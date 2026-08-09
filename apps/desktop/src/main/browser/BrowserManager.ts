@@ -276,6 +276,45 @@ class BrowserManagerImpl {
     }
   }
 
+  /** Wait for the view's page to finish loading (did-finish-load), or time out.
+   *  Used by the agent navigate tool so a subsequent snapshot/screenshot sees
+   *  real content instead of a blank/about:blank page. Resolves with the final
+   *  url/title so the caller can report them. No-op-safe if the page is already
+   *  loaded (did-finish-load fires immediately on attach only if load already
+   *  completed, so the timeout is the real backstop in that case). */
+  async waitForLoad(id: string, timeoutMs = 8000): Promise<{ ok: boolean; url?: string; title?: string; error?: string }> {
+    const live = this.get(id);
+    if (!live) return { ok: false, error: "浏览器不存在或已关闭" };
+    const wc = live.view.webContents;
+    if (wc.isLoading() === false) {
+      // Already loaded (or hasn't started yet). Give a brief grace period for a
+      // just-kicked-off loadURL to register as loading, then return current state.
+      await new Promise((r) => setTimeout(r, 200));
+      if (wc.isLoading() === false) {
+        return { ok: true, url: wc.getURL(), title: wc.getTitle() };
+      }
+    }
+    return new Promise((resolve) => {
+      let settled = false;
+      const finish = (result: { ok: boolean; url?: string; title?: string; error?: string }) => {
+        if (settled) return;
+        settled = true;
+        wc.removeListener("did-finish-load", onLoad);
+        wc.removeListener("did-fail-load", onFail);
+        resolve(result);
+      };
+      const onLoad = () => finish({ ok: true, url: wc.getURL(), title: wc.getTitle() });
+      const onFail = (_e: unknown, errorCode: number, errorDesc: string) =>
+        finish({ ok: false, error: `页面加载失败(${errorCode}): ${errorDesc}` });
+      wc.on("did-finish-load", onLoad);
+      wc.on("did-fail-load", onFail);
+      // Backstop: some pages never fire did-finish-load (permanent spinners,
+      // streaming responses). Resolve with whatever we have so the agent isn't
+      // blocked indefinitely.
+      setTimeout(() => finish({ ok: true, url: wc.getURL(), title: wc.getTitle() }), timeoutMs);
+    });
+  }
+
   goBack(id: string): BrowserOpResult {
     const live = this.get(id);
     if (!live) return { ok: false, error: "浏览器不存在或已关闭" };
@@ -509,19 +548,49 @@ class BrowserManagerImpl {
 
   /** Capture the current page as a PNG screenshot. `capturePage()` renders the
    *  view's current composite — if the page is mid-navigation the result may be
-   *  blank, so callers should snapshot/click after navigation settles. */
+   *  blank, so callers should snapshot/click after navigation settles. Retries
+   *  once after a short delay if the first capture throws (the renderer/GPU
+   *  process can be momentarily unavailable right after view creation). */
   async screenshot(id: string): Promise<BrowserScreenshotResult> {
     const live = this.get(id);
     if (!live) return { ok: false, error: "浏览器不存在或已关闭" };
-    try {
-      const image = await live.view.webContents.capturePage();
-      const data = image.toPNG().toString("base64");
-      return { ok: true, data, mimeType: "image/png" };
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      log.warn(`browser screenshot failed: ${id} ${msg}`);
-      return { ok: false, error: `截图失败: ${msg}` };
+    const wc = live.view.webContents;
+    if (wc.isDestroyed()) return { ok: false, error: "浏览器已销毁" };
+    log.info(`browser screenshot start: ${id} url=${wc.getURL()} visible=${live.visible} isLoading=${wc.isLoading()}`);
+
+    const capture = async (): Promise<{ pngBuf: Buffer; data: string } | { error: string }> => {
+      try {
+        const image = await wc.capturePage();
+        const pngBuf = image.toPNG();
+        return { pngBuf, data: pngBuf.toString("base64") };
+      } catch (err) {
+        return { error: err instanceof Error ? err.message : String(err) };
+      }
+    };
+
+    let result = await capture();
+    // Retry once after a brief wait if capture threw (common right after view
+    // creation, before the compositor is ready) or produced an empty image.
+    if ("error" in result || ("data" in result && result.data.length === 0)) {
+      const firstError = "error" in result ? result.error : "(empty image)";
+      log.info(`browser screenshot retrying after: ${firstError}`);
+      await new Promise((r) => setTimeout(r, 500));
+      result = await capture();
+      if ("error" in result) {
+        log.warn(`browser screenshot failed after retry: ${id} ${result.error}`);
+        return { ok: false, error: `截图失败: ${result.error}` };
+      }
     }
+    if ("error" in result) {
+      log.warn(`browser screenshot failed: ${id} ${result.error}`);
+      return { ok: false, error: `截图失败: ${result.error}` };
+    }
+
+    log.info(`browser screenshot done: ${id} pngBytes=${result.pngBuf.length} base64Len=${result.data.length}`);
+    if (result.data.length === 0) {
+      log.warn(`browser screenshot produced EMPTY image after retry: ${id} url=${wc.getURL()}`);
+    }
+    return { ok: true, data: result.data, mimeType: "image/png" };
   }
 
   /** Destroy every live browser view - call on app quit. Idempotent (safe to

@@ -113,10 +113,10 @@ export function browserList(): ToolResult {
  *  live, a new view is created (and shown) so the user sees the agent
  *  browsing. `projectPath` is required to create a view (it's bound to a
  *  project for consistency with terminal/git). */
-export function browserNavigate(
+export async function browserNavigate(
   args: { url: string; browserId?: string },
   projectPath: string,
-): ToolResult {
+): Promise<ToolResult> {
   const url = (args.url ?? "").trim();
   if (!url) return errorResult("url 不能为空");
   if (!isAllowedUrl(url)) {
@@ -151,7 +151,14 @@ export function browserNavigate(
 
   const res = BrowserManager.loadUrl(browserId, url);
   if (!res.ok) return errorResult(res.error ?? "导航失败");
-  return text(`已导航到 ${url}(browserId=${browserId})。页面正在加载,如需读取内容请稍后调用 browser_snapshot。`);
+  // Wait for the page to finish loading so a subsequent snapshot/screenshot
+  // sees real content. fire-and-forget loadURL returns before any bytes are
+  // fetched; without this wait, screenshot captures a blank page.
+  const loaded = await BrowserManager.waitForLoad(browserId);
+  if (!loaded.ok) return errorResult(loaded.error ?? "页面加载失败");
+  return text(
+    `已导航到 ${url}(browserId=${browserId})。页面已加载完成${loaded.title ? `,标题: "${loaded.title}"` : ""}。可调用 browser_snapshot 读取内容或 browser_screenshot 截图。`,
+  );
 }
 
 /** `browser_snapshot` — read a structured snapshot of the page (read-only).
@@ -221,8 +228,11 @@ export async function browserScreenshot(
   args: { browserId?: string },
   ctx: BrowserToolContext & { toolCallId: string },
 ): Promise<ToolResult> {
+  const live = BrowserManager.list();
+  log.info(`browserScreenshot called: requestedId=${args.browserId ?? "(none)"} liveCount=${live.length} liveIds=${JSON.stringify(live.map((l) => l.browserId))}`);
   const resolved = resolveBrowserId(args.browserId);
   if (!resolved.ok) {
+    log.warn(`browserScreenshot resolveBrowserId failed: ${resolved.reason}`);
     return errorResult(
       resolved.reason === "no-live-browser"
         ? "当前没有打开的浏览器。请先调用 browser_navigate({ url })。"
@@ -230,10 +240,14 @@ export async function browserScreenshot(
     );
   }
   const res = await BrowserManager.screenshot(resolved.browserId);
-  if (!res.ok || !res.data) return errorResult(res.error ?? "截图失败");
+  if (!res.ok || !res.data) {
+    log.warn(`browserScreenshot BrowserManager.screenshot failed: ${res.error}`);
+    return errorResult(res.error ?? "截图失败");
+  }
 
-  // Pi path: emit a structured event so the renderer attaches an inline
-  // image block keyed off toolCallId. Claude path: the image content block
+  log.info(`browserScreenshot success: base64Len=${res.data.length}`);
+  // Pi path: emit a structured event so the renderer attaches an inline image
+  // block keyed off toolCallId. Claude path: the image content block
   // below is parsed by the store from the tool_result.
   ctx.onImage?.({ toolCallId: ctx.toolCallId, data: res.data, mimeType: "image/png" });
 

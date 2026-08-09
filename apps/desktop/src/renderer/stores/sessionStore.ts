@@ -4226,14 +4226,23 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         }
         case "tool.result": {
           // eslint-disable-next-line no-console
-          console.log("[browser-img-debug] tool.result", {
+          console.log("[browser-img-debug] tool.result", JSON.stringify({
             toolCallId: e.toolCallId,
             isError: e.isError,
             contentType: Array.isArray(e.content) ? "array" : typeof e.content,
-            contentSample: Array.isArray(e.content)
-              ? e.content.map((b) => (b && typeof b === "object" ? { type: (b as { type?: string }).type, keys: Object.keys(b) } : typeof b))
-              : String(e.content).slice(0, 100),
-          });
+            contentBlocks: Array.isArray(e.content)
+              ? e.content.map((b) => {
+                  if (b && typeof b === "object") {
+                    const blk = b as Record<string, unknown>;
+                    if (blk.type === "text" && typeof blk.text === "string") {
+                      return { type: "text", text: blk.text.slice(0, 300) };
+                    }
+                    return { type: blk.type, keys: Object.keys(blk), hasSource: !!blk.source, hasData: typeof blk.data === "string" };
+                  }
+                  return typeof b;
+                })
+              : String(e.content).slice(0, 200),
+          }));
           next = next.map((m) => {
             const hasBlock = m.blocks.some((b) => b.kind === "tool_use" && b.toolCallId === e.toolCallId);
             if (!hasBlock) return m;

@@ -408,7 +408,7 @@ function registerBrowserTools(
     }),
     async execute(_toolCallId, params) {
       const { url, browserId } = params as { url: string; browserId?: string };
-      return toPiResult(browserNavigate({ url, browserId }, projectPath));
+      return toPiResult(await browserNavigate({ url, browserId }, projectPath));
     },
   });
 
