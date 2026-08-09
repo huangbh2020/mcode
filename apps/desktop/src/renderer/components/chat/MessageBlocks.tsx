@@ -331,12 +331,18 @@ function ImageGallery({ blocks }: { blocks: Extract<Block, { kind: "image" }>[] 
   const count = blocks.length;
   const cur = blocks[Math.min(idx, count - 1)];
   const go = (delta: number) => setIdx((i) => Math.max(0, Math.min(count - 1, i + delta)));
+  // All images of this gallery as data URLs — passed to the lightbox so it can
+  // navigate prev/next inside the fullscreen preview too.
+  const allSrcs = blocks.map((b) => `data:${b.mimeType};base64,${b.data}`);
   return (
     <div className="my-1 flex w-full max-w-[420px] flex-col gap-1">
       <div className="relative">
         <ImageWithPreview
           src={`data:${cur.mimeType};base64,${cur.data}`}
           alt={`截图 ${Math.min(idx, count - 1) + 1}/${count}`}
+          gallery={allSrcs}
+          index={idx}
+          onNavigate={setIdx}
         />
         {count > 1 && (
           <>

@@ -6,11 +6,23 @@
  * the image is shown at its full size (object-contain within the viewport).
  * Built on the project's Dialog primitive (base-ui) for consistent modal
  * behavior: Esc to close, click backdrop to close, focus trap.
+ *
+ * When `gallery` is provided (the full image list this thumbnail is part of),
+ * the lightbox shows ◀ ▶ nav buttons to step through the gallery, plus a
+ * position counter. Navigation is pushed up via `onNavigate` so the caller
+ * (e.g. ImageGallery) can keep its own index in sync; `index` is the current
+ * position, used to initialize the lightbox view.
  */
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Dialog } from "./dialog.js";
 import { cn } from "@renderer/lib/cn.js";
-import { IconArrowsMaximize, IconDownload, IconX } from "@renderer/lib/icons.js";
+import {
+  IconArrowsMaximize,
+  IconChevronLeft,
+  IconChevronRight,
+  IconDownload,
+  IconX,
+} from "@renderer/lib/icons.js";
 
 /** Trigger a browser download of a `data:` URL (base64 image). Creates a
  *  temporary <a download> and clicks it. The filename is derived from a
@@ -38,6 +50,15 @@ export interface ImageWithPreviewProps {
   /** Max thumbnail height in px (default 240 — small enough to stay compact in
    *  the message stream, large enough to be recognizable). */
   maxThumbnailHeight?: number;
+  /** Full image list this thumbnail belongs to. When provided (length > 1),
+   *  the lightbox gains ◀ ▶ navigation + a position counter. */
+  gallery?: string[];
+  /** Current index within `gallery`. Seeds the lightbox view and follows
+   *  external index changes (e.g. the caller's own thumbnail arrows). */
+  index?: number;
+  /** Fired when the user navigates inside the lightbox, so the caller can sync
+   *  its own index (and thus which thumbnail is shown). */
+  onNavigate?: (index: number) => void;
 }
 
 export function ImageWithPreview({
@@ -45,8 +66,34 @@ export function ImageWithPreview({
   alt = "",
   className,
   maxThumbnailHeight = 240,
+  gallery,
+  index = 0,
+  onNavigate,
 }: ImageWithPreviewProps) {
   const [open, setOpen] = useState(false);
+  const gallerySrcs = gallery && gallery.length > 0 ? gallery : [src];
+  const count = gallerySrcs.length;
+  // Local lightbox index. Seeded from `index` on open, and re-synced whenever
+  // the external `index` moves (the caller's thumbnail arrows / our own nav).
+  const [viewIdx, setViewIdx] = useState(index);
+  useEffect(() => {
+    setViewIdx(Math.max(0, Math.min(count - 1, index)));
+  }, [index, count]);
+  // Opening the lightbox starts at the currently-selected thumbnail.
+  useEffect(() => {
+    if (open) setViewIdx(Math.max(0, Math.min(count - 1, index)));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
+
+  const curSrc = gallerySrcs[Math.min(viewIdx, count - 1)] ?? src;
+  const curAlt = count > 1 ? `${alt} ${Math.min(viewIdx, count - 1) + 1}/${count}` : alt;
+  const go = (delta: number) => {
+    const next = Math.max(0, Math.min(count - 1, viewIdx + delta));
+    if (next === viewIdx) return;
+    setViewIdx(next);
+    onNavigate?.(next);
+  };
+
   return (
     <>
       <button
@@ -86,19 +133,47 @@ export function ImageWithPreview({
             className="left-1/2 top-1/2 max-h-[92vh] max-w-[94vw] -translate-x-1/2 -translate-y-1/2 rounded-none border-0 bg-transparent p-0 shadow-none"
           >
             {/* Visually-hidden title for a11y (Dialog expects a Title). */}
-            <Dialog.Title className="sr-only">{alt || "图片预览"}</Dialog.Title>
+            <Dialog.Title className="sr-only">{curAlt || "图片预览"}</Dialog.Title>
             <img
-              src={src}
-              alt={alt}
+              src={curSrc}
+              alt={curAlt}
               className="block max-h-[92vh] max-w-[94vw] object-contain"
             />
+            {/* Lightbox prev/next nav — only when this image is part of a
+                multi-image gallery. */}
+            {count > 1 && (
+              <>
+                <button
+                  type="button"
+                  onClick={() => go(-1)}
+                  disabled={viewIdx <= 0}
+                  title="上一张"
+                  className="fixed left-4 top-1/2 -translate-y-1/2 rounded-full bg-black/60 p-2.5 text-white/90 backdrop-blur-sm transition-colors enabled:hover:bg-black/80 enabled:hover:text-white disabled:opacity-30"
+                >
+                  <IconChevronLeft size={24} />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => go(1)}
+                  disabled={viewIdx >= count - 1}
+                  title="下一张"
+                  className="fixed right-4 top-1/2 -translate-y-1/2 rounded-full bg-black/60 p-2.5 text-white/90 backdrop-blur-sm transition-colors enabled:hover:bg-black/80 enabled:hover:text-white disabled:opacity-30"
+                >
+                  <IconChevronRight size={24} />
+                </button>
+                {/* Position counter, top-center. */}
+                <span className="fixed left-1/2 top-4 -translate-x-1/2 rounded-full bg-black/60 px-3 py-1 text-xs font-medium text-white/90 backdrop-blur-sm">
+                  {Math.min(viewIdx, count - 1) + 1} / {count}
+                </span>
+              </>
+            )}
             {/* Download button — saves the current image (data: URL or remote)
                 as a PNG file. Sits left of the close button. */}
             <button
               type="button"
               onClick={() => {
                 const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
-                downloadDataUrl(src, `截图-${stamp}.png`);
+                downloadDataUrl(curSrc, `截图-${stamp}.png`);
               }}
               title="下载图片"
               className="fixed right-16 top-4 rounded-full bg-black/60 p-2 text-white/90 backdrop-blur-sm transition-colors hover:bg-black/80 hover:text-white"
