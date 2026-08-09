@@ -105,8 +105,9 @@ const HIDDEN_BOUNDS: Rectangle = { x: -9999, y: -9999, width: 1, height: 1 };
 /** Default on-screen bounds for an agent-created view that the renderer hasn't
  *  measured yet. Sized to a reasonable right-panel region of the main window so
  *  the page is visible AND capturable (capturePage on a 1x1 offscreen view
- *  returns an empty image). The renderer's BrowserPanel will re-sync precise
- *  bounds once it mounts and measures its placeholder div. */
+ *  returns an empty image). Leaves room for the 48px icon rail on the far
+ *  right. The renderer's BrowserPanel will re-sync precise bounds once it
+ *  mounts and measures its placeholder div. */
 function defaultOnscreenBounds(): Rectangle {
   const win = getMainWindow();
   if (!win || win.isDestroyed()) {
@@ -114,8 +115,11 @@ function defaultOnscreenBounds(): Rectangle {
   }
   const [winW, winH] = win.getContentSize();
   // Right ~42% of the window, leaving room for the center pane. Min 480 wide.
+  // Subtract the 48px icon rail (RightPanel's far-right column) so the default
+  // rect doesn't cover the rail before BrowserPanel syncs precise bounds.
+  const railW = 48;
   const panelW = Math.max(480, Math.round(winW * 0.42));
-  return { x: Math.max(0, winW - panelW), y: 0, width: panelW, height: winH };
+  return { x: Math.max(0, winW - panelW - railW), y: 0, width: panelW, height: winH };
 }
 
 /** Background color matching the effective theme, so the view doesn't flash
@@ -585,13 +589,31 @@ class BrowserManagerImpl {
    *  view's current composite — if the page is mid-navigation the result may be
    *  blank, so callers should snapshot/click after navigation settles. Retries
    *  once after a short delay if the first capture throws (the renderer/GPU
-   *  process can be momentarily unavailable right after view creation). */
+   *  process can be momentarily unavailable right after view creation).
+   *  If the view is currently hidden (user switched the right panel away from
+   *  the browser tab), it is temporarily shown to a default on-screen rect for
+   *  the capture, then hidden again so it doesn't linger over the workspace. */
   async screenshot(id: string): Promise<BrowserScreenshotResult> {
     const live = this.get(id);
     if (!live) return { ok: false, error: "浏览器不存在或已关闭" };
     const wc = live.view.webContents;
     if (wc.isDestroyed()) return { ok: false, error: "浏览器已销毁" };
     log.info(`browser screenshot start: ${id} url=${wc.getURL()} visible=${live.visible} isLoading=${wc.isLoading()}`);
+
+    // If the view is offscreen/hidden (user switched panels, or it was never
+    // measured), temporarily bring it on-screen so capturePage gets real pixels.
+    // capturePage on a hidden/1x1 view returns an empty 0-byte image.
+    const needsTempShow = !live.visible || live.lastBounds.width <= 1;
+    const savedVisible = live.visible;
+    const savedBounds = live.lastBounds;
+    if (needsTempShow) {
+      const b = defaultOnscreenBounds();
+      live.view.setBounds(b);
+      live.lastBounds = b;
+      live.visible = true;
+      // Give the compositor a frame to paint before capturing.
+      await new Promise((r) => setTimeout(r, 100));
+    }
 
     const capture = async (): Promise<{ pngBuf: Buffer; data: string } | { error: string }> => {
       try {
@@ -611,11 +633,15 @@ class BrowserManagerImpl {
       log.info(`browser screenshot retrying after: ${firstError}`);
       await new Promise((r) => setTimeout(r, 500));
       result = await capture();
-      if ("error" in result) {
-        log.warn(`browser screenshot failed after retry: ${id} ${result.error}`);
-        return { ok: false, error: `截图失败: ${result.error}` };
-      }
     }
+
+    // Restore the hidden/offscreen state if we temporarily showed the view.
+    if (needsTempShow) {
+      live.view.setBounds(savedVisible ? savedBounds : HIDDEN_BOUNDS);
+      live.lastBounds = savedBounds;
+      live.visible = savedVisible;
+    }
+
     if ("error" in result) {
       log.warn(`browser screenshot failed: ${id} ${result.error}`);
       return { ok: false, error: `截图失败: ${result.error}` };

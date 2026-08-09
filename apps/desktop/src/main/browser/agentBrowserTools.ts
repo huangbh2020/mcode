@@ -138,7 +138,6 @@ export async function browserNavigate(
       const created = BrowserManager.create(projectPath);
       if (!created.ok) return errorResult(created.error ?? "创建浏览器失败");
       browserId = created.browserId;
-      BrowserManager.show(browserId);
       log.info(`agent browser auto-created: ${browserId} project=${projectPath}`);
     } else {
       return errorResult(resolved.reason);
@@ -149,9 +148,11 @@ export async function browserNavigate(
     if (!check.ok) return errorResult(check.reason);
   }
 
-  // Make sure the view is on-screen (it may have been hidden) and tell the
-  // renderer to surface the browser panel so the user sees the agent browsing.
-  BrowserManager.show(browserId);
+  // Tell the renderer to surface the browser panel + adopt this view as a tab.
+  // The renderer's BrowserPanel takes over showing the view at precise bounds
+  // (measured from its placeholder div). We DON'T show() here: a pre-show with
+  // default bounds would briefly cover the icon rail before BrowserPanel syncs.
+  // If the renderer is slow to adopt, screenshot's own temp-show covers capture.
   BrowserManager.notifyAgentOpened(browserId);
 
   const res = BrowserManager.loadUrl(browserId, url);

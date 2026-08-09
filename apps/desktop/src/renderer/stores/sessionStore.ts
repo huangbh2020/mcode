@@ -877,6 +877,11 @@ export interface SessionState {
   removeBrowserTab: (id: string) => void;
   /** Patch one browser tab by its main-process browserId. */
   patchBrowserTab: (browserId: string, patch: Partial<BrowserTab>) => void;
+  /** Adopt a browser view created by an agent tool (not by BrowserPanel's
+   *  createTab) into the renderer's tab list, so BrowserPanel's show/hide/
+   *  bounds logic can manage it. Idempotent: if a tab for this browserId
+   *  already exists, just updates its url/title and activates it. */
+  adoptAgentBrowserTab: (browserId: string, info: { url?: string; title?: string }) => void;
   /** Apply an incremental delta to the left sidebar width (clamped, then a
    *  debounced DB write). Called by the drag handle on every mousemove. */
   adjustLeftWidth: (deltaPx: number) => void;
@@ -4492,6 +4497,42 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     set((s) => ({
       browserTabs: s.browserTabs.map((t) => (t.browserId === browserId ? { ...t, ...patch } : t)),
     })),
+  adoptAgentBrowserTab: (browserId, info) => {
+    const s = get();
+    const existing = s.browserTabs.find((t) => t.browserId === browserId);
+    if (existing) {
+      // Already adopted — just refresh url/title + activate it.
+      if (info.url || info.title) {
+        set({
+          browserTabs: s.browserTabs.map((t) =>
+            t.browserId === browserId
+              ? {
+                  ...t,
+                  ...(typeof info.url === "string" ? { url: info.url } : {}),
+                  ...(typeof info.title === "string" ? { title: info.title } : {}),
+                }
+              : t,
+          ),
+        });
+      }
+      if (s.browserActiveTabId !== existing.id) set({ browserActiveTabId: existing.id });
+      return;
+    }
+    // Register a new tab for the agent-created view. device stays "desktop"
+    // (agent views are created without device emulation).
+    const tab: BrowserTab = {
+      id: `agent-${browserId}`,
+      browserId,
+      url: info.url ?? "",
+      title: info.title ?? "",
+      loading: false,
+      canGoBack: false,
+      canGoForward: false,
+      pickMode: false,
+      device: "desktop",
+    };
+    set({ browserTabs: [...s.browserTabs, tab], browserActiveTabId: tab.id });
+  },
 
   // ── Draggable pane sizes ──
   // adjust* apply an incremental delta (from the drag handle) to the current

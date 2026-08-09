@@ -46,12 +46,16 @@ export function App() {
   // so the user sees the agent browsing and BrowserPanel can sync bounds.
   // Subscribed globally (not in BrowserPanel, which only mounts when the
   // browser tab is already active) so the panel switch happens even if the
-  // right panel is currently on files/git.
+  // right panel is currently on files/git. The view is adopted into the
+  // renderer's tab list so BrowserPanel's show/hide/bounds logic manages it.
   useEffect(() => {
     const off = api.on.browserEvent((msg) => {
       if (msg.type !== "agentOpened") return;
-      useSessionStore.getState().setRightPanelTab("browser");
-      useSessionStore.getState().setRightOpen(true);
+      const p = (msg.payload as { url?: string; title?: string }) ?? {};
+      const st = useSessionStore.getState();
+      st.adoptAgentBrowserTab(msg.browserId, p);
+      st.setRightPanelTab("browser");
+      st.setRightOpen(true);
     });
     return off;
   }, []);
