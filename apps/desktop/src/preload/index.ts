@@ -186,6 +186,19 @@ const api = {
     /** Create a directory (recursive). Returns ok. */
     mkdir: ((input) =>
       ipcRenderer.invoke(IPC.FILE_MKDIR, input)) as RpcMap["file.mkdir"],
+    /** Delete a file or directory (moves to system trash). Returns ok. */
+    delete: ((input) =>
+      ipcRenderer.invoke(IPC.FILE_DELETE, input)) as RpcMap["file.delete"],
+    /** Rename a file or directory in place. Returns ok. */
+    rename: ((input) =>
+      ipcRenderer.invoke(IPC.FILE_RENAME, input)) as RpcMap["file.rename"],
+  },
+
+  /** Clipboard-pasted external files (images / files copied from the OS) →
+   *  materialized to a temp path the agent can read (composer paste). */
+  clipboardFile: {
+    save: ((input) =>
+      ipcRenderer.invoke(IPC.CLIPBOARD_SAVE_FILE, input)) as RpcMap["clipboard.saveFile"],
   },
 
   /** Git operations for the Git panel. All paths must resolve inside a known

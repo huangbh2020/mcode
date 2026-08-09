@@ -93,6 +93,9 @@ export function guardToolPath(
   return { denied: false, path: norm.absPath };
 }
 
+/** Pi's read-only built-in tools — auto-approved in every mode (including plan). */
+const PI_READONLY_TOOLS = new Set(["read", "grep", "find", "ls"]);
+
 /**
  * Decide whether a Pi tool should be auto-approved (skip the prompt) based on
  * the session's CURRENT permission mode. Mirrors the Claude provider's
@@ -101,10 +104,13 @@ export function guardToolPath(
  *
  *   - bypassPermissions / dontAsk → everything auto-approved
  *   - acceptEdits                  → file-editing tools auto-approved
- *   - default / plan / auto        → prompt the user (return false)
+ *   - plan                         → read-only tools auto-approved, writes prompt
+ *   - default / auto               → prompt the user (return false)
  */
 function shouldAutoApproveForPi(mode: PermissionMode | undefined, toolName: string): boolean {
   if (!mode) return false;
+  // Read-only tools never need approval — they can't change anything.
+  if (PI_READONLY_TOOLS.has(toolName)) return true;
   if (mode === "bypassPermissions" || mode === "dontAsk") return true;
   if (mode === "acceptEdits") return toolName === "write" || toolName === "edit";
   return false;
@@ -119,6 +125,9 @@ export interface CreateMcodeExtensionOptions {
   /** Strict in-project policy: deny writes outside cwd. False in
    *  bypassPermissions/dontAsk (user opted out of all checks). */
   strict: boolean;
+  /** The Mcode session id — needed for all emit() calls (plan.update /
+   * mode.change / plan.approval_request events carry it). */
+  sessionId: string;
 }
 
 /**
@@ -126,14 +135,32 @@ export interface CreateMcodeExtensionOptions {
  * form) so it shows up as `<inline:mcode>` in Pi's startup Extensions list —
  * useful for debugging whether the extension loaded.
  */
+/**
+ * Build the inline Mcode extension. Returned as an `InlineExtension` (named
+ * form) so it shows up as `<inline:mcode>` in Pi's startup Extensions list —
+ * useful for debugging whether the extension loaded.
+ */
 export function createMcodeExtension(opts: CreateMcodeExtensionOptions): InlineExtension {
-  const { ctx, cwd, strict } = opts;
+  const { ctx, cwd, strict, sessionId } = opts;
+
+  // ── Plan mode state (per-turn, in-process) ──────────────────────────
+  // Tracked here rather than via ctx.getPermissionMode() because the latter
+  // updates through an async IPC round-trip (renderer → updateSettings →
+  // setPermissionMode) that can't be relied on to land before the next
+  // tool_call handler runs. This boolean is synchronous: EnterPlanMode's
+  // execute sets it before returning, so the next tool_call handler sees it.
+  //
+  // The extension is recreated every turn (createMcodeExtension is called in
+  // each startTurn), so this doesn't persist across turns — which matches
+  // Claude's semantics (plan mode is a turn-internal state).
+  const planMode = { active: false };
 
   return {
     name: "mcode",
     factory: (pi: ExtensionAPI) => {
-      registerToolCallGuard(pi, { ctx, cwd, strict });
+      registerToolCallGuard(pi, { ctx, cwd, strict, planMode });
       registerAskUserQuestionTool(pi, ctx);
+      registerPlanModeTools(pi, { ctx, sessionId, planMode });
       registerSystemPromptInjector(pi);
     },
   };
@@ -142,20 +169,23 @@ export function createMcodeExtension(opts: CreateMcodeExtensionOptions): InlineE
 /**
  * `tool_call` handler — the Pi equivalent of Claude's `canUseTool`.
  *
- * Runs before every tool execution. Three responsibilities, in order:
+ * Runs before every tool execution. Responsibilities, in order:
  *   1. Path/command guard (write/edit/bash) — replaces the old customTools
  *      wrapping. Denials return `{ block: true, reason }`; path normalization
  *      mutates `event.input` in place (same-ref → reaches execution).
- *   2. AskUserQuestion bypass — the tool's own `execute` handles the IPC, so
- *      we never send it through the approval flow.
+ *   2. Plan tools bypass — EnterPlanMode/ExitPlanMode/AskUserQuestion handle
+ *      their own logic in execute(); never route through approval.
  *   3. Host approval — permission-mode auto-approve, always-allow, then the
- *      IPC approval prompt.
+ *      IPC approval prompt. In plan mode, shouldAutoApproveForPi returns false
+ *      for everything, so every mutating tool (write/edit/bash) triggers an
+ *      approval dialog — the model can experiment during planning, but the user
+ *      approves each action.
  */
 function registerToolCallGuard(
   pi: ExtensionAPI,
-  deps: { ctx: ProviderContext; cwd: string; strict: boolean },
+  deps: { ctx: ProviderContext; cwd: string; strict: boolean; planMode: { active: boolean } },
 ): void {
-  const { ctx, cwd, strict } = deps;
+  const { ctx, cwd, strict, planMode } = deps;
 
   pi.on("tool_call", async (event: ToolCallEvent): Promise<ToolCallEventResult | void> => {
     const { toolName } = event;
@@ -192,14 +222,25 @@ function registerToolCallGuard(
       }
     }
 
-    // ③ AskUserQuestion — its own execute() does the IPC bridging; never route
-    //    through the approval prompt.
-    if (toolName === "AskUserQuestion") {
+    // ③ Plan tools + AskUserQuestion — their own execute() handles the IPC
+    //    bridging; never route through the approval prompt or the plan-mode
+    //    read-only gate.
+    if (toolName === "EnterPlanMode" || toolName === "ExitPlanMode" || toolName === "AskUserQuestion") {
       return;
     }
 
-    // ④ Permission-mode auto-approve (reads the LIVE mode so a mid-turn flip
-    //    applies to the next tool immediately).
+    // ④ Plan-mode: write tools allowed but require approval.
+    //    Unlike Claude's plan mode (strictly read-only), Pi's plan mode lets the
+    //    model write files / run commands to verify hypotheses during planning —
+    //    but every mutating tool goes through the approval prompt (step ⑤).
+    //    planMode.active doesn't block tools here; it only means
+    //    shouldAutoApproveForPi returns false for everything, so the user gets
+    //    an approval dialog for each write/edit/bash. The model can experiment
+    //    safely while the user retains control.
+
+    // ⑤ Permission-mode auto-approve (reads the LIVE mode so a mid-turn flip
+    //    applies to the next tool immediately). In plan mode, nothing is
+    //    auto-approved — every tool hits the approval prompt below.
     const mode = ctx.getPermissionMode?.();
     if (shouldAutoApproveForPi(mode, toolName)) {
       return;
@@ -208,7 +249,7 @@ function registerToolCallGuard(
       return;
     }
 
-    // ⑤ Host-moderated approval via IPC. When no bridge is wired, fall open
+    // ⑥ Host-moderated approval via IPC. When no bridge is wired, fall open
     //    (fail-open matches the Claude provider's behavior when requestApproval
     //    is undefined).
     const requestApproval = ctx.requestApproval;
@@ -289,22 +330,171 @@ function registerAskUserQuestionTool(pi: ExtensionAPI, ctx: ProviderContext): vo
 }
 
 /**
- * `before_agent_start` handler — injects the AskUserQuestion usage hint into
- * the system prompt. The event fires each turn before the agent loop starts;
- * returning `systemPrompt` overrides `agent.state.systemPrompt` for the turn.
+ * Register `EnterPlanMode` and `ExitPlanMode` tools, bridging to the host's
+ * plan-mode UI (the same `plan.update` / `mode.change` / `plan.approval_request`
+ * RuntimeEvents that Claude's SdkMessageAdapter emits). The frontend plan
+ * card system (`PlanStreamBlock` / `PlanViewer` / `PlanApprovalPrompt`) is
+ * provider-neutral — it reacts to those events regardless of source, so Pi
+ * reuses the entire Claude plan UI with zero renderer changes.
  *
- * The injected text is the same `ASK_SYSTEM_PROMPT` the Claude provider uses
- * for its sentinel fallback — kept in one place (`@main/lib/askQuestion`) to
- * avoid drift. On Pi the native tool IS available, so the sentinel format is
- * informational (the model may still emit it, and the PiMessageAdapter could
- * scan for it as a backstop), but the primary path is the native tool.
+ * ## State tracking
+ *
+ * `planMode.active` is an in-process boolean (closure-captured), NOT
+ * `ctx.getPermissionMode()`. The latter updates via an async IPC round-trip
+ * (renderer → updateSettings → setPermissionMode) that races with the next
+ * tool_call. The boolean is synchronous: EnterPlanMode sets it before
+ * returning, so the tool_call handler's read-only gate (above) is immediately
+ * enforced.
+ *
+ * ## ExitPlanMode blocking
+ *
+ * ExitPlanMode's `execute` awaits `ctx.requestPlanApproval()` — a Deferred
+ * that resolves when the user approves/rejects via the IPC bridge. This blocks
+ * the agent loop (verified: `agent-loop.js` awaits `tool.execute`), so the
+ * model pauses until the user decides. This is the Pi equivalent of Claude's
+ * `canUseTool`/`onUserDialog` blocking on ExitPlanMode.
+ */
+function registerPlanModeTools(
+  pi: ExtensionAPI,
+  deps: { ctx: ProviderContext; sessionId: string; planMode: { active: boolean } },
+): void {
+  const { ctx, sessionId, planMode } = deps;
+
+  pi.registerTool({
+    name: "EnterPlanMode",
+    label: "Enter Plan Mode",
+    description:
+      "进入计划模式。在计划模式中你可以进行只读探索(读文件、搜索)来调研问题,也可以写文件/执行命令做验证——" +
+      "但每个修改操作都需要用户审批。充分调研后,调用 ExitPlanMode 提交你的执行计划给用户审批。" +
+      "适用于复杂任务或涉及重要修改的场景。",
+    promptSnippet: "EnterPlanMode: 进入计划模式,调研+验证(写操作需审批),完成后用 ExitPlanMode 提交",
+    parameters: Type.Object({}),
+    async execute() {
+      planMode.active = true;
+      // Notify the frontend: sync the composer chip to "plan" + show drafting
+      // state in the activity capsule. The plan text is empty (drafting) so no
+      // plan card appears yet — only the chip + capsule update.
+      ctx.emit({ type: "mode.change", sessionId, mode: "plan", source: "model" });
+      ctx.emit({ type: "plan.update", sessionId, plan: "", phase: "drafting" });
+      return {
+        content: [
+          {
+            type: "text",
+            text: "已进入计划模式。你可以使用 read/grep/find/ls 等只读工具调研,也可以写文件或执行命令做验证(每个修改操作需用户审批)。调研完成后,调用 ExitPlanMode 提交你的计划。",
+          },
+        ],
+        details: {},
+      };
+    },
+  });
+
+  pi.registerTool({
+    name: "ExitPlanMode",
+    label: "Exit Plan Mode",
+    description:
+      "提交你的执行计划给用户审批。用户可以批准(退出计划模式开始执行)、拒绝(留在计划模式修改计划)或编辑计划内容。" +
+      "调用此工具后会暂停等待用户决策。计划应为结构化的 Markdown 文本,包含目标、步骤和影响范围。",
+    promptSnippet: "ExitPlanMode({plan}): 提交计划给用户审批,批准后退出计划模式",
+    parameters: Type.Object({
+      plan: Type.String({ description: "完整的执行计划(Markdown 格式),包含目标、步骤、影响范围" }),
+    }),
+    async execute(toolCallId, params) {
+      const plan = (params as { plan?: string }).plan ?? "";
+      // Phase "ready" → the plan card appears in the message stream with the
+      // full plan text (PlanStreamBlock renders it as an inline card).
+      ctx.emit({ type: "plan.update", sessionId, plan, phase: "ready" });
+
+      try {
+        // Bridge to the host's approval UI. This awaits a Deferred that
+        // resolves when the user clicks approve/reject in the
+        // PlanApprovalPrompt. The agent loop is blocked here (same-turn).
+        const requestPlanApproval = ctx.requestPlanApproval;
+        if (!requestPlanApproval) {
+          // No bridge wired — fail open (exit plan mode without approval).
+          planMode.active = false;
+          ctx.emit({ type: "mode.change", sessionId, mode: "default", source: "model" });
+          return {
+            content: [{ type: "text", text: "计划审批不可用,已自动退出计划模式。" }],
+            details: {},
+          };
+        }
+        const decision = await requestPlanApproval({
+          requestId: randomUUID(),
+          plan,
+          toolUseId: toolCallId,
+        });
+
+        if (decision.approved) {
+          const finalPlan = decision.editedPlan ?? plan;
+          planMode.active = false;
+          // Exit plan mode → the composer chip returns to default, and the
+          // tool_call handler's read-only gate is lifted (next write/edit/bash
+          // passes through). The plan card stays as a frozen historical card
+          // (frontend turn.done freezes ready+nonempty plan blocks).
+          ctx.emit({ type: "mode.change", sessionId, mode: "default", source: "model" });
+          return {
+            content: [{ type: "text", text: `计划已批准,开始执行:\n\n${finalPlan}` }],
+            details: {},
+          };
+        }
+
+        // Rejected — stay in plan mode so the model can revise and resubmit.
+        // Flip the plan back to "drafting" so the card reflects the ongoing
+        // revision cycle (the frontend keeps the card but updates the badge).
+        const reason = decision.reason ?? "用户未提供理由";
+        ctx.emit({ type: "plan.update", sessionId, plan, phase: "drafting" });
+        return {
+          content: [
+            {
+              type: "text",
+              text: `计划被用户拒绝。原因:${reason}。你仍处于计划模式,请修改计划后重新调用 ExitPlanMode 提交。`,
+            },
+          ],
+          details: {},
+        };
+      } catch (err) {
+        // Interrupted (user abort / session dispose) — clean up plan mode
+        // state so a stale read-only gate doesn't linger. Re-throw so the
+        // agent loop records the tool as failed.
+        planMode.active = false;
+        ctx.emit({ type: "plan.update", sessionId, plan: "", phase: "cleared" });
+        ctx.emit({ type: "mode.change", sessionId, mode: "default", source: "model" });
+        throw err;
+      }
+    },
+  });
+}
+
+/**
+ * System-prompt text teaching the model how to use the plan-mode tools.
+ * Appended (alongside the AskUserQuestion hint) via `before_agent_start`.
+ */
+const PLAN_MODE_PROMPT = [
+  `## 计划模式工具`,
+  `当任务复杂或涉及重要修改时,先制定计划再执行:`,
+  `1. 调用 EnterPlanMode 进入计划模式`,
+  `2. 使用 read/grep/find/ls 等只读工具充分调研;如需验证可写文件/执行命令,但每个修改操作都需用户审批`,
+  `3. 调用 ExitPlanMode({plan: "你的详细计划"}) 提交计划给用户审批`,
+  `4. 用户批准后退出计划模式开始执行;拒绝则留在计划模式修改计划`,
+  `计划文本应为结构化的 Markdown,包含目标、步骤、影响范围。`,
+].join("\n");
+
+/**
+ * `before_agent_start` handler — injects the AskUserQuestion usage hint AND
+ * the plan-mode tool usage guide into the system prompt. The event fires each
+ * turn before the agent loop starts; returning `systemPrompt` overrides
+ * `agent.state.systemPrompt` for the turn.
+ *
+ * The AskUserQuestion text is the same `ASK_SYSTEM_PROMPT` the Claude provider
+ * uses — kept in one place (`@main/lib/askQuestion`) to avoid drift.
  */
 function registerSystemPromptInjector(pi: ExtensionAPI): void {
   pi.on(
     "before_agent_start",
     async (event: BeforeAgentStartEvent): Promise<BeforeAgentStartEventResult | void> => {
       const base = event.systemPrompt ?? "";
-      const next = base ? `${base}\n\n${ASK_SYSTEM_PROMPT}` : ASK_SYSTEM_PROMPT;
+      const injected = `${ASK_SYSTEM_PROMPT}\n\n${PLAN_MODE_PROMPT}`;
+      const next = base ? `${base}\n\n${injected}` : injected;
       return { systemPrompt: next };
     },
   );

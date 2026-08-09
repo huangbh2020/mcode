@@ -1,5 +1,4 @@
 import { useSessionStore, EMPTY_USAGE } from "@renderer/stores/sessionStore.js";
-import { ProviderDropdown } from "./ProviderDropdown.js";
 import { ModelDropdown } from "./ModelDropdown.js";
 import { EffortDropdown } from "./EffortDropdown.js";
 import { PermissionModeDropdown } from "./PermissionModeDropdown.js";
@@ -17,6 +16,10 @@ import { ContextRing } from "./ContextRing.js";
  *   right end of the chip row (after Permission). Sits inline rather than
  *   overlapping the textarea, so it never covers typed text. Click it to open
  *   the context-stats popover (live breakdown + per-turn history).
+ *
+ * NOTE: the SDK picker ({@link ProviderDropdown}) is deliberately NOT part of
+ * this row — it lives directly to the left of the send button in ChatPane, so
+ * it stays visible (and locked per-session) regardless of chip-row collapse.
  */
 export function ComposerToolbar() {
   // Context-window snapshot for the active session. Drives the ring at the
@@ -35,7 +38,6 @@ export function ComposerToolbar() {
 
   return (
     <div className="composer-chips composer-chips-root flex min-w-0 items-center gap-1">
-      <ProviderDropdown />
       <ModelDropdown />
       <EffortDropdown />
       <PermissionModeDropdown />

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { cn } from "@renderer/lib/cn.js";
 import {
   fmtTokens,
@@ -58,10 +58,20 @@ export function ContextRing({
   // selected styling stays in sync while the pointer is over the ring OR over
   // the (hoverable) tooltip body.
   const [tooltipOpen, setTooltipOpen] = useState(false);
+  // Bounding box of the ring at open time — the popover renders portaled to
+  // <body> (composer overflow can't clip it) and needs a fixed anchor.
+  const [anchorRect, setAnchorRect] = useState<DOMRect | null>(null);
+  const ringRef = useRef<HTMLDivElement>(null);
   const selected = open || tooltipOpen;
 
+  const openDetails = () => {
+    const el = ringRef.current;
+    if (el) setAnchorRect(el.getBoundingClientRect());
+    setOpen(true);
+  };
+
   return (
-    <div className="relative inline-flex">
+    <div ref={ringRef} className="relative inline-flex">
       {/* Always pass a boolean `open` (never undefined) so the tooltip stays
           fully controlled and never flips between controlled/uncontrolled —
           which would trip React's "uncontrolled → controlled" warning.
@@ -123,17 +133,18 @@ export function ContextRing({
                 snapshot={snapshot}
                 breakdown={breakdown}
                 historyCount={history.length}
-                onShowDetails={() => setOpen(true)}
+                onShowDetails={openDetails}
               />
             </Tooltip.Popup>
           </Tooltip.Positioner>
         </Tooltip.Portal>
       </Tooltip.Root>
-      {open && (
+      {open && anchorRect && (
         <ContextStatsPopover
           snapshot={snapshot}
           history={history}
           maxTokens={snapshot.maxTokens}
+          anchorRect={anchorRect}
           onClose={() => setOpen(false)}
           // The hover tooltip already showed the live breakdown, so jumping
           // straight to "history" avoids a redundant first screen.

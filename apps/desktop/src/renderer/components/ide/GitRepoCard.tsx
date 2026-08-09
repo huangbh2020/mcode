@@ -71,7 +71,7 @@ let logIdSeq = 0;
  *   Header: repo name + branch + ahead/behind + Pull/Push/Refresh
  *   已暂存 (staged) group  - [全部取消]
  *   Commit message input   - [提交 ▾] (commit / commit+push / commit+sync)
- *   更改 (unstaged) group   - [全部暂存]
+ *   更改 (unstaged) group   - [全部放弃] [全部暂存]
  *   操作日志 (operation log) - collapsible, recent N ops with full errors
  *
  * Clicking a file opens it in the CENTER editor's diff view (not inline).
@@ -710,6 +710,7 @@ export function GitRepoCard({ repo }: { repo: GitRepo }) {
                     bulkActionLabel="全部暂存"
                     busy={busy !== null}
                     onDiscard={(paths) => setPendingDiscard(paths)}
+                    onDiscardAll={() => setPendingDiscard(unstaged.map((f) => f.path))}
                     onSingleStage={(path) => void handleSingleStage(path)}
                     onSingleDiscard={(path) => setPendingDiscard([path])}
                   />
@@ -933,7 +934,7 @@ function CommitBox({
           value={value}
           onChange={(e) => onChange(e.target.value)}
           onKeyDown={handleKeyDown}
-          placeholder="提交信息…  (Ctrl+Enter 提交)"
+          placeholder="提交信息"
           disabled={disabled || generating}
           className="w-full resize-none rounded-md border border-edge-input bg-surface py-1 pl-2 pr-14 [font-size:var(--right-panel-font-size)] leading-relaxed text-content outline-none focus:border-accent disabled:opacity-50 min-h-[36px]"
         />
@@ -1273,6 +1274,7 @@ function FileGroup({
   bulkActionLabel,
   busy,
   onDiscard,
+  onDiscardAll,
   onSingleStage,
   onSingleUnstage,
   onSingleDiscard,
@@ -1285,6 +1287,9 @@ function FileGroup({
   bulkActionLabel: string;
   busy: boolean;
   onDiscard?: (paths: string[]) => void;
+  /** Discard every file in this group at once (opens the same confirmation
+   *  dialog as a single-file discard). Only wired for the unstaged group. */
+  onDiscardAll?: () => void;
   onSingleStage?: (filePath: string) => void;
   onSingleUnstage?: (filePath: string) => void;
   onSingleDiscard?: (filePath: string) => void;
@@ -1301,14 +1306,27 @@ function FileGroup({
           {collapsed ? <IconChevronRight size={10} /> : <IconChevronDown size={10} />}
           {label} ({files.length})
         </button>
-        <button
-          type="button"
-          onClick={onBulkAction}
-          disabled={busy}
-          className="ml-auto rounded px-1.5 py-0.5 [font-size:var(--rp-fs-xxs)] text-content-muted transition-colors hover:bg-surface-hover hover:text-content disabled:opacity-40"
-        >
-          {bulkActionLabel}
-        </button>
+        <div className="ml-auto flex items-center gap-1">
+          {onDiscardAll && (
+            <button
+              type="button"
+              onClick={onDiscardAll}
+              disabled={busy}
+              title={`放弃 ${label} 组内所有文件的本地更改`}
+              className="rounded px-1.5 py-0.5 [font-size:var(--rp-fs-xxs)] text-danger transition-colors hover:bg-danger/10 hover:text-danger disabled:opacity-40"
+            >
+              全部放弃
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={onBulkAction}
+            disabled={busy}
+            className="rounded px-1.5 py-0.5 [font-size:var(--rp-fs-xxs)] text-content-muted transition-colors hover:bg-surface-hover hover:text-content disabled:opacity-40"
+          >
+            {bulkActionLabel}
+          </button>
+        </div>
       </div>
       {!collapsed && (
         <div className="space-y-0.5">

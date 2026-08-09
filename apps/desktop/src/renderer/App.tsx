@@ -10,6 +10,7 @@ import { BottomTerminalBar } from "./components/layout/BottomTerminalBar.js";
 import { SettingsPage } from "./components/settings/SettingsPage.js";
 import { CommandPalette } from "./components/layout/CommandPalette.js";
 import { SearchDialog } from "./components/ide/SearchDialog.js";
+import { ModelConfigPrompt } from "./components/chat/ModelConfigPrompt.js";
 import { BrowserPanel } from "./components/browser/BrowserPanel.js";
 import { Toaster } from "./components/layout/Toaster.js";
 import { useClaudeEvents } from "./hooks/useClaudeEvents.js";
@@ -106,6 +107,10 @@ export function App() {
           z-50 dialogs so ConfirmDialog etc. still sit on top). */}
       <CommandPalette />
       <SearchDialog />
+      {/* Send-time "尚未配置模型" guard (sendPrompt opens it when the active
+          provider has no model configured). Root-mounted so it overlays both
+          workspace and settings views. */}
+      <ModelConfigPrompt />
       <BrowserPanel mode="overlay" />
       {settingsOpen ? (
         <>

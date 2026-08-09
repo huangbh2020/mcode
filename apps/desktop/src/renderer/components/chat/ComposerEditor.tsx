@@ -109,6 +109,11 @@ interface ComposerEditorProps {
   /** Threshold check — if true, the paste is forwarded to onPromotePaste
    *  instead of inserted inline. */
   shouldPromotePaste?: (text: string) => boolean;
+  /** Called when the paste carries external file items (an image copied from
+   *  a browser, a file copied in Finder, a screenshot). The parent turns them
+   *  into file tags; any text in the same paste is ignored (a real file
+   *  copy's text/plain is just the file name). */
+  onPasteFiles?: (files: File[]) => void;
   /** CSS class on the editor host. */
   className?: string;
 }
@@ -187,6 +192,7 @@ export const ComposerEditor = forwardRef<
     onEnter,
     onPromotePaste,
     shouldPromotePaste,
+    onPasteFiles,
     className,
   },
   ref,
@@ -198,10 +204,12 @@ export const ComposerEditor = forwardRef<
   const onEnterRef = useRef(onEnter);
   const onPromotePasteRef = useRef(onPromotePaste);
   const shouldPromotePasteRef = useRef(shouldPromotePaste);
+  const onPasteFilesRef = useRef(onPasteFiles);
   onChangeRef.current = onChange;
   onEnterRef.current = onEnter;
   onPromotePasteRef.current = onPromotePaste;
   shouldPromotePasteRef.current = shouldPromotePaste;
+  onPasteFilesRef.current = onPasteFiles;
 
   const editor = useEditor({
     extensions: [
@@ -226,8 +234,16 @@ export const ComposerEditor = forwardRef<
       // Force every paste to plain text: contenteditable would otherwise insert
       // rich HTML from external sources (browsers, other apps). If the paste is
       // bulky (per shouldPromotePaste) we hand it to the parent as a tag and
-      // suppress insertion entirely.
+      // suppress insertion entirely. External file items (images / files copied
+      // from the OS) take priority over any text in the same paste — the parent
+      // turns them into file tags.
       handlePaste: (view, event) => {
+        const files = Array.from(event.clipboardData?.files ?? []);
+        if (files.length > 0) {
+          event.preventDefault();
+          onPasteFilesRef.current?.(files);
+          return true;
+        }
         const text = event.clipboardData?.getData("text/plain") ?? "";
         const promote = shouldPromotePasteRef.current?.(text);
         if (promote && onPromotePasteRef.current) {
@@ -275,6 +291,11 @@ export const ComposerEditor = forwardRef<
       } else if (node.type.name === "skill") {
         out += `/${node.attrs.label ?? node.attrs.id ?? ""}`;
         return false; // don't descend into the pill
+      } else if (node.type.name === "hardBreak") {
+        // Shift+Enter (and multi-line pastes — ProseMirror converts the
+        // newlines to hardBreak nodes) must survive serialization or the
+        // sent message collapses into one line.
+        out += "\n";
       }
       return true;
     });
@@ -304,6 +325,9 @@ export const ComposerEditor = forwardRef<
         // A pill contributes `/name` chars.
         offset += `/${node.attrs.label ?? node.attrs.id ?? ""}`.length;
         return false;
+      } else if (node.type.name === "hardBreak") {
+        // Mirrors textWithSkills: a hard break serializes as "\n".
+        offset += 1;
       }
       return true;
     });
@@ -337,6 +361,14 @@ export const ComposerEditor = forwardRef<
           return false;
         }
         acc += len;
+      } else if (node.type.name === "hardBreak") {
+        // Mirrors textWithSkills: a hard break serializes as "\n".
+        if (acc + 1 >= offset) {
+          pos = p + 1;
+          acc = offset;
+          return false;
+        }
+        acc += 1;
       }
       return true;
     });

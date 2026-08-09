@@ -89,11 +89,15 @@ export function makeContentTag(text: string): ContentTag {
 /** Build a ContentTag for a file dragged in from the file tree. Unlike paste
  *  tags, a file tag carries only a PATH reference (the agent reads the file
  *  itself via its tools) - no file content is loaded. `preview` is the base
- *  file name; `content` is the `@path` reference injected into the prompt. */
-export function makeFileTag(filePath: string): ContentTag {
+ *  file name; `content` is the `@path` reference injected into the prompt.
+ *
+ *  `displayName` overrides the preview when the path's basename isn't
+ *  user-meaningful — clipboard-pasted external files are materialized to a
+ *  random temp path by main, so the card must show the ORIGINAL file name. */
+export function makeFileTag(filePath: string, displayName?: string): ContentTag {
   // Derive a short display name from the last path segment (handles both /
   // and \ separators for cross-platform paths).
-  const segs = filePath.split(/[/\\]/);
+  const segs = (displayName ?? filePath).split(/[/\\]/);
   const name = segs[segs.length - 1] || filePath;
   const preview =
     name.length > TAG_PREVIEW_CHARS ? name.slice(0, TAG_PREVIEW_CHARS) + "…" : name;

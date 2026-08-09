@@ -242,6 +242,15 @@ export const UI_IDE_EXPANDED_DIRS_SETTING_KEY = "ui.ideExpandedDirs";
 export const UI_IDE_EDITOR_MODE_SETTING_KEY = "ui.ideEditorMode";
 
 /**
+ * Setting key under which the composer's persisted provider/model choice is
+ * stored — the "next session" defaults the user picked (SDK + model + custom
+ * config). Value is a JSON-encoded `{ providerId, model, customModelId }`
+ * object; hydrated at boot so the last pick is pre-selected, and validated
+ * against the current model lists (a deleted model falls back to auto).
+ */
+export const UI_COMPOSER_MODEL_SETTING_KEY = "ui.composerModel";
+
+/**
  * Setting key under which the custom-model id used for git-commit-message
  * generation is persisted. Value is a config id from CustomModelStore, or
  * empty/null for "use built-in model". Shared between main (the generator
@@ -502,10 +511,10 @@ export type RespondPlanApprovalInput = z.infer<typeof RespondPlanApprovalSchema>
  * present. Main resolves each path against the session's cwd and refuses
  * any path that escapes it (path-traversal guard).
  *
- * `targetFiles` (optional): present only for a HISTORICAL-turn rewind.
- * Main forwards it onto the `turn.rewound` event so the renderer can
- * locate the exact card to mark `rewound: true` (vs. the latest-turn
- * rewind, which clears the live card). */
+ * `targetFiles`: the requested path set, forwarded onto the
+ * `turn.rewound` event so the renderer can locate the exact card to
+ * mark `rewound: true`. Always present — the card is never removed,
+ * only marked, for both latest-turn and historical rewinds. */
 export const RewindTurnSchema = z.object({
   sessionId: z.string(),
   files: z.array(
@@ -517,7 +526,7 @@ export const RewindTurnSchema = z.object({
       before: z.string(),
     }),
   ),
-  targetFiles: z.array(z.string()).optional(),
+  targetFiles: z.array(z.string()),
 });
 export type RewindTurnInput = z.infer<typeof RewindTurnSchema>;
 
@@ -913,6 +922,28 @@ export const FileReadBinarySchema = z.object({
 });
 export type FileReadBinaryInput = z.infer<typeof FileReadBinarySchema>;
 
+/** Save a file pasted from the OS clipboard (external image/file — copied in
+ *  Finder, a browser, or a screenshot) to a temp path the agent can read.
+ *  Bytes travel as base64 (matches the existing binary patterns); main
+ *  preserves the original extension so the agent's Read tool can sniff image
+ *  types, and returns the absolute temp path. The renderer then attaches it
+ *  exactly like an internally dragged file (a `@path` file tag). */
+export const ClipboardSaveFileSchema = z.object({
+  /** Original file name (display + extension preservation). */
+  name: z.string().min(1).max(255),
+  /** base64-encoded file bytes (~52MB file ceiling). */
+  bytes: z.string().min(1).max(70_000_000),
+});
+export type ClipboardSaveFileInput = z.infer<typeof ClipboardSaveFileSchema>;
+
+export const ClipboardSaveFileResultSchema = z.object({
+  ok: z.boolean(),
+  /** Absolute temp path (set when ok). */
+  path: z.string().optional(),
+  error: z.string().optional(),
+});
+export type ClipboardSaveFileResult = z.infer<typeof ClipboardSaveFileResultSchema>;
+
 /** One entry returned by `file.listDir`. `path` is the absolute filesystem
  *  path (already validated to sit inside a project root); `name` is the base
  *  name for display. `size` is only populated for files (bytes). */
@@ -992,6 +1023,32 @@ export const FileMkdirSchema = z.object({
   dirPath: z.string(),
 });
 export type FileMkdirInput = z.infer<typeof FileMkdirSchema>;
+
+/** Delete a file or directory by moving it to the system trash (recoverable).
+ *  Used by the file-tree "删除" right-click action. The path must resolve
+ *  inside a known project root; on refusal or failure `ok` is false and the
+ *  handler logs — the renderer surfaces a non-blocking error. Returns `{ ok }`. */
+export const FileDeleteSchema = z.object({
+  /** Absolute path of the file or directory to trash. Must resolve inside a
+   *  known project root (path-traversal guard, same as writeFile/mkdir). */
+  targetPath: z.string(),
+});
+export type FileDeleteInput = z.infer<typeof FileDeleteSchema>;
+
+/** Rename a file or directory in place (same parent directory). Both paths
+ *  must resolve inside the same known project root and share the same parent
+ *  directory — cross-directory moves are refused (that is a move, not a
+ *  rename). Used by the file-tree "重命名" right-click action. On refusal or
+ *  failure `ok` is false and the handler logs. Returns `{ ok }`. */
+export const FileRenameSchema = z.object({
+  /** Absolute path of the entry to rename. Must resolve inside a known project
+   *  root. */
+  oldPath: z.string(),
+  /** Absolute path of the new name. Must be in the same project root and the
+   *  same parent directory as `oldPath`. */
+  newPath: z.string(),
+});
+export type FileRenameInput = z.infer<typeof FileRenameSchema>;
 
 /** Native multi-file picker (project-external files allowed). Used by the
  *  composer "添加上下文" button to attach files that live outside the active
@@ -2019,6 +2076,8 @@ export interface RpcMap {
   "file.readFile": (input: FileReadInput) => Promise<{ content: string }>;
   /** Read a binary file as a base64 data URL (image preview). Same path guard. */
   "file.readBinary": (input: FileReadBinaryInput) => Promise<{ dataUrl: string }>;
+  /** Persist a clipboard-pasted external file to a temp path (composer paste). */
+  "clipboard.saveFile": (input: ClipboardSaveFileInput) => Promise<ClipboardSaveFileResult>;
   /** List one level of a directory (non-recursive), scoped to a project root. */
   "file.listDir": (input: FileListDirInput) => Promise<{ entries: FileTreeEntry[] }>;
   /** Recursive file search under a project root (composer @ / add-context). */
@@ -2027,6 +2086,10 @@ export interface RpcMap {
   "file.writeFile": (input: FileWriteInput) => Promise<{ ok: boolean }>;
   /** Create a directory (recursive), scoped to a project root. */
   "file.mkdir": (input: FileMkdirInput) => Promise<{ ok: boolean }>;
+  /** Delete a file or directory (moves to system trash), scoped to a project root. */
+  "file.delete": (input: FileDeleteInput) => Promise<{ ok: boolean }>;
+  /** Rename a file or directory in place, scoped to a project root. */
+  "file.rename": (input: FileRenameInput) => Promise<{ ok: boolean }>;
   /** Grep file contents under a project root (line-level matches). */
   "file.grep": (input: FileGrepInput) => Promise<{ matches: FileGrepEntry[] }>;
   // Git operations (P4 Git panel)
@@ -2239,12 +2302,18 @@ export const IPC = {
   FILE_READ: "file:readFile",
   // File read as base64 data URL (image preview)
   FILE_READ_BINARY: "file:readBinary",
+  // Clipboard-pasted external file → temp path (composer paste)
+  CLIPBOARD_SAVE_FILE: "clipboard:saveFile",
   // File tree listing + writing (P4 IDE right panel)
   FILE_LIST_DIR: "file:listDir",
   FILE_SEARCH: "file:search",
   FILE_WRITE: "file:writeFile",
   // Create a directory (file-tree "新建文件夹")
   FILE_MKDIR: "file:mkdir",
+  // Delete a file or directory (file-tree "删除" — moves to system trash)
+  FILE_DELETE: "file:delete",
+  // Rename a file or directory in place (file-tree "重命名")
+  FILE_RENAME: "file:rename",
   FILE_GREP: "file:grep",
   // Git operations (P4 Git panel)
   GIT_DISCOVER_REPOS: "git:discoverRepos",

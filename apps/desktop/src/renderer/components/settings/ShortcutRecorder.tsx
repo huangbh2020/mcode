@@ -19,13 +19,13 @@
  */
 import { useCallback, useEffect, useState } from "react";
 import { cn } from "@renderer/lib/cn.js";
-import { Button } from "@renderer/components/ui/index.js";
+import { Button, Kbd } from "@renderer/components/ui/index.js";
 import { useSessionStore } from "@renderer/stores/sessionStore.js";
 import {
   resolveShortcut,
   resolveAllShortcuts,
   eventToAccelerator,
-  acceleratorToDisplayString,
+  acceleratorToDisplayTokens,
   findConflict,
 } from "@renderer/lib/shortcuts.js";
 import { collectCommands } from "@renderer/lib/commands.js";
@@ -180,9 +180,7 @@ export function ShortcutRecorder({ commandId }: { commandId: string }) {
   return (
     <div className="flex items-center gap-2">
       {effective ? (
-        <kbd className="rounded border border-edge bg-surface-muted px-2 py-1 font-mono text-[0.7857em] text-content">
-          {acceleratorToDisplayString(effective)}
-        </kbd>
+        <Kbd keys={acceleratorToDisplayTokens(effective)} size="xs" />
       ) : (
         <span className="text-[0.7857em] text-content-subtle">未绑定</span>
       )}

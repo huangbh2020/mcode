@@ -299,17 +299,15 @@ export interface TurnFilesEvent {
 }
 
 /** Emitted by main after a renderer-initiated rewind completes. The
- *  renderer clears its turnFilesBySession entry and pushes a system
- *  message into the stream so the user has a visual breadcrumb.
+ *  renderer marks the matching `turn-files` card `rewound: true` in
+ *  place — the card is NEVER removed, so the conversation stream keeps
+ *  a visible trace that the user rolled this turn back (mirroring SDK
+ *  checkpoint semantics where file rollback never rolls back the
+ *  conversation itself).
  *
- *  Two rewind shapes arrive on this same event:
- *   - Latest-turn rewind (no `targetFiles`): the live turn-files card is
- *     removed and turnFilesBySession cleared.
- *   - Historical-turn rewind (`targetFiles` present): the matching
- *     historical card is marked `rewound: true` in place (it is NOT
- *     removed — the conversation record stays intact, mirroring SDK
- *     checkpoint semantics where file rollback never rolls back the
- *     conversation itself). turnFilesBySession is left alone. */
+ *  The renderer uses `targetFiles` to locate the card (path-set match),
+ *  and clears the latest-turn bucket (`turnFilesBySession`) only when
+ *  the matched card is the live one. */
 export interface TurnRewoundEvent {
   type: "turn.rewound";
   sessionId: string;
@@ -318,10 +316,9 @@ export interface TurnRewoundEvent {
    *  beyond the implicit "not in this list"). */
   files: string[];
   /** The ORIGINAL set of paths the rewind targeted (before any were
-   *  dropped due to failure). Present only for historical-turn rewinds
-   *  so the renderer can locate the exact `turn-files` block to mark.
-   *  Absent for the latest-turn rewind (which clears the live card). */
-  targetFiles?: string[];
+   *  dropped due to failure). Always present — the renderer matches the
+   *  `turn-files` block by this path set to mark it `rewound`. */
+  targetFiles: string[];
 }
 
 /**

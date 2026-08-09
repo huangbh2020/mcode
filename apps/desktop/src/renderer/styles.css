@@ -52,14 +52,15 @@
    *   --user-bubble is a neutral gray (zinc-500) so user prompts read as a
    *     calm, non-distracting bubble; presets in Settings offer color picks. */
   --chat-font-size: 14px; /* default = text-sm */
-  /* Chat prose line-height + base weight. A relaxed line height (1.7) and
-   * regular weight (400) give comfortable, airy reading on both themes —
-   * the same values are mirrored in .dark so the reading experience stays
-   * consistent regardless of theme. Contrast is tuned purely via the color
-   * tokens, not by diverging weight/spacing. Consumed by the Markdown
-   * container in Markdown.tsx. */
-  --chat-line-height: 1.7;
-  --chat-font-weight: 400;
+  /* Chat prose line-height + base weight. A relaxed line height (1.6) and a
+   * weight lifted toward the global base (450 vs the 400 of the original
+   * design) give comfortable, airy reading on both themes — 400 read as
+   * visibly thinner than the app chrome (base 500 light / 600 dark), which
+   * washed out on dark backgrounds. The dark scope below raises the weight
+   * one more step (500) since white-on-dark thins optically. Consumed by the
+   * Markdown container in Markdown.tsx. */
+  --chat-line-height: 1.6;
+  --chat-font-weight: 450;
   --user-bubble: 82 82 91; /* default = zinc-500 (neutral gray), R G B triplet */
 
   /* Global side-panel + settings base font size - user-configurable via
@@ -109,12 +110,12 @@
    * Overridden at runtime by lib/appearance.ts when the user sets a custom
    * value. */
   --chat-font-size: 14px;
-  /* Chat prose line-height + base weight — intentionally identical to the
-   * light-mode values (:root) so the reading experience is consistent
-   * across themes. The contrast tuning is handled entirely by the text/
-   * background color tokens (--content*), not by weight/spacing divergence. */
-  --chat-line-height: 1.7;
-  --chat-font-weight: 400;
+  /* Chat prose line-height + base weight — dark mode raises the prose weight
+   * to 500 (one step above light's 450) because white strokes thin optically
+   * on the deep background; the line height stays identical so the reading
+   * rhythm matches light mode. */
+  --chat-line-height: 1.6;
+  --chat-font-weight: 500;
   --user-bubble: 113 113 122; /* default = zinc-500 (\#71717a) */
 
   /* Global side-panel + settings base font size (same default in light + dark). */
@@ -365,7 +366,11 @@ body,
  * The :root block below is the "comfortable" default (= the old hardcoded
  * `mt-3` / `mt-5` / `space-y-2`), so the uncustomized state and any consumer
  * outside [data-chat-density] resolve unchanged. The explicit selectors cover
- * all three modes for clarity. */
+ * all three modes for clarity.
+ *
+ * The three presets are spread wide enough that switching is immediately
+ * perceptible: compact packs messages tightly, comfortable is the balanced
+ * default, cozy gives generous breathing room between turns. */
 :root,
 [data-chat-density="comfortable"] {
   --chat-row-gap-assistant: 0.75rem; /* 12px (was mt-3) */
@@ -373,14 +378,14 @@ body,
   --chat-block-gap: 0.5rem;          /* 8px  (was space-y-2) */
 }
 [data-chat-density="compact"] {
-  --chat-row-gap-assistant: 0.375rem; /* 6px */
-  --chat-row-gap-user: 0.625rem;      /* 10px */
-  --chat-block-gap: 0.25rem;          /* 4px */
+  --chat-row-gap-assistant: 0.25rem; /* 4px */
+  --chat-row-gap-user: 0.5rem;       /* 8px */
+  --chat-block-gap: 0.1875rem;       /* 3px */
 }
 [data-chat-density="cozy"] {
-  --chat-row-gap-assistant: 1.125rem; /* 18px */
-  --chat-row-gap-user: 1.75rem;       /* 28px */
-  --chat-block-gap: 0.75rem;          /* 12px */
+  --chat-row-gap-assistant: 1.75rem; /* 28px */
+  --chat-row-gap-user: 2.75rem;      /* 44px */
+  --chat-block-gap: 1rem;            /* 16px */
 }
 
 /* ───────────── Narrow-composer spacing ─────────────

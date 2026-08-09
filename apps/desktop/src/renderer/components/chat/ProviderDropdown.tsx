@@ -1,20 +1,22 @@
 import { Menu } from "@base-ui/react/menu";
 import { cn } from "@renderer/lib/cn.js";
-import { IconCheck, IconChevronDown } from "@renderer/lib/icons.js";
+import { IconCheck, IconChevronDown, IconLock } from "@renderer/lib/icons.js";
 import { getProviderIcon } from "@renderer/lib/providerIcon.js";
 import { useSessionStore } from "@renderer/stores/sessionStore.js";
 
 /**
  * Provider (AI backend) picker for the composer toolbar.
  *
- * Shows only when more than one provider is registered AND the active thread
- * has no messages yet — once a session has messages its provider is fixed at
- * creation, so the chip hides entirely (no read-only lock affordance) and the
- * model/effort/permission chips carry the conversation context alone.
+ * Shows only when more than one provider is registered. For a thread without
+ * messages it's a dropdown (the SDK for the NEXT session). Once a session has
+ * messages its provider is fixed at creation — the chip stays visible but
+ * becomes read-only (icon + name + lock, no dropdown) so the conversation's
+ * SDK remains legible in the composer.
  *
- * Placement: first in the chip row (provider is a higher-level choice than
- * model/effort/permission). The model dropdown adapts to the chosen provider's
- * capabilities automatically.
+ * Placement: directly left of the send button in ChatPane (not in the
+ * ComposerToolbar chip row), so it stays visible even when the chip row
+ * collapses in narrow mode. The model dropdown adapts to the chosen
+ * provider's capabilities automatically.
  */
 export function ProviderDropdown() {
   const providerId = useSessionStore((s) => s.providerId);
@@ -31,18 +33,33 @@ export function ProviderDropdown() {
   // Single-provider installs need no picker.
   if (providers.length <= 1) return null;
 
-  // Locked (session has messages): the provider is fixed at creation, so
-  // hide the chip entirely rather than show a read-only lock affordance.
-  if (hasMessages) return null;
-
   const active = providers.find((p) => p.id === providerId);
   const activeIcon = getProviderIcon(providerId);
+
+  // Locked (session has messages): the provider is fixed at creation. Render
+  // a read-only chip (icon + name + lock) — visible for context, but with no
+  // dropdown to change it.
+  if (hasMessages) {
+    return (
+      <span
+        className={cn(
+          "composer-chip flex shrink-0 items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-medium",
+          "cursor-default text-content-muted",
+        )}
+        title="该会话的 SDK 已固定,不可更改"
+      >
+        <activeIcon.Icon size={13} className={cn("shrink-0", activeIcon.color)} />
+        <span className="min-w-0 max-w-[140px] truncate">{active?.displayName ?? providerId}</span>
+        <IconLock size={11} className="shrink-0 opacity-50" />
+      </span>
+    );
+  }
 
   const chip = (
     <button
       type="button"
       className={cn(
-        "composer-chip flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-medium transition-all duration-150 ease-out",
+        "composer-chip flex shrink-0 items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-medium transition-all duration-150 ease-out",
         "text-content-muted hover:scale-105 hover:bg-accent/10 hover:text-accent active:scale-95",
       )}
       title="选择会话使用的 SDK"
@@ -53,10 +70,7 @@ export function ProviderDropdown() {
     </button>
   );
 
-  // Locked (session has messages): the provider is fixed at creation, so
-  // hide the chip entirely rather than show a read-only lock affordance.
-  if (hasMessages) return null;
-
+  // Unlocked (new thread): clicking the chip opens the provider menu.
   return (
     <Menu.Root>
       <Menu.Trigger render={chip} />

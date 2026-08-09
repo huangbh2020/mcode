@@ -63,7 +63,7 @@ export function EffortDropdown() {
             )}
           >
             <div className="px-3 py-1 text-xs uppercase tracking-wide text-content-subtle">
-              Reasoning effort
+              思考级别
             </div>
             {levels.map((m) => {
               const active = m.value === effort;

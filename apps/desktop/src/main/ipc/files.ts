@@ -17,9 +17,12 @@
  *  - `file:search`    — recursive file search for composer @ / add-context
  *  - `file:writeFile` — utf-8 write with parent-dir creation (Monaco save)
  *  - `file:mkdir`     — recursive directory creation (file-tree 新建文件夹)
+ *  - `file:delete`    — trash a file or directory (file-tree 删除, recoverable)
+ *  - `file:rename`    — in-place rename, same parent dir (file-tree 重命名)
  */
 import type { IpcMain } from "electron";
-import { readFile, writeFile, readdir, mkdir } from "node:fs/promises";
+import { app, shell } from "electron";
+import { readFile, writeFile, readdir, mkdir, rename, access } from "node:fs/promises";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import {
   IPC,
@@ -29,7 +32,10 @@ import {
   FileSearchSchema,
   FileWriteSchema,
   FileMkdirSchema,
+  FileDeleteSchema,
+  FileRenameSchema,
   FileGrepSchema,
+  ClipboardSaveFileSchema,
 } from "@contracts/ipc";
 import type { FileSearchEntry, FileTreeEntry, FileGrepEntry } from "@contracts/ipc";
 import { ProjectRepo } from "@main/store/repositories.js";
@@ -55,6 +61,16 @@ function pathWithin(root: string, abs: string): boolean {
   if (a === r) return true;
   // Ensure the root ends with a separator so "/foo/bar" doesn't match "/foo/ba".
   return a.startsWith(r + sep);
+}
+
+/** True if `abs` sits inside the clipboard-paste temp dir (see the
+ *  `clipboard:saveFile` handler). Files there were written by THIS app from
+ *  user pastes (images/files copied into the composer), so reads are allowed
+ *  even though the dir sits outside every project root — the IDE editor needs
+ *  it to open/preview pasted files. Writes stay guarded as before. */
+function isPasteTempPath(abs: string): boolean {
+  const dir = join(app.getPath("temp"), "mcode-pastes");
+  return resolve(abs).startsWith(resolve(dir) + sep);
 }
 
 /** Directory/file names hidden from the file tree. These are build artifacts
@@ -117,10 +133,11 @@ export function registerFileHandlers(ipcMain: IpcMain): void {
     const input = FileReadSchema.parse(raw);
     // Find a project root that contains the requested path. We check every
     // project (cheap — there are rarely more than a handful) rather than
-    // trusting a caller-supplied cwd.
+    // trusting a caller-supplied cwd. Clipboard-paste temp files (app-owned,
+    // written by clipboard:saveFile) are allowed outside projects.
     const projects = ProjectRepo.list();
     const root = projects.find((p) => pathWithin(p.path, input.filePath));
-    if (!root) {
+    if (!root && !isPasteTempPath(input.filePath)) {
       log.warn(`file.readFile refused — path outside any project root: ${input.filePath}`);
       return { content: "" };
     }
@@ -157,7 +174,7 @@ export function registerFileHandlers(ipcMain: IpcMain): void {
     const input = FileReadBinarySchema.parse(raw);
     const projects = ProjectRepo.list();
     const root = projects.find((p) => pathWithin(p.path, input.filePath));
-    if (!root) {
+    if (!root && !isPasteTempPath(input.filePath)) {
       log.warn(`file.readBinary refused - path outside any project root: ${input.filePath}`);
       return { dataUrl: "" };
     }
@@ -472,6 +489,113 @@ export function registerFileHandlers(ipcMain: IpcMain): void {
     } catch (err) {
       log.error(`file.mkdir failed for ${input.dirPath}: ${(err as Error).message}`);
       return { ok: false };
+    }
+  });
+
+  /* ── file:delete — move a file or directory to the system trash ── */
+  // Uses Electron's shell.trashItem so the user can recover the deletion from
+  // the OS recycle bin / Trash. Refuses anything outside a project root.
+  ipcMain.handle(IPC.FILE_DELETE, async (_evt, raw) => {
+    const input = FileDeleteSchema.parse(raw);
+    const projects = ProjectRepo.list();
+    const root = projects.find((p) => pathWithin(p.path, input.targetPath));
+    if (!root) {
+      log.warn(`file.delete refused — path outside any project root: ${input.targetPath}`);
+      return { ok: false };
+    }
+    try {
+      await shell.trashItem(input.targetPath);
+      log.info(`file.delete trashed: ${relative(root.path, input.targetPath) || input.targetPath}`);
+      return { ok: true };
+    } catch (err) {
+      log.error(`file.delete failed for ${input.targetPath}: ${(err as Error).message}`);
+      return { ok: false };
+    }
+  });
+
+  /* ── file:rename — in-place rename within the same parent directory ── */
+  // Both paths must resolve inside the same project root AND share the same
+  // parent dir — a cross-directory move is a different operation (and a
+  // foot-gun through this channel), so it's refused here.
+  ipcMain.handle(IPC.FILE_RENAME, async (_evt, raw) => {
+    const input = FileRenameSchema.parse(raw);
+    const projects = ProjectRepo.list();
+    const root = projects.find((p) => pathWithin(p.path, input.oldPath));
+    if (!root) {
+      log.warn(`file.rename refused — oldPath outside any project root: ${input.oldPath}`);
+      return { ok: false };
+    }
+    // newPath must stay inside the same root.
+    if (!pathWithin(root.path, input.newPath)) {
+      log.warn(`file.rename refused — newPath escapes root: ${input.newPath}`);
+      return { ok: false };
+    }
+    // Only allow a same-directory rename; reject cross-directory moves.
+    if (dirname(input.oldPath) !== dirname(input.newPath)) {
+      log.warn(
+        `file.rename refused — cross-directory move (rename only): ${input.oldPath} -> ${input.newPath}`,
+      );
+      return { ok: false };
+    }
+    // No-op rename (same path) — nothing to do, report success.
+    if (input.oldPath === input.newPath) {
+      return { ok: true };
+    }
+    try {
+      // POSIX `rename` silently overwrites an existing destination, which would
+      // silently clobber a sibling. Refuse if the destination already exists so
+      // a clash is surfaced (the renderer also pre-checks, but this is the
+      // authoritative guard). ENOENT from access() is the "ok to rename" path.
+      try {
+        await access(input.newPath);
+        log.warn(`file.rename refused — destination already exists: ${input.newPath}`);
+        return { ok: false };
+      } catch (existsErr) {
+        // Rethrow anything that isn't ENOENT (e.g. permission), which would
+        // also make the rename fail anyway.
+        const code = (existsErr as NodeJS.ErrnoException).code;
+        if (code !== "ENOENT") throw existsErr;
+      }
+      await rename(input.oldPath, input.newPath);
+      log.info(
+        `file.rename: ${relative(root.path, input.oldPath) || input.oldPath} -> ${relative(root.path, input.newPath) || input.newPath}`,
+      );
+      return { ok: true };
+    } catch (err) {
+      log.error(
+        `file.rename failed for ${input.oldPath} -> ${input.newPath}: ${(err as Error).message}`,
+      );
+      return { ok: false };
+    }
+  });
+
+  /* ── clipboard:saveFile — persist a clipboard-pasted external file to a
+     temp path the agent can read. The renderer can't write files itself
+     (contextIsolation), and the pasted file lives nowhere on disk, so the
+     bytes cross via base64 and main materializes them under the OS temp dir.
+     The original extension is preserved — the agent's Read tool sniffs image
+     types from it (base64 read for images). Note this is deliberately NOT
+     project-scoped: the file must be readable by the agent's Read tool from
+     anywhere, and reads are already unrestricted (only writes are guarded). */
+  ipcMain.handle(IPC.CLIPBOARD_SAVE_FILE, async (_evt, raw) => {
+    const input = ClipboardSaveFileSchema.parse(raw);
+    try {
+      // Sanitize the original name: strip path separators + control chars so
+      // the temp path stays a single flat file; keep the extension.
+      const cleanName =
+        basename(input.name).replace(/[\\/:*?"<>|\x00-\x1f]/g, "_") || "paste.bin";
+      const dir = join(app.getPath("temp"), "mcode-pastes");
+      await mkdir(dir, { recursive: true });
+      const target = join(
+        dir,
+        `${Date.now()}-${Math.random().toString(36).slice(2, 8)}-${cleanName}`,
+      );
+      await writeFile(target, Buffer.from(input.bytes, "base64"));
+      return { ok: true, path: target };
+    } catch (err) {
+      const msg = (err as Error).message;
+      log.warn(`clipboard.saveFile failed: ${msg}`);
+      return { ok: false, error: msg };
     }
   });
 }

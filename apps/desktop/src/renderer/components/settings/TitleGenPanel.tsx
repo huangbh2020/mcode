@@ -1,10 +1,15 @@
 import { useMemo } from "react";
 import { useSessionStore } from "@renderer/stores/sessionStore.js";
 import { cn } from "@renderer/lib/cn.js";
-import { Switch } from "@renderer/components/ui/index.js";
+import { Select, Switch } from "@renderer/components/ui/index.js";
 import { SettingRow } from "./SettingRow.js";
 import { SettingsSection } from "./SettingsSection.js";
 import { CUSTOM_MODEL_ROLES, CUSTOM_MODEL_ROLE_LABELS } from "@contracts/customModel";
+
+/** Sentinel for the "内置模型" (no selection) option — base-ui Select
+ *  rejects empty-string item values, so the empty state maps to this and
+ *  the store setter translates it back to null. */
+const MODEL_NONE = "__none__";
 
 /**
  * Thread-title generation settings.
@@ -75,23 +80,39 @@ export function TitleGenPanel() {
         desc="选择用于生成标题的具体模型。需要先在「模型配置」中添加并绑定角色。未选择则使用内置 Claude 模型。"
       >
         {modelOptions.length > 0 ? (
-          <select
-            value={titleGenModel ?? ""}
-            onChange={(e) => setTitleGenModel(e.target.value || null)}
-            disabled={!titleGenEnabled}
-            className={cn(
-              "min-w-[220px] rounded-md border border-edge-input bg-surface px-2 py-1.5 text-[0.8571em] text-content outline-none",
-              "focus:border-accent",
-              !titleGenEnabled && "cursor-not-allowed opacity-50",
-            )}
+          <Select.Root
+            value={titleGenModel ?? MODEL_NONE}
+            onValueChange={(v) => setTitleGenModel(v === MODEL_NONE ? null : (v as string))}
           >
-            <option value="">内置模型</option>
-            {modelOptions.map((opt) => (
-              <option key={opt.value} value={opt.value}>
-                {opt.label}
-              </option>
-            ))}
-          </select>
+            <Select.Trigger
+              disabled={!titleGenEnabled}
+              className={cn("min-w-[220px]", !titleGenEnabled && "cursor-not-allowed opacity-50")}
+            >
+              <Select.Value>
+                {(val: string) =>
+                  val === MODEL_NONE
+                    ? "内置模型"
+                    : (modelOptions.find((o) => o.value === val)?.label ?? val)
+                }
+              </Select.Value>
+            </Select.Trigger>
+            <Select.Portal>
+              <Select.Positioner>
+                <Select.Popup>
+                  <Select.List>
+                    <Select.Item value={MODEL_NONE}>
+                      <Select.ItemText>内置模型</Select.ItemText>
+                    </Select.Item>
+                    {modelOptions.map((opt) => (
+                      <Select.Item key={opt.value} value={opt.value}>
+                        <Select.ItemText>{opt.label}</Select.ItemText>
+                      </Select.Item>
+                    ))}
+                  </Select.List>
+                </Select.Popup>
+              </Select.Positioner>
+            </Select.Portal>
+          </Select.Root>
         ) : (
           <p className={cn("text-[0.7857em] text-content-subtle", !titleGenEnabled && "opacity-50")}>
             暂无可用模型,请先在「模型配置」中添加。未选择则使用内置 Claude 模型。

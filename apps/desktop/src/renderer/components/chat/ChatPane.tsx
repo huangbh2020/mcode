@@ -16,6 +16,8 @@ import {
   IconPencil,
 } from "@renderer/lib/icons.js";
 import { useSessionStore, EMPTY_MESSAGES, EMPTY_TODOS, EMPTY_SUBAGENTS, EMPTY_CHAT_QUEUE, EMPTY_ELEMENT_QUEUE, EMPTY_PROMPT_QUEUE, type Block, type ChatMessage, type TodoItem, type TurnMeta, type QueuedPrompt } from "@renderer/stores/sessionStore.js";
+import { useToastStore } from "@renderer/stores/toastStore.js";
+import { api } from "@renderer/lib/api.js";
 import { useNow } from "@renderer/hooks/useNow.js";
 import type { SubagentSnapshot } from "@contracts/runtime";
 import type { FileSearchEntry } from "@contracts/ipc";
@@ -33,6 +35,7 @@ import type { SkillInfo, BuiltInCommand } from "@renderer/lib/slashCommands.js";
 import { MessageBlocks, TurnPanel, type ProceduralBlock, type BeforeContentMap } from "./MessageBlocks.js";
 import { ComposerToolbar } from "./ComposerToolbar.js";
 import { ComposerToolbarToggle } from "./ComposerToolbarToggle.js";
+import { ProviderDropdown } from "./ProviderDropdown.js";
 import { QuestionPrompt } from "./QuestionPrompt.js";
 import { ApprovalPrompt } from "./ApprovalPrompt.js";
 import { PlanApprovalPrompt } from "./PlanApprovalPrompt.js";
@@ -62,6 +65,26 @@ import { LegendList, type LegendListRef } from "@legendapp/list/react";
 /** 第一条消息与顶部(标签条 / 标题栏)之间的留白。作为滚动内容的顶部
  *  padding,停在顶部时可见,向下滚动后随内容滚走。 */
 const MESSAGE_LIST_TOP_PADDING = 10;
+
+/** Uint8Array → base64. Chunked so large pasted files don't blow the call
+ *  stack (String.fromCharCode spread is limited to ~32K args per call). */
+function toBase64(bytes: Uint8Array): string {
+  let binary = "";
+  const CHUNK = 0x8000;
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
+  }
+  return btoa(binary);
+}
+
+/** Preserve a user-typed message's single line breaks when rendering through
+ *  Markdown: a lone "\n" is a soft break that markdown collapses to a space,
+ *  so every newline that is NOT part of a blank-line gap ("\n\n") becomes a
+ *  hard break ("  \n"). Purely a display transform — the stored text and the
+ *  copy/edit flows keep the raw "\n". */
+function preserveUserLineBreaks(text: string): string {
+  return text.replace(/\n(?!\n)/g, "  \n");
+}
 
 /** Distance from the bottom (px) under which the list is considered "at the
  *  bottom" - the jump-to-bottom button is hidden, and new content auto-follows.
@@ -204,6 +227,52 @@ function isCompletedTurnTail(
   return next?.role === "user";
 }
 
+/** Pull every per-turn "footer card" block out of the given messages and
+ *  return them separately. Two kinds qualify:
+ *   - `turn-files` ("本轮修改了 N 个文件") — strictly a per-turn summary footer
+ *     and must ALWAYS render as the turn's LAST visible item, after all the
+ *     model's reply text;
+ *   - `plan` (approved plan card) — belongs at the turn's end too, ABOVE the
+ *     turn-files card ("本轮修改" sits below the plan), and still at the very
+ *     bottom when the turn has no modified-files card.
+ *
+ *  The store attaches these blocks to whatever assistant message was current
+ *  at the time their events landed (array-last at turn.files / the trailing
+ *  open-turn message at plan.update), but a turn's reply can span multiple
+ *  assistant messages and a carrying message may also hold earlier reply text
+ *  or tool calls. A plan block in particular almost always sits BEFORE the
+ *  last tool call in the timeline (plan mode = research → plan → execute), so
+ *  without extraction it would fold into the process panel and vanish. This
+ *  helper is the single source of truth for the extraction: the LIVE streaming
+ *  branch, the completed-turn branch and the orphan branch all call it, so
+ *  both cards stay pinned to the turn's end regardless of streaming state or
+ *  event ordering. Returns the cleaned messages (dropping any left empty by
+ *  the extraction) plus the extracted blocks in their original order, plans
+ *  and files kept separate so callers can order plan → files. Pure — no
+ *  mutation of the input array. */
+function extractFooterBlocks(msgs: ChatMessage[]): {
+  cleaned: ChatMessage[];
+  plans: Block[];
+  files: Block[];
+} {
+  const plans: Block[] = [];
+  const files: Block[] = [];
+  const cleaned = msgs
+    .map((msg) => {
+      const planBlocks = msg.blocks.filter((b) => b.kind === "plan");
+      const fileBlocks = msg.blocks.filter((b) => b.kind === "turn-files");
+      if (planBlocks.length === 0 && fileBlocks.length === 0) return msg;
+      plans.push(...planBlocks);
+      files.push(...fileBlocks);
+      return {
+        ...msg,
+        blocks: msg.blocks.filter((b) => b.kind !== "plan" && b.kind !== "turn-files"),
+      };
+    })
+    .filter((msg) => msg.blocks.length > 0); // drop messages left empty by the extraction
+  return { cleaned, plans, files };
+}
+
 /** Group the raw message stream into render items at the TURN level. Every
  *  assistant message belonging to one turn (from the turn-opener carrying
  *  `turnMeta` up to the next turn-opener or a user message) is merged into a
@@ -265,13 +334,61 @@ function groupMessagesForRender(
         if (arr) arr.push(block);
         else byMsg.set(msg, [block]);
       }
+      // Group into ChatMessage[] so we can run the SAME footer-card extraction
+      // (plan + turn-files) as the completed-turn branch. turn.files is emitted
+      // from flushFinal() BEFORE turn.done, so while the turn is still
+      // streaming the card has already landed on a host message's blocks. A
+      // live plan card is attached the same way (plan.update mid-turn). Without
+      // extraction these would render inline wherever their host message sits
+      // (often mid-stream, mixed in with tool/narration cards). Pulling them
+      // out and re-emitting them as trailing singles (plan above, files below)
+      // keeps both cards at the turn's very end during streaming too — so their
+      // positions don't jump when the turn completes and the completed-turn
+      // extraction kicks in.
+      const liveMsgs: ChatMessage[] = [];
       for (const [msg, blocks] of byMsg) {
+        liveMsgs.push({ ...msg, blocks });
+      }
+      const { cleaned, plans, files } = extractFooterBlocks(liveMsgs);
+      const streamingTailId = lastMsg?.id;
+      for (const msg of cleaned) {
         items.push({
           kind: "single",
-          msg: { ...msg, blocks },
-          isStreamingTail: msg.id === lastMsg?.id,
+          msg,
+          isStreamingTail: msg.id === streamingTailId,
           isTurnTail: false,
         });
+      }
+      // Re-emit each extracted card as its own trailing single (after every
+      // real message of the live turn), plan cards before turn-files cards.
+      // isStreamingTail is false — the cards are not streaming output sources,
+      // and marking them true would attach a spinner to them. turnMeta is
+      // stripped to avoid a phantom "开始 · 用时" stat row on the synthetic
+      // carrier. Identity borrows the last real message's when available for
+      // sane copy/identity semantics.
+      if (plans.length > 0 || files.length > 0) {
+        const tail = cleaned.length > 0 ? cleaned[cleaned.length - 1] : null;
+        const emitFooter = (prefix: string, blocks: Block[]) => {
+          for (let i = 0; i < blocks.length; i++) {
+            const carrier: ChatMessage = tail
+              ? { ...tail, id: `${prefix}_${tail.id}_${i}`, turnMeta: undefined, blocks: [blocks[i]!] }
+              : {
+                  id: `${prefix}_${turnMeta?.startedAt ?? Date.now()}_${i}`,
+                  sessionId: "",
+                  role: "assistant",
+                  blocks: [blocks[i]!],
+                  createdAt: Date.now(),
+                };
+            items.push({
+              kind: "single",
+              msg: carrier,
+              isStreamingTail: false,
+              isTurnTail: false,
+            });
+          }
+        };
+        emitFooter("plan_tail", plans);
+        emitFooter("files_tail", files);
       }
       turnBlocks = [];
       turnMeta = undefined;
@@ -326,51 +443,75 @@ function groupMessagesForRender(
       }
     }
 
-    // The "本轮修改了 N 个文件" (turn-files) card must ALWAYS render as the
-    // very last item of the visible reply - after all the model's text. The
-    // store attaches the block to a specific assistant message (the array-last
-    // one at turn.files time), but a turn's reply can span multiple assistant
-    // messages, and the textMsgs order follows each message's FIRST reply-block
-    // position in the timeline. So if the card's carrying message also holds
-    // earlier reply text, that message is emitted before later messages' text,
-    // and the card ends up above subsequent reply text ("card in the middle").
+    // Pull approved plan cards out of the PROCESS surface. A plan block almost
+    // always sits BEFORE the last tool call in the timeline (plan mode =
+    // research tools → EnterPlanMode → ExitPlanMode → execution tools), so the
+    // slice above folds it into panelBlocks — hidden behind the collapsed
+    // panel. The approved plan card must stay visible: extract it here and
+    // re-emit it below the reply, above the modified-files card.
+    const panelPlans: Block[] = [];
+    if (panelBlocks.some((b) => b.kind === "plan")) {
+      panelPlans.push(...panelBlocks.filter((b) => b.kind === "plan"));
+      panelBlocks = panelBlocks.filter((b) => b.kind !== "plan");
+    }
+
+    // Per-turn footer cards (plan + turn-files) must ALWAYS render at the very
+    // end of the visible reply: the plan card above, the "本轮修改了 N 个文件"
+    // card below it. The store attaches them to whatever assistant message was
+    // current when their events landed (the array-last one at turn.files, the
+    // trailing open-turn message at plan.update), but a turn's reply can span
+    // multiple assistant messages, and the textMsgs order follows each
+    // message's FIRST reply-block position in the timeline. So if a carrying
+    // message also holds earlier reply text, its card would end up above
+    // subsequent reply text ("card in the middle").
     //
-    // Enforce the invariant here at the render boundary: pull every turn-files
-    // block out of its host message and re-emit it as a standalone trailing
-    // textMsg. This keeps the card last regardless of where the store attached
-    // it. (Errors/plan/compact-summary blocks are NOT moved - only turn-files,
-    // which is strictly a per-turn summary footer.)
-    if (textMsgs.length > 0) {
-      const extracted: Block[] = [];
-      const cleaned = textMsgs
-        .map((msg) => {
-          const tf = msg.blocks.filter((b) => b.kind === "turn-files");
-          if (tf.length === 0) return msg;
-          extracted.push(...tf);
-          return { ...msg, blocks: msg.blocks.filter((b) => b.kind !== "turn-files") };
-        })
-        .filter((msg) => msg.blocks.length > 0); // drop messages left empty by the extraction
-      if (extracted.length > 0) {
+    // Enforce the invariant at the render boundary: extractFooterBlocks pulls
+    // every plan/turn-files block out of its host message; here we re-emit the
+    // extracted cards as standalone trailing textMsgs in the order plan → files.
+    // (Errors / compact-summary blocks are NOT moved - only plan and turn-files,
+    // which are strictly per-turn footers.) The same helper runs in the LIVE
+    // branch so the cards' positions are stable across the streaming→completed
+    // transition. Runs whenever there is a footer candidate (including a plan
+    // card rescued from panelBlocks on a pure-plan turn) so none is dropped.
+    if (textMsgs.length > 0 || panelPlans.length > 0) {
+      const { cleaned, plans, files } = extractFooterBlocks(textMsgs);
+      const allPlans = [...panelPlans, ...plans];
+      if (allPlans.length > 0 || files.length > 0) {
         textMsgs.length = 0;
         textMsgs.push(...cleaned);
-        // Attach the extracted card(s) to the LAST reply message's identity (so
+        // Attach each extracted card to the LAST reply message's identity (so
         // copy/identity semantics stay sane), or synthesize a trailing message
-        // if every reply was turn-files-only. STRIP turnMeta from the trailing
+        // if every reply was footer-only. STRIP turnMeta from the trailing
         // message: it's a synthetic split-off carrying only the card, and
         // keeping turnMeta would render a duplicate "开始 · 用时" stat row in
         // pure-text turns (where hideTurnStat is false because there's no panel).
         const tail = cleaned.length > 0 ? cleaned[cleaned.length - 1] : null;
-        textMsgs.push(
-          tail
-            ? { ...tail, id: `files_tail_${tail.id}`, turnMeta: undefined, blocks: extracted }
-            : {
-                id: `files_tail_${turnMeta?.startedAt ?? Date.now()}`,
-                sessionId: "",
-                role: "assistant",
-                blocks: extracted,
-                createdAt: Date.now(),
-              },
-        );
+        if (allPlans.length > 0) {
+          textMsgs.push(
+            tail
+              ? { ...tail, id: `plan_tail_${tail.id}`, turnMeta: undefined, blocks: allPlans }
+              : {
+                  id: `plan_tail_${turnMeta?.startedAt ?? Date.now()}`,
+                  sessionId: "",
+                  role: "assistant",
+                  blocks: allPlans,
+                  createdAt: Date.now(),
+                },
+          );
+        }
+        if (files.length > 0) {
+          textMsgs.push(
+            tail
+              ? { ...tail, id: `files_tail_${tail.id}`, turnMeta: undefined, blocks: files }
+              : {
+                  id: `files_tail_${turnMeta?.startedAt ?? Date.now()}`,
+                  sessionId: "",
+                  role: "assistant",
+                  blocks: files,
+                  createdAt: Date.now(),
+                },
+          );
+        }
       }
     }
 
@@ -422,10 +563,35 @@ function groupMessagesForRender(
     } else {
       // Assistant message with no open turn (e.g. legacy / orphaned data
       // without turnMeta). Render as a standalone single item so it isn't
-      // lost — its own MessageBlocks will still fold any procedural run.
+      // lost — its own MessageBlocks will still fold any procedural run. Apply
+      // the same footer-card extraction as the other branches for consistency:
+      // a plan / turn-files card sitting on such a message would otherwise
+      // render inline. The cards are re-emitted as trailing singles right after
+      // this message, plan before turn-files.
       const isStreamingTail = isRunning && i === messages.length - 1;
       const isTurnTail = isCompletedTurnTail(messages, i, isRunning);
-      items.push({ kind: "single", msg: m, isStreamingTail, isTurnTail });
+      const { cleaned, plans, files } = extractFooterBlocks([m]);
+      for (const msg of cleaned) {
+        items.push({ kind: "single", msg, isStreamingTail, isTurnTail });
+      }
+      const emitFooter = (prefix: string, blocks: Block[]) => {
+        for (let k = 0; k < blocks.length; k++) {
+          items.push({
+            kind: "single",
+            msg: {
+              id: `${prefix}_${m.id}_${k}`,
+              sessionId: m.sessionId,
+              role: "assistant",
+              blocks: [blocks[k]!],
+              createdAt: m.createdAt,
+            },
+            isStreamingTail: false,
+            isTurnTail: false,
+          });
+        }
+      };
+      emitFooter("plan_tail", plans);
+      emitFooter("files_tail", files);
     }
   }
   flush();
@@ -967,6 +1133,54 @@ function ChatPaneForSession({ sessionId }: { sessionId: string }) {
     setTags((prev) => [...prev, makeContentTag(text)]);
   }, []);
 
+  // Ceiling for clipboard-pasted external files (renderer-side guard; the
+  // main-side schema caps the base64 payload too). Larger pastes are skipped
+  // with a toast instead of failing the IPC.
+  const PASTE_FILE_MAX_BYTES = 50 * 1024 * 1024;
+
+  /** Paste of external files/images (copied from the OS — Finder, browser,
+   *  screenshot). The renderer can't write files (contextIsolation), so each
+   *  file's bytes go to main which materializes them under the OS temp dir;
+   *  the returned path becomes a normal FILE tag — the same top-left card as
+   *  an internally dragged file, and the agent reads the content itself (the
+   *  Read tool handles images via base64). The card shows the ORIGINAL file
+   *  name, not the random temp path. */
+  const handlePasteFiles = useCallback((files: File[]) => {
+    for (const file of files) {
+      if (file.size > PASTE_FILE_MAX_BYTES) {
+        useToastStore.getState().push({
+          kind: "warning",
+          title: "文件过大",
+          body: `${file.name} 超过 50MB,未添加`,
+        });
+        continue;
+      }
+      // Some clipboard sources (older image copies) yield an empty File.name —
+      // fall back to a name derived from the MIME type so the temp path keeps
+      // a meaningful extension (the agent's Read tool sniffs images from it).
+      const name =
+        file.name ||
+        (file.type ? `pasted-${file.type.split("/").pop() || "file"}` : "pasted-file");
+      void file
+        .arrayBuffer()
+        .then((buf) => toBase64(new Uint8Array(buf)))
+        .then((bytes) => api.clipboardFile.save({ name, bytes }))
+        .then((res) => {
+          // Capture into a local const first: narrowing doesn't propagate
+          // into the nested setTags updater closure.
+          const path = res.ok && res.path ? res.path : null;
+          if (path) {
+            setTags((prev) => [...prev, makeFileTag(path, name)]);
+          } else {
+            console.warn("clipboardFile.save failed:", res.error);
+          }
+        })
+        .catch((err) => {
+          console.warn("paste external file failed:", err);
+        });
+    }
+  }, []);
+
   // Recompute the "jump to bottom" button visibility from the live scroll
   // state. Returns true if the list is near the bottom (button hidden), false
   // otherwise. Used both by the onScroll handler and the data-change effect so
@@ -1057,17 +1271,23 @@ function ChatPaneForSession({ sessionId }: { sessionId: string }) {
       attachmentKind: t.kind === "file" ? ("file" as const) : ("paste" as const),
       filePath: t.filePath,
     }));
+    // Clear the composer only when the prompt was actually accepted into the
+    // stream. A blocked send (e.g. the "尚未配置模型" dialog raised inside
+    // sendPrompt) must leave the typed text + tags intact so nothing is lost
+    // while the user goes to configure a model.
     void sendPrompt(
       prompt,
       attachments.length > 0 ? attachments : undefined,
       attachments.length > 0 ? text : undefined,
       skillNames.length > 0 ? skillNames : undefined,
-    );
-    editorRef.current?.clear();
-    setValue("");
-    setTags([]);
-    setOpenTagId(null);
-    setAnchorRect(null);
+    ).then((sent) => {
+      if (!sent) return;
+      editorRef.current?.clear();
+      setValue("");
+      setTags([]);
+      setOpenTagId(null);
+      setAnchorRect(null);
+    });
   };
 
   /** Queue the typed prompt while a turn is running, instead of sending it.
@@ -1641,6 +1861,7 @@ function ChatPaneForSession({ sessionId }: { sessionId: string }) {
               onEnter={handleEnter}
               onPromotePaste={handlePromotePaste}
               shouldPromotePaste={shouldPromoteToTag}
+              onPasteFiles={handlePasteFiles}
               className={cn(
                 "px-3 pt-2.5 text-sm leading-relaxed text-content",
                 tags.length > 0 && "pt-1.5",
@@ -1667,33 +1888,39 @@ function ChatPaneForSession({ sessionId }: { sessionId: string }) {
                     row when the pane < 30rem. Pops a panel hosting the same chips. */}
                 <ComposerToolbarToggle />
               </div>
-              {sessionBusy ? (
-                <button
-                  onClick={() => void interrupt()}
-                  title="停止生成"
-                  aria-label="停止生成"
-                  className={cn(
-                    "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-danger text-surface transition-all duration-150 ease-out",
-                    "hover:scale-105 hover:brightness-110 active:scale-95 active:brightness-95",
-                  )}
-                >
-                  <IconPlayerStop size={16} />
-                </button>
-              ) : (
-                <button
-                  onClick={handleSend}
-                  disabled={!value.trim() && tags.length === 0}
-                  title="发送"
-                  className={cn(
-                    "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-accent text-surface shadow-sm transition-all duration-150 ease-out",
-                    "hover:scale-110 hover:brightness-110 hover:shadow-md hover:shadow-accent/20",
-                    "active:scale-95 active:brightness-95",
-                    "disabled:scale-100 disabled:cursor-not-allowed disabled:bg-surface-hover disabled:text-content-subtle disabled:shadow-none disabled:hover:scale-100",
-                  )}
-                >
-                  <IconSend2 size={16} />
-                </button>
-              )}
+              {/* SDK picker pinned left of the send button — always visible
+                  (unlike the chip row, which collapses in narrow mode); locked
+                  to a read-only chip once the thread has messages. */}
+              <div className="flex shrink-0 items-center gap-1">
+                <ProviderDropdown />
+                {sessionBusy ? (
+                  <button
+                    onClick={() => void interrupt()}
+                    title="停止生成"
+                    aria-label="停止生成"
+                    className={cn(
+                      "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-danger text-surface transition-all duration-150 ease-out",
+                      "hover:scale-105 hover:brightness-110 active:scale-95 active:brightness-95",
+                    )}
+                  >
+                    <IconPlayerStop size={16} />
+                  </button>
+                ) : (
+                  <button
+                    onClick={handleSend}
+                    disabled={!value.trim() && tags.length === 0}
+                    title="发送"
+                    className={cn(
+                      "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-accent text-surface shadow-sm transition-all duration-150 ease-out",
+                      "hover:scale-110 hover:brightness-110 hover:shadow-md hover:shadow-accent/20",
+                      "active:scale-95 active:brightness-95",
+                      "disabled:scale-100 disabled:cursor-not-allowed disabled:bg-surface-hover disabled:text-content-subtle disabled:shadow-none disabled:hover:scale-100",
+                    )}
+                  >
+                    <IconSend2 size={16} />
+                  </button>
+                )}
+              </div>
             </div>
           </div>
           {/* Content-tag preview popover. Fixed-positioned to the clicked
@@ -1822,6 +2049,23 @@ const MessageRow = memo(function MessageRow({
 }) {
   const isUser = msg.role === "user";
   const copyText = useMemo(() => blocksToText(msg.blocks), [msg.blocks]);
+  // User-typed text renders through Markdown, which collapses single "\n"
+  // soft breaks into spaces. Map the blocks so user text keeps its typed
+  // line breaks visually (see preserveUserLineBreaks); assistant/tool text
+  // keeps normal markdown semantics. Identity-stable when nothing changes,
+  // so MessageBlocks' memoization still works.
+  const renderBlocks = useMemo(() => {
+    if (!isUser) return msg.blocks;
+    let changed = false;
+    const next = msg.blocks.map((b) => {
+      if (b.kind !== "text") return b;
+      const text = preserveUserLineBreaks(b.text);
+      if (text === b.text) return b;
+      changed = true;
+      return { ...b, text };
+    });
+    return changed ? next : msg.blocks;
+  }, [msg.blocks, isUser]);
   // Only show the copy button on messages with real text content - i.e. the
   // model's substantive answer to the user. A single turn often produces
   // several assistant messages (pure thinking, pure tool_use, then the text
@@ -1888,7 +2132,7 @@ const MessageRow = memo(function MessageRow({
               : "text-content [font-size:var(--chat-font-size)]"
           }
         >
-          <MessageBlocks blocks={msg.blocks} beforeMap={beforeMap} isStreamingTail={isStreamingTail} onOpenPlan={onOpenPlan} projectPath={projectPath} />
+          <MessageBlocks blocks={renderBlocks} beforeMap={beforeMap} isStreamingTail={isStreamingTail} onOpenPlan={onOpenPlan} projectPath={projectPath} />
           {/* Streaming loader at the bottom of the content while this
               message is still receiving deltas. */}
           {isStreamingTail && (

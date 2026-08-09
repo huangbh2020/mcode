@@ -95,7 +95,7 @@ export function PermissionModeDropdown() {
             )}
           >
             <div className="px-3 py-1 text-xs uppercase tracking-wide text-content-subtle">
-              Permission mode
+              权限级别
             </div>
             {modes.map((m) => {
               const active = m.value === permissionMode;

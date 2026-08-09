@@ -20,11 +20,15 @@
  *
  * The data source is the store's `usageHistoryBySession` map (append-only,
  * per session, ephemeral — a restart starts empty, so the empty-state hint
- * guides the user). Positioning mirrors {@link ActivityPopover}: an absolutely
- * positioned panel right-aligned to the ring, popping above it; a transparent
+ * guides the user). The panel renders through a portal to <body> with fixed
+ * positioning anchored to the ring's captured rect — the composer card's
+ * overflow-hidden would otherwise clip an in-flow absolutely positioned
+ * panel (same reason the thinking-level dropdown portals via Menu.Portal).
+ * It pops above the ring, flipping below when there's no room; a transparent
  * fixed backdrop handles outside-click dismissal.
  */
-import { useState } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { cn } from "@renderer/lib/cn.js";
 import { fmtTokens, getContextBreakdown, warningColor } from "@renderer/lib/contextWindow.js";
 import type { ContextSnapshot, TurnUsageRecord } from "@contracts/runtime";
@@ -37,6 +41,7 @@ export function ContextStatsPopover({
   snapshot,
   history,
   maxTokens,
+  anchorRect,
   onClose,
   initialView = "current",
 }: {
@@ -45,6 +50,9 @@ export function ContextStatsPopover({
   /** Current window ceiling, used to render each history row's occupancy %.
    *  Passed down from the live snapshot since history rows don't carry it. */
   maxTokens: number;
+  /** Bounding box of the ContextRing that opened this popover, in viewport
+   *  coordinates (getBoundingClientRect). Drives the fixed positioning. */
+  anchorRect: DOMRect;
   onClose: () => void;
   /** Which view the popover opens on. The ContextRing hover tooltip's
    *  "查看详情" affordance passes "history" so it jumps straight to the
@@ -54,17 +62,53 @@ export function ContextStatsPopover({
 }) {
   const [view, setView] = useState<View>(initialView);
   const breakdown = getContextBreakdown(snapshot);
+  const panelRef = useRef<HTMLDivElement>(null);
+  // Whether the panel has room to sit ABOVE the ring; falls back to below.
+  // Computed after first measure so we can read the panel's own height.
+  const [placeAbove, setPlaceAbove] = useState(true);
 
-  return (
+  // Measure once mounted and decide above/below. Also re-check on resize so
+  // a window shrink doesn't leave the panel overflowing the top edge.
+  useLayoutEffect(() => {
+    const recompute = () => {
+      const el = panelRef.current;
+      if (!el) return;
+      // 4px gap between panel and ring (mirrors the old mb-1).
+      setPlaceAbove(anchorRect.top - 4 - el.offsetHeight >= 0);
+    };
+    recompute();
+    window.addEventListener("resize", recompute);
+    return () => window.removeEventListener("resize", recompute);
+  }, [anchorRect.top]);
+
+  // Fixed positioning relative to the viewport (portaled to <body> so the
+  // composer card's overflow-hidden can't clip the panel — the same reason
+  // the thinking-level dropdown portals through Menu.Portal). Right-align to
+  // the ring's right edge; clamp the left so a wide panel never overflows
+  // the viewport. Vertically: sit just above (or below) the ring.
+  const right = window.innerWidth - anchorRect.right;
+  const style: React.CSSProperties = {
+    position: "fixed",
+    right: Math.max(right, 8),
+    // When right-clamped (panel wider than the space on the right), switch
+    // to a left anchor so it stays on screen.
+    ...(right < 8 ? { left: 8, right: "auto" as const } : {}),
+    ...(placeAbove
+      ? { bottom: window.innerHeight - anchorRect.top + 4 }
+      : { top: anchorRect.bottom + 4 }),
+  };
+
+  return createPortal(
     <>
       {/* Fixed full-screen backdrop: clicking anywhere outside closes. Sits
           below the panel (z-40) so the panel (z-50) still receives clicks. */}
       <div className="fixed inset-0 z-40" onClick={onClose} />
       <div
+        ref={panelRef}
+        style={style}
         className={cn(
-          "absolute bottom-full right-0 z-50 mb-1 w-[380px]",
+          "z-50 w-[380px] max-w-[calc(100vw-16px)]",
           "overflow-hidden rounded-lg border border-edge bg-surface shadow-2xl",
-          "data-[starting-style]:opacity-0",
         )}
         // Stop-click so interacting with the panel doesn't hit the backdrop.
         onClick={(e) => e.stopPropagation()}
@@ -80,7 +124,8 @@ export function ContextStatsPopover({
           <HistoryView history={history} maxTokens={maxTokens} />
         )}
       </div>
-    </>
+    </>,
+    document.body,
   );
 }
 

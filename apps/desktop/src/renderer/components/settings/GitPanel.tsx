@@ -14,6 +14,11 @@ const GIT_DIFF_OPEN_MODE_OPTIONS: { value: GitDiffOpenMode; label: string }[] = 
   { value: "dialog", label: "弹框编辑器(可多标签)" },
 ];
 
+/** Sentinel value for the "no model selected" option in the model selects —
+ *  base-ui Select rejects empty-string item values, so the empty state maps
+ *  to this and the store setters translate it back to null. */
+const MODEL_NONE = "__none__";
+
 /**
  * Git settings — commit-message generation configuration.
  *
@@ -120,21 +125,36 @@ export function GitPanel() {
           desc="选择用于生成提交信息的具体模型。需要先在「模型配置」中添加并绑定角色。"
         >
           {modelOptions.length > 0 ? (
-            <select
-              value={commitGenModel ?? ""}
-              onChange={(e) => setCommitGenModel(e.target.value || null)}
-              className={cn(
-                "min-w-[220px] rounded-md border border-edge-input bg-surface px-2 py-1.5 text-[0.8571em] text-content outline-none",
-                "focus:border-accent",
-              )}
+            <Select.Root
+              value={commitGenModel ?? MODEL_NONE}
+              onValueChange={(v) => setCommitGenModel(v === MODEL_NONE ? null : (v as string))}
             >
-              <option value="">未选择</option>
-              {modelOptions.map((opt) => (
-                <option key={opt.value} value={opt.value}>
-                  {opt.label}
-                </option>
-              ))}
-            </select>
+              <Select.Trigger className="min-w-[220px]">
+                <Select.Value>
+                  {(val: string) =>
+                    val === MODEL_NONE
+                      ? "未选择"
+                      : (modelOptions.find((o) => o.value === val)?.label ?? val)
+                  }
+                </Select.Value>
+              </Select.Trigger>
+              <Select.Portal>
+                <Select.Positioner>
+                  <Select.Popup>
+                    <Select.List>
+                      <Select.Item value={MODEL_NONE}>
+                        <Select.ItemText>未选择</Select.ItemText>
+                      </Select.Item>
+                      {modelOptions.map((opt) => (
+                        <Select.Item key={opt.value} value={opt.value}>
+                          <Select.ItemText>{opt.label}</Select.ItemText>
+                        </Select.Item>
+                      ))}
+                    </Select.List>
+                  </Select.Popup>
+                </Select.Positioner>
+              </Select.Portal>
+            </Select.Root>
           ) : (
             <p className="text-[0.7857em] text-content-subtle">
               暂无可用模型,请先在「模型配置」中添加。
@@ -172,21 +192,36 @@ export function GitPanel() {
           desc="选择用于解决合并冲突的具体模型。需要先在「模型配置」中添加并绑定角色。未选择则使用内置 Claude 模型。"
         >
           {modelOptions.length > 0 ? (
-            <select
-              value={conflictResolveModel ?? ""}
-              onChange={(e) => setConflictResolveModel(e.target.value || null)}
-              className={cn(
-                "min-w-[220px] rounded-md border border-edge-input bg-surface px-2 py-1.5 text-xs text-content outline-none",
-                "focus:border-accent",
-              )}
+            <Select.Root
+              value={conflictResolveModel ?? MODEL_NONE}
+              onValueChange={(v) => setConflictResolveModel(v === MODEL_NONE ? null : (v as string))}
             >
-              <option value="">内置模型</option>
-              {modelOptions.map((opt) => (
-                <option key={opt.value} value={opt.value}>
-                  {opt.label}
-                </option>
-              ))}
-            </select>
+              <Select.Trigger className="min-w-[220px]">
+                <Select.Value>
+                  {(val: string) =>
+                    val === MODEL_NONE
+                      ? "内置模型"
+                      : (modelOptions.find((o) => o.value === val)?.label ?? val)
+                  }
+                </Select.Value>
+              </Select.Trigger>
+              <Select.Portal>
+                <Select.Positioner>
+                  <Select.Popup>
+                    <Select.List>
+                      <Select.Item value={MODEL_NONE}>
+                        <Select.ItemText>内置模型</Select.ItemText>
+                      </Select.Item>
+                      {modelOptions.map((opt) => (
+                        <Select.Item key={opt.value} value={opt.value}>
+                          <Select.ItemText>{opt.label}</Select.ItemText>
+                        </Select.Item>
+                      ))}
+                    </Select.List>
+                  </Select.Popup>
+                </Select.Positioner>
+              </Select.Portal>
+            </Select.Root>
           ) : (
             <p className="text-xs text-content-subtle">
               暂无可用模型,将使用内置模型。可在「模型配置」中添加。

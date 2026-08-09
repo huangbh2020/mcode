@@ -82,11 +82,12 @@ export function TurnFilesCard({
     }
     setRewinding(true);
     try {
-      // targetFiles marks this as a historical rewind (the event handler
-      // matches the card by path-set and marks it `rewound` instead of
-      // clearing the live card). Omitted for the latest-turn rewind.
-      const targetFiles = isLatestTurn ? undefined : files.map((f) => f.filePath);
-      await rewindTurn(files, targetFiles);
+      // targetFiles is ALWAYS passed — the event handler matches the card
+      // by path-set and marks it `rewound: true` in place (the card stays
+      // in the stream as a trace that this turn was rolled back), whether
+      // this is the latest turn or a historical one. The only difference
+      // is the confirm() above for historical cards.
+      await rewindTurn(files, files.map((f) => f.filePath));
       setDone(true);
     } finally {
       setRewinding(false);

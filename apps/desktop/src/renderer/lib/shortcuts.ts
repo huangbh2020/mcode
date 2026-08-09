@@ -130,6 +130,21 @@ export const ALT_LABEL = isMac ? "⌥" : "Alt";
 const DISP_SEP = isMac ? "" : "+";
 
 /**
+ * Render an Accelerator as an array of display tokens — one per modifier/key —
+ * for per-keycap rendering (e.g. `<Kbd keys={...} />` from the UI library).
+ * Same glyphs and rules as `acceleratorToDisplayString`, just unjoined so each
+ * token can sit in its own keycap.
+ */
+export function acceleratorToDisplayTokens(a: Accelerator): string[] {
+  const parts: string[] = [];
+  if (a.cmd) parts.push(MOD_LABEL);
+  if (a.shift) parts.push(SHIFT_LABEL);
+  if (a.alt) parts.push(ALT_LABEL);
+  parts.push(prettyKey(a.key, a.shift));
+  return parts;
+}
+
+/**
  * Render an Accelerator as a human-readable chord for the current platform.
  * macOS uses symbol glyphs that abut (`⌘⇧F`); other platforms use labeled
  * tokens joined by `+` (`Ctrl+Shift+F`). The key is uppercased for letters
@@ -137,13 +152,7 @@ const DISP_SEP = isMac ? "" : "+";
  * but `cmd+shift+f` reads as `⌘⇧F` (Shift already conveys casing).
  */
 export function acceleratorToDisplayString(a: Accelerator): string {
-  const parts: string[] = [];
-  if (a.cmd) parts.push(MOD_LABEL);
-  if (a.shift) parts.push(SHIFT_LABEL);
-  if (a.alt) parts.push(ALT_LABEL);
-  const keyLabel = prettyKey(a.key, a.shift);
-  parts.push(keyLabel);
-  return parts.join(DISP_SEP);
+  return acceleratorToDisplayTokens(a).join(DISP_SEP);
 }
 
 /** Render a single raw key token for display. */

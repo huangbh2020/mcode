@@ -106,20 +106,21 @@ export class PiAgentSdkProvider implements AgentProvider {
       sessionManager = sdk.SessionManager.create(req.cwd);
     }
 
-    // Permission mode → tools allowlist. Pi has no native permission modes;
-    // the inline extension's `tool_call` handler interprets the mode at
-    // runtime (auto-approve / path-guard / approval-prompt). But the tools
-    // allowlist still gates which tools the model is *offered*: in plan mode
-    // we restrict to read-only tools so the model can't even attempt a write
-    // (defense-in-depth — the path guard would block it anyway).
-    //   - plan              → read-only tools + AskUserQuestion
-    //   - other modes       → undefined = Pi's default set (read/bash/edit/write)
-    //                         + all extension-registered tools (AskUserQuestion)
-    const tools =
-      req.permissionMode === "plan"
-        ? ["read", "grep", "find", "ls", "AskUserQuestion"]
-        : undefined;
-    // Strict in-project write policy (same as the Claude provider's canUseTool
+    // Tools allowlist. We do NOT restrict tools by permission mode here.
+    // Pi has no native permission-mode state machine (unlike Claude, whose SDK
+    // exits plan mode and restores the tool set after ExitPlanMode approval).
+    // The `tools` allowlist is fixed at session creation — if we gated write/
+    // edit/bash out under plan mode, they'd STAY gated out after the user
+    // approves the plan (the model would see "no edit/write tools available"
+    // even though planMode.active is now false).
+    //
+    // Instead, ALL tools are always available. The extension's `tool_call`
+    // handler enforces the plan-mode read-only gate dynamically via the
+    // in-process `planMode.active` flag: while in plan mode, write/edit/bash
+    // are blocked with a clear reason; after ExitPlanMode approval, the flag
+    // flips and they pass through immediately. This is the only correct way
+    // to handle the "plan mode → approve → execute" lifecycle on Pi.
+    const tools = undefined; // all built-in + extension tools
     // guard): deny writes outside the project working directory, except in
     // bypassPermissions/dontAsk where the user opted out of all checks. WSL
     // paths are normalized in every mode. Enforced by the extension's
@@ -177,7 +178,7 @@ export class PiAgentSdkProvider implements AgentProvider {
     // mcodeExtension.ts for why an extension (vs the old customTools wrapping)
     // is the right vehicle: the `tool_call` event covers ALL tools, and
     // `block:true`+`reason` is the Pi equivalent of Claude's canUseTool deny.
-    const mcodeExtension = createMcodeExtension({ ctx, cwd: req.cwd, strict });
+    const mcodeExtension = createMcodeExtension({ ctx, cwd: req.cwd, strict, sessionId: req.sessionId });
 
     // Bridge Mcode's skill roots + `/name` trigger into Pi's skill model, and
     // inject the inline extension via the loader's `extensionFactories`. Pi's

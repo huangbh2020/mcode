@@ -25,6 +25,7 @@ import {
   IconStack2,
 } from "@renderer/lib/icons.js";
 import { useNow } from "@renderer/hooks/useNow.js";
+import { useSessionStore } from "@renderer/stores/sessionStore.js";
 import type { Block, TurnMeta } from "@renderer/stores/sessionStore.js";
 import { Markdown } from "./Markdown.js";
 import { DiffView } from "./DiffView.js";
@@ -595,9 +596,11 @@ export { BlockView };
  *
  *  - Paste attachments (attachmentKind="paste" or undefined): clipboard icon,
  *    collapsed = one-line preview, expanded = full content + Copy button.
- *  - File attachments (attachmentKind="file"): file icon, collapsed = file
- *    name, expanded = the full file path (the `@path` reference sent to the
- *    model). No Copy button — a path is short enough to read inline.
+ *  - File attachments (attachmentKind="file"): file icon + name; CLICKING the
+ *    card opens the file in the center IDE editor (markdown renders, images
+ *    preview, text edits — the editor picks the view from the extension). The
+ *    full path lives in the hover title, so there's no expand-to-path toggle.
+ *    Legacy file cards without a path fall back to the paste-style expand.
  *
  *  Unlike the composer's TagPopover (fixed-positioned to the chip), this
  *  expands inline — the message stream is the stable anchor here, so a
@@ -627,10 +630,21 @@ function AttachmentCard({
     }
   };
 
+  // File cards open the file in the IDE editor (per-type view handled by the
+  // editor: markdown rendered, images previewed, text edited). Paste cards
+  // keep the inline expand; legacy path-less file cards fall back to it too.
+  const handleClick = () => {
+    if (isFile && filePath) {
+      useSessionStore.getState().openFileInIde(filePath);
+    } else {
+      setOpen((v) => !v);
+    }
+  };
+
   return (
     <div className="[font-size:var(--chat-fs-sm)]">
       <button
-        onClick={() => setOpen((v) => !v)}
+        onClick={handleClick}
         title={isFile ? (filePath ?? preview) : open ? "收起内容" : "查看内容"}
         className={cn(
           "inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-[11px] transition-colors",
@@ -645,10 +659,12 @@ function AttachmentCard({
           <IconClipboard size={12} className="opacity-80" />
         )}
         <span className="max-w-[220px] truncate">{preview}</span>
-        <IconChevronDown
-          size={11}
-          className={cn("shrink-0 opacity-70 transition-transform", !open && "-rotate-90")}
-        />
+        {!isFile && (
+          <IconChevronDown
+            size={11}
+            className={cn("shrink-0 opacity-70 transition-transform", !open && "-rotate-90")}
+          />
+        )}
       </button>
       {open && (
         <div className="mt-1 space-y-1">

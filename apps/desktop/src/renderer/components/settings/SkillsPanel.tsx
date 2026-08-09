@@ -44,7 +44,7 @@ import { useCallback, useEffect, useState } from "react";
 import { cn } from "@renderer/lib/cn.js";
 import { useSessionStore } from "@renderer/stores/sessionStore.js";
 import { api } from "@renderer/lib/api.js";
-import { Button, ConfirmDialog, Dialog } from "@renderer/components/ui/index.js";
+import { Button, ConfirmDialog, Dialog, Select } from "@renderer/components/ui/index.js";
 import { PanelHeader } from "./PanelHeader.js";
 import {
   IconPlus,
@@ -319,20 +319,38 @@ export function SkillsPanel() {
       <div className="mb-3 flex items-center gap-2">
         <span className="text-[0.7857em] font-medium text-content-muted">项目:</span>
         {managedProjects.length > 0 ? (
-          <select
+          <Select.Root
             value={managedProjectId ?? ""}
-            onChange={(e) => switchProject(e.target.value)}
-            className={cn(
-              "min-w-0 flex-1 rounded border border-edge bg-surface px-2 py-1 text-[0.7857em] text-content focus:border-accent focus:outline-none",
-            )}
+            onValueChange={(v) => switchProject(v as string)}
           >
-            {managedProjects.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name}
-                {p.id === activeProjectId ? " (当前工作区)" : ""}
-              </option>
-            ))}
-          </select>
+            <Select.Trigger className="min-w-0 flex-1">
+              <Select.Value>
+                {(val: string) => {
+                  const p =
+                    managedProjects.find((x) => x.id === val) ?? managedProjects[0];
+                  return p
+                    ? `${p.name}${p.id === activeProjectId ? " (当前工作区)" : ""}`
+                    : "";
+                }}
+              </Select.Value>
+            </Select.Trigger>
+            <Select.Portal>
+              <Select.Positioner>
+                <Select.Popup>
+                  <Select.List>
+                    {managedProjects.map((p) => (
+                      <Select.Item key={p.id} value={p.id}>
+                        <Select.ItemText>
+                          {p.name}
+                          {p.id === activeProjectId ? " (当前工作区)" : ""}
+                        </Select.ItemText>
+                      </Select.Item>
+                    ))}
+                  </Select.List>
+                </Select.Popup>
+              </Select.Positioner>
+            </Select.Portal>
+          </Select.Root>
         ) : (
           <span className="text-[0.7857em] text-content-subtle">
             暂无项目 — 仅可管理全局 skill

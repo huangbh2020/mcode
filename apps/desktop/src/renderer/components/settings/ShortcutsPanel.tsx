@@ -21,7 +21,7 @@ import {
   type CommandGroup,
 } from "@renderer/lib/commands.js";
 import { DEFAULT_SHORTCUTS } from "@renderer/lib/shortcuts.js";
-import { Button } from "@renderer/components/ui/index.js";
+import { Button, Kbd } from "@renderer/components/ui/index.js";
 import { PanelHeader } from "./PanelHeader.js";
 import { SettingsSection } from "./SettingsSection.js";
 import { SettingRow } from "./SettingRow.js";
@@ -107,8 +107,7 @@ export function ShortcutsPanel() {
         desc={
           <>
             点击右侧「修改」并按下新的组合键即可重新绑定。 Esc 取消录制。
-            带 <kbd className="rounded border border-edge px-1">⌘</kbd>/
-            <kbd className="rounded border border-edge px-1">Ctrl</kbd> 的组合在输入框内依然生效。
+            带 <Kbd keys={["⌘"]} size="xs" />/<Kbd keys={["Ctrl"]} size="xs" /> 的组合在输入框内依然生效。
           </>
         }
         action={

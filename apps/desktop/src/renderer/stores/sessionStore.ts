@@ -14,7 +14,7 @@ import type {
 } from "@contracts/runtime";
 import type { TurnFileEntry } from "@renderer/lib/turnFiles.js";
 import { isValidSnapshot } from "@renderer/lib/contextWindow.js";
-import type { CustomModelPublic } from "@contracts/customModel";
+import type { CustomModelPublic, CustomModelRoleKey } from "@contracts/customModel";
 import { CUSTOM_MODEL_ROLES } from "@contracts/customModel";
 import { api } from "@renderer/lib/api.js";
 import {
@@ -33,6 +33,7 @@ import {
   UI_COMMIT_GEN_MODEL_SETTING_KEY,
   UI_COMMIT_GEN_PROMPT_SETTING_KEY,
   UI_CONFLICT_RESOLVE_MODEL_SETTING_KEY,
+  UI_COMPOSER_MODEL_SETTING_KEY,
   UI_TITLE_GEN_ENABLED_SETTING_KEY,
   UI_TITLE_GEN_MODEL_SETTING_KEY,
   UI_GIT_COLLAPSED_REPOS_SETTING_KEY,
@@ -409,6 +410,10 @@ export interface SessionState {
    *  entry → "custom-models" / "pi-models") pass it to setSettingsOpen; null
    *  means "use the default section". Cleared on close. */
   settingsSection: string | null;
+  /** "尚未配置模型" dialog visibility. Opened by sendPrompt / editAndResendMessage
+   *  when the active provider has no configured model to send with (model is
+   *  auto/"default" and nothing is configured). NOT persisted. */
+  modelConfigPromptOpen: boolean;
   /** Command palette (Cmd/Ctrl+K) visibility. Toggled by the global hotkey
    *  wired in App.tsx and by any in-app "command palette" affordance. The
    *  palette itself (CommandPalette.tsx) reads this to mount/unmount. */
@@ -757,7 +762,11 @@ export interface SessionState {
      *  — the Markdown renderer turns the matching `/name` occurrences into
      *  styled pills). Absent for plain-text messages. */
     skillsUsed?: string[],
-  ) => Promise<void>;
+  ) => Promise<boolean>;
+  /** Resolves true when the prompt was accepted into the stream (the caller
+   *  may then clear the composer), false when a guard blocked it (no session,
+   *  session running, or the "尚未配置模型" dialog was raised — in which case
+   *  the caller should keep the composer's input so nothing is lost). */
   /** Edit a previously-sent user message in place and resend it. Truncates
    *  the session's message history at the target message (removing it and
    *  everything after it - including the AI's reply), persists the
@@ -782,6 +791,8 @@ export interface SessionState {
    *  is looking at it now). */
   setWindowFocused: (focused: boolean) => void;
   setSettingsOpen: (open: boolean, section?: string) => void;
+  /** Toggle the "尚未配置模型" dialog open/closed (send-time guard). */
+  setModelConfigPromptOpen: (open: boolean) => void;
   /** Toggle the Cmd/Ctrl+K command palette open/closed. */
   setCommandPaletteOpen: (open: boolean) => void;
   /** Toggle the file search dialog open/closed. Opened from the Files panel
@@ -934,11 +945,11 @@ export interface SessionState {
    *  for "files are back"). The call is fire-and-await; failures log
    *  to console and leave state untouched so the user can retry.
    *
-   *  `targetFiles` marks this as a HISTORICAL-turn rewind: it's forwarded
-   *  to main so the `turn.rewound` event carries it, letting the handler
-   *  mark the matching card in place rather than clearing the live card.
-   *  Omit it for the latest-turn rewind. */
-  rewindTurn: (files: TurnFileEntry[], targetFiles?: string[]) => Promise<void>;
+   *  `targetFiles` (the requested path set) is forwarded to main so the
+   *  `turn.rewound` event carries it; the handler then marks the matching
+   *  card `rewound: true` in place — for both latest-turn and historical
+   *  rewinds. The card is never removed, so the stream keeps a trace. */
+  rewindTurn: (files: TurnFileEntry[], targetFiles: string[]) => Promise<void>;
   refreshClaudeHealth: () => Promise<void>;
 
   /** Enqueue a file path to be added to the active session's composer as a
@@ -1005,6 +1016,15 @@ export interface SessionState {
   /** Remove a file from the editor's open list; active shifts to the
    *  previous file (or next, or null). */
   closeFileInIde: (filePath: string) => void;
+  /** Remove every open file that lives under `dirPath` (prefix match), and
+   *  drop expanded-dir records under it too. Used by the file-tree "删除"
+   *  action when a directory is trashed, so stale editor tabs disappear. */
+  closeFilesUnderDir: (dirPath: string) => void;
+  /** Migrate editor state after a rename. For a file, the single open path is
+   *  rewritten oldPath -> newPath (active / view-mode / diff-before keys too).
+   *  For a directory, every open path and expanded-dir record under it is
+   *  re-prefixed. Used by the file-tree "重命名" action. */
+  renamePathInIde: (oldPath: string, newPath: string, isDir: boolean) => void;
   /** Close every open file EXCEPT the given one; the given file becomes
    *  active. Used by the tab context menu's "关闭其他". */
   closeOtherFilesInIde: (keepFilePath: string) => void;
@@ -1342,6 +1362,115 @@ function syncConfigFromSession(
     patch.expandedProjects = { ...get().expandedProjects, [sess.projectId]: true };
   }
   set(patch);
+}
+
+/**
+ * Resolve the model a send should actually use.
+ *
+ * An explicit selection (`model !== "default"`) passes through untouched.
+ * "default" (the chip's "默认"/auto) means "the first configured model" —
+ * the lists mirror the ModelDropdown's selectable surface per provider:
+ *
+ *   - pi-sdk   → `piAvailableModels` (dynamic, user-configured) → first id
+ *   - claude   → `customModels` (user-configured gateways) → first config's
+ *                first bound role (same pick as `setCustomModel`'s fallback)
+ *   - other    → `capabilities.builtinModels` → first concrete entry
+ *                (skipping the "default"/Auto placeholder)
+ *
+ * Returns null when the active provider has NO model to send with — the
+ * caller then prompts the user to configure one instead of silently falling
+ * back to the provider's internal default (which, after an SDK switch to
+ * auto, is exactly the trap this guard exists to avoid).
+ */
+function resolveSendModel(
+  s: Pick<SessionState, "model" | "customModelId" | "providerId" | "providers" | "customModels" | "piAvailableModels">,
+): { model: string; customModelId: string | null } | null {
+  if (s.model !== "default") return { model: s.model, customModelId: s.customModelId };
+  const provider = s.providers.find((p) => p.id === s.providerId);
+  if (!provider) return null;
+  if (provider.id === "pi-sdk") {
+    const first = s.piAvailableModels[0];
+    return first ? { model: first.id, customModelId: null } : null;
+  }
+  if (provider.id === "claude-sdk") {
+    for (const cfg of s.customModels) {
+      const role = CUSTOM_MODEL_ROLES.find((r) => cfg.roles[r]?.requestModel?.trim());
+      if (role) return { model: role, customModelId: cfg.id };
+    }
+    return null;
+  }
+  const builtins = provider.capabilities.builtinModels ?? [];
+  const first = builtins.find((b) => b.id !== "default") ?? builtins[0];
+  return first ? { model: first.id, customModelId: null } : null;
+}
+
+/** Persist the composer's current provider/model choice — the "next session"
+ *  defaults — so the next launch pre-selects the same SDK + model the user
+ *  last picked (setProvider / setModel / setCustomModel call this). Fire-and-
+ *  forget, like the other setting.set callers. */
+function persistComposerSelection(
+  s: Pick<SessionState, "providerId" | "model" | "customModelId">,
+): void {
+  void api.setting
+    .set({
+      key: UI_COMPOSER_MODEL_SETTING_KEY,
+      value: JSON.stringify({
+        providerId: s.providerId,
+        model: s.model,
+        customModelId: s.customModelId,
+      }),
+    })
+    .catch((err) => {
+      console.error("setting.set(composerModel) failed:", err);
+    });
+}
+
+/**
+ * Drop a stale persisted composer choice back to auto. Runs after the model
+ * lists reload (providers / custom endpoints / pi models): if the persisted
+ * provider no longer exists, or the chosen model was deleted (custom config
+ * removed / pi model gone), the selection falls back to the default provider
+ * + "default" (auto) — and the reset is persisted so it doesn't reapply a
+ * stale choice on the next launch. Sessions that already have messages are
+ * skipped: their config is row-authoritative and re-synced on select.
+ */
+function validateComposerSelection(
+  set: (partial: Partial<SessionState> | ((s: SessionState) => Partial<SessionState>)) => void,
+  get: () => SessionState,
+): void {
+  const s = get();
+  const activeId = s.activeSessionId;
+  if (activeId) {
+    const bucket = s.messagesBySession[activeId];
+    if (bucket && bucket.length > 0) return;
+  }
+  // Already auto with no custom config → nothing to validate.
+  if (s.model === "default" && !s.customModelId) return;
+
+  const provider = s.providers.find((p) => p.id === s.providerId);
+  let patch: Partial<SessionState> | null = null;
+  if (!provider) {
+    // The SDK itself is gone (unregistered) — reset to the default provider.
+    patch = { providerId: DEFAULT_PROVIDER_ID, model: "default", customModelId: null };
+  } else if (provider.id === "pi-sdk") {
+    const ok = s.piAvailableModels.some((m) => m.id === s.model);
+    if (!ok) patch = { model: "default", customModelId: null };
+  } else if (provider.id === "claude-sdk") {
+    // Valid only when the custom config still exists AND the role is bound.
+    const cfg = s.customModels.find((m) => m.id === s.customModelId);
+    const ok =
+      !!cfg &&
+      !!s.customModelId &&
+      (CUSTOM_MODEL_ROLES as string[]).includes(s.model) &&
+      !!cfg.roles[s.model as CustomModelRoleKey]?.requestModel?.trim();
+    if (!ok) patch = { model: "default", customModelId: null };
+  } else {
+    const ok = (provider.capabilities.builtinModels ?? []).some((b) => b.id === s.model);
+    if (!ok) patch = { model: "default", customModelId: null };
+  }
+  if (!patch) return;
+  set(patch);
+  persistComposerSelection(get());
 }
 
 /** Hydrate the per-session context-window snapshot from the session row.
@@ -1807,41 +1936,6 @@ function appendCompactSummaryBlock(
   return [...messages, opener];
 }
 
-/** Remove the LATEST turn's turn-files block (called from the turn.rewound
- *  handler — the user rewound the latest turn, so its card should disappear).
- *
- *  Rewind happens AFTER the turn has ended (the user clicks 撤销本轮 on the
- *  frozen card), so the block lives on a CLOSED turn's message — we can't use
- *  findOpenTurnTrailingAssistant here. Instead we target the block marked
- *  `isLatestTurn === true`, which is exactly the rewindable card. Frozen
- *  historical blocks (isLatestTurn false/undefined) are untouched. Drops the
- *  assistant message too if it would be empty. */
-function removeLiveTurnFilesBlock(messages: ChatMessage[]): ChatMessage[] {
-  // Find the message carrying the latest-turn card (search from the end — the
-  // latest turn is the last one with a turn-files block).
-  let targetIndex = -1;
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const m = messages[i];
-    if (m && m.blocks.some((b) => b.kind === "turn-files" && b.isLatestTurn)) {
-      targetIndex = i;
-      break;
-    }
-  }
-  if (targetIndex === -1) return messages;
-  let next = messages;
-  const target = next[targetIndex]!;
-  const filtered = target.blocks.filter(
-    (b) => !(b.kind === "turn-files" && b.isLatestTurn),
-  );
-  if (filtered.length === target.blocks.length) return next; // nothing to remove
-  if (filtered.length === 0) {
-    next = next.filter((_, i) => i !== targetIndex);
-  } else {
-    next = next.map((m, i) => (i === targetIndex ? { ...m, blocks: filtered } : m));
-  }
-  return next;
-}
-
 /** Demote EVERY turn-files block's `isLatestTurn` to false. Called when a new
  *  turn opens (the previous "latest" card is no longer the latest — only the
  *  most recent completed turn is rewindable). The new turn's own card, once it
@@ -2159,6 +2253,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   claudeInstalled: null,
   settingsOpen: false,
   settingsSection: null,
+  modelConfigPromptOpen: false,
   commandPaletteOpen: false,
   // File search dialog (opened from the Files panel search button / Cmd+Shift+F
   // / command palette). Pure in-memory, mirrors commandPaletteOpen.
@@ -2304,6 +2399,32 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       }
     } catch (err) {
       console.error("setting.get(projectGroups) failed:", err);
+    }
+
+    // Composer's persisted provider/model choice — the "next session" defaults
+    // written by setProvider / setModel / setCustomModel. Restored so the last
+    // SDK + model pick is pre-selected at boot. Validity against the CURRENT
+    // model lists is checked once reloadProviders / reloadCustomModels /
+    // reloadPiAvailableModels resolve (a deleted model falls back to auto via
+    // validateComposerSelection).
+    try {
+      const { value } = await api.setting.get({ key: UI_COMPOSER_MODEL_SETTING_KEY });
+      if (value) {
+        const parsed = JSON.parse(value) as {
+          providerId?: unknown;
+          model?: unknown;
+          customModelId?: unknown;
+        };
+        if (parsed && typeof parsed === "object" && typeof parsed.providerId === "string") {
+          set({
+            providerId: parsed.providerId,
+            model: typeof parsed.model === "string" ? parsed.model : "default",
+            customModelId: typeof parsed.customModelId === "string" ? parsed.customModelId : null,
+          });
+        }
+      }
+    } catch (err) {
+      console.error("setting.get(composerModel) failed:", err);
     }
 
     // Fetch the project list and chat font size in parallel - both are needed
@@ -3324,10 +3445,21 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
   sendPrompt: async (prompt, attachments, displayText, skillsUsed) => {
     const sessionId = get().activeSessionId;
-    if (!sessionId || !prompt.trim()) return;
+    if (!sessionId || !prompt.trim()) return false;
     // Per-thread guard: only block this thread from sending if IT is running.
     // Another thread's running turn shouldn't lock the composer in this one.
-    if (get().runningBySession[sessionId]) return;
+    if (get().runningBySession[sessionId]) return false;
+
+    // Resolve the model BEFORE showing the user message: "default" (auto,
+    // e.g. right after an SDK switch) means "first configured model"; a
+    // provider with nothing configured can't send at all — prompt the user
+    // to configure one instead of silently using the provider's internal
+    // default. Aborting here leaves the composer untouched.
+    const resolvedModel = resolveSendModel(get());
+    if (!resolvedModel) {
+      set({ modelConfigPromptOpen: true });
+      return false;
+    }
 
     // 1. immediately show the user's message. Attachments (pasted content
     //    promoted to cards in the composer) render as attachment blocks
@@ -3385,17 +3517,18 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 	    //    `setModel` / `setCustomModel` persist via fire-and-forget
 	    //    `updateSettings`, which races `sendTurn`. The main handler
 	    //    applies these overrides to the in-memory session so
-	    //    RuntimeManager always sees the latest UI state.
-	    const { model, customModelId, effort, permissionMode, providerId } = get();
+	    //    RuntimeManager always sees the latest UI state. The model pair
+	    //    comes from `resolvedModel` above (auto → first configured model).
+	    const { effort, permissionMode, providerId } = get();
 	    let updated;
 	    try {
 	      ({ session: updated } = await api.claude.sendTurn({
 	        sessionId,
 	        prompt,
-	        model,
+	        model: resolvedModel.model,
 	        effort,
 	        permissionMode,
-	        customModelId,
+	        customModelId: resolvedModel.customModelId,
 	        // Per-turn provider override — lets the active provider drive
 	        // which backend handles this turn without persisting the change
 	        // to the session row. Combined with the per-turn overrides above
@@ -3403,23 +3536,25 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 	        providerId,
 	        skills: skillsUsed && skillsUsed.length > 0 ? skillsUsed : undefined,
 	      }));
-	    } catch (err) {
-	      // The IPC itself rejected (not a streamed `error` event). Without
-	      // this the running flag + synthesized stat row would stick forever
-	      // - no turn.done/error event will arrive to clear them. Reset both
-	      // so the composer unlocks and the pending row disappears.
-	      console.error("sendTurn IPC failed:", err);
-	      set((s) => {
-	        const runningBySession = { ...s.runningBySession, [sessionId]: false };
-	        const runningTurnStartedAt = { ...s.runningTurnStartedAt };
-	        delete runningTurnStartedAt[sessionId];
-	        return { runningBySession, runningTurnStartedAt };
-	      });
-	      // IPC rejected → no terminal event will arrive to clear the turn, so
-	      // also try draining the queue here (the session is now idle).
-	      get().drainPromptQueueIfIdle(sessionId);
-	      return;
-	    }
+    } catch (err) {
+      // The IPC itself rejected (not a streamed `error` event). Without
+      // this the running flag + synthesized stat row would stick forever
+      // - no turn.done/error event will arrive to clear them. Reset both
+      // so the composer unlocks and the pending row disappears. The prompt
+      // IS in the stream, so report "accepted" (the caller clears the
+      // composer, matching the pre-guard behavior).
+      console.error("sendTurn IPC failed:", err);
+      set((s) => {
+        const runningBySession = { ...s.runningBySession, [sessionId]: false };
+        const runningTurnStartedAt = { ...s.runningTurnStartedAt };
+        delete runningTurnStartedAt[sessionId];
+        return { runningBySession, runningTurnStartedAt };
+      });
+      // IPC rejected → no terminal event will arrive to clear the turn, so
+      // also try draining the queue here (the session is now idle).
+      get().drainPromptQueueIfIdle(sessionId);
+      return true;
+    }
     set((s) => {
       const pid = updated.projectId;
       const prevList = s.sessionsByProject[pid] ?? [];
@@ -3434,6 +3569,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         sessions: pid === s.activeProjectId ? nextList : s.sessions,
       };
     });
+    return true;
   },
 
   editAndResendMessage: async (sessionId, messageId, newPrompt, attachments, displayText, skillsUsed) => {
@@ -3441,6 +3577,14 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     // The session must be idle - editing while a turn is running would
     // race the truncation against live event ingestion.
     if (get().runningBySession[sessionId]) return;
+
+    // Same send-model guard as sendPrompt: auto → first configured model;
+    // nothing configured → prompt instead of silently falling back.
+    const resolvedModel = resolveSendModel(get());
+    if (!resolvedModel) {
+      set({ modelConfigPromptOpen: true });
+      return;
+    }
 
     const current = get().messagesBySession[sessionId] ?? [];
     const idx = current.findIndex((m) => m.id === messageId);
@@ -3503,17 +3647,17 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     void api.session.saveMessages({ sessionId, messages: toRecords(sessionId, [...truncated, userMsg]) });
 
     // 5. Fire the turn; events stream back via ingestEvent. Same per-turn
-    //    override pattern as sendPrompt.
-    const { model, customModelId, effort, permissionMode, providerId } = get();
+    //    override pattern as sendPrompt (model pair from resolvedModel above).
+    const { effort, permissionMode, providerId } = get();
     let updated;
     try {
       ({ session: updated } = await api.claude.sendTurn({
         sessionId,
         prompt: newPrompt,
-        model,
+        model: resolvedModel.model,
         effort,
         permissionMode,
-        customModelId,
+        customModelId: resolvedModel.customModelId,
         providerId,
         skills: skillsUsed && skillsUsed.length > 0 ? skillsUsed : undefined,
       }));
@@ -3874,69 +4018,55 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       return;
     }
     if (e.type === "turn.rewound") {
-      // Two rewind shapes arrive on this event:
-      //  - Historical rewind (e.targetFiles present): mark the matching
-      //    `turn-files` block `rewound: true` in place. The card stays
-      //    (conversation record preserved), turnFilesBySession is left
-      //    alone (it's the latest-turn bucket, unrelated to this card).
-      //  - Latest-turn rewind (no e.targetFiles): clear the live card and
-      //    turnFilesBySession (existing behavior).
-      if (e.targetFiles && e.targetFiles.length > 0) {
-        set((s) => {
-          const list = s.messagesBySession[sid] ?? EMPTY_MESSAGES;
-          // Match by path-set equality: a historical card whose files are
-          // exactly the targeted ones. Order-insensitive.
-          const targetSet = new Set(e.targetFiles!);
-          let changed = false;
-          const next = list.map((m) => {
-            let touched = false;
-            const blocks = m.blocks.map((b) => {
-              if (
-                b.kind === "turn-files" &&
-                !b.rewound &&
-                b.files.length === targetSet.size &&
-                b.files.every((f) => targetSet.has(f.filePath))
-              ) {
-                touched = true;
-                return { ...b, rewound: true };
-              }
-              return b;
-            });
-            if (!touched) return m;
-            changed = true;
-            return { ...m, blocks };
-          });
-          return changed
-            ? { messagesBySession: { ...s.messagesBySession, [sid]: next } }
-            : s;
-        });
-        // Persist so the rewound marker survives session reopen.
-        const rewoundSnapshot = get().messagesBySession[sid];
-        if (rewoundSnapshot) {
-          void api.session.saveMessages({ sessionId: sid, messages: toRecords(sid, rewoundSnapshot) });
-        }
-        return;
-      }
-      // The user rewound the LATEST turn — clear its in-memory mirror AND
-      // remove its live turn-files block from the stream (the card vanishes
-      // with the rewind). Frozen historical cards on prior turns are
-      // untouched. turnFilesBySession is also cleared so rewindTurn's
-      // empty-check correctly reports "nothing to rewind" afterwards.
+      // Unified rewind handling: mark the matching `turn-files` card
+      // `rewound: true` IN PLACE and NEVER remove it — the card stays in
+      // the stream as a visible trace that this turn was rolled back
+      // (mirroring SDK checkpoint semantics: file rollback never rolls
+      // back the conversation). The card matches by path-set equality
+      // against `e.targetFiles` (the requested paths, before failures).
+      //
+      // The only difference between a latest-turn and a historical rewind
+      // is the latest-turn BUCKET (turnFilesBySession): when the marked
+      // card is the live one (isLatestTurn), the bucket is cleared so
+      // downstream consumers (file-tree dots, diff sources) stop treating
+      // those files as "this turn's changes". Historical cards leave the
+      // bucket alone — it belongs to a different, later turn.
+      let rewoundLatest = false;
       set((s) => {
         const list = s.messagesBySession[sid] ?? EMPTY_MESSAGES;
-        const next = removeLiveTurnFilesBlock(list);
-        return {
-          turnFilesBySession: { ...s.turnFilesBySession, [sid]: [] },
-          messagesBySession: next === list
-            ? s.messagesBySession
-            : { ...s.messagesBySession, [sid]: next },
-        };
+        const targetSet = new Set(e.targetFiles);
+        let changed = false;
+        const next = list.map((m) => {
+          let touched = false;
+          const blocks = m.blocks.map((b) => {
+            if (
+              b.kind === "turn-files" &&
+              !b.rewound &&
+              b.files.length === targetSet.size &&
+              b.files.every((f) => targetSet.has(f.filePath))
+            ) {
+              touched = true;
+              if (b.isLatestTurn) rewoundLatest = true;
+              return { ...b, rewound: true };
+            }
+            return b;
+          });
+          if (!touched) return m;
+          changed = true;
+          return { ...m, blocks };
+        });
+        if (!changed) return s;
+        // If the rewound card was the live one, also clear the latest-turn
+        // bucket (its files are back on disk — no longer "this turn's").
+        return rewoundLatest
+          ? {
+              messagesBySession: { ...s.messagesBySession, [sid]: next },
+              turnFilesBySession: { ...s.turnFilesBySession, [sid]: [] },
+            }
+          : { messagesBySession: { ...s.messagesBySession, [sid]: next } };
       });
-      // Persist the rewound state: the latest turn's card was removed from the
-      // stream. Without this, reopening the session would resurrect the card
-      // from the pre-rewind snapshot saved at turn.done. main also clears the
-      // sessions.turn_files column on turn.rewound, but the per-message card
-      // lives in the messages table and needs its own save.
+      // Persist the rewound state so the marker survives session reopen.
+      // (The card is kept, so this is a mutation, not a removal.)
       const rewoundSnapshot = get().messagesBySession[sid];
       if (rewoundSnapshot) {
         void api.session.saveMessages({ sessionId: sid, messages: toRecords(sid, rewoundSnapshot) });
@@ -4230,6 +4360,8 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
   setSettingsOpen: (open, section) =>
     set(open ? { settingsOpen: true, settingsSection: section ?? null } : { settingsOpen: false, settingsSection: null }),
+
+  setModelConfigPromptOpen: (open) => set({ modelConfigPromptOpen: open }),
 
   setWindowFocused: (focused) => {
     set({ isWindowFocused: focused });
@@ -4570,6 +4702,8 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         console.error("updateSettings(model) failed:", err);
       });
     }
+    // Remember the pick as the next-session default (restored at boot).
+    persistComposerSelection(get());
   },
   /** Persist the active session's reasoning effort. See `setPermissionMode`
    *  for the pattern. */
@@ -4616,12 +4750,17 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         console.error("updateSettings(customModel) failed:", err);
       });
     }
+    // Remember the pick as the next-session default (restored at boot).
+    persistComposerSelection(get());
   },
 
   reloadCustomModels: async () => {
     try {
       const { models } = await api.customModel.list();
       set({ customModels: models });
+      // A persisted composer pick whose custom config was deleted falls back
+      // to auto.
+      validateComposerSelection(set, get);
     } catch (err) {
       console.error("reloadCustomModels failed:", err);
     }
@@ -4643,6 +4782,8 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         ? { providerId: id, model: "default", customModelId: null }
         : { providerId: id },
     );
+    // Remember the pick as the next-session default (restored at boot).
+    persistComposerSelection(get());
 
     // If a blank (message-less) session is currently active, also sync the
     // change onto its session row so the provider is fixed correctly before
@@ -4698,6 +4839,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     try {
       const { providers } = await api.provider.list();
       set({ providers });
+      // A persisted composer pick for a provider that no longer exists falls
+      // back to the default provider + auto.
+      validateComposerSelection(set, get);
     } catch (err) {
       console.error("reloadProviders failed:", err);
     }
@@ -4707,6 +4851,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     try {
       const { models } = await api.piModels.listAvailable();
       set({ piAvailableModels: models });
+      // A persisted composer pick whose pi model was deleted falls back
+      // to auto.
+      validateComposerSelection(set, get);
     } catch (err) {
       console.error("reloadPiAvailableModels failed:", err);
     }
@@ -4911,7 +5058,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       return;
     }
     try {
-      await api.claude.rewindTurn({ sessionId, files, ...(targetFiles ? { targetFiles } : {}) });
+      await api.claude.rewindTurn({ sessionId, files, targetFiles });
       // Don't optimistically clear turnFiles — wait for the `turn.rewound`
       // event from main so the UI only updates when files are actually
       // back on disk. If the IPC call returns successfully but main fails
@@ -5025,6 +5172,13 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     const q = s.promptQueueBySession[sessionId];
     if (!q || q.length === 0) return;
     const head = q[0];
+    // Send-time model guard, checked BEFORE dropping the head: if the active
+    // provider has nothing configured, the subsequent sendPrompt would be
+    // blocked and the dropped item lost. Keep it queued + raise the dialog.
+    if (!resolveSendModel(s)) {
+      set({ modelConfigPromptOpen: true });
+      return;
+    }
     // Drop the head from the queue BEFORE sending so the user sees it leave
     // immediately, and so a failed send doesn't loop on the same item.
     set((st) => ({
@@ -5173,6 +5327,115 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     const prevDiffBefore = get().ideDiffBeforeByProject[pid] ?? {};
     const diffBefore = { ...prevDiffBefore };
     delete diffBefore[filePath];
+    set((s) => ({
+      ideOpenFilesByProject: { ...s.ideOpenFilesByProject, [pid]: open },
+      ideActiveFileByProject: { ...s.ideActiveFileByProject, [pid]: active },
+      ideFileViewModeByProject: { ...s.ideFileViewModeByProject, [pid]: viewMode },
+      ideDiffBeforeByProject: { ...s.ideDiffBeforeByProject, [pid]: diffBefore },
+    }));
+    persistIdeBuckets(get());
+  },
+
+  closeFilesUnderDir: (dirPath) => {
+    const pid = get().activeProjectId;
+    if (!pid) return;
+    // Prefix used to match descendants: a trailing separator so a dir "/a/b"
+    // doesn't match siblings like "/a/bb/x" (the dir itself is never an open
+    // file, so we only need the descendant form here).
+    const prefix = dirPath.endsWith("/") ? dirPath : dirPath + "/";
+    const prevOpen = get().ideOpenFilesByProject[pid] ?? [];
+    const removed = new Set(prevOpen.filter((p) => p.startsWith(prefix)));
+    if (removed.size === 0 && !(get().ideExpandedDirsByProject[pid] ?? []).some((d) => d.startsWith(prefix))) {
+      // Nothing to close and no expanded dirs under it — still fall through to
+      // the (possibly empty) expanded-dirs cleanup below, which is cheap.
+    }
+    const open = prevOpen.filter((p) => !removed.has(p));
+    // Active shifts away if it was under the removed dir.
+    let active = get().ideActiveFileByProject[pid] ?? null;
+    if (active && removed.has(active)) {
+      const idx = prevOpen.indexOf(active);
+      active = open[idx - 1] ?? open[idx] ?? null;
+    }
+    // Clean up per-file view-mode + diff-before for the removed paths.
+    const prevViewMode = get().ideFileViewModeByProject[pid] ?? {};
+    const viewMode: Record<string, FileViewMode> = {};
+    for (const [k, v] of Object.entries(prevViewMode)) {
+      if (!removed.has(k)) viewMode[k] = v;
+    }
+    const prevDiffBefore = get().ideDiffBeforeByProject[pid] ?? {};
+    const diffBefore: Record<string, string> = {};
+    for (const [k, v] of Object.entries(prevDiffBefore)) {
+      if (!removed.has(k)) diffBefore[k] = v;
+    }
+    // Drop expanded-dir records under the removed dir too.
+    const prevExpanded = get().ideExpandedDirsByProject[pid] ?? [];
+    const expanded = prevExpanded.filter((d) => d !== dirPath && !d.startsWith(prefix));
+    set((s) => ({
+      ideOpenFilesByProject: { ...s.ideOpenFilesByProject, [pid]: open },
+      ideActiveFileByProject: { ...s.ideActiveFileByProject, [pid]: active },
+      ideFileViewModeByProject: { ...s.ideFileViewModeByProject, [pid]: viewMode },
+      ideDiffBeforeByProject: { ...s.ideDiffBeforeByProject, [pid]: diffBefore },
+      ideExpandedDirsByProject: { ...s.ideExpandedDirsByProject, [pid]: expanded },
+    }));
+    persistIdeBuckets(get());
+  },
+
+  renamePathInIde: (oldPath, newPath, isDir) => {
+    const pid = get().activeProjectId;
+    if (!pid) return;
+    if (isDir) {
+      // Re-prefix every open file and expanded dir that lives under oldPath.
+      const prefix = oldPath.endsWith("/") ? oldPath : oldPath + "/";
+      const prevOpen = get().ideOpenFilesByProject[pid] ?? [];
+      const hadDescendant = prevOpen.some((p) => p === oldPath || p.startsWith(prefix));
+      const prevExpanded = get().ideExpandedDirsByProject[pid] ?? [];
+      const hadExpanded = prevExpanded.some((d) => d === oldPath || d.startsWith(prefix));
+      if (!hadDescendant && !hadExpanded) return; // nothing under it
+      const open = prevOpen.map((p) => (p === oldPath ? newPath : p.startsWith(prefix) ? newPath + p.slice(oldPath.length) : p));
+      let active = get().ideActiveFileByProject[pid] ?? null;
+      if (active) {
+        active = active === oldPath ? newPath : active.startsWith(prefix) ? newPath + active.slice(oldPath.length) : active;
+      }
+      const reKey = (obj: Record<string, FileViewMode> | Record<string, string>) => {
+        const out: Record<string, string> = {};
+        for (const [k, v] of Object.entries(obj)) {
+          if (k === oldPath) out[newPath] = v as string;
+          else if (k.startsWith(prefix)) out[newPath + k.slice(oldPath.length)] = v as string;
+          else out[k] = v as string;
+        }
+        return out;
+      };
+      const viewMode = reKey(get().ideFileViewModeByProject[pid] ?? {}) as Record<string, FileViewMode>;
+      const diffBefore = reKey(get().ideDiffBeforeByProject[pid] ?? {});
+      const expanded = prevExpanded.map((d) => (d === oldPath ? newPath : d.startsWith(prefix) ? newPath + d.slice(oldPath.length) : d));
+      set((s) => ({
+        ideOpenFilesByProject: { ...s.ideOpenFilesByProject, [pid]: open },
+        ideActiveFileByProject: { ...s.ideActiveFileByProject, [pid]: active },
+        ideFileViewModeByProject: { ...s.ideFileViewModeByProject, [pid]: viewMode },
+        ideDiffBeforeByProject: { ...s.ideDiffBeforeByProject, [pid]: diffBefore },
+        ideExpandedDirsByProject: { ...s.ideExpandedDirsByProject, [pid]: expanded },
+      }));
+      persistIdeBuckets(get());
+      return;
+    }
+    // Single file rename: rewrite the single path if it's open.
+    const prevOpen = get().ideOpenFilesByProject[pid] ?? [];
+    const idx = prevOpen.indexOf(oldPath);
+    if (idx === -1) return;
+    const open = prevOpen.slice();
+    open[idx] = newPath;
+    let active = get().ideActiveFileByProject[pid] ?? null;
+    if (active === oldPath) active = newPath;
+    const reKey = <V>(obj: Record<string, V>): Record<string, V> => {
+      if (!(oldPath in obj)) return obj;
+      const out: Record<string, V> = {};
+      for (const [k, v] of Object.entries(obj)) {
+        out[k === oldPath ? newPath : k] = v;
+      }
+      return out;
+    };
+    const viewMode = reKey(get().ideFileViewModeByProject[pid] ?? {});
+    const diffBefore = reKey(get().ideDiffBeforeByProject[pid] ?? {});
     set((s) => ({
       ideOpenFilesByProject: { ...s.ideOpenFilesByProject, [pid]: open },
       ideActiveFileByProject: { ...s.ideActiveFileByProject, [pid]: active },

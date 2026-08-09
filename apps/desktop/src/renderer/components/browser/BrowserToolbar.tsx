@@ -187,25 +187,30 @@ export function BrowserToolbar({
       {/* Device preset selector - inline icon toggle group rendered directly in
           the toolbar (no popover/dropdown). The toolbar strip is NOT covered by
           the OS-level WebContentsView, so these buttons are always clickable.
-          Clicking a device icon switches to that preset. */}
-      <div className="flex shrink-0 items-center gap-0.5 rounded-md border border-edge p-0.5">
-        {devices.map((d) => (
-          <button
-            key={d.id}
-            type="button"
-            title={d.label + " " + d.hint}
-            onClick={() => onDeviceChange(d.id)}
-            className={cn(
-              "flex h-6 w-6 items-center justify-center rounded transition-colors",
-              device === d.id
-                ? "bg-accent text-white"
-                : "text-content-muted hover:bg-surface-hover hover:text-content",
-            )}
-          >
-            {d.icon}
-          </button>
-        ))}
-      </div>
+          Clicking a device icon switches to that preset.
+          Sidebar mode hides the selector entirely: the embedded panel is
+          fixed at iPhone size by design (new tabs default to iphone), so the
+          only place to switch sizes is the PC-fullscreen overlay. */}
+      {mode === "overlay" && (
+        <div className="flex shrink-0 items-center gap-0.5 rounded-md border border-edge p-0.5">
+          {devices.map((d) => (
+            <button
+              key={d.id}
+              type="button"
+              title={d.label + " " + d.hint}
+              onClick={() => onDeviceChange(d.id)}
+              className={cn(
+                "flex h-6 w-6 items-center justify-center rounded transition-colors",
+                device === d.id
+                  ? "bg-accent text-white"
+                  : "text-content-muted hover:bg-surface-hover hover:text-content",
+              )}
+            >
+              {d.icon}
+            </button>
+          ))}
+        </div>
+      )}
 
       <div className="mx-1 h-5 w-px bg-edge" />
 

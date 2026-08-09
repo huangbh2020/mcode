@@ -2,7 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { ContextMenu } from "@base-ui/react/context-menu";
 import { api } from "@renderer/lib/api.js";
 import { cn } from "@renderer/lib/cn.js";
-import { dirname, joinPath, relativePath } from "@renderer/lib/path.js";
+import { basename, dirname, joinPath, relativePath } from "@renderer/lib/path.js";
 import type { FileTreeEntry } from "@contracts/ipc";
 import { useSessionStore } from "@renderer/stores/sessionStore.js";
 import type { TurnFileEntry } from "@renderer/lib/turnFiles.js";
@@ -19,11 +19,18 @@ import {
   IconCheck,
   IconFolderPlus,
   IconFilePlus,
+  IconEdit,
+  IconTrash,
 } from "@renderer/lib/icons.js";
 import { FileTypeIcon } from "@renderer/lib/fileIcon.js";
+import { ConfirmDialog } from "@renderer/components/ui/confirm-dialog.js";
 
 /** Stable empty array for the expanded-dirs selector (Zustand Object.is). */
 const EMPTY_EXPANDED: string[] = [];
+
+/** Stable empty set for the rename clash check when no sibling context exists
+ *  (e.g. a node rendered at the project root with no parent container). */
+const EMPTY_NAMES: Set<string> = new Set();
 
 /**
  * Registry of mounted file-node DOM buttons, keyed by absolute file path.
@@ -58,6 +65,13 @@ const FileTreeActionsContext = createContext<FileTreeActions | null>(null);
  *  a no-op). */
 type StartNewInParent = (kind: NewEntryKind) => void;
 const NewInParentContext = createContext<StartNewInParent | null>(null);
+
+/** Sibling-name set provided by a container (DirNode or the FileTree root) to
+ *  its direct child rows, used by the inline rename row's clash check. The set
+ *  is lowercased basenames of the container's current children (memoized per
+ *  load). Null when rendered outside a container — the rename clash check then
+ *  falls back to server-side rejection. */
+const SiblingNamesContext = createContext<Set<string> | null>(null);
 
 /* ───────────────────────── context menu ───────────────────────── */
 
@@ -281,6 +295,136 @@ function InlineNewEntryRow({
   );
 }
 
+/* ───────────────────────── inline rename row ───────────────────────── */
+
+/** A temporary inline input row that replaces a node's label while renaming.
+ *  Mirrors InlineNewEntryRow's UX (focus in, pre-select the logical name part,
+ *  Enter to commit, Esc to cancel) but edits an existing entry instead of
+ *  creating one. Validation rejects empty names, path separators, reserved
+ *  names, and clashes with siblings — the entry's own current name is excluded
+ *  via `excludeSelf` so renaming to itself (or just adjusting case) is allowed.
+ *  On a valid name it calls `api.file.rename` (same-directory rename only,
+ *  enforced server-side), then reports the new path to the parent. */
+function InlineRenameRow({
+  depth,
+  initialName,
+  isDir,
+  parentPath,
+  existingNames,
+  excludeSelf,
+  onCancel,
+  onRenamed,
+}: {
+  depth: number;
+  /** Current basename of the entry being renamed (pre-fills the input). */
+  initialName: string;
+  /** Whether the entry is a directory — controls name preselection. */
+  isDir: boolean;
+  /** Absolute path of the directory the entry lives in. */
+  parentPath: string;
+  /** Lowercased sibling basenames (for clash detection). */
+  existingNames: Set<string>;
+  /** The entry's own current name (lowercased); excluded from clash check so
+   *  renaming to the same name (or a case-only change) is permitted. */
+  excludeSelf: string;
+  onCancel: () => void;
+  /** Called with the new absolute path on success. */
+  onRenamed: (newPath: string) => void;
+}) {
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [value, setValue] = useState(initialName);
+  const [error, setError] = useState<string | null>(null);
+  // Tracks an in-flight rename so a second Enter doesn't double-submit.
+  const submittingRef = useRef(false);
+
+  // Autofocus + preselect on mount. For folders the whole name is selected;
+  // for files we select up to the last dot so the extension is preserved.
+  useEffect(() => {
+    const el = inputRef.current;
+    if (!el) return;
+    el.focus();
+    const dot = isDir ? -1 : el.value.lastIndexOf(".");
+    el.setSelectionRange(0, dot > 0 ? dot : el.value.length);
+  }, [isDir]);
+
+  const commit = useCallback(async () => {
+    if (submittingRef.current) return;
+    const name = value.trim();
+    if (!name) {
+      onCancel();
+      return;
+    }
+    if (ILLEGAL_NAME_CHARS.test(name) || RESERVED_NAMES.test(name)) {
+      setError("名称包含非法字符");
+      return;
+    }
+    // Allow a no-op / case-only rename (exclude the entry itself from clash).
+    if (name.toLowerCase() !== excludeSelf && existingNames.has(name.toLowerCase())) {
+      setError("同名条目已存在");
+      return;
+    }
+    // Nothing changed — just cancel (server would reject a same-path rename).
+    if (name === initialName) {
+      onCancel();
+      return;
+    }
+    submittingRef.current = true;
+    const oldPath = joinPath(parentPath, initialName);
+    const newPath = joinPath(parentPath, name);
+    const result = await api.file.rename({ oldPath, newPath });
+    submittingRef.current = false;
+    if (!result.ok) {
+      setError("重命名失败");
+      return;
+    }
+    onRenamed(newPath);
+  }, [value, initialName, isDir, parentPath, existingNames, excludeSelf, onCancel, onRenamed]);
+
+  return (
+    <div
+      className="relative flex items-center gap-1 py-0.5 pr-2"
+      style={{ paddingLeft: depth * 12 + 4 }}
+    >
+      <span className="w-3 shrink-0" />
+      <span className="shrink-0 text-content-subtle">
+        {isDir ? <IconFolderOpen size={13} /> : <FileTypeIcon path={joinPath(parentPath, initialName)} size={13} />}
+      </span>
+      <input
+        ref={inputRef}
+        value={value}
+        onChange={(e) => {
+          setValue(e.target.value);
+          if (error) setError(null);
+        }}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            void commit();
+          } else if (e.key === "Escape") {
+            e.preventDefault();
+            onCancel();
+          }
+        }}
+        onBlur={() => {
+          if (submittingRef.current) return;
+          if (value.trim() === "") onCancel();
+          else void commit();
+        }}
+        className={cn(
+          "min-w-0 flex-1 rounded border bg-surface px-1 py-0 text-content outline-none",
+          "[font-size:var(--right-panel-font-size)]",
+          error ? "border-danger" : "border-accent focus:border-accent",
+        )}
+      />
+      {error && (
+        <span className="pointer-events-none absolute right-2 top-0 z-10 -translate-y-full whitespace-nowrap rounded bg-danger/90 px-1.5 py-0.5 text-[10px] text-white shadow">
+          {error}
+        </span>
+      )}
+    </div>
+  );
+}
+
 /* ───────────────────────── FileTree root ───────────────────────── */
 
 /**
@@ -433,9 +577,11 @@ export function FileTree({ projectPath }: { projectPath: string }) {
           空目录
         </div>
       ) : (
-        entries.map((e) => (
-          <TreeNode key={e.path} entry={e} depth={0} projectPath={projectPath} />
-        ))
+        <SiblingNamesContext.Provider value={rootNames}>
+          {entries.map((e) => (
+            <TreeNode key={e.path} entry={e} depth={0} projectPath={projectPath} />
+          ))}
+        </SiblingNamesContext.Provider>
       )}
     </div>
   );
@@ -606,7 +752,15 @@ function DirNode({
   const [loading, setLoading] = useState(false);
   // Inline new-entry row state: null = hidden, "file"|"folder" = showing.
   const [creating, setCreating] = useState<NewEntryKind | null>(null);
+  // Inline rename mode: when true the directory label is replaced by an input.
+  const [renaming, setRenaming] = useState(false);
+  // Pending delete confirmation dialog state.
+  const [pendingDelete, setPendingDelete] = useState(false);
   const { copy: copyWithFeedback, toast: copiedToast } = useCopyFeedback();
+  const closeFilesUnderDir = useSessionStore((s) => s.closeFilesUnderDir);
+  const renamePathInIde = useSessionStore((s) => s.renamePathInIde);
+  // In-flight delete guard so a double-confirm can't fire twice.
+  const deletingRef = useRef(false);
 
   // Track the last reload signal we acted on so we can diff and force a
   // re-load even when `children` is already cached (the normal guard would
@@ -686,6 +840,30 @@ function DirNode({
     [actions, creating, openFileInIde],
   );
 
+  // Rename the directory. On success: exit rename mode, re-scan the tree, and
+  // migrate any editor state (open tabs / expanded dirs) keyed under the old
+  // path to the new one so nothing dangles.
+  const handleRenamed = useCallback(
+    (newPath: string) => {
+      setRenaming(false);
+      actions?.bumpReload();
+      renamePathInIde(endPath, newPath, true);
+    },
+    [actions, endPath, renamePathInIde],
+  );
+
+  // Confirm-approved delete: trash the dir, re-scan, and close any editor tabs
+  // that lived under it. Guarded so a re-confirm can't double-fire.
+  const handleDelete = useCallback(async () => {
+    if (deletingRef.current) return;
+    deletingRef.current = true;
+    const result = await api.file.delete({ targetPath: endPath });
+    deletingRef.current = false;
+    if (!result.ok) return;
+    actions?.bumpReload();
+    closeFilesUnderDir(endPath);
+  }, [actions, endPath, closeFilesUnderDir]);
+
   // Lowercased child names for the inline row's clash check (stable per load).
   const childNames = useMemo(() => {
     const set = new Set<string>();
@@ -693,11 +871,31 @@ function DirNode({
     return set;
   }, [children]);
 
+  // This dir's own siblings (provided by the parent container) — used by the
+  // rename row to detect a name clash with a sibling dir/file. Null at the root
+  // (no parent container); falls back to server-side rejection.
+  const siblingNames = useContext(SiblingNamesContext);
+
   return (
     <div className="relative">
       {/* Provide a "create sibling" handler to descendant file rows so their
           right-click "新建" routes here (into this dir's children list). */}
       <NewInParentContext.Provider value={startCreating}>
+        {renaming ? (
+          // Rename mode replaces the label row with an inline input. Use the
+          // real leaf basename of endPath (handles compact-folders where
+          // entry.name is only the first segment).
+          <InlineRenameRow
+            depth={depth}
+            initialName={basename(endPath)}
+            isDir
+            parentPath={dirname(endPath)}
+            existingNames={siblingNames ?? EMPTY_NAMES}
+            excludeSelf={basename(endPath).toLowerCase()}
+            onCancel={() => setRenaming(false)}
+            onRenamed={handleRenamed}
+          />
+        ) : (
         <ContextMenu.Root>
           <ContextMenu.Trigger
             render={
@@ -746,11 +944,41 @@ function DirNode({
                   label="复制相对路径"
                   onClick={() => copyWithFeedback(relativePath(endPath, projectPath))}
                 />
+                <MenuSeparator />
+                <MenuItem
+                  icon={<IconEdit size={12} />}
+                  label="重命名"
+                  onClick={() => setRenaming(true)}
+                />
+                <MenuItem
+                  icon={<IconTrash size={12} />}
+                  label="删除"
+                  danger
+                  onClick={() => setPendingDelete(true)}
+                />
               </ContextMenu.Popup>
             </ContextMenu.Positioner>
           </ContextMenu.Portal>
         </ContextMenu.Root>
+        )}
         {copiedToast}
+        <ConfirmDialog
+          open={pendingDelete}
+          title="删除文件夹"
+          description={
+            <>
+              确定要删除 <span className="text-content">{label}</span> 吗?
+              <br />
+              <span className="text-content-subtle">文件夹及其所有内容将移至回收站,可从系统回收站恢复。</span>
+            </>
+          }
+          confirmText="删除"
+          danger
+          onOpenChange={(open) => {
+            if (!open) setPendingDelete(false);
+          }}
+          onConfirm={() => void handleDelete()}
+        />
         {isOpen && children && (
           <div>
             {creating && (
@@ -763,9 +991,11 @@ function DirNode({
                 onCreated={handleCreated}
               />
             )}
-            {children.map((c) => (
-              <TreeNode key={c.path} entry={c} depth={depth + 1} projectPath={projectPath} />
-            ))}
+            <SiblingNamesContext.Provider value={childNames}>
+              {children.map((c) => (
+                <TreeNode key={c.path} entry={c} depth={depth + 1} projectPath={projectPath} />
+              ))}
+            </SiblingNamesContext.Provider>
           </div>
         )}
       </NewInParentContext.Provider>
@@ -801,9 +1031,53 @@ function FileNodeRow({
   const startNewInParent = useContext(NewInParentContext);
   const { copy: copyWithFeedback, toast: copiedToast } = useCopyFeedback();
   const enqueueChatFile = useSessionStore((s) => s.enqueueChatFile);
+  // Tree-wide reload signal — used to re-scan after rename/delete. Null when
+  // rendered outside a FileTree (the menu items are then hidden anyway).
+  const actions = useContext(FileTreeActionsContext);
+  // Sibling names (lowercased) for the rename clash check; provided by the
+  // containing DirNode / FileTree root. Null outside a tree.
+  const siblingNames = useContext(SiblingNamesContext);
+  const closeFileInIde = useSessionStore((s) => s.closeFileInIde);
+  const renamePathInIde = useSessionStore((s) => s.renamePathInIde);
+  // Inline rename mode and pending-delete confirmation dialog.
+  const [renaming, setRenaming] = useState(false);
+  const [pendingDelete, setPendingDelete] = useState(false);
+  // In-flight delete guard so a double-confirm can't fire twice.
+  const deletingRef = useRef(false);
+
+  const handleRenamed = useCallback(
+    (newPath: string) => {
+      setRenaming(false);
+      actions?.bumpReload();
+      renamePathInIde(path, newPath, false);
+    },
+    [actions, path, renamePathInIde],
+  );
+
+  const handleDelete = useCallback(async () => {
+    if (deletingRef.current) return;
+    deletingRef.current = true;
+    const result = await api.file.delete({ targetPath: path });
+    deletingRef.current = false;
+    if (!result.ok) return;
+    actions?.bumpReload();
+    closeFileInIde(path);
+  }, [actions, path, closeFileInIde]);
 
   return (
     <div className="relative">
+      {renaming ? (
+        <InlineRenameRow
+          depth={depth}
+          initialName={name}
+          isDir={false}
+          parentPath={dirname(path)}
+          existingNames={siblingNames ?? EMPTY_NAMES}
+          excludeSelf={name.toLowerCase()}
+          onCancel={() => setRenaming(false)}
+          onRenamed={handleRenamed}
+        />
+      ) : (
       <ContextMenu.Root>
         <ContextMenu.Trigger
           render={
@@ -878,11 +1152,41 @@ function FileNodeRow({
                 label="添加到聊天"
                 onClick={() => enqueueChatFile(path)}
               />
+              <MenuSeparator />
+              <MenuItem
+                icon={<IconEdit size={12} />}
+                label="重命名"
+                onClick={() => setRenaming(true)}
+              />
+              <MenuItem
+                icon={<IconTrash size={12} />}
+                label="删除"
+                danger
+                onClick={() => setPendingDelete(true)}
+              />
             </ContextMenu.Popup>
           </ContextMenu.Positioner>
         </ContextMenu.Portal>
       </ContextMenu.Root>
+      )}
       {copiedToast}
+      <ConfirmDialog
+        open={pendingDelete}
+        title="删除文件"
+        description={
+          <>
+            确定要删除 <span className="text-content">{name}</span> 吗?
+            <br />
+            <span className="text-content-subtle">文件将移至回收站,可从系统回收站恢复。</span>
+          </>
+        }
+        confirmText="删除"
+        danger
+        onOpenChange={(open) => {
+          if (!open) setPendingDelete(false);
+        }}
+        onConfirm={() => void handleDelete()}
+      />
     </div>
   );
 }

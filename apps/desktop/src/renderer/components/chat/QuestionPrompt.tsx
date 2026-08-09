@@ -28,8 +28,10 @@ import type { UserInputAnswers } from "@contracts/provider";
  * renders ONE question at a time, and a fixed footer (progress + stepper
  * navigation + submit). Instead of stacking every question at once, the card
  * walks through them one-by-one:
- *   - answering a question auto-advances to the next (option click on a
- *     choice question; Enter / 下一题 for a typed answer);
+ *   - answering a SINGLE-select question auto-advances to the next (option
+ *     click on a choice question; Enter / 下一题 for a typed answer);
+ *     multi-select questions do NOT auto-advance — the first pick is by
+ *     definition partial, so the card stays until the user moves on;
  *   - 上一题 / 下一题 navigate freely — answers already given are kept, so
  *     the user can jump back and revise before submitting;
  *   - the last question shows 提交回答, enabled once every question is
@@ -68,8 +70,10 @@ export function QuestionPrompt({
 
   /** Toggle an option on question `qi`. Single-select replaces the pick
    *  (toggling the active option clears it); multi-select adds/removes.
-   *  Auto-advances to the next question when the answer transitions from
-   *  unanswered → answered (the first pick counts as "answered"). */
+   *  Auto-advances to the next question ONLY for single-select questions —
+   *  a multi-select pick is by definition partial (the user usually wants
+   *  more than one option), so it stays on the question until the user
+   *  moves on via 上一题/下一题. */
   const toggle = (qi: number, label: string) => {
     const wasAnswered = isAnswered(qi);
     setAnswers((prev) =>
@@ -86,7 +90,7 @@ export function QuestionPrompt({
         return { ...item, selected: item.selected[0] === label ? [] : [label] };
       }),
     );
-    if (!wasAnswered && qi === step && !isLast) {
+    if (!wasAnswered && qi === step && !isLast && !questions[qi].multiSelect) {
       setStep((s) => s + 1);
     }
   };
