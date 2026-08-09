@@ -58,6 +58,14 @@ import {
   formatAnswersForModel,
   ASK_SYSTEM_PROMPT,
 } from "@main/lib/askQuestion.js";
+import {
+  browserList,
+  browserNavigate,
+  browserSnapshot,
+  browserClick,
+  browserScreenshot,
+  type ToolResult,
+} from "@main/browser/agentBrowserTools.js";
 
 /** Pi's write/edit tools carry their target path in the `path` field (unlike
  *  Claude's `file_path`). Both schemas are `{ path, ... }`. */
@@ -96,6 +104,12 @@ export function guardToolPath(
 /** Pi's read-only built-in tools — auto-approved in every mode (including plan). */
 const PI_READONLY_TOOLS = new Set(["read", "grep", "find", "ls"]);
 
+/** Mcode browser tools that are purely read-only (they can't mutate the page or
+ *  navigate) — auto-approved in every mode, never routed through the approval
+ *  prompt. `browser_navigate` / `browser_click` have side effects and DO go
+ *  through approval (the user can still "always allow" them per session). */
+const MCODE_BROWSER_READONLY = new Set(["browser_list", "browser_snapshot", "browser_screenshot"]);
+
 /**
  * Decide whether a Pi tool should be auto-approved (skip the prompt) based on
  * the session's CURRENT permission mode. Mirrors the Claude provider's
@@ -128,6 +142,9 @@ export interface CreateMcodeExtensionOptions {
   /** The Mcode session id — needed for all emit() calls (plan.update /
    * mode.change / plan.approval_request events carry it). */
   sessionId: string;
+  /** Project root path — bound to auto-created browser views (for consistency
+   *  with terminal/git). Passed through to the shared browser tools. */
+  projectPath: string;
 }
 
 /**
@@ -141,7 +158,7 @@ export interface CreateMcodeExtensionOptions {
  * useful for debugging whether the extension loaded.
  */
 export function createMcodeExtension(opts: CreateMcodeExtensionOptions): InlineExtension {
-  const { ctx, cwd, strict, sessionId } = opts;
+  const { ctx, cwd, strict, sessionId, projectPath } = opts;
 
   // ── Plan mode state (per-turn, in-process) ──────────────────────────
   // Tracked here rather than via ctx.getPermissionMode() because the latter
@@ -160,6 +177,7 @@ export function createMcodeExtension(opts: CreateMcodeExtensionOptions): InlineE
     factory: (pi: ExtensionAPI) => {
       registerToolCallGuard(pi, { ctx, cwd, strict, planMode });
       registerAskUserQuestionTool(pi, ctx);
+      registerBrowserTools(pi, { ctx, sessionId, projectPath });
       registerPlanModeTools(pi, { ctx, sessionId, planMode });
       registerSystemPromptInjector(pi);
     },
@@ -226,6 +244,13 @@ function registerToolCallGuard(
     //    bridging; never route through the approval prompt or the plan-mode
     //    read-only gate.
     if (toolName === "EnterPlanMode" || toolName === "ExitPlanMode" || toolName === "AskUserQuestion") {
+      return;
+    }
+    //    Read-only browser tools (list/snapshot/screenshot) can't mutate the
+    //    page or navigate, so they're safe to auto-approve in every mode.
+    //    `browser_navigate` / `browser_click` DO have side effects and fall
+    //    through to the normal approval flow below.
+    if (MCODE_BROWSER_READONLY.has(toolName)) {
       return;
     }
 
@@ -325,6 +350,130 @@ function registerAskUserQuestionTool(pi: ExtensionAPI, ctx: ProviderContext): vo
         ],
         details: {},
       };
+    },
+  });
+}
+
+/**
+ * Register the `browser_*` tools that drive the app's embedded browser (the
+ * same `BrowserManager` `WebContentsView` the browser panel uses). The actual
+ * operations live in `agentBrowserTools.ts` (shared with the Claude provider);
+ * here we only define the typebox parameter schemas + bridge screenshots to
+ * `ctx.emit` so the renderer can render them inline.
+ *
+ * Read-only tools (list/snapshot/screenshot) are auto-approved by the
+ * `tool_call` guard (see `MCODE_BROWSER_READONLY`); `navigate`/`click` have
+ * side effects and go through the normal approval prompt.
+ */
+function registerBrowserTools(
+  pi: ExtensionAPI,
+  deps: { ctx: ProviderContext; sessionId: string; projectPath: string },
+): void {
+  const { ctx, sessionId, projectPath } = deps;
+
+  // Convert a shared ToolResult into Pi's execute() return shape. They're
+  // structurally identical (content[] + details), so this is effectively an
+  // identity — but spelling it out keeps the return type tied to ToolResult's
+  // TextBlock|ImageBlock union, which satisfies Pi's (TextContent|ImageContent)[].
+  const toPiResult = (r: ToolResult) => ({
+    content: r.content,
+    details: (r.details ?? {}) as Record<string, unknown>,
+  });
+
+  pi.registerTool({
+    name: "browser_list",
+    label: "Browser List",
+    description:
+      "列出当前所有打开的浏览器视图及其 URL 和标题,返回每个视图的 browserId。" +
+      "调用其他 browser_* 工具时可用 browserId 参数指定目标;省略时自动复用第一个已开视图。",
+    promptSnippet: "browser_list(): 列出打开的浏览器视图",
+    parameters: Type.Object({}),
+    async execute() {
+      return toPiResult(browserList());
+    },
+  });
+
+  pi.registerTool({
+    name: "browser_navigate",
+    label: "Browser Navigate",
+    description:
+      "在应用内浏览器中导航到指定 URL(仅 http/https)。若没有打开的浏览器视图会自动创建并显示一个。" +
+      "browserId 可选——省略时自动复用或新建。导航后需调用 browser_snapshot 读取页面内容。",
+    promptSnippet: "browser_navigate({url, browserId?}): 导航到 URL",
+    parameters: Type.Object({
+      url: Type.String({ description: "目标 URL,必须含 http:// 或 https://" }),
+      browserId: Type.Optional(
+        Type.String({ description: "目标浏览器视图 id;省略则自动复用第一个已开视图或新建" }),
+      ),
+    }),
+    async execute(_toolCallId, params) {
+      const { url, browserId } = params as { url: string; browserId?: string };
+      return toPiResult(browserNavigate({ url, browserId }, projectPath));
+    },
+  });
+
+  pi.registerTool({
+    name: "browser_snapshot",
+    label: "Browser Snapshot",
+    description:
+      "读取当前页面的结构化快照:URL、标题、readyState、页面正文,以及可交互元素列表(链接/按钮/输入框/标题等)。" +
+      "每个可交互元素带 role/name/tag/selector/text——其中的 selector 可直接传给 browser_click。" +
+      "只读,无副作用。这是理解页面内容、定位要操作的元素的主要方式。",
+    promptSnippet: "browser_snapshot({browserId?}): 读取页面结构化快照(只读)",
+    parameters: Type.Object({
+      browserId: Type.Optional(Type.String({ description: "目标浏览器视图 id;省略则用第一个已开视图" })),
+    }),
+    async execute(_toolCallId, params) {
+      const { browserId } = params as { browserId?: string };
+      return toPiResult(await browserSnapshot({ browserId }));
+    },
+  });
+
+  pi.registerTool({
+    name: "browser_click",
+    label: "Browser Click",
+    description:
+      "按 CSS selector 点击页面元素。selector 应来自 browser_snapshot 返回的可交互元素列表。" +
+      "返回点击后的 URL 和标题,可用于判断是否触发了导航。有副作用(会触发页面的点击行为)。",
+    promptSnippet: "browser_click({selector, browserId?}): 点击元素",
+    parameters: Type.Object({
+      selector: Type.String({ description: "要点击元素的 CSS selector(来自 browser_snapshot)" }),
+      browserId: Type.Optional(Type.String({ description: "目标浏览器视图 id;省略则用第一个已开视图" })),
+    }),
+    async execute(_toolCallId, params) {
+      const { selector, browserId } = params as { selector: string; browserId?: string };
+      return toPiResult(await browserClick({ selector, browserId }));
+    },
+  });
+
+  pi.registerTool({
+    name: "browser_screenshot",
+    label: "Browser Screenshot",
+    description:
+      "截取当前页面的可视区域,返回 PNG 图片。用于需要视觉确认页面布局/样式的场景。" +
+      "只读,无副作用。截图会同时显示给用户和返回给你。",
+    promptSnippet: "browser_screenshot({browserId?}): 截图(只读)",
+    parameters: Type.Object({
+      browserId: Type.Optional(Type.String({ description: "目标浏览器视图 id;省略则用第一个已开视图" })),
+    }),
+    async execute(toolCallId, params) {
+      const { browserId } = params as { browserId?: string };
+      const r = await browserScreenshot({ browserId }, {
+        toolCallId,
+        onImage: (info) => {
+          // Emit a structured event so the renderer attaches an inline image
+          // block (Pi path). Claude's image surfacing happens via the
+          // tool_result content instead.
+          ctx.emit({
+            type: "browser.image",
+            sessionId,
+            toolCallId: info.toolCallId,
+            data: info.data,
+            mimeType: info.mimeType,
+          });
+        },
+      });
+      return toPiResult(r);
     },
   });
 }
@@ -480,6 +629,21 @@ const PLAN_MODE_PROMPT = [
 ].join("\n");
 
 /**
+ * System-prompt text teaching the model how to use the browser tools. Appended
+ * (alongside AskUserQuestion + plan-mode hints) via `before_agent_start`.
+ */
+const BROWSER_TOOLS_PROMPT = [
+  `## 浏览器工具(控制应用内浏览器)`,
+  `当需要打开网页、查看页面内容、或与网页交互时使用这组工具:`,
+  `1. browser_navigate({ url }): 打开一个网页(仅 http/https)。没有打开的浏览器时会自动创建一个`,
+  `2. browser_snapshot({ browserId? }): 读取页面结构化快照——可交互元素列表带可直接传给 browser_click 的 selector(只读)`,
+  `3. browser_click({ selector, browserId? }): 按 selector 点击元素(selector 来自 snapshot)`,
+  `4. browser_screenshot({ browserId? }): 截图,用于视觉确认布局/样式(只读)`,
+  `5. browser_list(): 列出所有打开的浏览器视图及其 browserId`,
+  `browserId 参数全部可选——省略时自动复用第一个已开视图。典型流程: navigate → snapshot 读内容 → 按需 click/screenshot。`,
+].join("\n");
+
+/**
  * `before_agent_start` handler — injects the AskUserQuestion usage hint AND
  * the plan-mode tool usage guide into the system prompt. The event fires each
  * turn before the agent loop starts; returning `systemPrompt` overrides
@@ -493,7 +657,7 @@ function registerSystemPromptInjector(pi: ExtensionAPI): void {
     "before_agent_start",
     async (event: BeforeAgentStartEvent): Promise<BeforeAgentStartEventResult | void> => {
       const base = event.systemPrompt ?? "";
-      const injected = `${ASK_SYSTEM_PROMPT}\n\n${PLAN_MODE_PROMPT}`;
+      const injected = `${ASK_SYSTEM_PROMPT}\n\n${PLAN_MODE_PROMPT}\n\n${BROWSER_TOOLS_PROMPT}`;
       const next = base ? `${base}\n\n${injected}` : injected;
       return { systemPrompt: next };
     },

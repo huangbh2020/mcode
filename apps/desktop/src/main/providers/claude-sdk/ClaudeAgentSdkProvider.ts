@@ -6,6 +6,7 @@
  * The SDK bundles its own claude binary, so ClaudePathResolver is no longer needed.
  */
 import { randomUUID } from "node:crypto";
+import { z } from "zod";
 import type { Options, CanUseTool, OnUserDialog } from "@anthropic-ai/claude-agent-sdk";
 import type {
   AgentProvider,
@@ -26,6 +27,13 @@ import {
   normalizeToolFilePath,
 } from "@main/lib/fileSnapshot.js";
 import { resolveSdkBinaryPath } from "./sdkBinaryPath.js";
+import {
+  browserList,
+  browserNavigate,
+  browserSnapshot,
+  browserClick,
+  browserScreenshot,
+} from "@main/browser/agentBrowserTools.js";
 
 // Lazy-load the Agent SDK so the (large) module and its bundled claude binary
 // stay out of the main-process startup path. The SDK is only needed once the
@@ -41,9 +49,151 @@ async function loadQuery(): Promise<typeof import("@anthropic-ai/claude-agent-sd
   return queryFn;
 }
 
+// `createSdkMcpServer` builds an in-process MCP server that surfaces custom
+// tools to the model without spawning a subprocess. It's a pure constructor
+// (no binary, no I/O), but we lazy-load it alongside query() to keep the SDK
+// module out of the startup path.
+let createMcpServerFn: typeof import("@anthropic-ai/claude-agent-sdk").createSdkMcpServer | null = null;
+async function loadCreateMcpServer(): Promise<
+  typeof import("@anthropic-ai/claude-agent-sdk").createSdkMcpServer
+> {
+  if (!createMcpServerFn) {
+    const sdk = await import("@anthropic-ai/claude-agent-sdk");
+    createMcpServerFn = sdk.createSdkMcpServer;
+  }
+  return createMcpServerFn;
+}
+
+/**
+ * Build the in-process MCP server that exposes the `browser_*` tools to
+ * Claude (the SDK equivalent of Pi's `pi.registerTool`). Each tool's handler
+ * delegates to the shared `agentBrowserTools` implementation so both
+ * providers drive the browser identically.
+ *
+ * Claude surfaces each tool to canUseTool as `mcp__mcode-browser__<name>`;
+ * the read-only ones (list/snapshot/screenshot) are auto-approved by
+ * `shouldAutoApprove`, while navigate/click go through the normal approval
+ * prompt. Screenshots return an image content block that the store parses
+ * from the tool_result to render inline.
+ */
+async function buildBrowserMcpServer(projectPath: string, ctx: ProviderContext, sessionId: string) {
+  const createSdkMcpServer = await loadCreateMcpServer();
+
+  return createSdkMcpServer({
+    name: BROWSER_MCP_SERVER,
+    version: "1.0.0",
+    instructions:
+      "Mcode 应用内浏览器控制工具。browserId 可选——省略时自动复用已开 tab 或新建。" +
+      "典型流程:browser_navigate → browser_snapshot 读内容 → 按需 browser_click / browser_screenshot。",
+    alwaysLoad: true,
+    tools: [
+      {
+        name: "browser_list",
+        description:
+          "列出当前所有打开的浏览器视图及其 URL 和标题,返回每个视图的 browserId。" +
+          "调用其他 browser_* 工具时可用 browserId 参数指定目标;省略时自动复用第一个已开视图。",
+        inputSchema: {},
+        handler: async () => browserList(),
+      },
+      {
+        name: "browser_navigate",
+        description:
+          "在应用内浏览器中导航到指定 URL(仅 http/https)。若没有打开的浏览器视图会自动创建并显示一个。" +
+          "browserId 可选——省略时自动复用或新建。导航后需调用 browser_snapshot 读取页面内容。",
+        inputSchema: {
+          url: z.string().describe("目标 URL,必须含 http:// 或 https://"),
+          browserId: z.string().optional().describe("目标浏览器视图 id;省略则自动复用第一个已开视图或新建"),
+        },
+        handler: async (args: Record<string, unknown>) =>
+          browserNavigate(
+            { url: args.url as string, browserId: args.browserId as string | undefined },
+            projectPath,
+          ),
+      },
+      {
+        name: "browser_snapshot",
+        description:
+          "读取当前页面的结构化快照:URL、标题、readyState、页面正文,以及可交互元素列表(链接/按钮/输入框/标题等)。" +
+          "每个可交互元素带 role/name/tag/selector/text——其中的 selector 可直接传给 browser_click。" +
+          "只读,无副作用。这是理解页面内容、定位要操作的元素的主要方式。",
+        inputSchema: {
+          browserId: z.string().optional().describe("目标浏览器视图 id;省略则用第一个已开视图"),
+        },
+        handler: async (args: Record<string, unknown>) =>
+          browserSnapshot({ browserId: args.browserId as string | undefined }),
+      },
+      {
+        name: "browser_click",
+        description:
+          "按 CSS selector 点击页面元素。selector 应来自 browser_snapshot 返回的可交互元素列表。" +
+          "返回点击后的 URL 和标题,可用于判断是否触发了导航。有副作用(会触发页面的点击行为)。",
+        inputSchema: {
+          selector: z.string().describe("要点击元素的 CSS selector(来自 browser_snapshot)"),
+          browserId: z.string().optional().describe("目标浏览器视图 id;省略则用第一个已开视图"),
+        },
+        handler: async (args: Record<string, unknown>) =>
+          browserClick({
+            selector: args.selector as string,
+            browserId: args.browserId as string | undefined,
+          }),
+      },
+      {
+        name: "browser_screenshot",
+        description:
+          "截取当前页面的可视区域,返回 PNG 图片。用于需要视觉确认页面布局/样式的场景。" +
+          "只读,无副作用。截图会同时显示给用户和返回给你。",
+        inputSchema: {
+          browserId: z.string().optional().describe("目标浏览器视图 id;省略则用第一个已开视图"),
+        },
+        handler: async (args: Record<string, unknown>, extra: unknown) => {
+          // The SDK passes the tool-use id via extra context; fall back to a
+          // synthetic id if absent. ctx.emit lets the renderer attach an
+          // inline image block (mirrors the Pi path), in addition to the
+          // image content block in the returned result that the store parses.
+          const toolUseId =
+            (extra as { toolUseId?: string } | undefined)?.toolUseId ?? randomUUID();
+          return browserScreenshot(
+            { browserId: args.browserId as string | undefined },
+            {
+              toolCallId: toolUseId,
+              onImage: (info) => {
+                ctx.emit({
+                  type: "browser.image",
+                  sessionId,
+                  toolCallId: info.toolCallId,
+                  data: info.data,
+                  mimeType: info.mimeType,
+                });
+              },
+            },
+          );
+        },
+      },
+    ],
+  });
+}
+
 /** Tools that mutate files on disk — auto-approved under `acceptEdits`
  *  mode without prompting the user. Mirrors Claude Code's own grouping. */
 const FILE_EDIT_TOOLS = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit"]);
+
+/** The MCP server name under which the browser tools are registered (via
+ *  `createSdkMcpServer` below). The SDK surfaces each tool to canUseTool as
+ *  `mcp__<server>__<tool>`, so the composed prefix is `mcp__mcode-browser__`. */
+const BROWSER_MCP_SERVER = "mcode-browser";
+const BROWSER_MCP_PREFIX = `mcp__${BROWSER_MCP_SERVER}__`;
+
+/** Read-only browser tools (can't mutate the page or navigate) — auto-approved
+ *  in every mode, like the Pi provider's MCODE_BROWSER_READONLY set. The
+ *  side-effecting `browser_navigate` / `browser_click` go through approval. */
+const BROWSER_READONLY_SUFFIXES = new Set(["browser_list", "browser_snapshot", "browser_screenshot"]);
+
+/** True for a canUseTool toolName that names one of our read-only browser MCP
+ *  tools (i.e. `mcp__mcode-browser__browser_snapshot` etc). */
+function isReadOnlyBrowserTool(toolName: string): boolean {
+  if (!toolName.startsWith(BROWSER_MCP_PREFIX)) return false;
+  return BROWSER_READONLY_SUFFIXES.has(toolName.slice(BROWSER_MCP_PREFIX.length));
+}
 
 /** Decide whether a tool should be auto-approved (skip the prompt) based on
  *  the session's CURRENT permission mode. This runs in canUseTool on every
@@ -54,6 +204,8 @@ const FILE_EDIT_TOOLS = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit"]);
 function shouldAutoApprove(mode: PermissionMode | undefined, toolName: string): boolean {
   if (!mode) return false;
   if (mode === "bypassPermissions" || mode === "dontAsk") return true;
+  // Read-only browser tools never need approval — they can't change anything.
+  if (isReadOnlyBrowserTool(toolName)) return true;
   if (mode === "acceptEdits") return FILE_EDIT_TOOLS.has(toolName);
   return false;
 }
@@ -483,6 +635,17 @@ export class ClaudeAgentSdkProvider implements AgentProvider {
         append: appends.join(" "),
       };
     }
+
+    // --- In-process MCP server: browser tools ---
+    // Exposes `browser_*` tools (navigate/snapshot/click/screenshot/list) as an
+    // MCP server running in this process (no subprocess). The SDK surfaces each
+    // to canUseTool as `mcp__mcode-browser__<name>`; read-only tools are
+    // auto-approved (see shouldAutoApprove). Claude can't register custom tools
+    // directly (unlike Pi's pi.registerTool), so an in-process MCP server is the
+    // supported mechanism for same-process tool handlers. See sdk.d.ts
+    // `createSdkMcpServer`.
+    const browserServer = await buildBrowserMcpServer(req.cwd, ctx, req.sessionId);
+    options.mcpServers = { [BROWSER_MCP_SERVER]: browserServer };
 
     const q = (await loadQuery())({ prompt: req.prompt, options });
 

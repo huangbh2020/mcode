@@ -204,10 +204,18 @@ pnpm build
 | P3.5 中间面板 Tab 模式 | ✅ | 中间面板显示模式偏好(单/tab),`openTabs` + `SessionTabs` 标签条;关闭 tab 后台 turn 继续运行 |
 | P4 IDE 右栏 | ✅ | 文件树、git、终端(xterm+node-pty)、Monaco 编辑器 + diff |
 | P4.5 LSP 语言服务器 | ✅ | 设置页可安装/启停 TS/Python/Go/Java 语言服务器;`LspManager`(main)管理 stdio JSON-RPC 子进程;Monaco 手写 Provider(definition/references/hover)+ 诊断 markers + 跳转定位 |
-| P5 体验打磨 | ⬜ | 浏览器预览、checkpoint 时间线、Cmd+K、审批 UI |
+| P5 体验打磨 | 🟡 | ✅ 浏览器预览(agent 驱动应用内浏览器);⬜ checkpoint 时间线、Cmd+K、审批 UI |
 | P6 发布 | ✅ 基础 | electron-builder(mac/win 安装包)、electron-updater(GitHub Releases 渠道)、CI(typecheck + tag 自动发布)。mac 包已接 ad-hoc 签名(无 Apple 付费证书,dmg 直下首次启动需 `xattr -dr com.apple.quarantine` 或系统设置"仍要打开";brew cask 安装无此问题);真实 Developer ID 签名+公证未做,未含 Vitest |
 
 详见 `docs/tech-stack.md` 第八节。
+
+### Agent 浏览器工具(P5)
+- **架构**:复用应用内嵌入式浏览器(`BrowserManager` 的 `WebContentsView`,与右侧浏览器面板同一套 view)。不引入 Playwright/Puppeteer/CDP 等外部浏览器自动化依赖——零新二进制,打包/签名不受影响。
+- **底层能力**(`apps/desktop/src/main/browser/BrowserManager.ts`):在已有 `loadUrl`/`show`/`hide`/`setPickMode` 等面板方法基础上,新增 agent 专用的 `list()`(发现 browserId)、`snapshot()`(`executeJavaScript` 注入只读快照脚本,返回结构化页面数据 + 可交互元素 selector)、`click()`(按 selector 程序化点击,selector 经双重 JSON 编码注入,不拼进 script 源码)、`screenshot()`(`capturePage().toPNG()` → base64)。注入脚本是固定常量(`snapshotScript.ts`),selector 只用于 `querySelector`,无注入风险。
+- **共享工具实现**(`apps/desktop/src/main/browser/agentBrowserTools.ts`):Pi 和 Claude provider 共用。5 个函数 `browserList/browserNavigate/browserSnapshot/browserClick/browserScreenshot`,返回 MCP 兼容的 `{content: [TextBlock|ImageBlock]}`。**browserId 寻址**:所有工具的 `browserId` 可选——省略时自动复用第一个已开 view;无 view 时 `navigate` 自动 `create`+`show`(让用户看到 agent 在浏览),其他工具返回"请先 navigate"。
+- **Pi 侧**(`mcodeExtension.ts` 的 `registerBrowserTools`):用 `pi.registerTool`(typebox schema)注册 5 个工具。**审批分级**:`MCODE_BROWSER_READONLY = {browser_list, browser_snapshot, browser_screenshot}` 在 `tool_call` 守卫的 ③ 步硬编码白名单放行(永不审批);`browser_navigate`/`browser_click` 有副作用,走正常审批(支持 always-allow)。screenshot 的 execute 里 `ctx.emit({type:"browser.image"})` 发结构化事件给 renderer 内联渲染(Pi path)。
+- **Claude 侧**(`ClaudeAgentSdkProvider.ts` 的 `buildBrowserMcpServer`):用 SDK 的 `createSdkMcpServer({name:"mcode-browser", tools:[...]})` 挂**进程内 MCP server**(无子进程),放进 `options.mcpServers`。inputSchema 用 zod。Claude 不能 `registerTool`(SDK 不支持),in-process MCP server 是唯一路径。工具名呈现为 `mcp__mcode-browser__<name>`,`shouldAutoApprove` 里 `isReadOnlyBrowserTool()` 放行只读后缀。screenshot 的 image 通过 tool_result content 透传(SDK 原生支持 image block),store 从 `ToolResultEvent.content` 解析(Claude path)。
+- **图片渲染**(双路径汇聚到同一 store reducer):`RuntimeEvent` 新增 `browser.image`(Pi emit);`Block` union 新增 `kind:"image"`(base64 + mimeType)。`sessionStore` 的 `tool.result` reducer 检测 content 含 image block 时追加 image block(Claude path),`browser.image` reducer 按 toolCallId 追加(Pi path),两者按 toolCallId 去重。`MessageBlocks.tsx` 的 `BlockView` 新增 `case "image"` 渲染 `<img>`;`GenericToolCard` 的 result 预览(`resultPreview`)剥离 image block 避免把 base64 当文本 dump。图片随消息持久化(toRecords 透传 blocks 数组,不区分 kind)。
 
 ---
 

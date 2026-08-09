@@ -474,6 +474,21 @@ export interface CompactResultEvent {
   durationMs?: number;
 }
 
+/** An agent tool captured a screenshot (or other image) that should be shown
+ *  inline in the conversation. Emitted by Pi's `browser_screenshot` tool via
+ *  `ctx.emit`; Claude's in-process MCP server surfaces images through the
+ *  normal tool_result content (parsed by the store). Both paths key off
+ *  `toolCallId` to attach the image as a block next to the tool_use card. */
+export interface BrowserImageEvent {
+  type: "browser.image";
+  sessionId: string;
+  toolCallId: string;
+  /** Base64-encoded image bytes (no data: prefix). */
+  data: string;
+  /** Image MIME type — always "image/png" for screenshots today. */
+  mimeType: "image/png";
+}
+
 /** The union of all runtime events. */
 export type RuntimeEvent =
   | TextDeltaEvent
@@ -493,4 +508,5 @@ export type RuntimeEvent =
   | TurnDoneEvent
   | TurnFilesEvent
   | TurnRewoundEvent
-  | CompactResultEvent;
+  | CompactResultEvent
+  | BrowserImageEvent;

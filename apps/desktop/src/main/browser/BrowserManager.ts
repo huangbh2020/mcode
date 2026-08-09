@@ -34,6 +34,52 @@ import { getMainWindow, sendToRenderer } from "@main/window.js";
 import { getEffectiveTheme } from "@main/lib/theme.js";
 import { log } from "@main/lib/logger.js";
 import { PICKER_INJECT_SCRIPT, PICKER_REMOVE_SCRIPT } from "./pickerScript.js";
+import { SNAPSHOT_SCRIPT, buildClickScript } from "./snapshotScript.js";
+
+/** Metadata for a live browser view, returned by `list()` for agent discovery. */
+export interface BrowserInfo {
+  browserId: string;
+  projectPath: string;
+  url: string;
+  title: string;
+}
+
+/** Result of a `snapshot()` — the structured page data handed to the agent. */
+export interface BrowserSnapshotResult {
+  ok: boolean;
+  error?: string;
+  data?: {
+    url: string;
+    title: string;
+    readyState: string;
+    html: string;
+    bodyText: string;
+    interactive: Array<{
+      role: string;
+      name: string;
+      tag: string;
+      selector: string;
+      text: string;
+    }>;
+  };
+}
+
+/** Result of a `click()` — carries post-click url/title so the caller can tell
+ *  whether the click triggered a navigation. */
+export interface BrowserClickResult {
+  ok: boolean;
+  error?: string;
+  url?: string;
+  title?: string;
+}
+
+/** Result of a `screenshot()` — `data` is a base64 PNG string. */
+export interface BrowserScreenshotResult {
+  ok: boolean;
+  error?: string;
+  data?: string;
+  mimeType?: "image/png";
+}
 
 /** A pixel rect in window coordinates (the renderer measures + forwards this). */
 export interface BrowserBounds extends Rectangle {}
@@ -390,6 +436,92 @@ class BrowserManagerImpl {
     }
     log.info(`browser closed: ${id}`);
     return { ok: true };
+  }
+
+  // ── Agent-facing capabilities ───────────────────────────────────────
+  // These power the `browser_*` tools registered with both providers. Unlike
+  // the panel-facing methods above (which fire navigation and return
+  // immediately), these are async because they await the page's response:
+  // executeJavaScript resolves with the script's return value, capturePage
+  // resolves with a NativeImage. Both are awaited so the agent gets real data.
+
+  /** List metadata for every live browser view, so an agent can discover the
+   *  `browserId` to target. There is no "active" concept in the manager (the
+   *  renderer tracks the active panel tab); the agent resolves a target by
+   *  picking the first entry, or by matching url/title from this list. */
+  list(): BrowserInfo[] {
+    const out: BrowserInfo[] = [];
+    for (const [id, live] of this.browsers) {
+      const wc = live.view.webContents;
+      out.push({
+        browserId: id,
+        projectPath: live.projectPath,
+        url: wc.getURL(),
+        title: wc.getTitle(),
+      });
+    }
+    return out;
+  }
+
+  /** Read a structured snapshot of the page: url/title/readyState, clipped
+   *  html + bodyText, and a compact list of interactive elements (links,
+   *  buttons, inputs, headings) each with a stable selector the agent can
+   *  pass back to `click()`. */
+  async snapshot(id: string): Promise<BrowserSnapshotResult> {
+    const live = this.get(id);
+    if (!live) return { ok: false, error: "浏览器不存在或已关闭" };
+    try {
+      const data = await live.view.webContents.executeJavaScript(SNAPSHOT_SCRIPT, true);
+      return { ok: true, data: data as BrowserSnapshotResult["data"] };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      log.warn(`browser snapshot failed: ${id} ${msg}`);
+      return { ok: false, error: `无法读取页面快照: ${msg}` };
+    }
+  }
+
+  /** Programmatically click the element matching a CSS selector. The selector
+   *  is JSON-encoded before substitution into the click script (see
+   *  `buildClickScript`), so it can't break out of the `querySelector` call.
+   *  Returns post-click url/title so the caller can detect navigation. */
+  async click(id: string, selector: string): Promise<BrowserClickResult> {
+    const live = this.get(id);
+    if (!live) return { ok: false, error: "浏览器不存在或已关闭" };
+    if (typeof selector !== "string" || selector.length === 0) {
+      return { ok: false, error: "selector 不能为空" };
+    }
+    try {
+      const script = buildClickScript(selector);
+      const res = (await live.view.webContents.executeJavaScript(script, true)) as {
+        ok?: boolean;
+        error?: string;
+        url?: string;
+        title?: string;
+      };
+      if (res && res.error) return { ok: false, error: res.error };
+      return { ok: true, url: res?.url, title: res?.title };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      log.warn(`browser click failed: ${id} ${msg}`);
+      return { ok: false, error: `点击失败: ${msg}` };
+    }
+  }
+
+  /** Capture the current page as a PNG screenshot. `capturePage()` renders the
+   *  view's current composite — if the page is mid-navigation the result may be
+   *  blank, so callers should snapshot/click after navigation settles. */
+  async screenshot(id: string): Promise<BrowserScreenshotResult> {
+    const live = this.get(id);
+    if (!live) return { ok: false, error: "浏览器不存在或已关闭" };
+    try {
+      const image = await live.view.webContents.capturePage();
+      const data = image.toPNG().toString("base64");
+      return { ok: true, data, mimeType: "image/png" };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      log.warn(`browser screenshot failed: ${id} ${msg}`);
+      return { ok: false, error: `截图失败: ${msg}` };
+    }
   }
 
   /** Destroy every live browser view - call on app quit. Idempotent (safe to

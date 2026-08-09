@@ -585,6 +585,20 @@ const BlockView = memo(function BlockView({
         </div>
       );
     }
+
+    case "image":
+      // An agent-captured screenshot (browser_screenshot), rendered inline next
+      // to its tool_use card. `data` is base64 PNG (no data: prefix).
+      return (
+        <div className="my-1 overflow-hidden rounded-md border border-edge bg-surface/40">
+          <img
+            src={`data:${block.mimeType};base64,${block.data}`}
+            alt="浏览器截图"
+            className="block max-h-[480px] w-full object-contain"
+            loading="lazy"
+          />
+        </div>
+      );
   }
 });
 export { BlockView };
@@ -946,7 +960,7 @@ function GenericToolCard({
             <div>
               <div className="mb-0.5 uppercase text-content-subtle [font-size:var(--chat-fs-xxs)]">Result</div>
               <pre className="max-h-60 overflow-auto rounded bg-surface/60 p-2 text-content-muted [font-size:var(--chat-fs-xs)]">
-                {truncateResult(block.result)}
+                {resultPreview(block.result)}
               </pre>
             </div>
           )}
@@ -1143,6 +1157,28 @@ function safeStringify(v: unknown): string {
 function truncateResult(v: unknown): string {
   const s = safeStringify(v);
   return s.length > 2000 ? s.slice(0, 2000) + "\n…(truncated)" : s;
+}
+
+/**
+ * Like truncateResult, but strips image content blocks (which carry raw base64
+ * that would flood the card as thousands of chars of JSON). When a screenshot
+ * was captured, the image itself renders as an inline `kind:"image"` block next
+ * to the card; here we only need a short textual stand-in so the Result panel
+ * stays readable.
+ */
+function resultPreview(v: unknown): string {
+  if (Array.isArray(v)) {
+    const filtered = v.filter((b) => !(b && typeof b === "object" && (b as { type?: string }).type === "image"));
+    if (filtered.length !== v.length) {
+      // Had at least one image — render the remaining text blocks, plus a
+      // marker so the user knows a screenshot was elided (rendered above).
+      const texts = filtered
+        .filter((b) => b && typeof b === "object" && (b as { type?: string }).type === "text")
+        .map((b) => (b as { text?: string }).text ?? "");
+      return texts.length > 0 ? truncateResult(texts.join("\n")) + "\n[image rendered above]" : "[image rendered above]";
+    }
+  }
+  return truncateResult(v);
 }
 
 /* ─── type guards ───

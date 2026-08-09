@@ -187,6 +187,17 @@ export type Block =
       postTokens?: number;
       /** How long the compaction took, in ms (may be absent). */
       durationMs?: number;
+    }
+  | {
+      kind: "image";
+      /** The tool_use whose screenshot produced this image. Lets the card
+       *  render next to its tool_use and lets dedup replace rather than
+       *  duplicate on repeated emits. */
+      toolCallId: string;
+      /** Base64-encoded image bytes (no data: prefix). */
+      data: string;
+      /** Image MIME type — always "image/png" for screenshots today. */
+      mimeType: "image/png";
     };
 
 /** Turn-level timing metadata. Attached to the FIRST assistant message of
@@ -202,6 +213,33 @@ export interface TurnMeta {
   /** Wall-clock ms when the turn ended (turn.done / error). Undefined while
    *  the turn is still streaming — the renderer treats this as "live". */
   endedAt?: number;
+}
+
+/**
+ * Extract an image (base64 + mimeType) from a tool_result's content, if it
+ * carries one. Handles both shapes that reach the store:
+ *  - MCP / Pi structured content: `[{ type: "image", data, mimeType }]`
+ *  - Claude SDK passthrough: content may be a string or an array of blocks;
+ *    we only look at array entries with `type: "image"`.
+ * Returns the first image found, or null. Used by the `tool.result` reducer to
+ * attach an inline image block (the Claude path); the Pi path emits a dedicated
+ * `browser.image` event instead.
+ */
+function extractImageFromToolResult(content: unknown): { data: string; mimeType: "image/png" } | null {
+  if (!Array.isArray(content)) return null;
+  for (const block of content) {
+    if (
+      block &&
+      typeof block === "object" &&
+      (block as { type?: string }).type === "image" &&
+      typeof (block as { data?: unknown }).data === "string" &&
+      typeof (block as { mimeType?: unknown }).mimeType === "string"
+    ) {
+      const b = block as { data: string; mimeType: string };
+      return { data: b.data, mimeType: "image/png" };
+    }
+  }
+  return null;
 }
 
 /** One queued prompt: a fully-prepared turn payload held back while the
@@ -4170,14 +4208,41 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           next = next.map((m) => {
             const hasBlock = m.blocks.some((b) => b.kind === "tool_use" && b.toolCallId === e.toolCallId);
             if (!hasBlock) return m;
-            return {
-              ...m,
-              blocks: m.blocks.map((b) =>
-                b.kind === "tool_use" && b.toolCallId === e.toolCallId
-                  ? { ...b, status: e.isError ? "error" : "done", result: e.content }
-                  : b,
-              ),
-            };
+            // If the result carries an image (e.g. a Claude-path screenshot),
+            // attach an inline image block right after the tool_use card — but
+            // only if one isn't already present for this toolCallId (the Pi
+            // path may have already added it via a browser.image event).
+            const img = extractImageFromToolResult(e.content);
+            const hasImage = m.blocks.some((b) => b.kind === "image" && b.toolCallId === e.toolCallId);
+            const blocks: Block[] = m.blocks.map((b) => {
+              if (b.kind === "tool_use" && b.toolCallId === e.toolCallId) {
+                return { ...b, status: e.isError ? "error" : "done", result: e.content };
+              }
+              return b;
+            });
+            if (img && !hasImage) {
+              const tuIdx = blocks.findIndex((b) => b.kind === "tool_use" && b.toolCallId === e.toolCallId);
+              const imageBlock: Block = { kind: "image", toolCallId: e.toolCallId, data: img.data, mimeType: img.mimeType };
+              blocks.splice(tuIdx + 1, 0, imageBlock);
+            }
+            return { ...m, blocks };
+          });
+          break;
+        }
+        case "browser.image": {
+          // Pi path: the provider emits this when browser_screenshot runs.
+          // Attach an inline image block right after the tool_use card,
+          // deduped by toolCallId (an earlier tool.result may have already
+          // extracted the image from the result content).
+          next = next.map((m) => {
+            const tuIdx = m.blocks.findIndex((b) => b.kind === "tool_use" && b.toolCallId === e.toolCallId);
+            if (tuIdx < 0) return m;
+            const hasImage = m.blocks.some((b) => b.kind === "image" && b.toolCallId === e.toolCallId);
+            if (hasImage) return m;
+            const imageBlock = { kind: "image" as const, toolCallId: e.toolCallId, data: e.data, mimeType: e.mimeType };
+            const blocks = [...m.blocks];
+            blocks.splice(tuIdx + 1, 0, imageBlock);
+            return { ...m, blocks };
           });
           break;
         }
