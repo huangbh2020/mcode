@@ -145,27 +145,19 @@ async function buildBrowserMcpServer(projectPath: string, ctx: ProviderContext, 
         inputSchema: {
           browserId: z.string().optional().describe("目标浏览器视图 id;省略则用第一个已开视图"),
         },
-        handler: async (args: Record<string, unknown>, extra: unknown) => {
-          // The SDK passes the tool-use id via extra context; fall back to a
-          // synthetic id if absent. ctx.emit lets the renderer attach an
-          // inline image block (mirrors the Pi path), in addition to the
-          // image content block in the returned result that the store parses.
-          const toolUseId =
-            (extra as { toolUseId?: string } | undefined)?.toolUseId ?? randomUUID();
+        handler: async (args: Record<string, unknown>) => {
+          // The returned image content block flows back to the model via the
+          // SDK and is also surfaced to the user: the claude binary round-
+          // trips the tool_result content (including the image) back as a user
+          // message, which SdkMessageAdapter transparently forwards as a
+          // ToolResultEvent; the store then extracts the image (in Anthropic
+          // {source:{data,media_type}} or MCP {data,mimeType} form) and
+          // attaches an inline image block. No separate browser.image emit is
+          // needed here — unlike the Pi path, the toolCallId isn't available
+          // in the MCP handler's extra, so we rely solely on the tool_result.
           return browserScreenshot(
             { browserId: args.browserId as string | undefined },
-            {
-              toolCallId: toolUseId,
-              onImage: (info) => {
-                ctx.emit({
-                  type: "browser.image",
-                  sessionId,
-                  toolCallId: info.toolCallId,
-                  data: info.data,
-                  mimeType: info.mimeType,
-                });
-              },
-            },
+            { toolCallId: randomUUID() },
           );
         },
       },

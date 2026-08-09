@@ -1164,11 +1164,15 @@ function truncateResult(v: unknown): string {
  * that would flood the card as thousands of chars of JSON). When a screenshot
  * was captured, the image itself renders as an inline `kind:"image"` block next
  * to the card; here we only need a short textual stand-in so the Result panel
- * stays readable.
+ * stays readable. Handles both MCP (`{type:"image",data,mimeType}`) and
+ * Anthropic (`{type:"image",source:{...}}`) image shapes.
  */
+function isImageBlock(b: unknown): boolean {
+  return !!b && typeof b === "object" && (b as { type?: string }).type === "image";
+}
 function resultPreview(v: unknown): string {
   if (Array.isArray(v)) {
-    const filtered = v.filter((b) => !(b && typeof b === "object" && (b as { type?: string }).type === "image"));
+    const filtered = v.filter((b) => !isImageBlock(b));
     if (filtered.length !== v.length) {
       // Had at least one image — render the remaining text blocks, plus a
       // marker so the user knows a screenshot was elided (rendered above).

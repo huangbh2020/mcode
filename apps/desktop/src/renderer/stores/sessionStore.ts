@@ -217,29 +217,49 @@ export interface TurnMeta {
 
 /**
  * Extract an image (base64 + mimeType) from a tool_result's content, if it
- * carries one. Handles both shapes that reach the store:
- *  - MCP / Pi structured content: `[{ type: "image", data, mimeType }]`
- *  - Claude SDK passthrough: content may be a string or an array of blocks;
- *    we only look at array entries with `type: "image"`.
- * Returns the first image found, or null. Used by the `tool.result` reducer to
- * attach an inline image block (the Claude path); the Pi path emits a dedicated
- * `browser.image` event instead.
+ * carries one. Handles all three shapes that can reach the store:
+ *  - MCP format (Pi extension tools + Claude in-process MCP handlers):
+ *      `{ type: "image", data, mimeType }`
+ *  - Anthropic API format (claude binary round-trips tool_result content
+ *    through the Messages API, which represents images as):
+ *      `{ type: "image", source: { type: "base64", media_type, data } }`
+ *  - The content array itself may be nested one level: Anthropic wraps the
+ *    tool_result content blocks inside an outer array —
+ *    `[{ type: "tool_result", content: [{ type: "image", ... }] }]`. We peek
+ *    one level into any `tool_result` block's `content` too.
+ *
+ * Returns the first image found (as base64 + mimeType), or null.
  */
 function extractImageFromToolResult(content: unknown): { data: string; mimeType: "image/png" } | null {
-  if (!Array.isArray(content)) return null;
-  for (const block of content) {
-    if (
-      block &&
-      typeof block === "object" &&
-      (block as { type?: string }).type === "image" &&
-      typeof (block as { data?: unknown }).data === "string" &&
-      typeof (block as { mimeType?: unknown }).mimeType === "string"
-    ) {
-      const b = block as { data: string; mimeType: string };
-      return { data: b.data, mimeType: "image/png" };
+  const scan = (blocks: unknown[]): { data: string; mimeType: "image/png" } | null => {
+    for (const block of blocks) {
+      if (!block || typeof block !== "object") continue;
+      const b = block as Record<string, unknown>;
+      if (b.type === "image") {
+        // MCP format: top-level data + mimeType.
+        if (typeof b.data === "string" && typeof b.mimeType === "string") {
+          return { data: b.data, mimeType: "image/png" };
+        }
+        // Anthropic format: nested source.{media_type, data}.
+        const src = b.source as Record<string, unknown> | undefined;
+        if (
+          src &&
+          typeof src === "object" &&
+          typeof src.data === "string" &&
+          typeof src.media_type === "string"
+        ) {
+          return { data: src.data as string, mimeType: "image/png" };
+        }
+      }
+      // Anthropic may wrap the image inside a tool_result block's content.
+      if (b.type === "tool_result" && Array.isArray(b.content)) {
+        const inner = scan(b.content);
+        if (inner) return inner;
+      }
     }
-  }
-  return null;
+    return null;
+  };
+  return Array.isArray(content) ? scan(content) : null;
 }
 
 /** One queued prompt: a fully-prepared turn payload held back while the
@@ -4205,6 +4225,15 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           break;
         }
         case "tool.result": {
+          // eslint-disable-next-line no-console
+          console.log("[browser-img-debug] tool.result", {
+            toolCallId: e.toolCallId,
+            isError: e.isError,
+            contentType: Array.isArray(e.content) ? "array" : typeof e.content,
+            contentSample: Array.isArray(e.content)
+              ? e.content.map((b) => (b && typeof b === "object" ? { type: (b as { type?: string }).type, keys: Object.keys(b) } : typeof b))
+              : String(e.content).slice(0, 100),
+          });
           next = next.map((m) => {
             const hasBlock = m.blocks.some((b) => b.kind === "tool_use" && b.toolCallId === e.toolCallId);
             if (!hasBlock) return m;
@@ -4224,24 +4253,40 @@ export const useSessionStore = create<SessionState>((set, get) => ({
               const tuIdx = blocks.findIndex((b) => b.kind === "tool_use" && b.toolCallId === e.toolCallId);
               const imageBlock: Block = { kind: "image", toolCallId: e.toolCallId, data: img.data, mimeType: img.mimeType };
               blocks.splice(tuIdx + 1, 0, imageBlock);
+              // eslint-disable-next-line no-console
+              console.log("[browser-img-debug] tool.result: attached image block", { toolCallId: e.toolCallId, dataLen: img.data.length });
+            } else if (!img) {
+              // eslint-disable-next-line no-console
+              console.log("[browser-img-debug] tool.result: no image extracted", { toolCallId: e.toolCallId });
             }
             return { ...m, blocks };
           });
           break;
         }
         case "browser.image": {
+          // eslint-disable-next-line no-console
+          console.log("[browser-img-debug] browser.image event", { toolCallId: e.toolCallId, dataLen: e.data.length });
           // Pi path: the provider emits this when browser_screenshot runs.
           // Attach an inline image block right after the tool_use card,
           // deduped by toolCallId (an earlier tool.result may have already
           // extracted the image from the result content).
           next = next.map((m) => {
             const tuIdx = m.blocks.findIndex((b) => b.kind === "tool_use" && b.toolCallId === e.toolCallId);
-            if (tuIdx < 0) return m;
+            if (tuIdx < 0) {
+              // eslint-disable-next-line no-console
+              console.log("[browser-img-debug] browser.image: no tool_use block found", {
+                toolCallId: e.toolCallId,
+                blocks: m.blocks.map((b) => ({ kind: b.kind, toolCallId: (b as { toolCallId?: string }).toolCallId })),
+              });
+              return m;
+            }
             const hasImage = m.blocks.some((b) => b.kind === "image" && b.toolCallId === e.toolCallId);
             if (hasImage) return m;
             const imageBlock = { kind: "image" as const, toolCallId: e.toolCallId, data: e.data, mimeType: e.mimeType };
             const blocks = [...m.blocks];
             blocks.splice(tuIdx + 1, 0, imageBlock);
+            // eslint-disable-next-line no-console
+            console.log("[browser-img-debug] browser.image: attached image block", { toolCallId: e.toolCallId });
             return { ...m, blocks };
           });
           break;
