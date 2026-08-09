@@ -216,8 +216,9 @@ export interface TurnMeta {
 }
 
 /**
- * Extract an image (base64 + mimeType) from a tool_result's content, if it
- * carries one. Handles all shapes that can reach the store:
+ * Extract ALL images (base64 + mimeType) from a tool_result's content. A single
+ * tool result may carry multiple image blocks (e.g. a multi-screenshot capture
+ * session). Handles all shapes that can reach the store:
  *  - MCP format (Pi extension tools + Claude in-process MCP handlers):
  *      `{ type: "image", data, mimeType }`
  *  - Anthropic API format (claude binary round-trips tool_result content
@@ -232,17 +233,22 @@ export interface TurnMeta {
  *    (the AgentToolResult shape), NOT the bare content array. We unwrap a
  *    top-level `.content` array when the payload itself isn't an array.
  *
- * Returns the first image found (as base64 + mimeType), or null.
+ * Returns every image found (as base64 + mimeType), in document order. Empty
+ * array if none. Used by the `tool.result` reducer to attach inline image
+ * blocks (the Claude path); the Pi path emits a dedicated `browser.image`
+ * event per screenshot instead.
  */
-function extractImageFromToolResult(content: unknown): { data: string; mimeType: "image/png" } | null {
-  const scan = (blocks: unknown[]): { data: string; mimeType: "image/png" } | null => {
+function extractImagesFromToolResult(content: unknown): { data: string; mimeType: "image/png" }[] {
+  const out: { data: string; mimeType: "image/png" }[] = [];
+  const scan = (blocks: unknown[]): void => {
     for (const block of blocks) {
       if (!block || typeof block !== "object") continue;
       const b = block as Record<string, unknown>;
       if (b.type === "image") {
         // MCP format: top-level data + mimeType.
         if (typeof b.data === "string" && typeof b.mimeType === "string") {
-          return { data: b.data, mimeType: "image/png" };
+          out.push({ data: b.data, mimeType: "image/png" });
+          continue;
         }
         // Anthropic format: nested source.{media_type, data}.
         const src = b.source as Record<string, unknown> | undefined;
@@ -252,25 +258,25 @@ function extractImageFromToolResult(content: unknown): { data: string; mimeType:
           typeof src.data === "string" &&
           typeof src.media_type === "string"
         ) {
-          return { data: src.data as string, mimeType: "image/png" };
+          out.push({ data: src.data as string, mimeType: "image/png" });
         }
+        continue;
       }
       // Anthropic may wrap the image inside a tool_result block's content.
       if (b.type === "tool_result" && Array.isArray(b.content)) {
-        const inner = scan(b.content);
-        if (inner) return inner;
+        scan(b.content);
       }
     }
-    return null;
   };
   // Claude path: content is the bare content-block array.
-  if (Array.isArray(content)) return scan(content);
-  // Pi path: content is the AgentToolResult wrapper { content: [...], details }.
-  if (content && typeof content === "object") {
+  if (Array.isArray(content)) {
+    scan(content);
+  } else if (content && typeof content === "object") {
+    // Pi path: content is the AgentToolResult wrapper { content: [...], details }.
     const inner = (content as { content?: unknown }).content;
-    if (Array.isArray(inner)) return scan(inner);
+    if (Array.isArray(inner)) scan(inner);
   }
-  return null;
+  return out;
 }
 
 /** One queued prompt: a fully-prepared turn payload held back while the
@@ -4247,22 +4253,30 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           next = next.map((m) => {
             const hasBlock = m.blocks.some((b) => b.kind === "tool_use" && b.toolCallId === e.toolCallId);
             if (!hasBlock) return m;
-            // If the result carries an image (e.g. a Claude-path screenshot),
-            // attach an inline image block right after the tool_use card — but
-            // only if one isn't already present for this toolCallId (the Pi
-            // path may have already added it via a browser.image event).
-            const img = extractImageFromToolResult(e.content);
-            const hasImage = m.blocks.some((b) => b.kind === "image" && b.toolCallId === e.toolCallId);
+            // If the result carries image(s) (e.g. a Claude-path screenshot),
+            // attach inline image blocks right after the tool_use card. A single
+            // result may carry multiple images. Skip images already present for
+            // this toolCallId (the Pi path may have added some via browser.image
+            // events) — match by data to dedupe, not by mere existence.
+            const imgs = extractImagesFromToolResult(e.content);
             const blocks: Block[] = m.blocks.map((b) => {
               if (b.kind === "tool_use" && b.toolCallId === e.toolCallId) {
                 return { ...b, status: e.isError ? "error" : "done", result: e.content };
               }
               return b;
             });
-            if (img && !hasImage) {
+            if (imgs.length > 0) {
               const tuIdx = blocks.findIndex((b) => b.kind === "tool_use" && b.toolCallId === e.toolCallId);
-              const imageBlock: Block = { kind: "image", toolCallId: e.toolCallId, data: img.data, mimeType: img.mimeType };
-              blocks.splice(tuIdx + 1, 0, imageBlock);
+              const existing = new Set(
+                blocks.filter((b) => b.kind === "image").map((b) => (b as { data: string }).data),
+              );
+              const toAdd: Block[] = [];
+              for (const img of imgs) {
+                if (!existing.has(img.data)) {
+                  toAdd.push({ kind: "image", toolCallId: e.toolCallId, data: img.data, mimeType: img.mimeType });
+                }
+              }
+              if (toAdd.length > 0) blocks.splice(tuIdx + 1, 0, ...toAdd);
             }
             return { ...m, blocks };
           });

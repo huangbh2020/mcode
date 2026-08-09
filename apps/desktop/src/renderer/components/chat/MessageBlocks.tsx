@@ -2,6 +2,8 @@ import { memo, useState, useMemo, useEffect, useRef, useDeferredValue, type Reac
 import { cn } from "@renderer/lib/cn.js";
 import {
   IconChevronDown,
+  IconChevronLeft,
+  IconChevronRight,
   IconCheck,
   IconX,
   IconAlertTriangle,
@@ -120,6 +122,8 @@ const MessageBlocks = memo(function MessageBlocks({
       {segments.map((seg, i) =>
         seg.kind === "single" ? (
           <BlockView key={i} block={seg.block} defaultOpen={seg.defaultOpen} beforeMap={beforeMap} isStreamingTail={isStreamingTail} onOpenPlan={onOpenPlan} projectPath={projectPath} />
+        ) : seg.kind === "gallery" ? (
+          <ImageGallery key={i} blocks={seg.blocks} />
         ) : (
           <BatchToolGroup key={i} blocks={seg.blocks} beforeMap={beforeMap} turnActive={isStreamingTail} projectPath={projectPath} />
         ),
@@ -136,7 +140,8 @@ export type ThinkingBlock = Extract<Block, { kind: "thinking" }>;
 export type ProceduralBlock = ThinkingBlock | ToolUseBlock;
 type Segment =
   | { kind: "single"; block: Block; defaultOpen?: boolean }
-  | { kind: "batch"; blocks: ToolUseBlock[] };
+  | { kind: "batch"; blocks: ToolUseBlock[] }
+  | { kind: "gallery"; blocks: Extract<Block, { kind: "image" }>[] };
 
 /** Tool calls that are HIGH-FREQUENCY, LOW-INFO operations - the model fires
  *  off Read/Bash/Grep/Glob in long bursts while exploring. Collapsing these
@@ -181,23 +186,42 @@ function isBatchTool(b: Block): b is ToolUseBlock {
 function groupBlocks(blocks: Block[]): Segment[] {
   const out: Segment[] = [];
   let run: ToolUseBlock[] = [];
-  const flush = () => {
+  let images: Extract<Block, { kind: "image" }>[] = [];
+  const flushTools = () => {
     if (run.length > 0) {
       out.push({ kind: "batch", blocks: run });
       run = [];
     }
   };
+  const flushImages = () => {
+    if (images.length > 0) {
+      // A single image renders standalone (so BlockView's image case handles
+      // it); 2+ consecutive images become a swipeable gallery.
+      if (images.length === 1) {
+        out.push({ kind: "single", block: images[0], defaultOpen: false });
+      } else {
+        out.push({ kind: "gallery", blocks: images });
+      }
+      images = [];
+    }
+  };
   for (const b of blocks) {
-    if (isBatchTool(b)) {
+    if (b.kind === "image") {
+      // Images don't break a tool batch, but a tool breaks an image run.
+      flushTools();
+      images.push(b);
+    } else if (isBatchTool(b)) {
+      flushImages();
       run.push(b);
     } else {
-      // thinking / standalone tool (Task/AskUserQuestion/Edit/Write) / text /
-      // error / other blocks break the batch run and emit as their own segment.
-      flush();
+      // thinking / standalone tool / text / error / other blocks break both runs.
+      flushTools();
+      flushImages();
       out.push({ kind: "single", block: b, defaultOpen: false });
     }
   }
-  flush();
+  flushTools();
+  flushImages();
   return out;
 }
 
@@ -292,6 +316,72 @@ function Chevron({ open, className }: { open: boolean; className?: string }) {
         className,
       )}
     />
+  );
+}
+
+/** A swipeable gallery for 2+ consecutive screenshot image blocks (e.g. the
+ *  model captured several pages in one turn). Shows one thumbnail at a time
+ *  with ◀ ▶ arrows + a position counter (2/5). Clicking the thumbnail opens
+ *  the fullscreen ImageWithPreview lightbox for the current image.
+ *
+ *  Single images never reach here — `groupBlocks` renders a lone image via the
+ *  normal BlockView image case. This component only assembles runs of 2+. */
+function ImageGallery({ blocks }: { blocks: Extract<Block, { kind: "image" }>[] }) {
+  const [idx, setIdx] = useState(0);
+  const count = blocks.length;
+  const cur = blocks[Math.min(idx, count - 1)];
+  const go = (delta: number) => setIdx((i) => Math.max(0, Math.min(count - 1, i + delta)));
+  return (
+    <div className="my-1 flex w-full max-w-[420px] flex-col gap-1">
+      <div className="relative">
+        <ImageWithPreview
+          src={`data:${cur.mimeType};base64,${cur.data}`}
+          alt={`截图 ${Math.min(idx, count - 1) + 1}/${count}`}
+        />
+        {count > 1 && (
+          <>
+            <button
+              type="button"
+              onClick={() => go(-1)}
+              disabled={idx <= 0}
+              title="上一张"
+              className="absolute left-1 top-1/2 -translate-y-1/2 rounded-full bg-black/55 p-1.5 text-white/90 backdrop-blur-sm transition-colors enabled:hover:bg-black/80 enabled:hover:text-white disabled:opacity-30"
+            >
+              <IconChevronLeft size={18} />
+            </button>
+            <button
+              type="button"
+              onClick={() => go(1)}
+              disabled={idx >= count - 1}
+              title="下一张"
+              className="absolute right-1 top-1/2 -translate-y-1/2 rounded-full bg-black/55 p-1.5 text-white/90 backdrop-blur-sm transition-colors enabled:hover:bg-black/80 enabled:hover:text-white disabled:opacity-30"
+            >
+              <IconChevronRight size={18} />
+            </button>
+          </>
+        )}
+      </div>
+      {count > 1 && (
+        <div className="flex items-center justify-center gap-1 text-[11px] text-content-subtle">
+          <span>{Math.min(idx, count - 1) + 1} / {count}</span>
+          {/* Dot indicators for quick jump. */}
+          <span className="ml-1.5 flex items-center gap-1">
+            {blocks.map((_, i) => (
+              <button
+                key={i}
+                type="button"
+                onClick={() => setIdx(i)}
+                title={`第 ${i + 1} 张`}
+                className={cn(
+                  "h-1.5 rounded-full transition-all",
+                  i === idx ? "w-3 bg-accent" : "w-1.5 bg-content-subtle/40 hover:bg-content-subtle/70",
+                )}
+              />
+            ))}
+          </span>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -436,6 +526,8 @@ export function TurnPanel({
                 onOpenPlan={onOpenPlan}
                 projectPath={projectPath}
               />
+            ) : seg.kind === "gallery" ? (
+              <ImageGallery key={i} blocks={seg.blocks} />
             ) : (
               <BatchToolGroup
                 key={i}
