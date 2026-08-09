@@ -16,6 +16,7 @@ import { Toaster } from "./components/layout/Toaster.js";
 import { useClaudeEvents } from "./hooks/useClaudeEvents.js";
 import { useGlobalShortcuts } from "./hooks/useGlobalShortcuts.js";
 import { useSessionStore } from "./stores/sessionStore.js";
+import { api } from "./lib/api.js";
 import { useTheme } from "./lib/theme.js";
 import { useChatAppearance, useRightPanelAppearance } from "./lib/appearance.js";
 import { OpenTabsBar } from "./components/ide/OpenTabsBar.js";
@@ -41,6 +42,19 @@ const PlanViewer = lazy(() =>
 export function App() {
   // Subscribe to the claude event stream for the app's whole lifetime.
   useClaudeEvents();
+  // When an agent browser tool opens/reuses a view, surface the browser panel
+  // so the user sees the agent browsing and BrowserPanel can sync bounds.
+  // Subscribed globally (not in BrowserPanel, which only mounts when the
+  // browser tab is already active) so the panel switch happens even if the
+  // right panel is currently on files/git.
+  useEffect(() => {
+    const off = api.on.browserEvent((msg) => {
+      if (msg.type !== "agentOpened") return;
+      useSessionStore.getState().setRightPanelTab("browser");
+      useSessionStore.getState().setRightOpen(true);
+    });
+    return off;
+  }, []);
   // Global keyboard shortcuts (Cmd+K palette, Cmd+B sidebar, etc.). Mounts a
   // single capture-phase window listener; rebinding in settings re-subscribes.
   useGlobalShortcuts();

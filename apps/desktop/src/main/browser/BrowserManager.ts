@@ -102,6 +102,22 @@ interface LiveBrowser {
 /** Offscreen parking rect used while hidden (keeps the view alive but unseen). */
 const HIDDEN_BOUNDS: Rectangle = { x: -9999, y: -9999, width: 1, height: 1 };
 
+/** Default on-screen bounds for an agent-created view that the renderer hasn't
+ *  measured yet. Sized to a reasonable right-panel region of the main window so
+ *  the page is visible AND capturable (capturePage on a 1x1 offscreen view
+ *  returns an empty image). The renderer's BrowserPanel will re-sync precise
+ *  bounds once it mounts and measures its placeholder div. */
+function defaultOnscreenBounds(): Rectangle {
+  const win = getMainWindow();
+  if (!win || win.isDestroyed()) {
+    return { x: 80, y: 80, width: 800, height: 600 };
+  }
+  const [winW, winH] = win.getContentSize();
+  // Right ~42% of the window, leaving room for the center pane. Min 480 wide.
+  const panelW = Math.max(480, Math.round(winW * 0.42));
+  return { x: Math.max(0, winW - panelW), y: 0, width: panelW, height: winH };
+}
+
 /** Background color matching the effective theme, so the view doesn't flash
  *  the wrong color before a page paints. Mirrors window.ts's bgColor(). */
 function bgColor(): string {
@@ -369,7 +385,10 @@ class BrowserManagerImpl {
     return { ok: true };
   }
 
-  /** Attach + restore last bounds. Called when the panel reopens. */
+  /** Attach + restore last bounds. Called when the panel reopens. When the
+   *  view was created by the agent (never measured by the renderer), lastBounds
+   *  is still HIDDEN_BOUNDS — fall back to a default on-screen region so the
+   *  page is visible and capturable instead of a 1x1 offscreen blank. */
   show(id: string): BrowserOpResult {
     const live = this.get(id);
     if (!live) return { ok: false, error: "浏览器不存在或已关闭" };
@@ -378,7 +397,8 @@ class BrowserManagerImpl {
     try {
       // Re-attach in case it was removed (e.g. by close/hide using removeChildView).
       win.contentView.addChildView(live.view);
-      const b = live.lastBounds.width > 1 ? live.lastBounds : { ...HIDDEN_BOUNDS };
+      const b = live.lastBounds.width > 1 ? live.lastBounds : defaultOnscreenBounds();
+      live.lastBounds = b;
       live.view.setBounds(b);
       live.visible = true;
       return { ok: true };
@@ -483,6 +503,21 @@ class BrowserManagerImpl {
   // immediately), these are async because they await the page's response:
   // executeJavaScript resolves with the script's return value, capturePage
   // resolves with a NativeImage. Both are awaited so the agent gets real data.
+
+  /** Notify the renderer that an agent tool opened/reused a browser view, so it
+   *  can switch the right panel to the browser tab (making the view visible and
+   *  letting BrowserPanel take over precise bounds syncing). Pushed as a
+   *  `browser:event` with type "agentOpened". */
+  notifyAgentOpened(id: string): void {
+    const live = this.get(id);
+    if (!live) return;
+    sendToRenderer(IPC.BROWSER_EVENT, {
+      channel: IPC.BROWSER_EVENT,
+      browserId: id,
+      type: "agentOpened",
+      payload: { url: live.view.webContents.getURL(), title: live.view.webContents.getTitle() },
+    });
+  }
 
   /** List metadata for every live browser view, so an agent can discover the
    *  `browserId` to target. There is no "active" concept in the manager (the

@@ -1766,11 +1766,13 @@ export interface PickedElement {
  *  - "navigation": the active page changed (URL/title/back/forward state).
  *  - "loading":    the page started or stopped loading.
  *  - "pickResult": the user clicked an element in pick mode.
- *  - "crashed":    the renderer process died; the view needs recreating. */
+ *  - "crashed":    the renderer process died; the view needs recreating.
+ *  - "agentOpened": an agent tool created/reused a browser view; the renderer
+ *    should switch the right panel to the browser tab so the view is visible. */
 export interface BrowserEventMessage {
   channel: "browser:event";
   browserId: string;
-  type: "navigation" | "loading" | "pickResult" | "crashed";
+  type: "navigation" | "loading" | "pickResult" | "crashed" | "agentOpened";
   payload: unknown;
 }
 

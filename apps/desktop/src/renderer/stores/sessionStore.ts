@@ -4225,24 +4225,6 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           break;
         }
         case "tool.result": {
-          // eslint-disable-next-line no-console
-          console.log("[browser-img-debug] tool.result", JSON.stringify({
-            toolCallId: e.toolCallId,
-            isError: e.isError,
-            contentType: Array.isArray(e.content) ? "array" : typeof e.content,
-            contentBlocks: Array.isArray(e.content)
-              ? e.content.map((b) => {
-                  if (b && typeof b === "object") {
-                    const blk = b as Record<string, unknown>;
-                    if (blk.type === "text" && typeof blk.text === "string") {
-                      return { type: "text", text: blk.text.slice(0, 300) };
-                    }
-                    return { type: blk.type, keys: Object.keys(blk), hasSource: !!blk.source, hasData: typeof blk.data === "string" };
-                  }
-                  return typeof b;
-                })
-              : String(e.content).slice(0, 200),
-          }));
           next = next.map((m) => {
             const hasBlock = m.blocks.some((b) => b.kind === "tool_use" && b.toolCallId === e.toolCallId);
             if (!hasBlock) return m;
@@ -4262,40 +4244,24 @@ export const useSessionStore = create<SessionState>((set, get) => ({
               const tuIdx = blocks.findIndex((b) => b.kind === "tool_use" && b.toolCallId === e.toolCallId);
               const imageBlock: Block = { kind: "image", toolCallId: e.toolCallId, data: img.data, mimeType: img.mimeType };
               blocks.splice(tuIdx + 1, 0, imageBlock);
-              // eslint-disable-next-line no-console
-              console.log("[browser-img-debug] tool.result: attached image block", { toolCallId: e.toolCallId, dataLen: img.data.length });
-            } else if (!img) {
-              // eslint-disable-next-line no-console
-              console.log("[browser-img-debug] tool.result: no image extracted", { toolCallId: e.toolCallId });
             }
             return { ...m, blocks };
           });
           break;
         }
         case "browser.image": {
-          // eslint-disable-next-line no-console
-          console.log("[browser-img-debug] browser.image event", { toolCallId: e.toolCallId, dataLen: e.data.length });
           // Pi path: the provider emits this when browser_screenshot runs.
           // Attach an inline image block right after the tool_use card,
           // deduped by toolCallId (an earlier tool.result may have already
           // extracted the image from the result content).
           next = next.map((m) => {
             const tuIdx = m.blocks.findIndex((b) => b.kind === "tool_use" && b.toolCallId === e.toolCallId);
-            if (tuIdx < 0) {
-              // eslint-disable-next-line no-console
-              console.log("[browser-img-debug] browser.image: no tool_use block found", {
-                toolCallId: e.toolCallId,
-                blocks: m.blocks.map((b) => ({ kind: b.kind, toolCallId: (b as { toolCallId?: string }).toolCallId })),
-              });
-              return m;
-            }
+            if (tuIdx < 0) return m;
             const hasImage = m.blocks.some((b) => b.kind === "image" && b.toolCallId === e.toolCallId);
             if (hasImage) return m;
             const imageBlock = { kind: "image" as const, toolCallId: e.toolCallId, data: e.data, mimeType: e.mimeType };
             const blocks = [...m.blocks];
             blocks.splice(tuIdx + 1, 0, imageBlock);
-            // eslint-disable-next-line no-console
-            console.log("[browser-img-debug] browser.image: attached image block", { toolCallId: e.toolCallId });
             return { ...m, blocks };
           });
           break;

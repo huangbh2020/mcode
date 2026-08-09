@@ -149,6 +149,11 @@ export async function browserNavigate(
     if (!check.ok) return errorResult(check.reason);
   }
 
+  // Make sure the view is on-screen (it may have been hidden) and tell the
+  // renderer to surface the browser panel so the user sees the agent browsing.
+  BrowserManager.show(browserId);
+  BrowserManager.notifyAgentOpened(browserId);
+
   const res = BrowserManager.loadUrl(browserId, url);
   if (!res.ok) return errorResult(res.error ?? "导航失败");
   // Wait for the page to finish loading so a subsequent snapshot/screenshot
