@@ -34,6 +34,7 @@ import { TurnFilesCard } from "./TurnFilesCard.js";
 import { CurrentOpTicker } from "./CurrentOpTicker.js";
 import { lineDiff, diffSummary } from "@renderer/lib/lineDiff.js";
 import { FileLink } from "./FileLink.js";
+import { ImageWithPreview } from "@renderer/components/ui/index.js";
 
 /** Map of absolute file path → its pre-turn content. Built from the
  *  `turn.files` event payload so the Write tool card can diff the new
@@ -588,16 +589,14 @@ const BlockView = memo(function BlockView({
 
     case "image":
       // An agent-captured screenshot (browser_screenshot), rendered inline next
-      // to its tool_use card. `data` is base64 PNG (no data: prefix).
+      // to its tool_use card as a compact thumbnail. Click opens a fullscreen
+      // lightbox (Dialog-based) for full-size inspection.
       return (
-        <div className="my-1 overflow-hidden rounded-md border border-edge bg-surface/40">
-          <img
-            src={`data:${block.mimeType};base64,${block.data}`}
-            alt="浏览器截图"
-            className="block max-h-[480px] w-full object-contain"
-            loading="lazy"
-          />
-        </div>
+        <ImageWithPreview
+          src={`data:${block.mimeType};base64,${block.data}`}
+          alt="浏览器截图"
+          className="my-1 w-full max-w-[420px]"
+        />
       );
   }
 });

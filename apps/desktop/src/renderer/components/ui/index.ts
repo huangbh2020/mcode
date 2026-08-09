@@ -58,3 +58,6 @@ export type {
 
 export { Kbd } from "./kbd.js";
 export type { KbdProps } from "./kbd.js";
+
+export { ImageWithPreview } from "./image-preview.js";
+export type { ImageWithPreviewProps } from "./image-preview.js";

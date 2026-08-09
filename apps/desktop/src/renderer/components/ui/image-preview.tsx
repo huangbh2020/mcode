@@ -1,0 +1,90 @@
+/**
+ * ImageWithPreview — a thumbnail that opens a fullscreen lightbox on click.
+ *
+ * Renders a small, bounded image inline (so it doesn't dominate the chat
+ * stream); clicking it opens a Dialog-based preview with a dark backdrop where
+ * the image is shown at its full size (object-contain within the viewport).
+ * Built on the project's Dialog primitive (base-ui) for consistent modal
+ * behavior: Esc to close, click backdrop to close, focus trap.
+ */
+import { useState } from "react";
+import { Dialog } from "./dialog.js";
+import { cn } from "@renderer/lib/cn.js";
+import { IconArrowsMaximize, IconX } from "@renderer/lib/icons.js";
+
+export interface ImageWithPreviewProps {
+  /** Raw image source — a full `data:` URL or a regular URL. */
+  src: string;
+  /** Alt text for accessibility. */
+  alt?: string;
+  /** Extra classes on the thumbnail wrapper. */
+  className?: string;
+  /** Max thumbnail height in px (default 240 — small enough to stay compact in
+   *  the message stream, large enough to be recognizable). */
+  maxThumbnailHeight?: number;
+}
+
+export function ImageWithPreview({
+  src,
+  alt = "",
+  className,
+  maxThumbnailHeight = 240,
+}: ImageWithPreviewProps) {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        title="点击查看大图"
+        className={cn(
+          "group relative block overflow-hidden rounded-md border border-edge bg-surface/40 transition-colors hover:border-accent/50",
+          className,
+        )}
+      >
+        <img
+          src={src}
+          alt={alt}
+          loading="lazy"
+          style={{ maxHeight: maxThumbnailHeight }}
+          className="block w-full object-contain"
+        />
+        {/* Hover affordance: a small maximize badge that appears on hover. */}
+        <span className="pointer-events-none absolute right-1.5 top-1.5 flex items-center gap-1 rounded bg-black/55 px-1.5 py-0.5 text-[10px] font-medium text-white opacity-0 backdrop-blur-sm transition-opacity group-hover:opacity-100">
+          <IconArrowsMaximize size={12} />
+          查看
+        </span>
+      </button>
+      <Dialog.Root open={open} onOpenChange={setOpen}>
+        <Dialog.Portal>
+          <Dialog.Backdrop
+            // Override the default top-10 + bg-black/60 for a true fullscreen
+            // dark lightbox: cover from the very top, darker tint. Clicking the
+            // backdrop closes (base-ui Dialog propagates onOpenChange).
+            className="fixed inset-0 top-0 z-50 bg-black/85"
+          />
+          <Dialog.Popup
+            // Transparent, borderless, full-viewport container — the image sits
+            // centered inside. No rounded panel chrome (this is a lightbox, not
+            // a form dialog). The default -translate centering is kept.
+            className="left-1/2 top-1/2 max-h-[92vh] max-w-[94vw] -translate-x-1/2 -translate-y-1/2 rounded-none border-0 bg-transparent p-0 shadow-none"
+          >
+            {/* Visually-hidden title for a11y (Dialog expects a Title). */}
+            <Dialog.Title className="sr-only">{alt || "图片预览"}</Dialog.Title>
+            <img
+              src={src}
+              alt={alt}
+              className="block max-h-[92vh] max-w-[94vw] object-contain"
+            />
+            <Dialog.Close
+              className="fixed right-4 top-4 rounded-full bg-black/60 p-2 text-white/90 backdrop-blur-sm transition-colors hover:bg-black/80 hover:text-white"
+              aria-label="关闭预览"
+            >
+              <IconX size={20} />
+            </Dialog.Close>
+          </Dialog.Popup>
+        </Dialog.Portal>
+      </Dialog.Root>
+    </>
+  );
+}
