@@ -217,7 +217,7 @@ export interface TurnMeta {
 
 /**
  * Extract an image (base64 + mimeType) from a tool_result's content, if it
- * carries one. Handles all three shapes that can reach the store:
+ * carries one. Handles all shapes that can reach the store:
  *  - MCP format (Pi extension tools + Claude in-process MCP handlers):
  *      `{ type: "image", data, mimeType }`
  *  - Anthropic API format (claude binary round-trips tool_result content
@@ -227,6 +227,10 @@ export interface TurnMeta {
  *    tool_result content blocks inside an outer array —
  *    `[{ type: "tool_result", content: [{ type: "image", ... }] }]`. We peek
  *    one level into any `tool_result` block's `content` too.
+ *  - Pi wrapper: the Pi adapter forwards the tool execute() return value
+ *    verbatim as `event.result`, which is `{ content: [...], details: {} }`
+ *    (the AgentToolResult shape), NOT the bare content array. We unwrap a
+ *    top-level `.content` array when the payload itself isn't an array.
  *
  * Returns the first image found (as base64 + mimeType), or null.
  */
@@ -259,7 +263,14 @@ function extractImageFromToolResult(content: unknown): { data: string; mimeType:
     }
     return null;
   };
-  return Array.isArray(content) ? scan(content) : null;
+  // Claude path: content is the bare content-block array.
+  if (Array.isArray(content)) return scan(content);
+  // Pi path: content is the AgentToolResult wrapper { content: [...], details }.
+  if (content && typeof content === "object") {
+    const inner = (content as { content?: unknown }).content;
+    if (Array.isArray(inner)) return scan(inner);
+  }
+  return null;
 }
 
 /** One queued prompt: a fully-prepared turn payload held back while the

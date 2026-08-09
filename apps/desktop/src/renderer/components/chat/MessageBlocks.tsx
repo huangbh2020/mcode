@@ -1170,9 +1170,17 @@ function isImageBlock(b: unknown): boolean {
   return !!b && typeof b === "object" && (b as { type?: string }).type === "image";
 }
 function resultPreview(v: unknown): string {
-  if (Array.isArray(v)) {
-    const filtered = v.filter((b) => !isImageBlock(b));
-    if (filtered.length !== v.length) {
+  // Normalize: Pi forwards the AgentToolResult wrapper { content: [...], details }
+  // as the tool result; unwrap to the content array so the image-stripping below
+  // works uniformly for both Pi and Claude.
+  const blocks = Array.isArray(v)
+    ? v
+    : v && typeof v === "object" && Array.isArray((v as { content?: unknown }).content)
+      ? (v as { content: unknown[] }).content
+      : null;
+  if (blocks) {
+    const filtered = blocks.filter((b) => !isImageBlock(b));
+    if (filtered.length !== blocks.length) {
       // Had at least one image — render the remaining text blocks, plus a
       // marker so the user knows a screenshot was elided (rendered above).
       const texts = filtered
@@ -1180,6 +1188,8 @@ function resultPreview(v: unknown): string {
         .map((b) => (b as { text?: string }).text ?? "");
       return texts.length > 0 ? truncateResult(texts.join("\n")) + "\n[image rendered above]" : "[image rendered above]";
     }
+    // No image: stringify the (possibly unwrapped) content array for display.
+    return truncateResult(blocks);
   }
   return truncateResult(v);
 }
