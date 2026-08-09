@@ -20,6 +20,7 @@ import type { AskUserQuestionItem, PermissionMode } from "@contracts/runtime";
 import { SdkMessageAdapter, parseQuestions } from "./SdkMessageAdapter.js";
 import { buildCustomEnv, MCODE_CONFIG_DIR } from "./customEnv.js";
 import { ASK_SYSTEM_PROMPT } from "@main/lib/askQuestion.js";
+import { CLAUDE_IDENTITY_PROMPT } from "@main/lib/systemPrompt.js";
 import { getFileSnapshot } from "@main/lib/fileSnapshotRegistry.js";
 import {
   FILE_MUTATING_TOOLS,
@@ -621,6 +622,9 @@ export class ClaudeAgentSdkProvider implements AgentProvider {
     options.supportedDialogKinds = Array.from(EXIT_PLAN_DIALOG_KINDS);
 
     // --- systemPrompt appends ---
+    // (0) Claude identity: always appended (every platform, every turn) so the
+    //     model answers "who/what are you" by introducing itself as Mcode's
+    //     assistant rather than a bare Claude CLI/API.
     // (1) Windows path hint: Claude's training data is saturated with
     //     WSL-style `/mnt/<drive>/...` paths; on native Windows those resolve
     //     to a garbage root-relative folder. The canUseTool guard normalizes
@@ -628,7 +632,11 @@ export class ClaudeAgentSdkProvider implements AgentProvider {
     //     such paths in the first place — including inside Bash commands
     //     (e.g. `cat > /mnt/d/...`), which the guard can't intercept.
     // (2) AskUserQuestion sentinel fallback when the native tool is missing.
+    // Identity is always present, so the preset+append is always active —
+    // the `claude_code` preset (full Claude Code tool guidance + safety rules)
+    // becomes the base on every platform, with our fragments appended on top.
     const appends: string[] = [];
+    appends.push(CLAUDE_IDENTITY_PROMPT);
     if (process.platform === "win32") {
       appends.push(
         "You are running on Windows. Use native Windows paths (e.g. D:\\...) or, preferably, paths relative to the project working directory. NEVER use WSL-style paths like /mnt/d/... — they do not exist on this machine.",
@@ -637,13 +645,11 @@ export class ClaudeAgentSdkProvider implements AgentProvider {
     if (!this.capabilities.supportsAskUserQuestion) {
       appends.push(ASK_SYSTEM_PROMPT);
     }
-    if (appends.length > 0) {
-      options.systemPrompt = {
-        type: "preset",
-        preset: "claude_code",
-        append: appends.join(" "),
-      };
-    }
+    options.systemPrompt = {
+      type: "preset",
+      preset: "claude_code",
+      append: appends.join(" "),
+    };
 
     // --- In-process MCP server: browser tools ---
     // Exposes `browser_*` tools (navigate/snapshot/click/screenshot/list) as an

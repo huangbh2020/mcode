@@ -59,6 +59,7 @@ import {
   formatAnswersForModel,
   ASK_SYSTEM_PROMPT,
 } from "@main/lib/askQuestion.js";
+import { PI_IDENTITY_PROMPT } from "@main/lib/systemPrompt.js";
 import {
   browserList,
   browserNavigate,
@@ -679,20 +680,23 @@ const BROWSER_TOOLS_PROMPT = [
 ].join("\n");
 
 /**
- * `before_agent_start` handler — injects the AskUserQuestion usage hint AND
- * the plan-mode tool usage guide into the system prompt. The event fires each
- * turn before the agent loop starts; returning `systemPrompt` overrides
- * `agent.state.systemPrompt` for the turn.
+ * `before_agent_start` handler — injects the Mcode identity prompt, the
+ * AskUserQuestion usage hint and the plan-mode tool usage guide into the
+ * system prompt. The event fires each turn before the agent loop starts;
+ * returning `systemPrompt` overrides `agent.state.systemPrompt` for the turn.
  *
- * The AskUserQuestion text is the same `ASK_SYSTEM_PROMPT` the Claude provider
- * uses — kept in one place (`@main/lib/askQuestion`) to avoid drift.
+ * The identity fragment is Pi's own variant (`PI_IDENTITY_PROMPT` — the
+ * engine/driver differs from Claude's), co-located with the Claude variant in
+ * `@main/lib/systemPrompt`; the AskUserQuestion text is the same
+ * `ASK_SYSTEM_PROMPT` the Claude provider uses — both kept in one place to
+ * avoid drift.
  */
 function registerSystemPromptInjector(pi: ExtensionAPI): void {
   pi.on(
     "before_agent_start",
     async (event: BeforeAgentStartEvent): Promise<BeforeAgentStartEventResult | void> => {
       const base = event.systemPrompt ?? "";
-      const injected = `${ASK_SYSTEM_PROMPT}\n\n${PLAN_MODE_PROMPT}\n\n${BROWSER_TOOLS_PROMPT}`;
+      const injected = `${PI_IDENTITY_PROMPT}\n\n${ASK_SYSTEM_PROMPT}\n\n${PLAN_MODE_PROMPT}\n\n${BROWSER_TOOLS_PROMPT}`;
       const next = base ? `${base}\n\n${injected}` : injected;
       return { systemPrompt: next };
     },
