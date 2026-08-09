@@ -49,14 +49,30 @@ export function App() {
   // browser tab is already active) so the panel switch happens even if the
   // right panel is currently on files/git. The view is adopted into the
   // renderer's tab list so BrowserPanel's show/hide/bounds logic manages it.
+  //
+  // Display mode is chosen by device: desktop → fullscreen overlay (wide pages
+  // need room); iphone/android → right sidebar (phone-width column fits the
+  // emulated viewport). setBrowserPanelOpen(true) forces the sidebar closed so
+  // the two containers never fight over the shared WebContentsView.
   useEffect(() => {
     const off = api.on.browserEvent((msg) => {
       if (msg.type !== "agentOpened") return;
       const p = (msg.payload as { url?: string; title?: string; device?: BrowserDevicePreset }) ?? {};
       const st = useSessionStore.getState();
       st.adoptAgentBrowserTab(msg.browserId, p);
-      st.setRightPanelTab("browser");
-      st.setRightOpen(true);
+      const isDesktop = !p.device || p.device === "desktop";
+      if (isDesktop) {
+        // Overlay mode (fullscreen). setBrowserPanelOpen(true) closes the right
+        // panel so the sidebar BrowserPanel unmounts; the overlay instance takes
+        // over the view.
+        st.setBrowserPanelOpen(true);
+      } else {
+        // Sidebar mode (right panel). Ensure the overlay is closed first so the
+        // sidebar instance owns the view (isActive = !browserPanelOpen).
+        st.setBrowserPanelOpen(false);
+        st.setRightPanelTab("browser");
+        st.setRightOpen(true);
+      }
     });
     return off;
   }, []);
