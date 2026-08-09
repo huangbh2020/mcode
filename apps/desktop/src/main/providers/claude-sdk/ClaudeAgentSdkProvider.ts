@@ -84,6 +84,7 @@ async function buildBrowserMcpServer(projectPath: string, ctx: ProviderContext, 
     version: "1.0.0",
     instructions:
       "Mcode 应用内浏览器控制工具。browserId 可选——省略时自动复用已开 tab 或新建。" +
+      "browser_navigate 的 device 参数可选 desktop(默认,PC 全宽)/iphone/android(移动端模拟)。" +
       "典型流程:browser_navigate → browser_snapshot 读内容 → 按需 browser_click / browser_screenshot。",
     alwaysLoad: true,
     tools: [
@@ -99,14 +100,24 @@ async function buildBrowserMcpServer(projectPath: string, ctx: ProviderContext, 
         name: "browser_navigate",
         description:
           "在应用内浏览器中导航到指定 URL(仅 http/https)。若没有打开的浏览器视图会自动创建并显示一个。" +
-          "browserId 可选——省略时自动复用或新建。导航后需调用 browser_snapshot 读取页面内容。",
+          "browserId 可选——省略时自动复用或新建。device 可选——指定打开方式:" +
+          "desktop(PC 端全宽,默认)、iphone(390×844 移动端)、android(412×915 移动端)。" +
+          "测试移动端页面或响应式布局时用 iphone/android。导航后需调用 browser_snapshot 读取页面内容。",
         inputSchema: {
           url: z.string().describe("目标 URL,必须含 http:// 或 https://"),
           browserId: z.string().optional().describe("目标浏览器视图 id;省略则自动复用第一个已开视图或新建"),
+          device: z
+            .enum(["desktop", "iphone", "android"])
+            .optional()
+            .describe("打开方式:desktop(PC 全宽,默认)/iphone(移动端)/android(移动端)"),
         },
         handler: async (args: Record<string, unknown>) =>
           browserNavigate(
-            { url: args.url as string, browserId: args.browserId as string | undefined },
+            {
+              url: args.url as string,
+              browserId: args.browserId as string | undefined,
+              device: args.device as "desktop" | "iphone" | "android" | undefined,
+            },
             projectPath,
           ),
       },

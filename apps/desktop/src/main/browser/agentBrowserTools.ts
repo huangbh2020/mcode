@@ -20,6 +20,19 @@
  */
 import { BrowserManager } from "./BrowserManager.js";
 import { log } from "@main/lib/logger.js";
+import type { BrowserDevicePreset } from "@contracts/ipc";
+
+/** The device presets an agent can request when navigating. Mirrors
+ *  BrowserDevicePreset from contracts (desktop = no emulation, full viewport;
+ *  iphone/android = Chromium device emulation at phone size + the renderer
+ *  narrows the view to a phone-width column). */
+export const AGENT_DEVICE_PRESETS = ["desktop", "iphone", "android"] as const;
+export type AgentDevicePreset = (typeof AGENT_DEVICE_PRESETS)[number];
+
+/** Normalize whatever the model passed into a valid preset (default desktop). */
+function coerceDevice(v: unknown): BrowserDevicePreset {
+  return v === "iphone" || v === "android" ? v : "desktop";
+}
 
 /** A text content block (matches MCP's TextContent minimal shape). */
 export interface TextBlock {
@@ -112,9 +125,11 @@ export function browserList(): ToolResult {
 /** `browser_navigate` — load a URL. When no browserId is given and none is
  *  live, a new view is created (and shown) so the user sees the agent
  *  browsing. `projectPath` is required to create a view (it's bound to a
- *  project for consistency with terminal/git). */
+ *  project for consistency with terminal/git). `device` selects the emulation
+ *  preset (desktop = full-width PC; iphone/android = phone-sized column) —
+ *  applied on creation, or switched via setDevice for an existing view. */
 export async function browserNavigate(
-  args: { url: string; browserId?: string },
+  args: { url: string; browserId?: string; device?: AgentDevicePreset },
   projectPath: string,
 ): Promise<ToolResult> {
   const url = (args.url ?? "").trim();
@@ -124,21 +139,26 @@ export async function browserNavigate(
       `仅支持 http/https 协议(收到 "${url.slice(0, 40)}")。请使用完整的 http(s):// 地址。`,
     );
   }
+  const device = coerceDevice(args.device);
 
   let browserId = args.browserId;
+  let createdNew = false;
   if (!browserId) {
     const resolved = resolveBrowserId();
     if (resolved.ok) {
       browserId = resolved.browserId;
     } else if (resolved.reason === "no-live-browser") {
-      // Auto-create + show so the user sees the agent browsing.
+      // Auto-create so the user sees the agent browsing. Pass the requested
+      // device as initialDevice so emulation is applied at dom-ready (the safe
+      // earliest point — applying synchronously crashes the GPU pre-init).
       if (!projectPath) {
         return errorResult("无法自动创建浏览器:缺少 projectPath。请先指定 browserId。");
       }
-      const created = BrowserManager.create(projectPath);
+      const created = BrowserManager.create(projectPath, device);
       if (!created.ok) return errorResult(created.error ?? "创建浏览器失败");
       browserId = created.browserId;
-      log.info(`agent browser auto-created: ${browserId} project=${projectPath}`);
+      createdNew = true;
+      log.info(`agent browser auto-created: ${browserId} project=${projectPath} device=${device}`);
     } else {
       return errorResult(resolved.reason);
     }
@@ -148,12 +168,19 @@ export async function browserNavigate(
     if (!check.ok) return errorResult(check.reason);
   }
 
+  // For an existing view, apply the requested device preset (no-op if it
+  // already matches). Skipped for a freshly-created view (initialDevice already
+  // set it; calling setDevice again is harmless but redundant).
+  if (!createdNew) {
+    BrowserManager.setDevice(browserId, device);
+  }
+
   // Tell the renderer to surface the browser panel + adopt this view as a tab.
   // The renderer's BrowserPanel takes over showing the view at precise bounds
   // (measured from its placeholder div). We DON'T show() here: a pre-show with
   // default bounds would briefly cover the icon rail before BrowserPanel syncs.
   // If the renderer is slow to adopt, screenshot's own temp-show covers capture.
-  BrowserManager.notifyAgentOpened(browserId);
+  BrowserManager.notifyAgentOpened(browserId, { device });
 
   const res = BrowserManager.loadUrl(browserId, url);
   if (!res.ok) return errorResult(res.error ?? "导航失败");

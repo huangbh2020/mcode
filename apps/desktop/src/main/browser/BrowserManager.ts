@@ -511,15 +511,21 @@ class BrowserManagerImpl {
   /** Notify the renderer that an agent tool opened/reused a browser view, so it
    *  can switch the right panel to the browser tab (making the view visible and
    *  letting BrowserPanel take over precise bounds syncing). Pushed as a
-   *  `browser:event` with type "agentOpened". */
-  notifyAgentOpened(id: string): void {
+   *  `browser:event` with type "agentOpened". The optional `device` override
+   *  tells the renderer which emulation preset the agent requested, so the
+   *  adopted tab reflects it (e.g. mobile → phone-width column). */
+  notifyAgentOpened(id: string, opts?: { device?: BrowserDevicePreset }): void {
     const live = this.get(id);
     if (!live) return;
     sendToRenderer(IPC.BROWSER_EVENT, {
       channel: IPC.BROWSER_EVENT,
       browserId: id,
       type: "agentOpened",
-      payload: { url: live.view.webContents.getURL(), title: live.view.webContents.getTitle() },
+      payload: {
+        url: live.view.webContents.getURL(),
+        title: live.view.webContents.getTitle(),
+        device: opts?.device ?? live.device,
+      },
     });
   }
 

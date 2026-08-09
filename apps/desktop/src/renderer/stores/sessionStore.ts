@@ -880,8 +880,11 @@ export interface SessionState {
   /** Adopt a browser view created by an agent tool (not by BrowserPanel's
    *  createTab) into the renderer's tab list, so BrowserPanel's show/hide/
    *  bounds logic can manage it. Idempotent: if a tab for this browserId
-   *  already exists, just updates its url/title and activates it. */
-  adoptAgentBrowserTab: (browserId: string, info: { url?: string; title?: string }) => void;
+   *  already exists, just updates its url/title/device and activates it. */
+  adoptAgentBrowserTab: (
+    browserId: string,
+    info: { url?: string; title?: string; device?: BrowserDevicePreset },
+  ) => void;
   /** Apply an incremental delta to the left sidebar width (clamped, then a
    *  debounced DB write). Called by the drag handle on every mousemove. */
   adjustLeftWidth: (deltaPx: number) => void;
@@ -4501,8 +4504,8 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     const s = get();
     const existing = s.browserTabs.find((t) => t.browserId === browserId);
     if (existing) {
-      // Already adopted — just refresh url/title + activate it.
-      if (info.url || info.title) {
+      // Already adopted — refresh url/title/device + activate it.
+      if (info.url || info.title || info.device) {
         set({
           browserTabs: s.browserTabs.map((t) =>
             t.browserId === browserId
@@ -4510,6 +4513,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
                   ...t,
                   ...(typeof info.url === "string" ? { url: info.url } : {}),
                   ...(typeof info.title === "string" ? { title: info.title } : {}),
+                  ...(info.device ? { device: info.device } : {}),
                 }
               : t,
           ),
@@ -4518,8 +4522,8 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       if (s.browserActiveTabId !== existing.id) set({ browserActiveTabId: existing.id });
       return;
     }
-    // Register a new tab for the agent-created view. device stays "desktop"
-    // (agent views are created without device emulation).
+    // Register a new tab for the agent-created view. device comes from the
+    // agent's navigate call (default desktop = no emulation, full viewport).
     const tab: BrowserTab = {
       id: `agent-${browserId}`,
       browserId,
@@ -4529,7 +4533,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       canGoBack: false,
       canGoForward: false,
       pickMode: false,
-      device: "desktop",
+      device: info.device ?? "desktop",
     };
     set({ browserTabs: [...s.browserTabs, tab], browserActiveTabId: tab.id });
   },

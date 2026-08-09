@@ -52,6 +52,7 @@ import type {
 import type { ProviderContext } from "@contracts/provider";
 import type { PermissionMode } from "@contracts/runtime";
 import { normalizeToolFilePath } from "@main/lib/fileSnapshot.js";
+import { getFileSnapshot } from "@main/lib/fileSnapshotRegistry.js";
 import { guardBashCommand, expandTilde } from "./bashWriteGuard.js";
 import {
   parseQuestions,
@@ -175,7 +176,7 @@ export function createMcodeExtension(opts: CreateMcodeExtensionOptions): InlineE
   return {
     name: "mcode",
     factory: (pi: ExtensionAPI) => {
-      registerToolCallGuard(pi, { ctx, cwd, strict, planMode });
+      registerToolCallGuard(pi, { ctx, cwd, strict, sessionId, planMode });
       registerAskUserQuestionTool(pi, ctx);
       registerBrowserTools(pi, { ctx, sessionId, projectPath });
       registerPlanModeTools(pi, { ctx, sessionId, planMode });
@@ -201,9 +202,15 @@ export function createMcodeExtension(opts: CreateMcodeExtensionOptions): InlineE
  */
 function registerToolCallGuard(
   pi: ExtensionAPI,
-  deps: { ctx: ProviderContext; cwd: string; strict: boolean; planMode: { active: boolean } },
+  deps: {
+    ctx: ProviderContext;
+    cwd: string;
+    strict: boolean;
+    sessionId: string;
+    planMode: { active: boolean };
+  },
 ): void {
-  const { ctx, cwd, strict, planMode } = deps;
+  const { ctx, cwd, strict, sessionId, planMode } = deps;
 
   pi.on("tool_call", async (event: ToolCallEvent): Promise<ToolCallEventResult | void> => {
     const { toolName } = event;
@@ -223,6 +230,12 @@ function registerToolCallGuard(
         if (checked.path !== raw) {
           input.path = checked.path;
         }
+        // Snapshot the file's pre-turn state for the "本轮修改" card + 撤销本轮
+        // (rewind) — the same FileSnapshot the Claude provider's canUseTool
+        // path uses. Await'd (not fire-and-forget) because the tool executes
+        // right after this handler resolves: we want `before` to be the
+        // pre-write content, not a racing partial read.
+        await getFileSnapshot(sessionId).recordPre(cwd, checked.path);
       }
     }
 
@@ -398,17 +411,33 @@ function registerBrowserTools(
     label: "Browser Navigate",
     description:
       "在应用内浏览器中导航到指定 URL(仅 http/https)。若没有打开的浏览器视图会自动创建并显示一个。" +
-      "browserId 可选——省略时自动复用或新建。导航后需调用 browser_snapshot 读取页面内容。",
-    promptSnippet: "browser_navigate({url, browserId?}): 导航到 URL",
+      "browserId 可选——省略时自动复用或新建。device 可选——指定打开方式:" +
+      "desktop(PC 端全宽,默认)、iphone(390×844 移动端)、android(412×915 移动端)。" +
+      "测试移动端页面或响应式布局时用 iphone/android。导航后需调用 browser_snapshot 读取页面内容。",
+    promptSnippet: "browser_navigate({url, browserId?, device?}): 导航到 URL,device 可选 desktop/iphone/android",
     parameters: Type.Object({
       url: Type.String({ description: "目标 URL,必须含 http:// 或 https://" }),
       browserId: Type.Optional(
         Type.String({ description: "目标浏览器视图 id;省略则自动复用第一个已开视图或新建" }),
       ),
+      device: Type.Optional(
+        Type.Union(
+          [
+            Type.Literal("desktop"),
+            Type.Literal("iphone"),
+            Type.Literal("android"),
+          ],
+          { description: "打开方式:desktop(PC 全宽,默认)/iphone(移动端)/android(移动端)" },
+        ),
+      ),
     }),
     async execute(_toolCallId, params) {
-      const { url, browserId } = params as { url: string; browserId?: string };
-      return toPiResult(await browserNavigate({ url, browserId }, projectPath));
+      const { url, browserId, device } = params as {
+        url: string;
+        browserId?: string;
+        device?: "desktop" | "iphone" | "android";
+      };
+      return toPiResult(await browserNavigate({ url, browserId, device }, projectPath));
     },
   });
 
@@ -635,7 +664,7 @@ const PLAN_MODE_PROMPT = [
 const BROWSER_TOOLS_PROMPT = [
   `## 浏览器工具(控制应用内浏览器)`,
   `当需要打开网页、查看页面内容、或与网页交互时使用这组工具:`,
-  `1. browser_navigate({ url }): 打开一个网页(仅 http/https)。没有打开的浏览器时会自动创建一个`,
+  `1. browser_navigate({ url, device? }): 打开一个网页(仅 http/https)。没有打开的浏览器时会自动创建一个。device 可选 desktop(默认,PC 全宽)/iphone/android(移动端模拟),测试移动端页面时用 iphone 或 android`,
   `2. browser_snapshot({ browserId? }): 读取页面结构化快照——可交互元素列表带可直接传给 browser_click 的 selector(只读)`,
   `3. browser_click({ selector, browserId? }): 按 selector 点击元素(selector 来自 snapshot)`,
   `4. browser_screenshot({ browserId? }): 截图,用于视觉确认布局/样式(只读)`,

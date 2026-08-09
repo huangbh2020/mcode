@@ -16,6 +16,7 @@ import { Toaster } from "./components/layout/Toaster.js";
 import { useClaudeEvents } from "./hooks/useClaudeEvents.js";
 import { useGlobalShortcuts } from "./hooks/useGlobalShortcuts.js";
 import { useSessionStore } from "./stores/sessionStore.js";
+import type { BrowserDevicePreset } from "@contracts/ipc";
 import { api } from "./lib/api.js";
 import { useTheme } from "./lib/theme.js";
 import { useChatAppearance, useRightPanelAppearance } from "./lib/appearance.js";
@@ -51,7 +52,7 @@ export function App() {
   useEffect(() => {
     const off = api.on.browserEvent((msg) => {
       if (msg.type !== "agentOpened") return;
-      const p = (msg.payload as { url?: string; title?: string }) ?? {};
+      const p = (msg.payload as { url?: string; title?: string; device?: BrowserDevicePreset }) ?? {};
       const st = useSessionStore.getState();
       st.adoptAgentBrowserTab(msg.browserId, p);
       st.setRightPanelTab("browser");
