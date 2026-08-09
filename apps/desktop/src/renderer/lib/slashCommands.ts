@@ -27,8 +27,12 @@ export type { SkillSource } from "@contracts/ipc";
  *  - `compact`: immediately sends `/compact` to the agent (summarize + release
  *    context). Disabled while a turn is running.
  *  - `init`: fills the editor with an editable AGENTS.md-generation prompt so
- *    the user can tweak it before sending. */
-export type BuiltInCommandKind = "compact" | "init";
+ *    the user can tweak it before sending.
+ *  - `browser`: fills the editor with a browser-control prompt template so the
+ *    user can fill in a URL + intent (snapshot / click / screenshot / device),
+ *    then send. Surfaces the agent browser feature to users who otherwise
+ *    wouldn't know it exists. */
+export type BuiltInCommandKind = "compact" | "init" | "browser";
 
 export interface BuiltInCommand {
   /** Command name without the leading slash, e.g. "compact". */
@@ -52,6 +56,11 @@ export const BUILT_IN_COMMANDS: BuiltInCommand[] = [
     name: "init",
     description: "生成项目说明文件 AGENTS.md",
     kind: "init",
+  },
+  {
+    name: "browser",
+    description: "用应用内浏览器打开网页(导航/快照/点击/截图)",
+    kind: "browser",
   },
 ];
 

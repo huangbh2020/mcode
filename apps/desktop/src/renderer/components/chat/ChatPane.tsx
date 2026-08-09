@@ -1066,13 +1066,18 @@ function ChatPaneForSession({ sessionId }: { sessionId: string }) {
     [],
   );
 
-  /** Built-in command confirm (`/compact` / `/init`). Unlike skills (which
-   *  become inline pills), built-in commands have bespoke behavior:
+  /** Built-in command confirm (`/compact` / `/init` / `/browser`). Unlike
+   *  skills (which become inline pills), built-in commands have bespoke
+   *  behavior:
    *  - `compact`: immediately send `/compact` as a turn to the agent so it
    *    summarizes and releases context. No-op while a turn is running.
    *  - `init`: insert an atomic `/init` pill into the editor (same visual
    *    treatment as a skill pill) so the user can append extra instructions
-   *    before sending. The agent recognizes `/init` and generates AGENTS.md. */
+   *    before sending. The agent recognizes `/init` and generates AGENTS.md.
+   *  - `browser`: replace the trigger token with an editable prompt template
+   *    that asks the agent to open a URL with the browser tools. The user fills
+   *    in the URL (+ optional intent like "截图" / "移动端") and sends. This
+   *    surfaces the browser feature — without it users don't know it exists. */
   const handleBuiltInPick = useCallback(
     (cmd: BuiltInCommand) => {
       if (cmd.kind === "compact") {
@@ -1082,6 +1087,28 @@ function ChatPaneForSession({ sessionId }: { sessionId: string }) {
         if (sessionBusy) return;
         clearTriggerToken();
         void sendPrompt("/compact");
+        return;
+      }
+      if (cmd.kind === "browser") {
+        // Fill the editor with a template the user edits before sending. Clear
+        // the `/browser` trigger token first so it isn't left in the text.
+        setPickerKind(null);
+        clearTriggerToken();
+        triggerStartRef.current = null;
+        const template =
+          "请用应用内浏览器打开这个网页:\n" +
+          "URL: https://\n\n" +
+          "我的需求:(可选,例如:截图看看页面布局 / 读取页面内容 / 用移动端打开测试响应式)\n" +
+          "- 截图:截取页面可视区域\n" +
+          "- 快照:读取页面结构化内容(链接/按钮/文本)\n" +
+          "- 移动端:用 device=iphone 或 android 打开";
+        if (editorRef.current) {
+          editorRef.current.setText(template);
+          setValue(template);
+          // Focus + place the caret on the URL line so the user types the
+          // address immediately (the most common next action).
+          requestAnimationFrame(() => editorRef.current?.focus());
+        }
         return;
       }
       // `init`: replace the `/query` trigger token with an inline `/init` pill
