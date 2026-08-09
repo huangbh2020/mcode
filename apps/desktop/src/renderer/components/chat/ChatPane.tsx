@@ -455,6 +455,38 @@ function groupMessagesForRender(
       panelBlocks = panelBlocks.filter((b) => b.kind !== "plan");
     }
 
+    // Pull ALL screenshot image blocks out of the PROCESS surface too. Images
+    // are user-facing RESULTS, not process: they're attached right after their
+    // tool_use (which sits inside the panel), so the slice above would fold
+    // them behind the collapsed TurnPanel and the user would never see the
+    // screenshots. Extract every image (from both panelBlocks and the reply
+    // textMsgs, in case one landed after the last tool) into a single
+    // gallery, re-emitted as one trailing message — the render layer's
+    // groupBlocks merges consecutive image blocks into a swipeable gallery.
+    const panelImages: Extract<Block, { kind: "image" }>[] = [];
+    if (panelBlocks.some((b) => b.kind === "image")) {
+      panelImages.push(...(panelBlocks.filter((b) => b.kind === "image") as Extract<Block, { kind: "image" }>[]));
+      panelBlocks = panelBlocks.filter((b) => b.kind !== "image");
+    }
+    // Images that landed after the last tool (rare, but possible when a
+    // screenshot is the very last action) sit in textMsgs; sweep them out of
+    // their host message and into the gallery.
+    if (textMsgs.some((m) => m.blocks.some((b) => b.kind === "image"))) {
+      const swept: ChatMessage[] = [];
+      for (const m of textMsgs) {
+        const imgs = m.blocks.filter((b) => b.kind === "image") as Extract<Block, { kind: "image" }>[];
+        if (imgs.length > 0) {
+          panelImages.push(...imgs);
+          const rest = m.blocks.filter((b) => b.kind !== "image");
+          if (rest.length > 0) swept.push({ ...m, blocks: rest });
+        } else {
+          swept.push(m);
+        }
+      }
+      textMsgs.length = 0;
+      textMsgs.push(...swept);
+    }
+
     // Per-turn footer cards (plan + turn-files) must ALWAYS render at the very
     // end of the visible reply: the plan card above, the "本轮修改了 N 个文件"
     // card below it. The store attaches them to whatever assistant message was
@@ -513,6 +545,26 @@ function groupMessagesForRender(
           );
         }
       }
+    }
+
+    // Re-emit the turn's screenshots as ONE trailing gallery message (the
+    // render layer's groupBlocks merges the consecutive image blocks into a
+    // swipeable ImageGallery). Appended AFTER the footer cards so the visible
+    // order is: reply text → plan/files cards → screenshots. A screenshot-only
+    // turn (no reply text) still gets its gallery via the synthesized carrier.
+    if (panelImages.length > 0) {
+      const tail = textMsgs.length > 0 ? textMsgs[textMsgs.length - 1] : null;
+      textMsgs.push(
+        tail
+          ? { ...tail, id: `images_tail_${tail.id}`, turnMeta: undefined, blocks: panelImages }
+          : {
+              id: `images_tail_${turnMeta?.startedAt ?? Date.now()}`,
+              sessionId: "",
+              role: "assistant",
+              blocks: panelImages,
+              createdAt: Date.now(),
+            },
+      );
     }
 
     items.push({
@@ -1768,7 +1820,7 @@ function ChatPaneForSession({ sessionId }: { sessionId: string }) {
           )}
           <div
             className={cn(
-              "relative flex min-w-0 flex-col overflow-hidden rounded-2xl border border-edge-input bg-white transition-all duration-200",
+              "relative flex min-w-0 flex-col overflow-hidden rounded-2xl border border-edge-input bg-surface transition-all duration-200",
               "focus-within:border-accent focus-within:shadow-[0_0_0_3px_rgb(var(--accent)/0.12)]",
               // Highlight the composer while a file-tree drag hovers over it.
               dragOver && "border-accent ring-4 ring-accent/20",

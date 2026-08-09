@@ -10,7 +10,23 @@
 import { useState } from "react";
 import { Dialog } from "./dialog.js";
 import { cn } from "@renderer/lib/cn.js";
-import { IconArrowsMaximize, IconX } from "@renderer/lib/icons.js";
+import { IconArrowsMaximize, IconDownload, IconX } from "@renderer/lib/icons.js";
+
+/** Trigger a browser download of a `data:` URL (base64 image). Creates a
+ *  temporary <a download> and clicks it. The filename is derived from a
+ *  timestamp so repeated downloads don't collide. */
+function downloadDataUrl(dataUrl: string, baseName: string): void {
+  try {
+    const a = document.createElement("a");
+    a.href = dataUrl;
+    a.download = baseName;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  } catch {
+    // Downloads can be blocked in exotic embedded contexts; ignore silently.
+  }
+}
 
 export interface ImageWithPreviewProps {
   /** Raw image source — a full `data:` URL or a regular URL. */
@@ -76,6 +92,19 @@ export function ImageWithPreview({
               alt={alt}
               className="block max-h-[92vh] max-w-[94vw] object-contain"
             />
+            {/* Download button — saves the current image (data: URL or remote)
+                as a PNG file. Sits left of the close button. */}
+            <button
+              type="button"
+              onClick={() => {
+                const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+                downloadDataUrl(src, `截图-${stamp}.png`);
+              }}
+              title="下载图片"
+              className="fixed right-16 top-4 rounded-full bg-black/60 p-2 text-white/90 backdrop-blur-sm transition-colors hover:bg-black/80 hover:text-white"
+            >
+              <IconDownload size={20} />
+            </button>
             <Dialog.Close
               className="fixed right-4 top-4 rounded-full bg-black/60 p-2 text-white/90 backdrop-blur-sm transition-colors hover:bg-black/80 hover:text-white"
               aria-label="关闭预览"
