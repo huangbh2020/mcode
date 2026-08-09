@@ -418,6 +418,12 @@ export class ClaudeAgentSdkProvider implements AgentProvider {
           toolUseId: opts.toolUseID,
           questions,
         });
+        // User closed the question card without answering: deny the tool so
+        // the SDK surfaces it to the model as a clear error and the SAME
+        // turn continues (the model decides how to proceed).
+        if (decision.dismissed) {
+          return { behavior: "deny", message: "用户关闭了提问,未提供答案,请继续当前任务" };
+        }
         // Build the SDK's expected answers map: { [question.text]: label }.
         // SDK accepts a string (single label or comma-joined) per question.
         const sdkAnswers: Record<string, string> = {};

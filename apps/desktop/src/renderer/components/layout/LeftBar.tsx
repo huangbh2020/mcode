@@ -414,13 +414,8 @@ export function LeftBar() {
       >
         <BrandLogo size={30} />
         <span className="flex min-w-0 flex-col leading-tight">
-          <span className="flex items-baseline gap-1">
-            <span className="truncate text-[1.07em] font-semibold tracking-tight text-content">
-              Mcode
-            </span>
-            <span className="text-content-subtle/70 [font-size:var(--rp-fs-sm)]">
-              my Code
-            </span>
+          <span className="truncate text-[1.07em] font-semibold tracking-tight text-content">
+            Mcode
           </span>
           <span className="truncate text-content-subtle [font-size:var(--rp-fs-sm)]">
             智能编码工作台

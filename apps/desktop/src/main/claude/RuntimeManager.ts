@@ -428,6 +428,12 @@ class RuntimeManager {
     return approvalBridge.resolveUserInput(requestId, answers);
   }
 
+  /** Resolve a pending AskUserQuestion Deferred as DISMISSED (user closed the
+   *  question card) so the model's turn continues instead of blocking. */
+  dismissUserInput(requestId: string): boolean {
+    return approvalBridge.dismissUserInput(requestId);
+  }
+
   /** Resolve a plan-approval request (ExitPlanMode approve/reject). */
   resolvePlanApproval(requestId: string, decision: PlanApprovalDecision): boolean {
     return approvalBridge.resolvePlanApproval(requestId, decision);

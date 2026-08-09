@@ -141,6 +141,19 @@ export class ApprovalBridge {
     return true;
   }
 
+  /** Resolve a user-input request as DISMISSED (the user closed the question
+   *  card without answering). The provider's canUseTool / tool execute turns
+   *  `dismissed` into a deny / tool error so the model sees the question was
+   *  skipped and the SAME turn continues — without this the Deferred would
+   *  never resolve and the model would block forever. */
+  dismissUserInput(requestId: string): boolean {
+    const p = this.pendingUserInputs.get(requestId);
+    if (!p) return false;
+    p.resolve({ answers: {}, dismissed: true });
+    this.pendingUserInputs.delete(requestId);
+    return true;
+  }
+
   /* ── plan approval (ExitPlanMode) ── */
 
   /** Create a plan-approval-request handler for a session. Mirrors

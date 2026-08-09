@@ -5059,6 +5059,19 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   dismissQuestion: () => {
     const sessionId = get().activeSessionId;
     if (!sessionId) return;
+    const pending = get().pendingQuestionBySession[sessionId];
+    // Resolve the provider's pending Deferred as DISMISSED so the model's
+    // turn CONTINUES (it sees the question was skipped and decides what to
+    // do). The old behavior only cleared the local card, leaving the model
+    // blocked forever waiting for answers.
+    if (pending) {
+      const requestId = pending.requestId ?? `sentinel_${sessionId}_${Date.now()}`;
+      void api.claude
+        .respondQuestion({ sessionId, requestId, answers: {}, dismissed: true })
+        .catch((err) => {
+          console.error("respondQuestion(dismiss) failed:", err);
+        });
+    }
     set((s) => {
       const { [sessionId]: _drop, ...rest } = s.pendingQuestionBySession;
       return { pendingQuestionBySession: rest };

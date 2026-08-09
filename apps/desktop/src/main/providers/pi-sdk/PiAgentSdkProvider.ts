@@ -39,6 +39,7 @@ import { loadPiSdk } from "./piSdkLoader.js";
 import { buildPiTokenSnapshot } from "./piTokenUsage.js";
 import { buildPiSkillLoader, rewriteSkillPrefix, createMntNormalizingReadTool } from "./piSkillBridge.js";
 import { createMcodeExtension } from "./mcodeExtension.js";
+import { getFileSnapshot } from "@main/lib/fileSnapshotRegistry.js";
 
 /** Pi's permission modes, shown in the composer dropdown. Pi has no native
  *  permission system — the inline extension's `tool_call` handler interprets
@@ -253,7 +254,15 @@ export class PiAgentSdkProvider implements AgentProvider {
       return buildPiTokenSnapshot(ctxUsage, stats, modelId);
     };
 
-    const adapter = new PiMessageAdapter(ctx, req.sessionId, provideTokenSnapshot);
+    // Per-session file snapshot for the "本轮修改" card + 撤销本轮 (rewind) —
+    // shared with the Claude provider via the snapshot registry. The
+    // extension's tool_call handler records pre-turn content (recordPre);
+    // flushFinal() below freezes it into a `turn.files` event at turn end.
+    // RuntimeManager clears it at the start of every sendTurn (provider-
+    // agnostic), so consecutive turns never leak into each other's snapshot.
+    const snapshot = getFileSnapshot(req.sessionId);
+
+    const adapter = new PiMessageAdapter(ctx, req.sessionId, provideTokenSnapshot, snapshot);
     const unsubscribe = session.subscribe((event) => {
       adapter.dispatch(event);
     });
@@ -266,9 +275,19 @@ export class PiAgentSdkProvider implements AgentProvider {
         // `promptText` carries the `/skill:name`-rewritten leading token so Pi
         // expands an embedded skill pill (see rewriteSkillPrefix above).
         await session.prompt(promptText);
+        // End-of-turn finalization: freeze the file snapshot and emit
+        // `turn.files` (the "本轮修改" card). agent_end has already emitted
+        // turn.done inside the subscribe stream; turn.files arriving after it
+        // is expected — the renderer's turn.files handler is written for that
+        // ordering (same shape as Claude's flushFinal).
+        await adapter.flushFinal();
       } catch (err) {
         // A user-initiated abort makes prompt() reject.
         if (ac.signal.aborted) {
+          // Still run the end-of-turn finalization so partially-written files
+          // surface on the "本轮修改" card and can be rewound — mirrors
+          // ClaudeAgentSdkProvider's abort path, which also calls flushFinal.
+          await adapter.flushFinal();
           ctx.emit({
             type: "turn.done",
             sessionId: req.sessionId,

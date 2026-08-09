@@ -160,6 +160,11 @@ export type UserInputAnswers = Record<string, string | string[] | null>;
 /** The host's answer to a user-input request. */
 export interface UserInputDecision {
   answers: UserInputAnswers;
+  /** True when the user CLOSED the question card without answering. The
+   *  provider turns this into a deny / tool error so the model sees the
+   *  question was skipped and the SAME turn continues — without it the
+   *  pending Deferred would never resolve and the model would block forever. */
+  dismissed?: boolean;
 }
 
 /** Plan-approval request (ExitPlanMode tool) passed from provider → host. */

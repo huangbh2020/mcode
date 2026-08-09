@@ -477,16 +477,21 @@ export type ApproveInput = z.infer<typeof ApproveSchema>;
 
 /* Answer to an AskUserQuestion. `requestId` matches the question.ask event.
  * Each value is one question's answer: option label (string), labels
- * (string[] for multi-select), or null (skipped). See UserInputAnswers. */
+ * (string[] for multi-select), or null (skipped). See UserInputAnswers.
+ * `dismissed: true` means the user closed the question card without
+ * answering — main resolves the provider's pending Deferred as dismissed so
+ * the model's turn continues instead of blocking forever. */
 export const RespondQuestionSchema = z.object({
   sessionId: z.string(),
   requestId: z.string(),
   answers: z.record(z.string(), z.union([z.string(), z.array(z.string()), z.null()])),
+  dismissed: z.boolean().optional(),
 });
 export type RespondQuestionInput = {
   sessionId: string;
   requestId: string;
   answers: UserInputAnswers;
+  dismissed?: boolean;
 };
 
 /* User's decision on a pending ExitPlanMode plan-approval request. `requestId`

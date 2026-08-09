@@ -171,6 +171,17 @@ export function registerClaudeHandlers(ipcMain: IpcMain): void {
   ipcMain.handle(IPC.CLAUDE_RESPOND_QUESTION, async (_evt, raw) => {
     const input = RespondQuestionSchema.parse(raw);
 
+    // Dismissed: the user closed the question card. Sentinel requests have no
+    // Deferred (the turn already ended) — nothing to resume, so just return.
+    if (input.dismissed) {
+      if (input.requestId.startsWith("sentinel_")) return;
+      const resolved = runtimeManager.dismissUserInput(input.requestId);
+      if (!resolved) {
+        log.warn(`respondQuestion(dismiss): no pending request for id ${input.requestId}`);
+      }
+      return;
+    }
+
     if (input.requestId.startsWith("sentinel_")) {
       const session = SessionRepo.get(input.sessionId);
       if (!session) {

@@ -357,6 +357,12 @@ function registerAskUserQuestionTool(pi: ExtensionAPI, ctx: ProviderContext): vo
         toolUseId: toolCallId,
         questions,
       });
+      // User closed the question card without answering: throw so the SDK's
+      // agent-loop turns it into an error tool result the model can see —
+      // the SAME turn continues instead of blocking forever.
+      if (decision.dismissed) {
+        throw new Error("用户关闭了提问,未提供答案,请继续当前任务");
+      }
       return {
         content: [
           { type: "text", text: formatAnswersForModel(decision.answers, questions) },

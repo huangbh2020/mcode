@@ -23,6 +23,7 @@ import { randomUUID } from "node:crypto";
 import type { RuntimeEvent, TurnDoneReason, ContextUsageEvent } from "@contracts/runtime";
 import type { ProviderContext } from "@contracts/provider";
 import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
+import type { FileSnapshot } from "@main/lib/fileSnapshot.js";
 
 /**
  * Hook the provider installs so the adapter can ask for a token-usage snapshot
@@ -69,6 +70,11 @@ export class PiMessageAdapter {
      *  {@link PiTokenSnapshotProvider} — installed by PiAgentSdkProvider, which
      *  is the layer that owns the `session` (the adapter only sees events). */
     private readonly provideTokenSnapshot: PiTokenSnapshotProvider = () => undefined,
+    /** Per-session file snapshot backing the "本轮修改" card + 撤销本轮 (rewind).
+     *  Shared with the Claude provider via the snapshot registry — the
+     *  extension's `tool_call` handler records pre-turn content (recordPre),
+     *  and {@link flushFinal} freezes it into a `turn.files` event at turn end. */
+    private readonly snapshots: FileSnapshot,
   ) {}
 
   /** Dispatch a single Pi agent-session event into RuntimeEvents. */
@@ -211,6 +217,29 @@ export class PiMessageAdapter {
    *  events we surface; a completed agent run is treated as end_turn. */
   private pickDoneReason(): TurnDoneReason {
     return "end_turn";
+  }
+
+  /** End-of-turn finalization — the Pi analogue of Claude's flushFinal.
+   *  Called by the provider once `session.prompt()` settles (on success AND
+   *  on user abort; skipped on SDK error, matching Claude's error path).
+   *  Freezes the per-session file snapshot and emits `turn.files` so the
+   *  renderer can show the "本轮修改" card with per-file tallies + a rewind
+   *  button (adds/dels/before computed inside freeze()).
+   *
+   *  Async because freeze() reads each file's post-turn on-disk content.
+   *  `turn.files` may arrive AFTER `turn.done` — `agent_end` already emitted
+   *  it inside the subscribe stream — which is exactly the ordering the
+   *  store's turn.files handler is written for (Claude's flushFinal emits the
+   *  same way). */
+  async flushFinal(): Promise<void> {
+    const files = await this.snapshots.freeze();
+    if (files.length > 0) {
+      this.emit({
+        type: "turn.files",
+        sessionId: this.sessionId,
+        files,
+      });
+    }
   }
 
   /** Ask the provider for a turn-end token snapshot and emit
