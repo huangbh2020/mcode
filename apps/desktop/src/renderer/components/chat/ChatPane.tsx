@@ -455,6 +455,22 @@ function groupMessagesForRender(
       panelBlocks = panelBlocks.filter((b) => b.kind !== "plan");
     }
 
+    // Pull the "本轮修改了 N 个文件" turn-files card out of the PROCESS
+    // surface. turn.files is emitted at the very end of the turn (flushFinal)
+    // and attached to the current turn's trailing assistant message. When that
+    // message ALSO carries the turn's LAST tool_use (pure-tool turns, or a
+    // turn whose only text precedes the last edit), the slice above folds the
+    // turn-files block into panelBlocks — hiding it behind the collapsed
+    // TurnPanel ("开始用时" surface). Rescue it here (mirroring the plan +
+    // image rescues below) so the footer extraction picks it up and pins it
+    // to the turn's end. Without this, the card would intermittently appear
+    // inside the panel instead of at the turn's bottom.
+    const panelTurnFiles: Block[] = [];
+    if (panelBlocks.some((b) => b.kind === "turn-files")) {
+      panelTurnFiles.push(...panelBlocks.filter((b) => b.kind === "turn-files"));
+      panelBlocks = panelBlocks.filter((b) => b.kind !== "turn-files");
+    }
+
     // Pull ALL screenshot image blocks out of the PROCESS surface too. Images
     // are user-facing RESULTS, not process: they're attached right after their
     // tool_use (which sits inside the panel), so the slice above would fold
@@ -505,10 +521,13 @@ function groupMessagesForRender(
     // branch so the cards' positions are stable across the streaming→completed
     // transition. Runs whenever there is a footer candidate (including a plan
     // card rescued from panelBlocks on a pure-plan turn) so none is dropped.
-    if (textMsgs.length > 0 || panelPlans.length > 0) {
+    // panelTurnFiles (rescued above from the process surface) merges into the
+    // files list so the modified-files card always pins to the turn's end too.
+    if (textMsgs.length > 0 || panelPlans.length > 0 || panelTurnFiles.length > 0) {
       const { cleaned, plans, files } = extractFooterBlocks(textMsgs);
       const allPlans = [...panelPlans, ...plans];
-      if (allPlans.length > 0 || files.length > 0) {
+      const allFiles = [...panelTurnFiles, ...files];
+      if (allPlans.length > 0 || allFiles.length > 0) {
         textMsgs.length = 0;
         textMsgs.push(...cleaned);
         // Attach each extracted card to the LAST reply message's identity (so
@@ -531,15 +550,15 @@ function groupMessagesForRender(
                 },
           );
         }
-        if (files.length > 0) {
+        if (allFiles.length > 0) {
           textMsgs.push(
             tail
-              ? { ...tail, id: `files_tail_${tail.id}`, turnMeta: undefined, blocks: files }
+              ? { ...tail, id: `files_tail_${tail.id}`, turnMeta: undefined, blocks: allFiles }
               : {
                   id: `files_tail_${turnMeta?.startedAt ?? Date.now()}`,
                   sessionId: "",
                   role: "assistant",
-                  blocks: files,
+                  blocks: allFiles,
                   createdAt: Date.now(),
                 },
           );
