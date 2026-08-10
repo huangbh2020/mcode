@@ -449,6 +449,13 @@ export interface SessionState {
   shortcutOverrides: ShortcutBindings;
 
   messagesBySession: Record<string, ChatMessage[]>;
+  /** Whether older messages remain unloaded on the server, per session.
+   *  `undefined`/absent = not yet determined (session never loaded); `true` =
+   *  more history is available above the current head; `false` = all loaded. */
+  hasMoreMessagesBySession: Record<string, boolean>;
+  /** In-flight "load older" request, per session. Guards against stacking
+   *  concurrent paginated fetches when the user holds the scroll at the top. */
+  loadingOlderBySession: Record<string, boolean>;
   /** Per-session running flag. Keyed by sessionId so a turn running in
    *  thread A doesn't lock the composer in thread B — the user can keep
    *  composing / inspecting other threads while a background turn streams.
@@ -815,6 +822,9 @@ export interface SessionState {
    *  entry point in both display modes — the difference is purely
    *  cosmetic (single mode hides the tab strip, tabs mode shows it). */
   openTab: (sessionId: string) => Promise<void>;
+  /** Fetch the next page of older messages for a session and prepend them.
+   *  No-op when nothing more is available or a fetch is already in flight. */
+  loadOlderMessages: (sessionId: string) => Promise<void>;
   /** Remove a session from the tab strip. If it was the active tab,
    *  focus shifts to the previous one (or the next, if there is no
    *  previous); running turns are NOT cancelled — they keep streaming
@@ -1386,6 +1396,11 @@ function isPathWithinRoot(root: string, abs: string): boolean {
 /** Page size for the left-bar thread list. The first page is fetched on
  *  init / project expand; further pages are appended on "加载更多". */
 const SESSION_PAGE_SIZE = 5;
+
+/** Messages per page when lazily loading session history. Large enough that a
+ *  typical conversation fills the viewport in one fetch, small enough that
+ *  very long threads (thousands of rows) stay snappy on first open. */
+const MESSAGE_PAGE_SIZE = 200;
 
 /** Find a session across both the active and archived per-project caches by
  *  id. The archived cache is consulted so that config hydration still finds
@@ -2361,6 +2376,8 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   shortcutOverrides: {},
   shortcutRecording: false,
   messagesBySession: {},
+  hasMoreMessagesBySession: {},
+  loadingOlderBySession: {},
   runningBySession: {},
   runningTurnStartedAt: {},
   interruptedBySession: {},
@@ -2470,45 +2487,59 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     // list. Everything else (health check, appearance extras, IDE/git prefs) is
     // deferred to `initDeferred()` after this resolves.
 
+    // First-paint settings: one bulk read instead of N serial round-trips.
+    // Each value is applied in its own try/catch so a malformed blob for one
+    // key can't poison the rest (same isolation as the old per-key reads).
+    const fp = await api.setting
+      .getMany({
+        keys: [
+          DISPLAY_MODE_SETTING_KEY,
+          UI_CHAT_DENSITY_SETTING_KEY,
+          UI_PROJECT_VIEW_SETTING_KEY,
+          UI_PROJECT_GROUPS_SETTING_KEY,
+          UI_COMPOSER_MODEL_SETTING_KEY,
+        ],
+      })
+      .catch((err) => {
+        console.error("setting.getMany(first-paint) failed:", err);
+        return {} as Record<string, string | null>;
+      });
+
     // displayMode determines single vs tabs layout - needed before first render
     // of the center pane so the right structure mounts.
     try {
-      const { value } = await api.setting.get({ key: DISPLAY_MODE_SETTING_KEY });
-      if (value === "single" || value === "tabs") {
-        set({ displayMode: value });
-      }
+      const value = fp[DISPLAY_MODE_SETTING_KEY];
+      if (value === "single" || value === "tabs") set({ displayMode: value });
     } catch (err) {
-      console.error("setting.get(displayMode) failed:", err);
+      console.error("apply(displayMode) failed:", err);
     }
 
     // chatDensity controls message-stream vertical rhythm (row + block gaps).
     // Applied to <html> as CSS vars by useChatAppearance; read here so the
     // first paint already reflects the saved preference.
     try {
-      const { value } = await api.setting.get({ key: UI_CHAT_DENSITY_SETTING_KEY });
+      const value = fp[UI_CHAT_DENSITY_SETTING_KEY];
       if (value === "compact" || value === "comfortable" || value === "cozy") {
         set({ chatDensity: value });
       }
     } catch (err) {
-      console.error("setting.get(chatDensity) failed:", err);
+      console.error("apply(chatDensity) failed:", err);
     }
 
     // projectView determines whether the left bar renders projects as a flat
     // list or clustered under group headers. Needed before first paint so the
     // tree mounts in the right shape.
     try {
-      const { value } = await api.setting.get({ key: UI_PROJECT_VIEW_SETTING_KEY });
-      if (value === "flat" || value === "grouped") {
-        set({ projectView: value });
-      }
+      const value = fp[UI_PROJECT_VIEW_SETTING_KEY];
+      if (value === "flat" || value === "grouped") set({ projectView: value });
     } catch (err) {
-      console.error("setting.get(projectView) failed:", err);
+      console.error("apply(projectView) failed:", err);
     }
 
     // groupMeta (per-group color + order) — parsed from the ui.projectGroups
     // JSON blob. Defensive parse: a malformed blob leaves the default {}.
     try {
-      const { value } = await api.setting.get({ key: UI_PROJECT_GROUPS_SETTING_KEY });
+      const value = fp[UI_PROJECT_GROUPS_SETTING_KEY];
       if (value) {
         const parsed = JSON.parse(value);
         if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
@@ -2516,7 +2547,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         }
       }
     } catch (err) {
-      console.error("setting.get(projectGroups) failed:", err);
+      console.error("apply(projectGroups) failed:", err);
     }
 
     // Composer's persisted provider/model choice — the "next session" defaults
@@ -2526,7 +2557,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     // reloadPiAvailableModels resolve (a deleted model falls back to auto via
     // validateComposerSelection).
     try {
-      const { value } = await api.setting.get({ key: UI_COMPOSER_MODEL_SETTING_KEY });
+      const value = fp[UI_COMPOSER_MODEL_SETTING_KEY];
       if (value) {
         const parsed = JSON.parse(value) as {
           providerId?: unknown;
@@ -2542,7 +2573,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         }
       }
     } catch (err) {
-      console.error("setting.get(composerModel) failed:", err);
+      console.error("apply(composerModel) failed:", err);
     }
 
     // Fetch the project list and chat font size in parallel - both are needed
@@ -2669,42 +2700,66 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     // Language server states (install/running) for the settings panel + Monaco.
     void get().reloadLspLanguages();
 
+    // Deferred settings: one bulk read for everything non-critical-paint
+    // (appearance, pane widths, IDE/git prefs). One IPC instead of four
+    // sequential awaits that each did their own Promise.all internally.
+    const ds = await api.setting
+      .getMany({
+        keys: [
+          UI_RIGHT_PANEL_FONT_SIZE_SETTING_KEY,
+          UI_USER_MSG_COLOR_SETTING_KEY,
+          UI_ACCENT_COLOR_SETTING_KEY,
+          UI_SHORTCUTS_SETTING_KEY,
+          UI_PANE_WIDTHS_SETTING_KEY,
+          UI_RIGHT_PANEL_TAB_SETTING_KEY,
+          UI_IDE_OPEN_FILES_SETTING_KEY,
+          UI_IDE_ACTIVE_FILE_SETTING_KEY,
+          UI_IDE_EXPANDED_DIRS_SETTING_KEY,
+          UI_IDE_EDITOR_MODE_SETTING_KEY,
+          UI_GIT_DIFF_OPEN_MODE_SETTING_KEY,
+          UI_COMMIT_GEN_MODEL_SETTING_KEY,
+          UI_COMMIT_GEN_PROMPT_SETTING_KEY,
+          UI_CUSTOM_COMMANDS_BY_PROJECT_SETTING_KEY,
+          UI_CONFLICT_RESOLVE_MODEL_SETTING_KEY,
+          UI_TITLE_GEN_ENABLED_SETTING_KEY,
+          UI_TITLE_GEN_MODEL_SETTING_KEY,
+          UI_GIT_COLLAPSED_REPOS_SETTING_KEY,
+        ],
+      })
+      .catch((err) => {
+        console.error("setting.getMany(deferred) failed:", err);
+        return {} as Record<string, string | null>;
+      });
+
     // Appearance extras (right-panel font size, user-message bg, accent color).
     // chatFontSize was already loaded in init() - only the rest here.
     try {
-      const [, rpFontRes, colorRes, accentRes, shortcutsRes] = await Promise.all([
-        Promise.resolve(),
-        api.setting.get({ key: UI_RIGHT_PANEL_FONT_SIZE_SETTING_KEY }),
-        api.setting.get({ key: UI_USER_MSG_COLOR_SETTING_KEY }),
-        api.setting.get({ key: UI_ACCENT_COLOR_SETTING_KEY }),
-        api.setting.get({ key: UI_SHORTCUTS_SETTING_KEY }),
-      ]);
-      if (rpFontRes.value != null) {
-        const px = Number(rpFontRes.value);
+      const rpFontRaw = ds[UI_RIGHT_PANEL_FONT_SIZE_SETTING_KEY];
+      if (rpFontRaw != null) {
+        const px = Number(rpFontRaw);
         if (Number.isFinite(px)) set({ rightPanelFontSize: clampRightPanelFontSize(px) });
       }
-      if (colorRes.value && RGB_TRIPLET_RE.test(colorRes.value)) {
-        set({ userMessageColor: colorRes.value });
-      }
-      if (accentRes.value && RGB_TRIPLET_RE.test(accentRes.value)) {
-        set({ accentColor: accentRes.value });
-      }
+      const colorRaw = ds[UI_USER_MSG_COLOR_SETTING_KEY];
+      if (colorRaw && RGB_TRIPLET_RE.test(colorRaw)) set({ userMessageColor: colorRaw });
+      const accentRaw = ds[UI_ACCENT_COLOR_SETTING_KEY];
+      if (accentRaw && RGB_TRIPLET_RE.test(accentRaw)) set({ accentColor: accentRaw });
       // Shortcut overrides — parsed from the ui.shortcuts JSON blob.
       // safeParse rejects malformed blobs so a corrupt row can't crash the
       // store; on failure we keep the empty default (all defaults apply).
-      if (shortcutsRes.value) {
-        const parsed = ShortcutBindingsSchema.safeParse(JSON.parse(shortcutsRes.value));
+      const shortcutsRaw = ds[UI_SHORTCUTS_SETTING_KEY];
+      if (shortcutsRaw) {
+        const parsed = ShortcutBindingsSchema.safeParse(JSON.parse(shortcutsRaw));
         if (parsed.success) set({ shortcutOverrides: parsed.data });
       }
     } catch (err) {
-      console.error("setting.get(appearance deferred) failed:", err);
+      console.error("apply(appearance deferred) failed:", err);
     }
 
     // Draggable pane widths (one JSON blob).
     try {
-      const paneRes = await api.setting.get({ key: UI_PANE_WIDTHS_SETTING_KEY });
-      if (paneRes.value) {
-        const parsed = JSON.parse(paneRes.value) as Partial<{
+      const paneRaw = ds[UI_PANE_WIDTHS_SETTING_KEY];
+      if (paneRaw) {
+        const parsed = JSON.parse(paneRaw) as Partial<{
           left: number; right: number; bottomTerminal: number; editor: number;
         }>;
         const patch: Partial<SessionState> = {};
@@ -2719,43 +2774,34 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         }
       }
     } catch (err) {
-      console.error("setting.get(paneWidths) failed:", err);
+      console.error("apply(paneWidths) failed:", err);
     }
 
     // IDE right-panel prefs (active tab, open files, active file, expanded tree
     // dirs, editor mode, diff mode, commit-gen model/prompt, custom commands,
     // conflict-resolve model). All optional JSON-in-settings.
     try {
-      const [tabRes, openRes, activeRes, dirsRes, modeRes, diffModeRes, commitModelRes, commitPromptRes, commandsByProjectRes, conflictModelRes, titleGenEnabledRes, titleGenModelRes] = await Promise.all([
-        api.setting.get({ key: UI_RIGHT_PANEL_TAB_SETTING_KEY }),
-        api.setting.get({ key: UI_IDE_OPEN_FILES_SETTING_KEY }),
-        api.setting.get({ key: UI_IDE_ACTIVE_FILE_SETTING_KEY }),
-        api.setting.get({ key: UI_IDE_EXPANDED_DIRS_SETTING_KEY }),
-        api.setting.get({ key: UI_IDE_EDITOR_MODE_SETTING_KEY }),
-        api.setting.get({ key: UI_GIT_DIFF_OPEN_MODE_SETTING_KEY }),
-        api.setting.get({ key: UI_COMMIT_GEN_MODEL_SETTING_KEY }),
-        api.setting.get({ key: UI_COMMIT_GEN_PROMPT_SETTING_KEY }),
-        api.setting.get({ key: UI_CUSTOM_COMMANDS_BY_PROJECT_SETTING_KEY }),
-        api.setting.get({ key: UI_CONFLICT_RESOLVE_MODEL_SETTING_KEY }),
-        api.setting.get({ key: UI_TITLE_GEN_ENABLED_SETTING_KEY }),
-        api.setting.get({ key: UI_TITLE_GEN_MODEL_SETTING_KEY }),
-      ]);
-      if (tabRes.value === "files" || tabRes.value === "git") {
-        set({ rightPanelTab: tabRes.value });
-      }
-      if (modeRes.value === "tabs" || modeRes.value === "replace") {
-        set({ ideEditorMode: modeRes.value });
-      }
-      if (diffModeRes.value === "center" || diffModeRes.value === "dialog") {
-        set({ gitDiffOpenMode: diffModeRes.value });
-      }
-      set({ commitGenModel: commitModelRes.value || null });
-      if (commitPromptRes.value) {
-        set({ commitGenPrompt: commitPromptRes.value });
-      }
-      set({ conflictResolveModel: conflictModelRes.value || null });
-      set({ titleGenEnabled: titleGenEnabledRes.value === "on" });
-      set({ titleGenModel: titleGenModelRes.value || null });
+      const tabRaw = ds[UI_RIGHT_PANEL_TAB_SETTING_KEY];
+      const openRaw = ds[UI_IDE_OPEN_FILES_SETTING_KEY];
+      const activeRaw = ds[UI_IDE_ACTIVE_FILE_SETTING_KEY];
+      const dirsRaw = ds[UI_IDE_EXPANDED_DIRS_SETTING_KEY];
+      const modeRaw = ds[UI_IDE_EDITOR_MODE_SETTING_KEY];
+      const diffModeRaw = ds[UI_GIT_DIFF_OPEN_MODE_SETTING_KEY];
+      const commitModelRaw = ds[UI_COMMIT_GEN_MODEL_SETTING_KEY];
+      const commitPromptRaw = ds[UI_COMMIT_GEN_PROMPT_SETTING_KEY];
+      const commandsByProjectRaw = ds[UI_CUSTOM_COMMANDS_BY_PROJECT_SETTING_KEY];
+      const conflictModelRaw = ds[UI_CONFLICT_RESOLVE_MODEL_SETTING_KEY];
+      const titleGenEnabledRaw = ds[UI_TITLE_GEN_ENABLED_SETTING_KEY];
+      const titleGenModelRaw = ds[UI_TITLE_GEN_MODEL_SETTING_KEY];
+
+      if (tabRaw === "files" || tabRaw === "git") set({ rightPanelTab: tabRaw });
+      if (modeRaw === "tabs" || modeRaw === "replace") set({ ideEditorMode: modeRaw });
+      if (diffModeRaw === "center" || diffModeRaw === "dialog") set({ gitDiffOpenMode: diffModeRaw });
+      set({ commitGenModel: commitModelRaw || null });
+      if (commitPromptRaw) set({ commitGenPrompt: commitPromptRaw });
+      set({ conflictResolveModel: conflictModelRaw || null });
+      set({ titleGenEnabled: titleGenEnabledRaw === "on" });
+      set({ titleGenModel: titleGenModelRaw || null });
       const parseBucket = <T>(raw: string | null): Record<string, T> => {
         if (!raw) return {};
         try {
@@ -2766,9 +2812,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         }
         return {};
       };
-      const parsedOpen = parseBucket<string[]>(openRes.value);
-      const parsedActive = parseBucket<string | null>(activeRes.value);
-      const parsedDirs = parseBucket<string[]>(dirsRes.value);
+      const parsedOpen = parseBucket<string[]>(openRaw);
+      const parsedActive = parseBucket<string | null>(activeRaw);
+      const parsedDirs = parseBucket<string[]>(dirsRaw);
       // Apply IDE file/dir state, dropping paths that belong to no project.
       const projects = get().projects;
       const projectById = new Map(projects.map((p) => [p.id, p]));
@@ -2803,7 +2849,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       });
       // Per-project terminal quick-commands.
       {
-        const rawMap = parseBucket<unknown>(commandsByProjectRes.value);
+        const rawMap = parseBucket<unknown>(commandsByProjectRaw);
         const validated: Record<string, CustomCommand[]> = {};
         for (const [pid, rawList] of Object.entries(rawMap)) {
           if (!Array.isArray(rawList)) continue;
@@ -2820,20 +2866,20 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         set({ customCommandsByProject: validated });
       }
     } catch (err) {
-      console.error("setting.get(ide deferred) failed:", err);
+      console.error("apply(ide deferred) failed:", err);
     }
 
     // Collapsed git repo card states.
     try {
-      const { value } = await api.setting.get({ key: UI_GIT_COLLAPSED_REPOS_SETTING_KEY });
-      if (value) {
-        const parsed = JSON.parse(value);
+      const raw = ds[UI_GIT_COLLAPSED_REPOS_SETTING_KEY];
+      if (raw) {
+        const parsed = JSON.parse(raw);
         if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
           set({ collapsedGitRepos: parsed as Record<string, boolean> });
         }
       }
     } catch (err) {
-      console.error("setting.get(gitCollapsedRepos) failed:", err);
+      console.error("apply(gitCollapsedRepos) failed:", err);
     }
   },
 
@@ -3000,6 +3046,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         activeSessionId: session.id,
         expandedProjects: { ...s.expandedProjects, [projectId]: true },
         messagesBySession: { ...s.messagesBySession, [session.id]: [] },
+        hasMoreMessagesBySession: { ...s.hasMoreMessagesBySession, [session.id]: false },
         // New session lands as a fresh tab. If it was somehow already open
         // (e.g. a duplicate id — shouldn't happen) we don't double-add.
         openTabs: s.openTabs.includes(session.id) ? s.openTabs : [...s.openTabs, session.id],
@@ -3032,9 +3079,13 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       return { activeSessionId: sessionId, unreadBySession };
     });
     if (get().messagesBySession[sessionId]) return;
-    const { messages } = await api.session.messages({ sessionId });
+    const { messages, hasMore } = await api.session.messages({
+      sessionId,
+      limit: MESSAGE_PAGE_SIZE,
+    });
     set((s) => ({
       messagesBySession: { ...s.messagesBySession, [sessionId]: fromRecords(messages) },
+      hasMoreMessagesBySession: { ...s.hasMoreMessagesBySession, [sessionId]: hasMore },
     }));
   },
 
@@ -3063,9 +3114,55 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       };
     });
     if (!get().messagesBySession[sessionId]) {
-      const { messages } = await api.session.messages({ sessionId });
+      const { messages, hasMore } = await api.session.messages({
+        sessionId,
+        limit: MESSAGE_PAGE_SIZE,
+      });
       set((s) => ({
         messagesBySession: { ...s.messagesBySession, [sessionId]: fromRecords(messages) },
+        hasMoreMessagesBySession: { ...s.hasMoreMessagesBySession, [sessionId]: hasMore },
+      }));
+    }
+  },
+
+  /** Fetch the next page of older messages and prepend them to the session's
+   *  message list. Used by the "pull to load history" hook at the top of the
+   *  chat list. Safe to call repeatedly — concurrent calls are deduped via
+   *  `loadingOlderBySession`, and a `false` hasMore short-circuits future ones. */
+  loadOlderMessages: async (sessionId) => {
+    // Bail when there's nothing more to load or a fetch is already in flight.
+    if (!get().hasMoreMessagesBySession[sessionId]) return;
+    if (get().loadingOlderBySession[sessionId]) return;
+    const list = get().messagesBySession[sessionId];
+    if (!list || list.length === 0) return;
+    const head = list[0];
+    set((s) => ({
+      loadingOlderBySession: { ...s.loadingOlderBySession, [sessionId]: true },
+    }));
+    try {
+      const { messages, hasMore } = await api.session.messages({
+        sessionId,
+        limit: MESSAGE_PAGE_SIZE,
+        beforeCreatedAt: head.createdAt,
+        beforeId: head.id,
+      });
+      const older = fromRecords(messages);
+      set((s) => {
+        const cur = s.messagesBySession[sessionId] ?? EMPTY_MESSAGES;
+        // Avoid duplicates if the cursor drifted (defensive; the (createdAt,id)
+        // tiebreaker should already prevent overlap).
+        const existingIds = new Set(cur.map((m) => m.id));
+        const merged = [...older.filter((m) => !existingIds.has(m.id)), ...cur];
+        return {
+          messagesBySession: { ...s.messagesBySession, [sessionId]: merged },
+          hasMoreMessagesBySession: { ...s.hasMoreMessagesBySession, [sessionId]: hasMore },
+          loadingOlderBySession: { ...s.loadingOlderBySession, [sessionId]: false },
+        };
+      });
+    } catch (err) {
+      console.error("loadOlderMessages failed:", err);
+      set((s) => ({
+        loadingOlderBySession: { ...s.loadingOlderBySession, [sessionId]: false },
       }));
     }
   },
@@ -3279,6 +3376,10 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       // / approval queue / files in memory.
       const messagesBySession = { ...s.messagesBySession };
       delete messagesBySession[id];
+      const hasMoreMessagesBySession = { ...s.hasMoreMessagesBySession };
+      delete hasMoreMessagesBySession[id];
+      const loadingOlderBySession = { ...s.loadingOlderBySession };
+      delete loadingOlderBySession[id];
       const runningBySession = { ...s.runningBySession };
       delete runningBySession[id];
       const runningTurnStartedAt = { ...s.runningTurnStartedAt };
@@ -3327,6 +3428,8 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           sessionsTotalByProject: { ...s.sessionsTotalByProject, [projectId]: totalActive },
           sessionsHasMoreByProject: { ...s.sessionsHasMoreByProject, [projectId]: hasMoreActive },
           messagesBySession,
+          hasMoreMessagesBySession,
+          loadingOlderBySession,
           runningBySession,
           runningTurnStartedAt,
           interruptedBySession,
@@ -3371,6 +3474,8 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         sessionsTotalByProject: { ...s.sessionsTotalByProject, [projectId]: totalActive },
         sessionsHasMoreByProject: { ...s.sessionsHasMoreByProject, [projectId]: hasMoreActive },
         messagesBySession,
+        hasMoreMessagesBySession,
+        loadingOlderBySession,
         runningBySession,
         runningTurnStartedAt,
         interruptedBySession,
@@ -3707,6 +3812,8 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     const current = get().messagesBySession[sessionId] ?? [];
     const idx = current.findIndex((m) => m.id === messageId);
     if (idx === -1) return;
+    const editedMsg = current[idx];
+    if (!editedMsg) return;
 
     // 1. Truncate: keep only messages BEFORE the edited one. The edited
     //    message itself and everything after it (the AI's reply, any
@@ -3759,10 +3866,19 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       turnFilesBySession: { ...s.turnFilesBySession, [sessionId]: [] },
     }));
 
-    // 4. Persist the truncated history immediately so a crash mid-turn
-    //    doesn't leave the DB with the old (pre-edit) messages. The DB
-    //    layer does a full-snapshot replace.
-    void api.session.saveMessages({ sessionId, messages: toRecords(sessionId, [...truncated, userMsg]) });
+    // 4. Persist the truncation immediately so a crash mid-turn doesn't leave
+    //    the DB with the old (pre-edit) messages. Use truncateAndInsert rather
+    //    than replaceAll so that older rows not loaded into renderer memory
+    //    (paginated out) are preserved — replaceAll would wipe the whole table
+    //    and lose them. The cursor is the edited message's (createdAt, id);
+    //    the new user message is the only row inserted now (subsequent turn
+    //    events stream in via upsertMessages on terminal events).
+    void api.session.truncateAndInsertMessages({
+      sessionId,
+      cursorCreatedAt: editedMsg.createdAt,
+      cursorId: editedMsg.id,
+      messages: toRecords(sessionId, [userMsg]),
+    });
 
     // 5. Fire the turn; events stream back via ingestEvent. Same per-turn
     //    override pattern as sendPrompt (model pair from resolvedModel above).
@@ -3850,6 +3966,12 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
   ingestEvent: (e) => {
     const sid = e.sessionId;
+
+    // Capture the current turn's send-time anchor BEFORE any set() runs —
+    // turn.done clears it inside its own set, so by the time we reach the
+    // terminal-event persist below it's gone. Keeping it lets us persist only
+    // this turn's messages (incremental upsert) instead of the whole session.
+    const turnStartAtCapture = get().runningTurnStartedAt[sid];
 
     // Bump the unread counter for non-active sessions on noteworthy events.
     // The counter drives the red-dot badge in the left bar + tab strip so the
@@ -4094,14 +4216,20 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       });
       // turn.files is emitted from flushFinal(), which runs AFTER the `result`
       // message already emitted turn.done. So the saveMessages fired at turn.done
-      // captured a snapshot WITHOUT this card. Persist again now (the card is
-      // attached to the just-closed turn's trailing assistant message) so it
-      // survives restart - otherwise reopening the session loses every turn's
-      // modified-files card. IPC ordering preserves "last write wins" since this
-      // call lands after the turn.done one.
-      const filesSnapshot = get().messagesBySession[sid];
-      if (filesSnapshot) {
-        void api.session.saveMessages({ sessionId: sid, messages: toRecords(sid, filesSnapshot) });
+      // captured a snapshot WITHOUT this card. Persist just the changed message
+      // now (the card is attached to the just-closed turn's trailing assistant
+      // message) so it survives restart - otherwise reopening the session loses
+      // every turn's modified-files card. IPC ordering preserves "last write
+      // wins" since this call lands after the turn.done one.
+      //
+      // Incremental upsert: only the trailing assistant message gained a block,
+      // so we only need to write that one row instead of the whole session.
+      {
+        const list = get().messagesBySession[sid];
+        if (list && list.length > 0) {
+          const last = list[list.length - 1];
+          void api.session.upsertMessages({ sessionId: sid, messages: toRecords(sid, [last]) });
+        }
       }
       return;
     }
@@ -4128,10 +4256,14 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           ? s
           : { messagesBySession: { ...s.messagesBySession, [sid]: next } };
       });
-      // Persist so the card survives reload.
-      const compactSnapshot = get().messagesBySession[sid];
-      if (compactSnapshot) {
-        void api.session.saveMessages({ sessionId: sid, messages: toRecords(sid, compactSnapshot) });
+      // Persist so the card survives reload. Incremental upsert: only the
+      // trailing assistant message (or a freshly-appended turn opener) changed.
+      {
+        const list = get().messagesBySession[sid];
+        if (list && list.length > 0) {
+          const last = list[list.length - 1];
+          void api.session.upsertMessages({ sessionId: sid, messages: toRecords(sid, [last]) });
+        }
       }
       return;
     }
@@ -4150,6 +4282,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       // those files as "this turn's changes". Historical cards leave the
       // bucket alone — it belongs to a different, later turn.
       let rewoundLatest = false;
+      const rewoundChanged: ChatMessage[] = [];
       set((s) => {
         const list = s.messagesBySession[sid] ?? EMPTY_MESSAGES;
         const targetSet = new Set(e.targetFiles);
@@ -4171,7 +4304,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           });
           if (!touched) return m;
           changed = true;
-          return { ...m, blocks };
+          const updated = { ...m, blocks };
+          rewoundChanged.push(updated);
+          return updated;
         });
         if (!changed) return s;
         // If the rewound card was the live one, also clear the latest-turn
@@ -4184,10 +4319,10 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           : { messagesBySession: { ...s.messagesBySession, [sid]: next } };
       });
       // Persist the rewound state so the marker survives session reopen.
-      // (The card is kept, so this is a mutation, not a removal.)
-      const rewoundSnapshot = get().messagesBySession[sid];
-      if (rewoundSnapshot) {
-        void api.session.saveMessages({ sessionId: sid, messages: toRecords(sid, rewoundSnapshot) });
+      // (The card is kept, so this is a mutation, not a removal.) Incremental
+      // upsert: only the rows whose blocks actually changed need writing.
+      if (rewoundChanged.length > 0) {
+        void api.session.upsertMessages({ sessionId: sid, messages: toRecords(sid, rewoundChanged) });
       }
       return;
     }
@@ -4498,10 +4633,26 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
     // At terminal events the snapshot is final — persist it so the history
     // survives restart. Fire-and-forget; don't block the UI.
+    //
+    // Incremental upsert: only this turn's messages changed (the send-time
+    // user message + every assistant message produced this turn). Persisting
+    // just those rows avoids the O(N) DELETE+re-INSERT of a full snapshot on
+    // every turn — the cost is O(this turn) regardless of session length.
     if (e.type === "turn.done" || e.type === "error") {
       const snapshot = get().messagesBySession[sid];
       if (snapshot) {
-        void api.session.saveMessages({ sessionId: sid, messages: toRecords(sid, snapshot) });
+        // Identify this turn's messages by the captured send-time anchor.
+        // Falls back to full saveMessages when the anchor is missing (e.g. a
+        // turn done arrived for a session we never started, or resumed mid-
+        // turn) — preserving the old robustness.
+        const tail =
+          turnStartAtCapture != null
+            ? snapshot.filter(
+                (m) => m.createdAt >= turnStartAtCapture || m.turnMeta?.startedAt === turnStartAtCapture,
+              )
+            : snapshot;
+        const toSave = tail.length > 0 ? tail : snapshot;
+        void api.session.upsertMessages({ sessionId: sid, messages: toRecords(sid, toSave) });
       }
       // The session may have just gone fully idle — if the user queued a
       // prompt while busy, fire the head now. drainPromptQueueIfIdle is a

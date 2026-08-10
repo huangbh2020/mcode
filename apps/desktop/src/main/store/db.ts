@@ -144,6 +144,14 @@ function migrate(database: Database): void {
   // pre-migration rows fall back to created_at ordering; new projects get
   // MAX(sort_order)+1 so they append to the end.
   addColumnIfMissing(database, "projects", "sort_order", "INTEGER NOT NULL DEFAULT 0");
+
+  // Composite index for paginated message reads (cursor on created_at). The
+  // single-column idx_messages_session above serves the same queries but
+  // requires a sort; this index lets ORDER BY created_at LIMIT ? satisfy
+  // cursor pagination without a filesort. Idempotent.
+  database.run(
+    "CREATE INDEX IF NOT EXISTS idx_messages_session_created ON messages(session_id, created_at)",
+  );
 }
 
 /** Add a column only if it isn't already present. SQLite has no ADD COLUMN IF

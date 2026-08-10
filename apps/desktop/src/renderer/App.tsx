@@ -308,17 +308,32 @@ function CenterPane() {
 }
 
 /** The chat half: SessionTabs strip (in tabs mode) + the active ChatPane.
- *  Keyed on sessionId so switching tabs re-mounts (clean composer state,
- *  fresh scroll position). */
+ *
+ *  In tabs mode every open tab's ChatPane is mounted simultaneously and
+ *  backgrounded via CSS (display:none). This keeps each pane's composer
+ *  draft, scroll position, and Tiptap undo history alive across tab switches
+ *  — switching is instant instead of re-mounting and re-measuring. Events
+ *  still stream into backgrounded panes (they read their own session bucket).
+ *  Closing a tab removes its id from openTabs, letting React unmount it.
+ *
+ *  In single mode the legacy keyed remount is preserved (one pane at a time). */
 function ChatColumn() {
   const displayMode = useSessionStore((s) => s.displayMode);
   const activeSessionId = useSessionStore((s) => s.activeSessionId);
+  const openTabs = useSessionStore((s) => s.openTabs);
   if (displayMode === "tabs") {
     return (
       <div className="flex min-h-0 flex-1 flex-col">
         <SessionTabs />
-        <div className="min-h-0 flex-1">
-          {activeSessionId && <ChatPane key={activeSessionId} sessionId={activeSessionId} />}
+        <div className="relative min-h-0 flex-1">
+          {openTabs.map((sid) => (
+            <div
+              key={sid}
+              className={`absolute inset-0 ${sid === activeSessionId ? "" : "hidden"}`}
+            >
+              <ChatPane sessionId={sid} isActive={sid === activeSessionId} />
+            </div>
+          ))}
         </div>
       </div>
     );

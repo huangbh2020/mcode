@@ -48,6 +48,13 @@ const api = {
       ipcRenderer.invoke(IPC.SESSION_MESSAGES, input)) as RpcMap["session.messages"],
     saveMessages: ((input) =>
       ipcRenderer.invoke(IPC.SESSION_SAVE_MESSAGES, input)) as RpcMap["session.saveMessages"],
+    upsertMessages: ((input) =>
+      ipcRenderer.invoke(IPC.SESSION_UPSERT_MESSAGES, input)) as RpcMap["session.upsertMessages"],
+    truncateAndInsertMessages: ((input) =>
+      ipcRenderer.invoke(
+        IPC.SESSION_TRUNCATE_AND_INSERT_MESSAGES,
+        input,
+      )) as RpcMap["session.truncateAndInsertMessages"],
     updateSettings: ((input) =>
       ipcRenderer.invoke(IPC.SESSION_UPDATE_SETTINGS, input)) as RpcMap["session.updateSettings"],
     delete: ((input) =>
@@ -62,6 +69,8 @@ const api = {
       ipcRenderer.invoke(IPC.SETTING_GET, input)) as RpcMap["setting.get"],
     set: ((input) =>
       ipcRenderer.invoke(IPC.SETTING_SET, input)) as RpcMap["setting.set"],
+    getMany: ((input) =>
+      ipcRenderer.invoke(IPC.SETTING_GET_MANY, input)) as RpcMap["setting.getMany"],
   },
 
   /** Notification preferences + OS notification click handling. */

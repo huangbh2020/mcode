@@ -648,7 +648,15 @@ export const MessageRecordSchema = z.object({
   createdAt: z.number(),
 });
 
-export const SessionMessagesSchema = z.object({ sessionId: z.string() });
+export const SessionMessagesSchema = z.object({
+  sessionId: z.string(),
+  /** Page size. Omit for the legacy unpaginated path (all rows). */
+  limit: z.number().int().positive().optional(),
+  /** Cursor: fetch the page strictly older than this (createdAt, id) pair.
+   *  Omit on the first page (most recent). */
+  beforeCreatedAt: z.number().optional(),
+  beforeId: z.string().optional(),
+});
 export type SessionMessagesInput = z.infer<typeof SessionMessagesSchema>;
 
 export const SaveMessagesSchema = z.object({
@@ -664,12 +672,46 @@ export const SaveMessagesSchema = z.object({
  */
 export type SaveMessagesInput = { sessionId: string; messages: MessageRecord[] };
 
+/** Incremental message persist — upserts the given rows by id, leaving all
+ *  other rows for the session untouched. Use for additive / localized changes
+ *  (a turn's new messages, a turn-files card attached to a trailing message).
+ *  Prefer this over {@link SaveMessagesSchema} when only a few rows changed —
+ *  it avoids the O(N) DELETE+re-INSERT of a full snapshot. */
+export const UpsertMessagesSchema = z.object({
+  sessionId: z.string(),
+  messages: z.array(MessageRecordSchema),
+});
+export type UpsertMessagesInput = { sessionId: string; messages: MessageRecord[] };
+
+/** Edit-and-resend persist: delete every message at or after the cursor
+ *  (createdAt, id) and insert the given replacement rows in one transaction.
+ *  This is paginated-history-safe — older rows not loaded in renderer memory
+ *  are preserved, whereas {@link SaveMessagesSchema} would wipe them. */
+export const TruncateAndInsertMessagesSchema = z.object({
+  sessionId: z.string(),
+  cursorCreatedAt: z.number(),
+  cursorId: z.string(),
+  messages: z.array(MessageRecordSchema),
+});
+export type TruncateAndInsertMessagesInput = {
+  sessionId: string;
+  cursorCreatedAt: number;
+  cursorId: string;
+  messages: MessageRecord[];
+};
+
 /* ── Settings ── */
 export const GetSettingSchema = z.object({ key: z.string() });
 export type GetSettingInput = z.infer<typeof GetSettingSchema>;
 
 export const SetSettingSchema = z.object({ key: z.string(), value: z.string() });
 export type SetSettingInput = z.infer<typeof SetSettingSchema>;
+
+/** Bulk read of setting keys — one IPC instead of N round-trips. Missing keys
+ *  map to `null` in the result record. */
+export const GetManySettingsSchema = z.object({ keys: z.array(z.string()) });
+export type GetManySettingsInput = z.infer<typeof GetManySettingsSchema>;
+export type GetManySettingsResult = Record<string, string | null>;
 
 /* ── Notifications ── */
 
@@ -2149,8 +2191,14 @@ export interface RpcMap {
   // Sessions (P2 persistence)
   /** Cross-project session search by title substring (Ctrl+K unified search). */
   "session.search": (input: SessionSearchInput) => Promise<{ sessions: Session[] }>;
-  "session.messages": (input: SessionMessagesInput) => Promise<{ messages: MessageRecord[] }>;
+  "session.messages": (
+    input: SessionMessagesInput,
+  ) => Promise<{ messages: MessageRecord[]; hasMore: boolean }>;
   "session.saveMessages": (input: SaveMessagesInput) => Promise<void>;
+  "session.upsertMessages": (input: UpsertMessagesInput) => Promise<void>;
+  "session.truncateAndInsertMessages": (
+    input: TruncateAndInsertMessagesInput,
+  ) => Promise<void>;
   /** Hard-delete a session; its messages cascade-delete (DB FK). */
   "session.delete": (input: { id: string }) => Promise<void>;
   /** Set a session's archived flag (soft-delete; restorable). */
@@ -2162,6 +2210,7 @@ export interface RpcMap {
   // Settings
   "setting.get": (input: GetSettingInput) => Promise<{ value: string | null }>;
   "setting.set": (input: SetSettingInput) => Promise<void>;
+  "setting.getMany": (input: GetManySettingsInput) => Promise<GetManySettingsResult>;
   // Notifications
   /** Get the user's notification preferences (typed wrapper over settings). */
   "notification.getPrefs": () => Promise<{ prefs: NotificationPrefs }>;
@@ -2395,11 +2444,14 @@ export const IPC = {
   SESSION_SEARCH: "session:search",
   SESSION_MESSAGES: "session:messages",
   SESSION_SAVE_MESSAGES: "session:saveMessages",
+  SESSION_UPSERT_MESSAGES: "session:upsertMessages",
+  SESSION_TRUNCATE_AND_INSERT_MESSAGES: "session:truncateAndInsertMessages",
   SESSION_UPDATE_SETTINGS: "session:updateSettings",
   PROVIDER_LIST: "provider:list",
   // Settings
   SETTING_GET: "setting:get",
   SETTING_SET: "setting:set",
+  SETTING_GET_MANY: "setting:getMany",
   // Notifications
   NOTIFICATION_GET_PREFS: "notification:getPrefs",
   NOTIFICATION_SET_PREFS: "notification:setPrefs",

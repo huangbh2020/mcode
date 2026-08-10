@@ -502,14 +502,143 @@ export const MessageRepo = {
     persist();
   },
 
-  listBySession(sessionId: string): MessageRecord[] {
+  /**
+   * List messages for a session.
+   *
+   * - No opts: legacy full-list behavior (every row, ascending). Used by code
+   *   paths that still want the complete history (e.g. initial schema loads).
+   * - With opts: cursor-paginated. The most recent `limit` rows are returned
+   *   ascending; pass `beforeCreatedAt` + `beforeId` (the oldest already-loaded
+   *   row's timestamp + id) to fetch the page above it. The `(created_at, id)`
+   *   tiebreaker guards against ms-collisions when many messages share a
+   *   timestamp. `hasMore` is true when more older rows remain.
+   */
+  listBySession(
+    sessionId: string,
+    opts?: { limit?: number; beforeCreatedAt?: number; beforeId?: string },
+  ): { messages: MessageRecord[]; hasMore: boolean } {
+    const limit = opts?.limit;
+    const before = opts?.beforeCreatedAt;
+    const beforeId = opts?.beforeId;
     const db = getDb();
-    const stmt = db.prepare("SELECT * FROM messages WHERE session_id = ? ORDER BY created_at ASC");
-    stmt.bind([v(sessionId)]);
-    const out: MessageRecord[] = [];
-    while (stmt.step()) out.push(rowToMessage(stmt.getAsObject() as unknown as MessageRow));
-    stmt.free();
-    return out;
+
+    // Unpaginated path — keep the historical shape for callers that haven't
+    // opted in (they get all rows and ignore `hasMore`).
+    if (limit == null) {
+      const stmt = db.prepare("SELECT * FROM messages WHERE session_id = ? ORDER BY created_at ASC");
+      stmt.bind([v(sessionId)]);
+      const out: MessageRecord[] = [];
+      while (stmt.step()) out.push(rowToMessage(stmt.getAsObject() as unknown as MessageRow));
+      stmt.free();
+      return { messages: out, hasMore: false };
+    }
+
+    // Paginated path: fetch `limit + 1` rows descending from the cursor, so
+    // the extra row (if any) signals `hasMore`. Then reverse to ascending.
+    const fetchN = limit + 1;
+    const rows: MessageRecord[] = [];
+    if (before == null || beforeId == null) {
+      const stmt = db.prepare(
+        "SELECT * FROM messages WHERE session_id = ? ORDER BY created_at DESC, id DESC LIMIT ?",
+      );
+      stmt.bind([v(sessionId), v(fetchN)]);
+      while (stmt.step()) rows.push(rowToMessage(stmt.getAsObject() as unknown as MessageRow));
+      stmt.free();
+    } else {
+      // Tiebreaker: (created_at, id) so rows with identical createdAt still
+      // page cleanly without skipping or duplicating.
+      const stmt = db.prepare(
+        `SELECT * FROM messages WHERE session_id = ?
+         AND (created_at < ? OR (created_at = ? AND id < ?))
+         ORDER BY created_at DESC, id DESC LIMIT ?`,
+      );
+      stmt.bind([v(sessionId), v(before), v(before), v(beforeId), v(fetchN)]);
+      while (stmt.step()) rows.push(rowToMessage(stmt.getAsObject() as unknown as MessageRow));
+      stmt.free();
+    }
+    const hasMore = rows.length === fetchN;
+    const page = hasMore ? rows.slice(1) : rows;
+    page.reverse();
+    return { messages: page, hasMore };
+  },
+
+  /** Incremental upsert: insert-or-update the given messages by primary key.
+   *  Unlike {@link replaceAll}, this leaves all other rows for the session
+   *  untouched, so callers that only changed a few messages don't pay the
+   *  O(N) DELETE+re-INSERT cost of a full snapshot write.
+   *
+   *  Use this when the change set is additive or a localized mutation (e.g.
+   *  a turn appended a few rows, or a turn-files card was attached to the
+   *  trailing assistant message). Use {@link replaceAll} when rows must be
+   *  truncated (edit-and-resend, rewind mutations that remove history). */
+  upsertMany(messages: MessageRecord[]): void {
+    if (messages.length === 0) return;
+    const db = getDb();
+    db.run("BEGIN");
+    try {
+      const stmt = db.prepare(
+        `INSERT INTO messages (id, session_id, role, content, created_at) VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET
+           session_id = excluded.session_id,
+           role = excluded.role,
+           content = excluded.content,
+           created_at = excluded.created_at`,
+      );
+      for (const m of messages) {
+        stmt.run([v(m.id), v(m.sessionId), v(m.role), v(JSON.stringify(m.content)), v(m.createdAt)]);
+      }
+      stmt.free();
+      db.run("COMMIT");
+    } catch (err) {
+      db.run("ROLLBACK");
+      throw err;
+    }
+    persist();
+  },
+
+  /** Delete every message at or after a cursor (createdAt, id) and insert the
+   *  given replacement rows in one transaction. This is the paginated-history-
+   *  safe form of "edit and resend": it truncates the suffix the user is
+   *  branching from (including rows that may not be loaded in renderer memory
+   *  because they were never paginated in) and writes only the new messages,
+   *  so unloaded older history survives.
+   *
+   *  The (createdAt, id) tiebreaker matches the pagination cursor semantics in
+   *  {@link listBySession}: "at or after" means `created_at > cursor.createdAt`
+   *  OR (`created_at = cursor.createdAt` AND `id >= cursor.id`). */
+  truncateFromAndInsert(
+    sessionId: string,
+    cursor: { createdAt: number; id: string },
+    messages: MessageRecord[],
+  ): void {
+    const db = getDb();
+    db.run("BEGIN");
+    try {
+      db.run(
+        `DELETE FROM messages WHERE session_id = ?
+         AND (created_at > ? OR (created_at = ? AND id >= ?))`,
+        [v(sessionId), v(cursor.createdAt), v(cursor.createdAt), v(cursor.id)],
+      );
+      if (messages.length > 0) {
+        const stmt = db.prepare(
+          `INSERT INTO messages (id, session_id, role, content, created_at) VALUES (?, ?, ?, ?, ?)
+           ON CONFLICT(id) DO UPDATE SET
+             session_id = excluded.session_id,
+             role = excluded.role,
+             content = excluded.content,
+             created_at = excluded.created_at`,
+        );
+        for (const m of messages) {
+          stmt.run([v(m.id), v(m.sessionId), v(m.role), v(JSON.stringify(m.content)), v(m.createdAt)]);
+        }
+        stmt.free();
+      }
+      db.run("COMMIT");
+    } catch (err) {
+      db.run("ROLLBACK");
+      throw err;
+    }
+    persist();
   },
 };
 
@@ -526,6 +655,23 @@ export const SettingRepo = {
     const row = found ? (stmt.getAsObject() as { value: BindValue }) : undefined;
     stmt.free();
     return row ? String(row.value) : null;
+  },
+
+  /** Read multiple keys in one pass. sql.js is synchronous so this is a single
+   *  tick — cheaper for the renderer than N parallel `setting.get` round-trips
+   *  (one IPC instead of N). Missing keys map to `null`. */
+  getMany(keys: string[]): Record<string, string | null> {
+    const db = getDb();
+    const out: Record<string, string | null> = {};
+    const stmt = db.prepare("SELECT value FROM settings WHERE key = ?");
+    for (const k of keys) {
+      stmt.bind([v(k)]);
+      const found = stmt.step();
+      out[k] = found ? String((stmt.getAsObject() as { value: BindValue }).value) : null;
+      stmt.reset();
+    }
+    stmt.free();
+    return out;
   },
 
   /** Upsert a setting value. */

@@ -101,7 +101,12 @@
   --content-muted: 170 173 180; /* secondary text, dimmed in step with
                                  * --content so the hierarchy stays
                                  * proportional */
-  --content-subtle: 128 132 140; /* mid gray for dim metadata/labels */
+  --content-subtle: 150 154 162; /* brighter mid gray — lifted ~22 units so
+                                   * dim metadata (file paths / git hashes /
+                                   * counts in tool cards) clears WCAG AA
+                                   * (~6.4:1) on the zinc-900 surface instead
+                                   * of sitting at the ~4.7:1 edge where it
+                                   * read as washed-out. */
   --edge: 41 42 47; /* #292a2f — one notch below hover so borders read as
                      * separators, not highlights */
   --input-edge: 95 99 110; /* cool gray — brighter than --edge so the
@@ -299,6 +304,20 @@ body,
 .dark {
   -webkit-font-smoothing: auto;
   -moz-osx-font-smoothing: auto;
+}
+
+/* Dark-mode monospace crispness for code / terminal / diff / tool cards.
+ * The subpixel rendering above helps sans-serif UI text, but on monospace
+ * data-stream regions (small 11-13px JetBrains Mono) subpixel artifacts
+ * build up at glyph edges and the text reads as soft / unfocused — exactly
+ * the "data stream looks unclear" symptom. Forcing gray-scale AA here
+ * trades the subpixel color fringing for sharper edge definition, which is
+ * what code editors (VS Code) do for their monospace areas. JetBrains Mono
+ * is hand-hinted for gray AA so it stays crisp without thinning. Scoped to
+ * .dark .font-mono so light mode and dark sans-serif UI are untouched. */
+.dark .font-mono {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
 /* AskUserQuestion bottom-sheet slide-up. Tailwind's arbitrary-animation

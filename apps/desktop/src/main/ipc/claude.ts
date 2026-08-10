@@ -12,10 +12,17 @@ import {
   UpdateSessionSettingsSchema,
   SessionMessagesSchema,
   SaveMessagesSchema,
+  UpsertMessagesSchema,
+  TruncateAndInsertMessagesSchema,
   GetSettingSchema,
   SetSettingSchema,
+  GetManySettingsSchema,
 } from "@contracts/ipc";
-import type { SaveMessagesInput } from "@contracts/ipc";
+import type {
+  SaveMessagesInput,
+  UpsertMessagesInput,
+  TruncateAndInsertMessagesInput,
+} from "@contracts/ipc";
 import type { Session } from "@contracts/session";
 import type { UserInputAnswers } from "@contracts/provider";
 import { uid } from "@main/utils.js";
@@ -254,9 +261,28 @@ export function registerClaudeHandlers(ipcMain: IpcMain): void {
     MessageRepo.replaceAll(input.sessionId, input.messages);
   });
 
+  ipcMain.handle(IPC.SESSION_UPSERT_MESSAGES, (_evt, raw) => {
+    const input = UpsertMessagesSchema.parse(raw) as UpsertMessagesInput;
+    MessageRepo.upsertMany(input.messages);
+  });
+
+  ipcMain.handle(IPC.SESSION_TRUNCATE_AND_INSERT_MESSAGES, (_evt, raw) => {
+    const input = TruncateAndInsertMessagesSchema.parse(raw) as TruncateAndInsertMessagesInput;
+    MessageRepo.truncateFromAndInsert(
+      input.sessionId,
+      { createdAt: input.cursorCreatedAt, id: input.cursorId },
+      input.messages,
+    );
+  });
+
   ipcMain.handle(IPC.SESSION_MESSAGES, (_evt, raw) => {
     const input = SessionMessagesSchema.parse(raw);
-    return { messages: MessageRepo.listBySession(input.sessionId) };
+    const res = MessageRepo.listBySession(input.sessionId, {
+      limit: input.limit,
+      beforeCreatedAt: input.beforeCreatedAt,
+      beforeId: input.beforeId,
+    });
+    return { messages: res.messages, hasMore: res.hasMore };
   });
 
   // ── Settings ──
@@ -268,6 +294,11 @@ export function registerClaudeHandlers(ipcMain: IpcMain): void {
   ipcMain.handle(IPC.SETTING_SET, (_evt, raw) => {
     const input = SetSettingSchema.parse(raw);
     SettingRepo.set(input.key, input.value);
+  });
+
+  ipcMain.handle(IPC.SETTING_GET_MANY, (_evt, raw) => {
+    const input = GetManySettingsSchema.parse(raw);
+    return SettingRepo.getMany(input.keys);
   });
 
   // ── Per-session settings (model / effort / permissionMode / customModelId) ──

@@ -92,6 +92,11 @@ function preserveUserLineBreaks(text: string): string {
  *  latest content, i.e. as soon as they scroll up past one screenful. */
 const NEAR_BOTTOM_THRESHOLD = 80;
 
+/** Pixel distance from the top of the scroll surface that triggers loading
+ *  one page of older messages. A couple of rows is enough — the fetch is
+ *  async and the store dedupes concurrent calls. */
+const NEAR_TOP_THRESHOLD = 120;
+
 /** Format a wall-clock ms timestamp as HH:MM:SS (local time). */
 function fmtClock(ms: number): string {
   const d = new Date(ms);
@@ -688,7 +693,17 @@ function groupMessagesForRender(
   return items;
 }
 
-export function ChatPane({ sessionId }: { sessionId: string | null }) {
+export function ChatPane({
+  sessionId,
+  isActive = true,
+}: {
+  sessionId: string | null;
+  /** Whether this pane is the foreground tab. Multi-mount layouts pass false
+   *  for backgrounded panes so one-shot effects (initial scroll-to-bottom)
+   *  defer until the pane is actually shown. Defaults to true for the
+   *  single-pane legacy path. */
+  isActive?: boolean;
+}) {
   // `sessionId` is the prop — store lookups go through it directly, not
   // through `activeSessionId`. The store still tracks `activeSessionId`
   // for global single-slot concerns (model / effort / permissionMode
@@ -699,7 +714,7 @@ export function ChatPane({ sessionId }: { sessionId: string | null }) {
   if (sessionId === null) {
     return <EmptyCenterPane />;
   }
-  return <ChatPaneForSession sessionId={sessionId} />;
+  return <ChatPaneForSession sessionId={sessionId} isActive={isActive} />;
 }
 
 /** Empty-state shown when there's no active session to render (no tabs
@@ -746,10 +761,14 @@ function EmptyCenterPane() {
 /** The actual per-session chat pane. Extracted into its own function so
  *  the prop-typed parent (ChatPane) can short-circuit on `sessionId ===
  *  null` without forcing every selector to handle the empty case. */
-function ChatPaneForSession({ sessionId }: { sessionId: string }) {
+function ChatPaneForSession({ sessionId, isActive }: { sessionId: string; isActive: boolean }) {
   const messages = useSessionStore((s) =>
     s.messagesBySession[sessionId] ?? EMPTY_MESSAGES,
   );
+  // Older-message pagination state for this session.
+  const hasMoreMessages = useSessionStore((s) => !!s.hasMoreMessagesBySession[sessionId]);
+  const loadingOlder = useSessionStore((s) => !!s.loadingOlderBySession[sessionId]);
+  const loadOlderMessages = useSessionStore((s) => s.loadOlderMessages);
   // Per-thread "is running" — only true when THIS thread has a turn in flight.
   // A different thread's running turn must not lock the composer here.
   const isRunning = useSessionStore((s) => !!s.runningBySession[sessionId]);
@@ -1309,7 +1328,12 @@ function ChatPaneForSession({ sessionId }: { sessionId: string }) {
     setVirtualScrollTop(state.scroll);
     const distanceFromEnd = state.contentLength - state.scroll - state.scrollLength;
     setShowJumpBottom(distanceFromEnd >= NEAR_BOTTOM_THRESHOLD);
-  }, []);
+    // Near-top: load one page of older history. Cheap to call repeatedly —
+    // the store dedupes concurrent fetches and short-circuits on hasMore=false.
+    if (state.scroll < NEAR_TOP_THRESHOLD) {
+      void loadOlderMessages(sessionId);
+    }
+  }, [loadOlderMessages, sessionId]);
 
   // Whether the session has any messages yet. Computed early (before the
   // scroll effects below) because they reference it.
@@ -1477,8 +1501,12 @@ function ChatPaneForSession({ sessionId }: { sessionId: string }) {
   // once per mount: it waits for messages to load, then scrolls and latches
   // `initialScrollDoneRef` so subsequent streaming appends don't yank the view
   // back down if the user has scrolled up to read history.
+  //
+  // In multi-mount (tabs) mode this pane may mount while hidden — defer the
+  // scroll until it becomes the active (visible) pane, otherwise the rAF runs
+  // against a display:none list and the scroll is lost (or wrong).
   useEffect(() => {
-    if (empty || initialScrollDoneRef.current) return;
+    if (empty || !isActive || initialScrollDoneRef.current) return;
     // LegendList measures item heights asynchronously on first layout, so a
     // single rAF may run before the list has real scroll length. Two rAFs give
     // it a layout pass + a settle pass; scrollToEnd is a no-op if the list
@@ -1495,7 +1523,7 @@ function ChatPaneForSession({ sessionId }: { sessionId: string }) {
       cancelAnimationFrame(raf1);
       cancelAnimationFrame(raf2);
     };
-  }, [empty]);
+  }, [empty, isActive]);
 
   // The id of the last user message in this session. Only this message is
   // editable - editing an earlier user message would require forking the
@@ -1657,6 +1685,17 @@ function ChatPaneForSession({ sessionId }: { sessionId: string }) {
     );
   }, [isRunning, hasRunningSubagents]);
 
+  // Older-messages loading indicator. Shown only when a paginated fetch is in
+  // flight for this session. A thin row at the very top of the stream.
+  const listHeader = useMemo(() => {
+    if (!loadingOlder) return null;
+    return (
+      <div className="flex items-center justify-center py-2">
+        <IconLoader2 size={12} className="animate-spin text-accent" />
+      </div>
+    );
+  }, [loadingOlder]);
+
   return (
     <div className="relative flex h-full flex-col" data-chat-root>
       {/* Message stream area */}
@@ -1699,6 +1738,7 @@ function ChatPaneForSession({ sessionId }: { sessionId: string }) {
               onScroll={handleVirtualScroll}
               drawDistance={400}
               ListFooterComponent={listFooter}
+              ListHeaderComponent={listHeader}
               contentContainerStyle={{ paddingTop: MESSAGE_LIST_TOP_PADDING }}
               style={{ height: "100%", width: "100%" }}
             />
