@@ -33,6 +33,7 @@ import {
   browserNavigate,
   browserSnapshot,
   browserClick,
+  browserType,
   browserScreenshot,
 } from "@main/browser/agentBrowserTools.js";
 
@@ -77,7 +78,12 @@ async function loadCreateMcpServer(): Promise<
  * prompt. Screenshots return an image content block that the store parses
  * from the tool_result to render inline.
  */
-async function buildBrowserMcpServer(projectPath: string, ctx: ProviderContext, sessionId: string) {
+async function buildBrowserMcpServer(
+  projectPath: string,
+  ctx: ProviderContext,
+  sessionId: string,
+  turnNumber?: number,
+) {
   const createSdkMcpServer = await loadCreateMcpServer();
 
   return createSdkMcpServer({
@@ -86,7 +92,7 @@ async function buildBrowserMcpServer(projectPath: string, ctx: ProviderContext, 
     instructions:
       "Mcode 应用内浏览器控制工具。browserId 可选——省略时自动复用已开 tab 或新建。" +
       "browser_navigate 的 device 参数可选 desktop(默认,PC 全宽)/iphone/android(移动端模拟)。" +
-      "典型流程:browser_navigate → browser_snapshot 读内容 → 按需 browser_click / browser_screenshot。",
+      "典型流程:browser_navigate → browser_snapshot 读内容 → 按需 browser_type 填表 / browser_click 点击 / browser_screenshot 截图。",
     alwaysLoad: true,
     tools: [
       {
@@ -150,6 +156,24 @@ async function buildBrowserMcpServer(projectPath: string, ctx: ProviderContext, 
           }),
       },
       {
+        name: "browser_type",
+        description:
+          "向页面元素输入文本。selector 应来自 browser_snapshot 返回的可交互元素列表,定位到 input/textarea/contenteditable。" +
+          "text 为要输入的字符串。对 React/Vue 受控输入框也生效(通过原生 value setter + input/change 事件)。" +
+          "返回操作后的 URL 和标题。有副作用(会改变页面表单状态)。",
+        inputSchema: {
+          selector: z.string().describe("目标输入元素的 CSS selector(来自 browser_snapshot)"),
+          text: z.string().describe("要输入的文本内容"),
+          browserId: z.string().optional().describe("目标浏览器视图 id;省略则用第一个已开视图"),
+        },
+        handler: async (args: Record<string, unknown>) =>
+          browserType({
+            selector: args.selector as string,
+            text: args.text as string,
+            browserId: args.browserId as string | undefined,
+          }),
+      },
+      {
         name: "browser_screenshot",
         description:
           "截取当前页面的可视区域,返回 PNG 图片。用于需要视觉确认页面布局/样式的场景。" +
@@ -169,7 +193,11 @@ async function buildBrowserMcpServer(projectPath: string, ctx: ProviderContext, 
           // in the MCP handler's extra, so we rely solely on the tool_result.
           return browserScreenshot(
             { browserId: args.browserId as string | undefined },
-            { toolCallId: randomUUID() },
+            {
+              toolCallId: randomUUID(),
+              sessionId,
+              turnNumber,
+            },
           );
         },
       },
@@ -659,7 +687,7 @@ export class ClaudeAgentSdkProvider implements AgentProvider {
     // directly (unlike Pi's pi.registerTool), so an in-process MCP server is the
     // supported mechanism for same-process tool handlers. See sdk.d.ts
     // `createSdkMcpServer`.
-    const browserServer = await buildBrowserMcpServer(req.cwd, ctx, req.sessionId);
+    const browserServer = await buildBrowserMcpServer(req.cwd, ctx, req.sessionId, req.turnNumber);
     options.mcpServers = { [BROWSER_MCP_SERVER]: browserServer };
 
     const q = (await loadQuery())({ prompt: req.prompt, options });

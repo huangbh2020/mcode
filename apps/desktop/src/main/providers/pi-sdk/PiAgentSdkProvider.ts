@@ -179,7 +179,7 @@ export class PiAgentSdkProvider implements AgentProvider {
     // mcodeExtension.ts for why an extension (vs the old customTools wrapping)
     // is the right vehicle: the `tool_call` event covers ALL tools, and
     // `block:true`+`reason` is the Pi equivalent of Claude's canUseTool deny.
-    const mcodeExtension = createMcodeExtension({ ctx, cwd: req.cwd, strict, sessionId: req.sessionId, projectPath: req.cwd });
+    const mcodeExtension = createMcodeExtension({ ctx, cwd: req.cwd, strict, sessionId: req.sessionId, projectPath: req.cwd, turnNumber: req.turnNumber });
 
     // Bridge Mcode's skill roots + `/name` trigger into Pi's skill model, and
     // inject the inline extension via the loader's `extensionFactories`. Pi's

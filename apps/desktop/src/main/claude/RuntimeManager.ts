@@ -40,6 +40,10 @@ interface SessionRuntime {
   /** Per-turn usage history for this session. Hydrated from the persisted
    *  session row at bind; appended at each `turn.done` and written back. */
   usageHistory: TurnUsageRecord[];
+  /** 1-based turn counter, incremented at each sendTurn. Used to tag browser
+   *  screenshots with a per-turn directory (`turn-<N>`). In-memory only —
+   *  restarts restart the count, matching the per-session runtime lifetime. */
+  turnCount: number;
   /** When the session's config uses the OpenAI protocol, this holds the
    *  customModelId whose bridge we acquired (paired with a release on
    *  dispose). Undefined for anthropic-protocol / no-custom-model sessions. */
@@ -201,6 +205,7 @@ class RuntimeManager {
       lastCwd: null,
       turnStartedAt: 0,
       usageHistory: session.usageHistory ?? [],
+      turnCount: 0,
     });
   }
 
@@ -220,6 +225,8 @@ class RuntimeManager {
 
     // Record turn start time for per-turn usage history persistence.
     rt.turnStartedAt = Date.now();
+    // 1-based turn counter for per-turn artifacts (browser screenshot dirs).
+    rt.turnCount++;
 
     // Reset the per-turn file snapshot before the new turn. This is
     // what makes "rewind last turn" work correctly across consecutive
@@ -301,6 +308,8 @@ class RuntimeManager {
       // TaskUpdate(taskId=N) calls in this turn can resolve against tasks
       // created in earlier turns (the adapter is recreated fresh each turn).
       initialTodos: session.todos ?? undefined,
+      // Tag the turn for per-turn artifacts (browser screenshot dirs).
+      turnNumber: rt.turnCount,
     };
 
     const handle = await provider.startTurn(req, rt.ctx);

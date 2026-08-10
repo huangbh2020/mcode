@@ -1828,6 +1828,11 @@ export type MainToRendererMessage =
  *  bare command name). Empty/absent → platform smart default. */
 export const TERMINAL_SHELL_SETTING_KEY = "terminal.shell";
 
+/** Setting key for the directory where agent browser screenshots are saved.
+ *  Empty/absent → the system Pictures directory. Screenshots are organized as
+ *  `<dir>/<sessionId>/turn-<N>/<timestamp>-<toolCallId>.png`. */
+export const BROWSER_SCREENSHOT_DIR_SETTING_KEY = "browser.screenshotDir";
+
 /** Snapshot of a live (or just-exited) terminal session. */
 export interface TerminalInfo {
   terminalId: string;

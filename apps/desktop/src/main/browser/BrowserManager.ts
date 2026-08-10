@@ -36,7 +36,7 @@ import { getMainWindow, sendToRenderer } from "@main/window.js";
 import { getEffectiveTheme } from "@main/lib/theme.js";
 import { log } from "@main/lib/logger.js";
 import { PICKER_INJECT_SCRIPT, PICKER_REMOVE_SCRIPT } from "./pickerScript.js";
-import { SNAPSHOT_SCRIPT, buildClickScript } from "./snapshotScript.js";
+import { SNAPSHOT_SCRIPT, buildClickScript, buildTypeScript } from "./snapshotScript.js";
 
 /** Metadata for a live browser view, returned by `list()` for agent discovery. */
 export interface BrowserInfo {
@@ -627,6 +627,39 @@ class BrowserManagerImpl {
       const msg = err instanceof Error ? err.message : String(err);
       log.warn(`browser click failed: ${id} ${msg}`);
       return { ok: false, error: `点击失败: ${msg}` };
+    }
+  }
+
+  /** Type text into an element (input / textarea / contenteditable) selected by
+   *  CSS selector. Uses the element's native value setter + dispatches
+   *  input/change events so React/Vue controlled inputs pick the value up (a
+   *  plain `el.value = text` assignment silently no-ops on them). Returns
+   *  post-action url/title like click(). The script (buildTypeScript)
+   *  JSON-encodes both selector and text, so neither can break out of the
+   *  querySelector / value assignment. */
+  async type(id: string, selector: string, text: string): Promise<BrowserClickResult> {
+    const live = this.get(id);
+    if (!live) return { ok: false, error: "浏览器不存在或已关闭" };
+    if (typeof selector !== "string" || selector.length === 0) {
+      return { ok: false, error: "selector 不能为空" };
+    }
+    if (typeof text !== "string") {
+      return { ok: false, error: "text 必须是字符串" };
+    }
+    try {
+      const script = buildTypeScript(selector, text);
+      const res = (await live.view.webContents.executeJavaScript(script, true)) as {
+        ok?: boolean;
+        error?: string;
+        url?: string;
+        title?: string;
+      };
+      if (res && res.error) return { ok: false, error: res.error };
+      return { ok: true, url: res?.url, title: res?.title };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      log.warn(`browser type failed: ${id} ${msg}`);
+      return { ok: false, error: `输入失败: ${msg}` };
     }
   }
 

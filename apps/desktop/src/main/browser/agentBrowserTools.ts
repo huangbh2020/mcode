@@ -18,9 +18,16 @@
  * resolved id is echoed back in the result text so the model can pass it on
  * subsequent calls (avoiding repeated discovery).
  */
+import { mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { app } from "electron";
 import { BrowserManager } from "./BrowserManager.js";
 import { log } from "@main/lib/logger.js";
-import type { BrowserDevicePreset } from "@contracts/ipc";
+import { SettingRepo } from "@main/store/repositories.js";
+import {
+  BROWSER_SCREENSHOT_DIR_SETTING_KEY,
+  type BrowserDevicePreset,
+} from "@contracts/ipc";
 
 /** The device presets an agent can request when navigating. Mirrors
  *  BrowserDevicePreset from contracts (desktop = no emulation, full viewport;
@@ -70,6 +77,55 @@ export interface BrowserToolContext {
   /** Emitted right after a screenshot is captured, so the renderer can attach
    *  an inline image block (Pi path). */
   onImage?: (info: { toolCallId: string; data: string; mimeType: "image/png" }) => void;
+  /** GUI session id the screenshot belongs to — used to organize the saved
+   *  file under `<dir>/<sessionId>/turn-<N>/`. Providers pass it when
+   *  available; omitted → screenshots are still shown inline but not saved to
+   *  the per-session layout. */
+  sessionId?: string;
+  /** 1-based turn number within the session (see StartTurnRequest.turnNumber).
+   *  Combined with sessionId, screenshots land in per-turn folders. */
+  turnNumber?: number;
+}
+
+/**
+ * Save a screenshot (base64 PNG) to disk under the configured screenshot
+ * directory, organized per session + turn:
+ *
+ *   `<dir>/<sessionId>/turn-<N>/<timestamp>-<toolCallId>.png`
+ *
+ * The base dir comes from the `browser.screenshotDir` setting; when unset it
+ * falls back to the system Pictures directory. Never throws — a failed save
+ * only logs a warning so the in-conversation screenshot display is unaffected.
+ * Returns the absolute saved path, or null when the save failed (or when no
+ * session context was provided).
+ */
+export function saveScreenshotToDisk(
+  data: string,
+  opts: { sessionId?: string; turnNumber?: number; toolCallId: string },
+): string | null {
+  if (!opts.sessionId || !data) return null;
+  const baseDir =
+    SettingRepo.get(BROWSER_SCREENSHOT_DIR_SETTING_KEY)?.trim() ||
+    app.getPath("pictures");
+  // Sanitize the session id for use as a directory name (ids are UUIDs, but
+  // guard against anything odd anyway).
+  const safeSession = opts.sessionId.replace(/[^\w.-]/g, "_");
+  const turnDir = join(baseDir, safeSession, `turn-${opts.turnNumber ?? 0}`);
+  try {
+    mkdirSync(turnDir, { recursive: true });
+    const ts = new Date().toISOString().replace(/[:.]/g, "-").replace("T", "-").slice(0, 19);
+    // Sanitize the toolCallId for the filename (it may contain characters
+    // that are invalid on some filesystems).
+    const safeCallId = opts.toolCallId.replace(/[^\w.-]/g, "_");
+    const filePath = join(turnDir, `${ts}-${safeCallId}.png`);
+    writeFileSync(filePath, Buffer.from(data, "base64"));
+    log.info(`browser screenshot saved: ${filePath}`);
+    return filePath;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    log.warn(`browser screenshot save failed: ${msg}`);
+    return null;
+  }
 }
 
 /** Allowed URL schemes for `browser_navigate`. `file:` / `javascript:` /
@@ -254,6 +310,36 @@ export async function browserClick(args: { selector: string; browserId?: string 
   );
 }
 
+/** `browser_type` — fill text into an element (input/textarea/contenteditable)
+ *  by CSS selector. The selector should come from a prior `browser_snapshot`'s
+ *  interactive list. Works with React/Vue controlled inputs (native value
+ *  setter + input/change events). Returns post-action url/title. */
+export async function browserType(args: {
+  selector: string;
+  text: string;
+  browserId?: string;
+}): Promise<ToolResult> {
+  const selector = (args.selector ?? "").trim();
+  if (!selector) return errorResult("selector 不能为空");
+  const value = (args.text ?? "").toString();
+  if (!value) return errorResult("text 不能为空");
+  const resolved = resolveBrowserId(args.browserId);
+  if (!resolved.ok) {
+    return errorResult(
+      resolved.reason === "no-live-browser"
+        ? "当前没有打开的浏览器。请先调用 browser_navigate({ url })。"
+        : resolved.reason,
+    );
+  }
+  const res = await BrowserManager.type(resolved.browserId, selector, value);
+  if (!res.ok) return errorResult(res.error ?? "输入失败");
+  return text(
+    `已向 "${selector}" 输入 "${value}"(browserId=${resolved.browserId})。当前 URL: ${res.url ?? "(未知)"}${
+      res.title ? `\n标题: ${res.title}` : ""
+    }`,
+  );
+}
+
 /** `browser_screenshot` — capture the current page as a PNG. Returns an image
  *  content block (so the model sees the screenshot) AND, when `ctx.onImage`
  *  is wired (Pi path), emits it for inline conversation rendering. */
@@ -284,9 +370,22 @@ export async function browserScreenshot(
   // below is parsed by the store from the tool_result.
   ctx.onImage?.({ toolCallId: ctx.toolCallId, data: res.data, mimeType: "image/png" });
 
+  // Save to disk under the configured screenshot dir (per session + turn).
+  // Best-effort: a failed save only drops the file, never the inline image.
+  const savedPath = saveScreenshotToDisk(res.data, {
+    sessionId: ctx.sessionId,
+    turnNumber: ctx.turnNumber,
+    toolCallId: ctx.toolCallId,
+  });
+
   return {
     content: [
-      { type: "text", text: `已截图(browserId=${resolved.browserId})。` },
+      {
+        type: "text",
+        text: `已截图(browserId=${resolved.browserId})。${
+          savedPath ? `\n已保存到: ${savedPath}` : ""
+        }`,
+      },
       { type: "image", data: res.data, mimeType: "image/png" },
     ],
   };

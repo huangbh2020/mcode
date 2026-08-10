@@ -11,6 +11,7 @@ import {
   IconBell,
   IconBrandGit,
   IconTerminal2,
+  IconWorld,
   IconCode,
   IconInfoCircle,
   type TablerIconProps,
@@ -22,6 +23,7 @@ import { ShortcutsPanel } from "./ShortcutsPanel.js";
 import { GeneralPanel } from "./GeneralPanel.js";
 import { GitPanel } from "./GitPanel.js";
 import { TerminalPanel } from "./TerminalPanel.js";
+import { BrowserPanel } from "./BrowserPanel.js";
 import { LspLanguagesPanel } from "./LspLanguagesPanel.js";
 import { NotificationsPanel } from "./NotificationsPanel.js";
 import { AboutPanel } from "./AboutPanel.js";
@@ -52,7 +54,7 @@ import { AboutPanel } from "./AboutPanel.js";
  * Note: the legacy “Claude CLI 路径” panel was removed - the Agent SDK bundles
  * its own claude binary, so an externally-configured path is no longer used.
  */
-type SectionId = "general" | "custom-models" | "skills" | "appearance" | "shortcuts" | "notifications" | "git" | "terminal" | "lsp-languages" | "about";
+type SectionId = "general" | "custom-models" | "skills" | "appearance" | "shortcuts" | "notifications" | "git" | "terminal" | "browser" | "lsp-languages" | "about";
 
 interface NavItem {
   id: SectionId;
@@ -70,6 +72,7 @@ const NAV_ITEMS: NavItem[] = [
   { id: "notifications", label: "消息通知", icon: IconBell },
   { id: "git", label: "Git", icon: IconBrandGit },
   { id: "terminal", label: "终端", icon: IconTerminal2 },
+  { id: "browser", label: "浏览器", icon: IconWorld },
   { id: "lsp-languages", label: "语言服务器", icon: IconCode },
   { id: "about", label: "关于", icon: IconInfoCircle },
 ];
@@ -160,6 +163,7 @@ export function SettingsPage() {
           {active === "notifications" && <NotificationsPanel />}
           {active === "git" && <GitPanel />}
           {active === "terminal" && <TerminalPanel />}
+          {active === "browser" && <BrowserPanel />}
           {active === "lsp-languages" && <LspLanguagesPanel />}
           {active === "about" && <AboutPanel />}
         </div>

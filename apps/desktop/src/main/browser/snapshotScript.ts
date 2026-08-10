@@ -157,3 +157,63 @@ export const CLICK_SCRIPT = `
 export function buildClickScript(selector: string): string {
   return CLICK_SCRIPT.replace("%SELECTOR_JSON%", JSON.stringify(JSON.stringify(selector)));
 }
+
+/**
+ * Type/fill script: locates an element by CSS selector and sets its value to
+ * the given text. Handles <input>, <textarea> and contenteditable elements.
+ *
+ * Value-setting strategy: instead of assigning `el.value = text` directly
+ * (which silently no-ops on React/Vue controlled inputs because the framework
+ * owns the value via its own setter), we use the element prototype's native
+ * value setter and then dispatch `input` + `change` events. React's onChange
+ * listens to the native `input` event, so the framework's state updates and
+ * the controlled value round-trips correctly.
+ *
+ * Both the selector and the text are passed in as JSON-stringified arguments
+ * and never interpolated into script source, so a hostile selector OR text
+ * (quotes / backslashes / newlines / `</script>`) can't break out.
+ */
+export const TYPE_SCRIPT = `
+(function (selectorJson, textJson) {
+  var sel, text;
+  try { sel = JSON.parse(selectorJson); } catch (e) { return { error: 'invalid selector json' }; }
+  try { text = JSON.parse(textJson); } catch (e) { return { error: 'invalid text json' }; }
+  if (typeof sel !== 'string' || !sel) return { error: 'empty selector' };
+  if (typeof text !== 'string') return { error: 'text must be a string' };
+  var el = document.querySelector(sel);
+  if (!el) return { error: 'element not found for selector: ' + sel };
+  try {
+    el.focus();
+    if (el.isContentEditable || el.getAttribute('contenteditable') === 'true') {
+      // Contenteditable: replace text content directly (keeps formatting tags).
+      el.textContent = text;
+    } else if (el.tagName === 'TEXTAREA') {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(el, text);
+    } else if (el.tagName === 'INPUT') {
+      var proto = Object.getPrototypeOf(el);
+      var desc = Object.getOwnPropertyDescriptor(proto, 'value') ||
+                 Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value');
+      if (!desc || !desc.set) return { error: 'input value setter unavailable' };
+      desc.set.call(el, text);
+    } else {
+      return { error: 'element is not an input, textarea or contenteditable: ' + sel };
+    }
+    // Dispatch change/input so framework state (React/Vue) picks the value up.
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+  } catch (e) {
+    return { error: 'type threw: ' + (e && e.message ? e.message : String(e)) };
+  }
+  return { ok: true, url: location.href, title: document.title };
+})(%SELECTOR_JSON%, %TEXT_JSON%);
+`;
+
+/**
+ * Build a ready-to-execute type script from a selector + text. Both are
+ * JSON-encoded (valid JS string literals) and substituted into their slots —
+ * same injection-safe pattern as buildClickScript.
+ */
+export function buildTypeScript(selector: string, text: string): string {
+  return TYPE_SCRIPT.replace("%SELECTOR_JSON%", JSON.stringify(JSON.stringify(selector)))
+    .replace("%TEXT_JSON%", JSON.stringify(JSON.stringify(text)));
+}

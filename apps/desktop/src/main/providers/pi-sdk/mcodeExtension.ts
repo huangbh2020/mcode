@@ -65,6 +65,7 @@ import {
   browserNavigate,
   browserSnapshot,
   browserClick,
+  browserType,
   browserScreenshot,
   type ToolResult,
 } from "@main/browser/agentBrowserTools.js";
@@ -147,6 +148,9 @@ export interface CreateMcodeExtensionOptions {
   /** Project root path — bound to auto-created browser views (for consistency
    *  with terminal/git). Passed through to the shared browser tools. */
   projectPath: string;
+  /** 1-based turn number within the session (see StartTurnRequest.turnNumber).
+   *  Passed to the browser tools so screenshots land in per-turn folders. */
+  turnNumber?: number;
 }
 
 /**
@@ -160,7 +164,7 @@ export interface CreateMcodeExtensionOptions {
  * useful for debugging whether the extension loaded.
  */
 export function createMcodeExtension(opts: CreateMcodeExtensionOptions): InlineExtension {
-  const { ctx, cwd, strict, sessionId, projectPath } = opts;
+  const { ctx, cwd, strict, sessionId, projectPath, turnNumber } = opts;
 
   // ── Plan mode state (per-turn, in-process) ──────────────────────────
   // Tracked here rather than via ctx.getPermissionMode() because the latter
@@ -179,7 +183,7 @@ export function createMcodeExtension(opts: CreateMcodeExtensionOptions): InlineE
     factory: (pi: ExtensionAPI) => {
       registerToolCallGuard(pi, { ctx, cwd, strict, sessionId, planMode });
       registerAskUserQuestionTool(pi, ctx);
-      registerBrowserTools(pi, { ctx, sessionId, projectPath });
+      registerBrowserTools(pi, { ctx, sessionId, projectPath, turnNumber });
       registerPlanModeTools(pi, { ctx, sessionId, planMode });
       registerSystemPromptInjector(pi);
     },
@@ -387,9 +391,9 @@ function registerAskUserQuestionTool(pi: ExtensionAPI, ctx: ProviderContext): vo
  */
 function registerBrowserTools(
   pi: ExtensionAPI,
-  deps: { ctx: ProviderContext; sessionId: string; projectPath: string },
+  deps: { ctx: ProviderContext; sessionId: string; projectPath: string; turnNumber?: number },
 ): void {
-  const { ctx, sessionId, projectPath } = deps;
+  const { ctx, sessionId, projectPath, turnNumber } = deps;
 
   // Convert a shared ToolResult into Pi's execute() return shape. They're
   // structurally identical (content[] + details), so this is effectively an
@@ -483,6 +487,29 @@ function registerBrowserTools(
   });
 
   pi.registerTool({
+    name: "browser_type",
+    label: "Browser Type",
+    description:
+      "向页面元素输入文本。selector 应来自 browser_snapshot 返回的可交互元素列表,定位到 input/textarea/contenteditable。" +
+      "text 为要输入的字符串。对 React/Vue 受控输入框也生效(原生 value setter + input/change 事件)。" +
+      "返回操作后的 URL 和标题。有副作用(会改变页面表单状态)。",
+    promptSnippet: "browser_type({selector, text, browserId?}): 向输入框输入文本",
+    parameters: Type.Object({
+      selector: Type.String({ description: "目标输入元素的 CSS selector(来自 browser_snapshot)" }),
+      text: Type.String({ description: "要输入的文本内容" }),
+      browserId: Type.Optional(Type.String({ description: "目标浏览器视图 id;省略则用第一个已开视图" })),
+    }),
+    async execute(_toolCallId, params) {
+      const { selector, text, browserId } = params as {
+        selector: string;
+        text: string;
+        browserId?: string;
+      };
+      return toPiResult(await browserType({ selector, text, browserId }));
+    },
+  });
+
+  pi.registerTool({
     name: "browser_screenshot",
     label: "Browser Screenshot",
     description:
@@ -496,6 +523,8 @@ function registerBrowserTools(
       const { browserId } = params as { browserId?: string };
       const r = await browserScreenshot({ browserId }, {
         toolCallId,
+        sessionId,
+        turnNumber,
         onImage: (info) => {
           // Emit a structured event so the renderer attaches an inline image
           // block (Pi path). Claude's image surfacing happens via the
@@ -673,10 +702,11 @@ const BROWSER_TOOLS_PROMPT = [
   `当需要打开网页、查看页面内容、或与网页交互时使用这组工具:`,
   `1. browser_navigate({ url, device? }): 打开一个网页(仅 http/https)。没有打开的浏览器时会自动创建一个。device 可选 desktop(默认,PC 全宽)/iphone/android(移动端模拟),测试移动端页面时用 iphone 或 android`,
   `2. browser_snapshot({ browserId? }): 读取页面结构化快照——可交互元素列表带可直接传给 browser_click 的 selector(只读)`,
-  `3. browser_click({ selector, browserId? }): 按 selector 点击元素(selector 来自 snapshot)`,
-  `4. browser_screenshot({ browserId? }): 截图,用于视觉确认布局/样式(只读)`,
-  `5. browser_list(): 列出所有打开的浏览器视图及其 browserId`,
-  `browserId 参数全部可选——省略时自动复用第一个已开视图。典型流程: navigate → snapshot 读内容 → 按需 click/screenshot。`,
+  `3. browser_type({ selector, text, browserId? }): 向 input/textarea/contenteditable 输入文本(selector 来自 snapshot)`,
+  `4. browser_click({ selector, browserId? }): 按 selector 点击元素(selector 来自 snapshot)`,
+  `5. browser_screenshot({ browserId? }): 截图,用于视觉确认布局/样式(只读)`,
+  `6. browser_list(): 列出所有打开的浏览器视图及其 browserId`,
+  `browserId 参数全部可选——省略时自动复用第一个已开视图。典型流程: navigate → snapshot 读内容 → 按需 type 填表 / click 点击 / screenshot 截图。`,
 ].join("\n");
 
 /**

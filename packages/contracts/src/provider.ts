@@ -113,6 +113,11 @@ export interface StartTurnRequest {
    *  correctly instead of being silently dropped on a fresh adapter that
    *  starts with an empty task list. */
   initialTodos?: SessionTodoItem[];
+  /** 1-based turn number for this session (incremented per user message by
+   *  RuntimeManager). Used by the browser tools to organize per-turn
+   *  screenshot directories. Optional — providers that don't need it ignore
+   *  it. */
+  turnNumber?: number;
 }
 
 /** Approval request passed from provider → host (for canUseTool-style callbacks). */
