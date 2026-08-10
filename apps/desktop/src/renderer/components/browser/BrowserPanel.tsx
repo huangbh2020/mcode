@@ -86,6 +86,9 @@ export function BrowserPanel({ mode }: BrowserPanelProps) {
   // Device-toolbar visibility (DevTools-style row under the address bar).
   const deviceToolbarOpen = useSessionStore((s) => s.browserDeviceToolbarOpen);
   const setDeviceToolbarOpen = useSessionStore((s) => s.setBrowserDeviceToolbarOpen);
+  // Suppression counter: while > 0 a renderer-DOM overlay (image lightbox,
+  // etc.) needs to cover the OS-level view, so we hide it. See the effect below.
+  const suppressed = useSessionStore((s) => s.browserViewSuppressed);
   // Shared tabs state (lifted to the store so both containers see the same list).
   const tabs = useSessionStore((s) => s.browserTabs);
   const activeTabId = useSessionStore((s) => s.browserActiveTabId);
@@ -172,11 +175,11 @@ export function BrowserPanel({ mode }: BrowserPanelProps) {
    *  rAF-throttled by callers. Background tabs are visible:false in main, so
    *  their setBounds is a no-op - only the active view moves.
    *
-   *  The "pc" preset is special: it renders at true 1920×1080 (viewport is NOT
-   *  clamped to the stage) and the view pans with the stage's scroll position
-   *  (viewX/Y = stage origin − scroll offset), so a narrow sidebar shows a
-   *  scrollable window onto the full-size page. Screenshots capture the full
-   *  1920×1080 regardless of the visible portion. */
+   *  The "pc" preset keeps the page's true 1920×1080 layout (the emulated
+   *  viewport is pinned to 1920×1080 via setDevice's viewportWidth/Height
+   *  override) but clamps the physical view to the stage so a narrow sidebar
+   *  never overflows onto the chat/other panels. The user scrolls inside the
+   *  native window (the page's own scrollbar) to see the rest of the page. */
   const syncBounds = useCallback(() => {
     const id = activeTabIdRef.current;
     const tab = tabsRef.current.find((t) => t.id === id);
@@ -197,12 +200,16 @@ export function BrowserPanel({ mode }: BrowserPanelProps) {
     let effW: number | undefined;
     let effH: number | undefined;
     if (dims && tab.device === "pc") {
-      // PC preset: full 1920×1080, never clamped. The view pans with the
-      // scroll container, so scrolling reveals different parts of the page.
-      viewW = dims.width;
-      viewH = dims.height;
-      viewX = Math.round(r.left - stage.scrollLeft);
-      viewY = Math.round(r.top - stage.scrollTop);
+      // PC preset: keep the true 1920×1080 emulated viewport (PC page layout)
+      // but clamp the physical view to the stage so it never overflows the
+      // sidebar onto other panels. The page renders its full PC layout and the
+      // user scrolls inside the native window to see beyond the visible area.
+      viewW = r.width;
+      viewH = r.height;
+      viewX = Math.round(r.left);
+      viewY = Math.round(r.top);
+      effW = dims.width;
+      effH = dims.height;
     } else if (dims) {
       // Other presets: the view's physical size MUST equal the emulated
       // viewport or the page gets clipped (content "显示不完整") and
@@ -344,6 +351,27 @@ export function BrowserPanel({ mode }: BrowserPanelProps) {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isActive]);
+
+  // React to the suppression counter: while > 0 a renderer-DOM overlay (image
+  // lightbox, etc.) must cover the OS-level WebContentsView, which always floats
+  // above the DOM — so hide the active view and restore it when the counter
+  // returns to zero. Only this (active) container owns the view, so inactive
+  // containers no-op (their view is already hidden by the isActive effect
+  // above). Mirrors the device-dropdown / confirm-destroy hide pattern.
+  useEffect(() => {
+    if (!isActive) return;
+    const tab = activeTabIdRef.current
+      ? tabsRef.current.find((t) => t.id === activeTabIdRef.current)
+      : null;
+    if (!tab) return;
+    if (suppressed > 0) {
+      void api.browser.hide({ browserId: tab.browserId });
+    } else {
+      void api.browser.show({ browserId: tab.browserId });
+      lastBoundsRef.current = null;
+      requestAnimationFrame(syncBounds);
+    }
+  }, [suppressed, isActive, syncBounds]);
 
   // When the component unmounts (container swap / panel close), hide the active
   // view so it can't linger over the workspace. The view survives in main.
@@ -797,29 +825,11 @@ export function BrowserPanel({ mode }: BrowserPanelProps) {
       )}
       {/* The stage is the measurement target for the active tab's
           WebContentsView. The view floats above it at OS level, so this div
-          stays visually empty - its only job is to occupy the right rect.
-          It doubles as a scroll container for the "pc" preset: a 1920×1080
-          spacer inside lets the user scroll to pan the OS-level view (whose
-          bounds are offset by scrollLeft/scrollTop in syncBounds). */}
+          stays visually empty - its only job is to occupy the right rect. The
+          spacer just fills the stage for every device (the "pc" preset no longer
+          pans via stage scroll — the page scrolls inside the native window). */}
       <div ref={stageRef} className="relative min-h-0 flex-1 overflow-auto bg-surface">
-        {/* Spacer that defines the scrollable area. For the pc preset it's the
-            full 1920×1080 device size (honoring rotation); otherwise it fills
-            the stage (no scrolling). */}
-        <div
-          className={cn(
-            activeTab?.device === "pc" && deviceToolbarOpen
-              ? "pointer-events-none"
-              : "h-full w-full",
-          )}
-          style={
-            activeTab?.device === "pc" && deviceToolbarOpen
-              ? (() => {
-                  const d = activeTab ? tabViewportDims(activeTab) : null;
-                  return { width: d?.width ?? 1920, height: d?.height ?? 1080 };
-                })()
-              : undefined
-          }
-        />
+        <div className="h-full w-full" />
         {error && (
           <div className="absolute inset-0 flex items-center justify-center">
             <p className="text-sm text-content-muted">{error}</p>

@@ -11,9 +11,6 @@ importers:
 
   .:
     devDependencies:
-      '@turbo/windows-64':
-        specifier: 2.10.9
-        version: 2.10.9
       turbo:
         specifier: ^2.10.9
         version: 2.10.9
@@ -1539,6 +1536,11 @@ packages:
   '@turbo/darwin-64@2.10.9':
     resolution: {integrity: sha512-Jh+pTGXLNz8+1tkUU13TI/f+ZOI+OvC4YbHi1H+57iSpLt5DR3xgptd+4sA07RdjdRR/RX/01uQQu2OkbzIefA==}
     cpu: [x64]
+    os: [darwin]
+
+  '@turbo/darwin-arm64@2.10.9':
+    resolution: {integrity: sha512-aqtpPkiIC4IUas8Vv27oJ3aDfTuP1d5wofd01dZ7gfhHRrIKuFdqQb4imvNnVFahcOViF9Jh8Oi7feDoz8/ciA==}
+    cpu: [arm64]
     os: [darwin]
 
   '@turbo/linux-64@2.10.9':
@@ -5105,7 +5107,7 @@ snapshots:
   '@jridgewell/trace-mapping@0.3.31':
     dependencies:
       '@jridgewell/resolve-uri': 3.1.2
-      '@jridgewell/sourcemap-codec': 1.4.15
+      '@jridgewell/sourcemap-codec': 1.5.0
 
   '@kwsites/file-exists@1.1.1(supports-color@7.2.0)':
     dependencies:
@@ -5668,13 +5670,17 @@ snapshots:
   '@turbo/darwin-64@2.10.9':
     optional: true
 
+  '@turbo/darwin-arm64@2.10.9':
+    optional: true
+
   '@turbo/linux-64@2.10.9':
     optional: true
 
   '@turbo/linux-arm64@2.10.9':
     optional: true
 
-  '@turbo/windows-64@2.10.9': {}
+  '@turbo/windows-64@2.10.9':
+    optional: true
 
   '@turbo/windows-arm64@2.10.9':
     optional: true
@@ -8816,6 +8822,7 @@ snapshots:
   turbo@2.10.9:
     optionalDependencies:
       '@turbo/darwin-64': 2.10.9
+      '@turbo/darwin-arm64': 2.10.9
       '@turbo/linux-64': 2.10.9
       '@turbo/linux-arm64': 2.10.9
       '@turbo/windows-64': 2.10.9

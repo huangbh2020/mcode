@@ -50,34 +50,24 @@ export function App() {
   // right panel is currently on files/git. The view is adopted into the
   // renderer's tab list so BrowserPanel's show/hide/bounds logic manages it.
   //
-  // Display mode is chosen by device: desktop → fullscreen overlay (wide pages
-  // need room); iphone/android → right sidebar (phone-width column fits the
-  // emulated viewport). setBrowserPanelOpen(true) forces the sidebar closed so
-  // the two containers never fight over the shared WebContentsView.
+  // The agent always opens in the right sidebar (scrollable column) regardless
+  // of device — a desktop page renders at full width inside the sidebar; a
+  // phone page narrows to the emulated viewport. The fullscreen overlay is
+  // never triggered automatically: it's reserved for the user to open manually
+  // via the "展开为 PC 全屏" button when they want more room. setBrowserPanelOpen
+  // (false) ensures the sidebar instance owns the view (isActive = !browserPanelOpen).
+  // The device toolbar is auto-opened so the requested emulation takes effect
+  // (collapsed = full-width desktop, ignoring the agent's device).
   useEffect(() => {
     const off = api.on.browserEvent((msg) => {
       if (msg.type !== "agentOpened") return;
       const p = (msg.payload as { url?: string; title?: string; device?: BrowserDevicePreset }) ?? {};
       const st = useSessionStore.getState();
       st.adoptAgentBrowserTab(msg.browserId, p);
-      const isDesktop = !p.device || p.device === "desktop";
-      if (isDesktop) {
-        // Overlay mode (fullscreen). setBrowserPanelOpen(true) closes the right
-        // panel so the sidebar BrowserPanel unmounts; the overlay instance takes
-        // over the view.
-        st.setBrowserPanelOpen(true);
-      } else {
-        // Sidebar mode (right panel). Ensure the overlay is closed first so the
-        // sidebar instance owns the view (isActive = !browserPanelOpen). Auto-
-        // open the device toolbar too: the view is only narrowed to the agent's
-        // requested device size while the toolbar is open (collapsed = full
-        // width), so without this an iphone/android navigate would render full-
-        // width and ignore the emulation.
-        st.setBrowserPanelOpen(false);
-        st.setRightPanelTab("browser");
-        st.setRightOpen(true);
-        st.setBrowserDeviceToolbarOpen(true);
-      }
+      st.setBrowserPanelOpen(false);
+      st.setRightPanelTab("browser");
+      st.setRightOpen(true);
+      st.setBrowserDeviceToolbarOpen(true);
     });
     return off;
   }, []);

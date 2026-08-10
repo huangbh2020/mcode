@@ -16,6 +16,7 @@
 import { useEffect, useState } from "react";
 import { Dialog } from "./dialog.js";
 import { cn } from "@renderer/lib/cn.js";
+import { useSessionStore } from "@renderer/stores/sessionStore.js";
 import {
   IconArrowsMaximize,
   IconChevronLeft,
@@ -84,6 +85,18 @@ export function ImageWithPreview({
     if (open) setViewIdx(Math.max(0, Math.min(count - 1, index)));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
+
+  // The embedded browser's page is an OS-level WebContentsView that floats
+  // above all renderer DOM, so this lightbox (a renderer-DOM overlay) would be
+  // covered by it. Increment the global suppression counter while open so
+  // BrowserPanel hides the view; the cleanup decrements on close/unmount so it
+  // restores. A counter composes safely if multiple overlays ever stack.
+  const suppressBrowserView = useSessionStore((s) => s.suppressBrowserView);
+  useEffect(() => {
+    if (!open) return;
+    suppressBrowserView(true);
+    return () => suppressBrowserView(false);
+  }, [open, suppressBrowserView]);
 
   const curSrc = gallerySrcs[Math.min(viewIdx, count - 1)] ?? src;
   const curAlt = count > 1 ? `${alt} ${Math.min(viewIdx, count - 1) + 1}/${count}` : alt;

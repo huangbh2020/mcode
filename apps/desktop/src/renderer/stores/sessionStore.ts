@@ -536,6 +536,13 @@ export interface SessionState {
   browserTabs: BrowserTab[];
   /** The currently active browser tab id (shared across containers). */
   browserActiveTabId: string | null;
+  /** Suppression counter for the embedded browser's OS-level WebContentsView.
+   *  The native view always floats above renderer DOM, so a renderer-DOM
+   *  overlay that must cover it (image lightbox, etc.) increments this while
+   *  open; BrowserPanel reacts by hiding the view, and restores it when the
+   *  counter returns to zero. A counter (not a boolean) composes correctly
+   *  when multiple overlays are open at once. NOT persisted. */
+  browserViewSuppressed: number;
   /* ── Draggable pane sizes ──
    *  Persisted as one JSON blob (UI_PANE_WIDTHS_SETTING_KEY) and re-clamped
    *  on hydrate. Updated live during drag (synchronous set); the DB write is
@@ -904,6 +911,11 @@ export interface SessionState {
   setBrowserTabs: (tabs: BrowserTab[]) => void;
   /** Set the active browser tab id. */
   setBrowserActiveTabId: (id: string | null) => void;
+  /** Increment/decrement the browser-view suppression counter. While > 0 the
+   *  active WebContentsView is hidden so renderer-DOM overlays (image lightbox,
+   *  etc.) can cover it. Call `suppressBrowserView(false)` in a cleanup to
+   *  restore. NOT persisted. */
+  suppressBrowserView: (suppressed: boolean) => void;
   /** Append a new browser tab. */
   addBrowserTab: (tab: BrowserTab) => void;
   /** Remove a browser tab by its renderer-local id; returns nothing. */
@@ -2374,6 +2386,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   browserDeviceToolbarOpen: false,
   browserTabs: [],
   browserActiveTabId: null,
+  browserViewSuppressed: 0,
   // Draggable pane sizes. Persisted as one JSON blob (UI_PANE_WIDTHS_SETTING_KEY);
   // init() hydrates + clamps. These defaults match the original hardcoded
   // widths so the first-run layout is unchanged.
@@ -4539,6 +4552,8 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   },
   setBrowserTabCount: (count) => set({ browserTabCount: Math.max(0, count) }),
   setBrowserDeviceToolbarOpen: (open) => set({ browserDeviceToolbarOpen: open }),
+  suppressBrowserView: (suppressed) =>
+    set((s) => ({ browserViewSuppressed: Math.max(0, s.browserViewSuppressed + (suppressed ? 1 : -1)) })),
   setBrowserTabs: (tabs) => set({ browserTabs: tabs }),
   setBrowserActiveTabId: (id) => set({ browserActiveTabId: id }),
   addBrowserTab: (tab) => set((s) => ({ browserTabs: [...s.browserTabs, tab] })),

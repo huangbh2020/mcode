@@ -19,7 +19,6 @@
     "package": "turbo run package"
   },
   "devDependencies": {
-    "@turbo/windows-64": "2.10.9",
     "turbo": "^2.10.9",
     "typescript": "^5.7.0"
   }
