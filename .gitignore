@@ -37,5 +37,10 @@ yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 
+# Turbo build cache — binary .tar.zst archives, machine-local, regenerated on
+# every run. Must never be versioned: git pull/checkout restoring stale cache
+# files crashes the turbo binary on startup (0xC0000409).
+.turbo/
+
 # ZCode session artifacts (local planning drafts, scratch)
 .zcode/

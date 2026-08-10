@@ -276,7 +276,9 @@ function BatchToolGroup({
         onClick={(e) => toggleHoldPosition(e, setOpen)}
         className="flex w-full items-center gap-2 py-1.5 text-left hover:bg-surface-muted/40"
       >
-        <IconTools size={13} className="shrink-0 text-content-subtle" />
+        {/* 操作集合: a stack of layers reads as "a set of folded operations",
+            clearer than the toolbox wrench for the N-ops batch header. */}
+        <IconStack2 size={13} className="shrink-0 text-content-subtle" />
         <span className="font-medium text-content-muted">{label}</span>
         {breakdown && <span className="truncate text-content-subtle">{breakdown}</span>}
         {/* Live current-operation ticker - only while the turn is streaming.

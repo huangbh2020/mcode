@@ -61,6 +61,7 @@ import {
   type LspLanguageState,
   type PickedElement,
   type BrowserDevicePreset,
+  type BrowserOrientation,
 } from "@contracts/ipc";
 
 /** One browser tab, shared across the sidebar and overlay containers. `id` is
@@ -78,6 +79,13 @@ export interface BrowserTab {
   pickMode: boolean;
   /** Device emulation preset (desktop = full width, mobile = narrow). */
   device: BrowserDevicePreset;
+  /** Custom viewport width — set when device === "custom". */
+  customWidth?: number;
+  /** Custom viewport height — set when device === "custom". */
+  customHeight?: number;
+  /** Screen orientation (portrait/landscape). "landscape" swaps width/height
+   *  when emulating. Defaults to "portrait" when absent. */
+  orientation?: BrowserOrientation;
 }
 import type { BuiltinModelOption, UserInputAnswers } from "@contracts/provider";
 import { useToastStore } from "@renderer/stores/toastStore.js";
@@ -517,6 +525,11 @@ export interface SessionState {
    *  the Titlebar toggle button can show a count badge). Updated by the panel
    *  via setBrowserTabCount. NOT persisted. */
   browserTabCount: number;
+  /** Device-toolbar visibility in the browser panel (the DevTools-style bar
+   *  under the address bar with the device dropdown + custom dims + rotate).
+   *  Toggled by the 📱 button in BrowserToolbar; a per-session in-memory flag
+   *  (NOT persisted) like the other browser layout state. */
+  browserDeviceToolbarOpen: boolean;
   /** Open browser tabs, shared between the sidebar (mobile-first) and overlay
    *  (PC fullscreen) containers. Each owns a main-process WebContentsView by
    *  browserId; the view pool survives container swaps. NOT persisted. */
@@ -882,6 +895,9 @@ export interface SessionState {
   setBottomTerminalOpen: (open: boolean) => void;
   /** Toggle the browser panel open/closed (direct set). NOT persisted. */
   setBrowserPanelOpen: (open: boolean) => void;
+  /** Set the browser device-toolbar visibility (DevTools-style bar under the
+   *  address bar). NOT persisted. */
+  setBrowserDeviceToolbarOpen: (open: boolean) => void;
   /** Update the open-browser-tab count (drives the Titlebar badge). */
   setBrowserTabCount: (count: number) => void;
   /** Replace the whole browser-tabs list (shared sidebar/overlay state). */
@@ -900,7 +916,12 @@ export interface SessionState {
    *  already exists, just updates its url/title/device and activates it. */
   adoptAgentBrowserTab: (
     browserId: string,
-    info: { url?: string; title?: string; device?: BrowserDevicePreset },
+    info: {
+      url?: string;
+      title?: string;
+      device?: BrowserDevicePreset;
+      orientation?: BrowserOrientation;
+    },
   ) => void;
   /** Apply an incremental delta to the left sidebar width (clamped, then a
    *  debounced DB write). Called by the drag handle on every mousemove. */
@@ -2350,6 +2371,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   // Browser panel overlay - closed by default. NOT persisted.
   browserPanelOpen: false,
   browserTabCount: 0,
+  browserDeviceToolbarOpen: false,
   browserTabs: [],
   browserActiveTabId: null,
   // Draggable pane sizes. Persisted as one JSON blob (UI_PANE_WIDTHS_SETTING_KEY);
@@ -4516,6 +4538,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     }
   },
   setBrowserTabCount: (count) => set({ browserTabCount: Math.max(0, count) }),
+  setBrowserDeviceToolbarOpen: (open) => set({ browserDeviceToolbarOpen: open }),
   setBrowserTabs: (tabs) => set({ browserTabs: tabs }),
   setBrowserActiveTabId: (id) => set({ browserActiveTabId: id }),
   addBrowserTab: (tab) => set((s) => ({ browserTabs: [...s.browserTabs, tab] })),
@@ -4530,7 +4553,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     const existing = s.browserTabs.find((t) => t.browserId === browserId);
     if (existing) {
       // Already adopted — refresh url/title/device + activate it.
-      if (info.url || info.title || info.device) {
+      if (info.url || info.title || info.device || info.orientation) {
         set({
           browserTabs: s.browserTabs.map((t) =>
             t.browserId === browserId
@@ -4539,6 +4562,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
                   ...(typeof info.url === "string" ? { url: info.url } : {}),
                   ...(typeof info.title === "string" ? { title: info.title } : {}),
                   ...(info.device ? { device: info.device } : {}),
+                  ...(info.orientation
+                    ? { orientation: info.orientation }
+                    : {}),
                 }
               : t,
           ),
@@ -4559,6 +4585,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       canGoForward: false,
       pickMode: false,
       device: info.device ?? "desktop",
+      orientation: info.orientation,
     };
     set({ browserTabs: [...s.browserTabs, tab], browserActiveTabId: tab.id });
   },

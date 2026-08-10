@@ -268,6 +268,9 @@ export { RiApps2Line } from "react-icons/ri";
 // Phosphor icons
 export { PiRobot } from "react-icons/pi";
 
+// Phosphor icons — browser device toolbar rotate (portrait/landscape)
+export { PiArrowsClockwise } from "react-icons/pi";
+
 // Simple Icons (brands)
 export { SiGithub } from "react-icons/si";
 export { SiClaude } from "react-icons/si";

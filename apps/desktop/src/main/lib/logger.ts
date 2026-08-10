@@ -16,7 +16,15 @@ function getLogFile(): string {
 
 function write(level: string, msg: string): void {
   const line = `${new Date().toISOString()} [${level}] ${msg}\n`;
-  process.stderr.write(line);
+  // stderr 管道可能已断(EPIPE —— 父进程 turbo/electron-vite 关闭了读端)。
+  // 这里一旦抛出,uncaughtException handler 会调 log.error() 再次写 stderr,
+  // 递归到栈溢出(0xC0000409 STATUS_STACK_BUFFER_OVERRUN)。吞掉 —— 文件 sink
+  // 才是持久记录。
+  try {
+    process.stderr.write(line);
+  } catch {
+    // best-effort; if stderr is broken, the file sink below still records it
+  }
   try {
     appendFileSync(getLogFile(), line);
   } catch {

@@ -3,8 +3,14 @@ import { cn } from "@renderer/lib/cn.js";
 import { api } from "@renderer/lib/api.js";
 import { useSessionStore } from "@renderer/stores/sessionStore.js";
 import type { BrowserTab } from "@renderer/stores/sessionStore.js";
-import type { PickedElement, BrowserDevicePreset } from "@contracts/ipc";
+import {
+  resolveBrowserDeviceSpec,
+  type PickedElement,
+  type BrowserDevicePreset,
+  type BrowserOrientation,
+} from "@contracts/ipc";
 import { BrowserToolbar } from "./BrowserToolbar.js";
+import { DeviceToolbar } from "./DeviceToolbar.js";
 import { BrowserTabs, type BrowserTabDisplay } from "./BrowserTabs.js";
 import { PickedElementsBar } from "./PickedElementsBar.js";
 import { ConfirmDialog } from "@renderer/components/ui/confirm-dialog.js";
@@ -40,14 +46,23 @@ export interface BrowserPanelProps {
   mode: BrowserMode;
 }
 
-/** Emulated viewport widths for mobile presets (overlay mode). The view's
- *  bounds are narrowed to this width and centered in the stage so the page
- *  renders at phone size. Sidebar mode ignores this and fills the column. */
-const DEVICE_WIDTH: Record<BrowserDevicePreset, number | null> = {
-  desktop: null, // full stage width
-  iphone: 390,
-  android: 412,
-};
+/** Emulated viewport dims for a tab, honoring orientation (landscape swaps
+ *  width/height) and custom width/height. Returns null for desktop (no
+ *  emulation — the view fills the stage). Used by syncBounds to narrow the
+ *  view to a device-sized column centered in the stage (both overlay and
+ *  sidebar modes). */
+function tabViewportDims(tab: BrowserTab): { width: number; height: number } | null {
+  if (tab.device === "desktop") return null;
+  const spec = resolveBrowserDeviceSpec(tab.device, {
+    width: tab.customWidth,
+    height: tab.customHeight,
+  });
+  const landscape = tab.orientation === "landscape";
+  return {
+    width: landscape ? spec.height : spec.width,
+    height: landscape ? spec.width : spec.height,
+  };
+}
 
 /** Generate a renderer-local tab id (distinct from the main-process browserId). */
 function newTabId(): string {
@@ -68,6 +83,9 @@ export function BrowserPanel({ mode }: BrowserPanelProps) {
   const projects = useSessionStore((s) => s.projects);
   const enqueueChatElement = useSessionStore((s) => s.enqueueChatElement);
   const setBrowserTabCount = useSessionStore((s) => s.setBrowserTabCount);
+  // Device-toolbar visibility (DevTools-style row under the address bar).
+  const deviceToolbarOpen = useSessionStore((s) => s.browserDeviceToolbarOpen);
+  const setDeviceToolbarOpen = useSessionStore((s) => s.setBrowserDeviceToolbarOpen);
   // Shared tabs state (lifted to the store so both containers see the same list).
   const tabs = useSessionStore((s) => s.browserTabs);
   const activeTabId = useSessionStore((s) => s.browserActiveTabId);
@@ -100,9 +118,18 @@ export function BrowserPanel({ mode }: BrowserPanelProps) {
   const stageRef = useRef<HTMLDivElement | null>(null);
   /** Latest bounds sent to main, so re-showing the active tab can re-sync. */
   const lastBoundsRef = useRef<{ x: number; y: number; w: number; h: number } | null>(null);
+  /** Ref mirror of deviceToolbarOpen for syncBounds (which is []-memoized). */
+  const deviceToolbarOpenRef = useRef(deviceToolbarOpen);
+  deviceToolbarOpenRef.current = deviceToolbarOpen;
   /** Ref mirror of tabs/activeTabId so async callbacks read fresh values. */
   const tabsRef = useRef<BrowserTab[]>([]);
   const activeTabIdRef = useRef<string | null>(null);
+  /** Whether the device dropdown is open. While open we hide the active view
+   *  so the OS-level WebContentsView can't cover the renderer-DOM popup (the
+   *  view parks offscreen; it's re-shown + re-synced on close). Kept in a ref
+   *  (not state) because only the hide/show effect reads it — a render isn't
+   *  needed. */
+  const deviceMenuOpenRef = useRef(false);
   /** Ref mirror of pickedItems so handleAddPicked reads the fresh list. */
   const pickedItemsRef = useRef<PickedElement[]>([]);
   useEffect(() => {
@@ -123,8 +150,14 @@ export function BrowserPanel({ mode }: BrowserPanelProps) {
   /** Whether THIS container is currently the active one (owns the views). The
    *  overlay is active while `browserPanelOpen`; the sidebar is active while
    *  mounted AND the overlay is NOT open (overlay takes precedence so the two
-   *  containers never fight over the same view). */
-  const isActive = mode === "overlay" ? open : !open;
+   *  containers never fight over the same view). BOTH deactivate while the
+   *  settings overlay is open: the browser's WebContentsView is an OS-level
+   *  surface that floats ABOVE the renderer DOM, so no CSS z-index can stack
+   *  the settings page on top of it — the only way to keep the settings panel
+   *  clickable is to hide the view (hide() parks it offscreen, the session
+   *  survives and re-shows on return). */
+  const settingsOpen = useSessionStore((s) => s.settingsOpen);
+  const isActive = settingsOpen ? false : mode === "overlay" ? open : !open;
 
   const activeTab = tabs.find((t) => t.id === activeTabId) ?? null;
 
@@ -134,13 +167,10 @@ export function BrowserPanel({ mode }: BrowserPanelProps) {
     : null;
 
   /** Send the placeholder div's window-relative rect to main for the active
-   *  tab's view. In overlay mode with a mobile device preset, the view is
-   *  narrowed to the device's emulated width and centered horizontally in the
-   *  stage (so the page renders at phone size with empty space on both sides).
-   *  In sidebar mode the view always fills the sidebar width (mobile pages are
-   *  expected to reflow; the sidebar IS the phone-sized column). rAF-throttled
-   *  by callers. Background tabs are visible:false in main, so their setBounds
-   *  is a no-op - only the active view moves. */
+   *  tab's view. The view is sized to the emulated device (or the stage when
+   *  the device is larger than the available space) and centered in the stage.
+   *  rAF-throttled by callers. Background tabs are visible:false in main, so
+   *  their setBounds is a no-op - only the active view moves. */
   const syncBounds = useCallback(() => {
     const id = activeTabIdRef.current;
     const tab = tabsRef.current.find((t) => t.id === id);
@@ -148,19 +178,36 @@ export function BrowserPanel({ mode }: BrowserPanelProps) {
     if (!tab || !stage) return;
     const r = stage.getBoundingClientRect();
     if (r.width < 1 || r.height < 1) return;
+    // Device emulation active only while the device toolbar is open (collapsed
+    // = desktop full width). Desktop fills the stage.
+    const dims =
+      deviceToolbarOpenRef.current && tab.device !== "desktop"
+        ? tabViewportDims(tab)
+        : null;
     let viewW: number;
-    let viewX: number;
-    if (mode === "sidebar") {
-      // Sidebar: fill the column. The sidebar width is the device width.
-      viewW = r.width;
-      viewX = Math.round(r.left);
+    let viewH: number;
+    let effW: number | undefined;
+    let effH: number | undefined;
+    if (dims) {
+      // The view's physical size MUST equal the emulated viewport or the page
+      // gets clipped (content "显示不完整") and capturePage() returns black
+      // frames. When the device dims fit the stage, use them exactly; when
+      // they exceed it (narrow sidebar, short window), clamp to the stage and
+      // override the emulated viewport to match — the page reflows to the
+      // available space instead of being cut off.
+      viewW = Math.min(dims.width, r.width);
+      viewH = Math.min(dims.height, r.height);
+      if (viewW !== dims.width || viewH !== dims.height) {
+        effW = Math.round(viewW);
+        effH = Math.round(viewH);
+      }
     } else {
-      // Overlay: narrow + center for mobile presets; full width for desktop.
-      const devW = DEVICE_WIDTH[tab.device];
-      viewW = devW != null ? Math.min(devW, r.width) : r.width;
-      viewX = devW != null ? Math.round(r.left + (r.width - viewW) / 2) : Math.round(r.left);
+      viewW = r.width;
+      viewH = r.height;
     }
-    const bounds = { x: viewX, y: Math.round(r.top), w: Math.round(viewW), h: Math.round(r.height) };
+    const viewX = dims ? Math.round(r.left + (r.width - viewW) / 2) : Math.round(r.left);
+    const viewY = dims ? Math.round(r.top + (r.height - viewH) / 2) : Math.round(r.top);
+    const bounds = { x: viewX, y: viewY, w: Math.round(viewW), h: Math.round(viewH) };
     const prev = lastBoundsRef.current;
     if (prev && prev.x === bounds.x && prev.y === bounds.y && prev.w === bounds.w && prev.h === bounds.h) return;
     lastBoundsRef.current = bounds;
@@ -171,7 +218,21 @@ export function BrowserPanel({ mode }: BrowserPanelProps) {
       width: bounds.w,
       height: bounds.h,
     });
-  }, [mode]);
+    // If the emulated viewport was clamped to the stage, re-apply device
+    // emulation with the effective size so the page viewport matches the
+    // view's physical bounds (no clipping, screenshots stay valid).
+    if (effW != null && effH != null) {
+      void api.browser.setDevice({
+        browserId: tab.browserId,
+        device: tab.device,
+        width: tab.customWidth,
+        height: tab.customHeight,
+        orientation: tab.orientation ?? "portrait",
+        viewportWidth: effW,
+        viewportHeight: effH,
+      });
+    }
+  }, []);
 
   /** Create a new browser view (main) + a new tab entry, hide the old active
    *  tab's view, show the new one, and focus it. Returns the new tab or null. */
@@ -431,26 +492,109 @@ export function BrowserPanel({ mode }: BrowserPanelProps) {
     });
   }, [activeTab, patchTabInStore]);
 
-  /** Switch the active tab's device emulation preset. The main process applies
-   *  Chromium device emulation (mobile viewport + touch + UA); the overlay
-   *  renderer narrows the view's bounds to the device width and centers it
-   *  (sidebar always fills the column). The bounds re-sync happens on the next
-   *  animation frame. */
-  const handleDeviceChange = useCallback(
-    (device: BrowserDevicePreset) => {
-      if (!activeTab || activeTab.device === device) return;
-      void api.browser.setDevice({ browserId: activeTab.browserId, device }).then((res) => {
-        if (!res.ok) return;
-        patchTabInStore(activeTab.browserId, { device });
-        // Force a bounds re-sync: the dedupe check in syncBounds compares
-        // against lastBoundsRef, so we must clear it to let the new (narrower
-        // or wider) rect through.
+  /** The device dropdown is a renderer-DOM popup; the page behind it is an
+   *  OS-level WebContentsView that always floats above the DOM. So while the
+   *  dropdown is open we hide the active view (parked offscreen, session kept)
+   *  and re-show + re-sync it when the dropdown closes — the same pattern the
+   *  confirm-destroy dialog uses. Only acts when this container is active.
+   *  Edge cases are covered by the existing isActive show/hide effect: if the
+   *  container deactivates while the menu is open (settings opened, mode
+   *  switch, project switch), its hide effect hides the view anyway, and
+   *  reactivation re-shows it via the show branch. */
+  const handleDeviceMenuOpenChange = useCallback(
+    (open: boolean) => {
+      deviceMenuOpenRef.current = open;
+      if (!isActive) return;
+      const tab = activeTabIdRef.current
+        ? tabsRef.current.find((t) => t.id === activeTabIdRef.current)
+        : null;
+      if (!tab) return;
+      if (open) {
+        void api.browser.hide({ browserId: tab.browserId });
+      } else {
+        void api.browser.show({ browserId: tab.browserId });
         lastBoundsRef.current = null;
         requestAnimationFrame(syncBounds);
-      });
+      }
+    },
+    [isActive, syncBounds],
+  );
+
+  /** Switch the active tab's device/viewport. The main process applies
+   *  Chromium device emulation (mobile viewport + touch + UA); the renderer
+   *  narrows the view's bounds to the emulated size and centers it. For
+   *  "custom" the given width/height are used; orientation "landscape" swaps
+   *  the dims. The bounds re-sync happens on the next animation frame. */
+  const handleViewportChange = useCallback(
+    (
+      device: BrowserDevicePreset,
+      opts?: { width?: number; height?: number; orientation?: BrowserOrientation },
+    ) => {
+      if (!activeTab) return;
+      const orientation = opts?.orientation ?? "portrait";
+      const customWidth = device === "custom" ? opts?.width : undefined;
+      const customHeight = device === "custom" ? opts?.height : undefined;
+      if (
+        activeTab.device === device &&
+        (activeTab.orientation ?? "portrait") === orientation &&
+        (device !== "custom" ||
+          (activeTab.customWidth === customWidth &&
+            activeTab.customHeight === customHeight))
+      ) {
+        return;
+      }
+      void api.browser
+        .setDevice({
+          browserId: activeTab.browserId,
+          device,
+          width: opts?.width,
+          height: opts?.height,
+          orientation,
+        })
+        .then((res) => {
+          if (!res.ok) return;
+          patchTabInStore(activeTab.browserId, {
+            device,
+            ...(device === "custom"
+              ? { customWidth, customHeight }
+              : { customWidth: undefined, customHeight: undefined }),
+            orientation,
+          });
+          // Force a bounds re-sync: the dedupe check in syncBounds compares
+          // against lastBoundsRef, so we must clear it to let the new (narrower
+          // or wider) rect through.
+          lastBoundsRef.current = null;
+          requestAnimationFrame(syncBounds);
+        });
     },
     [activeTab, patchTabInStore, syncBounds],
   );
+
+  /** Toggle the device toolbar. Collapsing/expanding changes whether the view
+   *  is narrowed to the device size (collapsed = full width), so force a
+   *  bounds re-sync after the store updates (the dedupe check in syncBounds
+   *  needs lastBoundsRef cleared).
+   *
+   *  Collapsing while a mobile preset is active ALSO resets the device to
+   *  "desktop": main keeps Chromium device emulation (390×844 etc.) applied
+   *  until setDevice("desktop") disables it, so a full-width view with a
+   *  still-active emulation viewport is mismatched — capturePage() then
+   *  returns a black/blank screenshot. "Collapse = desktop full width" keeps
+   *  the renderer view bounds and the main emulation state in sync. */
+  const handleToggleDeviceToolbar = useCallback(() => {
+    const opening = !deviceToolbarOpenRef.current;
+    const tab = activeTabIdRef.current
+      ? tabsRef.current.find((t) => t.id === activeTabIdRef.current)
+      : null;
+    if (!opening && tab && tab.device !== "desktop") {
+      // Collapsing with a mobile preset: reset to desktop (disables main's
+      // emulation) so the full-width view matches the disabled emulation.
+      void handleViewportChange("desktop");
+    }
+    setDeviceToolbarOpen(opening);
+    lastBoundsRef.current = null;
+    requestAnimationFrame(syncBounds);
+  }, [setDeviceToolbarOpen, handleViewportChange, syncBounds]);
 
   /** Select a tab: hide the old active view, show the new one. */
   const handleSelectTab = useCallback(
@@ -606,18 +750,32 @@ export function BrowserPanel({ mode }: BrowserPanelProps) {
         canGoBack={activeTab?.canGoBack ?? false}
         canGoForward={activeTab?.canGoForward ?? false}
         pickMode={activeTab?.pickMode ?? false}
-        device={activeTab?.device ?? "desktop"}
+        deviceToolbarOpen={deviceToolbarOpen}
         onUrlChange={(u) => activeTab && patchTabInStore(activeTab.browserId, { url: u })}
         onNavigate={handleNavigate}
         onBack={handleBack}
         onForward={handleForward}
         onReload={handleReload}
         onTogglePickMode={handleTogglePickMode}
-        onDeviceChange={handleDeviceChange}
+        onToggleDeviceToolbar={handleToggleDeviceToolbar}
         onClose={handleClose}
         onSwitchMode={handleSwitchMode}
         onRequestDestroy={handleRequestDestroy}
       />
+      {/* Device toolbar — the DevTools-style row (device dropdown + custom
+          dims + rotate), toggled by the 📱 button above. Rendered between the
+          address bar and the stage so the stage (and the view) sits below it. */}
+      {deviceToolbarOpen && activeTab && (
+        <DeviceToolbar
+          device={activeTab.device}
+          customWidth={activeTab.customWidth}
+          customHeight={activeTab.customHeight}
+          orientation={activeTab.orientation}
+          onViewportChange={handleViewportChange}
+          onMenuOpenChange={handleDeviceMenuOpenChange}
+          onClose={() => handleToggleDeviceToolbar()}
+        />
+      )}
       {/* The stage is the measurement target for the active tab's
           WebContentsView. The view floats above it at OS level, so this div
           stays visually empty - its only job is to occupy the right rect. */}

@@ -96,7 +96,7 @@ function SelectPopup({ className, ...props }: SelectPopupProps) {
   return (
     <BaseSelect.Popup
       className={cn(
-        "z-50 origin-top rounded-md border border-edge bg-surface py-1 shadow-lg",
+        "origin-top rounded-md border border-edge bg-surface py-1 shadow-lg",
         "data-[ending-style]:scale-y-95 data-[ending-style]:opacity-0 data-[starting-style]:scale-y-95 data-[starting-style]:opacity-0",
         "transition-[transform,opacity] duration-100",
         className,
@@ -121,13 +121,22 @@ function SelectPortal(
  * requires `Select.Popup` to live inside a `Select.Positioner` (the popup
  * itself doesn't read the positioning context, so omitting this throws
  * "SelectPositionerContext is missing"). Place within `<Select.Portal>`.
+ *
+ * The z-index MUST live on the Positioner, not the Popup: the Positioner is
+ * the `position: fixed` element that participates in the root stacking
+ * context, while the Popup is `position: static` (a z-index there is inert).
+ * Without it, the popup renders BELOW any overlay with a positive z-index
+ * (e.g. the settings overlay in App.tsx is `z-30`), so the dropdown appears
+ * unclickable/invisible. Matches Tooltip.Positioner's `z-[60]` convention.
  */
 export type SelectPositionerProps = React.ComponentPropsWithoutRef<
   typeof BaseSelect.Positioner
 >;
 
 function SelectPositioner({ className, ...props }: SelectPositionerProps) {
-  return <BaseSelect.Positioner className={cn(className)} {...props} />;
+  return (
+    <BaseSelect.Positioner className={cn("z-[60]", className)} {...props} />
+  );
 }
 
 /* ───────── List ───────── */

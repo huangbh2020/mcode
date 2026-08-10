@@ -1915,7 +1915,17 @@ export const BrowserCreateSchema = z.object({
    *  is ready (dom-ready). Used by the sidebar container to start in mobile
    *  mode without calling setDevice too early (which can crash the GPU
    *  process before it's initialized). Omit = desktop (no emulation). */
-  initialDevice: z.enum(["desktop", "iphone", "android"]).optional(),
+  initialDevice: z
+    .enum([
+      "desktop",
+      "iphone",
+      "iphone-se",
+      "android",
+      "galaxy-s23",
+      "ipad-mini",
+      "custom",
+    ])
+    .optional(),
 });
 export type BrowserCreateInput = z.infer<typeof BrowserCreateSchema>;
 
@@ -1972,14 +1982,111 @@ export type BrowserCloseInput = z.infer<typeof BrowserCloseSchema>;
 
 /** Device presets for the browser panel's H5/mobile emulation. "desktop" is
  *  the default (no emulation); the mobile presets set a viewport width/height
- *  + deviceScaleFactor + mobile screenPosition via enableDeviceEmulation. */
-export type BrowserDevicePreset = "desktop" | "iphone" | "android";
+ *  + deviceScaleFactor + mobile screenPosition via enableDeviceEmulation.
+ *  "custom" uses the width/height passed at set-device time instead of a fixed
+ *  preset. */
+export type BrowserDevicePreset =
+  | "desktop"
+  | "iphone"
+  | "iphone-se"
+  | "android"
+  | "galaxy-s23"
+  | "ipad-mini"
+  | "custom";
+
+/** Screen orientation for device emulation. "landscape" swaps the preset's
+ *  width/height before applying emulation (e.g. 390×844 → 844×390). */
+export type BrowserOrientation = "portrait" | "landscape";
+
+/** One entry in the shared device preset catalog. `width`/`height` are the
+ *  portrait-orientation logical (CSS) viewport dims; `scale` is the
+ *  deviceScaleFactor passed to enableDeviceEmulation. Kept in contracts so
+ *  main (BrowserManager.setDevice) and renderer (BrowserPanel bounds sync +
+ *  BrowserToolbar labels) read the same numbers. */
+export interface BrowserDeviceSpec {
+  id: BrowserDevicePreset;
+  label: string;
+  width: number;
+  height: number;
+  scale: number;
+}
+
+/** Shared preset catalog — single source of truth for the device selector.
+ *  "custom" is a menu entry (no fixed dims; width/height come from the input
+ *  fields at set time). Desktop is the no-emulation default. */
+export const BROWSER_DEVICE_PRESETS: BrowserDeviceSpec[] = [
+  { id: "desktop", label: "桌面端", width: 0, height: 0, scale: 1 },
+  { id: "iphone", label: "iPhone 14", width: 390, height: 844, scale: 3 },
+  { id: "iphone-se", label: "iPhone SE", width: 375, height: 667, scale: 2 },
+  { id: "android", label: "Pixel 7", width: 412, height: 915, scale: 2.625 },
+  { id: "galaxy-s23", label: "Galaxy S23", width: 360, height: 740, scale: 3 },
+  { id: "ipad-mini", label: "iPad mini", width: 768, height: 1024, scale: 2 },
+  { id: "custom", label: "自定义", width: 0, height: 0, scale: 3 },
+];
+
+/** Resolve a preset's portrait dims/scale, falling back to the given custom
+ *  width/height (or the default preset) when the id is unknown. */
+export function resolveBrowserDeviceSpec(
+  device: BrowserDevicePreset,
+  custom?: { width?: number; height?: number },
+): BrowserDeviceSpec {
+  const found = BROWSER_DEVICE_PRESETS.find((p) => p.id === device);
+  if (device === "custom") {
+    return {
+      id: "custom",
+      label: found?.label ?? "自定义",
+      width: custom?.width ?? 390,
+      height: custom?.height ?? 844,
+      scale: found?.scale ?? 3,
+    };
+  }
+  return (
+    found ?? { id: "desktop", label: "桌面端", width: 0, height: 0, scale: 1 }
+  );
+}
 
 export const BrowserSetDeviceSchema = z.object({
   browserId: z.string().min(1),
-  device: z.enum(["desktop", "iphone", "android"]),
+  device: z.enum([
+    "desktop",
+    "iphone",
+    "iphone-se",
+    "android",
+    "galaxy-s23",
+    "ipad-mini",
+    "custom",
+  ]),
+  /** Custom viewport width (required when device === "custom"). */
+  width: z.number().int().min(1).optional(),
+  /** Custom viewport height (required when device === "custom"). */
+  height: z.number().int().min(1).optional(),
+  /** Screen orientation; "landscape" swaps width/height. Defaults to
+   *  "portrait" when omitted (backward compatible with old callers). */
+  orientation: z.enum(["portrait", "landscape"]).optional(),
+  /** Effective emulated viewport size (CSS px) to apply. When set, overrides
+   *  the preset/custom dims — used by the renderer to match the view's
+   *  physical bounds exactly (e.g. a narrow sidebar column), which keeps
+   *  capturePage() from returning black frames and pages from being clipped.
+   *  Omit to use the preset/custom dims. */
+  viewportWidth: z.number().int().min(1).optional(),
+  viewportHeight: z.number().int().min(1).optional(),
 });
 export type BrowserSetDeviceInput = z.infer<typeof BrowserSetDeviceSchema>;
+
+/** Current viewport configuration for a browser view (mirrors what was last
+ *  passed to browser.setDevice). Custom dims are present only for "custom";
+ *  orientation defaults to "portrait" when the field is absent. effWidth/
+ *  effHeight are the EFFECTIVE emulated viewport size (CSS px) actually
+ *  applied — equals the preset/custom dims (post-orientation) unless the
+ *  renderer overrode them to match the view's physical bounds. */
+export interface BrowserViewport {
+  device: BrowserDevicePreset;
+  width?: number;
+  height?: number;
+  orientation: BrowserOrientation;
+  effWidth?: number;
+  effHeight?: number;
+}
 
 /** Structured result for browser.create - either success with the id, or
  *  ok:false + error. */

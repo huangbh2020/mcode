@@ -23,11 +23,13 @@
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { ipcMain, shell, WebContentsView, type Rectangle, type IpcMainEvent } from "electron";
-import { IPC } from "@contracts/ipc";
+import { IPC, resolveBrowserDeviceSpec } from "@contracts/ipc";
 import type {
   BrowserCreateResult,
   BrowserOpResult,
   BrowserDevicePreset,
+  BrowserOrientation,
+  BrowserViewport,
   PickedElement,
 } from "@contracts/ipc";
 import { getMainWindow, sendToRenderer } from "@main/window.js";
@@ -97,6 +99,9 @@ interface LiveBrowser {
   pickMode: boolean;
   /** Current device emulation preset (desktop = no emulation). */
   device: BrowserDevicePreset;
+  /** Current viewport config (custom dims + orientation). Mirrors what was
+   *  last passed to setDevice so screenshots/reuse apply the same emulation. */
+  viewport: BrowserViewport;
 }
 
 /** Offscreen parking rect used while hidden (keeps the view alive but unseen). */
@@ -177,6 +182,7 @@ class BrowserManagerImpl {
       visible: false,
       pickMode: false,
       device: "desktop",
+      viewport: { device: "desktop", orientation: "portrait" },
     };
     this.browsers.set(id, live);
     this.wcToBrowser.set(view.webContents.id, id);
@@ -443,35 +449,68 @@ class BrowserManagerImpl {
     }
   }
 
-  /** Set the device emulation preset. "desktop" disables emulation (full
-   *  desktop viewport); mobile presets enable Chromium device emulation with a
-   *  fixed screen size + device scale factor + mobile screenPosition. The
-   *  renderer also narrows the view's bounds to match the emulated width so the
-   *  page renders in a phone-sized column centered in the stage. */
-  setDevice(id: string, device: BrowserDevicePreset): BrowserOpResult {
+  /** Set the device emulation preset (or a custom viewport + orientation).
+   *  "desktop" disables emulation (full desktop viewport); mobile presets
+   *  enable Chromium device emulation with a screen size + device scale factor
+   *  + mobile screenPosition. For "custom", the given width/height are used
+   *  (falling back to the iphone preset dims). `orientation: "landscape"`
+   *  swaps width/height before emulating. The renderer also narrows the view's
+   *  bounds to match the emulated size so the page renders in a device-sized
+   *  column centered in the stage. */
+  setDevice(
+    id: string,
+    device: BrowserDevicePreset,
+    opts?: {
+      width?: number;
+      height?: number;
+      orientation?: BrowserOrientation;
+      /** Effective emulated viewport size (CSS px). Overrides the preset/custom
+       *  dims so the viewport exactly matches the view's physical bounds (see
+       *  BrowserSetDeviceSchema.viewportWidth). */
+      viewportWidth?: number;
+      viewportHeight?: number;
+    },
+  ): BrowserOpResult {
     const live = this.get(id);
     if (!live) return { ok: false, error: "浏览器不存在或已关闭" };
-    if (device === live.device) return { ok: true }; // idempotent
+    const orientation = opts?.orientation ?? "portrait";
+    const spec = resolveBrowserDeviceSpec(device, {
+      width: opts?.width,
+      height: opts?.height,
+    });
+    const effW = opts?.viewportWidth ?? (orientation === "landscape" ? spec.height : spec.width);
+    const effH = opts?.viewportHeight ?? (orientation === "landscape" ? spec.width : spec.height);
+    if (
+      device === live.device &&
+      orientation === (live.viewport?.orientation ?? "portrait") &&
+      effW === live.viewport?.effWidth &&
+      effH === live.viewport?.effHeight
+    ) {
+      return { ok: true }; // idempotent
+    }
     try {
       const wc = live.view.webContents;
       if (device === "desktop") {
         wc.disableDeviceEmulation();
       } else {
-        // iPhone 14: 390x844 @ 3x; Android (Pixel): 412x915 @ 2.625x.
-        const dims =
-          device === "iphone"
-            ? { width: 390, height: 844, scale: 3 }
-            : { width: 412, height: 915, scale: 2.625 };
         wc.enableDeviceEmulation({
           screenPosition: "mobile",
-          screenSize: { width: dims.width, height: dims.height },
-          deviceScaleFactor: dims.scale,
-          viewSize: { width: dims.width, height: dims.height },
+          screenSize: { width: effW, height: effH },
+          deviceScaleFactor: spec.scale,
+          viewSize: { width: effW, height: effH },
           viewPosition: { x: 0, y: 0 },
           scale: 1,
         });
       }
       live.device = device;
+      live.viewport = {
+        device,
+        width: opts?.width,
+        height: opts?.height,
+        orientation,
+        effWidth: effW,
+        effHeight: effH,
+      };
       return { ok: true };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -597,8 +636,18 @@ class BrowserManagerImpl {
    *  once after a short delay if the first capture throws (the renderer/GPU
    *  process can be momentarily unavailable right after view creation).
    *  If the view is currently hidden (user switched the right panel away from
-   *  the browser tab), it is temporarily shown to a default on-screen rect for
-   *  the capture, then hidden again so it doesn't linger over the workspace. */
+   *  the browser tab), it is temporarily shown for the capture, then hidden
+   *  again so it doesn't linger over the workspace.
+   *
+   *  Device-emulation note: when a mobile preset is active (enableDeviceEmulation
+   *  sized the page to e.g. 390×844), capturePage() returns BLACK frames unless
+   *  the view's physical bounds match the emulated viewport. The renderer
+   *  normally keeps them in sync, but at capture time the view may be hidden
+   *  (offscreen) or its bounds may not have been synced yet (agent navigate →
+   *  immediate screenshot races the renderer's rAF sync). So when emulation is
+   *  active we temporarily size the view to the emulated rect (centered), wait
+   *  a frame, capture, then restore — exactly like the default temp-show below,
+   *  but with matching dimensions. */
   async screenshot(id: string): Promise<BrowserScreenshotResult> {
     const live = this.get(id);
     if (!live) return { ok: false, error: "浏览器不存在或已关闭" };
@@ -612,8 +661,17 @@ class BrowserManagerImpl {
     const needsTempShow = !live.visible || live.lastBounds.width <= 1;
     const savedVisible = live.visible;
     const savedBounds = live.lastBounds;
-    if (needsTempShow) {
-      const b = defaultOnscreenBounds();
+    // Device emulation active: the capture rect must match the emulated
+    // viewport (see the note above). Compute it from the stored viewport;
+    // null when desktop (no emulation) — then defaultOnscreenBounds applies.
+    const emuRect = this.emulationCaptureRect(live);
+    const boundsMatchEmu =
+      emuRect != null &&
+      Math.abs(live.lastBounds.width - emuRect.width) <= 2 &&
+      Math.abs(live.lastBounds.height - emuRect.height) <= 2;
+    const tempShown = needsTempShow || (emuRect != null && !boundsMatchEmu);
+    if (tempShown) {
+      const b = emuRect ?? defaultOnscreenBounds();
       live.view.setBounds(b);
       live.lastBounds = b;
       live.visible = true;
@@ -641,8 +699,10 @@ class BrowserManagerImpl {
       result = await capture();
     }
 
-    // Restore the hidden/offscreen state if we temporarily showed the view.
-    if (needsTempShow) {
+    // Restore the hidden/offscreen state if we temporarily showed/resized the
+    // view. Bounds changes during capture are reverted so the renderer's next
+    // syncBounds (or the user's next show) isn't fighting a stale rect.
+    if (tempShown) {
       live.view.setBounds(savedVisible ? savedBounds : HIDDEN_BOUNDS);
       live.lastBounds = savedBounds;
       live.visible = savedVisible;
@@ -658,6 +718,32 @@ class BrowserManagerImpl {
       log.warn(`browser screenshot produced EMPTY image after retry: ${id} url=${wc.getURL()}`);
     }
     return { ok: true, data: result.data, mimeType: "image/png" };
+  }
+
+  /** The on-screen rect that matches the view's current device-emulation
+   *  viewport (centered in the main window), or null for desktop (no
+   *  emulation). capturePage() needs the view's physical bounds to equal the
+   *  emulated screen size (e.g. 390×844 @3x) or it returns black frames, so
+   *  screenshot() sizes the view to this rect before capturing. Uses the
+   *  EFFECTIVE viewport size (may have been overridden by the renderer to
+   *  match a narrow sidebar column), falling back to the preset/custom dims. */
+  private emulationCaptureRect(live: LiveBrowser): Rectangle | null {
+    const vp = live.viewport;
+    if (!vp || vp.device === "desktop") return null;
+    const w = vp.effWidth;
+    const h = vp.effHeight;
+    if (typeof w !== "number" || typeof h !== "number") return null;
+    const win = getMainWindow();
+    if (!win || win.isDestroyed()) {
+      return { x: 80, y: 80, width: w, height: h };
+    }
+    const [winW, winH] = win.getContentSize();
+    return {
+      x: Math.max(0, Math.round((winW - w) / 2)),
+      y: Math.max(0, Math.round((winH - h) / 2)),
+      width: w,
+      height: h,
+    };
   }
 
   /** Destroy every live browser view - call on app quit. Idempotent (safe to

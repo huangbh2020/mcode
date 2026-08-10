@@ -7,20 +7,22 @@ import {
   IconTarget,
   IconX,
   IconLoader2,
-  IconDeviceDesktop,
   IconDeviceMobile,
   IconArrowsMaximize,
   IconArrowsMinimize,
 } from "@renderer/lib/icons.js";
-import type { BrowserDevicePreset } from "@contracts/ipc";
 import type { BrowserMode } from "./BrowserPanel.js";
 
 /**
  * Toolbar for the embedded browser panel. Pure presentational - all state
- * (url, loading, canGoBack/Forward, pickMode, device) is passed in as props,
- * and every action is a callback. Sits at the top of the BrowserPanel overlay;
+ * (url, loading, canGoBack/Forward, pickMode, deviceToolbarOpen) is passed in
+ * as props, and every action is a callback. Sits at the top of the BrowserPanel;
  * the WebContentsView is positioned below it, so this bar must never be covered
  * by the view.
+ *
+ * Device emulation controls live in the separate DeviceToolbar row below this
+ * one (mirroring Chrome DevTools' "Toggle device toolbar"): a 📱 button here
+ * toggles that row's visibility.
  */
 export interface BrowserToolbarProps {
   /** Which container this toolbar lives in (drives the leading button). */
@@ -33,16 +35,16 @@ export interface BrowserToolbarProps {
   canGoForward: boolean;
   /** Whether the element picker is active (accent highlight on the toggle). */
   pickMode: boolean;
-  /** Current device emulation preset (desktop / iphone / android). */
-  device: BrowserDevicePreset;
+  /** Whether the device toolbar row is currently shown (accent on the 📱). */
+  deviceToolbarOpen: boolean;
   onUrlChange: (url: string) => void;
   onNavigate: (url: string) => void;
   onBack: () => void;
   onForward: () => void;
   onReload: () => void;
   onTogglePickMode: () => void;
-  /** Switch the device emulation preset. */
-  onDeviceChange: (device: BrowserDevicePreset) => void;
+  /** Toggle the DevTools-style device toolbar row. */
+  onToggleDeviceToolbar: () => void;
   /** Overlay only: return to the main workspace (hide the overlay, keep views
    *  alive). Sidebar ignores this. */
   onClose: () => void;
@@ -96,28 +98,18 @@ export function BrowserToolbar({
   canGoBack,
   canGoForward,
   pickMode,
-  device,
+  deviceToolbarOpen,
   onUrlChange,
   onNavigate,
   onBack,
   onForward,
   onReload,
   onTogglePickMode,
-  onDeviceChange,
+  onToggleDeviceToolbar,
   onClose,
   onSwitchMode,
   onRequestDestroy,
 }: BrowserToolbarProps) {
-  const devices: {
-    id: BrowserDevicePreset;
-    label: string;
-    hint: string;
-    icon: React.ReactNode;
-  }[] = [
-    { id: "desktop", label: "桌面端", hint: "PC 全宽", icon: <IconDeviceDesktop size={14} /> },
-    { id: "iphone", label: "iPhone", hint: "390×844", icon: <IconDeviceMobile size={14} /> },
-    { id: "android", label: "Android", hint: "412×915", icon: <IconDeviceMobile size={14} /> },
-  ];
   return (
     <div className="flex h-11 shrink-0 items-center gap-1 border-b border-edge bg-surface px-2">
       {mode === "overlay" ? (
@@ -184,33 +176,16 @@ export function BrowserToolbar({
         <IconTarget size={16} />
       </ToolButton>
 
-      {/* Device preset selector - inline icon toggle group rendered directly in
-          the toolbar (no popover/dropdown). The toolbar strip is NOT covered by
-          the OS-level WebContentsView, so these buttons are always clickable.
-          Clicking a device icon switches to that preset.
-          Sidebar mode hides the selector entirely: the embedded panel is
-          fixed at iPhone size by design (new tabs default to iphone), so the
-          only place to switch sizes is the PC-fullscreen overlay. */}
-      {mode === "overlay" && (
-        <div className="flex shrink-0 items-center gap-0.5 rounded-md border border-edge p-0.5">
-          {devices.map((d) => (
-            <button
-              key={d.id}
-              type="button"
-              title={d.label + " " + d.hint}
-              onClick={() => onDeviceChange(d.id)}
-              className={cn(
-                "flex h-6 w-6 items-center justify-center rounded transition-colors",
-                device === d.id
-                  ? "bg-accent text-white"
-                  : "text-content-muted hover:bg-surface-hover hover:text-content",
-              )}
-            >
-              {d.icon}
-            </button>
-          ))}
-        </div>
-      )}
+      {/* Device-toolbar toggle — the "Toggle device toolbar" equivalent. Shows
+          the DevTools-style row (device dropdown + custom dims + rotate) under
+          the address bar. Accent when open. */}
+      <ToolButton
+        onClick={onToggleDeviceToolbar}
+        active={deviceToolbarOpen}
+        title={deviceToolbarOpen ? "收起设备工具栏" : "设备工具栏 (切换尺寸)"}
+      >
+        <IconDeviceMobile size={16} />
+      </ToolButton>
 
       <div className="mx-1 h-5 w-px bg-edge" />
 
@@ -220,4 +195,3 @@ export function BrowserToolbar({
     </div>
   );
 }
-

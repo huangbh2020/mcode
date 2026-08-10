@@ -88,12 +88,14 @@
                         * the reference design's dark background. */
   --surface-muted: 22 24 28; /* one stop up from surface for inset panels */
   --surface-hover: 34 36 41; /* hover/active states */
-  --content: 245 247 250; /* near-white with the faintest cool tint — reads
-                           * as "clean white" but softer than pure #fff,
-                           * avoiding harsh glare on the deep background. */
-  --content-muted: 178 184 193; /* cool light-gray-blue for secondary text;
-                                 * brighter than pure gray so it stays legible
-                                 * without competing with primary text. */
+  --content: 221 224 229; /* soft off-white (#dde0e5) — same faint cool tint
+                           * as before but one step dimmer: the old near-white
+                           * (#f5f7fa) was ~0.92 luminance and read as harsh
+                           * glare on long sessions. Still ~14:1 contrast on
+                           * the deep surface, well above WCAG AAA (7:1). */
+  --content-muted: 165 171 180; /* cool gray-blue for secondary text, dimmed
+                                 * in step with --content so the light/dark
+                                 * hierarchy stays proportional. */
   --content-subtle: 122 128 138; /* mid cool-gray for dim metadata/labels */
   --edge: 34 36 41; /* matches surface-hover — subtle dividers on deep bg */
   --input-edge: 92 99 112; /* cool gray — brighter than --edge so the

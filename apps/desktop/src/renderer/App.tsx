@@ -68,10 +68,15 @@ export function App() {
         st.setBrowserPanelOpen(true);
       } else {
         // Sidebar mode (right panel). Ensure the overlay is closed first so the
-        // sidebar instance owns the view (isActive = !browserPanelOpen).
+        // sidebar instance owns the view (isActive = !browserPanelOpen). Auto-
+        // open the device toolbar too: the view is only narrowed to the agent's
+        // requested device size while the toolbar is open (collapsed = full
+        // width), so without this an iphone/android navigate would render full-
+        // width and ignore the emulation.
         st.setBrowserPanelOpen(false);
         st.setRightPanelTab("browser");
         st.setRightOpen(true);
+        st.setBrowserDeviceToolbarOpen(true);
       }
     });
     return off;
@@ -147,71 +152,78 @@ export function App() {
           workspace and settings views. */}
       <ModelConfigPrompt />
       <BrowserPanel mode="overlay" />
-      {settingsOpen ? (
-        <>
-          <Titlebar
-            mode="settings"
-            leftOpen
-            rightOpen={false}
-            bottomTerminalOpen={false}
-            onBack={() => setSettingsOpen(false)}
-          />
-          {/* The settings page reuses the three-pane shell with the right
-              panel collapsed, so visually it reads as the same workspace
-              minus the IDE sidebar. The titlebar/center divider is a border-t
-              on the center <main> in ThreePaneLayout, spanning only the center
-              area (not the sidebar) so the left sidebar blends seamlessly into
-              the titlebar's sidebar strip above. */}
-          <div className="relative flex min-h-0 flex-1 bg-surface-muted">
+      {/*
+        Workspace shell is ALWAYS mounted — the settings view renders as an
+        overlay on top of it, not as a mutually-exclusive sibling. This is
+        critical: BottomTerminalBar (→ TerminalPanel → every TerminalView)
+        lives inside ThreePaneLayout. A ternary swap `settingsOpen ? <Settings>
+        : <Workspace>` would unmount the whole workspace subtree on every
+        settings open, killing all live PTYs (TerminalView's cleanup calls
+        api.terminal.kill) and destroying scrollback — and racing many
+        concurrent pty.kill() calls on Windows occasionally crashes the main
+        process. Keeping the workspace mounted preserves the carefully-built
+        cross-project terminal keep-alive (see TerminalPanel.tsx) exactly as
+        designed. The Titlebar below switches its mode + the settings overlay
+        covers the workspace visually.
+      */}
+      <Titlebar
+        mode={settingsOpen ? "settings" : "workspace"}
+        leftOpen={settingsOpen ? true : leftOpen}
+        rightOpen={settingsOpen ? false : rightOpen}
+        bottomTerminalOpen={settingsOpen ? false : bottomTerminalOpen}
+        onBack={() => setSettingsOpen(false)}
+        onToggleLeft={() => setLeftOpen(!leftOpen)}
+        onToggleRight={() => setRightOpen(!rightOpen)}
+        onToggleBottomTerminal={() => setBottomTerminalOpen(!bottomTerminalOpen)}
+      />
+      {/* Panel row — bg-surface-muted as the contrasting track so the center
+          pane's rounded bottom-left corner (in ThreePaneLayout) reveals this
+          muted color through the notch and reads as a clean arc. The left
+          sidebar is also bg-surface-muted, so it blends seamlessly into the
+          track; the center pane (bg-surface) sits on top. */}
+      <div className="relative flex min-h-0 flex-1 bg-surface-muted">
+        <ThreePaneLayout
+          left={<LeftBar />}
+          center={<CenterPane />}
+          right={<RightPanel />}
+          leftOpen={leftOpen}
+          rightOpen={rightOpen}
+          bottomTerminal={<BottomTerminalBar active={bottomTerminalOpen} />}
+          bottomTerminalOpen={bottomTerminalOpen}
+          leftWidth={leftWidth}
+          rightWidth={rightWidth}
+          bottomTerminalHeight={bottomTerminalHeight}
+          onResizeLeft={adjustLeftWidth}
+          onResizeRight={adjustRightWidth}
+          onResizeBottomTerminal={adjustBottomTerminalHeight}
+          onResetLeft={resetLeftWidth}
+          onResetRight={resetRightWidth}
+          onResetBottomTerminal={resetBottomTerminalHeight}
+        />
+        {/* Git diff dialog (the "dialog" open-mode). Portaled to <body>;
+            renders nothing when closed or empty. Mounted at the workspace
+            level so it overlays the editor while staying app-scoped.
+            Lazy-loaded with monaco since it reuses the Monaco DiffPane. */}
+        <Suspense fallback={null}>
+          <GitDiffDialog />
+        </Suspense>
+        {/*
+          Settings overlay — renders on top of the always-mounted workspace
+          shell. When open it covers the panel row completely (the workspace
+          still mounts underneath, keeping terminals alive, just not visible).
+          bg-surface is opaque so the workspace doesn't bleed through. `flex`
+          is required: SettingsPage reuses ThreePaneLayout, whose left
+          <aside> + center <main> are sibling nodes laid out horizontally by
+          a flex parent (the original settings branch used `relative flex
+          min-h-0 flex-1`). Without flex the <main> collapses to height 0 and
+          the settings content never renders.
+        */}
+        {settingsOpen && (
+          <div className="absolute inset-0 z-30 flex bg-surface">
             <SettingsPage />
           </div>
-        </>
-      ) : (
-        <>
-          <Titlebar
-            mode="workspace"
-            leftOpen={leftOpen}
-            rightOpen={rightOpen}
-            bottomTerminalOpen={bottomTerminalOpen}
-            onToggleLeft={() => setLeftOpen(!leftOpen)}
-            onToggleRight={() => setRightOpen(!rightOpen)}
-            onToggleBottomTerminal={() => setBottomTerminalOpen(!bottomTerminalOpen)}
-          />
-          {/* Panel row — bg-surface-muted as the contrasting track so the
-              center pane's rounded bottom-left corner (in ThreePaneLayout)
-              reveals this muted color through the notch and reads as a clean
-              arc. The left sidebar is also bg-surface-muted, so it blends
-              seamlessly into the track; the center pane (bg-surface) sits on
-              top. */}
-          <div className="relative flex min-h-0 flex-1 bg-surface-muted">
-            <ThreePaneLayout
-              left={<LeftBar />}
-              center={<CenterPane />}
-              right={<RightPanel />}
-              leftOpen={leftOpen}
-              rightOpen={rightOpen}
-              bottomTerminal={<BottomTerminalBar active={bottomTerminalOpen} />}
-              bottomTerminalOpen={bottomTerminalOpen}
-              leftWidth={leftWidth}
-              rightWidth={rightWidth}
-              bottomTerminalHeight={bottomTerminalHeight}
-              onResizeLeft={adjustLeftWidth}
-              onResizeRight={adjustRightWidth}
-              onResizeBottomTerminal={adjustBottomTerminalHeight}
-              onResetLeft={resetLeftWidth}
-              onResetRight={resetRightWidth}
-              onResetBottomTerminal={resetBottomTerminalHeight}
-            />
-          </div>
-          {/* Git diff dialog (the "dialog" open-mode). Portaled to <body>;
-              renders nothing when closed or empty. Mounted at the workspace
-              level so it overlays the editor while staying app-scoped.
-              Lazy-loaded with monaco since it reuses the Monaco DiffPane. */}
-          <Suspense fallback={null}>
-            <GitDiffDialog />
-          </Suspense>
-        </>
-      )}
+        )}
+      </div>
       {/* Global toast stack - mounted at the root so it overlays everything.
           Renders null when empty. */}
       <Toaster />

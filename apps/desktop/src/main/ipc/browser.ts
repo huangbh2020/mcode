@@ -146,7 +146,13 @@ export function registerBrowserHandlers(ipcMain: IpcMain): void {
   ipcMain.handle(IPC.BROWSER_SET_DEVICE, async (_evt, raw) => {
     try {
       const input = BrowserSetDeviceSchema.parse(raw);
-      return BrowserManager.setDevice(input.browserId, input.device);
+      return BrowserManager.setDevice(input.browserId, input.device, {
+        width: input.width,
+        height: input.height,
+        orientation: input.orientation,
+        viewportWidth: input.viewportWidth,
+        viewportHeight: input.viewportHeight,
+      });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       return { ok: false as const, error: msg };

@@ -43,11 +43,27 @@ if (process.platform === "win32") {
 // created with show:false and the ready-to-show -> show() path never completes
 // because the process is already dying. These handlers log the cause to
 // main.log so the failure is diagnosable instead of invisible.
+// 重入保护:若 log.error 自身抛出(如 stderr 管道断裂 EPIPE),重入这些 handler
+// 会递归到栈溢出(0xC0000409 STATUS_STACK_BUFFER_OVERRUN)。两个 handler 共用同一
+// flag,因为两者都调 log.error。
+let handlingGlobalError = false;
 process.on("uncaughtException", (err) => {
-  log.error(`uncaughtException: ${err.stack ?? err}`);
+  if (handlingGlobalError) return;
+  handlingGlobalError = true;
+  try {
+    log.error(`uncaughtException: ${err.stack ?? err}`);
+  } finally {
+    handlingGlobalError = false;
+  }
 });
 process.on("unhandledRejection", (reason) => {
-  log.error(`unhandledRejection: ${reason instanceof Error ? reason.stack ?? reason : String(reason)}`);
+  if (handlingGlobalError) return;
+  handlingGlobalError = true;
+  try {
+    log.error(`unhandledRejection: ${reason instanceof Error ? reason.stack ?? reason : String(reason)}`);
+  } finally {
+    handlingGlobalError = false;
+  }
 });
 
 // Single-instance lock - only one GUI instance runs at a time.
