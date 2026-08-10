@@ -170,7 +170,13 @@ export function BrowserPanel({ mode }: BrowserPanelProps) {
    *  tab's view. The view is sized to the emulated device (or the stage when
    *  the device is larger than the available space) and centered in the stage.
    *  rAF-throttled by callers. Background tabs are visible:false in main, so
-   *  their setBounds is a no-op - only the active view moves. */
+   *  their setBounds is a no-op - only the active view moves.
+   *
+   *  The "pc" preset is special: it renders at true 1920×1080 (viewport is NOT
+   *  clamped to the stage) and the view pans with the stage's scroll position
+   *  (viewX/Y = stage origin − scroll offset), so a narrow sidebar shows a
+   *  scrollable window onto the full-size page. Screenshots capture the full
+   *  1920×1080 regardless of the visible portion. */
   const syncBounds = useCallback(() => {
     const id = activeTabIdRef.current;
     const tab = tabsRef.current.find((t) => t.id === id);
@@ -186,17 +192,29 @@ export function BrowserPanel({ mode }: BrowserPanelProps) {
         : null;
     let viewW: number;
     let viewH: number;
+    let viewX: number;
+    let viewY: number;
     let effW: number | undefined;
     let effH: number | undefined;
-    if (dims) {
-      // The view's physical size MUST equal the emulated viewport or the page
-      // gets clipped (content "显示不完整") and capturePage() returns black
-      // frames. When the device dims fit the stage, use them exactly; when
-      // they exceed it (narrow sidebar, short window), clamp to the stage and
-      // override the emulated viewport to match — the page reflows to the
-      // available space instead of being cut off.
+    if (dims && tab.device === "pc") {
+      // PC preset: full 1920×1080, never clamped. The view pans with the
+      // scroll container, so scrolling reveals different parts of the page.
+      viewW = dims.width;
+      viewH = dims.height;
+      viewX = Math.round(r.left - stage.scrollLeft);
+      viewY = Math.round(r.top - stage.scrollTop);
+    } else if (dims) {
+      // Other presets: the view's physical size MUST equal the emulated
+      // viewport or the page gets clipped (content "显示不完整") and
+      // capturePage() returns black frames. When the device dims fit the
+      // stage, use them exactly; when they exceed it (narrow sidebar, short
+      // window), clamp to the stage and override the emulated viewport to
+      // match — the page reflows to the available space instead of being cut
+      // off.
       viewW = Math.min(dims.width, r.width);
       viewH = Math.min(dims.height, r.height);
+      viewX = Math.round(r.left + (r.width - viewW) / 2);
+      viewY = Math.round(r.top + (r.height - viewH) / 2);
       if (viewW !== dims.width || viewH !== dims.height) {
         effW = Math.round(viewW);
         effH = Math.round(viewH);
@@ -204,9 +222,9 @@ export function BrowserPanel({ mode }: BrowserPanelProps) {
     } else {
       viewW = r.width;
       viewH = r.height;
+      viewX = Math.round(r.left);
+      viewY = Math.round(r.top);
     }
-    const viewX = dims ? Math.round(r.left + (r.width - viewW) / 2) : Math.round(r.left);
-    const viewY = dims ? Math.round(r.top + (r.height - viewH) / 2) : Math.round(r.top);
     const bounds = { x: viewX, y: viewY, w: Math.round(viewW), h: Math.round(viewH) };
     const prev = lastBoundsRef.current;
     if (prev && prev.x === bounds.x && prev.y === bounds.y && prev.w === bounds.w && prev.h === bounds.h) return;
@@ -343,29 +361,30 @@ export function BrowserPanel({ mode }: BrowserPanelProps) {
     };
   }, []);
 
-  // ResizeObserver -> syncBounds (rAF-throttled inside).
+  // ResizeObserver -> syncBounds (rAF-throttled inside). The stage is also a
+  // scroll container for the "pc" preset (the view pans with scrollLeft/Top),
+  // so scroll events re-sync the bounds the same way.
   useEffect(() => {
     if (!isActive) return;
     const stage = stageRef.current;
     if (!stage) return;
     let raf = 0;
-    const ro = new ResizeObserver(() => {
-      cancelAnimationFrame(raf);
-      raf = requestAnimationFrame(syncBounds);
-    });
-    ro.observe(stage);
-    // Also sync on window resize (a window move changes the screen-coord rect
-    // without a size change that ResizeObserver would catch).
-    const onWinResize = () => {
+    const schedule = () => {
       cancelAnimationFrame(raf);
       raf = requestAnimationFrame(syncBounds);
     };
-    window.addEventListener("resize", onWinResize);
+    const ro = new ResizeObserver(schedule);
+    ro.observe(stage);
+    stage.addEventListener("scroll", schedule);
+    // Also sync on window resize (a window move changes the screen-coord rect
+    // without a size change that ResizeObserver would catch).
+    window.addEventListener("resize", schedule);
     raf = requestAnimationFrame(syncBounds);
     return () => {
       cancelAnimationFrame(raf);
       ro.disconnect();
-      window.removeEventListener("resize", onWinResize);
+      stage.removeEventListener("scroll", schedule);
+      window.removeEventListener("resize", schedule);
     };
   }, [isActive, syncBounds]);
 
@@ -778,8 +797,29 @@ export function BrowserPanel({ mode }: BrowserPanelProps) {
       )}
       {/* The stage is the measurement target for the active tab's
           WebContentsView. The view floats above it at OS level, so this div
-          stays visually empty - its only job is to occupy the right rect. */}
-      <div ref={stageRef} className="relative min-h-0 flex-1 bg-surface">
+          stays visually empty - its only job is to occupy the right rect.
+          It doubles as a scroll container for the "pc" preset: a 1920×1080
+          spacer inside lets the user scroll to pan the OS-level view (whose
+          bounds are offset by scrollLeft/scrollTop in syncBounds). */}
+      <div ref={stageRef} className="relative min-h-0 flex-1 overflow-auto bg-surface">
+        {/* Spacer that defines the scrollable area. For the pc preset it's the
+            full 1920×1080 device size (honoring rotation); otherwise it fills
+            the stage (no scrolling). */}
+        <div
+          className={cn(
+            activeTab?.device === "pc" && deviceToolbarOpen
+              ? "pointer-events-none"
+              : "h-full w-full",
+          )}
+          style={
+            activeTab?.device === "pc" && deviceToolbarOpen
+              ? (() => {
+                  const d = activeTab ? tabViewportDims(activeTab) : null;
+                  return { width: d?.width ?? 1920, height: d?.height ?? 1080 };
+                })()
+              : undefined
+          }
+        />
         {error && (
           <div className="absolute inset-0 flex items-center justify-center">
             <p className="text-sm text-content-muted">{error}</p>

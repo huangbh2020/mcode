@@ -36,7 +36,7 @@ import { getMainWindow, sendToRenderer } from "@main/window.js";
 import { getEffectiveTheme } from "@main/lib/theme.js";
 import { log } from "@main/lib/logger.js";
 import { PICKER_INJECT_SCRIPT, PICKER_REMOVE_SCRIPT } from "./pickerScript.js";
-import { SNAPSHOT_SCRIPT, buildClickScript, buildTypeScript } from "./snapshotScript.js";
+import { SNAPSHOT_SCRIPT, buildClickScript, buildTypeScript, buildEvaluateScript } from "./snapshotScript.js";
 
 /** Metadata for a live browser view, returned by `list()` for agent discovery. */
 export interface BrowserInfo {
@@ -73,6 +73,14 @@ export interface BrowserClickResult {
   error?: string;
   url?: string;
   title?: string;
+}
+
+/** Result of an `evaluate()` — like click, plus `result`: a JSON/text
+ *  serialization of the script's return value (so the agent can verify what
+ *  its DOM changes produced). */
+export interface BrowserEvaluateResult extends BrowserClickResult {
+  /** Serialized return value of the evaluated script (JSON or String fallback). */
+  result?: string;
 }
 
 /** Result of a `screenshot()` — `data` is a base64 PNG string. */
@@ -660,6 +668,37 @@ class BrowserManagerImpl {
       const msg = err instanceof Error ? err.message : String(err);
       log.warn(`browser type failed: ${id} ${msg}`);
       return { ok: false, error: `输入失败: ${msg}` };
+    }
+  }
+
+  /** Evaluate arbitrary JS in the page's main world via `new Function(code)()`.
+   *  This lets the agent modify the page DOM directly (text, styles,
+   *  attributes, events). The script runs with the page's own permissions —
+   *  no Node/Electron access (contextIsolation is on). Returns a serialized
+   *  view of the script's return value so the caller can verify its changes.
+   *  The script is JSON-encoded (buildEvaluateScript), so the code's quotes /
+   *  backslashes / newlines can't break the injected script's syntax. */
+  async evaluate(id: string, code: string): Promise<BrowserEvaluateResult> {
+    const live = this.get(id);
+    if (!live) return { ok: false, error: "浏览器不存在或已关闭" };
+    if (typeof code !== "string" || code.length === 0) {
+      return { ok: false, error: "script 不能为空" };
+    }
+    try {
+      const script = buildEvaluateScript(code);
+      const res = (await live.view.webContents.executeJavaScript(script, true)) as {
+        ok?: boolean;
+        error?: string;
+        url?: string;
+        title?: string;
+        result?: string;
+      };
+      if (res && res.error) return { ok: false, error: res.error };
+      return { ok: true, url: res?.url, title: res?.title, result: res?.result };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      log.warn(`browser evaluate failed: ${id} ${msg}`);
+      return { ok: false, error: `脚本执行失败: ${msg}` };
     }
   }
 

@@ -217,3 +217,52 @@ export function buildTypeScript(selector: string, text: string): string {
   return TYPE_SCRIPT.replace("%SELECTOR_JSON%", JSON.stringify(JSON.stringify(selector)))
     .replace("%TEXT_JSON%", JSON.stringify(JSON.stringify(text)));
 }
+
+/**
+ * Evaluate script: runs arbitrary JS in the page's main world via
+ * `new Function(code)()` and returns a JSON-serialized view of the result.
+ * This is the "model can modify the page DOM directly" escape hatch —
+ * anything reachable from the page (text nodes, styles, attributes, events)
+ * can be changed. The code is passed in as a JSON-stringified argument (same
+ * pattern as CLICK_SCRIPT / TYPE_SCRIPT) so quotes / backslashes / newlines
+ * in the code can't break the injected script's syntax.
+ *
+ * Result serialization: JSON.stringify succeeds for plain data; DOM elements,
+ * functions and cyclic objects fall back to String(result) (e.g. "[object
+ * HTMLHeadingElement]"), and undefined reports "(undefined)". The caller gets
+ * a text snapshot of what the script returned so it can verify its changes.
+ */
+export const EVALUATE_SCRIPT = `
+(function (scriptJson) {
+  var code;
+  try { code = JSON.parse(scriptJson); } catch (e) { return { error: 'invalid script json' }; }
+  if (typeof code !== 'string' || !code) return { error: 'empty script' };
+  var result;
+  try {
+    result = new Function(code)();
+  } catch (e) {
+    return { error: 'script threw: ' + (e && e.message ? e.message : String(e)) };
+  }
+  var text;
+  if (result === undefined) {
+    text = '(undefined)';
+  } else {
+    try {
+      text = JSON.stringify(result, null, 2);
+      if (text === undefined) text = String(result);
+    } catch (e) {
+      text = String(result);
+    }
+  }
+  return { ok: true, result: text, url: location.href, title: document.title };
+})(%SCRIPT_JSON%);
+`;
+
+/**
+ * Build a ready-to-execute evaluate script from JS code. The code is
+ * JSON-encoded (a valid JS string literal) and substituted into the
+ * `%SCRIPT_JSON%` slot — same injection-safe pattern as the other builders.
+ */
+export function buildEvaluateScript(code: string): string {
+  return EVALUATE_SCRIPT.replace("%SCRIPT_JSON%", JSON.stringify(JSON.stringify(code)));
+}

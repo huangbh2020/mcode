@@ -66,6 +66,7 @@ import {
   browserSnapshot,
   browserClick,
   browserType,
+  browserEvaluate,
   browserScreenshot,
   type ToolResult,
 } from "@main/browser/agentBrowserTools.js";
@@ -510,6 +511,24 @@ function registerBrowserTools(
   });
 
   pi.registerTool({
+    name: "browser_evaluate",
+    label: "Browser Evaluate",
+    description:
+      "在页面中执行任意 JavaScript,可修改页面 DOM(文字、样式、属性、触发事件等)——凡是页面自己能做到的都可以。" +
+      "script 为要执行的 JS 代码(在页面主世界运行,无 Node/Electron 权限)。返回脚本返回值(序列化为文本)供确认修改结果。" +
+      "适用于改页面显示文字、调整样式等 browser_type/click 做不到的操作。有副作用,需要用户审批。",
+    promptSnippet: "browser_evaluate({script, browserId?}): 在页面执行 JS(改 DOM/文字/样式)",
+    parameters: Type.Object({
+      script: Type.String({ description: "要在页面中执行的 JavaScript 代码(可访问 document/window 等页面对象)" }),
+      browserId: Type.Optional(Type.String({ description: "目标浏览器视图 id;省略则用第一个已开视图" })),
+    }),
+    async execute(_toolCallId, params) {
+      const { script, browserId } = params as { script: string; browserId?: string };
+      return toPiResult(await browserEvaluate({ script, browserId }));
+    },
+  });
+
+  pi.registerTool({
     name: "browser_screenshot",
     label: "Browser Screenshot",
     description:
@@ -703,10 +722,11 @@ const BROWSER_TOOLS_PROMPT = [
   `1. browser_navigate({ url, device? }): 打开一个网页(仅 http/https)。没有打开的浏览器时会自动创建一个。device 可选 desktop(默认,PC 全宽)/iphone/android(移动端模拟),测试移动端页面时用 iphone 或 android`,
   `2. browser_snapshot({ browserId? }): 读取页面结构化快照——可交互元素列表带可直接传给 browser_click 的 selector(只读)`,
   `3. browser_type({ selector, text, browserId? }): 向 input/textarea/contenteditable 输入文本(selector 来自 snapshot)`,
-  `4. browser_click({ selector, browserId? }): 按 selector 点击元素(selector 来自 snapshot)`,
-  `5. browser_screenshot({ browserId? }): 截图,用于视觉确认布局/样式(只读)`,
-  `6. browser_list(): 列出所有打开的浏览器视图及其 browserId`,
-  `browserId 参数全部可选——省略时自动复用第一个已开视图。典型流程: navigate → snapshot 读内容 → 按需 type 填表 / click 点击 / screenshot 截图。`,
+  `4. browser_evaluate({ script, browserId? }): 在页面中执行任意 JS,可修改页面 DOM(文字/样式/属性/触发事件)。返回值会序列化返回,可用于确认修改结果`,
+  `5. browser_click({ selector, browserId? }): 按 selector 点击元素(selector 来自 snapshot)`,
+  `6. browser_screenshot({ browserId? }): 截图,用于视觉确认布局/样式(只读)`,
+  `7. browser_list(): 列出所有打开的浏览器视图及其 browserId`,
+  `browserId 参数全部可选——省略时自动复用第一个已开视图。典型流程: navigate → snapshot 读内容 → 按需 type 填表 / evaluate 改页面 / click 点击 / screenshot 截图。`,
 ].join("\n");
 
 /**

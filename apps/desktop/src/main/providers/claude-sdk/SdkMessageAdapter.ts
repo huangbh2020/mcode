@@ -83,6 +83,7 @@ import {
   buildCompactSnapshot,
   buildSnapshotFromControlChannel,
   resolveEffectiveContextWindow,
+  totalProcessedTokensFromRawUsage,
   type RawClaudeUsage,
   type ClaudeContextWindowTag,
 } from "./claudeTokenUsage.js";
@@ -260,6 +261,10 @@ interface AdapterState {
    *  context-window occupancy before the generator closes. If the promise
    *  rejects (e.g. Query already closed) we fall back to path C. */
   pendingContextUsage?: Promise<unknown> | null;
+  /** Diagnostic: how many SDK assistant messages this turn has produced so
+   *  far. Logged at the getContextUsage kickoff so we can correlate the
+   *  control-channel's accuracy with how far into the turn it fired. */
+  assistantMessageCount: number;
   /** Whether turn.done has been emitted for this turn. Guards against double
    *  emits when both a result message and flushFinal() fire it. */
   turnDoneEmitted: boolean;
@@ -324,6 +329,7 @@ export class SdkMessageAdapter {
       subagents: new Map(),
       inPlanMode: false,
       pendingContextUsage: null,
+      assistantMessageCount: 0,
       turnDoneEmitted: false,
       backgroundTaskIds: new Set(),
     };
@@ -717,9 +723,15 @@ export class SdkMessageAdapter {
   }
 
   private handleAssistant(m: SDKAssistantMessage): void {
+    this.state.assistantMessageCount += 1;
     const message = m.message as {
       content?: Array<{ type: string; id?: string; name?: string; input?: unknown }>;
-      usage?: RawClaudeUsage;
+      usage?: {
+        input_tokens?: number;
+        output_tokens?: number;
+        cache_read_input_tokens?: number;
+        cache_creation_input_tokens?: number;
+      };
       model?: string;
     };
     const blocks = message.content;
@@ -730,7 +742,28 @@ export class SdkMessageAdapter {
     // + output size). Emits mid-turn so the status bar can update before the
     // turn completes. Skipped when `usage` is absent or all-zero (the SDK
     // forwards zeros from some proxies / non-Anthropic gateways).
-    this.emitTokenUsage(message.usage, message.model, undefined);
+    //
+    // NOTE: the SDK forwards the API's `usage` verbatim on assistant messages
+    // (Anthropic snake_case field names — BetaUsage), whereas RawClaudeUsage
+    // uses camelCase (handleResult reads result.usage with explicit snake_case
+    // keys, so it never hits this mismatch). Reading camelCase keys off the
+    // snake_case object silently zeroes every field: normalize returns
+    // undefined, path A never fires, lastKnown stays undefined, and the
+    // turn-end fallback degrades to pathC-direct (cumulative result.usage as
+    // occupancy), overstating the ring on multi-call turns. Map fields here.
+    const usage = message.usage;
+    this.emitTokenUsage(
+      usage
+        ? {
+            inputTokens: usage.input_tokens,
+            outputTokens: usage.output_tokens,
+            cacheReadInputTokens: usage.cache_read_input_tokens,
+            cacheCreationInputTokens: usage.cache_creation_input_tokens,
+          }
+        : undefined,
+      message.model,
+      undefined,
+    );
 
     // Path B kickoff: fire off `Query.getContextUsage()` now while the CLI
     // process is still alive (during assistant-message processing). The result
@@ -739,6 +772,14 @@ export class SdkMessageAdapter {
     // response received" because the generator is already tearing down. We
     // don't await here - just kick it off and let it resolve in the background.
     if (this.query && !this.state.pendingContextUsage) {
+      // Diagnostic: log when the control channel fires relative to the turn's
+      // assistant-message stream, plus the last path-A occupancy. Lets us
+      // correlate getContextUsage accuracy with kickoff timing (gateway
+      // models often report garbage: static-prompt-only totals, 0%).
+      this.ctx.log.info(
+        `context-usage kickoff: assistantMsgs=${this.state.assistantMessageCount} ` +
+          `lastKnownUsed=${this.state.lastKnownTokenUsage?.usedTokens ?? "none"}`,
+      );
       this.state.pendingContextUsage = this.query.getContextUsage().catch((err) => {
         // Swallow - the await in emitTurnEndSnapshot will see the rejection
         // via the stored promise and fall back to path C. Logging here helps
@@ -1225,14 +1266,48 @@ export class SdkMessageAdapter {
     if (pending) {
       try {
         const cc = await pending as Awaited<ReturnType<Query["getContextUsage"]>>;
-        const accumulated = normalizeClaudeTokenUsage(
-          accumulatedRaw,
-          { reported: reportedWindow, lastKnown: this.state.lastKnownContextWindow },
+        // Diagnostic: raw control-channel values vs the accumulated usage
+        // (billing) and the last path-A occupancy. `cc.totalTokens` far below
+        // `accInput` means the CLI's context tracker missed the conversation
+        // (gateway models) — the ring then shows garbage occupancy.
+        this.ctx.log.info(
+          `context-usage pathB: cc=${JSON.stringify({
+            totalTokens: cc.totalTokens,
+            maxTokens: cc.maxTokens,
+            percentage: cc.percentage,
+            model: cc.model,
+          })} accInput=${accumulatedRaw.inputTokens ?? 0} ` +
+            `accProcessed=${totalProcessedTokensFromRawUsage(accumulatedRaw)} ` +
+            `assistantMsgs=${this.state.assistantMessageCount} ` +
+            `lastKnownUsed=${lastKnown?.usedTokens ?? "none"}`,
         );
-        if (accumulated) {
-          const snapshot = buildSnapshotFromControlChannel(cc, accumulated);
-          this.publishTokenUsageSnapshot(snapshot);
-          return;
+        // Plausibility gate: on third-party gateways the CLI's control channel
+        // often returns a grossly undercounted occupancy (observed ~0.2%-1.6%
+        // of the real prompt; e.g. 1,814 vs 677,944 input tokens on multi-call
+        // turns), which would render a ghost "0%" ring. Cross-check against the
+        // accumulated result.usage — a totalTokens below 10% of the real input
+        // is treated as untrusted and we fall through to path C (path-A merge).
+        // Single-call turns report exactly (`totalTokens == accInput`), so the
+        // gate never fires there. Post-compaction the occupancy may legitimately
+        // shrink below 10% of the cumulative input, but path C's merge uses the
+        // last known snapshot (post-compact value), so the result stays correct.
+        const accInput = accumulatedRaw.inputTokens ?? 0;
+        const plausible = accInput <= 0 || cc.totalTokens >= accInput * 0.1;
+        if (plausible) {
+          const accumulated = normalizeClaudeTokenUsage(
+            accumulatedRaw,
+            { reported: reportedWindow, lastKnown: this.state.lastKnownContextWindow },
+          );
+          if (accumulated) {
+            const snapshot = buildSnapshotFromControlChannel(cc, accumulated);
+            this.publishTokenUsageSnapshot(snapshot);
+            return;
+          }
+        } else {
+          this.ctx.log.warn(
+            `context-usage pathB implausible: totalTokens=${cc.totalTokens} vs accInput=${accInput} ` +
+              `(${((cc.totalTokens / accInput) * 100).toFixed(1)}%), falling back to path C`,
+          );
         }
       } catch (err) {
         this.ctx.log.warn(
@@ -1245,6 +1320,11 @@ export class SdkMessageAdapter {
     // merged with path A's last known window read for occupancy.
     if (!lastKnown) {
       // No path-A snapshot - emit accumulated directly as better-than-nothing.
+      this.ctx.log.info(
+        `context-usage pathC-direct: accInput=${accumulatedRaw.inputTokens ?? 0} ` +
+          `accProcessed=${totalProcessedTokensFromRawUsage(accumulatedRaw)} ` +
+          `assistantMsgs=${this.state.assistantMessageCount} (no path-A snapshot)`,
+      );
       this.emitTokenUsage(accumulatedRaw, model, reportedWindow);
       return;
     }
@@ -1258,6 +1338,12 @@ export class SdkMessageAdapter {
         lastKnown,
         accumulated,
         accumulated.maxTokens,
+      );
+      this.ctx.log.info(
+        `context-usage pathC-merge: lastKnownUsed=${lastKnown.usedTokens} ` +
+          `accProcessed=${totalProcessedTokensFromRawUsage(accumulatedRaw)} ` +
+          `assistantMsgs=${this.state.assistantMessageCount} ` +
+          `final=${merged.usedTokens}/${merged.pct}%`,
       );
       this.publishTokenUsageSnapshot(merged);
     }

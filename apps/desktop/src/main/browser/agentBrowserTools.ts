@@ -340,6 +340,34 @@ export async function browserType(args: {
   );
 }
 
+/** `browser_evaluate` — run arbitrary JS in the page (modify DOM text, styles,
+ *  attributes, trigger events — anything the page can do). The script runs in
+ *  the page's own context (no Node/Electron access). Returns the script's
+ *  return value serialized as text so the model can verify its changes.
+ *  Side-effecting: goes through the normal approval flow. */
+export async function browserEvaluate(args: {
+  script: string;
+  browserId?: string;
+}): Promise<ToolResult> {
+  const script = (args.script ?? "").trim();
+  if (!script) return errorResult("script 不能为空");
+  const resolved = resolveBrowserId(args.browserId);
+  if (!resolved.ok) {
+    return errorResult(
+      resolved.reason === "no-live-browser"
+        ? "当前没有打开的浏览器。请先调用 browser_navigate({ url })。"
+        : resolved.reason,
+    );
+  }
+  const res = await BrowserManager.evaluate(resolved.browserId, script);
+  if (!res.ok) return errorResult(res.error ?? "脚本执行失败");
+  return text(
+    `已执行脚本(browserId=${resolved.browserId})。执行结果:\n${res.result ?? "(无返回值)"}\n当前 URL: ${
+      res.url ?? "(未知)"
+    }${res.title ? `\n标题: ${res.title}` : ""}`,
+  );
+}
+
 /** `browser_screenshot` — capture the current page as a PNG. Returns an image
  *  content block (so the model sees the screenshot) AND, when `ctx.onImage`
  *  is wired (Pi path), emits it for inline conversation rendering. */

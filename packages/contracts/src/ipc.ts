@@ -1928,6 +1928,7 @@ export const BrowserCreateSchema = z.object({
       "android",
       "galaxy-s23",
       "ipad-mini",
+      "pc",
       "custom",
     ])
     .optional(),
@@ -1988,6 +1989,8 @@ export type BrowserCloseInput = z.infer<typeof BrowserCloseSchema>;
 /** Device presets for the browser panel's H5/mobile emulation. "desktop" is
  *  the default (no emulation); the mobile presets set a viewport width/height
  *  + deviceScaleFactor + mobile screenPosition via enableDeviceEmulation.
+ *  "pc" is a large desktop-sized viewport (1920×1080) used in the sidebar with
+ *  a scroll container (page renders at true PC size; scrolling pans the view).
  *  "custom" uses the width/height passed at set-device time instead of a fixed
  *  preset. */
 export type BrowserDevicePreset =
@@ -1997,6 +2000,7 @@ export type BrowserDevicePreset =
   | "android"
   | "galaxy-s23"
   | "ipad-mini"
+  | "pc"
   | "custom";
 
 /** Screen orientation for device emulation. "landscape" swaps the preset's
@@ -2026,6 +2030,7 @@ export const BROWSER_DEVICE_PRESETS: BrowserDeviceSpec[] = [
   { id: "android", label: "Pixel 7", width: 412, height: 915, scale: 2.625 },
   { id: "galaxy-s23", label: "Galaxy S23", width: 360, height: 740, scale: 3 },
   { id: "ipad-mini", label: "iPad mini", width: 768, height: 1024, scale: 2 },
+  { id: "pc", label: "PC 1920×1080", width: 1920, height: 1080, scale: 1 },
   { id: "custom", label: "自定义", width: 0, height: 0, scale: 3 },
 ];
 
@@ -2059,6 +2064,7 @@ export const BrowserSetDeviceSchema = z.object({
     "android",
     "galaxy-s23",
     "ipad-mini",
+    "pc",
     "custom",
   ]),
   /** Custom viewport width (required when device === "custom"). */

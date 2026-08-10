@@ -34,6 +34,7 @@ import {
   browserSnapshot,
   browserClick,
   browserType,
+  browserEvaluate,
   browserScreenshot,
 } from "@main/browser/agentBrowserTools.js";
 
@@ -92,7 +93,7 @@ async function buildBrowserMcpServer(
     instructions:
       "Mcode 应用内浏览器控制工具。browserId 可选——省略时自动复用已开 tab 或新建。" +
       "browser_navigate 的 device 参数可选 desktop(默认,PC 全宽)/iphone/android(移动端模拟)。" +
-      "典型流程:browser_navigate → browser_snapshot 读内容 → 按需 browser_type 填表 / browser_click 点击 / browser_screenshot 截图。",
+      "典型流程:browser_navigate → browser_snapshot 读内容 → 按需 browser_type 填表 / browser_evaluate 修改页面 DOM / browser_click 点击 / browser_screenshot 截图。",
     alwaysLoad: true,
     tools: [
       {
@@ -170,6 +171,22 @@ async function buildBrowserMcpServer(
           browserType({
             selector: args.selector as string,
             text: args.text as string,
+            browserId: args.browserId as string | undefined,
+          }),
+      },
+      {
+        name: "browser_evaluate",
+        description:
+          "在页面中执行任意 JavaScript,可修改页面 DOM(文字、样式、属性、触发事件等)——凡是页面自己能做到的都可以。" +
+          "script 为要执行的 JS 代码(在页面主世界运行,无 Node/Electron 权限)。返回脚本返回值(序列化为文本)供确认修改结果。" +
+          "适用于改页面显示文字、调整样式等 browser_type/click 做不到的操作。有副作用,需要用户审批。",
+        inputSchema: {
+          script: z.string().describe("要在页面中执行的 JavaScript 代码(可访问 document/window 等页面对象)"),
+          browserId: z.string().optional().describe("目标浏览器视图 id;省略则用第一个已开视图"),
+        },
+        handler: async (args: Record<string, unknown>) =>
+          browserEvaluate({
+            script: args.script as string,
             browserId: args.browserId as string | undefined,
           }),
       },
