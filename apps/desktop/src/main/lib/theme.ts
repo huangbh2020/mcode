@@ -86,6 +86,15 @@ export async function initTheme(): Promise<void> {
   nativeTheme.themeSource = pref;
   log.info(`theme initialized: ${pref} (effective ${effective()})`);
 
+  // Explicitly sync the native window-controls overlay to the resolved theme.
+  // The window was created earlier with the OS-default colors (initTheme waits
+  // for the DB), and the "updated" listener below is only registered AFTER
+  // themeSource was set — if that setter emits synchronously, the event is
+  // missed and the close/minimize region keeps the OS-default color while the
+  // renderer shows the persisted theme (visible mismatch in the top-right
+  // corner). This call makes the startup sync deterministic; it's idempotent.
+  updateTitleBarOverlay();
+
   // OS theme changed (only meaningful in 'system' mode, but the event fires
   // regardless - cheap to re-broadcast). Also fires when WE set themeSource.
   nativeTheme.on("updated", () => {

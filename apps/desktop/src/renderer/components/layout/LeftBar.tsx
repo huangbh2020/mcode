@@ -408,7 +408,7 @@ export function LeftBar() {
         onClick={() => setSettingsOpen(true)}
         className={cn(
           "group mb-2 flex items-center gap-2.5 rounded-lg px-2 py-2 text-left transition-colors",
-          "hover:bg-surface-muted/60",
+          "hover:bg-surface-hover/60",
         )}
         title="关于 Mcode"
       >
@@ -451,8 +451,8 @@ export function LeftBar() {
               className={cn(
                 "flex items-center rounded-l px-1 py-0.5 transition-colors",
                 projectView === "flat"
-                  ? "bg-surface-muted text-content"
-                  : "text-content-subtle hover:bg-surface-muted/50 hover:text-content",
+                  ? "bg-surface-hover text-content"
+                  : "text-content-subtle hover:bg-surface-hover/60 hover:text-content",
               )}
               title="常规视图（平铺列表）"
               aria-pressed={projectView === "flat"}
@@ -464,8 +464,8 @@ export function LeftBar() {
               className={cn(
                 "flex items-center rounded-r border-l border-edge px-1 py-0.5 transition-colors",
                 projectView === "grouped"
-                  ? "bg-surface-muted text-content"
-                  : "text-content-subtle hover:bg-surface-muted/50 hover:text-content",
+                  ? "bg-surface-hover text-content"
+                  : "text-content-subtle hover:bg-surface-hover/60 hover:text-content",
               )}
               title="分组视图（按分组折叠）"
               aria-pressed={projectView === "grouped"}
@@ -558,7 +558,7 @@ export function LeftBar() {
             onClick={() => setArchivedViewOpen(!archivedViewOpen)}
             className={cn(
               "flex w-full items-center gap-1 rounded px-1 py-0.5 font-medium uppercase tracking-wide [font-size:var(--rp-fs-md)]",
-              "text-content-subtle transition-colors hover:bg-surface-muted/50",
+              "text-content-subtle transition-colors hover:bg-surface-hover/60",
             )}
           >
             <IconChevronRight
@@ -621,7 +621,7 @@ export function LeftBar() {
           onClick={() => setSettingsOpen(true)}
           className={cn(
             "flex w-full items-center gap-2 rounded px-2 py-1.5 text-content-muted transition-colors [font-size:var(--right-panel-font-size)]",
-            "hover:bg-surface-muted hover:text-content",
+            "hover:bg-surface-hover hover:text-content",
           )}
           title="设置"
         >
@@ -793,8 +793,8 @@ function ProjectNode(props: ProjectNodeProps) {
         className={cn(
           "group flex items-center gap-1 rounded px-1 py-1 [font-size:var(--right-panel-font-size)]",
           isActiveProject
-            ? "bg-surface-muted text-content"
-            : "text-content-muted hover:bg-surface-muted/50",
+            ? "bg-surface-hover text-content"
+            : "text-content-muted hover:bg-surface-hover/60",
           isDragging && "opacity-50",
         )}
       >
@@ -867,7 +867,7 @@ function ProjectNode(props: ProjectNodeProps) {
                 onClick={onLoadMore}
                 className={cn(
                   "w-full rounded px-2 py-1 text-left text-content-subtle transition-colors [font-size:var(--rp-fs-md)]",
-                  "hover:bg-surface-muted/50 hover:text-accent",
+                  "hover:bg-surface-hover/60 hover:text-accent",
                 )}
               >
                 加载更多{total > 0 ? `（还有 ${Math.max(total - loaded, 0)} 条）` : ""}
@@ -942,7 +942,7 @@ function SessionRow({
         "group flex cursor-pointer items-center gap-1 rounded-md px-1 py-1 [font-size:var(--right-panel-font-size)]",
         active
           ? "bg-surface-hover text-content shadow-sm ring-1 ring-inset ring-accent/35"
-          : "text-content-muted hover:bg-surface-muted/50",
+          : "text-content-muted hover:bg-surface-hover/60",
       )}
       title={`${session.title}\n${formatFullTime(session.updatedAt)}`}
     >
@@ -1096,7 +1096,7 @@ function ArchivedRow({
     <li
       className={cn(
         "flex items-center gap-1 rounded px-1 py-1 text-content-subtle [font-size:var(--right-panel-font-size)]",
-        "hover:bg-surface-muted/50",
+        "hover:bg-surface-hover/60",
       )}
     >
       {icon}
@@ -1319,8 +1319,8 @@ function GroupNode({
         {...listeners}
         className={cn(
           "group flex items-center gap-1 rounded px-1 py-0.5 [font-size:var(--rp-fs-md)]",
-          "text-content-subtle hover:bg-surface-muted/50",
-          isOver && "bg-surface-muted ring-1 ring-accent/40",
+          "text-content-subtle hover:bg-surface-hover/60",
+          isOver && "bg-surface-hover ring-1 ring-accent/40",
           isDragging && "opacity-50",
         )}
       >

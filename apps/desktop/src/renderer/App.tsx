@@ -169,8 +169,9 @@ export function App() {
       {/* Panel row — bg-surface-muted as the contrasting track so the center
           pane's rounded bottom-left corner (in ThreePaneLayout) reveals this
           muted color through the notch and reads as a clean arc. The left
-          sidebar is also bg-surface-muted, so it blends seamlessly into the
-          track; the center pane (bg-surface) sits on top. */}
+          sidebar is also bg-surface-muted — matching the titlebar's left
+          strip above it — so it blends seamlessly into the track; the center
+          pane (bg-surface) sits on top with --panel-shadow. */}
       <div className="relative flex min-h-0 flex-1 bg-surface-muted">
         <ThreePaneLayout
           left={<LeftBar />}

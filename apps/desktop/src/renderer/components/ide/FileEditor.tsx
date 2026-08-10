@@ -750,20 +750,33 @@ function useGitDiffPair(
 
 /** Tracks the effective Monaco theme by watching the `.dark` class on <html>.
  *  Monaco can't react to CSS, so we explicitly switch its theme when the app
- *  theme flips. Returns "vs-dark" or "light". */
+ *  theme flips. Returns "mcode-dark" or "light".
+ *
+ *  The switch is deferred ~150ms after the class change so it lands as the
+ *  CSS theme transition (styles.css .theme-transition, 180ms) finishes —
+ *  flipping instantly would flash the old palette's editor while the chrome
+ *  is still fading. The MutationObserver fires on every class change (the
+ *  transition flag class too), so the timeout is re-armed each time; the
+ *  final arm lands after the flip settles, which is exactly what we want. */
 export function useMonacoTheme(): string {
   const [dark, setDark] = useState(() =>
     typeof document !== "undefined" ? document.documentElement.classList.contains("dark") : true,
   );
   useEffect(() => {
     const el = document.documentElement;
+    let timer: number | undefined;
     const observer = new MutationObserver(() => {
-      setDark(el.classList.contains("dark"));
+      const isDark = el.classList.contains("dark");
+      window.clearTimeout(timer);
+      timer = window.setTimeout(() => setDark(isDark), 150);
     });
     observer.observe(el, { attributes: true, attributeFilter: ["class"] });
-    return () => observer.disconnect();
+    return () => {
+      observer.disconnect();
+      window.clearTimeout(timer);
+    };
   }, []);
-  return dark ? "vs-dark" : "light";
+  return dark ? "mcode-dark" : "light";
 }
 
 /** True for `.md` / `.markdown` files - gates the preview/edit toolbar toggle

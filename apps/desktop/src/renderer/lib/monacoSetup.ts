@@ -67,6 +67,57 @@ self.MonacoEnvironment = {
 // Hand the loader our bundled instance so it never hits the CDN.
 loader.config({ monaco });
 
+/**
+ * Custom dark theme ("mcode-dark") — the stock "vs-dark" paints Monaco on
+ * #1e1e1e, which clashes with the app's neutral dark-gray surface (#18181b,
+ * styles.css --surface) and makes the editor read as a foreign gray block.
+ * This theme inherits vs-dark's token colors (`base: "vs-dark", inherit:
+ * true`) and only re-paints the chrome: background, gutters, line numbers,
+ * selection, widgets, scrollbars and diff gutters — all mirroring the app
+ * tokens so the editor melts into the surrounding panes. Registered at module
+ * load (side effect), before any Editor mounts; FileEditor/PlanViewer select
+ * it via useMonacoTheme(). Keep the hex values in sync with styles.css. */
+monaco.editor.defineTheme("mcode-dark", {
+  base: "vs-dark",
+  inherit: true,
+  rules: [],
+  colors: {
+    "editor.background": "#18181b", // --surface
+    "editor.foreground": "#e7e8ec", // --content
+    "editorLineNumber.foreground": "#80848c", // --content-subtle
+    "editorLineNumber.activeForeground": "#aab0b8", // --content-muted
+    "editorCursor.foreground": "#e7e8ec",
+    "editor.selectionBackground": "#264f78aa",
+    "editor.inactiveSelectionBackground": "#264f7840",
+    "editor.lineHighlightBackground": "#2c2d3322",
+    "editor.lineHighlightBorder": "#00000000",
+    "editorIndentGuide.background1": "#2c2d3340",
+    "editorIndentGuide.activeBackground1": "#80848c80",
+    "editorBracketMatch.background": "#10b9812a", // --accent tint
+    "editorBracketMatch.border": "#10b98188",
+    "editorGutter.background": "#18181b",
+    "editorWidget.background": "#202126", // --surface-muted
+    "editorWidget.border": "#292a2f", // --edge
+    "editorSuggestWidget.background": "#202126",
+    "editorSuggestWidget.border": "#292a2f",
+    "editorSuggestWidget.selectedBackground": "#2c2d33", // --surface-hover
+    "editorHoverWidget.background": "#202126",
+    "editorHoverWidget.border": "#292a2f",
+    "editorError.foreground": "#f87171",
+    "editorWarning.foreground": "#fbbf24",
+    "editorInfo.foreground": "#a78bfa",
+    "scrollbarSlider.background": "#2c2d3366",
+    "scrollbarSlider.hoverBackground": "#2c2d33",
+    "scrollbarSlider.activeBackground": "#44454c",
+    "minimap.background": "#18181b",
+    "minimapSlider.background": "#2c2d3377",
+    "diffEditor.insertedTextBackground": "#10b98122",
+    "diffEditor.removedTextBackground": "#f8717122",
+    "diffEditor.insertedLineBackground": "#10b98114",
+    "diffEditor.removedLineBackground": "#f8717114",
+  },
+});
+
 export { monaco };
 
 /** Toggle Monaco's built-in TS/JS worker diagnostics. When an external TS

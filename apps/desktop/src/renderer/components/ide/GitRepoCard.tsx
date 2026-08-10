@@ -1297,7 +1297,7 @@ function FileGroup({
   const [collapsed, setCollapsed] = useState(false);
   return (
     <div>
-      <div className="mb-1 flex items-center gap-1">
+      <div className="group mb-1 flex items-center gap-1">
         <button
           type="button"
           onClick={() => setCollapsed((v) => !v)}
@@ -1313,9 +1313,10 @@ function FileGroup({
               onClick={onDiscardAll}
               disabled={busy}
               title={`放弃 ${label} 组内所有文件的本地更改`}
-              className="rounded px-1.5 py-0.5 [font-size:var(--rp-fs-xxs)] text-danger transition-colors hover:bg-danger/10 hover:text-danger disabled:opacity-40"
+              aria-label={`放弃 ${label} 组内所有文件的本地更改`}
+              className="rounded p-0.5 text-content-subtle opacity-0 transition-all hover:bg-danger/10 hover:text-danger focus-visible:opacity-100 group-hover:opacity-100 disabled:opacity-0"
             >
-              全部放弃
+              <IconTrash size={13} />
             </button>
           )}
           <button
@@ -1437,9 +1438,9 @@ function FileRow({
 
   return (
     <ContextMenu.Root>
-      <ContextMenu.Trigger
+        <ContextMenu.Trigger
         render={
-          <div className="group flex items-center gap-1.5 rounded px-1 py-0.5 hover:bg-surface-hover/40" />
+          <div className="group relative flex items-center gap-1.5 rounded px-1 py-0.5 hover:bg-surface-hover/40" />
         }
       >
         <button
@@ -1458,8 +1459,9 @@ function FileRow({
             {diffTally.dels > 0 && <span className="text-danger">−{diffTally.dels}</span>}
           </span>
         )}
-        {/* Hover action buttons — appear on hover, replacing the tally badge. */}
-        <div className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
+        {/* Hover action buttons — absolutely positioned so the +/- tally badge
+            can sit flush right; this layer fades in over the badge on hover. */}
+        <div className="absolute right-0.5 top-1/2 flex -translate-y-1/2 items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
           {/* Staged files: unstage button. Unstaged: stage button. */}
           {staged ? (
             <RowActionIcon

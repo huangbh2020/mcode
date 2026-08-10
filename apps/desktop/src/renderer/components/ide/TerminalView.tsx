@@ -34,12 +34,12 @@ interface Props {
 function buildTheme(dark: boolean): ITheme {
   if (dark) {
     return {
-      background: "#18181b", // surface zinc-900
-      foreground: "#f4f4f5", // content zinc-100
+      background: "#18181b", // surface zinc-900 (matches --surface)
+      foreground: "#e7e8ec", // content (--content)
       cursor: "#10b981", // accent emerald-500
       cursorAccent: "#18181b",
-      selectionBackground: "#3f3f46", // surface-hover
-      selectionForeground: "#f4f4f5",
+      selectionBackground: "#2c2d33", // surface-hover
+      selectionForeground: "#e7e8ec",
       black: "#18181b",
       red: "#f87171",
       green: "#34d399",
@@ -92,11 +92,19 @@ function useIsDark(): boolean {
   );
   useEffect(() => {
     const el = document.documentElement;
+    let timer: number | undefined;
     const observer = new MutationObserver(() => {
-      setDark(el.classList.contains("dark"));
+      const isDark = el.classList.contains("dark");
+      // Defer ~150ms so the swap lands as the CSS theme transition finishes
+      // (xterm's canvas can't fade, but it shouldn't hard-cut mid-fade either).
+      window.clearTimeout(timer);
+      timer = window.setTimeout(() => setDark(isDark), 150);
     });
     observer.observe(el, { attributes: true, attributeFilter: ["class"] });
-    return () => observer.disconnect();
+    return () => {
+      observer.disconnect();
+      window.clearTimeout(timer);
+    };
   }, []);
   return dark;
 }

@@ -8,6 +8,8 @@ import {
   IconX,
   IconColumns3,
   IconSquare,
+  IconMaximize,
+  IconMinimize,
   IconFile,
   IconLoader2,
   IconChevronDown,
@@ -59,6 +61,8 @@ export function GitDiffDialog() {
 
   const [status, setStatus] = useState<GitStatusResult | null>(null);
   const [statusLoading, setStatusLoading] = useState(false);
+  // Fullscreen is a transient view toggle — resets each time the dialog opens.
+  const [fullscreen, setFullscreen] = useState(false);
 
   const refreshStatus = useCallback(async (repoPath: string) => {
     setStatusLoading(true);
@@ -142,7 +146,14 @@ export function GitDiffDialog() {
     <Dialog.Root open={open && tabs.length > 0} onOpenChange={(o) => setOpen(o)}>
       <Dialog.Portal>
         <Dialog.Backdrop />
-        <Dialog.Popup className="flex h-[85vh] max-h-[900px] w-[90vw] max-w-[1400px] flex-col p-0">
+        <Dialog.Popup
+          className={cn(
+            "flex flex-col p-0",
+            fullscreen
+              ? "left-0 top-10 h-[calc(100vh-2.5rem)] w-screen max-w-none translate-x-0 translate-y-0 rounded-none"
+              : "h-[85vh] max-h-[900px] w-[90vw] max-w-[1400px]",
+          )}
+        >
           {/* Header: title + view-mode toggle (left) ... close (right) */}
           <div className="flex shrink-0 items-center justify-between border-b border-edge px-4 py-2.5">
             <div className="flex items-center gap-2">
@@ -159,6 +170,19 @@ export function GitDiffDialog() {
                 )}
               >
                 {isTabsMode ? <IconSquare size={15} /> : <IconColumns3 size={15} />}
+              </button>
+              {/* Fullscreen toggle — expand the dialog to fill the work area. */}
+              <button
+                type="button"
+                onClick={() => setFullscreen((v) => !v)}
+                title={fullscreen ? "退出全屏" : "全屏显示"}
+                aria-label={fullscreen ? "退出全屏" : "全屏显示"}
+                className={cn(
+                  "flex items-center justify-center rounded p-1 transition-colors",
+                  "text-content-subtle hover:bg-surface-hover hover:text-content",
+                )}
+              >
+                {fullscreen ? <IconMinimize size={15} /> : <IconMaximize size={15} />}
               </button>
             </div>
             <Dialog.Close />

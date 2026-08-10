@@ -6,11 +6,26 @@ import type { ThemeName, EffectiveTheme } from "@contracts/theme";
  * Toggle the `.dark` class on <html>, which (with `darkMode: 'class'` in the
  * Tailwind config) is what actually re-themes the UI. Exposed for the FOUC
  * guard below and for useTheme() to keep the class in sync.
+ *
+ * When the effective theme actually flips, the `theme-transition` flag is
+ * stamped on <html> for ~260ms so styles.css animates the whole chrome
+ * between palettes (backgrounds/borders/text fade instead of hard-cutting);
+ * the flag is removed afterwards so element-level hover transitions return
+ * to their normal timing. No-ops when the theme didn't change (e.g. the FOUC
+ * guard already applied the right class at startup) — that keeps the first
+ * paint transition-free.
  */
+const THEME_TRANSITION_MS = 260;
+
 export function applyThemeClass(effective: EffectiveTheme): void {
   const root = document.documentElement;
-  if (effective === "dark") root.classList.add("dark");
+  const wasDark = root.classList.contains("dark");
+  const isDark = effective === "dark";
+  if (wasDark === isDark) return;
+  root.classList.add("theme-transition");
+  if (isDark) root.classList.add("dark");
   else root.classList.remove("dark");
+  window.setTimeout(() => root.classList.remove("theme-transition"), THEME_TRANSITION_MS);
 }
 
 /**

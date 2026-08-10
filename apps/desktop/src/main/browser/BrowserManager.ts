@@ -138,7 +138,7 @@ function defaultOnscreenBounds(): Rectangle {
 /** Background color matching the effective theme, so the view doesn't flash
  *  the wrong color before a page paints. Mirrors window.ts's bgColor(). */
 function bgColor(): string {
-  return getEffectiveTheme() === "dark" ? "#0d0e11" : "#ffffff";
+  return getEffectiveTheme() === "dark" ? "#18181b" : "#ffffff";
 }
 
 class BrowserManagerImpl {

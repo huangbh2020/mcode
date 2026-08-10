@@ -2431,7 +2431,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   gitDiffDialogTabs: [],
   gitDiffDialogActiveId: null,
   gitDiffDialogOpen: false,
-  gitDiffDialogViewMode: "tabs",
+  gitDiffDialogViewMode: "single",
   ideExpandedDirsByProject: {},
   gitDiffByProject: {},
   ideDiffBeforeByProject: {},

@@ -83,29 +83,41 @@
    * in the same section. */
   font-weight: 600;
 
-  --surface: 13 14 17; /* near-black with a faint cool tint — deeper than
-                        * zinc-900 so white text floats with more pop, matching
-                        * the reference design's dark background. */
-  --surface-muted: 22 24 28; /* one stop up from surface for inset panels */
-  --surface-hover: 34 36 41; /* hover/active states */
-  --content: 221 224 229; /* soft off-white (#dde0e5) — same faint cool tint
-                           * as before but one step dimmer: the old near-white
-                           * (#f5f7fa) was ~0.92 luminance and read as harsh
-                           * glare on long sessions. Still ~14:1 contrast on
-                           * the deep surface, well above WCAG AAA (7:1). */
-  --content-muted: 165 171 180; /* cool gray-blue for secondary text, dimmed
-                                 * in step with --content so the light/dark
-                                 * hierarchy stays proportional. */
-  --content-subtle: 122 128 138; /* mid cool-gray for dim metadata/labels */
-  --edge: 34 36 41; /* matches surface-hover — subtle dividers on deep bg */
-  --input-edge: 92 99 112; /* cool gray — brighter than --edge so the
+  /* Neutral dark-gray ramp (VS Code Dark+ style) — deliberately NOT near-
+   * black. The previous --surface (13 14 17, #0d0e11) read as a harsh void
+   * on large areas; the ramp below starts at zinc-900 and steps up ~9 units
+   * per level so panels, hovers and borders each resolve as distinct layers
+   * instead of blending into one dark mush. Text was brightened one step to
+   * keep contrast ratios roughly unchanged on the lighter ground. */
+  --surface: 24 24 27; /* #18181b — zinc-900, the base app background */
+  --surface-muted: 32 33 38; /* #202126 — one clear step up: inset panels /
+                              * track / left sidebar. The gap to --surface is
+                              * ~2× the old one so the three-pane layering is
+                              * visible at a glance. */
+  --surface-hover: 44 45 51; /* #2c2d33 — hover/active states, clearly above
+                              * both surface and muted */
+  --content: 231 232 236; /* soft off-white (#e7e8ec) — ~14.5:1 on the new
+                           * surface, still well above WCAG AAA (7:1) */
+  --content-muted: 170 173 180; /* secondary text, dimmed in step with
+                                 * --content so the hierarchy stays
+                                 * proportional */
+  --content-subtle: 128 132 140; /* mid gray for dim metadata/labels */
+  --edge: 41 42 47; /* #292a2f — one notch below hover so borders read as
+                     * separators, not highlights */
+  --input-edge: 95 99 110; /* cool gray — brighter than --edge so the
                             * composer box outline stays visible on the
-                            * deep background. Tuned to read clearly without
+                            * background. Tuned to read clearly without
                             * being as bright as the muted-text color. */
   --accent: 16 185 129; /* emerald-500 */
   --danger: 248 113 113; /* red-400 */
   --warning: 251 191 36; /* amber-400 */
   --info: 167 139 250; /* violet-400 */
+
+  /* Center-pane drop shadow (--panel-shadow): applied to the workspace
+   * center pane + dialogs so the elevated surface separates from the muted
+   * track with a soft dark halo instead of relying on hairlines alone.
+   * A 1px near-black outline tightens the edge definition. */
+  --panel-shadow: 0 0 0 1px rgb(0 0 0 / 0.35), 0 0 32px -8px rgb(0 0 0 / 0.55);
 
   /* Chat appearance defaults for dark mode (neutral gray, one shade
    * brighter than the light default for readable contrast on zinc-900).
@@ -120,10 +132,19 @@
   --chat-font-weight: 500;
   --user-bubble: 113 113 122; /* default = zinc-500 (\#71717a) */
 
-  /* Global side-panel + settings base font size (same default in light + dark). */
+  /* Global side-panel + settings base font size - user-configurable via
+   * Settings -> 外观 -> 全局字体大小. Despite the var's legacy name it drives
+   * the whole app chrome (left bar, right files/git/terminal, settings page).
+   * Overridden at runtime by lib/appearance.ts. The derived --rp-fs-* variants
+   * (below) track this via calc. */
   --right-panel-font-size: 14px;
 
-  color-scheme: dark;
+  /* Center-pane drop shadow — light theme keeps a whisper (white-on-white
+   * needs almost nothing); .dark supplies the strong version. See the .dark
+   * block for the reasoning. */
+  --panel-shadow: 0 0 0 1px rgb(0 0 0 / 0.04), 0 8px 24px -12px rgb(0 0 0 / 0.12);
+
+  color-scheme: light;
 }
 
 /* ───────────── Font-weight ladder shifts ─────────────
@@ -233,6 +254,30 @@ html .font-bold {
 }
 .no-scrollbar::-webkit-scrollbar {
   display: none;
+}
+
+/* ───────────── Theme-switch transition ─────────────
+ * lib/theme.ts applyThemeClass() stamps `theme-transition` on <html> for the
+ * ~250ms around a light↔dark flip, then removes it. While present, every
+ * element inherits a short transition on the color-carrying properties, so
+ * the whole chrome fades smoothly between palettes instead of hard-cutting.
+ * Scoped to the flag class so the always-on cost is zero outside the flip
+ * window, and existing hover transitions (which set their own transition
+ * shorthand on the element) are temporarily overridden by !important. Monaco
+ * and xterm can't transition their internal canvases; they swap ~150ms in via
+ * their own observers, landing as the CSS fade finishes. */
+html.theme-transition,
+html.theme-transition *,
+html.theme-transition *::before,
+html.theme-transition *::after {
+  transition:
+    background-color 180ms ease-out,
+    border-color 180ms ease-out,
+    color 180ms ease-out,
+    fill 180ms ease-out,
+    stroke 180ms ease-out,
+    box-shadow 180ms ease-out,
+    outline-color 180ms ease-out !important;
 }
 
 html,
