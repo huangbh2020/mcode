@@ -15,7 +15,7 @@ import type { lineDiff } from "@renderer/lib/lineDiff.js";
 export function DiffView({ diff }: { diff: ReturnType<typeof lineDiff> }) {
   if (diff.length === 0) {
     return (
-      <div className="rounded bg-surface/60 p-2 text-content-subtle [font-size:var(--chat-fs-xs)]">
+      <div className="rounded bg-surface-muted/60 p-2 text-content-subtle [font-size:var(--chat-fs-xs)]">
         (no changes)
       </div>
     );
@@ -27,7 +27,7 @@ export function DiffView({ diff }: { diff: ReturnType<typeof lineDiff> }) {
   const rows = annotateDiffWithLineNumbers(diff);
 
   return (
-    <div className="max-h-80 overflow-auto rounded bg-surface/60 font-mono leading-relaxed [font-size:var(--chat-fs-xs)]">
+    <div className="max-h-80 overflow-auto rounded bg-surface-muted/60 font-mono leading-relaxed [font-size:var(--chat-fs-xs)]">
       {rows.map((d, i) => {
         // Fixed red/green diff colors that don't shift with the theme - the
         // accent/danger tokens change between light/dark (and track the

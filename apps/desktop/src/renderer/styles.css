@@ -120,32 +120,48 @@ div:has(> [role="menu"]) {
    * in the same section. */
   font-weight: 600;
 
-  /* Neutral dark-gray ramp (VS Code Dark+ style) — deliberately NOT near-
-   * black. The previous --surface (13 14 17, #0d0e11) read as a harsh void
-   * on large areas; the ramp below starts at zinc-900 and steps up ~9 units
-   * per level so panels, hovers and borders each resolve as distinct layers
-   * instead of blending into one dark mush. Text was brightened one step to
-   * keep contrast ratios roughly unchanged on the lighter ground. */
-  --surface: 24 24 27; /* #18181b — zinc-900, the base app background */
-  --surface-muted: 32 33 38; /* #202126 — one clear step up: inset panels /
-                              * track / left sidebar. The gap to --surface is
-                              * ~2× the old one so the three-pane layering is
-                              * visible at a glance. */
-  --surface-hover: 44 45 51; /* #2c2d33 — hover/active states, clearly above
-                              * both surface and muted */
+  /* Slate-tinted dark ramp (VS Code Dark+ / GitHub Dark style). The whole
+   * ramp carries a slight cool bias — the B channel runs a few units above
+   * R/G — so the base surface, recesses, hovers and borders all share ONE
+   * color temperature. The previous neutral-zinc ground (#18181b) read as a
+   * flat void next to the blue-gray wells once --surface-muted was moved to
+   * slate, which made the center pane look harshly black against the left
+   * sidebar. The base stays dark (≈#1a1d24) for immersion; muted/hover step
+   * up from there keeping the same cool proportion so the three panes (left
+   * = muted track, center/right = surface) read as one cool palette with
+   * brightness hierarchy, not a warm/cold split. Text stays neutral
+   * white/gray — it doesn't follow the tint, keeping contrast clean. */
+  --surface: 26 29 36; /* #1a1d24 — slate-tinted near-black; the base app
+                        * background (center pane, right sidebar, popups,
+                        * titlebar). B channel sits ~10 above R so the cool
+                        * bias matches --surface-muted. */
+  --surface-muted: 44 49 60; /* #2c313c — slate-tinted recess: inset panels /
+                              * track / left sidebar / code-block & tool-result
+                              * wells in the data stream. Tinted cool (B channel
+                              * runs higher than R/G) so recesses read as a calm
+                              * blue-gray instead of flat neutral — the VS Code
+                              * Dark+ look. The gap to --surface is ~20, enough
+                              * that /40 /60 alpha variants still resolve as a
+                              * visible layer. */
+  --surface-hover: 58 64 78; /* #3a404e — hover/active states, lifted in step
+                              * and keeping the same slate tint so the three
+                              * layers (surface → muted → hover) stay on one
+                              * cool ramp. */
   --content: 231 232 236; /* soft off-white (#e7e8ec) — ~14.5:1 on the new
                            * surface, still well above WCAG AAA (7:1) */
   --content-muted: 170 173 180; /* secondary text, dimmed in step with
                                  * --content so the hierarchy stays
                                  * proportional */
-  --content-subtle: 150 154 162; /* brighter mid gray — lifted ~22 units so
-                                   * dim metadata (file paths / git hashes /
-                                   * counts in tool cards) clears WCAG AA
-                                   * (~6.4:1) on the zinc-900 surface instead
-                                   * of sitting at the ~4.7:1 edge where it
-                                   * read as washed-out. */
-  --edge: 41 42 47; /* #292a2f — one notch below hover so borders read as
-                     * separators, not highlights */
+  --content-subtle: 132 136 145; /* dimmed mid gray (#848891) — pulled ~22
+                                   * units AWAY from --content-muted so the
+                                   * three text tiers (content → muted →
+                                   * subtle) resolve as distinct levels instead
+                                   * of merging into one flat off-white on dark
+                                   * (the old gap to muted was only ~19). Still
+                                   * ~4.5:1 on zinc-900 (WCAG AA edge). */
+  --edge: 45 51 64; /* #2d3340 — slate-tinted to match the muted/hover ramp;
+                     * one notch below hover so borders read as separators,
+                     * not highlights. */
   --input-edge: 95 99 110; /* cool gray — brighter than --edge so the
                             * composer box outline stays visible on the
                             * background. Tuned to read clearly without

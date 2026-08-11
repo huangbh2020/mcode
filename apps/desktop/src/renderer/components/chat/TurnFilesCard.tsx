@@ -105,7 +105,7 @@ export function TurnFilesCard({
   );
 
   return (
-    <div className={cn("rounded-lg border border-edge bg-surface/60 shadow-sm text-xs text-content-muted", rewound && "opacity-60")}>
+    <div className={cn("rounded-lg border border-edge bg-surface-muted/60 shadow-sm text-xs text-content-muted", rewound && "opacity-60")}>
       <button
         onClick={() => setOpen((v) => !v)}
         className="flex w-full items-center gap-2.5 px-3 py-2 text-left transition-colors hover:bg-surface-hover/50"

@@ -244,7 +244,7 @@ export function ActivityPopover({
   const showTasks = todos.length > 0;
 
   return (
-    <div className="absolute right-0 top-9 z-30 w-96 overflow-hidden rounded-xl border border-white/10 bg-surface/95 shadow-2xl backdrop-blur">
+    <div className="absolute right-0 top-9 z-30 w-96 overflow-hidden rounded-xl border border-white/10 bg-surface shadow-2xl">
       {/* Stacked sections: Plan -> Subagents -> Tasks. Thin dividers
           between them; the topmost rendered section gets the rounded top
           (handled by `overflow-hidden` on the parent). */}

@@ -801,7 +801,7 @@ function AttachmentCard({
               </button>
             </div>
           )}
-          <pre className="max-h-52 overflow-auto whitespace-pre-wrap break-words rounded bg-surface/60 px-3 py-2 font-mono text-[11px] leading-relaxed text-content-muted">
+          <pre className="max-h-52 overflow-auto whitespace-pre-wrap break-words rounded bg-surface-muted/60 px-3 py-2 font-mono text-[11px] leading-relaxed text-content-muted">
             {isFile ? (filePath ?? content) : content}
           </pre>
         </div>
@@ -908,7 +908,7 @@ function EditToolCard({
           {result !== undefined && (
             <div>
               <div className="mb-0.5 uppercase text-content-subtle [font-size:var(--chat-fs-xxs)]">Result</div>
-              <pre className="max-h-40 overflow-auto rounded bg-surface/60 p-2 text-content-muted [font-size:var(--chat-fs-xs)]">
+              <pre className="max-h-40 overflow-auto rounded bg-surface-muted/60 p-2 text-content-muted [font-size:var(--chat-fs-xs)]">
                 {truncateResult(result)}
               </pre>
             </div>
@@ -994,7 +994,7 @@ function WriteToolCard({
           ) : (
             <div>
               <div className="mb-0.5 uppercase text-content-subtle [font-size:var(--chat-fs-xxs)]">New file content</div>
-              <pre className="max-h-80 overflow-auto rounded bg-surface/60 p-2 text-content-muted [font-size:var(--chat-fs-xs)]">
+              <pre className="max-h-80 overflow-auto rounded bg-surface-muted/60 p-2 text-content-muted [font-size:var(--chat-fs-xs)]">
                 {content || "(empty)"}
               </pre>
             </div>
@@ -1002,7 +1002,7 @@ function WriteToolCard({
           {result !== undefined && (
             <div>
               <div className="mb-0.5 uppercase text-content-subtle [font-size:var(--chat-fs-xxs)]">Result</div>
-              <pre className="max-h-40 overflow-auto rounded bg-surface/60 p-2 text-content-muted [font-size:var(--chat-fs-xs)]">
+              <pre className="max-h-40 overflow-auto rounded bg-surface-muted/60 p-2 text-content-muted [font-size:var(--chat-fs-xs)]">
                 {truncateResult(result)}
               </pre>
             </div>
@@ -1051,14 +1051,14 @@ function GenericToolCard({
         <div className="space-y-2 border-l border-edge py-2 pl-2">
           <div>
             <div className="mb-0.5 uppercase text-content-subtle [font-size:var(--chat-fs-xxs)]">Input</div>
-            <pre className="max-h-60 overflow-auto rounded bg-surface/60 p-2 text-content-muted [font-size:var(--chat-fs-xs)]">
+            <pre className="max-h-60 overflow-auto rounded bg-surface-muted/60 p-2 text-content-muted [font-size:var(--chat-fs-xs)]">
               {safeStringify(block.input)}
             </pre>
           </div>
           {block.result !== undefined && (
             <div>
               <div className="mb-0.5 uppercase text-content-subtle [font-size:var(--chat-fs-xxs)]">Result</div>
-              <pre className="max-h-60 overflow-auto rounded bg-surface/60 p-2 text-content-muted [font-size:var(--chat-fs-xs)]">
+              <pre className="max-h-60 overflow-auto rounded bg-surface-muted/60 p-2 text-content-muted [font-size:var(--chat-fs-xs)]">
                 {resultPreview(block.result)}
               </pre>
             </div>

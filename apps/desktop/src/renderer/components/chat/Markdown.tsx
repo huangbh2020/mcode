@@ -252,7 +252,7 @@ function buildComponents(
     }, [rawCode, lang, ready]);
 
     return (
-      <pre className="my-2 overflow-hidden rounded-lg border border-edge/60 bg-surface/80">
+      <pre className="my-2 overflow-hidden rounded-lg border border-edge/60 bg-surface-muted/60">
         <div className="flex items-center justify-between border-b border-edge/60 bg-surface-muted/40 px-2 py-0.5 text-content-subtle [font-size:var(--chat-fs-xxs)]">
           <span className="font-mono">{lang}</span>
           <CopyButton text={rawCode.replace(/\n$/, "")} />
