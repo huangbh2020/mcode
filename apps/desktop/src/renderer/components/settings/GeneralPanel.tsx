@@ -15,8 +15,8 @@ import { TitleGenPanel } from "./TitleGenPanel.js";
  *
  * Hosts general-purpose preferences that aren't tied to a specific feature
  * area. Currently:
- *  - 布局 (SettingsSection): 中间面板显示模式 + 数据流显示风格
- *  - 线程名称生成 (TitleGenPanel, renders its own SettingsSection)
+ *  - 显示与布局 (SettingsSection): 中间面板显示模式 + 对话紧凑度 + 长文本折叠阈值
+ *  - 会话标题生成 (TitleGenPanel, renders its own SettingsSection)
  *
  * Card-grouped layout: a page-level PanelHeader on top, then one
  * SettingsSection per functional category. TitleGenPanel is dropped in as a
@@ -51,15 +51,15 @@ export function GeneralPanel() {
     <section className="space-y-4">
       <PanelHeader
         title="常规"
-        desc="调整界面布局与线程标题等基础偏好。"
+        desc="调整界面布局、消息显示与会话标题等基础偏好。"
       />
 
-      {/* ── 布局 ── */}
-      <SettingsSection title="布局">
+      {/* ── 显示与布局 ── */}
+      <SettingsSection title="显示与布局">
         {/* ── Center-pane display mode ── */}
         <SettingRow
           title="中间面板显示模式"
-          desc="点击左侧线程时,中间聊天区的呈现方式。"
+          desc="点击左侧会话时,中间聊天区的呈现方式。"
           htmlFor="setting-displaymode"
         >
           <Select.Root
@@ -92,7 +92,7 @@ export function GeneralPanel() {
 
         {/* ── Message-stream density (vertical rhythm) ── */}
         <SettingRow
-          title="数据流显示风格"
+          title="对话紧凑度"
           desc="调整消息之间的行间距与单条消息内块间距。紧凑可在屏幕内看到更多内容,宽松阅读更舒适。"
           htmlFor="setting-chatdensity"
         >
@@ -122,13 +122,11 @@ export function GeneralPanel() {
             </Select.Portal>
           </Select.Root>
         </SettingRow>
-      </SettingsSection>
 
-      {/* ── 输入 (paste behavior) ── */}
-      <SettingsSection title="输入">
+        {/* ── Long-text paste folding threshold ── */}
         <SettingRow
-          title="粘贴卡片阈值"
-          desc={`粘贴超过此字符数的内容时,会折叠为输入框上方的卡片而非直接插入正文(${PASTE_TAG_THRESHOLD_CHARS_MIN}–${PASTE_TAG_THRESHOLD_CHARS_MAX})。`}
+          title="长文本折叠阈值"
+          desc={`在输入框粘贴超过此字符数的内容时,会折叠为输入框上方的卡片而非直接插入正文(${PASTE_TAG_THRESHOLD_CHARS_MIN}–${PASTE_TAG_THRESHOLD_CHARS_MAX})。`}
           htmlFor="setting-paste-threshold"
         >
           <Input
@@ -144,7 +142,7 @@ export function GeneralPanel() {
         </SettingRow>
       </SettingsSection>
 
-      {/* ── 线程名称生成 (self-contained section) ── */}
+      {/* ── 会话标题生成 (self-contained section) ── */}
       <TitleGenPanel />
     </section>
   );

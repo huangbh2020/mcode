@@ -18,8 +18,9 @@ import { useEffect, useState } from "react";
 import { cn } from "@renderer/lib/cn.js";
 import { useSessionStore } from "@renderer/stores/sessionStore.js";
 import { api } from "@renderer/lib/api.js";
-import { Button, Card, Switch } from "@renderer/components/ui/index.js";
+import { Button, Switch } from "@renderer/components/ui/index.js";
 import { PanelHeader } from "./PanelHeader.js";
+import { SettingsSection } from "./SettingsSection.js";
 import type { LspLanguageId, LspLanguageState } from "@contracts/ipc";
 import {
   IconLanguage,
@@ -100,7 +101,7 @@ export function LspLanguagesPanel() {
         icon={IconLanguage}
       />
 
-      <Card className="divide-y divide-edge">
+      <SettingsSection title="语言服务器">
         {lspLanguages.length === 0 ? (
           <div className="flex items-center justify-center gap-2 px-4 py-8 text-[0.85em] text-content-subtle">
             <IconLoader2 size={14} className="animate-spin" />
@@ -111,7 +112,7 @@ export function LspLanguagesPanel() {
             <LanguageCard key={lang.language} state={lang} onReload={reloadLspLanguages} />
           ))
         )}
-      </Card>
+      </SettingsSection>
     </section>
   );
 }
@@ -250,7 +251,7 @@ function LanguageCard({
           </div>
           <div className="mt-0.5 text-[0.7857em] text-content-subtle">{meta.hint}</div>
         </div>
-        <Switch checked={state.enabled} onCheckedChange={doToggle} label={state.enabled ? "已启用" : "已停用"} />      </div>
+        <Switch checked={state.enabled} onCheckedChange={doToggle} label={state.enabled ? "已开启" : "已关闭"} />      </div>
 
       {/* Resolved path */}
       {state.serverPath && (

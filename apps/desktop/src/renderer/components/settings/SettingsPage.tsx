@@ -68,7 +68,7 @@ const NAV_ITEMS: NavItem[] = [
   { id: "appearance", label: "外观", icon: IconPalette },
   { id: "shortcuts", label: "快捷键", icon: IconKeyboard },
   { id: "custom-models", label: "模型配置", icon: IconRobot },
-  { id: "skills", label: "Skills", icon: IconSparkles },
+  { id: "skills", label: "技能", icon: IconSparkles },
   { id: "notifications", label: "消息通知", icon: IconBell },
   { id: "git", label: "Git", icon: IconBrandGit },
   { id: "terminal", label: "终端", icon: IconTerminal2 },

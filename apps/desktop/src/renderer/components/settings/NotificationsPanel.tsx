@@ -19,9 +19,10 @@ import { useEffect, useState } from "react";
 import { api } from "@renderer/lib/api.js";
 import type { NotificationPrefs } from "@contracts/ipc";
 import { DEFAULT_NOTIFICATION_PREFS } from "@contracts/ipc";
-import { Card, Switch } from "@renderer/components/ui/index.js";
+import { Switch } from "@renderer/components/ui/index.js";
 import { PanelHeader } from "./PanelHeader.js";
 import { SettingRow } from "./SettingRow.js";
+import { SettingsSection } from "./SettingsSection.js";
 
 export function NotificationsPanel() {
   const [prefs, setPrefs] = useState<NotificationPrefs>(DEFAULT_NOTIFICATION_PREFS);
@@ -50,7 +51,7 @@ export function NotificationsPanel() {
       />
 
       {/* Single category → one card of toggle rows. */}
-      <Card className="divide-y divide-edge">
+      <SettingsSection title="通知类型">
         {/* Master OS notification switch */}
         <SettingRow
           title="系统通知"
@@ -117,7 +118,7 @@ export function NotificationsPanel() {
             label={prefs.backgroundTasks ? "已开启" : "已关闭"}
           />
         </SettingRow>
-      </Card>
+      </SettingsSection>
     </section>
   );
 }

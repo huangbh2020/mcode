@@ -4,13 +4,11 @@ import {
   IconChevronDown,
   IconChevronLeft,
   IconChevronRight,
-  IconCheck,
   IconX,
   IconAlertTriangle,
   IconRobot,
   IconClipboard,
   IconFile,
-  IconCopy,
   // Tool-kind icons (left glyph of each action card).
   IconBulb,
   IconTerminal,
@@ -37,6 +35,8 @@ import { CurrentOpTicker } from "./CurrentOpTicker.js";
 import { lineDiff, diffSummary } from "@renderer/lib/lineDiff.js";
 import { FileLink } from "./FileLink.js";
 import { ImageWithPreview } from "@renderer/components/ui/index.js";
+import { TagPopover } from "./TagPopover.js";
+import type { ContentTag } from "@renderer/lib/contentTag.js";
 
 /** Map of absolute file path → its pre-turn content. Built from the
  *  `turn.files` event payload so the Write tool card can diff the new
@@ -719,16 +719,22 @@ export { BlockView };
  *  sending.
  *
  *  - Paste attachments (attachmentKind="paste" or undefined): clipboard icon,
- *    collapsed = one-line preview, expanded = full content + Copy button.
- *  - File attachments (attachmentKind="file"): file icon + name; CLICKING the
- *    card opens the file in the center IDE editor (markdown renders, images
- *    preview, text edits — the editor picks the view from the extension). The
- *    full path lives in the hover title, so there's no expand-to-path toggle.
- *    Legacy file cards without a path fall back to the paste-style expand.
+ *    one-line preview. CLICKING opens a floating `TagPopover` anchored to the
+ *    chip — exactly the same UX as the composer's ContentTagChip. No
+ *    "拆开" (expand-into-editor) action: once sent, the text belongs to the
+ *    user's message, not to the composer, so there's no editor to inline into.
+ *  - File attachments (attachmentKind="file"): file icon + name; CLICKING opens
+ *    the file in the center IDE editor (markdown renders, images preview, text
+ *    edits — the editor picks the view from the extension). The full path lives
+ *    in the hover title. Legacy file cards without a path fall back to the
+ *    paste-style popover.
  *
- *  Unlike the composer's TagPopover (fixed-positioned to the chip), this
- *  expands inline — the message stream is the stable anchor here, so a
- *  floating popover would be fragile on scroll. */
+ *  The popover uses `position: fixed` (viewport coordinates), so scrolling the
+ *  message stream does NOT move it — the popover stays put while the chip
+ *  scrolls out from under it. This matches the composer behavior and avoids
+ *  the fragility of an inline expand inside the (potentially virtualized)
+ *  message list. The popover is dismissed on outside-click / ESC / re-click
+ *  (handled by TagPopover internally + this toggle). */
 function AttachmentCard({
   preview,
   content,
@@ -741,33 +747,47 @@ function AttachmentCard({
   filePath?: string;
 }) {
   const [open, setOpen] = useState(false);
-  const [copied, setCopied] = useState(false);
+  const [anchorRect, setAnchorRect] = useState<DOMRect | null>(null);
+  const btnRef = useRef<HTMLButtonElement>(null);
   const isFile = attachmentKind === "file";
-
-  const handleCopy = async () => {
-    try {
-      await navigator.clipboard.writeText(content);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1200);
-    } catch {
-      // clipboard unavailable (sandbox) — silently no-op
-    }
-  };
 
   // File cards open the file in the IDE editor (per-type view handled by the
   // editor: markdown rendered, images previewed, text edited). Paste cards
-  // keep the inline expand; legacy path-less file cards fall back to it too.
+  // open the TagPopover (same as the composer's ContentTagChip); legacy
+  // path-less file cards fall back to the popover too.
   const handleClick = () => {
     if (isFile && filePath) {
       useSessionStore.getState().openFileInIde(filePath);
-    } else {
-      setOpen((v) => !v);
+      return;
     }
+    if (open) {
+      setOpen(false);
+      setAnchorRect(null);
+      return;
+    }
+    const el = btnRef.current;
+    setAnchorRect(el ? el.getBoundingClientRect() : null);
+    setOpen(true);
+  };
+
+  const closePopover = () => {
+    setOpen(false);
+    setAnchorRect(null);
+  };
+
+  // TagPopover expects a ContentTag; build a minimal one from the attachment.
+  const tag: ContentTag = {
+    id: "attachment",
+    kind: attachmentKind === "file" ? "file" : "paste",
+    preview,
+    content,
+    filePath,
   };
 
   return (
     <div className="[font-size:var(--chat-fs-sm)]">
       <button
+        ref={btnRef}
         onClick={handleClick}
         title={isFile ? (filePath ?? preview) : open ? "收起内容" : "查看内容"}
         className={cn(
@@ -790,32 +810,8 @@ function AttachmentCard({
           />
         )}
       </button>
-      {open && (
-        <div className="mt-1 space-y-1">
-          {!isFile && (
-            <div className="flex items-center justify-end">
-              <button
-                type="button"
-                onClick={handleCopy}
-                className="flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[10px] text-accent transition-colors hover:bg-accent/30"
-                title="复制完整内容"
-              >
-                {copied ? (
-                  <>
-                    <IconCheck size={11} /> 已复制
-                  </>
-                ) : (
-                  <>
-                    <IconCopy size={11} /> Copy
-                  </>
-                )}
-              </button>
-            </div>
-          )}
-          <pre className="max-h-52 overflow-auto whitespace-pre-wrap break-words rounded bg-surface-muted/60 px-3 py-2 font-mono text-[11px] leading-relaxed text-content-muted">
-            {isFile ? (filePath ?? content) : content}
-          </pre>
-        </div>
+      {open && anchorRect && (
+        <TagPopover tag={tag} anchorRect={anchorRect} onClose={closePopover} />
       )}
     </div>
   );

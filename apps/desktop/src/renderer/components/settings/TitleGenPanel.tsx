@@ -57,7 +57,7 @@ export function TitleGenPanel() {
 
   return (
     <SettingsSection
-      title="线程名称生成"
+      title="会话标题生成"
       desc="开启后,在用户发送第一条消息时后台自动调用模型生成简短标题,并覆盖默认标题。生成失败时保留默认占位标题。"
     >
       {/* Auto-generate toggle */}

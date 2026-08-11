@@ -10,8 +10,8 @@ import type { CustomModelRoleKey } from "@contracts/customModel";
 import type { GitDiffOpenMode } from "@contracts/ipc";
 
 const GIT_DIFF_OPEN_MODE_OPTIONS: { value: GitDiffOpenMode; label: string }[] = [
-  { value: "center", label: "中间区域编辑器" },
-  { value: "dialog", label: "弹框编辑器(可多标签)" },
+  { value: "center", label: "主编辑区" },
+  { value: "dialog", label: "弹窗编辑器(可多标签)" },
 ];
 
 /** Sentinel value for the "no model selected" option in the model selects —
@@ -82,7 +82,7 @@ export function GitPanel() {
       >
         <SettingRow
           title="打开方式"
-          desc="中间区域编辑器:在中间面板查看差异(现有行为)。弹框编辑器:以独立浮窗打开,可同时查看多个文件差异。"
+          desc="主编辑区:在中间面板查看差异(现有行为)。弹窗编辑器:以独立浮窗打开,可同时查看多个文件差异。"
           htmlFor="setting-gitdiff-openmode"
         >
           <Select.Root
@@ -93,7 +93,7 @@ export function GitPanel() {
               <Select.Value>
                 {(val: GitDiffOpenMode) =>
                   GIT_DIFF_OPEN_MODE_OPTIONS.find((o) => o.value === val)?.label ??
-                  "中间区域编辑器"
+                  "主编辑区"
                 }
               </Select.Value>
             </Select.Trigger>
@@ -114,9 +114,9 @@ export function GitPanel() {
         </SettingRow>
       </SettingsSection>
 
-      {/* ── Git 提交记录生成 ── */}
+      {/* ── Git 提交信息生成 ── */}
       <SettingsSection
-        title="提交记录生成"
+        title="提交信息生成"
         desc="配置用于自动生成提交信息的模型和提示词。在 Git 面板的提交框点击生成图标即可使用。"
       >
         {/* Model selector — specific supplier + role binding */}
@@ -188,7 +188,7 @@ export function GitPanel() {
       >
         {/* Conflict-resolution model selector */}
         <SettingRow
-          title="解决冲突模型"
+          title="解决模型"
           desc="选择用于解决合并冲突的具体模型。需要先在「模型配置」中添加并绑定角色。未选择则使用内置 Claude 模型。"
         >
           {modelOptions.length > 0 ? (

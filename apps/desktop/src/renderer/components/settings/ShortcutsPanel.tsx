@@ -94,7 +94,7 @@ export function ShortcutsPanel() {
   }, [commands]);
 
   const groupLabel: Record<CommandGroup, string> = {
-    "会话": "会话 / 线程",
+    "会话": "会话",
     "视图": "视图 / 导航",
     "布局": "布局 / 面板",
     "外观": "外观 / 主题",
