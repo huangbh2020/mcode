@@ -477,12 +477,15 @@ class BrowserManagerImpl {
   }
 
   /** Move offscreen without destroying - preserves the browsing session so
-   *  toggling the panel back on restores the page. */
+   *  toggling the panel back on restores the page. Dimensions are PRESERVED
+   *  (only x/y move offscreen) so capturePage still reads a valid backing
+   *  store from the hidden view — agent screenshots of a hidden panel don't
+   *  need to flash the page on-screen. */
   hide(id: string): BrowserOpResult {
     const live = this.get(id);
     if (!live) return { ok: false, error: "浏览器不存在或已关闭" };
     try {
-      live.view.setBounds(HIDDEN_BOUNDS);
+      live.view.setBounds({ x: -9999, y: -9999, width: live.lastBounds.width, height: live.lastBounds.height });
       live.visible = false;
       return { ok: true };
     } catch (err) {
@@ -808,7 +811,11 @@ class BrowserManagerImpl {
 
     // If the view is offscreen/hidden (user switched panels, or it was never
     // measured), temporarily bring it on-screen so capturePage gets real pixels.
-    // capturePage on a hidden/1x1 view returns an empty 0-byte image.
+    // capturePage on a hidden/1x1 view returns an empty 0-byte image. The brief
+    // on-screen flash is the known trade-off: offscreen capture either yields
+    // incomplete output (wrong viewport size) or changes the page layout
+    // (resizing to scrollHeight triggers reflow), so we prioritize capture
+    // correctness over avoiding the flash.
     const needsTempShow = !live.visible || live.lastBounds.width <= 1;
     const savedVisible = live.visible;
     const savedBounds = live.lastBounds;
@@ -854,7 +861,12 @@ class BrowserManagerImpl {
     // view. Bounds changes during capture are reverted so the renderer's next
     // syncBounds (or the user's next show) isn't fighting a stale rect.
     if (tempShown) {
-      live.view.setBounds(savedVisible ? savedBounds : HIDDEN_BOUNDS);
+      if (savedVisible) {
+        live.view.setBounds(savedBounds);
+      } else {
+        // Keep offscreen but preserve dimensions (consistent with hide()).
+        live.view.setBounds({ x: -9999, y: -9999, width: savedBounds.width, height: savedBounds.height });
+      }
       live.lastBounds = savedBounds;
       live.visible = savedVisible;
     }
