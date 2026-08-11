@@ -429,9 +429,10 @@ function StatusIcon({ status }: { status: "running" | "done" | "error" }) {
  *  - The panel collapses ONLY when the turn ends (turn.done sets endedAt) -
  *    not when the final reply text starts streaming. The user can still
  *    re-expand by clicking.
- *  - The header is minimal: just "HH:MM:SS · NN.Ns" + live ticker. The live
- *    duration and the chevron already carry the running/completed state, so
- *    no status glyph is shown. */
+ *  - The header is a centered pill flanked by gradient rules: chevron +
+ *    "HH:MM:SS · NN.Ns" + live ticker. An accent pulse dot (shown only
+ *    while turnActive) signals the running state alongside the live
+ *    duration. */
 export function TurnPanel({
   blocks,
   beforeMap,
@@ -507,21 +508,31 @@ export function TurnPanel({
 
   return (
     <div className="[font-size:var(--chat-fs-sm)]">
-      <button
-        onClick={(e) => toggleHoldPosition(e, setOpen)}
-        className="flex w-full items-center gap-1.5 border-b border-edge py-1.5 text-left text-[13px] text-content-subtle hover:bg-surface-muted/40"
-      >
-        <span className="tabular-nums text-content-muted">{fmtClock(startedAt)}</span>
-        <span className="text-content-subtle">·</span>
-        <span className="tabular-nums text-content-muted">{fmtDuration(duration)}</span>
-        {/* Live current-operation ticker - only while the turn is streaming.
-            Sits right of the duration and rolls up like a slot machine as the
-            agent moves between commands. Rendered inside the <button>
-            (CurrentOpTicker emits only phrasing content). Clears when the turn
-            ends so historical cards never show a stale operation. */}
-        {turnActive && <CurrentOpTicker op={runningTool} turnActive={turnActive} />}
-        <Chevron open={open} className="ml-auto" />
-      </button>
+      <div className="my-2 flex items-center gap-2.5">
+        <div className="h-px flex-1 bg-gradient-to-r from-transparent to-edge" />
+        <button
+          onClick={(e) => toggleHoldPosition(e, setOpen)}
+          className="flex items-center gap-1.5 rounded-full border border-edge bg-surface-muted px-3 py-1 text-xs shadow-sm transition-colors hover:bg-surface-hover/60"
+        >
+          {turnActive && (
+            <span className="relative flex h-1.5 w-1.5">
+              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-accent opacity-75" />
+              <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-accent" />
+            </span>
+          )}
+          <Chevron open={open} />
+          <span className="tabular-nums text-content-muted">{fmtClock(startedAt)}</span>
+          <span className="text-content-subtle">·</span>
+          <span className="tabular-nums text-content-muted">{fmtDuration(duration)}</span>
+          {/* Live current-operation ticker - only while the turn is streaming.
+              Sits right of the duration and rolls up like a slot machine as the
+              agent moves between commands. Rendered inside the <button>
+              (CurrentOpTicker emits only phrasing content). Clears when the turn
+              ends so historical cards never show a stale operation. */}
+          {turnActive && <CurrentOpTicker op={runningTool} turnActive={turnActive} />}
+        </button>
+        <div className="h-px flex-1 bg-gradient-to-l from-transparent to-edge" />
+      </div>
       {open && (
         <div className="space-y-1.5 py-2">
           {groupBlocks(blocks).map((seg, i) =>

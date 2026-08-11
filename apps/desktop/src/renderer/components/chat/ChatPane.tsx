@@ -139,22 +139,33 @@ function fmtDuration(ms: number): string {
  *  every delta flush. A local setInterval would be torn down by each remount's
  *  cleanup before its first 1000ms tick ever fires - leaving the duration
  *  stuck at "<1s" for the whole turn. The global clock survives remounts.
- *  Rendered larger than the body text and separated from the content below by
- *  a hairline border so it reads as a distinct turn header. */
+ *  Rendered as a centered pill (timestamp + duration) flanked by gradient
+ *  rules so it reads as a distinct turn-separator between the user prompt
+ *  and the assistant reply. A live (running) turn shows an accent pulse dot
+ *  inside the pill. */
 function TurnStatRow({ meta }: { meta: TurnMeta }) {
   // Only subscribe to the global ticker while the turn is still running -
   // frozen turns compute a static duration and pay nothing.
   const now = useNow();
   const end = meta.endedAt ?? now;
   const duration = Math.max(0, end - meta.startedAt);
+  const live = meta.endedAt === undefined;
 
   return (
-    <div className="mb-2 flex items-center gap-1.5 border-b border-edge pb-2 text-[13px] text-content-subtle">
-      <span>开始</span>
-      <span className="tabular-nums text-content-muted">{fmtClock(meta.startedAt)}</span>
-      <span className="text-content-subtle">·</span>
-      <span>用时</span>
-      <span className="tabular-nums text-content-muted">{fmtDuration(duration)}</span>
+    <div className="my-3 flex items-center gap-2.5">
+      <div className="h-px flex-1 bg-gradient-to-r from-transparent to-edge" />
+      <div className="flex items-center gap-1.5 rounded-full border border-edge bg-surface-muted px-3 py-1 text-xs shadow-sm">
+        {live && (
+          <span className="relative flex h-1.5 w-1.5">
+            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-accent opacity-75" />
+            <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-accent" />
+          </span>
+        )}
+        <span className="tabular-nums text-content-muted">{fmtClock(meta.startedAt)}</span>
+        <span className="text-content-subtle">·</span>
+        <span className="tabular-nums text-content-muted">{fmtDuration(duration)}</span>
+      </div>
+      <div className="h-px flex-1 bg-gradient-to-l from-transparent to-edge" />
     </div>
   );
 }
@@ -201,11 +212,12 @@ type RenderItem =
       isTurnTail: boolean;
     }
   | {
-      // Synthesized "开始 · 用时" row shown between send and the first
+      // Synthesized turn-separator pill shown between send and the first
       // assistant content block. Not a real message - it's derived in
       // groupMessagesForRender from runningTurnStartedAt so the user sees
-      // immediate running feedback (stat row + spinner) before any token
-      // lands. Disappears the moment a real assistant turnMeta appears.
+      // immediate running feedback (the pill carries its own accent pulse
+      // dot while live) before any token lands. Disappears the moment a
+      // real assistant turnMeta appears.
       kind: "pendingTurn";
       turnMeta: TurnMeta;
     };
@@ -1372,11 +1384,32 @@ function ChatPaneForSession({ sessionId, isActive }: { sessionId: string; isActi
     [addFileTags],
   );
 
+  // Paste-to-card threshold (user-configurable). When a paste exceeds this
+  // many chars (or spans > 3 lines), it's promoted to a chip instead of
+  // inserted inline. Driven by the "常规 → 粘贴卡片阈值" setting.
+  const pasteTagThresholdChars = useSessionStore((s) => s.pasteTagThresholdChars);
+
   /** Promote a bulky paste to a content-tag chip. Forwarded to the editor,
    *  which calls this instead of inserting long/multi-line text inline. */
   const handlePromotePaste = useCallback((text: string) => {
     setTags((prev) => [...prev, makeContentTag(text)]);
   }, []);
+
+  /** Expand a paste-tag's content back into the composer as inline text and
+   *  remove the chip. Only called for paste tags (file/element tags carry an
+   *  @path reference, not user text). The editor's insertText inserts at the
+   *  caret without clearing existing content. */
+  const handleExpandTag = useCallback(
+    (tagId: string) => {
+      const tag = tags.find((t) => t.id === tagId);
+      if (tag) editorRef.current?.insertText(tag.content);
+      setTags((prev) => prev.filter((t) => t.id !== tagId));
+      setOpenTagId(null);
+      setAnchorRect(null);
+      requestAnimationFrame(() => editorRef.current?.focus());
+    },
+    [tags],
+  );
 
   // Ceiling for clipboard-pasted external files (renderer-side guard; the
   // main-side schema caps the base64 payload too). Larger pastes are skipped
@@ -1701,9 +1734,6 @@ function ChatPaneForSession({ sessionId, isActive }: { sessionId: string; isActi
           <div className="px-[var(--chat-gutter)]">
             <div className="mx-auto max-w-5xl">
               <TurnStatRow meta={item.turnMeta} />
-              <div className="mt-1.5 flex items-center gap-1.5">
-                <IconLoader2 size={12} className="animate-spin text-accent" />
-              </div>
             </div>
           </div>
         );
@@ -2129,7 +2159,7 @@ function ChatPaneForSession({ sessionId, isActive }: { sessionId: string; isActi
               onHistoryDown={handleHistoryDown}
               historyNavEnabled={recallEnabled}
               onPromotePaste={handlePromotePaste}
-              shouldPromotePaste={shouldPromoteToTag}
+              shouldPromotePaste={(text) => shouldPromoteToTag(text, pasteTagThresholdChars)}
               onPasteFiles={handlePasteFiles}
               className={cn(
                 "px-3 pt-2.5 text-sm leading-relaxed text-content",
@@ -2209,6 +2239,9 @@ function ChatPaneForSession({ sessionId, isActive }: { sessionId: string; isActi
                     setOpenTagId(null);
                     setAnchorRect(null);
                   }}
+                  onExpand={
+                    t.kind === "paste" ? () => handleExpandTag(t.id) : undefined
+                  }
                 />
               ) : null;
             })()}

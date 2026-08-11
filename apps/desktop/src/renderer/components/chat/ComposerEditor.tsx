@@ -60,6 +60,10 @@ export interface ComposerEditorHandle {
   /** Replace all content with plain text (no skill pills), focus the editor,
    *  and place the caret at the end. Used by suggestion prompts. */
   setText: (text: string) => void;
+  /** Insert plain text at the current caret position without clearing
+   *  existing content. Focuses the editor first so the selection is valid.
+   *  Used by the "expand tag to editor" action. */
+  insertText: (text: string) => void;
   /** Serialize the current document as HTML (skill pills included as
    *  `<span data-type="skill">`). Used to persist the composer draft. */
   getHTML: () => string;
@@ -462,6 +466,10 @@ export const ComposerEditor = forwardRef<
         editor.commands.clearContent(true);
         if (text) editor.commands.insertContent(text);
         editor.commands.focus("end");
+      },
+      insertText: (text) => {
+        if (!editor) return;
+        editor.chain().focus().insertContent(text).run();
       },
       getHTML: () => editor?.getHTML() ?? "",
       setHTML: (html) => {

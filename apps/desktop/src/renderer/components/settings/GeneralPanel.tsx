@@ -1,5 +1,9 @@
-import { useSessionStore } from "@renderer/stores/sessionStore.js";
-import { Select } from "@renderer/components/ui/index.js";
+import {
+  useSessionStore,
+  PASTE_TAG_THRESHOLD_CHARS_MIN,
+  PASTE_TAG_THRESHOLD_CHARS_MAX,
+} from "@renderer/stores/sessionStore.js";
+import { Select, Input } from "@renderer/components/ui/index.js";
 import type { ChatDensity, DisplayMode } from "@contracts/ipc";
 import { SettingRow } from "./SettingRow.js";
 import { PanelHeader } from "./PanelHeader.js";
@@ -38,6 +42,10 @@ export function GeneralPanel() {
   // ── Message-stream density ──
   const chatDensity = useSessionStore((s) => s.chatDensity);
   const setChatDensity = useSessionStore((s) => s.setChatDensity);
+
+  // ── Paste-to-card threshold ──
+  const pasteTagThresholdChars = useSessionStore((s) => s.pasteTagThresholdChars);
+  const setPasteTagThresholdChars = useSessionStore((s) => s.setPasteTagThresholdChars);
 
   return (
     <section className="space-y-4">
@@ -113,6 +121,26 @@ export function GeneralPanel() {
               </Select.Positioner>
             </Select.Portal>
           </Select.Root>
+        </SettingRow>
+      </SettingsSection>
+
+      {/* ── 输入 (paste behavior) ── */}
+      <SettingsSection title="输入">
+        <SettingRow
+          title="粘贴卡片阈值"
+          desc={`粘贴超过此字符数的内容时,会折叠为输入框上方的卡片而非直接插入正文(${PASTE_TAG_THRESHOLD_CHARS_MIN}–${PASTE_TAG_THRESHOLD_CHARS_MAX})。`}
+          htmlFor="setting-paste-threshold"
+        >
+          <Input
+            id="setting-paste-threshold"
+            type="number"
+            min={PASTE_TAG_THRESHOLD_CHARS_MIN}
+            max={PASTE_TAG_THRESHOLD_CHARS_MAX}
+            step={50}
+            value={pasteTagThresholdChars}
+            onChange={(e) => void setPasteTagThresholdChars(Number(e.target.value))}
+            className="w-24"
+          />
         </SettingRow>
       </SettingsSection>
 

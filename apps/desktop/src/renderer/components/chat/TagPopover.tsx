@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { cn } from "@renderer/lib/cn.js";
-import { IconCopy, IconCheck, IconX } from "@renderer/lib/icons.js";
+import { IconCopy, IconCheck, IconX, IconArrowsMaximize } from "@renderer/lib/icons.js";
 import type { ContentTag } from "@renderer/lib/contentTag.js";
 
 /**
@@ -25,12 +25,17 @@ export function TagPopover({
   tag,
   anchorRect,
   onClose,
+  onExpand,
 }: {
   tag: ContentTag;
   /** Bounding box of the chip that opened this popover, in viewport
    *  coordinates (getBoundingClientRect). Drives the fixed positioning. */
   anchorRect: DOMRect;
   onClose: () => void;
+  /** Expand the tag's content back into the composer as inline text, removing
+   *  the chip. Only provided for paste tags — file/element tags are path
+   *  references whose "content" is an @path string, not user text. */
+  onExpand?: () => void;
 }) {
   const popoverRef = useRef<HTMLDivElement>(null);
   const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
@@ -141,6 +146,19 @@ export function TagPopover({
               </>
             )}
           </button>
+          {onExpand && (
+            <button
+              type="button"
+              onClick={() => {
+                onExpand();
+                onClose();
+              }}
+              className="flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[10px] text-accent transition-colors hover:bg-accent/30"
+              title="拆开卡片，内容粘贴到输入框"
+            >
+              <IconArrowsMaximize size={11} /> 拆开
+            </button>
+          )}
           <button
             type="button"
             onClick={onClose}
@@ -154,7 +172,7 @@ export function TagPopover({
       </div>
       {/* Content: scrollable, preserves whitespace, monospace so code/log
           pastes keep their original column alignment. */}
-      <pre className="max-h-52 overflow-auto whitespace-pre-wrap break-words px-3 py-2 font-mono text-[11px] leading-relaxed text-content-muted">
+      <pre className="max-h-52 overflow-auto whitespace-pre-wrap break-words px-3 py-2 font-mono [font-size:var(--chat-fs-xs)] leading-relaxed text-content">
         {tag.content}
       </pre>
     </div>

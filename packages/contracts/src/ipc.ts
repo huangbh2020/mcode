@@ -173,6 +173,16 @@ export const UI_CHAT_FONT_SIZE_SETTING_KEY = "ui.chatFontSize";
 export const UI_RIGHT_PANEL_FONT_SIZE_SETTING_KEY = "ui.rightPanelFontSize";
 
 /**
+ * Setting key under which the paste-to-card promotion threshold (character
+ * count) is persisted. Value is a numeric string like "200". When a paste
+ * exceeds this many characters (or spans more than the hardcoded line
+ * threshold of 3), it's promoted to a content-tag chip above the composer
+ * instead of being inserted inline. Validated/clamped in the renderer store
+ * action (50–5000).
+ */
+export const UI_PASTE_TAG_THRESHOLD_CHARS_SETTING_KEY = "ui.pasteTagThresholdChars";
+
+/**
  * Setting key under which the draggable panel widths are persisted as a JSON
  * object: `{ left, right, bottomTerminal, editor }`.
  *  - `left` / `right`: side-bar widths in px (clamped 180–500 / 240–640).

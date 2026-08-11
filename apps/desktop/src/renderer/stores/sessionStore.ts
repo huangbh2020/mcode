@@ -23,6 +23,7 @@ import {
   DEFAULT_PROVIDER_ID,
   UI_CHAT_FONT_SIZE_SETTING_KEY,
   UI_RIGHT_PANEL_FONT_SIZE_SETTING_KEY,
+  UI_PASTE_TAG_THRESHOLD_CHARS_SETTING_KEY,
   UI_USER_MSG_COLOR_SETTING_KEY,
   UI_ACCENT_COLOR_SETTING_KEY,
   UI_RIGHT_PANEL_TAB_SETTING_KEY,
@@ -451,6 +452,11 @@ export interface SessionState {
    *  --right-panel-font-size CSS var (plus --rp-fs-* derived variants) by
    *  lib/appearance.ts, and also fed to the xterm terminal fontSize. */
   rightPanelFontSize: number;
+  /** Character threshold above which a paste is promoted to a content-tag
+   *  chip (50–5000). Persisted in the `settings` table. Drives
+   *  `shouldPromoteToTag` in contentTag.ts via the composer's
+   *  shouldPromotePaste prop. */
+  pasteTagThresholdChars: number;
   /** Custom user-message background color as an "R G B" triplet string
    *  (e.g. "124 58 237"), or null to use the theme default. Persisted in
    *  the `settings` table. Applied to <html> as --user-bubble. */
@@ -1009,6 +1015,9 @@ export interface SessionState {
   /** Update the right-panel base font size (clamped to 10–22 px). Persists
    *  to the `settings` table. */
   setRightPanelFontSize: (px: number) => Promise<void>;
+  /** Update the paste-to-card threshold (clamped to 50–5000 chars). Persists
+   *  to the `settings` table. */
+  setPasteTagThresholdChars: (n: number) => Promise<void>;
   /** Update the user-message background color (R G B triplet, or null =
    *  theme default). Persists to the `settings` table. */
   setUserMessageColor: (rgb: string | null) => Promise<void>;
@@ -1371,6 +1380,23 @@ export function clampRightPanelFontSize(px: number): number {
   return Math.min(
     RIGHT_PANEL_FONT_SIZE_MAX,
     Math.max(RIGHT_PANEL_FONT_SIZE_MIN, Math.round(px)),
+  );
+}
+
+/** Min/max paste-to-card promotion threshold (characters). Pasting more than
+ *  this many chars (or spanning more than the hardcoded 3-line threshold)
+ *  promotes the content to a chip above the composer. The Settings "常规"
+ *  panel uses the same bounds; setPasteTagThresholdChars clamps to this
+ *  range defensively. */
+export const PASTE_TAG_THRESHOLD_CHARS_MIN = 50;
+export const PASTE_TAG_THRESHOLD_CHARS_MAX = 5000;
+
+/** Clamp a paste-tag threshold value to the allowed range. */
+export function clampPasteTagThresholdChars(n: number): number {
+  if (!Number.isFinite(n)) return 200;
+  return Math.min(
+    PASTE_TAG_THRESHOLD_CHARS_MAX,
+    Math.max(PASTE_TAG_THRESHOLD_CHARS_MIN, Math.round(n)),
   );
 }
 
@@ -2412,6 +2438,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   // Persisted in `settings` table; init() overwrites from the DB. Default
   // 14px mirrors the --right-panel-font-size CSS var in styles.css.
   rightPanelFontSize: 14,
+  // Persisted in `settings` table; init() overwrites from the DB. Default
+  // 200 mirrors the previous hardcoded TAG_THRESHOLD_CHARS in contentTag.ts.
+  pasteTagThresholdChars: 200,
   userMessageColor: null,
   accentColor: null,
   shortcutOverrides: {},
@@ -2790,6 +2819,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           UI_TITLE_GEN_ENABLED_SETTING_KEY,
           UI_TITLE_GEN_MODEL_SETTING_KEY,
           UI_GIT_COLLAPSED_REPOS_SETTING_KEY,
+          UI_PASTE_TAG_THRESHOLD_CHARS_SETTING_KEY,
         ],
       })
       .catch((err) => {
@@ -2804,6 +2834,11 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       if (rpFontRaw != null) {
         const px = Number(rpFontRaw);
         if (Number.isFinite(px)) set({ rightPanelFontSize: clampRightPanelFontSize(px) });
+      }
+      const pasteThresholdRaw = ds[UI_PASTE_TAG_THRESHOLD_CHARS_SETTING_KEY];
+      if (pasteThresholdRaw != null) {
+        const n = Number(pasteThresholdRaw);
+        if (Number.isFinite(n)) set({ pasteTagThresholdChars: clampPasteTagThresholdChars(n) });
       }
       const colorRaw = ds[UI_USER_MSG_COLOR_SETTING_KEY];
       if (colorRaw && RGB_TRIPLET_RE.test(colorRaw)) set({ userMessageColor: colorRaw });
@@ -5022,6 +5057,19 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       });
     } catch (err) {
       console.error("setting.set(rightPanelFontSize) failed:", err);
+    }
+  },
+
+  setPasteTagThresholdChars: async (n) => {
+    const clamped = clampPasteTagThresholdChars(n);
+    set({ pasteTagThresholdChars: clamped });
+    try {
+      await api.setting.set({
+        key: UI_PASTE_TAG_THRESHOLD_CHARS_SETTING_KEY,
+        value: String(clamped),
+      });
+    } catch (err) {
+      console.error("setting.set(pasteTagThresholdChars) failed:", err);
     }
   },
 

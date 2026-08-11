@@ -56,10 +56,10 @@ export interface ContentTag {
  *  Promote only when the paste is genuinely bulky: over the char threshold
  *  OR spanning more than the line threshold. Short multi-line snippets
  *  (2-3 lines) stay inline so ordinary pastes aren't interrupted. */
-export function shouldPromoteToTag(text: string): boolean {
+export function shouldPromoteToTag(text: string, thresholdChars: number = TAG_THRESHOLD_CHARS): boolean {
   const t = text.trim();
   if (!t) return false;
-  if (t.length > TAG_THRESHOLD_CHARS) return true;
+  if (t.length > thresholdChars) return true;
   // Count lines: a string with N newlines has N+1 lines, but a trailing
   // newline (already trimmed away) shouldn't inflate the count.
   const lineCount = t.split("\n").length;
