@@ -41,6 +41,8 @@ import {
   UI_PANE_WIDTHS_SETTING_KEY,
   UI_PROJECT_VIEW_SETTING_KEY,
   UI_PROJECT_GROUPS_SETTING_KEY,
+  UI_LAST_PROJECT_SETTING_KEY,
+  UI_LAST_SESSION_SETTING_KEY,
   UI_SHORTCUTS_SETTING_KEY,
   UI_CHAT_DENSITY_SETTING_KEY,
   ShortcutBindingsSchema,
@@ -944,7 +946,7 @@ export interface SessionState {
       device?: BrowserDevicePreset;
       orientation?: BrowserOrientation;
     },
-  ) => void;
+  ) => boolean;
   /** Apply an incremental delta to the left sidebar width (clamped, then a
    *  debounced DB write). Called by the drag handle on every mousemove. */
   adjustLeftWidth: (deltaPx: number) => void;
@@ -1493,6 +1495,14 @@ function syncConfigFromSession(
     patch.expandedProjects = { ...get().expandedProjects, [sess.projectId]: true };
   }
   set(patch);
+
+  // Remember the last-activated project + session so the next launch can
+  // restore the user's landing spot instead of always opening the first
+  // project. Fire-and-forget: a failed write just falls back to the default
+  // selection on next boot. Both session-activation entry points (selectSession
+  // / openTab) route through here, so this single write covers them.
+  void api.setting.set({ key: UI_LAST_SESSION_SETTING_KEY, value: sessionId });
+  void api.setting.set({ key: UI_LAST_PROJECT_SETTING_KEY, value: sess.projectId });
 }
 
 /**
@@ -2497,6 +2507,8 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           UI_CHAT_DENSITY_SETTING_KEY,
           UI_PROJECT_VIEW_SETTING_KEY,
           UI_PROJECT_GROUPS_SETTING_KEY,
+          UI_LAST_PROJECT_SETTING_KEY,
+          UI_LAST_SESSION_SETTING_KEY,
           UI_COMPOSER_MODEL_SETTING_KEY,
         ],
       })
@@ -2644,23 +2656,45 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     const firstSessions = byProject[firstActive.id] ?? [];
     const firstSession = firstSessions.find((s) => !s.archived);
 
+    // Restore the last-opened project/session (persisted on every session
+    // activation) instead of always landing on the first project — so a restart
+    // puts the user back where they left off. Validated against the CURRENT
+    // project/session lists: a saved id that was deleted or archived since is
+    // silently dropped and we fall back to the default first-project target.
+    let landingProject = firstActive;
+    let landingSession = firstSession;
+    const lastProjectId =
+      typeof fp[UI_LAST_PROJECT_SETTING_KEY] === "string" ? fp[UI_LAST_PROJECT_SETTING_KEY] : null;
+    const lastSessionId =
+      typeof fp[UI_LAST_SESSION_SETTING_KEY] === "string" ? fp[UI_LAST_SESSION_SETTING_KEY] : null;
+    if (lastProjectId) {
+      const savedProject = projects.find((p) => p.id === lastProjectId);
+      if (savedProject) {
+        landingProject = savedProject;
+        const savedSessions = byProject[savedProject.id] ?? [];
+        landingSession =
+          savedSessions.find((s) => s.id === lastSessionId) ??
+          savedSessions.find((s) => !s.archived);
+      }
+    }
+
     set({
       sessionsByProject: byProject,
       sessionsHasMoreByProject: hasMoreByProject,
       sessionsTotalByProject: totalByProject,
       archivedSessionsByProject: archivedByProject,
-      sessions: firstSessions,
-      activeProjectId: firstActive.id,
+      sessions: byProject[landingProject.id] ?? [],
+      activeProjectId: landingProject.id,
       // Auto-expand the active project so its threads are visible on load.
-      expandedProjects: { [firstActive.id]: true },
+      expandedProjects: { [landingProject.id]: true },
       // Seed the tab list with the landing session (if any). In `single`
       // mode this is informational; in `tabs` mode it shows the initial
       // open tab. Either way the user starts with a coherent state.
-      openTabs: firstSession ? [firstSession.id] : [],
+      openTabs: landingSession ? [landingSession.id] : [],
     });
-    if (firstSession) {
+    if (landingSession) {
       try {
-        await get().selectSession(firstSession.id);
+        await get().selectSession(landingSession.id);
       } catch (err) {
         console.error("selectSession failed:", err);
       }
@@ -4718,8 +4752,13 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     const s = get();
     const existing = s.browserTabs.find((t) => t.browserId === browserId);
     if (existing) {
-      // Already adopted — refresh url/title/device + activate it.
-      if (info.url || info.title || info.device || info.orientation) {
+      // Already adopted — refresh url/title ONLY and activate it. We must NOT
+      // overwrite device/orientation/customWidth/customHeight: the user may have
+      // manually selected a device preset or custom size, and an agent
+      // navigation (which defaults device to "desktop") must never clobber that
+      // selection. Chromium device emulation also persists across navigations,
+      // so the main process keeps the user's emulation without re-applying.
+      if (info.url || info.title) {
         set({
           browserTabs: s.browserTabs.map((t) =>
             t.browserId === browserId
@@ -4727,17 +4766,13 @@ export const useSessionStore = create<SessionState>((set, get) => ({
                   ...t,
                   ...(typeof info.url === "string" ? { url: info.url } : {}),
                   ...(typeof info.title === "string" ? { title: info.title } : {}),
-                  ...(info.device ? { device: info.device } : {}),
-                  ...(info.orientation
-                    ? { orientation: info.orientation }
-                    : {}),
                 }
               : t,
           ),
         });
       }
       if (s.browserActiveTabId !== existing.id) set({ browserActiveTabId: existing.id });
-      return;
+      return false;
     }
     // Register a new tab for the agent-created view. device comes from the
     // agent's navigate call (default desktop = no emulation, full viewport).
@@ -4754,6 +4789,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       orientation: info.orientation,
     };
     set({ browserTabs: [...s.browserTabs, tab], browserActiveTabId: tab.id });
+    return true;
   },
 
   // ── Draggable pane sizes ──

@@ -7,7 +7,7 @@ import {
   IconCheck,
   IconX,
   IconAlertTriangle,
-  IconTools,
+  IconRobot,
   IconClipboard,
   IconFile,
   IconCopy,
@@ -1137,7 +1137,7 @@ function fmtDuration(ms: number): string {
 }
 
 /** Resolve a left-glyph icon for a tool-use block by its name. Unknown names
- *  (incl. MCP `mcp__*` tools) fall back to the generic toolbox (`IconTools`).
+ *  (incl. MCP `mcp__*` tools) fall back to the generic robot (`IconRobot`).
  *
  *  Mapping rationale:
  *   - Read / Glob   -> file-search (looking up files by path or pattern)
@@ -1153,7 +1153,7 @@ function fmtDuration(ms: number): string {
  *   - WebFetch      -> world      (fetch a URL)
  *   - AskUserQuestion -> help-circle
  *   - Enter/ExitPlanMode -> clipboard (matches the plan card glyph)
- *   - default       -> tools      (generic) */
+ *   - default       -> robot      (generic agent) */
 const TOOL_ICON_MAP: Record<string, ComponentType<{ size?: number; className?: string }>> = {
   Read: IconFileSearch,
   Glob: IconFileSearch,
@@ -1190,7 +1190,7 @@ const TOOL_ICON_MAP: Record<string, ComponentType<{ size?: number; className?: s
  *  current-operation ticker (CurrentOpTicker) can reuse the same
  *  icon mapping instead of duplicating it. */
 export function ToolIcon({ name, className }: { name: string; className?: string }) {
-  const Icon = TOOL_ICON_MAP[name] ?? IconTools;
+  const Icon = TOOL_ICON_MAP[name] ?? IconRobot;
   return <Icon size={13} className={cn("shrink-0", className)} />;
 }
 

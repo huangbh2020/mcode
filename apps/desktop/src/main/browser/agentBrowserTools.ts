@@ -183,7 +183,9 @@ export function browserList(): ToolResult {
  *  browsing. `projectPath` is required to create a view (it's bound to a
  *  project for consistency with terminal/git). `device` selects the emulation
  *  preset (desktop = full-width PC; iphone/android = phone-sized column) —
- *  applied on creation, or switched via setDevice for an existing view. */
+ *  applied ONLY on creation. For an existing view the user's manually-selected
+ *  device/size is preserved: Chromium emulation persists across navigations,
+ *  so re-applying it would only clobber the user's choice. */
 export async function browserNavigate(
   args: { url: string; browserId?: string; device?: AgentDevicePreset },
   projectPath: string,
@@ -224,12 +226,12 @@ export async function browserNavigate(
     if (!check.ok) return errorResult(check.reason);
   }
 
-  // For an existing view, apply the requested device preset (no-op if it
-  // already matches). Skipped for a freshly-created view (initialDevice already
-  // set it; calling setDevice again is harmless but redundant).
-  if (!createdNew) {
-    BrowserManager.setDevice(browserId, device);
-  }
+  // Preserve the user's selected device/size on an existing view. Chromium
+  // device emulation persists across navigations, so re-applying setDevice is
+  // unnecessary — and worse, it would reset the emulation to the agent's
+  // (default "desktop") preset, clobbering whatever device or custom size the
+  // user manually chose. A freshly-created view already had its device applied
+  // via create()'s initialDevice, so nothing to do here in either case.
 
   // Tell the renderer to surface the browser panel + adopt this view as a tab.
   // The renderer's BrowserPanel takes over showing the view at precise bounds

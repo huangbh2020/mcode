@@ -2,6 +2,43 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ───────────── base-ui popup enter-animation fix ─────────────
+ * base-ui (Menu / Tooltip / ContextMenu / ...) drives its popup enter
+ * animation through a `data-starting-style` attribute: the popup mounts WITH
+ * the attribute (the `data-[starting-style]:opacity-0` / `:scale-95` Tailwind
+ * classes paint it at opacity:0 + scale .95), then base-ui removes the
+ * attribute on the next frame so the `transition-[transform,opacity]` animates
+ * it into view.
+ *
+ * That removal isn't happening here (React 19 + <StrictMode> dev double-mount
+ * confuses base-ui's lifecycle), so popups freeze at the starting state —
+ * opacity:0 — and render invisible. The composer's model / effort / permission
+ * dropdowns open and work (keyboard nav changes the value) but can't be seen.
+ * Select popups are unaffected because they don't use the starting-style
+ * classes (their <Select.Popup> has no animation className).
+ *
+ * Force the visible end-state while the attribute is present. This drops the
+ * fade-in but makes every affected popup usable. The rule is UNLAYERED, so it
+ * wins over Tailwind's layered `data-[starting-style]:opacity-0` utility
+ * without needing !important. If base-ui clears the attribute correctly (e.g.
+ * a future base-ui upgrade or non-StrictMode build), the selector simply stops
+ * matching and the normal styles take over. */
+[data-starting-style] {
+  opacity: 1 !important;
+  transform: none !important;
+}
+
+/* base-ui renders Menu popups ([role="menu"]) as position:static inside
+ * Menu.Positioner (position:absolute + transform → its own stacking context
+ * at z-index:auto). That auto context was painting below the app content,
+ * hiding the popup entirely — the popup's own z-50 is ineffective because
+ * z-index is ignored on static elements. Force the Positioner's stacking
+ * context to the top so the popup shows above the chrome. Scoped to a
+ * Positioner that directly wraps a menu popup; other surfaces are unaffected. */
+div:has(> [role="menu"]) {
+  z-index: 9999 !important;
+}
+
 /* ───────────── Theme variables ─────────────
  * Each value is a space-separated "R G B" triplet (no commas, no #) so
  * Tailwind's <alpha-value> placeholder can compose alpha variants like

@@ -544,6 +544,14 @@ export function FileTree({ projectPath }: { projectPath: string }) {
     return () => cancelAnimationFrame(raf);
   }, [activeFile, projectPath, setDirExpanded]);
 
+  // Precompute lowercased sibling names for the root-level clash check so the
+  // InlineNewEntryRow gets a stable Set (no per-render allocation in the row).
+  // MUST run before the `loading` early-return below: useMemoLowercasedNames
+  // wraps useMemo, and the Rules of Hooks require the same hooks in the same
+  // order on every render. Calling it while loading is harmless — `entries`
+  // is [] then, so it just memoizes an empty Set.
+  const rootNames = useMemoLowercasedNames(entries);
+
   if (loading) {
     return (
       <div className="flex items-center gap-1.5 px-3 py-2 text-content-subtle [font-size:var(--rp-fs-xs)]">
@@ -552,10 +560,6 @@ export function FileTree({ projectPath }: { projectPath: string }) {
       </div>
     );
   }
-
-  // Precompute lowercased sibling names for the root-level clash check so the
-  // InlineNewEntryRow gets a stable Set (no per-render allocation in the row).
-  const rootNames = useMemoLowercasedNames(entries);
 
   // The blank-area context menu (new file/folder at the project root) wraps
   // the whole tree body, including the empty-directory case so a brand-new

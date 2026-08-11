@@ -50,12 +50,18 @@ export function App() {
   // right panel is currently on files/git. The view is adopted into the
   // renderer's tab list so BrowserPanel's show/hide/bounds logic manages it.
   //
-  // The agent always opens in the right sidebar (scrollable column) regardless
-  // of device — a desktop page renders at full width inside the sidebar; a
-  // phone page narrows to the emulated viewport. The fullscreen overlay is
-  // never triggered automatically: it's reserved for the user to open manually
-  // via the "展开为 PC 全屏" button when they want more room. setBrowserPanelOpen
-  // (false) ensures the sidebar instance owns the view (isActive = !browserPanelOpen).
+  // The agent opens in the right sidebar (scrollable column) by default — a
+  // desktop page renders at full width inside the sidebar; a phone page narrows
+  // to the emulated viewport. The fullscreen overlay is never triggered
+  // automatically: it's reserved for the user to open manually via the
+  // "展开为 PC 全屏" button when they want more room.
+  //
+  // Respect the user's manual view-mode choice: if they've switched to the
+  // fullscreen overlay, the agent must NOT yank them back to the sidebar. We
+  // still adopt the tab so the overlay surfaces the agent's view, but leave
+  // browserPanelOpen untouched. Only when the user is NOT in fullscreen do we
+  // force the sidebar to own the view (isActive = !browserPanelOpen) and open
+  // the right panel on the browser tab.
   // The device toolbar is auto-opened so the requested emulation takes effect
   // (collapsed = full-width desktop, ignoring the agent's device).
   useEffect(() => {
@@ -63,11 +69,20 @@ export function App() {
       if (msg.type !== "agentOpened") return;
       const p = (msg.payload as { url?: string; title?: string; device?: BrowserDevicePreset }) ?? {};
       const st = useSessionStore.getState();
-      st.adoptAgentBrowserTab(msg.browserId, p);
-      st.setBrowserPanelOpen(false);
-      st.setRightPanelTab("browser");
-      st.setRightOpen(true);
-      st.setBrowserDeviceToolbarOpen(true);
+      const createdNew = st.adoptAgentBrowserTab(msg.browserId, p);
+      if (!st.browserPanelOpen) {
+        // Not in fullscreen — bring up the sidebar to show the agent browsing.
+        st.setRightPanelTab("browser");
+        st.setRightOpen(true);
+      }
+      // Only auto-open the device toolbar for a brand-new agent tab, so the
+      // requested emulation is visible. For an existing tab, preserve the
+      // user's toolbar state — reopening it over their collapsed choice would
+      // be surprising, and the user's device/size selection is preserved by
+      // adoptAgentBrowserTab regardless.
+      if (createdNew) {
+        st.setBrowserDeviceToolbarOpen(true);
+      }
     });
     return off;
   }, []);

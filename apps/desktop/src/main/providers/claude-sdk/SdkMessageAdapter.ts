@@ -265,6 +265,11 @@ interface AdapterState {
    *  far. Logged at the getContextUsage kickoff so we can correlate the
    *  control-channel's accuracy with how far into the turn it fired. */
   assistantMessageCount: number;
+  /** Diagnostic: how many `message_delta` stream events carried a non-empty
+   *  usage this turn. Gateway streams often omit usage entirely (assistant
+   *  messages then arrive usage-less and path A never fires) — this counter
+   *  tells us whether the delta-level source is viable. */
+  streamDeltaUsageCount: number;
   /** Whether turn.done has been emitted for this turn. Guards against double
    *  emits when both a result message and flushFinal() fire it. */
   turnDoneEmitted: boolean;
@@ -330,6 +335,7 @@ export class SdkMessageAdapter {
       inPlanMode: false,
       pendingContextUsage: null,
       assistantMessageCount: 0,
+      streamDeltaUsageCount: 0,
       turnDoneEmitted: false,
       backgroundTaskIds: new Set(),
     };
@@ -718,6 +724,36 @@ export class SdkMessageAdapter {
           messageId,
           text: delta.thinking,
         } satisfies ThinkingEvent);
+      }
+    } else if (ev.type === "message_delta") {
+      // Path A supplement: `message_delta` fires once per API call with that
+      // call's FINAL usage (snake_case, like BetaUsage). Gateway streams
+      // frequently omit usage, which leaves the aggregated assistant messages
+      // usage-less and path A dead (lastKnown undefined → turn-end falls back
+      // to pathC-direct, overstating occupancy with the cumulative input).
+      // Reading it here gives path A a per-call source when present. The
+      // counter distinguishes "delta carries usage" from "gateway never sends
+      // usage" in the turn-end logs.
+      const delta = ev as {
+        usage?: {
+          input_tokens?: number;
+          output_tokens?: number;
+          cache_read_input_tokens?: number;
+          cache_creation_input_tokens?: number;
+        };
+      };
+      if (delta.usage) {
+        this.state.streamDeltaUsageCount += 1;
+        this.emitTokenUsage(
+          {
+            inputTokens: delta.usage.input_tokens,
+            outputTokens: delta.usage.output_tokens,
+            cacheReadInputTokens: delta.usage.cache_read_input_tokens,
+            cacheCreationInputTokens: delta.usage.cache_creation_input_tokens,
+          },
+          undefined,
+          undefined,
+        );
       }
     }
   }
@@ -1279,6 +1315,7 @@ export class SdkMessageAdapter {
           })} accInput=${accumulatedRaw.inputTokens ?? 0} ` +
             `accProcessed=${totalProcessedTokensFromRawUsage(accumulatedRaw)} ` +
             `assistantMsgs=${this.state.assistantMessageCount} ` +
+            `deltaUsage=${this.state.streamDeltaUsageCount} ` +
             `lastKnownUsed=${lastKnown?.usedTokens ?? "none"}`,
         );
         // Plausibility gate: on third-party gateways the CLI's control channel
@@ -1323,7 +1360,8 @@ export class SdkMessageAdapter {
       this.ctx.log.info(
         `context-usage pathC-direct: accInput=${accumulatedRaw.inputTokens ?? 0} ` +
           `accProcessed=${totalProcessedTokensFromRawUsage(accumulatedRaw)} ` +
-          `assistantMsgs=${this.state.assistantMessageCount} (no path-A snapshot)`,
+          `assistantMsgs=${this.state.assistantMessageCount} ` +
+          `deltaUsage=${this.state.streamDeltaUsageCount} (no path-A snapshot)`,
       );
       this.emitTokenUsage(accumulatedRaw, model, reportedWindow);
       return;
@@ -1343,6 +1381,7 @@ export class SdkMessageAdapter {
         `context-usage pathC-merge: lastKnownUsed=${lastKnown.usedTokens} ` +
           `accProcessed=${totalProcessedTokensFromRawUsage(accumulatedRaw)} ` +
           `assistantMsgs=${this.state.assistantMessageCount} ` +
+          `deltaUsage=${this.state.streamDeltaUsageCount} ` +
           `final=${merged.usedTokens}/${merged.pct}%`,
       );
       this.publishTokenUsageSnapshot(merged);

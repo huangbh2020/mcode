@@ -59,6 +59,11 @@ export function DeviceToolbar({
         : landscape
           ? `${current?.height ?? ""}×${current?.width ?? ""}`
           : `${current?.width ?? ""}×${current?.height ?? ""}`;
+  // "desktop" is the no-emulation default but is intentionally not part of
+  // BROWSER_DEVICE_PRESETS (see contracts), so `current` is undefined for it —
+  // resolve a friendly label so the trigger never shows the raw id.
+  const displayLabel =
+    device === "desktop" ? "桌面端" : (current?.label ?? device);
 
   return (
     <div className="flex h-9 shrink-0 items-center gap-1.5 border-b border-edge bg-surface-muted/60 px-2">
@@ -74,17 +79,17 @@ export function DeviceToolbar({
           onOpenChange={(open) => onMenuOpenChange(open)}
         >
           <Select.Trigger
-            title={`设备: ${current?.label ?? device} ${dimsLabel}`}
+            title={`设备: ${displayLabel} ${dimsLabel}`}
             className="max-w-[10rem]"
           >
             <span className="flex min-w-0 items-center gap-1.5">
-              {device === "desktop" ? (
+              {device === "desktop" || device === "pc" ? (
                 <IconDeviceDesktop size={14} className="shrink-0" />
               ) : (
                 <IconDeviceMobile size={14} className="shrink-0" />
               )}
               <span className="truncate text-[11px] font-medium text-content">
-                {current?.label ?? device}
+                {displayLabel}
               </span>
               <span className="shrink-0 text-[10px] text-content-subtle">{dimsLabel}</span>
             </span>
@@ -97,7 +102,7 @@ export function DeviceToolbar({
                     <Select.Item key={p.id} value={p.id}>
                       <Select.ItemText>
                         <span className="flex items-center gap-1.5">
-                          {p.id === "desktop" ? (
+                          {p.id === "desktop" || p.id === "pc" ? (
                             <IconDeviceDesktop size={14} className="shrink-0" />
                           ) : (
                             <IconDeviceMobile size={14} className="shrink-0" />

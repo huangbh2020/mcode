@@ -103,6 +103,19 @@ export type ProjectView = z.infer<typeof ProjectViewSchema>;
  */
 export const UI_PROJECT_GROUPS_SETTING_KEY = "ui.projectGroups";
 
+/** Setting key under which the last-activated project id is persisted, so
+ *  `init()` can restore the user's previous landing project on the next
+ *  launch instead of always falling back to the first project. Written
+ *  alongside {@link UI_LAST_SESSION_SETTING_KEY} whenever a session is
+ *  activated (selectSession / openTab). Fire-and-forget: a failed write just
+ *  means the next launch falls back to the default first-project selection. */
+export const UI_LAST_PROJECT_SETTING_KEY = "ui.lastProjectId";
+
+/** Setting key under which the last-activated session id is persisted.
+ *  Paired with {@link UI_LAST_PROJECT_SETTING_KEY}; restored by `init()` to
+ *  re-open the exact thread the user was on before quitting. */
+export const UI_LAST_SESSION_SETTING_KEY = "ui.lastSessionId";
+
 /** Metadata for a single project group. */
 export const ProjectGroupMetaSchema = z.object({
   color: z.string().nullable().optional(),
@@ -2064,15 +2077,20 @@ export interface BrowserDeviceSpec {
 
 /** Shared preset catalog — single source of truth for the device selector.
  *  "custom" is a menu entry (no fixed dims; width/height come from the input
- *  fields at set time). Desktop is the no-emulation default. */
+ *  fields at set time).
+ *
+ *  Note: "desktop" (no-emulation, fill-the-panel) is still a valid
+ *  BrowserDevicePreset — it's the default device and the sentinel used when
+ *  collapsing the toolbar disables emulation. But it is intentionally NOT
+ *  listed here: it isn't a selectable menu entry, only the renamed
+ *  "桌面端" (= the former "PC 1920×1080", fixed emulation) is. */
 export const BROWSER_DEVICE_PRESETS: BrowserDeviceSpec[] = [
-  { id: "desktop", label: "桌面端", width: 0, height: 0, scale: 1 },
+  { id: "pc", label: "桌面端", width: 1920, height: 1080, scale: 1 },
   { id: "iphone", label: "iPhone 14", width: 390, height: 844, scale: 3 },
   { id: "iphone-se", label: "iPhone SE", width: 375, height: 667, scale: 2 },
   { id: "android", label: "Pixel 7", width: 412, height: 915, scale: 2.625 },
   { id: "galaxy-s23", label: "Galaxy S23", width: 360, height: 740, scale: 3 },
   { id: "ipad-mini", label: "iPad mini", width: 768, height: 1024, scale: 2 },
-  { id: "pc", label: "PC 1920×1080", width: 1920, height: 1080, scale: 1 },
   { id: "custom", label: "自定义", width: 0, height: 0, scale: 3 },
 ];
 
