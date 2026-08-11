@@ -290,6 +290,8 @@ const api = {
       ipcRenderer.invoke(IPC.BROWSER_CLOSE, input)) as RpcMap["browser.close"],
     setDevice: ((input) =>
       ipcRenderer.invoke(IPC.BROWSER_SET_DEVICE, input)) as RpcMap["browser.setDevice"],
+    clearCache: (() =>
+      ipcRenderer.invoke(IPC.BROWSER_CLEAR_CACHE)) as RpcMap["browser.clearCache"],
   },
 
   /** Language servers (LSP): install/enable per language, then sync documents

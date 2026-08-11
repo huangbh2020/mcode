@@ -889,6 +889,24 @@ function ChatPaneForSession({ sessionId, isActive }: { sessionId: string; isActi
         .filter((b): b is Extract<Block, { kind: "plan" }> => b.kind === "plan"),
     [messages],
   );
+  // Messages this thread's user has previously sent, oldest → newest, as
+  // plain text. Drives the Up/Down history recall in the composer. Derived
+  // from the message stream (the user message's `text` block holds exactly
+  // what was typed), so it survives restarts and stays per-thread. Messages
+  // with only attachment chips (no typed text) are skipped.
+  const historyTexts = useMemo(() => {
+    const out: string[] = [];
+    for (const m of messages) {
+      if (m.role !== "user") continue;
+      for (const b of m.blocks) {
+        if (b.kind === "text" && b.text.trim().length > 0) {
+          out.push(b.text);
+          break;
+        }
+      }
+    }
+    return out;
+  }, [messages]);
   // The textarea is blocked while a turn is running, a backgrounded subagent
   // is still in flight, or a tool approval is awaiting the user's decision —
   // the approval panel takes the place of the input area entirely so the user
@@ -917,6 +935,15 @@ function ChatPaneForSession({ sessionId, isActive }: { sessionId: string; isActi
   const clearPromptQueue = useSessionStore((s) => s.clearPromptQueue);
 
   const [value, setValue] = useState("");
+  // ── Up/Down history recall ──
+  // recallActive: the composer currently holds a recalled past message and
+  // Up/Down should keep cycling history (until the user edits the text).
+  // historyIndex: the recalled message's index into historyTexts (-1 = none).
+  // recallFillRef: guards handleChange so the content change triggered by OUR
+  // own setText fill doesn't exit recall mode — only a real user edit does.
+  const [recallActive, setRecallActive] = useState(false);
+  const [historyIndex, setHistoryIndex] = useState(-1);
+  const recallFillRef = useRef(false);
   const [showJumpBottom, setShowJumpBottom] = useState(false);
   // Inline-edit mode for a user message. When set, the MessageRow with this id
   // swaps its bubble for an inline editor. Cleared on submit/cancel. Null when
@@ -1050,12 +1077,113 @@ function ChatPaneForSession({ sessionId, isActive }: { sessionId: string; isActi
 
   /** Content-change handler from the rich-text editor. The editor reports its
    *  plain-text-with-skills representation; we keep a mirror in `value` (for
-   *  empty-state checks + enqueue) and re-run trigger detection. */
+   *  empty-state checks + enqueue) and re-run trigger detection. A change that
+   *  is NOT our own history-recall fill means the user typed/edited — exit
+   *  recall mode so Up/Down return to caret navigation, and re-run trigger
+   *  detection. Recall fills (applyHistory) are not user edits: they stay in
+   *  recall mode and skip trigger detection so a recalled `/command` or
+   *  `@file` doesn't pop the picker open mid-recall. */
   const handleChange = (text: string) => {
     setValue(text);
+    if (recallFillRef.current) {
+      recallFillRef.current = false;
+      setPickerKind(null);
+      return;
+    }
+    setRecallActive(false);
+    setHistoryIndex(-1);
     const caret = editorRef.current?.getCaretOffset() ?? -1;
     if (caret >= 0) recomputePicker(text, caret);
   };
+
+  /** Fill the editor with the history message at `idx`, entering recall mode.
+   *  The fill is marked via recallFillRef so handleChange (fired
+   *  synchronously by setText → onUpdate) doesn't interpret it as a user edit
+   *  and exit recall. */
+  const applyHistory = useCallback(
+    (idx: number) => {
+      const text = historyTexts[idx];
+      if (text === undefined) return;
+      setHistoryIndex(idx);
+      setRecallActive(true);
+      recallFillRef.current = true;
+      editorRef.current?.setText(text);
+      setValue(text);
+    },
+    [historyTexts],
+  );
+
+  /** Up arrow: recalls the most recent sent message when idle, otherwise one
+   *  step OLDER. No-op at the oldest entry. */
+  const handleHistoryUp = useCallback(() => {
+    if (historyTexts.length === 0) return;
+    const nextIdx =
+      recallActive && historyIndex >= 0 ? historyIndex - 1 : historyTexts.length - 1;
+    if (nextIdx < 0) return; // already at the oldest
+    applyHistory(nextIdx);
+  }, [historyTexts, recallActive, historyIndex, applyHistory]);
+
+  /** Down arrow: recalls one step NEWER; past the newest clears the editor
+   *  and exits recall. No-op before any message has been recalled. */
+  const handleHistoryDown = useCallback(() => {
+    if (historyTexts.length === 0) return;
+    if (!recallActive || historyIndex < 0) return; // nothing recalled yet
+    const nextIdx = historyIndex + 1;
+    if (nextIdx >= historyTexts.length) {
+      // Newest + 1 → clear the editor and leave recall mode.
+      setRecallActive(false);
+      setHistoryIndex(-1);
+      recallFillRef.current = true;
+      editorRef.current?.setText("");
+      setValue("");
+      return;
+    }
+    applyHistory(nextIdx);
+  }, [historyTexts, recallActive, historyIndex, applyHistory]);
+
+  /** Whether the composer's bare Up/Down arrows should be intercepted for
+   *  history recall: when the composer is empty (the recall trigger), or
+   *  already mid-recall with the recalled text still unedited. Locked while a
+   *  question/approval owns the input area. */
+  const recallEnabled =
+    !textareaLocked && historyTexts.length > 0 && (value.trim() === "" || recallActive);
+
+  /** Whether the composer holds anything sendable (typed text or attachment
+   *  chips). Drives the send button's enablement AND the busy-state stop/send
+   *  toggle: while a turn is running, an empty composer keeps the stop button
+   *  (interrupt); the moment the user types, the button flips to send — which
+   *  enqueues the prompt into the 排队 chips instead of starting a new turn. */
+  const hasComposerContent = value.trim() !== "" || tags.length > 0;
+
+  // ── Composer draft persistence ──
+  // The store's composerDraftBySession holds each thread's unsent input so it
+  // survives this pane unmounting (single-mode thread switch, tab close).
+  // Restore runs BEFORE the write-through below (declaration order matters):
+  // the write-through's first run sees the stale empty `value` and would
+  // otherwise clear a pre-existing draft before restore reads it.
+  useEffect(() => {
+    const draft = useSessionStore.getState().composerDraftBySession[sessionId];
+    // Guard: skip empty drafts so a never-typed thread isn't clobbered.
+    if (!draft || (!draft.text && draft.tags.length === 0)) return;
+    if (draft.html) editorRef.current?.setHTML(draft.html);
+    setValue(draft.text);
+    if (draft.tags.length > 0) setTags(draft.tags);
+  }, [sessionId]);
+
+  // Write the composer through to the per-session draft on every change, so
+  // an unmount at any later point has the freshest state. An emptied composer
+  // (after send) drops the stored draft.
+  useEffect(() => {
+    if (value.trim() === "" && tags.length === 0) {
+      useSessionStore.getState().clearComposerDraft(sessionId);
+      return;
+    }
+    useSessionStore.getState().saveComposerDraft(sessionId, {
+      text: value,
+      html: editorRef.current?.getHTML() ?? "",
+      tags,
+    });
+  }, [value, tags, sessionId]);
 
   /** Remove the trigger token (`@query` or `/query`) from the editor. */
   const clearTriggerToken = useCallback(() => {
@@ -1997,6 +2125,9 @@ function ChatPaneForSession({ sessionId, isActive }: { sessionId: string; isActi
               }
               onChange={handleChange}
               onEnter={handleEnter}
+              onHistoryUp={handleHistoryUp}
+              onHistoryDown={handleHistoryDown}
+              historyNavEnabled={recallEnabled}
               onPromotePaste={handlePromotePaste}
               shouldPromotePaste={shouldPromoteToTag}
               onPasteFiles={handlePasteFiles}
@@ -2031,7 +2162,7 @@ function ChatPaneForSession({ sessionId, isActive }: { sessionId: string; isActi
                   to a read-only chip once the thread has messages. */}
               <div className="flex shrink-0 items-center gap-1">
                 <ProviderDropdown />
-                {sessionBusy ? (
+                {sessionBusy && !hasComposerContent ? (
                   <button
                     onClick={() => void interrupt()}
                     title="停止生成"
@@ -2045,9 +2176,10 @@ function ChatPaneForSession({ sessionId, isActive }: { sessionId: string; isActi
                   </button>
                 ) : (
                   <button
-                    onClick={handleSend}
-                    disabled={!value.trim() && tags.length === 0}
-                    title="发送"
+                    onClick={sessionBusy ? handleEnqueue : handleSend}
+                    disabled={!hasComposerContent}
+                    title={sessionBusy ? "加入队列" : "发送"}
+                    aria-label={sessionBusy ? "加入队列" : "发送"}
                     className={cn(
                       "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-accent text-surface shadow-sm transition-all duration-150 ease-out",
                       "hover:scale-110 hover:brightness-110 hover:shadow-md hover:shadow-accent/20",

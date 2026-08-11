@@ -21,9 +21,18 @@
  * (target=_blank) are routed to the system browser, never opened in-view.
  */
 import { randomUUID } from "node:crypto";
-import { join } from "node:path";
-import { ipcMain, shell, WebContentsView, type Rectangle, type IpcMainEvent } from "electron";
-import { IPC, resolveBrowserDeviceSpec } from "@contracts/ipc";
+import { mkdirSync } from "node:fs";
+import { isAbsolute, join } from "node:path";
+import {
+  ipcMain,
+  shell,
+  session,
+  WebContentsView,
+  type Rectangle,
+  type Session,
+  type IpcMainEvent,
+} from "electron";
+import { IPC, resolveBrowserDeviceSpec, BROWSER_DATA_DIR_SETTING_KEY } from "@contracts/ipc";
 import type {
   BrowserCreateResult,
   BrowserOpResult,
@@ -35,6 +44,7 @@ import type {
 import { getMainWindow, sendToRenderer } from "@main/window.js";
 import { getEffectiveTheme } from "@main/lib/theme.js";
 import { log } from "@main/lib/logger.js";
+import { SettingRepo } from "@main/store/repositories.js";
 import { PICKER_INJECT_SCRIPT, PICKER_REMOVE_SCRIPT } from "./pickerScript.js";
 import { SNAPSHOT_SCRIPT, buildClickScript, buildTypeScript, buildEvaluateScript } from "./snapshotScript.js";
 
@@ -141,6 +151,42 @@ function bgColor(): string {
   return getEffectiveTheme() === "dark" ? "#18181b" : "#ffffff";
 }
 
+/** Persistent partition shared by ALL embedded browser views, so cookies /
+ *  localStorage / login state is consistent across tabs (mirrors the old
+ *  behavior of all views sharing session.defaultSession, but isolated from the
+ *  app shell). Used when the user has NOT configured a custom data directory. */
+const BROWSER_PARTITION = "persist:mcode-browser";
+
+/** The shared Session for every embedded browser view. When the user has
+ *  configured a data directory (browser.dataDir setting) it is created via
+ *  `session.fromPath(dir)` — the browser's cookies, form/autofill data,
+ *  localStorage, IndexedDB etc. are written straight into that directory.
+ *  Empty/absent → Electron's default partition location under userData.
+ *
+ *  NOTE: Electron caches Session objects by path/partition string, so a
+ *  browser.dataDir change only takes effect on the first session lookup of a
+ *  run. Changing the setting therefore requires an app restart (the settings
+ *  UI tells the user this). */
+function browserSession(): Session {
+  const dir = SettingRepo.get(BROWSER_DATA_DIR_SETTING_KEY)?.trim();
+  if (!dir) return session.fromPartition(BROWSER_PARTITION);
+  // session.fromPath requires an absolute path; a relative value (e.g. typed
+  // into the settings input) would be resolved unpredictably — fall back to
+  // the default partition location instead.
+  if (!isAbsolute(dir)) {
+    log.warn(`browser data dir is not absolute, ignoring: ${dir}`);
+    return session.fromPartition(BROWSER_PARTITION);
+  }
+  try {
+    mkdirSync(dir, { recursive: true });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    log.warn(`browser data dir mkdir failed (falling back to default): ${msg}`);
+    return session.fromPartition(BROWSER_PARTITION);
+  }
+  return session.fromPath(dir);
+}
+
 class BrowserManagerImpl {
   private readonly browsers = new Map<string, LiveBrowser>();
   /** webContents.id -> browserId, for routing picker IPC from the right view. */
@@ -159,6 +205,11 @@ class BrowserManagerImpl {
     try {
       view = new WebContentsView({
         webPreferences: {
+          // The browser runs on its own persistent partition (browserSession),
+          // isolated from the app shell's default session, so cookies/login/
+          // storage live in the browser's data directory (user-configurable
+          // via the browser.dataDir setting) instead of mixing with app data.
+          session: browserSession(),
           // contextIsolation stays on so the page can't touch the preload's
           // scope; the browserPicker preload exposes only mcodeBridge.pickElement.
           // sandbox is OFF because the preload is built as ESM (.mjs) and
@@ -546,6 +597,34 @@ class BrowserManagerImpl {
     }
     log.info(`browser closed: ${id}`);
     return { ok: true };
+  }
+
+  /** Clear the browser's HTTP cache + temporary site storage (localStorage,
+   *  IndexedDB, service workers, cache storage, websql, filesystem). Cookies
+   *  are intentionally NOT cleared, so the user stays signed in on the sites
+   *  they've logged into. Operates on the shared browser partition session, not
+   *  the app shell's default session. */
+  async clearBrowserCache(): Promise<BrowserOpResult> {
+    try {
+      const ses = browserSession();
+      await ses.clearCache();
+      await ses.clearStorageData({
+        storages: [
+          "localstorage",
+          "indexdb",
+          "serviceworkers",
+          "cachestorage",
+          "websql",
+          "filesystem",
+        ],
+      });
+      log.info("browser cache cleared (HTTP cache + temporary site storage)");
+      return { ok: true };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      log.error(`browser clearCache failed: ${msg}`);
+      return { ok: false, error: msg };
+    }
   }
 
   // ── Agent-facing capabilities ───────────────────────────────────────

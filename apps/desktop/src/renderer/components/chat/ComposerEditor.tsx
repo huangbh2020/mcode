@@ -60,6 +60,13 @@ export interface ComposerEditorHandle {
   /** Replace all content with plain text (no skill pills), focus the editor,
    *  and place the caret at the end. Used by suggestion prompts. */
   setText: (text: string) => void;
+  /** Serialize the current document as HTML (skill pills included as
+   *  `<span data-type="skill">`). Used to persist the composer draft. */
+  getHTML: () => string;
+  /** Replace all content with HTML (e.g. a restored composer draft), focus
+   *  the editor, and place the caret at the end. Skill pills round-trip via
+   *  the node's parseHTML. */
+  setHTML: (html: string) => void;
   /** Get the bounding rect of the editor element (for picker anchoring). */
   getRect: () => DOMRect | null;
   /**
@@ -103,6 +110,16 @@ interface ComposerEditorProps {
    *  send vs enqueue based on session state). Shift+Enter inserts a newline
    *  and is NOT reported. */
   onEnter: () => void;
+  /** Called when the user presses the bare Up arrow while `historyNavEnabled`
+   *  is true — the parent recalls an OLDER sent message into the editor. */
+  onHistoryUp?: () => void;
+  /** Called when the user presses the bare Down arrow while `historyNavEnabled`
+   *  is true — the parent recalls a NEWER sent message (or exits recall). */
+  onHistoryDown?: () => void;
+  /** Whether the Up/Down arrows should be intercepted for history recall
+   *  instead of normal caret navigation. True only when the composer is empty
+   *  (or the parent is mid-recall and the user hasn't edited the text). */
+  historyNavEnabled?: boolean;
   /** Called with a paste that should be promoted to a tag (long / multi-line).
    *  Short pastes are inserted inline as plain text by default. */
   onPromotePaste?: (text: string) => void;
@@ -190,6 +207,9 @@ export const ComposerEditor = forwardRef<
     editable,
     onChange,
     onEnter,
+    onHistoryUp,
+    onHistoryDown,
+    historyNavEnabled,
     onPromotePaste,
     shouldPromotePaste,
     onPasteFiles,
@@ -202,11 +222,17 @@ export const ComposerEditor = forwardRef<
   // latest closures without needing to recreate the editor.
   const onChangeRef = useRef(onChange);
   const onEnterRef = useRef(onEnter);
+  const onHistoryUpRef = useRef(onHistoryUp);
+  const onHistoryDownRef = useRef(onHistoryDown);
+  const historyNavEnabledRef = useRef(historyNavEnabled);
   const onPromotePasteRef = useRef(onPromotePaste);
   const shouldPromotePasteRef = useRef(shouldPromotePaste);
   const onPasteFilesRef = useRef(onPasteFiles);
   onChangeRef.current = onChange;
   onEnterRef.current = onEnter;
+  onHistoryUpRef.current = onHistoryUp;
+  onHistoryDownRef.current = onHistoryDown;
+  historyNavEnabledRef.current = historyNavEnabled;
   onPromotePasteRef.current = onPromotePaste;
   shouldPromotePasteRef.current = shouldPromotePaste;
   onPasteFilesRef.current = onPasteFiles;
@@ -264,6 +290,24 @@ export const ComposerEditor = forwardRef<
         if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
           event.preventDefault();
           onEnterRef.current();
+          return true;
+        }
+        // Bare Up/Down arrows (no modifier keys) are history recall when the
+        // parent enables it (composer empty, or mid-recall and the text
+        // hasn't been manually edited). Intercept and hand off; otherwise
+        // let ProseMirror keep them as caret / line navigation.
+        if (
+          historyNavEnabledRef.current &&
+          (event.key === "ArrowUp" || event.key === "ArrowDown") &&
+          !event.shiftKey &&
+          !event.altKey &&
+          !event.ctrlKey &&
+          !event.metaKey &&
+          !event.isComposing
+        ) {
+          event.preventDefault();
+          if (event.key === "ArrowUp") onHistoryUpRef.current?.();
+          else onHistoryDownRef.current?.();
           return true;
         }
         return false;
@@ -417,6 +461,12 @@ export const ComposerEditor = forwardRef<
         if (!editor) return;
         editor.commands.clearContent(true);
         if (text) editor.commands.insertContent(text);
+        editor.commands.focus("end");
+      },
+      getHTML: () => editor?.getHTML() ?? "",
+      setHTML: (html) => {
+        if (!editor) return;
+        editor.commands.setContent(html);
         editor.commands.focus("end");
       },
       getRect: () => hostRef.current?.getBoundingClientRect() ?? null,

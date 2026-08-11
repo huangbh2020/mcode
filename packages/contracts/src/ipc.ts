@@ -1888,6 +1888,16 @@ export const TERMINAL_SHELL_SETTING_KEY = "terminal.shell";
  *  `<dir>/<sessionId>/turn-<N>/<timestamp>-<toolCallId>.png`. */
 export const BROWSER_SCREENSHOT_DIR_SETTING_KEY = "browser.screenshotDir";
 
+/** Setting key for the directory where the embedded browser's session data is
+ *  stored (cookies, form/autofill data, localStorage, IndexedDB, etc.). The
+ *  browser views run on a dedicated persistent partition
+ *  ("persist:mcode-browser"); when this is set, the partition is pointed at
+ *  that directory via session.fromPartition's `path` option. Empty/absent →
+ *  Electron's default partition location under userData. NOTE: Electron caches
+ *  Session objects by partition string, so changing this only takes effect
+ *  after an app restart. */
+export const BROWSER_DATA_DIR_SETTING_KEY = "browser.dataDir";
+
 /** Snapshot of a live (or just-exited) terminal session. */
 export interface TerminalInfo {
   terminalId: string;
@@ -2356,6 +2366,10 @@ export interface RpcMap {
   "browser.close": (input: BrowserCloseInput) => Promise<BrowserOpResult>;
   /** Set the device emulation preset (desktop / iphone / android). */
   "browser.setDevice": (input: BrowserSetDeviceInput) => Promise<BrowserOpResult>;
+  /** Clear the embedded browser's HTTP cache + temporary site storage
+   *  (localStorage / IndexedDB / service workers / etc.). Cookies and login
+   *  data are preserved, so the user stays signed in. */
+  "browser.clearCache": () => Promise<BrowserOpResult>;
   /** App version + runtime info for the About panel. */
   "app.info": () => Promise<AppInfoResult>;
   /** Check for updates on the GitHub Releases channel. Returns the current
@@ -2545,6 +2559,7 @@ export const IPC = {
   BROWSER_HIDE: "browser:hide",
   BROWSER_CLOSE: "browser:close",
   BROWSER_SET_DEVICE: "browser:setDevice",
+  BROWSER_CLEAR_CACHE: "browser:clearCache",
   // App / runtime info (About panel)
   APP_INFO: "app:info",
   // Auto-update (electron-updater)

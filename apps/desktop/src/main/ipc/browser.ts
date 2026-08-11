@@ -158,4 +158,15 @@ export function registerBrowserHandlers(ipcMain: IpcMain): void {
       return { ok: false as const, error: msg };
     }
   });
+
+  // Global to the browser session (no per-view input): clears HTTP cache +
+  // temporary site storage while keeping cookies/login state.
+  ipcMain.handle(IPC.BROWSER_CLEAR_CACHE, async () => {
+    try {
+      return await BrowserManager.clearBrowserCache();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return { ok: false as const, error: msg };
+    }
+  });
 }

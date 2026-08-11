@@ -13,6 +13,7 @@ import type {
   TurnUsageRecord,
 } from "@contracts/runtime";
 import type { TurnFileEntry } from "@renderer/lib/turnFiles.js";
+import type { ContentTag } from "@renderer/lib/contentTag.js";
 import { isValidSnapshot } from "@renderer/lib/contextWindow.js";
 import type { CustomModelPublic, CustomModelRoleKey } from "@contracts/customModel";
 import { CUSTOM_MODEL_ROLES } from "@contracts/customModel";
@@ -314,6 +315,22 @@ export interface PromptAttachment {
   content: string;
   attachmentKind?: "paste" | "file";
   filePath?: string;
+}
+
+/** A snapshot of the composer's unsent content for one session. Written
+ *  through to the store on every change and restored when the session's
+ *  ChatPane remounts (single-mode session switch, tab close/reopen), so the
+ *  user's typed text + attachment chips survive thread switches.
+ *
+ *  `text` is the plain-text-with-skills mirror (drives the empty-state/send
+ *  button); `html` is the Tiptap document HTML so skill pills round-trip on
+ *  restore (`getHTML()`/`setContent()`); `tags` are the file/paste/element
+ *  chips above the editor. NOT persisted — in-memory only, cleared when the
+ *  draft is sent or the session is deleted. */
+export interface ComposerDraft {
+  text: string;
+  html: string;
+  tags: ContentTag[];
 }
 
 export interface ChatMessage {
@@ -683,6 +700,13 @@ export interface SessionState {
    *  in the store's event handlers, where there's no component to hold it.
    *  NOT persisted: ephemeral run-ahead buffer, not session history. */
   promptQueueBySession: Record<string, QueuedPrompt[]>;
+
+  /** Per-session composer draft (typed-but-unsent content + attachment chips).
+   *  Written through by the ChatPane on every composer change; restored when
+   *  the session's pane remounts (single-mode thread switch, tab close/reopen)
+   *  so the user's input survives thread switches. NOT persisted — in-memory
+   *  only, cleared once the draft is sent or the session is deleted. */
+  composerDraftBySession: Record<string, ComposerDraft>;
 
   /* ── IDE right-panel state ──
    *  Editor state (open files, active file, view mode, expanded tree dirs)
@@ -1115,6 +1139,13 @@ export interface SessionState {
    *  the `turn.done` / `error` / sendTurn-failure paths so a queued prompt
    *  fires the moment the previous turn truly ends. Safe to call any time. */
   drainPromptQueueIfIdle: (sessionId: string) => void;
+
+  /** Persist a session's composer draft (typed-but-unsent content) so it
+   *  survives the ChatPane unmounting (thread switch / tab close). The owning
+   *  ChatPane calls this on every content change (write-through). */
+  saveComposerDraft: (sessionId: string, draft: ComposerDraft) => void;
+  /** Drop a session's stored composer draft (empty composer / after send). */
+  clearComposerDraft: (sessionId: string) => void;
 
   /* ── IDE right-panel actions ── */
   /** Switch the active right-panel tab. Persists to settings. */
@@ -2445,6 +2476,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   chatFileQueueBySession: {},
   chatElementQueueBySession: {},
   promptQueueBySession: {},
+  composerDraftBySession: {},
   // IDE right-panel. Editor state is per-project (keyed by projectId);
   // init() hydrates from the settings table. rightPanelTab / ideEditorMode
   // are global user prefs.
@@ -3448,6 +3480,8 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       delete planTabActiveBySession[id];
       const planApprovalDraftBySession = { ...s.planApprovalDraftBySession };
       delete planApprovalDraftBySession[id];
+      const composerDraftBySession = { ...s.composerDraftBySession };
+      delete composerDraftBySession[id];
       const pendingApprovals = s.pendingApprovals.filter((p) => p.sessionId !== id);
       // Drop the session from the tab strip too. If it was the active tab,
       // the focus jumps to the previous tab (openTab logic replicated
@@ -3481,6 +3515,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           planDrawerPlanBySession,
           planTabActiveBySession,
           planApprovalDraftBySession,
+          composerDraftBySession,
           pendingApprovals,
           openTabs,
         };
@@ -3527,6 +3562,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         planDrawerPlanBySession,
         planTabActiveBySession,
         planApprovalDraftBySession,
+        composerDraftBySession,
         pendingApprovals,
         openTabs: finalActive ? openTabs : openTabs,
         sessions: isActiveProject ? nextList : s.sessions,
@@ -5555,6 +5591,20 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       if (!s.promptQueueBySession[sessionId]) return {};
       const { [sessionId]: _drop, ...rest } = s.promptQueueBySession;
       return { promptQueueBySession: rest };
+    });
+  },
+
+  saveComposerDraft: (sessionId, draft) => {
+    set((s) => ({
+      composerDraftBySession: { ...s.composerDraftBySession, [sessionId]: draft },
+    }));
+  },
+
+  clearComposerDraft: (sessionId) => {
+    set((s) => {
+      if (!s.composerDraftBySession[sessionId]) return {};
+      const { [sessionId]: _drop, ...rest } = s.composerDraftBySession;
+      return { composerDraftBySession: rest };
     });
   },
 
