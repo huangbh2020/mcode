@@ -40,6 +40,7 @@
  */
 import { homedir } from "node:os";
 import path from "node:path";
+import { bashPathHintFor, detectBashEnv } from "@main/lib/bashEnv.js";
 
 /** Suffix-free access to the Pi SDK module type (the provider already loads it
  *  via `loadPiSdk()` and hands us the resolved module). */
@@ -109,12 +110,18 @@ export async function buildPiSkillLoader(
     // `noSkills` unset so Pi's own `~/.pi/agent/skills` + `<cwd>/.pi/skills`
     // keep working — existing Pi users aren't disrupted.
     additionalSkillPaths: mcodeSkillRoots(cwd),
-    // On Windows, append the native-path hint so the model stops inventing
-    // `/mnt/<drive>/...` paths (the SDK injects native Windows paths; the model
-    // rewrites them to WSL form and the read tool then fails). The
-    // `createMntNormalizingReadTool` override is the silent-recovery backstop;
-    // this hint attacks the root cause and also covers Bash-redirected reads.
-    ...(process.platform === "win32" ? { appendSystemPrompt: [PI_WINDOWS_PATH_PROMPT] } : {}),
+    // On Windows, append a path-style hint that matches the bash the SDK will
+    // actually spawn — native (Git Bash: `/mnt/...` doesn't exist) or WSL
+    // (`/mnt/...` is the only absolute form that resolves; `detectBashEnv`
+    // mirrors the SDK's `getShellConfig` resolution, so on machines where Git
+    // isn't at the hardcoded locations and its `usr\bin` isn't on PATH, `where
+    // bash.exe` lands on the WSL launcher and every Bash call runs inside
+    // WSL). The `createMntNormalizingReadTool` override is the silent-recovery
+    // backstop; this hint attacks the root cause and also covers
+    // Bash-redirected reads.
+    ...(process.platform === "win32"
+      ? { appendSystemPrompt: [bashPathHintFor(detectBashEnv("pi"))] }
+      : {}),
     // Mirror Claude's allowlist semantics: when the user picked specific
     // skills, only those reach the model. Empty/undefined → no override, all
     // discovered skills are available (Claude's `"all"` analogue).
@@ -236,12 +243,12 @@ export function createMntNormalizingReadTool(
 }
 
 /**
- * System-prompt hint appended on Windows so the model stops inventing
- * `/mnt/<drive>/...` paths in the first place — the same mitigation the Claude
- * provider uses (`ClaudeAgentSdkProvider.ts` Windows path append). The
- * `createMntNormalizingReadTool` defense-in-depth recovers silently when the
- * model still emits one, but the hint cuts how often that happens (and also
- * covers Bash-redirected reads, which the tool override can't intercept).
+ * System-prompt hints for the Pi agent's bash environment now live in
+ * `@main/lib/bashEnv.ts` (`bashPathHintFor` + `detectBashEnv("pi")`) — the
+ * detector mirrors the SDK's `getShellConfig` resolution, and the hint text
+ * differs between native Windows bash and WSL bash (the two shells genuinely
+ * differ in which path forms resolve). The `createMntNormalizingReadTool`
+ * defense-in-depth recovers silently when the model still emits a `/mnt/`
+ * path, but the hint cuts how often that happens (and also covers
+ * Bash-redirected reads, which the tool override can't intercept).
  */
-export const PI_WINDOWS_PATH_PROMPT =
-  "You are running on Windows. Use native Windows paths (e.g. C:\\Users\\me\\file.txt) or, preferably, paths relative to the project working directory. NEVER use WSL-style paths like /mnt/c/... — they do not exist on this machine.";

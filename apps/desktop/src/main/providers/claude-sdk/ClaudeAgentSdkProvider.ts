@@ -22,6 +22,7 @@ import { buildCustomEnv, MCODE_CONFIG_DIR, resolveActiveModel } from "./customEn
 import type { ClaudeContextWindowTag } from "./claudeTokenUsage.js";
 import { ASK_SYSTEM_PROMPT } from "@main/lib/askQuestion.js";
 import { CLAUDE_IDENTITY_PROMPT } from "@main/lib/systemPrompt.js";
+import { bashPathHintFor, detectBashEnv } from "@main/lib/bashEnv.js";
 import { getFileSnapshot } from "@main/lib/fileSnapshotRegistry.js";
 import {
   FILE_MUTATING_TOOLS,
@@ -733,10 +734,14 @@ export class ClaudeAgentSdkProvider implements AgentProvider {
     //     model answers "who/what are you" by introducing itself as Mcode's
     //     assistant rather than a bare Claude CLI/API.
     // (1) Windows path hint: Claude's training data is saturated with
-    //     WSL-style `/mnt/<drive>/...` paths; on native Windows those resolve
-    //     to a garbage root-relative folder. The canUseTool guard normalizes
+    //     WSL-style `/mnt/<drive>/...` paths; whether those actually resolve
+    //     depends on the bash the CLI spawns, which varies by machine (Git
+    //     Bash → native `D:\...` only; no Git Bash → WSL, where `/mnt/...` is
+    //     the only absolute form). `detectBashEnv("claude")` mirrors the CLI's
+    //     resolution (Git Bash from the git install root, WSL as fallback) so
+    //     the hint tells the model the truth. The canUseTool guard normalizes
     //     the file tools anyway, but this hint cuts how often the model emits
-    //     such paths in the first place — including inside Bash commands
+    //     wrong-form paths in the first place — including inside Bash commands
     //     (e.g. `cat > /mnt/d/...`), which the guard can't intercept.
     // (2) AskUserQuestion sentinel fallback when the native tool is missing.
     // Identity is always present, so the preset+append is always active —
@@ -745,9 +750,7 @@ export class ClaudeAgentSdkProvider implements AgentProvider {
     const appends: string[] = [];
     appends.push(CLAUDE_IDENTITY_PROMPT);
     if (process.platform === "win32") {
-      appends.push(
-        "You are running on Windows. Use native Windows paths (e.g. D:\\...) or, preferably, paths relative to the project working directory. NEVER use WSL-style paths like /mnt/d/... — they do not exist on this machine.",
-      );
+      appends.push(bashPathHintFor(detectBashEnv("claude")));
     }
     if (!this.capabilities.supportsAskUserQuestion) {
       appends.push(ASK_SYSTEM_PROMPT);
