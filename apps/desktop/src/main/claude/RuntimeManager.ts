@@ -17,6 +17,7 @@ import { ApprovalBridge } from "./ApprovalBridge.js";
 import { getFileSnapshot, dropFileSnapshot } from "@main/lib/fileSnapshotRegistry.js";
 import { restoreFiles } from "@main/lib/fileSnapshot.js";
 import { BridgeRegistry } from "@main/providers/bridge/bridgeRegistry.js";
+import { mobileEventBus } from "@main/mobile/MobileEventBus.js";
 import { log } from "@main/lib/logger.js";
 
 interface SessionRuntime {
@@ -166,6 +167,14 @@ class RuntimeManager {
         this.observer?.(e);
       } catch (err) {
         log.error(`notification observer error: ${(err as Error).message}`);
+      }
+      // Fan out to mobile clients over SSE. Same fire-and-forget contract — a
+      // thrown subscriber is swallowed inside broadcast(). No subscribers ⇒
+      // cheap no-op, so this is safe even when the mobile feature is unused.
+      try {
+        mobileEventBus.broadcast(e);
+      } catch (err) {
+        log.error(`mobile event bus error: ${(err as Error).message}`);
       }
     };
 

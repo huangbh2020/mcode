@@ -11,6 +11,7 @@ import {
 import { getProviderIcon } from "@renderer/lib/providerIcon.js";
 import { useSessionStore } from "@renderer/stores/sessionStore.js";
 import { ProjectBranchIndicator } from "@renderer/components/chat/ProjectBranchIndicator.js";
+import { MobileConnectButton } from "@renderer/components/layout/MobileConnectDialog.js";
 import { resolveShortcut, acceleratorToDisplayString } from "@renderer/lib/shortcuts.js";
 
 type Mode = "workspace" | "settings";
@@ -194,6 +195,9 @@ export function Titlebar({
                 without closing the open file. Sits right of the branch pill. */}
             <EditorColumnToggle />
             <div className="flex-1" />
+            {/* Mobile companion ("connect phone") — opens the pairing dialog.
+                Hidden in browser overlay mode along with the panel toggles. */}
+            {!isBrowserMode && <MobileConnectButton />}
             {/* Bottom terminal toggle — sits just left of the right-panel
                 toggle. Active state highlighted with the accent token. */}
             {/* Bottom terminal toggle - hidden while the browser overlay is

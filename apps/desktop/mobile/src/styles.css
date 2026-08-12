@@ -1,0 +1,84 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ───────────── Theme variables ─────────────
+ * Copied from the desktop renderer's styles.css so both UIs share identical
+ * semantic tokens (surface / content / edge / accent / ...). Each value is a
+ * space-separated "R G B" triplet so Tailwind's <alpha-value> placeholder
+ * composes alpha variants. Kept in sync manually — a future refactor could
+ * extract these to a shared CSS file imported by both bundles. */
+:root {
+  font-weight: 500;
+  --surface: 255 255 255;
+  --surface-muted: 244 244 245;
+  --surface-hover: 228 228 231;
+  --content: 9 9 11;
+  --content-muted: 63 63 70;
+  --content-subtle: 113 113 122;
+  --edge: 228 228 231;
+  --input-edge: 212 212 216;
+  --accent: 5 150 105;
+  --danger: 220 38 38;
+  --warning: 217 119 6;
+  --info: 124 58 237;
+  --user-bubble: 82 82 91;
+  color-scheme: light;
+}
+
+.dark {
+  font-weight: 600;
+  --surface: 26 29 36;
+  --surface-muted: 44 49 60;
+  --surface-hover: 58 64 78;
+  --content: 231 232 236;
+  --content-muted: 170 173 180;
+  --content-subtle: 132 136 145;
+  --edge: 45 51 64;
+  --input-edge: 95 99 110;
+  --accent: 16 185 129;
+  --danger: 248 113 113;
+  --warning: 251 191 36;
+  --info: 167 139 250;
+  --user-bubble: 113 113 122;
+  color-scheme: dark;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background-color: rgb(var(--surface));
+  color: rgb(var(--content));
+  font-family:
+    system-ui,
+    -apple-system,
+    "Segoe UI",
+    Roboto,
+    "Helvetica Neue",
+    Arial,
+    "PingFang SC",
+    "Microsoft YaHei",
+    sans-serif;
+  -webkit-font-smoothing: antialiased;
+  /* Honor notches / home-indicator bars on iPhone. */
+  padding:
+    env(safe-area-inset-top)
+    env(safe-area-inset-right)
+    env(safe-area-inset-bottom)
+    env(safe-area-inset-left);
+  /* Disable pull-to-refresh + overscroll bounce while chatting. */
+  overscroll-behavior-y: none;
+}
+
+/* Prevent the iOS double-tap-to-zoom + text-selection-on-tap flicker inside
+   the chat surface and composer. */
+.no-select {
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}

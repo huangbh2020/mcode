@@ -205,6 +205,7 @@ pnpm build
 | P4 IDE 右栏 | ✅ | 文件树、git、终端(xterm+node-pty)、Monaco 编辑器 + diff |
 | P4.5 LSP 语言服务器 | ✅ | 设置页可安装/启停 TS/Python/Go/Java 语言服务器;`LspManager`(main)管理 stdio JSON-RPC 子进程;Monaco 手写 Provider(definition/references/hover)+ 诊断 markers + 跳转定位 |
 | P5 体验打磨 | 🟡 | ✅ 浏览器预览(agent 驱动应用内浏览器);⬜ checkpoint 时间线、Cmd+K、审批 UI |
+| P7 移动端 | ✅ 基础 | 局域网扫码+验证码配对;手机网页(独立 Vite bundle,`out/mobile/`)收发消息/审批/Git 提交;事件流复用 `RuntimeManager.emit` 单点扇出 |
 | P6 发布 | ✅ 基础 | electron-builder(mac/win 安装包)、electron-updater(GitHub Releases 渠道)、CI(typecheck + tag 自动发布)。mac 包已接 ad-hoc 签名(无 Apple 付费证书,dmg 直下首次启动需 `xattr -dr com.apple.quarantine` 或系统设置"仍要打开";brew cask 安装无此问题);真实 Developer ID 签名+公证未做,未含 Vitest |
 
 详见 `docs/tech-stack.md` 第八节。
@@ -216,6 +217,16 @@ pnpm build
 - **Pi 侧**(`mcodeExtension.ts` 的 `registerBrowserTools`):用 `pi.registerTool`(typebox schema)注册 5 个工具。**审批分级**:`MCODE_BROWSER_READONLY = {browser_list, browser_snapshot, browser_screenshot}` 在 `tool_call` 守卫的 ③ 步硬编码白名单放行(永不审批);`browser_navigate`/`browser_click` 有副作用,走正常审批(支持 always-allow)。screenshot 的 execute 里 `ctx.emit({type:"browser.image"})` 发结构化事件给 renderer 内联渲染(Pi path)。
 - **Claude 侧**(`ClaudeAgentSdkProvider.ts` 的 `buildBrowserMcpServer`):用 SDK 的 `createSdkMcpServer({name:"mcode-browser", tools:[...]})` 挂**进程内 MCP server**(无子进程),放进 `options.mcpServers`。inputSchema 用 zod。Claude 不能 `registerTool`(SDK 不支持),in-process MCP server 是唯一路径。工具名呈现为 `mcp__mcode-browser__<name>`,`shouldAutoApprove` 里 `isReadOnlyBrowserTool()` 放行只读后缀。screenshot 的 image 通过 tool_result content 透传(SDK 原生支持 image block),store 从 `ToolResultEvent.content` 解析(Claude path)。
 - **图片渲染**(双路径汇聚到同一 store reducer):`RuntimeEvent` 新增 `browser.image`(Pi emit);`Block` union 新增 `kind:"image"`(base64 + mimeType)。`sessionStore` 的 `tool.result` reducer 检测 content 含 image block 时追加 image block(Claude path),`browser.image` reducer 按 toolCallId 追加(Pi path),两者按 toolCallId 去重。`MessageBlocks.tsx` 的 `BlockView` 新增 `case "image"` 渲染 `<img>`;`GenericToolCard` 的 result 预览(`resultPreview`)剥离 image block 避免把 base64 当文本 dump。图片随消息持久化(toRecords 透传 blocks 数组,不区分 kind)。
+
+### 移动端 Mobile Companion(P7)
+- **架构**:手机浏览器经局域网(同源)访问 PC 主进程的 `MobileHttpServer`(`node:http`,绑 `0.0.0.0:7331`)。**零改动复用** provider 层——`RuntimeManager.emit` 是所有 `RuntimeEvent` 的单点,在那里挂一行 `mobileEventBus.broadcast(e)` 扇出给所有已连手机;`ApprovalBridge` 的 `requestId` 关联模型传输无关,手机回 `{requestId, granted}` 走同一 `resolveApproval`。provider 代码、持久化、桌面 IPC 全部不变。
+- **配对流程**:PC Titlebar「连接手机」按钮(`MobileConnectDialog.tsx`)→ IPC `mobile:startPairing` → `PairingManager` 生成 nonce(5min TTL)+ 6 位验证码 + 二维码(`qrcode` 库,二维码内含 `http://<lan-ip>:<port>/?nonce=<nonce>`)。手机扫码打开网页 → `PairingScreen` 输验证码 → POST `/api/pair/verify` → 校验通过签发 `deviceToken`(randomBytes(32),持久化到 settings 表 `mobile.pairedDevices`)。后续所有请求带 `Authorization: Bearer <token>`;SSE 因 EventSource 不能设 header,token 走 `?token=` 查询参数。
+- **传输**:`POST /api/rpc {method, input}`(走白名单)、`GET /api/events`(SSE,15s 心跳,断线浏览器原生重连)。`mobileApi.ts` 是与 `window.api` 子集同形状的 shim(fetch + EventSource)。
+- **安全白名单**(`mobileRpc.ts` + `mobileGitRpc.ts`):显式方法表,不在表内一律 404。允许:project/session 读取、`claude.startSession/sendTurn/interrupt/approve/respondQuestion/respondPlanApproval`、`git.{discoverRepos,status,diff,stage,unstage,commit,push,pull,generateCommitMessage}`。**禁止**:`file.*` 写删、`terminal.*`、`setting.set`、`project.create/delete`、`session.delete`、`git.discard/resolveConflicts`。所有 repoPath 走 `findContainingProject` 守卫(与桌面 git handler 共用,从 `ipc/git.ts` 导出)。
+- **git 复用**:`ipc/git.ts` 的 `loadSimpleGit`/`findContainingProject`/`mapStatus`/`findGitRepos`/`generateCommitMessageForRepo`(已提取为导出函数,桌面 IPC handler 与 mobile RPC 共调,无逻辑漂移)。
+- **mobile bundle**:独立 Vite 构建(`mobile.vite.config.ts`),输出到 `out/mobile/`(被 electron-builder `files: out/**/*` 自动打包)。复用 contracts 类型 + 同一套 Tailwind 语义 token(`mobile/src/styles.css` 内联 `:root`/`.dark` 变量)。store(`mobileStore.ts`)是桌面 `sessionStore` 的精简子集——同 event reducer 语义(text.delta→assistant 消息、tool.use→tool 卡片、turn.done→冻结),去掉布局/tab/终端/toast 等。输入框是轻量 textarea(非桌面 Tiptap)。**断线重连**:SSE 重连后 `recoverAfterReconnect` 重拉活跃 session 的 `session.messages` 快照覆盖,不缓冲丢掉的 delta。
+- **启动**:`index.ts` 的 `app.whenReady` 里 `startMobileServer()`(fire-and-forget,内部 await DB 读 enabled/port 设置,默认开,`mobile.enabled=0` 关);`before-quit` 里 `stopMobileServer()`。`pnpm build` / `pnpm package` 已串接 `build:mobile`,产物始终新鲜。
+- **互联网扩展预留**:配对协议与事件传输是「直连 LAN」实现,但 `PairingManager`/事件总线的设计可加 relay transport 而不改协议——本期不做。
 
 ---
 
