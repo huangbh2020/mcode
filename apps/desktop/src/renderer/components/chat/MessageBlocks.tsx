@@ -39,6 +39,7 @@ import { FileLink } from "./FileLink.js";
 import { ImageWithPreview } from "@renderer/components/ui/index.js";
 import { TagPopover } from "./TagPopover.js";
 import { isImageFilePath, type ContentTag } from "@renderer/lib/contentTag.js";
+import { BUILT_IN_COMMANDS } from "@renderer/lib/slashCommands.js";
 
 /** Map of absolute file path → its pre-turn content. Built from the
  *  `turn.files` event payload so the Write tool card can diff the new
@@ -47,6 +48,34 @@ import { isImageFilePath, type ContentTag } from "@renderer/lib/contentTag.js";
  *  those cases Write falls back to a plain new-content preview. */
 
 export type BeforeContentMap = Map<string, string>;
+
+/** Stable empty array returned by {@link useKnownSkillNames} when no skills or
+ *  commands are known yet (e.g. before the skill list finishes loading). Using
+ *  a module-level constant avoids triggering Markdown's useMemo on every call. */
+const EMPTY_SKILL_NAMES: ReadonlyArray<string> = [];
+
+/** All skill names + built-in command names currently known to the app. Used
+ *  by text-block rendering so that ANY `/<name>` occurrence in message text is
+ *  highlighted — not just the ones explicitly inserted as pills in the composer
+ *  (which are recorded in `block.skillNames`). This covers plain-typed
+ *  references and DB-restored messages where `skillNames` was never set.
+ *
+ *  Memoized on the store's `skills` array reference (stable unless the skill
+ *  list changes), so every caller gets the same array identity for free. */
+function useKnownSkillNames(): ReadonlyArray<string> {
+  const skills = useSessionStore((s) => s.skills);
+  return useMemo(() => {
+    if (skills.length === 0) {
+      // Still include built-in commands even before skills load.
+      const cmdOnly = BUILT_IN_COMMANDS.map((c) => c.name);
+      return cmdOnly.length > 0 ? cmdOnly : EMPTY_SKILL_NAMES;
+    }
+    const names = new Set<string>();
+    for (const s of skills) names.add(s.name);
+    for (const c of BUILT_IN_COMMANDS) names.add(c.name);
+    return Array.from(names);
+  }, [skills]);
+}
 
 /** Toggle a collapsible card while keeping the clicked header at the same
  *  viewport position. Without this, expanding a card inserts content below
@@ -339,7 +368,7 @@ function ImageGallery({ blocks }: { blocks: Extract<Block, { kind: "image" }>[] 
   // navigate prev/next inside the fullscreen preview too.
   const allSrcs = blocks.map((b) => `data:${b.mimeType};base64,${b.data}`);
   return (
-    <div className="my-1 flex w-full max-w-[420px] flex-col gap-1">
+    <div className="my-1 flex flex-col items-start gap-1">
       <div className="relative">
         <ImageWithPreview
           src={`data:${cur.mimeType};base64,${cur.data}`}
@@ -616,6 +645,11 @@ const BlockView = memo(function BlockView({
   /** Project root for resolving file paths in text blocks and tool cards. */
   projectPath?: string | null;
 }) {
+  // Known skill/command names — used to highlight /name references in text
+  // blocks regardless of whether they were inserted as pills (block.skillNames)
+  // or typed as plain text. See useKnownSkillNames.
+  const knownSkillNames = useKnownSkillNames();
+
   switch (block.kind) {
     case "text": {
       // useDeferredValue throttles the markdown re-parse: `block.text` updates
@@ -634,8 +668,16 @@ const BlockView = memo(function BlockView({
       // already guarded without sacrificing live markdown formatting.
       // eslint-disable-next-line react-hooks/rules-of-hooks
       const deferredText = useDeferredValue(block.text);
+      // Merge pill-recorded names with the full known set so that plain-typed
+      // /name references (and DB-restored messages without skillNames) also
+      // highlight. When block.skillNames is empty this is just knownSkillNames
+      // (stable reference) so Markdown's memo isn't broken.
+      const skillNames =
+        block.skillNames && block.skillNames.length > 0
+          ? Array.from(new Set([...block.skillNames, ...knownSkillNames]))
+          : knownSkillNames;
       return (
-        <Markdown projectPath={projectPath} skillNames={block.skillNames}>
+        <Markdown projectPath={projectPath} skillNames={skillNames}>
           {deferredText}
         </Markdown>
       );
@@ -738,7 +780,7 @@ const BlockView = memo(function BlockView({
         <ImageWithPreview
           src={`data:${block.mimeType};base64,${block.data}`}
           alt="浏览器截图"
-          className="my-1 w-full max-w-[420px]"
+          className="my-1"
         />
       );
   }
