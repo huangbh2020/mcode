@@ -439,6 +439,7 @@ export function TurnPanel({
   turnActive = false,
   turnMeta,
   onOpenPlan,
+  onToggleCollapse,
   projectPath,
 }: {
   /** The turn's process blocks in order: thinking, tool calls, and any text
@@ -460,6 +461,11 @@ export function TurnPanel({
   turnMeta?: TurnMeta;
   /** Forwarded to BlockView for plan blocks (opens the PlanDrawer). */
   onOpenPlan?: (plan: string) => void;
+  /** Fired the instant the panel is toggled by the user OR auto-collapsed at
+   *  the reply boundary. The parent (ChatPane) uses it to briefly suspend
+   *  LegendList's maintainScrollAtEnd so the height transition doesn't fight
+   *  a snap-to-bottom on every transition frame ("往上挤/闪一下"). */
+  onToggleCollapse?: () => void;
   /** Project root for file-path resolution, forwarded to BlockView. */
   projectPath?: string | null;
 }) {
@@ -483,9 +489,14 @@ export function TurnPanel({
   // true→false edge occurs).
   const prevTurnActive = useRef(turnActive);
   useEffect(() => {
-    if (prevTurnActive.current && !turnActive) setOpen(false);
+    if (prevTurnActive.current && !turnActive) {
+      // Pause bottom-anchoring for the collapse transition too — otherwise the
+      // auto-collapse at the reply boundary snaps scroll and re-flashes.
+      onToggleCollapse?.();
+      setOpen(false);
+    }
     prevTurnActive.current = turnActive;
-  }, [turnActive]);
+  }, [turnActive, onToggleCollapse]);
 
   const toolBlocks = blocks.filter((b): b is ToolUseBlock => b.kind === "tool_use");
 
@@ -511,7 +522,12 @@ export function TurnPanel({
       <div className="my-2 flex items-center gap-2.5">
         <div className="h-px flex-1 bg-gradient-to-r from-transparent to-edge" />
         <button
-          onClick={(e) => toggleHoldPosition(e, setOpen)}
+          onClick={(e) => {
+            // Pause maintainScrollAtEnd BEFORE toggling so LegendList doesn't
+            // snap-scroll against the height transition mid-flight.
+            onToggleCollapse?.();
+            toggleHoldPosition(e, setOpen);
+          }}
           className="flex items-center gap-1.5 rounded-full border border-edge bg-surface-muted px-3 py-1 text-xs shadow-sm transition-colors hover:bg-surface-hover/60"
         >
           {turnActive && (
@@ -533,32 +549,46 @@ export function TurnPanel({
         </button>
         <div className="h-px flex-1 bg-gradient-to-l from-transparent to-edge" />
       </div>
-      {open && (
-        <div className="space-y-1.5 py-2">
-          {groupBlocks(blocks).map((seg, i) =>
-            seg.kind === "single" ? (
-              <BlockView
-                key={i}
-                block={seg.block}
-                defaultOpen={seg.defaultOpen}
-                beforeMap={beforeMap}
-                onOpenPlan={onOpenPlan}
-                projectPath={projectPath}
-              />
-            ) : seg.kind === "gallery" ? (
-              <ImageGallery key={i} blocks={seg.blocks} />
-            ) : (
-              <BatchToolGroup
-                key={i}
-                blocks={seg.blocks}
-                beforeMap={beforeMap}
-                turnActive={turnActive}
-                projectPath={projectPath}
-              />
-            ),
-          )}
+      {/* Smooth height transition via the grid-template-rows 0fr→1fr trick.
+          The outer grid animates its single track between 0 (collapsed) and
+          1fr (expanded); the inner overflow-hidden wrapper is what lets the
+          0fr track actually collapse to zero (grid items default to
+          min-height:auto, which overflow:hidden zeroes out). Content stays
+          mounted in both states — it's just clipped — so remounting mid-stream
+          never re-flashes the blocks. */}
+      <div
+        className={cn(
+          "grid transition-[grid-template-rows] duration-200 ease-out",
+          open ? "grid-rows-[1fr]" : "grid-rows-[0fr]",
+        )}
+      >
+        <div className="overflow-hidden">
+          <div className="space-y-1.5 py-2">
+            {groupBlocks(blocks).map((seg, i) =>
+              seg.kind === "single" ? (
+                <BlockView
+                  key={i}
+                  block={seg.block}
+                  defaultOpen={seg.defaultOpen}
+                  beforeMap={beforeMap}
+                  onOpenPlan={onOpenPlan}
+                  projectPath={projectPath}
+                />
+              ) : seg.kind === "gallery" ? (
+                <ImageGallery key={i} blocks={seg.blocks} />
+              ) : (
+                <BatchToolGroup
+                  key={i}
+                  blocks={seg.blocks}
+                  beforeMap={beforeMap}
+                  turnActive={turnActive}
+                  projectPath={projectPath}
+                />
+              ),
+            )}
+          </div>
         </div>
-      )}
+      </div>
     </div>
   );
 }

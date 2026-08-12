@@ -962,6 +962,28 @@ function ChatPaneForSession({ sessionId, isActive }: { sessionId: string; isActi
   // no message is being edited.
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
   const virtualListRef = useRef<LegendListRef>(null);
+  // Briefly suspend maintainScrollAtEnd's onItemLayout trigger while the user
+  // expands/collapses a TurnPanel. With the prop left at `true`, LegendList
+  // normalizes it to {onItemLayout:true, animated:false}, which snaps scroll
+  // to keep the bottom pinned on EVERY item-height change. During the panel's
+  // 200ms height transition that fires every frame → every frame snaps scroll
+  // → the expanded content gets shoved upward ("往上挤") and the two animations
+  // beat against each other ("闪一下"). We only pause the itemLayout trigger,
+  // keeping onDataChange so live streaming still auto-follows new messages.
+  // Toggled from TurnPanel via onToggleCollapse; auto-cleared after the
+  // transition settles.
+  const [bottomAnchorPaused, setBottomAnchorPaused] = useState(false);
+  const pauseBottomAnchorTimer = useRef<number | null>(null);
+  const pauseBottomAnchor = useCallback(() => {
+    setBottomAnchorPaused(true);
+    if (pauseBottomAnchorTimer.current != null) {
+      window.clearTimeout(pauseBottomAnchorTimer.current);
+    }
+    pauseBottomAnchorTimer.current = window.setTimeout(() => {
+      setBottomAnchorPaused(false);
+      pauseBottomAnchorTimer.current = null;
+    }, 280);
+  }, []);
   // Rich-text editor handle (replaces the old <textarea> ref). Exposes
   // focus/serialize/insertSkill/etc. — see ComposerEditor.tsx.
   const editorRef = useRef<ComposerEditorHandle>(null);
@@ -1761,6 +1783,7 @@ function ChatPaneForSession({ sessionId, isActive }: { sessionId: string; isActi
                 turnActive={turnActive}
                 turnMeta={item.turnMeta}
                 onOpenPlan={onOpenPlan}
+                onToggleCollapse={pauseBottomAnchor}
                 projectPath={projectPath}
               />
             )}
@@ -1885,7 +1908,16 @@ function ChatPaneForSession({ sessionId, isActive }: { sessionId: string; isActi
                 // inside it) survive LegendList recycling during streaming.
                 return `turn:${item.turnMeta?.startedAt ?? ""}`;
               }}
-              maintainScrollAtEnd
+              maintainScrollAtEnd={
+                bottomAnchorPaused
+                  ? // While a panel is expanding/collapsing, drop the
+                    // itemLayout/layout triggers so LegendList stops snapping
+                    // scroll to hold the bottom pinned against our height
+                    // transition. onDataChange stays on so streaming still
+                    // follows new messages.
+                    { on: { dataChange: true } }
+                  : true
+              }
               // extraData drives LegendList's "should re-render all visible
               // items" check. renderItems alone isn't enough: toggling the
               // inline editor (editingMessageId) doesn't change renderItems,
