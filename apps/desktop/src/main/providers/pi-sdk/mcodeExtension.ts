@@ -665,8 +665,13 @@ function registerPlanModeTools(
           // passes through). The plan card stays as a frozen historical card
           // (frontend turn.done freezes ready+nonempty plan blocks).
           ctx.emit({ type: "mode.change", sessionId, mode: "default", source: "model" });
+          // The user's adjustment feedback (typed into the approval sheet)
+          // rides along in the tool result so the model incorporates it while
+          // executing. Without feedback the text stays the stock approval.
+          const feedback = decision.feedback?.trim();
+          const feedbackText = feedback ? `\n\n用户调整意见:${feedback}` : "";
           return {
-            content: [{ type: "text", text: `计划已批准,开始执行:\n\n${finalPlan}` }],
+            content: [{ type: "text", text: `计划已批准,开始执行:\n\n${finalPlan}${feedbackText}` }],
             details: {},
           };
         }

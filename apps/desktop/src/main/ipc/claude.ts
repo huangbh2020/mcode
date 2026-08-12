@@ -62,6 +62,7 @@ export function registerClaudeHandlers(ipcMain: IpcMain): void {
       permissionMode: input.permissionMode,
       customModelId: input.customModelId ?? null,
       archived: false,
+      pinnedAt: null, // new sessions are never pinned
       contextSnapshot: null,
       todos: null,
       subagents: null,
@@ -223,6 +224,7 @@ export function registerClaudeHandlers(ipcMain: IpcMain): void {
       approved: input.approved,
       editedPlan: input.editedPlan,
       reason: input.reason,
+      feedback: input.feedback,
     });
     if (!resolved) {
       log.warn(`respondPlanApproval: no pending request for id ${input.requestId}`);

@@ -328,9 +328,14 @@ export function SkillsPanel() {
                 {(val: string) => {
                   const p =
                     managedProjects.find((x) => x.id === val) ?? managedProjects[0];
-                  return p
-                    ? `${p.name}${p.id === activeProjectId ? " (当前工作区)" : ""}`
-                    : "";
+                  return (
+                    <span className="flex items-center gap-1.5">
+                      <IconFolder size={14} className="text-content-muted" />
+                      {p
+                        ? `${p.name}${p.id === activeProjectId ? " (当前工作区)" : ""}`
+                        : ""}
+                    </span>
+                  );
                 }}
               </Select.Value>
             </Select.Trigger>
@@ -340,6 +345,7 @@ export function SkillsPanel() {
                   <Select.List>
                     {managedProjects.map((p) => (
                       <Select.Item key={p.id} value={p.id}>
+                        <IconFolder size={14} className="text-content-muted" />
                         <Select.ItemText>
                           {p.name}
                           {p.id === activeProjectId ? " (当前工作区)" : ""}

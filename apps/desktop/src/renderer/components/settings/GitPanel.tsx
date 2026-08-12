@@ -2,16 +2,18 @@ import { useMemo } from "react";
 import { useSessionStore } from "@renderer/stores/sessionStore.js";
 import { cn } from "@renderer/lib/cn.js";
 import { Select } from "@renderer/components/ui/index.js";
+import { IconCode, IconSquare, IconCircleOff, IconRobot } from "@renderer/lib/icons.js";
 import { PanelHeader } from "./PanelHeader.js";
 import { SettingsSection } from "./SettingsSection.js";
 import { SettingRow } from "./SettingRow.js";
 import { CUSTOM_MODEL_ROLES, CUSTOM_MODEL_ROLE_LABELS } from "@contracts/customModel";
 import type { CustomModelRoleKey } from "@contracts/customModel";
 import type { GitDiffOpenMode } from "@contracts/ipc";
+import type { ReactNode } from "react";
 
-const GIT_DIFF_OPEN_MODE_OPTIONS: { value: GitDiffOpenMode; label: string }[] = [
-  { value: "center", label: "主编辑区" },
-  { value: "dialog", label: "弹窗编辑器(可多标签)" },
+const GIT_DIFF_OPEN_MODE_OPTIONS: { value: GitDiffOpenMode; label: string; icon: ReactNode }[] = [
+  { value: "center", label: "主编辑区", icon: <IconCode size={14} className="text-content-muted" /> },
+  { value: "dialog", label: "弹窗编辑器(可多标签)", icon: <IconSquare size={14} className="text-content-muted" /> },
 ];
 
 /** Sentinel value for the "no model selected" option in the model selects —
@@ -91,10 +93,17 @@ export function GitPanel() {
           >
             <Select.Trigger id="setting-gitdiff-openmode" className="min-w-[12rem]">
               <Select.Value>
-                {(val: GitDiffOpenMode) =>
-                  GIT_DIFF_OPEN_MODE_OPTIONS.find((o) => o.value === val)?.label ??
-                  "主编辑区"
-                }
+                {(val: GitDiffOpenMode) => {
+                  const o =
+                    GIT_DIFF_OPEN_MODE_OPTIONS.find((x) => x.value === val) ??
+                    GIT_DIFF_OPEN_MODE_OPTIONS[0];
+                  return (
+                    <span className="flex items-center gap-1.5">
+                      {o.icon}
+                      {o.label}
+                    </span>
+                  );
+                }}
               </Select.Value>
             </Select.Trigger>
             <Select.Portal>
@@ -103,6 +112,7 @@ export function GitPanel() {
                   <Select.List>
                     {GIT_DIFF_OPEN_MODE_OPTIONS.map((o) => (
                       <Select.Item key={o.value} value={o.value}>
+                        {o.icon}
                         <Select.ItemText>{o.label}</Select.ItemText>
                       </Select.Item>
                     ))}
@@ -132,9 +142,17 @@ export function GitPanel() {
               <Select.Trigger className="min-w-[220px]">
                 <Select.Value>
                   {(val: string) =>
-                    val === MODEL_NONE
-                      ? "未选择"
-                      : (modelOptions.find((o) => o.value === val)?.label ?? val)
+                    val === MODEL_NONE ? (
+                      <span className="flex items-center gap-1.5">
+                        <IconCircleOff size={14} className="text-content-muted" />
+                        未选择
+                      </span>
+                    ) : (
+                      <span className="flex items-center gap-1.5">
+                        <IconRobot size={14} className="text-content-muted" />
+                        {modelOptions.find((o) => o.value === val)?.label ?? val}
+                      </span>
+                    )
                   }
                 </Select.Value>
               </Select.Trigger>
@@ -143,10 +161,12 @@ export function GitPanel() {
                   <Select.Popup>
                     <Select.List>
                       <Select.Item value={MODEL_NONE}>
+                        <IconCircleOff size={14} className="text-content-muted" />
                         <Select.ItemText>未选择</Select.ItemText>
                       </Select.Item>
                       {modelOptions.map((opt) => (
                         <Select.Item key={opt.value} value={opt.value}>
+                          <IconRobot size={14} className="text-content-muted" />
                           <Select.ItemText>{opt.label}</Select.ItemText>
                         </Select.Item>
                       ))}
@@ -198,11 +218,14 @@ export function GitPanel() {
             >
               <Select.Trigger className="min-w-[220px]">
                 <Select.Value>
-                  {(val: string) =>
-                    val === MODEL_NONE
-                      ? "内置模型"
-                      : (modelOptions.find((o) => o.value === val)?.label ?? val)
-                  }
+                  {(val: string) => (
+                    <span className="flex items-center gap-1.5">
+                      <IconRobot size={14} className="text-content-muted" />
+                      {val === MODEL_NONE
+                        ? "内置模型"
+                        : (modelOptions.find((o) => o.value === val)?.label ?? val)}
+                    </span>
+                  )}
                 </Select.Value>
               </Select.Trigger>
               <Select.Portal>
@@ -210,10 +233,12 @@ export function GitPanel() {
                   <Select.Popup>
                     <Select.List>
                       <Select.Item value={MODEL_NONE}>
+                        <IconRobot size={14} className="text-content-muted" />
                         <Select.ItemText>内置模型</Select.ItemText>
                       </Select.Item>
                       {modelOptions.map((opt) => (
                         <Select.Item key={opt.value} value={opt.value}>
+                          <IconRobot size={14} className="text-content-muted" />
                           <Select.ItemText>{opt.label}</Select.ItemText>
                         </Select.Item>
                       ))}

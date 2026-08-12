@@ -69,6 +69,10 @@ export interface Session {
   /** Soft-delete flag: archived sessions are hidden from the main tree and
    *  live in the "archived" section; they can be restored or hard-deleted. */
   archived: boolean;
+  /** Pin timestamp (ms epoch) when the user pinned this session to the top of
+   *  its project's session list; null = not pinned. Pinned sessions sort above
+   *  unpinned ones (most recent pin first) within their project only. */
+  pinnedAt: number | null;
   /** Normalized ContextSnapshot from the most recent token-usage.updated
    *  event, serialized as JSON. Null for sessions that never saw a turn. */
   contextSnapshot: ContextSnapshot | null;

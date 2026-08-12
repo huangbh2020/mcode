@@ -276,13 +276,19 @@ function buildComponents(
     );
   },
   ul({ children }) {
-    return <ul className="my-1.5 list-disc space-y-1 pl-5 marker:text-content-subtle">{children}</ul>;
+    return <ul className="my-1.5 list-disc space-y-1 pl-5 text-content-muted marker:text-content-subtle">{children}</ul>;
   },
   ol({ children }) {
-    return <ol className="my-1.5 list-decimal space-y-1 pl-5 marker:text-content-subtle">{children}</ol>;
+    return <ol className="my-1.5 list-decimal space-y-1 pl-5 text-content-muted marker:text-content-subtle">{children}</ol>;
   },
   blockquote({ children }) {
-    return <blockquote className="my-2 border-l-2 border-edge pl-3 text-content">{children}</blockquote>;
+    return <blockquote className="my-2 border-l-2 border-edge pl-3 text-content-muted">{children}</blockquote>;
+  },
+  // Bold stays at the brightest content color even inside muted contexts
+  // (lists / tables / blockquotes all inherit --content-muted), so emphasized
+  // words still pop against the dimmer surrounding text.
+  strong({ children }) {
+    return <strong className="text-content">{children}</strong>;
   },
   table({ children }) {
     return (
@@ -295,7 +301,7 @@ function buildComponents(
     return <th className="border border-edge bg-surface-muted/50 px-2 py-1 text-left font-semibold text-content">{children}</th>;
   },
   td({ children }) {
-    return <td className="border border-edge px-2 py-1 text-content">{children}</td>;
+    return <td className="border border-edge px-2 py-1 text-content-muted">{children}</td>;
   },
   h1({ children }) {
     return <h1 className="mb-2 mt-3 font-bold text-content [font-size:var(--chat-fs-lg)]">{children}</h1>;

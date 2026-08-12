@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import type { ReactNode } from "react";
 import { cn } from "@renderer/lib/cn.js";
 import { useSessionStore } from "@renderer/stores/sessionStore.js";
 import { api } from "@renderer/lib/api.js";
@@ -13,7 +14,14 @@ import {
   IconLoader2,
   IconCheck,
   IconKey,
+  IconHash,
+  IconBookmark,
+  IconBrandOpenai,
+  IconAdjustmentsHorizontal,
+  IconCircleOff,
+  IconArrowsExchange,
 } from "@renderer/lib/icons.js";
+import { SiClaude, SiGoogle } from "@renderer/lib/icons.js";
 import {
   CUSTOM_MODEL_ROLES,
   CUSTOM_MODEL_ROLE_LABELS,
@@ -60,6 +68,43 @@ import {
  * (off → 200k default, on → 1M), mirroring the Claude side's 1M declaration —
  * the user no longer types a raw token count.
  */
+
+/* ════════════════════════ shared option constants ════════════════════════ */
+// Static Select option catalogs carrying a per-option icon, so every dropdown
+// in this panel shows a visual cue alongside the label (and in the trigger).
+
+const AUTH_MODE_OPTIONS: { value: AuthMode; label: string; icon: ReactNode }[] = [
+  { value: "auth_token", label: "Bearer", icon: <IconKey size={14} className="text-content-muted" /> },
+  { value: "api_key", label: "x-api-key", icon: <IconHash size={14} className="text-content-muted" /> },
+];
+
+const PROTOCOL_OPTIONS: { value: Protocol; label: string; icon: ReactNode }[] = [
+  {
+    value: "anthropic",
+    label: "Anthropic(原生 /v1/messages)",
+    icon: <SiClaude size={14} className="text-content-muted" />,
+  },
+  {
+    value: "openai",
+    label: "OpenAI(/v1/chat/completions,经本地协议翻译)",
+    icon: <IconBrandOpenai size={14} className="text-content-muted" />,
+  },
+];
+
+/** Per-API-type brand icon for the Pi "API 类型" select (label stays the raw
+ *  api string, e.g. "openai-completions"). Unknown api strings get no icon. */
+const PI_API_ICONS: Record<string, ReactNode> = {
+  "openai-completions": <IconBrandOpenai size={14} className="text-content-muted" />,
+  "openai-responses": <IconBrandOpenai size={14} className="text-content-muted" />,
+  "anthropic-messages": <SiClaude size={14} className="text-content-muted" />,
+  "google-generative-ai": <SiGoogle size={14} className="text-content-muted" />,
+};
+
+const THINKING_MODE_OPTIONS: { value: string; label: string; icon: ReactNode }[] = [
+  { value: "default", label: "默认", icon: <IconAdjustmentsHorizontal size={14} className="text-content-muted" /> },
+  { value: "null", label: "不支持", icon: <IconCircleOff size={14} className="text-content-muted" /> },
+  { value: "value", label: "映射值", icon: <IconArrowsExchange size={14} className="text-content-muted" /> },
+];
 
 /* ════════════════════════ shared helpers ════════════════════════ */
 
@@ -699,10 +744,21 @@ export function CustomModelsPanel() {
                 <Input value={presetDraft.baseUrl} onChange={(e) => setPresetDraft((d) => ({ ...d, baseUrl: e.target.value }))} placeholder="https://api.deepseek.com" />
                 <div className="flex gap-1">
                   <Select.Root value={presetDraft.authMode} onValueChange={(v) => setPresetDraft((d) => ({ ...d, authMode: v as AuthMode }))}>
-                    <Select.Trigger className="flex-1"><Select.Value /></Select.Trigger>
+                    <Select.Trigger className="flex-1">
+                      <Select.Value>
+                        {(val: AuthMode) => {
+                          const o = AUTH_MODE_OPTIONS.find((x) => x.value === val) ?? AUTH_MODE_OPTIONS[0];
+                          return <span className="flex items-center gap-1.5">{o.icon}{o.label}</span>;
+                        }}
+                      </Select.Value>
+                    </Select.Trigger>
                     <Select.Portal><Select.Positioner><Select.Popup><Select.List>
-                      <Select.Item value="auth_token">Bearer</Select.Item>
-                      <Select.Item value="api_key">x-api-key</Select.Item>
+                      {AUTH_MODE_OPTIONS.map((o) => (
+                        <Select.Item key={o.value} value={o.value}>
+                          {o.icon}
+                          <Select.ItemText>{o.label}</Select.ItemText>
+                        </Select.Item>
+                      ))}
                     </Select.List></Select.Popup></Select.Positioner></Select.Portal>
                   </Select.Root>
                   <Button variant="primary" size="sm" onClick={() => void savePreset()} disabled={!presetDraft.name.trim() || !presetDraft.baseUrl.trim()}>
@@ -854,10 +910,21 @@ function ClaudeProviderForm({
     <div className="space-y-2.5">
       <Field label="API 格式">
         <Select.Root value={form.protocol} onValueChange={(v) => update("protocol", v as Protocol)}>
-          <Select.Trigger className="w-full"><Select.Value /></Select.Trigger>
+          <Select.Trigger className="w-full">
+            <Select.Value>
+              {(val: Protocol) => {
+                const o = PROTOCOL_OPTIONS.find((x) => x.value === val) ?? PROTOCOL_OPTIONS[0];
+                return <span className="flex items-center gap-1.5">{o.icon}{o.label}</span>;
+              }}
+            </Select.Value>
+          </Select.Trigger>
           <Select.Portal><Select.Positioner><Select.Popup><Select.List>
-            <Select.Item value="anthropic">Anthropic(原生 /v1/messages)</Select.Item>
-            <Select.Item value="openai">OpenAI(/v1/chat/completions,经本地协议翻译)</Select.Item>
+            {PROTOCOL_OPTIONS.map((o) => (
+              <Select.Item key={o.value} value={o.value}>
+                {o.icon}
+                <Select.ItemText>{o.label}</Select.ItemText>
+              </Select.Item>
+            ))}
           </Select.List></Select.Popup></Select.Positioner></Select.Portal>
         </Select.Root>
       </Field>
@@ -874,10 +941,15 @@ function ClaudeProviderForm({
       {presets.length > 0 && (
         <Field label="从预设导入">
           <Select.Root value="" onValueChange={(v) => { const id = String(v); if (id) applyPreset(id); }}>
-            <Select.Trigger className="w-full"><Select.Value placeholder="选择端点预设(Base URL / 认证方式自动填充)" /></Select.Trigger>
+            <Select.Trigger className="w-full">
+              <Select.Value placeholder={<span className="flex items-center gap-1.5"><IconBookmark size={14} className="text-content-muted" />选择端点预设(Base URL / 认证方式自动填充)</span>} />
+            </Select.Trigger>
             <Select.Portal><Select.Positioner><Select.Popup><Select.List>
               {presets.map((p) => (
-                <Select.Item key={p.id} value={p.id}>{p.name} · {p.baseUrl}</Select.Item>
+                <Select.Item key={p.id} value={p.id}>
+                  <IconBookmark size={14} className="text-content-muted" />
+                  <Select.ItemText>{p.name} · {p.baseUrl}</Select.ItemText>
+                </Select.Item>
               ))}
             </Select.List></Select.Popup></Select.Positioner></Select.Portal>
           </Select.Root>
@@ -899,10 +971,21 @@ function ClaudeProviderForm({
         </Field>
         <Field label="认证方式">
           <Select.Root value={form.authMode} onValueChange={(v) => update("authMode", v as AuthMode)}>
-            <Select.Trigger className="w-full"><Select.Value /></Select.Trigger>
+            <Select.Trigger className="w-full">
+              <Select.Value>
+                {(val: AuthMode) => {
+                  const o = AUTH_MODE_OPTIONS.find((x) => x.value === val) ?? AUTH_MODE_OPTIONS[0];
+                  return <span className="flex items-center gap-1.5">{o.icon}{o.label}</span>;
+                }}
+              </Select.Value>
+            </Select.Trigger>
             <Select.Portal><Select.Positioner><Select.Popup><Select.List>
-              <Select.Item value="auth_token">Bearer</Select.Item>
-              <Select.Item value="api_key">x-api-key</Select.Item>
+              {AUTH_MODE_OPTIONS.map((o) => (
+                <Select.Item key={o.value} value={o.value}>
+                  {o.icon}
+                  <Select.ItemText>{o.label}</Select.ItemText>
+                </Select.Item>
+              ))}
             </Select.List></Select.Popup></Select.Positioner></Select.Portal>
           </Select.Root>
         </Field>
@@ -1048,9 +1131,16 @@ function PiProviderForm({
       {presets.length > 0 && (
         <Field label="从预设导入">
           <Select.Root value="" onValueChange={(v) => { const id = String(v); if (id) applyPreset(id); }}>
-            <Select.Trigger className="w-full"><Select.Value placeholder="选择端点预设(填 Base URL)" /></Select.Trigger>
+            <Select.Trigger className="w-full">
+              <Select.Value placeholder={<span className="flex items-center gap-1.5"><IconBookmark size={14} className="text-content-muted" />选择端点预设(填 Base URL)</span>} />
+            </Select.Trigger>
             <Select.Portal><Select.Positioner><Select.Popup><Select.List>
-              {presets.map((p) => (<Select.Item key={p.id} value={p.id}>{p.name} · {p.baseUrl}</Select.Item>))}
+              {presets.map((p) => (
+                <Select.Item key={p.id} value={p.id}>
+                  <IconBookmark size={14} className="text-content-muted" />
+                  <Select.ItemText>{p.name} · {p.baseUrl}</Select.ItemText>
+                </Select.Item>
+              ))}
             </Select.List></Select.Popup></Select.Positioner></Select.Portal>
           </Select.Root>
         </Field>
@@ -1062,9 +1152,23 @@ function PiProviderForm({
         </Field>
         <Field label="API 类型">
           <Select.Root value={form.api} onValueChange={(v) => update("api", String(v))}>
-            <Select.Trigger className="w-full"><Select.Value /></Select.Trigger>
+            <Select.Trigger className="w-full">
+              <Select.Value>
+                {(val: string) => (
+                  <span className="flex items-center gap-1.5">
+                    {PI_API_ICONS[val]}
+                    {val}
+                  </span>
+                )}
+              </Select.Value>
+            </Select.Trigger>
             <Select.Portal><Select.Positioner><Select.Popup><Select.List>
-              {PI_KNOWN_APIS.map((a) => (<Select.Item key={a} value={a}>{a}</Select.Item>))}
+              {PI_KNOWN_APIS.map((a) => (
+                <Select.Item key={a} value={a}>
+                  {PI_API_ICONS[a]}
+                  <Select.ItemText>{a}</Select.ItemText>
+                </Select.Item>
+              ))}
             </Select.List></Select.Popup></Select.Positioner></Select.Portal>
           </Select.Root>
         </Field>
@@ -1138,11 +1242,21 @@ function PiProviderForm({
                         <label key={k} className="flex items-center gap-1.5">
                           <span className="w-14 shrink-0 text-[0.7143em] text-content-muted">{k}</span>
                           <Select.Root value={m.thinking[k]} onValueChange={(v) => updateModel(idx, { thinking: { ...m.thinking, [k]: v as PiModelFormState["thinking"][PiThinkingKey] } })}>
-                            <Select.Trigger className="flex-1"><Select.Value /></Select.Trigger>
+                            <Select.Trigger className="flex-1">
+                              <Select.Value>
+                                {(val: string) => {
+                                  const o = THINKING_MODE_OPTIONS.find((x) => x.value === val) ?? THINKING_MODE_OPTIONS[0];
+                                  return <span className="flex items-center gap-1.5">{o.icon}{o.label}</span>;
+                                }}
+                              </Select.Value>
+                            </Select.Trigger>
                             <Select.Portal><Select.Positioner><Select.Popup><Select.List>
-                              <Select.Item value="default">默认</Select.Item>
-                              <Select.Item value="null">不支持</Select.Item>
-                              <Select.Item value="value">映射值</Select.Item>
+                              {THINKING_MODE_OPTIONS.map((o) => (
+                                <Select.Item key={o.value} value={o.value}>
+                                  {o.icon}
+                                  <Select.ItemText>{o.label}</Select.ItemText>
+                                </Select.Item>
+                              ))}
                             </Select.List></Select.Popup></Select.Positioner></Select.Portal>
                           </Select.Root>
                           {m.thinking[k] === "value" && (

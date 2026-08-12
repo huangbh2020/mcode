@@ -36,6 +36,8 @@ import {
   IconArrowRight,
   IconPalette,
   IconSearch,
+  IconPin,
+  IconPinnedFilled,
 } from "@renderer/lib/icons.js";
 import { getProviderIcon } from "@renderer/lib/providerIcon.js";
 import { Button, ConfirmDialog, Dialog, Input } from "@renderer/components/ui/index.js";
@@ -104,6 +106,7 @@ export function LeftBar() {
   const runningBySession = useSessionStore((s) => s.runningBySession);
   const unreadBySession = useSessionStore((s) => s.unreadBySession);
   const renameSession = useSessionStore((s) => s.renameSession);
+  const setSessionPinned = useSessionStore((s) => s.setSessionPinned);
   const projectView = useSessionStore((s) => s.projectView);
   const setProjectView = useSessionStore((s) => s.setProjectView);
   const setProjectGroup = useSessionStore((s) => s.setProjectGroup);
@@ -385,6 +388,7 @@ export function LeftBar() {
           }}
           onArchiveSession={(sid) => void archiveSession(sid, true)}
           onDeleteSession={(s) => void deleteSession(s.id)}
+          onTogglePinSession={(s) => void setSessionPinned(s.id, !s.pinnedAt)}
           registerNode={registerNode}
           onContextSession={(session, x, y) => setCtxMenu({ session, x, y })}
           onContextProject={(x, y) => setProjectCtxMenu({ project: p, x, y })}
@@ -395,7 +399,7 @@ export function LeftBar() {
       sessionsByProject, sessionsHasMoreByProject, sessionsTotalByProject,
       expandedProjects, activeProjectId, activeSessionId, runningBySession,
       toggleProjectExpanded, startSession, loadMoreSessions, openTab,
-      archiveSession, deleteSession, registerNode,
+      archiveSession, deleteSession, setSessionPinned, registerNode,
     ],
   );
 
@@ -642,6 +646,10 @@ export function LeftBar() {
           const proj = findProject(s.projectId);
           if (proj) void api.shell.openPath({ path: proj.path });
         }}
+        onTogglePin={(s) => {
+          setCtxMenu(null);
+          void setSessionPinned(s.id, !s.pinnedAt);
+        }}
       />
 
       {/* Right-click context menu for project rows. Hosts the "移动到分组"
@@ -747,6 +755,8 @@ interface ProjectNodeProps {
   onDelete: () => void;
   onArchiveSession: (sessionId: string) => void;
   onDeleteSession: (session: Session) => void;
+  /** Toggle a session's pinned state (project-scoped top-of-list pin). */
+  onTogglePinSession: (session: Session) => void;
   /** Register a session row's DOM node for scroll-into-view. */
   registerNode: (id: string, el: HTMLLIElement | null) => void;
   /** Open the right-click context menu for a session at the given coords. */
@@ -772,7 +782,7 @@ function ProjectNode(props: ProjectNodeProps) {
     project, sessions, hasMore, total, expanded, isActiveProject, activeSessionId,
     runningBySession, unreadBySession,
     onToggleExpand, onNewSession, onLoadMore, onSelectSession,
-    onDelete, onArchiveSession, onDeleteSession,
+    onDelete, onArchiveSession, onDeleteSession, onTogglePinSession,
     registerNode, onContextSession, onContextProject,
     sortableRef, sortableStyle, sortableListeners, sortableAttributes, isDragging,
   } = props;
@@ -854,6 +864,7 @@ function ProjectNode(props: ProjectNodeProps) {
                 isRunning={!!runningBySession[s.id]}
                 unreadCount={unreadBySession[s.id] ?? 0}
                 onSelect={() => onSelectSession(s.id)}
+                onTogglePin={() => onTogglePinSession(s)}
                 onArchive={() => onArchiveSession(s.id)}
                 onDelete={() => onDeleteSession(s)}
                 registerNode={registerNode}
@@ -890,7 +901,7 @@ function SessionRowIcon({ providerId, className }: { providerId: string; classNa
 }
 
 function SessionRow({
-  session, active, isRunning, unreadCount, onSelect, onArchive, onDelete, registerNode, onContext,
+  session, active, isRunning, unreadCount, onSelect, onTogglePin, onArchive, onDelete, registerNode, onContext,
 }: {
   session: Session;
   active: boolean;
@@ -899,12 +910,15 @@ function SessionRow({
    *  the row is idle (not running) and the count is > 0. */
   unreadCount: number;
   onSelect: () => void;
+  /** Toggle this session's pinned state (project-scoped top-of-list pin). */
+  onTogglePin: () => void;
   onArchive: () => void;
   onDelete: () => void;
   registerNode: (id: string, el: HTMLLIElement | null) => void;
   onContext: (x: number, y: number) => void;
 }) {
   const [pendingConfirm, setPendingConfirm] = useState<null | "archive" | "delete">(null);
+  const isPinned = session.pinnedAt != null;
   // Whether the pointer is over this row. We swap the right-aligned payload
   // between the relative-time label (default) and the archive/delete action
   // buttons (on hover), so the time can hug the right edge without the
@@ -947,6 +961,18 @@ function SessionRow({
       title={`${session.title}\n${formatFullTime(session.updatedAt)}`}
     >
       <SessionRowIcon providerId={session.providerId} className="shrink-0" />
+
+      {/* Pinned marker — always-visible badge on the LEFT (leading edge, next
+          to the provider icon) so a pinned thread reads as pinned at a glance,
+          independent of the hover actions / unread badge on the right edge. */}
+      {isPinned && (
+        <IconPinnedFilled
+          size={12}
+          className="shrink-0 text-accent/80"
+          aria-label="已置顶"
+        />
+      )}
+
       <span className="min-w-0 flex-1 truncate">{session.title}</span>
 
       {/* Relative time of the last activity (updatedAt), docked to the right
@@ -1025,6 +1051,17 @@ function SessionRow({
           edge instead of sharing space with hidden-but-reserved buttons. */}
       {showActions && (
         <>
+          <HoverIconButton
+            onClick={onTogglePin}
+            title={isPinned ? "取消置顶" : "置顶"}
+            className="opacity-100"
+          >
+            {isPinned ? (
+              <IconPinnedFilled size={13} className="text-accent" />
+            ) : (
+              <IconPin size={13} />
+            )}
+          </HoverIconButton>
           <HoverIconButton
             onClick={() => { setPendingConfirm("archive"); }}
             title="归档"
@@ -1140,10 +1177,11 @@ interface SessionContextMenuProps {
   onRename: (session: Session) => void;
   onCopyTitle: (session: Session) => void;
   onOpenFolder: (session: Session) => void;
+  onTogglePin: (session: Session) => void;
 }
 
 function SessionContextMenu({
-  ctxMenu, onClose, onRename, onCopyTitle, onOpenFolder,
+  ctxMenu, onClose, onRename, onCopyTitle, onOpenFolder, onTogglePin,
 }: SessionContextMenuProps) {
   // Virtual anchor pinned to the cursor coords so the popup opens where the
   // user right-clicked (base-ui's Menu.Positioner accepts a VirtualElement).
@@ -1158,6 +1196,7 @@ function SessionContextMenu({
   }, [ctxMenu?.x, ctxMenu?.y]);
 
   const session = ctxMenu?.session;
+  const isPinned = !!session?.pinnedAt;
 
   return (
     <Menu.Root open={!!ctxMenu} onOpenChange={(open) => { if (!open) onClose(); }}>
@@ -1171,6 +1210,20 @@ function SessionContextMenu({
               "transition-[transform,opacity] duration-100",
             )}
           >
+            <Menu.Item
+              onClick={() => session && onTogglePin(session)}
+              className={cn(
+                "flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs outline-none select-none",
+                "text-content-muted data-[highlighted]:bg-surface-muted",
+              )}
+            >
+              {isPinned ? (
+                <IconPinnedFilled size={14} className="shrink-0 text-accent" />
+              ) : (
+                <IconPin size={14} className="shrink-0" />
+              )}
+              {isPinned ? "取消置顶" : "置顶"}
+            </Menu.Item>
             <Menu.Item
               onClick={() => session && onRename(session)}
               className={cn(

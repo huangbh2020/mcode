@@ -36,6 +36,9 @@ export {
   IconSend,
   IconSend2,
   IconArchive,
+  IconPin,
+  IconPinFilled,
+  IconPinnedFilled,
   IconFocus,
   // Navigation
   IconChevronDown,
@@ -81,6 +84,7 @@ export {
   IconFilePlus,
   IconFileSearch,
   IconFileImport,
+  IconPhoto,
   IconPhotoOff,
   IconFileCode,
   IconFileCode2,
@@ -225,6 +229,8 @@ export {
   IconBulb,
   // Browser panel: element picker toggle
   IconTarget,
+  // "None / not supported" state (e.g. "no model selected" dropdown items)
+  IconCircleOff,
 } from "@tabler/icons-react";
 
 /* ───────── Shorthand aliases (commonly used) ───────── */
@@ -274,6 +280,7 @@ export { PiArrowsClockwise } from "react-icons/pi";
 // Simple Icons (brands)
 export { SiGithub } from "react-icons/si";
 export { SiClaude } from "react-icons/si";
+export { SiGoogle } from "react-icons/si";
 
 // VS Code icons
 export { VscMcp } from "react-icons/vsc";

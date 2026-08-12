@@ -2,6 +2,7 @@ import { useMemo } from "react";
 import { useSessionStore } from "@renderer/stores/sessionStore.js";
 import { cn } from "@renderer/lib/cn.js";
 import { Select, Switch } from "@renderer/components/ui/index.js";
+import { IconRobot } from "@renderer/lib/icons.js";
 import { SettingRow } from "./SettingRow.js";
 import { SettingsSection } from "./SettingsSection.js";
 import { CUSTOM_MODEL_ROLES, CUSTOM_MODEL_ROLE_LABELS } from "@contracts/customModel";
@@ -89,11 +90,14 @@ export function TitleGenPanel() {
               className={cn("min-w-[220px]", !titleGenEnabled && "cursor-not-allowed opacity-50")}
             >
               <Select.Value>
-                {(val: string) =>
-                  val === MODEL_NONE
-                    ? "内置模型"
-                    : (modelOptions.find((o) => o.value === val)?.label ?? val)
-                }
+                {(val: string) => (
+                  <span className="flex items-center gap-1.5">
+                    <IconRobot size={14} className="text-content-muted" />
+                    {val === MODEL_NONE
+                      ? "内置模型"
+                      : (modelOptions.find((o) => o.value === val)?.label ?? val)}
+                  </span>
+                )}
               </Select.Value>
             </Select.Trigger>
             <Select.Portal>
@@ -101,10 +105,12 @@ export function TitleGenPanel() {
                 <Select.Popup>
                   <Select.List>
                     <Select.Item value={MODEL_NONE}>
+                      <IconRobot size={14} className="text-content-muted" />
                       <Select.ItemText>内置模型</Select.ItemText>
                     </Select.Item>
                     {modelOptions.map((opt) => (
                       <Select.Item key={opt.value} value={opt.value}>
+                        <IconRobot size={14} className="text-content-muted" />
                         <Select.ItemText>{opt.label}</Select.ItemText>
                       </Select.Item>
                     ))}

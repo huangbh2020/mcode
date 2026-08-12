@@ -1,4 +1,5 @@
 import { memo, useState, useMemo, useEffect, useRef, useDeferredValue, type ReactNode, type ComponentType } from "react";
+import { createPortal } from "react-dom";
 import { cn } from "@renderer/lib/cn.js";
 import {
   IconChevronDown,
@@ -9,6 +10,7 @@ import {
   IconRobot,
   IconClipboard,
   IconFile,
+  IconPhoto,
   // Tool-kind icons (left glyph of each action card).
   IconBulb,
   IconTerminal,
@@ -36,7 +38,7 @@ import { lineDiff, diffSummary } from "@renderer/lib/lineDiff.js";
 import { FileLink } from "./FileLink.js";
 import { ImageWithPreview } from "@renderer/components/ui/index.js";
 import { TagPopover } from "./TagPopover.js";
-import type { ContentTag } from "@renderer/lib/contentTag.js";
+import { isImageFilePath, type ContentTag } from "@renderer/lib/contentTag.js";
 
 /** Map of absolute file path → its pre-turn content. Built from the
  *  `turn.files` event payload so the Write tool card can diff the new
@@ -780,13 +782,15 @@ function AttachmentCard({
   const [anchorRect, setAnchorRect] = useState<DOMRect | null>(null);
   const btnRef = useRef<HTMLButtonElement>(null);
   const isFile = attachmentKind === "file";
+  const isImage = isFile && !!filePath && isImageFilePath(filePath);
 
-  // File cards open the file in the IDE editor (per-type view handled by the
-  // editor: markdown rendered, images previewed, text edited). Paste cards
-  // open the TagPopover (same as the composer's ContentTagChip); legacy
-  // path-less file cards fall back to the popover too.
+  // Non-image file cards open the file in the IDE editor (per-type view
+  // handled by the editor: markdown rendered, text edited). Paste cards AND
+  // image file cards open the TagPopover — images render an in-popover
+  // preview (loaded via api.file.readBinary), same UX as the composer chip;
+  // legacy path-less file cards fall back to the popover too.
   const handleClick = () => {
-    if (isFile && filePath) {
+    if (isFile && filePath && !isImage) {
       useSessionStore.getState().openFileInIde(filePath);
       return;
     }
@@ -819,7 +823,17 @@ function AttachmentCard({
       <button
         ref={btnRef}
         onClick={handleClick}
-        title={isFile ? (filePath ?? preview) : open ? "收起内容" : "查看内容"}
+        title={
+          isFile && !isImage
+            ? (filePath ?? preview)
+            : open
+              ? isImage
+                ? "收起图片"
+                : "收起内容"
+              : isImage
+                ? "查看图片"
+                : "查看内容"
+        }
         className={cn(
           "inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-[11px] transition-colors",
           open
@@ -828,21 +842,34 @@ function AttachmentCard({
         )}
       >
         {isFile ? (
-          <IconFile size={12} className="opacity-80" />
+          isImage ? (
+            <IconPhoto size={12} className="opacity-80" />
+          ) : (
+            <IconFile size={12} className="opacity-80" />
+          )
         ) : (
           <IconClipboard size={12} className="opacity-80" />
         )}
         <span className="max-w-[220px] truncate">{preview}</span>
-        {!isFile && (
+        {(!isFile || isImage) && (
           <IconChevronDown
             size={11}
             className={cn("shrink-0 opacity-70 transition-transform", !open && "-rotate-90")}
           />
         )}
       </button>
-      {open && anchorRect && (
-        <TagPopover tag={tag} anchorRect={anchorRect} onClose={closePopover} />
-      )}
+      {open &&
+        anchorRect &&
+        // Render via a portal to document.body so the popover escapes the
+        // virtualized list item's `contain: paint layout style` (applied by
+        // @legendapp/list). That containment establishes a new containing block
+        // for the popover's `position: fixed` and clips its paint, which would
+        // otherwise mis-position and hide the popover. The composer achieves
+        // the same effect by lifting its TagPopover out of its container.
+        createPortal(
+          <TagPopover tag={tag} anchorRect={anchorRect} onClose={closePopover} />,
+          document.body,
+        )}
     </div>
   );
 }

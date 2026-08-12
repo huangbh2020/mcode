@@ -14,6 +14,9 @@ import {
   IconPaperclip,
   IconX,
   IconPencil,
+  IconBolt,
+  IconChevronRight,
+  IconGripVertical,
 } from "@renderer/lib/icons.js";
 import { useSessionStore, EMPTY_MESSAGES, EMPTY_TODOS, EMPTY_SUBAGENTS, EMPTY_CHAT_QUEUE, EMPTY_ELEMENT_QUEUE, EMPTY_PROMPT_QUEUE, type Block, type ChatMessage, type TodoItem, type TurnMeta, type QueuedPrompt } from "@renderer/stores/sessionStore.js";
 import { useToastStore } from "@renderer/stores/toastStore.js";
@@ -383,14 +386,25 @@ function groupMessagesForRender(
       // stripped to avoid a phantom "开始 · 用时" stat row on the synthetic
       // carrier. Identity borrows the last real message's when available for
       // sane copy/identity semantics.
+      //
+      // The carrier ID is scoped to the OPEN TURN (turnMeta.startedAt), NOT
+      // the last live message's id: the tail message changes every time the
+      // model starts a new output message (common during post-approval
+      // execution), and a tail-derived key would unmount/remount the plan card
+      // (and its LegendList height measurement) on every such switch —
+      // maintainScrollAtEnd then re-snaps on each remeasure, which reads as a
+      // page flicker while the bottom-pinned plan card is in view. A
+      // turn-scoped key keeps one stable identity across the whole streaming
+      // turn. Falls back to the tail id when no turnMeta is open (defensive).
       if (plans.length > 0 || files.length > 0) {
         const tail = cleaned.length > 0 ? cleaned[cleaned.length - 1] : null;
+        const footerIdSeed = turnMeta?.startedAt ?? tail?.id ?? Date.now();
         const emitFooter = (prefix: string, blocks: Block[]) => {
           for (let i = 0; i < blocks.length; i++) {
             const carrier: ChatMessage = tail
-              ? { ...tail, id: `${prefix}_${tail.id}_${i}`, turnMeta: undefined, blocks: [blocks[i]!] }
+              ? { ...tail, id: `${prefix}_${footerIdSeed}_${i}`, turnMeta: undefined, blocks: [blocks[i]!] }
               : {
-                  id: `${prefix}_${turnMeta?.startedAt ?? Date.now()}_${i}`,
+                  id: `${prefix}_${footerIdSeed}_${i}`,
                   sessionId: "",
                   role: "assistant",
                   blocks: [blocks[i]!],
@@ -705,29 +719,38 @@ function groupMessagesForRender(
   return items;
 }
 
-export function ChatPane({
-  sessionId,
-  isActive = true,
-}: {
-  sessionId: string | null;
-  /** Whether this pane is the foreground tab. Multi-mount layouts pass false
-   *  for backgrounded panes so one-shot effects (initial scroll-to-bottom)
-   *  defer until the pane is actually shown. Defaults to true for the
-   *  single-pane legacy path. */
-  isActive?: boolean;
-}) {
-  // `sessionId` is the prop — store lookups go through it directly, not
-  // through `activeSessionId`. The store still tracks `activeSessionId`
-  // for global single-slot concerns (model / effort / permissionMode
-  // config, sendPrompt target, etc.) and those are kept in sync by the
-  // caller (the CenterPane router in App.tsx). `null` means "no session
-  // open" — we render the empty-state placeholder and skip all the
-  // per-session store reads.
-  if (sessionId === null) {
-    return <EmptyCenterPane />;
-  }
-  return <ChatPaneForSession sessionId={sessionId} isActive={isActive} />;
-}
+// Memoized so that in tabs mode (where every open tab's ChatPane is mounted
+// simultaneously and backgrounded via CSS), switching tabs only re-renders
+// the two panes whose `isActive` actually flipped — the N-2 backgrounded
+// panes are skipped entirely. Both props are primitives, so a shallow
+// equality check on (sessionId, isActive) is sufficient. Single mode uses a
+// `key` to force remounts, which takes precedence over memo (no conflict).
+export const ChatPane = memo(
+  function ChatPane({
+    sessionId,
+    isActive = true,
+  }: {
+    sessionId: string | null;
+    /** Whether this pane is the foreground tab. Multi-mount layouts pass false
+     *  for backgrounded panes so one-shot effects (initial scroll-to-bottom)
+     *  defer until the pane is actually shown. Defaults to true for the
+     *  single-pane legacy path. */
+    isActive?: boolean;
+  }) {
+    // `sessionId` is the prop — store lookups go through it directly, not
+    // through `activeSessionId`. The store still tracks `activeSessionId`
+    // for global single-slot concerns (model / effort / permissionMode
+    // config, sendPrompt target, etc.) and those are kept in sync by the
+    // caller (the CenterPane router in App.tsx). `null` means "no session
+    //  open" — we render the empty-state placeholder and skip all the
+    // per-session store reads.
+    if (sessionId === null) {
+      return <EmptyCenterPane />;
+    }
+    return <ChatPaneForSession sessionId={sessionId} isActive={isActive} />;
+  },
+  (prev, next) => prev.sessionId === next.sessionId && prev.isActive === next.isActive,
+);
 
 /** Empty-state shown when there's no active session to render (no tabs
  *  open, or the project has no sessions yet). Kept inline so the
@@ -945,6 +968,8 @@ function ChatPaneForSession({ sessionId, isActive }: { sessionId: string; isActi
   const enqueuePrompt = useSessionStore((s) => s.enqueuePrompt);
   const removeQueuedPrompt = useSessionStore((s) => s.removeQueuedPrompt);
   const clearPromptQueue = useSessionStore((s) => s.clearPromptQueue);
+  const sendQueuedPromptNow = useSessionStore((s) => s.sendQueuedPromptNow);
+  const reorderPromptQueue = useSessionStore((s) => s.reorderPromptQueue);
 
   const [value, setValue] = useState("");
   // ── Up/Down history recall ──
@@ -1017,6 +1042,11 @@ function ChatPaneForSession({ sessionId, isActive }: { sessionId: string; isActi
   const [dragOver, setDragOver] = useState(false);
   // Which tag's preview popover is open (by id); null = none.
   const [openTagId, setOpenTagId] = useState<string | null>(null);
+  // Which queued-prompt card is expanded (by id); null = all collapsed.
+  const [expandedQueueId, setExpandedQueueId] = useState<string | null>(null);
+  // HTML5 drag-and-drop reorder state for the prompt queue.
+  const [draggedQueueId, setDraggedQueueId] = useState<string | null>(null);
+  const [dragOverQueueId, setDragOverQueueId] = useState<string | null>(null);
   // Refs to each chip's DOM node, keyed by tag id. Used to measure the
   // clicked chip's bounding box so the preview popover can anchor to its
   // top-right corner.
@@ -1629,6 +1659,48 @@ function ChatPaneForSession({ sessionId, isActive }: { sessionId: string; isActi
     setAnchorRect(null);
   };
 
+  /** Restore a queued prompt back into the composer for editing: fill the
+   *  editor with its displayText, rebuild attachment tags from its stored
+   *  attachments, then remove it from the queue. Skill pills (/commands)
+   *  can't be restored (only their plain text survives in displayText), so
+   *  the user re-types those — same constraint as editAndResendMessage. */
+  const handleEditQueuedPrompt = (item: QueuedPrompt) => {
+    editorRef.current?.setText(item.displayText);
+    if (item.attachments && item.attachments.length > 0) {
+      const restored: ContentTag[] = item.attachments.map((a, i) => ({
+        id: `reedit-${item.id}-${i}`,
+        kind: a.attachmentKind === "file" ? "file" : "paste",
+        preview: a.preview,
+        content: a.content,
+        filePath: a.filePath,
+      }));
+      setTags(restored);
+    } else {
+      setTags([]);
+    }
+    removeQueuedPrompt(sessionId, item.id);
+    setExpandedQueueId(null);
+    requestAnimationFrame(() => editorRef.current?.focus());
+  };
+
+  /** Drop the dragged queue item onto `targetId`: removes it from its old
+   *  position and inserts it at the target's slot (target shifts down).
+   *  No-op if the target is the item itself. */
+  const handleQueueReorder = (targetId: string) => {
+    const draggedId = draggedQueueId;
+    setDraggedQueueId(null);
+    setDragOverQueueId(null);
+    if (!draggedId || draggedId === targetId) return;
+    const next = queue.map((q) => q.id);
+    const from = next.indexOf(draggedId);
+    if (from < 0) return;
+    next.splice(from, 1);
+    const to = next.indexOf(targetId);
+    if (to < 0) next.push(draggedId);
+    else next.splice(to, 0, draggedId);
+    reorderPromptQueue(sessionId, next);
+  };
+
   /** Enter handler wired into the editor: sends when idle, enqueues when busy.
    *  Shift+Enter inserts a newline and never reaches here (handled by Tiptap). */
   const handleEnter = () => {
@@ -1756,6 +1828,9 @@ function ChatPaneForSession({ sessionId, isActive }: { sessionId: string; isActi
           <div className="px-[var(--chat-gutter)]">
             <div className="mx-auto max-w-5xl">
               <TurnStatRow meta={item.turnMeta} />
+              <div className="mt-1.5 flex items-center gap-1.5">
+                <IconLoader2 size={12} className="animate-spin text-accent" />
+              </div>
             </div>
           </div>
         );
@@ -2018,8 +2093,8 @@ function ChatPaneForSession({ sessionId, isActive }: { sessionId: string; isActi
                 const draft = useSessionStore.getState().planApprovalDraftBySession[sessionId];
                 openPlanDrawer(sessionId, draft ?? pendingPlanApproval.plan);
               }}
-              onApprove={(editedPlan) => {
-                void submitPlanApproval(pendingPlanApproval.requestId, true, editedPlan);
+              onApprove={(editedPlan, feedback) => {
+                void submitPlanApproval(pendingPlanApproval.requestId, true, editedPlan, undefined, feedback);
               }}
               onReject={(reason) => {
                 void submitPlanApproval(pendingPlanApproval.requestId, false, undefined, reason);
@@ -2105,44 +2180,170 @@ function ChatPaneForSession({ sessionId, isActive }: { sessionId: string; isActi
             }}
           >
             {queue.length > 0 && (
-              <div className="flex flex-wrap items-center gap-1 border-b border-edge px-2 pt-2 pb-1.5">
-                <span className="mr-0.5 shrink-0 text-[10px] font-medium uppercase tracking-wide text-content-subtle">
-                  排队
-                </span>
-                {queue.map((item, idx) => (
-                  <span
-                    key={item.id}
-                    title={item.displayText || "已排队的消息"}
-                    className={cn(
-                      "inline-flex max-w-full items-center gap-1 rounded-md border border-accent/30 bg-accent/5 px-1.5 py-0.5 text-[11px] text-content",
-                    )}
-                  >
-                    <span className="shrink-0 text-[10px] text-content-subtle">{idx + 1}.</span>
-                    <span className="max-w-[160px] truncate">
-                      {item.displayText || "(仅附件)"}
-                    </span>
-                    {item.attachments && item.attachments.length > 0 && (
-                      <IconPaperclip size={11} className="shrink-0 opacity-60" />
-                    )}
-                    <button
-                      type="button"
-                      onClick={() => removeQueuedPrompt(sessionId, item.id)}
-                      title="从队列移除"
-                      aria-label="从队列移除"
-                      className="ml-0.5 flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded text-content-subtle transition-colors hover:bg-accent/20 hover:text-content"
-                    >
-                      <IconX size={10} />
-                    </button>
+              <div className="border-b border-edge px-2 pt-2 pb-1.5">
+                <div className="mb-1 flex items-center justify-between">
+                  <span className="shrink-0 text-[10px] font-medium uppercase tracking-wide text-content-subtle">
+                    排队 · 拖动排序
                   </span>
-                ))}
-                <button
-                  type="button"
-                  onClick={() => clearPromptQueue(sessionId)}
-                  title="清空队列"
-                  className="shrink-0 rounded px-1 py-0.5 text-[10px] text-content-subtle transition-colors hover:bg-surface-muted hover:text-content"
-                >
-                  清空
-                </button>
+                  <button
+                    type="button"
+                    onClick={() => clearPromptQueue(sessionId)}
+                    title="清空队列"
+                    className="shrink-0 rounded px-1 py-0.5 text-[10px] text-content-subtle transition-colors hover:bg-surface-muted hover:text-content"
+                  >
+                    清空
+                  </button>
+                </div>
+                <div className="space-y-1">
+                  {queue.map((item, idx) => {
+                    const expanded = expandedQueueId === item.id;
+                    const isDragging = draggedQueueId === item.id;
+                    const isDragOver =
+                      dragOverQueueId === item.id && draggedQueueId !== item.id;
+                    return (
+                      <div
+                        key={item.id}
+                        draggable
+                        onDragStart={(e) => {
+                          setDraggedQueueId(item.id);
+                          e.dataTransfer.effectAllowed = "move";
+                          // Clear text content so Firefox fires dragstart at all.
+                          try {
+                            e.dataTransfer.setData("text/plain", item.id);
+                          } catch {
+                            /* noop */
+                          }
+                        }}
+                        onDragOver={(e) => {
+                          e.preventDefault();
+                          if (draggedQueueId && draggedQueueId !== item.id) {
+                            setDragOverQueueId(item.id);
+                          }
+                        }}
+                        onDragLeave={(e) => {
+                          // Only clear when leaving the card itself, not when
+                          // crossing into a child (relatedTarget still inside).
+                          if (!e.currentTarget.contains(e.relatedTarget as Node | null)) {
+                            setDragOverQueueId((cur) => (cur === item.id ? null : cur));
+                          }
+                        }}
+                        onDrop={(e) => {
+                          e.preventDefault();
+                          handleQueueReorder(item.id);
+                        }}
+                        onDragEnd={() => {
+                          setDraggedQueueId(null);
+                          setDragOverQueueId(null);
+                        }}
+                        className={cn(
+                          "rounded-md border px-1.5 py-1 text-[11px] text-content transition-colors",
+                          expanded
+                            ? "border-accent/40 bg-accent/5"
+                            : "border-edge bg-surface/50",
+                          isDragging && "opacity-40",
+                          isDragOver && "border-accent ring-1 ring-accent/30",
+                        )}
+                      >
+                        <div className="flex items-center gap-1">
+                          <IconGripVertical
+                            size={12}
+                            className="shrink-0 cursor-grab text-content-subtle opacity-40"
+                          />
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setExpandedQueueId((cur) =>
+                                cur === item.id ? null : item.id,
+                              )
+                            }
+                            title={expanded ? "收起" : "展开"}
+                            aria-label={expanded ? "收起" : "展开"}
+                            className="flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded text-content-subtle transition-colors hover:bg-surface-muted hover:text-content"
+                          >
+                            {expanded ? (
+                              <IconChevronDown size={11} />
+                            ) : (
+                              <IconChevronRight size={11} />
+                            )}
+                          </button>
+                          <span className="shrink-0 text-[10px] text-content-subtle">
+                            {idx + 1}.
+                          </span>
+                          <span className={cn("min-w-0 flex-1", !expanded && "truncate")}>
+                            {item.displayText || "(仅附件)"}
+                          </span>
+                          {item.attachments && item.attachments.length > 0 && (
+                            <span className="flex shrink-0 items-center gap-0.5 text-content-subtle">
+                              <IconPaperclip size={11} />
+                              <span className="text-[10px]">{item.attachments.length}</span>
+                            </span>
+                          )}
+                          {!expanded && (
+                            <div className="flex shrink-0 items-center gap-0.5">
+                              <button
+                                type="button"
+                                onClick={() => void sendQueuedPromptNow(sessionId, item.id)}
+                                title="立即发送（中断当前回合）"
+                                aria-label="立即发送"
+                                className="flex h-3.5 w-3.5 items-center justify-center rounded text-content-subtle transition-colors hover:bg-accent/20 hover:text-accent"
+                              >
+                                <IconBolt size={10} />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleEditQueuedPrompt(item)}
+                                title="编辑"
+                                aria-label="编辑"
+                                className="flex h-3.5 w-3.5 items-center justify-center rounded text-content-subtle transition-colors hover:bg-accent/20 hover:text-content"
+                              >
+                                <IconPencil size={10} />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => removeQueuedPrompt(sessionId, item.id)}
+                                title="从队列移除"
+                                aria-label="从队列移除"
+                                className="flex h-3.5 w-3.5 items-center justify-center rounded text-content-subtle transition-colors hover:bg-danger/20 hover:text-danger"
+                              >
+                                <IconX size={10} />
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                        {expanded && (
+                          <div className="pt-1">
+                            <div className="max-h-40 overflow-auto whitespace-pre-wrap break-words rounded bg-surface/70 px-1.5 py-1 text-[11px] leading-relaxed text-content">
+                              {item.displayText || "(仅附件)"}
+                            </div>
+                            <div className="mt-1 flex items-center justify-end gap-1">
+                              <button
+                                type="button"
+                                onClick={() => removeQueuedPrompt(sessionId, item.id)}
+                                className="inline-flex items-center gap-1 rounded px-1.5 py-1 text-[11px] text-content-subtle transition-colors hover:bg-danger/10 hover:text-danger"
+                              >
+                                <IconX size={11} /> 移除
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleEditQueuedPrompt(item)}
+                                className="inline-flex items-center gap-1 rounded px-1.5 py-1 text-[11px] text-content-muted transition-colors hover:bg-surface-muted hover:text-content"
+                              >
+                                <IconPencil size={11} /> 编辑
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => void sendQueuedPromptNow(sessionId, item.id)}
+                                className="inline-flex items-center gap-1 rounded bg-accent/15 px-1.5 py-1 text-[11px] font-medium text-accent transition-colors hover:bg-accent/25"
+                              >
+                                <IconBolt size={11} /> 立即发送
+                              </button>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
             )}
             {tags.length > 0 && (
@@ -2214,10 +2415,10 @@ function ChatPaneForSession({ sessionId, isActive }: { sessionId: string; isActi
                 >
                   <IconPaperclip size={18} />
                 </button>
-                <ComposerToolbar />
+                <ComposerToolbar sessionId={sessionId} />
                 {/* Narrow-mode entry: hidden in wide mode (CSS), replaces the chip
                     row when the pane < 30rem. Pops a panel hosting the same chips. */}
-                <ComposerToolbarToggle />
+                <ComposerToolbarToggle sessionId={sessionId} />
               </div>
               {/* SDK picker pinned left of the send button — always visible
                   (unlike the chip row, which collapses in narrow mode); locked

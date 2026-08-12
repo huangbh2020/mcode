@@ -194,6 +194,10 @@ export interface PlanApprovalDecision {
   editedPlan?: string;
   /** Feedback message sent to the model when denied. */
   reason?: string;
+  /** User's plan-adjustment feedback typed into the approval sheet. On
+   * approve it's passed to the model alongside the approval so execution
+   * incorporates the adjustments; on reject it doubles as the reason. */
+  feedback?: string;
 }
 
 /**

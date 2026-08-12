@@ -21,20 +21,18 @@ import { ContextRing } from "./ContextRing.js";
  * this row — it lives directly to the left of the send button in ChatPane, so
  * it stays visible (and locked per-session) regardless of chip-row collapse.
  */
-export function ComposerToolbar() {
-  // Context-window snapshot for the active session. Drives the ring at the
+export function ComposerToolbar({ sessionId }: { sessionId: string }) {
+  // Context-window snapshot for THIS pane's session. Drives the ring at the
   // end of the chip row. Undefined until the first token-usage.updated event
   // arrives (or a persisted snapshot is hydrated from the session row).
-  const activeSessionId = useSessionStore((s) => s.activeSessionId);
-  const contextSnapshot = useSessionStore((s) =>
-    activeSessionId ? s.contextSnapshotBySession[activeSessionId] : undefined,
-  );
+  // Reading the pane's own sessionId (not the global activeSessionId) means a
+  // backgrounded tab's toolbar no longer re-renders when the foreground tab
+  // changes — each toolbar tracks its own session.
+  const contextSnapshot = useSessionStore((s) => s.contextSnapshotBySession[sessionId]);
   // Per-session finalized-turn usage records, feeding the ring's history view.
   // `?? EMPTY_USAGE` keeps the selector's return stable across renders (a
   // bare `?? []` would create a new array each time and trip re-renders).
-  const usageHistory = useSessionStore((s) =>
-    activeSessionId ? s.usageHistoryBySession[activeSessionId] ?? EMPTY_USAGE : EMPTY_USAGE,
-  );
+  const usageHistory = useSessionStore((s) => s.usageHistoryBySession[sessionId] ?? EMPTY_USAGE);
 
   return (
     <div className="composer-chips composer-chips-root flex min-w-0 items-center gap-1">

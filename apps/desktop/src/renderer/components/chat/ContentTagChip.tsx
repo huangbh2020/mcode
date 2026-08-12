@@ -1,7 +1,7 @@
 import { forwardRef } from "react";
 import { cn } from "@renderer/lib/cn.js";
-import { IconClipboard, IconFile, IconCode, IconX } from "@renderer/lib/icons.js";
-import type { ContentTag } from "@renderer/lib/contentTag.js";
+import { IconClipboard, IconFile, IconCode, IconPhoto, IconX } from "@renderer/lib/icons.js";
+import { isImageFile, type ContentTag } from "@renderer/lib/contentTag.js";
 
 /**
  * A single content-tag chip rendered above the textarea in the composer.
@@ -46,7 +46,11 @@ export const ContentTagChip = forwardRef<
         className="flex items-center gap-1"
       >
         {isFile ? (
-          <IconFile size={12} className="opacity-80" />
+          isImageFile(tag) ? (
+            <IconPhoto size={12} className="opacity-80" />
+          ) : (
+            <IconFile size={12} className="opacity-80" />
+          )
         ) : isElement ? (
           <IconCode size={12} className="opacity-80" />
         ) : (

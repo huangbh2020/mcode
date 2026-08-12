@@ -15,9 +15,15 @@
  *   - `message_end` / `agent_end` bracket assistant messages.
  *
  * Turn lifecycle: the Pi SDK emits `agent_end` when the agent finishes
- * processing a prompt (and `turn_end` for each LLM+tool round). We emit
- * `turn.done` on `agent_end` — the closest analogue to the Claude result
- * message's end-of-turn signal.
+ * processing a prompt (and `turn_end` for each LLM+tool round). On a retryable
+ * transient error (overloaded / rate-limit / 5xx) the SDK emits an
+ * INTERMEDIATE `agent_end` with `willRetry: true`, then retries internally
+ * (`auto_retry_start` → backoff → another iteration). We emit `turn.done`
+ * only on the TERMINAL `agent_end` (`willRetry: false`) — emitting on the
+ * intermediate event used to clear the loading spinner mid-retry and, when
+ * every retry failed, end the turn with zero visible output. A terminal
+ * `agent_end` whose final assistant message has `stopReason: "error"` is also
+ * surfaced as a visible `error` block so the failure is never silent.
  */
 import { randomUUID } from "node:crypto";
 import type { RuntimeEvent, TurnDoneReason, ContextUsageEvent } from "@contracts/runtime";
@@ -62,6 +68,12 @@ export class PiMessageAdapter {
    *  tool.use event carry the owning message, so the renderer keeps the
    *  "text → tool" timeline instead of piling every tool onto the turn opener. */
   private pendingToolTargetId: string | null = null;
+  /** True once a terminal error has been surfaced for this turn. Guards
+   *  against a duplicate error block when the final agent_end (message
+   *  inspection) AND a subsequent auto_retry_end{success:false} both report
+   *  the same exhausted-retry failure. Per-turn state (adapter is recreated
+   *  each startTurn). */
+  private errorSurfaced = false;
 
   constructor(
     private readonly ctx: ProviderContext,
@@ -118,18 +130,34 @@ export class PiMessageAdapter {
         });
         break;
       case "agent_end":
-        // End of the agent's processing run — the Pi analogue of the Claude
-        // result message. Emit the token-usage snapshot BEFORE turn.done so
-        // the runtime can append this turn's usage-history record (it reads
-        // lastContextSnapshot at turn.done). Skipping the emit when the
-        // snapshot is undefined (e.g. right after compaction) is fine — the
-        // runtime just won't have a usage record for this turn.
-        this.emitTurnEndSnapshot();
-        this.emit({
-          type: "turn.done",
-          sessionId: this.sessionId,
-          reason: this.pickDoneReason(),
-        });
+        this.handleAgentEnd(event);
+        break;
+      case "auto_retry_start":
+        // Informational: the model hit a retryable transient error
+        // (overloaded / rate-limit / 5xx) and the SDK will retry after
+        // backoff. The agent_end that preceded this carried willRetry:true
+        // and was ignored by handleAgentEnd, so the loading spinner stays on
+        // while the SDK backs off and retries. Logged so a long exponential
+        // backoff isn't a silent hang in the main-process log.
+        this.ctx.log.info(
+          `pi: retrying after transient error (attempt ${event.attempt}/${event.maxAttempts} in ${event.delayMs}ms): ${event.errorMessage}`,
+        );
+        break;
+      case "auto_retry_end":
+        // A failed retry run. The terminal error is normally already surfaced
+        // by handleAgentEnd (the final agent_end carries the error assistant
+        // message). This is a backstop for the rare case where it wasn't —
+        // e.g. the error message was stripped from agent state before the
+        // final agent_end. errorSurfaced guards against a duplicate block.
+        if (!event.success && !this.errorSurfaced && event.finalError) {
+          this.errorSurfaced = true;
+          this.emit({
+            type: "error",
+            sessionId: this.sessionId,
+            message: `模型调用失败(重试已耗尽):${event.finalError}`,
+            code: "PI_RETRY_EXHAUSTED",
+          });
+        }
         break;
       case "compaction_end": {
         // Pi's CompactionResult carries real token counts (tokensBefore /
@@ -153,12 +181,96 @@ export class PiMessageAdapter {
         // the intended UX (a compaction visibly just happened).
         break;
       }
-      // turn_start / turn_end / agent_start / queue_update / auto_retry_* /
+      // turn_start / turn_end / agent_start / queue_update /
       // session_info_changed / thinking_level_changed — not surfaced to the
       // renderer. Forward-compatible: unknown types are silently ignored.
       default:
         break;
     }
+  }
+
+  /** Handle `agent_end` — the Pi analogue of the Claude result message.
+   *
+   *  agent_end fires once per agent.prompt/agent.continue iteration. When the
+   *  model hits a retryable transient error (overloaded / rate-limit / 5xx),
+   *  the SDK emits an INTERMEDIATE agent_end with `willRetry: true` and then
+   *  retries internally (auto_retry_start → backoff → another iteration).
+   *  Ending the turn on that intermediate event was the root cause of the
+   *  "loading disappears, no output, task stops" symptom: the spinner was
+   *  cleared while the SDK was still retrying, and because an error response
+   *  carries only `errorMessage` (no TextContent), a turn where every retry
+   *  failed ended with zero visible output and no error block.
+   *
+   *  Two fixes live here:
+   *    1. Ignore intermediate agent_end events (willRetry:true) — the turn
+   *       stays live until the terminal agent_end (willRetry:false), which
+   *       fires after retries are exhausted OR the attempt succeeds.
+   *    2. On the terminal event, inspect the final assistant message: if its
+   *       stopReason is "error", surface a visible error block so the failure
+   *       is never silent. Covers both the retries-disabled and the
+   *       retries-exhausted paths (in both, the final agent_end carries the
+   *       error assistant message — _prepareRetry only strips it when a retry
+   *       actually follows).
+   *
+   *  The token-usage snapshot is emitted BEFORE turn.done so the runtime can
+   *  append this turn's usage-history record (it reads lastContextSnapshot at
+   *  turn.done). Skipping the emit when the snapshot is undefined (e.g. right
+   *  after compaction) is fine — the runtime just won't have a usage record. */
+  private handleAgentEnd(event: Extract<AgentSessionEvent, { type: "agent_end" }>): void {
+    // willRetry:true = an intermediate event; the SDK is about to retry. Do
+    // NOT end the turn — the loading spinner must stay on until the terminal
+    // agent_end (willRetry:false) arrives.
+    if (event.willRetry) return;
+
+    const terminalError = this.terminalErrorFromMessages(event.messages);
+    if (terminalError && !this.errorSurfaced) {
+      this.errorSurfaced = true;
+      this.emit({
+        type: "error",
+        sessionId: this.sessionId,
+        message: terminalError,
+        code: "PI_MODEL_ERROR",
+      });
+    }
+
+    this.emitTurnEndSnapshot();
+    this.emit({
+      type: "turn.done",
+      sessionId: this.sessionId,
+      reason: this.pickDoneReason(),
+    });
+  }
+
+  /** Extract the terminal model error (if any) from an agent_end's `messages`.
+   *  Walks back from the end to the most recent assistant message; if its
+   *  stopReason is "error", returns the errorMessage (or a generic notice when
+   *  the provider didn't supply one, so the turn never ends truly blank). A
+   *  non-error last assistant message yields undefined — the turn produced a
+   *  real (possibly tool-bearing) result and needs no synthetic error.
+   *
+   *  Typed structurally (role/stopReason/errorMessage) because `AgentMessage`
+   *  isn't exported from the SDK's root entry and is a broad union including
+   *  custom message kinds; a structural read is the narrowest safe access. */
+  private terminalErrorFromMessages(
+    messages: readonly unknown[] | undefined,
+  ): string | undefined {
+    if (!messages || messages.length === 0) return undefined;
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const m = messages[i] as {
+        role?: string;
+        stopReason?: string;
+        errorMessage?: string;
+      };
+      if (m.role === "assistant") {
+        if (m.stopReason === "error") {
+          return m.errorMessage && m.errorMessage.trim().length > 0
+            ? m.errorMessage
+            : "模型调用失败,未返回内容(可能是限流或服务暂时不可用)";
+        }
+        return undefined;
+      }
+    }
+    return undefined;
   }
 
   private handleMessageUpdate(

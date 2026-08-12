@@ -176,6 +176,7 @@ interface SessionRow {
   permission_mode: string;
   custom_model_id: string | null;
   archived: number;
+  pinned_at: number | null;
   context_snapshot: string | null;
   todos: string | null;
   subagents: string | null;
@@ -199,6 +200,7 @@ function rowToSession(r: SessionRow): Session {
     permissionMode: r.permission_mode as Session["permissionMode"],
     customModelId: r.custom_model_id ?? null,
     archived: !!r.archived,
+    pinnedAt: r.pinned_at ?? null,
     contextSnapshot: (r.context_snapshot ? safeJson(r.context_snapshot) : null) as ContextSnapshot | null,
     todos: (r.todos ? safeJson(r.todos) : null) as SessionTodoItem[] | null,
     subagents: (r.subagents ? safeJson(r.subagents) : null) as SubagentSnapshot[] | null,
@@ -214,8 +216,8 @@ export const SessionRepo = {
   create(s: Session): void {
     getDb().run(
       `INSERT INTO sessions
-       (id, project_id, provider_id, claude_session_id, title, status, model, effort, permission_mode, custom_model_id, archived, context_snapshot, todos, subagents, plan_draft, turn_files, usage_history, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (id, project_id, provider_id, claude_session_id, title, status, model, effort, permission_mode, custom_model_id, archived, pinned_at, context_snapshot, todos, subagents, plan_draft, turn_files, usage_history, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         v(s.id),
         v(s.projectId),
@@ -228,6 +230,7 @@ export const SessionRepo = {
         v(s.permissionMode),
         v(s.customModelId),
         v(s.archived ? 1 : 0),
+        v(s.pinnedAt),
         v(s.contextSnapshot ? JSON.stringify(s.contextSnapshot) : null),
         v(s.todos ? JSON.stringify(s.todos) : null),
         v(s.subagents ? JSON.stringify(s.subagents) : null),
@@ -241,15 +244,19 @@ export const SessionRepo = {
     persist();
   },
 
-  /** List sessions for a project, most recently active first.
+  /** List sessions for a project, pinned sessions first, then most recently
+   *  active first.
    *
-   *  Ordered by `updated_at DESC` so a session floats to the top whenever it
-   *  is touched (new message, title/status change, snapshot save, …); ties
-   *  fall back to `created_at DESC` for a stable order. `opts.limit` /
-   *  `opts.offset` paginate (used by the left-bar tree, which loads the first
-   *  page and appends on "load more"). `opts.archived` filters by the
-   *  soft-delete flag: omit for all, `false` for the active thread list, `true`
-   *  for the archived bin. */
+   *  Ordered by `pinned_at DESC` (SQLite sorts NULLs last in DESC) so pinned
+   *  sessions float to the top of their project's list, most recent pin first;
+   *  unpinned sessions then sort by `updated_at DESC` — a session floats to
+   *  the top of its unpinned group whenever it is touched (new message,
+   *  title/status change, snapshot save, …) — with ties falling back to
+   *  `created_at DESC` for a stable order. `opts.limit` / `opts.offset`
+   *  paginate (used by the left-bar tree, which loads the first page and
+   *  appends on "load more"). `opts.archived` filters by the soft-delete flag:
+   *  omit for all, `false` for the active thread list, `true` for the
+   *  archived bin. */
   listByProject(
     projectId: string,
     opts?: { limit?: number; offset?: number; archived?: boolean },
@@ -261,7 +268,7 @@ export const SessionRepo = {
       where.push("archived = ?");
       params.push(opts.archived ? 1 : 0);
     }
-    let sql = `SELECT * FROM sessions WHERE ${where.join(" AND ")} ORDER BY updated_at DESC, created_at DESC`;
+    let sql = `SELECT * FROM sessions WHERE ${where.join(" AND ")} ORDER BY pinned_at DESC, updated_at DESC, created_at DESC`;
     if (opts?.limit !== undefined) {
       sql += " LIMIT ?";
       params.push(v(opts.limit));
@@ -429,6 +436,18 @@ export const SessionRepo = {
     getDb().run("UPDATE sessions SET archived = ?, updated_at = ? WHERE id = ?", [
       v(archived ? 1 : 0),
       v(Date.now()),
+      v(id),
+    ]);
+    persist();
+  },
+
+  /** Pin/unpin a session within its project: pinned rows write the current
+   *  timestamp (most recent pin sorts first), unpinned rows write NULL.
+   *  Does NOT bump `updated_at` — pinning is metadata, not activity, so it
+   *  doesn't disturb the activity ordering of the unpinned group. */
+  setPinned(id: string, pinned: boolean): void {
+    getDb().run("UPDATE sessions SET pinned_at = ? WHERE id = ?", [
+      v(pinned ? Date.now() : null),
       v(id),
     ]);
     persist();

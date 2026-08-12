@@ -13,6 +13,7 @@ import {
   IconPencil,
   IconTrash,
   IconTerminal2,
+  IconFolder,
 } from "@renderer/lib/icons.js";
 
 /**
@@ -192,9 +193,12 @@ function CommandsSection() {
             >
               <Select.Trigger id="setting-terminal-cmd-project" className="min-w-[12rem]">
                 <Select.Value>
-                  {(val: string) =>
-                    candidateProjects.find((p) => p.id === val)?.name ?? "选择项目"
-                  }
+                  {(val: string) => (
+                    <span className="flex items-center gap-1.5">
+                      <IconFolder size={14} className="text-content-muted" />
+                      {candidateProjects.find((p) => p.id === val)?.name ?? "选择项目"}
+                    </span>
+                  )}
                 </Select.Value>
               </Select.Trigger>
               <Select.Portal>
@@ -203,6 +207,7 @@ function CommandsSection() {
                     <Select.List>
                       {candidateProjects.map((p) => (
                         <Select.Item key={p.id} value={p.id}>
+                          <IconFolder size={14} className="text-content-muted" />
                           <Select.ItemText>{p.name}</Select.ItemText>
                         </Select.Item>
                       ))}

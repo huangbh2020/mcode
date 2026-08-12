@@ -882,6 +882,11 @@ export interface SessionState {
    *  + tab strip reflect the new title immediately. The store does NOT trim
    *  the title - the caller should pass a non-empty trimmed string. */
   renameSession: (id: string, title: string) => Promise<void>;
+  /** Pin/unpin a session within its project (project-scoped: pinned sessions
+   *  sort to the top of the project's session list). Persists via IPC, patches
+   *  the cached row with the server-fresh copy, then re-sorts the project's
+   *  loaded window so pinned rows float to the top immediately. */
+  setSessionPinned: (id: string, pinned: boolean) => Promise<void>;
   /** Apply a title update pushed from main (auto title-gen). Patches the
    *  in-memory session lists directly - the DB row is already updated by the
    *  main process, so no IPC round-trip. Mirrors renameSession's patching. */
@@ -920,7 +925,7 @@ export interface SessionState {
     displayText?: string,
     skillsUsed?: string[],
   ) => Promise<void>;
-  interrupt: () => Promise<void>;
+  interrupt: (sessionId?: string) => Promise<void>;
   ingestEvent: (e: RuntimeEvent) => void;
   /** Update the window-focus flag. Called from useClaudeEvents on Electron
    *  `window:focusChanged` + `document.visibilitychange`. When the window
@@ -1078,7 +1083,7 @@ export interface SessionState {
    *  SDK exits plan mode and starts executing; reject → SDK stays in plan
    *  mode and the model can revise. On success the pending card clears;
    *  on IPC failure it stays so the user can retry. */
-  submitPlanApproval: (requestId: string, approved: boolean, editedPlan?: string, reason?: string) => Promise<void>;
+  submitPlanApproval: (requestId: string, approved: boolean, editedPlan?: string, reason?: string, feedback?: string) => Promise<void>;
   /** Open a plan tab in the editor column for a session, showing the given
    *  plan markdown. Activates the plan tab (planTabActive = true). Called
    *  when the user clicks a plan card or a plan title in the activity
@@ -1148,6 +1153,17 @@ export interface SessionState {
    *  the `turn.done` / `error` / sendTurn-failure paths so a queued prompt
    *  fires the moment the previous turn truly ends. Safe to call any time. */
   drainPromptQueueIfIdle: (sessionId: string) => void;
+  /** Send a specific queued prompt immediately as a new turn. If the session
+   *  is currently busy (running turn or running background subagent), it is
+   *  interrupted first — `await interrupt()` clears `runningBySession` before
+   *  sendPrompt runs. Only the targeted item is dropped; the rest stay queued.
+   *  sendPrompt resets the interruptedBySession sentinel, so the old turn's
+   *  late turn.done{interrupted} is filtered by the existing race guard. */
+  sendQueuedPromptNow: (sessionId: string, id: string) => Promise<void>;
+  /** Reorder a session's queue to match `newOrder` (a list of ids). Any ids
+   *  present in the queue but missing from newOrder are appended at the end
+   *  in their original order, so a malformed caller can't drop items. */
+  reorderPromptQueue: (sessionId: string, newOrder: string[]) => void;
 
   /** Persist a session's composer draft (typed-but-unsent content) so it
    *  survives the ChatPane unmounting (thread switch / tab close). The owning
@@ -1505,6 +1521,23 @@ function patchSessionInCache(
   return { ...byProject, [projectId]: nextList };
 }
 
+/** Keep pinned sessions on top of a project's loaded session window. Stable:
+ *  within each group (pinned / unpinned) the incoming order is preserved; the
+ *  server already returns this order (`listByProject` orders by pinned_at DESC
+ *  then updated_at DESC), so this is a no-op on fresh fetches — it only
+ *  matters after local mutations (pin toggle, new session, restore) where a
+ *  row must jump into / out of the pinned block without re-fetching. */
+function pinSort(list: Session[]): Session[] {
+  return list.slice().sort((a, b) => {
+    const pa = a.pinnedAt ?? 0;
+    const pb = b.pinnedAt ?? 0;
+    if (pa === pb) return 0; // stable within each group
+    if (pa === 0) return 1; // unpinned after pinned
+    if (pb === 0) return -1;
+    return pb - pa; // pinned: most recent pin first
+  });
+}
+
 /** Read a session's persisted config (model / effort / permissionMode /
  *  customModelId) into the global view slots so the composer renders the
  *  active thread's choices. If the session can't be found (not yet loaded,
@@ -1726,34 +1759,64 @@ function hydrateCapsule(
   const subagents = sess?.subagents ?? null;
   const planDraft = sess?.planDraft ?? null;
   set((s) => {
-    const todosBySession = { ...s.todosBySession };
-    if (todos && Array.isArray(todos) && todos.length > 0) {
-      todosBySession[sessionId] = todos as TodoItem[];
-    } else {
-      delete todosBySession[sessionId];
+    const hasTodos = !!(todos && Array.isArray(todos) && todos.length > 0);
+    const hasSubagents = !!(subagents && Array.isArray(subagents) && subagents.length > 0);
+    const hasPlan = !!(planDraft && planDraft.phase !== "cleared" && planDraft.plan);
+    // If this session was manually interrupted, the persisted roster may
+    // still carry `running` subagents (the abort's flushFinal runs async and
+    // can race this hydration). Demote any `running` entry to `killed` so
+    // re-entering the thread can't resurrect "运行中" subagents the user
+    // already stopped. Mirrors the late-event guard in the subagent.update
+    // handler below. The rewrite always yields a fresh array, so an
+    // interrupted session is treated as always-changed (rare edge).
+    const interrupted = !!s.interruptedBySession[sessionId];
+    // Per-slice "already matches" guards — re-switching to an already-loaded
+    // tab used to clone all three maps unconditionally, tripping subscriber
+    // re-renders even when nothing changed.
+    const todosSame = hasTodos
+      ? s.todosBySession[sessionId] === todos
+      : !(sessionId in s.todosBySession);
+    const subagentsSame = interrupted
+      ? false
+      : hasSubagents
+        ? s.subagentsBySession[sessionId] === subagents
+        : !(sessionId in s.subagentsBySession);
+    const planSame = hasPlan
+      ? s.planBySession[sessionId] === planDraft
+      : !(sessionId in s.planBySession);
+    if (todosSame && subagentsSame && planSame) return {};
+
+    // Clone + patch only the slices that actually changed.
+    const patch: Partial<
+      Pick<SessionState, "todosBySession" | "subagentsBySession" | "planBySession">
+    > = {};
+    if (!todosSame) {
+      const todosBySession = { ...s.todosBySession };
+      if (hasTodos) todosBySession[sessionId] = todos as TodoItem[];
+      else delete todosBySession[sessionId];
+      patch.todosBySession = todosBySession;
     }
-    const subagentsBySession = { ...s.subagentsBySession };
-    if (subagents && Array.isArray(subagents) && subagents.length > 0) {
-      // If this session was manually interrupted, the persisted roster may
-      // still carry `running` subagents (the abort's flushFinal runs async
-      // and can race this hydration). Demote any `running` entry to `killed`
-      // so re-entering the thread can't resurrect "运行中" subagents the user
-      // already stopped. Mirrors the late-event guard in the subagent.update
-      // handler below.
-      const interrupted = !!s.interruptedBySession[sessionId];
-      subagentsBySession[sessionId] = interrupted
-        ? subagents.map((a) => (a.status === "running" ? { ...a, status: "killed" as const } : a))
-        : subagents;
-    } else {
-      delete subagentsBySession[sessionId];
+    if (!subagentsSame) {
+      const subagentsBySession = { ...s.subagentsBySession };
+      if (subagents && Array.isArray(subagents) && subagents.length > 0) {
+        subagentsBySession[sessionId] = interrupted
+          ? subagents.map((a) => (a.status === "running" ? { ...a, status: "killed" as const } : a))
+          : subagents;
+      } else {
+        delete subagentsBySession[sessionId];
+      }
+      patch.subagentsBySession = subagentsBySession;
     }
-    const planBySession = { ...s.planBySession };
-    if (planDraft && planDraft.phase !== "cleared" && planDraft.plan) {
-      planBySession[sessionId] = planDraft as PlanDraft;
-    } else {
-      delete planBySession[sessionId];
+    if (!planSame) {
+      const planBySession = { ...s.planBySession };
+      if (planDraft && planDraft.phase !== "cleared" && planDraft.plan) {
+        planBySession[sessionId] = planDraft as PlanDraft;
+      } else {
+        delete planBySession[sessionId];
+      }
+      patch.planBySession = planBySession;
     }
-    return { todosBySession, subagentsBySession, planBySession };
+    return patch;
   });
 }
 
@@ -1769,6 +1832,13 @@ function hydrateTurnFiles(
   const sess = findSession(get().sessionsByProject, get().archivedSessionsByProject, sessionId);
   const turnFiles = sess?.turnFiles ?? null;
   set((s) => {
+    const hasValue = !!(turnFiles && Array.isArray(turnFiles) && turnFiles.length > 0);
+    const hadValue = sessionId in s.turnFilesBySession;
+    // Skip the write when the cached row's value is already the reference we
+    // have, or both sides are empty — otherwise re-switching to an
+    // already-loaded tab clones the map and trips a subscriber re-render for
+    // nothing. Mirrors hydrateContextSnapshot's prev===snapshot guard.
+    if (hasValue ? s.turnFilesBySession[sessionId] === turnFiles : !hadValue) return {};
     const next = { ...s.turnFilesBySession };
     if (turnFiles && Array.isArray(turnFiles) && turnFiles.length > 0) {
       next[sessionId] = turnFiles;
@@ -1791,6 +1861,12 @@ function hydrateUsageHistory(
   const sess = findSession(get().sessionsByProject, get().archivedSessionsByProject, sessionId);
   const history = sess?.usageHistory ?? null;
   set((s) => {
+    const hasValue = !!(history && Array.isArray(history) && history.length > 0);
+    const hadValue = sessionId in s.usageHistoryBySession;
+    // Skip the write when the cached row's history is already the reference we
+    // have, or both sides are empty — otherwise re-switching to an
+    // already-loaded tab clones the map and trips a subscriber re-render.
+    if (hasValue ? s.usageHistoryBySession[sessionId] === history : !hadValue) return {};
     const next = { ...s.usageHistoryBySession };
     if (history && Array.isArray(history) && history.length > 0) {
       next[sessionId] = history;
@@ -2286,6 +2362,13 @@ function flushDeltas(): void {
 
       for (const e of sessionEntries) {
         let msg = findMsg(next, e.messageId);
+        // Never append streamed content onto a message whose turn already
+        // ended — happens only with straggler deltas from an aborted turn
+        // (e.g. a stop→resend race where the sentinel got cleared). The
+        // transcript must freeze where the user stopped it.
+        if (msg && msg.turnMeta && msg.turnMeta.endedAt !== undefined) {
+          continue;
+        }
         if (!msg) {
           // First delta for this message — create a new assistant message.
           // Check if a turn is already open (assistant message without endedAt).
@@ -2377,6 +2460,30 @@ function forceDeltaFlush(): void {
   deltaArrivals.length = 0; // Reset the adaptive window.
   flushDeltas();
 }
+
+/** Drop all buffered deltas for a session. Called on interrupt so the aborted
+ *  turn's straggler deltas (flushFinal emits them while the SDK generator
+ *  unwinds) never reach the transcript — the user asked to STOP, so content
+ *  freezes exactly where it was. */
+function clearSessionDeltas(sessionId: string): void {
+  if (deltaBuf.size === 0) return;
+  for (const [key, entry] of deltaBuf) {
+    if (entry.sessionId === sessionId) deltaBuf.delete(key);
+  }
+}
+
+/** Event types that append visible content to the transcript. While a session
+ *  is interrupted these are ignored so the aborted turn's late events can't
+ *  keep rendering text / tools / images after the Stop click. Status events
+ *  (turn.done / error / subagent.update / turn.files ...) are NOT in this set
+ *  — they still flow so state cleanup proceeds normally. */
+const CONTENT_FROZEN_EVENTS = new Set<RuntimeEvent["type"]>([
+  "text.delta",
+  "thinking",
+  "tool.use",
+  "tool.result",
+  "browser.image",
+]);
 
 /* ─── Pane-width persistence (debounced) ───
  * A drag fires many mousemove events; each calls an adjust* action that
@@ -3126,7 +3233,13 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     });
     set((s) => {
       const prevList = s.sessionsByProject[projectId] ?? [];
-      const nextByProject = { ...s.sessionsByProject, [projectId]: [session, ...prevList] };
+      // New sessions are never pinned, so they land at the head of the
+      // UNPINNED group (below any pinned sessions) — pinSort keeps that order
+      // stable while floating pinned rows to the top.
+      const nextByProject = {
+        ...s.sessionsByProject,
+        [projectId]: pinSort([session, ...prevList]),
+      };
       const isactive = projectId === s.activeProjectId;
       return {
         sessionsByProject: nextByProject,
@@ -3624,9 +3737,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       const isActiveProject = projectId === s.activeProjectId;
 
       // Pull the row out of whichever cache currently holds it and push the
-      // server-fresh copy into the opposite cache. Newest-first ordering is
-      // preserved by inserting at the head (the API returns DESC by created_at,
-      // and these archive flips don't change created_at).
+      // server-fresh copy into the opposite cache. Ordering is preserved by
+      // inserting at the head then applying pinSort, so a restored session
+      // lands at the top of its pinned / unpinned block as appropriate.
       const oldActive = s.sessionsByProject[projectId] ?? [];
       const oldArchived = s.archivedSessionsByProject[projectId] ?? [];
       let nextActive: Session[];
@@ -3636,7 +3749,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         nextArchived = [session, ...oldArchived.filter((x) => x.id !== id)];
       } else {
         nextArchived = oldArchived.filter((x) => x.id !== id);
-        nextActive = [session, ...oldActive.filter((x) => x.id !== id)];
+        nextActive = pinSort([session, ...oldActive.filter((x) => x.id !== id)]);
       }
       const sessionsByProject = { ...s.sessionsByProject, [projectId]: nextActive };
       const archivedByProject = { ...s.archivedSessionsByProject };
@@ -3720,6 +3833,34 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       }
       // The `sessions` alias mirrors the active project's list; refresh it in
       // case the renamed session lives in the active project (title chip etc.).
+      const sessions = s.activeProjectId === projectId
+        ? (sessionsByProject[projectId] ?? s.sessions)
+        : s.sessions;
+      return { sessionsByProject, archivedSessionsByProject, sessions };
+    });
+  },
+
+  setSessionPinned: async (id, pinned) => {
+    const { session } = await api.session.pin({ id, pinned });
+    set((s) => {
+      const projectId = session.projectId;
+      // Replace the row in whichever cache holds it (active page or archived
+      // bin) with the server-fresh copy, then re-sort the active list so the
+      // just-pinned/unpinned row lands in the right block immediately.
+      const patchRow = (list: Session[] | undefined) =>
+        list && list.some((x) => x.id === id)
+          ? list.map((x) => (x.id === id ? session : x))
+          : list;
+      const sessionsByProject = { ...s.sessionsByProject };
+      if (sessionsByProject[projectId]) {
+        const next = patchRow(sessionsByProject[projectId]);
+        if (next) sessionsByProject[projectId] = pinSort(next);
+      }
+      const archivedSessionsByProject = { ...s.archivedSessionsByProject };
+      if (archivedSessionsByProject[projectId]) {
+        const next = patchRow(archivedSessionsByProject[projectId]);
+        if (next) archivedSessionsByProject[projectId] = next;
+      }
       const sessions = s.activeProjectId === projectId
         ? (sessionsByProject[projectId] ?? s.sessions)
         : s.sessions;
@@ -4027,10 +4168,16 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     });
   },
 
-  interrupt: async () => {
-    const sessionId = get().activeSessionId;
+  interrupt: async (sessionIdArg) => {
+    const sessionId = sessionIdArg ?? get().activeSessionId;
     if (!sessionId) return;
     await api.claude.interrupt({ sessionId });
+    // Drop this session's buffered deltas: after abort, flushFinal may emit a
+    // few straggler text.delta/thinking while the generator unwinds, but the
+    // user asked to STOP — none of it should reach the page. Combined with
+    // the ingestEvent content freeze (sentinel check below), the transcript
+    // stays frozen exactly where the user stopped it.
+    clearSessionDeltas(sessionId);
     // Clear only the interrupted thread's flag. The `turn.done` (with reason
     // "interrupted") event from main will also clear it; doing it here too
     // is a defensive in case the event races with the user click.
@@ -4060,11 +4207,24 @@ export const useSessionStore = create<SessionState>((set, get) => ({
             ),
           }
         : s.subagentsBySession;
+      const list = s.messagesBySession[sessionId];
+      // Freeze the aborted turn's "开始·用时" row NOW instead of waiting for
+      // the late turn.done{interrupted} (which lands seconds later while the
+      // SDK unwinds). The turn.done reducer only stamps endedAt where it's
+      // still undefined, so this earlier freeze is never overwritten.
+      const frozen = list
+        ? list.map((m) =>
+            m.turnMeta && m.turnMeta.endedAt === undefined
+              ? { ...m, turnMeta: { ...m.turnMeta, endedAt: Date.now() } }
+              : m,
+          )
+        : undefined;
       return {
         runningBySession: { ...s.runningBySession, [sessionId]: false },
         runningTurnStartedAt,
         interruptedBySession: { ...s.interruptedBySession, [sessionId]: true },
         subagentsBySession,
+        ...(frozen ? { messagesBySession: { ...s.messagesBySession, [sessionId]: frozen } } : {}),
       };
     });
   },
@@ -4141,6 +4301,17 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     // stopped, didn't resend) still has the sentinel set when the late
     // turn.done arrives, so it runs and freezes the interrupted turn's opener.
     if (e.type === "turn.done" && e.reason === "interrupted" && !get().interruptedBySession[sid]) {
+      return;
+    }
+
+    // Stop → freeze the transcript: while the interrupt sentinel is set, drop
+    // any remaining content-carrying events from the aborted turn. flushFinal
+    // emits buffered text.delta / thinking / tool.result while the SDK
+    // generator unwinds — seconds after the Stop click — and without this
+    // guard they'd keep rendering. Status events still flow so cleanup
+    // proceeds. sendPrompt / editAndResendMessage clear the sentinel, so a
+    // NEW turn's events stream normally again.
+    if (get().interruptedBySession[sid] && CONTENT_FROZEN_EVENTS.has(e.type)) {
       return;
     }
 
@@ -5449,15 +5620,18 @@ export const useSessionStore = create<SessionState>((set, get) => ({
    *  plan. Calls `claude:respondPlanApproval` which resolves the provider's
    *  pending plan-approval Deferred — the SAME turn then continues (approve
    *  → SDK exits plan mode + starts executing; reject → SDK stays in plan
-   *  mode, model revises). Clears the pending card on success; on failure
-   *  the card stays so the user can retry. */
-  submitPlanApproval: async (requestId, approved, editedPlan, reason) => {
+   *  mode, model revises). `feedback` is the user's plan-adjustment opinion
+   *  from the approval sheet: on approve it's delivered to the model
+   *  alongside the approval (execution incorporates it); on reject it serves
+   *  as the reason. Clears the pending card on success; on failure the card
+   *  stays so the user can retry. */
+  submitPlanApproval: async (requestId, approved, editedPlan, reason, feedback) => {
     const sessionId = get().activeSessionId;
     if (!sessionId) return;
     const pending = get().pendingPlanApprovalBySession[sessionId];
     if (!pending || pending.requestId !== requestId) return;
     try {
-      await api.claude.respondPlanApproval({ sessionId, requestId, approved, editedPlan, reason });
+      await api.claude.respondPlanApproval({ sessionId, requestId, approved, editedPlan, reason, feedback });
       set((s) => {
         const { [sessionId]: _drop, ...rest } = s.pendingPlanApprovalBySession;
         // Drop the 待审阅 badge on the inline plan block now that the user
@@ -5687,6 +5861,55 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     // its turn.done handler will call drainPromptQueueIfIdle again — so the
     // whole queue drains one item per turn, in order.
     void s.sendPrompt(head.prompt, head.attachments, head.displayText, head.skillNames);
+  },
+
+  sendQueuedPromptNow: async (sessionId, id) => {
+    const q = get().promptQueueBySession[sessionId] ?? EMPTY_PROMPT_QUEUE;
+    const item = q.find((x) => x.id === id);
+    if (!item) return;
+    // If the session is busy (running turn or running background subagent),
+    // interrupt it first so this prompt can fire immediately as a new turn.
+    // interrupt() awaits the IPC and synchronously clears runningBySession +
+    // demotes running subagents, so sendPrompt's busy guard lets us through.
+    const agents = get().subagentsBySession[sessionId] ?? EMPTY_SUBAGENTS;
+    const busy =
+      get().runningBySession[sessionId] || agents.some((a) => a.status === "running");
+    if (busy) {
+      await get().interrupt(sessionId);
+    }
+    // Drop only this item; the rest of the queue is preserved.
+    get().removeQueuedPrompt(sessionId, id);
+    // Reuse the normal send path. sendPrompt clears the interruptedBySession
+    // sentinel, so the old turn's late turn.done{interrupted} is filtered by
+    // the existing race guard (sendPrompt / editAndResendMessage rely on it).
+    await get().sendPrompt(item.prompt, item.attachments, item.displayText, item.skillNames);
+  },
+
+  reorderPromptQueue: (sessionId, newOrder) => {
+    set((s) => {
+      const prev = s.promptQueueBySession[sessionId];
+      if (!prev || prev.length === 0) return {};
+      const byId = new Map(prev.map((q) => [q.id, q]));
+      const next: QueuedPrompt[] = [];
+      const seen = new Set<string>();
+      for (const id of newOrder) {
+        const q = byId.get(id);
+        if (q && !seen.has(id)) {
+          next.push(q);
+          seen.add(id);
+        }
+      }
+      // Append any items not referenced in newOrder so nothing is lost.
+      for (const q of prev) {
+        if (!seen.has(q.id)) next.push(q);
+      }
+      return {
+        promptQueueBySession: {
+          ...s.promptQueueBySession,
+          [sessionId]: next,
+        },
+      };
+    });
   },
 
   /* ─────────────────── IDE right-panel actions ─────────────────── */

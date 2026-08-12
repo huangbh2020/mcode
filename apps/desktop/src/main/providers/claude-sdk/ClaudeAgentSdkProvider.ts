@@ -18,7 +18,8 @@ import type {
 } from "@contracts/provider";
 import type { AskUserQuestionItem, PermissionMode } from "@contracts/runtime";
 import { SdkMessageAdapter, parseQuestions } from "./SdkMessageAdapter.js";
-import { buildCustomEnv, MCODE_CONFIG_DIR } from "./customEnv.js";
+import { buildCustomEnv, MCODE_CONFIG_DIR, resolveActiveModel } from "./customEnv.js";
+import type { ClaudeContextWindowTag } from "./claudeTokenUsage.js";
 import { ASK_SYSTEM_PROMPT } from "@main/lib/askQuestion.js";
 import { CLAUDE_IDENTITY_PROMPT } from "@main/lib/systemPrompt.js";
 import { getFileSnapshot } from "@main/lib/fileSnapshotRegistry.js";
@@ -257,6 +258,59 @@ function shouldAutoApprove(mode: PermissionMode | undefined, toolName: string): 
   if (isReadOnlyBrowserTool(toolName)) return true;
   if (mode === "acceptEdits") return FILE_EDIT_TOOLS.has(toolName);
   return false;
+}
+
+/** Max provider-level retries for a TRANSPORT failure (stdio break, binary
+ *  crash, network timeout). API-level transient errors (429 / overloaded /
+ *  5xx) are retried separately by the SDK itself — surfaced via `api_retry`
+ *  system messages the adapter now logs — and do NOT consume this budget,
+ *  because those end the iterator cleanly with a `result{subtype:"error"}`
+ *  rather than throwing. This wrapper only catches the thrown-exception case
+ *  the SDK's own retry loop doesn't cover. */
+const CLAUDE_MAX_TRANSPORT_RETRIES = 3;
+
+/** True for a thrown error that warrants a transport-level retry. Covers
+ *  stream/stdio breaks, network failures, timeouts, and HTTP 429/5xx that
+ *  escape the SDK's retry loop and surface as a thrown exception (possible on
+ *  non-Anthropic gateways). AbortError is excluded (it's a user stop, handled
+ *  separately). Auth/config errors are excluded (retrying won't help). The
+ *  SDK's thrown errors aren't strongly typed, so this is a message-based
+ *  heuristic — intentionally permissive on the side of retrying transient-
+ *  sounding failures. */
+function isRetryableTransportError(err: unknown): boolean {
+  const msg = (err instanceof Error ? err.message : String(err)).toLowerCase();
+  if (!msg) return false;
+  // User-initiated stop — never retry.
+  if (/abort/.test(msg)) return false;
+  // Stream / stdio / transport breaks.
+  if (/stream closed|stream.*closed|connection|econnreset|socket|hang up|epipe|\bpipe\b|transport/.test(msg)) return true;
+  // Timeouts.
+  if (/timeout|etimedout|timed out/.test(msg)) return true;
+  // Network / DNS / fetch.
+  if (/network|enotfound|getaddrinfo|fetch failed|failed to fetch/.test(msg)) return true;
+  // EOF / premature close.
+  if (/eof|premature|unexpected end|closed before/.test(msg)) return true;
+  // HTTP 429 / 5xx that escaped the SDK retry (rare; custom gateways).
+  if (/429|rate limit|overloaded|too many requests|5\d{2}|server error|service unavailable|bad gateway|gateway timeout/.test(msg)) return true;
+  return false;
+}
+
+/** Promise-based sleep that rejects early if the signal aborts, so a user
+ *  stop during a retry backoff doesn't wait out the full delay. The rejecting
+ *  path is how the retry loop detects an abort mid-backoff and bails out. */
+function abortableSleep(ms: number, signal: AbortSignal): Promise<void> {
+  if (signal.aborted) return Promise.reject(new Error("aborted"));
+  return new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(new Error("aborted"));
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
 }
 
 /** System prompt injected when the environment lacks native AskUserQuestion tool.
@@ -649,9 +703,17 @@ export class ClaudeAgentSdkProvider implements AgentProvider {
         });
         if (decision.approved) {
           const finalPlan = decision.editedPlan ?? plan;
+          // User's adjustment feedback (typed into the approval sheet) rides
+          // along in the dialog result message so the model reads it right
+          // after approval and incorporates it during execution. Without
+          // feedback the message stays the stock approval text.
+          const feedback = decision.feedback?.trim();
+          const message = feedback
+            ? `计划已批准。用户调整意见:${feedback}`
+            : "Plan approved by user";
           return {
             behavior: "completed" as const,
-            result: { approved: true, plan: finalPlan, message: "Plan approved by user" },
+            result: { approved: true, plan: finalPlan, message },
           };
         }
         return {
@@ -709,6 +771,19 @@ export class ClaudeAgentSdkProvider implements AgentProvider {
 
     const q = (await loadQuery())({ prompt: req.prompt, options });
 
+    // Resolve the user-declared context-window tag from the active role's
+    // `supports1m` flag. `resolveActiveModel` appends a `[1m]` suffix exactly
+    // when the active role declares 1M, so its presence signals a 1M window.
+    // For a custom endpoint this is authoritative (a non-1M config → "200k"
+    // overrides the model-name heuristic, so a gateway model coincidentally
+    // named "*opus*" without supports1m resolves to 200k as the user intended).
+    // `undefined` (official Anthropic endpoint) lets the heuristic decide.
+    const configured: ClaudeContextWindowTag | undefined = req.apiConfig
+      ? resolveActiveModel(req.apiConfig)?.toLowerCase().endsWith("[1m]")
+        ? "1m"
+        : "200k"
+      : undefined;
+
     const adapter = new SdkMessageAdapter(
       ctx,
       req.sessionId,
@@ -718,40 +793,95 @@ export class ClaudeAgentSdkProvider implements AgentProvider {
       ac.signal,
       q,
       req.initialTodos ?? [],
+      configured,
     );
 
     let finished = false;
     const done = (async () => {
+      // Transport-level retry loop. The SDK already retries API-level
+      // transient errors (429 / overloaded / 5xx) internally — surfaced via
+      // `api_retry` system messages the adapter now logs — and those close
+      // the iterator cleanly with a `result{subtype:"error"}` (handled by
+      // handleResult, not this catch). This wrapper catches only the THROWN-
+      // exception case the SDK doesn't cover: stdio breaks, binary crashes,
+      // network timeouts. When such a failure happens BEFORE any assistant
+      // content streamed to the renderer (checked via
+      // activeAdapter.hasEmittedContent()), we recreate the query + adapter
+      // and retry with exponential backoff. The no-content gate is critical
+      // — once text/thinking/tool_use has been emitted, recreating would
+      // orphan the partial output in the message stream.
+      let activeQuery = q;
+      let activeAdapter = adapter;
+      let attempt = 0;
       try {
-        for await (const m of q) {
-          await adapter.dispatch(m);
-        }
-        await adapter.flushFinal();
-      } catch (err) {
-        // A user-initiated stop (ac.abort()) makes the SDK's async iterator
-        // throw an AbortError. That's NOT an error condition - run the normal
-        // end-of-turn finalization so flushFinal() can mark still-running
-        // subagents as "killed" (reflecting the user's stop intent), emit the
-        // final subagent.update (which RuntimeManager persists to the DB so
-        // the killed state survives a session reopen), and emit the closing
-        // turn.done with reason "interrupted". Skipping flushFinal here would
-        // leave the persisted roster at its stale mid-stream "running" value,
-        // so re-entering the thread would resurrect "运行中" subagents.
-        if (ac.signal.aborted) {
-          await adapter.flushFinal();
-        } else {
-          ctx.log.error(`claude SDK error: ${(err as Error).message}`);
-          ctx.emit({
-            type: "error",
-            sessionId: req.sessionId,
-            message: (err as Error).message,
-            code: "SDK_ERROR",
-          });
-          ctx.emit({
-            type: "turn.done",
-            sessionId: req.sessionId,
-            reason: "error",
-          });
+        while (true) {
+          try {
+            for await (const m of activeQuery) {
+              await activeAdapter.dispatch(m);
+            }
+            await activeAdapter.flushFinal();
+            return;
+          } catch (err) {
+            // A user stop (ac.abort()) makes the iterator throw AbortError.
+            // That's not an error — finalize (marks running subagents killed
+            // reflecting the user's stop intent) and exit with interrupted.
+            if (ac.signal.aborted) {
+              await activeAdapter.flushFinal();
+              return;
+            }
+            // Retryable transport error before any content streamed → retry.
+            if (
+              !activeAdapter.hasEmittedContent() &&
+              attempt < CLAUDE_MAX_TRANSPORT_RETRIES &&
+              isRetryableTransportError(err)
+            ) {
+              attempt += 1;
+              const delayMs = Math.min(1000 * 2 ** (attempt - 1), 8000);
+              ctx.log.warn(
+                `claude: transport error, retry ${attempt}/${CLAUDE_MAX_TRANSPORT_RETRIES} in ${delayMs}ms: ${(err as Error).message}`,
+              );
+              // Abortable backoff: a user stop during the sleep must NOT
+              // turn into another retry attempt.
+              try {
+                await abortableSleep(delayMs, ac.signal);
+              } catch {
+                // Aborted during backoff — treat as a user interrupt.
+                await activeAdapter.flushFinal();
+                return;
+              }
+              // Fresh query + adapter for the retry. options.abortController
+              // (ac) is shared, so a user stop still cancels the retried
+              // attempt. options.resume re-attaches to the same SDK session
+              // so the conversation context carries over.
+              activeQuery = (await loadQuery())({ prompt: req.prompt, options });
+              activeAdapter = new SdkMessageAdapter(
+                ctx,
+                req.sessionId,
+                this.capabilities.supportsAskUserQuestion,
+                req.cwd,
+                snapshot,
+                ac.signal,
+                activeQuery,
+                req.initialTodos ?? [],
+                configured,
+              );
+              continue;
+            }
+            // Non-retryable, content already started, or retries exhausted.
+            ctx.log.error(`claude SDK error: ${(err as Error).message}`);
+            ctx.emit({
+              type: "error",
+              sessionId: req.sessionId,
+              message: (err as Error).message,
+              code: "SDK_ERROR",
+            });
+            ctx.emit({
+              type: "turn.done",
+              sessionId: req.sessionId,
+              reason: "error",
+            });
+            return;
+          }
         }
       } finally {
         finished = true;

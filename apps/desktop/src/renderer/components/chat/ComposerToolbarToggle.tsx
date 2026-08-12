@@ -22,7 +22,7 @@ import { ComposerToolbar } from "./ComposerToolbar.js";
  * — can still render upward beyond the popup's box. Effort/Permission use
  * `Menu.Portal` and ContextRing uses a hover tooltip, so neither is affected.
  */
-export function ComposerToolbarToggle() {
+export function ComposerToolbarToggle({ sessionId }: { sessionId: string }) {
   return (
     <span className="composer-chips-toggle shrink-0">
       <Popover.Root>
@@ -53,7 +53,7 @@ export function ComposerToolbarToggle() {
               )}
             >
               <div className="flex items-center gap-2">
-                <ComposerToolbar />
+                <ComposerToolbar sessionId={sessionId} />
               </div>
             </Popover.Popup>
           </Popover.Positioner>

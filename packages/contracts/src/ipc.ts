@@ -527,6 +527,10 @@ export const RespondPlanApprovalSchema = z.object({
   approved: z.boolean(),
   editedPlan: z.string().optional(),
   reason: z.string().optional(),
+  /* User's plan-adjustment feedback from the approval sheet. Attached to the
+   * decision: on approve it's delivered to the model alongside the approval
+   * (execution should incorporate it); on reject it doubles as the reason. */
+  feedback: z.string().optional(),
 });
 export type RespondPlanApprovalInput = z.infer<typeof RespondPlanApprovalSchema>;
 
@@ -604,6 +608,11 @@ export const ReorderProjectsSchema = z.object({
 export type ReorderProjectsInput = z.infer<typeof ReorderProjectsSchema>;
 export const DeleteSessionSchema = z.object({ id: z.string() });
 export const ArchiveSessionSchema = z.object({ id: z.string(), archived: z.boolean() });
+
+/* Pin/unpin a session (project-scoped: pinned sessions sort to the top of
+ * their project's list, most recent pin first). */
+export const PinSessionSchema = z.object({ id: z.string(), pinned: z.boolean() });
+export type PinSessionInput = z.infer<typeof PinSessionSchema>;
 
 /* Rename a session (user-edited title). Title is clamped to a sane length;
  * empty/whitespace-only is rejected by the min(1) on the trimmed value (the
@@ -2243,6 +2252,8 @@ export interface RpcMap {
   "session.archive": (input: { id: string; archived: boolean }) => Promise<{ session: Session }>;
   /** Rename a session (persist a user-edited title). Returns the updated row. */
   "session.rename": (input: RenameSessionInput) => Promise<{ session: Session }>;
+  /** Pin/unpin a session (project-scoped). Returns the updated row. */
+  "session.pin": (input: PinSessionInput) => Promise<{ session: Session }>;
   // Providers
   "provider.list": () => Promise<{ providers: ProviderInfo[] }>;
   // Settings
@@ -2483,6 +2494,7 @@ export const IPC = {
   SESSION_DELETE: "session:delete",
   SESSION_ARCHIVE: "session:archive",
   SESSION_RENAME: "session:rename",
+  SESSION_PIN: "session:pin",
   SESSION_SEARCH: "session:search",
   SESSION_MESSAGES: "session:messages",
   SESSION_SAVE_MESSAGES: "session:saveMessages",

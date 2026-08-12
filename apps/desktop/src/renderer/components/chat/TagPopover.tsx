@@ -1,7 +1,15 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { cn } from "@renderer/lib/cn.js";
-import { IconCopy, IconCheck, IconX, IconArrowsMaximize } from "@renderer/lib/icons.js";
-import type { ContentTag } from "@renderer/lib/contentTag.js";
+import { api } from "@renderer/lib/api.js";
+import {
+  IconCopy,
+  IconCheck,
+  IconX,
+  IconArrowsMaximize,
+  IconLoader2,
+  IconPhotoOff,
+} from "@renderer/lib/icons.js";
+import { isImageFile, type ContentTag } from "@renderer/lib/contentTag.js";
 
 /**
  * Floating preview for a single content-tag chip. Shows the full pasted
@@ -43,8 +51,38 @@ export function TagPopover({
   // Computed after first measure so we can read the popover's own height.
   const [placeAbove, setPlaceAbove] = useState(true);
 
+  // Image preview state (file tags whose path is a previewable image). null =
+  // loading, "" = error/unreadable, non-empty = valid data URL.
+  const isImage = isImageFile(tag);
+  const [natural, setNatural] = useState(false);
+  const [dataUrl, setDataUrl] = useState<string | null>(null);
+
+  // Lazily load the image bytes as a data URL when the popover opens for an
+  // image tag. Reuses the same IPC the IDE's image preview uses
+  // (api.file.readBinary), which allows both project files and paste-temp
+  // paths (the latter is explicitly whitelisted in main's readBinary handler).
+  useEffect(() => {
+    if (!isImage || !tag.filePath) return;
+    let cancelled = false;
+    setDataUrl(null);
+    setNatural(false);
+    api.file
+      .readBinary({ filePath: tag.filePath })
+      .then(({ dataUrl: url }) => {
+        if (!cancelled) setDataUrl(url);
+      })
+      .catch(() => {
+        if (!cancelled) setDataUrl("");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isImage, tag.filePath]);
+
   // Measure once mounted and decide above/below. Also re-check on resize so
-  // a window shrink doesn't leave the popover overflowing the top edge.
+  // a window shrink doesn't leave the popover overflowing the top edge. For
+  // image tags, re-measure when the data URL arrives so placement accounts
+  // for the real image height (not the small loading spinner).
   useLayoutEffect(() => {
     const recompute = () => {
       const el = popoverRef.current;
@@ -56,7 +94,7 @@ export function TagPopover({
     recompute();
     window.addEventListener("resize", recompute);
     return () => window.removeEventListener("resize", recompute);
-  }, [anchorRect.top]);
+  }, [anchorRect.top, dataUrl]);
 
   // Outside-click + ESC close. Mirrors ModelDropdown's pattern.
   useEffect(() => {
@@ -114,24 +152,60 @@ export function TagPopover({
       : { top: anchorRect.bottom + 8 }),
   };
 
+  // Image tags: pop up the bare image with no frame — no header bar, border,
+  // or backdrop. Just the floating image anchored near the chip, plus a small
+  // unobtrusive status pill while loading / on error. Closes on outside-click
+  // / ESC (handled above); click the image to toggle zoom-to-fit / enlarged.
+  if (isImage) {
+    return (
+      <div ref={popoverRef} style={style} className="z-30">
+        {dataUrl === null ? (
+          <div className="flex items-center gap-1.5 rounded-md bg-surface/95 px-2.5 py-1.5 text-[11px] text-content-subtle shadow-lg">
+            <IconLoader2 size={12} className="animate-spin" /> 读取图片…
+          </div>
+        ) : !dataUrl ? (
+          <div className="flex flex-col items-center gap-1.5 rounded-md bg-surface/95 px-4 py-3 text-center text-content-subtle shadow-lg">
+            <IconPhotoOff size={24} className="opacity-70" />
+            <p className="text-[11px]">图片加载失败</p>
+          </div>
+        ) : (
+          <img
+            src={dataUrl}
+            alt={tag.preview}
+            onClick={() => setNatural((n) => !n)}
+            title={natural ? "点击缩小" : "点击放大"}
+            className={cn(
+              "rounded-md shadow-2xl",
+              natural ? "cursor-zoom-out" : "cursor-zoom-in",
+            )}
+            style={
+              natural
+                ? { maxWidth: "calc(100vw - 16px)", maxHeight: "90vh" }
+                : { maxWidth: "min(32rem, calc(100vw - 16px))", maxHeight: "70vh" }
+            }
+          />
+        )}
+      </div>
+    );
+  }
+
+  // Paste / element tags: framed popover with header (char count + copy/close).
   return (
     <div
       ref={popoverRef}
       style={style}
-      className={cn(
-        "z-30 max-h-60 w-[min(28rem,calc(100vw-16px))] overflow-hidden rounded-md border border-accent/60 bg-surface shadow-2xl",
-      )}
+      className="z-30 flex max-h-60 w-[min(28rem,calc(100vw-16px))] flex-col overflow-hidden rounded-md border border-edge bg-surface shadow-2xl"
     >
       {/* Header: char count + copy/close */}
-      <div className="flex items-center justify-between border-b border-accent/30 bg-accent/10 px-2 py-1">
-        <span className="text-[10px] text-accent/80">
+      <div className="flex shrink-0 items-center justify-between gap-2 border-b border-edge bg-surface-muted px-2 py-1">
+        <span className="text-[10px] text-content-muted">
           {tag.content.length.toLocaleString()} 字符 · ESC 或点击外部关闭
         </span>
-        <div className="flex items-center gap-1">
+        <div className="flex shrink-0 items-center gap-1">
           <button
             type="button"
             onClick={handleCopy}
-            className="flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[10px] text-accent transition-colors hover:bg-accent/30"
+            className="flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[10px] text-content-muted transition-colors hover:bg-surface-hover hover:text-content"
             title="复制完整内容"
           >
             {copyState === "copied" ? (
@@ -153,7 +227,7 @@ export function TagPopover({
                 onExpand();
                 onClose();
               }}
-              className="flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[10px] text-accent transition-colors hover:bg-accent/30"
+              className="flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[10px] text-content-muted transition-colors hover:bg-surface-hover hover:text-content"
               title="拆开卡片，内容粘贴到输入框"
             >
               <IconArrowsMaximize size={11} /> 拆开
@@ -162,7 +236,7 @@ export function TagPopover({
           <button
             type="button"
             onClick={onClose}
-            className="flex h-4 w-4 items-center justify-center rounded text-accent/80 transition-colors hover:bg-accent/30 hover:text-accent"
+            className="flex h-4 w-4 items-center justify-center rounded text-content-muted transition-colors hover:bg-surface-hover hover:text-content"
             title="关闭"
             aria-label="关闭预览"
           >

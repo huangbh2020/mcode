@@ -120,6 +120,12 @@ interface LiveBrowser {
   /** Current viewport config (custom dims + orientation). Mirrors what was
    *  last passed to setDevice so screenshots/reuse apply the same emulation. */
   viewport: BrowserViewport;
+  /** Original UA captured at create() — restored when leaving a mobile preset
+   *  (webContents.setUserAgent fallback path). */
+  defaultUserAgent: string;
+  /** True while THIS manager holds a CDP debugger session on the view (for the
+   *  UA/client-hint override). Lets setDevice detach only its own session. */
+  uaDebuggerAttached: boolean;
 }
 
 /** Offscreen parking rect used while hidden (keeps the view alive but unseen). */
@@ -187,6 +193,95 @@ function browserSession(): Session {
   return session.fromPath(dir);
 }
 
+/** User-Agent + platform metadata used while a mobile preset is active.
+ *  enableDeviceEmulation only emulates the viewport — the page's requests
+ *  would otherwise keep the desktop Electron UA, so backends still judge the
+ *  device as PC. Keyed by preset id; unknown presets ("custom" when narrow)
+ *  fall back to ANDROID_UA_SPEC. */
+interface DeviceUaSpec {
+  /** User-Agent string (HTTP header + navigator.userAgent). */
+  ua: string;
+  /** Value for CDP Emulation.setUserAgentOverride.platform → navigator.platform. */
+  platform: string;
+  /** Client-hint platform token (sec-ch-ua-platform / userAgentData.platform). */
+  os: "android" | "ios";
+  platformVersion: string;
+  model: string;
+}
+
+const ANDROID_UA_SPEC: DeviceUaSpec = {
+  ua: "Mozilla/5.0 (Linux; Android 14; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36",
+  platform: "Linux armv8l",
+  os: "android",
+  platformVersion: "14.0.0",
+  model: "Pixel 7",
+};
+
+const MOBILE_USER_AGENTS: Partial<Record<BrowserDevicePreset, DeviceUaSpec>> = {
+  iphone: {
+    ua: "Mozilla/5.0 (iPhone; CPU iPhone OS 16_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.5 Mobile/15E148 Safari/604.1",
+    platform: "iPhone",
+    os: "ios",
+    platformVersion: "16.5.0",
+    model: "iPhone 14",
+  },
+  "iphone-se": {
+    ua: "Mozilla/5.0 (iPhone; CPU iPhone OS 15_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.5 Mobile/15E148 Safari/604.1",
+    platform: "iPhone",
+    os: "ios",
+    platformVersion: "15.5.0",
+    model: "iPhone SE",
+  },
+  android: ANDROID_UA_SPEC,
+  "galaxy-s23": {
+    ua: "Mozilla/5.0 (Linux; Android 14; SM-S918B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36",
+    platform: "Linux armv8l",
+    os: "android",
+    platformVersion: "14.0.0",
+    model: "SM-S918B",
+  },
+  "ipad-mini": {
+    ua: "Mozilla/5.0 (iPad; CPU OS 16_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.5 Mobile/15E148 Safari/604.1",
+    platform: "iPad",
+    os: "ios",
+    platformVersion: "16.5.0",
+    model: "iPad mini",
+  },
+};
+
+/** Whether a device preset should present a mobile UA. Desktop (no emulation)
+ *  and the 1920×1080 "pc" preset are desktop; the phone/tablet presets always
+ *  mobile; "custom" is mobile only while narrow enough to be a phone/tablet
+ *  viewport (wide custom sizes behave like desktop pages). */
+function isMobileUa(device: BrowserDevicePreset, effWidth: number): boolean {
+  if (device === "desktop" || device === "pc") return false;
+  if (device === "custom") return effWidth <= 1024;
+  return true;
+}
+
+/** CDP UserAgentMetadata for the emulated device: drives the `sec-ch-ua*`
+ *  client-hint headers and navigator.userAgentData. Without it a UA override
+ *  leaves client hints reporting the real desktop Chrome — the exact "judged
+ *  as PC" symptom. Best-effort: Chromium's brands are used even for iOS UAs;
+ *  the `mobile: true` flag is what backends actually branch on. */
+function userAgentMetadataFor(spec: DeviceUaSpec) {
+  return {
+    brands: [
+      { brand: "Chromium", version: "124" },
+      { brand: "Google Chrome", version: "124" },
+      { brand: "Not-A.Brand", version: "99" },
+    ],
+    fullVersion: "124.0.0.0",
+    platform: spec.os === "android" ? "Android" : "iOS",
+    platformVersion: spec.platformVersion,
+    architecture: "",
+    model: spec.model,
+    mobile: true,
+    bitness: "",
+    wow64: false,
+  };
+}
+
 class BrowserManagerImpl {
   private readonly browsers = new Map<string, LiveBrowser>();
   /** webContents.id -> browserId, for routing picker IPC from the right view. */
@@ -242,6 +337,8 @@ class BrowserManagerImpl {
       pickMode: false,
       device: "desktop",
       viewport: { device: "desktop", orientation: "portrait" },
+      defaultUserAgent: view.webContents.getUserAgent(),
+      uaDebuggerAttached: false,
     };
     this.browsers.set(id, live);
     this.wcToBrowser.set(view.webContents.id, id);
@@ -564,6 +661,11 @@ class BrowserManagerImpl {
           scale: 1,
         });
       }
+      // Viewport emulation alone keeps the desktop Electron UA on the page's
+      // requests — override UA/client-hints/platform to match the device (or
+      // restore the desktop UA when emulation is off). Fire-and-forget: the
+      // CDP work is async, failures are logged inside.
+      void this.applyDeviceUserAgent(live, device, effW);
       live.device = device;
       live.viewport = {
         device,
@@ -581,6 +683,76 @@ class BrowserManagerImpl {
     }
   }
 
+  /** Override the view's User-Agent (+ client hints + navigator.platform +
+   *  touch) so requests from a mobile-emulated page advertise the emulated
+   *  device — and restore the desktop UA when emulation is off. Without this a
+   *  mobile viewport still sends desktop Electron UAs, so backends judge the
+   *  device as PC.
+   *
+   *  Primary path is the CDP debugger: Emulation.setUserAgentOverride covers
+   *  the UA header AND the sec-ch-ua* client hints AND navigator.platform (a
+   *  plain webContents.setUserAgent would leave client hints reporting the
+   *  real desktop Chrome). The debugger stays attached while a mobile preset
+   *  is active and is detached on desktop, which reverts every override. If
+   *  the debugger is busy (e.g. DevTools open on this view) it falls back to
+   *  setUserAgent alone — the UA header is what most backends check anyway.
+   *  Idempotent + race-tolerant: attach() is synchronous (so the attached flag
+   *  is set atomically), and a later detach()/re-attach always wins. */
+  private async applyDeviceUserAgent(
+    live: LiveBrowser,
+    device: BrowserDevicePreset,
+    effWidth: number,
+  ): Promise<void> {
+    const wc = live.view.webContents;
+    if (wc.isDestroyed()) return;
+    if (!isMobileUa(device, effWidth)) {
+      if (live.uaDebuggerAttached) {
+        try {
+          wc.debugger.detach(); // reverts all CDP overrides (UA/hints/touch)
+        } catch {
+          /* view tearing down - ignore */
+        }
+        live.uaDebuggerAttached = false;
+      }
+      if (live.defaultUserAgent) wc.setUserAgent(live.defaultUserAgent);
+      return;
+    }
+    const spec = MOBILE_USER_AGENTS[device] ?? ANDROID_UA_SPEC;
+    if (!live.uaDebuggerAttached) {
+      try {
+        wc.debugger.attach("1.3");
+        live.uaDebuggerAttached = true;
+      } catch {
+        // Debugger busy (e.g. DevTools open on this view): fall back to the
+        // plain UA override below; client hints stay desktop, but the UA
+        // header is what most backends check.
+        log.warn(
+          `browser UA debugger attach failed (falling back to UA-only override): ${live.id}`,
+        );
+      }
+    }
+    try {
+      // Set the webContents UA first (primary on the fallback path, base
+      // value on the CDP path — the override below takes precedence).
+      wc.setUserAgent(spec.ua);
+      if (live.uaDebuggerAttached) {
+        await wc.debugger.sendCommand("Emulation.setUserAgentOverride", {
+          userAgent: spec.ua,
+          platform: spec.platform,
+          userAgentMetadata: userAgentMetadataFor(spec),
+        });
+        // navigator.maxTouchPoints / ontouchstart detection is part of how
+        // pages decide "mobile" — without it mobile pages can still act desktop.
+        await wc.debugger.sendCommand("Emulation.setTouchEmulationEnabled", {
+          enabled: true,
+          maxTouchPoints: 5,
+        });
+      }
+    } catch (err) {
+      log.warn(`browser UA override failed: ${live.id} ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
   /** Destroy the view + drop it from the manager. */
   close(id: string): BrowserOpResult {
     const live = this.get(id);
@@ -593,6 +765,14 @@ class BrowserManagerImpl {
     }
     this.wcToBrowser.delete(live.view.webContents.id);
     this.browsers.delete(id);
+    if (live.uaDebuggerAttached) {
+      try {
+        live.view.webContents.debugger.detach();
+      } catch {
+        /* webContents already gone - ignore */
+      }
+      live.uaDebuggerAttached = false;
+    }
     try {
       live.view.webContents.close();
     } catch (err) {

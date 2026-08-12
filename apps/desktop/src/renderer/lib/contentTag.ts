@@ -26,6 +26,31 @@ export const FILE_DRAG_MIME = "application/x-file-path";
  *  {@link TAG_THRESHOLD_LINES} lines becomes a tag. */
 export const TAG_THRESHOLD_CHARS = 200;
 
+/** Image file extensions we can preview as a data-URL `<img>` in the popover /
+ *  chip. Mirrors the editor's `isImage()` set (FileEditor.tsx) so composer
+ *  chips, message attachment cards, and the IDE editor all agree on what
+ *  counts as an image. */
+const IMAGE_EXTENSIONS = new Set([
+  ".png",
+  ".jpg",
+  ".jpeg",
+  ".gif",
+  ".bmp",
+  ".ico",
+  ".webp",
+  ".svg",
+  ".tif",
+  ".tiff",
+  ".avif",
+]);
+
+/** True if `path` has a previewable image extension (case-insensitive). */
+export function isImageFilePath(path: string): boolean {
+  const dot = path.lastIndexOf(".");
+  if (dot < 0) return false;
+  return IMAGE_EXTENSIONS.has(path.slice(dot).toLowerCase());
+}
+
 /** A paste spanning more than this many lines is promoted to a tag even if
  *  it's short — long logs / stack traces get chipped regardless of char
  *  count. A 2-3 line snippet stays inline so the user isn't interrupted
@@ -108,6 +133,13 @@ export function makeFileTag(filePath: string, displayName?: string): ContentTag 
     content: `@${filePath}`,
     filePath,
   };
+}
+
+/** True for a file tag whose path is a previewable image. Used by TagPopover
+ *  to render an `<img>` instead of the raw `@path` text, and by the chip to
+ *  swap in a photo icon. */
+export function isImageFile(tag: ContentTag): boolean {
+  return tag.kind === "file" && !!tag.filePath && isImageFilePath(tag.filePath);
 }
 
 /** Build a ContentTag for a DOM element picked from the embedded browser. The

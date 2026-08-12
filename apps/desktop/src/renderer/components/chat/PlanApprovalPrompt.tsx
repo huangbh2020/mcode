@@ -5,7 +5,6 @@ import { Button, Input } from "@renderer/components/ui/index.js";
 import {
   IconRocket,
   IconPencil,
-  IconCheck,
   IconX,
 } from "@renderer/lib/icons.js";
 
@@ -15,9 +14,16 @@ import {
  *
  * The full plan text is shown inline in the message stream via PlanStreamBlock
  * - this sheet is intentionally minimal so it doesn't obstruct the user's view
- * of the plan or the conversation. It carries only the action row: edit (opens
- * the plan in the editor column for Monaco editing), reject (with optional
- * reason), and approve.
+ * of the plan or the conversation. It carries: an always-visible adjustment-
+ * feedback input, edit (opens the plan in the editor column for Monaco
+ * editing), reject, and approve.
+ *
+ * Feedback semantics (意见随按钮走): whatever the user types in the
+ * adjustment-feedback input rides along with whichever decision they make -
+ * 批准并执行 delivers it to the model as an adjustment instruction (execution
+ * incorporates it); 拒绝 sends it as the rejection reason (the model stays in
+ * plan mode and revises). An empty input behaves exactly like the legacy
+ * no-feedback flows. Pressing Enter in the input approves (with feedback).
  *
  * Editing flow: "编辑计划" opens the plan tab in the editor column (handled by
  * the parent via `onEditPlan`). Edits made there are staged into
@@ -25,10 +31,6 @@ import {
  * reads that draft back so the "已编辑" indicator + "批准(已编辑)" reflect the
  * editor's content. The user still has to press 批准 to submit - editing in
  * the editor never auto-approves.
- *
- * - Default (idle): a single compact row - "计划已就绪 · 请审阅" + [编辑] [拒绝]
- *   [批准并执行]. Takes one line, doesn't block reading the plan card.
- * - Rejecting: expands a reason input + confirm/cancel.
  *
  * Positioning: rendered inside the composer's width-constrained column (see
  * ChatPane), so it inherits the same `px-[var(--chat-gutter)]` +
@@ -51,30 +53,37 @@ export function PlanApprovalPrompt({
   /** Open the plan in the editor column (Monaco) for editing. The parent
    *  activates the plan tab; PlanViewer stages edits back into the store. */
   onEditPlan: () => void;
-  /** Approve, optionally with an edited plan text. */
-  onApprove: (editedPlan?: string) => void;
-  /** Reject with an optional feedback reason shown to the model. */
-  onReject: (reason?: string) => void;
+  /** Approve, optionally with an edited plan text and/or adjustment feedback. */
+  onApprove: (editedPlan?: string, feedback?: string) => void;
+  /** Reject with optional feedback — doubles as the reason shown to the model. */
+  onReject: (feedback?: string) => void;
 }) {
   // The edited draft is staged by PlanViewer's save action. Falls back to the
   // original plan when nothing has been edited yet.
   const draft = useSessionStore(
     (s) => s.planApprovalDraftBySession[sessionId] ?? plan,
   );
-  const [rejecting, setRejecting] = useState(false);
-  const [reason, setReason] = useState("");
+  const [feedback, setFeedback] = useState("");
 
   const edited = draft.trim() !== plan.trim();
+  const hasFeedback = feedback.trim().length > 0;
 
   const handleApprove = () => {
     // Only pass the edited text if it actually changed, so an untouched
-    // approve doesn't accidentally rewrite the plan.
-    onApprove(edited ? draft : undefined);
+    // approve doesn't accidentally rewrite the plan. Same for feedback: an
+    // empty input keeps the legacy stock-approval message.
+    onApprove(edited ? draft : undefined, hasFeedback ? feedback.trim() : undefined);
   };
 
   const handleReject = () => {
-    onReject(reason.trim() || undefined);
+    onReject(hasFeedback ? feedback.trim() : undefined);
   };
+
+  const hint = edited
+    ? "已编辑"
+    : hasFeedback
+      ? "意见将反馈给模型"
+      : "批准后将退出计划模式并开始执行";
 
   return (
     <div
@@ -89,22 +98,26 @@ export function PlanApprovalPrompt({
           <IconRocket size={14} className="shrink-0 text-accent" />
           <span className="font-semibold text-accent">计划已就绪 · 请审阅</span>
         </div>
-        <span className="shrink-0 text-[10px] text-content-subtle">
-          {edited ? "已编辑" : "批准后将退出计划模式并开始执行"}
-        </span>
+        <span className="shrink-0 text-[10px] text-content-subtle">{hint}</span>
       </div>
 
-      {/* Reject reason input (collapsible) */}
-      {rejecting && (
-        <Input
-          type="text"
-          value={reason}
-          onChange={(e) => setReason(e.target.value)}
-          autoFocus
-          placeholder="拒绝理由（可选，会反馈给 Claude）…"
-          className="mb-2.5 font-sans"
-        />
-      )}
+      {/* Adjustment-feedback input (always visible). The text rides along with
+          whichever decision the user makes - approve delivers it to the model
+          as an adjustment instruction, reject sends it as the reason. Enter
+          approves (mirrors QuestionPrompt's Enter-to-submit). */}
+      <Input
+        type="text"
+        value={feedback}
+        onChange={(e) => setFeedback(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && !e.shiftKey) {
+            e.preventDefault();
+            handleApprove();
+          }
+        }}
+        placeholder="计划调整意见(可选)— 随批准执行或作为拒绝理由反馈给模型…"
+        className="mb-2.5 font-sans"
+      />
 
       {/* Action footer */}
       <div className="flex items-center justify-between gap-2 border-t border-edge pt-2">
@@ -118,45 +131,30 @@ export function PlanApprovalPrompt({
           {edited ? "编辑计划（已编辑）" : "编辑计划"}
         </Button>
         <div className="flex items-center gap-1.5">
-          {rejecting ? (
-            <>
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => {
-                  setRejecting(false);
-                  setReason("");
-                }}
-              >
-                <IconX size={12} />
-                取消
-              </Button>
-              <Button variant="danger" size="sm" onClick={handleReject}>
-                <IconCheck size={12} />
-                确认拒绝
-              </Button>
-            </>
-          ) : (
-            <>
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => setRejecting(true)}
-              >
-                <IconX size={12} />
-                拒绝
-              </Button>
-              <Button
-                variant="primary"
-                size="sm"
-                onClick={handleApprove}
-                title={edited ? "批准并使用你编辑后的计划" : "批准该计划"}
-              >
-                <IconRocket size={12} />
-                {edited ? "批准(已编辑)" : "批准并执行"}
-              </Button>
-            </>
-          )}
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={handleReject}
+            title={hasFeedback ? "拒绝并把你的意见作为理由反馈给模型" : "拒绝计划"}
+          >
+            <IconX size={12} />
+            拒绝
+          </Button>
+          <Button
+            variant="primary"
+            size="sm"
+            onClick={handleApprove}
+            title={
+              edited
+                ? "批准并使用你编辑后的计划"
+                : hasFeedback
+                  ? "批准并执行,按你的调整意见执行"
+                  : "批准该计划"
+            }
+          >
+            <IconRocket size={12} />
+            {edited ? "批准(已编辑)" : "批准并执行"}
+          </Button>
         </div>
       </div>
     </div>

@@ -5,8 +5,9 @@ import { api } from "@renderer/lib/api.js";
 import { hexToTriplet, tripletToHex } from "@renderer/lib/colorUtils.js";
 import { useSessionStore, CHAT_FONT_SIZE_MIN, CHAT_FONT_SIZE_MAX, RIGHT_PANEL_FONT_SIZE_MIN, RIGHT_PANEL_FONT_SIZE_MAX } from "@renderer/stores/sessionStore.js";
 import { Button, Card, Select } from "@renderer/components/ui/index.js";
-import { IconRefresh } from "@renderer/lib/icons.js";
+import { IconRefresh, IconSun, IconMoon, IconDeviceDesktop } from "@renderer/lib/icons.js";
 import type { ThemeName } from "@contracts/theme";
+import type { ReactNode } from "react";
 import { PanelHeader } from "./PanelHeader.js";
 import { SettingRow } from "./SettingRow.js";
 import { FontSizeStepper } from "./FontSizeStepper.js";
@@ -65,10 +66,10 @@ const ACCENT_PRESETS: { name: string; triplet: string; hex: string }[] = [
   { name: "橙色", triplet: "234 88 12", hex: "#ea580c" }, // orange-600
 ];
 
-const THEME_OPTIONS: { value: ThemeName; label: string }[] = [
-  { value: "light", label: "浅色" },
-  { value: "dark", label: "深色" },
-  { value: "system", label: "跟随系统" },
+const THEME_OPTIONS: { value: ThemeName; label: string; icon: ReactNode }[] = [
+  { value: "light", label: "浅色", icon: <IconSun size={14} className="text-content-muted" /> },
+  { value: "dark", label: "深色", icon: <IconMoon size={14} className="text-content-muted" /> },
+  { value: "system", label: "跟随系统", icon: <IconDeviceDesktop size={14} className="text-content-muted" /> },
 ];
 
 export function AppearancePanel() {
@@ -141,9 +142,17 @@ export function AppearancePanel() {
           >
             <Select.Trigger id="setting-theme" className="min-w-[8rem]">
               <Select.Value>
-                {(val: ThemeName) =>
-                  THEME_OPTIONS.find((o) => o.value === val)?.label ?? "浅色"
-                }
+                {(val: ThemeName) => {
+                  const o =
+                    THEME_OPTIONS.find((x) => x.value === val) ??
+                    THEME_OPTIONS[0];
+                  return (
+                    <span className="flex items-center gap-1.5">
+                      {o.icon}
+                      {o.label}
+                    </span>
+                  );
+                }}
               </Select.Value>
             </Select.Trigger>
             <Select.Portal>
@@ -152,6 +161,7 @@ export function AppearancePanel() {
                   <Select.List>
                     {THEME_OPTIONS.map((o) => (
                       <Select.Item key={o.value} value={o.value}>
+                        {o.icon}
                         <Select.ItemText>{o.label}</Select.ItemText>
                       </Select.Item>
                     ))}

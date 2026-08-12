@@ -63,6 +63,8 @@ const api = {
       ipcRenderer.invoke(IPC.SESSION_ARCHIVE, input)) as RpcMap["session.archive"],
     rename: ((input) =>
       ipcRenderer.invoke(IPC.SESSION_RENAME, input)) as RpcMap["session.rename"],
+    pin: ((input) =>
+      ipcRenderer.invoke(IPC.SESSION_PIN, input)) as RpcMap["session.pin"],
   },
   setting: {
     get: ((input) =>

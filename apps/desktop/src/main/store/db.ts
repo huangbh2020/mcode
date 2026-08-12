@@ -98,6 +98,7 @@ function migrate(database: Database): void {
       permission_mode   TEXT NOT NULL,
       custom_model_id   TEXT,
       archived          INTEGER NOT NULL DEFAULT 0,
+      pinned_at         INTEGER,
       created_at        INTEGER NOT NULL,
       updated_at        INTEGER NOT NULL
     );
@@ -130,6 +131,10 @@ function migrate(database: Database): void {
   addColumnIfMissing(database, "sessions", "plan_draft", "TEXT");
   addColumnIfMissing(database, "sessions", "custom_model_id", "TEXT");
   addColumnIfMissing(database, "sessions", "archived", "INTEGER NOT NULL DEFAULT 0");
+  // Pin timestamp for project-scoped session pinning (NULL = not pinned).
+  // Nullable so unpinned rows carry no value; listByProject orders by it DESC
+  // (SQLite puts NULLs last in DESC) to float pinned sessions to the top.
+  addColumnIfMissing(database, "sessions", "pinned_at", "INTEGER");
   // Per-turn modified-files snapshot (the "本轮修改" card). JSON blob of
   // TurnFileEntry[]; null after a rewind or for sessions that never edited.
   addColumnIfMissing(database, "sessions", "turn_files", "TEXT");

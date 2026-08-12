@@ -8,6 +8,7 @@ import {
   ReorderProjectsSchema,
   DeleteSessionSchema,
   ArchiveSessionSchema,
+  PinSessionSchema,
   ProjectSessionsSchema,
   RenameSessionSchema,
   SessionSearchSchema,
@@ -121,6 +122,17 @@ export function registerProjectHandlers(ipcMain: IpcMain): void {
     const session = SessionRepo.get(input.id);
     if (!session) throw new Error(`session not found after rename: ${input.id}`);
     log.info(`session renamed: ${input.id} -> "${input.title}"`);
+    return { session };
+  });
+
+  // Pin/unpin a session within its project (pinned sessions sort to the top
+  // of the project's list). Mirrors the archive handler's shape.
+  ipcMain.handle(IPC.SESSION_PIN, (_evt, raw) => {
+    const input = PinSessionSchema.parse(raw);
+    SessionRepo.setPinned(input.id, input.pinned);
+    const session = SessionRepo.get(input.id);
+    if (!session) throw new Error(`session not found after pin: ${input.id}`);
+    log.info(`session ${input.pinned ? "pinned" : "unpinned"}: ${input.id}`);
     return { session };
   });
 }

@@ -4,7 +4,9 @@ import {
   PASTE_TAG_THRESHOLD_CHARS_MAX,
 } from "@renderer/stores/sessionStore.js";
 import { Select, Input } from "@renderer/components/ui/index.js";
+import { IconSquare, IconStack2, IconList, IconListDetails, IconGripHorizontal } from "@renderer/lib/icons.js";
 import type { ChatDensity, DisplayMode } from "@contracts/ipc";
+import type { ReactNode } from "react";
 import { SettingRow } from "./SettingRow.js";
 import { PanelHeader } from "./PanelHeader.js";
 import { SettingsSection } from "./SettingsSection.js";
@@ -23,15 +25,15 @@ import { TitleGenPanel } from "./TitleGenPanel.js";
  * sibling section — the outer space-y-4 keeps the two cards apart.
  */
 
-const DISPLAY_MODE_OPTIONS: { value: DisplayMode; label: string }[] = [
-  { value: "single", label: "单会话模式" },
-  { value: "tabs", label: "Tab 标签模式" },
+const DISPLAY_MODE_OPTIONS: { value: DisplayMode; label: string; icon: ReactNode }[] = [
+  { value: "single", label: "单会话模式", icon: <IconSquare size={14} className="text-content-muted" /> },
+  { value: "tabs", label: "Tab 标签模式", icon: <IconStack2 size={14} className="text-content-muted" /> },
 ];
 
-const DENSITY_OPTIONS: { value: ChatDensity; label: string }[] = [
-  { value: "compact", label: "紧凑" },
-  { value: "comfortable", label: "舒适" },
-  { value: "cozy", label: "宽松" },
+const DENSITY_OPTIONS: { value: ChatDensity; label: string; icon: ReactNode }[] = [
+  { value: "compact", label: "紧凑", icon: <IconList size={14} className="text-content-muted" /> },
+  { value: "comfortable", label: "舒适", icon: <IconListDetails size={14} className="text-content-muted" /> },
+  { value: "cozy", label: "宽松", icon: <IconGripHorizontal size={14} className="text-content-muted" /> },
 ];
 
 export function GeneralPanel() {
@@ -68,10 +70,17 @@ export function GeneralPanel() {
           >
             <Select.Trigger id="setting-displaymode" className="min-w-[10rem]">
               <Select.Value>
-                {(val: DisplayMode) =>
-                  DISPLAY_MODE_OPTIONS.find((o) => o.value === val)?.label ??
-                  "单会话模式"
-                }
+                {(val: DisplayMode) => {
+                  const o =
+                    DISPLAY_MODE_OPTIONS.find((x) => x.value === val) ??
+                    DISPLAY_MODE_OPTIONS[0];
+                  return (
+                    <span className="flex items-center gap-1.5">
+                      {o.icon}
+                      {o.label}
+                    </span>
+                  );
+                }}
               </Select.Value>
             </Select.Trigger>
             <Select.Portal>
@@ -80,6 +89,7 @@ export function GeneralPanel() {
                   <Select.List>
                     {DISPLAY_MODE_OPTIONS.map((o) => (
                       <Select.Item key={o.value} value={o.value}>
+                        {o.icon}
                         <Select.ItemText>{o.label}</Select.ItemText>
                       </Select.Item>
                     ))}
@@ -102,9 +112,17 @@ export function GeneralPanel() {
           >
             <Select.Trigger id="setting-chatdensity" className="min-w-[8rem]">
               <Select.Value>
-                {(val: ChatDensity) =>
-                  DENSITY_OPTIONS.find((o) => o.value === val)?.label ?? "舒适"
-                }
+                {(val: ChatDensity) => {
+                  const o =
+                    DENSITY_OPTIONS.find((x) => x.value === val) ??
+                    DENSITY_OPTIONS[1];
+                  return (
+                    <span className="flex items-center gap-1.5">
+                      {o.icon}
+                      {o.label}
+                    </span>
+                  );
+                }}
               </Select.Value>
             </Select.Trigger>
             <Select.Portal>
@@ -113,6 +131,7 @@ export function GeneralPanel() {
                   <Select.List>
                     {DENSITY_OPTIONS.map((o) => (
                       <Select.Item key={o.value} value={o.value}>
+                        {o.icon}
                         <Select.ItemText>{o.label}</Select.ItemText>
                       </Select.Item>
                     ))}

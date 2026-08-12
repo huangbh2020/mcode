@@ -78,15 +78,23 @@ export function totalProcessedTokensFromRawUsage(raw: RawClaudeUsage): number {
 
 /* ── window resolution (doc §4) ── */
 
-/** Heuristic fallback when the SDK doesn't report a window. Opus extended
- *  mode advertises 1M (the `[1M]` suffix); everything else ships 200k. */
+/** Heuristic fallback when the SDK doesn't report a window. Recognizes a 1M
+ *  context window from two model-id signals:
+ *   - the `[1m]` suffix appended by this app's own `with1MSuffix` when the
+ *     active role declares `supports1m` (DeepSeek-style gateways echo the
+ *     model id verbatim in `message.model`, so the suffix survives the round
+ *     trip); this is also the convention third-party gateways use to advertise
+ *     1M context (see docs/claude-context-usage-tracking.md).
+ *   - the literal substring `opus` (Opus extended mode advertises 1M).
+ *  Everything else ships 200k. */
 export function resolveContextWindowHeuristic(
   model?: string,
   configured?: ClaudeContextWindowTag,
 ): number {
   if (configured === "1m") return CLAUDE_CONTEXT_WINDOW_MAX_TOKENS["1m"];
   if (configured === "200k") return CLAUDE_CONTEXT_WINDOW_MAX_TOKENS["200k"];
-  if (model?.toLowerCase().includes("opus")) {
+  const m = model?.toLowerCase() ?? "";
+  if (m.includes("opus") || m.includes("[1m]")) {
     return CLAUDE_CONTEXT_WINDOW_MAX_TOKENS["1m"];
   }
   return CLAUDE_CONTEXT_WINDOW_MAX_TOKENS["200k"];
@@ -222,6 +230,7 @@ export function buildCompactSnapshot(opts: {
   postTokens?: number;
   lastKnown?: ContextSnapshot;
   model?: string;
+  configured?: ClaudeContextWindowTag;
 }): ContextSnapshot | undefined {
   const { postTokens, lastKnown } = opts;
   if (typeof postTokens !== "number" || postTokens <= 0) return undefined;
@@ -230,7 +239,7 @@ export function buildCompactSnapshot(opts: {
   // to the model heuristic when no prior snapshot exists (compaction at the
   // very start of a session - rare but possible).
   const maxTokens = lastKnown?.maxTokens
-    ?? resolveEffectiveContextWindow({ model: opts.model });
+    ?? resolveEffectiveContextWindow({ model: opts.model, configured: opts.configured });
 
   const usedTokens = Math.min(postTokens, maxTokens);
   const pct = round1(Math.min(100, (usedTokens / maxTokens) * 100));

@@ -77,6 +77,22 @@ interface TaskUpdatedEnvelope {
     is_backgrounded?: boolean;
   };
 }
+
+/** Envelope for the SDK's `api_retry` system message — emitted when an API
+ *  request fails with a retryable error (rate_limit / overloaded / server_error
+ *  / connection timeout) and the SDK's built-in retry loop will retry after
+ *  `retry_delay_ms`. The claude binary retries API errors internally; this
+ *  message is the visibility signal. Full shape in sdk.d.ts SDKAPIRetryMessage;
+ *  we forward only what we log. */
+interface ApiRetryEnvelope {
+  type: "system";
+  subtype: "api_retry";
+  attempt: number;
+  max_retries: number;
+  retry_delay_ms: number;
+  error_status: number | null;
+  error: string;
+}
 import {
   normalizeClaudeTokenUsage,
   mergeClaudeTokenUsageSnapshot,
@@ -285,6 +301,12 @@ interface AdapterState {
    *  closes — but we keep consuming the level signal so the wiring is intact
    *  if we need an authoritative "still working" check later.) */
   backgroundTaskIds: Set<string>;
+  /** True once any renderable assistant content (text / thinking / tool_use)
+   *  has been emitted to the renderer this turn. Read by the provider's
+   *  transport-retry wrapper: a retry is only safe while this is false — once
+   *  content has streamed, recreating the query + adapter would orphan the
+   *  partial output in the message stream. */
+  contentStarted: boolean;
 }
 
 /* ─── public export ────────────────────────────────────────────────── */
@@ -323,6 +345,13 @@ export class SdkMessageAdapter {
      *  recreated each turn, so without seeding a cross-turn TaskUpdate has
      *  no list to index into). */
     initialTodos: TodoUpdateEvent["todos"] = [],
+    /** User-declared context-window tag ("1m" / "200k"), resolved from the
+     *  active role's `supports1m` flag in the session's ApiConfig. Highest-
+     *  precedence input to window resolution — overrides the model-name
+     *  heuristic, so a 1M model still resolves to 1M even when the gateway
+     *  strips the `[1m]` suffix from `message.model`. `undefined` (official
+     *  Anthropic endpoint) lets the heuristic decide from the model name. */
+    private configured?: ClaudeContextWindowTag,
   ) {
     this.state = {
       blockMessageIds: new Map(),
@@ -338,7 +367,16 @@ export class SdkMessageAdapter {
       streamDeltaUsageCount: 0,
       turnDoneEmitted: false,
       backgroundTaskIds: new Set(),
+      contentStarted: false,
     };
+  }
+
+  /** True once the turn has streamed any assistant content (text / thinking /
+   *  tool_use) to the renderer. The provider's transport-retry wrapper reads
+   *  this to decide whether a crashed attempt is safe to retry — retrying
+   *  after content would duplicate / orphan the partial output. */
+  hasEmittedContent(): boolean {
+    return this.state.contentStarted;
   }
 
   /** Feed one SDKMessage through the normalization pipeline. */
@@ -373,6 +411,8 @@ export class SdkMessageAdapter {
           subtype: "background_tasks_changed";
           tasks: { task_id: string; task_type: string; description: string }[];
         });
+      } else if (subtype === "api_retry") {
+        this.handleApiRetry(sys as unknown as ApiRetryEnvelope);
       }
     } else if (type === "stream_event") {
       this.handleStreamEvent(m as SDKPartialAssistantMessage);
@@ -505,6 +545,7 @@ export class SdkMessageAdapter {
       postTokens: meta.post_tokens,
       lastKnown: this.state.lastKnownTokenUsage,
       model: this.state.lastKnownTokenUsage?.model,
+      configured: this.configured,
     });
     if (snapshot) {
       this.publishTokenUsageSnapshot(snapshot);
@@ -602,6 +643,24 @@ export class SdkMessageAdapter {
     this.state.backgroundTaskIds = new Set((m.tasks ?? []).map((t) => t.task_id));
   }
 
+  /** `api_retry`: the SDK's built-in API-level retry loop kicked in after a
+   *  retryable error (rate_limit / overloaded / server_error / connection
+   *  timeout). The binary retries internally with the delay it reports here;
+   *  we don't drive that loop — this is purely the visibility signal. Logged
+   *  so a long backoff isn't a silent hang in the main-process log, and so
+   *  triage can correlate a slow turn with upstream throttling.
+   *
+   *  The loading spinner already stays on (no turn.done is emitted while the
+   *  SDK retries), so the user sees the turn as still active. When retries
+   *  are exhausted the SDK emits `result{subtype:"error"}`, which handleResult
+   *  surfaces as a visible error block. */
+  private handleApiRetry(m: ApiRetryEnvelope): void {
+    this.ctx.log.warn(
+      `claude: API retry ${m.attempt}/${m.max_retries} after ${m.retry_delay_ms}ms ` +
+        `(error=${m.error} status=${m.error_status ?? "n/a"})`,
+    );
+  }
+
   /** Emit the turn.done event exactly once per turn. Both handleResult (when
    *  the result isn't held back) and flushFinal (deferred end) route through
    *  here so the guard can't be bypassed by a result message followed by a
@@ -673,6 +732,13 @@ export class SdkMessageAdapter {
 
       const delta = (ev as { delta?: { type?: string; text?: string; thinking?: string } }).delta;
       if (!delta) return;
+
+      // Any streamed text/thinking delta means assistant content has started
+      // flowing — the provider's transport-retry wrapper must NOT retry after
+      // this point (it would orphan the partial output).
+      if ((delta.type === "text_delta" && delta.text) || (delta.type === "thinking_delta" && delta.thinking)) {
+        this.state.contentStarted = true;
+      }
 
       if (delta.type === "text_delta" && delta.text) {
         if (!this.askUserQuestionAvailable) {
@@ -853,6 +919,9 @@ export class SdkMessageAdapter {
 
         if (this.state.emittedToolUse.has(b.id)) continue;
         this.state.emittedToolUse.add(b.id);
+        // A tool_use block is renderable assistant content — once emitted, the
+        // provider's transport-retry wrapper must not retry (would orphan it).
+        this.state.contentStarted = true;
 
         // Attach the tool to the message that narrated it. Claude's SDK
         // sends text and tool_use as SEPARATE assistant messages (one
@@ -1242,9 +1311,10 @@ export class SdkMessageAdapter {
    *  (per assistant response) and the turn-end fallback in path C.
    *
    *  `reportedWindow` is the SDK-reported ceiling from `modelUsage[model].
-   *  contextWindow`; `configured` is the user override (reserved for future
-   *  settings). Both feed `resolveEffectiveContextWindow`, which also applies
-   *  the never-downgrade rule via `state.lastKnownContextWindow`.
+   *  contextWindow`; `configured` comes from the adapter's turn-level flag
+   *  (resolved from the active role's `supports1m`). Both feed
+   *  `resolveEffectiveContextWindow`, which also applies the never-downgrade
+   *  rule via `state.lastKnownContextWindow`.
    *
    *  No-op when `usage` is absent or all-zero (`normalizeClaudeTokenUsage`
    *  returns `undefined`) — avoids emitting ghost "0 / 200k (0%)" snapshots. */
@@ -1252,7 +1322,6 @@ export class SdkMessageAdapter {
     usage: RawClaudeUsage | undefined,
     model: string | undefined,
     reportedWindow: number | undefined,
-    configured?: ClaudeContextWindowTag,
   ): void {
     if (!usage) return;
     const snapshot = normalizeClaudeTokenUsage(
@@ -1260,7 +1329,7 @@ export class SdkMessageAdapter {
       {
         reported: reportedWindow,
         lastKnown: this.state.lastKnownContextWindow,
-        configured,
+        configured: this.configured,
       },
     );
     if (!snapshot) return;
@@ -1333,7 +1402,7 @@ export class SdkMessageAdapter {
         if (plausible) {
           const accumulated = normalizeClaudeTokenUsage(
             accumulatedRaw,
-            { reported: reportedWindow, lastKnown: this.state.lastKnownContextWindow },
+            { reported: reportedWindow, lastKnown: this.state.lastKnownContextWindow, configured: this.configured },
           );
           if (accumulated) {
             const snapshot = buildSnapshotFromControlChannel(cc, accumulated);
@@ -1369,7 +1438,7 @@ export class SdkMessageAdapter {
 
     const accumulated = normalizeClaudeTokenUsage(
       accumulatedRaw,
-      { reported: reportedWindow, lastKnown: this.state.lastKnownContextWindow },
+      { reported: reportedWindow, lastKnown: this.state.lastKnownContextWindow, configured: this.configured },
     );
     if (accumulated) {
       const merged = mergeClaudeTokenUsageSnapshot(

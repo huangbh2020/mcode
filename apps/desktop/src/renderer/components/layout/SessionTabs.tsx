@@ -16,18 +16,18 @@ import {
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { cn } from "@renderer/lib/cn.js";
-import { IconX } from "@renderer/lib/icons.js";
+import { IconX, SpinnerIcon } from "@renderer/lib/icons.js";
 import { getProviderIcon } from "@renderer/lib/providerIcon.js";
 import { useSessionStore } from "@renderer/stores/sessionStore.js";
 import type { Session } from "@contracts/session";
 import { TabBarChevronButton, TabBarOverflowMenu } from "./TabBarChrome.js";
 
 /** Tab strip rendered along the top of the center pane in `tabs` display
- *  mode. Each open tab shows the session's title, a tiny running indicator
- *  (dot that pulses when the session has a turn in flight), and a close
- *  button. Clicking the tab body activates it; the × button removes it
- *  from the strip (the session's in-flight turn is NOT cancelled — see
- *  `closeTab` in the store).
+ *  mode. Each open tab shows the session's title, a running indicator
+ *  (spinner when the session has a turn in flight, static dot when idle),
+ *  and a close button. Clicking the tab body activates it; the × button
+ *  removes it from the strip (the session's in-flight turn is NOT
+ *  cancelled — see `closeTab` in the store).
  *
  *  Interaction model (VS Code / browser-style tab bar):
  *   - Drag a tab to reorder it (via @dnd-kit; a 6px activation distance
@@ -323,20 +323,20 @@ function SortableTab({
         const { Icon, color } = getProviderIcon(session?.providerId);
         return <Icon size={13} className={cn("shrink-0", color)} />;
       })()}
-      {/* Running indicator: solid dot when active+idle, pulsing when turn
-          in flight. Uses Tailwind's animate-pulse so the user can see at a
-          glance which background tabs are still working. */}
-      <span
-        aria-hidden
-        className={cn(
-          "inline-block h-1.5 w-1.5 shrink-0 rounded-full",
-          running
-            ? "bg-accent animate-pulse"
-            : isActive
-              ? "bg-accent/70"
-              : "bg-content-subtle/50",
-        )}
-      />
+      {/* Running indicator: spinner while a turn is in flight (matches the
+          app-wide loading-icon convention), static dot when idle. Lets the
+          user see at a glance which background tabs are still working. */}
+      {running ? (
+        <SpinnerIcon size={12} className="shrink-0 animate-spin text-accent" />
+      ) : (
+        <span
+          aria-hidden
+          className={cn(
+            "inline-block h-1.5 w-1.5 shrink-0 rounded-full",
+            isActive ? "bg-accent/70" : "bg-content-subtle/50",
+          )}
+        />
+      )}
       <span className="truncate">{title}</span>
       {/* Unread badge - shown on non-active tabs with pending unread events.
           Suppresses on hover so the close button has room; the badge clears
