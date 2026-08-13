@@ -182,6 +182,9 @@ const api = {
     /** Read a binary file as a base64 data URL (image preview). */
     readBinary: ((input) =>
       ipcRenderer.invoke(IPC.FILE_READ_BINARY, input)) as RpcMap["file.readBinary"],
+    /** OS dialog image picker → base64 images (composer 图片 button). */
+    pickImages: ((input) =>
+      ipcRenderer.invoke(IPC.FILE_PICK_IMAGES, input)) as RpcMap["file.pickImages"],
     /** List one level of a directory (non-recursive) for the file tree. */
     listDir: ((input) =>
       ipcRenderer.invoke(IPC.FILE_LIST_DIR, input)) as RpcMap["file.listDir"],
@@ -210,6 +213,12 @@ const api = {
   clipboardFile: {
     save: ((input) =>
       ipcRenderer.invoke(IPC.CLIPBOARD_SAVE_FILE, input)) as RpcMap["clipboard.saveFile"],
+    /** Copy an image data URL onto the OS clipboard (image lightbox 复制). */
+    writeImage: ((input) =>
+      ipcRenderer.invoke(
+        IPC.CLIPBOARD_WRITE_IMAGE,
+        input,
+      )) as RpcMap["clipboard.writeImage"],
   },
 
   /** Git operations for the Git panel. All paths must resolve inside a known

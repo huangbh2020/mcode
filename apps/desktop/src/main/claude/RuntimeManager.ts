@@ -210,7 +210,10 @@ class RuntimeManager {
   }
 
   /** Send a user message to the provider and stream events back. */
-  async sendTurn(session: Session, input: { prompt: string; cwd: string; skills?: string[] }): Promise<void> {
+  async sendTurn(
+    session: Session,
+    input: { prompt: string; cwd: string; skills?: string[]; images?: { data: string; mimeType: string }[] },
+  ): Promise<void> {
     const rt = this.sessions.get(session.id);
     if (!rt) {
       log.warn(`sendTurn: no runtime bound for session ${session.id}`);
@@ -304,6 +307,9 @@ class RuntimeManager {
       resumeProviderSessionId: rt.providerSessionId,
       apiConfig,
       skills: input.skills,
+      // User-attached images (base64 content blocks) — forwarded verbatim to
+      // the provider; each adapter maps them onto its SDK's image shape.
+      images: input.images,
       // Seed the adapter with the persisted todo list so that incremental
       // TaskUpdate(taskId=N) calls in this turn can resolve against tasks
       // created in earlier turns (the adapter is recreated fresh each turn).

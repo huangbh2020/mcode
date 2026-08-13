@@ -17,6 +17,7 @@ import {
   IconBolt,
   IconChevronRight,
   IconGripVertical,
+  IconPhoto,
 } from "@renderer/lib/icons.js";
 import { useSessionStore, EMPTY_MESSAGES, EMPTY_TODOS, EMPTY_SUBAGENTS, EMPTY_CHAT_QUEUE, EMPTY_ELEMENT_QUEUE, EMPTY_PROMPT_QUEUE, type Block, type ChatMessage, type TodoItem, type TurnMeta, type QueuedPrompt } from "@renderer/stores/sessionStore.js";
 import { useToastStore } from "@renderer/stores/toastStore.js";
@@ -24,6 +25,8 @@ import { api } from "@renderer/lib/api.js";
 import { useNow } from "@renderer/hooks/useNow.js";
 import type { SubagentSnapshot } from "@contracts/runtime";
 import type { FileSearchEntry } from "@contracts/ipc";
+import { prepareImageForSend } from "@renderer/lib/imageResize.js";
+import type { PromptImage } from "@renderer/stores/sessionStore.js";
 import {
   type ContentTag,
   appendUniqueFileTags,
@@ -79,6 +82,18 @@ function toBase64(bytes: Uint8Array): string {
   }
   return btoa(binary);
 }
+
+/** A staged (not-yet-sent) user image in the composer. Held as a full data
+ *  URL so the thumbnail chip renders without an extra read; normalized to a
+ *  sendable PromptImage by prepareImageForSend at send time. */
+interface PendingImage {
+  id: string;
+  name: string;
+  dataUrl: string;
+}
+
+/** Ceiling for staged images (matches the SendTurn contract's max 20). */
+const MAX_PENDING_IMAGES = 20;
 
 /** Preserve a user-typed message's single line breaks when rendering through
  *  Markdown: a lone "\n" is a soft break that markdown collapses to a space,
@@ -1037,6 +1052,9 @@ function ChatPaneForSession({ sessionId, isActive }: { sessionId: string; isActi
   // textarea so they don't bury the input area. Ephemeral per-turn UI
   // state (cleared on send). See lib/contentTag.ts for the promote rules.
   const [tags, setTags] = useState<ContentTag[]>([]);
+  // Staged user-attached images (paste / OS picker) — thumbnail chips above
+  // the editor, sent inline with the prompt as base64 content blocks.
+  const [pendingImages, setPendingImages] = useState<PendingImage[]>([]);
   // Whether a file-tree drag is currently hovering over the composer —
   // drives a highlight ring so the drop target is discoverable.
   const [dragOver, setDragOver] = useState(false);
@@ -1212,12 +1230,13 @@ function ChatPaneForSession({ sessionId, isActive }: { sessionId: string; isActi
   const recallEnabled =
     !textareaLocked && historyTexts.length > 0 && (value.trim() === "" || recallActive);
 
-  /** Whether the composer holds anything sendable (typed text or attachment
-   *  chips). Drives the send button's enablement AND the busy-state stop/send
-   *  toggle: while a turn is running, an empty composer keeps the stop button
-   *  (interrupt); the moment the user types, the button flips to send — which
-   *  enqueues the prompt into the 排队 chips instead of starting a new turn. */
-  const hasComposerContent = value.trim() !== "" || tags.length > 0;
+  /** Whether the composer holds anything sendable (typed text, attachment
+   *  chips, or staged images). Drives the send button's enablement AND the
+   *  busy-state stop/send toggle: while a turn is running, an empty composer
+   *  keeps the stop button (interrupt); the moment the user types, the button
+   *  flips to send — which enqueues the prompt into the 排队 chips instead of
+   *  starting a new turn. */
+  const hasComposerContent = value.trim() !== "" || tags.length > 0 || pendingImages.length > 0;
 
   // ── Composer draft persistence ──
   // The store's composerDraftBySession holds each thread's unsent input so it
@@ -1468,15 +1487,98 @@ function ChatPaneForSession({ sessionId, isActive }: { sessionId: string; isActi
   // with a toast instead of failing the IPC.
   const PASTE_FILE_MAX_BYTES = 50 * 1024 * 1024;
 
+  /** Stage an image (name + data URL) as a pending inline image — thumbnail
+   *  chip now, base64 content block at send. Shared by OS paste and the OS
+   *  image picker. */
+  const stageImage = useCallback((name: string, dataUrl: string) => {
+    setPendingImages((prev) => {
+      if (prev.length >= MAX_PENDING_IMAGES) {
+        useToastStore.getState().push({
+          kind: "warning",
+          title: "图片过多",
+          body: `最多附加 ${MAX_PENDING_IMAGES} 张图片`,
+        });
+        return prev;
+      }
+      return [
+        ...prev,
+        {
+          id: `img_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+          name,
+          dataUrl,
+        },
+      ];
+    });
+  }, []);
+
+  /** Read an image File into a data URL and stage it. Files without a MIME
+   *  type (older clipboard copies) default to image/png — prepareImageForSend
+   *  re-encodes via canvas anyway when the bytes aren't actually PNG. */
+  const stageImageFile = useCallback(
+    (file: File) => {
+      if (file.size > PASTE_FILE_MAX_BYTES) {
+        useToastStore.getState().push({
+          kind: "warning",
+          title: "图片过大",
+          body: `${file.name} 超过 50MB,未添加`,
+        });
+        return;
+      }
+      // Some clipboard sources (older image copies) yield an empty File.name —
+      // fall back to a name derived from the MIME type.
+      const name =
+        file.name || (file.type ? `pasted-${file.type.split("/").pop() || "image"}` : "pasted-image");
+      const mime = file.type.startsWith("image/") ? file.type : "image/png";
+      void file
+        .arrayBuffer()
+        .then((buf) => toBase64(new Uint8Array(buf)))
+        .then((data) => stageImage(name, `data:${mime};base64,${data}`))
+        .catch((err) => {
+          console.warn("stage pasted image failed:", err);
+        });
+    },
+    [stageImage],
+  );
+
+  /** OS image picker (file:pickImages — main reads the files itself). */
+  const handlePickImages = useCallback(async () => {
+    if (inputBlocked) return;
+    try {
+      const res = await api.file.pickImages({});
+      for (const img of res.images) {
+        stageImage(img.name, `data:${img.mimeType};base64,${img.data}`);
+      }
+      if (res.skipped.length > 0) {
+        useToastStore.getState().push({
+          kind: "warning",
+          title: "已跳过部分图片",
+          body: `${res.skipped.join("、")} 过大或不是支持的图片格式`,
+        });
+      }
+    } catch (err) {
+      console.warn("pickImages failed:", err);
+    }
+  }, [inputBlocked, stageImage]);
+
+  const removePendingImage = useCallback((id: string) => {
+    setPendingImages((prev) => prev.filter((img) => img.id !== id));
+  }, []);
+
   /** Paste of external files/images (copied from the OS — Finder, browser,
-   *  screenshot). The renderer can't write files (contextIsolation), so each
-   *  file's bytes go to main which materializes them under the OS temp dir;
-   *  the returned path becomes a normal FILE tag — the same top-left card as
-   *  an internally dragged file, and the agent reads the content itself (the
-   *  Read tool handles images via base64). The card shows the ORIGINAL file
-   *  name, not the random temp path. */
+   *  screenshot). IMAGES are staged as inline content blocks (base64 sent
+   *  straight to the model — the model never sees a temp path). Non-image
+   *  files keep the old flow: the renderer can't write files
+   *  (contextIsolation), so each file's bytes go to main which materializes
+   *  them under the OS temp dir; the returned path becomes a normal FILE tag
+   *  — the same top-left card as an internally dragged file, and the agent
+   *  reads the content itself. The card shows the ORIGINAL file name, not
+   *  the random temp path. */
   const handlePasteFiles = useCallback((files: File[]) => {
     for (const file of files) {
+      if (file.type.startsWith("image/")) {
+        stageImageFile(file);
+        continue;
+      }
       if (file.size > PASTE_FILE_MAX_BYTES) {
         useToastStore.getState().push({
           kind: "warning",
@@ -1509,7 +1611,7 @@ function ChatPaneForSession({ sessionId, isActive }: { sessionId: string; isActi
           console.warn("paste external file failed:", err);
         });
     }
-  }, []);
+  }, [stageImageFile]);
 
   // Recompute the "jump to bottom" button visibility from the live scroll
   // state. Returns true if the list is near the bottom (button hidden), false
@@ -1574,7 +1676,28 @@ function ChatPaneForSession({ sessionId, isActive }: { sessionId: string; isActi
     void virtualListRef.current?.scrollToEnd({ animated: true });
   };
 
-  const handleSend = () => {
+  /** Normalize the staged images into the send allowlist (downscale / JPEG
+   *  re-encode when oversized). Returns null (with a toast) when any image
+   *  fails — the caller aborts the send and keeps the composer intact. */
+  const preparePendingImages = useCallback(async (): Promise<PromptImage[] | undefined | null> => {
+    if (pendingImages.length === 0) return undefined;
+    const images: PromptImage[] = [];
+    for (const img of pendingImages) {
+      const res = await prepareImageForSend(img.dataUrl, img.name);
+      if (!res.ok) {
+        useToastStore.getState().push({
+          kind: "warning",
+          title: "图片未发送",
+          body: res.error,
+        });
+        return null;
+      }
+      images.push(res.image);
+    }
+    return images;
+  }, [pendingImages]);
+
+  const handleSend = async () => {
     // Serialize the editor: text has skill pills inlined as `/name` at their
     // positions; skillNames records which pills were embedded.
     const { text: editorText, skillNames } = editorRef.current?.serialize() ?? {
@@ -1582,16 +1705,22 @@ function ChatPaneForSession({ sessionId, isActive }: { sessionId: string; isActi
       skillNames: [],
     };
     const text = editorText.trim();
-    // Nothing to send if both the editor and the tag list are empty.
-    if (!text && tags.length === 0) return;
+    // Nothing to send if the editor, tag list, and staged images are all empty.
+    if (!text && tags.length === 0 && pendingImages.length === 0) return;
     // Don't allow sending while a turn (or a backgrounded subagent from a
     // prior turn) is still in flight — the stop button is the only valid
     // action in that state.
     if (sessionBusy) return;
     // Compose the final prompt: editor text (with `/name` inline) + each tag's
-    // content as a delimited block (see composePromptWithTags).
+    // content as a delimited block (see composePromptWithTags). An image-only
+    // send yields an empty prompt (the images ARE the prompt).
     const prompt = composePromptWithTags(text, tags);
-    if (!prompt) return;
+    if (!prompt && pendingImages.length === 0) return;
+    // Normalize the staged images into the send allowlist (downscale / JPEG
+    // re-encode when oversized). A failed image aborts the send and keeps the
+    // composer intact — the toast explains which one and why.
+    const images = await preparePendingImages();
+    if (images === null) return;
     // Forward the tags as attachments so the sent user message keeps the
     // same chip-card presentation in the stream as it had in the composer.
     // displayText = just the editor text; the attachment content is shown
@@ -1610,36 +1739,42 @@ function ChatPaneForSession({ sessionId, isActive }: { sessionId: string; isActi
     // stream. A blocked send (e.g. the "尚未配置模型" dialog raised inside
     // sendPrompt) must leave the typed text + tags intact so nothing is lost
     // while the user goes to configure a model.
-    void sendPrompt(
+    const sent = await sendPrompt(
       prompt,
       attachments.length > 0 ? attachments : undefined,
       attachments.length > 0 ? text : undefined,
       skillNames.length > 0 ? skillNames : undefined,
-    ).then((sent) => {
-      if (!sent) return;
-      editorRef.current?.clear();
-      setValue("");
-      setTags([]);
-      setOpenTagId(null);
-      setAnchorRect(null);
-    });
+      images,
+    );
+    if (!sent) return;
+    editorRef.current?.clear();
+    setValue("");
+    setTags([]);
+    setPendingImages([]);
+    setOpenTagId(null);
+    setAnchorRect(null);
   };
 
   /** Queue the typed prompt while a turn is running, instead of sending it.
-   *  Mirrors handleSend's payload assembly (prompt + attachments + displayText)
-   *  so a drained queue item flows through the normal sendPrompt path and the
-   *  user message looks identical to a live send. No-op when not busy. */
-  const handleEnqueue = () => {
+   *  Mirrors handleSend's payload assembly (prompt + attachments + displayText
+   *  + images) so a drained queue item flows through the normal sendPrompt
+   *  path and the user message looks identical to a live send. No-op when not
+   *  busy. */
+  const handleEnqueue = async () => {
     const { text: editorText, skillNames } = editorRef.current?.serialize() ?? {
       text: value.trim(),
       skillNames: [],
     };
     const text = editorText.trim();
-    if (!text && tags.length === 0) return;
+    if (!text && tags.length === 0 && pendingImages.length === 0) return;
     // Only meaningful while busy — when idle, Enter/click routes to handleSend.
     if (!sessionBusy) return;
     const prompt = composePromptWithTags(text, tags);
-    if (!prompt) return;
+    if (!prompt && pendingImages.length === 0) return;
+    // Downsize the images NOW (not at drain time) so the queue holds only
+    // sendable payloads.
+    const images = await preparePendingImages();
+    if (images === null) return;
     const attachments = tags.map((t) => ({
       preview: t.preview,
       content: t.content,
@@ -1651,19 +1786,22 @@ function ChatPaneForSession({ sessionId, isActive }: { sessionId: string; isActi
       displayText: text,
       attachments: attachments.length > 0 ? attachments : undefined,
       skillNames: skillNames.length > 0 ? skillNames : undefined,
+      images: images ?? undefined,
     });
     editorRef.current?.clear();
     setValue("");
     setTags([]);
+    setPendingImages([]);
     setOpenTagId(null);
     setAnchorRect(null);
   };
 
   /** Restore a queued prompt back into the composer for editing: fill the
    *  editor with its displayText, rebuild attachment tags from its stored
-   *  attachments, then remove it from the queue. Skill pills (/commands)
-   *  can't be restored (only their plain text survives in displayText), so
-   *  the user re-types those — same constraint as editAndResendMessage. */
+   *  attachments and staged-image chips from its stored images, then remove
+   *  it from the queue. Skill pills (/commands) can't be restored (only their
+   *  plain text survives in displayText), so the user re-types those — same
+   *  constraint as editAndResendMessage. */
   const handleEditQueuedPrompt = (item: QueuedPrompt) => {
     editorRef.current?.setText(item.displayText);
     if (item.attachments && item.attachments.length > 0) {
@@ -1678,6 +1816,15 @@ function ChatPaneForSession({ sessionId, isActive }: { sessionId: string; isActi
     } else {
       setTags([]);
     }
+    setPendingImages(
+      item.images && item.images.length > 0
+        ? item.images.map((img, i) => ({
+            id: `reedit-img-${item.id}-${i}`,
+            name: `图片 ${i + 1}`,
+            dataUrl: `data:${img.mimeType};base64,${img.data}`,
+          }))
+        : [],
+    );
     removeQueuedPrompt(sessionId, item.id);
     setExpandedQueueId(null);
     requestAnimationFrame(() => editorRef.current?.focus());
@@ -2376,6 +2523,31 @@ function ChatPaneForSession({ sessionId, isActive }: { sessionId: string; isActi
                 ))}
               </div>
             )}
+            {pendingImages.length > 0 && (
+              <div className="flex flex-wrap gap-1.5 px-2 pt-2">
+                {pendingImages.map((img) => (
+                  <div
+                    key={img.id}
+                    className="group relative h-14 w-14 shrink-0 overflow-hidden rounded-lg border border-edge bg-surface"
+                    title={img.name}
+                  >
+                    <img
+                      src={img.dataUrl}
+                      alt={img.name}
+                      className="h-full w-full object-cover"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => removePendingImage(img.id)}
+                      aria-label={`移除图片 ${img.name}`}
+                      className="absolute right-0.5 top-0.5 hidden h-5 w-5 items-center justify-center rounded-full bg-black/60 text-white transition-colors hover:bg-black/80 group-hover:flex"
+                    >
+                      <IconX size={12} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
             <ComposerEditor
               ref={editorRef}
               editable={!textareaLocked}
@@ -2384,7 +2556,7 @@ function ChatPaneForSession({ sessionId, isActive }: { sessionId: string; isActi
                   ? "Claude is working…"
                   : sessionBusy
                     ? "排队输入…  (Enter 加入队列)"
-                    : "发送消息…  (@ 引用文件 · / 命令)"
+                    : "发送消息…  (@ 引用文件 · / 命令 · 粘贴图片)"
               }
               onChange={handleChange}
               onEnter={handleEnter}
@@ -2396,7 +2568,7 @@ function ChatPaneForSession({ sessionId, isActive }: { sessionId: string; isActi
               onPasteFiles={handlePasteFiles}
               className={cn(
                 "px-3 pt-2.5 text-sm leading-relaxed text-content",
-                tags.length > 0 && "pt-1.5",
+                (tags.length > 0 || pendingImages.length > 0) && "pt-1.5",
               )}
             />
             <div className="composer-action-row flex flex-wrap items-center justify-between gap-2 px-2.5 pb-2 pt-1.5">
@@ -2414,6 +2586,20 @@ function ChatPaneForSession({ sessionId, isActive }: { sessionId: string; isActi
                   )}
                 >
                   <IconPaperclip size={18} />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void handlePickImages()}
+                  disabled={inputBlocked}
+                  title="添加图片"
+                  aria-label="添加图片"
+                  className={cn(
+                    "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-xl text-content-muted transition-all duration-150 ease-out",
+                    "hover:scale-110 hover:bg-accent/10 hover:text-accent active:scale-95",
+                    "disabled:scale-100 disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-content-muted disabled:hover:scale-100",
+                  )}
+                >
+                  <IconPhoto size={18} />
                 </button>
                 <ComposerToolbar sessionId={sessionId} />
                 {/* Narrow-mode entry: hidden in wide mode (CSS), replaces the chip

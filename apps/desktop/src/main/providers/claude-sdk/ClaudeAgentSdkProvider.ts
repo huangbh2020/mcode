@@ -7,7 +7,7 @@
  */
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
-import type { Options, CanUseTool, OnUserDialog } from "@anthropic-ai/claude-agent-sdk";
+import type { Options, CanUseTool, OnUserDialog, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import type {
   AgentProvider,
   StartTurnRequest,
@@ -30,6 +30,8 @@ import {
   normalizeToolFilePath,
 } from "@main/lib/fileSnapshot.js";
 import { resolveSdkBinaryPath } from "./sdkBinaryPath.js";
+import { resolveGitBash } from "@main/lib/binaryResolve.js";
+import { normalizeBashCommand } from "@main/lib/msysPath.js";
 import {
   browserList,
   browserNavigate,
@@ -52,6 +54,45 @@ async function loadQuery(): Promise<typeof import("@anthropic-ai/claude-agent-sd
     queryFn = sdk.query;
   }
   return queryFn;
+}
+
+/** Anthropic image content-block media-type allowlist — mirrors
+ *  SendTurnImageSchema.mimeType (the zod enum already restricts to this set). */
+type ImageMediaType = "image/jpeg" | "image/png" | "image/gif" | "image/webp";
+
+/**
+ * Build the SDK `prompt` argument for a turn. Plain string for text-only
+ * turns (the common case — zero behavior change). When the user attached
+ * images, returns a fresh AsyncIterable yielding ONE user message whose
+ * content is the text block followed by the base64 image blocks — the same
+ * inline-encoding the Claude Code CLI uses for user-attached images (the
+ * harness encodes bytes into the request; the model never sees a filesystem
+ * path). A new iterable is created per call because the transport-retry path
+ * needs a replayable source after recreating the query.
+ */
+function buildPromptInput(req: StartTurnRequest): string | AsyncIterable<SDKUserMessage> {
+  const images = req.images;
+  if (!images || images.length === 0) return req.prompt;
+
+  const content: (
+    | { type: "text"; text: string }
+    | { type: "image"; source: { type: "base64"; media_type: ImageMediaType; data: string } }
+  )[] = [];
+  // Image-only turns send no text block (the images still reach the model).
+  if (req.prompt.trim()) content.push({ type: "text", text: req.prompt });
+  for (const img of images) {
+    content.push({
+      type: "image",
+      source: { type: "base64", media_type: img.mimeType as ImageMediaType, data: img.data },
+    });
+  }
+  return (async function* () {
+    yield {
+      type: "user",
+      message: { role: "user", content },
+      parent_tool_use_id: null,
+    } satisfies SDKUserMessage;
+  })();
 }
 
 // `createSdkMcpServer` builds an in-process MCP server that surfaces custom
@@ -441,6 +482,20 @@ export class ClaudeAgentSdkProvider implements AgentProvider {
       options.env = { ...process.env, CLAUDE_CONFIG_DIR: MCODE_CONFIG_DIR };
     }
 
+    // Bash tool shell: force Git Bash when one is resolvable. claude.exe's own
+    // Windows bash detection can fall back to WSL's System32\bash.exe (or
+    // PowerShell), neither of which understands the `/d/...`, `/mnt/d/...`, or
+    // `D:\...` paths the model emits. Git Bash's MSYS runtime converts them
+    // natively, and the canUseTool Bash branch below normalizes the remaining
+    // dialects to `D:/...` form. Only set when a real Git Bash is found;
+    // otherwise leave the SDK's default resolution untouched.
+    if (process.platform === "win32") {
+      const gitBash = resolveGitBash();
+      if (gitBash) {
+        options.env = { ...options.env, CLAUDE_CODE_GIT_BASH_PATH: gitBash };
+      }
+    }
+
     // NOTE: we do NOT set `settingSources` here. The default
     // ["user","project","local"] is safe because CLAUDE_CONFIG_DIR points at
     // ~/.mcode - the cc-switch-controlled ~/.claude/settings.json is never
@@ -613,6 +668,26 @@ export class ClaudeAgentSdkProvider implements AgentProvider {
         }
       }
 
+      // --- Bash command path-dialect normalization ---
+      // The model emits Git Bash `/d/...` and WSL `/mnt/d/...` paths inside
+      // bash commands. Only Git Bash understands `/d/...` (MSYS conversion);
+      // neither dialect works in PowerShell or WSL bash. Rewrite both to
+      // native `D:/...` form so the command succeeds in whatever shell the
+      // SDK resolves. The normalized command rides back via `updatedInput`
+      // (same mechanism as the file-path guard above) — the approval dialog
+      // also shows the corrected command. Backslash-native paths (`D:\...`)
+      // are left alone; those are fixed by steering the shell to Git Bash
+      // (CLAUDE_CODE_GIT_BASH_PATH, see startTurn).
+      if (toolName === "Bash") {
+        const raw = (input as { command?: unknown }).command;
+        if (typeof raw === "string" && raw.length > 0) {
+          const normalized = normalizeBashCommand(raw);
+          if (normalized !== raw) {
+            effectiveInput = { ...input, command: normalized };
+          }
+        }
+      }
+
       // Standard tool approval. Before prompting the user, check two
       // host-side gates so the change takes effect immediately:
       //  (1) "always allow" — the user previously granted this tool with
@@ -772,7 +847,7 @@ export class ClaudeAgentSdkProvider implements AgentProvider {
     const browserServer = await buildBrowserMcpServer(req.cwd, ctx, req.sessionId, req.turnNumber);
     options.mcpServers = { [BROWSER_MCP_SERVER]: browserServer };
 
-    const q = (await loadQuery())({ prompt: req.prompt, options });
+    const q = (await loadQuery())({ prompt: buildPromptInput(req), options });
 
     // Resolve the user-declared context-window tag from the active role's
     // `supports1m` flag. `resolveActiveModel` appends a `[1m]` suffix exactly
@@ -856,7 +931,7 @@ export class ClaudeAgentSdkProvider implements AgentProvider {
               // (ac) is shared, so a user stop still cancels the retried
               // attempt. options.resume re-attaches to the same SDK session
               // so the conversation context carries over.
-              activeQuery = (await loadQuery())({ prompt: req.prompt, options });
+              activeQuery = (await loadQuery())({ prompt: buildPromptInput(req), options });
               activeAdapter = new SdkMessageAdapter(
                 ctx,
                 req.sessionId,

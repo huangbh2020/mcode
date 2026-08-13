@@ -731,13 +731,14 @@ const BlockView = memo(function BlockView({
     }
 
     case "image":
-      // An agent-captured screenshot (browser_screenshot), rendered inline next
-      // to its tool_use card as a compact thumbnail. Click opens a fullscreen
-      // lightbox (Dialog-based) for full-size inspection.
+      // An image block: either an agent-captured screenshot (browser_screenshot,
+      // tied to its tool_use card) or a user-attached image (standalone on the
+      // user message). Rendered inline as a compact thumbnail; click opens a
+      // fullscreen lightbox (Dialog-based) for full-size inspection.
       return (
         <ImageWithPreview
           src={`data:${block.mimeType};base64,${block.data}`}
-          alt="浏览器截图"
+          alt={block.toolCallId ? "浏览器截图" : "用户图片"}
           className="my-1 w-full max-w-[420px]"
         />
       );

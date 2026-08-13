@@ -21,7 +21,7 @@
  *  - `file:rename`    — in-place rename, same parent dir (file-tree 重命名)
  */
 import type { IpcMain } from "electron";
-import { app, shell } from "electron";
+import { app, clipboard, nativeImage, shell } from "electron";
 import { readFile, writeFile, readdir, mkdir, rename, access } from "node:fs/promises";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import {
@@ -36,6 +36,7 @@ import {
   FileRenameSchema,
   FileGrepSchema,
   ClipboardSaveFileSchema,
+  ClipboardWriteImageSchema,
 } from "@contracts/ipc";
 import type { FileSearchEntry, FileTreeEntry, FileGrepEntry } from "@contracts/ipc";
 import { ProjectRepo } from "@main/store/repositories.js";
@@ -595,6 +596,30 @@ export function registerFileHandlers(ipcMain: IpcMain): void {
     } catch (err) {
       const msg = (err as Error).message;
       log.warn(`clipboard.saveFile failed: ${msg}`);
+      return { ok: false, error: msg };
+    }
+  });
+
+  /* ── clipboard:writeImage — copy an image data URL onto the OS clipboard.
+     The renderer's navigator.clipboard can't reliably write images under
+     contextIsolation, so main decodes the data URL into a nativeImage and
+     calls clipboard.writeImage (which handles the PNG/JPEG serialization per
+     platform). Schema already constrains input to `data:image/...`; an empty
+     nativeImage (undecodable payload) degrades to ok:false instead of
+     silently clobbering the clipboard. */
+  ipcMain.handle(IPC.CLIPBOARD_WRITE_IMAGE, async (_evt, raw) => {
+    const input = ClipboardWriteImageSchema.parse(raw);
+    try {
+      const image = nativeImage.createFromDataURL(input.dataUrl);
+      if (image.isEmpty()) {
+        log.warn("clipboard.writeImage failed: data URL decoded to an empty image");
+        return { ok: false, error: "图片数据无法解码" };
+      }
+      clipboard.writeImage(image);
+      return { ok: true };
+    } catch (err) {
+      const msg = (err as Error).message;
+      log.warn(`clipboard.writeImage failed: ${msg}`);
       return { ok: false, error: msg };
     }
   });

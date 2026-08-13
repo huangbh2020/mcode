@@ -53,6 +53,7 @@ import type { ProviderContext } from "@contracts/provider";
 import type { PermissionMode } from "@contracts/runtime";
 import { normalizeToolFilePath } from "@main/lib/fileSnapshot.js";
 import { getFileSnapshot } from "@main/lib/fileSnapshotRegistry.js";
+import { normalizeBashCommand } from "@main/lib/msysPath.js";
 import { guardBashCommand, expandTilde } from "./bashWriteGuard.js";
 import {
   parseQuestions,
@@ -252,7 +253,18 @@ function registerToolCallGuard(
       const input = event.input as { command?: unknown };
       const command = input.command;
       if (typeof command === "string" && command.length > 0) {
-        const denial = guardBashCommand(cwd, command, strict);
+        // Normalize Git Bash `/d/...` and WSL `/mnt/d/...` dialects to native
+        // `D:/...` BEFORE the guard: (1) the rewritten command is what actually
+        // executes (event.input is the shared ref, same as write/edit), so the
+        // command succeeds in Git Bash / PowerShell / cmd alike; (2) the write
+        // targets extracted by guardBashCommand then resolve as real Windows
+        // paths — `> /d/workspace/x.txt` was previously DENIED as out-of-project
+        // because `/d/` resolved to a garbage root-relative folder.
+        const normalized = normalizeBashCommand(command);
+        if (normalized !== command) {
+          input.command = normalized;
+        }
+        const denial = guardBashCommand(cwd, normalized, strict);
         if (denial) {
           return { block: true, reason: denial };
         }

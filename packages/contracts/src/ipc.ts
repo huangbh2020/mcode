@@ -463,10 +463,25 @@ export const StartSessionSchema = z.object({
 });
 export type StartSessionInput = z.infer<typeof StartSessionSchema>;
 
+/** One user-attached image sent inline with the turn (base64, no data: prefix).
+ *  Media types match the Anthropic image-block allowlist (jpeg/png/gif/webp) —
+ *  the Pi provider accepts the same values. The 6M-char cap keeps the decoded
+ *  bytes under Anthropic's ~5MB-per-image API limit. */
+export const SendTurnImageSchema = z.object({
+  /** Base64-encoded image bytes (no data: prefix). */
+  data: z.string().min(1).max(6_000_000),
+  mimeType: z.enum(["image/jpeg", "image/png", "image/gif", "image/webp"]),
+});
+export type SendTurnImage = z.infer<typeof SendTurnImageSchema>;
+
 export const SendTurnSchema = z.object({
   sessionId: z.string(),
   prompt: z.string(),
   attachments: z.array(z.string()).optional(),
+  /** User-attached images inlined into the provider request as base64 content
+   *  blocks (NOT paths — the model server can't read the local filesystem).
+   *  Sent alongside `prompt`; an image-only turn passes an empty prompt. */
+  images: z.array(SendTurnImageSchema).max(20).optional(),
   /** Override session-scoped settings for this turn (reflects current UI state). */
   model: z.string().optional(),
   effort: z.string().optional(),
@@ -1001,6 +1016,24 @@ export const FileReadBinarySchema = z.object({
 });
 export type FileReadBinaryInput = z.infer<typeof FileReadBinarySchema>;
 
+/** Open the OS file dialog for image selection and return the files as base64.
+ *  Main reads the files itself (the renderer can't read arbitrary paths under
+ *  contextIsolation). A user-driven dialog is explicit consent, so no
+ *  project-root guard applies — same trust level as `clipboard.saveFile`.
+ *  Individual files above PICK_IMAGE_MAX_BYTES (main-side) are skipped; the
+ *  renderer additionally downsizes before sending (see imageResize.ts). */
+export const PickImagesSchema = z.object({});
+export type PickImagesInput = z.infer<typeof PickImagesSchema>;
+
+/** One image read from the user's file dialog. `data` is base64 without the
+ *  `data:` prefix; `mimeType` is the SendTurn allowlist (jpeg/png/gif/webp). */
+export interface PickedImage {
+  /** Original file name (display only). */
+  name: string;
+  data: string;
+  mimeType: SendTurnImage["mimeType"];
+}
+
 /** Save a file pasted from the OS clipboard (external image/file — copied in
  *  Finder, a browser, or a screenshot) to a temp path the agent can read.
  *  Bytes travel as base64 (matches the existing binary patterns); main
@@ -1022,6 +1055,23 @@ export const ClipboardSaveFileResultSchema = z.object({
   error: z.string().optional(),
 });
 export type ClipboardSaveFileResult = z.infer<typeof ClipboardSaveFileResultSchema>;
+
+/** Copy an image (a `data:image/...` URL, e.g. from an agent screenshot) onto
+ *  the OS clipboard. The renderer's `navigator.clipboard` can't reliably write
+ *  images, so main decodes the data URL into a nativeImage and calls
+ *  `clipboard.writeImage`. The data URL scheme is validated here — main only
+ *  trusts `data:image/` payloads, never remote URLs. */
+export const ClipboardWriteImageSchema = z.object({
+  /** Full `data:image/<mime>;base64,...` URL of the image to copy. */
+  dataUrl: z.string().regex(/^data:image\/[a-z0-9.+-]+;base64,/i).max(80_000_000),
+});
+export type ClipboardWriteImageInput = z.infer<typeof ClipboardWriteImageSchema>;
+
+export const ClipboardWriteImageResultSchema = z.object({
+  ok: z.boolean(),
+  error: z.string().optional(),
+});
+export type ClipboardWriteImageResult = z.infer<typeof ClipboardWriteImageResultSchema>;
 
 /** One entry returned by `file.listDir`. `path` is the absolute filesystem
  *  path (already validated to sit inside a project root); `name` is the base
@@ -2299,8 +2349,12 @@ export interface RpcMap {
   "file.readFile": (input: FileReadInput) => Promise<{ content: string }>;
   /** Read a binary file as a base64 data URL (image preview). Same path guard. */
   "file.readBinary": (input: FileReadBinaryInput) => Promise<{ dataUrl: string }>;
+  /** OS dialog image picker → base64 images (composer 图片 button). */
+  "file.pickImages": (input: PickImagesInput) => Promise<{ images: PickedImage[]; skipped: string[] }>;
   /** Persist a clipboard-pasted external file to a temp path (composer paste). */
   "clipboard.saveFile": (input: ClipboardSaveFileInput) => Promise<ClipboardSaveFileResult>;
+  /** Copy an image data URL onto the OS clipboard (image lightbox 复制). */
+  "clipboard.writeImage": (input: ClipboardWriteImageInput) => Promise<ClipboardWriteImageResult>;
   /** List one level of a directory (non-recursive), scoped to a project root. */
   "file.listDir": (input: FileListDirInput) => Promise<{ entries: FileTreeEntry[] }>;
   /** Recursive file search under a project root (composer @ / add-context). */
@@ -2533,8 +2587,12 @@ export const IPC = {
   FILE_READ: "file:readFile",
   // File read as base64 data URL (image preview)
   FILE_READ_BINARY: "file:readBinary",
+  // OS dialog image picker → base64 images (composer 图片 button)
+  FILE_PICK_IMAGES: "file:pickImages",
   // Clipboard-pasted external file → temp path (composer paste)
   CLIPBOARD_SAVE_FILE: "clipboard:saveFile",
+  // Image data URL → OS clipboard (image lightbox 复制)
+  CLIPBOARD_WRITE_IMAGE: "clipboard:writeImage",
   // File tree listing + writing (P4 IDE right panel)
   FILE_LIST_DIR: "file:listDir",
   FILE_SEARCH: "file:search",

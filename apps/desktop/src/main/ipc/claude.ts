@@ -126,6 +126,7 @@ export function registerClaudeHandlers(ipcMain: IpcMain): void {
       prompt: input.prompt,
       cwd: project.path,
       skills: input.skills,
+      images: input.images,
     });
     // Background auto-title generation: on the first user message, fire a
     // one-shot LLM call to produce a short Chinese title and overwrite the

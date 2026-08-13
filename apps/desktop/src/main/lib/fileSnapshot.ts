@@ -27,6 +27,7 @@
 import { mkdir, readFile, unlink, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, relative, resolve } from "node:path";
 import type { TurnFileEntry } from "@contracts/runtime";
+import { msysToWindowsPath } from "@main/lib/msysPath.js";
 
 /** Internal record per snapshotted file. */
 interface FileRecord {
@@ -245,13 +246,15 @@ export function getToolFilePath(toolName: string, input: unknown): string {
 }
 
 /** Normalize a file path coming out of a file-mutating tool input:
- *  fix the WSL-path footgun and classify it relative to the project root.
+ *  fix the WSL/MSYS-path footguns and classify it relative to the project
+ *  root.
  *
- *  Claude occasionally emits `/mnt/<drive>/...` (WSL-style) paths even on
- *  native Windows — the notation is baked into its training data. On Windows
- *  `path.resolve()` treats such a path as root-relative on the current drive,
- *  so `/mnt/d/foo.md` would silently land in a garbage `D:\mnt\d\foo.md`
- *  folder. We translate it to `D:\foo.md` first, then resolve against cwd.
+ *  Claude occasionally emits `/mnt/<drive>/...` (WSL-style) or `/d/...`
+ *  (Git Bash-style) paths even on native Windows — both notations are baked
+ *  into its training data. On Windows `path.resolve()` treats such a path as
+ *  root-relative on the current drive, so `/mnt/d/foo.md` would silently land
+ *  in a garbage `D:\mnt\d\foo.md` folder. We translate both dialects to
+ *  native paths first, then resolve against cwd.
  *
  *  Returns `{ absPath, insideProject }`:
  *    - absPath: the absolute path the write should actually target (the
@@ -262,9 +265,10 @@ export function normalizeToolFilePath(
   cwd: string,
   filePath: string,
 ): { absPath: string; insideProject: boolean } | null {
-  // WSL mount notation → native Windows path: /mnt/d/foo → D:\foo.
-  const wsl = /^\/mnt\/([a-zA-Z])\/(.*)$/.exec(filePath);
-  const win = wsl ? `${wsl[1].toUpperCase()}:\\${wsl[2].replace(/\//g, "\\")}` : filePath;
+  // WSL/MSYS dialect → native Windows path: /mnt/d/foo → D:\foo, /d/foo →
+  // D:/foo (shared with the Pi read-tool override and the bash-command
+  // normalizer, so every path check agrees on the same translation).
+  const win = msysToWindowsPath(filePath);
   let abs: string;
   try {
     abs = resolve(cwd, win);

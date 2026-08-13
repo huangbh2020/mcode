@@ -118,6 +118,12 @@ export interface StartTurnRequest {
    *  screenshot directories. Optional — providers that don't need it ignore
    *  it. */
   turnNumber?: number;
+  /** User-attached images to send inline with the prompt (base64, no data:
+   *  prefix). Provider-neutral: Claude maps mimeType → ImageBlockParam.
+   *  media_type (Anthropic allowlist), Pi passes it straight through as
+   *  ImageContent.mimeType. Empty/absent = text-only turn (the prompt string
+   *  may still be empty for an image-only send). */
+  images?: { data: string; mimeType: string }[];
 }
 
 /** Approval request passed from provider → host (for canUseTool-style callbacks). */

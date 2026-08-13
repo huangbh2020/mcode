@@ -181,7 +181,7 @@ function buildComponents(
     const isInline = !isFencedCode(className);
     if (isInline) {
       return (
-        <code className="rounded bg-surface-muted/80 px-1 py-0.5 font-mono [font-size:var(--chat-fs-xs)] text-content">
+        <code className="rounded bg-surface-muted/80 px-1 py-0.5 font-mono [font-size:var(--chat-fs-xs)] [color:var(--code-fg)]">
           <CodeContext.Provider value={true}>{children}</CodeContext.Provider>
         </code>
       );

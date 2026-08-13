@@ -22,11 +22,19 @@
  * calls rediscovering that (observed in Pi sessions on WSL-first machines).
  * The two detectors below mirror each SDK's own resolution, so the hint
  * always matches the shell the tool will actually spawn.
+ *
+ * Mcode also *steers* the shell: `PiAgentSdkProvider` overrides the Bash
+ * tool's shellPath and `ClaudeAgentSdkProvider` sets
+ * `CLAUDE_CODE_GIT_BASH_PATH` — both to `resolveGitBash()` (binaryResolve.ts)
+ * when a real Git Bash exists. That bypasses each SDK's own resolution, so
+ * both detectors check `resolveGitBash()` FIRST: when steering is active the
+ * truth is always Git Bash.
  */
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
+import { resolveGitBash } from "./binaryResolve.js";
 
 export type BashEnvKind = "unix" | "wsl" | "native" | "unknown";
 export type BashEnvScope = "pi" | "claude";
@@ -81,6 +89,10 @@ function programFilesGitBash(): string | null {
 
 /** Pi mirror of the SDK's `getShellConfig()` — the shell its Bash tool spawns. */
 function detectPiBashEnv(): BashEnvKind {
+  // 0. Mcode shell steering (see module doc): PiAgentSdkProvider overrides the
+  //    Bash tool's shellPath with resolveGitBash() when one is found, so the
+  //    SDK's own getShellConfig resolution below is bypassed entirely.
+  if (resolveGitBash()) return "native";
   // 1. `~/.pi/agent/settings.json` `shellPath` (honors PI_CODING_AGENT_DIR).
   const agentDir = process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent");
   try {
@@ -115,6 +127,10 @@ function detectPiBashEnv(): BashEnvKind {
  *  `D:/...` paths resolving fine). So the git-derived check below runs before
  *  the PATH lookup. */
 function detectClaudeBashEnv(): BashEnvKind {
+  // 0. Mcode shell steering: ClaudeAgentSdkProvider sets
+  //    CLAUDE_CODE_GIT_BASH_PATH to resolveGitBash() when one is found, so
+  //    the Bash tool always runs Git Bash — bypassing the resolution below.
+  if (resolveGitBash()) return "native";
   // 1. Known Git Bash locations.
   if (programFilesGitBash()) return "native";
   // 2. Git-derived: bash sits under the git executable's install root
@@ -148,10 +164,14 @@ export function detectBashEnv(scope: BashEnvScope): BashEnvKind {
   return env;
 }
 
-/** Native-Windows bash (Git Bash / Cygwin / MSYS2): `/mnt/...` doesn't exist,
- *  so the model must stick to relative or native `D:\...` paths. */
+/** Native-Windows bash (Git Bash / Cygwin / MSYS2): `/mnt/...` and `/d/...`
+ *  don't resolve portably and `D:\...` backslashes get eaten by bash as
+ *  escapes, so the model must stick to relative or forward-slash native
+ *  `D:/...` paths. (The providers' command normalizer rewrites `/mnt/d/...`
+ *  and `/d/...` to `D:/...` anyway — this hint cuts how often the model emits
+ *  them in the first place.) */
 export const BASH_NATIVE_PATH_HINT =
-  "You are running on Windows. Use native Windows paths (e.g. D:\\...) or, preferably, paths relative to the project working directory. NEVER use WSL-style paths like /mnt/d/... — they do not exist on this machine.";
+  "You are running on Windows. Use native Windows paths (e.g. D:/...) or, preferably, paths relative to the project working directory. NEVER use WSL-style paths like /mnt/d/... or Git Bash style paths like /d/... — they do not exist on this machine. Also avoid D:\\... backslash paths in shell commands: bash treats backslashes as escape characters, so use D:/... or relative paths instead.";
 
 /** WSL bash: the working directory appears as `/mnt/<drive>/...` and only
  *  that form resolves inside bash commands — while the (Node-fs) file tools

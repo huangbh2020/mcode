@@ -13,14 +13,17 @@
  * (e.g. ImageGallery) can keep its own index in sync; `index` is the current
  * position, used to initialize the lightbox view.
  */
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Dialog } from "./dialog.js";
 import { cn } from "@renderer/lib/cn.js";
+import { api } from "@renderer/lib/api.js";
 import { useSessionStore } from "@renderer/stores/sessionStore.js";
 import {
   IconArrowsMaximize,
+  IconCheck,
   IconChevronLeft,
   IconChevronRight,
+  IconCopy,
   IconDownload,
   IconX,
 } from "@renderer/lib/icons.js";
@@ -82,9 +85,33 @@ export function ImageWithPreview({
   }, [index, count]);
   // Opening the lightbox starts at the currently-selected thumbnail.
   useEffect(() => {
-    if (open) setViewIdx(Math.max(0, Math.min(count - 1, index)));
+    if (open) {
+      setViewIdx(Math.max(0, Math.min(count - 1, index)));
+      // Fresh copy feedback each time the lightbox opens (stale ✓/error from
+      // a previous session shouldn't leak into the next one).
+      setCopyState("idle");
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
+
+  // Copy-to-clipboard feedback state. Images are `data:image/...` URLs (the
+  // only kind this component receives from the message stream); the copy
+  // button is disabled for any other src shape.
+  const [copyState, setCopyState] = useState<"idle" | "copying" | "done" | "error">("idle");
+  const copyResetTimer = useRef<number | undefined>(undefined);
+  useEffect(() => () => window.clearTimeout(copyResetTimer.current), []);
+
+  const handleCopy = async () => {
+    if (copyState === "copying" || !curSrc.startsWith("data:image/")) return;
+    setCopyState("copying");
+    const res = await api.clipboardFile.writeImage({ dataUrl: curSrc });
+    setCopyState(res.ok ? "done" : "error");
+    window.clearTimeout(copyResetTimer.current);
+    copyResetTimer.current = window.setTimeout(
+      () => setCopyState("idle"),
+      res.ok ? 1600 : 2400,
+    );
+  };
 
   // The embedded browser's page is an OS-level WebContentsView that floats
   // above all renderer DOM, so this lightbox (a renderer-DOM overlay) would be
@@ -180,19 +207,43 @@ export function ImageWithPreview({
                 </span>
               </>
             )}
-            {/* Download button — saves the current image (data: URL or remote)
-                as a PNG file. Sits left of the close button. */}
-            <button
-              type="button"
-              onClick={() => {
-                const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
-                downloadDataUrl(curSrc, `截图-${stamp}.png`);
-              }}
-              title="下载图片"
-              className="fixed right-16 top-4 rounded-full bg-black/60 p-2 text-white/90 backdrop-blur-sm transition-colors hover:bg-black/80 hover:text-white"
-            >
-              <IconDownload size={20} />
-            </button>
+            {/* Top-left actions — copy / download. Deliberately kept out of the
+                top-right corner: on Windows/Linux the native window caption
+                buttons float above the webview there, so any chrome placed in
+                that corner visually collides with them. The lightbox close
+                button alone stays top-right (pre-existing position). */}
+            <div className="fixed left-4 top-4 flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => void handleCopy()}
+                disabled={copyState === "copying" || !curSrc.startsWith("data:image/")}
+                title={
+                  copyState === "done"
+                    ? "已复制到剪贴板"
+                    : copyState === "error"
+                      ? "复制失败,请重试"
+                      : "复制图片"
+                }
+                className={cn(
+                  "rounded-full bg-black/60 p-2 text-white/90 backdrop-blur-sm transition-colors hover:bg-black/80 hover:text-white disabled:opacity-50",
+                  copyState === "done" && "text-accent hover:text-accent",
+                  copyState === "error" && "text-danger hover:text-danger",
+                )}
+              >
+                {copyState === "done" ? <IconCheck size={20} /> : <IconCopy size={20} />}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+                  downloadDataUrl(curSrc, `截图-${stamp}.png`);
+                }}
+                title="下载图片"
+                className="rounded-full bg-black/60 p-2 text-white/90 backdrop-blur-sm transition-colors hover:bg-black/80 hover:text-white"
+              >
+                <IconDownload size={20} />
+              </button>
+            </div>
             <Dialog.Close
               className="fixed right-4 top-4 rounded-full bg-black/60 p-2 text-white/90 backdrop-blur-sm transition-colors hover:bg-black/80 hover:text-white"
               aria-label="关闭预览"

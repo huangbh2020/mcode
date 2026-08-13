@@ -54,16 +54,20 @@ const USER_BUBBLE_PRESETS: { name: string; triplet: string; hex: string }[] = [
 ];
 
 /** Curated accent presets. `triplet` is what we persist; `hex` drives the swatch.
- *  Ordered across the spectrum; all keep acceptable contrast in light + dark. */
+ *  The first entry (emerald) is the default and stays saturated for brand
+ *  identity; the rest are softened tints (lifted lightness, middling
+ *  saturation) so they read as calm chips instead of glaring ones — kinder on
+ *  the eyes in dark mode. Trade-off: very soft accents reduce white-on-accent
+ *  legibility on filled buttons (those prefer a darker accent). */
 const ACCENT_PRESETS: { name: string; triplet: string; hex: string }[] = [
-  { name: "翠绿", triplet: "5 150 105", hex: "#059669" }, // emerald-600 (= default)
-  { name: "天蓝", triplet: "2 132 199", hex: "#0284c7" }, // sky-600
-  { name: "靛蓝", triplet: "67 56 202", hex: "#4338ca" }, // indigo-700
-  { name: "青色", triplet: "13 148 136", hex: "#0d9488" }, // teal-600
-  { name: "紫罗兰", triplet: "124 58 237", hex: "#7c3aed" }, // violet-600
-  { name: "玫瑰红", triplet: "225 29 72", hex: "#e11d48" }, // rose-600
-  { name: "琥珀", triplet: "217 119 6", hex: "#d97706" }, // amber-600
-  { name: "橙色", triplet: "234 88 12", hex: "#ea580c" }, // orange-600
+  { name: "翠绿", triplet: "5 150 105", hex: "#059669" }, // emerald-600 (default, kept saturated)
+  { name: "天蓝", triplet: "111 182 224", hex: "#6fb6e0" }, // soft sky
+  { name: "靛蓝", triplet: "139 151 232", hex: "#8b97e8" }, // soft indigo
+  { name: "青色", triplet: "94 200 184", hex: "#5ec8b8" }, // soft teal
+  { name: "紫罗兰", triplet: "184 156 230", hex: "#b89ce6" }, // soft violet
+  { name: "樱粉", triplet: "244 168 168", hex: "#f4a8a8" }, // soft rose
+  { name: "琥珀", triplet: "243 201 105", hex: "#f3c969" }, // soft amber
+  { name: "橙色", triplet: "246 165 107", hex: "#f6a56b" }, // soft orange
 ];
 
 const THEME_OPTIONS: { value: ThemeName; label: string; icon: ReactNode }[] = [

@@ -40,6 +40,7 @@ import { buildPiTokenSnapshot } from "./piTokenUsage.js";
 import { buildPiSkillLoader, rewriteSkillPrefix, createMntNormalizingReadTool } from "./piSkillBridge.js";
 import { createMcodeExtension } from "./mcodeExtension.js";
 import { getFileSnapshot } from "@main/lib/fileSnapshotRegistry.js";
+import { resolveGitBash } from "@main/lib/binaryResolve.js";
 
 /** Pi's permission modes, shown in the composer dropdown. Pi has no native
  *  permission system — the inline extension's `tool_call` handler interprets
@@ -203,9 +204,32 @@ export class PiAgentSdkProvider implements AgentProvider {
     // read tool can't resolve. The override is read-only so it carries no
     // in-project containment check — only the WSL translation.
     // The write/edit/bash guards moved to the extension's tool_call handler.
-    const customTools = process.platform === "win32"
-      ? [createMntNormalizingReadTool(sdk, req.cwd)]
-      : [];
+    //
+    // Win32 bash override: the SDK's own shell resolution (settings shellPath
+    // → %ProgramFiles%\Git → `where bash.exe`) can silently land on WSL's
+    // C:\Windows\System32\bash.exe, which cannot resolve ANY Windows path —
+    // the cause of the Pi provider's ~16% bash failure rate (DB-logged
+    // `ls: cannot access 'D:/workspace/lfl/'` on paths that exist). Steering
+    // the Bash tool to a real Git Bash fixes every dialect at once: MSYS
+    // converts `/d/...` and `D:/...` natively, and the extension's command
+    // normalizer rewrites the remaining `/mnt/d/...` to `D:/...`. Only applied
+    // when resolveGitBash() finds one — otherwise the SDK default stands.
+    const gitBash = process.platform === "win32" ? resolveGitBash() : null;
+    // Widened to `any` like `createMntNormalizingReadTool` — the SDK's concrete
+    // renderCall is contravariant in its args, so it doesn't structurally
+    // satisfy the fully-generic ToolDefinition. The bash def keeps its own
+    // schema (validated args unchanged); only the array slot is widened.
+    const customTools: import("@earendil-works/pi-coding-agent").ToolDefinition<any, any, any>[] =
+      process.platform === "win32"
+        ? [
+            createMntNormalizingReadTool(sdk, req.cwd),
+            ...(gitBash
+              ? [
+                  sdk.createBashToolDefinition(req.cwd, { shellPath: gitBash }) as import("@earendil-works/pi-coding-agent").ToolDefinition<any, any, any>,
+                ]
+              : []),
+          ]
+        : [];
 
     const { session } = await sdk.createAgentSession({
       cwd: req.cwd,
@@ -274,7 +298,24 @@ export class PiAgentSdkProvider implements AgentProvider {
         // prompt (including retries). Streaming events arrive via subscribe.
         // `promptText` carries the `/skill:name`-rewritten leading token so Pi
         // expands an embedded skill pill (see rewriteSkillPrefix above).
-        await session.prompt(promptText);
+        const images = req.images;
+        if (images && images.length > 0) {
+          // User-attached images ride the message's content array as base64
+          // ImageContent parts (Pi maps `data` straight onto Anthropic's
+          // base64 source). sendUserMessage triggers the same single turn as
+          // prompt(). Image-only turns omit the text part entirely.
+          const parts = [
+            ...(promptText.trim() ? [{ type: "text" as const, text: promptText }] : []),
+            ...images.map((img) => ({
+              type: "image" as const,
+              data: img.data,
+              mimeType: img.mimeType,
+            })),
+          ];
+          await session.sendUserMessage(parts);
+        } else {
+          await session.prompt(promptText);
+        }
         // End-of-turn finalization: freeze the file snapshot and emit
         // `turn.files` (the "本轮修改" card). agent_end has already emitted
         // turn.done inside the subscribe stream; turn.files arriving after it

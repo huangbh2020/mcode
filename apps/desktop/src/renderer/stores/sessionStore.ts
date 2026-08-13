@@ -202,14 +202,16 @@ export type Block =
     }
   | {
       kind: "image";
-      /** The tool_use whose screenshot produced this image. Lets the card
-       *  render next to its tool_use and lets dedup replace rather than
-       *  duplicate on repeated emits. */
-      toolCallId: string;
+      /** The tool_use whose screenshot produced this image. Present on
+       *  tool-produced images (renders next to its tool_use card, dedup by
+       *  replace); ABSENT on user-attached images (the composer's 图片/paste
+       *  flow), which sit standalone on the user message. */
+      toolCallId?: string;
       /** Base64-encoded image bytes (no data: prefix). */
       data: string;
-      /** Image MIME type — always "image/png" for screenshots today. */
-      mimeType: "image/png";
+      /** Image MIME type — "image/png" for browser screenshots; the SendTurn
+       *  allowlist (jpeg/png/gif/webp) for user-attached images. */
+      mimeType: string;
     };
 
 /** Turn-level timing metadata. Attached to the FIRST assistant message of
@@ -305,6 +307,8 @@ export interface QueuedPrompt {
   prompt: string;
   displayText: string;
   attachments?: PromptAttachment[];
+  /** User-attached images (downsized, ready to send). Empty/absent = text-only. */
+  images?: PromptImage[];
   /** Names of skill pills embedded in the queued text (for stream rendering). */
   skillNames?: string[];
 }
@@ -316,6 +320,13 @@ export interface PromptAttachment {
   content: string;
   attachmentKind?: "paste" | "file";
   filePath?: string;
+}
+
+/** User-attached image payload shared by sendPrompt and the queue — already
+ *  downsized to the SendTurn allowlist (base64 without the data: prefix). */
+export interface PromptImage {
+  data: string;
+  mimeType: "image/jpeg" | "image/png" | "image/gif" | "image/webp";
 }
 
 /** A snapshot of the composer's unsent content for one session. Written
@@ -904,6 +915,10 @@ export interface SessionState {
      *  — the Markdown renderer turns the matching `/name` occurrences into
      *  styled pills). Absent for plain-text messages. */
     skillsUsed?: string[],
+    /** User-attached images (downsized base64 content blocks). Rendered as
+     *  image blocks on the user message and inlined into the provider request.
+     *  An image-only turn passes an empty `prompt`. */
+    images?: PromptImage[],
   ) => Promise<boolean>;
   /** Resolves true when the prompt was accepted into the stream (the caller
    *  may then clear the composer), false when a guard blocked it (no session,
@@ -3912,9 +3927,11 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     });
   },
 
-  sendPrompt: async (prompt, attachments, displayText, skillsUsed) => {
+  sendPrompt: async (prompt, attachments, displayText, skillsUsed, images) => {
     const sessionId = get().activeSessionId;
-    if (!sessionId || !prompt.trim()) return false;
+    if (!sessionId) return false;
+    // An image-only turn (no typed text) is valid — the images are the prompt.
+    if (!prompt.trim() && !(images && images.length > 0)) return false;
     // Per-thread guard: only block this thread from sending if IT is running.
     // Another thread's running turn shouldn't lock the composer in this one.
     if (get().runningBySession[sessionId]) return false;
@@ -3951,11 +3968,22 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         });
       }
     }
-    blocks.push({
-      kind: "text",
-      text: displayText ?? prompt,
-      skillNames: skillsUsed && skillsUsed.length > 0 ? skillsUsed : undefined,
-    });
+    // User-attached images render inline between the attachment cards and the
+    // text block (mirrors the composer's chip-above-editor layout).
+    if (images) {
+      for (const img of images) {
+        blocks.push({ kind: "image", data: img.data, mimeType: img.mimeType });
+      }
+    }
+    // Image-only turns have no text block at all (empty bubble otherwise).
+    const textForBlock = displayText ?? prompt;
+    if (textForBlock.trim()) {
+      blocks.push({
+        kind: "text",
+        text: textForBlock,
+        skillNames: skillsUsed && skillsUsed.length > 0 ? skillsUsed : undefined,
+      });
+    }
     const userMsg: ChatMessage = {
       id: `u_${Date.now()}`,
       sessionId,
@@ -3991,20 +4019,23 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 	    const { effort, permissionMode, providerId } = get();
 	    let updated;
 	    try {
-	      ({ session: updated } = await api.claude.sendTurn({
-	        sessionId,
-	        prompt,
-	        model: resolvedModel.model,
-	        effort,
-	        permissionMode,
-	        customModelId: resolvedModel.customModelId,
-	        // Per-turn provider override — lets the active provider drive
-	        // which backend handles this turn without persisting the change
-	        // to the session row. Combined with the per-turn overrides above
-	        // this keeps "switch SDK at any time" working.
-	        providerId,
-	        skills: skillsUsed && skillsUsed.length > 0 ? skillsUsed : undefined,
-	      }));
+      ({ session: updated } = await api.claude.sendTurn({
+        sessionId,
+        prompt,
+        model: resolvedModel.model,
+        effort,
+        permissionMode,
+        customModelId: resolvedModel.customModelId,
+        // Per-turn provider override — lets the active provider drive
+        // which backend handles this turn without persisting the change
+        // to the session row. Combined with the per-turn overrides above
+        // this keeps "switch SDK at any time" working.
+        providerId,
+        skills: skillsUsed && skillsUsed.length > 0 ? skillsUsed : undefined,
+        // User-attached images inlined into the provider request (base64
+        // content blocks — never paths).
+        images: images && images.length > 0 ? images : undefined,
+      }));
     } catch (err) {
       // The IPC itself rejected (not a streamed `error` event). Without
       // this the running flag + synthesized stat row would stick forever
@@ -4070,6 +4101,12 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     //    sendPrompt's block construction: attachment blocks first, then a
     //    single text block holding displayText (or the raw prompt when
     //    there are no attachments).
+    //    User-attached images on the edited message survive the edit — the
+    //    block already carries the base64, so they're re-sent verbatim
+    //    without re-reading anything from disk.
+    const preservedImages = editedMsg.blocks
+      .filter((b): b is Extract<Block, { kind: "image" }> => b.kind === "image")
+      .map((b) => ({ data: b.data, mimeType: b.mimeType as PromptImage["mimeType"] }));
     const blocks: Block[] = [];
     if (attachments) {
       for (const a of attachments) {
@@ -4081,6 +4118,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           filePath: a.filePath,
         });
       }
+    }
+    for (const img of preservedImages) {
+      blocks.push({ kind: "image", data: img.data, mimeType: img.mimeType });
     }
     blocks.push({
       kind: "text",
@@ -4140,6 +4180,8 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         customModelId: resolvedModel.customModelId,
         providerId,
         skills: skillsUsed && skillsUsed.length > 0 ? skillsUsed : undefined,
+        // Preserved user-attached images from the pre-edit message.
+        images: preservedImages.length > 0 ? preservedImages : undefined,
       }));
     } catch (err) {
       console.error("editAndResendMessage: sendTurn IPC failed:", err);
@@ -5860,7 +5902,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     // and fires sendTurn. If that turn later ends with another queued item,
     // its turn.done handler will call drainPromptQueueIfIdle again — so the
     // whole queue drains one item per turn, in order.
-    void s.sendPrompt(head.prompt, head.attachments, head.displayText, head.skillNames);
+    void s.sendPrompt(head.prompt, head.attachments, head.displayText, head.skillNames, head.images);
   },
 
   sendQueuedPromptNow: async (sessionId, id) => {
@@ -5882,7 +5924,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     // Reuse the normal send path. sendPrompt clears the interruptedBySession
     // sentinel, so the old turn's late turn.done{interrupted} is filtered by
     // the existing race guard (sendPrompt / editAndResendMessage rely on it).
-    await get().sendPrompt(item.prompt, item.attachments, item.displayText, item.skillNames);
+    await get().sendPrompt(item.prompt, item.attachments, item.displayText, item.skillNames, item.images);
   },
 
   reorderPromptQueue: (sessionId, newOrder) => {

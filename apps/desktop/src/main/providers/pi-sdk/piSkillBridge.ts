@@ -41,6 +41,7 @@
 import { homedir } from "node:os";
 import path from "node:path";
 import { bashPathHintFor, detectBashEnv } from "@main/lib/bashEnv.js";
+import { msysToWindowsPath } from "@main/lib/msysPath.js";
 
 /** Suffix-free access to the Pi SDK module type (the provider already loads it
  *  via `loadPiSdk()` and hands us the resolved module). */
@@ -182,27 +183,28 @@ export function rewriteSkillPrefix(text: string, knownNames: Set<string>): strin
 /* ──────────────────── Windows WSL-path defense ──────────────────── */
 
 /**
- * Translate a WSL-style `/mnt/<drive>/...` path to a native Windows
- * `<DRIVE>:\...` path. Returns the original string unchanged when it isn't a
- * `/mnt/<drive>/...` form.
+ * Translate a WSL-style `/mnt/<drive>/...` (or Git Bash style `/d/...`) path
+ * to a native Windows `<DRIVE>:\...` path. Returns the original string
+ * unchanged when it isn't a recognized dialect form.
  *
  * This is the read-side counterpart of `normalizeToolFilePath` in
- * `fileSnapshot.ts`, but stripped to JUST the WSL→Windows translation: read is
- * a non-mutating operation that legitimately reaches outside the project
- * (skills live under `~/.mcode/skills`, docs under `~/Documents`, …), so the
- * strict in-project guard that file-write tools enforce must NOT apply here.
+ * `fileSnapshot.ts`, but stripped to JUST the dialect→Windows translation:
+ * read is a non-mutating operation that legitimately reaches outside the
+ * project (skills live under `~/.mcode/skills`, docs under `~/Documents`, …),
+ * so the strict in-project guard that file-write tools enforce must NOT apply
+ * here. Shared implementation lives in `@main/lib/msysPath.ts` so the read
+ * tool, the file-write guards, and the bash-command normalizer all agree on
+ * the same translation.
  *
  * Root cause being mitigated: the Pi SDK injects skill `filePath`/`baseDir`
  * verbatim as native Windows paths (`agent-session.js:959`), but the model —
- * trained on Linux/WSL examples — rewrites them to `/mnt/c/...` when it later
- * issues a `read`. The SDK's read tool does zero `/mnt/` normalization (the
- * raw string reaches `fs.readFile` and fails), so we patch the path before
- * delegating.
+ * trained on Linux/WSL examples — rewrites them to `/mnt/c/...` (or `/c/...`)
+ * when it later issues a `read`. The SDK's read tool does zero dialect
+ * normalization (the raw string reaches `fs.readFile` and fails), so we patch
+ * the path before delegating.
  */
 export function wslToWindowsPath(p: string): string {
-  const wsl = /^\/mnt\/([a-zA-Z])\/(.*)$/.exec(p);
-  if (!wsl) return p;
-  return `${wsl[1].toUpperCase()}:\\${wsl[2].replace(/\//g, "\\")}`;
+  return msysToWindowsPath(p);
 }
 
 /**
