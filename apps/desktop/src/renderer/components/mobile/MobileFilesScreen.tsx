@@ -59,15 +59,25 @@ export function MobileFilesScreen() {
   const current = stack[stack.length - 1];
 
   const load = useCallback(async (dir: { name: string; path: string }) => {
+    if (!project) return;
     setEntries(null);
     try {
-      const res = await api.file.listDir({ projectPath: dir.path, dirPath: "." });
+      // listDir's `projectPath` MUST be the persisted project root (main
+      // cross-checks it against ProjectRepo); the folder to list goes in
+      // `dirPath`, relative to that root. Stripping the root prefix from the
+      // breadcrumb's absolute dir path yields that relative segment — same
+      // trick the desktop FileTree uses (loadAndCompact). Passing a subfolder
+      // as `projectPath` is rejected as an unknown root, so every level below
+      // the first rendered empty.
+      const root = project.path;
+      const dirPath = dir.path.slice(root.length).replace(/^[\\/]/, "");
+      const res = await api.file.listDir({ projectPath: root, dirPath });
       setEntries(res.entries);
     } catch (err) {
       console.warn("mobile files listDir failed:", err);
       setEntries([]);
     }
-  }, []);
+  }, [project]);
 
   useEffect(() => {
     if (current) void load(current);

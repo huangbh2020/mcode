@@ -14,7 +14,6 @@
  *   user reads the code, then switches to the phone to type it).
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { CSSProperties } from "react";
 import QRCode from "qrcode";
 import { Dialog } from "@renderer/components/ui/index.js";
 import { Button } from "@renderer/components/ui/index.js";
@@ -24,8 +23,10 @@ import { api } from "@renderer/lib/api.js";
 import { RemoteConnectPanel } from "@renderer/components/mobile/RemoteConnectPanel.js";
 import type { PairingStartResult, PairedDevice } from "@contracts/mobile";
 
-/** Small self-contained trigger button + dialog. Renders its own Dialog.Root
- *  so the Titlebar only needs `<MobileConnectButton />`. */
+/** Self-contained trigger button + dialog, rendered in the left sidebar's quick
+ *  actions (below 搜索). The trigger matches the search/new-session button
+ *  style; renders its own Dialog.Root so the sidebar only needs
+ *  `<MobileConnectButton />`. */
 export function MobileConnectButton() {
   const [open, setOpen] = useState(false);
   return (
@@ -34,14 +35,15 @@ export function MobileConnectButton() {
         type="button"
         onClick={() => setOpen(true)}
         className={cn(
-          "flex items-center justify-center rounded p-1.5 transition-colors",
-          "text-content-muted hover:bg-surface-hover hover:text-content",
-          open && "bg-surface-hover text-accent",
+          "flex w-full items-center gap-2 rounded-lg px-1 py-2 transition-colors",
+          "[font-size:var(--right-panel-font-size)]",
+          "text-content-muted hover:bg-accent/10 hover:text-accent",
+          open && "bg-accent/10 text-accent",
         )}
         title="连接手机"
-        style={{ WebkitAppRegion: "no-drag" } as CSSProperties}
       >
-        <IconDeviceMobile size={18} className="shrink-0" />
+        <IconDeviceMobile size={16} className="shrink-0" />
+        <span className="flex-1 text-left font-medium">连接手机</span>
       </button>
       <Dialog.Root open={open} onOpenChange={setOpen}>
         <Dialog.Portal>

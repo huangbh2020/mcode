@@ -18,8 +18,6 @@
  * to the renderer via `relay:event`.
  */
 import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
-import { dirname, join } from "node:path";
 import * as nodeNet from "node:net";
 import {
   Client,
@@ -36,6 +34,11 @@ import { sendToRenderer } from "@main/window.js";
 import { SettingRepo } from "@main/store/repositories.js";
 import { awaitDb } from "@main/store/db.js";
 import { isMobileServerRunning, getMobileServer } from "@main/mobile/MobileHttpServer.js";
+// The forwarder.py script content, inlined at build time via Vite's `?raw`
+// suffix so it survives bundling. electron-vite emits a single main chunk and
+// does not copy sibling non-JS assets into out/main, so a runtime readFileSync
+// of a co-located file fails with ENOENT in dev/prod.
+import FORWARDER_PY from "./forwarder.py?raw";
 
 /** The local port the mobile HTTP server listens on. */
 const MOBILE_LOCAL_PORT = 7331;
@@ -48,10 +51,6 @@ const MAX_RECONNECT_ATTEMPTS = 5;
 
 /** Reconnect delay base (exponential backoff). */
 const RECONNECT_BASE_DELAY_MS = 2000;
-
-/** The forwarder.py script content, read at module load from the sibling file. */
-const __moduleDir = dirname(fileURLToPath(import.meta.url));
-const FORWARDER_PY = readFileSync(join(__moduleDir, "forwarder.py"), "utf8");
 
 class RelayManagerImpl {
   private conn: Client | null = null;
