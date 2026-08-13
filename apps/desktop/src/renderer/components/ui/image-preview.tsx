@@ -51,9 +51,12 @@ export interface ImageWithPreviewProps {
   alt?: string;
   /** Extra classes on the thumbnail wrapper. */
   className?: string;
-  /** Max thumbnail height in px (default 240 — small enough to stay compact in
-   *  the message stream, large enough to be recognizable). */
+  /** Max thumbnail height in px (default 160). Combined with `maxThumbnailWidth`
+   *  this caps the inline preview so a screenshot sits politely in the message
+   *  stream instead of dominating it — click opens the full-size lightbox. */
   maxThumbnailHeight?: number;
+  /** Max thumbnail width in px (default 280). */
+  maxThumbnailWidth?: number;
   /** Full image list this thumbnail belongs to. When provided (length > 1),
    *  the lightbox gains ◀ ▶ navigation + a position counter. */
   gallery?: string[];
@@ -69,7 +72,8 @@ export function ImageWithPreview({
   src,
   alt = "",
   className,
-  maxThumbnailHeight = 240,
+  maxThumbnailHeight = 160,
+  maxThumbnailWidth = 280,
   gallery,
   index = 0,
   onNavigate,
@@ -141,7 +145,7 @@ export function ImageWithPreview({
         onClick={() => setOpen(true)}
         title="点击查看大图"
         className={cn(
-          "group relative block overflow-hidden rounded-md border border-edge bg-surface/40 transition-colors hover:border-accent/50",
+          "group relative block w-fit overflow-hidden rounded-lg border border-edge bg-surface-muted/60 shadow-sm transition-all hover:border-accent/60 hover:shadow-md",
           className,
         )}
       >
@@ -149,8 +153,8 @@ export function ImageWithPreview({
           src={src}
           alt={alt}
           loading="lazy"
-          style={{ maxHeight: maxThumbnailHeight }}
-          className="block w-full object-contain"
+          style={{ maxHeight: maxThumbnailHeight, maxWidth: maxThumbnailWidth }}
+          className="block object-contain transition-transform duration-200 group-hover:scale-[1.03]"
         />
         {/* Hover affordance: a small maximize badge that appears on hover. */}
         <span className="pointer-events-none absolute right-1.5 top-1.5 flex items-center gap-1 rounded bg-black/55 px-1.5 py-0.5 text-[10px] font-medium text-white opacity-0 backdrop-blur-sm transition-opacity group-hover:opacity-100">

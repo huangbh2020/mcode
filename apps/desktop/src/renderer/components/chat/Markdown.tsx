@@ -24,8 +24,6 @@ import { cn } from "@renderer/lib/cn.js";
 import { IconCheck, IconCopy } from "@renderer/lib/icons.js";
 import type { Components } from "react-markdown";
 import { codeCacheKey, getCodeHtml, setCodeHtml } from "@renderer/lib/markdownCache.js";
-import { splitTextByPathTokens } from "@renderer/lib/fileLink.js";
-import { FileLink } from "./FileLink.js";
 
 // ── Lazy highlighter singleton ────────────────────────────────────────
 // Initialised on first encounter of a fenced code block; kept alive for the
@@ -154,27 +152,128 @@ function CopyButton({ text }: { text: string }) {
   );
 }
 
+// ── Rehype plugin: inline skill/command highlighting ──────────────────
+//
+// react-markdown v10 does NOT support a `text` component override — text
+// nodes are passed through as raw strings by hast-util-to-jsx-runtime. So
+// we intercept at the hast level: this plugin walks the tree, finds `text`
+// nodes that contain `/skillName` references (outside code/pre), and
+// replaces them with styled `<span class="skill-pill-inline">` element
+// nodes. react-markdown then renders these normally.
+//
+// This is the standard unified/rehype pattern — the same approach used by
+// rehype-katex, rehype-autolink-headings, etc.
+
+/** Minimal hast node shape — we only need these three fields. */
+interface HastNode {
+  type: string;
+  value?: string;
+  tagName?: string;
+  properties?: Record<string, unknown>;
+  children?: HastNode[];
+}
+
+/** True when the element is a `<code>` or `<pre>` — text inside should
+ *  never be linkified. */
+function isCodeElement(node: HastNode): boolean {
+  return node.type === "element" && (node.tagName === "code" || node.tagName === "pre");
+}
+
+/** Split a text value by skill/command references, producing an array of
+ *  text nodes and styled span elements that mirror the composer's skill
+ *  pill (✦ glyph + /name in accent color). Returns [] when nothing matched,
+ *  so the caller can keep the original node untouched. */
+function transformTextBySkills(value: string, skillRe: RegExp): HastNode[] {
+  skillRe.lastIndex = 0;
+  const nodes: HastNode[] = [];
+  let last = 0;
+  let m: RegExpExecArray | null;
+  while ((m = skillRe.exec(value)) !== null) {
+    const start = m.index;
+    const name = m[1];
+    if (start > last) {
+      nodes.push({ type: "text", value: value.slice(last, start) });
+    }
+    nodes.push({
+      type: "element",
+      tagName: "span",
+      properties: { className: ["skill-pill-inline"], title: `Skill: /${name}` },
+      children: [
+        {
+          type: "element",
+          tagName: "span",
+          properties: { className: ["skill-pill-inline-glyph"], ariaHidden: true },
+          children: [{ type: "text", value: "✦" }],
+        },
+        { type: "text", value: `/${name}` },
+      ],
+    });
+    last = start + m[0].length;
+  }
+  if (nodes.length === 0) return []; // no match — caller keeps original
+  if (last < value.length) {
+    nodes.push({ type: "text", value: value.slice(last) });
+  }
+  return nodes;
+}
+
+/** Recursively walk hast children, replacing text nodes (outside code/pre)
+ *  with skill-highlighted element nodes. Returns a new children array. */
+function walkAndTransform(children: HastNode[], skillRe: RegExp, inCode: boolean): HastNode[] {
+  const out: HastNode[] = [];
+  for (const child of children) {
+    if (child.type === "text" && !inCode && child.value && child.value.includes("/")) {
+      const transformed = transformTextBySkills(child.value, skillRe);
+      if (transformed.length > 0) {
+        out.push(...transformed);
+      } else {
+        out.push(child);
+      }
+    } else if (child.type === "element" && child.children) {
+      out.push({
+        ...child,
+        children: walkAndTransform(child.children, skillRe, inCode || isCodeElement(child)),
+      });
+    } else if (child.children) {
+      out.push({ ...child, children: walkAndTransform(child.children, skillRe, inCode) });
+    } else {
+      out.push(child);
+    }
+  }
+  return out;
+}
+
+/** Create a rehype plugin that highlights inline skill/command references.
+ *  The plugin closes over `skillRe` so it can be recreated when the set of
+ *  known skills changes. */
+function rehypeSkillInline(skillRe: RegExp) {
+  return function skillInlinePlugin() {
+    return function transformer(tree: HastNode) {
+      if (tree.children) {
+        tree.children = walkAndTransform(tree.children, skillRe, false);
+      }
+    };
+  };
+}
+
 // ── react-markdown component overrides ────────────────────────────────
 
 /**
- * Tracks whether the current text node is rendered inside a `code`/`pre`
- * context. When true, the `text` override skips path linkification - code
- * spans/blocks should render verbatim, not as clickable file links. Set by
- * the `code`/`pre` overrides below via the provider wrapping their children.
+ * Vestigial: formerly consumed by the `text` component override (now removed)
+ * to skip path linkification inside code. Code-context skipping now happens
+ * in the `rehypeSkillInline` plugin via {@link isCodeElement}. Kept because
+ * the `code`/`pre` overrides below still wrap children in a Provider (harmless).
  */
 const CodeContext = createContext(false);
 const useInCode = () => useContext(CodeContext);
 
 /**
- * Build the react-markdown component overrides. `projectPath` is threaded in
- * so the `text` override can resolve relative file paths mentioned in prose
- * against the owning project root. `skillRe` (optional) lets the `text`
- * override turn matching `/name` occurrences into styled inline skill pills.
+ * Build the react-markdown component overrides. Skill/command highlighting
+ * is NOT done here — it's handled by the `rehypeSkillInline` rehype plugin
+ * (see above), which operates at the hast level because react-markdown v10
+ * does not call a `text` component override.
  */
-function buildComponents(
-  projectPath: string | null | undefined,
-  skillRe: RegExp | null,
-): Components {
+function buildComponents(): Components {
   return {
   // Inline code - styled inline, no highlighting needed.
   code({ className, children }) {
@@ -312,68 +411,7 @@ function buildComponents(
   h3({ children }) {
     return <h3 className="mb-1 mt-2 font-semibold text-content [font-size:var(--chat-font-size)]">{children}</h3>;
   },
-  // Text override: scan leaf text nodes for file-path-like tokens AND inline
-  // skill pills, wrapping matches in <FileLink> / styled <span> respectively.
-  // Skipped inside code spans/blocks via CodeContext. Synchronous +
-  // allocation-light (regex splits) so it's safe to run on every text node
-  // during streaming; the expensive path (IPC resolution) happens only on
-  // click inside <FileLink>.
-  text({ children }) {
-    if (useInCode()) return <>{children}</>;
-    // react-markdown passes string children for text nodes; non-string
-    // (numbers/elements) pass through untouched.
-    if (typeof children !== "string") return <>{children}</>;
-    const segs = splitTextByPathTokens(children);
-    // No file links and no skills → render verbatim.
-    if (
-      (segs.length <= 1 && segs[0]?.kind === "text") &&
-      (!skillRe || !skillRe.test(children))
-    ) {
-      // Reset lastIndex (test() advances it on a global regex).
-      if (skillRe) skillRe.lastIndex = 0;
-      return <>{children}</>;
-    }
-    if (skillRe) skillRe.lastIndex = 0;
-    return (
-      <>
-        {segs.map((seg, i) =>
-          seg.kind === "path" ? (
-            <FileLink key={i} token={seg.token} projectPath={projectPath} />
-          ) : (
-            <SkillAwareText key={i} text={seg.text} skillRe={skillRe} />
-          ),
-        )}
-      </>
-    );
-  },
   };
-}
-
-/** Render a plain-text segment, splitting out `/skillName` occurrences into
- *  styled inline pills when `skillRe` is provided. Plain text segments without
- *  a skill match render as a bare string (no wrapper span) to match the
- *  pre-skill behavior. */
-function SkillAwareText({ text, skillRe }: { text: string; skillRe: RegExp | null }) {
-  if (!skillRe) return <>{text}</>;
-  skillRe.lastIndex = 0;
-  const parts: React.ReactNode[] = [];
-  let last = 0;
-  let m: RegExpExecArray | null;
-  let idx = 0;
-  while ((m = skillRe.exec(text)) !== null) {
-    const start = m.index;
-    const name = m[1];
-    if (start > last) parts.push(text.slice(last, start));
-    parts.push(
-      <span key={`s${idx++}`} className="skill-pill-inline" title={`Skill: /${name}`}>
-        /{name}
-      </span>,
-    );
-    last = start + m[0].length;
-  }
-  if (last < text.length) parts.push(text.slice(last));
-  if (parts.length <= 1) return <>{parts.length ? parts[0] : text}</>;
-  return <>{parts}</>;
 }
 
 export const Markdown = memo(function Markdown({
@@ -382,16 +420,13 @@ export const Markdown = memo(function Markdown({
   skillNames,
 }: {
   children: string;
-  /** Project root used to resolve relative/incomplete file paths mentioned in
-   *  the prose. When omitted, only absolute paths under a known project can be
-   *  opened (safe degradation). For chat this should be the SESSION's owning
-   *  project path (not necessarily the active project) so backgrounded tabs
-   *  resolve correctly. */
+  /** Project root — reserved for future inline file-path linkification.
+   *  Currently unused (the feature was in the dead `text` override; see the
+   *  rehype plugin section for the replacement strategy). */
   projectPath?: string | null;
-  /** Names of skills embedded inline in this text (from the rich-text
-   *  composer). Matching `/name` occurrences are rendered as styled inline
-   *  pills so they read the same in the stream as they did in the composer.
-   *  Absent for assistant messages and plain-text user messages. */
+  /** Names of skills/commands that should be highlighted when they appear as
+   *  `/name` in this text. Passed to the `rehypeSkillInline` plugin which
+   *  transforms matching text nodes at the hast level. */
   skillNames?: ReadonlyArray<string>;
 }) {
   // Build a single regex matching any known `/skillName` at its boundary.
@@ -403,15 +438,19 @@ export const Markdown = memo(function Markdown({
       .sort((a, b) => b.length - a.length);
     return new RegExp(`/(${escaped.join("|")})(?![A-Za-z0-9_-])`, "g");
   }, [skillNames]);
-  const components = useMemo(
-    () => buildComponents(projectPath, skillRe),
-    [projectPath, skillRe],
+  const components = useMemo(() => buildComponents(), []);
+  // rehype-katex is always active; the skill-inline plugin is added only when
+  // we have known skill names to highlight. Recreated when `skillRe` changes
+  // (i.e. when the skills list updates), so react-markdown re-parses.
+  const rehypePlugins = useMemo(
+    () => (skillRe ? [rehypeKatex, rehypeSkillInline(skillRe)] : [rehypeKatex]),
+    [skillRe],
   );
   return (
     <div
       className="break-words text-content [font-size:var(--chat-font-size)] [line-height:var(--chat-line-height)] [font-weight:var(--chat-font-weight)] [&>p]:my-1.5 [&:first-child]:mt-0 [&:last-child]:mb-0"
     >
-      <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]} components={components}>
+      <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={rehypePlugins} components={components}>
         {children}
       </ReactMarkdown>
     </div>

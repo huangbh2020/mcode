@@ -4,6 +4,7 @@ import { basename } from "@renderer/lib/path.js";
 import { api } from "@renderer/lib/api.js";
 import type { TurnFileEntry } from "@renderer/lib/turnFiles.js";
 import { useSessionStore } from "@renderer/stores/sessionStore.js";
+import { ConfirmDialog } from "@renderer/components/ui/index.js";
 import {
   IconChevronDown,
   IconChevronRight,
@@ -68,27 +69,27 @@ export function TurnFilesCard({
   // confirmation before the card disappears (latest-turn) or flips to
   // the 已撤销 state (historical).
   const [done, setDone] = useState(false);
+  // Controls the in-app confirmation dialog. Replaces native confirm() —
+  // every rewind (latest or historical) now goes through this gate so the
+  // action is never a single mis-click.
+  const [confirmOpen, setConfirmOpen] = useState(false);
 
   const handleRewind = async () => {
     if (rewinding || rewound) return;
-    // Historical rewind can clobber later turns' edits to the same files —
-    // confirm before proceeding. Mirrors SDK checkpoint semantics where
-    // rolling back to an old checkpoint is the user's explicit choice.
-    if (!isLatestTurn) {
-      const ok = window.confirm(
-        "撤销历史轮次会把该轮修改的文件恢复到当时修改前的状态，\n可能影响后续轮次对同一文件的修改。\n确定继续吗？",
-      );
-      if (!ok) return;
-    }
     setRewinding(true);
     try {
       // targetFiles is ALWAYS passed — the event handler matches the card
       // by path-set and marks it `rewound: true` in place (the card stays
       // in the stream as a trace that this turn was rolled back), whether
-      // this is the latest turn or a historical one. The only difference
-      // is the confirm() above for historical cards.
+      // this is the latest turn or a historical one. Confirmation is now
+      // handled by the ConfirmDialog before this runs.
       await rewindTurn(files, files.map((f) => f.filePath));
       setDone(true);
+      // Auto-collapse once rewound — the file list is now a stale snapshot
+      // of rolled-back changes, so fold the card to keep the scroll-back
+      // history calm. The card itself stays in the stream with the 已撤销
+      // badge (conversation record preserved).
+      setOpen(false);
     } finally {
       setRewinding(false);
     }
@@ -106,9 +107,18 @@ export function TurnFilesCard({
 
   return (
     <div className={cn("rounded-lg border border-edge bg-surface-muted/60 shadow-sm text-xs text-content-muted", rewound && "opacity-60")}>
-      <button
+      <div
+        role="button"
+        tabIndex={0}
+        aria-expanded={open}
         onClick={() => setOpen((v) => !v)}
-        className="flex w-full items-center gap-2.5 px-3 py-2 text-left transition-colors hover:bg-surface-hover/50"
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            setOpen((v) => !v);
+          }
+        }}
+        className="flex w-full cursor-pointer items-center gap-2.5 px-3 py-2 text-left transition-colors hover:bg-surface-hover/50"
       >
         <IconFile size={14} className="shrink-0 text-content-subtle" />
         <span className="font-semibold text-content">
@@ -124,42 +134,68 @@ export function TurnFilesCard({
           <span className="text-accent">+{totals.adds}</span>
           <span className="text-danger">-{totals.dels}</span>
         </span>
-        {/* "已撤销" badge once this turn's files have been rewound. The card
-            stays (conversation record preserved), so the badge makes the
-            rewound state legible at a glance. */}
-        {rewound && (
-          <span className="ml-2 rounded-md bg-surface-muted px-1.5 py-0.5 font-medium text-content-subtle">
-            已撤销
+        {/* Right-aligned affordances: the rewind button sits to the right of
+            the title, the expand chevron at the far edge. The rewind button
+            stops propagation so clicking it opens the confirm dialog instead
+            of toggling the card. An already-rewound card swaps the button for
+            a danger-tinted 已撤销 badge so the rolled-back state reads
+            clearly at a glance. */}
+        <div className="ml-auto flex shrink-0 items-center gap-2">
+          {!rewound ? (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                setConfirmOpen(true);
+              }}
+              onKeyDown={(e) => e.stopPropagation()}
+              disabled={rewinding || done}
+              className="rounded-md bg-surface-hover px-3 py-1 font-medium text-content transition-colors hover:bg-edge disabled:cursor-not-allowed disabled:text-content-subtle"
+              title={isLatestTurn ? "把本轮所有文件恢复为轮开始前的状态" : "把该历史轮次的文件改动恢复为当时修改前的状态(可能影响后续轮次)"}
+            >
+              {done ? "已撤销 ✓" : rewinding ? "撤销中…" : "撤销本轮"}
+            </button>
+          ) : (
+            <span className="rounded-md bg-danger/10 px-2 py-0.5 text-[11px] font-semibold text-danger">
+              已撤销
+            </span>
+          )}
+          <span className="text-content-subtle">
+            {open ? <IconChevronDown size={14} /> : <IconChevronRight size={14} />}
           </span>
-        )}
-        <span className="ml-auto shrink-0 text-content-subtle">
-          {open ? <IconChevronDown size={14} /> : <IconChevronRight size={14} />}
-        </span>
-      </button>
+        </div>
+      </div>
       {open && (
         <div className="space-y-1 border-t border-edge px-2 py-2">
           {files.map((f) => (
             <FileRow key={f.filePath} entry={f} />
           ))}
-          {/* Every card is rewindable: the latest turn via the live snapshot,
-              historical turns via their persisted entries (DB-driven, works
-              even after session reopen). An already-rewound card shows no
-              button. Historical rewinds are confirmed in handleRewind since
-              they can clobber later turns' edits to the same files. */}
-          {!rewound && (
-            <div className="flex items-center justify-end pt-1">
-              <button
-                onClick={handleRewind}
-                disabled={rewinding || done}
-                className="rounded-md bg-surface-hover px-3 py-1 font-medium text-content transition-colors hover:bg-edge disabled:cursor-not-allowed disabled:text-content-subtle"
-                title={isLatestTurn ? "把本轮所有文件恢复为轮开始前的状态" : "把该历史轮次的文件改动恢复为当时修改前的状态(可能影响后续轮次)"}
-              >
-                {done ? "已撤销 ✓" : rewinding ? "撤销中…" : "撤销本轮"}
-              </button>
-            </div>
-          )}
         </div>
       )}
+      {/* In-app confirmation for rewind - replaces native confirm(). Every
+          rewind (latest or historical) goes through this gate so the action
+          is never a single mis-click. Historical rewinds use the danger
+          variant since they can clobber later turns' edits to the same
+          files. */}
+      <ConfirmDialog
+        open={confirmOpen}
+        title="撤销本轮修改"
+        danger={!isLatestTurn}
+        description={
+          isLatestTurn
+            ? "将把本轮修改的文件恢复为轮开始前的状态。"
+            : (
+              <>
+                撤销历史轮次会把该轮修改的文件恢复到当时修改前的状态，
+                <br />
+                可能影响后续轮次对同一文件的修改。确定继续吗？
+              </>
+            )
+        }
+        confirmText="撤销"
+        onOpenChange={setConfirmOpen}
+        onConfirm={() => void handleRewind()}
+      />
     </div>
   );
 }

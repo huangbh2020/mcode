@@ -188,16 +188,20 @@ const SkillPill = Mention.extend({
       onExit: () => {},
     }),
   },
+  // Fully delete the pill on a single Backspace. The Mention extension's
+  // default Backspace handler replaces the node with its `mentionSuggestionChar`
+  // (which defaults to "@") instead of removing it — that's why deleting a pill
+  // left a stray "@". With this enabled, Backspace inserts "" (clean removal).
+  deleteTriggerWithBackspace: true,
   renderText: ({ node }) => `/${node.attrs.label ?? node.attrs.id ?? ""}`,
   HTMLAttributes: {
-    // Opaque accent fill (same pairing as the send button) so the skill pill
-    // reads as a solid, distinct color block inline with the text rather than
-    // a faint tint. text-surface gives high contrast on the accent background.
-    // Tight padding + sub-1em font keeps the pill height roughly aligned with
-    // the surrounding text line rather than towering above it.
+    // Lightweight inline mark: accent-colored text + a leading sparkles icon
+    // (added via `.skill-pill::before` in styles.css). No background fill,
+    // border, or shadow — the pill reads as colored text, not a chip, so it
+    // stays unobtrusive inline with the surrounding prose.
     class: cn(
-      "skill-pill inline-flex items-center gap-0.5 rounded border border-accent bg-accent px-1 py-px align-baseline shadow-sm transition-colors",
-      "text-[0.8em] font-semibold text-surface hover:brightness-110",
+      "skill-pill inline-flex items-center gap-0.5 align-baseline transition-opacity",
+      "text-[0.85em] font-semibold text-accent hover:opacity-70",
     ),
   },
 });
@@ -437,7 +441,7 @@ export const ComposerEditor = forwardRef<
   ) {
     const from = textOffsetToPos(ed, start);
     const to = textOffsetToPos(ed, end);
-    const attrs: MentionNodeAttrs = { id: name, label: name };
+    const attrs: MentionNodeAttrs = { id: name, label: name, mentionSuggestionChar: "/" };
     ed.chain()
       .focus()
       .deleteRange({ from, to })

@@ -202,6 +202,22 @@ function hasDynamicExpansion(p: string): boolean {
   return p.includes("$") || p.includes("`");
 }
 
+/** Special device files that are safe to write to — they never create or
+ *  modify real files on disk. `/dev/null` discards output (the canonical
+ *  `command > /dev/null 2>&1` idiom); `/dev/stdout`, `/dev/stderr`, and
+ *  `/dev/fd/N` redirect to existing file descriptors. Whitelisting these
+ *  avoids false positives on ubiquitous output-suppression patterns. Checked
+ *  against the normalized absolute path so `/dev/./null` etc. are covered. */
+const SAFE_DEVICE_FILES = new Set([
+  "/dev/null",
+  "/dev/stdin",
+  "/dev/stdout",
+  "/dev/stderr",
+  "/dev/fd/0",
+  "/dev/fd/1",
+  "/dev/fd/2",
+]);
+
 /**
  * Expand a leading `~` (or `~user`) to the user's home directory.
  *
@@ -252,6 +268,7 @@ export function guardBashCommand(
     if (hasDynamicExpansion(raw)) continue; // can't expand — allow
     const norm = normalizeToolFilePath(cwd, expandTilde(raw));
     if (!norm) continue; // unresolvable — allow (matches guardToolPath behavior)
+    if (SAFE_DEVICE_FILES.has(norm.absPath)) continue; // device file — safe, no real write
     if (!norm.insideProject) {
       return `拒绝:bash 重定向目标在项目工作目录之外(${norm.absPath})。只允许在项目目录内写入文件,请改用相对路径。`;
     }
