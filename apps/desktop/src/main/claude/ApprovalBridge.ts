@@ -31,11 +31,16 @@ interface PendingApproval {
 interface PendingUserInput {
   resolve: (v: UserInputDecision) => void;
   reject: (e: Error) => void;
+  /** Session the request belongs to — returned by resolve/dismiss so the
+   *  caller can broadcast the cross-client `request.resolved` sync event. */
+  sessionId: string;
 }
 
 interface PendingPlanApproval {
   resolve: (v: PlanApprovalDecision) => void;
   reject: (e: Error) => void;
+  /** Session the request belongs to — see PendingUserInput. */
+  sessionId: string;
 }
 
 export class ApprovalBridge {
@@ -78,10 +83,12 @@ export class ApprovalBridge {
 
   /** Resolve an approval request (called by ipc/claude.ts CLAUDE_APPROVE handler).
    *  When the user granted with `always: true`, the tool name is recorded in
-   *  the session's always-allowed set so subsequent calls skip the prompt. */
-  resolveApproval(requestId: string, decision: ProviderApprovalDecision, always?: boolean): boolean {
+   *  the session's always-allowed set so subsequent calls skip the prompt.
+   *  Returns the owning session's id on success, null when no such request is
+   *  pending (already resolved by another client). */
+  resolveApproval(requestId: string, decision: ProviderApprovalDecision, always?: boolean): string | null {
     const p = this.pendingApprovals.get(requestId);
-    if (!p) return false;
+    if (!p) return null;
     p.resolve(decision);
     this.pendingApprovals.delete(requestId);
     // Record "always allow" so canUseTool auto-approves this tool next time.
@@ -93,7 +100,7 @@ export class ApprovalBridge {
       }
       set.add(p.toolName);
     }
-    return true;
+    return p.sessionId;
   }
 
   /** Has the user granted this tool with "always allow" for this session?
@@ -122,7 +129,7 @@ export class ApprovalBridge {
   ): (req: UserInputRequest) => Promise<UserInputDecision> {
     return (req) =>
       new Promise<UserInputDecision>((resolve, reject) => {
-        this.pendingUserInputs.set(req.requestId, { resolve, reject });
+        this.pendingUserInputs.set(req.requestId, { resolve, reject, sessionId });
         emit({
           type: "question.ask",
           sessionId,
@@ -132,26 +139,28 @@ export class ApprovalBridge {
       });
   }
 
-  /** Resolve a user-input request (called when the user submits answers). */
-  resolveUserInput(requestId: string, answers: UserInputAnswers): boolean {
+  /** Resolve a user-input request (called when the user submits answers).
+   *  Returns the owning session's id on success, null when already resolved. */
+  resolveUserInput(requestId: string, answers: UserInputAnswers): string | null {
     const p = this.pendingUserInputs.get(requestId);
-    if (!p) return false;
+    if (!p) return null;
     p.resolve({ answers });
     this.pendingUserInputs.delete(requestId);
-    return true;
+    return p.sessionId;
   }
 
   /** Resolve a user-input request as DISMISSED (the user closed the question
    *  card without answering). The provider's canUseTool / tool execute turns
    *  `dismissed` into a deny / tool error so the model sees the question was
    *  skipped and the SAME turn continues — without this the Deferred would
-   *  never resolve and the model would block forever. */
-  dismissUserInput(requestId: string): boolean {
+   *  never resolve and the model would block forever. Returns the owning
+   *  session's id on success, null when already resolved. */
+  dismissUserInput(requestId: string): string | null {
     const p = this.pendingUserInputs.get(requestId);
-    if (!p) return false;
+    if (!p) return null;
     p.resolve({ answers: {}, dismissed: true });
     this.pendingUserInputs.delete(requestId);
-    return true;
+    return p.sessionId;
   }
 
   /* ── plan approval (ExitPlanMode) ── */
@@ -166,7 +175,7 @@ export class ApprovalBridge {
   ): (req: PlanApprovalRequest) => Promise<PlanApprovalDecision> {
     return (req) =>
       new Promise<PlanApprovalDecision>((resolve, reject) => {
-        this.pendingPlanApprovals.set(req.requestId, { resolve, reject });
+        this.pendingPlanApprovals.set(req.requestId, { resolve, reject, sessionId });
         emit({
           type: "plan.approval_request",
           sessionId,
@@ -178,13 +187,14 @@ export class ApprovalBridge {
   }
 
   /** Resolve a plan-approval request (called by ipc/claude.ts
-   * CLAUDE_RESPOND_PLAN_APPROVAL handler). */
-  resolvePlanApproval(requestId: string, decision: PlanApprovalDecision): boolean {
+   * CLAUDE_RESPOND_PLAN_APPROVAL handler). Returns the owning session's id on
+   * success, null when already resolved. */
+  resolvePlanApproval(requestId: string, decision: PlanApprovalDecision): string | null {
     const p = this.pendingPlanApprovals.get(requestId);
-    if (!p) return false;
+    if (!p) return null;
     p.resolve(decision);
     this.pendingPlanApprovals.delete(requestId);
-    return true;
+    return p.sessionId;
   }
 
   /* ── cleanup ── */

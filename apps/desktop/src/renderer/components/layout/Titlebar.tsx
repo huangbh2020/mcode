@@ -11,6 +11,7 @@ import {
 import { getProviderIcon } from "@renderer/lib/providerIcon.js";
 import { useSessionStore } from "@renderer/stores/sessionStore.js";
 import { ProjectBranchIndicator } from "@renderer/components/chat/ProjectBranchIndicator.js";
+import { MobileConnectButton } from "@renderer/components/layout/MobileConnectDialog.js";
 import { resolveShortcut, acceleratorToDisplayString } from "@renderer/lib/shortcuts.js";
 
 type Mode = "workspace" | "settings";
@@ -237,6 +238,9 @@ export function Titlebar({
                 />
               </button>
             )}
+            {/* Connect phone (LAN pairing: QR + 6-digit code) — always
+                available in workspace mode, independent of the side panels. */}
+            <MobileConnectButton />
           </>
         )}
       </div>

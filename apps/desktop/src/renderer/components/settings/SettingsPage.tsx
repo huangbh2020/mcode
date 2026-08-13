@@ -89,9 +89,15 @@ export function SettingsPage() {
   // renders it on `settingsOpen`), so this useState reads the requested
   // section once per open. Callers pass a section via setSettingsOpen(true, id)
   // — e.g. the composer's "管理模型…" entry targets "custom-models" / "pi-models".
+  // A plain gear click (no section) lands on the first nav item ("常规") — the
+  // default must NOT be "custom-models", or every plain open would jump to
+  // the model-config tab.
   const settingsSection = useSessionStore((s) => s.settingsSection);
   const [active, setActive] = useState<SectionId>(
-    () => (settingsSection && (NAV_ITEMS.some((n) => n.id === settingsSection)) ? settingsSection : "custom-models") as SectionId,
+    () =>
+      (settingsSection && NAV_ITEMS.some((n) => n.id === settingsSection)
+        ? settingsSection
+        : NAV_ITEMS[0].id) as SectionId,
   );
 
   // Esc returns to the workspace (preserves the modal's keyboard shortcut).

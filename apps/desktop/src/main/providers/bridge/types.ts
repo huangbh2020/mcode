@@ -32,8 +32,8 @@ export interface AnthropicToolUseBlock {
 export interface AnthropicToolResultBlock {
   type: "tool_result";
   tool_use_id: string;
-  /** string or an array of text blocks — we only need the text. */
-  content?: string | AnthropicTextBlock[];
+  /** string or an array of text/image blocks — we only forward the text. */
+  content?: string | (AnthropicTextBlock | AnthropicImageBlock)[];
   is_error?: boolean;
 }
 
@@ -45,11 +45,21 @@ export interface AnthropicThinkingBlock {
   signature: string;
 }
 
+/** An image block in a user message — the Claude binary sends user-attached
+ *  images inline as base64 content blocks (never as file paths). Also appears
+ *  inside tool_result content when a tool returns an image (e.g. Read on an
+ *  image file). */
+export interface AnthropicImageBlock {
+  type: "image";
+  source: { type: "base64"; media_type: string; data: string };
+}
+
 export type AnthropicContentBlock =
   | AnthropicTextBlock
   | AnthropicToolUseBlock
   | AnthropicToolResultBlock
-  | AnthropicThinkingBlock;
+  | AnthropicThinkingBlock
+  | AnthropicImageBlock;
 
 export interface AnthropicMessage {
   role: "user" | "assistant";
@@ -101,9 +111,19 @@ export interface OpenAIToolCall {
   function: { name: string; arguments: string };
 }
 
+/** One content part of an OpenAI user message. Text parts and image parts
+ *  (data-URL images) can be mixed in a single `content` array — the vision
+ *  input format for OpenAI-protocol endpoints. */
+export interface OpenAIContentPart {
+  type: "text" | "image_url";
+  text?: string;
+  image_url?: { url: string };
+}
+
 export interface OpenAIMessage {
   role: "system" | "user" | "assistant" | "tool";
-  content?: string | null;
+  /** string (plain text), a parts array (text + image_url mixed), or null. */
+  content?: string | null | OpenAIContentPart[];
   tool_calls?: OpenAIToolCall[];
   tool_call_id?: string;
 }

@@ -637,4 +637,22 @@ body,
   opacity: 0.8;
 }
 
+/* ───────────── Mobile focus-zoom guard ─────────────
+ * iOS Safari auto-zooms the page to ~2x when an <input>/<textarea>/
+ * contenteditable whose computed font-size is under 16px gains focus — the
+ * zoomed frame centers the field, pushing the rest of the page (and part of
+ * the field itself) off-screen. Every focusable control in the shared bundle
+ * is sized for the desktop (text-sm/text-xs), so on real phones/tablets
+ * (data-shell="mobile", stamped by main.tsx from isMobileDevice) we force
+ * each focusable surface to 16px. Pinch zoom stays enabled — the font bump is
+ * the accessible fix (maximum-scale=1 would break WCAG 1.4.4, and iOS ignores
+ * it for accessibility users anyway). Specificity (0,1,1)/(0,2,0) beats the
+ * Tailwind text-sm/text-xs utilities, and direct targeting beats the
+ * composer-host's inherited text-sm. */
+[data-shell="mobile"] input,
+[data-shell="mobile"] textarea,
+[data-shell="mobile"] [contenteditable="true"] {
+  font-size: 16px;
+}
+
 

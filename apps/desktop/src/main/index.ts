@@ -7,6 +7,7 @@ import { TerminalManager } from "@main/terminal/TerminalManager.js";
 import { BridgeRegistry } from "@main/providers/bridge/bridgeRegistry.js";
 import { lspManager } from "@main/lsp/LspManager.js";
 import { BrowserManager } from "@main/browser/BrowserManager.js";
+import { startMobileServer, stopMobileServer } from "@main/mobile/MobileHttpServer.js";
 import { initUpdater } from "@main/updater.js";
 import { notificationManager } from "@main/notifications/NotificationManager.js";
 import { is } from "@main/utils.js";
@@ -147,6 +148,19 @@ app.whenReady().then(async () => {
     }
   })();
 
+  // Start the mobile companion HTTP server (LAN-facing). Fire-and-forget: it
+  // awaits DB readiness internally to read its enabled/port settings, then
+  // binds 0.0.0.0:<port>. If disabled (mobile.enabled=0) it resolves to an
+  // idle handle — safe no-op. Failure to bind (port in use) is logged but
+  // never blocks the app.
+  void (async () => {
+    try {
+      await startMobileServer();
+    } catch (err) {
+      log.error(`mobile server failed to start: ${(err as Error).message}`);
+    }
+  })();
+
   app.on("activate", () => {
     // macOS: re-create a window when the dock icon is clicked.
     if (BrowserWindow.getAllWindows().length === 0) createMainWindow();
@@ -164,5 +178,6 @@ app.on("before-quit", () => {
   TerminalManager.disposeAll();
   lspManager.disposeAll();
   BrowserManager.disposeAll();
+  stopMobileServer();
   closeDb();
 });

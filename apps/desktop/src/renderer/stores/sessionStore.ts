@@ -11,6 +11,7 @@ import type {
   SubagentSnapshot,
   ContextSnapshot,
   TurnUsageRecord,
+  SessionListEntry,
 } from "@contracts/runtime";
 import type { TurnFileEntry } from "@renderer/lib/turnFiles.js";
 import type { ContentTag } from "@renderer/lib/contentTag.js";
@@ -1551,6 +1552,195 @@ function pinSort(list: Session[]): Session[] {
     if (pb === 0) return -1;
     return pb - pa; // pinned: most recent pin first
   });
+}
+
+/** Materialize a full {@link Session} row from a slim list-sync entry. Heavy
+ *  per-session payloads are null on a fresh row — a freshly-created session
+ *  has them null anyway; updates merge the entry OVER the cached row instead
+ *  (see the `session.changed` reducer). */
+function materializeSessionEntry(entry: SessionListEntry): Session {
+  return {
+    ...entry,
+    contextSnapshot: null,
+    todos: null,
+    subagents: null,
+    planDraft: null,
+    usageHistory: null,
+    turnFiles: null,
+  };
+}
+
+/** In-memory cleanup for a hard-deleted session — shared by the local
+ *  `deleteSession` action and the remote `session.deleted` event reducer, so a
+ *  phone deleting a thread cleans the desktop's lists/tabs/buckets exactly
+ *  like a local delete. Pure: takes the current state, returns the patch. */
+function applySessionDeletedState(s: SessionState, id: string): Partial<SessionState> {
+  // Find which project + cache owns this session.
+  let projectId: string | undefined;
+  let inArchived = false;
+  for (const [pid, list] of Object.entries(s.sessionsByProject)) {
+    if (list?.some((sess) => sess.id === id)) { projectId = pid; inArchived = false; break; }
+  }
+  if (!projectId) {
+    for (const [pid, list] of Object.entries(s.archivedSessionsByProject)) {
+      if (list?.some((sess) => sess.id === id)) { projectId = pid; inArchived = true; break; }
+    }
+  }
+  if (!projectId) return {};
+  const prevList = (inArchived ? s.archivedSessionsByProject : s.sessionsByProject)[projectId] ?? [];
+  const nextList = prevList.filter((sess) => sess.id !== id);
+  const sessionsByProject = { ...s.sessionsByProject };
+  const archivedByProject = { ...s.archivedSessionsByProject };
+  // Replace the touched cache. Empty archived cache entries are dropped
+  // so the "已归档" bin doesn't render empty project groups.
+  if (inArchived) {
+    if (nextList.length > 0) archivedByProject[projectId] = nextList;
+    else delete archivedByProject[projectId];
+  } else {
+    sessionsByProject[projectId] = nextList;
+  }
+  // Active-thread totals only move when an active (non-archived) row is
+  // deleted; deleting an already-archived row doesn't change the active
+  // count.
+  const totalActive = inArchived
+    ? (s.sessionsTotalByProject[projectId] ?? 0)
+    : Math.max((s.sessionsTotalByProject[projectId] ?? 0) - 1, 0);
+  const hasMoreActive = totalActive > nextList.length;
+  // Also drop all per-session buckets for this id. The session is gone
+  // for good; no point keeping its messages / running flag / question
+  // / approval queue / files in memory.
+  const messagesBySession = { ...s.messagesBySession };
+  delete messagesBySession[id];
+  const hasMoreMessagesBySession = { ...s.hasMoreMessagesBySession };
+  delete hasMoreMessagesBySession[id];
+  const loadingOlderBySession = { ...s.loadingOlderBySession };
+  delete loadingOlderBySession[id];
+  const runningBySession = { ...s.runningBySession };
+  delete runningBySession[id];
+  const runningTurnStartedAt = { ...s.runningTurnStartedAt };
+  delete runningTurnStartedAt[id];
+  const interruptedBySession = { ...s.interruptedBySession };
+  delete interruptedBySession[id];
+  const unreadBySession = { ...s.unreadBySession };
+  delete unreadBySession[id];
+  const todosBySession = { ...s.todosBySession };
+  delete todosBySession[id];
+  const planBySession = { ...s.planBySession };
+  delete planBySession[id];
+  const subagentsBySession = { ...s.subagentsBySession };
+  delete subagentsBySession[id];
+  const pendingQuestionBySession = { ...s.pendingQuestionBySession };
+  delete pendingQuestionBySession[id];
+  const turnFilesBySession = { ...s.turnFilesBySession };
+  delete turnFilesBySession[id];
+  const chatFileQueueBySession = { ...s.chatFileQueueBySession };
+  delete chatFileQueueBySession[id];
+  const chatElementQueueBySession = { ...s.chatElementQueueBySession };
+  delete chatElementQueueBySession[id];
+  const contextSnapshotBySession = { ...s.contextSnapshotBySession };
+  delete contextSnapshotBySession[id];
+  const usageHistoryBySession = { ...s.usageHistoryBySession };
+  delete usageHistoryBySession[id];
+  const pendingPlanApprovalBySession = { ...s.pendingPlanApprovalBySession };
+  delete pendingPlanApprovalBySession[id];
+  const planDrawerPlanBySession = { ...s.planDrawerPlanBySession };
+  delete planDrawerPlanBySession[id];
+  const planTabActiveBySession = { ...s.planTabActiveBySession };
+  delete planTabActiveBySession[id];
+  const planApprovalDraftBySession = { ...s.planApprovalDraftBySession };
+  delete planApprovalDraftBySession[id];
+  const composerDraftBySession = { ...s.composerDraftBySession };
+  delete composerDraftBySession[id];
+  const pendingApprovals = s.pendingApprovals.filter((p) => p.sessionId !== id);
+  // Drop the session from the tab strip too. If it was the active tab,
+  // the focus jumps to the previous tab (openTab logic replicated
+  // inline since we're already inside a `set` callback).
+  const idx = s.openTabs.indexOf(id);
+  const openTabs = idx === -1 ? s.openTabs : s.openTabs.filter((sid) => sid !== id);
+  const wasActive = s.activeSessionId === id;
+  if (!wasActive) {
+    return {
+      sessionsByProject,
+      archivedSessionsByProject: archivedByProject,
+      sessionsTotalByProject: { ...s.sessionsTotalByProject, [projectId]: totalActive },
+      sessionsHasMoreByProject: { ...s.sessionsHasMoreByProject, [projectId]: hasMoreActive },
+      messagesBySession,
+      hasMoreMessagesBySession,
+      loadingOlderBySession,
+      runningBySession,
+      runningTurnStartedAt,
+      interruptedBySession,
+      unreadBySession,
+      todosBySession,
+      planBySession,
+      subagentsBySession,
+      pendingQuestionBySession,
+      turnFilesBySession,
+      chatFileQueueBySession,
+      chatElementQueueBySession,
+      contextSnapshotBySession,
+      usageHistoryBySession,
+      pendingPlanApprovalBySession,
+      planDrawerPlanBySession,
+      planTabActiveBySession,
+      planApprovalDraftBySession,
+      composerDraftBySession,
+      pendingApprovals,
+      openTabs,
+    };
+  }
+  // Was the active tab. Land on the previous tab if any, otherwise the
+  // new tail, otherwise null (empty-state placeholder).
+  let nextActive: string | null = null;
+  if (openTabs.length > 0) {
+    nextActive = idx > 0 ? openTabs[idx - 1] : openTabs[0];
+  }
+  const isActiveProject = projectId === s.activeProjectId;
+  const nextInProject = isActiveProject
+    ? nextList.find((sess) => !sess.archived)
+    : null;
+  // If the new active session is the fallback one, sync its config
+  // into the global slots so the composer chips show the right
+  // model/effort/permission.
+  const finalActive = nextActive ?? nextInProject?.id ?? null;
+  const sess = finalActive ? findSession(sessionsByProject, archivedByProject, finalActive) : undefined;
+  // Clear the new active session's unread badge - it's now visible.
+  if (finalActive) delete unreadBySession[finalActive];
+  return {
+    sessionsByProject,
+    archivedSessionsByProject: archivedByProject,
+    sessionsTotalByProject: { ...s.sessionsTotalByProject, [projectId]: totalActive },
+    sessionsHasMoreByProject: { ...s.sessionsHasMoreByProject, [projectId]: hasMoreActive },
+    messagesBySession,
+    hasMoreMessagesBySession,
+    loadingOlderBySession,
+    runningBySession,
+    runningTurnStartedAt,
+    interruptedBySession,
+    unreadBySession,
+    todosBySession,
+    planBySession,
+    subagentsBySession,
+    pendingQuestionBySession,
+    turnFilesBySession,
+    chatFileQueueBySession,
+    chatElementQueueBySession,
+    contextSnapshotBySession,
+    usageHistoryBySession,
+    pendingPlanApprovalBySession,
+    planDrawerPlanBySession,
+    planTabActiveBySession,
+    planApprovalDraftBySession,
+    composerDraftBySession,
+    pendingApprovals,
+    openTabs,
+    sessions: isActiveProject ? nextList : s.sessions,
+    activeSessionId: finalActive,
+    model: sess?.model ?? s.model,
+    effort: sess?.effort ?? s.effort,
+    permissionMode: sess?.permissionMode ?? s.permissionMode,
+    customModelId: sess?.customModelId ?? s.customModelId,
+  };
 }
 
 /** Read a session's persisted config (model / effort / permissionMode /
@@ -3248,27 +3438,45 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     });
     set((s) => {
       const prevList = s.sessionsByProject[projectId] ?? [];
+      // The IPC handler broadcasts a `session.changed` event for cross-client
+      // list sync BEFORE returning the invoke response, and Electron delivers
+      // that event ahead of the invoke resolution — so by the time we reach
+      // here the session may ALREADY be in the cache (inserted by the
+      // `session.changed` reducer below). A blind prepend would then yield two
+      // list entries with the same id — a duplicate-keyed phantom row React
+      // renders but can't cleanly target for delete ("新建会话 生成了两个、删不掉一个").
+      // Upsert instead: merge over an existing row, else prepend; and only bump
+      // the total when the row is genuinely new (the event reducer already
+      // counted it in that case).
+      const exists = prevList.some((x) => x.id === session.id);
+      const upserted = exists
+        ? prevList.map((x) => (x.id === session.id ? { ...x, ...session } : x))
+        : [session, ...prevList];
       // New sessions are never pinned, so they land at the head of the
       // UNPINNED group (below any pinned sessions) — pinSort keeps that order
       // stable while floating pinned rows to the top.
       const nextByProject = {
         ...s.sessionsByProject,
-        [projectId]: pinSort([session, ...prevList]),
+        [projectId]: pinSort(upserted),
       };
       const isactive = projectId === s.activeProjectId;
+      const prevTotal = s.sessionsTotalByProject[projectId] ?? 0;
+      const nextTotal = exists ? prevTotal : prevTotal + 1;
       return {
         sessionsByProject: nextByProject,
         // A brand-new session sits at the head (newest created_at) and bumps
         // the active-thread total by one. `hasMore` flips on if the page now
         // exceeds SESSION_PAGE_SIZE — the load-more button reveals to fetch
-        // the next page rather than growing the cache unbounded.
+        // the next page rather than growing the cache unbounded. Both are
+        // no-ops when the row was already inserted by the ahead-of-response
+        // `session.changed` event (so the count isn't double-bumped).
         sessionsTotalByProject: {
           ...s.sessionsTotalByProject,
-          [projectId]: (s.sessionsTotalByProject[projectId] ?? 0) + 1,
+          [projectId]: nextTotal,
         },
         sessionsHasMoreByProject: {
           ...s.sessionsHasMoreByProject,
-          [projectId]: (s.sessionsTotalByProject[projectId] ?? 0) + 1 > SESSION_PAGE_SIZE,
+          [projectId]: nextTotal > SESSION_PAGE_SIZE,
         },
         sessions: isactive ? nextByProject[projectId] : s.sessions,
         activeProjectId: projectId,
@@ -3568,174 +3776,10 @@ export const useSessionStore = create<SessionState>((set, get) => ({
    *  project. */
   deleteSession: async (id) => {
     await api.session.delete({ id });
-    set((s) => {
-      // Find which project + cache owns this session.
-      let projectId: string | undefined;
-      let inArchived = false;
-      for (const [pid, list] of Object.entries(s.sessionsByProject)) {
-        if (list?.some((sess) => sess.id === id)) { projectId = pid; inArchived = false; break; }
-      }
-      if (!projectId) {
-        for (const [pid, list] of Object.entries(s.archivedSessionsByProject)) {
-          if (list?.some((sess) => sess.id === id)) { projectId = pid; inArchived = true; break; }
-        }
-      }
-      if (!projectId) return {};
-      const prevList = (inArchived ? s.archivedSessionsByProject : s.sessionsByProject)[projectId] ?? [];
-      const nextList = prevList.filter((sess) => sess.id !== id);
-      const sessionsByProject = { ...s.sessionsByProject };
-      const archivedByProject = { ...s.archivedSessionsByProject };
-      // Replace the touched cache. Empty archived cache entries are dropped
-      // so the "已归档" bin doesn't render empty project groups.
-      if (inArchived) {
-        if (nextList.length > 0) archivedByProject[projectId] = nextList;
-        else delete archivedByProject[projectId];
-      } else {
-        sessionsByProject[projectId] = nextList;
-      }
-      // Active-thread totals only move when an active (non-archived) row is
-      // deleted; deleting an already-archived row doesn't change the active
-      // count.
-      const totalActive = inArchived
-        ? (s.sessionsTotalByProject[projectId] ?? 0)
-        : Math.max((s.sessionsTotalByProject[projectId] ?? 0) - 1, 0);
-      const hasMoreActive = totalActive > nextList.length;
-      // Also drop all per-session buckets for this id. The session is gone
-      // for good; no point keeping its messages / running flag / question
-      // / approval queue / files in memory.
-      const messagesBySession = { ...s.messagesBySession };
-      delete messagesBySession[id];
-      const hasMoreMessagesBySession = { ...s.hasMoreMessagesBySession };
-      delete hasMoreMessagesBySession[id];
-      const loadingOlderBySession = { ...s.loadingOlderBySession };
-      delete loadingOlderBySession[id];
-      const runningBySession = { ...s.runningBySession };
-      delete runningBySession[id];
-      const runningTurnStartedAt = { ...s.runningTurnStartedAt };
-      delete runningTurnStartedAt[id];
-      const interruptedBySession = { ...s.interruptedBySession };
-      delete interruptedBySession[id];
-      const unreadBySession = { ...s.unreadBySession };
-      delete unreadBySession[id];
-      const todosBySession = { ...s.todosBySession };
-      delete todosBySession[id];
-      const planBySession = { ...s.planBySession };
-      delete planBySession[id];
-      const subagentsBySession = { ...s.subagentsBySession };
-      delete subagentsBySession[id];
-      const pendingQuestionBySession = { ...s.pendingQuestionBySession };
-      delete pendingQuestionBySession[id];
-      const turnFilesBySession = { ...s.turnFilesBySession };
-      delete turnFilesBySession[id];
-      const chatFileQueueBySession = { ...s.chatFileQueueBySession };
-      delete chatFileQueueBySession[id];
-      const chatElementQueueBySession = { ...s.chatElementQueueBySession };
-      delete chatElementQueueBySession[id];
-      const contextSnapshotBySession = { ...s.contextSnapshotBySession };
-      delete contextSnapshotBySession[id];
-      const usageHistoryBySession = { ...s.usageHistoryBySession };
-      delete usageHistoryBySession[id];
-      const pendingPlanApprovalBySession = { ...s.pendingPlanApprovalBySession };
-      delete pendingPlanApprovalBySession[id];
-      const planDrawerPlanBySession = { ...s.planDrawerPlanBySession };
-      delete planDrawerPlanBySession[id];
-      const planTabActiveBySession = { ...s.planTabActiveBySession };
-      delete planTabActiveBySession[id];
-      const planApprovalDraftBySession = { ...s.planApprovalDraftBySession };
-      delete planApprovalDraftBySession[id];
-      const composerDraftBySession = { ...s.composerDraftBySession };
-      delete composerDraftBySession[id];
-      const pendingApprovals = s.pendingApprovals.filter((p) => p.sessionId !== id);
-      // Drop the session from the tab strip too. If it was the active tab,
-      // the focus jumps to the previous tab (openTab logic replicated
-      // inline since we're already in a `set` callback).
-      const idx = s.openTabs.indexOf(id);
-      const openTabs = idx === -1 ? s.openTabs : s.openTabs.filter((sid) => sid !== id);
-      const wasActive = s.activeSessionId === id;
-      if (!wasActive) {
-        return {
-          sessionsByProject,
-          archivedSessionsByProject: archivedByProject,
-          sessionsTotalByProject: { ...s.sessionsTotalByProject, [projectId]: totalActive },
-          sessionsHasMoreByProject: { ...s.sessionsHasMoreByProject, [projectId]: hasMoreActive },
-          messagesBySession,
-          hasMoreMessagesBySession,
-          loadingOlderBySession,
-          runningBySession,
-          runningTurnStartedAt,
-          interruptedBySession,
-          unreadBySession,
-          todosBySession,
-          planBySession,
-          subagentsBySession,
-          pendingQuestionBySession,
-          turnFilesBySession,
-          chatFileQueueBySession,
-          chatElementQueueBySession,
-          contextSnapshotBySession,
-          usageHistoryBySession,
-          pendingPlanApprovalBySession,
-          planDrawerPlanBySession,
-          planTabActiveBySession,
-          planApprovalDraftBySession,
-          composerDraftBySession,
-          pendingApprovals,
-          openTabs,
-        };
-      }
-      // Was the active tab. Land on the previous tab if any, otherwise the
-      // new tail, otherwise null (empty-state placeholder).
-      let nextActive: string | null = null;
-      if (openTabs.length > 0) {
-        nextActive = idx > 0 ? openTabs[idx - 1] : openTabs[0];
-      }
-      const isActiveProject = projectId === s.activeProjectId;
-      const nextInProject = isActiveProject
-        ? nextList.find((sess) => !sess.archived)
-        : null;
-      // If the new active session is the fallback one, sync its config
-      // into the global slots so the composer chips show the right
-      // model/effort/permission.
-      const finalActive = nextActive ?? nextInProject?.id ?? null;
-      const sess = finalActive ? findSession(sessionsByProject, archivedByProject, finalActive) : undefined;
-      // Clear the new active session's unread badge - it's now visible.
-      if (finalActive) delete unreadBySession[finalActive];
-      return {
-        sessionsByProject,
-        archivedSessionsByProject: archivedByProject,
-        sessionsTotalByProject: { ...s.sessionsTotalByProject, [projectId]: totalActive },
-        sessionsHasMoreByProject: { ...s.sessionsHasMoreByProject, [projectId]: hasMoreActive },
-        messagesBySession,
-        hasMoreMessagesBySession,
-        loadingOlderBySession,
-        runningBySession,
-        runningTurnStartedAt,
-        interruptedBySession,
-        unreadBySession,
-        todosBySession,
-        planBySession,
-        subagentsBySession,
-        pendingQuestionBySession,
-        turnFilesBySession,
-        chatFileQueueBySession,
-        chatElementQueueBySession,
-        contextSnapshotBySession,
-        usageHistoryBySession,
-        pendingPlanApprovalBySession,
-        planDrawerPlanBySession,
-        planTabActiveBySession,
-        planApprovalDraftBySession,
-        composerDraftBySession,
-        pendingApprovals,
-        openTabs: finalActive ? openTabs : openTabs,
-        sessions: isActiveProject ? nextList : s.sessions,
-        activeSessionId: finalActive,
-        model: sess?.model ?? s.model,
-        effort: sess?.effort ?? s.effort,
-        permissionMode: sess?.permissionMode ?? s.permissionMode,
-        customModelId: sess?.customModelId ?? s.customModelId,
-      };
-    });
+    // Shared cleanup — a remote `session.deleted` event runs the same state
+    // surgery (see applySessionDeletedState) so phone-side deletes behave
+    // identically to local ones.
+    set((s) => applySessionDeletedState(s, id));
   },
 
   /** Set a session's archived flag (soft-delete; restorable). The session
@@ -4361,6 +4405,131 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     // message-accumulation logic below.
     if (e.type === "todo.update") {
       set((s) => ({ todosBySession: { ...s.todosBySession, [sid]: e.todos } }));
+      return;
+    }
+    // session.changed — cross-client list sync (a phone or another client
+    // created/renamed/pinned/archived a session; the same event also echoes
+    // our OWN local mutations back, idempotently). Upserts the slim row into
+    // whichever per-project cache is loaded. Unloaded projects are skipped —
+    // their buckets are (re)fetched wholesale by loadSessions/selectProject.
+    if (e.type === "session.changed") {
+      const entry = e.session;
+      set((s) => {
+        const patch: Partial<SessionState> = {};
+        let touched = false;
+        const activeList = s.sessionsByProject[entry.projectId];
+        if (activeList) {
+          const exists = activeList.some((x) => x.id === entry.id);
+          let next: Session[];
+          if (entry.archived) {
+            // Moved into the archived bin (possibly by a remote client) —
+            // drop it from the active window; totals shrink accordingly.
+            next = activeList.filter((x) => x.id !== entry.id);
+            if (next.length !== activeList.length) {
+              patch.sessionsTotalByProject = {
+                ...s.sessionsTotalByProject,
+                [entry.projectId]: Math.max((s.sessionsTotalByProject[entry.projectId] ?? 0) - 1, 0),
+              };
+              patch.sessionsHasMoreByProject = {
+                ...s.sessionsHasMoreByProject,
+                [entry.projectId]: (s.sessionsTotalByProject[entry.projectId] ?? 0) - 1 > next.length,
+              };
+            }
+          } else if (exists) {
+            // Merge the slim entry OVER the cached row so heavy payloads
+            // (contextSnapshot / turnFiles / …) survive the update.
+            next = activeList.map((x) => (x.id === entry.id ? { ...x, ...entry } : x));
+          } else {
+            // A session created on another client — materialize it at the
+            // head of the loaded window.
+            next = [materializeSessionEntry(entry), ...activeList];
+            patch.sessionsTotalByProject = {
+              ...s.sessionsTotalByProject,
+              [entry.projectId]: (s.sessionsTotalByProject[entry.projectId] ?? 0) + 1,
+            };
+          }
+          patch.sessionsByProject = { ...s.sessionsByProject, [entry.projectId]: pinSort(next) };
+          touched = true;
+        }
+        const archivedList = s.archivedSessionsByProject[entry.projectId];
+        if (archivedList) {
+          const exists = archivedList.some((x) => x.id === entry.id);
+          if (!entry.archived) {
+            // Restored from the bin — drop it from the archived window.
+            const next = archivedList.filter((x) => x.id !== entry.id);
+            if (next.length !== archivedList.length) {
+              if (next.length > 0) {
+                patch.archivedSessionsByProject = { ...s.archivedSessionsByProject, [entry.projectId]: next };
+              } else {
+                const copy = { ...s.archivedSessionsByProject };
+                delete copy[entry.projectId];
+                patch.archivedSessionsByProject = copy;
+              }
+              touched = true;
+            }
+          } else if (exists) {
+            patch.archivedSessionsByProject = {
+              ...s.archivedSessionsByProject,
+              [entry.projectId]: archivedList.map((x) => (x.id === entry.id ? { ...x, ...entry } : x)),
+            };
+            touched = true;
+          }
+          // else: archived remotely but outside the loaded bin page — the
+          // refresh path will pick it up.
+        }
+        if (!touched) return {};
+        // Keep the derived `sessions` alias (active project's list) fresh.
+        if (s.activeProjectId === entry.projectId && patch.sessionsByProject) {
+          patch.sessions = patch.sessionsByProject[entry.projectId] ?? s.sessions;
+        }
+        // Config sync: if the changed row is the ACTIVE session, mirror its
+        // model/effort/permissionMode/customModelId/providerId into the
+        // composer's global slots — a change made on the OTHER client
+        // (phone/desktop via session:updateSettings) takes effect here
+        // immediately, matching the local setModel/setEffort/… actions.
+        if (entry.id === s.activeSessionId) {
+          patch.model = entry.model;
+          patch.effort = entry.effort;
+          patch.permissionMode = entry.permissionMode;
+          patch.customModelId = entry.customModelId;
+          patch.providerId = entry.providerId;
+        }
+        return patch;
+      });
+      return;
+    }
+    // session.deleted — a session row was hard-deleted on another client.
+    // Same in-memory surgery as the local deleteSession action (tabs, buckets,
+    // active-thread fallback all included).
+    if (e.type === "session.deleted") {
+      set((s) => applySessionDeletedState(s, sid));
+      return;
+    }
+    // request.resolved — a pending approval / question / plan request was
+    // answered on ANOTHER client (the main-side Deferred resolves exactly
+    // once). Close this client's copy of the dialog: the requestId can no
+    // longer be answered. The answering client's own local cleanup already ran
+    // when it submitted, so the filter is a no-op there.
+    if (e.type === "request.resolved") {
+      set((s) => {
+        if (e.kind === "approval") {
+          const next = s.pendingApprovals.filter((p) => p.requestId !== e.requestId);
+          return next.length === s.pendingApprovals.length ? {} : { pendingApprovals: next };
+        }
+        if (e.kind === "question") {
+          const pending = s.pendingQuestionBySession[sid];
+          if (!pending || pending.requestId !== e.requestId) return {};
+          const bucket = { ...s.pendingQuestionBySession };
+          delete bucket[sid];
+          return { pendingQuestionBySession: bucket };
+        }
+        // plan
+        const pending = s.pendingPlanApprovalBySession[sid];
+        if (!pending || pending.requestId !== e.requestId) return {};
+        const bucket = { ...s.pendingPlanApprovalBySession };
+        delete bucket[sid];
+        return { pendingPlanApprovalBySession: bucket };
+      });
       return;
     }
     // plan.update: drives BOTH the activity capsule (planBySession) AND the

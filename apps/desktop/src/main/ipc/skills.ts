@@ -357,52 +357,69 @@ async function scanZcodePluginSkillDirs(): Promise<string[]> {
   return result;
 }
 
+/** Shared skills-list core — used by both the desktop IPC handler and the
+ *  mobile RPC whitelist. Containment guard: projectPath must be a persisted
+ *  Project root, otherwise returns []. */
+export async function listSkillsForProject(projectPath: string): Promise<SkillInfo[]> {
+  const project = findKnownProject(projectPath);
+  if (!project) {
+    return [];
+  }
+  const globalDir = resolveSkillRoot("global", project.path);
+  const projectDir = resolveSkillRoot("project", project.path);
+
+  const byName = new Map<string, SkillInfo>();
+  try {
+    // Global first, then project — so project entries override.
+    await scanSkillsRoot(globalDir, "global", byName);
+    await scanSkillsRoot(projectDir, "project", byName);
+  } catch (err) {
+    // Should be unreachable (scanSkillsRoot never throws), but be defensive:
+    // a broken skills dir must never break the composer.
+    log.warn(`skills.list scan failed: ${(err as Error).message}`);
+  }
+  // Stable ordering: project-first then global, alphabetical within each,
+  // so the menu doesn't reshuffle between renders.
+  return [...byName.values()].sort((a, b) => {
+    if (a.source !== b.source) return a.source === "project" ? -1 : 1;
+    return a.name.localeCompare(b.name);
+  });
+}
+
+/** Shared skills-read core — used by both the desktop IPC handler and the
+ *  mobile RPC whitelist. Returns "" when the project is unknown or the skill
+ *  dir escapes the skills root. */
+export async function readSkillForProject(
+  projectPath: string,
+  source: SkillSource,
+  name: string,
+): Promise<string> {
+  const project = findKnownProject(projectPath);
+  if (!project) return "";
+  const root = resolveSkillRoot(source, project.path);
+  const skillDir = path.join(root, name);
+  // Containment guard: the resolved skill dir must stay inside the root.
+  if (!pathWithin(root, skillDir)) return "";
+  try {
+    return await fs.readFile(path.join(skillDir, "SKILL.md"), "utf-8");
+  } catch {
+    // Missing file (e.g. a skill dir without SKILL.md) → empty editor.
+    return "";
+  }
+}
+
 export function registerSkillsHandlers(ipcMain: IpcMain): void {
   ipcMain.handle(IPC.SKILLS_LIST, async (_evt, raw) => {
     const input = SkillsListSchema.parse(raw);
-    // Containment guard: the project root must be a known persisted Project.
-    const project = findKnownProject(input.projectPath);
-    if (!project) {
-      return { skills: [] };
-    }
-    const globalDir = resolveSkillRoot("global", project.path);
-    const projectDir = resolveSkillRoot("project", project.path);
-
-    const byName = new Map<string, SkillInfo>();
-    try {
-      // Global first, then project — so project entries override.
-      await scanSkillsRoot(globalDir, "global", byName);
-      await scanSkillsRoot(projectDir, "project", byName);
-    } catch (err) {
-      // Should be unreachable (scanSkillsRoot never throws), but be defensive:
-      // a broken skills dir must never break the composer.
-      log.warn(`skills.list scan failed: ${(err as Error).message}`);
-    }
-    // Stable ordering: project-first then global, alphabetical within each,
-    // so the menu doesn't reshuffle between renders.
-    const skills = [...byName.values()].sort((a, b) => {
-      if (a.source !== b.source) return a.source === "project" ? -1 : 1;
-      return a.name.localeCompare(b.name);
-    });
+    const skills = await listSkillsForProject(input.projectPath);
     return { skills };
   });
 
   // ── Read one skill's full SKILL.md source ──
   ipcMain.handle(IPC.SKILLS_READ, async (_evt, raw) => {
     const input = SkillsReadSchema.parse(raw);
-    const project = findKnownProject(input.projectPath);
-    if (!project) return { content: "" };
-    const root = resolveSkillRoot(input.source, project.path);
-    const skillDir = path.join(root, input.name);
-    // Containment guard: the resolved skill dir must stay inside the root.
-    if (!pathWithin(root, skillDir)) return { content: "" };
-    try {
-      const content = await fs.readFile(path.join(skillDir, "SKILL.md"), "utf-8");
-      return { content };
-    } catch {
-      // Missing file (e.g. a skill dir without SKILL.md) → empty editor.
-      return { content: "" };
-    }
+    const content = await readSkillForProject(input.projectPath, input.source, input.name);
+    return { content };
   });
 
   // ── Create or overwrite a skill's SKILL.md ──

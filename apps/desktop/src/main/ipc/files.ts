@@ -128,130 +128,139 @@ function extOf(name: string): string {
   return name.slice(i + 1).toLowerCase();
 }
 
+/** MIME types for the binary/image extensions we expect to serve as data
+ *  URLs. Unknown extensions fall back to application/octet-stream (the <img>
+ *  will fail to render and the pane shows its error state - intended). */
+const BINARY_MIME: Record<string, string> = {
+  png: "image/png",
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  gif: "image/gif",
+  bmp: "image/bmp",
+  ico: "image/x-icon",
+  webp: "image/webp",
+  svg: "image/svg+xml",
+  tif: "image/tiff",
+  tiff: "image/tiff",
+  avif: "image/avif",
+};
+
+/** Shared guarded single-file utf-8 read — used by both the desktop IPC
+ *  handler and the mobile RPC whitelist. Scans every persisted project for a
+ *  root containing the path; clipboard-paste temp files (app-owned) are
+ *  allowed outside projects. Degrades to empty content instead of throwing. */
+export async function readFileGuarded(filePath: string): Promise<{ content: string }> {
+  const projects = ProjectRepo.list();
+  const root = projects.find((p) => pathWithin(p.path, filePath));
+  if (!root && !isPasteTempPath(filePath)) {
+    log.warn(`file.readFile refused — path outside any project root: ${filePath}`);
+    return { content: "" };
+  }
+  try {
+    const content = await readFile(filePath, "utf-8");
+    return { content };
+  } catch (err) {
+    // ENOENT (file gone), EACCES, or binary content that isn't valid utf-8.
+    log.warn(`file.readFile failed for ${filePath}: ${(err as Error).message}`);
+    return { content: "" };
+  }
+}
+
+/** Shared guarded binary read (base64 data URL) — same boundary as
+ *  {@link readFileGuarded}. */
+export async function readBinaryGuarded(filePath: string): Promise<{ dataUrl: string }> {
+  const projects = ProjectRepo.list();
+  const root = projects.find((p) => pathWithin(p.path, filePath));
+  if (!root && !isPasteTempPath(filePath)) {
+    log.warn(`file.readBinary refused - path outside any project root: ${filePath}`);
+    return { dataUrl: "" };
+  }
+  try {
+    const buf = await readFile(filePath);
+    const ext = extOf(basename(filePath));
+    const mime = BINARY_MIME[ext] ?? "application/octet-stream";
+    // For SVG (text/XML), decode to a utf-8 string and embed directly - avoids
+    // base64 bloat and renders identically in <img>.
+    if (mime === "image/svg+xml") {
+      const text = buf.toString("utf-8");
+      return { dataUrl: `data:${mime};utf8,${encodeURIComponent(text)}` };
+    }
+    const b64 = buf.toString("base64");
+    return { dataUrl: `data:${mime};base64,${b64}` };
+  } catch (err) {
+    log.warn(`file.readBinary failed for ${filePath}: ${(err as Error).message}`);
+    return { dataUrl: "" };
+  }
+}
+
+/** Shared guarded one-level directory listing — used by both the desktop IPC
+ *  handler and the mobile RPC whitelist. `projectPath` must match a persisted
+ *  Project root; `dirPath` is resolved against it and must stay inside. */
+export async function listDirGuarded(
+  projectPath: string,
+  dirPath: string,
+): Promise<{ entries: FileTreeEntry[] }> {
+  const known = ProjectRepo.list().some((p) => samePath(p.path, projectPath));
+  if (!known) {
+    log.warn(`file.listDir refused — unknown projectPath: ${projectPath}`);
+    return { entries: [] };
+  }
+  const abs = resolve(projectPath, dirPath || ".");
+  if (!pathWithin(projectPath, abs)) {
+    log.warn(
+      `file.listDir refused — dirPath escapes project root: ${dirPath} (root: ${projectPath})`,
+    );
+    return { entries: [] };
+  }
+  try {
+    const dirents = await readdir(abs, { withFileTypes: true });
+    const entries: FileTreeEntry[] = [];
+    for (const d of dirents) {
+      if (IGNORED_ENTRIES.has(d.name)) continue;
+      // Skip broken symlinks (isDirectory throws ENOENT on dangling links).
+      let isDir: boolean;
+      try {
+        isDir = d.isDirectory();
+      } catch {
+        continue;
+      }
+      const fullPath = join(abs, d.name);
+      entries.push({
+        name: d.name,
+        path: fullPath,
+        isDir,
+      });
+    }
+    // Sort: directories first, then alphabetically (case-insensitive).
+    entries.sort((a, b) => {
+      if (a.isDir !== b.isDir) return a.isDir ? -1 : 1;
+      return a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
+    });
+    return { entries };
+  } catch (err) {
+    // Directory gone, not a directory, or EACCES — degrade to empty.
+    log.warn(`file.listDir failed for ${abs}: ${(err as Error).message}`);
+    return { entries: [] };
+  }
+}
+
 export function registerFileHandlers(ipcMain: IpcMain): void {
   /* ── file:readFile — single file read, scoped to any project root ── */
   ipcMain.handle(IPC.FILE_READ, async (_evt, raw) => {
     const input = FileReadSchema.parse(raw);
-    // Find a project root that contains the requested path. We check every
-    // project (cheap — there are rarely more than a handful) rather than
-    // trusting a caller-supplied cwd. Clipboard-paste temp files (app-owned,
-    // written by clipboard:saveFile) are allowed outside projects.
-    const projects = ProjectRepo.list();
-    const root = projects.find((p) => pathWithin(p.path, input.filePath));
-    if (!root && !isPasteTempPath(input.filePath)) {
-      log.warn(`file.readFile refused — path outside any project root: ${input.filePath}`);
-      return { content: "" };
-    }
-    try {
-      const content = await readFile(input.filePath, "utf-8");
-      return { content };
-    } catch (err) {
-      // ENOENT (file gone), EACCES, or binary content that isn't valid utf-8.
-      // Return empty so the diff degrades to "whole before deleted" rather
-      // than throwing into the renderer.
-      log.warn(`file.readFile failed for ${input.filePath}: ${(err as Error).message}`);
-      return { content: "" };
-    }
+    return readFileGuarded(input.filePath);
   });
 
   /* ── file:readBinary - read a binary file as a base64 data URL (images) ── */
-  /** MIME types for the binary/image extensions we expect to serve as data
-   *  URLs. Unknown extensions fall back to application/octet-stream (the <img>
-   *  will fail to render and the pane shows its error state - intended). */
-  const BINARY_MIME: Record<string, string> = {
-    png: "image/png",
-    jpg: "image/jpeg",
-    jpeg: "image/jpeg",
-    gif: "image/gif",
-    bmp: "image/bmp",
-    ico: "image/x-icon",
-    webp: "image/webp",
-    svg: "image/svg+xml",
-    tif: "image/tiff",
-    tiff: "image/tiff",
-    avif: "image/avif",
-  };
   ipcMain.handle(IPC.FILE_READ_BINARY, async (_evt, raw) => {
     const input = FileReadBinarySchema.parse(raw);
-    const projects = ProjectRepo.list();
-    const root = projects.find((p) => pathWithin(p.path, input.filePath));
-    if (!root && !isPasteTempPath(input.filePath)) {
-      log.warn(`file.readBinary refused - path outside any project root: ${input.filePath}`);
-      return { dataUrl: "" };
-    }
-    try {
-      const buf = await readFile(input.filePath);
-      const ext = extOf(basename(input.filePath));
-      const mime = BINARY_MIME[ext] ?? "application/octet-stream";
-      // For SVG (text/XML), decode to a utf-8 string and embed directly - avoids
-      // base64 bloat and renders identically in <img>.
-      if (mime === "image/svg+xml") {
-        const text = buf.toString("utf-8");
-        return { dataUrl: `data:${mime};utf8,${encodeURIComponent(text)}` };
-      }
-      const b64 = buf.toString("base64");
-      return { dataUrl: `data:${mime};base64,${b64}` };
-    } catch (err) {
-      log.warn(`file.readBinary failed for ${input.filePath}: ${(err as Error).message}`);
-      return { dataUrl: "" };
-    }
+    return readBinaryGuarded(input.filePath);
   });
 
   /* ── file:listDir — one-level directory listing for the file tree ── */
   ipcMain.handle(IPC.FILE_LIST_DIR, async (_evt, raw) => {
     const input = FileListDirSchema.parse(raw);
-    // The caller supplies the project root explicitly (it's the active
-    // project's path). We still verify it matches a persisted project so a
-    // renderer bug can't list arbitrary directories. samePath normalizes both
-    // sides so a trailing-slash or casing difference doesn't cause a spurious
-    // refusal.
-    const known = ProjectRepo.list().some((p) => samePath(p.path, input.projectPath));
-    if (!known) {
-      log.warn(`file.listDir refused — unknown projectPath: ${input.projectPath}`);
-      return { entries: [] };
-    }
-    // Resolve the sub-directory against the project root. We do NOT use
-    // safeResolve here: its `rel !== ""` guard rejects dirPath === "" (the
-    // project root itself), which is a perfectly valid listing target — the
-    // file tree lists the root on first mount. pathWithin handles the root
-    // case correctly (abs === root returns true).
-    const abs = resolve(input.projectPath, input.dirPath || ".");
-    if (!pathWithin(input.projectPath, abs)) {
-      log.warn(
-        `file.listDir refused — dirPath escapes project root: ${input.dirPath} (root: ${input.projectPath})`,
-      );
-      return { entries: [] };
-    }
-    try {
-      const dirents = await readdir(abs, { withFileTypes: true });
-      const entries: FileTreeEntry[] = [];
-      for (const d of dirents) {
-        if (IGNORED_ENTRIES.has(d.name)) continue;
-        // Skip broken symlinks (isDirectory throws ENOENT on dangling links).
-        let isDir: boolean;
-        try {
-          isDir = d.isDirectory();
-        } catch {
-          continue;
-        }
-        const fullPath = join(abs, d.name);
-        entries.push({
-          name: d.name,
-          path: fullPath,
-          isDir,
-        });
-      }
-      // Sort: directories first, then alphabetically (case-insensitive).
-      entries.sort((a, b) => {
-        if (a.isDir !== b.isDir) return a.isDir ? -1 : 1;
-        return a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
-      });
-      return { entries };
-    } catch (err) {
-      // Directory gone, not a directory, or EACCES — degrade to empty.
-      log.warn(`file.listDir failed for ${abs}: ${(err as Error).message}`);
-      return { entries: [] };
-    }
+    return listDirGuarded(input.projectPath, input.dirPath);
   });
 
   /* ── file:search — recursive file search for composer @ / add-context ── */

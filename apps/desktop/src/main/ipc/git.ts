@@ -59,7 +59,9 @@ import { log } from "@main/lib/logger.js";
 // after the window is visible. Mirrors the node-pty lazy-load pattern in
 // TerminalManager.ts.
 let simpleGitLoader: typeof simpleGitFn | null = null;
-async function loadSimpleGit(): Promise<typeof simpleGitFn> {
+/** Lazy simple-git loader. Exported so the mobile git RPC whitelist reuses the
+ *  exact same loader (and module cache) as the desktop IPC handlers. */
+export async function loadSimpleGit(): Promise<typeof simpleGitFn> {
   if (!simpleGitLoader) {
     const mod = await import("simple-git");
     simpleGitLoader = mod.default;
@@ -69,7 +71,7 @@ async function loadSimpleGit(): Promise<typeof simpleGitFn> {
 
 /** Max recursion depth for repo discovery. Keeps the scan fast on deep trees
  *  while still finding nested monorepo packages. */
-const MAX_SCAN_DEPTH = 3;
+export const MAX_SCAN_DEPTH = 3;
 
 /** Directory names to skip during repo discovery (never contain repos we care
  *  about, and descending into them is slow). */
@@ -98,8 +100,9 @@ function pathWithin(root: string, abs: string): boolean {
 }
 
 /** Verify a repoPath is inside SOME persisted project root. Returns the
- *  matching project root, or null if the path is outside all roots (refuse). */
-function findContainingProject(repoPath: string): string | null {
+ *  matching project root, or null if the path is outside all roots (refuse).
+ *  Exported so the mobile git RPC whitelist enforces the same boundary. */
+export function findContainingProject(repoPath: string): string | null {
   const projects = ProjectRepo.list();
   const proj = projects.find((p) => pathWithin(p.path, repoPath));
   return proj?.path ?? null;
@@ -159,6 +162,120 @@ export async function resolveModelForGitOp(
   return { ok: true, config: cfg, releaseBridge: () => {} };
 }
 
+/* ───────────────────────── commit-message generation ───────────────────────── */
+
+/** Shared LLM commit-message core. Used by both the desktop IPC handler and
+ *  the mobile git RPC whitelist, so behavior is identical across transports.
+ *  The *system* prompt carries the fixed output-shape constraints
+ *  ({@link COMMIT_GEN_SYSTEM_PROMPT}) and is never overridden by user input;
+ *  the *user* message carries the (optional) format/language preference. */
+export async function generateCommitMessageForRepo(input: {
+  repoPath: string;
+  prompt?: string;
+  customModelId?: string;
+  customModelRole?: string;
+}): Promise<{ ok: boolean; message?: string; error?: string }> {
+  try {
+    // 1. Collect the staged diff (index vs HEAD).
+    const git = (await loadSimpleGit())(input.repoPath);
+    const diff = await git.diff(["--cached"]);
+    if (!diff.trim()) {
+      return { ok: false, error: "没有已暂存的更改可生成提交信息" };
+    }
+
+    // 2. Build the prompt (see header comment for the shape contract).
+    const formatPrompt = input.prompt?.trim() || DEFAULT_COMMIT_FORMAT_PROMPT;
+    const userPrompt =
+      `# 格式与语言偏好\n${formatPrompt}\n\n` +
+      `--- git diff --cached ---\n${diff}\n--- end diff ---`;
+
+    // 3. Resolve the model config. OpenAI-protocol configs get their bridge
+    //    activated here too (see resolveModelForGitOp).
+    const { query } = await import("@anthropic-ai/claude-agent-sdk");
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), 60000); // 60s timeout
+
+    let releaseBridge: (() => void) | undefined;
+    try {
+      let model: string | undefined;
+      let env: import("@anthropic-ai/claude-agent-sdk").Options["env"];
+
+      if (input.customModelId) {
+        const resolved = await resolveModelForGitOp(
+          input.customModelId,
+          input.customModelRole,
+        );
+        if (!resolved.ok) {
+          return { ok: false, error: resolved.error };
+        }
+        releaseBridge = resolved.releaseBridge;
+        const cfg = resolved.config;
+        model = resolveActiveModel(cfg);
+        env = buildCustomEnv(cfg);
+      }
+
+      // Resolve the real on-disk binary path (unpacks from asar in a packaged
+      // app). See the resolveSdkBinaryPath.ts rationale.
+      const binaryPath = resolveSdkBinaryPath();
+
+      const q = query({
+        prompt: userPrompt,
+        options: {
+          abortController: ac,
+          maxTurns: 1,
+          model,
+          env,
+          systemPrompt: COMMIT_GEN_SYSTEM_PROMPT,
+          settingSources: ["project", "local"],
+          includePartialMessages: false,
+          ...(binaryPath ? { pathToClaudeCodeExecutable: binaryPath } : {}),
+        },
+      });
+
+      // 4. Collect the assistant's text response.
+      let message = "";
+      for await (const m of q) {
+        if (m.type === "assistant") {
+          const content = (m as { message?: { content?: Array<{ type: string; text?: string }> } }).message?.content;
+          if (Array.isArray(content)) {
+            message = content
+              .filter((b) => b.type === "text" && b.text)
+              .map((b) => b.text!)
+              .join("\n");
+          }
+        }
+        if (m.type === "result") {
+          break;
+        }
+      }
+
+      clearTimeout(timer);
+      if (!message.trim()) {
+        return { ok: false, error: "模型未返回有效内容" };
+      }
+      // Clean up: strip markdown code fences if the model wrapped the message.
+      message = message.trim().replace(/^```\w*\n?/, "").replace(/\n?```$/, "").trim();
+      log.info(`git.generateCommitMessage succeeded for ${input.repoPath} (${message.length} chars)`);
+      return { ok: true, message };
+    } finally {
+      clearTimeout(timer);
+      // Release the OpenAI bridge if one was acquired for this op (no-op for
+      // anthropic-protocol configs).
+      releaseBridge?.();
+    }
+  } catch (err) {
+    const msg = (err as Error).message || String(err);
+    log.warn(`git.generateCommitMessage failed for ${input.repoPath}: ${msg}`);
+    if (/401|unauthorized|invalid.*key/i.test(msg)) {
+      return { ok: false, error: "认证失败,请检查模型配置的 Token/Key" };
+    }
+    if (/503|no available channel/i.test(msg)) {
+      return { ok: false, error: "网关无此模型渠道,请检查模型名配置" };
+    }
+    return { ok: false, error: msg };
+  }
+}
+
 /* ───────────────────────── repo discovery ───────────────────────── */
 
 /** Recursively scan `dir` for directories containing a `.git` entry, up to
@@ -166,7 +283,9 @@ export async function resolveModelForGitOp(
  *  into a directory once it's identified as a repo (nested repos inside a repo
  *  are found via their own `.git` only if they're separate worktrees — the
  *  common case is: the root is a repo OR some subdirs are repos). */
-async function findGitRepos(dir: string, maxDepth: number): Promise<string[]> {
+/** Exported for the mobile git RPC whitelist (repo discovery under a project
+ *  root uses the same scan as the desktop IPC handler). */
+export async function findGitRepos(dir: string, maxDepth: number): Promise<string[]> {
   const results: string[] = [];
   let entries: import("node:fs").Dirent[];
   try {
@@ -224,8 +343,9 @@ function mapStatusCode(code: string): GitStatusCode {
   }
 }
 
-/** Map simple-git's StatusResult to our GitStatusResult contract type. */
-function mapStatus(raw: import("simple-git").StatusResult): GitStatusResult {
+/** Map simple-git's StatusResult to our GitStatusResult contract type.
+ *  Exported for the mobile git RPC whitelist. */
+export function mapStatus(raw: import("simple-git").StatusResult): GitStatusResult {
   // simple-git's `.files` array has { path, index, working_dir } where the
   // status codes are single porcelain characters.
   const files: GitFileStatus[] = raw.files.map((f) => ({
@@ -536,124 +656,12 @@ export function registerGitHandlers(ipcMain: IpcMain): void {
     if (!findContainingProject(input.repoPath)) {
       return { ok: false, error: "仓库路径不在任何已添加的项目内" };
     }
-    try {
-      // 1. Collect the staged diff (index vs HEAD).
-      const git = (await loadSimpleGit())(input.repoPath);
-      const diff = await git.diff(["--cached"]);
-      if (!diff.trim()) {
-        return { ok: false, error: "没有已暂存的更改可生成提交信息" };
-      }
-
-      // 2. Build the prompt. The *system* prompt carries the fixed output-shape
-      //    constraints (clean, diff-only message) and is never overridden by the
-      //    user. The *user* message carries the (optional) format/language
-      //    preference — labelled as such so it can't be mistaken for overriding
-      //    the core behavior — followed by the staged diff.
-      const formatPrompt = input.prompt?.trim() || DEFAULT_COMMIT_FORMAT_PROMPT;
-      const userPrompt =
-        `# 格式与语言偏好\n${formatPrompt}\n\n` +
-        `--- git diff --cached ---\n${diff}\n--- end diff ---`;
-
-      // 3. Resolve the model config. If a customModelId is given, use that
-      //    config's env + model; otherwise fall back to the built-in model.
-      //    OpenAI-protocol configs get their bridge activated here too (mirrors
-      //    RuntimeManager) — without it the binary POSTs Anthropic-format
-      //    requests at a raw OpenAI endpoint and reports "selected model may
-      //    not exist". See resolveModelForGitOp.
-      const { query } = await import("@anthropic-ai/claude-agent-sdk");
-      const ac = new AbortController();
-      const timer = setTimeout(() => ac.abort(), 60000); // 60s timeout
-
-      let releaseBridge: (() => void) | undefined;
-      try {
-        let model: string | undefined;
-        let env: import("@anthropic-ai/claude-agent-sdk").Options["env"];
-
-        if (input.customModelId) {
-          const resolved = await resolveModelForGitOp(
-            input.customModelId,
-            input.customModelRole ?? undefined,
-          );
-          if (!resolved.ok) {
-            return { ok: false, error: resolved.error };
-          }
-          releaseBridge = resolved.releaseBridge;
-          const cfg = resolved.config;
-          model = resolveActiveModel(cfg);
-          env = buildCustomEnv(cfg);
-        }
-
-        // Resolve the real on-disk binary path (unpacks from asar in a packaged
-        // app). Without this, the SDK hands spawn() an app.asar-internal path
-        // and the launch fails with ENOTDIR. Null in dev (SDK resolves itself).
-        const binaryPath = resolveSdkBinaryPath();
-
-        const q = query({
-          prompt: userPrompt,
-          options: {
-            abortController: ac,
-            maxTurns: 1,
-            model,
-            env,
-            // Fixed system prompt guarantees clean, diff-only output. See
-            // COMMIT_GEN_SYSTEM_PROMPT — user's format prompt can't override it.
-            systemPrompt: COMMIT_GEN_SYSTEM_PROMPT,
-            settingSources: ["project", "local"],
-            includePartialMessages: false,
-            // Point the SDK at the real on-disk binary. Without this, the SDK
-            // resolves the claude binary to a path INSIDE app.asar and
-            // child_process.spawn fails with ENOTDIR (asar is a file, not a
-            // directory). Dev mode returns null and the SDK resolves node_modules
-            // itself. Same fix ClaudeAgentSdkProvider applies — see
-            // resolveSdkBinaryPath.ts for the full rationale.
-            ...(binaryPath ? { pathToClaudeCodeExecutable: binaryPath } : {}),
-          },
-        });
-
-        // 4. Collect the assistant's text response.
-        let message = "";
-        for await (const m of q) {
-          if (m.type === "assistant") {
-            // Extract text from content blocks.
-            const content = (m as { message?: { content?: Array<{ type: string; text?: string }> } }).message?.content;
-            if (Array.isArray(content)) {
-              message = content
-                .filter((b) => b.type === "text" && b.text)
-                .map((b) => b.text!)
-                .join("\n");
-            }
-          }
-          if (m.type === "result") {
-            break;
-          }
-        }
-
-        clearTimeout(timer);
-        if (!message.trim()) {
-          return { ok: false, error: "模型未返回有效内容" };
-        }
-        // Clean up: strip markdown code fences if the model wrapped the message.
-        message = message.trim().replace(/^```\w*\n?/, "").replace(/\n?```$/, "").trim();
-        log.info(`git.generateCommitMessage succeeded for ${input.repoPath} (${message.length} chars)`);
-        return { ok: true, message };
-      } finally {
-        clearTimeout(timer);
-        // Release the OpenAI bridge if one was acquired for this op (no-op for
-        // anthropic-protocol configs). Holds a server alive only as long as the
-        // query needs it; the registry closes the socket once the count hits 0.
-        releaseBridge?.();
-      }
-    } catch (err) {
-      const msg = (err as Error).message || String(err);
-      log.warn(`git.generateCommitMessage failed for ${input.repoPath}: ${msg}`);
-      if (/401|unauthorized|invalid.*key/i.test(msg)) {
-        return { ok: false, error: "认证失败,请检查模型配置的 Token/Key" };
-      }
-      if (/503|no available channel/i.test(msg)) {
-        return { ok: false, error: "网关无此模型渠道,请检查模型名配置" };
-      }
-      return { ok: false, error: msg };
-    }
+    return generateCommitMessageForRepo({
+      repoPath: input.repoPath,
+      prompt: input.prompt,
+      customModelId: input.customModelId ?? undefined,
+      customModelRole: input.customModelRole ?? undefined,
+    });
   });
 
   /* ── git:resolveConflicts — AI-resolve all merge conflicts in a repo ── */

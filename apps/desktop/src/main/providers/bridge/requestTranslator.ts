@@ -19,7 +19,11 @@
  *    `{role:"tool", tool_call_id, content}` message.
  * 4. **Tool definitions**: Anthropic's `input_schema` becomes OpenAI's
  *    `function.parameters`; `tool_choice` enum values map across.
- * 5. **Dropped fields**: `thinking` (no OpenAI equivalent), `cache_control`
+ * 5. **Images**: Anthropic image blocks (base64 source) become OpenAI
+ *    `image_url` data-URL parts in the user message's `content` array — the
+ *    vision input format for OpenAI-protocol endpoints. Without this, the
+ *    model never sees user-attached images and replies "你还没有提供图片".
+ * 6. **Dropped fields**: `thinking` (no OpenAI equivalent), `cache_control`
  *    (OpenAI caches automatically). These are intentionally NOT forwarded.
  */
 import type {
@@ -28,6 +32,7 @@ import type {
   AnthropicRequest,
   AnthropicTool,
   AnthropicToolChoice,
+  OpenAIContentPart,
   OpenAIMessage,
   OpenAIRequest,
   OpenAITool,
@@ -92,14 +97,21 @@ function translateMessage(msg: AnthropicMessage): OpenAIMessage[] {
   }
 
   // user message: split tool_result blocks into separate tool messages, and
-  // surface any remaining text as the user's own message.
+  // surface any remaining text + images as the user's own message.
   const userText: string[] = [];
+  const userImages: OpenAIContentPart[] = [];
   for (const block of msg.content) {
     if (block.type === "tool_result") {
       let resultText = typeof block.content === "string"
         ? block.content
         : Array.isArray(block.content)
-          ? block.content.map((t) => t.text).join("")
+          // OpenAI tool messages are text-only; image blocks inside a tool
+          // result (e.g. Read on an image file) have no representation there
+          // and are dropped.
+          ? block.content
+              .filter((t): t is { type: "text"; text: string } => t.type === "text")
+              .map((t) => t.text)
+              .join("")
           : "";
       // OpenAI has no `is_error` flag; fold the error hint into the text so the
       // model still sees that the tool call failed (mirrors what Claude does).
@@ -111,11 +123,31 @@ function translateMessage(msg: AnthropicMessage): OpenAIMessage[] {
       });
     } else if (block.type === "text") {
       userText.push(block.text);
+    } else if (block.type === "image") {
+      // Anthropic image block → OpenAI image_url part. Anthropic carries the
+      // media type + raw base64 separately; OpenAI wants a full data: URL.
+      if (block.source.type === "base64") {
+        userImages.push({
+          type: "image_url",
+          image_url: {
+            url: `data:${block.source.media_type};base64,${block.source.data}`,
+          },
+        });
+      }
+      // Non-base64 sources (url) can't occur in our flow; ignored defensively.
     }
     // thinking blocks can't appear in a user message; ignored defensively.
   }
-  if (userText.length > 0) {
-    out.push({ role: "user", content: userText.join("") });
+  const userParts: OpenAIContentPart[] = [];
+  if (userText.length > 0) userParts.push({ type: "text", text: userText.join("") });
+  userParts.push(...userImages);
+  if (userParts.length > 0) {
+    // No images → keep the plain string form (wire payload identical to
+    // before this change). Images → parts array, text part first.
+    out.push({
+      role: "user",
+      content: userImages.length === 0 ? (userParts[0].text ?? "") : userParts,
+    });
   }
   return out;
 }

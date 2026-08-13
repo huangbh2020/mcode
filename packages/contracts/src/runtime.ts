@@ -4,6 +4,8 @@
  * renders; the ClaudeAdapter translates raw NDJSON into these.
  */
 
+import type { Session } from "./session.js";
+
 /**
  * Permission modes are open strings so each provider can declare its own set
  * via `ProviderCapabilities.permissionModes`. Claude's values are kept as
@@ -489,6 +491,61 @@ export interface BrowserImageEvent {
   mimeType: "image/png";
 }
 
+/**
+ * Cross-client session-list sync. `RuntimeManager.emit` only fans out events
+ * from INSIDE a turn — a session created, renamed, deleted, archived or pinned
+ * from either client (desktop IPC handlers or the mobile RPC) would otherwise
+ * never reach the other side, leaving the two session lists diverging until a
+ * restart. These events are broadcast over the same two channels (renderer
+ * `claude:event` + mobile SSE bus) so every connected client keeps its list
+ * in sync.
+ *
+ * `session.changed` carries a SLIM row: only list-visible fields. The heavy
+ * per-session payloads (`turnFiles.before` can hold whole file contents) must
+ * not ride a list-sync broadcast. Receivers merge the entry onto an existing
+ * row (preserving cached heavy fields) or, for a row they don't have yet,
+ * materialize it with nulls for the heavy fields — a freshly-created session
+ * has them null anyway.
+ */
+export type SessionListEntry = Omit<
+  Session,
+  "contextSnapshot" | "todos" | "subagents" | "planDraft" | "usageHistory" | "turnFiles"
+>;
+
+/** A session row was created or mutated (title / archive / pin / rename …).
+ *  The full list-visible row is carried; receivers upsert by id. */
+export interface SessionChangedEvent {
+  type: "session.changed";
+  sessionId: string;
+  session: SessionListEntry;
+}
+
+/** A session was hard-deleted. Receivers drop the row from every list. */
+export interface SessionDeletedEvent {
+  type: "session.deleted";
+  sessionId: string;
+}
+
+/**
+ * Cross-client pending-request sync. When one client answers an approval /
+ * AskUserQuestion / plan approval, the main-process Deferred resolves exactly
+ * once — the OTHER clients (desktop + phones) would keep showing a dialog that
+ * can no longer be answered. This event tells every client to close its copy
+ * of the dialog for the given requestId. Broadcast through the same two
+ * channels as {@link SessionChangedEvent} (renderer `claude:event` + mobile
+ * SSE bus), ordered BEFORE the turn continues, so a subsequent request of the
+ * same kind can never be confused with the resolved one.
+ */
+export interface RequestResolvedEvent {
+  type: "request.resolved";
+  sessionId: string;
+  /** The pending request's id — matches the one carried by the originating
+   *  approval.request / question.ask / plan.approval_request event. */
+  requestId: string;
+  /** Which pending-request kind was closed. */
+  kind: "approval" | "question" | "plan";
+}
+
 /** The union of all runtime events. */
 export type RuntimeEvent =
   | TextDeltaEvent
@@ -509,4 +566,7 @@ export type RuntimeEvent =
   | TurnFilesEvent
   | TurnRewoundEvent
   | CompactResultEvent
-  | BrowserImageEvent;
+  | BrowserImageEvent
+  | SessionChangedEvent
+  | SessionDeletedEvent
+  | RequestResolvedEvent;
