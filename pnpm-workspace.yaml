@@ -10,10 +10,12 @@ packages:
 # 其 build scripts(prepare/postinstall)与运行时无关,设为 false 忽略。
 allowBuilds:
   '@google/genai': false
+  cpu-features: true
   electron: true
   esbuild: true
   node-pty: true
   protobufjs: false
+  ssh2: true
 
 # pnpm 11 moved settings from package.json's `pnpm` field into this file.
 # Override app-builder-lib to ^25.1.0: electron-builder@25.1.0's CLI requires

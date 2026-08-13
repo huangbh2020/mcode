@@ -8,6 +8,7 @@ import { BridgeRegistry } from "@main/providers/bridge/bridgeRegistry.js";
 import { lspManager } from "@main/lsp/LspManager.js";
 import { BrowserManager } from "@main/browser/BrowserManager.js";
 import { startMobileServer, stopMobileServer } from "@main/mobile/MobileHttpServer.js";
+import { relayManager } from "@main/relay/RelayManager.js";
 import { initUpdater } from "@main/updater.js";
 import { notificationManager } from "@main/notifications/NotificationManager.js";
 import { is } from "@main/utils.js";
@@ -178,6 +179,7 @@ app.on("before-quit", () => {
   TerminalManager.disposeAll();
   lspManager.disposeAll();
   BrowserManager.disposeAll();
+  relayManager.disposeAll();
   stopMobileServer();
   closeDb();
 });

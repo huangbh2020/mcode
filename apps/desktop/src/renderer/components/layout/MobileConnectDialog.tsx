@@ -19,8 +19,9 @@ import QRCode from "qrcode";
 import { Dialog } from "@renderer/components/ui/index.js";
 import { Button } from "@renderer/components/ui/index.js";
 import { cn } from "@renderer/lib/cn.js";
-import { IconCopy, IconDeviceMobile, IconRefresh, IconTrash } from "@renderer/lib/icons.js";
+import { IconCopy, IconDeviceMobile, IconRefresh, IconTrash, IconWifi, IconWorld } from "@renderer/lib/icons.js";
 import { api } from "@renderer/lib/api.js";
+import { RemoteConnectPanel } from "@renderer/components/mobile/RemoteConnectPanel.js";
 import type { PairingStartResult, PairedDevice } from "@contracts/mobile";
 
 /** Small self-contained trigger button + dialog. Renders its own Dialog.Root
@@ -55,6 +56,7 @@ export function MobileConnectButton() {
 }
 
 function MobileConnectPanel({ open }: { open: boolean }) {
+  const [tab, setTab] = useState<"lan" | "remote">("lan");
   const [pairing, setPairing] = useState<PairingStartResult | null>(null);
   const [qrDataUrl, setQrDataUrl] = useState<string | null>(null);
   const [devices, setDevices] = useState<PairedDevice[]>([]);
@@ -174,26 +176,63 @@ function MobileConnectPanel({ open }: { open: boolean }) {
   return (
     <>
       <Dialog.Title>连接手机</Dialog.Title>
-      <Dialog.Description>用手机扫码并在手机上输入验证码，完成配对（同一局域网）。</Dialog.Description>
+      <Dialog.Description>用手机扫码并在手机上输入验证码，完成配对。</Dialog.Description>
       <Dialog.Close />
 
-      {serverDown && (
-        <div className="mt-3 rounded border border-warning/40 bg-warning/10 px-3 py-2 text-xs text-warning">
-          手机服务未运行（端口被占用或已禁用）。请在设置中检查，或重启应用。
-        </div>
-      )}
+      {/* Mode tabs */}
+      <div className="mt-3 flex gap-1 border-b border-edge">
+        <button
+          type="button"
+          onClick={() => setTab("lan")}
+          className={cn(
+            "flex items-center gap-1.5 border-b-2 px-3 py-1.5 text-xs font-medium transition-colors",
+            tab === "lan"
+              ? "border-accent text-accent"
+              : "border-transparent text-content-muted hover:text-content",
+          )}
+        >
+          <IconWifi size={14} />
+          局域网配对
+        </button>
+        <button
+          type="button"
+          onClick={() => setTab("remote")}
+          className={cn(
+            "flex items-center gap-1.5 border-b-2 px-3 py-1.5 text-xs font-medium transition-colors",
+            tab === "remote"
+              ? "border-accent text-accent"
+              : "border-transparent text-content-muted hover:text-content",
+          )}
+        >
+          <IconWorld size={14} />
+          远程访问
+        </button>
+      </div>
 
-      <div className="mt-4 flex gap-4">
-        <div className="flex flex-col items-center gap-2">
-          <div className="rounded-lg border border-edge bg-white p-2">
-            {qrDataUrl ? (
-              <img src={qrDataUrl} alt="配对二维码" className="h-[180px] w-[180px]" />
-            ) : (
-              <div className="flex h-[180px] w-[180px] items-center justify-center text-xs text-content-subtle">
-                生成中…
+      {/* Remote mode */}
+      {tab === "remote" ? (
+        <div className="mt-4">
+          <RemoteConnectPanel />
+        </div>
+      ) : (
+        <>
+          {serverDown && (
+            <div className="mt-3 rounded border border-warning/40 bg-warning/10 px-3 py-2 text-xs text-warning">
+              手机服务未运行（端口被占用或已禁用）。请在设置中检查，或重启应用。
+            </div>
+          )}
+
+          <div className="mt-4 flex gap-4">
+            <div className="flex flex-col items-center gap-2">
+              <div className="rounded-lg border border-edge bg-white p-2">
+                {qrDataUrl ? (
+                  <img src={qrDataUrl} alt="配对二维码" className="h-[180px] w-[180px]" />
+                ) : (
+                  <div className="flex h-[180px] w-[180px] items-center justify-center text-xs text-content-subtle">
+                    生成中…
+                  </div>
+                )}
               </div>
-            )}
-          </div>
           <div className="flex items-center gap-3">
             <button
               type="button"
@@ -252,6 +291,8 @@ function MobileConnectPanel({ open }: { open: boolean }) {
           </div>
         </div>
       </div>
+        </>
+      )}
 
       <div className="mt-5">
         <div className="mb-2 text-xs font-medium text-content-muted">已连接设备（{devices.length}）</div>

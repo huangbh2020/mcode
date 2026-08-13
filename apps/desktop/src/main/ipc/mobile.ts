@@ -16,14 +16,23 @@ import { log } from "@main/lib/logger.js";
 export function registerMobileHandlers(ipcMain: IpcMain): void {
   ipcMain.handle(IPC.MOBILE_START_PAIRING, async (_evt, raw) => {
     const server = getMobileServer();
-    const input = (raw ?? {}) as { host?: string };
+    const input = (raw ?? {}) as {
+      host?: string;
+      mode?: "lan" | "remote";
+      endpoint?: string;
+    };
+
+    // Remote mode (SSH relay): the endpoint is the VPS's public URL.
+    if (input.mode === "remote" && input.endpoint) {
+      const pairing = pairingManager.startPairing(input.endpoint);
+      return { pairing: { ...pairing, mode: "remote" as const } };
+    }
+
+    // LAN mode (default): endpoint is the local HTTP server.
     const lanIp = input.host || detectLanIp();
-    // If the server isn't running (disabled / port error), we still let the
-    // user generate a QR but warn via the endpoint field — the phone won't be
-    // able to connect until the server comes up.
     const endpoint = `http://${lanIp ?? "localhost"}:${server.port || 7331}`;
     const pairing = pairingManager.startPairing(endpoint);
-    return { pairing };
+    return { pairing: { ...pairing, mode: "lan" as const } };
   });
 
   ipcMain.handle(IPC.MOBILE_GET_PAIRING, async () => {

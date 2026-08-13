@@ -373,13 +373,25 @@ const api = {
    *  "connect phone" dialog. The mobile HTTP server + pairing handshake itself
    *  lives in main; this only exposes start/cancel/list/revoke/status. */
   mobile: {
-    startPairing: (() => ipcRenderer.invoke(IPC.MOBILE_START_PAIRING)) as RpcMap["mobile.startPairing"],
+    startPairing: ((input) =>
+      ipcRenderer.invoke(IPC.MOBILE_START_PAIRING, input)) as RpcMap["mobile.startPairing"],
     getPairing: (() => ipcRenderer.invoke(IPC.MOBILE_GET_PAIRING)) as RpcMap["mobile.getPairing"],
     cancelPairing: (() => ipcRenderer.invoke(IPC.MOBILE_CANCEL_PAIRING)) as RpcMap["mobile.cancelPairing"],
     listDevices: (() => ipcRenderer.invoke(IPC.MOBILE_LIST_DEVICES)) as RpcMap["mobile.listDevices"],
     revokeDevice: ((input) =>
       ipcRenderer.invoke(IPC.MOBILE_REVOKE_DEVICE, input)) as RpcMap["mobile.revokeDevice"],
     getStatus: (() => ipcRenderer.invoke(IPC.MOBILE_GET_STATUS)) as RpcMap["mobile.getStatus"],
+  },
+
+  /** Relay (SSH-based remote access via user's own VPS) — drives the PC-side
+   *  "remote access" panel. Save/read VPS config, connect/disconnect. */
+  relay: {
+    saveConfig: ((input) =>
+      ipcRenderer.invoke(IPC.RELAY_SAVE_CONFIG, input)) as RpcMap["relay.saveConfig"],
+    getConfig: (() => ipcRenderer.invoke(IPC.RELAY_GET_CONFIG)) as RpcMap["relay.getConfig"],
+    connect: (() => ipcRenderer.invoke(IPC.RELAY_CONNECT)) as RpcMap["relay.connect"],
+    disconnect: (() => ipcRenderer.invoke(IPC.RELAY_DISCONNECT)) as RpcMap["relay.disconnect"],
+    status: (() => ipcRenderer.invoke(IPC.RELAY_STATUS)) as RpcMap["relay.status"],
   },
 
   // ── Push events (main → renderer) ──
@@ -514,6 +526,16 @@ const api = {
       ipcRenderer.on(IPC.NOTIFICATION_FOCUS_SESSION, listener);
       return () => {
         ipcRenderer.off(IPC.NOTIFICATION_FOCUS_SESSION, listener);
+      };
+    },
+    /** Relay state changes (connecting, deployed, connected, error). */
+    relayEvent(handler: (msg: Extract<MainToRendererMessage, { channel: "relay:event" }>) => void): () => void {
+      const listener = (_e: unknown, msg: MainToRendererMessage) => {
+        if (msg.channel === IPC.RELAY_EVENT) handler(msg);
+      };
+      ipcRenderer.on(IPC.RELAY_EVENT, listener);
+      return () => {
+        ipcRenderer.off(IPC.RELAY_EVENT, listener);
       };
     },
   },

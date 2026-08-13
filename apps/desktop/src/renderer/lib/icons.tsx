@@ -206,6 +206,9 @@ export {
   IconWorldWww,
   IconWorld,
   IconWorldSearch,
+  // Connectivity / relay
+  IconWifi,
+  IconServer,
   IconSun,
   IconMoon,
   // Search toggles

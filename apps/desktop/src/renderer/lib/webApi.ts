@@ -412,6 +412,8 @@ const on: Api["on"] = {
   updateDownloaded: () => () => {},
   windowFocusChanged: () => () => {},
   notificationFocusSession: () => () => {},
+  // Relay events are desktop-only (the phone doesn't manage SSH).
+  relayEvent: () => () => {},
 };
 
 /* ────────────────────────── assembly ────────────────────────── */

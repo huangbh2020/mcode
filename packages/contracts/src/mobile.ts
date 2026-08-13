@@ -59,6 +59,9 @@ export interface PairingStartResult {
   code: string;
   /** Unix ms when the nonce expires. */
   expiresAt: number;
+  /** Which endpoint mode this pairing uses. Defaults to "lan" for backward
+   *  compatibility. */
+  mode?: "lan" | "remote";
 }
 
 /** Input the mobile sends back to complete pairing. */
