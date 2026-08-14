@@ -48,6 +48,10 @@ export default {
         danger: "rgb(var(--danger) / <alpha-value>)",
         warning: "rgb(var(--warning) / <alpha-value>)",
         info: "rgb(var(--info) / <alpha-value>)",
+        // Fixed semantic green (git additions etc.) — same value as the
+        // DEFAULT accent but never overridden at runtime, so diff stats keep
+        // their green when the user customizes the brand color.
+        success: "rgb(var(--success) / <alpha-value>)",
         // User message bubble background — user-configurable color (default
         // = info token). Stored as an "R G B" triplet so the same
         // <alpha-value> mechanism composes bg-userBubble/10 etc. The value

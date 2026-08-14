@@ -38,7 +38,11 @@ import {
   IconSearch,
   IconPin,
   IconPinnedFilled,
+  IconSun,
+  IconMoon,
+  IconFocus,
 } from "@renderer/lib/icons.js";
+import { useTheme, applyThemeClass } from "@renderer/lib/theme.js";
 import { getProviderIcon } from "@renderer/lib/providerIcon.js";
 import { Button, ConfirmDialog, Dialog, Input } from "@renderer/components/ui/index.js";
 import { BrandLogo } from "./BrandLogo.js";
@@ -123,27 +127,58 @@ export function LeftBar() {
     [projects],
   );
 
+  // The active session's owning project, resolved from the loaded per-project
+  // slices (the owning project auto-expands on activation, so its slice is
+  // loaded). Used to SUPPRESS the project row's selected look while one of its
+  // threads is selected: the thread row already carries the selection, and a
+  // highlighted parent + child reads as two selections. Null when no session
+  // is active (or it isn't loaded yet) — then a directly-selected project
+  // (e.g. a freshly added empty project) keeps its highlight.
+  const activeSessionProjectId = useMemo(() => {
+    if (!activeSessionId) return null;
+    for (const [pid, list] of Object.entries(sessionsByProject)) {
+      if (list.some((s) => s.id === activeSessionId)) return pid;
+    }
+    return null;
+  }, [activeSessionId, sessionsByProject]);
+
+  // Theme quick-toggle (bottom rail). useTheme subscribes to theme.changed,
+  // so the icon stays in sync when the theme changes elsewhere (settings
+  // panel, or the OS flipping while in "system" mode). The toggle flips
+  // between the two EXPLICIT themes based on what's currently rendering —
+  // a "system" preference resolves via `effective` and lands on the opposite
+  // explicit theme.
+  const { effective: effectiveTheme } = useTheme();
+  const toggleTheme = () => {
+    const next = effectiveTheme === "dark" ? "light" : "dark";
+    void api.theme.set({ theme: next }).then((s) => {
+      applyThemeClass(s.effective);
+    });
+  };
+
   // ── Scroll-to-active-thread (clicking a tab should locate the thread in
   // the left bar, even across collapsed projects and un-paginated pages).
-  // Each SessionRow registers its <li> node here; an effect watches
-  // activeSessionId and, when the row isn't in the DOM yet, loads more pages
-  // until it mounts, then scrolls it into view. Mirrors SessionTabs' tabNodes
-  // pattern + FileTree's "mount-may-be-delayed" handling.
+  // Each SessionRow registers its <li> node here; locateActiveSession()
+  // scrolls it into view and, when the row isn't in the DOM yet, loads more
+  // pages until it mounts. Called by the effect below (auto-locate on
+  // activeSessionId change, "nearest" so the list barely moves) and by the
+  // bottom-rail locate button ("center" for an explicit jump). Mirrors
+  // SessionTabs' tabNodes pattern + FileTree's "mount-may-be-delayed"
+  // handling.
   const rowNodes = useRef<Map<string, HTMLLIElement>>(new Map());
   const registerNode = useCallback((id: string, el: HTMLLIElement | null) => {
     if (el) rowNodes.current.set(id, el);
     else rowNodes.current.delete(id);
   }, []);
 
-  useEffect(() => {
-    const id = activeSessionId;
+  const locateActiveSession = useCallback((center = false) => {
+    const id = useSessionStore.getState().activeSessionId;
     if (!id) return;
-    let cancelled = false;
 
     const tryScroll = () => {
       const el = rowNodes.current.get(id);
       if (el) {
-        el.scrollIntoView({ block: "nearest", behavior: "smooth" });
+        el.scrollIntoView({ block: center ? "center" : "nearest", behavior: "smooth" });
         return true;
       }
       return false;
@@ -155,10 +190,10 @@ export function LeftBar() {
     // (syncConfigFromSession already expanded it, but React hasn't painted),
     // or it's beyond the loaded page slice. Find its project, then keep
     // loading pages until the row appears or there's nothing more to load.
-    (async () => {
+    void (async () => {
       // Re-check after a paint in case the expand just rendered the row.
       await new Promise((r) => requestAnimationFrame(() => r(null)));
-      if (cancelled || tryScroll()) return;
+      if (tryScroll()) return;
 
       let projectId: string | undefined;
       for (const pid of Object.keys(useSessionStore.getState().sessionsByProject)) {
@@ -170,16 +205,19 @@ export function LeftBar() {
       if (!projectId) return; // archived / unknown - nothing to scroll to.
 
       // Load successive pages until the target row mounts or pages run out.
-      while (!cancelled) {
+      for (;;) {
         const s = useSessionStore.getState();
         if (!s.sessionsHasMoreByProject[projectId]) break;
         await s.loadMoreSessions(projectId);
-        if (cancelled || tryScroll()) break;
+        if (tryScroll()) break;
       }
     })();
+  }, []);
 
-    return () => { cancelled = true; };
-  }, [activeSessionId]);
+  useEffect(() => {
+    if (!activeSessionId) return;
+    locateActiveSession();
+  }, [activeSessionId, locateActiveSession]);
 
   // ── Right-click context menu for session rows. Controlled Menu + a virtual
   // anchor positioned at the cursor, so the popup opens exactly where the user
@@ -375,7 +413,9 @@ export function LeftBar() {
           hasMore={!!sessionsHasMoreByProject[p.id]}
           total={sessionsTotalByProject[p.id] ?? 0}
           expanded={!!expandedProjects[p.id]}
-          isActiveProject={p.id === activeProjectId}
+          // Selected look only when the project is active WITHOUT one of its
+          // threads being the active session (see activeSessionProjectId).
+          isActiveProject={p.id === activeProjectId && activeSessionProjectId !== p.id}
           activeSessionId={activeSessionId}
           runningBySession={runningBySession}
           unreadBySession={unreadBySession}
@@ -397,7 +437,8 @@ export function LeftBar() {
     ),
     [
       sessionsByProject, sessionsHasMoreByProject, sessionsTotalByProject,
-      expandedProjects, activeProjectId, activeSessionId, runningBySession,
+      expandedProjects, activeProjectId, activeSessionId, activeSessionProjectId,
+      runningBySession,
       toggleProjectExpanded, startSession, loadMoreSessions, openTab,
       archiveSession, deleteSession, setSessionPinned, registerNode,
     ],
@@ -617,20 +658,44 @@ export function LeftBar() {
         </div>
       )}
 
-      {/* Settings — entry moved here from the (removed) TopBar header.
-          Docked to the bottom of the left rail so it's always reachable
-          regardless of how far the project list scrolls. */}
-      <div className="mt-2 shrink-0 border-t border-edge pt-1.5">
+      {/* Settings + locate + theme quick-toggle — entry moved here from the
+          (removed) TopBar header. Docked to the bottom of the left rail so
+          it's always reachable regardless of how far the project list
+          scrolls. The two compact square buttons right of 设置: locate
+          (scroll the project tree to the active session, centering it) and
+          theme (sun while dark → light, moon while light → dark). */}
+      <div className="mt-2 flex shrink-0 items-center gap-1 border-t border-edge pt-1.5">
         <button
           onClick={() => setSettingsOpen(true)}
           className={cn(
-            "flex w-full items-center gap-2 rounded px-2 py-1.5 text-content-muted transition-colors [font-size:var(--right-panel-font-size)]",
+            "flex min-w-0 flex-1 items-center gap-2 rounded px-2 py-1.5 text-content-muted transition-colors [font-size:var(--right-panel-font-size)]",
             "hover:bg-surface-hover hover:text-content",
           )}
           title="设置"
         >
           <IconSettings size={14} className="shrink-0" />
           设置
+        </button>
+        <button
+          onClick={() => locateActiveSession(true)}
+          disabled={!activeSessionId}
+          className={cn(
+            "flex h-7 w-7 shrink-0 items-center justify-center rounded text-content-muted transition-colors [font-size:var(--right-panel-font-size)]",
+            "hover:bg-surface-hover hover:text-content disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent",
+          )}
+          title="定位到当前会话"
+        >
+          <IconFocus size={14} />
+        </button>
+        <button
+          onClick={toggleTheme}
+          className={cn(
+            "flex h-7 w-7 shrink-0 items-center justify-center rounded text-content-muted transition-colors [font-size:var(--right-panel-font-size)]",
+            "hover:bg-surface-hover hover:text-content",
+          )}
+          title={effectiveTheme === "dark" ? "切换到浅色主题" : "切换到深色主题"}
+        >
+          {effectiveTheme === "dark" ? <IconSun size={14} /> : <IconMoon size={14} />}
         </button>
       </div>
 

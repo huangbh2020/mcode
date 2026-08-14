@@ -74,6 +74,54 @@ export const DisplayModeSchema = z.enum(["single", "tabs"]);
 export type DisplayMode = z.infer<typeof DisplayModeSchema>;
 
 /**
+ * Setting key under which the session auto-archive rules are persisted (JSON).
+ *
+ * A session is auto-archived when its `updated_at` (bumped by every activity)
+ * is older than the project's effective threshold: `overrides[projectId]`
+ * when present, otherwise `defaultDays`. A threshold of `0` means "never
+ * archive". Pinned and running sessions are always excluded. The main-process
+ * AutoArchiver reads this key fresh on every tick, so a settings change takes
+ * effect on the next tick without any push sync.
+ */
+export const AUTO_ARCHIVE_SETTING_KEY = "session.autoArchive";
+
+/** zod schema for the auto-archive rules persisted under AUTO_ARCHIVE_SETTING_KEY. */
+export const AutoArchiveConfigSchema = z.object({
+  /** Master switch — when false, the AutoArchiver is a no-op. */
+  enabled: z.boolean(),
+  /** Global default inactivity threshold in days; applies to every project
+   *  without an explicit override. */
+  defaultDays: z.number().int().min(0),
+  /** Per-project overrides: projectId -> threshold in days (`0` = never
+   *  archive). Projects absent from this map inherit `defaultDays`. */
+  overrides: z.record(z.string(), z.number().int().min(0)),
+});
+export type AutoArchiveConfig = z.infer<typeof AutoArchiveConfigSchema>;
+
+export const DEFAULT_AUTO_ARCHIVE_CONFIG: AutoArchiveConfig = {
+  enabled: false,
+  defaultDays: 30,
+  overrides: {},
+};
+
+/**
+ * Parse the raw settings-table value into an AutoArchiveConfig. Any malformed
+ * or missing value falls back to the disabled default — shared by the main
+ * AutoArchiver and the renderer's settings hydration.
+ */
+export function parseAutoArchiveConfig(raw: string | null | undefined): AutoArchiveConfig {
+  if (!raw) return { ...DEFAULT_AUTO_ARCHIVE_CONFIG, overrides: {} };
+  try {
+    const parsed = AutoArchiveConfigSchema.safeParse(JSON.parse(raw));
+    if (parsed.success) return parsed.data;
+  } catch {
+    // fall through to the default
+  }
+  return { ...DEFAULT_AUTO_ARCHIVE_CONFIG, overrides: {} };
+}
+
+
+/**
  * Setting key under which the chat message-stream density is persisted.
  *  - "compact"    : tighter vertical rhythm — denser, more messages per fold.
  *  - "comfortable" (default): the historical look (assistant `mt-3` / user

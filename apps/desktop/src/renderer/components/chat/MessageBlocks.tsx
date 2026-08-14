@@ -1020,7 +1020,7 @@ function EditToolCard({
           {filePath}
         </span>
         <span className="ml-auto flex items-center gap-1.5 [font-size:var(--chat-fs-xxs)]">
-          {adds > 0 && <span className="text-accent">+{adds}</span>}
+          {adds > 0 && <span className="text-success">+{adds}</span>}
           {dels > 0 && <span className="text-danger">−{dels}</span>}
           <Chevron open={open} />
         </span>
@@ -1099,7 +1099,7 @@ function WriteToolCard({
           {filePath}
         </span>
         <span className="ml-auto flex items-center gap-1.5 [font-size:var(--chat-fs-xxs)]">
-          {diff && adds > 0 && <span className="text-accent">+{adds}</span>}
+          {diff && adds > 0 && <span className="text-success">+{adds}</span>}
           {diff && dels > 0 && <span className="text-danger">−{dels}</span>}
           {!diff && <span className="text-content-subtle">{lineCount} 行</span>}
           <Chevron open={open} />

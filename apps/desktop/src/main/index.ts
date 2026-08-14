@@ -10,6 +10,7 @@ import { BrowserManager } from "@main/browser/BrowserManager.js";
 import { startMobileServer, stopMobileServer } from "@main/mobile/MobileHttpServer.js";
 import { relayManager } from "@main/relay/RelayManager.js";
 import { initUpdater } from "@main/updater.js";
+import { initAutoArchiver } from "@main/session/AutoArchiver.js";
 import { notificationManager } from "@main/notifications/NotificationManager.js";
 import { is } from "@main/utils.js";
 import { logStartup } from "@main/lib/startupTimer.js";
@@ -149,6 +150,11 @@ app.whenReady().then(async () => {
   // Fire-and-forget: the first check is delayed 10s anyway, and the updater
   // module is lazy-loaded, so this never blocks window creation.
   void initUpdater();
+
+  // Start the session auto-archiver. Fire-and-forget: the first pass is
+  // delayed 60s and awaits DB readiness internally, so this never blocks
+  // window creation.
+  initAutoArchiver();
 
   // Start the notification system. Fire-and-forget: it awaits DB readiness
   // internally (to load prefs), then attaches its event observer to the

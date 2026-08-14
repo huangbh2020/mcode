@@ -49,7 +49,11 @@ import {
   UI_LAST_SESSION_SETTING_KEY,
   UI_SHORTCUTS_SETTING_KEY,
   UI_CHAT_DENSITY_SETTING_KEY,
+  AUTO_ARCHIVE_SETTING_KEY,
+  DEFAULT_AUTO_ARCHIVE_CONFIG,
+  parseAutoArchiveConfig,
   ShortcutBindingsSchema,
+  type AutoArchiveConfig,
   type DisplayMode,
   type ChatDensity,
   type ProjectView,
@@ -441,6 +445,11 @@ export interface SessionState {
   openTabs: string[];
   /** How the center pane renders. Persisted in the `settings` table. */
   displayMode: DisplayMode;
+  /** Session auto-archive rules (master switch + default inactivity days +
+   *  per-project overrides). Persisted as JSON in the `settings` table under
+   *  `session.autoArchive`; read fresh by the main-process AutoArchiver on
+   *  every tick, so a change here takes effect within an hour. */
+  autoArchiveConfig: AutoArchiveConfig;
   /** Chat message-stream vertical density. Persisted in the `settings` table
    *  under `ui.chatDensity`; applied to <html> as the --chat-row-gap-* /
    *  --chat-block-gap CSS vars by lib/appearance.ts. */
@@ -1046,6 +1055,10 @@ export interface SessionState {
   /** Update the center-pane display mode. Persists to the `settings`
    *  table so the choice survives restart. */
   setDisplayMode: (mode: DisplayMode) => Promise<void>;
+  /** Update the session auto-archive rules. Persists to the `settings`
+   *  table; the main-process AutoArchiver picks the change up on its next
+   *  tick. */
+  setAutoArchiveConfig: (config: AutoArchiveConfig) => Promise<void>;
   /** Update the chat message-stream density. Persists to the `settings`
    *  table so the choice survives restart. */
   setChatDensity: (mode: ChatDensity) => Promise<void>;
@@ -2810,6 +2823,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   openTabs: [],
   // Persisted in `settings` table; init() overwrites from the DB.
   displayMode: "single",
+  // Session auto-archive rules. Persisted as JSON in `settings`; initDeferred
+  // hydrates. Disabled by default so existing users opt in.
+  autoArchiveConfig: { ...DEFAULT_AUTO_ARCHIVE_CONFIG, overrides: {} },
   // Persisted in `settings` table; init() overwrites from the DB. Default
   // "comfortable" so existing users see no change until they opt in.
   chatDensity: "comfortable",
@@ -3244,6 +3260,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           UI_TITLE_GEN_MODEL_SETTING_KEY,
           UI_GIT_COLLAPSED_REPOS_SETTING_KEY,
           UI_PASTE_TAG_THRESHOLD_CHARS_SETTING_KEY,
+          AUTO_ARCHIVE_SETTING_KEY,
         ],
       })
       .catch((err) => {
@@ -3279,6 +3296,11 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     } catch (err) {
       console.error("apply(appearance deferred) failed:", err);
     }
+
+    // Session auto-archive rules (JSON blob). parseAutoArchiveConfig never
+    // throws — malformed rows fall back to the disabled default.
+    const autoArchiveRaw = ds[AUTO_ARCHIVE_SETTING_KEY];
+    if (autoArchiveRaw) set({ autoArchiveConfig: parseAutoArchiveConfig(autoArchiveRaw) });
 
     // Draggable pane widths (one JSON blob).
     try {
@@ -5457,6 +5479,18 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       await api.setting.set({ key: DISPLAY_MODE_SETTING_KEY, value: mode });
     } catch (err) {
       console.error("setting.set(displayMode) failed:", err);
+    }
+  },
+
+  /** Update the session auto-archive rules. Same immediate-flip +
+   *  fire-and-forget-persist pattern as setDisplayMode; the main-process
+   *  AutoArchiver re-reads the key on its next tick. */
+  setAutoArchiveConfig: async (config) => {
+    set({ autoArchiveConfig: config });
+    try {
+      await api.setting.set({ key: AUTO_ARCHIVE_SETTING_KEY, value: JSON.stringify(config) });
+    } catch (err) {
+      console.error("setting.set(autoArchive) failed:", err);
     }
   },
 

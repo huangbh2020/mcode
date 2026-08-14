@@ -52,6 +52,8 @@ const STATUS_COLOR: Record<string, string> = {
 export function MobileGitScreen() {
   const activeProjectId = useSessionStore((s) => s.activeProjectId);
   const projects = useSessionStore((s) => s.projects);
+  const commitGenModel = useSessionStore((s) => s.commitGenModel);
+  const commitGenPrompt = useSessionStore((s) => s.commitGenPrompt);
   const project = useMemo(
     () => projects.find((p) => p.id === activeProjectId) ?? null,
     [projects, activeProjectId],
@@ -155,14 +157,31 @@ export function MobileGitScreen() {
     setGenLoading(true);
     setError(null);
     try {
-      // customModelId/customModelRole: null = the built-in model (the desktop
-      // git panel passes the user's configured custom model; the mobile panel
-      // keeps the default — same shape on the wire).
+      // commitGenModel is stored as "configId:roleKey" — split it back, same as
+      // the desktop GitRepoCard. Null means no model is configured: the main-
+      // process core would fall back to the built-in Claude binary, which on a
+      // machine without a Claude login errors with "Not logged in · Please run
+      // login" — so guard here with an actionable message instead.
+      let customModelId: string | null = null;
+      let customModelRole: string | null = null;
+      if (commitGenModel) {
+        const colonIdx = commitGenModel.lastIndexOf(":");
+        if (colonIdx > 0) {
+          customModelId = commitGenModel.slice(0, colonIdx);
+          customModelRole = commitGenModel.slice(colonIdx + 1);
+        } else {
+          customModelId = commitGenModel;
+        }
+      }
+      if (!customModelId) {
+        setError("未配置提交信息生成模型，请在桌面端 设置 → Git 中选择");
+        return;
+      }
       const res = await api.git.generateCommitMessage({
         repoPath: repoPath!,
-        customModelId: null,
-        customModelRole: null,
-        prompt: "",
+        customModelId,
+        customModelRole,
+        prompt: commitGenPrompt,
       });
       if (res.ok && res.message) setMessage(res.message);
       else if (!res.ok) setError(res.error ?? "生成失败");

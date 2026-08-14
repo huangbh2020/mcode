@@ -1455,7 +1455,7 @@ function FileRow({
         {/* +/- tally badge — hidden on hover so the action buttons have room. */}
         {diffTally && (diffTally.adds > 0 || diffTally.dels > 0) && (
           <span className="flex shrink-0 items-center gap-0.5 font-mono [font-size:var(--rp-fs-xxs)] tabular-nums group-hover:opacity-0">
-            {diffTally.adds > 0 && <span className="text-accent">+{diffTally.adds}</span>}
+            {diffTally.adds > 0 && <span className="text-success">+{diffTally.adds}</span>}
             {diffTally.dels > 0 && <span className="text-danger">−{diffTally.dels}</span>}
           </span>
         )}

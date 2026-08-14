@@ -321,6 +321,22 @@ export const SessionRepo = {
     return out;
   },
 
+  /** Non-archived, unpinned sessions across ALL projects whose `updated_at`
+   *  is older than `cutoffMs`. Candidate feed for the auto-archiver, which
+   *  applies the per-project thresholds on top; pinned sessions are excluded
+   *  here because they are never auto-archived regardless of staleness. */
+  listStale(cutoffMs: number): Session[] {
+    const db = getDb();
+    const stmt = db.prepare(
+      "SELECT * FROM sessions WHERE archived = 0 AND pinned_at IS NULL AND updated_at < ?",
+    );
+    stmt.bind([v(cutoffMs)]);
+    const out: Session[] = [];
+    while (stmt.step()) out.push(rowToSession(stmt.getAsObject() as unknown as SessionRow));
+    stmt.free();
+    return out;
+  },
+
   get(id: string): Session | undefined {
     const db = getDb();
     const stmt = db.prepare("SELECT * FROM sessions WHERE id = ?");

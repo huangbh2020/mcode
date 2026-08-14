@@ -3,9 +3,9 @@ import {
   PASTE_TAG_THRESHOLD_CHARS_MIN,
   PASTE_TAG_THRESHOLD_CHARS_MAX,
 } from "@renderer/stores/sessionStore.js";
-import { Select, Input } from "@renderer/components/ui/index.js";
-import { IconSquare, IconStack2, IconList, IconListDetails, IconGripHorizontal } from "@renderer/lib/icons.js";
-import type { ChatDensity, DisplayMode } from "@contracts/ipc";
+import { Select, Input, Switch, Button } from "@renderer/components/ui/index.js";
+import { IconSquare, IconStack2, IconList, IconListDetails, IconGripHorizontal, IconX } from "@renderer/lib/icons.js";
+import type { ChatDensity, DisplayMode, AutoArchiveConfig } from "@contracts/ipc";
 import type { ReactNode } from "react";
 import { SettingRow } from "./SettingRow.js";
 import { PanelHeader } from "./PanelHeader.js";
@@ -18,6 +18,7 @@ import { TitleGenPanel } from "./TitleGenPanel.js";
  * Hosts general-purpose preferences that aren't tied to a specific feature
  * area. Currently:
  *  - 显示与布局 (SettingsSection): 中间面板显示模式 + 对话紧凑度 + 长文本折叠阈值
+ *  - 会话自动归档 (SettingsSection): 开关 + 默认不活跃天数 + 按项目覆盖
  *  - 会话标题生成 (TitleGenPanel, renders its own SettingsSection)
  *
  * Card-grouped layout: a page-level PanelHeader on top, then one
@@ -36,6 +37,28 @@ const DENSITY_OPTIONS: { value: ChatDensity; label: string; icon: ReactNode }[] 
   { value: "cozy", label: "宽松", icon: <IconGripHorizontal size={14} className="text-content-muted" /> },
 ];
 
+/** Inactivity thresholds offered for the global default and per-project
+ *  overrides. A project override of `never` maps to 0 (skip in the archiver). */
+const AUTO_ARCHIVE_DAY_OPTIONS: { value: string; label: string }[] = [
+  { value: "7", label: "7 天" },
+  { value: "14", label: "14 天" },
+  { value: "30", label: "30 天" },
+  { value: "60", label: "60 天" },
+  { value: "90", label: "90 天" },
+];
+
+/** Sentinel values for the per-project override select, distinct from the
+ *  numeric day options. */
+const NEVER_OVERRIDE = "0";
+
+/** Options for a per-project override: "永不归档" (0) plus the numeric day
+ *  thresholds. The global default select uses AUTO_ARCHIVE_DAY_OPTIONS only —
+ *  the default must always be a concrete day count. */
+const AUTO_ARCHIVE_OVERRIDE_OPTIONS: { value: string; label: string }[] = [
+  { value: NEVER_OVERRIDE, label: "永不归档" },
+  ...AUTO_ARCHIVE_DAY_OPTIONS,
+];
+
 export function GeneralPanel() {
   // ── Display mode ──
   const displayMode = useSessionStore((s) => s.displayMode);
@@ -48,6 +71,43 @@ export function GeneralPanel() {
   // ── Paste-to-card threshold ──
   const pasteTagThresholdChars = useSessionStore((s) => s.pasteTagThresholdChars);
   const setPasteTagThresholdChars = useSessionStore((s) => s.setPasteTagThresholdChars);
+
+  // ── Session auto-archive rules ──
+  const autoArchiveConfig = useSessionStore((s) => s.autoArchiveConfig);
+  const setAutoArchiveConfig = useSessionStore((s) => s.setAutoArchiveConfig);
+  const projects = useSessionStore((s) => s.projects);
+
+  const patchAutoArchive = (patch: Partial<AutoArchiveConfig>) =>
+    void setAutoArchiveConfig({ ...autoArchiveConfig, ...patch });
+
+  const setProjectOverride = (projectId: string, value: string) => {
+    const days = Number(value);
+    if (!Number.isFinite(days) || days < 0) return;
+    patchAutoArchive({ overrides: { ...autoArchiveConfig.overrides, [projectId]: days } });
+  };
+
+  const addProjectOverride = (projectId: string) => {
+    // Start the new override at the current default; the user then adjusts it.
+    patchAutoArchive({
+      overrides: { ...autoArchiveConfig.overrides, [projectId]: autoArchiveConfig.defaultDays },
+    });
+  };
+
+  const removeProjectOverride = (projectId: string) => {
+    const overrides = { ...autoArchiveConfig.overrides };
+    delete overrides[projectId];
+    patchAutoArchive({ overrides });
+  };
+
+  const activeProjects = projects.filter((p) => !p.archived);
+  // Only projects WITH a custom override are listed; the rest stay hidden
+  // behind the "add" picker so the panel stays compact.
+  const overriddenProjects = activeProjects.filter(
+    (p) => autoArchiveConfig.overrides[p.id] !== undefined,
+  );
+  const addableProjects = activeProjects.filter(
+    (p) => autoArchiveConfig.overrides[p.id] === undefined,
+  );
 
   return (
     <section className="space-y-4">
@@ -159,6 +219,127 @@ export function GeneralPanel() {
             className="w-24"
           />
         </SettingRow>
+      </SettingsSection>
+
+      {/* ── 会话自动归档 ── */}
+      <SettingsSection title="会话自动归档">
+        <SettingRow
+          title="自动归档不活跃会话"
+          desc="开启后,长时间没有活动的会话会自动移入左侧底部的「已归档」分区(可随时恢复)。置顶与正在运行的会话不会被归档。"
+        >
+          <Switch
+            id="setting-autoarchive-enabled"
+            checked={autoArchiveConfig.enabled}
+            onCheckedChange={(v) => patchAutoArchive({ enabled: v })}
+            label={autoArchiveConfig.enabled ? "已开启" : "已关闭"}
+          />
+        </SettingRow>
+
+        <SettingRow
+          title="默认不活跃天数"
+          desc="会话超过该天数没有任何活动(收发消息、改名、置顶等)后自动归档。可在下方为单个项目单独覆盖。"
+          htmlFor="setting-autoarchive-default-days"
+        >
+          <Select.Root
+            value={String(autoArchiveConfig.defaultDays)}
+            onValueChange={(v) => patchAutoArchive({ defaultDays: Number(v) })}
+          >
+            <Select.Trigger id="setting-autoarchive-default-days" className="min-w-[7rem]">
+              <Select.Value>
+                {(val: string) => {
+                  const label =
+                    AUTO_ARCHIVE_DAY_OPTIONS.find((o) => o.value === val)?.label ?? "30 天";
+                  return label;
+                }}
+              </Select.Value>
+            </Select.Trigger>
+            <Select.Portal>
+              <Select.Positioner>
+                <Select.Popup>
+                  <Select.List>
+                    {AUTO_ARCHIVE_DAY_OPTIONS.map((o) => (
+                      <Select.Item key={o.value} value={o.value}>
+                        <Select.ItemText>{o.label}</Select.ItemText>
+                      </Select.Item>
+                    ))}
+                  </Select.List>
+                </Select.Popup>
+              </Select.Positioner>
+            </Select.Portal>
+          </Select.Root>
+        </SettingRow>
+
+        {overriddenProjects.map((p) => (
+          <SettingRow
+            key={p.id}
+            title={p.name}
+            desc="覆盖上方默认归档天数。"
+            htmlFor={`setting-autoarchive-project-${p.id}`}
+          >
+            <div className="flex items-center gap-2">
+              <Select.Root
+                value={String(autoArchiveConfig.overrides[p.id])}
+                onValueChange={(v) => setProjectOverride(p.id, v as string)}
+              >
+                <Select.Trigger id={`setting-autoarchive-project-${p.id}`} className="min-w-[7rem]">
+                  <Select.Value>
+                    {(val: string) =>
+                      AUTO_ARCHIVE_OVERRIDE_OPTIONS.find((o) => o.value === val)?.label ?? "30 天"
+                    }
+                  </Select.Value>
+                </Select.Trigger>
+                <Select.Portal>
+                  <Select.Positioner>
+                    <Select.Popup>
+                      <Select.List>
+                        {AUTO_ARCHIVE_OVERRIDE_OPTIONS.map((o) => (
+                          <Select.Item key={o.value} value={o.value}>
+                            <Select.ItemText>{o.label}</Select.ItemText>
+                          </Select.Item>
+                        ))}
+                      </Select.List>
+                    </Select.Popup>
+                  </Select.Positioner>
+                </Select.Portal>
+              </Select.Root>
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => removeProjectOverride(p.id)}
+                aria-label={`移除 ${p.name} 的归档覆盖`}
+                title="移除覆盖"
+              >
+                <IconX size={14} />
+              </Button>
+            </div>
+          </SettingRow>
+        ))}
+
+        {addableProjects.length > 0 && (
+          <SettingRow
+            title="添加项目覆盖"
+            desc="为需要单独设置归档规则的项目添加覆盖。"
+          >
+            <Select.Root value={null} onValueChange={(v) => addProjectOverride(v as string)}>
+              <Select.Trigger className="min-w-[10rem]">
+                <Select.Value placeholder="选择项目…" />
+              </Select.Trigger>
+              <Select.Portal>
+                <Select.Positioner>
+                  <Select.Popup>
+                    <Select.List>
+                      {addableProjects.map((p) => (
+                        <Select.Item key={p.id} value={p.id}>
+                          <Select.ItemText>{p.name}</Select.ItemText>
+                        </Select.Item>
+                      ))}
+                    </Select.List>
+                  </Select.Popup>
+                </Select.Positioner>
+              </Select.Portal>
+            </Select.Root>
+          </SettingRow>
+        )}
       </SettingsSection>
 
       {/* ── 会话标题生成 (self-contained section) ── */}

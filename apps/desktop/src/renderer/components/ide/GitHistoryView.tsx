@@ -390,7 +390,7 @@ function CommitFileRow({
       {(file.additions != null || file.deletions != null) && (
         <span className="flex shrink-0 items-center gap-0.5 font-mono [font-size:var(--rp-fs-xxs)] tabular-nums">
           {file.additions != null && file.additions > 0 && (
-            <span className="text-accent">+{file.additions}</span>
+            <span className="text-success">+{file.additions}</span>
           )}
           {file.deletions != null && file.deletions > 0 && (
             <span className="text-danger">−{file.deletions}</span>

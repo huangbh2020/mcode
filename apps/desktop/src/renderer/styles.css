@@ -78,14 +78,23 @@ div:has(> [role="menu"]) {
   --input-edge: 212 212 216; /* zinc-300 */
   /* accent + status (one shade each; tuned per theme for contrast) */
   --accent: 5 150 105; /* emerald-600 */
-  /* Inline code span foreground — tracks the brand accent. Light mode uses the
-   * accent verbatim (light backgrounds don't strain the eye); .dark softens it
-   * (see the .dark override) so a saturated brand color doesn't glare against
-   * the dark recess. Consumed via [color:var(--code-fg)] in Markdown.tsx. */
+  /* Inline code span foreground — light mode uses the brand accent VERBATIM
+   * (user preference: keep the pure theme color even though small-text
+   * contrast on the muted recess is ~3.5:1, below WCAG AA). Dark mode mixes
+   * 60/40 toward --content instead (see the .dark override) so a saturated
+   * brand color doesn't glare against the dark recess. Consumed via
+   * [color:var(--code-fg)] in Markdown.tsx. */
   --code-fg: rgb(var(--accent));
   --danger: 220 38 38; /* red-600 */
   --warning: 217 119 6; /* amber-600 */
   --info: 124 58 237; /* violet-600 */
+  /* Fixed git "additions" green — intentionally NOT the brand accent. Diff
+   * +/- tallies are semantic (added/removed lines), like --danger red, so
+   * they must not repaint when the user changes the brand color. The value
+   * equals the DEFAULT accent (emerald-600) so the factory look is
+   * unchanged; a custom brand color simply stops bleeding into diff stats.
+   * Consumed via text-success in MessageBlocks / TurnFilesCard / git panels. */
+  --success: 5 150 105; /* emerald-600 */
 
   /* Chat appearance — user-configurable. Overridden at runtime by
    * lib/appearance.ts (setProperty on <html>) when the user changes them
@@ -182,6 +191,9 @@ div:has(> [role="menu"]) {
   --danger: 248 113 113; /* red-400 */
   --warning: 251 191 36; /* amber-400 */
   --info: 167 139 250; /* violet-400 */
+  /* Fixed git "additions" green — dark counterpart of :root's --success
+   * (mirrors the default dark accent, emerald-500). See :root for rationale. */
+  --success: 16 185 129; /* emerald-500 */
 
   /* Center-pane drop shadow (--panel-shadow): applied to the workspace
    * center pane + dialogs so the elevated surface separates from the muted
