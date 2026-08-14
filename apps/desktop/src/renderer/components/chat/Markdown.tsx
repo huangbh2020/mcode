@@ -351,7 +351,7 @@ function buildComponents(): Components {
     }, [rawCode, lang, ready]);
 
     return (
-      <pre className="my-2 overflow-hidden rounded-lg border border-edge/60 bg-surface-muted/60">
+      <pre className="my-[var(--chat-md-gap-md)] overflow-hidden rounded-lg border border-edge/60 bg-surface-muted/60">
         <div className="flex items-center justify-between border-b border-edge/60 bg-surface-muted/40 px-2 py-0.5 text-content-subtle [font-size:var(--chat-fs-xxs)]">
           <span className="font-mono">{lang}</span>
           <CopyButton text={rawCode.replace(/\n$/, "")} />
@@ -375,13 +375,13 @@ function buildComponents(): Components {
     );
   },
   ul({ children }) {
-    return <ul className="my-1.5 list-disc space-y-1 pl-5 text-content-muted marker:text-content-subtle">{children}</ul>;
+    return <ul className="my-[var(--chat-md-gap-sm)] list-disc space-y-[var(--chat-md-gap-xs)] pl-5 text-content-muted marker:text-content-subtle">{children}</ul>;
   },
   ol({ children }) {
-    return <ol className="my-1.5 list-decimal space-y-1 pl-5 text-content-muted marker:text-content-subtle">{children}</ol>;
+    return <ol className="my-[var(--chat-md-gap-sm)] list-decimal space-y-[var(--chat-md-gap-xs)] pl-5 text-content-muted marker:text-content-subtle">{children}</ol>;
   },
   blockquote({ children }) {
-    return <blockquote className="my-2 border-l-2 border-edge pl-3 text-content-muted">{children}</blockquote>;
+    return <blockquote className="my-[var(--chat-md-gap-md)] border-l-2 border-edge pl-3 text-content-muted">{children}</blockquote>;
   },
   // Bold stays at the brightest content color even inside muted contexts
   // (lists / tables / blockquotes all inherit --content-muted), so emphasized
@@ -389,27 +389,34 @@ function buildComponents(): Components {
   strong({ children }) {
     return <strong className="text-content">{children}</strong>;
   },
+  // Table sizing is content-first: `w-full` + auto layout squeezed text-heavy
+  // columns to per-word vertical strips on narrow panes (and stretched sparse
+  // tables to full width). max-content lets every column take its natural
+  // width, min-width:100% keeps sparse tables filling the column (previous
+  // look), and the per-cell max-width cap makes long prose wrap at a readable
+  // measure instead of rendering one enormous unbroken line. The overflow-x-auto
+  // wrapper scrolls whatever still exceeds the pane.
   table({ children }) {
     return (
-      <div className="my-2 overflow-x-auto">
-        <table className="w-full border-collapse [font-size:var(--chat-fs-sm)]">{children}</table>
+      <div className="my-[var(--chat-md-gap-md)] overflow-x-auto">
+        <table className="[width:max-content] [min-width:100%] border-collapse [font-size:var(--chat-fs-sm)]">{children}</table>
       </div>
     );
   },
   th({ children }) {
-    return <th className="border border-edge bg-surface-muted/50 px-2 py-1 text-left font-semibold text-content">{children}</th>;
+    return <th className="max-w-[32ch] border border-edge bg-surface-muted/50 px-2 py-1 text-left font-semibold text-content">{children}</th>;
   },
   td({ children }) {
-    return <td className="border border-edge px-2 py-1 text-content-muted">{children}</td>;
+    return <td className="max-w-[32ch] border border-edge px-2 py-1 text-content-muted">{children}</td>;
   },
   h1({ children }) {
-    return <h1 className="mb-2 mt-3 font-bold text-content [font-size:var(--chat-fs-lg)]">{children}</h1>;
+    return <h1 className="mb-[var(--chat-md-gap-md)] mt-[var(--chat-md-gap-lg)] font-bold text-content [font-size:var(--chat-fs-lg)]">{children}</h1>;
   },
   h2({ children }) {
-    return <h2 className="mb-1.5 mt-3 font-bold text-content [font-size:var(--chat-font-size)]">{children}</h2>;
+    return <h2 className="mb-[var(--chat-md-gap-sm)] mt-[var(--chat-md-gap-lg)] font-bold text-content [font-size:var(--chat-font-size)]">{children}</h2>;
   },
   h3({ children }) {
-    return <h3 className="mb-1 mt-2 font-semibold text-content [font-size:var(--chat-font-size)]">{children}</h3>;
+    return <h3 className="mb-[var(--chat-md-gap-xs)] mt-[var(--chat-md-gap-md)] font-semibold text-content [font-size:var(--chat-font-size)]">{children}</h3>;
   },
   };
 }
@@ -446,9 +453,13 @@ export const Markdown = memo(function Markdown({
     () => (skillRe ? [rehypeKatex, rehypeSkillInline(skillRe)] : [rehypeKatex]),
     [skillRe],
   );
+  // Block margins + line-height here are density-driven (--chat-md-gap-* /
+  // --chat-md-leading, see the chat-density section in styles.css) so the
+  // 对话紧凑度 setting shapes the reply body itself, not just the gaps
+  // between message rows.
   return (
     <div
-      className="break-words text-content [font-size:var(--chat-font-size)] [line-height:var(--chat-line-height)] [font-weight:var(--chat-font-weight)] [&>p]:my-1.5 [&:first-child]:mt-0 [&:last-child]:mb-0"
+      className="break-words text-content [font-size:var(--chat-font-size)] [line-height:var(--chat-md-leading)] [font-weight:var(--chat-font-weight)] [&>p]:my-[var(--chat-md-gap-sm)] [&:first-child]:mt-0 [&:last-child]:mb-0"
     >
       <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={rehypePlugins} components={components}>
         {children}

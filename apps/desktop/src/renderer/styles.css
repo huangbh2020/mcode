@@ -94,14 +94,14 @@ div:has(> [role="menu"]) {
    *   --user-bubble is a neutral gray (zinc-500) so user prompts read as a
    *     calm, non-distracting bubble; presets in Settings offer color picks. */
   --chat-font-size: 14px; /* default = text-sm */
-  /* Chat prose line-height + base weight. A relaxed line height (1.6) and a
-   * weight lifted toward the global base (450 vs the 400 of the original
-   * design) give comfortable, airy reading on both themes — 400 read as
-   * visibly thinner than the app chrome (base 500 light / 600 dark), which
-   * washed out on dark backgrounds. The dark scope below raises the weight
-   * one more step (500) since white-on-dark thins optically. Consumed by the
-   * Markdown container in Markdown.tsx. */
-  --chat-line-height: 1.6;
+  /* Chat prose base weight. A weight lifted toward the global base (450 vs
+   * the 400 of the original design) gives comfortable, airy reading on both
+   * themes — 400 read as visibly thinner than the app chrome (base 500 light
+   * / 600 dark), which washed out on dark backgrounds. The dark scope below
+   * raises the weight one more step (500) since white-on-dark thins
+   * optically. Prose line-height is density-driven (--chat-md-leading in the
+   * chat-density section below). Consumed by the Markdown container in
+   * Markdown.tsx. */
   --chat-font-weight: 450;
   --user-bubble: 82 82 91; /* default = zinc-500 (neutral gray), R G B triplet */
 
@@ -194,11 +194,10 @@ div:has(> [role="menu"]) {
    * Overridden at runtime by lib/appearance.ts when the user sets a custom
    * value. */
   --chat-font-size: 14px;
-  /* Chat prose line-height + base weight — dark mode raises the prose weight
-   * to 500 (one step above light's 450) because white strokes thin optically
-   * on the deep background; the line height stays identical so the reading
-   * rhythm matches light mode. */
-  --chat-line-height: 1.6;
+  /* Chat prose base weight — dark mode raises the prose weight to 500 (one
+   * step above light's 450) because white strokes thin optically on the deep
+   * background. Line height is density-driven (--chat-md-leading) and shared
+   * across themes. */
   --chat-font-weight: 500;
   --user-bubble: 113 113 122; /* default = zinc-500 (\#71717a) */
 
@@ -324,6 +323,21 @@ html .font-bold {
 }
 .no-scrollbar::-webkit-scrollbar {
   display: none;
+}
+
+/* ───────────── Markdown code blocks (shiki) ─────────────
+ * Markdown.tsx renders each fenced block as
+ * <pre card> → <div.overflow-x-auto> → <pre.shiki style="background-color:…">.
+ * The inner shiki <pre> is block-level, so its box — and with it the theme
+ * background it carries inline — is only as wide as the scroll container's
+ * viewport. Overflowing lines widen the scrollable area but not the box, so
+ * the region revealed by horizontal scrolling showed the lighter card
+ * background instead of the code well (visible in dark mode, where shiki's
+ * #0d1117 differs from surface-muted). Sizing the box to its widest line
+ * (flooring at 100%) makes the background span the full scroll width. */
+pre.shiki {
+  width: max-content;
+  min-width: 100%;
 }
 
 /* ───────────── Theme-switch transition ─────────────
@@ -508,7 +522,9 @@ body,
 
 /* ───────────── Chat message-stream density ─────────────
  * The message stream's vertical rhythm is user-configurable (Settings →
- * 常规 → 数据流显示风格). Three density presets, each setting three vars:
+ * 常规 → 对话紧凑度). Three density presets, each setting two groups of vars:
+ *
+ * Stream rhythm (row/block gaps):
  *   --chat-row-gap-assistant : top margin of each assistant MessageRow
  *   --chat-row-gap-user      : top margin of each user MessageRow (kept larger
  *                              than assistant so a new user prompt still reads
@@ -516,12 +532,23 @@ body,
  *   --chat-block-gap         : gap between blocks inside one message
  *                              (MessageBlocks `space-y-[...]`)
  *
+ * Markdown typography (the final reply's own layout — Markdown.tsx). Without
+ * these, the density setting only moved row gaps while the reply body (which
+ * dominates a long turn's visual footprint) stayed identical in every mode.
+ * The four gap tiers mirror the old hardcoded Tailwind margins:
+ *   --chat-md-gap-xs : list-item gaps, h3 bottom   (was space-y-1 / mb-1)
+ *   --chat-md-gap-sm : paragraphs, lists, h2 bottom (was my-1.5 / mb-1.5)
+ *   --chat-md-gap-md : code blocks, blockquotes, tables, h1 bottom / h3 top
+ *                      (was my-2)
+ *   --chat-md-gap-lg : heading tops                 (was mt-3)
+ *   --chat-md-leading: prose line-height            (was --chat-line-height)
+ *
  * The active preset is selected by the `data-chat-density` attribute on <html>,
  * written by lib/appearance.ts from the persisted `ui.chatDensity` setting.
  * The :root block below is the "comfortable" default (= the old hardcoded
- * `mt-3` / `mt-5` / `space-y-2`), so the uncustomized state and any consumer
- * outside [data-chat-density] resolve unchanged. The explicit selectors cover
- * all three modes for clarity.
+ * `mt-3` / `mt-5` / `space-y-2` / `my-1.5`), so the uncustomized state and any
+ * consumer outside [data-chat-density] resolve unchanged. The explicit
+ * selectors cover all three modes for clarity.
  *
  * The three presets are spread wide enough that switching is immediately
  * perceptible: compact packs messages tightly, comfortable is the balanced
@@ -531,16 +558,31 @@ body,
   --chat-row-gap-assistant: 0.75rem; /* 12px (was mt-3) */
   --chat-row-gap-user: 1.25rem;      /* 20px (was mt-5) */
   --chat-block-gap: 0.5rem;          /* 8px  (was space-y-2) */
+  --chat-md-gap-xs: 0.25rem;         /* 4px  */
+  --chat-md-gap-sm: 0.375rem;        /* 6px  */
+  --chat-md-gap-md: 0.5rem;          /* 8px  */
+  --chat-md-gap-lg: 0.75rem;         /* 12px */
+  --chat-md-leading: 1.6;            /* = --chat-line-height default */
 }
 [data-chat-density="compact"] {
   --chat-row-gap-assistant: 0.25rem; /* 4px */
   --chat-row-gap-user: 0.5rem;       /* 8px */
   --chat-block-gap: 0.1875rem;       /* 3px */
+  --chat-md-gap-xs: 0.125rem;        /* 2px */
+  --chat-md-gap-sm: 0.25rem;         /* 4px */
+  --chat-md-gap-md: 0.375rem;        /* 6px */
+  --chat-md-gap-lg: 0.5rem;          /* 8px */
+  --chat-md-leading: 1.5;
 }
 [data-chat-density="cozy"] {
   --chat-row-gap-assistant: 1.75rem; /* 28px */
   --chat-row-gap-user: 2.75rem;      /* 44px */
   --chat-block-gap: 1rem;            /* 16px */
+  --chat-md-gap-xs: 0.4375rem;       /* 7px */
+  --chat-md-gap-sm: 0.625rem;        /* 10px */
+  --chat-md-gap-md: 0.875rem;        /* 14px */
+  --chat-md-gap-lg: 1.25rem;         /* 20px */
+  --chat-md-leading: 1.75;
 }
 
 /* ───────────── Narrow-composer spacing ─────────────

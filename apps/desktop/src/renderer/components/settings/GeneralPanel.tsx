@@ -103,7 +103,7 @@ export function GeneralPanel() {
         {/* ── Message-stream density (vertical rhythm) ── */}
         <SettingRow
           title="对话紧凑度"
-          desc="调整消息之间的行间距与单条消息内块间距。紧凑可在屏幕内看到更多内容,宽松阅读更舒适。"
+          desc="调整消息之间的行间距、消息内块间距,以及回复正文的段落间距与行高。紧凑可在屏幕内看到更多内容,宽松阅读更舒适。"
           htmlFor="setting-chatdensity"
         >
           <Select.Root
