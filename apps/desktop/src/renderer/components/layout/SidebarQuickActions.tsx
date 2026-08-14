@@ -23,6 +23,7 @@ import {
 } from "@renderer/lib/shortcuts.js";
 import { IconPlus, IconSearch } from "@renderer/lib/icons.js";
 import { Kbd } from "@renderer/components/ui/index.js";
+import { MobileConnectButton } from "@renderer/components/layout/MobileConnectDialog.js";
 
 /** Trailing keyboard badge, consistent with the command palette. Subscribes to
  *  overrides so it updates live when the user rebinds in settings. */
@@ -80,6 +81,12 @@ export function SidebarQuickActions() {
         <span className="flex-1 text-left font-medium">搜索</span>
         <ShortcutBadge commandId="command.palette" />
       </button>
+
+      {/* 连接手机 — LAN pairing (QR + 6-digit code) / remote relay. Rendered
+          as a self-contained trigger + dialog so the sidebar just hosts it;
+          the button style mirrors 搜索/新建会话 so all three read as a matched
+          group of workspace entry points. */}
+      <MobileConnectButton />
     </div>
   );
 }

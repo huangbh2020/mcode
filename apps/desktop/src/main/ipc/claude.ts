@@ -30,6 +30,7 @@ import { SessionRepo, ProjectRepo, MessageRepo, SettingRepo } from "@main/store/
 import { runtimeManager } from "@main/claude/RuntimeManager.js";
 import { providerRegistry } from "@main/providers/registry.js";
 import { log } from "@main/lib/logger.js";
+import { broadcastSessionChanged } from "@main/lib/sessionSync.js";
 import { generateSessionTitle } from "@main/ipc/titleGen.js";
 
 export function registerClaudeHandlers(ipcMain: IpcMain): void {
@@ -74,6 +75,8 @@ export function registerClaudeHandlers(ipcMain: IpcMain): void {
     };
     SessionRepo.create(session);
     runtimeManager.bindSession(session);
+    // Keep connected mobile clients' session lists in sync.
+    broadcastSessionChanged(session);
     log.info(`session started: ${session.id} (provider ${session.providerId}, project ${input.projectId})`);
     return { session };
   });
@@ -85,14 +88,16 @@ export function registerClaudeHandlers(ipcMain: IpcMain): void {
     const project = ProjectRepo.get(session.projectId);
     if (!project) throw new Error(`project not found for session ${input.sessionId}`);
 
-	    // Auto-title from the first user message, if the title is still the default.
-	    let updated = session;
-	    const isFirstMessage = session.title === "New session" && input.prompt.trim().length > 0;
-	    if (isFirstMessage) {
-	      const title = input.prompt.trim().slice(0, 40) + (input.prompt.trim().length > 40 ? "…" : "");
-	      SessionRepo.updateTitle(session.id, title);
-	      updated = { ...session, title };
-	    }
+		    // Auto-title from the first user message, if the title is still the default.
+		    let updated = session;
+		    const isFirstMessage = session.title === "New session" && input.prompt.trim().length > 0;
+		    if (isFirstMessage) {
+		      const title = input.prompt.trim().slice(0, 40) + (input.prompt.trim().length > 40 ? "…" : "");
+		      SessionRepo.updateTitle(session.id, title);
+		      updated = { ...session, title };
+		      // Keep connected mobile clients' session lists in sync.
+		      broadcastSessionChanged(updated);
+		    }
 	    // Apply per-turn overrides from the renderer's current UI state. The
 	    // renderer persists model/effort/permissionMode/customModelId to the
 	    // session row via fire-and-forget `updateSettings` calls, so the row
@@ -181,9 +186,13 @@ export function registerClaudeHandlers(ipcMain: IpcMain): void {
     const input = RespondQuestionSchema.parse(raw);
 
     // Dismissed: the user closed the question card. Sentinel requests have no
-    // Deferred (the turn already ended) — nothing to resume, so just return.
+    // Deferred (the turn already ended) — nothing to resume; still broadcast
+    // the cross-client close so other clients drop their copy of the card.
     if (input.dismissed) {
-      if (input.requestId.startsWith("sentinel_")) return;
+      if (input.requestId.startsWith("sentinel_")) {
+        runtimeManager.notifyRequestResolved(input.sessionId, input.requestId, "question");
+        return;
+      }
       const resolved = runtimeManager.dismissUserInput(input.requestId);
       if (!resolved) {
         log.warn(`respondQuestion(dismiss): no pending request for id ${input.requestId}`);
@@ -192,6 +201,9 @@ export function registerClaudeHandlers(ipcMain: IpcMain): void {
     }
 
     if (input.requestId.startsWith("sentinel_")) {
+      // No Deferred exists — tell every other client to close their copy of
+      // the question card (this answer was accepted from one client only).
+      runtimeManager.notifyRequestResolved(input.sessionId, input.requestId, "question");
       const session = SessionRepo.get(input.sessionId);
       if (!session) {
         log.warn(`respondQuestion(sentinel): session not found ${input.sessionId}`);
@@ -320,6 +332,10 @@ export function registerClaudeHandlers(ipcMain: IpcMain): void {
     if (input.permissionMode) {
       runtimeManager.setPermissionMode(input.sessionId, input.permissionMode);
     }
+    // Broadcast the fresh row so every other client (phones) re-syncs its
+    // session list AND its composer chips for this thread.
+    const updated = SessionRepo.get(input.sessionId);
+    if (updated) broadcastSessionChanged(updated);
   });
 }
 

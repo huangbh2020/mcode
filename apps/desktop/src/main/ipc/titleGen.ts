@@ -23,6 +23,7 @@ import {
 import type { Session } from "@contracts/session";
 import { SessionRepo, SettingRepo } from "@main/store/repositories.js";
 import { sendToRenderer } from "@main/window.js";
+import { broadcastSessionChanged } from "@main/lib/sessionSync.js";
 import { resolveModelForGitOp } from "@main/ipc/git.js";
 import { buildCustomEnv, resolveActiveModel } from "@main/providers/claude-sdk/customEnv.js";
 import { resolveSdkBinaryPath } from "@main/providers/claude-sdk/sdkBinaryPath.js";
@@ -144,13 +145,16 @@ export async function generateSessionTitle(
 
     if (!title) return null;
 
-    // 4. Persist + notify the renderer so the sidebar/tabs refresh.
+    // 4. Persist + notify the renderer so the sidebar/tabs refresh, and
+    //    broadcast to connected mobile clients so their lists stay in sync.
     SessionRepo.updateTitle(session.id, title);
     sendToRenderer(IPC.SESSION_TITLE_UPDATED, {
       channel: IPC.SESSION_TITLE_UPDATED,
       sessionId: session.id,
       title,
     });
+    const updated = SessionRepo.get(session.id);
+    if (updated) broadcastSessionChanged(updated);
     log.info(`titleGen: generated title for ${session.id}: "${title}"`);
     return title;
   } catch (err) {

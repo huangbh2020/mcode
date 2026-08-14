@@ -40,6 +40,33 @@ function projectModel(model: { id: string; name?: string; provider: string; cont
   };
 }
 
+/** Shared listAvailable core — used by both the desktop IPC handler and the
+ *  mobile RPC whitelist. Injects every configured apiKey so the SDK's
+ *  auth-priority chain reports custom providers as authenticated. Non-fatal on
+ *  failure: returns [] so the picker just shows nothing for pi. */
+export async function listAvailablePiModels(): Promise<BuiltinModelOption[]> {
+  try {
+    const sdk = await loadPiSdk();
+    const runtime = await sdk.ModelRuntime.create();
+    // Inject every configured apiKey so the SDK's auth-priority chain
+    // reports these models as authenticated (the env-fallback won't
+    // have credentials for custom providers).
+    const publicProviders = await PiModelsStore.listPublic();
+    for (const [name, pub] of Object.entries(publicProviders)) {
+      if (!pub.hasApiKey) continue;
+      const key = PiModelsStore.resolveApiKey(name);
+      if (key) await runtime.setRuntimeApiKey(name, key);
+    }
+    const available = await runtime.getAvailable();
+    return available.map((m) => projectModel(m));
+  } catch (err) {
+    // Non-fatal: return empty so the picker just shows nothing for pi.
+    // Common case is pi SDK failed to load on a non-pi-user's machine.
+    log.warn(`piModels.listAvailable failed: ${(err as Error).message}`);
+    return [];
+  }
+}
+
 export function registerPiModelsHandlers(ipcMain: IpcMain): void {
   ipcMain.handle(IPC.PI_MODELS_LIST, async () => {
     const providers = await PiModelsStore.listPublic();
@@ -72,26 +99,6 @@ export function registerPiModelsHandlers(ipcMain: IpcMain): void {
   });
 
   ipcMain.handle(IPC.PI_MODELS_LIST_AVAILABLE, async () => {
-    try {
-      const sdk = await loadPiSdk();
-      const runtime = await sdk.ModelRuntime.create();
-      // Inject every configured apiKey so the SDK's auth-priority chain
-      // reports these models as authenticated (the env-fallback won't
-      // have credentials for custom providers).
-      const publicProviders = await PiModelsStore.listPublic();
-      for (const [name, pub] of Object.entries(publicProviders)) {
-        if (!pub.hasApiKey) continue;
-        const key = PiModelsStore.resolveApiKey(name);
-        if (key) await runtime.setRuntimeApiKey(name, key);
-      }
-      const available = await runtime.getAvailable();
-      const models: BuiltinModelOption[] = available.map((m) => projectModel(m));
-      return { models };
-    } catch (err) {
-      // Non-fatal: return empty so the picker just shows nothing for pi.
-      // Common case is pi SDK failed to load on a non-pi-user's machine.
-      log.warn(`piModels.listAvailable failed: ${(err as Error).message}`);
-      return { models: [] };
-    }
+    return { models: await listAvailablePiModels() };
   });
 }

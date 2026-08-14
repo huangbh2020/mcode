@@ -16,6 +16,7 @@ import {
 import type { Project } from "@contracts/session";
 import { uid } from "@main/utils.js";
 import { ProjectRepo, SessionRepo } from "@main/store/repositories.js";
+import { broadcastSessionChanged, broadcastSessionDeleted } from "@main/lib/sessionSync.js";
 import { log } from "@main/lib/logger.js";
 
 export function registerProjectHandlers(ipcMain: IpcMain): void {
@@ -102,6 +103,8 @@ export function registerProjectHandlers(ipcMain: IpcMain): void {
   ipcMain.handle(IPC.SESSION_DELETE, (_evt, raw) => {
     const input = DeleteSessionSchema.parse(raw);
     SessionRepo.delete(input.id);
+    // Keep connected mobile clients' session lists in sync.
+    broadcastSessionDeleted(input.id);
     log.info(`session deleted: ${input.id}`);
   });
 
@@ -111,6 +114,7 @@ export function registerProjectHandlers(ipcMain: IpcMain): void {
     SessionRepo.setArchived(input.id, input.archived);
     const session = SessionRepo.get(input.id);
     if (!session) throw new Error(`session not found after archive: ${input.id}`);
+    broadcastSessionChanged(session);
     log.info(`session ${input.archived ? "archived" : "restored"}: ${input.id}`);
     return { session };
   });
@@ -121,6 +125,7 @@ export function registerProjectHandlers(ipcMain: IpcMain): void {
     SessionRepo.updateTitle(input.id, input.title);
     const session = SessionRepo.get(input.id);
     if (!session) throw new Error(`session not found after rename: ${input.id}`);
+    broadcastSessionChanged(session);
     log.info(`session renamed: ${input.id} -> "${input.title}"`);
     return { session };
   });
@@ -132,6 +137,7 @@ export function registerProjectHandlers(ipcMain: IpcMain): void {
     SessionRepo.setPinned(input.id, input.pinned);
     const session = SessionRepo.get(input.id);
     if (!session) throw new Error(`session not found after pin: ${input.id}`);
+    broadcastSessionChanged(session);
     log.info(`session ${input.pinned ? "pinned" : "unpinned"}: ${input.id}`);
     return { session };
   });

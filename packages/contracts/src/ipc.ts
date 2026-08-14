@@ -11,6 +11,21 @@ import type { CustomModelPublic, CustomModelInput, TestCustomModelResult } from 
 import type { EndpointPresetPublic } from "./endpointPreset.js";
 import type { PiProviderConfig, PiProviderPublic } from "./piModel.js";
 import type { ThemeName, EffectiveTheme, ThemeChangedMessage } from "./theme.js";
+import type { PairingStartResult, PairedDevice } from "./mobile.js";
+import type { RelayStatus, RelayVpsConfig, RelayVpsConfigInput } from "./relay.js";
+
+// Re-export relay types so consumers can import from "@contracts/ipc".
+export type {
+  RelayState,
+  RelayStatus,
+  RelayVpsConfig,
+  RelayVpsConfigInput,
+} from "./relay.js";
+export {
+  RelayVpsConfigSchema,
+  RELAY_CONFIG_SETTING_KEY,
+  RELAY_DEFAULT_PUBLIC_PORT,
+} from "./relay.js";
 
 /**
  * Default provider id — used when no provider is explicitly specified for a
@@ -1929,6 +1944,14 @@ export interface NotificationFocusSessionMessage {
   sessionId: string;
 }
 
+/** Pushed from main → renderer on relay state changes (connecting, deployed,
+ *  connected, error, disconnected). The renderer uses these to update the
+ *  remote-access panel without polling. */
+export interface RelayEventMessage {
+  channel: "relay:event";
+  status: RelayStatus;
+}
+
 export type MainToRendererMessage =
   | ClaudeEventMessage
   | SessionTitleUpdatedMessage
@@ -1941,7 +1964,8 @@ export type MainToRendererMessage =
   | UpdateDownloadProgressMessage
   | UpdateDownloadedMessage
   | WindowFocusChangedMessage
-  | NotificationFocusSessionMessage;
+  | NotificationFocusSessionMessage
+  | RelayEventMessage;
 
 /* ── Integrated terminal (xterm.js + node-pty) ──
  *  PTY processes live in main. Renderer only sees opaque terminalIds and
@@ -2252,6 +2276,9 @@ export interface BrowserOpResult {
 
 /* ──────────────────────────  RPC method map  ───────────────────────────────── */
 
+/** Revoke a paired mobile device. Input to `mobile.revokeDevice`. */
+export const RevokeMobileDeviceSchema = z.object({ deviceId: z.string().min(1) });
+
 /** A typed map of all renderer→main RPC invocations. The preload exposes a
  * typed `window.api` matching this shape; the renderer imports it for safety. */
 export interface RpcMap {
@@ -2525,6 +2552,43 @@ export interface RpcMap {
   /** Forward an arbitrary LSP request (definition/references/hover/...) to the
    *  server and await its response. */
   "lsp.request": (input: LspRequestInput) => Promise<LspRequestResult>;
+  // ── Mobile companion (LAN pairing + device management) ──
+  /** Begin a pairing session: returns QR URL + 6-digit code + endpoint.
+   *  Optional `host` overrides auto-detected LAN IP (for multi-NIC machines
+   *  where the phone can only reach one interface). */
+  "mobile.startPairing": (input?: {
+    host?: string;
+    mode?: "lan" | "remote";
+    endpoint?: string;
+  }) => Promise<{ pairing: PairingStartResult }>;
+  /** Read the current pending pairing (for the dialog to rehydrate after a
+   *  close/reopen). Null when no pairing is active. */
+  "mobile.getPairing": () => Promise<{ pairing: { code: string; expiresAt: number } | null }>;
+  /** Cancel the active pairing (clears the nonce). */
+  "mobile.cancelPairing": () => Promise<{ ok: true }>;
+  /** List paired devices (token stripped). */
+  "mobile.listDevices": () => Promise<{ devices: PairedDevice[] }>;
+  /** Revoke a paired device; its token stops working immediately. */
+  "mobile.revokeDevice": (input: { deviceId: string }) => Promise<{ ok: true }>;
+  /** Server status (running, port, endpoint, candidate LAN IPs) for the dialog. */
+  "mobile.getStatus": () => Promise<{
+    running: boolean;
+    port: number;
+    endpoint: string;
+    lanIp: string | null;
+    lanIps: string[];
+  }>;
+  // ── Relay (SSH-based remote access) ──
+  /** Save VPS connection config to settings (persisted across restarts). */
+  "relay.saveConfig": (input: RelayVpsConfigInput) => Promise<{ ok: true }>;
+  /** Read the saved VPS config (passwords included — main→renderer only). */
+  "relay.getConfig": () => Promise<{ config: RelayVpsConfig | null }>;
+  /** Connect to the VPS: SSH + deploy forwarder + reverse tunnel. */
+  "relay.connect": () => Promise<{ ok: boolean; error?: string }>;
+  /** Disconnect from the VPS (forwarder keeps running on the VPS). */
+  "relay.disconnect": () => Promise<{ ok: true }>;
+  /** Read the current relay status. */
+  "relay.status": () => Promise<RelayStatus>;
 }
 
 /** The channel names used in invoke/handle and send/on. Keep these centralized
@@ -2676,6 +2740,21 @@ export const IPC = {
   LSP_DID_CHANGE: "lsp:didChange",
   LSP_DID_SAVE: "lsp:didSave",
   LSP_REQUEST: "lsp:request",
+  // Mobile companion (LAN pairing + device management) — invoke/handle (RPC).
+  MOBILE_START_PAIRING: "mobile:startPairing",
+  MOBILE_GET_PAIRING: "mobile:getPairing",
+  MOBILE_CANCEL_PAIRING: "mobile:cancelPairing",
+  MOBILE_LIST_DEVICES: "mobile:listDevices",
+  MOBILE_REVOKE_DEVICE: "mobile:revokeDevice",
+  MOBILE_GET_STATUS: "mobile:getStatus",
+  // Relay (SSH-based remote access) — invoke/handle (RPC).
+  RELAY_SAVE_CONFIG: "relay:saveConfig",
+  RELAY_GET_CONFIG: "relay:getConfig",
+  RELAY_CONNECT: "relay:connect",
+  RELAY_DISCONNECT: "relay:disconnect",
+  RELAY_STATUS: "relay:status",
+  // Relay push events (main → renderer).
+  RELAY_EVENT: "relay:event",
   // send/on (push events)
   CLAUDE_EVENT: "claude:event",
   SESSION_TITLE_UPDATED: "session:titleUpdated",

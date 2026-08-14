@@ -3,6 +3,7 @@ import { cn } from "@renderer/lib/cn.js";
 import { api } from "@renderer/lib/api.js";
 import { useSessionStore } from "@renderer/stores/sessionStore.js";
 import type { BrowserTab } from "@renderer/stores/sessionStore.js";
+import { localPathToFileUrl } from "@renderer/lib/browserUrl.js";
 import {
   resolveBrowserDeviceSpec,
   type PickedElement,
@@ -164,6 +165,10 @@ export function BrowserPanel({ mode }: BrowserPanelProps) {
 
   const activeTab = tabs.find((t) => t.id === activeTabId) ?? null;
 
+  /** URL staged by an external "open in browser" entry (e.g. the file-tree
+   *  context menu) to be loaded into a new tab. Consumed by the effects below. */
+  const pendingBrowserUrl = useSessionStore((s) => s.pendingBrowserUrl);
+
   /** Resolve the active project's path (needed for browser.create). */
   const projectPath = activeProjectId
     ? projects.find((p) => p.id === activeProjectId)?.path ?? null
@@ -261,7 +266,7 @@ export function BrowserPanel({ mode }: BrowserPanelProps) {
 
   /** Create a new browser view (main) + a new tab entry, hide the old active
    *  tab's view, show the new one, and focus it. Returns the new tab or null. */
-  const createTab = useCallback(async (): Promise<BrowserTab | null> => {
+  const createTab = useCallback(async (initialUrl?: string): Promise<BrowserTab | null> => {
     if (!projectPath) {
       setError("请先选择一个项目");
       return null;
@@ -279,7 +284,7 @@ export function BrowserPanel({ mode }: BrowserPanelProps) {
     const tab: BrowserTab = {
       id: newTabId(),
       browserId,
-      url: "",
+      url: initialUrl ?? "",
       title: "",
       loading: false,
       canGoBack: false,
@@ -288,8 +293,9 @@ export function BrowserPanel({ mode }: BrowserPanelProps) {
       // Sidebar defaults to mobile; overlay defaults to desktop.
       device: mode === "sidebar" ? "iphone" : "desktop",
     };
-    // Load a blank start page.
-    void api.browser.loadUrl({ browserId, url: "about:blank" });
+    // Load the start page: an explicit initial URL (e.g. a local file opened
+    // from the file tree) if given, otherwise a blank page.
+    void api.browser.loadUrl({ browserId, url: initialUrl ?? "about:blank" });
     // Hide the previously active tab's view, then show the new one.
     const prevId = activeTabIdRef.current;
     const prevTab = prevId ? tabsRef.current.find((t) => t.id === prevId) : null;
@@ -317,10 +323,30 @@ export function BrowserPanel({ mode }: BrowserPanelProps) {
     if (tabsRef.current.length > 0) return; // already have tabs
     if (creatingTabRef.current) return; // an initial create is already in flight
     creatingTabRef.current = true;
-    void createTab().finally(() => {
-      creatingTabRef.current = false;
-    });
+    // If an external entry (e.g. file-tree "open in browser") staged a URL
+    // before any tab existed, load it into this first tab instead of a blank.
+    const pending = useSessionStore.getState().pendingBrowserUrl;
+    void createTab(pending ?? undefined)
+      .then(() => {
+        if (pending) useSessionStore.setState({ pendingBrowserUrl: null });
+      })
+      .finally(() => {
+        creatingTabRef.current = false;
+      });
   }, [isActive, createTab]);
+
+  // External "open URL in browser" requests (file-tree, etc.) arrive as a
+  // staged `pendingBrowserUrl`. When tabs already exist we honour the request
+  // by creating a NEW tab for the URL (rather than overwriting the current
+  // page). The no-tabs case (panel first opened) is owned by the first-tab
+  // effect above, which loads the URL into the initial tab.
+  useEffect(() => {
+    if (!isActive || !pendingBrowserUrl) return;
+    if (tabsRef.current.length === 0) return; // first-tab effect handles the no-tab case
+    const url = pendingBrowserUrl;
+    useSessionStore.setState({ pendingBrowserUrl: null }); // consume before async create
+    void createTab(url);
+  }, [isActive, pendingBrowserUrl, createTab]);
 
   // Show/hide the active tab's view as THIS container activates/deactivates.
   // Deactivating hides the view WITHOUT destroying it (preserves browsing
@@ -501,12 +527,21 @@ export function BrowserPanel({ mode }: BrowserPanelProps) {
     handleReturnToSidebar();
   }, [enqueueChatElement, handleReturnToSidebar]);
 
-  /** Normalize a typed string into a URL (add https:// if it lacks a scheme). */
+  /** Normalize a typed string into a URL.
+   *  Recognizes: explicit schemes (http(s)://, file://, …), about:blank, local
+   *  file paths (Windows `C:\\…` / `C:/…` or Unix `/…`, converted to file://),
+   *  bare domains (prefixed with https://), and falls back to a web search. */
   const normalizeUrl = (input: string): string => {
     const s = input.trim();
     if (!s) return "about:blank";
     if (s === "about:blank") return s;
-    if (/^https?:\/\//i.test(s)) return s;
+    // 已带 scheme 的 URL（http/https/file/…）原样放行
+    if (/^[a-z][a-z0-9+.-]*:\/\//i.test(s)) return s;
+    // 本地文件路径：Windows 盘符路径或 Unix 绝对路径 → file://
+    if (/^[a-z]:[\\/]/i.test(s) || s.startsWith("/")) {
+      return localPathToFileUrl(s);
+    }
+    // 看起来像域名（含 TLD）则补 https://
     if (!/\s/.test(s) && /\.[a-z]{2,}/i.test(s)) return `https://${s}`;
     return `https://www.google.com/search?q=${encodeURIComponent(s)}`;
   };

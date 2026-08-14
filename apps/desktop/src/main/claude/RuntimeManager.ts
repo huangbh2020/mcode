@@ -17,6 +17,8 @@ import { ApprovalBridge } from "./ApprovalBridge.js";
 import { getFileSnapshot, dropFileSnapshot } from "@main/lib/fileSnapshotRegistry.js";
 import { restoreFiles } from "@main/lib/fileSnapshot.js";
 import { BridgeRegistry } from "@main/providers/bridge/bridgeRegistry.js";
+import { mobileEventBus } from "@main/mobile/MobileEventBus.js";
+import { broadcastRuntimeEvent } from "@main/lib/sessionSync.js";
 import { log } from "@main/lib/logger.js";
 
 interface SessionRuntime {
@@ -75,6 +77,14 @@ class RuntimeManager {
 
     const emit = (e: RuntimeEvent) => {
       sendToRenderer(IPC.CLAUDE_EVENT, { channel: IPC.CLAUDE_EVENT, sessionId: e.sessionId, event: e });
+      // Fan out to mobile clients over SSE. Same fire-and-forget contract — a
+      // thrown subscriber is swallowed inside broadcast(). No subscribers ⇒
+      // cheap no-op, so this is safe even when the mobile feature is unused.
+      try {
+        mobileEventBus.broadcast(e);
+      } catch (err) {
+        log.error(`mobile event bus error: ${(err as Error).message}`);
+      }
       // Persist capsule state so the top-right status pill reloads on
       // session reopen. Each event type → one Repo call, fire-and-forget.
       // contextSnapshot / todos / subagents / planDraft are all JSON blobs.
@@ -425,9 +435,14 @@ class RuntimeManager {
     return restored;
   }
 
-  /** Resolve an approval request from the renderer. */
+  /** Resolve an approval request from the renderer. On success, broadcast the
+   *  cross-client `request.resolved` sync event so every OTHER client closes
+   *  its copy of the approval dialog (the Deferred resolves exactly once). */
   resolveApproval(requestId: string, allow: boolean, reason?: string, always?: boolean): boolean {
-    return approvalBridge.resolveApproval(requestId, { allow, reason }, always);
+    const sessionId = approvalBridge.resolveApproval(requestId, { allow, reason }, always);
+    if (!sessionId) return false;
+    this.notifyRequestResolved(sessionId, requestId, "approval");
+    return true;
   }
 
   /** Update a session's permission mode mid-turn. The bridge records it and
@@ -438,20 +453,45 @@ class RuntimeManager {
     approvalBridge.setPermissionMode(sessionId, mode);
   }
 
-  /** Resolve a user-input request (AskUserQuestion answer). */
+  /** Resolve a user-input request (AskUserQuestion answer). On success,
+   *  broadcasts `request.resolved{kind:"question"}` so other clients close
+   *  their copy of the question card. */
   resolveUserInput(requestId: string, answers: UserInputAnswers): boolean {
-    return approvalBridge.resolveUserInput(requestId, answers);
+    const sessionId = approvalBridge.resolveUserInput(requestId, answers);
+    if (!sessionId) return false;
+    this.notifyRequestResolved(sessionId, requestId, "question");
+    return true;
   }
 
   /** Resolve a pending AskUserQuestion Deferred as DISMISSED (user closed the
-   *  question card) so the model's turn continues instead of blocking. */
+   *  question card) so the model's turn continues instead of blocking. Also
+   *  broadcasts the cross-client close event. */
   dismissUserInput(requestId: string): boolean {
-    return approvalBridge.dismissUserInput(requestId);
+    const sessionId = approvalBridge.dismissUserInput(requestId);
+    if (!sessionId) return false;
+    this.notifyRequestResolved(sessionId, requestId, "question");
+    return true;
   }
 
-  /** Resolve a plan-approval request (ExitPlanMode approve/reject). */
+  /** Resolve a plan-approval request (ExitPlanMode approve/reject). On
+   *  success, broadcasts `request.resolved{kind:"plan"}` so other clients
+   *  close their copy of the plan-approval sheet. */
   resolvePlanApproval(requestId: string, decision: PlanApprovalDecision): boolean {
-    return approvalBridge.resolvePlanApproval(requestId, decision);
+    const sessionId = approvalBridge.resolvePlanApproval(requestId, decision);
+    if (!sessionId) return false;
+    this.notifyRequestResolved(sessionId, requestId, "plan");
+    return true;
+  }
+
+  /** Broadcast a pending-request resolution to every client. Public so the
+   *  legacy sentinel question path (which has no Deferred to resolve) can
+   *  still tell other clients to close their question cards. */
+  notifyRequestResolved(
+    sessionId: string,
+    requestId: string,
+    kind: "approval" | "question" | "plan",
+  ): void {
+    broadcastRuntimeEvent({ type: "request.resolved", sessionId, requestId, kind });
   }
 }
 

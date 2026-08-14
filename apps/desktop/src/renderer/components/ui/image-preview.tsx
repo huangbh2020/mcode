@@ -57,6 +57,11 @@ export interface ImageWithPreviewProps {
   maxThumbnailHeight?: number;
   /** Max thumbnail width in px (default 280). */
   maxThumbnailWidth?: number;
+  /** When true, render the thumbnail inside a fixed frame of
+   *  maxThumbnailWidth × maxThumbnailHeight (image is object-contain'd inside).
+   *  Used by ImageGallery: switching between differently-sized screenshots then
+   *  keeps the card a stable size instead of resizing around each image. */
+  fixedFrame?: boolean;
   /** Full image list this thumbnail belongs to. When provided (length > 1),
    *  the lightbox gains ◀ ▶ navigation + a position counter. */
   gallery?: string[];
@@ -74,6 +79,7 @@ export function ImageWithPreview({
   className,
   maxThumbnailHeight = 160,
   maxThumbnailWidth = 280,
+  fixedFrame = false,
   gallery,
   index = 0,
   onNavigate,
@@ -153,7 +159,11 @@ export function ImageWithPreview({
           src={src}
           alt={alt}
           loading="lazy"
-          style={{ maxHeight: maxThumbnailHeight, maxWidth: maxThumbnailWidth }}
+          style={
+            fixedFrame
+              ? { width: maxThumbnailWidth, height: maxThumbnailHeight }
+              : { maxHeight: maxThumbnailHeight, maxWidth: maxThumbnailWidth }
+          }
           className="block object-contain transition-transform duration-200 group-hover:scale-[1.03]"
         />
         {/* Hover affordance: a small maximize badge that appears on hover. */}

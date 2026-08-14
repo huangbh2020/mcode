@@ -376,6 +376,13 @@ function ImageGallery({ blocks }: { blocks: Extract<Block, { kind: "image" }>[] 
           gallery={allSrcs}
           index={idx}
           onNavigate={setIdx}
+          // Keep the thumbnail ceiling in sync with the single-image case in
+          // BlockView so a screenshot renders at the same size whether it shows
+          // up alone or inside this gallery. fixedFrame locks the card to a
+          // constant size so switching images doesn't resize it around each one.
+          maxThumbnailWidth={300}
+          maxThumbnailHeight={200}
+          fixedFrame
         />
         {count > 1 && (
           <>
@@ -777,11 +784,20 @@ const BlockView = memo(function BlockView({
       // tied to its tool_use card) or a user-attached image (standalone on the
       // user message). Rendered inline as a compact thumbnail; click opens a
       // fullscreen lightbox (Dialog-based) for full-size inspection.
+      //
+      // The wrapper button defaults to `w-fit`, so the card shrinks to the
+      // image's rendered size — no `w-full` here, otherwise a tall mobile
+      // screenshot (constrained by maxThumbnailHeight) renders as a tiny sliver
+      // floating inside a wide 420px card, leaving a large empty area. We also
+      // raise the thumbnail ceiling so portrait screenshots stay legible
+      // without dominating the stream.
       return (
         <ImageWithPreview
           src={`data:${block.mimeType};base64,${block.data}`}
           alt={block.toolCallId ? "浏览器截图" : "用户图片"}
-          className="my-1 w-full max-w-[420px]"
+          className="my-1"
+          maxThumbnailWidth={300}
+          maxThumbnailHeight={200}
         />
       );
   }
