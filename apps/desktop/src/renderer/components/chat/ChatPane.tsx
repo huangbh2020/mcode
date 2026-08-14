@@ -808,6 +808,40 @@ function EmptyCenterPane() {
   );
 }
 
+/** Placeholder shimmer shown while a newly-opened session's first page of
+ *  persisted messages is still loading. Mimics the rhythm of a real thread
+ *  (user bubble → assistant paragraph → compact tool row) so the layout
+ *  doesn't jump when actual content replaces it. */
+function HistorySkeleton() {
+  return (
+    <div className="animate-pulse space-y-8" aria-hidden>
+      {/* User message bubble (right-aligned, accent-tinted) */}
+      <div className="flex justify-end">
+        <div className="w-2/5 space-y-2 rounded-lg bg-surface-muted p-3">
+          <div className="h-3 w-full rounded bg-surface-muted" />
+          <div className="h-3 w-3/5 rounded bg-surface-muted" />
+        </div>
+      </div>
+      {/* Assistant reply (left, plain paragraphs) */}
+      <div className="space-y-2.5">
+        <div className="h-3 w-full rounded bg-surface-muted" />
+        <div className="h-3 w-11/12 rounded bg-surface-muted" />
+        <div className="h-3 w-4/6 rounded bg-surface-muted" />
+      </div>
+      {/* Compact tool-call row */}
+      <div className="flex items-center gap-2">
+        <div className="h-5 w-40 rounded bg-surface-muted" />
+        <div className="h-3 w-24 rounded bg-surface-muted/70" />
+      </div>
+      {/* Another assistant paragraph */}
+      <div className="space-y-2.5">
+        <div className="h-3 w-5/6 rounded bg-surface-muted" />
+        <div className="h-3 w-2/5 rounded bg-surface-muted" />
+      </div>
+    </div>
+  );
+}
+
 /** The actual per-session chat pane. Extracted into its own function so
  *  the prop-typed parent (ChatPane) can short-circuit on `sessionId ===
  *  null` without forcing every selector to handle the empty case. */
@@ -1650,9 +1684,19 @@ function ChatPaneForSession({ sessionId, isActive }: { sessionId: string; isActi
     }
   }, [loadOlderMessages, sessionId]);
 
+  // First-page history fetch in flight for this session (bucket still
+  // undefined). Drives a skeleton in place of the empty-thread welcome so
+  // switching threads doesn't flash the centered empty composer before the
+  // persisted messages land.
+  const historyLoading = useSessionStore(
+    (s) => !s.messagesBySession[sessionId] && !!s.loadingMessagesBySession[sessionId],
+  );
+
   // Whether the session has any messages yet. Computed early (before the
-  // scroll effects below) because they reference it.
-  const empty = messages.length === 0;
+  // scroll effects below) because they reference it. A loading thread is
+  // treated as non-empty so the composer stays docked at the bottom and the
+  // message area keeps its flex-1 slot for the skeleton.
+  const empty = messages.length === 0 && !historyLoading;
 
   // Keep the jump-to-bottom button in sync when content changes (new messages
   // arrive / streaming grows the list) even if no scroll event fires. After the
@@ -2155,6 +2199,16 @@ function ChatPaneForSession({ sessionId, isActive }: { sessionId: string; isActi
               style={{ height: "100%", width: "100%" }}
             />
           </div>
+        </div>
+      )}
+
+      {/* History-loading skeleton — shimmer rows standing in for the message
+          stream while the first page of persisted messages is fetched.
+          Pointer-events none: purely decorative, disappears the moment the
+          real messages land in the bucket. */}
+      {historyLoading && (
+        <div className="pointer-events-none absolute inset-0 z-20 mx-auto w-full max-w-5xl space-y-8 overflow-hidden px-[var(--chat-gutter)] pt-12">
+          <HistorySkeleton />
         </div>
       )}
 

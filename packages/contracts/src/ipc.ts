@@ -1912,12 +1912,32 @@ export interface PickedElement {
  *  - "pickResult": the user clicked an element in pick mode.
  *  - "crashed":    the renderer process died; the view needs recreating.
  *  - "agentOpened": an agent tool created/reused a browser view; the renderer
- *    should switch the right panel to the browser tab so the view is visible. */
+ *    should switch the right panel to the browser tab so the view is visible.
+ *  - "authRequest": a page asked for HTTP Basic Auth and no saved credential
+ *    matched; the payload is a BrowserAuthRequest and the renderer should show
+ *    a login dialog, then answer via the browser.authRespond RPC. */
 export interface BrowserEventMessage {
   channel: "browser:event";
   browserId: string;
-  type: "navigation" | "loading" | "pickResult" | "crashed" | "agentOpened";
+  type:
+    | "navigation"
+    | "loading"
+    | "pickResult"
+    | "crashed"
+    | "agentOpened"
+    | "authRequest";
   payload: unknown;
+}
+
+/** Payload of the "authRequest" browser push event. The requestId maps 1:1 to
+ *  a pending Electron login callback held in main; answering (or cancelling)
+ *  with browser.authRespond resolves it. */
+export interface BrowserAuthRequest {
+  requestId: string;
+  /** Origin the credentials will be sent to (scheme://host[:port]). */
+  origin: string;
+  /** Host name only, for the dialog title. */
+  host: string;
 }
 
 /**
@@ -1990,6 +2010,28 @@ export const BROWSER_SCREENSHOT_DIR_SETTING_KEY = "browser.screenshotDir";
  *  Session objects by partition string, so changing this only takes effect
  *  after an app restart. */
 export const BROWSER_DATA_DIR_SETTING_KEY = "browser.dataDir";
+
+/** Setting key for the address-bar history (JSON array of
+ *  `BrowserHistoryEntry`, most-recent first, capped at 50). Written only by
+ *  the main process (BrowserManager on did-navigate); the renderer reads it
+ *  via setting.get and removes entries via the browser.historyRemove /
+ *  browser.historyClear RPCs. */
+export const BROWSER_ADDRESS_HISTORY_SETTING_KEY = "browser.addressHistory";
+
+/** One address-bar history entry. */
+export interface BrowserHistoryEntry {
+  url: string;
+  /** Page title at the time of navigation (may be empty for redirects). */
+  title: string;
+  /** Epoch ms of the last visit. */
+  at: number;
+}
+
+/** Setting key for the encrypted browser credential vault (JSON
+ *  `{ [origin]: { username, passwordEnc } }`). Passwords are encrypted with
+ *  Electron safeStorage via the shared secretStore helpers; only the main
+ *  process ever sees plaintext. */
+export const BROWSER_CREDENTIALS_SETTING_KEY = "browser.credentials";
 
 /** Snapshot of a live (or just-exited) terminal session. */
 export interface TerminalInfo {
@@ -2274,6 +2316,68 @@ export interface BrowserOpResult {
   error?: string;
 }
 
+/* ── Address history + credential vault ──
+ *  History is written by main only (on did-navigate); these RPCs let the
+ *  renderer remove entries without racing main's writes. Credentials are
+ *  encrypted at rest (safeStorage) and never leave main in plaintext. */
+
+export const BrowserHistoryRemoveSchema = z.object({
+  url: z.string().min(1),
+});
+export type BrowserHistoryRemoveInput = z.infer<typeof BrowserHistoryRemoveSchema>;
+
+export const BrowserHistoryClearSchema = z.object({});
+export type BrowserHistoryClearInput = z.infer<typeof BrowserHistoryClearSchema>;
+
+/** A saved credential as exposed to the renderer — the password is
+ *  intentionally NOT included. */
+export interface BrowserCredentialPublic {
+  /** Origin the credential belongs to (scheme://host[:port]). */
+  origin: string;
+  username: string;
+}
+
+export const BrowserCredentialsListSchema = z.object({});
+export type BrowserCredentialsListInput = z.infer<typeof BrowserCredentialsListSchema>;
+
+export const BrowserCredentialsSaveSchema = z.object({
+  origin: z.string().min(1),
+  username: z.string().min(1),
+  password: z.string(),
+});
+export type BrowserCredentialsSaveInput = z.infer<typeof BrowserCredentialsSaveSchema>;
+
+export const BrowserCredentialsRemoveSchema = z.object({
+  origin: z.string().min(1),
+});
+export type BrowserCredentialsRemoveInput = z.infer<typeof BrowserCredentialsRemoveSchema>;
+
+/** Fill the saved credential for the view's current origin into the page's
+ *  login form (heuristic: first password input + nearest preceding text
+ *  input). The password stays in main; only the injected fill script sees it. */
+export const BrowserCredentialsFillSchema = z.object({
+  browserId: z.string().min(1),
+  /** When omitted, the credential for the page's current origin is used. */
+  origin: z.string().min(1).optional(),
+});
+export type BrowserCredentialsFillInput = z.infer<typeof BrowserCredentialsFillSchema>;
+
+export interface BrowserCredentialsFillResult {
+  ok: boolean;
+  error?: string;
+}
+
+/** Renderer's answer to an "authRequest" push event. */
+export const BrowserAuthRespondSchema = z.object({
+  requestId: z.string().min(1),
+  /** Empty username+password cancels the auth prompt. */
+  username: z.string(),
+  password: z.string(),
+  /** Persist the credential (encrypted) for this origin when true. */
+  save: z.boolean().optional(),
+});
+export type BrowserAuthRespondInput = z.infer<typeof BrowserAuthRespondSchema>;
+
 /* ──────────────────────────  RPC method map  ───────────────────────────────── */
 
 /** Revoke a paired mobile device. Input to `mobile.revokeDevice`. */
@@ -2472,6 +2576,26 @@ export interface RpcMap {
    *  (localStorage / IndexedDB / service workers / etc.). Cookies and login
    *  data are preserved, so the user stays signed in. */
   "browser.clearCache": () => Promise<BrowserOpResult>;
+  /** Remove one entry from the address-bar history. */
+  "browser.historyRemove": (input: BrowserHistoryRemoveInput) => Promise<BrowserOpResult>;
+  /** Clear the whole address-bar history. */
+  "browser.historyClear": (input: BrowserHistoryClearInput) => Promise<BrowserOpResult>;
+  /** List saved browser credentials (origin + username only, no passwords). */
+  "browser.credentialsList": (input: BrowserCredentialsListInput) => Promise<{
+    credentials: BrowserCredentialPublic[];
+  }>;
+  /** Create/update a credential (password encrypted with safeStorage). */
+  "browser.credentialsSave": (input: BrowserCredentialsSaveInput) => Promise<{
+    credentials: BrowserCredentialPublic[];
+  }>;
+  /** Delete a credential by origin. */
+  "browser.credentialsRemove": (input: BrowserCredentialsRemoveInput) => Promise<{
+    credentials: BrowserCredentialPublic[];
+  }>;
+  /** Fill the saved credential into the view's current page login form. */
+  "browser.credentialsFill": (input: BrowserCredentialsFillInput) => Promise<BrowserCredentialsFillResult>;
+  /** Answer a pending HTTP Basic Auth prompt (see "authRequest" push event). */
+  "browser.authRespond": (input: BrowserAuthRespondInput) => Promise<void>;
   /** App version + runtime info for the About panel. */
   "app.info": () => Promise<AppInfoResult>;
   /** Check for updates on the GitHub Releases channel. Returns the current
@@ -2704,6 +2828,14 @@ export const IPC = {
   BROWSER_CLOSE: "browser:close",
   BROWSER_SET_DEVICE: "browser:setDevice",
   BROWSER_CLEAR_CACHE: "browser:clearCache",
+  // Address history + credential vault (embedded browser)
+  BROWSER_HISTORY_REMOVE: "browser:historyRemove",
+  BROWSER_HISTORY_CLEAR: "browser:historyClear",
+  BROWSER_CREDENTIALS_LIST: "browser:credentialsList",
+  BROWSER_CREDENTIALS_SAVE: "browser:credentialsSave",
+  BROWSER_CREDENTIALS_REMOVE: "browser:credentialsRemove",
+  BROWSER_CREDENTIALS_FILL: "browser:credentialsFill",
+  BROWSER_AUTH_RESPOND: "browser:authRespond",
   // App / runtime info (About panel)
   APP_INFO: "app:info",
   // Auto-update (electron-updater)

@@ -6,15 +6,20 @@ import type { BrowserTab } from "@renderer/stores/sessionStore.js";
 import { localPathToFileUrl } from "@renderer/lib/browserUrl.js";
 import {
   resolveBrowserDeviceSpec,
+  BROWSER_ADDRESS_HISTORY_SETTING_KEY,
   type PickedElement,
   type BrowserDevicePreset,
   type BrowserOrientation,
+  type BrowserHistoryEntry,
+  type BrowserAuthRequest,
 } from "@contracts/ipc";
 import { BrowserToolbar } from "./BrowserToolbar.js";
 import { DeviceToolbar } from "./DeviceToolbar.js";
 import { BrowserTabs, type BrowserTabDisplay } from "./BrowserTabs.js";
 import { PickedElementsBar } from "./PickedElementsBar.js";
 import { ConfirmDialog } from "@renderer/components/ui/confirm-dialog.js";
+import { CredentialDialog } from "./CredentialDialog.js";
+import { AuthPromptDialog } from "./AuthPromptDialog.js";
 
 /**
  * Browser panel — multi-tab, shared between two containers.
@@ -103,6 +108,13 @@ export function BrowserPanel({ mode }: BrowserPanelProps) {
    *  active WebContentsView so the (renderer-DOM) dialog isn't covered by the
    *  OS-level view floating above the stage. */
   const [confirmDestroy, setConfirmDestroy] = useState(false);
+  /** Credential-vault dialog visibility (same hide-view-while-open pattern). */
+  const [credentialsOpen, setCredentialsOpen] = useState(false);
+  /** Pending HTTP Basic Auth request pushed by main ("authRequest" event).
+   *  Non-null shows the login dialog (view hidden while it's up). */
+  const [authRequest, setAuthRequest] = useState<BrowserAuthRequest | null>(null);
+  /** Address-bar history, read from settings (main is the single writer). */
+  const [history, setHistory] = useState<BrowserHistoryEntry[]>([]);
   /** Error message shown in the stage when tab creation fails (e.g. no active
    *  project). Renders in the placeholder div so it isn't covered by a view. */
   const [error, setError] = useState<string | null>(null);
@@ -264,6 +276,54 @@ export function BrowserPanel({ mode }: BrowserPanelProps) {
     }
   }, []);
 
+  /** Re-show the active tab's view with fresh bounds. ORDERING IS THE FIX for
+   *  the "browser view escapes the sidebar and covers other panels" bug: main's
+   *  show() restores the last stored bounds — or a GUESSED default rect
+   *  (defaultOnscreenBounds, ~42% of the window) when the view was never
+   *  measured (fresh tab, container swap). If show() is sent before the
+   *  renderer has measured the stage, the view paints at that wrong rect and
+   *  floats above everything until some later resize happens to re-sync.
+   *  Instead: (1) while the stage isn't measurable yet, DON'T show — retry on
+   *  subsequent frames (bounded, so a never-measurable container can't spin
+   *  rAF forever; after ~1s fall back to a plain show); (2) syncBounds() FIRST
+   *  so main stores the true rect while the view is still hidden (setBounds on
+   *  an invisible view only updates lastBounds); (3) only then show(), which
+   *  applies exactly those bounds; (4) one more rAF sync in case layout moved.
+   *  Callers that must force a re-sync (stage narrowed by a menu, device
+   *  change, …) null lastBoundsRef before calling. Reads tabsRef/
+   *  activeTabIdRef, so callers that just changed the active tab must update
+   *  those refs first (they lag the store by one render). */
+  const showActiveViewRef = useRef<(attempt?: number) => void>(() => {});
+  const showActiveView = useCallback(
+    (attempt = 0) => {
+      const stage = stageRef.current;
+      const r = stage ? stage.getBoundingClientRect() : null;
+      if (!r || r.width < 1 || r.height < 1) {
+        if (attempt < 60) {
+          requestAnimationFrame(() => showActiveViewRef.current(attempt + 1));
+          return;
+        }
+      } else {
+        // ALWAYS force the setBounds through: lastBoundsRef dedupes identical
+        // rects, but a tab switch lands on a DIFFERENT view that never received
+        // those bounds (opening a 2nd html file measures the exact same stage
+        // rect as the 1st) — without this, main's show() falls back to the
+        // guessed defaultOnscreenBounds rect and the view escapes the panel.
+        lastBoundsRef.current = null;
+        syncBounds();
+      }
+      const tab = activeTabIdRef.current
+        ? tabsRef.current.find((t) => t.id === activeTabIdRef.current)
+        : null;
+      if (tab) void api.browser.show({ browserId: tab.browserId });
+      requestAnimationFrame(syncBounds);
+    },
+    [syncBounds],
+  );
+  useEffect(() => {
+    showActiveViewRef.current = (attempt?: number) => showActiveView(attempt ?? 0);
+  }, [showActiveView]);
+
   /** Create a new browser view (main) + a new tab entry, hide the old active
    *  tab's view, show the new one, and focus it. Returns the new tab or null. */
   const createTab = useCallback(async (initialUrl?: string): Promise<BrowserTab | null> => {
@@ -306,13 +366,17 @@ export function BrowserPanel({ mode }: BrowserPanelProps) {
       }
       void api.browser.hide({ browserId: prevTab.browserId });
     }
-    void api.browser.show({ browserId });
     addTab(tab);
     setActiveTabId(tab.id);
+    // The refs lag the store by one render — set them NOW so showActiveView()
+    // (called synchronously below) measures + targets the new tab, not the
+    // outgoing one.
+    tabsRef.current = [...tabsRef.current, tab];
+    activeTabIdRef.current = tab.id;
     setError(null);
-    requestAnimationFrame(syncBounds);
+    showActiveView();
     return tab;
-  }, [projectPath, mode, addTab, setActiveTabId, syncBounds]);
+  }, [projectPath, mode, addTab, setActiveTabId, syncBounds, showActiveView]);
 
   // First time THIS container becomes active with no tabs at all: create the
   // initial tab. (Tabs are shared, so this only fires once per session no
@@ -325,10 +389,18 @@ export function BrowserPanel({ mode }: BrowserPanelProps) {
     creatingTabRef.current = true;
     // If an external entry (e.g. file-tree "open in browser") staged a URL
     // before any tab existed, load it into this first tab instead of a blank.
+    // Consume it SYNCHRONOUSLY, before the async create starts: addTab landing
+    // mid-create re-renders and re-runs the pendingBrowserUrl effect below,
+    // which — with tabsRef already length 1 and the URL still staged — would
+    // open the SAME url in a second, duplicate tab.
     const pending = useSessionStore.getState().pendingBrowserUrl;
+    if (pending) useSessionStore.setState({ pendingBrowserUrl: null });
     void createTab(pending ?? undefined)
-      .then(() => {
-        if (pending) useSessionStore.setState({ pendingBrowserUrl: null });
+      .catch(() => {
+        // Restore the URL if the initial create failed outright, so the
+        // request isn't silently dropped (the pending effect will retry once
+        // a tab exists).
+        if (pending) useSessionStore.setState({ pendingBrowserUrl: pending });
       })
       .finally(() => {
         creatingTabRef.current = false;
@@ -344,6 +416,11 @@ export function BrowserPanel({ mode }: BrowserPanelProps) {
     if (!isActive || !pendingBrowserUrl) return;
     if (tabsRef.current.length === 0) return; // first-tab effect handles the no-tab case
     const url = pendingBrowserUrl;
+    // Re-check the LIVE store before consuming: the closure value can be
+    // stale — React StrictMode (dev) re-invokes effects with the SAME captured
+    // value after the first run already consumed the URL; without this guard
+    // one "open in browser" click creates TWO identical tabs.
+    if (useSessionStore.getState().pendingBrowserUrl !== url) return;
     useSessionStore.setState({ pendingBrowserUrl: null }); // consume before async create
     void createTab(url);
   }, [isActive, pendingBrowserUrl, createTab]);
@@ -368,15 +445,9 @@ export function BrowserPanel({ mode }: BrowserPanelProps) {
     }
     // Container activating with existing tabs: re-show the active view + sync.
     if (tabsRef.current.length === 0) return; // first-open tab creation handled above
-    const tab = activeTabIdRef.current
-      ? tabsRef.current.find((t) => t.id === activeTabIdRef.current)
-      : null;
-    if (tab) {
-      void api.browser.show({ browserId: tab.browserId });
-      requestAnimationFrame(syncBounds);
-    }
+    showActiveView();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isActive]);
+  }, [isActive, showActiveView]);
 
   // React to the suppression counter: while > 0 a renderer-DOM overlay (image
   // lightbox, etc.) must cover the OS-level WebContentsView, which always floats
@@ -393,11 +464,10 @@ export function BrowserPanel({ mode }: BrowserPanelProps) {
     if (suppressed > 0) {
       void api.browser.hide({ browserId: tab.browserId });
     } else {
-      void api.browser.show({ browserId: tab.browserId });
       lastBoundsRef.current = null;
-      requestAnimationFrame(syncBounds);
+      showActiveView();
     }
-  }, [suppressed, isActive, syncBounds]);
+  }, [suppressed, isActive, showActiveView]);
 
   // When the component unmounts (container swap / panel close), hide the active
   // view so it can't linger over the workspace. The view survives in main.
@@ -442,15 +512,45 @@ export function BrowserPanel({ mode }: BrowserPanelProps) {
     };
   }, [isActive, syncBounds]);
 
+  // Address history: read from settings on mount + after navigations (main
+  // writes it on did-navigate; a small delay lets the write land first).
+  const refreshHistory = useCallback(() => {
+    void api.setting
+      .get({ key: BROWSER_ADDRESS_HISTORY_SETTING_KEY })
+      .then((res) => {
+        try {
+          const parsed = res.value ? JSON.parse(res.value) : [];
+          setHistory(Array.isArray(parsed) ? parsed : []);
+        } catch {
+          setHistory([]);
+        }
+      })
+      .catch(() => {});
+  }, []);
+  useEffect(() => {
+    refreshHistory();
+  }, [refreshHistory]);
+
   // Subscribe to browser:event pushes. Route each event to the owning tab by
   // browserId and update that tab's state only. Subscribed whenever this
   // container is active (the other container takes over otherwise).
   useEffect(() => {
     if (!isActive) return;
     const unsub = api.on.browserEvent((msg) => {
+      // Basic Auth request: hide the active view (the login dialog is
+      // renderer DOM and would be covered by the OS-level view) and show it.
+      if (msg.type === "authRequest") {
+        const req = msg.payload as BrowserAuthRequest;
+        if (!req || typeof req.requestId !== "string") return;
+        setAuthRequest(req);
+        const tab = tabsRef.current.find((t) => t.browserId === msg.browserId);
+        if (tab) void api.browser.hide({ browserId: tab.browserId });
+        return;
+      }
       const tab = tabsRef.current.find((t) => t.browserId === msg.browserId);
       if (!tab) return; // not one of our tabs (e.g. stale view)
       if (msg.type === "navigation") {
+        refreshHistory();
         const p = msg.payload as { url?: string; title?: string; canGoBack?: boolean; canGoForward?: boolean };
         patchTabInStore(msg.browserId, {
           ...(typeof p.url === "string" ? { url: p.url } : {}),
@@ -477,7 +577,7 @@ export function BrowserPanel({ mode }: BrowserPanelProps) {
       }
     });
     return unsub;
-  }, [isActive, mode, enqueueChatElement, patchTabInStore]);
+  }, [isActive, mode, enqueueChatElement, patchTabInStore, refreshHistory]);
 
   // Clear the pick flash + floating preview after a moment.
   useEffect(() => {
@@ -594,12 +694,11 @@ export function BrowserPanel({ mode }: BrowserPanelProps) {
       if (open) {
         void api.browser.hide({ browserId: tab.browserId });
       } else {
-        void api.browser.show({ browserId: tab.browserId });
         lastBoundsRef.current = null;
-        requestAnimationFrame(syncBounds);
+        showActiveView();
       }
     },
-    [isActive, syncBounds],
+    [isActive, showActiveView],
   );
 
   /** Switch the active tab's device/viewport. The main process applies
@@ -678,6 +777,71 @@ export function BrowserPanel({ mode }: BrowserPanelProps) {
     requestAnimationFrame(syncBounds);
   }, [setDeviceToolbarOpen, handleViewportChange, syncBounds]);
 
+  /** Address-history dropdown open/close — same hide/show pattern as the
+   *  device dropdown above (renderer-DOM popup vs OS-level view). */
+  const handleHistoryMenuOpenChange = useCallback(
+    (open: boolean) => {
+      if (!isActive) return;
+      const tab = activeTabIdRef.current
+        ? tabsRef.current.find((t) => t.id === activeTabIdRef.current)
+        : null;
+      if (!tab) return;
+      if (open) {
+        void api.browser.hide({ browserId: tab.browserId });
+      } else {
+        lastBoundsRef.current = null;
+        showActiveView();
+      }
+    },
+    [isActive, showActiveView],
+  );
+
+  const handleRemoveHistoryEntry = useCallback(
+    (url: string) => {
+      void api.browser.historyRemove({ url }).then(() => refreshHistory());
+    },
+    [refreshHistory],
+  );
+
+  const handleClearHistory = useCallback(() => {
+    void api.browser.historyClear({}).then(() => refreshHistory());
+  }, [refreshHistory]);
+
+  /** Credential vault dialog — hide the active view while it's open (same
+   *  pattern as the destroy-confirm dialog), restore on close. */
+  const handleCredentialsOpenChange = useCallback(
+    (open: boolean) => {
+      if (!isActive) {
+        setCredentialsOpen(open);
+        return;
+      }
+      const tab = activeTabIdRef.current
+        ? tabsRef.current.find((t) => t.id === activeTabIdRef.current)
+        : null;
+      if (open) {
+        if (tab) void api.browser.hide({ browserId: tab.browserId });
+      } else if (tab) {
+        lastBoundsRef.current = null;
+        showActiveView();
+      }
+      setCredentialsOpen(open);
+    },
+    [isActive, showActiveView],
+  );
+
+  /** Auth dialog closed: restore the (previously hidden) active view. */
+  const handleAuthClose = useCallback(() => {
+    setAuthRequest(null);
+    if (!isActive) return;
+    const tab = activeTabIdRef.current
+      ? tabsRef.current.find((t) => t.id === activeTabIdRef.current)
+      : null;
+    if (tab) {
+      lastBoundsRef.current = null;
+      showActiveView();
+    }
+  }, [isActive, showActiveView]);
+
   /** Select a tab: hide the old active view, show the new one. */
   const handleSelectTab = useCallback(
     (id: string) => {
@@ -693,11 +857,13 @@ export function BrowserPanel({ mode }: BrowserPanelProps) {
         patchTabInStore(oldTab.browserId, { pickMode: false });
       }
       if (oldTab) void api.browser.hide({ browserId: oldTab.browserId });
-      void api.browser.show({ browserId: newTab.browserId });
       setActiveTabId(id);
-      requestAnimationFrame(syncBounds);
+      // Refs lag the store by one render — update them now so showActiveView()
+      // targets the incoming tab.
+      activeTabIdRef.current = id;
+      showActiveView();
     },
-    [patchTabInStore, setActiveTabId, syncBounds],
+    [patchTabInStore, setActiveTabId, showActiveView],
   );
 
   /** Close a tab: destroy its view, remove it, and activate a neighbor. If it
@@ -726,11 +892,14 @@ export function BrowserPanel({ mode }: BrowserPanelProps) {
       if (id === activeTabIdRef.current) {
         const nextTab = remaining[Math.min(idx, remaining.length - 1)];
         setActiveTabId(nextTab.id);
-        void api.browser.show({ browserId: nextTab.browserId });
-        requestAnimationFrame(syncBounds);
+        // Refs lag the store — update now so showActiveView() targets the
+        // incoming neighbor tab.
+        tabsRef.current = remaining;
+        activeTabIdRef.current = nextTab.id;
+        showActiveView();
       }
     },
-    [mode, setTabs, setActiveTabId, setOpen, setRightPanelTab, syncBounds],
+    [mode, setTabs, setActiveTabId, setOpen, setRightPanelTab, showActiveView],
   );
 
   /** New tab button: create a fresh tab and focus it. */
@@ -843,6 +1012,11 @@ export function BrowserPanel({ mode }: BrowserPanelProps) {
         onClose={handleClose}
         onSwitchMode={handleSwitchMode}
         onRequestDestroy={handleRequestDestroy}
+        history={history}
+        onRemoveHistoryEntry={handleRemoveHistoryEntry}
+        onClearHistory={handleClearHistory}
+        onHistoryMenuOpenChange={handleHistoryMenuOpenChange}
+        onOpenCredentials={() => handleCredentialsOpenChange(true)}
       />
       {/* Device toolbar — the DevTools-style row (device dropdown + custom
           dims + rotate), toggled by the 📱 button above. Rendered between the
@@ -930,17 +1104,20 @@ export function BrowserPanel({ mode }: BrowserPanelProps) {
           if (!o) {
             // Cancel: re-show the active view (panel is still active).
             if (!isActive) return;
-            const tab = activeTabIdRef.current
-              ? tabsRef.current.find((t) => t.id === activeTabIdRef.current)
-              : null;
-            if (tab) {
-              void api.browser.show({ browserId: tab.browserId });
-              requestAnimationFrame(syncBounds);
-            }
+            lastBoundsRef.current = null;
+            showActiveView();
           }
         }}
         onConfirm={handleConfirmDestroy}
       />
+
+      {/* Credential vault (manual password manager). The active view is
+          hidden while open via handleCredentialsOpenChange. */}
+      <CredentialDialog open={credentialsOpen} onOpenChange={handleCredentialsOpenChange} />
+
+      {/* HTTP Basic Auth prompt (pushed by main as an "authRequest" event;
+          the view is hidden while it's up, restored on close). */}
+      <AuthPromptDialog request={authRequest} onClose={handleAuthClose} />
     </div>
   );
 }

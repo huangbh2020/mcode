@@ -420,3 +420,89 @@ export async function browserScreenshot(
     ],
   };
 }
+
+/**
+ * Shared per-tool spec: the tool `description` (surfaced by BOTH providers —
+ * Pi's `pi.registerTool` and Claude's in-process MCP server) and a one-line
+ * `promptSnippet` used to build the system-prompt usage section.
+ *
+ * Single source of truth: before this table existed the 7 descriptions were
+ * copy-pasted verbatim in `mcodeExtension.ts` and `ClaudeAgentSdkProvider.ts`
+ * and had already drifted once. When you add/rename a browser tool, update
+ * this table (and the implementations above) — never edit a provider copy.
+ */
+export interface BrowserToolSpec {
+  name: string;
+  /** Full tool description shown in the providers' tool registries. */
+  description: string;
+  /** One-line summary for the system-prompt usage section. */
+  promptSnippet: string;
+}
+
+export const BROWSER_TOOL_SPECS: Record<string, BrowserToolSpec> = {
+  browser_list: {
+    name: "browser_list",
+    description:
+      "列出当前所有打开的浏览器视图及其 URL 和标题,返回每个视图的 browserId。省略 browserId 的工具会自动复用第一个已开视图。",
+    promptSnippet: "browser_list(): 列出打开的浏览器视图",
+  },
+  browser_navigate: {
+    name: "browser_navigate",
+    description:
+      "在应用内浏览器中导航到指定 URL(仅 http/https)。若没有打开的浏览器视图会自动创建并显示一个。" +
+      "device 可选——desktop(PC 全宽,默认)/iphone/android(移动端模拟),测试移动端页面时用后两者。导航后需调用 browser_snapshot 读取页面内容。",
+    promptSnippet: "browser_navigate({url, device?}): 打开网页;device 可选 desktop/iphone/android",
+  },
+  browser_snapshot: {
+    name: "browser_snapshot",
+    description:
+      "读取当前页面的结构化快照:URL、标题、正文,以及可交互元素列表(链接/按钮/输入框等)。" +
+      "每个元素带 selector,可直接传给 browser_click / browser_type。只读——这是理解页面内容、定位元素的主要方式。",
+    promptSnippet: "browser_snapshot({browserId?}): 读取页面结构化快照,元素带 selector(只读)",
+  },
+  browser_click: {
+    name: "browser_click",
+    description:
+      "按 CSS selector 点击页面元素(selector 来自 browser_snapshot)。返回点击后的 URL/标题,可判断是否触发了导航。有副作用。",
+    promptSnippet: "browser_click({selector, browserId?}): 点击元素",
+  },
+  browser_type: {
+    name: "browser_type",
+    description:
+      "向页面元素输入文本(selector 来自 browser_snapshot,定位 input/textarea/contenteditable)。对 React/Vue 受控输入框也生效。有副作用。",
+    promptSnippet: "browser_type({selector, text, browserId?}): 向输入框输入文本",
+  },
+  browser_evaluate: {
+    name: "browser_evaluate",
+    description:
+      "在页面中执行任意 JavaScript(页面主世界,无 Node/Electron 权限),可修改 DOM 文字/样式/属性、触发事件。" +
+      "返回脚本返回值供确认结果。适用于 browser_type/click 做不到的页面修改。有副作用,需用户审批。",
+    promptSnippet: "browser_evaluate({script, browserId?}): 在页面执行 JS(改 DOM/文字/样式)",
+  },
+  browser_screenshot: {
+    name: "browser_screenshot",
+    description:
+      "截取当前页面可视区域为 PNG,用于视觉确认布局/样式。只读,截图同时显示给用户和返回给你。",
+    promptSnippet: "browser_screenshot({browserId?}): 截图(只读)",
+  },
+};
+
+/** Shared flow guidance appended to every browser-tools prompt section and to
+ *  the Claude MCP server's `instructions`. */
+export const BROWSER_TOOLS_FLOW =
+  "browserId 参数全部可选——省略时自动复用第一个已开视图。典型流程: navigate → snapshot 读内容 → 按需 type 填表 / evaluate 改页面 / click 点击 / screenshot 截图。";
+
+/**
+ * Build the system-prompt section teaching the browser tools — one promptSnippet
+ * line per tool plus the shared flow. Used by the Pi provider's
+ * `before_agent_start` injector; compact by design (injected every turn).
+ */
+export function browserToolsUsagePrompt(): string {
+  const lines = [
+    `## 浏览器工具(控制应用内浏览器)`,
+    `当需要打开网页、查看页面内容、或与网页交互时使用这组工具:`,
+    ...Object.values(BROWSER_TOOL_SPECS).map((s) => `- ${s.promptSnippet}`),
+    BROWSER_TOOLS_FLOW,
+  ];
+  return lines.join("\n");
+}

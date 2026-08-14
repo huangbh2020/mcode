@@ -82,14 +82,23 @@ export function formatAnswersForModel(
 }
 
 /**
+ * System prompt teaching the model to use the NATIVE AskUserQuestion tool
+ * (Pi provider — the tool is registered by the inline extension). Deliberately
+ * does NOT mention the sentinel format: telling the model to "MUST emit this
+ * EXACT format" while a native tool exists makes the two behaviors compete.
+ */
+export const ASK_NATIVE_TOOL_PROMPT = [
+  `## 向用户提问`,
+  `当需要用户在选项间做选择或补充关键信息时,调用 AskUserQuestion 工具提问,而不是用自由文本罗列问题。`,
+  `questions 数组每项:header(≤12 字符短标签)、question(完整问题)、multiSelect(是否可多选)、options(每项含 label + description)。`,
+  `调用后停止生成,等待用户回答;不要自问自答。`,
+].join("\n");
+
+/**
  * System prompt describing the sentinel-delimited JSON format the model should
  * emit when no native AskUserQuestion tool is available (Claude sentinel-text
- * fallback). Also used verbatim by the Pi provider's `before_agent_start`
- * extension to teach the model the native AskUserQuestion tool's input schema.
- *
- * NOTE: on Pi the native tool IS available (registered via the inline
- * extension), so the sentinel format is informational there — but keeping a
- * single source of truth for the prompt avoids drift across providers.
+ * fallback — injected only when `supportsAskUserQuestion` is false). The Pi
+ * provider uses `ASK_NATIVE_TOOL_PROMPT` above instead.
  */
 export const ASK_SYSTEM_PROMPT = [
   `When you need to ask the user a question or need them to choose between options, you MUST emit it in this EXACT format and nothing else on those lines:`,

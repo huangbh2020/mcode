@@ -1,3 +1,4 @@
+import { useMemo, useState } from "react";
 import { cn } from "@renderer/lib/cn.js";
 import {
   IconArrowLeft,
@@ -10,7 +11,11 @@ import {
   IconDeviceMobile,
   IconArrowsMaximize,
   IconArrowsMinimize,
+  IconKey,
+  IconClock,
+  IconTrash,
 } from "@renderer/lib/icons.js";
+import type { BrowserHistoryEntry } from "@contracts/ipc";
 import type { BrowserMode } from "./BrowserPanel.js";
 
 /**
@@ -51,6 +56,17 @@ export interface BrowserToolbarProps {
   /** Switch to the other container: sidebar → overlay (PC fullscreen) or
    *  overlay → sidebar (mobile column). Tabs carry over via the shared store. */
   onSwitchMode: () => void;
+  /** Address-bar history (most-recent first), persisted by main. */
+  history: BrowserHistoryEntry[];
+  /** Remove one history entry (delegates to browser.historyRemove). */
+  onRemoveHistoryEntry: (url: string) => void;
+  /** Clear the whole history (delegates to browser.historyClear). */
+  onClearHistory: () => void;
+  /** Fired as the history dropdown opens/closes — the parent hides/shows the
+   *  OS-level WebContentsView so the renderer-DOM dropdown isn't covered. */
+  onHistoryMenuOpenChange: (open: boolean) => void;
+  /** Open the credential vault dialog. */
+  onOpenCredentials: () => void;
   /** Request to destroy the browser entirely — the parent opens a
    *  confirmation dialog; on confirm all tabs/views are torn down. */
   onRequestDestroy: () => void;
@@ -109,7 +125,40 @@ export function BrowserToolbar({
   onClose,
   onSwitchMode,
   onRequestDestroy,
+  history,
+  onRemoveHistoryEntry,
+  onClearHistory,
+  onHistoryMenuOpenChange,
+  onOpenCredentials,
 }: BrowserToolbarProps) {
+  // Address-history dropdown state. Local because only this input drives it;
+  // the parent is only told about open/close so it can hide the OS-level view.
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [highlight, setHighlight] = useState(0);
+
+  const filteredHistory = useMemo(() => {
+    const q = url.trim().toLowerCase();
+    if (!q) return history.slice(0, 10);
+    return history
+      .filter(
+        (e) =>
+          e.url.toLowerCase().includes(q) ||
+          (e.title && e.title.toLowerCase().includes(q)),
+      )
+      .slice(0, 10);
+  }, [history, url]);
+
+  const setDropdownOpen = (open: boolean) => {
+    setHistoryOpen(open);
+    if (open) setHighlight(0);
+    onHistoryMenuOpenChange(open);
+  };
+
+  const pickHistoryEntry = (entry: BrowserHistoryEntry) => {
+    setDropdownOpen(false);
+    onUrlChange(entry.url);
+    onNavigate(entry.url);
+  };
   return (
     <div className="flex h-11 shrink-0 items-center gap-1 border-b border-edge bg-surface px-2">
       {mode === "overlay" ? (
@@ -151,25 +200,122 @@ export function BrowserToolbar({
       </ToolButton>
 
       {/* Address bar - Enter navigates. Controlled by the parent so navigation
-          events can update it. */}
-      <input
-        type="text"
-        value={url}
-        onChange={(e) => onUrlChange(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === "Enter") {
-            e.preventDefault();
-            onNavigate(url);
-          }
-        }}
-        placeholder="输入网址、本地文件路径或搜索…"
-        spellCheck={false}
-        className={cn(
-          "mx-1 h-7 min-w-0 flex-1 rounded-md border border-edge bg-surface-muted px-2.5",
-          "text-[13px] text-content placeholder:text-content-subtle",
-          "focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent/40",
+          events can update it. Focusing opens the history dropdown (the parent
+          hides the OS-level view while it's open so the dropdown is visible). */}
+      <div className="relative mx-1 min-w-0 flex-1">
+        <input
+          type="text"
+          value={url}
+          onChange={(e) => {
+            onUrlChange(e.target.value);
+            if (!historyOpen && filteredHistory.length > 0) setDropdownOpen(true);
+          }}
+          onFocus={() => {
+            if (!historyOpen && filteredHistory.length > 0) setDropdownOpen(true);
+          }}
+          onBlur={() => {
+            // Delay so row clicks (mousedown below) land before the close.
+            setTimeout(() => setDropdownOpen(false), 150);
+          }}
+          onKeyDown={(e) => {
+            if (historyOpen && filteredHistory.length > 0) {
+              if (e.key === "ArrowDown") {
+                e.preventDefault();
+                setHighlight((h) => Math.min(h + 1, filteredHistory.length - 1));
+                return;
+              }
+              if (e.key === "ArrowUp") {
+                e.preventDefault();
+                setHighlight((h) => Math.max(h - 1, 0));
+                return;
+              }
+              if (e.key === "Escape") {
+                e.preventDefault();
+                setDropdownOpen(false);
+                return;
+              }
+            }
+            if (e.key === "Enter") {
+              e.preventDefault();
+              if (historyOpen && filteredHistory[highlight]) {
+                pickHistoryEntry(filteredHistory[highlight]);
+              } else {
+                onNavigate(url);
+              }
+            }
+          }}
+          placeholder="输入网址、本地文件路径或搜索…"
+          spellCheck={false}
+          className={cn(
+            "h-7 w-full rounded-md border border-edge bg-surface-muted px-2.5",
+            "text-[13px] text-content placeholder:text-content-subtle",
+            "focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent/40",
+          )}
+        />
+        {historyOpen && filteredHistory.length > 0 && (
+          <div
+            className={cn(
+              "absolute left-0 right-0 top-full z-30 mt-1",
+              "max-h-72 overflow-y-auto rounded-md border border-edge bg-surface shadow-xl",
+            )}
+          >
+            <div className="flex items-center gap-1.5 px-2.5 py-1.5 text-[10px] font-medium uppercase tracking-wide text-content-subtle">
+              <IconClock size={11} />
+              历史记录
+            </div>
+            {filteredHistory.map((entry, i) => (
+              <div
+                key={entry.url}
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => pickHistoryEntry(entry)}
+                onMouseEnter={() => setHighlight(i)}
+                className={cn(
+                  "flex cursor-pointer items-center gap-2 px-2.5 py-1.5",
+                  i === highlight ? "bg-surface-hover" : "bg-transparent",
+                )}
+              >
+                <div className="min-w-0 flex-1">
+                  {entry.title && (
+                    <div className="truncate text-xs text-content">{entry.title}</div>
+                  )}
+                  <div className="truncate text-[11px] text-content-muted">{entry.url}</div>
+                </div>
+                <button
+                  type="button"
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onRemoveHistoryEntry(entry.url);
+                  }}
+                  title="删除该记录"
+                  className="rounded p-1 text-content-subtle hover:bg-surface-hover hover:text-danger"
+                >
+                  <IconTrash size={12} />
+                </button>
+              </div>
+            ))}
+            {history.length > 0 && (
+              <button
+                type="button"
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => {
+                  onClearHistory();
+                  setDropdownOpen(false);
+                }}
+                className="w-full border-t border-edge px-2.5 py-1.5 text-left text-[11px] text-content-muted hover:bg-surface-hover hover:text-content"
+              >
+                清空历史记录…
+              </button>
+            )}
+          </div>
         )}
-      />
+      </div>
+
+      {/* Credential vault — manage saved passwords + fill them into the
+          current page's login form. */}
+      <ToolButton onClick={onOpenCredentials} title="密码库">
+        <IconKey size={16} />
+      </ToolButton>
 
       {/* Element picker toggle. Accent when active. */}
       <ToolButton onClick={onTogglePickMode} active={pickMode} title={pickMode ? "退出元素选择" : "选择页面元素"}>

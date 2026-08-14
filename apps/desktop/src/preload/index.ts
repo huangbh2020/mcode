@@ -303,6 +303,20 @@ const api = {
       ipcRenderer.invoke(IPC.BROWSER_SET_DEVICE, input)) as RpcMap["browser.setDevice"],
     clearCache: (() =>
       ipcRenderer.invoke(IPC.BROWSER_CLEAR_CACHE)) as RpcMap["browser.clearCache"],
+    historyRemove: ((input) =>
+      ipcRenderer.invoke(IPC.BROWSER_HISTORY_REMOVE, input)) as RpcMap["browser.historyRemove"],
+    historyClear: (() =>
+      ipcRenderer.invoke(IPC.BROWSER_HISTORY_CLEAR)) as RpcMap["browser.historyClear"],
+    credentialsList: (() =>
+      ipcRenderer.invoke(IPC.BROWSER_CREDENTIALS_LIST)) as RpcMap["browser.credentialsList"],
+    credentialsSave: ((input) =>
+      ipcRenderer.invoke(IPC.BROWSER_CREDENTIALS_SAVE, input)) as RpcMap["browser.credentialsSave"],
+    credentialsRemove: ((input) =>
+      ipcRenderer.invoke(IPC.BROWSER_CREDENTIALS_REMOVE, input)) as RpcMap["browser.credentialsRemove"],
+    credentialsFill: ((input) =>
+      ipcRenderer.invoke(IPC.BROWSER_CREDENTIALS_FILL, input)) as RpcMap["browser.credentialsFill"],
+    authRespond: ((input) =>
+      ipcRenderer.invoke(IPC.BROWSER_AUTH_RESPOND, input)) as RpcMap["browser.authRespond"],
   },
 
   /** Language servers (LSP): install/enable per language, then sync documents

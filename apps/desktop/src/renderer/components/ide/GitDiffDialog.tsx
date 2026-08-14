@@ -64,6 +64,18 @@ export function GitDiffDialog() {
   // Fullscreen is a transient view toggle — resets each time the dialog opens.
   const [fullscreen, setFullscreen] = useState(false);
 
+  // The embedded browser's page is an OS-level WebContentsView floating above
+  // all renderer DOM, so this dialog would be covered by it while the browser
+  // panel is open. Increment the global suppression counter while the dialog is
+  // visible (BrowserPanel then hides the active view and restores it on close).
+  const suppressBrowserView = useSessionStore((s) => s.suppressBrowserView);
+  const dialogVisible = open && tabs.length > 0;
+  useEffect(() => {
+    if (!dialogVisible) return;
+    suppressBrowserView(true);
+    return () => suppressBrowserView(false);
+  }, [dialogVisible, suppressBrowserView]);
+
   const refreshStatus = useCallback(async (repoPath: string) => {
     setStatusLoading(true);
     try {

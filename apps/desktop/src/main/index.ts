@@ -126,6 +126,20 @@ app.whenReady().then(async () => {
   registerIpcHandlers();
   logStartup("IPC handlers registered");
 
+  // HTTP Basic Auth for the embedded browser: BrowserManager auto-fills a
+  // saved credential for the origin, or pushes an "authRequest" event so the
+  // renderer shows a login dialog (answered via the browser.authRespond RPC).
+  // Requests not from a browser view are ignored (default cancel behavior).
+  app.on("login", (event, webContents, _details, authInfo, callback) => {
+    event.preventDefault();
+    BrowserManager.handleLogin(
+      webContents.id,
+      webContents.getURL(),
+      authInfo,
+      callback,
+    );
+  });
+
   // Create the window immediately - don't wait for DB init to finish. The
   // renderer starts loading its JS/HMR while sql.js parses in parallel.
   createMainWindow();

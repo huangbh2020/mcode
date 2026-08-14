@@ -943,7 +943,13 @@ function SessionRow({
     <li
       ref={(el) => registerNode(session.id, el)}
       onClick={handleRowClick}
-      onMouseEnter={() => setHovered(true)}
+      onMouseEnter={() => {
+        setHovered(true);
+        // Warm the message bucket on hover — by the time the click lands
+        // the history fetch is usually done (or in flight), so the center
+        // pane swaps in with content instead of a skeleton frame.
+        void useSessionStore.getState().prefetchSessionMessages(session.id);
+      }}
       onMouseLeave={() => setHovered(false)}
       onContextMenu={(e) => {
         // Suppress the menu while an inline confirm is mid-flight, otherwise

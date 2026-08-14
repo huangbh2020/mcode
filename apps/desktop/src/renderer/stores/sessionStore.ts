@@ -491,6 +491,12 @@ export interface SessionState {
    *  `undefined`/absent = not yet determined (session never loaded); `true` =
    *  more history is available above the current head; `false` = all loaded. */
   hasMoreMessagesBySession: Record<string, boolean>;
+  /** In-flight FIRST-PAGE history fetch, per session. True between the
+   *  activation/prefetch fetch starting and its IPC round-trip landing.
+   *  The ChatPane reads this (bucket undefined + loading) to show a
+   *  skeleton instead of the empty-thread welcome while persisted history
+   *  streams in — no more "blank composer, then content pops in" flash. */
+  loadingMessagesBySession: Record<string, boolean>;
   /** In-flight "load older" request, per session. Guards against stacking
    *  concurrent paginated fetches when the user holds the scroll at the top. */
   loadingOlderBySession: Record<string, boolean>;
@@ -620,6 +626,14 @@ export interface SessionState {
   model: string;
   /** Custom-model config bound to the active session (null = built-in). */
   customModelId: string | null;
+  /** Last user-picked model per provider ("记住每个 SDK 上次选的模型").
+   *  Written by setModel / setCustomModel / setProvider (which stashes the
+   *  outgoing provider's selection); read when switching SDKs back so the
+   *  composer re-selects the model the user last used with that provider
+   *  instead of snapping to "default". Persisted as part of the composer
+   *  selection setting. Entries whose model was deleted are dropped (see
+   *  validateComposerSelection / rememberProviderModel). */
+  lastModelByProvider: Record<string, { model: string; customModelId: string | null }>;
   /** User-defined custom-model configs (desensitized — tokens masked). */
   customModels: CustomModelPublic[];
   /** Registered AI backends from `provider.list`. Empty until initDeferred. */
@@ -871,6 +885,12 @@ export interface SessionState {
    *  entry point in both display modes — the difference is purely
    *  cosmetic (single mode hides the tab strip, tabs mode shows it). */
   openTab: (sessionId: string) => Promise<void>;
+  /** Load a session's first page of persisted messages WITHOUT activating
+   *  it. Used for hover-prefetch from the sidebar so that by the time the
+   *  click lands the bucket is already warm (or in flight) and the center
+   *  pane swaps in with content instead of a blank frame. No-op when the
+   *  bucket exists or a fetch is already running. */
+  prefetchSessionMessages: (sessionId: string) => Promise<void>;
   /** Fetch the next page of older messages for a session and prepend them.
    *  No-op when nothing more is available or a fetch is already in flight. */
   loadOlderMessages: (sessionId: string) => Promise<void>;
@@ -1357,6 +1377,8 @@ export const EMPTY_ELEMENT_QUEUE: PickedElement[] = [];
 /** Stable empty prompt-queue reference (selector must return a stable array). */
 export const EMPTY_PROMPT_QUEUE: QueuedPrompt[] = [];
 const EMPTY_CUSTOM_MODELS: CustomModelPublic[] = [];
+/** Stable empty map for lastModelByProvider (selector-stability rule). */
+const EMPTY_LAST_MODEL_BY_PROVIDER: Record<string, { model: string; customModelId: string | null }> = {};
 const EMPTY_PROVIDERS: ProviderInfo[] = [];
 const EMPTY_PI_MODELS: BuiltinModelOption[] = [];
 const EMPTY_SKILLS: SkillInfo[] = [];
@@ -1451,6 +1473,12 @@ export const LEFT_WIDTH_MIN = 180;
 export const LEFT_WIDTH_MAX = 500;
 export const RIGHT_WIDTH_MIN = 240;
 export const RIGHT_WIDTH_MAX = 640;
+/** Right-panel width that fits the sidebar browser's default iPhone 14 Pro
+ *  emulation (393 CSS pt) plus the 48px icon rail + border. When the browser
+ *  tab is FIRST opened (no tabs yet), the panel is widened to at least this so
+ *  the mobile view isn't clamped narrower than a real phone. Never shrinks a
+ *  wider panel; falls inside RIGHT_WIDTH_MAX. */
+export const RIGHT_WIDTH_BROWSER_FIT = 442;
 export const BOTTOM_TERMINAL_HEIGHT_MIN = 80;
 export const BOTTOM_TERMINAL_HEIGHT_MAX = 600;
 export const EDITOR_WIDTH_PCT_MIN = 20;
@@ -1623,6 +1651,8 @@ function applySessionDeletedState(s: SessionState, id: string): Partial<SessionS
   delete messagesBySession[id];
   const hasMoreMessagesBySession = { ...s.hasMoreMessagesBySession };
   delete hasMoreMessagesBySession[id];
+  const loadingMessagesBySession = { ...s.loadingMessagesBySession };
+  delete loadingMessagesBySession[id];
   const loadingOlderBySession = { ...s.loadingOlderBySession };
   delete loadingOlderBySession[id];
   const runningBySession = { ...s.runningBySession };
@@ -1674,29 +1704,30 @@ function applySessionDeletedState(s: SessionState, id: string): Partial<SessionS
       archivedSessionsByProject: archivedByProject,
       sessionsTotalByProject: { ...s.sessionsTotalByProject, [projectId]: totalActive },
       sessionsHasMoreByProject: { ...s.sessionsHasMoreByProject, [projectId]: hasMoreActive },
-      messagesBySession,
-      hasMoreMessagesBySession,
-      loadingOlderBySession,
-      runningBySession,
-      runningTurnStartedAt,
-      interruptedBySession,
-      unreadBySession,
-      todosBySession,
-      planBySession,
-      subagentsBySession,
-      pendingQuestionBySession,
-      turnFilesBySession,
-      chatFileQueueBySession,
-      chatElementQueueBySession,
-      contextSnapshotBySession,
-      usageHistoryBySession,
-      pendingPlanApprovalBySession,
-      planDrawerPlanBySession,
-      planTabActiveBySession,
-      planApprovalDraftBySession,
-      composerDraftBySession,
-      pendingApprovals,
-      openTabs,
+    messagesBySession,
+    hasMoreMessagesBySession,
+    loadingMessagesBySession,
+    loadingOlderBySession,
+    runningBySession,
+    runningTurnStartedAt,
+    interruptedBySession,
+    unreadBySession,
+    todosBySession,
+    planBySession,
+    subagentsBySession,
+    pendingQuestionBySession,
+    turnFilesBySession,
+    chatFileQueueBySession,
+    chatElementQueueBySession,
+    contextSnapshotBySession,
+    usageHistoryBySession,
+    pendingPlanApprovalBySession,
+    planDrawerPlanBySession,
+    planTabActiveBySession,
+    planApprovalDraftBySession,
+    composerDraftBySession,
+    pendingApprovals,
+    openTabs,
     };
   }
   // Was the active tab. Land on the previous tab if any, otherwise the
@@ -1723,6 +1754,7 @@ function applySessionDeletedState(s: SessionState, id: string): Partial<SessionS
     sessionsHasMoreByProject: { ...s.sessionsHasMoreByProject, [projectId]: hasMoreActive },
     messagesBySession,
     hasMoreMessagesBySession,
+    loadingMessagesBySession,
     loadingOlderBySession,
     runningBySession,
     runningTurnStartedAt,
@@ -1855,7 +1887,7 @@ function resolveSendModel(
  *  last picked (setProvider / setModel / setCustomModel call this). Fire-and-
  *  forget, like the other setting.set callers. */
 function persistComposerSelection(
-  s: Pick<SessionState, "providerId" | "model" | "customModelId">,
+  s: Pick<SessionState, "providerId" | "model" | "customModelId" | "lastModelByProvider">,
 ): void {
   void api.setting
     .set({
@@ -1864,11 +1896,39 @@ function persistComposerSelection(
         providerId: s.providerId,
         model: s.model,
         customModelId: s.customModelId,
+        lastModelByProvider: s.lastModelByProvider,
       }),
     })
     .catch((err) => {
       console.error("setting.set(composerModel) failed:", err);
     });
+}
+
+/** Validate a remembered {model, customModelId} pair against the CURRENT
+ *  provider + model lists — same rules as validateComposerSelection. Returns
+ *  the entry when still valid, null when the model was deleted (caller then
+ *  falls back to "default"). */
+function isValidRememberedModel(
+  s: Pick<SessionState, "providers" | "customModels" | "piAvailableModels">,
+  providerId: string,
+  entry: { model: string; customModelId: string | null } | undefined,
+): entry is { model: string; customModelId: string | null } {
+  if (!entry || entry.model === "default") return !!entry;
+  const provider = s.providers.find((p) => p.id === providerId);
+  if (!provider) return false;
+  if (provider.id === "pi-sdk") {
+    return s.piAvailableModels.some((m) => m.id === entry.model);
+  }
+  if (provider.id === "claude-sdk") {
+    const cfg = s.customModels.find((m) => m.id === entry.customModelId);
+    return (
+      !!cfg &&
+      !!entry.customModelId &&
+      (CUSTOM_MODEL_ROLES as string[]).includes(entry.model) &&
+      !!cfg.roles[entry.model as CustomModelRoleKey]?.requestModel?.trim()
+    );
+  }
+  return (provider.capabilities.builtinModels ?? []).some((b) => b.id === entry.model);
 }
 
 /**
@@ -1915,6 +1975,12 @@ function validateComposerSelection(
     if (!ok) patch = { model: "default", customModelId: null };
   }
   if (!patch) return;
+  // Also drop the stale remembered model for the current provider so a later
+  // SDK switch back doesn't restore a deleted model.
+  if (s.providerId in s.lastModelByProvider) {
+    const { [s.providerId]: _drop, ...rest } = s.lastModelByProvider;
+    patch = { ...patch, lastModelByProvider: rest };
+  }
   set(patch);
   persistComposerSelection(get());
 }
@@ -2767,9 +2833,10 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   accentColor: null,
   shortcutOverrides: {},
   shortcutRecording: false,
-  messagesBySession: {},
-  hasMoreMessagesBySession: {},
-  loadingOlderBySession: {},
+    messagesBySession: {},
+    hasMoreMessagesBySession: {},
+    loadingMessagesBySession: {},
+    loadingOlderBySession: {},
   runningBySession: {},
   runningTurnStartedAt: {},
   interruptedBySession: {},
@@ -2808,6 +2875,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   providerId: DEFAULT_PROVIDER_ID,
   model: "default",
   customModelId: null,
+  lastModelByProvider: EMPTY_LAST_MODEL_BY_PROVIDER,
   customModels: EMPTY_CUSTOM_MODELS,
   providers: EMPTY_PROVIDERS,
   piAvailableModels: EMPTY_PI_MODELS,
@@ -2959,12 +3027,43 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           providerId?: unknown;
           model?: unknown;
           customModelId?: unknown;
+          lastModelByProvider?: unknown;
         };
         if (parsed && typeof parsed === "object" && typeof parsed.providerId === "string") {
+          // Per-provider remembered models (newer format). Guarded shape check;
+          // malformed entries are simply ignored.
+          let lastMap: Record<string, { model: string; customModelId: string | null }> = {};
+          if (parsed.lastModelByProvider && typeof parsed.lastModelByProvider === "object") {
+            for (const [k, v] of Object.entries(
+              parsed.lastModelByProvider as Record<string, unknown>,
+            )) {
+              if (
+                v &&
+                typeof v === "object" &&
+                typeof (v as { model?: unknown }).model === "string"
+              ) {
+                const cid = (v as { customModelId?: unknown }).customModelId;
+                lastMap[k] = {
+                  model: (v as { model: string }).model,
+                  customModelId: typeof cid === "string" ? cid : null,
+                };
+              }
+            }
+          }
+          // Top-level model/customModelId come from the legacy (pre-map) format;
+          // a remembered entry for the restored provider takes precedence.
+          const remembered = lastMap[parsed.providerId];
           set({
             providerId: parsed.providerId,
-            model: typeof parsed.model === "string" ? parsed.model : "default",
-            customModelId: typeof parsed.customModelId === "string" ? parsed.customModelId : null,
+            model:
+              remembered?.model ??
+              (typeof parsed.model === "string" ? parsed.model : "default"),
+            customModelId: remembered
+              ? remembered.customModelId
+              : typeof parsed.customModelId === "string"
+                ? parsed.customModelId
+                : null,
+            lastModelByProvider: lastMap,
           });
         }
       }
@@ -3529,14 +3628,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       return { activeSessionId: sessionId, unreadBySession };
     });
     if (get().messagesBySession[sessionId]) return;
-    const { messages, hasMore } = await api.session.messages({
-      sessionId,
-      limit: MESSAGE_PAGE_SIZE,
-    });
-    set((s) => ({
-      messagesBySession: { ...s.messagesBySession, [sessionId]: fromRecords(messages) },
-      hasMoreMessagesBySession: { ...s.hasMoreMessagesBySession, [sessionId]: hasMore },
-    }));
+    void get().prefetchSessionMessages(sessionId);
   },
 
   /** Open a session as a tab. Already-open tabs simply become active; new
@@ -3564,6 +3656,21 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       };
     });
     if (!get().messagesBySession[sessionId]) {
+      void get().prefetchSessionMessages(sessionId);
+    }
+  },
+
+  /** Shared first-page history fetch behind selectSession / openTab / hover
+   *  prefetch. Tracks in-flight state in `loadingMessagesBySession` so the
+   *  ChatPane can distinguish "history loading" (skeleton) from "thread
+   *  genuinely empty" (welcome screen), and dedupes concurrent callers. */
+  prefetchSessionMessages: async (sessionId) => {
+    if (get().messagesBySession[sessionId]) return;
+    if (get().loadingMessagesBySession[sessionId]) return;
+    set((s) => ({
+      loadingMessagesBySession: { ...s.loadingMessagesBySession, [sessionId]: true },
+    }));
+    try {
       const { messages, hasMore } = await api.session.messages({
         sessionId,
         limit: MESSAGE_PAGE_SIZE,
@@ -3571,6 +3678,13 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       set((s) => ({
         messagesBySession: { ...s.messagesBySession, [sessionId]: fromRecords(messages) },
         hasMoreMessagesBySession: { ...s.hasMoreMessagesBySession, [sessionId]: hasMore },
+        loadingMessagesBySession: { ...s.loadingMessagesBySession, [sessionId]: false },
+      }));
+    } catch {
+      // Never leave the skeleton stuck up on a failed fetch — fall back to
+      // the regular (empty) view so the composer stays usable.
+      set((s) => ({
+        loadingMessagesBySession: { ...s.loadingMessagesBySession, [sessionId]: false },
       }));
     }
   },
@@ -4065,7 +4179,13 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       interruptedBySession: { ...s.interruptedBySession, [sessionId]: false },
     }));
 
-	    // 2. fire the turn; events stream back via ingestEvent. Ship the
+	    // 2. fire the turn; events stream back via ingestEvent. Run the IPC in
+	    //    the BACKGROUND and return true the moment the user message lands
+	    //    in the stream — the main handler awaits provider.startTurn (SDK
+	    //    spawn / bridge acquisition) before its invoke resolves, which can
+	    //    take hundreds of ms. Awaiting it here kept the composer's typed
+	    //    text frozen next to the already-rendered user bubble, which read
+	    //    as "send lag". Ship the
 	    //    current model / customModelId / effort / permissionMode from the
 	    //    store as per-turn overrides - the DB row may be stale because
 	    //    `setModel` / `setCustomModel` persist via fire-and-forget
@@ -4073,59 +4193,63 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 	    //    applies these overrides to the in-memory session so
 	    //    RuntimeManager always sees the latest UI state. The model pair
 	    //    comes from `resolvedModel` above (auto → first configured model).
-	    const { effort, permissionMode, providerId } = get();
-	    let updated;
-	    try {
-      ({ session: updated } = await api.claude.sendTurn({
-        sessionId,
-        prompt,
-        model: resolvedModel.model,
-        effort,
-        permissionMode,
-        customModelId: resolvedModel.customModelId,
-        // Per-turn provider override — lets the active provider drive
-        // which backend handles this turn without persisting the change
-        // to the session row. Combined with the per-turn overrides above
-        // this keeps "switch SDK at any time" working.
-        providerId,
-        skills: skillsUsed && skillsUsed.length > 0 ? skillsUsed : undefined,
-        // User-attached images inlined into the provider request (base64
-        // content blocks — never paths).
-        images: images && images.length > 0 ? images : undefined,
-      }));
-    } catch (err) {
-      // The IPC itself rejected (not a streamed `error` event). Without
-      // this the running flag + synthesized stat row would stick forever
-      // - no turn.done/error event will arrive to clear them. Reset both
-      // so the composer unlocks and the pending row disappears. The prompt
-      // IS in the stream, so report "accepted" (the caller clears the
-      // composer, matching the pre-guard behavior).
-      console.error("sendTurn IPC failed:", err);
+	    void (async () => {
+      const { effort, permissionMode, providerId } = get();
+      let updated;
+      try {
+        ({ session: updated } = await api.claude.sendTurn({
+          sessionId,
+          prompt,
+          model: resolvedModel.model,
+          effort,
+          permissionMode,
+          customModelId: resolvedModel.customModelId,
+          // Per-turn provider override — lets the active provider drive
+          // which backend handles this turn without persisting the change
+          // to the session row. Combined with the per-turn overrides above
+          // this keeps "switch SDK at any time" working.
+          providerId,
+          skills: skillsUsed && skillsUsed.length > 0 ? skillsUsed : undefined,
+          // User-attached images inlined into the provider request (base64
+          // content blocks — never paths).
+          images: images && images.length > 0 ? images : undefined,
+        }));
+      } catch (err) {
+        // The IPC itself rejected (not a streamed `error` event). Without
+        // this the running flag + synthesized stat row would stick forever
+        // - no turn.done/error event will arrive to clear them. Reset both
+        // so the composer unlocks and the pending row disappears. The prompt
+        // IS in the stream, so the send is still treated as accepted (the
+        // caller already cleared the composer).
+        console.error("sendTurn IPC failed:", err);
+        set((s) => {
+          const runningBySession = { ...s.runningBySession, [sessionId]: false };
+          const runningTurnStartedAt = { ...s.runningTurnStartedAt };
+          delete runningTurnStartedAt[sessionId];
+          return { runningBySession, runningTurnStartedAt };
+        });
+        // IPC rejected → no terminal event will arrive to clear the turn, so
+        // also try draining the queue here (the session is now idle).
+        get().drainPromptQueueIfIdle(sessionId);
+        return;
+      }
       set((s) => {
-        const runningBySession = { ...s.runningBySession, [sessionId]: false };
-        const runningTurnStartedAt = { ...s.runningTurnStartedAt };
-        delete runningTurnStartedAt[sessionId];
-        return { runningBySession, runningTurnStartedAt };
+        const pid = updated.projectId;
+        const prevList = s.sessionsByProject[pid] ?? [];
+        // Sending a message makes this session the most recently active, so move
+        // it to the head of the list (mirrors the `updated_at DESC` server order
+        // and the head-insert done by `startSession`). Replace-in-place would
+        // leave a stale position; unshift keeps the left bar in sync with activity.
+        const rest = prevList.filter((sess) => sess.id !== updated.id);
+        const nextList = [updated, ...rest];
+        return {
+          sessionsByProject: { ...s.sessionsByProject, [pid]: nextList },
+          sessions: pid === s.activeProjectId ? nextList : s.sessions,
+        };
       });
-      // IPC rejected → no terminal event will arrive to clear the turn, so
-      // also try draining the queue here (the session is now idle).
-      get().drainPromptQueueIfIdle(sessionId);
-      return true;
-    }
-    set((s) => {
-      const pid = updated.projectId;
-      const prevList = s.sessionsByProject[pid] ?? [];
-      // Sending a message makes this session the most recently active, so move
-      // it to the head of the list (mirrors the `updated_at DESC` server order
-      // and the head-insert done by `startSession`). Replace-in-place would
-      // leave a stale position; unshift keeps the left bar in sync with activity.
-      const rest = prevList.filter((sess) => sess.id !== updated.id);
-      const nextList = [updated, ...rest];
-      return {
-        sessionsByProject: { ...s.sessionsByProject, [pid]: nextList },
-        sessions: pid === s.activeProjectId ? nextList : s.sessions,
-      };
-    });
+    })();
+    // Accepted: the user message is in the stream and the turn is dispatched
+    // in the background. The caller clears the composer immediately.
     return true;
   },
 
@@ -4224,47 +4348,52 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     });
 
     // 5. Fire the turn; events stream back via ingestEvent. Same per-turn
-    //    override pattern as sendPrompt (model pair from resolvedModel above).
-    const { effort, permissionMode, providerId } = get();
-    let updated;
-    try {
-      ({ session: updated } = await api.claude.sendTurn({
-        sessionId,
-        prompt: newPrompt,
-        model: resolvedModel.model,
-        effort,
-        permissionMode,
-        customModelId: resolvedModel.customModelId,
-        providerId,
-        skills: skillsUsed && skillsUsed.length > 0 ? skillsUsed : undefined,
-        // Preserved user-attached images from the pre-edit message.
-        images: preservedImages.length > 0 ? preservedImages : undefined,
-      }));
-    } catch (err) {
-      console.error("editAndResendMessage: sendTurn IPC failed:", err);
+    //    override pattern as sendPrompt (model pair from resolvedModel above),
+    //    and same BACKGROUND dispatch: the truncated stream + new user message
+    //    are already on screen, so don't block this action's completion on the
+    //    main process's provider.startTurn round-trip.
+    void (async () => {
+      const { effort, permissionMode, providerId } = get();
+      let updated;
+      try {
+        ({ session: updated } = await api.claude.sendTurn({
+          sessionId,
+          prompt: newPrompt,
+          model: resolvedModel.model,
+          effort,
+          permissionMode,
+          customModelId: resolvedModel.customModelId,
+          providerId,
+          skills: skillsUsed && skillsUsed.length > 0 ? skillsUsed : undefined,
+          // Preserved user-attached images from the pre-edit message.
+          images: preservedImages.length > 0 ? preservedImages : undefined,
+        }));
+      } catch (err) {
+        console.error("editAndResendMessage: sendTurn IPC failed:", err);
+        set((s) => {
+          const runningBySession = { ...s.runningBySession, [sessionId]: false };
+          const runningTurnStartedAt = { ...s.runningTurnStartedAt };
+          delete runningTurnStartedAt[sessionId];
+          return { runningBySession, runningTurnStartedAt };
+        });
+        get().drainPromptQueueIfIdle(sessionId);
+        return;
+      }
       set((s) => {
-        const runningBySession = { ...s.runningBySession, [sessionId]: false };
-        const runningTurnStartedAt = { ...s.runningTurnStartedAt };
-        delete runningTurnStartedAt[sessionId];
-        return { runningBySession, runningTurnStartedAt };
+        const pid = updated.projectId;
+        const prevList = s.sessionsByProject[pid] ?? [];
+        // Sending a message makes this session the most recently active, so move
+        // it to the head of the list (mirrors the `updated_at DESC` server order
+        // and the head-insert done by `startSession`). Replace-in-place would
+        // leave a stale position; unshift keeps the left bar in sync with activity.
+        const rest = prevList.filter((sess) => sess.id !== updated.id);
+        const nextList = [updated, ...rest];
+        return {
+          sessionsByProject: { ...s.sessionsByProject, [pid]: nextList },
+          sessions: pid === s.activeProjectId ? nextList : s.sessions,
+        };
       });
-      get().drainPromptQueueIfIdle(sessionId);
-      return;
-    }
-    set((s) => {
-      const pid = updated.projectId;
-      const prevList = s.sessionsByProject[pid] ?? [];
-      // Sending a message makes this session the most recently active, so move
-      // it to the head of the list (mirrors the `updated_at DESC` server order
-      // and the head-insert done by `startSession`). Replace-in-place would
-      // leave a stale position; unshift keeps the left bar in sync with activity.
-      const rest = prevList.filter((sess) => sess.id !== updated.id);
-      const nextList = [updated, ...rest];
-      return {
-        sessionsByProject: { ...s.sessionsByProject, [pid]: nextList },
-        sessions: pid === s.activeProjectId ? nextList : s.sessions,
-      };
-    });
+    })();
   },
 
   interrupt: async (sessionIdArg) => {
@@ -5218,8 +5347,10 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     // Reveal the browser sidebar + stage the URL. BrowserPanel opens it in a
     // NEW tab: when tabs already exist it creates one for the URL; when none
     // exist (panel first opened) the first-tab effect loads it into the
-    // initial tab.
-    set({ rightPanelTab: "browser", rightOpen: true, pendingBrowserUrl: url });
+    // initial tab. Goes through setRightPanelTab so the first-open panel-width
+    // fit (iPhone 14 Pro) applies here too.
+    get().setRightPanelTab("browser");
+    set({ rightOpen: true, pendingBrowserUrl: url });
   },
   adoptAgentBrowserTab: (browserId, info) => {
     const s = get();
@@ -5566,7 +5697,13 @@ export const useSessionStore = create<SessionState>((set, get) => ({
    *  optimistic-local / fire-and-forget pattern. */
   setModel: (model) => {
     const sessionId = get().activeSessionId;
-    set({ model });
+    set((s) => ({
+      model,
+      lastModelByProvider: {
+        ...s.lastModelByProvider,
+        [s.providerId]: { model, customModelId: s.customModelId },
+      },
+    }));
     if (sessionId) {
       void api.session.updateSettings({ sessionId, model }).catch((err) => {
         console.error("updateSettings(model) failed:", err);
@@ -5608,7 +5745,14 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           : "default";
         nextModel = firstBound;
       }
-      return { customModelId: id, model: nextModel };
+      return {
+        customModelId: id,
+        model: nextModel,
+        lastModelByProvider: {
+          ...s.lastModelByProvider,
+          [s.providerId]: { model: nextModel, customModelId: id },
+        },
+      };
     });
     // Persist the new binding + role to the session row. We compute the
     // resolved model from the same logic as above (re-read post-set to be
@@ -5638,20 +5782,37 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
   setProvider: (id) => {
     // Always update the "next session" slot — new threads inherit this.
-    // When switching to a *different* provider, also reset the model
-    // selection: model ids live in per-provider namespaces (claude uses
-    // role/alias keys like "sonnet"; pi uses "provider/modelId" strings),
-    // so a leftover value would either render as a raw id in the chip or
-    // point at a model the new provider can't resolve. "default" lets each
-    // provider pick its own sensible default. customModelId is a claude-only
-    // concept (gateway configs), so it must be cleared on any switch.
+    // When switching to a *different* provider: model ids live in
+    // per-provider namespaces (claude uses role/alias keys like "sonnet"; pi
+    // uses "provider/modelId" strings), so a leftover value would either
+    // render as a raw id in the chip or point at a model the new provider
+    // can't resolve. Instead of snapping to "default", remember the outgoing
+    // provider's selection (so switching back restores it) and re-apply the
+    // target provider's last remembered model — dropped back to "default"
+    // when the remembered model has since been deleted.
+    // customModelId is a claude-only concept (gateway configs), so it must be
+    // cleared on any switch away.
     const prevProviderId = get().providerId;
     const providerChanged = prevProviderId !== id;
-    set(
-      providerChanged
-        ? { providerId: id, model: "default", customModelId: null }
-        : { providerId: id },
-    );
+    // Restore result for the target provider — kept so the session-row sync
+    // below persists the SAME model the composer now shows (a row left at
+    // "default"/stale would clobber the restore on the next
+    // syncConfigFromSession).
+    let restored: { model: string; customModelId: string | null };
+    if (providerChanged) {
+      const s = get();
+      const nextMap = { ...s.lastModelByProvider };
+      nextMap[prevProviderId] = { model: s.model, customModelId: s.customModelId };
+      const remembered = nextMap[id];
+      restored =
+        isValidRememberedModel(s, id, remembered) && remembered.model !== "default"
+          ? { model: remembered.model, customModelId: remembered.customModelId }
+          : { model: "default", customModelId: null };
+      set({ providerId: id, ...restored, lastModelByProvider: nextMap });
+    } else {
+      restored = { model: get().model, customModelId: get().customModelId };
+      set({ providerId: id });
+    }
     // Remember the pick as the next-session default (restored at boot).
     persistComposerSelection(get());
 
@@ -5673,7 +5834,11 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
     set((s) => {
       const patchRow = (list: Session[]): Session[] =>
-        list.map((x) => (x.id === sid ? { ...x, providerId: id } : x));
+        list.map((x) =>
+          x.id === sid
+            ? { ...x, providerId: id, model: restored.model, customModelId: restored.customModelId }
+            : x,
+        );
       const nextByProject = { ...s.sessionsByProject };
       if (nextByProject[projectId]) {
         nextByProject[projectId] = patchRow(nextByProject[projectId]);
@@ -5690,14 +5855,14 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       return { sessionsByProject: nextByProject, archivedSessionsByProject: nextArchived, sessions: nextSessions };
     });
 
-    // Persist the provider change to the session row, along with the model
-    // reset when the provider actually changed (so the row stays consistent
-    // with the in-memory "default" + cleared customModelId above). Fire-and-
+    // Persist the provider change to the session row, along with the restored
+    // model (so the row stays consistent with what the composer shows and a
+    // later syncConfigFromSession doesn't clobber the restore). Fire-and-
     // forget, like the other updateSettings callers.
     void api.session
       .updateSettings(
         providerChanged
-          ? { sessionId: sid, providerId: id, model: "default", customModelId: null }
+          ? { sessionId: sid, providerId: id, model: restored.model, customModelId: restored.customModelId }
           : { sessionId: sid, providerId: id },
       )
       .catch((err) => {
@@ -6146,6 +6311,18 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   /* ─────────────────── IDE right-panel actions ─────────────────── */
 
   setRightPanelTab: (tab) => {
+    // First-time browser open: the sidebar browser defaults to the iPhone 14
+    // Pro preset (393 CSS pt wide). If the right panel is narrower than that
+    // (default 360), widen it so the mobile view renders at true device size
+    // instead of being clamped by syncBounds to the narrow stage. Only on the
+    // FIRST open (no tabs yet) and never shrinks an already-wider panel — the
+    // user's manually-dragged width is respected from then on.
+    if (tab === "browser") {
+      const s = get();
+      if (s.browserTabs.length === 0 && s.rightWidth < RIGHT_WIDTH_BROWSER_FIT) {
+        set({ rightWidth: clampRightWidth(RIGHT_WIDTH_BROWSER_FIT) });
+      }
+    }
     set({ rightPanelTab: tab });
     void api.setting.set({ key: UI_RIGHT_PANEL_TAB_SETTING_KEY, value: tab }).catch((err) => {
       console.error("setting.set(rightPanelTab) failed:", err);

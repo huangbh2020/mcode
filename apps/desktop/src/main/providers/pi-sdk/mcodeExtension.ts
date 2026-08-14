@@ -58,9 +58,9 @@ import { guardBashCommand, expandTilde } from "./bashWriteGuard.js";
 import {
   parseQuestions,
   formatAnswersForModel,
-  ASK_SYSTEM_PROMPT,
+  ASK_NATIVE_TOOL_PROMPT,
 } from "@main/lib/askQuestion.js";
-import { PI_IDENTITY_PROMPT } from "@main/lib/systemPrompt.js";
+import { PI_IDENTITY_PROMPT, joinPromptSections } from "@main/lib/systemPrompt.js";
 import {
   browserList,
   browserNavigate,
@@ -69,6 +69,8 @@ import {
   browserType,
   browserEvaluate,
   browserScreenshot,
+  browserToolsUsagePrompt,
+  BROWSER_TOOL_SPECS,
   type ToolResult,
 } from "@main/browser/agentBrowserTools.js";
 
@@ -420,10 +422,8 @@ function registerBrowserTools(
   pi.registerTool({
     name: "browser_list",
     label: "Browser List",
-    description:
-      "列出当前所有打开的浏览器视图及其 URL 和标题,返回每个视图的 browserId。" +
-      "调用其他 browser_* 工具时可用 browserId 参数指定目标;省略时自动复用第一个已开视图。",
-    promptSnippet: "browser_list(): 列出打开的浏览器视图",
+    description: BROWSER_TOOL_SPECS.browser_list.description,
+    promptSnippet: BROWSER_TOOL_SPECS.browser_list.promptSnippet,
     parameters: Type.Object({}),
     async execute() {
       return toPiResult(browserList());
@@ -433,12 +433,8 @@ function registerBrowserTools(
   pi.registerTool({
     name: "browser_navigate",
     label: "Browser Navigate",
-    description:
-      "在应用内浏览器中导航到指定 URL(仅 http/https)。若没有打开的浏览器视图会自动创建并显示一个。" +
-      "browserId 可选——省略时自动复用或新建。device 可选——指定打开方式:" +
-      "desktop(PC 端全宽,默认)、iphone(390×844 移动端)、android(412×915 移动端)。" +
-      "测试移动端页面或响应式布局时用 iphone/android。导航后需调用 browser_snapshot 读取页面内容。",
-    promptSnippet: "browser_navigate({url, browserId?, device?}): 导航到 URL,device 可选 desktop/iphone/android",
+    description: BROWSER_TOOL_SPECS.browser_navigate.description,
+    promptSnippet: BROWSER_TOOL_SPECS.browser_navigate.promptSnippet,
     parameters: Type.Object({
       url: Type.String({ description: "目标 URL,必须含 http:// 或 https://" }),
       browserId: Type.Optional(
@@ -468,11 +464,8 @@ function registerBrowserTools(
   pi.registerTool({
     name: "browser_snapshot",
     label: "Browser Snapshot",
-    description:
-      "读取当前页面的结构化快照:URL、标题、readyState、页面正文,以及可交互元素列表(链接/按钮/输入框/标题等)。" +
-      "每个可交互元素带 role/name/tag/selector/text——其中的 selector 可直接传给 browser_click。" +
-      "只读,无副作用。这是理解页面内容、定位要操作的元素的主要方式。",
-    promptSnippet: "browser_snapshot({browserId?}): 读取页面结构化快照(只读)",
+    description: BROWSER_TOOL_SPECS.browser_snapshot.description,
+    promptSnippet: BROWSER_TOOL_SPECS.browser_snapshot.promptSnippet,
     parameters: Type.Object({
       browserId: Type.Optional(Type.String({ description: "目标浏览器视图 id;省略则用第一个已开视图" })),
     }),
@@ -485,10 +478,8 @@ function registerBrowserTools(
   pi.registerTool({
     name: "browser_click",
     label: "Browser Click",
-    description:
-      "按 CSS selector 点击页面元素。selector 应来自 browser_snapshot 返回的可交互元素列表。" +
-      "返回点击后的 URL 和标题,可用于判断是否触发了导航。有副作用(会触发页面的点击行为)。",
-    promptSnippet: "browser_click({selector, browserId?}): 点击元素",
+    description: BROWSER_TOOL_SPECS.browser_click.description,
+    promptSnippet: BROWSER_TOOL_SPECS.browser_click.promptSnippet,
     parameters: Type.Object({
       selector: Type.String({ description: "要点击元素的 CSS selector(来自 browser_snapshot)" }),
       browserId: Type.Optional(Type.String({ description: "目标浏览器视图 id;省略则用第一个已开视图" })),
@@ -502,11 +493,8 @@ function registerBrowserTools(
   pi.registerTool({
     name: "browser_type",
     label: "Browser Type",
-    description:
-      "向页面元素输入文本。selector 应来自 browser_snapshot 返回的可交互元素列表,定位到 input/textarea/contenteditable。" +
-      "text 为要输入的字符串。对 React/Vue 受控输入框也生效(原生 value setter + input/change 事件)。" +
-      "返回操作后的 URL 和标题。有副作用(会改变页面表单状态)。",
-    promptSnippet: "browser_type({selector, text, browserId?}): 向输入框输入文本",
+    description: BROWSER_TOOL_SPECS.browser_type.description,
+    promptSnippet: BROWSER_TOOL_SPECS.browser_type.promptSnippet,
     parameters: Type.Object({
       selector: Type.String({ description: "目标输入元素的 CSS selector(来自 browser_snapshot)" }),
       text: Type.String({ description: "要输入的文本内容" }),
@@ -525,11 +513,8 @@ function registerBrowserTools(
   pi.registerTool({
     name: "browser_evaluate",
     label: "Browser Evaluate",
-    description:
-      "在页面中执行任意 JavaScript,可修改页面 DOM(文字、样式、属性、触发事件等)——凡是页面自己能做到的都可以。" +
-      "script 为要执行的 JS 代码(在页面主世界运行,无 Node/Electron 权限)。返回脚本返回值(序列化为文本)供确认修改结果。" +
-      "适用于改页面显示文字、调整样式等 browser_type/click 做不到的操作。有副作用,需要用户审批。",
-    promptSnippet: "browser_evaluate({script, browserId?}): 在页面执行 JS(改 DOM/文字/样式)",
+    description: BROWSER_TOOL_SPECS.browser_evaluate.description,
+    promptSnippet: BROWSER_TOOL_SPECS.browser_evaluate.promptSnippet,
     parameters: Type.Object({
       script: Type.String({ description: "要在页面中执行的 JavaScript 代码(可访问 document/window 等页面对象)" }),
       browserId: Type.Optional(Type.String({ description: "目标浏览器视图 id;省略则用第一个已开视图" })),
@@ -543,10 +528,8 @@ function registerBrowserTools(
   pi.registerTool({
     name: "browser_screenshot",
     label: "Browser Screenshot",
-    description:
-      "截取当前页面的可视区域,返回 PNG 图片。用于需要视觉确认页面布局/样式的场景。" +
-      "只读,无副作用。截图会同时显示给用户和返回给你。",
-    promptSnippet: "browser_screenshot({browserId?}): 截图(只读)",
+    description: BROWSER_TOOL_SPECS.browser_screenshot.description,
+    promptSnippet: BROWSER_TOOL_SPECS.browser_screenshot.promptSnippet,
     parameters: Type.Object({
       browserId: Type.Optional(Type.String({ description: "目标浏览器视图 id;省略则用第一个已开视图" })),
     }),
@@ -727,23 +710,7 @@ const PLAN_MODE_PROMPT = [
   `3. 调用 ExitPlanMode({plan: "你的详细计划"}) 提交计划给用户审批`,
   `4. 用户批准后退出计划模式开始执行;拒绝则留在计划模式修改计划`,
   `计划文本应为结构化的 Markdown,包含目标、步骤、影响范围。`,
-].join("\n");
-
-/**
- * System-prompt text teaching the model how to use the browser tools. Appended
- * (alongside AskUserQuestion + plan-mode hints) via `before_agent_start`.
- */
-const BROWSER_TOOLS_PROMPT = [
-  `## 浏览器工具(控制应用内浏览器)`,
-  `当需要打开网页、查看页面内容、或与网页交互时使用这组工具:`,
-  `1. browser_navigate({ url, device? }): 打开一个网页(仅 http/https)。没有打开的浏览器时会自动创建一个。device 可选 desktop(默认,PC 全宽)/iphone/android(移动端模拟),测试移动端页面时用 iphone 或 android`,
-  `2. browser_snapshot({ browserId? }): 读取页面结构化快照——可交互元素列表带可直接传给 browser_click 的 selector(只读)`,
-  `3. browser_type({ selector, text, browserId? }): 向 input/textarea/contenteditable 输入文本(selector 来自 snapshot)`,
-  `4. browser_evaluate({ script, browserId? }): 在页面中执行任意 JS,可修改页面 DOM(文字/样式/属性/触发事件)。返回值会序列化返回,可用于确认修改结果`,
-  `5. browser_click({ selector, browserId? }): 按 selector 点击元素(selector 来自 snapshot)`,
-  `6. browser_screenshot({ browserId? }): 截图,用于视觉确认布局/样式(只读)`,
-  `7. browser_list(): 列出所有打开的浏览器视图及其 browserId`,
-  `browserId 参数全部可选——省略时自动复用第一个已开视图。典型流程: navigate → snapshot 读内容 → 按需 type 填表 / evaluate 改页面 / click 点击 / screenshot 截图。`,
+  `仅当任务复杂、多步或涉及重要修改时才进入计划模式;简单、单步或目标明确的任务直接执行,不要走计划流程。`,
 ].join("\n");
 
 /**
@@ -754,16 +721,24 @@ const BROWSER_TOOLS_PROMPT = [
  *
  * The identity fragment is Pi's own variant (`PI_IDENTITY_PROMPT` — the
  * engine/driver differs from Claude's), co-located with the Claude variant in
- * `@main/lib/systemPrompt`; the AskUserQuestion text is the same
- * `ASK_SYSTEM_PROMPT` the Claude provider uses — both kept in one place to
- * avoid drift.
+ * `@main/lib/systemPrompt`. The AskUserQuestion text is
+ * `ASK_NATIVE_TOOL_PROMPT` (use-the-native-tool guidance); Claude's sentinel
+ * fallback `ASK_SYSTEM_PROMPT` is NOT injected here — Pi has the native tool,
+ * and a "MUST emit this exact text format" instruction would make the model
+ * bypass it. Sections are joined via `joinPromptSections` (blank-line
+ * separation) shared with the Claude provider to avoid drift.
  */
 function registerSystemPromptInjector(pi: ExtensionAPI): void {
   pi.on(
     "before_agent_start",
     async (event: BeforeAgentStartEvent): Promise<BeforeAgentStartEventResult | void> => {
       const base = event.systemPrompt ?? "";
-      const injected = `${PI_IDENTITY_PROMPT}\n\n${ASK_SYSTEM_PROMPT}\n\n${PLAN_MODE_PROMPT}\n\n${BROWSER_TOOLS_PROMPT}`;
+      const injected = joinPromptSections(
+        PI_IDENTITY_PROMPT,
+        ASK_NATIVE_TOOL_PROMPT,
+        PLAN_MODE_PROMPT,
+        browserToolsUsagePrompt(),
+      );
       const next = base ? `${base}\n\n${injected}` : injected;
       return { systemPrompt: next };
     },

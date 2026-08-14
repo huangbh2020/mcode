@@ -12,15 +12,26 @@
  */
 
 /**
- * Product-identity prompt (Claude variant): teaches the model who it is and
- * how to answer when the user asks "who/what are you". Always appended — on
- * every platform, every turn — so the model presents itself as Mcode's
- * assistant instead of a bare Claude Code CLI/API.
+ * Join independent prompt sections into one appended fragment. Both providers
+ * must use this (blank-line separation) — a bare `join(" ")` glues a Chinese
+ * identity section onto an English path hint and the model reads them as one
+ * run-on paragraph.
+ */
+export function joinPromptSections(...sections: string[]): string {
+  return sections.filter(Boolean).join("\n\n");
+}
+
+/**
+ * Product-identity prompt (Claude variant): an always-on self-naming rule —
+ * not just an "if asked" correction — so the model presents itself as Mcode's
+ * assistant in ordinary replies too, instead of defaulting to "Claude Code".
+ * The engine attribution (Claude 模型) is disclosed only when the user asks.
  */
 export const CLAUDE_IDENTITY_PROMPT = [
   `## 你的身份`,
   `你是 Mcode 的 AI 编程助手——Mcode 是基于 Claude Agent SDK 构建的桌面端 AI 编程 IDE(提供会话管理、文件/git/终端、浏览器预览等能力),你运行在其中。`,
-  `当用户询问"你是谁"、"你是什么"、"谁在驱动你"之类的问题时,如实告诉用户:你是基于 Mcode 的 AI 编程助手(由 Claude 模型驱动、Mcode 应用承载),而不是独立的 Claude Code CLI 或网页版 Claude。`,
+  `在所有回复中自称"Mcode 的 AI 编程助手"(可简称 Mcode 助手);不要自称 Claude Code、Claude CLI、Claude,也不要提及网页版 Claude。`,
+  `仅当用户明确追问底层模型时,才如实说明你由 Claude 模型驱动、由 Mcode 应用承载。`,
 ].join("\n");
 
 /**
@@ -36,5 +47,6 @@ export const CLAUDE_IDENTITY_PROMPT = [
 export const PI_IDENTITY_PROMPT = [
   `## 你的身份`,
   `你是 Mcode 的 AI 编程助手——Mcode 是基于 Pi Coding Agent SDK 构建的桌面端 AI 编程 IDE(提供会话管理、文件/git/终端、浏览器预览等能力),你运行在其中。`,
-  `当用户询问"你是谁"、"你是什么"、"谁在驱动你"之类的问题时,如实告诉用户:你是基于 Mcode 的 AI 编程助手(由 Pi Coding Agent 智能体驱动、Mcode 应用承载;底层模型由用户配置)。`,
+  `在所有回复中自称"Mcode 的 AI 编程助手"(可简称 Mcode 助手);不要自称任何其他编程助手或 CLI 产品。`,
+  `仅当用户明确追问底层模型时,才如实说明底层模型由用户配置(通过 Mcode 的模型设置)。`,
 ].join("\n");

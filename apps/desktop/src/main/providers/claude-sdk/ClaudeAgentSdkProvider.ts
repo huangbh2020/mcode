@@ -21,7 +21,7 @@ import { SdkMessageAdapter, parseQuestions } from "./SdkMessageAdapter.js";
 import { buildCustomEnv, MCODE_CONFIG_DIR, resolveActiveModel } from "./customEnv.js";
 import type { ClaudeContextWindowTag } from "./claudeTokenUsage.js";
 import { ASK_SYSTEM_PROMPT } from "@main/lib/askQuestion.js";
-import { CLAUDE_IDENTITY_PROMPT } from "@main/lib/systemPrompt.js";
+import { CLAUDE_IDENTITY_PROMPT, joinPromptSections } from "@main/lib/systemPrompt.js";
 import { bashPathHintFor, detectBashEnv } from "@main/lib/bashEnv.js";
 import { getFileSnapshot } from "@main/lib/fileSnapshotRegistry.js";
 import {
@@ -40,6 +40,8 @@ import {
   browserType,
   browserEvaluate,
   browserScreenshot,
+  BROWSER_TOOL_SPECS,
+  BROWSER_TOOLS_FLOW,
 } from "@main/browser/agentBrowserTools.js";
 
 // Lazy-load the Agent SDK so the (large) module and its bundled claude binary
@@ -134,26 +136,18 @@ async function buildBrowserMcpServer(
     name: BROWSER_MCP_SERVER,
     version: "1.0.0",
     instructions:
-      "Mcode 应用内浏览器控制工具。browserId 可选——省略时自动复用已开 tab 或新建。" +
-      "browser_navigate 的 device 参数可选 desktop(默认,PC 全宽)/iphone/android(移动端模拟)。" +
-      "典型流程:browser_navigate → browser_snapshot 读内容 → 按需 browser_type 填表 / browser_evaluate 修改页面 DOM / browser_click 点击 / browser_screenshot 截图。",
+      "Mcode 应用内浏览器控制工具。" + BROWSER_TOOLS_FLOW,
     alwaysLoad: true,
     tools: [
       {
         name: "browser_list",
-        description:
-          "列出当前所有打开的浏览器视图及其 URL 和标题,返回每个视图的 browserId。" +
-          "调用其他 browser_* 工具时可用 browserId 参数指定目标;省略时自动复用第一个已开视图。",
+        description: BROWSER_TOOL_SPECS.browser_list.description,
         inputSchema: {},
         handler: async () => browserList(),
       },
       {
         name: "browser_navigate",
-        description:
-          "在应用内浏览器中导航到指定 URL(仅 http/https)。若没有打开的浏览器视图会自动创建并显示一个。" +
-          "browserId 可选——省略时自动复用或新建。device 可选——指定打开方式:" +
-          "desktop(PC 端全宽,默认)、iphone(390×844 移动端)、android(412×915 移动端)。" +
-          "测试移动端页面或响应式布局时用 iphone/android。导航后需调用 browser_snapshot 读取页面内容。",
+        description: BROWSER_TOOL_SPECS.browser_navigate.description,
         inputSchema: {
           url: z.string().describe("目标 URL,必须含 http:// 或 https://"),
           browserId: z.string().optional().describe("目标浏览器视图 id;省略则自动复用第一个已开视图或新建"),
@@ -174,10 +168,7 @@ async function buildBrowserMcpServer(
       },
       {
         name: "browser_snapshot",
-        description:
-          "读取当前页面的结构化快照:URL、标题、readyState、页面正文,以及可交互元素列表(链接/按钮/输入框/标题等)。" +
-          "每个可交互元素带 role/name/tag/selector/text——其中的 selector 可直接传给 browser_click。" +
-          "只读,无副作用。这是理解页面内容、定位要操作的元素的主要方式。",
+        description: BROWSER_TOOL_SPECS.browser_snapshot.description,
         inputSchema: {
           browserId: z.string().optional().describe("目标浏览器视图 id;省略则用第一个已开视图"),
         },
@@ -186,9 +177,7 @@ async function buildBrowserMcpServer(
       },
       {
         name: "browser_click",
-        description:
-          "按 CSS selector 点击页面元素。selector 应来自 browser_snapshot 返回的可交互元素列表。" +
-          "返回点击后的 URL 和标题,可用于判断是否触发了导航。有副作用(会触发页面的点击行为)。",
+        description: BROWSER_TOOL_SPECS.browser_click.description,
         inputSchema: {
           selector: z.string().describe("要点击元素的 CSS selector(来自 browser_snapshot)"),
           browserId: z.string().optional().describe("目标浏览器视图 id;省略则用第一个已开视图"),
@@ -201,10 +190,7 @@ async function buildBrowserMcpServer(
       },
       {
         name: "browser_type",
-        description:
-          "向页面元素输入文本。selector 应来自 browser_snapshot 返回的可交互元素列表,定位到 input/textarea/contenteditable。" +
-          "text 为要输入的字符串。对 React/Vue 受控输入框也生效(通过原生 value setter + input/change 事件)。" +
-          "返回操作后的 URL 和标题。有副作用(会改变页面表单状态)。",
+        description: BROWSER_TOOL_SPECS.browser_type.description,
         inputSchema: {
           selector: z.string().describe("目标输入元素的 CSS selector(来自 browser_snapshot)"),
           text: z.string().describe("要输入的文本内容"),
@@ -219,10 +205,7 @@ async function buildBrowserMcpServer(
       },
       {
         name: "browser_evaluate",
-        description:
-          "在页面中执行任意 JavaScript,可修改页面 DOM(文字、样式、属性、触发事件等)——凡是页面自己能做到的都可以。" +
-          "script 为要执行的 JS 代码(在页面主世界运行,无 Node/Electron 权限)。返回脚本返回值(序列化为文本)供确认修改结果。" +
-          "适用于改页面显示文字、调整样式等 browser_type/click 做不到的操作。有副作用,需要用户审批。",
+        description: BROWSER_TOOL_SPECS.browser_evaluate.description,
         inputSchema: {
           script: z.string().describe("要在页面中执行的 JavaScript 代码(可访问 document/window 等页面对象)"),
           browserId: z.string().optional().describe("目标浏览器视图 id;省略则用第一个已开视图"),
@@ -235,9 +218,7 @@ async function buildBrowserMcpServer(
       },
       {
         name: "browser_screenshot",
-        description:
-          "截取当前页面的可视区域,返回 PNG 图片。用于需要视觉确认页面布局/样式的场景。" +
-          "只读,无副作用。截图会同时显示给用户和返回给你。",
+        description: BROWSER_TOOL_SPECS.browser_screenshot.description,
         inputSchema: {
           browserId: z.string().optional().describe("目标浏览器视图 id;省略则用第一个已开视图"),
         },
@@ -833,7 +814,10 @@ export class ClaudeAgentSdkProvider implements AgentProvider {
     options.systemPrompt = {
       type: "preset",
       preset: "claude_code",
-      append: appends.join(" "),
+      // Blank-line section separation (shared with the Pi provider's injector)
+      // — a bare space glues the Chinese identity section onto the English
+      // path hint and the model reads them as one run-on paragraph.
+      append: joinPromptSections(...appends),
     };
 
     // --- In-process MCP server: browser tools ---
