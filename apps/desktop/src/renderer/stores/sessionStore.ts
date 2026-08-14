@@ -19,6 +19,7 @@ import { isValidSnapshot } from "@renderer/lib/contextWindow.js";
 import type { CustomModelPublic, CustomModelRoleKey } from "@contracts/customModel";
 import { CUSTOM_MODEL_ROLES } from "@contracts/customModel";
 import { api } from "@renderer/lib/api.js";
+import { isElectron } from "@renderer/lib/platform.js";
 import {
   DISPLAY_MODE_SETTING_KEY,
   DEFAULT_PROVIDER_ID,
@@ -580,6 +581,10 @@ export interface SessionState {
   browserTabs: BrowserTab[];
   /** The currently active browser tab id (shared across containers). */
   browserActiveTabId: string | null;
+  /** A URL staged by an external entry (e.g. file-tree "open in browser") to
+   *  be loaded into the browser panel when no tab exists yet. BrowserPanel's
+   *  first-tab effect consumes and clears it. NOT persisted. */
+  pendingBrowserUrl: string | null;
   /** Suppression counter for the embedded browser's OS-level WebContentsView.
    *  The native view always floats above renderer DOM, so a renderer-DOM
    *  overlay that must cover it (image lightbox, etc.) increments this while
@@ -985,6 +990,11 @@ export interface SessionState {
   removeBrowserTab: (id: string) => void;
   /** Patch one browser tab by its main-process browserId. */
   patchBrowserTab: (browserId: string, patch: Partial<BrowserTab>) => void;
+  /** Open the browser sidebar and load `url` (a fully-qualified URL such as a
+   *  `file://` path) into the active tab. If no tab exists yet, the URL is
+   *  stashed as `pendingBrowserUrl` and loaded once BrowserPanel creates its
+   *  first tab. */
+  openUrlInBrowser: (url: string) => void;
   /** Adopt a browser view created by an agent tool (not by BrowserPanel's
    *  createTab) into the renderer's tab list, so BrowserPanel's show/hide/
    *  bounds logic can manage it. Idempotent: if a tab for this browserId
@@ -2785,6 +2795,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   browserDeviceToolbarOpen: false,
   browserTabs: [],
   browserActiveTabId: null,
+  pendingBrowserUrl: null,
   browserViewSuppressed: 0,
   // Draggable pane sizes. Persisted as one JSON blob (UI_PANE_WIDTHS_SETTING_KEY);
   // init() hydrates + clamps. These defaults match the original hardcoded
@@ -3105,7 +3116,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     void get().reloadSkills();
 
     // Language server states (install/running) for the settings panel + Monaco.
-    void get().reloadLspLanguages();
+    // Desktop-only: the web shim exposes no `api.lsp` surface (no editor /
+    // settings panel on mobile), so skip it to avoid a spurious load error.
+    if (isElectron) void get().reloadLspLanguages();
 
     // Deferred settings: one bulk read for everything non-critical-paint
     // (appearance, pane widths, IDE/git prefs). One IPC instead of four
@@ -5201,6 +5214,13 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     set((s) => ({
       browserTabs: s.browserTabs.map((t) => (t.browserId === browserId ? { ...t, ...patch } : t)),
     })),
+  openUrlInBrowser: (url) => {
+    // Reveal the browser sidebar + stage the URL. BrowserPanel opens it in a
+    // NEW tab: when tabs already exist it creates one for the URL; when none
+    // exist (panel first opened) the first-tab effect loads it into the
+    // initial tab.
+    set({ rightPanelTab: "browser", rightOpen: true, pendingBrowserUrl: url });
+  },
   adoptAgentBrowserTab: (browserId, info) => {
     const s = get();
     const existing = s.browserTabs.find((t) => t.browserId === browserId);

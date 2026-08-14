@@ -21,8 +21,10 @@ import {
   IconFilePlus,
   IconEdit,
   IconTrash,
+  IconWorld,
 } from "@renderer/lib/icons.js";
 import { FileTypeIcon } from "@renderer/lib/fileIcon.js";
+import { localPathToFileUrl } from "@renderer/lib/browserUrl.js";
 import { ConfirmDialog } from "@renderer/components/ui/confirm-dialog.js";
 
 /** Stable empty array for the expanded-dirs selector (Zustand Object.is). */
@@ -1156,6 +1158,15 @@ function FileNodeRow({
                 label="添加到聊天"
                 onClick={() => enqueueChatFile(path)}
               />
+              {/\.html?$/i.test(path) && (
+                <MenuItem
+                  icon={<IconWorld size={12} />}
+                  label="在浏览器中打开"
+                  onClick={() =>
+                    useSessionStore.getState().openUrlInBrowser(localPathToFileUrl(path))
+                  }
+                />
+              )}
               <MenuSeparator />
               <MenuItem
                 icon={<IconEdit size={12} />}

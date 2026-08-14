@@ -162,7 +162,7 @@ export function BrowserToolbar({
             onNavigate(url);
           }
         }}
-        placeholder="输入网址或搜索…"
+        placeholder="输入网址、本地文件路径或搜索…"
         spellCheck={false}
         className={cn(
           "mx-1 h-7 min-w-0 flex-1 rounded-md border border-edge bg-surface-muted px-2.5",

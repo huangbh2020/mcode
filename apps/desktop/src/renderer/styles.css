@@ -483,6 +483,29 @@ body,
   }
 }
 
+/* ───────────── Turn-files card: compact title on narrow panes ─────────────
+ * The "本轮修改了 N 个文件 (创建 X · 修改 Y) · 撤销本轮" header is too wide for
+ * a phone, where the row wraps and pushes the +/- badge + button off-line.
+ * [data-chat-root] is already an inline-size query container, so we shorten
+ * the title text and hide the kind-breakdown subtitle below 28rem (covers all
+ * phone widths; tablets/desktop keep the full wording). Tracked on the PANE
+ * width, not the viewport, so a narrow center column on desktop also benefits. */
+[data-chat-root] .tfc-short {
+  display: none;
+}
+
+@container (width < 28rem) {
+  [data-chat-root] .tfc-long {
+    display: none;
+  }
+  [data-chat-root] .tfc-short {
+    display: inline;
+  }
+  [data-chat-root] .tfc-sub {
+    display: none;
+  }
+}
+
 /* ───────────── Chat message-stream density ─────────────
  * The message stream's vertical rhythm is user-configurable (Settings →
  * 常规 → 数据流显示风格). Three density presets, each setting three vars:

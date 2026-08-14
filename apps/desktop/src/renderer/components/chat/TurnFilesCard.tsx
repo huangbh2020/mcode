@@ -121,10 +121,11 @@ export function TurnFilesCard({
         className="flex w-full cursor-pointer items-center gap-2.5 px-3 py-2 text-left transition-colors hover:bg-surface-hover/50"
       >
         <IconFile size={14} className="shrink-0 text-content-subtle" />
-        <span className="font-semibold text-content">
-          本轮修改了 {files.length} 个文件
+        <span className="whitespace-nowrap font-semibold text-content">
+          <span className="tfc-long">本轮修改了 {files.length} 个文件</span>
+          <span className="tfc-short">修改 {files.length} 个文件</span>
         </span>
-        <span className="text-content-subtle">
+        <span className="tfc-sub text-content-subtle">
           ({created > 0 ? `创建 ${created}` : ""}
           {created > 0 && modified > 0 ? " · " : ""}
           {modified > 0 ? `修改 ${modified}` : ""})
@@ -153,7 +154,12 @@ export function TurnFilesCard({
               className="rounded-md bg-surface-hover px-3 py-1 font-medium text-content transition-colors hover:bg-edge disabled:cursor-not-allowed disabled:text-content-subtle"
               title={isLatestTurn ? "把本轮所有文件恢复为轮开始前的状态" : "把该历史轮次的文件改动恢复为当时修改前的状态(可能影响后续轮次)"}
             >
-              {done ? "已撤销 ✓" : rewinding ? "撤销中…" : "撤销本轮"}
+              {done ? "已撤销 ✓" : rewinding ? "撤销中…" : (
+                <>
+                  <span className="tfc-long">撤销本轮</span>
+                  <span className="tfc-short">撤销</span>
+                </>
+              )}
             </button>
           ) : (
             <span className="rounded-md bg-danger/10 px-2 py-0.5 text-[11px] font-semibold text-danger">

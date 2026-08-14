@@ -14,7 +14,7 @@
  *  - displayMode (single/tabs, a desktop-shared pref) is ignored: the strip
  *    always shows every open tab and the active pane mounts keyed.
  */
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { LeftBar } from "./components/layout/LeftBar.js";
 import { ChatPane } from "./components/chat/ChatPane.js";
 import { SessionTabs } from "./components/layout/SessionTabs.js";
@@ -29,7 +29,7 @@ import { useClaudeEvents } from "./hooks/useClaudeEvents.js";
 import { useSessionStore } from "./stores/sessionStore.js";
 import { useTheme } from "./lib/theme.js";
 import { useChatAppearance, useRightPanelAppearance } from "./lib/appearance.js";
-import { isPaired } from "./lib/webApi.js";
+import { isPaired, onAuthLost } from "./lib/webApi.js";
 import { cn } from "./lib/cn.js";
 import {
   IconMenu2,
@@ -41,15 +41,45 @@ import {
 } from "./lib/icons.js";
 
 export function AppMobile() {
-  const [paired, setPaired] = useState(() => isPaired());
+  const [paired, setPaired] = useState(() => {
+    // A fresh QR scan carries ?nonce — always go through pairing so a stale
+    // token (left over from a previous session, or invalidated when the PC
+    // restarted / removed the device) can't skip the gate and 401 on boot.
+    const hasNonce =
+      typeof window !== "undefined" &&
+      new URLSearchParams(window.location.search).has("nonce");
+    return isPaired() && !hasNonce;
+  });
   // Theme / appearance hooks are pairing-independent (localStorage + media
   // queries on web), so they mount outside the gate.
   useTheme();
   useChatAppearance();
   useRightPanelAppearance();
 
+  // A 401 anywhere (stale token reopened WITHOUT a nonce) clears auth via the
+  // web shim — fall back to the pairing screen so the user can re-pair instead
+  // of cascading "未配对" errors.
+  useEffect(() => onAuthLost(() => setPaired(false)), []);
+
+  // After a successful pairing, strip the nonce from the URL so a later reload
+  // uses the new token directly instead of re-triggering the pairing gate.
+  const handlePaired = useCallback(() => {
+    try {
+      if (new URLSearchParams(window.location.search).has("nonce")) {
+        window.history.replaceState(
+          null,
+          "",
+          window.location.pathname + window.location.hash,
+        );
+      }
+    } catch {
+      // non-critical — ignore
+    }
+    setPaired(true);
+  }, []);
+
   if (!paired) {
-    return <PairingScreen onPaired={() => setPaired(true)} />;
+    return <PairingScreen onPaired={handlePaired} />;
   }
   return <MobileShell />;
 }
@@ -116,7 +146,7 @@ function MobileShell() {
         </button>
       </div>
 
-      <div className="relative flex min-h-0 flex-1">
+      <div className="relative flex min-h-0 flex-1 overflow-hidden">
         {/* Left drawer: the full desktop LeftBar (session tree, groups,
             search, archive bin) in a slide-over panel. */}
         {drawerOpen && (

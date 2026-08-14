@@ -254,7 +254,7 @@ function FileViewer({ file, onClose }: { file: { name: string; path: string }; o
 /** Shared header for the full-screen mobile utility pages (files / git). */
 function ScreenShell({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <div className="flex h-full min-h-0 flex-1 flex-col">
+    <div className="flex h-full min-w-0 min-h-0 flex-1 flex-col">
       <div className="flex h-10 shrink-0 items-center gap-2 border-b border-edge px-3">
         <span className="text-sm font-medium text-content">{title}</span>
         <span className="flex-1" />

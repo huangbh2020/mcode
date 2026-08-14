@@ -174,7 +174,7 @@ export function MobileGitScreen() {
   };
 
   return (
-    <div className="flex h-full min-h-0 flex-1 flex-col">
+    <div className="flex h-full min-w-0 min-h-0 flex-1 flex-col">
       <div className="flex h-10 shrink-0 items-center gap-2 border-b border-edge px-3">
         <span className="text-sm font-medium text-content">Git</span>
         <span className="flex-1" />
@@ -211,7 +211,9 @@ export function MobileGitScreen() {
           {status && (
             <div className="mb-2 flex items-center gap-2 text-xs text-content-muted">
               <IconGitBranch size={13} className="shrink-0" />
-              <span className="font-mono text-content">{status.branch || "(无分支)"}</span>
+              <span className="min-w-0 truncate font-mono text-content" title={status.branch}>
+                {status.branch || "(无分支)"}
+              </span>
               {status.ahead > 0 && (
                 <span className="flex items-center gap-0.5 text-accent">
                   <IconArrowUp size={11} /> {status.ahead}

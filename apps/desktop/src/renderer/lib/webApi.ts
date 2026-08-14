@@ -72,13 +72,35 @@ export function isPaired(): boolean {
   return !!readAuth().token;
 }
 
-/** Drop the local device token — back to the pairing gate. */
+/** Subscribers notified whenever the device token is dropped — a 401 in `rpc`
+ *  (the PC removed the device, or restarted with a fresh DB) or an explicit
+ *  logout in settings. The phone shell subscribes so it falls back to the
+ *  pairing screen instead of looping on dead credentials. */
+const authLostSubs = new Set<() => void>();
+
+/** Subscribe to device-auth loss. Returns an unsubscribe. */
+export function onAuthLost(cb: () => void): () => void {
+  authLostSubs.add(cb);
+  return () => {
+    authLostSubs.delete(cb);
+  };
+}
+
+/** Drop the local device token — back to the pairing gate. Notifies
+ *  `onAuthLost` subscribers so the shell can re-show the pairing screen. */
 export function clearAuth(): void {
   try {
     localStorage.removeItem(TOKEN_KEY);
     localStorage.removeItem(ENDPOINT_KEY);
   } catch {
     // ignore
+  }
+  for (const fn of authLostSubs) {
+    try {
+      fn();
+    } catch {
+      // a subscriber throwing must not block the others
+    }
   }
 }
 
@@ -148,6 +170,20 @@ async function rpc<T = unknown>(method: string, input?: unknown): Promise<T> {
  *  members that exist on the desktop Api shape but have no web meaning. */
 function webUnsupported(name: string): never {
   throw new Error(`api.${name} 在移动端不可用`);
+}
+
+/** Callable proxy standing in for an absent desktop-only namespace
+ *  (`api.lsp`, `api.terminal`, …). It is itself callable, and every property
+ *  access yields another such proxy, so the shared code's
+ *  `api.<ns>.<method>()` shape surfaces one diagnosable error
+ *  ("api.<ns>.<method> 在移动端不可用") instead of an opaque
+ *  `TypeError: ... is not a function` (a bare function has no `.<method>`). */
+function unsupportedNamespace(path: string): unknown {
+  const callable = (): never => webUnsupported(path);
+  return new Proxy(callable, {
+    get: (_t, prop) =>
+      typeof prop === "string" ? unsupportedNamespace(`${path}.${prop}`) : undefined,
+  });
 }
 
 /* ────────────────────────── SSE event bus ────────────────────────── */
@@ -449,10 +485,11 @@ export function createWebApi(): Api {
       const existing = Reflect.get(target, prop, receiver);
       if (existing !== undefined) return existing;
       if (typeof prop !== "string") return existing;
-      // Unknown surface (terminal/browser/lsp/dialog/app/... on web) — the
-      // shared code calls api.*.<method>, so a throwing function keeps the
-      // failure explicit and diagnosable.
-      return () => webUnsupported(String(prop));
+      // Unknown surface (terminal/browser/lsp/dialog/app/... on web). Shared
+      // code accesses these as `api.<namespace>.<method>(...)`, so return a
+      // deep callable proxy: both `api.lsp()` and `api.lsp.list()` throw a
+      // clean `webUnsupported` instead of an opaque "is not a function".
+      return unsupportedNamespace(String(prop));
     },
   });
 }

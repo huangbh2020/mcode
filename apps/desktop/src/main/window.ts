@@ -10,9 +10,9 @@ let mainWindow: BrowserWindow | null = null;
 
 /** Background color matching the effective theme, so the first frame (before
  *  React mounts) doesn't flash the wrong color. Mirrors --surface in CSS
- *  (styles.css): light = #ffffff, dark = #18181b. */
+ *  (styles.css): light = #ffffff, dark = #1a1d24. */
 function bgColor(): string {
-  return getEffectiveTheme() === "dark" ? "#18181b" : "#ffffff";
+  return getEffectiveTheme() === "dark" ? "#1a1d24" : "#ffffff";
 }
 
 /** Title-bar overlay colour scheme that matches the app theme. The overlay sits
@@ -30,8 +30,8 @@ function bgColor(): string {
 function overlayColors() {
   const dark = getEffectiveTheme() === "dark";
   return {
-    color: dark ? "#18181b" : "#ffffff",
-    symbolColor: dark ? "#80848c" : "#71717a",
+    color: dark ? "#1a1d24" : "#ffffff",
+    symbolColor: dark ? "#848891" : "#71717a",
     height: 40,
   };
 }
