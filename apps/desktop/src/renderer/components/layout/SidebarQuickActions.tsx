@@ -14,6 +14,10 @@
  * The pair sits above the "项目" header so the two most-used workspace entry
  * points are always visible without scrolling, regardless of how long the
  * project list grows.
+ *
+ * `showSearch` / `showConnectPhone` drop the matching entries — the mobile
+ * drawer hides both: there is no Ctrl+K on a phone, and its visitor is
+ * already on the phone.
  */
 import { cn } from "@renderer/lib/cn.js";
 import { useSessionStore } from "@renderer/stores/sessionStore.js";
@@ -34,7 +38,15 @@ function ShortcutBadge({ commandId }: { commandId: string }) {
   return <Kbd keys={acceleratorToDisplayTokens(accel)} size="xs" />;
 }
 
-export function SidebarQuickActions() {
+export function SidebarQuickActions({
+  showSearch = true,
+  showConnectPhone = true,
+}: {
+  /** Hide the 搜索 entry (mobile drawer: no keyboard to trigger Ctrl+K). */
+  showSearch?: boolean;
+  /** Hide the 连接手机 entry (mobile drawer: the visitor is already the phone). */
+  showConnectPhone?: boolean;
+} = {}) {
   const startSession = useSessionStore((s) => s.startSession);
   const setCommandPaletteOpen = useSessionStore((s) => s.setCommandPaletteOpen);
   const activeProjectId = useSessionStore((s) => s.activeProjectId);
@@ -67,26 +79,28 @@ export function SidebarQuickActions() {
 
       {/* 搜索 — entry to the unified Ctrl+K palette. Mirrors 新建会话's
           neutral rest + accent-on-hover so the two read as a matched pair. */}
-      <button
-        type="button"
-        onClick={() => setCommandPaletteOpen(true)}
-        title="搜索命令、线程、文件…"
-        className={cn(
-          "flex w-full items-center gap-2 rounded-lg px-1 py-2 transition-colors",
-          "[font-size:var(--right-panel-font-size)]",
-          "text-content-muted hover:bg-accent/10 hover:text-accent",
-        )}
-      >
-        <IconSearch size={16} className="shrink-0" />
-        <span className="flex-1 text-left font-medium">搜索</span>
-        <ShortcutBadge commandId="command.palette" />
-      </button>
+      {showSearch && (
+        <button
+          type="button"
+          onClick={() => setCommandPaletteOpen(true)}
+          title="搜索命令、线程、文件…"
+          className={cn(
+            "flex w-full items-center gap-2 rounded-lg px-1 py-2 transition-colors",
+            "[font-size:var(--right-panel-font-size)]",
+            "text-content-muted hover:bg-accent/10 hover:text-accent",
+          )}
+        >
+          <IconSearch size={16} className="shrink-0" />
+          <span className="flex-1 text-left font-medium">搜索</span>
+          <ShortcutBadge commandId="command.palette" />
+        </button>
+      )}
 
       {/* 连接手机 — LAN pairing (QR + 6-digit code) / remote relay. Rendered
           as a self-contained trigger + dialog so the sidebar just hosts it;
           the button style mirrors 搜索/新建会话 so all three read as a matched
           group of workspace entry points. */}
-      <MobileConnectButton />
+      {showConnectPhone && <MobileConnectButton />}
     </div>
   );
 }

@@ -81,7 +81,15 @@ import type { Project, Session } from "@contracts/session";
  *   ─────────────────────────────
  *   ⚙ 设置
  */
-export function LeftBar() {
+export function LeftBar({
+  showSearch = true,
+  showConnectPhone = true,
+}: {
+  /** Forwarded to SidebarQuickActions — the mobile drawer hides the 搜索 /
+      连接手机 entries (no Ctrl+K on a phone, and its visitor is already it). */
+  showSearch?: boolean;
+  showConnectPhone?: boolean;
+} = {}) {
   const projects = useSessionStore((s) => s.projects);
   const activeProjectId = useSessionStore((s) => s.activeProjectId);
   const sessionsByProject = useSessionStore((s) => s.sessionsByProject);
@@ -468,10 +476,13 @@ export function LeftBar() {
         </span>
       </button>
 
-      {/* Quick actions — 新建会话 / 搜索. Two full-width primary buttons
-          docked directly under the brand logo so the two most-used workspace
+      {/* Quick actions — 新建会话 / 搜索 / 连接手机. Full-width buttons
+          docked directly under the brand logo so the most-used workspace
           entry points are always visible without scrolling. */}
-      <SidebarQuickActions />
+      <SidebarQuickActions
+        showSearch={showSearch}
+        showConnectPhone={showConnectPhone}
+      />
 
       {/* Header */}
       <div className="group mb-1 flex items-center justify-between px-1">

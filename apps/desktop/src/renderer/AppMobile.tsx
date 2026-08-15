@@ -18,7 +18,6 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { LeftBar } from "./components/layout/LeftBar.js";
 import { ChatPane } from "./components/chat/ChatPane.js";
 import { SessionTabs } from "./components/layout/SessionTabs.js";
-import { CommandPalette } from "./components/layout/CommandPalette.js";
 import { ModelConfigPrompt } from "./components/chat/ModelConfigPrompt.js";
 import { Toaster } from "./components/layout/Toaster.js";
 import { PairingScreen } from "./components/mobile/PairingScreen.js";
@@ -149,7 +148,9 @@ function MobileShell() {
 
       <div className="relative flex min-h-0 flex-1 overflow-hidden">
         {/* Left drawer: the full desktop LeftBar (session tree, groups,
-            search, archive bin) in a slide-over panel. */}
+            archive bin) in a slide-over panel. The quick-action 搜索 /
+            连接手机 entries are hidden — no Ctrl+K on a phone, and the
+            visitor is already the phone. */}
         {drawerOpen && (
           <>
             <button
@@ -164,7 +165,7 @@ function MobileShell() {
                 "border-r border-edge bg-surface-muted shadow-2xl",
               )}
             >
-              <LeftBar />
+              <LeftBar showSearch={false} showConnectPhone={false} />
             </div>
           </>
         )}
@@ -209,9 +210,9 @@ function MobileShell() {
         ))}
       </nav>
 
-      {/* Shared overlays — CommandPalette (session search, opened from the
-          drawer's search button) + the send-time model-config guard + toasts. */}
-      <CommandPalette />
+      {/* Shared overlays — the send-time model-config guard + toasts. (The
+          Ctrl+K CommandPalette is desktop-only: its only entry point is the
+          left bar's 搜索 button, hidden in the mobile drawer.) */}
       <ModelConfigPrompt />
       <MobileSettingsSheet open={settingsOpen} onClose={() => setSettingsOpen(false)} />
       {/* Fullscreen viewer for chat-stream content (files / turn diffs / plans)
