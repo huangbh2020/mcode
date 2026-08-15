@@ -12,7 +12,16 @@ import type { lineDiff } from "@renderer/lib/lineDiff.js";
  * The diff input is the return type of `lineDiff()` — typed via `typeof` to
  * avoid a value import we don't need here (this component only renders).
  */
-export function DiffView({ diff }: { diff: ReturnType<typeof lineDiff> }) {
+export function DiffView({
+  diff,
+  scrollClassName = "max-h-80",
+}: {
+  diff: ReturnType<typeof lineDiff>;
+  /** Class controlling the scroll container's height. Overridable so
+   *  full-screen consumers (the mobile viewer overlay) can fill the screen;
+   *  defaults to the inline card height. */
+  scrollClassName?: string;
+}) {
   if (diff.length === 0) {
     return (
       <div className="rounded bg-surface-muted/60 p-2 text-content-subtle [font-size:var(--chat-fs-xs)]">
@@ -27,7 +36,7 @@ export function DiffView({ diff }: { diff: ReturnType<typeof lineDiff> }) {
   const rows = annotateDiffWithLineNumbers(diff);
 
   return (
-    <div className="max-h-80 overflow-auto rounded bg-surface-muted/60 font-mono leading-relaxed [font-size:var(--chat-fs-xs)]">
+    <div className={cn("overflow-auto rounded bg-surface-muted/60 font-mono leading-relaxed [font-size:var(--chat-fs-xs)]", scrollClassName)}>
       {rows.map((d, i) => {
         // Fixed red/green diff colors that don't shift with the theme - the
         // accent/danger tokens change between light/dark (and track the

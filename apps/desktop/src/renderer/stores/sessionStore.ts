@@ -138,6 +138,18 @@ function isUnsupportedPath(filePath: string): boolean {
   ].some((ext) => lower.endsWith(ext));
 }
 
+/** Target for the mobile shell's fullscreen viewer overlay. The web (phone)
+ *  shell has no editor column / PlanViewer, so chat-stream touchpoints
+ *  (FileLink, TurnFilesCard rows, plan cards) redirect here instead:
+ *  - file: read-only file content (text via readFile + shiki, images inline)
+ *  - diff: frozen turn `before` vs the current on-disk content (lineDiff)
+ *  - plan: plan markdown rendered read-only
+ * Desktop never sets this (the Electron-only UIs consume those touchpoints). */
+export type MobileViewerTarget =
+  | { kind: "file"; name: string; path: string }
+  | { kind: "diff"; name: string; path: string; before: string }
+  | { kind: "plan"; plan: string };
+
 /** A single content block within a message (mirrors how claude structures output). */
 export type Block =
   | { kind: "text"; text: string; /** Names of skill pills embedded inline in
@@ -682,6 +694,9 @@ export interface SessionState {
    *  in the editor never auto-approves. Cleared on submitPlanApproval /
    *  closePlanDrawer / session reset. Ephemeral (not persisted). */
   planApprovalDraftBySession: Record<string, string>;
+  /** Mobile-shell fullscreen viewer target (see {@link MobileViewerTarget}).
+   *  null = closed. Ephemeral (not persisted). */
+  mobileViewer: MobileViewerTarget | null;
   /** Per-session subagent roster (REPLACE semantics from `subagent.update`).
    *  Empty array = no subagents active. Includes recently-completed ones
    *  until the next turn clears them. */
@@ -1148,6 +1163,11 @@ export interface SessionState {
    *  when the user clicks a plan card or a plan title in the activity
    *  popover. Ephemeral view state (not persisted). */
   openPlanDrawer: (sessionId: string, plan: string) => void;
+  /** Open the mobile shell's fullscreen viewer (file / diff / plan). No-op
+   *  target routing on the desktop shell — nothing consumes it there. */
+  openMobileViewer: (target: MobileViewerTarget) => void;
+  /** Close the mobile shell's fullscreen viewer. */
+  closeMobileViewer: () => void;
   /** Close the plan tab for a session (removes the plan text entirely). */
   closePlanDrawer: (sessionId: string) => void;
   /** Set whether the plan tab is the active tab in the editor column. When
@@ -2866,14 +2886,16 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   // File search dialog (opened from the Files panel search button / Cmd+Shift+F
   // / command palette). Pure in-memory, mirrors commandPaletteOpen.
   searchDialogOpen: false,
-  // Layout panel visibility — lifted from App.tsx useState. Defaults mirror
-  // the original App.tsx useState initial values (left+right open, terminal
-  // collapsed). NOT persisted.
+  // Layout panel visibility — lifted from App.tsx useState. Right panel
+  // starts hidden by default (the titlebar toggle / command palette reopens
+  // it). NOT persisted.
   leftOpen: true,
-  rightOpen: true,
+  rightOpen: false,
   bottomTerminalOpen: false,
   // Browser panel overlay - closed by default. NOT persisted.
   browserPanelOpen: false,
+  // Mobile-shell fullscreen viewer (file/diff/plan) - closed by default.
+  mobileViewer: null,
   browserTabCount: 0,
   browserDeviceToolbarOpen: false,
   browserTabs: [],
@@ -6088,10 +6110,23 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   },
 
   openPlanDrawer: (sessionId, plan) => {
+    // The web (phone) shell has no editor column / PlanViewer — open the
+    // read-only plan view in the mobile fullscreen overlay instead. Same
+    // action serves both shells so every call site stays transport-neutral.
+    if (!isElectron) {
+      set({ mobileViewer: { kind: "plan", plan } });
+      return;
+    }
     set((s) => ({
       planDrawerPlanBySession: { ...s.planDrawerPlanBySession, [sessionId]: plan },
       planTabActiveBySession: { ...s.planTabActiveBySession, [sessionId]: true },
     }));
+  },
+  openMobileViewer: (target) => {
+    set({ mobileViewer: target });
+  },
+  closeMobileViewer: () => {
+    set({ mobileViewer: null });
   },
   closePlanDrawer: (sessionId) => {
     set((s) => {

@@ -49,7 +49,7 @@ export function RightPanel() {
 
       {/* Vertical icon rail — always visible. Each icon is a square button;
           the active one is marked with the accent token. */}
-      <div className="flex w-12 shrink-0 flex-col items-center gap-1 border-l border-edge bg-surface-muted py-2">
+      <div className="flex w-12 shrink-0 flex-col items-center gap-1 border-l border-edge bg-surface py-2">
         <RailButton
           active={tab === "files"}
           onClick={() => setTab("files")}

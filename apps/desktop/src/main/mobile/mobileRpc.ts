@@ -49,6 +49,7 @@ import {
   FileListDirSchema,
   FileReadSchema,
   FileReadBinarySchema,
+  FileSearchSchema,
   GetSettingSchema,
   SetSettingSchema,
   GetManySettingsSchema,
@@ -70,7 +71,7 @@ import { broadcastSessionChanged, broadcastSessionDeleted } from "@main/lib/sess
 import { CustomModelStore } from "@main/lib/secretStore.js";
 import { listAvailablePiModels } from "@main/ipc/piModels.js";
 import { listSkillsForProject, readSkillForProject } from "@main/ipc/skills.js";
-import { readFileGuarded, readBinaryGuarded, listDirGuarded } from "@main/ipc/files.js";
+import { readFileGuarded, readBinaryGuarded, listDirGuarded, searchFilesGuarded } from "@main/ipc/files.js";
 import { generateSessionTitle } from "@main/ipc/titleGen.js";
 
 /** Identity of the calling device, made available to every handler. */
@@ -167,6 +168,11 @@ const HANDLERS: Record<string, RpcHandler> = {
   "file:readBinary": (raw) => {
     const input = FileReadBinarySchema.parse(raw);
     return readBinaryGuarded(input.filePath);
+  },
+
+  "file:search": (raw) => {
+    const input = FileSearchSchema.parse(raw);
+    return searchFilesGuarded(input);
   },
 
   // ── Settings (app-level prefs shared with the desktop DB) ──

@@ -20,6 +20,7 @@ import {
   GitCommitSchema,
   GitDiffSchema,
   GitGenerateCommitSchema,
+  GitCancelGenerateCommitSchema,
   type GitRepo,
 } from "@contracts/ipc";
 import { ProjectRepo } from "@main/store/repositories.js";
@@ -29,6 +30,7 @@ import {
   mapStatus,
   findGitRepos,
   generateCommitMessageForRepo,
+  cancelCommitMessageGeneration,
   MAX_SCAN_DEPTH,
 } from "@main/ipc/git.js";
 import { registerMobileRpcHandlers, type RpcHandler } from "./mobileRpc.js";
@@ -163,7 +165,14 @@ const handlers: Record<string, RpcHandler> = {
       prompt: input.prompt,
       customModelId: input.customModelId ?? undefined,
       customModelRole: input.customModelRole ?? undefined,
+      requestId: input.requestId,
     });
+  },
+
+  "git:cancelGenerateCommitMessage": async (raw) => {
+    const input = GitCancelGenerateCommitSchema.parse(raw);
+    cancelCommitMessageGeneration(input.requestId);
+    return { ok: true };
   },
 };
 

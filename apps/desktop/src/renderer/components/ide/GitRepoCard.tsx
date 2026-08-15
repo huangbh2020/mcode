@@ -19,6 +19,7 @@ import {
   IconArrowDown,
   IconRefresh,
   IconLoader2,
+  IconPlayerStop,
   IconAlertTriangle,
   IconCheck,
   IconDotsVertical,
@@ -856,6 +857,12 @@ function CommitBox({
   const commitGenModel = useSessionStore((s) => s.commitGenModel);
   const commitGenPrompt = useSessionStore((s) => s.commitGenPrompt);
   const [generating, setGenerating] = useState(false);
+  // Set when the user stops an in-flight generation: the aborted call's
+  // result/error must NOT overwrite the commit message box.
+  const cancelledRef = useRef(false);
+  // Cancellation key of the in-flight generation (main aborts the SDK query
+  // via git.cancelGenerateCommitMessage).
+  const genRequestIdRef = useRef<string | null>(null);
   // Maximize/preview panel - opened when the commit message overflows the
   // 3-row cap, so the user can edit the full text comfortably.
   const [previewOpen, setPreviewOpen] = useState(false);
@@ -896,23 +903,37 @@ function CommitBox({
     if (!customModelId) return; // no model configured - no-op
 
     setGenerating(true);
+    cancelledRef.current = false;
+    const requestId = crypto.randomUUID();
+    genRequestIdRef.current = requestId;
     try {
       const res = await api.git.generateCommitMessage({
         repoPath,
         customModelId,
         customModelRole,
         prompt: commitGenPrompt,
+        requestId,
       });
+      if (cancelledRef.current) return; // aborted by the user — keep the box as-is
       if (res.ok && res.message) {
         onChange(res.message);
       } else {
         onChange(res.error ?? "生成失败");
       }
     } catch {
-      onChange("生成失败");
+      if (!cancelledRef.current) onChange("生成失败");
     } finally {
+      genRequestIdRef.current = null;
       setGenerating(false);
     }
+  };
+
+  /** Stop the in-flight generation (hover affordance on the generate button). */
+  const handleCancelGenerate = () => {
+    cancelledRef.current = true;
+    const id = genRequestIdRef.current;
+    if (id) void api.git.cancelGenerateCommitMessage({ requestId: id });
+    setGenerating(false);
   };
 
   // Ctrl/Cmd+Enter commits (Enter itself inserts a newline, as expected in a
@@ -945,16 +966,19 @@ function CommitBox({
           {commitGenModel && (
             <button
               type="button"
-              onClick={handleGenerate}
-              disabled={disabled || generating}
-              title="使用 AI 生成提交信息"
+              onClick={() => (generating ? handleCancelGenerate() : handleGenerate())}
+              disabled={disabled}
+              title={generating ? "停止生成" : "使用 AI 生成提交信息"}
               className={cn(
-                "flex h-5 w-5 items-center justify-center rounded text-content-subtle transition-colors",
+                "group/generate flex h-5 w-5 items-center justify-center rounded text-content-subtle transition-colors",
                 "hover:bg-surface-hover hover:text-accent disabled:opacity-40",
               )}
             >
               {generating ? (
-                <IconLoader2 size={12} className="animate-spin" />
+                <>
+                  <IconLoader2 size={12} className="animate-spin group-hover/generate:hidden" />
+                  <IconPlayerStop size={12} className="hidden group-hover/generate:block" />
+                </>
               ) : (
                 <IconSparkles size={12} />
               )}

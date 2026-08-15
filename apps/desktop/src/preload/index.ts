@@ -245,6 +245,8 @@ const api = {
       ipcRenderer.invoke(IPC.GIT_DISCARD, input)) as RpcMap["git.discard"],
     generateCommitMessage: ((input) =>
       ipcRenderer.invoke(IPC.GIT_GENERATE_COMMIT, input)) as RpcMap["git.generateCommitMessage"],
+    cancelGenerateCommitMessage: ((input) =>
+      ipcRenderer.invoke(IPC.GIT_CANCEL_GENERATE_COMMIT, input)) as RpcMap["git.cancelGenerateCommitMessage"],
     resolveConflicts: ((input) =>
       ipcRenderer.invoke(IPC.GIT_RESOLVE_CONFLICTS, input)) as RpcMap["git.resolveConflicts"],
     log: ((input) =>

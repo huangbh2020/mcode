@@ -27,6 +27,7 @@ import {
   GitDiffSchema,
   GitDiscardSchema,
   GitGenerateCommitSchema,
+  GitCancelGenerateCommitSchema,
   GitResolveConflictsSchema,
   GitLogSchema,
   GitShowCommitSchema,
@@ -164,17 +165,30 @@ export async function resolveModelForGitOp(
 
 /* ───────────────────────── commit-message generation ───────────────────────── */
 
+/** In-flight commit-message generations, keyed by the requestId the renderer
+ *  supplied. Lets git:cancelGenerateCommitMessage abort a running SDK query. */
+const activeCommitGenerations = new Map<string, AbortController>();
+
+/** Abort an in-flight generation started with `requestId`. No-op if it already
+ *  finished (the entry is removed in the generate function's finally). */
+export function cancelCommitMessageGeneration(requestId: string): void {
+  activeCommitGenerations.get(requestId)?.abort();
+}
+
 /** Shared LLM commit-message core. Used by both the desktop IPC handler and
  *  the mobile git RPC whitelist, so behavior is identical across transports.
  *  The *system* prompt carries the fixed output-shape constraints
  *  ({@link COMMIT_GEN_SYSTEM_PROMPT}) and is never overridden by user input;
- *  the *user* message carries the (optional) format/language preference. */
+ *  the *user* message carries the (optional) format/language preference.
+ *  When `requestId` is given the query's AbortController is registered for the
+ *  lifetime of the call so it can be cancelled mid-flight. */
 export async function generateCommitMessageForRepo(input: {
   repoPath: string;
   prompt?: string;
   customModelId?: string;
   customModelRole?: string;
-}): Promise<{ ok: boolean; message?: string; error?: string }> {
+  requestId?: string;
+}): Promise<{ ok: boolean; message?: string; error?: string; cancelled?: boolean }> {
   try {
     // 1. Collect the staged diff (index vs HEAD).
     const git = (await loadSimpleGit())(input.repoPath);
@@ -193,6 +207,7 @@ export async function generateCommitMessageForRepo(input: {
     //    activated here too (see resolveModelForGitOp).
     const { query } = await import("@anthropic-ai/claude-agent-sdk");
     const ac = new AbortController();
+    if (input.requestId) activeCommitGenerations.set(input.requestId, ac);
     const timer = setTimeout(() => ac.abort(), 60000); // 60s timeout
 
     let releaseBridge: (() => void) | undefined;
@@ -258,6 +273,7 @@ export async function generateCommitMessageForRepo(input: {
       log.info(`git.generateCommitMessage succeeded for ${input.repoPath} (${message.length} chars)`);
       return { ok: true, message };
     } finally {
+      if (input.requestId) activeCommitGenerations.delete(input.requestId);
       clearTimeout(timer);
       // Release the OpenAI bridge if one was acquired for this op (no-op for
       // anthropic-protocol configs).
@@ -661,7 +677,15 @@ export function registerGitHandlers(ipcMain: IpcMain): void {
       prompt: input.prompt,
       customModelId: input.customModelId ?? undefined,
       customModelRole: input.customModelRole ?? undefined,
+      requestId: input.requestId,
     });
+  });
+
+  /* ── git:cancelGenerateCommitMessage — abort an in-flight generation ── */
+  ipcMain.handle(IPC.GIT_CANCEL_GENERATE_COMMIT, (_evt, raw) => {
+    const input = GitCancelGenerateCommitSchema.parse(raw);
+    cancelCommitMessageGeneration(input.requestId);
+    return { ok: true };
   });
 
   /* ── git:resolveConflicts — AI-resolve all merge conflicts in a repo ── */

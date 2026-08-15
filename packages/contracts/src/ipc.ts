@@ -1426,8 +1426,19 @@ export const GitGenerateCommitSchema = z.object({
   customModelRole: z.string().nullable(),
   /** The user's prompt template. The diff is appended after this. */
   prompt: z.string(),
+  /** Optional cancellation key: when present, the AbortController driving the
+   *  SDK query is registered under this id so git.cancelGenerateCommit can
+   *  abort an in-flight generation. */
+  requestId: z.string().optional(),
 });
 export type GitGenerateCommitInput = z.infer<typeof GitGenerateCommitSchema>;
+
+/** Cancel an in-flight git.generateCommitMessage call (matched by the
+ *  requestId passed to it). No-op if that generation already finished. */
+export const GitCancelGenerateCommitSchema = z.object({
+  requestId: z.string(),
+});
+export type GitCancelGenerateCommitInput = z.infer<typeof GitCancelGenerateCommitSchema>;
 
 /** Input for git.resolveConflicts: resolve all unmerged files in a repo via
  *  an AI one-shot call. `repoPath` scopes the operation; `customModelId` +
@@ -2569,6 +2580,7 @@ export interface RpcMap {
   "git.discard": (input: GitDiscardInput) => Promise<GitOpResult>;
   /** Generate a commit message from the staged diff via an LLM one-shot call. */
   "git.generateCommitMessage": (input: GitGenerateCommitInput) => Promise<{ ok: boolean; message?: string; error?: string }>;
+  "git.cancelGenerateCommitMessage": (input: GitCancelGenerateCommitInput) => Promise<{ ok: boolean }>;
   /** Resolve all merge conflicts in a repo via an AI one-shot call. Reads each
    *  conflicted file, asks the model for a resolved version, writes it back and
    *  runs `git add`. Does NOT commit. Returns the resolved file paths. */
@@ -2851,6 +2863,7 @@ export const IPC = {
   GIT_DIFF: "git:diff",
   GIT_DISCARD: "git:discard",
   GIT_GENERATE_COMMIT: "git:generateCommitMessage",
+  GIT_CANCEL_GENERATE_COMMIT: "git:cancelGenerateCommitMessage",
   GIT_RESOLVE_CONFLICTS: "git:resolveConflicts",
   GIT_LOG: "git:log",
   GIT_SHOW_COMMIT: "git:showCommit",

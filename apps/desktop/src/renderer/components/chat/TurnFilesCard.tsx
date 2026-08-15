@@ -4,6 +4,7 @@ import { basename } from "@renderer/lib/path.js";
 import { api } from "@renderer/lib/api.js";
 import type { TurnFileEntry } from "@renderer/lib/turnFiles.js";
 import { useSessionStore } from "@renderer/stores/sessionStore.js";
+import { isElectron } from "@renderer/lib/platform.js";
 import { ConfirmDialog } from "@renderer/components/ui/index.js";
 import {
   IconChevronDown,
@@ -220,6 +221,18 @@ function FileRow({ entry }: { entry: TurnFileEntry }) {
 
   const handleOpen = async () => {
     const store = useSessionStore.getState();
+    // The mobile shell has no editor column / diff dialog — open the turn
+    // diff in the fullscreen mobile viewer instead (frozen `before` vs the
+    // current on-disk content, rendered by the shared DiffView).
+    if (!isElectron) {
+      store.openMobileViewer({
+        kind: "diff",
+        name: basename(entry.filePath),
+        path: entry.filePath,
+        before: entry.before,
+      });
+      return;
+    }
     // Resolve the file's owning repo so the dialog's left sidebar can show
     // working-tree status. discoverRepos scans the active project; we pick the
     // repo whose root is a prefix of this file's absolute path. Falls back to

@@ -19,6 +19,7 @@ import { cn } from "@renderer/lib/cn.js";
 import { basename } from "@renderer/lib/path.js";
 import { FileTypeIcon } from "@renderer/lib/fileIcon.js";
 import { useSessionStore } from "@renderer/stores/sessionStore.js";
+import { isElectron } from "@renderer/lib/platform.js";
 import {
   resolveFilePathToken,
   type ResolvedCandidate,
@@ -67,6 +68,18 @@ export function FileLink({
     [],
   );
 
+  /** Open a resolved candidate: the desktop shell opens the IDE editor; the
+   *  mobile shell has no editor column, so it opens the read-only fullscreen
+   *  viewer instead. */
+  const openCandidatePath = (c: ResolvedCandidate) => {
+    const store = useSessionStore.getState();
+    if (isElectron) {
+      store.openFileInIde(c.path);
+    } else {
+      store.openMobileViewer({ kind: "file", name: basename(c.path), path: c.path });
+    }
+  };
+
   const resolve = async () => {
     if (loading) return;
     setLoading(true);
@@ -76,7 +89,7 @@ export function FileLink({
       setCandidates(result);
       if (result.length === 1) {
         // Unique match - open immediately, no menu.
-        useSessionStore.getState().openFileInIde(result[0].path);
+        openCandidatePath(result[0]);
         setMenuOpen(false);
       } else {
         // 0 or >1 - show the picker (empty state renders a disabled row).
@@ -105,7 +118,7 @@ export function FileLink({
   };
 
   const openCandidate = (c: ResolvedCandidate) => {
-    useSessionStore.getState().openFileInIde(c.path);
+    openCandidatePath(c);
     setMenuOpen(false);
   };
 

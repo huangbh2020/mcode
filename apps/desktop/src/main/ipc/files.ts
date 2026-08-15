@@ -38,7 +38,7 @@ import {
   ClipboardSaveFileSchema,
   ClipboardWriteImageSchema,
 } from "@contracts/ipc";
-import type { FileSearchEntry, FileTreeEntry, FileGrepEntry } from "@contracts/ipc";
+import type { FileSearchEntry, FileTreeEntry, FileGrepEntry, FileSearchInput } from "@contracts/ipc";
 import { ProjectRepo } from "@main/store/repositories.js";
 import { log } from "@main/lib/logger.js";
 
@@ -244,6 +244,83 @@ export async function listDirGuarded(
   }
 }
 
+/** Guarded recursive file search (project-root containment + hard depth /
+ *  visit caps). Shared by the desktop `file:search` IPC handler and the
+ *  mobile RPC whitelist so both transports behave identically. */
+export async function searchFilesGuarded(
+  input: FileSearchInput,
+): Promise<{ files: FileSearchEntry[] }> {
+  const known = ProjectRepo.list().some((p) => samePath(p.path, input.projectPath));
+  if (!known) {
+    log.warn(`file.search refused — unknown projectPath: ${input.projectPath}`);
+    return { files: [] as FileSearchEntry[] };
+  }
+  const root = resolve(input.projectPath);
+  const limit = input.limit ?? 80;
+  const query = (input.query ?? "").trim().toLowerCase();
+  // Hard caps so a pathological tree can't pin the main process. Depth
+  // and total-visit limits are independent of the result limit so an
+  // empty-query sample still finishes quickly on huge monorepos.
+  const MAX_DEPTH = 12;
+  const MAX_VISIT = 8000;
+
+  const files: FileSearchEntry[] = [];
+  let visited = 0;
+
+  /** BFS walk so shallow/project-root files surface first in empty-query
+   *  samples (more useful than deep leaf hits). */
+  type QueueItem = { abs: string; depth: number };
+  const queue: QueueItem[] = [{ abs: root, depth: 0 }];
+
+  while (queue.length > 0 && files.length < limit && visited < MAX_VISIT) {
+    const { abs, depth } = queue.shift()!;
+    let dirents;
+    try {
+      dirents = await readdir(abs, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    // Sort each level dirs-first then alpha so results are stable.
+    dirents.sort((a, b) => {
+      const aDir = a.isDirectory();
+      const bDir = b.isDirectory();
+      if (aDir !== bDir) return aDir ? -1 : 1;
+      return a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
+    });
+    for (const d of dirents) {
+      if (files.length >= limit || visited >= MAX_VISIT) break;
+      if (IGNORED_ENTRIES.has(d.name)) continue;
+      let isDir: boolean;
+      try {
+        isDir = d.isDirectory();
+      } catch {
+        continue;
+      }
+      const fullPath = join(abs, d.name);
+      if (!pathWithin(root, fullPath)) continue;
+      visited += 1;
+      if (isDir) {
+        if (depth + 1 <= MAX_DEPTH) queue.push({ abs: fullPath, depth: depth + 1 });
+        continue;
+      }
+      // relative() can throw on exotic roots; fall back to name only.
+      let rel: string;
+      try {
+        rel = relative(root, fullPath).split(/[/\\]/).join("/");
+      } catch {
+        rel = d.name;
+      }
+      if (query) {
+        const hay = `${d.name}\n${rel}`.toLowerCase();
+        if (!hay.includes(query)) continue;
+      }
+      files.push({ name: d.name, path: fullPath, relativePath: rel });
+    }
+  }
+
+  return { files };
+}
+
 export function registerFileHandlers(ipcMain: IpcMain): void {
   /* ── file:readFile — single file read, scoped to any project root ── */
   ipcMain.handle(IPC.FILE_READ, async (_evt, raw) => {
@@ -266,75 +343,7 @@ export function registerFileHandlers(ipcMain: IpcMain): void {
   /* ── file:search — recursive file search for composer @ / add-context ── */
   ipcMain.handle(IPC.FILE_SEARCH, async (_evt, raw) => {
     const input = FileSearchSchema.parse(raw);
-    const known = ProjectRepo.list().some((p) => samePath(p.path, input.projectPath));
-    if (!known) {
-      log.warn(`file.search refused — unknown projectPath: ${input.projectPath}`);
-      return { files: [] as FileSearchEntry[] };
-    }
-    const root = resolve(input.projectPath);
-    const limit = input.limit ?? 80;
-    const query = (input.query ?? "").trim().toLowerCase();
-    // Hard caps so a pathological tree can't pin the main process. Depth
-    // and total-visit limits are independent of the result limit so an
-    // empty-query sample still finishes quickly on huge monorepos.
-    const MAX_DEPTH = 12;
-    const MAX_VISIT = 8000;
-
-    const files: FileSearchEntry[] = [];
-    let visited = 0;
-
-    /** BFS walk so shallow/project-root files surface first in empty-query
-     *  samples (more useful than deep leaf hits). */
-    type QueueItem = { abs: string; depth: number };
-    const queue: QueueItem[] = [{ abs: root, depth: 0 }];
-
-    while (queue.length > 0 && files.length < limit && visited < MAX_VISIT) {
-      const { abs, depth } = queue.shift()!;
-      let dirents;
-      try {
-        dirents = await readdir(abs, { withFileTypes: true });
-      } catch {
-        continue;
-      }
-      // Sort each level dirs-first then alpha so results are stable.
-      dirents.sort((a, b) => {
-        const aDir = a.isDirectory();
-        const bDir = b.isDirectory();
-        if (aDir !== bDir) return aDir ? -1 : 1;
-        return a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
-      });
-      for (const d of dirents) {
-        if (files.length >= limit || visited >= MAX_VISIT) break;
-        if (IGNORED_ENTRIES.has(d.name)) continue;
-        let isDir: boolean;
-        try {
-          isDir = d.isDirectory();
-        } catch {
-          continue;
-        }
-        const fullPath = join(abs, d.name);
-        if (!pathWithin(root, fullPath)) continue;
-        visited += 1;
-        if (isDir) {
-          if (depth + 1 <= MAX_DEPTH) queue.push({ abs: fullPath, depth: depth + 1 });
-          continue;
-        }
-        // relative() can throw on exotic roots; fall back to name only.
-        let rel: string;
-        try {
-          rel = relative(root, fullPath).split(/[/\\]/).join("/");
-        } catch {
-          rel = d.name;
-        }
-        if (query) {
-          const hay = `${d.name}\n${rel}`.toLowerCase();
-          if (!hay.includes(query)) continue;
-        }
-        files.push({ name: d.name, path: fullPath, relativePath: rel });
-      }
-    }
-
-    return { files };
+    return searchFilesGuarded(input);
   });
 
   /* ── file:grep - recursive content search (line-level matches) ──

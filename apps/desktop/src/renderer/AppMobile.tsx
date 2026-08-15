@@ -25,6 +25,7 @@ import { PairingScreen } from "./components/mobile/PairingScreen.js";
 import { MobileSettingsSheet } from "./components/mobile/MobileSettingsSheet.js";
 import { MobileFilesScreen } from "./components/mobile/MobileFilesScreen.js";
 import { MobileGitScreen } from "./components/mobile/MobileGitScreen.js";
+import { MobileViewerOverlay } from "./components/mobile/MobileViewerOverlay.js";
 import { useClaudeEvents } from "./hooks/useClaudeEvents.js";
 import { useSessionStore } from "./stores/sessionStore.js";
 import { useTheme } from "./lib/theme.js";
@@ -213,6 +214,9 @@ function MobileShell() {
       <CommandPalette />
       <ModelConfigPrompt />
       <MobileSettingsSheet open={settingsOpen} onClose={() => setSettingsOpen(false)} />
+      {/* Fullscreen viewer for chat-stream content (files / turn diffs / plans)
+          opened via the store's mobileViewer state. */}
+      <MobileViewerOverlay />
       <Toaster />
     </div>
   );

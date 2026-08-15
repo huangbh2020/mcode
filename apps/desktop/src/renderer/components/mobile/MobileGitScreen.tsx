@@ -9,7 +9,7 @@
  * desktop git module's helpers (same path guard, same simple-git loader, same
  * LLM commit-message core) — behavior is identical, only the transport differs.
  */
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { api } from "@renderer/lib/api.js";
 import { useSessionStore } from "@renderer/stores/sessionStore.js";
 import { cn } from "@renderer/lib/cn.js";
@@ -24,7 +24,9 @@ import {
   IconCheck,
   IconSparkles,
   IconFile,
+  IconPlayerStop,
 } from "@renderer/lib/icons.js";
+import { parsePatch, PatchRows } from "./PatchView.js";
 
 /** Compact per-status glyphs for the file-list badges. */
 const STATUS_LABEL: Record<GitStatusCode, string> = {
@@ -64,8 +66,23 @@ export function MobileGitScreen() {
   const [status, setStatus] = useState<GitStatusResult | null>(null);
   const [tab, setTab] = useState<"changes" | "staged">("changes");
   const [message, setMessage] = useState("");
+  // Commit message textarea: 1 row by default, auto-grows with the content up
+  // to ~4 rows (keeps the bottom bar compact; mirrors the desktop CommitBox).
+  const msgRef = useRef<HTMLTextAreaElement>(null);
+  useLayoutEffect(() => {
+    const ta = msgRef.current;
+    if (!ta) return;
+    ta.style.height = "auto";
+    const lineHeight = parseFloat(getComputedStyle(ta).lineHeight) || 18;
+    ta.style.height = `${Math.max(Math.min(ta.scrollHeight, lineHeight * 4), 30)}px`;
+  }, [message]);
   const [busy, setBusy] = useState<string | null>(null);
   const [genLoading, setGenLoading] = useState(false);
+  // Set when the user stops an in-flight generation: the aborted call's
+  // result/error must NOT overwrite the commit message box (mirrors the
+  // desktop GitRepoCard CommitBox).
+  const genCancelledRef = useRef(false);
+  const genRequestIdRef = useRef<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [diffPath, setDiffPath] = useState<{ path: string; staged: boolean } | null>(null);
 
@@ -155,7 +172,10 @@ export function MobileGitScreen() {
 
   const generate = async () => {
     setGenLoading(true);
+    genCancelledRef.current = false;
     setError(null);
+    const requestId = crypto.randomUUID();
+    genRequestIdRef.current = requestId;
     try {
       // commitGenModel is stored as "configId:roleKey" — split it back, same as
       // the desktop GitRepoCard. Null means no model is configured: the main-
@@ -182,14 +202,25 @@ export function MobileGitScreen() {
         customModelId,
         customModelRole,
         prompt: commitGenPrompt,
+        requestId,
       });
+      if (genCancelledRef.current) return; // aborted by the user — keep the box as-is
       if (res.ok && res.message) setMessage(res.message);
       else if (!res.ok) setError(res.error ?? "生成失败");
     } catch (err) {
-      setError((err as Error).message);
+      if (!genCancelledRef.current) setError((err as Error).message);
     } finally {
+      genRequestIdRef.current = null;
       setGenLoading(false);
     }
+  };
+
+  /** Stop the in-flight generation (hover affordance on the generate button). */
+  const stopGenerate = () => {
+    genCancelledRef.current = true;
+    const id = genRequestIdRef.current;
+    if (id) void api.git.cancelGenerateCommitMessage({ requestId: id }).catch(() => {});
+    setGenLoading(false);
   };
 
   return (
@@ -312,24 +343,40 @@ export function MobileGitScreen() {
             )}
           </div>
 
-          {/* commit message */}
+          {/* commit message — single-row textarea that auto-grows, with the
+              AI-generate action as an inline icon button (top-right, same
+              affordance as the desktop CommitBox) instead of a full-width
+              button row. */}
           <div className="shrink-0 border-t border-edge pt-2">
-            <textarea
-              value={message}
-              onChange={(e) => setMessage(e.target.value)}
-              placeholder="提交信息…"
-              rows={2}
-              className="mb-2 w-full resize-none rounded-lg border border-input-edge bg-surface-muted px-2 py-1.5 text-xs text-content outline-none focus:border-accent"
-            />
-            <button
-              type="button"
-              onClick={() => void generate()}
-              disabled={genLoading || staged.length === 0 || !repoPath}
-              className="mb-2 flex w-full items-center justify-center gap-1 rounded-lg border border-edge px-2 py-1.5 text-xs text-content-muted disabled:opacity-50"
-            >
-              <IconSparkles size={12} />
-              {genLoading ? "AI 生成中…" : "AI 生成提交信息"}
-            </button>
+            <div className="relative mb-2">
+              <textarea
+                ref={msgRef}
+                value={message}
+                onChange={(e) => setMessage(e.target.value)}
+                placeholder="提交信息…"
+                rows={1}
+                className="w-full resize-none overflow-hidden rounded-lg border border-input-edge bg-surface-muted px-2 py-1.5 pr-9 text-xs leading-relaxed text-content outline-none focus:border-accent"
+              />
+              {commitGenModel && (
+                <button
+                  type="button"
+                  onClick={() => (genLoading ? stopGenerate() : void generate())}
+                  disabled={!repoPath || staged.length === 0}
+                  title={genLoading ? "停止生成" : "使用 AI 生成提交信息"}
+                  aria-label={genLoading ? "停止生成" : "使用 AI 生成提交信息"}
+                  className="group/gen absolute right-1 top-1 flex h-7 w-7 items-center justify-center rounded-md text-content-subtle transition-colors hover:bg-surface-hover hover:text-accent disabled:opacity-40 aria-disabled:opacity-40"
+                >
+                  {genLoading ? (
+                    <>
+                      <IconLoader2 size={14} className="animate-spin group-hover/gen:hidden" />
+                      <IconPlayerStop size={14} className="hidden group-hover/gen:block" />
+                    </>
+                  ) : (
+                    <IconSparkles size={14} />
+                  )}
+                </button>
+              )}
+            </div>
             {error && <p className="mb-2 text-xs text-danger">{error}</p>}
             <div className="flex gap-2">
               <button
@@ -388,6 +435,7 @@ function DiffOverlay({
       cancelled = true;
     };
   }, [repoPath, file.path, file.staged]);
+  const rows = useMemo(() => parsePatch(patch), [patch]);
   return (
     <div className="fixed inset-0 z-50 flex flex-col bg-surface">
       <div className="flex h-10 shrink-0 items-center gap-2 border-b border-edge px-2">
@@ -404,9 +452,13 @@ function DiffOverlay({
         </div>
         <span className="w-8" />
       </div>
-      <pre className="min-h-0 flex-1 overflow-auto px-3 py-2 font-mono text-[11px] leading-relaxed text-content-muted">
-        {loading ? "加载中…" : patch || "(无差异)"}
-      </pre>
+      {loading ? (
+        <div className="flex flex-1 items-center justify-center text-xs text-content-subtle">加载中…</div>
+      ) : rows.length === 0 ? (
+        <div className="flex flex-1 items-center justify-center text-xs text-content-subtle">(无差异)</div>
+      ) : (
+        <PatchRows rows={rows} />
+      )}
     </div>
   );
 }
