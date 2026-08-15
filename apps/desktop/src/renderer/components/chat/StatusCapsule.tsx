@@ -8,7 +8,9 @@ import {
 } from "@renderer/lib/icons.js";
 import type { SubagentSnapshot } from "@contracts/runtime";
 import type { TodoItem, Block } from "@renderer/stores/sessionStore.js";
+import { isElectron } from "@renderer/lib/platform.js";
 import { ActivityPopover } from "./ActivityPopover.js";
+import { ActivitySheet } from "@renderer/components/mobile/ActivitySheet.js";
 
 /** A `kind: "plan"` block - the frozen per-turn plan in the message stream. */
 type PlanBlock = Extract<Block, { kind: "plan" }>;
@@ -148,18 +150,33 @@ export function StatusCapsule({
           )}
         />
       </button>
-      {open && (
-        <ActivityPopover
-          todos={todos}
-          planBlocks={planBlocks}
-          subagents={subagents}
-          onPickPlan={(plan) => {
-            // Close the popover, then open the drawer via the callback.
-            setOpen(false);
-            onPickPlan(plan);
-          }}
-        />
-      )}
+      {open &&
+        (isElectron ? (
+          <ActivityPopover
+            todos={todos}
+            planBlocks={planBlocks}
+            subagents={subagents}
+            onPickPlan={(plan) => {
+              // Close the popover, then open the drawer via the callback.
+              setOpen(false);
+              onPickPlan(plan);
+            }}
+          />
+        ) : (
+          // Mobile shell: a 384px anchored popover would overflow the phone
+          // viewport - expand into a full-width bottom sheet instead.
+          <ActivitySheet
+            todos={todos}
+            planBlocks={planBlocks}
+            subagents={subagents}
+            onClose={() => setOpen(false)}
+            onPickPlan={(plan) => {
+              // Close the sheet, then open the plan viewer via the callback.
+              setOpen(false);
+              onPickPlan(plan);
+            }}
+          />
+        ))}
     </div>
   );
 }

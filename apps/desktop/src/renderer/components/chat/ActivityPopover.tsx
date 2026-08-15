@@ -1,5 +1,6 @@
 import type { TodoItem, Block } from "@renderer/stores/sessionStore.js";
 import type { SubagentSnapshot } from "@contracts/runtime";
+import { cn } from "@renderer/lib/cn.js";
 import { extractPlanTitle } from "./StatusCapsule.js";
 
 /** A `kind: "plan"` block - the frozen per-turn plan in the message stream. */
@@ -41,6 +42,12 @@ export function fmtUsage(snap: SubagentSnapshot): string {
 
 /* ── Section primitives ─────────────────────────────────────────────── */
 
+/** List container class shared by every section. `scrollLists=false` removes
+ *  the per-section `max-h-60` so the whole stack scrolls as one body inside
+ *  the mobile bottom sheet (avoids nested scroll areas on touch). */
+const sectionListCls = (scrollLists: boolean) =>
+  cn("overflow-y-auto py-1", scrollLists ? "max-h-60" : "max-h-none");
+
 /** A horizontal section header: icon + title (left), badge/right slot. */
 function SectionHeader({
   icon,
@@ -77,9 +84,11 @@ function SectionHeader({
 function PlanListSection({
   planBlocks,
   onPickPlan,
+  scrollLists,
 }: {
   planBlocks: PlanBlock[];
   onPickPlan: (plan: string) => void;
+  scrollLists: boolean;
 }) {
   // Newest first: the last plan block in the stream is the most recent turn's.
   const ordered = [...planBlocks].reverse();
@@ -89,7 +98,7 @@ function PlanListSection({
         icon="📋"
         title={`计划 · ${planBlocks.length} 个`}
       />
-      <ul className="max-h-60 overflow-y-auto py-1">
+      <ul className={sectionListCls(scrollLists)}>
         {ordered.map((block, i) => {
           const title = extractPlanTitle(block.plan) || `(计划 ${ordered.length - i})`;
           return (
@@ -117,7 +126,7 @@ function PlanListSection({
 
 /* ── Section: Tasks ─────────────────────────────────────────────────── */
 
-function TasksSection({ todos }: { todos: TodoItem[] }) {
+function TasksSection({ todos, scrollLists }: { todos: TodoItem[]; scrollLists: boolean }) {
   const done = todos.filter((t) => t.status === "completed").length;
   const pct = todos.length > 0 ? Math.round((done / todos.length) * 100) : 0;
   return (
@@ -131,7 +140,7 @@ function TasksSection({ todos }: { todos: TodoItem[] }) {
           </span>
         }
       />
-      <ul className="max-h-60 overflow-y-auto py-1">
+      <ul className={sectionListCls(scrollLists)}>
         {todos.map((t, i) => {
           const meta = STATUS_META[t.status];
           return (
@@ -157,7 +166,7 @@ function TasksSection({ todos }: { todos: TodoItem[] }) {
 
 /* ── Section: Subagents ────────────────────────────────────────────── */
 
-function SubagentsSection({ agents }: { agents: SubagentSnapshot[] }) {
+function SubagentsSection({ agents, scrollLists }: { agents: SubagentSnapshot[]; scrollLists: boolean }) {
   const running = agents.filter((a) => a.status === "running").length;
   return (
     <>
@@ -173,7 +182,7 @@ function SubagentsSection({ agents }: { agents: SubagentSnapshot[] }) {
           ) : null
         }
       />
-      <ul className="max-h-60 overflow-y-auto py-1">
+      <ul className={sectionListCls(scrollLists)}>
         {agents.map((s) => {
           const meta = SUBAGENT_STATUS_META[s.status];
           const usage = fmtUsage(s);
@@ -215,18 +224,63 @@ function SubagentsSection({ agents }: { agents: SubagentSnapshot[] }) {
 /* ── Root: ActivityPopover ─────────────────────────────────────────── */
 
 /**
- * Unified activity popover for the ChatPane sticky capsule. Renders up to
- * three sections - Plan, Subagents, Tasks - in priority order. Each section
- * is omitted entirely when its source state is empty (no Todos -> no Tasks
- * section), so the popover gracefully degrades to whatever the active session
- * is actually doing right now.
+ * Shared section stack for both shells of the activity capsule: the desktop
+ * anchored popover and the mobile bottom sheet. Renders up to three sections
+ * - Plan, Subagents, Tasks - in priority order. Each section is omitted
+ * entirely when its source state is empty (no Todos -> no Tasks section), so
+ * the stack gracefully degrades to whatever the active session is actually
+ * doing right now.
  *
- * The Plan section is now a clickable title list (not the full content).
- * Clicking a plan title opens the right-side PlanDrawer via `onPickPlan`.
+ * The Plan section is a clickable title list (not the full content).
+ * Clicking a plan title opens the plan viewer via `onPickPlan`.
  *
- * Pure presentational: open/close + outer positioning is handled by the
- * caller (ChatPane). This component is the "expanded view of the
- * activity capsule".
+ * `scrollLists` selects where scrolling happens: the desktop popover gives
+ * each section its own `max-h-60` inner scroll; the mobile sheet passes
+ * `false` so the whole stack scrolls as one body.
+ */
+export function ActivitySections({
+  todos,
+  planBlocks,
+  subagents,
+  onPickPlan,
+  scrollLists = true,
+}: {
+  todos: TodoItem[];
+  planBlocks: PlanBlock[];
+  subagents: SubagentSnapshot[];
+  onPickPlan: (plan: string) => void;
+  scrollLists?: boolean;
+}) {
+  const showPlan = planBlocks.length > 0;
+  const showSubagents = subagents.length > 0;
+  const showTasks = todos.length > 0;
+
+  return (
+    <>
+      {showPlan && (
+        <div className="border-b border-white/5">
+          <PlanListSection planBlocks={planBlocks} onPickPlan={onPickPlan} scrollLists={scrollLists} />
+        </div>
+      )}
+      {showSubagents && (
+        <div className="border-b border-white/5">
+          <SubagentsSection agents={subagents} scrollLists={scrollLists} />
+        </div>
+      )}
+      {showTasks && (
+        <div className="border-b border-white/5">
+          <TasksSection todos={todos} scrollLists={scrollLists} />
+        </div>
+      )}
+    </>
+  );
+}
+
+/**
+ * Desktop shell: anchored popover below the capsule pill, fixed 384px width.
+ * On mobile this is replaced by the bottom sheet (see
+ * components/mobile/ActivitySheet.tsx) - a 384px anchored popover would
+ * overflow a ~375px phone viewport.
  */
 export function ActivityPopover({
   todos,
@@ -239,30 +293,9 @@ export function ActivityPopover({
   subagents: SubagentSnapshot[];
   onPickPlan: (plan: string) => void;
 }) {
-  const showPlan = planBlocks.length > 0;
-  const showSubagents = subagents.length > 0;
-  const showTasks = todos.length > 0;
-
   return (
     <div className="absolute right-0 top-9 z-30 w-96 overflow-hidden rounded-xl border border-white/10 bg-surface shadow-2xl">
-      {/* Stacked sections: Plan -> Subagents -> Tasks. Thin dividers
-          between them; the topmost rendered section gets the rounded top
-          (handled by `overflow-hidden` on the parent). */}
-      {showPlan && (
-        <div className="border-b border-white/5">
-          <PlanListSection planBlocks={planBlocks} onPickPlan={onPickPlan} />
-        </div>
-      )}
-      {showSubagents && (
-        <div className="border-b border-white/5">
-          <SubagentsSection agents={subagents} />
-        </div>
-      )}
-      {showTasks && (
-        <div className="border-b border-white/5">
-          <TasksSection todos={todos} />
-        </div>
-      )}
+      <ActivitySections todos={todos} planBlocks={planBlocks} subagents={subagents} onPickPlan={onPickPlan} />
     </div>
   );
 }

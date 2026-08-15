@@ -4,10 +4,11 @@
  *
  * A focused, mobile-first take on the desktop GitRepoCard: discover repos under
  * the active project, show changed/staged files with stage toggles, edit a
- * commit message (with AI generation), and commit / commit-and-push / pull. The
- * operations map 1:1 to the `git:*` mobile RPC whitelist, which reuses the
- * desktop git module's helpers (same path guard, same simple-git loader, same
- * LLM commit-message core) — behavior is identical, only the transport differs.
+ * commit message (with AI generation), and commit / commit-and-push / sync
+ * (pull then push). The operations map 1:1 to the `git:*` mobile RPC whitelist,
+ * which reuses the desktop git module's helpers (same path guard, same
+ * simple-git loader, same LLM commit-message core) — behavior is identical,
+ * only the transport differs.
  */
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { api } from "@renderer/lib/api.js";
@@ -24,8 +25,10 @@ import {
   IconCheck,
   IconSparkles,
   IconFile,
-  IconPlayerStop,
+  IconCopy,
 } from "@renderer/lib/icons.js";
+import { copyText } from "@renderer/lib/clipboard.js";
+import { browserUuid } from "@renderer/lib/uuid.js";
 import { parsePatch, PatchRows } from "./PatchView.js";
 
 /** Compact per-status glyphs for the file-list badges. */
@@ -164,17 +167,27 @@ export function MobileGitScreen() {
       }
     });
 
-  const pull = () =>
-    run("pull", async () => {
-      const res = await api.git.pull({ repoPath: repoPath! });
-      if (!res.ok) throw new Error(res.error ?? "拉取失败");
+  /** Pull then push (desktop's "sync"). Never pushes past a merge conflict. */
+  const sync = () =>
+    run("sync", async () => {
+      const pullRes = await api.git.pull({ repoPath: repoPath! });
+      if (!pullRes.ok) throw new Error(pullRes.error ?? "拉取失败");
+      if (pullRes.conflict) {
+        setError(`拉取后产生 ${pullRes.conflictedFiles?.length ?? 0} 个冲突文件，请先解决冲突`);
+        return;
+      }
+      const pushRes = await api.git.push({ repoPath: repoPath! });
+      if (!pushRes.ok) throw new Error(pushRes.error ?? "推送失败");
     });
 
   const generate = async () => {
     setGenLoading(true);
     genCancelledRef.current = false;
     setError(null);
-    const requestId = crypto.randomUUID();
+    // browserUuid, not crypto.randomUUID: the mobile shell runs over plain
+    // HTTP on the LAN where crypto.randomUUID is undefined (non-secure
+    // context) and the direct call crashes with a TypeError.
+    const requestId = browserUuid();
     genRequestIdRef.current = requestId;
     try {
       // commitGenModel is stored as "configId:roleKey" — split it back, same as
@@ -343,59 +356,72 @@ export function MobileGitScreen() {
             )}
           </div>
 
-          {/* commit message — single-row textarea that auto-grows, with the
-              AI-generate action as an inline icon button (top-right, same
-              affordance as the desktop CommitBox) instead of a full-width
-              button row. */}
+          {/* Commit message — single-row textarea that auto-grows. The
+              AI-generate action is a standalone full-width button BELOW the
+              input (not an absolute-positioned overlay): the overlay variant
+              sat inside the textarea's padding box, where phone browsers
+              frequently swallowed the tap (IME/long-press selection). Same
+              affordances as the desktop CommitBox — tap again to stop. */}
           <div className="shrink-0 border-t border-edge pt-2">
-            <div className="relative mb-2">
-              <textarea
-                ref={msgRef}
-                value={message}
-                onChange={(e) => setMessage(e.target.value)}
-                placeholder="提交信息…"
-                rows={1}
-                className="w-full resize-none overflow-hidden rounded-lg border border-input-edge bg-surface-muted px-2 py-1.5 pr-9 text-xs leading-relaxed text-content outline-none focus:border-accent"
-              />
-              {commitGenModel && (
-                <button
-                  type="button"
-                  onClick={() => (genLoading ? stopGenerate() : void generate())}
-                  disabled={!repoPath || staged.length === 0}
-                  title={genLoading ? "停止生成" : "使用 AI 生成提交信息"}
-                  aria-label={genLoading ? "停止生成" : "使用 AI 生成提交信息"}
-                  className="group/gen absolute right-1 top-1 flex h-7 w-7 items-center justify-center rounded-md text-content-subtle transition-colors hover:bg-surface-hover hover:text-accent disabled:opacity-40 aria-disabled:opacity-40"
-                >
-                  {genLoading ? (
-                    <>
-                      <IconLoader2 size={14} className="animate-spin group-hover/gen:hidden" />
-                      <IconPlayerStop size={14} className="hidden group-hover/gen:block" />
-                    </>
-                  ) : (
+            <textarea
+              ref={msgRef}
+              value={message}
+              onChange={(e) => setMessage(e.target.value)}
+              placeholder="提交信息…"
+              rows={1}
+              className="mb-2 w-full resize-none overflow-hidden rounded-lg border border-input-edge bg-surface-muted px-2 py-1.5 text-xs leading-relaxed text-content outline-none focus:border-accent"
+            />
+            {commitGenModel && (
+              <button
+                type="button"
+                onClick={() => (genLoading ? stopGenerate() : void generate())}
+                disabled={!repoPath || staged.length === 0}
+                title={genLoading ? "停止生成" : "使用 AI 生成提交信息"}
+                aria-label={genLoading ? "停止生成" : "使用 AI 生成提交信息"}
+                className="mb-2 flex w-full items-center justify-center gap-1.5 rounded-lg border border-edge px-2 py-1.5 text-xs text-content-muted transition-colors hover:bg-surface-hover hover:text-accent disabled:opacity-40"
+              >
+                {genLoading ? (
+                  <>
+                    <IconLoader2 size={14} className="animate-spin" />
+                    停止生成
+                  </>
+                ) : (
+                  <>
                     <IconSparkles size={14} />
-                  )}
-                </button>
-              )}
-            </div>
-            {error && <p className="mb-2 text-xs text-danger">{error}</p>}
+                    AI 生成提交信息
+                  </>
+                )}
+              </button>
+            )}
+            {error && <ErrorBanner message={error} onDismiss={() => setError(null)} />}
             <div className="flex gap-2">
               <button
                 type="button"
-                onClick={() => void pull()}
-                disabled={!!busy || !repoPath}
+                onClick={() => void commit(false)}
+                disabled={!!busy || staged.length === 0 || !message.trim()}
                 className="flex flex-1 items-center justify-center gap-1 rounded-lg border border-edge px-2 py-2 text-xs text-content-muted disabled:opacity-50"
               >
-                {busy === "pull" ? <IconLoader2 size={12} className="animate-spin" /> : <IconArrowDown size={12} />}
-                拉取
+                {busy === "commit" ? <IconLoader2 size={12} className="animate-spin" /> : <IconCheck size={12} />}
+                提交
               </button>
               <button
                 type="button"
                 onClick={() => void commit(true)}
                 disabled={!!busy || staged.length === 0 || !message.trim()}
-                className="flex flex-[2] items-center justify-center gap-1 rounded-lg bg-accent px-2 py-2 text-xs font-semibold text-surface disabled:opacity-40"
+                className="flex flex-[1.4] items-center justify-center gap-1 rounded-lg bg-accent px-2 py-2 text-xs font-semibold text-surface disabled:opacity-40"
               >
                 {busy === "commit+push" ? <IconLoader2 size={12} className="animate-spin" /> : <IconCheck size={12} />}
                 提交并推送
+              </button>
+              <button
+                type="button"
+                onClick={() => void sync()}
+                disabled={!!busy || !repoPath}
+                title="拉取远端更新后推送本地提交"
+                className="flex flex-1 items-center justify-center gap-1 rounded-lg border border-edge px-2 py-2 text-xs text-content-muted disabled:opacity-50"
+              >
+                {busy === "sync" ? <IconLoader2 size={12} className="animate-spin" /> : <IconArrowDown size={12} />}
+                拉取并同步
               </button>
             </div>
           </div>
@@ -405,6 +431,47 @@ export function MobileGitScreen() {
       {diffPath && repoPath && (
         <DiffOverlay repoPath={repoPath} file={diffPath} onClose={() => setDiffPath(null)} />
       )}
+    </div>
+  );
+}
+
+/** Git-operation error banner: multi-line-friendly message with copy (for
+ *  pasting the failure into a search / chat) and dismiss affordances. Copy
+ *  uses the shared helper so it works over the mobile shell's plain-HTTP
+ *  LAN transport, where navigator.clipboard is unavailable. */
+function ErrorBanner({ message, onDismiss }: { message: string; onDismiss: () => void }) {
+  const [copied, setCopied] = useState(false);
+  useEffect(() => {
+    if (!copied) return;
+    const t = setTimeout(() => setCopied(false), 1500);
+    return () => clearTimeout(t);
+  }, [copied]);
+
+  const copy = async () => {
+    if (await copyText(message)) setCopied(true);
+  };
+
+  return (
+    <div className="mb-2 flex items-start gap-1 rounded-lg border border-danger/30 bg-danger/10 px-2 py-1.5 text-xs text-danger">
+      <span className="min-w-0 flex-1 whitespace-pre-wrap break-all">{message}</span>
+      <button
+        type="button"
+        onClick={() => void copy()}
+        aria-label={copied ? "已复制" : "复制错误信息"}
+        title={copied ? "已复制" : "复制错误信息"}
+        className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-danger/70 hover:bg-danger/10 hover:text-danger"
+      >
+        {copied ? <IconCheck size={13} /> : <IconCopy size={13} />}
+      </button>
+      <button
+        type="button"
+        onClick={onDismiss}
+        aria-label="关闭错误提示"
+        title="关闭错误提示"
+        className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-danger/70 hover:bg-danger/10 hover:text-danger"
+      >
+        <IconX size={13} />
+      </button>
     </div>
   );
 }

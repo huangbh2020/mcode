@@ -546,6 +546,24 @@ export interface RequestResolvedEvent {
   kind: "approval" | "question" | "plan";
 }
 
+/**
+ * Authoritative snapshot of which sessions currently have a running turn.
+ * Emitted ONLY on the mobile SSE channel, as the first data frame after a
+ * (re)connect: the mobile event bus is unbuffered, and a phone that was
+ * backgrounded while a turn ran (iOS suspends EventSource) misses the
+ * terminal `turn.done` — its client-side `runningBySession` would stay
+ * stuck on forever (spinner never stops, slash picker silently disabled).
+ * Receiving clients replace their local running-state guesses with this set.
+ */
+export interface SessionRunningSnapshotEvent {
+  type: "session.runningSnapshot";
+  /** Not meaningful for a global snapshot; kept for envelope compatibility
+   *  (every RuntimeEvent carries a sessionId and the SSE frame mirrors it). */
+  sessionId: string;
+  /** Every session id that currently has a running turn on the host. */
+  running: string[];
+}
+
 /** The union of all runtime events. */
 export type RuntimeEvent =
   | TextDeltaEvent
@@ -569,4 +587,5 @@ export type RuntimeEvent =
   | BrowserImageEvent
   | SessionChangedEvent
   | SessionDeletedEvent
-  | RequestResolvedEvent;
+  | RequestResolvedEvent
+  | SessionRunningSnapshotEvent;

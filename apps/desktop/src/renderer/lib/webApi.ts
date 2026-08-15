@@ -142,28 +142,60 @@ export async function webHealth(): Promise<boolean> {
 
 /* ────────────────────────── RPC core ────────────────────────── */
 
+/** Per-method client-side deadlines (ms). Without one, a request stalled by a
+ * restarting PC or a LAN hiccup leaves the Promise pending forever — and any
+ * loading spinner bound to it spinning with no error to surface. */
+const RPC_TIMEOUT_MS: Record<string, number> = {
+  // Drives a 60s-abort SDK query server-side (commit-message generation) —
+  // budget the client slightly above that so the server's own error (which
+  // carries the real cause) wins the race over the generic timeout.
+  "git:generateCommitMessage": 75_000,
+};
+const RPC_DEFAULT_TIMEOUT_MS = 30_000;
+
 async function rpc<T = unknown>(method: string, input?: unknown): Promise<T> {
   const { token } = readAuth();
   if (!token) throw new Error("未配对 — 请先在电脑端生成二维码完成配对");
-  const res = await fetch("/api/rpc", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${token}`,
-    },
-    body: JSON.stringify({ method, input }),
-  });
-  if (res.status === 401) {
-    // Token revoked on the PC side — clear local auth so the pairing screen
-    // reappears instead of silently looping on bad credentials.
-    clearAuth();
-    throw new Error("设备已被电脑端移除 — 请重新配对");
+  const timeoutMs = RPC_TIMEOUT_MS[method] ?? RPC_DEFAULT_TIMEOUT_MS;
+  let timedOut = false;
+  const ac = new AbortController();
+  const timer = setTimeout(() => {
+    timedOut = true;
+    ac.abort();
+  }, timeoutMs);
+  try {
+    const res = await fetch("/api/rpc", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({ method, input }),
+      signal: ac.signal,
+    });
+    if (res.status === 401) {
+      // Token revoked on the PC side — clear local auth so the pairing screen
+      // reappears instead of silently looping on bad credentials.
+      clearAuth();
+      throw new Error("设备已被电脑端移除 — 请重新配对");
+    }
+    const envelope = (await res.json().catch(() => null)) as MobileRpcResponse | null;
+    if (!envelope || !envelope.ok) {
+      throw new Error(envelope && !envelope.ok ? envelope.error : `RPC 失败 (${res.status})`);
+    }
+    return envelope.result as T;
+  } catch (err) {
+    // Distinguish our deadline from any other abort/network failure so the
+    // user gets an actionable message instead of an opaque "AbortError".
+    if (timedOut) {
+      throw new Error(
+        `请求超时（${Math.round(timeoutMs / 1000)} 秒）— 电脑端可能正在重启或网络不稳定，请稍后重试`,
+      );
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
   }
-  const envelope = (await res.json().catch(() => null)) as MobileRpcResponse | null;
-  if (!envelope || !envelope.ok) {
-    throw new Error(envelope && !envelope.ok ? envelope.error : `RPC 失败 (${res.status})`);
-  }
-  return envelope.result as T;
 }
 
 /** Desktop-only stub: throws a clear error. Used for whitelisted-group

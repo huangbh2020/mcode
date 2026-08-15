@@ -67,8 +67,12 @@ export function MobileViewerOverlay() {
 /** Turn-diff body: fetches the file's current on-disk content and diffs it
  *  against the frozen pre-turn `before` snapshot carried by the card. Uses
  *  the shared lineDiff + DiffView (line-numbered, red/green) — no git
- *  dependency, so it also works after the changes were committed. */
-function DiffContent({ path, before }: { path: string; before: string }) {
+ *  dependency, so it also works after the changes were committed.
+ *
+ *  `before` may be undefined on cards persisted by builds predating the
+ *  snapshot field — diffing is impossible then, so degrade to the plain
+ *  read-only file view with a hint instead of crashing lineDiff. */
+function DiffContent({ path, before }: { path: string; before: string | undefined }) {
   const [after, setAfter] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
 
@@ -89,6 +93,16 @@ function DiffContent({ path, before }: { path: string; before: string }) {
     };
   }, [path]);
 
+  if (before === undefined) {
+    return (
+      <div className="flex min-h-0 flex-1 flex-col">
+        <div className="shrink-0 border-b border-edge bg-surface-muted/60 px-3 py-1.5 text-center text-[11px] text-content-subtle">
+          该轮次缺少修改前快照（旧版本会话），以下为文件当前内容
+        </div>
+        <FileViewerContent name={basename(path)} path={path} />
+      </div>
+    );
+  }
   if (failed) {
     return (
       <div className="flex flex-1 items-center justify-center text-xs text-content-subtle">

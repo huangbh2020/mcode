@@ -219,6 +219,18 @@ class RuntimeManager {
     });
   }
 
+  /** IDs of every session with a currently running turn. Used by the mobile
+   *  SSE endpoint to publish a running-state snapshot on (re)connect, so a
+   *  phone that missed `turn.done` while backgrounded can self-correct its
+   *  client-side running state. */
+  runningSessionIds(): string[] {
+    const ids: string[] = [];
+    for (const [id, rt] of this.sessions) {
+      if (rt.handle?.isRunning()) ids.push(id);
+    }
+    return ids;
+  }
+
   /** Send a user message to the provider and stream events back. */
   async sendTurn(
     session: Session,

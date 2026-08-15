@@ -72,6 +72,17 @@ import { LegendList, type LegendListRef } from "@legendapp/list/react";
  *  padding,停在顶部时可见,向下滚动后随内容滚走。 */
 const MESSAGE_LIST_TOP_PADDING = 10;
 
+/** Picker trigger chars → picker kind. CJK soft keyboards often emit
+ *  full-width variants (／ U+FF0F, ＠ U+FF20) for the slash/at keys, so
+ *  both forms trigger; the full-width char itself lands inside the replaced
+ *  token range and is swallowed by the inserted pill. */
+const TRIGGER_CHARS: Record<string, "mention" | "slash"> = {
+  "@": "mention",
+  "＠": "mention",
+  "/": "slash",
+  "／": "slash",
+};
+
 /** Uint8Array → base64. Chunked so large pasted files don't blow the call
  *  stack (String.fromCharCode spread is limited to ~32K args per call). */
 function toBase64(bytes: Uint8Array): string {
@@ -1161,19 +1172,20 @@ function ChatPaneForSession({ sessionId, isActive }: { sessionId: string; isActi
           }
         }
         const ch = v[i - 1];
-        if (ch === "@" || ch === "/") {
+        const triggerKind = TRIGGER_CHARS[ch];
+        if (triggerKind) {
           const atLineStart = i - 1 === 0 || /\s/.test(v[i - 2]);
           if (!atLineStart) {
             if (pickerKind !== null) setPickerKind(null);
             return;
           }
           const token = v.slice(i, caret);
-          // A space inside the token means the user moved past it - close.
+          // A space within the token means the user moved past it - close.
           if (/\s/.test(token)) {
             if (pickerKind !== null) setPickerKind(null);
             return;
           }
-          const kind: "mention" | "slash" = ch === "@" ? "mention" : "slash";
+          const kind = triggerKind;
           if (pickerKind !== kind) {
             triggerStartRef.current = i - 1;
             const rect = editorRef.current?.getRect();

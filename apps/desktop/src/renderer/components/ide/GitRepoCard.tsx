@@ -5,6 +5,7 @@ import { api } from "@renderer/lib/api.js";
 import { cn } from "@renderer/lib/cn.js";
 import { joinPath, basename } from "@renderer/lib/path.js";
 import { formatRelativeTime, formatFullTime } from "@renderer/lib/time.js";
+import { browserUuid } from "@renderer/lib/uuid.js";
 import type { GitRepo, GitStatusResult, GitFileStatus, GitBranchInfo, GitBranchListResult } from "@contracts/ipc";
 import { EMPTY_TURN_FILES, useSessionStore } from "@renderer/stores/sessionStore.js";
 import type { TurnFileEntry } from "@renderer/lib/turnFiles.js";
@@ -904,7 +905,7 @@ function CommitBox({
 
     setGenerating(true);
     cancelledRef.current = false;
-    const requestId = crypto.randomUUID();
+    const requestId = browserUuid();
     genRequestIdRef.current = requestId;
     try {
       const res = await api.git.generateCommitMessage({

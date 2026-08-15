@@ -11,6 +11,7 @@
  * Zustand store because it's ephemeral per-turn UI state, not session data.
  */
 import type { PickedElement } from "@contracts/ipc";
+import { browserUuid } from "@renderer/lib/uuid.js";
 
 /** Display char count for a tag's preview text. Single line, whitespace
  *  collapsed; an ellipsis is appended if the original was longer. */
@@ -162,20 +163,9 @@ export function makeElementTag(el: PickedElement): ContentTag {
   };
 }
 
-/** Browser-safe UUID. Electron renderer has `crypto.randomUUID()` in secure
- *  contexts; fall back to a Math.random-based id for any environment that
- *  doesn't (defensive — shouldn't happen in Electron, but keeps the code
- *  portable for tests). */
+/** Browser-safe UUID — delegates to the shared {@link browserUuid} helper. */
 function cryptoRandomId(): string {
-  try {
-    if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
-      return crypto.randomUUID();
-    }
-  } catch {
-    /* fall through */
-  }
-  // RFC 4122 v4-ish fallback.
-  return "t-" + Math.random().toString(36).slice(2) + Date.now().toString(36);
+  return browserUuid();
 }
 
 /** Compose the final prompt string from the textarea text + all tags.

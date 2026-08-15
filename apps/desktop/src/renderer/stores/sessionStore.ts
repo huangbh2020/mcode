@@ -147,7 +147,9 @@ function isUnsupportedPath(filePath: string): boolean {
  * Desktop never sets this (the Electron-only UIs consume those touchpoints). */
 export type MobileViewerTarget =
   | { kind: "file"; name: string; path: string }
-  | { kind: "diff"; name: string; path: string; before: string }
+  | { kind: "diff"; name: string; path: string; /** Undefined only on cards
+   * persisted by builds predating the snapshot field — the viewer degrades
+   * to a plain file view then. */ before?: string }
   | { kind: "plan"; plan: string };
 
 /** A single content block within a message (mirrors how claude structures output). */
@@ -4584,6 +4586,28 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     // proceeds. sendPrompt / editAndResendMessage clear the sentinel, so a
     // NEW turn's events stream normally again.
     if (get().interruptedBySession[sid] && CONTENT_FROZEN_EVENTS.has(e.type)) {
+      return;
+    }
+
+    // session.runningSnapshot — mobile SSE (re)connect compensation. The
+    // mobile event bus is unbuffered: a phone backgrounded while a turn ran
+    // (iOS suspends EventSource) misses the terminal `turn.done` and its
+    // runningBySession stays stuck on — which keeps the spinner alive and
+    // silently disables the slash picker (inputBlocked). The host pushes
+    // this snapshot as the first frame of every SSE (re)connect; it carries
+    // the authoritative running set, so replace our local guesses wholesale.
+    // `runningTurnStartedAt` is intentionally left untouched: its consumers
+    // all fall back to Date.now(), so a snapshot-discovered running turn
+    // persists correctly when its (possibly missed-then-resynced) turn.done
+    // lands.
+    if (e.type === "session.runningSnapshot") {
+      const running = new Set(e.running);
+      set((s) => {
+        const next: Record<string, boolean> = {};
+        for (const id of Object.keys(s.runningBySession)) next[id] = running.has(id);
+        for (const id of running) next[id] = true;
+        return { runningBySession: next };
+      });
       return;
     }
 

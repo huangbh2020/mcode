@@ -38,6 +38,7 @@ import {
 } from "@contracts/mobile";
 import { pairingManager, detectLanIp } from "./PairingManager.js";
 import { mobileEventBus } from "./MobileEventBus.js";
+import { runtimeManager } from "@main/claude/RuntimeManager.js";
 import { dispatchMobileRpc, RpcError, type DeviceContext } from "./mobileRpc.js";
 import { registerMobileGitRpc } from "./mobileGitRpc.js";
 import { serveMobileAsset } from "./serveMobileStatic.js";
@@ -170,6 +171,21 @@ function handleEvents(req: IncomingMessage, res: ServerResponse): void {
   // Initial flush so the client sees headers immediately.
   res.write(": connected\n\n");
 
+  // Running-state snapshot as the first data frame of every (re)connect.
+  // The bus is unbuffered, so a phone that was backgrounded while a turn ran
+  // misses the terminal `turn.done` — without this frame its client-side
+  // running state stays stuck on forever (spinner, slash picker disabled).
+  res.write(
+    `data: ${JSON.stringify({
+      sessionId: "",
+      event: {
+        type: "session.runningSnapshot",
+        sessionId: "",
+        running: runtimeManager.runningSessionIds(),
+      },
+    })}\n\n`,
+  );
+
   const unsubscribe = mobileEventBus.subscribe((e) => {
     // Filter is per-client in the future (sessionId subscription); for now we
     // fan out everything and let the client drop irrelevant sessionIds — cheap
@@ -223,7 +239,29 @@ async function handleRpc(req: IncomingMessage, res: ServerResponse, device: Pair
     return;
   }
   const ctx: DeviceContext = { device };
-  sendRpcResult(res, dispatchMobileRpc(body, ctx));
+  // Entry/exit tracing. git:* calls are user-triggered slow ops (LLM rounds,
+  // network) — always logged so a hung request is visible in main.log. Other
+  // methods log only when slow or failing. Without this a request stuck
+  // server-side leaves no trace at all: the handlers log only on completion,
+  // and handler failures are swallowed into 4xx responses by sendRpcResult
+  // (the outer route catch never fires for them).
+  const started = Date.now();
+  const slowOp = body.method.startsWith("git:");
+  if (slowOp) log.info(`mobile: rpc ${body.method} start (${device.name})`);
+  const traced = dispatchMobileRpc(body, ctx).then(
+    (result) => {
+      const ms = Date.now() - started;
+      if (slowOp) log.info(`mobile: rpc ${body.method} ok in ${ms}ms`);
+      else if (ms > 3000) log.warn(`mobile: rpc ${body.method} slow (${ms}ms)`);
+      return result;
+    },
+    (err: unknown) => {
+      const ms = Date.now() - started;
+      log.warn(`mobile: rpc ${body.method} failed in ${ms}ms: ${(err as Error)?.message ?? err}`);
+      throw err;
+    },
+  );
+  sendRpcResult(res, traced);
 }
 
 /** Start the mobile server. Resolves with a handle (running:false if disabled
