@@ -7,21 +7,22 @@
  *    after pairing do the event subscriptions and store hydration start, so
  *    the SSE stream is opened with valid credentials.
  *  - No Titlebar / ThreePaneLayout / right IDE panel / terminal / browser
- *    panel — those are Electron-bound. The left bar becomes a slide-over
- *    drawer, and the chat column is the whole screen (ChatPane's container
- *    queries already adapt the gutters/composer to the narrow width).
+ *    panel — those are Electron-bound. The session list becomes the
+ *    touch-first MobileSessionDrawer slide-over, and the chat column is the
+ *    whole screen (ChatPane's container queries already adapt the
+ *    gutters/composer to the narrow width).
  *  - Settings is the minimal MobileSettingsSheet instead of SettingsPage.
  *  - displayMode (single/tabs, a desktop-shared pref) is ignored: the strip
  *    always shows every open tab and the active pane mounts keyed.
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { LeftBar } from "./components/layout/LeftBar.js";
 import { ChatPane } from "./components/chat/ChatPane.js";
 import { SessionTabs } from "./components/layout/SessionTabs.js";
 import { ModelConfigPrompt } from "./components/chat/ModelConfigPrompt.js";
 import { Toaster } from "./components/layout/Toaster.js";
 import { PairingScreen } from "./components/mobile/PairingScreen.js";
 import { MobileSettingsSheet } from "./components/mobile/MobileSettingsSheet.js";
+import { MobileSessionDrawer } from "./components/mobile/MobileSessionDrawer.js";
 import { MobileFilesScreen } from "./components/mobile/MobileFilesScreen.js";
 import { MobileGitScreen } from "./components/mobile/MobileGitScreen.js";
 import { MobileViewerOverlay } from "./components/mobile/MobileViewerOverlay.js";
@@ -147,28 +148,14 @@ function MobileShell() {
       </div>
 
       <div className="relative flex min-h-0 flex-1 overflow-hidden">
-        {/* Left drawer: the full desktop LeftBar (session tree, groups,
-            archive bin) in a slide-over panel. The quick-action 搜索 /
-            连接手机 entries are hidden — no Ctrl+K on a phone, and the
-            visitor is already the phone. */}
-        {drawerOpen && (
-          <>
-            <button
-              type="button"
-              aria-label="关闭会话列表"
-              className="absolute inset-0 z-30 bg-black/40"
-              onClick={() => setDrawerOpen(false)}
-            />
-            <div
-              className={cn(
-                "absolute inset-y-0 left-0 z-40 flex w-[min(85vw,320px)] flex-col",
-                "border-r border-edge bg-surface-muted shadow-2xl",
-              )}
-            >
-              <LeftBar showSearch={false} showConnectPhone={false} />
-            </div>
-          </>
-        )}
+        {/* Left drawer — the touch-first MobileSessionDrawer (project →
+            session tree, search, bottom action sheets). Renders nothing
+            while closed; it keeps itself mounted through the slide-out. */}
+        <MobileSessionDrawer
+          open={drawerOpen}
+          onClose={() => setDrawerOpen(false)}
+          onPickSession={() => setView("chat")}
+        />
 
         {/* Chat column: tab strip + the active pane. ChatPane renders the
             empty state when no session is open. */}

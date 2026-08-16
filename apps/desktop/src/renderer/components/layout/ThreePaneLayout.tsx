@@ -87,15 +87,15 @@ export function ThreePaneLayout({
         />
       )}
 
-      {/* Center pane — rounded bottom-left corner creates a soft arc where it
-         meets the left sidebar at the bottom edge, echoing the titlebar's
-         top-left radius. Visible because the track (bg-surface-muted) shows
-         through the notch against the pane's bg-surface.
+      {/* Center pane — rounded bottom corners create soft arcs where it meets
+         the side panels at the bottom edge, echoing the titlebar's radii.
+         Visible because the track (bg-surface-muted) shows through the notches
+         against the pane's bg-surface.
          `relative z-10` + --panel-shadow make the pane read as an elevated
          surface floating over the muted track (the shadow would otherwise be
          painted over by the later right sidebar).
          Stacks the center content above an optional bottom terminal bar. */}
-      <main className="relative z-10 flex min-w-0 flex-1 flex-col rounded-bl-lg border-t border-edge bg-surface shadow-[var(--panel-shadow)]">
+      <main className="relative z-10 flex min-w-0 flex-1 flex-col rounded-b-lg border-t border-edge bg-surface shadow-[var(--panel-shadow)]">
         <div className="min-h-0 flex-1 overflow-hidden">{center}</div>
         {/* Bottom terminal bar — keep-alive: always rendered, height collapses
             to 0 when closed so PTYs/scrollback survive. overflow-hidden clips
@@ -130,14 +130,17 @@ export function ThreePaneLayout({
           onDoubleClick={onResetRight}
         />
       )}
-      {/* Right sidebar — plain rectangle (no corner rounding). Uses
-         bg-surface (same as center pane) so it reads as a continuation of the
-         chat area; the border-l below is the divider. overflow-hidden (not
-         overflow-y-auto): Files/Git scroll internally, and xterm FitAddon
-         breaks under a scrolling ancestor. */}
+      {/* Right sidebar — rounded bottom-left corner mirrors the center pane's
+         bottom-right arc, so the center|right seam ends in a symmetric soft
+         notch revealing the muted track (same language as the left seam).
+         Uses bg-surface (same as center pane) so it reads as a continuation of
+         the chat area; the border-l below is the divider. overflow-hidden (not
+         overflow-y-auto): clips children to the rounded corner; Files/Git
+         scroll internally, and xterm FitAddon breaks under a scrolling
+         ancestor. */}
       {rightOpen && (
         <aside
-          className="flex h-full shrink-0 flex-col border-t border-edge bg-surface"
+          className="flex h-full shrink-0 flex-col overflow-hidden rounded-bl-lg border-t border-edge bg-surface"
           style={{ width: rightWidth }}
         >
           <div className="min-h-0 flex-1 overflow-hidden border-l border-edge/60">{right}</div>
