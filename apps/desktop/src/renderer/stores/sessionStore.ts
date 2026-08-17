@@ -1005,6 +1005,10 @@ export interface SessionState {
    *  truncated history, then sends the edited prompt as a fresh user
    *  message. The session must NOT be running when this is called.
    *
+   *  `images` is the surviving image list from the inline editor (empty
+   *  array = the user deleted them all). When omitted, the original
+   *  message's images are preserved verbatim.
+   *
    *  Takes an explicit `sessionId` (not activeSessionId) so it works
    *  correctly across multiple open tabs. */
   editAndResendMessage: (
@@ -1014,6 +1018,7 @@ export interface SessionState {
     attachments?: { preview: string; content: string; attachmentKind?: "paste" | "file"; filePath?: string }[],
     displayText?: string,
     skillsUsed?: string[],
+    images?: PromptImage[],
   ) => Promise<void>;
   interrupt: (sessionId?: string) => Promise<void>;
   ingestEvent: (e: RuntimeEvent) => void;
@@ -4351,7 +4356,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     return true;
   },
 
-  editAndResendMessage: async (sessionId, messageId, newPrompt, attachments, displayText, skillsUsed) => {
+  editAndResendMessage: async (sessionId, messageId, newPrompt, attachments, displayText, skillsUsed, images) => {
     if (!sessionId || !newPrompt.trim()) return;
     // The session must be idle - editing while a turn is running would
     // race the truncation against live event ingestion.
@@ -4381,11 +4386,16 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     //    single text block holding displayText (or the raw prompt when
     //    there are no attachments).
     //    User-attached images on the edited message survive the edit — the
-    //    block already carries the base64, so they're re-sent verbatim
-    //    without re-reading anything from disk.
-    const preservedImages = editedMsg.blocks
-      .filter((b): b is Extract<Block, { kind: "image" }> => b.kind === "image")
-      .map((b) => ({ data: b.data, mimeType: b.mimeType as PromptImage["mimeType"] }));
+    //    inline editor shows them as removable thumbnails and passes back the
+    //    surviving list; the blocks already carry the base64, so they're
+    //    re-sent verbatim without re-reading anything from disk. An omitted
+    //    list (no editor round-trip) preserves every image, matching the
+    //    pre-editor behavior.
+    const preservedImages: PromptImage[] =
+      images ??
+      editedMsg.blocks
+        .filter((b): b is Extract<Block, { kind: "image" }> => b.kind === "image")
+        .map((b) => ({ data: b.data, mimeType: b.mimeType as PromptImage["mimeType"] }));
     const blocks: Block[] = [];
     if (attachments) {
       for (const a of attachments) {

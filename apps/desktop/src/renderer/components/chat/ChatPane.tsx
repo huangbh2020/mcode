@@ -1913,9 +1913,10 @@ function ChatPaneForSession({ sessionId, isActive }: { sessionId: string; isActi
 
   /** Submit an inline-edited user message. Reconstructs the full prompt from
    *  the edited text + the original message's attachment blocks (preserved
-   *  as-is), then calls editAndResendMessage which truncates the session
-   *  history at the edited message and resends. */
-  const handleEditSubmit = async (msg: ChatMessage, newText: string) => {
+   *  as-is) + the images the user kept in the editor, then calls
+   *  editAndResendMessage which truncates the session history at the edited
+   *  message and resends. */
+  const handleEditSubmit = async (msg: ChatMessage, newText: string, images: PromptImage[]) => {
     const text = newText.trim();
     if (!text) return;
     setEditingMessageId(null);
@@ -1951,6 +1952,7 @@ function ChatPaneForSession({ sessionId, isActive }: { sessionId: string; isActi
       attachments.length > 0 ? attachments : undefined,
       attachments.length > 0 ? text : undefined,
       skillsUsed,
+      images,
     );
   };
 
@@ -2817,7 +2819,7 @@ const MessageRow = memo(function MessageRow({
   /** Whether THIS row is currently in inline-edit mode. */
   isEditing?: boolean;
   onStartEdit?: (msg: ChatMessage) => void;
-  onSubmitEdit?: (msg: ChatMessage, newText: string) => void;
+  onSubmitEdit?: (msg: ChatMessage, newText: string, images: PromptImage[]) => void;
   onCancelEdit?: () => void;
   /** Called when the user clicks an inline plan block - opens the plan in
    *  the editor column via openPlanDrawer. */
@@ -2883,7 +2885,7 @@ const MessageRow = memo(function MessageRow({
         <div className="max-w-[85%] w-full">
           <UserMessageEditor
             msg={msg}
-            onSubmit={(newText) => onSubmitEdit?.(msg, newText)}
+            onSubmit={(newText, images) => onSubmitEdit?.(msg, newText, images)}
             onCancel={() => onCancelEdit?.()}
           />
         </div>
@@ -3020,10 +3022,23 @@ function userMessageText(blocks: Block[]): string {
   return "";
 }
 
+/** Narrow the inline editor's editable image list down to the shape the store
+ *  re-sends (same mimeType cast the store applies when preserving blocks). */
+function toPromptImages(
+  images: { id: string; data: string; mimeType: string }[],
+): PromptImage[] {
+  return images.map(({ data, mimeType }) => ({
+    data,
+    mimeType: mimeType as PromptImage["mimeType"],
+  }));
+}
+
 /** Inline editor that replaces a user message bubble when the user clicks
  *  the edit pencil. Renders a textarea prefilled with the original typed
  *  text (attachment blocks are shown as read-only chips above it, matching
- *  the composer's chip-above-textarea layout). Enter submits the edit
+ *  the composer's chip-above-textarea layout). The message's image blocks
+ *  are shown as composer-style thumbnails with hover-remove buttons so the
+ *  user can see and delete them before resending. Enter submits the edit
  *  (truncating the session history at this message and resending), Escape
  *  cancels back to the read-only view. */
 function UserMessageEditor({
@@ -3032,13 +3047,25 @@ function UserMessageEditor({
   onCancel,
 }: {
   msg: ChatMessage;
-  onSubmit: (newText: string) => void;
+  onSubmit: (newText: string, images: PromptImage[]) => void;
   onCancel: () => void;
 }) {
   const initialText = useMemo(() => userMessageText(msg.blocks), [msg.blocks]);
   const [text, setText] = useState(initialText);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const attachmentBlocks = msg.blocks.filter((b) => b.kind === "attachment");
+  // Local editable copy of the message's image blocks — the surviving list is
+  // re-sent verbatim on submit (an emptied list drops the images from the
+  // resent turn). Ids exist only to give the thumbnails stable React keys.
+  const [images, setImages] = useState<{ id: string; data: string; mimeType: string }[]>(() =>
+    msg.blocks
+      .filter((b): b is Extract<Block, { kind: "image" }> => b.kind === "image")
+      .map((b, i) => ({
+        id: `edit-img-${msg.id}-${i}`,
+        data: b.data,
+        mimeType: b.mimeType,
+      })),
+  );
 
   // Focus + auto-resize on mount.
   useEffect(() => {
@@ -3062,7 +3089,7 @@ function UserMessageEditor({
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       const trimmed = text.trim();
-      if (trimmed) onSubmit(trimmed);
+      if (trimmed) onSubmit(trimmed, toPromptImages(images));
     } else if (e.key === "Escape") {
       e.preventDefault();
       onCancel();
@@ -3095,6 +3122,33 @@ function UserMessageEditor({
           )}
         </div>
       )}
+      {/* Image thumbnails - same visual treatment as the composer's pending
+          image strip (h-14 squares, hover-revealed X to remove). */}
+      {images.length > 0 && (
+        <div className="mb-2 flex flex-wrap gap-1.5">
+          {images.map((img, i) => (
+            <div
+              key={img.id}
+              className="group relative h-14 w-14 shrink-0 overflow-hidden rounded-lg border border-edge bg-surface"
+              title={`图片 ${i + 1}`}
+            >
+              <img
+                src={`data:${img.mimeType};base64,${img.data}`}
+                alt={`图片 ${i + 1}`}
+                className="h-full w-full object-cover"
+              />
+              <button
+                type="button"
+                onClick={() => setImages((prev) => prev.filter((p) => p.id !== img.id))}
+                aria-label={`移除图片 ${i + 1}`}
+                className="absolute right-0.5 top-0.5 hidden h-5 w-5 items-center justify-center rounded-full bg-black/60 text-white transition-colors hover:bg-black/80 group-hover:flex"
+              >
+                <IconX size={12} />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
       <textarea
         ref={textareaRef}
         value={text}
@@ -3114,7 +3168,7 @@ function UserMessageEditor({
         </button>
         <button
           type="button"
-          onClick={() => canSubmit && onSubmit(text.trim())}
+          onClick={() => canSubmit && onSubmit(text.trim(), toPromptImages(images))}
           disabled={!canSubmit}
           className={cn(
             "inline-flex items-center gap-1 rounded px-2 py-1 text-[11px] transition-colors",
