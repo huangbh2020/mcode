@@ -10,6 +10,7 @@
  *            against that endpoint, so the user can verify before save
  */
 import type { IpcMain } from "electron";
+import { randomUUID } from "node:crypto";
 import {
   IPC,
   SaveCustomModelSchema,
@@ -20,6 +21,7 @@ import {
 import type { ApiConfig } from "@contracts/customModel";
 import { CustomModelStore } from "@main/lib/secretStore.js";
 import { buildCustomEnv, resolveActiveModel } from "@main/providers/claude-sdk/customEnv.js";
+import { BridgeRegistry } from "@main/providers/bridge/bridgeRegistry.js";
 import { resolveSdkBinaryPath } from "@main/providers/claude-sdk/sdkBinaryPath.js";
 import { log } from "@main/lib/logger.js";
 
@@ -73,12 +75,23 @@ export function registerCustomModelHandlers(ipcMain: IpcMain): void {
       disableNonEssentialTraffic: input.disableNonEssentialTraffic ?? true,
       timeoutMs: input.timeoutMs,
     };
-    // OpenAI-format endpoints are probed directly via a minimal chat-completions
-    // request, NOT through the Claude binary. The bridge's correctness is
-    // verified separately; the probe only needs to confirm reachability + auth
-    // + that the named model exists on the endpoint.
+    // BOTH protocols probe through the real live chain (binary + env builder +
+    // settingSources) — never a shortcut fetch. OpenAI-format endpoints get a
+    // throwaway bridge instance under a synthetic config id, mirroring what
+    // RuntimeManager.sendTurn does for a live turn, so the probe exercises
+    // translation + auth + model routing end-to-end: "测得过 = 保存后一定能用".
+    // (The former direct-fetch shortcut skipped the bridge and sent the
+    // `[1m]`-suffixed model id straight onto the OpenAI wire — which has no
+    // such convention — so gateways read `model[1m]` as an unknown model and
+    // answered 401, failing tests for configs that work fine live.)
     if (cfg.protocol === "openai") {
-      return probeOpenAiEndpoint(cfg);
+      const probeId = `probe:${randomUUID()}`;
+      const handle = await BridgeRegistry.acquire(probeId, cfg);
+      try {
+        return await probeEndpoint({ ...cfg, baseUrl: handle.localUrl });
+      } finally {
+        BridgeRegistry.release(probeId);
+      }
     }
     return probeEndpoint(cfg);
   });
@@ -87,11 +100,15 @@ export function registerCustomModelHandlers(ipcMain: IpcMain): void {
 /**
  * Verify a custom endpoint by spawning a minimal SDK query against it and
  * waiting for the first system/init message (proves: DNS reachable, auth
- * accepted, model available). Aborts after {@link TEST_TIMEOUT_MS}.
+ * accepted, model available, and — for OpenAI configs — the bridge
+ * translation works). Aborts after {@link TEST_TIMEOUT_MS}.
  *
  * Uses the SAME env-builder, SAME model resolver, AND SAME settingSources as a
  * live turn, so a passing test guarantees the saved config will work
- * end-to-end. The probe resolves the model id via {@link resolveActiveModel}
+ * end-to-end. OpenAI-format callers pass a cfg whose baseUrl has already been
+ * rewritten to a live bridge's local URL (exactly the rewrite
+ * RuntimeManager.sendTurn applies), so the probe is the live chain verbatim.
+ * The probe resolves the model id via {@link resolveActiveModel}
  * and passes `settingSources: ['project','local']` — matching what
  * {@link ClaudeAgentSdkProvider} does — so the two paths can never drift. This
  * is critical: without matching settingSources, the binary would read whatever
@@ -117,7 +134,10 @@ async function probeEndpoint(
     // via the SDK `model` option (it doesn't set ANTHROPIC_MODEL because its
     // cfg binds only one role); the binary accepts either channel.
     // betas is intentionally NOT set — 1M is declared via the suffix, not via
-    // the anthropic-beta header.
+    // the anthropic-beta header. Where the suffix ends up depends on protocol:
+    // anthropic gateways parse it themselves (DeepSeek convention); for openai
+    // configs the bridge strips it before the upstream sees the request (the
+    // OpenAI wire has no such convention) — mirroring a live turn either way.
     const probedModel = resolveActiveModel(cfg);
     // Resolve the real on-disk binary path. Without this, the SDK resolves the
     // claude binary to a path INSIDE app.asar in a packaged app and spawn()
@@ -161,78 +181,20 @@ async function probeEndpoint(
     return { ok: false, error: "endpoint did not send an init message" };
   } catch (err) {
     const msg = (err as Error).message || String(err);
-    // Translate the most common failure modes into friendlier text.
+    // Translate the most common failure modes into friendlier text, keeping a
+    // short excerpt of the raw cause — bridge-relayed upstream errors embed
+    // the gateway's own words (e.g. one-api's "无可用渠道"), which is often
+    // the actual reason a 401/503 fired (token↔model binding, not bad auth).
+    const excerpt = `;上游返回: ${msg.replace(/\s+/g, " ").slice(0, 160)}`;
     if (/401|unauthorized|invalid.*key|invalid_api_key|invalid.*token/i.test(msg)) {
-      return { ok: false, error: `认证失败:Token/Key 被拒绝 (401) — 检查认证方式是否选对 (Bearer vs x-api-key)` };
+      return { ok: false, error: `认证失败:Token/Key 被拒绝 (401) — 检查认证方式是否选对 (Bearer vs x-api-key)${excerpt}` };
     }
     if (/403|forbidden/i.test(msg)) {
-      return { ok: false, error: "无权访问 (403) — 该 Token 无此模型权限" };
+      return { ok: false, error: `无权访问 (403) — 该 Token 无此模型权限${excerpt}` };
     }
     if (/503|no available channel|无可用渠道/i.test(msg)) {
-      return { ok: false, error: `网关无此模型渠道 (503):确认「模型名」与「别名映射」是否匹配该网关` };
+      return { ok: false, error: `网关无此模型渠道 (503):确认「模型名」与「别名映射」是否匹配该网关${excerpt}` };
     }
-    if (ac.signal.aborted || /abort/i.test(msg)) {
-      return { ok: false, error: `连接超时(${TEST_TIMEOUT_MS / 1000}s),请检查 Base URL 或网络` };
-    }
-    return { ok: false, error: msg };
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-/** Build the upstream chat-completions URL for an OpenAI-format endpoint,
- *  normalizing the path (mirrors the bridge's buildUpstreamUrl). */
-function buildOpenAiUrl(baseUrl: string): string {
-  const trimmed = baseUrl.replace(/\/+$/, "");
-  if (/\/v1\/chat\/completions\/?$/i.test(trimmed)) return trimmed.replace(/\/+$/, "");
-  if (/\/v1\/?$/i.test(trimmed)) return `${trimmed.replace(/\/+$/, "")}/chat/completions`;
-  return `${trimmed}/v1/chat/completions`;
-}
-
-/** Probe an OpenAI-format endpoint directly with a 1-token chat completion.
- *  Confirms DNS reachability, auth, and that the named model exists — without
- *  spinning up the Claude binary or the full bridge. A 200 means the saved
- *  config will work end-to-end (the bridge uses the exact same URL + auth). */
-async function probeOpenAiEndpoint(
-  cfg: ApiConfig,
-): Promise<{ ok: boolean; detail?: string; error?: string }> {
-  const model = resolveActiveModel(cfg);
-  const ac = new AbortController();
-  const timer = setTimeout(() => ac.abort(), TEST_TIMEOUT_MS);
-  const url = buildOpenAiUrl(cfg.baseUrl);
-  const isAzure = /azure\.com/i.test(cfg.baseUrl);
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-    Authorization: isAzure ? "" : `Bearer ${cfg.authToken}`,
-  };
-  if (isAzure) {
-    headers["api-key"] = cfg.authToken;
-    delete headers.Authorization;
-  }
-  try {
-    const res = await fetch(url, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({
-        model,
-        messages: [{ role: "user", content: "hi" }],
-        max_tokens: 1,
-      }),
-      signal: ac.signal,
-    });
-    if (res.ok) {
-      return { ok: true, detail: `connected (${model})` };
-    }
-    const errText = await res.text().catch(() => "");
-    if (res.status === 401 || res.status === 403) {
-      return { ok: false, error: `认证失败 (${res.status}) — 检查 Token/Key 是否正确` };
-    }
-    if (res.status === 404) {
-      return { ok: false, error: `端点或模型不存在 (404) — 检查 Base URL 路径与模型名「${model}」` };
-    }
-    return { ok: false, error: `HTTP ${res.status}: ${errText.slice(0, 200) || res.statusText}` };
-  } catch (err) {
-    const msg = (err as Error).message || String(err);
     if (ac.signal.aborted || /abort/i.test(msg)) {
       return { ok: false, error: `连接超时(${TEST_TIMEOUT_MS / 1000}s),请检查 Base URL 或网络` };
     }

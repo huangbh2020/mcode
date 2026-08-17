@@ -14,10 +14,12 @@ import {
   IconWorld,
   IconCode,
   IconInfoCircle,
+  McpIcon,
   type TablerIconProps,
 } from "@renderer/lib/icons.js";
 import { CustomModelsPanel } from "./CustomModelsPanel.js";
 import { SkillsPanel } from "./SkillsPanel.js";
+import { McpPanel } from "./McpPanel.js";
 import { AppearancePanel } from "./AppearancePanel.js";
 import { ShortcutsPanel } from "./ShortcutsPanel.js";
 import { GeneralPanel } from "./GeneralPanel.js";
@@ -39,8 +41,8 @@ import { AboutPanel } from "./AboutPanel.js";
  * Available sections (grouped: 常规 -> 个性化 -> 核心 AI 配置 -> IDE 能力 -> 关于):
  *  - 常规    (GeneralPanel - currently wraps TitleGenPanel for thread titles)
  *  - 外观    (AppearancePanel - flat one-row-per-feature list)
- *  - 快捷键  (ShortcutsPanel)
  *  - 模型配置 (CustomModelsPanel - two-column: provider list + config form)
+ *  - 快捷键  (ShortcutsPanel)
  *  - Skills  (SkillsPanel - two-column: skill list + raw SKILL.md editor)
  *  - 消息通知 (NotificationsPanel - toggle per notification category)
  *  - Git     (GitPanel)
@@ -54,7 +56,7 @@ import { AboutPanel } from "./AboutPanel.js";
  * Note: the legacy “Claude CLI 路径” panel was removed - the Agent SDK bundles
  * its own claude binary, so an externally-configured path is no longer used.
  */
-type SectionId = "general" | "custom-models" | "skills" | "appearance" | "shortcuts" | "notifications" | "git" | "terminal" | "browser" | "lsp-languages" | "about";
+type SectionId = "general" | "custom-models" | "skills" | "mcp" | "appearance" | "shortcuts" | "notifications" | "git" | "terminal" | "browser" | "lsp-languages" | "about";
 
 interface NavItem {
   id: SectionId;
@@ -66,9 +68,10 @@ const NAV_ITEMS: NavItem[] = [
   // 分组顺序:常规 -> 个性化 -> 核心 AI 配置 -> IDE 能力 -> 关于
   { id: "general", label: "常规", icon: IconSettings },
   { id: "appearance", label: "外观", icon: IconPalette },
-  { id: "shortcuts", label: "快捷键", icon: IconKeyboard },
   { id: "custom-models", label: "模型配置", icon: IconRobot },
+  { id: "shortcuts", label: "快捷键", icon: IconKeyboard },
   { id: "skills", label: "技能", icon: IconSparkles },
+  { id: "mcp", label: "MCP", icon: McpIcon },
   { id: "notifications", label: "消息通知", icon: IconBell },
   { id: "git", label: "Git", icon: IconBrandGit },
   { id: "terminal", label: "终端", icon: IconTerminal2 },
@@ -163,9 +166,10 @@ export function SettingsPage() {
         >
           {active === "general" && <GeneralPanel />}
           {active === "appearance" && <AppearancePanel />}
-          {active === "shortcuts" && <ShortcutsPanel />}
           {active === "custom-models" && <CustomModelsPanel />}
+          {active === "shortcuts" && <ShortcutsPanel />}
           {active === "skills" && <SkillsPanel />}
+          {active === "mcp" && <McpPanel />}
           {active === "notifications" && <NotificationsPanel />}
           {active === "git" && <GitPanel />}
           {active === "terminal" && <TerminalPanel />}

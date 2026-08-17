@@ -1740,6 +1740,161 @@ export const SkillsImportSchema = z.object({
 });
 export type SkillsImportInput = z.infer<typeof SkillsImportSchema>;
 
+/* ── MCP management (settings panel) ──
+ *  The settings panel's "MCP" section lists three MCP server sources and lets
+ *  the user toggle, add, remove and import them:
+ *   - user scope: the `mcpServers` object of ~/.mcode/.claude.json — Mcode's
+ *     redirected Claude config root (CLAUDE_CONFIG_DIR). The claude binary
+ *     loads these automatically (settingSources default includes "user"), so
+ *     the file is the source of truth; disabling a server moves its config
+ *     out of the file into the management-state stash below, which is what
+ *     keeps the binary from loading it.
+ *   - project scope: <projectRoot>/.mcp.json (read-only, never rewritten).
+ *     The CLI's native first-use approval dialog can't surface through our
+ *     onUserDialog bridge (unknown kinds get cancelled), so this panel
+ *     replaces it: project servers default to OFF and are recorded here when
+ *     explicitly enabled; the provider passes per-turn
+ *     enabledMcpjsonServers / disabledMcpjsonServers accordingly.
+ *   - builtin: the in-process "mcode-browser" server injected by the Claude
+ *     provider each turn; toggling gates that injection. */
+
+/** Setting key for the persisted MCP management state.
+ *  Value = JSON.stringify(McpManagementState). */
+export const MCP_MANAGEMENT_SETTING_KEY = "mcp.management";
+
+/** Serializable MCP server config shapes, mirroring the Claude Agent SDK's
+ *  McpStdioServerConfig / McpHttpServerConfig / McpSSEServerConfig. Transport
+ *  fields only; exotic fields (timeout, tools, ...) survive import round-trips
+ *  via passthrough. Absent `type` means stdio, same as the SDK. */
+export const McpServerConfigSchema = z.union([
+  z
+    .object({
+      type: z.literal("stdio").optional(),
+      command: z.string().min(1),
+      args: z.array(z.string()).optional(),
+      env: z.record(z.string(), z.string()).optional(),
+    })
+    .passthrough(),
+  z
+    .object({
+      type: z.literal("http"),
+      url: z.string().min(1),
+      headers: z.record(z.string(), z.string()).optional(),
+    })
+    .passthrough(),
+  z
+    .object({
+      type: z.literal("sse"),
+      url: z.string().min(1),
+      headers: z.record(z.string(), z.string()).optional(),
+    })
+    .passthrough(),
+]);
+export type McpServerConfig = z.infer<typeof McpServerConfigSchema>;
+
+/** Persisted MCP management state (MCP_MANAGEMENT_SETTING_KEY). */
+export interface McpManagementState {
+  /** Built-in mcode-browser server disabled. Absent/false = enabled. */
+  browserDisabled?: boolean;
+  /** User-scope servers the user turned OFF. Their full configs are stashed
+   *  here (keyed by name) so re-enabling restores them exactly; the config
+   *  file meanwhile stays free of them, which is what keeps the binary from
+   *  loading them. */
+  userDisabled?: Record<string, McpServerConfig>;
+  /** Project .mcp.json servers the user explicitly turned ON. Project servers
+   *  default to OFF (this panel replaces the CLI's first-use approval dialog),
+   *  so an allowlist — not a denylist — is persisted. Matched against the
+   *  turn's cwd at startTurn. */
+  projectEnabled?: Array<{ projectPath: string; name: string }>;
+}
+
+/** Which source a listed MCP server comes from. */
+export type McpScope = "user" | "project" | "builtin";
+
+/** Transport kind shown in the panel badges; "builtin" = in-process server. */
+export type McpKind = "stdio" | "http" | "sse" | "builtin";
+
+/** One row of the MCP panel's server list. `detail` is a secret-free summary
+ *  ("node server.js --foo" / "https://example.com/mcp") — env and header
+ *  values are never included. */
+export interface McpServerEntry {
+  name: string;
+  scope: McpScope;
+  kind: McpKind;
+  detail: string;
+  enabled: boolean;
+}
+
+/** List MCP servers for the settings panel. `projectPath` scopes the project
+ *  .mcp.json group and must match a persisted Project.path when present; the
+ *  group is simply omitted when absent. */
+export const McpListSchema = z.object({
+  projectPath: z.string().optional(),
+});
+export type McpListInput = z.infer<typeof McpListSchema>;
+
+/** Toggle a server. `projectPath` is required for scope "project". */
+export const McpToggleSchema = z.object({
+  name: z.string().min(1),
+  scope: z.enum(["user", "project", "builtin"]),
+  projectPath: z.string().optional(),
+  enabled: z.boolean(),
+});
+export type McpToggleInput = z.infer<typeof McpToggleSchema>;
+
+/** MCP server name charset — same family as skill names (letters, digits,
+ *  underscore, hyphen). The name becomes a JSON object key, not a path, but
+ *  staying conservative costs nothing. */
+const MCP_NAME_RE = /^[A-Za-z0-9_-]+$/;
+
+/** Reserved server name — collides with the built-in in-process server. */
+export const MCP_RESERVED_NAME = "mcode-browser";
+
+/** Add a user-scope server. Rejected when the name already exists (enabled in
+ *  the config file or stashed as disabled). The config is written into
+ *  ~/.mcode/.claude.json. */
+export const McpSaveSchema = z.object({
+  name: z.string().regex(MCP_NAME_RE, "invalid MCP server name"),
+  config: McpServerConfigSchema,
+});
+export type McpSaveInput = z.infer<typeof McpSaveSchema>;
+
+/** Remove a user-scope server — from both the config file and the disabled
+ *  stash (whichever holds it). Project/builtin entries have no delete. */
+export const McpRemoveSchema = z.object({
+  name: z.string().regex(MCP_NAME_RE, "invalid MCP server name"),
+});
+export type McpRemoveInput = z.infer<typeof McpRemoveSchema>;
+
+/** A server discovered in the local Claude CLI config (~/.claude.json),
+ *  offered by the import dialog. `origin` labels where it came from: the
+ *  global scope or the project path it was configured for. */
+export interface McpImportSource {
+  name: string;
+  kind: McpKind;
+  detail: string;
+  origin: string;
+  config: McpServerConfig;
+}
+
+/** Scan the local Claude CLI config for importable MCP servers. Read-only;
+ *  never writes to ~/.claude.json. */
+export const McpScanImportSchema = z.object({});
+export type McpScanImportInput = z.infer<typeof McpScanImportSchema>;
+
+/** A single server to import (name + full config, from a scanImport result). */
+export const McpImportItemSchema = z.object({
+  name: z.string().min(1),
+  config: McpServerConfigSchema,
+});
+
+/** Import selected servers into the user scope (Mcode's own config file).
+ *  Already-existing names are skipped. Returns per-server lists. */
+export const McpImportSchema = z.object({
+  servers: z.array(McpImportItemSchema),
+});
+export type McpImportInput = z.infer<typeof McpImportSchema>;
+
 /* ──────────────────────────  Main → Renderer (events)  ─────────────────────── */
 
 /* ── Language servers (LSP) ──
@@ -2707,6 +2862,28 @@ export interface RpcMap {
     skipped: string[];
     errors: Array<{ name: string; error: string }>;
   }>;
+  // MCP management (settings panel)
+  /** List all MCP servers across the three sources (user config file, project
+   *  .mcp.json, built-in mcode-browser) with their enabled state. */
+  "mcp.list": (input: McpListInput) => Promise<{ servers: McpServerEntry[] }>;
+  /** Enable/disable a server. User scope moves the config between the config
+   *  file and the management stash; project/builtin update the management
+   *  state. Takes effect on the next turn. */
+  "mcp.toggle": (input: McpToggleInput) => Promise<{ ok: boolean; error?: string }>;
+  /** Add a user-scope server (writes into ~/.mcode/.claude.json). */
+  "mcp.save": (input: McpSaveInput) => Promise<{ ok: boolean; error?: string }>;
+  /** Remove a user-scope server (from both the config file and the stash). */
+  "mcp.remove": (input: McpRemoveInput) => Promise<{ ok: boolean; error?: string }>;
+  /** Scan the local Claude CLI config (~/.claude.json) for servers available
+   *  for import (global + per-project entries). Read-only. */
+  "mcp.scanImport": (input: McpScanImportInput) => Promise<{ sources: McpImportSource[] }>;
+  /** Import selected servers into the user scope. Already-existing names are
+   *  skipped. Returns per-server imported / skipped / error lists. */
+  "mcp.import": (input: McpImportInput) => Promise<{
+    imported: string[];
+    skipped: string[];
+    errors: Array<{ name: string; error: string }>;
+  }>;
   // Language servers (LSP)
   /** List all language servers and their install/running state. */
   "lsp.list": () => Promise<{ languages: LspLanguageState[] }>;
@@ -2920,6 +3097,13 @@ export const IPC = {
   // Skill import (settings panel): scan external tools + copy into ~/.mcode/skills
   SKILLS_SCAN_SOURCES: "skills:scanSources",
   SKILLS_IMPORT: "skills:import",
+  // MCP management (settings panel): list / toggle / add / remove / import
+  MCP_LIST: "mcp:list",
+  MCP_TOGGLE: "mcp:toggle",
+  MCP_SAVE: "mcp:save",
+  MCP_REMOVE: "mcp:remove",
+  MCP_SCAN_IMPORT: "mcp:scanImport",
+  MCP_IMPORT: "mcp:import",
   // Language servers (LSP): install/enable/sync/request
   LSP_LIST: "lsp:list",
   LSP_INSTALL: "lsp:install",

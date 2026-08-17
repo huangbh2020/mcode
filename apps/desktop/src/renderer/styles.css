@@ -39,6 +39,43 @@ div:has(> [role="menu"]) {
   z-index: 9999 !important;
 }
 
+/* ───────────── Monaco workbench-hover fix (find-widget buttons) ─────────────
+ * monaco-editor 0.5x renders its find-widget button tooltips (关闭 / 上一个
+ * 匹配项 / 切换替换…) through the platform hover service as real DOM — a
+ * .workbench-hover-container inside a .context-view wrapper appended to the
+ * editor — not native title attributes (upstream bugs
+ * microsoft/monaco-editor#5208 / #5296; verified reproducible in this app).
+ *
+ * In THIS app the tooltip box ends up ON TOP of its trigger button: the app's
+ * global font-weight ladder (body 500/600) makes the tooltip ~47px tall
+ * instead of monaco's stock ~28px, and the pointer-style positioning math
+ * then overlaps the button's box (measured: tooltip [1558,86 → 1633,133]
+ * fully covering the close button [1594,111 → 1616,133]). The tooltip and
+ * its wrapper intercept pointer events, so: hover the button → tooltip pops
+ * over the cursor → button gets mouseleave → tooltip disposes after its
+ * 200ms debounce → mouseover refires (0ms delay — standalone monaco has no
+ * default for workbench.hover.delay, and same-group hovers skip the delay
+ * entirely; all find-widget buttons share groupId "find-widget") → loop.
+ * Symptom: the close button flickers under the cursor and clicks land on the
+ * tooltip instead of the button (Esc still works). Most visible with the
+ * right sidebar open (narrower editor → widget hugging the pane edge).
+ *
+ * Fix: make the hover tooltip transparent to the mouse. The rule MUST
+ * target the .context-view wrapper — putting pointer-events:none on
+ * .workbench-hover-container alone is NOT enough, because the parent
+ * .context-view still hit-tests over the same area (this is why the
+ * workaround reported in #5208 "did not work"). :has() scopes it to exactly
+ * the wrappers that contain an UNLOCKED hover tooltip, so monaco's other
+ * context-view users (context menu, select/suggest dropdowns) stay
+ * clickable, and locked (alt-pinned) hovers remain interactive. With the
+ * rule in place the tooltip still renders but can never become the
+ * hit-test target: no synthesized mouseleave, no show/hide loop, and
+ * clicks pass through to the button underneath. */
+.context-view:has(> .workbench-hover-container:not(.locked)),
+.workbench-hover-container:not(.locked) {
+  pointer-events: none;
+}
+
 /* ───────────── Theme variables ─────────────
  * Each value is a space-separated "R G B" triplet (no commas, no #) so
  * Tailwind's <alpha-value> placeholder can compose alpha variants like

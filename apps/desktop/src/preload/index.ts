@@ -378,6 +378,25 @@ const api = {
       ipcRenderer.invoke(IPC.SKILLS_IMPORT, input)) as RpcMap["skills.import"],
   },
 
+  /** MCP server management (settings panel): list the three server sources
+   *  (user config file / project .mcp.json / built-in browser server), toggle
+   *  them, add/remove user-scope servers, and import from the local Claude
+   *  CLI config. Changes take effect on the next turn. */
+  mcp: {
+    list: ((input) =>
+      ipcRenderer.invoke(IPC.MCP_LIST, input)) as RpcMap["mcp.list"],
+    toggle: ((input) =>
+      ipcRenderer.invoke(IPC.MCP_TOGGLE, input)) as RpcMap["mcp.toggle"],
+    save: ((input) =>
+      ipcRenderer.invoke(IPC.MCP_SAVE, input)) as RpcMap["mcp.save"],
+    remove: ((input) =>
+      ipcRenderer.invoke(IPC.MCP_REMOVE, input)) as RpcMap["mcp.remove"],
+    scanImport: ((input) =>
+      ipcRenderer.invoke(IPC.MCP_SCAN_IMPORT, input)) as RpcMap["mcp.scanImport"],
+    import: ((input) =>
+      ipcRenderer.invoke(IPC.MCP_IMPORT, input)) as RpcMap["mcp.import"],
+  },
+
   /** Probe whether the default provider is functional. */
   claudeHealthCheck: (): Promise<{
     installed: boolean;

@@ -44,7 +44,7 @@ import type {
   PickedElement,
 } from "@contracts/ipc";
 import { getMainWindow, sendToRenderer } from "@main/window.js";
-import { getEffectiveTheme } from "@main/lib/theme.js";
+import { getOsPrefersDark, getThemePreference } from "@main/lib/theme.js";
 import { log } from "@main/lib/logger.js";
 import { SettingRepo } from "@main/store/repositories.js";
 import { PICKER_INJECT_SCRIPT, PICKER_REMOVE_SCRIPT } from "./pickerScript.js";
@@ -130,6 +130,10 @@ interface LiveBrowser {
   /** True while THIS manager holds a CDP debugger session on the view (for the
    *  UA/client-hint override). Lets setDevice detach only its own session. */
   uaDebuggerAttached: boolean;
+  /** True while a CDP debugger session pins the page's prefers-color-scheme to
+   *  the OS preference (see pinColorScheme). Released before the mobile UA
+   *  override takes the (single) debugger slot. */
+  csDebuggerAttached: boolean;
 }
 
 /** Offscreen parking rect used while hidden (keeps the view alive but unseen). */
@@ -138,9 +142,8 @@ const HIDDEN_BOUNDS: Rectangle = { x: -9999, y: -9999, width: 1, height: 1 };
 /** Default on-screen bounds for an agent-created view that the renderer hasn't
  *  measured yet. Sized to a reasonable right-panel region of the main window so
  *  the page is visible AND capturable (capturePage on a 1x1 offscreen view
- *  returns an empty image). Leaves room for the 48px icon rail on the far
- *  right. The renderer's BrowserPanel will re-sync precise bounds once it
- *  mounts and measures its placeholder div. */
+ *  returns an empty image). The renderer's BrowserPanel will re-sync precise
+ *  bounds once it mounts and measures its placeholder div. */
 function defaultOnscreenBounds(): Rectangle {
   const win = getMainWindow();
   if (!win || win.isDestroyed()) {
@@ -148,18 +151,16 @@ function defaultOnscreenBounds(): Rectangle {
   }
   const [winW, winH] = win.getContentSize();
   // Right ~42% of the window, leaving room for the center pane. Min 480 wide.
-  // Subtract the 48px icon rail (RightPanel's far-right column) so the default
-  // rect doesn't cover the rail before BrowserPanel syncs precise bounds.
-  const railW = 48;
   const panelW = Math.max(480, Math.round(winW * 0.42));
-  return { x: Math.max(0, winW - panelW - railW), y: 0, width: panelW, height: winH };
+  return { x: Math.max(0, winW - panelW), y: 0, width: panelW, height: winH };
 }
 
-/** Background color matching the effective theme, so the view doesn't flash
- *  the wrong color before a page paints. Mirrors window.ts's bgColor(). */
-function bgColor(): string {
-  return getEffectiveTheme() === "dark" ? "#18181b" : "#ffffff";
-}
+/** Fixed background for every browser view. Intentionally theme-independent:
+ *  the page (and any blank/loading frame while it paints) keeps the same
+ *  backdrop whether the app is in dark or light mode, so the embedded browser
+ *  reads as an external window rather than a themed panel. White is Chromium's
+ *  default page canvas. */
+const BROWSER_BACKGROUND = "#ffffff";
 
 /** Persistent partition shared by ALL embedded browser views, so cookies /
  *  localStorage / login state is consistent across tabs (mirrors the old
@@ -328,7 +329,7 @@ class BrowserManagerImpl {
       return { ok: false, error: `创建浏览器视图失败: ${msg}` };
     }
 
-    view.setBackgroundColor(bgColor());
+    view.setBackgroundColor(BROWSER_BACKGROUND);
     // Start offscreen + invisible until the renderer sends real bounds + show().
     view.setBounds(HIDDEN_BOUNDS);
 
@@ -343,6 +344,7 @@ class BrowserManagerImpl {
       viewport: { device: "desktop", orientation: "portrait" },
       defaultUserAgent: view.webContents.getUserAgent(),
       uaDebuggerAttached: false,
+      csDebuggerAttached: false,
     };
     this.browsers.set(id, live);
     this.wcToBrowser.set(view.webContents.id, id);
@@ -373,7 +375,50 @@ class BrowserManagerImpl {
     });
 
     log.info(`browser created: ${id} project=${projectPath}`);
+    void this.pinColorScheme(live);
     return { ok: true, browserId: id };
+  }
+
+  /** Pin this view's `prefers-color-scheme` media query to the OS's real
+   *  preference (captured at startup, before the app's themeSource override),
+   *  so embedded pages render like they would in the OS browser instead of
+   *  following the app's dark/light setting. Uses the CDP debugger's
+   *  Emulation.setEmulatedMedia — Electron has no per-webContents themeSource,
+   *  and nativeTheme.themeSource is process-global. Silent no-op when the app
+   *  is in "system" theme mode (the OS already controls the media feature),
+   *  when the debugger is busy, or when the view is gone — degradation only
+   *  ever returns to the current behavior.
+   *
+   *  The mobile UA override needs the debugger too (two attach() calls on one
+   *  webContents throw), so applyDeviceUserAgent releases this session while a
+   *  mobile preset is active and this method re-attaches when emulation returns
+   *  to desktop. */
+  private async pinColorScheme(live: LiveBrowser): Promise<void> {
+    if (getThemePreference() === "system") return;
+    const wc = live.view.webContents;
+    if (wc.isDestroyed() || live.csDebuggerAttached) return;
+    try {
+      wc.debugger.attach("1.3");
+      live.csDebuggerAttached = true;
+    } catch {
+      // Debugger already taken (DevTools / mobile UA session) — leave the page
+      // unpinned rather than disturb the other user.
+      return;
+    }
+    try {
+      await wc.debugger.sendCommand("Emulation.setEmulatedMedia", {
+        features: [{ name: "prefers-color-scheme", value: getOsPrefersDark() ? "dark" : "light" }],
+      });
+    } catch {
+      // Page tearing down / session broken — release the slot so a later call
+      // (or the UA override) can retry.
+      try {
+        wc.debugger.detach();
+      } catch {
+        /* ignore */
+      }
+      live.csDebuggerAttached = false;
+    }
   }
 
   /** Install the global picker-result listener once. Routes by sender. */
@@ -739,9 +784,22 @@ class BrowserManagerImpl {
         live.uaDebuggerAttached = false;
       }
       if (live.defaultUserAgent) wc.setUserAgent(live.defaultUserAgent);
+      // Desktop has no UA needs — re-pin the page's color scheme, which the
+      // mobile path freed to make the debugger slot available.
+      void this.pinColorScheme(live);
       return;
     }
     const spec = MOBILE_USER_AGENTS[device] ?? ANDROID_UA_SPEC;
+    // Give up our color-scheme pin session so the UA override below can have
+    // the sole debugger slot (two attach() calls on one webContents throw).
+    if (live.csDebuggerAttached) {
+      try {
+        wc.debugger.detach();
+      } catch {
+        /* view tearing down - ignore */
+      }
+      live.csDebuggerAttached = false;
+    }
     if (!live.uaDebuggerAttached) {
       try {
         wc.debugger.attach("1.3");
@@ -796,6 +854,14 @@ class BrowserManagerImpl {
         /* webContents already gone - ignore */
       }
       live.uaDebuggerAttached = false;
+    }
+    if (live.csDebuggerAttached) {
+      try {
+        live.view.webContents.debugger.detach();
+      } catch {
+        /* webContents already gone - ignore */
+      }
+      live.csDebuggerAttached = false;
     }
     try {
       live.view.webContents.close();

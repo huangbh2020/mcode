@@ -712,9 +712,14 @@ const BlockView = memo(function BlockView({
 
     case "error":
       return (
-        <div className="flex items-start gap-1.5 rounded-md border border-danger bg-danger/30 px-3 py-2 text-danger [font-size:var(--chat-fs-sm)]">
+        <div className="flex max-h-64 items-start gap-1.5 overflow-y-auto rounded-md border border-danger bg-danger/30 px-3 py-2 text-danger [font-size:var(--chat-fs-sm)]">
           <IconAlertTriangle size={14} className="mt-0.5 shrink-0" />
-          <span>{block.message}</span>
+          {/* min-w-0 + flex-1 let the text shrink within the flex row so it
+              wraps at the card width; pre-wrap keeps the error's own line
+              breaks, break-words splits unbroken tokens (paths/stacks). */}
+          <span className="min-w-0 flex-1 whitespace-pre-wrap break-words">
+            {block.message}
+          </span>
         </div>
       );
 

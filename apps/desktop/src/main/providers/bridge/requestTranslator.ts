@@ -23,9 +23,18 @@
  *    `image_url` data-URL parts in the user message's `content` array — the
  *    vision input format for OpenAI-protocol endpoints. Without this, the
  *    model never sees user-attached images and replies "你还没有提供图片".
- * 6. **Dropped fields**: `thinking` (no OpenAI equivalent), `cache_control`
+ * 6. **Model id**: the Anthropic wire carries a trailing `[1m]` suffix on the
+ *    model id to declare 1M context (DeepSeek-style gateways parse it
+ *    themselves). The OpenAI chat-completions wire has NO such convention —
+ *    `model[1m]` reads as an unknown model id and gateways answer 401/404.
+ *    The suffix is stripped here so the upstream sees the bare id. Context
+ *    math is unaffected: the binary's 1M behavior is driven by
+ *    ANTHROPIC_MODEL (env), and the UI's window resolution keys off the
+ *    role's `supports1m` flag (highest-priority input), not the echo.
+ * 7. **Dropped fields**: `thinking` (no OpenAI equivalent), `cache_control`
  *    (OpenAI caches automatically). These are intentionally NOT forwarded.
  */
+import { strip1MSuffix } from "@main/providers/claude-sdk/customEnv.js";
 import type {
   AnthropicContentBlock,
   AnthropicMessage,
@@ -194,7 +203,8 @@ export function anthropicToOpenAI(req: AnthropicRequest): OpenAIRequest {
   }
 
   const out: OpenAIRequest = {
-    model: req.model,
+    // Strip the Anthropic-only `[1m]` context suffix — see header note 6.
+    model: strip1MSuffix(req.model),
     messages,
     max_tokens: req.max_tokens,
     stream: req.stream,

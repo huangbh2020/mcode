@@ -25,7 +25,7 @@ Claude 二进制 ──Anthropic /v1/messages──▶ 本地翻译层(127.0.0.1
 
 ## 2. 核心设计：对现有链路透明
 
-关键洞察：`customEnv.ts` 已把 tier→真实模型名映射好（`ANTHROPIC_MODEL` 等），翻译层收到的请求 `model` 字段就是用户配的真实模型名（如 `gpt-4o`）。所以**翻译层只做协议格式翻译，不做模型名翻译**，直接透传 `model`。
+关键洞察：`customEnv.ts` 已把 tier→真实模型名映射好（`ANTHROPIC_MODEL` 等），翻译层收到的请求 `model` 字段就是用户配的真实模型名（如 `gpt-4o`）。所以**翻译层只做协议格式翻译，不做模型名改写**，透传 `model` —— 唯一例外：剥离末尾的 `[1m]` 上下文后缀（这是 Anthropic wire 上 DeepSeek 式网关的私有约定，OpenAI 的 chat-completions 协议没有对应物，`model[1m]` 会被网关当成不存在的模型名而回 401/404）。
 
 在 `RuntimeManager.sendTurn` 解密 `apiConfig` 后，若 `cfg.protocol === "openai"`：
 1. 启动/复用本地翻译层 server（按 `customModelId` 复用，引用计数）
@@ -57,7 +57,7 @@ apps/desktop/src/main/providers/bridge/
 
 | Anthropic | OpenAI |
 |---|---|
-| `model` | `model`（直接透传，customEnv 已映射好） |
+| `model` | `model`（透传，但剥离 `[1m]` 后缀——OpenAI wire 无此约定，见 §2） |
 | `system`（string 或 TextBlock[]） | 首条 `{role:"system", content}` |
 | `messages[].content`（string 或 block 数组） | 统一展开为数组再映射 |
 | `text` block | content 拼接 |
@@ -108,15 +108,19 @@ OpenAI 不暴露 reasoning 签名，无法真实合成 Anthropic 的 `signature`
 3. 填 Base URL（如 `https://api.openai.com/v1`，无需带 `/chat/completions`，翻译层自动补全）
 4. 填 Token / API Key
 5. 角色绑定：建议点"一键填充主模型"，把同一个模型（如 `gpt-4o`）填到所有 5 个 tier（后台请求 Haiku/Subagent 也会用到）
-6. 测试连接（OpenAI 端点走直接 fetch `/v1/chat/completions`，不经过 Claude 二进制）
+6. 测试连接（两种协议都走完整真实链路，见 §6）
 7. 保存 → 在 composer 的模型下拉里选该配置
 
 ---
 
-## 6. 测试连接的两条路径
+## 6. 测试连接（单一真实链路）
 
-- **Anthropic 端点**：复用 live-turn 的完整链路（`buildCustomEnv` + `settingSources` + claude 二进制 query），"测得过就能用"
-- **OpenAI 端点**：直接 `fetch POST /v1/chat/completions`（`max_tokens:1`），验证连通性 + 鉴权 + 模型存在。翻译层本身的正确性由其单元测试保证，probe 只验证端点
+**两种协议统一走 live-turn 的完整链路**（`buildCustomEnv` + `settingSources` + claude 二进制发一条 "hi"），"测得过就能用"：
+
+- **Anthropic 端点**：SDK query 直连用户配置的 baseUrl
+- **OpenAI 端点**：SDK query 指向一个**临时 bridge 实例**（`BridgeRegistry.acquire` 用合成 id `probe:<uuid>` 拉起，探测完 release 关闭）——与 `RuntimeManager.sendTurn` 对 live turn 的改写完全一致，测试同时验证了协议翻译、鉴权、模型路由
+
+> 历史：OpenAI 端点曾用"绕过二进制直接 fetch `/v1/chat/completions`"的捷径。它不走桥，把 `resolveActiveModel` 拼出的 `model[1m]` 后缀名原样发到 OpenAI wire 上，网关把带后缀的模型名当成不存在/无权限而回 401——明明 Token 正确却报"认证失败"，且测试结果与 live 行为脱钩。已废弃。
 
 ---
 

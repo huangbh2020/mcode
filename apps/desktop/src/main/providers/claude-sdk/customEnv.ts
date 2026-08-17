@@ -115,6 +115,19 @@ export function with1MSuffix(model: string): string {
   return /\[1m\]$/i.test(model) ? `${model.replace(/\[1m\]$/i, "")}[1m]` : `${model}[1m]`;
 }
 
+/** Strip the trailing `[1m]` context suffix (any casing, repeated occurrences
+ *  collapsed) — the inverse of {@link with1MSuffix}. Used where the BARE model
+ *  id is required:
+ *   - the OpenAI-protocol bridge: the suffix is an Anthropic-wire convention
+ *     that DeepSeek-style gateways parse themselves; OpenAI's chat-completions
+ *     wire has no equivalent, so `model[1m]` reads as an unknown model id and
+ *     gateways answer 401/404 even though the token is perfectly valid.
+ *   - the subagent fallback below (sub-agent calls are short-context by
+ *     nature, so the suffix must never reach CLAUDE_CODE_SUBAGENT_MODEL). */
+export function strip1MSuffix(model: string): string {
+  return model.replace(/(\[1m\])+$/i, "");
+}
+
 /**
  * Resolve the model id for the active role, with the `[1m]` suffix appended
  * when that role declares `supports1m`. This is the same string placed on
@@ -189,8 +202,8 @@ export function buildCustomEnv(cfg: ApiConfig): NonNullable<Options["env"]> {
   // model, never carrying the `[1m]` suffix — sub-agent calls are short-
   // context). A binding, if present, always wins over this fallback.
   if (!env.CLAUDE_CODE_SUBAGENT_MODEL) {
-    const fallback = resolveActiveModel(cfg)?.replace(/\[1m\]$/i, "");
-    if (fallback) env.CLAUDE_CODE_SUBAGENT_MODEL = fallback;
+    const fallback = resolveActiveModel(cfg);
+    if (fallback) env.CLAUDE_CODE_SUBAGENT_MODEL = strip1MSuffix(fallback);
   }
 
   // Legacy haiku alias: older Claude Code builds read ANTHROPIC_SMALL_FAST_MODEL

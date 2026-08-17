@@ -24,6 +24,19 @@ import { log } from "@main/lib/logger.js";
 
 let initialized = false;
 
+/** The OS's natural dark-mode preference, captured at startup BEFORE the app
+ *  overwrites nativeTheme.themeSource. The embedded browser pins its pages'
+ *  prefers-color-scheme to this value so sites render like they do in the OS
+ *  browser regardless of the app's dark/light setting (see
+ *  BrowserManager.pinColorScheme). */
+let osPrefersDark = false;
+
+/** The OS dark-mode preference captured at startup (see above). Irrelevant in
+ *  "system" theme mode, where the OS already drives everything. */
+export function getOsPrefersDark(): boolean {
+  return osPrefersDark;
+}
+
 function isDark(): boolean {
   return nativeTheme.shouldUseDarkColors;
 }
@@ -83,6 +96,10 @@ export async function initTheme(): Promise<void> {
 
   await awaitDb();
   const pref = getThemePreference();
+  // Capture the OS preference while themeSource is still the default "system"
+  // (this function is the first to override it) — the embedded browser needs
+  // it to keep web pages OS-faithful instead of app-themed.
+  osPrefersDark = nativeTheme.shouldUseDarkColors;
   nativeTheme.themeSource = pref;
   log.info(`theme initialized: ${pref} (effective ${effective()})`);
 

@@ -1036,8 +1036,10 @@ export function BrowserPanel({ mode }: BrowserPanelProps) {
           WebContentsView. The view floats above it at OS level, so this div
           stays visually empty - its only job is to occupy the right rect. The
           spacer just fills the stage for every device (the "pc" preset no longer
-          pans via stage scroll — the page scrolls inside the native window). */}
-      <div ref={stageRef} className="relative min-h-0 flex-1 overflow-auto bg-surface">
+          pans via stage scroll — the page scrolls inside the native window).
+          The background is fixed white (matching BrowserManager's view
+          background) so the browser's page area never follows the app theme. */}
+      <div ref={stageRef} className="relative min-h-0 flex-1 overflow-auto bg-white">
         <div className="h-full w-full" />
         {error && (
           <div className="absolute inset-0 flex items-center justify-center">

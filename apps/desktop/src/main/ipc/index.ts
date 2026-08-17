@@ -15,6 +15,7 @@ import { registerAppHandlers } from "./app.js";
 import { registerShellHandlers } from "./shell.js";
 import { registerUpdaterHandlers } from "./updater.js";
 import { registerSkillsHandlers } from "./skills.js";
+import { registerMcpHandlers } from "./mcp.js";
 import { registerLspHandlers } from "./lsp.js";
 import { registerBrowserHandlers } from "./browser.js";
 import { registerNotificationHandlers } from "./notifications.js";
@@ -61,6 +62,7 @@ export function registerIpcHandlers(): void {
   registerShellHandlers(ipc);
   registerUpdaterHandlers(ipc);
   registerSkillsHandlers(ipc);
+  registerMcpHandlers(ipc);
   registerLspHandlers(ipc);
   registerBrowserHandlers(ipc);
   registerNotificationHandlers(ipc);

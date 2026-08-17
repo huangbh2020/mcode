@@ -31,6 +31,8 @@ import {
 } from "@main/lib/fileSnapshot.js";
 import { resolveSdkBinaryPath } from "./sdkBinaryPath.js";
 import { resolveGitBash } from "@main/lib/binaryResolve.js";
+import { samePath } from "@main/lib/pathGuard.js";
+import { getMcpManagement, readProjectMcpServers } from "@main/lib/mcpConfig.js";
 import { normalizeBashCommand } from "@main/lib/msysPath.js";
 import {
   browserList,
@@ -828,8 +830,35 @@ export class ClaudeAgentSdkProvider implements AgentProvider {
     // directly (unlike Pi's pi.registerTool), so an in-process MCP server is the
     // supported mechanism for same-process tool handlers. See sdk.d.ts
     // `createSdkMcpServer`.
-    const browserServer = await buildBrowserMcpServer(req.cwd, ctx, req.sessionId, req.turnNumber);
-    options.mcpServers = { [BROWSER_MCP_SERVER]: browserServer };
+    //
+    // The settings panel's MCP section gates this injection: when the built-in
+    // server is disabled there, the turn runs without it. User-scope servers
+    // (~/.mcode/.claude.json mcpServers) need no injection here — the binary
+    // loads them via the "user" setting source; disabled ones are simply
+    // absent from the file. Project .mcp.json servers are governed per-turn by
+    // the explicit approval lists below, which replace the CLI's first-use
+    // approval dialog (our onUserDialog bridge cancels unknown kinds, so an
+    // unlisted server would never load anyway).
+    const mcpState = await getMcpManagement();
+    if (!mcpState.browserDisabled) {
+      const browserServer = await buildBrowserMcpServer(req.cwd, ctx, req.sessionId, req.turnNumber);
+      options.mcpServers = { [BROWSER_MCP_SERVER]: browserServer };
+    }
+    const projectMcpNames = Object.keys(await readProjectMcpServers(req.cwd));
+    if (projectMcpNames.length > 0) {
+      const enabledSet = new Set(
+        (mcpState.projectEnabled ?? [])
+          .filter((e) => samePath(e.projectPath, req.cwd))
+          .map((e) => e.name),
+      );
+      // These approval lists live on the Settings interface (options.settings),
+      // not on Options itself.
+      options.settings = {
+        ...(typeof options.settings === "object" ? options.settings : {}),
+        enabledMcpjsonServers: projectMcpNames.filter((n) => enabledSet.has(n)),
+        disabledMcpjsonServers: projectMcpNames.filter((n) => !enabledSet.has(n)),
+      };
+    }
 
     const q = (await loadQuery())({ prompt: buildPromptInput(req), options });
 

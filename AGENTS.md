@@ -217,6 +217,13 @@ pnpm build
 - **Claude 侧**(`ClaudeAgentSdkProvider.ts` 的 `buildBrowserMcpServer`):用 SDK 的 `createSdkMcpServer({name:"mcode-browser", tools:[...]})` 挂**进程内 MCP server**(无子进程),放进 `options.mcpServers`。inputSchema 用 zod。Claude 不能 `registerTool`(SDK 不支持),in-process MCP server 是唯一路径。工具名呈现为 `mcp__mcode-browser__<name>`,`shouldAutoApprove` 里 `isReadOnlyBrowserTool()` 放行只读后缀。screenshot 的 image 通过 tool_result content 透传(SDK 原生支持 image block),store 从 `ToolResultEvent.content` 解析(Claude path)。
 - **图片渲染**(双路径汇聚到同一 store reducer):`RuntimeEvent` 新增 `browser.image`(Pi emit);`Block` union 新增 `kind:"image"`(base64 + mimeType)。`sessionStore` 的 `tool.result` reducer 检测 content 含 image block 时追加 image block(Claude path),`browser.image` reducer 按 toolCallId 追加(Pi path),两者按 toolCallId 去重。`MessageBlocks.tsx` 的 `BlockView` 新增 `case "image"` 渲染 `<img>`;`GenericToolCard` 的 result 预览(`resultPreview`)剥离 image block 避免把 base64 当文本 dump。图片随消息持久化(toRecords 透传 blocks 数组,不区分 kind)。
 
+### MCP 服务器管理(设置页)
+- **三类来源**(`contracts/ipc.ts` "MCP management" 段 + `main/lib/mcpConfig.ts`):① 用户级 = `~/.mcode/.claude.json` 的 `mcpServers`(CLI 原生 user 级位置,`CLAUDE_CONFIG_DIR` 已重定向,settingSources 默认含 user → **binary 自动加载,provider 零注入**;文件即开关);② 项目级 = 项目根 `.mcp.json`(**只读**,永不写项目文件);③ 内置 = 进程内 `mcode-browser` server。
+- **开关状态**存 settings 表单 key `mcp.management`(`MCP_MANAGEMENT_SETTING_KEY`,JSON):`userDisabled`(关闭的用户级 server 全量配置暂存,关闭=配置移出文件、开启=移回——SDK options 没有"禁用 user 级 server"的声明式入口,移出文件是唯一可靠手段)、`projectEnabled`(项目 .mcp.json server 的**允许名单**——项目级默认关闭,面板开关替代 CLI 首次审批弹窗,因 `onUserDialog` 对未知 kind 返回 cancelled)、`browserDisabled`。**不向 .claude.json 写自定义 key**(CLI 频繁整体回写该文件,自定义 key 会被冲掉);写文件一律 read-modify-write 保留其它 key + 原子写,不认识的配置条目原样保留(只是不可管理)。
+- **provider 注入**(`ClaudeAgentSdkProvider.startTurn` MCP 段):读 `getMcpManagement()`,`browserDisabled` 时不构建 browserServer;cwd 有 `.mcp.json` 时按允许名单算出 `enabledMcpjsonServers`/`disabledMcpjsonServers` **合并进 `options.settings`**(这两个字段在 SDK 的 `Settings` 接口上,不在顶层 `Options`!)。改动下一轮生效(每轮重建 options)。
+- **IPC**:`mcp.*` namespace(list/toggle/save/remove/scanImport/import),handler 在 `main/ipc/mcp.ts`(skills.ts 模板:zod parse + findKnownProject 校验 + `{ok,error}` 返回)。`scanImport` 只读扫 `~/.claude.json`(全局 + 各 project 条目,带 origin 标签)——Mcode 因配置重定向**看不到**用户真实 CLI 的 MCP,导入是唯一复用方式。
+- **UI**:`McpPanel.tsx`(SkillsPanel/BrowserPanel 模板):用户级(开关+删除+新增表单 dialog:stdio/http/sse 三类型)+ 项目级(managedProjectId Select 切换、只开关)+ 内置(单开关)。`VscMcp` 图标经 `icons.tsx` 的 `McpIcon` 适配层包装(react-icons 的 `stroke` 类型与 TablerIconProps 不兼容,不能直接进 `ComponentType<TablerIconProps>` 槽位)。仅 Claude 会话生效(Pi 走 extension,`supportsMcp:false`),面板 desc 有注明。
+
 ---
 
 ## 关键提醒

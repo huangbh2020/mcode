@@ -287,6 +287,16 @@ export { SiGoogle } from "react-icons/si";
 
 // VS Code icons
 export { VscMcp } from "react-icons/vsc";
+import { VscMcp as VscMcpGlyph } from "react-icons/vsc";
+import type { IconProps } from "@tabler/icons-react";
+
+/** VscMcp adapted to the TablerIconProps shape — react-icons' IconType takes
+ *  IconBaseProps, whose `stroke` is string-only and clashes with Tabler's
+ *  `stroke?: string | number`, so VscMcp itself can't sit in a
+ *  ComponentType<TablerIconProps> slot (settings nav, PanelHeader icon). */
+export function McpIcon({ size = 24, className }: IconProps) {
+  return <VscMcpGlyph size={size} className={className} />;
+}
 
 /* ───────── Custom brand marks (not in any icon library) ───────── */
 
