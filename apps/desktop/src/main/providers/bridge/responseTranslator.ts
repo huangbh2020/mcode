@@ -40,6 +40,7 @@ import type {
   AnthropicUsage,
   OpenAIChunk,
 } from "./types.js";
+import { ThinkTagSplitter, type ThinkSegment } from "./thinkTagSplitter.js";
 
 /** Sentinel for "no block currently open" (avoids number|undefined juggling). */
 const NO_BLOCK = -1;
@@ -57,7 +58,9 @@ export class OpenAiToAnthropicSse {
   /** The Anthropic block index currently open, or NO_BLOCK if none. */
   private openBlockIndex = NO_BLOCK;
   /** The type of the currently-open block, or undefined if none. */
-  private openBlockKind: "text" | "tool_use" | undefined;
+  private openBlockKind: "text" | "tool_use" | "thinking" | undefined;
+  /** Splits `<think>`-tagged reasoning out of the text stream. */
+  private thinkSplitter = new ThinkTagSplitter();
   /** Next Anthropic block index to assign. */
   private nextIndex = 0;
   /** Map: OpenAI tool_call.index → Anthropic block index (for that tool_use). */
@@ -107,6 +110,46 @@ export class OpenAiToAnthropicSse {
     return index;
   }
 
+  /** Open a new thinking block (closing the previous open block first).
+   *  The signature is faked as empty: OpenAI-compatible upstreams expose no
+   *  reasoning signature. That's safe here because the request translator
+   *  strips thinking blocks from history, so the empty signature never
+   *  round-trips to anything that would validate it. */
+  private openThinkingBlock(events: AnthropicSseEvent[]): number {
+    this.closeOpenBlock(events);
+    const index = this.nextIndex++;
+    this.openBlockIndex = index;
+    this.openBlockKind = "thinking";
+    events.push({
+      type: "content_block_start",
+      index,
+      content_block: { type: "thinking", thinking: "", signature: "" },
+    });
+    return index;
+  }
+
+  /** Emit one text/thinking segment, reusing the open block when its kind
+   *  matches and switching blocks (close + open) when it doesn't. */
+  private emitTextLike(events: AnthropicSseEvent[], seg: ThinkSegment): void {
+    if (seg.kind === "text") {
+      const index =
+        this.openBlockKind === "text" ? this.openBlockIndex : this.openTextBlock(events);
+      events.push({
+        type: "content_block_delta",
+        index,
+        delta: { type: "text_delta", text: seg.text },
+      });
+    } else {
+      const index =
+        this.openBlockKind === "thinking" ? this.openBlockIndex : this.openThinkingBlock(events);
+      events.push({
+        type: "content_block_delta",
+        index,
+        delta: { type: "thinking_delta", thinking: seg.text },
+      });
+    }
+  }
+
   /** Process one OpenAI SSE chunk → zero or more Anthropic events. */
   feed(chunk: OpenAIChunk): AnthropicSseEvent[] {
     const events: AnthropicSseEvent[] = [];
@@ -146,17 +189,24 @@ export class OpenAiToAnthropicSse {
     const delta = choice?.delta;
 
     if (delta) {
-      // Text content. Lazily open a text block on the first fragment, then
-      // emit a text_delta. Subsequent fragments reuse the open block.
+      // Reasoning content (DeepSeek/o1-style dedicated field). Checked before
+      // text: these models stream reasoning first, so block order matches the
+      // model's actual output order when a chunk carries both.
+      const reasoning = delta.reasoning ?? delta.reasoning_content;
+      if (typeof reasoning === "string" && reasoning.length > 0) {
+        this.emitTextLike(events, { kind: "thinking", text: reasoning });
+      }
+
+      // Text content. Routed through the think-tag splitter so
+      // `<think>`-wrapped reasoning emitted inline (many OpenAI-compatible
+      // reasoning models do this) becomes a thinking block instead of raw
+      // tags in the chat. Plain streams pass through unchanged — the
+      // splitter only holds back bytes that could still grow into a tag.
       const text = delta.content;
       if (typeof text === "string" && text.length > 0) {
-        const index =
-          this.openBlockKind === "text" ? this.openBlockIndex : this.openTextBlock(events);
-        events.push({
-          type: "content_block_delta",
-          index,
-          delta: { type: "text_delta", text },
-        });
+        for (const seg of this.thinkSplitter.push(text)) {
+          this.emitTextLike(events, seg);
+        }
       }
 
       // Tool-call fragments. Each distinct OpenAI tool_call index maps to one
@@ -188,16 +238,6 @@ export class OpenAiToAnthropicSse {
         }
       }
 
-      // Reasoning content (DeepSeek/o1-style) — forward as a thinking block.
-      // The signature is faked as empty: OpenAI exposes no reasoning
-      // signature, so we can't honor multi-turn thinking continuity, but a
-      // single-turn thinking block still renders correctly in the UI.
-      const reasoning = delta.reasoning ?? delta.reasoning_content;
-      if (typeof reasoning === "string" && reasoning.length > 0) {
-        // Thinking is intentionally NOT implemented in the POC (see plan stage
-        // 2): we drop it to avoid emitting blocks the binary can't validate.
-        // This branch is a placeholder kept for stage 2.
-      }
     }
 
     return events;
@@ -224,6 +264,12 @@ export class OpenAiToAnthropicSse {
       });
       this.started = true;
     }
+    // Flush any bytes the splitter is still holding (stream ended exactly on
+    // a partial tag like `<th`) BEFORE closing the open block, so a flushed
+    // segment's block still gets its content_block_stop.
+    for (const seg of this.thinkSplitter.flush()) {
+      this.emitTextLike(events, seg);
+    }
     this.closeOpenBlock(events);
     events.push({
       type: "message_delta",
@@ -242,6 +288,7 @@ export class OpenAiToAnthropicSse {
     this.started = false;
     this.openBlockIndex = NO_BLOCK;
     this.openBlockKind = undefined;
+    this.thinkSplitter = new ThinkTagSplitter();
     this.nextIndex = 0;
     this.toolIndexMap.clear();
     this.usage = {

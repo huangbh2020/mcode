@@ -245,6 +245,23 @@ export class PiAgentSdkProvider implements AgentProvider {
       ...(resolvedModel ? { model: resolvedModel } : {}),
     });
 
+    // User-attached images vs. the model's declared input capabilities.
+    // models.json custom models default to text-only input (`input ?? ["text"]`
+    // in the SDK's provider-composer), and pi-ai's transformMessages then swaps
+    // every user image for the "(image omitted: model does not support images)"
+    // placeholder BEFORE the request leaves the process — the model answers
+    // "没有附带图片" and the user can't tell why. The user attaching an image IS
+    // the capability declaration for this turn: patch the per-turn model object
+    // (freshly composed each turn by ModelRuntime.create, never frozen) so the
+    // images reach the wire. An endpoint without vision then returns a real API
+    // error the user can act on, instead of a silently degraded text-only turn.
+    if (req.images && req.images.length > 0 && session.model && !(session.model.input ?? []).includes("image")) {
+      session.model.input = [...(session.model.input ?? []), "image"];
+      ctx.log.info(
+        `pi: model "${session.model.id}" declared text-only input; patched to include "image" for this turn (user attached ${req.images.length} image(s))`,
+      );
+    }
+
     // Rewrite a leading `/name` (composer pill serialization) to Pi's
     // `/skill:name` trigger for names the loader actually resolved, so Pi's
     // `_expandSkillCommand` (which only recognizes the `/skill:` prefix)

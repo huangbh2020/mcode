@@ -266,6 +266,17 @@ async function handleMessages(
   }
 
   const openaiReq: OpenAIRequest = anthropicToOpenAI(body);
+  // Observability for image turns: count the image_url parts we forward so a
+  // gateway that silently drops them (non-vision model behind an OpenAI-
+  // protocol endpoint) is diagnosable from main.log — the app-side chain is
+  // proven complete when this line shows a non-zero count.
+  const imageParts = openaiReq.messages.reduce(
+    (n, m) => n + (Array.isArray(m.content) ? m.content.filter((p) => p.type === "image_url").length : 0),
+    0,
+  );
+  if (imageParts > 0) {
+    log.info(`bridge: forwarding ${imageParts} image part(s) to upstream (${buildUpstreamUrl(upstream.baseUrl)})`);
+  }
   // Always stream upstream and re-frame on our side — even non-streaming
   // Anthropic requests can be served from a streaming OpenAI response (we'd
   // just collect the deltas). For the POC we forward stream as-is.

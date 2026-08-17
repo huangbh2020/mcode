@@ -249,6 +249,11 @@ interface PiModelFormState {
   enable1m: boolean;
   maxTokens: string;
   reasoning: boolean;
+  /** Whether the model accepts image input. Written to models.json as
+   *  `input: ["text","image"]` / `["text"]` — the SDK defaults undeclared
+   *  models to TEXT-ONLY, which makes pi-ai swap user-attached images for an
+   *  "(image omitted)" placeholder before the request leaves the process. */
+  vision: boolean;
   thinking: Record<PiThinkingKey, "default" | "null" | "value">;
   thinkingValue: Record<PiThinkingKey, string>;
 }
@@ -269,6 +274,7 @@ function emptyPiModel(): PiModelFormState {
     enable1m: false,
     maxTokens: "",
     reasoning: false,
+    vision: true,
     thinking: {
       off: "default",
       minimal: "default",
@@ -292,6 +298,10 @@ function piModelFromDef(def: PiModelDefinition): PiModelFormState {
   m.enable1m = typeof def.contextWindow === "number" && def.contextWindow >= PI_1M_CONTEXT_WINDOW;
   m.maxTokens = def.maxTokens ? String(def.maxTokens) : "";
   m.reasoning = def.reasoning ?? false;
+  // Declared input wins; absent = the SDK's text-only default, but the form
+  // still shows vision ON because the provider patches it in at turn time
+  // whenever the user actually attaches an image (see PiAgentSdkProvider).
+  m.vision = def.input ? def.input.includes("image") : true;
   const tlm = def.thinkingLevelMap ?? {};
   for (const k of PI_THINKING_KEYS) {
     const v = tlm[k];
@@ -329,6 +339,10 @@ function piConfigFromForm(form: PiFormState): PiProviderConfig {
       const mt = Number(m.maxTokens);
       if (m.maxTokens.trim() && Number.isFinite(mt) && mt > 0) def.maxTokens = mt;
       if (m.reasoning) def.reasoning = true;
+      // Always write `input` explicitly — the SDK's implicit default for
+      // models.json models is text-only, which silently strips user-attached
+      // images (replaced by an "(image omitted)" placeholder in the request).
+      def.input = m.vision ? ["text", "image"] : ["text"];
       const tlm: NonNullable<PiModelDefinition["thinkingLevelMap"]> = {};
       let hasMap = false;
       for (const k of PI_THINKING_KEYS) {
@@ -1230,6 +1244,10 @@ function PiProviderForm({
                     <label className="flex items-center gap-1.5">
                       <Switch checked={m.reasoning} onCheckedChange={(v) => updateModel(idx, { reasoning: v })} label="支持推理" />
                       <span className="text-[0.7143em] text-content-muted">推理</span>
+                    </label>
+                    <label className="flex items-center gap-1.5" title="允许在消息中附加图片(关闭后图片不会发送给模型)">
+                      <Switch checked={m.vision} onCheckedChange={(v) => updateModel(idx, { vision: v })} label="支持图片输入" />
+                      <span className="text-[0.7143em] text-content-muted">图片</span>
                     </label>
                     <Field label="显示名(可选)">
                       <Input value={m.name} onChange={(e) => updateModel(idx, { name: e.target.value })} placeholder="如 DeepSeek V4 Pro" />
