@@ -1,6 +1,8 @@
+import { useState } from "react";
 import { Popover } from "@base-ui/react/popover";
 import { cn } from "@renderer/lib/cn.js";
 import { IconAdjustmentsHorizontal } from "@renderer/lib/icons.js";
+import { useSuppressBrowserView } from "@renderer/hooks/useSuppressBrowserView.js";
 import { ComposerToolbar } from "./ComposerToolbar.js";
 
 /**
@@ -23,9 +25,14 @@ import { ComposerToolbar } from "./ComposerToolbar.js";
  * `Menu.Portal` and ContextRing uses a hover tooltip, so neither is affected.
  */
 export function ComposerToolbarToggle({ sessionId }: { sessionId: string }) {
+  // The popup hosts the full chip row and is wider than a narrow/wide-mode
+  // chat column, so it can extend over the browser's rect — suppress the
+  // browser view while open to keep it visible/clickable.
+  const [open, setOpen] = useState(false);
+  useSuppressBrowserView(open);
   return (
     <span className="composer-chips-toggle shrink-0">
-      <Popover.Root>
+      <Popover.Root open={open} onOpenChange={setOpen}>
         <Popover.Trigger
           render={
             <button

@@ -1,8 +1,10 @@
+import { useState } from "react";
 import { Menu } from "@base-ui/react/menu";
 import { cn } from "@renderer/lib/cn.js";
 import { IconCheck, IconChevronDown, IconLock } from "@renderer/lib/icons.js";
 import { getProviderIcon } from "@renderer/lib/providerIcon.js";
 import { useSessionStore } from "@renderer/stores/sessionStore.js";
+import { useSuppressBrowserView } from "@renderer/hooks/useSuppressBrowserView.js";
 
 /**
  * Provider (AI backend) picker for the composer toolbar.
@@ -19,6 +21,10 @@ import { useSessionStore } from "@renderer/stores/sessionStore.js";
  * provider's capabilities automatically.
  */
 export function ProviderDropdown() {
+  // While the menu is open the embedded browser view is suppressed so the
+  // portaled popup stays visible/clickable when it extends over the browser.
+  const [open, setOpen] = useState(false);
+  useSuppressBrowserView(open);
   const providerId = useSessionStore((s) => s.providerId);
   const providers = useSessionStore((s) => s.providers);
   const setProvider = useSessionStore((s) => s.setProvider);
@@ -72,7 +78,7 @@ export function ProviderDropdown() {
 
   // Unlocked (new thread): clicking the chip opens the provider menu.
   return (
-    <Menu.Root>
+    <Menu.Root open={open} onOpenChange={setOpen}>
       <Menu.Trigger render={chip} />
       <Menu.Portal>
         <Menu.Positioner side="top" align="start">

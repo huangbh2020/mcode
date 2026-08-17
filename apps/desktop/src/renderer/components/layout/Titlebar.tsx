@@ -76,7 +76,18 @@ export function Titlebar({
   // below uses setBrowserPanelOpen to exit the overlay.
   const browserPanelOpen = useSessionStore((s) => s.browserPanelOpen);
   const setBrowserPanelOpen = useSessionStore((s) => s.setBrowserPanelOpen);
-  const isBrowserMode = !!browserPanelOpen && !isSettings;
+  // Wide-panel (2:8) mode hides the left sidebar + center editor and shows the
+  // chat column + full right panel. It gets the same titlebar treatment as the
+  // browser overlay: the left strip swaps to a back button and the right-panel
+  // / terminal / editor toggles are hidden.
+  const widePanelOpen = useSessionStore((s) => s.widePanelOpen);
+  const setWidePanelOpen = useSessionStore((s) => s.setWidePanelOpen);
+  const isBrowserMode = (!!browserPanelOpen || widePanelOpen) && !isSettings;
+  // The fullscreen browser overlay covers the whole workspace, so its side-panel
+  // / terminal toggles hide while it's open. Wide-panel mode keeps them: the
+  // terminal bar still renders below the split and the right-panel toggle
+  // shows/hides the wide mode's right column.
+  const isBrowserOverlay = !!browserPanelOpen && !isSettings;
 
   // The left strip tracks the sidebar's draggable width so the toggle button
   // and the settings back button stay aligned with the panel edge below.
@@ -141,16 +152,21 @@ export function Titlebar({
           // affordances read consistently. The tooltip appends the effective
           // toggle-browser shortcut (the same command this button triggers).
           <button
-            onClick={() => setBrowserPanelOpen(false)}
+            onClick={() =>
+              widePanelOpen ? setWidePanelOpen(false) : setBrowserPanelOpen(false)
+            }
             className={cn(
               "flex items-center gap-1.5 rounded px-1.5 py-1 text-xs font-medium",
               "text-content-muted transition-colors hover:bg-surface-hover hover:text-content",
             )}
             style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
-            title={"返回工作台" + hintFor("layout.toggle-browser")}
+            title={
+              (widePanelOpen ? "退出宽屏模式" : "返回工作台") +
+              hintFor(widePanelOpen ? "layout.toggle-wide-panel" : "layout.toggle-browser")
+            }
           >
             <IconArrowLeft size={16} className="shrink-0" />
-            返回工作台
+            {widePanelOpen ? "退出宽屏模式" : "返回工作台"}
           </button>
         ) : (
           <button
@@ -192,13 +208,13 @@ export function Titlebar({
             <ToolbarBranchIndicator />
             {/* Editor column toggle - shows/hides the center-pane editor column
                 without closing the open file. Sits right of the branch pill. */}
-            <EditorColumnToggle />
+            {!isBrowserMode && <EditorColumnToggle />}
             <div className="flex-1" />
             {/* Bottom terminal toggle — sits just left of the right-panel
                 toggle. Active state highlighted with the accent token. */}
             {/* Bottom terminal toggle - hidden while the browser overlay is
-                open, same as the side-panel toggles. */}
-            {!isBrowserMode && (
+                open, same as the side-panel toggles (kept during wide mode). */}
+            {!isBrowserOverlay && (
               <button
                 onClick={onToggleBottomTerminal}
                 className={cn(
@@ -215,8 +231,9 @@ export function Titlebar({
             )}
             {/* Right-panel toggle - hidden while the browser overlay is open
                 (the browser forces the right panel closed and manages its own
-                restore on exit). */}
-            {!isBrowserMode && (
+                restore on exit). During wide mode it stays: it hides/shows the
+                wide mode's right column (chat goes full width when hidden). */}
+            {!isBrowserOverlay && (
               <button
                 onClick={onToggleRight}
                 className={cn(

@@ -34,6 +34,7 @@ import { fmtTokens, getContextBreakdown, warningColor } from "@renderer/lib/cont
 import type { ContextSnapshot, TurnUsageRecord } from "@contracts/runtime";
 import { ContextTooltipBody } from "./ContextRing.js";
 import { IconCalendarStats, IconChartBar, IconClock } from "@renderer/lib/icons.js";
+import { useSuppressBrowserView } from "@renderer/hooks/useSuppressBrowserView.js";
 
 type View = "current" | "history";
 
@@ -60,6 +61,11 @@ export function ContextStatsPopover({
    *  avoiding a redundant first screen. Defaults to "current". */
   initialView?: View;
 }) {
+  // This popover is only mounted while open (parent gates `open && anchorRect`),
+  // so a constant-true suppression suppresses the browser view for its whole
+  // lifetime — the portaled panel can otherwise be covered by the OS-level view
+  // in narrow/wide layouts.
+  useSuppressBrowserView(true);
   const [view, setView] = useState<View>(initialView);
   const breakdown = getContextBreakdown(snapshot);
   const panelRef = useRef<HTMLDivElement>(null);

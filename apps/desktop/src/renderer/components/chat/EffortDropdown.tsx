@@ -1,7 +1,9 @@
+import { useState } from "react";
 import { Menu } from "@base-ui/react/menu";
 import { cn } from "@renderer/lib/cn.js";
 import { IconCheck, IconBolt, IconChevronDown } from "@renderer/lib/icons.js";
 import { useSessionStore } from "@renderer/stores/sessionStore.js";
+import { useSuppressBrowserView } from "@renderer/hooks/useSuppressBrowserView.js";
 
 /**
  * Reasoning-effort / thinking-level picker for the composer toolbar.
@@ -24,6 +26,11 @@ function labelFor(levels: { value: string; label: string }[] | undefined, value:
 }
 
 export function EffortDropdown() {
+  // While the menu is open the embedded browser view is suppressed so the
+  // portaled popup (which can extend over the browser's rect in narrow/wide
+  // layouts) stays visible and clickable. See useSuppressBrowserView.
+  const [open, setOpen] = useState(false);
+  useSuppressBrowserView(open);
   const effort = useSessionStore((s) => s.effort);
   const setEffort = useSessionStore((s) => s.setEffort);
   const providerId = useSessionStore((s) => s.providerId);
@@ -40,7 +47,7 @@ export function EffortDropdown() {
   if (!levels || levels.length === 0) return null;
 
   return (
-    <Menu.Root>
+    <Menu.Root open={open} onOpenChange={setOpen}>
       <Menu.Trigger
         className={cn(
           "composer-chip flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-medium transition-all duration-150 ease-out",

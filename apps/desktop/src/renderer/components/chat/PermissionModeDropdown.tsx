@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { Menu } from "@base-ui/react/menu";
 import { cn } from "@renderer/lib/cn.js";
 import {
@@ -9,6 +10,7 @@ import {
   IconChevronDown,
 } from "@renderer/lib/icons.js";
 import { useSessionStore } from "@renderer/stores/sessionStore.js";
+import { useSuppressBrowserView } from "@renderer/hooks/useSuppressBrowserView.js";
 import type { PermissionModeOption } from "@contracts/provider";
 
 /**
@@ -48,6 +50,10 @@ const FALLBACK_LABEL: Record<string, string> = {
 };
 
 export function PermissionModeDropdown() {
+  // While the menu is open the embedded browser view is suppressed so the
+  // portaled popup stays visible/clickable when it extends over the browser.
+  const [open, setOpen] = useState(false);
+  useSuppressBrowserView(open);
   const permissionMode = useSessionStore((s) => s.permissionMode);
   const setPermissionMode = useSessionStore((s) => s.setPermissionMode);
   const providerId = useSessionStore((s) => s.providerId);
@@ -67,7 +73,7 @@ export function PermissionModeDropdown() {
   const modeColor = activeMeta?.color ?? "";
 
   return (
-    <Menu.Root>
+    <Menu.Root open={open} onOpenChange={setOpen}>
       <Menu.Trigger
         className={cn(
           "composer-chip flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-medium transition-all duration-150 ease-out",

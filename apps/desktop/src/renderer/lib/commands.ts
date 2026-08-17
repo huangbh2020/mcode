@@ -43,6 +43,7 @@ import {
   IconKeyboard,
   IconX,
   IconArrowsExchange,
+  IconArrowsMaximize,
   IconFocus,
 } from "@renderer/lib/icons.js";
 
@@ -229,6 +230,9 @@ const STATIC_COMMANDS: CommandDef[] = [
     keywords: ["left", "sidebar", "toggle", "左侧", "侧栏"],
     icon: IconLayoutSidebarLeftExpand,
     defaultAccelerator: DEFAULT_SHORTCUTS["layout.toggle-left"],
+    // Hidden while wide-panel (2:8) mode is on: the left sidebar is locked
+    // closed there and must not be reopened via palette/shortcut.
+    available: (s) => !s.widePanelOpen,
     perform: (s) => {
       s.setLeftOpen(!s.leftOpen);
     },
@@ -268,6 +272,20 @@ const STATIC_COMMANDS: CommandDef[] = [
       // files) if it's already showing. The PC-fullscreen overlay is reached
       // from inside the sidebar via its own "展开为 PC 全屏" button.
       s.setRightPanelTab(s.rightPanelTab === "browser" ? "files" : "browser");
+    },
+  },
+  {
+    id: "layout.toggle-wide-panel",
+    label: "切换宽屏模式 (聊天+面板)",
+    group: "布局",
+    keywords: ["wide", "panel", "fullscreen", "width", "宽屏", "全屏", "2:8", "右栏"],
+    icon: IconArrowsMaximize,
+    defaultAccelerator: DEFAULT_SHORTCUTS["layout.toggle-wide-panel"],
+    perform: (s) => {
+      // 2:8 layout: hide the left sidebar + center editor and show the chat
+      // column + full right panel. Entering snapshots the layout for restore on
+      // exit; the right panel keeps its current tab.
+      s.setWidePanelOpen(!s.widePanelOpen);
     },
   },
 

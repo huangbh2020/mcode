@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { Menu } from "@base-ui/react/menu";
 import { cn } from "@renderer/lib/cn.js";
 import {
@@ -7,6 +8,7 @@ import {
   IconPlus,
 } from "@renderer/lib/icons.js";
 import { useSessionStore } from "@renderer/stores/sessionStore.js";
+import { useSuppressBrowserView } from "@renderer/hooks/useSuppressBrowserView.js";
 import { CUSTOM_MODEL_ROLES, CUSTOM_MODEL_ROLE_LABELS } from "@contracts/customModel";
 import type { CustomModelRoleKey } from "@contracts/customModel";
 
@@ -39,6 +41,11 @@ function hostOf(url: string): string {
 }
 
 export function ModelDropdown() {
+  // While the menu (or its nested submenu) is open the embedded browser view
+  // is suppressed so the portaled popup stays visible/clickable over the
+  // browser's rect in narrow/wide layouts.
+  const [open, setOpen] = useState(false);
+  useSuppressBrowserView(open);
   const model = useSessionStore((s) => s.model);
   const customModelId = useSessionStore((s) => s.customModelId);
   const customModels = useSessionStore((s) => s.customModels);
@@ -104,7 +111,7 @@ export function ModelDropdown() {
   };
 
   return (
-    <Menu.Root>
+    <Menu.Root open={open} onOpenChange={setOpen}>
       <Menu.Trigger
         className={cn(
           "composer-chip flex min-w-0 items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-medium transition-all duration-150 ease-out",

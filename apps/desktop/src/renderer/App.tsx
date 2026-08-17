@@ -120,6 +120,7 @@ export function App() {
   const setRightOpen = useSessionStore((s) => s.setRightOpen);
   const bottomTerminalOpen = useSessionStore((s) => s.bottomTerminalOpen);
   const setBottomTerminalOpen = useSessionStore((s) => s.setBottomTerminalOpen);
+  const widePanelOpen = useSessionStore((s) => s.widePanelOpen);
 
   /** Draggable pane sizes + resize actions (from the store; persisted). */
   const leftWidth = useSessionStore((s) => s.leftWidth);
@@ -157,6 +158,11 @@ export function App() {
           workspace and settings views. */}
       <ModelConfigPrompt />
       <BrowserPanel mode="overlay" />
+      {/* Wide-mode plan dialog - mounts over the wide 2:8 workspace (fixed
+          overlay below the titlebar) when a plan tab is open. Mounted here
+          beside the browser overlay so it covers both the chat and right
+          columns. Renders null when not applicable. */}
+      <WidePlanDialog />
       {/*
         Workspace shell is ALWAYS mounted — the settings view renders as an
         overlay on top of it, not as a mutually-exclusive sibling. This is
@@ -190,10 +196,10 @@ export function App() {
       <div className="relative flex min-h-0 flex-1 bg-surface-muted">
         <ThreePaneLayout
           left={<LeftBar />}
-          center={<CenterPane />}
+          center={widePanelOpen ? <WidePanelSplit /> : <CenterPane />}
           right={<RightPanel />}
-          leftOpen={leftOpen}
-          rightOpen={rightOpen}
+          leftOpen={widePanelOpen ? false : leftOpen}
+          rightOpen={widePanelOpen ? false : rightOpen}
           bottomTerminal={<BottomTerminalBar active={bottomTerminalOpen} />}
           bottomTerminalOpen={bottomTerminalOpen}
           leftWidth={leftWidth}
@@ -355,6 +361,115 @@ function ChatColumn() {
   }
   // single mode: legacy behavior — one ChatPane, swapped by activeSessionId.
   return <ChatPane key={activeSessionId ?? "empty"} sessionId={activeSessionId} />;
+}
+
+/** Wide-panel (2:8) split — the chat column (2) on the left and the full
+ *  right panel (8) on the right, shown while `widePanelOpen`. Replaces the
+ *  ThreePaneLayout center+right composition entirely: the left sidebar is
+ *  hidden and the center editor column never renders here. The split is
+ *  draggable (percentage-based, same pattern as the chat|editor split);
+ *  double-click resets to the default 2:8. */
+function WidePanelSplit() {
+  const widePanelPct = useSessionStore((s) => s.widePanelPct);
+  const rightOpen = useSessionStore((s) => s.rightOpen);
+  const adjustWidePanelPct = useSessionStore((s) => s.adjustWidePanelPct);
+  const resetWidePanelPct = useSessionStore((s) => s.resetWidePanelPct);
+  const splitRef = useRef<HTMLDivElement>(null);
+
+  // Convert a px drag delta into a percentage-point delta relative to the
+  // container width (the sign flip lives in adjustWidePanelPct).
+  const handleResize = (deltaPx: number) => {
+    const el = splitRef.current;
+    if (!el) return;
+    const w = el.getBoundingClientRect().width;
+    if (w <= 0) return;
+    adjustWidePanelPct(Math.round((deltaPx / w) * 100));
+  };
+
+  // The titlebar right-panel toggle drives `rightOpen`. While hidden in wide
+  // mode the right column is omitted and the chat takes the full width.
+  if (!rightOpen) {
+    return (
+      <div ref={splitRef} className="flex h-full min-h-0">
+        <div className="flex min-w-0 flex-1 flex-col">
+          <ChatColumn />
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div ref={splitRef} className="flex h-full min-h-0">
+      {/* Chat column - the left share. ChatColumn keeps its single/tabs mode. */}
+      <div
+        className="flex min-w-0 flex-col"
+        style={{ flexGrow: 0, flexBasis: `${100 - widePanelPct}%` }}
+      >
+        <ChatColumn />
+      </div>
+      <Divider
+        orientation="vertical"
+        onResize={handleResize}
+        onDoubleClick={resetWidePanelPct}
+      />
+      {/* Right panel - the right share (files/git/browser tabs). */}
+      <div
+        className="flex min-w-0 flex-col border-l border-edge bg-surface"
+        style={{ flexGrow: 0, flexBasis: `${widePanelPct}%` }}
+      >
+        <RightPanel />
+      </div>
+    </div>
+  );
+}
+
+/** Wide-mode plan viewer: the PlanViewer as a fullscreen dialog overlay. The
+ *  wide 2:8 layout has no editor column, so a plan tab (set via openPlanDrawer)
+ *  would otherwise render nowhere. Mirrors the mobile shell's fullscreen plan
+ *  viewer, but reuses the desktop PlanViewer as-is (edit mode, 待审阅 badge,
+ *  approval-draft save). While open the embedded browser view is suppressed —
+ *  the OS-level WebContentsView would otherwise float above this DOM overlay. */
+function WidePlanDialog() {
+  const widePanelOpen = useSessionStore((s) => s.widePanelOpen);
+  const activeSessionId = useSessionStore((s) => s.activeSessionId);
+  const planTabActive = useSessionStore((s) =>
+    activeSessionId ? (s.planTabActiveBySession[activeSessionId] ?? false) : false,
+  );
+  const planText = useSessionStore((s) =>
+    activeSessionId ? (s.planDrawerPlanBySession[activeSessionId] ?? null) : null,
+  );
+  const planApprovalPending = useSessionStore((s) =>
+    activeSessionId ? !!s.pendingPlanApprovalBySession[activeSessionId] : false,
+  );
+  const closePlanDrawer = useSessionStore((s) => s.closePlanDrawer);
+  const suppressBrowserView = useSessionStore((s) => s.suppressBrowserView);
+
+  const open = widePanelOpen && planTabActive && !!planText;
+  useEffect(() => {
+    if (!open) return;
+    suppressBrowserView(true);
+    return () => suppressBrowserView(false);
+  }, [open, suppressBrowserView]);
+
+  if (!open) return null;
+  return (
+    <div className="fixed inset-x-0 top-10 bottom-0 z-50 flex flex-col bg-surface">
+      <Suspense
+        fallback={
+          <div className="flex h-full items-center justify-center text-[11px] text-content-subtle">
+            加载计划…
+          </div>
+        }
+      >
+        <PlanViewer
+          plan={planText!}
+          sessionId={activeSessionId!}
+          isApprovalPending={planApprovalPending}
+          onClose={() => activeSessionId && closePlanDrawer(activeSessionId)}
+        />
+      </Suspense>
+    </div>
+  );
 }
 
 /** The editor half: OpenTabsBar (only in tabs mode) + the active tab's

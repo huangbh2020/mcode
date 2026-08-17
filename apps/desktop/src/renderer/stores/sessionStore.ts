@@ -603,6 +603,21 @@ export interface SessionState {
    *  the workspace and the embedded WebContentsView is shown; false hides both.
    *  NOT persisted (pure in-memory, like the other layout flags). */
   browserPanelOpen: boolean;
+  /** Wide-panel (2:8) mode: hides the left sidebar + center editor so the
+   *  workspace shows only the chat column (2) and the full right panel (8).
+   *  Toggled from the right-panel rail fullscreen button / command palette.
+   *  While on, the left sidebar can't be opened. NOT persisted (transient,
+   *  like the other layout flags); on exit the pre-enter layout state is
+   *  restored from widePanelSnapshot. */
+  widePanelOpen: boolean;
+  /** Right-panel share (%) of the wide-panel chat|right split; the chat column
+   *  gets the remainder. Default 80 → the requested 2:8. Draggable via the
+   *  split's Divider; double-click resets to the default. In-memory only. */
+  widePanelPct: number;
+  /** Layout state captured when wide-panel mode opened, restored on exit.
+   *  rightPanelTab is deliberately NOT snapshotted — tab switches the user
+   *  makes while in wide mode are respected on exit. */
+  widePanelSnapshot: { leftOpen: boolean; rightOpen: boolean; rightWidth: number } | null;
   /** Number of open browser tabs (mirrors BrowserPanel's local tabs state so
    *  the Titlebar toggle button can show a count badge). Updated by the panel
    *  via setBrowserTabCount. NOT persisted. */
@@ -1024,6 +1039,17 @@ export interface SessionState {
   setBottomTerminalOpen: (open: boolean) => void;
   /** Toggle the browser panel open/closed (direct set). NOT persisted. */
   setBrowserPanelOpen: (open: boolean) => void;
+  /** Enter/exit wide-panel (2:8) mode. Entering hides the left sidebar + closes
+   *  any open browser overlay and snapshots the pre-enter layout; exiting
+   *  restores leftOpen / rightOpen / rightWidth from that snapshot. */
+  setWidePanelOpen: (open: boolean) => void;
+  /** Apply an incremental delta to the wide-panel percentage (the right
+   *  panel's share of the chat|right split). Divider sits left of the right
+   *  column, so a right drag (positive delta) shrinks it — same sign convention
+   *  as adjustEditorWidthPct. */
+  adjustWidePanelPct: (deltaPx: number) => void;
+  /** Reset the wide-panel split to the default 2:8 (double-click on divider). */
+  resetWidePanelPct: () => void;
   /** Set the browser device-toolbar visibility (DevTools-style bar under the
    *  address bar). NOT persisted. */
   setBrowserDeviceToolbarOpen: (open: boolean) => void;
@@ -1547,6 +1573,19 @@ export function clampBottomTerminalHeight(px: number): number {
 export function clampEditorWidthPct(pct: number): number {
   if (!Number.isFinite(pct)) return 50;
   return Math.min(EDITOR_WIDTH_PCT_MAX, Math.max(EDITOR_WIDTH_PCT_MIN, Math.round(pct)));
+}
+/** Wide-panel split bounds. widePanelPct is the right panel's share of the
+ *  chat|right split; DEFAULT 80 gives the requested 2:8. The bounds keep the
+ *  chat column usable and the right panel dominant. In-memory (not persisted). */
+export const WIDE_PANEL_PCT_MIN = 40;
+export const WIDE_PANEL_PCT_MAX = 96;
+export const WIDE_PANEL_PCT_DEFAULT = 80;
+
+/** Clamp helper for the wide-panel percentage. Falls back to the default on
+ *  any non-finite value. */
+export function clampWidePanelPct(pct: number): number {
+  if (!Number.isFinite(pct)) return WIDE_PANEL_PCT_DEFAULT;
+  return Math.min(WIDE_PANEL_PCT_MAX, Math.max(WIDE_PANEL_PCT_MIN, Math.round(pct)));
 }
 
 /** Matches a well-formed space-separated "R G B" triplet (0–255 each),
@@ -2905,6 +2944,10 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   bottomTerminalOpen: false,
   // Browser panel overlay - closed by default. NOT persisted.
   browserPanelOpen: false,
+  // Wide-panel (2:8) mode - off by default; transient like browserPanelOpen.
+  widePanelOpen: false,
+  widePanelPct: WIDE_PANEL_PCT_DEFAULT,
+  widePanelSnapshot: null,
   // Mobile-shell fullscreen viewer (file/diff/plan) - closed by default.
   mobileViewer: null,
   browserTabCount: 0,
@@ -5406,7 +5449,12 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
   setCommandPaletteOpen: (open) => set({ commandPaletteOpen: open }),
   setSearchDialogOpen: (open) => set({ searchDialogOpen: open }),
-  setLeftOpen: (open) => set({ leftOpen: open }),
+  setLeftOpen: (open) => {
+    // While wide-panel (2:8) mode is on the left sidebar must stay closed —
+    // guard in the store so no caller/command can open it.
+    if (open && get().widePanelOpen) return;
+    set({ leftOpen: open });
+  },
   setRightOpen: (open) => set({ rightOpen: open }),
   setBottomTerminalOpen: (open) => set({ bottomTerminalOpen: open }),
   setBrowserPanelOpen: (open) => {
@@ -5418,6 +5466,39 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       set({ browserPanelOpen: true, rightOpen: false });
     } else {
       set({ browserPanelOpen: false });
+    }
+  },
+  setWidePanelOpen: (open) => {
+    const s = get();
+    if (open === s.widePanelOpen) return;
+    if (open) {
+      // Enter wide mode: snapshot the pre-enter layout so exit can restore it,
+      // hide the left sidebar and close any browser overlay (it would cover the
+      // wide layout). rightPanelTab is left untouched — the right 8/10 keeps
+      // whatever tab is already active.
+      set({
+        widePanelSnapshot: {
+          leftOpen: s.leftOpen,
+          rightOpen: s.rightOpen,
+          rightWidth: s.rightWidth,
+        },
+        widePanelOpen: true,
+        leftOpen: false,
+        // The right panel is the mode's centerpiece — always show it on enter.
+        // (The titlebar right-panel toggle then hides/shows it during the
+        // mode; exit still restores the pre-enter rightOpen from the snapshot.)
+        rightOpen: true,
+        browserPanelOpen: false,
+      });
+    } else {
+      const snap = s.widePanelSnapshot;
+      set({
+        widePanelOpen: false,
+        widePanelSnapshot: null,
+        leftOpen: snap?.leftOpen ?? true,
+        rightOpen: snap?.rightOpen ?? true,
+        rightWidth: snap?.rightWidth ?? s.rightWidth,
+      });
     }
   },
   setBrowserTabCount: (count) => set({ browserTabCount: Math.max(0, count) }),
@@ -5535,6 +5616,15 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   resetEditorWidthPct: () => {
     set({ editorWidthPct: 50 });
     schedulePaneWidthPersist(get);
+  },
+  adjustWidePanelPct: (deltaPx) => {
+    // Divider sits LEFT of the right panel in the wide-panel split, so a drag
+    // right (delta>0) shrinks the right pane — same sign flip as the editor
+    // divider. In-memory only (no schedulePaneWidthPersist).
+    set({ widePanelPct: clampWidePanelPct(get().widePanelPct - deltaPx) });
+  },
+  resetWidePanelPct: () => {
+    set({ widePanelPct: WIDE_PANEL_PCT_DEFAULT });
   },
 
   /** Update the center-pane display mode. The local store flips

@@ -3,8 +3,11 @@ import {
   IconFolder,
   IconGitBranch,
   IconWorld,
+  IconArrowsMaximize,
+  IconArrowsMinimize,
 } from "@renderer/lib/icons.js";
 import { useSessionStore } from "@renderer/stores/sessionStore.js";
+import { resolveShortcut, acceleratorToDisplayString } from "@renderer/lib/shortcuts.js";
 import { FilesPanel } from "@renderer/components/ide/FilesPanel.js";
 import { GitPanel } from "@renderer/components/ide/GitPanel.js";
 import { BrowserPanel } from "@renderer/components/browser/BrowserPanel.js";
@@ -27,6 +30,16 @@ export function RightPanel() {
   const tab = useSessionStore((s) => s.rightPanelTab);
   const setTab = useSessionStore((s) => s.setRightPanelTab);
   const browserTabCount = useSessionStore((s) => s.browserTabCount);
+  const widePanelOpen = useSessionStore((s) => s.widePanelOpen);
+  const setWidePanelOpen = useSessionStore((s) => s.setWidePanelOpen);
+
+  // Append the effective shortcut for a command's tooltip (same pattern as the
+  // Titlebar's hintFor; cheap - a handful of lookups per render).
+  const overrides = useSessionStore((s) => s.shortcutOverrides);
+  const hintFor = (commandId: string): string => {
+    const a = resolveShortcut(commandId, overrides);
+    return a ? ` (${acceleratorToDisplayString(a)})` : "";
+  };
 
   /** Toggle the embedded sidebar browser: open it if another tab is active,
    *  or close it (fall back to files) if it's already showing. */
@@ -68,6 +81,29 @@ export function RightPanel() {
               {browserTabCount}
             </span>
           )}
+        </div>
+        {/* Wide-panel (2:8) mode - hide the left sidebar + center editor and
+            split the workspace into this right panel (8/10) + the chat column
+            (2/10). Toggled here, via the command palette / shortcut, or the
+            titlebar back button. Pushed to the rail's far right with ml-auto. */}
+        <div className="ml-auto flex items-center gap-1">
+          <div className="h-5 w-px bg-edge" />
+          <RailButton
+            active={widePanelOpen}
+            onClick={() => setWidePanelOpen(!widePanelOpen)}
+            title={
+              (widePanelOpen ? "退出宽屏模式" : "宽屏模式 (聊天+面板 2:8)") +
+              hintFor("layout.toggle-wide-panel")
+            }
+          >
+            {/* Maximize when entering, minimize (restore) when already wide —
+                the standard expand/collapse affordance pair. */}
+            {widePanelOpen ? (
+              <IconArrowsMinimize size={16} className="shrink-0" />
+            ) : (
+              <IconArrowsMaximize size={16} className="shrink-0" />
+            )}
+          </RailButton>
         </div>
       </div>
 
