@@ -53,6 +53,7 @@ import { resolveSdkBinaryPath } from "@main/providers/claude-sdk/sdkBinaryPath.j
 import { BridgeRegistry } from "@main/providers/bridge/bridgeRegistry.js";
 import { resolveProtocol } from "@contracts/customModel";
 import type { ApiConfig } from "@contracts/customModel";
+import { broadcastGitChanged } from "@main/lib/sessionSync.js";
 import { log } from "@main/lib/logger.js";
 
 // Lazy-load simple-git so the CJS module stays out of the main-process startup
@@ -432,6 +433,7 @@ export function registerGitHandlers(ipcMain: IpcMain): void {
     try {
       const git = (await loadSimpleGit())(input.repoPath);
       await git.add(input.filePaths);
+      broadcastGitChanged(input.repoPath);
       return { ok: true };
     } catch (err) {
       const msg = (err as Error).message;
@@ -450,6 +452,7 @@ export function registerGitHandlers(ipcMain: IpcMain): void {
       const git = (await loadSimpleGit())(input.repoPath);
       // `git reset HEAD -- <files>` unstages without touching working tree.
       await git.reset(input.filePaths.length > 0 ? ["--", ...input.filePaths] : []);
+      broadcastGitChanged(input.repoPath);
       return { ok: true };
     } catch (err) {
       const msg = (err as Error).message;
@@ -468,6 +471,7 @@ export function registerGitHandlers(ipcMain: IpcMain): void {
       const git = (await loadSimpleGit())(input.repoPath);
       await git.commit(input.message);
       log.info(`git.commit succeeded in ${input.repoPath}`);
+      broadcastGitChanged(input.repoPath);
       return { ok: true };
     } catch (err) {
       const msg = (err as Error).message;
@@ -486,6 +490,7 @@ export function registerGitHandlers(ipcMain: IpcMain): void {
       const git = (await loadSimpleGit())(input.repoPath);
       await git.push();
       log.info(`git.push succeeded in ${input.repoPath}`);
+      broadcastGitChanged(input.repoPath);
       return { ok: true };
     } catch (err) {
       const msg = (err as Error).message;
@@ -515,6 +520,7 @@ export function registerGitHandlers(ipcMain: IpcMain): void {
         const conflicted = st?.conflicted ?? [];
         if (conflicted.length > 0) {
           log.warn(`git.pull produced ${conflicted.length} conflict(s) in ${input.repoPath}`);
+          broadcastGitChanged(input.repoPath);
           return { ok: true, conflict: true, conflictedFiles: conflicted };
         }
         throw pullErr;
@@ -525,9 +531,11 @@ export function registerGitHandlers(ipcMain: IpcMain): void {
       const conflicted = st?.conflicted ?? [];
       if (conflicted.length > 0) {
         log.warn(`git.pull left ${conflicted.length} conflict(s) in ${input.repoPath}`);
+        broadcastGitChanged(input.repoPath);
         return { ok: true, conflict: true, conflictedFiles: conflicted };
       }
       log.info(`git.pull succeeded in ${input.repoPath}`);
+      broadcastGitChanged(input.repoPath);
       return { ok: true };
     } catch (err) {
       const msg = (err as Error).message;
@@ -583,6 +591,7 @@ export function registerGitHandlers(ipcMain: IpcMain): void {
         await git.clean("f", ["-d", "--", ...untracked]);
       }
       log.info(`git.discard succeeded in ${input.repoPath} (${tracked.length} tracked, ${untracked.length} untracked)`);
+      broadcastGitChanged(input.repoPath);
       return { ok: true };
     } catch (err) {
       const msg = (err as Error).message;
@@ -847,6 +856,7 @@ export function registerGitHandlers(ipcMain: IpcMain): void {
           `git.resolveConflicts resolved ${resolvedFiles.length}/${conflicted.length} file(s) in ${input.repoPath}` +
             (unresolved.length ? `, ${unresolved.length} unresolved` : ""),
         );
+        broadcastGitChanged(input.repoPath);
         return {
           ok: true,
           resolvedFiles,
@@ -975,6 +985,7 @@ export function registerGitHandlers(ipcMain: IpcMain): void {
         await git.checkout(input.branch);
         log.info(`git.checkout switched to ${input.branch} in ${input.repoPath}`);
       }
+      broadcastGitChanged(input.repoPath);
       return { ok: true };
     } catch (err) {
       const msg = (err as Error).message;

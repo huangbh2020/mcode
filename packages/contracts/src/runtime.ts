@@ -527,6 +527,22 @@ export interface SessionDeletedEvent {
 }
 
 /**
+ * A repo's git state changed on the host — commit / stage / unstage / push /
+ * pull / discard, issued by ANY client (desktop panel or a paired phone).
+ * Receivers re-run `git status` / reload the commit history for the matching
+ * repoPath, so one client's commit shows up everywhere without a manual
+ * refresh. Broadcast through the same two channels as
+ * {@link SessionChangedEvent}; `sessionId` is "" (envelope compatibility —
+ * see {@link SessionRunningSnapshotEvent}).
+ */
+export interface GitChangedEvent {
+  type: "git.changed";
+  sessionId: string;
+  /** Absolute path of the repo whose state changed. */
+  repoPath: string;
+}
+
+/**
  * Cross-client pending-request sync. When one client answers an approval /
  * AskUserQuestion / plan approval, the main-process Deferred resolves exactly
  * once — the OTHER clients (desktop + phones) would keep showing a dialog that
@@ -588,4 +604,5 @@ export type RuntimeEvent =
   | SessionChangedEvent
   | SessionDeletedEvent
   | RequestResolvedEvent
-  | SessionRunningSnapshotEvent;
+  | SessionRunningSnapshotEvent
+  | GitChangedEvent;

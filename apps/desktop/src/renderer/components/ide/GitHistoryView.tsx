@@ -85,6 +85,16 @@ export function GitHistoryView({ repos }: { repos: GitRepo[] }) {
     void loadCommits();
   }, [loadCommits]);
 
+  // Cross-client auto-refresh: the host broadcasts `git.changed` after ANY
+  // client's commit / pull / checkout; bumping this version reloads the
+  // history so a fresh commit shows up without tapping the manual refresh.
+  const gitChangeVersion = useSessionStore(
+    (s) => (repoPath ? s.gitChangeVersionByRepo[repoPath] ?? 0 : 0),
+  );
+  useEffect(() => {
+    void loadCommits();
+  }, [gitChangeVersion, loadCommits]);
+
   const openCommit = async (commit: GitCommitInfo) => {
     setSelected(commit);
     setFiles([]);

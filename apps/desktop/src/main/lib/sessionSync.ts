@@ -56,3 +56,13 @@ export function broadcastSessionChanged(session: Session): void {
 export function broadcastSessionDeleted(sessionId: string): void {
   broadcastRuntimeEvent({ type: "session.deleted", sessionId });
 }
+
+/** A repo's git state changed (commit / stage / unstage / push / pull /
+ *  discard — issued by the desktop panel OR a paired phone). Every client
+ *  bumps its per-repo git-change version so its git surfaces (status panel,
+ *  commit history) re-fetch instead of going stale until a manual refresh.
+ *  The mutating client also receives the echo — harmless, its own refresh is
+ *  idempotent. */
+export function broadcastGitChanged(repoPath: string): void {
+  broadcastRuntimeEvent({ type: "git.changed", sessionId: "", repoPath });
+}

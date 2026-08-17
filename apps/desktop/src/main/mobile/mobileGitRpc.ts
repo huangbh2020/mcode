@@ -34,6 +34,7 @@ import {
   MAX_SCAN_DEPTH,
 } from "@main/ipc/git.js";
 import { registerMobileRpcHandlers, type RpcHandler } from "./mobileRpc.js";
+import { broadcastGitChanged } from "@main/lib/sessionSync.js";
 import { log } from "@main/lib/logger.js";
 
 const REFUSE = "仓库路径不在任何已添加的项目内";
@@ -93,6 +94,7 @@ const handlers: Record<string, RpcHandler> = {
     try {
       const git = (await loadSimpleGit())(input.repoPath);
       await git.add(input.filePaths);
+      broadcastGitChanged(input.repoPath);
       return { ok: true };
     } catch (err) {
       return { ok: false, error: (err as Error).message };
@@ -105,6 +107,7 @@ const handlers: Record<string, RpcHandler> = {
     try {
       const git = (await loadSimpleGit())(input.repoPath);
       await git.reset(input.filePaths.length > 0 ? ["--", ...input.filePaths] : []);
+      broadcastGitChanged(input.repoPath);
       return { ok: true };
     } catch (err) {
       return { ok: false, error: (err as Error).message };
@@ -117,6 +120,7 @@ const handlers: Record<string, RpcHandler> = {
     try {
       const git = (await loadSimpleGit())(input.repoPath);
       await git.commit(input.message);
+      broadcastGitChanged(input.repoPath);
       return { ok: true };
     } catch (err) {
       return { ok: false, error: (err as Error).message };
@@ -129,6 +133,7 @@ const handlers: Record<string, RpcHandler> = {
     try {
       const git = (await loadSimpleGit())(input.repoPath);
       await git.push();
+      broadcastGitChanged(input.repoPath);
       return { ok: true };
     } catch (err) {
       return { ok: false, error: (err as Error).message };
@@ -145,12 +150,19 @@ const handlers: Record<string, RpcHandler> = {
       } catch (pullErr) {
         const st = await git.status().catch(() => null);
         const conflicted = st?.conflicted ?? [];
-        if (conflicted.length > 0) return { ok: true, conflict: true, conflictedFiles: conflicted };
+        if (conflicted.length > 0) {
+          broadcastGitChanged(input.repoPath);
+          return { ok: true, conflict: true, conflictedFiles: conflicted };
+        }
         throw pullErr;
       }
       const st = await git.status().catch(() => null);
       const conflicted = st?.conflicted ?? [];
-      if (conflicted.length > 0) return { ok: true, conflict: true, conflictedFiles: conflicted };
+      if (conflicted.length > 0) {
+        broadcastGitChanged(input.repoPath);
+        return { ok: true, conflict: true, conflictedFiles: conflicted };
+      }
+      broadcastGitChanged(input.repoPath);
       return { ok: true };
     } catch (err) {
       return { ok: false, error: (err as Error).message };

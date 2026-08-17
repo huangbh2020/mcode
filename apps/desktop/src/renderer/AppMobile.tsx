@@ -12,8 +12,10 @@
  *    whole screen (ChatPane's container queries already adapt the
  *    gutters/composer to the narrow width).
  *  - Settings is the minimal MobileSettingsSheet instead of SettingsPage.
- *  - displayMode (single/tabs, a desktop-shared pref) is ignored: the strip
- *    always shows every open tab and the active pane mounts keyed.
+ *  - displayMode (single/tabs, a desktop-shared pref) gates the tab strip:
+ *    the default "single" hides it (the drawer is the session switcher);
+ *    "tabs" shows the shared SessionTabs strip above the keyed active pane
+ *    (unlike the desktop, background panes stay unmounted to save memory).
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { ChatPane } from "./components/chat/ChatPane.js";
@@ -97,6 +99,7 @@ function MobileShell() {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [view, setView] = useState<"chat" | "files" | "git">("chat");
   const activeSessionId = useSessionStore((s) => s.activeSessionId);
+  const displayMode = useSessionStore((s) => s.displayMode);
   const running = useSessionStore((s) =>
     s.activeSessionId ? s.runningBySession[s.activeSessionId] : false,
   );
@@ -157,11 +160,13 @@ function MobileShell() {
           onPickSession={() => setView("chat")}
         />
 
-        {/* Chat column: tab strip + the active pane. ChatPane renders the
-            empty state when no session is open. */}
+        {/* Chat column: tab strip (only in `tabs` displayMode — the default
+            "single" hides it; the drawer is the session switcher) + the
+            active pane. ChatPane renders the empty state when no session is
+            open. */}
         {view === "chat" ? (
           <div className="flex min-w-0 flex-1 flex-col">
-            <SessionTabs />
+            {displayMode === "tabs" && <SessionTabs />}
             <div className="min-h-0 flex-1">
               <ChatPane key={activeSessionId ?? "empty"} sessionId={activeSessionId} />
             </div>

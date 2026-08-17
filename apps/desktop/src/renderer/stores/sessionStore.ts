@@ -553,6 +553,14 @@ export interface SessionState {
    *  openTab). Drives the red dot badge in the left bar + tab strip. NOT
    *  persisted - unread state is transient and shouldn't survive a restart. */
   unreadBySession: Record<string, number>;
+  /** Per-repo git-change version, bumped by the `git.changed` runtime event
+   *  (broadcast by the main process after ANY client's commit / stage /
+   *  unstage / push / pull / discard / checkout). Git surfaces (mobile Git
+   *  screen, desktop GitRepoCard, GitHistoryView) select the counter for the
+   *  repo they're viewing and re-fetch when it moves — so a commit on the
+   *  phone refreshes the desktop panel and vice versa, with no polling. NOT
+   *  persisted — a missed bump just means one manual refresh. */
+  gitChangeVersionByRepo: Record<string, number>;
   /** Whether the main window is currently focused (frontmost + not minimized +
    *  the renderer tab is visible). Fed from the Electron `window:focusChanged`
    *  push event + `document.visibilitychange`. The notification layer reads
@@ -2835,6 +2843,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   sessionsHasMoreByProject: {},
   sessionsTotalByProject: {},
   archivedSessionsByProject: {},
+  gitChangeVersionByRepo: {},
   sessions: [],
   activeSessionId: null,
   expandedProjects: {},
@@ -4615,6 +4624,19 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     // message-accumulation logic below.
     if (e.type === "todo.update") {
       set((s) => ({ todosBySession: { ...s.todosBySession, [sid]: e.todos } }));
+      return;
+    }
+    // git.changed — a repo's git state changed on the host (any client).
+    // Independent state slice: bump the per-repo version; git surfaces
+    // re-fetch in their own effects. No sessionId semantics — the host emits
+    // "" (envelope compatibility, see SessionRunningSnapshotEvent).
+    if (e.type === "git.changed") {
+      set((s) => ({
+        gitChangeVersionByRepo: {
+          ...s.gitChangeVersionByRepo,
+          [e.repoPath]: (s.gitChangeVersionByRepo[e.repoPath] ?? 0) + 1,
+        },
+      }));
       return;
     }
     // session.changed — cross-client list sync (a phone or another client

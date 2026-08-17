@@ -1,18 +1,21 @@
 /**
- * MobileGitScreen — the mobile git commit panel (bottom-nav page of the web
- * shell).
+ * MobileGitScreen — the mobile git panel (bottom-nav page of the web shell).
  *
  * A focused, mobile-first take on the desktop GitRepoCard: discover repos under
  * the active project, show changed/staged files with stage toggles, edit a
- * commit message (with AI generation), and commit / commit-and-push / sync
- * (pull then push). The operations map 1:1 to the `git:*` mobile RPC whitelist,
- * which reuses the desktop git module's helpers (same path guard, same
- * simple-git loader, same LLM commit-message core) — behavior is identical,
- * only the transport differs.
+ * commit message (with AI generation), commit / commit-and-push, and sync with
+ * the remote. Actions live in two contextual zones instead of one button soup:
+ * the branch bar hosts the remote ops (拉取 / 推送 / 同步, next to the
+ * ahead/behind counts they resolve), and the commit box hosts the staging ops
+ * (提交 / 提交并推送). The operations map 1:1 to the `git:*` mobile RPC
+ * whitelist, which reuses the desktop git module's helpers (same path guard,
+ * same simple-git loader, same LLM commit-message core) — behavior is
+ * identical, only the transport differs.
  */
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { api } from "@renderer/lib/api.js";
 import { useSessionStore } from "@renderer/stores/sessionStore.js";
+import { useToastStore } from "@renderer/stores/toastStore.js";
 import { cn } from "@renderer/lib/cn.js";
 import type { GitRepo, GitStatusResult, GitStatusCode } from "@contracts/ipc";
 import {
@@ -22,6 +25,7 @@ import {
   IconLoader2,
   IconArrowDown,
   IconArrowUp,
+  IconArrowsExchange,
   IconCheck,
   IconSparkles,
   IconFile,
@@ -66,6 +70,9 @@ export function MobileGitScreen() {
 
   const [repos, setRepos] = useState<GitRepo[]>([]);
   const [repoPath, setRepoPath] = useState<string | null>(null);
+  // True while repo discovery is in flight — distinguishes "still looking"
+  // from "looked and found none" (the latter shows the no-repo empty state).
+  const [reposLoading, setReposLoading] = useState(true);
   const [status, setStatus] = useState<GitStatusResult | null>(null);
   const [tab, setTab] = useState<"changes" | "staged">("changes");
   const [message, setMessage] = useState("");
@@ -91,13 +98,19 @@ export function MobileGitScreen() {
 
   // Discover repos when the project changes.
   const discover = useCallback(async () => {
-    if (!project) return;
+    if (!project) {
+      setReposLoading(false);
+      return;
+    }
+    setReposLoading(true);
     try {
       const res = await api.git.discoverRepos({ projectPath: project.path });
       setRepos(res.repos);
       if (res.repos.length > 0) setRepoPath(res.repos[0].path);
     } catch (err) {
       setError((err as Error).message);
+    } finally {
+      setReposLoading(false);
     }
   }, [project]);
 
@@ -121,6 +134,18 @@ export function MobileGitScreen() {
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  // Cross-client auto-refresh: the host broadcasts `git.changed` after ANY
+  // client's git mutation (desktop panel, another phone), which bumps this
+  // per-repo version in the store. Re-running status keeps this screen fresh
+  // when, say, the agent (or the PC) commits while the phone sits on the Git
+  // tab. Own mutations echo back too — idempotent extra refresh.
+  const gitChangeVersion = useSessionStore(
+    (s) => (repoPath ? s.gitChangeVersionByRepo[repoPath] ?? 0 : 0),
+  );
+  useEffect(() => {
+    void refresh();
+  }, [gitChangeVersion, refresh]);
 
   // Same staged/unstaged split as the desktop GitRepoCard.
   const staged = useMemo(
@@ -146,6 +171,11 @@ export function MobileGitScreen() {
     }
   };
 
+  // Lightweight success feedback for remote/commit ops (3s toast). Errors
+  // still go through the inline ErrorBanner for full detail + copy.
+  const toast = (title: string) =>
+    useToastStore.getState().push({ kind: "info", title, duration: 3000 });
+
   const stage = (path: string) =>
     run("stage", () => api.git.stage({ repoPath: repoPath!, filePaths: [path] }));
   const unstage = (path: string) =>
@@ -161,10 +191,33 @@ export function MobileGitScreen() {
       const res = await api.git.commit({ repoPath: repoPath!, message: message.trim() });
       if (!res.ok) throw new Error(res.error ?? "提交失败");
       setMessage("");
+      toast("已提交");
       if (andPush) {
         const pushRes = await api.git.push({ repoPath: repoPath! });
         if (!pushRes.ok) throw new Error(pushRes.error ?? "推送失败");
+        toast("已推送至远端");
       }
+    });
+
+  /** Pull only — never pushes. A merge conflict surfaces as an error banner
+   *  and stops there (nothing is auto-committed past a conflict). */
+  const pull = () =>
+    run("pull", async () => {
+      const res = await api.git.pull({ repoPath: repoPath! });
+      if (!res.ok) throw new Error(res.error ?? "拉取失败");
+      if (res.conflict) {
+        setError(`拉取后产生 ${res.conflictedFiles?.length ?? 0} 个冲突文件，请先解决冲突`);
+        return;
+      }
+      toast("拉取完成");
+    });
+
+  /** Push only — local commits to the remote. */
+  const push = () =>
+    run("push", async () => {
+      const res = await api.git.push({ repoPath: repoPath! });
+      if (!res.ok) throw new Error(res.error ?? "推送失败");
+      toast("推送完成");
     });
 
   /** Pull then push (desktop's "sync"). Never pushes past a merge conflict. */
@@ -178,6 +231,7 @@ export function MobileGitScreen() {
       }
       const pushRes = await api.git.push({ repoPath: repoPath! });
       if (!pushRes.ok) throw new Error(pushRes.error ?? "推送失败");
+      toast("同步完成");
     });
 
   const generate = async () => {
@@ -244,10 +298,11 @@ export function MobileGitScreen() {
         <button
           type="button"
           onClick={() => void refresh()}
-          className="flex h-7 w-7 items-center justify-center rounded-lg text-content-muted hover:bg-surface-muted"
+          className="flex h-8 w-8 items-center justify-center rounded-lg text-content-muted active:bg-surface-muted"
           title="刷新"
+          aria-label="刷新"
         >
-          <IconRefresh size={14} />
+          <IconRefresh size={15} />
         </button>
       </div>
 
@@ -270,33 +325,99 @@ export function MobileGitScreen() {
             </select>
           )}
 
-          {/* branch + ahead/behind */}
+          {/* Branch status + remote actions — one bar. The branch line owns
+              the ahead/behind state; the three sync buttons dock right of it
+              and reuse the ↑/↓ arrows so each button pairs with the count it
+              resolves (推送 ↔ ↑领先, 拉取 ↔ ↓落后). */}
           {status && (
-            <div className="mb-2 flex items-center gap-2 text-xs text-content-muted">
-              <IconGitBranch size={13} className="shrink-0" />
-              <span className="min-w-0 truncate font-mono text-content" title={status.branch}>
-                {status.branch || "(无分支)"}
-              </span>
-              {status.ahead > 0 && (
-                <span className="flex items-center gap-0.5 text-accent">
-                  <IconArrowUp size={11} /> {status.ahead}
+            <div className="mb-2 flex shrink-0 items-center gap-2">
+              <div className="flex min-w-0 flex-1 items-center gap-1.5 text-xs text-content-muted">
+                <IconGitBranch size={13} className="shrink-0" />
+                <span className="min-w-0 truncate font-mono text-content" title={status.branch}>
+                  {status.branch || "(无分支)"}
                 </span>
-              )}
-              {status.behind > 0 && (
-                <span className="flex items-center gap-0.5 text-warning">
-                  <IconArrowDown size={11} /> {status.behind}
-                </span>
-              )}
+                {status.ahead > 0 && (
+                  <span
+                    className="flex shrink-0 items-center gap-0.5 text-accent"
+                    title={`领先远端 ${status.ahead} 个提交`}
+                  >
+                    <IconArrowUp size={11} /> {status.ahead}
+                  </span>
+                )}
+                {status.behind > 0 && (
+                  <span
+                    className="flex shrink-0 items-center gap-0.5 text-warning"
+                    title={`落后远端 ${status.behind} 个提交`}
+                  >
+                    <IconArrowDown size={11} /> {status.behind}
+                  </span>
+                )}
+              </div>
+              <button
+                type="button"
+                onClick={() => void pull()}
+                disabled={!!busy || !repoPath}
+                title="拉取远端更新"
+                className="flex h-9 shrink-0 items-center gap-1 rounded-lg border border-edge px-2.5 text-xs text-content-muted active:bg-surface-hover disabled:opacity-50"
+              >
+                {busy === "pull" ? (
+                  <IconLoader2 size={12} className="animate-spin" />
+                ) : (
+                  <IconArrowDown size={12} />
+                )}
+                拉取
+              </button>
+              <button
+                type="button"
+                onClick={() => void push()}
+                disabled={!!busy || !repoPath}
+                title="推送本地提交到远端"
+                className="flex h-9 shrink-0 items-center gap-1 rounded-lg border border-edge px-2.5 text-xs text-content-muted active:bg-surface-hover disabled:opacity-50"
+              >
+                {busy === "push" ? (
+                  <IconLoader2 size={12} className="animate-spin" />
+                ) : (
+                  <IconArrowUp size={12} />
+                )}
+                推送
+              </button>
+              <button
+                type="button"
+                onClick={() => void sync()}
+                disabled={!!busy || !repoPath}
+                title="拉取远端更新后推送本地提交"
+                className="flex h-9 shrink-0 items-center gap-1 rounded-lg border border-edge px-2.5 text-xs text-content-muted active:bg-surface-hover disabled:opacity-50"
+              >
+                {busy === "sync" ? (
+                  <IconLoader2 size={12} className="animate-spin" />
+                ) : (
+                  <IconArrowsExchange size={12} />
+                )}
+                同步
+              </button>
             </div>
           )}
 
+          {/* Discovery / no-repo empty states replace the whole working area —
+              the tabs, file list, and commit box are meaningless without a
+              repo. */}
+          {reposLoading ? (
+            <div className="flex min-h-0 flex-1 items-center justify-center text-xs text-content-subtle">
+              正在发现仓库…
+            </div>
+          ) : repos.length === 0 ? (
+            <div className="flex min-h-0 flex-1 items-center justify-center px-6 text-center text-xs text-content-subtle">
+              此项目下未发现 Git 仓库
+            </div>
+          ) : (
+            <>
           {/* segmented control */}
           <div className="mb-2 flex shrink-0 gap-1 rounded-lg bg-surface-muted p-1 text-xs">
             <button
               type="button"
               onClick={() => setTab("changes")}
               className={cn(
-                "flex-1 rounded px-2 py-1.5",
+                "flex-1 rounded px-2 py-2",
                 tab === "changes" ? "bg-surface text-content shadow-sm" : "text-content-muted",
               )}
             >
@@ -306,7 +427,7 @@ export function MobileGitScreen() {
               type="button"
               onClick={() => setTab("staged")}
               className={cn(
-                "flex-1 rounded px-2 py-1.5",
+                "flex-1 rounded px-2 py-2",
                 tab === "staged" ? "bg-surface text-content shadow-sm" : "text-content-muted",
               )}
             >
@@ -346,7 +467,7 @@ export function MobileGitScreen() {
                       type="button"
                       onClick={() => (tab === "changes" ? void stage(f.path) : void unstage(f.path))}
                       disabled={!!busy}
-                      className="shrink-0 rounded border border-edge px-2 py-1 text-[10px] text-content-muted disabled:opacity-50"
+                      className="h-8 shrink-0 rounded-lg border border-edge px-3 text-[11px] text-content-muted active:bg-surface-hover disabled:opacity-50"
                     >
                       {tab === "changes" ? "暂存" : "取消"}
                     </button>
@@ -399,7 +520,7 @@ export function MobileGitScreen() {
                 type="button"
                 onClick={() => void commit(false)}
                 disabled={!!busy || staged.length === 0 || !message.trim()}
-                className="flex flex-1 items-center justify-center gap-1 rounded-lg border border-edge px-2 py-2 text-xs text-content-muted disabled:opacity-50"
+                className="flex flex-1 items-center justify-center gap-1 rounded-lg border border-edge px-2 py-2.5 text-xs text-content-muted active:bg-surface-hover disabled:opacity-50"
               >
                 {busy === "commit" ? <IconLoader2 size={12} className="animate-spin" /> : <IconCheck size={12} />}
                 提交
@@ -408,23 +529,15 @@ export function MobileGitScreen() {
                 type="button"
                 onClick={() => void commit(true)}
                 disabled={!!busy || staged.length === 0 || !message.trim()}
-                className="flex flex-[1.4] items-center justify-center gap-1 rounded-lg bg-accent px-2 py-2 text-xs font-semibold text-surface disabled:opacity-40"
+                className="flex flex-[1.4] items-center justify-center gap-1 rounded-lg bg-accent px-2 py-2.5 text-xs font-semibold text-surface disabled:opacity-40"
               >
                 {busy === "commit+push" ? <IconLoader2 size={12} className="animate-spin" /> : <IconCheck size={12} />}
                 提交并推送
               </button>
-              <button
-                type="button"
-                onClick={() => void sync()}
-                disabled={!!busy || !repoPath}
-                title="拉取远端更新后推送本地提交"
-                className="flex flex-1 items-center justify-center gap-1 rounded-lg border border-edge px-2 py-2 text-xs text-content-muted disabled:opacity-50"
-              >
-                {busy === "sync" ? <IconLoader2 size={12} className="animate-spin" /> : <IconArrowDown size={12} />}
-                拉取并同步
-              </button>
             </div>
           </div>
+            </>
+          )}
         </div>
       )}
 

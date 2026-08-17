@@ -229,6 +229,17 @@ export function GitRepoCard({ repo }: { repo: GitRepo }) {
     void refresh();
   }, [refresh]);
 
+  // Cross-client auto-refresh: the host broadcasts `git.changed` after ANY
+  // client's git mutation (a paired phone's commit/pull, another repo card),
+  // bumping this per-repo version in the store. Own mutations echo back too
+  // — an idempotent extra refresh.
+  const gitChangeVersion = useSessionStore(
+    (s) => s.gitChangeVersionByRepo[repo.path] ?? 0,
+  );
+  useEffect(() => {
+    void refresh();
+  }, [gitChangeVersion, refresh]);
+
   // Split files into staged and unstaged groups.
   const staged = useMemo(
     () => status?.files.filter((f) => f.index !== "unmodified" && f.index !== "untracked") ?? [],
