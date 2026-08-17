@@ -6,6 +6,7 @@ import type { GitRepo } from "@contracts/ipc";
 import { GitRepoCard } from "./GitRepoCard.js";
 import { GitHistoryView } from "./GitHistoryView.js";
 import { IconGitBranch, IconGitCommit, IconLoader2, IconRefresh } from "@renderer/lib/icons.js";
+import { useI18n } from "@renderer/lib/i18n/index.js";
 
 type GitSubTab = "changes" | "history";
 
@@ -23,6 +24,7 @@ type GitSubTab = "changes" | "history";
  * refresh button re-scans (useful after cloning a new repo into the folder).
  */
 export function GitPanel() {
+  const { t } = useI18n();
   const activeProjectId = useSessionStore((s) => s.activeProjectId);
   const projects = useSessionStore((s) => s.projects);
   const [subTab, setSubTab] = useState<GitSubTab>("changes");
@@ -60,8 +62,8 @@ export function GitPanel() {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-2 p-6 text-center">
         <IconGitBranch size={20} className="text-content-subtle" />
-        <p className="[font-size:var(--right-panel-font-size)] text-content-muted">还没有项目</p>
-        <p className="[font-size:var(--right-panel-font-size)] text-content-subtle">添加项目后即可查看 Git 状态</p>
+        <p className="[font-size:var(--right-panel-font-size)] text-content-muted">{t("ide.files.noProjectTitle")}</p>
+        <p className="[font-size:var(--right-panel-font-size)] text-content-subtle">{t("ide.git.noProjectHint")}</p>
       </div>
     );
   }
@@ -70,7 +72,7 @@ export function GitPanel() {
     return (
       <div className="flex items-center gap-1.5 px-3 py-2 [font-size:var(--right-panel-font-size)] text-content-subtle">
         <IconLoader2 size={12} className="animate-spin" />
-        扫描 Git 仓库…
+        {t("ide.git.scanning")}
       </div>
     );
   }
@@ -79,16 +81,16 @@ export function GitPanel() {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-2 p-6 text-center">
         <IconGitBranch size={20} className="text-content-subtle" />
-        <p className="[font-size:var(--right-panel-font-size)] text-content-muted">未找到 Git 仓库</p>
+        <p className="[font-size:var(--right-panel-font-size)] text-content-muted">{t("ide.git.noRepos")}</p>
         <p className="[font-size:var(--right-panel-font-size)] text-content-subtle">
-          在「{projectPath}」及其子目录(3 层内)未发现 .git 目录
+          {t("ide.git.noReposHint", { path: projectPath })}
         </p>
         <button
           type="button"
           onClick={() => void scan(projectPath)}
           className="mt-1 flex items-center gap-1 rounded px-2 py-1 [font-size:var(--right-panel-font-size)] text-content-muted hover:bg-surface-hover"
         >
-          <IconRefresh size={11} /> 重新扫描
+          <IconRefresh size={11} /> {t("ide.git.rescan")}
         </button>
       </div>
     );
@@ -102,21 +104,21 @@ export function GitPanel() {
           active={subTab === "changes"}
           onClick={() => setSubTab("changes")}
           icon={<IconGitBranch size={12} />}
-          label="更改"
+          label={t("ide.git.changes")}
         />
         <SubTabButton
           active={subTab === "history"}
           onClick={() => setSubTab("history")}
           icon={<IconGitCommit size={12} />}
-          label="历史"
+          label={t("ide.git.history")}
         />
         <div className="ml-auto flex items-center gap-1 px-1.5">
-          <span className="[font-size:var(--rp-fs-xxs)] text-content-subtle">{repos.length} 仓</span>
+          <span className="[font-size:var(--rp-fs-xxs)] text-content-subtle">{t("ide.git.repoCount", { n: repos.length })}</span>
           <button
             type="button"
             onClick={() => void scan(projectPath)}
             className="flex items-center gap-1 rounded px-1.5 py-0.5 [font-size:var(--right-panel-font-size)] text-content-muted transition-colors hover:bg-surface-hover hover:text-content"
-            title="重新扫描仓库"
+            title={t("ide.git.rescanRepos")}
           >
             <IconRefresh size={12} />
           </button>

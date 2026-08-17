@@ -21,6 +21,7 @@ import { useCallback, useEffect, useState } from "react";
 import { cn } from "@renderer/lib/cn.js";
 import { Button, Kbd } from "@renderer/components/ui/index.js";
 import { useSessionStore } from "@renderer/stores/sessionStore.js";
+import { useI18n } from "@renderer/lib/i18n/index.js";
 import {
   resolveShortcut,
   resolveAllShortcuts,
@@ -35,6 +36,7 @@ import { IconRefresh, IconCheck } from "@renderer/lib/icons.js";
 type Mode = "idle" | "recording" | "conflict";
 
 export function ShortcutRecorder({ commandId }: { commandId: string }) {
+  const { t } = useI18n();
   const overrides = useSessionStore((s) => s.shortcutOverrides);
   const setShortcutOverride = useSessionStore((s) => s.setShortcutOverride);
 
@@ -145,14 +147,14 @@ export function ShortcutRecorder({ commandId }: { commandId: string }) {
     return (
       <div className="flex items-center gap-2">
         <span className="text-[0.7857em] text-accent">
-          已被「{conflictLabel}」占用
+          {t("settings.shortcuts.conflict", { label: conflictLabel })}
         </span>
         <Button variant="primary" size="sm" onClick={confirmOverwrite}>
           <IconCheck size={11} />
-          覆盖
+          {t("settings.shortcuts.overwrite")}
         </Button>
         <Button variant="ghost" size="sm" onClick={cancel}>
-          取消
+          {t("common.cancel")}
         </Button>
       </div>
     );
@@ -167,10 +169,10 @@ export function ShortcutRecorder({ commandId }: { commandId: string }) {
             "text-[0.7857em] text-accent animate-pulse",
           )}
         >
-          按下组合键…
+          {t("settings.shortcuts.recordingHint")}
         </kbd>
         <Button variant="ghost" size="sm" onClick={cancel}>
-          取消
+          {t("common.cancel")}
         </Button>
       </div>
     );
@@ -182,21 +184,21 @@ export function ShortcutRecorder({ commandId }: { commandId: string }) {
       {effective ? (
         <Kbd keys={acceleratorToDisplayTokens(effective)} size="xs" />
       ) : (
-        <span className="text-[0.7857em] text-content-subtle">未绑定</span>
+        <span className="text-[0.7857em] text-content-subtle">{t("settings.shortcuts.unbound")}</span>
       )}
       <Button variant="outline" size="sm" onClick={startRecording}>
-        修改
+        {t("settings.shortcuts.modify")}
       </Button>
       {hasOverride && (
         <Button
           variant="ghost"
           size="sm"
           onClick={() => setShortcutOverride(commandId, null)}
-          title="恢复为默认快捷键"
+          title={t("settings.shortcuts.resetTitle")}
           className="gap-1 px-1.5"
         >
           <IconRefresh size={11} />
-          恢复默认
+          {t("settings.shortcuts.reset")}
         </Button>
       )}
     </div>

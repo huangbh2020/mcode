@@ -1,5 +1,6 @@
 import { cn } from "@renderer/lib/cn.js";
 import { IconX, IconPlus, IconLoader2, IconWorld } from "@renderer/lib/icons.js";
+import { useI18n } from "@renderer/lib/i18n/index.js";
 
 /** A single browser tab's display state (mirrors the BrowserTab in BrowserPanel
  *  minus browserId, which the tab strip doesn't need). */
@@ -27,6 +28,7 @@ export interface BrowserTabsProps {
 }
 
 export function BrowserTabs({ tabs, activeTabId, onSelect, onClose, onNew }: BrowserTabsProps) {
+  const { t } = useI18n();
   if (tabs.length === 0) return null;
   return (
     <div className="flex h-9 shrink-0 items-end gap-0.5 border-b border-edge bg-surface/40 px-2 pt-1.5">
@@ -34,7 +36,7 @@ export function BrowserTabs({ tabs, activeTabId, onSelect, onClose, onNew }: Bro
         {tabs.map((tab) => {
           const isActive = tab.id === activeTabId;
           // Derive a short tab title: prefer the page title, fall back to the
-          // URL's hostname, then "新标签页" for about:blank/empty.
+          // URL's hostname, then the "new tab" placeholder for about:blank/empty.
           const host = (() => {
             try {
               if (tab.url && tab.url !== "about:blank") return new URL(tab.url).hostname;
@@ -43,7 +45,7 @@ export function BrowserTabs({ tabs, activeTabId, onSelect, onClose, onNew }: Bro
             }
             return null;
           })();
-          const label = tab.title || host || (tab.url && tab.url !== "about:blank" ? tab.url : "新标签页");
+          const label = tab.title || host || (tab.url && tab.url !== "about:blank" ? tab.url : t("browser.newTab"));
           return (
             <div
               key={tab.id}
@@ -73,7 +75,7 @@ export function BrowserTabs({ tabs, activeTabId, onSelect, onClose, onNew }: Bro
               <span className="min-w-0 truncate">{label}</span>
               <button
                 type="button"
-                aria-label="关闭标签页"
+                aria-label={t("browser.closeTabAria")}
                 onClick={(e) => {
                   e.stopPropagation();
                   onClose(tab.id);
@@ -94,8 +96,8 @@ export function BrowserTabs({ tabs, activeTabId, onSelect, onClose, onNew }: Bro
       <button
         type="button"
         onClick={onNew}
-        title="新建标签页"
-        aria-label="新建标签页"
+        title={t("browser.createTab")}
+        aria-label={t("browser.createTab")}
         className="mb-0.5 ml-1 flex h-6 w-6 shrink-0 items-center justify-center rounded text-content-muted transition-colors hover:bg-surface-muted hover:text-content"
       >
         <IconPlus size={14} />

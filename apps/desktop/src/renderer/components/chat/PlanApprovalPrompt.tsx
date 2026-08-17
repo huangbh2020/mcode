@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useSessionStore } from "@renderer/stores/sessionStore.js";
 import { cn } from "@renderer/lib/cn.js";
+import { useI18n } from "@renderer/lib/i18n/index.js";
 import { Button, Input } from "@renderer/components/ui/index.js";
 import {
   IconRocket,
@@ -63,6 +64,7 @@ export function PlanApprovalPrompt({
   const draft = useSessionStore(
     (s) => s.planApprovalDraftBySession[sessionId] ?? plan,
   );
+  const { t } = useI18n();
   const [feedback, setFeedback] = useState("");
 
   const edited = draft.trim() !== plan.trim();
@@ -80,10 +82,10 @@ export function PlanApprovalPrompt({
   };
 
   const hint = edited
-    ? "已编辑"
+    ? t("chat.planApproval.hintEdited")
     : hasFeedback
-      ? "意见将反馈给模型"
-      : "批准后将退出计划模式并开始执行";
+      ? t("chat.planApproval.hintFeedback")
+      : t("chat.planApproval.hintDefault");
 
   return (
     <div
@@ -96,7 +98,7 @@ export function PlanApprovalPrompt({
       <div className="mb-2 flex items-center justify-between gap-2">
         <div className="flex min-w-0 items-center gap-1.5">
           <IconRocket size={14} className="shrink-0 text-accent" />
-          <span className="font-semibold text-accent">计划已就绪 · 请审阅</span>
+          <span className="font-semibold text-accent">{t("chat.planApproval.title")}</span>
         </div>
         <span className="shrink-0 text-[10px] text-content-subtle">{hint}</span>
       </div>
@@ -115,7 +117,7 @@ export function PlanApprovalPrompt({
             handleApprove();
           }
         }}
-        placeholder="计划调整意见(可选)— 随批准执行或作为拒绝理由反馈给模型…"
+        placeholder={t("chat.planApproval.feedbackPlaceholder")}
         className="mb-2.5 font-sans"
       />
 
@@ -125,20 +127,20 @@ export function PlanApprovalPrompt({
           variant="ghost"
           size="sm"
           onClick={onEditPlan}
-          title="在编辑器中编辑计划"
+          title={t("chat.planApproval.editInEditor")}
         >
           <IconPencil size={12} />
-          {edited ? "编辑计划（已编辑）" : "编辑计划"}
+          {edited ? t("chat.planApproval.editEdited") : t("chat.plan.editPlan")}
         </Button>
         <div className="flex items-center gap-1.5">
           <Button
             variant="ghost"
             size="sm"
             onClick={handleReject}
-            title={hasFeedback ? "拒绝并把你的意见作为理由反馈给模型" : "拒绝计划"}
+            title={hasFeedback ? t("chat.planApproval.rejectFeedbackTitle") : t("chat.planApproval.rejectTitle")}
           >
             <IconX size={12} />
-            拒绝
+            {t("chat.planApproval.reject")}
           </Button>
           <Button
             variant="primary"
@@ -146,14 +148,14 @@ export function PlanApprovalPrompt({
             onClick={handleApprove}
             title={
               edited
-                ? "批准并使用你编辑后的计划"
+                ? t("chat.planApproval.approveEditedTitle")
                 : hasFeedback
-                  ? "批准并执行,按你的调整意见执行"
-                  : "批准该计划"
+                  ? t("chat.planApproval.approveFeedbackTitle")
+                  : t("chat.planApproval.approveTitle")
             }
           >
             <IconRocket size={12} />
-            {edited ? "批准(已编辑)" : "批准并执行"}
+            {edited ? t("chat.planApproval.approveEdited") : t("chat.planApproval.approve")}
           </Button>
         </div>
       </div>

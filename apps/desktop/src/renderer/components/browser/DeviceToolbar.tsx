@@ -11,6 +11,16 @@ import {
   type BrowserDevicePreset,
   type BrowserOrientation,
 } from "@contracts/ipc";
+import { useI18n, type MessageId } from "@renderer/lib/i18n/index.js";
+
+/** Localized overrides for presets whose contract label is Chinese
+ * ("桌面端"/"自定义" in BROWSER_DEVICE_PRESETS). Product names (iPhone 14,
+ * Pixel 7, …) pass through untranslated. */
+const PRESET_LABEL_KEYS: Partial<Record<BrowserDevicePreset, MessageId>> = {
+  desktop: "browser.desktopDevice",
+  pc: "browser.desktopDevice",
+  custom: "browser.customDevice",
+};
 
 /**
  * Device toolbar — the browser panel's "Toggle device toolbar" equivalent
@@ -49,13 +59,20 @@ export function DeviceToolbar({
   /** Collapse the toolbar (same as clicking the 📱 toggle again). */
   onClose: () => void;
 }) {
+  const { t } = useI18n();
   const current = BROWSER_DEVICE_PRESETS.find((p) => p.id === device);
   const landscape = orientation === "landscape";
+  // Localized preset label: PRESET_LABEL_KEYS covers the Chinese contract
+  // labels; product names pass through.
+  const presetLabel = (id: BrowserDevicePreset, fallback: string) => {
+    const key = PRESET_LABEL_KEYS[id];
+    return key ? t(key) : fallback;
+  };
   const dimsLabel =
     device === "custom"
       ? `${customWidth ?? 390}×${customHeight ?? 844}`
       : device === "desktop"
-        ? "PC 全宽"
+        ? t("browser.pcFullWidth")
         : landscape
           ? `${current?.height ?? ""}×${current?.width ?? ""}`
           : `${current?.width ?? ""}×${current?.height ?? ""}`;
@@ -63,12 +80,12 @@ export function DeviceToolbar({
   // BROWSER_DEVICE_PRESETS (see contracts), so `current` is undefined for it —
   // resolve a friendly label so the trigger never shows the raw id.
   const displayLabel =
-    device === "desktop" ? "桌面端" : (current?.label ?? device);
+    device === "desktop" ? t("browser.desktopDevice") : presetLabel(device, current?.label ?? device);
 
   return (
     <div className="flex h-9 shrink-0 items-center gap-1.5 border-b border-edge bg-surface-muted/60 px-2">
       <span className="shrink-0 text-[10px] font-medium uppercase tracking-wider text-content-subtle">
-        设备
+        {t("browser.device")}
       </span>
 
       {/* Device dropdown — every preset + 自定义. */}
@@ -79,7 +96,7 @@ export function DeviceToolbar({
           onOpenChange={(open) => onMenuOpenChange(open)}
         >
           <Select.Trigger
-            title={`设备: ${displayLabel} ${dimsLabel}`}
+            title={t("browser.deviceTitle", { label: displayLabel, dims: dimsLabel })}
             className="max-w-[10rem]"
           >
             <span className="flex min-w-0 items-center gap-1.5">
@@ -107,7 +124,7 @@ export function DeviceToolbar({
                           ) : (
                             <IconDeviceMobile size={14} className="shrink-0" />
                           )}
-                          <span>{p.label}</span>
+                          <span>{presetLabel(p.id, p.label)}</span>
                           {p.id !== "desktop" && p.id !== "custom" && (
                             <span className="ml-auto pl-3 text-[10px] text-content-subtle">
                               {landscape
@@ -138,8 +155,8 @@ export function DeviceToolbar({
               const w = Number(e.target.value) || 390;
               onViewportChange("custom", { width: w, height: customHeight ?? 844, orientation });
             }}
-            title="自定义宽度 (px)"
-            aria-label="自定义宽度"
+            title={t("browser.customWidthTitle")}
+            aria-label={t("browser.customWidthAria")}
             className="h-6 w-14 rounded border border-edge bg-surface px-1 text-center text-[10px] text-content outline-none focus:border-accent"
           />
           <span className="text-[10px] text-content-subtle">×</span>
@@ -151,8 +168,8 @@ export function DeviceToolbar({
               const h = Number(e.target.value) || 844;
               onViewportChange("custom", { width: customWidth ?? 390, height: h, orientation });
             }}
-            title="自定义高度 (px)"
-            aria-label="自定义高度"
+            title={t("browser.customHeightTitle")}
+            aria-label={t("browser.customHeightAria")}
             className="h-6 w-14 rounded border border-edge bg-surface px-1 text-center text-[10px] text-content outline-none focus:border-accent"
           />
           <span className="text-[10px] text-content-subtle">px</span>
@@ -171,8 +188,8 @@ export function DeviceToolbar({
               orientation: landscape ? "portrait" : "landscape",
             })
           }
-          title={landscape ? "切换为竖屏" : "切换为横屏"}
-          aria-label={landscape ? "切换为竖屏" : "切换为横屏"}
+          title={landscape ? t("browser.rotateToPortrait") : t("browser.rotateToLandscape")}
+          aria-label={landscape ? t("browser.rotateToPortrait") : t("browser.rotateToLandscape")}
           className={cn(
             "flex h-7 w-7 shrink-0 items-center justify-center rounded transition-colors",
             landscape
@@ -190,12 +207,12 @@ export function DeviceToolbar({
       <button
         type="button"
         onClick={onClose}
-        title="收起设备工具栏"
-        aria-label="收起设备工具栏"
+        title={t("browser.collapseDeviceToolbar")}
+        aria-label={t("browser.collapseDeviceToolbar")}
         className="flex h-7 shrink-0 items-center gap-1 rounded px-1.5 text-[10px] text-content-muted transition-colors hover:bg-surface-hover hover:text-content"
       >
         <IconChevronDown size={13} className="rotate-180" />
-        收起
+        {t("browser.collapse")}
       </button>
     </div>
   );

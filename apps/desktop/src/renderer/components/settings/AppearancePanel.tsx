@@ -6,6 +6,7 @@ import { hexToTriplet, tripletToHex } from "@renderer/lib/colorUtils.js";
 import { useSessionStore, CHAT_FONT_SIZE_MIN, CHAT_FONT_SIZE_MAX, RIGHT_PANEL_FONT_SIZE_MIN, RIGHT_PANEL_FONT_SIZE_MAX } from "@renderer/stores/sessionStore.js";
 import { Button, Card, Select } from "@renderer/components/ui/index.js";
 import { IconRefresh, IconSun, IconMoon, IconDeviceDesktop } from "@renderer/lib/icons.js";
+import { useI18n, type MessageId } from "@renderer/lib/i18n/index.js";
 import type { ThemeName } from "@contracts/theme";
 import type { ReactNode } from "react";
 import { PanelHeader } from "./PanelHeader.js";
@@ -43,14 +44,14 @@ const DEFAULT_USER_BUBBLE_HEX = "#52525b";
 /** Curated user-bubble presets. `triplet` is what we persist; `hex` drives the
  *  swatch. Mirrors ACCENT_PRESETS structure; the first entry is the default
  *  (neutral gray) so user prompts read as a calm, non-distracting bubble. */
-const USER_BUBBLE_PRESETS: { name: string; triplet: string; hex: string }[] = [
-  { name: "灰色", triplet: "82 82 91", hex: "#52525b" }, // zinc-500 (= default)
-  { name: "翠绿", triplet: "5 150 105", hex: "#059669" }, // emerald-600
-  { name: "天蓝", triplet: "2 132 199", hex: "#0284c7" }, // sky-600
-  { name: "靛蓝", triplet: "67 56 202", hex: "#4338ca" }, // indigo-700
-  { name: "紫罗兰", triplet: "124 58 237", hex: "#7c3aed" }, // violet-600
-  { name: "玫瑰红", triplet: "225 29 72", hex: "#e11d48" }, // rose-600
-  { name: "琥珀", triplet: "217 119 6", hex: "#d97706" }, // amber-600
+const USER_BUBBLE_PRESETS: { nameKey: MessageId; triplet: string; hex: string }[] = [
+  { nameKey: "settings.appearance.colorGray", triplet: "82 82 91", hex: "#52525b" }, // zinc-500 (= default)
+  { nameKey: "settings.appearance.colorEmerald", triplet: "5 150 105", hex: "#059669" }, // emerald-600
+  { nameKey: "settings.appearance.colorSky", triplet: "2 132 199", hex: "#0284c7" }, // sky-600
+  { nameKey: "settings.appearance.colorIndigo", triplet: "67 56 202", hex: "#4338ca" }, // indigo-700
+  { nameKey: "settings.appearance.colorViolet", triplet: "124 58 237", hex: "#7c3aed" }, // violet-600
+  { nameKey: "settings.appearance.colorRose", triplet: "225 29 72", hex: "#e11d48" }, // rose-600
+  { nameKey: "settings.appearance.colorAmber", triplet: "217 119 6", hex: "#d97706" }, // amber-600
 ];
 
 /** Curated accent presets. `triplet` is what we persist; `hex` drives the swatch.
@@ -59,24 +60,25 @@ const USER_BUBBLE_PRESETS: { name: string; triplet: string; hex: string }[] = [
  *  saturation) so they read as calm chips instead of glaring ones — kinder on
  *  the eyes in dark mode. Trade-off: very soft accents reduce white-on-accent
  *  legibility on filled buttons (those prefer a darker accent). */
-const ACCENT_PRESETS: { name: string; triplet: string; hex: string }[] = [
-  { name: "翠绿", triplet: "5 150 105", hex: "#059669" }, // emerald-600 (default, kept saturated)
-  { name: "天蓝", triplet: "111 182 224", hex: "#6fb6e0" }, // soft sky
-  { name: "靛蓝", triplet: "139 151 232", hex: "#8b97e8" }, // soft indigo
-  { name: "青色", triplet: "94 200 184", hex: "#5ec8b8" }, // soft teal
-  { name: "紫罗兰", triplet: "184 156 230", hex: "#b89ce6" }, // soft violet
-  { name: "樱粉", triplet: "244 168 168", hex: "#f4a8a8" }, // soft rose
-  { name: "琥珀", triplet: "243 201 105", hex: "#f3c969" }, // soft amber
-  { name: "橙色", triplet: "246 165 107", hex: "#f6a56b" }, // soft orange
+const ACCENT_PRESETS: { nameKey: MessageId; triplet: string; hex: string }[] = [
+  { nameKey: "settings.appearance.colorEmerald", triplet: "5 150 105", hex: "#059669" }, // emerald-600 (default, kept saturated)
+  { nameKey: "settings.appearance.colorSky", triplet: "111 182 224", hex: "#6fb6e0" }, // soft sky
+  { nameKey: "settings.appearance.colorIndigo", triplet: "139 151 232", hex: "#8b97e8" }, // soft indigo
+  { nameKey: "settings.appearance.colorTeal", triplet: "94 200 184", hex: "#5ec8b8" }, // soft teal
+  { nameKey: "settings.appearance.colorViolet", triplet: "184 156 230", hex: "#b89ce6" }, // soft violet
+  { nameKey: "settings.appearance.colorPink", triplet: "244 168 168", hex: "#f4a8a8" }, // soft rose
+  { nameKey: "settings.appearance.colorAmber", triplet: "243 201 105", hex: "#f3c969" }, // soft amber
+  { nameKey: "settings.appearance.colorOrange", triplet: "246 165 107", hex: "#f6a56b" }, // soft orange
 ];
 
-const THEME_OPTIONS: { value: ThemeName; label: string; icon: ReactNode }[] = [
-  { value: "light", label: "浅色", icon: <IconSun size={14} className="text-content-muted" /> },
-  { value: "dark", label: "深色", icon: <IconMoon size={14} className="text-content-muted" /> },
-  { value: "system", label: "跟随系统", icon: <IconDeviceDesktop size={14} className="text-content-muted" /> },
+const THEME_OPTIONS: { value: ThemeName; labelKey: MessageId; icon: ReactNode }[] = [
+  { value: "light", labelKey: "settings.appearance.themeLight", icon: <IconSun size={14} className="text-content-muted" /> },
+  { value: "dark", labelKey: "settings.appearance.themeDark", icon: <IconMoon size={14} className="text-content-muted" /> },
+  { value: "system", labelKey: "settings.appearance.themeSystem", icon: <IconDeviceDesktop size={14} className="text-content-muted" /> },
 ];
 
 export function AppearancePanel() {
+  const { t } = useI18n();
   const { theme, effective } = useTheme();
 
   // ── Chat font size ──
@@ -114,13 +116,13 @@ export function AppearancePanel() {
     tripletToHex(accentColor) ||
     DEFAULT_ACCENT_HEX;
 
-  const effectiveLabel = effective === "dark" ? "深色" : "浅色";
+  const effectiveLabel = t(effective === "dark" ? "settings.appearance.themeDark" : "settings.appearance.themeLight");
 
   return (
     <section className="space-y-4">
       <PanelHeader
-        title="外观"
-        desc="调整界面主题、聊天样式与全局强调色,所有改动实时生效。"
+        title={t("settings.appearance.title")}
+        desc={t("settings.appearance.desc")}
       />
 
       {/* Single category → rows go straight into one card. Rows share a
@@ -129,12 +131,14 @@ export function AppearancePanel() {
       <Card className="divide-y divide-edge">
         {/* ── Theme ── */}
         <SettingRow
-          title="界面主题"
+          title={t("settings.appearance.theme")}
           desc={
             <>
-              选择应用的外观配色;选&quot;跟随系统&quot;会随操作系统自动切换。
+              {t("settings.appearance.themeDesc")}
               {theme === "system" && (
-                <span className="text-content-muted"> 当前:{effectiveLabel}。</span>
+                <span className="text-content-muted">
+                  {t("settings.appearance.currentTheme", { theme: effectiveLabel })}
+                </span>
               )}
             </>
           }
@@ -153,7 +157,7 @@ export function AppearancePanel() {
                   return (
                     <span className="flex items-center gap-1.5">
                       {o.icon}
-                      {o.label}
+                      {t(o.labelKey)}
                     </span>
                   );
                 }}
@@ -166,7 +170,7 @@ export function AppearancePanel() {
                     {THEME_OPTIONS.map((o) => (
                       <Select.Item key={o.value} value={o.value}>
                         {o.icon}
-                        <Select.ItemText>{o.label}</Select.ItemText>
+                        <Select.ItemText>{t(o.labelKey)}</Select.ItemText>
                       </Select.Item>
                     ))}
                   </Select.List>
@@ -178,8 +182,11 @@ export function AppearancePanel() {
 
         {/* ── Global font size (left bar + right panel + settings) ── */}
         <SettingRow
-          title="全局字体大小"
-          desc={`统一设置左侧项目栏、右侧文件树/Git/终端以及设置面板的字体大小(${RIGHT_PANEL_FONT_SIZE_MIN}–${RIGHT_PANEL_FONT_SIZE_MAX} px)。`}
+          title={t("settings.appearance.globalFontSize")}
+          desc={t("settings.appearance.globalFontSizeDesc", {
+            min: RIGHT_PANEL_FONT_SIZE_MIN,
+            max: RIGHT_PANEL_FONT_SIZE_MAX,
+          })}
           htmlFor="setting-sidepanel-fontsize"
         >
           <FontSizeStepper
@@ -193,8 +200,11 @@ export function AppearancePanel() {
 
         {/* ── Chat font size ── */}
         <SettingRow
-          title="聊天字体大小"
-          desc={`自定义聊天内容的字体大小(${CHAT_FONT_SIZE_MIN}–${CHAT_FONT_SIZE_MAX} px)。`}
+          title={t("settings.appearance.chatFontSize")}
+          desc={t("settings.appearance.chatFontSizeDesc", {
+            min: CHAT_FONT_SIZE_MIN,
+            max: CHAT_FONT_SIZE_MAX,
+          })}
           htmlFor="setting-fontsize"
         >
           <FontSizeStepper
@@ -208,15 +218,15 @@ export function AppearancePanel() {
 
         {/* ── User message background color ── */}
         <SettingRow
-          title="用户消息背景色"
+          title={t("settings.appearance.userColor")}
           desc={
             userMessageColor
-              ? `自定义 ${userColorHex.toUpperCase()}`
-              : "主题默认色(灰色)"
+              ? t("settings.appearance.userColorCustom", { hex: userColorHex.toUpperCase() })
+              : t("settings.appearance.userColorDefault")
           }
           descExtra={
             <span className="text-[0.7143em] text-content-subtle">
-              影响聊天中用户消息气泡的背景色调。
+              {t("settings.appearance.userColorDescExtra")}
             </span>
           }
           controlAlign="start"
@@ -234,8 +244,8 @@ export function AppearancePanel() {
                     setPendingUserHex("");
                     void setUserMessageColor(p.triplet);
                   }}
-                  title={`${p.name} · ${p.hex.toUpperCase()}`}
-                  aria-label={`选择${p.name}`}
+                  title={`${t(p.nameKey)} · ${p.hex.toUpperCase()}`}
+                  aria-label={t("settings.appearance.pickColor", { name: t(p.nameKey) })}
                   aria-pressed={active}
                   className={cn(
                     "h-6 w-6 rounded-full border-2 transition-transform hover:scale-110",
@@ -268,25 +278,25 @@ export function AppearancePanel() {
               void setUserMessageColor(null);
             }}
             disabled={!userMessageColor && !pendingUserHex}
-            title="恢复为主题默认色(灰色)"
+            title={t("settings.appearance.userColorResetTitle")}
             className="gap-1 px-1.5"
           >
             <IconRefresh size={11} />
-            恢复默认
+            {t("settings.appearance.resetDefault")}
           </Button>
         </SettingRow>
 
         {/* ── Accent color ── */}
         <SettingRow
-          title="品牌强调色"
+          title={t("settings.appearance.accentColor")}
           desc={
             accentColor
-              ? `自定义 ${accentHex.toUpperCase()}`
-              : "主题默认色(翠绿)"
+              ? t("settings.appearance.accentColorCustom", { hex: accentHex.toUpperCase() })
+              : t("settings.appearance.accentColorDefault")
           }
           descExtra={
             <span className="text-[0.7143em] text-content-subtle">
-              影响按钮、链接、选中态、输入框聚焦边框等。
+              {t("settings.appearance.accentColorDescExtra")}
             </span>
           }
           controlAlign="start"
@@ -303,8 +313,8 @@ export function AppearancePanel() {
                     setPendingAccentHex("");
                     void setAccentColor(p.triplet);
                   }}
-                  title={`${p.name} · ${p.hex.toUpperCase()}`}
-                  aria-label={`选择${p.name}`}
+                  title={`${t(p.nameKey)} · ${p.hex.toUpperCase()}`}
+                  aria-label={t("settings.appearance.pickColor", { name: t(p.nameKey) })}
                   aria-pressed={active}
                   className={cn(
                     "h-6 w-6 rounded-full border-2 transition-transform hover:scale-110",
@@ -337,11 +347,11 @@ export function AppearancePanel() {
               void setAccentColor(null);
             }}
             disabled={!accentColor && !pendingAccentHex}
-            title="恢复为主题默认色(翠绿)"
+            title={t("settings.appearance.accentColorResetTitle")}
             className="gap-1 px-1.5"
           >
             <IconRefresh size={11} />
-            恢复默认
+            {t("settings.appearance.resetDefault")}
           </Button>
         </SettingRow>
 
@@ -349,7 +359,7 @@ export function AppearancePanel() {
           accent row. */}
       </Card>
       <p className="pt-1 text-[0.7143em] text-content-subtle">
-        提示:主题切换整窗即时生效;颜色透明度按各场景预设固定,无需手动调节。
+        {t("settings.appearance.footer")}
       </p>
     </section>
   );

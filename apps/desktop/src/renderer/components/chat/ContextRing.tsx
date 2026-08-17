@@ -1,5 +1,6 @@
 import { useRef, useState } from "react";
 import { cn } from "@renderer/lib/cn.js";
+import { useI18n } from "@renderer/lib/i18n/index.js";
 import {
   fmtTokens,
   getContextBreakdown,
@@ -44,6 +45,7 @@ export function ContextRing({
    *  the store's `usageHistoryBySession`). Empty until the first turn ends. */
   history: TurnUsageRecord[];
 }) {
+  const { t } = useI18n();
   const { pct, warning } = snapshot;
   // Geometry: 14px box, ring stroke 2.5 (so inner hole ~9px).
   const size = 14;
@@ -91,8 +93,8 @@ export function ContextRing({
           render={
             <button
               type="button"
-              aria-label="上下文统计"
-              title="上下文统计"
+              aria-label={t("chat.context.stats")}
+              title={t("chat.context.stats")}
             />
           }
           className={cn(
@@ -196,6 +198,7 @@ export function ContextTooltipBody({
    *  trailing affordance is rendered. */
   onShowDetails?: () => void;
 }) {
+  const { t } = useI18n();
   const colorClass = warningColor(snapshot.warning);
   return (
     <div className="px-2.5 py-2">
@@ -234,7 +237,7 @@ export function ContextTooltipBody({
       </ul>
       {snapshot.model && (
         <div className="mt-1.5 border-t border-edge/70 pt-1.5 text-[10px] text-content-subtle">
-          模型 · {snapshot.model}
+          {t("chat.context.modelLine", { model: snapshot.model })}
         </div>
       )}
       {onShowDetails && (
@@ -248,10 +251,10 @@ export function ContextTooltipBody({
             )}
           >
             <IconChartBar size={12} className="shrink-0 opacity-70" />
-            <span className="min-w-0 flex-1 truncate">查看详情</span>
+            <span className="min-w-0 flex-1 truncate">{t("chat.context.viewDetails")}</span>
             {historyCount != null && (
               <span className="rounded-full bg-surface-muted px-1.5 py-0.5 text-[10px] tabular-nums text-content-subtle">
-                {historyCount} 轮
+                {t("chat.context.turns", { n: historyCount })}
               </span>
             )}
             <IconChevronRight size={12} className="shrink-0 opacity-50" />

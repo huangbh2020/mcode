@@ -24,6 +24,7 @@ import {
 // Side-effect import: configures Monaco's worker environment + local instance
 // (no CDN). Must run before any <Editor> mounts. See monacoSetup.ts.
 import "@renderer/lib/monacoSetup.js";
+import { useI18n } from "@renderer/lib/i18n/index.js";
 
 /**
  * File editor — wraps Monaco for a single open file. Supports two modes:
@@ -157,6 +158,7 @@ function EditorToolbar({
   editorMode: "tabs" | "replace";
   onToggleEditorMode: () => void;
 }) {
+  const { t } = useI18n();
   // Files that default to a read-only preview pane (markdown rendered, image
   // displayed, or an unsupported-type notice). These get a Preview/Edit toggle
   // so the user can still drop into the raw Monaco editor if they want.
@@ -186,7 +188,7 @@ function EditorToolbar({
               "flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] transition-colors",
               "text-content-muted hover:bg-surface-hover hover:text-content",
             )}
-            title={mode === "edit" ? "切换到差异视图" : "切换到编辑视图"}
+            title={mode === "edit" ? t("ide.editor.switchToDiff") : t("ide.editor.switchToEditView")}
           >
             {mode === "edit" ? <IconEye size={12} /> : <IconEdit size={12} />}
             {mode === "edit" ? "Diff" : "Edit"}
@@ -206,7 +208,7 @@ function EditorToolbar({
               "flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] transition-colors",
               "text-content-muted hover:bg-surface-hover hover:text-content",
             )}
-            title={mode === "preview" ? "切换到源码编辑" : "切换到预览"}
+            title={mode === "preview" ? t("ide.editor.switchToSource") : t("ide.editor.switchToPreview")}
           >
             {mode === "preview" ? <IconEdit size={12} /> : <IconEye size={12} />}
             {mode === "preview" ? "Edit" : "Preview"}
@@ -224,8 +226,8 @@ function EditorToolbar({
           )}
           title={
             editorMode === "tabs"
-              ? "当前:多标签页 — 点击切到替换模式(单文件)"
-              : "当前:替换模式 — 点击切到多标签页"
+              ? t("ide.editor.modeTabsHint")
+              : t("ide.editor.modeReplaceHint")
           }
         >
           {editorMode === "tabs" ? <IconColumns3 size={13} /> : <IconSquare size={13} />}
@@ -241,6 +243,7 @@ function EditorToolbar({
  *  dirty state; Ctrl+S saves. Wires LSP document sync + providers when the
  *  file's language has a server enabled. */
 function EditPane({ filePath, projectPath }: { filePath: string; projectPath: string }) {
+  const { t } = useI18n();
   const editorRef = useRef<editor.IStandaloneCodeEditor | null>(null);
   const monacoRef = useRef<typeof import("monaco-editor") | null>(null);
   const [content, setContent] = useState<string | null>(null); // null = loading
@@ -374,7 +377,7 @@ function EditPane({ filePath, projectPath }: { filePath: string; projectPath: st
     return (
       <div className="flex h-full items-center justify-center gap-1.5 text-[11px] text-content-subtle">
         <IconLoader2 size={12} className="animate-spin" />
-        读取文件…
+        {t("ide.editor.readingFile")}
       </div>
     );
   }
@@ -404,7 +407,7 @@ function EditPane({ filePath, projectPath }: { filePath: string; projectPath: st
           }
         }}
         onMount={handleEditorMount}
-        loading={<div className="text-[11px] text-content-subtle">加载编辑器…</div>}
+        loading={<div className="text-[11px] text-content-subtle">{t("ide.editor.loadingEditor")}</div>}
         options={{
           minimap: { enabled: false },
           fontSize: 12,
@@ -428,14 +431,14 @@ function EditPane({ filePath, projectPath }: { filePath: string; projectPath: st
           )}
         >
           {saveState === "saving" && <IconLoader2 size={11} className="animate-spin" />}
-          {saveState === "saved" && <span>已保存 ✓</span>}
+          {saveState === "saved" && <span>{t("ide.editor.savedToast")}</span>}
           {saveState === "error" && (
             <>
               <IconAlertTriangle size={11} />
-              保存失败
+              {t("ide.editor.saveFailed")}
             </>
           )}
-          {saveState === "saving" && "保存中…"}
+          {saveState === "saving" && t("ide.editor.saving")}
         </div>
       )}
     </div>
@@ -451,6 +454,7 @@ function EditPane({ filePath, projectPath }: { filePath: string; projectPath: st
  *  size instead of the chat bubble size. Read-only - no save / dirty tracking.
  *  Re-reads on filePath change. */
 function MarkdownPreviewPane({ filePath, projectPath }: { filePath: string; projectPath: string }) {
+  const { t } = useI18n();
   const [content, setContent] = useState<string | null>(null); // null = loading
   useEffect(() => {
     let cancelled = false;
@@ -472,7 +476,7 @@ function MarkdownPreviewPane({ filePath, projectPath }: { filePath: string; proj
     return (
       <div className="flex h-full items-center justify-center gap-1.5 text-[11px] text-content-subtle">
         <IconLoader2 size={12} className="animate-spin" />
-        读取文件…
+        {t("ide.editor.readingFile")}
       </div>
     );
   }
@@ -495,6 +499,7 @@ function MarkdownPreviewPane({ filePath, projectPath }: { filePath: string; proj
  *  production CSP (`img-src 'self' data:`) with no extra privilege grants.
  *  No dirty tracking - images are read-only. */
 function ImagePreviewPane({ filePath }: { filePath: string }) {
+  const { t } = useI18n();
   const [natural, setNatural] = useState(false);
   // null = loading, "" = error/empty, non-empty = valid data URL
   const [dataUrl, setDataUrl] = useState<string | null>(null);
@@ -521,7 +526,7 @@ function ImagePreviewPane({ filePath }: { filePath: string }) {
     return (
       <div className="flex h-full items-center justify-center gap-1.5 text-[11px] text-content-subtle">
         <IconLoader2 size={12} className="animate-spin" />
-        读取图片…
+        {t("ide.editor.readingImage")}
       </div>
     );
   }
@@ -530,9 +535,9 @@ function ImagePreviewPane({ filePath }: { filePath: string }) {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-2 p-6 text-center">
         <IconPhotoOff size={32} className="text-content-subtle" />
-        <p className="text-[12px] font-medium text-content-muted">图片加载失败</p>
+        <p className="text-[12px] font-medium text-content-muted">{t("ide.editor.imageLoadFailed")}</p>
         <p className="max-w-[320px] text-[11px] leading-relaxed text-content-subtle">
-          无法预览此图片文件,可能已损坏或格式不受支持
+          {t("ide.editor.imageLoadFailedDesc")}
         </p>
       </div>
     );
@@ -551,7 +556,7 @@ function ImagePreviewPane({ filePath }: { filePath: string }) {
       <div
         className="flex min-h-full min-w-full items-center justify-center p-6"
         onClick={() => setNatural((n) => !n)}
-        title={natural ? "点击适应窗口" : "点击查看原始尺寸"}
+        title={natural ? t("ide.editor.imageFitHint") : t("ide.editor.imageNaturalHint")}
       >
         <img
           src={dataUrl}
@@ -575,7 +580,8 @@ function ImagePreviewPane({ filePath }: { filePath: string }) {
  *  type, a short explanation, and an "open externally" hint. Read-only, no
  *  Monaco - loading these as utf-8 would show garbled bytes. */
 function UnsupportedPane({ filePath }: { filePath: string }) {
-  const ext = extname(filePath).replace(/^\./, "").toUpperCase() || "未知";
+  const { t } = useI18n();
+  const ext = extname(filePath).replace(/^\./, "").toUpperCase() || t("ide.editor.unknownExt");
   return (
     <div className="flex h-full flex-col items-center justify-center gap-3 p-8 text-center">
       <div className="flex h-16 w-16 items-center justify-center rounded-full bg-surface-muted text-content-subtle">
@@ -583,20 +589,19 @@ function UnsupportedPane({ filePath }: { filePath: string }) {
       </div>
       <div className="space-y-1">
         <p className="text-[13px] font-medium text-content">
-          无法预览 {ext} 文件
+          {t("ide.editor.cannotPreview", { ext })}
         </p>
         <p className="max-w-[360px] text-[11px] leading-relaxed text-content-subtle">
-          此文件类型不支持在编辑器中预览。它是二进制格式,无法以文本方式显示。
-          你可以在资源管理器中用关联程序打开它。
+          {t("ide.editor.unsupportedDesc")}
         </p>
       </div>
       <button
         type="button"
         onClick={() => void api.shell.openFile({ path: filePath })}
         className="flex items-center gap-1.5 rounded-md border border-edge bg-surface px-3 py-1.5 text-[12px] text-content-muted transition-colors hover:bg-surface-hover hover:text-content"
-        title="用系统默认程序打开"
+        title={t("ide.editor.openInSystemHint")}
       >
-        在系统中打开
+        {t("ide.editor.openInSystem")}
       </button>
     </div>
   );
@@ -626,6 +631,7 @@ export function DiffPane({
    *  reads the working-tree file from disk. */
   after?: string;
 }) {
+  const { t } = useI18n();
   const [modified, setModified] = useState<string | null>(after ?? null);
   const theme = useMonacoTheme();
   const language = languageForExt(extname(filePath));
@@ -679,7 +685,7 @@ export function DiffPane({
     return (
       <div className="flex h-full items-center justify-center gap-1.5 text-[11px] text-content-subtle">
         <IconLoader2 size={12} className="animate-spin" />
-        读取改动…
+        {t("ide.editor.readingDiff")}
       </div>
     );
   }
@@ -695,7 +701,7 @@ export function DiffPane({
       // ourselves (widget first) to avoid the dispose-order race.
       keepCurrentOriginalModel
       keepCurrentModifiedModel
-      loading={<div className="text-[11px] text-content-subtle">加载差异…</div>}
+      loading={<div className="text-[11px] text-content-subtle">{t("ide.editor.loadingDiff")}</div>}
       onMount={(editor, monaco) => {
         editorRef.current = editor;
         monacoRef.current = monaco;

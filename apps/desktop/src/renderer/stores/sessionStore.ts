@@ -20,8 +20,10 @@ import type { CustomModelPublic, CustomModelRoleKey } from "@contracts/customMod
 import { CUSTOM_MODEL_ROLES } from "@contracts/customModel";
 import { api } from "@renderer/lib/api.js";
 import { isElectron } from "@renderer/lib/platform.js";
+import { translate } from "@renderer/lib/i18n/core.js";
 import {
   DISPLAY_MODE_SETTING_KEY,
+  UI_LOCALE_SETTING_KEY,
   DEFAULT_PROVIDER_ID,
   UI_CHAT_FONT_SIZE_SETTING_KEY,
   UI_RIGHT_PANEL_FONT_SIZE_SETTING_KEY,
@@ -55,6 +57,7 @@ import {
   ShortcutBindingsSchema,
   type AutoArchiveConfig,
   type DisplayMode,
+  type Locale,
   type ChatDensity,
   type ProjectView,
   type ProjectGroupsMeta,
@@ -459,6 +462,10 @@ export interface SessionState {
   openTabs: string[];
   /** How the center pane renders. Persisted in the `settings` table. */
   displayMode: DisplayMode;
+  /** UI language for all translated chrome. `"zh"` (the project's original
+   *  language) is the default. Persisted in the `settings` table; components
+   *  subscribe via `useI18n()` and re-render live when it flips. */
+  locale: Locale;
   /** Session auto-archive rules (master switch + default inactivity days +
    *  per-project overrides). Persisted as JSON in the `settings` table under
    *  `session.autoArchive`; read fresh by the main-process AutoArchiver on
@@ -1111,6 +1118,9 @@ export interface SessionState {
   /** Update the center-pane display mode. Persists to the `settings`
    *  table so the choice survives restart. */
   setDisplayMode: (mode: DisplayMode) => Promise<void>;
+  /** Update the UI language. Persists to the `settings` table so the
+   *  choice survives restart; translated components re-render live. */
+  setLocale: (locale: Locale) => Promise<void>;
   /** Update the session auto-archive rules. Persists to the `settings`
    *  table; the main-process AutoArchiver picks the change up on its next
    *  tick. */
@@ -2898,6 +2908,10 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   openTabs: [],
   // Persisted in `settings` table; init() overwrites from the DB.
   displayMode: "single",
+  // UI language. Persisted in `settings` table; init() overwrites from the
+  // DB. "zh" is the default (and the pre-i18n behavior) so existing users see
+  // no change until they opt into English.
+  locale: "zh",
   // Session auto-archive rules. Persisted as JSON in `settings`; initDeferred
   // hydrates. Disabled by default so existing users opt in.
   autoArchiveConfig: { ...DEFAULT_AUTO_ARCHIVE_CONFIG, overrides: {} },
@@ -3053,6 +3067,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       .getMany({
         keys: [
           DISPLAY_MODE_SETTING_KEY,
+          UI_LOCALE_SETTING_KEY,
           UI_CHAT_DENSITY_SETTING_KEY,
           UI_PROJECT_VIEW_SETTING_KEY,
           UI_PROJECT_GROUPS_SETTING_KEY,
@@ -3073,6 +3088,18 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       if (value === "single" || value === "tabs") set({ displayMode: value });
     } catch (err) {
       console.error("apply(displayMode) failed:", err);
+    }
+
+    // locale drives every translated string — must land before first paint so
+    // the UI never flashes the wrong language. Also mirror onto <html lang>.
+    try {
+      const value = fp[UI_LOCALE_SETTING_KEY];
+      if (value === "zh" || value === "en") {
+        set({ locale: value });
+        document.documentElement.lang = value === "en" ? "en" : "zh-CN";
+      }
+    } catch (err) {
+      console.error("apply(locale) failed:", err);
     }
 
     // chatDensity controls message-stream vertical rhythm (row + block gaps).
@@ -4878,7 +4905,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       );
       if (justFinished) {
         bumpUnread();
-        pushToast("info", "后台任务完成", "子代理任务已结束");
+        pushToast("info", translate(get().locale, "store.toast.backgroundTaskDone"), translate(get().locale, "store.toast.backgroundTaskDoneBody"));
       }
       set((s) => {
         const agents = s.interruptedBySession[sid]
@@ -4917,7 +4944,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     }
     if (e.type === "question.ask") {
       bumpUnread();
-      pushToast("warning", "Agent 有问题要问你", e.questions[0]?.question);
+      pushToast("warning", translate(get().locale, "store.toast.agentQuestion"), e.questions[0]?.question);
       set((s) => ({
         pendingQuestionBySession: {
           ...s.pendingQuestionBySession,
@@ -4930,7 +4957,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       // Mirror the main-side ApprovalBridge queue: head = element 0.
       // De-dup by requestId so a re-emitted event doesn't double-push.
       bumpUnread();
-      pushToast("warning", "需要审批工具调用", e.toolName);
+      pushToast("warning", translate(get().locale, "store.toast.toolApprovalNeeded"), e.toolName);
       set((s) => ({
         pendingApprovals: [
           ...s.pendingApprovals.filter((p) => p.requestId !== e.requestId),
@@ -4946,7 +4973,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       // Also refresh the inline plan block's hasApproval flag -> true so its
       // badge flips to 待审阅, mirroring the composer approval sheet.
       bumpUnread();
-      pushToast("warning", "计划待审批", "查看并批准执行计划");
+      pushToast("warning", translate(get().locale, "store.toast.planApprovalPending"), translate(get().locale, "store.toast.planApprovalPendingBody"));
       set((s) => {
         const list = s.messagesBySession[sid] ?? EMPTY_MESSAGES;
         // The plan text on the approval request is the model's ExitPlanMode
@@ -5252,7 +5279,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
               : m,
           );
           bumpUnread();
-          pushToast("error", "发生错误", e.message);
+          pushToast("error", translate(get().locale, "store.toast.errorOccurred"), e.message);
           set((s) => {
             const runningTurnStartedAt = { ...s.runningTurnStartedAt };
             delete runningTurnStartedAt[sid];
@@ -5276,7 +5303,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           // the intermediate result is not a "done" signal).
           if (e.reason !== "interrupted" && e.reason !== "tool_use") {
             bumpUnread();
-            pushToast("info", "回合完成", "Agent 已完成本轮任务");
+            pushToast("info", translate(get().locale, "store.toast.turnComplete"), translate(get().locale, "store.toast.turnCompleteBody"));
           }
           // Close out any tool_use still "running": the turn ended without a
           // matching tool.result (plan mode, or interrupted).
@@ -5647,6 +5674,19 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       await api.setting.set({ key: DISPLAY_MODE_SETTING_KEY, value: mode });
     } catch (err) {
       console.error("setting.set(displayMode) failed:", err);
+    }
+  },
+
+  /** Update the UI language. Same immediate-flip + fire-and-forget-persist
+   *  pattern as setDisplayMode. Also mirrors the choice onto
+   *  <html lang> so assistive tech + font selection follow the UI language. */
+  setLocale: async (locale) => {
+    set({ locale });
+    document.documentElement.lang = locale === "en" ? "en" : "zh-CN";
+    try {
+      await api.setting.set({ key: UI_LOCALE_SETTING_KEY, value: locale });
+    } catch (err) {
+      console.error("setting.set(locale) failed:", err);
     }
   },
 

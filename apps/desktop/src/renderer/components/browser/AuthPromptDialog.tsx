@@ -5,6 +5,7 @@ import { Input } from "@renderer/components/ui/input.js";
 import { Dialog } from "@renderer/components/ui/index.js";
 import { IconLock } from "@renderer/lib/icons.js";
 import type { BrowserAuthRequest } from "@contracts/ipc";
+import { useI18n } from "@renderer/lib/i18n/index.js";
 
 /**
  * HTTP Basic Auth prompt for the embedded browser. Shown when a page asks for
@@ -20,6 +21,7 @@ export function AuthPromptDialog({
   request: BrowserAuthRequest | null;
   onClose: () => void;
 }) {
+  const { t } = useI18n();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [save, setSave] = useState(true);
@@ -57,23 +59,23 @@ export function AuthPromptDialog({
           <div className="mb-3 flex items-center gap-2">
             <IconLock size={16} className="text-accent" />
             <Dialog.Title className="text-sm font-semibold text-content">
-              需要登录 — {request.host}
+              {t("browser.authTitle", { host: request.host })}
             </Dialog.Title>
           </div>
           <Dialog.Description className="mb-3 text-xs text-content-muted">
-            站点 <span className="font-mono">{request.origin}</span> 请求用户名和密码（HTTP Basic Auth）。
+            {t("browser.authDesc", { origin: request.origin })}
           </Dialog.Description>
           <div className="space-y-2">
             <Input
               autoFocus
-              placeholder="用户名"
+              placeholder={t("browser.username")}
               value={username}
               onChange={(e) => setUsername(e.target.value)}
               spellCheck={false}
             />
             <Input
               type="password"
-              placeholder="密码"
+              placeholder={t("browser.password")}
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               spellCheck={false}
@@ -88,12 +90,12 @@ export function AuthPromptDialog({
                 onChange={(e) => setSave(e.target.checked)}
                 className="accent-[var(--color-accent)]"
               />
-              保存密码（加密存储，下次自动登录）
+              {t("browser.savePassword")}
             </label>
           </div>
           <div className="mt-3 flex justify-end gap-2">
             <Button variant="ghost" size="sm" onClick={() => answer("", "")}>
-              取消
+              {t("common.cancel")}
             </Button>
             <Button
               variant="primary"
@@ -101,7 +103,7 @@ export function AuthPromptDialog({
               disabled={!username}
               onClick={() => answer(username, password)}
             >
-              登录
+              {t("browser.signIn")}
             </Button>
           </div>
         </Dialog.Popup>

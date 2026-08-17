@@ -20,6 +20,7 @@ import { PickedElementsBar } from "./PickedElementsBar.js";
 import { ConfirmDialog } from "@renderer/components/ui/confirm-dialog.js";
 import { CredentialDialog } from "./CredentialDialog.js";
 import { AuthPromptDialog } from "./AuthPromptDialog.js";
+import { useI18n } from "@renderer/lib/i18n/index.js";
 
 /**
  * Browser panel — multi-tab, shared between two containers.
@@ -80,6 +81,7 @@ function newTabId(): string {
 }
 
 export function BrowserPanel({ mode }: BrowserPanelProps) {
+  const { t } = useI18n();
   // Layout / mode state from the store.
   const open = useSessionStore((s) => s.browserPanelOpen);
   const setOpen = useSessionStore((s) => s.setBrowserPanelOpen);
@@ -328,7 +330,7 @@ export function BrowserPanel({ mode }: BrowserPanelProps) {
    *  tab's view, show the new one, and focus it. Returns the new tab or null. */
   const createTab = useCallback(async (initialUrl?: string): Promise<BrowserTab | null> => {
     if (!projectPath) {
-      setError("请先选择一个项目");
+      setError(t("browser.selectProjectFirst"));
       return null;
     }
     // Sidebar starts in mobile mode. We pass initialDevice so the main process
@@ -376,7 +378,7 @@ export function BrowserPanel({ mode }: BrowserPanelProps) {
     setError(null);
     showActiveView();
     return tab;
-  }, [projectPath, mode, addTab, setActiveTabId, syncBounds, showActiveView]);
+  }, [projectPath, mode, addTab, setActiveTabId, syncBounds, showActiveView, t]);
 
   // First time THIS container becomes active with no tabs at all: create the
   // initial tab. (Tabs are shared, so this only fires once per session no
@@ -1049,8 +1051,8 @@ export function BrowserPanel({ mode }: BrowserPanelProps) {
         {activeTab?.pickMode && (
           <div className="pointer-events-none absolute left-1/2 top-3 z-10 -translate-x-1/2 rounded-full bg-accent/90 px-3 py-1 text-[11px] font-medium text-white shadow">
             {mode === "sidebar"
-              ? "点击页面元素直接添加到输入框 · 按 Esc 退出"
-              : "点击页面元素以添加到输入框 · 按 Esc 退出"}
+              ? t("browser.pickSidebarHint")
+              : t("browser.pickOverlayHint")}
           </div>
         )}
         {/* Floating preview card: appears briefly on each pick, showing the
@@ -1069,7 +1071,7 @@ export function BrowserPanel({ mode }: BrowserPanelProps) {
             <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-white/25 text-[11px]">✓</span>
             <div className="min-w-0">
               <div className="text-[11px] font-medium leading-tight">
-                {mode === "sidebar" ? "已添加到输入框" : "已拾取到列表"}
+                {mode === "sidebar" ? t("browser.addedToInput") : t("browser.pickedToList")}
               </div>
               <div className="max-w-[240px] truncate text-[10px] leading-tight text-white/80">
                 {flashPreview.preview || flashPreview.selector}
@@ -1096,10 +1098,10 @@ export function BrowserPanel({ mode }: BrowserPanelProps) {
           restores the view since the panel stays open. */}
       <ConfirmDialog
         open={confirmDestroy}
-        title="关闭浏览器？"
-        description="关闭后将销毁所有打开的标签页，未保存的页面内容将丢失。"
-        confirmText="确定关闭"
-        cancelText="取消"
+        title={t("browser.closeBrowserQ")}
+        description={t("browser.closeBrowserDesc")}
+        confirmText={t("browser.confirmClose")}
+        cancelText={t("common.cancel")}
         danger
         onOpenChange={(o) => {
           setConfirmDestroy(o);

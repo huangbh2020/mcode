@@ -1,4 +1,5 @@
 import { cn } from "@renderer/lib/cn.js";
+import { useI18n } from "@renderer/lib/i18n/index.js";
 import { IconRocket } from "@renderer/lib/icons.js";
 import { Markdown } from "./Markdown.js";
 import { extractPlanTitle } from "./StatusCapsule.js";
@@ -52,9 +53,10 @@ export function PlanStreamBlock({
   /** Project root for resolving file paths mentioned in the plan preview. */
   projectPath?: string | null;
 }) {
+  const { t } = useI18n();
   const isDrafting = phase === "drafting";
-  const label = hasApproval ? "待审阅" : isDrafting ? "草拟中" : null;
-  const title = extractPlanTitle(plan) || "计划";
+  const label = hasApproval ? t("chat.plan.pendingReview") : isDrafting ? t("chat.plan.drafting") : null;
+  const title = extractPlanTitle(plan) || t("chat.plan.fallbackTitle");
   const preview = truncate(plan, PLAN_PREVIEW_CHARS);
 
   return (
@@ -101,7 +103,7 @@ export function PlanStreamBlock({
       <button
         type="button"
         onClick={() => onOpenPlan?.(plan)}
-        title="在侧边栏中查看完整计划"
+        title={t("chat.plan.viewFullTitle")}
         className={cn(
           "flex w-full items-center justify-center gap-1.5 border-t px-3 py-2 text-sm font-medium transition-colors",
           hasApproval
@@ -110,7 +112,7 @@ export function PlanStreamBlock({
         )}
       >
         <IconRocket size={15} />
-        查看计划
+        {t("chat.plan.view")}
       </button>
     </div>
   );

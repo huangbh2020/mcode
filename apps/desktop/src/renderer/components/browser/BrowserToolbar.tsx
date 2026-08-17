@@ -17,6 +17,7 @@ import {
 } from "@renderer/lib/icons.js";
 import type { BrowserHistoryEntry } from "@contracts/ipc";
 import type { BrowserMode } from "./BrowserPanel.js";
+import { useI18n } from "@renderer/lib/i18n/index.js";
 
 /**
  * Toolbar for the embedded browser panel. Pure presentational - all state
@@ -131,6 +132,7 @@ export function BrowserToolbar({
   onHistoryMenuOpenChange,
   onOpenCredentials,
 }: BrowserToolbarProps) {
+  const { t } = useI18n();
   // Address-history dropdown state. Local because only this input drives it;
   // the parent is only told about open/close so it can hide the OS-level view.
   const [historyOpen, setHistoryOpen] = useState(false);
@@ -166,11 +168,11 @@ export function BrowserToolbar({
           {/* Overlay: "返回工作台" leaves the fullscreen overlay (views stay
               alive). Visually distinct (accent on hover) so the user sees how
               to exit. */}
-          <ToolButton onClick={onClose} title="返回工作台">
+          <ToolButton onClick={onClose} title={t("browser.backToWorkspace")}>
             <IconArrowLeft size={16} />
           </ToolButton>
           {/* Switch to the embedded sidebar (mobile column). */}
-          <ToolButton onClick={onSwitchMode} title="切换到侧边栏">
+          <ToolButton onClick={onSwitchMode} title={t("browser.switchToSidebar")}>
             <IconArrowsMinimize size={16} />
           </ToolButton>
         </>
@@ -178,20 +180,20 @@ export function BrowserToolbar({
         /* Sidebar: "展开为 PC 全屏" swaps to the fullscreen overlay. The
            sidebar has no "close" button here — closing is via the rail icon
            toggle or the 关闭浏览器 button on the right. */
-        <ToolButton onClick={onSwitchMode} title="展开为 PC 全屏">
+        <ToolButton onClick={onSwitchMode} title={t("browser.expandFullscreen")}>
           <IconArrowsMaximize size={16} />
         </ToolButton>
       )}
 
       <div className="mx-1 h-5 w-px bg-edge" />
 
-      <ToolButton onClick={onBack} disabled={!canGoBack} title="后退">
+      <ToolButton onClick={onBack} disabled={!canGoBack} title={t("browser.back")}>
         <IconChevronLeft size={18} />
       </ToolButton>
-      <ToolButton onClick={onForward} disabled={!canGoForward} title="前进">
+      <ToolButton onClick={onForward} disabled={!canGoForward} title={t("browser.forward")}>
         <IconChevronRight size={18} />
       </ToolButton>
-      <ToolButton onClick={onReload} title="刷新">
+      <ToolButton onClick={onReload} title={t("common.refresh")}>
         {loading ? (
           <IconLoader2 size={16} className="animate-spin" />
         ) : (
@@ -244,7 +246,7 @@ export function BrowserToolbar({
               }
             }
           }}
-          placeholder="输入网址、本地文件路径或搜索…"
+          placeholder={t("browser.addressPlaceholder")}
           spellCheck={false}
           className={cn(
             "h-7 w-full rounded-md border border-edge bg-surface-muted px-2.5",
@@ -261,7 +263,7 @@ export function BrowserToolbar({
           >
             <div className="flex items-center gap-1.5 px-2.5 py-1.5 text-[10px] font-medium uppercase tracking-wide text-content-subtle">
               <IconClock size={11} />
-              历史记录
+              {t("browser.history")}
             </div>
             {filteredHistory.map((entry, i) => (
               <div
@@ -287,7 +289,7 @@ export function BrowserToolbar({
                     e.stopPropagation();
                     onRemoveHistoryEntry(entry.url);
                   }}
-                  title="删除该记录"
+                  title={t("browser.removeHistoryEntry")}
                   className="rounded p-1 text-content-subtle hover:bg-surface-hover hover:text-danger"
                 >
                   <IconTrash size={12} />
@@ -304,7 +306,7 @@ export function BrowserToolbar({
                 }}
                 className="w-full border-t border-edge px-2.5 py-1.5 text-left text-[11px] text-content-muted hover:bg-surface-hover hover:text-content"
               >
-                清空历史记录…
+                {t("browser.clearHistory")}
               </button>
             )}
           </div>
@@ -313,12 +315,12 @@ export function BrowserToolbar({
 
       {/* Credential vault — manage saved passwords + fill them into the
           current page's login form. */}
-      <ToolButton onClick={onOpenCredentials} title="密码库">
+      <ToolButton onClick={onOpenCredentials} title={t("browser.credentials")}>
         <IconKey size={16} />
       </ToolButton>
 
       {/* Element picker toggle. Accent when active. */}
-      <ToolButton onClick={onTogglePickMode} active={pickMode} title={pickMode ? "退出元素选择" : "选择页面元素"}>
+      <ToolButton onClick={onTogglePickMode} active={pickMode} title={pickMode ? t("browser.exitPick") : t("browser.pickElement")}>
         <IconTarget size={16} />
       </ToolButton>
 
@@ -328,14 +330,14 @@ export function BrowserToolbar({
       <ToolButton
         onClick={onToggleDeviceToolbar}
         active={deviceToolbarOpen}
-        title={deviceToolbarOpen ? "收起设备工具栏" : "设备工具栏 (切换尺寸)"}
+        title={deviceToolbarOpen ? t("browser.collapseDeviceToolbar") : t("browser.deviceToolbar")}
       >
         <IconDeviceMobile size={16} />
       </ToolButton>
 
       <div className="mx-1 h-5 w-px bg-edge" />
 
-      <ToolButton onClick={onRequestDestroy} title="关闭浏览器">
+      <ToolButton onClick={onRequestDestroy} title={t("browser.closeBrowser")}>
         <IconX size={16} />
       </ToolButton>
     </div>

@@ -3,6 +3,7 @@ import { useSessionStore } from "@renderer/stores/sessionStore.js";
 import { cn } from "@renderer/lib/cn.js";
 import { Select } from "@renderer/components/ui/index.js";
 import { IconCode, IconSquare, IconCircleOff, IconRobot } from "@renderer/lib/icons.js";
+import { useI18n, type MessageId } from "@renderer/lib/i18n/index.js";
 import { PanelHeader } from "./PanelHeader.js";
 import { SettingsSection } from "./SettingsSection.js";
 import { SettingRow } from "./SettingRow.js";
@@ -11,9 +12,9 @@ import type { CustomModelRoleKey } from "@contracts/customModel";
 import type { GitDiffOpenMode } from "@contracts/ipc";
 import type { ReactNode } from "react";
 
-const GIT_DIFF_OPEN_MODE_OPTIONS: { value: GitDiffOpenMode; label: string; icon: ReactNode }[] = [
-  { value: "center", label: "主编辑区", icon: <IconCode size={14} className="text-content-muted" /> },
-  { value: "dialog", label: "弹窗编辑器(可多标签)", icon: <IconSquare size={14} className="text-content-muted" /> },
+const GIT_DIFF_OPEN_MODE_OPTIONS: { value: GitDiffOpenMode; labelKey: MessageId; icon: ReactNode }[] = [
+  { value: "center", labelKey: "settings.git.openCenter", icon: <IconCode size={14} className="text-content-muted" /> },
+  { value: "dialog", labelKey: "settings.git.openDialog", icon: <IconSquare size={14} className="text-content-muted" /> },
 ];
 
 /** Sentinel value for the "no model selected" option in the model selects —
@@ -39,6 +40,7 @@ const MODEL_NONE = "__none__";
  * `customModelId` + `customModelRole` for the IPC call.
  */
 export function GitPanel() {
+  const { t } = useI18n();
   const commitGenModel = useSessionStore((s) => s.commitGenModel);
   const commitGenPrompt = useSessionStore((s) => s.commitGenPrompt);
   const setCommitGenModel = useSessionStore((s) => s.setCommitGenModel);
@@ -74,17 +76,17 @@ export function GitPanel() {
     <section className="space-y-4">
       <PanelHeader
         title="Git"
-        desc="配置差异查看方式,以及 AI 辅助的提交信息生成与合并冲突解决。"
+        desc={t("settings.git.desc")}
       />
 
       {/* ── Git 差异打开方式 ── */}
       <SettingsSection
-        title="差异打开方式"
-        desc="点击 Git 面板中的修改文件时,差异查看器的打开位置。弹框模式支持同时打开多个标签。"
+        title={t("settings.git.diffSection")}
+        desc={t("settings.git.diffSectionDesc")}
       >
         <SettingRow
-          title="打开方式"
-          desc="主编辑区:在中间面板查看差异(现有行为)。弹窗编辑器:以独立浮窗打开,可同时查看多个文件差异。"
+          title={t("settings.git.diffMode")}
+          desc={t("settings.git.diffModeDesc")}
           htmlFor="setting-gitdiff-openmode"
         >
           <Select.Root
@@ -100,7 +102,7 @@ export function GitPanel() {
                   return (
                     <span className="flex items-center gap-1.5">
                       {o.icon}
-                      {o.label}
+                      {t(o.labelKey)}
                     </span>
                   );
                 }}
@@ -113,7 +115,7 @@ export function GitPanel() {
                     {GIT_DIFF_OPEN_MODE_OPTIONS.map((o) => (
                       <Select.Item key={o.value} value={o.value}>
                         {o.icon}
-                        <Select.ItemText>{o.label}</Select.ItemText>
+                        <Select.ItemText>{t(o.labelKey)}</Select.ItemText>
                       </Select.Item>
                     ))}
                   </Select.List>
@@ -126,13 +128,13 @@ export function GitPanel() {
 
       {/* ── Git 提交信息生成 ── */}
       <SettingsSection
-        title="提交信息生成"
-        desc="配置用于自动生成提交信息的模型和提示词。在 Git 面板的提交框点击生成图标即可使用。"
+        title={t("settings.git.commitSection")}
+        desc={t("settings.git.commitSectionDesc")}
       >
         {/* Model selector — specific supplier + role binding */}
         <SettingRow
-          title="生成模型"
-          desc="选择用于生成提交信息的具体模型。需要先在「模型配置」中添加并绑定角色。"
+          title={t("settings.genModel")}
+          desc={t("settings.git.genModelDesc")}
         >
           {modelOptions.length > 0 ? (
             <Select.Root
@@ -145,7 +147,7 @@ export function GitPanel() {
                     val === MODEL_NONE ? (
                       <span className="flex items-center gap-1.5">
                         <IconCircleOff size={14} className="text-content-muted" />
-                        未选择
+                        {t("settings.git.noModelSelected")}
                       </span>
                     ) : (
                       <span className="flex items-center gap-1.5">
@@ -162,7 +164,7 @@ export function GitPanel() {
                     <Select.List>
                       <Select.Item value={MODEL_NONE}>
                         <IconCircleOff size={14} className="text-content-muted" />
-                        <Select.ItemText>未选择</Select.ItemText>
+                        <Select.ItemText>{t("settings.git.noModelSelected")}</Select.ItemText>
                       </Select.Item>
                       {modelOptions.map((opt) => (
                         <Select.Item key={opt.value} value={opt.value}>
@@ -177,7 +179,7 @@ export function GitPanel() {
             </Select.Root>
           ) : (
             <p className="text-[0.7857em] text-content-subtle">
-              暂无可用模型,请先在「模型配置」中添加。
+              {t("settings.git.noModelsHint")}
             </p>
           )}
         </SettingRow>
@@ -185,13 +187,13 @@ export function GitPanel() {
         {/* Prompt template — format/language preference only */}
         <SettingRow
           layout="vertical"
-          title="格式与语言偏好"
-          desc="仅控制提交信息的语言、措辞风格与规范格式(如 Conventional Commits、中英文、是否加 emoji)。核心生成行为(基于已暂存 diff 输出干净的提交信息)已内置固定,无法被覆盖。留空使用默认偏好。"
+          title={t("settings.git.promptTitle")}
+          desc={t("settings.git.promptDesc")}
         >
           <textarea
             value={commitGenPrompt}
             onChange={(e) => setCommitGenPrompt(e.target.value)}
-            placeholder="例如:使用英文、遵循 Conventional Commits 规范、在类型前加 emoji…"
+            placeholder={t("settings.git.promptPlaceholder")}
             rows={5}
             className={cn(
               "w-full resize-y rounded-md border border-edge-input bg-surface px-2.5 py-1.5 text-[0.8571em] leading-relaxed text-content outline-none",
@@ -203,13 +205,13 @@ export function GitPanel() {
 
       {/* ── Git 冲突解决 ── */}
       <SettingsSection
-        title="冲突解决"
-        desc="当 git pull 产生合并冲突时,可一键让 AI 读取冲突标记并解决冲突。AI 会写回文件并暂存,保留 merge 状态供你检查后手动提交。"
+        title={t("settings.git.conflictSection")}
+        desc={t("settings.git.conflictSectionDesc")}
       >
         {/* Conflict-resolution model selector */}
         <SettingRow
-          title="解决模型"
-          desc="选择用于解决合并冲突的具体模型。需要先在「模型配置」中添加并绑定角色。未选择则使用内置 Claude 模型。"
+          title={t("settings.git.resolveModel")}
+          desc={t("settings.git.resolveModelDesc")}
         >
           {modelOptions.length > 0 ? (
             <Select.Root
@@ -222,7 +224,7 @@ export function GitPanel() {
                     <span className="flex items-center gap-1.5">
                       <IconRobot size={14} className="text-content-muted" />
                       {val === MODEL_NONE
-                        ? "内置模型"
+                        ? t("settings.builtinModel")
                         : (modelOptions.find((o) => o.value === val)?.label ?? val)}
                     </span>
                   )}
@@ -234,7 +236,7 @@ export function GitPanel() {
                     <Select.List>
                       <Select.Item value={MODEL_NONE}>
                         <IconRobot size={14} className="text-content-muted" />
-                        <Select.ItemText>内置模型</Select.ItemText>
+                        <Select.ItemText>{t("settings.builtinModel")}</Select.ItemText>
                       </Select.Item>
                       {modelOptions.map((opt) => (
                         <Select.Item key={opt.value} value={opt.value}>
@@ -249,7 +251,7 @@ export function GitPanel() {
             </Select.Root>
           ) : (
             <p className="text-xs text-content-subtle">
-              暂无可用模型,将使用内置模型。可在「模型配置」中添加。
+              {t("settings.git.noModelsFallback")}
             </p>
           )}
         </SettingRow>

@@ -36,6 +36,7 @@ import {
   IconX,
   IconTag,
 } from "@renderer/lib/icons.js";
+import { useI18n, type MessageId } from "@renderer/lib/i18n/index.js";
 
 /** A single git operation log entry - one per pull/push/commit/sync/etc. */
 type GitOpLogEntry = {
@@ -49,15 +50,16 @@ type GitOpLogEntry = {
   timestamp: number;
 };
 
-/** Human-readable labels for each operation type, shown in the log list. */
-const OP_LABELS: Record<GitOpLogEntry["op"], string> = {
-  pull: "拉取",
-  push: "推送",
-  commit: "提交",
-  sync: "同步",
-  stage: "暂存",
-  unstage: "取消暂存",
-  discard: "放弃更改",
+/** Message ids for each operation type, shown in the log list (rendered via
+ *  `t()` so the label follows the UI locale). */
+const OP_LABEL_KEYS: Record<GitOpLogEntry["op"], MessageId> = {
+  pull: "ide.git.pull",
+  push: "ide.git.push",
+  commit: "ide.git.commit",
+  sync: "ide.git.sync",
+  stage: "ide.git.stage",
+  unstage: "ide.git.unstage",
+  discard: "ide.git.discard",
 };
 
 /** Max number of log entries kept per repo. Older entries are dropped. */
@@ -83,6 +85,7 @@ let logIdSeq = 0;
  * All state is local to this card - multiple cards operate independently.
  */
 export function GitRepoCard({ repo }: { repo: GitRepo }) {
+  const { t } = useI18n();
   const [status, setStatus] = useState<GitStatusResult | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -183,21 +186,21 @@ export function GitRepoCard({ repo }: { repo: GitRepo }) {
       try {
         const res = await api.git.checkout({ repoPath: repo.path, branch, newBranch });
         if (!res.ok) {
-          setError(res.error ?? "切换分支失败");
+          setError(res.error ?? t("ide.git.checkoutFailed"));
           prependLog({ op: "discard", status: "failure", message: res.error });
         } else {
           prependLog({ op: "discard", status: "success" });
         }
         await refresh();
       } catch (err) {
-        const msg = (err as Error).message ?? "切换分支失败";
+        const msg = (err as Error).message ?? t("ide.git.checkoutFailed");
         setError(msg);
         prependLog({ op: "discard", status: "failure", message: msg });
       } finally {
         setCheckingOut(false);
       }
     },
-    [repo.path, refresh, prependLog],
+    [repo.path, refresh, prependLog, t],
   );
 
   /** Create a new branch from HEAD and switch to it. */
@@ -263,14 +266,14 @@ export function GitRepoCard({ repo }: { repo: GitRepo }) {
         filePaths: unstaged.map((f) => f.path),
       });
       if (!res.ok) {
-        setError(res.error ?? "暂存失败");
+        setError(res.error ?? t("ide.git.stageFailed"));
         prependLog({ op: "stage", status: "failure", message: res.error });
       } else {
         prependLog({ op: "stage", status: "success" });
       }
       await refresh();
     } catch (err) {
-      const msg = (err as Error).message ?? "暂存失败";
+      const msg = (err as Error).message ?? t("ide.git.stageFailed");
       setError(msg);
       prependLog({ op: "stage", status: "failure", message: msg });
     } finally {
@@ -287,14 +290,14 @@ export function GitRepoCard({ repo }: { repo: GitRepo }) {
         filePaths: staged.map((f) => f.path),
       });
       if (!res.ok) {
-        setError(res.error ?? "取消暂存失败");
+        setError(res.error ?? t("ide.git.unstageFailed"));
         prependLog({ op: "unstage", status: "failure", message: res.error });
       } else {
         prependLog({ op: "unstage", status: "success" });
       }
       await refresh();
     } catch (err) {
-      const msg = (err as Error).message ?? "取消暂存失败";
+      const msg = (err as Error).message ?? t("ide.git.unstageFailed");
       setError(msg);
       prependLog({ op: "unstage", status: "failure", message: msg });
     } finally {
@@ -307,14 +310,14 @@ export function GitRepoCard({ repo }: { repo: GitRepo }) {
     try {
       const res = await api.git.stage({ repoPath: repo.path, filePaths: [filePath] });
       if (!res.ok) {
-        setError(res.error ?? "暂存失败");
+        setError(res.error ?? t("ide.git.stageFailed"));
         prependLog({ op: "stage", status: "failure", message: res.error });
       } else {
         prependLog({ op: "stage", status: "success" });
       }
       await refresh();
     } catch (err) {
-      const msg = (err as Error).message ?? "暂存失败";
+      const msg = (err as Error).message ?? t("ide.git.stageFailed");
       setError(msg);
       prependLog({ op: "stage", status: "failure", message: msg });
     } finally {
@@ -327,14 +330,14 @@ export function GitRepoCard({ repo }: { repo: GitRepo }) {
     try {
       const res = await api.git.unstage({ repoPath: repo.path, filePaths: [filePath] });
       if (!res.ok) {
-        setError(res.error ?? "取消暂存失败");
+        setError(res.error ?? t("ide.git.unstageFailed"));
         prependLog({ op: "unstage", status: "failure", message: res.error });
       } else {
         prependLog({ op: "unstage", status: "success" });
       }
       await refresh();
     } catch (err) {
-      const msg = (err as Error).message ?? "取消暂存失败";
+      const msg = (err as Error).message ?? t("ide.git.unstageFailed");
       setError(msg);
       prependLog({ op: "unstage", status: "failure", message: msg });
     } finally {
@@ -350,7 +353,7 @@ export function GitRepoCard({ repo }: { repo: GitRepo }) {
     try {
       const res = await api.git.commit({ repoPath: repo.path, message: msg });
       if (!res.ok) {
-        setError(res.error ?? "提交失败");
+        setError(res.error ?? t("ide.git.commitFailed"));
         prependLog({ op: "commit", status: "failure", message: res.error });
         return;
       }
@@ -359,7 +362,7 @@ export function GitRepoCard({ repo }: { repo: GitRepo }) {
       if (mode === "push") {
         const pushRes = await api.git.push({ repoPath: repo.path });
         if (!pushRes.ok) {
-          setError(pushRes.error ?? "推送失败");
+          setError(pushRes.error ?? t("ide.git.pushFailed"));
           prependLog({ op: "push", status: "failure", message: pushRes.error });
         } else {
           prependLog({ op: "push", status: "success" });
@@ -367,13 +370,13 @@ export function GitRepoCard({ repo }: { repo: GitRepo }) {
       } else if (mode === "sync") {
         const pullRes = await api.git.pull({ repoPath: repo.path });
         if (!pullRes.ok) {
-          setError(pullRes.error ?? "拉取失败");
+          setError(pullRes.error ?? t("ide.git.pullFailed"));
           prependLog({ op: "sync", status: "failure", message: pullRes.error });
           return; // don't push if pull failed
         }
         const pushRes = await api.git.push({ repoPath: repo.path });
         if (!pushRes.ok) {
-          setError(pushRes.error ?? "推送失败");
+          setError(pushRes.error ?? t("ide.git.pushFailed"));
           prependLog({ op: "push", status: "failure", message: pushRes.error });
         } else {
           prependLog({ op: "push", status: "success" });
@@ -381,7 +384,7 @@ export function GitRepoCard({ repo }: { repo: GitRepo }) {
       }
       await refresh();
     } catch (err) {
-      const errMsg = (err as Error).message ?? "提交失败";
+      const errMsg = (err as Error).message ?? t("ide.git.commitFailed");
       setError(errMsg);
       prependLog({ op: "commit", status: "failure", message: errMsg });
     } finally {
@@ -395,14 +398,14 @@ export function GitRepoCard({ repo }: { repo: GitRepo }) {
     try {
       const res = await api.git.push({ repoPath: repo.path });
       if (!res.ok) {
-        setError(res.error ?? "推送失败");
+        setError(res.error ?? t("ide.git.pushFailed"));
         prependLog({ op: "push", status: "failure", message: res.error });
       } else {
         prependLog({ op: "push", status: "success" });
       }
       await refresh();
     } catch (err) {
-      const msg = (err as Error).message ?? "推送失败";
+      const msg = (err as Error).message ?? t("ide.git.pushFailed");
       setError(msg);
       prependLog({ op: "push", status: "failure", message: msg });
     } finally {
@@ -416,7 +419,7 @@ export function GitRepoCard({ repo }: { repo: GitRepo }) {
     try {
       const res = await api.git.pull({ repoPath: repo.path });
       if (!res.ok) {
-        setError(res.error ?? "拉取失败");
+        setError(res.error ?? t("ide.git.pullFailed"));
         prependLog({ op: "pull", status: "failure", message: res.error });
       } else if (res.conflict && res.conflictedFiles && res.conflictedFiles.length > 0) {
         // Pull succeeded but left a merge conflict. Offer AI resolution via a
@@ -427,7 +430,7 @@ export function GitRepoCard({ repo }: { repo: GitRepo }) {
       }
       await refresh();
     } catch (err) {
-      const msg = (err as Error).message ?? "拉取失败";
+      const msg = (err as Error).message ?? t("ide.git.pullFailed");
       setError(msg);
       prependLog({ op: "pull", status: "failure", message: msg });
     } finally {
@@ -470,10 +473,10 @@ export function GitRepoCard({ repo }: { repo: GitRepo }) {
         setError(null);
         await refresh();
       } else {
-        setError(res.error ?? "AI 解决冲突失败");
+        setError(res.error ?? t("ide.git.resolveFailed"));
       }
     } catch {
-      setError("AI 解决冲突失败");
+      setError(t("ide.git.resolveFailed"));
     } finally {
       setResolving(false);
     }
@@ -488,7 +491,7 @@ export function GitRepoCard({ repo }: { repo: GitRepo }) {
         filePaths: pendingDiscard,
       });
       if (!res.ok) {
-        setError(res.error ?? "放弃更改失败");
+        setError(res.error ?? t("ide.git.discardFailed"));
         prependLog({ op: "discard", status: "failure", message: res.error });
       } else {
         prependLog({ op: "discard", status: "success" });
@@ -496,7 +499,7 @@ export function GitRepoCard({ repo }: { repo: GitRepo }) {
       setPendingDiscard(null);
       await refresh();
     } catch (err) {
-      const msg = (err as Error).message ?? "放弃更改失败";
+      const msg = (err as Error).message ?? t("ide.git.discardFailed");
       setError(msg);
       prependLog({ op: "discard", status: "failure", message: msg });
     } finally {
@@ -522,7 +525,7 @@ export function GitRepoCard({ repo }: { repo: GitRepo }) {
           </span>
           <ActionButton
             onClick={() => toggleCollapsedGitRepo(repo.path)}
-            title={collapsed ? "展开" : "收起"}
+            title={collapsed ? t("ide.tree.expand") : t("ide.git.collapseCard")}
           >
             {collapsed ? <IconChevronRight size={12} /> : <IconChevronDown size={12} />}
           </ActionButton>
@@ -535,7 +538,7 @@ export function GitRepoCard({ repo }: { repo: GitRepo }) {
                 "flex shrink-0 items-center gap-0.5 rounded bg-surface-muted px-1.5 py-0.5 font-mono [font-size:var(--rp-fs-xxs)] text-content-muted transition-colors",
                 "hover:bg-surface-hover hover:text-content",
               )}
-              title="切换分支"
+              title={t("ide.git.switchBranch")}
             >
               <IconGitBranch size={10} className="shrink-0 opacity-80" />
               <span className="truncate max-w-[120px]">{status?.branch || "HEAD"}</span>
@@ -564,13 +567,13 @@ export function GitRepoCard({ repo }: { repo: GitRepo }) {
                           e.stopPropagation();
                         }
                       }}
-                      placeholder="搜索分支或标签..."
+                      placeholder={t("ide.git.searchBranches")}
                       className="min-w-0 flex-1 rounded border border-edge bg-surface px-1.5 py-0.5 text-[11px] text-content outline-none placeholder:text-content-subtle focus:border-accent"
                     />
                     <button
                       type="button"
                       onClick={() => setNewBranchOpen(true)}
-                      title="新建分支"
+                      title={t("ide.git.newBranch")}
                       className="flex shrink-0 items-center gap-0.5 rounded px-1 py-0.5 text-[11px] text-content-muted transition-colors hover:bg-surface-muted hover:text-accent"
                     >
                       <IconPlus size={11} />
@@ -582,30 +585,30 @@ export function GitRepoCard({ repo }: { repo: GitRepo }) {
                     {branchesLoading ? (
                       <div className="flex items-center justify-center gap-1.5 px-3 py-4 text-[11px] text-content-subtle">
                         <IconLoader2 size={12} className="animate-spin" />
-                        加载中...
+                        {t("common.loading")}
                       </div>
                     ) : !filteredBranches ? (
                       <div className="px-3 py-4 text-center text-[11px] text-content-subtle">
-                        无法读取分支
+                        {t("ide.git.cannotReadBranches")}
                       </div>
                     ) : (
                       <>
                         {checkingOut && (
                           <div className="flex items-center justify-center gap-1.5 border-b border-edge px-3 py-1 text-[11px] text-content-subtle">
                             <IconLoader2 size={12} className="animate-spin" />
-                            切换中...
+                            {t("ide.git.switching")}
                           </div>
                         )}
                         {filteredBranches.local.length === 0 &&
                           filteredBranches.remote.length === 0 &&
                           filteredBranches.tags.length === 0 && (
                             <div className="px-3 py-3 text-center text-[11px] text-content-subtle">
-                              {branchQuery ? "无匹配结果" : "无分支"}
+                              {branchQuery ? t("ide.git.noMatch") : t("ide.git.noBranches")}
                             </div>
                           )}
                         {filteredBranches.local.length > 0 && (
                           <BranchGroup
-                            label="本地分支"
+                            label={t("ide.git.localBranches")}
                             items={filteredBranches.local}
                             localNames={new Set(filteredBranches.local.map((b) => b.name))}
                             onCheckout={handleCheckout}
@@ -613,7 +616,7 @@ export function GitRepoCard({ repo }: { repo: GitRepo }) {
                         )}
                         {filteredBranches.remote.length > 0 && (
                           <BranchGroup
-                            label="远程分支"
+                            label={t("ide.git.remoteBranches")}
                             items={filteredBranches.remote}
                             localNames={new Set(filteredBranches.local.map((b) => b.name))}
                             onCheckout={handleCheckout}
@@ -621,7 +624,7 @@ export function GitRepoCard({ repo }: { repo: GitRepo }) {
                         )}
                         {filteredBranches.tags.length > 0 && (
                           <BranchGroup
-                            label="标签"
+                            label={t("ide.git.tags")}
                             items={filteredBranches.tags}
                             localNames={new Set(filteredBranches.local.map((b) => b.name))}
                             onCheckout={handleCheckout}
@@ -636,25 +639,25 @@ export function GitRepoCard({ repo }: { repo: GitRepo }) {
             </Menu.Portal>
           </Menu.Root>
           {status && status.ahead > 0 && (
-            <span className="flex shrink-0 items-center gap-0.5 [font-size:var(--rp-fs-xxs)] text-accent" title="领先上游">
+            <span className="flex shrink-0 items-center gap-0.5 [font-size:var(--rp-fs-xxs)] text-accent" title={t("ide.git.aheadOfUpstream")}>
               <IconArrowUp size={10} />
               {status.ahead}
             </span>
           )}
           {status && status.behind > 0 && (
-            <span className="flex shrink-0 items-center gap-0.5 [font-size:var(--rp-fs-xxs)] text-info" title="落后上游">
+            <span className="flex shrink-0 items-center gap-0.5 [font-size:var(--rp-fs-xxs)] text-info" title={t("ide.git.behindUpstream")}>
               <IconArrowDown size={10} />
               {status.behind}
             </span>
           )}
           <div className="ml-auto flex items-center gap-0.5">
-            <ActionButton onClick={handlePull} disabled={busy !== null || loading} busy={busy === "pull"} title="拉取 (Pull)">
+            <ActionButton onClick={handlePull} disabled={busy !== null || loading} busy={busy === "pull"} title={t("ide.git.pullFull")}>
               <IconArrowDown size={12} />
             </ActionButton>
-            <ActionButton onClick={handlePush} disabled={busy !== null || loading} busy={busy === "push"} title="推送 (Push)">
+            <ActionButton onClick={handlePush} disabled={busy !== null || loading} busy={busy === "push"} title={t("ide.git.pushFull")}>
               <IconArrowUp size={12} />
             </ActionButton>
-            <ActionButton onClick={refresh} disabled={busy !== null} title="刷新状态">
+            <ActionButton onClick={refresh} disabled={busy !== null} title={t("ide.git.refreshStatus")}>
               <IconRefresh size={12} />
             </ActionButton>
           </div>
@@ -675,12 +678,12 @@ export function GitRepoCard({ repo }: { repo: GitRepo }) {
           {loading && !status ? (
             <div className="flex items-center gap-1.5 py-2 [font-size:var(--right-panel-font-size)] text-content-subtle">
               <IconLoader2 size={12} className="animate-spin" />
-              读取状态…
+              {t("ide.git.readingStatus")}
             </div>
           ) : !status || (status.files.length === 0) ? (
             <div className="flex items-center gap-1.5 py-2 [font-size:var(--right-panel-font-size)] text-content-subtle">
               <IconCheck size={12} className="text-accent" />
-              工作区干净
+              {t("ide.git.workingTreeClean")}
             </div>
           ) : (
             <>
@@ -700,12 +703,12 @@ export function GitRepoCard({ repo }: { repo: GitRepo }) {
               {/* 已暂存 group */}
               {hasStaged && (
                 <FileGroup
-                  label="已暂存"
+                  labelKey="ide.git.staged"
                   files={staged}
                   repoPath={repo.path}
                   staged
                   onBulkAction={handleUnstageAll}
-                  bulkActionLabel="全部取消"
+                  bulkActionLabel={t("ide.git.unstageAll")}
                   busy={busy !== null}
                   onSingleUnstage={(path) => void handleSingleUnstage(path)}
                   onSingleDiscard={undefined}
@@ -716,11 +719,11 @@ export function GitRepoCard({ repo }: { repo: GitRepo }) {
               {hasUnstaged && (
                 <div className={hasStaged ? "mt-2" : ""}>
                   <FileGroup
-                    label="更改"
+                    labelKey="ide.git.changes"
                     files={unstaged}
                     repoPath={repo.path}
                     onBulkAction={handleStageAll}
-                    bulkActionLabel="全部暂存"
+                    bulkActionLabel={t("ide.git.stageAll")}
                     busy={busy !== null}
                     onDiscard={(paths) => setPendingDiscard(paths)}
                     onDiscardAll={() => setPendingDiscard(unstaged.map((f) => f.path))}
@@ -749,19 +752,19 @@ export function GitRepoCard({ repo }: { repo: GitRepo }) {
                 <IconAlertTriangle size={16} />
               </span>
               <div className="min-w-0 flex-1">
-                <Dialog.Title>放弃更改?</Dialog.Title>
+                <Dialog.Title>{t("ide.git.discardQ")}</Dialog.Title>
                 <Dialog.Description className="mt-1">
-                  将放弃 {pendingDiscard?.length ?? 0} 个文件的本地更改,此操作不可撤销。
+                  {t("ide.git.discardDesc", { n: pendingDiscard?.length ?? 0 })}
                 </Dialog.Description>
               </div>
             </div>
             <div className="mt-4 flex justify-end gap-2">
               <Button variant="ghost" size="sm" onClick={() => setPendingDiscard(null)}>
-                取消
+                {t("common.cancel")}
               </Button>
               <Button variant="danger" size="sm" onClick={handleDiscard} disabled={busy !== null}>
                 {busy === "commit" ? <IconLoader2 size={12} className="animate-spin" /> : <IconTrash size={12} />}
-                放弃更改
+                {t("ide.git.discard")}
               </Button>
             </div>
             <Dialog.Close />
@@ -779,10 +782,9 @@ export function GitRepoCard({ repo }: { repo: GitRepo }) {
                 <IconAlertTriangle size={16} />
               </span>
               <div className="min-w-0 flex-1">
-                <Dialog.Title>检测到 Git 合并冲突</Dialog.Title>
+                <Dialog.Title>{t("ide.git.conflictTitle")}</Dialog.Title>
                 <Dialog.Description className="mt-1">
-                  拉取后产生 {conflictFiles?.length ?? 0} 个冲突文件。可以由 AI 自动读取冲突标记并解决冲突,
-                  解决后会写回文件并暂存,保留合并状态供你检查后手动提交。
+                  {t("ide.git.conflictDesc", { n: conflictFiles?.length ?? 0 })}
                 </Dialog.Description>
                 {conflictFiles && conflictFiles.length > 0 && (
                   <div className="mt-2 max-h-28 overflow-y-auto rounded-md border border-edge bg-surface-muted px-2 py-1.5">
@@ -793,7 +795,7 @@ export function GitRepoCard({ repo }: { repo: GitRepo }) {
                         </li>
                       ))}
                       {conflictFiles.length > 20 && (
-                        <li className="text-[11px] text-content-subtle">…还有 {conflictFiles.length - 20} 个</li>
+                        <li className="text-[11px] text-content-subtle">{t("ide.git.conflictMore", { n: conflictFiles.length - 20 })}</li>
                       )}
                     </ul>
                   </div>
@@ -802,11 +804,11 @@ export function GitRepoCard({ repo }: { repo: GitRepo }) {
             </div>
             <div className="mt-4 flex justify-end gap-2">
               <Button variant="ghost" size="sm" onClick={() => setConflictFiles(null)} disabled={resolving}>
-                稍后手动处理
+                {t("ide.git.resolveLater")}
               </Button>
               <Button size="sm" onClick={handleResolveConflicts} disabled={resolving}>
                 {resolving ? <IconLoader2 size={12} className="animate-spin" /> : <IconSparkles size={12} />}
-                用 AI 解决
+                {t("ide.git.resolveWithAi")}
               </Button>
             </div>
             <Dialog.Close />
@@ -820,9 +822,9 @@ export function GitRepoCard({ repo }: { repo: GitRepo }) {
         <Dialog.Portal>
           <Dialog.Backdrop />
           <Dialog.Popup className="w-[360px] max-w-[90vw] p-4">
-            <Dialog.Title>新建分支</Dialog.Title>
+            <Dialog.Title>{t("ide.git.newBranch")}</Dialog.Title>
             <Dialog.Description className="mt-1">
-              从当前 HEAD 创建新分支并切换过去。
+              {t("ide.git.newBranchDesc")}
             </Dialog.Description>
             <input
               value={newBranchName}
@@ -831,16 +833,16 @@ export function GitRepoCard({ repo }: { repo: GitRepo }) {
                 if (e.key === "Enter" && newBranchName.trim()) void handleCreateBranch();
               }}
               autoFocus
-              placeholder="分支名,如 feature/xxx"
+              placeholder={t("ide.git.branchNamePlaceholder")}
               className="mt-3 w-full rounded-md border border-edge-input bg-surface px-2.5 py-1.5 text-xs text-content outline-none placeholder:text-content-subtle focus:border-accent"
             />
             <div className="mt-3 flex justify-end gap-2">
               <Button variant="ghost" size="sm" onClick={() => setNewBranchOpen(false)}>
-                取消
+                {t("common.cancel")}
               </Button>
               <Button size="sm" onClick={handleCreateBranch} disabled={!newBranchName.trim() || checkingOut}>
                 {checkingOut ? <IconLoader2 size={12} className="animate-spin" /> : <IconPlus size={12} />}
-                创建并切换
+                {t("ide.git.createAndSwitch")}
               </Button>
             </div>
             <Dialog.Close />
@@ -866,6 +868,7 @@ function CommitBox({
   busy: boolean;
   onCommit: (mode: "commit" | "push" | "sync") => void;
 }) {
+  const { t } = useI18n();
   const commitGenModel = useSessionStore((s) => s.commitGenModel);
   const commitGenPrompt = useSessionStore((s) => s.commitGenPrompt);
   const [generating, setGenerating] = useState(false);
@@ -930,10 +933,10 @@ function CommitBox({
       if (res.ok && res.message) {
         onChange(res.message);
       } else {
-        onChange(res.error ?? "生成失败");
+        onChange(res.error ?? t("ide.git.genFailed"));
       }
     } catch {
-      if (!cancelledRef.current) onChange("生成失败");
+      if (!cancelledRef.current) onChange(t("ide.git.genFailed"));
     } finally {
       genRequestIdRef.current = null;
       setGenerating(false);
@@ -967,7 +970,7 @@ function CommitBox({
           value={value}
           onChange={(e) => onChange(e.target.value)}
           onKeyDown={handleKeyDown}
-          placeholder="提交信息"
+          placeholder={t("ide.git.commitPlaceholder")}
           disabled={disabled || generating}
           className="w-full resize-none rounded-md border border-edge-input bg-surface py-1 pl-2 pr-14 [font-size:var(--right-panel-font-size)] leading-relaxed text-content outline-none focus:border-accent disabled:opacity-50 min-h-[36px]"
         />
@@ -980,7 +983,7 @@ function CommitBox({
               type="button"
               onClick={() => (generating ? handleCancelGenerate() : handleGenerate())}
               disabled={disabled}
-              title={generating ? "停止生成" : "使用 AI 生成提交信息"}
+              title={generating ? t("ide.git.stopGenerate") : t("ide.git.generateHint")}
               className={cn(
                 "group/generate flex h-5 w-5 items-center justify-center rounded text-content-subtle transition-colors",
                 "hover:bg-surface-hover hover:text-accent disabled:opacity-40",
@@ -1000,7 +1003,7 @@ function CommitBox({
             <button
               type="button"
               onClick={() => setPreviewOpen(true)}
-              title="展开编辑"
+              title={t("ide.git.expandEdit")}
               className="flex h-5 w-5 items-center justify-center rounded text-content-subtle transition-colors hover:bg-surface-hover hover:text-content"
             >
               <IconMaximize size={12} />
@@ -1021,7 +1024,7 @@ function CommitBox({
           className="flex flex-1 items-center justify-center gap-1 bg-accent px-2 py-1 [font-size:var(--right-panel-font-size)] text-surface transition-colors hover:brightness-110 disabled:cursor-not-allowed disabled:bg-surface-hover disabled:text-content-subtle"
         >
           {busy ? <IconLoader2 size={11} className="animate-spin" /> : <IconGitCommit size={11} />}
-          提交
+          {t("ide.git.commit")}
         </button>
         <Menu.Root>
           <Menu.Trigger
@@ -1044,19 +1047,19 @@ function CommitBox({
                     onClick={() => onCommit("commit")}
                     className="flex w-full items-center gap-2 px-3 py-1.5 text-left [font-size:var(--right-panel-font-size)] text-content-muted outline-none select-none data-[highlighted]:bg-surface-muted"
                   >
-                    提交
+                    {t("ide.git.commit")}
                   </Menu.Item>
                   <Menu.Item
                     onClick={() => onCommit("push")}
                     className="flex w-full items-center gap-2 px-3 py-1.5 text-left [font-size:var(--right-panel-font-size)] text-content-muted outline-none select-none data-[highlighted]:bg-surface-muted"
                   >
-                    提交并推送
+                    {t("ide.git.commitAndPush")}
                   </Menu.Item>
                   <Menu.Item
                     onClick={() => onCommit("sync")}
                     className="flex w-full items-center gap-2 px-3 py-1.5 text-left [font-size:var(--right-panel-font-size)] text-content-muted outline-none select-none data-[highlighted]:bg-surface-muted"
                   >
-                    提交并同步
+                    {t("ide.git.commitAndSync")}
                   </Menu.Item>
                 </Menu.Popup>
               </Menu.Positioner>
@@ -1071,9 +1074,9 @@ function CommitBox({
         <Dialog.Portal>
           <Dialog.Backdrop />
           <Dialog.Popup className="w-[480px] max-w-[90vw] p-4">
-            <Dialog.Title>编辑提交信息</Dialog.Title>
+            <Dialog.Title>{t("ide.git.editCommitTitle")}</Dialog.Title>
             <Dialog.Description className="mt-1">
-              在此完整编辑提交信息,Ctrl+Enter 可直接提交。
+              {t("ide.git.editCommitDesc")}
             </Dialog.Description>
             <textarea
               value={value}
@@ -1085,7 +1088,7 @@ function CommitBox({
             />
             <div className="mt-3 flex justify-end gap-2">
               <Button variant="ghost" size="sm" onClick={() => setPreviewOpen(false)}>
-                完成
+                {t("ide.git.done")}
               </Button>
               <Button
                 variant="primary"
@@ -1097,7 +1100,7 @@ function CommitBox({
                 }}
               >
                 <IconGitCommit size={12} />
-                提交
+                {t("ide.git.commit")}
               </Button>
             </div>
             <Dialog.Close />
@@ -1222,6 +1225,7 @@ function OperationLog({
   logs: GitOpLogEntry[];
   onClear: () => void;
 }) {
+  const { t } = useI18n();
   const [collapsed, setCollapsed] = useState(false);
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
@@ -1236,12 +1240,12 @@ function OperationLog({
         >
           {collapsed ? <IconChevronRight size={10} /> : <IconChevronDown size={10} />}
           <IconList size={11} />
-          操作日志 ({logs.length})
+          {t("ide.git.opLog", { n: logs.length })}
         </button>
         <button
           type="button"
           onClick={onClear}
-          title="清空日志"
+          title={t("ide.git.clearLog")}
           className="ml-auto flex h-5 w-5 items-center justify-center rounded text-content-subtle transition-colors hover:bg-surface-hover hover:text-content-muted"
         >
           <IconX size={12} />
@@ -1276,7 +1280,7 @@ function OperationLog({
                       isFailure ? "text-danger" : "text-content-muted",
                     )}
                   >
-                    {OP_LABELS[entry.op]}
+                    {t(OP_LABEL_KEYS[entry.op])}
                   </span>
                   <span
                     className="ml-auto shrink-0 [font-size:var(--rp-fs-xxs)] text-content-subtle"
@@ -1302,7 +1306,7 @@ function OperationLog({
 /* ───────────────────────── file group ───────────────────────── */
 
 function FileGroup({
-  label,
+  labelKey,
   files,
   repoPath,
   staged,
@@ -1315,7 +1319,7 @@ function FileGroup({
   onSingleUnstage,
   onSingleDiscard,
 }: {
-  label: string;
+  labelKey: MessageId;
   files: GitFileStatus[];
   repoPath: string;
   staged?: boolean;
@@ -1330,6 +1334,8 @@ function FileGroup({
   onSingleUnstage?: (filePath: string) => void;
   onSingleDiscard?: (filePath: string) => void;
 }) {
+  const { t } = useI18n();
+  const label = t(labelKey);
   const [collapsed, setCollapsed] = useState(false);
   return (
     <div>
@@ -1348,8 +1354,8 @@ function FileGroup({
               type="button"
               onClick={onDiscardAll}
               disabled={busy}
-              title={`放弃 ${label} 组内所有文件的本地更改`}
-              aria-label={`放弃 ${label} 组内所有文件的本地更改`}
+              title={t("ide.git.discardAllHint", { group: label })}
+              aria-label={t("ide.git.discardAllHint", { group: label })}
               className="rounded p-0.5 text-content-subtle opacity-0 transition-all hover:bg-danger/10 hover:text-danger focus-visible:opacity-100 group-hover:opacity-100 disabled:opacity-0"
             >
               <IconTrash size={13} />
@@ -1404,6 +1410,7 @@ function FileRow({
   onSingleUnstage?: (filePath: string) => void;
   onSingleDiscard?: (filePath: string) => void;
 }) {
+  const { t } = useI18n();
   const openFileInIde = useSessionStore((s) => s.openFileInIde);
   const setGitDiffBefore = useSessionStore((s) => s.setGitDiffBefore);
   const gitDiffOpenMode = useSessionStore((s) => s.gitDiffOpenMode);
@@ -1502,7 +1509,7 @@ function FileRow({
           {staged ? (
             <RowActionIcon
               icon={<IconMinus size={11} />}
-              title="取消暂存"
+              title={t("ide.git.unstage")}
               onClick={(e) => {
                 e.stopPropagation();
                 onSingleUnstage?.(file.path);
@@ -1511,7 +1518,7 @@ function FileRow({
           ) : (
             <RowActionIcon
               icon={<IconPlus size={11} />}
-              title="暂存"
+              title={t("ide.git.stage")}
               onClick={(e) => {
                 e.stopPropagation();
                 onSingleStage?.(file.path);
@@ -1522,7 +1529,7 @@ function FileRow({
           {!staged && onSingleDiscard && (
             <RowActionIcon
               icon={<IconTrash size={11} />}
-              title="放弃更改"
+              title={t("ide.git.discard")}
               danger
               onClick={(e) => {
                 e.stopPropagation();
@@ -1547,14 +1554,14 @@ function FileRow({
               className="flex w-full items-center gap-2 px-3 py-1.5 text-left [font-size:var(--right-panel-font-size)] text-content-muted outline-none select-none data-[highlighted]:bg-surface-muted"
             >
               <IconEye size={12} />
-              查看 Diff
+              {t("ide.git.viewDiff")}
             </ContextMenu.Item>
             <ContextMenu.Item
               onClick={() => openFileInIde(absPath)}
               className="flex w-full items-center gap-2 px-3 py-1.5 text-left [font-size:var(--right-panel-font-size)] text-content-muted outline-none select-none data-[highlighted]:bg-surface-muted"
             >
               <IconGitCommit size={12} />
-              查看源文件
+              {t("ide.git.viewSource")}
             </ContextMenu.Item>
             {!staged && onDiscard && (
               <ContextMenu.Item
@@ -1562,7 +1569,7 @@ function FileRow({
                 className="flex w-full items-center gap-2 px-3 py-1.5 text-left [font-size:var(--right-panel-font-size)] text-danger outline-none select-none data-[highlighted]:bg-danger/10"
               >
                 <IconTrash size={12} />
-                放弃更改…
+                {t("ide.git.discardEllipsis")}
               </ContextMenu.Item>
             )}
           </ContextMenu.Popup>

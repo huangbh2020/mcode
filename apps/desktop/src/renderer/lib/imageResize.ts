@@ -18,6 +18,8 @@
  * goes anywhere near the model, the model only ever sees base64.
  */
 import type { PromptImage } from "@renderer/stores/sessionStore.js";
+import { translate } from "@renderer/lib/i18n/core.js";
+import { useSessionStore } from "@renderer/stores/sessionStore.js";
 
 /** Decoded-byte ceiling per sent image (~4.5MB, under Anthropic's 5MB). */
 const MAX_SEND_BYTES = 4.5 * 1024 * 1024;
@@ -64,8 +66,9 @@ export async function prepareImageForSend(
   dataUrl: string,
   name: string,
 ): Promise<ImagePrepResult> {
+  const locale = useSessionStore.getState().locale;
   const match = /^data:([^;,]+);base64,(.+)$/s.exec(dataUrl);
-  if (!match) return { ok: false, error: `${name}: 不是有效的图片数据` };
+  if (!match) return { ok: false, error: translate(locale, "lib.image.invalidData", { name }) };
   const mimeType = match[1].toLowerCase();
   const raw = match[2];
 
@@ -73,7 +76,7 @@ export async function prepareImageForSend(
   try {
     img = await loadImage(dataUrl);
   } catch {
-    return { ok: false, error: `${name}: 图片解码失败` };
+    return { ok: false, error: translate(locale, "lib.image.decodeFailed", { name }) };
   }
 
   const oversized =
@@ -97,16 +100,16 @@ export async function prepareImageForSend(
   canvas.width = Math.max(1, Math.round(img.naturalWidth * scale));
   canvas.height = Math.max(1, Math.round(img.naturalHeight * scale));
   const ctx = canvas.getContext("2d");
-  if (!ctx) return { ok: false, error: `${name}: 无法创建画布` };
+  if (!ctx) return { ok: false, error: translate(locale, "lib.image.canvasFailed", { name }) };
   ctx.fillStyle = "#fff";
   ctx.fillRect(0, 0, canvas.width, canvas.height);
   ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
 
   const out = canvas.toDataURL("image/jpeg", JPEG_QUALITY);
   const outMatch = /^data:image\/jpeg;base64,(.+)$/s.exec(out);
-  if (!outMatch) return { ok: false, error: `${name}: 图片压缩失败` };
+  if (!outMatch) return { ok: false, error: translate(locale, "lib.image.compressFailed", { name }) };
   if (approxBytes(outMatch[1]) > MAX_SEND_BYTES) {
-    return { ok: false, error: `${name}: 压缩后仍然过大,请换一张更小的图片` };
+    return { ok: false, error: translate(locale, "lib.image.stillTooLarge", { name }) };
   }
   return { ok: true, image: { data: outMatch[1], mimeType: "image/jpeg" } };
 }

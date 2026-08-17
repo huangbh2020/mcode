@@ -9,6 +9,7 @@ import {
   IconRefresh,
   IconSearch,
 } from "@renderer/lib/icons.js";
+import { useI18n } from "@renderer/lib/i18n/index.js";
 
 /**
  * Files panel - the right-panel "Files" tab body.
@@ -28,6 +29,7 @@ import {
  * active, an empty state is shown.
  */
 export function FilesPanel() {
+  const { t } = useI18n();
   const activeProjectId = useSessionStore((s) => s.activeProjectId);
   const projects = useSessionStore((s) => s.projects);
   const setSearchDialogOpen = useSessionStore((s) => s.setSearchDialogOpen);
@@ -96,8 +98,8 @@ export function FilesPanel() {
         <button
           type="button"
           onClick={() => setRefreshNonce((n) => n + 1)}
-          title="刷新目录"
-          aria-label="刷新目录"
+          title={t("ide.files.refreshDir")}
+          aria-label={t("ide.files.refreshDir")}
           className={cn(
             "flex shrink-0 items-center justify-center rounded p-0.5 transition-colors",
             "text-content-subtle hover:bg-surface-hover hover:text-content",
@@ -108,8 +110,8 @@ export function FilesPanel() {
         <button
           type="button"
           onClick={() => setSearchDialogOpen(true)}
-          title="搜索文件（⌘⇧F）"
-          aria-label="搜索文件"
+          title={t("ide.files.searchFilesHint")}
+          aria-label={t("ide.files.searchFiles")}
           className={cn(
             "flex shrink-0 items-center justify-center rounded p-0.5 transition-colors",
             "text-content-subtle hover:bg-surface-hover hover:text-content",
@@ -133,14 +135,15 @@ export function FilesPanel() {
 /** Empty state shown when no project is active. Points the user at the
  *  left-bar's add-project affordance. */
 function EmptyState() {
+  const { t } = useI18n();
   return (
     <div className="flex h-full flex-col items-center justify-center gap-2 p-6 text-center">
       <div className="flex h-10 w-10 items-center justify-center rounded-full bg-surface-muted text-content-subtle">
         <IconFolderPlus size={20} />
       </div>
-      <p className="text-xs font-medium text-content-muted">还没有项目</p>
+      <p className="text-xs font-medium text-content-muted">{t("ide.files.noProjectTitle")}</p>
       <p className="text-[11px] leading-relaxed text-content-subtle">
-        在左侧栏添加一个项目文件夹后,即可在此浏览文件
+        {t("ide.files.noProjectDesc")}
       </p>
     </div>
   );

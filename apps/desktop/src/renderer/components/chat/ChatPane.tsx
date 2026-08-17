@@ -22,6 +22,7 @@ import {
 import { useSessionStore, EMPTY_MESSAGES, EMPTY_TODOS, EMPTY_SUBAGENTS, EMPTY_CHAT_QUEUE, EMPTY_ELEMENT_QUEUE, EMPTY_PROMPT_QUEUE, type Block, type ChatMessage, type TodoItem, type TurnMeta, type QueuedPrompt } from "@renderer/stores/sessionStore.js";
 import { useToastStore } from "@renderer/stores/toastStore.js";
 import { api } from "@renderer/lib/api.js";
+import { useI18n } from "@renderer/lib/i18n/index.js";
 import { useNow } from "@renderer/hooks/useNow.js";
 import type { SubagentSnapshot } from "@contracts/runtime";
 import type { FileSearchEntry } from "@contracts/ipc";
@@ -783,6 +784,7 @@ export const ChatPane = memo(
  *  CenterPane router can mount a single component without us threading
  *  separate "empty" / "with-session" branches. */
 function EmptyCenterPane() {
+  const { t } = useI18n();
   const claudeInstalled = useSessionStore((s) => s.claudeInstalled);
   const setSettingsOpen = useSessionStore((s) => s.setSettingsOpen);
   return (
@@ -792,12 +794,12 @@ function EmptyCenterPane() {
           <div className="space-y-3">
             <div className="flex items-center justify-center gap-1.5 text-base font-semibold text-warning">
               <IconAlertTriangle size={18} />
-              <span>未检测到 Claude Code CLI</span>
+              <span>{t("chat.cliNotFound")}</span>
             </div>
             <p className="text-sm text-content-muted">
-              请先安装（
+              {t("chat.cliInstallPrefix")}
               <code className="rounded bg-surface-muted px-1 text-content">npm i -g @anthropic-ai/claude-code</code>
-              ），或指定已有的安装路径：
+              {t("chat.cliInstallSuffix")}
             </p>
             <button
               onClick={() => setSettingsOpen(true)}
@@ -807,12 +809,12 @@ function EmptyCenterPane() {
               )}
             >
               <IconSettings size={14} />
-              配置 CLI 路径
+              {t("chat.cliConfigure")}
               <IconArrowRight size={14} />
             </button>
           </div>
         ) : (
-          <p className="text-base font-medium text-content">打开一个项目并开始会话以继续</p>
+          <p className="text-base font-medium text-content">{t("chat.emptyHint")}</p>
         )}
       </div>
     </div>
@@ -857,6 +859,7 @@ function HistorySkeleton() {
  *  the prop-typed parent (ChatPane) can short-circuit on `sessionId ===
  *  null` without forcing every selector to handle the empty case. */
 function ChatPaneForSession({ sessionId, isActive }: { sessionId: string; isActive: boolean }) {
+  const { t, locale } = useI18n();
   const messages = useSessionStore((s) =>
     s.messagesBySession[sessionId] ?? EMPTY_MESSAGES,
   );
@@ -1442,13 +1445,7 @@ function ChatPaneForSession({ sessionId, isActive }: { sessionId: string; isActi
         setPickerKind(null);
         clearTriggerToken();
         triggerStartRef.current = null;
-        const template =
-          "请用应用内浏览器打开这个网页:\n" +
-          "URL: https://\n\n" +
-          "我的需求:(可选,例如:截图看看页面布局 / 读取页面内容 / 用移动端打开测试响应式)\n" +
-          "- 截图:截取页面可视区域\n" +
-          "- 快照:读取页面结构化内容(链接/按钮/文本)\n" +
-          "- 移动端:用 device=iphone 或 android 打开";
+        const template = t("chat.slash.browserTemplate");
         if (editorRef.current) {
           editorRef.current.setText(template);
           setValue(template);
@@ -1480,7 +1477,7 @@ function ChatPaneForSession({ sessionId, isActive }: { sessionId: string; isActi
       // Refresh the mirrored text so empty-state / enqueue stay in sync.
       setValue(editorRef.current.getTextWithSkills());
     },
-    [sessionBusy, clearTriggerToken, sendPrompt],
+    [sessionBusy, clearTriggerToken, sendPrompt, t],
   );
 
   /** Open the attach picker from the bottom-left + button. */
@@ -1541,8 +1538,8 @@ function ChatPaneForSession({ sessionId, isActive }: { sessionId: string; isActi
       if (prev.length >= MAX_PENDING_IMAGES) {
         useToastStore.getState().push({
           kind: "warning",
-          title: "图片过多",
-          body: `最多附加 ${MAX_PENDING_IMAGES} 张图片`,
+          title: t("chat.toast.tooManyImages"),
+          body: t("chat.toast.tooManyImagesBody", { n: MAX_PENDING_IMAGES }),
         });
         return prev;
       }
@@ -1555,7 +1552,7 @@ function ChatPaneForSession({ sessionId, isActive }: { sessionId: string; isActi
         },
       ];
     });
-  }, []);
+  }, [t]);
 
   /** Read an image File into a data URL and stage it. Files without a MIME
    *  type (older clipboard copies) default to image/png — prepareImageForSend
@@ -1565,8 +1562,8 @@ function ChatPaneForSession({ sessionId, isActive }: { sessionId: string; isActi
       if (file.size > PASTE_FILE_MAX_BYTES) {
         useToastStore.getState().push({
           kind: "warning",
-          title: "图片过大",
-          body: `${file.name} 超过 50MB,未添加`,
+          title: t("chat.toast.imageTooLarge"),
+          body: t("chat.toast.tooLargeBody", { name: file.name }),
         });
         return;
       }
@@ -1583,7 +1580,7 @@ function ChatPaneForSession({ sessionId, isActive }: { sessionId: string; isActi
           console.warn("stage pasted image failed:", err);
         });
     },
-    [stageImage],
+    [stageImage, t],
   );
 
   /** OS image picker (file:pickImages — main reads the files itself). */
@@ -1597,14 +1594,16 @@ function ChatPaneForSession({ sessionId, isActive }: { sessionId: string; isActi
       if (res.skipped.length > 0) {
         useToastStore.getState().push({
           kind: "warning",
-          title: "已跳过部分图片",
-          body: `${res.skipped.join("、")} 过大或不是支持的图片格式`,
+          title: t("chat.toast.imagesSkipped"),
+          body: t("chat.toast.imagesSkippedBody", {
+            names: res.skipped.join(locale === "en" ? ", " : "、"),
+          }),
         });
       }
     } catch (err) {
       console.warn("pickImages failed:", err);
     }
-  }, [inputBlocked, stageImage]);
+  }, [inputBlocked, stageImage, t, locale]);
 
   const removePendingImage = useCallback((id: string) => {
     setPendingImages((prev) => prev.filter((img) => img.id !== id));
@@ -1628,8 +1627,8 @@ function ChatPaneForSession({ sessionId, isActive }: { sessionId: string; isActi
       if (file.size > PASTE_FILE_MAX_BYTES) {
         useToastStore.getState().push({
           kind: "warning",
-          title: "文件过大",
-          body: `${file.name} 超过 50MB,未添加`,
+          title: t("chat.toast.fileTooLarge"),
+          body: t("chat.toast.tooLargeBody", { name: file.name }),
         });
         continue;
       }
@@ -1657,7 +1656,7 @@ function ChatPaneForSession({ sessionId, isActive }: { sessionId: string; isActi
           console.warn("paste external file failed:", err);
         });
     }
-  }, [stageImageFile]);
+  }, [stageImageFile, t]);
 
   // Recompute the "jump to bottom" button visibility from the live scroll
   // state. Returns true if the list is near the bottom (button hidden), false
@@ -1743,7 +1742,7 @@ function ChatPaneForSession({ sessionId, isActive }: { sessionId: string; isActi
       if (!res.ok) {
         useToastStore.getState().push({
           kind: "warning",
-          title: "图片未发送",
+          title: t("chat.toast.imageNotSent"),
           body: res.error,
         });
         return null;
@@ -1751,7 +1750,7 @@ function ChatPaneForSession({ sessionId, isActive }: { sessionId: string; isActi
       images.push(res.image);
     }
     return images;
-  }, [pendingImages]);
+  }, [pendingImages, t]);
 
   const handleSend = async () => {
     // Serialize the editor: text has skill pills inlined as `/name` at their
@@ -1876,7 +1875,7 @@ function ChatPaneForSession({ sessionId, isActive }: { sessionId: string; isActi
       item.images && item.images.length > 0
         ? item.images.map((img, i) => ({
             id: `reedit-img-${item.id}-${i}`,
-            name: `图片 ${i + 1}`,
+            name: t("chat.imageN", { n: i + 1 }),
             dataUrl: `data:${img.mimeType};base64,${img.data}`,
           }))
         : [],
@@ -2255,7 +2254,7 @@ function ChatPaneForSession({ sessionId, isActive }: { sessionId: string; isActi
               "border border-content-subtle/40 bg-surface-hover px-2.5 py-1.5 shadow-md transition-all",
               "hover:brightness-95 dark:hover:brightness-110",
             )}
-            title="回到底部"
+            title={t("chat.jumpToBottom")}
           >
             <IconArrowDown size={14} className="text-content" />
           </button>
@@ -2398,15 +2397,15 @@ function ChatPaneForSession({ sessionId, isActive }: { sessionId: string; isActi
               <div className="border-b border-edge px-2 pt-2 pb-1.5">
                 <div className="mb-1 flex items-center justify-between">
                   <span className="shrink-0 text-[10px] font-medium uppercase tracking-wide text-content-subtle">
-                    排队 · 拖动排序
+                    {t("chat.queue.header")}
                   </span>
                   <button
                     type="button"
                     onClick={() => clearPromptQueue(sessionId)}
-                    title="清空队列"
+                    title={t("chat.queue.clearTitle")}
                     className="shrink-0 rounded px-1 py-0.5 text-[10px] text-content-subtle transition-colors hover:bg-surface-muted hover:text-content"
                   >
-                    清空
+                    {t("chat.queue.clear")}
                   </button>
                 </div>
                 <div className="space-y-1">
@@ -2471,8 +2470,8 @@ function ChatPaneForSession({ sessionId, isActive }: { sessionId: string; isActi
                                 cur === item.id ? null : item.id,
                               )
                             }
-                            title={expanded ? "收起" : "展开"}
-                            aria-label={expanded ? "收起" : "展开"}
+                            title={expanded ? t("chat.queue.collapse") : t("chat.queue.expand")}
+                            aria-label={expanded ? t("chat.queue.collapse") : t("chat.queue.expand")}
                             className="flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded text-content-subtle transition-colors hover:bg-surface-muted hover:text-content"
                           >
                             {expanded ? (
@@ -2485,7 +2484,7 @@ function ChatPaneForSession({ sessionId, isActive }: { sessionId: string; isActi
                             {idx + 1}.
                           </span>
                           <span className={cn("min-w-0 flex-1", !expanded && "truncate")}>
-                            {item.displayText || "(仅附件)"}
+                            {item.displayText || t("chat.queue.attachmentsOnly")}
                           </span>
                           {item.attachments && item.attachments.length > 0 && (
                             <span className="flex shrink-0 items-center gap-0.5 text-content-subtle">
@@ -2498,8 +2497,8 @@ function ChatPaneForSession({ sessionId, isActive }: { sessionId: string; isActi
                               <button
                                 type="button"
                                 onClick={() => void sendQueuedPromptNow(sessionId, item.id)}
-                                title="立即发送（中断当前回合）"
-                                aria-label="立即发送"
+                                title={t("chat.queue.sendNowTitle")}
+                                aria-label={t("chat.queue.sendNow")}
                                 className="flex h-3.5 w-3.5 items-center justify-center rounded text-content-subtle transition-colors hover:bg-accent/20 hover:text-accent"
                               >
                                 <IconBolt size={10} />
@@ -2507,8 +2506,8 @@ function ChatPaneForSession({ sessionId, isActive }: { sessionId: string; isActi
                               <button
                                 type="button"
                                 onClick={() => handleEditQueuedPrompt(item)}
-                                title="编辑"
-                                aria-label="编辑"
+                                title={t("common.edit")}
+                                aria-label={t("common.edit")}
                                 className="flex h-3.5 w-3.5 items-center justify-center rounded text-content-subtle transition-colors hover:bg-accent/20 hover:text-content"
                               >
                                 <IconPencil size={10} />
@@ -2516,8 +2515,8 @@ function ChatPaneForSession({ sessionId, isActive }: { sessionId: string; isActi
                               <button
                                 type="button"
                                 onClick={() => removeQueuedPrompt(sessionId, item.id)}
-                                title="从队列移除"
-                                aria-label="从队列移除"
+                                title={t("chat.queue.removeTitle")}
+                                aria-label={t("chat.queue.removeTitle")}
                                 className="flex h-3.5 w-3.5 items-center justify-center rounded text-content-subtle transition-colors hover:bg-danger/20 hover:text-danger"
                               >
                                 <IconX size={10} />
@@ -2528,7 +2527,7 @@ function ChatPaneForSession({ sessionId, isActive }: { sessionId: string; isActi
                         {expanded && (
                           <div className="pt-1">
                             <div className="max-h-40 overflow-auto whitespace-pre-wrap break-words rounded bg-surface/70 px-1.5 py-1 text-[11px] leading-relaxed text-content">
-                              {item.displayText || "(仅附件)"}
+                              {item.displayText || t("chat.queue.attachmentsOnly")}
                             </div>
                             <div className="mt-1 flex items-center justify-end gap-1">
                               <button
@@ -2536,21 +2535,21 @@ function ChatPaneForSession({ sessionId, isActive }: { sessionId: string; isActi
                                 onClick={() => removeQueuedPrompt(sessionId, item.id)}
                                 className="inline-flex items-center gap-1 rounded px-1.5 py-1 text-[11px] text-content-subtle transition-colors hover:bg-danger/10 hover:text-danger"
                               >
-                                <IconX size={11} /> 移除
+                                <IconX size={11} /> {t("common.remove")}
                               </button>
                               <button
                                 type="button"
                                 onClick={() => handleEditQueuedPrompt(item)}
                                 className="inline-flex items-center gap-1 rounded px-1.5 py-1 text-[11px] text-content-muted transition-colors hover:bg-surface-muted hover:text-content"
                               >
-                                <IconPencil size={11} /> 编辑
+                                <IconPencil size={11} /> {t("common.edit")}
                               </button>
                               <button
                                 type="button"
                                 onClick={() => void sendQueuedPromptNow(sessionId, item.id)}
                                 className="inline-flex items-center gap-1 rounded bg-accent/15 px-1.5 py-1 text-[11px] font-medium text-accent transition-colors hover:bg-accent/25"
                               >
-                                <IconBolt size={11} /> 立即发送
+                                <IconBolt size={11} /> {t("chat.queue.sendNow")}
                               </button>
                             </div>
                           </div>
@@ -2607,7 +2606,7 @@ function ChatPaneForSession({ sessionId, isActive }: { sessionId: string; isActi
                     <button
                       type="button"
                       onClick={() => removePendingImage(img.id)}
-                      aria-label={`移除图片 ${img.name}`}
+                      aria-label={t("chat.removeImageName", { name: img.name })}
                       className="absolute right-0.5 top-0.5 hidden h-5 w-5 items-center justify-center rounded-full bg-black/60 text-white transition-colors hover:bg-black/80 group-hover:flex"
                     >
                       <IconX size={12} />
@@ -2623,8 +2622,8 @@ function ChatPaneForSession({ sessionId, isActive }: { sessionId: string; isActi
                 textareaLocked
                   ? "Claude is working…"
                   : sessionBusy
-                    ? "排队输入…  (Enter 加入队列)"
-                    : "发送消息…  (@ 引用文件 · / 命令 · 粘贴图片)"
+                    ? t("chat.placeholderQueued")
+                    : t("chat.placeholderIdle")
               }
               onChange={handleChange}
               onEnter={handleEnter}
@@ -2645,8 +2644,8 @@ function ChatPaneForSession({ sessionId, isActive }: { sessionId: string; isActi
                   type="button"
                   onClick={openAttachPicker}
                   disabled={inputBlocked}
-                  title="添加上下文文件"
-                  aria-label="添加上下文文件"
+                  title={t("chat.attachFiles")}
+                  aria-label={t("chat.attachFiles")}
                   className={cn(
                     "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-xl text-content-muted transition-all duration-150 ease-out",
                     "hover:scale-110 hover:bg-accent/10 hover:text-accent active:scale-95",
@@ -2659,8 +2658,8 @@ function ChatPaneForSession({ sessionId, isActive }: { sessionId: string; isActi
                   type="button"
                   onClick={() => void handlePickImages()}
                   disabled={inputBlocked}
-                  title="添加图片"
-                  aria-label="添加图片"
+                  title={t("chat.addImage")}
+                  aria-label={t("chat.addImage")}
                   className={cn(
                     "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-xl text-content-muted transition-all duration-150 ease-out",
                     "hover:scale-110 hover:bg-accent/10 hover:text-accent active:scale-95",
@@ -2682,8 +2681,8 @@ function ChatPaneForSession({ sessionId, isActive }: { sessionId: string; isActi
                 {sessionBusy && !hasComposerContent ? (
                   <button
                     onClick={() => void interrupt()}
-                    title="停止生成"
-                    aria-label="停止生成"
+                    title={t("chat.stopGenerating")}
+                    aria-label={t("chat.stopGenerating")}
                     className={cn(
                       "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-danger text-surface transition-all duration-150 ease-out",
                       "hover:scale-105 hover:brightness-110 active:scale-95 active:brightness-95",
@@ -2695,8 +2694,8 @@ function ChatPaneForSession({ sessionId, isActive }: { sessionId: string; isActi
                   <button
                     onClick={sessionBusy ? handleEnqueue : handleSend}
                     disabled={!hasComposerContent}
-                    title={sessionBusy ? "加入队列" : "发送"}
-                    aria-label={sessionBusy ? "加入队列" : "发送"}
+                    title={sessionBusy ? t("chat.enqueue") : t("chat.send")}
+                    aria-label={sessionBusy ? t("chat.enqueue") : t("chat.send")}
                     className={cn(
                       "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-accent text-surface shadow-sm transition-all duration-150 ease-out",
                       "hover:scale-110 hover:brightness-110 hover:shadow-md hover:shadow-accent/20",
@@ -2837,6 +2836,7 @@ const MessageRow = memo(function MessageRow({
    *  their own project. */
   projectPath?: string | null;
 }) {
+  const { t } = useI18n();
   const isUser = msg.role === "user";
   const copyText = useMemo(() => blocksToText(msg.blocks), [msg.blocks]);
   // User-typed text renders through Markdown, which collapses single "\n"
@@ -2948,8 +2948,8 @@ const MessageRow = memo(function MessageRow({
               <button
                 type="button"
                 onClick={() => onStartEdit?.(msg)}
-                title="编辑"
-                aria-label="编辑"
+                title={t("common.edit")}
+                aria-label={t("common.edit")}
                 className="inline-flex items-center rounded px-1 py-0.5 text-[10px] text-content-subtle transition-colors hover:bg-surface-hover hover:text-content-muted"
               >
                 <IconPencil size={12} />
@@ -2987,6 +2987,7 @@ function blocksToText(blocks: Block[]): string {
 }
 
 function CopyButton({ text }: { text: string }) {
+  const { t } = useI18n();
   const [copied, setCopied] = useState(false);
   const onCopy = async () => {
     try {
@@ -3002,8 +3003,8 @@ function CopyButton({ text }: { text: string }) {
     <button
       type="button"
       onClick={onCopy}
-      title="复制"
-      aria-label="复制"
+      title={t("common.copy")}
+      aria-label={t("common.copy")}
       className="inline-flex items-center rounded px-1 py-0.5 text-[10px] text-content-subtle transition-colors hover:bg-surface-hover hover:text-content-muted"
     >
       {copied ? <IconCheck size={12} className="text-accent" /> : <IconCopy size={12} />}
@@ -3050,6 +3051,7 @@ function UserMessageEditor({
   onSubmit: (newText: string, images: PromptImage[]) => void;
   onCancel: () => void;
 }) {
+  const { t } = useI18n();
   const initialText = useMemo(() => userMessageText(msg.blocks), [msg.blocks]);
   const [text, setText] = useState(initialText);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -3130,17 +3132,17 @@ function UserMessageEditor({
             <div
               key={img.id}
               className="group relative h-14 w-14 shrink-0 overflow-hidden rounded-lg border border-edge bg-surface"
-              title={`图片 ${i + 1}`}
+              title={t("chat.imageN", { n: i + 1 })}
             >
               <img
                 src={`data:${img.mimeType};base64,${img.data}`}
-                alt={`图片 ${i + 1}`}
+                alt={t("chat.imageN", { n: i + 1 })}
                 className="h-full w-full object-cover"
               />
               <button
                 type="button"
                 onClick={() => setImages((prev) => prev.filter((p) => p.id !== img.id))}
-                aria-label={`移除图片 ${i + 1}`}
+                aria-label={t("chat.removeImageN", { n: i + 1 })}
                 className="absolute right-0.5 top-0.5 hidden h-5 w-5 items-center justify-center rounded-full bg-black/60 text-white transition-colors hover:bg-black/80 group-hover:flex"
               >
                 <IconX size={12} />
@@ -3164,7 +3166,7 @@ function UserMessageEditor({
           onClick={onCancel}
           className="rounded px-2 py-1 text-[11px] text-content-muted transition-colors hover:bg-surface-hover hover:text-content"
         >
-          取消
+          {t("common.cancel")}
         </button>
         <button
           type="button"
@@ -3178,7 +3180,7 @@ function UserMessageEditor({
           )}
         >
           <IconSend2 size={12} />
-          发送
+          {t("chat.send")}
         </button>
       </div>
     </div>

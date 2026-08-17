@@ -7,6 +7,7 @@ import type { editor } from "monaco-editor";
 // no file open), we need the worker setup here too.
 import "@renderer/lib/monacoSetup.js";
 import { cn } from "@renderer/lib/cn.js";
+import { useI18n } from "@renderer/lib/i18n/index.js";
 import { useSessionStore } from "@renderer/stores/sessionStore.js";
 import { useMonacoTheme } from "../ide/FileEditor.js";
 import {
@@ -69,6 +70,7 @@ export function PlanViewer({
   isApprovalPending: boolean;
   onClose: () => void;
 }) {
+  const { t } = useI18n();
   const [editing, setEditing] = useState(false);
   // The in-progress edit text. Re-seeded from `plan` whenever editing opens or
   // the upstream plan text changes (e.g. a new approval_request supersedes).
@@ -182,10 +184,10 @@ export function PlanViewer({
       {/* Header - sticky title bar with edit / save / close actions. */}
       <div className="flex shrink-0 items-center gap-1.5 border-b border-edge px-3 py-2">
         <IconClipboard size={15} className="shrink-0 text-content-subtle" />
-        <span className="text-xs font-semibold text-content">计划内容</span>
+        <span className="text-xs font-semibold text-content">{t("chat.planViewer.title")}</span>
         {isApprovalPending && (
           <span className="rounded bg-accent/15 px-1.5 py-0.5 text-[10px] font-medium text-accent">
-            待审阅
+            {t("chat.plan.pendingReview")}
           </span>
         )}
         <div className="ml-auto flex items-center gap-1">
@@ -194,22 +196,22 @@ export function PlanViewer({
               <button
                 type="button"
                 onClick={cancelEdit}
-                title="取消编辑"
-                aria-label="取消编辑"
+                title={t("chat.planViewer.cancelEdit")}
+                aria-label={t("chat.planViewer.cancelEdit")}
                 className={cn(
                   "inline-flex h-6 items-center gap-1 rounded-md px-2 text-[11px] text-content-muted transition-colors",
                   "hover:bg-surface-muted hover:text-content",
                 )}
               >
                 <IconX size={13} />
-                取消
+                {t("common.cancel")}
               </button>
               <button
                 type="button"
                 onClick={handleSave}
                 disabled={!dirty}
-                title={dirty ? "保存（Ctrl+S）" : "无更改"}
-                aria-label="保存"
+                title={dirty ? t("chat.planViewer.saveTitle") : t("chat.planViewer.noChanges")}
+                aria-label={t("common.save")}
                 className={cn(
                   "inline-flex h-6 items-center gap-1 rounded-md px-2 text-[11px] transition-colors",
                   dirty
@@ -218,7 +220,7 @@ export function PlanViewer({
                 )}
               >
                 <IconDeviceFloppy size={13} />
-                保存
+                {t("common.save")}
               </button>
               <button
                 type="button"
@@ -228,8 +230,8 @@ export function PlanViewer({
                   if (dirty) handleSave();
                   setEditing(false);
                 }}
-                title="完成编辑，返回预览"
-                aria-label="完成编辑"
+                title={t("chat.planViewer.finishTitle")}
+                aria-label={t("chat.planViewer.finish")}
                 className={cn(
                   "inline-flex h-6 w-6 items-center justify-center rounded-md text-content-muted transition-colors",
                   "hover:bg-surface-muted hover:text-content",
@@ -242,22 +244,22 @@ export function PlanViewer({
             <button
               type="button"
               onClick={enterEdit}
-              title="编辑计划"
-              aria-label="编辑计划"
+              title={t("chat.plan.editPlan")}
+              aria-label={t("chat.plan.editPlan")}
               className={cn(
                 "inline-flex h-6 items-center gap-1 rounded-md px-2 text-[11px] text-content-muted transition-colors",
                 "hover:bg-surface-muted hover:text-content",
               )}
             >
               <IconPencil size={13} />
-              编辑
+              {t("common.edit")}
             </button>
           )}
           <button
             type="button"
             onClick={onClose}
-            title="关闭计划视图"
-            aria-label="关闭计划视图"
+            title={t("chat.planViewer.close")}
+            aria-label={t("chat.planViewer.close")}
             className={cn(
               "inline-flex h-6 w-6 items-center justify-center rounded-md text-content-muted transition-colors",
               "hover:bg-surface-muted hover:text-content",
@@ -278,7 +280,7 @@ export function PlanViewer({
             theme={theme}
             onChange={(value) => setDraft(value ?? "")}
             onMount={handleEditorMount}
-            loading={<div className="text-[11px] text-content-subtle">加载编辑器…</div>}
+            loading={<div className="text-[11px] text-content-subtle">{t("chat.planViewer.loading")}</div>}
             options={{
               minimap: { enabled: false },
               fontSize: 12,
@@ -294,7 +296,7 @@ export function PlanViewer({
         ) : (
           <div className="h-full overflow-auto p-4">
             <div className="prose-plan text-[13px] leading-relaxed text-content">
-              <Markdown projectPath={projectPath}>{plan || "_(计划为空)_"}</Markdown>
+              <Markdown projectPath={projectPath}>{plan || t("chat.planViewer.empty")}</Markdown>
             </div>
           </div>
         )}
@@ -310,9 +312,9 @@ export function PlanViewer({
           >
             {saveState === "saving" && <IconCheck size={12} />}
             {saveState === "saved" && <IconCheck size={12} />}
-            {saveState === "saving" && <span>保存中…</span>}
-            {saveState === "saved" && <span>已保存 ✓</span>}
-            {saveState === "error" && <span>保存失败</span>}
+            {saveState === "saving" && <span>{t("chat.planViewer.saving")}</span>}
+            {saveState === "saved" && <span>{t("chat.planViewer.saved")}</span>}
+            {saveState === "error" && <span>{t("chat.planViewer.saveFailed")}</span>}
           </div>
         )}
       </div>

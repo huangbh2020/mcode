@@ -27,6 +27,7 @@ import {
 } from "@renderer/lib/icons.js";
 import { FileTypeIcon } from "@renderer/lib/fileIcon.js";
 import { TabBarChevronButton, TabBarOverflowMenu } from "../layout/TabBarChrome.js";
+import { useI18n } from "@renderer/lib/i18n/index.js";
 
 /** Stable empty array so the selector never returns a fresh [] (Zustand
  *  Object.is rule — a new [] every render causes an infinite loop). */
@@ -72,6 +73,7 @@ const MENU_ITEM_CLASS =
  * subscribes to — see `ideDirtyTracker`.
  */
 export function OpenTabsBar() {
+  const { t } = useI18n();
   // Open files are scoped to the active project — switching projects swaps
   // the tab bar to that project's open files.
   const pid = useSessionStore((s) => s.activeProjectId);
@@ -233,7 +235,7 @@ export function OpenTabsBar() {
         <TabBarChevronButton
           dir="left"
           onClick={() => scrollByPage(-1)}
-          title="Scroll tabs left"
+          title={t("ide.editor.scrollTabsLeft")}
         />
       )}
 
@@ -294,7 +296,7 @@ export function OpenTabsBar() {
               }}
               role="tab"
               aria-selected={planTabActive}
-              title="查看计划内容"
+              title={t("ide.editor.viewPlan")}
               onClick={() => {
                 if (activeSessionId) {
                   clearIdeActiveFile();
@@ -312,10 +314,10 @@ export function OpenTabsBar() {
               )}
             >
               <IconClipboard size={12} className="shrink-0 text-accent" />
-              <span className="min-w-0 flex-1 truncate">计划</span>
+              <span className="min-w-0 flex-1 truncate">{t("ide.editor.planTab")}</span>
               <button
                 type="button"
-                aria-label="Close plan tab"
+                aria-label={t("ide.editor.closePlanTabAria")}
                 onClick={(e) => {
                   e.stopPropagation();
                   if (activeSessionId) closePlanDrawer(activeSessionId);
@@ -323,7 +325,7 @@ export function OpenTabsBar() {
                 onPointerDown={(e) => e.stopPropagation()}
                 className="inline-flex h-4 w-4 shrink-0 items-center justify-center rounded text-content-subtle opacity-0 transition-opacity hover:bg-surface-hover hover:text-content group-hover:opacity-100 data-[active=true]:opacity-100"
                 data-active={planTabActive}
-                title="关闭"
+                title={t("common.close")}
               >
                 <IconX size={10} />
               </button>
@@ -346,7 +348,7 @@ export function OpenTabsBar() {
         <TabBarChevronButton
           dir="right"
           onClick={() => scrollByPage(1)}
-          title="Scroll tabs right"
+          title={t("ide.editor.scrollTabsRight")}
         />
       )}
 
@@ -354,7 +356,7 @@ export function OpenTabsBar() {
           when the strip actually overflows (otherwise it's pure noise). */}
       {overflowing && (
         <TabBarOverflowMenu
-          heading="Open files"
+          heading={t("ide.editor.openFiles")}
           items={[
             ...openFiles.map((path) => ({
               key: path,
@@ -365,8 +367,8 @@ export function OpenTabsBar() {
             })),
             ...(hasPlanTab ? [{
               key: "__plan__",
-              label: "计划",
-              title: "查看计划内容",
+              label: t("ide.editor.planTab"),
+              title: t("ide.editor.viewPlan"),
               active: planTabActive,
               dotClass: undefined as string | undefined,
             }] : []),
@@ -425,6 +427,7 @@ function SortableFileTab({
   onClose,
   onContextMenu,
 }: SortableFileTabProps) {
+  const { t } = useI18n();
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
     useSortable({ id: path });
 
@@ -507,17 +510,17 @@ function SortableFileTab({
       {dirty ? (
         <span
           className="h-1.5 w-1.5 shrink-0 rounded-full bg-accent animate-pulse"
-          title="未保存"
+          title={t("ide.editor.unsaved")}
         />
       ) : (
         <button
           type="button"
-          aria-label="Close tab"
+          aria-label={t("ide.editor.closeTabAria")}
           onClick={handleClose}
           onPointerDown={(e) => e.stopPropagation()}
           className="inline-flex h-4 w-4 shrink-0 items-center justify-center rounded text-content-subtle opacity-0 transition-opacity hover:bg-surface-hover hover:text-content group-hover:opacity-100 data-[active=true]:opacity-100"
           data-active={isActive}
-          title="关闭"
+          title={t("common.close")}
         >
           <IconX size={10} />
         </button>
@@ -551,6 +554,7 @@ function FileTabContextMenu({
   onClose: () => void;
   actions: FileTabContextMenuActions;
 }) {
+  const { t } = useI18n();
   // Virtual anchor at the cursor position so the menu opens exactly where the
   // user right-clicked (base-ui's ContextMenu.Trigger anchors to the element
   // edge, not the cursor).
@@ -581,21 +585,21 @@ function FileTabContextMenu({
               className={MENU_ITEM_CLASS}
             >
               <IconX size={14} className="shrink-0" />
-              <span>关闭</span>
+              <span>{t("common.close")}</span>
             </Menu.Item>
             <Menu.Item
               onClick={() => { if (path) actions.closeOthers(path); }}
               className={MENU_ITEM_CLASS}
             >
               <IconX size={14} className="shrink-0 opacity-50" />
-              <span>关闭其他</span>
+              <span>{t("ide.editor.closeOthers")}</span>
             </Menu.Item>
             <Menu.Item
               onClick={() => actions.closeAll()}
               className={MENU_ITEM_CLASS}
             >
               <IconStack2 size={14} className="shrink-0" />
-              <span>关闭全部</span>
+              <span>{t("ide.editor.closeAll")}</span>
             </Menu.Item>
             <Menu.Separator className="my-1 h-px bg-edge" />
             <Menu.Item
@@ -603,14 +607,14 @@ function FileTabContextMenu({
               className={MENU_ITEM_CLASS}
             >
               <IconMessage size={14} className="shrink-0" />
-              <span>加入聊天</span>
+              <span>{t("ide.editor.addToChat")}</span>
             </Menu.Item>
             <Menu.Item
               onClick={handleCopyPath}
               className={MENU_ITEM_CLASS}
             >
               <IconCopy size={14} className="shrink-0" />
-              <span>复制路径</span>
+              <span>{t("ide.editor.copyPath")}</span>
             </Menu.Item>
           </Menu.Popup>
         </Menu.Positioner>

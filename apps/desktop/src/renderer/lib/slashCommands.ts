@@ -16,6 +16,8 @@
  * (`lib/commands.ts`) and from terminal custom commands.
  */
 import type { SkillInfo } from "@contracts/ipc";
+import { translate, type MessageId } from "@renderer/lib/i18n/core.js";
+import { useSessionStore } from "@renderer/stores/sessionStore.js";
 
 /** Re-exported so UI code imports the skill shape from one place. */
 export type { SkillInfo } from "@contracts/ipc";
@@ -45,24 +47,44 @@ export interface BuiltInCommand {
   kind: BuiltInCommandKind;
 }
 
-/** Fixed list of built-in `/` commands. Order is the display order. */
-export const BUILT_IN_COMMANDS: BuiltInCommand[] = [
+/** Internal definition shape: description lives as a dictionary key so it can
+ *  be resolved against the current UI locale on every read. */
+const BUILT_IN_COMMAND_DEFS: Array<
+  Omit<BuiltInCommand, "description"> & { descriptionKey: MessageId }
+> = [
   {
     name: "compact",
-    description: "压缩对话历史(总结并释放上下文)",
+    descriptionKey: "lib.slash.compact",
     kind: "compact",
   },
   {
     name: "init",
-    description: "生成项目说明文件 AGENTS.md",
+    descriptionKey: "lib.slash.init",
     kind: "init",
   },
   {
     name: "browser",
-    description: "用应用内浏览器打开网页(导航/快照/点击/截图)",
+    descriptionKey: "lib.slash.browser",
     kind: "browser",
   },
 ];
+
+/** Fixed list of built-in `/` commands. Order is the display order.
+ *
+ *  `description` is a getter: it re-resolves the dictionary key against the
+ *  live store locale on every property read, so consumers that cache the
+ *  array (or memoize a filtered slice) still render the freshly-switched
+ *  language without rebuilding their caches. The `BuiltInCommand` interface
+ *  is unchanged — callers keep seeing a plain `description: string`. */
+export const BUILT_IN_COMMANDS: BuiltInCommand[] = BUILT_IN_COMMAND_DEFS.map(
+  (d) => ({
+    name: d.name,
+    kind: d.kind,
+    get description() {
+      return translate(useSessionStore.getState().locale, d.descriptionKey);
+    },
+  }),
+);
 
 /** Case-insensitive match on built-in command name + description.
  *  Empty query = all built-in commands. */

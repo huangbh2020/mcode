@@ -1,0 +1,236 @@
+/** English mirror of `zh/chat-composer.ts`. */
+export const en = {
+  // ── empty center pane (no session open) ──
+  "chat.cliNotFound": "Claude Code CLI not found",
+  "chat.cliInstallPrefix": "Please install (",
+  "chat.cliInstallSuffix": ") first, or point to an existing install path:",
+  "chat.cliConfigure": "Configure CLI path",
+  "chat.emptyHint": "Open a project and start a session to continue",
+
+  // ── composer & image/file toasts ──
+  "chat.toast.tooManyImages": "Too many images",
+  "chat.toast.tooManyImagesBody": "You can attach up to {n} images",
+  "chat.toast.imageTooLarge": "Image too large",
+  "chat.toast.fileTooLarge": "File too large",
+  "chat.toast.tooLargeBody": "{name} exceeds 50 MB and was not attached",
+  "chat.toast.imagesSkipped": "Some images were skipped",
+  "chat.toast.imagesSkippedBody": "{names} exceed 50 MB or are not a supported image format",
+  "chat.toast.imageNotSent": "Image not sent",
+  "chat.imageN": "Image {n}",
+  "chat.removeImageName": "Remove image {name}",
+  "chat.removeImageN": "Remove image {n}",
+
+  // ── composer actions / placeholders ──
+  "chat.jumpToBottom": "Jump to bottom",
+  "chat.placeholderQueued": "Queue a message…  (Enter to enqueue)",
+  "chat.placeholderIdle": "Send a message…  (@ files · / commands · paste images)",
+  "chat.attachFiles": "Add context files",
+  "chat.addImage": "Add image",
+  "chat.stopGenerating": "Stop generating",
+  "chat.enqueue": "Enqueue",
+  "chat.send": "Send",
+
+  // ── prompt queue ──
+  "chat.queue.header": "Queued · drag to reorder",
+  "chat.queue.clearTitle": "Clear the queue",
+  "chat.queue.clear": "Clear",
+  "chat.queue.collapse": "Collapse",
+  "chat.queue.expand": "Expand",
+  "chat.queue.attachmentsOnly": "(attachments only)",
+  "chat.queue.sendNowTitle": "Send now (interrupts the current turn)",
+  "chat.queue.sendNow": "Send now",
+  "chat.queue.removeTitle": "Remove from queue",
+
+  // ── tool approval card ──
+  "chat.approval.aria": "Claude is requesting to run a tool",
+  "chat.approval.title": "Claude wants to run a tool",
+  "chat.approval.queueTitle": "{n} more approvals pending in the queue",
+  "chat.approval.collapseTitle": "Hide details",
+  "chat.approval.expandTitle": "View tool input",
+  "chat.approval.collapse": "Hide",
+  "chat.approval.details": "Details",
+  "chat.approval.alwaysAllow": "Always allow {tool} in this session",
+  "chat.approval.denyTitle": "Deny (Esc)",
+  "chat.approval.deny": "Deny",
+  "chat.approval.allowTitle": "Allow (Enter)",
+  "chat.approval.allow": "Allow",
+
+  // ── AskUserQuestion card ──
+  "chat.question.aria": "Claude is asking a question",
+  "chat.question.titleOne": "Claude has a question for you",
+  "chat.question.titleN": "Claude has {n} questions for you",
+  "chat.question.step": "Question {cur} of {total}",
+  "chat.question.dismiss": "Dismiss this question",
+  "chat.question.multiSelect": "Multi-select",
+  "chat.question.customAnswer": "Or type a custom answer…",
+  "chat.question.answered": "{answered} / {total} answered",
+  "chat.question.prevTitle": "Previous question — answers can be revised",
+  "chat.question.prev": "Back",
+  "chat.question.nextTitle": "Next question",
+  "chat.question.next": "Next",
+  "chat.question.submitTitle": "Submit answers (Enter)",
+  "chat.question.submitDisabled": "Answer all questions first",
+  "chat.question.submit": "Submit",
+
+  // ── plan approval sheet ──
+  "chat.planApproval.hintEdited": "Edited",
+  "chat.planApproval.hintFeedback": "Your feedback will be shared with the model",
+  "chat.planApproval.hintDefault": "Approving exits plan mode and starts execution",
+  "chat.planApproval.title": "Plan ready · please review",
+  "chat.planApproval.feedbackPlaceholder":
+    "Plan adjustment feedback (optional) — rides along on approve, or serves as the rejection reason…",
+  "chat.planApproval.editInEditor": "Edit the plan in the editor",
+  "chat.planApproval.editEdited": "Edit plan (edited)",
+  "chat.planApproval.rejectFeedbackTitle": "Reject and send your feedback to the model as the reason",
+  "chat.planApproval.rejectTitle": "Reject the plan",
+  "chat.planApproval.reject": "Reject",
+  "chat.planApproval.approveEditedTitle": "Approve with your edited plan",
+  "chat.planApproval.approveFeedbackTitle": "Approve and execute with your adjustments",
+  "chat.planApproval.approveTitle": "Approve the plan",
+  "chat.planApproval.approveEdited": "Approve (edited)",
+  "chat.planApproval.approve": "Approve & execute",
+
+  // ── plan stream card + plan viewer ──
+  "chat.plan.pendingReview": "Pending review",
+  "chat.plan.drafting": "Drafting",
+  "chat.plan.fallbackTitle": "Plan",
+  "chat.plan.viewFullTitle": "View the full plan in the side panel",
+  "chat.plan.view": "View plan",
+  "chat.plan.editPlan": "Edit plan",
+  "chat.planViewer.title": "Plan content",
+  "chat.planViewer.cancelEdit": "Cancel editing",
+  "chat.planViewer.saveTitle": "Save (Ctrl+S)",
+  "chat.planViewer.noChanges": "No changes",
+  "chat.planViewer.finishTitle": "Finish editing and return to preview",
+  "chat.planViewer.finish": "Finish editing",
+  "chat.planViewer.close": "Close the plan view",
+  "chat.planViewer.loading": "Loading editor…",
+  "chat.planViewer.empty": "_(Empty plan)_",
+  "chat.planViewer.saving": "Saving…",
+  "chat.planViewer.saved": "Saved ✓",
+  "chat.planViewer.saveFailed": "Save failed",
+
+  // ── model dropdown ──
+  "chat.model.selectTitle": "Select model",
+  "chat.model.builtin": "Built-in models",
+  "chat.model.list": "Models",
+  "chat.model.noneAvailable": "No models available",
+  "chat.model.notConfigured": "No model configured yet — add one below",
+  "chat.model.manage": "Add / manage models…",
+  "chat.model.default": "Default",
+
+  // ── model config guard dialog ──
+  "chat.modelConfig.title": "No model configured",
+  "chat.modelConfig.desc": "The current SDK has no model available. Configure a model before sending.",
+  "chat.modelConfig.configure": "Configure",
+
+  // ── effort (thinking level) dropdown ──
+  "chat.effort.section": "Thinking level",
+  "chat.effort.hintDefault": "Let {provider} decide",
+  "chat.effort.hintOff": "Thinking off",
+  "chat.effort.hintMinimal": "Barely any thinking",
+  "chat.effort.hintLow": "Fastest, least thinking",
+  "chat.effort.hintMedium": "Balanced",
+  "chat.effort.hintHigh": "More thinking",
+  "chat.effort.hintXhigh": "Deep thinking",
+  "chat.effort.hintMax": "Most thorough, slowest",
+
+  // ── permission mode dropdown ──
+  "chat.permission.section": "Permission level",
+  "chat.permission.hintDefault": "Standard behavior; tools request approval per the rules",
+  "chat.permission.hintAcceptEdits": "Auto-allow file edits inside the working directory",
+  "chat.permission.hintPlan": "Read-only exploration; every write requires approval",
+  "chat.permission.hintBypass": "Skip all permission checks (use with care)",
+
+  // ── provider (SDK) dropdown ──
+  "chat.provider.locked": "This session's SDK is fixed and cannot be changed",
+  "chat.provider.selectTitle": "Choose the SDK for the session",
+  "chat.provider.section": "Choose SDK",
+
+  // ── slash command picker ──
+  "chat.slash.tabCommands": "Commands",
+  "chat.slash.noSkills": "No skills found (install under ~/.claude/skills)",
+  "chat.slash.noSkillMatch": "No matching skills",
+  "chat.slash.noCommandMatch": "No matching commands",
+  "chat.slash.noDescription": "(no description)",
+  "chat.slash.builtin": "Built-in",
+  "chat.slash.project": "Project",
+  "chat.slash.global": "Global",
+  "chat.kbd.navigate": "navigate",
+  "chat.slash.switchTab": "switch tabs",
+  "chat.slash.insert": "insert",
+  "chat.slash.count": "{n} items",
+  "chat.slash.browserTemplate":
+    "Please open this page with the in-app browser:\n" +
+    "URL: https://\n\n" +
+    "What I need (optional, e.g. screenshot the layout / read the page content / open in mobile view to test responsiveness)\n" +
+    "- Screenshot: capture the visible viewport\n" +
+    "- Snapshot: read the page's structured content (links/buttons/text)\n" +
+    "- Mobile: open with device=iphone or android",
+
+  // ── file mention / attach picker ──
+  "chat.mention.searchPlaceholder": "Search project files…",
+  "chat.mention.addN": "Add {n}",
+  "chat.mention.header": "Reference files",
+  "chat.mention.externalTitle": "Open the system file picker (files outside the project allowed)",
+  "chat.mention.externalPick": "Pick files from your system…",
+  "chat.mention.externalHint": "Outside project",
+  "chat.mention.openProjectFirst": "Open a project first",
+  "chat.mention.searching": "Searching…",
+  "chat.mention.noMatch": "No matching files",
+  "chat.mention.added": "Added",
+  "chat.mention.confirm": "confirm",
+  "chat.mention.select": "select",
+  "chat.mention.count": "{n} items",
+
+  // ── narrow-composer toolbar toggle ──
+  "chat.toolbarToggle": "Model / thinking level / permission mode / context",
+
+  // ── content tag chip + preview popover ──
+  "chat.tag.hidePreview": "Hide preview",
+  "chat.tag.viewElement": "View element content",
+  "chat.tag.viewContent": "View content",
+  "chat.tag.removeTitle": "Remove this attachment",
+  "chat.tagPopover.loadingImage": "Loading image…",
+  "chat.tagPopover.imageFailed": "Failed to load image",
+  "chat.tagPopover.shrink": "Click to shrink",
+  "chat.tagPopover.enlarge": "Click to enlarge",
+  "chat.tagPopover.charCount": "{n} chars · Esc or click outside to close",
+  "chat.tagPopover.copyFull": "Copy full content",
+  "chat.tagPopover.copyFailed": "Copy failed",
+  "chat.tagPopover.expandTitle": "Unwrap the card and paste its content into the composer",
+  "chat.tagPopover.expand": "Unwrap",
+  "chat.tagPopover.closePreview": "Close preview",
+
+  // ── context ring + context stats popover ──
+  "chat.context.stats": "Context stats",
+  "chat.context.modelLine": "Model · {model}",
+  "chat.context.viewDetails": "View details",
+  "chat.context.turns": "{n} turns",
+  "chat.context.history": "History",
+  "chat.context.historyTurns": "History · {n} turns",
+  "chat.context.historyEmpty": "History appears after this turn ends",
+  "chat.context.colTurn": "Turn",
+  "chat.context.colInput": "Input",
+  "chat.context.colOutput": "Output",
+  "chat.context.colCacheRead": "Cache read",
+  "chat.context.colCacheWrite": "Cache write",
+  "chat.context.colUsed": "Used",
+  "chat.context.total": "Total",
+  "chat.context.rowTooltip": "Processed {processed} · cumulative {used}",
+  "chat.context.rowModel": "Model {model}",
+  "chat.context.timeDuration": "Time / duration",
+  "chat.context.modelLabel": "Model",
+  "chat.context.hoverRow": "Hover a row for details",
+
+  // ── project / branch indicator ──
+  "chat.branch.switchTitle": "Switch branch",
+  "chat.branch.searchPlaceholder": "Search branches or tags...",
+  "chat.branch.loadFailed": "Could not read branches",
+  "chat.branch.switching": "Switching...",
+  "chat.branch.noMatch": "No matches",
+  "chat.branch.none": "No branches",
+  "chat.branch.local": "Local branches",
+  "chat.branch.remote": "Remote branches",
+  "chat.branch.tags": "Tags",
+} as const;

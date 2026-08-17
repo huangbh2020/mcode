@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api } from "@renderer/lib/api.js";
 import { cn } from "@renderer/lib/cn.js";
+import { useI18n } from "@renderer/lib/i18n/index.js";
 import { Button } from "@renderer/components/ui/index.js";
 import {
   IconCopy,
@@ -37,8 +38,6 @@ import {
 
 /** App display name (matches the root package.json "name"). */
 const APP_NAME = "Mcode";
-/** One-line description shown under the app name. */
-const APP_DESC = "基于 Agent SDK 构建的多 agent 桌面端 GUI(Electron 三栏 IDE)";
 /** GitHub repo URL. */
 const REPO_URL = "https://github.com/huangbh2020/mcode";
 /** GitHub Releases latest URL — where the user lands to manually download on
@@ -113,6 +112,7 @@ function platformLabel(platform: string): string {
 }
 
 export function AboutPanel() {
+  const { t } = useI18n();
   const [info, setInfo] = useState<AppInfoResult | null>(null);
   const [copied, setCopied] = useState(false);
   const [updateState, setUpdateState] = useState<UpdateState>({ kind: "idle" });
@@ -247,12 +247,12 @@ export function AboutPanel() {
   };
 
   const rows: { label: string; value: string }[] = [
-    { label: "版本", value: info ? `v${info.appVersion}` : "-" },
-    { label: "许可证", value: LICENSE },
+    { label: t("settings.about.version"), value: info ? `v${info.appVersion}` : "-" },
+    { label: t("settings.about.license"), value: LICENSE },
     { label: "Electron", value: info?.electron ?? "-" },
     { label: "Node.js", value: info?.node ?? "-" },
     { label: "Chromium", value: info?.chromium ?? "-" },
-    { label: "系统", value: info ? `${platformLabel(info.platform)} · ${info.arch}` : "-" },
+    { label: t("settings.about.system"), value: info ? `${platformLabel(info.platform)} · ${info.arch}` : "-" },
   ];
 
   return (
@@ -267,7 +267,7 @@ export function AboutPanel() {
         </div>
         <h2 className="text-lg font-semibold text-content">{APP_NAME}</h2>
         <p className="mt-1.5 text-[0.8571em] leading-relaxed text-content-subtle">
-          {APP_DESC}
+          {t("settings.about.desc")}
         </p>
         {info && (
           <p className="mt-1 text-[0.7857em] tabular-nums text-content-muted">
@@ -305,7 +305,7 @@ export function AboutPanel() {
           variant="ghost"
           size="sm"
           onClick={onCopyVersion}
-          title="复制版本信息"
+          title={t("settings.about.copyVersionInfo")}
           className="gap-1.5"
         >
           {copied ? (
@@ -313,24 +313,24 @@ export function AboutPanel() {
           ) : (
             <IconCopy size={14} />
           )}
-          {copied ? "已复制" : "复制版本信息"}
+          {copied ? t("common.copied") : t("settings.about.copyVersionInfo")}
         </Button>
         <Button
           variant="ghost"
           size="sm"
           onClick={() => openExternal(REPO_URL)}
-          title="在浏览器中打开 GitHub 仓库"
+          title={t("settings.about.openRepoTitle")}
           className="gap-1.5"
         >
           <SiGithub size={14} />
-          GitHub 仓库
+          {t("settings.about.githubRepo")}
         </Button>
         <Button
           variant="ghost"
           size="sm"
           onClick={onCheckForUpdates}
           disabled={updateState.kind === "checking" || updateState.kind === "downloading"}
-          title="检查是否有新版本"
+          title={t("settings.about.checkUpdateTitle")}
           className="gap-1.5"
         >
           {updateState.kind === "checking" ? (
@@ -338,17 +338,14 @@ export function AboutPanel() {
           ) : (
             <IconExternalLink size={14} />
           )}
-          {updateState.kind === "checking" ? "检查中…" : "检查更新"}
+          {updateState.kind === "checking" ? t("settings.about.checking") : t("settings.about.checkForUpdates")}
         </Button>
       </div>
 
       {/* Footer note */}
       <p className="mt-8 flex w-full max-w-md items-center justify-center gap-1.5 text-center text-[0.7143em] leading-relaxed text-content-subtle">
         <IconInfoCircle size={12} className="shrink-0" />
-        <span>
-          本应用为开源软件(MIT 许可证),仅作编码 agent 的交互界面,不内嵌任何
-          agent 二进制。Claude 是 Anthropic 的商标,Pi 是 Earendil Works 的产品。
-        </span>
+        <span>{t("settings.about.footer")}</span>
       </p>
     </section>
   );
@@ -368,6 +365,8 @@ function UpdateBanner({
   onInstall: () => void;
   onGoToDownload: () => void;
 }) {
+  const { t } = useI18n();
+
   if (state.kind === "idle" || state.kind === "checking") return null;
 
   // Downloading gets a richer layout: a progress bar + percent/byte counter.
@@ -386,7 +385,7 @@ function UpdateBanner({
         <div className="flex items-center gap-2.5">
           <IconRefresh size={16} className="shrink-0 animate-spin text-accent" />
           <span className="truncate text-[0.8571em] text-content">
-            正在下载更新… {percent.toFixed(0)}%
+            {t("settings.about.downloading", { p: percent.toFixed(0) })}
           </span>
           <span className="ml-auto shrink-0 tabular-nums text-[0.7143em] text-content-muted">
             {bytesText}
@@ -411,12 +410,12 @@ function UpdateBanner({
   switch (state.kind) {
     case "up-to-date":
       icon = <IconCheck size={16} className="text-accent" />;
-      message = `已是最新版本(v${state.version})`;
+      message = t("settings.about.upToDate", { version: state.version });
       break;
     case "available":
       icon = <IconDownload size={16} className="text-accent" />;
-      message = `发现新版本 v${state.version}`;
-      action = { label: "立即下载", onClick: onDownload, icon: <IconDownload size={14} /> };
+      message = t("settings.about.available", { version: state.version });
+      action = { label: t("settings.about.downloadNow"), onClick: onDownload, icon: <IconDownload size={14} /> };
       tone = "accent";
       break;
     case "downloaded":
@@ -425,22 +424,22 @@ function UpdateBanner({
         // the releases page for a manual download/install instead of offering
         // a no-op "restart & install".
         icon = <IconExternalLink size={16} className="text-accent" />;
-        message = `v${state.version} 已下载,需手动安装`;
+        message = t("settings.about.manualInstall", { version: state.version });
         action = {
-          label: "前往下载",
+          label: t("settings.about.goToDownload"),
           onClick: onGoToDownload,
           icon: <IconExternalLink size={14} />,
         };
       } else {
         icon = <IconRocket size={16} className="text-accent" />;
-        message = `v${state.version} 已就绪,重启后安装`;
-        action = { label: "重启安装", onClick: onInstall, icon: <IconRocket size={14} /> };
+        message = t("settings.about.readyToInstall", { version: state.version });
+        action = { label: t("settings.about.restartInstall"), onClick: onInstall, icon: <IconRocket size={14} /> };
       }
       tone = "accent";
       break;
     case "error":
       icon = <IconAlertTriangle size={16} className="text-warning" />;
-      message = `更新检查失败:${state.message}`;
+      message = t("settings.about.checkFailed", { message: state.message });
       tone = "warning";
       break;
   }

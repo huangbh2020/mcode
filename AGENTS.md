@@ -77,7 +77,8 @@ apps/desktop/src/
     store/{db,repositories}.ts # SQLite 持久化(sql.js)
   preload/index.ts             # contextBridge 白名单 API
   renderer/                    # 前端(React)
-    stores/sessionStore.ts     # ★ Zustand store,ingest RuntimeEvent → ChatMessage
+    stores/sessionStore.ts     # ★ Zustand store,ingest RuntimeEvent → ChatMessage(locale 状态也在此)
+    lib/i18n/                  # ★ 中英双语文案:core.ts(translate) + index.ts(useI18n) + zh|en/{common,layout,lib,chat-stream,chat-composer,ide,browser,settings,store}.ts
     hooks/useClaudeEvents.ts   # 订阅 IPC 事件流
     components/{layout,chat}/  # UI
 ```
@@ -127,6 +128,13 @@ pnpm build
 ### IPC
 - 新通道:先在 `contracts/ipc.ts` 加 zod schema + `IPC` 常量 → preload 白名单注册 → main handler 用 `Schema.parse(raw)` 校验入参
 - main→renderer 推送用 `sendToRenderer(IPC.XXX, msg)`,renderer 用 `api.on.xxx` 订阅
+
+### 界面文案 i18n(中英双语,默认中文)
+- 语言偏好:`settings` 表 `ui.locale` key(`UI_LOCALE_SETTING_KEY`,`"zh"|"en"`),sessionStore 的 `locale` 状态 + `setLocale` 持久化,启动时进 first-paint `getMany` 批量水合,切换即时生效(组件订阅 `useI18n()` 自动重渲染,并同步 `<html lang>`)
+- 组件内:`import { useI18n } from "@renderer/lib/i18n/index.js"` → `const { t } = useI18n()` → `t("area.key")`;插值 `t("key", { n })` 对应词条里的 `{n}`
+- 非 React 模块(store、lib 纯函数):用 `lib/i18n/core.ts` 的 `translate(locale, key, params)`(locale 从 `useSessionStore.getState().locale` 取)。**不要从 index.js 导入 translate 到 store/store 相关模块**——index 导入 store,会成环;core.ts 无依赖
+- 词典:`lib/i18n/zh/` 与 `en/` 按功能分区(common/layout/lib/chat-stream/chat-composer/ide/browser/settings/store),zh 是源(`MessageId` 由 zh 键派生),en 镜像同一类型——**缺键过不了 typecheck**。新词条 zh/en 同步加,键用分区前缀
+- **禁止硬编码新的用户可见中文/英文文案**;只翻 UI 文案,代码注释、console 日志、发给模型的 prompt、持久化标识符不进词典。模块级常量数组存 `labelKey: MessageId`,渲染时 `t()`
 
 ### claude 解析(SdkMessageAdapter)
 - `SdkMessageAdapter.dispatch()` 将 SDK 的 `SDKMessage` 归一化为 `RuntimeEvent`

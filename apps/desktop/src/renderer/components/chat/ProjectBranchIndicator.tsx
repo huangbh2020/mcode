@@ -16,6 +16,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Menu } from "@base-ui/react/menu";
 import { api } from "@renderer/lib/api.js";
 import { cn } from "@renderer/lib/cn.js";
+import { useI18n } from "@renderer/lib/i18n/index.js";
 import { relativePath } from "@renderer/lib/path.js";
 import type {
   GitRepo,
@@ -48,6 +49,7 @@ export function ProjectBranchIndicator({
   projectName,
   compact = false,
 }: ProjectBranchIndicatorProps) {
+  const { t } = useI18n();
   // Primary repo (best match for project root). null = not a git project.
   const [repo, setRepo] = useState<GitRepo | null>(null);
   const [status, setStatus] = useState<GitStatusResult | null>(null);
@@ -176,7 +178,7 @@ export function ProjectBranchIndicator({
               "flex shrink-0 items-center gap-0.5 rounded bg-surface-muted px-1.5 py-0.5 font-mono text-[11px] text-content-muted transition-colors",
               "hover:bg-surface-hover hover:text-content",
             )}
-            title="切换分支"
+            title={t("chat.branch.switchTitle")}
           >
             <IconGitBranch size={11} className="shrink-0 opacity-80" />
             <span className="max-w-[140px] truncate">{status?.branch || "HEAD"}</span>
@@ -203,7 +205,7 @@ export function ProjectBranchIndicator({
                         e.stopPropagation();
                       }
                     }}
-                    placeholder="搜索分支或标签..."
+                    placeholder={t("chat.branch.searchPlaceholder")}
                     className="min-w-0 flex-1 rounded border border-edge bg-surface px-1.5 py-0.5 text-[11px] text-content outline-none placeholder:text-content-subtle focus:border-accent"
                   />
                 </div>
@@ -212,30 +214,30 @@ export function ProjectBranchIndicator({
                   {branchesLoading ? (
                     <div className="flex items-center justify-center gap-1.5 px-3 py-4 text-[11px] text-content-subtle">
                       <IconLoader2 size={12} className="animate-spin" />
-                      加载中...
+                      {t("common.loading")}
                     </div>
                   ) : !filteredBranches ? (
                     <div className="px-3 py-4 text-center text-[11px] text-content-subtle">
-                      无法读取分支
+                      {t("chat.branch.loadFailed")}
                     </div>
                   ) : (
                     <>
                       {checkingOut && (
                         <div className="flex items-center justify-center gap-1.5 border-b border-edge px-3 py-1 text-[11px] text-content-subtle">
                           <IconLoader2 size={12} className="animate-spin" />
-                          切换中...
+                          {t("chat.branch.switching")}
                         </div>
                       )}
                       {filteredBranches.local.length === 0 &&
                         filteredBranches.remote.length === 0 &&
                         filteredBranches.tags.length === 0 && (
                           <div className="px-3 py-3 text-center text-[11px] text-content-subtle">
-                            {branchQuery ? "无匹配结果" : "无分支"}
+                            {branchQuery ? t("chat.branch.noMatch") : t("chat.branch.none")}
                           </div>
                         )}
                       {filteredBranches.local.length > 0 && (
                         <BranchGroup
-                          label="本地分支"
+                          label={t("chat.branch.local")}
                           items={filteredBranches.local}
                           localNames={localNames}
                           onCheckout={handleCheckout}
@@ -243,7 +245,7 @@ export function ProjectBranchIndicator({
                       )}
                       {filteredBranches.remote.length > 0 && (
                         <BranchGroup
-                          label="远程分支"
+                          label={t("chat.branch.remote")}
                           items={filteredBranches.remote}
                           localNames={localNames}
                           onCheckout={handleCheckout}
@@ -251,7 +253,7 @@ export function ProjectBranchIndicator({
                       )}
                       {filteredBranches.tags.length > 0 && (
                         <BranchGroup
-                          label="标签"
+                          label={t("chat.branch.tags")}
                           items={filteredBranches.tags}
                           localNames={localNames}
                           onCheckout={handleCheckout}

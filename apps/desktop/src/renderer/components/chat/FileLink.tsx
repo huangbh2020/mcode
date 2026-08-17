@@ -16,6 +16,7 @@
 import { useMemo, useRef, useState, type MouseEvent, type KeyboardEvent } from "react";
 import { Menu } from "@base-ui/react/menu";
 import { cn } from "@renderer/lib/cn.js";
+import { useI18n } from "@renderer/lib/i18n/index.js";
 import { basename } from "@renderer/lib/path.js";
 import { FileTypeIcon } from "@renderer/lib/fileIcon.js";
 import { useSessionStore } from "@renderer/stores/sessionStore.js";
@@ -51,6 +52,7 @@ export function FileLink({
   const [loading, setLoading] = useState(false);
   const [candidates, setCandidates] = useState<ResolvedCandidate[] | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
+  const { t } = useI18n();
 
   /** Virtual anchor built from the span's current rect, so the candidate
    *  menu opens right below the clicked token. Recomputed each open via the
@@ -128,7 +130,7 @@ export function FileLink({
         ref={spanRef}
         role="button"
         tabIndex={0}
-        title="点击打开文件"
+        title={t("chatStream.fileLink.clickToOpen")}
         onClick={handleClick}
         onKeyDown={handleKeyDown}
         className={cn(
@@ -148,12 +150,12 @@ export function FileLink({
               {candidates === null ? null : candidates.length === 0 ? (
                 <div className={cn(MENU_ITEM_CLASS, "cursor-default opacity-70")}>
                   <IconAlertTriangle size={14} className="shrink-0 text-content-subtle" />
-                  <span>未找到匹配文件</span>
+                  <span>{t("chatStream.fileLink.noMatch")}</span>
                 </div>
               ) : (
                 <>
                   <div className="px-2.5 py-1 text-[10px] uppercase tracking-wide text-content-subtle">
-                    {candidates.length} 个匹配 · 选择打开
+                    {t("chatStream.fileLink.matchCount", { n: candidates.length })}
                   </div>
                   {candidates.map((c) => (
                     <Menu.Item

@@ -6,6 +6,7 @@ import { Input } from "@renderer/components/ui/input.js";
 import { Dialog } from "@renderer/components/ui/index.js";
 import { IconKey, IconTrash, IconUser, IconWorldWww } from "@renderer/lib/icons.js";
 import type { BrowserCredentialPublic } from "@contracts/ipc";
+import { useI18n } from "@renderer/lib/i18n/index.js";
 
 /**
  * Manual credential vault for the embedded browser — manage per-origin
@@ -23,6 +24,7 @@ export function CredentialDialog({
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
+  const { t } = useI18n();
   const [credentials, setCredentials] = useState<BrowserCredentialPublic[]>([]);
   const [origin, setOrigin] = useState("");
   const [username, setUsername] = useState("");
@@ -50,11 +52,11 @@ export function CredentialDialog({
   const handleSubmit = async () => {
     const normalizedOrigin = normalizeOrigin(origin);
     if (!normalizedOrigin) {
-      setError("请输入有效的站点 origin（如 https://example.com）");
+      setError(t("browser.invalidOrigin"));
       return;
     }
     if (!username.trim()) {
-      setError("用户名不能为空");
+      setError(t("browser.usernameRequired"));
       return;
     }
     const res = await api.browser.credentialsSave({
@@ -88,17 +90,17 @@ export function CredentialDialog({
           <div className="mb-3 flex items-center gap-2">
             <IconKey size={16} className="text-accent" />
             <Dialog.Title className="text-sm font-semibold text-content">
-              浏览器密码库
+              {t("browser.vaultTitle")}
             </Dialog.Title>
           </div>
           <Dialog.Description className="mb-3 text-xs leading-relaxed text-content-muted">
-            按站点保存账号密码（OS 钥匙串加密存储）。HTTP Basic Auth 弹窗会自动使用；工具栏钥匙菜单可一键填充到当前页登录表单。
+            {t("browser.vaultDesc")}
           </Dialog.Description>
 
           {/* Saved list */}
           <div className="mb-3 max-h-52 space-y-1 overflow-y-auto">
             {credentials.length === 0 && (
-              <p className="py-4 text-center text-xs text-content-subtle">暂无保存的凭证</p>
+              <p className="py-4 text-center text-xs text-content-subtle">{t("browser.noCredentials")}</p>
             )}
             {credentials.map((c) => (
               <div
@@ -121,12 +123,12 @@ export function CredentialDialog({
                   onClick={() => handleEdit(c)}
                   className="rounded px-1.5 py-0.5 text-[11px] text-content-muted hover:bg-surface-hover hover:text-content"
                 >
-                  编辑
+                  {t("common.edit")}
                 </button>
                 <button
                   type="button"
                   onClick={() => void handleRemove(c.origin)}
-                  title="删除"
+                  title={t("common.delete")}
                   className="rounded p-1 text-content-subtle hover:bg-surface-hover hover:text-danger"
                 >
                   <IconTrash size={13} />
@@ -138,7 +140,7 @@ export function CredentialDialog({
           {/* Add / edit form */}
           <div className="space-y-2 rounded border border-edge bg-surface-muted p-2.5">
             <p className="text-[11px] font-medium text-content-muted">
-              {editingOrigin ? `编辑 ${editingOrigin}` : "新增凭证"}
+              {editingOrigin ? t("browser.editingCredential", { origin: editingOrigin }) : t("browser.addCredential")}
             </p>
             <Input
               placeholder="https://example.com"
@@ -148,14 +150,14 @@ export function CredentialDialog({
               spellCheck={false}
             />
             <Input
-              placeholder="用户名"
+              placeholder={t("browser.username")}
               value={username}
               onChange={(e) => setUsername(e.target.value)}
               spellCheck={false}
             />
             <Input
               type="password"
-              placeholder={editingOrigin ? "密码（留空 = 不修改）" : "密码"}
+              placeholder={editingOrigin ? t("browser.passwordKeep") : t("browser.password")}
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               spellCheck={false}
@@ -164,11 +166,11 @@ export function CredentialDialog({
             <div className="flex justify-end gap-2 pt-1">
               {editingOrigin && (
                 <Button variant="ghost" size="sm" onClick={resetForm}>
-                  取消编辑
+                  {t("browser.cancelEdit")}
                 </Button>
               )}
               <Button size="sm" onClick={() => void handleSubmit()}>
-                保存
+                {t("common.save")}
               </Button>
             </div>
           </div>

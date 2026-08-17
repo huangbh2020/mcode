@@ -52,6 +52,7 @@ import { hexToTriplet, tripletToHex } from "@renderer/lib/colorUtils.js";
 import { formatRelativeTime, formatFullTime } from "@renderer/lib/time.js";
 import { useSessionStore } from "@renderer/stores/sessionStore.js";
 import type { Project, Session } from "@contracts/session";
+import { useI18n, type MessageId } from "@renderer/lib/i18n/index.js";
 
 /**
  * Left bar — a tree of projects → sessions, with archive (soft) / delete (hard)
@@ -90,6 +91,7 @@ export function LeftBar({
   showSearch?: boolean;
   showConnectPhone?: boolean;
 } = {}) {
+  const { t } = useI18n();
   const projects = useSessionStore((s) => s.projects);
   const activeProjectId = useSessionStore((s) => s.activeProjectId);
   const sessionsByProject = useSessionStore((s) => s.sessionsByProject);
@@ -463,7 +465,7 @@ export function LeftBar({
           "group mb-2 flex items-center gap-2.5 rounded-lg px-2 py-2 text-left transition-colors",
           "hover:bg-surface-hover/60",
         )}
-        title="关于 Mcode"
+        title={t("layout.about")}
       >
         <BrandLogo size={30} />
         <span className="flex min-w-0 flex-col leading-tight">
@@ -471,7 +473,7 @@ export function LeftBar({
             Mcode
           </span>
           <span className="truncate text-content-subtle [font-size:var(--rp-fs-sm)]">
-            智能编码工作台
+            {t("layout.tagline")}
           </span>
         </span>
       </button>
@@ -487,7 +489,7 @@ export function LeftBar({
       {/* Header */}
       <div className="group mb-1 flex items-center justify-between px-1">
         <h3 className="font-semibold uppercase tracking-wide text-content-subtle [font-size:var(--rp-fs-md)]">
-          项目
+          {t("layout.projects")}
         </h3>
         <div className="flex items-center gap-1">
           {/* View-mode toggle: flat list vs grouped under headers. Hover-
@@ -500,7 +502,7 @@ export function LeftBar({
               "opacity-0 group-hover:opacity-100",
             )}
             role="group"
-            aria-label="项目视图模式"
+            aria-label={t("layout.projectViewMode")}
           >
             <button
               onClick={() => void setProjectView("flat")}
@@ -510,7 +512,7 @@ export function LeftBar({
                   ? "bg-surface-hover text-content"
                   : "text-content-subtle hover:bg-surface-hover/60 hover:text-content",
               )}
-              title="常规视图（平铺列表）"
+              title={t("layout.viewFlat")}
               aria-pressed={projectView === "flat"}
             >
               <IconList size={13} />
@@ -523,7 +525,7 @@ export function LeftBar({
                   ? "bg-surface-hover text-content"
                   : "text-content-subtle hover:bg-surface-hover/60 hover:text-content",
               )}
-              title="分组视图（按分组折叠）"
+              title={t("layout.viewGrouped")}
               aria-pressed={projectView === "grouped"}
             >
               <IconCategoryFilled size={13} />
@@ -539,7 +541,7 @@ export function LeftBar({
                 ? "opacity-100 hover:text-accent"
                 : "opacity-0 hover:text-accent group-hover:opacity-100",
             )}
-            title="打开一个文件夹作为项目"
+            title={t("layout.addProject")}
           >
             <IconPlus size={12} />
           </button>
@@ -593,7 +595,7 @@ export function LeftBar({
                           a lone ungrouped section looks like the flat list. */}
                       {groupedProjects.size > 0 && (
                         <li className="px-1 py-0.5 text-content-subtle [font-size:var(--rp-fs-md)]">
-                          未分组
+                          {t("layout.ungrouped")}
                         </li>
                       )}
                       {ungroupedProjects.map((p) => renderProjectNode(p))}
@@ -624,7 +626,7 @@ export function LeftBar({
                 archivedViewOpen && "rotate-90",
               )}
             />
-            已归档 ({archivedCount})
+            {t("layout.archivedCount", { n: archivedCount })}
           </button>
           {archivedViewOpen && (
             <ul className="mt-1 space-y-0.5">
@@ -682,10 +684,10 @@ export function LeftBar({
             "flex min-w-0 flex-1 items-center gap-2 rounded px-2 py-1.5 text-content-muted transition-colors [font-size:var(--right-panel-font-size)]",
             "hover:bg-surface-hover hover:text-content",
           )}
-          title="设置"
+          title={t("layout.settings")}
         >
           <IconSettings size={14} className="shrink-0" />
-          设置
+          {t("layout.settings")}
         </button>
         <button
           onClick={() => locateActiveSession(true)}
@@ -694,7 +696,7 @@ export function LeftBar({
             "flex h-7 w-7 shrink-0 items-center justify-center rounded text-content-muted transition-colors [font-size:var(--right-panel-font-size)]",
             "hover:bg-surface-hover hover:text-content disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent",
           )}
-          title="定位到当前会话"
+          title={t("layout.locateSession")}
         >
           <IconFocus size={14} />
         </button>
@@ -704,7 +706,7 @@ export function LeftBar({
             "flex h-7 w-7 shrink-0 items-center justify-center rounded text-content-muted transition-colors [font-size:var(--right-panel-font-size)]",
             "hover:bg-surface-hover hover:text-content",
           )}
-          title={effectiveTheme === "dark" ? "切换到浅色主题" : "切换到深色主题"}
+          title={effectiveTheme === "dark" ? t("layout.themeToLight") : t("layout.themeToDark")}
         >
           {effectiveTheme === "dark" ? <IconSun size={14} /> : <IconMoon size={14} />}
         </button>
@@ -791,13 +793,13 @@ export function LeftBar({
       <ConfirmDialog
         open={confirmDelete != null}
         danger
-        title={confirmDelete?.kind === "project" ? "删除项目" : "删除线程"}
+        title={confirmDelete?.kind === "project" ? t("layout.deleteProject") : t("layout.deleteThread")}
         description={
           confirmDelete?.kind === "project"
-            ? <>确认删除项目「{confirmDelete.name}」及其所有线程?此操作不可恢复。</>
-            : <>确认彻底删除线程「{confirmDelete?.title}」?此操作不可恢复。</>
+            ? t("layout.deleteProjectDesc", { name: confirmDelete.name })
+            : t("layout.deleteThreadDesc", { title: confirmDelete?.title ?? "" })
         }
-        confirmText="删除"
+        confirmText={t("common.delete")}
         onOpenChange={(open) => { if (!open) setConfirmDelete(null); }}
         onConfirm={() => {
           if (!confirmDelete) return;
@@ -854,6 +856,7 @@ interface ProjectNodeProps {
 }
 
 function ProjectNode(props: ProjectNodeProps) {
+  const { t } = useI18n();
   const {
     project, sessions, hasMore, total, expanded, isActiveProject, activeSessionId,
     runningBySession, unreadBySession,
@@ -888,7 +891,7 @@ function ProjectNode(props: ProjectNodeProps) {
         <button
           onClick={onToggleExpand}
           className="flex w-3 shrink-0 items-center justify-center text-content-subtle"
-          title={expanded ? "折叠" : "展开"}
+          title={expanded ? t("layout.collapse") : t("layout.expand")}
         >
           <IconChevronRight
             size={10}
@@ -916,13 +919,13 @@ function ProjectNode(props: ProjectNodeProps) {
             "flex shrink-0 items-center rounded px-1 text-content-subtle opacity-0 transition-colors",
             "hover:text-accent group-hover:opacity-100",
           )}
-          title="在此项目下新建会话"
+          title={t("layout.newSessionHere")}
         >
           <IconPlus size={12} />
         </button>
 
         {/* Delete — inline on hover (projects cannot be archived, only removed). */}
-        <HoverIconButton onClick={onDelete} title="删除" danger>
+        <HoverIconButton onClick={onDelete} title={t("common.delete")} danger>
           <IconTrash size={13} />
         </HoverIconButton>
       </div>
@@ -930,7 +933,7 @@ function ProjectNode(props: ProjectNodeProps) {
       {expanded && (
         <ul className="ml-3 mt-0.5 space-y-0.5 border-l border-edge/50 pl-2">
           {loaded === 0 ? (
-            <li className="px-2 py-1 text-content-subtle [font-size:var(--rp-fs-md)]">暂无线程</li>
+            <li className="px-2 py-1 text-content-subtle [font-size:var(--rp-fs-md)]">{t("layout.noThreads")}</li>
           ) : (
             sessions.map((s) => (
               <SessionRow
@@ -957,7 +960,8 @@ function ProjectNode(props: ProjectNodeProps) {
                   "hover:bg-surface-hover/60 hover:text-accent",
                 )}
               >
-                加载更多{total > 0 ? `（还有 ${Math.max(total - loaded, 0)} 条）` : ""}
+                {t("layout.loadMore")}
+                {total > 0 ? t("layout.loadMoreRemaining", { n: Math.max(total - loaded, 0) }) : ""}
               </button>
             </li>
           )}
@@ -993,6 +997,7 @@ function SessionRow({
   registerNode: (id: string, el: HTMLLIElement | null) => void;
   onContext: (x: number, y: number) => void;
 }) {
+  const { t } = useI18n();
   const [pendingConfirm, setPendingConfirm] = useState<null | "archive" | "delete">(null);
   const isPinned = session.pinnedAt != null;
   // Whether the pointer is over this row. We swap the right-aligned payload
@@ -1051,7 +1056,7 @@ function SessionRow({
         <IconPinnedFilled
           size={12}
           className="shrink-0 text-accent/80"
-          aria-label="已置顶"
+          aria-label={t("layout.pinned")}
         />
       )}
 
@@ -1096,14 +1101,14 @@ function SessionRow({
           <button
             onClick={(e) => { e.stopPropagation(); setPendingConfirm(null); onArchive(); }}
             className="flex shrink-0 items-center rounded px-1 text-accent hover:bg-surface-hover"
-            title="确认归档"
+            title={t("layout.confirmArchive")}
           >
             <IconCheck size={13} />
           </button>
           <button
             onClick={(e) => { e.stopPropagation(); setPendingConfirm(null); }}
             className="flex shrink-0 items-center rounded px-1 text-content-subtle hover:bg-surface-hover hover:text-content"
-            title="取消"
+            title={t("common.cancel")}
           >
             <IconX size={13} />
           </button>
@@ -1114,14 +1119,14 @@ function SessionRow({
           <button
             onClick={(e) => { e.stopPropagation(); setPendingConfirm(null); onDelete(); }}
             className="flex shrink-0 items-center rounded px-1 text-danger hover:bg-surface-hover"
-            title="确认删除"
+            title={t("layout.confirmDelete")}
           >
             <IconCheck size={13} />
           </button>
           <button
             onClick={(e) => { e.stopPropagation(); setPendingConfirm(null); }}
             className="flex shrink-0 items-center rounded px-1 text-content-subtle hover:bg-surface-hover hover:text-content"
-            title="取消"
+            title={t("common.cancel")}
           >
             <IconX size={13} />
           </button>
@@ -1135,7 +1140,7 @@ function SessionRow({
         <>
           <HoverIconButton
             onClick={onTogglePin}
-            title={isPinned ? "取消置顶" : "置顶"}
+            title={isPinned ? t("layout.unpin") : t("layout.pin")}
             className="opacity-100"
           >
             {isPinned ? (
@@ -1146,14 +1151,14 @@ function SessionRow({
           </HoverIconButton>
           <HoverIconButton
             onClick={() => { setPendingConfirm("archive"); }}
-            title="归档"
+            title={t("layout.archive")}
             className="opacity-100"
           >
             <IconArchive size={13} />
           </HoverIconButton>
           <HoverIconButton
             onClick={() => { setPendingConfirm("delete"); }}
-            title="删除"
+            title={t("common.delete")}
             danger
             className="opacity-100"
           >
@@ -1211,6 +1216,7 @@ function ArchivedRow({
   onRestore: () => void;
   onDelete: () => void;
 }) {
+  const { t } = useI18n();
   return (
     <li
       className={cn(
@@ -1233,9 +1239,9 @@ function ArchivedRow({
           "shrink-0 rounded px-1 text-content-subtle transition-colors [font-size:var(--rp-fs-sm)]",
           "hover:text-accent",
         )}
-        title="恢复到列表"
+        title={t("layout.restoreToList")}
       >
-        恢复
+        {t("layout.restore")}
       </button>
       <button
         onClick={(e) => { e.stopPropagation(); onDelete(); }}
@@ -1243,9 +1249,9 @@ function ArchivedRow({
           "shrink-0 rounded px-1 text-content-subtle transition-colors [font-size:var(--rp-fs-sm)]",
           "hover:text-danger",
         )}
-        title="彻底删除"
+        title={t("layout.deleteForever")}
       >
-        删
+        {t("layout.deleteShort")}
       </button>
     </li>
   );
@@ -1265,6 +1271,7 @@ interface SessionContextMenuProps {
 function SessionContextMenu({
   ctxMenu, onClose, onRename, onCopyTitle, onOpenFolder, onTogglePin,
 }: SessionContextMenuProps) {
+  const { t } = useI18n();
   // Virtual anchor pinned to the cursor coords so the popup opens where the
   // user right-clicked (base-ui's Menu.Positioner accepts a VirtualElement).
   const anchor = useMemo(() => {
@@ -1304,7 +1311,7 @@ function SessionContextMenu({
               ) : (
                 <IconPin size={14} className="shrink-0" />
               )}
-              {isPinned ? "取消置顶" : "置顶"}
+              {isPinned ? t("layout.unpin") : t("layout.pin")}
             </Menu.Item>
             <Menu.Item
               onClick={() => session && onRename(session)}
@@ -1314,7 +1321,7 @@ function SessionContextMenu({
               )}
             >
               <IconPencil size={14} className="shrink-0" />
-              重命名
+              {t("common.rename")}
             </Menu.Item>
             <Menu.Item
               onClick={() => session && onCopyTitle(session)}
@@ -1324,7 +1331,7 @@ function SessionContextMenu({
               )}
             >
               <IconCopy size={14} className="shrink-0" />
-              复制会话标题
+              {t("layout.copySessionTitle")}
             </Menu.Item>
             <Menu.Item
               onClick={() => session && onOpenFolder(session)}
@@ -1334,7 +1341,7 @@ function SessionContextMenu({
               )}
             >
               <IconFolder size={14} className="shrink-0" />
-              在文件管理器中打开
+              {t("layout.openInFileManager")}
             </Menu.Item>
           </Menu.Popup>
         </Menu.Positioner>
@@ -1352,6 +1359,7 @@ interface RenameDialogProps {
 }
 
 function RenameDialog({ renaming, onClose, onSubmit }: RenameDialogProps) {
+  const { t } = useI18n();
   const [value, setValue] = useState("");
 
   // Seed the input whenever a new rename target is set.
@@ -1370,16 +1378,16 @@ function RenameDialog({ renaming, onClose, onSubmit }: RenameDialogProps) {
       <Dialog.Portal>
         <Dialog.Backdrop />
         <Dialog.Popup className="w-[420px] max-w-[90vw] p-4">
-          <Dialog.Title>重命名线程</Dialog.Title>
+          <Dialog.Title>{t("layout.renameThread")}</Dialog.Title>
           <Dialog.Description className="mt-1">
-            为线程设置一个新标题。
+            {t("layout.renameThreadDesc")}
           </Dialog.Description>
 
           <div className="mt-4">
             <Input
               value={value}
               autoFocus
-              placeholder="线程标题"
+              placeholder={t("layout.threadTitlePlaceholder")}
               onChange={(e) => setValue((e.target as HTMLInputElement).value)}
               onKeyDown={(e) => {
                 if (e.key === "Enter") { e.preventDefault(); submit(); }
@@ -1391,10 +1399,10 @@ function RenameDialog({ renaming, onClose, onSubmit }: RenameDialogProps) {
 
           <div className="mt-4 flex items-center justify-end gap-2">
             <Button variant="ghost" size="sm" onClick={onClose}>
-              取消
+              {t("common.cancel")}
             </Button>
             <Button variant="primary" size="sm" onClick={submit} disabled={!trimmed}>
-              保存
+              {t("common.save")}
             </Button>
           </div>
           <Dialog.Close />
@@ -1423,20 +1431,22 @@ interface GroupNodeProps {
   renderProject: (p: Project) => React.ReactNode;
 }
 
-/** Preset swatches for the group color picker (mirrors ACCENT_PRESETS). */
-const GROUP_COLOR_PRESETS: { name: string; triplet: string; hex: string }[] = [
-  { name: "翠绿", triplet: "5 150 105", hex: "#059669" },
-  { name: "天蓝", triplet: "2 132 199", hex: "#0284c7" },
-  { name: "靛蓝", triplet: "67 56 202", hex: "#4338ca" },
-  { name: "紫罗兰", triplet: "124 58 237", hex: "#7c3aed" },
-  { name: "玫瑰红", triplet: "225 29 72", hex: "#e11d48" },
-  { name: "琥珀", triplet: "217 119 6", hex: "#d97706" },
+/** Preset swatches for the group color picker (mirrors ACCENT_PRESETS).
+ *  Names are dictionary keys — resolved at render for the swatch tooltip. */
+const GROUP_COLOR_PRESETS: { nameKey: MessageId; triplet: string; hex: string }[] = [
+  { nameKey: "layout.color.emerald", triplet: "5 150 105", hex: "#059669" },
+  { nameKey: "layout.color.sky", triplet: "2 132 199", hex: "#0284c7" },
+  { nameKey: "layout.color.indigo", triplet: "67 56 202", hex: "#4338ca" },
+  { nameKey: "layout.color.violet", triplet: "124 58 237", hex: "#7c3aed" },
+  { nameKey: "layout.color.rose", triplet: "225 29 72", hex: "#e11d48" },
+  { nameKey: "layout.color.amber", triplet: "217 119 6", hex: "#d97706" },
 ];
 
 function GroupNode({
   groupName, projects, groupColor, collapsed,
   onToggle, onRenameGroup, onDeleteGroup, onSetColor, renderProject,
 }: GroupNodeProps) {
+  const { t } = useI18n();
   // The header is both a drop target (dropping a project here reassigns its
   // group) AND a sortable item (groups can be dragged to reorder among
   // themselves). useSortable provides both behaviors.
@@ -1462,7 +1472,7 @@ function GroupNode({
         <button
           onClick={onToggle}
           className="flex w-3 shrink-0 items-center justify-center"
-          title={collapsed ? "展开" : "折叠"}
+          title={collapsed ? t("layout.expand") : t("layout.collapse")}
         >
           <IconChevronRight
             size={10}
@@ -1485,7 +1495,7 @@ function GroupNode({
             reflects the current group color so it doubles as an indicator. */}
         <Menu.Root>
           <Menu.Trigger
-            title="设置颜色"
+            title={t("layout.setColor")}
             className="flex shrink-0 items-center rounded px-1 text-content-subtle opacity-0 transition-colors hover:bg-surface-hover group-hover:opacity-100"
           >
             <IconPalette size={12} style={colorHex ? { color: colorHex } : undefined} />
@@ -1501,7 +1511,7 @@ function GroupNode({
                 )}
               >
                 <div className="px-3 py-1 text-[10px] uppercase tracking-wide text-content-subtle">
-                  分组颜色
+                  {t("layout.groupColor")}
                 </div>
                 <div className="flex flex-wrap gap-1.5 px-3 py-1">
                   {GROUP_COLOR_PRESETS.map((p) => (
@@ -1513,7 +1523,7 @@ function GroupNode({
                         backgroundColor: p.hex,
                         borderColor: groupColor === p.triplet ? "var(--color-content)" : "var(--color-edge)",
                       }}
-                      title={`${p.name} · ${p.hex.toUpperCase()}`}
+                      title={`${t(p.nameKey)} · ${p.hex.toUpperCase()}`}
                     >
                       {groupColor === p.triplet && (
                         <IconCheck size={12} className="text-white drop-shadow" />
@@ -1523,7 +1533,7 @@ function GroupNode({
                 </div>
                 <div className="my-1 h-px bg-edge" />
                 <div className="flex items-center gap-2 px-3 py-1">
-                  <span className="text-xs text-content-muted">自定义</span>
+                  <span className="text-xs text-content-muted">{t("layout.customColor")}</span>
                   <input
                     type="color"
                     value={colorHex ?? "#808080"}
@@ -1539,7 +1549,7 @@ function GroupNode({
                   disabled={!groupColor}
                   className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-content-muted data-[highlighted]:bg-surface-muted disabled:opacity-40"
                 >
-                  恢复默认
+                  {t("layout.resetColor")}
                 </Menu.Item>
               </Menu.Popup>
             </Menu.Positioner>
@@ -1548,11 +1558,11 @@ function GroupNode({
         <button
           onClick={onRenameGroup}
           className="flex shrink-0 items-center rounded px-1 text-content-subtle opacity-0 transition-colors hover:text-accent group-hover:opacity-100"
-          title="重命名分组"
+          title={t("layout.renameGroup")}
         >
           <IconPencil size={12} />
         </button>
-        <HoverIconButton onClick={onDeleteGroup} title="解散分组（不删除项目）" danger>
+        <HoverIconButton onClick={onDeleteGroup} title={t("layout.dissolveGroup")} danger>
           <IconX size={12} />
         </HoverIconButton>
       </div>
@@ -1615,6 +1625,7 @@ function ProjectContextMenu({
   ctxMenu, knownGroups, onClose,
   onMoveToGroup, onCreateGroup, onRemoveFromGroup, onOpenFolder,
 }: ProjectContextMenuProps) {
+  const { t } = useI18n();
   const anchor = useMemo(() => {
     const x = ctxMenu?.x ?? 0;
     const y = ctxMenu?.y ?? 0;
@@ -1650,7 +1661,7 @@ function ProjectContextMenu({
             {knownGroups.length > 0 && (
               <>
                 <div className="px-3 py-1 text-[10px] uppercase tracking-wide text-content-subtle">
-                  移动到分组
+                  {t("layout.moveToGroup")}
                 </div>
                 {knownGroups.map((g) => (
                   <Menu.Item
@@ -1671,7 +1682,7 @@ function ProjectContextMenu({
               className={itemClass}
             >
               <IconPlus size={14} className="shrink-0" />
-              新建分组…
+              {t("layout.newGroupMenu")}
             </Menu.Item>
             {currentGroup && (
               <Menu.Item
@@ -1679,7 +1690,7 @@ function ProjectContextMenu({
                 className={itemClass}
               >
                 <IconArrowRight size={14} className="shrink-0 rotate-45" />
-                移出分组
+                {t("layout.removeFromGroup")}
               </Menu.Item>
             )}
             <Menu.Separator className="my-1 h-px bg-edge" />
@@ -1688,7 +1699,7 @@ function ProjectContextMenu({
               className={itemClass}
             >
               <IconFolder size={14} className="shrink-0" />
-              在文件管理器中打开
+              {t("layout.openInFileManager")}
             </Menu.Item>
           </Menu.Popup>
         </Menu.Positioner>
@@ -1710,6 +1721,7 @@ interface GroupDialogProps {
 }
 
 function GroupDialog({ state, onClose, onSubmit }: GroupDialogProps) {
+  const { t } = useI18n();
   const [value, setValue] = useState("");
 
   useEffect(() => {
@@ -1728,18 +1740,18 @@ function GroupDialog({ state, onClose, onSubmit }: GroupDialogProps) {
       <Dialog.Portal>
         <Dialog.Backdrop />
         <Dialog.Popup className="w-[420px] max-w-[90vw] p-4">
-          <Dialog.Title>{state?.mode === "rename" ? "重命名分组" : "新建分组"}</Dialog.Title>
+          <Dialog.Title>{state?.mode === "rename" ? t("layout.renameGroup") : t("layout.newGroup")}</Dialog.Title>
           <Dialog.Description className="mt-1">
             {state?.mode === "rename"
-              ? "为分组设置一个新名称，分组内所有项目会一起移动。"
-              : "输入分组名称，将该项目归入新分组。"}
+              ? t("layout.renameGroupDesc")
+              : t("layout.newGroupDesc")}
           </Dialog.Description>
 
           <div className="mt-4">
             <Input
               value={value}
               autoFocus
-              placeholder="分组名称"
+              placeholder={t("layout.groupNamePlaceholder")}
               onChange={(e) => setValue((e.target as HTMLInputElement).value)}
               onKeyDown={(e) => {
                 if (e.key === "Enter") { e.preventDefault(); submit(); }
@@ -1751,10 +1763,10 @@ function GroupDialog({ state, onClose, onSubmit }: GroupDialogProps) {
 
           <div className="mt-4 flex items-center justify-end gap-2">
             <Button variant="ghost" size="sm" onClick={onClose}>
-              取消
+              {t("common.cancel")}
             </Button>
             <Button variant="primary" size="sm" onClick={submit} disabled={!trimmed}>
-              {state?.mode === "rename" ? "保存" : "创建"}
+              {state?.mode === "rename" ? t("common.save") : t("common.create")}
             </Button>
           </div>
           <Dialog.Close />

@@ -14,6 +14,7 @@ import {
   IconChevronDown,
   IconLetterCase,
 } from "@renderer/lib/icons.js";
+import { useI18n } from "@renderer/lib/i18n/index.js";
 
 /** Search debounce + result caps. Name/content share the debounce; caps differ
  *  (name search returns files, content returns line-level matches). Mirrors the
@@ -48,6 +49,7 @@ type SearchMode = "name" | "content";
  * the IPC channels (`file.search` / `file.grep`) are unchanged.
  */
 export function SearchDialog() {
+  const { t } = useI18n();
   const open = useSessionStore((s) => s.searchDialogOpen);
   const setOpen = useSessionStore((s) => s.setSearchDialogOpen);
   const activeProjectId = useSessionStore((s) => s.activeProjectId);
@@ -229,8 +231,8 @@ export function SearchDialog() {
             <button
               type="button"
               onClick={toggleMode}
-              title={mode === "name" ? "当前:文件名搜索 - 点击切到内容搜索" : "当前:内容搜索 - 点击切到文件名搜索"}
-              aria-label={mode === "name" ? "切换为内容搜索" : "切换为文件名搜索"}
+              title={mode === "name" ? t("ide.search.modeNameHint") : t("ide.search.modeContentHint")}
+              aria-label={mode === "name" ? t("ide.search.switchToContentAria") : t("ide.search.switchToNameAria")}
               className={cn(
                 "flex shrink-0 items-center justify-center rounded p-0.5 transition-colors",
                 "text-content-subtle hover:bg-surface-hover hover:text-content",
@@ -244,7 +246,7 @@ export function SearchDialog() {
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               onKeyDown={onKeyDown}
-              placeholder={mode === "name" ? "搜索文件名…" : "搜索文件内容…"}
+              placeholder={mode === "name" ? t("ide.search.namePlaceholder") : t("ide.search.contentPlaceholder")}
               spellCheck={false}
               className="h-6 min-w-0 flex-1 bg-transparent text-sm text-content outline-none placeholder:text-content-subtle"
             />
@@ -257,8 +259,8 @@ export function SearchDialog() {
                   setCaseSensitive((v) => !v);
                   inputRef.current?.focus();
                 }}
-                title={caseSensitive ? "区分大小写:开" : "区分大小写:关"}
-                aria-label="切换区分大小写"
+                title={caseSensitive ? t("ide.search.caseOn") : t("ide.search.caseOff")}
+                aria-label={t("ide.search.caseToggleAria")}
                 aria-pressed={caseSensitive}
                 className={cn(
                   "flex shrink-0 items-center justify-center rounded p-0.5 transition-colors",
@@ -280,7 +282,7 @@ export function SearchDialog() {
                   inputRef.current?.focus();
                 }}
                 className="shrink-0 rounded text-content-subtle transition-colors hover:text-content"
-                title="清除搜索"
+                title={t("ide.search.clear")}
               >
                 <IconX size={15} />
               </button>
@@ -311,13 +313,13 @@ export function SearchDialog() {
               ) : (
                 <div className="flex h-full min-h-[160px] items-center justify-center px-4 text-center text-[12px] text-content-subtle">
                   {mode === "name"
-                    ? "输入文件名或路径片段以搜索项目文件"
-                    : "输入文本以搜索文件内容"}
+                    ? t("ide.search.nameIdleHint")
+                    : t("ide.search.contentIdleHint")}
                 </div>
               )
             ) : (
               <div className="flex h-full min-h-[160px] items-center justify-center px-4 text-center text-[12px] text-content-subtle">
-                没有活动项目,请先在左侧栏添加并选择一个项目文件夹
+                {t("ide.search.noProjectHint")}
               </div>
             )}
           </div>
@@ -328,21 +330,21 @@ export function SearchDialog() {
               <span>
                 <kbd className="rounded border border-edge px-1">↑</kbd>
                 <kbd className="ml-0.5 rounded border border-edge px-1">↓</kbd>{" "}
-                导航
+                {t("ide.search.navigate")}
               </span>
               <span>
-                <kbd className="rounded border border-edge px-1">↵</kbd> 打开
+                <kbd className="rounded border border-edge px-1">↵</kbd> {t("common.open")}
               </span>
               <span>
-                <kbd className="rounded border border-edge px-1">esc</kbd> 关闭
+                <kbd className="rounded border border-edge px-1">esc</kbd> {t("common.close")}
               </span>
             </span>
             <span>
               {isSearching
-                ? `${flatCount} 条结果`
+                ? t("ide.search.resultCount", { n: flatCount })
                 : mode === "name"
-                  ? "文件名搜索"
-                  : "内容搜索"}
+                  ? t("ide.search.modeName")
+                  : t("ide.search.modeContent")}
             </span>
           </div>
         </Dialog.Popup>
@@ -368,17 +370,18 @@ function NameSearchResults({
   onHover: (idx: number) => void;
   onOpen: (path: string) => void;
 }) {
+  const { t } = useI18n();
   if (loading && results.length === 0) {
     return (
       <div className="flex items-center justify-center gap-1.5 px-3 py-6 text-[12px] text-content-subtle">
         <IconLoader2 size={14} className="animate-spin" />
-        搜索中…
+        {t("ide.search.searching")}
       </div>
     );
   }
   if (results.length === 0) {
     return (
-      <div className="px-3 py-6 text-center text-[12px] text-content-subtle">无匹配文件</div>
+      <div className="px-3 py-6 text-center text-[12px] text-content-subtle">{t("ide.search.noFileMatch")}</div>
     );
   }
   return (
@@ -457,19 +460,20 @@ function ContentSearchResults({
   onHover: (idx: number) => void;
   onOpen: (path: string) => void;
 }) {
+  const { t } = useI18n();
   const groups = useMemo(() => groupByFile(results), [results]);
 
   if (loading && results.length === 0) {
     return (
       <div className="flex items-center justify-center gap-1.5 px-3 py-6 text-[12px] text-content-subtle">
         <IconLoader2 size={14} className="animate-spin" />
-        搜索中…
+        {t("ide.search.searching")}
       </div>
     );
   }
   if (results.length === 0) {
     return (
-      <div className="px-3 py-6 text-center text-[12px] text-content-subtle">无匹配内容</div>
+      <div className="px-3 py-6 text-center text-[12px] text-content-subtle">{t("ide.search.noContentMatch")}</div>
     );
   }
 

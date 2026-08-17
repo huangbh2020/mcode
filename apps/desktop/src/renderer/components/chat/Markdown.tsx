@@ -21,6 +21,7 @@ import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
 import { cn } from "@renderer/lib/cn.js";
+import { useI18n } from "@renderer/lib/i18n/index.js";
 import { IconCheck, IconCopy } from "@renderer/lib/icons.js";
 import type { Components } from "react-markdown";
 import { codeCacheKey, getCodeHtml, setCodeHtml } from "@renderer/lib/markdownCache.js";
@@ -133,6 +134,7 @@ function escapeHtml(s: string): string {
 
 function CopyButton({ text }: { text: string }) {
   const [copied, setCopied] = useState(false);
+  const { t } = useI18n();
   return (
     <button
       onClick={() => {
@@ -145,9 +147,9 @@ function CopyButton({ text }: { text: string }) {
         "inline-flex items-center gap-1 rounded px-1.5 py-0.5 transition-colors",
         "text-content-subtle hover:bg-surface-hover/60 hover:text-content-muted",
       )}
-      title="Copy code"
+      title={t("chatStream.copyCode")}
     >
-      {copied ? (<><IconCheck size={10} /> copied</>) : (<><IconCopy size={10} /> copy</>)}
+      {copied ? (<><IconCheck size={10} /> {t("common.copied")}</>) : (<><IconCopy size={10} /> {t("common.copy")}</>)}
     </button>
   );
 }

@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { cn } from "@renderer/lib/cn.js";
+import { useI18n } from "@renderer/lib/i18n/index.js";
 import {
   PiRobot,
   IconListDetails,
@@ -77,6 +78,7 @@ export function StatusCapsule({
   onPickPlan: (plan: string) => void;
 }) {
   const [open, setOpen] = useState(false);
+  const { t } = useI18n();
   const runningAgents = subagents.filter((a) => a.status === "running").length;
   const hasSubagents = subagents.length > 0;
   const hasTodos = todos.length > 0;
@@ -102,7 +104,7 @@ export function StatusCapsule({
             ? "border-accent/50 bg-accent/15 text-accent"
             : "border-content-subtle/40 bg-surface-hover text-content hover:brightness-95 dark:hover:brightness-110",
         )}
-        title="查看活动详情（计划 / 任务 / 子代理）"
+        title={t("chatStream.activity.capsuleTitle")}
       >
         {/* Plan segment - icon + count only. Renders first so the plan reads
             as the primary activity when present. */}

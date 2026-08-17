@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "@renderer/lib/api.js";
+import { useI18n } from "@renderer/lib/i18n/index.js";
 import { Button, ConfirmDialog, Input } from "@renderer/components/ui/index.js";
 import { PanelHeader } from "./PanelHeader.js";
 import { SettingsSection } from "./SettingsSection.js";
@@ -24,11 +25,12 @@ import {
  *   (a dedicated IPC into main). Cookies/login state are preserved.
  */
 export function BrowserPanel() {
+  const { t } = useI18n();
   return (
     <section className="space-y-4">
       <PanelHeader
-        title="浏览器"
-        desc="配置应用内浏览器的行为：截图存放目录、浏览器数据目录，以及清理缓存数据。"
+        title={t("settings.browser.title")}
+        desc={t("settings.browser.desc")}
       />
       <ScreenshotDirSection />
       <DataDirSection />
@@ -38,6 +40,7 @@ export function BrowserPanel() {
 }
 
 function ScreenshotDirSection() {
+  const { t } = useI18n();
   const [dir, setDir] = useState("");
   const [loaded, setLoaded] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -74,13 +77,13 @@ function ScreenshotDirSection() {
 
   return (
     <SettingsSection
-      title="截图存放目录"
-      desc="agent 使用浏览器截图工具(browser_screenshot)时,截取的图片会保存到该目录,并按会话和对话轮次分子目录:截图目录/会话ID/turn-轮次/。留空则保存到系统图片目录。"
+      title={t("settings.browser.screenshotSection")}
+      desc={t("settings.browser.screenshotSectionDesc")}
     >
       <SettingRow
         layout="vertical"
-        title="截图目录"
-        desc="选择或输入一个文件夹路径。留空时使用系统图片目录。"
+        title={t("settings.browser.screenshotDir")}
+        desc={t("settings.browser.screenshotDirDesc")}
       >
         <div className="flex gap-2">
           <Input
@@ -89,13 +92,13 @@ function ScreenshotDirSection() {
               setDir((e.target as HTMLInputElement).value);
               setSaved(false);
             }}
-            placeholder="留空使用系统图片目录"
+            placeholder={t("settings.browser.screenshotPlaceholder")}
             spellCheck={false}
             disabled={!loaded}
             className="min-w-0 flex-1 font-mono"
           />
           <Button variant="secondary" size="sm" onClick={() => void pickDir()} disabled={!loaded}>
-            选择目录…
+            {t("settings.browser.chooseDir")}
           </Button>
           <Button
             variant="primary"
@@ -103,11 +106,11 @@ function ScreenshotDirSection() {
             onClick={() => void save()}
             disabled={saving || !loaded}
           >
-            {saving ? "保存中…" : "保存"}
+            {saving ? t("settings.saving") : t("common.save")}
           </Button>
         </div>
         {saved && (
-          <p className="mt-1 text-[0.7857em] text-accent">已保存。后续浏览器截图将保存到此目录。</p>
+          <p className="mt-1 text-[0.7857em] text-accent">{t("settings.browser.savedScreenshot")}</p>
         )}
       </SettingRow>
     </SettingsSection>
@@ -118,6 +121,7 @@ function ScreenshotDirSection() {
  *  storage / IndexedDB …). Mirrors ScreenshotDirSection; the main process
  *  reads `browser.dataDir` when creating the browser session partition. */
 function DataDirSection() {
+  const { t } = useI18n();
   const [dir, setDir] = useState("");
   const [loaded, setLoaded] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -152,13 +156,13 @@ function DataDirSection() {
 
   return (
     <SettingsSection
-      title="浏览器数据目录"
-      desc="浏览器会话数据(Cookie、表单/登录记录、本地存储、IndexedDB 等)实时写入该目录。留空使用应用默认位置。更改后需重启应用才生效。"
+      title={t("settings.browser.dataSection")}
+      desc={t("settings.browser.dataSectionDesc")}
     >
       <SettingRow
         layout="vertical"
-        title="数据目录"
-        desc="选择或输入一个文件夹路径。留空时使用应用默认位置。"
+        title={t("settings.browser.dataDir")}
+        desc={t("settings.browser.dataDirDesc")}
       >
         <div className="flex gap-2">
           <Input
@@ -167,13 +171,13 @@ function DataDirSection() {
               setDir((e.target as HTMLInputElement).value);
               setSaved(false);
             }}
-            placeholder="留空使用默认位置"
+            placeholder={t("settings.browser.dataDirPlaceholder")}
             spellCheck={false}
             disabled={!loaded}
             className="min-w-0 flex-1 font-mono"
           />
           <Button variant="secondary" size="sm" onClick={() => void pickDir()} disabled={!loaded}>
-            选择目录…
+            {t("settings.browser.chooseDir")}
           </Button>
           <Button
             variant="primary"
@@ -181,12 +185,12 @@ function DataDirSection() {
             onClick={() => void save()}
             disabled={saving || !loaded}
           >
-            {saving ? "保存中…" : "保存"}
+            {saving ? t("settings.saving") : t("common.save")}
           </Button>
         </div>
         {saved && (
           <p className="mt-1 text-[0.7857em] text-accent">
-            已保存。重启应用后浏览器数据将保存到新目录。
+            {t("settings.browser.savedDataDir")}
           </p>
         )}
       </SettingRow>
@@ -198,6 +202,7 @@ function DataDirSection() {
  *  guarded by a ConfirmDialog; cookies & login state are kept, so the user
  *  stays signed in. */
 function CacheSection() {
+  const { t } = useI18n();
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<"ok" | "error" | null>(null);
@@ -217,13 +222,13 @@ function CacheSection() {
 
   return (
     <SettingsSection
-      title="缓存数据"
-      desc="清理浏览器缓存与临时站点数据。Cookie 与登录状态会被保留,不需要重新登录网站。"
+      title={t("settings.browser.cacheSection")}
+      desc={t("settings.browser.cacheSectionDesc")}
     >
       <SettingRow
         layout="horizontal"
-        title="清除缓存数据"
-        desc="清除 HTTP 缓存以及 localStorage / IndexedDB 等临时站点数据,释放磁盘空间。"
+        title={t("settings.browser.clearCache")}
+        desc={t("settings.browser.clearCacheDesc")}
       >
         <div className="flex flex-col items-end gap-1">
           <Button
@@ -232,26 +237,27 @@ function CacheSection() {
             disabled={busy}
             onClick={() => setConfirmOpen(true)}
           >
-            {busy ? "清理中…" : "清除缓存数据"}
+            {busy ? t("settings.browser.clearing") : t("settings.browser.clearCache")}
           </Button>
           {result === "ok" && (
-            <span className="text-[0.7857em] text-accent">已清除,登录状态已保留。</span>
+            <span className="text-[0.7857em] text-accent">{t("settings.browser.clearOk")}</span>
           )}
           {result === "error" && (
-            <span className="text-[0.7857em] text-danger">清理失败,请查看主进程日志。</span>
+            <span className="text-[0.7857em] text-danger">{t("settings.browser.clearFailed")}</span>
           )}
         </div>
       </SettingRow>
       <ConfirmDialog
         open={confirmOpen}
-        title="清除浏览器缓存数据"
+        title={t("settings.browser.clearConfirmTitle")}
         description={
           <>
-            将清除 HTTP 缓存和临时站点数据(localStorage、IndexedDB 等)。
-            <span className="font-medium">Cookie 与登录状态会保留</span>,已登录的网站不需要重新登录。确定继续吗?
+            {t("settings.browser.clearConfirmDesc1")}
+            <span className="font-medium">{t("settings.browser.clearConfirmKeep")}</span>
+            {t("settings.browser.clearConfirmDesc2")}
           </>
         }
-        confirmText="清除"
+        confirmText={t("settings.browser.clear")}
         danger
         onOpenChange={(open) => {
           if (!open) setConfirmOpen(false);

@@ -1,5 +1,6 @@
 import { forwardRef } from "react";
 import { cn } from "@renderer/lib/cn.js";
+import { useI18n } from "@renderer/lib/i18n/index.js";
 import { IconClipboard, IconFile, IconCode, IconPhoto, IconX } from "@renderer/lib/icons.js";
 import { isImageFile, type ContentTag } from "@renderer/lib/contentTag.js";
 
@@ -27,6 +28,7 @@ export const ContentTagChip = forwardRef<
     onRemove: () => void;
   }
 >(function ContentTagChip({ tag, open, onToggle, onRemove }, ref) {
+  const { t } = useI18n();
   const isFile = tag.kind === "file";
   const isElement = tag.kind === "element";
   return (
@@ -42,7 +44,13 @@ export const ContentTagChip = forwardRef<
       <button
         type="button"
         onClick={onToggle}
-        title={isFile ? (tag.filePath ?? tag.preview) : isElement ? (open ? "收起预览" : "查看元素内容") : open ? "收起预览" : "查看内容"}
+        title={
+          isFile
+            ? (tag.filePath ?? tag.preview)
+            : isElement
+              ? (open ? t("chat.tag.hidePreview") : t("chat.tag.viewElement"))
+              : open ? t("chat.tag.hidePreview") : t("chat.tag.viewContent")
+        }
         className="flex items-center gap-1"
       >
         {isFile ? (
@@ -61,8 +69,8 @@ export const ContentTagChip = forwardRef<
       <button
         type="button"
         onClick={onRemove}
-        title="删除此附件"
-        aria-label="删除此附件"
+        title={t("chat.tag.removeTitle")}
+        aria-label={t("chat.tag.removeTitle")}
         className="ml-0.5 flex h-4 w-4 items-center justify-center rounded text-accent/70 transition-colors hover:bg-accent/30 hover:text-accent"
       >
         <IconX size={11} />

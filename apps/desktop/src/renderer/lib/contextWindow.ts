@@ -19,6 +19,12 @@ export type {
 } from "@contracts/runtime";
 
 import type { ContextSnapshot, ContextWarning } from "@contracts/runtime";
+import { translate } from "@renderer/lib/i18n/core.js";
+// Cycle note: sessionStore imports this module (isValidSnapshot). Importing the
+// store back is safe because the only access (`getState()`) happens inside a
+// function body — never during module evaluation — so neither side of the
+// cycle observes the other's TDZ.
+import { useSessionStore } from "@renderer/stores/sessionStore.js";
 
 /**
  * Validate that a persisted/received snapshot has the full post-refactor
@@ -78,22 +84,23 @@ export function getContextBreakdown(s: ContextSnapshot): {
   subtitle: string;
   rows: ContextBreakdownRow[];
 } {
+  const locale = useSessionStore.getState().locale;
   const cacheRead = s.cacheReadTokens ?? 0;
   const cacheCreation = s.cacheCreationTokens ?? 0;
   const freshInput = Math.max(0, s.usedTokens - cacheRead - cacheCreation);
   const rows: ContextBreakdownRow[] = [
-    { key: "input", label: "输入", value: fmtTokens(freshInput) },
-    { key: "cache-read", label: "缓存读取", value: fmtTokens(cacheRead) },
-    { key: "cache-write", label: "缓存写入", value: fmtTokens(cacheCreation) },
-    { key: "output", label: "输出", value: fmtTokens(s.outputTokens) },
+    { key: "input", label: translate(locale, "lib.context.input"), value: fmtTokens(freshInput) },
+    { key: "cache-read", label: translate(locale, "lib.context.cacheRead"), value: fmtTokens(cacheRead) },
+    { key: "cache-write", label: translate(locale, "lib.context.cacheWrite"), value: fmtTokens(cacheCreation) },
+    { key: "output", label: translate(locale, "lib.context.output"), value: fmtTokens(s.outputTokens) },
     {
       key: "processed",
-      label: "本轮处理",
+      label: translate(locale, "lib.context.processed"),
       value: fmtTokens(s.totalProcessedTokens),
     },
   ];
   return {
-    title: "上下文占用",
+    title: translate(locale, "lib.context.title"),
     subtitle: `${fmtTokens(s.usedTokens)} / ${fmtTokens(s.maxTokens)} · ${s.pct}%`,
     rows,
   };

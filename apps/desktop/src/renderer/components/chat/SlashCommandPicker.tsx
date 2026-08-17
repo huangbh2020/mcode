@@ -17,6 +17,7 @@
  */
 import { useEffect, useMemo, useRef, useState } from "react";
 import { cn } from "@renderer/lib/cn.js";
+import { useI18n } from "@renderer/lib/i18n/index.js";
 import { IconCommand, IconSparkles } from "@renderer/lib/icons.js";
 import {
   filterBuiltInCommands,
@@ -52,6 +53,7 @@ export function SlashCommandPicker({
   onPickCommand,
   onClose,
 }: SlashCommandPickerProps) {
+  const { t } = useI18n();
   // Compute both tabs' filtered lists up front so we can auto-switch.
   const skillCmds = useMemo(() => filterSkillCommands(query, skills), [query, skills]);
   const builtinCmds = useMemo(() => filterBuiltInCommands(query), [query]);
@@ -195,7 +197,7 @@ export function SlashCommandPicker({
           active={activeTab === "command"}
           onClick={() => setActiveTab("command")}
           icon={<IconCommand size={12} className="shrink-0 opacity-70" />}
-          label="命令"
+          label={t("chat.slash.tabCommands")}
           count={builtinCmds.length}
         />
       </div>
@@ -205,9 +207,9 @@ export function SlashCommandPicker({
           <div className="px-3 py-6 text-center text-[12px] text-content-subtle">
             {activeTab === "skill"
               ? skills.length === 0
-                ? "未发现 skill(可在 ~/.claude/skills 安装)"
-                : "无匹配 skill"
-              : "无匹配命令"}
+                ? t("chat.slash.noSkills")
+                : t("chat.slash.noSkillMatch")
+              : t("chat.slash.noCommandMatch")}
           </div>
         ) : (
           commands.map((entry, idx) => {
@@ -246,15 +248,15 @@ export function SlashCommandPicker({
                     ) : null}
                   </span>
                   <span className="block truncate text-[10px] text-content-subtle">
-                    {description || "(无描述)"}
+                    {description || t("chat.slash.noDescription")}
                   </span>
                 </span>
                 <span className="shrink-0 text-[10px] text-content-subtle">
                   {isBuiltin
-                    ? "内置"
+                    ? t("chat.slash.builtin")
                     : (entry as SkillInfo).source === "project"
-                      ? "项目"
-                      : "全局"}
+                      ? t("chat.slash.project")
+                      : t("chat.slash.global")}
                 </span>
               </button>
             );
@@ -266,14 +268,14 @@ export function SlashCommandPicker({
         <span>
           <kbd className="rounded border border-edge px-1">↑</kbd>
           <kbd className="ml-0.5 rounded border border-edge px-1">↓</kbd>
-          {" "}导航{" "}
+          {" "}{t("chat.kbd.navigate")}{" "}
           <kbd className="ml-1 rounded border border-edge px-1">←</kbd>
           <kbd className="ml-0.5 rounded border border-edge px-1">→</kbd>
-          {" "}切 tab{" "}
+          {" "}{t("chat.slash.switchTab")}{" "}
           <kbd className="ml-1 rounded border border-edge px-1">↵</kbd>
-          {" "}插入
+          {" "}{t("chat.slash.insert")}
         </span>
-        <span>{commands.length} 条</span>
+        <span>{t("chat.slash.count", { n: commands.length })}</span>
       </div>
     </div>
   );

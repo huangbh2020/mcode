@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { cn } from "@renderer/lib/cn.js";
+import { useI18n } from "@renderer/lib/i18n/index.js";
 import { Button, Input } from "@renderer/components/ui/index.js";
 import {
   IconCheck,
@@ -55,6 +56,7 @@ export function QuestionPrompt({
   onSubmit: (answers: UserInputAnswers) => void;
   onDismiss: () => void;
 }) {
+  const { t } = useI18n();
   // answers[i] holds: selected option labels + optional free text.
   const [answers, setAnswers] = useState<Array<{ selected: string[]; text: string }>>(
     questions.map(() => ({ selected: [], text: "" })),
@@ -159,7 +161,7 @@ export function QuestionPrompt({
     <div
       role="dialog"
       aria-modal="false"
-      aria-label="Claude 正在提问"
+      aria-label={t("chat.question.aria")}
       className={cn(
         "mb-2 flex max-h-[60vh] flex-col overflow-hidden rounded-2xl",
         "border border-edge-input bg-surface text-xs text-content shadow-2xl",
@@ -171,11 +173,13 @@ export function QuestionPrompt({
           <div className="flex min-w-0 items-center gap-1.5">
             <IconQuestionMark size={14} className="shrink-0 text-accent" />
             <span className="truncate font-semibold text-accent">
-              {questions.length === 1 ? "Claude 有一个问题需要回答" : `Claude 有 ${questions.length} 个问题需要回答`}
+              {questions.length === 1
+                ? t("chat.question.titleOne")
+                : t("chat.question.titleN", { n: questions.length })}
             </span>
             {questions.length > 1 && (
               <span className="shrink-0 rounded bg-surface-muted px-1.5 py-0.5 text-[10px] tabular-nums text-content-muted">
-                第 {step + 1}/{questions.length} 题
+                {t("chat.question.step", { cur: step + 1, total: questions.length })}
               </span>
             )}
           </div>
@@ -196,8 +200,8 @@ export function QuestionPrompt({
           <button
             type="button"
             onClick={onDismiss}
-            title="忽略这次提问"
-            aria-label="忽略这次提问"
+            title={t("chat.question.dismiss")}
+            aria-label={t("chat.question.dismiss")}
             className="shrink-0 rounded p-0.5 text-content-muted transition-colors hover:bg-surface-hover hover:text-content"
           >
             <IconX size={14} />
@@ -214,7 +218,7 @@ export function QuestionPrompt({
               {q.question}
               {q.multiSelect && (
                 <span className="ml-1.5 rounded bg-surface-muted px-1.5 py-0.5 text-[10px] text-content-muted">
-                  可多选
+                  {t("chat.question.multiSelect")}
                 </span>
               )}
             </div>
@@ -267,7 +271,7 @@ export function QuestionPrompt({
               type="text"
               value={a.text}
               onChange={(e) => setFreeText(step, e.target.value)}
-              placeholder="或输入自定义回答…"
+              placeholder={t("chat.question.customAnswer")}
               className="mt-2 font-sans"
             />
           </div>
@@ -276,7 +280,7 @@ export function QuestionPrompt({
         {/* Footer — fixed at bottom: progress + stepper nav / submit */}
         <div className="flex shrink-0 items-center justify-between gap-2 border-t border-edge bg-surface-muted/40 px-4 py-2.5">
           <span className="text-[10px] tabular-nums text-content-subtle">
-            {answeredCount} / {questions.length} 已回答
+            {t("chat.question.answered", { answered: answeredCount, total: questions.length })}
           </span>
           <div className="flex items-center gap-1.5">
             {questions.length > 1 ? (
@@ -286,10 +290,10 @@ export function QuestionPrompt({
                   size="sm"
                   onClick={() => setStep((s) => Math.max(0, s - 1))}
                   disabled={step === 0}
-                  title="上一题，可修改答案"
+                  title={t("chat.question.prevTitle")}
                 >
                   <IconChevronLeft size={12} />
-                  上一题
+                  {t("chat.question.prev")}
                 </Button>
                 {isLast ? (
                   <Button
@@ -297,19 +301,19 @@ export function QuestionPrompt({
                     size="sm"
                     onClick={submit}
                     disabled={!allAnswered}
-                    title={allAnswered ? "提交回答 (Enter)" : "请先回答所有问题"}
+                    title={allAnswered ? t("chat.question.submitTitle") : t("chat.question.submitDisabled")}
                   >
                     <IconSend2 size={12} />
-                    提交回答
+                    {t("chat.question.submit")}
                   </Button>
                 ) : (
                   <Button
                     variant="secondary"
                     size="sm"
                     onClick={() => setStep((s) => Math.min(questions.length - 1, s + 1))}
-                    title="下一题"
+                    title={t("chat.question.nextTitle")}
                   >
-                    下一题
+                    {t("chat.question.next")}
                     <IconChevronRight size={12} />
                   </Button>
                 )}
@@ -320,10 +324,10 @@ export function QuestionPrompt({
                 size="sm"
                 onClick={submit}
                 disabled={!allAnswered}
-                title={allAnswered ? "提交回答 (Enter)" : "请先回答所有问题"}
+                title={allAnswered ? t("chat.question.submitTitle") : t("chat.question.submitDisabled")}
               >
                 <IconSend2 size={12} />
-                提交回答
+                {t("chat.question.submit")}
               </Button>
             )}
           </div>

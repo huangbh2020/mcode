@@ -18,6 +18,7 @@ import { Dialog } from "./dialog.js";
 import { cn } from "@renderer/lib/cn.js";
 import { api } from "@renderer/lib/api.js";
 import { useSessionStore } from "@renderer/stores/sessionStore.js";
+import { useI18n } from "@renderer/lib/i18n/index.js";
 import {
   IconArrowsMaximize,
   IconCheck,
@@ -84,6 +85,7 @@ export function ImageWithPreview({
   index = 0,
   onNavigate,
 }: ImageWithPreviewProps) {
+  const { t } = useI18n();
   const [open, setOpen] = useState(false);
   const gallerySrcs = gallery && gallery.length > 0 ? gallery : [src];
   const count = gallerySrcs.length;
@@ -149,7 +151,7 @@ export function ImageWithPreview({
       <button
         type="button"
         onClick={() => setOpen(true)}
-        title="点击查看大图"
+        title={t("layout.image.clickToView")}
         className={cn(
           "group relative block w-fit overflow-hidden rounded-lg border border-edge bg-surface-muted/60 shadow-sm transition-all hover:border-accent/60 hover:shadow-md",
           className,
@@ -169,7 +171,7 @@ export function ImageWithPreview({
         {/* Hover affordance: a small maximize badge that appears on hover. */}
         <span className="pointer-events-none absolute right-1.5 top-1.5 flex items-center gap-1 rounded bg-black/55 px-1.5 py-0.5 text-[10px] font-medium text-white opacity-0 backdrop-blur-sm transition-opacity group-hover:opacity-100">
           <IconArrowsMaximize size={12} />
-          查看
+          {t("layout.image.view")}
         </span>
       </button>
       <Dialog.Root open={open} onOpenChange={setOpen}>
@@ -187,7 +189,7 @@ export function ImageWithPreview({
             className="left-1/2 top-1/2 max-h-[92vh] max-w-[94vw] -translate-x-1/2 -translate-y-1/2 rounded-none border-0 bg-transparent p-0 shadow-none"
           >
             {/* Visually-hidden title for a11y (Dialog expects a Title). */}
-            <Dialog.Title className="sr-only">{curAlt || "图片预览"}</Dialog.Title>
+            <Dialog.Title className="sr-only">{curAlt || t("layout.image.previewTitle")}</Dialog.Title>
             <img
               src={curSrc}
               alt={curAlt}
@@ -201,7 +203,7 @@ export function ImageWithPreview({
                   type="button"
                   onClick={() => go(-1)}
                   disabled={viewIdx <= 0}
-                  title="上一张"
+                  title={t("layout.image.prev")}
                   className="fixed left-4 top-1/2 -translate-y-1/2 rounded-full bg-black/60 p-2.5 text-white/90 backdrop-blur-sm transition-colors enabled:hover:bg-black/80 enabled:hover:text-white disabled:opacity-30"
                 >
                   <IconChevronLeft size={24} />
@@ -210,7 +212,7 @@ export function ImageWithPreview({
                   type="button"
                   onClick={() => go(1)}
                   disabled={viewIdx >= count - 1}
-                  title="下一张"
+                  title={t("layout.image.next")}
                   className="fixed right-4 top-1/2 -translate-y-1/2 rounded-full bg-black/60 p-2.5 text-white/90 backdrop-blur-sm transition-colors enabled:hover:bg-black/80 enabled:hover:text-white disabled:opacity-30"
                 >
                   <IconChevronRight size={24} />
@@ -233,10 +235,10 @@ export function ImageWithPreview({
                 disabled={copyState === "copying" || !curSrc.startsWith("data:image/")}
                 title={
                   copyState === "done"
-                    ? "已复制到剪贴板"
+                    ? t("layout.image.copied")
                     : copyState === "error"
-                      ? "复制失败,请重试"
-                      : "复制图片"
+                      ? t("layout.image.copyFailed")
+                      : t("layout.image.copy")
                 }
                 className={cn(
                   "rounded-full bg-black/60 p-2 text-white/90 backdrop-blur-sm transition-colors hover:bg-black/80 hover:text-white disabled:opacity-50",
@@ -250,9 +252,9 @@ export function ImageWithPreview({
                 type="button"
                 onClick={() => {
                   const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
-                  downloadDataUrl(curSrc, `截图-${stamp}.png`);
+                  downloadDataUrl(curSrc, t("layout.image.downloadName", { stamp }));
                 }}
-                title="下载图片"
+                title={t("layout.image.download")}
                 className="rounded-full bg-black/60 p-2 text-white/90 backdrop-blur-sm transition-colors hover:bg-black/80 hover:text-white"
               >
                 <IconDownload size={20} />
@@ -260,7 +262,7 @@ export function ImageWithPreview({
             </div>
             <Dialog.Close
               className="fixed right-4 top-4 rounded-full bg-black/60 p-2 text-white/90 backdrop-blur-sm transition-colors hover:bg-black/80 hover:text-white"
-              aria-label="关闭预览"
+              aria-label={t("layout.image.closePreview")}
             >
               <IconX size={20} />
             </Dialog.Close>

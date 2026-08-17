@@ -44,6 +44,7 @@ import { useCallback, useEffect, useState } from "react";
 import { cn } from "@renderer/lib/cn.js";
 import { useSessionStore } from "@renderer/stores/sessionStore.js";
 import { api } from "@renderer/lib/api.js";
+import { useI18n } from "@renderer/lib/i18n/index.js";
 import { Button, ConfirmDialog, Dialog, Select } from "@renderer/components/ui/index.js";
 import { PanelHeader } from "./PanelHeader.js";
 import {
@@ -90,6 +91,7 @@ function skillKey(s: { source: SkillSource; name: string }): string {
 }
 
 export function SkillsPanel() {
+  const { t } = useI18n();
   const projects = useSessionStore((s) => s.projects);
   const activeProjectId = useSessionStore((s) => s.activeProjectId);
   const reloadSkills = useSessionStore((s) => s.reloadSkills);
@@ -217,7 +219,7 @@ export function SkillsPanel() {
         content: editContent,
       });
       if (!res.ok) {
-        setError(res.error ?? "保存失败");
+        setError(res.error ?? t("settings.saveFailed"));
         return;
       }
       await refreshAfterMutation();
@@ -233,11 +235,11 @@ export function SkillsPanel() {
     if (!projectPath || !sel || sel.kind !== "new" || !newForm) return;
     const name = newForm.name.trim();
     if (!SKILL_NAME_RE.test(name)) {
-      setError("名称只能包含字母、数字、下划线和连字符");
+      setError(t("settings.nameCharsError"));
       return;
     }
     if (!newForm.description.trim()) {
-      setError("请填写描述");
+      setError(t("settings.skills.errDesc"));
       return;
     }
     // Assemble a minimal, valid SKILL.md: frontmatter (name + description) +
@@ -254,7 +256,7 @@ export function SkillsPanel() {
         content,
       });
       if (!res.ok) {
-        setError(res.error ?? "保存失败");
+        setError(res.error ?? t("settings.saveFailed"));
         return;
       }
       await refreshAfterMutation();
@@ -279,7 +281,7 @@ export function SkillsPanel() {
         name: target.name,
       });
       if (!res.ok) {
-        setError(res.error ?? "删除失败");
+        setError(res.error ?? t("settings.deleteFailed"));
         return;
       }
       // Clear selection if the deleted skill was selected.
@@ -305,9 +307,13 @@ export function SkillsPanel() {
         title="Skills"
         desc={
           <>
-            管理 Claude 技能(SKILL.md)。项目 skill 存放在所选项目的 <code className="rounded bg-surface-muted px-0.5">.claude/skills</code>,
-            仅该项目可用。全局 skill 通过「导入」功能从 Claude Code / Codex / Zcode 导入到 <code className="rounded bg-surface-muted px-0.5">~/.mcode/skills</code>,
-            所有项目可用。在输入框输入 <code className="rounded bg-surface-muted px-0.5">/</code> 即可调用。
+            {t("settings.skills.desc1")}
+            <code className="rounded bg-surface-muted px-0.5">.claude/skills</code>
+            {t("settings.skills.desc2")}
+            <code className="rounded bg-surface-muted px-0.5">~/.mcode/skills</code>
+            {t("settings.skills.desc3")}
+            <code className="rounded bg-surface-muted px-0.5">/</code>
+            {t("settings.skills.desc4")}
           </>
         }
       />
@@ -317,7 +323,7 @@ export function SkillsPanel() {
           belong to the project shown here. Switching it reloads the list and
           does NOT touch the workspace's active project. */}
       <div className="mb-3 flex items-center gap-2">
-        <span className="text-[0.7857em] font-medium text-content-muted">项目:</span>
+        <span className="text-[0.7857em] font-medium text-content-muted">{t("settings.projectLabel")}</span>
         {managedProjects.length > 0 ? (
           <Select.Root
             value={managedProjectId ?? ""}
@@ -332,7 +338,7 @@ export function SkillsPanel() {
                     <span className="flex items-center gap-1.5">
                       <IconFolder size={14} className="text-content-muted" />
                       {p
-                        ? `${p.name}${p.id === activeProjectId ? " (当前工作区)" : ""}`
+                        ? `${p.name}${p.id === activeProjectId ? ` (${t("settings.currentWorkspace")})` : ""}`
                         : ""}
                     </span>
                   );
@@ -348,7 +354,7 @@ export function SkillsPanel() {
                         <IconFolder size={14} className="text-content-muted" />
                         <Select.ItemText>
                           {p.name}
-                          {p.id === activeProjectId ? " (当前工作区)" : ""}
+                          {p.id === activeProjectId ? ` (${t("settings.currentWorkspace")})` : ""}
                         </Select.ItemText>
                       </Select.Item>
                     ))}
@@ -359,7 +365,7 @@ export function SkillsPanel() {
           </Select.Root>
         ) : (
           <span className="text-[0.7857em] text-content-subtle">
-            暂无项目 — 仅可管理全局 skill
+            {t("settings.skills.noProjects")}
           </span>
         )}
       </div>
@@ -377,7 +383,7 @@ export function SkillsPanel() {
             {selected?.kind === "new" && (
               <div className="relative block w-full rounded border border-dashed border-accent/60 bg-accent/5 px-2.5 py-1.5 text-left text-[0.7857em] italic text-accent">
                 <span className="absolute left-0 top-1/2 h-4 w-0.5 -translate-y-1/2 rounded-full bg-accent" />
-                新建 Skill
+                {t("settings.skills.newSkill")}
               </div>
             )}
             {panelSkills.map((s) => {
@@ -410,12 +416,12 @@ export function SkillsPanel() {
                           : "bg-surface-hover text-content-subtle",
                       )}
                     >
-                      {s.source === "project" ? "项目" : "全局"}
+                      {s.source === "project" ? t("settings.skills.sourceProject") : t("settings.skills.sourceGlobal")}
                     </span>
                   </div>
                   <div className="flex items-center gap-1.5">
                     <span className="truncate text-[0.7143em] text-content-subtle">
-                      {s.description || "(无描述)"}
+                      {s.description || t("settings.skills.noDesc")}
                     </span>
                   </div>
                 </button>
@@ -423,9 +429,9 @@ export function SkillsPanel() {
             })}
             {panelSkills.length === 0 && !listLoading && selected?.kind !== "new" && (
               <div className="px-2 py-4 text-center text-[0.7143em] leading-relaxed text-content-subtle">
-                未发现 skill。
+                {t("settings.skills.listEmpty1")}
                 <br />
-                点击下方「新建」或「导入」。
+                {t("settings.skills.listEmpty2")}
               </div>
             )}
           </nav>
@@ -438,7 +444,7 @@ export function SkillsPanel() {
               className="w-full justify-center gap-1"
             >
               <IconPlus size={12} />
-              新建 Skill
+              {t("settings.skills.newSkill")}
             </Button>
             <Button
               variant="ghost"
@@ -447,7 +453,7 @@ export function SkillsPanel() {
               className="w-full justify-center gap-1"
             >
               <IconDownload size={12} />
-              导入 Skill
+              {t("settings.skills.importSkill")}
             </Button>
           </div>
         </aside>
@@ -489,15 +495,18 @@ export function SkillsPanel() {
       {/* ───────── Delete confirmation ───────── */}
       <ConfirmDialog
         open={pendingDelete != null}
-        title="删除 Skill"
+        title={t("settings.skills.deleteTitle")}
         danger
         description={
           <>
-            确认删除{pendingDelete?.source === "project" ? "项目" : "全局"} skill「{pendingDelete?.name}」?
-            此操作不可撤销,skill 目录及其下所有文件将被移除。
+            {t("settings.skills.deleteDescPre")}
+            {pendingDelete?.source === "project" ? t("settings.skills.sourceProject") : t("settings.skills.sourceGlobal")}
+            {t("settings.skills.deleteDescMid")}
+            {pendingDelete?.name}
+            {t("settings.skills.deleteDescPost")}
           </>
         }
-        confirmText="删除"
+        confirmText={t("common.delete")}
         onOpenChange={(open) => {
           if (!open) setPendingDelete(null);
         }}
@@ -516,11 +525,12 @@ export function SkillsPanel() {
 
 /** Right-pane empty state — nothing selected. */
 function EmptyDetail() {
+  const { t } = useI18n();
   return (
     <div className="flex h-full flex-col items-center justify-center text-center">
       <IconSparkles size={28} className="mb-2 text-content-subtle" />
       <p className="max-w-[240px] text-[0.7857em] leading-relaxed text-content-subtle">
-        从左侧选择一个 skill 查看或编辑,或点击「新建 Skill」创建新技能。
+        {t("settings.skills.emptyDetail")}
       </p>
     </div>
   );
@@ -548,6 +558,7 @@ function SkillSourceEditor({
   onCancel: () => void;
   onDelete: () => void;
 }) {
+  const { t } = useI18n();
   return (
     <div className="flex min-h-full flex-col">
       <div className="mb-2 flex items-center justify-between">
@@ -562,15 +573,15 @@ function SkillSourceEditor({
                 : "bg-surface-hover text-content-subtle",
             )}
           >
-            {skill.source === "project" ? "项目" : "全局"}
+            {skill.source === "project" ? t("settings.skills.sourceProject") : t("settings.skills.sourceGlobal")}
           </span>
         </div>
-        <span className="text-[0.7143em] text-content-subtle">SKILL.md 原文</span>
+        <span className="text-[0.7143em] text-content-subtle">{t("settings.skills.rawSource")}</span>
       </div>
       {loading ? (
         <div className="flex items-center gap-2 py-8 text-[0.7857em] text-content-subtle">
           <IconLoader2 size={14} className="animate-spin" />
-          加载中…
+          {t("common.loading")}
         </div>
       ) : (
         <textarea
@@ -580,21 +591,21 @@ function SkillSourceEditor({
           className={cn(
             "min-h-[300px] flex-1 resize-y rounded border border-edge bg-surface px-2.5 py-2 font-mono text-[0.7857em] leading-relaxed text-content placeholder:text-content-subtle focus:border-accent focus:outline-none",
           )}
-          placeholder="# SKILL.md 源码"
+          placeholder={t("settings.skills.sourcePlaceholder")}
         />
       )}
       {error && <div className="mt-2 text-[0.7857em] text-danger">{error}</div>}
       <div className="mt-2 flex items-center gap-2">
-        <Button variant="danger" size="sm" onClick={onDelete} title="删除此 skill">
+        <Button variant="danger" size="sm" onClick={onDelete} title={t("settings.skills.deleteSkillTitle")}>
           <IconTrash size={12} />
-          删除
+          {t("common.delete")}
         </Button>
         <div className="flex-1" />
         <Button variant="ghost" size="sm" onClick={onCancel}>
-          取消
+          {t("common.cancel")}
         </Button>
         <Button variant="primary" size="sm" onClick={onSave} disabled={saving || loading}>
-          {saving ? "保存中…" : "保存"}
+          {saving ? t("settings.saving") : t("common.save")}
         </Button>
       </div>
     </div>
@@ -621,19 +632,22 @@ function NewSkillForm({
   // while this component is mounted, but the setter type carries | null).
   const update = <K extends keyof NewForm>(key: K, value: NewForm[K]) =>
     setForm((prev) => (prev ? { ...prev, [key]: value } : prev));
+  const { t } = useI18n();
   return (
     <div className="flex min-h-full flex-col">
       <div className="mb-2 flex items-center gap-1.5">
         <IconPlus size={14} className="text-accent" />
-        <span className="text-[0.8571em] font-medium text-content">新建 Skill</span>
+        <span className="text-[0.8571em] font-medium text-content">{t("settings.skills.newSkill")}</span>
       </div>
       <p className="mb-2 text-[0.7143em] leading-relaxed text-content-subtle">
-        填写名称、描述和正文,保存时会自动生成标准 frontmatter。
-        新建 skill 存放到当前项目的 <code className="rounded bg-surface-muted px-0.5">.claude/skills</code>。
-        之后可在编辑模式补充 <code className="rounded bg-surface-muted px-0.5">allowed-tools</code> 等高级字段。
+        {t("settings.skills.newSkillIntro1")}
+        <code className="rounded bg-surface-muted px-0.5">.claude/skills</code>
+        {t("settings.skills.newSkillIntro2")}
+        <code className="rounded bg-surface-muted px-0.5">allowed-tools</code>
+        {t("settings.skills.newSkillIntro3")}
       </p>
 
-      <Field label="名称 (Skill Name)">
+      <Field label={t("settings.skills.fieldName")}>
         <input
           type="text"
           value={form.name}
@@ -644,22 +658,24 @@ function NewSkillForm({
           autoFocus
         />
         <p className="mt-0.5 text-[10px] text-content-subtle">
-          仅字母、数字、下划线、连字符;将作为 <code className="rounded bg-surface-muted px-0.5">/name</code> 命令名
+          {t("settings.skills.fieldNameHintPre")}
+          <code className="rounded bg-surface-muted px-0.5">/name</code>
+          {t("settings.skills.fieldNameHintPost")}
         </p>
       </Field>
 
-      <Field label="描述 (Description)">
+      <Field label={t("settings.skills.fieldDesc")}>
         <input
           type="text"
           value={form.description}
           onChange={(e) => update("description", e.target.value)}
-          placeholder="一句话说明这个 skill 做什么、何时使用"
+          placeholder={t("settings.skills.descPlaceholder")}
           className={inputCls}
           spellCheck={false}
         />
       </Field>
 
-      <Field label="正文 (Markdown)">
+      <Field label={t("settings.skills.fieldBody")}>
         <textarea
           value={form.body}
           onChange={(e) => update("body", e.target.value)}
@@ -671,7 +687,7 @@ function NewSkillForm({
           className={cn(
             "min-h-[200px] w-full resize-y rounded border border-edge bg-surface px-2.5 py-2 font-mono text-[0.7857em] leading-relaxed text-content placeholder:text-content-subtle focus:border-accent focus:outline-none",
           )}
-          placeholder={"# Skill 标题\n\n说明这个 skill 的使用方式、步骤、注意事项…"}
+          placeholder={t("settings.skills.bodyPlaceholder")}
         />
       </Field>
 
@@ -679,10 +695,10 @@ function NewSkillForm({
       <div className="mt-2 flex items-center gap-2">
         <div className="flex-1" />
         <Button variant="ghost" size="sm" onClick={onCancel}>
-          取消
+          {t("common.cancel")}
         </Button>
         <Button variant="primary" size="sm" onClick={onSave} disabled={saving}>
-          {saving ? "保存中…" : "创建"}
+          {saving ? t("settings.saving") : t("settings.skills.createBtn")}
         </Button>
       </div>
     </div>
@@ -708,7 +724,7 @@ const TOOL_LABELS: Record<SkillTool, string> = {
   "claude-code": "Claude Code",
   codex: "Codex",
   zcode: "Zcode",
-  local: "本地",
+  local: "",
 };
 
 /** Tool badge color classes - each tool gets a distinct tint. */
@@ -735,6 +751,7 @@ function ImportSkillsDialog({
   projectPath: string | null;
   onImported: () => void;
 }) {
+  const { t } = useI18n();
   const [sources, setSources] = useState<ExternalSkillInfo[]>([]);
   const [loading, setLoading] = useState(false);
   const [importing, setImporting] = useState(false);
@@ -870,9 +887,9 @@ function ImportSkillsDialog({
       <Dialog.Portal>
         <Dialog.Backdrop />
         <Dialog.Popup className="flex max-h-[80vh] w-[560px] flex-col p-0">
-          <Dialog.Title className="px-4 pt-4">导入 Skill</Dialog.Title>
+          <Dialog.Title className="px-4 pt-4">{t("settings.skills.importTitle")}</Dialog.Title>
           <Dialog.Description className="px-4 pt-1">
-            从 Claude Code / Codex / Zcode 或本地文件夹导入 skill 到{" "}
+            {t("settings.skills.importDesc1")}
             <code className="rounded bg-surface-muted px-0.5">~/.mcode/skills</code>
           </Dialog.Description>
           <Dialog.Close />
@@ -883,12 +900,12 @@ function ImportSkillsDialog({
                 Always shown so the user can import from an arbitrary local
                 directory (a single skill, or a collection of skills). Picking a
                 folder sets localDir → the open-effect re-scans with it and the
-                results appear in the "本地" group below. */}
+                results appear in the local group below. */}
             <div className="mb-3 rounded border border-edge bg-surface/40 p-2">
               <div className="flex items-center gap-2">
                 <IconFolder size={14} className="shrink-0 text-content-subtle" />
                 <span className="text-[0.7143em] font-medium text-content-muted">
-                  本地文件夹
+                  {t("settings.skills.localFolder")}
                 </span>
                 <div className="flex-1" />
                 {localDir ? (
@@ -897,7 +914,7 @@ function ImportSkillsDialog({
                     onClick={clearLocalFolder}
                     className="text-[0.7143em] text-content-subtle hover:text-content"
                   >
-                    清除
+                    {t("settings.skills.clear")}
                   </button>
                 ) : null}
               </div>
@@ -911,7 +928,7 @@ function ImportSkillsDialog({
                   </span>
                 ) : (
                   <span className="min-w-0 flex-1 text-[0.7143em] text-content-subtle">
-                    选择本地文件夹导入(支持单个 skill 或 skill 集合)
+                    {t("settings.skills.localFolderHint")}
                   </span>
                 )}
                 <Button
@@ -922,7 +939,7 @@ function ImportSkillsDialog({
                   className="shrink-0 gap-1"
                 >
                   <IconFolder size={12} />
-                  选择文件夹
+                  {t("settings.skills.chooseFolder")}
                 </Button>
               </div>
             </div>
@@ -930,14 +947,14 @@ function ImportSkillsDialog({
             {loading ? (
               <div className="flex items-center justify-center gap-2 py-8 text-[0.7857em] text-content-subtle">
                 <IconLoader2 size={14} className="animate-spin" />
-                扫描中…
+                {t("settings.scanning")}
               </div>
             ) : sources.length === 0 ? (
               <div className="py-8 text-center text-[0.7857em] leading-relaxed text-content-subtle">
-                未发现可导入的 skill。
+                {t("settings.skills.importEmpty1")}
                 <br />
-                请先在 Claude Code / Codex / Zcode 中安装 skill,
-                或点上方「选择文件夹」从本地导入。
+                {t("settings.skills.importEmpty2a")}
+                {t("settings.skills.importEmpty2b")}
               </div>
             ) : (
               <div className="space-y-3">
@@ -953,10 +970,10 @@ function ImportSkillsDialog({
                             TOOL_BADGE_CLS[tool],
                           )}
                         >
-                          {TOOL_LABELS[tool]}
+                          {tool === "local" ? t("settings.skills.toolLocal") : TOOL_LABELS[tool]}
                         </span>
                         <span className="text-[0.7143em] text-content-subtle">
-                          {items.length} 个 skill
+                          {t("settings.skills.skillCount", { n: items.length })}
                         </span>
                       </div>
                       <div className="space-y-0.5">
@@ -989,12 +1006,12 @@ function ImportSkillsDialog({
                                   </span>
                                   {isExisting && (
                                     <span className="shrink-0 rounded bg-surface-hover px-1 text-[9px] text-content-subtle">
-                                      已存在
+                                      {t("settings.importExisting")}
                                     </span>
                                   )}
                                 </div>
                                 <p className="truncate text-[0.7143em] text-content-subtle">
-                                  {s.description || "(无描述)"}
+                                  {s.description || t("settings.skills.noDesc")}
                                 </p>
                               </div>
                             </label>
@@ -1012,18 +1029,20 @@ function ImportSkillsDialog({
               <div className="mt-3 rounded border border-edge bg-surface/40 p-2 text-[0.7143em]">
                 {result.imported.length > 0 && (
                   <p className="text-accent">
-                    已导入 {result.imported.length} 个: {result.imported.join(", ")}
+                    {t("settings.importResultImported", { n: result.imported.length, list: result.imported.join(", ") })}
                   </p>
                 )}
                 {result.skipped.length > 0 && (
                   <p className="text-content-subtle">
-                    跳过 {result.skipped.length} 个(已存在): {result.skipped.join(", ")}
+                    {t("settings.importResultSkipped", { n: result.skipped.length, list: result.skipped.join(", ") })}
                   </p>
                 )}
                 {result.errors.length > 0 && (
                   <p className="text-danger">
-                    失败 {result.errors.length} 个:{" "}
-                    {result.errors.map((e) => `${e.name}(${e.error})`).join("; ")}
+                    {t("settings.importResultFailed", {
+                      n: result.errors.length,
+                      list: result.errors.map((e) => `${e.name}(${e.error})`).join("; "),
+                    })}
                   </p>
                 )}
               </div>
@@ -1037,11 +1056,11 @@ function ImportSkillsDialog({
           {/* Footer: selected count + actions */}
           <div className="flex items-center gap-2 border-t border-edge px-4 py-3">
             <span className="text-[0.7143em] text-content-subtle">
-              {selectedCount > 0 ? `已选 ${selectedCount} 个` : ""}
+              {selectedCount > 0 ? t("settings.importSelectedCount", { n: selectedCount }) : ""}
             </span>
             <div className="flex-1" />
             <Button variant="ghost" size="sm" onClick={close} disabled={importing}>
-              {result ? "关闭" : "取消"}
+              {result ? t("common.close") : t("common.cancel")}
             </Button>
             {!result && (
               <Button
@@ -1050,7 +1069,9 @@ function ImportSkillsDialog({
                 onClick={() => void doImport()}
                 disabled={importing || selectedCount === 0}
               >
-                {importing ? "导入中…" : `导入${selectedCount > 0 ? ` (${selectedCount})` : ""}`}
+                {importing
+                  ? t("settings.importing")
+                  : `${t("settings.importBtn")}${selectedCount > 0 ? ` (${selectedCount})` : ""}`}
               </Button>
             )}
           </div>

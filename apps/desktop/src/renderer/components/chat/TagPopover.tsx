@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { cn } from "@renderer/lib/cn.js";
+import { useI18n } from "@renderer/lib/i18n/index.js";
 import { api } from "@renderer/lib/api.js";
 import {
   IconCopy,
@@ -45,6 +46,7 @@ export function TagPopover({
    *  references whose "content" is an @path string, not user text. */
   onExpand?: () => void;
 }) {
+  const { t } = useI18n();
   const popoverRef = useRef<HTMLDivElement>(null);
   const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
   // Whether the popover has room to sit ABOVE the chip; falls back to below.
@@ -161,19 +163,19 @@ export function TagPopover({
       <div ref={popoverRef} style={style} className="z-30">
         {dataUrl === null ? (
           <div className="flex items-center gap-1.5 rounded-md bg-surface/95 px-2.5 py-1.5 text-[11px] text-content-subtle shadow-lg">
-            <IconLoader2 size={12} className="animate-spin" /> 读取图片…
+            <IconLoader2 size={12} className="animate-spin" /> {t("chat.tagPopover.loadingImage")}
           </div>
         ) : !dataUrl ? (
           <div className="flex flex-col items-center gap-1.5 rounded-md bg-surface/95 px-4 py-3 text-center text-content-subtle shadow-lg">
             <IconPhotoOff size={24} className="opacity-70" />
-            <p className="text-[11px]">图片加载失败</p>
+            <p className="text-[11px]">{t("chat.tagPopover.imageFailed")}</p>
           </div>
         ) : (
           <img
             src={dataUrl}
             alt={tag.preview}
             onClick={() => setNatural((n) => !n)}
-            title={natural ? "点击缩小" : "点击放大"}
+            title={natural ? t("chat.tagPopover.shrink") : t("chat.tagPopover.enlarge")}
             className={cn(
               "rounded-md shadow-2xl",
               natural ? "cursor-zoom-out" : "cursor-zoom-in",
@@ -199,24 +201,24 @@ export function TagPopover({
       {/* Header: char count + copy/close */}
       <div className="flex shrink-0 items-center justify-between gap-2 border-b border-edge bg-surface-muted px-2 py-1">
         <span className="text-[10px] text-content-muted">
-          {tag.content.length.toLocaleString()} 字符 · ESC 或点击外部关闭
+          {t("chat.tagPopover.charCount", { n: tag.content.length.toLocaleString() })}
         </span>
         <div className="flex shrink-0 items-center gap-1">
           <button
             type="button"
             onClick={handleCopy}
             className="flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[10px] text-content-muted transition-colors hover:bg-surface-hover hover:text-content"
-            title="复制完整内容"
+            title={t("chat.tagPopover.copyFull")}
           >
             {copyState === "copied" ? (
               <>
-                <IconCheck size={11} /> 已复制
+                <IconCheck size={11} /> {t("common.copied")}
               </>
             ) : copyState === "failed" ? (
-              "复制失败"
+              t("chat.tagPopover.copyFailed")
             ) : (
               <>
-                <IconCopy size={11} /> Copy
+                <IconCopy size={11} /> {t("common.copy")}
               </>
             )}
           </button>
@@ -228,17 +230,17 @@ export function TagPopover({
                 onClose();
               }}
               className="flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[10px] text-content-muted transition-colors hover:bg-surface-hover hover:text-content"
-              title="拆开卡片，内容粘贴到输入框"
+              title={t("chat.tagPopover.expandTitle")}
             >
-              <IconArrowsMaximize size={11} /> 拆开
+              <IconArrowsMaximize size={11} /> {t("chat.tagPopover.expand")}
             </button>
           )}
           <button
             type="button"
             onClick={onClose}
             className="flex h-4 w-4 items-center justify-center rounded text-content-muted transition-colors hover:bg-surface-hover hover:text-content"
-            title="关闭"
-            aria-label="关闭预览"
+            title={t("common.close")}
+            aria-label={t("chat.tagPopover.closePreview")}
           >
             <IconX size={11} />
           </button>

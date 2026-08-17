@@ -1,6 +1,7 @@
 import { cn } from "@renderer/lib/cn.js";
 import { IconX, IconTrash, IconCode, IconArrowRight } from "@renderer/lib/icons.js";
 import type { PickedElement } from "@contracts/ipc";
+import { useI18n } from "@renderer/lib/i18n/index.js";
 
 /**
  * Picked-elements bar - a Chrome-download-bar-style strip at the bottom of the
@@ -28,11 +29,12 @@ export interface PickedElementsBarProps {
 }
 
 export function PickedElementsBar({ items, onRemove, onClear, onAdd }: PickedElementsBarProps) {
+  const { t } = useI18n();
   if (items.length === 0) return null;
   return (
     <div className="flex h-10 shrink-0 items-center gap-2 border-t border-edge bg-surface-muted px-2">
       <span className="shrink-0 text-[11px] font-medium text-content-muted">
-        已拾取 {items.length} 个元素
+        {t("browser.pickedCount", { n: items.length })}
       </span>
       <div className="no-scrollbar flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto">
         {items.map((el, i) => (
@@ -47,7 +49,7 @@ export function PickedElementsBar({ items, onRemove, onClear, onAdd }: PickedEle
             <span className="max-w-[140px] truncate">{el.preview || el.selector}</span>
             <button
               type="button"
-              aria-label="移除"
+              aria-label={t("common.remove")}
               onClick={() => onRemove(i)}
               className="ml-0.5 inline-flex h-3.5 w-3.5 items-center justify-center rounded text-accent/70 transition-colors hover:bg-accent/30 hover:text-accent"
             >
@@ -59,22 +61,22 @@ export function PickedElementsBar({ items, onRemove, onClear, onAdd }: PickedEle
       <button
         type="button"
         onClick={onClear}
-        title="清空拾取列表"
+        title={t("browser.clearPickedHint")}
         className="flex shrink-0 items-center gap-1 rounded px-1.5 py-1 text-[11px] text-content-muted transition-colors hover:bg-surface-hover hover:text-content"
       >
         <IconTrash size={12} />
-        清空
+        {t("browser.clear")}
       </button>
       <button
         type="button"
         onClick={onAdd}
-        title="添加到输入框并返回主面板"
+        title={t("browser.addAndReturn")}
         className={cn(
           "flex shrink-0 items-center gap-1 rounded-md px-2.5 py-1 text-[11px] font-medium transition-colors",
           "bg-accent text-white hover:bg-accent/90",
         )}
       >
-        添加
+        {t("browser.add")}
         <IconArrowRight size={12} />
       </button>
     </div>

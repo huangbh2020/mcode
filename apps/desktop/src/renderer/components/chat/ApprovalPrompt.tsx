@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { cn } from "@renderer/lib/cn.js";
+import { useI18n } from "@renderer/lib/i18n/index.js";
 import { Button } from "@renderer/components/ui/index.js";
 import {
   IconAlertTriangle,
@@ -55,6 +56,7 @@ export function ApprovalPrompt({
   /** granted=true → allow (with `always` if checked); granted=false → deny. */
   onDecide: (granted: boolean, always?: boolean) => void;
 }) {
+  const { t } = useI18n();
   const [open, setOpen] = useState(false);
   const [always, setAlways] = useState(false);
   const allowRef = useRef<HTMLButtonElement>(null);
@@ -97,7 +99,7 @@ export function ApprovalPrompt({
     <div
       ref={cardRef}
       role="alertdialog"
-      aria-label="Claude 正在请求执行工具"
+      aria-label={t("chat.approval.aria")}
       className={cn(
         "mb-2 rounded-2xl border border-edge-input bg-surface px-4 py-3 text-xs text-content shadow-2xl",
         "animate-[qa-sheet-in_140ms_ease-out]",
@@ -107,11 +109,11 @@ export function ApprovalPrompt({
       <div className="mb-2.5 flex items-center justify-between gap-2">
         <div className="flex min-w-0 items-center gap-1.5">
           <IconAlertTriangle size={14} className="shrink-0 text-warning" />
-          <span className="font-semibold text-warning">Claude 请求执行工具</span>
+          <span className="font-semibold text-warning">{t("chat.approval.title")}</span>
           {queueTotal > 1 && (
             <span
               className="rounded-full border border-warning/60 bg-warning/15 px-1.5 py-0.5 text-[10px] font-medium tabular-nums text-warning"
-              title={`队列中还有 ${queueTotal - queuePosition} 个待审批`}
+              title={t("chat.approval.queueTitle", { n: queueTotal - queuePosition })}
             >
               {queuePosition} / {queueTotal}
             </span>
@@ -124,13 +126,13 @@ export function ApprovalPrompt({
             "inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-medium transition-colors",
             "text-content-muted hover:bg-surface-hover hover:text-content",
           )}
-          title={open ? "收起详情" : "查看工具输入"}
+          title={open ? t("chat.approval.collapseTitle") : t("chat.approval.expandTitle")}
         >
           <IconChevronDown
             size={12}
             className={cn("transition-transform", open && "rotate-180")}
           />
-          {open ? "收起" : "详情"}
+          {open ? t("chat.approval.collapse") : t("chat.approval.details")}
         </button>
       </div>
 
@@ -167,17 +169,17 @@ export function ApprovalPrompt({
             onChange={(e) => setAlways(e.target.checked)}
             className="h-3 w-3 cursor-pointer accent-warning"
           />
-          本会话内始终允许 {toolName}
+          {t("chat.approval.alwaysAllow", { tool: toolName })}
         </label>
         <div className="flex items-center gap-1.5">
           <Button
             variant="ghost"
             size="sm"
             onClick={() => decide(false)}
-            title="拒绝 (Esc)"
+            title={t("chat.approval.denyTitle")}
           >
             <IconX size={12} />
-            拒绝
+            {t("chat.approval.deny")}
           </Button>
           {/* Primary confirm action uses the warning token (amber) to keep the
               "permission grant" semantic distinct from QuestionPrompt's green
@@ -187,14 +189,14 @@ export function ApprovalPrompt({
             ref={allowRef}
             type="button"
             onClick={() => decide(true)}
-            title="允许 (Enter)"
+            title={t("chat.approval.allowTitle")}
             className={cn(
               "inline-flex h-6 items-center gap-1 rounded px-2 text-[11px] font-medium transition-colors",
               "bg-warning text-surface hover:brightness-110 focus:outline-none focus-visible:ring-2 focus-visible:ring-warning/50",
             )}
           >
             <IconCheck size={12} />
-            允许
+            {t("chat.approval.allow")}
           </button>
         </div>
       </div>

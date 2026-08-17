@@ -12,6 +12,7 @@ import {
   IconRefresh,
   IconAlertTriangle,
 } from "@renderer/lib/icons.js";
+import { useI18n } from "@renderer/lib/i18n/index.js";
 
 const PAGE_SIZE = 50;
 
@@ -26,6 +27,7 @@ const PAGE_SIZE = 50;
  * All state is local; multi-repo selection lives here too.
  */
 export function GitHistoryView({ repos }: { repos: GitRepo[] }) {
+  const { t } = useI18n();
   const [repoPath, setRepoPath] = useState(repos[0]?.path ?? "");
   const [commits, setCommits] = useState<GitCommitInfo[]>([]);
   const [hasMore, setHasMore] = useState(false);
@@ -72,14 +74,14 @@ export function GitHistoryView({ repos }: { repos: GitRepo[] }) {
       setCommits((prev) => (append ? [...prev, ...res.commits] : res.commits));
       setHasMore(res.hasMore);
     } catch (err) {
-      setError((err as Error).message || "加载提交历史失败");
+      setError((err as Error).message || t("ide.git.loadHistoryFailed"));
       if (!append) setCommits([]);
       setHasMore(false);
     } finally {
       setLoading(false);
       setLoadingMore(false);
     }
-  }, [repoPath]);
+  }, [repoPath, t]);
 
   useEffect(() => {
     void loadCommits();
@@ -107,13 +109,13 @@ export function GitHistoryView({ repos }: { repos: GitRepo[] }) {
         commitHash: commit.hash,
       });
       if (!detail) {
-        setDetailError("无法加载该提交");
+        setDetailError(t("ide.git.loadCommitFailed"));
         return;
       }
       setSelected(detail.commit);
       setFiles(detail.files);
     } catch (err) {
-      setDetailError((err as Error).message || "加载提交详情失败");
+      setDetailError((err as Error).message || t("ide.git.loadDetailFailed"));
     } finally {
       setDetailLoading(false);
     }
@@ -149,7 +151,7 @@ export function GitHistoryView({ repos }: { repos: GitRepo[] }) {
       store.setGitDiffPair(absPath, { before, after });
       store.openFileInIde(absPath, { diff: true });
     } catch (err) {
-      setFileError((err as Error).message || "打开文件差异失败");
+      setFileError((err as Error).message || t("ide.git.openFileDiffFailed"));
     }
   };
 
@@ -157,7 +159,7 @@ export function GitHistoryView({ repos }: { repos: GitRepo[] }) {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-2 p-6 text-center">
         <IconGitCommit size={20} className="text-content-subtle" />
-        <p className="[font-size:var(--right-panel-font-size)] text-content-muted">未找到 Git 仓库</p>
+        <p className="[font-size:var(--right-panel-font-size)] text-content-muted">{t("ide.git.noRepos")}</p>
       </div>
     );
   }
@@ -171,7 +173,7 @@ export function GitHistoryView({ repos }: { repos: GitRepo[] }) {
             value={repoPath}
             onChange={(e) => setRepoPath(e.target.value)}
             className="min-w-0 flex-1 truncate rounded border border-edge bg-surface px-1.5 py-0.5 [font-size:var(--right-panel-font-size)] text-content outline-none focus:border-accent"
-            title="选择仓库"
+            title={t("ide.git.selectRepo")}
           >
             {repos.map((r) => (
               <option key={r.path} value={r.path}>
@@ -188,7 +190,7 @@ export function GitHistoryView({ repos }: { repos: GitRepo[] }) {
           type="button"
           onClick={() => void loadCommits()}
           className="flex shrink-0 items-center rounded px-1.5 py-0.5 text-content-muted transition-colors hover:bg-surface-hover hover:text-content"
-          title="刷新历史"
+          title={t("ide.git.refreshHistory")}
         >
           <IconRefresh size={12} />
         </button>
@@ -220,12 +222,12 @@ export function GitHistoryView({ repos }: { repos: GitRepo[] }) {
         ) : loading ? (
           <div className="flex items-center gap-1.5 px-3 py-3 [font-size:var(--right-panel-font-size)] text-content-subtle">
             <IconLoader2 size={12} className="animate-spin" />
-            加载提交历史…
+            {t("ide.git.loadingHistory")}
           </div>
         ) : commits.length === 0 ? (
           <div className="flex flex-col items-center justify-center gap-1 px-4 py-10 text-center">
             <IconGitCommit size={18} className="text-content-subtle" />
-            <p className="[font-size:var(--right-panel-font-size)] text-content-muted">暂无提交记录</p>
+            <p className="[font-size:var(--right-panel-font-size)] text-content-muted">{t("ide.git.noCommits")}</p>
           </div>
         ) : (
           <div className="py-1">
@@ -243,10 +245,10 @@ export function GitHistoryView({ repos }: { repos: GitRepo[] }) {
                   {loadingMore ? (
                     <>
                       <IconLoader2 size={12} className="animate-spin" />
-                      加载中…
+                      {t("common.loading")}
                     </>
                   ) : (
-                    "加载更多"
+                    t("ide.git.loadMore")
                   )}
                 </button>
               </div>
@@ -306,6 +308,7 @@ function CommitDetail({
   onBack: () => void;
   onOpenFile: (file: GitCommitFile) => void;
 }) {
+  const { t } = useI18n();
   return (
     <div className="flex flex-col">
       <div className="border-b border-edge px-2 py-1.5">
@@ -315,7 +318,7 @@ function CommitDetail({
           className="mb-1.5 flex items-center gap-1 rounded px-1 py-0.5 [font-size:var(--right-panel-font-size)] text-content-muted transition-colors hover:bg-surface-hover hover:text-content"
         >
           <IconArrowLeft size={12} />
-          返回列表
+          {t("ide.git.backToList")}
         </button>
         <div className="flex min-w-0 items-start gap-1.5">
           <IconGitCommit size={13} className="mt-0.5 shrink-0 text-content-subtle" />
@@ -346,7 +349,7 @@ function CommitDetail({
       {loading ? (
         <div className="flex items-center gap-1.5 px-3 py-3 [font-size:var(--right-panel-font-size)] text-content-subtle">
           <IconLoader2 size={12} className="animate-spin" />
-          加载变更文件…
+          {t("ide.git.loadingFiles")}
         </div>
       ) : error ? (
         <div className="flex items-start gap-1.5 px-3 py-3 [font-size:var(--right-panel-font-size)] text-danger">
@@ -354,11 +357,11 @@ function CommitDetail({
           <span>{error}</span>
         </div>
       ) : files.length === 0 ? (
-        <div className="px-3 py-4 text-center [font-size:var(--right-panel-font-size)] text-content-subtle">无文件变更</div>
+        <div className="px-3 py-4 text-center [font-size:var(--right-panel-font-size)] text-content-subtle">{t("ide.git.noFileChanges")}</div>
       ) : (
         <div className="py-1">
           <div className="px-2.5 py-1 [font-size:var(--rp-fs-xxs)] font-medium uppercase tracking-wide text-content-subtle">
-            {files.length} 个文件
+            {t("ide.git.fileCount", { n: files.length })}
           </div>
           {files.map((f) => (
             <CommitFileRow key={`${f.status}:${f.oldPath ?? ""}:${f.path}`} file={f} onClick={() => onOpenFile(f)} />

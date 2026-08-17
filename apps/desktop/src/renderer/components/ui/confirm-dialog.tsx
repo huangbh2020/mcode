@@ -18,6 +18,7 @@
  */
 import { IconAlertTriangle } from "@renderer/lib/icons.js";
 import { cn } from "@renderer/lib/cn.js";
+import { useI18n } from "@renderer/lib/i18n/index.js";
 import { Button } from "./button.js";
 import { Dialog } from "./dialog.js";
 
@@ -37,12 +38,18 @@ export function ConfirmDialog({
   open,
   title,
   description,
-  confirmText = "确认",
-  cancelText = "取消",
+  confirmText,
+  cancelText,
   danger = false,
   onOpenChange,
   onConfirm,
 }: ConfirmDialogProps) {
+  // Button labels default to the shared dictionary (callers may override with
+  // a context-specific verb, e.g. 删除/恢复). Resolved here rather than via
+  // parameter defaults so the labels follow the live locale.
+  const { t } = useI18n();
+  const confirmLabel = confirmText ?? t("common.confirm");
+  const cancelLabel = cancelText ?? t("common.cancel");
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
@@ -64,7 +71,7 @@ export function ConfirmDialog({
           </div>
           <div className="mt-4 flex justify-end gap-2">
             <Button variant="ghost" size="sm" onClick={() => onOpenChange(false)}>
-              {cancelText}
+              {cancelLabel}
             </Button>
             <Button
               variant={danger ? "danger" : "primary"}
@@ -74,7 +81,7 @@ export function ConfirmDialog({
                 onOpenChange(false);
               }}
             >
-              {confirmText}
+              {confirmLabel}
             </Button>
           </div>
           <Dialog.Close />

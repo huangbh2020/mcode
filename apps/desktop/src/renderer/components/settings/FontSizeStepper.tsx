@@ -1,4 +1,5 @@
 import { cn } from "@renderer/lib/cn.js";
+import { useI18n } from "@renderer/lib/i18n/index.js";
 import { IconMinus, IconPlus } from "@renderer/lib/icons.js";
 
 /**
@@ -28,13 +29,14 @@ export function FontSizeStepper({
   id?: string;
   className?: string;
 }) {
+  const { t } = useI18n();
   const atMin = value <= min;
   const atMax = value >= max;
 
   return (
     <div id={id} className={cn("flex items-center gap-1", className)}>
       <StepperButton
-        title="减小"
+        title={t("settings.appearance.fontSmaller")}
         disabled={atMin}
         onClick={() => onChange(Math.max(min, value - 1))}
       >
@@ -44,7 +46,7 @@ export function FontSizeStepper({
         {value}px
       </span>
       <StepperButton
-        title="增大"
+        title={t("settings.appearance.fontLarger")}
         disabled={atMax}
         onClick={() => onChange(Math.min(max, value + 1))}
       >

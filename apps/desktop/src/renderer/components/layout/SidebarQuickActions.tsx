@@ -28,6 +28,7 @@ import {
 import { IconPlus, IconSearch } from "@renderer/lib/icons.js";
 import { Kbd } from "@renderer/components/ui/index.js";
 import { MobileConnectButton } from "@renderer/components/layout/MobileConnectDialog.js";
+import { useI18n } from "@renderer/lib/i18n/index.js";
 
 /** Trailing keyboard badge, consistent with the command palette. Subscribes to
  *  overrides so it updates live when the user rebinds in settings. */
@@ -47,6 +48,7 @@ export function SidebarQuickActions({
   /** Hide the 连接手机 entry (mobile drawer: the visitor is already the phone). */
   showConnectPhone?: boolean;
 } = {}) {
+  const { t } = useI18n();
   const startSession = useSessionStore((s) => s.startSession);
   const setCommandPaletteOpen = useSessionStore((s) => s.setCommandPaletteOpen);
   const activeProjectId = useSessionStore((s) => s.activeProjectId);
@@ -63,7 +65,7 @@ export function SidebarQuickActions({
           if (canNewSession) void startSession();
         }}
         disabled={!canNewSession}
-        title={canNewSession ? "在当前项目下新建会话" : "请先打开一个项目"}
+        title={canNewSession ? t("layout.newSessionInProject") : t("layout.needProject")}
         className={cn(
           "flex w-full items-center gap-2 rounded-lg px-1 py-2 transition-colors",
           "[font-size:var(--right-panel-font-size)]",
@@ -73,7 +75,7 @@ export function SidebarQuickActions({
         )}
       >
         <IconPlus size={16} className="shrink-0" />
-        <span className="flex-1 text-left font-medium">新建会话</span>
+        <span className="flex-1 text-left font-medium">{t("layout.newSession")}</span>
         <ShortcutBadge commandId="session.new" />
       </button>
 
@@ -83,7 +85,7 @@ export function SidebarQuickActions({
         <button
           type="button"
           onClick={() => setCommandPaletteOpen(true)}
-          title="搜索命令、线程、文件…"
+          title={t("layout.palette.placeholder.all")}
           className={cn(
             "flex w-full items-center gap-2 rounded-lg px-1 py-2 transition-colors",
             "[font-size:var(--right-panel-font-size)]",
@@ -91,7 +93,7 @@ export function SidebarQuickActions({
           )}
         >
           <IconSearch size={16} className="shrink-0" />
-          <span className="flex-1 text-left font-medium">搜索</span>
+          <span className="flex-1 text-left font-medium">{t("common.search")}</span>
           <ShortcutBadge commandId="command.palette" />
         </button>
       )}

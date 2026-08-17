@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useSessionStore } from "@renderer/stores/sessionStore.js";
 import { api } from "@renderer/lib/api.js";
 import { cn } from "@renderer/lib/cn.js";
+import { useI18n } from "@renderer/lib/i18n/index.js";
 import { Button, Dialog, Input, Select } from "@renderer/components/ui/index.js";
 import { PanelHeader } from "./PanelHeader.js";
 import { SettingsSection } from "./SettingsSection.js";
@@ -32,11 +33,12 @@ import {
  *    CustomCommand[]>` via the store's per-project commands state.
  */
 export function TerminalPanel() {
+  const { t } = useI18n();
   return (
     <section className="space-y-4">
       <PanelHeader
-        title="终端"
-        desc="配置终端使用的 Shell 与按项目保存的常用快捷命令。"
+        title={t("settings.terminal.title")}
+        desc={t("settings.terminal.desc")}
       />
       <ShellSection />
       <CommandsSection />
@@ -47,6 +49,7 @@ export function TerminalPanel() {
 /* ───────────────────────── Shell section ───────────────────────── */
 
 function ShellSection() {
+  const { t } = useI18n();
   const [shell, setShell] = useState("");
   const [loaded, setLoaded] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -75,13 +78,13 @@ function ShellSection() {
 
   return (
     <SettingsSection
-      title="终端 Shell"
-      desc="指定终端使用的 Shell 可执行文件。留空则使用系统默认(Windows:pwsh → powershell → bash → cmd;macOS/Linux:$SHELL → bash → zsh → sh)。仅对新建终端生效。"
+      title={t("settings.terminal.shellSection")}
+      desc={t("settings.terminal.shellSectionDesc")}
     >
       <SettingRow
         layout="vertical"
-        title="Shell 路径"
-        desc="例如 pwsh、bash、powershell,或完整路径如 C:\\Program Files\\PowerShell\\7\\pwsh.exe。"
+        title={t("settings.terminal.shellPath")}
+        desc={t("settings.terminal.shellPathDesc")}
         htmlFor="setting-terminal-shell"
       >
         <div className="flex gap-2">
@@ -92,7 +95,7 @@ function ShellSection() {
               setShell((e.target as HTMLInputElement).value);
               setSaved(false);
             }}
-            placeholder="留空使用系统默认"
+            placeholder={t("settings.terminal.shellPlaceholder")}
             spellCheck={false}
             disabled={!loaded}
             className="min-w-0 flex-1 font-mono"
@@ -103,11 +106,11 @@ function ShellSection() {
             onClick={() => void save()}
             disabled={saving || !loaded}
           >
-            {saving ? "保存中…" : "保存"}
+            {saving ? t("settings.saving") : t("common.save")}
           </Button>
         </div>
         {saved && (
-          <p className="mt-1 text-[0.7857em] text-accent">已保存。新建终端将使用此 Shell。</p>
+          <p className="mt-1 text-[0.7857em] text-accent">{t("settings.terminal.shellSaved")}</p>
         )}
       </SettingRow>
     </SettingsSection>
@@ -119,6 +122,7 @@ function ShellSection() {
 const EMPTY: CustomCommand[] = [];
 
 function CommandsSection() {
+  const { t } = useI18n();
   const projects = useSessionStore((s) => s.projects);
   const activeProjectId = useSessionStore((s) => s.activeProjectId);
 
@@ -175,16 +179,16 @@ function CommandsSection() {
 
   return (
     <SettingsSection
-      title="自定义命令"
-      desc="按项目保存常用终端命令,在终端工具栏的书签菜单中一键运行。命令按项目独立保存,互不影响。"
+      title={t("settings.terminal.commandsSection")}
+      desc={t("settings.terminal.commandsSectionDesc")}
     >
       {candidateProjects.length === 0 ? (
-        <p className="px-4 py-4 text-[0.8571em] text-content-subtle">请先在项目列表中添加一个项目。</p>
+        <p className="px-4 py-4 text-[0.8571em] text-content-subtle">{t("settings.terminal.noProjects")}</p>
       ) : (
         <>
           <SettingRow
-            title="选择项目"
-            desc="切换查看不同项目的自定义命令。"
+            title={t("settings.terminal.pickProject")}
+            desc={t("settings.terminal.pickProjectDesc")}
             htmlFor="setting-terminal-cmd-project"
           >
             <Select.Root
@@ -196,7 +200,7 @@ function CommandsSection() {
                   {(val: string) => (
                     <span className="flex items-center gap-1.5">
                       <IconFolder size={14} className="text-content-muted" />
-                      {candidateProjects.find((p) => p.id === val)?.name ?? "选择项目"}
+                      {candidateProjects.find((p) => p.id === val)?.name ?? t("settings.terminal.pickProject")}
                     </span>
                   )}
                 </Select.Value>
@@ -221,14 +225,14 @@ function CommandsSection() {
           <div className="px-4 py-3">
             <div className="mb-2 flex items-center justify-between">
               <span className="text-[0.8571em] font-medium text-content">
-                命令列表
+                {t("settings.terminal.commandList")}
                 <span className="ml-1.5 text-[0.7857em] font-normal text-content-subtle">
                   ({commands.length})
                 </span>
               </span>
               <Button variant="ghost" size="sm" onClick={openAdd} disabled={!selectedId}>
                 <IconPlus size={12} className="mr-1" />
-                添加命令
+                {t("settings.terminal.addCommand")}
               </Button>
             </div>
 
@@ -236,10 +240,10 @@ function CommandsSection() {
               <div className="flex flex-col items-center gap-2 rounded-md border border-dashed border-edge py-6 text-center">
                 <IconTerminal2 size={20} className="text-content-subtle" />
                 <p className="text-[0.7857em] text-content-subtle">
-                  该项目暂无自定义命令。
+                  {t("settings.terminal.emptyCommands1")}
                 </p>
                 <p className="text-[0.7857em] text-content-subtle">
-                  可点上方「添加命令」,或在终端工具栏书签菜单中快速添加。
+                  {t("settings.terminal.emptyCommands2")}
                 </p>
               </div>
             ) : (
@@ -261,7 +265,7 @@ function CommandsSection() {
                       <button
                         type="button"
                         className="rounded p-1 text-content-subtle hover:bg-surface-hover hover:text-content"
-                        title="编辑"
+                        title={t("common.edit")}
                         onClick={() => openEdit(cmd)}
                       >
                         <IconPencil size={13} />
@@ -269,7 +273,7 @@ function CommandsSection() {
                       <button
                         type="button"
                         className="rounded p-1 text-content-subtle hover:bg-surface-hover hover:text-danger"
-                        title="删除"
+                        title={t("common.delete")}
                         onClick={() => remove(cmd.id)}
                       >
                         <IconTrash size={13} />
@@ -288,17 +292,17 @@ function CommandsSection() {
         <Dialog.Portal>
           <Dialog.Backdrop />
           <Dialog.Popup className="w-[420px] max-w-[90vw] p-4">
-            <Dialog.Title>{editing?.id ? "编辑命令" : "添加命令"}</Dialog.Title>
+            <Dialog.Title>{editing?.id ? t("settings.terminal.editCommand") : t("settings.terminal.addCommand")}</Dialog.Title>
             <Dialog.Description className="mt-1">
-              保存后可在终端工具栏的书签菜单中一键运行。
+              {t("settings.terminal.dialogDesc")}
             </Dialog.Description>
 
             <div className="mt-4 flex flex-col gap-3">
               <label className="flex flex-col gap-1">
-                <span className="text-[11px] font-medium text-content-muted">名称</span>
+                <span className="text-[11px] font-medium text-content-muted">{t("settings.terminal.nameLabel")}</span>
                 <Input
                   value={editing?.name ?? ""}
-                  placeholder="例如:启动开发服务器"
+                  placeholder={t("settings.terminal.namePlaceholder")}
                   onChange={(e) =>
                     editing && setEditing({ ...editing, name: (e.target as HTMLInputElement).value })
                   }
@@ -306,10 +310,10 @@ function CommandsSection() {
                 />
               </label>
               <label className="flex flex-col gap-1">
-                <span className="text-[11px] font-medium text-content-muted">命令</span>
+                <span className="text-[11px] font-medium text-content-muted">{t("settings.terminal.commandLabel")}</span>
                 <textarea
                   value={editing?.command ?? ""}
-                  placeholder="例如:npm run dev"
+                  placeholder={t("settings.terminal.commandPlaceholder")}
                   rows={3}
                   onChange={(e) => editing && setEditing({ ...editing, command: e.target.value })}
                   className={cn(
@@ -332,13 +336,13 @@ function CommandsSection() {
                       if (editing?.id && selectedId) remove(editing.id);
                     }}
                   >
-                    删除
+                    {t("common.delete")}
                   </Button>
                 )}
               </div>
               <div className="flex gap-2">
                 <Button variant="ghost" size="sm" onClick={() => setEditing(null)}>
-                  取消
+                  {t("common.cancel")}
                 </Button>
                 <Button
                   variant="primary"
@@ -346,7 +350,7 @@ function CommandsSection() {
                   onClick={save}
                   disabled={!editing?.name.trim() || !editing?.command.trim()}
                 >
-                  保存
+                  {t("common.save")}
                 </Button>
               </div>
             </div>

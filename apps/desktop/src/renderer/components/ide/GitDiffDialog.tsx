@@ -17,6 +17,7 @@ import {
 } from "@renderer/lib/icons.js";
 import { DiffPane } from "./FileEditor.js";
 import type { GitFileStatus, GitStatusResult } from "@contracts/ipc";
+import { useI18n, type MessageId } from "@renderer/lib/i18n/index.js";
 
 /**
  * Git diff dialog - the "dialog" open-mode for viewing git file diffs.
@@ -40,6 +41,7 @@ import type { GitFileStatus, GitStatusResult } from "@contracts/ipc";
  * closed or when there are no tabs.
  */
 export function GitDiffDialog() {
+  const { t } = useI18n();
   const open = useSessionStore((s) => s.gitDiffDialogOpen);
   const tabs = useSessionStore((s) => s.gitDiffDialogTabs);
   const activeId = useSessionStore((s) => s.gitDiffDialogActiveId);
@@ -169,13 +171,13 @@ export function GitDiffDialog() {
           {/* Header: title + view-mode toggle (left) ... close (right) */}
           <div className="flex shrink-0 items-center justify-between border-b border-edge px-4 py-2.5">
             <div className="flex items-center gap-2">
-              <Dialog.Title className="text-sm font-semibold text-content">查看差异</Dialog.Title>
+              <Dialog.Title className="text-sm font-semibold text-content">{t("ide.diff.title")}</Dialog.Title>
               {/* View-mode toggle: tabs (tab strip + sidebar) vs single (sidebar only). */}
               <button
                 type="button"
                 onClick={() => setViewMode(isTabsMode ? "single" : "tabs")}
-                title={isTabsMode ? "切换为单标签模式" : "切换为标签模式"}
-                aria-label={isTabsMode ? "切换为单标签模式" : "切换为标签模式"}
+                title={isTabsMode ? t("ide.diff.switchToSingle") : t("ide.diff.switchToTabs")}
+                aria-label={isTabsMode ? t("ide.diff.switchToSingle") : t("ide.diff.switchToTabs")}
                 className={cn(
                   "flex items-center justify-center rounded p-1 transition-colors",
                   "text-content-subtle hover:bg-surface-hover hover:text-content",
@@ -187,8 +189,8 @@ export function GitDiffDialog() {
               <button
                 type="button"
                 onClick={() => setFullscreen((v) => !v)}
-                title={fullscreen ? "退出全屏" : "全屏显示"}
-                aria-label={fullscreen ? "退出全屏" : "全屏显示"}
+                title={fullscreen ? t("ide.diff.exitFullscreen") : t("ide.diff.fullscreen")}
+                aria-label={fullscreen ? t("ide.diff.exitFullscreen") : t("ide.diff.fullscreen")}
                 className={cn(
                   "flex items-center justify-center rounded p-1 transition-colors",
                   "text-content-subtle hover:bg-surface-hover hover:text-content",
@@ -206,23 +208,23 @@ export function GitDiffDialog() {
                 no close / delete controls. */}
             <div className="flex w-[220px] shrink-0 flex-col overflow-y-auto border-r border-edge bg-surface-muted/50 py-1.5">
               {!sidebarRepoPath ? (
-                <div className="px-2.5 py-2 text-[11px] text-content-subtle">无仓库</div>
+                <div className="px-2.5 py-2 text-[11px] text-content-subtle">{t("ide.diff.noRepo")}</div>
               ) : statusLoading && !status ? (
                 <div className="flex items-center gap-1.5 px-2.5 py-2 text-[11px] text-content-subtle">
                   <IconLoader2 size={12} className="animate-spin" />
-                  读取状态…
+                  {t("ide.git.readingStatus")}
                 </div>
               ) : staged.length === 0 && unstaged.length === 0 ? (
                 <div className="px-2.5 py-2 text-[11px] text-content-subtle">
                   {activeTab?.source === "history"
-                    ? "工作区干净（当前为历史提交差异）"
-                    : "工作区干净"}
+                    ? t("ide.diff.cleanHistory")
+                    : t("ide.git.workingTreeClean")}
                 </div>
               ) : (
                 <>
                   {staged.length > 0 && (
                     <SidebarFileGroup
-                      label="已暂存"
+                      labelKey="ide.git.staged"
                       files={staged}
                       staged
                       activeTabId={activeTab?.id ?? null}
@@ -232,7 +234,7 @@ export function GitDiffDialog() {
                   )}
                   {unstaged.length > 0 && (
                     <SidebarFileGroup
-                      label="更改"
+                      labelKey="ide.git.changes"
                       files={unstaged}
                       staged={false}
                       activeTabId={activeTab?.id ?? null}
@@ -270,12 +272,12 @@ export function GitDiffDialog() {
                         <span className="truncate font-mono">
                           {tab.title}
                           {tab.source === "working" && tab.staged ? (
-                            <span className="ml-1 text-content-subtle">·暂存</span>
+                            <span className="ml-1 text-content-subtle">{t("ide.diff.stagedBadge")}</span>
                           ) : null}
                         </span>
                         <button
                           type="button"
-                          aria-label="关闭标签"
+                          aria-label={t("ide.diff.closeTabAria")}
                           onClick={(e) => {
                             e.stopPropagation();
                             closeTab(tab.id);
@@ -306,7 +308,7 @@ export function GitDiffDialog() {
                   />
                 ) : (
                   <div className="flex h-full items-center justify-center text-[11px] text-content-subtle">
-                    无可显示的差异
+                    {t("ide.diff.noDiff")}
                   </div>
                 )}
               </div>
@@ -321,20 +323,21 @@ export function GitDiffDialog() {
 /* ───────────────────────── left sidebar groups ───────────────────────── */
 
 function SidebarFileGroup({
-  label,
+  labelKey,
   files,
   staged,
   activeTabId,
   repoPath,
   onSelect,
 }: {
-  label: string;
+  labelKey: MessageId;
   files: GitFileStatus[];
   staged: boolean;
   activeTabId: string | null;
   repoPath: string;
   onSelect: (file: GitFileStatus) => void;
 }) {
+  const { t } = useI18n();
   const [collapsed, setCollapsed] = useState(false);
   return (
     <div className="mb-1">
@@ -344,7 +347,7 @@ function SidebarFileGroup({
         className="flex w-full items-center gap-1 px-2.5 py-1 text-[10px] font-medium uppercase tracking-wide text-content-subtle"
       >
         {collapsed ? <IconChevronRight size={10} /> : <IconChevronDown size={10} />}
-        {label} ({files.length})
+        {t(labelKey)} ({files.length})
       </button>
       {!collapsed && (
         <div>

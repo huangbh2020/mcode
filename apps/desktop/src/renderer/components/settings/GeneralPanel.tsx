@@ -5,7 +5,8 @@ import {
 } from "@renderer/stores/sessionStore.js";
 import { Select, Input, Switch, Button } from "@renderer/components/ui/index.js";
 import { IconSquare, IconStack2, IconList, IconListDetails, IconGripHorizontal, IconX } from "@renderer/lib/icons.js";
-import type { ChatDensity, DisplayMode, AutoArchiveConfig } from "@contracts/ipc";
+import { useI18n, type MessageId } from "@renderer/lib/i18n/index.js";
+import type { ChatDensity, DisplayMode, AutoArchiveConfig, Locale } from "@contracts/ipc";
 import type { ReactNode } from "react";
 import { SettingRow } from "./SettingRow.js";
 import { PanelHeader } from "./PanelHeader.js";
@@ -17,6 +18,7 @@ import { TitleGenPanel } from "./TitleGenPanel.js";
  *
  * Hosts general-purpose preferences that aren't tied to a specific feature
  * area. Currently:
+ *  - 语言 (SettingsSection): 界面语言 (zh/en)
  *  - 显示与布局 (SettingsSection): 中间面板显示模式 + 对话紧凑度 + 长文本折叠阈值
  *  - 会话自动归档 (SettingsSection): 开关 + 默认不活跃天数 + 按项目覆盖
  *  - 会话标题生成 (TitleGenPanel, renders its own SettingsSection)
@@ -26,40 +28,32 @@ import { TitleGenPanel } from "./TitleGenPanel.js";
  * sibling section — the outer space-y-4 keeps the two cards apart.
  */
 
-const DISPLAY_MODE_OPTIONS: { value: DisplayMode; label: string; icon: ReactNode }[] = [
-  { value: "single", label: "单会话模式", icon: <IconSquare size={14} className="text-content-muted" /> },
-  { value: "tabs", label: "Tab 标签模式", icon: <IconStack2 size={14} className="text-content-muted" /> },
+const DISPLAY_MODE_OPTIONS: { value: DisplayMode; labelKey: MessageId; icon: ReactNode }[] = [
+  { value: "single", labelKey: "settings.general.displayModeSingle", icon: <IconSquare size={14} className="text-content-muted" /> },
+  { value: "tabs", labelKey: "settings.general.displayModeTabs", icon: <IconStack2 size={14} className="text-content-muted" /> },
 ];
 
-const DENSITY_OPTIONS: { value: ChatDensity; label: string; icon: ReactNode }[] = [
-  { value: "compact", label: "紧凑", icon: <IconList size={14} className="text-content-muted" /> },
-  { value: "comfortable", label: "舒适", icon: <IconListDetails size={14} className="text-content-muted" /> },
-  { value: "cozy", label: "宽松", icon: <IconGripHorizontal size={14} className="text-content-muted" /> },
+const DENSITY_OPTIONS: { value: ChatDensity; labelKey: MessageId; icon: ReactNode }[] = [
+  { value: "compact", labelKey: "settings.general.densityCompact", icon: <IconList size={14} className="text-content-muted" /> },
+  { value: "comfortable", labelKey: "settings.general.densityComfortable", icon: <IconListDetails size={14} className="text-content-muted" /> },
+  { value: "cozy", labelKey: "settings.general.densityCozy", icon: <IconGripHorizontal size={14} className="text-content-muted" /> },
 ];
 
-/** Inactivity thresholds offered for the global default and per-project
- *  overrides. A project override of `never` maps to 0 (skip in the archiver). */
-const AUTO_ARCHIVE_DAY_OPTIONS: { value: string; label: string }[] = [
-  { value: "7", label: "7 天" },
-  { value: "14", label: "14 天" },
-  { value: "30", label: "30 天" },
-  { value: "60", label: "60 天" },
-  { value: "90", label: "90 天" },
-];
+/** Inactivity day thresholds. Labels are built via t("common.dayCount") at
+ *  render time — the numeric value IS the label, only the unit word localizes. */
+const AUTO_ARCHIVE_DAY_VALUES = [7, 14, 30, 60, 90];
 
-/** Sentinel values for the per-project override select, distinct from the
+/** Sentinel value for the per-project override select, distinct from the
  *  numeric day options. */
 const NEVER_OVERRIDE = "0";
 
-/** Options for a per-project override: "永不归档" (0) plus the numeric day
- *  thresholds. The global default select uses AUTO_ARCHIVE_DAY_OPTIONS only —
- *  the default must always be a concrete day count. */
-const AUTO_ARCHIVE_OVERRIDE_OPTIONS: { value: string; label: string }[] = [
-  { value: NEVER_OVERRIDE, label: "永不归档" },
-  ...AUTO_ARCHIVE_DAY_OPTIONS,
-];
-
 export function GeneralPanel() {
+  const { t } = useI18n();
+
+  // ── UI language ──
+  const locale = useSessionStore((s) => s.locale);
+  const setLocale = useSessionStore((s) => s.setLocale);
+
   // ── Display mode ──
   const displayMode = useSessionStore((s) => s.displayMode);
   const setDisplayMode = useSessionStore((s) => s.setDisplayMode);
@@ -76,6 +70,11 @@ export function GeneralPanel() {
   const autoArchiveConfig = useSessionStore((s) => s.autoArchiveConfig);
   const setAutoArchiveConfig = useSessionStore((s) => s.setAutoArchiveConfig);
   const projects = useSessionStore((s) => s.projects);
+
+  const dayLabel = (val: string) =>
+    AUTO_ARCHIVE_DAY_VALUES.some((d) => String(d) === val)
+      ? t("common.dayCount", { n: val })
+      : t("settings.general.archiveNever");
 
   const patchAutoArchive = (patch: Partial<AutoArchiveConfig>) =>
     void setAutoArchiveConfig({ ...autoArchiveConfig, ...patch });
@@ -112,16 +111,54 @@ export function GeneralPanel() {
   return (
     <section className="space-y-4">
       <PanelHeader
-        title="常规"
-        desc="调整界面布局、消息显示与会话标题等基础偏好。"
+        title={t("settings.general.title")}
+        desc={t("settings.general.desc")}
       />
 
+      {/* ── 语言 ── */}
+      <SettingsSection title={t("settings.general.sectionLanguage")}>
+        <SettingRow
+          title={t("settings.general.language")}
+          desc={t("settings.general.languageDesc")}
+          htmlFor="setting-locale"
+        >
+          <Select.Root
+            value={locale}
+            onValueChange={(v) => void setLocale(v as Locale)}
+          >
+            <Select.Trigger id="setting-locale" className="min-w-[10rem]">
+              <Select.Value>
+                {(val: Locale) =>
+                  val === "en"
+                    ? t("settings.general.languageEn")
+                    : t("settings.general.languageZh")
+                }
+              </Select.Value>
+            </Select.Trigger>
+            <Select.Portal>
+              <Select.Positioner>
+                <Select.Popup>
+                  <Select.List>
+                    <Select.Item value="zh">
+                      <Select.ItemText>{t("settings.general.languageZh")}</Select.ItemText>
+                    </Select.Item>
+                    <Select.Item value="en">
+                      <Select.ItemText>{t("settings.general.languageEn")}</Select.ItemText>
+                    </Select.Item>
+                  </Select.List>
+                </Select.Popup>
+              </Select.Positioner>
+            </Select.Portal>
+          </Select.Root>
+        </SettingRow>
+      </SettingsSection>
+
       {/* ── 显示与布局 ── */}
-      <SettingsSection title="显示与布局">
+      <SettingsSection title={t("settings.general.sectionDisplay")}>
         {/* ── Center-pane display mode ── */}
         <SettingRow
-          title="中间面板显示模式"
-          desc="点击左侧会话时,中间聊天区的呈现方式。"
+          title={t("settings.general.displayMode")}
+          desc={t("settings.general.displayModeDesc")}
           htmlFor="setting-displaymode"
         >
           <Select.Root
@@ -137,7 +174,7 @@ export function GeneralPanel() {
                   return (
                     <span className="flex items-center gap-1.5">
                       {o.icon}
-                      {o.label}
+                      {t(o.labelKey)}
                     </span>
                   );
                 }}
@@ -150,7 +187,7 @@ export function GeneralPanel() {
                     {DISPLAY_MODE_OPTIONS.map((o) => (
                       <Select.Item key={o.value} value={o.value}>
                         {o.icon}
-                        <Select.ItemText>{o.label}</Select.ItemText>
+                        <Select.ItemText>{t(o.labelKey)}</Select.ItemText>
                       </Select.Item>
                     ))}
                   </Select.List>
@@ -162,8 +199,8 @@ export function GeneralPanel() {
 
         {/* ── Message-stream density (vertical rhythm) ── */}
         <SettingRow
-          title="对话紧凑度"
-          desc="调整消息之间的行间距、消息内块间距,以及回复正文的段落间距与行高。紧凑可在屏幕内看到更多内容,宽松阅读更舒适。"
+          title={t("settings.general.density")}
+          desc={t("settings.general.densityDesc")}
           htmlFor="setting-chatdensity"
         >
           <Select.Root
@@ -179,7 +216,7 @@ export function GeneralPanel() {
                   return (
                     <span className="flex items-center gap-1.5">
                       {o.icon}
-                      {o.label}
+                      {t(o.labelKey)}
                     </span>
                   );
                 }}
@@ -192,7 +229,7 @@ export function GeneralPanel() {
                     {DENSITY_OPTIONS.map((o) => (
                       <Select.Item key={o.value} value={o.value}>
                         {o.icon}
-                        <Select.ItemText>{o.label}</Select.ItemText>
+                        <Select.ItemText>{t(o.labelKey)}</Select.ItemText>
                       </Select.Item>
                     ))}
                   </Select.List>
@@ -204,8 +241,11 @@ export function GeneralPanel() {
 
         {/* ── Long-text paste folding threshold ── */}
         <SettingRow
-          title="长文本折叠阈值"
-          desc={`在输入框粘贴超过此字符数的内容时,会折叠为输入框上方的卡片而非直接插入正文(${PASTE_TAG_THRESHOLD_CHARS_MIN}–${PASTE_TAG_THRESHOLD_CHARS_MAX})。`}
+          title={t("settings.general.pasteThreshold")}
+          desc={t("settings.general.pasteThresholdDesc", {
+            min: PASTE_TAG_THRESHOLD_CHARS_MIN,
+            max: PASTE_TAG_THRESHOLD_CHARS_MAX,
+          })}
           htmlFor="setting-paste-threshold"
         >
           <Input
@@ -222,22 +262,22 @@ export function GeneralPanel() {
       </SettingsSection>
 
       {/* ── 会话自动归档 ── */}
-      <SettingsSection title="会话自动归档">
+      <SettingsSection title={t("settings.general.sectionArchive")}>
         <SettingRow
-          title="自动归档不活跃会话"
-          desc="开启后,长时间没有活动的会话会自动移入左侧底部的「已归档」分区(可随时恢复)。置顶与正在运行的会话不会被归档。"
+          title={t("settings.general.archiveEnabled")}
+          desc={t("settings.general.archiveEnabledDesc")}
         >
           <Switch
             id="setting-autoarchive-enabled"
             checked={autoArchiveConfig.enabled}
             onCheckedChange={(v) => patchAutoArchive({ enabled: v })}
-            label={autoArchiveConfig.enabled ? "已开启" : "已关闭"}
+            label={autoArchiveConfig.enabled ? t("settings.general.archiveOn") : t("settings.general.archiveOff")}
           />
         </SettingRow>
 
         <SettingRow
-          title="默认不活跃天数"
-          desc="会话超过该天数没有任何活动(收发消息、改名、置顶等)后自动归档。可在下方为单个项目单独覆盖。"
+          title={t("settings.general.archiveDefaultDays")}
+          desc={t("settings.general.archiveDefaultDaysDesc")}
           htmlFor="setting-autoarchive-default-days"
         >
           <Select.Root
@@ -246,20 +286,20 @@ export function GeneralPanel() {
           >
             <Select.Trigger id="setting-autoarchive-default-days" className="min-w-[7rem]">
               <Select.Value>
-                {(val: string) => {
-                  const label =
-                    AUTO_ARCHIVE_DAY_OPTIONS.find((o) => o.value === val)?.label ?? "30 天";
-                  return label;
-                }}
+                {(val: string) =>
+                  AUTO_ARCHIVE_DAY_VALUES.some((d) => String(d) === val)
+                    ? t("common.dayCount", { n: val })
+                    : t("common.dayCount", { n: 30 })
+                }
               </Select.Value>
             </Select.Trigger>
             <Select.Portal>
               <Select.Positioner>
                 <Select.Popup>
                   <Select.List>
-                    {AUTO_ARCHIVE_DAY_OPTIONS.map((o) => (
-                      <Select.Item key={o.value} value={o.value}>
-                        <Select.ItemText>{o.label}</Select.ItemText>
+                    {AUTO_ARCHIVE_DAY_VALUES.map((d) => (
+                      <Select.Item key={d} value={String(d)}>
+                        <Select.ItemText>{t("common.dayCount", { n: d })}</Select.ItemText>
                       </Select.Item>
                     ))}
                   </Select.List>
@@ -273,7 +313,7 @@ export function GeneralPanel() {
           <SettingRow
             key={p.id}
             title={p.name}
-            desc="覆盖上方默认归档天数。"
+            desc={t("settings.general.archiveOverrideDesc")}
             htmlFor={`setting-autoarchive-project-${p.id}`}
           >
             <div className="flex items-center gap-2">
@@ -282,19 +322,18 @@ export function GeneralPanel() {
                 onValueChange={(v) => setProjectOverride(p.id, v as string)}
               >
                 <Select.Trigger id={`setting-autoarchive-project-${p.id}`} className="min-w-[7rem]">
-                  <Select.Value>
-                    {(val: string) =>
-                      AUTO_ARCHIVE_OVERRIDE_OPTIONS.find((o) => o.value === val)?.label ?? "30 天"
-                    }
-                  </Select.Value>
+                  <Select.Value>{(val: string) => dayLabel(val)}</Select.Value>
                 </Select.Trigger>
                 <Select.Portal>
                   <Select.Positioner>
                     <Select.Popup>
                       <Select.List>
-                        {AUTO_ARCHIVE_OVERRIDE_OPTIONS.map((o) => (
-                          <Select.Item key={o.value} value={o.value}>
-                            <Select.ItemText>{o.label}</Select.ItemText>
+                        <Select.Item value={NEVER_OVERRIDE}>
+                          <Select.ItemText>{t("settings.general.archiveNever")}</Select.ItemText>
+                        </Select.Item>
+                        {AUTO_ARCHIVE_DAY_VALUES.map((d) => (
+                          <Select.Item key={d} value={String(d)}>
+                            <Select.ItemText>{t("common.dayCount", { n: d })}</Select.ItemText>
                           </Select.Item>
                         ))}
                       </Select.List>
@@ -306,8 +345,8 @@ export function GeneralPanel() {
                 variant="ghost"
                 size="icon"
                 onClick={() => removeProjectOverride(p.id)}
-                aria-label={`移除 ${p.name} 的归档覆盖`}
-                title="移除覆盖"
+                aria-label={t("settings.general.archiveRemoveOverrideAria", { name: p.name })}
+                title={t("settings.general.archiveRemoveOverrideTitle")}
               >
                 <IconX size={14} />
               </Button>
@@ -317,12 +356,12 @@ export function GeneralPanel() {
 
         {addableProjects.length > 0 && (
           <SettingRow
-            title="添加项目覆盖"
-            desc="为需要单独设置归档规则的项目添加覆盖。"
+            title={t("settings.general.archiveAddOverride")}
+            desc={t("settings.general.archiveAddOverrideDesc")}
           >
             <Select.Root value={null} onValueChange={(v) => addProjectOverride(v as string)}>
               <Select.Trigger className="min-w-[10rem]">
-                <Select.Value placeholder="选择项目…" />
+                <Select.Value placeholder={t("settings.general.archivePickProject")} />
               </Select.Trigger>
               <Select.Portal>
                 <Select.Positioner>

@@ -16,6 +16,7 @@ import { useCallback, useEffect, useState } from "react";
 import { cn } from "@renderer/lib/cn.js";
 import { useSessionStore } from "@renderer/stores/sessionStore.js";
 import { api } from "@renderer/lib/api.js";
+import { useI18n, type MessageId } from "@renderer/lib/i18n/index.js";
 import {
   Button,
   ConfirmDialog,
@@ -54,12 +55,19 @@ function rowKey(s: { scope: McpScope; name: string }): string {
   return `${s.scope}:${s.name}`;
 }
 
-/** Transport badge label + tint per kind (same badge family as SkillsPanel). */
-const KIND_LABEL: Record<McpKind, string> = {
+/** Transport badge label key per kind (same badge family as SkillsPanel).
+ *  stdio/http/sse are proper transport names; only "builtin" localizes. */
+const KIND_LABEL: Record<McpKind, MessageId | null> = {
+  stdio: null,
+  http: null,
+  sse: null,
+  builtin: "settings.mcp.builtinKind",
+};
+/** Raw (untranslated) label for the non-localizable kinds. */
+const KIND_RAW: Partial<Record<McpKind, string>> = {
   stdio: "stdio",
   http: "http",
   sse: "sse",
-  builtin: "内置",
 };
 const KIND_BADGE_CLS: Record<McpKind, string> = {
   stdio: "bg-accent/12 text-accent",
@@ -69,6 +77,8 @@ const KIND_BADGE_CLS: Record<McpKind, string> = {
 };
 
 function KindBadge({ kind }: { kind: McpKind }) {
+  const { t } = useI18n();
+  const labelKey = KIND_LABEL[kind];
   return (
     <span
       className={cn(
@@ -76,12 +86,13 @@ function KindBadge({ kind }: { kind: McpKind }) {
         KIND_BADGE_CLS[kind],
       )}
     >
-      {KIND_LABEL[kind]}
+      {labelKey ? t(labelKey) : KIND_RAW[kind]}
     </span>
   );
 }
 
 export function McpPanel() {
+  const { t } = useI18n();
   const projects = useSessionStore((s) => s.projects);
   const activeProjectId = useSessionStore((s) => s.activeProjectId);
 
@@ -133,7 +144,7 @@ export function McpPanel() {
         projectPath: s.scope === "project" ? projectPath ?? undefined : undefined,
         enabled: !s.enabled,
       });
-      if (!res.ok) setError(res.error ?? "操作失败");
+      if (!res.ok) setError(res.error ?? t("settings.operationFailed"));
       await load();
     } catch (err) {
       setError((err as Error).message);
@@ -148,7 +159,7 @@ export function McpPanel() {
     setError(null);
     try {
       const res = await api.mcp.remove({ name: target.name });
-      if (!res.ok) setError(res.error ?? "删除失败");
+      if (!res.ok) setError(res.error ?? t("settings.deleteFailed"));
       await load();
     } catch (err) {
       setError((err as Error).message);
@@ -164,13 +175,15 @@ export function McpPanel() {
   return (
     <section className="space-y-4">
       <PanelHeader
-        title="MCP 服务器"
+        title={t("settings.mcp.title")}
         icon={McpIcon}
         desc={
           <>
-            管理 MCP(Model Context Protocol)server。改动自<strong>下一轮对话</strong>起生效;
-            仅 Claude 会话生效(Pi 会话使用扩展机制)。用户级 server 保存在{" "}
-            <code className="rounded bg-surface-muted px-0.5">~/.mcode/.claude.json</code>,对所有项目可用。
+            {t("settings.mcp.desc1")}
+            <strong>{t("settings.mcp.desc2")}</strong>
+            {t("settings.mcp.desc3")}
+            <code className="rounded bg-surface-muted px-0.5">~/.mcode/.claude.json</code>
+            {t("settings.mcp.desc4")}
           </>
         }
       />
@@ -183,19 +196,19 @@ export function McpPanel() {
 
       {/* ───────── 用户级 ───────── */}
       <SettingsSection
-        title="用户级"
-        desc="保存在 Mcode 自己的 Claude 配置(~/.mcode/.claude.json)中,所有项目可用。关闭的 server 配置会被暂存,重新开启即可恢复。"
+        title={t("settings.mcp.userSection")}
+        desc={t("settings.mcp.userSectionDesc")}
       >
         {loading ? (
           <div className="flex items-center justify-center gap-2 py-6 text-[0.7857em] text-content-subtle">
             <IconLoader2 size={14} className="animate-spin" />
-            加载中…
+            {t("common.loading")}
           </div>
         ) : userServers.length === 0 ? (
           <div className="px-4 py-4 text-center text-[0.7143em] leading-relaxed text-content-subtle">
-            暂无用户级 server。
+            {t("settings.mcp.userEmpty1")}
             <br />
-            点击下方「新增」或「从 Claude CLI 导入」。
+            {t("settings.mcp.userEmpty2")}
           </div>
         ) : (
           userServers.map((s) => (
@@ -213,12 +226,12 @@ export function McpPanel() {
                 checked={s.enabled}
                 onCheckedChange={() => void toggle(s)}
                 disabled={busyKey === rowKey(s)}
-                label={`${s.enabled ? "关闭" : "开启"} ${s.name}`}
+                label={t(s.enabled ? "settings.mcp.toggleOff" : "settings.mcp.toggleOn", { name: s.name })}
               />
               <Button
                 variant="ghost"
                 size="icon"
-                title="删除此 server"
+                title={t("settings.mcp.deleteServer")}
                 onClick={() => setPendingDelete(s)}
               >
                 <IconTrash size={13} className="text-content-subtle" />
@@ -229,28 +242,31 @@ export function McpPanel() {
         <div className="flex justify-end gap-2 px-4 py-2.5">
           <Button variant="ghost" size="sm" onClick={() => setImportOpen(true)} className="gap-1">
             <IconDownload size={12} />
-            从 Claude CLI 导入
+            {t("settings.mcp.importFromCli")}
           </Button>
           <Button variant="secondary" size="sm" onClick={() => setAddOpen(true)} className="gap-1">
             <IconPlus size={12} />
-            新增 MCP Server
+            {t("settings.mcp.addServer")}
           </Button>
         </div>
       </SettingsSection>
 
       {/* ───────── 项目级 ───────── */}
       <SettingsSection
-        title="项目级"
+        title={t("settings.mcp.projectSection")}
         desc={
           <>
-            来自所选项目根的 <code className="rounded bg-surface-muted px-0.5">.mcp.json</code>(只读,不会修改项目文件)。
-            项目级 server <strong>默认关闭</strong>——开启等同于批准其在该项目的所有会话中加载。
+            {t("settings.mcp.projectSectionDesc1")}
+            <code className="rounded bg-surface-muted px-0.5">.mcp.json</code>
+            {t("settings.mcp.projectSectionDesc2")}
+            <strong>{t("settings.mcp.projectSectionDesc3")}</strong>
+            {t("settings.mcp.projectSectionDesc4")}
           </>
         }
       >
         {managedProjects.length > 0 ? (
           <div className="flex items-center gap-2 px-4 py-2.5">
-            <span className="text-[0.7857em] font-medium text-content-muted">项目:</span>
+            <span className="text-[0.7857em] font-medium text-content-muted">{t("settings.projectLabel")}</span>
             <Select.Root
               value={managedProjectId ?? ""}
               onValueChange={(v) => setManagedProjectId(v as string)}
@@ -262,7 +278,7 @@ export function McpPanel() {
                     return (
                       <span className="flex items-center gap-1.5">
                         <IconFolder size={14} className="text-content-muted" />
-                        {p ? `${p.name}${p.id === activeProjectId ? " (当前工作区)" : ""}` : ""}
+                        {p ? `${p.name}${p.id === activeProjectId ? ` (${t("settings.currentWorkspace")})` : ""}` : ""}
                       </span>
                     );
                   }}
@@ -277,7 +293,7 @@ export function McpPanel() {
                           <IconFolder size={14} className="text-content-muted" />
                           <Select.ItemText>
                             {p.name}
-                            {p.id === activeProjectId ? " (当前工作区)" : ""}
+                            {p.id === activeProjectId ? ` (${t("settings.currentWorkspace")})` : ""}
                           </Select.ItemText>
                         </Select.Item>
                       ))}
@@ -289,13 +305,13 @@ export function McpPanel() {
           </div>
         ) : (
           <div className="px-4 py-4 text-center text-[0.7143em] text-content-subtle">
-            暂无项目 — 打开项目后可在此管理其 .mcp.json
+            {t("settings.mcp.noProjects")}
           </div>
         )}
         {projectPath &&
           (projectServers.length === 0 ? (
             <div className="px-4 py-4 text-center text-[0.7143em] leading-relaxed text-content-subtle">
-              {loading ? "…" : "当前项目的 .mcp.json 中没有 MCP server。"}
+              {loading ? "…" : t("settings.mcp.noProjectServers")}
             </div>
           ) : (
             projectServers.map((s) => (
@@ -310,7 +326,7 @@ export function McpPanel() {
                 desc={
                   <span className="font-mono">
                     {s.detail}
-                    {!s.enabled && " · 默认关闭,确认来源后开启"}
+                    {!s.enabled && t("settings.mcp.projectOffSuffix")}
                   </span>
                 }
               >
@@ -318,7 +334,7 @@ export function McpPanel() {
                   checked={s.enabled}
                   onCheckedChange={() => void toggle(s)}
                   disabled={busyKey === rowKey(s)}
-                  label={`${s.enabled ? "关闭" : "开启"} ${s.name}`}
+                  label={t(s.enabled ? "settings.mcp.toggleOff" : "settings.mcp.toggleOn", { name: s.name })}
                 />
               </SettingRow>
             ))
@@ -326,7 +342,7 @@ export function McpPanel() {
       </SettingsSection>
 
       {/* ───────── 内置 ───────── */}
-      <SettingsSection title="内置" desc="随应用内置、运行在本进程内的 MCP server。">
+      <SettingsSection title={t("settings.mcp.builtinSection")} desc={t("settings.mcp.builtinSectionDesc")}>
         {builtin && (
           <SettingRow
             title={
@@ -341,7 +357,7 @@ export function McpPanel() {
               checked={builtin.enabled}
               onCheckedChange={() => void toggle(builtin)}
               disabled={busyKey === rowKey(builtin)}
-              label={`${builtin.enabled ? "关闭" : "开启"} ${builtin.name}`}
+              label={t(builtin.enabled ? "settings.mcp.toggleOff" : "settings.mcp.toggleOn", { name: builtin.name })}
             />
           </SettingRow>
         )}
@@ -349,15 +365,18 @@ export function McpPanel() {
 
       <ConfirmDialog
         open={pendingDelete != null}
-        title="删除 MCP server"
+        title={t("settings.mcp.deleteTitle")}
         danger
         description={
           <>
-            确认删除用户级 server「{pendingDelete?.name}」?
-            该配置将从 <code className="rounded bg-surface-muted px-0.5">~/.mcode/.claude.json</code> 中移除(含已关闭的暂存配置),此操作不可撤销。
+            {t("settings.mcp.deleteDescPre")}
+            {pendingDelete?.name}
+            {t("settings.mcp.deleteDescMid")}
+            <code className="rounded bg-surface-muted px-0.5">~/.mcode/.claude.json</code>
+            {t("settings.mcp.deleteDescPost")}
           </>
         }
-        confirmText="删除"
+        confirmText={t("common.delete")}
         onOpenChange={(open) => {
           if (!open) setPendingDelete(null);
         }}
@@ -397,22 +416,28 @@ function Field({ label, hint, children }: { label: string; hint?: string; childr
 }
 
 /** Parse a JSON object of string→string (env / headers). Returns an error
- *  message on invalid input, else the record (undefined when text is empty). */
-function parseStringRecordJson(text: string, what: string): { error?: string; value?: Record<string, string> } {
+ *  message on invalid input, else the record (undefined when text is empty).
+ *  `t` localizes the error templates; `what` is the already-localized field
+ *  name interpolated into them. */
+function parseStringRecordJson(
+  text: string,
+  what: string,
+  t: (key: MessageId, params?: Record<string, string | number>) => string,
+): { error?: string; value?: Record<string, string> } {
   const trimmed = text.trim();
   if (!trimmed) return {};
   let parsed: unknown;
   try {
     parsed = JSON.parse(trimmed);
   } catch {
-    return { error: `${what} 不是合法 JSON` };
+    return { error: t("settings.mcp.errNotJson", { what }) };
   }
   if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-    return { error: `${what} 需要是 JSON 对象` };
+    return { error: t("settings.mcp.errNotObject", { what }) };
   }
   const out: Record<string, string> = {};
   for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
-    if (typeof v !== "string") return { error: `${what} 的值必须是字符串` };
+    if (typeof v !== "string") return { error: t("settings.mcp.errValueString", { what }) };
     out[k] = v;
   }
   return { value: out };
@@ -427,6 +452,7 @@ function AddServerDialog({
   onOpenChange: (open: boolean) => void;
   onSaved: () => void;
 }) {
+  const { t } = useI18n();
   const [name, setName] = useState("");
   const [type, setType] = useState<"stdio" | "http" | "sse">("stdio");
   const [command, setCommand] = useState("");
@@ -454,20 +480,20 @@ function AddServerDialog({
     setError(null);
     const trimmedName = name.trim();
     if (!MCP_NAME_RE.test(trimmedName)) {
-      setError("名称只能包含字母、数字、下划线和连字符");
+      setError(t("settings.nameCharsError"));
       return;
     }
     if (trimmedName === MCP_RESERVED_NAME) {
-      setError(`「${MCP_RESERVED_NAME}」是内置 server 的保留名`);
+      setError(t("settings.mcp.errReserved", { name: MCP_RESERVED_NAME }));
       return;
     }
     let config: McpServerConfig;
     if (type === "stdio") {
       if (!command.trim()) {
-        setError("请填写启动命令");
+        setError(t("settings.mcp.errCommand"));
         return;
       }
-      const envRes = parseStringRecordJson(envJson, "环境变量");
+      const envRes = parseStringRecordJson(envJson, t("settings.mcp.envLabel"), t);
       if (envRes.error) {
         setError(envRes.error);
         return;
@@ -481,10 +507,10 @@ function AddServerDialog({
       };
     } else {
       if (!url.trim()) {
-        setError("请填写 URL");
+        setError(t("settings.mcp.errUrl"));
         return;
       }
-      const headersRes = parseStringRecordJson(headersJson, "请求头");
+      const headersRes = parseStringRecordJson(headersJson, t("settings.mcp.headersLabel"), t);
       if (headersRes.error) {
         setError(headersRes.error);
         return;
@@ -499,7 +525,7 @@ function AddServerDialog({
     try {
       const res = await api.mcp.save({ name: trimmedName, config });
       if (!res.ok) {
-        setError(res.error ?? "保存失败");
+        setError(res.error ?? t("settings.saveFailed"));
         return;
       }
       onSaved();
@@ -516,13 +542,15 @@ function AddServerDialog({
       <Dialog.Portal>
         <Dialog.Backdrop />
         <Dialog.Popup className="flex max-h-[80vh] w-[520px] flex-col p-0">
-          <Dialog.Title className="px-4 pt-4">新增 MCP Server</Dialog.Title>
+          <Dialog.Title className="px-4 pt-4">{t("settings.mcp.addTitle")}</Dialog.Title>
           <Dialog.Description className="px-4 pt-1">
-            添加到 <code className="rounded bg-surface-muted px-0.5">~/.mcode/.claude.json</code>(用户级,所有项目可用)
+            {t("settings.mcp.addDescPre")}
+            <code className="rounded bg-surface-muted px-0.5">~/.mcode/.claude.json</code>
+            {t("settings.mcp.addDescPost")}
           </Dialog.Description>
           <Dialog.Close />
           <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
-            <Field label="名称" hint="仅字母、数字、下划线、连字符;工具将以 mcp__名称__工具 形式呈现">
+            <Field label={t("settings.mcp.fName")} hint={t("settings.mcp.fNameHint")}>
               <input
                 type="text"
                 value={name}
@@ -533,7 +561,7 @@ function AddServerDialog({
                 autoFocus
               />
             </Field>
-            <Field label="类型">
+            <Field label={t("settings.mcp.fType")}>
               <Select.Root value={type} onValueChange={(v) => setType(v as "stdio" | "http" | "sse")}>
                 <Select.Trigger className="w-full">
                   <Select.Value>{(val: string) => val}</Select.Value>
@@ -543,13 +571,13 @@ function AddServerDialog({
                     <Select.Popup>
                       <Select.List>
                         <Select.Item value="stdio">
-                          <Select.ItemText>stdio(本地进程)</Select.ItemText>
+                          <Select.ItemText>{t("settings.mcp.typeStdio")}</Select.ItemText>
                         </Select.Item>
                         <Select.Item value="http">
-                          <Select.ItemText>http(远程服务)</Select.ItemText>
+                          <Select.ItemText>{t("settings.mcp.typeHttp")}</Select.ItemText>
                         </Select.Item>
                         <Select.Item value="sse">
-                          <Select.ItemText>sse(远程服务,旧协议)</Select.ItemText>
+                          <Select.ItemText>{t("settings.mcp.typeSse")}</Select.ItemText>
                         </Select.Item>
                       </Select.List>
                     </Select.Popup>
@@ -559,7 +587,7 @@ function AddServerDialog({
             </Field>
             {type === "stdio" ? (
               <>
-                <Field label="启动命令" hint="可执行文件,如 npx / node / uvx;找不到时写完整路径">
+                <Field label={t("settings.mcp.fCommand")} hint={t("settings.mcp.fCommandHint")}>
                   <input
                     type="text"
                     value={command}
@@ -569,7 +597,7 @@ function AddServerDialog({
                     spellCheck={false}
                   />
                 </Field>
-                <Field label="参数(可选)" hint="空格分隔,如:-y @modelcontextprotocol/server-filesystem /data">
+                <Field label={t("settings.mcp.fArgs")} hint={t("settings.mcp.fArgsHint")}>
                   <input
                     type="text"
                     value={args}
@@ -579,7 +607,7 @@ function AddServerDialog({
                     spellCheck={false}
                   />
                 </Field>
-                <Field label="环境变量(可选,JSON)" hint='如 {"API_KEY": "xxx"} 的 JSON 对象'>
+                <Field label={t("settings.mcp.fEnv")} hint={t("settings.mcp.fEnvHint")}>
                   <textarea
                     value={envJson}
                     onChange={(e) => setEnvJson(e.target.value)}
@@ -591,7 +619,7 @@ function AddServerDialog({
               </>
             ) : (
               <>
-                <Field label="URL" hint="远程 MCP 端点,如 https://example.com/mcp">
+                <Field label="URL" hint={t("settings.mcp.fUrlHint")}>
                   <input
                     type="text"
                     value={url}
@@ -601,7 +629,7 @@ function AddServerDialog({
                     spellCheck={false}
                   />
                 </Field>
-                <Field label="请求头(可选,JSON)" hint='如 {"Authorization": "Bearer xxx"} 的 JSON 对象'>
+                <Field label={t("settings.mcp.fHeaders")} hint={t("settings.mcp.fHeadersHint")}>
                   <textarea
                     value={headersJson}
                     onChange={(e) => setHeadersJson(e.target.value)}
@@ -617,10 +645,10 @@ function AddServerDialog({
           <div className="flex items-center gap-2 border-t border-edge px-4 py-3">
             <div className="flex-1" />
             <Button variant="ghost" size="sm" onClick={() => onOpenChange(false)} disabled={saving}>
-              取消
+              {t("common.cancel")}
             </Button>
             <Button variant="primary" size="sm" onClick={() => void save()} disabled={saving}>
-              {saving ? "保存中…" : "添加"}
+              {saving ? t("settings.saving") : t("settings.mcp.addBtn")}
             </Button>
           </div>
         </Dialog.Popup>
@@ -645,6 +673,7 @@ function ImportMcpDialog({
   onOpenChange: (open: boolean) => void;
   onImported: () => void;
 }) {
+  const { t } = useI18n();
   const [sources, setSources] = useState<McpImportSource[]>([]);
   const [loading, setLoading] = useState(false);
   const [importing, setImporting] = useState(false);
@@ -739,22 +768,24 @@ function ImportMcpDialog({
       <Dialog.Portal>
         <Dialog.Backdrop />
         <Dialog.Popup className="flex max-h-[80vh] w-[560px] flex-col p-0">
-          <Dialog.Title className="px-4 pt-4">导入 MCP Server</Dialog.Title>
+          <Dialog.Title className="px-4 pt-4">{t("settings.mcp.importTitle")}</Dialog.Title>
           <Dialog.Description className="px-4 pt-1">
-            从本机 Claude CLI 配置(<code className="rounded bg-surface-muted px-0.5">~/.claude.json</code>)导入到 Mcode 的用户级配置。Mcode 不读取该文件,导入是唯一的复用方式。
+            {t("settings.mcp.importDesc1")}
+            <code className="rounded bg-surface-muted px-0.5">~/.claude.json</code>
+            {t("settings.mcp.importDesc2")}
           </Dialog.Description>
           <Dialog.Close />
           <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
             {loading ? (
               <div className="flex items-center justify-center gap-2 py-8 text-[0.7857em] text-content-subtle">
                 <IconLoader2 size={14} className="animate-spin" />
-                扫描中…
+                {t("settings.scanning")}
               </div>
             ) : sources.length === 0 ? (
               <div className="py-8 text-center text-[0.7857em] leading-relaxed text-content-subtle">
-                未在 ~/.claude.json 中发现 MCP server。
+                {t("settings.mcp.importEmpty1")}
                 <br />
-                可先用 claude mcp add 命令配置,再回到此处导入。
+                {t("settings.mcp.importEmpty2")}
               </div>
             ) : (
               <div className="space-y-3">
@@ -770,10 +801,12 @@ function ImportMcpDialog({
                         )}
                         title={origin === "全局" ? undefined : origin}
                       >
-                        {origin === "全局" ? "全局" : origin}
+                        {/* "全局" is the literal origin tag emitted by the scan
+                            RPC — a data comparison, not display text. */}
+                        {origin === "全局" ? t("settings.mcp.originGlobal") : origin}
                       </span>
                       <span className="text-[0.7143em] text-content-subtle">
-                        {groups[origin].length} 个
+                        {t("settings.mcp.count", { n: groups[origin].length })}
                       </span>
                     </div>
                     <div className="space-y-0.5">
@@ -808,7 +841,7 @@ function ImportMcpDialog({
                                 <KindBadge kind={s.kind} />
                                 {isExisting && (
                                   <span className="shrink-0 rounded bg-surface-hover px-1 text-[9px] text-content-subtle">
-                                    已存在
+                                    {t("settings.importExisting")}
                                   </span>
                                 )}
                               </div>
@@ -829,18 +862,20 @@ function ImportMcpDialog({
               <div className="mt-3 rounded border border-edge bg-surface/40 p-2 text-[0.7143em]">
                 {result.imported.length > 0 && (
                   <p className="text-accent">
-                    已导入 {result.imported.length} 个: {result.imported.join(", ")}
+                    {t("settings.importResultImported", { n: result.imported.length, list: result.imported.join(", ") })}
                   </p>
                 )}
                 {result.skipped.length > 0 && (
                   <p className="text-content-subtle">
-                    跳过 {result.skipped.length} 个(已存在): {result.skipped.join(", ")}
+                    {t("settings.importResultSkipped", { n: result.skipped.length, list: result.skipped.join(", ") })}
                   </p>
                 )}
                 {result.errors.length > 0 && (
                   <p className="text-danger">
-                    失败 {result.errors.length} 个:{" "}
-                    {result.errors.map((e) => `${e.name}(${e.error})`).join("; ")}
+                    {t("settings.importResultFailed", {
+                      n: result.errors.length,
+                      list: result.errors.map((e) => `${e.name}(${e.error})`).join("; "),
+                    })}
                   </p>
                 )}
               </div>
@@ -850,11 +885,11 @@ function ImportMcpDialog({
           </div>
           <div className="flex items-center gap-2 border-t border-edge px-4 py-3">
             <span className="text-[0.7143em] text-content-subtle">
-              {selectedCount > 0 ? `已选 ${selectedCount} 个` : ""}
+              {selectedCount > 0 ? t("settings.importSelectedCount", { n: selectedCount }) : ""}
             </span>
             <div className="flex-1" />
             <Button variant="ghost" size="sm" onClick={() => onOpenChange(false)} disabled={importing}>
-              {result ? "关闭" : "取消"}
+              {result ? t("common.close") : t("common.cancel")}
             </Button>
             {!result && (
               <Button
@@ -863,7 +898,9 @@ function ImportMcpDialog({
                 onClick={() => void doImport()}
                 disabled={importing || selectedCount === 0}
               >
-                {importing ? "导入中…" : `导入${selectedCount > 0 ? ` (${selectedCount})` : ""}`}
+                {importing
+                  ? t("settings.importing")
+                  : `${t("settings.importBtn")}${selectedCount > 0 ? ` (${selectedCount})` : ""}`}
               </Button>
             )}
           </div>

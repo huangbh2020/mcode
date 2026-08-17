@@ -12,6 +12,7 @@ import { getProviderIcon } from "@renderer/lib/providerIcon.js";
 import { useSessionStore } from "@renderer/stores/sessionStore.js";
 import { ProjectBranchIndicator } from "@renderer/components/chat/ProjectBranchIndicator.js";
 import { resolveShortcut, acceleratorToDisplayString } from "@renderer/lib/shortcuts.js";
+import { useI18n } from "@renderer/lib/i18n/index.js";
 
 type Mode = "workspace" | "settings";
 
@@ -69,6 +70,7 @@ export function Titlebar({
   onToggleBottomTerminal,
   onBack,
 }: Props) {
+  const { t } = useI18n();
   const isSettings = mode === "settings";
   // The browser overlay toggle now lives in the right-panel rail, but the
   // overlay still forces the side panels closed and hides their toggles when
@@ -140,10 +142,10 @@ export function Titlebar({
               "text-content-muted transition-colors hover:bg-surface-hover hover:text-content",
             )}
             style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
-            title="返回工作区"
+            title={t("layout.backToWorkspace")}
           >
             <IconArrowLeft size={16} className="shrink-0" />
-            返回工作区
+            {t("layout.backToWorkspace")}
           </button>
         ) : isBrowserMode ? (
           // Browser overlay open: show a "返回工作台" button that closes the
@@ -161,12 +163,12 @@ export function Titlebar({
             )}
             style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
             title={
-              (widePanelOpen ? "退出宽屏模式" : "返回工作台") +
+              (widePanelOpen ? t("layout.exitWideMode") : t("layout.backToWorkbench")) +
               hintFor(widePanelOpen ? "layout.toggle-wide-panel" : "layout.toggle-browser")
             }
           >
             <IconArrowLeft size={16} className="shrink-0" />
-            {widePanelOpen ? "退出宽屏模式" : "返回工作台"}
+            {widePanelOpen ? t("layout.exitWideMode") : t("layout.backToWorkbench")}
           </button>
         ) : (
           <button
@@ -177,7 +179,7 @@ export function Titlebar({
                 ? "bg-surface-hover text-accent"
                 : "text-content-muted hover:bg-surface-hover hover:text-content",
             )}
-            title={(leftOpen ? "隐藏左侧面板" : "显示左侧面板") + hintFor("layout.toggle-left")}
+            title={(leftOpen ? t("layout.hideLeftPanel") : t("layout.showLeftPanel")) + hintFor("layout.toggle-left")}
             style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
           >
             <IconLayoutSidebarLeftExpand
@@ -198,7 +200,7 @@ export function Titlebar({
         )}
       >
         {isSettings ? (
-          <h2 className="px-1.5 text-sm font-semibold text-content">设置</h2>
+          <h2 className="px-1.5 text-sm font-semibold text-content">{t("layout.settings")}</h2>
         ) : (
           <>
             <ActiveThreadTitle />
@@ -223,7 +225,7 @@ export function Titlebar({
                     ? "bg-surface-hover text-accent"
                     : "text-content-muted hover:bg-surface-hover hover:text-content",
                 )}
-                title={(bottomTerminalOpen ? "隐藏终端" : "显示终端") + hintFor("layout.toggle-bottom-terminal")}
+                title={(bottomTerminalOpen ? t("layout.hideTerminal") : t("layout.showTerminal")) + hintFor("layout.toggle-bottom-terminal")}
                 style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
               >
               <IconTerminal2 size={18} className="shrink-0" />
@@ -242,7 +244,7 @@ export function Titlebar({
                     ? "bg-surface-hover text-accent"
                     : "text-content-muted hover:bg-surface-hover hover:text-content",
                 )}
-                title={(rightOpen ? "隐藏右侧面板" : "显示右侧面板") + hintFor("layout.toggle-right")}
+                title={(rightOpen ? t("layout.hideRightPanel") : t("layout.showRightPanel")) + hintFor("layout.toggle-right")}
                 style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
               >
                 <IconLayoutSidebarRightExpand
@@ -329,6 +331,7 @@ const EMPTY_OPEN_FILES: string[] = [];
  *  plan tab so neither renders); clicking when hidden re-opens the first file
  *  from the open-files list (or does nothing if none are open). */
 function EditorColumnToggle() {
+  const { t } = useI18n();
   const activeProjectId = useSessionStore((s) => s.activeProjectId);
   const activeFile = useSessionStore((s) =>
     activeProjectId ? s.ideActiveFileByProject[activeProjectId] ?? null : null,
@@ -387,10 +390,10 @@ function EditorColumnToggle() {
       )}
       title={
         editorVisible
-          ? "隐藏编辑器"
+          ? t("layout.hideEditor")
           : canRestore
-            ? "显示编辑器"
-            : "无打开的文件"
+            ? t("layout.showEditor")
+            : t("layout.noOpenFiles")
       }
       style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
     >

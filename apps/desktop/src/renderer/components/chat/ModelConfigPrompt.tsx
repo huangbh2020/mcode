@@ -9,9 +9,11 @@
  * pi providers).
  */
 import { useSessionStore } from "@renderer/stores/sessionStore.js";
+import { useI18n } from "@renderer/lib/i18n/index.js";
 import { ConfirmDialog } from "@renderer/components/ui/index.js";
 
 export function ModelConfigPrompt() {
+  const { t } = useI18n();
   const open = useSessionStore((s) => s.modelConfigPromptOpen);
   const setOpen = useSessionStore((s) => s.setModelConfigPromptOpen);
   const setSettingsOpen = useSessionStore((s) => s.setSettingsOpen);
@@ -19,10 +21,10 @@ export function ModelConfigPrompt() {
   return (
     <ConfirmDialog
       open={open}
-      title="尚未配置模型"
-      description="当前 SDK 没有可用的模型,请先配置模型后再发送。"
-      confirmText="去配置"
-      cancelText="取消"
+      title={t("chat.modelConfig.title")}
+      description={t("chat.modelConfig.desc")}
+      confirmText={t("chat.modelConfig.configure")}
+      cancelText={t("common.cancel")}
       onOpenChange={(o) => setOpen(o)}
       onConfirm={() => setSettingsOpen(true, "custom-models")}
     />

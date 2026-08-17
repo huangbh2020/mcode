@@ -20,6 +20,7 @@ import type { BrowserDevicePreset } from "@contracts/ipc";
 import { api } from "./lib/api.js";
 import { useTheme } from "./lib/theme.js";
 import { useChatAppearance, useRightPanelAppearance } from "./lib/appearance.js";
+import { useI18n } from "./lib/i18n/index.js";
 import { OpenTabsBar } from "./components/ide/OpenTabsBar.js";
 
 // Lazy-load the Monaco-backed editor, diff dialog and plan viewer so the large
@@ -430,6 +431,7 @@ function WidePanelSplit() {
  *  approval-draft save). While open the embedded browser view is suppressed —
  *  the OS-level WebContentsView would otherwise float above this DOM overlay. */
 function WidePlanDialog() {
+  const { t } = useI18n();
   const widePanelOpen = useSessionStore((s) => s.widePanelOpen);
   const activeSessionId = useSessionStore((s) => s.activeSessionId);
   const planTabActive = useSessionStore((s) =>
@@ -457,7 +459,7 @@ function WidePlanDialog() {
       <Suspense
         fallback={
           <div className="flex h-full items-center justify-center text-[11px] text-content-subtle">
-            加载计划…
+            {t("layout.loadingPlan")}
           </div>
         }
       >
@@ -477,6 +479,7 @@ function WidePlanDialog() {
  *  can show relative paths in its toolbar. When the plan tab is active,
  *  renders PlanViewer instead of FileEditor. */
 function EditorColumn({ filePath }: { filePath: string | null }) {
+  const { t } = useI18n();
   const editorMode = useSessionStore((s) => s.ideEditorMode);
   const activeProjectId = useSessionStore((s) => s.activeProjectId);
   const projects = useSessionStore((s) => s.projects);
@@ -513,7 +516,7 @@ function EditorColumn({ filePath }: { filePath: string | null }) {
           <Suspense
             fallback={
               <div className="flex h-full items-center justify-center gap-1.5 text-[11px] text-content-subtle">
-                加载编辑器…
+                {t("layout.loadingEditor")}
               </div>
             }
           >
@@ -528,7 +531,7 @@ function EditorColumn({ filePath }: { filePath: string | null }) {
           <Suspense
             fallback={
               <div className="flex h-full items-center justify-center gap-1.5 text-[11px] text-content-subtle">
-                加载编辑器…
+                {t("layout.loadingEditor")}
               </div>
             }
           >
@@ -536,7 +539,7 @@ function EditorColumn({ filePath }: { filePath: string | null }) {
           </Suspense>
         ) : (
           <div className="flex h-full items-center justify-center text-[11px] text-content-subtle">
-            无法解析项目路径
+            {t("layout.noProjectPath")}
           </div>
         )}
       </div>

@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Menu } from "@base-ui/react/menu";
 import { cn } from "@renderer/lib/cn.js";
+import { useI18n } from "@renderer/lib/i18n/index.js";
 import {
   IconCheck,
   IconChevronDown,
@@ -41,6 +42,7 @@ function hostOf(url: string): string {
 }
 
 export function ModelDropdown() {
+  const { t } = useI18n();
   // While the menu (or its nested submenu) is open the embedded browser view
   // is suppressed so the portaled popup stays visible/clickable over the
   // browser's rect in narrow/wide layouts.
@@ -96,8 +98,8 @@ export function ModelDropdown() {
   const piModel = isPi ? piAvailableModels.find((b) => b.id === model) : undefined;
   const chipLabel = activeCustom
     ? (activeRoleBinding?.displayName?.trim() ||
-      (activeRoleBinding ? CUSTOM_MODEL_ROLE_LABELS[model as CustomModelRoleKey] : "默认"))
-    : piModel?.label ?? builtin?.label ?? "默认";
+      (activeRoleBinding ? CUSTOM_MODEL_ROLE_LABELS[model as CustomModelRoleKey] : t("chat.model.default")))
+    : piModel?.label ?? builtin?.label ?? t("chat.model.default");
 
   const pickCustomRole = (cfgId: string, roleKey: CustomModelRoleKey) => {
     setCustomModel(cfgId, roleKey);
@@ -117,7 +119,7 @@ export function ModelDropdown() {
           "composer-chip flex min-w-0 items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-medium transition-all duration-150 ease-out",
           "text-content-muted hover:scale-105 hover:bg-accent/10 hover:text-accent active:scale-95",
         )}
-        title="选择模型"
+        title={t("chat.model.selectTitle")}
       >
         <span className="min-w-0 max-w-[180px] truncate">
           {chipLabel}
@@ -143,7 +145,7 @@ export function ModelDropdown() {
             {!isClaude && !isPi && builtinModels.length > 0 && (
               <div className="border-b border-edge/60 pb-1">
                 <div className="px-3 py-1 text-xs uppercase tracking-wide text-content-subtle">
-                  内置模型
+                  {t("chat.model.builtin")}
                 </div>
                 {builtinModels.map((b) => {
                   const active = !activeCustom && model === b.id;
@@ -178,7 +180,7 @@ export function ModelDropdown() {
             {showPiModels && (
               <div className="border-b border-edge/60 pb-1">
                 <div className="px-3 py-1 text-xs uppercase tracking-wide text-content-subtle">
-                  模型列表
+                  {t("chat.model.list")}
                 </div>
                 {piAvailableModels.map((b) => {
                   const active = model === b.id;
@@ -209,7 +211,7 @@ export function ModelDropdown() {
             {showCustomSection && (
               <div className="pt-1">
                 <div className="flex items-center justify-between px-3 py-1">
-                  <span className="text-xs uppercase tracking-wide text-content-subtle">模型列表</span>
+                  <span className="text-xs uppercase tracking-wide text-content-subtle">{t("chat.model.list")}</span>
                   <span className="text-xs text-content-subtle">{customModels.length}</span>
                 </div>
                 {customModels.map((m) => {
@@ -303,19 +305,19 @@ export function ModelDropdown() {
                 (piAvailableModels stays empty but manageTarget is set). */}
             {!isClaude && !isPi && builtinModels.length === 0 && !showPiModels && !showCustomSection && (
               <div className="px-3 py-2 text-[13px] text-content-subtle">
-                暂无可用模型
+                {t("chat.model.noneAvailable")}
               </div>
             )}
             {/* Claude with no custom configs: nudge toward configuration. */}
             {isClaude && !showCustomSection && (
               <div className="px-3 py-2 text-[13px] text-content-subtle">
-                尚未配置模型,点击下方添加
+                {t("chat.model.notConfigured")}
               </div>
             )}
             {/* Pi with no discovered models: nudge toward the Pi models panel. */}
             {isPi && !showPiModels && (
               <div className="px-3 py-2 text-[13px] text-content-subtle">
-                尚未配置模型,点击下方添加
+                {t("chat.model.notConfigured")}
               </div>
             )}
 
@@ -333,7 +335,7 @@ export function ModelDropdown() {
                   )}
                 >
                   <IconPlus size={14} />
-                  <span>添加 / 管理模型…</span>
+                  <span>{t("chat.model.manage")}</span>
                 </Menu.Item>
               </>
             )}

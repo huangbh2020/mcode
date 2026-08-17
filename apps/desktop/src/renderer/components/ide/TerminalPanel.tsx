@@ -16,11 +16,15 @@ import {
   type TerminalViewHandle,
 } from "./TerminalView.js";
 import { TerminalCommandsMenu } from "./TerminalCommandsMenu.js";
+import { useI18n } from "@renderer/lib/i18n/index.js";
 
-/** One UI terminal tab. `key` is stable; the underlying PTY id lives in the view. */
+/** One UI terminal tab. `key` is stable; the underlying PTY id lives in the view.
+ *  The tab title is derived at render time from `seq` ("终端 {n}") so it
+ *  follows the UI locale instead of being frozen at creation. */
 interface TermSession {
   key: string;
-  title: string;
+  /** Ordinal shown in the tab title. */
+  seq: number;
   status: TerminalSessionStatus;
   detail?: string;
 }
@@ -32,7 +36,7 @@ const EMPTY_SESSIONS: TermSession[] = [];
 let nextSeq = 1;
 function makeSession(): TermSession {
   const n = nextSeq++;
-  return { key: `term-${n}-${Date.now().toString(36)}`, title: `终端 ${n}`, status: "starting" };
+  return { key: `term-${n}-${Date.now().toString(36)}`, seq: n, status: "starting" };
 }
 
 /** Per-project terminal state. `sessions` are the open tabs; `activeKey` is the
@@ -58,6 +62,7 @@ interface ProjectTermState {
  *   project is deleted/archived (see the projects effect below).
  */
 export function TerminalPanel({ active }: { active: boolean }) {
+  const { t } = useI18n();
   const activeProjectId = useSessionStore((s) => s.activeProjectId);
   const projects = useSessionStore((s) => s.projects);
 
@@ -249,9 +254,9 @@ export function TerminalPanel({ active }: { active: boolean }) {
         <div className="flex h-10 w-10 items-center justify-center rounded-full bg-surface text-content-subtle">
           <IconTerminal2 size={20} />
         </div>
-        <p className="text-xs font-medium text-content-muted">还没有项目</p>
+        <p className="text-xs font-medium text-content-muted">{t("ide.files.noProjectTitle")}</p>
         <p className="text-[11px] leading-relaxed text-content-subtle">
-          在左侧栏添加一个项目文件夹后,即可在此打开集成终端
+          {t("ide.term.noProjectDesc")}
         </p>
       </div>
     );
@@ -272,6 +277,8 @@ export function TerminalPanel({ active }: { active: boolean }) {
         <div className="flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto py-0.5">
           {sessions.map((s) => {
             const isActive = s.key === activeKey;
+            // Derive the tab title at render so it re-localizes on locale switch.
+            const sessionTitle = t("ide.term.tabTitle", { n: s.seq });
             return (
               <div
                 key={s.key}
@@ -293,7 +300,7 @@ export function TerminalPanel({ active }: { active: boolean }) {
                       forceRender();
                     }
                   }}
-                  title={s.detail ? `${s.title} - ${s.detail}` : s.title}
+                  title={s.detail ? `${sessionTitle} - ${s.detail}` : sessionTitle}
                 >
                   <span
                     className={cn(
@@ -304,7 +311,7 @@ export function TerminalPanel({ active }: { active: boolean }) {
                       s.status === "error" && "bg-danger",
                     )}
                   />
-                  {s.title}
+                  {sessionTitle}
                 </button>
                 <button
                   type="button"
@@ -312,7 +319,7 @@ export function TerminalPanel({ active }: { active: boolean }) {
                     "rounded p-0.5 transition-colors text-content-subtle hover:bg-surface-hover hover:text-content",
                     !isActive && "opacity-0 group-hover:opacity-100",
                   )}
-                  title="关闭终端"
+                  title={t("ide.term.closeTerminal")}
                   onClick={(e) => {
                     e.stopPropagation();
                     closeSession(s.key);
@@ -326,7 +333,7 @@ export function TerminalPanel({ active }: { active: boolean }) {
           <button
             type="button"
             className="shrink-0 rounded p-1 text-content-subtle hover:bg-surface-hover hover:text-content"
-            title="新建终端"
+            title={t("ide.term.newTerminal")}
             onClick={addSession}
           >
             <IconPlus size={13} />
@@ -336,21 +343,21 @@ export function TerminalPanel({ active }: { active: boolean }) {
         <div className="flex shrink-0 items-center gap-0.5 border-l border-edge pl-1">
           <TerminalCommandsMenu onRun={runCommand} onRunInNewTerminal={runCommandInNewTerminal} />
           <IconBtn
-            title="清屏"
+            title={t("ide.term.clearScreen")}
             onClick={() => activeHandle?.clear()}
             disabled={!activeHandle}
           >
             <IconEraser size={13} />
           </IconBtn>
           <IconBtn
-            title="终止进程"
+            title={t("ide.term.killProcess")}
             onClick={() => activeHandle?.kill()}
             disabled={!activeHandle || activeSession?.status !== "running"}
           >
             <IconPlayerStop size={13} />
           </IconBtn>
           <IconBtn
-            title="重开"
+            title={t("ide.term.restart")}
             onClick={() => {
               // Clear scrollback then spawn a fresh PTY into the same view.
               activeHandle?.clear();
@@ -369,14 +376,14 @@ export function TerminalPanel({ active }: { active: boolean }) {
           <div className="flex shrink-0 items-center justify-between gap-2 border-b border-edge bg-surface px-2 py-1 text-[11px] text-content-muted">
             <span className="truncate">
               {activeSession.detail ??
-                (activeSession.status === "error" ? "启动失败" : "已退出")}
+                (activeSession.status === "error" ? t("ide.term.startFailed") : t("ide.term.exited"))}
             </span>
             <button
               type="button"
               className="shrink-0 rounded px-1.5 py-0.5 text-accent hover:bg-surface-hover"
               onClick={() => activeHandle?.restart()}
             >
-              重开
+              {t("ide.term.restart")}
             </button>
           </div>
         )}

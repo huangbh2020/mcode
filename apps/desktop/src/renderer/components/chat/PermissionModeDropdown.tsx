@@ -9,6 +9,7 @@ import {
   IconShieldLock,
   IconChevronDown,
 } from "@renderer/lib/icons.js";
+import { useI18n, type MessageId } from "@renderer/lib/i18n/index.js";
 import { useSessionStore } from "@renderer/stores/sessionStore.js";
 import { useSuppressBrowserView } from "@renderer/hooks/useSuppressBrowserView.js";
 import type { PermissionModeOption } from "@contracts/provider";
@@ -49,7 +50,20 @@ const FALLBACK_LABEL: Record<string, string> = {
   auto: "Auto",
 };
 
+/** Hint i18n keys by mode value. The provider's capabilities carry the zh
+ *  hints as data (declared in main, identical for claude + pi); resolve known
+ *  modes through the dictionary at render time and fall back to the declared
+ *  hint for unknown/future values. Labels (Default/Plan/…) are intentionally
+ *  locale-neutral and stay as declared. */
+const PERMISSION_HINT_KEYS: Record<string, MessageId> = {
+  default: "chat.permission.hintDefault",
+  acceptEdits: "chat.permission.hintAcceptEdits",
+  plan: "chat.permission.hintPlan",
+  bypassPermissions: "chat.permission.hintBypass",
+};
+
 export function PermissionModeDropdown() {
+  const { t } = useI18n();
   // While the menu is open the embedded browser view is suppressed so the
   // portaled popup stays visible/clickable when it extends over the browser.
   const [open, setOpen] = useState(false);
@@ -101,10 +115,11 @@ export function PermissionModeDropdown() {
             )}
           >
             <div className="px-3 py-1 text-xs uppercase tracking-wide text-content-subtle">
-              权限级别
+              {t("chat.permission.section")}
             </div>
             {modes.map((m) => {
               const active = m.value === permissionMode;
+              const hintKey = PERMISSION_HINT_KEYS[m.value];
               return (
                 <Menu.Item
                   key={m.value}
@@ -120,7 +135,9 @@ export function PermissionModeDropdown() {
                   <span className="flex min-w-0 items-center gap-2">
                     <span className={cn("shrink-0 opacity-90", active ? "" : m.color)}>{resolveIcon(m)}</span>
                     <span className={cn("font-medium", active ? "" : m.color)}>{m.label}</span>
-                    <span className="truncate text-xs text-content-subtle">{m.hint}</span>
+                    <span className="truncate text-xs text-content-subtle">
+                      {hintKey ? t(hintKey) : m.hint}
+                    </span>
                   </span>
                   {active && <IconCheck size={14} className="shrink-0" />}
                 </Menu.Item>

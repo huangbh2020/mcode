@@ -1,0 +1,242 @@
+/**
+ * chat-composer area messages: the composer input box, prompt cards (tool
+ * approval / AskUserQuestion / plan approval), plan stream card + viewer, the
+ * composer dropdowns (model / effort / permission / provider) and the inline
+ * pickers (slash commands / file mentions / content tags / context ring).
+ * Keys: `chat.*`. zh is the source of truth for `MessageId`.
+ */
+export const zh = {
+  // ── empty center pane (no session open) ──
+  "chat.cliNotFound": "未检测到 Claude Code CLI",
+  "chat.cliInstallPrefix": "请先安装（",
+  "chat.cliInstallSuffix": "），或指定已有的安装路径：",
+  "chat.cliConfigure": "配置 CLI 路径",
+  "chat.emptyHint": "打开一个项目并开始会话以继续",
+
+  // ── composer & image/file toasts ──
+  "chat.toast.tooManyImages": "图片过多",
+  "chat.toast.tooManyImagesBody": "最多附加 {n} 张图片",
+  "chat.toast.imageTooLarge": "图片过大",
+  "chat.toast.fileTooLarge": "文件过大",
+  "chat.toast.tooLargeBody": "{name} 超过 50MB,未添加",
+  "chat.toast.imagesSkipped": "已跳过部分图片",
+  "chat.toast.imagesSkippedBody": "{names} 过大或不是支持的图片格式",
+  "chat.toast.imageNotSent": "图片未发送",
+  "chat.imageN": "图片 {n}",
+  "chat.removeImageName": "移除图片 {name}",
+  "chat.removeImageN": "移除图片 {n}",
+
+  // ── composer actions / placeholders ──
+  "chat.jumpToBottom": "回到底部",
+  "chat.placeholderQueued": "排队输入…  (Enter 加入队列)",
+  "chat.placeholderIdle": "发送消息…  (@ 引用文件 · / 命令 · 粘贴图片)",
+  "chat.attachFiles": "添加上下文文件",
+  "chat.addImage": "添加图片",
+  "chat.stopGenerating": "停止生成",
+  "chat.enqueue": "加入队列",
+  "chat.send": "发送",
+
+  // ── prompt queue ──
+  "chat.queue.header": "排队 · 拖动排序",
+  "chat.queue.clearTitle": "清空队列",
+  "chat.queue.clear": "清空",
+  "chat.queue.collapse": "收起",
+  "chat.queue.expand": "展开",
+  "chat.queue.attachmentsOnly": "(仅附件)",
+  "chat.queue.sendNowTitle": "立即发送（中断当前回合）",
+  "chat.queue.sendNow": "立即发送",
+  "chat.queue.removeTitle": "从队列移除",
+
+  // ── tool approval card ──
+  "chat.approval.aria": "Claude 正在请求执行工具",
+  "chat.approval.title": "Claude 请求执行工具",
+  "chat.approval.queueTitle": "队列中还有 {n} 个待审批",
+  "chat.approval.collapseTitle": "收起详情",
+  "chat.approval.expandTitle": "查看工具输入",
+  "chat.approval.collapse": "收起",
+  "chat.approval.details": "详情",
+  "chat.approval.alwaysAllow": "本会话内始终允许 {tool}",
+  "chat.approval.denyTitle": "拒绝 (Esc)",
+  "chat.approval.deny": "拒绝",
+  "chat.approval.allowTitle": "允许 (Enter)",
+  "chat.approval.allow": "允许",
+
+  // ── AskUserQuestion card ──
+  "chat.question.aria": "Claude 正在提问",
+  "chat.question.titleOne": "Claude 有一个问题需要回答",
+  "chat.question.titleN": "Claude 有 {n} 个问题需要回答",
+  "chat.question.step": "第 {cur}/{total} 题",
+  "chat.question.dismiss": "忽略这次提问",
+  "chat.question.multiSelect": "可多选",
+  "chat.question.customAnswer": "或输入自定义回答…",
+  "chat.question.answered": "{answered} / {total} 已回答",
+  "chat.question.prevTitle": "上一题，可修改答案",
+  "chat.question.prev": "上一题",
+  "chat.question.nextTitle": "下一题",
+  "chat.question.next": "下一题",
+  "chat.question.submitTitle": "提交回答 (Enter)",
+  "chat.question.submitDisabled": "请先回答所有问题",
+  "chat.question.submit": "提交回答",
+
+  // ── plan approval sheet ──
+  "chat.planApproval.hintEdited": "已编辑",
+  "chat.planApproval.hintFeedback": "意见将反馈给模型",
+  "chat.planApproval.hintDefault": "批准后将退出计划模式并开始执行",
+  "chat.planApproval.title": "计划已就绪 · 请审阅",
+  "chat.planApproval.feedbackPlaceholder":
+    "计划调整意见(可选)— 随批准执行或作为拒绝理由反馈给模型…",
+  "chat.planApproval.editInEditor": "在编辑器中编辑计划",
+  "chat.planApproval.editEdited": "编辑计划（已编辑）",
+  "chat.planApproval.rejectFeedbackTitle": "拒绝并把你的意见作为理由反馈给模型",
+  "chat.planApproval.rejectTitle": "拒绝计划",
+  "chat.planApproval.reject": "拒绝",
+  "chat.planApproval.approveEditedTitle": "批准并使用你编辑后的计划",
+  "chat.planApproval.approveFeedbackTitle": "批准并执行,按你的调整意见执行",
+  "chat.planApproval.approveTitle": "批准该计划",
+  "chat.planApproval.approveEdited": "批准(已编辑)",
+  "chat.planApproval.approve": "批准并执行",
+
+  // ── plan stream card + plan viewer ──
+  "chat.plan.pendingReview": "待审阅",
+  "chat.plan.drafting": "草拟中",
+  "chat.plan.fallbackTitle": "计划",
+  "chat.plan.viewFullTitle": "在侧边栏中查看完整计划",
+  "chat.plan.view": "查看计划",
+  "chat.plan.editPlan": "编辑计划",
+  "chat.planViewer.title": "计划内容",
+  "chat.planViewer.cancelEdit": "取消编辑",
+  "chat.planViewer.saveTitle": "保存（Ctrl+S）",
+  "chat.planViewer.noChanges": "无更改",
+  "chat.planViewer.finishTitle": "完成编辑，返回预览",
+  "chat.planViewer.finish": "完成编辑",
+  "chat.planViewer.close": "关闭计划视图",
+  "chat.planViewer.loading": "加载编辑器…",
+  "chat.planViewer.empty": "_(计划为空)_",
+  "chat.planViewer.saving": "保存中…",
+  "chat.planViewer.saved": "已保存 ✓",
+  "chat.planViewer.saveFailed": "保存失败",
+
+  // ── model dropdown ──
+  "chat.model.selectTitle": "选择模型",
+  "chat.model.builtin": "内置模型",
+  "chat.model.list": "模型列表",
+  "chat.model.noneAvailable": "暂无可用模型",
+  "chat.model.notConfigured": "尚未配置模型,点击下方添加",
+  "chat.model.manage": "添加 / 管理模型…",
+  "chat.model.default": "默认",
+
+  // ── model config guard dialog ──
+  "chat.modelConfig.title": "尚未配置模型",
+  "chat.modelConfig.desc": "当前 SDK 没有可用的模型,请先配置模型后再发送。",
+  "chat.modelConfig.configure": "去配置",
+
+  // ── effort (thinking level) dropdown ──
+  "chat.effort.section": "思考级别",
+  "chat.effort.hintDefault": "让 {provider} 自选",
+  "chat.effort.hintOff": "关闭思考",
+  "chat.effort.hintMinimal": "极少思考",
+  "chat.effort.hintLow": "最快,少思考",
+  "chat.effort.hintMedium": "平衡",
+  "chat.effort.hintHigh": "更多思考",
+  "chat.effort.hintXhigh": "深度思考",
+  "chat.effort.hintMax": "最充分,最慢",
+
+  // ── permission mode dropdown ──
+  "chat.permission.section": "权限级别",
+  "chat.permission.hintDefault": "标准行为,工具按规则触发审批",
+  "chat.permission.hintAcceptEdits": "工作目录内的文件编辑自动放行",
+  "chat.permission.hintPlan": "只读探索,所有写操作都需审批",
+  "chat.permission.hintBypass": "跳过所有权限检查(慎用)",
+
+  // ── provider (SDK) dropdown ──
+  "chat.provider.locked": "该会话的 SDK 已固定,不可更改",
+  "chat.provider.selectTitle": "选择会话使用的 SDK",
+  "chat.provider.section": "选择 SDK",
+
+  // ── slash command picker ──
+  "chat.slash.tabCommands": "命令",
+  "chat.slash.noSkills": "未发现 skill(可在 ~/.claude/skills 安装)",
+  "chat.slash.noSkillMatch": "无匹配 skill",
+  "chat.slash.noCommandMatch": "无匹配命令",
+  "chat.slash.noDescription": "(无描述)",
+  "chat.slash.builtin": "内置",
+  "chat.slash.project": "项目",
+  "chat.slash.global": "全局",
+  "chat.kbd.navigate": "导航",
+  "chat.slash.switchTab": "切 tab",
+  "chat.slash.insert": "插入",
+  "chat.slash.count": "{n} 条",
+  "chat.slash.browserTemplate":
+    "请用应用内浏览器打开这个网页:\n" +
+    "URL: https://\n\n" +
+    "我的需求:(可选,例如:截图看看页面布局 / 读取页面内容 / 用移动端打开测试响应式)\n" +
+    "- 截图:截取页面可视区域\n" +
+    "- 快照:读取页面结构化内容(链接/按钮/文本)\n" +
+    "- 移动端:用 device=iphone 或 android 打开",
+
+  // ── file mention / attach picker ──
+  "chat.mention.searchPlaceholder": "搜索项目文件…",
+  "chat.mention.addN": "添加 {n}",
+  "chat.mention.header": "引用文件",
+  "chat.mention.externalTitle": "打开系统文件选择对话框(可选择项目外的文件)",
+  "chat.mention.externalPick": "从系统选择文件…",
+  "chat.mention.externalHint": "项目外",
+  "chat.mention.openProjectFirst": "请先打开一个项目",
+  "chat.mention.searching": "搜索中…",
+  "chat.mention.noMatch": "无匹配文件",
+  "chat.mention.added": "已添加",
+  "chat.mention.confirm": "确认",
+  "chat.mention.select": "选择",
+  "chat.mention.count": "{n} 项",
+
+  // ── narrow-composer toolbar toggle ──
+  "chat.toolbarToggle": "模型 / 思考级别 / 权限模式 / 上下文",
+
+  // ── content tag chip + preview popover ──
+  "chat.tag.hidePreview": "收起预览",
+  "chat.tag.viewElement": "查看元素内容",
+  "chat.tag.viewContent": "查看内容",
+  "chat.tag.removeTitle": "删除此附件",
+  "chat.tagPopover.loadingImage": "读取图片…",
+  "chat.tagPopover.imageFailed": "图片加载失败",
+  "chat.tagPopover.shrink": "点击缩小",
+  "chat.tagPopover.enlarge": "点击放大",
+  "chat.tagPopover.charCount": "{n} 字符 · ESC 或点击外部关闭",
+  "chat.tagPopover.copyFull": "复制完整内容",
+  "chat.tagPopover.copyFailed": "复制失败",
+  "chat.tagPopover.expandTitle": "拆开卡片，内容粘贴到输入框",
+  "chat.tagPopover.expand": "拆开",
+  "chat.tagPopover.closePreview": "关闭预览",
+
+  // ── context ring + context stats popover ──
+  "chat.context.stats": "上下文统计",
+  "chat.context.modelLine": "模型 · {model}",
+  "chat.context.viewDetails": "查看详情",
+  "chat.context.turns": "{n} 轮",
+  "chat.context.history": "历史详情",
+  "chat.context.historyTurns": "历史详情 · {n} 轮",
+  "chat.context.historyEmpty": "本轮结束后将显示历史",
+  "chat.context.colTurn": "轮次",
+  "chat.context.colInput": "输入",
+  "chat.context.colOutput": "输出",
+  "chat.context.colCacheRead": "缓存读",
+  "chat.context.colCacheWrite": "缓存写",
+  "chat.context.colUsed": "占用",
+  "chat.context.total": "合计",
+  "chat.context.rowTooltip": "处理 {processed} · 累计占用 {used}",
+  "chat.context.rowModel": "模型 {model}",
+  "chat.context.timeDuration": "时间 / 耗时",
+  "chat.context.modelLabel": "模型",
+  "chat.context.hoverRow": "悬停行查看明细",
+
+  // ── project / branch indicator ──
+  "chat.branch.switchTitle": "切换分支",
+  "chat.branch.searchPlaceholder": "搜索分支或标签...",
+  "chat.branch.loadFailed": "无法读取分支",
+  "chat.branch.switching": "切换中...",
+  "chat.branch.noMatch": "无匹配结果",
+  "chat.branch.none": "无分支",
+  "chat.branch.local": "本地分支",
+  "chat.branch.remote": "远程分支",
+  "chat.branch.tags": "标签",
+} as const;

@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Menu } from "@base-ui/react/menu";
 import { cn } from "@renderer/lib/cn.js";
 import { IconCheck, IconBolt, IconChevronDown } from "@renderer/lib/icons.js";
+import { useI18n, type MessageId } from "@renderer/lib/i18n/index.js";
 import { useSessionStore } from "@renderer/stores/sessionStore.js";
 import { useSuppressBrowserView } from "@renderer/hooks/useSuppressBrowserView.js";
 
@@ -25,7 +26,24 @@ function labelFor(levels: { value: string; label: string }[] | undefined, value:
   return levels?.find((l) => l.value === value)?.label ?? value;
 }
 
+/** Hint i18n keys by level value. The provider's capabilities carry the zh
+ *  hints as data (declared in main, not localizable there); we resolve the
+ *  known levels through the dictionary at render time and fall back to the
+ *  provider-declared hint for unknown/future values. Labels (Auto/Low/…) are
+ *  intentionally locale-neutral and stay as declared. */
+const EFFORT_HINT_KEYS: Record<string, MessageId> = {
+  default: "chat.effort.hintDefault",
+  off: "chat.effort.hintOff",
+  minimal: "chat.effort.hintMinimal",
+  low: "chat.effort.hintLow",
+  medium: "chat.effort.hintMedium",
+  high: "chat.effort.hintHigh",
+  xhigh: "chat.effort.hintXhigh",
+  max: "chat.effort.hintMax",
+};
+
 export function EffortDropdown() {
+  const { t } = useI18n();
   // While the menu is open the embedded browser view is suppressed so the
   // portaled popup (which can extend over the browser's rect in narrow/wide
   // layouts) stays visible and clickable. See useSuppressBrowserView.
@@ -70,10 +88,14 @@ export function EffortDropdown() {
             )}
           >
             <div className="px-3 py-1 text-xs uppercase tracking-wide text-content-subtle">
-              思考级别
+              {t("chat.effort.section")}
             </div>
             {levels.map((m) => {
               const active = m.value === effort;
+              const hintKey = EFFORT_HINT_KEYS[m.value];
+              const hint = hintKey
+                ? t(hintKey, { provider: provider?.displayName ?? "" })
+                : m.hint;
               return (
                 <Menu.Item
                   key={m.value}
@@ -86,7 +108,7 @@ export function EffortDropdown() {
                 >
                   <span className="flex min-w-0 items-baseline gap-2">
                     <span className="font-medium">{m.label}</span>
-                    <span className="truncate text-xs text-content-subtle">{m.hint}</span>
+                    <span className="truncate text-xs text-content-subtle">{hint}</span>
                   </span>
                   {active && <IconCheck size={14} className="shrink-0" />}
                 </Menu.Item>

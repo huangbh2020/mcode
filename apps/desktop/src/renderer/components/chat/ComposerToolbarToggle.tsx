@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Popover } from "@base-ui/react/popover";
 import { cn } from "@renderer/lib/cn.js";
+import { useI18n } from "@renderer/lib/i18n/index.js";
 import { IconAdjustmentsHorizontal } from "@renderer/lib/icons.js";
 import { useSuppressBrowserView } from "@renderer/hooks/useSuppressBrowserView.js";
 import { ComposerToolbar } from "./ComposerToolbar.js";
@@ -25,6 +26,7 @@ import { ComposerToolbar } from "./ComposerToolbar.js";
  * `Menu.Portal` and ContextRing uses a hover tooltip, so neither is affected.
  */
 export function ComposerToolbarToggle({ sessionId }: { sessionId: string }) {
+  const { t } = useI18n();
   // The popup hosts the full chip row and is wider than a narrow/wide-mode
   // chat column, so it can extend over the browser's rect — suppress the
   // browser view while open to keep it visible/clickable.
@@ -37,8 +39,8 @@ export function ComposerToolbarToggle({ sessionId }: { sessionId: string }) {
           render={
             <button
               type="button"
-              title="模型 / 思考级别 / 权限模式 / 上下文"
-              aria-label="模型 / 思考级别 / 权限模式 / 上下文"
+              title={t("chat.toolbarToggle")}
+              aria-label={t("chat.toolbarToggle")}
             />
           }
           className={cn(

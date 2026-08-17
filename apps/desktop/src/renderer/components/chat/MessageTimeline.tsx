@@ -21,7 +21,12 @@
  */
 import { useEffect, useRef, useState, useMemo } from "react";
 import { cn } from "@renderer/lib/cn.js";
+import { useI18n, type MessageId } from "@renderer/lib/i18n/index.js";
 import type { Block, ChatMessage } from "@renderer/stores/sessionStore.js";
+
+/** Translator signature matching the `t` returned by {@link useI18n}, so
+ *  module-level helpers can localize without hook access. */
+type Translate = (key: MessageId, params?: Record<string, string | number>) => string;
 
 /** Map of messageId → render-item index (from the virtual list's data array). */
 export type UserItemIndexMap = Map<string, number>;
@@ -33,17 +38,18 @@ function fmtClock(ms: number): string {
   return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 }
 
-/** Flatten a message's blocks into plain text for the tooltip body. */
-function blocksToText(blocks: Block[]): string {
+/** Flatten a message's blocks into plain text for the tooltip body. Takes the
+ *  locale-bound translator so the attachment line localizes. */
+function blocksToText(blocks: Block[], t: Translate): string {
   const out: string[] = [];
   for (const b of blocks) {
     if (b.kind === "text") {
       out.push(b.text);
     } else if (b.kind === "thinking") {
-      const t = b.text.trim();
-      if (t) out.push(`> ${t.replace(/\n/g, "\n> ")}`);
+      const thinking = b.text.trim();
+      if (thinking) out.push(`> ${thinking.replace(/\n/g, "\n> ")}`);
     } else if (b.kind === "attachment") {
-      out.push(`[附件] ${b.preview}`);
+      out.push(t("chatStream.timeline.attachmentLine", { text: b.preview }));
     }
   }
   return out.join("\n\n").trim();
@@ -149,7 +155,8 @@ function TimelineDash({
   onJump: () => void;
 }) {
   const [hovered, setHovered] = useState(false);
-  const text = blocksToText(message.blocks);
+  const { t } = useI18n();
+  const text = blocksToText(message.blocks, t);
   const accent = active || hovered;
 
   return (
@@ -178,11 +185,11 @@ function TimelineDash({
               {fmtClock(message.createdAt)}
             </span>
             {active && (
-              <span className="ml-auto rounded bg-accent/15 px-1 text-[9px] text-accent">当前</span>
+              <span className="ml-auto rounded bg-accent/15 px-1 text-[9px] text-accent">{t("chatStream.timeline.current")}</span>
             )}
           </div>
           <div className="max-h-48 overflow-y-auto whitespace-pre-wrap break-words text-[13px] leading-relaxed text-content">
-            {text || <span className="text-content-subtle">(无文本内容)</span>}
+            {text || <span className="text-content-subtle">{t("chatStream.timeline.noText")}</span>}
           </div>
         </div>
       )}

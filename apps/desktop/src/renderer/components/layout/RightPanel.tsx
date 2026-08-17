@@ -11,6 +11,7 @@ import { resolveShortcut, acceleratorToDisplayString } from "@renderer/lib/short
 import { FilesPanel } from "@renderer/components/ide/FilesPanel.js";
 import { GitPanel } from "@renderer/components/ide/GitPanel.js";
 import { BrowserPanel } from "@renderer/components/browser/BrowserPanel.js";
+import { useI18n } from "@renderer/lib/i18n/index.js";
 
 /** Right panel: a horizontal icon rail docked at the top + a main panel
  *  area (IDE-style). The rail is always visible and holds three icons:
@@ -27,6 +28,7 @@ import { BrowserPanel } from "@renderer/components/browser/BrowserPanel.js";
  *  never auto-opens at boot). The browser icon shows a badge with the open-tab
  *  count. */
 export function RightPanel() {
+  const { t } = useI18n();
   const tab = useSessionStore((s) => s.rightPanelTab);
   const setTab = useSessionStore((s) => s.setRightPanelTab);
   const browserTabCount = useSessionStore((s) => s.browserTabCount);
@@ -56,14 +58,14 @@ export function RightPanel() {
         <RailButton
           active={tab === "files"}
           onClick={() => setTab("files")}
-          title="文件"
+          title={t("layout.tabFiles")}
         >
           <IconFolder size={16} className="shrink-0" />
         </RailButton>
         <RailButton
           active={tab === "git"}
           onClick={() => setTab("git")}
-          title="Git"
+          title="Git" /* brand name */
         >
           <IconGitBranch size={16} className="shrink-0" />
         </RailButton>
@@ -72,7 +74,7 @@ export function RightPanel() {
           <RailButton
             active={tab === "browser"}
             onClick={toggleBrowser}
-            title={tab === "browser" ? "关闭侧边栏浏览器" : "打开浏览器"}
+            title={tab === "browser" ? t("layout.closeSidebarBrowser") : t("layout.openBrowser")}
           >
             <IconWorld size={16} className="shrink-0" />
           </RailButton>
@@ -92,7 +94,7 @@ export function RightPanel() {
             active={widePanelOpen}
             onClick={() => setWidePanelOpen(!widePanelOpen)}
             title={
-              (widePanelOpen ? "退出宽屏模式" : "宽屏模式 (聊天+面板 2:8)") +
+              (widePanelOpen ? t("layout.exitWideMode") : t("layout.wideMode")) +
               hintFor("layout.toggle-wide-panel")
             }
           >

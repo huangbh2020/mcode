@@ -9,6 +9,7 @@ import {
   IconPlayerPlay,
 } from "@renderer/lib/icons.js";
 import type { CustomCommand } from "@contracts/ipc";
+import { useI18n } from "@renderer/lib/i18n/index.js";
 
 /** Module-level empty array so the selector returns a stable reference when
  *  the active project has no saved commands (avoids the infinite-render trap
@@ -39,6 +40,7 @@ export function TerminalCommandsMenu({
   onRun: (command: string) => void;
   onRunInNewTerminal: (command: string) => void;
 }) {
+  const { t } = useI18n();
   const activeProjectId = useSessionStore((s) => s.activeProjectId);
   const commands = useSessionStore((s) =>
     activeProjectId ? s.customCommandsByProject[activeProjectId] ?? EMPTY : EMPTY,
@@ -68,7 +70,7 @@ export function TerminalCommandsMenu({
           render={
             <button
               type="button"
-              title={disabled ? "请先选择项目" : "自定义命令"}
+              title={disabled ? t("ide.term.selectProjectFirst") : t("ide.term.customCommands")}
               disabled={disabled}
               className={cn(
                 "rounded p-1 text-content-subtle hover:bg-surface-hover hover:text-content",
@@ -90,12 +92,12 @@ export function TerminalCommandsMenu({
               )}
             >
               <div className="px-3 py-1 text-[10px] uppercase tracking-wide text-content-subtle">
-                自定义命令
+                {t("ide.term.customCommands")}
               </div>
 
               {commands.length === 0 ? (
                 <div className="px-3 py-3 text-center text-[11px] text-content-subtle">
-                  暂无自定义命令
+                  {t("ide.term.noCommands")}
                 </div>
               ) : (
                 commands.map((cmd) => (
@@ -111,7 +113,7 @@ export function TerminalCommandsMenu({
                       onClick={() => {
                         onRunInNewTerminal(cmd.command);
                       }}
-                      title={`在新终端中运行:${cmd.command}`}
+                      title={t("ide.term.runInNewTerminal", { command: cmd.command })}
                     >
                       <span className="shrink-0 text-[11px] font-medium text-content">
                         {cmd.name}
@@ -126,7 +128,7 @@ export function TerminalCommandsMenu({
                       <button
                         type="button"
                         className="rounded p-0.5 text-content-subtle hover:bg-surface-hover hover:text-accent"
-                        title="在当前终端运行"
+                        title={t("ide.term.runInCurrent")}
                         onClick={() => onRun(cmd.command)}
                       >
                         <IconPlayerPlay size={11} />
@@ -145,7 +147,7 @@ export function TerminalCommandsMenu({
                 onClick={openAdd}
               >
                 <IconPlus size={12} className="shrink-0" />
-                添加命令
+                {t("ide.term.addCommand")}
               </Menu.Item>
             </Menu.Popup>
           </Menu.Positioner>
@@ -158,17 +160,17 @@ export function TerminalCommandsMenu({
         <Dialog.Portal>
           <Dialog.Backdrop />
           <Dialog.Popup className="w-[420px] max-w-[90vw] p-4">
-            <Dialog.Title>添加命令</Dialog.Title>
+            <Dialog.Title>{t("ide.term.addCommand")}</Dialog.Title>
             <Dialog.Description className="mt-1">
-              保存后可在终端工具栏一键运行。编辑或删除已有命令请前往「设置 - 终端」。
+              {t("ide.term.addCommandDesc")}
             </Dialog.Description>
 
             <div className="mt-4 flex flex-col gap-3">
               <label className="flex flex-col gap-1">
-                <span className="text-[11px] font-medium text-content-muted">名称</span>
+                <span className="text-[11px] font-medium text-content-muted">{t("ide.term.nameLabel")}</span>
                 <Input
                   value={adding?.name ?? ""}
-                  placeholder="例如:启动开发服务器"
+                  placeholder={t("ide.term.namePlaceholder")}
                   onChange={(e) =>
                     adding && setAdding({ ...adding, name: (e.target as HTMLInputElement).value })
                   }
@@ -176,10 +178,10 @@ export function TerminalCommandsMenu({
                 />
               </label>
               <label className="flex flex-col gap-1">
-                <span className="text-[11px] font-medium text-content-muted">命令</span>
+                <span className="text-[11px] font-medium text-content-muted">{t("ide.term.commandLabel")}</span>
                 <textarea
                   value={adding?.command ?? ""}
-                  placeholder="例如:npm run dev"
+                  placeholder={t("ide.term.commandPlaceholder")}
                   rows={3}
                   onChange={(e) => adding && setAdding({ ...adding, command: e.target.value })}
                   className={cn(
@@ -192,7 +194,7 @@ export function TerminalCommandsMenu({
 
             <div className="mt-4 flex items-center justify-end gap-2">
               <Button variant="ghost" size="sm" onClick={() => setAdding(null)}>
-                取消
+                {t("common.cancel")}
               </Button>
               <Button
                 variant="primary"
@@ -200,7 +202,7 @@ export function TerminalCommandsMenu({
                 onClick={save}
                 disabled={!adding?.name.trim() || !adding?.command.trim()}
               >
-                保存
+                {t("common.save")}
               </Button>
             </div>
             <Dialog.Close />

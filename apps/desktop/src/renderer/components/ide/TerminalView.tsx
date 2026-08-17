@@ -5,6 +5,7 @@ import "@xterm/xterm/css/xterm.css";
 import { api } from "@renderer/lib/api.js";
 import { cn } from "@renderer/lib/cn.js";
 import { useSessionStore } from "@renderer/stores/sessionStore.js";
+import { useI18n } from "@renderer/lib/i18n/index.js";
 import type { ITheme } from "@xterm/xterm";
 
 export type TerminalSessionStatus = "starting" | "running" | "exited" | "error";
@@ -135,6 +136,12 @@ export function TerminalView({
   const statusRef = useRef<TerminalSessionStatus>("starting");
   const disposedRef = useRef(false);
   const writingRef = useRef(false);
+  // Locale-fresh translator: the kill handler below is bound once per
+  // sessionKey, so a locale switch mid-session must still translate its
+  // status detail. Updated every render, read inside long-lived callbacks.
+  const { t } = useI18n();
+  const tRef = useRef(t);
+  tRef.current = t;
   // Bumps to force a fresh PTY spawn while keeping the same xterm instance.
   const [spawnGen, setSpawnGen] = useState(0);
   const dark = useIsDark();
@@ -346,7 +353,7 @@ export function TerminalView({
           terminalIdRef.current = null;
           void api.terminal.kill({ terminalId: id });
         }
-        setStatus("exited", "已终止");
+        setStatus("exited", tRef.current("ide.term.killed"));
       },
       getTerminalId: () => terminalIdRef.current,
       getStatus: () => statusRef.current,
@@ -421,10 +428,17 @@ export function TerminalView({
       if (msg.terminalId !== terminalIdRef.current) return;
       terminalIdRef.current = null;
       const code = msg.exitCode;
-      setStatus("exited", code === null ? "进程已结束" : `进程已退出 (code ${code})`);
+      setStatus(
+        "exited",
+        code === null
+          ? tRef.current("ide.term.processEnded")
+          : tRef.current("ide.term.processExited", { code }),
+      );
       term.writeln("");
       term.writeln(
-        `\r\n\x1b[90m[进程已退出${code === null ? "" : ` code=${code}`}] 点击工具栏「重开」可重新启动\x1b[0m`,
+        `\r\n\x1b[90m[${tRef.current("ide.term.processExitedLabel", {
+          code: code === null ? "" : ` code=${code}`,
+        })}] ${tRef.current("ide.term.restartHint")}\x1b[0m`,
       );
     });
 
@@ -450,7 +464,7 @@ export function TerminalView({
         }
         if (!result.ok) {
           setStatus("error", result.error);
-          term.writeln(`\r\n\x1b[31m[启动失败] ${result.error}\x1b[0m`);
+          term.writeln(`\r\n\x1b[31m[${tRef.current("ide.term.startFailed")}] ${result.error}\x1b[0m`);
           return;
         }
         terminalIdRef.current = result.terminalId;
@@ -473,7 +487,7 @@ export function TerminalView({
         if (cancelled || disposedRef.current) return;
         const msg = err instanceof Error ? err.message : String(err);
         setStatus("error", msg);
-        term.writeln(`\r\n\x1b[31m[启动失败] ${msg}\x1b[0m`);
+        term.writeln(`\r\n\x1b[31m[${tRef.current("ide.term.startFailed")}] ${msg}\x1b[0m`);
       }
     };
     void boot();

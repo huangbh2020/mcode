@@ -26,6 +26,7 @@ import {
 import { FileTypeIcon } from "@renderer/lib/fileIcon.js";
 import { localPathToFileUrl } from "@renderer/lib/browserUrl.js";
 import { ConfirmDialog } from "@renderer/components/ui/confirm-dialog.js";
+import { useI18n } from "@renderer/lib/i18n/index.js";
 
 /** Stable empty array for the expanded-dirs selector (Zustand Object.is). */
 const EMPTY_EXPANDED: string[] = [];
@@ -124,16 +125,17 @@ function MenuSeparator() {
  *  supplied starter, which opens the inline new-entry row. Rendered after a
  *  {@link MenuSeparator} so they read as a distinct "create" group. */
 function NewEntryMenuItems({ onStart }: { onStart: (kind: NewEntryKind) => void }) {
+  const { t } = useI18n();
   return (
     <>
       <MenuItem
         icon={<IconFolderPlus size={12} />}
-        label="新建文件夹"
+        label={t("ide.tree.newFolder")}
         onClick={() => onStart("folder")}
       />
       <MenuItem
         icon={<IconFilePlus size={12} />}
-        label="新建文件"
+        label={t("ide.tree.newFile")}
         onClick={() => onStart("file")}
       />
     </>
@@ -144,6 +146,7 @@ function NewEntryMenuItems({ onStart }: { onStart: (kind: NewEntryKind) => void 
  *  top-right. Shared by the file and directory context menus. Returns the
  *  copy handler and the toast element (render once per row, near the trigger). */
 function useCopyFeedback() {
+  const { t } = useI18n();
   const [copied, setCopied] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const copy = useCallback((text: string) => {
@@ -157,7 +160,7 @@ function useCopyFeedback() {
   const toast = copied ? (
     <div className="pointer-events-none absolute right-2 top-0 z-50 flex -translate-y-full items-center gap-1 rounded-md bg-accent/15 px-1.5 py-0.5 text-accent [font-size:var(--right-panel-font-size)] shadow-sm">
       <IconCheck size={10} />
-      已复制
+      {t("common.copied")}
     </div>
   ) : null;
   return { copy, toast };
@@ -201,6 +204,7 @@ function InlineNewEntryRow({
   /** Called with the created entry's absolute path on success. */
   onCreated: (newPath: string) => void;
 }) {
+  const { t } = useI18n();
   const inputRef = useRef<HTMLInputElement>(null);
   const [value, setValue] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -226,11 +230,11 @@ function InlineNewEntryRow({
       return;
     }
     if (ILLEGAL_NAME_CHARS.test(name) || RESERVED_NAMES.test(name)) {
-      setError("名称包含非法字符");
+      setError(t("ide.tree.nameIllegal"));
       return;
     }
     if (existingNames.has(name.toLowerCase())) {
-      setError("同名条目已存在");
+      setError(t("ide.tree.nameExists"));
       return;
     }
     submittingRef.current = true;
@@ -241,11 +245,11 @@ function InlineNewEntryRow({
         : await api.file.writeFile({ filePath: targetPath, content: "" });
     submittingRef.current = false;
     if (!result.ok) {
-      setError("创建失败");
+      setError(t("ide.tree.createFailed"));
       return;
     }
     onCreated(targetPath);
-  }, [value, kind, parentPath, existingNames, onCancel, onCreated]);
+  }, [value, kind, parentPath, existingNames, onCancel, onCreated, t]);
 
   return (
     <div
@@ -261,7 +265,7 @@ function InlineNewEntryRow({
         ref={inputRef}
         value={value}
         // Placeholder differs by kind so the user remembers what they're making.
-        placeholder={kind === "folder" ? "文件夹名称" : "文件名称"}
+        placeholder={kind === "folder" ? t("ide.tree.folderNamePlaceholder") : t("ide.tree.fileNamePlaceholder")}
         onChange={(e) => {
           setValue(e.target.value);
           if (error) setError(null);
@@ -333,6 +337,7 @@ function InlineRenameRow({
   /** Called with the new absolute path on success. */
   onRenamed: (newPath: string) => void;
 }) {
+  const { t } = useI18n();
   const inputRef = useRef<HTMLInputElement>(null);
   const [value, setValue] = useState(initialName);
   const [error, setError] = useState<string | null>(null);
@@ -357,12 +362,12 @@ function InlineRenameRow({
       return;
     }
     if (ILLEGAL_NAME_CHARS.test(name) || RESERVED_NAMES.test(name)) {
-      setError("名称包含非法字符");
+      setError(t("ide.tree.nameIllegal"));
       return;
     }
     // Allow a no-op / case-only rename (exclude the entry itself from clash).
     if (name.toLowerCase() !== excludeSelf && existingNames.has(name.toLowerCase())) {
-      setError("同名条目已存在");
+      setError(t("ide.tree.nameExists"));
       return;
     }
     // Nothing changed — just cancel (server would reject a same-path rename).
@@ -376,11 +381,11 @@ function InlineRenameRow({
     const result = await api.file.rename({ oldPath, newPath });
     submittingRef.current = false;
     if (!result.ok) {
-      setError("重命名失败");
+      setError(t("ide.tree.renameFailed"));
       return;
     }
     onRenamed(newPath);
-  }, [value, initialName, isDir, parentPath, existingNames, excludeSelf, onCancel, onRenamed]);
+  }, [value, initialName, isDir, parentPath, existingNames, excludeSelf, onCancel, onRenamed, t]);
 
   return (
     <div
@@ -440,6 +445,7 @@ function InlineRenameRow({
  * what the agent just changed without scanning every node.
  */
 export function FileTree({ projectPath }: { projectPath: string }) {
+  const { t } = useI18n();
   const pid = useSessionStore((s) => s.activeProjectId);
   const activeFile = useSessionStore((s) =>
     pid ? s.ideActiveFileByProject[pid] ?? null : null,
@@ -558,7 +564,7 @@ export function FileTree({ projectPath }: { projectPath: string }) {
     return (
       <div className="flex items-center gap-1.5 px-3 py-2 text-content-subtle [font-size:var(--rp-fs-xs)]">
         <IconLoader2 size={12} className="animate-spin" />
-        读取目录…
+        {t("ide.files.readingDir")}
       </div>
     );
   }
@@ -580,7 +586,7 @@ export function FileTree({ projectPath }: { projectPath: string }) {
       )}
       {entries.length === 0 && !creating ? (
         <div className="px-3 py-2 text-content-subtle [font-size:var(--rp-fs-xs)]">
-          空目录
+          {t("ide.files.emptyDir")}
         </div>
       ) : (
         <SiblingNamesContext.Provider value={rootNames}>
@@ -746,6 +752,7 @@ function DirNode({
   onToggle: () => void;
   setDirExpanded: (dirPath: string, open: boolean) => void;
 }) {
+  const { t } = useI18n();
   // Tree-wide reload signal: a bump means a sibling/dir was created or
   // deleted somewhere, so drop this node's cached children and re-fetch.
   const actions = useContext(FileTreeActionsContext);
@@ -929,7 +936,7 @@ function DirNode({
               <ContextMenu.Popup className={MENU_POPUP_CLASS}>
                 <MenuItem
                   icon={<IconFolderOpen size={12} />}
-                  label={isOpen ? "折叠" : "展开"}
+                  label={isOpen ? t("ide.tree.collapse") : t("ide.tree.expand")}
                   onClick={onToggle}
                 />
                 <MenuSeparator />
@@ -937,28 +944,28 @@ function DirNode({
                 <MenuSeparator />
                 <MenuItem
                   icon={<IconExternalLink size={12} />}
-                  label="在资源管理器中显示"
+                  label={t("ide.tree.revealInFileManager")}
                   onClick={() => void api.shell.showItemInFolder({ path: endPath })}
                 />
                 <MenuItem
                   icon={<IconClipboard size={12} />}
-                  label="复制绝对路径"
+                  label={t("ide.tree.copyAbsPath")}
                   onClick={() => copyWithFeedback(endPath)}
                 />
                 <MenuItem
                   icon={<IconCopy size={12} />}
-                  label="复制相对路径"
+                  label={t("ide.tree.copyRelPath")}
                   onClick={() => copyWithFeedback(relativePath(endPath, projectPath))}
                 />
                 <MenuSeparator />
                 <MenuItem
                   icon={<IconEdit size={12} />}
-                  label="重命名"
+                  label={t("common.rename")}
                   onClick={() => setRenaming(true)}
                 />
                 <MenuItem
                   icon={<IconTrash size={12} />}
-                  label="删除"
+                  label={t("common.delete")}
                   danger
                   onClick={() => setPendingDelete(true)}
                 />
@@ -970,15 +977,16 @@ function DirNode({
         {copiedToast}
         <ConfirmDialog
           open={pendingDelete}
-          title="删除文件夹"
+          title={t("ide.tree.deleteFolderTitle")}
           description={
             <>
-              确定要删除 <span className="text-content">{label}</span> 吗?
+              {t("ide.tree.deleteConfirmQ", { name: label })}
               <br />
-              <span className="text-content-subtle">文件夹及其所有内容将移至回收站,可从系统回收站恢复。</span>
+              <span className="text-content-subtle">{t("ide.tree.deleteFolderNote")}</span>
             </>
           }
-          confirmText="删除"
+          confirmText={t("common.delete")}
+          cancelText={t("common.cancel")}
           danger
           onOpenChange={(open) => {
             if (!open) setPendingDelete(false);
@@ -1026,6 +1034,7 @@ function FileNodeRow({
   onClick: () => void;
   projectPath: string;
 }) {
+  const { t } = useI18n();
   // Agent-touched marker: look up this file in the active session's turn-files.
   const turnFile = useAgentTouchedFile(path);
   // Register this button with the FileTree's node registry so the reveal
@@ -1121,14 +1130,14 @@ function FileNodeRow({
                 "ml-auto h-1.5 w-1.5 shrink-0 rounded-full",
                 turnFile.kind === "created" ? "bg-accent" : "bg-info",
               )}
-              title={turnFile.kind === "created" ? "本轮新建" : "本轮修改"}
+              title={turnFile.kind === "created" ? t("ide.tree.touchedCreated") : t("ide.tree.touchedModified")}
             />
           )}
         </ContextMenu.Trigger>
         <ContextMenu.Portal>
           <ContextMenu.Positioner>
             <ContextMenu.Popup className={MENU_POPUP_CLASS}>
-              <MenuItem icon={<FileTypeIcon path={path} size={12} />} label="打开" onClick={onClick} />
+              <MenuItem icon={<FileTypeIcon path={path} size={12} />} label={t("common.open")} onClick={onClick} />
               {/* "新建" creates a sibling in this file's parent dir; only shown
                   when a container context is available (i.e. inside a tree). */}
               {startNewInParent && (
@@ -1140,28 +1149,28 @@ function FileNodeRow({
               <MenuSeparator />
               <MenuItem
                 icon={<IconExternalLink size={12} />}
-                label="在资源管理器中显示"
+                label={t("ide.tree.revealInFileManager")}
                 onClick={() => void api.shell.showItemInFolder({ path })}
               />
               <MenuItem
                 icon={<IconClipboard size={12} />}
-                label="复制绝对路径"
+                label={t("ide.tree.copyAbsPath")}
                 onClick={() => copyWithFeedback(path)}
               />
               <MenuItem
                 icon={<IconCopy size={12} />}
-                label="复制相对路径"
+                label={t("ide.tree.copyRelPath")}
                 onClick={() => copyWithFeedback(relativePath(path, projectPath))}
               />
               <MenuItem
                 icon={<IconMessage size={12} />}
-                label="添加到聊天"
+                label={t("ide.tree.addToChat")}
                 onClick={() => enqueueChatFile(path)}
               />
               {/\.html?$/i.test(path) && (
                 <MenuItem
                   icon={<IconWorld size={12} />}
-                  label="在浏览器中打开"
+                  label={t("ide.tree.openInBrowser")}
                   onClick={() =>
                     useSessionStore.getState().openUrlInBrowser(localPathToFileUrl(path))
                   }
@@ -1170,12 +1179,12 @@ function FileNodeRow({
               <MenuSeparator />
               <MenuItem
                 icon={<IconEdit size={12} />}
-                label="重命名"
+                label={t("common.rename")}
                 onClick={() => setRenaming(true)}
               />
               <MenuItem
                 icon={<IconTrash size={12} />}
-                label="删除"
+                label={t("common.delete")}
                 danger
                 onClick={() => setPendingDelete(true)}
               />
@@ -1187,15 +1196,16 @@ function FileNodeRow({
       {copiedToast}
       <ConfirmDialog
         open={pendingDelete}
-        title="删除文件"
+        title={t("ide.tree.deleteFileTitle")}
         description={
           <>
-            确定要删除 <span className="text-content">{name}</span> 吗?
+            {t("ide.tree.deleteConfirmQ", { name })}
             <br />
-            <span className="text-content-subtle">文件将移至回收站,可从系统回收站恢复。</span>
+            <span className="text-content-subtle">{t("ide.tree.deleteFileNote")}</span>
           </>
         }
-        confirmText="删除"
+        confirmText={t("common.delete")}
+        cancelText={t("common.cancel")}
         danger
         onOpenChange={(open) => {
           if (!open) setPendingDelete(false);

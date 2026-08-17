@@ -14,6 +14,7 @@
  */
 import { useMemo } from "react";
 import { useSessionStore } from "@renderer/stores/sessionStore.js";
+import { useI18n, type MessageId } from "@renderer/lib/i18n/index.js";
 import {
   collectCommands,
   COMMAND_GROUPS,
@@ -29,6 +30,7 @@ import { ShortcutRecorder } from "./ShortcutRecorder.js";
 import { IconRefresh } from "@renderer/lib/icons.js";
 
 export function ShortcutsPanel() {
+  const { t } = useI18n();
   const resetAllShortcuts = useSessionStore((s) => s.resetAllShortcuts);
 
   // Build the display list: every command that has a default binding, plus
@@ -58,7 +60,7 @@ export function ShortcutsPanel() {
         // Simplest: synthesize a minimal stub from the id + default accel.
         byId.set(id, {
           id,
-          label: labelForId(id),
+          label: t(labelForId(id)),
           group: groupForId(id),
           defaultAccelerator: DEFAULT_SHORTCUTS[id],
           perform: () => {},
@@ -69,7 +71,7 @@ export function ShortcutsPanel() {
       if (!byId.has(id) && !id.startsWith("session.switch.")) {
         byId.set(id, {
           id,
-          label: labelForId(id),
+          label: t(labelForId(id)),
           group: groupForId(id),
           defaultAccelerator: DEFAULT_SHORTCUTS[id],
           perform: () => {},
@@ -78,7 +80,8 @@ export function ShortcutsPanel() {
     }
 
     return Array.from(byId.values());
-  }, []);
+    // t changes identity on locale flip, rebuilding the fallback labels.
+  }, [t]);
 
   // Bucket by group, preserving COMMAND_GROUPS order.
   const grouped = useMemo(() => {
@@ -93,21 +96,24 @@ export function ShortcutsPanel() {
     );
   }, [commands]);
 
-  const groupLabel: Record<CommandGroup, string> = {
-    "会话": "会话",
-    "视图": "视图 / 导航",
-    "布局": "布局 / 面板",
-    "外观": "外观 / 主题",
+  const groupLabel: Record<CommandGroup, MessageId> = {
+    "会话": "settings.shortcuts.groupSession",
+    "视图": "settings.shortcuts.groupView",
+    "布局": "settings.shortcuts.groupLayout",
+    "外观": "settings.shortcuts.groupAppearance",
   };
 
   return (
     <section className="space-y-4">
       <PanelHeader
-        title="快捷键"
+        title={t("settings.shortcuts.title")}
         desc={
           <>
-            点击右侧「修改」并按下新的组合键即可重新绑定。 Esc 取消录制。
-            带 <Kbd keys={["⌘"]} size="xs" />/<Kbd keys={["Ctrl"]} size="xs" /> 的组合在输入框内依然生效。
+            {t("settings.shortcuts.desc1")}
+            <Kbd keys={["⌘"]} size="xs" />
+            {t("settings.shortcuts.desc2")}
+            <Kbd keys={["Ctrl"]} size="xs" />
+            {t("settings.shortcuts.desc3")}
           </>
         }
         action={
@@ -115,17 +121,17 @@ export function ShortcutsPanel() {
             variant="ghost"
             size="sm"
             onClick={resetAllShortcuts}
-            title="清除所有自定义绑定,恢复默认快捷键"
+            title={t("settings.shortcuts.resetAllTitle")}
             className="gap-1 shrink-0"
           >
             <IconRefresh size={12} />
-            恢复全部默认
+            {t("settings.shortcuts.resetAll")}
           </Button>
         }
       />
 
       {grouped.map(({ group, items }) => (
-        <SettingsSection key={group} title={groupLabel[group]}>
+        <SettingsSection key={group} title={t(groupLabel[group])}>
           {items.map((cmd) => {
             const Icon = cmd.icon;
             return (
@@ -152,8 +158,7 @@ export function ShortcutsPanel() {
       ))}
 
       <p className="pt-1 text-[0.7143em] text-content-subtle">
-        提示:同一组合键只能绑定到一个命令;录制时会自动检测冲突并提供覆盖选项。
-        修改即时生效并自动保存。
+        {t("settings.shortcuts.footer")}
       </p>
     </section>
   );
@@ -161,24 +166,24 @@ export function ShortcutsPanel() {
 
 /* ────────── helpers for filtered-out static commands ────────── */
 
-/** A human label for a command id, used when the command is currently
+/** A message key for a command id, used when the command is currently
  *  filtered out by `available` (so we can't read its label from the
  *  collected list). Falls back to the id tail. */
-function labelForId(id: string): string {
-  const map: Record<string, string> = {
-    "session.new": "新建会话",
-    "tab.close": "关闭当前标签页",
-    "command.palette": "打开命令面板",
-    "view.display-mode.toggle": "切换显示模式",
-    "files.search": "搜索文件",
-    "view.settings": "打开设置",
-    "chat.focus-input": "聚焦聊天输入框",
-    "layout.toggle-left": "切换左侧栏",
-    "layout.toggle-right": "切换右侧栏",
-    "layout.toggle-bottom-terminal": "切换底部终端",
-    "appearance.theme.toggle": "切换深/浅主题",
+function labelForId(id: string): MessageId {
+  const map: Record<string, MessageId> = {
+    "session.new": "settings.shortcuts.cmdNewSession",
+    "tab.close": "settings.shortcuts.cmdCloseTab",
+    "command.palette": "settings.shortcuts.cmdPalette",
+    "view.display-mode.toggle": "settings.shortcuts.cmdToggleDisplayMode",
+    "files.search": "settings.shortcuts.cmdSearchFiles",
+    "view.settings": "settings.shortcuts.cmdSettings",
+    "chat.focus-input": "settings.shortcuts.cmdFocusInput",
+    "layout.toggle-left": "settings.shortcuts.cmdToggleLeft",
+    "layout.toggle-right": "settings.shortcuts.cmdToggleRight",
+    "layout.toggle-bottom-terminal": "settings.shortcuts.cmdToggleTerminal",
+    "appearance.theme.toggle": "settings.shortcuts.cmdToggleTheme",
   };
-  return map[id] ?? id.split(".").pop() ?? id;
+  return map[id] ?? (id as MessageId);
 }
 
 /** The group a command belongs to, used for the filtered-out fallback. */

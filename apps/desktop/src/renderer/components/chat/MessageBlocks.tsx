@@ -1,6 +1,7 @@
 import { memo, useState, useMemo, useEffect, useRef, useDeferredValue, type ReactNode, type ComponentType } from "react";
 import { createPortal } from "react-dom";
 import { cn } from "@renderer/lib/cn.js";
+import { useI18n, translate, type MessageId } from "@renderer/lib/i18n/index.js";
 import {
   IconChevronDown,
   IconChevronLeft,
@@ -278,6 +279,7 @@ function BatchToolGroup({
   projectPath?: string | null;
 }) {
   const [open, setOpen] = useState(false);
+  const { t } = useI18n();
 
   const aggregateStatus: "running" | "done" | "error" = blocks.some((b) => b.status === "running")
     ? "running"
@@ -299,7 +301,7 @@ function BatchToolGroup({
   for (const b of blocks) counts.set(b.toolName, (counts.get(b.toolName) ?? 0) + 1);
   const breakdown = [...counts.entries()].map(([n, c]) => `${n} ×${c}`).join(" · ");
 
-  const label = `${blocks.length} 个操作`;
+  const label = t("chatStream.opCount", { n: blocks.length });
 
   return (
     <div className="[font-size:var(--chat-fs-sm)]">
@@ -361,6 +363,7 @@ function Chevron({ open, className }: { open: boolean; className?: string }) {
  *  normal BlockView image case. This component only assembles runs of 2+. */
 function ImageGallery({ blocks }: { blocks: Extract<Block, { kind: "image" }>[] }) {
   const [idx, setIdx] = useState(0);
+  const { t } = useI18n();
   const count = blocks.length;
   const cur = blocks[Math.min(idx, count - 1)];
   const go = (delta: number) => setIdx((i) => Math.max(0, Math.min(count - 1, i + delta)));
@@ -372,7 +375,7 @@ function ImageGallery({ blocks }: { blocks: Extract<Block, { kind: "image" }>[] 
       <div className="relative">
         <ImageWithPreview
           src={`data:${cur.mimeType};base64,${cur.data}`}
-          alt={`截图 ${Math.min(idx, count - 1) + 1}/${count}`}
+          alt={t("chatStream.gallery.screenshotAlt", { n: Math.min(idx, count - 1) + 1, total: count })}
           gallery={allSrcs}
           index={idx}
           onNavigate={setIdx}
@@ -390,7 +393,7 @@ function ImageGallery({ blocks }: { blocks: Extract<Block, { kind: "image" }>[] 
               type="button"
               onClick={() => go(-1)}
               disabled={idx <= 0}
-              title="上一张"
+              title={t("chatStream.gallery.prev")}
               className="absolute left-1 top-1/2 -translate-y-1/2 rounded-full bg-black/55 p-1.5 text-white/90 backdrop-blur-sm transition-colors enabled:hover:bg-black/80 enabled:hover:text-white disabled:opacity-30"
             >
               <IconChevronLeft size={18} />
@@ -399,7 +402,7 @@ function ImageGallery({ blocks }: { blocks: Extract<Block, { kind: "image" }>[] 
               type="button"
               onClick={() => go(1)}
               disabled={idx >= count - 1}
-              title="下一张"
+              title={t("chatStream.gallery.next")}
               className="absolute right-1 top-1/2 -translate-y-1/2 rounded-full bg-black/55 p-1.5 text-white/90 backdrop-blur-sm transition-colors enabled:hover:bg-black/80 enabled:hover:text-white disabled:opacity-30"
             >
               <IconChevronRight size={18} />
@@ -417,7 +420,7 @@ function ImageGallery({ blocks }: { blocks: Extract<Block, { kind: "image" }>[] 
                 key={i}
                 type="button"
                 onClick={() => setIdx(i)}
-                title={`第 ${i + 1} 张`}
+                title={t("chatStream.gallery.imageN", { n: i + 1 })}
                 className={cn(
                   "h-1.5 rounded-full transition-all",
                   i === idx ? "w-3 bg-accent" : "w-1.5 bg-content-subtle/40 hover:bg-content-subtle/70",
@@ -656,6 +659,7 @@ const BlockView = memo(function BlockView({
   // blocks regardless of whether they were inserted as pills (block.skillNames)
   // or typed as plain text. See useKnownSkillNames.
   const knownSkillNames = useKnownSkillNames();
+  const { t } = useI18n();
 
   switch (block.kind) {
     case "text": {
@@ -692,7 +696,7 @@ const BlockView = memo(function BlockView({
 
     case "thinking":
       return (
-        <Collapsible label="Thinking" hint={summarize(block.text)} defaultOpen={defaultOpen}>
+        <Collapsible label={t("chatStream.thinking")} hint={summarize(block.text)} defaultOpen={defaultOpen}>
           {block.text}
         </Collapsible>
       );
@@ -768,10 +772,10 @@ const BlockView = memo(function BlockView({
         <div className="flex items-center gap-2 rounded-md border border-accent/40 bg-accent/10 px-3 py-2 [font-size:var(--chat-fs-sm)]">
           <IconStack2 size={14} className="shrink-0 text-accent" />
           <span className="text-content">
-            {block.trigger === "manual" ? "已手动压缩对话历史" : "已自动压缩对话历史"}
+            {block.trigger === "manual" ? t("chatStream.compact.manual") : t("chatStream.compact.auto")}
             {saved != null && (
               <span className="text-content-muted">
-                {" "}· 释放 {saved.toLocaleString()} tokens{pct != null ? ` (${pct}%)` : ""}
+                {" "}{t("chatStream.compact.freed", { n: saved.toLocaleString() })}{pct != null ? ` (${pct}%)` : ""}
               </span>
             )}
             {block.postTokens != null && (
@@ -799,7 +803,7 @@ const BlockView = memo(function BlockView({
       return (
         <ImageWithPreview
           src={`data:${block.mimeType};base64,${block.data}`}
-          alt={block.toolCallId ? "浏览器截图" : "用户图片"}
+          alt={block.toolCallId ? t("chatStream.image.browserScreenshot") : t("chatStream.image.userImage")}
           className="my-1"
           maxThumbnailWidth={300}
           maxThumbnailHeight={200}
@@ -845,6 +849,7 @@ function AttachmentCard({
   const [open, setOpen] = useState(false);
   const [anchorRect, setAnchorRect] = useState<DOMRect | null>(null);
   const btnRef = useRef<HTMLButtonElement>(null);
+  const { t } = useI18n();
   const isFile = attachmentKind === "file";
   const isImage = isFile && !!filePath && isImageFilePath(filePath);
 
@@ -892,11 +897,11 @@ function AttachmentCard({
             ? (filePath ?? preview)
             : open
               ? isImage
-                ? "收起图片"
-                : "收起内容"
+                ? t("chatStream.attachment.collapseImage")
+                : t("chatStream.attachment.collapseContent")
               : isImage
-                ? "查看图片"
-                : "查看内容"
+                ? t("chatStream.attachment.viewImage")
+                : t("chatStream.attachment.viewContent")
         }
         className={cn(
           "inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-[11px] transition-colors",
@@ -1009,6 +1014,7 @@ function EditToolCard({
   // first render (user can collapse an individual card even inside an
   // open group).
   const [open, setOpen] = useState(defaultOpen);
+  const { t } = useI18n();
   const diff = useMemo(() => lineDiff(oldString, newString), [oldString, newString]);
   const { adds, dels } = useMemo(() => diffSummary(diff), [diff]);
 
@@ -1035,7 +1041,7 @@ function EditToolCard({
           <DiffView diff={diff} />
           {result !== undefined && (
             <div>
-              <div className="mb-0.5 uppercase text-content-subtle [font-size:var(--chat-fs-xxs)]">Result</div>
+              <div className="mb-0.5 uppercase text-content-subtle [font-size:var(--chat-fs-xxs)]">{t("chatStream.tool.result")}</div>
               <pre className="max-h-40 overflow-auto rounded bg-surface-muted/60 p-2 text-content-muted [font-size:var(--chat-fs-xs)]">
                 {truncateResult(result)}
               </pre>
@@ -1068,6 +1074,7 @@ function WriteToolCard({
   projectPath?: string | null;
 }) {
   const [open, setOpen] = useState(defaultOpen);
+  const { t } = useI18n();
   const lineCount = content ? content.split("\n").length : 0;
 
   // Look up the pre-turn content for this file. The turn.files payload
@@ -1106,7 +1113,7 @@ function WriteToolCard({
         <span className="ml-auto flex items-center gap-1.5 [font-size:var(--chat-fs-xxs)]">
           {diff && adds > 0 && <span className="text-success">+{adds}</span>}
           {diff && dels > 0 && <span className="text-danger">−{dels}</span>}
-          {!diff && <span className="text-content-subtle">{lineCount} 行</span>}
+          {!diff && <span className="text-content-subtle">{t("chatStream.lineCount", { n: lineCount })}</span>}
           <Chevron open={open} />
         </span>
       </button>
@@ -1115,21 +1122,21 @@ function WriteToolCard({
           {diff ? (
             <div>
               <div className="mb-0.5 uppercase text-content-subtle [font-size:var(--chat-fs-xxs)]">
-                {before === "" ? "New file" : "Diff vs pre-turn"}
+                {before === "" ? t("chatStream.diff.newFile") : t("chatStream.diff.vsPreTurn")}
               </div>
               <DiffView diff={diff} />
             </div>
           ) : (
             <div>
-              <div className="mb-0.5 uppercase text-content-subtle [font-size:var(--chat-fs-xxs)]">New file content</div>
+              <div className="mb-0.5 uppercase text-content-subtle [font-size:var(--chat-fs-xxs)]">{t("chatStream.diff.newFileContent")}</div>
               <pre className="max-h-80 overflow-auto rounded bg-surface-muted/60 p-2 text-content-muted [font-size:var(--chat-fs-xs)]">
-                {content || "(empty)"}
+                {content || t("chatStream.emptyPlaceholder")}
               </pre>
             </div>
           )}
           {result !== undefined && (
             <div>
-              <div className="mb-0.5 uppercase text-content-subtle [font-size:var(--chat-fs-xxs)]">Result</div>
+              <div className="mb-0.5 uppercase text-content-subtle [font-size:var(--chat-fs-xxs)]">{t("chatStream.tool.result")}</div>
               <pre className="max-h-40 overflow-auto rounded bg-surface-muted/60 p-2 text-content-muted [font-size:var(--chat-fs-xs)]">
                 {truncateResult(result)}
               </pre>
@@ -1152,6 +1159,7 @@ function GenericToolCard({
   projectPath?: string | null;
 }) {
   const [open, setOpen] = useState(defaultOpen);
+  const { t } = useI18n();
   // The Read tool (and any file-bearing tool routed here) shows a file_path in
   // its summary line - linkify it. Bash/Grep/Glob summaries are commands or
   // patterns, not paths, so they stay plain text.
@@ -1178,14 +1186,14 @@ function GenericToolCard({
       {open && (
         <div className="space-y-2 border-l border-edge py-2 pl-2">
           <div>
-            <div className="mb-0.5 uppercase text-content-subtle [font-size:var(--chat-fs-xxs)]">Input</div>
+            <div className="mb-0.5 uppercase text-content-subtle [font-size:var(--chat-fs-xxs)]">{t("chatStream.tool.input")}</div>
             <pre className="max-h-60 overflow-auto rounded bg-surface-muted/60 p-2 text-content-muted [font-size:var(--chat-fs-xs)]">
               {safeStringify(block.input)}
             </pre>
           </div>
           {block.result !== undefined && (
             <div>
-              <div className="mb-0.5 uppercase text-content-subtle [font-size:var(--chat-fs-xxs)]">Result</div>
+              <div className="mb-0.5 uppercase text-content-subtle [font-size:var(--chat-fs-xxs)]">{t("chatStream.tool.result")}</div>
               <pre className="max-h-60 overflow-auto rounded bg-surface-muted/60 p-2 text-content-muted [font-size:var(--chat-fs-xs)]">
                 {resultPreview(block.result)}
               </pre>
@@ -1381,9 +1389,17 @@ function safeStringify(v: unknown): string {
   }
 }
 
+/** Locale-aware text for module-level helper functions (no hook access).
+ *  Reads the current locale at call time — these helpers run during render of
+ *  components subscribed via useI18n, so a locale flip re-renders them with
+ *  fresh strings. */
+function tr(key: MessageId): string {
+  return translate(useSessionStore.getState().locale, key);
+}
+
 function truncateResult(v: unknown): string {
   const s = safeStringify(v);
-  return s.length > 2000 ? s.slice(0, 2000) + "\n…(truncated)" : s;
+  return s.length > 2000 ? s.slice(0, 2000) + "\n…" + tr("chatStream.truncatedSuffix") : s;
 }
 
 /**
@@ -1414,7 +1430,7 @@ function resultPreview(v: unknown): string {
       const texts = filtered
         .filter((b) => b && typeof b === "object" && (b as { type?: string }).type === "text")
         .map((b) => (b as { text?: string }).text ?? "");
-      return texts.length > 0 ? truncateResult(texts.join("\n")) + "\n[image rendered above]" : "[image rendered above]";
+      return texts.length > 0 ? truncateResult(texts.join("\n")) + "\n" + tr("chatStream.imageRenderedAbove") : tr("chatStream.imageRenderedAbove");
     }
     // No image: stringify the (possibly unwrapped) content array for display.
     return truncateResult(blocks);

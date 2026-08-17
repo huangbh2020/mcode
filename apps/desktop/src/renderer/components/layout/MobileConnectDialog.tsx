@@ -22,12 +22,14 @@ import { IconCopy, IconDeviceMobile, IconRefresh, IconTrash, IconWifi, IconWorld
 import { api } from "@renderer/lib/api.js";
 import { RemoteConnectPanel } from "@renderer/components/mobile/RemoteConnectPanel.js";
 import type { PairingStartResult, PairedDevice } from "@contracts/mobile";
+import { useI18n } from "@renderer/lib/i18n/index.js";
 
 /** Self-contained trigger button + dialog, rendered in the left sidebar's quick
  *  actions (below 搜索). The trigger matches the search/new-session button
  *  style; renders its own Dialog.Root so the sidebar only needs
  *  `<MobileConnectButton />`. */
 export function MobileConnectButton() {
+  const { t } = useI18n();
   const [open, setOpen] = useState(false);
   return (
     <>
@@ -40,10 +42,10 @@ export function MobileConnectButton() {
           "text-content-muted hover:bg-accent/10 hover:text-accent",
           open && "bg-accent/10 text-accent",
         )}
-        title="连接手机"
+        title={t("layout.connectPhone")}
       >
         <IconDeviceMobile size={16} className="shrink-0" />
-        <span className="flex-1 text-left font-medium">连接手机</span>
+        <span className="flex-1 text-left font-medium">{t("layout.connectPhone")}</span>
       </button>
       <Dialog.Root open={open} onOpenChange={setOpen}>
         <Dialog.Portal>
@@ -58,6 +60,7 @@ export function MobileConnectButton() {
 }
 
 function MobileConnectPanel({ open }: { open: boolean }) {
+  const { t } = useI18n();
   const [tab, setTab] = useState<"lan" | "remote">("lan");
   const [pairing, setPairing] = useState<PairingStartResult | null>(null);
   const [qrDataUrl, setQrDataUrl] = useState<string | null>(null);
@@ -177,8 +180,8 @@ function MobileConnectPanel({ open }: { open: boolean }) {
 
   return (
     <>
-      <Dialog.Title>连接手机</Dialog.Title>
-      <Dialog.Description>用手机扫码并在手机上输入验证码，完成配对。</Dialog.Description>
+      <Dialog.Title>{t("layout.connectPhone")}</Dialog.Title>
+      <Dialog.Description>{t("layout.connectPhoneDesc")}</Dialog.Description>
       <Dialog.Close />
 
       {/* Mode tabs */}
@@ -194,7 +197,7 @@ function MobileConnectPanel({ open }: { open: boolean }) {
           )}
         >
           <IconWifi size={14} />
-          局域网配对
+          {t("layout.pairLan")}
         </button>
         <button
           type="button"
@@ -207,7 +210,7 @@ function MobileConnectPanel({ open }: { open: boolean }) {
           )}
         >
           <IconWorld size={14} />
-          远程访问
+          {t("layout.remoteAccess")}
         </button>
       </div>
 
@@ -220,7 +223,7 @@ function MobileConnectPanel({ open }: { open: boolean }) {
         <>
           {serverDown && (
             <div className="mt-3 rounded border border-warning/40 bg-warning/10 px-3 py-2 text-xs text-warning">
-              手机服务未运行（端口被占用或已禁用）。请在设置中检查，或重启应用。
+              {t("layout.mobileServerDown")}
             </div>
           )}
 
@@ -228,10 +231,10 @@ function MobileConnectPanel({ open }: { open: boolean }) {
             <div className="flex flex-col items-center gap-2">
               <div className="rounded-lg border border-edge bg-white p-2">
                 {qrDataUrl ? (
-                  <img src={qrDataUrl} alt="配对二维码" className="h-[180px] w-[180px]" />
+                  <img src={qrDataUrl} alt={t("layout.pairingQr")} className="h-[180px] w-[180px]" />
                 ) : (
                   <div className="flex h-[180px] w-[180px] items-center justify-center text-xs text-content-subtle">
-                    生成中…
+                    {t("layout.generating")}
                   </div>
                 )}
               </div>
@@ -241,31 +244,38 @@ function MobileConnectPanel({ open }: { open: boolean }) {
               onClick={() => void beginPairing()}
               className="flex items-center gap-1 text-xs text-content-muted hover:text-content"
             >
-              <IconRefresh size={12} /> 刷新二维码
+              <IconRefresh size={12} /> {t("layout.refreshQr")}
             </button>
             <button
               type="button"
               onClick={() => void copyPairingLink()}
               disabled={!pairing}
               className="flex items-center gap-1 text-xs text-content-muted hover:text-content disabled:opacity-40"
-              title="复制配对链接，可在电脑浏览器中打开测试"
+              title={t("layout.copyPairingLinkTitle")}
             >
-              <IconCopy size={12} /> {copied ? "已复制" : "复制链接"}
+              <IconCopy size={12} /> {copied ? t("common.copied") : t("layout.copyLink")}
             </button>
           </div>
         </div>
 
         <div className="flex min-w-0 flex-1 flex-col">
-          <div className="text-xs text-content-muted">验证码</div>
+          <div className="text-xs text-content-muted">{t("layout.verifyCode")}</div>
           <div className="mt-1 font-mono text-3xl font-bold tracking-[0.3em] text-content">
             {pairing ? pairing.code : "------"}
           </div>
           <div className="mt-1 text-[11px] text-content-subtle">
-            {pairing ? (expired ? "已过期，正在刷新…" : `约 ${Math.floor(remainingSec / 60)}:${String(remainingSec % 60).padStart(2, "0")} 后过期`) : ""}
+            {pairing
+              ? expired
+                ? t("layout.pairingExpired")
+                : t("layout.pairingExpiresIn", {
+                    time: `${Math.floor(remainingSec / 60)}:${String(remainingSec % 60).padStart(2, "0")}`,
+                  })
+              : ""}
           </div>
           {status?.endpoint && (
             <div className="mt-3 text-[11px] text-content-subtle">
-              局域网地址：<span className="font-mono">{status.endpoint}</span>
+              {t("layout.lanAddress")}
+              <span className="font-mono">{status.endpoint}</span>
             </div>
           )}
           {/* When auto-detection has alternatives, surface them so the user can
@@ -281,7 +291,7 @@ function MobileConnectPanel({ open }: { open: boolean }) {
                     type="button"
                     onClick={() => void rebindEndpoint(ip)}
                     className="rounded border border-edge px-1.5 py-0.5 font-mono text-[10px] text-content-subtle hover:bg-surface-hover hover:text-content"
-                    title={`用这个 IP 重新生成二维码: ${ip}`}
+                    title={t("layout.regenerateWithIp", { ip })}
                   >
                     {ip}
                   </button>
@@ -289,7 +299,7 @@ function MobileConnectPanel({ open }: { open: boolean }) {
             </div>
           )}
           <div className="mt-1 text-[11px] text-content-subtle">
-            手机需与电脑在同一局域网。若扫码后空白，点上面的备用 IP 切换。
+            {t("layout.lanHint")}
           </div>
         </div>
       </div>
@@ -297,10 +307,12 @@ function MobileConnectPanel({ open }: { open: boolean }) {
       )}
 
       <div className="mt-5">
-        <div className="mb-2 text-xs font-medium text-content-muted">已连接设备（{devices.length}）</div>
+        <div className="mb-2 text-xs font-medium text-content-muted">
+          {t("layout.connectedDevices", { n: devices.length })}
+        </div>
         {devices.length === 0 ? (
           <div className="rounded border border-dashed border-edge px-3 py-3 text-center text-xs text-content-subtle">
-            还没有设备配对
+            {t("layout.noDevices")}
           </div>
         ) : (
           <ul className="space-y-1.5">
@@ -313,14 +325,14 @@ function MobileConnectPanel({ open }: { open: boolean }) {
                 <div className="min-w-0 flex-1">
                   <div className="truncate text-xs font-medium text-content">{d.name}</div>
                   <div className="text-[11px] text-content-subtle">
-                    配对于 {new Date(d.pairedAt).toLocaleString()}
+                    {t("layout.pairedAt", { time: new Date(d.pairedAt).toLocaleString() })}
                   </div>
                 </div>
                 <button
                   type="button"
                   onClick={() => void handleRevoke(d.deviceId)}
                   className="rounded p-1 text-content-subtle hover:bg-surface-hover hover:text-danger"
-                  title="断开该设备"
+                  title={t("layout.revokeDevice")}
                 >
                   <IconTrash size={14} />
                 </button>
@@ -332,7 +344,7 @@ function MobileConnectPanel({ open }: { open: boolean }) {
 
       <div className="mt-5 flex justify-end">
         <Button variant="ghost" onClick={() => void refreshDevices()}>
-          刷新设备列表
+          {t("layout.refreshDevices")}
         </Button>
       </div>
     </>

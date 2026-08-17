@@ -1,6 +1,7 @@
 import type { TodoItem, Block } from "@renderer/stores/sessionStore.js";
 import type { SubagentSnapshot } from "@contracts/runtime";
 import { cn } from "@renderer/lib/cn.js";
+import { useI18n, type MessageId } from "@renderer/lib/i18n/index.js";
 import { extractPlanTitle } from "./StatusCapsule.js";
 
 /** A `kind: "plan"` block - the frozen per-turn plan in the message stream. */
@@ -22,12 +23,13 @@ const PRIORITY_BAR: Record<TodoItem["priority"], string> = {
 
 /** Status tints per subagent lifecycle state. Exported so the capsule
  *  chip (SubagentsChip) can render matching labels/colors without
- *  duplicating the map. */
-export const SUBAGENT_STATUS_META: Record<SubagentSnapshot["status"], { label: string; cls: string; spin?: boolean }> = {
-  running: { label: "运行中", cls: "text-warning", spin: true },
-  completed: { label: "已完成", cls: "text-accent" },
-  failed: { label: "失败", cls: "text-danger" },
-  killed: { label: "已终止", cls: "text-danger" },
+ *  duplicating the map. Display labels are `labelKey`s resolved via t() at
+ *  render time (module constants can't hold locale-bound strings). */
+export const SUBAGENT_STATUS_META: Record<SubagentSnapshot["status"], { labelKey: MessageId; cls: string; spin?: boolean }> = {
+  running: { labelKey: "chatStream.subagent.statusRunning", cls: "text-warning", spin: true },
+  completed: { labelKey: "chatStream.subagent.statusCompleted", cls: "text-accent" },
+  failed: { labelKey: "chatStream.subagent.statusFailed", cls: "text-danger" },
+  killed: { labelKey: "chatStream.subagent.statusKilled", cls: "text-danger" },
 };
 
 /** Compact "1.2k tokens · 5 tools · 12s" string. Exported for reuse by the
@@ -90,23 +92,24 @@ function PlanListSection({
   onPickPlan: (plan: string) => void;
   scrollLists: boolean;
 }) {
+  const { t } = useI18n();
   // Newest first: the last plan block in the stream is the most recent turn's.
   const ordered = [...planBlocks].reverse();
   return (
     <>
       <SectionHeader
         icon="📋"
-        title={`计划 · ${planBlocks.length} 个`}
+        title={t("chatStream.activity.plansTitle", { n: planBlocks.length })}
       />
       <ul className={sectionListCls(scrollLists)}>
         {ordered.map((block, i) => {
-          const title = extractPlanTitle(block.plan) || `(计划 ${ordered.length - i})`;
+          const title = extractPlanTitle(block.plan) || t("chatStream.activity.planFallback", { n: ordered.length - i });
           return (
             <li key={block.planId}>
               <button
                 type="button"
                 onClick={() => onPickPlan(block.plan)}
-                title="点击查看完整计划内容"
+                title={t("chatStream.activity.viewPlan")}
                 className="flex w-full items-center gap-2 px-3 py-1.5 text-left transition-colors hover:bg-surface-muted"
               >
                 <span className="shrink-0 text-[10px] tabular-nums text-content-subtle">
@@ -127,13 +130,14 @@ function PlanListSection({
 /* ── Section: Tasks ─────────────────────────────────────────────────── */
 
 function TasksSection({ todos, scrollLists }: { todos: TodoItem[]; scrollLists: boolean }) {
-  const done = todos.filter((t) => t.status === "completed").length;
+  const { t } = useI18n();
+  const done = todos.filter((td) => td.status === "completed").length;
   const pct = todos.length > 0 ? Math.round((done / todos.length) * 100) : 0;
   return (
     <>
       <SectionHeader
         icon="✓"
-        title="Tasks"
+        title={t("chatStream.activity.tasksTitle")}
         right={
           <span className="rounded-full bg-surface-muted px-2 py-0.5 tabular-nums">
             {done}/{todos.length} · {pct}%
@@ -167,17 +171,18 @@ function TasksSection({ todos, scrollLists }: { todos: TodoItem[]; scrollLists: 
 /* ── Section: Subagents ────────────────────────────────────────────── */
 
 function SubagentsSection({ agents, scrollLists }: { agents: SubagentSnapshot[]; scrollLists: boolean }) {
+  const { t } = useI18n();
   const running = agents.filter((a) => a.status === "running").length;
   return (
     <>
       <SectionHeader
         icon="🤖"
-        title={`子代理 · ${agents.length} 个`}
+        title={t("chatStream.activity.subagentsTitle", { n: agents.length })}
         right={
           running > 0 ? (
             <span className="flex items-center gap-1 text-warning">
               <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-warning" />
-              {running} 运行中
+              {t("chatStream.activity.runningCount", { n: running })}
             </span>
           ) : null
         }
@@ -196,11 +201,11 @@ function SubagentsSection({ agents, scrollLists }: { agents: SubagentSnapshot[];
                 )}
                 <span className={`flex items-center gap-1 text-[10px] ${meta.cls}`}>
                   {meta.spin && <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-warning" />}
-                  {meta.label}
+                  {t(meta.labelKey)}
                 </span>
               </div>
               <p className="mt-0.5 truncate text-[11px] text-content" title={s.description}>
-                {s.description || "(无描述)"}
+                {s.description || t("chatStream.activity.noDescription")}
               </p>
               {(usage || s.lastToolName) && (
                 <p className="mt-0.5 text-[10px] text-content-subtle">

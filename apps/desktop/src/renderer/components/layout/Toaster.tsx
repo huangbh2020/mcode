@@ -14,6 +14,7 @@ import { useToastStore, type ToastItem, type ToastKind } from "@renderer/stores/
 import { useSessionStore } from "@renderer/stores/sessionStore.js";
 import { cn } from "@renderer/lib/cn.js";
 import { IconInfoCircle, IconAlertTriangle, IconAlertCircle, IconX } from "@renderer/lib/icons.js";
+import { useI18n } from "@renderer/lib/i18n/index.js";
 
 /** Per-kind visual config: icon + accent border color. */
 const KIND_META: Record<ToastKind, { icon: typeof IconInfoCircle; accent: string }> = {
@@ -23,6 +24,7 @@ const KIND_META: Record<ToastKind, { icon: typeof IconInfoCircle; accent: string
 };
 
 function ToastCard({ toast }: { toast: ToastItem }) {
+  const { t } = useI18n();
   const dismiss = useToastStore((s) => s.dismiss);
   const openTab = useSessionStore((s) => s.openTab);
   const meta = KIND_META[toast.kind];
@@ -58,7 +60,7 @@ function ToastCard({ toast }: { toast: ToastItem }) {
           dismiss(toast.id);
         }}
         className="shrink-0 rounded p-0.5 text-content-subtle opacity-0 transition-opacity hover:bg-surface-hover hover:text-content group-hover:opacity-100"
-        aria-label="关闭"
+        aria-label={t("common.close")}
       >
         <IconX size={14} />
       </button>

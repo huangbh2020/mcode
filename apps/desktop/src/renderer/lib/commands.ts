@@ -17,6 +17,15 @@
  * store via the argument, never capturing stale state). Dynamic commands
  * (e.g. "switch to session X") are produced by `collectCommands()`, which
  * merges the static list with per-store-state items.
+ *
+ * i18n: static entries store a `labelKey` (a MessageId) instead of a baked
+ * label; `collectCommands` resolves it against the live store locale so the
+ * label is translated at collection time and consumers keep receiving a
+ * plain `label: string`. `keywords` deliberately keep BOTH languages — they
+ * are search targets (matched by `commandMatches`), never rendered, so a
+ * Chinese query still finds commands while the UI is in English.
+ * `COMMAND_GROUPS` values stay as-is: they double as stable bucket
+ * identifiers for the settings shortcuts panel.
  */
 import type { ComponentType } from "react";
 import type { Accelerator } from "@contracts/ipc";
@@ -25,6 +34,7 @@ import type { TablerIconProps } from "@renderer/lib/icons.js";
 import { api } from "@renderer/lib/api.js";
 import { isMac } from "@renderer/lib/platform.js";
 import { DEFAULT_SHORTCUTS } from "@renderer/lib/shortcuts.js";
+import { translate, type MessageId } from "@renderer/lib/i18n/core.js";
 import {
   IconPlus,
   IconMessage,
@@ -86,11 +96,15 @@ export interface CommandDef {
 
 /* ───────────────────── static commands ───────────────────── */
 
-const STATIC_COMMANDS: CommandDef[] = [
+/** Internal shape: same as CommandDef but with a dictionary key instead of a
+ *  baked label, resolved per-collect against the current UI locale. */
+type StaticCommandDef = Omit<CommandDef, "label"> & { labelKey: MessageId };
+
+const STATIC_COMMANDS: StaticCommandDef[] = [
   // ── 会话 ──
   {
     id: "session.new",
-    label: "新建会话",
+    labelKey: "layout.newSession",
     group: "会话",
     keywords: ["new", "session", "chat", "thread", "新建", "对话"],
     icon: IconPlus,
@@ -102,7 +116,7 @@ const STATIC_COMMANDS: CommandDef[] = [
   },
   {
     id: "tab.close",
-    label: "关闭当前标签页",
+    labelKey: "lib.commands.closeTab",
     group: "会话",
     keywords: ["close", "tab", "关闭", "标签"],
     icon: IconX,
@@ -116,7 +130,7 @@ const STATIC_COMMANDS: CommandDef[] = [
   // ── 视图 ──
   {
     id: "command.palette",
-    label: "打开命令面板",
+    labelKey: "lib.commands.openPalette",
     group: "视图",
     keywords: ["command", "palette", "search", "命令", "面板"],
     icon: IconKeyboard,
@@ -127,7 +141,7 @@ const STATIC_COMMANDS: CommandDef[] = [
   },
   {
     id: "view.display-mode.single",
-    label: "显示模式：单会话",
+    labelKey: "lib.commands.displaySingle",
     group: "视图",
     keywords: ["single", "display", "mode", "单", "模式"],
     icon: IconMessage,
@@ -138,7 +152,7 @@ const STATIC_COMMANDS: CommandDef[] = [
   },
   {
     id: "view.display-mode.tabs",
-    label: "显示模式：标签页",
+    labelKey: "lib.commands.displayTabs",
     group: "视图",
     keywords: ["tabs", "display", "mode", "标签", "多开", "模式"],
     icon: IconColumns3,
@@ -149,7 +163,7 @@ const STATIC_COMMANDS: CommandDef[] = [
   },
   {
     id: "view.display-mode.toggle",
-    label: "切换显示模式",
+    labelKey: "lib.commands.displayToggle",
     group: "视图",
     keywords: ["toggle", "display", "mode", "切换", "模式"],
     icon: IconArrowsExchange,
@@ -161,7 +175,7 @@ const STATIC_COMMANDS: CommandDef[] = [
   },
   {
     id: "view.right-panel.files",
-    label: "右栏：文件",
+    labelKey: "lib.commands.rightPanelFiles",
     group: "视图",
     keywords: ["files", "right", "panel", "文件", "右栏"],
     icon: IconFolder,
@@ -172,7 +186,7 @@ const STATIC_COMMANDS: CommandDef[] = [
   },
   {
     id: "files.search",
-    label: "搜索文件",
+    labelKey: "lib.commands.searchFiles",
     group: "视图",
     keywords: ["search", "files", "grep", "搜索", "查找", "文件"],
     icon: IconSearch,
@@ -184,7 +198,7 @@ const STATIC_COMMANDS: CommandDef[] = [
   },
   {
     id: "view.right-panel.git",
-    label: "右栏：Git",
+    labelKey: "lib.commands.rightPanelGit",
     group: "视图",
     keywords: ["git", "right", "panel", "右栏"],
     icon: IconGitBranch,
@@ -195,7 +209,7 @@ const STATIC_COMMANDS: CommandDef[] = [
   },
   {
     id: "view.settings",
-    label: "打开设置",
+    labelKey: "lib.commands.openSettings",
     group: "视图",
     keywords: ["settings", "preferences", "设置", "偏好"],
     icon: IconSettings,
@@ -206,7 +220,7 @@ const STATIC_COMMANDS: CommandDef[] = [
   },
   {
     id: "chat.focus-input",
-    label: "聚焦聊天输入框",
+    labelKey: "lib.commands.focusComposer",
     group: "视图",
     keywords: ["focus", "chat", "input", "composer", "聚焦", "输入"],
     icon: IconFocus,
@@ -225,7 +239,7 @@ const STATIC_COMMANDS: CommandDef[] = [
   // ── 布局 ──
   {
     id: "layout.toggle-left",
-    label: "切换左侧栏",
+    labelKey: "lib.commands.toggleLeft",
     group: "布局",
     keywords: ["left", "sidebar", "toggle", "左侧", "侧栏"],
     icon: IconLayoutSidebarLeftExpand,
@@ -239,7 +253,7 @@ const STATIC_COMMANDS: CommandDef[] = [
   },
   {
     id: "layout.toggle-right",
-    label: "切换右侧栏",
+    labelKey: "lib.commands.toggleRight",
     group: "布局",
     keywords: ["right", "sidebar", "panel", "toggle", "右侧", "右栏"],
     icon: IconLayoutSidebarRightExpand,
@@ -250,7 +264,7 @@ const STATIC_COMMANDS: CommandDef[] = [
   },
   {
     id: "layout.toggle-bottom-terminal",
-    label: "切换底部终端",
+    labelKey: "lib.commands.toggleTerminal",
     group: "布局",
     keywords: ["terminal", "bottom", "toggle", "终端", "底部"],
     icon: IconTerminal2,
@@ -261,7 +275,7 @@ const STATIC_COMMANDS: CommandDef[] = [
   },
   {
     id: "layout.toggle-browser",
-    label: "切换浏览器面板",
+    labelKey: "lib.commands.toggleBrowser",
     group: "布局",
     keywords: ["browser", "web", "toggle", "浏览器", "网页"],
     icon: IconWorld,
@@ -276,7 +290,7 @@ const STATIC_COMMANDS: CommandDef[] = [
   },
   {
     id: "layout.toggle-wide-panel",
-    label: "切换宽屏模式 (聊天+面板)",
+    labelKey: "lib.commands.toggleWide",
     group: "布局",
     keywords: ["wide", "panel", "fullscreen", "width", "宽屏", "全屏", "2:8", "右栏"],
     icon: IconArrowsMaximize,
@@ -292,7 +306,7 @@ const STATIC_COMMANDS: CommandDef[] = [
   // ── 外观 ──
   {
     id: "appearance.theme.light",
-    label: "主题：浅色",
+    labelKey: "lib.commands.themeLight",
     group: "外观",
     keywords: ["theme", "light", "主题", "浅色", "亮色"],
     icon: IconSun,
@@ -302,7 +316,7 @@ const STATIC_COMMANDS: CommandDef[] = [
   },
   {
     id: "appearance.theme.dark",
-    label: "主题：深色",
+    labelKey: "lib.commands.themeDark",
     group: "外观",
     keywords: ["theme", "dark", "主题", "深色", "暗色"],
     icon: IconMoon,
@@ -312,7 +326,7 @@ const STATIC_COMMANDS: CommandDef[] = [
   },
   {
     id: "appearance.theme.toggle",
-    label: "切换深/浅主题",
+    labelKey: "lib.commands.themeToggle",
     group: "外观",
     keywords: ["toggle", "theme", "切换", "主题"],
     icon: IconArrowsExchange,
@@ -343,7 +357,10 @@ const STATIC_COMMANDS: CommandDef[] = [
  *  what the keyboard does. Rendering is platform-aware (⌘ on mac, Ctrl
  *  elsewhere) via `acceleratorToDisplayString`. */
 export function collectCommands(s: SessionState): CommandDef[] {
-  const cmds = STATIC_COMMANDS.filter((c) => !c.available || c.available(s));
+  const locale = s.locale;
+  const cmds: CommandDef[] = STATIC_COMMANDS.filter(
+    (c) => !c.available || c.available(s),
+  ).map((c) => ({ ...c, label: translate(locale, c.labelKey) }));
 
   // Dynamic: "switch to session" — one per session in the active project's
   // currently-loaded page. Rendered under the 会话 group so the user can
@@ -351,10 +368,10 @@ export function collectCommands(s: SessionState): CommandDef[] {
   const pid = s.activeProjectId;
   const sessions = pid ? s.sessionsByProject[pid] ?? [] : [];
   for (const sess of sessions) {
-    const title = sess.title?.trim() || "无标题会话";
+    const title = sess.title?.trim() || translate(locale, "lib.untitledSession");
     cmds.push({
       id: `session.switch.${sess.id}`,
-      label: `切换到会话：${title}`,
+      label: translate(locale, "lib.commands.switchToSession", { title }),
       group: "会话",
       keywords: ["switch", "session", "open", "tab", "切换", "跳转", title],
       icon: IconList,

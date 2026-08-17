@@ -51,6 +51,10 @@ import {
   IconFileSearch,
 } from "@renderer/lib/icons.js";
 import { getProviderIcon } from "@renderer/lib/providerIcon.js";
+import { useI18n, type MessageId } from "@renderer/lib/i18n/index.js";
+
+/** Translator signature used by the module-level copy helpers below. */
+type Translator = (key: MessageId, params?: Record<string, string | number>) => string;
 
 /** Debounce for the async searches. Matches SearchDialog's value. */
 const SEARCH_DEBOUNCE_MS = 120;
@@ -67,14 +71,16 @@ const GREP_MAX_PER_FILE = 3;
  *  the user can target threads / files / content without noise. */
 type SearchScope = "all" | "command" | "session" | "file" | "grep";
 
-/** Tab descriptor: id + label + whether it needs an active project to be
- *  useful (file/content searches are project-scoped). Ordered for display. */
-const SCOPE_TABS: { id: SearchScope; label: string; needsProject: boolean }[] = [
-  { id: "all", label: "全部", needsProject: false },
-  { id: "command", label: "命令", needsProject: false },
-  { id: "session", label: "线程", needsProject: false },
-  { id: "file", label: "文件", needsProject: true },
-  { id: "grep", label: "文件内容", needsProject: true },
+/** Tab descriptor: id + dictionary key + whether it needs an active project
+ *  to be useful (file/content searches are project-scoped). Ordered for
+ *  display. The key doubles as the palette group label (command groups and
+ *  scope tabs read the same words). */
+const SCOPE_TABS: { id: SearchScope; labelKey: MessageId; needsProject: boolean }[] = [
+  { id: "all", labelKey: "layout.palette.all", needsProject: false },
+  { id: "command", labelKey: "layout.palette.command", needsProject: false },
+  { id: "session", labelKey: "layout.palette.session", needsProject: false },
+  { id: "file", labelKey: "layout.palette.file", needsProject: true },
+  { id: "grep", labelKey: "layout.palette.grep", needsProject: true },
 ];
 
 /** Does `scope` include the given group? (`all` includes everything.) */
@@ -98,11 +104,11 @@ type PaletteItem =
 const GROUP_ORDER = ["command", "session", "file", "grep"] as const;
 type PaletteGroup = (typeof GROUP_ORDER)[number];
 
-const GROUP_LABELS: Record<PaletteGroup, string> = {
-  command: "命令",
-  session: "线程",
-  file: "文件",
-  grep: "文件内容",
+const GROUP_LABELS: Record<PaletteGroup, MessageId> = {
+  command: "layout.palette.command",
+  session: "layout.palette.session",
+  file: "layout.palette.file",
+  grep: "layout.palette.grep",
 };
 
 /** Tri-state async result: undefined = idle, {loading:true} = pending,
@@ -113,6 +119,7 @@ type AsyncResult<T> = undefined | { loading: true } | { loading: false; value: T
 /* ───────────────────────── component ───────────────────────── */
 
 export function CommandPalette() {
+  const { t } = useI18n();
   const open = useSessionStore((s) => s.commandPaletteOpen);
   const setOpen = useSessionStore((s) => s.setCommandPaletteOpen);
   // Subscribe to overrides so <kbd> hints update live when the user rebinds.
@@ -381,7 +388,7 @@ export function CommandPalette() {
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
                 onKeyDown={onInputKeyDown}
-                placeholder={placeholderFor(scope)}
+                placeholder={placeholderFor(t, scope)}
                 className={cn(
                   "h-11 flex-1 bg-transparent text-sm text-content",
                   "placeholder:text-content-subtle focus:outline-none",
@@ -400,7 +407,7 @@ export function CommandPalette() {
                         "text-content-subtle",
                       )}
                     >
-                      <span>{GROUP_LABELS[group]}</span>
+                      <span>{t(GROUP_LABELS[group])}</span>
                       {loading && <IconLoader2 size={11} className="animate-spin" />}
                     </Combobox.GroupLabel>
                     {groupItems.map((item, idx) => (
@@ -415,7 +422,7 @@ export function CommandPalette() {
                 <Combobox.Empty
                   className={cn("px-3 py-8 text-center text-[13px] text-content-subtle")}
                 >
-                  {emptyMessageFor(scope, isSearching)}
+                  {emptyMessageFor(t, scope, isSearching)}
                 </Combobox.Empty>
               </Combobox.List>
             </div>
@@ -431,16 +438,18 @@ export function CommandPalette() {
                 <span>
                   <kbd className="rounded border border-edge px-1">↑</kbd>
                   <kbd className="ml-0.5 rounded border border-edge px-1">↓</kbd>{" "}
-                  导航
+                  {t("layout.palette.navigate")}
                 </span>
                 <span>
-                  <kbd className="rounded border border-edge px-1">↵</kbd> 执行
+                  <kbd className="rounded border border-edge px-1">↵</kbd>{" "}
+                  {t("layout.palette.run")}
                 </span>
                 <span>
-                  <kbd className="rounded border border-edge px-1">esc</kbd> 关闭
+                  <kbd className="rounded border border-edge px-1">esc</kbd>{" "}
+                  {t("common.close")}
                 </span>
               </span>
-              <span>{totalCount} 条结果</span>
+              <span>{t("layout.palette.resultCount", { n: totalCount })}</span>
             </div>
           </Combobox.Root>
         </BaseDialog.Popup>
@@ -463,6 +472,7 @@ function ScopeTabs({
   onScope: (s: SearchScope) => void;
   projectPath: boolean;
 }) {
+  const { t } = useI18n();
   return (
     <div className="flex items-center gap-0.5 border-b border-edge px-2 py-1.5">
       {SCOPE_TABS.map((tab) => {
@@ -476,8 +486,8 @@ function ScopeTabs({
             disabled={disabled}
             title={
               disabled
-                ? "请先打开一个项目"
-                : `${tab.label}${tab.id === "all" ? "（搜索全部类型）" : ""}`
+                ? t("layout.needProject")
+                : t(tab.labelKey) + (tab.id === "all" ? t("layout.palette.searchAllHint") : "")
             }
             className={cn(
               "rounded-md px-2.5 py-1 text-xs transition-colors select-none",
@@ -488,14 +498,14 @@ function ScopeTabs({
                   : "text-content-muted hover:bg-surface-muted hover:text-content",
             )}
           >
-            {tab.label}
+            {t(tab.labelKey)}
           </button>
         );
       })}
       <span className="ml-auto flex items-center gap-1 text-[10px] text-content-subtle">
         <kbd className="rounded border border-edge px-1">←</kbd>
-        <kbd className="rounded border border-edge px-1">→</kbd>
-        切换类型
+        <kbd className="rounded border border-edge px-1">→</kbd>{" "}
+        {t("layout.palette.switchScope")}
       </span>
     </div>
   );
@@ -503,31 +513,31 @@ function ScopeTabs({
 
 /** Input placeholder reflects the active scope so the user knows what they're
  *  targeting without looking up at the tabs. */
-function placeholderFor(scope: SearchScope): string {
+function placeholderFor(t: Translator, scope: SearchScope): string {
   switch (scope) {
     case "all":
-      return "搜索命令、线程、文件…";
+      return t("layout.palette.placeholder.all");
     case "command":
-      return "搜索命令…";
+      return t("layout.palette.placeholder.command");
     case "session":
-      return "搜索线程标题…";
+      return t("layout.palette.placeholder.session");
     case "file":
-      return "按文件名或路径搜索…";
+      return t("layout.palette.placeholder.file");
     case "grep":
-      return "搜索文件内容…";
+      return t("layout.palette.placeholder.grep");
   }
 }
 
 /** Empty-list copy tailored to the scope: with no query it prompts to type;
  *  mid-search it says there are no matches for that kind. */
-function emptyMessageFor(scope: SearchScope, isSearching: boolean): string {
+function emptyMessageFor(t: Translator, scope: SearchScope, isSearching: boolean): string {
   if (!isSearching) {
-    if (scope === "all" || scope === "command") return "输入以搜索命令";
-    if (scope === "session") return "输入关键词搜索线程";
-    if (scope === "file") return "输入文件名以搜索";
-    return "输入关键词搜索文件内容";
+    if (scope === "all" || scope === "command") return t("layout.palette.empty.command");
+    if (scope === "session") return t("layout.palette.empty.session");
+    if (scope === "file") return t("layout.palette.empty.file");
+    return t("layout.palette.empty.grep");
   }
-  return "无匹配结果";
+  return t("layout.palette.empty.searching");
 }
 
 /* ───────────────────────── helpers ───────────────────────── */
@@ -597,7 +607,8 @@ function CommandRowContent({ cmd }: { cmd: CommandDef }) {
 }
 
 function SessionRowContent({ session }: { session: Session }) {
-  const title = session.title?.trim() || "无标题会话";
+  const { t } = useI18n();
+  const title = session.title?.trim() || t("lib.untitledSession");
   const { Icon, color } = getProviderIcon(session.providerId);
   return (
     <>

@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { cn } from "@renderer/lib/cn.js";
+import { useI18n } from "@renderer/lib/i18n/index.js";
 import { basename } from "@renderer/lib/path.js";
 import { api } from "@renderer/lib/api.js";
 import type { TurnFileEntry } from "@renderer/lib/turnFiles.js";
@@ -62,6 +63,7 @@ export function TurnFilesCard({
   // rewindTurn comes from the store - invoked for both the latest turn
   // (clears the card) and historical turns (marks the card in place).
   const rewindTurn = useSessionStore((s) => s.rewindTurn);
+  const { t } = useI18n();
   // Local rewind-in-flight flag so the button is disabled while the
   // IPC call is in progress (main also clears the card on its
   // `turn.rewound` event, but that takes a tick after the IPC resolves).
@@ -123,13 +125,13 @@ export function TurnFilesCard({
       >
         <IconFile size={14} className="shrink-0 text-content-subtle" />
         <span className="whitespace-nowrap font-semibold text-content">
-          <span className="tfc-long">本轮修改了 {files.length} 个文件</span>
-          <span className="tfc-short">修改 {files.length} 个文件</span>
+          <span className="tfc-long">{t("chatStream.turnFiles.titleLong", { n: files.length })}</span>
+          <span className="tfc-short">{t("chatStream.turnFiles.titleShort", { n: files.length })}</span>
         </span>
         <span className="tfc-sub text-content-subtle">
-          ({created > 0 ? `创建 ${created}` : ""}
+          ({created > 0 ? t("chatStream.turnFiles.created", { n: created }) : ""}
           {created > 0 && modified > 0 ? " · " : ""}
-          {modified > 0 ? `修改 ${modified}` : ""})
+          {modified > 0 ? t("chatStream.turnFiles.modified", { n: modified }) : ""})
         </span>
         {/* Aggregate change tallies - the headline number reviewers care about. */}
         <span className="ml-2 inline-flex items-center gap-1 rounded-md bg-surface-muted px-1.5 py-0.5 font-mono text-[10px] tabular-nums">
@@ -153,18 +155,18 @@ export function TurnFilesCard({
               onKeyDown={(e) => e.stopPropagation()}
               disabled={rewinding || done}
               className="rounded-md bg-surface-hover px-3 py-1 font-medium text-content transition-colors hover:bg-edge disabled:cursor-not-allowed disabled:text-content-subtle"
-              title={isLatestTurn ? "把本轮所有文件恢复为轮开始前的状态" : "把该历史轮次的文件改动恢复为当时修改前的状态(可能影响后续轮次)"}
+              title={isLatestTurn ? t("chatStream.turnFiles.rewindLatestTitle") : t("chatStream.turnFiles.rewindHistoryTitle")}
             >
-              {done ? "已撤销 ✓" : rewinding ? "撤销中…" : (
+              {done ? t("chatStream.turnFiles.rewoundCheck") : rewinding ? t("chatStream.turnFiles.rewinding") : (
                 <>
-                  <span className="tfc-long">撤销本轮</span>
-                  <span className="tfc-short">撤销</span>
+                  <span className="tfc-long">{t("chatStream.turnFiles.rewindLong")}</span>
+                  <span className="tfc-short">{t("chatStream.turnFiles.rewindShort")}</span>
                 </>
               )}
             </button>
           ) : (
             <span className="rounded-md bg-danger/10 px-2 py-0.5 text-[11px] font-semibold text-danger">
-              已撤销
+              {t("chatStream.turnFiles.rewoundBadge")}
             </span>
           )}
           <span className="text-content-subtle">
@@ -186,20 +188,20 @@ export function TurnFilesCard({
           files. */}
       <ConfirmDialog
         open={confirmOpen}
-        title="撤销本轮修改"
+        title={t("chatStream.turnFiles.confirmTitle")}
         danger={!isLatestTurn}
         description={
           isLatestTurn
-            ? "将把本轮修改的文件恢复为轮开始前的状态。"
+            ? t("chatStream.turnFiles.confirmDescLatest")
             : (
               <>
-                撤销历史轮次会把该轮修改的文件恢复到当时修改前的状态，
+                {t("chatStream.turnFiles.confirmDescHistory1")}
                 <br />
-                可能影响后续轮次对同一文件的修改。确定继续吗？
+                {t("chatStream.turnFiles.confirmDescHistory2")}
               </>
             )
         }
-        confirmText="撤销"
+        confirmText={t("chatStream.turnFiles.rewindShort")}
         onOpenChange={setConfirmOpen}
         onConfirm={() => void handleRewind()}
       />
@@ -217,6 +219,7 @@ export function TurnFilesCard({
  *
  *  An external-link glyph at the trailing edge signals the open affordance. */
 function FileRow({ entry }: { entry: TurnFileEntry }) {
+  const { t } = useI18n();
   const isCreated = entry.kind === "created";
 
   const handleOpen = async () => {
@@ -282,9 +285,9 @@ function FileRow({ entry }: { entry: TurnFileEntry }) {
       type="button"
       onClick={handleOpen}
       className="flex w-full items-center gap-2 rounded-md bg-surface-muted/40 px-2 py-1.5 text-left transition-colors hover:bg-surface-hover"
-      title="在编辑器中审查改动"
+      title={t("chatStream.turnFiles.reviewDiff")}
     >
-      <span aria-hidden title={isCreated ? "本轮新建" : "本轮修改"} className="shrink-0 text-content-subtle">
+      <span aria-hidden title={isCreated ? t("chatStream.turnFiles.createdThisTurn") : t("chatStream.turnFiles.modifiedThisTurn")} className="shrink-0 text-content-subtle">
         {isCreated ? <IconPlus size={12} /> : <IconEdit size={12} />}
       </span>
       <span className="min-w-0 truncate font-mono text-[11px] text-content" title={entry.filePath}>
@@ -295,7 +298,7 @@ function FileRow({ entry }: { entry: TurnFileEntry }) {
         {entry.adds > 0 && <span className="text-success">+{entry.adds}</span>}
         {entry.dels > 0 && <span className="text-danger">-{entry.dels}</span>}
         {entry.adds === 0 && entry.dels === 0 && (
-          <span className="text-content-subtle">无变化</span>
+          <span className="text-content-subtle">{t("chatStream.turnFiles.noChanges")}</span>
         )}
       </span>
       <IconExternalLink

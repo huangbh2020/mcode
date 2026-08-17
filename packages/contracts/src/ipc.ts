@@ -74,6 +74,22 @@ export const DisplayModeSchema = z.enum(["single", "tabs"]);
 export type DisplayMode = z.infer<typeof DisplayModeSchema>;
 
 /**
+ * UI language preference:
+ *  - "zh" (default): Simplified Chinese — the project's original UI language.
+ *  - "en": English.
+ *
+ * Persisted in the `settings` table under this key; the renderer reads it at
+ * boot (first-paint `setting.getMany` batch) into the sessionStore's `locale`
+ * field. All translated components subscribe to `locale` via `useI18n()` and
+ * re-render immediately when it flips — no restart needed.
+ */
+export const UI_LOCALE_SETTING_KEY = "ui.locale";
+
+/** zod schema + TS union for the UI language preference. */
+export const LocaleSchema = z.enum(["zh", "en"]);
+export type Locale = z.infer<typeof LocaleSchema>;
+
+/**
  * Setting key under which the session auto-archive rules are persisted (JSON).
  *
  * A session is auto-archived when its `updated_at` (bumped by every activity)

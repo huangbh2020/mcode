@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Menu } from "@base-ui/react/menu";
 import { cn } from "@renderer/lib/cn.js";
+import { useI18n } from "@renderer/lib/i18n/index.js";
 import { IconCheck, IconChevronDown, IconLock } from "@renderer/lib/icons.js";
 import { getProviderIcon } from "@renderer/lib/providerIcon.js";
 import { useSessionStore } from "@renderer/stores/sessionStore.js";
@@ -21,6 +22,7 @@ import { useSuppressBrowserView } from "@renderer/hooks/useSuppressBrowserView.j
  * provider's capabilities automatically.
  */
 export function ProviderDropdown() {
+  const { t } = useI18n();
   // While the menu is open the embedded browser view is suppressed so the
   // portaled popup stays visible/clickable when it extends over the browser.
   const [open, setOpen] = useState(false);
@@ -52,7 +54,7 @@ export function ProviderDropdown() {
           "composer-chip flex shrink-0 items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-medium",
           "cursor-default text-content-muted",
         )}
-        title="该会话的 SDK 已固定,不可更改"
+        title={t("chat.provider.locked")}
       >
         <activeIcon.Icon size={13} className={cn("shrink-0", activeIcon.color)} />
         <span className="min-w-0 max-w-[140px] truncate">{active?.displayName ?? providerId}</span>
@@ -68,7 +70,7 @@ export function ProviderDropdown() {
         "composer-chip flex shrink-0 items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-medium transition-all duration-150 ease-out",
         "text-content-muted hover:scale-105 hover:bg-accent/10 hover:text-accent active:scale-95",
       )}
-      title="选择会话使用的 SDK"
+      title={t("chat.provider.selectTitle")}
     >
       <activeIcon.Icon size={13} className={cn("shrink-0", activeIcon.color)} />
       <span className="min-w-0 max-w-[140px] truncate">{active?.displayName ?? providerId}</span>
@@ -91,7 +93,7 @@ export function ProviderDropdown() {
             )}
           >
             <div className="px-3 py-1 text-xs uppercase tracking-wide text-content-subtle">
-              选择 SDK
+              {t("chat.provider.section")}
             </div>
             {providers.map((p) => {
               const activeItem = p.id === providerId;

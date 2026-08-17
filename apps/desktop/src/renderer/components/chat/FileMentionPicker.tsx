@@ -7,6 +7,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { cn } from "@renderer/lib/cn.js";
+import { useI18n } from "@renderer/lib/i18n/index.js";
 import { api } from "@renderer/lib/api.js";
 import { IconFile, IconLoader2, IconPaperclip, IconSearch, IconUpload } from "@renderer/lib/icons.js";
 import type { FileSearchEntry } from "@contracts/ipc";
@@ -42,6 +43,7 @@ export function FileMentionPicker({
   onPick,
   onClose,
 }: FileMentionPickerProps) {
+  const { t } = useI18n();
   const [files, setFiles] = useState<FileSearchEntry[]>([]);
   const [loading, setLoading] = useState(false);
   const [activeIdx, setActiveIdx] = useState(0);
@@ -251,7 +253,7 @@ export function FileMentionPicker({
             ref={inputRef}
             value={localQuery}
             onChange={(e) => setLocalQuery(e.target.value)}
-            placeholder="搜索项目文件…"
+            placeholder={t("chat.mention.searchPlaceholder")}
             className="h-6 flex-1 bg-transparent text-[12px] text-content outline-none placeholder:text-content-subtle"
           />
           {selected.size > 0 && (
@@ -260,7 +262,7 @@ export function FileMentionPicker({
               className="shrink-0 rounded bg-accent px-1.5 py-0.5 text-[10px] font-medium text-surface hover:brightness-110"
               onClick={confirmAttach}
             >
-              添加 {selected.size}
+              {t("chat.mention.addN", { n: selected.size })}
             </button>
           )}
         </div>
@@ -268,7 +270,7 @@ export function FileMentionPicker({
         <div className="flex items-center gap-1.5 border-b border-edge px-2.5 py-1.5 text-[11px] text-content-muted">
           <IconPaperclip size={12} className="shrink-0 opacity-70" />
           <span className="truncate">
-            引用文件{effectiveQuery ? ` · ${effectiveQuery}` : ""}
+            {t("chat.mention.header")}{effectiveQuery ? ` · ${effectiveQuery}` : ""}
           </span>
         </div>
       )}
@@ -281,27 +283,27 @@ export function FileMentionPicker({
             "mx-1.5 mt-1.5 flex items-center gap-1.5 rounded-md border border-dashed border-edge px-2 py-1.5 text-left text-[12px] text-content-muted",
             "transition-colors hover:border-accent/60 hover:bg-accent/10 hover:text-accent",
           )}
-          title="打开系统文件选择对话框(可选择项目外的文件)"
+          title={t("chat.mention.externalTitle")}
         >
           <IconUpload size={14} className="shrink-0" />
-          <span className="flex-1">从系统选择文件…</span>
-          <span className="text-[10px] text-content-subtle">项目外</span>
+          <span className="flex-1">{t("chat.mention.externalPick")}</span>
+          <span className="text-[10px] text-content-subtle">{t("chat.mention.externalHint")}</span>
         </button>
       )}
 
       <div ref={listRef} className="min-h-0 flex-1 overflow-y-auto p-1">
         {!projectPath ? (
           <div className="px-3 py-6 text-center text-[12px] text-content-subtle">
-            请先打开一个项目
+            {t("chat.mention.openProjectFirst")}
           </div>
         ) : loading && files.length === 0 ? (
           <div className="flex items-center justify-center gap-1.5 px-3 py-6 text-[12px] text-content-subtle">
             <IconLoader2 size={14} className="animate-spin" />
-            搜索中…
+            {t("chat.mention.searching")}
           </div>
         ) : files.length === 0 ? (
           <div className="px-3 py-6 text-center text-[12px] text-content-subtle">
-            无匹配文件
+            {t("chat.mention.noMatch")}
           </div>
         ) : (
           files.map((f, idx) => {
@@ -350,7 +352,7 @@ export function FileMentionPicker({
                   </span>
                 </span>
                 {already && (
-                  <span className="shrink-0 text-[10px] text-content-subtle">已添加</span>
+                  <span className="shrink-0 text-[10px] text-content-subtle">{t("chat.mention.added")}</span>
                 )}
               </button>
             );
@@ -362,12 +364,12 @@ export function FileMentionPicker({
         <span>
           <kbd className="rounded border border-edge px-1">↑</kbd>
           <kbd className="ml-0.5 rounded border border-edge px-1">↓</kbd>
-          {" "}导航{" "}
+          {" "}{t("chat.kbd.navigate")}{" "}
           <kbd className="ml-1 rounded border border-edge px-1">↵</kbd>
           {" "}
-          {mode === "attach" ? "确认" : "选择"}
+          {mode === "attach" ? t("chat.mention.confirm") : t("chat.mention.select")}
         </span>
-        <span>{files.length} 项</span>
+        <span>{t("chat.mention.count", { n: files.length })}</span>
       </div>
     </div>
   );

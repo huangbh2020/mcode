@@ -30,6 +30,7 @@
 import { useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { cn } from "@renderer/lib/cn.js";
+import { useI18n } from "@renderer/lib/i18n/index.js";
 import { fmtTokens, getContextBreakdown, warningColor } from "@renderer/lib/contextWindow.js";
 import type { ContextSnapshot, TurnUsageRecord } from "@contracts/runtime";
 import { ContextTooltipBody } from "./ContextRing.js";
@@ -148,6 +149,7 @@ function CurrentView({
   historyCount: number;
   onShowHistory: () => void;
 }) {
+  const { t } = useI18n();
   return (
     <div>
       <ContextTooltipBody snapshot={snapshot} breakdown={breakdown} />
@@ -161,9 +163,9 @@ function CurrentView({
           )}
         >
           <IconChartBar size={12} className="shrink-0 opacity-70" />
-          <span className="min-w-0 flex-1 truncate">历史详情</span>
+          <span className="min-w-0 flex-1 truncate">{t("chat.context.history")}</span>
           <span className="rounded-full bg-surface-muted px-1.5 py-0.5 text-[10px] tabular-nums text-content-subtle">
-            {historyCount} 轮
+            {t("chat.context.turns", { n: historyCount })}
           </span>
         </button>
       </div>
@@ -197,6 +199,7 @@ function HistoryView({
   history: TurnUsageRecord[];
   maxTokens: number;
 }) {
+  const { t } = useI18n();
   // Newest first so the most recent turn is on top without scrolling.
   const ordered = [...history].reverse();
   // Per-turn "input" isn't stored directly — derive it as the non-cached,
@@ -226,25 +229,25 @@ function HistoryView({
       <div className="flex items-center gap-1 border-b border-edge/70 px-2.5 py-1.5">
         <span className="flex items-center gap-1 text-[11px] font-semibold text-content">
           <IconChartBar size={12} className="opacity-80" />
-          历史详情 · {history.length} 轮
+          {t("chat.context.historyTurns", { n: history.length })}
         </span>
       </div>
 
       {ordered.length === 0 ? (
         <div className="px-3 py-6 text-center text-[11px] text-content-subtle">
-          本轮结束后将显示历史
+          {t("chat.context.historyEmpty")}
         </div>
       ) : (
         <div className="max-h-80 overflow-y-auto">
           <table className="w-full border-collapse text-[10px] tabular-nums">
             <thead className="sticky top-0 bg-surface text-content-subtle">
               <tr className="border-b border-edge/70">
-                <th className="px-1.5 py-1 text-left font-medium">轮次</th>
-                <th className="px-1 py-1 text-right font-medium">输入</th>
-                <th className="px-1 py-1 text-right font-medium">输出</th>
-                <th className="px-1 py-1 text-right font-medium">缓存读</th>
-                <th className="px-1 py-1 text-right font-medium">缓存写</th>
-                <th className="px-1 py-1 text-right font-medium">占用</th>
+                <th className="px-1.5 py-1 text-left font-medium">{t("chat.context.colTurn")}</th>
+                <th className="px-1 py-1 text-right font-medium">{t("chat.context.colInput")}</th>
+                <th className="px-1 py-1 text-right font-medium">{t("chat.context.colOutput")}</th>
+                <th className="px-1 py-1 text-right font-medium">{t("chat.context.colCacheRead")}</th>
+                <th className="px-1 py-1 text-right font-medium">{t("chat.context.colCacheWrite")}</th>
+                <th className="px-1 py-1 text-right font-medium">{t("chat.context.colUsed")}</th>
               </tr>
             </thead>
             <tbody>
@@ -264,8 +267,12 @@ function HistoryView({
                     className="border-b border-edge/30 hover:bg-surface-muted"
                     title={
                       `#${turnNo} · ${fmtTime(r.endedAt)} · ${fmtDuration(r.durationMs)}\n` +
-                      `处理 ${fmtTokens(r.totalProcessedTokens)} · 累计占用 ${fmtTokens(r.usedTokens)}\n` +
-                      (r.model ? `模型 ${r.model}` : "")
+                      t("chat.context.rowTooltip", {
+                        processed: fmtTokens(r.totalProcessedTokens),
+                        used: fmtTokens(r.usedTokens),
+                      }) +
+                      "\n" +
+                      (r.model ? t("chat.context.rowModel", { model: r.model }) : "")
                     }
                   >
                     <td className="whitespace-nowrap px-1.5 py-1 text-content-muted">#{turnNo}</td>
@@ -290,7 +297,7 @@ function HistoryView({
             </tbody>
             <tfoot className="border-t border-edge/70 bg-surface-muted/50">
               <tr>
-                <td className="px-1.5 py-1 font-medium text-content">合计</td>
+                <td className="px-1.5 py-1 font-medium text-content">{t("chat.context.total")}</td>
                 <td className="whitespace-nowrap px-1 py-1 text-right font-medium text-content">
                   {fmtTokens(totals.input)}
                 </td>
@@ -313,12 +320,12 @@ function HistoryView({
               row's tooltip. */}
           <div className="flex items-center gap-3 px-2 py-1 text-[9px] text-content-subtle">
             <span className="inline-flex items-center gap-0.5">
-              <IconCalendarStats size={10} /> 时间 / 耗时
+              <IconCalendarStats size={10} /> {t("chat.context.timeDuration")}
             </span>
             <span className="inline-flex items-center gap-0.5">
-              <IconClock size={10} /> 模型
+              <IconClock size={10} /> {t("chat.context.modelLabel")}
             </span>
-            <span className="ml-auto italic">悬停行查看明细</span>
+            <span className="ml-auto italic">{t("chat.context.hoverRow")}</span>
           </div>
         </div>
       )}

@@ -1,4 +1,5 @@
 import { cn } from "@renderer/lib/cn.js";
+import { useI18n } from "@renderer/lib/i18n/index.js";
 import type { lineDiff } from "@renderer/lib/lineDiff.js";
 
 /**
@@ -22,10 +23,11 @@ export function DiffView({
    *  defaults to the inline card height. */
   scrollClassName?: string;
 }) {
+  const { t } = useI18n();
   if (diff.length === 0) {
     return (
       <div className="rounded bg-surface-muted/60 p-2 text-content-subtle [font-size:var(--chat-fs-xs)]">
-        (no changes)
+        {t("chatStream.diff.noChanges")}
       </div>
     );
   }

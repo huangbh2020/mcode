@@ -28,7 +28,7 @@
  */
 import type { Api } from "../../preload/index.js";
 import { IPC } from "@contracts/ipc";
-import type { PickedImage } from "@contracts/ipc";
+import type { Locale, PickedImage } from "@contracts/ipc";
 import type { RuntimeEvent } from "@contracts/runtime";
 import type { ThemeState } from "./theme.js";
 import type {
@@ -36,10 +36,22 @@ import type {
   PairingVerifyInput,
   PairingVerifyResult,
 } from "@contracts/mobile";
+import { translate } from "@renderer/lib/i18n/core.js";
 
 const TOKEN_KEY = "mcode-web-token";
 const ENDPOINT_KEY = "mcode-web-endpoint";
 const THEME_KEY = "mcode-web-theme";
+
+/** Current UI language for error messages. This module must NOT import
+ *  sessionStore: lib/api.ts constructs `createWebApi()` during module
+ *  evaluation, and the store imports api.ts — a store import here would form
+ *  a module-evaluation cycle that crashes phone boot in TDZ. The store keeps
+ *  `<html lang>` in sync with the locale at hydrate and on every switch
+ *  (defaulting to zh when unset), which is exactly what we need at error
+ *  time — long after boot. */
+function uiLocale(): Locale {
+  return document.documentElement.lang === "en" ? "en" : "zh";
+}
 
 /** Cap for user-picked images (mirrors the desktop picker's main-side cap and
  *  the SendTurnImageSchema 6M-char ceiling). */
@@ -121,7 +133,9 @@ export async function pairWithCode(input: PairingVerifyInput): Promise<PairingVe
   });
   if (!res.ok) {
     const body = (await res.json().catch(() => ({}))) as { error?: string };
-    throw new Error(body.error ?? `配对失败 (${res.status})`);
+    throw new Error(
+      body.error ?? translate(uiLocale(), "lib.web.pairFailed", { status: res.status }),
+    );
   }
   const result = (await res.json()) as PairingVerifyResult;
   writeAuth(result.deviceToken, result.endpoint);
@@ -155,7 +169,8 @@ const RPC_DEFAULT_TIMEOUT_MS = 30_000;
 
 async function rpc<T = unknown>(method: string, input?: unknown): Promise<T> {
   const { token } = readAuth();
-  if (!token) throw new Error("未配对 — 请先在电脑端生成二维码完成配对");
+  if (!token)
+    throw new Error(translate(uiLocale(), "lib.web.notPaired"));
   const timeoutMs = RPC_TIMEOUT_MS[method] ?? RPC_DEFAULT_TIMEOUT_MS;
   let timedOut = false;
   const ac = new AbortController();
@@ -177,11 +192,15 @@ async function rpc<T = unknown>(method: string, input?: unknown): Promise<T> {
       // Token revoked on the PC side — clear local auth so the pairing screen
       // reappears instead of silently looping on bad credentials.
       clearAuth();
-      throw new Error("设备已被电脑端移除 — 请重新配对");
+      throw new Error(translate(uiLocale(), "lib.web.deviceRevoked"));
     }
     const envelope = (await res.json().catch(() => null)) as MobileRpcResponse | null;
     if (!envelope || !envelope.ok) {
-      throw new Error(envelope && !envelope.ok ? envelope.error : `RPC 失败 (${res.status})`);
+      throw new Error(
+        envelope && !envelope.ok
+          ? envelope.error
+          : translate(uiLocale(), "lib.web.rpcFailed", { status: res.status }),
+      );
     }
     return envelope.result as T;
   } catch (err) {
@@ -189,7 +208,9 @@ async function rpc<T = unknown>(method: string, input?: unknown): Promise<T> {
     // user gets an actionable message instead of an opaque "AbortError".
     if (timedOut) {
       throw new Error(
-        `请求超时（${Math.round(timeoutMs / 1000)} 秒）— 电脑端可能正在重启或网络不稳定，请稍后重试`,
+        translate(uiLocale(), "lib.web.timeout", {
+          sec: Math.round(timeoutMs / 1000),
+        }),
       );
     }
     throw err;
@@ -201,7 +222,7 @@ async function rpc<T = unknown>(method: string, input?: unknown): Promise<T> {
 /** Desktop-only stub: throws a clear error. Used for whitelisted-group
  *  members that exist on the desktop Api shape but have no web meaning. */
 function webUnsupported(name: string): never {
-  throw new Error(`api.${name} 在移动端不可用`);
+  throw new Error(translate(uiLocale(), "lib.web.unavailable", { name }));
 }
 
 /** Callable proxy standing in for an absent desktop-only namespace
@@ -323,7 +344,8 @@ function pickImagesWeb(): Promise<{ images: PickedImage[]; skipped: string[] }> 
       ).then(() => resolve({ images, skipped }));
     };
     input.oncancel = () => resolve({ images: [], skipped: [] });
-    input.onerror = () => reject(new Error("无法打开文件选择器"));
+    input.onerror = () =>
+      reject(new Error(translate(uiLocale(), "lib.web.pickerFailed")));
     input.click();
   });
 }
@@ -457,7 +479,10 @@ const shell: Api["shell"] = {
 };
 
 const clipboardFile: Api["clipboardFile"] = {
-  save: async () => ({ ok: false as const, error: "移动端不支持粘贴外部文件,仅支持图片" }),
+  save: async () => ({
+    ok: false as const,
+    error: translate(uiLocale(), "lib.web.pasteUnsupported"),
+  }),
   writeImage: (input) => writeImageWeb(input),
 };
 

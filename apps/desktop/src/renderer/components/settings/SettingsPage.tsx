@@ -1,6 +1,7 @@
 import { useEffect, useState, type ComponentType } from "react";
 import { cn } from "@renderer/lib/cn.js";
 import { useSessionStore } from "@renderer/stores/sessionStore.js";
+import { useI18n, type MessageId } from "@renderer/lib/i18n/index.js";
 import { ThreePaneLayout } from "@renderer/components/layout/ThreePaneLayout.js";
 import {
   IconSettings,
@@ -60,27 +61,28 @@ type SectionId = "general" | "custom-models" | "skills" | "mcp" | "appearance" |
 
 interface NavItem {
   id: SectionId;
-  label: string;
+  labelKey: MessageId;
   icon: ComponentType<TablerIconProps>;
 }
 
 const NAV_ITEMS: NavItem[] = [
   // 分组顺序:常规 -> 个性化 -> 核心 AI 配置 -> IDE 能力 -> 关于
-  { id: "general", label: "常规", icon: IconSettings },
-  { id: "appearance", label: "外观", icon: IconPalette },
-  { id: "custom-models", label: "模型配置", icon: IconRobot },
-  { id: "shortcuts", label: "快捷键", icon: IconKeyboard },
-  { id: "skills", label: "技能", icon: IconSparkles },
-  { id: "mcp", label: "MCP", icon: McpIcon },
-  { id: "notifications", label: "消息通知", icon: IconBell },
-  { id: "git", label: "Git", icon: IconBrandGit },
-  { id: "terminal", label: "终端", icon: IconTerminal2 },
-  { id: "browser", label: "浏览器", icon: IconWorld },
-  { id: "lsp-languages", label: "语言服务器", icon: IconCode },
-  { id: "about", label: "关于", icon: IconInfoCircle },
+  { id: "general", labelKey: "settings.nav.general", icon: IconSettings },
+  { id: "appearance", labelKey: "settings.nav.appearance", icon: IconPalette },
+  { id: "custom-models", labelKey: "settings.nav.customModels", icon: IconRobot },
+  { id: "shortcuts", labelKey: "settings.nav.shortcuts", icon: IconKeyboard },
+  { id: "skills", labelKey: "settings.nav.skills", icon: IconSparkles },
+  { id: "mcp", labelKey: "settings.nav.mcp", icon: McpIcon },
+  { id: "notifications", labelKey: "settings.nav.notifications", icon: IconBell },
+  { id: "git", labelKey: "settings.nav.git", icon: IconBrandGit },
+  { id: "terminal", labelKey: "settings.nav.terminal", icon: IconTerminal2 },
+  { id: "browser", labelKey: "settings.nav.browser", icon: IconWorld },
+  { id: "lsp-languages", labelKey: "settings.nav.lsp", icon: IconCode },
+  { id: "about", labelKey: "settings.nav.about", icon: IconInfoCircle },
 ];
 
 export function SettingsPage() {
+  const { t } = useI18n();
   const setSettingsOpen = useSessionStore((s) => s.setSettingsOpen);
   // Read the same persisted leftWidth the workspace sidebar + titlebar left
   // strip use, so the settings nav sidebar stays exactly aligned with the
@@ -143,7 +145,7 @@ export function SettingsPage() {
                     isActive ? "text-accent" : "text-content-subtle",
                   )}
                 />
-                {item.label}
+                {t(item.labelKey)}
               </button>
             );
           })}
