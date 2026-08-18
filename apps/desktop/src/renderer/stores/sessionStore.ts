@@ -52,6 +52,7 @@ import {
   UI_SHORTCUTS_SETTING_KEY,
   UI_CHAT_DENSITY_SETTING_KEY,
   AUTO_ARCHIVE_SETTING_KEY,
+  UI_GAME_TAUNT_SETTING_KEY,
   DEFAULT_AUTO_ARCHIVE_CONFIG,
   parseAutoArchiveConfig,
   ShortcutBindingsSchema,
@@ -75,6 +76,7 @@ import {
   type PickedElement,
   type BrowserDevicePreset,
   type BrowserOrientation,
+  type GameState,
 } from "@contracts/ipc";
 
 /** One browser tab, shared across the sidebar and overlay containers. `id` is
@@ -601,6 +603,18 @@ export interface SessionState {
    *  wired in App.tsx and by any in-app "command palette" affordance. The
    *  palette itself (CommandPalette.tsx) reads this to mount/unmount. */
   commandPaletteOpen: boolean;
+  /** Mini-game overlay (liars dice) visibility. Toggled by the titlebar button
+   *  / global hotkey. The overlay (GameOverlay.tsx) reads this to mount/unmount.
+   *  NOT persisted (pure in-memory, like the command palette). */
+  gameOverlayOpen: boolean;
+  /** Mirrored game state from main (the authoritative owner). Null = no game in
+   *  progress. Hydrated on init / overlay reopen via `game.getState`, and
+   *  refreshed after each user action. Persisted on the main side under
+   *  `ui.game.state`; the renderer only mirrors. */
+  gameState: GameState | null;
+  /** Whether the model opponent's trash-talk is shown. Mirrors the
+   *  `ui.game.taunt` setting (default on). Toggled in the overlay. */
+  gameTaunt: boolean;
   /** File search dialog visibility. Opened from the Files panel search
    *  button, the `files.search` command, or the Cmd/Ctrl+Shift+F hotkey.
    *  The dialog (SearchDialog.tsx) reads this to mount/unmount. NOT persisted. */
@@ -1051,6 +1065,22 @@ export interface SessionState {
   setModelConfigPromptOpen: (open: boolean) => void;
   /** Toggle the Cmd/Ctrl+K command palette open/closed. */
   setCommandPaletteOpen: (open: boolean) => void;
+  /** Toggle the mini-game overlay open/closed. */
+  setGameOverlayOpen: (open: boolean) => void;
+  /** Hydrate the mirrored game state from main (called on init / overlay reopen). */
+  hydrateGameState: () => Promise<void>;
+  /** Start a fresh game. Refreshes the mirrored state. */
+  gameNewGame: () => Promise<boolean>;
+  /** Submit the user's bid. Returns true on success. */
+  gameUserBid: (count: number, face: number) => Promise<boolean>;
+  /** The user challenges the model's last bid. Returns true on success. */
+  gameUserChallenge: () => Promise<boolean>;
+  /** After a roundOver reveal, start the next round. Returns true on success. */
+  gameContinue: () => Promise<boolean>;
+  /** The user resigns. Refreshes the mirrored state. */
+  gameResign: () => Promise<void>;
+  /** Toggle the taunt feature on/off (persists to `ui.game.taunt`). */
+  setGameTaunt: (on: boolean) => void;
   /** Toggle the file search dialog open/closed. Opened from the Files panel
    *  search button, the `files.search` command, or the Cmd/Ctrl+Shift+F
    *  global hotkey. NOT persisted (pure in-memory, like the command palette). */
@@ -2985,6 +3015,12 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   settingsSection: null,
   modelConfigPromptOpen: false,
   commandPaletteOpen: false,
+  // Mini-game overlay (liars dice) - closed by default. Pure in-memory.
+  gameOverlayOpen: false,
+  // Mirrored game state from main. Null until hydrated.
+  gameState: null,
+  // Taunt feature - default on (mirrors the `ui.game.taunt` setting).
+  gameTaunt: true,
   // File search dialog (opened from the Files panel search button / Cmd+Shift+F
   // / command palette). Pure in-memory, mirrors commandPaletteOpen.
   searchDialogOpen: false,
@@ -3402,6 +3438,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           UI_GIT_COLLAPSED_REPOS_SETTING_KEY,
           UI_PASTE_TAG_THRESHOLD_CHARS_SETTING_KEY,
           AUTO_ARCHIVE_SETTING_KEY,
+          UI_GAME_TAUNT_SETTING_KEY,
         ],
       })
       .catch((err) => {
@@ -3442,6 +3479,14 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     // throws — malformed rows fall back to the disabled default.
     const autoArchiveRaw = ds[AUTO_ARCHIVE_SETTING_KEY];
     if (autoArchiveRaw) set({ autoArchiveConfig: parseAutoArchiveConfig(autoArchiveRaw) });
+
+    // Mini-game taunt toggle (default on; "off" disables trash-talk).
+    try {
+      const tauntRaw = ds[UI_GAME_TAUNT_SETTING_KEY];
+      set({ gameTaunt: tauntRaw !== "off" });
+    } catch (err) {
+      console.error("apply(gameTaunt) failed:", err);
+    }
 
     // Draggable pane widths (one JSON blob).
     try {
@@ -5599,6 +5644,93 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   },
 
   setCommandPaletteOpen: (open) => set({ commandPaletteOpen: open }),
+  setGameOverlayOpen: (open) => set({ gameOverlayOpen: open }),
+
+  // ── Mini-game (liars dice) actions ──
+  // Main is the authoritative state owner; these RPCs return the resulting
+  // state (or an error) which we mirror into `gameState`. The model opponent
+  // runs to completion inside main before returning, so the mirrored state is
+  // always ready for the user's next move.
+  hydrateGameState: async () => {
+    try {
+      const res = await api.game.getState();
+      if (res.ok) set({ gameState: res.state });
+    } catch (err) {
+      console.error("game.getState failed:", err);
+    }
+  },
+  gameNewGame: async () => {
+    try {
+      const res = await api.game.newGame();
+      if (res.ok) {
+        set({ gameState: res.state });
+        return true;
+      }
+      console.error("game.newGame failed:", res.error);
+      return false;
+    } catch (err) {
+      console.error("game.newGame failed:", err);
+      return false;
+    }
+  },
+  gameUserBid: async (count, face) => {
+    try {
+      const res = await api.game.userBid({ count, face });
+      if (res.ok) {
+        set({ gameState: res.state });
+        return true;
+      }
+      console.error("game.userBid failed:", res.error);
+      return false;
+    } catch (err) {
+      console.error("game.userBid failed:", err);
+      return false;
+    }
+  },
+  gameUserChallenge: async () => {
+    try {
+      const res = await api.game.userChallenge();
+      if (res.ok) {
+        set({ gameState: res.state });
+        return true;
+      }
+      console.error("game.userChallenge failed:", res.error);
+      return false;
+    } catch (err) {
+      console.error("game.userChallenge failed:", err);
+      return false;
+    }
+  },
+  gameContinue: async () => {
+    try {
+      const res = await api.game.continueGame();
+      if (res.ok) {
+        set({ gameState: res.state });
+        return true;
+      }
+      console.error("game.continue failed:", res.error);
+      return false;
+    } catch (err) {
+      console.error("game.continue failed:", err);
+      return false;
+    }
+  },
+  gameResign: async () => {
+    try {
+      const res = await api.game.resign();
+      if (res.ok) set({ gameState: res.state });
+    } catch (err) {
+      console.error("game.resign failed:", err);
+    }
+  },
+  setGameTaunt: (on) => {
+    set({ gameTaunt: on });
+    try {
+      void api.setting.set({ key: UI_GAME_TAUNT_SETTING_KEY, value: on ? "on" : "off" });
+    } catch (err) {
+      console.error("setting.set(game.taunt) failed:", err);
+    }
+  },
   setSearchDialogOpen: (open) => set({ searchDialogOpen: open }),
   setLeftOpen: (open) => {
     // While wide-panel (2:8) mode is on the left sidebar must stay closed —

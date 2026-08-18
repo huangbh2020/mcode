@@ -55,6 +55,7 @@ import {
   IconArrowsExchange,
   IconArrowsMaximize,
   IconFocus,
+  IconDeviceGamepad2,
 } from "@renderer/lib/icons.js";
 
 /** Visual grouping label shown as a section header in the palette. */
@@ -137,6 +138,17 @@ const STATIC_COMMANDS: StaticCommandDef[] = [
     defaultAccelerator: DEFAULT_SHORTCUTS["command.palette"],
     perform: (s) => {
       s.setCommandPaletteOpen(!s.commandPaletteOpen);
+    },
+  },
+  {
+    id: "game.toggle",
+    labelKey: "lib.commands.toggleGame",
+    group: "视图",
+    keywords: ["game", "dice", "liars", "游戏", "骰子", "吹牛"],
+    icon: IconDeviceGamepad2,
+    defaultAccelerator: DEFAULT_SHORTCUTS["game.toggle"],
+    perform: (s) => {
+      s.setGameOverlayOpen(!s.gameOverlayOpen);
     },
   },
   {

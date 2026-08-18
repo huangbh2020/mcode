@@ -42,6 +42,7 @@ export const DEFAULT_SHORTCUTS: ShortcutBindings = {
   "appearance.theme.toggle": { key: "l", cmd: true, shift: true, alt: false },
   "tab.close": { key: "w", cmd: true, shift: false, alt: false },
   "chat.focus-input": { key: "n", cmd: true, shift: true, alt: false },
+  "game.toggle": { key: "g", cmd: true, shift: true, alt: false },
 };
 
 /**

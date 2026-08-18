@@ -232,6 +232,22 @@ export {
   IconBulb,
   // Browser panel: element picker toggle
   IconTarget,
+  // Mini-game overlay (liars dice): titlebar toggle + dice faces + trophy
+  IconDice,
+  IconDice1,
+  IconDice2,
+  IconDice3,
+  IconDice4,
+  IconDice5,
+  IconDice6,
+  IconDice1Filled,
+  IconDice2Filled,
+  IconDice3Filled,
+  IconDice4Filled,
+  IconDice5Filled,
+  IconDice6Filled,
+  IconDeviceGamepad2,
+  IconTrophy,
   // "None / not supported" state (e.g. "no model selected" dropdown items)
   IconCircleOff,
 } from "@tabler/icons-react";

@@ -436,7 +436,23 @@ const api = {
     status: (() => ipcRenderer.invoke(IPC.RELAY_STATUS)) as RpcMap["relay.status"],
   },
 
-  // ── Push events (main → renderer) ──
+  /** Mini-game overlay (liars dice). Main owns the authoritative state; each
+   *  RPC returns the resulting state (or an error) for the renderer to mirror.
+   *  The model opponent runs to completion inside main before any state is
+   *  returned, so the returned state is always ready for the user's next move. */
+  game: {
+    newGame: (() => ipcRenderer.invoke(IPC.GAME_NEW_GAME)) as RpcMap["game.newGame"],
+    getState: (() => ipcRenderer.invoke(IPC.GAME_GET_STATE)) as RpcMap["game.getState"],
+    userBid: ((input) =>
+      ipcRenderer.invoke(IPC.GAME_USER_BID, input)) as RpcMap["game.userBid"],
+    userChallenge: (() =>
+      ipcRenderer.invoke(IPC.GAME_USER_CHALLENGE)) as RpcMap["game.userChallenge"],
+    continueGame: (() =>
+      ipcRenderer.invoke(IPC.GAME_CONTINUE)) as RpcMap["game.continue"],
+    resign: (() => ipcRenderer.invoke(IPC.GAME_RESIGN)) as RpcMap["game.resign"],
+  },
+
+  // ── Push events (main -> renderer) ──
   on: {
     /** Subscribe to claude:event push channel. Returns an unsubscribe fn. */
     claudeEvent(handler: (msg: Extract<MainToRendererMessage, { channel: "claude:event" }>) => void): () => void {

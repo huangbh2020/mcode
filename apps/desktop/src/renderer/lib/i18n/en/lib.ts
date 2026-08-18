@@ -6,6 +6,7 @@ export const en = {
   /* ── lib/commands.ts (command palette labels) ── */
   "lib.commands.closeTab": "Close current tab",
   "lib.commands.openPalette": "Open command palette",
+  "lib.commands.toggleGame": "Mini-game: Liar's Dice",
   "lib.commands.displaySingle": "Display mode: single session",
   "lib.commands.displayTabs": "Display mode: tabs",
   "lib.commands.displayToggle": "Toggle display mode",

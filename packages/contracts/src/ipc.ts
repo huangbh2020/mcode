@@ -13,6 +13,7 @@ import type { PiProviderConfig, PiProviderPublic } from "./piModel.js";
 import type { ThemeName, EffectiveTheme, ThemeChangedMessage } from "./theme.js";
 import type { PairingStartResult, PairedDevice } from "./mobile.js";
 import type { RelayStatus, RelayVpsConfig, RelayVpsConfigInput } from "./relay.js";
+import type { GameState, Bid, Face, PlayerId } from "./game.js";
 
 // Re-export relay types so consumers can import from "@contracts/ipc".
 export type {
@@ -26,6 +27,9 @@ export {
   RELAY_CONFIG_SETTING_KEY,
   RELAY_DEFAULT_PUBLIC_PORT,
 } from "./relay.js";
+
+// Re-export game domain types so consumers can import from "@contracts/ipc".
+export type { GameState, Bid, Face, PlayerId, GamePhase, BidEntry, RoundResult } from "./game.js";
 
 /**
  * Default provider id — used when no provider is explicitly specified for a
@@ -2686,6 +2690,85 @@ export const BrowserAuthRespondSchema = z.object({
 });
 export type BrowserAuthRespondInput = z.infer<typeof BrowserAuthRespondSchema>;
 
+/* ──────────────────────────  Mini-game (overlay)  ─────────────────────────── */
+
+/**
+ * Setting key under which the current game state is persisted as JSON. Main is
+ * the single source of truth; the renderer mirrors the state via `game.*` RPCs.
+ * A missing/malformed value falls back to "no game in progress" (null).
+ */
+export const UI_GAME_STATE_SETTING_KEY = "ui.game.state";
+
+/** Setting key for the model-trash-talk toggle ("on" / "off", default "on"). */
+export const UI_GAME_TAUNT_SETTING_KEY = "ui.game.taunt";
+
+/**
+ * Setting key for the model config used by the game opponent, in
+ * `"configId:roleKey"` form (same convention as title-gen / commit-gen). When
+ * absent, the game falls back to the composer's `ui.composerModel` model.
+ */
+export const UI_GAME_MODEL_SETTING_KEY = "ui.game.model";
+
+/** zod schema for {@link GameState} - used by `parseGameState` to validate the
+ *  persisted JSON before trusting it. */
+export const GameStateSchema = z.object({
+  gameId: z.literal("liars-dice"),
+  phase: z.enum(["bidding", "roundOver", "gameOver"]),
+  userDice: z.array(z.number().int().min(1).max(6)).min(1).max(5),
+  modelDice: z.array(z.number().int().min(1).max(6)).min(1).max(5),
+  bidHistory: z.array(
+    z.object({
+      by: z.enum(["user", "model"]),
+      bid: z.object({
+        count: z.number().int().min(1),
+        face: z.number().int().min(2).max(6),
+      }),
+    }),
+  ),
+  currentTurn: z.enum(["user", "model"]),
+  lastResult: z
+    .object({
+      challenger: z.enum(["user", "model"]),
+      finalBid: z.object({ count: z.number().int().min(1), face: z.number().int().min(2).max(6) }),
+      allDice: z.array(z.number().int().min(1).max(6)),
+      actualCount: z.number().int().min(0),
+      met: z.boolean(),
+      loser: z.enum(["user", "model"]),
+    })
+    .optional(),
+  winner: z.enum(["user", "model"]).optional(),
+  roundsPlayed: z.number().int().min(0),
+  lastTaunt: z.string().optional(),
+});
+
+/**
+ * Parse the raw settings-table value into a {@link GameState} or `null`. Any
+ * malformed / missing value falls back to null (no game in progress), mirroring
+ * the `parseAutoArchiveConfig` defensive pattern.
+ */
+export function parseGameState(raw: string | null | undefined): GameState | null {
+  if (!raw) return null;
+  try {
+    const parsed = GameStateSchema.safeParse(JSON.parse(raw));
+    if (parsed.success) return parsed.data as GameState;
+  } catch {
+    // fall through to null
+  }
+  return null;
+}
+
+/** Input for `game.userBid` - the user's bid in the current round. */
+export const GameUserBidSchema = z.object({
+  count: z.number().int().min(1),
+  face: z.number().int().min(2).max(6),
+});
+export type GameUserBidInput = z.infer<typeof GameUserBidSchema>;
+
+/** Result shape for game RPCs that return a state. */
+export type GameRpcResult =
+  | { ok: true; state: GameState | null }
+  | { ok: false; error: string; state: GameState | null };
+
 /* ──────────────────────────  RPC method map  ───────────────────────────────── */
 
 /** Revoke a paired mobile device. Input to `mobile.revokeDevice`. */
@@ -3048,6 +3131,24 @@ export interface RpcMap {
   "relay.disconnect": () => Promise<{ ok: true }>;
   /** Read the current relay status. */
   "relay.status": () => Promise<RelayStatus>;
+  // Mini-game overlay (liars dice) - main is the authoritative state owner;
+  // the renderer mirrors the state returned by these RPCs. The model opponent
+  // runs to completion inside `advance()` before any state is returned, so
+  // currentTurn is always "user" (or meaningless in roundOver/gameOver).
+  /** Start a fresh game (clears any in-progress game). Returns the new state. */
+  "game.newGame": () => Promise<GameRpcResult>;
+  /** Read the current game state (used on rehydrate / overlay reopen). */
+  "game.getState": () => Promise<GameRpcResult>;
+  /** Submit the user's bid. Main runs the model's response(s) to completion
+   *  before returning, so the returned state is ready for the user's next move. */
+  "game.userBid": (input: GameUserBidInput) => Promise<GameRpcResult>;
+  /** The user challenges the model's last bid. Main resolves the round, runs
+   *  any continuation (model-led next round), and returns the final state. */
+  "game.userChallenge": () => Promise<GameRpcResult>;
+  /** The user starts a new round after a `roundOver` reveal. */
+  "game.continue": () => Promise<GameRpcResult>;
+  /** The user resigns - the model wins immediately. */
+  "game.resign": () => Promise<GameRpcResult>;
 }
 
 /** The channel names used in invoke/handle and send/on. Keep these centralized
@@ -3232,6 +3333,13 @@ export const IPC = {
   RELAY_STATUS: "relay:status",
   // Relay push events (main → renderer).
   RELAY_EVENT: "relay:event",
+  // Mini-game overlay (liars dice): invoke/handle (RPC). Main owns the state.
+  GAME_NEW_GAME: "game:newGame",
+  GAME_GET_STATE: "game:getState",
+  GAME_USER_BID: "game:userBid",
+  GAME_USER_CHALLENGE: "game:userChallenge",
+  GAME_CONTINUE: "game:continue",
+  GAME_RESIGN: "game:resign",
   // send/on (push events)
   CLAUDE_EVENT: "claude:event",
   SESSION_TITLE_UPDATED: "session:titleUpdated",

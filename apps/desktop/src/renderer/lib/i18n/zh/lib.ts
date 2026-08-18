@@ -9,6 +9,7 @@ export const zh = {
   /* ── lib/commands.ts (command palette labels) ── */
   "lib.commands.closeTab": "关闭当前标签页",
   "lib.commands.openPalette": "打开命令面板",
+  "lib.commands.toggleGame": "小游戏：吹牛骰",
   "lib.commands.displaySingle": "显示模式：单会话",
   "lib.commands.displayTabs": "显示模式：标签页",
   "lib.commands.displayToggle": "切换显示模式",

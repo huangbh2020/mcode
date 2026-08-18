@@ -7,6 +7,7 @@ import {
   IconLayoutSidebarRightExpand,
   IconTerminal2,
   IconCode,
+  IconDeviceGamepad2,
 } from "@renderer/lib/icons.js";
 import { getProviderIcon } from "@renderer/lib/providerIcon.js";
 import { useSessionStore } from "@renderer/stores/sessionStore.js";
@@ -80,6 +81,11 @@ export function Titlebar({
   const widePanelOpen = useSessionStore((s) => s.widePanelOpen);
   const setWidePanelOpen = useSessionStore((s) => s.setWidePanelOpen);
   const isBrowserMode = (!!browserPanelOpen || widePanelOpen) && !isSettings;
+  // Mini-game overlay toggle - reads straight from the store (browser-toggle
+  // style). Shown in all modes (workspace + settings) so the user can open the
+  // game while waiting on an agent turn regardless of the current view.
+  const gameOverlayOpen = useSessionStore((s) => s.gameOverlayOpen);
+  const setGameOverlayOpen = useSessionStore((s) => s.setGameOverlayOpen);
   // The fullscreen browser overlay covers the whole workspace, so its side-panel
   // / terminal toggles hide while it's open. Wide-panel mode keeps them: the
   // terminal bar still renders below the split and the right-panel toggle
@@ -231,6 +237,22 @@ export function Titlebar({
                 />
               </button>
             )}
+            {/* Mini-game overlay toggle - opens the liars dice floating card.
+                Always available (workspace + settings) so the user can play
+                while waiting on an agent turn. */}
+            <button
+              onClick={() => setGameOverlayOpen(!gameOverlayOpen)}
+              className={cn(
+                "flex items-center justify-center rounded p-1.5 transition-colors",
+                gameOverlayOpen
+                  ? "bg-surface-hover text-accent"
+                  : "text-content-muted hover:bg-surface-hover hover:text-content",
+              )}
+              title={t("game.title") + hintFor("game.toggle")}
+              style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
+            >
+              <IconDeviceGamepad2 size={18} className="shrink-0" />
+            </button>
           </>
         )}
       </div>
