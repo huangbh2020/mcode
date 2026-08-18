@@ -170,14 +170,15 @@ function LeftBarBase({
   };
 
   // ── Scroll-to-active-thread (clicking a tab should locate the thread in
-  // the left bar, even across collapsed projects and un-paginated pages).
-  // Each SessionRow registers its <li> node here; locateActiveSession()
-  // scrolls it into view and, when the row isn't in the DOM yet, loads more
-  // pages until it mounts. Called by the effect below (auto-locate on
-  // activeSessionId change, "nearest" so the list barely moves) and by the
-  // bottom-rail locate button ("center" for an explicit jump). Mirrors
-  // SessionTabs' tabNodes pattern + FileTree's "mount-may-be-delayed"
-  // handling.
+  // the left bar, even across collapsed groups/projects and un-paginated
+  // pages). Each SessionRow registers its <li> node here;
+  // locateActiveSession() scrolls it into view and, when the row isn't in
+  // the DOM yet, expands the owning group + project (whichever is
+  // collapsed), then loads more pages until it mounts. Called by the effect
+  // below (auto-locate on activeSessionId change, "nearest" so the list
+  // barely moves) and by the bottom-rail locate button ("center" for an
+  // explicit jump). Mirrors SessionTabs' tabNodes pattern + FileTree's
+  // "mount-may-be-delayed" handling.
   const rowNodes = useRef<Map<string, HTMLLIElement>>(new Map());
   const registerNode = useCallback((id: string, el: HTMLLIElement | null) => {
     if (el) rowNodes.current.set(id, el);
@@ -199,23 +200,43 @@ function LeftBarBase({
 
     if (tryScroll()) return;
 
-    // The active row isn't mounted yet. Two reasons: its project is collapsed
-    // (syncConfigFromSession already expanded it, but React hasn't painted),
-    // or it's beyond the loaded page slice. Find its project, then keep
-    // loading pages until the row appears or there's nothing more to load.
+    // The active row isn't mounted yet. Reasons: its GROUP is collapsed
+    // (grouped view — group collapse is LeftBar-local state the store can't
+    // touch), its project row is collapsed (syncConfigFromSession expands it
+    // on activation, but the user can collapse it again afterwards), or it's
+    // beyond the loaded page slice. Find its project, reveal the ancestors,
+    // then keep loading pages until the row appears or there's no more.
     void (async () => {
       // Re-check after a paint in case the expand just rendered the row.
       await new Promise((r) => requestAnimationFrame(() => r(null)));
       if (tryScroll()) return;
 
+      const st = useSessionStore.getState();
       let projectId: string | undefined;
-      for (const pid of Object.keys(useSessionStore.getState().sessionsByProject)) {
-        if (useSessionStore.getState().sessionsByProject[pid]?.some((s) => s.id === id)) {
+      for (const pid of Object.keys(st.sessionsByProject)) {
+        if (st.sessionsByProject[pid]?.some((s) => s.id === id)) {
           projectId = pid;
           break;
         }
       }
       if (!projectId) return; // archived / unknown - nothing to scroll to.
+
+      // Reveal ancestors so the row can mount at all. Grouped view: expand
+      // the owning group when collapsed (identity return when already open —
+      // React bails out, no extra render). Then expand the project row when
+      // collapsed — the toggle's expand path is a pure local set, so it
+      // never clobbers the loaded slice (the pagination loop below refills
+      // whatever a prior collapse trimmed away).
+      const proj = st.projects.find((p) => p.id === projectId);
+      if (st.projectView === "grouped" && proj?.group) {
+        const groupName = proj.group;
+        setCollapsedGroups((g) => (g[groupName] ? { ...g, [groupName]: false } : g));
+      }
+      if (!st.expandedProjects[projectId]) {
+        st.toggleProjectExpanded(projectId);
+      }
+      await new Promise((r) => requestAnimationFrame(() => r(null)));
+      if (tryScroll()) return;
 
       // Load successive pages until the target row mounts or pages run out.
       for (;;) {
@@ -459,35 +480,57 @@ function LeftBarBase({
 
   return (
     <div className="flex h-full flex-col px-2 py-2 [font-size:var(--right-panel-font-size)]">
-      {/* Brand header — 应用名称与 logo,置于项目列表之上。
-          点击打开设置(与底部「设置」入口一致,顶部作为身份锚点)。
-          The sidebar runs the full window height, so this header sits at the
-          very top edge: the row doubles as a window drag handle, and on macOS
-          reserves room for the traffic lights that overlay the sidebar's
-          top-left corner. The button opts out of the drag region. */}
-      <div className="mb-2" style={{ WebkitAppRegion: "drag" } as React.CSSProperties}>
-        <button
-          type="button"
-          onClick={() => setSettingsOpen(true)}
-          className={cn(
-            "group flex w-full items-center gap-2.5 rounded-lg px-2 py-2 text-left transition-colors",
-            "hover:bg-surface-hover/60",
-            isMac && "pl-[70px]",
-          )}
-          style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
-          title={t("layout.about")}
+      {/* Top strip. mac: the brand header (logo + name) was removed — the
+          strip now hosts the sidebar-collapse toggle, moved up from the
+          footer, sitting right of the traffic lights (trafficLightPosition
+          {x:20,y:13}: three 12px circles ending ~x=72): -mt-2 cancels the
+          root's pt-2 so the box spans the Titlebar's 40px band (y 0..40) and
+          the button centers on the traffic lights' centerline; pl-[70px]
+          clears the buttons (toggle starts at x≈78). The strip doubles as a
+          window drag handle; the button opts out. win: keeps the original
+          brand header (logo + name + tagline) untouched. */}
+      {isMac ? (
+        <div
+          className="-mt-2 mb-2 flex h-10 items-center pl-[70px]"
+          style={{ WebkitAppRegion: "drag" } as React.CSSProperties}
         >
-          <BrandLogo size={30} />
-          <span className="flex min-w-0 flex-col leading-tight">
-            <span className="truncate text-[1.07em] font-semibold tracking-tight text-content">
-              Mcode
+          <button
+            type="button"
+            onClick={() => setLeftOpen(false)}
+            className={cn(
+              "flex h-7 w-7 items-center justify-center rounded text-content-muted transition-colors",
+              "hover:bg-surface-hover hover:text-content",
+            )}
+            style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
+            title={t("layout.hideLeftPanel")}
+          >
+            <IconLayoutSidebarLeftExpand size={18} className="shrink-0" />
+          </button>
+        </div>
+      ) : (
+        <div className="mb-2" style={{ WebkitAppRegion: "drag" } as React.CSSProperties}>
+          <button
+            type="button"
+            onClick={() => setSettingsOpen(true)}
+            className={cn(
+              "group flex w-full items-center gap-2.5 rounded-lg px-2 py-2 text-left transition-colors",
+              "hover:bg-surface-hover/60",
+            )}
+            style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
+            title={t("layout.about")}
+          >
+            <BrandLogo size={30} />
+            <span className="flex min-w-0 flex-col leading-tight">
+              <span className="truncate text-[1.07em] font-semibold tracking-tight text-content">
+                Mcode
+              </span>
+              <span className="truncate text-content-subtle [font-size:var(--rp-fs-sm)]">
+                {t("layout.tagline")}
+              </span>
             </span>
-            <span className="truncate text-content-subtle [font-size:var(--rp-fs-sm)]">
-              {t("layout.tagline")}
-            </span>
-          </span>
-        </button>
-      </div>
+          </button>
+        </div>
+      )}
 
       {/* Quick actions — 新建会话 / 搜索 / 连接手机. Full-width buttons
           docked directly under the brand logo so the most-used workspace
@@ -721,20 +764,22 @@ function LeftBarBase({
         >
           {effectiveTheme === "dark" ? <IconSun size={14} /> : <IconMoon size={14} />}
         </button>
-        {/* Collapse-sidebar toggle — the toolbar no longer carries this
-            button while the sidebar is open (it moved here). The toolbar
-            re-shows it only while the sidebar is CLOSED, since this footer
-            button is inside the hidden sidebar then. */}
-        <button
-          onClick={() => setLeftOpen(false)}
-          className={cn(
-            "flex h-7 w-7 shrink-0 items-center justify-center rounded text-content-muted transition-colors [font-size:var(--right-panel-font-size)]",
-            "hover:bg-surface-hover hover:text-content",
-          )}
-          title={t("layout.hideLeftPanel")}
-        >
-          <IconLayoutSidebarLeftExpand size={14} />
-        </button>
+        {/* Collapse-sidebar toggle — win only. On mac it moved to the
+            sidebar's top strip (right of the traffic lights). The toolbar
+            re-shows its own toggle while the sidebar is CLOSED, since this
+            footer button is inside the hidden sidebar then. */}
+        {!isMac && (
+          <button
+            onClick={() => setLeftOpen(false)}
+            className={cn(
+              "flex h-7 w-7 shrink-0 items-center justify-center rounded text-content-muted transition-colors [font-size:var(--right-panel-font-size)]",
+              "hover:bg-surface-hover hover:text-content",
+            )}
+            title={t("layout.hideLeftPanel")}
+          >
+            <IconLayoutSidebarLeftExpand size={14} />
+          </button>
+        )}
       </div>
 
       {/* Right-click context menu for session rows. Rendered once at the bar

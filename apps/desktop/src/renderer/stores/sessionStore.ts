@@ -1566,11 +1566,12 @@ export function clampPasteTagThresholdChars(n: number): number {
  * on hydrate so a corrupted/out-of-range stored value can't collapse a pane
  * below its usable minimum or stretch it past the screen. */
 
-/** Min 12 ≈ 259px on a 2160px window — the user-tuned compact floor; the
- *  default matches it so a fresh window starts at the preferred width. */
+/** Min 12 ≈ 259px on a 2160px window — the user-tuned compact floor. The
+ *  default (20%) is the fresh-window starting width; users can drag it down
+ *  to the floor and it persists. */
 export const LEFT_WIDTH_PCT_MIN = 12;
 export const LEFT_WIDTH_PCT_MAX = 40;
-export const LEFT_WIDTH_PCT_DEFAULT = 12;
+export const LEFT_WIDTH_PCT_DEFAULT = 20;
 export const RIGHT_WIDTH_MIN = 240;
 export const RIGHT_WIDTH_MAX = 640;
 /** Right-panel width that fits the sidebar browser's default iPhone 14 Pro
