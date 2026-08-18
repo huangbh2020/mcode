@@ -233,10 +233,12 @@ div:has(> [role="menu"]) {
   --success: 16 185 129; /* emerald-500 */
 
   /* Center-pane drop shadow (--panel-shadow): applied to the workspace
-   * center pane + dialogs so the elevated surface separates from the muted
-   * track with a soft dark halo instead of relying on hairlines alone.
-   * A 1px near-black outline tightens the edge definition. */
-  --panel-shadow: 0 0 0 1px rgb(0 0 0 / 0.35), 0 0 32px -8px rgb(0 0 0 / 0.55);
+   * center pane so the elevated surface separates from the muted track with
+   * a soft dark halo. Bottom-directed only (y-offset + negative spread) and
+   * WITHOUT a 1px outline ring — a ring drew a hairline on every edge,
+   * which read as a hard divider between the (same-toned) sidebar and the
+   * pane's left edge. */
+  --panel-shadow: 0 8px 32px -12px rgb(0 0 0 / 0.55);
 
   /* Chat appearance defaults for dark mode (neutral gray, one shade
    * brighter than the light default for readable contrast on zinc-900).
@@ -258,9 +260,9 @@ div:has(> [role="menu"]) {
   --right-panel-font-size: 14px;
 
   /* Center-pane drop shadow — light theme keeps a whisper (white-on-white
-   * needs almost nothing); .dark supplies the strong version. See the .dark
-   * block for the reasoning. */
-  --panel-shadow: 0 0 0 1px rgb(0 0 0 / 0.04), 0 8px 24px -12px rgb(0 0 0 / 0.12);
+   * needs almost nothing); .dark supplies the strong version. No outline
+   * ring — see the .dark block for why. */
+  --panel-shadow: 0 8px 24px -12px rgb(0 0 0 / 0.12);
 
   color-scheme: light;
 }

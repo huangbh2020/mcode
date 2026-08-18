@@ -19,9 +19,10 @@ function bgColor(): string {
  *  behind the native min/max/close buttons when `titleBarStyle: 'hidden'` is
  *  active, so it must visually blend with the custom titlebar in the renderer.
  *
- *  `color` mirrors --surface; `symbolColor` mirrors --content-subtle so the
- *  button glyphs match the dim UI text tone. Values must stay in sync with
- *  styles.css (.dark block).
+ *  `color` mirrors --surface-muted (the toolbar's background — it matches the
+ *  full-height sidebar so they read as one frame); `symbolColor` mirrors
+ *  --content-subtle so the button glyphs match the dim UI text tone. Values
+ *  must stay in sync with styles.css (.dark block).
  *
  *  `height` must match the renderer titlebar's height (h-10 = 40px): Electron
  *  draws the overlay aligned to the top of the window, and the buttons are
@@ -30,7 +31,7 @@ function bgColor(): string {
 function overlayColors() {
   const dark = getEffectiveTheme() === "dark";
   return {
-    color: dark ? "#1a1d24" : "#ffffff",
+    color: dark ? "#2c313c" : "#f4f4f5",
     symbolColor: dark ? "#848891" : "#71717a",
     height: 40,
   };

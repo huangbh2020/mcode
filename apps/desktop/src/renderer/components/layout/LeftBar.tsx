@@ -41,8 +41,10 @@ import {
   IconSun,
   IconMoon,
   IconFocus,
+  IconLayoutSidebarLeftExpand,
 } from "@renderer/lib/icons.js";
 import { useTheme, applyThemeClass } from "@renderer/lib/theme.js";
+import { isMac } from "@renderer/lib/platform.js";
 import { getProviderIcon } from "@renderer/lib/providerIcon.js";
 import { Button, ConfirmDialog, Dialog, Input } from "@renderer/components/ui/index.js";
 import { BrandLogo } from "./BrandLogo.js";
@@ -117,6 +119,7 @@ export function LeftBar({
   const deleteSession = useSessionStore((s) => s.deleteSession);
   const archiveSession = useSessionStore((s) => s.archiveSession);
   const setSettingsOpen = useSessionStore((s) => s.setSettingsOpen);
+  const setLeftOpen = useSessionStore((s) => s.setLeftOpen);
   const runningBySession = useSessionStore((s) => s.runningBySession);
   const unreadBySession = useSessionStore((s) => s.unreadBySession);
   const renameSession = useSessionStore((s) => s.renameSession);
@@ -457,26 +460,34 @@ export function LeftBar({
   return (
     <div className="flex h-full flex-col px-2 py-2 [font-size:var(--right-panel-font-size)]">
       {/* Brand header — 应用名称与 logo,置于项目列表之上。
-          点击打开设置(与底部「设置」入口一致,顶部作为身份锚点)。 */}
-      <button
-        type="button"
-        onClick={() => setSettingsOpen(true)}
-        className={cn(
-          "group mb-2 flex items-center gap-2.5 rounded-lg px-2 py-2 text-left transition-colors",
-          "hover:bg-surface-hover/60",
-        )}
-        title={t("layout.about")}
-      >
-        <BrandLogo size={30} />
-        <span className="flex min-w-0 flex-col leading-tight">
-          <span className="truncate text-[1.07em] font-semibold tracking-tight text-content">
-            Mcode
+          点击打开设置(与底部「设置」入口一致,顶部作为身份锚点)。
+          The sidebar runs the full window height, so this header sits at the
+          very top edge: the row doubles as a window drag handle, and on macOS
+          reserves room for the traffic lights that overlay the sidebar's
+          top-left corner. The button opts out of the drag region. */}
+      <div className="mb-2" style={{ WebkitAppRegion: "drag" } as React.CSSProperties}>
+        <button
+          type="button"
+          onClick={() => setSettingsOpen(true)}
+          className={cn(
+            "group flex w-full items-center gap-2.5 rounded-lg px-2 py-2 text-left transition-colors",
+            "hover:bg-surface-hover/60",
+            isMac && "pl-[70px]",
+          )}
+          style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
+          title={t("layout.about")}
+        >
+          <BrandLogo size={30} />
+          <span className="flex min-w-0 flex-col leading-tight">
+            <span className="truncate text-[1.07em] font-semibold tracking-tight text-content">
+              Mcode
+            </span>
+            <span className="truncate text-content-subtle [font-size:var(--rp-fs-sm)]">
+              {t("layout.tagline")}
+            </span>
           </span>
-          <span className="truncate text-content-subtle [font-size:var(--rp-fs-sm)]">
-            {t("layout.tagline")}
-          </span>
-        </span>
-      </button>
+        </button>
+      </div>
 
       {/* Quick actions — 新建会话 / 搜索 / 连接手机. Full-width buttons
           docked directly under the brand logo so the most-used workspace
@@ -709,6 +720,20 @@ export function LeftBar({
           title={effectiveTheme === "dark" ? t("layout.themeToLight") : t("layout.themeToDark")}
         >
           {effectiveTheme === "dark" ? <IconSun size={14} /> : <IconMoon size={14} />}
+        </button>
+        {/* Collapse-sidebar toggle — the toolbar no longer carries this
+            button while the sidebar is open (it moved here). The toolbar
+            re-shows it only while the sidebar is CLOSED, since this footer
+            button is inside the hidden sidebar then. */}
+        <button
+          onClick={() => setLeftOpen(false)}
+          className={cn(
+            "flex h-7 w-7 shrink-0 items-center justify-center rounded text-content-muted transition-colors [font-size:var(--right-panel-font-size)]",
+            "hover:bg-surface-hover hover:text-content",
+          )}
+          title={t("layout.hideLeftPanel")}
+        >
+          <IconLayoutSidebarLeftExpand size={14} />
         </button>
       </div>
 

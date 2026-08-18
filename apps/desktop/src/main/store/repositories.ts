@@ -430,6 +430,45 @@ export const SessionRepo = {
     persist();
   },
 
+  /** Light full-table scan for cross-session usage stats: fetches only the
+   *  provider id + custom-model binding + usage history of sessions that have
+   *  one. Rows with an unparseable history blob are skipped (safeJson returns
+   *  the raw string — the Array.isArray guard drops it). */
+  listUsageRows(): Array<{
+    id: string;
+    providerId: string;
+    customModelId: string | null;
+    usageHistory: TurnUsageRecord[];
+  }> {
+    const stmt = getDb().prepare(
+      "SELECT id, provider_id, custom_model_id, usage_history FROM sessions WHERE usage_history IS NOT NULL",
+    );
+    const out: Array<{
+      id: string;
+      providerId: string;
+      customModelId: string | null;
+      usageHistory: TurnUsageRecord[];
+    }> = [];
+    while (stmt.step()) {
+      const row = stmt.getAsObject() as unknown as {
+        id: string;
+        provider_id: string | null;
+        custom_model_id: string | null;
+        usage_history: string | null;
+      };
+      const parsed = safeJson(row.usage_history);
+      if (!Array.isArray(parsed)) continue;
+      out.push({
+        id: row.id,
+        providerId: row.provider_id ?? "claude-sdk",
+        customModelId: row.custom_model_id ?? null,
+        usageHistory: parsed as TurnUsageRecord[],
+      });
+    }
+    stmt.free();
+    return out;
+  },
+
   /** Persist which custom-model config this session is bound to (null = built-in). */
   updateCustomModelId(id: string, customModelId: string | null): void {
     getDb().run("UPDATE sessions SET custom_model_id = ?, updated_at = ? WHERE id = ?", [

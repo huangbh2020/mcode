@@ -1,14 +1,40 @@
 # Mcode
 
+![GitHub release](https://img.shields.io/github/v/release/huangbh2020/mcode?style=flat-square)
+![GitHub stars](https://img.shields.io/github/stars/huangbh2020/mcode?style=flat-square)
+![License: MIT](https://img.shields.io/badge/license-MIT-green.svg?style=flat-square)
+![Electron](https://img.shields.io/badge/Electron-33-47848F?style=flat-square)
+![React](https://img.shields.io/badge/React-19-61DAFB?style=flat-square)
+![TypeScript](https://img.shields.io/badge/TypeScript-5-3178C6?style=flat-square)
+
+**Mcode** — *my* Code. 免费开源的 **Claude Code / 编程 Agent 桌面客户端**。
+
 **English** | [中文](#中文)
 
 ---
 
 ## English
 
-**Mcode** — *my* Code. A desktop GUI for coding agents: a three-pane IDE built on top of agent SDKs ([Claude Agent SDK](https://code.claude.com/docs/en/agent-sdk) and [Pi Coding Agent](https://pi.dev/)). It does **not** reimplement the agent — it provides the interaction surface: session management, real-time streaming, tool approvals, and full IDE affordances (files, git, terminal, browser), plus a phone companion for remote access.
+### What is Mcode?
 
-![首页](docs/images/首页.png)
+Mcode is a **free, open-source desktop GUI for coding agents** — a three-pane IDE that turns **Claude Code** and other agent platforms into a full-featured desktop application. Built on the official **Claude Agent SDK** and the **Pi Coding Agent SDK**, Mcode does **not** reimplement the agent. It provides the complete interaction surface: session management, **real-time token-by-token streaming**, visual **tool-approval** prompts, **plan mode**, and all the **IDE** affordances you expect — file tree, Monaco editor with 30+ languages, **git**, **terminal**, **embedded browser**, and **LSP** language servers — plus a **mobile companion** for remote control from your phone.
+
+> **Search keywords:** Claude Code GUI · Claude desktop app · open-source Claude client · AI coding agent IDE · Agent SDK desktop UI · tool approval UI
+
+![Mcode 首页 - Claude Code 桌面客户端 GUI 界面](docs/images/首页.png)
+
+### Key highlights
+
+- 🎛 **Multi-provider** — Claude and Pi in one app; pick the agent before each session starts
+- ⚡ **Real-time streaming** — watch every token arrive as the agent works
+- ✅ **Tool approval UI** — allow / always-allow / deny with a per-session pending queue
+- 📋 **Plan mode** — the agent researches and presents a plan for your approval before executing
+- 🗂 **Projects & sessions** — multi-project management, SQLite persistence, resume anytime
+- 🧰 **Full IDE** — Monaco editor (30+ languages), diff view, multi-repo git, multi-tab terminal
+- 🌐 **Embedded browser** — element picking + agent-driven browser automation
+- 🌍 **Language servers (LSP)** — TypeScript, Python, Go, Java — install and enable in one click
+- 📱 **Mobile remote control** — watch, chat, approve, and rewind from your phone (LAN or SSH tunnel)
+- 🆓 **MIT licensed** — free forever, no tracking, no account required
 
 ### Features
 
@@ -18,7 +44,7 @@
 - Each provider declares its own capabilities and the UI adapts automatically: thinking levels, permission modes, built-in models, custom endpoints.
 - Per-role model assignment: normal chat, git commit-message generation, and merge-conflict resolution can each use a different model.
 
-![支持claude和pi](docs/images/支持claude和pi.png)
+![Mcode 支持 Claude 与 Pi 双 agent provider](docs/images/支持claude和pi.png)
 
 #### 💬 Real-time conversation & multi-session
 
@@ -29,13 +55,13 @@
 - Attach files, paste images, and use slash commands from the composer.
 - Sessions persist to SQLite (via sql.js) and can be resumed later (`--resume` semantics); auto-archiving keeps the session list clean.
 
-![主面板数据流显示](docs/images/主面板数据流显示.png)
+![Mcode 主面板 - AI 对话实时流式数据渲染](docs/images/主面板数据流显示.png)
 
 #### 🗂 Projects & sessions in the left sidebar
 
 - Multi-project management with grouping, pinning, reordering, archiving; per-project session history with search.
 
-![左侧边栏功能](docs/images/左侧边栏功能.png)
+![Mcode 左侧边栏 - 项目与会话管理列表](docs/images/左侧边栏功能.png)
 
 #### 📁 File tree & editor (right panel)
 
@@ -46,8 +72,8 @@
 
 <table>
   <tr>
-    <td><img src="docs/images/右侧边栏-文件树.png" alt="右侧边栏-文件树"/></td>
-    <td><img src="docs/images/文件预览和编辑.png" alt="文件预览和编辑"/></td>
+    <td><img src="docs/images/右侧边栏-文件树.png" alt="Mcode 右侧边栏-文件树"/></td>
+    <td><img src="docs/images/文件预览和编辑.png" alt="Mcode 文件预览和编辑"/></td>
   </tr>
 </table>
 
@@ -57,14 +83,14 @@
 - Stage / unstage / discard, line-level diffs in Monaco DiffEditor, branch switcher, history view, per-repo operation log.
 - ✨ **AI commit message**: reads the diff and drafts a conventional-commit style message; **AI merge-conflict resolution** offers a guided "resolve with AI" flow after a conflicted pull.
 
-![右侧边栏-git管理](docs/images/右侧边栏-git管理.png)
+![Mcode 右侧边栏 - 多仓库 Git 管理界面](docs/images/右侧边栏-git管理.png)
 
 #### 🖥 Built-in terminal (bottom)
 
 - Multi-tab terminal (xterm.js + node-pty) with status indicators; switching projects never kills background terminals (keep-alive).
 - Per-project custom commands: bookmark your frequent commands and run them with one click.
 
-![底部终端](docs/images/底部终端.png)
+![Mcode 底部内置多标签终端](docs/images/底部终端.png)
 
 #### 🌐 Embedded browser (right panel)
 
@@ -73,7 +99,7 @@
 - 🎯 Element picking: hover, click, and send the element's HTML + stable selector straight into the conversation for the agent to work on.
 - The agent itself can also drive the browser (list / navigate / snapshot / click / screenshot) through built-in tools.
 
-![右侧边栏-浏览器](docs/images/右侧边栏-浏览器.png)
+![Mcode 右侧边栏 - 内置浏览器面板](docs/images/右侧边栏-浏览器.png)
 
 #### 🌍 Language servers (LSP)
 
@@ -88,8 +114,8 @@
 
 <table>
   <tr>
-    <td><img src="docs/images/手机端-局域网连接.png" alt="手机端-局域网连接"/></td>
-    <td><img src="docs/images/手机端-远程访问.png" alt="手机端-远程访问"/></td>
+    <td><img src="docs/images/手机端-局域网连接.png" alt="Mcode 手机端 - 局域网扫码配对连接"/></td>
+    <td><img src="docs/images/手机端-远程访问.png" alt="Mcode 手机端 - VPS 远程访问"/></td>
   </tr>
 </table>
 
@@ -97,52 +123,69 @@
 
 **General** — session title generation preferences.
 
-![设置面板-常规](docs/images/设置面板-常规.png)
+![Mcode 设置面板 - 常规设置](docs/images/设置面板-常规.png)
 
 **Appearance** — theme, density, and font preferences.
 
-![设置面板-外观](docs/images/设置面板-外观.png)
+![Mcode 设置面板 - 外观主题设置](docs/images/设置面板-外观.png)
 
 **Shortcuts** — view and record keyboard shortcuts.
 
-![设置面板-快捷键](docs/images/设置面板-快捷键.png)
+![Mcode 设置面板 - 快捷键设置](docs/images/设置面板-快捷键.png)
 
 **Models** — provider & custom model configuration (OpenAI-compatible endpoints supported).
 
-![设置-模型配置](docs/images/设置-模型配置.png)
+![Mcode 设置 - 模型配置](docs/images/设置-模型配置.png)
 
 **Skills** — manage agent skills with a built-in SKILL.md editor.
 
-![设置-技能](docs/images/设置-技能.png)
+![Mcode 设置 - 技能管理](docs/images/设置-技能.png)
 
 **Notifications** — toggle notifications per category.
 
-![设置-消息](docs/images/设置-消息.png)
+![Mcode 设置 - 消息通知](docs/images/设置-消息.png)
 
 **Git** — author identity, diff options, and the model used for AI commit messages.
 
-![设置-git](docs/images/设置-git.png)
+![Mcode 设置 - Git 配置](docs/images/设置-git.png)
 
 **Terminal** — shell override and per-project custom commands.
 
-![设置-终端](docs/images/设置-终端.png)
+![Mcode 设置 - 终端配置](docs/images/设置-终端.png)
 
 **Browser** — embedded browser preferences.
 
-![设置-浏览器](docs/images/设置-浏览器.png)
+![Mcode 设置 - 浏览器配置](docs/images/设置-浏览器.png)
 
 **Language servers** — install, enable, and disable LSP servers per language.
 
-![设置-语言服务器](docs/images/设置-语言服务器.png)
+![Mcode 设置 - 语言服务器 LSP 配置](docs/images/设置-语言服务器.png)
 
 **About** — version, license, repo links, and manual update check.
 
-![设置-关于](docs/images/设置-关于.png)
+![Mcode 设置 - 关于与更新](docs/images/设置-关于.png)
 
 #### 🔄 Other
 
 - Auto-update via `electron-updater` (pulls `latest*.yml` from GitHub Releases); manual check in **Settings → About**.
 - Provider abstraction layer (`AgentProvider`) — Claude and Pi today, easy to extend to other agent platforms.
+
+### FAQ
+
+**Q: Is Mcode free?**
+A: Yes — Mcode is open source under the **MIT license**, free to use and modify.
+
+**Q: Does Mcode work on macOS and Windows?**
+A: Yes. Pre-built installers are published for macOS (Apple Silicon + Intel) and Windows (x64). See [Download](#download) below.
+
+**Q: Do I need to install the Claude Code CLI separately?**
+A: No. The **Claude Agent SDK** bundles its own `claude` binary and the Pi SDK manages its own runtime — no separate CLI required.
+
+**Q: Which models can I use?**
+A: The Claude provider uses your **Anthropic API key**; the Pi provider supports **OpenAI-compatible endpoints**, so you can bring your own models.
+
+**Q: Can I control Mcode from my phone?**
+A: Yes — scan the QR code for LAN access, or connect through your own VPS via an **SSH reverse tunnel** for remote access from anywhere.
 
 ### Requirements
 
@@ -219,90 +262,107 @@ MIT. This project does not redistribute or bundle any agent binary — each SDK 
 
 ## 中文
 
-**Mcode** — *my* Code。基于 Agent SDK 构建的**多 agent 桌面端 GUI**——一个三栏 IDE。目前已接入 **Claude**([Claude Agent SDK](https://code.claude.com/docs/en/agent-sdk))与 **Pi**([Pi Coding Agent](https://pi.dev/))两个 agent 后端。本应用**不重新实现 agent**,只提供交互界面:会话管理、实时流式渲染、工具审批、IDE 能力(文件、Git、终端、浏览器),以及手机端远程访问。
+### Mcode 是什么？
 
-![首页](docs/images/首页.png)
+**Mcode** 是一款免费开源的 **AI 编程助手桌面客户端**——一个基于 Agent SDK 构建的**三栏 IDE**，把 **Claude Code** 与 **Pi** 等 agent 平台放进一个完整的桌面应用。Mcode 依托官方的 [Claude Agent SDK](https://code.claude.com/docs/en/agent-sdk) 与 [Pi Coding Agent](https://pi.dev/)，**不重新实现 agent**，只提供完整的交互界面：会话管理、**实时流式渲染**、可视化**工具审批**、**计划模式**，以及文件树、Monaco 编辑器（30+ 语言）、**Git**、**终端**、**内置浏览器**、**语言服务器（LSP）**等全套 IDE 能力，并支持**手机端远程控制**。
+
+> **搜索关键词：** Claude Code 桌面版 · Claude 客户端 · 开源 AI IDE · AI 编程助手 · Agent SDK 桌面应用 · 工具审批 UI
+
+![Mcode 首页 - AI 编程助手桌面客户端主界面](docs/images/首页.png)
+
+### 核心亮点
+
+- 🎛 **多 Agent 支持** —— Claude 与 Pi 二合一，会话前自由切换
+- ⚡ **实时流式输出** —— agent 的每一个 token 实时呈现
+- ✅ **工具审批界面** —— 允许 / 始终允许 / 拒绝，按会话维护待审批队列
+- 📋 **计划模式** —— 先只读调研、给出计划等你批准，再动手执行
+- 🗂 **项目与多会话** —— 多项目管理、SQLite 持久化、随时续传
+- 🧰 **全套 IDE** —— Monaco 编辑器（30+ 语言）、diff 对比、多仓库 Git、多标签终端
+- 🌐 **内置浏览器** —— 元素拾取 + agent 自动驱动浏览器
+- 🌍 **语言服务器（LSP）** —— TypeScript / Python / Go / Java 一键安装启用
+- 📱 **手机端遥控** —— 手机上看会话、发消息、审批、撤销（局域网 / SSH 隧道）
+- 🆓 **MIT 开源** —— 永久免费，无追踪、无账号
 
 ### 功能特性
 
 #### 🤖 多 Agent Provider
 
-- 内置 **Claude**(基于 `@anthropic-ai/claude-agent-sdk`)与 **Pi**(基于 `@earendil-works/pi-coding-agent`)两个 provider,会话首条消息前可在输入框选择。
-- 每个 provider 声明自己的能力,UI 自动适配:思考级别、权限模式、内置模型、自定义端点支持。
-- 按角色分配模型:普通对话、提交信息生成、合并冲突解决可分别使用不同的模型。
+- 内置 **Claude**（基于 `@anthropic-ai/claude-agent-sdk`）与 **Pi**（基于 `@earendil-works/pi-coding-agent`）两个 provider，会话首条消息前可在输入框选择。
+- 每个 provider 声明自己的能力，UI 自动适配：思考级别、权限模式、内置模型、自定义端点支持。
+- 按角色分配模型：普通对话、提交信息生成、合并冲突解决可分别使用不同的模型。
 
-![支持claude和pi](docs/images/支持claude和pi.png)
+![Mcode 支持 Claude 与 Pi 双 agent 后端](docs/images/支持claude和pi.png)
 
 #### 💬 实时对话与多会话
 
-- 通过所选 provider 的 SDK 驱动 agent loop,消息按 token 实时流式渲染;assistant 消息、思考过程、工具调用、工具结果、图片以**结构化卡片**展示。
-- 工具审批:允许 / 始终允许 / 拒绝,每个会话独立维护待审批队列。
-- 计划模式(Plan Mode):agent 先只读调研、给出计划等你批准,再动手执行。
-- 每轮文件快照 + 一键「撤销本轮」——精确回滚 agent 本轮改过的文件,历史轮次也能撤。
+- 通过所选 provider 的 SDK 驱动 agent loop，消息按 token 实时流式渲染；assistant 消息、思考过程、工具调用、工具结果、图片以**结构化卡片**展示。
+- 工具审批：允许 / 始终允许 / 拒绝，每个会话独立维护待审批队列。
+- 计划模式（Plan Mode）：agent 先只读调研、给出计划等你批准，再动手执行。
+- 每轮文件快照 + 一键「撤销本轮」——精确回滚 agent 本轮改过的文件，历史轮次也能撤。
 - 输入框支持附加文件、粘贴图片、斜杠命令。
-- 会话持久化到 SQLite(基于 sql.js),支持后续续传(`--resume` 语义);自动归档保持会话列表整洁。
+- 会话持久化到 SQLite（基于 sql.js），支持后续续传（`--resume` 语义）；自动归档保持会话列表整洁。
 
-![主面板数据流显示](docs/images/主面板数据流显示.png)
+![Mcode 主面板 - AI 对话实时流式数据渲染](docs/images/主面板数据流显示.png)
 
-#### 🗂 左侧边栏:项目与会话管理
+#### 🗂 左侧边栏：项目与会话管理
 
-- 多项目管理:分组、置顶、排序、归档;每个项目独立维护会话历史,支持搜索。
+- 多项目管理：分组、置顶、排序、归档；每个项目独立维护会话历史，支持搜索。
 
-![左侧边栏功能](docs/images/左侧边栏功能.png)
+![Mcode 左侧边栏 - 项目与会话管理](docs/images/左侧边栏功能.png)
 
-#### 📁 右侧边栏:文件树与编辑器
+#### 📁 右侧边栏：文件树与编辑器
 
-- 当前项目的文件树,带"agent 改动"标记(本轮新建 / 修改的文件一目了然)。
-- Monaco 编辑器:30+ 语言支持、脏标记、查找替换。
-- 三态文件视图:**编辑**(Monaco)、**Diff**(Monaco DiffEditor 并排对比)、**预览**(Markdown 语法高亮 + 数学公式、图片预览、二进制文件友好提示)。
-- 右键菜单(在资源管理器中显示、复制路径、添加到聊天)+ 拖拽文件直接送入对话。
+- 当前项目的文件树，带"agent 改动"标记（本轮新建 / 修改的文件一目了然）。
+- Monaco 编辑器：30+ 语言支持、脏标记、查找替换。
+- 三态文件视图：**编辑**（Monaco）、**Diff**（Monaco DiffEditor 并排对比）、**预览**（Markdown 语法高亮 + 数学公式、图片预览、二进制文件友好提示）。
+- 右键菜单（在资源管理器中显示、复制路径、添加到聊天）+ 拖拽文件直接送入对话。
 
 <table>
   <tr>
-    <td><img src="docs/images/右侧边栏-文件树.png" alt="右侧边栏-文件树"/></td>
-    <td><img src="docs/images/文件预览和编辑.png" alt="文件预览和编辑"/></td>
+    <td><img src="docs/images/右侧边栏-文件树.png" alt="Mcode 右侧边栏-文件树"/></td>
+    <td><img src="docs/images/文件预览和编辑.png" alt="Mcode 文件预览和编辑"/></td>
   </tr>
 </table>
 
-#### 🧰 Git 管理(多仓库)
+#### 🧰 Git 管理（多仓库）
 
-- 递归扫描自动发现一个项目里的**多个仓库**(monorepo、子模块、嵌套工程),每个仓库一张独立卡片。
+- 递归扫描自动发现一个项目里的**多个仓库**（monorepo、子模块、嵌套工程），每个仓库一张独立卡片。
 - 暂存 / 取消暂存 / 丢弃、Monaco 行级 diff、分支切换器、提交历史、每仓操作日志。
-- ✨ **AI 生成提交信息**:读取 diff 起草符合 conventional commit 风格的 message;**AI 解决合并冲突**:pull 冲突后提供引导式的"用 AI 解决"流程。
+- ✨ **AI 生成提交信息**：读取 diff 起草符合 conventional commit 风格的 message；**AI 解决合并冲突**：pull 冲突后提供引导式的"用 AI 解决"流程。
 
-![右侧边栏-git管理](docs/images/右侧边栏-git管理.png)
+![Mcode 右侧边栏 - 多仓库 Git 管理界面](docs/images/右侧边栏-git管理.png)
 
 #### 🖥 底部内置终端
 
-- 多 tab 终端(xterm.js + node-pty),带状态指示灯;切换项目不杀后台终端(keep-alive)。
-- 项目级自定义命令:把常用命令存成书签,一键执行。
+- 多 tab 终端（xterm.js + node-pty），带状态指示灯；切换项目不杀后台终端（keep-alive）。
+- 项目级自定义命令：把常用命令存成书签，一键执行。
 
-![底部终端](docs/images/底部终端.png)
+![Mcode 底部内置多标签终端](docs/images/底部终端.png)
 
-#### 🌐 右侧边栏:内置浏览器
+#### 🌐 右侧边栏：内置浏览器
 
-- 主窗口之上的多 tab 浏览器面板;关闭面板页面保持存活。
-- 设备尺寸模拟(桌面 / iPhone / Android),真实视口 + 触摸仿真。
-- 🎯 元素拾取:悬停高亮、点击选中,把元素的 HTML + 稳定选择器直接送入对话交给 agent。
-- agent 自己也能驱动浏览器(列出 / 导航 / 快照 / 点击 / 截图)完成网页端调试。
+- 主窗口之上的多 tab 浏览器面板；关闭面板页面保持存活。
+- 设备尺寸模拟（桌面 / iPhone / Android），真实视口 + 触摸仿真。
+- 🎯 元素拾取：悬停高亮、点击选中，把元素的 HTML + 稳定选择器直接送入对话交给 agent。
+- agent 自己也能驱动浏览器（列出 / 导航 / 快照 / 点击 / 截图）完成网页端调试。
 
-![右侧边栏-浏览器](docs/images/右侧边栏-浏览器.png)
+![Mcode 右侧边栏 - 内置浏览器面板](docs/images/右侧边栏-浏览器.png)
 
-#### 🌍 语言服务器(LSP)
+#### 🌍 语言服务器（LSP）
 
-- 可安装、可启停的 TS/JS、Python(basedpyright)、Go(gopls)、Java(jdtls)语言服务器。
-- Monaco 内的定义跳转 / 引用 / 悬停,以及实时诊断波浪线。
+- 可安装、可启停的 TS/JS、Python（basedpyright）、Go（gopls）、Java（jdtls）语言服务器。
+- Monaco 内的定义跳转 / 引用 / 悬停，以及实时诊断波浪线。
 
 #### 📱 手机端伴侣
 
-- **局域网连接**:Mcode 在本地网络起一个伴侣 Web 服务,桌面端扫二维码(或手机扫码)完成配对(设备令牌认证)。
-- **远程访问**:通过你自己的 VPS 建立 SSH 反向隧道,在任何网络下都能连回桌面端,无需第三方穿透服务。
-- 手机是完整的遥控器:实时观看会话流式输出、发送消息、中断或撤销本轮、审批工具调用、浏览文件与 diff、执行 Git 操作(含 AI 生成提交信息)。
+- **局域网连接**：Mcode 在本地网络起一个伴侣 Web 服务，桌面端扫码（或手机扫码）完成配对（设备令牌认证）。
+- **远程访问**：通过你自己的 VPS 建立 SSH 反向隧道，在任何网络下都能连回桌面端，无需第三方穿透服务。
+- 手机是完整的遥控器：实时观看会话流式输出、发送消息、中断或撤销本轮、审批工具调用、浏览文件与 diff、执行 Git 操作（含 AI 生成提交信息）。
 
 <table>
   <tr>
-    <td><img src="docs/images/手机端-局域网连接.png" alt="手机端-局域网连接"/></td>
-    <td><img src="docs/images/手机端-远程访问.png" alt="手机端-远程访问"/></td>
+    <td><img src="docs/images/手机端-局域网连接.png" alt="Mcode 手机端 - 局域网扫码连接"/></td>
+    <td><img src="docs/images/手机端-远程访问.png" alt="Mcode 手机端 - VPS 远程访问"/></td>
   </tr>
 </table>
 
@@ -310,61 +370,78 @@ MIT. This project does not redistribute or bundle any agent binary — each SDK 
 
 **常规** —— 会话标题生成配置。
 
-![设置面板-常规](docs/images/设置面板-常规.png)
+![Mcode 设置面板 - 常规设置](docs/images/设置面板-常规.png)
 
 **外观** —— 主题、密度、字体偏好。
 
-![设置面板-外观](docs/images/设置面板-外观.png)
+![Mcode 设置面板 - 外观主题](docs/images/设置面板-外观.png)
 
 **快捷键** —— 查看与录制键盘快捷键。
 
-![设置面板-快捷键](docs/images/设置面板-快捷键.png)
+![Mcode 设置面板 - 快捷键设置](docs/images/设置面板-快捷键.png)
 
-**模型配置** —— provider 与自定义模型配置(支持 OpenAI 协议端点)。
+**模型配置** —— provider 与自定义模型配置（支持 OpenAI 协议端点）。
 
-![设置-模型配置](docs/images/设置-模型配置.png)
+![Mcode 设置 - 模型配置](docs/images/设置-模型配置.png)
 
-**技能** —— 管理 agent 技能,内置 SKILL.md 编辑器。
+**技能** —— 管理 agent 技能，内置 SKILL.md 编辑器。
 
-![设置-技能](docs/images/设置-技能.png)
+![Mcode 设置 - 技能管理](docs/images/设置-技能.png)
 
 **消息通知** —— 按类别开关消息通知。
 
-![设置-消息](docs/images/设置-消息.png)
+![Mcode 设置 - 消息通知](docs/images/设置-消息.png)
 
 **Git** —— 作者身份、diff 选项、AI 生成提交信息所用模型。
 
-![设置-git](docs/images/设置-git.png)
+![Mcode 设置 - Git 配置](docs/images/设置-git.png)
 
 **终端** —— Shell 覆盖与项目级自定义命令。
 
-![设置-终端](docs/images/设置-终端.png)
+![Mcode 设置 - 终端配置](docs/images/设置-终端.png)
 
 **浏览器** —— 内置浏览器偏好设置。
 
-![设置-浏览器](docs/images/设置-浏览器.png)
+![Mcode 设置 - 浏览器配置](docs/images/设置-浏览器.png)
 
 **语言服务器** —— 按语言安装、启用、停用 LSP 服务器。
 
-![设置-语言服务器](docs/images/设置-语言服务器.png)
+![Mcode 设置 - 语言服务器 LSP 配置](docs/images/设置-语言服务器.png)
 
 **关于** —— 版本、许可证、仓库链接、手动检查更新。
 
-![设置-关于](docs/images/设置-关于.png)
+![Mcode 设置 - 关于与更新](docs/images/设置-关于.png)
 
 #### 🔄 其他
 
-- 自动更新:通过 `electron-updater` 从 GitHub Releases 拉 `latest*.yml`;也可在**设置 → 关于**手动检查。
-- Provider 抽象层(`AgentProvider`)——目前内置 Claude 与 Pi,易于扩展其他 agent 平台。
+- 自动更新：通过 `electron-updater` 从 GitHub Releases 拉 `latest*.yml`；也可在**设置 → 关于**手动检查。
+- Provider 抽象层（`AgentProvider`）——目前内置 Claude 与 Pi，易于扩展其他 agent 平台。
+
+### 常见问题
+
+**Q：Mcode 免费吗？**
+A：免费。Mcode 采用 **MIT 开源协议**，可自由使用和修改。
+
+**Q：支持 macOS 和 Windows 吗？**
+A：支持。已发布 macOS（Apple Silicon + Intel）与 Windows（x64）安装包，见下方[下载](#下载)。
+
+**Q：需要单独安装 Claude Code CLI 吗？**
+A：不需要。**Claude Agent SDK** 自带 `claude` 二进制，Pi SDK 也自行管理运行时，无需单独安装 CLI。
+
+**Q：可以用哪些模型？**
+A：Claude provider 使用你的 **Anthropic API key**；Pi provider 支持 **OpenAI 协议端点**，可以接入自有模型。
+
+**Q：手机能控制 Mcode 吗？**
+A：可以。局域网内扫码即可连接；也可以用自己的 VPS 建立 **SSH 反向隧道**，实现任何网络下的远程访问。
 
 ### 环境要求
 
-- Node.js ≥ 22.13(pnpm 11 要求)
-- pnpm ≥ 9(`corepack enable && corepack prepare pnpm@latest --activate`)
-- **Claude provider**:Anthropic API key(`ANTHROPIC_API_KEY`)——Agent SDK 按 API key 计费,不能使用 Max/Pro 订阅。
-- **Pi provider**:通过**设置 → 模型配置**至少配置一个 provider/模型(等价于编辑 `~/.pi/agent/models.json`)。在 GUI 中填写的 API key 使用 Electron `safeStorage` 加密存储,无需设置环境变量。
+- Node.js ≥ 22.13（pnpm 11 要求）
+- pnpm ≥ 9（`corepack enable && corepack prepare pnpm@latest --activate`）
+- **Claude provider**：Anthropic API key（`ANTHROPIC_API_KEY`）——Agent SDK 按 API key 计费，不能使用 Max/Pro 订阅。
+- **Pi provider**：通过**设置 → 模型配置**至少配置一个 provider/模型（等价于编辑 `~/.pi/agent/models.json`）。在 GUI 中填写的 API key 使用 Electron `safeStorage` 加密存储，无需设置环境变量。
 
-> **注意**:Claude Agent SDK 自带 `claude` 二进制,Pi SDK 也自行管理其运行时,均无需单独安装 CLI。
+> **注意**：Claude Agent SDK 自带 `claude` 二进制，Pi SDK 也自行管理其运行时，均无需单独安装 CLI。
 
 ### 快速开始
 
@@ -379,38 +456,38 @@ pnpm dev
 # 类型检查
 pnpm typecheck
 
-# 构建(electron-vite)
+# 构建（electron-vite）
 pnpm build
 
-# 打包安装包(macOS dmg/zip + Windows nsis)-> apps/desktop/release/
+# 打包安装包（macOS dmg/zip + Windows nsis）-> apps/desktop/release/
 pnpm package
 ```
 
 ### 下载
 
-预编译二进制发布在 [GitHub Releases](https://github.com/huangbh2020/mcode/releases):
+预编译二进制发布在 [GitHub Releases](https://github.com/huangbh2020/mcode/releases)：
 
-- **macOS**:`.dmg`(arm64 + x64)
-- **Windows**:`.exe` NSIS 安装包(x64)
+- **macOS**：`.dmg`（arm64 + x64）
+- **Windows**：`.exe` NSIS 安装包（x64）
 
-> ⚠️ **未代码签名。** Mcode 是免费的 MIT 开源项目,没有付费的 Apple Developer ID 证书,也没有 Windows 代码签名证书,因此安装包仅做了 ad-hoc 签名(macOS)/未签名(Windows)。首次启动时系统会弹出安全提示,属正常现象,可放心使用。下面是首次启动的处理方法。
+> ⚠️ **未代码签名。** Mcode 是免费的 MIT 开源项目，没有付费的 Apple Developer ID 证书，也没有 Windows 代码签名证书，因此安装包仅做了 ad-hoc 签名（macOS）/ 未签名（Windows）。首次启动时系统会弹出安全提示，属正常现象，可放心使用。下面是首次启动的处理方法。
 
 #### 首次启动注意事项
 
-**macOS** —— Gatekeeper 会拦截并提示 *"无法打开 Mcode,因为无法验证开发者"* / *"Apple 无法检查其是否包含恶意软件"*:
+**macOS** —— Gatekeeper 会拦截并提示 *"无法打开 Mcode，因为无法验证开发者"* / *"Apple 无法检查其是否包含恶意软件"*：
 
-- **macOS 15(Sequoia)及更早版本**:右键点击应用 → **打开** → 在弹窗中确认。
-- **macOS 26 及以上**:右键 → 打开已失效。请打开 **系统设置 → 隐私与安全性**,滚动到底部,点击 **仍要打开**。
-- **终端命令(所有版本通用)**:
+- **macOS 15（Sequoia）及更早版本**：右键点击应用 → **打开** → 在弹窗中确认。
+- **macOS 26 及以上**：右键 → 打开已失效。请打开 **系统设置 → 隐私与安全性**，滚动到底部，点击 **仍要打开**。
+- **终端命令（所有版本通用）**：
   ```bash
   xattr -dr com.apple.quarantine /Applications/Mcode.app
   ```
-- **Homebrew(完全不提示)**:`brew install --cask mcode` —— cask 在安装时会自动去除 quarantine 属性。
+- **Homebrew（完全不提示）**：`brew install --cask mcode` —— cask 在安装时会自动去除 quarantine 属性。
 
-**Windows** —— SmartScreen 会提示 *"Windows 已保护你的电脑"* / *"未知发布者"*:
+**Windows** —— SmartScreen 会提示 *"Windows 已保护你的电脑"* / *"未知发布者"*：
 
 - 点击 **更多信息** → **仍要运行**。
-- 安装包(NSIS)为每用户安装,无需管理员权限。
+- 安装包（NSIS）为每用户安装，无需管理员权限。
 
 ### 技术栈
 
@@ -420,10 +497,14 @@ pnpm package
 | 前端 | React 19、Zustand 5、Tailwind CSS 3、@base-ui/react、@tabler/icons |
 | 编辑器/终端 | Monaco Editor、xterm.js + node-pty |
 | Agent | @anthropic-ai/claude-agent-sdk、@earendil-works/pi-coding-agent |
-| 持久化 | sql.js(纯 WASM 的 SQLite) |
-| 契约 | zod(跨进程 IPC 校验) |
-| 工具链 | pnpm 11、Turbo、TypeScript 5(strict) |
+| 持久化 | sql.js（纯 WASM 的 SQLite） |
+| 契约 | zod（跨进程 IPC 校验） |
+| 工具链 | pnpm 11、Turbo、TypeScript 5（strict） |
 
 ### 许可证
 
-MIT。本项目不重新分发或内嵌任何 agent 二进制——各 SDK 自行管理其运行时(Claude Agent SDK 与 Pi coding-agent SDK 均如此)。
+MIT。本项目不重新分发或内嵌任何 agent 二进制——各 SDK 自行管理其运行时（Claude Agent SDK 与 Pi coding-agent SDK 均如此）。
+
+---
+
+如果 Mcode 帮到了你，欢迎 ⭐ Star 这个项目，并把链接分享给需要的人——你的每一次分享都是在帮开源项目被更多人发现。

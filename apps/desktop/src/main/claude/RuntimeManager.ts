@@ -19,6 +19,7 @@ import { restoreFiles } from "@main/lib/fileSnapshot.js";
 import { BridgeRegistry } from "@main/providers/bridge/bridgeRegistry.js";
 import { mobileEventBus } from "@main/mobile/MobileEventBus.js";
 import { broadcastRuntimeEvent } from "@main/lib/sessionSync.js";
+import { invalidateUsageStats } from "@main/lib/usageStats.js";
 import { log } from "@main/lib/logger.js";
 
 interface SessionRuntime {
@@ -118,6 +119,7 @@ class RuntimeManager {
             };
             rt.usageHistory = [...rt.usageHistory, record];
             SessionRepo.updateUsageHistory(session.id, rt.usageHistory);
+            invalidateUsageStats();
           }
         } catch (err) {
           log.error(`failed to persist usage history: ${(err as Error).message}`);

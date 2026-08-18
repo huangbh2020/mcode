@@ -45,6 +45,11 @@ export interface DividerProps {
   /** Kept for API compatibility but a no-op (the visible 1px line is centered
    *  in the symmetric hit area, so there is nowhere to align within). */
   lineAlign?: "start" | "center" | "end";
+  /** Omit the visible 1px hairline while keeping the draggable hit area.
+   *  Used where two panes share the same background and a hairline would cut
+   *  through a continuous surface (e.g. the workspace's muted frame: sidebar
+   *  | toolbar) — resizing stays possible, discovered via the resize cursor. */
+  hideLine?: boolean;
   className?: string;
 }
 
@@ -52,6 +57,7 @@ export function Divider({
   orientation,
   onResize,
   onDoubleClick,
+  hideLine = false,
   className,
 }: DividerProps) {
   const dragging = useRef(false);
@@ -126,13 +132,16 @@ export function Divider({
         )}
       />
       {/* Visible 1px hairline - pointer-events-none so the hit area stays the
-          grab target. Lights up on hover/active via group-hover/active. */}
-      <div
-        className={cn(
-          "pointer-events-none absolute inset-0 bg-edge transition-colors group-hover/divider:bg-accent/50 group-active/divider:bg-accent/70",
-          isVertical ? "w-px left-0" : "h-px top-0",
-        )}
-      />
+          grab target. Lights up on hover/active via group-hover/active.
+          Skipped entirely when `hideLine` is set (invisible splitter). */}
+      {!hideLine && (
+        <div
+          className={cn(
+            "pointer-events-none absolute inset-0 bg-edge transition-colors group-hover/divider:bg-accent/50 group-active/divider:bg-accent/70",
+            isVertical ? "w-px left-0" : "h-px top-0",
+          )}
+        />
+      )}
     </div>
   );
 }

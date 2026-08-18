@@ -62,13 +62,11 @@ export function ThreePaneLayout({
 }: Props) {
   return (
     <>
-      {/* Left sidebar — plain rectangle (no corner rounding). The right
-         divider lives on the inner scroll container so it spans the panel.
-         bg-surface-muted matches the titlebar's left strip (Titlebar.tsx) and
-         the row track, so the sidebar reads as one continuous block running
-         to the top of the window. Its hover/active states use the
-         surface-hover family (see LeftBar.tsx), which is clearly visible on
-         this muted base. */}
+      {/* Left sidebar — only used by the settings page since the workspace
+         moved its full-height sidebar up to App.tsx. bg-surface-muted matches
+         the row track, so the sidebar reads as one continuous block. Its
+         hover/active states use the surface-hover family (see LeftBar.tsx),
+         which is clearly visible on this muted base. */}
       {leftOpen && (
         <aside
           className="flex h-full shrink-0 flex-col rounded-r-lg bg-surface-muted"
@@ -82,20 +80,18 @@ export function ThreePaneLayout({
           orientation="vertical"
           onResize={onResizeLeft}
           onDoubleClick={onResetLeft}
-          // The divider is a 1px line flush at x=leftWidth, naturally aligned
-          // with the titlebar's border-r above (also at x=leftWidth).
         />
       )}
 
-      {/* Center pane — rounded bottom corners create soft arcs where it meets
-         the side panels at the bottom edge, echoing the titlebar's radii.
-         Visible because the track (bg-surface-muted) shows through the notches
-         against the pane's bg-surface.
+      {/* Center pane — 3xl arcs on the LEFT edge only (top-left at the
+         toolbar/sidebar junction, bottom-left at the track below): the muted
+         frame shows through both notches against the pane's bg-surface. The
+         RIGHT edge (the seam with the right IDE panel) is intentionally
+         square — no arcs there.
          `relative z-10` + --panel-shadow make the pane read as an elevated
-         surface floating over the muted track (the shadow would otherwise be
-         painted over by the later right sidebar).
+         surface floating over the muted track.
          Stacks the center content above an optional bottom terminal bar. */}
-      <main className="relative z-10 flex min-w-0 flex-1 flex-col rounded-b-lg border-t border-edge bg-surface shadow-[var(--panel-shadow)]">
+      <main className="relative z-10 flex min-w-0 flex-1 flex-col rounded-tl-3xl rounded-bl-3xl border-t border-edge bg-surface shadow-[var(--panel-shadow)]">
         <div className="min-h-0 flex-1 overflow-hidden">{center}</div>
         {/* Bottom terminal bar — keep-alive: always rendered, height collapses
             to 0 when closed so PTYs/scrollback survive. overflow-hidden clips
@@ -130,17 +126,14 @@ export function ThreePaneLayout({
           onDoubleClick={onResetRight}
         />
       )}
-      {/* Right sidebar — rounded bottom-left corner mirrors the center pane's
-         bottom-right arc, so the center|right seam ends in a symmetric soft
-         notch revealing the muted track (same language as the left seam).
-         Uses bg-surface (same as center pane) so it reads as a continuation of
-         the chat area; the border-l below is the divider. overflow-hidden (not
-         overflow-y-auto): clips children to the rounded corner; Files/Git
-         scroll internally, and xterm FitAddon breaks under a scrolling
-         ancestor. */}
+      {/* Right sidebar — square corners (no arcs; the seam with the center
+         pane stays a straight edge). Uses bg-surface (same as center pane) so
+         it reads as a continuation of the chat area; the border-l below is
+         the divider. overflow-hidden (not overflow-y-auto): Files/Git scroll
+         internally, and xterm FitAddon breaks under a scrolling ancestor. */}
       {rightOpen && (
         <aside
-          className="flex h-full shrink-0 flex-col overflow-hidden rounded-bl-lg border-t border-edge bg-surface"
+          className="flex h-full shrink-0 flex-col overflow-hidden border-t border-edge bg-surface"
           style={{ width: rightWidth }}
         >
           <div className="min-h-0 flex-1 overflow-hidden border-l border-edge/60">{right}</div>

@@ -1240,8 +1240,15 @@ export class SdkMessageAdapter {
 	      // so `usedTokens`/`pct`/`warning` must come from the last path-A
 	      // snapshot. The accumulated result contributes only throughput/cost/
 	      // cache/output/window-ceiling metadata.
-	      const costUsd = m.total_cost_usd ?? (muCost > 0 ? muCost : undefined);
-	      const model = (m as { model?: string }).model;
+const costUsd = m.total_cost_usd ?? (muCost > 0 ? muCost : undefined);
+		      // The SDK reports the active model either as a top-level
+		      // `result.model` (first-party endpoints) or — notably on third-party
+		      // gateways / custom-model configs — ONLY as the key of the
+		      // `modelUsage` map (e.g. "MiniMax-M3[1m]"). Reading `m.model` alone
+		      // leaves those turns model-less, which surfaces as "未知模型" in the
+		      // usage-stats panel even though the SDK did report the model.
+		      const model =
+		        (m as { model?: string }).model ?? Object.keys(modelUsage ?? {})[0];
 	      const lastKnown = this.state.lastKnownTokenUsage;
 
 	      // Build the accumulated throughput snapshot from result.usage.

@@ -655,8 +655,9 @@ export interface SessionState {
    *  Persisted as one JSON blob (UI_PANE_WIDTHS_SETTING_KEY) and re-clamped
    *  on hydrate. Updated live during drag (synchronous set); the DB write is
    *  debounced so a drag doesn't hammer the settings table. */
-  /** Left sidebar width in px. */
-  leftWidth: number;
+  /** Left sidebar share of the window width, as a percentage 0–100 (the
+   *  redesign default is 20 = a 2:8 split against the main area). */
+  leftWidthPct: number;
   /** Right IDE panel width in px. */
   rightWidth: number;
   /** Bottom terminal bar height in px (when expanded). */
@@ -1100,9 +1101,10 @@ export interface SessionState {
       orientation?: BrowserOrientation;
     },
   ) => boolean;
-  /** Apply an incremental delta to the left sidebar width (clamped, then a
-   *  debounced DB write). Called by the drag handle on every mousemove. */
-  adjustLeftWidth: (deltaPx: number) => void;
+  /** Apply an incremental delta (in percentage points of the window width) to
+   *  the left sidebar share (clamped, then a debounced DB write). The caller
+   *  converts the divider's px delta via the container width. */
+  adjustLeftWidthPct: (deltaPct: number) => void;
   /** Apply an incremental delta to the right panel width. */
   adjustRightWidth: (deltaPx: number) => void;
   /** Apply an incremental delta to the bottom terminal height. */
@@ -1111,7 +1113,7 @@ export interface SessionState {
    *  is in px; the caller converts to pct via the container width. */
   adjustEditorWidthPct: (deltaPx: number) => void;
   /** Reset a pane width to its default (double-click on the divider). */
-  resetLeftWidth: () => void;
+  resetLeftWidthPct: () => void;
   resetRightWidth: () => void;
   resetBottomTerminalHeight: () => void;
   resetEditorWidthPct: () => void;
@@ -1553,8 +1555,9 @@ export function clampPasteTagThresholdChars(n: number): number {
  * on hydrate so a corrupted/out-of-range stored value can't collapse a pane
  * below its usable minimum or stretch it past the screen. */
 
-export const LEFT_WIDTH_MIN = 180;
-export const LEFT_WIDTH_MAX = 500;
+export const LEFT_WIDTH_PCT_MIN = 10;
+export const LEFT_WIDTH_PCT_MAX = 40;
+export const LEFT_WIDTH_PCT_DEFAULT = 20;
 export const RIGHT_WIDTH_MIN = 240;
 export const RIGHT_WIDTH_MAX = 640;
 /** Right-panel width that fits the sidebar browser's default iPhone 14 Pro
@@ -1570,9 +1573,12 @@ export const EDITOR_WIDTH_PCT_MAX = 80;
 
 /** Clamp helper for the four persisted pane sizes. Falls back to defaults on
  *  any non-finite value so the layout never breaks. */
-export function clampLeftWidth(px: number): number {
-  if (!Number.isFinite(px)) return 280;
-  return Math.min(LEFT_WIDTH_MAX, Math.max(LEFT_WIDTH_MIN, Math.round(px)));
+export function clampLeftWidthPct(pct: number): number {
+  if (!Number.isFinite(pct)) return LEFT_WIDTH_PCT_DEFAULT;
+  return Math.min(
+    LEFT_WIDTH_PCT_MAX,
+    Math.max(LEFT_WIDTH_PCT_MIN, Math.round(pct)),
+  );
 }
 export function clampRightWidth(px: number): number {
   if (!Number.isFinite(px)) return 360;
@@ -2878,7 +2884,7 @@ function schedulePaneWidthPersist(get: () => SessionState): void {
       await api.setting.set({
         key: UI_PANE_WIDTHS_SETTING_KEY,
         value: JSON.stringify({
-          left: s.leftWidth,
+          leftPct: s.leftWidthPct,
           right: s.rightWidth,
           bottomTerminal: s.bottomTerminalHeight,
           editor: s.editorWidthPct,
@@ -2978,7 +2984,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   // Draggable pane sizes. Persisted as one JSON blob (UI_PANE_WIDTHS_SETTING_KEY);
   // init() hydrates + clamps. These defaults match the original hardcoded
   // widths so the first-run layout is unchanged.
-  leftWidth: 280,
+  leftWidthPct: LEFT_WIDTH_PCT_DEFAULT,
   rightWidth: 360,
   bottomTerminalHeight: 280,
   editorWidthPct: 50,
@@ -3415,11 +3421,14 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       const paneRaw = ds[UI_PANE_WIDTHS_SETTING_KEY];
       if (paneRaw) {
         const parsed = JSON.parse(paneRaw) as Partial<{
-          left: number; right: number; bottomTerminal: number; editor: number;
+          leftPct: number; right: number; bottomTerminal: number; editor: number;
         }>;
         const patch: Partial<SessionState> = {};
         if (parsed && typeof parsed === "object") {
-          if (Number.isFinite(parsed.left)) patch.leftWidth = clampLeftWidth(parsed.left!);
+          // Only `leftPct` is read — the legacy `left` (px) field from the old
+          // fixed-width layout is deliberately dropped; the redesigned 2:8
+          // layout starts everyone at the percentage default.
+          if (Number.isFinite(parsed.leftPct)) patch.leftWidthPct = clampLeftWidthPct(parsed.leftPct!);
           if (Number.isFinite(parsed.right)) patch.rightWidth = clampRightWidth(parsed.right!);
           if (Number.isFinite(parsed.bottomTerminal)) {
             patch.bottomTerminalHeight = clampBottomTerminalHeight(parsed.bottomTerminal!);
@@ -5609,9 +5618,13 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   // value, clamp, and set synchronously (instant UI). The DB write is
   // debounced so a drag (many mousemove events) only hits the settings table
   // once after the user stops. reset* restore the defaults (double-click).
-  adjustLeftWidth: (deltaPx) => {
-    const next = clampLeftWidth(get().leftWidth + deltaPx);
-    set({ leftWidth: next });
+  adjustLeftWidthPct: (deltaPct) => {
+    // The divider sits to the RIGHT of the sidebar, so dragging it right
+    // (delta>0) widens the sidebar — no sign flip (unlike the right-bar /
+    // bottom-terminal dividers). delta is already in percentage points; the
+    // caller converted px via the container width.
+    const next = clampLeftWidthPct(get().leftWidthPct + deltaPct);
+    set({ leftWidthPct: next });
     schedulePaneWidthPersist(get);
   },
   adjustRightWidth: (deltaPx) => {
@@ -5638,8 +5651,8 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     set({ editorWidthPct: next });
     schedulePaneWidthPersist(get);
   },
-  resetLeftWidth: () => {
-    set({ leftWidth: 280 });
+  resetLeftWidthPct: () => {
+    set({ leftWidthPct: LEFT_WIDTH_PCT_DEFAULT });
     schedulePaneWidthPersist(get);
   },
   resetRightWidth: () => {

@@ -32,34 +32,29 @@ interface Props {
   onBack?: () => void;
 }
 
-/** Custom titlebar — sits behind the native window controls (titleBarStyle:
- *  hidden) so the toggle buttons share the same row as min/max/close.
- *  -webkit-app-region: drag makes the bar draggable; the buttons opt out with
- *  -webkit-app-region: no-drag so clicks pass through.
+/** Custom toolbar — sits at the top of the right (main) column, behind the
+ *  native window controls (titleBarStyle: hidden) so the toggle buttons
+ *  share the same row as min/max/close. -webkit-app-region: drag makes the
+ *  bar draggable; the buttons opt out with -webkit-app-region: no-drag so
+ *  clicks pass through. The left sidebar runs the FULL window height beside
+ *  it (see App.tsx), so this bar no longer has a sidebar-aligned left strip;
+ *  bg-surface-muted matches the sidebar so the two read as one continuous
+ *  frame around the center + right panes.
  *
- *  The bar is split vertically to match the panes below it: a sidebar strip
- *  (bg-surface-muted) over the left panel, and a main strip (bg-surface) over
- *  the center. This makes the left panel read as one continuous block running
- *  to the top of the window (no divider between the titlebar sidebar strip and
- *  the sidebar below - they blend), while the center keeps the distinct
- *  "toolbar above editor" separation. The horizontal titlebar/center divider
- *  is drawn as a border-t on the center <main> in ThreePaneLayout (not here),
- *  so it spans only the center area and isn't clipped by the native
- *  titleBarOverlay on Windows/Linux.
+ *  Leading content by mode:
+ *   - workspace: the sidebar toggle ONLY while the sidebar is closed (the
+ *     collapse button lives in the LeftBar footer; see LeftBar.tsx), then
+ *     the active-thread title chip + branch pill, editor toggle, and the
+ *     terminal/right-panel toggles at the far right.
+ *   - settings:  a "返回工作区" back button + a "设置" heading.
+ *   - browser overlay / wide-panel mode: the matching back button
+ *     ("返回工作台" / "退出宽屏") in the same slot.
  *
- *  Two modes:
- *   - workspace: left strip carries the left-panel toggle (always rendered so
- *     the button stays put whether the panel is open or closed); main strip
- *     carries the active-thread title chip + right-panel toggle.
- *   - settings:  left strip is fixed at the sidebar width (reads the same
- *     leftWidth from the store as the workspace sidebar, so the back button
- *     lines up with the settings menu below); carries a "返回工作区" back
- *     button; main strip shows "设置".
- *
- *  Platform reservation: on macOS the traffic lights sit on the LEFT, so the
- *  sidebar strip reserves left padding; on Windows/Linux the titleBarOverlay
- *  controls (min/max/close) sit on the RIGHT, so the main strip reserves
- *  right padding. */
+ *  Platform reservation: on macOS the traffic lights sit on the LEFT — they
+ *  overlay the full-height sidebar while it's open (LeftBar's header reserves
+ *  room), but when the sidebar is closed the bar starts at x=0 and reserves
+ *  the left padding itself. On Windows/Linux the titleBarOverlay controls
+ *  (min/max/close) sit on the RIGHT, so the bar reserves right padding. */
 export function Titlebar({
   mode,
   leftOpen,
@@ -91,11 +86,6 @@ export function Titlebar({
   // shows/hides the wide mode's right column.
   const isBrowserOverlay = !!browserPanelOpen && !isSettings;
 
-  // The left strip tracks the sidebar's draggable width so the toggle button
-  // and the settings back button stay aligned with the panel edge below.
-  const leftWidth = useSessionStore((s) => s.leftWidth);
-  const showLeftStrip = (leftOpen || isSettings) && !isBrowserMode;
-
   // Subscribe once to the shortcut overrides so every toggle button's tooltip
   // shows the *effective* chord (override ?? default). Re-resolved per render
   // via `hintFor` below — cheap (a handful of lookups).
@@ -115,94 +105,81 @@ export function Titlebar({
     >
       <div
         className={cn(
-          "flex shrink-0 items-center rounded-tl-lg pr-1.5",
-          // When the left panel is open (or in settings), the strip uses the
-          // muted surface so it blends with the sidebar below it as one
-          // continuous block. When collapsed, match the main strip's
-          // bg-surface so the toggle reads as part of the main titlebar.
-          showLeftStrip ? "bg-surface-muted" : "bg-surface",
-          // In settings mode the sidebar strip is always shown so the back
-          // button lines up with the settings menu below.
-          showLeftStrip && "rounded-tr-lg border-r border-edge",
-          isMac ? "pl-[78px]" : "pl-1.5",
-        )}
-        // Align the strip's right edge with the panel row's left column below.
-        // In workspace mode the panel row is <aside width=leftWidth> + a
-        // separate 1px <Divider>, so the left column spans leftWidth+1 and the
-        // strip must match (+1) for the border-r to land directly above the
-        // divider. Settings mode renders no divider (SettingsPage passes no
-        // resize handler), so the strip stays exactly leftWidth.
-        style={showLeftStrip ? { width: leftWidth + (isSettings ? 0 : 1) } : undefined}
-      >
-        {isSettings ? (
-          <button
-            onClick={onBack}
-            className={cn(
-              "flex items-center gap-1.5 rounded px-1.5 py-1 text-xs font-medium",
-              "text-content-muted transition-colors hover:bg-surface-hover hover:text-content",
-            )}
-            style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
-            title={t("layout.backToWorkspace")}
-          >
-            <IconArrowLeft size={16} className="shrink-0" />
-            {t("layout.backToWorkspace")}
-          </button>
-        ) : isBrowserMode ? (
-          // Browser overlay open: show a "返回工作台" button that closes the
-          // browser and returns to the IDE workspace. Mirrors the settings-mode
-          // back button in form (icon + label) so the two "exit this mode"
-          // affordances read consistently. The tooltip appends the effective
-          // toggle-browser shortcut (the same command this button triggers).
-          <button
-            onClick={() =>
-              widePanelOpen ? setWidePanelOpen(false) : setBrowserPanelOpen(false)
-            }
-            className={cn(
-              "flex items-center gap-1.5 rounded px-1.5 py-1 text-xs font-medium",
-              "text-content-muted transition-colors hover:bg-surface-hover hover:text-content",
-            )}
-            style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
-            title={
-              (widePanelOpen ? t("layout.exitWideMode") : t("layout.backToWorkbench")) +
-              hintFor(widePanelOpen ? "layout.toggle-wide-panel" : "layout.toggle-browser")
-            }
-          >
-            <IconArrowLeft size={16} className="shrink-0" />
-            {widePanelOpen ? t("layout.exitWideMode") : t("layout.backToWorkbench")}
-          </button>
-        ) : (
-          <button
-            onClick={onToggleLeft}
-            className={cn(
-              "flex items-center justify-center rounded p-1.5 transition-colors",
-              leftOpen
-                ? "bg-surface-hover text-accent"
-                : "text-content-muted hover:bg-surface-hover hover:text-content",
-            )}
-            title={(leftOpen ? t("layout.hideLeftPanel") : t("layout.showLeftPanel")) + hintFor("layout.toggle-left")}
-            style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
-          >
-            <IconLayoutSidebarLeftExpand
-              size={18}
-              className={cn(
-                "shrink-0 transition-transform",
-                !leftOpen && "scale-x-[-1]",
-              )}
-            />
-          </button>
-        )}
-      </div>
-
-      <div
-        className={cn(
-          "flex flex-1 items-center bg-surface px-1.5",
+          "flex flex-1 items-center bg-surface-muted px-1.5",
           !isMac && "pr-[138px]",
+          // macOS traffic lights sit at the window's top-left. They overlay
+          // the full-height sidebar while it's visible (LeftBar's header
+          // reserves the room). Whenever the sidebar is NOT visible — closed,
+          // or hidden because settings goes fullscreen — this bar starts at
+          // x=0 and must reserve the space itself.
+          isMac && !(leftOpen && !isSettings) && "pl-[78px]",
         )}
       >
         {isSettings ? (
-          <h2 className="px-1.5 text-sm font-semibold text-content">{t("layout.settings")}</h2>
+          <>
+            <button
+              onClick={onBack}
+              className={cn(
+                "flex items-center gap-1.5 rounded px-1.5 py-1 text-xs font-medium",
+                "text-content-muted transition-colors hover:bg-surface-hover hover:text-content",
+              )}
+              style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
+              title={t("layout.backToWorkspace")}
+            >
+              <IconArrowLeft size={16} className="shrink-0" />
+              {t("layout.backToWorkspace")}
+            </button>
+            <h2 className="px-1.5 text-sm font-semibold text-content">{t("layout.settings")}</h2>
+          </>
         ) : (
           <>
+            {isBrowserMode ? (
+              // Browser overlay / wide-panel mode: a back button that closes
+              // the mode and returns to the IDE workspace. Mirrors the
+              // settings-mode back button in form (icon + label) so the
+              // "exit this mode" affordances read consistently. The tooltip
+              // appends the effective toggle shortcut (the same command this
+              // button triggers).
+              <button
+                onClick={() =>
+                  widePanelOpen ? setWidePanelOpen(false) : setBrowserPanelOpen(false)
+                }
+                className={cn(
+                  "flex items-center gap-1.5 rounded px-1.5 py-1 text-xs font-medium",
+                  "text-content-muted transition-colors hover:bg-surface-hover hover:text-content",
+                )}
+                style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
+                title={
+                  (widePanelOpen ? t("layout.exitWideMode") : t("layout.backToWorkbench")) +
+                  hintFor(widePanelOpen ? "layout.toggle-wide-panel" : "layout.toggle-browser")
+                }
+              >
+                <IconArrowLeft size={16} className="shrink-0" />
+                {widePanelOpen ? t("layout.exitWideMode") : t("layout.backToWorkbench")}
+              </button>
+            ) : (
+              // Workspace: the sidebar's collapse toggle lives in the LeftBar
+              // footer now, so the toolbar HIDES this button while the sidebar
+              // is open. It reappears only while the sidebar is CLOSED — the
+              // footer button is inside the hidden sidebar, so this is the
+              // only mouse path back (beyond the toggle-left shortcut).
+              !leftOpen && (
+                <button
+                  onClick={onToggleLeft}
+                  className={cn(
+                    "flex items-center justify-center rounded p-1.5 transition-colors",
+                    "text-content-muted hover:bg-surface-hover hover:text-content",
+                  )}
+                  title={t("layout.showLeftPanel") + hintFor("layout.toggle-left")}
+                  style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
+                >
+                  <IconLayoutSidebarLeftExpand
+                    size={18}
+                    className="shrink-0 scale-x-[-1]"
+                  />
+                </button>
+              )
+            )}
             <ActiveThreadTitle />
             {/* Git branch indicator - compact pill (no project name), click to
                 switch branches. Only renders when a project is active and is a
@@ -212,8 +189,6 @@ export function Titlebar({
                 without closing the open file. Sits right of the branch pill. */}
             {!isBrowserMode && <EditorColumnToggle />}
             <div className="flex-1" />
-            {/* Bottom terminal toggle — sits just left of the right-panel
-                toggle. Active state highlighted with the accent token. */}
             {/* Bottom terminal toggle - hidden while the browser overlay is
                 open, same as the side-panel toggles (kept during wide mode). */}
             {!isBrowserOverlay && (
@@ -228,8 +203,8 @@ export function Titlebar({
                 title={(bottomTerminalOpen ? t("layout.hideTerminal") : t("layout.showTerminal")) + hintFor("layout.toggle-bottom-terminal")}
                 style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
               >
-              <IconTerminal2 size={18} className="shrink-0" />
-            </button>
+                <IconTerminal2 size={18} className="shrink-0" />
+              </button>
             )}
             {/* Right-panel toggle - hidden while the browser overlay is open
                 (the browser forces the right panel closed and manages its own

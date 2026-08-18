@@ -299,6 +299,10 @@ export function mergeClaudeTokenUsageSnapshot(
     pct >= 90 ? "critical" : pct >= 70 ? "near-window" : "ok";
   return {
     ...accumulated,
+    // `accumulated.model` is absent on gateway/custom-model endpoints (no
+    // top-level result.model); keep whatever the last path-A snapshot read
+    // from message.model instead of letting the merged state lose it.
+    model: accumulated.model ?? lastKnown.model,
     usedTokens,
     pct,
     warning,

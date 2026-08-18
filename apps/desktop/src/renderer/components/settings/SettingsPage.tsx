@@ -15,6 +15,7 @@ import {
   IconWorld,
   IconCode,
   IconInfoCircle,
+  IconChartBar,
   McpIcon,
   type TablerIconProps,
 } from "@renderer/lib/icons.js";
@@ -29,6 +30,7 @@ import { TerminalPanel } from "./TerminalPanel.js";
 import { BrowserPanel } from "./BrowserPanel.js";
 import { LspLanguagesPanel } from "./LspLanguagesPanel.js";
 import { NotificationsPanel } from "./NotificationsPanel.js";
+import { UsagePanel } from "./UsagePanel.js";
 import { AboutPanel } from "./AboutPanel.js";
 
 /**
@@ -49,6 +51,7 @@ import { AboutPanel } from "./AboutPanel.js";
  *  - Git     (GitPanel)
  *  - 终端    (TerminalPanel - shell override + per-project commands)
  *  - 语言服务器 (LspLanguagesPanel)
+ *  - 用量统计 (UsagePanel - daily heatmap + per-model breakdown over time ranges)
  *  - 关于    (AboutPanel - version / license / repo links)
  *
  * The thread-title generator used to be its own nav item ("线程名称"); it has
@@ -57,13 +60,19 @@ import { AboutPanel } from "./AboutPanel.js";
  * Note: the legacy “Claude CLI 路径” panel was removed - the Agent SDK bundles
  * its own claude binary, so an externally-configured path is no longer used.
  */
-type SectionId = "general" | "custom-models" | "skills" | "mcp" | "appearance" | "shortcuts" | "notifications" | "git" | "terminal" | "browser" | "lsp-languages" | "about";
+type SectionId = "general" | "custom-models" | "skills" | "mcp" | "appearance" | "shortcuts" | "notifications" | "git" | "terminal" | "browser" | "lsp-languages" | "usage" | "about";
 
 interface NavItem {
   id: SectionId;
   labelKey: MessageId;
   icon: ComponentType<TablerIconProps>;
 }
+
+/** Settings nav sidebar width (px). Fixed — the workspace sidebar is now a
+ *  percentage of the window (leftWidthPct) and no longer shares a width with
+ *  the titlebar's retired left strip, so there's nothing to stay aligned
+ *  with. 280px keeps the old default look. */
+const SETTINGS_NAV_WIDTH = 280;
 
 const NAV_ITEMS: NavItem[] = [
   // 分组顺序:常规 -> 个性化 -> 核心 AI 配置 -> IDE 能力 -> 关于
@@ -78,18 +87,13 @@ const NAV_ITEMS: NavItem[] = [
   { id: "terminal", labelKey: "settings.nav.terminal", icon: IconTerminal2 },
   { id: "browser", labelKey: "settings.nav.browser", icon: IconWorld },
   { id: "lsp-languages", labelKey: "settings.nav.lsp", icon: IconCode },
+  { id: "usage", labelKey: "settings.nav.usage", icon: IconChartBar },
   { id: "about", labelKey: "settings.nav.about", icon: IconInfoCircle },
 ];
 
 export function SettingsPage() {
   const { t } = useI18n();
   const setSettingsOpen = useSessionStore((s) => s.setSettingsOpen);
-  // Read the same persisted leftWidth the workspace sidebar + titlebar left
-  // strip use, so the settings nav sidebar stays exactly aligned with the
-  // titlebar's sidebar strip above (whose width also comes from this store
-  // value). Without this the settings sidebar was a hardcoded 280px while the
-  // titlebar strip tracked the user's dragged width - they'd drift apart.
-  const leftWidth = useSessionStore((s) => s.leftWidth);
   // SettingsPage mounts fresh each time the modal opens (App.tsx conditionally
   // renders it on `settingsOpen`), so this useState reads the requested
   // section once per open. Callers pass a section via setSettingsOpen(true, id)
@@ -177,13 +181,14 @@ export function SettingsPage() {
           {active === "terminal" && <TerminalPanel />}
           {active === "browser" && <BrowserPanel />}
           {active === "lsp-languages" && <LspLanguagesPanel />}
+          {active === "usage" && <UsagePanel />}
           {active === "about" && <AboutPanel />}
         </div>
       }
       right={null}
       leftOpen
       rightOpen={false}
-      leftWidth={leftWidth}
+      leftWidth={SETTINGS_NAV_WIDTH}
     />
   );
 }

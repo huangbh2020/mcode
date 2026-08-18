@@ -397,6 +397,13 @@ const api = {
       ipcRenderer.invoke(IPC.MCP_IMPORT, input)) as RpcMap["mcp.import"],
   },
 
+  /** Usage stats (settings panel): aggregated token/cost usage over the
+   *  persisted per-turn history (summary + per-model + per-day heatmap). */
+  usage: {
+    stats: ((input) =>
+      ipcRenderer.invoke(IPC.USAGE_STATS, input)) as RpcMap["usage.stats"],
+  },
+
   /** Probe whether the default provider is functional. */
   claudeHealthCheck: (): Promise<{
     installed: boolean;
