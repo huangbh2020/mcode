@@ -154,12 +154,14 @@ export function App() {
   // Convert a px drag delta into a percentage-point delta of the window
   // width. The divider sits to the RIGHT of the sidebar, so the sign flip
   // (none needed here — dragging right widens) lives in adjustLeftWidthPct.
+  // No rounding: the store keeps fractional percentages so the pane tracks
+  // the cursor pixel-for-pixel (integer pcts ate sub-percent deltas).
   const handleLeftResize = (deltaPx: number) => {
     const el = rootRef.current;
     if (!el) return;
     const w = el.getBoundingClientRect().width;
     if (w <= 0) return;
-    adjustLeftWidthPct(Math.round((deltaPx / w) * 100));
+    adjustLeftWidthPct((deltaPx / w) * 100);
   };
 
   return (
@@ -184,16 +186,17 @@ export function App() {
           columns. Renders null when not applicable. */}
       <WidePlanDialog />
       {/*
-        Left sidebar — spans the FULL window height (the 2 of the 2:8 split).
-        Its share of the width is a persisted percentage (default 20%); the
-        Divider below is draggable (invisible hairline — the sidebar and the
-        toolbar/track share the same muted surface, a hairline would cut the
-        continuous frame; the resize cursor is the affordance) and
-        double-click resets to 2:8. Wide-panel mode forces leftOpen=false in
-        the store, so the aside hides itself without special-casing here.
-        While the settings view is open the aside is hidden via CSS (`hidden`,
-        stays mounted to preserve scroll) so settings renders FULL-WIDTH below
-        the toolbar instead of only over the right column.
+        Left sidebar — spans the FULL window height. Its share of the width
+        is a persisted percentage (default 12 ≈ a compact ~259px sidebar on a
+        2160px window); the Divider below is draggable (invisible hairline —
+        the sidebar and the toolbar/track share the same muted surface, a
+        hairline would cut the continuous frame; the resize cursor is the
+        affordance) and double-click resets to the default. Wide-panel mode
+        forces leftOpen=false in the store, so the aside hides itself without
+        special-casing here. While the settings view is open the aside is
+        hidden via CSS (`hidden`, stays mounted to preserve scroll) so
+        settings renders FULL-WIDTH below the toolbar instead of only over
+        the right column.
         bg-surface-muted matches the toolbar to the right and the panel track,
         so all three read as one continuous frame — no right-edge rounding;
         rounded-tl alone carries the window-corner arc on macOS.
@@ -201,7 +204,12 @@ export function App() {
       {leftOpen && (
         <aside
           className={cn(
-            "flex h-full shrink-0 flex-col rounded-tl-3xl bg-surface-muted",
+            // min-w-0 kills the flex `min-width: auto` content floor —
+            // without it the widest nowrap row in LeftBar (e.g. a long
+            // session title, which contributes its full text width to
+            // min-content) propped the aside open no matter how small
+            // leftWidthPct got.
+            "flex h-full min-w-0 shrink-0 flex-col rounded-tl-3xl bg-surface-muted",
             settingsOpen && "hidden",
           )}
           style={{ flexGrow: 0, flexBasis: `${leftWidthPct}%` }}
@@ -215,6 +223,10 @@ export function App() {
         <Divider
           orientation="vertical"
           hideLine
+          // z-20 lifts the invisible ±5px hit area above the center pane's
+          // z-10 — without it the pane (later in DOM, same z) swallowed the
+          // right half of the grab zone, leaving only the sidebar-side 5px.
+          className="z-20"
           onResize={handleLeftResize}
           onDoubleClick={resetLeftWidthPct}
         />
@@ -251,11 +263,11 @@ export function App() {
           onToggleBottomTerminal={() => setBottomTerminalOpen(!bottomTerminalOpen)}
         />
         {/* Main panel row — bg-surface-muted as the contrasting track so the
-            center pane's rounded bottom-left corner (in ThreePaneLayout)
-            reveals this muted color through the notch and reads as a clean
-            arc. The left sidebar (bg-surface-muted) blends into the track on
-            its side; the center pane (bg-surface) sits on top with
-            --panel-shadow. */}
+            center pane's rounded left-edge corners (in ThreePaneLayout)
+            reveal this muted color through the notches and read as clean
+            arcs. The left sidebar (bg-surface-muted) blends into the track
+            on its side; the center pane (bg-surface) separates from the
+            track by the flat color step alone (no shadow). */}
         <div className="relative flex min-h-0 flex-1 bg-surface-muted">
           <ThreePaneLayout
             left={null}
@@ -285,15 +297,18 @@ export function App() {
             settings is open, so this overlay (inset-0 of the panel row, which
             now spans the whole window) covers everything below the toolbar.
             The workspace still mounts underneath, keeping terminals alive,
-            just not visible. bg-surface is opaque so the workspace doesn't
-            bleed through. `flex` is required: SettingsPage reuses
+            just not visible. bg-surface-muted is opaque (no bleed-through)
+            and doubles as the settings "track": it shows through the content
+            pane's rounded-tl/bl notches so the settings arcs read exactly
+            like the workspace center pane against its frame.
+            `flex` is required: SettingsPage reuses
             ThreePaneLayout, whose left <aside> + center <main> are sibling
             nodes laid out horizontally by a flex parent. Without flex the
             <main> collapses to height 0 and the settings content never
             renders.
           */}
           {settingsOpen && (
-            <div className="absolute inset-0 z-30 flex bg-surface">
+            <div className="absolute inset-0 z-30 flex bg-surface-muted">
               <SettingsPage />
             </div>
           )}
@@ -353,7 +368,7 @@ function CenterPane() {
     if (!el) return;
     const w = el.getBoundingClientRect().width;
     if (w <= 0) return;
-    adjustEditorWidthPct(Math.round((deltaPx / w) * 100));
+    adjustEditorWidthPct((deltaPx / w) * 100);
   };
 
   return (
@@ -446,7 +461,7 @@ function WidePanelSplit() {
     if (!el) return;
     const w = el.getBoundingClientRect().width;
     if (w <= 0) return;
-    adjustWidePanelPct(Math.round((deltaPx / w) * 100));
+    adjustWidePanelPct((deltaPx / w) * 100);
   };
 
   // The titlebar right-panel toggle drives `rightOpen`. While hidden in wide

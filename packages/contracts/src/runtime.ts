@@ -580,6 +580,36 @@ export interface SessionRunningSnapshotEvent {
   running: string[];
 }
 
+/**
+ * Cross-client echo of a user prompt. Emitted by the host when ANY client
+ * (desktop renderer or a paired phone) sends a turn, so every OTHER client
+ * appends the sender's bubble in real time — ahead of the first assistant
+ * event of the turn. Without it, a prompt typed on the phone never showed
+ * up on the PC until a restart: assistant-side events fan out, but the user
+ * message itself lives only in the originator's local store until it is
+ * persisted at the turn boundary, and an already-hydrated session never
+ * re-fetches. The echo carries the originator's message id / createdAt /
+ * display blocks; the originator itself already appended the same id
+ * optimistically at send time and ignores the echo by id match. Broadcast
+ * through the same two channels as {@link SessionChangedEvent} (renderer
+ * `claude:event` + mobile SSE bus).
+ */
+export interface UserMessageEvent {
+  type: "user.message";
+  sessionId: string;
+  /** The originator's local user-message id (`u_<ts>`). Shared by every
+   *  client so the persisted row is identical regardless of which client
+   *  writes it first, and so the originator can dedupe the echo. */
+  messageId: string;
+  /** Wall-clock ms at the originator's send — the ordering key. */
+  createdAt: number;
+  /** The user message's display blocks (text / image / attachment chips)
+   *  exactly as the originator rendered them. Opaque to the contract — the
+   *  renderer's Block union lives in the store; receivers cast on ingest,
+   *  mirroring how persisted message content is trusted on reload. */
+  blocks: unknown[];
+}
+
 /** The union of all runtime events. */
 export type RuntimeEvent =
   | TextDeltaEvent
@@ -605,4 +635,5 @@ export type RuntimeEvent =
   | SessionDeletedEvent
   | RequestResolvedEvent
   | SessionRunningSnapshotEvent
+  | UserMessageEvent
   | GitChangedEvent;

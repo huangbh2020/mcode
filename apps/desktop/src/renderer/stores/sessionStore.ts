@@ -530,6 +530,17 @@ export interface SessionState {
   /** In-flight "load older" request, per session. Guards against stacking
    *  concurrent paginated fetches when the user holds the scroll at the top. */
   loadingOlderBySession: Record<string, boolean>;
+  /** Per-session "persisted history hydrated" flag. True ONLY after
+   *  prefetchSessionMessages has merged the DB's first page into the bucket
+   *  (or the session was created locally, whose history is empty by
+   *  definition). Bucket EXISTENCE is not enough as the guard: ingestEvent
+   *  creates partial buckets on the fly for sessions never opened locally
+   *  (e.g. a turn driven from the mobile companion while the desktop app was
+   *  running but the thread wasn't open) — such a bucket holds only the live
+   *  event window, and letting it suppress the first-page fetch hides every
+   *  earlier persisted message (sent from this PC in a previous run, or from
+   *  the phone) until an app restart re-hydrates from the DB. */
+  historyLoadedBySession: Record<string, boolean>;
   /** Per-session running flag. Keyed by sessionId so a turn running in
    *  thread A doesn't lock the composer in thread B — the user can keep
    *  composing / inspecting other threads while a background turn streams.
@@ -655,8 +666,8 @@ export interface SessionState {
    *  Persisted as one JSON blob (UI_PANE_WIDTHS_SETTING_KEY) and re-clamped
    *  on hydrate. Updated live during drag (synchronous set); the DB write is
    *  debounced so a drag doesn't hammer the settings table. */
-  /** Left sidebar share of the window width, as a percentage 0–100 (the
-   *  redesign default is 20 = a 2:8 split against the main area). */
+  /** Left sidebar share of the window width, as a percentage 0–100
+   *  (default/min 12 — a compact ~259px sidebar on a 2160px window). */
   leftWidthPct: number;
   /** Right IDE panel width in px. */
   rightWidth: number;
@@ -1555,9 +1566,11 @@ export function clampPasteTagThresholdChars(n: number): number {
  * on hydrate so a corrupted/out-of-range stored value can't collapse a pane
  * below its usable minimum or stretch it past the screen. */
 
-export const LEFT_WIDTH_PCT_MIN = 10;
+/** Min 12 ≈ 259px on a 2160px window — the user-tuned compact floor; the
+ *  default matches it so a fresh window starts at the preferred width. */
+export const LEFT_WIDTH_PCT_MIN = 12;
 export const LEFT_WIDTH_PCT_MAX = 40;
-export const LEFT_WIDTH_PCT_DEFAULT = 20;
+export const LEFT_WIDTH_PCT_DEFAULT = 12;
 export const RIGHT_WIDTH_MIN = 240;
 export const RIGHT_WIDTH_MAX = 640;
 /** Right-panel width that fits the sidebar browser's default iPhone 14 Pro
@@ -1573,11 +1586,17 @@ export const EDITOR_WIDTH_PCT_MAX = 80;
 
 /** Clamp helper for the four persisted pane sizes. Falls back to defaults on
  *  any non-finite value so the layout never breaks. */
+/** NOTE: the pct clamps deliberately do NOT round — percentage shares must
+ *  stay fractional. A per-mousemove drag delta is a fraction of a percent
+ *  (1px on a 2900px window ≈ 0.034%); rounding to integers turned every
+ *  small delta into 0 (dead handle) until one big move jumped a whole
+ *  percent (~29px) — the classic janky resizable. Fractional values keep
+ *  the handle tracking the cursor pixel-for-pixel. */
 export function clampLeftWidthPct(pct: number): number {
   if (!Number.isFinite(pct)) return LEFT_WIDTH_PCT_DEFAULT;
   return Math.min(
     LEFT_WIDTH_PCT_MAX,
-    Math.max(LEFT_WIDTH_PCT_MIN, Math.round(pct)),
+    Math.max(LEFT_WIDTH_PCT_MIN, pct),
   );
 }
 export function clampRightWidth(px: number): number {
@@ -1592,8 +1611,9 @@ export function clampBottomTerminalHeight(px: number): number {
   );
 }
 export function clampEditorWidthPct(pct: number): number {
+  // No rounding — see clampLeftWidthPct for why fractional pcts matter.
   if (!Number.isFinite(pct)) return 50;
-  return Math.min(EDITOR_WIDTH_PCT_MAX, Math.max(EDITOR_WIDTH_PCT_MIN, Math.round(pct)));
+  return Math.min(EDITOR_WIDTH_PCT_MAX, Math.max(EDITOR_WIDTH_PCT_MIN, pct));
 }
 /** Wide-panel split bounds. widePanelPct is the right panel's share of the
  *  chat|right split; DEFAULT 80 gives the requested 2:8. The bounds keep the
@@ -1605,8 +1625,9 @@ export const WIDE_PANEL_PCT_DEFAULT = 80;
 /** Clamp helper for the wide-panel percentage. Falls back to the default on
  *  any non-finite value. */
 export function clampWidePanelPct(pct: number): number {
+  // No rounding — see clampLeftWidthPct for why fractional pcts matter.
   if (!Number.isFinite(pct)) return WIDE_PANEL_PCT_DEFAULT;
-  return Math.min(WIDE_PANEL_PCT_MAX, Math.max(WIDE_PANEL_PCT_MIN, Math.round(pct)));
+  return Math.min(WIDE_PANEL_PCT_MAX, Math.max(WIDE_PANEL_PCT_MIN, pct));
 }
 
 /** Matches a well-formed space-separated "R G B" triplet (0–255 each),
@@ -1758,6 +1779,8 @@ function applySessionDeletedState(s: SessionState, id: string): Partial<SessionS
   delete loadingMessagesBySession[id];
   const loadingOlderBySession = { ...s.loadingOlderBySession };
   delete loadingOlderBySession[id];
+  const historyLoadedBySession = { ...s.historyLoadedBySession };
+  delete historyLoadedBySession[id];
   const runningBySession = { ...s.runningBySession };
   delete runningBySession[id];
   const runningTurnStartedAt = { ...s.runningTurnStartedAt };
@@ -1811,6 +1834,7 @@ function applySessionDeletedState(s: SessionState, id: string): Partial<SessionS
     hasMoreMessagesBySession,
     loadingMessagesBySession,
     loadingOlderBySession,
+    historyLoadedBySession,
     runningBySession,
     runningTurnStartedAt,
     interruptedBySession,
@@ -1859,6 +1883,7 @@ function applySessionDeletedState(s: SessionState, id: string): Partial<SessionS
     hasMoreMessagesBySession,
     loadingMessagesBySession,
     loadingOlderBySession,
+    historyLoadedBySession,
     runningBySession,
     runningTurnStartedAt,
     interruptedBySession,
@@ -2948,6 +2973,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     hasMoreMessagesBySession: {},
     loadingMessagesBySession: {},
     loadingOlderBySession: {},
+    historyLoadedBySession: {},
   runningBySession: {},
   runningTurnStartedAt: {},
   interruptedBySession: {},
@@ -3735,6 +3761,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         expandedProjects: { ...s.expandedProjects, [projectId]: true },
         messagesBySession: { ...s.messagesBySession, [session.id]: [] },
         hasMoreMessagesBySession: { ...s.hasMoreMessagesBySession, [session.id]: false },
+        // Locally-created session: the empty bucket IS the full history — mark
+        // it hydrated so selectSession/openTab never re-fetch for it.
+        historyLoadedBySession: { ...s.historyLoadedBySession, [session.id]: true },
         // New session lands as a fresh tab. If it was somehow already open
         // (e.g. a duplicate id — shouldn't happen) we don't double-add.
         openTabs: s.openTabs.includes(session.id) ? s.openTabs : [...s.openTabs, session.id],
@@ -3766,7 +3795,11 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       delete unreadBySession[sessionId];
       return { activeSessionId: sessionId, unreadBySession };
     });
-    if (get().messagesBySession[sessionId]) return;
+    // Gate on the hydration flag, NOT bucket existence: a bucket may already
+    // exist having been created by ingestEvent from another client's turn
+    // (mobile companion) — it holds only the live event window and must not
+    // suppress loading the full persisted history. See prefetchSessionMessages.
+    if (get().historyLoadedBySession[sessionId]) return;
     void get().prefetchSessionMessages(sessionId);
   },
 
@@ -3794,7 +3827,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         unreadBySession,
       };
     });
-    if (!get().messagesBySession[sessionId]) {
+    // Same hydration-flag gate as selectSession — an event-created partial
+    // bucket (another client's turn) must not suppress the history fetch.
+    if (!get().historyLoadedBySession[sessionId]) {
       void get().prefetchSessionMessages(sessionId);
     }
   },
@@ -3802,9 +3837,18 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   /** Shared first-page history fetch behind selectSession / openTab / hover
    *  prefetch. Tracks in-flight state in `loadingMessagesBySession` so the
    *  ChatPane can distinguish "history loading" (skeleton) from "thread
-   *  genuinely empty" (welcome screen), and dedupes concurrent callers. */
+   *  genuinely empty" (welcome screen), and dedupes concurrent callers.
+   *
+   *  When a live bucket already exists (created by ingestEvent from a turn
+   *  driven by ANOTHER client — e.g. the mobile companion — before this
+   *  client ever opened the thread), the fetched page is MERGED with it
+   *  instead of replacing it: shared ids keep the live copy (fresher stream
+   *  state than the persisted row mid-turn), live-only messages append, and
+   *  the union is re-sorted by the same (createdAt, id) key the DB pages by.
+   *  This is what makes "chat on the phone → come back to the PC" show the
+   *  full thread instead of just the phone-driven tail. */
   prefetchSessionMessages: async (sessionId) => {
-    if (get().messagesBySession[sessionId]) return;
+    if (get().historyLoadedBySession[sessionId]) return;
     if (get().loadingMessagesBySession[sessionId]) return;
     set((s) => ({
       loadingMessagesBySession: { ...s.loadingMessagesBySession, [sessionId]: true },
@@ -3814,14 +3858,32 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         sessionId,
         limit: MESSAGE_PAGE_SIZE,
       });
+      const fetched = fromRecords(messages);
+      const live = get().messagesBySession[sessionId];
+      let merged: ChatMessage[];
+      if (live && live.length > 0) {
+        const byId = new Map(fetched.map((m) => [m.id, m]));
+        const extras: ChatMessage[] = [];
+        for (const m of live) {
+          if (byId.has(m.id)) byId.set(m.id, m);
+          else extras.push(m);
+        }
+        merged = [...byId.values(), ...extras].sort(
+          (a, b) => a.createdAt - b.createdAt || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
+        );
+      } else {
+        merged = fetched;
+      }
       set((s) => ({
-        messagesBySession: { ...s.messagesBySession, [sessionId]: fromRecords(messages) },
+        messagesBySession: { ...s.messagesBySession, [sessionId]: merged },
         hasMoreMessagesBySession: { ...s.hasMoreMessagesBySession, [sessionId]: hasMore },
+        historyLoadedBySession: { ...s.historyLoadedBySession, [sessionId]: true },
         loadingMessagesBySession: { ...s.loadingMessagesBySession, [sessionId]: false },
       }));
     } catch {
       // Never leave the skeleton stuck up on a failed fetch — fall back to
-      // the regular (empty) view so the composer stays usable.
+      // the regular (empty) view so the composer stays usable. The hydration
+      // flag stays unset so a later open retries the fetch.
       set((s) => ({
         loadingMessagesBySession: { ...s.loadingMessagesBySession, [sessionId]: false },
       }));
@@ -4311,8 +4373,11 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       // assistant block arrives. This anchors the synthesized "开始 · 用时"
       // row that renders before any token lands, and the real turnMeta
       // (stamped at the first delta/tool/plan) falls back to this value so
-      // the timing is continuous across the handoff.
-      runningTurnStartedAt: { ...s.runningTurnStartedAt, [sessionId]: Date.now() },
+      // the timing is continuous across the handoff. Reuses userMsg.createdAt
+      // (not a fresh Date.now()) so the turn-done incremental persist's
+      // `createdAt >= anchor` filter can never tick past the user message
+      // and drop it from the persisted tail on a millisecond boundary.
+      runningTurnStartedAt: { ...s.runningTurnStartedAt, [sessionId]: userMsg.createdAt },
       // A new turn supersedes any prior manual interrupt: clear the sentinel
       // so subagent.update / turn.done events for THIS turn aren't filtered.
       interruptedBySession: { ...s.interruptedBySession, [sessionId]: false },
@@ -4352,6 +4417,10 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           // User-attached images inlined into the provider request (base64
           // content blocks — never paths).
           images: images && images.length > 0 ? images : undefined,
+          // Cross-client echo: main re-broadcasts this bubble to every OTHER
+          // client (phone ⇄ PC) as a `user.message` event keyed by the id.
+          // The local copy appended above makes the echo a no-op here.
+          userMessage: { id: userMsg.id, createdAt: userMsg.createdAt, blocks: userMsg.blocks },
         }));
       } catch (err) {
         // The IPC itself rejected (not a streamed `error` event). Without
@@ -4470,7 +4539,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         [sessionId]: [...truncated, userMsg],
       },
       runningBySession: { ...s.runningBySession, [sessionId]: true },
-      runningTurnStartedAt: { ...s.runningTurnStartedAt, [sessionId]: Date.now() },
+      // Same anchor rule as sendPrompt: reuse userMsg.createdAt so the
+      // turn-done incremental persist can never filter out the user message.
+      runningTurnStartedAt: { ...s.runningTurnStartedAt, [sessionId]: userMsg.createdAt },
       // A new turn supersedes any prior manual interrupt: clear the sentinel
       // so subagent.update / turn.done events for THIS turn aren't filtered.
       interruptedBySession: { ...s.interruptedBySession, [sessionId]: false },
@@ -4511,6 +4582,10 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           skills: skillsUsed && skillsUsed.length > 0 ? skillsUsed : undefined,
           // Preserved user-attached images from the pre-edit message.
           images: preservedImages.length > 0 ? preservedImages : undefined,
+          // Cross-client echo (same as sendPrompt): other clients append the
+          // re-sent bubble by id. Their stale pre-edit tail is a separate
+          // cross-client sync concern; this at least surfaces the new prompt.
+          userMessage: { id: userMsg.id, createdAt: userMsg.createdAt, blocks: userMsg.blocks },
         }));
       } catch (err) {
         console.error("editAndResendMessage: sendTurn IPC failed:", err);
@@ -4705,6 +4780,35 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         for (const id of Object.keys(s.runningBySession)) next[id] = running.has(id);
         for (const id of running) next[id] = true;
         return { runningBySession: next };
+      });
+      return;
+    }
+
+    // user.message — cross-client echo of a prompt typed on another client
+    // (phone → PC or PC → phone), emitted by main right before the turn
+    // starts. The originator appended its bubble optimistically at send and
+    // passed the SAME id, so the id check below makes the echo a no-op
+    // there; everyone else appends the bubble verbatim, in time to sit above
+    // the assistant reply that is about to stream in. Without this, a
+    // phone-typed prompt only reached the PC via the DB on a later
+    // open/restart — a hydrated session never re-fetched, so the bubble was
+    // simply missing while the reply streamed in headerless.
+    if (e.type === "user.message") {
+      bumpUnread();
+      set((s) => {
+        const list = s.messagesBySession[sid] ?? EMPTY_MESSAGES;
+        // Originator's own echo (id already present) — nothing to append.
+        if (list.some((m) => m.id === e.messageId)) return s;
+        const msg: ChatMessage = {
+          id: e.messageId,
+          sessionId: sid,
+          role: "user",
+          // Trusted payload from our own renderer/mobile peer, same as the
+          // persisted message content trusted by fromRecords on reload.
+          blocks: e.blocks as Block[],
+          createdAt: e.createdAt,
+        };
+        return { messagesBySession: { ...s.messagesBySession, [sid]: [...list, msg] } };
       });
       return;
     }

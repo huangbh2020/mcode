@@ -290,12 +290,14 @@ function isCompletedTurnTail(
  *  or tool calls. A plan block in particular almost always sits BEFORE the
  *  last tool call in the timeline (plan mode = research → plan → execute), so
  *  without extraction it would fold into the process panel and vanish. This
- *  helper is the single source of truth for the extraction: the LIVE streaming
- *  branch, the completed-turn branch and the orphan branch all call it, so
- *  both cards stay pinned to the turn's end regardless of streaming state or
- *  event ordering. Returns the cleaned messages (dropping any left empty by
- *  the extraction) plus the extracted blocks in their original order, plans
- *  and files kept separate so callers can order plan → files. Pure — no
+ *  helper is the single source of truth for the extraction: the completed-turn
+ *  branch and the orphan branch call it, so both cards stay pinned to the
+ *  turn's end in the FROZEN (post-turn) view regardless of event ordering.
+ *  The LIVE streaming branch deliberately does NOT call it — footer cards stay
+ *  inline on their host message while the turn runs (see the isStreamingTail
+ *  branch below for why). Returns the cleaned messages (dropping any left
+ *  empty by the extraction) plus the extracted blocks in their original order,
+ *  plans and files kept separate so callers can order plan → files. Pure — no
  *  mutation of the input array. */
 function extractFooterBlocks(msgs: ChatMessage[]): {
   cleaned: ChatMessage[];
@@ -375,78 +377,36 @@ function groupMessagesForRender(
     // isStreamingTail-false path below). Each message's own MessageBlocks
     // still folds consecutive batch tools into one card.
     if (isStreamingTail) {
+      // While the turn is still streaming, every message of the live turn is
+      // emitted as its own single item (flat stream: text + tool cards inline),
+      // each carrying its OWN blocks verbatim — plan and turn-files blocks
+      // included. The footer cards are NOT extracted to the stream's end here:
+      // re-pinning a live plan card to the bottom meant every newly streamed
+      // message landed ABOVE it, pushing it further down while
+      // maintainScrollAtEnd kept re-snapping scroll to the moving end
+      // (onDataChange + onItemLayout >5px) — the card visibly jumped on each
+      // delta ("闪烁"), especially during post-approval execution and plan
+      // revision, where output keeps flowing long after the card appeared.
+      // Keeping the card inline on its host message (right where the model
+      // presented the plan) gives it a stable position: new content appends
+      // BELOW it and scrolls past naturally. When the turn completes, the
+      // completed-turn branch below re-runs the footer extraction and pins the
+      // frozen cards to the turn's end in one coherent re-layout (the turn
+      // collapses into a panel at that moment anyway).
       const byMsg = new Map<ChatMessage, Block[]>();
       for (const { block, msg } of turnBlocks) {
         const arr = byMsg.get(msg);
         if (arr) arr.push(block);
         else byMsg.set(msg, [block]);
       }
-      // Group into ChatMessage[] so we can run the SAME footer-card extraction
-      // (plan + turn-files) as the completed-turn branch. turn.files is emitted
-      // from flushFinal() BEFORE turn.done, so while the turn is still
-      // streaming the card has already landed on a host message's blocks. A
-      // live plan card is attached the same way (plan.update mid-turn). Without
-      // extraction these would render inline wherever their host message sits
-      // (often mid-stream, mixed in with tool/narration cards). Pulling them
-      // out and re-emitting them as trailing singles (plan above, files below)
-      // keeps both cards at the turn's very end during streaming too — so their
-      // positions don't jump when the turn completes and the completed-turn
-      // extraction kicks in.
-      const liveMsgs: ChatMessage[] = [];
-      for (const [msg, blocks] of byMsg) {
-        liveMsgs.push({ ...msg, blocks });
-      }
-      const { cleaned, plans, files } = extractFooterBlocks(liveMsgs);
       const streamingTailId = lastMsg?.id;
-      for (const msg of cleaned) {
+      for (const [msg, blocks] of byMsg) {
         items.push({
           kind: "single",
-          msg,
+          msg: { ...msg, blocks },
           isStreamingTail: msg.id === streamingTailId,
           isTurnTail: false,
         });
-      }
-      // Re-emit each extracted card as its own trailing single (after every
-      // real message of the live turn), plan cards before turn-files cards.
-      // isStreamingTail is false — the cards are not streaming output sources,
-      // and marking them true would attach a spinner to them. turnMeta is
-      // stripped to avoid a phantom "开始 · 用时" stat row on the synthetic
-      // carrier. Identity borrows the last real message's when available for
-      // sane copy/identity semantics.
-      //
-      // The carrier ID is scoped to the OPEN TURN (turnMeta.startedAt), NOT
-      // the last live message's id: the tail message changes every time the
-      // model starts a new output message (common during post-approval
-      // execution), and a tail-derived key would unmount/remount the plan card
-      // (and its LegendList height measurement) on every such switch —
-      // maintainScrollAtEnd then re-snaps on each remeasure, which reads as a
-      // page flicker while the bottom-pinned plan card is in view. A
-      // turn-scoped key keeps one stable identity across the whole streaming
-      // turn. Falls back to the tail id when no turnMeta is open (defensive).
-      if (plans.length > 0 || files.length > 0) {
-        const tail = cleaned.length > 0 ? cleaned[cleaned.length - 1] : null;
-        const footerIdSeed = turnMeta?.startedAt ?? tail?.id ?? Date.now();
-        const emitFooter = (prefix: string, blocks: Block[]) => {
-          for (let i = 0; i < blocks.length; i++) {
-            const carrier: ChatMessage = tail
-              ? { ...tail, id: `${prefix}_${footerIdSeed}_${i}`, turnMeta: undefined, blocks: [blocks[i]!] }
-              : {
-                  id: `${prefix}_${footerIdSeed}_${i}`,
-                  sessionId: "",
-                  role: "assistant",
-                  blocks: [blocks[i]!],
-                  createdAt: Date.now(),
-                };
-            items.push({
-              kind: "single",
-              msg: carrier,
-              isStreamingTail: false,
-              isTurnTail: false,
-            });
-          }
-        };
-        emitFooter("plan_tail", plans);
-        emitFooter("files_tail", files);
       }
       turnBlocks = [];
       turnMeta = undefined;

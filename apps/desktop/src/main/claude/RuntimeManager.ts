@@ -7,7 +7,7 @@
  */
 import { sendToRenderer } from "@main/window.js";
 import { IPC } from "@contracts/ipc";
-import type { RuntimeEvent, PermissionMode, ContextSnapshot, TurnUsageRecord, TurnFileEntry } from "@contracts/runtime";
+import type { RuntimeEvent, PermissionMode, ContextSnapshot, TurnUsageRecord, TurnFileEntry, UserMessageEvent } from "@contracts/runtime";
 import type { Session } from "@contracts/session";
 import type { ProviderContext, TurnHandle, StartTurnRequest, UserInputAnswers, PlanApprovalDecision } from "@contracts/provider";
 import { providerRegistry } from "@main/providers/registry.js";
@@ -236,7 +236,18 @@ class RuntimeManager {
   /** Send a user message to the provider and stream events back. */
   async sendTurn(
     session: Session,
-    input: { prompt: string; cwd: string; skills?: string[]; images?: { data: string; mimeType: string }[] },
+    input: {
+      prompt: string;
+      cwd: string;
+      skills?: string[];
+      images?: { data: string; mimeType: string }[];
+      /** The originating client's user message (id / createdAt / display
+       *  blocks). Echoed to every client as a `user.message` RuntimeEvent so
+       *  a prompt typed on one device (phone ⇄ PC) renders on the others in
+       *  real time; the originator dedupes by id (it appended optimistically
+       *  at send). Absent for callers that predate the field — no echo. */
+      userMessage?: { id: string; createdAt: number; blocks: unknown[] };
+    },
   ): Promise<void> {
     const rt = this.sessions.get(session.id);
     if (!rt) {
@@ -319,6 +330,20 @@ class RuntimeManager {
         }
         modelForReq = undefined; // env pins ANTHROPIC_MODEL via buildCustomEnv
       }
+    }
+
+    // Cross-client user-message echo — emitted BEFORE the provider turn
+    // starts so the bubble lands on other clients ahead of the first
+    // assistant event. The originator ignores it by id match (see
+    // UserMessageEvent); every other client appends it verbatim.
+    if (input.userMessage) {
+      rt.ctx.emit({
+        type: "user.message",
+        sessionId: session.id,
+        messageId: input.userMessage.id,
+        createdAt: input.userMessage.createdAt,
+        blocks: input.userMessage.blocks,
+      } satisfies UserMessageEvent);
     }
 
     const req: StartTurnRequest = {

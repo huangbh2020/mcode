@@ -578,6 +578,18 @@ export const SendTurnSchema = z.object({
    *  Forwarded to the provider as the SDK `skills` allowlist so the model's
    *  Skill tool can reach them (stream-json input doesn't parse /name). */
   skills: z.array(z.string()).optional(),
+  /** The sender's local user message (id / createdAt / display blocks).
+   *  When present, the host echoes it to every client as a `user.message`
+   *  RuntimeEvent so the prompt's bubble appears on the OTHER devices in
+   *  real time (the sender dedupes by id — it already appended locally).
+   *  Optional so older/foreign callers keep working (no echo, no dupes). */
+  userMessage: z
+    .object({
+      id: z.string().min(1),
+      createdAt: z.number(),
+      blocks: z.array(z.unknown()),
+    })
+    .optional(),
 });
 export type SendTurnInput = z.infer<typeof SendTurnSchema>;
 

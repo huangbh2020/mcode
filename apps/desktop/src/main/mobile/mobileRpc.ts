@@ -270,6 +270,8 @@ const HANDLERS: Record<string, RpcHandler> = {
       cwd: project.path,
       skills: input.skills,
       images: input.images,
+      // User-message echo payload from the phone (cross-client bubble).
+      userMessage: input.userMessage,
     });
     // Background auto-title generation — same one-shot LLM routine the
     // desktop sendTurn fires (see titleGen.ts). Fire-and-forget.

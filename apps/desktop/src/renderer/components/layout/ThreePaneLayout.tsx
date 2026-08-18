@@ -63,13 +63,14 @@ export function ThreePaneLayout({
   return (
     <>
       {/* Left sidebar — only used by the settings page since the workspace
-         moved its full-height sidebar up to App.tsx. bg-surface-muted matches
-         the row track, so the sidebar reads as one continuous block. Its
-         hover/active states use the surface-hover family (see LeftBar.tsx),
-         which is clearly visible on this muted base. */}
+         moved its full-height sidebar up to App.tsx. Square corners (no
+         arcs). bg-surface-muted matches the settings overlay backdrop so the
+         nav reads as one continuous block. Its hover/active states use the
+         surface-hover family (see LeftBar.tsx), which is clearly visible on
+         this muted base. */}
       {leftOpen && (
         <aside
-          className="flex h-full shrink-0 flex-col rounded-r-lg bg-surface-muted"
+          className="flex h-full shrink-0 flex-col bg-surface-muted"
           style={{ width: leftWidth }}
         >
           <div className="min-h-0 flex-1 overflow-y-auto">{left}</div>
@@ -85,13 +86,15 @@ export function ThreePaneLayout({
 
       {/* Center pane — 3xl arcs on the LEFT edge only (top-left at the
          toolbar/sidebar junction, bottom-left at the track below): the muted
-         frame shows through both notches against the pane's bg-surface. The
-         RIGHT edge (the seam with the right IDE panel) is intentionally
-         square — no arcs there.
-         `relative z-10` + --panel-shadow make the pane read as an elevated
-         surface floating over the muted track.
+         frame shows through both notches against the pane's bg-surface, so
+         the arcs read cleanly. overflow-hidden clips the CONTENT to the same
+         rounded rect — without it, square children painted into the notches
+         (e.g. the session-tabs strip's translucent bg-surface/40 + its
+         border-b, or the bottom-terminal bar) read as a faint square corner
+         behind the arc. Non-scrolling overflow-hidden is xterm-safe (see the
+         note on the right sidebar).
          Stacks the center content above an optional bottom terminal bar. */}
-      <main className="relative z-10 flex min-w-0 flex-1 flex-col rounded-tl-3xl rounded-bl-3xl border-t border-edge bg-surface shadow-[var(--panel-shadow)]">
+      <main className="relative z-10 flex min-w-0 flex-1 flex-col overflow-hidden rounded-tl-3xl rounded-bl-3xl border-t border-edge bg-surface">
         <div className="min-h-0 flex-1 overflow-hidden">{center}</div>
         {/* Bottom terminal bar — keep-alive: always rendered, height collapses
             to 0 when closed so PTYs/scrollback survive. overflow-hidden clips

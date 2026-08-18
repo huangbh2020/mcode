@@ -1,4 +1,4 @@
-import { cloneElement, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { cloneElement, memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Menu } from "@base-ui/react/menu";
 import {
   DndContext,
@@ -84,7 +84,7 @@ import { useI18n, type MessageId } from "@renderer/lib/i18n/index.js";
  *   ─────────────────────────────
  *   ⚙ 设置
  */
-export function LeftBar({
+function LeftBarBase({
   showSearch = true,
   showConnectPhone = true,
 }: {
@@ -838,6 +838,13 @@ export function LeftBar({
     </div>
   );
 }
+
+/** Memoized so a left-sidebar width drag (App re-renders on every mousemove
+ *  via its leftWidthPct subscription) doesn't reconcile the whole project
+ *  tree each frame. LeftBarBase reads its own data via zustand selectors,
+ *  which still update it independently of parent re-renders. Renders with no
+ *  props everywhere (workspace aside), so the shallow compare always skips. */
+export const LeftBar = memo(LeftBarBase);
 
 /* ── Project node (expandable, with its sessions nested) ── */
 
