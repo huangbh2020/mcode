@@ -1944,6 +1944,36 @@ function ChatPaneForSession({ sessionId, isActive }: { sessionId: string; isActi
     };
   }, [empty, isActive]);
 
+  // When this session's running turn completes (isRunning flips true → false),
+  // bring the list back to the very bottom so the finished reply — and any
+  // footer cards pinned to the turn's end (plan / turn-files) — are fully in
+  // view. Streaming already auto-follows while the user sits at the bottom
+  // (maintainScrollAtEnd), but that only tracks when the list is already near
+  // the end: if the user scrolled up mid-stream, or the completion re-layout
+  // (flat stream → collapsed TurnPanel + re-pinned cards) left the view a few
+  // pixels short of the end, nothing snaps back. A double-rAF waits for
+  // LegendList to measure the re-grouped turn's item heights before scrolling;
+  // the transition guard (wasRunningRef) keeps this from firing on mount or
+  // while the turn is still streaming. Hidden (backgrounded tab) panes defer.
+  const wasRunningRef = useRef(false);
+  useEffect(() => {
+    if (!isActive) return;
+    const wasRunning = wasRunningRef.current;
+    wasRunningRef.current = isRunning;
+    if (!wasRunning || isRunning) return;
+    let raf1 = 0;
+    let raf2 = 0;
+    raf1 = requestAnimationFrame(() => {
+      raf2 = requestAnimationFrame(() => {
+        virtualListRef.current?.scrollToEnd({ animated: true });
+      });
+    });
+    return () => {
+      cancelAnimationFrame(raf1);
+      cancelAnimationFrame(raf2);
+    };
+  }, [isRunning, isActive]);
+
   // The id of the last user message in this session. Only this message is
   // editable - editing an earlier user message would require forking the
   // conversation at a non-tail point, which the current truncation-based

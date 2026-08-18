@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, interactive-widget=resizes-content" />
+    <!-- This page is served over plain HTTP (LAN / VPS relay), so unlike the
+         Electron window it carries its own meta CSP. It only talks to the
+         same-origin /api/* endpoints; inline styles are allowed (they're
+         static in this file), scripts must come from 'self' (the hashed
+         pair-*.js module). No inline <script> — keeps XSS surface empty. -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'self'"
+    />
+    <link rel="icon" type="image/png" href="./favicon.png" />
+    <title>连接 Mcode</title>
+    <style>
+      /* Theme tokens mirror styles.css (light + dark via prefers-color-scheme).
+         Kept local — this page must not import the app's stylesheet. */
+      :root {
+        --surface: #ffffff;
+        --surface-muted: #f4f4f5;
+        --content: #09090b;
+        --content-muted: #3f3f46;
+        --content-subtle: #71717a;
+        --edge: #e4e4e7;
+        --input-edge: #d4d4d8;
+        --accent: #059669;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --surface: #1a1d24;
+          --surface-muted: #2c313c;
+          --content: #e7e8ec;
+          --content-muted: #aaadb4;
+          --content-subtle: #848891;
+          --edge: #2d3340;
+          --input-edge: #5f636e;
+          --accent: #10b981;
+        }
+      }
+      * { box-sizing: border-box; }
+      html, body { height: 100%; }
+      body {
+        margin: 0;
+        font: 15px/1.6 system-ui, -apple-system, "Segoe UI", sans-serif;
+        background: var(--surface);
+        color: var(--content);
+        -webkit-font-smoothing: antialiased;
+      }
+      .page {
+        display: flex;
+        min-height: 100%;
+        align-items: center;
+        justify-content: center;
+        padding: 24px 16px;
+      }
+      .card {
+        width: 100%;
+        max-width: 380px;
+        display: flex;
+        flex-direction: column;
+        gap: 16px;
+      }
+      .head { display: flex; flex-direction: column; align-items: center; gap: 8px; text-align: center; }
+      .head .logo {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 56px;
+        height: 56px;
+        border-radius: 16px;
+        background: var(--surface-muted);
+        color: var(--accent);
+      }
+      .head h1 { margin: 0; font-size: 19px; font-weight: 600; }
+      .head p { margin: 0; font-size: 13px; color: var(--content-muted); }
+      .form {
+        display: flex;
+        flex-direction: column;
+        gap: 14px;
+        padding: 16px;
+        border: 1px solid var(--edge);
+        border-radius: 14px;
+        background: color-mix(in srgb, var(--surface-muted) 50%, transparent);
+      }
+      .field { display: flex; flex-direction: column; gap: 6px; }
+      .field > span { font-size: 12px; font-weight: 500; color: var(--content-muted); }
+      input {
+        width: 100%;
+        border: 1px solid var(--input-edge);
+        border-radius: 10px;
+        background: var(--surface);
+        color: var(--content);
+        padding: 10px 12px;
+        font: inherit;
+        outline: none;
+      }
+      input:focus { border-color: var(--accent); }
+      #code { text-align: center; font-family: ui-monospace, "JetBrains Mono", monospace; font-size: 20px; letter-spacing: 0.4em; }
+      button {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 6px;
+        min-height: 40px;
+        border: 0;
+        border-radius: 10px;
+        background: var(--accent);
+        color: #fff;
+        font: inherit;
+        font-weight: 500;
+        cursor: pointer;
+      }
+      button:hover { filter: brightness(1.08); }
+      button:disabled { opacity: 0.55; cursor: not-allowed; }
+      .error {
+        margin: 0;
+        font-size: 12px;
+        line-height: 1.5;
+        color: #dc2626;
+      }
+      .foot { margin: 0; text-align: center; font-size: 11px; color: var(--content-subtle); word-break: break-all; }
+      /* Pairing-complete state */
+      .done { display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 28px 16px; text-align: center; }
+      .spinner {
+        width: 26px;
+        height: 26px;
+        border: 3px solid var(--input-edge);
+        border-top-color: var(--accent);
+        border-radius: 50%;
+        animation: spin 0.9s linear infinite;
+      }
+      @keyframes spin { to { transform: rotate(360deg); } }
+      .done p { margin: 0; font-size: 14px; color: var(--content-muted); }
+    </style>
+  </head>
+  <body>
+    <main class="page">
+      <section class="card" id="card">
+        <div class="head">
+          <div class="logo" aria-hidden="true">
+            <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="7" y="2" width="10" height="20" rx="2.5"></rect>
+              <path d="M11 18.5h2"></path>
+            </svg>
+          </div>
+          <h1 id="title">连接 Mcode</h1>
+          <p id="desc"></p>
+        </div>
+
+        <form class="form" id="form" novalidate>
+          <label class="field">
+            <span id="codeLabel">验证码</span>
+            <input id="code" inputmode="numeric" autocomplete="one-time-code" autofocus maxlength="8" placeholder="••••••" />
+          </label>
+          <label class="field">
+            <span id="nameLabel">设备名称（可选）</span>
+            <input id="name" maxlength="64" />
+          </label>
+          <p class="error" id="error" hidden></p>
+          <button type="submit" id="submit">
+            <svg id="submitIcon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"></path>
+            </svg>
+            <span id="submitText">完成配对</span>
+          </button>
+        </form>
+
+        <p class="foot" id="foot"></p>
+      </section>
+    </main>
+    <script type="module" src="./pair.ts"></script>
+  </body>
+</html>
