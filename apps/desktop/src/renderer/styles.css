@@ -200,16 +200,19 @@ div:has(> [role="menu"]) {
                               * cool ramp. */
   --content: 231 232 236; /* soft off-white (#e7e8ec) — ~14.5:1 on the new
                            * surface, still well above WCAG AAA (7:1) */
-  --content-muted: 170 173 180; /* secondary text, dimmed in step with
-                                 * --content so the hierarchy stays
-                                 * proportional */
-  --content-subtle: 132 136 145; /* dimmed mid gray (#848891) — pulled ~22
-                                   * units AWAY from --content-muted so the
-                                   * three text tiers (content → muted →
-                                   * subtle) resolve as distinct levels instead
-                                   * of merging into one flat off-white on dark
-                                   * (the old gap to muted was only ~19). Still
-                                   * ~4.5:1 on zinc-900 (WCAG AA edge). */
+  /* Secondary/tertiary text — brightened one step from the old
+   * #aaadb4 / #848891. On a near-black surface a mid-gray at a "passing"
+   * ratio still reads perceptually dimmer than the same ratio on white
+   * (white-on-dark loses apparent contrast to the eye), and model replies
+   * are dominated by bullet lists / tables / tool cards rendered at muted —
+   * the whole reply body read one tier dimmer than its intro paragraph.
+   * New values: muted ≈9.2:1, subtle ≈6.6:1 on the base surface (both clear
+   * WCAG AA for body text). Tier gaps stay wide (content 231 → muted 188 →
+   * subtle 158) so the three levels still resolve as distinct. */
+  --content-muted: 188 191 198; /* #bcbfc6 — lists / tables / thinking body /
+                                 * tool-card labels */
+  --content-subtle: 158 162 171; /* #9ea2ab — metadata: paths / summaries /
+                                  * timestamps / markers / hints */
   --edge: 45 51 64; /* #2d3340 — slate-tinted to match the muted/hover ramp;
                      * one notch below hover so borders read as separators,
                      * not highlights. */

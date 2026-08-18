@@ -84,15 +84,15 @@ monaco.editor.defineTheme("mcode-dark", {
   colors: {
     "editor.background": "#18181b", // --surface
     "editor.foreground": "#e7e8ec", // --content
-    "editorLineNumber.foreground": "#80848c", // --content-subtle
-    "editorLineNumber.activeForeground": "#aab0b8", // --content-muted
+    "editorLineNumber.foreground": "#9ea2ab", // --content-subtle
+    "editorLineNumber.activeForeground": "#bcbfc6", // --content-muted
     "editorCursor.foreground": "#e7e8ec",
     "editor.selectionBackground": "#264f78aa",
     "editor.inactiveSelectionBackground": "#264f7840",
     "editor.lineHighlightBackground": "#2c2d3322",
     "editor.lineHighlightBorder": "#00000000",
     "editorIndentGuide.background1": "#2c2d3340",
-    "editorIndentGuide.activeBackground1": "#80848c80",
+    "editorIndentGuide.activeBackground1": "#9ea2ab80",
     "editorBracketMatch.background": "#10b9812a", // --accent tint
     "editorBracketMatch.border": "#10b98188",
     "editorGutter.background": "#18181b",

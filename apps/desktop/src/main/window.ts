@@ -32,7 +32,7 @@ function overlayColors() {
   const dark = getEffectiveTheme() === "dark";
   return {
     color: dark ? "#2c313c" : "#f4f4f5",
-    symbolColor: dark ? "#848891" : "#71717a",
+    symbolColor: dark ? "#9ea2ab" : "#71717a",
     height: 40,
   };
 }
