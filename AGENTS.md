@@ -23,6 +23,7 @@
 |------|------|
 | 技术栈、架构、踩坑记录 | [`docs/tech-stack.md`](docs/tech-stack.md) |
 | claude stream-json 数据格式(旧 CLI 方式的 dump 记录,SDK 的 SDKMessage 与此对应) | [`docs/claude-stream-json.md`](docs/claude-stream-json.md) |
+| Pi SDK 接入记录 | [`docs/pi-sdk-integration.md`](docs/pi-sdk-integration.md) |
 | Claude Agent SDK 参考 | https://code.claude.com/docs/en/agent-sdk |
 
 改 `SdkMessageAdapter` 或涉及 SDK 输出解析时,**必须**先读 stream-json 文档——SDK 的 `SDKMessage` 类型本质上是对 CLI stream-json 的类型化封装,字段语义一一对应。
