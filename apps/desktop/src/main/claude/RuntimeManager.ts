@@ -7,7 +7,7 @@
  */
 import { sendToRenderer } from "@main/window.js";
 import { IPC } from "@contracts/ipc";
-import type { RuntimeEvent, PermissionMode, ContextSnapshot, TurnUsageRecord, TurnFileEntry, UserMessageEvent } from "@contracts/runtime";
+import type { RuntimeEvent, PermissionMode, ContextSnapshot, TurnUsageRecord, TurnFileEntry, UserMessageEvent, UpstreamIssueEvent } from "@contracts/runtime";
 import type { Session } from "@contracts/session";
 import type { ProviderContext, TurnHandle, StartTurnRequest, UserInputAnswers, PlanApprovalDecision } from "@contracts/provider";
 import { providerRegistry } from "@main/providers/registry.js";
@@ -55,6 +55,13 @@ interface SessionRuntime {
    *  keep it to read its localUrl when rewriting the apiConfig each turn, and
    *  to know the bridge is alive. Released in dispose(). */
   bridgeHandle?: { localUrl: string };
+  /** Unsubscribe for the bridge status subscription below. The bridge is
+   *  SHARED across sessions (one server per config), so its retry statuses
+   *  fan out to every subscriber; we attribute them to this session as
+   *  `upstream.issue` events (the renderer gates the hint on the session's
+   *  running state, so a retry that belongs to another session's request is
+   *  harmless noise). Paired with acquire/release above. */
+  bridgeStatusUnsubscribe?: () => void;
 }
 
 const approvalBridge = new ApprovalBridge();
@@ -309,6 +316,8 @@ class RuntimeManager {
           // repeats across turns reuse the existing handle without bumping the
           // ref count again.
           if (rt.bridgeConfigId && rt.bridgeConfigId !== session.customModelId) {
+            rt.bridgeStatusUnsubscribe?.();
+            rt.bridgeStatusUnsubscribe = undefined;
             BridgeRegistry.release(rt.bridgeConfigId);
             rt.bridgeConfigId = undefined;
             rt.bridgeHandle = undefined;
@@ -317,6 +326,21 @@ class RuntimeManager {
             const handle = await BridgeRegistry.acquire(session.customModelId, cfg);
             rt.bridgeConfigId = session.customModelId;
             rt.bridgeHandle = { localUrl: handle.localUrl };
+            // Surface transient upstream-transport retries (connect timeout /
+            // reset / refused) to this session's UI. Without it, a 10s+ retry
+            // loop mid-turn looks like an unexplained hang — the final failure
+            // does reach the user (502 → API-error card), but the WAITING
+            // doesn't. kind:"ok" after a successful retry clears the hint.
+            rt.bridgeStatusUnsubscribe = handle.onStatus((s) => {
+              rt.ctx.emit({
+                type: "upstream.issue",
+                sessionId: session.id,
+                kind: s.kind,
+                cause: s.cause,
+                attempt: s.attempt,
+                attempts: s.attempts,
+              } satisfies UpstreamIssueEvent);
+            });
           }
           // rt.bridgeHandle is now guaranteed set (we just ensured it above);
           // bind to a local so TS keeps it narrowed through the rewrite below.
@@ -396,6 +420,8 @@ class RuntimeManager {
     // Release any OpenAI bridge this session was holding, so the ref count
     // drops and the shared server can shut down when no session needs it.
     if (rt.bridgeConfigId) {
+      rt.bridgeStatusUnsubscribe?.();
+      rt.bridgeStatusUnsubscribe = undefined;
       BridgeRegistry.release(rt.bridgeConfigId);
       rt.bridgeConfigId = undefined;
       rt.bridgeHandle = undefined;

@@ -53,6 +53,7 @@ import { FileMentionPicker, type FileMentionPickerMode } from "./FileMentionPick
 import { EmptyThreadWelcome } from "./EmptyThreadWelcome.js";
 import { SlashCommandPicker } from "./SlashCommandPicker.js";
 import { StatusCapsule } from "./StatusCapsule.js";
+import { ComposerLiveBar } from "./ComposerLiveBar.js";
 import { MessageTimeline, type UserItemIndexMap } from "./MessageTimeline.js";
 import { LegendList, type LegendListRef } from "@legendapp/list/react";
 
@@ -818,6 +819,27 @@ function HistorySkeleton() {
 /** The actual per-session chat pane. Extracted into its own function so
  *  the prop-typed parent (ChatPane) can short-circuit on `sessionId ===
  *  null` without forcing every selector to handle the empty case. */
+/** Amber hint rendered beside the streaming spinner while the session's
+ *  model channel (the OpenAI bridge) retries a transport failure (connect
+ *  timeout / reset / refused). The full cause — e.g. undici's connect-timeout
+ *  detail with every attempted address — goes into the title tooltip; the
+ *  visible line stays short so it fits the spinner row. */
+function UpstreamRetryHint({
+  issue,
+}: {
+  issue: { cause: string; attempt: number; attempts: number };
+}) {
+  const { t } = useI18n();
+  return (
+    <span className="flex min-w-0 items-center gap-1 text-warning" title={issue.cause}>
+      <IconAlertTriangle size={12} className="shrink-0" />
+      <span className="truncate">
+        {t("chatStream.upstreamRetry", { attempt: issue.attempt, attempts: issue.attempts })}
+      </span>
+    </span>
+  );
+}
+
 function ChatPaneForSession({ sessionId, isActive }: { sessionId: string; isActive: boolean }) {
   const { t, locale } = useI18n();
   const messages = useSessionStore((s) =>
@@ -838,6 +860,14 @@ function ChatPaneForSession({ sessionId, isActive }: { sessionId: string; isActi
     (s) => (s.subagentsBySession[sessionId] ?? EMPTY_SUBAGENTS).some((a) => a.status === "running"),
   );
   const sessionBusy = isRunning || hasRunningSubagents;
+  // Live upstream-transport retry (the OpenAI bridge retrying a connect
+  // timeout / reset — UpstreamIssueEvent). Only meaningful while a turn is
+  // streaming: rendered beside the streaming spinner so a 10s+ stall reads
+  // as "网络在重试" instead of an unexplained hang. Stable reference — the
+  // stored object only changes when a new retry lands.
+  const upstreamIssue = useSessionStore((s) =>
+    s.runningBySession[sessionId] ? s.upstreamIssueBySession[sessionId] : undefined,
+  );
   // Send-time anchor for the synthesized pendingTurn row (see
   // groupMessagesForRender). Subscribed so the row appears the instant
   // sendPrompt stamps it, before any assistant token arrives. Returns
@@ -1691,6 +1721,24 @@ function ChatPaneForSession({ sessionId, isActive }: { sessionId: string; isActi
     void virtualListRef.current?.scrollToEnd({ animated: true });
   };
 
+  // "New content while scrolled away" count for the composer live bar's jump
+  // badge: snapshot the render-item count the moment the user leaves the
+  // bottom, diff against it while away, reset on return. Setting the baseline
+  // in an effect (not during render) keeps the count stable as renderItems
+  // rebuilds on every delta flush.
+  const awayBaseRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (!showJumpBottom) {
+      awayBaseRef.current = null;
+      return;
+    }
+    if (awayBaseRef.current === null) awayBaseRef.current = renderItems.length;
+  }, [showJumpBottom, renderItems.length]);
+  const newWhileAway =
+    showJumpBottom && awayBaseRef.current !== null
+      ? Math.max(0, renderItems.length - awayBaseRef.current)
+      : 0;
+
   /** Normalize the staged images into the send allowlist (downscale / JPEG
    *  re-encode when oversized). Returns null (with a toast) when any image
    *  fails — the caller aborts the send and keeps the composer intact. */
@@ -2024,6 +2072,7 @@ function ChatPaneForSession({ sessionId, isActive }: { sessionId: string; isActi
               <TurnStatRow meta={item.turnMeta} />
               <div className="mt-1.5 flex items-center gap-1.5">
                 <IconLoader2 size={12} className="animate-spin text-accent" />
+                {upstreamIssue && <UpstreamRetryHint issue={upstreamIssue} />}
               </div>
             </div>
           </div>
@@ -2103,13 +2152,14 @@ function ChatPaneForSession({ sessionId, isActive }: { sessionId: string; isActi
             {turnActive && (
               <div className="mt-1.5 flex items-center gap-1.5">
                 <IconLoader2 size={12} className="animate-spin text-accent" />
+                {upstreamIssue && <UpstreamRetryHint issue={upstreamIssue} />}
               </div>
             )}
           </div>
         </div>
       );
     },
-    [beforeMap, sessionBusy, editingMessageId, lastUserMessageId, handleEditSubmit, sessionId, projectPath],
+    [beforeMap, sessionBusy, editingMessageId, lastUserMessageId, handleEditSubmit, sessionId, projectPath, upstreamIssue],
   );
 
   // Footer rendered after all message items. The plan card and per-turn
@@ -2234,8 +2284,12 @@ function ChatPaneForSession({ sessionId, isActive }: { sessionId: string; isActi
         </div>
       )}
 
-      {/* Jump-to-bottom button */}
-      {showJumpBottom && (
+      {/* Jump-to-bottom button. Suppressed while the session is busy AND the
+          composer card is visible — the live strip inside the composer takes
+          over the jump affordance (with a new-content badge), and two stacked
+          jump buttons would read as clutter. While a bottom prompt hides the
+          composer, the pill returns. */}
+      {showJumpBottom && (!sessionBusy || hasPendingPrompt) && (
         <div className="pointer-events-none absolute inset-x-0 bottom-2 z-30 flex justify-center">
           <button
             onClick={jumpToBottom}
@@ -2383,6 +2437,32 @@ function ChatPaneForSession({ sessionId, isActive }: { sessionId: string; isActi
               setTags((prev) => [...prev, makeFileTag(path)]);
             }}
           >
+            {/* Live-activity layer while a turn runs. The composer is the one
+                surface always visible (docked below the scroll container), so
+                while the session is busy it wears the running state:
+                  - the border comet (accent light orbiting the card edge,
+                    brightening + speeding up while the user is scrolled away);
+                  - the live strip (equalizer + timer + current-op ticker +
+                    jump badge) along the card's top edge.
+                Both no-op when idle. pointer-events-none on the comet; the
+                strip is interactive only through its jump badge. */}
+            {sessionBusy && (
+              <div
+                aria-hidden
+                // inset-0 (not -inset-px): the card clips overflow, so an
+                // outset ring would be trimmed to a sliver; the ring sits on
+                // the inner edge of the card border instead. Radius comes via
+                // `border-radius: inherit` in .composer-beam.
+                className="composer-beam pointer-events-none absolute inset-0 z-[1]"
+                data-hot={showJumpBottom || undefined}
+              />
+            )}
+            <ComposerLiveBar
+              sessionId={sessionId}
+              scrolledAway={showJumpBottom}
+              newCount={newWhileAway}
+              onJumpToLatest={jumpToBottom}
+            />
             {queue.length > 0 && (
               <div className="border-b border-edge px-2 pt-2 pb-1.5">
                 <div className="mb-1 flex items-center justify-between">

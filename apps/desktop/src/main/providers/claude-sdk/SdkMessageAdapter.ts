@@ -47,6 +47,12 @@ interface TaskStartedEnvelope {
   tool_use_id?: string;
   description?: string;
   subagent_type?: string;
+  /** CLI-internal task kind. Verified against the bundled binary (2.1.x):
+   *  `local_agent` = Task-tool subagent, `local_bash` = background/foreground
+   *  bash command tracked as a task, `local_workflow` = script workflow,
+   *  `remote_agent` = remote agent. The capsule is a *subagent* roster, so
+   *  non-agent kinds are excluded (see NON_AGENT_TASK_TYPES). */
+  task_type?: string;
   /** SDK flag: when true the parent agent does not block on this task and it
    *  may continue running after the parent turn's stream ends. */
   is_backgrounded?: boolean;
@@ -109,6 +115,15 @@ import {
 function readStr(v: unknown): string {
   return typeof v === "string" ? v.trim() : "";
 }
+
+/** CLI task kinds that are NOT subagents and must not enter the capsule
+ *  roster. `local_bash` covers every bash command the CLI tracks as a task
+ *  (e.g. `sleep N` waits) — those used to pile up as forever-"running"
+ *  "subagents" because the CLI never sends a closing task_updated for them
+ *  mid-turn. `local_workflow` runs script workflows, not model subagents.
+ *  Unknown / missing task_type stays visible (older CLIs don't send the
+ *  field, and future agent-ish kinds shouldn't be hidden). */
+const NON_AGENT_TASK_TYPES = new Set(["local_bash", "local_workflow"]);
 
 function safeJsonParse<T>(s: string): T | undefined {
   try {
@@ -267,6 +282,12 @@ interface AdapterState {
    *  task_progress / task_updated edge events, then flushed as a single
    *  `subagent.update` event (REPLACE semantics). */
   subagents: Map<string, SubagentSnapshot>;
+  /** task_ids of non-agent tasks (bash commands, workflows) we deliberately
+   *  keep OUT of the subagent roster. task_started tags them with task_type,
+   *  but task_progress / task_updated don't carry it — without remembering
+   *  the ids here, the progress handler's synthesis branch would re-add
+   *  them to the roster. */
+  ignoredTaskIds: Set<string>;
   /** Whether the model is currently in plan mode. Set true on EnterPlanMode,
    *  false on the matching ExitPlanMode or when a `mode.change` to default
    *  arrives (covers rejection / interruption). Drives `plan.update` emit. */
@@ -361,6 +382,7 @@ export class SdkMessageAdapter {
       textScanners: new Map(),
       lastKnownContextWindow: 0,
       subagents: new Map(),
+      ignoredTaskIds: new Set(),
       inPlanMode: false,
       pendingContextUsage: null,
       assistantMessageCount: 0,
@@ -561,6 +583,16 @@ export class SdkMessageAdapter {
    * types here to avoid dragging those deep generics into this file. */
 
   private handleTaskStarted(m: TaskStartedEnvelope): void {
+    // Non-agent tasks (bash commands / workflows) must not enter the
+    // subagent capsule: they'd render as fake "subagents", and the CLI
+    // doesn't emit a closing task_updated for them mid-turn, so they'd be
+    // stuck on "running" until turn end. Remember the id so the follow-up
+    // task_progress doesn't re-synthesize an entry either.
+    if (NON_AGENT_TASK_TYPES.has(m.task_type ?? "")) {
+      this.state.ignoredTaskIds.add(m.task_id);
+      return;
+    }
+    this.state.ignoredTaskIds.delete(m.task_id);
     const snapshot: SubagentSnapshot = {
       taskId: m.task_id,
       toolUseId: m.tool_use_id,
@@ -574,6 +606,7 @@ export class SdkMessageAdapter {
   }
 
   private handleTaskProgress(m: TaskProgressEnvelope): void {
+    if (this.state.ignoredTaskIds.has(m.task_id)) return; // non-agent task
     const cur = this.state.subagents.get(m.task_id);
     if (!cur) {
       // Progress without a prior start — synthesize a minimal snapshot so

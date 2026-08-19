@@ -88,6 +88,9 @@ export const en = {
   "chatStream.subagent.statusFailed": "Failed",
   "chatStream.subagent.statusKilled": "Terminated",
 
+  // ── ChatPane: streaming spinner hint ──
+  "chatStream.upstreamRetry": "Upstream connection issue — retrying ({attempt}/{attempts})",
+
   // ── EmptyThreadWelcome ──
   "chatStream.welcome.title": "Start a new chat",
   "chatStream.welcome.withProject": "Start a new chat in {name}",

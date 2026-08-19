@@ -91,6 +91,9 @@ export const zh = {
   "chatStream.subagent.statusFailed": "失败",
   "chatStream.subagent.statusKilled": "已终止",
 
+  // ── ChatPane: streaming spinner hint ──
+  "chatStream.upstreamRetry": "上游连接异常，正在重试（{attempt}/{attempts}）",
+
   // ── EmptyThreadWelcome ──
   "chatStream.welcome.title": "开始新的会话",
   "chatStream.welcome.withProject": "在「{name}」中开始新的会话",

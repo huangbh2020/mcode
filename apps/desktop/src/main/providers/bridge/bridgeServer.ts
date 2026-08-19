@@ -32,6 +32,17 @@ import type {
   UpstreamConfig,
 } from "./types.js";
 
+/** Transient upstream-transport status, surfaced to subscribers via
+ *  {@link BridgeHandle.onStatus} so the UI can show "上游连接异常,正在重试…"
+ *  instead of an unexplained spinner. */
+export interface BridgeStatus {
+  kind: "retry" | "ok";
+  /** Readable transport cause (see describeFetchError); empty for "ok". */
+  cause: string;
+  attempt: number;
+  attempts: number;
+}
+
 /** A handle to a running bridge server. */
 export interface BridgeHandle {
   /** The local URL the Claude binary should use as ANTHROPIC_BASE_URL. */
@@ -40,6 +51,10 @@ export interface BridgeHandle {
    *  this exists only so the env-var contract (`ANTHROPIC_AUTH_TOKEN`) is
    *  satisfied. The real upstream credential is held inside the server. */
   readonly routeToken: string;
+  /** Subscribe to transient upstream-transport status (retry loop). The
+   *  returned function unsubscribes. Statuses are informational only — the
+   *  bridge proceeds identically with or without subscribers. */
+  onStatus(cb: (s: BridgeStatus) => void): () => void;
   /** Stop listening. Idempotent. */
   close(): void;
 }
@@ -107,11 +122,14 @@ function isRetryableFetchError(err: unknown): boolean {
  *
  * Waits {@link backoffMs} before the second attempt; honors `signal` so a client
  * disconnect or timeout aborts immediately rather than sleeping pointlessly.
- * Returns the first successful Response, or throws the last error. */
+ * Returns the first successful Response, or throws the last error. Transport
+ * retries are reported through `onStatus` (informational — the loop runs the
+ * same with or without a subscriber) so the UI can explain a mid-turn stall. */
 async function fetchUpstreamWithRetry(
   url: string,
   init: RequestInit,
   signal: AbortSignal,
+  onStatus?: (s: BridgeStatus) => void,
   attempts = 2,
   backoffMs = 500,
 ): Promise<Response> {
@@ -119,12 +137,17 @@ async function fetchUpstreamWithRetry(
   for (let attempt = 1; attempt <= attempts; attempt++) {
     if (signal.aborted) throw new Error("aborted before fetch");
     try {
-      return await fetch(url, { ...init, signal });
+      const res = await fetch(url, { ...init, signal });
+      // A request that needed retries finally went through — tell
+      // subscribers the stall is over (they clear the retry hint).
+      if (attempt > 1) onStatus?.({ kind: "ok", cause: "", attempt, attempts });
+      return res;
     } catch (err) {
       lastErr = err;
       const cause = describeFetchError(err);
       if (attempt < attempts && isRetryableFetchError(err)) {
         log.warn(`bridge: upstream fetch attempt ${attempt}/${attempts} failed (${cause}); retrying in ${backoffMs}ms`);
+        onStatus?.({ kind: "retry", cause, attempt, attempts });
         await new Promise<void>((resolve) => {
           const t = setTimeout(resolve, backoffMs);
           // If the client disconnects mid-backoff, stop waiting immediately.
@@ -255,6 +278,7 @@ async function handleMessages(
   req: IncomingMessage,
   res: ServerResponse,
   upstream: UpstreamConfig,
+  onStatus?: (s: BridgeStatus) => void,
 ): Promise<void> {
   let body: AnthropicRequest;
   try {
@@ -307,6 +331,7 @@ async function handleMessages(
         body: jsonBody,
       },
       ac.signal,
+      onStatus,
     );
   } catch (err) {
     // Use describeFetchError so the real cause (ECONNREFUSED / connect timeout
@@ -388,6 +413,19 @@ async function handleMessages(
 
 /** Start a bridge server bound to a random local port. Resolves once listening. */
 export async function startBridge(upstream: UpstreamConfig): Promise<BridgeHandle> {
+  // Status subscribers (RuntimeManager fans these out as `upstream.issue`
+  // RuntimeEvents per session using this bridge). Listener errors are
+  // swallowed — status is best-effort observability, never control flow.
+  const statusListeners = new Set<(s: BridgeStatus) => void>();
+  const notifyStatus = (s: BridgeStatus) => {
+    for (const cb of statusListeners) {
+      try {
+        cb(s);
+      } catch {
+        // ignore — a broken subscriber must not break the bridge
+      }
+    }
+  };
   const server: Server = createServer((req, res) => {
     // The Claude binary POSTs to {baseUrl}/v1/messages. Accept either
     // /v1/messages or a bare /messages for robustness.
@@ -403,7 +441,7 @@ export async function startBridge(upstream: UpstreamConfig): Promise<BridgeHandl
     const rawUrl = req.url ?? "";
     const path = rawUrl.split("?", 2)[0];
     if (req.method === "POST" && (path.endsWith("/v1/messages") || path.endsWith("/messages"))) {
-      handleMessages(req, res, upstream).catch((err) => {
+      handleMessages(req, res, upstream, notifyStatus).catch((err) => {
         log.error(`bridge: handler threw: ${(err as Error).message}`);
         sendError(res, 500, "internal bridge error");
       });
@@ -429,6 +467,10 @@ export async function startBridge(upstream: UpstreamConfig): Promise<BridgeHandl
   return {
     localUrl: `http://127.0.0.1:${port}`,
     routeToken,
+    onStatus: (cb: (s: BridgeStatus) => void) => {
+      statusListeners.add(cb);
+      return () => statusListeners.delete(cb);
+    },
     close: () => {
       server.close(() => log.info(`bridge: closed 127.0.0.1:${port}`));
     },

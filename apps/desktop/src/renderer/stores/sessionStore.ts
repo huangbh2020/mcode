@@ -564,6 +564,14 @@ export interface SessionState {
    *  -- 用户的中断是权威意图。NOT persisted - 仅内存态,随 deleteSession
    *  一并清理。 */
   interruptedBySession: Record<string, boolean>;
+  /** Per-session transient upstream-network issue (the OpenAI bridge's retry
+   *  loop: connect timeout / reset / refused — see UpstreamIssueEvent). Set on
+   *  `upstream.issue{kind:"retry"}`; cleared on kind:"ok", turn end (turn.done
+   *  / error), interrupt, session delete, and a decay timer (a retry that goes
+   *  quiet without any terminal event must not pin the hint forever). The chat
+   *  renders it beside the streaming spinner so a 10s+ mid-turn stall is
+   *  explained instead of looking like a hang. NOT persisted — live feedback. */
+  upstreamIssueBySession: Record<string, { cause: string; attempt: number; attempts: number }>;
   /** Per-session unread event counter. Incremented in `ingestEvent` whenever a
    *  noteworthy event (turn done, error, blocking approval/question, background
    *  subagent completion) arrives for a session that is NOT the active session.
@@ -1484,8 +1492,36 @@ export const EMPTY_SUBAGENTS: SubagentSnapshot[] = [];
 /** Stable empty usage-history reference (selector must return a stable array). */
 export const EMPTY_USAGE: TurnUsageRecord[] = [];
 /** Stable cleared-plan reference — used both as the initial state and as
- * the "not in plan mode" placeholder returned by selectors. */
+ *  the "not in plan mode" placeholder returned by selectors. */
 export const EMPTY_PLAN: PlanDraft = { plan: "", phase: "cleared" };
+
+/* ─── upstream-issue hint decay ──────────────────────────────────────
+ * The bridge's retry statuses are transient by nature, but the happy-path
+ * "ok" clear can be missed (the retried request belongs to a different
+ * session sharing the bridge, or the SDK gave up before it). Each retry
+ * (re)arms a decay timer so the hint can never linger forever. */
+const upstreamIssueDecayTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const UPSTREAM_ISSUE_DECAY_MS = 30_000;
+
+/** Drop a session's upstream-issue hint + its decay timer. Safe to call when
+ *  neither exists. `set` is the store's setter — the helper builds the
+ *  reference-preserving no-op patch when the bucket has nothing to clear. */
+function clearUpstreamIssue(
+  set: (partial: Partial<SessionState> | ((s: SessionState) => Partial<SessionState>)) => void,
+  sid: string,
+): void {
+  const t = upstreamIssueDecayTimers.get(sid);
+  if (t) {
+    clearTimeout(t);
+    upstreamIssueDecayTimers.delete(sid);
+  }
+  set((s) => {
+    if (!(sid in s.upstreamIssueBySession)) return {};
+    const bucket = { ...s.upstreamIssueBySession };
+    delete bucket[sid];
+    return { upstreamIssueBySession: bucket };
+  });
+}
 
 /**
  * Persist the per-project IDE buckets (open files / active file / expanded
@@ -1788,6 +1824,15 @@ function applySessionDeletedState(s: SessionState, id: string): Partial<SessionS
   delete runningTurnStartedAt[id];
   const interruptedBySession = { ...s.interruptedBySession };
   delete interruptedBySession[id];
+  const upstreamIssueBySession = { ...s.upstreamIssueBySession };
+  delete upstreamIssueBySession[id];
+  // Also drop the hint's decay timer (module-level side effect — idempotent,
+  // and this builder only runs synchronously inside set() callbacks).
+  const issueTimer = upstreamIssueDecayTimers.get(id);
+  if (issueTimer) {
+    clearTimeout(issueTimer);
+    upstreamIssueDecayTimers.delete(id);
+  }
   const unreadBySession = { ...s.unreadBySession };
   delete unreadBySession[id];
   const todosBySession = { ...s.todosBySession };
@@ -1839,6 +1884,7 @@ function applySessionDeletedState(s: SessionState, id: string): Partial<SessionS
     runningBySession,
     runningTurnStartedAt,
     interruptedBySession,
+    upstreamIssueBySession,
     unreadBySession,
     todosBySession,
     planBySession,
@@ -1888,6 +1934,7 @@ function applySessionDeletedState(s: SessionState, id: string): Partial<SessionS
     runningBySession,
     runningTurnStartedAt,
     interruptedBySession,
+    upstreamIssueBySession,
     unreadBySession,
     todosBySession,
     planBySession,
@@ -2159,6 +2206,27 @@ function hydrateContextSnapshot(
  *  have todos but no subagents, etc. Slices absent on the row are cleared
  *  so switching FROM a session with data TO one without doesn't leave the
  *  previous capsule stale. Mirrors hydrateContextSnapshot's pattern. */
+
+/** Drop legacy non-agent entries from a persisted subagent roster. Rosters
+ *  written before the adapter's NON_AGENT_TASK_TYPES filter could contain
+ *  CLI bash tasks (`sleep` waits etc.) stuck on "running" — the CLI doesn't
+ *  emit a closing task_updated for them mid-turn, so they poisoned both the
+ *  capsule and the busy/queue gate. A non-backgrounded "running" entry
+ *  cannot exist at rest in clean data (flushFinal completes them at turn
+ *  end), so dropping is safe. Memoized per raw-array reference so the
+ *  "already matches" guard in hydrateCapsule stays reference-stable. */
+const sanitizeSubagentRoster = (() => {
+  const cache = new WeakMap<SubagentSnapshot[], SubagentSnapshot[]>();
+  return (list: SubagentSnapshot[]): SubagentSnapshot[] => {
+    const hit = cache.get(list);
+    if (hit) return hit;
+    const dirty = list.some((a) => a.status === "running" && !a.isBackgrounded);
+    const out = dirty ? list.filter((a) => !(a.status === "running" && !a.isBackgrounded)) : list;
+    cache.set(list, out);
+    return out;
+  };
+})();
+
 function hydrateCapsule(
   set: (partial: Partial<SessionState> | ((s: SessionState) => Partial<SessionState>)) => void,
   get: () => SessionState,
@@ -2169,8 +2237,15 @@ function hydrateCapsule(
   const subagents = sess?.subagents ?? null;
   const planDraft = sess?.planDraft ?? null;
   set((s) => {
+    // Sanitize before the has/same checks: a legacy roster whose entries
+    // are ALL stale running bash tasks sanitizes to empty and must clear
+    // the capsule slice, not keep the raw array.
+    const cleanSubagents =
+      subagents && Array.isArray(subagents) && subagents.length > 0
+        ? sanitizeSubagentRoster(subagents)
+        : null;
     const hasTodos = !!(todos && Array.isArray(todos) && todos.length > 0);
-    const hasSubagents = !!(subagents && Array.isArray(subagents) && subagents.length > 0);
+    const hasSubagents = !!cleanSubagents;
     const hasPlan = !!(planDraft && planDraft.phase !== "cleared" && planDraft.plan);
     // If this session was manually interrupted, the persisted roster may
     // still carry `running` subagents (the abort's flushFinal runs async and
@@ -2189,7 +2264,7 @@ function hydrateCapsule(
     const subagentsSame = interrupted
       ? false
       : hasSubagents
-        ? s.subagentsBySession[sessionId] === subagents
+        ? s.subagentsBySession[sessionId] === cleanSubagents
         : !(sessionId in s.subagentsBySession);
     const planSame = hasPlan
       ? s.planBySession[sessionId] === planDraft
@@ -2208,10 +2283,12 @@ function hydrateCapsule(
     }
     if (!subagentsSame) {
       const subagentsBySession = { ...s.subagentsBySession };
-      if (subagents && Array.isArray(subagents) && subagents.length > 0) {
+      if (cleanSubagents) {
         subagentsBySession[sessionId] = interrupted
-          ? subagents.map((a) => (a.status === "running" ? { ...a, status: "killed" as const } : a))
-          : subagents;
+          ? cleanSubagents.map((a) =>
+              a.status === "running" ? { ...a, status: "killed" as const } : a,
+            )
+          : cleanSubagents;
       } else {
         delete subagentsBySession[sessionId];
       }
@@ -2978,6 +3055,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   runningBySession: {},
   runningTurnStartedAt: {},
   interruptedBySession: {},
+  upstreamIssueBySession: {},
   unreadBySession: {},
   isWindowFocused: true,
   claudeInstalled: null,
@@ -4676,6 +4754,8 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         ...(frozen ? { messagesBySession: { ...s.messagesBySession, [sessionId]: frozen } } : {}),
       };
     });
+    // User stopped the turn — drop any live upstream-retry hint with it.
+    clearUpstreamIssue(set, sessionId);
   },
 
   ingestEvent: (e) => {
@@ -5000,6 +5080,34 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           console.error("updateSettings(mode.change) failed:", err);
         });
       }
+      return;
+    }
+    // upstream.issue — transient transport trouble on the session's model
+    // channel (the OpenAI bridge retrying a connect timeout / reset). No
+    // message-stream impact: the hint renders beside the streaming spinner
+    // (ChatPane) so a 10s+ stall reads as "网络在重试" instead of a hang.
+    // kind "ok" (a retried request went through) and turn-end paths clear it,
+    // plus the decay timer above as the safety net.
+    if (e.type === "upstream.issue") {
+      if (e.kind === "ok") {
+        clearUpstreamIssue(set, sid);
+        return;
+      }
+      set((s) => ({
+        upstreamIssueBySession: {
+          ...s.upstreamIssueBySession,
+          [sid]: { cause: e.cause, attempt: e.attempt, attempts: e.attempts },
+        },
+      }));
+      const prev = upstreamIssueDecayTimers.get(sid);
+      if (prev) clearTimeout(prev);
+      upstreamIssueDecayTimers.set(
+        sid,
+        setTimeout(() => {
+          upstreamIssueDecayTimers.delete(sid);
+          clearUpstreamIssue(set, sid);
+        }, UPSTREAM_ISSUE_DECAY_MS),
+      );
       return;
     }
     // subagent.update: REPLACE semantics — swap the full roster.
@@ -5408,6 +5516,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
               turnFilesBySession: { ...s.turnFilesBySession, [sid]: [] },
             };
           });
+          // Turn over — any live upstream-retry hint is stale (a later retry
+          // re-arms it for the next turn).
+          clearUpstreamIssue(set, sid);
           break;
         }
         case "turn.done": {
@@ -5536,6 +5647,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
               usageHistoryBySession: { ...s.usageHistoryBySession, [sid]: history },
             };
           });
+          // Turn closed — drop any live upstream-retry hint (the channel may
+          // still flap next turn, which re-arms it).
+          clearUpstreamIssue(set, sid);
           break;
         }
         default:

@@ -610,6 +610,28 @@ export interface UserMessageEvent {
   blocks: unknown[];
 }
 
+/**
+ * Transient upstream-network issue on the session's model channel. Emitted by
+ * the OpenAI-protocol bridge when a request to the real upstream fails with a
+ * retryable transport error (connect timeout / reset / refused …) and the
+ * bridge's internal retry loop kicks in — the moment where a turn looks hung
+ * with no streaming feedback — and again with kind "ok" once a retried
+ * request subsequently succeeds. Purely a visibility signal: the retry
+ * proceeds regardless, and final failure still reaches the user as the SDK's
+ * API-error card (the bridge answers 502 / the upstream status verbatim).
+ */
+export interface UpstreamIssueEvent {
+  type: "upstream.issue";
+  sessionId: string;
+  kind: "retry" | "ok";
+  /** Human-readable transport cause, e.g. "UND_ERR_CONNECT_TIMEOUT: Connect
+   *  Timeout Error (…)". Empty for kind "ok". */
+  cause: string;
+  /** 1-based retry attempt that just failed / attempt count ceiling. */
+  attempt: number;
+  attempts: number;
+}
+
 /** The union of all runtime events. */
 export type RuntimeEvent =
   | TextDeltaEvent
@@ -636,4 +658,5 @@ export type RuntimeEvent =
   | RequestResolvedEvent
   | SessionRunningSnapshotEvent
   | UserMessageEvent
+  | UpstreamIssueEvent
   | GitChangedEvent;
