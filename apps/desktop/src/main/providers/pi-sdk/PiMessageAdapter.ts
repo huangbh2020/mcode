@@ -74,6 +74,26 @@ export class PiMessageAdapter {
    *  the same exhausted-retry failure. Per-turn state (adapter is recreated
    *  each startTurn). */
   private errorSurfaced = false;
+  /** <think>-tag splitter: current region kind. "text" outside a think tag,
+   *  "thinking" inside one. See {@link emitSplitText}. */
+  private thinkRegion: "text" | "thinking" = "text";
+  /** <think>-tag splitter: tail of the previous delta held back because it
+   *  may be a tag PREFIX cut mid-tag across delta boundaries (e.g. "<th" +
+   *  "ink>"). Re-scanned when the next delta arrives. */
+  private thinkHold = "";
+  /** messageId for the think-block synthesized out of inline <think> regions.
+   *  Distinct from the text block's id so the renderer buckets them as
+   *  separate messages (the delta buffer keys text/thinking by messageId);
+   *  re-set per assistant message at message_end. */
+  private thinkMessageId: string | null = null;
+  /** Set right after a closing </think>: swallow the single newline that
+   *  models emit directly after it so the answer body doesn't start with a
+   *  blank line. Survives across deltas (the \n often arrives in the next
+   *  chunk). */
+  private skipLfAfterThinkClose = false;
+  /** contentIndex of the most recent text_delta — the fallback index used
+   *  when flushing held-back text at message_end. */
+  private lastTextContentIndex = 0;
 
   constructor(
     private readonly ctx: ProviderContext,
@@ -100,10 +120,20 @@ export class PiMessageAdapter {
         // nothing to do at message boundaries.
         break;
       case "message_end":
+        // Flush any held-back tail (an unterminated tag prefix that never
+        // completed — emit it as plain content, don't drop it) before the
+        // block ids are cleared.
+        this.flushThinkHold();
         if (this.lastMessageId) {
           this.emit({ type: "message.complete", sessionId: this.sessionId, messageId: this.lastMessageId });
         }
         this.blockMessageIds.clear();
+        // Reset the per-message <think> splitter state so the next assistant
+        // message starts fresh in text mode with its own think messageId.
+        this.thinkRegion = "text";
+        this.thinkHold = "";
+        this.thinkMessageId = null;
+        this.skipLfAfterThinkClose = false;
         break;
       case "tool_execution_start":
         // Attach the tool to the message that narrated it (snapshot at
@@ -279,20 +309,15 @@ export class PiMessageAdapter {
     const sub = event.assistantMessageEvent;
     if (!sub) return;
     if (sub.type === "text_delta") {
-      const messageId = this.ensureMessageId(sub.contentIndex);
       // AskUserQuestion is now handled by the inline extension's native tool
       // (registered via pi.registerTool in mcodeExtension.ts) — the tool's
       // execute bridges to ctx.requestUserInput, so the question panel opens
       // deterministically. The model may still occasionally emit the
       // sentinel <<<ASK_USER_QUESTION>>> JSON form (the system prompt teaches
-      // it as a fallback); a sentinel-text scan could be added here later as
-      // a backstop, but the native tool is the primary path.
-      this.emit({
-        type: "text.delta",
-        sessionId: this.sessionId,
-        messageId,
-        text: sub.delta,
-      });
+      // it as a fallback); a sentinel-text scan could be added here later as a
+      // backstop, but the native tool is the primary path.
+      this.lastTextContentIndex = sub.contentIndex;
+      this.emitSplitText(sub.delta, sub.contentIndex);
     } else if (sub.type === "thinking_delta") {
       const messageId = this.ensureMessageId(sub.contentIndex);
       this.emit({
@@ -309,6 +334,108 @@ export class PiMessageAdapter {
       // block never emits a delta of its own; it just records the target.
       this.pendingToolTargetId = this.lastMessageId;
     }
+  }
+
+  /** Route a text-delta chunk through the inline `<think>` splitter.
+   *
+   *  Reasoning models behind OpenAI-compatible endpoints (DeepSeek-R1, GLM,
+   *  QwQ, … via vLLM / llama.cpp / gateway deployments) often inline their
+   *  chain-of-thought in the `content` field wrapped in literal
+   *  `<think>…</think>` tags instead of the separate `reasoning_content`
+   *  field pi-ai recognizes. The SDK forwards those tags as ordinary
+   *  `text_delta`s, so without this pass the raw tags render in the chat.
+   *  The splitter converts each tagged region into a `thinking` event under
+   *  a dedicated messageId (reusing the renderer's existing thinking panel)
+   *  and emits the surrounding text as `text.delta`, dropping the tags
+   *  themselves plus the newline models put right after the closing tag.
+   *
+   *  Deltas can split a tag anywhere ("<th" + "ink>…"), so text that might be
+   *  a tag prefix is held back ({@link thinkHold}) until the next chunk
+   *  resolves it; message_end flushes whatever is still held. */
+  private emitSplitText(delta: string, contentIndex: number): void {
+    const buf = this.thinkHold + delta;
+    this.thinkHold = "";
+    let pos = 0;
+    while (pos < buf.length) {
+      if (this.skipLfAfterThinkClose) {
+        if (buf[pos] === "\n") pos++;
+        this.skipLfAfterThinkClose = false;
+        continue;
+      }
+      if (this.thinkRegion === "text") {
+        const open = buf.indexOf("<think>", pos);
+        const close = buf.indexOf("</think>", pos);
+        if (open !== -1 && (close === -1 || open < close)) {
+          this.emitTextSegment(buf.slice(pos, open), contentIndex);
+          pos = open + "<think>".length;
+          this.thinkRegion = "thinking";
+        } else if (close !== -1) {
+          // Stray closing tag with no opening one — strip it, stay in text.
+          this.emitTextSegment(buf.slice(pos, close), contentIndex);
+          pos = close + "</think>".length;
+          this.skipLfAfterThinkClose = true;
+        } else {
+          const hold = this.tagPrefixHoldLen(buf, pos);
+          this.emitTextSegment(buf.slice(pos, buf.length - hold), contentIndex);
+          this.thinkHold = buf.slice(buf.length - hold);
+          return;
+        }
+      } else {
+        const close = buf.indexOf("</think>", pos);
+        if (close !== -1) {
+          this.emitTextSegment(buf.slice(pos, close), contentIndex);
+          pos = close + "</think>".length;
+          this.thinkRegion = "text";
+          this.skipLfAfterThinkClose = true;
+        } else {
+          const hold = this.tagPrefixHoldLen(buf, pos);
+          this.emitTextSegment(buf.slice(pos, buf.length - hold), contentIndex);
+          this.thinkHold = buf.slice(buf.length - hold);
+          return;
+        }
+      }
+    }
+  }
+
+  /** Emit one splitter segment under the current region kind: text regions
+   *  ride the contentIndex-keyed messageId (the plain pre-splitter behavior),
+   *  think regions get a dedicated id so the renderer buckets them as their
+   *  own thinking message. */
+  private emitTextSegment(text: string, contentIndex: number): void {
+    if (!text) return;
+    if (this.thinkRegion === "thinking") {
+      if (!this.thinkMessageId) this.thinkMessageId = randomUUID();
+      this.lastMessageId = this.thinkMessageId;
+      this.emit({ type: "thinking", sessionId: this.sessionId, messageId: this.thinkMessageId, text });
+    } else {
+      const messageId = this.ensureMessageId(contentIndex);
+      this.emit({ type: "text.delta", sessionId: this.sessionId, messageId, text });
+    }
+  }
+
+  /** Length of the buffer tail that must be held back because it could still
+   *  grow into a tag on the next delta: the candidate starts at the last "<"
+   *  and is only kept when it is a proper prefix of "<think>" or "</think>".
+   *  Complete tags never reach here (the scan above consumes them first). */
+  private tagPrefixHoldLen(buf: string, from: number): number {
+    const lt = buf.lastIndexOf("<");
+    if (lt < from) return 0;
+    const tail = buf.slice(lt);
+    if ("<think>".startsWith(tail) || "</think>".startsWith(tail)) {
+      return tail.length;
+    }
+    return 0;
+  }
+
+  /** Emit any held-back tail at message end. An unterminated tag prefix
+   *  ("<th" that never completed) is ordinary text — deliver it in the
+   *  current region kind rather than dropping it. */
+  private flushThinkHold(): void {
+    if (!this.thinkHold) return;
+    const held = this.thinkHold;
+    this.thinkHold = "";
+    this.emitTextSegment(held, this.lastTextContentIndex);
+    this.skipLfAfterThinkClose = false;
   }
 
   /** Look up (or lazily allocate) the messageId for a given contentIndex. Each
