@@ -29,6 +29,7 @@
  */
 import { useCallback, useRef } from "react";
 import { cn } from "@renderer/lib/cn.js";
+import { COL_RESIZE_CURSOR, ROW_RESIZE_CURSOR } from "@renderer/lib/cursors.js";
 
 export interface DividerProps {
   /** `vertical` = a tall thin bar between side-by-side panes (cursor:
@@ -76,7 +77,7 @@ export function Divider({
       // selection, no iframe pointer capture issues. Removed on mouseup.
       const prevCursor = document.body.style.cursor;
       const prevSelect = document.body.style.userSelect;
-      document.body.style.cursor = isVertical ? "col-resize" : "row-resize";
+      document.body.style.cursor = isVertical ? COL_RESIZE_CURSOR : ROW_RESIZE_CURSOR;
       document.body.style.userSelect = "none";
 
       const onMove = (ev: MouseEvent) => {
@@ -120,15 +121,19 @@ export function Divider({
         className,
       )}
     >
-      {/* Draggable hit area - wider than the visible line. */}
+      {/* Draggable hit area - wider than the visible line. Cursor uses the
+          explicit SVG resize cursors (lib/cursors.ts), NOT `cursor-col-resize`:
+          Chromium may swap in a white variant of the system cursor when the
+          window is flagged dark, which vanishes on the light theme. */}
       <div
         onMouseDown={handleMouseDown}
         onDoubleClick={onDoubleClick}
+        style={{ cursor: isVertical ? COL_RESIZE_CURSOR : ROW_RESIZE_CURSOR }}
         className={cn(
           "absolute z-0",
           isVertical
-            ? "inset-y-0 -left-[5px] -right-[5px] cursor-col-resize"
-            : "inset-x-0 -top-[5px] -bottom-[5px] cursor-row-resize",
+            ? "inset-y-0 -left-[5px] -right-[5px]"
+            : "inset-x-0 -top-[5px] -bottom-[5px]",
         )}
       />
       {/* Visible 1px hairline - pointer-events-none so the hit area stays the

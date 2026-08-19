@@ -254,7 +254,12 @@ div:has(> [role="menu"]) {
    * (below) track this via calc. */
   --right-panel-font-size: 14px;
 
-  color-scheme: light;
+  /* Must be `dark` (was mistakenly `light`): besides native widgets, Chromium
+   * also uses the document's color-scheme when picking light/dark variants of
+   * built-in cursors — declaring light here makes dark-mode UI get the black
+   * cursor variant, invisible against the dark surfaces. Scrollbars are safe:
+   * they're custom-styled (*::-webkit-scrollbar below), not native. */
+  color-scheme: dark;
 }
 
 /* ───────────── Font-weight ladder shifts ─────────────
