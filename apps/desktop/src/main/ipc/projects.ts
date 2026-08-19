@@ -130,8 +130,10 @@ export function registerProjectHandlers(ipcMain: IpcMain): void {
     return { session };
   });
 
-  // Pin/unpin a session within its project (pinned sessions sort to the top
-  // of the project's list). Mirrors the archive handler's shape.
+  // Pin/unpin a session. Pinned sessions LEAVE their project's active list
+  // and render in the left bar's global pinned section above the project
+  // tree (cross-project, most recent pin first). Mirrors the archive
+  // handler's shape.
   ipcMain.handle(IPC.SESSION_PIN, (_evt, raw) => {
     const input = PinSessionSchema.parse(raw);
     SessionRepo.setPinned(input.id, input.pinned);
@@ -140,5 +142,10 @@ export function registerProjectHandlers(ipcMain: IpcMain): void {
     broadcastSessionChanged(session);
     log.info(`session ${input.pinned ? "pinned" : "unpinned"}: ${input.id}`);
     return { session };
+  });
+
+  // All pinned sessions across projects — feeds the left bar's pinned section.
+  ipcMain.handle(IPC.SESSION_LIST_PINNED, () => {
+    return { sessions: SessionRepo.listPinned() };
   });
 }

@@ -515,7 +515,7 @@ export class ClaudeAgentSdkProvider implements AgentProvider {
       const tok = e.ANTHROPIC_AUTH_TOKEN ?? e.ANTHROPIC_API_KEY;
       diagEnv.__authTokenMasked = tok ? `${tok.slice(0, 2)}***${tok.slice(-4)} (mode=${e.ANTHROPIC_API_KEY ? "api_key" : "auth_token"})` : "(none)";
       ctx.log.info(
-        `claude custom env: selectedRole=${req.apiConfig.selectedRole} betas=${JSON.stringify(options.betas ?? null)} env=${JSON.stringify(diagEnv)}`,
+        `claude custom env: selectedModel=${req.apiConfig.selectedModel} betas=${JSON.stringify(options.betas ?? null)} env=${JSON.stringify(diagEnv)}`,
       );
     }
 
@@ -862,13 +862,14 @@ export class ClaudeAgentSdkProvider implements AgentProvider {
 
     const q = (await loadQuery())({ prompt: buildPromptInput(req), options });
 
-    // Resolve the user-declared context-window tag from the active role's
+    // Resolve the user-declared context-window tag from the selected model's
     // `supports1m` flag. `resolveActiveModel` appends a `[1m]` suffix exactly
-    // when the active role declares 1M, so its presence signals a 1M window.
-    // For a custom endpoint this is authoritative (a non-1M config → "200k"
-    // overrides the model-name heuristic, so a gateway model coincidentally
-    // named "*opus*" without supports1m resolves to 200k as the user intended).
-    // `undefined` (official Anthropic endpoint) lets the heuristic decide.
+    // when the selected model declares 1M, so its presence signals a 1M
+    // window. For a custom endpoint this is authoritative (a non-1M config →
+    // "200k" overrides the model-name heuristic, so a gateway model
+    // coincidentally named "*opus*" without supports1m resolves to 200k as
+    // the user intended). `undefined` (official Anthropic endpoint) lets the
+    // heuristic decide.
     const configured: ClaudeContextWindowTag | undefined = req.apiConfig
       ? resolveActiveModel(req.apiConfig)?.toLowerCase().endsWith("[1m]")
         ? "1m"

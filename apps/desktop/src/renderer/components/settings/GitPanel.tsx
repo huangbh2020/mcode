@@ -7,8 +7,6 @@ import { useI18n, type MessageId } from "@renderer/lib/i18n/index.js";
 import { PanelHeader } from "./PanelHeader.js";
 import { SettingsSection } from "./SettingsSection.js";
 import { SettingRow } from "./SettingRow.js";
-import { CUSTOM_MODEL_ROLES, CUSTOM_MODEL_ROLE_LABELS } from "@contracts/customModel";
-import type { CustomModelRoleKey } from "@contracts/customModel";
 import type { GitDiffOpenMode } from "@contracts/ipc";
 import type { ReactNode } from "react";
 
@@ -26,18 +24,19 @@ const MODEL_NONE = "__none__";
  * Git settings — commit-message generation configuration.
  *
  * Two controls:
- *  - **Model**: pick a SPECIFIC model (supplier + role binding, e.g.
- *    "DeepSeek 中转 → Sonnet"). Only custom-model configs with at least one
- *    bound role are listed; the user must have configured models first.
+ *  - **Model**: pick a SPECIFIC model (supplier + model id, e.g.
+ *    "DeepSeek 中转 → deepseek-v4-pro"). Only custom-model configs with at
+ *    least one model are listed; the user must have configured models first.
  *  - **Format preference**: a textarea steering only the language / wording /
  *    convention of the generated message (e.g. Conventional Commits, en/zh,
  *    emoji style). The core behavior — emit a clean, diff-derived commit
  *    message with no preamble — is fixed in the backend and cannot be
  *    overridden here. Empty = built-in default preference.
  *
- * The model value is stored as `"configId:roleKey"` (e.g. `"cfg_abc:sonnet"`)
- * in the settings table; at commit-generation time it's split back into
- * `customModelId` + `customModelRole` for the IPC call.
+ * The model value is stored as `"configId:modelId"` (e.g.
+ * `"cfg_abc:deepseek-v4-pro"`) in the settings table; at commit-generation
+ * time it's split back into `customModelId` + `customModelRole` for the IPC
+ * call.
  */
 export function GitPanel() {
   const { t } = useI18n();
@@ -53,18 +52,16 @@ export function GitPanel() {
   const gitDiffOpenMode = useSessionStore((s) => s.gitDiffOpenMode);
   const setGitDiffOpenMode = useSessionStore((s) => s.setGitDiffOpenMode);
 
-  // Build a flat list of selectable models: one entry per (config, bound role).
-  // Each entry's value is `"configId:roleKey"`, label is `"供应商名 → 角色名"`.
+  // Build a flat list of selectable models: one entry per (config, model).
+  // Each entry's value is `"configId:modelId"`, label is `"供应商名 → 模型id"`.
   const modelOptions = useMemo(() => {
     const opts: { value: string; label: string }[] = [];
     for (const cfg of customModels) {
-      for (const role of CUSTOM_MODEL_ROLES) {
-        const binding = cfg.roles[role];
-        if (binding?.requestModel?.trim()) {
-          const roleLabel = binding.displayName || CUSTOM_MODEL_ROLE_LABELS[role];
+      for (const entry of cfg.models) {
+        if (entry.id.trim()) {
           opts.push({
-            value: `${cfg.id}:${role}`,
-            label: `${cfg.name} → ${roleLabel}`,
+            value: `${cfg.id}:${entry.id}`,
+            label: `${cfg.name} → ${entry.id}`,
           });
         }
       }
@@ -220,14 +217,19 @@ export function GitPanel() {
             >
               <Select.Trigger className="min-w-[220px]">
                 <Select.Value>
-                  {(val: string) => (
-                    <span className="flex items-center gap-1.5">
-                      <IconRobot size={14} className="text-content-muted" />
-                      {val === MODEL_NONE
-                        ? t("settings.builtinModel")
-                        : (modelOptions.find((o) => o.value === val)?.label ?? val)}
-                    </span>
-                  )}
+                  {(val: string) =>
+                    val === MODEL_NONE ? (
+                      <span className="flex items-center gap-1.5">
+                        <IconCircleOff size={14} className="text-content-muted" />
+                        {t("settings.git.noModelSelected")}
+                      </span>
+                    ) : (
+                      <span className="flex items-center gap-1.5">
+                        <IconRobot size={14} className="text-content-muted" />
+                        {modelOptions.find((o) => o.value === val)?.label ?? val}
+                      </span>
+                    )
+                  }
                 </Select.Value>
               </Select.Trigger>
               <Select.Portal>
@@ -235,8 +237,8 @@ export function GitPanel() {
                   <Select.Popup>
                     <Select.List>
                       <Select.Item value={MODEL_NONE}>
-                        <IconRobot size={14} className="text-content-muted" />
-                        <Select.ItemText>{t("settings.builtinModel")}</Select.ItemText>
+                        <IconCircleOff size={14} className="text-content-muted" />
+                        <Select.ItemText>{t("settings.git.noModelSelected")}</Select.ItemText>
                       </Select.Item>
                       {modelOptions.map((opt) => (
                         <Select.Item key={opt.value} value={opt.value}>

@@ -6,12 +6,6 @@ import { Select, Switch } from "@renderer/components/ui/index.js";
 import { IconRobot } from "@renderer/lib/icons.js";
 import { SettingRow } from "./SettingRow.js";
 import { SettingsSection } from "./SettingsSection.js";
-import { CUSTOM_MODEL_ROLES, CUSTOM_MODEL_ROLE_LABELS } from "@contracts/customModel";
-
-/** Sentinel for the "内置模型" (no selection) option — base-ui Select
- *  rejects empty-string item values, so the empty state maps to this and
- *  the store setter translates it back to null. */
-const MODEL_NONE = "__none__";
 
 /**
  * Thread-title generation settings.
@@ -21,11 +15,12 @@ const MODEL_NONE = "__none__";
  *    LLM call on a session's first user message to produce a short Chinese
  *    title, overwriting the default placeholder. When off, the placeholder
  *    (first 40 chars of the prompt) is kept.
- *  - **Generation model**: pick a SPECIFIC model (supplier + role binding).
- *    Only custom-model configs with at least one bound role are listed; the
- *    user must have configured models first. Unset = built-in Claude model.
+ *  - **Generation model**: pick a SPECIFIC model (supplier + model id).
+ *    Only custom-model configs with at least one model are listed; the
+ *    user must have configured models first. There is no default model —
+ *    until one is picked, titles are not generated.
  *
- * The model value is stored as `"configId:roleKey"` in the settings table,
+ * The model value is stored as `"configId:modelId"` in the settings table,
  * same shape as the commit-gen / conflict-resolve model selectors.
  *
  * Renders as its own SettingsSection (card) so it slots into GeneralPanel as
@@ -39,18 +34,16 @@ export function TitleGenPanel() {
   const setTitleGenModel = useSessionStore((s) => s.setTitleGenModel);
   const customModels = useSessionStore((s) => s.customModels);
 
-  // Build a flat list of selectable models: one entry per (config, bound role).
-  // Each entry's value is `"configId:roleKey"`, label is `"供应商名 -> 角色名"`.
+  // Build a flat list of selectable models: one entry per (config, model).
+  // Each entry's value is `"configId:modelId"`, label is `"供应商名 -> 模型id"`.
   const modelOptions = useMemo(() => {
     const opts: { value: string; label: string }[] = [];
     for (const cfg of customModels) {
-      for (const role of CUSTOM_MODEL_ROLES) {
-        const binding = cfg.roles[role];
-        if (binding?.requestModel?.trim()) {
-          const roleLabel = binding.displayName || CUSTOM_MODEL_ROLE_LABELS[role];
+      for (const entry of cfg.models) {
+        if (entry.id.trim()) {
           opts.push({
-            value: `${cfg.id}:${role}`,
-            label: `${cfg.name} -> ${roleLabel}`,
+            value: `${cfg.id}:${entry.id}`,
+            label: `${cfg.name} -> ${entry.id}`,
           });
         }
       }
@@ -84,20 +77,25 @@ export function TitleGenPanel() {
       >
         {modelOptions.length > 0 ? (
           <Select.Root
-            value={titleGenModel ?? MODEL_NONE}
-            onValueChange={(v) => setTitleGenModel(v === MODEL_NONE ? null : (v as string))}
+            value={titleGenModel}
+            onValueChange={(v) => setTitleGenModel((v as string) ?? null)}
           >
             <Select.Trigger
               disabled={!titleGenEnabled}
               className={cn("min-w-[220px]", !titleGenEnabled && "cursor-not-allowed opacity-50")}
             >
               <Select.Value>
-                {(val: string) => (
-                  <span className="flex items-center gap-1.5">
+                {(val: string | null) => (
+                  <span
+                    className={cn(
+                      "flex items-center gap-1.5",
+                      !val && "text-content-subtle",
+                    )}
+                  >
                     <IconRobot size={14} className="text-content-muted" />
-                    {val === MODEL_NONE
-                      ? t("settings.builtinModel")
-                      : (modelOptions.find((o) => o.value === val)?.label ?? val)}
+                    {val
+                      ? (modelOptions.find((o) => o.value === val)?.label ?? val)
+                      : t("settings.titleGen.modelPlaceholder")}
                   </span>
                 )}
               </Select.Value>
@@ -106,10 +104,6 @@ export function TitleGenPanel() {
               <Select.Positioner>
                 <Select.Popup>
                   <Select.List>
-                    <Select.Item value={MODEL_NONE}>
-                      <IconRobot size={14} className="text-content-muted" />
-                      <Select.ItemText>{t("settings.builtinModel")}</Select.ItemText>
-                    </Select.Item>
                     {modelOptions.map((opt) => (
                       <Select.Item key={opt.value} value={opt.value}>
                         <IconRobot size={14} className="text-content-muted" />

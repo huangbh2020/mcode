@@ -8,7 +8,6 @@ import type { RuntimeEvent } from "./runtime.js";
 import type { Project, Session, MessageRecord, TurnInput, ApprovalDecision } from "./session.js";
 import type { ProviderCapabilities, UserInputAnswers, BuiltinModelOption } from "./provider.js";
 import type { CustomModelPublic, CustomModelInput, TestCustomModelResult } from "./customModel.js";
-import type { EndpointPresetPublic } from "./endpointPreset.js";
 import type { PiProviderConfig, PiProviderPublic } from "./piModel.js";
 import type { ThemeName, EffectiveTheme, ThemeChangedMessage } from "./theme.js";
 import type { PairingStartResult, PairedDevice } from "./mobile.js";
@@ -871,22 +870,10 @@ export type FocusSessionInput = z.infer<typeof FocusSessionSchema>;
 
 /* ── Custom model configs (user-defined Anthropic-compatible endpoints) ── */
 
-/** Single tier binding within a custom-model config. Every field is optional;
- *  a role with no `requestModel` is simply treated as unbound. */
-const RoleBindingSchema = z.object({
-  displayName: z.string().optional(),
-  requestModel: z.string().optional(),
+/** One selectable model within a custom-model config. */
+const CustomModelEntrySchema = z.object({
+  id: z.string().min(1),
   supports1m: z.boolean().optional(),
-});
-
-/** Per-config role bindings for the five Claude Code tiers. Any subset of
- *  keys may be present. */
-const RoleBindingsSchema = z.object({
-  haiku: RoleBindingSchema.optional(),
-  sonnet: RoleBindingSchema.optional(),
-  opus: RoleBindingSchema.optional(),
-  fable: RoleBindingSchema.optional(),
-  subagent: RoleBindingSchema.optional(),
 });
 
 const AuthModeSchema = z.enum(["auth_token", "api_key"]);
@@ -895,8 +882,7 @@ const ProtocolSchema = z.enum(["anthropic", "openai"]);
 
 /** Save (create or update) a custom-model config. On update, an omitted
  *  `authToken` keeps the existing stored token; on create, `authToken` is
- *  required. At least one role must have a `requestModel` (enforced in the
- *  UI/handler — zod can't easily express "≥1 non-empty nested field"). */
+ *  required. At least one model entry is required. */
 export const SaveCustomModelSchema = z.object({
   id: z.string().optional(),
   name: z.string().min(1),
@@ -904,7 +890,7 @@ export const SaveCustomModelSchema = z.object({
   authMode: AuthModeSchema.optional(),
   protocol: ProtocolSchema.optional(),
   authToken: z.string().optional(),
-  roles: RoleBindingsSchema,
+  models: z.array(CustomModelEntrySchema).min(1),
   disableNonEssentialTraffic: z.boolean().optional(),
   timeoutMs: z.number().optional(),
 });
@@ -914,15 +900,16 @@ export const DeleteCustomModelSchema = z.object({ id: z.string() });
 
 /** Probe a custom endpoint using the supplied (not-yet-saved) values, so the
  *  user can verify auth/baseUrl/a-specific-model before committing. The probe
- *  tests ONE model at a time (the user picks which role/model in the UI). */
+ *  tests ONE model at a time (the user picks which model in the UI). */
 export const TestCustomModelSchema = z.object({
   baseUrl: z.string().min(1),
   authToken: z.string().min(1),
   authMode: AuthModeSchema.optional(),
   protocol: ProtocolSchema.optional(),
-  /** The single requestModel to probe in this request. */
+  /** The single model id to probe in this request. */
   model: z.string().min(1),
-  /** Whether to declare 1M context (sets betas) — mirrors the role's toggle. */
+  /** Whether to declare 1M context (adds the `[1m]` suffix) — mirrors the
+   *  model row's toggle. */
   supports1m: z.boolean().optional(),
   disableNonEssentialTraffic: z.boolean().optional(),
   timeoutMs: z.number().optional(),
@@ -936,19 +923,6 @@ export type TestCustomModelInput = z.infer<typeof TestCustomModelSchema>;
  *  turn-time path (those resolve the token in main via resolveApiConfig). */
 export const GetCustomModelTokenSchema = z.object({ id: z.string().min(1) });
 export type GetCustomModelTokenInput = z.infer<typeof GetCustomModelTokenSchema>;
-
-/* ── Endpoint presets (credential-free endpoint templates) ── */
-
-export const SaveEndpointPresetSchema = z.object({
-  id: z.string().optional(),
-  name: z.string().min(1),
-  baseUrl: z.string().min(1),
-  authMode: AuthModeSchema.optional(),
-});
-export type SaveEndpointPresetInput = z.infer<typeof SaveEndpointPresetSchema>;
-
-export const DeleteEndpointPresetSchema = z.object({ id: z.string() });
-export type DeleteEndpointPresetInput = z.infer<typeof DeleteEndpointPresetSchema>;
 
 /* ── Pi models (visual editor for ~/.pi/agent/models.json) ── */
 
@@ -2727,6 +2701,10 @@ export interface RpcMap {
   // Sessions (P2 persistence)
   /** Cross-project session search by title substring (Ctrl+K unified search). */
   "session.search": (input: SessionSearchInput) => Promise<{ sessions: Session[] }>;
+  /** All pinned non-archived sessions across projects (most recent pin
+   *  first) — powers the left bar's global pinned section above the project
+   *  tree. */
+  "session.listPinned": () => Promise<{ sessions: Session[] }>;
   "session.messages": (
     input: SessionMessagesInput,
   ) => Promise<{ messages: MessageRecord[]; hasMore: boolean }>;
@@ -2764,10 +2742,6 @@ export interface RpcMap {
   "customModel.test": (input: TestCustomModelInput) => Promise<TestCustomModelResult>;
   /** Settings UI eye-icon only — returns cleartext token for display. */
   "customModel.getToken": (input: GetCustomModelTokenInput) => Promise<{ token: string | null }>;
-  // Endpoint presets (credential-free endpoint templates)
-  "endpointPreset.list": () => Promise<{ presets: EndpointPresetPublic[] }>;
-  "endpointPreset.save": (input: SaveEndpointPresetInput) => Promise<{ presets: EndpointPresetPublic[] }>;
-  "endpointPreset.delete": (input: { id: string }) => Promise<{ presets: EndpointPresetPublic[] }>;
   // Pi models (visual editor for ~/.pi/agent/models.json)
   "piModels.list": () => Promise<{ providers: Record<string, PiProviderPublic> }>;
   "piModels.save": (input: SavePiProviderInput) => Promise<{ providers: Record<string, PiProviderPublic> }>;
@@ -3072,6 +3046,7 @@ export const IPC = {
   SESSION_ARCHIVE: "session:archive",
   SESSION_RENAME: "session:rename",
   SESSION_PIN: "session:pin",
+  SESSION_LIST_PINNED: "session:listPinned",
   SESSION_SEARCH: "session:search",
   SESSION_MESSAGES: "session:messages",
   SESSION_SAVE_MESSAGES: "session:saveMessages",
@@ -3093,10 +3068,6 @@ export const IPC = {
   CUSTOM_MODEL_DELETE: "customModel:delete",
   CUSTOM_MODEL_TEST: "customModel:test",
   CUSTOM_MODEL_GET_TOKEN: "customModel:getToken",
-  // Endpoint presets (credential-free endpoint templates shared across providers)
-  ENDPOINT_PRESET_LIST: "endpointPreset:list",
-  ENDPOINT_PRESET_SAVE: "endpointPreset:save",
-  ENDPOINT_PRESET_DELETE: "endpointPreset:delete",
   // Pi models (visual editor for ~/.pi/agent/models.json)
   PI_MODELS_LIST: "piModels:list",
   PI_MODELS_SAVE: "piModels:save",

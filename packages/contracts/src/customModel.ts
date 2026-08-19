@@ -7,30 +7,22 @@
  * (see main/lib/secretStore.ts) and NEVER crosses to the renderer in cleartext.
  * The renderer only ever sees {@link CustomModelPublic}.
  *
- * ## Model: role bindings (5 tiers)
+ * ## Model: flat model list
  *
- * One config = one endpoint (baseUrl + token + authMode) plus a binding for
- * each of the five Claude Code tiers. Each tier can be bound to a gateway-side
- * model and labeled with a display name; the user then picks a TIER in the
- * model dropdown (not a raw model name), and that tier's `requestModel` is
- * injected as `ANTHROPIC_MODEL` and as the tier's matching env var:
+ * One config = one endpoint (baseUrl + token + authMode) plus a flat list of
+ * gateway-side model ids — mirroring how the Pi provider form works. The user
+ * picks a MODEL in the dropdown; the selected id is injected as
+ * `ANTHROPIC_MODEL` (with a `[1m]` suffix when the entry declares 1M context),
+ * and the same bare id is mirrored onto the binary's background-tier env vars
+ * (`ANTHROPIC_DEFAULT_HAIKU/SONNET/OPUS/FABLE_MODEL`, `CLAUDE_CODE_SUBAGENT_MODEL`)
+ * so background requests also route to the user's gateway. See
+ * main/providers/claude-sdk/customEnv.ts for the full mapping.
  *
- *   haiku    → ANTHROPIC_DEFAULT_HAIKU_MODEL
- *   sonnet   → ANTHROPIC_DEFAULT_SONNET_MODEL
- *   opus     → ANTHROPIC_DEFAULT_OPUS_MODEL
- *   fable    → ANTHROPIC_DEFAULT_FABLE_MODEL
- *   subagent → CLAUDE_CODE_SUBAGENT_MODEL   (NOT a model alias — a usage context)
+ * (This flat shape replaced the earlier 5-tier "role binding" table — and, before
+ * that, a `models[]` list + 3-key alias map. Older persisted records are
+ * migrated transparently on read by `migrateMeta` in secretStore.ts.)
  *
- * (Subagent is special: it's the model the built-in Task tool spawns under,
- * not a Claude Code tier alias. The env var lives outside the ANTHROPIC_*
- * namespace, which the binary confirms.)
- *
- * 1M context support is declared PER TIER via `RoleBinding.supports1m`. When
- * the session's selected tier declares it, the provider sets
- * `options.betas = ['context-1m-2025-08-07']` on the SDK query. There is no
- * env var for this — it's a query option (sdk.d.ts:1488, type SdkBeta).
- *
- * ## Why so many fields besides the bindings?
+ * ## Why so many fields besides the model list?
  *
  * Claude Code's own env contract for a custom endpoint isn't just base URL +
  * key. Third-party gateways differ from the official API in three ways that
@@ -44,9 +36,6 @@
  * 2. **Non-essential traffic.** Claude Code phones home to Anthropic's
  *    telemetry endpoints by default; on a third-party gateway those fail.
  *    `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` turns them off.
- *
- * (Tier→model remapping is handled by the bindings above, which replaced the
- * older flat `models[]` list + 3-key alias map.)
  */
 
 /** How the credential is presented to the upstream. */
@@ -71,52 +60,18 @@ export function resolveProtocol(p: Protocol | undefined): Protocol {
   return p ?? DEFAULT_PROTOCOL;
 }
 
-/** The five Claude Code tiers a custom endpoint can bind. The first four are
- *  real model aliases; subagent is a usage context (the Task-tool model). */
-export type CustomModelRoleKey = "haiku" | "sonnet" | "opus" | "fable" | "subagent";
-
-/** Canonical, ordered list of roles — used by UI to render the table and by
- *  the dropdown to enumerate bindable tiers. */
-export const CUSTOM_MODEL_ROLES: CustomModelRoleKey[] = [
-  "haiku",
-  "sonnet",
-  "opus",
-  "fable",
-  "subagent",
-];
-
-/** Human-readable label for each role key. */
-export const CUSTOM_MODEL_ROLE_LABELS: Record<CustomModelRoleKey, string> = {
-  haiku: "Haiku",
-  sonnet: "Sonnet",
-  opus: "Opus",
-  fable: "Fable",
-  subagent: "Subagent",
-};
-
-/** A single tier's binding within a custom-model config. All fields optional —
- *  an unbound role (no `requestModel`) is simply not exposed in the dropdown. */
-export interface RoleBinding {
-  /** Gateway-side display name shown in the dropdown, e.g. "pro". Falls back
-   *  to the role label (e.g. "Sonnet") when unset. */
-  displayName?: string;
+/** One selectable model on a custom endpoint. Mirrors the Pi side's flat
+ *  per-provider model list: just the gateway-side model id plus a 1M-context
+ *  declaration — no display name, no per-tier role. */
+export interface CustomModelEntry {
   /** The actual model id the gateway routes to, e.g. "deepseek-v4-pro".
-   *  Injected as the role's matching env var; when this role is selected for a
-   *  turn it is also passed as ANTHROPIC_MODEL. */
-  requestModel?: string;
-  /** Declare 1M-token context support. When the session selects this role, the
-   *  provider sets betas=['context-1m-2025-08-07'] on the SDK query. */
+   *  Injected as ANTHROPIC_MODEL when selected; mirrored onto the background
+   *  tier env vars (bare, without the `[1m]` suffix). */
+  id: string;
+  /** Declare 1M-token context support. When the session selects this model,
+   *  ANTHROPIC_MODEL carries the `[1m]` suffix (the DeepSeek-style gateway
+   *  convention). */
   supports1m?: boolean;
-}
-
-/** Per-config role bindings. Any subset of the five keys may be present; only
- *  roles with a `requestModel` are selectable in the UI. */
-export interface RoleBindings {
-  haiku?: RoleBinding;
-  sonnet?: RoleBinding;
-  opus?: RoleBinding;
-  fable?: RoleBinding;
-  subagent?: RoleBinding;
 }
 
 /** Fully-resolved config passed to the provider at turn time (main-process
@@ -129,13 +84,14 @@ export interface ApiConfig {
   /** Wire protocol of the upstream endpoint. `anthropic` (default) talks to it
    *  directly; `openai` activates the in-process protocol bridge. */
   protocol: Protocol;
-  /** The role the session has selected for this turn (one of the bindable
-   * keys). Its `requestModel` becomes ANTHROPIC_MODEL; its `supports1m`
-   * decides whether betas are sent. Falls back to the first bound role. */
-  selectedRole: CustomModelRoleKey;
-  /** Per-tier bindings. Every tier with a `requestModel` is injected as its
-   *  matching env var so background requests also route correctly. */
-  roles: RoleBindings;
+  /** The model id the session has selected for this turn (one of
+   *  `models[].id`). It becomes ANTHROPIC_MODEL (with the `[1m]` suffix when
+   *  the entry declares it). Falls back to the first entry. */
+  selectedModel: string;
+  /** The config's flat model list. The selected model's bare id is mirrored
+   *  onto the background-tier env vars so background requests also route to
+   *  the user's gateway. */
+  models: CustomModelEntry[];
   /** Disable Claude Code's non-essential (telemetry) traffic. Default true
    *  for custom endpoints — almost always what you want on a gateway. */
   disableNonEssentialTraffic: boolean;
@@ -150,7 +106,7 @@ export interface StoredCredential {
 }
 
 /** A stored custom-model config (main-process side; holds the cleartext token).
- *  One config = one endpoint + per-tier role bindings. */
+ *  One config = one endpoint + a flat model list. */
 export interface CustomModel {
   id: string;
   /** User-facing name, e.g. "DeepSeek 中转". */
@@ -160,7 +116,7 @@ export interface CustomModel {
   authToken: string;
   authMode: AuthMode;
   protocol: Protocol;
-  roles: RoleBindings;
+  models: CustomModelEntry[];
   disableNonEssentialTraffic: boolean;
   timeoutMs?: number;
   createdAt: number;
@@ -179,7 +135,7 @@ export interface CustomModelPublic {
   protocol: Protocol;
   /** Masked token, e.g. "sk-***ab12". For display only. */
   authTokenMasked: string;
-  roles: RoleBindings;
+  models: CustomModelEntry[];
   disableNonEssentialTraffic: boolean;
   timeoutMs?: number;
   createdAt: number;
@@ -195,7 +151,7 @@ export interface CustomModelMeta {
   authMode: AuthMode;
   /** Wire protocol. Absent on legacy records; resolve via {@link resolveProtocol}. */
   protocol?: Protocol;
-  roles: RoleBindings;
+  models: CustomModelEntry[];
   disableNonEssentialTraffic: boolean;
   timeoutMs?: number;
   createdAt: number;
@@ -214,7 +170,8 @@ export interface CustomModelInput {
   protocol?: Protocol;
   /** Cleartext. Required on create; optional on update (omit = keep existing). */
   authToken?: string;
-  roles: RoleBindings;
+  /** The flat model list (≥1 entry, enforced by the IPC schema). */
+  models: CustomModelEntry[];
   disableNonEssentialTraffic?: boolean;
   timeoutMs?: number;
 }

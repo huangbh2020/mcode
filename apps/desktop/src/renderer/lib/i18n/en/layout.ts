@@ -23,6 +23,7 @@ export const en = {
   "layout.loadMore": "Load more",
   "layout.loadMoreRemaining": " ({n} more)",
   "layout.pinned": "Pinned",
+  "layout.pinnedSection": "Pinned ({n})",
   "layout.pin": "Pin",
   "layout.unpin": "Unpin",
   "layout.archive": "Archive",

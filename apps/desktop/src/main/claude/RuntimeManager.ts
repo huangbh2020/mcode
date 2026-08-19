@@ -36,6 +36,13 @@ interface SessionRuntime {
   /** Wall-clock ms when the current turn started (Date.now()). Used to
    *  compute `durationMs` in the per-turn usage history. */
   turnStartedAt: number;
+  /** Set at `turn.done` with the turn's endedAt/durationMs; consumed by the
+   *  next `token-usage.updated` (the turn-end context snapshot, which the
+   *  adapter fires asynchronously OFF the turn's critical path, so it lands
+   *  after turn.done) to append the per-turn usage-history record with the
+   *  turn's final throughput/cost data. Flushed at the next sendTurn if no
+   *  snapshot ever arrives (all-zero usage turn / abort before result). */
+  pendingTurnEnd?: { endedAt: number; durationMs: number };
   /** Latest context snapshot emitted by the adapter (tracked from
    *  `token-usage.updated` events). Read at `turn.done` to build the
    *  per-turn usage history entry. */
@@ -102,34 +109,28 @@ class RuntimeManager {
         } catch (err) {
           log.error(`failed to persist context snapshot: ${(err as Error).message}`);
         }
-        // Track the latest snapshot so turn.done can persist the usage history.
+        // Track the latest snapshot; if a turn just ended, its deferred
+        // usage-history record settles now (the adapter fires the turn-end
+        // snapshot asynchronously, AFTER turn.done — see pendingTurnEnd).
         const rt = this.sessions.get(session.id);
-        if (rt) rt.lastContextSnapshot = e.snapshot;
+        if (rt) {
+          rt.lastContextSnapshot = e.snapshot;
+          this.settlePendingTurnEnd(session.id, rt);
+        }
       } else if (e.type === "turn.done") {
-        // Persist the per-turn token/cost history. The final snapshot for the
-        // turn is `lastContextSnapshot` (captured from the last token-usage.updated).
-        // durationMs is derived from turnStartedAt (set in sendTurn).
-        try {
-          const rt = this.sessions.get(session.id);
-          const snap = rt?.lastContextSnapshot;
-          if (rt && snap && rt.turnStartedAt > 0) {
-            const record: TurnUsageRecord = {
-              endedAt: Date.now(),
-              durationMs: Math.max(0, Date.now() - rt.turnStartedAt),
-              totalProcessedTokens: snap.totalProcessedTokens,
-              outputTokens: snap.outputTokens,
-              cacheReadTokens: snap.cacheReadTokens ?? 0,
-              cacheCreationTokens: snap.cacheCreationTokens ?? 0,
-              costUsd: snap.costUsd,
-              usedTokens: snap.usedTokens,
-              model: snap.model,
-            };
-            rt.usageHistory = [...rt.usageHistory, record];
-            SessionRepo.updateUsageHistory(session.id, rt.usageHistory);
-            invalidateUsageStats();
-          }
-        } catch (err) {
-          log.error(`failed to persist usage history: ${(err as Error).message}`);
+        // Persist the per-turn token/cost history. The turn's FINAL snapshot
+        // (throughput/cost from result.usage) is published asynchronously by
+        // the adapter after turn.done — it must never delay turn.done, as
+        // slow gateway control channels used to stall it for tens of seconds.
+        // So: stash the timings here, append the record when the turn-end
+        // snapshot lands (settlePendingTurnEnd above), and let the next
+        // sendTurn flush it with the last-known snapshot if none ever does.
+        const rt = this.sessions.get(session.id);
+        if (rt && rt.turnStartedAt > 0) {
+          rt.pendingTurnEnd = {
+            endedAt: Date.now(),
+            durationMs: Math.max(0, Date.now() - rt.turnStartedAt),
+          };
         }
       } else if (e.type === "todo.update") {
         try {
@@ -240,6 +241,36 @@ class RuntimeManager {
     return ids;
   }
 
+  /** Append the deferred per-turn usage-history record (stashed by the
+   *  turn.done handler in `pendingTurnEnd`) using the latest context
+   *  snapshot. No-op when nothing is pending; skips silently when no
+   *  snapshot ever arrived (nothing meaningful to record). */
+  private settlePendingTurnEnd(sessionId: string, rt: SessionRuntime): void {
+    const pending = rt.pendingTurnEnd;
+    if (!pending) return;
+    rt.pendingTurnEnd = undefined;
+    const snap = rt.lastContextSnapshot;
+    if (!snap) return;
+    try {
+      const record: TurnUsageRecord = {
+        endedAt: pending.endedAt,
+        durationMs: pending.durationMs,
+        totalProcessedTokens: snap.totalProcessedTokens,
+        outputTokens: snap.outputTokens,
+        cacheReadTokens: snap.cacheReadTokens ?? 0,
+        cacheCreationTokens: snap.cacheCreationTokens ?? 0,
+        costUsd: snap.costUsd,
+        usedTokens: snap.usedTokens,
+        model: snap.model,
+      };
+      rt.usageHistory = [...rt.usageHistory, record];
+      SessionRepo.updateUsageHistory(sessionId, rt.usageHistory);
+      invalidateUsageStats();
+    } catch (err) {
+      log.error(`failed to persist usage history: ${(err as Error).message}`);
+    }
+  }
+
   /** Send a user message to the provider and stream events back. */
   async sendTurn(
     session: Session,
@@ -268,6 +299,11 @@ class RuntimeManager {
 
     const provider = providerRegistry.resolve(session.providerId);
 
+    // A previous turn that ended without any turn-end snapshot (all-zero
+    // usage / abort before result) left its usage-history record pending —
+    // flush it with the last-known snapshot before this turn starts.
+    this.settlePendingTurnEnd(session.id, rt);
+
     // Record turn start time for per-turn usage history persistence.
     rt.turnStartedAt = Date.now();
     // 1-based turn counter for per-turn artifacts (browser screenshot dirs).
@@ -285,23 +321,23 @@ class RuntimeManager {
     // If the session is bound to a custom-model config, decrypt its
     // credentials (main-process only) and pass them through to the provider
     // so the turn runs against the user's endpoint. `session.model` carries
-    // the selected role key (e.g. "sonnet" / "fable"); resolveApiConfig
-    // validates it against the config's bound roles (falling back to the
-    // first bound role if it's been cleared). Cleartext lives only in this
-    // request object for the duration of the turn.
+    // the selected model id (e.g. "deepseek-v4-pro"); resolveApiConfig
+    // validates it against the config's model list (falling back to the first
+    // entry if it's been removed). Cleartext lives only in this request
+    // object for the duration of the turn.
     let apiConfig: StartTurnRequest["apiConfig"];
     // The model id to pass to the SDK `model` option. For a custom config we
-    // deliberately leave this undefined: `session.model` is a ROLE KEY (not a
-    // model id), and buildCustomEnv pins ANTHROPIC_MODEL from the selected
-    // role's requestModel (with the `[1m]` suffix when supports1m). The
-    // binary reads ANTHROPIC_MODEL as its native model-override channel, so
-    // passing --model too would just risk disagreeing with the env var.
+    // deliberately leave this undefined: buildCustomEnv pins
+    // ANTHROPIC_MODEL from the selected model (with the `[1m]` suffix when it
+    // declares 1M context). The binary reads ANTHROPIC_MODEL as its native
+    // model-override channel, so passing --model too would just risk
+    // disagreeing with the env var.
     // For the built-in path it's the session's model unless "default".
     let modelForReq: string | undefined = session.model !== "default" ? session.model : undefined;
     if (session.customModelId) {
       const cfg = CustomModelStore.resolveApiConfig(session.customModelId, session.model);
       if (!cfg) {
-        log.warn(`sendTurn: custom model ${session.customModelId} not found, token undecryptable, or no role bound; falling back to default endpoint`);
+        log.warn(`sendTurn: custom model ${session.customModelId} not found, token undecryptable, or no model configured; falling back to default endpoint`);
       } else {
         // OpenAI-protocol endpoints need an in-process bridge that impersonates
         // Anthropic /v1/messages. We rewrite the apiConfig to point at the

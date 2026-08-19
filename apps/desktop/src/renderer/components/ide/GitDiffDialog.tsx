@@ -162,7 +162,11 @@ export function GitDiffDialog() {
         <Dialog.Backdrop />
         <Dialog.Popup
           className={cn(
-            "flex flex-col p-0",
+            // bg-surface-muted (the left sidebar's color) overrides the Dialog
+            // default bg-surface via twMerge: on the dark theme the default
+            // reads nearly identical to the dimmed app behind the backdrop,
+            // while the muted tone keeps the popup clearly distinguishable.
+            "flex flex-col bg-surface-muted p-0",
             fullscreen
               ? "left-0 top-10 h-[calc(100vh-2.5rem)] w-screen max-w-none translate-x-0 translate-y-0 rounded-none"
               : "h-[85vh] max-h-[900px] w-[90vw] max-w-[1400px]",
@@ -199,14 +203,18 @@ export function GitDiffDialog() {
                 {fullscreen ? <IconMinimize size={15} /> : <IconMaximize size={15} />}
               </button>
             </div>
-            <Dialog.Close />
+            {/* hover:bg-surface-hover overrides Dialog.Close's default
+                bg-surface-muted hover, which is invisible on the muted chrome. */}
+            <Dialog.Close className="hover:bg-surface-hover" />
           </div>
 
           {/* Body: left file-list sidebar + right diff column */}
           <div className="flex min-h-0 flex-1">
             {/* Left sidebar — mirrors Git panel 已暂存 / 更改. Navigation only;
-                no close / delete controls. */}
-            <div className="flex w-[220px] shrink-0 flex-col overflow-y-auto border-r border-edge bg-surface-muted/50 py-1.5">
+                no close / delete controls. bg-surface/50 keeps the recess
+                visible now that the popup chrome is bg-surface-muted (the old
+                muted/50 tint would blend into the identical chrome). */}
+            <div className="flex w-[220px] shrink-0 flex-col overflow-y-auto border-r border-edge bg-surface/50 py-1.5">
               {!sidebarRepoPath ? (
                 <div className="px-2.5 py-2 text-[11px] text-content-subtle">{t("ide.diff.noRepo")}</div>
               ) : statusLoading && !status ? (

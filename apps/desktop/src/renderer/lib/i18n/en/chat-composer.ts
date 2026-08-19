@@ -30,12 +30,7 @@ export const en = {
   "chat.enqueue": "Enqueue",
   "chat.send": "Send",
 
-  // ── composer live-activity strip (running turn) ──
-  "chat.live.waitingModel": "Waiting for model…",
-  "chat.live.thinking": "Thinking…",
-  "chat.live.streaming": "Writing response…",
-  "chat.live.subagentsRunning": "{n} agents running",
-  "chat.live.jumpLatest": "Jump to latest",
+  // ── running turn (jump-to-bottom badge) ──
   "chat.live.newActivity": "{n} new updates",
 
   // ── prompt queue ──

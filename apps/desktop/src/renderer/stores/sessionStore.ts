@@ -16,8 +16,7 @@ import type {
 import type { TurnFileEntry } from "@renderer/lib/turnFiles.js";
 import type { ContentTag } from "@renderer/lib/contentTag.js";
 import { isValidSnapshot } from "@renderer/lib/contextWindow.js";
-import type { CustomModelPublic, CustomModelRoleKey } from "@contracts/customModel";
-import { CUSTOM_MODEL_ROLES } from "@contracts/customModel";
+import type { CustomModelPublic } from "@contracts/customModel";
 import { api } from "@renderer/lib/api.js";
 import { isElectron } from "@renderer/lib/platform.js";
 import { translate } from "@renderer/lib/i18n/core.js";
@@ -443,6 +442,12 @@ export interface SessionState {
    *  bin, which is now grouped by project rather than a flat dump. Only
    *  populated for projects that have ≥1 archived session. */
   archivedSessionsByProject: Record<string, Session[]>;
+  /** Pinned non-archived sessions across ALL projects (most recent pin
+   *  first), hoisted out of their project's active list into the left bar's
+   *  global pinned section ABOVE the project tree. Loaded once at init via
+   *  `session.listPinned` and maintained incrementally by the pin/archive/
+   *  delete mutations and the cross-client `session.changed` reducer. */
+  pinnedSessions: Session[];
   /** Sessions of the active project (derived view; components may read either). */
   sessions: Session[];
   activeSessionId: string | null;
@@ -1692,19 +1697,24 @@ const SESSION_PAGE_SIZE = 5;
  *  very long threads (thousands of rows) stay snappy on first open. */
 const MESSAGE_PAGE_SIZE = 200;
 
-/** Find a session across both the active and archived per-project caches by
- *  id. The archived cache is consulted so that config hydration still finds
- *  a session a user just restored (and so deleted/restored fallbacks don't
- *  miss rows that were moved between caches). */
+/** Find a session across the active per-project caches, the archived bin,
+ *  and the global pinned bucket by id. The archived cache is consulted so
+ *  that config hydration still finds a session a user just restored (and so
+ *  deleted/restored fallbacks don't miss rows that were moved between
+ *  caches); the pinned bucket because pinned rows LEAVE their project's
+ *  active list and live in the global pinned section instead. */
 function findSession(
   sessionsByProject: Record<string, Session[]>,
   archivedByProject: Record<string, Session[]>,
+  pinnedSessions: Session[],
   id: string,
 ): Session | undefined {
   for (const list of Object.values(sessionsByProject)) {
     const hit = list?.find((s) => s.id === id);
     if (hit) return hit;
   }
+  const pinnedHit = pinnedSessions.find((s) => s.id === id);
+  if (pinnedHit) return pinnedHit;
   for (const list of Object.values(archivedByProject)) {
     const hit = list?.find((s) => s.id === id);
     if (hit) return hit;
@@ -1736,21 +1746,80 @@ function patchSessionInCache(
   return { ...byProject, [projectId]: nextList };
 }
 
-/** Keep pinned sessions on top of a project's loaded session window. Stable:
- *  within each group (pinned / unpinned) the incoming order is preserved; the
- *  server already returns this order (`listByProject` orders by pinned_at DESC
- *  then updated_at DESC), so this is a no-op on fresh fetches — it only
- *  matters after local mutations (pin toggle, new session, restore) where a
- *  row must jump into / out of the pinned block without re-fetching. */
-function pinSort(list: Session[]): Session[] {
-  return list.slice().sort((a, b) => {
-    const pa = a.pinnedAt ?? 0;
-    const pb = b.pinnedAt ?? 0;
-    if (pa === pb) return 0; // stable within each group
-    if (pa === 0) return 1; // unpinned after pinned
-    if (pb === 0) return -1;
-    return pb - pa; // pinned: most recent pin first
-  });
+/** Keep the global pinned bucket ordered by pin recency (most recent pin
+ *  first). The server already returns this order (`listPinned` orders by
+ *  pinned_at DESC), so this only matters after local mutations. */
+function sortPinnedByRecency(list: Session[]): Session[] {
+  return list.slice().sort((a, b) => (b.pinnedAt ?? 0) - (a.pinnedAt ?? 0));
+}
+
+/** Insert a session into an unpinned active list at its `updated_at` position
+ *  (server order is updated_at DESC, ties created_at DESC). Used when a
+ *  session returns from the pinned section to its project's loaded window. */
+function insertByActivity(list: Session[], session: Session): Session[] {
+  const i = list.findIndex((x) => x.updatedAt < session.updatedAt);
+  return i === -1 ? [...list, session] : [...list.slice(0, i), session, ...list.slice(i)];
+}
+
+/** In-memory move for a pin toggle (shared by the local action and — via the
+ *  `session.changed` reducer's idempotent echo — other clients' pin toggles):
+ *  the server-fresh row moves between the owning project's active window and
+ *  the global pinned bucket. Pinning takes the row OUT of sessionsByProject
+ *  (totals shrink accordingly); unpinning re-inserts it at its updated_at
+ *  position. If the owning project's window isn't loaded, the active list is
+ *  untouched — loadSessions will fetch the row with the right filters. */
+function applySessionPinnedState(s: SessionState, session: Session): Partial<SessionState> {
+  const patch: Partial<SessionState> = {};
+  const projectId = session.projectId;
+  const isPinned = !session.archived && session.pinnedAt != null;
+
+  // Global pinned bucket — upsert or evict, kept sorted by pin recency.
+  const withoutPinned = s.pinnedSessions.filter((x) => x.id !== session.id);
+  patch.pinnedSessions = isPinned
+    ? sortPinnedByRecency([session, ...withoutPinned])
+    : withoutPinned;
+
+  // Project active window (if loaded).
+  const activeList = s.sessionsByProject[projectId];
+  if (activeList) {
+    let next: Session[];
+    let totalDelta = 0;
+    if (isPinned || session.archived) {
+      // Leaving the active window — pinned rows render in the global pinned
+      // section, archived rows in the bin.
+      next = activeList.filter((x) => x.id !== session.id);
+      if (next.length !== activeList.length) totalDelta = -1;
+    } else if (activeList.some((x) => x.id === session.id)) {
+      next = activeList.map((x) => (x.id === session.id ? { ...x, ...session } : x));
+    } else {
+      next = insertByActivity(activeList, session);
+      totalDelta = 1;
+    }
+    patch.sessionsByProject = { ...s.sessionsByProject, [projectId]: next };
+    if (totalDelta !== 0) {
+      const total = Math.max((s.sessionsTotalByProject[projectId] ?? 0) + totalDelta, 0);
+      patch.sessionsTotalByProject = { ...s.sessionsTotalByProject, [projectId]: total };
+      patch.sessionsHasMoreByProject = {
+        ...s.sessionsHasMoreByProject,
+        [projectId]: total > next.length,
+      };
+    }
+  }
+
+  // Archived bin row (a pinned-then-archived row still lives there) — keep
+  // the cached copy fresh.
+  const archivedList = s.archivedSessionsByProject[projectId];
+  if (archivedList && archivedList.some((x) => x.id === session.id)) {
+    patch.archivedSessionsByProject = {
+      ...s.archivedSessionsByProject,
+      [projectId]: archivedList.map((x) => (x.id === session.id ? { ...x, ...session } : x)),
+    };
+  }
+
+  if (s.activeProjectId === projectId && patch.sessionsByProject) {
+    patch.sessions = patch.sessionsByProject[projectId] ?? s.sessions;
+  }
+  return patch;
 }
 
 /** Materialize a full {@link Session} row from a slim list-sync entry. Heavy
@@ -1777,8 +1846,15 @@ function applySessionDeletedState(s: SessionState, id: string): Partial<SessionS
   // Find which project + cache owns this session.
   let projectId: string | undefined;
   let inArchived = false;
+  let inPinned = false;
   for (const [pid, list] of Object.entries(s.sessionsByProject)) {
     if (list?.some((sess) => sess.id === id)) { projectId = pid; inArchived = false; break; }
+  }
+  // Pinned rows aren't in the per-project caches — they live in the global
+  // pinned bucket, so look there before the archived bin.
+  if (!projectId) {
+    const pinnedRow = s.pinnedSessions.find((sess) => sess.id === id);
+    if (pinnedRow) { projectId = pinnedRow.projectId; inPinned = true; }
   }
   if (!projectId) {
     for (const [pid, list] of Object.entries(s.archivedSessionsByProject)) {
@@ -1786,25 +1862,36 @@ function applySessionDeletedState(s: SessionState, id: string): Partial<SessionS
     }
   }
   if (!projectId) return {};
-  const prevList = (inArchived ? s.archivedSessionsByProject : s.sessionsByProject)[projectId] ?? [];
+  const prevList = inPinned
+    ? s.pinnedSessions
+    : (inArchived ? s.archivedSessionsByProject : s.sessionsByProject)[projectId] ?? [];
   const nextList = prevList.filter((sess) => sess.id !== id);
+  // For a pinned row the project's active window is untouched; all
+  // total/hasMore math below must reference it rather than the pinned bucket.
+  const activeWindowLen = inPinned
+    ? (s.sessionsByProject[projectId]?.length ?? 0)
+    : nextList.length;
   const sessionsByProject = { ...s.sessionsByProject };
   const archivedByProject = { ...s.archivedSessionsByProject };
   // Replace the touched cache. Empty archived cache entries are dropped
   // so the "已归档" bin doesn't render empty project groups.
-  if (inArchived) {
+  if (inPinned) {
+    // Row leaves the pinned bucket only; project caches are untouched.
+  } else if (inArchived) {
     if (nextList.length > 0) archivedByProject[projectId] = nextList;
     else delete archivedByProject[projectId];
   } else {
     sessionsByProject[projectId] = nextList;
   }
-  // Active-thread totals only move when an active (non-archived) row is
-  // deleted; deleting an already-archived row doesn't change the active
-  // count.
-  const totalActive = inArchived
+  // Active-thread totals only move when an active (non-archived,
+  // non-pinned) row is deleted; archived / pinned rows aren't part of the
+  // active count.
+  const totalActive = inArchived || inPinned
     ? (s.sessionsTotalByProject[projectId] ?? 0)
     : Math.max((s.sessionsTotalByProject[projectId] ?? 0) - 1, 0);
-  const hasMoreActive = totalActive > nextList.length;
+  const hasMoreActive = inPinned
+    ? (s.sessionsHasMoreByProject[projectId] ?? false)
+    : totalActive > activeWindowLen;
   // Also drop all per-session buckets for this id. The session is gone
   // for good; no point keeping its messages / running flag / question
   // / approval queue / files in memory.
@@ -1874,6 +1961,7 @@ function applySessionDeletedState(s: SessionState, id: string): Partial<SessionS
     return {
       sessionsByProject,
       archivedSessionsByProject: archivedByProject,
+      ...(inPinned ? { pinnedSessions: nextList } : {}),
       sessionsTotalByProject: { ...s.sessionsTotalByProject, [projectId]: totalActive },
       sessionsHasMoreByProject: { ...s.sessionsHasMoreByProject, [projectId]: hasMoreActive },
     messagesBySession,
@@ -1911,19 +1999,24 @@ function applySessionDeletedState(s: SessionState, id: string): Partial<SessionS
     nextActive = idx > 0 ? openTabs[idx - 1] : openTabs[0];
   }
   const isActiveProject = projectId === s.activeProjectId;
+  // For a pinned row the fallback candidate comes from the project's active
+  // window (unchanged by this delete), not from the pinned bucket.
   const nextInProject = isActiveProject
-    ? nextList.find((sess) => !sess.archived)
+    ? (inPinned ? (s.sessionsByProject[projectId] ?? []) : nextList).find((sess) => !sess.archived)
     : null;
   // If the new active session is the fallback one, sync its config
   // into the global slots so the composer chips show the right
   // model/effort/permission.
   const finalActive = nextActive ?? nextInProject?.id ?? null;
-  const sess = finalActive ? findSession(sessionsByProject, archivedByProject, finalActive) : undefined;
+  const sess = finalActive
+    ? findSession(sessionsByProject, archivedByProject, inPinned ? nextList : s.pinnedSessions, finalActive)
+    : undefined;
   // Clear the new active session's unread badge - it's now visible.
   if (finalActive) delete unreadBySession[finalActive];
   return {
     sessionsByProject,
     archivedSessionsByProject: archivedByProject,
+    ...(inPinned ? { pinnedSessions: nextList } : {}),
     sessionsTotalByProject: { ...s.sessionsTotalByProject, [projectId]: totalActive },
     sessionsHasMoreByProject: { ...s.sessionsHasMoreByProject, [projectId]: hasMoreActive },
     messagesBySession,
@@ -1971,7 +2064,7 @@ function syncConfigFromSession(
   get: () => SessionState,
   sessionId: string,
 ): void {
-  const sess = findSession(get().sessionsByProject, get().archivedSessionsByProject, sessionId);
+  const sess = findSession(get().sessionsByProject, get().archivedSessionsByProject, get().pinnedSessions, sessionId);
   if (!sess) return;
   // Keep activeProjectId in lockstep with the active session's owning project.
   // Without this, switching to a thread in project B while activeProjectId
@@ -2027,7 +2120,7 @@ function syncConfigFromSession(
  *
  *   - pi-sdk   → `piAvailableModels` (dynamic, user-configured) → first id
  *   - claude   → `customModels` (user-configured gateways) → first config's
- *                first bound role (same pick as `setCustomModel`'s fallback)
+ *                first model (same pick as `setCustomModel`'s fallback)
  *   - other    → `capabilities.builtinModels` → first concrete entry
  *                (skipping the "default"/Auto placeholder)
  *
@@ -2048,8 +2141,8 @@ function resolveSendModel(
   }
   if (provider.id === "claude-sdk") {
     for (const cfg of s.customModels) {
-      const role = CUSTOM_MODEL_ROLES.find((r) => cfg.roles[r]?.requestModel?.trim());
-      if (role) return { model: role, customModelId: cfg.id };
+      const first = cfg.models.find((m) => m.id.trim());
+      if (first) return { model: first.id, customModelId: cfg.id };
     }
     return null;
   }
@@ -2100,8 +2193,7 @@ function isValidRememberedModel(
     return (
       !!cfg &&
       !!entry.customModelId &&
-      (CUSTOM_MODEL_ROLES as string[]).includes(entry.model) &&
-      !!cfg.roles[entry.model as CustomModelRoleKey]?.requestModel?.trim()
+      cfg.models.some((m) => m.id === entry.model && m.id.trim())
     );
   }
   return (provider.capabilities.builtinModels ?? []).some((b) => b.id === entry.model);
@@ -2138,13 +2230,13 @@ function validateComposerSelection(
     const ok = s.piAvailableModels.some((m) => m.id === s.model);
     if (!ok) patch = { model: "default", customModelId: null };
   } else if (provider.id === "claude-sdk") {
-    // Valid only when the custom config still exists AND the role is bound.
+    // Valid only when the custom config still exists AND the selected model
+    // is still configured on it.
     const cfg = s.customModels.find((m) => m.id === s.customModelId);
     const ok =
       !!cfg &&
       !!s.customModelId &&
-      (CUSTOM_MODEL_ROLES as string[]).includes(s.model) &&
-      !!cfg.roles[s.model as CustomModelRoleKey]?.requestModel?.trim();
+      cfg.models.some((m) => m.id === s.model && m.id.trim());
     if (!ok) patch = { model: "default", customModelId: null };
   } else {
     const ok = (provider.capabilities.builtinModels ?? []).some((b) => b.id === s.model);
@@ -2181,7 +2273,7 @@ function hydrateContextSnapshot(
   get: () => SessionState,
   sessionId: string,
 ): void {
-  const sess = findSession(get().sessionsByProject, get().archivedSessionsByProject, sessionId);
+  const sess = findSession(get().sessionsByProject, get().archivedSessionsByProject, get().pinnedSessions, sessionId);
   const snapshot = sess?.contextSnapshot;
   if (!snapshot || !isValidSnapshot(snapshot)) {
     // No usable snapshot on the row - leave any existing slot as-is so we
@@ -2232,7 +2324,7 @@ function hydrateCapsule(
   get: () => SessionState,
   sessionId: string,
 ): void {
-  const sess = findSession(get().sessionsByProject, get().archivedSessionsByProject, sessionId);
+  const sess = findSession(get().sessionsByProject, get().archivedSessionsByProject, get().pinnedSessions, sessionId);
   const todos = sess?.todos ?? null;
   const subagents = sess?.subagents ?? null;
   const planDraft = sess?.planDraft ?? null;
@@ -2316,7 +2408,7 @@ function hydrateTurnFiles(
   get: () => SessionState,
   sessionId: string,
 ): void {
-  const sess = findSession(get().sessionsByProject, get().archivedSessionsByProject, sessionId);
+  const sess = findSession(get().sessionsByProject, get().archivedSessionsByProject, get().pinnedSessions, sessionId);
   const turnFiles = sess?.turnFiles ?? null;
   set((s) => {
     const hasValue = !!(turnFiles && Array.isArray(turnFiles) && turnFiles.length > 0);
@@ -2345,7 +2437,7 @@ function hydrateUsageHistory(
   get: () => SessionState,
   sessionId: string,
 ): void {
-  const sess = findSession(get().sessionsByProject, get().archivedSessionsByProject, sessionId);
+  const sess = findSession(get().sessionsByProject, get().archivedSessionsByProject, get().pinnedSessions, sessionId);
   const history = sess?.usageHistory ?? null;
   set((s) => {
     const hasValue = !!(history && Array.isArray(history) && history.length > 0);
@@ -3006,6 +3098,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   sessionsHasMoreByProject: {},
   sessionsTotalByProject: {},
   archivedSessionsByProject: {},
+  pinnedSessions: [],
   gitChangeVersionByRepo: {},
   sessions: [],
   activeSessionId: null,
@@ -3306,11 +3399,13 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       console.error("apply(composerModel) failed:", err);
     }
 
-    // Fetch the project list and chat font size in parallel - both are needed
-    // for the first frame (session tree + chat text size).
-    const [projectListRes, fontRes] = await Promise.allSettled([
+    // Fetch the project list, chat font size, and the global pinned bucket in
+    // parallel - all three are needed for the first frame (session tree + chat
+    // text size + pinned section above the tree).
+    const [projectListRes, fontRes, pinnedRes] = await Promise.allSettled([
       api.project.list(),
       api.setting.get({ key: UI_CHAT_FONT_SIZE_SETTING_KEY }),
+      api.session.listPinned(),
     ]);
 
     // Apply chat font size (best-effort - missing/invalid leaves the default).
@@ -3401,6 +3496,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       sessionsHasMoreByProject: hasMoreByProject,
       sessionsTotalByProject: totalByProject,
       archivedSessionsByProject: archivedByProject,
+      pinnedSessions: pinnedRes.status === "fulfilled" ? pinnedRes.value.sessions : [],
       sessions: byProject[landingProject.id] ?? [],
       activeProjectId: landingProject.id,
       // Auto-expand the active project so its threads are visible on load.
@@ -3704,7 +3800,13 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   selectProject: async (projectId) => {
     const sessions = get().sessionsByProject[projectId] ?? [];
     // Pick the latest non-archived session of this project to land on.
-    const next = sessions.find((s) => !s.archived);
+    // Pinned rows aren't in the project's list (they render in the global
+    // pinned section) — fall back to the project's most recent pinned row
+    // so a project whose threads are ALL pinned still lands on one instead
+    // of the empty state.
+    const next =
+      sessions.find((s) => !s.archived) ??
+      get().pinnedSessions.find((s) => s.projectId === projectId && !s.archived);
     set((s) => ({
       activeProjectId: projectId,
       sessions,
@@ -3809,12 +3911,12 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       const upserted = exists
         ? prevList.map((x) => (x.id === session.id ? { ...x, ...session } : x))
         : [session, ...prevList];
-      // New sessions are never pinned, so they land at the head of the
-      // UNPINNED group (below any pinned sessions) — pinSort keeps that order
-      // stable while floating pinned rows to the top.
+      // New sessions are never pinned — the active list holds unpinned rows
+      // only (pinned ones live in the global pinned bucket), and a new
+      // session is the newest row so it lands at the head.
       const nextByProject = {
         ...s.sessionsByProject,
-        [projectId]: pinSort(upserted),
+        [projectId]: upserted,
       };
       const isactive = projectId === s.activeProjectId;
       const prevTotal = s.sessionsTotalByProject[projectId] ?? 0;
@@ -4046,7 +4148,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       if (nextActive && nextActive !== s.activeSessionId) {
         // Defer to the set body: we can't call syncConfigFromSession
         // here because it uses the same `set`. Inline the same lookup.
-        const sess = findSession(s.sessionsByProject, s.archivedSessionsByProject, nextActive);
+        const sess = findSession(s.sessionsByProject, s.archivedSessionsByProject, s.pinnedSessions, nextActive);
         const unreadBySession = { ...s.unreadBySession };
         delete unreadBySession[nextActive];
         return {
@@ -4204,19 +4306,39 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       const isActiveProject = projectId === s.activeProjectId;
 
       // Pull the row out of whichever cache currently holds it and push the
-      // server-fresh copy into the opposite cache. Ordering is preserved by
-      // inserting at the head then applying pinSort, so a restored session
-      // lands at the top of its pinned / unpinned block as appropriate.
+      // server-fresh copy into the opposite cache. The global pinned bucket
+      // participates too: archiving evicts the row from the pinned section
+      // (pinned rows are active-only; the row stays visible in the bin), and
+      // restoring a still-pinned row sends it back to the pinned section
+      // rather than the project's list (pin survives archive/restore).
       const oldActive = s.sessionsByProject[projectId] ?? [];
       const oldArchived = s.archivedSessionsByProject[projectId] ?? [];
+      // Whether the row sat in this project's active window — only then does
+      // archiving shrink the active total (pinned rows aren't in it).
+      const wasActiveRow = oldActive.some((x) => x.id === id);
       let nextActive: Session[];
       let nextArchived: Session[];
+      let nextPinned = s.pinnedSessions;
       if (archived) {
         nextActive = oldActive.filter((x) => x.id !== id);
         nextArchived = [session, ...oldArchived.filter((x) => x.id !== id)];
+        if (nextPinned.some((x) => x.id === id)) {
+          nextPinned = nextPinned.filter((x) => x.id !== id);
+        }
       } else {
         nextArchived = oldArchived.filter((x) => x.id !== id);
-        nextActive = pinSort([session, ...oldActive.filter((x) => x.id !== id)]);
+        if (session.pinnedAt != null) {
+          nextActive = oldActive.filter((x) => x.id !== id);
+          nextPinned = sortPinnedByRecency([
+            session,
+            ...nextPinned.filter((x) => x.id !== id),
+          ]);
+        } else {
+          nextActive = [session, ...oldActive.filter((x) => x.id !== id)];
+          if (nextPinned.some((x) => x.id !== id)) {
+            nextPinned = nextPinned.filter((x) => x.id !== id);
+          }
+        }
       }
       const sessionsByProject = { ...s.sessionsByProject, [projectId]: nextActive };
       const archivedByProject = { ...s.archivedSessionsByProject };
@@ -4225,10 +4347,16 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       } else {
         delete archivedByProject[projectId];
       }
-      // Keep the active-thread totals in lockstep with the cache move. The
-      // archive cache isn't paginated, so no hasMore/total tracking needed
-      // there.
-      const totalActive = (s.sessionsTotalByProject[projectId] ?? 0) + (archived ? -1 : 1);
+      // Keep the active-thread totals in lockstep with the cache move. Only
+      // rows that actually sat in the active window (or now return to it)
+      // move the count — a pinned row isn't part of the project list, so
+      // archiving/restoring it leaves the total alone. The archive cache
+      // isn't paginated, so no hasMore/total tracking needed there.
+      const totalActive = Math.max(
+        (s.sessionsTotalByProject[projectId] ?? 0) +
+          (archived ? (wasActiveRow ? -1 : 0) : session.pinnedAt != null ? 0 : 1),
+        0,
+      );
       const hasMoreActive = totalActive > nextActive.length;
 
       // Archived sessions shouldn't stay open in the tab strip — the user
@@ -4240,6 +4368,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         return {
           sessionsByProject,
           archivedSessionsByProject: archivedByProject,
+          pinnedSessions: nextPinned,
           sessionsTotalByProject: { ...s.sessionsTotalByProject, [projectId]: Math.max(totalActive, 0) },
           sessionsHasMoreByProject: { ...s.sessionsHasMoreByProject, [projectId]: hasMoreActive },
           sessions: isActiveProject ? nextActive : s.sessions,
@@ -4255,7 +4384,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         nextActiveId = idx > 0 ? openTabs[idx - 1] : openTabs[0];
       }
       const sess = nextActiveId
-        ? findSession(sessionsByProject, archivedByProject, nextActiveId)
+        ? findSession(sessionsByProject, archivedByProject, nextPinned, nextActiveId)
         : undefined;
       // Clear the new active session's unread badge - it's now visible.
       const unreadBySession = { ...s.unreadBySession };
@@ -4263,6 +4392,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       return {
         sessionsByProject,
         archivedSessionsByProject: archivedByProject,
+        pinnedSessions: nextPinned,
         sessionsTotalByProject: { ...s.sessionsTotalByProject, [projectId]: Math.max(totalActive, 0) },
         sessionsHasMoreByProject: { ...s.sessionsHasMoreByProject, [projectId]: hasMoreActive },
         sessions: nextActive,
@@ -4298,41 +4428,23 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         const next = patchRow(archivedSessionsByProject[projectId]);
         if (next) archivedSessionsByProject[projectId] = next;
       }
+      const pinnedSessions = patchRow(s.pinnedSessions) ?? s.pinnedSessions;
       // The `sessions` alias mirrors the active project's list; refresh it in
       // case the renamed session lives in the active project (title chip etc.).
       const sessions = s.activeProjectId === projectId
         ? (sessionsByProject[projectId] ?? s.sessions)
         : s.sessions;
-      return { sessionsByProject, archivedSessionsByProject, sessions };
+      return { sessionsByProject, archivedSessionsByProject, pinnedSessions, sessions };
     });
   },
 
   setSessionPinned: async (id, pinned) => {
     const { session } = await api.session.pin({ id, pinned });
-    set((s) => {
-      const projectId = session.projectId;
-      // Replace the row in whichever cache holds it (active page or archived
-      // bin) with the server-fresh copy, then re-sort the active list so the
-      // just-pinned/unpinned row lands in the right block immediately.
-      const patchRow = (list: Session[] | undefined) =>
-        list && list.some((x) => x.id === id)
-          ? list.map((x) => (x.id === id ? session : x))
-          : list;
-      const sessionsByProject = { ...s.sessionsByProject };
-      if (sessionsByProject[projectId]) {
-        const next = patchRow(sessionsByProject[projectId]);
-        if (next) sessionsByProject[projectId] = pinSort(next);
-      }
-      const archivedSessionsByProject = { ...s.archivedSessionsByProject };
-      if (archivedSessionsByProject[projectId]) {
-        const next = patchRow(archivedSessionsByProject[projectId]);
-        if (next) archivedSessionsByProject[projectId] = next;
-      }
-      const sessions = s.activeProjectId === projectId
-        ? (sessionsByProject[projectId] ?? s.sessions)
-        : s.sessions;
-      return { sessionsByProject, archivedSessionsByProject, sessions };
-    });
+    // Pinning MOVES the row: out of the project's active window and into the
+    // global pinned section above the project tree (unpinning moves it back).
+    // The shared state builder also runs for the cross-client
+    // `session.changed` echo, so this stays idempotent.
+    set((s) => applySessionPinnedState(s, session));
   },
 
   applySessionTitleUpdate: (sessionId, title) => {
@@ -4346,6 +4458,12 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           break;
         }
       }
+      // Pinned rows live in the global pinned bucket — their owning project
+      // comes from the row itself.
+      const pinnedRow = projectId
+        ? undefined
+        : s.pinnedSessions.find((x) => x.id === sessionId);
+      if (!projectId && pinnedRow) projectId = pinnedRow.projectId;
       if (!projectId) {
         for (const pid of Object.keys(s.archivedSessionsByProject)) {
           if (s.archivedSessionsByProject[pid]?.some((x) => x.id === sessionId)) {
@@ -4372,10 +4490,11 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         const next = patchRow(archivedSessionsByProject[projectId]);
         if (next) archivedSessionsByProject[projectId] = next;
       }
+      const pinnedSessions = patchRow(s.pinnedSessions) ?? s.pinnedSessions;
       const sessions = s.activeProjectId === projectId
         ? (sessionsByProject[projectId] ?? s.sessions)
         : s.sessions;
-      return { sessionsByProject, archivedSessionsByProject, sessions };
+      return { sessionsByProject, archivedSessionsByProject, pinnedSessions, sessions };
     });
   },
 
@@ -4924,12 +5043,29 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       set((s) => {
         const patch: Partial<SessionState> = {};
         let touched = false;
+        // Global pinned bucket — upsert while the changed row is pinned AND
+        // active, evict otherwise (unpinned / archived). Maintained regardless
+        // of whether the owning project's window is loaded, since the pinned
+        // section is global. This is the echo path for remote pin toggles;
+        // local toggles also end here after applySessionPinnedState (no-op).
+        const inPinned = s.pinnedSessions.some((x) => x.id === entry.id);
+        const shouldBePinned = !entry.archived && entry.pinnedAt != null;
+        if (shouldBePinned) {
+          patch.pinnedSessions = inPinned
+            ? s.pinnedSessions.map((x) => (x.id === entry.id ? { ...x, ...entry } : x))
+            : sortPinnedByRecency([materializeSessionEntry(entry), ...s.pinnedSessions]);
+          touched = true;
+        } else if (inPinned) {
+          patch.pinnedSessions = s.pinnedSessions.filter((x) => x.id !== entry.id);
+          touched = true;
+        }
         const activeList = s.sessionsByProject[entry.projectId];
         if (activeList) {
           const exists = activeList.some((x) => x.id === entry.id);
           let next: Session[];
-          if (entry.archived) {
-            // Moved into the archived bin (possibly by a remote client) —
+          if (entry.archived || entry.pinnedAt != null) {
+            // Left the active window — archived (moved to the bin) or pinned
+            // (moved to the global pinned section above the project tree);
             // drop it from the active window; totals shrink accordingly.
             next = activeList.filter((x) => x.id !== entry.id);
             if (next.length !== activeList.length) {
@@ -4955,7 +5091,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
               [entry.projectId]: (s.sessionsTotalByProject[entry.projectId] ?? 0) + 1,
             };
           }
-          patch.sessionsByProject = { ...s.sessionsByProject, [entry.projectId]: pinSort(next) };
+          patch.sessionsByProject = { ...s.sessionsByProject, [entry.projectId]: next };
           touched = true;
         }
         const archivedList = s.archivedSessionsByProject[entry.projectId];
@@ -5155,11 +5291,19 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         // Keep the in-memory session row cache in sync. Only touch the list
         // entry actually found (no-op if this session isn't in the cache, e.g.
         // archived / not yet loaded).
-        const cached = findSession(s.sessionsByProject, s.archivedSessionsByProject, sid);
+        const cached = findSession(s.sessionsByProject, s.archivedSessionsByProject, s.pinnedSessions, sid);
         if (cached && cached.contextSnapshot !== e.snapshot) {
           patch.sessionsByProject = patchSessionInCache(
             s.sessionsByProject, cached.projectId, sid, { contextSnapshot: e.snapshot },
           );
+          // Pinned rows live in the global pinned bucket, not the per-project
+          // list — mirror the snapshot there too.
+          const pinnedIdx = s.pinnedSessions.findIndex((x) => x.id === sid);
+          if (pinnedIdx !== -1) {
+            patch.pinnedSessions = s.pinnedSessions.map((x, i) =>
+              i === pinnedIdx ? { ...x, contextSnapshot: e.snapshot } : x,
+            );
+          }
         }
         return patch;
       });
@@ -6199,26 +6343,24 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     }
   },
 
-  /** Pick a built-in model or one of a custom-config's roles. Both
-   *  `customModelId` and `model` (the role key) are part of the session's
+  /** Pick a built-in model or one of a custom-config's models. Both
+   *  `customModelId` and `model` (the model id) are part of the session's
    *  persisted config, so a single updateSettings patch covers the change. */
-  setCustomModel: (id, roleArg) => {
+  setCustomModel: (id, modelArg) => {
     set((s) => {
       let nextModel: string;
       if (!id) {
         nextModel = "default";
-      } else if (roleArg) {
-        // Caller picked a specific role (e.g. "sonnet"); trust it.
-        nextModel = roleArg;
+      } else if (modelArg) {
+        // Caller picked a specific model (e.g. "deepseek-v4-pro"); trust it.
+        nextModel = modelArg;
       } else {
-        // No role given — fall back to the config's first bound role so the
-        // chip/dropdown shows something meaningful. If none is bound (shouldn't
-        // happen for a saved config), fall back to "default".
+        // No model given — fall back to the config's first model so the
+        // chip/dropdown shows something meaningful. If none is configured
+        // (shouldn't happen for a saved config), fall back to "default".
         const cfg = s.customModels.find((m) => m.id === id);
-        const firstBound = cfg
-          ? (CUSTOM_MODEL_ROLES.find((r) => cfg.roles[r]?.requestModel?.trim()) ?? "default")
-          : "default";
-        nextModel = firstBound;
+        const first = cfg?.models.find((m) => m.id.trim())?.id ?? "default";
+        nextModel = first;
       }
       return {
         customModelId: id,
@@ -6229,7 +6371,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         },
       };
     });
-    // Persist the new binding + role to the session row. We compute the
+    // Persist the new binding + model to the session row. We compute the
     // resolved model from the same logic as above (re-read post-set to be
     // sure) and send both fields in one patch.
     const sessionId = get().activeSessionId;
@@ -6258,13 +6400,13 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   setProvider: (id) => {
     // Always update the "next session" slot — new threads inherit this.
     // When switching to a *different* provider: model ids live in
-    // per-provider namespaces (claude uses role/alias keys like "sonnet"; pi
-    // uses "provider/modelId" strings), so a leftover value would either
-    // render as a raw id in the chip or point at a model the new provider
-    // can't resolve. Instead of snapping to "default", remember the outgoing
-    // provider's selection (so switching back restores it) and re-apply the
-    // target provider's last remembered model — dropped back to "default"
-    // when the remembered model has since been deleted.
+    // per-provider namespaces (claude uses gateway model ids like
+    // "deepseek-v4-pro"; pi uses "provider/modelId" strings), so a leftover
+    // value would either render as a raw id in the chip or point at a model
+    // the new provider can't resolve. Instead of snapping to "default",
+    // remember the outgoing provider's selection (so switching back restores
+    // it) and re-apply the target provider's last remembered model — dropped
+    // back to "default" when the remembered model has since been deleted.
     // customModelId is a claude-only concept (gateway configs), so it must be
     // cleared on any switch away.
     const prevProviderId = get().providerId;
@@ -6303,7 +6445,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     const bucket = get().messagesBySession[sid];
     if (bucket && bucket.length > 0) return;
 
-    const sess = findSession(get().sessionsByProject, get().archivedSessionsByProject, sid);
+    const sess = findSession(get().sessionsByProject, get().archivedSessionsByProject, get().pinnedSessions, sid);
     if (!sess || sess.providerId === id) return;
     const projectId = sess.projectId;
 

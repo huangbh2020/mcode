@@ -247,14 +247,21 @@ function ActiveThreadTitle() {
   // trip zustand's "snapshot should be cached" check (Object.is sees a
   // new ref every render → infinite loop). title and providerId are read
   // independently so each returns a primitive (or undefined) that's stable.
+  // `s.sessions` mirrors the ACTIVE project's list, which no longer holds
+  // pinned rows (they render in the global pinned section above the project
+  // tree) — the pinned bucket is the fallback lookup for those.
   const title = useSessionStore((s) => {
     if (!s.activeSessionId) return null;
-    const sess = s.sessions.find((x) => x.id === s.activeSessionId);
+    const sess =
+      s.sessions.find((x) => x.id === s.activeSessionId) ??
+      s.pinnedSessions.find((x) => x.id === s.activeSessionId);
     return sess?.title ?? null;
   });
   const providerId = useSessionStore((s) => {
     if (!s.activeSessionId) return null;
-    const sess = s.sessions.find((x) => x.id === s.activeSessionId);
+    const sess =
+      s.sessions.find((x) => x.id === s.activeSessionId) ??
+      s.pinnedSessions.find((x) => x.id === s.activeSessionId);
     return sess?.providerId ?? null;
   });
   if (!title) return null;

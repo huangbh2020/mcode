@@ -23,7 +23,7 @@
  *    reorder, and the settings / locate / theme rail (settings already
  *    lives in the mobile top bar and MobileSettingsSheet).
  */
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import type { ReactNode } from "react";
 import { cn } from "@renderer/lib/cn.js";
@@ -31,6 +31,7 @@ import { api } from "@renderer/lib/api.js";
 import { getProviderIcon } from "@renderer/lib/providerIcon.js";
 import { formatRelativeTime } from "@renderer/lib/time.js";
 import { useSessionStore } from "@renderer/stores/sessionStore.js";
+import { useI18n } from "@renderer/lib/i18n/index.js";
 import { Input } from "@renderer/components/ui/index.js";
 import type { Project, Session } from "@contracts/session";
 import {
@@ -74,6 +75,7 @@ export function MobileSessionDrawer({
   const sessionsHasMoreByProject = useSessionStore((s) => s.sessionsHasMoreByProject);
   const sessionsTotalByProject = useSessionStore((s) => s.sessionsTotalByProject);
   const archivedSessionsByProject = useSessionStore((s) => s.archivedSessionsByProject);
+  const pinnedSessions = useSessionStore((s) => s.pinnedSessions);
   const expandedProjects = useSessionStore((s) => s.expandedProjects);
   const runningBySession = useSessionStore((s) => s.runningBySession);
   const unreadBySession = useSessionStore((s) => s.unreadBySession);
@@ -91,6 +93,16 @@ export function MobileSessionDrawer({
   const { mounted, entered } = useEnterExit(open, 200);
 
   const [sheet, setSheet] = useState<SheetTarget | null>(null);
+  // Expand state for the pinned section (in-memory, defaults open). The rest
+  // of this drawer's copy is still hardcoded zh (pre-i18n surface); the new
+  // section's label goes through the dictionary so it isn't MORE hardcoded.
+  const [pinnedOpen, setPinnedOpen] = useState(true);
+  const { t } = useI18n();
+  // Project id → name lookup for the pinned section's owner hints.
+  const projectNameById = useMemo(
+    () => new Map(projects.map((p) => [p.id, p.name])),
+    [projects],
+  );
   const [renaming, setRenaming] = useState<Session | null>(null);
   // Two-tap delete arm inside the sheet; reset whenever the sheet changes.
   const [armDelete, setArmDelete] = useState(false);
@@ -179,13 +191,14 @@ export function MobileSessionDrawer({
 
   if (!mounted) return null;
 
-  const renderSessionRow = (s: Session) => (
+  const renderSessionRow = (s: Session, projectLabel?: string) => (
     <SessionRow
       key={s.id}
       session={s}
       active={s.id === activeSessionId}
       isRunning={!!runningBySession[s.id]}
       unreadCount={unreadBySession[s.id] ?? 0}
+      projectLabel={projectLabel}
       onPick={() => pickSession(s)}
       onMore={() => openSheet({ kind: "session", session: s })}
     />
@@ -282,6 +295,32 @@ export function MobileSessionDrawer({
             </div>
           ) : (
             <>
+              {/* Pinned — global section above the project list; pinned rows
+                  leave their project's list (same model as the desktop left
+                  bar), so without this they'd be invisible on mobile. */}
+              {pinnedSessions.length > 0 && (
+                <section className="mb-2">
+                  <button
+                    type="button"
+                    onClick={() => setPinnedOpen(!pinnedOpen)}
+                    className="flex min-h-[40px] w-full items-center gap-1.5 rounded-lg px-3 text-xs font-medium uppercase tracking-wide text-content-subtle active:bg-surface-muted"
+                  >
+                    <IconChevronRight
+                      size={14}
+                      className={cn("shrink-0 transition-transform", pinnedOpen && "rotate-90")}
+                    />
+                    <IconPin size={12} className="shrink-0 text-accent/70" />
+                    {t("layout.pinnedSection", { n: pinnedSessions.length })}
+                  </button>
+                  {pinnedOpen && (
+                    <ul>
+                      {pinnedSessions.map((s) =>
+                        renderSessionRow(s, projectNameById.get(s.projectId)),
+                      )}
+                    </ul>
+                  )}
+                </section>
+              )}
               {activeProjects.map((p) => {
                 const sessions = sessionsByProject[p.id] ?? [];
                 const total = sessionsTotalByProject[p.id] ?? sessions.length;
@@ -716,6 +755,7 @@ function SessionRow({
   active,
   isRunning,
   unreadCount,
+  projectLabel,
   onPick,
   onMore,
 }: {
@@ -723,6 +763,9 @@ function SessionRow({
   active: boolean;
   isRunning: boolean;
   unreadCount: number;
+  /** Owning project name — pinned-section rows only (rows inside a project's
+   *  own list don't need the redundant hint). */
+  projectLabel?: string;
   onPick: () => void;
   onMore: () => void;
 }) {
@@ -745,6 +788,7 @@ function SessionRow({
             <span className="truncate text-sm text-content">{session.title}</span>
           </span>
           <span className="text-xs leading-none text-content-subtle">
+            {projectLabel && <span className="text-content-subtle/80">{projectLabel} · </span>}
             {formatRelativeTime(session.updatedAt)}
           </span>
         </span>

@@ -36,12 +36,7 @@ export const zh = {
   "chat.enqueue": "加入队列",
   "chat.send": "发送",
 
-  // ── composer live-activity strip (running turn) ──
-  "chat.live.waitingModel": "等待模型响应…",
-  "chat.live.thinking": "思考中…",
-  "chat.live.streaming": "正在撰写回复…",
-  "chat.live.subagentsRunning": "{n} 个代理运行中",
-  "chat.live.jumpLatest": "回到底部",
+  // ── running turn (jump-to-bottom badge) ──
   "chat.live.newActivity": "{n} 条新动态",
 
   // ── prompt queue ──

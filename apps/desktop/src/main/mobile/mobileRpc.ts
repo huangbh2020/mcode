@@ -367,6 +367,8 @@ const HANDLERS: Record<string, RpcHandler> = {
     return { session };
   },
 
+  "session:listPinned": () => ({ sessions: SessionRepo.listPinned() }),
+
   "session:archive": (raw) => {
     const input = ArchiveSessionSchema.parse(raw);
     SessionRepo.setArchived(input.id, input.archived);

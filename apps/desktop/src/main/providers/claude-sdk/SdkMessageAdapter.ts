@@ -125,6 +125,14 @@ function readStr(v: unknown): string {
  *  field, and future agent-ish kinds shouldn't be hidden). */
 const NON_AGENT_TASK_TYPES = new Set(["local_bash", "local_workflow"]);
 
+/** How long the turn-end snapshot (emitTurnEndSnapshot) waits for the
+ *  `getContextUsage()` control channel (path B) before falling back to
+ *  path C. First-party CLI answers arrive in milliseconds; third-party
+ *  gateways have been observed answering after 17-36s with garbage values
+ *  (the plausibility gate discards them anyway) — waiting that long only
+ *  stalls the snapshot publish. 3s cleanly separates the two. */
+const CONTEXT_USAGE_PATH_B_TIMEOUT_MS = 3_000;
+
 function safeJsonParse<T>(s: string): T | undefined {
   try {
     return JSON.parse(s) as T;
@@ -293,10 +301,11 @@ interface AdapterState {
    *  arrives (covers rejection / interruption). Drives `plan.update` emit. */
   inPlanMode: boolean;
   /** In-flight `Query.getContextUsage()` promise kicked off at the last
-   *  `handleAssistant` (while the CLI process is still alive). Awaited at
-   *  turn-end in `emitTurnEndSnapshot` so we can read the authoritative
-   *  context-window occupancy before the generator closes. If the promise
-   *  rejects (e.g. Query already closed) we fall back to path C. */
+   *  `handleAssistant` (while the CLI process is still alive). Raced against
+   *  CONTEXT_USAGE_PATH_B_TIMEOUT_MS at turn-end in `emitTurnEndSnapshot`
+   *  (which itself runs OFF the turn's critical path) to read the
+   *  authoritative context-window occupancy; on timeout or rejection (e.g.
+   *  Query already closed) we fall back to path C. */
   pendingContextUsage?: Promise<unknown> | null;
   /** Diagnostic: how many SDK assistant messages this turn has produced so
    *  far. Logged at the getContextUsage kickoff so we can correlate the
@@ -902,10 +911,13 @@ export class SdkMessageAdapter {
 
     // Path B kickoff: fire off `Query.getContextUsage()` now while the CLI
     // process is still alive (during assistant-message processing). The result
-    // is awaited at turn-end (emitTurnEndSnapshot). This is critical: calling
-    // getContextUsage() only at result-time fails with "Query closed before
-    // response received" because the generator is already tearing down. We
-    // don't await here - just kick it off and let it resolve in the background.
+    // is raced against a short timeout at turn-end (emitTurnEndSnapshot),
+    // which itself runs off the turn's critical path (fire-and-forget from
+    // handleResult — it must never delay turn.done). This is critical:
+    // calling getContextUsage() only at result-time fails with "Query closed
+    // before response received" because the generator is already tearing
+    // down. We don't await here - just kick it off and let it resolve in the
+    // background.
     if (this.query && !this.state.pendingContextUsage) {
       // Diagnostic: log when the control channel fires relative to the turn's
       // assistant-message stream, plus the last path-A occupancy. Lets us
@@ -1305,7 +1317,20 @@ const costUsd = m.total_cost_usd ?? (muCost > 0 ? muCost : undefined);
 	      // Try path B (control channel) first. If it succeeds, merge with
 	      // accumulated throughput. If it fails or is unavailable, fall back
 	      // to path C (path-A merge).
-	      await this.emitTurnEndSnapshot(accumulatedRaw, model, reportedWindow, lastKnown);
+	      //
+	      // Fire-and-forget — the snapshot must NOT sit on the turn's
+	      // critical path. Awaited here it stalled turn.done (which comes
+	      // from flushFinal once the generator closes) for the full
+	      // getContextUsage() latency, observed 17-36s on third-party
+	      // gateways: the model had finished, but the UI kept spinning.
+	      // turn.done now fires immediately; the context ring updates a
+	      // moment later (≤ CONTEXT_USAGE_PATH_B_TIMEOUT_MS when path B is
+	      // slow/unavailable).
+	      void this.emitTurnEndSnapshot(accumulatedRaw, model, reportedWindow, lastKnown).catch((err) => {
+	        this.ctx.log.warn(
+	          `context-usage turn-end snapshot failed: ${(err as Error).message}`,
+	        );
+	      });
 
       // Permission denials
       for (const d of m.permission_denials ?? []) {
@@ -1392,10 +1417,13 @@ const costUsd = m.total_cost_usd ?? (muCost > 0 ? muCost : undefined);
     } satisfies ContextUsageEvent);
   }
 
-/** Emit the turn-end context-usage snapshot. Awaits the `getContextUsage()`
-   *  promise kicked off at the last `handleAssistant` (path B) for authoritative
-   *  window occupancy; falls back to path C (accumulated result.usage merged
-   *  with path A's last known window read) if path B never fired or rejected. */
+/** Emit the turn-end context-usage snapshot. Runs OFF the turn's critical
+   *  path — handleResult fires it and returns immediately, so turn.done (from
+   *  flushFinal) is never delayed. Races the `getContextUsage()` promise
+   *  kicked off at the last `handleAssistant` (path B) against
+   *  CONTEXT_USAGE_PATH_B_TIMEOUT_MS for authoritative window occupancy;
+   *  falls back to path C (accumulated result.usage merged with path A's
+   *  last known window read) if path B never fired, timed out, or rejected. */
   private async emitTurnEndSnapshot(
     accumulatedRaw: RawClaudeUsage,
     model: string | undefined,
@@ -1404,56 +1432,75 @@ const costUsd = m.total_cost_usd ?? (muCost > 0 ? muCost : undefined);
   ): Promise<void> {
     // Path B: control channel. The most authoritative source for window
     // occupancy - the CLI reports the live context-window size directly. We
-    // await the promise kicked off at handleAssistant time (before the
-    // generator started tearing down).
+    // race the promise kicked off at handleAssistant time (before the
+    // generator started tearing down) against a short timeout.
     const pending = this.state.pendingContextUsage;
     this.state.pendingContextUsage = null; // one-shot
     if (pending) {
       try {
-        const cc = await pending as Awaited<ReturnType<Query["getContextUsage"]>>;
-        // Diagnostic: raw control-channel values vs the accumulated usage
-        // (billing) and the last path-A occupancy. `cc.totalTokens` far below
-        // `accInput` means the CLI's context tracker missed the conversation
-        // (gateway models) — the ring then shows garbage occupancy.
-        this.ctx.log.info(
-          `context-usage pathB: cc=${JSON.stringify({
-            totalTokens: cc.totalTokens,
-            maxTokens: cc.maxTokens,
-            percentage: cc.percentage,
-            model: cc.model,
-          })} accInput=${accumulatedRaw.inputTokens ?? 0} ` +
-            `accProcessed=${totalProcessedTokensFromRawUsage(accumulatedRaw)} ` +
-            `assistantMsgs=${this.state.assistantMessageCount} ` +
-            `deltaUsage=${this.state.streamDeltaUsageCount} ` +
-            `lastKnownUsed=${lastKnown?.usedTokens ?? "none"}`,
-        );
-        // Plausibility gate: on third-party gateways the CLI's control channel
-        // often returns a grossly undercounted occupancy (observed ~0.2%-1.6%
-        // of the real prompt; e.g. 1,814 vs 677,944 input tokens on multi-call
-        // turns), which would render a ghost "0%" ring. Cross-check against the
-        // accumulated result.usage — a totalTokens below 10% of the real input
-        // is treated as untrusted and we fall through to path C (path-A merge).
-        // Single-call turns report exactly (`totalTokens == accInput`), so the
-        // gate never fires there. Post-compaction the occupancy may legitimately
-        // shrink below 10% of the cumulative input, but path C's merge uses the
-        // last known snapshot (post-compact value), so the result stays correct.
-        const accInput = accumulatedRaw.inputTokens ?? 0;
-        const plausible = accInput <= 0 || cc.totalTokens >= accInput * 0.1;
-        if (plausible) {
-          const accumulated = normalizeClaudeTokenUsage(
-            accumulatedRaw,
-            { reported: reportedWindow, lastKnown: this.state.lastKnownContextWindow, configured: this.configured },
-          );
-          if (accumulated) {
-            const snapshot = buildSnapshotFromControlChannel(cc, accumulated);
-            this.publishTokenUsageSnapshot(snapshot);
-            return;
-          }
-        } else {
+        // Race the control channel against a short timeout. First-party CLI
+        // answers arrive in milliseconds; third-party gateways have been
+        // observed answering after 17-36s with garbage values (which the
+        // plausibility gate below discards anyway). This snapshot already
+        // runs off the turn's critical path, but a 36s-late publish could
+        // land mid-next-turn and regress the ring — so on timeout we drop
+        // the late answer and fall through to path C.
+        void pending.catch(() => {}); // a late rejection must not surface as unhandled
+        const cc = await Promise.race([
+          pending,
+          new Promise<null>((resolve) => {
+            setTimeout(() => resolve(null), CONTEXT_USAGE_PATH_B_TIMEOUT_MS).unref();
+          }),
+        ]) as Awaited<ReturnType<Query["getContextUsage"]>> | null;
+        if (!cc) {
           this.ctx.log.warn(
-            `context-usage pathB implausible: totalTokens=${cc.totalTokens} vs accInput=${accInput} ` +
-              `(${((cc.totalTokens / accInput) * 100).toFixed(1)}%), falling back to path C`,
+            `getContextUsage timed out after ${CONTEXT_USAGE_PATH_B_TIMEOUT_MS}ms, falling back to path C`,
           );
+        } else {
+          // Diagnostic: raw control-channel values vs the accumulated usage
+          // (billing) and the last path-A occupancy. `cc.totalTokens` far below
+          // `accInput` means the CLI's context tracker missed the conversation
+          // (gateway models) — the ring then shows garbage occupancy.
+          this.ctx.log.info(
+            `context-usage pathB: cc=${JSON.stringify({
+              totalTokens: cc.totalTokens,
+              maxTokens: cc.maxTokens,
+              percentage: cc.percentage,
+              model: cc.model,
+            })} accInput=${accumulatedRaw.inputTokens ?? 0} ` +
+              `accProcessed=${totalProcessedTokensFromRawUsage(accumulatedRaw)} ` +
+              `assistantMsgs=${this.state.assistantMessageCount} ` +
+              `deltaUsage=${this.state.streamDeltaUsageCount} ` +
+              `lastKnownUsed=${lastKnown?.usedTokens ?? "none"}`,
+          );
+          // Plausibility gate: on third-party gateways the CLI's control channel
+          // often returns a grossly undercounted occupancy (observed ~0.2%-1.6%
+          // of the real prompt; e.g. 1,814 vs 677,944 input tokens on multi-call
+          // turns), which would render a ghost "0%" ring. Cross-check against the
+          // accumulated result.usage — a totalTokens below 10% of the real input
+          // is treated as untrusted and we fall through to path C (path-A merge).
+          // Single-call turns report exactly (`totalTokens == accInput`), so the
+          // gate never fires there. Post-compaction the occupancy may legitimately
+          // shrink below 10% of the cumulative input, but path C's merge uses the
+          // last known snapshot (post-compact value), so the result stays correct.
+          const accInput = accumulatedRaw.inputTokens ?? 0;
+          const plausible = accInput <= 0 || cc.totalTokens >= accInput * 0.1;
+          if (plausible) {
+            const accumulated = normalizeClaudeTokenUsage(
+              accumulatedRaw,
+              { reported: reportedWindow, lastKnown: this.state.lastKnownContextWindow, configured: this.configured },
+            );
+            if (accumulated) {
+              const snapshot = buildSnapshotFromControlChannel(cc, accumulated);
+              this.publishTokenUsageSnapshot(snapshot);
+              return;
+            }
+          } else {
+            this.ctx.log.warn(
+              `context-usage pathB implausible: totalTokens=${cc.totalTokens} vs accInput=${accInput} ` +
+                `(${((cc.totalTokens / accInput) * 100).toFixed(1)}%), falling back to path C`,
+            );
+          }
         }
       } catch (err) {
         this.ctx.log.warn(

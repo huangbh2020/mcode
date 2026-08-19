@@ -65,6 +65,8 @@ const api = {
       ipcRenderer.invoke(IPC.SESSION_RENAME, input)) as RpcMap["session.rename"],
     pin: ((input) =>
       ipcRenderer.invoke(IPC.SESSION_PIN, input)) as RpcMap["session.pin"],
+    listPinned: (() =>
+      ipcRenderer.invoke(IPC.SESSION_LIST_PINNED)) as RpcMap["session.listPinned"],
   },
   setting: {
     get: ((input) =>
@@ -103,16 +105,6 @@ const api = {
     /** Settings UI eye-icon only — returns cleartext token for display. */
     getToken: ((input) =>
       ipcRenderer.invoke(IPC.CUSTOM_MODEL_GET_TOKEN, input)) as RpcMap["customModel.getToken"],
-  },
-
-  /** Endpoint presets — credential-free endpoint templates shared across
-   *  providers (claude customModel / pi models.json). No secrets involved. */
-  endpointPreset: {
-    list: (() => ipcRenderer.invoke(IPC.ENDPOINT_PRESET_LIST)) as RpcMap["endpointPreset.list"],
-    save: ((input) =>
-      ipcRenderer.invoke(IPC.ENDPOINT_PRESET_SAVE, input)) as RpcMap["endpointPreset.save"],
-    delete: ((input) =>
-      ipcRenderer.invoke(IPC.ENDPOINT_PRESET_DELETE, input)) as RpcMap["endpointPreset.delete"],
   },
 
   /** Pi models visual editor — reads/writes ~/.pi/agent/models.json.

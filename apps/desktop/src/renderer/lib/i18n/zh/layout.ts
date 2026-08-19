@@ -26,6 +26,7 @@ export const zh = {
   "layout.loadMore": "加载更多",
   "layout.loadMoreRemaining": "（还有 {n} 条）",
   "layout.pinned": "已置顶",
+  "layout.pinnedSection": "置顶 ({n})",
   "layout.pin": "置顶",
   "layout.unpin": "取消置顶",
   "layout.archive": "归档",

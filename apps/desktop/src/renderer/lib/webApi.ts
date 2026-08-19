@@ -395,6 +395,7 @@ const session: Api["session"] = {
   archive: (input) => rpc("session:archive", input),
   rename: (input) => rpc("session:rename", input),
   pin: (input) => rpc("session:pin", input),
+  listPinned: () => rpc("session:listPinned"),
 };
 
 const provider: Api["provider"] = {

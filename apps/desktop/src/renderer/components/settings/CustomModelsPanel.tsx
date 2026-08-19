@@ -16,26 +16,18 @@ import {
   IconCheck,
   IconKey,
   IconHash,
-  IconBookmark,
   IconBrandOpenai,
   IconAdjustmentsHorizontal,
   IconCircleOff,
   IconArrowsExchange,
 } from "@renderer/lib/icons.js";
 import { SiClaude, SiGoogle } from "@renderer/lib/icons.js";
-import {
-  CUSTOM_MODEL_ROLES,
-  CUSTOM_MODEL_ROLE_LABELS,
-} from "@contracts/customModel";
 import type {
   CustomModelPublic,
+  CustomModelEntry,
   AuthMode,
   Protocol,
-  RoleBindings,
-  RoleBinding,
-  CustomModelRoleKey,
 } from "@contracts/customModel";
-import type { EndpointPresetPublic } from "@contracts/endpointPreset";
 import { PanelHeader } from "./PanelHeader.js";
 import {
   PI_KNOWN_APIS,
@@ -51,14 +43,16 @@ import {
 /**
  * Unified model-config panel — the single "模型配置" settings surface.
  *
- * Both provider families live on ONE page and share a left list + right form
- * layout, distinguished by a type badge:
+ * Claude and Pi each get their own TAB at the top; within a tab the page is a
+ * left provider list + right form:
  *   - Claude (Anthropic-compatible gateways, encrypted-token customModel store)
  *   - Pi     (writes ~/.pi/agent/models.json, encrypted apiKey in settings map)
  *
  * Selecting an item loads a family-specific form (ClaudeProviderForm /
- * PiProviderForm) on the right. "+ Claude 端点" / "+ Pi Provider" at the list
- * foot create transient new entries that promote on save / discard on cancel.
+ * PiProviderForm) on the right. The "+ Claude 端点" / "+ Pi Provider" button
+ * at the list foot (of the matching tab) creates a transient new entry that
+ * promotes on save / discards on cancel. Switching tabs discards any open
+ * form/draft, same as the add buttons.
  *
  * Credential viewing: Token / API Key fields default to masked (password). An
  * eye-icon button fetches the cleartext via customModel.getToken /
@@ -202,6 +196,12 @@ type TestState =
   | { status: "ok"; detail: string }
   | { status: "fail"; error: string };
 
+interface ClaudeModelFormState {
+  /** Gateway-side model id, e.g. "deepseek-v4-pro". */
+  id: string;
+  supports1m: boolean;
+}
+
 interface ClaudeFormState {
   id?: string;
   name: string;
@@ -209,10 +209,16 @@ interface ClaudeFormState {
   authMode: AuthMode;
   protocol: Protocol;
   authToken: string;
-  roles: RoleBindings;
-  testRole: CustomModelRoleKey;
+  /** Flat model list — mirrors the Pi form's models array. */
+  models: ClaudeModelFormState[];
+  /** Index of the model row the "测试连接" button probes. */
+  testIdx: number;
   disableNonEssentialTraffic: boolean;
   timeoutMs: string;
+}
+
+function emptyClaudeModel(): ClaudeModelFormState {
+  return { id: "", supports1m: false };
 }
 
 function emptyClaudeForm(): ClaudeFormState {
@@ -222,8 +228,8 @@ function emptyClaudeForm(): ClaudeFormState {
     authMode: "auth_token",
     protocol: "anthropic",
     authToken: "",
-    roles: {},
-    testRole: "sonnet",
+    models: [],
+    testIdx: 0,
     disableNonEssentialTraffic: true,
     timeoutMs: "",
   };
@@ -237,9 +243,8 @@ function claudeFormFromConfig(m: CustomModelPublic): ClaudeFormState {
     authMode: m.authMode,
     protocol: m.protocol,
     authToken: "",
-    roles: { ...m.roles },
-    testRole:
-      (CUSTOM_MODEL_ROLES.find((r) => m.roles[r]?.requestModel?.trim()) as CustomModelRoleKey | undefined) ?? "sonnet",
+    models: m.models.map((e) => ({ id: e.id, supports1m: Boolean(e.supports1m) })),
+    testIdx: 0,
     disableNonEssentialTraffic: m.disableNonEssentialTraffic ?? true,
     timeoutMs: m.timeoutMs ? String(m.timeoutMs) : "",
   };
@@ -376,8 +381,9 @@ function piConfigFromForm(form: PiFormState): PiProviderConfig {
 
 /* ════════════════════════ unified list ════════════════════════ */
 
+type Family = "claude" | "pi";
 type Selection = { kind: "claude"; id: string | "new" } | { kind: "pi"; id: string | "new" } | null;
-type ListItem = { kind: "claude" | "pi"; id: string; name: string; sub: string };
+type ListItem = { kind: Family; id: string; name: string; sub: string };
 
 /* ════════════════════════ main panel ════════════════════════ */
 
@@ -386,6 +392,7 @@ export function CustomModelsPanel() {
   const customModels = useSessionStore((s) => s.customModels);
   const reloadCustomModels = useSessionStore((s) => s.reloadCustomModels);
 
+  const [tab, setTab] = useState<Family>("claude");
   const [piProviders, setPiProviders] = useState<Record<string, PiProviderPublic>>({});
   const [selection, setSelection] = useState<Selection>(null);
   const [claudeForm, setClaudeForm] = useState<ClaudeFormState | null>(null);
@@ -394,9 +401,6 @@ export function CustomModelsPanel() {
   const [error, setError] = useState<string | null>(null);
   const [test, setTest] = useState<TestState>({ status: "idle" });
   const [pendingDelete, setPendingDelete] = useState<Selection & { id: string } | null>(null);
-  const [presets, setPresets] = useState<EndpointPresetPublic[]>([]);
-  const [showPresetForm, setShowPresetForm] = useState(false);
-  const [presetDraft, setPresetDraft] = useState({ name: "", baseUrl: "", authMode: "auth_token" as AuthMode });
 
   const reloadPi = async () => {
     try {
@@ -409,27 +413,12 @@ export function CustomModelsPanel() {
 
   useEffect(() => {
     void reloadPi();
-    void api.endpointPreset
-      .list()
-      .then(({ presets }) => setPresets(presets))
-      .catch((err) => console.error("endpointPreset.list failed:", err));
   }, []);
 
   const listItems = useMemo<ListItem[]>(() => {
-    const items: ListItem[] = customModels.map((m) => {
-      const bound = CUSTOM_MODEL_ROLES.filter((r) => m.roles[r]?.requestModel?.trim()).length;
-      return {
-        kind: "claude",
-        id: m.id,
-        name: m.name,
-        sub: bound > 0
-          ? `${t("settings.customModels.roleCount", { n: bound })} · ${m.authMode === "api_key" ? "x-api-key" : "Bearer"}`
-          : t("settings.customModels.noRoles"),
-      };
-    });
-    for (const [name, cfg] of Object.entries(piProviders)) {
-      items.push({
-        kind: "pi",
+    if (tab !== "claude") {
+      return Object.entries(piProviders).map(([name, cfg]) => ({
+        kind: "pi" as const,
         id: name,
         name,
         sub: [
@@ -441,10 +430,20 @@ export function CustomModelsPanel() {
             ? t("settings.customModels.keyConfigured")
             : t("settings.customModels.keyNotConfigured"),
         ].join(" · "),
-      });
+      }));
     }
-    return items;
-  }, [customModels, piProviders, t]);
+    return customModels.map((m) => {
+      const count = m.models.filter((e) => e.id.trim()).length;
+      return {
+        kind: "claude" as const,
+        id: m.id,
+        name: m.name,
+        sub: count > 0
+          ? `${t("settings.customModels.modelCount", { n: count })} · ${m.authMode === "api_key" ? "x-api-key" : "Bearer"}`
+          : t("settings.customModels.noModels"),
+      };
+    });
+  }, [tab, customModels, piProviders, t]);
 
   const isSelected = (item: ListItem) =>
     selection?.kind === item.kind && selection.id === item.id;
@@ -485,6 +484,15 @@ export function CustomModelsPanel() {
     setError(null);
   };
 
+  /** Switch the Claude/Pi tab. A form (or unsaved draft) open in the OTHER
+   *  tab can't keep rendering here, so it's discarded — same semantics as
+   *  the per-tab "新增" buttons, which also reset the transient draft. */
+  const switchTab = (next: Family) => {
+    if (next === tab) return;
+    setTab(next);
+    cancel();
+  };
+
   /** Fetch cleartext credential for the currently-open form. New mode returns
    *  the form value (already plaintext in the field); edit mode calls IPC. */
   const revealToken = async (): Promise<string | null> => {
@@ -497,63 +505,23 @@ export function CustomModelsPanel() {
     return (await api.piModels.getApiKey({ name: selection.id })).apiKey;
   };
 
-  /** Apply a preset's baseUrl (+ authMode for claude) to the open form. */
-  const applyPreset = (presetId: string) => {
-    const preset = presets.find((p) => p.id === presetId);
-    if (!preset) return;
-    if (selection?.kind === "claude") {
-      setClaudeForm((f) => (f ? { ...f, baseUrl: preset.baseUrl, authMode: preset.authMode } : f));
-    } else if (selection?.kind === "pi") {
-      setPiForm((f) => (f ? { ...f, baseUrl: preset.baseUrl } : f));
-    }
-    setTest({ status: "idle" });
-  };
-
-  const savePreset = async () => {
-    if (!presetDraft.name.trim() || !presetDraft.baseUrl.trim()) return;
-    try {
-      const { presets: next } = await api.endpointPreset.save({
-        name: presetDraft.name,
-        baseUrl: presetDraft.baseUrl,
-        authMode: presetDraft.authMode,
-      });
-      setPresets(next);
-      setPresetDraft({ name: "", baseUrl: "", authMode: "auth_token" });
-      setShowPresetForm(false);
-    } catch (err) {
-      console.error("endpointPreset.save failed:", err);
-    }
-  };
-  const deletePreset = async (id: string) => {
-    try {
-      const { presets: next } = await api.endpointPreset.delete({ id });
-      setPresets(next);
-    } catch (err) {
-      console.error("endpointPreset.delete failed:", err);
-    }
-  };
-
   const saveClaude = async () => {
     if (!claudeForm) return;
-    const roles: RoleBindings = {};
-    let anyBound = false;
-    for (const role of CUSTOM_MODEL_ROLES) {
-      const b = claudeForm.roles[role];
-      const requestModel = b?.requestModel?.trim();
-      if (!requestModel) continue;
-      anyBound = true;
-      const cleaned: RoleBinding = { requestModel };
-      const dn = b?.displayName?.trim();
-      if (dn) cleaned.displayName = dn;
-      if (b?.supports1m) cleaned.supports1m = true;
-      roles[role] = cleaned;
+    // Trim + dedupe: the same id twice in one config is always a typo.
+    const seen = new Set<string>();
+    const models: CustomModelEntry[] = [];
+    for (const m of claudeForm.models) {
+      const id = m.id.trim();
+      if (!id || seen.has(id)) continue;
+      seen.add(id);
+      models.push(m.supports1m ? { id, supports1m: true } : { id });
     }
     if (!claudeForm.name.trim() || !claudeForm.baseUrl.trim()) {
       setError(t("settings.customModels.errNameBaseUrl"));
       return;
     }
-    if (!anyBound) {
-      setError(t("settings.customModels.errNeedRole"));
+    if (models.length === 0) {
+      setError(t("settings.customModels.errNeedModel"));
       return;
     }
     if (!claudeForm.id && !claudeForm.authToken.trim()) {
@@ -575,7 +543,7 @@ export function CustomModelsPanel() {
         authMode: claudeForm.authMode,
         protocol: claudeForm.protocol,
         authToken: claudeForm.authToken.trim() || undefined,
-        roles,
+        models,
         disableNonEssentialTraffic: claudeForm.disableNonEssentialTraffic,
         timeoutMs,
       });
@@ -599,15 +567,10 @@ export function CustomModelsPanel() {
       setError(t("settings.customModels.errTimeout"));
       return;
     }
-    const binding = claudeForm.roles[claudeForm.testRole];
-    const model = binding?.requestModel?.trim() ?? "";
+    const entry = claudeForm.models[Math.min(claudeForm.testIdx, claudeForm.models.length - 1)];
+    const model = entry?.id.trim() ?? "";
     if (!claudeForm.baseUrl.trim() || !model) {
-      setTest({
-        status: "fail",
-        error: t("settings.customModels.errTestFields", {
-          role: CUSTOM_MODEL_ROLE_LABELS[claudeForm.testRole],
-        }),
-      });
+      setTest({ status: "fail", error: t("settings.customModels.errTestFields") });
       return;
     }
     if (!claudeForm.authToken.trim()) {
@@ -628,7 +591,7 @@ export function CustomModelsPanel() {
         authMode: claudeForm.authMode,
         protocol: claudeForm.protocol,
         model,
-        supports1m: binding?.supports1m ?? false,
+        supports1m: entry?.supports1m ?? false,
         disableNonEssentialTraffic: claudeForm.disableNonEssentialTraffic,
         timeoutMs,
       });
@@ -703,8 +666,30 @@ export function CustomModelsPanel() {
         desc={t("settings.customModels.desc")}
       />
 
+      {/* ───────── Claude / Pi family tabs ───────── */}
+      <div className="mb-3 flex w-fit items-center gap-0.5 rounded-lg border border-edge bg-surface/40 p-0.5">
+        {(["claude", "pi"] as const).map((k) => {
+          const count = k === "claude" ? customModels.length : Object.keys(piProviders).length;
+          return (
+            <button
+              key={k}
+              type="button"
+              onClick={() => switchTab(k)}
+              className={cn(
+                "flex items-center gap-1.5 rounded-md px-3 py-1 text-[0.7857em] font-medium transition-colors",
+                tab === k ? "bg-surface-hover text-content" : "text-content-muted hover:text-content",
+              )}
+            >
+              {k === "claude" ? <SiClaude size={13} className={tab === k ? "text-accent" : "text-content-subtle"} /> : null}
+              {k === "claude" ? "Claude" : "Pi"}
+              <span className="tabular-nums text-[0.8571em] text-content-subtle">{count}</span>
+            </button>
+          );
+        })}
+      </div>
+
       <div className="grid min-h-0 flex-1 grid-cols-[210px_1fr] gap-4">
-        {/* ───────── Left: unified provider list ───────── */}
+        {/* ───────── Left: provider list (family of the active tab) ───────── */}
         <aside className="flex min-h-0 flex-col rounded-md border border-edge bg-surface/40">
           <div className="flex items-center justify-between px-2.5 py-2 text-[0.7143em] font-medium uppercase tracking-wide text-content-subtle">
             <span>{t("settings.customModels.providers")}</span>
@@ -713,10 +698,9 @@ export function CustomModelsPanel() {
           <nav className="min-h-0 flex-1 space-y-0.5 overflow-y-auto px-1.5 pb-1.5">
             {listItems.map((item) => {
               const active = isSelected(item);
-              const isPi = item.kind === "pi";
               return (
                 <button
-                  key={`${item.kind}:${item.id}`}
+                  key={item.id}
                   onClick={() =>
                     item.kind === "claude"
                       ? startEditClaude(customModels.find((m) => m.id === item.id)!)
@@ -728,90 +712,33 @@ export function CustomModelsPanel() {
                   )}
                 >
                   {active && <span className="absolute left-0 top-1/2 h-4 w-0.5 -translate-y-1/2 rounded-full bg-accent" />}
-                  <div className="flex items-center gap-1.5">
-                    <span
-                      className={cn(
-                        "shrink-0 rounded px-1 py-px text-[0.6428em] font-medium",
-                        isPi ? "bg-accent/15 text-accent" : "bg-surface-muted text-content-muted",
-                      )}
-                    >
-                      {isPi ? "Pi" : "Claude"}
-                    </span>
-                    <span className="min-w-0 flex-1 truncate text-[0.7857em] font-medium text-content">{item.name}</span>
-                  </div>
+                  <div className="truncate text-[0.7857em] font-medium text-content">{item.name}</div>
                   <div className="mt-0.5 truncate pl-0.5 text-[0.7143em] text-content-subtle">{item.sub}</div>
                 </button>
               );
             })}
-            {selection?.id === "new" && (
+            {selection?.id === "new" && selection.kind === tab && (
               <div className="relative block w-full rounded border border-dashed border-accent/60 bg-accent/5 px-2.5 py-1.5 text-left text-[0.7857em] italic text-accent">
                 <span className="absolute left-0 top-1/2 h-4 w-0.5 -translate-y-1/2 rounded-full bg-accent" />
-                {t(selection.kind === "pi" ? "settings.customModels.newPi" : "settings.customModels.newClaude")}
+                {t(tab === "pi" ? "settings.customModels.newPi" : "settings.customModels.newClaude")}
               </div>
             )}
-            {listItems.length === 0 && selection?.id !== "new" && (
+            {listItems.length === 0 && !(selection?.id === "new" && selection.kind === tab) && (
               <div className="px-2 py-4 text-center text-[0.7143em] leading-relaxed text-content-subtle">
                 {t("settings.customModels.emptyProviders")}
               </div>
             )}
           </nav>
-          <div className="space-y-1 border-t border-edge p-1.5">
-            <Button variant="outline" size="sm" onClick={startNewClaude} disabled={selection?.id === "new"} className="w-full justify-center gap-1">
-              <IconPlus size={12} /> {t("settings.customModels.addClaude")}
-            </Button>
-            <Button variant="outline" size="sm" onClick={startNewPi} disabled={selection?.id === "new"} className="w-full justify-center gap-1">
-              <IconPlus size={12} /> {t("settings.customModels.addPi")}
-            </Button>
-          </div>
-
-          {/* ───── Endpoint presets (credential-free, shared) ───── */}
-          <div className="border-t border-edge/60 p-2">
-            <div className="mb-1 flex items-center justify-between">
-              <span className="text-[0.7143em] font-medium uppercase tracking-wide text-content-subtle">{t("settings.customModels.presetsTitle")}</span>
-              <button type="button" onClick={() => setShowPresetForm((v) => !v)} className="text-[0.7143em] text-accent hover:text-accent/80">
-                {showPresetForm ? t("settings.customModels.collapse") : t("settings.customModels.add")}
-              </button>
-            </div>
-            {showPresetForm && (
-              <div className="mb-1.5 space-y-1">
-                <Input value={presetDraft.name} onChange={(e) => setPresetDraft((d) => ({ ...d, name: e.target.value }))} placeholder={t("settings.customModels.presetNamePlaceholder")} />
-                <Input value={presetDraft.baseUrl} onChange={(e) => setPresetDraft((d) => ({ ...d, baseUrl: e.target.value }))} placeholder="https://api.deepseek.com" />
-                <div className="flex gap-1">
-                  <Select.Root value={presetDraft.authMode} onValueChange={(v) => setPresetDraft((d) => ({ ...d, authMode: v as AuthMode }))}>
-                    <Select.Trigger className="flex-1">
-                      <Select.Value>
-                        {(val: AuthMode) => {
-                          const o = AUTH_MODE_OPTIONS.find((x) => x.value === val) ?? AUTH_MODE_OPTIONS[0];
-                          return <span className="flex items-center gap-1.5">{o.icon}{o.label}</span>;
-                        }}
-                      </Select.Value>
-                    </Select.Trigger>
-                    <Select.Portal><Select.Positioner><Select.Popup><Select.List>
-                      {AUTH_MODE_OPTIONS.map((o) => (
-                        <Select.Item key={o.value} value={o.value}>
-                          {o.icon}
-                          <Select.ItemText>{o.label}</Select.ItemText>
-                        </Select.Item>
-                      ))}
-                    </Select.List></Select.Popup></Select.Positioner></Select.Portal>
-                  </Select.Root>
-                  <Button variant="primary" size="sm" onClick={() => void savePreset()} disabled={!presetDraft.name.trim() || !presetDraft.baseUrl.trim()}>
-                    {t("common.save")}
-                  </Button>
-                </div>
-              </div>
+          <div className="border-t border-edge p-1.5">
+            {tab === "claude" ? (
+              <Button variant="outline" size="sm" onClick={startNewClaude} disabled={selection?.id === "new"} className="w-full justify-center gap-1">
+                <IconPlus size={12} /> {t("settings.customModels.addClaude")}
+              </Button>
+            ) : (
+              <Button variant="outline" size="sm" onClick={startNewPi} disabled={selection?.id === "new"} className="w-full justify-center gap-1">
+                <IconPlus size={12} /> {t("settings.customModels.addPi")}
+              </Button>
             )}
-            <ul className="space-y-0.5">
-              {presets.map((p) => (
-                <li key={p.id} className="group flex items-center gap-1 rounded px-1 py-0.5 text-[0.7143em] text-content-muted">
-                  <span className="min-w-0 flex-1 truncate" title={`${p.baseUrl} (${p.authMode})`}>{p.name}</span>
-                  <button type="button" onClick={() => void deletePreset(p.id)} className="shrink-0 text-content-subtle opacity-0 transition-opacity hover:text-danger group-hover:opacity-100" title={t("settings.customModels.deletePreset")}>
-                    <IconTrash size={11} />
-                  </button>
-                </li>
-              ))}
-              {presets.length === 0 && !showPresetForm && <li className="text-[0.7143em] text-content-subtle">{t("settings.customModels.noPresets")}</li>}
-            </ul>
           </div>
         </aside>
 
@@ -825,8 +752,6 @@ export function CustomModelsPanel() {
               test={test}
               saving={saving}
               error={error}
-              presets={presets}
-              applyPreset={applyPreset}
               revealToken={revealToken}
               onTest={() => void runClaudeTest()}
               onSave={() => void saveClaude()}
@@ -840,8 +765,6 @@ export function CustomModelsPanel() {
               setForm={setPiForm}
               saving={saving}
               error={error}
-              presets={presets}
-              applyPreset={applyPreset}
               revealToken={revealToken}
               isEdit={selection.id !== "new"}
               onSave={() => void savePi()}
@@ -903,8 +826,6 @@ function ClaudeProviderForm({
   test,
   saving,
   error,
-  presets,
-  applyPreset,
   revealToken,
   onTest,
   onSave,
@@ -916,8 +837,6 @@ function ClaudeProviderForm({
   test: TestState;
   saving: boolean;
   error: string | null;
-  presets: EndpointPresetPublic[];
-  applyPreset: (id: string) => void;
   revealToken: () => Promise<string | null>;
   onTest: () => void;
   onSave: () => void;
@@ -932,22 +851,15 @@ function ClaudeProviderForm({
   const update = <K extends keyof ClaudeFormState>(key: K, value: ClaudeFormState[K]) =>
     setForm({ ...form, [key]: value });
 
-  const updateRole = (role: CustomModelRoleKey, patch: Partial<RoleBinding>) => {
-    const current = form.roles[role] ?? {};
-    const merged: RoleBinding = { ...current, ...patch };
-    const cleaned: RoleBinding = {};
-    if (merged.displayName) cleaned.displayName = merged.displayName;
-    if (merged.requestModel) cleaned.requestModel = merged.requestModel;
-    if (merged.supports1m) cleaned.supports1m = merged.supports1m;
-    setForm({ ...form, roles: { ...form.roles, [role]: Object.keys(cleaned).length > 0 ? cleaned : undefined } });
-  };
-
-  const fillAllRoles = () => {
-    const src = form.roles[form.testRole]?.requestModel?.trim();
-    if (!src) return;
-    const filled: RoleBindings = {};
-    for (const r of CUSTOM_MODEL_ROLES) filled[r] = { requestModel: src };
-    update("roles", filled);
+  const updateModel = (idx: number, patch: Partial<ClaudeModelFormState>) =>
+    setForm({ ...form, models: form.models.map((m, i) => (i === idx ? { ...m, ...patch } : m)) });
+  const addModel = () => setForm({ ...form, models: [...form.models, emptyClaudeModel()] });
+  const removeModel = (idx: number) => {
+    setForm({
+      ...form,
+      models: form.models.filter((_, i) => i !== idx),
+      testIdx: Math.max(0, Math.min(form.testIdx >= idx ? form.testIdx - 1 : form.testIdx, form.models.length - 2)),
+    });
   };
 
   return (
@@ -981,24 +893,6 @@ function ClaudeProviderForm({
       <Field label={t("settings.customModels.nameLabel")}>
         <Input value={form.name} onChange={(e) => update("name", e.target.value)} placeholder={t("settings.customModels.namePlaceholder")} />
       </Field>
-
-      {presets.length > 0 && (
-        <Field label={t("settings.customModels.importPreset")}>
-          <Select.Root value="" onValueChange={(v) => { const id = String(v); if (id) applyPreset(id); }}>
-            <Select.Trigger className="w-full">
-              <Select.Value placeholder={<span className="flex items-center gap-1.5"><IconBookmark size={14} className="text-content-muted" />{t("settings.customModels.importPresetPlaceholderClaude")}</span>} />
-            </Select.Trigger>
-            <Select.Portal><Select.Positioner><Select.Popup><Select.List>
-              {presets.map((p) => (
-                <Select.Item key={p.id} value={p.id}>
-                  <IconBookmark size={14} className="text-content-muted" />
-                  <Select.ItemText>{p.name} · {p.baseUrl}</Select.ItemText>
-                </Select.Item>
-              ))}
-            </Select.List></Select.Popup></Select.Positioner></Select.Portal>
-          </Select.Root>
-        </Field>
-      )}
 
       <Field label="Base URL">
         <Input value={form.baseUrl} onChange={(e) => update("baseUrl", e.target.value)} placeholder={isOpenAi ? "https://api.openai.com/v1" : "https://api.deepseek.com/anthropic"} />
@@ -1035,32 +929,35 @@ function ClaudeProviderForm({
         </Field>
       </div>
 
-      {/* Role-binding table */}
+      {/* Models sub-list — flat rows mirroring the Pi form: model id + 1M
+          toggle + delete, plus a radio dot picking which row the connection
+          test probes. */}
       <div>
-        <div className="mb-1 flex items-baseline justify-between">
-          <span className="text-[0.7857em] font-medium text-content-muted">{t("settings.customModels.rolesTitle")}</span>
-          {isOpenAi && (
-            <button type="button" onClick={fillAllRoles} className="text-[0.7143em] text-accent hover:text-accent/80">
-              {t("settings.customModels.fillAll")}
-            </button>
-          )}
+        <div className="mb-1 flex items-center justify-between">
+          <span className="text-[0.7857em] font-medium text-content-muted">
+            {t("settings.customModels.modelListTitle", { n: form.models.filter((m) => m.id.trim()).length })}
+          </span>
+          <button type="button" onClick={addModel} className="flex items-center gap-1 text-[0.7857em] text-accent hover:text-accent/80">
+            <IconPlus size={11} /> {t("settings.customModels.addModel")}
+          </button>
         </div>
-        <p className="mb-1.5 text-[0.7143em] leading-relaxed text-content-subtle">
-          {t("settings.customModels.rolesHint")}
-        </p>
-        <div className="overflow-hidden rounded border border-edge">
-          <div className="grid grid-cols-[20px_56px_1fr_1fr_44px] items-center gap-1.5 border-b border-edge bg-surface-muted px-1.5 py-1 text-[0.6428em] font-medium uppercase tracking-wide text-content-subtle">
-            <span /><span>{t("settings.customModels.colRole")}</span><span>{t("settings.customModels.colDisplayName")}</span><span>{t("settings.customModels.colRequestModel")}</span><span className="text-center">1M</span>
-          </div>
-          {CUSTOM_MODEL_ROLES.map((role) => {
-            const binding = form.roles[role] ?? {};
-            const isTest = form.testRole === role;
+        {form.models.length === 0 && (
+          <p className="rounded border border-dashed border-edge px-2 py-3 text-center text-[0.7143em] text-content-subtle">
+            {t("settings.customModels.modelsEmpty")}
+          </p>
+        )}
+        <div className="space-y-1.5">
+          {form.models.map((m, idx) => {
+            const isTest = form.testIdx === idx;
             return (
-              <div key={role} className="grid grid-cols-[20px_56px_1fr_1fr_44px] items-center gap-1.5 border-b border-edge px-1.5 py-1 last:border-b-0">
+              <div
+                key={idx}
+                className="grid grid-cols-[20px_1fr_auto_auto] items-center gap-1.5 rounded border border-edge bg-surface/40 px-1.5 py-1"
+              >
                 <Tooltip.Root>
                   <Tooltip.Trigger
                     type="button"
-                    onClick={() => update("testRole", role)}
+                    onClick={() => update("testIdx", idx)}
                     className={cn(
                       "flex h-3.5 w-3.5 items-center justify-center rounded-full text-[0.6428em] outline-none",
                       isTest ? "bg-accent text-surface" : "bg-surface-hover text-content-subtle hover:bg-surface-muted",
@@ -1068,14 +965,21 @@ function ClaudeProviderForm({
                   >
                     <IconCheck size={8} className={isTest ? "opacity-100" : "opacity-0"} />
                   </Tooltip.Trigger>
-                  <Tooltip.Portal><Tooltip.Positioner side="top"><Tooltip.Popup>{t("settings.customModels.testWithRole", { role: CUSTOM_MODEL_ROLE_LABELS[role] })}</Tooltip.Popup></Tooltip.Positioner></Tooltip.Portal>
+                  <Tooltip.Portal><Tooltip.Positioner side="top"><Tooltip.Popup>{t("settings.customModels.testWithModel")}</Tooltip.Popup></Tooltip.Positioner></Tooltip.Portal>
                 </Tooltip.Root>
-                <span className="text-[0.7857em] font-medium text-content">{CUSTOM_MODEL_ROLE_LABELS[role]}</span>
-                <Input value={binding.displayName ?? ""} onChange={(e) => updateRole(role, { displayName: e.target.value || undefined })} placeholder={t("settings.customModels.optionalPlaceholder")} />
-                <Input value={binding.requestModel ?? ""} onChange={(e) => updateRole(role, { requestModel: e.target.value || undefined })} placeholder={role === "subagent" ? t("settings.customModels.roleHintSubagent") : ROLE_PLACEHOLDERS[role]} />
-                <div className="flex justify-center">
-                  <Switch checked={Boolean(binding.supports1m)} onCheckedChange={(v) => updateRole(role, { supports1m: v || undefined })} label={t("settings.customModels.supports1mLabel")} />
-                </div>
+                <Input
+                  value={m.id}
+                  onChange={(e) => updateModel(idx, { id: e.target.value })}
+                  placeholder={t("settings.customModels.modelIdPlaceholder")}
+                  spellCheck={false}
+                />
+                <label className="flex items-center gap-1 justify-self-center" title={t("settings.customModels.supports1mLabel")}>
+                  <Switch checked={m.supports1m} onCheckedChange={(v) => updateModel(idx, { supports1m: v })} label={t("settings.customModels.supports1mLabel")} />
+                  <span className="text-[0.6428em] text-content-muted">1M</span>
+                </label>
+                <Button variant="ghost" size="icon" onClick={() => removeModel(idx)} title={t("settings.customModels.deleteModel")}>
+                  <IconTrash size={12} />
+                </Button>
               </div>
             );
           })}
@@ -1112,7 +1016,7 @@ function ClaudeProviderForm({
         testInfo={
           <span className="truncate text-[0.7143em] text-content-subtle">
             {t("settings.customModels.testInfoPrefix")}
-            {CUSTOM_MODEL_ROLE_LABELS[form.testRole]} · {form.roles[form.testRole]?.requestModel?.trim() || t("settings.customModels.testModelEmpty")}
+            {form.models[Math.min(form.testIdx, form.models.length - 1)]?.id.trim() || t("settings.customModels.testModelEmpty")}
           </span>
         }
         testStatus={test}
@@ -1126,17 +1030,6 @@ function ClaudeProviderForm({
   );
 }
 
-/** Placeholder examples for the per-role "request model" inputs. The
- *  "subagent" role's hint is localized, so it's rendered via
- *  settings.customModels.roleHintSubagent at the call site instead. */
-const ROLE_PLACEHOLDERS: Record<CustomModelRoleKey, string> = {
-  haiku: "deepseek-v4-flash",
-  sonnet: "deepseek-v4-pro",
-  opus: "deepseek-v4-pro-max",
-  fable: "claude-fable-5",
-  subagent: "",
-};
-
 /* ════════════════════════ Pi provider form ════════════════════════ */
 
 function PiProviderForm({
@@ -1144,8 +1037,6 @@ function PiProviderForm({
   setForm,
   saving,
   error,
-  presets,
-  applyPreset,
   revealToken,
   isEdit,
   onSave,
@@ -1156,8 +1047,6 @@ function PiProviderForm({
   setForm: (f: PiFormState | null) => void;
   saving: boolean;
   error: string | null;
-  presets: EndpointPresetPublic[];
-  applyPreset: (id: string) => void;
   revealToken: () => Promise<string | null>;
   isEdit: boolean;
   onSave: () => void;
@@ -1175,24 +1064,6 @@ function PiProviderForm({
 
   return (
     <div className="space-y-2.5">
-      {presets.length > 0 && (
-        <Field label={t("settings.customModels.importPreset")}>
-          <Select.Root value="" onValueChange={(v) => { const id = String(v); if (id) applyPreset(id); }}>
-            <Select.Trigger className="w-full">
-              <Select.Value placeholder={<span className="flex items-center gap-1.5"><IconBookmark size={14} className="text-content-muted" />{t("settings.customModels.importPresetPlaceholderPi")}</span>} />
-            </Select.Trigger>
-            <Select.Portal><Select.Positioner><Select.Popup><Select.List>
-              {presets.map((p) => (
-                <Select.Item key={p.id} value={p.id}>
-                  <IconBookmark size={14} className="text-content-muted" />
-                  <Select.ItemText>{p.name} · {p.baseUrl}</Select.ItemText>
-                </Select.Item>
-              ))}
-            </Select.List></Select.Popup></Select.Positioner></Select.Portal>
-          </Select.Root>
-        </Field>
-      )}
-
       <div className="grid grid-cols-2 gap-2">
         <Field label={t("settings.customModels.providerNameLabel")}>
           <Input value={form.name} onChange={(e) => update("name", e.target.value)} placeholder="deepseek" />

@@ -215,8 +215,9 @@ export type AnthropicSseEvent =
   | { type: "message_stop" };
 
 /** The upstream endpoint the bridge forwards to. Extracted from an ApiConfig —
- *  only the fields the bridge needs; everything else (roles, selectedRole,
- *  non-essential-traffic flags) is for the Claude binary's env, not the bridge. */
+ *  only the fields the bridge needs; everything else (model list, selected
+ *  model, non-essential-traffic flags) is for the Claude binary's env, not
+ *  the bridge. */
 export interface UpstreamConfig {
   baseUrl: string;
   authToken: string;

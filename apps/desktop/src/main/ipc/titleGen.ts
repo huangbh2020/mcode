@@ -8,7 +8,7 @@
  *
  * Mirrors the one-shot `query()` pattern from `git.ts:generateCommitMessage`:
  *  - 60s abort timeout, `maxTurns: 1`
- *  - optional custom-model resolution via `resolveModelForGitOp` (shared with
+ *  - custom-model resolution via `resolveModelForGitOp` (shared with
  *    the git ops), so OpenAI-protocol configs get their bridge activated too
  *  - fixed system prompt guarantees a clean, short, punctuation-free title
  *
@@ -58,8 +58,9 @@ export async function generateSessionTitle(
   if (enabled !== "on") return null;
   if (!firstPrompt.trim()) return null;
 
-  // 2. Resolve the model config. If a customModelId is configured, use that
-  //    config's env + model; otherwise fall back to the built-in model.
+  // 2. Resolve the model config. There is no default model — generation only
+  //    runs when an explicit "configId:modelId" was picked in settings;
+  //    otherwise the placeholder title stays.
   const stored = SettingRepo.get(UI_TITLE_GEN_MODEL_SETTING_KEY);
   let customModelId: string | undefined;
   let customModelRole: string | undefined;
@@ -72,6 +73,7 @@ export async function generateSessionTitle(
       customModelId = stored;
     }
   }
+  if (!customModelId) return null;
 
   const { query } = await import("@anthropic-ai/claude-agent-sdk");
   const ac = new AbortController();
@@ -82,17 +84,15 @@ export async function generateSessionTitle(
     let model: string | undefined;
     let env: import("@anthropic-ai/claude-agent-sdk").Options["env"];
 
-    if (customModelId) {
-      const resolved = await resolveModelForGitOp(customModelId, customModelRole);
-      if (!resolved.ok) {
-        log.warn(`titleGen: model resolve failed for ${session.id}: ${resolved.error}`);
-        return null;
-      }
-      releaseBridge = resolved.releaseBridge;
-      const cfg = resolved.config;
-      model = resolveActiveModel(cfg);
-      env = buildCustomEnv(cfg);
+    const resolved = await resolveModelForGitOp(customModelId, customModelRole);
+    if (!resolved.ok) {
+      log.warn(`titleGen: model resolve failed for ${session.id}: ${resolved.error}`);
+      return null;
     }
+    releaseBridge = resolved.releaseBridge;
+    const cfg = resolved.config;
+    model = resolveActiveModel(cfg);
+    env = buildCustomEnv(cfg);
 
     // Resolve the real on-disk binary path (unpacks from asar in a packaged
     // app). See git.ts:generateCommitMessage for the full rationale.

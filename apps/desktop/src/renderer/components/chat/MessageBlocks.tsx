@@ -471,9 +471,9 @@ function StatusIcon({ status }: { status: "running" | "done" | "error" }) {
  *    not when the final reply text starts streaming. The user can still
  *    re-expand by clicking.
  *  - The header is a centered pill flanked by gradient rules: chevron +
- *    "HH:MM:SS · NN.Ns" + live ticker. An accent pulse dot (shown only
- *    while turnActive) signals the running state alongside the live
- *    duration. */
+ *    "HH:MM:SS · NN.Ns" + live ticker. The equalizer glyph (.live-eq, shown
+ *    only while turnActive; slow tempo while no tool is executing) signals
+ *    the running state alongside the live duration. */
 export function TurnPanel({
   blocks,
   beforeMap,
@@ -572,9 +572,14 @@ export function TurnPanel({
           className="flex items-center gap-1.5 rounded-full border border-edge bg-surface-muted px-3 py-1 text-xs shadow-sm transition-colors hover:bg-surface-hover/60"
         >
           {turnActive && (
-            <span className="relative flex h-1.5 w-1.5">
-              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-accent opacity-75" />
-              <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-accent" />
+            <span
+              className="live-eq shrink-0"
+              data-tempo={runningTool ? undefined : "slow"}
+              aria-hidden
+            >
+              <span />
+              <span />
+              <span />
             </span>
           )}
           <Chevron open={open} />

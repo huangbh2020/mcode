@@ -150,6 +150,7 @@ export const en = {
   "ide.git.conflictMore": "…{n} more",
   "ide.git.resolveLater": "Handle manually later",
   "ide.git.resolveWithAi": "Resolve with AI",
+  "ide.git.resolveNoModel": "No resolution model configured — pick one under \"Settings → Git\" first.",
   "ide.git.newBranchDesc": "Create a new branch from the current HEAD and switch to it.",
   "ide.git.branchNamePlaceholder": "Branch name, e.g. feature/xxx",
   "ide.git.createAndSwitch": "Create & switch",

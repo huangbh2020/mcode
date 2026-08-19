@@ -152,6 +152,7 @@ export const zh = {
   "ide.git.conflictMore": "…还有 {n} 个",
   "ide.git.resolveLater": "稍后手动处理",
   "ide.git.resolveWithAi": "用 AI 解决",
+  "ide.git.resolveNoModel": "未配置冲突解决模型,请先在「设置 → Git」中选择解决模型。",
   "ide.git.newBranchDesc": "从当前 HEAD 创建新分支并切换过去。",
   "ide.git.branchNamePlaceholder": "分支名,如 feature/xxx",
   "ide.git.createAndSwitch": "创建并切换",

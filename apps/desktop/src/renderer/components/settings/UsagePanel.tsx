@@ -6,7 +6,7 @@
  * already normalized — Pi sessions are cumulative and get diffed there):
  *   1. Summary cards over the selected time range (turns / sessions / tokens
  *      breakdown / estimated cost).
- *   2. A fixed half-year (26-week) GitHub-style daily heatmap; days outside
+ *   2. A fixed full-year (53-week) GitHub-style daily heatmap; days outside
  *      the selected range are dimmed so the range choice reads on the grid.
  *   3. A per-model ranking with proportional bars.
  *
@@ -14,7 +14,7 @@
  * column-flow CSS grid, the model bars reuse the AboutPanel progress-bar
  * pattern, colors are accent-alpha tiers over semantic tokens.
  */
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   type UsageDayStat,
   type UsageStatsPreset,
@@ -37,10 +37,9 @@ const PRESETS: Array<{ id: UsageStatsPreset; labelKey: MessageId }> = [
   { id: "all", labelKey: "settings.usage.range.all" },
 ];
 
-/** Heatmap cell side + gap in px (chart region uses fixed px, not em, so the
- *  grid geometry never wobbles with the user's font-size setting). */
-const CELL = 12;
-const CELL_GAP = 3;
+/** Heatmap geometry: cells are square via aspect-square and columns are 1fr,
+ *  so the grid stretches to fill the available width; the fixed 3px gap (not
+ *  em) keeps spacing stable across font-size settings. */
 
 const MONTHS_EN = [
   "Jan", "Feb", "Mar", "Apr", "May", "Jun",
@@ -91,6 +90,24 @@ export function UsagePanel() {
   const [result, setResult] = useState<UsageStatsResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // ── shared cell tooltip: one div for the whole grid (366 per-cell Tooltip
+  //    instances would be heavy and flicker between adjacent cells). Position
+  //    is cell-relative to the grid wrapper; shown instantly on hover.
+  const [tip, setTip] = useState<{ x: number; y: number; text: string } | null>(null);
+  const heatWrapRef = useRef<HTMLDivElement | null>(null);
+  const tipRef = useRef<HTMLDivElement | null>(null);
+
+  // Keep the centered tooltip inside the wrapper so first/last columns don't
+  // overflow the panel. Direct style write pre-paint — no visible jump.
+  useLayoutEffect(() => {
+    const el = tipRef.current;
+    const wrap = heatWrapRef.current;
+    if (!tip || !el || !wrap) return;
+    const half = el.offsetWidth / 2;
+    const max = Math.max(half + 4, wrap.clientWidth - half - 4);
+    el.style.left = `${Math.min(Math.max(tip.x, half + 4), max)}px`;
+  }, [tip]);
 
   const load = useCallback(async (p: UsageStatsPreset) => {
     setLoading(true);
@@ -213,17 +230,17 @@ export function UsagePanel() {
 
           {/* ───────── 每日热力图 ───────── */}
           <SettingsSection title={t("settings.usage.heatmap.title")}>
-            <div className="overflow-x-auto px-4 py-3">
+            <div className="px-4 py-3">
               {cells.length === 0 ? (
                 <div className="py-4 text-center text-[0.7143em] text-content-subtle">
                   {t("common.loading")}
                 </div>
               ) : (
-                <div className="flex gap-1.5" style={{ width: "max-content" }}>
+                <div className="flex w-full gap-1.5">
                   {/* weekday labels — h/gap mirror the cell grid so rows align */}
                   <div
                     className="grid shrink-0 gap-[3px] pt-[17px]"
-                    style={{ gridTemplateRows: `repeat(7, ${CELL}px)` }}
+                    style={{ gridTemplateRows: "repeat(7, minmax(0, 1fr))" }}
                   >
                     {[0, 1, 2, 3, 4, 5, 6].map((row) => (
                       <span
@@ -238,37 +255,57 @@ export function UsagePanel() {
                       </span>
                     ))}
                   </div>
-                  <div>
-                    {/* month labels — one span per week column, first week of
-                        each month carries the label */}
-                    <div className="mb-[3px] flex h-[14px] gap-[3px]">
+                  <div ref={heatWrapRef} className="relative min-w-0 flex-1">
+                    {/* month labels — one span per week column (same 1fr track
+                        sizing as the cell grid), first week of each month
+                        carries the label */}
+                    <div
+                      className="mb-[3px] grid h-[14px] gap-[3px]"
+                      style={{ gridTemplateColumns: `repeat(${weeks.length}, minmax(0, 1fr))` }}
+                    >
                       {weeks.map((_, i) => (
                         <span
                           key={i}
                           className="whitespace-nowrap text-[9px] leading-none text-content-subtle"
-                          style={{ width: CELL }}
                         >
                           {monthLabels[i] ?? ""}
                         </span>
                       ))}
                     </div>
+                    {/* grid-flow-col needs the explicit 7-row template to wrap
+                        into the next week column — without it every cell lands
+                        in one endless vertical column */}
                     <div
-                      className="grid grid-flow-col gap-[3px]"
-                      style={{ gridTemplateRows: `repeat(7, ${CELL}px)`, gridAutoColumns: `${CELL}px` }}
+                      className="grid w-full grid-flow-col gap-[3px]"
+                      style={{
+                        gridTemplateRows: "repeat(7, auto)",
+                        gridTemplateColumns: `repeat(${weeks.length}, minmax(0, 1fr))`,
+                      }}
                     >
                       {cells.map((cell, i) =>
                         cell == null ? (
-                          <span key={i} />
+                          <span key={i} className="aspect-square" />
                         ) : (
                           <span
                             key={i}
-                            title={t("settings.usage.cellTip", {
-                              date: cell.date,
-                              turns: cell.turns.toLocaleString(),
-                              tokens: cell.totalTokens.toLocaleString(),
-                            })}
+                            onMouseEnter={(e) => {
+                              const wrap = heatWrapRef.current;
+                              if (!wrap) return;
+                              const r = e.currentTarget.getBoundingClientRect();
+                              const w = wrap.getBoundingClientRect();
+                              setTip({
+                                x: r.left + r.width / 2 - w.left,
+                                y: r.top - w.top,
+                                text: t("settings.usage.cellTip", {
+                                  date: cell.date,
+                                  turns: cell.turns.toLocaleString(),
+                                  tokens: cell.totalTokens.toLocaleString(),
+                                }),
+                              });
+                            }}
+                            onMouseLeave={() => setTip(null)}
                             className={cn(
-                              "rounded-[3px] transition-opacity",
+                              "aspect-square cursor-pointer rounded-[3px] transition-opacity",
                               heatClass(cell.totalTokens, dailyMax),
                               startKey && cell.date < startKey && "opacity-25",
                             )}
@@ -276,6 +313,15 @@ export function UsagePanel() {
                         ),
                       )}
                     </div>
+                    {tip && (
+                      <div
+                        ref={tipRef}
+                        className="pointer-events-none absolute z-20 -translate-x-1/2 -translate-y-full whitespace-nowrap rounded-md border border-edge bg-surface px-2.5 py-1.5 text-[11px] text-content shadow-lg"
+                        style={{ left: tip.x, top: tip.y - 6 }}
+                      >
+                        {tip.text}
+                      </div>
+                    )}
                   </div>
                 </div>
               )}

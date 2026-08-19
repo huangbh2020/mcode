@@ -11,7 +11,7 @@
  * so the two paths stay byte-identical.
  *
  * ## How the model id reaches the API
- *
+
  * The claude binary consults TWO channels and they MUST agree:
  *
  *   1. `ANTHROPIC_MODEL` (subprocess env) — the binary's native model override.
@@ -29,19 +29,25 @@
  * binary resolve from a single source (the env var) matches DeepSeek's
  * documented working config and avoids the dual-channel disagreement.
  *
- * ## Role → env var mapping (background tiers)
+ * ## Background tiers — mirror the selected model everywhere
  *
- * Each of the five tiers maps to a dedicated env var the binary reads when
- * issuing BACKGROUND requests (sub-agent Task tool, haiku-class side calls):
+ * The binary also issues BACKGROUND requests under its internal tier system
+ * (sub-agent Task tool, haiku-class side calls), each routed via a dedicated
+ * env var:
  *
- *   haiku    → ANTHROPIC_DEFAULT_HAIKU_MODEL
- *   sonnet   → ANTHROPIC_DEFAULT_SONNET_MODEL
- *   opus     → ANTHROPIC_DEFAULT_OPUS_MODEL
- *   fable    → ANTHROPIC_DEFAULT_FABLE_MODEL
- *   subagent → CLAUDE_CODE_SUBAGENT_MODEL   (not a model alias — Task-tool ctx)
+ *   ANTHROPIC_DEFAULT_HAIKU_MODEL / _SONNET_ / _OPUS_ / _FABLE_
+ *   CLAUDE_CODE_SUBAGENT_MODEL   (not a model alias — Task-tool context)
+ *   ANTHROPIC_SMALL_FAST_MODEL   (legacy haiku alias read by older builds)
  *
- * Only tiers with a `requestModel` are injected; an unbound tier leaves the
- * SDK's defaults untouched.
+ * The config's model list is FLAT — there are no per-tier models anymore — so
+ * every tier var is set to the SELECTED model's bare id. Without this, the
+ * tiers fall back to Anthropic's built-in model names, which only exist on
+ * Anthropic's own endpoint: on a third-party gateway the Task tool dies with
+ * "no available channel for model claude-…-…" 503s before doing anything.
+ * Tier vars NEVER carry the `[1m]` suffix — background requests are
+ * short-context, and a suffixed id on a tier the gateway doesn't expect was
+ * the historical "haiku channel receiving deepseek-v4-pro[1m] it doesn't
+ * serve" mismatch.
  *
  * ## 1M context — the `[1m]` suffix (LOWERCASE)
  *
@@ -57,14 +63,11 @@
  * handshake logs `model=deepseek-v4-pro[1m]` regardless of input casing), so
  * emitting lowercase up front keeps the diagnostic log honest.
  *
- * The suffix is carried on:
- *   - `ANTHROPIC_MODEL` (the primary turn's model) — when the selected role
- *     declares `supports1m`.
- *   - the selected role's tier env var — when that role declares `supports1m`.
- * Background (non-selected) tiers use the bare name; they're short-context.
+ * The suffix is carried ONLY on `ANTHROPIC_MODEL` (the primary turn's model)
+ * — when the selected model's entry declares `supports1m`. Background tier
+ * vars use the bare name; see above.
  */
-import type { ApiConfig, RoleBindings, RoleBinding, CustomModelRoleKey } from "@contracts/customModel";
-import { CUSTOM_MODEL_ROLES } from "@contracts/customModel";
+import type { ApiConfig, CustomModelEntry } from "@contracts/customModel";
 import type { Options } from "@anthropic-ai/claude-agent-sdk";
 import { homedir } from "node:os";
 import path from "node:path";
@@ -78,33 +81,11 @@ import path from "node:path";
  *  Mcode's import feature places them. */
 export const MCODE_CONFIG_DIR = path.join(homedir(), ".mcode");
 
-/** Map each role key to the env var the claude binary reads for that tier. */
-const ROLE_ENV_VAR: Record<CustomModelRoleKey, string> = {
-  haiku: "ANTHROPIC_DEFAULT_HAIKU_MODEL",
-  sonnet: "ANTHROPIC_DEFAULT_SONNET_MODEL",
-  opus: "ANTHROPIC_DEFAULT_OPUS_MODEL",
-  fable: "ANTHROPIC_DEFAULT_FABLE_MODEL",
-  // Subagent is the odd one out: it lives under the CLAUDE_CODE_* namespace,
-  // not ANTHROPIC_* (ANTHROPIC_SUBAGENT_MODEL does not exist in the binary).
-  subagent: "CLAUDE_CODE_SUBAGENT_MODEL",
-};
-
-/** The first role (canonical order) with a bound requestModel — the fallback
- *  selection when the session's selected role has no binding. */
-function firstBoundRole(roles: RoleBindings): CustomModelRoleKey | undefined {
-  for (const key of CUSTOM_MODEL_ROLES) {
-    if (roles[key]?.requestModel?.trim()) return key;
-  }
-  return undefined;
-}
-
-/** Resolve the active role for this turn: the session's selected role if it
- *  has a binding, else the first bound role. Callers guarantee at least one
- *  role is bound before invoking us (validated upstream). */
-function resolveActiveRole(cfg: ApiConfig): CustomModelRoleKey | undefined {
-  const sel = cfg.roles[cfg.selectedRole]?.requestModel?.trim();
-  if (sel) return cfg.selectedRole;
-  return firstBoundRole(cfg.roles);
+/** The config entry driving this turn: the session's selected model when it's
+ *  still configured, else the first entry. Callers guarantee at least one
+ *  entry exists before invoking us (validated upstream). */
+function resolveSelectedEntry(cfg: ApiConfig): CustomModelEntry | undefined {
+  return cfg.models.find((m) => m.id === cfg.selectedModel) ?? cfg.models[0];
 }
 
 /** Append the `[1m]` context suffix used by DeepSeek-style gateways. Idempotent
@@ -117,30 +98,26 @@ export function with1MSuffix(model: string): string {
 
 /** Strip the trailing `[1m]` context suffix (any casing, repeated occurrences
  *  collapsed) — the inverse of {@link with1MSuffix}. Used where the BARE model
- *  id is required:
- *   - the OpenAI-protocol bridge: the suffix is an Anthropic-wire convention
- *     that DeepSeek-style gateways parse themselves; OpenAI's chat-completions
- *     wire has no equivalent, so `model[1m]` reads as an unknown model id and
- *     gateways answer 401/404 even though the token is perfectly valid.
- *   - the subagent fallback below (sub-agent calls are short-context by
- *     nature, so the suffix must never reach CLAUDE_CODE_SUBAGENT_MODEL). */
+ *  id is required: the OpenAI-protocol bridge. The suffix is an Anthropic-wire
+ *  convention that DeepSeek-style gateways parse themselves; OpenAI's
+ *  chat-completions wire has no equivalent, so `model[1m]` reads as an unknown
+ *  model id and gateways answer 401/404 even though the token is perfectly
+ *  valid. */
 export function strip1MSuffix(model: string): string {
   return model.replace(/(\[1m\])+$/i, "");
 }
 
 /**
- * Resolve the model id for the active role, with the `[1m]` suffix appended
- * when that role declares `supports1m`. This is the same string placed on
- * `ANTHROPIC_MODEL` by {@link buildCustomEnv}; exported so the connection
+ * Resolve the model id for this turn, with the `[1m]` suffix appended when the
+ * selected model's entry declares `supports1m`. This is the same string placed
+ * on `ANTHROPIC_MODEL` by {@link buildCustomEnv}; exported so the connection
  * probe (which doesn't set `ANTHROPIC_MODEL` — it passes the model via the
  * SDK `model` option instead) can stay byte-identical with the live-turn path.
  */
 export function resolveActiveModel(cfg: ApiConfig): string | undefined {
-  const role = resolveActiveRole(cfg);
-  if (!role) return undefined;
-  const raw = cfg.roles[role]?.requestModel?.trim();
-  if (!raw) return undefined;
-  return cfg.roles[role]?.supports1m ? with1MSuffix(raw) : raw;
+  const entry = resolveSelectedEntry(cfg);
+  if (!entry) return undefined;
+  return entry.supports1m ? with1MSuffix(entry.id) : entry.id;
 }
 
 export function buildCustomEnv(cfg: ApiConfig): NonNullable<Options["env"]> {
@@ -166,62 +143,30 @@ export function buildCustomEnv(cfg: ApiConfig): NonNullable<Options["env"]> {
     env.ANTHROPIC_API_KEY = undefined;
   }
 
-  // Per-tier bindings — inject each EXPLICITLY BOUND role's requestModel into
-  // its tier env var so BACKGROUND requests (sub-agent Task tool, haiku-class
-  // side calls) also route to the user's gateway. The selected role's tier
-  // var additionally carries the `[1m]` suffix when it declares supports1m
-  // (mirroring DeepSeek's documented config, which sets e.g.
-  // ANTHROPIC_DEFAULT_OPUS_MODEL=deepseek-v4-pro[1m]). Non-selected tiers use
-  // the bare name — background requests are short-context by nature.
-  //
-  // We do NOT auto-fill unbound MODEL tiers (haiku/sonnet/opus/fable): a
-  // hand-written DeepSeek config (the reference that works) leaves fable
-  // unset, and Claude Code gracefully falls back to its built-in model names
-  // for background requests under those tiers. Auto-filling with the selected
-  // role's model previously caused routing mismatches (haiku channel
-  // receiving a `deepseek-v4-pro[1m]` it doesn't serve).
-  //
-  // Subagent is the exception — see the fallback block below.
-  const selectedSupports1m = Boolean(cfg.roles[cfg.selectedRole]?.supports1m);
-
-  for (const key of CUSTOM_MODEL_ROLES) {
-    const binding: RoleBinding | undefined = cfg.roles[key];
-    const rawModel = binding?.requestModel?.trim();
-    if (!rawModel) continue; // unbound MODEL tier — leave the SDK default untouched
-    const use1m = key === cfg.selectedRole && selectedSupports1m;
-    env[ROLE_ENV_VAR[key]] = use1m ? with1MSuffix(rawModel) : rawModel;
-  }
-
-  // Subagent fallback — the one UNBOUND tier we DO auto-fill. When the user
-  // hasn't bound a dedicated `subagent` model, the built-in Task tool falls
-  // back to its hardcoded default (e.g. `claude-opus-4-8`). That default only
-  // exists on Anthropic's own endpoint; on a third-party gateway it produces
-  // "no available channel for model claude-opus-4-8" 503s and kills the
-  // sub-agent before it can do anything. So when subagent is unbound we route
-  // it to the SAME model the foreground turn uses (the active role's resolved
-  // model, never carrying the `[1m]` suffix — sub-agent calls are short-
-  // context). A binding, if present, always wins over this fallback.
-  if (!env.CLAUDE_CODE_SUBAGENT_MODEL) {
-    const fallback = resolveActiveModel(cfg);
-    if (fallback) env.CLAUDE_CODE_SUBAGENT_MODEL = strip1MSuffix(fallback);
-  }
-
-  // Legacy haiku alias: older Claude Code builds read ANTHROPIC_SMALL_FAST_MODEL
-  // (37 hits in the v0.3.218 binary) before ANTHROPIC_DEFAULT_HAIKU_MODEL existed.
-  // Mirror the haiku binding if one is set so background "small/fast" requests
-  // route correctly on builds that still consult the legacy name. Never carries
-  // the [1m] suffix (haiku is a background tier).
-  if (env.ANTHROPIC_DEFAULT_HAIKU_MODEL) {
-    env.ANTHROPIC_SMALL_FAST_MODEL = env.ANTHROPIC_DEFAULT_HAIKU_MODEL;
-  }
-
-  // DeepSeek private convention: ANTHROPIC_DEFAULT_SONNET_MODEL_NAME records
-  // the logical sonnet model name WITHOUT the `[1m]` suffix, even when the
-  // sonnet tier binding carries it. The gateway consults this for internal
-  // routing. Set whenever sonnet is bound, always to the bare name.
-  const sonnetRaw = cfg.roles.sonnet?.requestModel?.trim();
-  if (sonnetRaw) {
-    env.ANTHROPIC_DEFAULT_SONNET_MODEL_NAME = sonnetRaw;
+  // Resolve the model driving this turn. The flat model list has no per-tier
+  // bindings, so the SELECTED model is mirrored onto every background-tier
+  // env var (bare id — never the `[1m]` suffix; see the file header). This
+  // replaces both the old per-role binding table and its subagent fallback:
+  // with a flat list there is nothing to differentiate, and unbound tiers
+  // falling back to Anthropic's built-in model names was exactly what broke
+  // the Task tool on third-party gateways.
+  const entry = resolveSelectedEntry(cfg);
+  if (entry) {
+    const bare = entry.id;
+    env.ANTHROPIC_DEFAULT_HAIKU_MODEL = bare;
+    env.ANTHROPIC_DEFAULT_SONNET_MODEL = bare;
+    env.ANTHROPIC_DEFAULT_OPUS_MODEL = bare;
+    env.ANTHROPIC_DEFAULT_FABLE_MODEL = bare;
+    env.CLAUDE_CODE_SUBAGENT_MODEL = bare;
+    // Legacy haiku alias: older Claude Code builds read ANTHROPIC_SMALL_FAST_MODEL
+    // (37 hits in the v0.3.218 binary) before ANTHROPIC_DEFAULT_HAIKU_MODEL
+    // existed. Mirror the same bare id so background "small/fast" requests
+    // route correctly on builds that still consult the legacy name.
+    env.ANTHROPIC_SMALL_FAST_MODEL = bare;
+    // DeepSeek private convention: ANTHROPIC_DEFAULT_SONNET_MODEL_NAME records
+    // the logical sonnet model name WITHOUT the `[1m]` suffix. The gateway
+    // consults this for internal routing. Always the bare name.
+    env.ANTHROPIC_DEFAULT_SONNET_MODEL_NAME = bare;
   }
 
   // Non-essential traffic (telemetry, etc.) — almost always desirable to
@@ -234,7 +179,7 @@ export function buildCustomEnv(cfg: ApiConfig): NonNullable<Options["env"]> {
   // Pin the primary turn's model via ANTHROPIC_MODEL. This is the channel the
   // binary uses to route the foreground request; it's what DeepSeek's official
   // Claude Code integration configures. Carries the `[1m]` suffix when the
-  // selected role declares supports1m, so a 1M-context turn is routed
+  // selected model declares supports1m, so a 1M-context turn is routed
   // correctly. (We deliberately do NOT also pass Options.model / --model —
   // see the file header; one channel is enough and avoids disagreement.)
   const mainModel = resolveActiveModel(cfg);

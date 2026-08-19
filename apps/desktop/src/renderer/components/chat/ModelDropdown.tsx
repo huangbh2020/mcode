@@ -10,8 +10,6 @@ import {
 } from "@renderer/lib/icons.js";
 import { useSessionStore } from "@renderer/stores/sessionStore.js";
 import { useSuppressBrowserView } from "@renderer/hooks/useSuppressBrowserView.js";
-import { CUSTOM_MODEL_ROLES, CUSTOM_MODEL_ROLE_LABELS } from "@contracts/customModel";
-import type { CustomModelRoleKey } from "@contracts/customModel";
 
 /**
  * Model picker for the composer toolbar.
@@ -19,17 +17,17 @@ import type { CustomModelRoleKey } from "@contracts/customModel";
  * The model surface is provider-driven, not hardcoded:
  *   - Built-in aliases come from the active provider's
  *     `capabilities.builtinModels` (claude: Auto/Sonnet/Opus/Fable).
- *   - The custom-endpoint configs (user-defined gateways with per-tier role
- *     bindings) are shown only when the provider declares
+ *   - The custom-endpoint configs (user-defined gateways with a flat model
+ *     list) are shown only when the provider declares
  *     `supportsCustomEndpoint` (claude: true, pi: false).
  *
  * Selection state is the pair (customModelId, model):
  *   - built-in alias → customModelId=null, model=<alias id>
- *   - custom model   → customModelId=<cfg id>, model=<one of cfg.roles>
+ *   - custom model   → customModelId=<cfg id>, model=<one of cfg.models[].id>
  *
  * Built on @base-ui/react/menu like EffortDropdown: the popup renders through
  * Menu.Portal (document.body), so it isn't clipped by the composer card's
- * overflow-hidden. Config rows with bound models open a nested submenu.
+ * overflow-hidden. Config rows with models open a nested submenu.
  */
 
 /** Derive the host segment of a base URL for the secondary line. */
@@ -79,9 +77,9 @@ export function ModelDropdown() {
   const manageTarget: string | null = isPi || isClaude ? "custom-models" : null;
 
   // Chip label: resolve the current `model` against the ACTIVE provider's
-  // model surface only. Model ids are per-provider (claude uses role/alias
-  // keys like "sonnet"; pi uses "provider/modelId" strings), so a leftover
-  // value from another provider must never leak into the label.
+  // model surface only. Model ids are per-provider (claude uses gateway model
+  // ids like "deepseek-v4-pro"; pi uses "provider/modelId" strings), so a
+  // leftover value from another provider must never leak into the label.
   //   - custom config  → only when this provider supports custom endpoints
   //   - pi model       → resolved from the dynamic piAvailableModels list
   //   - built-in alias → from the provider's capabilities.builtinModels
@@ -90,26 +88,22 @@ export function ModelDropdown() {
   const activeCustom = supportsCustomEndpoint
     ? customModels.find((m) => m.id === customModelId)
     : undefined;
-  const activeRoleBinding =
-    activeCustom && (CUSTOM_MODEL_ROLES as string[]).includes(model)
-      ? activeCustom.roles[model as CustomModelRoleKey]
-      : undefined;
+  const activeEntry = activeCustom?.models.find((e) => e.id === model);
   const builtin = builtinModels.find((b) => b.id === model);
   const piModel = isPi ? piAvailableModels.find((b) => b.id === model) : undefined;
   const chipLabel = activeCustom
-    ? (activeRoleBinding?.displayName?.trim() ||
-      (activeRoleBinding ? CUSTOM_MODEL_ROLE_LABELS[model as CustomModelRoleKey] : t("chat.model.default")))
+    ? (activeEntry?.id ?? t("chat.model.default"))
     : piModel?.label ?? builtin?.label ?? t("chat.model.default");
 
-  const pickCustomRole = (cfgId: string, roleKey: CustomModelRoleKey) => {
-    setCustomModel(cfgId, roleKey);
+  const pickCustomModel = (cfgId: string, modelId: string) => {
+    setCustomModel(cfgId, modelId);
   };
 
-  // Bound roles for a config, in canonical order (only roles with a requestModel).
-  const boundRolesOf = (cfgId: string): CustomModelRoleKey[] => {
+  // Models for a config (only rows with a non-empty id).
+  const modelsOf = (cfgId: string) => {
     const cfg = customModels.find((m) => m.id === cfgId);
     if (!cfg) return [];
-    return CUSTOM_MODEL_ROLES.filter((r) => cfg.roles[r]?.requestModel?.trim());
+    return cfg.models.filter((e) => e.id.trim());
   };
 
   return (
@@ -216,7 +210,7 @@ export function ModelDropdown() {
                 </div>
                 {customModels.map((m) => {
                   const cfgActive = customModelId === m.id;
-                  const hasRoles = boundRolesOf(m.id).length > 0;
+                  const hasModels = modelsOf(m.id).length > 0;
                   const rowTitle = `${m.baseUrl}\ntoken: ${m.authTokenMasked} (${m.authMode === "api_key" ? "x-api-key" : "Bearer"})`;
                   const rowContent = (
                     <>
@@ -229,7 +223,7 @@ export function ModelDropdown() {
                       </span>
                       <span className="ml-2 flex shrink-0 items-center gap-1">
                         <span className="truncate text-xs text-content-subtle">{hostOf(m.baseUrl)}</span>
-                        {hasRoles && <IconChevronRight size={12} className="opacity-60" />}
+                        {hasModels && <IconChevronRight size={12} className="opacity-60" />}
                       </span>
                     </>
                   );
@@ -238,7 +232,7 @@ export function ModelDropdown() {
                     "data-[highlighted]:bg-surface-muted data-[highlighted]:text-content",
                     cfgActive ? "text-accent" : "text-content-muted",
                   );
-                  return hasRoles ? (
+                  return hasModels ? (
                     <Menu.SubmenuRoot key={m.id}>
                       <Menu.SubmenuTrigger
                         openOnHover
@@ -258,27 +252,21 @@ export function ModelDropdown() {
                               "transition-[transform,opacity] duration-100",
                             )}
                           >
-                            {boundRolesOf(m.id).map((roleKey) => {
-                              const binding = m.roles[roleKey]!;
-                              const active = cfgActive && model === roleKey;
-                              const label =
-                                binding.displayName?.trim() || CUSTOM_MODEL_ROLE_LABELS[roleKey];
+                            {modelsOf(m.id).map((entry) => {
+                              const active = cfgActive && model === entry.id;
                               return (
                                 <Menu.Item
-                                  key={roleKey}
-                                  onClick={() => pickCustomRole(m.id, roleKey)}
+                                  key={entry.id}
+                                  onClick={() => pickCustomModel(m.id, entry.id)}
                                   className={cn(
-                                    "flex w-full items-center justify-between px-3 py-2 text-left text-[13px] outline-none select-none",
+                                    "flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-[13px] outline-none select-none",
                                     "data-[highlighted]:bg-surface-muted",
                                     active ? "text-accent" : "text-content-muted",
                                   )}
                                 >
                                   <span className="flex min-w-0 items-baseline gap-2">
-                                    <span className="shrink-0 text-[10px] uppercase tracking-wide text-content-subtle">
-                                      {CUSTOM_MODEL_ROLE_LABELS[roleKey]}
-                                    </span>
-                                    <span className="truncate">{label}</span>
-                                    {binding.supports1m && (
+                                    <span className="truncate">{entry.id}</span>
+                                    {entry.supports1m && (
                                       <span className="shrink-0 rounded bg-accent/15 px-1 text-[10px] text-accent">1M</span>
                                     )}
                                   </span>

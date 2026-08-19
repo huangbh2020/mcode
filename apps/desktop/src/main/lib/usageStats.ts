@@ -32,8 +32,9 @@ import type { TurnUsageRecord } from "@contracts/runtime";
 import { SessionRepo } from "../store/repositories.js";
 import { CustomModelStore } from "./secretStore.js";
 
-/** Heatmap span: 26 weeks (183 days, today inclusive). */
-export const HEATMAP_DAYS = 183;
+/** Heatmap span: 53 weeks (366 days, today inclusive) — a full year, so the
+ *  month-label row walks through all twelve months instead of a half-year. */
+export const HEATMAP_DAYS = 366;
 
 const PI_PROVIDER_ID = "pi-sdk";
 
@@ -181,7 +182,7 @@ function loadTurnRecords(): NormalizedTurn[] {
 export function buildUsageStats(preset: UsageStatsPreset): UsageStatsResult {
   const records = loadTurnRecords();
 
-  // ── daily heatmap buckets: fixed 183-day window regardless of preset ──
+  // ── daily heatmap buckets: fixed 366-day (full-year) window regardless of preset ──
   const daily: UsageDayStat[] = [];
   const dayMap = new Map<string, UsageDayStat>();
   for (let i = HEATMAP_DAYS - 1; i >= 0; i--) {

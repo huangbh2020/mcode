@@ -53,7 +53,6 @@ import { FileMentionPicker, type FileMentionPickerMode } from "./FileMentionPick
 import { EmptyThreadWelcome } from "./EmptyThreadWelcome.js";
 import { SlashCommandPicker } from "./SlashCommandPicker.js";
 import { StatusCapsule } from "./StatusCapsule.js";
-import { ComposerLiveBar } from "./ComposerLiveBar.js";
 import { MessageTimeline, type UserItemIndexMap } from "./MessageTimeline.js";
 import { LegendList, type LegendListRef } from "@legendapp/list/react";
 
@@ -172,8 +171,8 @@ function fmtDuration(ms: number): string {
  *  stuck at "<1s" for the whole turn. The global clock survives remounts.
  *  Rendered as a centered pill (timestamp + duration) flanked by gradient
  *  rules so it reads as a distinct turn-separator between the user prompt
- *  and the assistant reply. A live (running) turn shows an accent pulse dot
- *  inside the pill. */
+ *  and the assistant reply. A live (running) turn shows the equalizer glyph
+ *  (.live-eq, shared with TurnPanel's header pill) inside the pill. */
 function TurnStatRow({ meta }: { meta: TurnMeta }) {
   // Only subscribe to the global ticker while the turn is still running -
   // frozen turns compute a static duration and pay nothing.
@@ -187,9 +186,10 @@ function TurnStatRow({ meta }: { meta: TurnMeta }) {
       <div className="h-px flex-1 bg-gradient-to-r from-transparent to-edge" />
       <div className="flex items-center gap-1.5 rounded-full border border-edge bg-surface-muted px-3 py-1 text-xs shadow-sm">
         {live && (
-          <span className="relative flex h-1.5 w-1.5">
-            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-accent opacity-75" />
-            <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-accent" />
+          <span className="live-eq shrink-0" aria-hidden>
+            <span />
+            <span />
+            <span />
           </span>
         )}
         <span className="tabular-nums text-content-muted">{fmtClock(meta.startedAt)}</span>
@@ -900,6 +900,8 @@ function ChatPaneForSession({ sessionId, isActive }: { sessionId: string; isActi
   const openPlanDrawer = useSessionStore((s) => s.openPlanDrawer);
   // Project root absolute path for this session (used by the @ / add-context
   // file pickers). Resolved through the session's projectId → projects[].
+  // Pinned sessions aren't in the per-project slices (they live in the global
+  // pinned bucket), so that's scanned too.
   const projectPath = useSessionStore((s) => {
     let pid: string | undefined;
     for (const list of Object.values(s.sessionsByProject)) {
@@ -909,6 +911,7 @@ function ChatPaneForSession({ sessionId, isActive }: { sessionId: string; isActi
         break;
       }
     }
+    if (!pid) pid = s.pinnedSessions.find((x) => x.id === sessionId)?.projectId;
     if (!pid) return null;
     return s.projects.find((p) => p.id === pid)?.path ?? null;
   });
@@ -924,6 +927,7 @@ function ChatPaneForSession({ sessionId, isActive }: { sessionId: string; isActi
         break;
       }
     }
+    if (!pid) pid = s.pinnedSessions.find((x) => x.id === sessionId)?.projectId;
     if (!pid) return "";
     const p = s.projects.find((pr) => pr.id === pid);
     return p?.name ?? "";
@@ -2284,12 +2288,9 @@ function ChatPaneForSession({ sessionId, isActive }: { sessionId: string; isActi
         </div>
       )}
 
-      {/* Jump-to-bottom button. Suppressed while the session is busy AND the
-          composer card is visible — the live strip inside the composer takes
-          over the jump affordance (with a new-content badge), and two stacked
-          jump buttons would read as clutter. While a bottom prompt hides the
-          composer, the pill returns. */}
-      {showJumpBottom && (!sessionBusy || hasPendingPrompt) && (
+      {/* Jump-to-bottom button. Shows a new-activity count while a turn is
+          running (updates that landed since the user left the bottom). */}
+      {showJumpBottom && (
         <div className="pointer-events-none absolute inset-x-0 bottom-2 z-30 flex justify-center">
           <button
             onClick={jumpToBottom}
@@ -2301,6 +2302,11 @@ function ChatPaneForSession({ sessionId, isActive }: { sessionId: string; isActi
             title={t("chat.jumpToBottom")}
           >
             <IconArrowDown size={14} className="text-content" />
+            {newWhileAway > 0 && (
+              <span className="animate-[live-badge-in_220ms_ease-out] text-xs tabular-nums text-content-muted">
+                {t("chat.live.newActivity", { n: newWhileAway })}
+              </span>
+            )}
           </button>
         </div>
       )}
@@ -2437,32 +2443,6 @@ function ChatPaneForSession({ sessionId, isActive }: { sessionId: string; isActi
               setTags((prev) => [...prev, makeFileTag(path)]);
             }}
           >
-            {/* Live-activity layer while a turn runs. The composer is the one
-                surface always visible (docked below the scroll container), so
-                while the session is busy it wears the running state:
-                  - the border comet (accent light orbiting the card edge,
-                    brightening + speeding up while the user is scrolled away);
-                  - the live strip (equalizer + timer + current-op ticker +
-                    jump badge) along the card's top edge.
-                Both no-op when idle. pointer-events-none on the comet; the
-                strip is interactive only through its jump badge. */}
-            {sessionBusy && (
-              <div
-                aria-hidden
-                // inset-0 (not -inset-px): the card clips overflow, so an
-                // outset ring would be trimmed to a sliver; the ring sits on
-                // the inner edge of the card border instead. Radius comes via
-                // `border-radius: inherit` in .composer-beam.
-                className="composer-beam pointer-events-none absolute inset-0 z-[1]"
-                data-hot={showJumpBottom || undefined}
-              />
-            )}
-            <ComposerLiveBar
-              sessionId={sessionId}
-              scrolledAway={showJumpBottom}
-              newCount={newWhileAway}
-              onJumpToLatest={jumpToBottom}
-            />
             {queue.length > 0 && (
               <div className="border-b border-edge px-2 pt-2 pb-1.5">
                 <div className="mb-1 flex items-center justify-between">

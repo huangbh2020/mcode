@@ -800,13 +800,20 @@ export function GitRepoCard({ repo }: { repo: GitRepo }) {
                     </ul>
                   </div>
                 )}
+                {/* No default model for AI resolution — surface the missing
+                    config instead of letting the call fail after the fact. */}
+                {!conflictResolveModel && (
+                  <p className="mt-2 text-[11px] text-warning">
+                    {t("ide.git.resolveNoModel")}
+                  </p>
+                )}
               </div>
             </div>
             <div className="mt-4 flex justify-end gap-2">
               <Button variant="ghost" size="sm" onClick={() => setConflictFiles(null)} disabled={resolving}>
                 {t("ide.git.resolveLater")}
               </Button>
-              <Button size="sm" onClick={handleResolveConflicts} disabled={resolving}>
+              <Button size="sm" onClick={handleResolveConflicts} disabled={resolving || !conflictResolveModel}>
                 {resolving ? <IconLoader2 size={12} className="animate-spin" /> : <IconSparkles size={12} />}
                 {t("ide.git.resolveWithAi")}
               </Button>

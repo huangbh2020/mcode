@@ -501,72 +501,16 @@ body,
   }
 }
 
-/* ───────────── Composer live-activity animations ─────────────
- * "活体输入框": while a turn runs, the composer card becomes mission control —
- * an accent comet orbits its border and a live strip shows what the agent is
- * doing (ComposerLiveBar.tsx / ChatPane.tsx). These live here instead of
- * Tailwind arbitrary values because they need @property interpolation, ring
- * mask composition and staggered per-child delays. */
-
-/* The comet's angular position. @property is REQUIRED for the browser to
-   interpolate the custom property inside keyframes — without registration the
-   animation would snap between keyframe extremes. Chromium-only syntax, fine
-   for an Electron app. */
-@property --beam-angle {
-  syntax: "<angle>";
-  initial-value: 0deg;
-  inherits: false;
-}
-
-/* Border beam: an overlay whose background is a conic comet, masked down to
-   just the 1.5px padding ring (content-box vs border-box masks XOR'd out).
-   The caller absolutely positions it over the composer card with
-   pointer-events:none; border-radius comes from the card via `inherit`. */
-.composer-beam {
-  --beam-duration: 3.2s;
-  border-radius: inherit;
-  padding: 1.5px;
-  background: conic-gradient(
-    from var(--beam-angle),
-    rgb(var(--accent) / 0.55) 0deg,
-    rgb(var(--accent) / 0.16) 55deg,
-    rgb(var(--accent) / 0) 150deg,
-    rgb(var(--accent) / 0) 360deg
-  );
-  -webkit-mask:
-    linear-gradient(#fff 0 0) content-box,
-    linear-gradient(#fff 0 0);
-  -webkit-mask-composite: xor;
-  mask:
-    linear-gradient(#fff 0 0) content-box,
-    linear-gradient(#fff 0 0);
-  mask-composite: exclude;
-  animation: composer-beam-spin var(--beam-duration) linear infinite;
-}
-
-/* Hot mode (user scrolled away from the bottom): brighter comet + faster
-   orbit — the distance-awareness cue that the task keeps running even when
-   the streaming tail is scrolled out of view. */
-.composer-beam[data-hot="true"] {
-  --beam-duration: 1.8s;
-  background: conic-gradient(
-    from var(--beam-angle),
-    rgb(var(--accent) / 0.95) 0deg,
-    rgb(var(--accent) / 0.38) 70deg,
-    rgb(var(--accent) / 0) 170deg,
-    rgb(var(--accent) / 0) 360deg
-  );
-}
-
-@keyframes composer-beam-spin {
-  to {
-    --beam-angle: 360deg;
-  }
-}
+/* ───────────── Stream live-activity animations ─────────────
+ * While a turn runs, the turn pills in the message stream (TurnStatRow in
+ * ChatPane.tsx, TurnPanel in MessageBlocks.tsx) show an equalizer glyph, and
+ * the jump-to-bottom button pops in a new-activity count. These live here
+ * instead of Tailwind arbitrary values because they need staggered per-child
+ * delays. */
 
 /* Equalizer glyph — three staggered bars. data-tempo swaps the perceived
-   energy: slow while waiting for the model / background agents, brisk while
-   a tool runs. */
+   energy: slow while no tool is executing (waiting for the model /
+   thinking / streaming), brisk while a tool runs. */
 .live-eq {
   display: inline-flex;
   align-items: flex-end;
@@ -605,8 +549,9 @@ body,
   }
 }
 
-/* "N 条新动态" jump-badge pop-in. Referenced from ComposerLiveBar via the
-   arbitrary-animation class animate-[live-badge-in_220ms_ease-out]. */
+/* "N 条新动态" count pop-in on the floating jump-to-bottom button
+   (ChatPane). Referenced via the arbitrary-animation class
+   animate-[live-badge-in_220ms_ease-out]. */
 @keyframes live-badge-in {
   from {
     transform: scale(0.6);
@@ -621,16 +566,9 @@ body,
   }
 }
 
-/* Reduced motion: the comet freezes into a static dim ring, the bars hold
-   fixed heights, the badge pops no more — the strip stays informative,
-   just calm. */
+/* Reduced motion: the bars hold fixed heights, the badge pops no more —
+   the strip stays informative, just calm. */
 @media (prefers-reduced-motion: reduce) {
-  .composer-beam,
-  .composer-beam[data-hot="true"] {
-    animation: none;
-    background: rgb(var(--accent) / 0.35);
-  }
-
   .live-eq > span {
     animation: none;
     transform: scaleY(0.6);

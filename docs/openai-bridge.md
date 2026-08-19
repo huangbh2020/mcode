@@ -107,7 +107,7 @@ OpenAI 不暴露 reasoning 签名，无法真实合成 Anthropic 的 `signature`
 2. **API 格式**下拉选 `OpenAI`
 3. 填 Base URL（如 `https://api.openai.com/v1`，无需带 `/chat/completions`，翻译层自动补全）
 4. 填 Token / API Key
-5. 角色绑定：建议点"一键填充主模型"，把同一个模型（如 `gpt-4o`）填到所有 5 个 tier（后台请求 Haiku/Subagent 也会用到）
+5. 模型列表：添加网关侧的模型 id（如 `gpt-4o`）；后台请求（Haiku/Subagent tier）会自动镜像选中模型的裸 id，无需额外配置
 6. 测试连接（两种协议都走完整真实链路，见 §6）
 7. 保存 → 在 composer 的模型下拉里选该配置
 
@@ -139,7 +139,7 @@ OpenAI 不暴露 reasoning 签名，无法真实合成 Anthropic 的 `signature`
 - `CustomModelsPanel.tsx`：API 格式下拉 + OpenAI 提示 + 一键填充按钮
 - `ModelDropdown.tsx`：OpenAI 配置加 badge
 
-**不需改**：`customEnv.ts`、`ClaudeAgentSdkProvider.ts`、`preload`、`SdkMessageAdapter.ts`、`sessionStore.ts`、IPC 通道常量、`RoleBindings` schema。
+**不需改**：`customEnv.ts`、`ClaudeAgentSdkProvider.ts`、`preload`、`SdkMessageAdapter.ts`、`sessionStore.ts`、IPC 通道常量、`CustomModelEntry` schema。
 
 ---
 

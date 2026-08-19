@@ -59,19 +59,19 @@ export function registerCustomModelHandlers(ipcMain: IpcMain): void {
 
   ipcMain.handle(IPC.CUSTOM_MODEL_TEST, async (_evt, raw) => {
     const input = TestCustomModelSchema.parse(raw);
-    // The probe tests ONE model (the user picks which role/model in the UI).
-    // Build a minimal ApiConfig that binds the probed model under the Sonnet
-    // tier (arbitrary but valid) and selects it. supports1m is recorded on the
-    // binding so resolveActiveModel / buildCustomEnv see the same 1M behavior
-    // a saved config would produce — the probe then exercises the EXACT model
-    // string a real turn would send via Options.model.
+    // The probe tests ONE model (the user picks which model row in the UI).
+    // Build a minimal ApiConfig whose flat list holds just the probed model
+    // and selects it. supports1m is recorded on the entry so
+    // resolveActiveModel / buildCustomEnv see the same 1M behavior a saved
+    // config would produce — the probe then exercises the EXACT model string
+    // a real turn would send via Options.model.
     const cfg: ApiConfig = {
       baseUrl: input.baseUrl,
       authToken: input.authToken,
       authMode: input.authMode ?? "auth_token",
       protocol: input.protocol ?? "anthropic",
-      selectedRole: "sonnet",
-      roles: { sonnet: { requestModel: input.model, supports1m: input.supports1m ?? false } },
+      selectedModel: input.model,
+      models: [{ id: input.model, ...(input.supports1m ? { supports1m: true } : {}) }],
       disableNonEssentialTraffic: input.disableNonEssentialTraffic ?? true,
       timeoutMs: input.timeoutMs,
     };

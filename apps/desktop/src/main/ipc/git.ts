@@ -703,6 +703,11 @@ export function registerGitHandlers(ipcMain: IpcMain): void {
     if (!findContainingProject(input.repoPath)) {
       return { ok: false, error: "仓库路径不在任何已添加的项目内" };
     }
+    // There is no default model — AI resolution requires an explicitly
+    // selected conflict-resolve model (Settings → Git).
+    if (!input.customModelId) {
+      return { ok: false, error: "未配置冲突解决模型,请先在「设置 → Git」中选择" };
+    }
     try {
       const git = (await loadSimpleGit())(input.repoPath);
       // 1. Gather the current conflicted files. (simple-git exposes them via
@@ -749,8 +754,9 @@ export function registerGitHandlers(ipcMain: IpcMain): void {
         `仓库 ${input.repoPath} 在合并后产生了 ${conflicted.length} 个冲突文件。` +
         `请逐一解决冲突并输出每个文件的完整最终内容。\n\n${filesBlock}`;
 
-      // 4. Resolve the model config (optional custom endpoint). OpenAI-protocol
-      //    configs activate the bridge here too (see resolveModelForGitOp).
+      // 4. Resolve the model config (required — no built-in fallback).
+      //    OpenAI-protocol configs activate the bridge here too (see
+      //    resolveModelForGitOp).
       const { query } = await import("@anthropic-ai/claude-agent-sdk");
       const ac = new AbortController();
       const timer = setTimeout(() => ac.abort(), 120000); // 120s — conflicts can be large
@@ -760,19 +766,17 @@ export function registerGitHandlers(ipcMain: IpcMain): void {
         let model: string | undefined;
         let env: import("@anthropic-ai/claude-agent-sdk").Options["env"];
 
-        if (input.customModelId) {
-          const resolved = await resolveModelForGitOp(
-            input.customModelId,
-            input.customModelRole ?? undefined,
-          );
-          if (!resolved.ok) {
-            return { ok: false, error: resolved.error };
-          }
-          releaseBridge = resolved.releaseBridge;
-          const cfg = resolved.config;
-          model = resolveActiveModel(cfg);
-          env = buildCustomEnv(cfg);
+        const resolved = await resolveModelForGitOp(
+          input.customModelId,
+          input.customModelRole ?? undefined,
+        );
+        if (!resolved.ok) {
+          return { ok: false, error: resolved.error };
         }
+        releaseBridge = resolved.releaseBridge;
+        const cfg = resolved.config;
+        model = resolveActiveModel(cfg);
+        env = buildCustomEnv(cfg);
 
         // Resolve the real on-disk binary path (see generateCommitMessage).
         const binaryPath = resolveSdkBinaryPath();

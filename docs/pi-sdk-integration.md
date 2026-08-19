@@ -110,27 +110,21 @@ providerRegistry.register(new PiAgentSdkProvider());
 
 ## 4. 模型设置适配
 
-### 4.1 决策:路线 A + 共享端点预设
+### 4.1 决策:路线 A(两套配置各自独立)
 
-两套配置体系的**模型概念有本质差异**(claude 5 tier 角色绑定 vs pi 独立模型列表),
-6 个字段无法双向映射(tier 角色 / contextWindow / maxTokens / reasoning /
-thinkingLevelMap / compat)。强行统一(路线 B)会导致 UI 臃肿且信息丢失。
+两套配置体系的**模型概念有本质差异**(claude 网关端点 + 扁平模型列表 vs pi 独立模型列表),
+字段无法双向映射(contextWindow / maxTokens / reasoning / thinkingLevelMap / compat)。
+强行统一(路线 B)会导致 UI 臃肿且信息丢失。
 
-**采用路线 A**: 两套配置各自独立,共享一层"端点预设"避免重复填写 baseUrl + authMode。
+**采用路线 A**: 两套配置各自独立。CustomModelsPanel 顶部用 Claude / Pi 两个 tab 切换,
+tab 内是左供应商列表 + 右表单。
 
-### 4.2 端点预设(`EndpointPreset`)
-
-```
-packages/contracts/src/endpointPreset.ts   # 类型
-apps/desktop/src/main/lib/endpointPresetStore.ts  # SettingRepo KV 存储
-apps/desktop/src/main/ipc/endpointPreset.ts       # IPC handlers
-```
-
-- **无凭证**: 预设只含 name / baseUrl / authMode,不含 token。
-  各 provider 用自己的凭证存储(claude: safeStorage 加密的 customModelKeys;
-  pi: `~/.pi/agent/auth.json` / 环境变量)
-- **存储**: `SettingRepo` 新 key `endpointPresets`(明文 JSON,无加密需求)
-- **UI**: CustomModelsPanel 左侧栏底部可增删预设;供应商表单有"从预设导入"下拉
+> **端点预设已移除**(2026-08):原先在左栏底部有一层"端点预设"(无凭证的
+> name/baseUrl/authMode 模板,存 `SettingRepo` key `endpointPresets`,表单里
+> "从预设导入"下拉)。该功能连同 `contracts/endpointPreset.ts`、
+> `endpointPresetStore.ts`、`ipc/endpointPreset.ts` 与 `endpointPreset.*`
+> IPC 通道整体删除——配置足够简单后不再需要预填模板。历史 settings 表里
+> 残留的 `endpointPresets` 数据成为孤儿 key,无副作用。
 
 ### 4.3 Dropdown 组件改造
 

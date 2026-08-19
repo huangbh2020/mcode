@@ -244,19 +244,19 @@ export const SessionRepo = {
     persist();
   },
 
-  /** List sessions for a project, pinned sessions first, then most recently
-   *  active first.
+  /** List sessions for a project, most recently active first.
    *
-   *  Ordered by `pinned_at DESC` (SQLite sorts NULLs last in DESC) so pinned
-   *  sessions float to the top of their project's list, most recent pin first;
-   *  unpinned sessions then sort by `updated_at DESC` — a session floats to
-   *  the top of its unpinned group whenever it is touched (new message,
-   *  title/status change, snapshot save, …) — with ties falling back to
-   *  `created_at DESC` for a stable order. `opts.limit` / `opts.offset`
-   *  paginate (used by the left-bar tree, which loads the first page and
-   *  appends on "load more"). `opts.archived` filters by the soft-delete flag:
-   *  omit for all, `false` for the active thread list, `true` for the
-   *  archived bin. */
+   *  The active list (`opts.archived === false`) EXCLUDES pinned sessions —
+   *  they render in the left bar's global pinned section (see
+   *  {@link SessionRepo.listPinned}) instead of under their project. The
+   *  remaining rows sort by `updated_at DESC` — a session floats to the top
+   *  whenever it is touched (new message, title/status change, snapshot
+   *  save, …) — with ties falling back to `created_at DESC` for a stable
+   *  order. `opts.limit` / `opts.offset` paginate (used by the left-bar tree,
+   *  which loads the first page and appends on "load more"). `opts.archived`
+   *  filters by the soft-delete flag: omit for all (pinned included), `false`
+   *  for the active thread list (pinned excluded), `true` for the archived
+   *  bin (pinned included — a pinned-then-archived row stays visible there). */
   listByProject(
     projectId: string,
     opts?: { limit?: number; offset?: number; archived?: boolean },
@@ -268,7 +268,14 @@ export const SessionRepo = {
       where.push("archived = ?");
       params.push(opts.archived ? 1 : 0);
     }
-    let sql = `SELECT * FROM sessions WHERE ${where.join(" AND ")} ORDER BY pinned_at DESC, updated_at DESC, created_at DESC`;
+    // Pinned sessions are EXCLUDED from the active list — they render in the
+    // left bar's global "pinned" section above the project tree instead of
+    // under their project. The archived bin (and the unfiltered "all" mode)
+    // still includes them so a pinned-then-archived row stays visible there.
+    if (opts?.archived === false) {
+      where.push("pinned_at IS NULL");
+    }
+    let sql = `SELECT * FROM sessions WHERE ${where.join(" AND ")} ORDER BY updated_at DESC, created_at DESC`;
     if (opts?.limit !== undefined) {
       sql += " LIMIT ?";
       params.push(v(opts.limit));
@@ -286,7 +293,9 @@ export const SessionRepo = {
   },
 
   /** Count sessions for a project, optionally filtered by archived flag.
-   *  Used to compute `hasMore` for pagination. */
+   *  Used to compute `hasMore` for pagination. Matches {@link listByProject}'s
+   *  filters: the active count (`archived === false`) excludes pinned
+   *  sessions so it lines up with what the paginated active list returns. */
   countByProject(projectId: string, archived?: boolean): number {
     const db = getDb();
     const where = ["project_id = ?"];
@@ -295,12 +304,30 @@ export const SessionRepo = {
       where.push("archived = ?");
       params.push(archived ? 1 : 0);
     }
+    if (archived === false) {
+      where.push("pinned_at IS NULL");
+    }
     const stmt = db.prepare(`SELECT COUNT(*) AS n FROM sessions WHERE ${where.join(" AND ")}`);
     stmt.bind(params);
     stmt.step();
     const n = (stmt.getAsObject() as { n: number }).n;
     stmt.free();
     return n;
+  },
+
+  /** All pinned non-archived sessions across every project, most recent pin
+   *  first. Powers the left bar's global pinned section, which hoists pinned
+   *  threads out of their project's list and shows them above the project
+   *  tree (the renderer resolves each row's owning project name locally). */
+  listPinned(): Session[] {
+    const db = getDb();
+    const stmt = db.prepare(
+      "SELECT * FROM sessions WHERE archived = 0 AND pinned_at IS NOT NULL ORDER BY pinned_at DESC",
+    );
+    const out: Session[] = [];
+    while (stmt.step()) out.push(rowToSession(stmt.getAsObject() as unknown as SessionRow));
+    stmt.free();
+    return out;
   },
 
   /** Cross-project title-substring search (Ctrl+K unified search). Scans all

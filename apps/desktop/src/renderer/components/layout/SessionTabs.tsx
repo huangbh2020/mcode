@@ -46,6 +46,7 @@ export function SessionTabs() {
   const tabs = useSessionStore((s) => s.openTabs);
   const activeId = useSessionStore((s) => s.activeSessionId);
   const sessionsByProject = useSessionStore((s) => s.sessionsByProject);
+  const pinnedSessions = useSessionStore((s) => s.pinnedSessions);
   const runningBySession = useSessionStore((s) => s.runningBySession);
   const unreadBySession = useSessionStore((s) => s.unreadBySession);
   const selectSession = useSessionStore((s) => s.selectSession);
@@ -161,7 +162,7 @@ export function SessionTabs() {
               strategy={horizontalListSortingStrategy}
             >
               {tabs.map((id) => {
-                const sess = findSession(sessionsByProject, id);
+                const sess = findSession(sessionsByProject, pinnedSessions, id);
                 const isActive = id === activeId;
                 const running = !!runningBySession[id];
                 const unread = unreadBySession[id] ?? 0;
@@ -211,7 +212,7 @@ export function SessionTabs() {
         <TabBarOverflowMenu
           heading="Open tabs"
           items={tabs.map((id) => {
-            const sess = findSession(sessionsByProject, id);
+            const sess = findSession(sessionsByProject, pinnedSessions, id);
             return {
               key: id,
               label: sess?.title ?? "(unknown)",
@@ -367,11 +368,12 @@ function SortableTab({
   );
 }
 
-/** Find a session across the per-project cache by id. Returns undefined
- *  if the cache hasn't been populated yet (init race) or the id is
- *  unknown. */
+/** Find a session across the per-project cache by id, falling back to the
+ *  global pinned bucket (pinned rows leave their project's list). Returns
+ *  undefined if neither has it (init race / unknown id). */
 function findSession(
   sessionsByProject: Record<string, Session[]>,
+  pinnedSessions: Session[],
   id: string,
 ): Session | undefined {
   for (const list of Object.values(sessionsByProject)) {
@@ -379,5 +381,5 @@ function findSession(
     const hit = list.find((s) => s.id === id);
     if (hit) return hit;
   }
-  return undefined;
+  return pinnedSessions.find((s) => s.id === id);
 }

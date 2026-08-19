@@ -103,6 +103,7 @@ function LeftBarBase({
   const activeSessionId = useSessionStore((s) => s.activeSessionId);
   const expandedProjects = useSessionStore((s) => s.expandedProjects);
   const archivedViewOpen = useSessionStore((s) => s.archivedViewOpen);
+  const pinnedSessions = useSessionStore((s) => s.pinnedSessions);
 
   const addProject = useSessionStore((s) => s.addProjectFromFolder);
   const toggleProjectExpanded = useSessionStore((s) => s.toggleProjectExpanded);
@@ -140,6 +141,13 @@ function LeftBarBase({
     [projects],
   );
 
+  // Project id → name lookup for the global pinned section, whose rows come
+  // from many projects and each carry an owner hint.
+  const projectNameById = useMemo(
+    () => new Map(projects.map((p) => [p.id, p.name])),
+    [projects],
+  );
+
   // The active session's owning project, resolved from the loaded per-project
   // slices (the owning project auto-expands on activation, so its slice is
   // loaded). Used to SUPPRESS the project row's selected look while one of its
@@ -152,8 +160,12 @@ function LeftBarBase({
     for (const [pid, list] of Object.entries(sessionsByProject)) {
       if (list.some((s) => s.id === activeSessionId)) return pid;
     }
-    return null;
-  }, [activeSessionId, sessionsByProject]);
+    // Pinned rows render in the global pinned section, not their project's
+    // list — resolve the owner from the pinned bucket so the project row
+    // still suppresses its own selection while the pinned row is active.
+    const pinned = pinnedSessions.find((s) => s.id === activeSessionId);
+    return pinned ? pinned.projectId : null;
+  }, [activeSessionId, sessionsByProject, pinnedSessions]);
 
   // Theme quick-toggle (bottom rail). useTheme subscribes to theme.changed,
   // so the icon stays in sync when the theme changes elsewhere (settings
@@ -219,7 +231,19 @@ function LeftBarBase({
           break;
         }
       }
-      if (!projectId) return; // archived / unknown - nothing to scroll to.
+      if (!projectId) {
+        // Pinned rows live in the global pinned section, not the per-project
+        // slices — if it's there, expand the section (rows register nodes on
+        // mount) and scroll to it; no project/page expansion needed.
+        if (st.pinnedSessions.some((s) => s.id === id)) {
+          setPinnedOpen(true);
+          await new Promise((r) => requestAnimationFrame(() => r(null)));
+          await new Promise((r) => requestAnimationFrame(() => r(null)));
+          tryScroll();
+          return;
+        }
+        return; // archived / unknown - nothing to scroll to.
+      }
 
       // Reveal ancestors so the row can mount at all. Grouped view: expand
       // the owning group when collapsed (identity return when already open —
@@ -290,6 +314,9 @@ function LeftBarBase({
     | null
   >(null);
   const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
+  // Expand state for the global pinned section (in-memory, defaults open so
+  // the feature is discoverable; mirrors the archived bin's local toggle).
+  const [pinnedOpen, setPinnedOpen] = useState(true);
 
   // Split into active vs archived. Active projects show in the tree;
   // archived projects (whole-project archive) show as their own rows in
@@ -601,6 +628,53 @@ function LeftBarBase({
           </button>
         </div>
       </div>
+
+      {/* Pinned sessions — a global section ABOVE the project tree collecting
+          the pinned threads of every project (pinned rows leave their
+          project's list and live here until unpinned). Mirrors the archived
+          bin's collapsible-header pattern, but defaults open and sits on top.
+          Hidden entirely when nothing is pinned. */}
+      {pinnedSessions.length > 0 && (
+        <div className="mb-2">
+          <button
+            onClick={() => setPinnedOpen(!pinnedOpen)}
+            className={cn(
+              "flex w-full items-center gap-1 rounded px-1 py-0.5 font-medium uppercase tracking-wide [font-size:var(--rp-fs-md)]",
+              "text-content-subtle transition-colors hover:bg-surface-hover/60",
+            )}
+          >
+            <IconChevronRight
+              size={12}
+              className={cn(
+                "shrink-0 transition-transform",
+                pinnedOpen && "rotate-90",
+              )}
+            />
+            <IconPin size={12} className="shrink-0 text-accent/70" />
+            {t("layout.pinnedSection", { n: pinnedSessions.length })}
+          </button>
+          {pinnedOpen && (
+            <ul className="mt-1 space-y-0.5">
+              {pinnedSessions.map((s) => (
+                <SessionRow
+                  key={s.id}
+                  session={s}
+                  active={s.id === activeSessionId}
+                  isRunning={!!runningBySession[s.id]}
+                  unreadCount={unreadBySession[s.id] ?? 0}
+                  projectLabel={projectNameById.get(s.projectId)}
+                  onSelect={() => void openTab(s.id)}
+                  onTogglePin={() => void setSessionPinned(s.id, !s.pinnedAt)}
+                  onArchive={() => void archiveSession(s.id, true)}
+                  onDelete={() => void deleteSession(s.id)}
+                  registerNode={registerNode}
+                  onContext={(x, y) => setCtxMenu({ session: s, x, y })}
+                />
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
 
       {/* Project → session tree. A single DndContext wraps both view modes:
           flat list reorders in place; grouped view reorders within the
@@ -1058,7 +1132,7 @@ function SessionRowIcon({ providerId, className }: { providerId: string; classNa
 }
 
 function SessionRow({
-  session, active, isRunning, unreadCount, onSelect, onTogglePin, onArchive, onDelete, registerNode, onContext,
+  session, active, isRunning, unreadCount, projectLabel, onSelect, onTogglePin, onArchive, onDelete, registerNode, onContext,
 }: {
   session: Session;
   active: boolean;
@@ -1066,8 +1140,13 @@ function SessionRow({
   /** Unread event count for this session (0 = no badge). Only rendered when
    *  the row is idle (not running) and the count is > 0. */
   unreadCount: number;
+  /** Owning project name — only passed by the global pinned section, where
+   *  rows from different projects are interleaved and each needs an owner
+   *  hint. Undefined inside a project's own list (redundant there). */
+  projectLabel?: string;
   onSelect: () => void;
-  /** Toggle this session's pinned state (project-scoped top-of-list pin). */
+  /** Toggle this session's pinned state (moves it into / out of the global
+   *  pinned section above the project tree). */
   onTogglePin: () => void;
   onArchive: () => void;
   onDelete: () => void;
@@ -1138,6 +1217,18 @@ function SessionRow({
       )}
 
       <span className="min-w-0 flex-1 truncate">{session.title}</span>
+
+      {/* Owning project hint — pinned-section rows only (see projectLabel).
+          Docked before the right-edge payload so it stays visible even while
+          the time label / action buttons swap in and out. */}
+      {projectLabel && (
+        <span
+          className="max-w-[45%] shrink-0 truncate text-content-subtle/80 [font-size:var(--rp-fs-sm)]"
+          title={projectLabel}
+        >
+          {projectLabel}
+        </span>
+      )}
 
       {/* Relative time of the last activity (updatedAt), docked to the right
           edge. The row swaps between two right-aligned payloads: the time

@@ -85,6 +85,7 @@ export function PlanViewer({
   // Project root for the session owning this plan (so file paths mentioned in
   // the plan markdown resolve to the right project). Resolved via sessionId ->
   // projectId -> projects[].path, mirroring ChatPane's session-keyed lookup.
+  // Pinned sessions live in the global pinned bucket, scanned as a fallback.
   const projectPath = useSessionStore((s) => {
     let pid: string | undefined;
     for (const list of Object.values(s.sessionsByProject)) {
@@ -94,6 +95,7 @@ export function PlanViewer({
         break;
       }
     }
+    if (!pid) pid = s.pinnedSessions.find((x) => x.id === sessionId)?.projectId;
     if (!pid) return null;
     return s.projects.find((p) => p.id === pid)?.path ?? null;
   });

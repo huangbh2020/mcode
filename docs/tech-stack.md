@@ -280,25 +280,18 @@ RuntimeManager.emit()
 
 `warning`(ok / near-window / critical)按 `pct`(>=90 critical / >=70 near-window)派生,驱动 StatusBar 染色。
 
-### 自定义模型:角色绑定 + 1M 声明(`customModel.ts` / `customEnv.ts`)
+### 自定义模型:扁平模型列表 + 1M 声明(`customModel.ts` / `customEnv.ts`)
 
-自定义模型配置 = 一个端点(baseUrl + token + authMode)+ **5 个角色的绑定表**。每个角色可绑定到网关侧真实模型,会话选择的是**角色**(如 Sonnet)而非模型名。
+自定义模型配置 = 一个端点(baseUrl + token + authMode)+ **扁平模型列表**(与 Pi 的配置方式一致)。每个模型就是一条 `{ id, supports1m? }`,会话直接选择**模型 id**(如 `deepseek-v4-pro`),没有显示名、没有角色概念。
 
-| 角色 | 注入的 env var | 备注 |
-|------|---------------|------|
-| haiku    | `ANTHROPIC_DEFAULT_HAIKU_MODEL` | 模型别名 |
-| sonnet   | `ANTHROPIC_DEFAULT_SONNET_MODEL` | 模型别名 |
-| opus     | `ANTHROPIC_DEFAULT_OPUS_MODEL` | 模型别名 |
-| fable    | `ANTHROPIC_DEFAULT_FABLE_MODEL` | 模型别名(v0.3.218 起一等 tier) |
-| subagent | `CLAUDE_CODE_SUBAGENT_MODEL` | **不是别名** — 内置 Task 工具调用的模型 |
+`buildCustomEnv` 的注入规则:
 
-`buildCustomEnv` 把每个角色的 `requestModel` 写进对应 env var,会话选中角色的 `requestModel` 同时作为 `ANTHROPIC_MODEL`。
+- `ANTHROPIC_MODEL` = 选中模型 id(声明 1M 时带小写 `[1m]` 后缀,DeepSeek 约定);这是主回合模型的唯一通道(不同时传 `--model`,避免双通道不一致)。
+- **后台 tier 环境变量全部镜像选中模型的裸 id**(不带 `[1m]`):`ANTHROPIC_DEFAULT_HAIKU/SONNET/OPUS/FABLE_MODEL`、`CLAUDE_CODE_SUBAGENT_MODEL`(内置 Task 工具用的模型)、`ANTHROPIC_SMALL_FAST_MODEL`(legacy haiku 名,v0.3.218 仍有 37 处引用)、`ANTHROPIC_DEFAULT_SONNET_MODEL_NAME`(DeepSeek 私有约定,永远裸名)。原因:Claude Code 在后台会发**每个** tier 的请求(haiku 用于标题/快速检查、sonnet 用于编码、opus 用于复杂推理…),不镜像的话 tier 回退到内置 `claude-*` 默认模型名 → 第三方网关不认 → 404/"no available channel"。后台请求都是短上下文,所以永不带 `[1m]` 后缀(历史 bug:haiku 通道收到网关不提供的 `deepseek-v4-pro[1m]`)。
 
-**未绑定角色的自动回填**(关键):Claude Code 在后台会发**每个** tier 的请求(haiku 用于标题/快速检查、sonnet 用于编码、opus 用于复杂推理…)。如果某个 tier 没绑定,Claude Code 会回退到内置的 `claude-*` 默认模型名 → 第三方网关不认 → 404 → 报 `"There's an issue with the selected model … may not exist"`。所以 `buildCustomEnv` **自动用会话选中角色的 `requestModel` 回填所有未显式绑定的 tier** —— 用户只填一个角色也能跑通;想要 tier 级差异化路由,显式绑定会覆盖自动回填。同时把 `ANTHROPIC_SMALL_FAST_MODEL`(legacy haiku 名,v0.3.218 仍有 37 处引用)镜像到 haiku 值,兼容老版本读取路径。
+**1M 上下文**:不是 env var,也不是 SDK 的 `options.betas`——是模型名上的 `[1m]` 后缀。按模型声明(`CustomModelEntry.supports1m`):选中该模型时 `ANTHROPIC_MODEL` 带后缀;`ClaudeAgentSdkProvider` 用 `resolveActiveModel(...).endsWith("[1m]")` 推导 `configured: "1m"|"200k"` 上下文标签。启用后 SDK 会在 `modelUsage` 报 `contextWindow:1000000`,上面的 token 数学自动正确。
 
-**1M 上下文**:不是 env var,是 SDK 的 `options.betas = ['context-1m-2025-08-07']`(`sdk.d.ts:1488`,`SdkBeta` 类型)。按角色声明(`RoleBinding.supports1m`):选中该角色时由 `ClaudeAgentSdkProvider` 注入 betas。启用后 SDK 会在 `modelUsage` 报 `contextWindow:1000000`,上面的 token 数学自动正确。
-
-**迁移**:旧配置(`models[] + alias{haiku,sonnet,opus}`)在 `secretStore.readMeta` 时由 `migrateMeta` 合成 `roles`(`models[0]→sonnet`、`alias.*→对应角色`),用户下次保存落盘为新格式。`configured?: "1m"` 钩子(`claudeTokenUsage.ts`)仍保留未启用,可作为后续"强制声明"开关。
+**迁移**(`secretStore.readMeta` 的 `migrateMeta`):两种历史结构在读时透明升级为扁平列表——① 角色绑定表(`roles`):各角色的 `requestModel` 按角色顺序去重后成为模型条目,`supports1m` 在共享同一模型 id 的角色间取 OR;② 最老结构(`models[] + alias{haiku,sonnet,opus}`):先合成角色表再扁平化。旧记录的 `roles` 作为**幽灵字段**保留(不进 `CustomModelMeta` 契约、不透给 renderer),使旧会话 `model` 列里的角色 key(如 `"sonnet"`)仍解析到同一网关模型;用户下次保存配置时幽灵被剥离。`configured?: "1m"` 钩子(`claudeTokenUsage.ts`)仍保留未启用,可作为后续"强制声明"开关。
 
 ### 文件索引
 

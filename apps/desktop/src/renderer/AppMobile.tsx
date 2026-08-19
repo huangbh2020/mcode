@@ -104,6 +104,7 @@ function MobileShell() {
     s.activeSessionId ? s.runningBySession[s.activeSessionId] : false,
   );
   const sessionsByProject = useSessionStore((s) => s.sessionsByProject);
+  const pinnedSessions = useSessionStore((s) => s.pinnedSessions);
   const settingsOpen = useSessionStore((s) => s.settingsOpen);
   const setSettingsOpen = useSessionStore((s) => s.setSettingsOpen);
 
@@ -119,8 +120,12 @@ function MobileShell() {
       const hit = list?.find((x) => x.id === activeSessionId);
       if (hit) return hit.title;
     }
+    // Pinned sessions aren't in the per-project slices — check the global
+    // pinned bucket before falling back to the default title.
+    const pinnedHit = pinnedSessions.find((x) => x.id === activeSessionId);
+    if (pinnedHit) return pinnedHit.title;
     return "Mcode";
-  }, [activeSessionId, sessionsByProject]);
+  }, [activeSessionId, sessionsByProject, pinnedSessions]);
 
   return (
     <div className="flex h-full w-full flex-col bg-surface text-content">
