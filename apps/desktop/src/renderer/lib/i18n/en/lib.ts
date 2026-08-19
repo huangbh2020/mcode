@@ -12,6 +12,7 @@ export const en = {
   "lib.commands.rightPanelFiles": "Right panel: files",
   "lib.commands.searchFiles": "Search files",
   "lib.commands.rightPanelGit": "Right panel: Git",
+  "lib.commands.rightPanelTurns": "Right panel: turn flow",
   "lib.commands.openSettings": "Open settings",
   "lib.commands.focusComposer": "Focus chat input",
   "lib.commands.toggleLeft": "Toggle left sidebar",

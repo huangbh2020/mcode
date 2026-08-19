@@ -3485,7 +3485,8 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       const titleGenEnabledRaw = ds[UI_TITLE_GEN_ENABLED_SETTING_KEY];
       const titleGenModelRaw = ds[UI_TITLE_GEN_MODEL_SETTING_KEY];
 
-      if (tabRaw === "files" || tabRaw === "git") set({ rightPanelTab: tabRaw });
+      if (tabRaw === "files" || tabRaw === "git" || tabRaw === "turns")
+        set({ rightPanelTab: tabRaw });
       if (modeRaw === "tabs" || modeRaw === "replace") set({ ideEditorMode: modeRaw });
       if (diffModeRaw === "center" || diffModeRaw === "dialog") set({ gitDiffOpenMode: diffModeRaw });
       set({ commitGenModel: commitModelRaw || null });

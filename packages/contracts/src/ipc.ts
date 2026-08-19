@@ -295,8 +295,8 @@ export const UI_ACCENT_COLOR_SETTING_KEY = "ui.accentColor";
 
 /**
  * Setting key under which the active right-panel tab is persisted.
- * Value is one of "files" | "git" | "browser". The right panel reads it at boot
- * and restores the last-used tab. "browser" re-enables the browser as an
+ * Value is one of "files" | "git" | "browser" | "turns". The right panel reads it
+ * at boot and restores the last-used tab. "browser" re-enables the browser as an
  * embedded sidebar panel (mobile-first); on hydrate the store still falls back
  * to "files" so the browser doesn't auto-open at startup — the "browser" value
  * is only reached via an explicit user toggle during the session.
@@ -306,7 +306,7 @@ export const UI_ACCENT_COLOR_SETTING_KEY = "ui.accentColor";
 export const UI_RIGHT_PANEL_TAB_SETTING_KEY = "ui.rightPanelTab";
 
 /** zod schema + TS union for the right-panel tab preference. */
-export const RightPanelTabSchema = z.enum(["files", "git", "browser"]);
+export const RightPanelTabSchema = z.enum(["files", "git", "browser", "turns"]);
 export type RightPanelTab = z.infer<typeof RightPanelTabSchema>;
 
 /**

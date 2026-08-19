@@ -46,6 +46,7 @@ import {
   IconWorld,
   IconFolder,
   IconGitBranch,
+  IconListDetails,
   IconSettings,
   IconSun,
   IconMoon,
@@ -204,6 +205,17 @@ const STATIC_COMMANDS: StaticCommandDef[] = [
     icon: IconGitBranch,
     perform: (s) => {
       s.setRightPanelTab("git");
+      s.setRightOpen(true);
+    },
+  },
+  {
+    id: "view.right-panel.turns",
+    labelKey: "lib.commands.rightPanelTurns",
+    group: "视图",
+    keywords: ["turns", "flow", "timeline", "usage", "轮次", "流程", "时间线", "右栏"],
+    icon: IconListDetails,
+    perform: (s) => {
+      s.setRightPanelTab("turns");
       s.setRightOpen(true);
     },
   },

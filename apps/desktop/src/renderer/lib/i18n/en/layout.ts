@@ -80,6 +80,7 @@ export const en = {
   "layout.hideEditor": "Hide editor",
   "layout.noOpenFiles": "No open files",
   "layout.tabFiles": "Files",
+  "layout.tabTurns": "Turn Flow",
   "layout.openBrowser": "Open browser",
   "layout.closeSidebarBrowser": "Close sidebar browser",
 

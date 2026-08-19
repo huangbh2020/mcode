@@ -15,6 +15,7 @@ export const zh = {
   "lib.commands.rightPanelFiles": "右栏：文件",
   "lib.commands.searchFiles": "搜索文件",
   "lib.commands.rightPanelGit": "右栏：Git",
+  "lib.commands.rightPanelTurns": "右栏：轮次流程",
   "lib.commands.openSettings": "打开设置",
   "lib.commands.focusComposer": "聚焦聊天输入框",
   "lib.commands.toggleLeft": "切换左侧栏",

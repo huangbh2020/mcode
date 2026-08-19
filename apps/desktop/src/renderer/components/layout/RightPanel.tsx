@@ -3,6 +3,7 @@ import {
   IconFolder,
   IconGitBranch,
   IconWorld,
+  IconListDetails,
   IconArrowsMaximize,
   IconArrowsMinimize,
 } from "@renderer/lib/icons.js";
@@ -10,6 +11,7 @@ import { useSessionStore } from "@renderer/stores/sessionStore.js";
 import { resolveShortcut, acceleratorToDisplayString } from "@renderer/lib/shortcuts.js";
 import { FilesPanel } from "@renderer/components/ide/FilesPanel.js";
 import { GitPanel } from "@renderer/components/ide/GitPanel.js";
+import { TurnFlowPanel } from "@renderer/components/ide/TurnFlowPanel.js";
 import { BrowserPanel } from "@renderer/components/browser/BrowserPanel.js";
 import { useI18n } from "@renderer/lib/i18n/index.js";
 
@@ -84,6 +86,15 @@ export function RightPanel() {
             </span>
           )}
         </div>
+        {/* Turn flow — per-turn visualization of the model's work process
+            (prompt → actions → reply → token cost) from the message stream. */}
+        <RailButton
+          active={tab === "turns"}
+          onClick={() => setTab("turns")}
+          title={t("layout.tabTurns")}
+        >
+          <IconListDetails size={16} className="shrink-0" />
+        </RailButton>
         {/* Wide-panel (2:8) mode - hide the left sidebar + center editor and
             split the workspace into this right panel (8/10) + the chat column
             (2/10). Toggled here, via the command palette / shortcut, or the
@@ -116,6 +127,7 @@ export function RightPanel() {
       <div className="relative min-h-0 flex-1 overflow-hidden">
         {tab === "files" && <FilesPanel />}
         {tab === "git" && <GitPanel />}
+        {tab === "turns" && <TurnFlowPanel />}
         {tab === "browser" && <BrowserPanel mode="sidebar" />}
       </div>
     </div>
