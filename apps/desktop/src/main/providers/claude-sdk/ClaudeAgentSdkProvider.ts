@@ -886,6 +886,7 @@ export class ClaudeAgentSdkProvider implements AgentProvider {
       q,
       req.initialTodos ?? [],
       configured,
+      !req.apiConfig,
     );
 
     let finished = false;
@@ -956,6 +957,7 @@ export class ClaudeAgentSdkProvider implements AgentProvider {
                 activeQuery,
                 req.initialTodos ?? [],
                 configured,
+                !req.apiConfig,
               );
               continue;
             }

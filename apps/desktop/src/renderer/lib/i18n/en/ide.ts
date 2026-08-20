@@ -75,6 +75,12 @@ export const en = {
   "ide.editor.addToChat": "Add to chat",
   "ide.editor.copyPath": "Copy path",
   "ide.editor.unsaved": "Unsaved",
+  "ide.editor.gotoKind.definition": "definition",
+  "ide.editor.gotoKind.implementation": "implementation",
+  "ide.editor.gotoKind.references": "references",
+  "ide.editor.gotoSearching": "Finding {kind}…",
+  "ide.editor.gotoNoneFound": "No {kind} found",
+  "ide.editor.gotoFailed": "{kind} search failed",
 
   /* ── search dialog ── */
   "ide.search.modeNameHint": "Current: file name search — click to switch to content search",

@@ -77,6 +77,12 @@ export const zh = {
   "ide.editor.addToChat": "加入聊天",
   "ide.editor.copyPath": "复制路径",
   "ide.editor.unsaved": "未保存",
+  "ide.editor.gotoKind.definition": "定义",
+  "ide.editor.gotoKind.implementation": "实现",
+  "ide.editor.gotoKind.references": "引用",
+  "ide.editor.gotoSearching": "正在查找{kind}…",
+  "ide.editor.gotoNoneFound": "未找到{kind}",
+  "ide.editor.gotoFailed": "查找{kind}失败",
 
   /* ── search dialog ── */
   "ide.search.modeNameHint": "当前:文件名搜索 - 点击切到内容搜索",

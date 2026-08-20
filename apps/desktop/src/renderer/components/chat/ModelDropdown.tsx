@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { Menu } from "@base-ui/react/menu";
 import { cn } from "@renderer/lib/cn.js";
 import { useI18n } from "@renderer/lib/i18n/index.js";
@@ -71,6 +71,24 @@ export function ModelDropdown() {
   // as the "模型列表" section instead — its static aliases are intentionally
   // hidden from the menu (users pick from their configured endpoints).
   const showPiModels = isPi && piAvailableModels.length > 0;
+  // Group Pi models by supplier so each model's vendor is visible (mirrors
+  // Claude's config-grouped picker, whose top-level rows are the gateway
+  // "suppliers"). supplier came from the projection; fall back to the id
+  // prefix for safety. Order of groups = order of first appearance.
+  const piGroups = useMemo(() => {
+    if (!isPi) return [];
+    const groups: { supplier: string; models: typeof piAvailableModels }[] = [];
+    for (const b of piAvailableModels) {
+      const supplier = b.supplier ?? b.id.split("/")[0] ?? b.id;
+      let g = groups.find((x) => x.supplier === supplier);
+      if (!g) {
+        g = { supplier, models: [] };
+        groups.push(g);
+      }
+      g.models.push(b);
+    }
+    return groups;
+  }, [isPi, piAvailableModels]);
   // "管理模型" lands on the unified model-config settings section. Both claude
   // (custom endpoints) and pi (models.json providers) now live on the same
   // "custom-models" page, distinguished by a type badge in its left list.
@@ -165,37 +183,45 @@ export function ModelDropdown() {
             )}
 
             {/* Pi models: dynamically discovered from ~/.pi/agent/models.json
-                (configured in the Pi models settings panel). Flat list, single
-                select — each entry maps to a "providerId/modelId" string that
-                PiAgentSdkProvider resolves to a Model object at turn time. We
-                use setModel (not setCustomModel) because pi has no custom-config
-                concept: the picked id is a concrete model, persisted verbatim
-                in the session's `model` field and consumed by the provider. */}
+                (configured in the Pi models settings panel). Flat list grouped
+                by supplier, single select — each entry maps to a
+                "providerId/modelId" string that PiAgentSdkProvider resolves to
+                a Model object at turn time. We use setModel (not
+                setCustomModel) because pi has no custom-config concept: the
+                picked id is a concrete model, persisted verbatim in the
+                session's `model` field and consumed by the provider. */}
             {showPiModels && (
               <div className="border-b border-edge/60 pb-1">
                 <div className="px-3 py-1 text-xs uppercase tracking-wide text-content-subtle">
                   {t("chat.model.list")}
                 </div>
-                {piAvailableModels.map((b) => {
-                  const active = model === b.id;
-                  return (
-                    <Menu.Item
-                      key={b.id}
-                      className={cn(
-                        "flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-[13px] outline-none select-none",
-                        "data-[highlighted]:bg-surface-muted",
-                        active ? "text-accent" : "text-content-muted",
-                      )}
-                      onClick={() => setModel(b.id)}
-                    >
-                      <span className="flex min-w-0 items-baseline gap-2">
-                        <span className="font-medium">{b.label}</span>
-                        {b.hint && <span className="truncate text-xs text-content-subtle">{b.hint}</span>}
-                      </span>
-                      {active && <IconCheck size={14} className="shrink-0" />}
-                    </Menu.Item>
-                  );
-                })}
+                {piGroups.map((group) => (
+                  <div key={group.supplier}>
+                    <div className="px-3 pb-0.5 pt-1 text-[11px] font-semibold uppercase tracking-wide text-content-subtle">
+                      {group.supplier}
+                    </div>
+                    {group.models.map((b) => {
+                      const active = model === b.id;
+                      return (
+                        <Menu.Item
+                          key={b.id}
+                          className={cn(
+                            "flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-[13px] outline-none select-none",
+                            "data-[highlighted]:bg-surface-muted",
+                            active ? "text-accent" : "text-content-muted",
+                          )}
+                          onClick={() => setModel(b.id)}
+                        >
+                          <span className="flex min-w-0 items-baseline gap-2">
+                            <span className="font-medium">{b.label}</span>
+                            {b.hint && <span className="truncate text-xs text-content-subtle">{b.hint}</span>}
+                          </span>
+                          {active && <IconCheck size={14} className="shrink-0" />}
+                        </Menu.Item>
+                      );
+                    })}
+                  </div>
+                ))}
               </div>
             )}
 

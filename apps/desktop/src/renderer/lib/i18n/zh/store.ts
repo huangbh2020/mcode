@@ -13,4 +13,5 @@ export const zh = {
   "store.toast.errorOccurred": "发生错误",
   "store.toast.turnComplete": "回合完成",
   "store.toast.turnCompleteBody": "Agent 已完成本轮任务",
+  "store.toast.turnIncomplete": "任务提前中断",
 } as const;

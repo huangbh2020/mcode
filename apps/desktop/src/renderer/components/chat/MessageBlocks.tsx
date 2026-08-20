@@ -732,6 +732,33 @@ const BlockView = memo(function BlockView({
         </div>
       );
 
+    case "turn-incomplete":
+      // Gateway-truncated turn — the CLI reported "success" but the model
+      // never finished (empty final response). Amber, not red: the turn's
+      // context is intact and sending "继续" resumes from where it stopped.
+      return (
+        <div className="flex flex-col gap-1 rounded-md border border-warning/50 bg-warning/10 px-3 py-2 [font-size:var(--chat-fs-sm)]">
+          <div className="flex items-center gap-1.5 font-medium text-warning">
+            <IconAlertTriangle size={14} className="shrink-0" />
+            <span>{t("chatStream.turnIncomplete.title")}</span>
+          </div>
+          <div className="text-content-muted">
+            {t(
+              block.incompleteKind === "empty-response"
+                ? "chatStream.turnIncomplete.emptyDesc"
+                : "chatStream.turnIncomplete.danglingDesc",
+            )}
+          </div>
+          {block.pendingToolNames.length > 0 && (
+            <div className="text-content-muted">
+              {t("chatStream.turnIncomplete.pendingTools", {
+                tools: block.pendingToolNames.join("、"),
+              })}
+            </div>
+          )}
+        </div>
+      );
+
     case "plan":
       // Inline read-only plan card that lives in the message stream as a
       // per-turn trailing block (drafting -> 待审阅 -> 已就绪). Clicking it

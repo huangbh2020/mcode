@@ -16,6 +16,7 @@ import type {
   ContextUsageEvent,
   ContextSnapshot,
   TurnDoneEvent,
+  TurnIncompleteEvent,
   TurnFilesEvent,
   ErrorEvent,
   TodoUpdateEvent,
@@ -323,6 +324,27 @@ interface AdapterState {
    *  INTERMEDIATE one (held back because subagents were still running), the
    *  real turn.done is deferred to flushFinal(), which uses this reason. */
   lastResultReason?: TurnDoneEvent["reason"];
+  /** Subtype of the LAST `result` message ("success" / "error_max_turns" …).
+   *  Read by the turn-incomplete check in flushFinal: only success-ending
+   *  turns qualify (error subtypes already surface via the error event). */
+  lastResultSubtype: string | null;
+  /** tool_use id → tool name, for every main-agent tool_use emitted this
+   *  turn. Lets the turn-incomplete check report WHICH calls are dangling. */
+  toolUseNames: Map<string, string>;
+  /** tool_use ids that received a tool_result this turn. Diffed against
+   *  emittedToolUse in flushFinal to detect dangling calls (the model was
+   *  mid-tool-flow when the stream closed — third-party gateways returning
+   *  an empty final completion). */
+  resultedToolUseIds: Set<string>;
+  /** True once any assistant text block arrived this turn. A success-ending
+   *  turn with no text at all is the other half of the empty-response
+   *  failure mode the turn-incomplete check covers. */
+  textEmitted: boolean;
+  /** True once the turn used an interaction tool (EnterPlanMode /
+   *  ExitPlanMode / AskUserQuestion). Those turns legitimately end without
+   *  narration text — the "payload" lives in the tool input / approval flow —
+   *  so the empty-response half of the turn-incomplete check must skip them. */
+  interactionToolSeen: boolean;
   /** Level signal of live background tasks (SDK `background_tasks_changed`).
    *  The SDK documents it as the authoritative "is background work running"
    *  source — we track the task_ids here for observability / future use.
@@ -382,6 +404,19 @@ export class SdkMessageAdapter {
      *  strips the `[1m]` suffix from `message.model`. `undefined` (official
      *  Anthropic endpoint) lets the heuristic decide from the model name. */
     private configured?: ClaudeContextWindowTag,
+    /** Whether to use the `getContextUsage()` control channel for turn-end
+     *  window occupancy (path B). OFF for custom/gateway endpoints. The gate
+     *  exists because kicking off `getContextUsage()` mid-turn leaves a
+     *  `get_context_usage` request IN FLIGHT on the CLI's control channel; on
+     *  third-party gateways that channel answers slowly, and although the
+     *  snapshot emit is fire-and-forget, the query generator's teardown stays
+     *  blocked behind the unanswered request until our
+     *  CONTEXT_USAGE_PATH_B_TIMEOUT_MS race resolves — stalling turn.done
+     *  (and the loading spinner) by that full 3s on every gateway turn. The
+     *  value we'd get is discarded anyway: the plausibility gate rejects the
+     *  garbage totals gateways report. Official Anthropic answers in
+     *  milliseconds with trustworthy values, so path B stays enabled there. */
+    private enableControlChannel = true,
   ) {
     this.state = {
       blockMessageIds: new Map(),
@@ -397,6 +432,11 @@ export class SdkMessageAdapter {
       assistantMessageCount: 0,
       streamDeltaUsageCount: 0,
       turnDoneEmitted: false,
+      lastResultSubtype: null,
+      toolUseNames: new Map(),
+      resultedToolUseIds: new Set(),
+      textEmitted: false,
+      interactionToolSeen: false,
       backgroundTaskIds: new Set(),
       contentStarted: false,
     };
@@ -520,6 +560,9 @@ export class SdkMessageAdapter {
       }
     }
     if (subagentsChanged) this.flushSubagents();
+    // Flag gateway-truncated turns BEFORE turn.done so the renderer can
+    // replace its "回合完成" toast with an accurate "任务提前中断" warning.
+    this.maybeEmitTurnIncomplete();
     // Turn end, exactly once. Three paths converge here:
     //  - a result arrived while subagents were still running → held back by
     //    maybeEmitTurnDone, now emitted with the final result's reason;
@@ -529,6 +572,61 @@ export class SdkMessageAdapter {
     if (!this.state.turnDoneEmitted) {
       this.emitTurnDone(this.state.lastResultReason ?? "interrupted");
     }
+  }
+
+  /** Detect a "successfully"-ended turn whose stream shows the model never
+   *  finished — the third-party-gateway failure where the model channel
+   *  answers the last tool_result with an EMPTY completion and the CLI
+   *  accepts it as a normal end-of-turn (observed 2026-08-20 on an
+   *  OpenAI-protocol bridge: turn died right after a Read tool_use, result
+   *  subtype=success, no final text, no error). Without this check the user
+   *  just sees the work stop with a "turn complete" toast.
+   *
+   *  Conditions are deliberately narrow to avoid false positives:
+   *  - last result subtype must be "success" (errors already surface);
+   *  - the turn must not be user-interrupted (dangling tools are expected
+   *    there);
+   *  - Task launches are excluded — a backgrounded subagent legitimately
+   *    outlives the parent stream, and its Task tool_use may never get an
+   *    in-stream tool_result. */
+  private maybeEmitTurnIncomplete(): void {
+    if (this.state.lastResultSubtype !== "success") return;
+    if (this.abortSignal?.aborted) return;
+
+    const pending = [...this.state.emittedToolUse]
+      .filter((id) => !this.state.resultedToolUseIds.has(id))
+      .map((id) => ({ toolCallId: id, toolName: this.state.toolUseNames.get(id) ?? "" }))
+      .filter((c) => c.toolName !== "Task");
+
+    let kind: TurnIncompleteEvent["kind"] | null = null;
+    if (pending.length > 0) {
+      kind = "dangling-tools";
+    } else if (
+      !this.state.textEmitted &&
+      this.state.emittedToolUse.size > 0 &&
+      !this.state.interactionToolSeen
+    ) {
+      // Tools ran but the model never narrated anything — also a truncated
+      // turn (a healthy turn always ends with the final text reply). Only
+      // checked when tools ran: a completely empty turn (no content at all)
+      // usually means the SDK is about to throw / has already surfaced an
+      // error, and the error card covers it. Turns driven by interaction
+      // tools (plan mode / AskUserQuestion) legitimately end text-less.
+      kind = "empty-response";
+    }
+    if (!kind) return;
+
+    this.ctx.log.warn(
+      `turn incomplete (gateway likely returned an empty final response): kind=${kind} pendingToolCalls=[${pending
+        .map((c) => c.toolName)
+        .join(", ")}]`,
+    );
+    this.ctx.emit({
+      type: "turn.incomplete",
+      sessionId: this.sessionId,
+      kind,
+      pendingToolCalls: kind === "dangling-tools" ? pending : [],
+    } satisfies TurnIncompleteEvent);
   }
 
   /* ──────────────── per-message-type handlers ──────────────── */
@@ -918,7 +1016,7 @@ export class SdkMessageAdapter {
     // before response received" because the generator is already tearing
     // down. We don't await here - just kick it off and let it resolve in the
     // background.
-    if (this.query && !this.state.pendingContextUsage) {
+    if (this.enableControlChannel && this.query && !this.state.pendingContextUsage) {
       // Diagnostic: log when the control channel fires relative to the turn's
       // assistant-message stream, plus the last path-A occupancy. Lets us
       // correlate getContextUsage accuracy with kickoff timing (gateway
@@ -947,6 +1045,10 @@ export class SdkMessageAdapter {
       // handleStreamEvent; text.delta uses the same map), so the index here
       // matches the stream's content index.
       if (b.type === "text" || b.type === "thinking") {
+        const rawText = (b as { text?: unknown }).text;
+        if (b.type === "text" && typeof rawText === "string" && rawText.trim().length > 0) {
+          this.state.textEmitted = true;
+        }
         const narrationId = this.state.blockMessageIds.get(idx);
         if (narrationId) this.state.lastNarrationMessageId = narrationId;
         continue;
@@ -964,6 +1066,10 @@ export class SdkMessageAdapter {
 
         if (this.state.emittedToolUse.has(b.id)) continue;
         this.state.emittedToolUse.add(b.id);
+        this.state.toolUseNames.set(b.id, b.name);
+        if (b.name === "EnterPlanMode" || b.name === "ExitPlanMode" || b.name === "AskUserQuestion") {
+          this.state.interactionToolSeen = true;
+        }
         // A tool_use block is renderable assistant content — once emitted, the
         // provider's transport-retry wrapper must not retry (would orphan it).
         this.state.contentStarted = true;
@@ -1205,6 +1311,7 @@ export class SdkMessageAdapter {
         // dedicated subagent transcript view, route these there instead.
         if (m.parent_tool_use_id) continue;
 
+        this.state.resultedToolUseIds.add(b.tool_use_id);
         this.ctx.emit({
           type: "tool.result",
           sessionId: this.sessionId,
@@ -1226,6 +1333,7 @@ export class SdkMessageAdapter {
     this.ctx.log.info(
       `claude result: subtype=${m.subtype} usage=${JSON.stringify(rawUsage)} modelUsage=${JSON.stringify(rawModelUsage)} total_cost_usd=${(m as { total_cost_usd?: number }).total_cost_usd ?? "n/a"}`,
     );
+    this.state.lastResultSubtype = m.subtype;
 
     if (m.subtype === "success") {
       // Usage + cost (see https://code.claude.com/docs/en/agent-sdk/cost-tracking)

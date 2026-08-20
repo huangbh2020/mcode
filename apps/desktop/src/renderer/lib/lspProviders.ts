@@ -20,7 +20,7 @@ import type { editor, languages, IDisposable, IRange, MarkerSeverity, Uri } from
 import type { LspDiagnostic, LspLanguageId } from "@contracts/ipc";
 import { api } from "@renderer/lib/api.js";
 import { useSessionStore } from "@renderer/stores/sessionStore.js";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useSyncExternalStore } from "react";
 
 /** Map a Monaco language id to the LSP language id we route requests through.
  *  TS server handles both typescript + javascript, so both map to "typescript".
@@ -79,10 +79,13 @@ export function ensureLspProviders(
     return s.projects.find((p) => p.id === pid)?.path ?? null;
   };
 
-  /** Forward an LSP request to main and return the result (or null on error). */
+  /** Forward an LSP request to main. Throws on failure (no active project,
+   *  server not enabled/installed, transport error) so the caller can decide
+   *  whether to surface it — the goto providers turn it into the activity
+   *  pill's error state; hover swallows it silently. */
   const lspRequest = async (method: string, params: unknown): Promise<unknown> => {
     const wp = workspacePath();
-    if (!wp) return null;
+    if (!wp) throw new Error("no active project");
     const res = await api.lsp.request({
       workspacePath: wp,
       language: lspLang,
@@ -90,10 +93,9 @@ export function ensureLspProviders(
       params,
     });
     if ("error" in res) {
-      // Silent - the server may not support this method or the position may
-      // have no definition. Log to console for debugging.
+      // The server may not support this method; log for debugging.
       console.debug(`lsp.request ${method} failed:`, res.error.message);
-      return null;
+      throw new Error(res.error.message);
     }
     return res.result;
   };
@@ -107,39 +109,54 @@ export function ensureLspProviders(
     monaco.languages.registerDefinitionProvider(languageId, {
       provideDefinition: async (model, position) => {
         const docUri = modelToLspUri(model);
-        const result = await lspRequest("textDocument/definition", {
-          textDocument: { uri: docUri },
-          position: toLspPosition(position),
-        });
-        const locs = toMonacoLocations(result, monaco);
-        if (!locs || locs.length === 0) return null;
-        // Extract the path from the RAW LSP result (not from Monaco's Uri,
-        // which lowercases the Windows drive letter). This preserves the
-        // original case so openFileInIde's path matches the store.
-        const firstRaw = firstRawLocation(result);
-        if (firstRaw) {
-          const targetPath = uriToFilePath(decodeURIComponentSafe(firstRaw.uri));
-          const currentPath = uriToFilePath(decodeURIComponentSafe(docUri));
-          if (targetPath !== currentPath) {
-            // Cross-file: open via the store (which records the outgoing
-            // location into the navigation history itself).
-            gotoLocation(
-              targetPath,
-              firstRaw.range.start.line + 1,
-              firstRaw.range.start.character + 1,
-            );
+        const activity = lspGotoTracker.begin("definition");
+        try {
+          const result = await lspRequest("textDocument/definition", {
+            textDocument: { uri: docUri },
+            position: toLspPosition(position),
+          });
+          const locs = toMonacoLocations(result, monaco);
+          if (!locs || locs.length === 0) {
+            lspGotoTracker.end(activity, "empty");
             return null;
           }
+          // Extract the path from the RAW LSP result (not from Monaco's Uri,
+          // which lowercases the Windows drive letter). This preserves the
+          // original case so openFileInIde's path matches the store.
+          const firstRaw = firstRawLocation(result);
+          if (firstRaw) {
+            const targetPath = uriToFilePath(decodeURIComponentSafe(firstRaw.uri));
+            const currentPath = uriToFilePath(decodeURIComponentSafe(docUri));
+            if (targetPath !== currentPath) {
+              // Cross-file: open via the store (which records the outgoing
+              // location into the navigation history itself).
+              gotoLocation(
+                targetPath,
+                firstRaw.range.start.line + 1,
+                firstRaw.range.start.character + 1,
+              );
+              lspGotoTracker.end(activity, "done");
+              return null;
+            }
+          }
+          // Same-file (or raw extraction failed): return locations so Monaco
+          // navigates natively. Monaco's jump bypasses the store, so record the
+          // pre-jump position here for Alt+← (navigation history).
+          useSessionStore.getState().pushNavHistory({
+            filePath: uriToFilePath(decodeURIComponentSafe(docUri)),
+            line: position.lineNumber,
+            column: position.column,
+          });
+          lspGotoTracker.end(activity, "done");
+          return locs;
+        } catch (err) {
+          lspGotoTracker.end(
+            activity,
+            "error",
+            err instanceof Error ? err.message : String(err),
+          );
+          return null;
         }
-        // Same-file (or raw extraction failed): return locations so Monaco
-        // navigates natively. Monaco's jump bypasses the store, so record the
-        // pre-jump position here for Alt+← (navigation history).
-        useSessionStore.getState().pushNavHistory({
-          filePath: uriToFilePath(decodeURIComponentSafe(docUri)),
-          line: position.lineNumber,
-          column: position.column,
-        });
-        return locs;
       },
     }),
   );
@@ -148,12 +165,24 @@ export function ensureLspProviders(
   providerDisposers.push(
     monaco.languages.registerReferenceProvider(languageId, {
       provideReferences: async (model, position) => {
-        const result = await lspRequest("textDocument/references", {
-          textDocument: { uri: modelToLspUri(model) },
-          position: toLspPosition(position),
-          context: { includeDeclaration: true },
-        });
-        return toMonacoLocations(result, monaco);
+        const activity = lspGotoTracker.begin("references");
+        try {
+          const result = await lspRequest("textDocument/references", {
+            textDocument: { uri: modelToLspUri(model) },
+            position: toLspPosition(position),
+            context: { includeDeclaration: true },
+          });
+          const locs = toMonacoLocations(result, monaco);
+          lspGotoTracker.end(activity, locs && locs.length > 0 ? "done" : "empty");
+          return locs;
+        } catch (err) {
+          lspGotoTracker.end(
+            activity,
+            "error",
+            err instanceof Error ? err.message : String(err),
+          );
+          return null;
+        }
       },
     }),
   );
@@ -165,35 +194,50 @@ export function ensureLspProviders(
     monaco.languages.registerImplementationProvider(languageId, {
       provideImplementation: async (model, position) => {
         const docUri = modelToLspUri(model);
-        const result = await lspRequest("textDocument/implementation", {
-          textDocument: { uri: docUri },
-          position: toLspPosition(position),
-        });
-        const locs = toMonacoLocations(result, monaco);
-        if (!locs || locs.length === 0) return null;
-        // Cross-file navigation: open the first target via the store.
-        const firstRaw = firstRawLocation(result);
-        if (firstRaw) {
-          const targetPath = uriToFilePath(decodeURIComponentSafe(firstRaw.uri));
-          const currentPath = uriToFilePath(decodeURIComponentSafe(docUri));
-          if (targetPath !== currentPath) {
-            gotoLocation(
-              targetPath,
-              firstRaw.range.start.line + 1,
-              firstRaw.range.start.character + 1,
-            );
+        const activity = lspGotoTracker.begin("implementation");
+        try {
+          const result = await lspRequest("textDocument/implementation", {
+            textDocument: { uri: docUri },
+            position: toLspPosition(position),
+          });
+          const locs = toMonacoLocations(result, monaco);
+          if (!locs || locs.length === 0) {
+            lspGotoTracker.end(activity, "empty");
             return null;
           }
+          // Cross-file navigation: open the first target via the store.
+          const firstRaw = firstRawLocation(result);
+          if (firstRaw) {
+            const targetPath = uriToFilePath(decodeURIComponentSafe(firstRaw.uri));
+            const currentPath = uriToFilePath(decodeURIComponentSafe(docUri));
+            if (targetPath !== currentPath) {
+              gotoLocation(
+                targetPath,
+                firstRaw.range.start.line + 1,
+                firstRaw.range.start.character + 1,
+              );
+              lspGotoTracker.end(activity, "done");
+              return null;
+            }
+          }
+          // Same-file: return locations so Monaco navigates natively. Record
+          // the pre-jump position for Alt+← (navigation history), same as the
+          // definition provider above.
+          useSessionStore.getState().pushNavHistory({
+            filePath: uriToFilePath(decodeURIComponentSafe(docUri)),
+            line: position.lineNumber,
+            column: position.column,
+          });
+          lspGotoTracker.end(activity, "done");
+          return locs;
+        } catch (err) {
+          lspGotoTracker.end(
+            activity,
+            "error",
+            err instanceof Error ? err.message : String(err),
+          );
+          return null;
         }
-        // Same-file: return locations so Monaco navigates natively. Record
-        // the pre-jump position for Alt+← (navigation history), same as the
-        // definition provider above.
-        useSessionStore.getState().pushNavHistory({
-          filePath: uriToFilePath(decodeURIComponentSafe(docUri)),
-          line: position.lineNumber,
-          column: position.column,
-        });
-        return locs;
       },
     }),
   );
@@ -202,13 +246,93 @@ export function ensureLspProviders(
   providerDisposers.push(
     monaco.languages.registerHoverProvider(languageId, {
       provideHover: async (model, position) => {
-        const result = await lspRequest("textDocument/hover", {
-          textDocument: { uri: modelToLspUri(model) },
-          position: toLspPosition(position),
-        });
-        return toMonacoHover(result, monaco);
+        // Silent on failure: hover fires on every mouse move, so errors
+        // (server disabled, no workspace) must not spam anywhere.
+        try {
+          const result = await lspRequest("textDocument/hover", {
+            textDocument: { uri: modelToLspUri(model) },
+            position: toLspPosition(position),
+          });
+          return toMonacoHover(result, monaco);
+        } catch {
+          return null;
+        }
       },
     }),
+  );
+}
+
+/* ──────────────────────── goto activity tracking ────────────────────────
+ *
+ * Interactive LSP navigation (F12 / Ctrl+F12 / Shift+F12) can take seconds
+ * on a cold server (spawn + initialize handshake + tsserver project load),
+ * and the cross-file path returns null to Monaco — the editor shows NOTHING
+ * while the request is in flight, and nothing when it comes back empty.
+ * This tiny pub/sub (same pattern as OpenTabsBar's ideDirtyTracker) lets
+ * EditPane render a small floating "正在查找…" pill so the user can see the
+ * query is working, and briefly see the outcome ("未找到实现" / the error,
+ * e.g. "语言服务器未启用"). Hover is deliberately NOT tracked (too chatty). */
+
+export type GotoKind = "definition" | "implementation" | "references";
+
+export interface GotoActivity {
+  id: number;
+  kind: GotoKind;
+  startedAt: number;
+  state: "pending" | "done" | "empty" | "error";
+  /** Terminal-state detail (error message, shown as the pill's tooltip). */
+  message?: string;
+}
+
+const gotoActivities = new Map<number, GotoActivity>();
+const gotoListeners = new Set<() => void>();
+/** Stable snapshot for useSyncExternalStore (rebuilt only on changes, so the
+ *  Object.is identity rule holds between notifications). */
+let gotoSnapshot: GotoActivity[] = [];
+let gotoSeq = 0;
+/** How long a terminal (done/empty/error) entry lingers in the snapshot so
+ *  the pill can show its outcome before being dropped. */
+const GOTO_RESULT_LINGER_MS = 1800;
+
+function notifyGoto(): void {
+  gotoSnapshot = [...gotoActivities.values()];
+  gotoListeners.forEach((fn) => fn());
+}
+
+export const lspGotoTracker = {
+  begin(kind: GotoKind): number {
+    const id = ++gotoSeq;
+    gotoActivities.set(id, { id, kind, startedAt: Date.now(), state: "pending" });
+    notifyGoto();
+    return id;
+  },
+  end(id: number, state: "done" | "empty" | "error", message?: string): void {
+    const entry = gotoActivities.get(id);
+    if (!entry) return;
+    entry.state = state;
+    entry.message = message;
+    notifyGoto();
+    // Drop the terminal entry after the linger so the pill fades out.
+    setTimeout(() => {
+      if (gotoActivities.get(id) === entry) {
+        gotoActivities.delete(id);
+        notifyGoto();
+      }
+    }, GOTO_RESULT_LINGER_MS);
+  },
+  subscribe(fn: () => void): () => void {
+    gotoListeners.add(fn);
+    return () => gotoListeners.delete(fn);
+  },
+};
+
+/** Hook: current goto activities (in-flight + briefly-lingering results).
+ *  Re-renders the caller whenever the set changes. */
+export function useLspGotoActivities(): GotoActivity[] {
+  return useSyncExternalStore(
+    lspGotoTracker.subscribe,
+    () => gotoSnapshot,
+    () => gotoSnapshot,
   );
 }
 

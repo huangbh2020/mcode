@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import Editor, { DiffEditor } from "@monaco-editor/react";
 import type { editor } from "monaco-editor";
 import { api } from "@renderer/lib/api.js";
@@ -15,6 +15,7 @@ import { Markdown } from "../chat/Markdown.js";
 import {
   ensureLspProviders,
   useLspDiagnostics,
+  useLspGotoActivities,
   openLspDocument,
   closeLspDocument,
   notifyLspChange,
@@ -22,11 +23,13 @@ import {
   filePathToUri,
   monacoLanguageToLsp,
   LSP_LANGUAGE_DISPLAY,
+  type GotoKind,
 } from "@renderer/lib/lspProviders.js";
 // Side-effect import: configures Monaco's worker environment + local instance
 // (no CDN). Must run before any <Editor> mounts. See monacoSetup.ts.
 import "@renderer/lib/monacoSetup.js";
 import { useI18n } from "@renderer/lib/i18n/index.js";
+import type { MessageId } from "@renderer/lib/i18n/core.js";
 import { setLastCursor, type NavEntry } from "@renderer/lib/editorNav.js";
 import { resolveShortcut, acceleratorToDisplayString } from "@renderer/lib/shortcuts.js";
 
@@ -616,6 +619,91 @@ function EditPane({ filePath, projectPath }: { filePath: string; projectPath: st
           )}
           {saveState === "saving" && t("ide.editor.saving")}
         </div>
+      )}
+      {/* LSP goto activity pill — bottom-center, non-blocking. */}
+      <GotoActivityPill />
+    </div>
+  );
+}
+
+/* ──────────────────────── LSP goto activity pill ──────────────────────── */
+
+/** Kind → label-key map for the goto pill (module-level for stable refs;
+ *  `satisfies` keeps the values checkable against the i18n dictionaries). */
+const GOTO_KIND_LABEL_KEY = {
+  definition: "ide.editor.gotoKind.definition",
+  implementation: "ide.editor.gotoKind.implementation",
+  references: "ide.editor.gotoKind.references",
+} as const satisfies Record<GotoKind, MessageId>;
+
+/** Delay before a PENDING pill appears — warm sub-250ms responses shouldn't
+ *  flash UI on every F12. Terminal states bypass the delay (they linger only
+ *  ~1.8s, and "未找到实现" is worth showing even for fast queries). */
+const GOTO_PILL_DELAY_MS = 250;
+/** Show the elapsed-seconds counter once a query runs at least this long. */
+const GOTO_ELAPSED_THRESHOLD_SEC = 3;
+
+/** Floating goto-activity pill for the edit pane: a spinner + "正在查找实现…"
+ *  while an LSP navigation query (F12 / Ctrl+F12 / Shift+F12) is in flight,
+ *  then a brief "未找到实现" / failure notice when it lands. Cold servers
+ *  (spawn + initialize + tsserver project load) can take seconds, and the
+ *  cross-file path returns null to Monaco — without this pill the user has
+ *  no idea whether anything is happening. */
+function GotoActivityPill() {
+  const { t } = useI18n();
+  const activities = useLspGotoActivities();
+  const latest = activities.length > 0 ? activities[activities.length - 1] : null;
+
+  const [visible, setVisible] = useState(false);
+  useEffect(() => {
+    if (!latest || latest.state !== "pending") {
+      setVisible(!!latest);
+      return;
+    }
+    setVisible(false);
+    const timer = setTimeout(() => setVisible(true), GOTO_PILL_DELAY_MS);
+    return () => clearTimeout(timer);
+    // Re-run when the driving activity changes (new query / state flip / the
+    // lingering terminal entry dropping out of the snapshot).
+  }, [latest?.id, latest?.state]);
+
+  // Tick once per second while a pending pill is visible so the
+  // elapsed-seconds counter updates.
+  const [, tick] = useReducer((x: number) => x + 1, 0);
+  const pending = latest?.state === "pending";
+  useEffect(() => {
+    if (!pending || !visible) return;
+    const iv = setInterval(tick, 1000);
+    return () => clearInterval(iv);
+  }, [pending, visible]);
+
+  if (!visible || !latest || latest.state === "done") return null;
+  const elapsedSec = Math.floor((Date.now() - latest.startedAt) / 1000);
+  const kind = t(GOTO_KIND_LABEL_KEY[latest.kind]);
+
+  return (
+    <div
+      className={cn(
+        "pointer-events-none absolute bottom-3 left-1/2 z-10 flex -translate-x-1/2 items-center gap-1.5 whitespace-nowrap rounded-md px-2 py-1 text-[11px] shadow-sm",
+        latest.state === "pending" && "bg-surface text-content-muted",
+        latest.state === "empty" && "bg-surface text-content-subtle",
+        latest.state === "error" && "bg-danger/15 text-danger",
+      )}
+    >
+      {latest.state === "pending" && (
+        <>
+          <IconLoader2 size={11} className="animate-spin" />
+          {t("ide.editor.gotoSearching", { kind })}
+          {elapsedSec >= GOTO_ELAPSED_THRESHOLD_SEC && (
+            <span className="text-content-subtle">{elapsedSec}s</span>
+          )}
+        </>
+      )}
+      {latest.state === "empty" && <span>{t("ide.editor.gotoNoneFound", { kind })}</span>}
+      {latest.state === "error" && (
+        <span className="max-w-[420px] truncate" title={latest.message}>
+          {t("ide.editor.gotoFailed", { kind })}
+        </span>
       )}
     </div>
   );

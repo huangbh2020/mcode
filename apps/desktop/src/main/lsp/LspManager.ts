@@ -716,6 +716,17 @@ class LspManagerImpl {
     this.sendNotify(handle, "textDocument/didOpen", {
       textDocument: { uri, languageId, version: 1, text },
     });
+
+    // Background warm-up: several servers (typescript-language-server in
+    // particular) lazily load the project on the FIRST workspace query — the
+    // user's first F12 / Ctrl+F12 / hover would otherwise pay that whole
+    // latency interactively. Fire a cheap documentSymbol request right after
+    // open so the load happens while the user is still reading the file.
+    // Best-effort: errors are swallowed; the request timeout bounds it and
+    // removeServer rejects pending entries if the server dies meanwhile.
+    void this.sendRequest(handle, "textDocument/documentSymbol", {
+      textDocument: { uri },
+    }).catch(() => {});
   }
 
   async closeDocument(workspacePath: string, filePath: string): Promise<void> {

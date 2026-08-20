@@ -260,6 +260,33 @@ export interface TurnDoneEvent {
 }
 
 /**
+ * The turn ended with a "success" result but the stream shows the model never
+ * finished its work — the classic third-party-gateway failure where the model
+ * channel returns an empty completion that the CLI silently accepts as a
+ * normal end-of-turn. Emitted by the adapter right BEFORE turn.done so the
+ * renderer can flag the turn (warning card + toast) instead of showing a
+ * misleading "回合完成".
+ *
+ * Two shapes:
+ *  - `dangling-tools` — main-agent tool_use blocks were still unanswered when
+ *    the stream closed (the model was mid-tool-flow; its next response after
+ *    the last tool_result came back empty).
+ *  - `empty-response` — the turn produced no assistant text at all.
+ *
+ * NOT emitted for user interrupts (dangling tools are expected there) or
+ * error-subtype results (the `error` event already surfaces those).
+ */
+export interface TurnIncompleteEvent {
+  type: "turn.incomplete";
+  sessionId: string;
+  kind: "dangling-tools" | "empty-response";
+  /** Main-agent tool calls that never received a tool_result
+   *  (kind "dangling-tools"; empty for "empty-response"). Names are for
+   *  display, ids for correlation with the chat stream's tool cards. */
+  pendingToolCalls: Array<{ toolCallId: string; toolName: string }>;
+}
+
+/**
  * One file touched by a turn. Shared shape across the `turn.files` event
  * payload, the persisted `Session.turnFiles` column, and the renderer's
  * `turnFilesBySession` bucket — defined once here so the three never drift.
@@ -649,6 +676,7 @@ export type RuntimeEvent =
   | ContextUsageEvent
   | ErrorEvent
   | TurnDoneEvent
+  | TurnIncompleteEvent
   | TurnFilesEvent
   | TurnRewoundEvent
   | CompactResultEvent

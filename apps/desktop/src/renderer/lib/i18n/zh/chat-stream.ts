@@ -94,6 +94,14 @@ export const zh = {
   // ── ChatPane: streaming spinner hint ──
   "chatStream.upstreamRetry": "上游连接异常，正在重试（{attempt}/{attempts}）",
 
+  // ── MessageBlocks: turn-incomplete warning card ──
+  "chatStream.turnIncomplete.title": "任务提前中断",
+  "chatStream.turnIncomplete.danglingDesc":
+    "模型通道在任务中途返回了空响应，本轮未完成。直接发送「继续」可从中断处恢复。",
+  "chatStream.turnIncomplete.emptyDesc":
+    "模型通道未返回任何回复文本，本轮没有产出。建议重发或切换模型。",
+  "chatStream.turnIncomplete.pendingTools": "未完成的调用：{tools}",
+
   // ── EmptyThreadWelcome ──
   "chatStream.welcome.title": "开始新的会话",
   "chatStream.welcome.withProject": "在「{name}」中开始新的会话",

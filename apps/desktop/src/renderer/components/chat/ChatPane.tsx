@@ -209,6 +209,19 @@ function isProceduralBlock(b: Block): b is ProceduralBlock {
   return b.kind === "thinking" || b.kind === "tool_use";
 }
 
+/** Meta / bookkeeping tools update the model's own task list. They get invoked
+ *  any time the model ticks a todo item — frequently as the LAST action of a
+ *  turn, right as it finishes writing its answer — so they must not anchor the
+ *  process/reply split (see groupMessagesForRender): treating TaskUpdate as the
+ *  boundary would fold everything before it, often the bulk of the reply, into
+ *  the hidden TurnPanel and leave only the text after it visible. They still
+ *  belong to the process surface, so they're routed into the panel explicitly. */
+const META_TOOL_NAMES = new Set(["TaskUpdate", "TaskCreate", "TodoWrite"]);
+
+function isMetaToolBlock(b: Block): boolean {
+  return b.kind === "tool_use" && META_TOOL_NAMES.has(b.toolName);
+}
+
 /** Render item after turn-level grouping. A `turnGroup` bundles a whole
  *  turn: its process blocks (hidden behind a TurnPanel header) plus any
  *  reply text that should stay visible below the panel. The precomputed
@@ -416,14 +429,16 @@ function groupMessagesForRender(
       return;
     }
 
-    // Find the index of the LAST procedural block (thinking / tool_use) in
-    // the turn's timeline. Everything at or before it is "process" —
-    // including any text the model wove between tool calls ("let me read
-    // this first", "tests passed, now…"). Only blocks AFTER the last tool
-    // call count as the user-facing reply.
-    let lastProcIdx = -1;
+    // Find the index of the LAST *real* procedural block (thinking / tool_use,
+    // excluding meta tools) in the turn's timeline. Everything at or before it
+    // is "process" — including any text the model wove between tool calls
+    // ("let me read this first", "tests passed, now…"). Only blocks after it
+    // count as the user-facing reply.
+    let lastRealProcIdx = -1;
     for (let j = 0; j < turnBlocks.length; j++) {
-      if (isProceduralBlock(turnBlocks[j].block)) lastProcIdx = j;
+      if (isProceduralBlock(turnBlocks[j].block) && !isMetaToolBlock(turnBlocks[j].block)) {
+        lastRealProcIdx = j;
+      }
     }
 
     let panelBlocks: Block[] = [];
@@ -433,33 +448,25 @@ function groupMessagesForRender(
     // so narration text sits before the last tool (inside the panel) and the
     // true final reply after it (outside). Pure-text turns have no procedural
     // block at all and render as plain messages.
-    if (lastProcIdx >= 0) {
-      // Process surface: blocks [0 .. lastProcIdx] (procedural + woven text).
-      panelBlocks = turnBlocks.slice(0, lastProcIdx + 1).map((t) => t.block);
-      // Reply surface: blocks after the last tool, regrouped by source message
-      // so each textMsg renders with its original message identity (id, role).
-      const replyByMsg = new Map<ChatMessage, Block[]>();
-      for (let j = lastProcIdx + 1; j < turnBlocks.length; j++) {
-        const { block, msg } = turnBlocks[j];
+    const replyByMsg = new Map<ChatMessage, Block[]>();
+    for (let j = 0; j < turnBlocks.length; j++) {
+      const { block, msg } = turnBlocks[j];
+      // Process surface: blocks at-or-before the last real tool (procedural +
+      // woven text), plus any meta tools wherever they landed. Meta tools are
+      // excluded from the boundary above but must not leak into the reply —
+      // re-route them here so a trailing task-list update stays in the panel.
+      if (j <= lastRealProcIdx || isMetaToolBlock(block)) {
+        panelBlocks.push(block);
+      } else {
+        // Reply surface: blocks after the last real tool, regrouped by source
+        // message so each textMsg renders with its original identity (id, role).
         const arr = replyByMsg.get(msg);
         if (arr) arr.push(block);
         else replyByMsg.set(msg, [block]);
       }
-      for (const [msg, blocks] of replyByMsg) {
-        textMsgs.push({ ...msg, blocks });
-      }
-    } else {
-      // No tool calls at all (pure-text turn) - nothing to hide. The whole
-      // turn is the reply; no panel is shown.
-      const replyByMsg = new Map<ChatMessage, Block[]>();
-      for (const { block, msg } of turnBlocks) {
-        const arr = replyByMsg.get(msg);
-        if (arr) arr.push(block);
-        else replyByMsg.set(msg, [block]);
-      }
-      for (const [msg, blocks] of replyByMsg) {
-        textMsgs.push({ ...msg, blocks });
-      }
+    }
+    for (const [msg, blocks] of replyByMsg) {
+      textMsgs.push({ ...msg, blocks });
     }
 
     // Pull approved plan cards out of the PROCESS surface. A plan block almost

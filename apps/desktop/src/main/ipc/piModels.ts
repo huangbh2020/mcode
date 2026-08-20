@@ -27,9 +27,11 @@ import { log } from "@main/lib/logger.js";
 
 /** Best-effort projection of a pi Model into BuiltinModelOption.
  *  `providerId/modelId` shape lets the picker send a single string to
- *  `req.model` that Pi understands. Only 1M-context models carry a hint
- *  ("1M"); everything else shows no trailing text after the model name
- *  (threshold matches the settings panel's 1M toggle). */
+ *  `req.model` that Pi understands. `supplier` carries the models.json
+ *  provider name so the picker can group models by vendor instead of dumping
+ *  the `provider/modelId` prefix in front of the user. Only 1M-context models
+ *  carry a hint ("1M"); everything else shows no trailing text after the
+ *  model name (threshold matches the settings panel's 1M toggle). */
 function projectModel(model: { id: string; name?: string; provider: string; contextWindow?: number }): BuiltinModelOption {
   const hint =
     model.contextWindow && model.contextWindow >= PI_1M_CONTEXT_WINDOW ? "1M" : undefined;
@@ -37,6 +39,7 @@ function projectModel(model: { id: string; name?: string; provider: string; cont
     id: `${model.provider}/${model.id}`,
     label: model.name ?? model.id,
     hint,
+    supplier: model.provider,
   };
 }
 

@@ -91,6 +91,14 @@ export const en = {
   // ── ChatPane: streaming spinner hint ──
   "chatStream.upstreamRetry": "Upstream connection issue — retrying ({attempt}/{attempts})",
 
+  // ── MessageBlocks: turn-incomplete warning card ──
+  "chatStream.turnIncomplete.title": "Task ended early",
+  "chatStream.turnIncomplete.danglingDesc":
+    "The model channel returned an empty response mid-task, so this turn ended unfinished. Send “Continue” to resume from where it stopped.",
+  "chatStream.turnIncomplete.emptyDesc":
+    "The model channel returned no reply text this turn. Try resending or switching models.",
+  "chatStream.turnIncomplete.pendingTools": "Unfinished calls: {tools}",
+
   // ── EmptyThreadWelcome ──
   "chatStream.welcome.title": "Start a new chat",
   "chatStream.welcome.withProject": "Start a new chat in {name}",

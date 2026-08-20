@@ -223,6 +223,13 @@ export type Block =
   | { kind: "thinking"; text: string }
   | { kind: "tool_use"; toolCallId: string; toolName: string; input: unknown; status: "running" | "done" | "error"; result?: unknown }
   | { kind: "error"; message: string }
+  | { kind: "turn-incomplete"; /** Mirrors TurnIncompleteEvent.kind —
+    * "dangling-tools" = the turn closed with unanswered tool_use;
+    * "empty-response" = tools ran but the model never replied with text. */
+    incompleteKind: "dangling-tools" | "empty-response";
+    /** Display names of the tool calls that never got a result
+     *  ("dangling-tools" only). */
+    pendingToolNames: string[] }
   | { kind: "attachment"; preview: string; content: string; attachmentKind?: "paste" | "file"; filePath?: string }
   | {
       kind: "plan";
@@ -635,6 +642,14 @@ export interface SessionState {
    *  -- 用户的中断是权威意图。NOT persisted - 仅内存态,随 deleteSession
    *  一并清理。 */
   interruptedBySession: Record<string, boolean>;
+  /** Per-session "turn ended but the work didn't finish" flag. Set by
+   *  `turn.incomplete` (gateway returned an empty final response — the turn
+   *  closed with dangling tool_use or no reply text); consumed by the very
+   *  next turn.done, which then skips its misleading "回合完成" toast/unread
+   *  bump (the turn.incomplete case already toasted a warning). Lifetime is
+   *  effectively milliseconds — the adapter always emits turn.incomplete
+   *  immediately before turn.done. NOT persisted. */
+  turnIncompleteBySession: Record<string, boolean>;
   /** Per-session transient upstream-network issue (the OpenAI bridge's retry
    *  loop: connect timeout / reset / refused — see UpstreamIssueEvent). Set on
    *  `upstream.issue{kind:"retry"}`; cleared on kind:"ok", turn end (turn.done
@@ -3267,6 +3282,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   runningBySession: {},
   runningTurnStartedAt: {},
   interruptedBySession: {},
+  turnIncompleteBySession: {},
   upstreamIssueBySession: {},
   unreadBySession: {},
   isWindowFocused: true,
@@ -5804,6 +5820,41 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           });
           break;
         }
+        case "turn.incomplete": {
+          // Gateway-truncated turn (empty final response). The adapter emits
+          // this immediately BEFORE turn.done — append the warning card and
+          // toast here, and flag the session so the turn.done case skips its
+          // misleading "回合完成" toast/unread bump (already done here).
+          next = [
+            ...next,
+            {
+              id: `ti_${Date.now()}`,
+              sessionId: sid,
+              role: "assistant",
+              blocks: [
+                {
+                  kind: "turn-incomplete",
+                  incompleteKind: e.kind,
+                  pendingToolNames: e.pendingToolCalls.map((c) => c.toolName),
+                },
+              ],
+              createdAt: Date.now(),
+            },
+          ];
+          bumpUnread();
+          pushToast(
+            "warning",
+            translate(get().locale, "store.toast.turnIncomplete"),
+            translate(
+              get().locale,
+              e.kind === "empty-response"
+                ? "chatStream.turnIncomplete.emptyDesc"
+                : "chatStream.turnIncomplete.danglingDesc",
+            ),
+          );
+          set((s) => ({ turnIncompleteBySession: { ...s.turnIncompleteBySession, [sid]: true } }));
+          break;
+        }
         case "error": {
           next = [...next, { id: `err_${Date.now()}`, sessionId: sid, role: "assistant", blocks: [{ kind: "error", message: e.message }], createdAt: Date.now() }];
           // An error terminates the turn just like turn.done - stamp the
@@ -5835,12 +5886,25 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           break;
         }
         case "turn.done": {
+          // A turn.incomplete arrived just before this turn.done — the work
+          // did NOT finish (gateway returned an empty final response) and its
+          // own case already toasted a warning + bumped unread. Consume the
+          // flag so we don't ALSO toast "回合完成" on a truncated turn.
+          const turnIncomplete = !!get().turnIncompleteBySession[sid];
+          if (turnIncomplete) {
+            set((s) => {
+              const turnIncompleteBySession = { ...s.turnIncompleteBySession };
+              delete turnIncompleteBySession[sid];
+              return { turnIncompleteBySession };
+            });
+          }
           // Bump unread for non-active sessions on turn completion - the
           // result is ready and the user may have switched away. Skipped for
-          // interrupted turns (the user initiated the stop, no surprise) and
+          // interrupted turns (the user initiated the stop, no surprise),
           // for tool_use turns (the adapter will resume streaming shortly;
-          // the intermediate result is not a "done" signal).
-          if (e.reason !== "interrupted" && e.reason !== "tool_use") {
+          // the intermediate result is not a "done" signal), and for
+          // incomplete turns (see above).
+          if (e.reason !== "interrupted" && e.reason !== "tool_use" && !turnIncomplete) {
             bumpUnread();
             pushToast("info", translate(get().locale, "store.toast.turnComplete"), translate(get().locale, "store.toast.turnCompleteBody"));
           }

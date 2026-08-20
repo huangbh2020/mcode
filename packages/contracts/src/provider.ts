@@ -75,6 +75,10 @@ export interface BuiltinModelOption {
   id: string;
   label: string;
   hint?: string;
+  /** Supplier/provider this model belongs to (pi: the models.json provider
+   *  name). Lets a model picker group models by vendor instead of dumping
+   *  the raw `provider/modelId` id in front of the user. */
+  supplier?: string;
 }
 
 /** Request to start one turn/conversation. Provider-neutral equivalent of the

@@ -10,4 +10,5 @@ export const en = {
   "store.toast.errorOccurred": "Error occurred",
   "store.toast.turnComplete": "Turn complete",
   "store.toast.turnCompleteBody": "The agent has finished this turn",
+  "store.toast.turnIncomplete": "Task ended early",
 } as const;
