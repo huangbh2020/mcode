@@ -126,6 +126,21 @@ const STATIC_COMMANDS: StaticCommandDef[] = [
     icon: IconX,
     defaultAccelerator: DEFAULT_SHORTCUTS["tab.close"],
     perform: (s) => {
+      // Unified center bar: close whichever tab kind currently holds the
+      // center — the focused plan/file tab while the editor is showing,
+      // else the active session tab (legacy behavior).
+      const pid = s.activeProjectId;
+      const activeFile = pid ? s.ideActiveFileByProject[pid] ?? null : null;
+      const sid = s.activeSessionId;
+      const planActive = sid ? s.planTabActiveBySession[sid] ?? false : false;
+      if (s.centerTabFocus === "editor" && (activeFile || planActive)) {
+        if (planActive && sid) {
+          s.closePlanDrawer(sid);
+        } else if (activeFile) {
+          s.closeFileInIde(activeFile);
+        }
+        return;
+      }
       if (s.activeSessionId) s.closeTab(s.activeSessionId);
     },
     available: (s) => s.displayMode === "tabs" && s.openTabs.length > 0,

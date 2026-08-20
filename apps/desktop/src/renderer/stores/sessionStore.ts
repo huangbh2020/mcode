@@ -183,6 +183,21 @@ function currentNavEntryFor(get: () => SessionState): NavEntry | null {
   return { filePath: file, ...cursor };
 }
 
+/** Whether `sid`'s chat counts as "on screen" for unread-badge / toast
+ *  gating in ingestEvent: non-active sessions are never on screen; the
+ *  active one is — UNLESS the unified center bar (tabs displayMode, not in
+ *  wide-panel mode where ChatColumn still shows the chat) has handed the
+ *  center to the editor, hiding the active session's pane behind it. In
+ *  that state noteworthy events (turn done / approval needed) must badge
+ *  and toast again, or they'd be silently missed. */
+function isSessionChatOnScreen(
+  sid: string,
+  s: Pick<SessionState, "activeSessionId" | "displayMode" | "centerTabFocus" | "widePanelOpen">,
+): boolean {
+  if (sid !== s.activeSessionId) return false;
+  return !(s.displayMode === "tabs" && s.centerTabFocus === "editor" && !s.widePanelOpen);
+}
+
 /** Target for the mobile shell's fullscreen viewer overlay. The web (phone)
  *  shell has no editor column / PlanViewer, so chat-stream touchpoints
  *  (FileLink, TurnFilesCard rows, plan cards) redirect here instead:
@@ -510,6 +525,14 @@ export interface SessionState {
   openTabs: string[];
   /** How the center pane renders. Persisted in the `settings` table. */
   displayMode: DisplayMode;
+  /** Which tab kind owns the center content area in `tabs` displayMode: the
+   *  active session's chat ("chat") or the editor — file / plan tab
+   *  ("editor"). Only read in `tabs` mode; `single` mode keeps the legacy
+   *  chat|editor split and ignores it. UI-only (not persisted). Treat
+   *  "editor" as effective only while the editor has content (an active file
+   *  or an active plan tab); consumers fall back to "chat" at render time
+   *  when it doesn't. */
+  centerTabFocus: "chat" | "editor";
   /** UI language for all translated chrome. `"zh"` (the project's original
    *  language) is the default. Persisted in the `settings` table; components
    *  subscribe via `useI18n()` and re-render live when it flips. */
@@ -1201,6 +1224,11 @@ export interface SessionState {
   /** Update the center-pane display mode. Persists to the `settings`
    *  table so the choice survives restart. */
   setDisplayMode: (mode: DisplayMode) => Promise<void>;
+  /** Switch the unified center tab bar's focus (tabs displayMode) between
+   *  the chat view and the editor view. Most flips flow through natural
+   *  actions (selectSession / openFileInIde / setIdeActiveFile / ...);
+   *  this is the direct escape hatch for chrome that toggles the view. */
+  setCenterTabFocus: (focus: "chat" | "editor") => void;
   /** Update the UI language. Persists to the `settings` table so the
    *  choice survives restart; translated components re-render live. */
   setLocale: (locale: Locale) => Promise<void>;
@@ -3199,6 +3227,8 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   openTabs: [],
   // Persisted in `settings` table; init() overwrites from the DB.
   displayMode: "single",
+  // Center focus for the unified tab bar (`tabs` displayMode). UI-only.
+  centerTabFocus: "chat",
   // UI language. Persisted in `settings` table; init() overwrites from the
   // DB. "zh" is the default (and the pre-i18n behavior) so existing users see
   // no change until they opt into English.
@@ -4058,6 +4088,8 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         // New session lands as a fresh tab. If it was somehow already open
         // (e.g. a duplicate id — shouldn't happen) we don't double-add.
         openTabs: s.openTabs.includes(session.id) ? s.openTabs : [...s.openTabs, session.id],
+        // A brand-new session is a chat view by definition.
+        centerTabFocus: "chat" as const,
       };
     });
   },
@@ -4081,10 +4113,13 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     hydrateUsageHistory(set, get, sessionId);
     set((s) => {
       // Clear the unread badge - the user is now looking at this session.
-      if (!s.unreadBySession[sessionId]) return { activeSessionId: sessionId };
+      // Activating a session also pulls the unified center bar back to the
+      // chat view (tabs displayMode).
+      if (!s.unreadBySession[sessionId])
+        return { activeSessionId: sessionId, centerTabFocus: "chat" as const };
       const unreadBySession = { ...s.unreadBySession };
       delete unreadBySession[sessionId];
-      return { activeSessionId: sessionId, unreadBySession };
+      return { activeSessionId: sessionId, unreadBySession, centerTabFocus: "chat" as const };
     });
     // Gate on the hydration flag, NOT bucket existence: a bucket may already
     // exist having been created by ingestEvent from another client's turn
@@ -4116,6 +4151,8 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         // tabs were opened (newer tabs on the right).
         openTabs: s.openTabs.includes(sessionId) ? s.openTabs : [...s.openTabs, sessionId],
         unreadBySession,
+        // Opening/activating a session tab shows its chat in the center.
+        centerTabFocus: "chat" as const,
       };
     });
     // Same hydration-flag gate as selectSession — an event-created partial
@@ -4238,8 +4275,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       const idx = s.openTabs.indexOf(sessionId);
       if (idx === -1) return {};
       const nextTabs = s.openTabs.filter((id) => id !== sessionId);
+      const wasActive = s.activeSessionId === sessionId;
       let nextActive = s.activeSessionId;
-      if (s.activeSessionId === sessionId) {
+      if (wasActive) {
         // Prefer the tab to the left (idx - 1), or fall back to the new
         // tail (which used to be at idx). If neither exists, leave
         // activeSessionId null so the empty-state placeholder shows.
@@ -4249,6 +4287,21 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           nextActive = nextTabs[idx - 1];
         } else {
           nextActive = nextTabs[0];
+        }
+      }
+      // Unified center bar focus: only the ACTIVE tab's closure moves it —
+      // closing a background session tab must not yank the editor away.
+      // Closing the active tab lands on the successor session's chat; when
+      // that was the LAST session tab, keep the editor if a file is active
+      // (otherwise the center would go blank for no reason).
+      let centerTabFocus = s.centerTabFocus;
+      if (wasActive) {
+        if (nextTabs.length > 0) {
+          centerTabFocus = "chat";
+        } else {
+          const pid = s.activeProjectId;
+          centerTabFocus =
+            pid && (s.ideActiveFileByProject[pid] ?? null) ? "editor" : "chat";
         }
       }
       // If the new active tab changed, sync its config so the composer
@@ -4268,9 +4321,10 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           permissionMode: sess?.permissionMode ?? s.permissionMode,
           customModelId: sess?.customModelId ?? s.customModelId,
           unreadBySession,
+          centerTabFocus,
         };
       }
-      return { openTabs: nextTabs, activeSessionId: nextActive };
+      return { openTabs: nextTabs, activeSessionId: nextActive, centerTabFocus };
     });
   },
 
@@ -5010,7 +5064,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     // terminal and blocking events count: the user actually needs to act or
     // the result is ready.
     const bumpUnread = () => {
-      if (sid === get().activeSessionId) return;
+      if (isSessionChatOnScreen(sid, get())) return;
       set((s) => ({
         unreadBySession: { ...s.unreadBySession, [sid]: (s.unreadBySession[sid] ?? 0) + 1 },
       }));
@@ -5020,7 +5074,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     // handles OS notifications instead. Toasts are always supplemented by the
     // badge (bumpUnread), so the user sees both the dot + the detail card.
     const pushToast = (kind: "info" | "warning" | "error", title: string, body?: string) => {
-      if (sid === get().activeSessionId) return;
+      if (isSessionChatOnScreen(sid, get())) return;
       if (!get().isWindowFocused) return;
       useToastStore.getState().push({ kind, title, body, sessionId: sid });
     };
@@ -6169,6 +6223,12 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     }
   },
 
+  /** Direct focus switch for the unified center tab bar (tabs displayMode).
+   *  See the `centerTabFocus` field doc — natural actions flip it too. */
+  setCenterTabFocus: (focus) => {
+    set({ centerTabFocus: focus });
+  },
+
   /** Update the UI language. Same immediate-flip + fire-and-forget-persist
    *  pattern as setDisplayMode. Also mirrors the choice onto
    *  <html lang> so assistive tech + font selection follow the UI language. */
@@ -6796,6 +6856,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     set((s) => ({
       planDrawerPlanBySession: { ...s.planDrawerPlanBySession, [sessionId]: plan },
       planTabActiveBySession: { ...s.planTabActiveBySession, [sessionId]: true },
+      // Opening the plan (from a plan card / approval prompt) surfaces the
+      // plan tab — in tabs displayMode that means focusing the editor view.
+      ...(s.displayMode === "tabs" ? { centerTabFocus: "editor" as const } : {}),
     }));
   },
   openMobileViewer: (target) => {
@@ -6822,12 +6885,20 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         ...(pid && restoreFile
           ? { ideActiveFileByProject: { ...s.ideActiveFileByProject, [pid]: restoreFile } }
           : {}),
+        // Unified bar: with a file to fall back to the editor view survives
+        // (keep the current focus); otherwise return to the chat view.
+        centerTabFocus: restoreFile ? s.centerTabFocus : ("chat" as const),
       };
     });
   },
   setPlanTabActive: (sessionId, active) => {
     set((s) => ({
       planTabActiveBySession: { ...s.planTabActiveBySession, [sessionId]: active },
+      // Activating the plan tab (tab click / restore) focuses the editor
+      // view in tabs displayMode.
+      ...(active && s.displayMode === "tabs"
+        ? { centerTabFocus: "editor" as const }
+        : {}),
     }));
   },
   setPlanApprovalDraft: (sessionId, draft) => {
@@ -6880,6 +6951,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           ...s.chatFileQueueBySession,
           [sessionId]: [...prev, filePath],
         },
+        // The attachment lands in the composer — bring the chat view back so
+        // the user sees it happen (tabs displayMode).
+        ...(s.displayMode === "tabs" ? { centerTabFocus: "chat" as const } : {}),
       };
     });
   },
@@ -7175,6 +7249,11 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       ideDiffBeforeByProject: { ...s.ideDiffBeforeByProject, [pid]: diffBefore },
       // Bump the focus nonce so App opens the right panel if collapsed.
       ideFocusNonce: s.ideFocusNonce + 1,
+      // Unified center bar (tabs displayMode): opening a file focuses the
+      // editor so it gets the full center width. Gated on tabs mode — the
+      // split layout in single mode ignores the flag, and keeping single
+      // mode out of it makes a later mode switch land on the chat.
+      ...(s.displayMode === "tabs" ? { centerTabFocus: "editor" as const } : {}),
       // If a line was requested (goto-definition), stash a reveal target +
       // bump the nonce so the EditPane scrolls to it once mounted/active.
       ...(opts?.line != null
@@ -7283,12 +7362,19 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     const prevDiffBefore = get().ideDiffBeforeByProject[pid] ?? {};
     const diffBefore = { ...prevDiffBefore };
     delete diffBefore[filePath];
-    set((s) => ({
-      ideOpenFilesByProject: { ...s.ideOpenFilesByProject, [pid]: open },
-      ideActiveFileByProject: { ...s.ideActiveFileByProject, [pid]: active },
-      ideFileViewModeByProject: { ...s.ideFileViewModeByProject, [pid]: viewMode },
-      ideDiffBeforeByProject: { ...s.ideDiffBeforeByProject, [pid]: diffBefore },
-    }));
+    set((s) => {
+      // Unified center bar: when the closed file was the last one and no
+      // plan tab is active, fall back to the chat view.
+      const sid = s.activeSessionId;
+      const planActive = !!(sid && s.planTabActiveBySession[sid]);
+      return {
+        ideOpenFilesByProject: { ...s.ideOpenFilesByProject, [pid]: open },
+        ideActiveFileByProject: { ...s.ideActiveFileByProject, [pid]: active },
+        ideFileViewModeByProject: { ...s.ideFileViewModeByProject, [pid]: viewMode },
+        ideDiffBeforeByProject: { ...s.ideDiffBeforeByProject, [pid]: diffBefore },
+        centerTabFocus: active == null && !planActive ? ("chat" as const) : s.centerTabFocus,
+      };
+    });
     persistIdeBuckets(get);
   },
 
@@ -7326,13 +7412,19 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     // Drop expanded-dir records under the removed dir too.
     const prevExpanded = get().ideExpandedDirsByProject[pid] ?? [];
     const expanded = prevExpanded.filter((d) => d !== dirPath && !d.startsWith(prefix));
-    set((s) => ({
-      ideOpenFilesByProject: { ...s.ideOpenFilesByProject, [pid]: open },
-      ideActiveFileByProject: { ...s.ideActiveFileByProject, [pid]: active },
-      ideFileViewModeByProject: { ...s.ideFileViewModeByProject, [pid]: viewMode },
-      ideDiffBeforeByProject: { ...s.ideDiffBeforeByProject, [pid]: diffBefore },
-      ideExpandedDirsByProject: { ...s.ideExpandedDirsByProject, [pid]: expanded },
-    }));
+    set((s) => {
+      // Same unified-bar fallback as closeFileInIde (see there).
+      const sid = s.activeSessionId;
+      const planActive = !!(sid && s.planTabActiveBySession[sid]);
+      return {
+        ideOpenFilesByProject: { ...s.ideOpenFilesByProject, [pid]: open },
+        ideActiveFileByProject: { ...s.ideActiveFileByProject, [pid]: active },
+        ideFileViewModeByProject: { ...s.ideFileViewModeByProject, [pid]: viewMode },
+        ideDiffBeforeByProject: { ...s.ideDiffBeforeByProject, [pid]: diffBefore },
+        ideExpandedDirsByProject: { ...s.ideExpandedDirsByProject, [pid]: expanded },
+        centerTabFocus: active == null && !planActive ? ("chat" as const) : s.centerTabFocus,
+      };
+    });
     persistIdeBuckets(get);
   },
 
@@ -7428,12 +7520,19 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     if (!pid) return;
     const prev = get().ideOpenFilesByProject[pid] ?? [];
     if (prev.length === 0) return;
-    set((s) => ({
-      ideOpenFilesByProject: { ...s.ideOpenFilesByProject, [pid]: [] },
-      ideActiveFileByProject: { ...s.ideActiveFileByProject, [pid]: null },
-      ideFileViewModeByProject: { ...s.ideFileViewModeByProject, [pid]: {} },
-      ideDiffBeforeByProject: { ...s.ideDiffBeforeByProject, [pid]: {} },
-    }));
+    set((s) => {
+      // Unified-bar fallback: no files left — the plan tab may still own the
+      // editor view; otherwise return to the chat.
+      const sid = s.activeSessionId;
+      const planActive = !!(sid && s.planTabActiveBySession[sid]);
+      return {
+        ideOpenFilesByProject: { ...s.ideOpenFilesByProject, [pid]: [] },
+        ideActiveFileByProject: { ...s.ideActiveFileByProject, [pid]: null },
+        ideFileViewModeByProject: { ...s.ideFileViewModeByProject, [pid]: {} },
+        ideDiffBeforeByProject: { ...s.ideDiffBeforeByProject, [pid]: {} },
+        centerTabFocus: !planActive ? ("chat" as const) : s.centerTabFocus,
+      };
+    });
     persistIdeBuckets(get);
   },
 
@@ -7453,6 +7552,8 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     }
     set((s) => ({
       ideActiveFileByProject: { ...s.ideActiveFileByProject, [pid]: filePath },
+      // Clicking a file tab (unified bar) focuses the editor view.
+      ...(s.displayMode === "tabs" ? { centerTabFocus: "editor" as const } : {}),
     }));
     persistIdeBuckets(get);
   },
@@ -7462,6 +7563,10 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     if (!pid) return;
     set((s) => ({
       ideActiveFileByProject: { ...s.ideActiveFileByProject, [pid]: null },
+      // Semantically a "hide the editor" move (titlebar toggle; the plan-tab
+      // click overrides it right after by activating the plan tab). In tabs
+      // displayMode this pulls the center back to the chat view.
+      centerTabFocus: "chat",
     }));
     persistIdeBuckets(get);
   },

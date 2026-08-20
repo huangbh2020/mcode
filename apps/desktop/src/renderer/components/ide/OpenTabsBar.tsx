@@ -35,8 +35,9 @@ const EMPTY_OPEN_FILES: string[] = [];
 
 /** Synthetic key for the plan tab in the tabNodes registry. Used so the
  *  scroll-into-view logic can target the plan tab the same way it targets
- *  file tabs (which are keyed by their file path). */
-const PLAN_TAB_KEY = "__plan__";
+ *  file tabs (which are keyed by their file path). Exported for the
+ *  unified tab bar, which registers its plan tab the same way. */
+export const PLAN_TAB_KEY = "__plan__";
 
 /** Shared menu styling constants - match FileTree's context menu for visual
  *  consistency across all right-click menus in the app. */
@@ -418,7 +419,10 @@ interface SortableFileTabProps {
   onContextMenu: (e: React.MouseEvent) => void;
 }
 
-function SortableFileTab({
+/** A single file tab. Exported so the unified tab bar (tabs displayMode)
+ *  can render file tabs inside its own DndContext — `useSortable` binds
+ *  per-item, so the same component works under any shared context. */
+export function SortableFileTab({
   path,
   isActive,
   dirty,
@@ -532,8 +536,9 @@ function SortableFileTab({
 /* ───────────────────────── context menu ───────────────────────── */
 
 /** Actions available from the file-tab context menu. Passed in from
- *  OpenTabsBar so the menu component stays presentational. */
-interface FileTabContextMenuActions {
+ *  OpenTabsBar (or the unified tab bar) so the menu component stays
+ *  presentational. */
+export interface FileTabContextMenuActions {
   close: (path: string) => void;
   closeOthers: (keepPath: string) => void;
   closeAll: () => void;
@@ -544,8 +549,9 @@ interface FileTabContextMenuActions {
 /** Cursor-anchored right-click menu for editor file tabs. Renders a single
  *  controlled `Menu.Root` (open iff ctxMenu is non-null) with a virtual anchor
  *  positioned at the cursor coordinates. Items: close, close others, close
- *  all, copy path, add to chat. Closes after any action. */
-function FileTabContextMenu({
+ *  all, copy path, add to chat. Closes after any action. Exported for the
+ *  unified tab bar. */
+export function FileTabContextMenu({
   ctxMenu,
   onClose,
   actions,
@@ -656,8 +662,9 @@ export const ideDirtyTracker = {
 };
 
 /** Hook returning the current set of dirty file paths. Re-renders the caller
- *  when the set changes. */
-function useDirtyFiles(): Set<string> {
+ *  when the set changes. Exported for the unified tab bar, which shows the
+ *  same dirty dots on its file tabs. */
+export function useDirtyFiles(): Set<string> {
   // We use useSyncExternalStore for correctness (tears-free under concurrent
   // React). The snapshot is the Set itself; since we never mutate it in place
   // without notifying, identity is stable between notifications.

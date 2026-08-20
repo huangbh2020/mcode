@@ -6,6 +6,7 @@ import { Titlebar } from "./components/layout/Titlebar.js";
 import { LeftBar } from "./components/layout/LeftBar.js";
 import { ChatPane } from "./components/chat/ChatPane.js";
 import { SessionTabs } from "./components/layout/SessionTabs.js";
+import { UnifiedTabsBar } from "./components/layout/UnifiedTabsBar.js";
 import { RightPanel } from "./components/layout/RightPanel.js";
 import { BottomTerminalBar } from "./components/layout/BottomTerminalBar.js";
 import { SettingsPage } from "./components/settings/SettingsPage.js";
@@ -321,16 +322,81 @@ export function App() {
   );
 }
 
-/** Center pane router: a horizontal split between the chat column (left)
+/** Center pane router. `tabs` displayMode renders the UNIFIED tab bar —
+ *  session tabs and editor file tabs share ONE strip, and whichever tab is
+ *  active (chat or editor) takes the full center width (no split). `single`
+ *  mode keeps the legacy layout: a horizontal split between the chat column
+ *  (left) and the file-editor column (right), where the editor column only
+ *  appears when a file or plan tab is open (see the design notes in
+ *  docs/tech-stack.md). */
+function CenterPane() {
+  const displayMode = useSessionStore((s) => s.displayMode);
+  if (displayMode === "tabs") {
+    return <UnifiedTabbedPane />;
+  }
+  return <SplitCenterPane />;
+}
+
+/** `tabs` displayMode: ONE tab bar (UnifiedTabsBar) mixing session tabs and
+ *  file tabs, with the active tab's content filling the whole center width.
+ *  The chat|editor split is gone — that's the point (maximum reading space
+ *  for whichever view is active). All open tabs' ChatPanes stay mounted and
+ *  are backgrounded via CSS (`hidden`) so drafts / scroll / undo survive
+ *  focus flips (same keep-alive trick the old tabs-mode chat column used);
+ *  the editor column mounts only while an editor tab holds the focus. */
+function UnifiedTabbedPane() {
+  // The active file is scoped to the active project - switching projects
+  // swaps to that project's open files (or hides the editor if none).
+  const activeProjectId = useSessionStore((s) => s.activeProjectId);
+  const activeFile = useSessionStore((s) =>
+    activeProjectId ? s.ideActiveFileByProject[activeProjectId] ?? null : null,
+  );
+  const activeSessionId = useSessionStore((s) => s.activeSessionId);
+  const openTabs = useSessionStore((s) => s.openTabs);
+  const planTabActive = useSessionStore(
+    (s) => (activeSessionId ? s.planTabActiveBySession[activeSessionId] ?? false : false),
+  );
+  const centerTabFocus = useSessionStore((s) => s.centerTabFocus);
+  // The editor owns the content area only while focused AND it has content.
+  // The content check makes a stale "editor" focus (e.g. the last file was
+  // closed by a path that didn't recompute the flag) fall back to the chat
+  // instead of showing an empty editor.
+  const showEditor = centerTabFocus === "editor" && (!!activeFile || planTabActive);
+
+  return (
+    <div className="flex h-full min-h-0 flex-col">
+      <UnifiedTabsBar />
+      <div className="relative min-h-0 flex-1">
+        {openTabs.map((sid) => (
+          <div
+            key={sid}
+            className={cn(
+              "absolute inset-0",
+              sid === activeSessionId && !showEditor ? "" : "hidden",
+            )}
+          >
+            <ChatPane sessionId={sid} isActive={sid === activeSessionId && !showEditor} />
+          </div>
+        ))}
+        {showEditor && (
+          <div className="absolute inset-0 flex min-h-0 flex-col">
+            {/* hideTabsBar: the unified bar above already shows the file
+                tabs — a second OpenTabsBar would duplicate them. */}
+            <EditorColumn filePath={activeFile} hideTabsBar />
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** `single` displayMode: a horizontal split between the chat column (left)
  *  and the file-editor column (right). When no file is open the editor
  *  column is omitted and the chat column takes the full width — the layout
- *  the user sees when they haven't clicked any files yet.
- *
- *  The chat column chooses between single-session and tabbed layouts based
- *  on the user's `displayMode` preference (see the design notes in
- *  docs/tech-stack.md). The editor column hosts the Monaco FileEditor + its
- *  tab bar, and is only rendered when `ideActiveFile` is non-null. */
-function CenterPane() {
+ *  the user sees when they haven't clicked any files yet. The editor column
+ *  hosts the Monaco FileEditor + its own tab bar (OpenTabsBar), and is only
+ *  rendered when `ideActiveFile` is non-null. */
+function SplitCenterPane() {
   // The active file is scoped to the active project - switching projects
   // swaps to that project's open files (or hides the editor if none).
   const activeProjectId = useSessionStore((s) => s.activeProjectId);
@@ -551,11 +617,19 @@ function WidePlanDialog() {
   );
 }
 
-/** The editor half: OpenTabsBar (only in tabs mode) + the active tab's
- *  content. Resolves the project path from the active project so FileEditor
- *  can show relative paths in its toolbar. When the plan tab is active,
- *  renders PlanViewer instead of FileEditor. */
-function EditorColumn({ filePath }: { filePath: string | null }) {
+/** The editor half: OpenTabsBar (only in tabs editor-mode, and not when
+ *  `hideTabsBar` — the unified center bar passes that since it already
+ *  renders the file tabs) + the active tab's content. Resolves the project
+ *  path from the active project so FileEditor can show relative paths in
+ *  its toolbar. When the plan tab is active, renders PlanViewer instead of
+ *  FileEditor. */
+function EditorColumn({
+  filePath,
+  hideTabsBar = false,
+}: {
+  filePath: string | null;
+  hideTabsBar?: boolean;
+}) {
   const { t } = useI18n();
   const editorMode = useSessionStore((s) => s.ideEditorMode);
   const activeProjectId = useSessionStore((s) => s.activeProjectId);
@@ -587,7 +661,7 @@ function EditorColumn({ filePath }: { filePath: string | null }) {
 
   return (
     <>
-      {editorMode === "tabs" && <OpenTabsBar />}
+      {!hideTabsBar && editorMode === "tabs" && <OpenTabsBar />}
       <div className="min-h-0 flex-1">
         {showPlan ? (
           <Suspense

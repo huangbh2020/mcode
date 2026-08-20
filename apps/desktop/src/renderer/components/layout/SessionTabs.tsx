@@ -167,7 +167,7 @@ export function SessionTabs() {
                 const running = !!runningBySession[id];
                 const unread = unreadBySession[id] ?? 0;
                 return (
-                  <SortableTab
+                  <SortableSessionTab
                     key={id}
                     session={sess}
                     sessionId={id}
@@ -243,7 +243,10 @@ interface SortableTabProps {
   onClose: () => void;
 }
 
-function SortableTab({
+/** A single session tab. Exported so the unified tab bar (tabs displayMode)
+ *  can render session tabs inside its own DndContext — `useSortable` binds
+ *  per-item, so the same component works under any shared context. */
+export function SortableSessionTab({
   session,
   sessionId,
   isActive,
@@ -370,8 +373,9 @@ function SortableTab({
 
 /** Find a session across the per-project cache by id, falling back to the
  *  global pinned bucket (pinned rows leave their project's list). Returns
- *  undefined if neither has it (init race / unknown id). */
-function findSession(
+ *  undefined if neither has it (init race / unknown id). Exported for the
+ *  unified tab bar, which resolves session rows the same way. */
+export function findSession(
   sessionsByProject: Record<string, Session[]>,
   pinnedSessions: Session[],
   id: string,

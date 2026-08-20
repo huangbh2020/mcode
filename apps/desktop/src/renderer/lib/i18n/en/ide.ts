@@ -65,6 +65,7 @@ export const en = {
   "ide.editor.scrollTabsLeft": "Scroll tabs left",
   "ide.editor.scrollTabsRight": "Scroll tabs right",
   "ide.editor.openFiles": "Open files",
+  "ide.editor.openTabs": "Open tabs",
   "ide.editor.planTab": "Plan",
   "ide.editor.viewPlan": "View the plan",
   "ide.editor.closeTabAria": "Close tab",

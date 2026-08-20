@@ -159,14 +159,13 @@ pnpm build
 - **契约**:`RewindTurnSchema` 含 `files`(内联 zod)+ 必填 `targetFiles`;`TurnRewoundEvent` 带必填 `targetFiles`。
 
 ### 中间面板 Tab 模式(P3.5)
-
-### 中间面板 Tab 模式(P3.5)
 - **显示模式偏好**持久化在 `settings` 表的 `ui.displayMode` key(`DISPLAY_MODE_SETTING_KEY`),`init()` 启动时 `setting.get` 拉取,`setDisplayMode()` 写回。
 - `openTabs: string[]` 是已开 tab 的 sessionId 有序列表;**不论 single / tabs 模式都写**,切模式不丢已开线程。
 - `closeTab()` **不取消运行中的 turn**,只从 tab 列表移除;事件流继续按 sessionId 入桶,重新打开 tab 可看到最新状态。
 - 单 slot 字段(原 `pendingQuestion` / `turnFiles`)已改为 per-session 桶(`pendingQuestionBySession` / `turnFilesBySession`),多 tab 并发不会互相覆盖。
 - `ChatPane` 接受 `sessionId: string | null` prop,所有 per-session 选择器都按 prop 读;`null` 走空态(`EmptyCenterPane`)。
-- `CenterPane`(在 `App.tsx`)按 `displayMode` 决定:`single` 直接挂 `<ChatPane>`;`tabs` 先挂 `<SessionTabs />` 再挂 `<ChatPane key={activeSessionId} />`(只挂载前台 tab,key 变化重挂载)。
+- `CenterPane`(在 `App.tsx`)按 `displayMode` 决定:**`tabs` 模式挂 `UnifiedTabbedPane`** —— 顶部一条 `UnifiedTabsBar`(`components/layout/UnifiedTabsBar.tsx`,复用 SessionTabs 的 `SortableSessionTab` + OpenTabsBar 的 `SortableFileTab`/`FileTabContextMenu`/`useDirtyFiles`,同一 DndContext 内两个 SortableContext,跨类型拖放忽略),**会话 tab 与文件 tab(+计划伪 tab)混排一条栏、不分组**;内容由 store 的 `centerTabFocus: "chat"|"editor"` 决定:会话 tab 激活 → 全宽 ChatPane(所有 openTabs 的 pane 常挂、非前台 `hidden` 保活草稿/滚动),文件/计划 tab 激活 → 全宽 `EditorColumn`(传 `hideTabsBar`,避免与统一栏重复)。**没有 chat|editor 分栏**,激活视图独占整个中间宽度。**`single` 模式挂 `SplitCenterPane`**,保持旧的"聊天列 | 编辑列"分栏(编辑列内自带 `OpenTabsBar`),wide 模式(`WidePanelSplit`)仍用旧 `ChatColumn`(只有 SessionTabs,无编辑列)。
+- **`centerTabFocus` 焦点流转**(UI-only,不持久化;渲染端对 "editor" 做兜底——无 activeFile 且无激活计划 tab 时视同 "chat"):置 "chat" = `selectSession`/`openTab`/`startSession`/`enqueueChatFile`/`clearIdeActiveFile`(隐藏编辑器语义);置 "editor" = `openFileInIde`/`setIdeActiveFile`/`setPlanTabActive(true)`/`openPlanDrawer`(均 **gate 在 tabs 模式**,single 模式不写,保证切回 tabs 时落在聊天);`closeTab` 仅在被关的是**激活 tab** 时移动焦点(关后台会话 tab 不拉走编辑器),关最后一个会话 tab 时若有 activeFile 则落到编辑器;`closeFileInIde`/`closeFilesUnderDir`/`closeAllFilesInIde` 在"无剩余文件且无激活计划 tab"时回落 "chat";`closePlanDrawer` 有可回退文件则保持焦点,否则回 "chat"。Titlebar 的 `EditorColumnToggle` 在 tabs 模式按 `centerTabFocus` 判显隐。
 - 4 个全局 config 槽(model / effort / permissionMode / customModelId)保持不变——它们表达"前台 tab 的配置",`syncConfigFromSession` 在 `selectSession` / `openTab` / `closeTab` 切活动时自动同步,Composer 立即反映。
 
 ### 语言服务器 LSP(P4.5)
@@ -212,7 +211,7 @@ pnpm build
 | P2 会话持久化 | ✅ | sql.js(SQLite)、`--resume` 续传、会话列表 |
 | P2.5 SDK 迁移 | ✅ | @anthropic-ai/claude-agent-sdk + AgentProvider 抽象层 + ProviderRegistry |
 | P3 工具审批 | ✅ 基础 | canUseTool 桥 → approval.request/approve IPC(后端已通,前端审批 UI 待 P5) |
-| P3.5 中间面板 Tab 模式 | ✅ | 中间面板显示模式偏好(单/tab),`openTabs` + `SessionTabs` 标签条;关闭 tab 后台 turn 继续运行 |
+| P3.5 中间面板 Tab 模式 | ✅ | 中间面板显示模式偏好(单/tab);tabs 模式 = `UnifiedTabsBar` 统一 tab 栏(会话+文件混排,激活视图全宽),single 模式 = 旧分栏布局;关闭 tab 后台 turn 继续运行 |
 | P4 IDE 右栏 | ✅ | 文件树、git、终端(xterm+node-pty)、Monaco 编辑器 + diff |
 | P4.5 LSP 语言服务器 | ✅ | 设置页可安装/启停 TS/Python/Go/Java 语言服务器;`LspManager`(main)管理 stdio JSON-RPC 子进程;Monaco 手写 Provider(definition/references/hover)+ 诊断 markers + 跳转定位 |
 | P5 体验打磨 | 🟡 | ✅ 浏览器预览(agent 驱动应用内浏览器);⬜ checkpoint 时间线、Cmd+K、审批 UI |
