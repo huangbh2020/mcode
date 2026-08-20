@@ -38,6 +38,7 @@ import {
   type LspOpResult,
   type LspRequestResult,
   type LspServerConfig,
+  type LspStateChangedPayload,
 } from "@contracts/ipc";
 import { log } from "@main/lib/logger.js";
 import { sendToRenderer } from "@main/window.js";
@@ -115,11 +116,12 @@ const MAX_SPAWN_FAILURES = 3;
 /** Cooldown (ms) after which a failed language may be retried. */
 const SPAWN_FAILURE_COOLDOWN_MS = 30_000;
 
-/** `lsp:event` payload shapes (kept here so the manager stays self-contained). */
+/** `lsp:event` payload shapes (kept here so the manager stays self-contained).
+ *  The stateChanged shape is the shared contract type LspStateChangedPayload. */
 type LspEventPayload =
   | { uri: string; diagnostics: LspDiagnostic[] }
   | { level: "info" | "warn" | "error"; message: string }
-  | { running: boolean };
+  | LspStateChangedPayload;
 
 class LspManagerImpl {
   /** Keyed by `${workspacePath}::${language}`. */
@@ -880,9 +882,14 @@ class LspManagerImpl {
       if (elapsed < SPAWN_FAILURE_COOLDOWN_MS) {
         const lastErr = this.lastErrors.get(language);
         const detail = lastErr ? `\n原因: ${lastErr}` : "";
-        throw new Error(
-          `${LANGUAGE_SPECS[language].displayName} 语言服务器连续启动失败 ${failure.count} 次,已暂停重试。${detail}\n请修复环境后在设置中关闭再重新启用。`,
-        );
+        const message = `${LANGUAGE_SPECS[language].displayName} 语言服务器连续启动失败 ${failure.count} 次,已暂停重试。${detail}\n请修复环境后在设置中关闭再重新启用。`;
+        // Surface the refusal to the editor toolbar (no server ever spawned).
+        this.pushStateEvent(workspacePath, language, {
+          phase: "stopped",
+          running: false,
+          error: message,
+        });
+        throw new Error(message);
       }
       // Cooldown expired - reset and try again.
       this.spawnFailures.delete(key);
@@ -890,14 +897,20 @@ class LspManagerImpl {
 
     const config = this.getConfig(language);
     if (!config?.enabled) {
+      // Opted-out language: no event — the user disabled it deliberately, so
+      // the toolbar shows nothing rather than nagging.
       throw new Error(`${LANGUAGE_SPECS[language].displayName} 语言服务器未启用。请在设置 > 语言服务器中开启。`);
     }
     const spec = LANGUAGE_SPECS[language];
     const resolved = this.resolveServerPath(spec, config);
     if (!resolved) {
-      throw new Error(
-        `未找到 ${spec.displayName} 可执行文件(${spec.binaryNames.join(" / ")}),请先安装或指定路径`,
-      );
+      const message = `未找到 ${spec.displayName} 可执行文件(${spec.binaryNames.join(" / ")}),请先安装或指定路径`;
+      this.pushStateEvent(workspacePath, language, {
+        phase: "stopped",
+        running: false,
+        error: message,
+      });
+      throw new Error(message);
     }
 
     const { cmd, args, spawnOpts } = await this.buildSpawnCommand(spec, resolved, workspacePath, config);
@@ -934,6 +947,10 @@ class LspManagerImpl {
       intentionalStop: false,
     };
     this.servers.set(key, handle);
+    // The initialize handshake can take minutes (Java imports the whole
+    // project) — tell the renderer the server is STARTING so the editor can
+    // show a loading state while requests wait on `initialized`.
+    this.pushEvent(handle, "stateChanged", { phase: "starting", running: false });
 
     proc.stdout?.on("data", (chunk: Buffer) => this.onStdout(handle, chunk));
     proc.stderr?.on("data", (chunk: Buffer) => {
@@ -952,6 +969,11 @@ class LspManagerImpl {
       handle.initReject(err);
       this.recordSpawnFailure(key);
       this.removeServer(key, handle);
+      this.pushStateEvent(workspacePath, language, {
+        phase: "stopped",
+        running: false,
+        error: err.message,
+      });
     });
     proc.on("exit", (code, signal) => {
       log.info(`lsp[${language}] exit code=${code} signal=${signal}`);
@@ -964,8 +986,14 @@ class LspManagerImpl {
       this.removeServer(key, handle);
       if (wasInitializing) {
         this.recordSpawnFailure(key);
-        this.pushEvent(handle, "stateChanged", { running: false });
       }
+      // Always notify: both crashes (with the recorded reason) and intentional
+      // stops (settings toggle / dispose) clear any "starting" indicator.
+      this.pushStateEvent(workspacePath, language, {
+        phase: "stopped",
+        running: false,
+        error: wasInitializing ? this.lastErrors.get(language) : undefined,
+      });
     });
 
     // Run the initialize handshake.
@@ -977,7 +1005,7 @@ class LspManagerImpl {
       // Success - clear any prior failure count + error.
       this.spawnFailures.delete(key);
       this.lastErrors.delete(language);
-      this.pushEvent(handle, "stateChanged", { running: true });
+      this.pushEvent(handle, "stateChanged", { phase: "running", running: true });
       return handle;
     } catch (err) {
       log.error(`lsp[${language}]: initialize failed: ${(err as Error).message}`);
@@ -985,6 +1013,11 @@ class LspManagerImpl {
       this.lastErrors.set(language, (err as Error).message);
       this.recordSpawnFailure(key);
       this.removeServer(key, handle);
+      this.pushStateEvent(workspacePath, language, {
+        phase: "stopped",
+        running: false,
+        error: (err as Error).message,
+      });
       throw err;
     }
   }
@@ -1236,6 +1269,24 @@ class LspManagerImpl {
       workspacePath: handle.workspacePath,
       language: handle.language,
       type,
+      payload,
+    } as const);
+  }
+
+  /** Push a stateChanged event for a (workspace, language) that has no live
+   *  ServerHandle yet — used for pre-spawn refusals (crash-loop guard,
+   *  binary not found) so the editor toolbar can surface WHY the server
+   *  won't start. */
+  private pushStateEvent(
+    workspacePath: string,
+    language: LspLanguageId,
+    payload: LspStateChangedPayload,
+  ): void {
+    sendToRenderer(IPC.LSP_EVENT, {
+      channel: IPC.LSP_EVENT,
+      workspacePath,
+      language,
+      type: "stateChanged",
       payload,
     } as const);
   }

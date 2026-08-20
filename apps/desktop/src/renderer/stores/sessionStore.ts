@@ -72,6 +72,7 @@ import {
   type ShortcutBindings,
   type Accelerator,
   type LspLanguageState,
+  type LspStateChangedPayload,
   type PickedElement,
   type BrowserDevicePreset,
   type BrowserOrientation,
@@ -985,6 +986,12 @@ export interface SessionState {
    *  Empty array until first load completes. Not persisted (re-fetched each
    *  startup from the main process). */
   lspLanguages: LspLanguageState[];
+
+  /** Language-server lifecycle phase per `${workspacePath}::${language}`,
+   *  driven by `lsp:event` stateChanged pushes (see LspStateChangedPayload).
+   *  The editor toolbar reads it to show a loading pill while a server starts
+   *  and a failure notice when it couldn't start. Ephemeral. */
+  lspPhasesByWorkspace: Record<string, { phase: "starting" | "running" | "stopped"; error?: string }>;
 
   /** True once `init()` has started - guards against React StrictMode's
    *  double-effect in dev firing init twice. */
@@ -3323,6 +3330,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   navBackByProject: {},
   navForwardByProject: {},
   lspLanguages: [] as LspLanguageState[],
+  lspPhasesByWorkspace: {} as Record<string, { phase: "starting" | "running" | "stopped"; error?: string }>,
 
   /** True once `init()` has started, to guard against React StrictMode's
    *  double-effect in dev (which would otherwise fire init twice). */
@@ -3632,7 +3640,24 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     // Language server states (install/running) for the settings panel + Monaco.
     // Desktop-only: the web shim exposes no `api.lsp` surface (no editor /
     // settings panel on mobile), so skip it to avoid a spurious load error.
-    if (isElectron) void get().reloadLspLanguages();
+    if (isElectron) {
+      void get().reloadLspLanguages();
+      // Track the language-server lifecycle per (workspace, language) so the
+      // editor toolbar can show a loading indicator while a server starts
+      // (Java's jdtls can take minutes to import a project) and a failure
+      // notice when it can't start. App-lifetime subscription — no teardown.
+      api.on.lspEvent((msg) => {
+        if (msg.type !== "stateChanged") return;
+        const p = msg.payload as LspStateChangedPayload;
+        if (!p || (p.phase !== "starting" && p.phase !== "running" && p.phase !== "stopped")) return;
+        set((s) => ({
+          lspPhasesByWorkspace: {
+            ...s.lspPhasesByWorkspace,
+            [`${msg.workspacePath}::${msg.language}`]: { phase: p.phase, error: p.error },
+          },
+        }));
+      });
+    }
 
     // Deferred settings: one bulk read for everything non-critical-paint
     // (appearance, pane widths, IDE/git prefs). One IPC instead of four

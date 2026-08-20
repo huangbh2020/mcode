@@ -2027,6 +2027,21 @@ export interface LspLanguageState {
   lastError: string;
 }
 
+/** `lsp:event` stateChanged payload: the language-server lifecycle for one
+ *  (workspacePath, language). Emitted at every phase transition so the
+ *  renderer can show startup progress in the editor toolbar. `stopped` after
+ *  a failed start carries the reason in `error`. */
+export interface LspStateChangedPayload {
+  /** "starting" = spawned, initialize handshake in flight (can take minutes
+   *  for Java); "running" = initialize done; "stopped" = exited/failed. */
+  phase: "starting" | "running" | "stopped";
+  /** Boolean view of the phase (running === phase === "running"), kept for
+   *  consumers that only care whether the server is usable. */
+  running: boolean;
+  /** Failure reason when the server couldn't start (phase "stopped"). */
+  error?: string;
+}
+
 /** A diagnostic pushed from the server via publishDiagnostics. Mirrors LSP
  *  Diagnostic (0-based line/character). */
 export interface LspDiagnostic {
@@ -2167,6 +2182,8 @@ export interface LspEventMessage {
   channel: "lsp:event";
   workspacePath: string;
   language: LspLanguageId;
+  /** Type-specific shape: diagnostics → LspDiagnostic[], log →
+   *  { level, message }, stateChanged → LspStateChangedPayload. */
   type: "diagnostics" | "log" | "stateChanged";
   payload: unknown;
 }

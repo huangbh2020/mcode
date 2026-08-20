@@ -23,8 +23,10 @@ import { useSessionStore } from "@renderer/stores/sessionStore.js";
 import { useEffect, useRef } from "react";
 
 /** Map a Monaco language id to the LSP language id we route requests through.
- *  TS server handles both typescript + javascript, so both map to "typescript". */
-function monacoLanguageToLsp(languageId: string): LspLanguageId | null {
+ *  TS server handles both typescript + javascript, so both map to "typescript".
+ *  Exported so the editor toolbar can resolve a file's LSP language for the
+ *  server-status indicator. */
+export function monacoLanguageToLsp(languageId: string): LspLanguageId | null {
   switch (languageId) {
     case "typescript":
     case "javascript":
@@ -39,6 +41,15 @@ function monacoLanguageToLsp(languageId: string): LspLanguageId | null {
       return null;
   }
 }
+
+/** Display names for the LSP language ids (proper nouns — same in zh/en, so
+ *  they bypass the i18n dictionaries). */
+export const LSP_LANGUAGE_DISPLAY: Record<LspLanguageId, string> = {
+  typescript: "TypeScript",
+  python: "Python",
+  go: "Go",
+  java: "Java",
+};
 
 /** Languages we've already registered providers for (Monaco registers per
  *  language id globally, not per model). */

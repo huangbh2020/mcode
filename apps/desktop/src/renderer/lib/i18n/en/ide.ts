@@ -33,6 +33,9 @@ export const en = {
   "ide.tree.touchedModified": "Modified this turn",
 
   /* ── file editor / open tabs ── */
+  "ide.editor.lspStarting": "{name} server starting…",
+  "ide.editor.lspStartingHint": "The language server is starting; the first jump/hover request waits for it (Java's first import can take minutes)",
+  "ide.editor.lspFailed": "{name} server failed to start",
   "ide.editor.navBack": "Go back",
   "ide.editor.navForward": "Go forward",
   "ide.editor.switchToDiff": "Switch to diff view",

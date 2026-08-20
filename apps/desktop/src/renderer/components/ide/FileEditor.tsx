@@ -20,6 +20,8 @@ import {
   notifyLspChange,
   notifyLspSave,
   filePathToUri,
+  monacoLanguageToLsp,
+  LSP_LANGUAGE_DISPLAY,
 } from "@renderer/lib/lspProviders.js";
 // Side-effect import: configures Monaco's worker environment + local instance
 // (no CDN). Must run before any <Editor> mounts. See monacoSetup.ts.
@@ -176,6 +178,20 @@ function EditorToolbar({
   );
   const navigateBack = useSessionStore((s) => s.navigateBack);
   const navigateForward = useSessionStore((s) => s.navigateForward);
+  // Language-server status for THIS file's language (active project's
+  // workspace): "starting" shows a loading pill (jdtls can take minutes),
+  // "stopped" with an error shows a failure notice that opens settings on
+  // click. "running"/no-LSP-language show nothing.
+  const lspStatus = useSessionStore((s) => {
+    const lspLang = monacoLanguageToLsp(languageForExt(extname(filePath)));
+    if (!lspLang) return null;
+    const pid = s.activeProjectId;
+    const projPath = pid ? s.projects.find((p) => p.id === pid)?.path : undefined;
+    if (!projPath) return null;
+    return s.lspPhasesByWorkspace[`${projPath}::${lspLang}`] ?? null;
+  });
+  const lspLanguageId = monacoLanguageToLsp(languageForExt(extname(filePath)));
+  const setSettingsOpen = useSessionStore((s) => s.setSettingsOpen);
   // Tooltip = label + the EFFECTIVE chord (user override or Alt+←/→ default),
   // so a rebind in settings is reflected here immediately.
   const shortcutOverrides = useSessionStore((s) => s.shortcutOverrides);
@@ -236,6 +252,33 @@ function EditorToolbar({
         {rel}
       </span>
       <div className="ml-auto flex items-center gap-1">
+        {/* Language-server startup indicator: spinner while the server's
+            initialize handshake is in flight, a failure notice (click →
+            settings) when it couldn't start. Requests made while starting
+            wait for the server, so this pill explains the perceived lag. */}
+        {lspStatus?.phase === "starting" && lspLanguageId && (
+          <span
+            className="flex items-center gap-1 text-[11px] text-content-subtle"
+            title={t("ide.editor.lspStartingHint")}
+          >
+            <IconLoader2 size={11} className="animate-spin" />
+            {t("ide.editor.lspStarting", { name: LSP_LANGUAGE_DISPLAY[lspLanguageId] })}
+          </span>
+        )}
+        {lspStatus?.phase === "stopped" && lspStatus.error && lspLanguageId && (
+          <button
+            type="button"
+            onClick={() => setSettingsOpen(true)}
+            className={cn(
+              "flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] transition-colors",
+              "text-danger hover:bg-surface-hover",
+            )}
+            title={lspStatus.error}
+          >
+            <IconAlertTriangle size={11} />
+            {t("ide.editor.lspFailed", { name: LSP_LANGUAGE_DISPLAY[lspLanguageId] })}
+          </button>
+        )}
         {canDiff && mode !== "preview" && (
           <button
             type="button"
@@ -319,8 +362,9 @@ function EditPane({ filePath, projectPath }: { filePath: string; projectPath: st
   const lspVersionRef = useRef(1);
   // Debounce timer for didChange notifications.
   const changeDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // View-state save listeners (scroll + selection) — disposed on unmount.
-  const viewStateDisposablesRef = useRef<{ dispose(): void }[]>([]);
+  // Editor event-listener disposables (view-state stash, cursor tracking,
+  // reveal re-centering retry) — disposed on unmount.
+  const editorDisposablesRef = useRef<{ dispose(): void }[]>([]);
   // Reveal nonce consumer - re-runs when the store requests a goto-def reveal.
   const ideRevealNonce = useSessionStore((s) => s.ideRevealNonce);
   const idePendingReveal = useSessionStore((s) => s.idePendingReveal);
@@ -419,7 +463,7 @@ function EditPane({ filePath, projectPath }: { filePath: string; projectPath: st
     // Seed the cursor now (post view-state restore) so a file opened for the
     // first time this session still has a known location.
     stashCursor();
-    viewStateDisposablesRef.current.push(
+    editorDisposablesRef.current.push(
       editor_.onDidScrollChange(stashViewState),
       editor_.onDidChangeCursorSelection(() => {
         stashViewState();
@@ -435,16 +479,43 @@ function EditPane({ filePath, projectPath }: { filePath: string; projectPath: st
 
   /** Scroll to + focus the pending reveal target for this file, if any, and
    *  clear it. Shared by the nonce effect (already-mounted editor) and
-   *  onMount (freshly-mounted editor from a cross-file jump). */
+   *  onMount (freshly-mounted editor from a cross-file jump).
+   *
+   *  The target is revealed at the CENTER of the viewport (VS Code behavior).
+   *  On the mount path the editor may still carry a degenerate layout from
+   *  creation time (viewport ≈ 0–1 lines tall) — revealLineInCenter would
+   *  then compute a top-aligned offset and the target lands on the FIRST
+   *  visible line once automaticLayout settles. Two guards: force a
+   *  synchronous layout measure before revealing, and re-assert the
+   *  centering on the first post-reveal layout change (bounded to ~1s so a
+   *  later user resize never jumps the scroll back). */
   const applyReveal = () => {
     const reveal = useSessionStore.getState().idePendingReveal;
     if (!reveal || reveal.filePath !== filePath) return;
     const ed = editorRef.current;
     if (!ed) return;
-    ed.revealLineInCenter(reveal.line);
-    ed.setPosition({ lineNumber: reveal.line, column: reveal.column });
+    const doReveal = () => {
+      ed.revealLineInCenter(reveal.line);
+      ed.setPosition({ lineNumber: reveal.line, column: reveal.column });
+    };
+    ed.layout(); // measure the container NOW so the centering math is real
+    doReveal();
     ed.focus();
     useSessionStore.getState().clearIdePendingReveal();
+    let retryListener: { dispose(): void } | null = null;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    const stopRetry = () => {
+      retryListener?.dispose();
+      if (retryTimer) clearTimeout(retryTimer);
+      retryListener = null;
+      retryTimer = null;
+    };
+    retryListener = ed.onDidLayoutChange(() => {
+      stopRetry();
+      doReveal();
+    });
+    retryTimer = setTimeout(stopRetry, 1000);
+    editorDisposablesRef.current.push({ dispose: stopRetry });
   };
 
   // Goto-definition reveal: when the store has a pending reveal for this file,
@@ -462,14 +533,15 @@ function EditPane({ filePath, projectPath }: { filePath: string; projectPath: st
     () => editorRef.current,
   );
 
-  // Clear the saved-indicator timer, stop the view-state listeners + close
-  // the LSP document on unmount.
+  // Clear the saved-indicator timer, stop the editor listeners (view-state
+  // stash / cursor tracking / reveal retry) + close the LSP document on
+  // unmount.
   useEffect(() => {
     return () => {
       if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
       if (changeDebounceRef.current) clearTimeout(changeDebounceRef.current);
-      viewStateDisposablesRef.current.forEach((d) => d.dispose());
-      viewStateDisposablesRef.current = [];
+      editorDisposablesRef.current.forEach((d) => d.dispose());
+      editorDisposablesRef.current = [];
       // Report clean on unmount so a re-open doesn't show a stale dirty dot.
       ideDirtyTracker.set(filePath, false);
       // Tell the server this document closed (best-effort).

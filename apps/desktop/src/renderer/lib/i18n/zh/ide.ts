@@ -35,6 +35,9 @@ export const zh = {
   "ide.tree.touchedModified": "本轮修改",
 
   /* ── file editor / open tabs ── */
+  "ide.editor.lspStarting": "{name} 服务器启动中…",
+  "ide.editor.lspStartingHint": "语言服务器正在启动,首个跳转/悬停请求会等待就绪(Java 首次导入可能需要几分钟)",
+  "ide.editor.lspFailed": "{name} 服务器启动失败",
   "ide.editor.navBack": "返回上一处",
   "ide.editor.navForward": "前往下一处",
   "ide.editor.switchToDiff": "切换到差异视图",
