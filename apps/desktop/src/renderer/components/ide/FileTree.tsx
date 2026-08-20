@@ -689,8 +689,13 @@ function TreeNode({
 }) {
   // Expanded dirs + active file are scoped to the active project.
   const pid = useSessionStore((s) => s.activeProjectId);
-  const expandedDirs = useSessionStore((s) =>
-    pid ? s.ideExpandedDirsByProject[pid] ?? EMPTY_EXPANDED : EMPTY_EXPANDED,
+  // Select membership as a primitive instead of the array reference: the old
+  // array selector returned a fresh bucket per toggle, and since Zustand
+  // compares selector results with Object.is, EVERY node re-rendered whenever
+  // ANY dir expanded/collapsed. A boolean only re-renders this node when its
+  // own membership flips.
+  const isOpen = useSessionStore((s) =>
+    pid ? (s.ideExpandedDirsByProject[pid] ?? EMPTY_EXPANDED).includes(entry.path) : false,
   );
   const toggleDirExpanded = useSessionStore((s) => s.toggleDirExpanded);
   const setDirExpanded = useSessionStore((s) => s.setDirExpanded);
@@ -699,7 +704,6 @@ function TreeNode({
     pid ? s.ideActiveFileByProject[pid] ?? null : null,
   );
 
-  const isOpen = expandedDirs.includes(entry.path);
   const isActiveFile = activeFile === entry.path;
 
   if (entry.isDir) {

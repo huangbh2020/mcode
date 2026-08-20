@@ -35,7 +35,7 @@ import {
 export function TerminalPanel() {
   const { t } = useI18n();
   return (
-    <section className="space-y-4">
+    <section className="mx-auto w-full max-w-3xl space-y-4">
       <PanelHeader
         title={t("settings.terminal.title")}
         desc={t("settings.terminal.desc")}

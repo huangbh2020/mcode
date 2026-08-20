@@ -27,7 +27,7 @@ import {
 export function BrowserPanel() {
   const { t } = useI18n();
   return (
-    <section className="space-y-4">
+    <section className="mx-auto w-full max-w-3xl space-y-4">
       <PanelHeader
         title={t("settings.browser.title")}
         desc={t("settings.browser.desc")}

@@ -505,7 +505,7 @@ export const en = {
 
   // ── UsagePanel ──
   "settings.usage.title": "Usage",
-  "settings.usage.desc": "Token usage and estimated cost aggregated from every session's turn history. Costs are provider estimates; Pi sessions are counted as increments.",
+  "settings.usage.desc": "Token usage aggregated from every session's turn history. Pi sessions are counted as increments.",
   "settings.usage.range.today": "Today",
   "settings.usage.range.sevenDays": "Last 7 days",
   "settings.usage.range.thirtyDays": "Last 30 days",
@@ -516,7 +516,6 @@ export const en = {
   "settings.usage.summary.outputTokens": "Output tokens",
   "settings.usage.summary.cacheRead": "Cache reads",
   "settings.usage.summary.cacheWrite": "Cache writes",
-  "settings.usage.summary.cost": "Est. cost",
   "settings.usage.heatmap.title": "Daily usage heatmap",
   "settings.usage.heatmap.weekdayMon": "Mon",
   "settings.usage.heatmap.weekdayThu": "Thu",

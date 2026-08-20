@@ -197,7 +197,7 @@ export const zh = {
   "ide.diff.noDiff": "无可显示的差异",
 
   /* ── terminal ── */
-  "ide.term.tabTitle": "终端 {n}",
+  "ide.term.tabTitle": "{name} {n}",
   "ide.term.noProjectDesc": "在左侧栏添加一个项目文件夹后,即可在此打开集成终端",
   "ide.term.closeTerminal": "关闭终端",
   "ide.term.newTerminal": "新建终端",

@@ -150,8 +150,7 @@ const BINARY_MIME: Record<string, string> = {
  *  root containing the path; clipboard-paste temp files (app-owned) are
  *  allowed outside projects. Degrades to empty content instead of throwing. */
 export async function readFileGuarded(filePath: string): Promise<{ content: string }> {
-  const projects = ProjectRepo.list();
-  const root = projects.find((p) => pathWithin(p.path, filePath));
+  const root = ProjectRepo.listPaths().find((p) => pathWithin(p, filePath));
   if (!root && !isPasteTempPath(filePath)) {
     log.warn(`file.readFile refused — path outside any project root: ${filePath}`);
     return { content: "" };
@@ -169,8 +168,7 @@ export async function readFileGuarded(filePath: string): Promise<{ content: stri
 /** Shared guarded binary read (base64 data URL) — same boundary as
  *  {@link readFileGuarded}. */
 export async function readBinaryGuarded(filePath: string): Promise<{ dataUrl: string }> {
-  const projects = ProjectRepo.list();
-  const root = projects.find((p) => pathWithin(p.path, filePath));
+  const root = ProjectRepo.listPaths().find((p) => pathWithin(p, filePath));
   if (!root && !isPasteTempPath(filePath)) {
     log.warn(`file.readBinary refused - path outside any project root: ${filePath}`);
     return { dataUrl: "" };
@@ -200,7 +198,7 @@ export async function listDirGuarded(
   projectPath: string,
   dirPath: string,
 ): Promise<{ entries: FileTreeEntry[] }> {
-  const known = ProjectRepo.list().some((p) => samePath(p.path, projectPath));
+  const known = ProjectRepo.listPaths().some((p) => samePath(p, projectPath));
   if (!known) {
     log.warn(`file.listDir refused — unknown projectPath: ${projectPath}`);
     return { entries: [] };
@@ -250,7 +248,7 @@ export async function listDirGuarded(
 export async function searchFilesGuarded(
   input: FileSearchInput,
 ): Promise<{ files: FileSearchEntry[] }> {
-  const known = ProjectRepo.list().some((p) => samePath(p.path, input.projectPath));
+  const known = ProjectRepo.listPaths().some((p) => samePath(p, input.projectPath));
   if (!known) {
     log.warn(`file.search refused — unknown projectPath: ${input.projectPath}`);
     return { files: [] as FileSearchEntry[] };
@@ -353,7 +351,7 @@ export function registerFileHandlers(ipcMain: IpcMain): void {
    * Same path-root containment and hard caps as the name search. */
   ipcMain.handle(IPC.FILE_GREP, async (_evt, raw) => {
     const input = FileGrepSchema.parse(raw);
-    const known = ProjectRepo.list().some((p) => samePath(p.path, input.projectPath));
+    const known = ProjectRepo.listPaths().some((p) => samePath(p, input.projectPath));
     if (!known) {
       log.warn(`file.grep refused - unknown projectPath: ${input.projectPath}`);
       return { matches: [] as FileGrepEntry[] };
@@ -465,8 +463,7 @@ export function registerFileHandlers(ipcMain: IpcMain): void {
     const input = FileWriteSchema.parse(raw);
     // Same root-scoping guard as readFile: accept the first project whose
     // root contains the target path.
-    const projects = ProjectRepo.list();
-    const root = projects.find((p) => pathWithin(p.path, input.filePath));
+    const root = ProjectRepo.listPaths().find((p) => pathWithin(p, input.filePath));
     if (!root) {
       log.warn(`file.writeFile refused — path outside any project root: ${input.filePath}`);
       return { ok: false };
@@ -476,13 +473,13 @@ export function registerFileHandlers(ipcMain: IpcMain): void {
       const parent = dirname(input.filePath);
       // Defense-in-depth: the parent must also stay inside the root. (Normal
       // dirname of an in-root path always does, but this guards edge cases.)
-      if (!pathWithin(root.path, parent)) {
+      if (!pathWithin(root, parent)) {
         log.warn(`file.writeFile refused — parent escapes root: ${parent}`);
         return { ok: false };
       }
       await mkdir(parent, { recursive: true });
       await writeFile(input.filePath, input.content, "utf-8");
-      log.info(`file.writeFile saved: ${relative(root.path, input.filePath) || input.filePath}`);
+      log.info(`file.writeFile saved: ${relative(root, input.filePath) || input.filePath}`);
       return { ok: true };
     } catch (err) {
       log.error(`file.writeFile failed for ${input.filePath}: ${(err as Error).message}`);
@@ -495,15 +492,14 @@ export function registerFileHandlers(ipcMain: IpcMain): void {
     const input = FileMkdirSchema.parse(raw);
     // Same root-scoping guard as writeFile: accept the first project whose
     // root contains the target path.
-    const projects = ProjectRepo.list();
-    const root = projects.find((p) => pathWithin(p.path, input.dirPath));
+    const root = ProjectRepo.listPaths().find((p) => pathWithin(p, input.dirPath));
     if (!root) {
       log.warn(`file.mkdir refused — path outside any project root: ${input.dirPath}`);
       return { ok: false };
     }
     try {
       await mkdir(input.dirPath, { recursive: true });
-      log.info(`file.mkdir created: ${relative(root.path, input.dirPath) || input.dirPath}`);
+      log.info(`file.mkdir created: ${relative(root, input.dirPath) || input.dirPath}`);
       return { ok: true };
     } catch (err) {
       log.error(`file.mkdir failed for ${input.dirPath}: ${(err as Error).message}`);
@@ -516,15 +512,14 @@ export function registerFileHandlers(ipcMain: IpcMain): void {
   // the OS recycle bin / Trash. Refuses anything outside a project root.
   ipcMain.handle(IPC.FILE_DELETE, async (_evt, raw) => {
     const input = FileDeleteSchema.parse(raw);
-    const projects = ProjectRepo.list();
-    const root = projects.find((p) => pathWithin(p.path, input.targetPath));
+    const root = ProjectRepo.listPaths().find((p) => pathWithin(p, input.targetPath));
     if (!root) {
       log.warn(`file.delete refused — path outside any project root: ${input.targetPath}`);
       return { ok: false };
     }
     try {
       await shell.trashItem(input.targetPath);
-      log.info(`file.delete trashed: ${relative(root.path, input.targetPath) || input.targetPath}`);
+      log.info(`file.delete trashed: ${relative(root, input.targetPath) || input.targetPath}`);
       return { ok: true };
     } catch (err) {
       log.error(`file.delete failed for ${input.targetPath}: ${(err as Error).message}`);
@@ -538,14 +533,13 @@ export function registerFileHandlers(ipcMain: IpcMain): void {
   // foot-gun through this channel), so it's refused here.
   ipcMain.handle(IPC.FILE_RENAME, async (_evt, raw) => {
     const input = FileRenameSchema.parse(raw);
-    const projects = ProjectRepo.list();
-    const root = projects.find((p) => pathWithin(p.path, input.oldPath));
+    const root = ProjectRepo.listPaths().find((p) => pathWithin(p, input.oldPath));
     if (!root) {
       log.warn(`file.rename refused — oldPath outside any project root: ${input.oldPath}`);
       return { ok: false };
     }
     // newPath must stay inside the same root.
-    if (!pathWithin(root.path, input.newPath)) {
+    if (!pathWithin(root, input.newPath)) {
       log.warn(`file.rename refused — newPath escapes root: ${input.newPath}`);
       return { ok: false };
     }
@@ -577,7 +571,7 @@ export function registerFileHandlers(ipcMain: IpcMain): void {
       }
       await rename(input.oldPath, input.newPath);
       log.info(
-        `file.rename: ${relative(root.path, input.oldPath) || input.oldPath} -> ${relative(root.path, input.newPath) || input.newPath}`,
+        `file.rename: ${relative(root, input.oldPath) || input.oldPath} -> ${relative(root, input.newPath) || input.newPath}`,
       );
       return { ok: true };
     } catch (err) {

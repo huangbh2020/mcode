@@ -262,6 +262,24 @@ div:has(> [role="menu"]) {
   color-scheme: dark;
 }
 
+/* ───────────── Settings overlay text lift (dark only) ─────────────
+ * The global dark grays above are tuned for the chat stream; the settings
+ * page renders far more small muted/subtle text (labels / descs / hints,
+ * often on muted recesses), where the global values read as
+ * near-background. Brightening is scoped to the settings overlay wrapper
+ * (.settings-root on the App.tsx overlay div) so chat / IDE chrome keeps
+ * the global ramp. Values lift both tiers while staying below --content
+ * (231 232 236) so the three-level hierarchy still resolves:
+ *   muted  #bcbfc6 → #d0d3d9  ≈9.2:1 → ≈11.2:1 on --surface
+ *   subtle #9ea2ab → #b8bcc4  ≈6.6:1 → ≈8.9:1  on --surface
+ * Custom properties cascade — Tailwind's text-content-* utilities read
+ * them at the element, so all settings panels pick this up at once.
+ * (Portaled dialogs/tooltips outside this subtree keep global tokens.) */
+.dark .settings-root {
+  --content-muted: 208 211 217; /* #d0d3d9 */
+  --content-subtle: 184 188 196; /* #b8bcc4 */
+}
+
 /* ───────────── Font-weight ladder shifts ─────────────
  * Pairs with the base font-weight set on :root (500, light) and .dark (600,
  * dark). Because the inherited base is lifted, the raw Tailwind utilities

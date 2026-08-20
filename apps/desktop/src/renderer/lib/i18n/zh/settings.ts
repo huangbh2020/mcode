@@ -508,7 +508,7 @@ export const zh = {
 
   // ── UsagePanel ──
   "settings.usage.title": "用量统计",
-  "settings.usage.desc": "汇总各会话每轮对话的 token 用量与成本估计。成本为 provider 估计值,Pi 会话按增量折算。",
+  "settings.usage.desc": "汇总各会话每轮对话的 token 用量。Pi 会话按增量折算。",
   "settings.usage.range.today": "今天",
   "settings.usage.range.sevenDays": "最近 7 天",
   "settings.usage.range.thirtyDays": "最近 30 天",
@@ -519,7 +519,6 @@ export const zh = {
   "settings.usage.summary.outputTokens": "输出 Tokens",
   "settings.usage.summary.cacheRead": "缓存读取",
   "settings.usage.summary.cacheWrite": "缓存写入",
-  "settings.usage.summary.cost": "预估成本",
   "settings.usage.heatmap.title": "每日用量热力图",
   "settings.usage.heatmap.weekdayMon": "一",
   "settings.usage.heatmap.weekdayThu": "四",

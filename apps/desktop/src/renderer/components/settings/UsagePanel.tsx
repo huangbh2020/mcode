@@ -4,8 +4,8 @@
  * Aggregates the per-turn usage history persisted on session rows into three
  * views (data computed in main by lib/usageStats.ts, provider accounting
  * already normalized — Pi sessions are cumulative and get diffed there):
- *   1. Summary cards over the selected time range (turns / sessions / tokens
- *      breakdown / estimated cost).
+ *   1. Summary cards over the selected time range (turns / sessions /
+ *      tokens breakdown).
  *   2. A fixed full-year (53-week) GitHub-style daily heatmap; days outside
  *      the selected range are dimmed so the range choice reads on the grid.
  *   3. A per-model ranking with proportional bars.
@@ -58,12 +58,6 @@ function rangeStartKey(preset: UsageStatsPreset): string | null {
   const d = new Date();
   d.setDate(d.getDate() - days);
   return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
-}
-
-/** Cost formatting: keep 4 decimals for the typical sub-$10 daily sums, 2
- *  once it grows past $100. */
-function fmtCost(n: number): string {
-  return `$${n >= 100 ? n.toFixed(2) : n.toFixed(4)}`;
 }
 
 /** 5-tier accent-alpha ramp relative to the window's busiest day. */
@@ -176,12 +170,14 @@ export function UsagePanel() {
         { key: "outputTokens", label: t("settings.usage.summary.outputTokens"), value: fmtTokens(summary.outputTokens) },
         { key: "cacheRead", label: t("settings.usage.summary.cacheRead"), value: fmtTokens(summary.cacheReadTokens) },
         { key: "cacheWrite", label: t("settings.usage.summary.cacheWrite"), value: fmtTokens(summary.cacheCreationTokens) },
-        { key: "cost", label: t("settings.usage.summary.cost"), value: summary.costUsd > 0 ? fmtCost(summary.costUsd) : "—" },
       ]
     : [];
 
   return (
-    <section className="space-y-4">
+    // Constrained width + centered (same pattern as LspLanguagesPanel):
+    // the 53-week heatmap stretches by 1fr columns, so at full panel width
+    // the cells grow huge — max-w-3xl keeps them GitHub-sized.
+    <section className="mx-auto w-full max-w-3xl space-y-4">
       <PanelHeader
         title={t("settings.usage.title")}
         icon={IconChartBar}
@@ -217,7 +213,7 @@ export function UsagePanel() {
       ) : (
         <>
           {/* ───────── 区间汇总 ───────── */}
-          <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
+          <div className="grid grid-cols-2 gap-2 md:grid-cols-3">
             {summaryItems.map((item) => (
               <Card key={item.key} className="px-3 py-2.5">
                 <div className="text-[0.7143em] text-content-subtle">{item.label}</div>
@@ -362,7 +358,6 @@ export function UsagePanel() {
                         {fmtTokens(m.totalTokens)} {t("settings.usage.models.tokens")}
                         {" · "}
                         {m.turns.toLocaleString()} {t("settings.usage.models.turns")}
-                        {m.costUsd > 0 ? ` · ${fmtCost(m.costUsd)}` : ""}
                       </span>
                     </div>
                     <div className="mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-surface-muted">

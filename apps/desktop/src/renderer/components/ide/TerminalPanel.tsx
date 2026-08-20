@@ -19,11 +19,14 @@ import { TerminalCommandsMenu } from "./TerminalCommandsMenu.js";
 import { useI18n } from "@renderer/lib/i18n/index.js";
 
 /** One UI terminal tab. `key` is stable; the underlying PTY id lives in the view.
- *  The tab title is derived at render time from `seq` ("终端 {n}") so it
- *  follows the UI locale instead of being frozen at creation. */
+ *  The tab title is derived at render time from the owning project's name plus
+ *  `seq` ("{name} {n}") so it follows the UI locale (and later project renames)
+ *  instead of being frozen at creation. `seq` is per-project (see
+ *  `ProjectTermState.nextSeq`), so tabs of different projects never make each
+ *  other's numbers jump. */
 interface TermSession {
   key: string;
-  /** Ordinal shown in the tab title. */
+  /** Per-project ordinal shown in the tab title. */
   seq: number;
   status: TerminalSessionStatus;
   detail?: string;
@@ -33,10 +36,13 @@ interface TermSession {
  *  each render that would churn downstream selectors). */
 const EMPTY_SESSIONS: TermSession[] = [];
 
-let nextSeq = 1;
-function makeSession(): TermSession {
-  const n = nextSeq++;
-  return { key: `term-${n}-${Date.now().toString(36)}`, seq: n, status: "starting" };
+/** Globally-unique tab-key generator. Only guarantees key uniqueness — the
+ *  displayed ordinal comes from the owning project bucket's `nextSeq`. The
+ *  timestamp suffix keeps keys unique across module re-evaluation (HMR) while
+ *  the component tree persists. */
+let keyGen = 0;
+function makeSession(seq: number): TermSession {
+  return { key: `term-${keyGen++}-${Date.now().toString(36)}`, seq, status: "starting" };
 }
 
 /** Per-project terminal state. `sessions` are the open tabs; `activeKey` is the
@@ -44,6 +50,8 @@ function makeSession(): TermSession {
 interface ProjectTermState {
   sessions: TermSession[];
   activeKey: string | null;
+  /** Next per-project ordinal handed out for the tab title ("终端 {n}"). */
+  nextSeq: number;
 }
 
 /**
@@ -51,7 +59,11 @@ interface ProjectTermState {
  *
  * - Scoped to the active project's path (cwd = project root).
  * - Supports multiple local sessions (tabs) per project; each mounts a
- *   TerminalView.
+ *   TerminalView. Tab ordinals ("终端 {n}") are per-project, starting at 1
+ *   for each project's first terminal.
+ * - The first terminal of a project is created lazily — the first time the
+ *   panel is actually OPENED with that project active, not when the project
+ *   merely becomes active — so switching projects never spawns hidden PTYs.
  * - Parent BottomTerminalBar keep-alives this component (collapses to height 0
  *   instead of unmounting) so PTYs and scrollback survive the bar toggling.
  * - Cross-project keep-alive: every project that has ever opened a terminal
@@ -89,22 +101,39 @@ export function TerminalPanel({ active }: { active: boolean }) {
   const pendingCommandBySession = useRef<Map<string, string>>(new Map());
   const [, forceRender] = useReducer((n: number) => n + 1, 0);
 
+  // Create a session in the given project's bucket (creating the bucket if
+  // needed) and make it the active tab. Single choke point for every terminal
+  // spawn, so the per-project ordinal stays dense — a shared global counter
+  // made numbers jump whenever another project silently consumed one.
+  const appendSession = useCallback((path: string): TermSession => {
+    let st = termsRef.current.get(path);
+    if (!st) {
+      st = { sessions: [], activeKey: null, nextSeq: 1 };
+      termsRef.current.set(path, st);
+    }
+    const s = makeSession(st.nextSeq++);
+    st.sessions = [...st.sessions, s];
+    st.activeKey = s.key;
+    keyToPathRef.current.set(s.key, path);
+    return s;
+  }, []);
+
   // Read-only view of the CURRENT project's state (empty when no project).
   const current = projectPath ? termsRef.current.get(projectPath) : undefined;
   const sessions = current?.sessions ?? EMPTY_SESSIONS;
   const activeKey = current?.activeKey ?? null;
 
-  // Ensure the current project has a terminal bucket: create the first session
-  // on first visit, but leave existing buckets untouched so switching back to a
-  // project restores its tabs + active tab + live PTYs.
+  // Ensure the current project has a terminal bucket — lazily: only once the
+  // panel has actually been OPENED with that project active. Creating on bare
+  // project activation would silently spawn (and keep alive) a hidden PTY for
+  // every project the user merely switched through. Existing buckets are left
+  // untouched so re-opening restores tabs + active tab + live PTYs.
   useEffect(() => {
-    if (!projectPath) return; // no project -> empty state; don't touch the map
+    if (!projectPath || !active) return; // not open (or no project) -> don't touch the map
     if (termsRef.current.has(projectPath)) return; // already has terminals -> restore as-is
-    const first = makeSession();
-    termsRef.current.set(projectPath, { sessions: [first], activeKey: first.key });
-    keyToPathRef.current.set(first.key, projectPath);
+    appendSession(projectPath);
     forceRender();
-  }, [projectPath]);
+  }, [projectPath, active, appendSession]);
 
   // Clean up terminals for projects that no longer exist (deleted/archived out).
   // The store has already switched activeProjectId away by the time this runs,
@@ -128,17 +157,9 @@ export function TerminalPanel({ active }: { active: boolean }) {
 
   const addSession = useCallback(() => {
     if (!projectPath) return;
-    const s = makeSession();
-    const st = termsRef.current.get(projectPath);
-    if (st) {
-      st.sessions = [...st.sessions, s];
-      st.activeKey = s.key;
-    } else {
-      termsRef.current.set(projectPath, { sessions: [s], activeKey: s.key });
-    }
-    keyToPathRef.current.set(s.key, projectPath);
+    appendSession(projectPath);
     forceRender();
-  }, [projectPath]);
+  }, [projectPath, appendSession]);
 
   const closeSession = useCallback(
     (key: string) => {
@@ -157,10 +178,10 @@ export function TerminalPanel({ active }: { active: boolean }) {
         const next = st.sessions.filter((s) => s.key !== key);
         if (next.length === 0 && path === projectPath) {
           // Closing the last tab of the current project spawns a fresh terminal
-          // so the current project is never left empty.
-          const fresh = makeSession();
-          keyToPathRef.current.set(fresh.key, path);
-          termsRef.current.set(path, { sessions: [fresh], activeKey: fresh.key });
+          // so the current project is never left empty. appendSession keeps the
+          // bucket's ordinal counter, so the replacement gets the next number.
+          st.sessions = [];
+          appendSession(path);
         } else if (next.length === 0) {
           // Last tab of a non-current project - drop the bucket entirely.
           termsRef.current.delete(path);
@@ -173,7 +194,7 @@ export function TerminalPanel({ active }: { active: boolean }) {
       }
       forceRender();
     },
-    [projectPath],
+    [projectPath, appendSession],
   );
 
   const updateStatus = useCallback(
@@ -233,19 +254,11 @@ export function TerminalPanel({ active }: { active: boolean }) {
   const runCommandInNewTerminal = useCallback(
     (command: string) => {
       if (!projectPath) return;
-      const s = makeSession();
-      const st = termsRef.current.get(projectPath);
-      if (st) {
-        st.sessions = [...st.sessions, s];
-        st.activeKey = s.key;
-      } else {
-        termsRef.current.set(projectPath, { sessions: [s], activeKey: s.key });
-      }
-      keyToPathRef.current.set(s.key, projectPath);
+      const s = appendSession(projectPath);
       pendingCommandBySession.current.set(s.key, command);
       forceRender();
     },
-    [projectPath],
+    [projectPath, appendSession],
   );
 
   if (!projectPath) {
@@ -261,6 +274,15 @@ export function TerminalPanel({ active }: { active: boolean }) {
       </div>
     );
   }
+
+  // Tab titles read "<project name> <ordinal>" (e.g. "my-app 2"). The visible
+  // strip only ever shows the current project's sessions, so resolving the
+  // current project's name covers every tab; the path's basename is a fallback
+  // for when the project row is (transiently) absent from the store.
+  const projectName =
+    projects.find((p) => p.path === projectPath)?.name ||
+    projectPath.split(/[\\/]/).filter(Boolean).pop() ||
+    projectPath;
 
   // Flatten every project's terminals into a single render list. All of them
   // stay mounted (cross-project keep-alive); visibility is decided per-entry
@@ -278,7 +300,7 @@ export function TerminalPanel({ active }: { active: boolean }) {
           {sessions.map((s) => {
             const isActive = s.key === activeKey;
             // Derive the tab title at render so it re-localizes on locale switch.
-            const sessionTitle = t("ide.term.tabTitle", { n: s.seq });
+            const sessionTitle = t("ide.term.tabTitle", { name: projectName, n: s.seq });
             return (
               <div
                 key={s.key}

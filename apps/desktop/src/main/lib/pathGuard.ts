@@ -41,13 +41,12 @@ export function pathWithin(root: string, abs: string): boolean {
 /** Verify a path is inside SOME persisted project root. Returns the matching
  *  project root path, or null if the path is outside all roots (refuse). */
 export function findContainingProject(absPath: string): string | null {
-  const projects = ProjectRepo.list();
-  const proj = projects.find((p) => pathWithin(p.path, absPath));
-  return proj?.path ?? null;
+  const root = ProjectRepo.listPaths().find((p) => pathWithin(p, absPath));
+  return root ?? null;
 }
 
 /** True if `projectPath` exactly matches a persisted Project.path (normalized,
  *  case-insensitive on Windows/macOS). */
 export function isKnownProjectPath(projectPath: string): boolean {
-  return ProjectRepo.list().some((p) => samePath(p.path, projectPath));
+  return ProjectRepo.listPaths().some((p) => samePath(p, projectPath));
 }

@@ -42,7 +42,7 @@ const REFUSE = "仓库路径不在任何已添加的项目内";
 const handlers: Record<string, RpcHandler> = {
   "git:discoverRepos": async (raw) => {
     const input = GitDiscoverReposSchema.parse(raw);
-    const known = ProjectRepo.list().some((p) => resolve(p.path) === resolve(input.projectPath));
+    const known = ProjectRepo.listPaths().some((p) => resolve(p) === resolve(input.projectPath));
     if (!known) return { repos: [] };
     try {
       const repoPaths = await findGitRepos(input.projectPath, MAX_SCAN_DEPTH);

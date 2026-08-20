@@ -1531,32 +1531,52 @@ function clearUpstreamIssue(
 /**
  * Persist the per-project IDE buckets (open files / active file / expanded
  * dirs) to the settings table. Each is stored as a JSON object keyed by
- * projectId. Called after every IDE action that mutates a bucket — the write
- * is fire-and-forget (same pattern as setDisplayMode). `viewMode` is NOT
- * persisted here (it's ephemeral — see the field doc).
+ * projectId. `viewMode` is NOT persisted here (it's ephemeral — see the field
+ * doc).
  *
- * Takes the full state snapshot so callers can pass `get()` right after a
- * `set()` without an extra read.
+ * Every IDE action used to fire all THREE writes even when only one bucket
+ * changed (a dir toggle also re-serialized openFiles + activeFile). Two fixes:
+ * the flush is debounced (same pattern as the pane-width persist — bursts like
+ * the reveal effect expanding several ancestor dirs coalesce), and each bucket
+ * is diffed against the last value actually written so only changed buckets
+ * hit the DB. Trailing debounce reads state at flush time, so the `get`
+ * accessor is stashed rather than a snapshot.
  */
-function persistIdeBuckets(state: SessionState): void {
-  void api.setting
-    .set({
-      key: UI_IDE_OPEN_FILES_SETTING_KEY,
-      value: JSON.stringify(state.ideOpenFilesByProject),
-    })
-    .catch((err) => console.error("setting.set(ideOpenFiles) failed:", err));
-  void api.setting
-    .set({
-      key: UI_IDE_ACTIVE_FILE_SETTING_KEY,
-      value: JSON.stringify(state.ideActiveFileByProject),
-    })
-    .catch((err) => console.error("setting.set(ideActiveFile) failed:", err));
-  void api.setting
-    .set({
-      key: UI_IDE_EXPANDED_DIRS_SETTING_KEY,
-      value: JSON.stringify(state.ideExpandedDirsByProject),
-    })
-    .catch((err) => console.error("setting.set(ideExpandedDirs) failed:", err));
+const IDE_BUCKETS_PERSIST_DEBOUNCE_MS = 400;
+let ideBucketsPersistTimer: ReturnType<typeof setTimeout> | null = null;
+let ideBucketsLastWritten: {
+  openFiles: string;
+  activeFile: string;
+  expandedDirs: string;
+} | null = null;
+function persistIdeBuckets(get: () => SessionState): void {
+  if (ideBucketsPersistTimer) clearTimeout(ideBucketsPersistTimer);
+  ideBucketsPersistTimer = setTimeout(() => {
+    ideBucketsPersistTimer = null;
+    const s = get();
+    const next = {
+      openFiles: JSON.stringify(s.ideOpenFilesByProject),
+      activeFile: JSON.stringify(s.ideActiveFileByProject),
+      expandedDirs: JSON.stringify(s.ideExpandedDirsByProject),
+    };
+    const last = ideBucketsLastWritten;
+    if (last?.openFiles !== next.openFiles) {
+      void api.setting
+        .set({ key: UI_IDE_OPEN_FILES_SETTING_KEY, value: next.openFiles })
+        .catch((err) => console.error("setting.set(ideOpenFiles) failed:", err));
+    }
+    if (last?.activeFile !== next.activeFile) {
+      void api.setting
+        .set({ key: UI_IDE_ACTIVE_FILE_SETTING_KEY, value: next.activeFile })
+        .catch((err) => console.error("setting.set(ideActiveFile) failed:", err));
+    }
+    if (last?.expandedDirs !== next.expandedDirs) {
+      void api.setting
+        .set({ key: UI_IDE_EXPANDED_DIRS_SETTING_KEY, value: next.expandedDirs })
+        .catch((err) => console.error("setting.set(ideExpandedDirs) failed:", err));
+    }
+    ideBucketsLastWritten = next;
+  }, IDE_BUCKETS_PERSIST_DEBOUNCE_MS);
 }
 
 /** Min/max chat content font size (px). The slider in Settings uses the
@@ -7056,7 +7076,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           }
         : {}),
     }));
-    persistIdeBuckets(get());
+    persistIdeBuckets(get);
   },
 
   clearIdePendingReveal: () => {
@@ -7089,7 +7109,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       ideFileViewModeByProject: { ...s.ideFileViewModeByProject, [pid]: viewMode },
       ideDiffBeforeByProject: { ...s.ideDiffBeforeByProject, [pid]: diffBefore },
     }));
-    persistIdeBuckets(get());
+    persistIdeBuckets(get);
   },
 
   closeFilesUnderDir: (dirPath) => {
@@ -7133,7 +7153,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       ideDiffBeforeByProject: { ...s.ideDiffBeforeByProject, [pid]: diffBefore },
       ideExpandedDirsByProject: { ...s.ideExpandedDirsByProject, [pid]: expanded },
     }));
-    persistIdeBuckets(get());
+    persistIdeBuckets(get);
   },
 
   renamePathInIde: (oldPath, newPath, isDir) => {
@@ -7171,7 +7191,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         ideDiffBeforeByProject: { ...s.ideDiffBeforeByProject, [pid]: diffBefore },
         ideExpandedDirsByProject: { ...s.ideExpandedDirsByProject, [pid]: expanded },
       }));
-      persistIdeBuckets(get());
+      persistIdeBuckets(get);
       return;
     }
     // Single file rename: rewrite the single path if it's open.
@@ -7198,7 +7218,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       ideFileViewModeByProject: { ...s.ideFileViewModeByProject, [pid]: viewMode },
       ideDiffBeforeByProject: { ...s.ideDiffBeforeByProject, [pid]: diffBefore },
     }));
-    persistIdeBuckets(get());
+    persistIdeBuckets(get);
   },
 
   closeOtherFilesInIde: (keepFilePath) => {
@@ -7220,7 +7240,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       ideFileViewModeByProject: { ...s.ideFileViewModeByProject, [pid]: viewMode },
       ideDiffBeforeByProject: { ...s.ideDiffBeforeByProject, [pid]: diffBefore },
     }));
-    persistIdeBuckets(get());
+    persistIdeBuckets(get);
   },
 
   closeAllFilesInIde: () => {
@@ -7234,7 +7254,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       ideFileViewModeByProject: { ...s.ideFileViewModeByProject, [pid]: {} },
       ideDiffBeforeByProject: { ...s.ideDiffBeforeByProject, [pid]: {} },
     }));
-    persistIdeBuckets(get());
+    persistIdeBuckets(get);
   },
 
   setIdeActiveFile: (filePath) => {
@@ -7243,7 +7263,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     set((s) => ({
       ideActiveFileByProject: { ...s.ideActiveFileByProject, [pid]: filePath },
     }));
-    persistIdeBuckets(get());
+    persistIdeBuckets(get);
   },
 
   clearIdeActiveFile: () => {
@@ -7252,7 +7272,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     set((s) => ({
       ideActiveFileByProject: { ...s.ideActiveFileByProject, [pid]: null },
     }));
-    persistIdeBuckets(get());
+    persistIdeBuckets(get);
   },
 
   /** Move an open file within the active project's editor tab strip.
@@ -7276,7 +7296,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     set((s) => ({
       ideOpenFilesByProject: { ...s.ideOpenFilesByProject, [pid]: next },
     }));
-    persistIdeBuckets(get());
+    persistIdeBuckets(get);
   },
 
   setIdeFileViewMode: (filePath, mode) => {
@@ -7303,7 +7323,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           ideEditorMode: mode,
           ideOpenFilesByProject: { ...s.ideOpenFilesByProject, [pid]: open },
         }));
-        persistIdeBuckets(get());
+        persistIdeBuckets(get);
       } else {
         set({ ideEditorMode: mode });
       }
@@ -7377,7 +7397,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     set((s) => ({
       ideExpandedDirsByProject: { ...s.ideExpandedDirsByProject, [pid]: open },
     }));
-    persistIdeBuckets(get());
+    persistIdeBuckets(get);
   },
 
   setDirExpanded: (dirPath, open) => {
@@ -7392,7 +7412,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     set((s) => ({
       ideExpandedDirsByProject: { ...s.ideExpandedDirsByProject, [pid]: next },
     }));
-    persistIdeBuckets(get());
+    persistIdeBuckets(get);
   },
 
   saveFileContent: async (filePath, content) => {

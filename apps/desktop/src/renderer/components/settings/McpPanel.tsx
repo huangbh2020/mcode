@@ -173,7 +173,7 @@ export function McpPanel() {
   const builtin = servers.find((s) => s.scope === "builtin");
 
   return (
-    <section className="space-y-4">
+    <section className="mx-auto w-full max-w-3xl space-y-4">
       <PanelHeader
         title={t("settings.mcp.title")}
         icon={McpIcon}

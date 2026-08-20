@@ -308,7 +308,7 @@ export function App() {
             renders.
           */}
           {settingsOpen && (
-            <div className="absolute inset-0 z-30 flex bg-surface-muted">
+            <div className="settings-root absolute inset-0 z-30 flex bg-surface-muted">
               <SettingsPage />
             </div>
           )}

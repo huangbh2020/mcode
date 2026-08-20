@@ -195,7 +195,7 @@ export const en = {
   "ide.diff.noDiff": "No diff to display",
 
   /* ── terminal ── */
-  "ide.term.tabTitle": "Terminal {n}",
+  "ide.term.tabTitle": "{name} {n}",
   "ide.term.noProjectDesc": "Add a project folder in the left bar to use the integrated terminal",
   "ide.term.closeTerminal": "Close terminal",
   "ide.term.newTerminal": "New terminal",

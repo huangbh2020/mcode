@@ -105,9 +105,8 @@ function pathWithin(root: string, abs: string): boolean {
  *  matching project root, or null if the path is outside all roots (refuse).
  *  Exported so the mobile git RPC whitelist enforces the same boundary. */
 export function findContainingProject(repoPath: string): string | null {
-  const projects = ProjectRepo.list();
-  const proj = projects.find((p) => pathWithin(p.path, repoPath));
-  return proj?.path ?? null;
+  const root = ProjectRepo.listPaths().find((p) => pathWithin(p, repoPath));
+  return root ?? null;
 }
 
 /** Resolve a custom-model config for an LLM-driven git operation (commit
@@ -385,7 +384,7 @@ export function registerGitHandlers(ipcMain: IpcMain): void {
   ipcMain.handle(IPC.GIT_DISCOVER_REPOS, async (_evt, raw) => {
     const input = GitDiscoverReposSchema.parse(raw);
     // Verify the project path is a known persisted project.
-    const known = ProjectRepo.list().some((p) => resolve(p.path) === resolve(input.projectPath));
+    const known = ProjectRepo.listPaths().some((p) => resolve(p) === resolve(input.projectPath));
     if (!known) {
       log.warn(`git.discoverRepos refused — unknown projectPath: ${input.projectPath}`);
       return { repos: [] };

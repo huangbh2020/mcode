@@ -70,7 +70,7 @@ export function GitPanel() {
   }, [customModels]);
 
   return (
-    <section className="space-y-4">
+    <section className="mx-auto w-full max-w-3xl space-y-4">
       <PanelHeader
         title="Git"
         desc={t("settings.git.desc")}

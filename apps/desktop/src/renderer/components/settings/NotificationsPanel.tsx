@@ -46,7 +46,7 @@ export function NotificationsPanel() {
   };
 
   return (
-    <section className="space-y-4">
+    <section className="mx-auto w-full max-w-3xl space-y-4">
       <PanelHeader
         title={t("settings.notifications.title")}
         desc={t("settings.notifications.desc")}

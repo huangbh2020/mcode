@@ -60,6 +60,14 @@ function rowToProject(r: ProjectRow): Project {
   };
 }
 
+/* Root-path cache for the per-call guard checks. The files/git/lsp IPC
+ * handlers re-derive "is this a known project root" on every renderer call
+ * (file-tree expand, editor read, …), which used to mean a full projects-table
+ * scan each time. The path set only changes via create/delete, but every
+ * mutator drops the cache anyway — free, and future-proof against rows moving
+ * in through new code paths. */
+let rootPathsCache: string[] | null = null;
+
 export const ProjectRepo = {
   create(p: Project): void {
     const db = getDb();
@@ -86,6 +94,7 @@ export const ProjectRepo = {
       ],
     );
     persist();
+    rootPathsCache = null;
   },
 
   list(): Project[] {
@@ -97,6 +106,16 @@ export const ProjectRepo = {
     while (stmt.step()) out.push(rowToProject(stmt.getAsObject() as unknown as ProjectRow));
     stmt.free();
     return out;
+  },
+
+  /** Root paths of all persisted projects, served from an in-memory cache.
+   *  Use in guard checks that only need the path set (known-root match /
+   *  containment) instead of {@link list} — the file tree calls these on
+   *  every expand. Callers needing other fields (archived, group, …) must
+   *  use {@link list}; mutations re-populate the cache lazily. */
+  listPaths(): string[] {
+    if (!rootPathsCache) rootPathsCache = ProjectRepo.list().map((p) => p.path);
+    return rootPathsCache;
   },
 
   get(id: string): Project | undefined {
@@ -115,6 +134,7 @@ export const ProjectRepo = {
   delete(id: string): void {
     getDb().run("DELETE FROM projects WHERE id = ?", [v(id)]);
     persist();
+    rootPathsCache = null;
   },
 
   /** Set the archived (soft-delete) flag. */
@@ -125,17 +145,19 @@ export const ProjectRepo = {
       v(id),
     ]);
     persist();
+    rootPathsCache = null;
   },
 
   /** Assign a project to a group. Pass null to remove it from any group.
    *  `group` is a column name in SQLite so it must be backtick-quoted. */
   setGroup(id: string, group: string | null): void {
     getDb().run("UPDATE projects SET `group` = ?, updated_at = ? WHERE id = ?", [
-      v(group),
+      v(group ?? null),
       v(Date.now()),
       v(id),
     ]);
     persist();
+    rootPathsCache = null;
   },
 
   /** Rewrite sort_order for every id in `orderedIds` (index = position).
@@ -159,6 +181,7 @@ export const ProjectRepo = {
       throw err;
     }
     persist();
+    rootPathsCache = null;
   },
 };
 
