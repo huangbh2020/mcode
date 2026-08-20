@@ -42,6 +42,8 @@ export const DEFAULT_SHORTCUTS: ShortcutBindings = {
   "appearance.theme.toggle": { key: "l", cmd: true, shift: true, alt: false },
   "tab.close": { key: "w", cmd: true, shift: false, alt: false },
   "chat.focus-input": { key: "n", cmd: true, shift: true, alt: false },
+  "editor.nav-back": { key: "arrowleft", cmd: false, shift: false, alt: true },
+  "editor.nav-forward": { key: "arrowright", cmd: false, shift: false, alt: true },
 };
 
 /**

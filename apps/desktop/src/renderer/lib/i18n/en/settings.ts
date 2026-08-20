@@ -404,6 +404,7 @@ export const en = {
   "settings.shortcuts.groupSession": "Sessions",
   "settings.shortcuts.groupView": "View / Navigation",
   "settings.shortcuts.groupLayout": "Layout / Panels",
+  "settings.shortcuts.groupEditor": "Editor",
   "settings.shortcuts.groupAppearance": "Appearance / Theme",
   "settings.shortcuts.cmdNewSession": "New session",
   "settings.shortcuts.cmdCloseTab": "Close current tab",

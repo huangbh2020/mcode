@@ -7,7 +7,7 @@ import { extname } from "@renderer/lib/path.js";
 import { useSessionStore } from "@renderer/stores/sessionStore.js";
 import type { TurnFileEntry } from "@renderer/lib/turnFiles.js";
 import { ideDirtyTracker } from "./OpenTabsBar.js";
-import { IconEye, IconEdit, IconLoader2, IconAlertTriangle, IconSquare, IconColumns3, IconPhotoOff } from "@renderer/lib/icons.js";
+import { IconEye, IconEdit, IconLoader2, IconAlertTriangle, IconSquare, IconColumns3, IconPhotoOff, IconArrowLeft, IconArrowRight } from "@renderer/lib/icons.js";
 import { FileTypeIcon } from "@renderer/lib/fileIcon.js";
 import { Markdown } from "../chat/Markdown.js";
 // LSP provider bridge: registers definition/references/hover providers, syncs
@@ -25,6 +25,8 @@ import {
 // (no CDN). Must run before any <Editor> mounts. See monacoSetup.ts.
 import "@renderer/lib/monacoSetup.js";
 import { useI18n } from "@renderer/lib/i18n/index.js";
+import { setLastCursor, type NavEntry } from "@renderer/lib/editorNav.js";
+import { resolveShortcut, acceleratorToDisplayString } from "@renderer/lib/shortcuts.js";
 
 /**
  * File editor — wraps Monaco for a single open file. Supports two modes:
@@ -133,6 +135,9 @@ export function FileEditor({
 
 /* ───────────────────────── Toolbar ───────────────────────── */
 
+/** Stable empty nav stack for zustand selectors (never return a fresh []). */
+const EMPTY_NAV: NavEntry[] = [];
+
 function EditorToolbar({
   filePath,
   projectPath,
@@ -159,6 +164,27 @@ function EditorToolbar({
   onToggleEditorMode: () => void;
 }) {
   const { t } = useI18n();
+  // Navigation-history (Alt+←/→) back/forward state — enabled iff the active
+  // project's stacks are non-empty. The buttons live here (not in a global
+  // toolbar) because they act on the editor column.
+  const navPid = useSessionStore((s) => s.activeProjectId);
+  const canBack = useSessionStore((s) =>
+    navPid ? (s.navBackByProject[navPid] ?? EMPTY_NAV).length > 0 : false,
+  );
+  const canForward = useSessionStore((s) =>
+    navPid ? (s.navForwardByProject[navPid] ?? EMPTY_NAV).length > 0 : false,
+  );
+  const navigateBack = useSessionStore((s) => s.navigateBack);
+  const navigateForward = useSessionStore((s) => s.navigateForward);
+  // Tooltip = label + the EFFECTIVE chord (user override or Alt+←/→ default),
+  // so a rebind in settings is reflected here immediately.
+  const shortcutOverrides = useSessionStore((s) => s.shortcutOverrides);
+  const withChord = (commandId: string, label: string) => {
+    const accel = resolveShortcut(commandId, shortcutOverrides);
+    return accel ? `${label} (${acceleratorToDisplayString(accel)})` : label;
+  };
+  const navBackTitle = withChord("editor.nav-back", t("ide.editor.navBack"));
+  const navForwardTitle = withChord("editor.nav-forward", t("ide.editor.navForward"));
   // Files that default to a read-only preview pane (markdown rendered, image
   // displayed, or an unsupported-type notice). These get a Preview/Edit toggle
   // so the user can still drop into the raw Monaco editor if they want.
@@ -175,6 +201,36 @@ function EditorToolbar({
       : filePath;
   return (
     <div className="flex shrink-0 items-center gap-2 border-b border-edge bg-surface-muted/40 px-2.5 py-1">
+      {/* Back/forward (navigation history) — disabled when the stacks are
+          empty. Mirrors the Alt+←/→ global shortcuts. */}
+      <div className="flex items-center gap-0.5">
+        <button
+          type="button"
+          onClick={navigateBack}
+          disabled={!canBack}
+          className={cn(
+            "flex items-center justify-center rounded p-0.5 transition-colors",
+            "text-content-subtle hover:bg-surface-hover hover:text-content",
+            "disabled:cursor-default disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-content-subtle",
+          )}
+          title={navBackTitle}
+        >
+          <IconArrowLeft size={13} />
+        </button>
+        <button
+          type="button"
+          onClick={navigateForward}
+          disabled={!canForward}
+          className={cn(
+            "flex items-center justify-center rounded p-0.5 transition-colors",
+            "text-content-subtle hover:bg-surface-hover hover:text-content",
+            "disabled:cursor-default disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-content-subtle",
+          )}
+          title={navForwardTitle}
+        >
+          <IconArrowRight size={13} />
+        </button>
+      </div>
       <FileTypeIcon path={filePath} size={14} className="shrink-0 text-content-subtle" />
       <span className="truncate font-mono text-[11px] text-content-muted" title={filePath}>
         {rel}
@@ -239,9 +295,19 @@ function EditorToolbar({
 
 /* ───────────────────────── Edit pane ───────────────────────── */
 
+/** Per-file editor view states (scroll position + cursor selection), keyed by
+ *  absolute file path. App.tsx mounts FileEditor with `key={filePath}`, so
+ *  every file switch tears the Monaco instance down completely — and the
+ *  @monaco-editor/react built-in view-state cache only saves on a `path`
+ *  change of a live editor or on unmount with `keepCurrentModel`, neither of
+ *  which happens in that flow. This cache survives the remounts so re-opening
+ *  a file puts the user back where they left off. */
+const viewStateCache = new Map<string, editor.ICodeEditorViewState>();
+
 /** Editable Monaco instance for one file. Loads content on mount; tracks
  *  dirty state; Ctrl+S saves. Wires LSP document sync + providers when the
- *  file's language has a server enabled. */
+ *  file's language has a server enabled. Re-opening a file restores its last
+ *  scroll position / cursor from `viewStateCache`. */
 function EditPane({ filePath, projectPath }: { filePath: string; projectPath: string }) {
   const { t } = useI18n();
   const editorRef = useRef<editor.IStandaloneCodeEditor | null>(null);
@@ -253,6 +319,8 @@ function EditPane({ filePath, projectPath }: { filePath: string; projectPath: st
   const lspVersionRef = useRef(1);
   // Debounce timer for didChange notifications.
   const changeDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // View-state save listeners (scroll + selection) — disposed on unmount.
+  const viewStateDisposablesRef = useRef<{ dispose(): void }[]>([]);
   // Reveal nonce consumer - re-runs when the store requests a goto-def reveal.
   const ideRevealNonce = useSessionStore((s) => s.ideRevealNonce);
   const idePendingReveal = useSessionStore((s) => s.idePendingReveal);
@@ -326,6 +394,39 @@ function EditPane({ filePath, projectPath }: { filePath: string; projectPath: st
       void openLspDocument(projectPath, filePath, language);
     }
 
+    // Restore the scroll position / cursor from a previous visit of this file
+    // (stashed eagerly by the listeners below). A pending goto-def reveal
+    // still wins — applyReveal() below runs after this and re-positions.
+    const saved = viewStateCache.get(filePath);
+    if (saved) editor_.restoreViewState(saved);
+
+    // Stash the view state eagerly on every scroll / selection change. The
+    // library's unmount cleanup disposes the model before any save-on-unmount
+    // we could register here would run (child cleanup beats parent cleanup,
+    // and saveViewState needs a live model), so an eager save is the only
+    // reliable stash point across the key-remount flow.
+    const stashViewState = () => {
+      const vs = editor_.saveViewState();
+      if (vs) viewStateCache.set(filePath, vs);
+    };
+    // Track the primary cursor alongside the view state (lib/editorNav): the
+    // store's navigation-history actions read it to snapshot the OUTGOING
+    // location when the user navigates away (Alt+← back target).
+    const stashCursor = () => {
+      const p = editor_.getPosition();
+      if (p) setLastCursor(filePath, { line: p.lineNumber, column: p.column });
+    };
+    // Seed the cursor now (post view-state restore) so a file opened for the
+    // first time this session still has a known location.
+    stashCursor();
+    viewStateDisposablesRef.current.push(
+      editor_.onDidScrollChange(stashViewState),
+      editor_.onDidChangeCursorSelection(() => {
+        stashViewState();
+        stashCursor();
+      }),
+    );
+
     // Apply a pending goto-def reveal now that the editor is ready. Needed for
     // cross-file jumps: the EditPane mounts, the reveal effect runs with
     // editorRef still null (onMount hasn't fired), so we must re-check here.
@@ -361,11 +462,14 @@ function EditPane({ filePath, projectPath }: { filePath: string; projectPath: st
     () => editorRef.current,
   );
 
-  // Clear the saved-indicator timer + close the LSP document on unmount.
+  // Clear the saved-indicator timer, stop the view-state listeners + close
+  // the LSP document on unmount.
   useEffect(() => {
     return () => {
       if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
       if (changeDebounceRef.current) clearTimeout(changeDebounceRef.current);
+      viewStateDisposablesRef.current.forEach((d) => d.dispose());
+      viewStateDisposablesRef.current = [];
       // Report clean on unmount so a re-open doesn't show a stale dirty dot.
       ideDirtyTracker.set(filePath, false);
       // Tell the server this document closed (best-effort).

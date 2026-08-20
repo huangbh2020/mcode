@@ -14,6 +14,8 @@ export const en = {
   "lib.commands.rightPanelGit": "Right panel: Git",
   "lib.commands.rightPanelTurns": "Right panel: turn flow",
   "lib.commands.openSettings": "Open settings",
+  "lib.commands.navBack": "Editor: go back",
+  "lib.commands.navForward": "Editor: go forward",
   "lib.commands.focusComposer": "Focus chat input",
   "lib.commands.toggleLeft": "Toggle left sidebar",
   "lib.commands.toggleRight": "Toggle right sidebar",

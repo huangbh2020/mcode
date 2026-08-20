@@ -33,6 +33,8 @@ export const en = {
   "ide.tree.touchedModified": "Modified this turn",
 
   /* ── file editor / open tabs ── */
+  "ide.editor.navBack": "Go back",
+  "ide.editor.navForward": "Go forward",
   "ide.editor.switchToDiff": "Switch to diff view",
   "ide.editor.switchToEditView": "Switch to edit view",
   "ide.editor.switchToSource": "Switch to source editing",

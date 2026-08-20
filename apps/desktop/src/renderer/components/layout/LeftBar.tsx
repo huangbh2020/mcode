@@ -141,13 +141,6 @@ function LeftBarBase({
     [projects],
   );
 
-  // Project id → name lookup for the global pinned section, whose rows come
-  // from many projects and each carry an owner hint.
-  const projectNameById = useMemo(
-    () => new Map(projects.map((p) => [p.id, p.name])),
-    [projects],
-  );
-
   // The active session's owning project, resolved from the loaded per-project
   // slices (the owning project auto-expands on activation, so its slice is
   // loaded). Used to SUPPRESS the project row's selected look while one of its
@@ -515,7 +508,8 @@ function LeftBarBase({
           the button centers on the traffic lights' centerline; pl-[70px]
           clears the buttons (toggle starts at x≈78). The strip doubles as a
           window drag handle; the button opts out. win: keeps the original
-          brand header (logo + name + tagline) untouched. */}
+          brand header (logo + name + tagline), clicking it collapses the
+          sidebar (setLeftOpen(false)) — settings remain in the footer. */}
       {isMac ? (
         <div
           className="-mt-2 mb-2 flex h-10 items-center pl-[70px]"
@@ -538,13 +532,13 @@ function LeftBarBase({
         <div className="mb-2" style={{ WebkitAppRegion: "drag" } as React.CSSProperties}>
           <button
             type="button"
-            onClick={() => setSettingsOpen(true)}
+            onClick={() => setLeftOpen(false)}
             className={cn(
               "group flex w-full items-center gap-2.5 rounded-lg px-2 py-2 text-left transition-colors",
               "hover:bg-surface-hover/60",
             )}
             style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
-            title={t("layout.about")}
+            title={t("layout.hideLeftPanel")}
           >
             <BrandLogo size={30} />
             <span className="flex min-w-0 flex-col leading-tight">
@@ -662,7 +656,6 @@ function LeftBarBase({
                   active={s.id === activeSessionId}
                   isRunning={!!runningBySession[s.id]}
                   unreadCount={unreadBySession[s.id] ?? 0}
-                  projectLabel={projectNameById.get(s.projectId)}
                   onSelect={() => void openTab(s.id)}
                   onTogglePin={() => void setSessionPinned(s.id, !s.pinnedAt)}
                   onArchive={() => void archiveSession(s.id, true)}
@@ -1132,7 +1125,7 @@ function SessionRowIcon({ providerId, className }: { providerId: string; classNa
 }
 
 function SessionRow({
-  session, active, isRunning, unreadCount, projectLabel, onSelect, onTogglePin, onArchive, onDelete, registerNode, onContext,
+  session, active, isRunning, unreadCount, onSelect, onTogglePin, onArchive, onDelete, registerNode, onContext,
 }: {
   session: Session;
   active: boolean;
@@ -1140,10 +1133,6 @@ function SessionRow({
   /** Unread event count for this session (0 = no badge). Only rendered when
    *  the row is idle (not running) and the count is > 0. */
   unreadCount: number;
-  /** Owning project name — only passed by the global pinned section, where
-   *  rows from different projects are interleaved and each needs an owner
-   *  hint. Undefined inside a project's own list (redundant there). */
-  projectLabel?: string;
   onSelect: () => void;
   /** Toggle this session's pinned state (moves it into / out of the global
    *  pinned section above the project tree). */
@@ -1217,18 +1206,6 @@ function SessionRow({
       )}
 
       <span className="min-w-0 flex-1 truncate">{session.title}</span>
-
-      {/* Owning project hint — pinned-section rows only (see projectLabel).
-          Docked before the right-edge payload so it stays visible even while
-          the time label / action buttons swap in and out. */}
-      {projectLabel && (
-        <span
-          className="max-w-[45%] shrink-0 truncate text-content-subtle/80 [font-size:var(--rp-fs-sm)]"
-          title={projectLabel}
-        >
-          {projectLabel}
-        </span>
-      )}
 
       {/* Relative time of the last activity (updatedAt), docked to the right
           edge. The row swaps between two right-aligned payloads: the time

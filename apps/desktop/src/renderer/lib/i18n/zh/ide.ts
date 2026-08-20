@@ -35,6 +35,8 @@ export const zh = {
   "ide.tree.touchedModified": "本轮修改",
 
   /* ── file editor / open tabs ── */
+  "ide.editor.navBack": "返回上一处",
+  "ide.editor.navForward": "前往下一处",
   "ide.editor.switchToDiff": "切换到差异视图",
   "ide.editor.switchToEditView": "切换到编辑视图",
   "ide.editor.switchToSource": "切换到源码编辑",

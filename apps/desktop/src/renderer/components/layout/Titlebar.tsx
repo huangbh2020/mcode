@@ -7,6 +7,7 @@ import {
   IconLayoutSidebarRightExpand,
   IconTerminal2,
   IconCode,
+  IconFolder,
 } from "@renderer/lib/icons.js";
 import { getProviderIcon } from "@renderer/lib/providerIcon.js";
 import { useSessionStore } from "@renderer/stores/sessionStore.js";
@@ -44,8 +45,8 @@ interface Props {
  *  Leading content by mode:
  *   - workspace: the sidebar toggle ONLY while the sidebar is closed (the
  *     collapse button lives in the LeftBar footer; see LeftBar.tsx), then
- *     the active-thread title chip + branch pill, editor toggle, and the
- *     terminal/right-panel toggles at the far right.
+ *     the active-thread title chip + owning-project chip + branch pill,
+ *     editor toggle, and the terminal/right-panel toggles at the far right.
  *   - settings:  a "返回工作区" back button + a "设置" heading.
  *   - browser overlay / wide-panel mode: the matching back button
  *     ("返回工作台" / "退出宽屏") in the same slot.
@@ -181,6 +182,11 @@ export function Titlebar({
               )
             )}
             <ActiveThreadTitle />
+            {/* Owning-project chip — folder icon + project name for the active
+                session's project (full path in the tooltip). Rendered for
+                pinned and regular threads alike; the left bar no longer shows
+                the owner on pinned rows, so this is the single owner hint. */}
+            <ActiveProjectChip />
             {/* Git branch indicator - compact pill (no project name), click to
                 switch branches. Only renders when a project is active and is a
                 git repo. Sits right of the thread title. */}
@@ -272,6 +278,31 @@ function ActiveThreadTitle() {
       <span className="truncate" title={title}>
         {title}
       </span>
+    </div>
+  );
+}
+
+/** Owning-project chip rendered right of the active-thread title: folder icon
+ *  + project name, full path in the hover tooltip. Shows only while a session
+ *  is active. `activeProjectId` is kept in lockstep with the active session's
+ *  owner by syncConfigFromSession (every activation entry point routes through
+ *  it), so resolving via the id works for pinned rows and per-project rows
+ *  alike — no need to hunt the session record across the paginated lists. */
+function ActiveProjectChip() {
+  const activeSessionId = useSessionStore((s) => s.activeSessionId);
+  // Returns an existing element of `projects` (stable ref) or null — never a
+  // fresh object, so the selector is safe under zustand's Object.is check.
+  const project = useSessionStore((s) =>
+    s.activeProjectId ? s.projects.find((p) => p.id === s.activeProjectId) ?? null : null,
+  );
+  if (!activeSessionId || !project) return null;
+  return (
+    <div
+      className="flex min-w-0 max-w-[180px] shrink-0 items-center gap-1 px-1 text-xs text-content-subtle"
+      title={project.path}
+    >
+      <IconFolder size={13} className="shrink-0" />
+      <span className="truncate">{project.name}</span>
     </div>
   );
 }

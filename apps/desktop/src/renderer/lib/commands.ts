@@ -56,6 +56,8 @@ import {
   IconArrowsExchange,
   IconArrowsMaximize,
   IconFocus,
+  IconArrowLeft,
+  IconArrowRight,
 } from "@renderer/lib/icons.js";
 
 /** Visual grouping label shown as a section header in the palette. */
@@ -63,6 +65,7 @@ export const COMMAND_GROUPS = [
   "会话",
   "视图",
   "布局",
+  "编辑器",
   "外观",
 ] as const;
 export type CommandGroup = (typeof COMMAND_GROUPS)[number];
@@ -312,6 +315,32 @@ const STATIC_COMMANDS: StaticCommandDef[] = [
       // column + full right panel. Entering snapshots the layout for restore on
       // exit; the right panel keeps its current tab.
       s.setWidePanelOpen(!s.widePanelOpen);
+    },
+  },
+
+  // ── 编辑器 ──
+  {
+    id: "editor.nav-back",
+    labelKey: "lib.commands.navBack",
+    group: "编辑器",
+    keywords: ["back", "navigate", "history", "editor", "返回", "上一处", "后退", "编辑器"],
+    icon: IconArrowLeft,
+    defaultAccelerator: DEFAULT_SHORTCUTS["editor.nav-back"],
+    // Always listed (also in the shortcuts settings panel); performs a safe
+    // no-op when the back stack is empty, like VS Code's navigateBack.
+    perform: (s) => {
+      s.navigateBack();
+    },
+  },
+  {
+    id: "editor.nav-forward",
+    labelKey: "lib.commands.navForward",
+    group: "编辑器",
+    keywords: ["forward", "navigate", "history", "editor", "前进", "下一处", "编辑器"],
+    icon: IconArrowRight,
+    defaultAccelerator: DEFAULT_SHORTCUTS["editor.nav-forward"],
+    perform: (s) => {
+      s.navigateForward();
     },
   },
 

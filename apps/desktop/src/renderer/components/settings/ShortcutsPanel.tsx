@@ -100,6 +100,7 @@ export function ShortcutsPanel() {
     "会话": "settings.shortcuts.groupSession",
     "视图": "settings.shortcuts.groupView",
     "布局": "settings.shortcuts.groupLayout",
+    "编辑器": "settings.shortcuts.groupEditor",
     "外观": "settings.shortcuts.groupAppearance",
   };
 

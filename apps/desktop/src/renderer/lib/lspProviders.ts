@@ -110,7 +110,8 @@ export function ensureLspProviders(
           const targetPath = uriToFilePath(decodeURIComponentSafe(firstRaw.uri));
           const currentPath = uriToFilePath(decodeURIComponentSafe(docUri));
           if (targetPath !== currentPath) {
-            // Cross-file: open via the store.
+            // Cross-file: open via the store (which records the outgoing
+            // location into the navigation history itself).
             gotoLocation(
               targetPath,
               firstRaw.range.start.line + 1,
@@ -120,7 +121,13 @@ export function ensureLspProviders(
           }
         }
         // Same-file (or raw extraction failed): return locations so Monaco
-        // navigates natively.
+        // navigates natively. Monaco's jump bypasses the store, so record the
+        // pre-jump position here for Alt+← (navigation history).
+        useSessionStore.getState().pushNavHistory({
+          filePath: uriToFilePath(decodeURIComponentSafe(docUri)),
+          line: position.lineNumber,
+          column: position.column,
+        });
         return locs;
       },
     }),
@@ -167,7 +174,14 @@ export function ensureLspProviders(
             return null;
           }
         }
-        // Same-file: return locations so Monaco navigates natively.
+        // Same-file: return locations so Monaco navigates natively. Record
+        // the pre-jump position for Alt+← (navigation history), same as the
+        // definition provider above.
+        useSessionStore.getState().pushNavHistory({
+          filePath: uriToFilePath(decodeURIComponentSafe(docUri)),
+          line: position.lineNumber,
+          column: position.column,
+        });
         return locs;
       },
     }),

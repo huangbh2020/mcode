@@ -407,6 +407,7 @@ export const zh = {
   "settings.shortcuts.groupSession": "会话",
   "settings.shortcuts.groupView": "视图 / 导航",
   "settings.shortcuts.groupLayout": "布局 / 面板",
+  "settings.shortcuts.groupEditor": "编辑器",
   "settings.shortcuts.groupAppearance": "外观 / 主题",
   "settings.shortcuts.cmdNewSession": "新建会话",
   "settings.shortcuts.cmdCloseTab": "关闭当前标签页",

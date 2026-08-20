@@ -16,6 +16,7 @@ import type {
 import type { TurnFileEntry } from "@renderer/lib/turnFiles.js";
 import type { ContentTag } from "@renderer/lib/contentTag.js";
 import { isValidSnapshot } from "@renderer/lib/contextWindow.js";
+import { getLastCursor, type NavEntry } from "@renderer/lib/editorNav.js";
 import type { CustomModelPublic } from "@contracts/customModel";
 import { api } from "@renderer/lib/api.js";
 import { isElectron } from "@renderer/lib/platform.js";
@@ -138,6 +139,47 @@ function isUnsupportedPath(filePath: string): boolean {
     ".woff", ".woff2", ".ttf", ".otf", ".eot",
     ".pdf",
   ].some((ext) => lower.endsWith(ext));
+}
+
+/* ───────────────────── editor navigation history ───────────────────── */
+/* Alt+← / Alt+→ back/forward across editor jumps (goto-definition, file
+ * switches). The stacks live in store state (per project, ephemeral); the
+ * helpers below are shared by the actions. */
+
+/** Max entries per stack (matches VS Code's navigation-history cap). */
+const NAV_HISTORY_CAP = 50;
+
+/** True when two history entries point at the same spot (path + 1-based
+ *  line/column). Used to dedup consecutive pushes and to skip snapshotting a
+ *  "current" location that equals the reveal target. */
+function sameNavEntry(a: NavEntry, b: NavEntry): boolean {
+  return a.filePath === b.filePath && a.line === b.line && a.column === b.column;
+}
+
+/** True while a navigateBack/navigateForward reveal is running. openFileInIde
+ *  and setIdeActiveFile record the outgoing location into the back stack on
+ *  user-initiated navigation; a history-driven reveal must NOT record (the
+ *  history actions manage both stacks themselves). Set/cleared synchronously
+ *  around the openFileInIde call. */
+let navHistoryRevealing = false;
+
+/** Snapshot the ACTIVE project's current location (active file + its
+ *  last-known cursor) as a history entry, or null when no file is active.
+ *  The cursor comes from lib/editorNav (module state, see its docs). A
+ *  pending not-yet-consumed reveal targeting the active file wins: during a
+ *  rapid Alt+← Alt+← sequence the EditPane hasn't mounted/consumed the first
+ *  reveal yet, and that reveal target is the location being left. */
+function currentNavEntryFor(get: () => SessionState): NavEntry | null {
+  const pid = get().activeProjectId;
+  if (!pid) return null;
+  const file = get().ideActiveFileByProject[pid] ?? null;
+  if (!file) return null;
+  const pending = get().idePendingReveal;
+  if (pending && pending.filePath === file) {
+    return { filePath: file, line: pending.line, column: pending.column };
+  }
+  const cursor = getLastCursor(file) ?? { line: 1, column: 1 };
+  return { filePath: file, ...cursor };
 }
 
 /** Target for the mobile shell's fullscreen viewer overlay. The web (phone)
@@ -931,6 +973,14 @@ export interface SessionState {
    *  already-mounted EditPane re-runs its reveal effect. */
   ideRevealNonce: number;
 
+  /** Per-project editor navigation-history BACK stack (Alt+←). Each entry is
+   *  a location the user navigated AWAY from (goto-definition invocation,
+   *  file switch). Ephemeral — NOT persisted; resets each session. */
+  navBackByProject: Record<string, NavEntry[]>;
+  /** Per-project editor navigation-history FORWARD stack (Alt+→). Filled by
+   *  navigateBack (the location left behind), cleared by any new push. */
+  navForwardByProject: Record<string, NavEntry[]>;
+
   /** Language server states, hydrated from `api.lsp.list()` in initDeferred.
    *  Empty array until first load completes. Not persisted (re-fetched each
    *  startup from the main process). */
@@ -1353,6 +1403,18 @@ export interface SessionState {
   ) => void;
   /** Clear a consumed pending reveal (called by EditPane after applying it). */
   clearIdePendingReveal: () => void;
+  /** Push a location onto the active project's editor navigation-history back
+   *  stack (dedups a consecutive identical entry, clears the forward stack).
+   *  Called by openFileInIde/setIdeActiveFile when the user navigates away,
+   *  and by the LSP providers for same-file jumps (Monaco navigates those
+   *  natively, bypassing the store). */
+  pushNavHistory: (entry: NavEntry) => void;
+  /** Alt+← — go back to the previous editor location (cross-file or
+   *  same-file). No-op when the back stack is empty. */
+  navigateBack: () => void;
+  /** Alt+→ — go forward again after one or more navigateBack calls. No-op
+   *  when the forward stack is empty. */
+  navigateForward: () => void;
   /** Remove a file from the editor's open list; active shifts to the
    *  previous file (or next, or null). */
   closeFileInIde: (filePath: string) => void;
@@ -3258,6 +3320,8 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   ideFocusNonce: 0,
   idePendingReveal: null,
   ideRevealNonce: 0,
+  navBackByProject: {},
+  navForwardByProject: {},
   lspLanguages: [] as LspLanguageState[],
 
   /** True once `init()` has started, to guard against React StrictMode's
@@ -4230,11 +4294,15 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       const ideFileViewModeByProject = { ...s.ideFileViewModeByProject };
       const ideExpandedDirsByProject = { ...s.ideExpandedDirsByProject };
       const gitDiffByProject = { ...s.gitDiffByProject };
+      const navBackByProject = { ...s.navBackByProject };
+      const navForwardByProject = { ...s.navForwardByProject };
       delete ideOpenFilesByProject[id];
       delete ideActiveFileByProject[id];
       delete ideFileViewModeByProject[id];
       delete ideExpandedDirsByProject[id];
       delete gitDiffByProject[id];
+      delete navBackByProject[id];
+      delete navForwardByProject[id];
       const wasActive = s.activeProjectId === id;
       if (!wasActive) {
         // Still need to scrub any open tabs that belonged to the deleted
@@ -4248,6 +4316,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           projects, sessionsByProject, archivedSessionsByProject: archivedByProject,
           sessionsTotalByProject: totalByProject, sessionsHasMoreByProject: hasMoreByProject,
           ideOpenFilesByProject, ideActiveFileByProject, ideFileViewModeByProject, ideExpandedDirsByProject, gitDiffByProject,
+          navBackByProject, navForwardByProject,
           openTabs, activeSessionId,
         };
       }
@@ -4264,7 +4333,8 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         archivedSessionsByProject: archivedByProject,
         sessionsTotalByProject: totalByProject,
         sessionsHasMoreByProject: hasMoreByProject,
-        ideOpenFilesByProject, ideActiveFileByProject, ideFileViewModeByProject, ideExpandedDirsByProject,
+        ideOpenFilesByProject, ideActiveFileByProject, ideFileViewModeByProject, ideExpandedDirsByProject, gitDiffByProject,
+        navBackByProject, navForwardByProject,
         activeProjectId: next?.id ?? null,
         sessions: nextSessions,
         activeSessionId: nextSession?.id ?? null,
@@ -7022,6 +7092,19 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     const lowerFile = filePath.toLowerCase();
     const existing = prev.find((p) => p.toLowerCase() === lowerFile);
     const canonicalPath = existing ?? filePath;
+    // Navigation history: record the location being LEFT (goto-definition
+    // invocation, chat link, file-tree open...) so Alt+← can come back to it.
+    // Only meaningful navigation — switching to another file or an explicit
+    // line reveal; re-opening the same file without a reveal doesn't move the
+    // cursor and would only pollute the stack. History-driven reveals
+    // (navigateBack/Forward) manage the stacks themselves.
+    if (
+      !navHistoryRevealing &&
+      (opts?.line != null || canonicalPath !== (get().ideActiveFileByProject[pid] ?? null))
+    ) {
+      const outgoing = currentNavEntryFor(get);
+      if (outgoing) get().pushNavHistory(outgoing);
+    }
     // In "replace" mode, opening a file discards everything else - at most
     // one file is open at a time. In "tabs" mode, files accumulate (dedup:
     // re-opening an already-open file just activates it).
@@ -7036,6 +7119,10 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     // A review/diff request is an explicit intent -> force diff mode (don't
     // leave a stale "edit" the user may have toggled for a different purpose).
     if (opts?.diff) viewMode[canonicalPath] = "diff";
+    // A line reveal (goto-definition / navigation history) targets source code
+    // and is only consumed by the EditPane — force "edit" so a stale "diff"
+    // or "preview" view-mode for this file doesn't swallow the reveal.
+    else if (opts?.line != null) viewMode[canonicalPath] = "edit";
     // Files that render as a read-only preview default to "preview" on FIRST
     // open (no prior view-mode for this file): Markdown (rendered), images
     // (<img> via app-resource://), and unsupported binary types (Office docs,
@@ -7081,6 +7168,74 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
   clearIdePendingReveal: () => {
     if (get().idePendingReveal) set({ idePendingReveal: null });
+  },
+
+  pushNavHistory: (entry) => {
+    const pid = get().activeProjectId;
+    if (!pid) return;
+    const back = get().navBackByProject[pid] ?? [];
+    // Dedup a consecutive identical entry (guards against double-pushes when
+    // a provider and openFileInIde both try to record the same jump origin).
+    const top = back[back.length - 1];
+    if (top && sameNavEntry(top, entry)) return;
+    set((s) => ({
+      navBackByProject: { ...s.navBackByProject, [pid]: [...back, entry].slice(-NAV_HISTORY_CAP) },
+      // Any new navigation invalidates the forward stack (standard back/forward semantics).
+      navForwardByProject: { ...s.navForwardByProject, [pid]: [] },
+    }));
+  },
+
+  navigateBack: () => {
+    const pid = get().activeProjectId;
+    if (!pid) return;
+    const back = get().navBackByProject[pid] ?? [];
+    if (back.length === 0) return;
+    const target = back[back.length - 1];
+    // Snapshot the location being LEFT onto the forward stack so
+    // navigateForward can return here (skip when it equals the target —
+    // nothing visually changes).
+    const cur = currentNavEntryFor(get);
+    const prevForward = get().navForwardByProject[pid] ?? [];
+    const forward =
+      cur && !sameNavEntry(cur, target)
+        ? [...prevForward, cur].slice(-NAV_HISTORY_CAP)
+        : prevForward;
+    set((s) => ({
+      navBackByProject: { ...s.navBackByProject, [pid]: back.slice(0, -1) },
+      navForwardByProject: { ...s.navForwardByProject, [pid]: forward },
+    }));
+    navHistoryRevealing = true;
+    try {
+      get().openFileInIde(target.filePath, { line: target.line, column: target.column });
+    } finally {
+      navHistoryRevealing = false;
+    }
+  },
+
+  navigateForward: () => {
+    const pid = get().activeProjectId;
+    if (!pid) return;
+    const forward = get().navForwardByProject[pid] ?? [];
+    if (forward.length === 0) return;
+    const target = forward[forward.length - 1];
+    // Mirror of navigateBack: push the location being left back onto the
+    // back stack so the next Alt+← undoes this forward.
+    const cur = currentNavEntryFor(get);
+    const prevBack = get().navBackByProject[pid] ?? [];
+    const back =
+      cur && !sameNavEntry(cur, target)
+        ? [...prevBack, cur].slice(-NAV_HISTORY_CAP)
+        : prevBack;
+    set((s) => ({
+      navBackByProject: { ...s.navBackByProject, [pid]: back },
+      navForwardByProject: { ...s.navForwardByProject, [pid]: forward.slice(0, -1) },
+    }));
+    navHistoryRevealing = true;
+    try {
+      get().openFileInIde(target.filePath, { line: target.line, column: target.column });
+    } finally {
+      navHistoryRevealing = false;
+    }
   },
 
   closeFileInIde: (filePath) => {
@@ -7260,6 +7415,17 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   setIdeActiveFile: (filePath) => {
     const pid = get().activeProjectId;
     if (!pid) return;
+    // Navigation history: switching the active file via a tab click records
+    // where the user is leaving. Same-file activation (a re-click on the
+    // current tab) moves nothing and must not pollute the stack; history-
+    // driven reveals are excluded via the flag.
+    if (
+      !navHistoryRevealing &&
+      filePath !== (get().ideActiveFileByProject[pid] ?? null)
+    ) {
+      const outgoing = currentNavEntryFor(get);
+      if (outgoing) get().pushNavHistory(outgoing);
+    }
     set((s) => ({
       ideActiveFileByProject: { ...s.ideActiveFileByProject, [pid]: filePath },
     }));

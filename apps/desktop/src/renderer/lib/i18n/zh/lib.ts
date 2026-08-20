@@ -17,6 +17,8 @@ export const zh = {
   "lib.commands.rightPanelGit": "右栏：Git",
   "lib.commands.rightPanelTurns": "右栏：轮次流程",
   "lib.commands.openSettings": "打开设置",
+  "lib.commands.navBack": "编辑器：返回上一处",
+  "lib.commands.navForward": "编辑器：前往下一处",
   "lib.commands.focusComposer": "聚焦聊天输入框",
   "lib.commands.toggleLeft": "切换左侧栏",
   "lib.commands.toggleRight": "切换右侧栏",
