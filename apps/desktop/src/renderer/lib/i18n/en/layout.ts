@@ -134,6 +134,11 @@ export const en = {
   "layout.pairedAt": "Paired {time}",
   "layout.revokeDevice": "Disconnect this device",
   "layout.refreshDevices": "Refresh device list",
+  "layout.relayAutoStart": "Start remote access automatically on launch",
+  "layout.relayAutoStartOn": "On",
+  "layout.relayAutoStartOff": "Off",
+  "layout.relayConnected": "Remote access enabled",
+  "layout.activeDevices": "{n} device(s) active",
 
   /* ── image preview (ui) ── */
   "layout.image.clickToView": "Click to view full size",

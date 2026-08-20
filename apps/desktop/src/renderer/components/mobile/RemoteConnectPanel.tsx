@@ -12,7 +12,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import QRCode from "qrcode";
-import { Button } from "@renderer/components/ui/index.js";
+import { Button, Switch } from "@renderer/components/ui/index.js";
 import { cn } from "@renderer/lib/cn.js";
 import {
   IconCopy,
@@ -26,6 +26,8 @@ import {
 } from "@renderer/lib/icons.js";
 import { api } from "@renderer/lib/api.js";
 import type { RelayStatus, RelayVpsConfig } from "@contracts/ipc";
+import { RELAY_AUTO_START_SETTING_KEY } from "@contracts/relay";
+import { useI18n } from "@renderer/lib/i18n/index.js";
 
 const STATE_LABELS: Record<RelayStatus["state"], string> = {
   idle: "未连接",
@@ -36,8 +38,10 @@ const STATE_LABELS: Record<RelayStatus["state"], string> = {
 };
 
 export function RemoteConnectPanel() {
+  const { t } = useI18n();
   const [status, setStatus] = useState<RelayStatus | null>(null);
   const [config, setConfig] = useState<RelayVpsConfig | null>(null);
+  const [autoStart, setAutoStart] = useState(false);
   const [form, setForm] = useState({
     host: "",
     sshPort: "22",
@@ -63,9 +67,14 @@ export function RemoteConnectPanel() {
   // Load initial state.
   const refresh = useCallback(async () => {
     try {
-      const [s, c] = await Promise.all([api.relay.status(), api.relay.getConfig()]);
+      const [s, c, as] = await Promise.all([
+        api.relay.status(),
+        api.relay.getConfig(),
+        api.setting.get({ key: RELAY_AUTO_START_SETTING_KEY }),
+      ]);
       setStatus(s);
       setConfig(c.config);
+      setAutoStart(as.value === "1");
       if (c.config) {
         setForm({
           host: c.config.host,
@@ -155,6 +164,16 @@ export function RemoteConnectPanel() {
     }
   }, [busy]);
 
+  /** Persist the "start on launch" preference. */
+  const handleAutoStartChange = useCallback(async (checked: boolean) => {
+    setAutoStart(checked);
+    try {
+      await api.setting.set({ key: RELAY_AUTO_START_SETTING_KEY, value: checked ? "1" : "0" });
+    } catch (err) {
+      console.error("set autoStart failed", err);
+    }
+  }, []);
+
   const copyLink = useCallback(async () => {
     if (!pairingUrl) return;
     try {
@@ -191,6 +210,15 @@ export function RemoteConnectPanel() {
           服务器需有 SSH 访问权限，且安装了 <code className="font-mono text-content">socat</code> 或 <code className="font-mono text-content">python3</code>。
         </span>
       </div>
+
+      {/* Start on launch toggle */}
+      <label className="flex cursor-pointer items-center gap-2 rounded-lg border border-edge bg-surface-muted/30 px-3 py-2.5">
+        <Switch checked={autoStart} onCheckedChange={handleAutoStartChange} label={t("layout.relayAutoStart")} />
+        <span className="min-w-0 flex-1 text-xs text-content">{t("layout.relayAutoStart")}</span>
+        <span className="shrink-0 text-[11px] text-content-subtle">
+          {autoStart ? t("layout.relayAutoStartOn") : t("layout.relayAutoStartOff")}
+        </span>
+      </label>
 
       {/* VPS config form (shown when not connected) */}
       {!isConnected && (

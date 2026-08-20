@@ -31,6 +31,10 @@ export const MOBILE_DEFAULT_PORT = 7331;
 /** How long a pairing nonce stays valid after {@link PairingStartResult}. */
 export const PAIRING_TTL_MS = 5 * 60 * 1000;
 
+/** A paired device is considered "active" if it last made a request within this
+ *  window (used to derive the live active-device count on the PC UI). */
+export const MOBILE_ACTIVE_WINDOW_MS = 3 * 60 * 1000;
+
 /** A device that has successfully paired with this desktop. The wire form
  *  (no token) — the token never leaves the main process except at issuance. */
 export interface PairedDevice {

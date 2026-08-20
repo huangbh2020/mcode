@@ -22,15 +22,61 @@ import { IconCopy, IconDeviceMobile, IconRefresh, IconTrash, IconWifi, IconWorld
 import { api } from "@renderer/lib/api.js";
 import { RemoteConnectPanel } from "@renderer/components/mobile/RemoteConnectPanel.js";
 import type { PairingStartResult, PairedDevice } from "@contracts/mobile";
+import type { RelayStatus } from "@contracts/ipc";
 import { useI18n } from "@renderer/lib/i18n/index.js";
 
 /** Self-contained trigger button + dialog, rendered in the left sidebar's quick
  *  actions (below 搜索). The trigger matches the search/new-session button
  *  style; renders its own Dialog.Root so the sidebar only needs
- *  `<MobileConnectButton />`. */
+ *  `<MobileConnectButton />`. When remote access (relay) is connected, an
+ *  enabled indicator is shown on the right. */
 export function MobileConnectButton() {
   const { t } = useI18n();
   const [open, setOpen] = useState(false);
+  // Live relay status, so the button can show an "enabled" indicator when
+  // remote access is active (connected) even outside the dialog.
+  const [relayConnected, setRelayConnected] = useState(false);
+  // Number of paired devices that made a request recently (activity window). 
+  // Polled periodically — the server's `lastSeenAt` only refreshes on request,
+  // so a push event alone wouldn't keep the count fresh.
+  const [activeCount, setActiveCount] = useState(0);
+
+  useEffect(() => {
+    let cancelled = false;
+    // Seed with current status, then keep in sync via pushed relay:event.
+    void api.relay.status().then((s) => {
+      if (!cancelled) setRelayConnected(s.state === "connected");
+    });
+    const unsub = api.on.relayEvent((msg: { status: RelayStatus }) => {
+      if (!cancelled) setRelayConnected(msg.status.state === "connected");
+    });
+    return () => {
+      cancelled = true;
+      unsub();
+    };
+  }, []);
+
+  // Poll the active device count so the button reflects live activity even
+  // without any relay events (a paired-but-idle phone slowly ages out of the
+  // window).
+  useEffect(() => {
+    let cancelled = false;
+    const tick = async () => {
+      try {
+        const { count } = await api.mobile.getActiveCount();
+        if (!cancelled) setActiveCount(count);
+      } catch {
+        // ignore — server may be down
+      }
+    };
+    void tick();
+    const interval = setInterval(tick, 15_000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, []);
+
   return (
     <>
       <button
@@ -46,6 +92,17 @@ export function MobileConnectButton() {
       >
         <IconDeviceMobile size={16} className="shrink-0" />
         <span className="flex-1 text-left font-medium">{t("layout.connectPhone")}</span>
+        {activeCount > 0 && (
+          <span
+            className="shrink-0 rounded-full bg-accent/15 px-1.5 py-0.5 text-[10px] font-semibold leading-none text-accent"
+            title={t("layout.activeDevices", { n: activeCount })}
+          >
+            ×{activeCount}
+          </span>
+        )}
+        {relayConnected && (
+          <IconWorld size={14} className="shrink-0 text-accent" title={t("layout.relayConnected")} />
+        )}
       </button>
       <Dialog.Root open={open} onOpenChange={setOpen}>
         <Dialog.Portal>

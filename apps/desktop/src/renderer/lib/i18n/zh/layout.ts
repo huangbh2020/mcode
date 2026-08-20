@@ -137,6 +137,11 @@ export const zh = {
   "layout.pairedAt": "配对于 {time}",
   "layout.revokeDevice": "断开该设备",
   "layout.refreshDevices": "刷新设备列表",
+  "layout.relayAutoStart": "启动时自动开启远程访问",
+  "layout.relayAutoStartOn": "开启",
+  "layout.relayAutoStartOff": "关闭",
+  "layout.relayConnected": "远程访问已启用",
+  "layout.activeDevices": "{n} 台设备活跃",
 
   /* ── image preview (ui) ── */
   "layout.image.clickToView": "点击查看大图",

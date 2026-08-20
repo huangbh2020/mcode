@@ -89,6 +89,7 @@ export function ModelDropdown() {
     }
     return groups;
   }, [isPi, piAvailableModels]);
+  const piModelCount = piAvailableModels.length;
   // "管理模型" lands on the unified model-config settings section. Both claude
   // (custom endpoints) and pi (models.json providers) now live on the same
   // "custom-models" page, distinguished by a type badge in its left list.
@@ -183,45 +184,81 @@ export function ModelDropdown() {
             )}
 
             {/* Pi models: dynamically discovered from ~/.pi/agent/models.json
-                (configured in the Pi models settings panel). Flat list grouped
-                by supplier, single select — each entry maps to a
-                "providerId/modelId" string that PiAgentSdkProvider resolves to
-                a Model object at turn time. We use setModel (not
-                setCustomModel) because pi has no custom-config concept: the
-                picked id is a concrete model, persisted verbatim in the
-                session's `model` field and consumed by the provider. */}
+                (configured in the Pi models settings panel). Grouped by
+                supplier, mirroring Claude's config-grouped picker: each
+                supplier is a top-level row that opens a submenu of its models.
+                Each entry maps to a "providerId/modelId" string that
+                PiAgentSdkProvider resolves to a Model object at turn time. We
+                use setModel (not setCustomModel) because pi has no custom-config
+                concept: the picked id is a concrete model, persisted verbatim
+                in the session's `model` field and consumed by the provider. */}
             {showPiModels && (
               <div className="border-b border-edge/60 pb-1">
-                <div className="px-3 py-1 text-xs uppercase tracking-wide text-content-subtle">
-                  {t("chat.model.list")}
+                <div className="flex items-center justify-between px-3 py-1">
+                  <span className="text-xs uppercase tracking-wide text-content-subtle">{t("chat.model.list")}</span>
+                  <span className="text-xs text-content-subtle">{piModelCount}</span>
                 </div>
-                {piGroups.map((group) => (
-                  <div key={group.supplier}>
-                    <div className="px-3 pb-0.5 pt-1 text-[11px] font-semibold uppercase tracking-wide text-content-subtle">
-                      {group.supplier}
-                    </div>
-                    {group.models.map((b) => {
-                      const active = model === b.id;
-                      return (
-                        <Menu.Item
-                          key={b.id}
-                          className={cn(
-                            "flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-[13px] outline-none select-none",
-                            "data-[highlighted]:bg-surface-muted",
-                            active ? "text-accent" : "text-content-muted",
-                          )}
-                          onClick={() => setModel(b.id)}
-                        >
-                          <span className="flex min-w-0 items-baseline gap-2">
-                            <span className="font-medium">{b.label}</span>
-                            {b.hint && <span className="truncate text-xs text-content-subtle">{b.hint}</span>}
-                          </span>
-                          {active && <IconCheck size={14} className="shrink-0" />}
-                        </Menu.Item>
-                      );
-                    })}
-                  </div>
-                ))}
+                {piGroups.map((group) => {
+                  const groupActive = group.models.some((b) => model === b.id);
+                  const groupRow = (
+                    <span className="flex min-w-0 items-center gap-2">
+                      <span className="truncate font-medium">{group.supplier}</span>
+                      {groupActive && <IconCheck size={14} className="shrink-0" />}
+                    </span>
+                  );
+                  const groupClasses = cn(
+                    "flex w-full items-center justify-between px-3 py-2 text-left text-[13px] outline-none select-none",
+                    "data-[highlighted]:bg-surface-muted data-[highlighted]:text-content",
+                    groupActive ? "text-accent" : "text-content-muted",
+                  );
+                  return (
+                    <Menu.SubmenuRoot key={group.supplier}>
+                      <Menu.SubmenuTrigger
+                        openOnHover
+                        closeDelay={120}
+                        className={groupClasses}
+                      >
+                        {groupRow}
+                        <IconChevronRight size={12} className="ml-2 shrink-0 opacity-60" />
+                      </Menu.SubmenuTrigger>
+                      <Menu.Portal>
+                        <Menu.Positioner side="right" align="start" sideOffset={4}>
+                          <Menu.Popup
+                            className={cn(
+                              "z-50 min-w-[220px] origin-left rounded-lg border border-edge bg-surface py-1.5 shadow-2xl",
+                              "data-[ending-style]:scale-95 data-[ending-style]:opacity-0",
+                              "data-[starting-style]:scale-95 data-[starting-style]:opacity-0",
+                              "transition-[transform,opacity] duration-100",
+                            )}
+                          >
+                            {group.models.map((b) => {
+                              const active = model === b.id;
+                              return (
+                                <Menu.Item
+                                  key={b.id}
+                                  onClick={() => setModel(b.id)}
+                                  className={cn(
+                                    "flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-[13px] outline-none select-none",
+                                    "data-[highlighted]:bg-surface-muted",
+                                    active ? "text-accent" : "text-content-muted",
+                                  )}
+                                >
+                                  <span className="flex min-w-0 items-baseline gap-2">
+                                    <span className="truncate font-medium">{b.label}</span>
+                                    {b.hint && (
+                                      <span className="shrink-0 rounded bg-accent/15 px-1 text-[10px] text-accent">1M</span>
+                                    )}
+                                  </span>
+                                  {active && <IconCheck size={14} className="shrink-0" />}
+                                </Menu.Item>
+                              );
+                            })}
+                          </Menu.Popup>
+                        </Menu.Positioner>
+                      </Menu.Portal>
+                    </Menu.SubmenuRoot>
+                  );
+                })}
               </div>
             )}
 

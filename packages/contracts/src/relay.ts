@@ -20,6 +20,9 @@ import { z } from "zod";
 /** Setting key under which the VPS connection config is persisted (JSON). */
 export const RELAY_CONFIG_SETTING_KEY = "relay.vpsConfig";
 
+/** Setting key for "start remote access automatically on app launch" ("1"/"0"). */
+export const RELAY_AUTO_START_SETTING_KEY = "relay.autoStart";
+
 /** Default public port on the VPS that the phone connects to. */
 export const RELAY_DEFAULT_PUBLIC_PORT = 7331;
 

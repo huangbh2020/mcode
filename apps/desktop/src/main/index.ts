@@ -9,6 +9,8 @@ import { lspManager } from "@main/lsp/LspManager.js";
 import { BrowserManager } from "@main/browser/BrowserManager.js";
 import { startMobileServer, stopMobileServer } from "@main/mobile/MobileHttpServer.js";
 import { relayManager } from "@main/relay/RelayManager.js";
+import { RELAY_AUTO_START_SETTING_KEY } from "@contracts/relay";
+import { SettingRepo } from "@main/store/repositories.js";
 import { initUpdater } from "@main/updater.js";
 import { initAutoArchiver } from "@main/session/AutoArchiver.js";
 import { notificationManager } from "@main/notifications/NotificationManager.js";
@@ -173,10 +175,13 @@ app.whenReady().then(async () => {
   // awaits DB readiness internally to read its enabled/port settings, then
   // binds 0.0.0.0:<port>. If disabled (mobile.enabled=0) it resolves to an
   // idle handle — safe no-op. Failure to bind (port in use) is logged but
-  // never blocks the app.
+  // never blocks the app. When "start remote access on launch" is enabled and
+  // a VPS config exists, auto-connect the relay tunnel right after the mobile
+  // server is up (the relay forwards into it).
   void (async () => {
     try {
       await startMobileServer();
+      await maybeAutoStartRelay();
     } catch (err) {
       log.error(`mobile server failed to start: ${(err as Error).message}`);
     }
@@ -192,6 +197,24 @@ app.whenReady().then(async () => {
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();
 });
+
+/** If "start remote access on launch" is enabled and a VPS config exists,
+ *  auto-connect the relay tunnel. Best-effort — failures are logged, never
+ *  thrown (startup must not be blocked). */
+async function maybeAutoStartRelay(): Promise<void> {
+  try {
+    const raw = SettingRepo.get(RELAY_AUTO_START_SETTING_KEY);
+    if (raw !== "1") return;
+    if (!relayManager.getConfig()) return;
+    log.info("relay: auto-start enabled, connecting…");
+    const result = await relayManager.connect();
+    if (!result.ok && result.error) {
+      log.warn(`relay: auto-start connect failed: ${result.error}`);
+    }
+  } catch (err) {
+    log.warn(`relay: auto-start failed: ${(err as Error).message}`);
+  }
+}
 
 // Close PTYs + bridge servers + LSP servers + browser views + DB cleanly on shutdown (best-effort).
 app.on("before-quit", () => {

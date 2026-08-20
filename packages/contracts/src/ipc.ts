@@ -3028,6 +3028,9 @@ export interface RpcMap {
     lanIp: string | null;
     lanIps: string[];
   }>;
+  /** Count of paired devices that are currently "active" (made a request
+   *  within {@link MOBILE_ACTIVE_WINDOW_MS}). */
+  "mobile.getActiveCount": () => Promise<{ count: number }>;
   // ── Relay (SSH-based remote access) ──
   /** Save VPS connection config to settings (persisted across restarts). */
   "relay.saveConfig": (input: RelayVpsConfigInput) => Promise<{ ok: true }>;
@@ -3212,6 +3215,7 @@ export const IPC = {
   MOBILE_LIST_DEVICES: "mobile:listDevices",
   MOBILE_REVOKE_DEVICE: "mobile:revokeDevice",
   MOBILE_GET_STATUS: "mobile:getStatus",
+  MOBILE_GET_ACTIVE_COUNT: "mobile:getActiveCount",
   // Relay (SSH-based remote access) — invoke/handle (RPC).
   RELAY_SAVE_CONFIG: "relay:saveConfig",
   RELAY_GET_CONFIG: "relay:getConfig",

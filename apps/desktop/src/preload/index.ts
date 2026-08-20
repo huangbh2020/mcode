@@ -415,6 +415,7 @@ const api = {
     revokeDevice: ((input) =>
       ipcRenderer.invoke(IPC.MOBILE_REVOKE_DEVICE, input)) as RpcMap["mobile.revokeDevice"],
     getStatus: (() => ipcRenderer.invoke(IPC.MOBILE_GET_STATUS)) as RpcMap["mobile.getStatus"],
+    getActiveCount: (() => ipcRenderer.invoke(IPC.MOBILE_GET_ACTIVE_COUNT)) as RpcMap["mobile.getActiveCount"],
   },
 
   /** Relay (SSH-based remote access via user's own VPS) — drives the PC-side

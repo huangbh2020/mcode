@@ -11,6 +11,7 @@ import type { IpcMain } from "electron";
 import { IPC, RevokeMobileDeviceSchema } from "@contracts/ipc";
 import { pairingManager, detectLanIp, detectLanIps } from "@main/mobile/PairingManager.js";
 import { getMobileServer } from "@main/mobile/MobileHttpServer.js";
+import { MOBILE_ACTIVE_WINDOW_MS } from "@contracts/mobile";
 import { log } from "@main/lib/logger.js";
 
 export function registerMobileHandlers(ipcMain: IpcMain): void {
@@ -64,6 +65,13 @@ export function registerMobileHandlers(ipcMain: IpcMain): void {
       lanIp: detectLanIp(),
       lanIps: detectLanIps(),
     };
+  });
+
+  ipcMain.handle(IPC.MOBILE_GET_ACTIVE_COUNT, async () => {
+    const devices = await pairingManager.listDevices();
+    const cutoff = Date.now() - MOBILE_ACTIVE_WINDOW_MS;
+    const count = devices.filter((d) => d.lastSeenAt >= cutoff).length;
+    return { count };
   });
 
   log.info("mobile: IPC handlers registered");
