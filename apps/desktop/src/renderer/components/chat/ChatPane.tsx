@@ -2720,14 +2720,6 @@ function ChatPaneForSession({ sessionId, isActive }: { sessionId: string; isActi
             />
             <div className="composer-action-row flex flex-wrap items-center justify-between gap-2 px-2.5 pb-2 pt-1.5">
               <div className="composer-chips flex min-w-0 flex-1 items-center gap-1">
-                {/* Voice input: mic button with continuous / hold-to-talk modes
-                    (mode switchable via the caret menu). `sessionId` wires the
-                    voice.dictation keyboard shortcut to THIS pane's mic. */}
-                <MicButton
-                  sessionId={sessionId ?? ""}
-                  editorRef={editorRef}
-                  disabled={inputBlocked}
-                />
                 {/* Single "+" entry for attachments (files / images) — keeps
                     the action row calm; direct paste / drag-drop still works
                     without opening the menu. */}
@@ -2742,10 +2734,20 @@ function ChatPaneForSession({ sessionId, isActive }: { sessionId: string; isActi
                     row when the pane < 30rem. Pops a panel hosting the same chips. */}
                 <ComposerToolbarToggle sessionId={sessionId} />
               </div>
-              {/* SDK picker pinned left of the send button — always visible
-                  (unlike the chip row, which collapses in narrow mode); locked
-                  to a read-only chip once the thread has messages. */}
+              {/* Right cluster: mic + provider picker + send, always visible
+                  (the chip row collapses in narrow mode; these don't). */}
               <div className="flex shrink-0 items-center gap-1">
+                {/* Voice input: mic button with continuous / hold-to-talk modes
+                    (mode switchable via the caret menu). `sessionId` wires the
+                    voice.dictation keyboard shortcut to THIS pane's mic. */}
+                <MicButton
+                  sessionId={sessionId ?? ""}
+                  editorRef={editorRef}
+                  disabled={inputBlocked}
+                />
+                {/* SDK picker pinned left of the send button — always visible
+                    (unlike the chip row, which collapses in narrow mode); locked
+                    to a read-only chip once the thread has messages. */}
                 <ProviderDropdown />
                 {sessionBusy && !hasComposerContent ? (
                   <button

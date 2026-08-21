@@ -337,7 +337,7 @@ export function MicButton({
           <IconChevronDown size={12} />
         </Menu.Trigger>
         <Menu.Portal>
-          <Menu.Positioner side="top" align="start">
+          <Menu.Positioner side="top" align="end">
             <Menu.Popup
               className={cn(
                 "z-50 min-w-[190px] origin-bottom-left rounded-lg border border-edge bg-surface py-1.5 shadow-2xl",
