@@ -397,6 +397,28 @@ export const SessionRepo = {
     return row ? rowToSession(row) : undefined;
   },
 
+  /** Newest still-fresh session of a project — the "new session" button
+   *  reuses this row instead of stacking empty ones (see
+   *  `createOrReuseSession` in lib/sessionStart.ts). "Fresh" = still on the
+   *  default title (the first sent message auto-renames the row, so a default
+   *  title means it was never used), idle, unarchived and unpinned (pinned
+   *  rows live in the left bar's global pinned section, not the project
+   *  list, so "move it to the top" wouldn't apply to them). */
+  findFreshByProject(projectId: string): Session | undefined {
+    const db = getDb();
+    const stmt = db.prepare(
+      `SELECT * FROM sessions
+       WHERE project_id = ? AND archived = 0 AND pinned_at IS NULL
+         AND status = 'idle' AND title = 'New session'
+       ORDER BY updated_at DESC, created_at DESC LIMIT 1`,
+    );
+    stmt.bind([v(projectId)]);
+    const found = stmt.step();
+    const row = found ? (stmt.getAsObject() as unknown as SessionRow) : undefined;
+    stmt.free();
+    return row ? rowToSession(row) : undefined;
+  },
+
   /** Persist claude's own session id so future turns can --resume. */
   updateClaudeSessionId(id: string, claudeSessionId: string): void {
     getDb().run("UPDATE sessions SET claude_session_id = ?, updated_at = ? WHERE id = ?", [

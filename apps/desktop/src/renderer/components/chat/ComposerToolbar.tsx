@@ -11,7 +11,10 @@ import { ContextRing } from "./ContextRing.js";
  *
  * - Model: dropdown (built-in + custom configs).
  * - Effort: dropdown (Auto → Max), same base-ui Menu style as Permission.
- * - Permission mode: dropdown showing the 4 user-facing modes.
+ * - Permission mode: dropdown showing the 4 user-facing modes. Kept as its own
+ *   chip (not folded into a shared menu): the semantic color telegraphs risky
+ *   modes (Edit Auto amber / Plan blue / Bypass red) at a glance, and each
+ *   setting is directly reachable with one click.
  * - Context ring: occupancy indicator for the active session, pinned at the
  *   right end of the chip row (after Permission). Sits inline rather than
  *   overlapping the textarea, so it never covers typed text. Click it to open

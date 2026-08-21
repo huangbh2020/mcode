@@ -76,6 +76,33 @@ const api = {
     getMany: ((input) =>
       ipcRenderer.invoke(IPC.SETTING_GET_MANY, input)) as RpcMap["setting.getMany"],
   },
+  /** Speech-to-text (voice input) — drives sherpa-onnx ASR in main. The
+   *  renderer streams 16 kHz mono PCM via `feed`; live results arrive on
+   *  `voiceResult`. */
+  voice: {
+    start: ((input) =>
+      ipcRenderer.invoke(IPC.VOICE_START, input)) as RpcMap["voice.start"],
+    feed: ((input) =>
+      ipcRenderer.invoke(IPC.VOICE_FEED, input)) as RpcMap["voice.feed"],
+    stop: ((input) =>
+      ipcRenderer.invoke(IPC.VOICE_STOP, input)) as RpcMap["voice.stop"],
+    cancel: ((input) =>
+      ipcRenderer.invoke(IPC.VOICE_CANCEL, input)) as RpcMap["voice.cancel"],
+    modelList: (() =>
+      ipcRenderer.invoke(IPC.VOICE_MODEL_LIST)) as RpcMap["voice.modelList"],
+    downloadModel: ((input) =>
+      ipcRenderer.invoke(IPC.VOICE_DOWNLOAD_MODEL, input)) as RpcMap["voice.downloadModel"],
+    cancelModelDownload: ((input) =>
+      ipcRenderer.invoke(IPC.VOICE_CANCEL_MODEL_DOWNLOAD, input)) as RpcMap["voice.cancelModelDownload"],
+    selectModel: ((input) =>
+      ipcRenderer.invoke(IPC.VOICE_SELECT_MODEL, input)) as RpcMap["voice.selectModel"],
+    removeModel: ((input) =>
+      ipcRenderer.invoke(IPC.VOICE_REMOVE_MODEL, input)) as RpcMap["voice.removeModel"],
+    getModelDir: ((input) =>
+      ipcRenderer.invoke(IPC.VOICE_GET_MODEL_DIR, input)) as RpcMap["voice.getModelDir"],
+    setModelDir: ((input) =>
+      ipcRenderer.invoke(IPC.VOICE_SET_MODEL_DIR, input)) as RpcMap["voice.setModelDir"],
+  },
 
   /** Notification preferences + OS notification click handling. */
   notification: {
@@ -571,6 +598,26 @@ const api = {
       ipcRenderer.on(IPC.RELAY_EVENT, listener);
       return () => {
         ipcRenderer.off(IPC.RELAY_EVENT, listener);
+      };
+    },
+    /** Live ASR results (partial/final) for an active voice-input session. */
+    voiceResult(handler: (msg: Extract<MainToRendererMessage, { channel: "voice:result" }>) => void): () => void {
+      const listener = (_e: unknown, msg: MainToRendererMessage) => {
+        if (msg.channel === IPC.VOICE_RESULT) handler(msg);
+      };
+      ipcRenderer.on(IPC.VOICE_RESULT, listener);
+      return () => {
+        ipcRenderer.off(IPC.VOICE_RESULT, listener);
+      };
+    },
+    /** Voice-model download progress (Settings → 语音输入 → 下载语言模型). */
+    voiceDownloadProgress(handler: (msg: Extract<MainToRendererMessage, { channel: "voice:downloadProgress" }>) => void): () => void {
+      const listener = (_e: unknown, msg: MainToRendererMessage) => {
+        if (msg.channel === IPC.VOICE_DOWNLOAD_PROGRESS) handler(msg);
+      };
+      ipcRenderer.on(IPC.VOICE_DOWNLOAD_PROGRESS, listener);
+      return () => {
+        ipcRenderer.off(IPC.VOICE_DOWNLOAD_PROGRESS, listener);
       };
     },
   },

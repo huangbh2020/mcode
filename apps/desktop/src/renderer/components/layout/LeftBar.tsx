@@ -1192,10 +1192,8 @@ function SessionRow({
       )}
       title={`${session.title}\n${formatFullTime(session.updatedAt)}`}
     >
-      <SessionRowIcon providerId={session.providerId} className="shrink-0" />
-
-      {/* Pinned marker — always-visible badge on the LEFT (leading edge, next
-          to the provider icon) so a pinned thread reads as pinned at a glance,
+      {/* Pinned marker — always-visible badge at the very LEFT edge (before
+          the provider icon) so a pinned thread reads as pinned at a glance,
           independent of the hover actions / unread badge on the right edge. */}
       {isPinned && (
         <IconPinnedFilled
@@ -1204,6 +1202,8 @@ function SessionRow({
           aria-label={t("layout.pinned")}
         />
       )}
+
+      <SessionRowIcon providerId={session.providerId} className="shrink-0" />
 
       <span className="min-w-0 flex-1 truncate">{session.title}</span>
 

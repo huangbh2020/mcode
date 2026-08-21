@@ -70,7 +70,7 @@ export const en = {
   "layout.backToWorkspace": "Back to workspace",
   "layout.backToWorkbench": "Back to workspace",
   "layout.exitWideMode": "Exit wide mode",
-  "layout.wideMode": "Wide mode (chat + panel 2:8)",
+  "layout.wideMode": "Wide mode (chat + panel 3:7)",
   "layout.showLeftPanel": "Show left panel",
   "layout.hideLeftPanel": "Hide left panel",
   "layout.showRightPanel": "Show right panel",

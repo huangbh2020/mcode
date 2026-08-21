@@ -179,6 +179,7 @@ function labelForId(id: string): MessageId {
     "files.search": "settings.shortcuts.cmdSearchFiles",
     "view.settings": "settings.shortcuts.cmdSettings",
     "chat.focus-input": "settings.shortcuts.cmdFocusInput",
+    "voice.dictation": "settings.shortcuts.cmdVoiceDictation",
     "layout.toggle-left": "settings.shortcuts.cmdToggleLeft",
     "layout.toggle-right": "settings.shortcuts.cmdToggleRight",
     "layout.toggle-bottom-terminal": "settings.shortcuts.cmdToggleTerminal",
@@ -189,7 +190,7 @@ function labelForId(id: string): MessageId {
 
 /** The group a command belongs to, used for the filtered-out fallback. */
 function groupForId(id: string): CommandGroup {
-  if (id.startsWith("session.") || id.startsWith("tab.")) return "会话";
+  if (id.startsWith("session.") || id.startsWith("tab.") || id.startsWith("voice.")) return "会话";
   if (id.startsWith("layout.")) return "布局";
   if (id.startsWith("appearance.")) return "外观";
   return "视图";

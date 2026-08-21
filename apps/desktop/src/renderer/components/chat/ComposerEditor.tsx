@@ -36,11 +36,19 @@ import {
   useImperativeHandle,
   useRef,
 } from "react";
-import { useEditor, EditorContent } from "@tiptap/react";
+import { useEditor, EditorContent, type Editor } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import { Mention, type MentionNodeAttrs } from "@tiptap/extension-mention";
 import { cn } from "@renderer/lib/cn.js";
 import type { SkillInfo } from "@contracts/ipc";
+
+/** Sync the `is-empty` class the placeholder CSS rule keys on (styles.css).
+ *  Tiptap v3 adds no such class on its own (and no Placeholder extension is
+ *  installed), so without this the rule never matches and the placeholder
+ *  text stays invisible. */
+function syncEmptyClass(ed: Editor): void {
+  ed.view.dom.classList.toggle("is-empty", ed.isEmpty);
+}
 
 /** Result of serializing the editor's document for sending. */
 export interface ComposerSerialization {
@@ -88,6 +96,12 @@ export interface ComposerEditorHandle {
   /** Delete the text in the plain-text range [start, end), then place the
    *  caret at `start`. Used to remove a `/query` or `@query` trigger token. */
   deleteTextRange: (start: number, end: number) => void;
+  /** Replace the plain-text range [start, end) with plain text in a single
+   *  chained transaction, leaving the caret after the inserted text. Used by
+   *  live voice dictation to update the composer's tail in place as the
+   *  transcript streams in (partial results revise themselves, so the tail is
+   *  rewritten rather than appended). */
+  replaceTextRange: (start: number, end: number, text: string) => void;
   /** Serialize the current document for sending. */
   serialize: () => ComposerSerialization;
   /** Current plain text (skills inlined as `/name`), for trigger detection. */
@@ -321,7 +335,14 @@ export const ComposerEditor = forwardRef<
         return false;
       },
     },
+    onCreate: ({ editor }) => {
+      // Initial empty-doc state: the placeholder must be visible before the
+      // first keystroke (and before focus — the home composer starts
+      // unfocused).
+      syncEmptyClass(editor);
+    },
     onUpdate: ({ editor }) => {
+      syncEmptyClass(editor);
       onChangeRef.current(textWithSkills(editor));
     },
   });
@@ -330,6 +351,15 @@ export const ComposerEditor = forwardRef<
   useEffect(() => {
     if (editor) editor.setEditable(editable);
   }, [editor, editable]);
+
+  // data-placeholder / aria-label are captured once at editor creation
+  // (editorProps.attributes) — patch the DOM attributes when the prop flips
+  // (idle → queued → locked) so the placeholder always matches the state.
+  useEffect(() => {
+    if (!editor) return;
+    editor.view.dom.setAttribute("data-placeholder", placeholder);
+    editor.view.dom.setAttribute("aria-label", placeholder);
+  }, [editor, placeholder]);
 
   /** Plain-text representation of the doc: text nodes verbatim, skill nodes as
    *  `/name`. Walks the doc so node order is preserved relative to text. */
@@ -499,6 +529,20 @@ export const ComposerEditor = forwardRef<
           .focus()
           .deleteRange({ from, to })
           .setTextSelection(from)
+          .run();
+      },
+      replaceTextRange: (start, end, text) => {
+        if (!editor) return;
+        const from = textOffsetToPos(editor, start);
+        const to = textOffsetToPos(editor, end);
+        const at = Math.min(from, to);
+        editor
+          .chain()
+          .focus()
+          .deleteRange({ from: at, to: Math.max(from, to) })
+          .insertContentAt(at, text)
+          // Pure-text insertion advances the caret by the text length.
+          .setTextSelection(at + text.length)
           .run();
       },
       setCaretOffset: (offset) => {

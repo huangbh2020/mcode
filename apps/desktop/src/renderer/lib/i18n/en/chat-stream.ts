@@ -102,4 +102,5 @@ export const en = {
   // ── EmptyThreadWelcome ──
   "chatStream.welcome.title": "Start a new chat",
   "chatStream.welcome.withProject": "Start a new chat in {name}",
+  "chatStream.welcome.todayUsage": "{turns} turns today · {tokens} tokens used",
 } as const;

@@ -17,7 +17,6 @@ import {
   IconBolt,
   IconChevronRight,
   IconGripVertical,
-  IconPhoto,
 } from "@renderer/lib/icons.js";
 import { useSessionStore, EMPTY_MESSAGES, EMPTY_TODOS, EMPTY_SUBAGENTS, EMPTY_CHAT_QUEUE, EMPTY_ELEMENT_QUEUE, EMPTY_PROMPT_QUEUE, type Block, type ChatMessage, type TodoItem, type TurnMeta, type QueuedPrompt } from "@renderer/stores/sessionStore.js";
 import { useToastStore } from "@renderer/stores/toastStore.js";
@@ -40,6 +39,8 @@ import {
 } from "@renderer/lib/contentTag.js";
 import type { SkillInfo, BuiltInCommand } from "@renderer/lib/slashCommands.js";
 import { MessageBlocks, TurnPanel, type ProceduralBlock, type BeforeContentMap } from "./MessageBlocks.js";
+import { AttachMenuButton } from "./AttachMenuButton.js";
+import { MicButton } from "./MicButton.js";
 import { ComposerToolbar } from "./ComposerToolbar.js";
 import { ComposerToolbarToggle } from "./ComposerToolbarToggle.js";
 import { ProviderDropdown } from "./ProviderDropdown.js";
@@ -960,6 +961,7 @@ function ChatPaneForSession({ sessionId, isActive }: { sessionId: string; isActi
     (s) => s.pendingPlanApprovalBySession[sessionId] ?? null,
   );
   const submitPlanApproval = useSessionStore((s) => s.submitPlanApproval);
+  const handoffPlanApproval = useSessionStore((s) => s.handoffPlanApproval);
   // Pre-turn file contents for the Write-tool diff. Built from the per-turn
   // `kind: "turn-files"` blocks in the message stream — each turn records the
   // `before` of every file it touched, so scanning all of them (later turns
@@ -1488,6 +1490,23 @@ function ChatPaneForSession({ sessionId, isActive }: { sessionId: string; isActi
     if (rect) setAttachAnchor(rect);
     setAttachPickerQuery("");
     setAttachPickerOpen(true);
+  }, [inputBlocked]);
+
+  /** 在光标处插入触发字符(`/` 或 `@`),交给 recomputePicker 打开对应的
+   *  内联选择器 — 与手动输入走完全相同的链路,选中插入 / 关闭等行为全部
+   *  复用。触发字符必须位于行首或空白之后才会被识别,光标前是普通字符时
+   *  先补一个换行;编辑器失焦时(点菜单/提示的常态)getCaretOffset 返回
+   *  -1,回退到文本末尾。供 "+" 菜单「斜杠命令」与空输入框的提示行共用。 */
+  const insertTriggerChar = useCallback((ch: string) => {
+    if (inputBlocked) return;
+    const editor = editorRef.current;
+    if (!editor) return;
+    const text = editor.getTextWithSkills();
+    const caret = editor.getCaretOffset();
+    const pos = caret >= 0 ? caret : text.length;
+    const needsNewline = pos > 0 && !/\s/.test(text[pos - 1] ?? "");
+    editor.setCaretOffset(pos);
+    editor.insertText(needsNewline ? `\n${ch}` : ch);
   }, [inputBlocked]);
 
   const handleAttachPick = useCallback(
@@ -2357,15 +2376,19 @@ function ChatPaneForSession({ sessionId, isActive }: { sessionId: string; isActi
             <PlanApprovalPrompt
               sessionId={sessionId}
               plan={pendingPlanApproval.plan}
-              onEditPlan={() => {
-                // Open the plan tab in the editor column for Monaco editing.
-                // Seed it with the staged draft (if any prior edits exist) so
-                // re-opening the editor preserves in-progress edits.
+              onViewPlan={() => {
+                // Open the plan tab in the editor column (PlanViewer read
+                // view) - the same entry as the capsule / plan cards. Seed it
+                // with the staged draft (if any prior edits exist) so
+                // re-opening the viewer preserves in-progress edits.
                 const draft = useSessionStore.getState().planApprovalDraftBySession[sessionId];
                 openPlanDrawer(sessionId, draft ?? pendingPlanApproval.plan);
               }}
               onApprove={(editedPlan, feedback) => {
                 void submitPlanApproval(pendingPlanApproval.requestId, true, editedPlan, undefined, feedback);
+              }}
+              onHandoff={(target, feedback) => {
+                void handoffPlanApproval(sessionId, pendingPlanApproval.requestId, target, feedback);
               }}
               onReject={(reason) => {
                 void submitPlanApproval(pendingPlanApproval.requestId, false, undefined, reason);
@@ -2697,34 +2720,23 @@ function ChatPaneForSession({ sessionId, isActive }: { sessionId: string; isActi
             />
             <div className="composer-action-row flex flex-wrap items-center justify-between gap-2 px-2.5 pb-2 pt-1.5">
               <div className="composer-chips flex min-w-0 flex-1 items-center gap-1">
-                <button
-                  type="button"
-                  onClick={openAttachPicker}
+                {/* Voice input: mic button with continuous / hold-to-talk modes
+                    (mode switchable via the caret menu). `sessionId` wires the
+                    voice.dictation keyboard shortcut to THIS pane's mic. */}
+                <MicButton
+                  sessionId={sessionId ?? ""}
+                  editorRef={editorRef}
                   disabled={inputBlocked}
-                  title={t("chat.attachFiles")}
-                  aria-label={t("chat.attachFiles")}
-                  className={cn(
-                    "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-xl text-content-muted transition-all duration-150 ease-out",
-                    "hover:scale-110 hover:bg-accent/10 hover:text-accent active:scale-95",
-                    "disabled:scale-100 disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-content-muted disabled:hover:scale-100",
-                  )}
-                >
-                  <IconPaperclip size={18} />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void handlePickImages()}
+                />
+                {/* Single "+" entry for attachments (files / images) — keeps
+                    the action row calm; direct paste / drag-drop still works
+                    without opening the menu. */}
+                <AttachMenuButton
                   disabled={inputBlocked}
-                  title={t("chat.addImage")}
-                  aria-label={t("chat.addImage")}
-                  className={cn(
-                    "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-xl text-content-muted transition-all duration-150 ease-out",
-                    "hover:scale-110 hover:bg-accent/10 hover:text-accent active:scale-95",
-                    "disabled:scale-100 disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-content-muted disabled:hover:scale-100",
-                  )}
-                >
-                  <IconPhoto size={18} />
-                </button>
+                  onPickFiles={openAttachPicker}
+                  onPickImages={() => void handlePickImages()}
+                  onSlashCommand={() => insertTriggerChar("/")}
+                />
                 <ComposerToolbar sessionId={sessionId} />
                 {/* Narrow-mode entry: hidden in wide mode (CSS), replaces the chip
                     row when the pane < 30rem. Pops a panel hosting the same chips. */}

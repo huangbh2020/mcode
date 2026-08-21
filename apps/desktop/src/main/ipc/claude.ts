@@ -1,7 +1,6 @@
 import type { IpcMain } from "electron";
 import {
   IPC,
-  DEFAULT_PROVIDER_ID,
   StartSessionSchema,
   SendTurnSchema,
   InterruptSchema,
@@ -23,14 +22,13 @@ import type {
   UpsertMessagesInput,
   TruncateAndInsertMessagesInput,
 } from "@contracts/ipc";
-import type { Session } from "@contracts/session";
 import type { UserInputAnswers } from "@contracts/provider";
-import { uid } from "@main/utils.js";
 import { SessionRepo, ProjectRepo, MessageRepo, SettingRepo } from "@main/store/repositories.js";
 import { runtimeManager } from "@main/claude/RuntimeManager.js";
 import { providerRegistry } from "@main/providers/registry.js";
 import { log } from "@main/lib/logger.js";
 import { broadcastSessionChanged } from "@main/lib/sessionSync.js";
+import { createOrReuseSession } from "@main/lib/sessionStart.js";
 import { generateSessionTitle } from "@main/ipc/titleGen.js";
 
 export function registerClaudeHandlers(ipcMain: IpcMain): void {
@@ -50,34 +48,9 @@ export function registerClaudeHandlers(ipcMain: IpcMain): void {
 
   ipcMain.handle(IPC.CLAUDE_START_SESSION, (_evt, raw) => {
     const input = StartSessionSchema.parse(raw);
-    const now = Date.now();
-    const session: Session = {
-      id: uid("sess_"),
-      projectId: input.projectId,
-      providerId: input.providerId ?? DEFAULT_PROVIDER_ID,
-      claudeSessionId: null, // captured from system/init once the first turn runs
-      title: input.title ?? "New session",
-      status: "idle",
-      model: input.model ?? "default",
-      effort: input.effort,
-      permissionMode: input.permissionMode,
-      customModelId: input.customModelId ?? null,
-      archived: false,
-      pinnedAt: null, // new sessions are never pinned
-      contextSnapshot: null,
-      todos: null,
-      subagents: null,
-      planDraft: null,
-      turnFiles: null,
-      usageHistory: null,
-      createdAt: now,
-      updatedAt: now,
-    };
-    SessionRepo.create(session);
-    runtimeManager.bindSession(session);
-    // Keep connected mobile clients' session lists in sync.
-    broadcastSessionChanged(session);
-    log.info(`session started: ${session.id} (provider ${session.providerId}, project ${input.projectId})`);
+    // Reuses the project's still-fresh "New session" row when one exists —
+    // only creates a new row otherwise (see createOrReuseSession).
+    const { session } = createOrReuseSession(input, "desktop");
     return { session };
   });
 

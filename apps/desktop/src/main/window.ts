@@ -1,4 +1,4 @@
-import { BrowserWindow, shell } from "electron";
+import { BrowserWindow, shell, session } from "electron";
 import { join } from "node:path";
 import { is } from "@main/utils.js";
 import { getEffectiveTheme } from "@main/lib/theme.js";
@@ -49,8 +49,32 @@ export function updateTitleBarOverlay(): void {
   mainWindow?.setTitleBarOverlay(overlayColors());
 }
 
+/** Grant the renderer access to the microphone (voice input).
+ *
+ *  Electron defaults to denying mic permission for a sandboxed renderer, so
+ *  the composer's voice button (which calls `navigator.mediaDevices.
+ *  getUserMedia({ audio })`) would fail without this. This app's only mic
+ *  consumer is the voice-input feature, so we allow `media` requests on the
+ *  default session outright. Runs once, before any window loads a page.
+ *  Uses Electron's `media` permission type (the umbrella covering mic/camera);
+ *  we only ever request the mic, so granting media is sufficient.
+ */
+let sessionPermissionsReady = false;
+function setupSessionPermissions(): void {
+  if (sessionPermissionsReady) return;
+  sessionPermissionsReady = true;
+  const ses = session.defaultSession;
+  ses.setPermissionRequestHandler((_wc, permission, callback) => {
+    callback(permission === "media" || permission === "mediaKeySystem");
+  });
+  ses.setPermissionCheckHandler((_wc, permission) => {
+    return permission === "media" || permission === "mediaKeySystem";
+  });
+}
+
 /** Create the primary three-pane window. */
 export function createMainWindow(): BrowserWindow {
+  setupSessionPermissions();
   mainWindow = new BrowserWindow({
     width: 1440,
     height: 900,

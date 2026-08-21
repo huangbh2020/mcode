@@ -95,9 +95,9 @@ export function RightPanel() {
         >
           <IconListDetails size={16} className="shrink-0" />
         </RailButton>
-        {/* Wide-panel (2:8) mode - hide the left sidebar + center editor and
-            split the workspace into this right panel (8/10) + the chat column
-            (2/10). Toggled here, via the command palette / shortcut, or the
+        {/* Wide-panel (3:7) mode - hide the left sidebar + center editor and
+            split the workspace into this right panel (7/10) + the chat column
+            (3/10). Toggled here, via the command palette / shortcut, or the
             titlebar back button. Pushed to the rail's far right with ml-auto. */}
         <div className="ml-auto flex items-center gap-1">
           <div className="h-5 w-px bg-edge" />

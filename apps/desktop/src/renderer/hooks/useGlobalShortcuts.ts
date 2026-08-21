@@ -25,6 +25,7 @@
 import { useEffect } from "react";
 import { useSessionStore } from "@renderer/stores/sessionStore.js";
 import { collectCommands } from "@renderer/lib/commands.js";
+import { voiceHandleFor } from "@renderer/lib/voiceController.js";
 import {
   resolveAllShortcuts,
   findMatchingCommand,
@@ -45,6 +46,10 @@ export function useGlobalShortcuts(): void {
       // its own capture listener consumes the event. Without this, pressing a
       // bound chord mid-recording would both record it AND fire its command.
       if (useSessionStore.getState().shortcutRecording) return;
+
+      // Auto-repeat (holding the key down) must not re-fire toggle commands —
+      // especially voice.dictation, whose chord is HELD for push-to-talk.
+      if (e.repeat) return;
 
       const commandId = findMatchingCommand(e, effective);
       if (!commandId) return;
@@ -67,9 +72,39 @@ export function useGlobalShortcuts(): void {
       void cmd.perform(state);
     };
 
+    // Release half of the voice.dictation chord: in push-to-talk mode,
+    // letting go of the chord stops the listen (hold chord = hold the talk
+    // button). Continuous mode ignores keyup — its toggle is press-press.
+    //
+    // Besides the full chord match, ALSO stop when just the MAIN key is
+    // released: users routinely release a modifier a beat earlier, and that
+    // keyup (e.g. "v" with Cmd+Shift already gone) matches no chord — without
+    // this fallback the mic would keep recording until the next full press.
+    const onKeyUp = (e: KeyboardEvent) => {
+      if (useSessionStore.getState().shortcutRecording) return;
+      const commandId = findMatchingCommand(e, effective);
+      const dictationKey = effective["voice.dictation"]?.key ?? "v";
+      const releasedDictationKey =
+        commandId !== "voice.dictation" &&
+        e.key.toLowerCase() === dictationKey;
+      if (commandId !== "voice.dictation" && !releasedDictationKey) return;
+      const state = useSessionStore.getState();
+      if (state.voiceInputMode !== "pushToTalk") return;
+      const sid = state.activeSessionId;
+      const handle = sid ? voiceHandleFor(sid) : undefined;
+      if (handle?.isBusy()) {
+        e.preventDefault();
+        void handle.stopListen();
+      }
+    };
+
     // capture phase: runs before document-level capture listeners registered
     // by chat pickers, so our modifier chords always win.
     window.addEventListener("keydown", onKey, true);
-    return () => window.removeEventListener("keydown", onKey, true);
+    window.addEventListener("keyup", onKeyUp, true);
+    return () => {
+      window.removeEventListener("keydown", onKey, true);
+      window.removeEventListener("keyup", onKeyUp, true);
+    };
   }, [overrides]);
 }

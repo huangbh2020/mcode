@@ -74,7 +74,7 @@ export function Titlebar({
   // below uses setBrowserPanelOpen to exit the overlay.
   const browserPanelOpen = useSessionStore((s) => s.browserPanelOpen);
   const setBrowserPanelOpen = useSessionStore((s) => s.setBrowserPanelOpen);
-  // Wide-panel (2:8) mode hides the left sidebar + center editor and shows the
+  // Wide-panel (3:7) mode hides the left sidebar + center editor and shows the
   // chat column + full right panel. It gets the same titlebar treatment as the
   // browser overlay: the left strip swaps to a back button and the right-panel
   // / terminal / editor toggles are hidden.

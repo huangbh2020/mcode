@@ -466,6 +466,22 @@ const setting: Api["setting"] = {
   getMany: (input) => rpc("setting:getMany", input),
 };
 
+/** Voice input requires the desktop main-process ASR engine; the mobile/web
+ *  shell has no microphone capture bridge, so every call is unsupported. */
+const voice: Api["voice"] = {
+  start: () => webUnsupported("voice.start"),
+  feed: () => webUnsupported("voice.feed"),
+  stop: () => webUnsupported("voice.stop"),
+  cancel: () => webUnsupported("voice.cancel"),
+  modelList: () => webUnsupported("voice.modelList"),
+  downloadModel: () => webUnsupported("voice.downloadModel"),
+  cancelModelDownload: () => webUnsupported("voice.cancelModelDownload"),
+  selectModel: () => webUnsupported("voice.selectModel"),
+  removeModel: () => webUnsupported("voice.removeModel"),
+  getModelDir: () => webUnsupported("voice.getModelDir"),
+  setModelDir: () => webUnsupported("voice.setModelDir"),
+};
+
 const theme: Api["theme"] = {
   get: () => themeGet(),
   set: (input) => themeSet(input),
@@ -509,6 +525,9 @@ const on: Api["on"] = {
   notificationFocusSession: () => () => {},
   // Relay events are desktop-only (the phone doesn't manage SSH).
   relayEvent: () => () => {},
+  // Voice ASR is desktop-only; the web shell never emits results.
+  voiceResult: () => () => {},
+  voiceDownloadProgress: () => () => {},
 };
 
 /* ────────────────────────── assembly ────────────────────────── */
@@ -528,6 +547,7 @@ export function createWebApi(): Api {
     git,
     claude,
     setting,
+    voice,
     theme,
     shell,
     clipboardFile,

@@ -105,4 +105,5 @@ export const zh = {
   // ── EmptyThreadWelcome ──
   "chatStream.welcome.title": "开始新的会话",
   "chatStream.welcome.withProject": "在「{name}」中开始新的会话",
+  "chatStream.welcome.todayUsage": "今天对话 {turns} 轮 · 消耗 {tokens} token",
 } as const;

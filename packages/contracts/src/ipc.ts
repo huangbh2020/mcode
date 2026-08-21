@@ -261,6 +261,104 @@ export const UI_RIGHT_PANEL_FONT_SIZE_SETTING_KEY = "ui.rightPanelFontSize";
 export const UI_PASTE_TAG_THRESHOLD_CHARS_SETTING_KEY = "ui.pasteTagThresholdChars";
 
 /**
+ * Setting key under which the default voice-input mode is persisted.
+ * Value is "continuous" (click to start/stop continuous dictation) or
+ * "pushToTalk" (hold the mic button to talk, release to stop).
+ * Hydrated into sessionStore.voiceInputMode at boot; the composer mic button
+ * reads it as its default mode (the user can still flip it per-use from the
+ * mic button's menu).
+ */
+export const UI_VOICE_INPUT_MODE_SETTING_KEY = "ui.voiceInputMode";
+
+/** zod schema + TS union for the voice-input default mode. */
+export const VoiceInputModeSchema = z.enum(["continuous", "pushToTalk"]);
+export type VoiceInputMode = z.infer<typeof VoiceInputModeSchema>;
+
+/**
+ * Setting key under which the default speech-recognition language is
+ * persisted. Value is a BCP-47-ish tag like "zh-CN" or "en-US" (used to pick
+ * the ASR model / decoder language). Hydrated into sessionStore.voiceLang.
+ */
+export const UI_VOICE_LANG_SETTING_KEY = "ui.voiceLang";
+
+/**
+ * Setting key under which the chosen voice engine is persisted: "zipformer"
+ * (streaming Chinese Zipformer — live interim results) or "parakeet" (offline
+ * NVIDIA Parakeet — higher accuracy, no interim). Falls back to "zipformer"
+ * when the parakeet engine/model is unavailable. Hydrated into
+ * sessionStore.voiceEngine.
+ */
+export const UI_VOICE_ENGINE_SETTING_KEY = "ui.voiceEngine";
+
+/** zod schema + TS union for the voice ASR engine. */
+export const VoiceEngineSchema = z.enum(["zipformer", "parakeet"]);
+export type VoiceEngine = z.infer<typeof VoiceEngineSchema>;
+
+/**
+ * Setting key under which the user's mic permission grant is cached
+ * ("granted" | "denied" | ""). The main window's permission handler lets the
+ * renderer request the microphone; this caches the outcome so the composing
+ * mic button can show a clear "grant access" state instead of silently
+ * failing. Managed by the renderer voice store action.
+ */
+export const UI_VOICE_MIC_PERMISSION_SETTING_KEY = "ui.voiceMicPermission";
+
+/**
+ * Setting key under which the active voice model id is persisted (one of the
+ * ids in {@link VOICE_MODEL_CATALOG}). Choosing a model in Settings →
+ * 语音输入 → 下载模型 writes this, and the engine resolves the model's files
+ * under the download dir at `voice.start`. Empty = no model selected.
+ */
+export const UI_VOICE_MODEL_SETTING_KEY = "ui.voiceModel";
+
+/**
+ * Setting key under which the list of downloaded voice models is persisted as
+ * a JSON array of the model ids present on disk (from the catalog). Kept in
+ * sync by main after each download completes/removes; the settings panel reads
+ * it to render the "已下载" list.
+ */
+export const UI_VOICE_DOWNLOADED_MODELS_SETTING_KEY = "ui.voiceDownloadedModels";
+
+/**
+ * Setting key under the local directory that downloaded voice model files are
+ * kept in (absolute path, or empty string for the default `userData/models/voice`).
+ * Each catalog model lives in `<dir>/<model-id>/`. The engine validates the files
+ * exist at `voice.start` time and surfaces a clear "模型未下载" error.
+ */
+export const UI_VOICE_MODEL_DIR_SETTING_KEY = "ui.voiceModelDir";
+
+/** Get the current effective model root (the user-customized path when set,
+ *  otherwise the default `userData/models/voice`). Returned to the settings
+ *  panel so it can render the current value. */
+export const GetVoiceModelDirSchema = z.object({});
+export type GetVoiceModelDirInput = z.infer<typeof GetVoiceModelDirSchema>;
+export const GetVoiceModelDirResultSchema = z.object({
+  /** The active root (never empty — resolves the default). */
+  modelDir: z.string(),
+  /** True when the user has customized the path. */
+  isCustom: z.boolean(),
+});
+export type GetVoiceModelDirResult = z.infer<typeof GetVoiceModelDirResultSchema>;
+
+/** Change the model root directory. The new path must be an absolute, writable
+ *  directory; the call validates and rejects bad input. An empty string resets
+ *  to the default `userData/models/voice` root. The new root is then scanned
+ *  for already-downloaded catalog models so the renderer can update the list
+ *  in a single round-trip. */
+export const SetVoiceModelDirSchema = z.object({
+  /** Absolute path, or "" to reset to the default. */
+  modelDir: z.string(),
+});
+export type SetVoiceModelDirInput = z.infer<typeof SetVoiceModelDirSchema>;
+export const SetVoiceModelDirResultSchema = z.object({
+  modelDir: z.string(),
+  isCustom: z.boolean(),
+  /** Catalog models found under the new root. */
+  downloaded: z.array(z.string()),
+});
+export type SetVoiceModelDirResult = z.infer<typeof SetVoiceModelDirResultSchema>;
+
+/**
  * Setting key under which the draggable panel widths are persisted as a JSON
  * object: `{ left, right, bottomTerminal, editor }`.
  *  - `left` / `right`: side-bar widths in px (clamped 180–500 / 240–640).
@@ -587,6 +685,13 @@ export const SendTurnSchema = z.object({
       id: z.string().min(1),
       createdAt: z.number(),
       blocks: z.array(z.unknown()),
+      /** Set only when this send is an EDIT of an earlier user message
+       *  (editAndResendMessage). Carries the id of the message being
+       *  replaced so every OTHER client can truncate its own store at that
+       *  message before appending the re-sent bubble — keeping their in-memory
+       *  tail (and their turn.done persistence of it) consistent with the
+       *  originator's truncation. Absent for a normal first send. */
+      editedMessageId: z.string().optional(),
     })
     .optional(),
 });
@@ -849,6 +954,177 @@ export type SetSettingInput = z.infer<typeof SetSettingSchema>;
 export const GetManySettingsSchema = z.object({ keys: z.array(z.string()) });
 export type GetManySettingsInput = z.infer<typeof GetManySettingsSchema>;
 export type GetManySettingsResult = Record<string, string | null>;
+
+/* ── Voice input ── */
+
+/**
+ * Kick off an ASR session: ensure the model/engine is ready (downloading on
+ * first use, lazily), create an online decoder for `lang`, and prepare to
+ * receive PCM audio. `sessionId` lets the renderer run one live transcription
+ * at a time per composer (a per-composer token); it is NOT the chat-session id.
+ */
+export const VoiceStartSchema = z.object({
+  /** Opaque per-listen token chosen by the renderer (e.g. a random hex id). */
+  sessionId: z.string().min(1),
+  /** Speech language tag, e.g. "zh-CN" | "en-US". Picks the decoder language. */
+  lang: z.string().min(1),
+  /** Desired engine: "zipformer" (streaming, interim results) | "parakeet"
+   *  (offline, higher accuracy). Falls back to zipformer when unavailable. */
+  engine: VoiceEngineSchema,
+});
+export type VoiceStartInput = z.infer<typeof VoiceStartSchema>;
+
+/** Feed a chunk of 16 kHz mono PCM samples to the active session's decoder.
+ *  The Float32Array form is the preferred wire encoding (structured clone
+ *  carries it at 4 bytes/sample and validation is a single instanceof check);
+ *  the plain number[] form is still accepted for compatibility. */
+export const VoiceFeedSchema = z.object({
+  sessionId: z.string().min(1),
+  pcm: z.union([z.instanceof(Float32Array), z.array(z.number()).max(65536 * 4)]),
+});
+export type VoiceFeedInput = z.infer<typeof VoiceFeedSchema>;
+
+/** Stop the session and return the final (highest-confidence) transcript. */
+export const VoiceStopSchema = z.object({ sessionId: z.string().min(1) });
+export type VoiceStopInput = z.infer<typeof VoiceStopSchema>;
+
+/** Cancel/discard a session (no final result emitted; drops partials). */
+export const VoiceCancelSchema = z.object({ sessionId: z.string().min(1) });
+export type VoiceCancelInput = z.infer<typeof VoiceCancelSchema>;
+
+/** Result of voice.stop — the final recognized text ("" if nothing spoken). */
+export const VoiceStopResultSchema = z.object({ text: z.string() });
+export type VoiceStopResult = z.infer<typeof VoiceStopResultSchema>;
+
+/** Main → renderer push: live recognition result for a voice session.
+ *  `partial` = interim (streaming, possibly revised); `final` = committed
+ *  segment for the current session. */
+export const VoiceResultPayloadSchema = z.object({
+  sessionId: z.string().min(1),
+  kind: z.enum(["partial", "final"]),
+  text: z.string(),
+});
+export type VoiceResultPayload = z.infer<typeof VoiceResultPayloadSchema>;
+
+/* ── Voice model catalog + download ── */
+
+/** One downloadable ASR model. `files` carry the exact filenames the engine
+ *  requires (mirroring {@link STREAMING_ZIPFORMER_FILES} in the sherpa-onnx
+ *  model zoo) plus per-file download URLs. `dir` is the local subdir name. */
+export interface VoiceModelInfo {
+  id: string;
+  name: string;
+  /** Human label for the primary language, e.g. "中文 (zh-CN)". */
+  langLabel: string;
+  /** Approximate expanded size, shown in the settings list. */
+  sizeLabel: string;
+  /** Subdirectory under the voice model dir that this model's files live in. */
+  dir: string;
+  files: { rel: string; url: string }[];
+}
+
+/**
+ * The set of models the app can download. All are free / open (Apache-2.0)
+ * and run fully on-device. Streaming Zipformer models give live interim
+ * results (the "文字边听边出" UX). Hosted on HuggingFace under `csukuangfj`;
+ * per-file URLs may move — keep them in sync with the sherpa-onnx model zoo.
+ * @see https://k2-fsa.github.io/sherpa/onnx/
+ */
+export const VOICE_MODEL_CATALOG: VoiceModelInfo[] = [
+  {
+    id: "sherpa-onnx-streaming-zipformer-zh-14M-2023-02-23",
+    name: "Streaming Zipformer 中文",
+    langLabel: "中文 (zh-CN)",
+    sizeLabel: "~67 MB",
+    dir: "streaming-zipformer-zh",
+    files: [
+      {
+        rel: "tokens.txt",
+        url: "https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-zh-14M-2023-02-23/resolve/main/tokens.txt",
+      },
+      {
+        rel: "encoder-epoch-99-avg-1.int8.onnx",
+        url: "https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-zh-14M-2023-02-23/resolve/main/encoder-epoch-99-avg-1.int8.onnx",
+      },
+      {
+        rel: "decoder-epoch-99-avg-1.int8.onnx",
+        url: "https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-zh-14M-2023-02-23/resolve/main/decoder-epoch-99-avg-1.int8.onnx",
+      },
+      {
+        rel: "joiner-epoch-99-avg-1.int8.onnx",
+        url: "https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-zh-14M-2023-02-23/resolve/main/joiner-epoch-99-avg-1.int8.onnx",
+      },
+    ],
+  },
+  {
+    id: "sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20",
+    name: "Streaming Zipformer 中英",
+    langLabel: "中英双语 (zh + en)",
+    sizeLabel: "~81 MB",
+    dir: "streaming-zipformer-zh-en",
+    files: [
+      {
+        rel: "tokens.txt",
+        url: "https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20/resolve/main/tokens.txt",
+      },
+      {
+        rel: "encoder-epoch-99-avg-1.int8.onnx",
+        url: "https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20/resolve/main/encoder-epoch-99-avg-1.int8.onnx",
+      },
+      {
+        rel: "decoder-epoch-99-avg-1.int8.onnx",
+        url: "https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20/resolve/main/decoder-epoch-99-avg-1.int8.onnx",
+      },
+      {
+        rel: "joiner-epoch-99-avg-1.int8.onnx",
+        url: "https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20/resolve/main/joiner-epoch-99-avg-1.int8.onnx",
+      },
+    ],
+  },
+];
+
+/** Start downloading a catalog model (`modelId`). Main streams files into the
+ *  model dir and reports progress on `voice:downloadProgress`. */
+export const VoiceDownloadModelSchema = z.object({
+  modelId: z.string().min(1),
+});
+export type VoiceDownloadModelInput = z.infer<typeof VoiceDownloadModelSchema>;
+
+/** List the catalog + which models are downloaded + the active selection. */
+export const VoiceModelListSchema = z.object({});
+export type VoiceModelListInput = z.infer<typeof VoiceModelListSchema>;
+export const VoiceModelListResultSchema = z.object({
+  models: z.array(z.custom<VoiceModelInfo>()),
+  downloaded: z.array(z.string()),
+  selected: z.string().nullable(),
+  /** Active model root (after the user's customization, if any). */
+  modelDir: z.string(),
+  /** True when the user has set a custom model root. */
+  isCustom: z.boolean(),
+});
+export type VoiceModelListResult = z.infer<typeof VoiceModelListResultSchema>;
+
+/** Main → renderer push: download progress for a model. `percent` is 0–100
+ *  across the whole model (byte-weighted when per-file sizes are known,
+ *  file-count-weighted otherwise). */
+export const VoiceDownloadProgressPayloadSchema = z.object({
+  modelId: z.string().min(1),
+  stage: z.enum(["downloading", "done", "error", "cancelled"]),
+  /** Whole-model progress 0–100 (includes file index weighting). */
+  percent: z.number().min(0).max(100),
+  /** 0-based index of the file currently downloading. */
+  fileIndex: z.number().min(0),
+  fileCount: z.number().min(1),
+  /** Bytes so far for the current file (for small-file UIs). */
+  fileBytes: z.number().min(0),
+  /** Total bytes of the current file when known (Content-Length); lets the
+   *  UI render "12.3 / 50.6 MB" instead of a bare percentage. */
+  fileTotalBytes: z.number().min(0).optional(),
+  error: z.string().optional(),
+});
+export type VoiceDownloadProgressPayload = z.infer<
+  typeof VoiceDownloadProgressPayloadSchema
+>;
 
 /* ── Notifications ── */
 
@@ -2271,6 +2547,31 @@ export interface RelayEventMessage {
   status: RelayStatus;
 }
 
+/** Pushed from main → renderer with live ASR results for a voice-input
+ *  session. `partial` = interim streaming text (may still change), `final` =
+ *  a committed segment for the session. The renderer matches results to its
+ *  composer via `sessionId` (the per-listen token it chose at voice.start). */
+export interface VoiceResultMessage {
+  channel: "voice:result";
+  sessionId: string;
+  kind: "partial" | "final";
+  text: string;
+}
+
+/** Pushed from main → renderer while a voice model downloads. The settings
+ *  panel renders a progress bar from this; `stage: "done"` means the model is
+ *  ready to select. */
+export interface VoiceDownloadProgressMessage {
+  channel: "voice:downloadProgress";
+  modelId: string;
+  stage: "downloading" | "done" | "error" | "cancelled";
+  percent: number;
+  fileIndex: number;
+  fileCount: number;
+  fileBytes: number;
+  error?: string;
+}
+
 export type MainToRendererMessage =
   | ClaudeEventMessage
   | SessionTitleUpdatedMessage
@@ -2284,7 +2585,9 @@ export type MainToRendererMessage =
   | UpdateDownloadedMessage
   | WindowFocusChangedMessage
   | NotificationFocusSessionMessage
-  | RelayEventMessage;
+  | RelayEventMessage
+  | VoiceResultMessage
+  | VoiceDownloadProgressMessage;
 
 /* ── Integrated terminal (xterm.js + node-pty) ──
  *  PTY processes live in main. Renderer only sees opaque terminalIds and
@@ -2744,6 +3047,29 @@ export interface RpcMap {
   "setting.get": (input: GetSettingInput) => Promise<{ value: string | null }>;
   "setting.set": (input: SetSettingInput) => Promise<void>;
   "setting.getMany": (input: GetManySettingsInput) => Promise<GetManySettingsResult>;
+  // Voice input
+  "voice.start": (input: VoiceStartInput) => Promise<void>;
+  "voice.feed": (input: VoiceFeedInput) => Promise<void>;
+  "voice.stop": (input: VoiceStopInput) => Promise<VoiceStopResult>;
+  "voice.cancel": (input: VoiceCancelInput) => Promise<void>;
+  /** List the model catalog + downloaded models + active selection. */
+  "voice.modelList": () => Promise<VoiceModelListResult>;
+  /** Begin downloading a catalog model. Returns immediately; progress arrives
+   *  on the `voice:downloadProgress` push. */
+  "voice.downloadModel": (input: VoiceDownloadModelInput) => Promise<void>;
+  /** Cancel an in-flight model download (no-op if none). */
+  "voice.cancelModelDownload": (input: VoiceDownloadModelInput) => Promise<void>;
+  /** Persist the active voice model selection for the composer mic button. */
+  "voice.selectModel": (input: VoiceDownloadModelInput) => Promise<void>;
+  /** Delete a downloaded model's local files (the active selection is
+   *  re-pointed at another downloaded model, or cleared). */
+  "voice.removeModel": (input: VoiceDownloadModelInput) => Promise<void>;
+  /** Read the current effective voice model root (custom or default). */
+  "voice.getModelDir": (input: GetVoiceModelDirInput) => Promise<GetVoiceModelDirResult>;
+  /** Change the voice model root directory. Empty string = default. The new
+   *  path is scanned; already-present catalog models appear as "downloaded"
+   *  in the returned list, no re-download required. */
+  "voice.setModelDir": (input: SetVoiceModelDirInput) => Promise<SetVoiceModelDirResult>;
   // Notifications
   /** Get the user's notification preferences (typed wrapper over settings). */
   "notification.getPrefs": () => Promise<{ prefs: NotificationPrefs }>;
@@ -3078,6 +3404,29 @@ export const IPC = {
   SETTING_GET: "setting:get",
   SETTING_SET: "setting:set",
   SETTING_GET_MANY: "setting:getMany",
+  // Voice input
+  VOICE_START: "voice:start",
+  VOICE_FEED: "voice:feed",
+  VOICE_STOP: "voice:stop",
+  VOICE_CANCEL: "voice:cancel",
+  /** Main → renderer push for live ASR results. */
+  VOICE_RESULT: "voice:result",
+  /** List catalog + downloaded models + active selection. */
+  VOICE_MODEL_LIST: "voice:modelList",
+  /** Begin downloading a catalog model. */
+  VOICE_DOWNLOAD_MODEL: "voice:downloadModel",
+  /** Cancel an in-flight model download. */
+  VOICE_CANCEL_MODEL_DOWNLOAD: "voice:cancelModelDownload",
+  /** Select a downloaded model as the active voice model. */
+  VOICE_SELECT_MODEL: "voice:selectModel",
+  /** Delete a downloaded model's local files. */
+  VOICE_REMOVE_MODEL: "voice:removeModel",
+  /** Read the current voice model root directory. */
+  VOICE_GET_MODEL_DIR: "voice:getModelDir",
+  /** Change the voice model root directory (or reset to default). */
+  VOICE_SET_MODEL_DIR: "voice:setModelDir",
+  /** Main → renderer push for model download progress. */
+  VOICE_DOWNLOAD_PROGRESS: "voice:downloadProgress",
   // Notifications
   NOTIFICATION_GET_PREFS: "notification:getPrefs",
   NOTIFICATION_SET_PREFS: "notification:setPrefs",

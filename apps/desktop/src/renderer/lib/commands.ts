@@ -34,6 +34,7 @@ import type { TablerIconProps } from "@renderer/lib/icons.js";
 import { api } from "@renderer/lib/api.js";
 import { isMac } from "@renderer/lib/platform.js";
 import { DEFAULT_SHORTCUTS } from "@renderer/lib/shortcuts.js";
+import { voiceHandleFor } from "@renderer/lib/voiceController.js";
 import { translate, type MessageId } from "@renderer/lib/i18n/core.js";
 import {
   IconPlus,
@@ -58,6 +59,7 @@ import {
   IconFocus,
   IconArrowLeft,
   IconArrowRight,
+  IconMicrophone,
 } from "@renderer/lib/icons.js";
 
 /** Visual grouping label shown as a section header in the palette. */
@@ -144,6 +146,27 @@ const STATIC_COMMANDS: StaticCommandDef[] = [
       if (s.activeSessionId) s.closeTab(s.activeSessionId);
     },
     available: (s) => s.displayMode === "tabs" && s.openTabs.length > 0,
+  },
+  {
+    id: "voice.dictation",
+    labelKey: "lib.commands.voiceDictation",
+    group: "会话",
+    keywords: ["voice", "dictation", "mic", "speech", "asr", "语音", "听写", "说话", "麦克风"],
+    icon: IconMicrophone,
+    defaultAccelerator: DEFAULT_SHORTCUTS["voice.dictation"],
+    available: (s) => s.activeSessionId !== null,
+    // Press to start, press again to stop. The chord ADAPTS to the mic mode:
+    // in push-to-talk the global keyup listener (useGlobalShortcuts) also
+    // stops on release, so holding the chord = holding the talk button; in
+    // continuous mode keyup does nothing and only the toggle applies.
+    perform: (s) => {
+      const sid = s.activeSessionId;
+      if (!sid) return;
+      const h = voiceHandleFor(sid);
+      if (!h) return;
+      if (h.isBusy()) void h.stopListen();
+      else void h.startListen();
+    },
   },
 
   // ── 视图 ──
@@ -274,7 +297,7 @@ const STATIC_COMMANDS: StaticCommandDef[] = [
     keywords: ["left", "sidebar", "toggle", "左侧", "侧栏"],
     icon: IconLayoutSidebarLeftExpand,
     defaultAccelerator: DEFAULT_SHORTCUTS["layout.toggle-left"],
-    // Hidden while wide-panel (2:8) mode is on: the left sidebar is locked
+    // Hidden while wide-panel (3:7) mode is on: the left sidebar is locked
     // closed there and must not be reopened via palette/shortcut.
     available: (s) => !s.widePanelOpen,
     perform: (s) => {
@@ -322,11 +345,11 @@ const STATIC_COMMANDS: StaticCommandDef[] = [
     id: "layout.toggle-wide-panel",
     labelKey: "lib.commands.toggleWide",
     group: "布局",
-    keywords: ["wide", "panel", "fullscreen", "width", "宽屏", "全屏", "2:8", "右栏"],
+    keywords: ["wide", "panel", "fullscreen", "width", "宽屏", "全屏", "3:7", "右栏"],
     icon: IconArrowsMaximize,
     defaultAccelerator: DEFAULT_SHORTCUTS["layout.toggle-wide-panel"],
     perform: (s) => {
-      // 2:8 layout: hide the left sidebar + center editor and show the chat
+      // 3:7 layout: hide the left sidebar + center editor and show the chat
       // column + full right panel. Entering snapshots the layout for restore on
       // exit; the right panel keeps its current tab.
       s.setWidePanelOpen(!s.widePanelOpen);

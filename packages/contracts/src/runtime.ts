@@ -635,6 +635,11 @@ export interface UserMessageEvent {
    *  renderer's Block union lives in the store; receivers cast on ingest,
    *  mirroring how persisted message content is trusted on reload. */
   blocks: unknown[];
+  /** Set when this send is an EDIT of an earlier user message: the id of the
+   *  message this new bubble replaces. Receiving clients truncate their own
+   *  store (and their later persistence) at that message before appending,
+   *  so a stale pre-edit tail can't survive on another device. */
+  editedMessageId?: string;
 }
 
 /**

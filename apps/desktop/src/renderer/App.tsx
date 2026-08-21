@@ -15,6 +15,7 @@ import { SearchDialog } from "./components/ide/SearchDialog.js";
 import { ModelConfigPrompt } from "./components/chat/ModelConfigPrompt.js";
 import { BrowserPanel } from "./components/browser/BrowserPanel.js";
 import { Toaster } from "./components/layout/Toaster.js";
+import { VoiceListeningOverlay } from "./components/layout/VoiceListeningOverlay.js";
 import { useClaudeEvents } from "./hooks/useClaudeEvents.js";
 import { useGlobalShortcuts } from "./hooks/useGlobalShortcuts.js";
 import { useSessionStore } from "./stores/sessionStore.js";
@@ -150,7 +151,7 @@ export function App() {
 
   // Root row ref — measures the full window width so the left divider's px
   // drag delta can be converted into percentage points of that width (the
-  // sidebar share is percentage-based so the 2:8 split scales on resize).
+  // sidebar share is percentage-based so the 3:7 split scales on resize).
   const rootRef = useRef<HTMLDivElement>(null);
   // Convert a px drag delta into a percentage-point delta of the window
   // width. The divider sits to the RIGHT of the sidebar, so the sign flip
@@ -181,7 +182,7 @@ export function App() {
           workspace and settings views. */}
       <ModelConfigPrompt />
       <BrowserPanel mode="overlay" />
-      {/* Wide-mode plan dialog - mounts over the wide 2:8 workspace (fixed
+      {/* Wide-mode plan dialog - mounts over the wide 3:7 workspace (fixed
           overlay below the titlebar) when a plan tab is open. Mounted here
           beside the browser overlay so it covers both the chat and right
           columns. Renders null when not applicable. */}
@@ -233,7 +234,7 @@ export function App() {
         />
       )}
       {/*
-        Right column — the 8 of the 2:8 split: the toolbar (Titlebar) on top
+        Right column — the 7 of the 3:7 split: the toolbar (Titlebar) on top
         and the main panel below (center chat/editor pane + right IDE panel,
         plus the bottom terminal inside the center main).
       */}
@@ -318,6 +319,9 @@ export function App() {
       {/* Global toast stack - mounted at the root so it overlays everything.
           Renders null when empty. */}
       <Toaster />
+      {/* Global voice-dictation indicator - floats top-center while any
+          composer is listening. Renders null when idle. */}
+      <VoiceListeningOverlay />
     </div>
   );
 }
@@ -507,12 +511,12 @@ function ChatColumn() {
   return <ChatPane key={activeSessionId ?? "empty"} sessionId={activeSessionId} />;
 }
 
-/** Wide-panel (2:8) split — the chat column (2) on the left and the full
- *  right panel (8) on the right, shown while `widePanelOpen`. Replaces the
+/** Wide-panel (3:7) split — the chat column (3) on the left and the full
+ *  right panel (7) on the right, shown while `widePanelOpen`. Replaces the
  *  ThreePaneLayout center+right composition entirely: the left sidebar is
  *  hidden and the center editor column never renders here. The split is
  *  draggable (percentage-based, same pattern as the chat|editor split);
- *  double-click resets to the default 2:8. */
+ *  double-click resets to the default 3:7. */
 function WidePanelSplit() {
   const widePanelPct = useSessionStore((s) => s.widePanelPct);
   const rightOpen = useSessionStore((s) => s.rightOpen);
@@ -568,7 +572,7 @@ function WidePanelSplit() {
 }
 
 /** Wide-mode plan viewer: the PlanViewer as a fullscreen dialog overlay. The
- *  wide 2:8 layout has no editor column, so a plan tab (set via openPlanDrawer)
+ *  wide 3:7 layout has no editor column, so a plan tab (set via openPlanDrawer)
  *  would otherwise render nowhere. Mirrors the mobile shell's fullscreen plan
  *  viewer, but reuses the desktop PlanViewer as-is (edit mode, 待审阅 badge,
  *  approval-draft save). While open the embedded browser view is suppressed —

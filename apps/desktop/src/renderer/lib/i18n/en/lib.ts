@@ -17,6 +17,7 @@ export const en = {
   "lib.commands.navBack": "Editor: go back",
   "lib.commands.navForward": "Editor: go forward",
   "lib.commands.focusComposer": "Focus chat input",
+  "lib.commands.voiceDictation": "Voice input (hold to talk / tap to toggle)",
   "lib.commands.toggleLeft": "Toggle left sidebar",
   "lib.commands.toggleRight": "Toggle right sidebar",
   "lib.commands.toggleTerminal": "Toggle bottom terminal",

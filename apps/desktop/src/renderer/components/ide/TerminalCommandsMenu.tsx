@@ -29,9 +29,10 @@ const EMPTY: CustomCommand[] = [];
  * Commands are scoped per-project (see `customCommandsByProject` in the store).
  * When no project is active the menu is disabled.
  *
- * Mirrors the base-ui Menu styling of EffortDropdown / PermissionModeDropdown
- * so it reads as part of the same control family. Positioned side="top" so it
- * opens upward above the bottom terminal bar.
+ * Mirrors the base-ui Menu styling of the composer dropdowns
+ * (ModelDropdown / ComposerOptionsDropdown) so it reads as part of the same
+ * control family. Positioned side="top" so it opens upward above the bottom
+ * terminal bar.
  */
 export function TerminalCommandsMenu({
   onRun,

@@ -809,10 +809,12 @@ body,
   white-space: pre-wrap;
 }
 
-/* Placeholder: Tiptap uses :empty before any input. We mirror the old
-   textarea's muted placeholder color. Only shown when the editor is focused
-   and empty (avoids a flicker of placeholder on blur). */
-.composer-host .ProseMirror.is-empty.is-focused::before {
+/* Placeholder: shown whenever the doc is empty, focused or not — the
+   home-screen composer starts unfocused and the hint text must be visible
+   immediately. `is-empty` is toggled by ComposerEditor (syncEmptyClass);
+   Tiptap v3 doesn't add it and no Placeholder extension is installed, so
+   the class is the single source of truth for emptiness. */
+.composer-host .ProseMirror.is-empty::before {
   content: attr(data-placeholder);
   position: absolute;
   color: var(--color-content-subtle, rgb(var(--content-subtle)));

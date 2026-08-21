@@ -20,6 +20,7 @@ import {
   IconAdjustmentsHorizontal,
   IconCircleOff,
   IconArrowsExchange,
+  IconPlugConnected,
 } from "@renderer/lib/icons.js";
 import { SiClaude, SiGoogle } from "@renderer/lib/icons.js";
 import type {
@@ -192,7 +193,7 @@ function SecretInput({
 
 type TestState =
   | { status: "idle" }
-  | { status: "testing" }
+  | { status: "testing"; idx: number }
   | { status: "ok"; detail: string }
   | { status: "fail"; error: string };
 
@@ -211,8 +212,6 @@ interface ClaudeFormState {
   authToken: string;
   /** Flat model list — mirrors the Pi form's models array. */
   models: ClaudeModelFormState[];
-  /** Index of the model row the "测试连接" button probes. */
-  testIdx: number;
   disableNonEssentialTraffic: boolean;
   timeoutMs: string;
 }
@@ -229,7 +228,6 @@ function emptyClaudeForm(): ClaudeFormState {
     protocol: "anthropic",
     authToken: "",
     models: [],
-    testIdx: 0,
     disableNonEssentialTraffic: true,
     timeoutMs: "",
   };
@@ -244,7 +242,6 @@ function claudeFormFromConfig(m: CustomModelPublic): ClaudeFormState {
     protocol: m.protocol,
     authToken: "",
     models: m.models.map((e) => ({ id: e.id, supports1m: Boolean(e.supports1m) })),
-    testIdx: 0,
     disableNonEssentialTraffic: m.disableNonEssentialTraffic ?? true,
     timeoutMs: m.timeoutMs ? String(m.timeoutMs) : "",
   };
@@ -560,14 +557,14 @@ export function CustomModelsPanel() {
     }
   };
 
-  const runClaudeTest = async () => {
+  const runClaudeTest = async (idx: number) => {
     if (!claudeForm) return;
     const timeoutMs = claudeForm.timeoutMs.trim() ? Number(claudeForm.timeoutMs.trim()) : undefined;
     if (timeoutMs != null && (!Number.isFinite(timeoutMs) || timeoutMs <= 0)) {
       setError(t("settings.customModels.errTimeout"));
       return;
     }
-    const entry = claudeForm.models[Math.min(claudeForm.testIdx, claudeForm.models.length - 1)];
+    const entry = claudeForm.models[idx];
     const model = entry?.id.trim() ?? "";
     if (!claudeForm.baseUrl.trim() || !model) {
       setTest({ status: "fail", error: t("settings.customModels.errTestFields") });
@@ -583,7 +580,7 @@ export function CustomModelsPanel() {
       return;
     }
     setError(null);
-    setTest({ status: "testing" });
+    setTest({ status: "testing", idx });
     try {
       const result = await api.customModel.test({
         baseUrl: claudeForm.baseUrl.trim(),
@@ -743,7 +740,7 @@ export function CustomModelsPanel() {
         </aside>
 
         {/* ───────── Right: family-specific form ───────── */}
-        <div className="min-h-0 overflow-y-auto pr-1">
+        <div className="min-h-0 overflow-y-auto rounded-md border border-edge bg-surface/40 p-3">
           {selection?.kind === "claude" && claudeForm ? (
             <ClaudeProviderForm
               key={`claude:${claudeForm.id ?? "new"}`}
@@ -753,7 +750,7 @@ export function CustomModelsPanel() {
               saving={saving}
               error={error}
               revealToken={revealToken}
-              onTest={() => void runClaudeTest()}
+              onTest={(idx) => void runClaudeTest(idx)}
               onSave={() => void saveClaude()}
               onCancel={cancel}
               onDelete={claudeForm.id ? () => setPendingDelete({ kind: "claude", id: claudeForm.id! }) : undefined}
@@ -838,7 +835,7 @@ function ClaudeProviderForm({
   saving: boolean;
   error: string | null;
   revealToken: () => Promise<string | null>;
-  onTest: () => void;
+  onTest: (idx: number) => void;
   onSave: () => void;
   onCancel: () => void;
   onDelete?: () => void;
@@ -854,13 +851,8 @@ function ClaudeProviderForm({
   const updateModel = (idx: number, patch: Partial<ClaudeModelFormState>) =>
     setForm({ ...form, models: form.models.map((m, i) => (i === idx ? { ...m, ...patch } : m)) });
   const addModel = () => setForm({ ...form, models: [...form.models, emptyClaudeModel()] });
-  const removeModel = (idx: number) => {
-    setForm({
-      ...form,
-      models: form.models.filter((_, i) => i !== idx),
-      testIdx: Math.max(0, Math.min(form.testIdx >= idx ? form.testIdx - 1 : form.testIdx, form.models.length - 2)),
-    });
-  };
+  const removeModel = (idx: number) =>
+    setForm({ ...form, models: form.models.filter((_, i) => i !== idx) });
 
   return (
     <div className="space-y-2.5">
@@ -930,8 +922,8 @@ function ClaudeProviderForm({
       </div>
 
       {/* Models sub-list — flat rows mirroring the Pi form: model id + 1M
-          toggle + delete, plus a radio dot picking which row the connection
-          test probes. */}
+          toggle, with a per-row plug icon (next to delete) that fires the
+          connection test for that specific model. */}
       <div>
         <div className="mb-1 flex items-center justify-between">
           <span className="text-[0.7857em] font-medium text-content-muted">
@@ -948,25 +940,12 @@ function ClaudeProviderForm({
         )}
         <div className="space-y-1.5">
           {form.models.map((m, idx) => {
-            const isTest = form.testIdx === idx;
+            const testingThis = test.status === "testing" && test.idx === idx;
             return (
               <div
                 key={idx}
-                className="grid grid-cols-[20px_1fr_auto_auto] items-center gap-1.5 rounded border border-edge bg-surface/40 px-1.5 py-1"
+                className="grid grid-cols-[1fr_auto_auto_auto] items-center gap-1.5 rounded border border-edge bg-surface/40 px-1.5 py-1"
               >
-                <Tooltip.Root>
-                  <Tooltip.Trigger
-                    type="button"
-                    onClick={() => update("testIdx", idx)}
-                    className={cn(
-                      "flex h-3.5 w-3.5 items-center justify-center rounded-full text-[0.6428em] outline-none",
-                      isTest ? "bg-accent text-surface" : "bg-surface-hover text-content-subtle hover:bg-surface-muted",
-                    )}
-                  >
-                    <IconCheck size={8} className={isTest ? "opacity-100" : "opacity-0"} />
-                  </Tooltip.Trigger>
-                  <Tooltip.Portal><Tooltip.Positioner side="top"><Tooltip.Popup>{t("settings.customModels.testWithModel")}</Tooltip.Popup></Tooltip.Positioner></Tooltip.Portal>
-                </Tooltip.Root>
                 <Input
                   value={m.id}
                   onChange={(e) => updateModel(idx, { id: e.target.value })}
@@ -977,6 +956,15 @@ function ClaudeProviderForm({
                   <Switch checked={m.supports1m} onCheckedChange={(v) => updateModel(idx, { supports1m: v })} label={t("settings.customModels.supports1mLabel")} />
                   <span className="text-[0.6428em] text-content-muted">1M</span>
                 </label>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={() => onTest(idx)}
+                  disabled={test.status === "testing"}
+                  title={t("settings.customModels.testWithModel")}
+                >
+                  {testingThis ? <IconLoader2 size={12} className="animate-spin" /> : <IconPlugConnected size={12} />}
+                </Button>
                 <Button variant="ghost" size="icon" onClick={() => removeModel(idx)} title={t("settings.customModels.deleteModel")}>
                   <IconTrash size={12} />
                 </Button>
@@ -1008,17 +996,6 @@ function ClaudeProviderForm({
       {error && <div className="text-[0.7857em] text-danger">{error}</div>}
 
       <FormActions
-        left={
-          <Button variant="secondary" size="sm" onClick={onTest} disabled={test.status === "testing"}>
-            {test.status === "testing" ? t("settings.customModels.testing") : t("settings.customModels.testConnection")}
-          </Button>
-        }
-        testInfo={
-          <span className="truncate text-[0.7143em] text-content-subtle">
-            {t("settings.customModels.testInfoPrefix")}
-            {form.models[Math.min(form.testIdx, form.models.length - 1)]?.id.trim() || t("settings.customModels.testModelEmpty")}
-          </span>
-        }
         testStatus={test}
         onDelete={onDelete}
         onCancel={onCancel}
@@ -1213,8 +1190,6 @@ function PiProviderForm({
 /* ════════════════════════ shared action bar ════════════════════════ */
 
 function FormActions({
-  left,
-  testInfo,
   testStatus,
   onDelete,
   onCancel,
@@ -1222,8 +1197,6 @@ function FormActions({
   saving,
   isEdit,
 }: {
-  left?: React.ReactNode;
-  testInfo?: React.ReactNode;
   testStatus?: TestState;
   onDelete?: () => void;
   onCancel: () => void;
@@ -1234,8 +1207,6 @@ function FormActions({
   const { t } = useI18n();
   return (
     <div className="flex flex-wrap items-center gap-2 pt-1">
-      {left}
-      {testInfo}
       {testStatus?.status === "ok" && <span className="flex items-center gap-0.5 text-[0.7857em] text-accent"><IconCheck size={12} /> {testStatus.detail}</span>}
       {testStatus?.status === "fail" && <span className="truncate text-[0.7857em] text-danger">✗ {testStatus.error}</span>}
       <div className="flex-1" />

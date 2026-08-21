@@ -169,6 +169,11 @@ export {
   IconUsers,
   IconHelpCircle,
   IconQuestionMark,
+  // Voice input
+  IconMicrophone,
+  IconMicrophoneFilled,
+  IconMicrophoneOff,
+  IconCircleFilled,
   // Layout / window
   IconLayoutSidebarLeftExpand,
   IconLayoutSidebarRightExpand,
@@ -208,6 +213,7 @@ export {
   IconWorldSearch,
   // Connectivity / relay
   IconWifi,
+  IconPlugConnected,
   IconServer,
   IconSun,
   IconMoon,

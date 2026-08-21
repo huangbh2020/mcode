@@ -16,6 +16,7 @@ import {
   IconCode,
   IconInfoCircle,
   IconChartBar,
+  IconMicrophone,
   McpIcon,
   type TablerIconProps,
 } from "@renderer/lib/icons.js";
@@ -30,6 +31,7 @@ import { TerminalPanel } from "./TerminalPanel.js";
 import { BrowserPanel } from "./BrowserPanel.js";
 import { LspLanguagesPanel } from "./LspLanguagesPanel.js";
 import { NotificationsPanel } from "./NotificationsPanel.js";
+import { VoicePanel } from "./VoicePanel.js";
 import { UsagePanel } from "./UsagePanel.js";
 import { AboutPanel } from "./AboutPanel.js";
 
@@ -60,7 +62,7 @@ import { AboutPanel } from "./AboutPanel.js";
  * Note: the legacy “Claude CLI 路径” panel was removed - the Agent SDK bundles
  * its own claude binary, so an externally-configured path is no longer used.
  */
-type SectionId = "general" | "custom-models" | "skills" | "mcp" | "appearance" | "shortcuts" | "notifications" | "git" | "terminal" | "browser" | "lsp-languages" | "usage" | "about";
+type SectionId = "general" | "custom-models" | "skills" | "mcp" | "appearance" | "shortcuts" | "voice" | "notifications" | "git" | "terminal" | "browser" | "lsp-languages" | "usage" | "about";
 
 interface NavItem {
   id: SectionId;
@@ -80,6 +82,7 @@ const NAV_ITEMS: NavItem[] = [
   { id: "appearance", labelKey: "settings.nav.appearance", icon: IconPalette },
   { id: "custom-models", labelKey: "settings.nav.customModels", icon: IconRobot },
   { id: "shortcuts", labelKey: "settings.nav.shortcuts", icon: IconKeyboard },
+  { id: "voice", labelKey: "settings.nav.voice", icon: IconMicrophone },
   { id: "skills", labelKey: "settings.nav.skills", icon: IconSparkles },
   { id: "mcp", labelKey: "settings.nav.mcp", icon: McpIcon },
   { id: "notifications", labelKey: "settings.nav.notifications", icon: IconBell },
@@ -174,6 +177,7 @@ export function SettingsPage() {
           {active === "appearance" && <AppearancePanel />}
           {active === "custom-models" && <CustomModelsPanel />}
           {active === "shortcuts" && <ShortcutsPanel />}
+          {active === "voice" && <VoicePanel />}
           {active === "skills" && <SkillsPanel />}
           {active === "mcp" && <McpPanel />}
           {active === "notifications" && <NotificationsPanel />}

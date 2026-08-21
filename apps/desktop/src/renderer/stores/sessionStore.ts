@@ -31,6 +31,11 @@ import {
   UI_USER_MSG_COLOR_SETTING_KEY,
   UI_ACCENT_COLOR_SETTING_KEY,
   UI_RIGHT_PANEL_TAB_SETTING_KEY,
+  UI_VOICE_INPUT_MODE_SETTING_KEY,
+  UI_VOICE_LANG_SETTING_KEY,
+  UI_VOICE_ENGINE_SETTING_KEY,
+  UI_VOICE_MIC_PERMISSION_SETTING_KEY,
+  UI_VOICE_MODEL_DIR_SETTING_KEY,
   UI_IDE_OPEN_FILES_SETTING_KEY,
   UI_IDE_ACTIVE_FILE_SETTING_KEY,
   UI_IDE_EXPANDED_DIRS_SETTING_KEY,
@@ -58,6 +63,8 @@ import {
   type AutoArchiveConfig,
   type DisplayMode,
   type Locale,
+  type VoiceInputMode,
+  type VoiceEngine,
   type ChatDensity,
   type ProjectView,
   type ProjectGroupsMeta,
@@ -409,6 +416,32 @@ export interface PromptAttachment {
   filePath?: string;
 }
 
+/** Execution target picked in the plan-approval sheet's 执行方式 row.
+ *  "remodel" = end the blocked turn, rebind THIS session's model, fire the
+ *  plan as a fresh turn in the same thread (transcript context carries).
+ *  "newSession" = end the blocked turn and hand the plan to a brand-new
+ *  session (optionally another SDK) as its first prompt — context rebuilds
+ *  from the plan document. Approving in place is NOT part of this union; it
+ *  goes through submitPlanApproval. */
+export type PlanHandoffTarget =
+  | { kind: "remodel"; model: string; customModelId: string | null }
+  | { kind: "newSession"; providerId: string; model: string; customModelId: string | null };
+
+/** Compose the kickoff prompt that hands an approved plan to a (possibly
+ *  different) executor. The plan text is embedded verbatim (the staged editor
+ *  draft when one exists) because the receiving agent may have no transcript
+ *  access to it — for the new-session path this prompt is the ONLY context
+ *  that carries. Model-facing prompt text, deliberately NOT in the i18n
+ *  dictionaries (AGENTS.md: only UI chrome is translated). */
+function buildPlanKickoffPrompt(plan: string, feedback: string | undefined, sameThread: boolean): string {
+  const lead = sameThread
+    ? "下面的计划已经用户审批通过（可能经过编辑）。请在当前会话直接执行它，无需再次规划或征求确认："
+    : "下面的计划来自另一个会话，已经用户审批通过（可能经过编辑）。请在本会话执行它：先按计划中列出的文件快速核对现状，再按步骤执行，无需再次规划或征求确认。";
+  const parts = [lead, "", "<approved-plan>", plan, "</approved-plan>"];
+  if (feedback) parts.push("", `执行时注意：${feedback}`);
+  return parts.join("\n");
+}
+
 /** User-attached image payload shared by sendPrompt and the queue — already
  *  downsized to the SendTurn allowlist (base64 without the data: prefix). */
 export interface PromptImage {
@@ -578,6 +611,24 @@ export interface SessionState {
    *  `shouldPromoteToTag` in contentTag.ts via the composer's
    *  shouldPromotePaste prop. */
   pasteTagThresholdChars: number;
+  /** Default voice-input mode: "continuous" (click to start/stop dictation)
+   *  or "pushToTalk" (hold the mic to talk, release to stop). Persisted in
+   *  the `settings` table; the composer mic button reads it as its default
+   *  and can flip it per-use. */
+  voiceInputMode: VoiceInputMode;
+  /** Default speech-recognition language tag (e.g. "zh-CN" | "en-US"). */
+  voiceLang: string;
+  /** Preferred ASR engine ("zipformer" streaming | "parakeet" offline). Falls
+   *  back to zipformer when the chosen engine/model is unavailable. */
+  voiceEngine: VoiceEngine;
+  /** Cached mic-permission outcome: "granted" | "denied" | "". Empty until the
+   *  user first attempts voice input. Surfaces a clear "grant access" mic
+   *  state instead of a silent failure. */
+  voiceMicPermission: string;
+  /** Absolute path to the user-selected local ASR model directory (empty = not
+   *  configured). The app never downloads models — the user fetches the files
+   *  themselves and points Settings → 语音输入 → 模型目录 here. */
+  voiceModelDir: string;
   /** Custom user-message background color as an "R G B" triplet string
    *  (e.g. "124 58 237"), or null to use the theme default. Persisted in
    *  the `settings` table. Applied to <html> as --user-bubble. */
@@ -715,15 +766,15 @@ export interface SessionState {
    *  the workspace and the embedded WebContentsView is shown; false hides both.
    *  NOT persisted (pure in-memory, like the other layout flags). */
   browserPanelOpen: boolean;
-  /** Wide-panel (2:8) mode: hides the left sidebar + center editor so the
-   *  workspace shows only the chat column (2) and the full right panel (8).
+  /** Wide-panel (3:7) mode: hides the left sidebar + center editor so the
+   *  workspace shows only the chat column (3) and the full right panel (7).
    *  Toggled from the right-panel rail fullscreen button / command palette.
    *  While on, the left sidebar can't be opened. NOT persisted (transient,
    *  like the other layout flags); on exit the pre-enter layout state is
    *  restored from widePanelSnapshot. */
   widePanelOpen: boolean;
   /** Right-panel share (%) of the wide-panel chat|right split; the chat column
-   *  gets the remainder. Default 80 → the requested 2:8. Draggable via the
+   *  gets the remainder. Default 70 → the requested 3:7. Draggable via the
    *  split's Divider; double-click resets to the default. In-memory only. */
   widePanelPct: number;
   /** Layout state captured when wide-panel mode opened, restored on exit.
@@ -1049,7 +1100,7 @@ export interface SessionState {
   /** Fetch the next page of active sessions for a project and append it to
    *  `sessionsByProject[projectId]`. No-op when there are no more to load. */
   loadMoreSessions: (projectId: string) => Promise<void>;
-  startSession: (projectId?: string) => Promise<void>;
+  startSession: (projectId?: string, overrides?: { providerId?: string; model?: string; customModelId?: string | null }) => Promise<void>;
   /** Switch the active session (and load its history if not cached).
    *  Always replaces the center pane content. In `single` displayMode
    *  this is the only navigation primitive; in `tabs` mode it's used
@@ -1171,7 +1222,7 @@ export interface SessionState {
   setBottomTerminalOpen: (open: boolean) => void;
   /** Toggle the browser panel open/closed (direct set). NOT persisted. */
   setBrowserPanelOpen: (open: boolean) => void;
-  /** Enter/exit wide-panel (2:8) mode. Entering hides the left sidebar + closes
+  /** Enter/exit wide-panel (3:7) mode. Entering hides the left sidebar + closes
    *  any open browser overlay and snapshots the pre-enter layout; exiting
    *  restores leftOpen / rightOpen / rightWidth from that snapshot. */
   setWidePanelOpen: (open: boolean) => void;
@@ -1180,7 +1231,7 @@ export interface SessionState {
    *  column, so a right drag (positive delta) shrinks it — same sign convention
    *  as adjustEditorWidthPct. */
   adjustWidePanelPct: (deltaPx: number) => void;
-  /** Reset the wide-panel split to the default 2:8 (double-click on divider). */
+  /** Reset the wide-panel split to the default 3:7 (double-click on divider). */
   resetWidePanelPct: () => void;
   /** Set the browser device-toolbar visibility (DevTools-style bar under the
    *  address bar). NOT persisted. */
@@ -1274,6 +1325,17 @@ export interface SessionState {
   /** Update the paste-to-card threshold (clamped to 50–5000 chars). Persists
    *  to the `settings` table. */
   setPasteTagThresholdChars: (n: number) => Promise<void>;
+  /** Set the default voice-input mode (continuous | pushToTalk). Persists to
+   *  the `settings` table. */
+  setVoiceInputMode: (mode: VoiceInputMode) => Promise<void>;
+  /** Set the default speech-recognition language tag ("zh-CN" | "en-US"). */
+  setVoiceLang: (lang: string) => Promise<void>;
+  /** Set the preferred ASR engine ("zipformer" | "parakeet"). */
+  setVoiceEngine: (engine: VoiceEngine) => Promise<void>;
+  /** Cache the mic-permission outcome ("granted" | "denied" | ""). */
+  setVoiceMicPermission: (perm: string) => Promise<void>;
+  /** Set the user-selected local ASR model directory (absolute path). */
+  setVoiceModelDir: (dir: string) => Promise<void>;
   /** Update the user-message background color (R G B triplet, or null =
    *  theme default). Persists to the `settings` table. */
   setUserMessageColor: (rgb: string | null) => Promise<void>;
@@ -1335,6 +1397,16 @@ export interface SessionState {
    *  mode and the model can revise. On success the pending card clears;
    *  on IPC failure it stays so the user can retry. */
   submitPlanApproval: (requestId: string, approved: boolean, editedPlan?: string, reason?: string, feedback?: string) => Promise<void>;
+  /** Hand a pending plan approval to a different executor instead of
+   *  approving in place. "remodel" interrupts the blocked turn, rebinds this
+   *  session's model, and fires the plan as a fresh turn in the same thread;
+   *  "newSession" interrupts it and creates a new session (optionally another
+   *  SDK) seeded with the plan as its first prompt. The pending ExitPlanMode
+   *  dialog is never answered — the turn is aborted, so no request.resolved
+   *  event will arrive and the local pending state is cleared here. Must run
+   *  from the foreground tab (config-slot rebind + sendPrompt are
+   *  active-session scoped). */
+  handoffPlanApproval: (sessionId: string, requestId: string, target: PlanHandoffTarget, feedback?: string) => Promise<void>;
   /** Open a plan tab in the editor column for a session, showing the given
    *  plan markdown. Activates the plan tab (planTabActive = true). Called
    *  when the user clicks a plan card or a plan title in the activity
@@ -1790,11 +1862,12 @@ export function clampEditorWidthPct(pct: number): number {
   return Math.min(EDITOR_WIDTH_PCT_MAX, Math.max(EDITOR_WIDTH_PCT_MIN, pct));
 }
 /** Wide-panel split bounds. widePanelPct is the right panel's share of the
- *  chat|right split; DEFAULT 80 gives the requested 2:8. The bounds keep the
- *  chat column usable and the right panel dominant. In-memory (not persisted). */
+ *  chat|right split; DEFAULT 70 gives the requested 3:7. The bounds keep the
+ *  chat column usable (min 30% = the left panel's floor) and the right panel
+ *  dominant. In-memory (not persisted). */
 export const WIDE_PANEL_PCT_MIN = 40;
-export const WIDE_PANEL_PCT_MAX = 96;
-export const WIDE_PANEL_PCT_DEFAULT = 80;
+export const WIDE_PANEL_PCT_MAX = 70;
+export const WIDE_PANEL_PCT_DEFAULT = 70;
 
 /** Clamp helper for the wide-panel percentage. Falls back to the default on
  *  any non-finite value. */
@@ -3270,6 +3343,12 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   // Persisted in `settings` table; init() overwrites from the DB. Default
   // 200 mirrors the previous hardcoded TAG_THRESHOLD_CHARS in contentTag.ts.
   pasteTagThresholdChars: 200,
+  // Default voice input: continuous dictation, Chinese, streaming zipformer.
+  voiceInputMode: "continuous" as const,
+  voiceLang: "zh-CN",
+  voiceEngine: "zipformer" as const,
+  voiceMicPermission: "",
+  voiceModelDir: "",
   userMessageColor: null,
   accentColor: null,
   shortcutOverrides: {},
@@ -3302,7 +3381,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   bottomTerminalOpen: false,
   // Browser panel overlay - closed by default. NOT persisted.
   browserPanelOpen: false,
-  // Wide-panel (2:8) mode - off by default; transient like browserPanelOpen.
+  // Wide-panel (3:7) mode - off by default; transient like browserPanelOpen.
   widePanelOpen: false,
   widePanelPct: WIDE_PANEL_PCT_DEFAULT,
   widePanelSnapshot: null,
@@ -3730,6 +3809,11 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           UI_TITLE_GEN_MODEL_SETTING_KEY,
           UI_GIT_COLLAPSED_REPOS_SETTING_KEY,
           UI_PASTE_TAG_THRESHOLD_CHARS_SETTING_KEY,
+          UI_VOICE_INPUT_MODE_SETTING_KEY,
+          UI_VOICE_LANG_SETTING_KEY,
+          UI_VOICE_ENGINE_SETTING_KEY,
+          UI_VOICE_MIC_PERMISSION_SETTING_KEY,
+          UI_VOICE_MODEL_DIR_SETTING_KEY,
           AUTO_ARCHIVE_SETTING_KEY,
         ],
       })
@@ -3755,6 +3839,22 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       if (colorRaw && RGB_TRIPLET_RE.test(colorRaw)) set({ userMessageColor: colorRaw });
       const accentRaw = ds[UI_ACCENT_COLOR_SETTING_KEY];
       if (accentRaw && RGB_TRIPLET_RE.test(accentRaw)) set({ accentColor: accentRaw });
+      // Voice-input prefs. Validate against the schemas so a corrupt row can't
+      // crash the store; keep defaults otherwise.
+      const voiceModeRaw = ds[UI_VOICE_INPUT_MODE_SETTING_KEY];
+      if (voiceModeRaw === "continuous" || voiceModeRaw === "pushToTalk") {
+        set({ voiceInputMode: voiceModeRaw });
+      }
+      const voiceLangRaw = ds[UI_VOICE_LANG_SETTING_KEY];
+      if (voiceLangRaw && voiceLangRaw.length <= 20) set({ voiceLang: voiceLangRaw });
+      const voiceEngineRaw = ds[UI_VOICE_ENGINE_SETTING_KEY];
+      if (voiceEngineRaw === "zipformer" || voiceEngineRaw === "parakeet") {
+        set({ voiceEngine: voiceEngineRaw });
+      }
+      const voiceMicRaw = ds[UI_VOICE_MIC_PERMISSION_SETTING_KEY];
+      if (voiceMicRaw === "granted" || voiceMicRaw === "denied") set({ voiceMicPermission: voiceMicRaw });
+      const voiceModelDirRaw = ds[UI_VOICE_MODEL_DIR_SETTING_KEY];
+      if (voiceModelDirRaw) set({ voiceModelDir: voiceModelDirRaw });
       // Shortcut overrides — parsed from the ui.shortcuts JSON blob.
       // safeParse rejects malformed blobs so a corrupt row can't crash the
       // store; on failure we keep the empty default (all defaults apply).
@@ -3782,7 +3882,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         const patch: Partial<SessionState> = {};
         if (parsed && typeof parsed === "object") {
           // Only `leftPct` is read — the legacy `left` (px) field from the old
-          // fixed-width layout is deliberately dropped; the redesigned 2:8
+          // fixed-width layout is deliberately dropped; the redesigned 3:7
           // layout starts everyone at the percentage default.
           if (Number.isFinite(parsed.leftPct)) patch.leftWidthPct = clampLeftWidthPct(parsed.leftPct!);
           if (Number.isFinite(parsed.right)) patch.rightWidth = clampRightWidth(parsed.right!);
@@ -4039,16 +4139,21 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     });
   },
 
-  startSession: async (projectIdArg) => {
+  startSession: async (projectIdArg, overrides) => {
     const projectId = projectIdArg ?? get().activeProjectId;
     if (!projectId) return;
+    // `overrides` (plan handoff) replaces the composer-slot defaults for this
+    // creation only — the slots themselves are re-synced from the new session
+    // row below, so the foreground chips match the thread the user lands on.
+    const model = overrides?.model ?? get().model;
     const { session } = await api.claude.startSession({
       projectId,
-      providerId: get().providerId,
-      model: get().model !== "default" ? get().model : undefined,
+      providerId: overrides?.providerId ?? get().providerId,
+      model: model !== "default" ? model : undefined,
       effort: get().effort,
       permissionMode: get().permissionMode,
-      customModelId: get().customModelId,
+      customModelId:
+        overrides?.customModelId !== undefined ? overrides.customModelId : get().customModelId,
     });
     set((s) => {
       const prevList = s.sessionsByProject[projectId] ?? [];
@@ -4061,10 +4166,19 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       // renders but can't cleanly target for delete ("新建会话 生成了两个、删不掉一个").
       // Upsert instead: merge over an existing row, else prepend; and only bump
       // the total when the row is genuinely new (the event reducer already
-      // counted it in that case).
+      // counted it in that case). The merge HOISTS the row to the head: a
+      // brand-new row has the newest `updated_at`, and a REUSED fresh row
+      // (createOrReuseSession bumps an existing "New session" row instead of
+      // creating another) may sit mid-list — leaving it there would contradict
+      // the updated_at-desc order a fresh fetch would show.
       const exists = prevList.some((x) => x.id === session.id);
       const upserted = exists
-        ? prevList.map((x) => (x.id === session.id ? { ...x, ...session } : x))
+        ? [
+            // Merge over the cached row so heavy fields the slim `session`
+            // payload lacks (contextSnapshot / turnFiles / …) survive.
+            { ...(prevList.find((x) => x.id === session.id) as Session), ...session },
+            ...prevList.filter((x) => x.id !== session.id),
+          ]
         : [session, ...prevList];
       // New sessions are never pinned — the active list holds unpinned rows
       // only (pinned ones live in the global pinned bucket), and a new
@@ -4108,6 +4222,11 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         centerTabFocus: "chat" as const,
       };
     });
+    // With explicit overrides the new row's config differs from the composer
+    // slots — re-sync so the chips reflect the session the user just landed
+    // on. Skipped in the normal path (slots were the row's source anyway) to
+    // keep that behavior untouched.
+    if (overrides) syncConfigFromSession(set, get, session.id);
   },
 
   /** Activate an existing session and load its persisted history.
@@ -4969,7 +5088,16 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           // Cross-client echo (same as sendPrompt): other clients append the
           // re-sent bubble by id. Their stale pre-edit tail is a separate
           // cross-client sync concern; this at least surfaces the new prompt.
-          userMessage: { id: userMsg.id, createdAt: userMsg.createdAt, blocks: userMsg.blocks },
+          userMessage: {
+            id: userMsg.id,
+            createdAt: userMsg.createdAt,
+            blocks: userMsg.blocks,
+            // Edit marker: other connected clients truncate their own stale
+            // pre-edit tail at THIS message before appending, so the old
+            // message (and its old reply) don't survive on their screens or
+            // get re-persisted into the DB at their turn.done.
+            editedMessageId: messageId,
+          },
         }));
       } catch (err) {
         console.error("editAndResendMessage: sendTurn IPC failed:", err);
@@ -5183,8 +5311,23 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       bumpUnread();
       set((s) => {
         const list = s.messagesBySession[sid] ?? EMPTY_MESSAGES;
-        // Originator's own echo (id already present) — nothing to append.
+        // Originator's own echo (id already present) — nothing to append (the
+        // originator already truncated + optimistically appended at edit time).
         if (list.some((m) => m.id === e.messageId)) return s;
+        // Cross-client EDIT (e.g. edited on the phone, echoed here): drop the
+        // stale pre-edit tail — the message being replaced and everything
+        // after it — BEFORE appending the re-sent bubble. Without this, a
+        // second connected device keeps the old message + its old reply in
+        // memory, shows them live, and at its own turn.done re-persists that
+        // stale tail into the DB, resurrecting rows the originator truncated
+        // away (a later re-open then shows duplicates). Receivers that don't
+        // have the edited message (already truncated / not loaded) fall back
+        // to a plain append.
+        let base = list;
+        if (e.editedMessageId) {
+          const idx = base.findIndex((m) => m.id === e.editedMessageId);
+          if (idx !== -1) base = base.slice(0, idx);
+        }
         const msg: ChatMessage = {
           id: e.messageId,
           sessionId: sid,
@@ -5194,7 +5337,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           blocks: e.blocks as Block[],
           createdAt: e.createdAt,
         };
-        return { messagesBySession: { ...s.messagesBySession, [sid]: [...list, msg] } };
+        return { messagesBySession: { ...s.messagesBySession, [sid]: [...base, msg] } };
       });
       return;
     }
@@ -6093,7 +6236,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   setCommandPaletteOpen: (open) => set({ commandPaletteOpen: open }),
   setSearchDialogOpen: (open) => set({ searchDialogOpen: open }),
   setLeftOpen: (open) => {
-    // While wide-panel (2:8) mode is on the left sidebar must stay closed —
+    // While wide-panel (3:7) mode is on the left sidebar must stay closed —
     // guard in the store so no caller/command can open it.
     if (open && get().widePanelOpen) return;
     set({ leftOpen: open });
@@ -6461,6 +6604,51 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       });
     } catch (err) {
       console.error("setting.set(pasteTagThresholdChars) failed:", err);
+    }
+  },
+
+  setVoiceInputMode: async (mode) => {
+    set({ voiceInputMode: mode });
+    try {
+      await api.setting.set({ key: UI_VOICE_INPUT_MODE_SETTING_KEY, value: mode });
+    } catch (err) {
+      console.error("setting.set(voiceInputMode) failed:", err);
+    }
+  },
+
+  setVoiceLang: async (lang) => {
+    set({ voiceLang: lang });
+    try {
+      await api.setting.set({ key: UI_VOICE_LANG_SETTING_KEY, value: lang });
+    } catch (err) {
+      console.error("setting.set(voiceLang) failed:", err);
+    }
+  },
+
+  setVoiceEngine: async (engine) => {
+    set({ voiceEngine: engine });
+    try {
+      await api.setting.set({ key: UI_VOICE_ENGINE_SETTING_KEY, value: engine });
+    } catch (err) {
+      console.error("setting.set(voiceEngine) failed:", err);
+    }
+  },
+
+  setVoiceMicPermission: async (perm) => {
+    set({ voiceMicPermission: perm });
+    try {
+      await api.setting.set({ key: UI_VOICE_MIC_PERMISSION_SETTING_KEY, value: perm });
+    } catch (err) {
+      console.error("setting.set(voiceMicPermission) failed:", err);
+    }
+  },
+
+  setVoiceModelDir: async (dir) => {
+    set({ voiceModelDir: dir });
+    try {
+      await api.setting.set({ key: UI_VOICE_MODEL_DIR_SETTING_KEY, value: dir });
+    } catch (err) {
+      console.error("setting.set(voiceModelDir) failed:", err);
     }
   },
 
@@ -6906,6 +7094,105 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       });
     } catch (err) {
       console.error("claude.respondPlanApproval failed:", err);
+    }
+  },
+
+  handoffPlanApproval: async (sessionId, requestId, target, feedback) => {
+    const s0 = get();
+    const pending = s0.pendingPlanApprovalBySession[sessionId];
+    if (!pending || pending.requestId !== requestId) return;
+    // The flows below rebind the ACTIVE session's config slots and sendPrompt
+    // is active-session scoped — the handoff must run from the foreground tab
+    // that owns this approval sheet.
+    if (sessionId !== s0.activeSessionId) return;
+    // Prefer the staged editor draft (PlanViewer edits): unlike a plain
+    // approve it is NOT delivered through the ExitPlanMode dialog, so the
+    // kickoff prompt is its only carrier to the executing agent.
+    const planText = s0.planApprovalDraftBySession[sessionId] ?? pending.plan;
+    const fb = feedback?.trim() ? feedback.trim() : undefined;
+    // Capture the turn anchor BEFORE interrupt() wipes it, so the badge-flip
+    // below lands on the same live plan block the sheet was showing.
+    const anchor = s0.runningTurnStartedAt[sessionId] ?? Date.now();
+
+    // End the blocked turn WITHOUT answering the ExitPlanMode dialog: the
+    // abort means no request.resolved will ever arrive, so clear the local
+    // pending state here (mirrors submitPlanApproval's cleanup — sheet gone,
+    // 待审阅 badge dropped, staged draft released).
+    await get().interrupt(sessionId);
+    set((s) => {
+      const { [sessionId]: _drop, ...rest } = s.pendingPlanApprovalBySession;
+      const { [sessionId]: _dropDraft, ...restDrafts } = s.planApprovalDraftBySession;
+      const list = s.messagesBySession[sessionId] ?? EMPTY_MESSAGES;
+      const next = upsertLivePlanBlock(list, planText, "ready", false, anchor);
+      return {
+        pendingPlanApprovalBySession: rest,
+        planApprovalDraftBySession: restDrafts,
+        messagesBySession: next === list
+          ? s.messagesBySession
+          : { ...s.messagesBySession, [sessionId]: next },
+      };
+    });
+
+    const kickoff = buildPlanKickoffPrompt(planText, fb, target.kind === "remodel");
+    if (target.kind === "remodel") {
+      // Rebind this session's model in ONE patch. Going through the existing
+      // setters is a poor fit: setCustomModel(null, id) resets model to
+      // "default" (its null branch ignores the id), and setModel alone would
+      // leave a stale customModelId behind — two fire-and-forget
+      // updateSettings calls could also race. The inline patch avoids all
+      // three and lands a single IPC.
+      set((s) => ({
+        model: target.model,
+        customModelId: target.customModelId,
+        lastModelByProvider: {
+          ...s.lastModelByProvider,
+          [s.providerId]: { model: target.model, customModelId: target.customModelId },
+        },
+      }));
+      void api.session
+        .updateSettings({ sessionId, model: target.model, customModelId: target.customModelId })
+        .catch((err) => {
+          console.error("updateSettings(plan handoff remodel) failed:", err);
+        });
+      persistComposerSelection(get());
+      // Fresh turn in the SAME thread: transcript context carries via resume,
+      // only the model changed. interrupt() already cleared the running flag,
+      // and sendPrompt clears the interrupt sentinel itself.
+      void get().sendPrompt(kickoff);
+      return;
+    }
+    // newSession: same project as the planning thread, executor chosen in the
+    // sheet. The kickoff rides the per-session prompt queue so the existing
+    // send-model guard + busy-check apply (it fires the moment the new tab
+    // is idle — which a brand-new session always is).
+    const sess = findSession(
+      get().sessionsByProject,
+      get().archivedSessionsByProject,
+      get().pinnedSessions,
+      sessionId,
+    );
+    const projectId = sess?.projectId ?? get().activeProjectId;
+    // No resolvable project → nothing to create (startSession would no-op
+    // anyway); the newSid guard below keeps the enqueue from misfiring.
+    if (projectId) {
+      try {
+        await get().startSession(projectId, {
+          providerId: target.providerId,
+          model: target.model,
+          customModelId: target.customModelId,
+        });
+      } catch (err) {
+        // The planning thread is already interrupted + cleaned up; log and
+        // stop here rather than surfacing an unhandled rejection (the user
+        // can still send the kickoff manually if they want).
+        console.error("plan handoff: startSession failed:", err);
+        return;
+      }
+    }
+    const newSid = get().activeSessionId;
+    if (newSid && newSid !== sessionId) {
+      get().enqueuePrompt(newSid, { prompt: kickoff, displayText: kickoff });
+      get().drainPromptQueueIfIdle(newSid);
     }
   },
 

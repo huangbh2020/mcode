@@ -25,7 +25,7 @@ import { useSuppressBrowserView } from "@renderer/hooks/useSuppressBrowserView.j
  *   - built-in alias → customModelId=null, model=<alias id>
  *   - custom model   → customModelId=<cfg id>, model=<one of cfg.models[].id>
  *
- * Built on @base-ui/react/menu like EffortDropdown: the popup renders through
+ * Built on @base-ui/react/menu: the popup renders through
  * Menu.Portal (document.body), so it isn't clipped by the composer card's
  * overflow-hidden. Config rows with models open a nested submenu.
  */

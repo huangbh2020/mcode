@@ -73,7 +73,7 @@ export const zh = {
   "layout.backToWorkspace": "返回工作区",
   "layout.backToWorkbench": "返回工作台",
   "layout.exitWideMode": "退出宽屏模式",
-  "layout.wideMode": "宽屏模式 (聊天+面板 2:8)",
+  "layout.wideMode": "宽屏模式 (聊天+面板 3:7)",
   "layout.showLeftPanel": "显示左侧面板",
   "layout.hideLeftPanel": "隐藏左侧面板",
   "layout.showRightPanel": "显示右侧面板",

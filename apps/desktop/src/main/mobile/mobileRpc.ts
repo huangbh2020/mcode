@@ -53,7 +53,6 @@ import {
   GetSettingSchema,
   SetSettingSchema,
   GetManySettingsSchema,
-  DEFAULT_PROVIDER_ID,
 } from "@contracts/ipc";
 import type {
   SaveMessagesInput,
@@ -61,13 +60,12 @@ import type {
   TruncateAndInsertMessagesInput,
 } from "@contracts/ipc";
 import type { PairedDevice, MobileRpcRequest } from "@contracts/mobile";
-import { uid } from "@main/utils.js";
 import { SessionRepo, ProjectRepo, MessageRepo, SettingRepo } from "@main/store/repositories.js";
 import { providerRegistry } from "@main/providers/registry.js";
 import { runtimeManager } from "@main/claude/RuntimeManager.js";
-import type { Session } from "@contracts/session";
 import { log } from "@main/lib/logger.js";
 import { broadcastSessionChanged, broadcastSessionDeleted } from "@main/lib/sessionSync.js";
+import { createOrReuseSession } from "@main/lib/sessionStart.js";
 import { CustomModelStore } from "@main/lib/secretStore.js";
 import { listAvailablePiModels } from "@main/ipc/piModels.js";
 import { listSkillsForProject, readSkillForProject } from "@main/ipc/skills.js";
@@ -207,35 +205,10 @@ const HANDLERS: Record<string, RpcHandler> = {
   // ── Session lifecycle / turns ───────────────────────────────────────────
   "claude:startSession": (raw) => {
     const input = StartSessionSchema.parse(raw);
-    const now = Date.now();
-    const session: Session = {
-      id: uid("sess_"),
-      projectId: input.projectId,
-      providerId: input.providerId ?? DEFAULT_PROVIDER_ID,
-      claudeSessionId: null,
-      title: input.title ?? "New session",
-      status: "idle",
-      model: input.model ?? "default",
-      effort: input.effort,
-      permissionMode: input.permissionMode,
-      customModelId: input.customModelId ?? null,
-      archived: false,
-      pinnedAt: null,
-      contextSnapshot: null,
-      todos: null,
-      subagents: null,
-      planDraft: null,
-      turnFiles: null,
-      usageHistory: null,
-      createdAt: now,
-      updatedAt: now,
-    };
-    SessionRepo.create(session);
-    runtimeManager.bindSession(session);
-    // Push the new row to every client (desktop renderer included) so their
-    // session lists stay in sync with the phone.
-    broadcastSessionChanged(session);
-    log.info(`mobile: session started (${session.id}) by ${input.providerId ?? DEFAULT_PROVIDER_ID}`);
+    // Same create-or-reuse semantics as the desktop IPC — the phone's "new
+    // session" tap also floats the project's fresh row instead of stacking
+    // empty ones.
+    const { session } = createOrReuseSession(input, "mobile");
     return { session };
   },
 

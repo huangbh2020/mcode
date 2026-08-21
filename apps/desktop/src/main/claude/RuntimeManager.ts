@@ -283,8 +283,15 @@ class RuntimeManager {
        *  blocks). Echoed to every client as a `user.message` RuntimeEvent so
        *  a prompt typed on one device (phone ⇄ PC) renders on the others in
        *  real time; the originator dedupes by id (it appended optimistically
-       *  at send). Absent for callers that predate the field — no echo. */
-      userMessage?: { id: string; createdAt: number; blocks: unknown[] };
+       *  at send). Absent for callers that predate the field — no echo.
+       *  `editedMessageId`, when set, marks this as an EDIT and lets the other
+       *  clients truncate their own stale tail at that message. */
+      userMessage?: {
+        id: string;
+        createdAt: number;
+        blocks: unknown[];
+        editedMessageId?: string;
+      };
     },
   ): Promise<void> {
     const rt = this.sessions.get(session.id);
@@ -403,6 +410,9 @@ class RuntimeManager {
         messageId: input.userMessage.id,
         createdAt: input.userMessage.createdAt,
         blocks: input.userMessage.blocks,
+        // Edit marker: receiving clients truncate their stale tail at this
+        // message before appending (see store ingestEvent).
+        editedMessageId: input.userMessage.editedMessageId,
       } satisfies UserMessageEvent);
     }
 
