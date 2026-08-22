@@ -201,6 +201,17 @@ export function useVoiceInput(options: UseVoiceInputOptions = {}): UseVoiceInput
       const sessionId = `voice_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
       sessionIdRef.current = sessionId;
 
+      // Secure-context pre-check: browsers withhold `navigator.mediaDevices`
+      // entirely on plain-HTTP origins (the mobile shell's LAN/relay server),
+      // which would surface as an opaque TypeError below. Bail into the same
+      // micError path the permission denial uses. (English on purpose — the
+      // string only feeds MicButton's error classification, never the UI.)
+      if (!navigator.mediaDevices?.getUserMedia) {
+        setMicError("microphone unavailable (insecure context or no device)");
+        sessionIdRef.current = null;
+        return;
+      }
+
       // Kick off the engine session and the mic acquisition CONCURRENTLY —
       // they're independent, so the click-to-capture dead time is the slower
       // leg instead of the sum (saves the full getUserMedia round-trip).
@@ -286,6 +297,24 @@ export function useVoiceInput(options: UseVoiceInputOptions = {}): UseVoiceInput
       }
 
       setBusy(true);
+    } catch (err) {
+      // Unexpected SYNCHRONOUS throws (api-layer stubs in non-Electron
+      // bundles, a rejecting `ctx.resume()`, …) would otherwise escape the
+      // try — rejecting start() past MicButton's arm() and leaving the button
+      // stuck "listening" with no capture behind it. Funnel them into the
+      // micError path and tear down whatever this attempt opened.
+      if (!stale()) setMicError(String((err as Error)?.message ?? err));
+      streamRef.current?.getTracks().forEach((t) => t.stop());
+      streamRef.current = null;
+      void ctxRef.current?.close().catch(() => {});
+      ctxRef.current = null;
+      pendingRef.current = null;
+      // Only cancel the engine session when this attempt still owns the
+      // token — a stale start must not kill a newer listen's session.
+      if (!stale() && sessionIdRef.current) {
+        void api.voice.cancel({ sessionId: sessionIdRef.current }).catch(() => {});
+        sessionIdRef.current = null;
+      }
     } finally {
       startingRef.current = false;
     }

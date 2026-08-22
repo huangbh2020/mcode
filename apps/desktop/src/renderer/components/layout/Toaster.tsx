@@ -84,8 +84,11 @@ export function Toaster() {
 
   if (toasts.length === 0) return null;
 
+  // Positioning (fixed bottom-right) is owned by the shared corner container
+  // in App.tsx so this stack and the update notification card lay out in one
+  // column instead of overlapping each other.
   return (
-    <div className="pointer-events-none fixed bottom-4 right-4 z-[9999] flex flex-col items-end gap-2">
+    <div className="flex flex-col items-end gap-2">
       {toasts.map((t) => (
         <ToastCard key={t.id} toast={t} />
       ))}

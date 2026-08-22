@@ -138,6 +138,17 @@ export const en = {
   "settings.about.restartInstall": "Restart & install",
   "settings.about.checkFailed": "Update check failed: {message}",
 
+  // ── UpdateNotification (global bottom-right update notice card) ──
+  "settings.update.availableTitle": "New version v{version} available",
+  "settings.update.availableBodyWin": "Restart to install once downloaded, or it installs automatically when you quit the app.",
+  "settings.update.availableBodyManual": "In-app auto-update isn't supported by this build. Please download the latest version from the releases page.",
+  "settings.update.downloadNow": "Download now",
+  "settings.update.remindLater": "Remind me later",
+  "settings.update.goToDownload": "Go to downloads",
+  "settings.update.downloadingTitle": "Downloading v{version}",
+  "settings.update.downloadedTitle": "v{version} ready to install",
+  "settings.update.downloadedBody": "Restart the app to finish installing; if you skip it for now, it installs automatically on quit.",
+
   // ── AppearancePanel (+ FontSizeStepper) ──
   "settings.appearance.title": "Appearance",
   "settings.appearance.desc": "Theme, chat styling and accent color — every change applies live.",
@@ -540,6 +551,29 @@ export const en = {
   "settings.titleGen.genModelDesc": "The specific model used to generate titles. Add models under \"Models\" first. There is no default model — titles are not generated until one is picked.",
   "settings.titleGen.noModelsHint": "No models available — add one under \"Models\" first.",
   "settings.titleGen.modelPlaceholder": "Not set",
+
+  // ── OutputStylePanel ──
+  "settings.outputStyle.sectionTitle": "Output Style",
+  "settings.outputStyle.sectionDesc":
+    "Choose how Claude sessions respond: the style rewrites the role, tone and output format in the system prompt. Switching applies from the next turn. Claude sessions only.",
+  "settings.outputStyle.select": "Response style",
+  "settings.outputStyle.selectDesc":
+    "Controls how the model shapes its replies. Custom styles: drop a Markdown file with name/description frontmatter into ~/.mcode/output-styles/, then hit refresh.",
+  "settings.outputStyle.groupBuiltin": "Built-in",
+  "settings.outputStyle.groupUser": "Custom",
+  "settings.outputStyle.style.default": "Default",
+  "settings.outputStyle.style.Explanatory": "Explanatory",
+  "settings.outputStyle.style.Learning": "Learning",
+  "settings.outputStyle.style.Proactive": "Proactive",
+  "settings.outputStyle.style.Concise": "Concise",
+  "settings.outputStyle.builtinDesc.default": "Standard software-engineering behavior, balanced planning and execution.",
+  "settings.outputStyle.builtinDesc.Explanatory": "Explains implementation choices and codebase patterns along the way.",
+  "settings.outputStyle.builtinDesc.Learning": "Pauses and leaves TODO(human) markers for you to implement small pieces.",
+  "settings.outputStyle.builtinDesc.Proactive": "Executes immediately, minimizes interruptions, prefers action over planning.",
+  "settings.outputStyle.builtinDesc.Concise": "Short, result-first replies while keeping full error reports and security warnings.",
+  "settings.outputStyle.refresh": "Refresh custom styles",
+  "settings.outputStyle.loadFailed": "Failed to load styles",
+  "settings.outputStyle.stale": "missing",
 
   // ── UsagePanel ──
   "settings.usage.title": "Usage",

@@ -15,6 +15,7 @@ import { SearchDialog } from "./components/ide/SearchDialog.js";
 import { ModelConfigPrompt } from "./components/chat/ModelConfigPrompt.js";
 import { BrowserPanel } from "./components/browser/BrowserPanel.js";
 import { Toaster } from "./components/layout/Toaster.js";
+import { UpdateNotification } from "./components/layout/UpdateNotification.js";
 import { VoiceListeningOverlay } from "./components/layout/VoiceListeningOverlay.js";
 import { useClaudeEvents } from "./hooks/useClaudeEvents.js";
 import { useGlobalShortcuts } from "./hooks/useGlobalShortcuts.js";
@@ -316,9 +317,13 @@ export function App() {
           )}
         </div>
       </div>
-      {/* Global toast stack - mounted at the root so it overlays everything.
-          Renders null when empty. */}
-      <Toaster />
+      {/* Global bottom-right corner: update notification card + toast stack
+          share one fixed column so they stack vertically and never overlap.
+          Both render null when they have nothing to show. */}
+      <div className="pointer-events-none fixed bottom-4 right-4 z-[9999] flex flex-col items-end gap-2">
+        <UpdateNotification />
+        <Toaster />
+      </div>
       {/* Global voice-dictation indicator - floats top-center while any
           composer is listening. Renders null when idle. */}
       <VoiceListeningOverlay />

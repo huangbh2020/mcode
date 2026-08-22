@@ -502,9 +502,14 @@ export class SdkMessageAdapter {
    * listing every file Edit/Write touched in this turn (so the renderer
    * can show the "本轮文件" card with per-file tallies + a rewind button).
    *
+   * `finalReason` OVERRIDES the result-derived reason for the fallback
+   * turn.done — the provider passes `"error"` when the generator threw, so a
+   * stream that died mid-turn still closes with an error reason while the
+   * files it already wrote surface on the turn-files card.
+   *
    * Async because freeze() now reads each file's post-turn on-disk content
    * to compute the +N -M tallies and carry the pre-turn `before` payload. */
-  async flushFinal(): Promise<void> {
+  async flushFinal(finalReason?: TurnDoneEvent["reason"]): Promise<void> {
     // Freeze and emit the snapshot list regardless of whether result
     // arrived. After freeze(), the snapshot is "frozen" — late
     // tool_use events for this adapter instance (shouldn't happen,
@@ -569,8 +574,11 @@ export class SdkMessageAdapter {
     //  - the stream ended without any result → safety-net "interrupted"
     //    (preserves the pre-existing fallback semantics);
     //  - a normal result already emitted turn.done → no-op (guard inside).
+    // An explicit finalReason (the provider's thrown-error path) wins over
+    // the result-derived reason: a stream that broke after an intermediate
+    // result ended in an error, not in that result's stop_reason.
     if (!this.state.turnDoneEmitted) {
-      this.emitTurnDone(this.state.lastResultReason ?? "interrupted");
+      this.emitTurnDone(finalReason ?? this.state.lastResultReason ?? "interrupted");
     }
   }
 

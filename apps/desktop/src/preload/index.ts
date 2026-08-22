@@ -416,6 +416,14 @@ const api = {
       ipcRenderer.invoke(IPC.MCP_IMPORT, input)) as RpcMap["mcp.import"],
   },
 
+  /** Output styles (settings panel): list built-in + user styles. The
+   *  selection is persisted via the generic setting channels and applies to
+   *  Claude sessions from the next turn. */
+  outputStyle: {
+    list: ((input) =>
+      ipcRenderer.invoke(IPC.OUTPUT_STYLE_LIST, input)) as RpcMap["outputStyle.list"],
+  },
+
   /** Usage stats (settings panel): aggregated token/cost usage over the
    *  persisted per-turn history (summary + per-model + per-day heatmap). */
   usage: {

@@ -12,6 +12,7 @@ import { SettingRow } from "./SettingRow.js";
 import { PanelHeader } from "./PanelHeader.js";
 import { SettingsSection } from "./SettingsSection.js";
 import { TitleGenPanel } from "./TitleGenPanel.js";
+import { OutputStylePanel } from "./OutputStylePanel.js";
 
 /**
  * "常规" (General) settings panel.
@@ -22,10 +23,12 @@ import { TitleGenPanel } from "./TitleGenPanel.js";
  *  - 显示与布局 (SettingsSection): 中间面板显示模式 + 对话紧凑度 + 长文本折叠阈值
  *  - 会话自动归档 (SettingsSection): 开关 + 默认不活跃天数 + 按项目覆盖
  *  - 会话标题生成 (TitleGenPanel, renders its own SettingsSection)
+ *  - 输出风格 (OutputStylePanel, renders its own SettingsSection)
  *
  * Card-grouped layout: a page-level PanelHeader on top, then one
- * SettingsSection per functional category. TitleGenPanel is dropped in as a
- * sibling section — the outer space-y-4 keeps the two cards apart.
+ * SettingsSection per functional category. TitleGenPanel / OutputStylePanel
+ * are dropped in as sibling sections — the outer space-y-4 keeps the cards
+ * apart.
  */
 
 const DISPLAY_MODE_OPTIONS: { value: DisplayMode; labelKey: MessageId; icon: ReactNode }[] = [
@@ -383,6 +386,9 @@ export function GeneralPanel() {
 
       {/* ── 会话标题生成 (self-contained section) ── */}
       <TitleGenPanel />
+
+      {/* ── 输出风格 (self-contained section) ── */}
+      <OutputStylePanel />
     </section>
   );
 }

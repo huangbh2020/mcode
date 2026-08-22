@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api } from "@renderer/lib/api.js";
 import { cn } from "@renderer/lib/cn.js";
+import { formatBytes } from "@renderer/lib/format.js";
 import { useI18n } from "@renderer/lib/i18n/index.js";
 import { Button } from "@renderer/components/ui/index.js";
 import {
@@ -51,23 +52,10 @@ type UpdateState =
   | { kind: "idle" }
   | { kind: "checking" }
   | { kind: "up-to-date"; version: string }
-  | { kind: "available"; version: string }
+  | { kind: "available"; version: string; manualInstallRequired: boolean }
   | { kind: "downloading"; percent: number; transferred: number; total: number }
   | { kind: "downloaded"; version: string; manualInstallRequired: boolean }
   | { kind: "error"; message: string };
-
-/** Format a byte count as a human-readable string (e.g. "12.3 MB"). */
-function formatBytes(bytes: number): string {
-  if (!bytes || bytes < 0) return "0 B";
-  const units = ["B", "KB", "MB", "GB"];
-  let value = bytes;
-  let unit = 0;
-  while (value >= 1024 && unit < units.length - 1) {
-    value /= 1024;
-    unit += 1;
-  }
-  return `${value.toFixed(value >= 100 || unit === 0 ? 0 : 1)} ${units[unit]}`;
-}
 
 /** Restore the in-memory UpdateState from a persisted snapshot (read on mount
  *  so reopening the About panel or restarting the app keeps the banner). */
@@ -157,7 +145,14 @@ export function AboutPanel() {
   // update-downloaded fires once the download finishes.
   useEffect(() => {
     const offAvailable = api.on.updateAvailable((msg) => {
-      setUpdateState({ kind: "available", version: msg.version });
+      setUpdateState({
+        kind: "available",
+        version: msg.version,
+        // Known at discovery time on macOS (ad-hoc signature): guide the user
+        // to the releases page right away instead of letting them download
+        // ~100MB that Squirrel.Mac could never install.
+        manualInstallRequired: msg.manualInstallRequired ?? false,
+      });
     });
     const offProgress = api.on.updateDownloadProgress((msg) => {
       setUpdateState({
@@ -206,7 +201,11 @@ export function AboutPanel() {
       if (result.status === "up-to-date") {
         setUpdateState({ kind: "up-to-date", version: result.version });
       } else if (result.status === "available") {
-        setUpdateState({ kind: "available", version: result.version });
+        setUpdateState({
+          kind: "available",
+          version: result.version,
+          manualInstallRequired: result.manualInstallRequired,
+        });
       } else {
         setUpdateState({ kind: "error", message: result.error });
       }
@@ -413,9 +412,21 @@ function UpdateBanner({
       message = t("settings.about.upToDate", { version: state.version });
       break;
     case "available":
-      icon = <IconDownload size={16} className="text-accent" />;
-      message = t("settings.about.available", { version: state.version });
-      action = { label: t("settings.about.downloadNow"), onClick: onDownload, icon: <IconDownload size={14} /> };
+      if (state.manualInstallRequired) {
+        // macOS ad-hoc: downloads can never be auto-installed, so skip the
+        // in-app download entirely and guide the user to the releases page.
+        icon = <IconExternalLink size={16} className="text-accent" />;
+        message = t("settings.about.available", { version: state.version });
+        action = {
+          label: t("settings.about.goToDownload"),
+          onClick: onGoToDownload,
+          icon: <IconExternalLink size={14} />,
+        };
+      } else {
+        icon = <IconDownload size={16} className="text-accent" />;
+        message = t("settings.about.available", { version: state.version });
+        action = { label: t("settings.about.downloadNow"), onClick: onDownload, icon: <IconDownload size={14} /> };
+      }
       tone = "accent";
       break;
     case "downloaded":

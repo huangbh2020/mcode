@@ -205,7 +205,10 @@ function TurnStatRow({ meta }: { meta: TurnMeta }) {
 /** Whether a block is "procedural" (model process: thinking / tool calls) —
  *  the surface that gets hidden inside a TurnPanel — vs "display" (text /
  *  plan / turn-files / error / attachment) which stays visible to the user.
- *  This is the single source of truth for the process/output split. */
+ *  NOTE: this predicate describes PANEL MEMBERSHIP, not the process/reply
+ *  boundary — the boundary anchors only on real tool calls (see
+ *  groupMessagesForRender); a post-tool thinking block must not swallow the
+ *  reply text that preceded it. */
 function isProceduralBlock(b: Block): b is ProceduralBlock {
   return b.kind === "thinking" || b.kind === "tool_use";
 }
@@ -244,8 +247,10 @@ type RenderItem =
       kind: "turnGroup";
       /** The turn's process surface, in order: thinking, tool calls, AND any
        *  text the model emitted between tools (e.g. "let me read this first").
-       *  Everything up to and including the LAST tool call goes here. Fed to
-       *  TurnPanel (hidden behind the header). Empty for pure-text turns. */
+       *  Everything up to and including the LAST tool call goes here, plus
+       *  thinking blocks wherever they land (they never anchor the split).
+       *  Fed to TurnPanel (hidden behind the header). Empty for turns with
+       *  neither tools nor thinking. */
       panelBlocks: Block[];
       /** Messages carrying the turn's DISPLAY blocks — only what comes AFTER
        *  the last tool call (the final reply text, plus plan / turn-files /
@@ -380,34 +385,33 @@ function groupMessagesForRender(
       !!lastMsg && lastMsg.role === "assistant" && isCompletedTurnTail(messages, lastTurnMsgIndex, isRunning);
 
     // LIVE turn → flat output. While the turn is still streaming we do NOT
-    // group its messages into a turnGroup: a narration text and its tool_use
+    // group its messages into a turnGroup — the user watches the RAW stream
+    // in arrival order (narration text, tool cards, reply text all inline),
+    // and the process/result split is applied only once the turn completes
+    // (the regroup below folds the process into the panel and leaves the
+    // post-last-tool reply visible). A narration text and its tool_use also
     // arrive as SEPARATE events (claude sends text and tool_use as
     // independent assistant messages; the tool attaches to the narration
-    // message only when its tool.use lands). Grouping during streaming would
-    // briefly classify the narration as the final reply (it sits after the
-    // previous tool), then yank it back into the panel when its tool arrives
-    // — a visible flicker. Instead, emit every message of the live turn as
-    // its own single item (flat stream: text + tool cards inline), and only
-    // collapse the whole turn into a turnGroup once it completes (the
-    // isStreamingTail-false path below). Each message's own MessageBlocks
-    // still folds consecutive batch tools into one card.
+    // message only when its tool.use lands), so grouping during streaming
+    // would briefly classify the narration as the final reply (it sits after
+    // the previous tool), then yank it back into the panel when its tool
+    // arrives — a visible flicker. Emit every message of the live turn as
+    // its own single item instead; each message's own MessageBlocks still
+    // folds consecutive batch tools into one card.
     if (isStreamingTail) {
-      // While the turn is still streaming, every message of the live turn is
-      // emitted as its own single item (flat stream: text + tool cards inline),
-      // each carrying its OWN blocks verbatim — plan and turn-files blocks
-      // included. The footer cards are NOT extracted to the stream's end here:
-      // re-pinning a live plan card to the bottom meant every newly streamed
-      // message landed ABOVE it, pushing it further down while
-      // maintainScrollAtEnd kept re-snapping scroll to the moving end
-      // (onDataChange + onItemLayout >5px) — the card visibly jumped on each
-      // delta ("闪烁"), especially during post-approval execution and plan
-      // revision, where output keeps flowing long after the card appeared.
-      // Keeping the card inline on its host message (right where the model
-      // presented the plan) gives it a stable position: new content appends
-      // BELOW it and scrolls past naturally. When the turn completes, the
-      // completed-turn branch below re-runs the footer extraction and pins the
-      // frozen cards to the turn's end in one coherent re-layout (the turn
-      // collapses into a panel at that moment anyway).
+      // Each live message carries its OWN blocks verbatim — plan and
+      // turn-files blocks included. The footer cards are NOT extracted to
+      // the stream's end here: re-pinning a live plan card to the bottom
+      // meant every newly streamed message landed ABOVE it, pushing it
+      // further down while maintainScrollAtEnd kept re-snapping scroll to
+      // the moving end — the card visibly jumped on each delta ("闪烁"),
+      // especially during post-approval execution and plan revision, where
+      // output keeps flowing long after the card appeared. Keeping the card
+      // inline on its host message gives it a stable position: new content
+      // appends BELOW it and scrolls past naturally. When the turn
+      // completes, the branch below re-runs the footer extraction and pins
+      // the frozen cards to the turn's end in one coherent re-layout (the
+      // turn collapses into a panel at that moment anyway).
       const byMsg = new Map<ChatMessage, Block[]>();
       for (const { block, msg } of turnBlocks) {
         const arr = byMsg.get(msg);
@@ -430,15 +434,20 @@ function groupMessagesForRender(
       return;
     }
 
-    // Find the index of the LAST *real* procedural block (thinking / tool_use,
-    // excluding meta tools) in the turn's timeline. Everything at or before it
-    // is "process" — including any text the model wove between tool calls
-    // ("let me read this first", "tests passed, now…"). Only blocks after it
-    // count as the user-facing reply.
-    let lastRealProcIdx = -1;
+    // Find the index of the LAST real TOOL CALL (excluding meta tools) — the
+    // process/reply boundary. Everything at or before it is "process" —
+    // including any text the model wove between tool calls ("let me read
+    // this first", "tests passed, now…"). Thinking blocks deliberately do
+    // NOT anchor the boundary: with interleaved thinking the model can emit
+    // text → think → more text as ONE final answer, and anchoring on the
+    // thinking block would fold the earlier segment into the panel, leaving
+    // only the last segment as the visible reply. Thinking (and meta tools)
+    // are instead re-routed into the panel wherever they land, so EVERY
+    // post-tool text segment stays in the reply.
+    let lastToolIdx = -1;
     for (let j = 0; j < turnBlocks.length; j++) {
-      if (isProceduralBlock(turnBlocks[j].block) && !isMetaToolBlock(turnBlocks[j].block)) {
-        lastRealProcIdx = j;
+      if (turnBlocks[j].block.kind === "tool_use" && !isMetaToolBlock(turnBlocks[j].block)) {
+        lastToolIdx = j;
       }
     }
 
@@ -453,10 +462,12 @@ function groupMessagesForRender(
     for (let j = 0; j < turnBlocks.length; j++) {
       const { block, msg } = turnBlocks[j];
       // Process surface: blocks at-or-before the last real tool (procedural +
-      // woven text), plus any meta tools wherever they landed. Meta tools are
-      // excluded from the boundary above but must not leak into the reply —
-      // re-route them here so a trailing task-list update stays in the panel.
-      if (j <= lastRealProcIdx || isMetaToolBlock(block)) {
+      // woven text), plus any thinking / meta-tool blocks wherever they
+      // landed — those never anchor the boundary but must not leak into the
+      // reply, so re-route them here: a mid-answer thinking pause or a
+      // trailing task-list update stays in the panel while the text around
+      // it remains visible.
+      if (j <= lastToolIdx || isProceduralBlock(block)) {
         panelBlocks.push(block);
       } else {
         // Reply surface: blocks after the last real tool, regrouped by source
@@ -2739,11 +2750,16 @@ function ChatPaneForSession({ sessionId, isActive }: { sessionId: string; isActi
               <div className="flex shrink-0 items-center gap-1">
                 {/* Voice input: mic button with continuous / hold-to-talk modes
                     (mode switchable via the caret menu). `sessionId` wires the
-                    voice.dictation keyboard shortcut to THIS pane's mic. */}
+                    voice.dictation keyboard shortcut to THIS pane's mic.
+                    Gated on `hasPendingPrompt`, NOT `inputBlocked`: dictation
+                    writes into the same textarea that stays editable while a
+                    turn runs (type-ahead + enqueue), so the mic keeps working
+                    mid-turn; it only locks when a bottom prompt (approval /
+                    plan / question) hides the composer. */}
                 <MicButton
                   sessionId={sessionId ?? ""}
                   editorRef={editorRef}
-                  disabled={inputBlocked}
+                  disabled={hasPendingPrompt}
                 />
                 {/* SDK picker pinned left of the send button — always visible
                     (unlike the chip row, which collapses in narrow mode); locked

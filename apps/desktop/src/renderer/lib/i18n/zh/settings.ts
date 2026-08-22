@@ -141,6 +141,17 @@ export const zh = {
   "settings.about.restartInstall": "重启安装",
   "settings.about.checkFailed": "更新检查失败:{message}",
 
+  // ── UpdateNotification (global bottom-right update notice card) ──
+  "settings.update.availableTitle": "发现新版本 v{version}",
+  "settings.update.availableBodyWin": "下载完成后可重启安装,退出应用时也会自动安装。",
+  "settings.update.availableBodyManual": "当前安装包暂不支持应用内自动更新,请前往发布页下载最新版本。",
+  "settings.update.downloadNow": "立即下载",
+  "settings.update.remindLater": "稍后提醒",
+  "settings.update.goToDownload": "前往下载",
+  "settings.update.downloadingTitle": "正在下载 v{version}",
+  "settings.update.downloadedTitle": "v{version} 已就绪",
+  "settings.update.downloadedBody": "重启应用后完成安装;稍后重启将在退出时自动安装。",
+
   // ── AppearancePanel (+ FontSizeStepper) ──
   "settings.appearance.title": "外观",
   "settings.appearance.desc": "调整界面主题、聊天样式与全局强调色,所有改动实时生效。",
@@ -543,6 +554,29 @@ export const zh = {
   "settings.titleGen.genModelDesc": "选择用于生成标题的具体模型。需要先在「模型配置」中添加模型。没有默认模型,未选择则不生成标题。",
   "settings.titleGen.noModelsHint": "暂无可用模型,请先在「模型配置」中添加。",
   "settings.titleGen.modelPlaceholder": "未选择",
+
+  // ── OutputStylePanel ──
+  "settings.outputStyle.sectionTitle": "输出风格",
+  "settings.outputStyle.sectionDesc":
+    "选择 Claude 会话的回复风格:改写系统提示词中的角色、语气与输出格式,切换在下一轮对话生效。仅 Claude 会话生效。",
+  "settings.outputStyle.select": "回复风格",
+  "settings.outputStyle.selectDesc":
+    "决定模型如何组织回复。自定义风格:把带 name/description frontmatter 的 Markdown 文件放入 ~/.mcode/output-styles/,点击刷新即可加载。",
+  "settings.outputStyle.groupBuiltin": "内置风格",
+  "settings.outputStyle.groupUser": "自定义",
+  "settings.outputStyle.style.default": "默认",
+  "settings.outputStyle.style.Explanatory": "讲解型",
+  "settings.outputStyle.style.Learning": "学习型",
+  "settings.outputStyle.style.Proactive": "主动型",
+  "settings.outputStyle.style.Concise": "简洁型",
+  "settings.outputStyle.builtinDesc.default": "标准软件工程行为,均衡规划与执行。",
+  "settings.outputStyle.builtinDesc.Explanatory": "执行任务的同时解释实现选择与代码库模式。",
+  "settings.outputStyle.builtinDesc.Learning": "适时暂停,留 TODO(human) 让你亲手实现小块代码。",
+  "settings.outputStyle.builtinDesc.Proactive": "立即执行、尽量少打断,行动优先于规划。",
+  "settings.outputStyle.builtinDesc.Concise": "回复简短、结论优先,保留完整报错与安全提醒。",
+  "settings.outputStyle.refresh": "刷新自定义风格",
+  "settings.outputStyle.loadFailed": "加载风格列表失败",
+  "settings.outputStyle.stale": "已失效",
 
   // ── UsagePanel ──
   "settings.usage.title": "用量统计",
