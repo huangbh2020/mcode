@@ -56,7 +56,7 @@ export const zh = {
   "chat.voice.noModel": "语音模型未就绪",
   "chat.voice.noModelDesc": "请先在「设置 → 语音输入」下载并选择识别模型,即将为你打开该页面。",
   "chat.voice.manageModels": "下载语言模型…",
-  "chat.voice.lockedTitle": "回合进行中,暂不能语音输入",
+  "chat.voice.lockedTitle": "等待审批或确认期间,暂不能语音输入",
   "chat.voice.dictationCancelled": "已取消本次听写",
   "chat.voice.overlayHintPtt": "松开快捷键结束 · Esc 取消",
   "chat.voice.overlayHintContinuous": "点击麦克风或再按快捷键结束 · Esc 取消",

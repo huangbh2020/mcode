@@ -138,6 +138,17 @@ export const en = {
   "settings.about.restartInstall": "Restart & install",
   "settings.about.checkFailed": "Update check failed: {message}",
 
+  // ── UpdateNotification (global bottom-right update notice card) ──
+  "settings.update.availableTitle": "New version v{version} available",
+  "settings.update.availableBodyWin": "Restart to install once downloaded, or it installs automatically when you quit the app.",
+  "settings.update.availableBodyManual": "In-app auto-update isn't supported by this build. Please download the latest version from the releases page.",
+  "settings.update.downloadNow": "Download now",
+  "settings.update.remindLater": "Remind me later",
+  "settings.update.goToDownload": "Go to downloads",
+  "settings.update.downloadingTitle": "Downloading v{version}",
+  "settings.update.downloadedTitle": "v{version} ready to install",
+  "settings.update.downloadedBody": "Restart the app to finish installing; if you skip it for now, it installs automatically on quit.",
+
   // ── AppearancePanel (+ FontSizeStepper) ──
   "settings.appearance.title": "Appearance",
   "settings.appearance.desc": "Theme, chat styling and accent color — every change applies live.",

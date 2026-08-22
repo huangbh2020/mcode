@@ -1256,7 +1256,7 @@ export interface AppInfoResult {
 /** Result of a manual/auto update check. */
 export type CheckForUpdatesResult =
   | { status: "up-to-date"; version: string }
-  | { status: "available"; version: string }
+  | { status: "available"; version: string; manualInstallRequired: boolean }
   | { status: "error"; error: string };
 
 /** Pushed when the updater finds a newer version on the release channel.
@@ -1270,6 +1270,18 @@ export interface UpdateAvailableMessage {
   releaseNotes?: string;
   /** ISO date string of the release, if available. */
   releaseDate?: string;
+  /** Where the check that discovered this update came from: "auto" = the
+   *  boot/interval check initiated by main, "manual" = the user clicked
+   *  "check for updates" in the About panel. The global update notification
+   *  card only auto-shows for "auto" so a manual check never pops a redundant
+   *  card over the panel the user is already looking at. */
+  source?: "auto" | "manual";
+  /** True when Squirrel.Mac can't auto-install updates (macOS ad-hoc
+   *  signature). Surfaced at discovery time — before any bytes are downloaded
+   *  — so the renderer can guide the user to the releases page immediately
+   *  instead of wasting a ~100MB in-app download that ends in "manual install
+   *  required". Always false on Windows. */
+  manualInstallRequired?: boolean;
 }
 
 /** Pushed when a downloaded update is ready to install. The renderer offers a

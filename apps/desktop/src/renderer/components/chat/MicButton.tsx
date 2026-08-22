@@ -15,6 +15,11 @@
  * The default mode/language come from the store's persisted voice settings;
  * flipping the mode here also persists it, so "我记得上次用的模式" behavior is
  * kept across sessions.
+ *
+ * Desktop-only: the ASR engine lives in the Electron main process (no bridge
+ * exists over the mobile RPC/SSE transport), and the mobile shell serves the
+ * page over plain HTTP where browsers withhold `navigator.mediaDevices`
+ * entirely — render nothing there instead of a button that can never listen.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Menu } from "@base-ui/react/menu";
@@ -24,6 +29,7 @@ import { useSessionStore } from "@renderer/stores/sessionStore.js";
 import { useToastStore } from "@renderer/stores/toastStore.js";
 import { useSuppressBrowserView } from "@renderer/hooks/useSuppressBrowserView.js";
 import { useVoiceInput } from "@renderer/hooks/useVoiceInput.js";
+import { isElectron } from "@renderer/lib/platform.js";
 import {
   registerVoiceHandle,
   setVoiceActive,
@@ -43,19 +49,31 @@ import {
  *  (`尚未选择语音模型…` / `语音模型未下载或不完整…`). */
 const NO_MODEL_ERROR_RE = /尚未选择语音模型|模型未下载|先下载并选择/;
 
-export function MicButton({
-  sessionId,
-  editorRef,
-  disabled,
-}: {
+interface MicButtonProps {
   /** This pane's session — the keyboard shortcut / command palette drives the
    *  ACTIVE session's mic through the voiceController registry. */
   sessionId: string;
   /** The composer editor — transcribed text is inserted into it. */
   editorRef: React.RefObject<ComposerEditorHandle | null>;
-  /** True while the composer is locked (turn running / approval pending). */
+  /** True while a bottom prompt (tool approval / plan approval / question)
+   *  owns the input area — the composer is hidden then. A running turn does
+   *  NOT lock the mic: dictation lands in the still-editable composer for
+   *  type-ahead / enqueue, mirroring `textareaLocked`'s rules. */
   disabled: boolean;
-}) {
+}
+
+export function MicButton(props: MicButtonProps) {
+  // `isElectron` is a module constant, so the branch is stable per bundle —
+  // the web (phone) shell never mounts the hooks below.
+  if (!isElectron) return null;
+  return <MicButtonDesktop {...props} />;
+}
+
+function MicButtonDesktop({
+  sessionId,
+  editorRef,
+  disabled,
+}: MicButtonProps) {
   const { t } = useI18n();
   const voiceInputMode = useSessionStore((s) => s.voiceInputMode);
   const setVoiceInputMode = useSessionStore((s) => s.setVoiceInputMode);

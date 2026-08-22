@@ -76,6 +76,12 @@ let initialized = false;
 /** Track the latest update info so the check RPC can report it synchronously. */
 let pendingVersion: string | null = null;
 
+/** Source of the most recently initiated check ("auto" = boot/interval timer,
+ *  "manual" = About panel RPC). The `update-available` listener reads this to
+ *  tag its push, so the global notification card can distinguish a background
+ *  discovery (pop the card) from a user-initiated one (panel already shows it). */
+let lastCheckSource: "auto" | "manual" = "manual";
+
 /** Version currently being downloaded (set when download starts, cleared on
  *  *  completion/error). Used to tag download-progress events with a version. */
 let downloadingVersion: string | null = null;
@@ -140,12 +146,18 @@ export async function initUpdater(): Promise<void> {
 
     autoUpdater.on("update-available", (info) => {
       pendingVersion = info.version ?? null;
+      // Detect the ad-hoc signature at discovery time so macOS users are
+      // guided to the releases page before downloading ~100MB that Squirrel.Mac
+      // could never install. Cached after the first call.
+      const manualInstallRequired = detectManualInstallRequired();
       log.info(`updater: update available ${pendingVersion ?? "(unknown version)"}`);
       sendToRenderer(IPC.UPDATE_AVAILABLE, {
         channel: IPC.UPDATE_AVAILABLE,
         version: info.version ?? "",
         releaseNotes: typeof info.releaseNotes === "string" ? info.releaseNotes : undefined,
         releaseDate: info.releaseDate,
+        source: lastCheckSource,
+        manualInstallRequired,
       });
     });
 
@@ -208,12 +220,14 @@ export async function initUpdater(): Promise<void> {
       });
     });
 
-    // Delayed first check, then recurring.
+    // Delayed first check, then recurring. Both pass "auto" so the global
+    // notification card knows the discovery came from the background check
+    // (a "manual" tag means the user clicked the About panel's button).
     setTimeout(() => {
-      void checkForUpdates();
+      void checkForUpdates("auto");
     }, FIRST_CHECK_DELAY_MS);
     setInterval(() => {
-      void checkForUpdates();
+      void checkForUpdates("auto");
     }, RECURRING_CHECK_INTERVAL_MS);
 
     initialized = true;
@@ -225,19 +239,26 @@ export async function initUpdater(): Promise<void> {
 
 /** Check for updates. In dev, returns "up-to-date" without hitting the network.
  *  In prod, triggers autoUpdater.checkForUpdates() and resolves once the check
- *  completes (or errors). */
-export async function checkForUpdates(): Promise<CheckForUpdatesResult> {
+ *  completes (or errors). `source` tags the originating check so the
+ *  `update-available` push can tell the renderer whether this was a background
+ *  (auto) or user-initiated (manual) discovery. */
+export async function checkForUpdates(source: "auto" | "manual" = "manual"): Promise<CheckForUpdatesResult> {
   if (!is.prod || !initialized) {
     return { status: "up-to-date", version: app.getVersion() };
   }
 
+  lastCheckSource = source;
   try {
     const autoUpdater = loadAutoUpdater();
     const result = await autoUpdater.checkForUpdates();
     // If a newer version exists, `update-available` will have fired and set
     // pendingVersion. Otherwise the check resolves and we're up-to-date.
     if (pendingVersion) {
-      return { status: "available", version: pendingVersion };
+      return {
+        status: "available",
+        version: pendingVersion,
+        manualInstallRequired: detectManualInstallRequired(),
+      };
     }
     const version = result?.updateInfo?.version ?? app.getVersion();
     return { status: "up-to-date", version };
@@ -266,6 +287,10 @@ export async function downloadUpdate(): Promise<void> {
     downloadingVersion = null;
     clearPersistedUpdateState();
     log.error(`updater: downloadUpdate failed ${err instanceof Error ? err.message : String(err)}`);
+    // Re-throw so the initiator (About panel / notification card) can restore
+    // its UI — otherwise the RPC resolves as success and the card is stuck on
+    // a 0% progress bar forever.
+    throw err;
   }
 }
 

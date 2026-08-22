@@ -50,7 +50,7 @@ export const en = {
   "chat.voice.noModel": "Voice model not ready",
   "chat.voice.noModelDesc": "Download and select a speech model under Settings → Voice Input first — opening that page for you now.",
   "chat.voice.manageModels": "Download speech models…",
-  "chat.voice.lockedTitle": "Voice input is paused while a turn is running",
+  "chat.voice.lockedTitle": "Voice input is paused while a prompt awaits your answer",
   "chat.voice.dictationCancelled": "Dictation cancelled",
   "chat.voice.overlayHintPtt": "Release shortcut to finish · Esc to cancel",
   "chat.voice.overlayHintContinuous": "Click mic or press shortcut again to finish · Esc to cancel",

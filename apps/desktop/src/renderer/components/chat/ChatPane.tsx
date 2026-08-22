@@ -2750,11 +2750,16 @@ function ChatPaneForSession({ sessionId, isActive }: { sessionId: string; isActi
               <div className="flex shrink-0 items-center gap-1">
                 {/* Voice input: mic button with continuous / hold-to-talk modes
                     (mode switchable via the caret menu). `sessionId` wires the
-                    voice.dictation keyboard shortcut to THIS pane's mic. */}
+                    voice.dictation keyboard shortcut to THIS pane's mic.
+                    Gated on `hasPendingPrompt`, NOT `inputBlocked`: dictation
+                    writes into the same textarea that stays editable while a
+                    turn runs (type-ahead + enqueue), so the mic keeps working
+                    mid-turn; it only locks when a bottom prompt (approval /
+                    plan / question) hides the composer. */}
                 <MicButton
                   sessionId={sessionId ?? ""}
                   editorRef={editorRef}
-                  disabled={inputBlocked}
+                  disabled={hasPendingPrompt}
                 />
                 {/* SDK picker pinned left of the send button — always visible
                     (unlike the chip row, which collapses in narrow mode); locked
