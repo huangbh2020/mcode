@@ -1,4 +1,4 @@
-import { BrowserWindow, shell, session } from "electron";
+import { BrowserWindow, shell, session, type WebContents } from "electron";
 import { join } from "node:path";
 import { is } from "@main/utils.js";
 import { getEffectiveTheme } from "@main/lib/theme.js";
@@ -64,11 +64,28 @@ function setupSessionPermissions(): void {
   if (sessionPermissionsReady) return;
   sessionPermissionsReady = true;
   const ses = session.defaultSession;
-  ses.setPermissionRequestHandler((_wc, permission, callback) => {
-    callback(permission === "media" || permission === "mediaKeySystem");
+
+  // A custom check handler REPLACES Electron's default allow-all, so every
+  // permission the renderer's own code relies on must be listed here or it
+  // silently regresses app-wide. `navigator.clipboard.writeText()` performs a
+  // `clipboard-sanitized-write` CHECK (no prompt) and `readText()` needs
+  // `clipboard-read` — denying these broke every copy affordance (chat code
+  // blocks, file-tree path copy, the mobile-connect dialog) and terminal
+  // paste. Clipboard grants are scoped to the main window's webContents so
+  // arbitrary pages can never touch the OS clipboard; the embedded browser
+  // views use a separate persistent partition and are unaffected either way.
+  const isAllowed = (wc: WebContents | null, permission: string): boolean => {
+    if (permission === "media" || permission === "mediaKeySystem") return true;
+    if (permission !== "clipboard-sanitized-write" && permission !== "clipboard-read") return false;
+    const main = getMainWindow();
+    return !!main && !main.isDestroyed() && wc?.id === main.webContents.id;
+  };
+
+  ses.setPermissionRequestHandler((wc, permission, callback) => {
+    callback(isAllowed(wc, permission));
   });
-  ses.setPermissionCheckHandler((_wc, permission) => {
-    return permission === "media" || permission === "mediaKeySystem";
+  ses.setPermissionCheckHandler((wc, permission) => {
+    return isAllowed(wc, permission);
   });
 }
 

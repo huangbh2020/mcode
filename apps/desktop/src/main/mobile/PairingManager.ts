@@ -156,10 +156,16 @@ export class PairingManager {
    *  typed the currently-displayed code) and raced the QR-vs-code display under
    *  React StrictMode's double effect invocation. Only an expired or consumed
    *  pending pairing is replaced. The endpoint comes from the HTTP server (it
-   *  knows its bound port + detected LAN IP). */
-  startPairing(endpoint: string): PairingStartResult {
+   *  knows its bound port + detected LAN IP).
+   *
+   *  `opts.force` voids the pending pairing and generates a fresh nonce + code
+   *  — the explicit "refresh QR" path. The pending nonce's TTL-reuse above is
+   *  what makes refresh a visible no-op otherwise. Any phone page already
+   *  open on the old nonce stops matching (expected: the user asked for a new
+   *  code) and must re-scan. */
+  startPairing(endpoint: string, opts?: { force?: boolean }): PairingStartResult {
     const now = Date.now();
-    if (this.pending && now <= this.pending.expiresAt) {
+    if (!opts?.force && this.pending && now <= this.pending.expiresAt) {
       log.info(
         `mobile: pairing reused (nonce ends ${this.pending.nonce.slice(-6)}, expires in ${Math.ceil((this.pending.expiresAt - now) / 1000)}s)`,
       );

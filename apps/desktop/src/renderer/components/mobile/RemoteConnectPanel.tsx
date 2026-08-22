@@ -25,6 +25,7 @@ import {
   IconWorld,
 } from "@renderer/lib/icons.js";
 import { api } from "@renderer/lib/api.js";
+import { copyText } from "@renderer/lib/clipboard.js";
 import type { RelayStatus, RelayVpsConfig } from "@contracts/ipc";
 import { RELAY_AUTO_START_SETTING_KEY } from "@contracts/relay";
 import { useI18n } from "@renderer/lib/i18n/index.js";
@@ -93,10 +94,13 @@ export function RemoteConnectPanel() {
     void refresh();
   }, [refresh]);
 
-  // Generate pairing when connected.
-  const generatePairing = useCallback(async (endpoint: string) => {
+  // Generate pairing when connected. `force` voids the pending pairing and
+  // issues a fresh code — the manual refresh button passes it (without it,
+  // startPairing reuses the pending pairing within its TTL and the UI shows
+  // the identical QR/code, i.e. a visible no-op).
+  const generatePairing = useCallback(async (endpoint: string, force = false) => {
     try {
-      const res = await api.mobile.startPairing({ mode: "remote", endpoint });
+      const res = await api.mobile.startPairing({ mode: "remote", endpoint, force });
       setPairingUrl(res.pairing.qrUrl);
       setPairingCode(res.pairing.code);
       const dataUrl = await QRCode.toDataURL(res.pairing.qrUrl, {
@@ -176,12 +180,9 @@ export function RemoteConnectPanel() {
 
   const copyLink = useCallback(async () => {
     if (!pairingUrl) return;
-    try {
-      await navigator.clipboard.writeText(pairingUrl);
-      setCopied(true);
-    } catch {
-      // ignore
-    }
+    const ok = await copyText(pairingUrl);
+    if (ok) setCopied(true);
+    else console.error("copy pairing link failed");
   }, [pairingUrl]);
 
   useEffect(() => {
@@ -191,7 +192,7 @@ export function RemoteConnectPanel() {
   }, [copied]);
 
   const handleRefreshPairing = useCallback(() => {
-    if (status?.endpoint) void generatePairing(status.endpoint);
+    if (status?.endpoint) void generatePairing(status.endpoint, true);
   }, [status, generatePairing]);
 
   const isConnected = status?.state === "connected";

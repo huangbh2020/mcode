@@ -20,6 +20,7 @@ import { Button } from "@renderer/components/ui/index.js";
 import { cn } from "@renderer/lib/cn.js";
 import { IconCopy, IconDeviceMobile, IconRefresh, IconTrash, IconWifi, IconWorld } from "@renderer/lib/icons.js";
 import { api } from "@renderer/lib/api.js";
+import { copyText } from "@renderer/lib/clipboard.js";
 import { RemoteConnectPanel } from "@renderer/components/mobile/RemoteConnectPanel.js";
 import type { PairingStartResult, PairedDevice } from "@contracts/mobile";
 import type { RelayStatus } from "@contracts/ipc";
@@ -127,9 +128,11 @@ function MobileConnectPanel({ open }: { open: boolean }) {
   const [copied, setCopied] = useState(false);
   const pollTimer = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  const beginPairing = useCallback(async (host?: string) => {
+  const beginPairing = useCallback(async (host?: string, force = false) => {
     try {
-      const res = await api.mobile.startPairing(host ? { host } : undefined);
+      const res = await api.mobile.startPairing(
+        host !== undefined || force ? { host, force } : undefined,
+      );
       setPairing(res.pairing);
       const dataUrl = await QRCode.toDataURL(res.pairing.qrUrl, {
         margin: 1,
@@ -152,15 +155,14 @@ function MobileConnectPanel({ open }: { open: boolean }) {
   );
 
   /** Copy the pairing link (QR content) to the clipboard — the PC-testing path
-   *  that doesn't need a phone to decode the QR. */
+   *  that doesn't need a phone to decode the QR. Uses the shared copyText
+   *  helper (execCommand fallback) so the copy still lands when the clipboard
+   *  API is unavailable/denied; the "已复制" feedback only shows on success. */
   const copyPairingLink = useCallback(async () => {
     if (!pairing) return;
-    try {
-      await navigator.clipboard.writeText(pairing.qrUrl);
-      setCopied(true);
-    } catch (err) {
-      console.error("copy pairing link failed", err);
-    }
+    const ok = await copyText(pairing.qrUrl);
+    if (ok) setCopied(true);
+    else console.error("copy pairing link failed");
   }, [pairing]);
 
   // Auto-reset the "已复制" feedback after 2s.
@@ -298,7 +300,7 @@ function MobileConnectPanel({ open }: { open: boolean }) {
           <div className="flex items-center gap-3">
             <button
               type="button"
-              onClick={() => void beginPairing()}
+              onClick={() => void beginPairing(undefined, true)}
               className="flex items-center gap-1 text-xs text-content-muted hover:text-content"
             >
               <IconRefresh size={12} /> {t("layout.refreshQr")}

@@ -21,18 +21,20 @@ export function registerMobileHandlers(ipcMain: IpcMain): void {
       host?: string;
       mode?: "lan" | "remote";
       endpoint?: string;
+      force?: boolean;
     };
+    const force = { force: input.force === true };
 
     // Remote mode (SSH relay): the endpoint is the VPS's public URL.
     if (input.mode === "remote" && input.endpoint) {
-      const pairing = pairingManager.startPairing(input.endpoint);
+      const pairing = pairingManager.startPairing(input.endpoint, force);
       return { pairing: { ...pairing, mode: "remote" as const } };
     }
 
     // LAN mode (default): endpoint is the local HTTP server.
     const lanIp = input.host || detectLanIp();
     const endpoint = `http://${lanIp ?? "localhost"}:${server.port || 7331}`;
-    const pairing = pairingManager.startPairing(endpoint);
+    const pairing = pairingManager.startPairing(endpoint, force);
     return { pairing: { ...pairing, mode: "lan" as const } };
   });
 

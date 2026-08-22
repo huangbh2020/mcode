@@ -3336,6 +3336,10 @@ export interface RpcMap {
     host?: string;
     mode?: "lan" | "remote";
     endpoint?: string;
+    /** Void the pending pairing (if any) and generate a fresh nonce + code.
+     *  Without this the call reuses the pending pairing within its TTL, which
+     *  is what the manual "refresh QR" buttons need to bypass. */
+    force?: boolean;
   }) => Promise<{ pairing: PairingStartResult }>;
   /** Read the current pending pairing (for the dialog to rehydrate after a
    *  close/reopen). Null when no pairing is active. */
