@@ -47,6 +47,7 @@ import {
   UI_COMPOSER_MODEL_SETTING_KEY,
   UI_TITLE_GEN_ENABLED_SETTING_KEY,
   UI_TITLE_GEN_MODEL_SETTING_KEY,
+  AGENT_OUTPUT_STYLE_SETTING_KEY,
   UI_GIT_COLLAPSED_REPOS_SETTING_KEY,
   UI_CUSTOM_COMMANDS_BY_PROJECT_SETTING_KEY,
   UI_PANE_WIDTHS_SETTING_KEY,
@@ -1045,6 +1046,10 @@ export interface SessionState {
    *  built-in model. Stored as `"configId:roleKey"`. Persisted in the settings
    *  table; independent of the other gen models. */
   titleGenModel: string | null;
+  /** Selected Claude output style name (built-in id or custom style name), or
+   *  null = never configured → the CLI default style. Persisted in the
+   *  settings table; injected per-turn by the Claude provider. */
+  outputStyle: string | null;
   /** Per-repo collapsed state in the Git panel. Persisted in the settings
    *  table as a JSON-encoded Record<string, boolean>. */
   collapsedGitRepos: Record<string, boolean>;
@@ -1612,6 +1617,8 @@ export interface SessionState {
   setTitleGenEnabled: (enabled: boolean) => void;
   /** Set the custom-model id used for auto thread-title generation. Persists. */
   setTitleGenModel: (modelId: string | null) => void;
+  /** Set the Claude output style (null = CLI default). Persists. */
+  setOutputStyle: (style: string | null) => void;
   /** Toggle a git repo card's collapsed state. Persists. */
   toggleCollapsedGitRepo: (repoPath: string) => void;
 }
@@ -2676,7 +2683,14 @@ function hydrateUsageHistory(
 /** Find the index of the trailing assistant message of the currently-open
  *  turn (the LAST assistant message whose turnMeta has no endedAt), or -1 if
  *  no open-turn assistant message exists. Used to locate where the live plan
- *  block should be attached / removed. */
+ *  block should be attached / removed.
+ *
+ *  NOTE: only a turn's OPENER carries turnMeta, so this actually resolves to
+ *  the opener — the right anchor for plan/turn-files cards (the render layer
+ *  re-pins those footers to the turn's end regardless of host message). For
+ *  append-order-sensitive content (tool_use fallback) use
+ *  {@link findOpenTurnLastAssistant} instead, which returns the turn's
+ *  chronologically-LAST assistant message. */
 function findOpenTurnTrailingAssistant(messages: ChatMessage[]): number {
   for (let i = messages.length - 1; i >= 0; i--) {
     const m = messages[i];
@@ -2685,6 +2699,26 @@ function findOpenTurnTrailingAssistant(messages: ChatMessage[]): number {
     }
   }
   return -1;
+}
+
+/** Find the chronologically-LAST assistant message of the currently-open
+ *  turn, or -1 if the turn has no assistant messages yet. Only the opener
+ *  carries turnMeta (later messages of the same turn don't), so this walks
+ *  forward from the opener to the end of the list — appending here keeps the
+ *  flattened message timeline in ARRIVAL order. The tool.use fallback MUST
+ *  use this, not the opener: appending a tool to the opener while later
+ *  narration messages exist places the tool BEFORE text that had already
+ *  streamed, and the renderer's completed-turn split ("everything up to the
+ *  last tool call is process") then misclassifies that narration as the
+ *  final reply — the "process data leaks below the panel" bug. */
+function findOpenTurnLastAssistant(messages: ChatMessage[]): number {
+  const openerIdx = findOpenTurnTrailingAssistant(messages);
+  if (openerIdx === -1) return -1;
+  for (let i = messages.length - 1; i > openerIdx; i--) {
+    const m = messages[i];
+    if (m && m.role === "assistant") return i;
+  }
+  return openerIdx;
 }
 
 /** The planId used for the single "live" plan block within the current turn.
@@ -3448,6 +3482,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   conflictResolveModel: null,
   titleGenEnabled: false,
   titleGenModel: null,
+  outputStyle: null,
   collapsedGitRepos: {} as Record<string, boolean>,
   ideFocusNonce: 0,
   idePendingReveal: null,
@@ -3807,6 +3842,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           UI_CONFLICT_RESOLVE_MODEL_SETTING_KEY,
           UI_TITLE_GEN_ENABLED_SETTING_KEY,
           UI_TITLE_GEN_MODEL_SETTING_KEY,
+          AGENT_OUTPUT_STYLE_SETTING_KEY,
           UI_GIT_COLLAPSED_REPOS_SETTING_KEY,
           UI_PASTE_TAG_THRESHOLD_CHARS_SETTING_KEY,
           UI_VOICE_INPUT_MODE_SETTING_KEY,
@@ -3923,6 +3959,8 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       set({ conflictResolveModel: conflictModelRaw || null });
       set({ titleGenEnabled: titleGenEnabledRaw === "on" });
       set({ titleGenModel: titleGenModelRaw || null });
+      const outputStyleRaw = ds[AGENT_OUTPUT_STYLE_SETTING_KEY];
+      set({ outputStyle: outputStyleRaw || null });
       const parseBucket = <T>(raw: string | null): Record<string, T> => {
         if (!raw) return {};
         try {
@@ -5228,14 +5266,17 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     if (e.type === "turn.done" || e.type === "error") {
       forceDeltaFlush();
     }
-    // A tool.use carrying an owning messageId (pi: PiMessageAdapter
-    // snapshots the narration message at toolcall_start; claude: the
-    // SdkMessageAdapter reuses the preceding text/thinking block's
-    // messageId). The narration text that precedes it is still sitting in
-    // the delta buffer — flush it first so the tool block lands on a real
-    // message instead of falling back to the open-turn heuristic (which
-    // would pile every tool onto the turn's opener).
-    if (e.type === "tool.use" && e.messageId) {
+    // A tool.use must land AFTER any narration text that has already
+    // streamed. The text is still sitting in the rAF delta buffer — flush it
+    // first (for EVERY tool.use, not just ones carrying an owning messageId:
+    // pi snapshots the narration message at toolcall_start; claude reuses
+    // the preceding text/thinking block's messageId). Without the flush a
+    // messageId-less tool could be appended to an earlier message while the
+    // buffered narration later materializes as a message AFTER it — the
+    // renderer's completed-turn split ("everything up to the last tool call
+    // is process") would then misclassify that narration as the final reply
+    // and leak it out of the process panel.
+    if (e.type === "tool.use") {
       forceDeltaFlush();
     }
 
@@ -5870,16 +5911,15 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           }
           // Fallback (no usable messageId — e.g. a tool block with no
           // preceding text/thinking in the same assistant message, or a
-          // legacy event): target the CURRENT turn's trailing assistant
-          // message — i.e. the last assistant message whose turnMeta has no
-          // endedAt (turn.done hasn't landed). We must NOT use
-          // "last assistant message" naively: after an edit-resend (or any
-          // history truncation), the truncated history's last assistant
-          // message is a CLOSED turn (turnMeta.endedAt is set), and appending
-          // the new turn's tool_use to it would merge two turns into one giant
-          // panel. Same "open turn" heuristic used by the text.delta /
-          // plan.update / compact paths.
-          const openIdx = findOpenTurnTrailingAssistant(next);
+          // legacy event): target the open turn's chronologically-LAST
+          // assistant message (findOpenTurnLastAssistant — NOT the opener,
+          // and NOT a naive "last assistant message": appending to the opener
+          // would place this tool BEFORE narration messages that already
+          // streamed, corrupting the arrival-order timeline the completed-
+          // turn process/reply split relies on; a naive last-assistant scan
+          // would, after an edit-resend / history truncation, hit a CLOSED
+          // turn's message and merge two turns into one giant panel).
+          const openIdx = findOpenTurnLastAssistant(next);
           let lastAssistant = openIdx >= 0 ? next[openIdx] : undefined;
           if (!lastAssistant) {
             // No open-turn assistant message exists — this tool_use starts a
@@ -8132,6 +8172,13 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     void api.setting
       .set({ key: UI_TITLE_GEN_MODEL_SETTING_KEY, value: modelId ?? "" })
       .catch((err) => console.error("setting.set(titleGenModel) failed:", err));
+  },
+
+  setOutputStyle: (style) => {
+    set({ outputStyle: style });
+    void api.setting
+      .set({ key: AGENT_OUTPUT_STYLE_SETTING_KEY, value: style ?? "" })
+      .catch((err) => console.error("setting.set(outputStyle) failed:", err));
   },
 
   toggleCollapsedGitRepo: (repoPath) => {

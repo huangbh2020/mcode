@@ -459,8 +459,9 @@ export class PiMessageAdapter {
   }
 
   /** End-of-turn finalization — the Pi analogue of Claude's flushFinal.
-   *  Called by the provider once `session.prompt()` settles (on success AND
-   *  on user abort; skipped on SDK error, matching Claude's error path).
+   *  Called by the provider once `session.prompt()` settles (on success,
+   *  user abort, AND SDK error — an external failure doesn't undo the file
+   *  writes that already landed, so the card must still surface them).
    *  Freezes the per-session file snapshot and emits `turn.files` so the
    *  renderer can show the "本轮修改" card with per-file tallies + a rewind
    *  button (adds/dels/before computed inside freeze()).

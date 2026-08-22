@@ -2018,6 +2018,43 @@ export const SkillsImportSchema = z.object({
 });
 export type SkillsImportInput = z.infer<typeof SkillsImportSchema>;
 
+/* ── Output style (settings panel) ──
+ *  Claude sessions can run with a different "output style" — the CLI rewrites
+ *  its system prompt to change HOW the model responds (default / Explanatory /
+ *  Learning / Proactive / Concise, plus user-defined markdown styles). The SDK
+ *  exposes this as `Settings.outputStyle` (NOT a top-level Options field) and
+ *  offers no runtime switch control request, so the selection is persisted
+ *  here and injected per-turn by the Claude provider. Changes therefore apply
+ *  on the NEXT turn (same contract as the MCP panel). Pi sessions do not
+ *  support output styles. */
+
+/**
+ * Setting key under which the selected output style name is persisted.
+ * Value = the exact style name the CLI matches on: a built-in id
+ * ("default" | "Explanatory" | "Learning" | "Proactive" | "Concise") or the
+ * frontmatter `name` of a custom style in ~/.mcode/output-styles/*.md.
+ * Empty/null = never configured → nothing injected (CLI default behavior).
+ */
+export const AGENT_OUTPUT_STYLE_SETTING_KEY = "agent.outputStyle";
+
+/** Which source a listed output style comes from. */
+export type OutputStyleSource = "builtin" | "user";
+
+/** One row of the settings panel's output-style list. `id` is the value to
+ *  persist under AGENT_OUTPUT_STYLE_SETTING_KEY. `description` is only set
+ *  for user styles (verbatim frontmatter text — user content, not localized);
+ *  built-in descriptions are i18n'd renderer-side by id. */
+export interface OutputStyleEntry {
+  id: string;
+  source: OutputStyleSource;
+  description?: string;
+}
+
+/** List selectable output styles (built-ins gated by the bundled CLI version
+ *  + user styles scanned from ~/.mcode/output-styles). */
+export const OutputStyleListSchema = z.object({});
+export type OutputStyleListInput = z.infer<typeof OutputStyleListSchema>;
+
 /* ── MCP management (settings panel) ──
  *  The settings panel's "MCP" section lists three MCP server sources and lets
  *  the user toggle, add, remove and import them:
@@ -3295,6 +3332,12 @@ export interface RpcMap {
     skipped: string[];
     errors: Array<{ name: string; error: string }>;
   }>;
+  /** Output styles (settings panel): list built-in + user styles. The
+   *  selection itself is persisted via the generic setting.get/set channels
+   *  under AGENT_OUTPUT_STYLE_SETTING_KEY. */
+  "outputStyle.list": (
+    input: OutputStyleListInput,
+  ) => Promise<{ styles: OutputStyleEntry[] }>;
   // Usage stats (settings panel)
   /** Aggregate the persisted per-turn usage history into summary / per-model /
    *  per-day views for the requested time range. Read-only. */
@@ -3542,6 +3585,8 @@ export const IPC = {
   MCP_REMOVE: "mcp:remove",
   MCP_SCAN_IMPORT: "mcp:scanImport",
   MCP_IMPORT: "mcp:import",
+  // Output styles (settings panel): list built-in + user styles
+  OUTPUT_STYLE_LIST: "outputStyle:list",
   // Usage stats (settings panel): aggregated token/cost usage over time ranges
   USAGE_STATS: "usage:stats",
   // Language servers (LSP): install/enable/sync/request

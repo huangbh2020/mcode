@@ -33,6 +33,7 @@ import { resolveSdkBinaryPath } from "./sdkBinaryPath.js";
 import { resolveGitBash } from "@main/lib/binaryResolve.js";
 import { samePath } from "@main/lib/pathGuard.js";
 import { getMcpManagement, readProjectMcpServers } from "@main/lib/mcpConfig.js";
+import { getOutputStyleSetting } from "@main/lib/outputStyleConfig.js";
 import { normalizeBashCommand } from "@main/lib/msysPath.js";
 import {
   browserList,
@@ -860,6 +861,20 @@ export class ClaudeAgentSdkProvider implements AgentProvider {
       };
     }
 
+    // Output style (settings panel): same Settings-not-Options trap as the
+    // MCP lists above. The CLI reads the style once at session start and has
+    // no runtime switch control request, so the selection only shapes NEW
+    // turns — which is exactly the per-turn granularity Mcode wants (every
+    // turn is a fresh query). Never-configured (null) keeps the CLI default
+    // and injects nothing.
+    const outputStyle = await getOutputStyleSetting();
+    if (outputStyle) {
+      options.settings = {
+        ...(typeof options.settings === "object" ? options.settings : {}),
+        outputStyle,
+      };
+    }
+
     const q = (await loadQuery())({ prompt: buildPromptInput(req), options });
 
     // Resolve the user-declared context-window tag from the selected model's
@@ -969,11 +984,13 @@ export class ClaudeAgentSdkProvider implements AgentProvider {
               message: (err as Error).message,
               code: "SDK_ERROR",
             });
-            ctx.emit({
-              type: "turn.done",
-              sessionId: req.sessionId,
-              reason: "error",
-            });
+            // Finalize through flushFinal (NOT a bare turn.done emit): the
+            // turn may have already written files before the stream broke,
+            // and the user still needs the "本轮修改" card to see (and
+            // rewind) what landed on disk. flushFinal also runs the plan
+            // collapse + subagent cleanup safety nets, and emits the closing
+            // turn.done{reason:"error"} exactly once via its own guard.
+            await activeAdapter.flushFinal("error");
             return;
           }
         }

@@ -359,6 +359,12 @@ export class PiAgentSdkProvider implements AgentProvider {
             message: (err as Error).message,
             code: "PI_SDK_ERROR",
           });
+          // Still run the end-of-turn finalization so partially-written files
+          // surface on the "本轮修改" card and can be rewound — an external
+          // failure (SDK crash / transport break) doesn't undo the writes
+          // that already landed, so the user must still see them. Mirrors
+          // the abort path above and ClaudeAgentSdkProvider's error path.
+          await adapter.flushFinal();
           ctx.emit({
             type: "turn.done",
             sessionId: req.sessionId,
