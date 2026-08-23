@@ -73,6 +73,7 @@ export const zh = {
   "chatStream.turnFiles.confirmDescHistory1": "撤销历史轮次会把该轮修改的文件恢复到当时修改前的状态，",
   "chatStream.turnFiles.confirmDescHistory2": "可能影响后续轮次对同一文件的修改。确定继续吗？",
   "chatStream.turnFiles.reviewDiff": "在编辑器中审查改动",
+  "chatStream.turnFiles.locateTitle": "在文件树中定位此文件",
   "chatStream.turnFiles.createdThisTurn": "本轮新建",
   "chatStream.turnFiles.modifiedThisTurn": "本轮修改",
   "chatStream.turnFiles.noChanges": "无变化",

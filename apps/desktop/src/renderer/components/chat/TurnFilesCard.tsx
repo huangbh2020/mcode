@@ -12,6 +12,7 @@ import {
   IconChevronRight,
   IconExternalLink,
   IconFile,
+  IconFocus,
   IconPlus,
   IconEdit,
 } from "@renderer/lib/icons.js";
@@ -217,7 +218,10 @@ export function TurnFilesCard({
  *     so several files can be reviewed side by side. `after` is left undefined
  *     so DiffPane reads the live working-tree file from disk.
  *
- *  An external-link glyph at the trailing edge signals the open affordance. */
+ *  The row is a div[role=button] (not a native button) because it CONTAINS a
+ *  real button: the trailing locate icon reveals this file in the right
+ *  panel's file tree (desktop only - nested buttons are invalid HTML).
+ *  An external-link glyph before it signals the row-click diff affordance. */
 function FileRow({ entry }: { entry: TurnFileEntry }) {
   const { t } = useI18n();
   const isCreated = entry.kind === "created";
@@ -281,10 +285,17 @@ function FileRow({ entry }: { entry: TurnFileEntry }) {
   };
 
   return (
-    <button
-      type="button"
+    <div
+      role="button"
+      tabIndex={0}
       onClick={handleOpen}
-      className="flex w-full items-center gap-2 rounded-md bg-surface-muted/40 px-2 py-1.5 text-left transition-colors hover:bg-surface-hover"
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          void handleOpen();
+        }
+      }}
+      className="flex w-full cursor-pointer items-center gap-2 rounded-md bg-surface-muted/40 px-2 py-1.5 text-left transition-colors hover:bg-surface-hover"
       title={t("chatStream.turnFiles.reviewDiff")}
     >
       <span aria-hidden title={isCreated ? t("chatStream.turnFiles.createdThisTurn") : t("chatStream.turnFiles.modifiedThisTurn")} className="shrink-0 text-content-subtle">
@@ -305,7 +316,25 @@ function FileRow({ entry }: { entry: TurnFileEntry }) {
         size={11}
         className={cn("ml-auto shrink-0 text-content-subtle")}
       />
-    </button>
+      {/* Locate this file in the right panel's file tree (expand ancestors +
+          scroll to it). stopPropagation so the row's diff-open doesn't fire.
+          Desktop only — the mobile shell has no file tree. */}
+      {isElectron && (
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            useSessionStore.getState().revealInFileTree(entry.filePath);
+          }}
+          onKeyDown={(e) => e.stopPropagation()}
+          className="shrink-0 rounded p-0.5 text-content-subtle transition-colors hover:bg-surface-hover hover:text-content"
+          title={t("chatStream.turnFiles.locateTitle")}
+          aria-label={t("chatStream.turnFiles.locateTitle")}
+        >
+          <IconFocus size={12} className="block" />
+        </button>
+      )}
+    </div>
   );
 }
 

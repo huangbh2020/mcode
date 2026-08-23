@@ -509,48 +509,69 @@ export function FileTree({ projectPath }: { projectPath: string }) {
     else nodeMap.current.delete(path);
   }, []);
 
-  // Reveal the active file in the tree: expand its ancestor dirs (so the node
-  // mounts - DirNode only renders children when open) then scroll it into view.
-  // Ancestor expansion is an async chain (setDirExpanded -> re-render ->
+  // Reveal a file in the tree: expand its ancestor dirs (so the node
+  // mounts - DirNode only renders children when open) then scroll it into
+  // view. Ancestor expansion is an async chain (setDirExpanded -> re-render ->
   // DirNode lazy-loads children -> child mounts), so we can't scroll
   // synchronously; we poll the node registry across rAF frames until the node
-  // appears (or give up after ~500ms).
+  // appears (or give up after ~500ms). Shared by the active-file reveal
+  // effect and the store-driven ideTreeReveal effect (turn-files card's
+  // 定位到工作树 button). Returns a cancel fn for the caller's effect cleanup.
+  const revealPath = useCallback(
+    (filePath: string): (() => void) => {
+      // Build the ancestor dir chain from the file's dir up to (excluding) the
+      // project root. E.g. "D:/proj/src/sub/a.ts" + root "D:/proj" ->
+      // ["D:/proj/src", "D:/proj/src/sub"] (shallow-to-deep). We expand
+      // shallow-first so each level's lazy load can kick off in mount order.
+      const ancestors: string[] = [];
+      let dir = dirname(filePath);
+      while (dir && dir !== projectPath) {
+        // Guard: if dirname stops making progress (filesystem root), stop.
+        ancestors.unshift(dir); // prepend -> shallowest first
+        const parent = dirname(dir);
+        if (parent === dir) break;
+        dir = parent;
+      }
+      for (const ancestor of ancestors) {
+        setDirExpanded(ancestor, true);
+      }
+
+      let frames = 0;
+      const MAX_FRAMES = 30; // ~500ms @60fps - enough for a few async dir loads
+      let raf = 0;
+      const tryScroll = () => {
+        const node = nodeMap.current.get(filePath);
+        if (node) {
+          node.scrollIntoView({ block: "nearest", behavior: "smooth" });
+          return;
+        }
+        if (++frames < MAX_FRAMES) {
+          raf = requestAnimationFrame(tryScroll);
+        }
+        // else: ancestors still loading after the budget - give up silently.
+      };
+      raf = requestAnimationFrame(tryScroll);
+      return () => cancelAnimationFrame(raf);
+    },
+    [projectPath, setDirExpanded],
+  );
+
+  // Reveal the currently-active editor file (classic "follow the editor").
   useEffect(() => {
     if (!activeFile || !activeFile.startsWith(projectPath)) return;
-    // Build the ancestor dir chain from the file's dir up to (excluding) the
-    // project root. E.g. "D:/proj/src/sub/a.ts" + root "D:/proj" ->
-    // ["D:/proj/src", "D:/proj/src/sub"] (shallow-to-deep). We expand
-    // shallow-first so each level's lazy load can kick off in mount order.
-    const ancestors: string[] = [];
-    let dir = dirname(activeFile);
-    while (dir && dir !== projectPath) {
-      // Guard: if dirname stops making progress (filesystem root), stop.
-      ancestors.unshift(dir); // prepend -> shallowest first
-      const parent = dirname(dir);
-      if (parent === dir) break;
-      dir = parent;
-    }
-    for (const ancestor of ancestors) {
-      setDirExpanded(ancestor, true);
-    }
+    return revealPath(activeFile);
+  }, [activeFile, projectPath, revealPath]);
 
-    let frames = 0;
-    const MAX_FRAMES = 30; // ~500ms @60fps - enough for a few async dir loads
-    let raf = 0;
-    const tryScroll = () => {
-      const node = nodeMap.current.get(activeFile);
-      if (node) {
-        node.scrollIntoView({ block: "nearest", behavior: "smooth" });
-        return;
-      }
-      if (++frames < MAX_FRAMES) {
-        raf = requestAnimationFrame(tryScroll);
-      }
-      // else: ancestors still loading after the budget - give up silently.
-    };
-    raf = requestAnimationFrame(tryScroll);
-    return () => cancelAnimationFrame(raf);
-  }, [activeFile, projectPath, setDirExpanded]);
+  // Reveal an explicitly-requested target (store action revealInFileTree,
+  // fired by the turn-files card's 定位到工作树 button). Identity-driven: the
+  // action always sets a fresh {filePath, nonce} object, so each request
+  // re-runs this effect even for the same path. Unlike the active-file
+  // reveal, this never opens anything in the editor.
+  const treeReveal = useSessionStore((s) => s.ideTreeReveal);
+  useEffect(() => {
+    if (!treeReveal || !treeReveal.filePath.startsWith(projectPath)) return;
+    return revealPath(treeReveal.filePath);
+  }, [treeReveal, projectPath, revealPath]);
 
   // Precompute lowercased sibling names for the root-level clash check so the
   // InlineNewEntryRow gets a stable Set (no per-render allocation in the row).

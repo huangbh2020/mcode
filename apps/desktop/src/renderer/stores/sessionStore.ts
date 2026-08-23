@@ -1060,6 +1060,14 @@ export interface SessionState {
    *  the visibility toggle. */
   ideFocusNonce: number;
 
+  /** Pending "reveal in file tree" target — set by the turn-files card's
+   *  定位到工作树 button. FileTree expands the target's ancestor dirs and
+   *  scrolls it into view whenever this object's identity changes (the nonce
+   *  makes every request a new object, like ideRevealNonce). Not
+   *  consumed/cleared — the effect only reacts to change, a stale value is
+   *  inert. Not persisted. */
+  ideTreeReveal: { filePath: string; nonce: number } | null;
+
   /** Pending goto-definition reveal target. When non-null, the EditPane for
    *  `filePath` should scroll to (line, column) and place the caret there on
    *  mount/nonce-bump, then clear this. Driven by `openFileInIde` line/col. */
@@ -1449,6 +1457,13 @@ export interface SessionState {
    *  card `rewound: true` in place — for both latest-turn and historical
    *  rewinds. The card is never removed, so the stream keeps a trace. */
   rewindTurn: (files: TurnFileEntry[], targetFiles: string[]) => Promise<void>;
+
+  /** Reveal a file in the IDE right panel's file tree: switches the panel to
+   *  the files tab, bumps ideFocusNonce (App's effect opens the panel if
+   *  collapsed), and sets ideTreeReveal so the tree expands the file's
+   *  ancestor dirs and scrolls to it. Desktop only — the mobile shell has no
+   *  file tree. */
+  revealInFileTree: (filePath: string) => void;
   refreshClaudeHealth: () => Promise<void>;
 
   /** Enqueue a file path to be added to the active session's composer as a
@@ -3485,6 +3500,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   outputStyle: null,
   collapsedGitRepos: {} as Record<string, boolean>,
   ideFocusNonce: 0,
+  ideTreeReveal: null,
   idePendingReveal: null,
   ideRevealNonce: 0,
   navBackByProject: {},
@@ -7325,6 +7341,18 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     } catch (err) {
       console.error("claude.rewindTurn failed:", err);
     }
+  },
+
+  revealInFileTree: (filePath) => {
+    // Panel-first: switching the tab + bumping the focus nonce both matter
+    // even before the tree reveal lands — the user asked to GO somewhere, so
+    // make sure the destination is visible. setRightPanelTab persists the
+    // tab like any manual tab click does.
+    get().setRightPanelTab("files");
+    set((s) => ({
+      ideFocusNonce: s.ideFocusNonce + 1,
+      ideTreeReveal: { filePath, nonce: (s.ideTreeReveal?.nonce ?? 0) + 1 },
+    }));
   },
 
   refreshClaudeHealth: async () => {

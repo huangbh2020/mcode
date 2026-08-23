@@ -70,6 +70,7 @@ export const en = {
   "chatStream.turnFiles.confirmDescHistory1": "Undoing a past turn restores its changed files to their pre-edit state,",
   "chatStream.turnFiles.confirmDescHistory2": "which may affect later turns that edited the same files. Continue?",
   "chatStream.turnFiles.reviewDiff": "Review changes in the editor",
+  "chatStream.turnFiles.locateTitle": "Reveal this file in the file tree",
   "chatStream.turnFiles.createdThisTurn": "Created this turn",
   "chatStream.turnFiles.modifiedThisTurn": "Modified this turn",
   "chatStream.turnFiles.noChanges": "No changes",
