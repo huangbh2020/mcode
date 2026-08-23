@@ -439,6 +439,30 @@ body,
   -webkit-font-smoothing: antialiased;
 }
 
+/* ───────────── Document scroll lock (fullscreen shell) ─────────────
+ * The app shell is a fixed-viewport layout: html/body/#root at height 100%
+ * with every scrollable surface an inner overflow container. On touch
+ * browsers, though, the DOCUMENT itself stayed scrollable/bounceable:
+ *  - iOS Safari resolves html's 100% against the *large* viewport (URL bar
+ *    hidden), so with the URL bar showing the document is scrollable by
+ *    that delta — and Safari also pans it to reveal a focused composer.
+ *  - A touch scroll starting at an inner scroller's boundary (message list
+ *    pinned at its top) chains up to the document.
+ * Either way the whole UI gets dragged down and stays shifted, and while
+ * the document is mid-scroll/rubber-band it eats subsequent touch
+ * gestures — the message list seems dead until a tap resets gesture
+ * targeting (the "sometimes can't scroll, whole interface moves" bug).
+ * Locking the document (no scroll, no overscroll chaining, no Android
+ * pull-to-refresh) keeps every gesture inside the inner scrollers. Safe
+ * everywhere this stylesheet loads: the Electron window is fixed-size and
+ * never relied on document scroll, and the pairing page (pair.html) has
+ * its own inline styles and doesn't import this file. */
+html,
+body {
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
 /* Dark-mode font rendering: switch from gray-scale antialiasing to the
  * platform default (subpixel on macOS). Gray AA thins light-on-dark strokes,
  * which is the "still not enough contrast" symptom on white text. Letting
