@@ -436,7 +436,7 @@ function registerBrowserTools(
     description: BROWSER_TOOL_SPECS.browser_navigate.description,
     promptSnippet: BROWSER_TOOL_SPECS.browser_navigate.promptSnippet,
     parameters: Type.Object({
-      url: Type.String({ description: "目标 URL,必须含 http:// 或 https://" }),
+      url: Type.String({ description: "目标 URL,http(s):// 网页或 file:/// 本地文件" }),
       browserId: Type.Optional(
         Type.String({ description: "目标浏览器视图 id;省略则自动复用第一个已开视图或新建" }),
       ),

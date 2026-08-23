@@ -152,7 +152,7 @@ async function buildBrowserMcpServer(
         name: "browser_navigate",
         description: BROWSER_TOOL_SPECS.browser_navigate.description,
         inputSchema: {
-          url: z.string().describe("目标 URL,必须含 http:// 或 https://"),
+          url: z.string().describe("目标 URL,http(s):// 网页或 file:/// 本地文件"),
           browserId: z.string().optional().describe("目标浏览器视图 id;省略则自动复用第一个已开视图或新建"),
           device: z
             .enum(["desktop", "iphone", "android"])

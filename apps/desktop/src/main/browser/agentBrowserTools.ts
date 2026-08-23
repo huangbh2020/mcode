@@ -128,11 +128,24 @@ export function saveScreenshotToDisk(
   }
 }
 
-/** Allowed URL schemes for `browser_navigate`. `file:` / `javascript:` /
- *  `data:` are rejected — the embedded browser is for web pages, and these
- *  schemes are either meaningless or unsafe under agent control. */
+/** Allowed URL schemes for `browser_navigate`: http(s) pages and local
+ *  `file:` pages (a rendered local file exposes no more than the Read tool
+ *  already does). `javascript:` / `data:` stay rejected — unsafe under agent
+ *  control. */
 function isAllowedUrl(url: string): boolean {
-  return /^https?:\/\//i.test(url.trim());
+  return /^(https?|file):\/\//i.test(url.trim());
+}
+
+/** Canonicalize a file URL: backslashes → forward slashes, and the two-slash
+ *  drive-letter form `file://D:/x` (drive parsed as a host → Chromium rejects
+ *  with ERR_INVALID_URL) or `file://localhost/x` → the three-slash
+ *  `file:///x` that actually loads. UNC hosts (`file://server/share/…`) are
+ *  left untouched — the lookahead only matches a drive letter. */
+function normalizeFileUrl(url: string): string {
+  if (!/^file:\/\//i.test(url)) return url;
+  return url
+    .replace(/\\/g, "/")
+    .replace(/^file:\/\/(?:localhost\/|(?=[A-Za-z]:))/i, "file:///");
 }
 
 /** Find a browserId to operate on. When the caller passed one, validate it
@@ -190,11 +203,12 @@ export async function browserNavigate(
   args: { url: string; browserId?: string; device?: AgentDevicePreset },
   projectPath: string,
 ): Promise<ToolResult> {
-  const url = (args.url ?? "").trim();
-  if (!url) return errorResult("url 不能为空");
+  const raw = (args.url ?? "").trim();
+  if (!raw) return errorResult("url 不能为空");
+  const url = normalizeFileUrl(raw);
   if (!isAllowedUrl(url)) {
     return errorResult(
-      `仅支持 http/https 协议(收到 "${url.slice(0, 40)}")。请使用完整的 http(s):// 地址。`,
+      `仅支持 http/https/file 协议(收到 "${raw.slice(0, 40)}")。网页用完整 http(s):// 地址;本地文件用 file:/// 绝对路径(Windows 形如 file:///D:/dir/page.html)。`,
     );
   }
   const device = coerceDevice(args.device);
@@ -449,9 +463,9 @@ export const BROWSER_TOOL_SPECS: Record<string, BrowserToolSpec> = {
   browser_navigate: {
     name: "browser_navigate",
     description:
-      "在应用内浏览器中导航到指定 URL(仅 http/https)。若没有打开的浏览器视图会自动创建并显示一个。" +
+      "在应用内浏览器中导航到指定 URL(支持 http/https 网页与 file:/// 本地文件,本地文件 Windows 形如 file:///D:/dir/page.html)。若没有打开的浏览器视图会自动创建并显示一个。" +
       "device 可选——desktop(PC 全宽,默认)/iphone/android(移动端模拟),测试移动端页面时用后两者。导航后需调用 browser_snapshot 读取页面内容。",
-    promptSnippet: "browser_navigate({url, device?}): 打开网页;device 可选 desktop/iphone/android",
+    promptSnippet: "browser_navigate({url, device?}): 打开网页或 file:/// 本地文件;device 可选 desktop/iphone/android",
   },
   browser_snapshot: {
     name: "browser_snapshot",
