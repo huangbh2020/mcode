@@ -11,10 +11,11 @@
  *    sibling hit areas (nested buttons are invalid HTML), so picking a
  *    session never fires an action by mistake. Feedback is `active:` state,
  *    not hover.
- *  - Row actions (pin / rename / archive / delete, project new-session,
- *    archived restore/delete) open a bottom action sheet — the touch
- *    equivalent of the desktop context menus. Delete arms on the first tap
- *    and fires on the second, replacing the desktop inline-confirm icons.
+ *  - Row actions (pin / rename / archive / delete, archived restore/delete)
+ *    open a bottom action sheet — the touch equivalent of the desktop context
+ *    menus. Delete arms on the first tap and fires on the second, replacing
+ *    the desktop inline-confirm icons. New-session-in-project lives on the
+ *    project header's always-visible "+" instead (no hover on touch).
  *  - A title search box rides on the same cross-project `session:search`
  *    RPC as the desktop Ctrl+K palette; picking a result switches project
  *    first, then opens the tab (mirrors CommandPalette).
@@ -53,7 +54,6 @@ import {
  *  active ones so the sheet offers restore instead of archive. */
 type SheetTarget =
   | { kind: "session"; session: Session }
-  | { kind: "project"; project: Project }
   | { kind: "archived-session"; session: Session }
   | { kind: "archived-project"; project: Project };
 
@@ -262,7 +262,9 @@ export function MobileSessionDrawer({
           </div>
         </div>
 
-        {/* New session — primary action, one tap from anywhere. */}
+        {/* New session — primary action, one tap from anywhere. The trailing
+            project name spells out where the session will land, since the
+            fallback target (first project) isn't otherwise visible. */}
         {newSessionProjectId && (
           <div className="shrink-0 px-3 pb-2">
             <button
@@ -270,8 +272,11 @@ export function MobileSessionDrawer({
               onClick={() => startNewSession(newSessionProjectId)}
               className="flex h-10 w-full items-center justify-center gap-1.5 rounded-xl bg-accent text-sm font-medium text-surface active:opacity-80"
             >
-              <IconPlus size={16} />
-              新建会话
+              <IconPlus size={16} className="shrink-0" />
+              <span className="shrink-0">新建会话</span>
+              <span className="min-w-0 max-w-[150px] truncate text-xs font-normal text-surface/75">
+                · {projectNameById.get(newSessionProjectId)}
+              </span>
             </button>
           </div>
         )}
@@ -333,7 +338,7 @@ export function MobileSessionDrawer({
                       count={total}
                       expanded={expanded}
                       onToggle={() => toggleProjectExpanded(p.id)}
-                      onMore={() => openSheet({ kind: "project", project: p })}
+                      onNewSession={() => startNewSession(p.id)}
                     />
                     {expanded && (
                       <div className="ml-5 border-l border-edge/60 pl-1">
@@ -445,10 +450,6 @@ export function MobileSessionDrawer({
           }}
           onDeleteSession={(s) => {
             void deleteSession(s.id);
-            setSheet(null);
-          }}
-          onNewSession={(pid) => {
-            startNewSession(pid);
             setSheet(null);
           }}
           onRestoreProject={(pid) => {
@@ -580,7 +581,6 @@ function ActionSheet({
   onArchive,
   onRestoreSession,
   onDeleteSession,
-  onNewSession,
   onRestoreProject,
   onDeleteProject,
 }: {
@@ -595,7 +595,6 @@ function ActionSheet({
   /** Archived-row 恢复到列表 (archive=false). */
   onRestoreSession: (s: Session) => void;
   onDeleteSession: (s: Session) => void;
-  onNewSession: (projectId: string) => void;
   onRestoreProject: (projectId: string) => void;
   onDeleteProject: (projectId: string) => void;
 }) {
@@ -633,15 +632,6 @@ function ActionSheet({
       );
       break;
     }
-    case "project":
-      body = (
-        <SheetItem
-          icon={<IconPlus size={18} />}
-          label="在此项目新建会话"
-          onClick={() => onNewSession(target.project.id)}
-        />
-      );
-      break;
     case "archived-session": {
       const s = target.session;
       body = (
@@ -818,21 +808,22 @@ function SessionRowIcon({ providerId }: { providerId: string }) {
   return <Icon size={16} className={cn("shrink-0", color)} />;
 }
 
-/* ── Project header — tap toggles expand, "…" offers project actions. ── */
+/* ── Project header — tap toggles expand, "+" starts a session in it. ── */
 
 function ProjectHeader({
   project,
   count,
   expanded,
   onToggle,
-  onMore,
+  onNewSession,
 }: {
   project: Project;
   count: number;
   expanded: boolean;
   onToggle: () => void;
-  onMore: () => void;
+  onNewSession: () => void;
 }) {
+  const { t } = useI18n();
   return (
     <div className="flex items-stretch">
       <button
@@ -848,13 +839,16 @@ function ProjectHeader({
         <span className="truncate text-sm font-medium text-content">{project.name}</span>
         {count > 0 && <span className="shrink-0 text-xs text-content-subtle">{count}</span>}
       </button>
+      {/* Always visible (no hover on touch) — mirrors the desktop project
+          header's hover "+". It replaced the "…" sheet, whose only item was
+          this same action. */}
       <button
         type="button"
-        aria-label="项目操作"
-        onClick={onMore}
+        aria-label={t("layout.newSessionHere")}
+        onClick={onNewSession}
         className="flex w-11 shrink-0 items-center justify-center self-stretch rounded-lg text-content-subtle active:bg-surface-muted"
       >
-        <IconDotsVertical size={18} />
+        <IconPlus size={18} />
       </button>
     </div>
   );
