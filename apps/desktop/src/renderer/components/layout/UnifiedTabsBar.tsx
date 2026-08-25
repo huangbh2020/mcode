@@ -314,7 +314,7 @@ export function UnifiedTabsBar() {
                 // min-width so its label + close button are fully visible.
                 planTabActive && editorFocused ? "min-w-[100px] max-w-[200px]" : "max-w-[160px]",
                 planTabActive && editorFocused
-                  ? "bg-accent/15 text-accent"
+                  ? "bg-accent/15 text-content dark:text-accent"
                   : "text-content-muted hover:bg-surface-muted/50 hover:text-content",
               )}
             >

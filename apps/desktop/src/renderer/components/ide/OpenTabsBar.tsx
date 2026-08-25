@@ -310,7 +310,7 @@ export function OpenTabsBar() {
                 // min-width so its label + close button are fully visible.
                 planTabActive ? "min-w-[100px] max-w-[200px]" : "max-w-[160px]",
                 planTabActive
-                  ? "bg-accent/15 text-accent"
+                  ? "bg-accent/15 text-content dark:text-accent"
                   : "text-content-muted hover:bg-surface-muted/50 hover:text-content",
               )}
             >
@@ -496,7 +496,7 @@ export function SortableFileTab({
         // hover-only.
         isActive ? "min-w-[140px] max-w-[240px]" : "max-w-[160px]",
         isActive
-          ? "bg-accent/15 text-accent"
+          ? "bg-accent/15 text-content dark:text-accent"
           : "text-content-muted hover:bg-surface-muted/50 hover:text-content",
         isDragging && "shadow-lg",
       )}

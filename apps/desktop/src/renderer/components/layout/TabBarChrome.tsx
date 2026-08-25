@@ -90,7 +90,7 @@ export function TabBarOverflowMenu({ items, heading, onSelect }: OverflowMenuPro
                 className={cn(
                   "flex w-full items-center gap-2 px-3 py-1.5 text-left text-[11px] outline-none select-none",
                   "data-[highlighted]:bg-surface-muted",
-                  item.active ? "text-accent" : "text-content-muted",
+                  item.active ? "text-content dark:text-accent" : "text-content-muted",
                 )}
               >
                 {item.dotClass && (

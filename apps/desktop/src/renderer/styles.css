@@ -115,13 +115,14 @@ div:has(> [role="menu"]) {
   --input-edge: 212 212 216; /* zinc-300 */
   /* accent + status (one shade each; tuned per theme for contrast) */
   --accent: 5 150 105; /* emerald-600 */
-  /* Inline code span foreground — light mode uses the brand accent VERBATIM
-   * (user preference: keep the pure theme color even though small-text
-   * contrast on the muted recess is ~3.5:1, below WCAG AA). Dark mode mixes
-   * 60/40 toward --content instead (see the .dark override) so a saturated
-   * brand color doesn't glare against the dark recess. Consumed via
-   * [color:var(--code-fg)] in Markdown.tsx. */
-  --code-fg: rgb(var(--accent));
+  /* Inline code span foreground — light mode drops the brand tint entirely
+   * and uses the plain body color: the accent (emerald-600) only hit ~3.5:1
+   * on the muted recess and even the darkened mix still read as tinted
+   * small text, so light follows the GitHub-light convention of plain
+   * near-black inline code on a gray recess. Dark mode keeps its accent
+   * mix (see the .dark override). Consumed via [color:var(--code-fg)] in
+   * Markdown.tsx. */
+  --code-fg: rgb(var(--content));
   --danger: 220 38 38; /* red-600 */
   --warning: 217 119 6; /* amber-600 */
   --info: 124 58 237; /* violet-600 */

@@ -316,8 +316,11 @@ export function SortableSessionTab({
       title={title}
       className={cn(
         "group flex max-w-[200px] min-w-0 shrink-0 cursor-pointer select-none items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] transition-colors",
+        // Active tab: accent-tinted pill marks the selection, but the label
+        // stays near-black in light mode — accent-on-accent-tint read ~3.3:1
+        // (unreadable). Dark keeps the accent text (it mixes fine there).
         isActive
-          ? "bg-accent/15 text-accent"
+          ? "bg-accent/15 text-content dark:text-accent"
           : "text-content-muted hover:bg-surface-muted/50 hover:text-content",
         isDragging && "shadow-lg",
       )}
