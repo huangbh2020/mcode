@@ -40,9 +40,12 @@ type SearchMode = "name" | "content";
  * global Cmd/Ctrl+Shift+F hotkey (wired in App.tsx). Visibility lives in the
  * session store (`searchDialogOpen`), mirroring the command-palette pattern.
  *
- * Clicking a result opens it in the CENTER pane editor (via openFileInIde) but
- * keeps the dialog open so the user can open several results in a row. Esc (or
- * the close button / backdrop) closes the dialog. Mount once at the App root.
+ * Clicking a result opens it in the CENTER pane editor (via openFileInIde) and
+ * closes the dialog - the user is done searching once a target is picked. Esc
+ * (or the close button / backdrop) also closes. The query / mode /
+ * case-sensitivity survive a close, so reopening resumes the last search
+ * (VS Code global-search behavior); the query is selected on reopen so typing
+ * overwrites it. Mount once at the App root.
  *
  * The search logic (debounce + reqIdRef stale-guard + keyboard nav + match
  * highlighting) migrated verbatim from the old inline search in FilesPanel.tsx;
@@ -62,8 +65,8 @@ export function SearchDialog() {
     return proj?.path ?? null;
   }, [activeProjectId, projects]);
 
-  // Search state. Reset on close so the dialog always opens fresh (matches the
-  // command palette's reset-on-close behavior).
+  // Search state. query / mode / caseSensitive survive a close so reopening
+  // resumes the last search; only transient per-open state is reset below.
   const [mode, setMode] = useState<SearchMode>("name");
   const [query, setQuery] = useState("");
   const [caseSensitive, setCaseSensitive] = useState(false);
@@ -82,16 +85,14 @@ export function SearchDialog() {
   // mode, one per matched line in content mode.
   const flatCount = mode === "name" ? nameResults.length : grepResults.length;
 
-  // Reset everything when the dialog closes (fresh open = clean slate).
+  // Drop transient per-open state when the dialog closes (and invalidate any
+  // in-flight request), but keep the query / mode / case sensitivity so the
+  // next open resumes the last search. The search effect re-runs on open (its
+  // deps include `open`), refreshing results for the preserved query.
   useEffect(() => {
     if (open) return;
-    setMode("name");
-    setQuery("");
-    setCaseSensitive(false);
-    setNameResults([]);
-    setGrepResults([]);
-    setLoading(false);
     setActiveIdx(0);
+    setLoading(false);
     reqIdRef.current++;
   }, [open]);
 
@@ -157,16 +158,21 @@ export function SearchDialog() {
     el?.scrollIntoView({ block: "nearest" });
   }, [activeIdx, isSearching, flatCount]);
 
+  // Open a result and close the dialog - picking a target ends the search.
+  const openResult = (path: string) => {
+    openFileInIde(path);
+    setOpen(false);
+  };
+
   // Open the flat-active item: a file in name mode, or the file of the active
-  // matched line in content mode. Keeps the dialog open (VS Code global-search
-  // style) so multiple results can be opened in sequence.
+  // matched line in content mode.
   const openActive = () => {
     if (mode === "name") {
       const f = nameResults[activeIdx];
-      if (f) openFileInIde(f.path);
+      if (f) openResult(f.path);
     } else {
       const m = grepResults[activeIdx];
-      if (m) openFileInIde(m.path);
+      if (m) openResult(m.path);
     }
   };
 
@@ -218,9 +224,13 @@ export function SearchDialog() {
     <Dialog.Root
       open={open}
       onOpenChange={(o) => setOpen(o)}
-      // Focus the input when the dialog opens so typing works immediately.
+      // Focus (and select) the input when the dialog opens so typing works
+      // immediately; selecting lets a fresh keystroke replace the remembered
+      // query while reopening still shows what was last searched.
       onOpenChangeComplete={(o) => {
-        if (o) inputRef.current?.focus();
+        if (!o) return;
+        inputRef.current?.focus();
+        inputRef.current?.select();
       }}
     >
       <Dialog.Portal>
@@ -299,7 +309,7 @@ export function SearchDialog() {
                     results={nameResults}
                     activeIdx={activeIdx}
                     onHover={setActiveIdx}
-                    onOpen={(path) => openFileInIde(path)}
+                    onOpen={openResult}
                   />
                 ) : (
                   <ContentSearchResults
@@ -307,7 +317,7 @@ export function SearchDialog() {
                     results={grepResults}
                     activeIdx={activeIdx}
                     onHover={setActiveIdx}
-                    onOpen={(path) => openFileInIde(path)}
+                    onOpen={openResult}
                   />
                 )
               ) : (
