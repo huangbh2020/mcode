@@ -33,6 +33,7 @@
  * ClaudeAgentSdkProvider and TerminalManager.
  */
 import type { AgentProvider, StartTurnRequest, ProviderContext, TurnHandle, ProviderCapabilities } from "@contracts/provider";
+import type { PiProviderPublic } from "@contracts/piModel";
 import { PiMessageAdapter } from "./PiMessageAdapter.js";
 import { PiModelsStore } from "@main/lib/piModelsStore.js";
 import { loadPiSdk } from "./piSdkLoader.js";
@@ -135,8 +136,15 @@ export class PiAgentSdkProvider implements AgentProvider {
     // key is authoritative. Keys are decrypted from the safeStorage-backed
     // map on every turn (one-shot, never persisted in this process).
     const modelRuntime = await sdk.ModelRuntime.create();
+    // Providers the user configured in ~/.pi/agent/models.json (settings
+    // panel or hand-edited). This is the ONLY model surface Mcode exposes for
+    // pi: the runtime also carries the SDK's builtin provider catalog
+    // (anthropic/openai/…), whose auth can silently resolve from environment
+    // variables — running on it would make an unconfigured model appear to
+    // work (e.g. ANTHROPIC_API_KEY left by a Claude Code install).
+    let publicProviders: Record<string, PiProviderPublic> = {};
     try {
-      const publicProviders = await PiModelsStore.listPublic();
+      publicProviders = await PiModelsStore.listPublic();
       for (const [name, pub] of Object.entries(publicProviders)) {
         if (!pub.hasApiKey) continue;
         const key = PiModelsStore.resolveApiKey(name);
@@ -150,26 +158,73 @@ export class PiAgentSdkProvider implements AgentProvider {
       ctx.log.warn(`pi: failed to load API keys (continuing without): ${(err as Error).message}`);
     }
 
+    // Guard: a pi turn must run on a user-configured model. With no
+    // providers in models.json there is nothing legitimate to run on — fail
+    // the turn with a visible error instead of letting the SDK pick its
+    // builtin default. The composer blocks earlier (resolveSendModel), but
+    // other entry points (mobile RPC) can still reach here.
+    if (Object.keys(publicProviders).length === 0) {
+      ctx.log.error("pi: no providers configured in models.json, refusing to start turn");
+      ctx.emit({
+        type: "error",
+        sessionId: req.sessionId,
+        message: "Pi 未配置任何模型:请先在「设置 → 模型配置」中添加模型后再发送。",
+        code: "PI_NO_MODEL",
+      });
+      ctx.emit({ type: "turn.done", sessionId: req.sessionId, reason: "error" });
+      return {
+        done: Promise.resolve(),
+        interrupt: () => {},
+        isRunning: () => false,
+      };
+    }
+
     // Resolve the model the user picked in the composer. Pi model ids are
     // "providerId/modelId" (see projectModel in ipc/piModels.ts); pi SDK's
     // createAgentSession takes a Model object, not a string, so we look it up
-    // via the same runtime that already has the user's keys injected. When the
-    // id is absent ("default" / unset / malformed / unknown to the runtime),
-    // we fall back to pi's default — letting the SDK pick from settings/env,
-    // exactly the pre-selection behavior.
+    // via the same runtime that already has the user's keys injected. Only
+    // providers present in models.json are accepted — an id naming a builtin
+    // provider (a stale pick from before the picker was filtered) falls back
+    // to the first configured model below, never the builtin catalog.
     let resolvedModel: ReturnType<typeof modelRuntime.getModel> | undefined;
     if (req.model && req.model !== "default") {
       const slashIdx = req.model.indexOf("/");
       if (slashIdx > 0 && slashIdx < req.model.length - 1) {
         const providerName = req.model.slice(0, slashIdx);
         const modelId = req.model.slice(slashIdx + 1);
-        try {
-          resolvedModel = modelRuntime.getModel(providerName, modelId);
-          if (!resolvedModel) {
-            ctx.log.warn(`pi: model "${req.model}" not found in runtime, falling back to default`);
+        if (!publicProviders[providerName]) {
+          ctx.log.warn(
+            `pi: model "${req.model}" names provider "${providerName}" not configured in models.json, falling back to the first configured model`,
+          );
+        } else {
+          try {
+            resolvedModel = modelRuntime.getModel(providerName, modelId);
+            if (!resolvedModel) {
+              ctx.log.warn(`pi: model "${req.model}" not found in runtime, falling back`);
+            }
+          } catch (err) {
+            ctx.log.warn(`pi: failed to resolve model "${req.model}": ${(err as Error).message}`);
           }
-        } catch (err) {
-          ctx.log.warn(`pi: failed to resolve model "${req.model}": ${(err as Error).message}`);
+        }
+      }
+    }
+    // Fallback (unset/"default"/stale id/unknown model): the first configured
+    // provider's first model — mirrors the composer's resolveSendModel
+    // ("auto" = first configured model) and guarantees the turn never rides
+    // the SDK's builtin default.
+    if (!resolvedModel) {
+      for (const [name, pub] of Object.entries(publicProviders)) {
+        const first = (pub.models ?? []).find((m) => m.id?.trim());
+        if (!first) continue;
+        try {
+          const candidate = modelRuntime.getModel(name, first.id);
+          if (candidate) {
+            ctx.log.info(`pi: falling back to first configured model "${name}/${first.id}"`);
+            resolvedModel = candidate;
+            break;
+          }
+        } catch {
+          // Provider failed to compose in the runtime — try the next one.
         }
       }
     }

@@ -61,7 +61,16 @@ export async function listAvailablePiModels(): Promise<BuiltinModelOption[]> {
       if (key) await runtime.setRuntimeApiKey(name, key);
     }
     const available = await runtime.getAvailable();
-    return available.map((m) => projectModel(m));
+    // Only providers the user actually configured in models.json may surface
+    // in the picker. The runtime also carries the SDK's builtin provider
+    // catalog (anthropic/openai/…) whose auth can resolve from environment
+    // variables — with ANTHROPIC_API_KEY set (e.g. a Claude Code install on
+    // the same machine) an empty-config picker would otherwise list anthropic
+    // models that were never configured in Mcode.
+    const configured = new Set(Object.keys(publicProviders));
+    return available
+      .filter((m) => configured.has(m.provider))
+      .map((m) => projectModel(m));
   } catch (err) {
     // Non-fatal: return empty so the picker just shows nothing for pi.
     // Common case is pi SDK failed to load on a non-pi-user's machine.

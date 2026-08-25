@@ -2341,7 +2341,12 @@ function syncConfigFromSession(
 /**
  * Resolve the model a send should actually use.
  *
- * An explicit selection (`model !== "default"`) passes through untouched.
+ * An explicit selection (`model !== "default"`) passes through untouched —
+ * except for pi, whose ids must resolve against `piAvailableModels` (the
+ * picker's only surface): a stale id (provider deleted mid-session, or a
+ * builtin-catalog id like "anthropic/…" picked before the list was filtered
+ * to user-configured providers) falls through to the default resolution
+ * instead of sending a model that was never actually configured.
  * "default" (the chip's "默认"/auto) means "the first configured model" —
  * the lists mirror the ModelDropdown's selectable surface per provider:
  *
@@ -2359,13 +2364,16 @@ function syncConfigFromSession(
 function resolveSendModel(
   s: Pick<SessionState, "model" | "customModelId" | "providerId" | "providers" | "customModels" | "piAvailableModels">,
 ): { model: string; customModelId: string | null } | null {
-  if (s.model !== "default") return { model: s.model, customModelId: s.customModelId };
   const provider = s.providers.find((p) => p.id === s.providerId);
-  if (!provider) return null;
-  if (provider.id === "pi-sdk") {
+  if (provider?.id === "pi-sdk") {
+    if (s.model !== "default" && s.piAvailableModels.some((m) => m.id === s.model)) {
+      return { model: s.model, customModelId: null };
+    }
     const first = s.piAvailableModels[0];
     return first ? { model: first.id, customModelId: null } : null;
   }
+  if (s.model !== "default") return { model: s.model, customModelId: s.customModelId };
+  if (!provider) return null;
   if (provider.id === "claude-sdk") {
     for (const cfg of s.customModels) {
       const first = cfg.models.find((m) => m.id.trim());
