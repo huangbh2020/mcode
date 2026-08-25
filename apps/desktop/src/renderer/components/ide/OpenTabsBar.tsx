@@ -308,9 +308,9 @@ export function OpenTabsBar() {
                 // Matches the file-tab chip look (rounded-md + resting bg) —
                 // the plan view is an editor-kind tab.
                 "group flex min-w-0 shrink-0 cursor-pointer select-none items-center gap-1.5 rounded-md px-2.5 py-1 text-[11px] transition-colors",
-                // Match the file-tab width rules: active plan tab gets a
-                // min-width so its label + close button are fully visible.
-                planTabActive ? "min-w-[100px] max-w-[200px]" : "max-w-[160px]",
+                // Same state-independent width cap as file tabs — activation
+                // never changes the tab's width.
+                "max-w-[160px]",
                 planTabActive
                   ? "bg-accent/15 text-content ring-1 ring-inset ring-accent/40 dark:text-accent"
                   : "bg-surface-muted/60 text-content-muted hover:bg-surface-hover/70 hover:text-content",
@@ -491,15 +491,14 @@ export function SortableFileTab({
       aria-selected={isActive}
       title={path}
       className={cn(
-        // Editor file tabs read as squarish chips with a resting background —
-        // deliberately distinct from the pill-shaped, transparent session
-        // tabs they share the unified tab strip with (SortableSessionTab).
+        // Editor file tabs share the same chip style as session tabs
+        // (rounded-md + resting bg); in the unified strip a vertical divider
+        // separates the two groups.
         "group flex min-w-0 shrink-0 cursor-pointer select-none items-center gap-1.5 rounded-md px-2.5 py-1 text-[11px] transition-colors",
-        // The active tab gets a min-width so its name + close button are
-        // always fully visible (not truncated by sibling tabs). Background
-        // tabs can shrink more aggressively since their close button is
-        // hover-only.
-        isActive ? "min-w-[140px] max-w-[240px]" : "max-w-[160px]",
+        // Width caps are identical in both states so activating a tab never
+        // stretches it or shifts the strip layout; the always-visible close
+        // button on the active tab just truncates the name a bit harder.
+        "max-w-[160px]",
         isActive
           ? "bg-accent/15 text-content ring-1 ring-inset ring-accent/40 dark:text-accent"
           : "bg-surface-muted/60 text-content-muted hover:bg-surface-hover/70 hover:text-content",

@@ -32,10 +32,9 @@ const EMPTY_OPEN_FILES: string[] = [];
 
 /** The unified center tab bar (`tabs` displayMode): ONE strip holding the
  *  open session tabs AND the editor's file tabs (+ the per-session plan
- *  pseudo-tab) side by side, with no visual grouping between them — session
- *  tabs render as transparent pills while file/plan tabs render as squarish
- *  chips with a resting background (plus the provider icon vs file-type
- *  icon), so the two kinds stay distinguishable at a glance. Clicking a
+ *  pseudo-tab) side by side. Both kinds share the same chip style; a
+ *  vertical divider separates the session group from the editor group (plus
+ *  the provider icon vs file-type icon as a secondary cue). Clicking a
  *  session tab
  *  shows that session's chat full-width; clicking a file / plan tab shows
  *  the editor full-width (the `centerTabFocus` store flag — see
@@ -264,6 +263,16 @@ export function UnifiedTabsBar() {
                 );
               })}
             </SortableContext>
+
+            {/* Group divider: session tabs on the left, editor tabs (files +
+                the plan pseudo-tab) on the right. Only rendered when both
+                groups have content. content-subtle (not bg-edge) so the line
+                reads clearly against the bar in both themes; self-center
+                against the strip's items-end alignment. */}
+            {tabs.length > 0 && (openFiles.length > 0 || hasPlanTab) && (
+              <div aria-hidden className="mx-1.5 h-4 w-px shrink-0 self-center bg-content-subtle/50" />
+            )}
+
             <SortableContext items={openFiles} strategy={horizontalListSortingStrategy}>
               {openFiles.map((path) => (
                 <SortableFileTab
@@ -312,13 +321,12 @@ export function UnifiedTabsBar() {
                 }
               }}
               className={cn(
-                // Matches the file-tab chip look (rounded-md + resting bg) —
-                // the plan view is an editor-kind tab, distinct from the
-                // pill-shaped session tabs in this strip.
+                // Matches the file-tab chip look — the plan view is an
+                // editor-kind tab in the post-divider group.
                 "group flex min-w-0 shrink-0 cursor-pointer select-none items-center gap-1.5 rounded-md px-2.5 py-1 text-[11px] transition-colors",
-                // Match the file-tab width rules: active plan tab gets a
-                // min-width so its label + close button are fully visible.
-                planTabActive && editorFocused ? "min-w-[100px] max-w-[200px]" : "max-w-[160px]",
+                // Same state-independent width cap as file tabs — activation
+                // never changes the tab's width.
+                "max-w-[160px]",
                 planTabActive && editorFocused
                   ? "bg-accent/15 text-content ring-1 ring-inset ring-accent/40 dark:text-accent"
                   : "bg-surface-muted/60 text-content-muted hover:bg-surface-hover/70 hover:text-content",

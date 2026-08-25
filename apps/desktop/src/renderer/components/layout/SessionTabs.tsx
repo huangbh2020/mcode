@@ -315,13 +315,13 @@ export function SortableSessionTab({
       aria-selected={isActive}
       title={title}
       className={cn(
-        "group flex max-w-[200px] min-w-0 shrink-0 cursor-pointer select-none items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] transition-colors",
-        // Active tab: accent-tinted pill marks the selection, but the label
-        // stays near-black in light mode — accent-on-accent-tint read ~3.3:1
-        // (unreadable). Dark keeps the accent text (it mixes fine there).
+        // Uniform chip style shared with editor file tabs (rounded-md +
+        // resting bg). In the unified tab strip the two kinds are told
+        // apart by the vertical divider between the groups, not by shape.
+        "group flex max-w-[200px] min-w-0 shrink-0 cursor-pointer select-none items-center gap-1.5 rounded-md px-2.5 py-1 text-[11px] transition-colors",
         isActive
-          ? "bg-accent/15 text-content dark:text-accent"
-          : "text-content-muted hover:bg-surface-muted/50 hover:text-content",
+          ? "bg-accent/15 text-content ring-1 ring-inset ring-accent/40 dark:text-accent"
+          : "bg-surface-muted/60 text-content-muted hover:bg-surface-hover/70 hover:text-content",
         isDragging && "shadow-lg",
       )}
     >
