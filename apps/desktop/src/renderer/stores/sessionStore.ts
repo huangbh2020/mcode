@@ -3370,8 +3370,10 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   // if any) and by `startSession`. Defaulting to [] here means there's no
   // phantom active tab before hydration completes.
   openTabs: [],
-  // Persisted in `settings` table; init() overwrites from the DB.
-  displayMode: "single",
+  // Persisted in `settings` table; init() overwrites from the DB. Default is
+  // `tabs` (unified tab bar) — new users land on the tabbed center pane;
+  // anyone who explicitly picked a mode keeps their stored choice.
+  displayMode: "tabs",
   // Center focus for the unified tab bar (`tabs` displayMode). UI-only.
   centerTabFocus: "chat",
   // UI language. Persisted in `settings` table; init() overwrites from the

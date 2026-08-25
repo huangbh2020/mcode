@@ -32,8 +32,11 @@ const EMPTY_OPEN_FILES: string[] = [];
 
 /** The unified center tab bar (`tabs` displayMode): ONE strip holding the
  *  open session tabs AND the editor's file tabs (+ the per-session plan
- *  pseudo-tab) side by side, with no visual grouping between them — the
- *  provider icon vs file-type icon tells them apart. Clicking a session tab
+ *  pseudo-tab) side by side, with no visual grouping between them — session
+ *  tabs render as transparent pills while file/plan tabs render as squarish
+ *  chips with a resting background (plus the provider icon vs file-type
+ *  icon), so the two kinds stay distinguishable at a glance. Clicking a
+ *  session tab
  *  shows that session's chat full-width; clicking a file / plan tab shows
  *  the editor full-width (the `centerTabFocus` store flag — see
  *  UnifiedTabbedPane in App.tsx). This replaces the split
@@ -309,13 +312,16 @@ export function UnifiedTabsBar() {
                 }
               }}
               className={cn(
-                "group flex min-w-0 shrink-0 cursor-pointer select-none items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] transition-colors",
+                // Matches the file-tab chip look (rounded-md + resting bg) —
+                // the plan view is an editor-kind tab, distinct from the
+                // pill-shaped session tabs in this strip.
+                "group flex min-w-0 shrink-0 cursor-pointer select-none items-center gap-1.5 rounded-md px-2.5 py-1 text-[11px] transition-colors",
                 // Match the file-tab width rules: active plan tab gets a
                 // min-width so its label + close button are fully visible.
                 planTabActive && editorFocused ? "min-w-[100px] max-w-[200px]" : "max-w-[160px]",
                 planTabActive && editorFocused
-                  ? "bg-accent/15 text-content dark:text-accent"
-                  : "text-content-muted hover:bg-surface-muted/50 hover:text-content",
+                  ? "bg-accent/15 text-content ring-1 ring-inset ring-accent/40 dark:text-accent"
+                  : "bg-surface-muted/60 text-content-muted hover:bg-surface-hover/70 hover:text-content",
               )}
             >
               <IconClipboard size={12} className="shrink-0 text-accent" />

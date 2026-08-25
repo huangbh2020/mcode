@@ -305,13 +305,15 @@ export function OpenTabsBar() {
                 }
               }}
               className={cn(
-                "group flex min-w-0 shrink-0 cursor-pointer select-none items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] transition-colors",
+                // Matches the file-tab chip look (rounded-md + resting bg) —
+                // the plan view is an editor-kind tab.
+                "group flex min-w-0 shrink-0 cursor-pointer select-none items-center gap-1.5 rounded-md px-2.5 py-1 text-[11px] transition-colors",
                 // Match the file-tab width rules: active plan tab gets a
                 // min-width so its label + close button are fully visible.
                 planTabActive ? "min-w-[100px] max-w-[200px]" : "max-w-[160px]",
                 planTabActive
-                  ? "bg-accent/15 text-content dark:text-accent"
-                  : "text-content-muted hover:bg-surface-muted/50 hover:text-content",
+                  ? "bg-accent/15 text-content ring-1 ring-inset ring-accent/40 dark:text-accent"
+                  : "bg-surface-muted/60 text-content-muted hover:bg-surface-hover/70 hover:text-content",
               )}
             >
               <IconClipboard size={12} className="shrink-0 text-accent" />
@@ -489,15 +491,18 @@ export function SortableFileTab({
       aria-selected={isActive}
       title={path}
       className={cn(
-        "group flex min-w-0 shrink-0 cursor-pointer select-none items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] transition-colors",
+        // Editor file tabs read as squarish chips with a resting background —
+        // deliberately distinct from the pill-shaped, transparent session
+        // tabs they share the unified tab strip with (SortableSessionTab).
+        "group flex min-w-0 shrink-0 cursor-pointer select-none items-center gap-1.5 rounded-md px-2.5 py-1 text-[11px] transition-colors",
         // The active tab gets a min-width so its name + close button are
         // always fully visible (not truncated by sibling tabs). Background
         // tabs can shrink more aggressively since their close button is
         // hover-only.
         isActive ? "min-w-[140px] max-w-[240px]" : "max-w-[160px]",
         isActive
-          ? "bg-accent/15 text-content dark:text-accent"
-          : "text-content-muted hover:bg-surface-muted/50 hover:text-content",
+          ? "bg-accent/15 text-content ring-1 ring-inset ring-accent/40 dark:text-accent"
+          : "bg-surface-muted/60 text-content-muted hover:bg-surface-hover/70 hover:text-content",
         isDragging && "shadow-lg",
       )}
     >
