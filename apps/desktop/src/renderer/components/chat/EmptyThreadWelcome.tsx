@@ -14,6 +14,7 @@
  */
 import { useEffect, useState } from "react";
 import { api } from "@renderer/lib/api.js";
+import { isElectron } from "@renderer/lib/platform.js";
 import { useI18n } from "@renderer/lib/i18n/index.js";
 import { fmtTokens } from "@renderer/lib/contextWindow.js";
 import type { UsageSummaryStat } from "@contracts/ipc";
@@ -30,6 +31,11 @@ export function EmptyThreadWelcome({ projectName }: EmptyThreadWelcomeProps) {
   // forever when it failed — the hint line simply stays hidden).
   const [today, setToday] = useState<UsageSummaryStat | null>(null);
   useEffect(() => {
+    // Desktop-only RPC. The web shim's `api.usage` proxy throws
+    // SYNCHRONOUSLY (before `.catch` below can attach), which would crash
+    // the mobile home screen — so skip the call entirely outside Electron.
+    // The hint is optional chrome and stays hidden, same as on RPC failure.
+    if (!isElectron) return;
     let alive = true;
     api.usage
       .stats({ preset: "today" })
