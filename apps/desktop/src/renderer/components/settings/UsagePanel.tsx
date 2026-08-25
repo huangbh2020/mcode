@@ -181,7 +181,6 @@ export function UsagePanel() {
       <PanelHeader
         title={t("settings.usage.title")}
         icon={IconChartBar}
-        desc={t("settings.usage.desc")}
         action={
           <div className="flex flex-wrap gap-1">
             {PRESETS.map((p) => (

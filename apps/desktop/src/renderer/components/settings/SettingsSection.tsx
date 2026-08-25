@@ -2,10 +2,10 @@
  * SettingsSection — a functional category inside a settings panel.
  *
  * The middle level of the settings visual hierarchy (see PanelHeader):
- * a small muted category label (the "功能分类标题") sits above a bordered
- * Card that contains the actual setting rows (the "功能标题" + controls).
- * The card boundary + the label's muted style make categories unmistakably
- * distinct from the rows inside them.
+ * a category label (the "功能分类标题") sits above a bordered Card that
+ * contains the actual setting rows (the "功能标题" + controls). The label is
+ * deliberately one size step up from the row titles (0.93em semibold content
+ * vs 0.86em medium) — group vs row must be tellable apart at a glance.
  *
  * @example
  *   <SettingsSection title="提交记录生成" desc="配置生成提交信息的模型与提示词。">
@@ -35,8 +35,8 @@ export function SettingsSection({
   return (
     <section className={cn("space-y-1.5", className)}>
       <div className="flex items-center gap-1.5 px-1">
-        {Icon && <Icon size={14} className="shrink-0 text-content-subtle" />}
-        <h3 className="text-[0.8571em] font-semibold text-content-muted">
+        {Icon && <Icon size={15} className="shrink-0 text-content-muted" />}
+        <h3 className="text-[0.9286em] font-semibold text-content">
           {title}
         </h3>
       </div>

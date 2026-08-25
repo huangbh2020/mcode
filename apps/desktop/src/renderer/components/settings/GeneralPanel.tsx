@@ -19,13 +19,13 @@ import { OutputStylePanel } from "./OutputStylePanel.js";
  *
  * Hosts general-purpose preferences that aren't tied to a specific feature
  * area. Currently:
- *  - 语言 (SettingsSection): 界面语言 (zh/en)
- *  - 显示与布局 (SettingsSection): 中间面板显示模式 + 对话紧凑度 + 长文本折叠阈值
+ *  - 基础 (SettingsSection): 界面语言 + 中间面板显示模式 + 对话紧凑度 + 长文本折叠阈值
+ *    (语言与显示合并为一组——单行小节不值得独占一张卡)
  *  - 会话自动归档 (SettingsSection): 开关 + 默认不活跃天数 + 按项目覆盖
  *  - 会话标题生成 (TitleGenPanel, renders its own SettingsSection)
  *  - 输出风格 (OutputStylePanel, renders its own SettingsSection)
  *
- * Card-grouped layout: a page-level PanelHeader on top, then one
+ * Card-grouped layout: a sticky PanelHeader toolbar on top, then one
  * SettingsSection per functional category. TitleGenPanel / OutputStylePanel
  * are dropped in as sibling sections — the outer space-y-4 keeps the cards
  * apart.
@@ -115,11 +115,10 @@ export function GeneralPanel() {
     <section className="mx-auto w-full max-w-3xl space-y-4">
       <PanelHeader
         title={t("settings.general.title")}
-        desc={t("settings.general.desc")}
       />
 
-      {/* ── 语言 ── */}
-      <SettingsSection title={t("settings.general.sectionLanguage")}>
+      {/* ── 基础(语言 + 显示与布局合并为一组) ── */}
+      <SettingsSection title={t("settings.general.sectionBasics")}>
         <SettingRow
           title={t("settings.general.language")}
           desc={t("settings.general.languageDesc")}
@@ -129,7 +128,7 @@ export function GeneralPanel() {
             value={locale}
             onValueChange={(v) => void setLocale(v as Locale)}
           >
-            <Select.Trigger id="setting-locale" className="min-w-[10rem]">
+            <Select.Trigger id="setting-locale" className="w-full">
               <Select.Value>
                 {(val: Locale) =>
                   val === "en"
@@ -154,10 +153,7 @@ export function GeneralPanel() {
             </Select.Portal>
           </Select.Root>
         </SettingRow>
-      </SettingsSection>
 
-      {/* ── 显示与布局 ── */}
-      <SettingsSection title={t("settings.general.sectionDisplay")}>
         {/* ── Center-pane display mode ── */}
         <SettingRow
           title={t("settings.general.displayMode")}
@@ -168,7 +164,7 @@ export function GeneralPanel() {
             value={displayMode}
             onValueChange={(v) => void setDisplayMode(v as DisplayMode)}
           >
-            <Select.Trigger id="setting-displaymode" className="min-w-[10rem]">
+            <Select.Trigger id="setting-displaymode" className="w-full">
               <Select.Value>
                 {(val: DisplayMode) => {
                   const o =
@@ -210,7 +206,7 @@ export function GeneralPanel() {
             value={chatDensity}
             onValueChange={(v) => void setChatDensity(v as ChatDensity)}
           >
-            <Select.Trigger id="setting-chatdensity" className="min-w-[8rem]">
+            <Select.Trigger id="setting-chatdensity" className="w-full">
               <Select.Value>
                 {(val: ChatDensity) => {
                   const o =
@@ -259,7 +255,7 @@ export function GeneralPanel() {
             step={50}
             value={pasteTagThresholdChars}
             onChange={(e) => void setPasteTagThresholdChars(Number(e.target.value))}
-            className="w-24"
+            className="w-full"
           />
         </SettingRow>
       </SettingsSection>
@@ -287,7 +283,7 @@ export function GeneralPanel() {
             value={String(autoArchiveConfig.defaultDays)}
             onValueChange={(v) => patchAutoArchive({ defaultDays: Number(v) })}
           >
-            <Select.Trigger id="setting-autoarchive-default-days" className="min-w-[7rem]">
+            <Select.Trigger id="setting-autoarchive-default-days" className="w-full">
               <Select.Value>
                 {(val: string) =>
                   AUTO_ARCHIVE_DAY_VALUES.some((d) => String(d) === val)
@@ -324,7 +320,7 @@ export function GeneralPanel() {
                 value={String(autoArchiveConfig.overrides[p.id])}
                 onValueChange={(v) => setProjectOverride(p.id, v as string)}
               >
-                <Select.Trigger id={`setting-autoarchive-project-${p.id}`} className="min-w-[7rem]">
+                <Select.Trigger id={`setting-autoarchive-project-${p.id}`} className="min-w-0 flex-1">
                   <Select.Value>{(val: string) => dayLabel(val)}</Select.Value>
                 </Select.Trigger>
                 <Select.Portal>
@@ -363,7 +359,7 @@ export function GeneralPanel() {
             desc={t("settings.general.archiveAddOverrideDesc")}
           >
             <Select.Root value={null} onValueChange={(v) => addProjectOverride(v as string)}>
-              <Select.Trigger className="min-w-[10rem]">
+              <Select.Trigger className="w-full">
                 <Select.Value placeholder={t("settings.general.archivePickProject")} />
               </Select.Trigger>
               <Select.Portal>

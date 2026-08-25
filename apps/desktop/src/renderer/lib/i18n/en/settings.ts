@@ -16,9 +16,17 @@ export const en = {
   "settings.nav.usage": "Usage",
   "settings.nav.about": "About",
 
+  // ── left nav group eyebrows (SettingsPage) ──
+  "settings.navGroup.general": "General",
+  "settings.navGroup.ai": "AI & Models",
+  "settings.navGroup.input": "Input & Alerts",
+  "settings.navGroup.workbench": "Workbench",
+  "settings.navGroup.system": "System",
+
   // ── GeneralPanel ──
   "settings.general.title": "General",
   "settings.general.desc": "Layout, message display, thread titles and other basic preferences.",
+  "settings.general.sectionBasics": "Basics",
   "settings.general.sectionLanguage": "Language",
   "settings.general.sectionDisplay": "Display & Layout",
   "settings.general.language": "Interface language",
@@ -152,6 +160,8 @@ export const en = {
   // ── AppearancePanel (+ FontSizeStepper) ──
   "settings.appearance.title": "Appearance",
   "settings.appearance.desc": "Theme, chat styling and accent color — every change applies live.",
+  "settings.appearance.sectionThemeColor": "Theme & Colors",
+  "settings.appearance.sectionFontSize": "Font Size",
   "settings.appearance.theme": "Interface theme",
   "settings.appearance.themeDesc": "Pick the app's color scheme; \"Follow system\" switches with your OS automatically.",
   "settings.appearance.currentTheme": " Current: {theme}.",
@@ -192,6 +202,9 @@ export const en = {
   "settings.browser.title": "Browser",
   "settings.browser.desc": "Configure the embedded browser: where screenshots and browser data live, and cache cleanup.",
   "settings.browser.screenshotSection": "Screenshot folder",
+  "settings.browser.sectionStorage": "Storage Locations",
+  "settings.browser.sectionCache": "Cache",
+  "settings.lsp.section": "Server list",
   "settings.browser.screenshotSectionDesc": "Screenshots taken by the agent's browser_screenshot tool are saved here, grouped into subfolders by session and turn: <dir>/<sessionID>/turn-<n>/. Leave empty to use the system Pictures folder.",
   "settings.browser.screenshotDir": "Screenshot folder",
   "settings.browser.screenshotDirDesc": "Pick or type a folder path. Leave empty to use the system Pictures folder.",

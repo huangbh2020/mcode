@@ -19,9 +19,17 @@ export const zh = {
   "settings.nav.usage": "用量统计",
   "settings.nav.about": "关于",
 
+  // ── left nav group eyebrows (SettingsPage) ──
+  "settings.navGroup.general": "通用",
+  "settings.navGroup.ai": "AI 能力",
+  "settings.navGroup.input": "输入与提醒",
+  "settings.navGroup.workbench": "工作台",
+  "settings.navGroup.system": "系统",
+
   // ── GeneralPanel ──
   "settings.general.title": "常规",
   "settings.general.desc": "调整界面布局、消息显示与会话标题等基础偏好。",
+  "settings.general.sectionBasics": "基础",
   "settings.general.sectionLanguage": "语言",
   "settings.general.sectionDisplay": "显示与布局",
   "settings.general.language": "界面语言",
@@ -155,6 +163,8 @@ export const zh = {
   // ── AppearancePanel (+ FontSizeStepper) ──
   "settings.appearance.title": "外观",
   "settings.appearance.desc": "调整界面主题、聊天样式与全局强调色,所有改动实时生效。",
+  "settings.appearance.sectionThemeColor": "主题与颜色",
+  "settings.appearance.sectionFontSize": "字号",
   "settings.appearance.theme": "界面主题",
   "settings.appearance.themeDesc": "选择应用的外观配色;选\"跟随系统\"会随操作系统自动切换。",
   "settings.appearance.currentTheme": " 当前:{theme}。",
@@ -195,6 +205,9 @@ export const zh = {
   "settings.browser.title": "浏览器",
   "settings.browser.desc": "配置应用内浏览器的行为:截图存放目录、浏览器数据目录,以及清理缓存数据。",
   "settings.browser.screenshotSection": "截图存放目录",
+  "settings.browser.sectionStorage": "存储位置",
+  "settings.browser.sectionCache": "缓存",
+  "settings.lsp.section": "服务器列表",
   "settings.browser.screenshotSectionDesc": "agent 使用浏览器截图工具(browser_screenshot)时,截取的图片会保存到该目录,并按会话和对话轮次分子目录:截图目录/会话ID/turn-轮次/。留空则保存到系统图片目录。",
   "settings.browser.screenshotDir": "截图目录",
   "settings.browser.screenshotDirDesc": "选择或输入一个文件夹路径。留空时使用系统图片目录。",

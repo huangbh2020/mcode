@@ -43,21 +43,10 @@ import { AboutPanel } from "./AboutPanel.js";
  * workspace - the only difference is the right sidebar is collapsed and the
  * left sidebar hosts the settings navigation instead of the project tree.
  *
- * Available sections (grouped: 常规 -> 个性化 -> 核心 AI 配置 -> IDE 能力 -> 关于):
- *  - 常规    (GeneralPanel - currently wraps TitleGenPanel for thread titles)
- *  - 外观    (AppearancePanel - flat one-row-per-feature list)
- *  - 模型配置 (CustomModelsPanel - two-column: provider list + config form)
- *  - 快捷键  (ShortcutsPanel)
- *  - Skills  (SkillsPanel - two-column: skill list + raw SKILL.md editor)
- *  - 消息通知 (NotificationsPanel - toggle per notification category)
- *  - Git     (GitPanel)
- *  - 终端    (TerminalPanel - shell override + per-project commands)
- *  - 语言服务器 (LspLanguagesPanel)
- *  - 用量统计 (UsagePanel - daily heatmap + per-model breakdown over time ranges)
- *  - 关于    (AboutPanel - version / license / repo links)
- *
- * The thread-title generator used to be its own nav item ("线程名称"); it has
- * been folded into the "常规" section. The section is the first nav entry.
+ * The nav is grouped into 5 labeled clusters (通用 → AI 能力 → 输入与提醒 →
+ * 工作台 → 系统) so 14 flat items don't read as one undifferentiated list;
+ * the group eyebrow is inert (not selectable). Deep links via
+ * `setSettingsOpen(true, sectionId)` still address individual items.
  *
  * Note: the legacy “Claude CLI 路径” panel was removed - the Agent SDK bundles
  * its own claude binary, so an externally-configured path is no longer used.
@@ -70,29 +59,62 @@ interface NavItem {
   icon: ComponentType<TablerIconProps>;
 }
 
+interface NavGroup {
+  labelKey: MessageId;
+  items: NavItem[];
+}
+
 /** Settings nav sidebar width (px). Fixed — the workspace sidebar is now a
  *  percentage of the window (leftWidthPct) and no longer shares a width with
  *  the titlebar's retired left strip, so there's nothing to stay aligned
- *  with. 280px keeps the old default look. */
-const SETTINGS_NAV_WIDTH = 280;
+ *  with. 240px keeps labels comfortable while giving the content column (the
+ *  main stage) as much room as possible. */
+const SETTINGS_NAV_WIDTH = 240;
 
-const NAV_ITEMS: NavItem[] = [
-  // 分组顺序:常规 -> 个性化 -> 核心 AI 配置 -> IDE 能力 -> 关于
-  { id: "general", labelKey: "settings.nav.general", icon: IconSettings },
-  { id: "appearance", labelKey: "settings.nav.appearance", icon: IconPalette },
-  { id: "custom-models", labelKey: "settings.nav.customModels", icon: IconRobot },
-  { id: "shortcuts", labelKey: "settings.nav.shortcuts", icon: IconKeyboard },
-  { id: "voice", labelKey: "settings.nav.voice", icon: IconMicrophone },
-  { id: "skills", labelKey: "settings.nav.skills", icon: IconSparkles },
-  { id: "mcp", labelKey: "settings.nav.mcp", icon: McpIcon },
-  { id: "notifications", labelKey: "settings.nav.notifications", icon: IconBell },
-  { id: "git", labelKey: "settings.nav.git", icon: IconBrandGit },
-  { id: "terminal", labelKey: "settings.nav.terminal", icon: IconTerminal2 },
-  { id: "browser", labelKey: "settings.nav.browser", icon: IconWorld },
-  { id: "lsp-languages", labelKey: "settings.nav.lsp", icon: IconCode },
-  { id: "usage", labelKey: "settings.nav.usage", icon: IconChartBar },
-  { id: "about", labelKey: "settings.nav.about", icon: IconInfoCircle },
+const NAV_GROUPS: NavGroup[] = [
+  {
+    labelKey: "settings.navGroup.general",
+    items: [
+      { id: "general", labelKey: "settings.nav.general", icon: IconSettings },
+      { id: "appearance", labelKey: "settings.nav.appearance", icon: IconPalette },
+    ],
+  },
+  {
+    labelKey: "settings.navGroup.ai",
+    items: [
+      { id: "custom-models", labelKey: "settings.nav.customModels", icon: IconRobot },
+      { id: "skills", labelKey: "settings.nav.skills", icon: IconSparkles },
+      { id: "mcp", labelKey: "settings.nav.mcp", icon: McpIcon },
+    ],
+  },
+  {
+    labelKey: "settings.navGroup.input",
+    items: [
+      { id: "voice", labelKey: "settings.nav.voice", icon: IconMicrophone },
+      { id: "shortcuts", labelKey: "settings.nav.shortcuts", icon: IconKeyboard },
+      { id: "notifications", labelKey: "settings.nav.notifications", icon: IconBell },
+    ],
+  },
+  {
+    labelKey: "settings.navGroup.workbench",
+    items: [
+      { id: "git", labelKey: "settings.nav.git", icon: IconBrandGit },
+      { id: "terminal", labelKey: "settings.nav.terminal", icon: IconTerminal2 },
+      { id: "browser", labelKey: "settings.nav.browser", icon: IconWorld },
+      { id: "lsp-languages", labelKey: "settings.nav.lsp", icon: IconCode },
+    ],
+  },
+  {
+    labelKey: "settings.navGroup.system",
+    items: [
+      { id: "usage", labelKey: "settings.nav.usage", icon: IconChartBar },
+      { id: "about", labelKey: "settings.nav.about", icon: IconInfoCircle },
+    ],
+  },
 ];
+
+/** Flat nav items (group order preserved) — used to validate deep-link ids. */
+const NAV_ITEMS: NavItem[] = NAV_GROUPS.flatMap((g) => g.items);
 
 export function SettingsPage() {
   const { t } = useI18n();
@@ -125,37 +147,46 @@ export function SettingsPage() {
     <ThreePaneLayout
       left={
         <nav
-          className="space-y-0.5 px-2 py-3"
+          className="px-2 py-3"
           style={{ fontSize: "var(--right-panel-font-size)" }}
         >
-          {NAV_ITEMS.map((item) => {
-            const isActive = item.id === active;
-            const Icon = item.icon;
-            return (
-              <button
-                key={item.id}
-                onClick={() => setActive(item.id)}
-                className={cn(
-                  "relative flex w-full items-center gap-2 rounded px-3 py-2 text-left transition-colors",
-                  isActive
-                    ? "bg-surface-hover font-medium text-content"
-                    : "text-content-muted hover:bg-surface-hover hover:text-content",
-                )}
-              >
-                {isActive && (
-                  <span className="absolute left-0 top-1/2 h-4 w-0.5 -translate-y-1/2 rounded-full bg-accent" />
-                )}
-                <Icon
-                  size={16}
-                  className={cn(
-                    "shrink-0",
-                    isActive ? "text-accent" : "text-content-subtle",
-                  )}
-                />
-                {t(item.labelKey)}
-              </button>
-            );
-          })}
+          {NAV_GROUPS.map((group, gi) => (
+            <div key={group.labelKey} className={gi === 0 ? "pb-1" : "pb-1 pt-4"}>
+              <div className="px-3 pb-1 text-[0.7143em] font-medium uppercase tracking-wider text-content-subtle">
+                {t(group.labelKey)}
+              </div>
+              <div className="space-y-0.5">
+                {group.items.map((item) => {
+                  const isActive = item.id === active;
+                  const Icon = item.icon;
+                  return (
+                    <button
+                      key={item.id}
+                      onClick={() => setActive(item.id)}
+                      className={cn(
+                        "relative flex w-full items-center gap-2 rounded px-3 py-2 text-left transition-colors",
+                        isActive
+                          ? "bg-surface-hover font-medium text-content"
+                          : "text-content-muted hover:bg-surface-hover hover:text-content",
+                      )}
+                    >
+                      {isActive && (
+                        <span className="absolute left-0 top-1/2 h-4 w-0.5 -translate-y-1/2 rounded-full bg-accent" />
+                      )}
+                      <Icon
+                        size={16}
+                        className={cn(
+                          "shrink-0",
+                          isActive ? "text-accent" : "text-content-subtle",
+                        )}
+                      />
+                      {t(item.labelKey)}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
         </nav>
       }
       center={

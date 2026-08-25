@@ -305,17 +305,6 @@ export function SkillsPanel() {
       <PanelHeader
         className="mb-3"
         title="Skills"
-        desc={
-          <>
-            {t("settings.skills.desc1")}
-            <code className="rounded bg-surface-muted px-0.5">.claude/skills</code>
-            {t("settings.skills.desc2")}
-            <code className="rounded bg-surface-muted px-0.5">~/.mcode/skills</code>
-            {t("settings.skills.desc3")}
-            <code className="rounded bg-surface-muted px-0.5">/</code>
-            {t("settings.skills.desc4")}
-          </>
-        }
       />
 
       {/* ───────── Project selector ───────── */}

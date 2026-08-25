@@ -36,10 +36,7 @@ export function TerminalPanel() {
   const { t } = useI18n();
   return (
     <section className="mx-auto w-full max-w-3xl space-y-4">
-      <PanelHeader
-        title={t("settings.terminal.title")}
-        desc={t("settings.terminal.desc")}
-      />
+      <PanelHeader title={t("settings.terminal.title")} />
       <ShellSection />
       <CommandsSection />
     </section>
@@ -195,12 +192,14 @@ function CommandsSection() {
               value={selectedId ?? ""}
               onValueChange={(v) => setSelectedId(v as string)}
             >
-              <Select.Trigger id="setting-terminal-cmd-project" className="min-w-[12rem]">
+              <Select.Trigger id="setting-terminal-cmd-project" className="w-full">
                 <Select.Value>
                   {(val: string) => (
-                    <span className="flex items-center gap-1.5">
+                    <span className="flex min-w-0 items-center gap-1.5">
                       <IconFolder size={14} className="text-content-muted" />
-                      {candidateProjects.find((p) => p.id === val)?.name ?? t("settings.terminal.pickProject")}
+                      <span className="truncate">
+                        {candidateProjects.find((p) => p.id === val)?.name ?? t("settings.terminal.pickProject")}
+                      </span>
                     </span>
                   )}
                 </Select.Value>

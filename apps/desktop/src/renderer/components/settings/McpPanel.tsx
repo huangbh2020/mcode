@@ -177,15 +177,6 @@ export function McpPanel() {
       <PanelHeader
         title={t("settings.mcp.title")}
         icon={McpIcon}
-        desc={
-          <>
-            {t("settings.mcp.desc1")}
-            <strong>{t("settings.mcp.desc2")}</strong>
-            {t("settings.mcp.desc3")}
-            <code className="rounded bg-surface-muted px-0.5">~/.mcode/.claude.json</code>
-            {t("settings.mcp.desc4")}
-          </>
-        }
       />
 
       {error && (

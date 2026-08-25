@@ -4,6 +4,7 @@ import { cn } from "@renderer/lib/cn.js";
 import { formatBytes } from "@renderer/lib/format.js";
 import { useI18n } from "@renderer/lib/i18n/index.js";
 import { Button } from "@renderer/components/ui/index.js";
+import { PanelHeader } from "./PanelHeader.js";
 import {
   IconCopy,
   IconCheck,
@@ -256,8 +257,16 @@ export function AboutPanel() {
 
   return (
     <section className="flex min-h-full flex-col items-center px-6 py-10">
+      {/* Sticky page toolbar (title only — consistent with the other panels;
+          the About body below stays a centered identity page). */}
+      <PanelHeader
+        className="w-full self-stretch"
+        title={t("settings.nav.about")}
+        icon={IconInfoCircle}
+      />
+
       {/* App identity */}
-      <div className="flex w-full max-w-md flex-col items-center text-center">
+      <div className="mt-6 flex w-full max-w-md flex-col items-center text-center">
         <div
           className="mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-accent/10 text-accent"
           aria-hidden

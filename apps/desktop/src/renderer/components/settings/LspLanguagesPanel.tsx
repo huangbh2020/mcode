@@ -99,14 +99,13 @@ export function LspLanguagesPanel() {
   }, [reloadLspLanguages]);
 
   return (
-    <section className="mx-auto max-w-3xl space-y-4">
+    <section className="mx-auto w-full max-w-3xl space-y-4">
       <PanelHeader
         title={t("settings.lsp.title")}
-        desc={t("settings.lsp.desc")}
         icon={IconLanguage}
       />
 
-      <SettingsSection title={t("settings.lsp.title")}>
+      <SettingsSection title={t("settings.lsp.section")}>
         {lspLanguages.length === 0 ? (
           <div className="flex items-center justify-center gap-2 px-4 py-8 text-[0.85em] text-content-subtle">
             <IconLoader2 size={14} className="animate-spin" />

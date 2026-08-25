@@ -67,7 +67,7 @@ export interface SelectValueProps
 function SelectValue({ className, ...props }: SelectValueProps) {
   return (
     <BaseSelect.Value
-      className={cn("flex-1 text-left", className)}
+      className={cn("min-w-0 flex-1 truncate text-left", className)}
       {...props}
     />
   );

@@ -28,18 +28,20 @@ export function BrowserPanel() {
   const { t } = useI18n();
   return (
     <section className="mx-auto w-full max-w-3xl space-y-4">
-      <PanelHeader
-        title={t("settings.browser.title")}
-        desc={t("settings.browser.desc")}
-      />
-      <ScreenshotDirSection />
-      <DataDirSection />
+      <PanelHeader title={t("settings.browser.title")} />
+
+      {/* 存储位置 — 截图目录与数据目录合并为一张卡(两行) */}
+      <SettingsSection title={t("settings.browser.sectionStorage")}>
+        <ScreenshotDirRow />
+        <DataDirRow />
+      </SettingsSection>
+
       <CacheSection />
     </section>
   );
 }
 
-function ScreenshotDirSection() {
+function ScreenshotDirRow() {
   const { t } = useI18n();
   const [dir, setDir] = useState("");
   const [loaded, setLoaded] = useState(false);
@@ -76,51 +78,46 @@ function ScreenshotDirSection() {
   };
 
   return (
-    <SettingsSection
-      title={t("settings.browser.screenshotSection")}
-      desc={t("settings.browser.screenshotSectionDesc")}
+    <SettingRow
+      layout="vertical"
+      title={t("settings.browser.screenshotDir")}
+      desc={t("settings.browser.screenshotDirDesc")}
     >
-      <SettingRow
-        layout="vertical"
-        title={t("settings.browser.screenshotDir")}
-        desc={t("settings.browser.screenshotDirDesc")}
-      >
-        <div className="flex gap-2">
-          <Input
-            value={dir}
-            onChange={(e) => {
-              setDir((e.target as HTMLInputElement).value);
-              setSaved(false);
-            }}
-            placeholder={t("settings.browser.screenshotPlaceholder")}
-            spellCheck={false}
-            disabled={!loaded}
-            className="min-w-0 flex-1 font-mono"
-          />
-          <Button variant="secondary" size="sm" onClick={() => void pickDir()} disabled={!loaded}>
-            {t("settings.browser.chooseDir")}
-          </Button>
-          <Button
-            variant="primary"
-            size="sm"
-            onClick={() => void save()}
-            disabled={saving || !loaded}
-          >
-            {saving ? t("settings.saving") : t("common.save")}
-          </Button>
-        </div>
-        {saved && (
-          <p className="mt-1 text-[0.7857em] text-accent">{t("settings.browser.savedScreenshot")}</p>
-        )}
-      </SettingRow>
-    </SettingsSection>
+      <div className="flex gap-2">
+        <Input
+          value={dir}
+          onChange={(e) => {
+            setDir((e.target as HTMLInputElement).value);
+            setSaved(false);
+          }}
+          placeholder={t("settings.browser.screenshotPlaceholder")}
+          spellCheck={false}
+          disabled={!loaded}
+          className="min-w-0 flex-1 font-mono"
+        />
+        <Button variant="secondary" size="sm" onClick={() => void pickDir()} disabled={!loaded}>
+          {t("settings.browser.chooseDir")}
+        </Button>
+        <Button
+          variant="primary"
+          size="sm"
+          onClick={() => void save()}
+          disabled={saving || !loaded}
+        >
+          {saving ? t("settings.saving") : t("common.save")}
+        </Button>
+      </div>
+      {saved && (
+        <p className="mt-1 text-[0.7857em] text-accent">{t("settings.browser.savedScreenshot")}</p>
+      )}
+    </SettingRow>
   );
 }
 
 /** Browser session data directory (cookies / form & login records / local
- *  storage / IndexedDB …). Mirrors ScreenshotDirSection; the main process
+ *  storage / IndexedDB …). Mirrors ScreenshotDirRow; the main process
  *  reads `browser.dataDir` when creating the browser session partition. */
-function DataDirSection() {
+function DataDirRow() {
   const { t } = useI18n();
   const [dir, setDir] = useState("");
   const [loaded, setLoaded] = useState(false);
@@ -155,46 +152,41 @@ function DataDirSection() {
   };
 
   return (
-    <SettingsSection
-      title={t("settings.browser.dataSection")}
-      desc={t("settings.browser.dataSectionDesc")}
+    <SettingRow
+      layout="vertical"
+      title={t("settings.browser.dataDir")}
+      desc={t("settings.browser.dataDirDesc")}
     >
-      <SettingRow
-        layout="vertical"
-        title={t("settings.browser.dataDir")}
-        desc={t("settings.browser.dataDirDesc")}
-      >
-        <div className="flex gap-2">
-          <Input
-            value={dir}
-            onChange={(e) => {
-              setDir((e.target as HTMLInputElement).value);
-              setSaved(false);
-            }}
-            placeholder={t("settings.browser.dataDirPlaceholder")}
-            spellCheck={false}
-            disabled={!loaded}
-            className="min-w-0 flex-1 font-mono"
-          />
-          <Button variant="secondary" size="sm" onClick={() => void pickDir()} disabled={!loaded}>
-            {t("settings.browser.chooseDir")}
-          </Button>
-          <Button
-            variant="primary"
-            size="sm"
-            onClick={() => void save()}
-            disabled={saving || !loaded}
-          >
-            {saving ? t("settings.saving") : t("common.save")}
-          </Button>
-        </div>
-        {saved && (
-          <p className="mt-1 text-[0.7857em] text-accent">
-            {t("settings.browser.savedDataDir")}
-          </p>
-        )}
-      </SettingRow>
-    </SettingsSection>
+      <div className="flex gap-2">
+        <Input
+          value={dir}
+          onChange={(e) => {
+            setDir((e.target as HTMLInputElement).value);
+            setSaved(false);
+          }}
+          placeholder={t("settings.browser.dataDirPlaceholder")}
+          spellCheck={false}
+          disabled={!loaded}
+          className="min-w-0 flex-1 font-mono"
+        />
+        <Button variant="secondary" size="sm" onClick={() => void pickDir()} disabled={!loaded}>
+          {t("settings.browser.chooseDir")}
+        </Button>
+        <Button
+          variant="primary"
+          size="sm"
+          onClick={() => void save()}
+          disabled={saving || !loaded}
+        >
+          {saving ? t("settings.saving") : t("common.save")}
+        </Button>
+      </div>
+      {saved && (
+        <p className="mt-1 text-[0.7857em] text-accent">
+          {t("settings.browser.savedDataDir")}
+        </p>
+      )}
+    </SettingRow>
   );
 }
 
@@ -222,7 +214,7 @@ function CacheSection() {
 
   return (
     <SettingsSection
-      title={t("settings.browser.cacheSection")}
+      title={t("settings.browser.sectionCache")}
       desc={t("settings.browser.cacheSectionDesc")}
     >
       <SettingRow

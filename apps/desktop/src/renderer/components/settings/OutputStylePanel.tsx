@@ -110,12 +110,12 @@ export function OutputStylePanel() {
         desc={t("settings.outputStyle.selectDesc")}
         htmlFor="setting-output-style"
       >
-        <div className="flex items-center gap-2">
+        <div className="flex w-full items-center gap-2">
           <Select.Root
             value={selected}
             onValueChange={(v) => setOutputStyle((v as string) ?? null)}
           >
-            <Select.Trigger id="setting-output-style" className="min-w-[220px]">
+            <Select.Trigger id="setting-output-style" className="min-w-0 flex-1">
               <Select.Value>
                 {(val: string | null) => (
                   <span

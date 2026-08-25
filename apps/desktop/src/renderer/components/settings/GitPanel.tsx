@@ -71,10 +71,7 @@ export function GitPanel() {
 
   return (
     <section className="mx-auto w-full max-w-3xl space-y-4">
-      <PanelHeader
-        title="Git"
-        desc={t("settings.git.desc")}
-      />
+      <PanelHeader title="Git" />
 
       {/* ── Git 差异打开方式 ── */}
       <SettingsSection
@@ -90,7 +87,7 @@ export function GitPanel() {
             value={gitDiffOpenMode}
             onValueChange={(v) => void setGitDiffOpenMode(v as GitDiffOpenMode)}
           >
-            <Select.Trigger id="setting-gitdiff-openmode" className="min-w-[12rem]">
+            <Select.Trigger id="setting-gitdiff-openmode" className="w-full">
               <Select.Value>
                 {(val: GitDiffOpenMode) => {
                   const o =
@@ -138,18 +135,20 @@ export function GitPanel() {
               value={commitGenModel ?? MODEL_NONE}
               onValueChange={(v) => setCommitGenModel(v === MODEL_NONE ? null : (v as string))}
             >
-              <Select.Trigger className="min-w-[220px]">
+              <Select.Trigger className="w-full">
                 <Select.Value>
                   {(val: string) =>
                     val === MODEL_NONE ? (
-                      <span className="flex items-center gap-1.5">
+                      <span className="flex min-w-0 items-center gap-1.5">
                         <IconCircleOff size={14} className="text-content-muted" />
-                        {t("settings.git.noModelSelected")}
+                        <span className="truncate">{t("settings.git.noModelSelected")}</span>
                       </span>
                     ) : (
-                      <span className="flex items-center gap-1.5">
+                      <span className="flex min-w-0 items-center gap-1.5">
                         <IconRobot size={14} className="text-content-muted" />
-                        {modelOptions.find((o) => o.value === val)?.label ?? val}
+                        <span className="truncate">
+                          {modelOptions.find((o) => o.value === val)?.label ?? val}
+                        </span>
                       </span>
                     )
                   }
@@ -215,18 +214,20 @@ export function GitPanel() {
               value={conflictResolveModel ?? MODEL_NONE}
               onValueChange={(v) => setConflictResolveModel(v === MODEL_NONE ? null : (v as string))}
             >
-              <Select.Trigger className="min-w-[220px]">
+              <Select.Trigger className="w-full">
                 <Select.Value>
                   {(val: string) =>
                     val === MODEL_NONE ? (
-                      <span className="flex items-center gap-1.5">
+                      <span className="flex min-w-0 items-center gap-1.5">
                         <IconCircleOff size={14} className="text-content-muted" />
-                        {t("settings.git.noModelSelected")}
+                        <span className="truncate">{t("settings.git.noModelSelected")}</span>
                       </span>
                     ) : (
-                      <span className="flex items-center gap-1.5">
+                      <span className="flex min-w-0 items-center gap-1.5">
                         <IconRobot size={14} className="text-content-muted" />
-                        {modelOptions.find((o) => o.value === val)?.label ?? val}
+                        <span className="truncate">
+                          {modelOptions.find((o) => o.value === val)?.label ?? val}
+                        </span>
                       </span>
                     )
                   }

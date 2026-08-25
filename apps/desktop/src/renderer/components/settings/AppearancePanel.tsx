@@ -4,22 +4,23 @@ import { useTheme } from "@renderer/lib/theme.js";
 import { api } from "@renderer/lib/api.js";
 import { hexToTriplet, tripletToHex } from "@renderer/lib/colorUtils.js";
 import { useSessionStore, CHAT_FONT_SIZE_MIN, CHAT_FONT_SIZE_MAX, RIGHT_PANEL_FONT_SIZE_MIN, RIGHT_PANEL_FONT_SIZE_MAX } from "@renderer/stores/sessionStore.js";
-import { Button, Card, Select } from "@renderer/components/ui/index.js";
+import { Button, Select } from "@renderer/components/ui/index.js";
 import { IconRefresh, IconSun, IconMoon, IconDeviceDesktop } from "@renderer/lib/icons.js";
 import { useI18n, type MessageId } from "@renderer/lib/i18n/index.js";
 import type { ThemeName } from "@contracts/theme";
 import type { ReactNode } from "react";
 import { PanelHeader } from "./PanelHeader.js";
+import { SettingsSection } from "./SettingsSection.js";
 import { SettingRow } from "./SettingRow.js";
 import { FontSizeStepper } from "./FontSizeStepper.js";
 
 /**
- * Appearance settings — a flat, one-row-per-feature list.
+ * Appearance settings — two grouped cards: 主题与颜色 + 字号.
  *
  * Consolidates what used to be four separate stacked panels (ThemePanel,
  * DisplayModePanel, ChatAppearancePanel, AccentPanel) into a single compact
- * view: left column = feature description, right column = a small control
- * (dropdown / color swatch / slider).
+ * view. Selects fill the fixed SettingRow control slot; color palettes take
+ * full-width vertical rows (swatches don't fit a 260px slot).
  *
  * Note: the display-mode row used to live here but has moved to the "常规"
  * (General) panel — it's a layout/interaction preference, not visual styling.
@@ -122,13 +123,10 @@ export function AppearancePanel() {
     <section className="mx-auto w-full max-w-3xl space-y-4">
       <PanelHeader
         title={t("settings.appearance.title")}
-        desc={t("settings.appearance.desc")}
       />
 
-      {/* Single category → rows go straight into one card. Rows share a
-          `divide-y` so each SettingRow is separated by a hairline without each
-          row having to know about borders. */}
-      <Card className="divide-y divide-edge">
+      {/* ── 主题与颜色 ── */}
+      <SettingsSection title={t("settings.appearance.sectionThemeColor")}>
         {/* ── Theme ── */}
         <SettingRow
           title={t("settings.appearance.theme")}
@@ -148,7 +146,7 @@ export function AppearancePanel() {
             value={theme}
             onValueChange={(v) => void api.theme.set({ theme: v as ThemeName })}
           >
-            <Select.Trigger id="setting-theme" className="min-w-[8rem]">
+            <Select.Trigger id="setting-theme" className="w-full">
               <Select.Value>
                 {(val: ThemeName) => {
                   const o =
@@ -180,6 +178,149 @@ export function AppearancePanel() {
           </Select.Root>
         </SettingRow>
 
+        {/* ── User message background color ── */}
+        <SettingRow
+          layout="vertical"
+          title={t("settings.appearance.userColor")}
+          desc={
+            userMessageColor
+              ? t("settings.appearance.userColorCustom", { hex: userColorHex.toUpperCase() })
+              : t("settings.appearance.userColorDefault")
+          }
+          descExtra={
+            <span className="text-[0.7143em] text-content-subtle">
+              {t("settings.appearance.userColorDescExtra")}
+            </span>
+          }
+        >
+          {/* Preset swatches — full-row row (palettes don't fit the fixed
+              control slot) */}
+          <div className="flex flex-wrap items-center gap-1.5">
+            {USER_BUBBLE_PRESETS.map((p) => {
+              const active = userMessageColor === p.triplet && !pendingUserHex;
+              return (
+                <button
+                  key={p.triplet}
+                  type="button"
+                  onClick={() => {
+                    setPendingUserHex("");
+                    void setUserMessageColor(p.triplet);
+                  }}
+                  title={`${t(p.nameKey)} · ${p.hex.toUpperCase()}`}
+                  aria-label={t("settings.appearance.pickColor", { name: t(p.nameKey) })}
+                  aria-pressed={active}
+                  className={cn(
+                    "h-6 w-6 rounded-full border-2 transition-transform hover:scale-110",
+                    active
+                      ? "border-content ring-2 ring-content/20 ring-offset-1 ring-offset-surface"
+                      : "border-edge",
+                  )}
+                  style={{ backgroundColor: p.hex }}
+                />
+              );
+            })}
+            <input
+              id="setting-usercolor"
+              type="color"
+              value={userColorHex}
+              onChange={(e) => {
+                const hex = e.target.value;
+                const triplet = hexToTriplet(hex);
+                setPendingUserHex(hex);
+                if (triplet) void setUserMessageColor(triplet);
+              }}
+              className="h-7 w-10 cursor-pointer rounded border border-edge bg-transparent p-0.5"
+            />
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                setPendingUserHex("");
+                void setUserMessageColor(null);
+              }}
+              disabled={!userMessageColor && !pendingUserHex}
+              title={t("settings.appearance.userColorResetTitle")}
+              className="gap-1 px-1.5"
+            >
+              <IconRefresh size={11} />
+              {t("settings.appearance.resetDefault")}
+            </Button>
+          </div>
+        </SettingRow>
+
+        {/* ── Accent color ── */}
+        <SettingRow
+          layout="vertical"
+          title={t("settings.appearance.accentColor")}
+          desc={
+            accentColor
+              ? t("settings.appearance.accentColorCustom", { hex: accentHex.toUpperCase() })
+              : t("settings.appearance.accentColorDefault")
+          }
+          descExtra={
+            <span className="text-[0.7143em] text-content-subtle">
+              {t("settings.appearance.accentColorDescExtra")}
+            </span>
+          }
+        >
+          {/* Preset swatches — full-row row (palettes don't fit the fixed
+              control slot) */}
+          <div className="flex flex-wrap items-center gap-1.5">
+            {ACCENT_PRESETS.map((p) => {
+              const active = accentColor === p.triplet && !pendingAccentHex;
+              return (
+                <button
+                  key={p.triplet}
+                  type="button"
+                  onClick={() => {
+                    setPendingAccentHex("");
+                    void setAccentColor(p.triplet);
+                  }}
+                  title={`${t(p.nameKey)} · ${p.hex.toUpperCase()}`}
+                  aria-label={t("settings.appearance.pickColor", { name: t(p.nameKey) })}
+                  aria-pressed={active}
+                  className={cn(
+                    "h-6 w-6 rounded-full border-2 transition-transform hover:scale-110",
+                    active
+                      ? "border-content ring-2 ring-content/20 ring-offset-1 ring-offset-surface"
+                      : "border-edge",
+                  )}
+                  style={{ backgroundColor: p.hex }}
+                />
+              );
+            })}
+            <input
+              id="setting-accent"
+              type="color"
+              value={accentHex}
+              onChange={(e) => {
+                const hex = e.target.value;
+                const triplet = hexToTriplet(hex);
+                setPendingAccentHex(hex);
+                if (triplet) void setAccentColor(triplet);
+              }}
+              className="h-7 w-10 cursor-pointer rounded border border-edge bg-transparent p-0.5"
+            />
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                setPendingAccentHex("");
+                void setAccentColor(null);
+              }}
+              disabled={!accentColor && !pendingAccentHex}
+              title={t("settings.appearance.accentColorResetTitle")}
+              className="gap-1 px-1.5"
+            >
+              <IconRefresh size={11} />
+              {t("settings.appearance.resetDefault")}
+            </Button>
+          </div>
+        </SettingRow>
+      </SettingsSection>
+
+      {/* ── 字号 ── */}
+      <SettingsSection title={t("settings.appearance.sectionFontSize")}>
         {/* ── Global font size (left bar + right panel + settings) ── */}
         <SettingRow
           title={t("settings.appearance.globalFontSize")}
@@ -215,149 +356,8 @@ export function AppearancePanel() {
             onChange={(px) => void setChatFontSize(px)}
           />
         </SettingRow>
+      </SettingsSection>
 
-        {/* ── User message background color ── */}
-        <SettingRow
-          title={t("settings.appearance.userColor")}
-          desc={
-            userMessageColor
-              ? t("settings.appearance.userColorCustom", { hex: userColorHex.toUpperCase() })
-              : t("settings.appearance.userColorDefault")
-          }
-          descExtra={
-            <span className="text-[0.7143em] text-content-subtle">
-              {t("settings.appearance.userColorDescExtra")}
-            </span>
-          }
-          controlAlign="start"
-          htmlFor="setting-usercolor"
-        >
-          {/* Preset swatches */}
-          <div className="flex flex-wrap gap-1.5">
-            {USER_BUBBLE_PRESETS.map((p) => {
-              const active = userMessageColor === p.triplet && !pendingUserHex;
-              return (
-                <button
-                  key={p.triplet}
-                  type="button"
-                  onClick={() => {
-                    setPendingUserHex("");
-                    void setUserMessageColor(p.triplet);
-                  }}
-                  title={`${t(p.nameKey)} · ${p.hex.toUpperCase()}`}
-                  aria-label={t("settings.appearance.pickColor", { name: t(p.nameKey) })}
-                  aria-pressed={active}
-                  className={cn(
-                    "h-6 w-6 rounded-full border-2 transition-transform hover:scale-110",
-                    active
-                      ? "border-content ring-2 ring-content/20 ring-offset-1 ring-offset-surface"
-                      : "border-edge",
-                  )}
-                  style={{ backgroundColor: p.hex }}
-                />
-              );
-            })}
-          </div>
-          <input
-            id="setting-usercolor"
-            type="color"
-            value={userColorHex}
-            onChange={(e) => {
-              const hex = e.target.value;
-              const triplet = hexToTriplet(hex);
-              setPendingUserHex(hex);
-              if (triplet) void setUserMessageColor(triplet);
-            }}
-            className="h-7 w-10 cursor-pointer rounded border border-edge bg-transparent p-0.5"
-          />
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => {
-              setPendingUserHex("");
-              void setUserMessageColor(null);
-            }}
-            disabled={!userMessageColor && !pendingUserHex}
-            title={t("settings.appearance.userColorResetTitle")}
-            className="gap-1 px-1.5"
-          >
-            <IconRefresh size={11} />
-            {t("settings.appearance.resetDefault")}
-          </Button>
-        </SettingRow>
-
-        {/* ── Accent color ── */}
-        <SettingRow
-          title={t("settings.appearance.accentColor")}
-          desc={
-            accentColor
-              ? t("settings.appearance.accentColorCustom", { hex: accentHex.toUpperCase() })
-              : t("settings.appearance.accentColorDefault")
-          }
-          descExtra={
-            <span className="text-[0.7143em] text-content-subtle">
-              {t("settings.appearance.accentColorDescExtra")}
-            </span>
-          }
-          controlAlign="start"
-        >
-          {/* Preset swatches */}
-          <div className="flex flex-wrap gap-1.5">
-            {ACCENT_PRESETS.map((p) => {
-              const active = accentColor === p.triplet && !pendingAccentHex;
-              return (
-                <button
-                  key={p.triplet}
-                  type="button"
-                  onClick={() => {
-                    setPendingAccentHex("");
-                    void setAccentColor(p.triplet);
-                  }}
-                  title={`${t(p.nameKey)} · ${p.hex.toUpperCase()}`}
-                  aria-label={t("settings.appearance.pickColor", { name: t(p.nameKey) })}
-                  aria-pressed={active}
-                  className={cn(
-                    "h-6 w-6 rounded-full border-2 transition-transform hover:scale-110",
-                    active
-                      ? "border-content ring-2 ring-content/20 ring-offset-1 ring-offset-surface"
-                      : "border-edge",
-                  )}
-                  style={{ backgroundColor: p.hex }}
-                />
-              );
-            })}
-          </div>
-          <input
-            id="setting-accent"
-            type="color"
-            value={accentHex}
-            onChange={(e) => {
-              const hex = e.target.value;
-              const triplet = hexToTriplet(hex);
-              setPendingAccentHex(hex);
-              if (triplet) void setAccentColor(triplet);
-            }}
-            className="h-7 w-10 cursor-pointer rounded border border-edge bg-transparent p-0.5"
-          />
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => {
-              setPendingAccentHex("");
-              void setAccentColor(null);
-            }}
-            disabled={!accentColor && !pendingAccentHex}
-            title={t("settings.appearance.accentColorResetTitle")}
-            className="gap-1 px-1.5"
-          >
-            <IconRefresh size={11} />
-            {t("settings.appearance.resetDefault")}
-          </Button>
-        </SettingRow>
-
-      {/* Tiny footer note — the card above intentionally ends after the last
-          accent row. */}
-      </Card>
       <p className="pt-1 text-[0.7143em] text-content-subtle">
         {t("settings.appearance.footer")}
       </p>

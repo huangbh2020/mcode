@@ -82,20 +82,22 @@ export function TitleGenPanel() {
           >
             <Select.Trigger
               disabled={!titleGenEnabled}
-              className={cn("min-w-[220px]", !titleGenEnabled && "cursor-not-allowed opacity-50")}
+              className={cn("w-full", !titleGenEnabled && "cursor-not-allowed opacity-50")}
             >
               <Select.Value>
                 {(val: string | null) => (
                   <span
                     className={cn(
-                      "flex items-center gap-1.5",
+                      "flex min-w-0 items-center gap-1.5",
                       !val && "text-content-subtle",
                     )}
                   >
                     <IconRobot size={14} className="text-content-muted" />
-                    {val
-                      ? (modelOptions.find((o) => o.value === val)?.label ?? val)
-                      : t("settings.titleGen.modelPlaceholder")}
+                    <span className="truncate">
+                      {val
+                        ? (modelOptions.find((o) => o.value === val)?.label ?? val)
+                        : t("settings.titleGen.modelPlaceholder")}
+                    </span>
                   </span>
                 )}
               </Select.Value>

@@ -660,7 +660,6 @@ export function CustomModelsPanel() {
       <PanelHeader
         className="mb-3"
         title={t("settings.customModels.title")}
-        desc={t("settings.customModels.desc")}
       />
 
       {/* ───────── Claude / Pi family tabs ───────── */}

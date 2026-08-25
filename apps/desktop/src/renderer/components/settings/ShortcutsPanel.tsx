@@ -22,7 +22,7 @@ import {
   type CommandGroup,
 } from "@renderer/lib/commands.js";
 import { DEFAULT_SHORTCUTS } from "@renderer/lib/shortcuts.js";
-import { Button, Kbd } from "@renderer/components/ui/index.js";
+import { Button } from "@renderer/components/ui/index.js";
 import { PanelHeader } from "./PanelHeader.js";
 import { SettingsSection } from "./SettingsSection.js";
 import { SettingRow } from "./SettingRow.js";
@@ -108,15 +108,6 @@ export function ShortcutsPanel() {
     <section className="mx-auto w-full max-w-3xl space-y-4">
       <PanelHeader
         title={t("settings.shortcuts.title")}
-        desc={
-          <>
-            {t("settings.shortcuts.desc1")}
-            <Kbd keys={["⌘"]} size="xs" />
-            {t("settings.shortcuts.desc2")}
-            <Kbd keys={["Ctrl"]} size="xs" />
-            {t("settings.shortcuts.desc3")}
-          </>
-        }
         action={
           <Button
             variant="ghost"

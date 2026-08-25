@@ -179,7 +179,6 @@ export function VoicePanel() {
     <section className="mx-auto w-full max-w-3xl space-y-4">
       <PanelHeader
         title={t("settings.voice.title")}
-        desc={t("settings.voice.desc")}
         icon={IconMicrophone}
       />
 
@@ -275,7 +274,7 @@ export function VoicePanel() {
             value={voiceInputMode}
             onValueChange={(v) => void setVoiceInputMode(v as VoiceInputMode)}
           >
-            <Select.Trigger id="setting-voice-mode" className="min-w-[10rem]">
+            <Select.Trigger id="setting-voice-mode" className="w-full">
               <Select.Value>
                 {(val: VoiceInputMode) =>
                   val === "pushToTalk"
@@ -314,7 +313,7 @@ export function VoicePanel() {
             value={voiceLang}
             onValueChange={(v) => void setVoiceLang(v as string)}
           >
-            <Select.Trigger id="setting-voice-lang" className="min-w-[10rem]">
+            <Select.Trigger id="setting-voice-lang" className="w-full">
               <Select.Value>
                 {(val: string) =>
                   val === "en-US"
