@@ -2290,7 +2290,12 @@ function ChatPaneForSession({ sessionId, isActive }: { sessionId: string; isActi
               ListFooterComponent={listFooter}
               ListHeaderComponent={listHeader}
               contentContainerStyle={{ paddingTop: MESSAGE_LIST_TOP_PADDING }}
-              style={{ height: "100%", width: "100%" }}
+              // overscrollBehavior contain: a touch scroll starting at the
+              // list's boundaries must not chain to the document (mobile
+              // browsers would pan the whole shell — see the document scroll
+              // lock in styles.css). The style spread lands after the
+              // library's own overflow styles, on the same scroll div.
+              style={{ height: "100%", width: "100%", overscrollBehavior: "contain" }}
             />
           </div>
         </div>

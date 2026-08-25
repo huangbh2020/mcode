@@ -2,19 +2,23 @@
  * FileViewer — shared read-only file viewer for the mobile shell.
  *
  * Text files render through the shared Markdown fenced-code path (shiki
- * highlighting, zero new deps); images render inline via the binary-read
- * path. Extracted from MobileFilesScreen so the chat-stream viewer overlay
- * (MobileViewerOverlay) can reuse the exact same rendering.
+ * highlighting, zero new deps); markdown files default to the rendered
+ * preview instead (same shared Markdown component, raw content) with a
+ * floating pill to flip back to the highlighted source; images render
+ * inline via the binary-read path. Extracted from MobileFilesScreen so the
+ * chat-stream viewer overlay (MobileViewerOverlay) can reuse the exact same
+ * rendering.
  */
 import { useEffect, useState } from "react";
 import { api } from "@renderer/lib/api.js";
 import { Markdown } from "@renderer/components/chat/Markdown.js";
-import { IconArrowUp, IconLoader2, IconPhoto } from "@renderer/lib/icons.js";
+import { useI18n } from "@renderer/lib/i18n/index.js";
+import { IconArrowUp, IconCode, IconEye, IconLoader2, IconPhoto } from "@renderer/lib/icons.js";
 
 /** File extension → shiki language id for the fenced-code renderer. */
 export const LANG_BY_EXT: Record<string, string> = {
   ts: "typescript", tsx: "tsx", js: "javascript", jsx: "jsx", mjs: "javascript", cjs: "javascript",
-  json: "json", md: "markdown", py: "python", go: "go", rs: "rust", java: "java", c: "c",
+  json: "json", md: "markdown", markdown: "markdown", py: "python", go: "go", rs: "rust", java: "java", c: "c",
   h: "c", cpp: "cpp", hpp: "cpp", cs: "csharp", rb: "ruby", php: "php", sh: "bash",
   bash: "bash", yml: "yaml", yaml: "yaml", toml: "toml", html: "html", htm: "html",
   css: "css", scss: "scss", sql: "sql", xml: "xml", svg: "xml", vue: "vue", kt: "kotlin",
@@ -23,6 +27,10 @@ export const LANG_BY_EXT: Record<string, string> = {
 
 /** Image extensions rendered inline via the binary-read path. */
 const IMAGE_EXT = new Set(["png", "jpg", "jpeg", "gif", "webp", "svg", "bmp", "ico"]);
+
+/** Markdown extensions that default to the rendered preview view (mirrors
+ *  the desktop editor's isMarkdown gate). */
+const MARKDOWN_EXT = new Set(["md", "markdown"]);
 
 export function extOf(name: string): string {
   const i = name.lastIndexOf(".");
@@ -63,18 +71,23 @@ export function FileViewerOverlay({
 }
 
 /** Body-only variant (loading / image / failed / text) — embedded by overlays
- *  that render their own header. */
+ *  that render their own header. Markdown files open in the rendered preview
+ *  by default; the floating pill toggles to the shiki-highlighted source. */
 export function FileViewerContent({ name, path }: { name: string; path: string }) {
+  const { t } = useI18n();
   const [content, setContent] = useState<string | null>(null);
   const [imageUrl, setImageUrl] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
+  const [sourceView, setSourceView] = useState(false);
   const ext = extOf(name);
+  const isMd = MARKDOWN_EXT.has(ext);
 
   useEffect(() => {
     let cancelled = false;
     setContent(null);
     setImageUrl(null);
     setFailed(false);
+    setSourceView(false);
     if (IMAGE_EXT.has(ext)) {
       void api.file
         .readBinary({ filePath: path })
@@ -129,8 +142,21 @@ export function FileViewerContent({ name, path }: { name: string; path: string }
     );
   }
   return (
-    <div className="min-h-0 flex-1 overflow-auto px-3 py-2">
-      <Markdown>{markdown}</Markdown>
+    <div className="relative min-h-0 flex-1">
+      <div className="absolute inset-0 overflow-auto px-3 py-2">
+        <Markdown>{isMd && !sourceView ? content : markdown}</Markdown>
+      </div>
+      {isMd && (
+        <button
+          type="button"
+          onClick={() => setSourceView((v) => !v)}
+          title={sourceView ? t("ide.viewer.mdPreview") : t("ide.viewer.mdSource")}
+          className="absolute bottom-4 right-4 z-10 flex h-8 items-center gap-1.5 rounded-full border border-edge bg-surface-muted/90 px-3 text-xs text-content-muted shadow-lg backdrop-blur hover:bg-surface-hover active:bg-surface-hover"
+        >
+          {sourceView ? <IconEye size={14} /> : <IconCode size={14} />}
+          {sourceView ? t("ide.viewer.mdPreview") : t("ide.viewer.mdSource")}
+        </button>
+      )}
     </div>
   );
 }

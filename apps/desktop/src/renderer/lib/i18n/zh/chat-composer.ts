@@ -146,6 +146,8 @@ export const zh = {
   "chat.plan.viewFullTitle": "在侧边栏中查看完整计划",
   "chat.plan.view": "查看计划",
   "chat.plan.editPlan": "编辑计划",
+  "chat.plan.kickoffNote": "在新会话中执行已批准的计划",
+  "chat.plan.kickoffNoteWithFeedback": "在新会话中执行已批准的计划。执行时注意：{feedback}",
   "chat.planViewer.title": "计划内容",
   "chat.planViewer.cancelEdit": "取消编辑",
   "chat.planViewer.saveTitle": "保存（Ctrl+S）",

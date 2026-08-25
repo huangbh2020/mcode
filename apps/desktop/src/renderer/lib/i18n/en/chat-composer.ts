@@ -140,6 +140,8 @@ export const en = {
   "chat.plan.viewFullTitle": "View the full plan in the side panel",
   "chat.plan.view": "View plan",
   "chat.plan.editPlan": "Edit plan",
+  "chat.plan.kickoffNote": "Execute the approved plan in this new session",
+  "chat.plan.kickoffNoteWithFeedback": "Execute the approved plan in this new session. Note: {feedback}",
   "chat.planViewer.title": "Plan content",
   "chat.planViewer.cancelEdit": "Cancel editing",
   "chat.planViewer.saveTitle": "Save (Ctrl+S)",

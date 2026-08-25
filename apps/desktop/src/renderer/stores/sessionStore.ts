@@ -406,6 +406,10 @@ export interface QueuedPrompt {
   images?: PromptImage[];
   /** Names of skill pills embedded in the queued text (for stream rendering). */
   skillNames?: string[];
+  /** Rich blocks for the user bubble, replacing the default single text block
+   *  (plan handoff renders "note + plan card" instead of the raw kickoff
+   *  text — `displayText` still carries the queue card's preview line). */
+  displayBlocks?: Block[];
 }
 
 /** Attachment payload shared by sendPrompt and the queue (kept loose here so
@@ -1185,6 +1189,11 @@ export interface SessionState {
      *  image blocks on the user message and inlined into the provider request.
      *  An image-only turn passes an empty `prompt`. */
     images?: PromptImage[],
+    /** Rich blocks for the user bubble, replacing the default single text
+     *  block. The plan handoff uses this to render "note + plan card" instead
+     *  of dumping the raw kickoff prompt — `prompt` still carries the full
+     *  text to the model. Absent for ordinary typed messages. */
+    displayBlocks?: Block[],
   ) => Promise<boolean>;
   /** Resolves true when the prompt was accepted into the stream (the caller
    *  may then clear the composer), false when a guard blocked it (no session,
@@ -4866,7 +4875,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     });
   },
 
-  sendPrompt: async (prompt, attachments, displayText, skillsUsed, images) => {
+  sendPrompt: async (prompt, attachments, displayText, skillsUsed, images, displayBlocks) => {
     const sessionId = get().activeSessionId;
     if (!sessionId) return false;
     // An image-only turn (no typed text) is valid — the images are the prompt.
@@ -4915,13 +4924,20 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       }
     }
     // Image-only turns have no text block at all (empty bubble otherwise).
-    const textForBlock = displayText ?? prompt;
-    if (textForBlock.trim()) {
-      blocks.push({
-        kind: "text",
-        text: textForBlock,
-        skillNames: skillsUsed && skillsUsed.length > 0 ? skillsUsed : undefined,
-      });
+    // `displayBlocks` (plan handoff) replaces the default text block with
+    // richer content — e.g. a short note + the plan card — so the raw
+    // kickoff prompt never dumps into the bubble.
+    if (displayBlocks) {
+      blocks.push(...displayBlocks);
+    } else {
+      const textForBlock = displayText ?? prompt;
+      if (textForBlock.trim()) {
+        blocks.push({
+          kind: "text",
+          text: textForBlock,
+          skillNames: skillsUsed && skillsUsed.length > 0 ? skillsUsed : undefined,
+        });
+      }
     }
     const userMsg: ChatMessage = {
       id: `u_${Date.now()}`,
@@ -5068,6 +5084,17 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       editedMsg.blocks
         .filter((b): b is Extract<Block, { kind: "image" }> => b.kind === "image")
         .map((b) => ({ data: b.data, mimeType: b.mimeType as PromptImage["mimeType"] }));
+    // A plan block on the edited message (the plan handoff's first prompt)
+    // survives the edit verbatim — the card keeps rendering on the re-sent
+    // bubble, and its text is re-appended to the model prompt below. The
+    // inline editor only edits the note text, so without this the re-send
+    // would silently drop the plan the executor runs on.
+    const preservedPlanBlock = editedMsg.blocks.find(
+      (b): b is Extract<Block, { kind: "plan" }> => b.kind === "plan",
+    );
+    const modelPrompt = preservedPlanBlock
+      ? `${newPrompt}\n\n<approved-plan>\n${preservedPlanBlock.plan}\n</approved-plan>`
+      : newPrompt;
     const blocks: Block[] = [];
     if (attachments) {
       for (const a of attachments) {
@@ -5088,6 +5115,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       text: displayText ?? newPrompt,
       skillNames: skillsUsed && skillsUsed.length > 0 ? skillsUsed : undefined,
     });
+    if (preservedPlanBlock) blocks.push(preservedPlanBlock);
     const userMsg: ChatMessage = {
       id: `u_${Date.now()}`,
       sessionId,
@@ -5140,7 +5168,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       try {
         ({ session: updated } = await api.claude.sendTurn({
           sessionId,
-          prompt: newPrompt,
+          // Carries the preserved plan payload (if any) — the bubble's text
+          // block shows only the edited note text.
+          prompt: modelPrompt,
           model: resolvedModel.model,
           effort,
           permissionMode,
@@ -7257,7 +7287,19 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     }
     const newSid = get().activeSessionId;
     if (newSid && newSid !== sessionId) {
-      get().enqueuePrompt(newSid, { prompt: kickoff, displayText: kickoff });
+      // The new session renders the handoff as "note + plan card" (same
+      // PlanStreamBlock the planning session showed) instead of dumping the
+      // raw kickoff text — `prompt` still carries the full kickoff to the
+      // model, and the plan block persists with the user message so the card
+      // survives session reloads.
+      const note = fb
+        ? translate(get().locale, "chat.plan.kickoffNoteWithFeedback", { feedback: fb })
+        : translate(get().locale, "chat.plan.kickoffNote");
+      const displayBlocks: Block[] = [
+        { kind: "text", text: note },
+        { kind: "plan", planId: LIVE_PLAN_ID, plan: planText, phase: "ready" },
+      ];
+      get().enqueuePrompt(newSid, { prompt: kickoff, displayText: note, displayBlocks });
       get().drainPromptQueueIfIdle(newSid);
     }
   },
@@ -7504,7 +7546,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     // and fires sendTurn. If that turn later ends with another queued item,
     // its turn.done handler will call drainPromptQueueIfIdle again — so the
     // whole queue drains one item per turn, in order.
-    void s.sendPrompt(head.prompt, head.attachments, head.displayText, head.skillNames, head.images);
+    void s.sendPrompt(head.prompt, head.attachments, head.displayText, head.skillNames, head.images, head.displayBlocks);
   },
 
   sendQueuedPromptNow: async (sessionId, id) => {
@@ -7526,7 +7568,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     // Reuse the normal send path. sendPrompt clears the interruptedBySession
     // sentinel, so the old turn's late turn.done{interrupted} is filtered by
     // the existing race guard (sendPrompt / editAndResendMessage rely on it).
-    await get().sendPrompt(item.prompt, item.attachments, item.displayText, item.skillNames, item.images);
+    await get().sendPrompt(item.prompt, item.attachments, item.displayText, item.skillNames, item.images, item.displayBlocks);
   },
 
   reorderPromptQueue: (sessionId, newOrder) => {

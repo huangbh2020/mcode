@@ -42,6 +42,10 @@ export const en = {
   "ide.editor.switchToEditView": "Switch to edit view",
   "ide.editor.switchToSource": "Switch to source editing",
   "ide.editor.switchToPreview": "Switch to preview",
+
+  /* ── file viewer (mobile read-only viewer) ── */
+  "ide.viewer.mdPreview": "Preview",
+  "ide.viewer.mdSource": "Source",
   "ide.editor.modeTabsHint": "Current: tabs — click to switch to replace mode (single file)",
   "ide.editor.modeReplaceHint": "Current: replace — click to switch to tabs mode",
   "ide.editor.readingFile": "Reading file…",

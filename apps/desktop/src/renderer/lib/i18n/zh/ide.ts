@@ -44,6 +44,10 @@ export const zh = {
   "ide.editor.switchToEditView": "切换到编辑视图",
   "ide.editor.switchToSource": "切换到源码编辑",
   "ide.editor.switchToPreview": "切换到预览",
+
+  /* ── file viewer (mobile read-only viewer) ── */
+  "ide.viewer.mdPreview": "预览",
+  "ide.viewer.mdSource": "源码",
   "ide.editor.modeTabsHint": "当前:多标签页 — 点击切到替换模式(单文件)",
   "ide.editor.modeReplaceHint": "当前:替换模式 — 点击切到多标签页",
   "ide.editor.readingFile": "读取文件…",

@@ -105,6 +105,13 @@ function MobileShell() {
   );
   const sessionsByProject = useSessionStore((s) => s.sessionsByProject);
   const pinnedSessions = useSessionStore((s) => s.pinnedSessions);
+  // Owning project of the active session (kept in lockstep by
+  // syncConfigFromSession) — shown next to the title. Same stable-ref selector
+  // shape as the desktop Titlebar's ActiveProjectChip: an existing element of
+  // `projects` or null, never a fresh object.
+  const activeProject = useSessionStore((s) =>
+    s.activeProjectId ? s.projects.find((p) => p.id === s.activeProjectId) ?? null : null,
+  );
   const settingsOpen = useSessionStore((s) => s.settingsOpen);
   const setSettingsOpen = useSessionStore((s) => s.setSettingsOpen);
 
@@ -143,7 +150,16 @@ function MobileShell() {
         </button>
         <div className="flex min-w-0 flex-1 items-center justify-center gap-1.5 px-1">
           {running && <SpinnerIcon size={13} className="shrink-0 animate-spin text-accent" />}
-          <span className="truncate text-sm font-medium">{title}</span>
+          <span className="min-w-0 shrink truncate text-sm font-medium">{title}</span>
+          {/* Mobile counterpart of the desktop Titlebar's ActiveProjectChip —
+              without it, the thread's owning project is invisible outside the
+              drawer (fresh sessions show as a bare "New session" title). */}
+          {activeSessionId && activeProject && (
+            <span className="flex min-w-0 shrink items-center gap-1 px-1 text-xs text-content-subtle">
+              <IconFolder size={13} className="shrink-0" />
+              <span className="truncate">{activeProject.name}</span>
+            </span>
+          )}
         </div>
         <button
           type="button"
