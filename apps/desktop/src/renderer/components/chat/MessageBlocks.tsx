@@ -1181,6 +1181,20 @@ function WriteToolCard({
 }
 
 /** Generic tool card for everything not Edit/Write (Bash, Read, Grep…). */
+/** True when an ExitPlanMode tool card's error is an approval-CHANNEL failure
+ *  (transport broke before the approval prompt reached this app), as opposed
+ *  to a real user rejection or a model-side input error. Matched on the
+ *  result text because both the CLI's own error ("Tool permission request
+ *  failed: AbortError: Stream closed") and the adapter's synthesized
+ *  fallback mention permission/stream failures — a user rejection through
+ *  the real approval sheet says "Plan rejected by user" instead. */
+function isPlanApprovalChannelFailure(block: Extract<Block, { kind: "tool_use" }>): boolean {
+  if (block.toolName !== "ExitPlanMode" || block.status !== "error") return false;
+  return /permission denied|permission request failed|stream closed|approval channel/i.test(
+    resultPreview(block.result),
+  );
+}
+
 function GenericToolCard({
   block,
   defaultOpen = false,
@@ -1196,6 +1210,7 @@ function GenericToolCard({
   // its summary line - linkify it. Bash/Grep/Glob summaries are commands or
   // patterns, not paths, so they stay plain text.
   const summaryToolPath = extractToolFilePath(block.toolName, block.input);
+  const approvalBroken = isPlanApprovalChannelFailure(block);
 
   return (
     <div className="[font-size:var(--chat-fs-sm)]">
@@ -1215,6 +1230,18 @@ function GenericToolCard({
         )}
         <Chevron open={open} />
       </button>
+      {approvalBroken && (
+        // Amber (not red): the turn's context is intact and the model usually
+        // self-recovers by writing the plan file — the user just approves via
+        // chat. Mirrors the turn-incomplete warning card's tone.
+        <div className="mb-1.5 flex flex-col gap-0.5 rounded-md border border-warning/50 bg-warning/10 px-2.5 py-1.5">
+          <div className="flex items-center gap-1.5 font-medium text-warning">
+            <IconAlertTriangle size={13} className="shrink-0" />
+            <span>{t("chatStream.planApprovalBroken.title")}</span>
+          </div>
+          <div className="text-content-muted">{t("chatStream.planApprovalBroken.desc")}</div>
+        </div>
+      )}
       {open && (
         <div className="space-y-2 border-l border-edge py-2 pl-2">
           <div>

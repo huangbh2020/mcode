@@ -18,6 +18,12 @@
  * hairline) so cards scroll underneath it; in full-height two-column panels
  * (Skills / custom models) the center pane doesn't scroll, so the bar simply
  * sits at the top.
+ *
+ * The `mt-5` supplies the initial top gap inside the center pane — the pane
+ * itself must stay free of top padding, because Chromium anchors a sticky
+ * child below the scroll container's padding-top, which would leave a
+ * visible strip above the stuck bar (self-margin does NOT offset the stuck
+ * position, so this is the safe way to space it).
  */
 import type { ComponentType, ReactNode } from "react";
 import { cn } from "@renderer/lib/cn.js";
@@ -38,7 +44,7 @@ export function PanelHeader({
   return (
     <header
       className={cn(
-        "sticky top-0 z-10 mb-1 flex items-center justify-between gap-4",
+        "sticky top-0 z-10 mb-1 mt-5 flex items-center justify-between gap-4",
         "border-b border-edge bg-surface py-2.5",
         className,
       )}

@@ -201,7 +201,14 @@ export function SettingsPage() {
           // wrapper a definite height so child panels fill it and scroll
           // internally; overflow-y-auto still lets non-internal-scroll panels
           // (Git/Terminal/About) scroll when their content is tall.
-          className="min-h-0 h-full overflow-y-auto px-6 py-5"
+          //
+          // NO top padding: Chromium anchors a `sticky top-0` child below the
+          // scroll container's padding-top, so a `py-5` here left a 20px strip
+          // above the stuck PanelHeader where scrolling content showed through.
+          // The initial 20px gap comes from PanelHeader's own `mt-5` instead —
+          // a sticky element's self-margin positions it at rest but does not
+          // offset where it sticks.
+          className="min-h-0 h-full overflow-y-auto px-6 pb-5"
           style={{ fontSize: "var(--right-panel-font-size)" }}
         >
           {active === "general" && <GeneralPanel />}

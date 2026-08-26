@@ -100,6 +100,11 @@ export const en = {
     "The model channel returned no reply text this turn. Try resending or switching models.",
   "chatStream.turnIncomplete.pendingTools": "Unfinished calls: {tools}",
 
+  // ── MessageBlocks: ExitPlanMode approval-channel failure ──
+  "chatStream.planApprovalBroken.title": "Plan approval prompt failed to show",
+  "chatStream.planApprovalBroken.desc":
+    "The approval request broke in transit (not a user rejection). The plan is usually saved to the plan file — reply to approve it or request changes.",
+
   // ── EmptyThreadWelcome ──
   "chatStream.welcome.title": "Start a new chat",
   "chatStream.welcome.withProject": "Start a new chat in {name}",

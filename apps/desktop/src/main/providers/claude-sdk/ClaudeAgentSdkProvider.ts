@@ -21,7 +21,7 @@ import { SdkMessageAdapter, parseQuestions } from "./SdkMessageAdapter.js";
 import { buildCustomEnv, MCODE_CONFIG_DIR, resolveActiveModel } from "./customEnv.js";
 import type { ClaudeContextWindowTag } from "./claudeTokenUsage.js";
 import { ASK_SYSTEM_PROMPT } from "@main/lib/askQuestion.js";
-import { CLAUDE_IDENTITY_PROMPT, joinPromptSections } from "@main/lib/systemPrompt.js";
+import { CLAUDE_IDENTITY_PROMPT, CLAUDE_PLAN_MODE_NUDGE, joinPromptSections } from "@main/lib/systemPrompt.js";
 import { bashPathHintFor, detectBashEnv } from "@main/lib/bashEnv.js";
 import { getFileSnapshot } from "@main/lib/fileSnapshotRegistry.js";
 import {
@@ -65,27 +65,58 @@ async function loadQuery(): Promise<typeof import("@anthropic-ai/claude-agent-sd
  *  SendTurnImageSchema.mimeType (the zod enum already restricts to this set). */
 type ImageMediaType = "image/jpeg" | "image/png" | "image/gif" | "image/webp";
 
+/** Promise that resolves when the signal fires (immediately if already
+ *  aborted). Used to unblock the prompt iterable's hold on user stop. */
+function abortSignalPromise(signal: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    if (signal.aborted) return resolve();
+    signal.addEventListener("abort", () => resolve(), { once: true });
+  });
+}
+
+/** A turn-settle gate: the prompt iterable awaits `promise` after yielding the
+ *  user message, and the adapter calls `release` once the turn is settled
+ *  (result received AND no subagents / background tasks still running). See
+ *  buildPromptInput for why the hold exists. */
+function makeSettleGate(): { promise: Promise<void>; release: () => void } {
+  let release!: () => void;
+  const promise = new Promise<void>((r) => (release = r));
+  return { promise, release };
+}
+
 /**
- * Build the SDK `prompt` argument for a turn. Plain string for text-only
- * turns (the common case — zero behavior change). When the user attached
- * images, returns a fresh AsyncIterable yielding ONE user message whose
- * content is the text block followed by the base64 image blocks — the same
- * inline-encoding the Claude Code CLI uses for user-attached images (the
- * harness encodes bytes into the request; the model never sees a filesystem
- * path). A new iterable is created per call because the transport-retry path
+ * Build the SDK `prompt` argument for a turn: an AsyncIterable yielding ONE
+ * user message (text block + any inline base64 image blocks — the same
+ * inline-encoding the Claude Code CLI uses for user-attached images), then
+ * HOLDING OPEN until the turn settles.
+ *
+ * Why the hold: with a plain string (or a one-shot iterable) the SDK closes
+ * the CLI's stdin after the first result message (`isSingleUserTurn` /
+ * `streamInput` endInput). The CLI process then exits while backgrounded
+ * subagents are still running, orphaning them — they keep writing the shared
+ * session file, and a turn that resumes in that window reads torn state in
+ * which every permission ask dies instantly ("Tool permission request
+ * failed: AbortError: Stream closed"; observed with plan-mode sessions,
+ * 2026-08-26). Holding stdin open keeps the CLI process alive until the
+ * adapter confirms the turn settled, so the session file is complete before
+ * the next turn can resume it. The hold races the abort signal so a user
+ * stop never deadlocks the iterable.
+ *
+ * A new iterable + gate is created per call because the transport-retry path
  * needs a replayable source after recreating the query.
  */
-function buildPromptInput(req: StartTurnRequest): string | AsyncIterable<SDKUserMessage> {
-  const images = req.images;
-  if (!images || images.length === 0) return req.prompt;
-
+function buildPromptInput(
+  req: StartTurnRequest,
+  gate: { promise: Promise<void> },
+  signal: AbortSignal,
+): AsyncIterable<SDKUserMessage> {
   const content: (
     | { type: "text"; text: string }
     | { type: "image"; source: { type: "base64"; media_type: ImageMediaType; data: string } }
   )[] = [];
   // Image-only turns send no text block (the images still reach the model).
   if (req.prompt.trim()) content.push({ type: "text", text: req.prompt });
-  for (const img of images) {
+  for (const img of req.images ?? []) {
     content.push({
       type: "image",
       source: { type: "base64", media_type: img.mimeType as ImageMediaType, data: img.data },
@@ -97,6 +128,7 @@ function buildPromptInput(req: StartTurnRequest): string | AsyncIterable<SDKUser
       message: { role: "user", content },
       parent_tool_use_id: null,
     } satisfies SDKUserMessage;
+    await Promise.race([gate.promise, abortSignalPromise(signal)]);
   })();
 }
 
@@ -295,6 +327,12 @@ function shouldAutoApprove(mode: PermissionMode | undefined, toolName: string): 
  *  the SDK's own retry loop doesn't cover. */
 const CLAUDE_MAX_TRANSPORT_RETRIES = 3;
 
+/** Hard cap on the prompt iterable's stdin hold (see buildPromptInput). If
+ *  the adapter's settle signal never fires, release the hold after this long
+ *  so the turn can still finish — the CLI exits and any straggler background
+ *  agents orphan, which is exactly the pre-fix behavior, not a deadlock. */
+const PROMPT_SETTLE_FALLBACK_MS = 5 * 60_000;
+
 /** True for a thrown error that warrants a transport-level retry. Covers
  *  stream/stdio breaks, network failures, timeouts, and HTTP 429/5xx that
  *  escape the SDK's retry loop and surface as a thrown exception (possible on
@@ -378,6 +416,19 @@ export class ClaudeAgentSdkProvider implements AgentProvider {
 
   async startTurn(req: StartTurnRequest, ctx: ProviderContext): Promise<TurnHandle> {
     const ac = new AbortController();
+
+    // UI "Plan" mode → run the CLI under `default` and steer the model into
+    // plan mode via the EnterPlanMode tool instead. The CLI's plan
+    // permission-mode reliably kills the ExitPlanMode approval round-trip
+    // when a turn resumes right after a backgrounded subagent completes
+    // (rule-layer instant deny recorded as "Tool permission request failed:
+    // AbortError: Stream closed", permission_denials → "Permission denied
+    // (ExitPlanMode)"; observed on CLI 2.1.218 AND 2.1.238, 2026-08-26 — the
+    // ask never reaches canUseTool/onUserDialog). Under `default` the
+    // EnterPlanMode→ExitPlanMode flow is the battle-proven path. Safety is
+    // preserved host-side: the ApprovalBridge still sees the config-level
+    // "plan" mode, so shouldAutoApprove prompts for every mutating tool.
+    const isUiPlanMode = req.permissionMode === "plan";
     // Look up the session's snapshot via the module-scope registry.
     // The runtime creates it lazily on first sendTurn and clears it
     // between turns; the provider only reads. No-op fallbacks if the
@@ -399,8 +450,9 @@ export class ClaudeAgentSdkProvider implements AgentProvider {
       effort: req.effort && req.effort !== "default" ? (req.effort as Options["effort"]) : undefined,
       // Permission mode: the contract is an open string; the SDK's type is a
       // narrow union. The UI only offers claude's 4 modes for this provider
-      // (declared in capabilities.permissionModes), so the cast is safe.
-      permissionMode: req.permissionMode as Options["permissionMode"],
+      // (declared in capabilities.permissionModes), so the cast is safe. The
+      // UI "plan" mode is translated to "default" (see isUiPlanMode above).
+      permissionMode: (isUiPlanMode ? "default" : req.permissionMode) as Options["permissionMode"],
       resume: req.resumeProviderSessionId ?? undefined,
       includePartialMessages: true,
       // Skills: when the user picked specific skills in the composer, pass them
@@ -811,6 +863,9 @@ export class ClaudeAgentSdkProvider implements AgentProvider {
     if (process.platform === "win32") {
       appends.push(bashPathHintFor(detectBashEnv("claude")));
     }
+    if (isUiPlanMode) {
+      appends.push(CLAUDE_PLAN_MODE_NUDGE);
+    }
     if (!this.capabilities.supportsAskUserQuestion) {
       appends.push(ASK_SYSTEM_PROMPT);
     }
@@ -875,7 +930,18 @@ export class ClaudeAgentSdkProvider implements AgentProvider {
       };
     }
 
-    const q = (await loadQuery())({ prompt: buildPromptInput(req), options });
+    const gate = makeSettleGate();
+    // Fallback cap for the stdin hold: if the settle signal never arrives
+    // (CLI stops emitting task edges, unexpected states), release anyway so
+    // the turn can't hang — degrades to the pre-fix early-exit behavior
+    // instead of deadlocking. Long enough for real background agents.
+    const settleTimers: NodeJS.Timeout[] = [];
+    settleTimers.push(setTimeout(() => gate.release(), PROMPT_SETTLE_FALLBACK_MS));
+    let retryGate: ReturnType<typeof makeSettleGate> | null = null;
+    ctx.log.info(
+      `claude turn start: session=${req.sessionId} uiMode=${req.permissionMode} sdkMode=${(typeof options.permissionMode === "string" ? options.permissionMode : "default")} settleGate=on`,
+    );
+    const q = (await loadQuery())({ prompt: buildPromptInput(req, gate, ac.signal), options });
 
     // Resolve the user-declared context-window tag from the selected model's
     // `supports1m` flag. `resolveActiveModel` appends a `[1m]` suffix exactly
@@ -903,6 +969,10 @@ export class ClaudeAgentSdkProvider implements AgentProvider {
       configured,
       !req.apiConfig,
     );
+    // Wire the settle gate: the adapter releases the prompt iterable's hold
+    // once the turn is settled (result + no running subagents / background
+    // tasks), letting the CLI process exit with complete session state.
+    adapter.setSettleGate(gate.release);
 
     let finished = false;
     const done = (async () => {
@@ -960,8 +1030,14 @@ export class ClaudeAgentSdkProvider implements AgentProvider {
               // Fresh query + adapter for the retry. options.abortController
               // (ac) is shared, so a user stop still cancels the retried
               // attempt. options.resume re-attaches to the same SDK session
-              // so the conversation context carries over.
-              activeQuery = (await loadQuery())({ prompt: buildPromptInput(req), options });
+              // so the conversation context carries over. The retry gets a
+              // FRESH settle gate (the abandoned attempt's iterable/gate died
+              // with its query).
+              retryGate = makeSettleGate();
+              settleTimers.push(
+                setTimeout(() => retryGate?.release(), PROMPT_SETTLE_FALLBACK_MS),
+              );
+              activeQuery = (await loadQuery())({ prompt: buildPromptInput(req, retryGate, ac.signal), options });
               activeAdapter = new SdkMessageAdapter(
                 ctx,
                 req.sessionId,
@@ -974,6 +1050,7 @@ export class ClaudeAgentSdkProvider implements AgentProvider {
                 configured,
                 !req.apiConfig,
               );
+              activeAdapter.setSettleGate(retryGate.release);
               continue;
             }
             // Non-retryable, content already started, or retries exhausted.
@@ -996,6 +1073,12 @@ export class ClaudeAgentSdkProvider implements AgentProvider {
         }
       } finally {
         finished = true;
+        // Defensive release: if the CLI process already exited (error path,
+        // clean close) while the prompt iterable was still holding, unblock
+        // the SDK's streamInput so it can finish its own teardown.
+        gate.release();
+        retryGate?.release();
+        for (const t of settleTimers) clearTimeout(t);
       }
     })();
 

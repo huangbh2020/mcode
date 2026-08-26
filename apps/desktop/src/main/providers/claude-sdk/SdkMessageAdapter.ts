@@ -134,6 +134,11 @@ const NON_AGENT_TASK_TYPES = new Set(["local_bash", "local_workflow"]);
  *  stalls the snapshot publish. 3s cleanly separates the two. */
 const CONTEXT_USAGE_PATH_B_TIMEOUT_MS = 3_000;
 
+/** Grace period between the settle condition flipping and the stdin-hold
+ *  release (see maybeSettle) — covers the CLI's session-state finalization
+ *  lag after the last background-agent edge. */
+const SETTLE_GRACE_MS = 1_500;
+
 function safeJsonParse<T>(s: string): T | undefined {
   try {
     return JSON.parse(s) as T;
@@ -359,12 +364,32 @@ interface AdapterState {
    *  content has streamed, recreating the query + adapter would orphan the
    *  partial output in the message stream. */
   contentStarted: boolean;
+  /** True once the turn-settle gate fired (result seen AND no running
+   *  subagents / background tasks). Guards maybeSettle's idempotence. See
+   *  setSettleGate / the provider's buildPromptInput for the full story. */
+  settled: boolean;
+  /** Wall-clock ms of the last `result` message (0 = none yet). Settling
+   *  requires a result NEWER than the last subagent/background-task edge —
+   *  see lastAgentActivityAt. */
+  lastResultAt: number;
+  /** Wall-clock ms of the last subagent status / background-task edge
+   *  (0 = none). An agent completing triggers the CLI's task-notification
+   *  resume flow: it injects a synthetic user message and CONTINUES the
+   *  main loop (more tools, more asks, possibly more agents). A result that
+   *  predates the last agent edge is an INTERMEDIATE one — the turn is not
+   *  over, so the stdin hold must stay (2026-08-26: releasing on the bare
+   *  "result + agents idle" condition killed every ask in the resumed
+   *  phase with "AbortError: Stream closed"). */
+  lastAgentActivityAt: number;
 }
 
 /* ─── public export ────────────────────────────────────────────────── */
 
 export class SdkMessageAdapter {
   private state: AdapterState;
+  /** The provider's turn-settle release fn (unblocks the prompt iterable's
+   *  stdin hold). Set via setSettleGate after construction. */
+  private settleRelease: (() => void) | null = null;
 
   constructor(
     private ctx: ProviderContext,
@@ -439,6 +464,9 @@ export class SdkMessageAdapter {
       interactionToolSeen: false,
       backgroundTaskIds: new Set(),
       contentStarted: false,
+      settled: false,
+      lastResultAt: 0,
+      lastAgentActivityAt: 0,
     };
   }
 
@@ -448,6 +476,47 @@ export class SdkMessageAdapter {
    *  after content would duplicate / orphan the partial output. */
   hasEmittedContent(): boolean {
     return this.state.contentStarted;
+  }
+
+  /** Wire the turn-settle gate (see ClaudeAgentSdkProvider.buildPromptInput):
+   *  `release` unblocks the prompt iterable's stdin hold so the CLI process
+   *  can exit. Called once per adapter construction; safe to call before or
+   *  after the settle condition is already met. */
+  setSettleGate(release: () => void): void {
+    this.settleRelease = release;
+    this.maybeSettle();
+  }
+
+  /** Release the settle gate once the turn is settled: a result message has
+   *  arrived AND no subagents / background tasks are still running. Rechecked
+   *  on every result, subagent-status change, and background-task level
+   *  signal, because the final result may precede the last agent's completion
+   *  edge (or follow it). Idempotent. */
+  private maybeSettle(): void {
+    if (this.state.settled) return;
+    // No result yet → the turn is still mid-flight (or streaming agent
+    // output after an intermediate result) — keep holding.
+    if (this.state.lastResultSubtype === null) return;
+    // The result must POSTDATE the last agent edge. An agent completing
+    // triggers the CLI's task-notification resume flow (synthetic user
+    // message → the main loop continues), so a result older than the last
+    // agent edge is intermediate — the turn still has resumed phases to run
+    // and their permission asks need the stdin hold.
+    if (this.state.lastResultAt < this.state.lastAgentActivityAt) return;
+    for (const s of this.state.subagents.values()) {
+      if (s.status === "running") return;
+    }
+    if (this.state.backgroundTaskIds.size > 0) return;
+    this.state.settled = true;
+    // Grace period: the CLI's session-state finalization (last agent
+    // completion records) can lag the last edge we saw. Releasing stdin a
+    // beat later keeps a fast follow-up turn from resuming mid-finalization
+    // — the state that breaks the permission-ask channel (2026-08-26).
+    const roster = Array.from(this.state.subagents.values());
+    this.ctx.log.info(
+      `claude turn settled: subtype=${this.state.lastResultSubtype} agents=${roster.length} bgTasks=${this.state.backgroundTaskIds.size} resultAt=+${this.state.lastResultAt} agentEdge=+${this.state.lastAgentActivityAt} — releasing stdin hold in ${SETTLE_GRACE_MS}ms`,
+    );
+    setTimeout(() => this.settleRelease?.(), SETTLE_GRACE_MS);
   }
 
   /** Feed one SDKMessage through the normalization pipeline. */
@@ -789,6 +858,10 @@ export class SdkMessageAdapter {
     tasks: { task_id: string; task_type: string; description: string }[];
   }): void {
     this.state.backgroundTaskIds = new Set((m.tasks ?? []).map((t) => t.task_id));
+    this.state.lastAgentActivityAt = Date.now();
+    // The level signal may be the last edge we see when the final background
+    // task completes after the result message — recheck the settle gate.
+    this.maybeSettle();
   }
 
   /** `api_retry`: the SDK's built-in API-level retry loop kicked in after a
@@ -831,6 +904,12 @@ export class SdkMessageAdapter {
       sessionId: this.sessionId,
       agents: Array.from(this.state.subagents.values()),
     } satisfies SubagentUpdateEvent);
+    // A status transition (running → completed/failed/killed) may be the last
+    // edge before the settle condition flips — recheck on every roster flush.
+    // It also marks agent activity: an agent completing kicks off the CLI's
+    // task-notification resume flow, so any prior result is intermediate.
+    this.state.lastAgentActivityAt = Date.now();
+    this.maybeSettle();
   }
 
   /** Look up a subagent snapshot by its originating Task tool_use id.
@@ -1342,6 +1421,11 @@ export class SdkMessageAdapter {
       `claude result: subtype=${m.subtype} usage=${JSON.stringify(rawUsage)} modelUsage=${JSON.stringify(rawModelUsage)} total_cost_usd=${(m as { total_cost_usd?: number }).total_cost_usd ?? "n/a"}`,
     );
     this.state.lastResultSubtype = m.subtype;
+    this.state.lastResultAt = Date.now();
+    // A result arrived — the turn may now be settleable (if no subagents /
+    // background tasks are still running, this releases the prompt hold and
+    // the CLI process exits with complete session state).
+    this.maybeSettle();
 
     if (m.subtype === "success") {
       // Usage + cost (see https://code.claude.com/docs/en/agent-sdk/cost-tracking)
@@ -1451,12 +1535,21 @@ const costUsd = m.total_cost_usd ?? (muCost > 0 ? muCost : undefined);
       // Permission denials
       for (const d of m.permission_denials ?? []) {
         if (!d.tool_use_id) continue;
+        // The CLI usually streams the real (diagnostic) tool_result before
+        // the final result envelope — e.g. ExitPlanMode's "Tool permission
+        // request failed: AbortError: Stream closed" (SDK 0.3.238 / CLI
+        // 2.1.238 control-stream regression, observed 2026-08-26). Don't
+        // clobber it with the generic one-liner below; only synthesize when
+        // no real result streamed for this tool_use.
+        if (this.state.resultedToolUseIds.has(d.tool_use_id)) continue;
         this.ctx.emit({
           type: "tool.result",
           sessionId: this.sessionId,
           toolCallId: d.tool_use_id,
           isError: true,
-          content: `Permission denied${d.tool_name ? ` (${d.tool_name})` : ""}`,
+          content: d.tool_name === "ExitPlanMode"
+            ? "Plan approval prompt failed to reach the app (approval channel error). Reply in chat to approve the plan or request changes."
+            : `Permission denied${d.tool_name ? ` (${d.tool_name})` : ""}`,
         } satisfies ToolResultEvent);
       }
 

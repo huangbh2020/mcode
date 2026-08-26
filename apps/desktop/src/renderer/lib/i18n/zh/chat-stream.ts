@@ -103,6 +103,11 @@ export const zh = {
     "模型通道未返回任何回复文本，本轮没有产出。建议重发或切换模型。",
   "chatStream.turnIncomplete.pendingTools": "未完成的调用：{tools}",
 
+  // ── MessageBlocks: ExitPlanMode 审批通道故障警告 ──
+  "chatStream.planApprovalBroken.title": "计划审批弹框未能弹出",
+  "chatStream.planApprovalBroken.desc":
+    "审批请求在传输通道中断（非用户拒绝）。模型通常已把计划写入计划文件，可直接回复「批准」或提出修改意见继续。",
+
   // ── EmptyThreadWelcome ──
   "chatStream.welcome.title": "开始新的会话",
   "chatStream.welcome.withProject": "在「{name}」中开始新的会话",
