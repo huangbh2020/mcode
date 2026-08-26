@@ -227,6 +227,12 @@ const api = {
       ipcRenderer.invoke(IPC.FILE_RENAME, input)) as RpcMap["file.rename"],
   },
 
+  /** ripgrep availability + one-click install (search dialog banner). */
+  rg: {
+    status: (() => ipcRenderer.invoke(IPC.RG_STATUS)) as RpcMap["rg.status"],
+    install: (() => ipcRenderer.invoke(IPC.RG_INSTALL)) as RpcMap["rg.install"],
+  },
+
   /** Clipboard-pasted external files (images / files copied from the OS) →
    *  materialized to a temp path the agent can read (composer paste). */
   clipboardFile: {

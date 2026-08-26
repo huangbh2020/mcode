@@ -4,6 +4,7 @@ import { api } from "@renderer/lib/api.js";
 import { Dialog } from "@renderer/components/ui/index.js";
 import { useSessionStore } from "@renderer/stores/sessionStore.js";
 import type { FileSearchEntry, FileGrepEntry } from "@contracts/ipc";
+import { SEARCH_FILE_TYPES_SETTING_KEY } from "@contracts/ipc";
 import {
   IconSearch,
   IconX,
@@ -25,6 +26,27 @@ const NAME_SEARCH_LIMIT = 200;
 const GREP_LIMIT = 400;
 const GREP_MAX_PER_FILE = 10;
 
+/** Cap on how many file-type filters are remembered (datalist size). */
+const FILE_TYPE_HISTORY_MAX = 10;
+
+/** Parse the free-form file-type input into a bare-extension allow-list.
+ *  Accepts `*.java` / `.java` / bare `java`, and comma- or space-separated
+ *  lists of those; anything not shaped like a plain extension is dropped
+ *  (the backend filter only understands extensions). */
+function parseFileTypeInput(value: string): string[] {
+  const raw = value.trim();
+  if (!raw) return [];
+  const exts = new Set<string>();
+  for (const part of raw.split(/[,，;；\s]+/)) {
+    let p = part.trim();
+    if (p.startsWith("*.")) p = p.slice(2);
+    else if (p.startsWith(".")) p = p.slice(1);
+    p = p.toLowerCase();
+    if (p && /^[a-z0-9]+$/.test(p)) exts.add(p);
+  }
+  return [...exts];
+}
+
 /** Which field the search targets. Toggled by an icon button in the header. */
 type SearchMode = "name" | "content";
 
@@ -43,10 +65,10 @@ type SearchMode = "name" | "content";
  *
  * Clicking a result opens it in the CENTER pane editor (via openFileInIde) and
  * closes the dialog - the user is done searching once a target is picked. Esc
- * (or the close button / backdrop) also closes. The query / mode /
- * case-sensitivity survive a close, so reopening resumes the last search
- * (VS Code global-search behavior); the query is selected on reopen so typing
- * overwrites it. Mount once at the App root.
+ * (or the close button / backdrop) also closes. The query / case-sensitivity /
+ * file-type filter survive a close so reopening resumes the last search, while
+ * the MODE always resets to content search (the dialog's default). The query
+ * is selected on reopen so typing overwrites it. Mount once at the App root.
  *
  * The search logic (debounce + reqIdRef stale-guard + keyboard nav + match
  * highlighting) migrated verbatim from the old inline search in FilesPanel.tsx;
@@ -66,11 +88,17 @@ export function SearchDialog() {
     return proj?.path ?? null;
   }, [activeProjectId, projects]);
 
-  // Search state. query / mode / caseSensitive survive a close so reopening
-  // resumes the last search; only transient per-open state is reset below.
-  const [mode, setMode] = useState<SearchMode>("name");
+  // Search state. The query / case sensitivity / file-type filter survive a
+  // close so reopening resumes the last search; the MODE always resets to
+  // content search on close (the dialog's default). Only transient per-open
+  // state is reset below.
+  const [mode, setMode] = useState<SearchMode>("content");
   const [query, setQuery] = useState("");
   const [caseSensitive, setCaseSensitive] = useState(false);
+  const [fileType, setFileType] = useState<string>("");
+  // Previously typed file-type filters (persisted in settings; the datalist
+  // auto-completes from this).
+  const [fileTypeHistory, setFileTypeHistory] = useState<string[]>([]);
   const [nameResults, setNameResults] = useState<FileSearchEntry[]>([]);
   const [grepResults, setGrepResults] = useState<FileGrepEntry[]>([]);
   const [loading, setLoading] = useState(false);
@@ -87,23 +115,108 @@ export function SearchDialog() {
   // earlier query can't overwrite a newer one's results.
   const reqIdRef = useRef(0);
 
+  // ripgrep availability for the install banner (checked on open). Searches
+  // work without it (slow JS fallback); the banner offers a one-click install.
+  const [rgReady, setRgReady] = useState(true);
+  const [rgInstalling, setRgInstalling] = useState(false);
+  const [rgError, setRgError] = useState<string | null>(null);
+
+  // Extension allow-list parsed from the free-form file-type input ("" = no
+  // filter → undefined, keeping the IPC payload minimal).
+  const includeExts = useMemo(() => parseFileTypeInput(fileType), [fileType]);
+
   const isSearching = query.trim().length > 0;
   // The "flat" result count activeIdx navigates over: one per file in name
   // mode, one per matched line in content mode.
   const flatCount = mode === "name" ? nameResults.length : grepResults.length;
 
+  // Promote the current filter into the remembered history (dedup + cap).
+  // Called on Enter in the file-type field and on dialog close.
+  const rememberFileType = (value: string) => {
+    const v = value.trim();
+    if (!v) return;
+    setFileTypeHistory((prev) =>
+      prev[0] === v ? prev : [v, ...prev.filter((h) => h !== v)].slice(0, FILE_TYPE_HISTORY_MAX),
+    );
+  };
+
   // Drop transient per-open state when the dialog closes (and invalidate any
-  // in-flight request), but keep the query / mode / case sensitivity so the
-  // next open resumes the last search. The search effect re-runs on open (its
-  // deps include `open`), refreshing results for the preserved query.
+  // in-flight request). The query / case sensitivity / file-type filter
+  // survive a close so reopening resumes the last search; the MODE always
+  // resets to content search — the dialog's default per user request. The
+  // current file-type filter is also folded into the remembered history. The
+  // search effect re-runs on open (its deps include `open`), refreshing
+  // results for the preserved query.
   useEffect(() => {
     if (open) return;
     setActiveIdx(0);
     setLoading(false);
     setTruncated(false);
     setIncompleteScan(false);
+    setMode("content");
+    rememberFileType(fileType);
     reqIdRef.current++;
+  }, [open, fileType]);
+
+  // On open, check whether ripgrep is available; the banner offers a one-click
+  // install when it isn't. A failed status check degrades to "assume
+  // available" so the banner never nags when we can't tell.
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    setRgError(null);
+    void api.rg
+      .status()
+      .then((s) => {
+        if (cancelled) return;
+        setRgReady(s.available);
+        setRgInstalling(s.installing);
+      })
+      .catch(() => {
+        if (!cancelled) setRgReady(true);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [open]);
+
+  // Remembered file-type filters: hydrate from settings on open so the
+  // datalist shows previously typed values.
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    void api.setting
+      .get({ key: SEARCH_FILE_TYPES_SETTING_KEY })
+      .then((res) => {
+        if (cancelled || !res.value) return;
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(res.value);
+        } catch {
+          return; // not a JSON array (unset / legacy) — keep empty history
+        }
+        if (Array.isArray(parsed)) {
+          setFileTypeHistory(
+            parsed.filter((v): v is string => typeof v === "string").slice(0, FILE_TYPE_HISTORY_MAX),
+          );
+        }
+      })
+      .catch(() => {
+        // settings read failure — history just stays empty
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open]);
+
+  // Persist the history whenever it changes (writing the same list back on
+  // hydrate is harmless).
+  useEffect(() => {
+    if (fileTypeHistory.length === 0) return;
+    void api.setting
+      .set({ key: SEARCH_FILE_TYPES_SETTING_KEY, value: JSON.stringify(fileTypeHistory) })
+      .catch(() => {});
+  }, [fileTypeHistory]);
 
   // Debounced search driven by the query + mode + case-sensitivity. Each mode
   // hits its own IPC channel; switching mode clears the other mode's results so
@@ -125,7 +238,12 @@ export function SearchDialog() {
       const promise =
         mode === "name"
           ? api.file
-              .search({ projectPath, query: query.trim(), limit: NAME_SEARCH_LIMIT })
+              .search({
+                projectPath,
+                query: query.trim(),
+                limit: NAME_SEARCH_LIMIT,
+                includeExts: includeExts.length ? includeExts : undefined,
+              })
               .then((res) => {
                 if (reqIdRef.current !== myId) return;
                 setNameResults(res.files ?? []);
@@ -140,6 +258,7 @@ export function SearchDialog() {
                 limit: GREP_LIMIT,
                 maxResultsPerFile: GREP_MAX_PER_FILE,
                 caseSensitive,
+                includeExts: includeExts.length ? includeExts : undefined,
               })
               .then((res) => {
                 if (reqIdRef.current !== myId) return;
@@ -164,7 +283,7 @@ export function SearchDialog() {
         });
     }, SEARCH_DEBOUNCE_MS);
     return () => window.clearTimeout(t);
-  }, [open, query, mode, caseSensitive, projectPath, isSearching]);
+  }, [open, query, mode, caseSensitive, projectPath, isSearching, fileType]);
 
   // Keep the keyboard-active row scrolled into view while navigating.
   useEffect(() => {
@@ -175,10 +294,38 @@ export function SearchDialog() {
     el?.scrollIntoView({ block: "nearest" });
   }, [activeIdx, isSearching, flatCount]);
 
-  // Open a result and close the dialog - picking a target ends the search.
-  const openResult = (path: string) => {
-    openFileInIde(path);
+  // Open a result and close the dialog - picking a target ends the search. For
+  // content matches the hit line is passed so the editor reveals it.
+  const openResult = (path: string, line?: number) => {
+    openFileInIde(path, line != null ? { line } : undefined);
     setOpen(false);
+  };
+
+  // One-click ripgrep install (banner). On success the main process resets its
+  // resolution cache, so subsequent searches take the fast rg path.
+  const installRg = async () => {
+    setRgInstalling(true);
+    setRgError(null);
+    try {
+      const res = await api.rg.install({});
+      if (res.ok) {
+        setRgReady(true);
+      } else {
+        setRgError(
+          t("ide.search.rgInstallFailed", {
+            error: res.error ?? t("ide.search.unknownError"),
+          }),
+        );
+      }
+    } catch (err) {
+      setRgError(
+        t("ide.search.rgInstallFailed", {
+          error: err instanceof Error ? err.message : String(err),
+        }),
+      );
+    } finally {
+      setRgInstalling(false);
+    }
   };
 
   // Open the flat-active item: a file in name mode, or the file of the active
@@ -189,7 +336,7 @@ export function SearchDialog() {
       if (f) openResult(f.path);
     } else {
       const m = grepResults[activeIdx];
-      if (m) openResult(m.path);
+      if (m) openResult(m.path, m.lineNumber);
     }
   };
 
@@ -277,6 +424,28 @@ export function SearchDialog() {
               spellCheck={false}
               className="h-6 min-w-0 flex-1 bg-transparent text-sm text-content outline-none placeholder:text-content-subtle"
             />
+            {/* File-type filter: free-form input (auto-completes from previously typed
+                values via the datalist). Accepts "*.java"/".java"/"java" and
+                comma- or space-separated lists. Wired to includeExts on both
+                IPC channels. */}
+            <input
+              list="search-filetype-list"
+              value={fileType}
+              onChange={(e) => setFileType(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && fileType.trim()) rememberFileType(fileType);
+              }}
+              placeholder={t("ide.search.fileTypePlaceholder")}
+              title={t("ide.search.fileTypeHint")}
+              aria-label={t("ide.search.fileTypeHint")}
+              spellCheck={false}
+              className="h-6 w-[84px] shrink-0 rounded border border-edge bg-transparent px-1 text-[11px] text-content-muted outline-none placeholder:text-content-subtle hover:text-content focus:text-content"
+            />
+            <datalist id="search-filetype-list">
+              {fileTypeHistory.map((h) => (
+                <option key={h} value={h} />
+              ))}
+            </datalist>
             {/* Case-sensitivity toggle - content mode only (name search backend
                 is always case-insensitive). Wired to FileGrepInput.caseSensitive. */}
             {mode === "content" && (
@@ -315,6 +484,32 @@ export function SearchDialog() {
               </button>
             ) : null}
           </div>
+
+          {/* ripgrep missing banner: searches still work through the JS
+              fallback, but a one-click install restores the fast C path. */}
+          {!rgReady && (
+            <div className="flex flex-col gap-1 border-b border-edge bg-warning/10 px-3 py-1.5">
+              <div className="flex items-center gap-1.5 text-[11px] text-content-muted">
+                <IconAlertTriangle size={13} className="shrink-0 text-warning" />
+                <span className="min-w-0 flex-1 truncate">{t("ide.search.rgMissingHint")}</span>
+                {rgInstalling ? (
+                  <span className="flex shrink-0 items-center gap-1 text-content-subtle">
+                    <IconLoader2 size={12} className="animate-spin" />
+                    {t("ide.search.rgInstalling")}
+                  </span>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => void installRg()}
+                    className="shrink-0 rounded border border-accent/40 px-1.5 py-0.5 text-[11px] font-medium text-accent transition-colors hover:bg-accent/10"
+                  >
+                    {t("ide.search.rgInstall")}
+                  </button>
+                )}
+              </div>
+              {rgError && <div className="text-[11px] text-content-subtle">{rgError}</div>}
+            </div>
+          )}
 
           {/* Body: results while a query is active, idle hint otherwise. */}
           <div ref={listRef} className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden">
@@ -530,7 +725,7 @@ function ContentSearchResults({
   results: FileGrepEntry[];
   activeIdx: number;
   onHover: (idx: number) => void;
-  onOpen: (path: string) => void;
+  onOpen: (path: string, line?: number) => void;
 }) {
   const { t } = useI18n();
   const groups = useMemo(() => groupByFile(results), [results]);
@@ -592,7 +787,7 @@ function ContentSearchResults({
                 type="button"
                 data-idx={flatIdx}
                 onMouseEnter={() => onHover(flatIdx)}
-                onClick={() => onOpen(m.path)}
+                onClick={() => onOpen(m.path, m.lineNumber)}
                 className={cn(
                   "flex w-full items-start gap-2 py-0.5 pr-3 pl-8 text-left transition-colors",
                   isActive

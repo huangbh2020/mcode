@@ -245,7 +245,7 @@ export interface RgGrepResult {
 export function rgGrep(
   root: string,
   query: string,
-  opts: { caseSensitive: boolean; limit: number; maxPerFile: number },
+  opts: { caseSensitive: boolean; limit: number; maxPerFile: number; includeExts?: string[] },
   ignored: Iterable<string>,
 ): Promise<RgGrepResult | null> {
   const rg = resolveRg();
@@ -281,10 +281,20 @@ function runGrepPass(
   rg: string,
   root: string,
   query: string,
-  opts: { caseSensitive: boolean; limit: number; maxPerFile: number },
+  opts: { caseSensitive: boolean; limit: number; maxPerFile: number; includeExts?: string[] },
   ignored: Iterable<string>,
   encoding: "utf-8" | "gbk",
 ): Promise<RgGrepMatch[] | null> {
+  const includeGlobs: string[] = [];
+  for (const ext of opts.includeExts ?? []) {
+    // Sanitize: only bare alnum extensions become globs; anything else
+    // (the renderer supplies these) is dropped rather than risk a weird
+    // glob pattern. `*.ts` matches any file ending in .ts, any depth.
+    const safe = ext.replace(/[^a-zA-Z0-9]/g, "");
+    if (safe) {
+      includeGlobs.push("-g", `*.${safe}`, "-g", `**/*.${safe}`);
+    }
+  }
   const args = [
     "--json",
     "--no-ignore",
@@ -298,6 +308,7 @@ function runGrepPass(
     encoding,
     opts.caseSensitive ? "--case-sensitive" : "--ignore-case",
     ...ignoreGlobArgs(ignored),
+    ...includeGlobs,
     query,
     ".",
   ];

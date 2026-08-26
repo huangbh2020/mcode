@@ -111,6 +111,13 @@ export const en = {
   "ide.search.noContentMatch": "No matching content",
   "ide.search.truncatedHint": "Too many matches — showing only part of them, try a narrower query",
   "ide.search.scanIncompleteHint": "Large project tree — only part was scanned, results may be incomplete",
+  "ide.search.rgMissingHint": "ripgrep not found — large-project searches will be slow. Install it for speed",
+  "ide.search.rgInstall": "Install",
+  "ide.search.rgInstalling": "Downloading…",
+  "ide.search.rgInstallFailed": "Install failed: {error}",
+  "ide.search.unknownError": "Unknown error",
+  "ide.search.fileTypePlaceholder": "e.g. *.java",
+  "ide.search.fileTypeHint": "Filter by file type",
 
   /* ── git panel / repo card ── */
   "ide.git.noProjectHint": "Add a project to see its Git status",

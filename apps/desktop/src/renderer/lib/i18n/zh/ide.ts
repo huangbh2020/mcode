@@ -113,6 +113,13 @@ export const zh = {
   "ide.search.noContentMatch": "无匹配内容",
   "ide.search.truncatedHint": "匹配结果过多,仅显示前一部分,请缩小搜索范围",
   "ide.search.scanIncompleteHint": "项目目录较大,只扫描了部分文件,结果可能不完整",
+  "ide.search.rgMissingHint": "未检测到 ripgrep,大项目搜索会较慢,可一键安装加速",
+  "ide.search.rgInstall": "安装",
+  "ide.search.rgInstalling": "下载安装中…",
+  "ide.search.rgInstallFailed": "安装失败:{error}",
+  "ide.search.unknownError": "未知错误",
+  "ide.search.fileTypePlaceholder": "如 *.java",
+  "ide.search.fileTypeHint": "文件类型过滤",
 
   /* ── git panel / repo card ── */
   "ide.git.noProjectHint": "添加项目后即可查看 Git 状态",

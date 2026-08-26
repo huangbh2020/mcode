@@ -379,14 +379,16 @@ function rankFileMatch(name: string, relPath: string, query: string): number {
 }
 
 /** Match + relevance-rank a flat file list against `query` (already trimmed
- *  + lowercased). Shared by the rg fast path and the cached JS walk so both
- *  produce identical ordering and entries. */
+ *  + lowercased), optionally restricted to `includeExts`. Shared by the rg
+ *  fast path and the cached JS walk so both produce identical results. */
 function rankNameMatches(
   files: ReadonlyArray<{ name: string; abs: string; relPath: string }>,
   query: string,
+  includeExts?: ReadonlySet<string>,
 ): FileSearchEntry[] {
   const hits: FileSearchEntry[] = [];
   for (const f of files) {
+    if (includeExts && !includeExts.has(extOf(f.name))) continue;
     const hay = `${f.name}\n${f.relPath}`.toLowerCase();
     if (!hay.includes(query)) continue;
     hits.push({ name: f.name, path: f.abs, relativePath: f.relPath });
@@ -420,6 +422,7 @@ export async function searchFilesGuarded(
   const root = resolve(input.projectPath);
   const limit = input.limit ?? 80;
   const query = (input.query ?? "").trim().toLowerCase();
+  const includeExts = new Set((input.includeExts ?? []).map((e) => e.toLowerCase()));
 
   // Empty query: keep the legacy shallow BFS sample (stops at `limit`) — the
   // @-mention picker wants an instant initial list, and walking 50k entries
@@ -475,14 +478,14 @@ export async function searchFilesGuarded(
   if (rgBin) {
     const rgFiles = await rgListFiles(root, IGNORED_ENTRIES);
     if (rgFiles) {
-      const hits = rankNameMatches(rgFiles, query);
+      const hits = rankNameMatches(rgFiles, query, includeExts);
       const truncated = hits.length > limit;
       return { files: hits.slice(0, limit), truncated, incompleteScan: false };
     }
     // rg spawn failed — fall through to the in-process walk.
   }
   const { files: allFiles, incompleteScan } = await cachedTreeFiles(root, IGNORED_ENTRIES);
-  const hits = rankNameMatches(allFiles, query);
+  const hits = rankNameMatches(allFiles, query, includeExts);
   const truncated = hits.length > limit;
   return { files: hits.slice(0, limit), truncated, incompleteScan };
 }
@@ -505,6 +508,7 @@ export async function grepFilesGuarded(input: FileGrepInput): Promise<FileGrepRe
   const maxPerFile = input.maxResultsPerFile ?? 10;
   const query = input.query;
   const needle = input.caseSensitive ? query : query.toLowerCase();
+  const includeExts = new Set((input.includeExts ?? []).map((e) => e.toLowerCase()));
 
   // rg fast path: ripgrep does the walk, match and per-file cap in C, and
   // handles UTF-8/UTF-16(BOM) natively; a merged `--encoding gbk` pass covers
@@ -513,7 +517,12 @@ export async function grepFilesGuarded(input: FileGrepInput): Promise<FileGrepRe
     const rgResult = await rgGrep(
       root,
       query,
-      { caseSensitive: input.caseSensitive === true, limit, maxPerFile },
+      {
+        caseSensitive: input.caseSensitive === true,
+        limit,
+        maxPerFile,
+        includeExts: input.includeExts ?? [],
+      },
       IGNORED_ENTRIES,
     );
     if (rgResult) {
@@ -559,6 +568,9 @@ export async function grepFilesGuarded(input: FileGrepInput): Promise<FileGrepRe
       }
       // Skip obvious binaries by extension without opening them.
       if (BINARY_EXTENSIONS.has(extOf(d.name))) continue;
+      // Optional file-type filter — mirrors rg's glob narrowing so the
+      // fallback honors the same includeExts contract.
+      if (includeExts.size > 0 && !includeExts.has(extOf(d.name))) continue;
 
       // Size gate before reading: decoding + line-splitting a multi-hundred-
       // MB dump would stall the main process for seconds.

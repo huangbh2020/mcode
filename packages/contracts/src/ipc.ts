@@ -68,6 +68,14 @@ export const UPDATE_STATE_SETTING_KEY = "update.state";
  */
 export const DISPLAY_MODE_SETTING_KEY = "ui.displayMode";
 
+/**
+ * Search-dialog file-type filter history. Persisted in the `settings` table
+ * under this key as a JSON string array (most recent first, deduplicated,
+ * capped) — the search dialog feeds it into a `<datalist>` so users can
+ * re-pick file types they've typed before.
+ */
+export const SEARCH_FILE_TYPES_SETTING_KEY = "ui.search.fileTypes";
+
 /** zod schema + TS union for the display-mode preference. */
 export const DisplayModeSchema = z.enum(["single", "tabs"]);
 export type DisplayMode = z.infer<typeof DisplayModeSchema>;
@@ -1479,6 +1487,9 @@ export const FileSearchSchema = z.object({
   projectPath: z.string(),
   /** Optional case-insensitive filter over file name / relative path. */
   query: z.string().optional(),
+  /** Optional file-extension allow-list (no dots, lowercased). Empty or
+   *  absent means no filter; name search drops files outside the list. */
+  includeExts: z.array(z.string().min(1).max(32)).max(50).optional(),
   /** Max files to return. Defaults to 80 on the main side. */
   limit: z.number().int().positive().max(2000).optional(),
 });
@@ -1589,6 +1600,9 @@ export const FileGrepSchema = z.object({
   projectPath: z.string(),
   /** Substring to search for inside file contents. */
   query: z.string(),
+  /** Optional file-extension allow-list (no dots, lowercased). Empty or
+   *  absent means no filter; narrows rg's globs and the JS fallback. */
+  includeExts: z.array(z.string().min(1).max(32)).max(50).optional(),
   /** Max total matches to return. Defaults to 200 on the main side. */
   limit: z.number().int().positive().max(500).optional(),
   /** Max matches per single file. Defaults to 10 on the main side. */

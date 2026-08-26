@@ -8,6 +8,7 @@ import { registerCustomModelHandlers } from "./customModel.js";
 import { registerPiModelsHandlers } from "./piModels.js";
 import { registerThemeHandlers } from "./theme.js";
 import { registerFileHandlers } from "./files.js";
+import { registerRgHandlers } from "./rg.js";
 import { registerGitHandlers } from "./git.js";
 import { registerTerminalHandlers } from "./terminal.js";
 import { registerAppHandlers } from "./app.js";
@@ -57,6 +58,7 @@ export function registerIpcHandlers(): void {
   registerPiModelsHandlers(ipc);
   registerThemeHandlers(ipc);
   registerFileHandlers(ipc);
+  registerRgHandlers(ipc);
   registerGitHandlers(ipc);
   registerTerminalHandlers(ipc);
   registerAppHandlers(ipc);
