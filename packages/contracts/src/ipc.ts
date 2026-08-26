@@ -1613,6 +1613,36 @@ export interface FileGrepResult {
   incompleteScan: boolean;
 }
 
+/* ── ripgrep availability / one-click install ──
+ *  `file.search` / `file.grep` prefer ripgrep when one is resolvable and
+ *  degrade to the in-process scanners when not. These channels let the search
+ *  dialog detect the missing binary and offer a one-click install (downloads
+ *  the official release into `userData/bin`). */
+
+/** Snapshot of ripgrep availability for the search dialog. `installing`
+ *  mirrors the main-side in-flight guard so a reopen during an ongoing
+ *  install shows the right state. */
+export interface RgStatusResult {
+  /** An `rg` binary is resolvable (bundled userData/bin checked first, then PATH). */
+  available: boolean;
+  /** Resolved binary path when available. */
+  path?: string;
+  /** An install has been requested and is still running. */
+  installing: boolean;
+}
+
+export const RgInstallSchema = z.object({});
+export type RgInstallInput = z.infer<typeof RgInstallSchema>;
+
+/** Result of an `rg.install` request. On success the binary sits in
+ *  `userData/bin` and subsequent searches pick it up. */
+export interface RgInstallResult {
+  ok: boolean;
+  error?: string;
+  /** Path of the installed binary on success. */
+  path?: string;
+}
+
 /* ── Git operations (status / stage / commit / push / pull / diff) ──
  *  All git operations are scoped to a `repoPath` that must resolve inside a
  *  known project root. A single project folder may host MULTIPLE git repos
@@ -3215,6 +3245,10 @@ export interface RpcMap {
   "file.rename": (input: FileRenameInput) => Promise<{ ok: boolean }>;
   /** Grep file contents under a project root (line-level matches). */
   "file.grep": (input: FileGrepInput) => Promise<FileGrepResult>;
+  /** ripgrep availability snapshot (drives the search-dialog install banner). */
+  "rg.status": () => Promise<RgStatusResult>;
+  /** Download + install the ripgrep binary into userData/bin (one-click). */
+  "rg.install": (input: RgInstallInput) => Promise<RgInstallResult>;
   // Git operations (P4 Git panel)
   /** Discover all git repos under a project root (recursive, max depth 3). */
   "git.discoverRepos": (input: GitDiscoverReposInput) => Promise<{ repos: GitRepo[] }>;
@@ -3571,6 +3605,8 @@ export const IPC = {
   // Rename a file or directory in place (file-tree "重命名")
   FILE_RENAME: "file:rename",
   FILE_GREP: "file:grep",
+  RG_STATUS: "rg:status",
+  RG_INSTALL: "rg:install",
   // Git operations (P4 Git panel)
   GIT_DISCOVER_REPOS: "git:discoverRepos",
   GIT_STATUS: "git:status",

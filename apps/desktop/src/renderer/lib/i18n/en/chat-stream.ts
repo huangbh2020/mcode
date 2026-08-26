@@ -40,6 +40,8 @@ export const en = {
 
   // ── Markdown ──
   "chatStream.copyCode": "Copy code",
+  "chatStream.code.expand": "Expand",
+  "chatStream.code.collapse": "Collapse",
 
   // ── FileLink ──
   "chatStream.fileLink.clickToOpen": "Click to open file",

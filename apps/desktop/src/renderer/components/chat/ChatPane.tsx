@@ -23,6 +23,7 @@ import { useToastStore } from "@renderer/stores/toastStore.js";
 import { api } from "@renderer/lib/api.js";
 import { useI18n } from "@renderer/lib/i18n/index.js";
 import { useNow } from "@renderer/hooks/useNow.js";
+import { useComposerRowFit } from "@renderer/hooks/useComposerRowFit.js";
 import type { SubagentSnapshot } from "@contracts/runtime";
 import type { FileSearchEntry } from "@contracts/ipc";
 import { prepareImageForSend } from "@renderer/lib/imageResize.js";
@@ -861,6 +862,11 @@ function UpstreamRetryHint({
 
 function ChatPaneForSession({ sessionId, isActive }: { sessionId: string; isActive: boolean }) {
   const { t, locale } = useI18n();
+  // Content-aware collapse of the composer's bottom action row: when the chip
+  // cluster (Model/Effort/Permission/ContextRing) can't fit on one line next
+  // to the mic/provider/send cluster, `collapsed` hides the chips and shows
+  // the single-icon menu toggle instead (see useComposerRowFit).
+  const { rowRef: composerActionRowRef, collapsed: composerChipsCollapsed } = useComposerRowFit();
   const messages = useSessionStore((s) =>
     s.messagesBySession[sessionId] ?? EMPTY_MESSAGES,
   );
@@ -2734,7 +2740,13 @@ function ChatPaneForSession({ sessionId, isActive }: { sessionId: string; isActi
                 (tags.length > 0 || pendingImages.length > 0) && "pt-1.5",
               )}
             />
-            <div className="composer-action-row flex flex-wrap items-center justify-between gap-2 px-2.5 pb-2 pt-1.5">
+            <div
+              ref={composerActionRowRef}
+              className={cn(
+                "composer-action-row flex flex-wrap items-center justify-between gap-2 px-2.5 pb-2 pt-1.5",
+                composerChipsCollapsed && "composer-row-collapsed",
+              )}
+            >
               <div className="composer-chips flex min-w-0 flex-1 items-center gap-1">
                 {/* Single "+" entry for attachments (files / images) — keeps
                     the action row calm; direct paste / drag-drop still works
@@ -2746,8 +2758,9 @@ function ChatPaneForSession({ sessionId, isActive }: { sessionId: string; isActi
                   onSlashCommand={() => insertTriggerChar("/")}
                 />
                 <ComposerToolbar sessionId={sessionId} />
-                {/* Narrow-mode entry: hidden in wide mode (CSS), replaces the chip
-                    row when the pane < 30rem. Pops a panel hosting the same chips. */}
+                {/* Narrow-mode entry: hidden by default (CSS), replaces the chip
+                    row while `composer-row-collapsed` is set. Pops a panel
+                    hosting the same chips. */}
                 <ComposerToolbarToggle sessionId={sessionId} />
               </div>
               {/* Right cluster: mic + provider picker + send, always visible

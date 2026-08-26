@@ -43,6 +43,8 @@ export const zh = {
 
   // ── Markdown ──
   "chatStream.copyCode": "复制代码",
+  "chatStream.code.expand": "展开",
+  "chatStream.code.collapse": "收起",
 
   // ── FileLink ──
   "chatStream.fileLink.clickToOpen": "点击打开文件",

@@ -15,14 +15,14 @@
  * code-block HTML, which is produced from known content (the code text) and
  * is thus safe by construction.
  */
-import { memo, useState, useMemo, createContext, useContext } from "react";
+import { memo, useState, useMemo, useRef, useLayoutEffect, createContext, useContext } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
 import { cn } from "@renderer/lib/cn.js";
 import { useI18n } from "@renderer/lib/i18n/index.js";
-import { IconCheck, IconCopy } from "@renderer/lib/icons.js";
+import { IconCheck, IconChevronDown, IconChevronUp, IconCopy } from "@renderer/lib/icons.js";
 import type { Components } from "react-markdown";
 import { codeCacheKey, getCodeHtml, setCodeHtml } from "@renderer/lib/markdownCache.js";
 
@@ -131,6 +131,10 @@ function escapeHtml(s: string): string {
 }
 
 // ── Copy button ───────────────────────────────────────────────────────
+
+/** Collapsed height of a fenced code block before the user clicks 展开
+ *  (taller blocks preview-scroll inside this box). */
+const CODE_COLLAPSE_MAX_PX = 360;
 
 function CopyButton({ text }: { text: string }) {
   const [copied, setCopied] = useState(false);
@@ -352,19 +356,65 @@ function buildComponents(): Components {
       return null; // Not ready yet or highlight failed — show raw text.
     }, [rawCode, lang, ready]);
 
+    // Long code blocks are collapsed to a max-height preview with a 展开
+    // overlay; clicking it (or the 收起 header button once expanded) toggles
+    // full height. `clippable` is re-measured only while collapsed, so
+    // streaming growth stays accurate and an expanded block's unbounded
+    // scrollHeight never accidentally un-clips it.
+    const { t } = useI18n();
+    const [expanded, setExpanded] = useState(false);
+    const [clippable, setClippable] = useState(false);
+    const bodyRef = useRef<HTMLDivElement>(null);
+    useLayoutEffect(() => {
+      const el = bodyRef.current;
+      if (!el || expanded) return;
+      setClippable(el.scrollHeight > el.clientHeight + 1);
+    }, [rawCode, lang, ready, html, expanded]);
+
     return (
       <pre className="my-[var(--chat-md-gap-md)] overflow-hidden rounded-lg border border-edge/60 bg-surface-muted/60">
-        <div className="flex items-center justify-between border-b border-edge/60 bg-surface-muted/40 px-2 py-0.5 text-content-subtle [font-size:var(--chat-fs-xxs)]">
-          <span className="font-mono">{lang}</span>
-          <CopyButton text={rawCode.replace(/\n$/, "")} />
+        <div className="flex items-center justify-between gap-2 border-b border-edge/60 bg-surface-muted/40 px-2 py-0.5 text-content-subtle [font-size:var(--chat-fs-xxs)]">
+          <span className="truncate font-mono">{lang}</span>
+          <span className="flex shrink-0 items-center gap-1">
+            {clippable && expanded && (
+              <button
+                onClick={() => setExpanded(false)}
+                className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 transition-colors hover:bg-surface-hover/60 hover:text-content-muted"
+                title={t("chatStream.code.collapse")}
+              >
+                <IconChevronUp size={10} /> {t("chatStream.code.collapse")}
+              </button>
+            )}
+            <CopyButton text={rawCode.replace(/\n$/, "")} />
+          </span>
         </div>
-        {html ? (
-          <div className="overflow-x-auto px-3 py-2 [font-size:var(--chat-fs-xs)]" dangerouslySetInnerHTML={html} />
-        ) : (
-          <code className="block overflow-x-auto px-3 py-2 font-mono leading-relaxed text-content [font-size:var(--chat-fs-xs)]">
-            {childProps?.children as React.ReactNode}
-          </code>
-        )}
+        <div className="relative">
+          <div
+            ref={bodyRef}
+            className="overflow-auto"
+            style={{ maxHeight: expanded ? undefined : CODE_COLLAPSE_MAX_PX }}
+          >
+            {html ? (
+              <div className="px-3 py-2 [font-size:var(--chat-fs-xs)]" dangerouslySetInnerHTML={html} />
+            ) : (
+              <code className="block px-3 py-2 font-mono leading-relaxed text-content [font-size:var(--chat-fs-xs)]">
+                {childProps?.children as React.ReactNode}
+              </code>
+            )}
+          </div>
+          {clippable && !expanded && (
+            <>
+              <div className="pointer-events-none absolute inset-x-0 bottom-0 h-12 bg-gradient-to-t from-surface-muted/90 to-transparent" />
+              <button
+                onClick={() => setExpanded(true)}
+                className="absolute bottom-1.5 left-1/2 inline-flex -translate-x-1/2 items-center gap-1 rounded-full border border-edge bg-surface px-2.5 py-0.5 text-content-muted shadow-sm transition-colors hover:bg-surface-hover hover:text-content"
+                title={t("chatStream.code.expand")}
+              >
+                <IconChevronDown size={12} /> {t("chatStream.code.expand")}
+              </button>
+            </>
+          )}
+        </div>
       </pre>
     );
   },

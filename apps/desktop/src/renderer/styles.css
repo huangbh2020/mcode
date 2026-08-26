@@ -784,11 +784,26 @@ body {
  * the inline px-2.5 / gap-2 utilities. */
 
 /* Wide mode (default): the inline chip row is shown; the narrow-mode toggle
- * entry is absent from the layout. */
+ * entry is absent from the layout. Collapsing into the toggle is driven by
+ * MEASURED fit instead of a fixed width breakpoint: the chip row's min width
+ * depends on locale and selected values (and the pane width isn't the same as
+ * the composer's real width — side gutters + the always-visible
+ * mic/provider/send cluster eat into it), so only content can tell when the
+ * row stops fitting. `composer-row-collapsed` is toggled by the
+ * useComposerRowFit hook on the action row. */
 [data-chat-root] .composer-chips-toggle {
   display: none;
 }
 
+[data-chat-root] .composer-action-row.composer-row-collapsed .composer-chips-root {
+  display: none;
+}
+[data-chat-root] .composer-action-row.composer-row-collapsed .composer-chips-toggle {
+  display: inline-flex;
+}
+
+/* Narrow-pane cosmetics only (gaps/paddings) — the collapse decision itself
+ * lives in useComposerRowFit. */
 @container (width < 30rem) {
   [data-chat-root] .composer-action-row {
     gap: 0.25rem;
@@ -801,15 +816,6 @@ body {
   [data-chat-root] .composer-chip {
     padding-left: 0.375rem;
     padding-right: 0.375rem;
-  }
-  /* Narrow mode: collapse the chip row and reveal the single-icon entry. The
-   * inline row is display:none (not visibility:hidden) so it stops
-   * contributing to min-content width and the toggle fits comfortably. */
-  [data-chat-root] .composer-chips-root {
-    display: none;
-  }
-  [data-chat-root] .composer-chips-toggle {
-    display: inline-flex;
   }
 }
 

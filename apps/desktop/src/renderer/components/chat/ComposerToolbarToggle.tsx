@@ -9,15 +9,18 @@ import { ComposerToolbar } from "./ComposerToolbar.js";
 /**
  * Narrow-composer entry point for the chip cluster.
  *
- * When the chat pane is narrow, the inline chip row (Model / Effort /
- * Permission / ContextRing rendered by {@link ComposerToolbar}) is hidden by a
- * container query (see styles.css, `@container (width < 30rem)`), and THIS
- * toggle icon takes its place. Clicking it pops a panel that hosts the *same*
- * `ComposerToolbar` — so the controls collapse to a single icon visually, but
- * behaviour is identical to the wide-mode chip row (no duplicated logic).
+ * When the chip row can't fit on one line beside the mic/provider/send
+ * cluster, `useComposerRowFit` adds `composer-row-collapsed` to the action
+ * row (measured fit — not a fixed breakpoint, since the chips' width depends
+ * on locale and selected values). The inline chip row (Model / Effort /
+ * Permission / ContextRing rendered by {@link ComposerToolbar}) is then hidden
+ * by CSS, and THIS toggle icon takes its place. Clicking it pops a panel that
+ * hosts the *same* `ComposerToolbar` — so the controls collapse to a single
+ * icon visually, but behaviour is identical to the wide-mode chip row (no
+ * duplicated logic).
  *
  * The toggle is hidden by default (`display:none` via the `.composer-chips-toggle`
- * rule) and only revealed at the narrow breakpoint; in wide mode it is absent
+ * rule) and only revealed by the collapsed state; in wide mode it is absent
  * from the layout entirely.
  *
  * The popup deliberately uses `overflow-visible` so that `ModelDropdown` —

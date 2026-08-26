@@ -23,7 +23,6 @@
 import type { IpcMain } from "electron";
 import { app, clipboard, nativeImage, shell } from "electron";
 import { readFile, writeFile, readdir, mkdir, rename, access, stat } from "node:fs/promises";
-import type { Dirent } from "node:fs";
 import { TextDecoder } from "node:util";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import {
@@ -51,6 +50,8 @@ import type {
 } from "@contracts/ipc";
 import { ProjectRepo } from "@main/store/repositories.js";
 import { log } from "@main/lib/logger.js";
+import { resolveRg, rgListFiles, rgGrep } from "@main/lib/rgSearch.js";
+import { cachedTreeFiles, sortDirents, SEARCH_MAX_DEPTH, SEARCH_MAX_VISIT } from "@main/lib/walkCache.js";
 
 /** Compare two filesystem paths for equality after normalizing (resolving
  *  `.`, `..`, redundant separators, and trailing separators). Used instead of
@@ -364,92 +365,6 @@ export async function listDirGuarded(
   }
 }
 
-/** Walk budget shared by `file.search` and `file.grep`. The original 12/8000
- *  caps silently stopped mid-tree on monorepos with deep package layouts or
- *  vendored dependencies — matches below the cut were simply never seen, and
- *  the user got "the file exists but search can't find it". Raised well above
- *  realistic source trees; when a walk still runs out of budget the result
- *  carries `incompleteScan: true` so the renderer can say the results may be
- *  partial instead of presenting an incomplete scan as exhaustive. */
-const SEARCH_MAX_DEPTH = 32;
-const SEARCH_MAX_VISIT = 50000;
-
-/** Stable per-level ordering for the recursive walks: directories first, then
- *  case-insensitive alphabetical (keeps results deterministic). */
-function sortDirents(dirents: Dirent[]): void {
-  dirents.sort((a, b) => {
-    const aDir = a.isDirectory();
-    const bDir = b.isDirectory();
-    if (aDir !== bDir) return aDir ? -1 : 1;
-    return a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
-  });
-}
-
-interface WalkFile {
-  name: string;
-  /** Absolute filesystem path. */
-  abs: string;
-  /** Project-relative path with forward slashes. */
-  relPath: string;
-}
-
-/** Enumerate every non-ignored file under `root`, shallow-first, bounded by
- *  {@link SEARCH_MAX_DEPTH}/{@link SEARCH_MAX_VISIT}. `incompleteScan` is set
- *  when the budget ran out before the tree was exhausted — callers must
- *  surface that, or an incomplete result looks authoritative. */
-async function collectTreeFiles(
-  root: string,
-): Promise<{ files: WalkFile[]; incompleteScan: boolean }> {
-  const files: WalkFile[] = [];
-  let visited = 0;
-  let incompleteScan = false;
-  const queue: Array<{ abs: string; depth: number }> = [{ abs: root, depth: 0 }];
-  while (queue.length > 0 && visited < SEARCH_MAX_VISIT) {
-    const { abs, depth } = queue.shift()!;
-    let dirents;
-    try {
-      dirents = await readdir(abs, { withFileTypes: true });
-    } catch {
-      continue; // Unreadable dir (EACCES/broken link) - keep walking siblings.
-    }
-    sortDirents(dirents);
-    for (const d of dirents) {
-      if (visited >= SEARCH_MAX_VISIT) {
-        incompleteScan = true;
-        break;
-      }
-      if (IGNORED_ENTRIES.has(d.name)) continue;
-      let isDir: boolean;
-      try {
-        isDir = d.isDirectory();
-      } catch {
-        continue; // Skip broken symlinks.
-      }
-      const fullPath = join(abs, d.name);
-      if (!pathWithin(root, fullPath)) continue;
-      visited += 1;
-      if (isDir) {
-        if (depth + 1 <= SEARCH_MAX_DEPTH) {
-          queue.push({ abs: fullPath, depth: depth + 1 });
-        } else {
-          incompleteScan = true; // Too deep to ever queue - flagged, not silent.
-        }
-        continue;
-      }
-      // relative() can throw on exotic roots; fall back to name only.
-      let rel: string;
-      try {
-        rel = relative(root, fullPath).split(/[/\\]/).join("/");
-      } catch {
-        rel = d.name;
-      }
-      files.push({ name: d.name, abs: fullPath, relPath: rel });
-    }
-  }
-  if (visited >= SEARCH_MAX_VISIT) incompleteScan = true;
-  return { files, incompleteScan };
-}
-
 /** Relevance rank for name-search results: lower is better. Exact basename
  *  match beats a basename prefix, which beats a basename substring, which
  *  beats a path-only substring. The old result order was pure BFS (shallow
@@ -461,6 +376,31 @@ function rankFileMatch(name: string, relPath: string, query: string): number {
   if (bn.startsWith(query)) return 1;
   if (bn.includes(query)) return 2;
   return relPath.includes(query) ? 3 : 4;
+}
+
+/** Match + relevance-rank a flat file list against `query` (already trimmed
+ *  + lowercased). Shared by the rg fast path and the cached JS walk so both
+ *  produce identical ordering and entries. */
+function rankNameMatches(
+  files: ReadonlyArray<{ name: string; abs: string; relPath: string }>,
+  query: string,
+): FileSearchEntry[] {
+  const hits: FileSearchEntry[] = [];
+  for (const f of files) {
+    const hay = `${f.name}\n${f.relPath}`.toLowerCase();
+    if (!hay.includes(query)) continue;
+    hits.push({ name: f.name, path: f.abs, relativePath: f.relPath });
+  }
+  hits.sort((a, b) => {
+    const ra = rankFileMatch(a.name, a.relativePath, query);
+    const rb = rankFileMatch(b.name, b.relativePath, query);
+    if (ra !== rb) return ra - rb;
+    const la = a.relativePath.length;
+    const lb = b.relativePath.length;
+    if (la !== lb) return la - lb;
+    return a.relativePath.localeCompare(b.relativePath, undefined, { sensitivity: "base" });
+  });
+  return hits;
 }
 
 /** Guarded recursive file search (project-root containment + hard depth /
@@ -526,26 +466,23 @@ export async function searchFilesGuarded(
     return { files, truncated: false, incompleteScan: false };
   }
 
-  // Query path: walk the whole tree once, filter, rank by relevance, slice to
-  // `limit`. Collecting before ranking is what lets exact-name / prefix
-  // matches surface instead of being buried by BFS order; `truncated` reports
-  // when the slice hid real matches.
-  const { files: allFiles, incompleteScan } = await collectTreeFiles(root);
-  const hits: FileSearchEntry[] = [];
-  for (const f of allFiles) {
-    const hay = `${f.name}\n${f.relPath}`.toLowerCase();
-    if (!hay.includes(query)) continue;
-    hits.push({ name: f.name, path: f.abs, relativePath: f.relPath });
+  // Query path. Prefer ripgrep for the tree walk (C-fast, complete), then the
+  // cached in-process walk as fallback; matching + ranking stay in JS so both
+  // produce identical results. `truncated` reports when the slice hid real
+  // matches; `incompleteScan` reports a walk that ran out of budget (the rg
+  // walk never does).
+  const rgBin = resolveRg();
+  if (rgBin) {
+    const rgFiles = await rgListFiles(root, IGNORED_ENTRIES);
+    if (rgFiles) {
+      const hits = rankNameMatches(rgFiles, query);
+      const truncated = hits.length > limit;
+      return { files: hits.slice(0, limit), truncated, incompleteScan: false };
+    }
+    // rg spawn failed — fall through to the in-process walk.
   }
-  hits.sort((a, b) => {
-    const ra = rankFileMatch(a.name, a.relativePath, query);
-    const rb = rankFileMatch(b.name, b.relativePath, query);
-    if (ra !== rb) return ra - rb;
-    const la = a.relativePath.length;
-    const lb = b.relativePath.length;
-    if (la !== lb) return la - lb;
-    return a.relativePath.localeCompare(b.relativePath, undefined, { sensitivity: "base" });
-  });
+  const { files: allFiles, incompleteScan } = await cachedTreeFiles(root, IGNORED_ENTRIES);
+  const hits = rankNameMatches(allFiles, query);
   const truncated = hits.length > limit;
   return { files: hits.slice(0, limit), truncated, incompleteScan };
 }
@@ -568,6 +505,21 @@ export async function grepFilesGuarded(input: FileGrepInput): Promise<FileGrepRe
   const maxPerFile = input.maxResultsPerFile ?? 10;
   const query = input.query;
   const needle = input.caseSensitive ? query : query.toLowerCase();
+
+  // rg fast path: ripgrep does the walk, match and per-file cap in C, and
+  // handles UTF-8/UTF-16(BOM) natively; a merged `--encoding gbk` pass covers
+  // the ANSI files our decode fallback exists for. Falls back on any failure.
+  if (resolveRg()) {
+    const rgResult = await rgGrep(
+      root,
+      query,
+      { caseSensitive: input.caseSensitive === true, limit, maxPerFile },
+      IGNORED_ENTRIES,
+    );
+    if (rgResult) {
+      return { matches: rgResult.matches, truncated: rgResult.truncated, incompleteScan: false };
+    }
+  }
 
   const matches: FileGrepEntry[] = [];
   let visited = 0;
