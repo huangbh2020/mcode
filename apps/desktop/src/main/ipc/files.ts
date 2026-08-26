@@ -22,7 +22,9 @@
  */
 import type { IpcMain } from "electron";
 import { app, clipboard, nativeImage, shell } from "electron";
-import { readFile, writeFile, readdir, mkdir, rename, access } from "node:fs/promises";
+import { readFile, writeFile, readdir, mkdir, rename, access, stat } from "node:fs/promises";
+import type { Dirent } from "node:fs";
+import { TextDecoder } from "node:util";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import {
   IPC,
@@ -38,7 +40,15 @@ import {
   ClipboardSaveFileSchema,
   ClipboardWriteImageSchema,
 } from "@contracts/ipc";
-import type { FileSearchEntry, FileTreeEntry, FileGrepEntry, FileSearchInput } from "@contracts/ipc";
+import type {
+  FileSearchEntry,
+  FileTreeEntry,
+  FileGrepEntry,
+  FileSearchInput,
+  FileGrepInput,
+  FileSearchResult,
+  FileGrepResult,
+} from "@contracts/ipc";
 import { ProjectRepo } from "@main/store/repositories.js";
 import { log } from "@main/lib/logger.js";
 
@@ -77,7 +87,9 @@ function isPasteTempPath(abs: string): boolean {
 /** Directory/file names hidden from the file tree. These are build artifacts
  *  or VCS internals the user never wants to click through. Kept as a Set for
  *  O(1) lookup during listing. Dotfiles are NOT hidden — users expect to see
- *  `.env`, `.eslintrc`, etc. */
+ *  `.env`, `.eslintrc`, etc. The search + grep walks share this list (both
+ *  runs of the keep-out list also include common virtualenv / package-cache
+ *  dirs that would otherwise eat the whole traversal budget on big repos). */
 const IGNORED_ENTRIES = new Set([
   "node_modules",
   ".git",
@@ -94,6 +106,20 @@ const IGNORED_ENTRIES = new Set([
   ".DS_Store",
   "out",
   "target",
+  ".venv",
+  "venv",
+  ".gradle",
+  ".idea",
+  ".svn",
+  ".hg",
+  ".pytest_cache",
+  ".mypy_cache",
+  ".ruff_cache",
+  ".eslintcache",
+  "Pods",
+  ".yarn",
+  ".pnpm-store",
+  "__MACOSX",
 ]);
 
 /** File extensions that are always binary - skipped by `file:grep` without
@@ -108,17 +134,113 @@ const BINARY_EXTENSIONS = new Set([
   "sqlite", "db",
 ]);
 
-/** Heuristic binary detection: treat a file as binary if its first chunk
- *  contains a NUL byte (the classic git/ripgrep heuristic). We only sniff the
- *  first `SNIFF_BYTES` since reading a whole large file just to reject it is
- *  wasteful. Used by `file:grep` after the extension skip-list. */
+/** NUL-byte sniff window for text/binary discrimination. We only look at the
+ *  first chunk — reading a whole large file just to reject it is wasteful.
+ *  Used by `decodeTextBuffer` (below), which replaces the old plain NUL check
+ *  so real UTF-16 text files (which legitimately contain NUL bytes) are no
+ *  longer thrown away as binary. */
 const SNIFF_BYTES = 8192;
-function isBinaryBuffer(buf: Buffer): boolean {
+
+/** Upper bound for a single file scanned by `file:grep`. Larger files are
+ *  skipped (with a WARN) — decoding + line-splitting a multi-GB dump would
+ *  stall the main process. 32MB covers every realistic source/log file. */
+const MAX_GREP_FILE_BYTES = 32 * 1024 * 1024;
+
+/** Decoders for `file:grep`. UTF-8 variants are the common case; the BOM
+ *  variant strips the BOM so the first line doesn't start with U+FEFF. The
+ *  GBK fallback is what makes CJK search work on the Windows ANSI files a
+ *  Chinese dev machine accumulates (see `decodeTextBuffer`). */
+const UTF8_DECODER = new TextDecoder("utf-8");
+const UTF8_STRICT = new TextDecoder("utf-8", { fatal: true });
+const UTF16LE = new TextDecoder("utf-16le");
+const UTF16BE = new TextDecoder("utf-16be");
+let GBK: TextDecoder | null | undefined;
+
+function gbkDecoder(): TextDecoder | null {
+  if (GBK !== undefined) return GBK;
+  try {
+    GBK = new TextDecoder("gbk");
+  } catch {
+    // Not all ICU builds ship GBK; search degrades to UTF-8 in that case.
+    GBK = null;
+  }
+  return GBK;
+}
+
+/** True if any of the first `SNIFF_BYTES` bytes of `buf` is NUL. */
+function hasNulByte(buf: Buffer): boolean {
   const len = Math.min(buf.length, SNIFF_BYTES);
   for (let i = 0; i < len; i++) {
     if (buf[i] === 0) return true;
   }
   return false;
+}
+
+/** UTF-16 LE/BE detection for BOM-less files. Real "Unicode" text files
+ *  mostly contain ASCII (structural chars, spacing) whose UTF-16 encoding
+ *  puts a NUL in every other byte — that pattern is what we exploit. A
+ *  BOM-less all-CJK UTF-16 file has no NULs at all and stays undetected
+ *  (it would need a language model to guess); those are extremely rare. */
+function looksUtf16Le(buf: Buffer): boolean {
+  const n = Math.min(buf.length, 4096) & ~1;
+  if (n < 4) return false;
+  let pairs = 0;
+  let nulOdd = 0;
+  for (let i = 0; i < n; i += 2) {
+    pairs += 1;
+    if (buf[i + 1] === 0) nulOdd += 1;
+  }
+  return nulOdd >= pairs * 0.6;
+}
+
+function looksUtf16Be(buf: Buffer): boolean {
+  const n = Math.min(buf.length, 4096) & ~1;
+  if (n < 4) return false;
+  let pairs = 0;
+  let nulEven = 0;
+  for (let i = 0; i < n; i += 2) {
+    pairs += 1;
+    if (buf[i] === 0) nulEven += 1;
+  }
+  return nulEven >= pairs * 0.6;
+}
+
+/**
+ * Decode a raw file buffer for content search; null means "binary, skip".
+ * The old path (`buf.toString("utf-8")` after a raw NUL sniff) had two blind
+ * spots that made real files unfindable:
+ *  - UTF-16 text (Windows Notepad "Unicode") contains NUL bytes, so the
+ *    sniff classified it as binary and skipped it entirely;
+ *  - GBK/GB2312 ANSI files (the default encoding for CJK on older Windows
+ *    tools) are byte-invalid UTF-8, so the lossy decode produced mojibake and
+ *    every non-ASCII query missed.
+ * Order is: BOM → UTF-16 NUL pattern → strict UTF-8 → GBK. Only bytes that
+ * fail all of these (and aren't NUL-pattern UTF-16) are treated as binary.
+ */
+function decodeTextBuffer(buf: Buffer): string | null {
+  if (buf.length === 0) return "";
+  if (buf.length >= 3 && buf[0] === 0xef && buf[1] === 0xbb && buf[2] === 0xbf) {
+    return UTF8_DECODER.decode(buf.subarray(3));
+  }
+  if (buf.length >= 2 && buf[0] === 0xff && buf[1] === 0xfe) {
+    return UTF16LE.decode(buf.subarray(2));
+  }
+  if (buf.length >= 2 && buf[0] === 0xfe && buf[1] === 0xff) {
+    return UTF16BE.decode(buf.subarray(2));
+  }
+  if (hasNulByte(buf)) {
+    if (looksUtf16Le(buf)) return UTF16LE.decode(buf);
+    if (looksUtf16Be(buf)) return UTF16BE.decode(buf);
+    return null;
+  }
+  try {
+    return UTF8_STRICT.decode(buf);
+  } catch {
+    const gbk = gbkDecoder();
+    if (gbk) return gbk.decode(buf);
+    // ICUI-less build: fall back to the old lossy decode rather than skipping.
+    return UTF8_DECODER.decode(buf);
+  }
 }
 
 /** Extract the lowercase extension (no dot) from a filename, or "" if none. */
@@ -242,35 +364,219 @@ export async function listDirGuarded(
   }
 }
 
+/** Walk budget shared by `file.search` and `file.grep`. The original 12/8000
+ *  caps silently stopped mid-tree on monorepos with deep package layouts or
+ *  vendored dependencies — matches below the cut were simply never seen, and
+ *  the user got "the file exists but search can't find it". Raised well above
+ *  realistic source trees; when a walk still runs out of budget the result
+ *  carries `incompleteScan: true` so the renderer can say the results may be
+ *  partial instead of presenting an incomplete scan as exhaustive. */
+const SEARCH_MAX_DEPTH = 32;
+const SEARCH_MAX_VISIT = 50000;
+
+/** Stable per-level ordering for the recursive walks: directories first, then
+ *  case-insensitive alphabetical (keeps results deterministic). */
+function sortDirents(dirents: Dirent[]): void {
+  dirents.sort((a, b) => {
+    const aDir = a.isDirectory();
+    const bDir = b.isDirectory();
+    if (aDir !== bDir) return aDir ? -1 : 1;
+    return a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
+  });
+}
+
+interface WalkFile {
+  name: string;
+  /** Absolute filesystem path. */
+  abs: string;
+  /** Project-relative path with forward slashes. */
+  relPath: string;
+}
+
+/** Enumerate every non-ignored file under `root`, shallow-first, bounded by
+ *  {@link SEARCH_MAX_DEPTH}/{@link SEARCH_MAX_VISIT}. `incompleteScan` is set
+ *  when the budget ran out before the tree was exhausted — callers must
+ *  surface that, or an incomplete result looks authoritative. */
+async function collectTreeFiles(
+  root: string,
+): Promise<{ files: WalkFile[]; incompleteScan: boolean }> {
+  const files: WalkFile[] = [];
+  let visited = 0;
+  let incompleteScan = false;
+  const queue: Array<{ abs: string; depth: number }> = [{ abs: root, depth: 0 }];
+  while (queue.length > 0 && visited < SEARCH_MAX_VISIT) {
+    const { abs, depth } = queue.shift()!;
+    let dirents;
+    try {
+      dirents = await readdir(abs, { withFileTypes: true });
+    } catch {
+      continue; // Unreadable dir (EACCES/broken link) - keep walking siblings.
+    }
+    sortDirents(dirents);
+    for (const d of dirents) {
+      if (visited >= SEARCH_MAX_VISIT) {
+        incompleteScan = true;
+        break;
+      }
+      if (IGNORED_ENTRIES.has(d.name)) continue;
+      let isDir: boolean;
+      try {
+        isDir = d.isDirectory();
+      } catch {
+        continue; // Skip broken symlinks.
+      }
+      const fullPath = join(abs, d.name);
+      if (!pathWithin(root, fullPath)) continue;
+      visited += 1;
+      if (isDir) {
+        if (depth + 1 <= SEARCH_MAX_DEPTH) {
+          queue.push({ abs: fullPath, depth: depth + 1 });
+        } else {
+          incompleteScan = true; // Too deep to ever queue - flagged, not silent.
+        }
+        continue;
+      }
+      // relative() can throw on exotic roots; fall back to name only.
+      let rel: string;
+      try {
+        rel = relative(root, fullPath).split(/[/\\]/).join("/");
+      } catch {
+        rel = d.name;
+      }
+      files.push({ name: d.name, abs: fullPath, relPath: rel });
+    }
+  }
+  if (visited >= SEARCH_MAX_VISIT) incompleteScan = true;
+  return { files, incompleteScan };
+}
+
+/** Relevance rank for name-search results: lower is better. Exact basename
+ *  match beats a basename prefix, which beats a basename substring, which
+ *  beats a path-only substring. The old result order was pure BFS (shallow
+ *  dirs, alphabetical) — with a common query the file the user actually
+ *  meant could sit past the result cap while unrelated hits filled the list. */
+function rankFileMatch(name: string, relPath: string, query: string): number {
+  const bn = name.toLowerCase();
+  if (bn === query) return 0;
+  if (bn.startsWith(query)) return 1;
+  if (bn.includes(query)) return 2;
+  return relPath.includes(query) ? 3 : 4;
+}
+
 /** Guarded recursive file search (project-root containment + hard depth /
  *  visit caps). Shared by the desktop `file:search` IPC handler and the
- *  mobile RPC whitelist so both transports behave identically. */
+ *  mobile RPC whitelist so both transports behave identically. Non-empty
+ *  queries return relevance-ranked matches (exact name / prefix first) sliced
+ *  to `limit`, with `truncated`/`incompleteScan` telling the renderer when
+ *  the slice or the walk hid real matches. */
 export async function searchFilesGuarded(
   input: FileSearchInput,
-): Promise<{ files: FileSearchEntry[] }> {
+): Promise<FileSearchResult> {
   const known = ProjectRepo.listPaths().some((p) => samePath(p, input.projectPath));
   if (!known) {
     log.warn(`file.search refused — unknown projectPath: ${input.projectPath}`);
-    return { files: [] as FileSearchEntry[] };
+    return { files: [], truncated: false, incompleteScan: false };
   }
   const root = resolve(input.projectPath);
   const limit = input.limit ?? 80;
   const query = (input.query ?? "").trim().toLowerCase();
-  // Hard caps so a pathological tree can't pin the main process. Depth
-  // and total-visit limits are independent of the result limit so an
-  // empty-query sample still finishes quickly on huge monorepos.
-  const MAX_DEPTH = 12;
-  const MAX_VISIT = 8000;
 
-  const files: FileSearchEntry[] = [];
+  // Empty query: keep the legacy shallow BFS sample (stops at `limit`) — the
+  // @-mention picker wants an instant initial list, and walking 50k entries
+  // just to show a sample would be a regression. A sample is the contract
+  // here, so neither truncation flag is meaningful for it.
+  if (!query) {
+    const files: FileSearchEntry[] = [];
+    let visited = 0;
+    const queue: Array<{ abs: string; depth: number }> = [{ abs: root, depth: 0 }];
+    while (queue.length > 0 && files.length < limit && visited < SEARCH_MAX_VISIT) {
+      const { abs, depth } = queue.shift()!;
+      let dirents;
+      try {
+        dirents = await readdir(abs, { withFileTypes: true });
+      } catch {
+        continue;
+      }
+      sortDirents(dirents);
+      for (const d of dirents) {
+        if (files.length >= limit || visited >= SEARCH_MAX_VISIT) break;
+        if (IGNORED_ENTRIES.has(d.name)) continue;
+        let isDir: boolean;
+        try {
+          isDir = d.isDirectory();
+        } catch {
+          continue;
+        }
+        const fullPath = join(abs, d.name);
+        if (!pathWithin(root, fullPath)) continue;
+        visited += 1;
+        if (isDir) {
+          if (depth + 1 <= SEARCH_MAX_DEPTH) queue.push({ abs: fullPath, depth: depth + 1 });
+          continue;
+        }
+        let rel: string;
+        try {
+          rel = relative(root, fullPath).split(/[/\\]/).join("/");
+        } catch {
+          rel = d.name;
+        }
+        files.push({ name: d.name, path: fullPath, relativePath: rel });
+      }
+    }
+    return { files, truncated: false, incompleteScan: false };
+  }
+
+  // Query path: walk the whole tree once, filter, rank by relevance, slice to
+  // `limit`. Collecting before ranking is what lets exact-name / prefix
+  // matches surface instead of being buried by BFS order; `truncated` reports
+  // when the slice hid real matches.
+  const { files: allFiles, incompleteScan } = await collectTreeFiles(root);
+  const hits: FileSearchEntry[] = [];
+  for (const f of allFiles) {
+    const hay = `${f.name}\n${f.relPath}`.toLowerCase();
+    if (!hay.includes(query)) continue;
+    hits.push({ name: f.name, path: f.abs, relativePath: f.relPath });
+  }
+  hits.sort((a, b) => {
+    const ra = rankFileMatch(a.name, a.relativePath, query);
+    const rb = rankFileMatch(b.name, b.relativePath, query);
+    if (ra !== rb) return ra - rb;
+    const la = a.relativePath.length;
+    const lb = b.relativePath.length;
+    if (la !== lb) return la - lb;
+    return a.relativePath.localeCompare(b.relativePath, undefined, { sensitivity: "base" });
+  });
+  const truncated = hits.length > limit;
+  return { files: hits.slice(0, limit), truncated, incompleteScan };
+}
+
+/** Guarded recursive content search (line-level matches). Shared by the
+ *  desktop `file:grep` IPC handler; walks the same ignored-dir-filtered tree
+ *  and visit/depth caps as `file:search`, decodes each file via
+ *  `decodeTextBuffer` (UTF-8 / UTF-16 / GBK, binary skipped), and returns
+ *  line-level matches. `truncated` reports the match cap being reached;
+ *  `incompleteScan` reports the walk budget running out — both prevent an
+ *  incomplete result from masquerading as exhaustive. */
+export async function grepFilesGuarded(input: FileGrepInput): Promise<FileGrepResult> {
+  const known = ProjectRepo.listPaths().some((p) => samePath(p, input.projectPath));
+  if (!known) {
+    log.warn(`file.grep refused - unknown projectPath: ${input.projectPath}`);
+    return { matches: [], truncated: false, incompleteScan: false };
+  }
+  const root = resolve(input.projectPath);
+  const limit = input.limit ?? 200;
+  const maxPerFile = input.maxResultsPerFile ?? 10;
+  const query = input.query;
+  const needle = input.caseSensitive ? query : query.toLowerCase();
+
+  const matches: FileGrepEntry[] = [];
   let visited = 0;
+  let incompleteScan = false;
 
-  /** BFS walk so shallow/project-root files surface first in empty-query
-   *  samples (more useful than deep leaf hits). */
-  type QueueItem = { abs: string; depth: number };
-  const queue: QueueItem[] = [{ abs: root, depth: 0 }];
+  /** BFS walk mirroring `file:search` so shallow files are scanned first. */
+  const queue: Array<{ abs: string; depth: number }> = [{ abs: root, depth: 0 }];
 
-  while (queue.length > 0 && files.length < limit && visited < MAX_VISIT) {
+  while (queue.length > 0 && matches.length < limit && visited < SEARCH_MAX_VISIT) {
     const { abs, depth } = queue.shift()!;
     let dirents;
     try {
@@ -278,15 +584,9 @@ export async function searchFilesGuarded(
     } catch {
       continue;
     }
-    // Sort each level dirs-first then alpha so results are stable.
-    dirents.sort((a, b) => {
-      const aDir = a.isDirectory();
-      const bDir = b.isDirectory();
-      if (aDir !== bDir) return aDir ? -1 : 1;
-      return a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
-    });
+    sortDirents(dirents);
     for (const d of dirents) {
-      if (files.length >= limit || visited >= MAX_VISIT) break;
+      if (matches.length >= limit || visited >= SEARCH_MAX_VISIT) break;
       if (IGNORED_ENTRIES.has(d.name)) continue;
       let isDir: boolean;
       try {
@@ -298,25 +598,81 @@ export async function searchFilesGuarded(
       if (!pathWithin(root, fullPath)) continue;
       visited += 1;
       if (isDir) {
-        if (depth + 1 <= MAX_DEPTH) queue.push({ abs: fullPath, depth: depth + 1 });
+        if (depth + 1 <= SEARCH_MAX_DEPTH) {
+          queue.push({ abs: fullPath, depth: depth + 1 });
+        } else {
+          incompleteScan = true;
+        }
         continue;
       }
-      // relative() can throw on exotic roots; fall back to name only.
+      // Skip obvious binaries by extension without opening them.
+      if (BINARY_EXTENSIONS.has(extOf(d.name))) continue;
+
+      // Size gate before reading: decoding + line-splitting a multi-hundred-
+      // MB dump would stall the main process for seconds.
+      let st;
+      try {
+        st = await stat(fullPath);
+      } catch {
+        continue; // ENOENT / EACCES - skip this file, keep scanning.
+      }
+      if (st.size > MAX_GREP_FILE_BYTES) {
+        log.warn(`file.grep skipped ${fullPath}: ${st.size} bytes exceeds ${MAX_GREP_FILE_BYTES}`);
+        continue;
+      }
+
+      let buf: Buffer;
+      try {
+        buf = await readFile(fullPath);
+      } catch {
+        // ENOENT / EACCES / unreadable - skip this file, keep scanning.
+        log.warn(`file.grep read failed for ${fullPath}: skipping`);
+        continue;
+      }
+      // Decode as UTF-8 / UTF-16 / GBK; null means binary content, skip.
+      const text = decodeTextBuffer(buf);
+      if (text === null) continue;
+
       let rel: string;
       try {
         rel = relative(root, fullPath).split(/[/\\]/).join("/");
       } catch {
         rel = d.name;
       }
-      if (query) {
-        const hay = `${d.name}\n${rel}`.toLowerCase();
-        if (!hay.includes(query)) continue;
+
+      // Split on line boundaries; we scan the whole file but break early
+      // once the per-file match cap is hit (bounds very large files).
+      const lines = text.split(/\r?\n/);
+      let fileHits = 0;
+      for (let li = 0; li < lines.length; li++) {
+        if (matches.length >= limit || fileHits >= maxPerFile) break;
+        const line = lines[li];
+        const hay = input.caseSensitive ? line : line.toLowerCase();
+        let from = 0;
+        const ranges: Array<{ start: number; end: number }> = [];
+        // Find all occurrences on this line. Ranges index into the original
+        // `line` (case preserved) so the frontend highlight aligns.
+        for (;;) {
+          const idx = hay.indexOf(needle, from);
+          if (idx === -1) break;
+          ranges.push({ start: idx, end: idx + query.length });
+          from = idx + needle.length;
+        }
+        if (ranges.length > 0) {
+          matches.push({
+            path: fullPath,
+            relativePath: rel,
+            lineNumber: li + 1,
+            lineText: line,
+            matches: ranges,
+          });
+          fileHits += 1;
+        }
       }
-      files.push({ name: d.name, path: fullPath, relativePath: rel });
     }
   }
-
-  return { files };
+  if (visited >= SEARCH_MAX_VISIT) incompleteScan = true;
+  return { matches, truncated: matches.length >= limit, incompleteScan };
 }
 
 export function registerFileHandlers(ipcMain: IpcMain): void {
@@ -344,118 +700,10 @@ export function registerFileHandlers(ipcMain: IpcMain): void {
     return searchFilesGuarded(input);
   });
 
-  /* ── file:grep - recursive content search (line-level matches) ──
-   * Walks the same ignored-dir-filtered tree as `file:search`, reads each text
-   * file, and returns line-level matches. Binary files are skipped via an
-   * extension skip-list + a NUL-byte sniff so we never decode non-text bytes.
-   * Same path-root containment and hard caps as the name search. */
+  /* ── file:grep - recursive content search (line-level matches) ── */
   ipcMain.handle(IPC.FILE_GREP, async (_evt, raw) => {
     const input = FileGrepSchema.parse(raw);
-    const known = ProjectRepo.listPaths().some((p) => samePath(p, input.projectPath));
-    if (!known) {
-      log.warn(`file.grep refused - unknown projectPath: ${input.projectPath}`);
-      return { matches: [] as FileGrepEntry[] };
-    }
-    const root = resolve(input.projectPath);
-    const limit = input.limit ?? 200;
-    const maxPerFile = input.maxResultsPerFile ?? 10;
-    const query = input.query;
-    const needle = input.caseSensitive ? query : query.toLowerCase();
-
-    const matches: FileGrepEntry[] = [];
-    let visited = 0;
-
-    /** BFS walk mirroring `file:search` so shallow files are scanned first. */
-    type QueueItem = { abs: string; depth: number };
-    const queue: QueueItem[] = [{ abs: root, depth: 0 }];
-    const MAX_DEPTH = 12;
-    const MAX_VISIT = 8000;
-
-    while (queue.length > 0 && matches.length < limit && visited < MAX_VISIT) {
-      const { abs, depth } = queue.shift()!;
-      let dirents;
-      try {
-        dirents = await readdir(abs, { withFileTypes: true });
-      } catch {
-        continue;
-      }
-      dirents.sort((a, b) => {
-        const aDir = a.isDirectory();
-        const bDir = b.isDirectory();
-        if (aDir !== bDir) return aDir ? -1 : 1;
-        return a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
-      });
-      for (const d of dirents) {
-        if (matches.length >= limit || visited >= MAX_VISIT) break;
-        if (IGNORED_ENTRIES.has(d.name)) continue;
-        let isDir: boolean;
-        try {
-          isDir = d.isDirectory();
-        } catch {
-          continue;
-        }
-        const fullPath = join(abs, d.name);
-        if (!pathWithin(root, fullPath)) continue;
-        visited += 1;
-        if (isDir) {
-          if (depth + 1 <= MAX_DEPTH) queue.push({ abs: fullPath, depth: depth + 1 });
-          continue;
-        }
-        // Skip obvious binaries by extension without opening them.
-        if (BINARY_EXTENSIONS.has(extOf(d.name))) continue;
-
-        let buf: Buffer;
-        try {
-          buf = await readFile(fullPath);
-        } catch {
-          // ENOENT / EACCES / unreadable - skip this file, keep scanning.
-          log.warn(`file.grep read failed for ${fullPath}: skipping`);
-          continue;
-        }
-        // NUL-byte sniff: skip binary content that slipped past the ext list.
-        if (isBinaryBuffer(buf)) continue;
-
-        let rel: string;
-        try {
-          rel = relative(root, fullPath).split(/[/\\]/).join("/");
-        } catch {
-          rel = d.name;
-        }
-
-        const text = buf.toString("utf-8");
-        // Split on line boundaries; we scan the whole file but break early
-        // once the per-file match cap is hit (bounds very large files).
-        const lines = text.split(/\r?\n/);
-        let fileHits = 0;
-        for (let li = 0; li < lines.length; li++) {
-          if (matches.length >= limit || fileHits >= maxPerFile) break;
-          const line = lines[li];
-          const hay = input.caseSensitive ? line : line.toLowerCase();
-          let from = 0;
-          const ranges: Array<{ start: number; end: number }> = [];
-          // Find all occurrences on this line. Ranges index into the original
-          // `line` (case preserved) so the frontend highlight aligns.
-          for (;;) {
-            const idx = hay.indexOf(needle, from);
-            if (idx === -1) break;
-            ranges.push({ start: idx, end: idx + query.length });
-            from = idx + needle.length;
-          }
-          if (ranges.length > 0) {
-            matches.push({
-              path: fullPath,
-              relativePath: rel,
-              lineNumber: li + 1,
-              lineText: line,
-              matches: ranges,
-            });
-            fileHits += 1;
-          }
-        }
-      }
-    }
-
-    return { matches };
+    return grepFilesGuarded(input);
   });
 
   /* ── file:writeFile — utf-8 write, creates parent dirs, scoped to a root ── */

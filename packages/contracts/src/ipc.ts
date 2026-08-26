@@ -1484,6 +1484,22 @@ export const FileSearchSchema = z.object({
 });
 export type FileSearchInput = z.infer<typeof FileSearchSchema>;
 
+/**
+ * Result of a `file.search` call. `files` are already ranked and sliced to
+ * `limit`. `truncated` is true when more matches existed than the requested
+ * `limit` (the caller showed a slice, not the full set). `incompleteScan` is
+ * true when the walk itself was cut short by the traversal budget (visit /
+ * depth caps) — some subtrees were never visited, so results may miss
+ * matches regardless of ranking.
+ */
+export interface FileSearchResult {
+  files: FileSearchEntry[];
+  /** More matches existed than the returned slice. */
+  truncated: boolean;
+  /** The tree walk hit its visit/depth budget before finishing. */
+  incompleteScan: boolean;
+}
+
 /** Write utf-8 content to a file, creating it (and parent dirs) if absent.
  *  Path must resolve inside a known project root (path-traversal guard,
  *  same as readFile). Returns `{ ok }`; on refusal or failure `ok` is false
@@ -1581,6 +1597,21 @@ export const FileGrepSchema = z.object({
   caseSensitive: z.boolean().optional(),
 });
 export type FileGrepInput = z.infer<typeof FileGrepSchema>;
+
+/**
+ * Result of a `file.grep` call. `matches` are capped at `limit` total /
+ * `maxResultsPerFile` per file. `truncated` is true when the match cap was
+ * reached while more matches almost certainly exist in files scanned so far.
+ * `incompleteScan` is true when the walk hit its visit/depth budget before
+ * covering the whole tree — unseen subtrees may hold additional matches.
+ */
+export interface FileGrepResult {
+  matches: FileGrepEntry[];
+  /** The match cap was reached — more matches likely exist. */
+  truncated: boolean;
+  /** The tree walk hit its visit/depth budget before finishing. */
+  incompleteScan: boolean;
+}
 
 /* ── Git operations (status / stage / commit / push / pull / diff) ──
  *  All git operations are scoped to a `repoPath` that must resolve inside a
@@ -2421,6 +2452,16 @@ export type LspSetPathInput = z.infer<typeof LspSetPathSchema>;
 export const LspHealthCheckSchema = z.object({ language: LspLanguageSchema });
 export type LspHealthCheckInput = z.infer<typeof LspHealthCheckSchema>;
 
+/** Restart a language server for one workspace. Unlike a toggle-off/on this
+ *  immediately relaunches (with the crash-loop guard cleared) so the editor's
+ *  startup pill visibly goes starting → running/stopped. */
+export const LspRestartSchema = z.object({
+  /** Project root the server was started for (must be a known project). */
+  workspacePath: z.string(),
+  language: LspLanguageSchema,
+});
+export type LspRestartInput = z.infer<typeof LspRestartSchema>;
+
 export const LspOpenDocSchema = z.object({
   workspacePath: z.string(),
   filePath: z.string(),
@@ -3163,7 +3204,7 @@ export interface RpcMap {
   /** List one level of a directory (non-recursive), scoped to a project root. */
   "file.listDir": (input: FileListDirInput) => Promise<{ entries: FileTreeEntry[] }>;
   /** Recursive file search under a project root (composer @ / add-context). */
-  "file.search": (input: FileSearchInput) => Promise<{ files: FileSearchEntry[] }>;
+  "file.search": (input: FileSearchInput) => Promise<FileSearchResult>;
   /** Write content to a file (creates parents), scoped to a project root. */
   "file.writeFile": (input: FileWriteInput) => Promise<{ ok: boolean }>;
   /** Create a directory (recursive), scoped to a project root. */
@@ -3173,7 +3214,7 @@ export interface RpcMap {
   /** Rename a file or directory in place, scoped to a project root. */
   "file.rename": (input: FileRenameInput) => Promise<{ ok: boolean }>;
   /** Grep file contents under a project root (line-level matches). */
-  "file.grep": (input: FileGrepInput) => Promise<{ matches: FileGrepEntry[] }>;
+  "file.grep": (input: FileGrepInput) => Promise<FileGrepResult>;
   // Git operations (P4 Git panel)
   /** Discover all git repos under a project root (recursive, max depth 3). */
   "git.discoverRepos": (input: GitDiscoverReposInput) => Promise<{ repos: GitRepo[] }>;
@@ -3371,6 +3412,10 @@ export interface RpcMap {
   "lsp.setPath": (input: LspSetPathInput) => Promise<{ languages: LspLanguageState[] }>;
   /** Verify the server binary runs (--version or --help probe). */
   "lsp.healthCheck": (input: LspHealthCheckInput) => Promise<LspOpResult>;
+  /** Restart a language server for one workspace (stop + clear the crash-loop
+   *  guard + immediately relaunch). Clicking a startup-failure notice calls
+   *  this after the user fixes the environment. */
+  "lsp.restart": (input: LspRestartInput) => Promise<LspOpResult>;
   /** Open a document in the server (textDocument/didOpen). Lazily starts the
    *  server for (workspacePath, language) on first call. */
   "lsp.openDocument": (input: LspOpenDocInput) => Promise<void>;
@@ -3613,6 +3658,7 @@ export const IPC = {
   LSP_TOGGLE: "lsp:toggle",
   LSP_SET_PATH: "lsp:setPath",
   LSP_HEALTH_CHECK: "lsp:healthCheck",
+  LSP_RESTART: "lsp:restart",
   LSP_OPEN_DOC: "lsp:openDocument",
   LSP_CLOSE_DOC: "lsp:closeDocument",
   LSP_DID_CHANGE: "lsp:didChange",

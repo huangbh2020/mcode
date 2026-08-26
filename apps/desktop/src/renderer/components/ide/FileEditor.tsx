@@ -5,6 +5,7 @@ import { api } from "@renderer/lib/api.js";
 import { cn } from "@renderer/lib/cn.js";
 import { extname } from "@renderer/lib/path.js";
 import { useSessionStore } from "@renderer/stores/sessionStore.js";
+import { useToastStore } from "@renderer/stores/toastStore.js";
 import type { TurnFileEntry } from "@renderer/lib/turnFiles.js";
 import { ideDirtyTracker } from "./OpenTabsBar.js";
 import { IconEye, IconEdit, IconLoader2, IconAlertTriangle, IconSquare, IconColumns3, IconPhotoOff, IconArrowLeft, IconArrowRight } from "@renderer/lib/icons.js";
@@ -183,8 +184,9 @@ function EditorToolbar({
   const navigateForward = useSessionStore((s) => s.navigateForward);
   // Language-server status for THIS file's language (active project's
   // workspace): "starting" shows a loading pill (jdtls can take minutes),
-  // "stopped" with an error shows a failure notice that opens settings on
-  // click. "running"/no-LSP-language show nothing.
+  // "stopped" with an error shows a failure notice that re-launches the
+  // server on click (after the user fixes the environment, e.g. Java).
+  // "running"/no-LSP-language show nothing.
   const lspStatus = useSessionStore((s) => {
     const lspLang = monacoLanguageToLsp(languageForExt(extname(filePath)));
     if (!lspLang) return null;
@@ -194,7 +196,34 @@ function EditorToolbar({
     return s.lspPhasesByWorkspace[`${projPath}::${lspLang}`] ?? null;
   });
   const lspLanguageId = monacoLanguageToLsp(languageForExt(extname(filePath)));
-  const setSettingsOpen = useSessionStore((s) => s.setSettingsOpen);
+  // Restarting guard: the `lsp:event` stateChanged stream drives the pill
+  // through starting → running/stopped on its own; this flag only prevents
+  // double-clicks during the brief pre-start window.
+  const [restartingLsp, setRestartingLsp] = useState(false);
+  const restartLsp = useCallback(async () => {
+    if (!lspLanguageId || restartingLsp) return;
+    const s = useSessionStore.getState();
+    const pid = s.activeProjectId;
+    const projPath = pid ? s.projects.find((p) => p.id === pid)?.path : undefined;
+    if (!projPath) return;
+    setRestartingLsp(true);
+    let failure: string | undefined;
+    try {
+      const result = await api.lsp.restart({ workspacePath: projPath, language: lspLanguageId });
+      if (!result.ok) failure = result.error;
+    } catch (err) {
+      failure = err instanceof Error ? err.message : String(err);
+    } finally {
+      setRestartingLsp(false);
+    }
+    if (failure) {
+      useToastStore.getState().push({
+        kind: "error",
+        title: t("ide.editor.lspRestartFailed", { name: LSP_LANGUAGE_DISPLAY[lspLanguageId] }),
+        body: failure,
+      });
+    }
+  }, [lspLanguageId, restartingLsp, t]);
   // Tooltip = label + the EFFECTIVE chord (user override or Alt+←/→ default),
   // so a rebind in settings is reflected here immediately.
   const shortcutOverrides = useSessionStore((s) => s.shortcutOverrides);
@@ -271,14 +300,20 @@ function EditorToolbar({
         {lspStatus?.phase === "stopped" && lspStatus.error && lspLanguageId && (
           <button
             type="button"
-            onClick={() => setSettingsOpen(true)}
+            onClick={restartLsp}
+            disabled={restartingLsp}
             className={cn(
               "flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] transition-colors",
               "text-danger hover:bg-surface-hover",
+              restartingLsp && "opacity-60",
             )}
-            title={lspStatus.error}
+            title={`${lspStatus.error}\n${t("ide.editor.lspRestartHint")}`}
           >
-            <IconAlertTriangle size={11} />
+            {restartingLsp ? (
+              <IconLoader2 size={11} className="animate-spin" />
+            ) : (
+              <IconAlertTriangle size={11} />
+            )}
             {t("ide.editor.lspFailed", { name: LSP_LANGUAGE_DISPLAY[lspLanguageId] })}
           </button>
         )}

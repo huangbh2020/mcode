@@ -358,6 +358,8 @@ const api = {
       ipcRenderer.invoke(IPC.LSP_SET_PATH, input)) as RpcMap["lsp.setPath"],
     healthCheck: ((input) =>
       ipcRenderer.invoke(IPC.LSP_HEALTH_CHECK, input)) as RpcMap["lsp.healthCheck"],
+    restart: ((input) =>
+      ipcRenderer.invoke(IPC.LSP_RESTART, input)) as RpcMap["lsp.restart"],
     openDocument: ((input) =>
       ipcRenderer.invoke(IPC.LSP_OPEN_DOC, input)) as RpcMap["lsp.openDocument"],
     closeDocument: ((input) =>

@@ -13,6 +13,7 @@ import {
   IconLoader2,
   IconChevronDown,
   IconLetterCase,
+  IconAlertTriangle,
 } from "@renderer/lib/icons.js";
 import { useI18n } from "@renderer/lib/i18n/index.js";
 
@@ -20,8 +21,8 @@ import { useI18n } from "@renderer/lib/i18n/index.js";
  *  (name search returns files, content returns line-level matches). Mirrors the
  *  FilesPanel constants these values migrated from. */
 const SEARCH_DEBOUNCE_MS = 120;
-const NAME_SEARCH_LIMIT = 80;
-const GREP_LIMIT = 200;
+const NAME_SEARCH_LIMIT = 200;
+const GREP_LIMIT = 400;
 const GREP_MAX_PER_FILE = 10;
 
 /** Which field the search targets. Toggled by an icon button in the header. */
@@ -73,6 +74,12 @@ export function SearchDialog() {
   const [nameResults, setNameResults] = useState<FileSearchEntry[]>([]);
   const [grepResults, setGrepResults] = useState<FileGrepEntry[]>([]);
   const [loading, setLoading] = useState(false);
+  // Whether the backend's result was cut short: `truncated` = more matches
+  // existed than the result cap (we got a slice), `incompleteScan` = the tree
+  // walk budget ran out (parts of the project were never looked at). Both
+  // render an amber hint so a partial result is never mistaken for exhaustive.
+  const [truncated, setTruncated] = useState(false);
+  const [incompleteScan, setIncompleteScan] = useState(false);
   const [activeIdx, setActiveIdx] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
@@ -93,6 +100,8 @@ export function SearchDialog() {
     if (open) return;
     setActiveIdx(0);
     setLoading(false);
+    setTruncated(false);
+    setIncompleteScan(false);
     reqIdRef.current++;
   }, [open]);
 
@@ -105,6 +114,8 @@ export function SearchDialog() {
       setNameResults([]);
       setGrepResults([]);
       setLoading(false);
+      setTruncated(false);
+      setIncompleteScan(false);
       setActiveIdx(0);
       return;
     }
@@ -119,6 +130,8 @@ export function SearchDialog() {
                 if (reqIdRef.current !== myId) return;
                 setNameResults(res.files ?? []);
                 setGrepResults([]);
+                setTruncated(res.truncated);
+                setIncompleteScan(res.incompleteScan);
               })
           : api.file
               .grep({
@@ -132,6 +145,8 @@ export function SearchDialog() {
                 if (reqIdRef.current !== myId) return;
                 setGrepResults(res.matches ?? []);
                 setNameResults([]);
+                setTruncated(res.truncated);
+                setIncompleteScan(res.incompleteScan);
               });
       void promise
         .then(() => {
@@ -144,6 +159,8 @@ export function SearchDialog() {
           setNameResults([]);
           setGrepResults([]);
           setLoading(false);
+          setTruncated(false);
+          setIncompleteScan(false);
         });
     }, SEARCH_DEBOUNCE_MS);
     return () => window.clearTimeout(t);
@@ -306,6 +323,8 @@ export function SearchDialog() {
                 mode === "name" ? (
                   <NameSearchResults
                     loading={loading}
+                    truncated={truncated}
+                    incompleteScan={incompleteScan}
                     results={nameResults}
                     activeIdx={activeIdx}
                     onHover={setActiveIdx}
@@ -314,6 +333,8 @@ export function SearchDialog() {
                 ) : (
                   <ContentSearchResults
                     loading={loading}
+                    truncated={truncated}
+                    incompleteScan={incompleteScan}
                     results={grepResults}
                     activeIdx={activeIdx}
                     onHover={setActiveIdx}
@@ -365,16 +386,50 @@ export function SearchDialog() {
 
 /* ───────────────────────── name-search results ───────────────────────── */
 
+/** Amber hint shown above results when the backend couldn't return the full
+ *  set: the match cap was hit (more matches exist than shown) and/or the tree
+ *  walk budget ran out (parts of the project were never scanned). Mirrors the
+ *  planApprovalBroken card tone — informative, not an error. */
+function SearchHintBanner({
+  truncated,
+  incompleteScan,
+}: {
+  truncated: boolean;
+  incompleteScan: boolean;
+}) {
+  const { t } = useI18n();
+  return (
+    <div className="mb-1 flex flex-col gap-1 border border-warning/50 bg-warning/10 px-2.5 py-1.5">
+      {truncated && (
+        <div className="flex items-center gap-1.5 text-[11px] font-medium text-warning">
+          <IconAlertTriangle size={13} className="shrink-0" />
+          <span>{t("ide.search.truncatedHint")}</span>
+        </div>
+      )}
+      {incompleteScan && (
+        <div className="flex items-center gap-1.5 text-[11px] font-medium text-warning">
+          <IconAlertTriangle size={13} className="shrink-0" />
+          <span>{t("ide.search.scanIncompleteHint")}</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
 /** Flat list of file-name matches. Each row shows the file name (primary) and
  *  its project-relative path (secondary) so same-named files stay distinguishable. */
 function NameSearchResults({
   loading,
+  truncated,
+  incompleteScan,
   results,
   activeIdx,
   onHover,
   onOpen,
 }: {
   loading: boolean;
+  truncated: boolean;
+  incompleteScan: boolean;
   results: FileSearchEntry[];
   activeIdx: number;
   onHover: (idx: number) => void;
@@ -396,6 +451,9 @@ function NameSearchResults({
   }
   return (
     <div className="py-1 text-[13px]">
+      {!loading && (truncated || incompleteScan) && (
+        <SearchHintBanner truncated={truncated} incompleteScan={incompleteScan} />
+      )}
       {results.map((f, idx) => {
         const isActive = idx === activeIdx;
         return (
@@ -459,12 +517,16 @@ function groupByFile(matches: FileGrepEntry[]): GrepGroup[] {
  *  keyboard navigation and scrollIntoView work against the same flat index. */
 function ContentSearchResults({
   loading,
+  truncated,
+  incompleteScan,
   results,
   activeIdx,
   onHover,
   onOpen,
 }: {
   loading: boolean;
+  truncated: boolean;
+  incompleteScan: boolean;
   results: FileGrepEntry[];
   activeIdx: number;
   onHover: (idx: number) => void;
@@ -492,6 +554,9 @@ function ContentSearchResults({
 
   return (
     <div className="py-1 text-[13px]">
+      {!loading && (truncated || incompleteScan) && (
+        <SearchHintBanner truncated={truncated} incompleteScan={incompleteScan} />
+      )}
       {groups.map((g) => (
         <div key={g.path} className="mb-0.5">
           {/* File header: clickable to open the file in the editor. */}

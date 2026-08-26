@@ -599,6 +599,32 @@ class LspManagerImpl {
     return this.list();
   }
 
+  /** Restart a language server for one workspace: stop any live process, clear
+   *  the crash-loop guard, then immediately relaunch (rather than waiting for
+   *  the next openDocument/request) so the toolbar pill visibly goes through
+   *  starting → running/stopped. Invoked when the user clicks a startup-failure
+   *  notice after fixing the environment. */
+  async restart(
+    workspacePath: string,
+    language: LspLanguageId,
+  ): Promise<LspOpResult> {
+    this.assertWorkspace(workspacePath);
+    const key = serverKey(workspacePath, language);
+    // Give the server a fresh chance — the crash-loop guard would otherwise
+    // refuse another attempt for SPAWN_FAILURE_COOLDOWN_MS.
+    this.clearSpawnFailures(language);
+    const existing = this.servers.get(key);
+    if (existing && !existing.proc.killed && existing.proc.exitCode === null) {
+      this.removeServer(key, existing);
+    }
+    try {
+      await this.ensureServer(workspacePath, language);
+      return { ok: true };
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
   /* ───────────────────────── health check ───────────────────────── */
 
   async healthCheck(language: LspLanguageId): Promise<LspOpResult> {
@@ -975,6 +1001,9 @@ class LspManagerImpl {
       handle.stderrTail = (handle.stderrTail + text).slice(-2048);
     });
     proc.on("error", (err) => {
+      // A restart may have already swapped this slot for a fresh handle —
+      // never tear down or report on a server we no longer own.
+      if (this.servers.get(key) !== handle) return;
       log.error(`lsp[${language}] spawn error: ${err.message}`);
       this.lastErrors.set(language, err.message);
       handle.initReject(err);
@@ -988,6 +1017,20 @@ class LspManagerImpl {
     });
     proc.on("exit", (code, signal) => {
       log.info(`lsp[${language}] exit code=${code} signal=${signal}`);
+      // A restart can replace this handle in `servers` before the old process
+      // actually exits. Only act on the handle that still owns the slot; a
+      // slot that is already free was torn down intentionally (toggle/setPath/
+      // restart/dispose) — just clear any lingering "starting" indicator.
+      const current = this.servers.get(key);
+      if (current === undefined) {
+        this.pushStateEvent(workspacePath, language, {
+          phase: "stopped",
+          running: false,
+          error: undefined,
+        });
+        return;
+      }
+      if (current !== handle) return;
       // If the process exits before initialization completes, it's a crash.
       // Store the stderr tail as the last error so the user can see why.
       const wasInitializing = !handle.intentionalStop;
@@ -1023,12 +1066,16 @@ class LspManagerImpl {
       initReject(err as Error);
       this.lastErrors.set(language, (err as Error).message);
       this.recordSpawnFailure(key);
-      this.removeServer(key, handle);
-      this.pushStateEvent(workspacePath, language, {
-        phase: "stopped",
-        running: false,
-        error: (err as Error).message,
-      });
+      // A concurrent restart may have swapped this slot for a fresh handle;
+      // only tear down the one this initialize flow still owns.
+      if (this.servers.get(key) === handle) {
+        this.removeServer(key, handle);
+        this.pushStateEvent(workspacePath, language, {
+          phase: "stopped",
+          running: false,
+          error: (err as Error).message,
+        });
+      }
       throw err;
     }
   }

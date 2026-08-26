@@ -17,6 +17,7 @@ import {
   LspToggleSchema,
   LspSetPathSchema,
   LspHealthCheckSchema,
+  LspRestartSchema,
   LspOpenDocSchema,
   LspCloseDocSchema,
   LspDidChangeSchema,
@@ -98,6 +99,17 @@ export function registerLspHandlers(ipcMain: IpcMain): void {
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       log.error(`lsp.healthCheck failed: ${msg}`);
+      return { ok: false, error: msg };
+    }
+  });
+
+  ipcMain.handle(IPC.LSP_RESTART, async (_evt, raw) => {
+    try {
+      const input = LspRestartSchema.parse(raw);
+      return await lspManager.restart(input.workspacePath, input.language);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      log.error(`lsp.restart failed: ${msg}`);
       return { ok: false, error: msg };
     }
   });

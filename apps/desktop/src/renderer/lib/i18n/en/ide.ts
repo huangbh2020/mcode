@@ -36,6 +36,8 @@ export const en = {
   "ide.editor.lspStarting": "{name} server starting…",
   "ide.editor.lspStartingHint": "The language server is starting; the first jump/hover request waits for it (Java's first import can take minutes)",
   "ide.editor.lspFailed": "{name} server failed to start",
+  "ide.editor.lspRestartHint": "Click to restart the language server",
+  "ide.editor.lspRestartFailed": "{name} server restart failed",
   "ide.editor.navBack": "Go back",
   "ide.editor.navForward": "Go forward",
   "ide.editor.switchToDiff": "Switch to diff view",
@@ -107,6 +109,8 @@ export const en = {
   "ide.search.searching": "Searching…",
   "ide.search.noFileMatch": "No matching files",
   "ide.search.noContentMatch": "No matching content",
+  "ide.search.truncatedHint": "Too many matches — showing only part of them, try a narrower query",
+  "ide.search.scanIncompleteHint": "Large project tree — only part was scanned, results may be incomplete",
 
   /* ── git panel / repo card ── */
   "ide.git.noProjectHint": "Add a project to see its Git status",

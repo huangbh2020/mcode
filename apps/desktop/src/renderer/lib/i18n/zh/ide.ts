@@ -38,6 +38,8 @@ export const zh = {
   "ide.editor.lspStarting": "{name} 服务器启动中…",
   "ide.editor.lspStartingHint": "语言服务器正在启动,首个跳转/悬停请求会等待就绪(Java 首次导入可能需要几分钟)",
   "ide.editor.lspFailed": "{name} 服务器启动失败",
+  "ide.editor.lspRestartHint": "点击重新启动该语言服务器",
+  "ide.editor.lspRestartFailed": "{name} 服务器重启失败",
   "ide.editor.navBack": "返回上一处",
   "ide.editor.navForward": "前往下一处",
   "ide.editor.switchToDiff": "切换到差异视图",
@@ -109,6 +111,8 @@ export const zh = {
   "ide.search.searching": "搜索中…",
   "ide.search.noFileMatch": "无匹配文件",
   "ide.search.noContentMatch": "无匹配内容",
+  "ide.search.truncatedHint": "匹配结果过多,仅显示前一部分,请缩小搜索范围",
+  "ide.search.scanIncompleteHint": "项目目录较大,只扫描了部分文件,结果可能不完整",
 
   /* ── git panel / repo card ── */
   "ide.git.noProjectHint": "添加项目后即可查看 Git 状态",

@@ -1284,8 +1284,12 @@ function Collapsible({
         className="flex w-full items-center gap-2 py-1.5 text-left text-content-muted hover:bg-surface-muted/40"
       >
         <IconBulb size={13} className="shrink-0 text-content-subtle" />
-        <span className="font-medium text-content-muted">{label}</span>
-        <span className="ml-1 truncate text-content-subtle">{hint}</span>
+        {/* shrink-0 + whitespace-nowrap keep the short label on one line even
+            in a narrow pane; flex-1 + min-w-0 let the hint own the leftover
+            width and truncate with an ellipsis instead of pushing the header
+            onto two lines. */}
+        <span className="shrink-0 whitespace-nowrap font-medium text-content-muted">{label}</span>
+        <span className="min-w-0 flex-1 truncate text-content-subtle">{hint}</span>
         <Chevron open={open} className="ml-auto" />
       </button>
       {open && (
