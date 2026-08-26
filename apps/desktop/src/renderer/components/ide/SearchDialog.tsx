@@ -17,6 +17,7 @@ import {
   IconAlertTriangle,
 } from "@renderer/lib/icons.js";
 import { useI18n } from "@renderer/lib/i18n/index.js";
+import { useRgStatus } from "@renderer/lib/useRgStatus.js";
 
 /** Search debounce + result caps. Name/content share the debounce; caps differ
  *  (name search returns files, content returns line-level matches). Mirrors the
@@ -117,9 +118,7 @@ export function SearchDialog() {
 
   // ripgrep availability for the install banner (checked on open). Searches
   // work without it (slow JS fallback); the banner offers a one-click install.
-  const [rgReady, setRgReady] = useState(true);
-  const [rgInstalling, setRgInstalling] = useState(false);
-  const [rgError, setRgError] = useState<string | null>(null);
+  const rg = useRgStatus(open);
 
   // Extension allow-list parsed from the free-form file-type input ("" = no
   // filter → undefined, keeping the IPC payload minimal).
@@ -157,28 +156,6 @@ export function SearchDialog() {
     rememberFileType(fileType);
     reqIdRef.current++;
   }, [open, fileType]);
-
-  // On open, check whether ripgrep is available; the banner offers a one-click
-  // install when it isn't. A failed status check degrades to "assume
-  // available" so the banner never nags when we can't tell.
-  useEffect(() => {
-    if (!open) return;
-    let cancelled = false;
-    setRgError(null);
-    void api.rg
-      .status()
-      .then((s) => {
-        if (cancelled) return;
-        setRgReady(s.available);
-        setRgInstalling(s.installing);
-      })
-      .catch(() => {
-        if (!cancelled) setRgReady(true);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [open]);
 
   // Remembered file-type filters: hydrate from settings on open so the
   // datalist shows previously typed values.
@@ -299,33 +276,6 @@ export function SearchDialog() {
   const openResult = (path: string, line?: number) => {
     openFileInIde(path, line != null ? { line } : undefined);
     setOpen(false);
-  };
-
-  // One-click ripgrep install (banner). On success the main process resets its
-  // resolution cache, so subsequent searches take the fast rg path.
-  const installRg = async () => {
-    setRgInstalling(true);
-    setRgError(null);
-    try {
-      const res = await api.rg.install({});
-      if (res.ok) {
-        setRgReady(true);
-      } else {
-        setRgError(
-          t("ide.search.rgInstallFailed", {
-            error: res.error ?? t("ide.search.unknownError"),
-          }),
-        );
-      }
-    } catch (err) {
-      setRgError(
-        t("ide.search.rgInstallFailed", {
-          error: err instanceof Error ? err.message : String(err),
-        }),
-      );
-    } finally {
-      setRgInstalling(false);
-    }
   };
 
   // Open the flat-active item: a file in name mode, or the file of the active
@@ -487,12 +437,12 @@ export function SearchDialog() {
 
           {/* ripgrep missing banner: searches still work through the JS
               fallback, but a one-click install restores the fast C path. */}
-          {!rgReady && (
+          {!rg.ready && (
             <div className="flex flex-col gap-1 border-b border-edge bg-warning/10 px-3 py-1.5">
               <div className="flex items-center gap-1.5 text-[11px] text-content-muted">
                 <IconAlertTriangle size={13} className="shrink-0 text-warning" />
                 <span className="min-w-0 flex-1 truncate">{t("ide.search.rgMissingHint")}</span>
-                {rgInstalling ? (
+                {rg.installing ? (
                   <span className="flex shrink-0 items-center gap-1 text-content-subtle">
                     <IconLoader2 size={12} className="animate-spin" />
                     {t("ide.search.rgInstalling")}
@@ -500,14 +450,18 @@ export function SearchDialog() {
                 ) : (
                   <button
                     type="button"
-                    onClick={() => void installRg()}
+                    onClick={() => void rg.install()}
                     className="shrink-0 rounded border border-accent/40 px-1.5 py-0.5 text-[11px] font-medium text-accent transition-colors hover:bg-accent/10"
                   >
                     {t("ide.search.rgInstall")}
                   </button>
                 )}
               </div>
-              {rgError && <div className="text-[11px] text-content-subtle">{rgError}</div>}
+              {rg.error && (
+                <div className="text-[11px] text-content-subtle">
+                  {t("ide.search.rgInstallFailed", { error: rg.error })}
+                </div>
+              )}
             </div>
           )}
 

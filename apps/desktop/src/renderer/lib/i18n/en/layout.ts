@@ -111,6 +111,10 @@ export const en = {
   "layout.palette.empty.file": "Type a file name to search",
   "layout.palette.empty.grep": "Type keywords to search file contents",
   "layout.palette.empty.searching": "No matches",
+  "layout.palette.rgMissingHint": "ripgrep not found — large-project searches will be slow. Install it for speed",
+  "layout.palette.rgInstall": "Install",
+  "layout.palette.rgInstalling": "Downloading…",
+  "layout.palette.rgInstallFailed": "Install failed: {error}",
 
   /* ── connect phone ── */
   "layout.connectPhone": "Connect phone",

@@ -49,15 +49,21 @@ import {
   IconLoader2,
   IconFile,
   IconFileSearch,
+  IconAlertTriangle,
 } from "@renderer/lib/icons.js";
 import { getProviderIcon } from "@renderer/lib/providerIcon.js";
 import { useI18n, type MessageId } from "@renderer/lib/i18n/index.js";
+import { useRgStatus } from "@renderer/lib/useRgStatus.js";
 
 /** Translator signature used by the module-level copy helpers below. */
 type Translator = (key: MessageId, params?: Record<string, string | number>) => string;
 
-/** Debounce for the async searches. Matches SearchDialog's value. */
+/** Debounce for the cheap searches (session title + file name). The content
+ *  scan (grep) is the heavy one on large repos, so it gets its own longer
+ *  debounce — while the user types, only the light searches fire every
+ *  keystroke and the file-content scan waits for typing to settle. */
 const SEARCH_DEBOUNCE_MS = 120;
+const GREP_DEBOUNCE_MS = 220;
 /** Result caps keep the palette snappy and the list scrollable. */
 const SESSION_SEARCH_LIMIT = 30;
 const FILE_SEARCH_LIMIT = 50;
@@ -132,6 +138,11 @@ export function CommandPalette() {
     return projects.find((p) => p.id === activeProjectId)?.path ?? null;
   }, [activeProjectId, projects]);
 
+  // ripgrep availability for the install banner — the file/content searches
+  // run the same optimized main path as SearchDialog (rg + cache), which
+  // degrades to the slow JS fallback when rg is missing.
+  const rg = useRgStatus(open);
+
   const inputRef = useRef<HTMLInputElement>(null);
   const [query, setQuery] = useState("");
   const [scope, setScope] = useState<SearchScope>("all");
@@ -164,7 +175,9 @@ export function CommandPalette() {
   // Drive the async searches off the live query + active scope. Only the
   // searches the current scope includes are fired, so picking e.g. "线程" never
   // wastes a file/content scan. File/content searches additionally require an
-  // active project; session search is cross-project.
+  // active project; session search is cross-project. The cheap searches
+  // (session/file) debounce at SEARCH_DEBOUNCE_MS; the heavy content scan runs
+  // on its own longer GREP_DEBOUNCE_MS so typing never churns rg per keystroke.
   useEffect(() => {
     const wantSession = scopeIncludes(scope, "session");
     const wantFile = scopeIncludes(scope, "file") && !!projectPath;
@@ -182,7 +195,8 @@ export function CommandPalette() {
     if (wantGrep) setGreps({ loading: true });
     else setGreps(undefined);
     const myId = ++reqIdRef.current;
-    const t = window.setTimeout(() => {
+
+    const runCheapSearches = (): void => {
       if (wantSession) {
         void api.session
           .search({ query: trimmed, limit: SESSION_SEARCH_LIMIT })
@@ -207,25 +221,31 @@ export function CommandPalette() {
             setFiles({ loading: false, value: [] });
           });
       }
-      if (wantGrep) {
-        void api.file
-          .grep({
-            projectPath: projectPath!,
-            query: trimmed,
-            limit: GREP_LIMIT,
-            maxResultsPerFile: GREP_MAX_PER_FILE,
-          })
-          .then((res) => {
-            if (reqIdRef.current !== myId) return;
-            setGreps({ loading: false, value: res.matches ?? [] });
-          })
-          .catch(() => {
-            if (reqIdRef.current !== myId) return;
-            setGreps({ loading: false, value: [] });
-          });
-      }
-    }, SEARCH_DEBOUNCE_MS);
-    return () => window.clearTimeout(t);
+    };
+    const runGrep = (): void => {
+      void api.file
+        .grep({
+          projectPath: projectPath!,
+          query: trimmed,
+          limit: GREP_LIMIT,
+          maxResultsPerFile: GREP_MAX_PER_FILE,
+        })
+        .then((res) => {
+          if (reqIdRef.current !== myId) return;
+          setGreps({ loading: false, value: res.matches ?? [] });
+        })
+        .catch(() => {
+          if (reqIdRef.current !== myId) return;
+          setGreps({ loading: false, value: [] });
+        });
+    };
+
+    const t1 = window.setTimeout(runCheapSearches, SEARCH_DEBOUNCE_MS);
+    const t2 = wantGrep ? window.setTimeout(runGrep, GREP_DEBOUNCE_MS) : null;
+    return () => {
+      window.clearTimeout(t1);
+      if (t2 !== null) window.clearTimeout(t2);
+    };
   }, [open, isSearching, trimmed, scope, projectPath]);
 
   // Reset everything when the dialog closes so the next open is a clean slate
@@ -377,6 +397,38 @@ export function CommandPalette() {
               /* no-op: items are one-shot actions, not selectable values */
             }}
           >
+            {/* ripgrep missing banner: file/content searches fall back to the slow JS
+                  scanners; a one-click install restores the fast path. */}
+            {!rg.ready && (
+              <div className="flex flex-col gap-1 border-b border-edge bg-warning/10 px-3 py-1.5">
+                <div className="flex items-center gap-1.5 text-[11px] text-content-muted">
+                  <IconAlertTriangle size={13} className="shrink-0 text-warning" />
+                  <span className="min-w-0 flex-1 truncate">
+                    {t("layout.palette.rgMissingHint")}
+                  </span>
+                  {rg.installing ? (
+                    <span className="flex shrink-0 items-center gap-1 text-content-subtle">
+                      <IconLoader2 size={12} className="animate-spin" />
+                      {t("layout.palette.rgInstalling")}
+                    </span>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => void rg.install()}
+                      className="shrink-0 rounded border border-accent/40 px-1.5 py-0.5 text-[11px] font-medium text-accent transition-colors hover:bg-accent/10"
+                    >
+                      {t("layout.palette.rgInstall")}
+                    </button>
+                  )}
+                </div>
+                {rg.error && (
+                  <div className="text-[11px] text-content-subtle">
+                    {t("layout.palette.rgInstallFailed", { error: rg.error })}
+                  </div>
+                )}
+              </div>
+            )}
+
             {/* Scope tabs — pick which kind(s) to search. */}
             <ScopeTabs scope={scope} onScope={setScope} projectPath={!!projectPath} />
 
