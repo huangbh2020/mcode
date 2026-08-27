@@ -85,6 +85,20 @@ export const en = {
   "layout.openBrowser": "Open browser",
   "layout.closeSidebarBrowser": "Close sidebar browser",
 
+  /* ── side chat (right-panel ask tab) ── */
+  "layout.tabSideChat": "Quick Ask",
+  "sideChat.open": "Open quick ask (won't interrupt the running session)",
+  "sideChat.newChat": "New question",
+  "sideChat.parentPrefix": "Main session",
+  "sideChat.noMainSession": "Open a main session first",
+  "sideChat.emptyTitle": "No questions yet",
+  "sideChat.emptyHint": "Spot something in the main session's output you don't follow? Ask here — the main session keeps running, fully independent.",
+  "sideChat.backToList": "Back to the question list",
+  "sideChat.parentDeleted": "Main session deleted",
+  "sideChat.goToParent": "Jump to the parent session",
+  "sideChat.titlePlaceholder": "New question",
+  "sideChat.loading": "Loading questions…",
+
   /* ── center pane ── */
   "layout.loadingPlan": "Loading plan…",
   "layout.loadingEditor": "Loading editor…",

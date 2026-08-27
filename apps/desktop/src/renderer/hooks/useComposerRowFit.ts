@@ -25,13 +25,21 @@ const RESHOW_SLACK_PX = 24;
  * reveals the single-icon {@link ComposerToolbarToggle} entry. Re-showing is
  * gated on the row growing past the width at collapse time (RESHOW_SLACK_PX),
  * so the hidden state never re-measures itself into a loop.
+ *
+ * `forceCollapsed = true` skips the measurement entirely — the chips stay in
+ * the single-icon state at every pane width. Used by narrow always-folded
+ * surfaces (the side-chat panel), where folding shouldn't depend on measured
+ * fit and must never flip back to inline chips on a resize.
  */
-export function useComposerRowFit() {
+export function useComposerRowFit(forceCollapsed = false) {
   const rowRef = useRef<HTMLDivElement | null>(null);
-  const [collapsed, setCollapsed] = useState(false);
+  const [collapsed, setCollapsed] = useState(forceCollapsed);
   const collapseAtRef = useRef(0);
 
   useLayoutEffect(() => {
+    // Always-folded mode: no measuring, no observer — permanently collapsed.
+    if (forceCollapsed) return;
+
     const row = rowRef.current;
     if (!row) return;
 

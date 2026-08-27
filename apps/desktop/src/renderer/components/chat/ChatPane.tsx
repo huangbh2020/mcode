@@ -727,16 +727,46 @@ function groupMessagesForRender(
   return items;
 }
 
+/** Attachment record shape handed to the store's sendPrompt — shared by the
+ *  send and enqueue paths so both assemble identical payloads. */
+type SendAttachment = {
+  preview: string;
+  content: string;
+  attachmentKind?: "paste" | "file" | "quote";
+  filePath?: string;
+};
+
+/** Stream-facing attachment records from the composer tags. Element tags fold
+ *  into "paste" for display purposes (they're inline content blocks, same as
+ *  a paste); the "element" kind only matters inside the composer's
+ *  ContentTag, not in the persisted attachment record. */
+function composeSendAttachments(tags: ReadonlyArray<ContentTag>): SendAttachment[] {
+  return tags.map((t) => ({
+    preview: t.preview,
+    content: t.content,
+    attachmentKind: t.kind === "file" ? "file" : "paste",
+    filePath: t.filePath,
+  }));
+}
+
 // Memoized so that in tabs mode (where every open tab's ChatPane is mounted
 // simultaneously and backgrounded via CSS), switching tabs only re-renders
 // the two panes whose `isActive` actually flipped — the N-2 backgrounded
-// panes are skipped entirely. Both props are primitives, so a shallow
-// equality check on (sessionId, isActive) is sufficient. Single mode uses a
+// panes are skipped entirely. All props are primitives / stable callbacks,
+// so a shallow equality check is sufficient. Single mode uses a
 // `key` to force remounts, which takes precedence over memo (no conflict).
+/** How the composer's option chips (Model / Effort / Permission / ContextRing)
+ *  are displayed: "auto" measures the row and folds into the single-icon
+ *  toggle only when they don't fit (center-pane behavior); "collapsed" keeps
+ *  them permanently folded behind the toggle icon (the side-chat panel, where
+ *  the pane is narrow at every default width). */
+export type ComposerChipsMode = "auto" | "collapsed";
+
 export const ChatPane = memo(
   function ChatPane({
     sessionId,
     isActive = true,
+    chipsMode = "auto",
   }: {
     sessionId: string | null;
     /** Whether this pane is the foreground tab. Multi-mount layouts pass false
@@ -744,20 +774,28 @@ export const ChatPane = memo(
      *  defer until the pane is actually shown. Defaults to true for the
      *  single-pane legacy path. */
     isActive?: boolean;
+    /** Chip-row display mode — see {@link ComposerChipsMode}. */
+    chipsMode?: ComposerChipsMode;
   }) {
     // `sessionId` is the prop — store lookups go through it directly, not
     // through `activeSessionId`. The store still tracks `activeSessionId`
     // for global single-slot concerns (model / effort / permissionMode
-    // config, sendPrompt target, etc.) and those are kept in sync by the
-    // caller (the CenterPane router in App.tsx). `null` means "no session
-    //  open" — we render the empty-state placeholder and skip all the
-    // per-session store reads.
+    // config) and those are kept in sync by the caller (the CenterPane
+    // router in App.tsx). Sends pass this sessionId explicitly, so a pane
+    // never fires into another session (e.g. the side chat running beside
+    // its parent). `null` means "no session open" — we render the
+    // empty-state placeholder and skip all the per-session store reads.
     if (sessionId === null) {
       return <EmptyCenterPane />;
     }
-    return <ChatPaneForSession sessionId={sessionId} isActive={isActive} />;
+    return (
+      <ChatPaneForSession sessionId={sessionId} isActive={isActive} chipsMode={chipsMode} />
+    );
   },
-  (prev, next) => prev.sessionId === next.sessionId && prev.isActive === next.isActive,
+  (prev, next) =>
+    prev.sessionId === next.sessionId &&
+    prev.isActive === next.isActive &&
+    prev.chipsMode === next.chipsMode,
 );
 
 /** Empty-state shown when there's no active session to render (no tabs
@@ -860,13 +898,24 @@ function UpstreamRetryHint({
   );
 }
 
-function ChatPaneForSession({ sessionId, isActive }: { sessionId: string; isActive: boolean }) {
+function ChatPaneForSession({
+  sessionId,
+  isActive,
+  chipsMode = "auto",
+}: {
+  sessionId: string;
+  isActive: boolean;
+  chipsMode?: ComposerChipsMode;
+}) {
   const { t, locale } = useI18n();
   // Content-aware collapse of the composer's bottom action row: when the chip
   // cluster (Model/Effort/Permission/ContextRing) can't fit on one line next
   // to the mic/provider/send cluster, `collapsed` hides the chips and shows
-  // the single-icon menu toggle instead (see useComposerRowFit).
-  const { rowRef: composerActionRowRef, collapsed: composerChipsCollapsed } = useComposerRowFit();
+  // the single-icon menu toggle instead (see useComposerRowFit). Narrow hosts
+  // (`chipsMode="collapsed"`, i.e. the side-chat panel) skip measuring and
+  // stay folded at every width.
+  const { rowRef: composerActionRowRef, collapsed: composerChipsCollapsed } =
+    useComposerRowFit(chipsMode === "collapsed");
   const messages = useSessionStore((s) =>
     s.messagesBySession[sessionId] ?? EMPTY_MESSAGES,
   );
@@ -906,6 +955,7 @@ function ChatPaneForSession({ sessionId, isActive }: { sessionId: string; isActi
     [messages, isRunning, runningTurnStartedAt],
   );
   const sendPrompt = useSessionStore((s) => s.sendPrompt);
+  const openSideChatPanel = useSessionStore((s) => s.openSideChatPanel);
   const interrupt = useSessionStore((s) => s.interrupt);
   const editAndResendMessage = useSessionStore((s) => s.editAndResendMessage);
   const claudeInstalled = useSessionStore((s) => s.claudeInstalled);
@@ -1170,7 +1220,13 @@ function ChatPaneForSession({ sessionId, isActive }: { sessionId: string; isActi
    *  them while backtracking - a pill's `/` is never a trigger. */
   const recomputePicker = useCallback(
     (v: string, caret: number) => {
-      if (inputBlocked) {
+      // Locked only when a bottom prompt (approval / question) owns the input
+      // area — matching textareaLocked. While a turn is merely RUNNING the
+      // picker stays available: the composer accepts typed-ahead prompts, and
+      // `/sidechat` in particular exists precisely to be reachable while the
+      // main turn streams. Each command's pick handler carries its own
+      // busy-guard where one applies (e.g. /compact refuses mid-turn).
+      if (textareaLocked) {
         if (pickerKind !== null) setPickerKind(null);
         return;
       }
@@ -1223,7 +1279,7 @@ function ChatPaneForSession({ sessionId, isActive }: { sessionId: string; isActi
       }
       if (pickerKind !== null) setPickerKind(null);
     },
-    [inputBlocked, pickerKind],
+    [textareaLocked, pickerKind],
   );
 
   /** Content-change handler from the rich-text editor. The editor reports its
@@ -1383,10 +1439,10 @@ function ChatPaneForSession({ sessionId, isActive }: { sessionId: string; isActi
   const drainChatFileQueue = useSessionStore((s) => s.drainChatFileQueue);
   useEffect(() => {
     if (chatFileQueue.length === 0) return;
-    const paths = drainChatFileQueue();
+    const paths = drainChatFileQueue(sessionId);
     if (paths.length === 0) return;
     setTags((prev) => appendUniqueFileTags(prev, paths));
-  }, [chatFileQueue, drainChatFileQueue]);
+  }, [chatFileQueue, drainChatFileQueue, sessionId]);
 
   // Element-pick drain: the embedded browser panel enqueues picked DOM
   // elements (selector + outerHTML + url) into chatElementQueueBySession;
@@ -1398,10 +1454,10 @@ function ChatPaneForSession({ sessionId, isActive }: { sessionId: string; isActi
   const drainChatElementQueue = useSessionStore((s) => s.drainChatElementQueue);
   useEffect(() => {
     if (chatElementQueue.length === 0) return;
-    const els = drainChatElementQueue();
+    const els = drainChatElementQueue(sessionId);
     if (els.length === 0) return;
     setTags((prev) => [...prev, ...els.map(makeElementTag)]);
-  }, [chatElementQueue, drainChatElementQueue]);
+  }, [chatElementQueue, drainChatElementQueue, sessionId]);
 
   /** Mention picker confirm: drop the @token, add a file tag, refocus. */
   const handleMentionPick = useCallback(
@@ -1436,8 +1492,8 @@ function ChatPaneForSession({ sessionId, isActive }: { sessionId: string; isActi
     [],
   );
 
-  /** Built-in command confirm (`/compact` / `/init` / `/browser`). Unlike
-   *  skills (which become inline pills), built-in commands have bespoke
+  /** Built-in command confirm (`/compact` / `/init` / `/browser` / `/sidechat`).
+   *  Unlike skills (which become inline pills), built-in commands have bespoke
    *  behavior:
    *  - `compact`: immediately send `/compact` as a turn to the agent so it
    *    summarizes and releases context. No-op while a turn is running.
@@ -1447,7 +1503,10 @@ function ChatPaneForSession({ sessionId, isActive }: { sessionId: string; isActi
    *  - `browser`: replace the trigger token with an editable prompt template
    *    that asks the agent to open a URL with the browser tools. The user fills
    *    in the URL (+ optional intent like "截图" / "移动端") and sends. This
-   *    surfaces the browser feature — without it users don't know it exists. */
+   *    surfaces the browser feature — without it users don't know it exists.
+   *  - `sidechat`: pure navigation — open the right-panel quick-ask tab. No
+   *    prompt is inserted; deliberately NOT gated on sessionBusy, since asking
+   *    beside a RUNNING turn is the feature's whole point. */
   const handleBuiltInPick = useCallback(
     (cmd: BuiltInCommand) => {
       if (cmd.kind === "compact") {
@@ -1456,7 +1515,16 @@ function ChatPaneForSession({ sessionId, isActive }: { sessionId: string; isActi
         setPickerKind(null);
         if (sessionBusy) return;
         clearTriggerToken();
-        void sendPrompt("/compact");
+        void sendPrompt("/compact", undefined, undefined, undefined, undefined, undefined, sessionId);
+        return;
+      }
+      if (cmd.kind === "sidechat") {
+        // Drop the `/sidechat` trigger token and navigate away — the editor
+        // stays empty (nothing was meant to be sent).
+        setPickerKind(null);
+        clearTriggerToken();
+        triggerStartRef.current = null;
+        openSideChatPanel();
         return;
       }
       if (cmd.kind === "browser") {
@@ -1497,7 +1565,7 @@ function ChatPaneForSession({ sessionId, isActive }: { sessionId: string; isActi
       // Refresh the mirrored text so empty-state / enqueue stay in sync.
       setValue(editorRef.current.getTextWithSkills());
     },
-    [sessionBusy, clearTriggerToken, sendPrompt, t],
+    [sessionBusy, clearTriggerToken, sendPrompt, t, sessionId, openSideChatPanel],
   );
 
   /** Open the attach picker from the bottom-left + button. */
@@ -1833,18 +1901,7 @@ function ChatPaneForSession({ sessionId, isActive }: { sessionId: string; isActi
     if (images === null) return;
     // Forward the tags as attachments so the sent user message keeps the
     // same chip-card presentation in the stream as it had in the composer.
-    // displayText = just the editor text; the attachment content is shown
-    // via the cards, so we must NOT also inline it into the text block
-    // (the full prompt, with attachments inlined, is still sent to the SDK).
-    // Element tags map to "paste" for stream-display purposes (they're inline
-    // content blocks, same as a paste); the "element" kind only matters inside
-    // the composer's ContentTag, not in the persisted attachment record.
-    const attachments = tags.map((t) => ({
-      preview: t.preview,
-      content: t.content,
-      attachmentKind: t.kind === "file" ? ("file" as const) : ("paste" as const),
-      filePath: t.filePath,
-    }));
+    const attachments = composeSendAttachments(tags);
     // Clear the composer only when the prompt was actually accepted into the
     // stream. A blocked send (e.g. the "尚未配置模型" dialog raised inside
     // sendPrompt) must leave the typed text + tags intact so nothing is lost
@@ -1855,6 +1912,8 @@ function ChatPaneForSession({ sessionId, isActive }: { sessionId: string; isActi
       attachments.length > 0 ? text : undefined,
       skillNames.length > 0 ? skillNames : undefined,
       images,
+      undefined,
+      sessionId,
     );
     if (!sent) return;
     editorRef.current?.clear();
@@ -1885,12 +1944,7 @@ function ChatPaneForSession({ sessionId, isActive }: { sessionId: string; isActi
     // sendable payloads.
     const images = await preparePendingImages();
     if (images === null) return;
-    const attachments = tags.map((t) => ({
-      preview: t.preview,
-      content: t.content,
-      attachmentKind: t.kind === "file" ? ("file" as const) : ("paste" as const),
-      filePath: t.filePath,
-    }));
+    const attachments = composeSendAttachments(tags);
     enqueuePrompt(sessionId, {
       prompt,
       displayText: text,
@@ -1981,7 +2035,10 @@ function ChatPaneForSession({ sessionId, isActive }: { sessionId: string; isActi
       const ab = b as Extract<Block, { kind: "attachment" }>;
       return {
         id: `edit-tag-${i}`,
-        kind: ab.attachmentKind ?? "paste",
+        // "quote" (side-chat reference) re-inlines as a paste block — only
+        // the composer's ContentTag has no quote kind; the persisted record
+        // keeps it for display.
+        kind: ab.attachmentKind === "file" ? "file" : "paste",
         preview: ab.preview,
         content: ab.content,
         filePath: ab.filePath,
@@ -2453,7 +2510,7 @@ function ChatPaneForSession({ sessionId, isActive }: { sessionId: string; isActi
             <QuestionPrompt
               questions={activeQuestion}
               onSubmit={(answers) => {
-                void submitQuestion(answers);
+                void submitQuestion(answers, sessionId);
               }}
               onDismiss={dismissQuestion}
             />

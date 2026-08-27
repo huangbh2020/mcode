@@ -55,6 +55,15 @@ export interface Session {
   providerId: string;
   /** claude's own session id, used for `--resume`. Null until first turn. */
   claudeSessionId: string | null;
+  /** Session role: "chat" = a normal session shown in the left-bar list;
+   *  "side" = a side-chat Q&A session (right-panel ask tab). Side sessions
+   *  are excluded from every list/search/reuse query and are managed only by
+   *  the side-chat panel, keyed by their parent session. */
+  kind: "chat" | "side";
+  /** For side sessions (kind="side"): the id of the main session this Q&A
+   *  thread was opened from, for traceability. Null for main sessions; set
+   *  back to null when the parent is deleted (the side chat itself is kept). */
+  parentSessionId: string | null;
   title: string;
   status: SessionStatus;
   /** Model alias or full name ("default" = let claude pick). → --model. */

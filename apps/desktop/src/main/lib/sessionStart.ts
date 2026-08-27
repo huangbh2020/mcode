@@ -20,6 +20,47 @@ export function createOrReuseSession(
   input: StartSessionInput,
   source: "desktop" | "mobile",
 ): { session: Session; reused: boolean } {
+  // Side-chat Q&A sessions: every request creates a fresh row (one main
+  // session → many side chats). No fresh-row reuse, no session.changed
+  // broadcast — the desktop ask tab consumes the IPC return value directly
+  // and mobile doesn't manage side chats at all.
+  if (input.kind === "side") {
+    const now = Date.now();
+    const session: Session = {
+      id: uid("sess_"),
+      projectId: input.projectId,
+      providerId: input.providerId ?? DEFAULT_PROVIDER_ID,
+      claudeSessionId: null, // captured from system/init once the first turn runs
+      kind: "side",
+      parentSessionId: input.parentSessionId ?? null,
+      // Placeholder until the first question rewrites it (sendTurn truncates
+      // the first prompt to ~40 chars — same rule as main-session auto-title,
+      // but no generateSessionTitle LLM call).
+      title: "Quick ask",
+      status: "idle",
+      model: input.model ?? "default",
+      effort: input.effort,
+      permissionMode: input.permissionMode,
+      customModelId: input.customModelId ?? null,
+      archived: false,
+      pinnedAt: null,
+      contextSnapshot: null,
+      todos: null,
+      subagents: null,
+      planDraft: null,
+      turnFiles: null,
+      usageHistory: null,
+      createdAt: now,
+      updatedAt: now,
+    };
+    SessionRepo.create(session);
+    runtimeManager.bindSession(session);
+    log.info(
+      `side chat started: ${session.id} (parent ${input.parentSessionId ?? "?"}, project ${input.projectId}, ${source})`,
+    );
+    return { session, reused: false };
+  }
+
   // Only a default-title request can reuse — an explicit title (none of our
   // UIs send one today) always deserves its own row.
   if (input.title === undefined || input.title === "New session") {
@@ -51,6 +92,8 @@ export function createOrReuseSession(
     projectId: input.projectId,
     providerId: input.providerId ?? DEFAULT_PROVIDER_ID,
     claudeSessionId: null, // captured from system/init once the first turn runs
+    kind: "chat",
+    parentSessionId: null,
     title: input.title ?? "New session",
     status: "idle",
     model: input.model ?? "default",

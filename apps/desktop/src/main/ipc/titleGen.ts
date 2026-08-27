@@ -145,8 +145,10 @@ export async function generateSessionTitle(
 
     if (!title) return null;
 
-    // 4. Persist + notify the renderer so the sidebar/tabs refresh, and
-    //    broadcast to connected mobile clients so their lists stay in sync.
+    // 4. Persist + notify the renderer so the sidebar/tabs (or the side-chat
+    //    ask tab) refresh. broadcastSessionChanged reaches connected MOBILE
+    //    clients — side chats aren't managed there, so they only send the
+    //    desktop push event.
     SessionRepo.updateTitle(session.id, title);
     sendToRenderer(IPC.SESSION_TITLE_UPDATED, {
       channel: IPC.SESSION_TITLE_UPDATED,
@@ -154,7 +156,7 @@ export async function generateSessionTitle(
       title,
     });
     const updated = SessionRepo.get(session.id);
-    if (updated) broadcastSessionChanged(updated);
+    if (updated && updated.kind !== "side") broadcastSessionChanged(updated);
     log.info(`titleGen: generated title for ${session.id}: "${title}"`);
     return title;
   } catch (err) {

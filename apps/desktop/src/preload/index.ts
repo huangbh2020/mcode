@@ -12,6 +12,8 @@ const api = {
   claude: {
     startSession: ((input) =>
       ipcRenderer.invoke(IPC.CLAUDE_START_SESSION, input)) as RpcMap["claude.startSession"],
+    listSideChats: ((input) =>
+      ipcRenderer.invoke(IPC.CLAUDE_LIST_SIDE_CHATS, input)) as RpcMap["claude.listSideChats"],
     sendTurn: ((input) =>
       ipcRenderer.invoke(IPC.CLAUDE_SEND_TURN, input)) as RpcMap["claude.sendTurn"],
     interrupt: ((input) =>

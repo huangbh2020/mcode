@@ -141,6 +141,13 @@ function migrate(database: Database): void {
   // Per-turn token/cost history. JSON array of TurnUsageRecord; appended at
   // each turn-end so the context-stats history popover survives restart.
   addColumnIfMissing(database, "sessions", "usage_history", "TEXT");
+  // Side-chat Q&A sessions (right-panel ask tab): role discriminator + the
+  // owning main session. 'chat' is the default so pre-migration rows and all
+  // existing creation paths stay main sessions. parent_session_id carries no
+  // DB-level FK — deleting a main session nulls the pointer in SessionRepo
+  // instead of cascading (the Q&A history is kept).
+  addColumnIfMissing(database, "sessions", "kind", "TEXT NOT NULL DEFAULT 'chat'");
+  addColumnIfMissing(database, "sessions", "parent_session_id", "TEXT");
   addColumnIfMissing(database, "projects", "archived", "INTEGER NOT NULL DEFAULT 0");
   // Optional user-assigned group name for the left-bar "grouped" view. NULL
   // means the project is ungrouped; the renderer treats "" / undefined as null.

@@ -410,8 +410,10 @@ export const UI_ACCENT_COLOR_SETTING_KEY = "ui.accentColor";
  */
 export const UI_RIGHT_PANEL_TAB_SETTING_KEY = "ui.rightPanelTab";
 
-/** zod schema + TS union for the right-panel tab preference. */
-export const RightPanelTabSchema = z.enum(["files", "git", "browser", "turns"]);
+/** zod schema + TS union for the right-panel tab preference. "sidechat" (the
+ *  side-chat Q&A tab) is session-only like "browser": hydrate ignores a
+ *  persisted value so the ask tab never auto-opens at startup. */
+export const RightPanelTabSchema = z.enum(["files", "git", "browser", "turns", "sidechat"]);
 export type RightPanelTab = z.infer<typeof RightPanelTabSchema>;
 
 /**
@@ -644,8 +646,21 @@ export const StartSessionSchema = z.object({
   permissionMode: z.string().default("default"),
   /** Id of a custom-model config to bind to this session (omit/null = built-in). */
   customModelId: z.string().nullable().optional(),
+  /** Session role: "chat" (default, normal left-bar session) or "side"
+   *  (side-chat Q&A session owned by the right-panel ask tab). Side sessions
+   *  always create a fresh row — the createOrReuse fresh-row logic doesn't
+   *  apply to them. */
+  kind: z.enum(["chat", "side"]).default("chat"),
+  /** For kind="side": the main session this Q&A thread belongs to. Enables
+   *  traceability (one main session → many side chats). Ignored for chat. */
+  parentSessionId: z.string().optional(),
 });
 export type StartSessionInput = z.infer<typeof StartSessionSchema>;
+
+/** List a main session's side chats (kind="side", parent = the given id),
+ *  newest first — hydrates the right-panel ask tab's list view. */
+export const ListSideChatsSchema = z.object({ parentSessionId: z.string() });
+export type ListSideChatsInput = z.infer<typeof ListSideChatsSchema>;
 
 /** One user-attached image sent inline with the turn (base64, no data: prefix).
  *  Media types match the Anthropic image-block allowlist (jpeg/png/gif/webp) —
@@ -3124,6 +3139,8 @@ export const RevokeMobileDeviceSchema = z.object({ deviceId: z.string().min(1) }
 export interface RpcMap {
   // Claude
   "claude.startSession": (input: StartSessionInput) => Promise<{ session: Session }>;
+  /** List a main session's side chats (kind="side"), newest first. */
+  "claude.listSideChats": (input: ListSideChatsInput) => Promise<{ sessions: Session[] }>;
   /** Returns the (possibly retitled) session so the renderer can refresh. */
   "claude.sendTurn": (input: SendTurnInput) => Promise<{ session: Session }>;
   "claude.interrupt": (input: InterruptInput) => Promise<void>;
@@ -3527,6 +3544,7 @@ export interface RpcMap {
 export const IPC = {
   // invoke/handle (RPC)
   CLAUDE_START_SESSION: "claude:startSession",
+  CLAUDE_LIST_SIDE_CHATS: "claude:listSideChats",
   CLAUDE_SEND_TURN: "claude:sendTurn",
   CLAUDE_INTERRUPT: "claude:interrupt",
   CLAUDE_APPROVE: "claude:approve",

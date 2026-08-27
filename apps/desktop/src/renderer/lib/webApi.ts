@@ -366,6 +366,7 @@ async function writeImageWeb(input: { dataUrl: string }): Promise<{ ok: boolean;
 
 const claude: Api["claude"] = {
   startSession: (input) => rpc("claude:startSession", input),
+  listSideChats: (input) => rpc("claude:listSideChats", input),
   sendTurn: (input) => rpc("claude:sendTurn", input),
   interrupt: (input) => rpc("claude:interrupt", input),
   approve: (input) => rpc("claude:approve", input),

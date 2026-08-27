@@ -54,7 +54,15 @@ export function ComposerToolbarToggle({ sessionId }: { sessionId: string }) {
           <IconAdjustmentsHorizontal size={18} />
         </Popover.Trigger>
         <Popover.Portal>
-          <Popover.Positioner side="top" align="start">
+          {/* z on the POSITIONER (not just the popup): floating-ui positions
+              it via transform, which creates a stacking context — a z-50 on
+              the popup alone is trapped inside a z-auto positioner and loses
+              to the center pane's z-10 (ThreePaneLayout's <main>). The chips
+              popup is wider than the side-chat's right panel and overflows
+              over the center pane, so without this the Model chip (leftmost)
+              ends up underneath it and unclickable. Same convention as
+              ui/select.tsx's Positioner wrapper. */}
+          <Popover.Positioner side="top" align="start" className="z-50">
             <Popover.Popup
               className={cn(
                 // overflow-visible: let non-portal child dropdowns (Model) escape.

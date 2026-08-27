@@ -206,6 +206,17 @@ function isSessionChatOnScreen(
   return !(s.displayMode === "tabs" && s.centerTabFocus === "editor" && !s.widePanelOpen);
 }
 
+/** True when `sid` belongs to a loaded side chat (any parent's bucket in
+ *  sideChatsByParent). Side chats live outside the left-bar lists, so the
+ *  unread-badge / global-toast machinery must skip them entirely: the ask
+ *  tab is their only surface. */
+function isSideChatSession(sid: string, s: Pick<SessionState, "sideChatsByParent">): boolean {
+  for (const list of Object.values(s.sideChatsByParent)) {
+    if (list?.some((x) => x.id === sid)) return true;
+  }
+  return false;
+}
+
 /** Target for the mobile shell's fullscreen viewer overlay. The web (phone)
  *  shell has no editor column / PlanViewer, so chat-stream touchpoints
  *  (FileLink, TurnFilesCard rows, plan cards) redirect here instead:
@@ -238,7 +249,7 @@ export type Block =
     /** Display names of the tool calls that never got a result
      *  ("dangling-tools" only). */
     pendingToolNames: string[] }
-  | { kind: "attachment"; preview: string; content: string; attachmentKind?: "paste" | "file"; filePath?: string }
+  | { kind: "attachment"; preview: string; content: string; attachmentKind?: "paste" | "file" | "quote"; filePath?: string }
   | {
       kind: "plan";
       /** Stable id for the in-turn live plan block — "current" while the turn
@@ -417,7 +428,7 @@ export interface QueuedPrompt {
 export interface PromptAttachment {
   preview: string;
   content: string;
-  attachmentKind?: "paste" | "file";
+  attachmentKind?: "paste" | "file" | "quote";
   filePath?: string;
 }
 
@@ -963,6 +974,23 @@ export interface SessionState {
    *  only, cleared once the draft is sent or the session is deleted. */
   composerDraftBySession: Record<string, ComposerDraft>;
 
+  /* ── Side chat (right-panel ask tab) ──
+   *  Side chats are full sessions with kind="side" + parentSessionId, hidden
+   *  from every left-bar list (repo queries exclude them). They run fully
+   *  concurrent with their parent — RuntimeManager keys everything by
+   *  sessionId — and are managed here, keyed by their PARENT session id. */
+  /** Loaded side-chat lists, keyed by parent (main) session id. Hydrated on
+   *  demand when the ask tab opens or the active main session changes
+   *  (hydrateSideChats); NOT part of sessionsByProject. Ordered by
+   *  created_at DESC (newest Q&A thread first), matching the repo query. */
+  sideChatsByParent: Record<string, Session[]>;
+  /** The side chat currently open in the ask tab's chat view; null = the
+   *  list view is showing. NOT reset on main-session switch — the panel
+   *  derives "activeSideChat belongs to the current parent" and falls back
+   *  to the list view when it doesn't, so switching threads can't strand
+   *  the user in another thread's chat view. */
+  activeSideChatId: string | null;
+
   /* ── IDE right-panel state ──
    *  Editor state (open files, active file, view mode, expanded tree dirs)
    *  is PER-PROJECT: switching to project B shows B's open files, and
@@ -1174,7 +1202,7 @@ export interface SessionState {
   applySessionTitleUpdate: (sessionId: string, title: string) => void;
   sendPrompt: (
     prompt: string,
-    attachments?: { preview: string; content: string; attachmentKind?: "paste" | "file"; filePath?: string }[],
+    attachments?: { preview: string; content: string; attachmentKind?: "paste" | "file" | "quote"; filePath?: string }[],
     /** Text shown in the user message's text block. Defaults to `prompt`,
      *  but when attachments are present the caller passes just the typed
      *  text (without the inlined attachment content) so the card + text
@@ -1194,6 +1222,10 @@ export interface SessionState {
      *  of dumping the raw kickoff prompt — `prompt` still carries the full
      *  text to the model. Absent for ordinary typed messages. */
     displayBlocks?: Block[],
+    /** Explicit target session. Defaults to the global activeSessionId; the
+     *  side-chat pane passes ITS own sessionId so its sends never leak into
+     *  the foreground main session (and vice versa). */
+    sessionId?: string,
   ) => Promise<boolean>;
   /** Resolves true when the prompt was accepted into the stream (the caller
    *  may then clear the composer), false when a guard blocked it (no session,
@@ -1215,7 +1247,7 @@ export interface SessionState {
     sessionId: string,
     messageId: string,
     newPrompt: string,
-    attachments?: { preview: string; content: string; attachmentKind?: "paste" | "file"; filePath?: string }[],
+    attachments?: { preview: string; content: string; attachmentKind?: "paste" | "file" | "quote"; filePath?: string }[],
     displayText?: string,
     skillsUsed?: string[],
     images?: PromptImage[],
@@ -1406,7 +1438,13 @@ export interface SessionState {
    *  the answers and proceeds). This is the correct path: it does NOT start
    *  a new turn. For sentinel-fallback requests (no Deferred), main composes
    *  the answers into a prompt and starts a follow-up turn itself. */
-  submitQuestion: (answers: UserInputAnswers) => Promise<void>;
+  submitQuestion: (
+    answers: UserInputAnswers,
+    /** Owning session; defaults to the global activeSessionId. The side-chat
+     *  pane passes its own id so answering ITS question doesn't resolve the
+     *  foreground session's pending card. */
+    sessionId?: string,
+  ) => Promise<void>;
   /** Approve or deny the head of the approval queue. Called by the
    *  composer overlay; resolves the matching canUseTool on the main side
    *  and shifts the head off. If the queue has more items, the next one
@@ -1484,7 +1522,7 @@ export interface SessionState {
   /** Read and clear the active session's pending chat-file queue, returning
    *  the paths so the caller can turn them into tags. Returns an empty array
    *  if no active session or queue is empty. */
-  drainChatFileQueue: () => string[];
+  drainChatFileQueue: (sessionId?: string) => string[];
 
   /** Enqueue a DOM element picked from the embedded browser to be added to the
    *  active session's composer as an element tag. The owning ChatPane drains
@@ -1493,7 +1531,7 @@ export interface SessionState {
   /** Read and clear the active session's pending chat-element queue, returning
    *  the elements so the caller can turn them into tags. Empty array if no
    *  active session or queue is empty. */
-  drainChatElementQueue: () => PickedElement[];
+  drainChatElementQueue: (sessionId?: string) => PickedElement[];
 
   /** Append a prepared prompt to a session's FIFO queue. Called by the
    *  composer's "排队" action while the session is busy. Generates the id;
@@ -1532,6 +1570,24 @@ export interface SessionState {
   /* ── IDE right-panel actions ── */
   /** Switch the active right-panel tab. Persists to settings. */
   setRightPanelTab: (tab: RightPanelTab) => void;
+
+  /* ── Side chat (right-panel ask tab) actions ── */
+  /** Reveal the right panel and focus the sidechat tab (the ask-tab entry
+   *  point behind the rail button / global shortcut). Does NOT create a
+   *  session — creation is an explicit "+ 新问答" in the panel's list view. */
+  openSideChatPanel: () => void;
+  /** Fetch a main session's side chats into sideChatsByParent (idempotent
+   *  refresh — also re-syncs titles/status after background changes). */
+  hydrateSideChats: (parentSessionId: string) => Promise<void>;
+  /** Create a fresh side chat under the ACTIVE main session, enter its chat
+   *  view. Reuses the composer's global config slots (the user's current
+   *  model/provider), mirroring sendPrompt's send-model guard. */
+  createSideChat: () => Promise<void>;
+  /** Enter a side chat's chat view (lazy-loads its persisted history). */
+  selectSideChat: (sessionId: string) => Promise<void>;
+  /** Leave the chat view, back to the ask tab's list view. */
+  closeSideChatView: () => void;
+
   /** Replace a single project's saved terminal quick-commands. Persists the
    *  whole per-project map (JSON-encoded) to settings. Both the terminal
    *  commands menu (quick-add) and the settings -> terminal panel call this.
@@ -3494,6 +3550,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   chatElementQueueBySession: {},
   promptQueueBySession: {},
   composerDraftBySession: {},
+  // Side chat (right-panel ask tab). Lists hydrate on demand per parent.
+  sideChatsByParent: {},
+  activeSideChatId: null,
   // IDE right-panel. Editor state is per-project (keyed by projectId);
   // init() hydrates from the settings table. rightPanelTab / ideEditorMode
   // are global user prefs.
@@ -4221,6 +4280,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     const model = overrides?.model ?? get().model;
     const { session } = await api.claude.startSession({
       projectId,
+      kind: "chat",
       providerId: overrides?.providerId ?? get().providerId,
       model: model !== "default" ? model : undefined,
       effort: get().effort,
@@ -4828,6 +4888,18 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     // Find the session's projectId from whichever cache holds it. The main
     // process already persisted the title, so we only patch in-memory lists.
     set((s) => {
+      // Side chats live in the ask tab's per-parent buckets, not the
+      // left-bar caches — patch those and be done.
+      for (const [parent, list] of Object.entries(s.sideChatsByParent)) {
+        if (list?.some((x) => x.id === sessionId)) {
+          return {
+            sideChatsByParent: {
+              ...s.sideChatsByParent,
+              [parent]: list.map((x) => (x.id === sessionId ? { ...x, title } : x)),
+            },
+          };
+        }
+      }
       let projectId: string | undefined;
       for (const pid of Object.keys(s.sessionsByProject)) {
         if (s.sessionsByProject[pid]?.some((x) => x.id === sessionId)) {
@@ -4875,8 +4947,8 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     });
   },
 
-  sendPrompt: async (prompt, attachments, displayText, skillsUsed, images, displayBlocks) => {
-    const sessionId = get().activeSessionId;
+  sendPrompt: async (prompt, attachments, displayText, skillsUsed, images, displayBlocks, sessionIdArg) => {
+    const sessionId = sessionIdArg ?? get().activeSessionId;
     if (!sessionId) return false;
     // An image-only turn (no typed text) is valid — the images are the prompt.
     if (!prompt.trim() && !(images && images.length > 0)) return false;
@@ -5025,6 +5097,22 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         return;
       }
       set((s) => {
+        // Side chats never touch the left-bar caches — patch the ask tab's
+        // per-parent bucket instead (the row carries the first-question
+        // rewrite of the "Quick ask" placeholder title). List order is
+        // created_at, so replace-in-place rather than unshift.
+        if (updated.kind === "side") {
+          const parent = updated.parentSessionId;
+          if (!parent) return {};
+          const list = s.sideChatsByParent[parent];
+          if (!list) return {};
+          return {
+            sideChatsByParent: {
+              ...s.sideChatsByParent,
+              [parent]: list.map((x) => (x.id === updated.id ? updated : x)),
+            },
+          };
+        }
         const pid = updated.projectId;
         const prevList = s.sessionsByProject[pid] ?? [];
         // Sending a message makes this session the most recently active, so move
@@ -5205,6 +5293,18 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         return;
       }
       set((s) => {
+        // Side chats patch the ask tab's per-parent bucket (see sendPrompt).
+        if (updated.kind === "side") {
+          const parent = updated.parentSessionId;
+          const list = parent ? s.sideChatsByParent[parent] : undefined;
+          if (!parent || !list) return {};
+          return {
+            sideChatsByParent: {
+              ...s.sideChatsByParent,
+              [parent]: list.map((x) => (x.id === updated.id ? updated : x)),
+            },
+          };
+        }
         const pid = updated.projectId;
         const prevList = s.sessionsByProject[pid] ?? [];
         // Sending a message makes this session the most recently active, so move
@@ -5302,6 +5402,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     // terminal and blocking events count: the user actually needs to act or
     // the result is ready.
     const bumpUnread = () => {
+      if (isSideChatSession(sid, get())) return;
       if (isSessionChatOnScreen(sid, get())) return;
       set((s) => ({
         unreadBySession: { ...s.unreadBySession, [sid]: (s.unreadBySession[sid] ?? 0) + 1 },
@@ -5312,6 +5413,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     // handles OS notifications instead. Toasts are always supplemented by the
     // badge (bumpUnread), so the user sees both the dot + the detail card.
     const pushToast = (kind: "info" | "warning" | "error", title: string, body?: string) => {
+      if (isSideChatSession(sid, get())) return;
       if (isSessionChatOnScreen(sid, get())) return;
       if (!get().isWindowFocused) return;
       useToastStore.getState().push({ kind, title, body, sessionId: sid });
@@ -5465,6 +5567,26 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     // their buckets are (re)fetched wholesale by loadSessions/selectProject.
     if (e.type === "session.changed") {
       const entry = e.session;
+      // Side chats never belong in the left-bar caches. Main-side creation
+      // and title rewrites don't broadcast for them, but a patch arriving
+      // through some other path must not leak a side row into the lists —
+      // route it to the ask tab's per-parent bucket instead.
+      if (entry.kind === "side") {
+        set((s) => {
+          const parent = entry.parentSessionId;
+          const list = parent ? s.sideChatsByParent[parent] : undefined;
+          if (!parent || !list) return {};
+          return {
+            sideChatsByParent: {
+              ...s.sideChatsByParent,
+              [parent]: list.some((x) => x.id === entry.id)
+                ? list.map((x) => (x.id === entry.id ? { ...x, ...entry } : x))
+                : [materializeSessionEntry(entry), ...list],
+            },
+          };
+        });
+        return;
+      }
       set((s) => {
         const patch: Partial<SessionState> = {};
         let touched = false;
@@ -7110,8 +7232,8 @@ export const useSessionStore = create<SessionState>((set, get) => ({
    *  composes the answers into a follow-up prompt. Either way we clear
    *  the local pending card; if the IPC fails the card stays so the user
    *  can retry. */
-  submitQuestion: async (answers) => {
-    const sessionId = get().activeSessionId;
+  submitQuestion: async (answers, sessionIdArg) => {
+    const sessionId = sessionIdArg ?? get().activeSessionId;
     if (!sessionId) return;
     const pending = get().pendingQuestionBySession[sessionId];
     if (!pending) return;
@@ -7134,11 +7256,13 @@ export const useSessionStore = create<SessionState>((set, get) => ({
    *  we shift the head off — a failed IPC leaves the card in place so the
    *  user can retry instead of thinking they approved something they didn't. */
   decideApproval: async (requestId, granted, always) => {
-    const sessionId = get().activeSessionId;
-    if (!sessionId) return;
     // Find the head matching this id (defensive — UI always passes head[0]).
     const head = get().pendingApprovals.find((p) => p.requestId === requestId);
     if (!head) return;
+    // Resolve the owning session from the request itself — with the side chat
+    // running concurrently the foreground activeSessionId may be a DIFFERENT
+    // session than the one whose approval is being answered.
+    const sessionId = head.sessionId;
     try {
       await api.claude.approve({ sessionId, requestId, granted, always });
     } catch (err) {
@@ -7162,10 +7286,19 @@ export const useSessionStore = create<SessionState>((set, get) => ({
    *  as the reason. Clears the pending card on success; on failure the card
    *  stays so the user can retry. */
   submitPlanApproval: async (requestId, approved, editedPlan, reason, feedback) => {
-    const sessionId = get().activeSessionId;
-    if (!sessionId) return;
-    const pending = get().pendingPlanApprovalBySession[sessionId];
-    if (!pending || pending.requestId !== requestId) return;
+    // Look up by requestId across ALL per-session buckets — the pending plan
+    // may belong to the side chat while the foreground active session is its
+    // parent (or vice versa).
+    let sessionId: string | null = null;
+    let pending: PlanApprovalRequestEvent | undefined;
+    for (const [sid, p] of Object.entries(get().pendingPlanApprovalBySession)) {
+      if (p.requestId === requestId) {
+        sessionId = sid;
+        pending = p;
+        break;
+      }
+    }
+    if (!pending || !sessionId) return;
     try {
       await api.claude.respondPlanApproval({ sessionId, requestId, approved, editedPlan, reason, feedback });
       set((s) => {
@@ -7429,8 +7562,8 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     });
   },
 
-  drainChatFileQueue: () => {
-    const sessionId = get().activeSessionId;
+  drainChatFileQueue: (sessionIdArg?: string) => {
+    const sessionId = sessionIdArg ?? get().activeSessionId;
     if (!sessionId) return [];
     const queued = get().chatFileQueueBySession[sessionId];
     if (!queued || queued.length === 0) return [];
@@ -7455,8 +7588,8 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     });
   },
 
-  drainChatElementQueue: () => {
-    const sessionId = get().activeSessionId;
+  drainChatElementQueue: (sessionIdArg?: string) => {
+    const sessionId = sessionIdArg ?? get().activeSessionId;
     if (!sessionId) return [];
     const queued = get().chatElementQueueBySession[sessionId];
     if (!queued || queued.length === 0) return [];
@@ -7545,8 +7678,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     // Reuse the normal send path: it appends the user message, flips busy,
     // and fires sendTurn. If that turn later ends with another queued item,
     // its turn.done handler will call drainPromptQueueIfIdle again — so the
-    // whole queue drains one item per turn, in order.
-    void s.sendPrompt(head.prompt, head.attachments, head.displayText, head.skillNames, head.images, head.displayBlocks);
+    // whole queue drains one item per turn, in order. Explicit sessionId so
+    // a background/side session's queue never drains into the foreground one.
+    void s.sendPrompt(head.prompt, head.attachments, head.displayText, head.skillNames, head.images, head.displayBlocks, sessionId);
   },
 
   sendQueuedPromptNow: async (sessionId, id) => {
@@ -7568,7 +7702,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     // Reuse the normal send path. sendPrompt clears the interruptedBySession
     // sentinel, so the old turn's late turn.done{interrupted} is filtered by
     // the existing race guard (sendPrompt / editAndResendMessage rely on it).
-    await get().sendPrompt(item.prompt, item.attachments, item.displayText, item.skillNames, item.images, item.displayBlocks);
+    await get().sendPrompt(item.prompt, item.attachments, item.displayText, item.skillNames, item.images, item.displayBlocks, sessionId);
   },
 
   reorderPromptQueue: (sessionId, newOrder) => {
@@ -7618,6 +7752,77 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       console.error("setting.set(rightPanelTab) failed:", err);
     });
   },
+
+  openSideChatPanel: () => {
+    set({ rightOpen: true });
+    get().setRightPanelTab("sidechat");
+    // Refresh the current main session's list if we have one (cheap; keeps
+    // titles/status fresh after restarts or background changes).
+    const parent = get().activeSessionId;
+    if (parent) void get().hydrateSideChats(parent);
+  },
+
+  hydrateSideChats: async (parentSessionId) => {
+    try {
+      const { sessions } = await api.claude.listSideChats({ parentSessionId });
+      set((s) => ({ sideChatsByParent: { ...s.sideChatsByParent, [parentSessionId]: sessions } }));
+    } catch (err) {
+      console.error("listSideChats failed:", err);
+    }
+  },
+
+  createSideChat: async () => {
+    const s = get();
+    const parentSessionId = s.activeSessionId;
+    if (!parentSessionId) return;
+    // Same send-model guard as sendPrompt: "default" resolves to the first
+    // configured model; nothing configured → raise the config dialog instead
+    // of silently using the provider's internal default.
+    const resolvedModel = resolveSendModel(s);
+    if (!resolvedModel) {
+      set({ modelConfigPromptOpen: true });
+      return;
+    }
+    // The parent main session's row carries the owning projectId (FK is
+    // NOT NULL); resolve it from the loaded caches.
+    const parentRow =
+      s.sessionsByProject[s.activeProjectId ?? ""]?.find((x) => x.id === parentSessionId) ??
+      s.pinnedSessions.find((x) => x.id === parentSessionId);
+    if (!parentRow) return;
+    try {
+      const { session } = await api.claude.startSession({
+        projectId: parentRow.projectId,
+        kind: "side",
+        parentSessionId,
+        providerId: s.providerId,
+        model: resolvedModel.model !== "default" ? resolvedModel.model : undefined,
+        effort: s.effort,
+        permissionMode: s.permissionMode,
+        customModelId: resolvedModel.customModelId,
+      });
+      set((st) => ({
+        sideChatsByParent: {
+          ...st.sideChatsByParent,
+          [parentSessionId]: [session, ...(st.sideChatsByParent[parentSessionId] ?? [])],
+        },
+        activeSideChatId: session.id,
+        // Locally-created: empty bucket IS the full history (same as startSession).
+        messagesBySession: { ...st.messagesBySession, [session.id]: [] },
+        hasMoreMessagesBySession: { ...st.hasMoreMessagesBySession, [session.id]: false },
+        historyLoadedBySession: { ...st.historyLoadedBySession, [session.id]: true },
+      }));
+    } catch (err) {
+      console.error("createSideChat failed:", err);
+    }
+  },
+
+  selectSideChat: async (sessionId) => {
+    set({ activeSideChatId: sessionId });
+    // Lazy-load persisted history (no-op when already hydrated / live).
+    await get().prefetchSessionMessages(sessionId);
+  },
+
+  closeSideChatView: () => set({ activeSideChatId: null }),
 
   setCustomCommandsByProject: (projectId, commands) => {
     set((s) => ({

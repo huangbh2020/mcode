@@ -875,7 +875,9 @@ function AttachmentCard({
 }: {
   preview: string;
   content: string;
-  attachmentKind?: "paste" | "file";
+  /** "quote" = a side-chat's reference to its parent session's latest output
+   *  — rendered like a paste (inline content block, popover to expand). */
+  attachmentKind?: "paste" | "file" | "quote";
   filePath?: string;
 }) {
   const [open, setOpen] = useState(false);

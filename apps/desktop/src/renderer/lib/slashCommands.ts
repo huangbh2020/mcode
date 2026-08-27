@@ -33,8 +33,12 @@ export type { SkillSource } from "@contracts/ipc";
  *  - `browser`: fills the editor with a browser-control prompt template so the
  *    user can fill in a URL + intent (snapshot / click / screenshot / device),
  *    then send. Surfaces the agent browser feature to users who otherwise
- *    wouldn't know it exists. */
-export type BuiltInCommandKind = "compact" | "init" | "browser";
+ *    wouldn't know it exists.
+ *  - `sidechat`: opens the right-panel quick-ask tab (pure navigation — no
+ *    prompt is inserted; the composer is left empty). Available even while a
+ *    turn is running, which is the feature's core scenario: ask about the
+ *    streaming output without interrupting it. */
+export type BuiltInCommandKind = "compact" | "init" | "browser" | "sidechat";
 
 export interface BuiltInCommand {
   /** Command name without the leading slash, e.g. "compact". */
@@ -66,6 +70,11 @@ const BUILT_IN_COMMAND_DEFS: Array<
     name: "browser",
     descriptionKey: "lib.slash.browser",
     kind: "browser",
+  },
+  {
+    name: "sidechat",
+    descriptionKey: "lib.slash.sidechat",
+    kind: "sidechat",
   },
 ];
 

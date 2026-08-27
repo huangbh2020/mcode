@@ -199,23 +199,26 @@ export class ApprovalBridge {
 
   /* ── cleanup ── */
 
-  /** Reject all pending requests for a session (called on interrupt / dispose). */
+  /** Reject all pending requests for a session (called on interrupt / dispose).
+   *  Scoped to the given session — with concurrent sessions (e.g. a side chat
+   *  running next to its parent) a blanket clear would kill the OTHER
+   *  session's pending prompts. */
   rejectAll(sessionId: string): void {
-    // We don't actually have sessionId-keyed lookups (requests are keyed by requestId).
-    // But we can reject everything still pending — the provider should handle the
-    // rejection gracefully (return deny to canUseTool).
     for (const [id, p] of this.pendingApprovals) {
+      if (p.sessionId !== sessionId) continue;
       p.reject(new Error("Session cancelled"));
+      this.pendingApprovals.delete(id);
     }
     for (const [id, p] of this.pendingUserInputs) {
+      if (p.sessionId !== sessionId) continue;
       p.reject(new Error("Session cancelled"));
+      this.pendingUserInputs.delete(id);
     }
     for (const [id, p] of this.pendingPlanApprovals) {
+      if (p.sessionId !== sessionId) continue;
       p.reject(new Error("Session cancelled"));
+      this.pendingPlanApprovals.delete(id);
     }
-    this.pendingApprovals.clear();
-    this.pendingUserInputs.clear();
-    this.pendingPlanApprovals.clear();
     // Drop per-session always-allow + mode state so a reused session id
     // (shouldn't happen, but defensive) starts clean.
     this.alwaysAllowedTools.delete(sessionId);

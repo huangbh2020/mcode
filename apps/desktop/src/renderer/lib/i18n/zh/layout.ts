@@ -88,6 +88,20 @@ export const zh = {
   "layout.openBrowser": "打开浏览器",
   "layout.closeSidebarBrowser": "关闭侧边栏浏览器",
 
+  /* ── side chat (right-panel ask tab) ── */
+  "layout.tabSideChat": "快速问答",
+  "sideChat.open": "打开快速问答（不影响当前会话）",
+  "sideChat.newChat": "新问答",
+  "sideChat.parentPrefix": "主会话",
+  "sideChat.noMainSession": "先打开一个会话再提问",
+  "sideChat.emptyTitle": "还没有问答",
+  "sideChat.emptyHint": "看不懂主会话输出的某个知识点？在这里提问，主会话照常运行，互不影响。",
+  "sideChat.backToList": "返回问答列表",
+  "sideChat.parentDeleted": "主会话已删除",
+  "sideChat.goToParent": "跳到关联的主会话",
+  "sideChat.titlePlaceholder": "新问答",
+  "sideChat.loading": "加载问答…",
+
   /* ── center pane ── */
   "layout.loadingPlan": "加载计划…",
   "layout.loadingEditor": "加载编辑器…",

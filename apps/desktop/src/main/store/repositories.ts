@@ -192,6 +192,8 @@ interface SessionRow {
   project_id: string;
   provider_id: string;
   claude_session_id: string | null;
+  kind: string;
+  parent_session_id: string | null;
   title: string;
   status: string;
   model: string;
@@ -216,6 +218,8 @@ function rowToSession(r: SessionRow): Session {
     projectId: r.project_id,
     providerId: r.provider_id ?? "claude-sdk",
     claudeSessionId: r.claude_session_id,
+    kind: r.kind === "side" ? "side" : "chat",
+    parentSessionId: r.parent_session_id ?? null,
     title: r.title,
     status: r.status as Session["status"],
     model: r.model,
@@ -239,13 +243,15 @@ export const SessionRepo = {
   create(s: Session): void {
     getDb().run(
       `INSERT INTO sessions
-       (id, project_id, provider_id, claude_session_id, title, status, model, effort, permission_mode, custom_model_id, archived, pinned_at, context_snapshot, todos, subagents, plan_draft, turn_files, usage_history, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (id, project_id, provider_id, claude_session_id, kind, parent_session_id, title, status, model, effort, permission_mode, custom_model_id, archived, pinned_at, context_snapshot, todos, subagents, plan_draft, turn_files, usage_history, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         v(s.id),
         v(s.projectId),
         v(s.providerId),
         v(s.claudeSessionId),
+        v(s.kind),
+        v(s.parentSessionId),
         v(s.title),
         v(s.status),
         v(s.model),
@@ -285,7 +291,9 @@ export const SessionRepo = {
     opts?: { limit?: number; offset?: number; archived?: boolean },
   ): Session[] {
     const db = getDb();
-    const where = ["project_id = ?"];
+    // Side-chat sessions are managed by the right-panel ask tab keyed by
+    // parent session — never by the left-bar project list (any mode).
+    const where = ["project_id = ?", "kind = 'chat'"];
     const params: BindValue[] = [v(projectId)];
     if (opts?.archived !== undefined) {
       where.push("archived = ?");
@@ -321,7 +329,7 @@ export const SessionRepo = {
    *  sessions so it lines up with what the paginated active list returns. */
   countByProject(projectId: string, archived?: boolean): number {
     const db = getDb();
-    const where = ["project_id = ?"];
+    const where = ["project_id = ?", "kind = 'chat'"];
     const params: BindValue[] = [v(projectId)];
     if (archived !== undefined) {
       where.push("archived = ?");
@@ -345,7 +353,7 @@ export const SessionRepo = {
   listPinned(): Session[] {
     const db = getDb();
     const stmt = db.prepare(
-      "SELECT * FROM sessions WHERE archived = 0 AND pinned_at IS NOT NULL ORDER BY pinned_at DESC",
+      "SELECT * FROM sessions WHERE archived = 0 AND pinned_at IS NOT NULL AND kind = 'chat' ORDER BY pinned_at DESC",
     );
     const out: Session[] = [];
     while (stmt.step()) out.push(rowToSession(stmt.getAsObject() as unknown as SessionRow));
@@ -362,7 +370,7 @@ export const SessionRepo = {
     const params: BindValue[] = [v(q)];
     const limit = opts?.limit ?? 30;
     params.push(v(limit));
-    const sql = `SELECT * FROM sessions WHERE archived = 0 AND title LIKE ? ORDER BY updated_at DESC, created_at DESC LIMIT ?`;
+    const sql = `SELECT * FROM sessions WHERE archived = 0 AND kind = 'chat' AND title LIKE ? ORDER BY updated_at DESC, created_at DESC LIMIT ?`;
     const stmt = db.prepare(sql);
     stmt.bind(params);
     const out: Session[] = [];
@@ -378,7 +386,7 @@ export const SessionRepo = {
   listStale(cutoffMs: number): Session[] {
     const db = getDb();
     const stmt = db.prepare(
-      "SELECT * FROM sessions WHERE archived = 0 AND pinned_at IS NULL AND updated_at < ?",
+      "SELECT * FROM sessions WHERE archived = 0 AND pinned_at IS NULL AND kind = 'chat' AND updated_at < ?",
     );
     stmt.bind([v(cutoffMs)]);
     const out: Session[] = [];
@@ -409,7 +417,7 @@ export const SessionRepo = {
     const stmt = db.prepare(
       `SELECT * FROM sessions
        WHERE project_id = ? AND archived = 0 AND pinned_at IS NULL
-         AND status = 'idle' AND title = 'New session'
+         AND kind = 'chat' AND status = 'idle' AND title = 'New session'
        ORDER BY updated_at DESC, created_at DESC LIMIT 1`,
     );
     stmt.bind([v(projectId)]);
@@ -417,6 +425,23 @@ export const SessionRepo = {
     const row = found ? (stmt.getAsObject() as unknown as SessionRow) : undefined;
     stmt.free();
     return row ? rowToSession(row) : undefined;
+  },
+
+  /** List a main session's side chats (kind='side', parent = the given id),
+   *  newest first. Powers the right-panel ask tab's list view. Unlike the
+   *  left-bar list this orders by `created_at` — side chats are immutable
+   *  Q&A threads, so creation order is the natural reading order (updated_at
+   *  would shuffle the list whenever an old thread's status flips). */
+  listSideByParent(parentSessionId: string): Session[] {
+    const db = getDb();
+    const stmt = db.prepare(
+      "SELECT * FROM sessions WHERE kind = 'side' AND parent_session_id = ? ORDER BY created_at DESC",
+    );
+    stmt.bind([v(parentSessionId)]);
+    const out: Session[] = [];
+    while (stmt.step()) out.push(rowToSession(stmt.getAsObject() as unknown as SessionRow));
+    stmt.free();
+    return out;
   },
 
   /** Persist claude's own session id so future turns can --resume. */
@@ -552,9 +577,17 @@ export const SessionRepo = {
   },
 
   /** Hard-delete a session. Child messages cascade-delete via
-   *  messages.session_id ON DELETE CASCADE. */
+   *  messages.session_id ON DELETE CASCADE. Deleting a MAIN session keeps its
+   *  side chats alive (their Q&A history has standalone value) — their
+   *  parent_session_id is nulled here so the UI shows「主会话已删除」instead of
+   *  a dangling pointer. */
   delete(id: string): void {
-    getDb().run("DELETE FROM sessions WHERE id = ?", [v(id)]);
+    const db = getDb();
+    db.run("UPDATE sessions SET parent_session_id = NULL, updated_at = ? WHERE parent_session_id = ?", [
+      v(Date.now()),
+      v(id),
+    ]);
+    db.run("DELETE FROM sessions WHERE id = ?", [v(id)]);
     persist();
   },
 

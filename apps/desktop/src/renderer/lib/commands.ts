@@ -45,6 +45,7 @@ import {
   IconLayoutSidebarRightExpand,
   IconTerminal2,
   IconWorld,
+  IconMessageChatbot,
   IconFolder,
   IconGitBranch,
   IconListDetails,
@@ -339,6 +340,20 @@ const STATIC_COMMANDS: StaticCommandDef[] = [
       // files) if it's already showing. The PC-fullscreen overlay is reached
       // from inside the sidebar via its own "展开为 PC 全屏" button.
       s.setRightPanelTab(s.rightPanelTab === "browser" ? "files" : "browser");
+    },
+  },
+  {
+    id: "sidechat.open",
+    labelKey: "lib.commands.openSideChat",
+    group: "布局",
+    keywords: ["sidechat", "quick ask", "question", "ask", "问答", "提问", "快速问答"],
+    icon: IconMessageChatbot,
+    defaultAccelerator: DEFAULT_SHORTCUTS["sidechat.open"],
+    perform: (s) => {
+      // Reveal the right panel + focus the ask tab. No session is created —
+      // creation is the explicit "+ 新问答" action inside the panel, so the
+      // shortcut never litters hidden sessions on casual presses.
+      s.openSideChatPanel();
     },
   },
   {

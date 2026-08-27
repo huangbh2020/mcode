@@ -4,6 +4,7 @@ import {
   IconGitBranch,
   IconWorld,
   IconListDetails,
+  IconMessageChatbot,
   IconArrowsMaximize,
   IconArrowsMinimize,
 } from "@renderer/lib/icons.js";
@@ -13,6 +14,7 @@ import { FilesPanel } from "@renderer/components/ide/FilesPanel.js";
 import { GitPanel } from "@renderer/components/ide/GitPanel.js";
 import { TurnFlowPanel } from "@renderer/components/ide/TurnFlowPanel.js";
 import { BrowserPanel } from "@renderer/components/browser/BrowserPanel.js";
+import { SideChatPanel } from "@renderer/components/chat/SideChatPanel.js";
 import { useI18n } from "@renderer/lib/i18n/index.js";
 
 /** Right panel: a horizontal icon rail docked at the top + a main panel
@@ -95,6 +97,14 @@ export function RightPanel() {
         >
           <IconListDetails size={16} className="shrink-0" />
         </RailButton>
+        {/* Side chat — quick Q&A beside the running main session. */}
+        <RailButton
+          active={tab === "sidechat"}
+          onClick={() => setTab("sidechat")}
+          title={t("layout.tabSideChat") + hintFor("sidechat.open")}
+        >
+          <IconMessageChatbot size={16} className="shrink-0" />
+        </RailButton>
         {/* Wide-panel (3:7) mode - hide the left sidebar + center editor and
             split the workspace into this right panel (7/10) + the chat column
             (3/10). Toggled here, via the command palette / shortcut, or the
@@ -128,6 +138,7 @@ export function RightPanel() {
         {tab === "files" && <FilesPanel />}
         {tab === "git" && <GitPanel />}
         {tab === "turns" && <TurnFlowPanel />}
+        {tab === "sidechat" && <SideChatPanel />}
         {tab === "browser" && <BrowserPanel mode="sidebar" />}
       </div>
     </div>

@@ -2,6 +2,7 @@ import type { IpcMain } from "electron";
 import {
   IPC,
   StartSessionSchema,
+  ListSideChatsSchema,
   SendTurnSchema,
   InterruptSchema,
   ApproveSchema,
@@ -54,6 +55,13 @@ export function registerClaudeHandlers(ipcMain: IpcMain): void {
     return { session };
   });
 
+  // Hydrate the right-panel ask tab's list view: a main session's side
+  // chats, newest first. Read-only, no schema beyond the parent id.
+  ipcMain.handle(IPC.CLAUDE_LIST_SIDE_CHATS, (_evt, raw) => {
+    const input = ListSideChatsSchema.parse(raw);
+    return { sessions: SessionRepo.listSideByParent(input.parentSessionId) };
+  });
+
   ipcMain.handle(IPC.CLAUDE_SEND_TURN, async (_evt, raw) => {
     const input = SendTurnSchema.parse(raw);
     const session = SessionRepo.get(input.sessionId);
@@ -61,16 +69,23 @@ export function registerClaudeHandlers(ipcMain: IpcMain): void {
     const project = ProjectRepo.get(session.projectId);
     if (!project) throw new Error(`project not found for session ${input.sessionId}`);
 
-		    // Auto-title from the first user message, if the title is still the default.
-		    let updated = session;
-		    const isFirstMessage = session.title === "New session" && input.prompt.trim().length > 0;
-		    if (isFirstMessage) {
-		      const title = input.prompt.trim().slice(0, 40) + (input.prompt.trim().length > 40 ? "…" : "");
-		      SessionRepo.updateTitle(session.id, title);
-		      updated = { ...session, title };
-		      // Keep connected mobile clients' session lists in sync.
-		      broadcastSessionChanged(updated);
-		    }
+	    // Auto-title from the first user message, if the title is still the default.
+	    // Side chats rewrite their own "Quick ask" placeholder (same 40-char
+	    // truncation) but DON'T broadcast the change — they're invisible to the
+	    // left-bar/mobile lists by design; the ask tab patches its own list
+	    // from this handler's return value instead.
+	    let updated = session;
+	    const titlePlaceholder = session.kind === "side" ? "Quick ask" : "New session";
+	    const isFirstMessage = session.title === titlePlaceholder && input.prompt.trim().length > 0;
+	    if (isFirstMessage) {
+      const title = input.prompt.trim().slice(0, 40) + (input.prompt.trim().length > 40 ? "…" : "");
+      SessionRepo.updateTitle(session.id, title);
+      updated = { ...session, title };
+      if (session.kind !== "side") {
+	      // Keep connected mobile clients' session lists in sync.
+	      broadcastSessionChanged(updated);
+      }
+	    }
 	    // Apply per-turn overrides from the renderer's current UI state. The
 	    // renderer persists model/effort/permissionMode/customModelId to the
 	    // session row via fire-and-forget `updateSettings` calls, so the row
@@ -113,6 +128,12 @@ export function registerClaudeHandlers(ipcMain: IpcMain): void {
     // placeholder. Fire-and-forget - never blocks the turn, and if the feature
     // is disabled (or fails) the placeholder title above already covers the
     // UI. See titleGen.ts for the full rationale.
+    // Background auto-title generation: on the first user message, fire a
+    // one-shot LLM call to produce a short Chinese title and overwrite the
+    // placeholder. Runs for main sessions AND side chats (both rewrite their
+    // own placeholder above; the truncated text is the fallback when the
+    // feature is off or fails). Fire-and-forget - never blocks the turn. See
+    // titleGen.ts for the full rationale.
     if (isFirstMessage) {
       void generateSessionTitle(updated, input.prompt).catch((err) =>
         log.warn(`title generation failed for ${session.id}: ${(err as Error).message}`),
