@@ -138,6 +138,9 @@ function migrate(database: Database): void {
   // Per-turn modified-files snapshot (the "本轮修改" card). JSON blob of
   // TurnFileEntry[]; null after a rewind or for sessions that never edited.
   addColumnIfMissing(database, "sessions", "turn_files", "TEXT");
+  // User-placed message bookmarks (capsule + timeline markers). JSON blob of
+  // SessionBookmark[]; null for sessions with no bookmarks.
+  addColumnIfMissing(database, "sessions", "bookmarks", "TEXT");
   // Per-turn token/cost history. JSON array of TurnUsageRecord; appended at
   // each turn-end so the context-stats history popover survives restart.
   addColumnIfMissing(database, "sessions", "usage_history", "TEXT");

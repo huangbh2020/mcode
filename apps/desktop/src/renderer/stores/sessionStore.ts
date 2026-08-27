@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { Project, Session, MessageRecord, SessionTodoItem, SessionPlanDraft } from "@contracts/session";
+import type { Project, Session, MessageRecord, SessionTodoItem, SessionPlanDraft, SessionBookmark } from "@contracts/session";
 import type {
   RuntimeEvent,
   PermissionMode,
@@ -946,6 +946,14 @@ export interface SessionState {
    *  `turn.rewound` for the same session. */
   turnFilesBySession: Record<string, TurnFileEntry[]>;
 
+  /** Per-session user-placed message bookmarks (selection → "添加书签").
+   *  Persisted on the session row; hydrated on select/open so the capsule
+   *  segment + timeline markers survive a reopen. Per-session for the same
+   *  tab-isolation reason as turnFilesBySession. Stale entries (their
+   *  message was truncated away by an edit-resend) are kept until the user
+   *  deletes them — the popover renders them greyed out. */
+  bookmarksBySession: Record<string, SessionBookmark[]>;
+
   /** Per-session ephemeral queue of absolute file paths the user wants added
    *  to the composer as file-reference tags (e.g. from the file-tree context
    *  menu's "Add to chat" action). The owning ChatPane drains its session's
@@ -1196,6 +1204,22 @@ export interface SessionState {
    *  the cached row with the server-fresh copy, then re-sorts the project's
    *  loaded window so pinned rows float to the top immediately. */
   setSessionPinned: (id: string, pinned: boolean) => Promise<void>;
+  /** Add a message bookmark (message-level anchor + display excerpt).
+   *  Optimistically updates the per-session bucket (the fly-to-capsule
+   *  animation needs instant feedback), persists the full list via IPC, and
+   *  rolls the bucket back if the write fails. */
+  addBookmark: (
+    sessionId: string,
+    bookmark: { messageId: string; excerpt: string; role: "user" | "assistant" },
+  ) => Promise<void>;
+  /** Remove a bookmark by id (same optimistic-then-persist flow as
+   *  {@link addBookmark}). */
+  removeBookmark: (sessionId: string, bookmarkId: string) => Promise<void>;
+  /** Set a bookmark's user-defined display name. Empty/whitespace title
+   *  clears the rename (lists fall back to the excerpt). The excerpt is
+   *  never rewritten — it anchors the jump's precise text highlight. Same
+   *  optimistic-then-persist flow as {@link removeBookmark}. */
+  renameBookmark: (sessionId: string, bookmarkId: string, title: string) => Promise<void>;
   /** Apply a title update pushed from main (auto title-gen). Patches the
    *  in-memory session lists directly - the DB row is already updated by the
    *  main process, so no IPC round-trip. Mirrors renameSession's patching. */
@@ -1767,6 +1791,8 @@ const EMPTY_SESSIONS: Session[] = [];
 export const EMPTY_SUBAGENTS: SubagentSnapshot[] = [];
 /** Stable empty usage-history reference (selector must return a stable array). */
 export const EMPTY_USAGE: TurnUsageRecord[] = [];
+/** Stable empty bookmark-list reference (selector-stability rule). */
+export const EMPTY_BOOKMARKS: SessionBookmark[] = [];
 /** Stable cleared-plan reference — used both as the initial state and as
  *  the "not in plan mode" placeholder returned by selectors. */
 export const EMPTY_PLAN: PlanDraft = { plan: "", phase: "cleared" };
@@ -2127,6 +2153,7 @@ function materializeSessionEntry(entry: SessionListEntry): Session {
     planDraft: null,
     usageHistory: null,
     turnFiles: null,
+    bookmarks: null,
   };
 }
 
@@ -2224,6 +2251,8 @@ function applySessionDeletedState(s: SessionState, id: string): Partial<SessionS
   delete pendingQuestionBySession[id];
   const turnFilesBySession = { ...s.turnFilesBySession };
   delete turnFilesBySession[id];
+  const bookmarksBySession = { ...s.bookmarksBySession };
+  delete bookmarksBySession[id];
   const chatFileQueueBySession = { ...s.chatFileQueueBySession };
   delete chatFileQueueBySession[id];
   const chatElementQueueBySession = { ...s.chatElementQueueBySession };
@@ -2271,6 +2300,7 @@ function applySessionDeletedState(s: SessionState, id: string): Partial<SessionS
     subagentsBySession,
     pendingQuestionBySession,
     turnFilesBySession,
+    bookmarksBySession,
     chatFileQueueBySession,
     chatElementQueueBySession,
     contextSnapshotBySession,
@@ -2326,6 +2356,7 @@ function applySessionDeletedState(s: SessionState, id: string): Partial<SessionS
     subagentsBySession,
     pendingQuestionBySession,
     turnFilesBySession,
+    bookmarksBySession,
     chatFileQueueBySession,
     chatElementQueueBySession,
     contextSnapshotBySession,
@@ -2726,6 +2757,65 @@ function hydrateTurnFiles(
     }
     return { turnFilesBySession: next };
   });
+}
+
+/** Hydrate the per-session bookmark list from the session row. Persisted on
+ *  the row so the capsule segment + timeline markers survive a reopen. An
+ *  absent/empty list on the row clears the bucket so switching sessions
+ *  doesn't leave the previous thread's bookmarks up. Mirrors
+ *  hydrateTurnFiles's pattern (including the reference-equality guard). */
+function hydrateBookmarks(
+  set: (partial: Partial<SessionState> | ((s: SessionState) => Partial<SessionState>)) => void,
+  get: () => SessionState,
+  sessionId: string,
+): void {
+  const sess = findSession(get().sessionsByProject, get().archivedSessionsByProject, get().pinnedSessions, sessionId);
+  const bookmarks = sess?.bookmarks ?? null;
+  set((s) => {
+    const hasValue = !!(bookmarks && Array.isArray(bookmarks) && bookmarks.length > 0);
+    const hadValue = sessionId in s.bookmarksBySession;
+    // Same skip-write guard as hydrateTurnFiles: avoid cloning the map (and
+    // tripping subscribers) when nothing actually changed.
+    if (hasValue ? s.bookmarksBySession[sessionId] === bookmarks : !hadValue) return {};
+    const next = { ...s.bookmarksBySession };
+    if (bookmarks && Array.isArray(bookmarks) && bookmarks.length > 0) {
+      next[sessionId] = bookmarks;
+    } else {
+      delete next[sessionId];
+    }
+    return { bookmarksBySession: next };
+  });
+}
+
+/** Patch ONLY the bookmarks field on the cached session row(s), keeping the
+ *  caller's array reference so a follow-up hydrateBookmarks hits its
+ *  reference-equality guard and skips the write. Unlike
+ *  applySessionPinnedState this must NOT re-sort or move the row — a bookmark
+ *  write must not re-order the session list. No-op when no cache holds the
+ *  row (e.g. a side chat, which the caches don't track). */
+function patchSessionRowBookmarks(
+  s: SessionState,
+  sessionId: string,
+  projectId: string,
+  bookmarks: SessionBookmark[],
+): Partial<SessionState> {
+  const patch: Partial<SessionState> = {};
+  const mapRow = (x: Session) => (x.id === sessionId ? { ...x, bookmarks } : x);
+  const activeList = s.sessionsByProject[projectId];
+  if (activeList?.some((x) => x.id === sessionId)) {
+    patch.sessionsByProject = { ...s.sessionsByProject, [projectId]: activeList.map(mapRow) };
+  }
+  const archivedList = s.archivedSessionsByProject[projectId];
+  if (archivedList?.some((x) => x.id === sessionId)) {
+    patch.archivedSessionsByProject = {
+      ...s.archivedSessionsByProject,
+      [projectId]: archivedList.map(mapRow),
+    };
+  }
+  if (s.pinnedSessions.some((x) => x.id === sessionId)) {
+    patch.pinnedSessions = s.pinnedSessions.map(mapRow);
+  }
+  return patch;
 }
 
 /** Hydrate the per-turn usage history from the session row. The history is
@@ -3546,6 +3636,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   pendingApprovals: [],
   pendingPlanApprovalBySession: {},
   turnFilesBySession: {},
+  bookmarksBySession: {},
   chatFileQueueBySession: {},
   chatElementQueueBySession: {},
   promptQueueBySession: {},
@@ -4379,6 +4470,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     hydrateCapsule(set, get, sessionId);
     hydrateTurnFiles(set, get, sessionId);
     hydrateUsageHistory(set, get, sessionId);
+    hydrateBookmarks(set, get, sessionId);
     set((s) => {
       // Clear the unread badge - the user is now looking at this session.
       // Activating a session also pulls the unified center bar back to the
@@ -4409,6 +4501,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     hydrateCapsule(set, get, sessionId);
     hydrateTurnFiles(set, get, sessionId);
     hydrateUsageHistory(set, get, sessionId);
+    hydrateBookmarks(set, get, sessionId);
     set((s) => {
       // Clear the unread badge - the user is now looking at this session.
       const unreadBySession = { ...s.unreadBySession };
@@ -4882,6 +4975,80 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     // The shared state builder also runs for the cross-client
     // `session.changed` echo, so this stays idempotent.
     set((s) => applySessionPinnedState(s, session));
+  },
+
+  addBookmark: async (sessionId, input) => {
+    const bookmark: SessionBookmark = {
+      // Time + random suffix: two bookmarks added in the same millisecond
+      // (impossible by hand, possible by scripted double-fire) stay distinct.
+      id: `bm_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      messageId: input.messageId,
+      excerpt: input.excerpt,
+      title: null,
+      role: input.role,
+      createdAt: Date.now(),
+    };
+    const prev = get().bookmarksBySession[sessionId] ?? EMPTY_BOOKMARKS;
+    const next = [...prev, bookmark];
+    // Optimistic bucket update first — the fly-to-capsule animation needs the
+    // capsule segment (and its count) to appear before the IPC round-trip.
+    set((s) => ({ bookmarksBySession: { ...s.bookmarksBySession, [sessionId]: next } }));
+    try {
+      const { session } = await api.session.updateBookmarks({ id: sessionId, bookmarks: next });
+      // Patch the cached row with the same array reference (the schema parse
+      // doesn't mutate values), so hydrateBookmarks's guard skips the rewrite.
+      set((s) => patchSessionRowBookmarks(s, sessionId, session.projectId, next));
+    } catch (err) {
+      console.error("[store] addBookmark failed, rolling back", err);
+      set((s) => {
+        const bucket = { ...s.bookmarksBySession };
+        const cur = bucket[sessionId];
+        if (cur) {
+          const filtered = cur.filter((b) => b.id !== bookmark.id);
+          if (filtered.length > 0) bucket[sessionId] = filtered;
+          else delete bucket[sessionId];
+        }
+        return { bookmarksBySession: bucket };
+      });
+    }
+  },
+
+  removeBookmark: async (sessionId, bookmarkId) => {
+    const prev = get().bookmarksBySession[sessionId];
+    if (!prev) return;
+    const next = prev.filter((b) => b.id !== bookmarkId);
+    if (next.length === prev.length) return;
+    set((s) => {
+      const bucket = { ...s.bookmarksBySession };
+      if (next.length > 0) bucket[sessionId] = next;
+      else delete bucket[sessionId];
+      return { bookmarksBySession: bucket };
+    });
+    try {
+      const { session } = await api.session.updateBookmarks({ id: sessionId, bookmarks: next });
+      set((s) => patchSessionRowBookmarks(s, sessionId, session.projectId, next));
+    } catch (err) {
+      console.error("[store] removeBookmark failed, rolling back", err);
+      set((s) => ({ bookmarksBySession: { ...s.bookmarksBySession, [sessionId]: prev } }));
+    }
+  },
+
+  renameBookmark: async (sessionId, bookmarkId, title) => {
+    const prev = get().bookmarksBySession[sessionId];
+    if (!prev) return;
+    const trimmed = title.trim().slice(0, 80);
+    const nextTitle = trimmed.length > 0 ? trimmed : null;
+    const existing = prev.find((b) => b.id === bookmarkId);
+    if (!existing || (existing.title ?? null) === nextTitle) return;
+    const next = prev.map((b) => (b.id === bookmarkId ? { ...b, title: nextTitle } : b));
+    set((s) => ({ bookmarksBySession: { ...s.bookmarksBySession, [sessionId]: next } }));
+    try {
+      const { session } = await api.session.updateBookmarks({ id: sessionId, bookmarks: next });
+      set((s) => patchSessionRowBookmarks(s, sessionId, session.projectId, next));
+    } catch (err) {
+      console.error("[store] renameBookmark failed, rolling back", err);
+      set((s) => ({ bookmarksBySession: { ...s.bookmarksBySession, [sessionId]: prev } }));
+    }
   },
 
   applySessionTitleUpdate: (sessionId, title) => {

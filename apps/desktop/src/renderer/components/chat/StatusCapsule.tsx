@@ -6,8 +6,10 @@ import {
   IconListDetails,
   IconClipboard,
   IconChevronDown,
+  IconBookmark,
 } from "@renderer/lib/icons.js";
 import type { SubagentSnapshot } from "@contracts/runtime";
+import type { SessionBookmark } from "@contracts/session";
 import type { TodoItem, Block } from "@renderer/stores/sessionStore.js";
 import { isElectron } from "@renderer/lib/platform.js";
 import { ActivityPopover } from "./ActivityPopover.js";
@@ -64,6 +66,11 @@ export function StatusCapsule({
   todos,
   planCount,
   planBlocks,
+  bookmarks,
+  isBookmarkStale,
+  onPickBookmark,
+  onRemoveBookmark,
+  onRenameBookmark,
   onPickPlan,
 }: {
   subagents: SubagentSnapshot[];
@@ -73,6 +80,20 @@ export function StatusCapsule({
   planCount: number;
   /** All plan blocks (for the popover's title list). */
   planBlocks: PlanBlock[];
+  /** The session's message bookmarks (drives the bookmark segment + popover
+   *  list). Empty array hides the segment. */
+  bookmarks: SessionBookmark[];
+  /** Stale check (bookmarked message no longer in the stream) — the popover
+   *  greys those rows out instead of offering a jump. */
+  isBookmarkStale?: (b: SessionBookmark) => boolean;
+  /** Jump to the bookmarked message (popover row click). */
+  onPickBookmark?: (b: SessionBookmark) => void;
+  /** Delete a bookmark (popover row hover button). Required for the section
+   *  to render at all — a bookmark list without a delete path would be a
+   *  dead end. */
+  onRemoveBookmark?: (b: SessionBookmark) => void;
+  /** Rename a bookmark (inline edit in the popover row). */
+  onRenameBookmark?: (b: SessionBookmark, title: string) => void;
   /** Called when the user clicks a plan title in the popover - opens the
    *  right-side PlanDrawer with that plan's full content. */
   onPickPlan: (plan: string) => void;
@@ -83,10 +104,11 @@ export function StatusCapsule({
   const hasSubagents = subagents.length > 0;
   const hasTodos = todos.length > 0;
   const hasPlan = planCount > 0;
+  const hasBookmarks = bookmarks.length > 0;
   const todoDone = todos.filter((t) => t.status === "completed").length;
 
   // At least one segment must be present, else render nothing.
-  if (!hasSubagents && !hasTodos && !hasPlan) return null;
+  if (!hasSubagents && !hasTodos && !hasPlan && !hasBookmarks) return null;
 
   // Count of segments already rendered, to decide whether a divider is
   // needed before the next segment.
@@ -140,6 +162,26 @@ export function StatusCapsule({
           </span>
         )}
 
+        {/* Bookmarks segment - icon + count. The divider condition is
+            explicit (not the needDivider counter) because that counter's
+            protocol assumes the LAST segment never calls it; appending a
+            segment after Tasks without touching the others is safer this
+            way. The count span re-mounts on change (key) so the badge-pop
+            keyframe replays on every add — the fly-to-capsule animation
+            lands on a visible bounce. */}
+        {(hasPlan || hasSubagents || hasTodos) && hasBookmarks && <Divider />}
+        {hasBookmarks && (
+          <span
+            className="flex shrink-0 items-center gap-1 tabular-nums"
+            title={t("chatStream.bookmark.capsuleTitle", { n: bookmarks.length })}
+          >
+            <IconBookmark size={13} className="text-warning opacity-90" />
+            <span key={bookmarks.length} className="animate-[bookmark-badge-pop_160ms_ease-out]">
+              {bookmarks.length}
+            </span>
+          </span>
+        )}
+
         {/* Expand/collapse affordance - a chevron that flips when the
             popover is open. Separated from the segments by a thin divider
             so it reads as a control, not another metric. */}
@@ -158,6 +200,16 @@ export function StatusCapsule({
             todos={todos}
             planBlocks={planBlocks}
             subagents={subagents}
+            bookmarks={bookmarks}
+            isBookmarkStale={isBookmarkStale}
+            onPickBookmark={(b) => {
+              // Close the popover first, then scroll — the popover's anchor
+              // would shift mid-flight otherwise.
+              setOpen(false);
+              onPickBookmark?.(b);
+            }}
+            onRemoveBookmark={onRemoveBookmark}
+            onRenameBookmark={onRenameBookmark}
             onPickPlan={(plan) => {
               // Close the popover, then open the drawer via the callback.
               setOpen(false);
@@ -166,14 +218,18 @@ export function StatusCapsule({
           />
         ) : (
           // Mobile shell: a 384px anchored popover would overflow the phone
-          // viewport - expand into a full-width bottom sheet instead.
+          // viewport - expand into a full-width bottom sheet instead. The
+          // mobile shell has no virtual-list jump plumbing, so bookmark rows
+          // are list/delete only (no onPickBookmark).
           <ActivitySheet
             todos={todos}
             planBlocks={planBlocks}
             subagents={subagents}
+            bookmarks={bookmarks}
+            isBookmarkStale={isBookmarkStale}
+            onRemoveBookmark={onRemoveBookmark}
             onClose={() => setOpen(false)}
             onPickPlan={(plan) => {
-              // Close the sheet, then open the plan viewer via the callback.
               setOpen(false);
               onPickPlan(plan);
             }}

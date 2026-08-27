@@ -38,6 +38,7 @@ import {
   UpdateSessionSettingsSchema,
   RenameSessionSchema,
   PinSessionSchema,
+  UpdateBookmarksSchema,
   ArchiveSessionSchema,
   DeleteSessionSchema,
   ArchiveProjectSchema,
@@ -336,6 +337,19 @@ const HANDLERS: Record<string, RpcHandler> = {
     SessionRepo.setPinned(input.id, input.pinned);
     const session = SessionRepo.get(input.id);
     if (!session) throw new RpcError(`session not found after pin: ${input.id}`, 500);
+    broadcastSessionChanged(session);
+    return { session };
+  },
+
+  // Replace a session's bookmark list (the mobile activity sheet can delete
+  // stale entries even though it has no selection-based add affordance).
+  "session:updateBookmarks": (raw) => {
+    const input = UpdateBookmarksSchema.parse(raw);
+    // Absent title (pre-rename rows) → null; see the desktop handler.
+    const bookmarks = input.bookmarks.map((b) => ({ ...b, title: b.title ?? null }));
+    SessionRepo.updateBookmarks(input.id, bookmarks);
+    const session = SessionRepo.get(input.id);
+    if (!session) throw new RpcError(`session not found after updateBookmarks: ${input.id}`, 500);
     broadcastSessionChanged(session);
     return { session };
   },

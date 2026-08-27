@@ -1,8 +1,11 @@
+import { useRef, useState } from "react";
 import type { TodoItem, Block } from "@renderer/stores/sessionStore.js";
 import type { SubagentSnapshot } from "@contracts/runtime";
+import type { SessionBookmark } from "@contracts/session";
 import { cn } from "@renderer/lib/cn.js";
 import { useI18n, type MessageId } from "@renderer/lib/i18n/index.js";
 import { extractPlanTitle } from "./StatusCapsule.js";
+import { IconBookmark, IconPencil, IconX } from "@renderer/lib/icons.js";
 
 /** A `kind: "plan"` block - the frozen per-turn plan in the message stream. */
 type PlanBlock = Extract<Block, { kind: "plan" }>;
@@ -226,6 +229,172 @@ function SubagentsSection({ agents, scrollLists }: { agents: SubagentSnapshot[];
   );
 }
 
+/* ── Section: Bookmarks ─────────────────────────────────────────────── */
+
+/** Format a bookmark's createdAt as HH:MM (local) — compact trailing hint
+ *  for the row, full HH:MM:SS lives in the title attribute. */
+function fmtBookmarkClock(ms: number): string {
+  const d = new Date(ms);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+/**
+ * Bookmarks section - a clickable list of the session's message bookmarks.
+ * Each row shows the user-defined title when renamed, else the excerpt
+ * captured at add time (the excerpt is also the jump's locate anchor and is
+ * never rewritten; a renamed row shows it as its tooltip). Stale entries
+ * (their message was truncated away by an edit-resend / compact) are greyed
+ * out and disabled for jumps; renaming them is still allowed — the title is
+ * user data. Hover reveals a rename (pencil) and delete (x) button; rename
+ * edits inline in the row (Enter/blur commits, Esc cancels, empty = clear).
+ */
+function BookmarksSection({
+  bookmarks,
+  isStale,
+  onPick,
+  onRemove,
+  onRename,
+  scrollLists,
+}: {
+  bookmarks: SessionBookmark[];
+  isStale: (b: SessionBookmark) => boolean;
+  onPick: (b: SessionBookmark) => void;
+  onRemove: (b: SessionBookmark) => void;
+  /** Present = the rename pencil is offered (desktop). Absent (mobile
+   *  sheet) = display-only rows. */
+  onRename?: (b: SessionBookmark, title: string) => void;
+  scrollLists: boolean;
+}) {
+  const { t } = useI18n();
+  // Inline-edit state for ONE row at a time (the popover is transient, so
+  // component-local state survives long enough).
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [draft, setDraft] = useState("");
+  // Esc must cancel WITHOUT the input's blur firing a commit — blur runs
+  // when the input unmounts, after the Escape handler already flipped state.
+  const cancelledRef = useRef(false);
+  // Newest first — the most recent bookmark is the likeliest jump target.
+  const ordered = [...bookmarks].reverse();
+
+  const startEdit = (b: SessionBookmark) => {
+    cancelledRef.current = false;
+    setEditingId(b.id);
+    setDraft(b.title ?? "");
+  };
+  const commitEdit = (b: SessionBookmark) => {
+    setEditingId(null);
+    onRename?.(b, draft);
+  };
+
+  return (
+    <>
+      <SectionHeader
+        icon="🔖"
+        title={t("chatStream.bookmark.sectionTitle", { n: bookmarks.length })}
+      />
+      <ul className={sectionListCls(scrollLists)}>
+        {ordered.map((b) => {
+          const stale = isStale(b);
+          const label = b.title ?? b.excerpt;
+          return (
+            <li key={b.id} className="group/row relative">
+              {editingId === b.id ? (
+                <div className="flex w-full items-center px-3 py-1">
+                  <input
+                    autoFocus
+                    value={draft}
+                    maxLength={80}
+                    onChange={(e) => setDraft(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") commitEdit(b);
+                      else if (e.key === "Escape") {
+                        cancelledRef.current = true;
+                        setEditingId(null);
+                      }
+                    }}
+                    onBlur={() => {
+                      if (cancelledRef.current) {
+                        cancelledRef.current = false;
+                        return;
+                      }
+                      commitEdit(b);
+                    }}
+                    placeholder={t("chatStream.bookmark.renamePlaceholder")}
+                    className="min-w-0 flex-1 rounded border border-accent/50 bg-surface-muted px-1.5 py-0.5 text-[11px] text-content outline-none"
+                  />
+                </div>
+              ) : (
+                <>
+                  <button
+                    type="button"
+                    disabled={stale}
+                    onClick={() => onPick(b)}
+                    title={
+                      stale
+                        ? undefined
+                        : b.title
+                          ? b.excerpt
+                          : t("chatStream.bookmark.jumpTitle")
+                    }
+                    className={cn(
+                      "flex w-full items-center gap-2 py-1.5 pl-3 pr-12 text-left transition-colors",
+                      stale ? "cursor-default" : "hover:bg-surface-muted",
+                    )}
+                  >
+                    <IconBookmark
+                      size={11}
+                      className={cn("shrink-0", stale ? "text-content-subtle" : "text-warning")}
+                    />
+                    <span
+                      className={cn(
+                        "min-w-0 flex-1 truncate text-[11px]",
+                        stale ? "text-content-subtle" : "text-content",
+                      )}
+                    >
+                      {label}
+                    </span>
+                    {stale ? (
+                      <span className="shrink-0 rounded bg-surface-muted px-1 text-[9px] text-content-subtle">
+                        {t("chatStream.bookmark.stale")}
+                      </span>
+                    ) : (
+                      <span className="shrink-0 text-[9px] tabular-nums text-content-subtle">
+                        {fmtBookmarkClock(b.createdAt)}
+                      </span>
+                    )}
+                  </button>
+                  {onRename && (
+                    <button
+                      type="button"
+                      onClick={() => startEdit(b)}
+                      title={t("chatStream.bookmark.rename")}
+                      className="absolute right-7 top-1/2 hidden -translate-y-1/2 rounded p-0.5 text-content-subtle transition-colors hover:bg-surface-hover hover:text-content group-hover/row:block"
+                    >
+                      <IconPencil size={11} />
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onRemove(b);
+                    }}
+                    title={t("chatStream.bookmark.remove")}
+                    className="absolute right-1.5 top-1/2 hidden -translate-y-1/2 rounded p-0.5 text-content-subtle transition-colors hover:bg-surface-hover hover:text-danger group-hover/row:block"
+                  >
+                    <IconX size={11} />
+                  </button>
+                </>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+    </>
+  );
+}
+
 /* ── Root: ActivityPopover ─────────────────────────────────────────── */
 
 /**
@@ -247,18 +416,32 @@ export function ActivitySections({
   todos,
   planBlocks,
   subagents,
+  bookmarks,
+  isBookmarkStale,
+  onPickBookmark,
+  onRemoveBookmark,
+  onRenameBookmark,
   onPickPlan,
   scrollLists = true,
 }: {
   todos: TodoItem[];
   planBlocks: PlanBlock[];
   subagents: SubagentSnapshot[];
+  /** The session's bookmarks; omit/empty to hide the section. */
+  bookmarks?: SessionBookmark[];
+  /** Stale check (message no longer in the stream) — greys out the row. */
+  isBookmarkStale?: (b: SessionBookmark) => boolean;
+  onPickBookmark?: (b: SessionBookmark) => void;
+  onRemoveBookmark?: (b: SessionBookmark) => void;
+  /** Present = rows offer the inline rename pencil. */
+  onRenameBookmark?: (b: SessionBookmark, title: string) => void;
   onPickPlan: (plan: string) => void;
   scrollLists?: boolean;
 }) {
   const showPlan = planBlocks.length > 0;
   const showSubagents = subagents.length > 0;
   const showTasks = todos.length > 0;
+  const showBookmarks = (bookmarks?.length ?? 0) > 0 && !!onRemoveBookmark;
 
   return (
     <>
@@ -277,6 +460,18 @@ export function ActivitySections({
           <TasksSection todos={todos} scrollLists={scrollLists} />
         </div>
       )}
+      {showBookmarks && (
+        <div className="border-b border-white/5">
+          <BookmarksSection
+            bookmarks={bookmarks!}
+            isStale={isBookmarkStale ?? (() => false)}
+            onPick={(b) => onPickBookmark?.(b)}
+            onRemove={onRemoveBookmark!}
+            onRename={onRenameBookmark}
+            scrollLists={scrollLists}
+          />
+        </div>
+      )}
     </>
   );
 }
@@ -291,16 +486,36 @@ export function ActivityPopover({
   todos,
   planBlocks,
   subagents,
+  bookmarks,
+  isBookmarkStale,
+  onPickBookmark,
+  onRemoveBookmark,
+  onRenameBookmark,
   onPickPlan,
 }: {
   todos: TodoItem[];
   planBlocks: PlanBlock[];
   subagents: SubagentSnapshot[];
+  bookmarks?: SessionBookmark[];
+  isBookmarkStale?: (b: SessionBookmark) => boolean;
+  onPickBookmark?: (b: SessionBookmark) => void;
+  onRemoveBookmark?: (b: SessionBookmark) => void;
+  onRenameBookmark?: (b: SessionBookmark, title: string) => void;
   onPickPlan: (plan: string) => void;
 }) {
   return (
     <div className="absolute right-0 top-9 z-30 w-96 overflow-hidden rounded-xl border border-white/10 bg-surface shadow-2xl">
-      <ActivitySections todos={todos} planBlocks={planBlocks} subagents={subagents} onPickPlan={onPickPlan} />
+      <ActivitySections
+        todos={todos}
+        planBlocks={planBlocks}
+        subagents={subagents}
+        bookmarks={bookmarks}
+        isBookmarkStale={isBookmarkStale}
+        onPickBookmark={onPickBookmark}
+        onRemoveBookmark={onRemoveBookmark}
+        onRenameBookmark={onRenameBookmark}
+        onPickPlan={onPickPlan}
+      />
     </div>
   );
 }

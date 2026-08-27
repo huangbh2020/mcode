@@ -91,6 +91,18 @@ export const en = {
   "chatStream.subagent.statusFailed": "Failed",
   "chatStream.subagent.statusKilled": "Terminated",
 
+  // ── Message bookmarks (selection toolbar / capsule / timeline) ──
+  "chatStream.bookmark.add": "Add bookmark",
+  "chatStream.bookmark.copied": "Copied",
+  "chatStream.bookmark.capsuleTitle": "Bookmarks ({n})",
+  "chatStream.bookmark.sectionTitle": "Bookmarks · {n}",
+  "chatStream.bookmark.jumpTitle": "Click to jump to the message",
+  "chatStream.bookmark.remove": "Remove bookmark",
+  "chatStream.bookmark.rename": "Rename bookmark",
+  "chatStream.bookmark.renamePlaceholder": "Bookmark name",
+  "chatStream.bookmark.stale": "Message removed",
+  "chatStream.bookmark.addedToast": "Bookmark added",
+
   // ── ChatPane: streaming spinner hint ──
   "chatStream.upstreamRetry": "Upstream connection issue — retrying ({attempt}/{attempts})",
 

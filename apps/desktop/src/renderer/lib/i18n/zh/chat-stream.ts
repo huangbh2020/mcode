@@ -94,6 +94,18 @@ export const zh = {
   "chatStream.subagent.statusFailed": "失败",
   "chatStream.subagent.statusKilled": "已终止",
 
+  // ── Message bookmarks (selection toolbar / capsule / timeline) ──
+  "chatStream.bookmark.add": "添加书签",
+  "chatStream.bookmark.copied": "已复制",
+  "chatStream.bookmark.capsuleTitle": "书签（{n} 个）",
+  "chatStream.bookmark.sectionTitle": "书签 · {n} 个",
+  "chatStream.bookmark.jumpTitle": "点击定位到原文",
+  "chatStream.bookmark.remove": "删除书签",
+  "chatStream.bookmark.rename": "重命名书签",
+  "chatStream.bookmark.renamePlaceholder": "书签名称",
+  "chatStream.bookmark.stale": "原消息已移除",
+  "chatStream.bookmark.addedToast": "已添加书签",
+
   // ── ChatPane: streaming spinner hint ──
   "chatStream.upstreamRetry": "上游连接异常，正在重试（{attempt}/{attempts}）",
 

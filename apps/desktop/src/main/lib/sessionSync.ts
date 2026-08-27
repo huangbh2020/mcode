@@ -32,6 +32,7 @@ export function toSessionListEntry(s: Session): SessionListEntry {
     planDraft: _pd,
     usageHistory: _uh,
     turnFiles: _tf,
+    bookmarks: _bm,
     ...entry
   } = s;
   return entry;

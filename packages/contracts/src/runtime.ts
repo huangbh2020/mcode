@@ -536,7 +536,7 @@ export interface BrowserImageEvent {
  */
 export type SessionListEntry = Omit<
   Session,
-  "contextSnapshot" | "todos" | "subagents" | "planDraft" | "usageHistory" | "turnFiles"
+  "contextSnapshot" | "todos" | "subagents" | "planDraft" | "usageHistory" | "turnFiles" | "bookmarks"
 >;
 
 /** A session row was created or mutated (title / archive / pin / rename …).

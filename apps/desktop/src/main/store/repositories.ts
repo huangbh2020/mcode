@@ -13,6 +13,7 @@ import type {
   MessageRecord,
   SessionTodoItem,
   SessionPlanDraft,
+  SessionBookmark,
 } from "@contracts/session";
 import type { ContextSnapshot, SubagentSnapshot, TurnFileEntry, TurnUsageRecord } from "@contracts/runtime";
 import { getDb, persist } from "./db.js";
@@ -208,6 +209,7 @@ interface SessionRow {
   plan_draft: string | null;
   turn_files: string | null;
   usage_history: string | null;
+  bookmarks: string | null;
   created_at: number;
   updated_at: number;
 }
@@ -234,6 +236,7 @@ function rowToSession(r: SessionRow): Session {
     planDraft: (r.plan_draft ? safeJson(r.plan_draft) : null) as SessionPlanDraft | null,
     turnFiles: (r.turn_files ? safeJson(r.turn_files) : null) as TurnFileEntry[] | null,
     usageHistory: (r.usage_history ? safeJson(r.usage_history) : null) as TurnUsageRecord[] | null,
+    bookmarks: (r.bookmarks ? safeJson(r.bookmarks) : null) as SessionBookmark[] | null,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
   };
@@ -243,8 +246,8 @@ export const SessionRepo = {
   create(s: Session): void {
     getDb().run(
       `INSERT INTO sessions
-       (id, project_id, provider_id, claude_session_id, kind, parent_session_id, title, status, model, effort, permission_mode, custom_model_id, archived, pinned_at, context_snapshot, todos, subagents, plan_draft, turn_files, usage_history, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (id, project_id, provider_id, claude_session_id, kind, parent_session_id, title, status, model, effort, permission_mode, custom_model_id, archived, pinned_at, context_snapshot, todos, subagents, plan_draft, turn_files, usage_history, bookmarks, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         v(s.id),
         v(s.projectId),
@@ -266,6 +269,7 @@ export const SessionRepo = {
         v(s.planDraft ? JSON.stringify(s.planDraft) : null),
         v(s.turnFiles ? JSON.stringify(s.turnFiles) : null),
         v(s.usageHistory ? JSON.stringify(s.usageHistory) : null),
+        v(s.bookmarks ? JSON.stringify(s.bookmarks) : null),
         v(s.createdAt),
         v(s.updatedAt),
       ],
@@ -521,6 +525,18 @@ export const SessionRepo = {
   updateUsageHistory(id: string, history: TurnUsageRecord[]): void {
     getDb().run("UPDATE sessions SET usage_history = ?, updated_at = ? WHERE id = ?", [
       v(JSON.stringify(history)),
+      v(Date.now()),
+      v(id),
+    ]);
+    persist();
+  },
+
+  /** Replace the session's full bookmark list (renderer sends the complete
+   *  array on every add/remove — single-digit cardinality, no incremental
+   *  protocol needed). Empty array = "has bookmarks column but none left". */
+  updateBookmarks(id: string, bookmarks: SessionBookmark[]): void {
+    getDb().run("UPDATE sessions SET bookmarks = ?, updated_at = ? WHERE id = ?", [
+      v(JSON.stringify(bookmarks)),
       v(Date.now()),
       v(id),
     ]);

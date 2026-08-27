@@ -67,6 +67,11 @@ const api = {
       ipcRenderer.invoke(IPC.SESSION_RENAME, input)) as RpcMap["session.rename"],
     pin: ((input) =>
       ipcRenderer.invoke(IPC.SESSION_PIN, input)) as RpcMap["session.pin"],
+    updateBookmarks: ((input) =>
+      ipcRenderer.invoke(
+        IPC.SESSION_UPDATE_BOOKMARKS,
+        input,
+      )) as RpcMap["session.updateBookmarks"],
     listPinned: (() =>
       ipcRenderer.invoke(IPC.SESSION_LIST_PINNED)) as RpcMap["session.listPinned"],
   },

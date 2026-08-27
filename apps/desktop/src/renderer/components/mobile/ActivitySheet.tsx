@@ -15,6 +15,7 @@
  */
 import { createPortal } from "react-dom";
 import type { SubagentSnapshot } from "@contracts/runtime";
+import type { SessionBookmark } from "@contracts/session";
 import type { TodoItem, Block } from "@renderer/stores/sessionStore.js";
 import { ActivitySections } from "@renderer/components/chat/ActivityPopover.js";
 
@@ -25,15 +26,24 @@ export function ActivitySheet({
   todos,
   planBlocks,
   subagents,
+  bookmarks,
+  isBookmarkStale,
+  onRemoveBookmark,
   onClose,
   onPickPlan,
 }: {
   todos: TodoItem[];
   planBlocks: PlanBlock[];
   subagents: SubagentSnapshot[];
+  /** The session's bookmarks; omit/empty to hide the section. The mobile
+   *  shell has no virtual-list jump plumbing, so entries are list/delete
+   *  only (no pick/jump callback). */
+  bookmarks?: SessionBookmark[];
+  isBookmarkStale?: (b: SessionBookmark) => boolean;
+  onRemoveBookmark?: (b: SessionBookmark) => void;
   onClose: () => void;
   /** Called when the user taps a plan title - opens the plan viewer with
-   *  that plan's full markdown content. The sheet is closed by the caller
+   *  that plan's markdown content. The sheet is closed by the caller
    *  (StatusCapsule) before this fires. */
   onPickPlan: (plan: string) => void;
 }) {
@@ -59,6 +69,9 @@ export function ActivitySheet({
             todos={todos}
             planBlocks={planBlocks}
             subagents={subagents}
+            bookmarks={bookmarks}
+            isBookmarkStale={isBookmarkStale}
+            onRemoveBookmark={onRemoveBookmark}
             onPickPlan={onPickPlan}
             scrollLists={false}
           />

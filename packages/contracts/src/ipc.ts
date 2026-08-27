@@ -847,6 +847,27 @@ export const ArchiveSessionSchema = z.object({ id: z.string(), archived: z.boole
 export const PinSessionSchema = z.object({ id: z.string(), pinned: z.boolean() });
 export type PinSessionInput = z.infer<typeof PinSessionSchema>;
 
+/* Replace a session's full bookmark list. The renderer owns the whole list
+ * (single-digit cardinality) and sends the complete array on every add /
+ * remove — an incremental protocol would be overkill. Excerpt is clamped in
+ * the renderer before sending; the schema still bounds it to keep rows
+ * defensive against hand-crafted payloads. */
+export const SessionBookmarkSchema = z.object({
+  id: z.string().min(1),
+  messageId: z.string().min(1),
+  excerpt: z.string().max(400),
+  // Optional (not just nullable) so bookmark lists persisted before the
+  // rename feature existed parse unchanged.
+  title: z.string().max(80).nullable().optional(),
+  role: z.enum(["user", "assistant"]),
+  createdAt: z.number().int().nonnegative(),
+});
+export const UpdateBookmarksSchema = z.object({
+  id: z.string(),
+  bookmarks: z.array(SessionBookmarkSchema),
+});
+export type UpdateBookmarksInput = z.infer<typeof UpdateBookmarksSchema>;
+
 /* Rename a session (user-edited title). Title is clamped to a sane length;
  * empty/whitespace-only is rejected by the min(1) on the trimmed value (the
  * store trims before sending). */
@@ -3192,6 +3213,8 @@ export interface RpcMap {
   "session.rename": (input: RenameSessionInput) => Promise<{ session: Session }>;
   /** Pin/unpin a session (project-scoped). Returns the updated row. */
   "session.pin": (input: PinSessionInput) => Promise<{ session: Session }>;
+  /** Replace a session's bookmark list (full-array write). Returns the updated row. */
+  "session.updateBookmarks": (input: UpdateBookmarksInput) => Promise<{ session: Session }>;
   // Providers
   "provider.list": () => Promise<{ providers: ProviderInfo[] }>;
   // Settings
@@ -3562,6 +3585,7 @@ export const IPC = {
   SESSION_ARCHIVE: "session:archive",
   SESSION_RENAME: "session:rename",
   SESSION_PIN: "session:pin",
+  SESSION_UPDATE_BOOKMARKS: "session:updateBookmarks",
   SESSION_LIST_PINNED: "session:listPinned",
   SESSION_SEARCH: "session:search",
   SESSION_MESSAGES: "session:messages",

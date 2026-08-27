@@ -27,6 +27,25 @@ export interface SessionPlanDraft {
   phase: PlanUpdateEvent["phase"];
 }
 
+/** A user-placed bookmark on a chat message (message-level anchor). The
+ *  excerpt is the text the user had selected when adding the bookmark —
+ *  display-only, used to recognize the entry in lists; jump targeting goes
+ *  through `messageId` alone. Bookmarks whose message was later removed
+ *  (edit-resend truncation / compact) are kept and shown as stale until the
+ *  user deletes them. */
+export interface SessionBookmark {
+  id: string;
+  messageId: string;
+  excerpt: string;
+  /** User-defined display name (rename). null/empty = lists show the
+   *  excerpt instead. `excerpt` itself is NEVER rewritten by a rename — it
+   *  stays the whitespace-normalized anchor the jump uses to re-find the
+   *  selected text in the rendered DOM for the precise highlight. */
+  title: string | null;
+  role: "user" | "assistant";
+  createdAt: number;
+}
+
 export interface Project {
   id: string;
   name: string;
@@ -98,6 +117,10 @@ export interface Session {
    *  survives a session reopen). Null for sessions that never saw a file edit.
    *  Cleared (set to null) after a rewind. JSON-serialized in the DB. */
   turnFiles: TurnFileEntry[] | null;
+  /** User-placed message bookmarks (persisted so the capsule + timeline
+   *  markers survive a session reopen). Null for sessions with no bookmarks.
+   *  JSON-serialized in the DB. */
+  bookmarks: SessionBookmark[] | null;
   createdAt: number;
   updatedAt: number;
 }

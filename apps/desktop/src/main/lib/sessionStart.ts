@@ -50,6 +50,7 @@ export function createOrReuseSession(
       planDraft: null,
       turnFiles: null,
       usageHistory: null,
+      bookmarks: null,
       createdAt: now,
       updatedAt: now,
     };
@@ -108,6 +109,7 @@ export function createOrReuseSession(
     planDraft: null,
     turnFiles: null,
     usageHistory: null,
+    bookmarks: null,
     createdAt: now,
     updatedAt: now,
   };

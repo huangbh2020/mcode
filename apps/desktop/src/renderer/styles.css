@@ -544,6 +544,97 @@ body {
   }
 }
 
+/* ───────────── Message bookmark animations ─────────────
+ * Selection toolbar pop-in, capsule badge bounce on count change, and the
+ * jump-target row flash. Referenced via Tailwind arbitrary-animation classes
+ * (animate-[bookmark-bar-in_…], animate-[bookmark-badge-pop_…]) and the
+ * imperative .bookmark-flash class ChatPane toggles on the row after
+ * scrollToIndex. */
+
+/* Floating [copy | add bookmark] toolbar — small fade-up so it doesn't
+   hard-cut over the selection. */
+@keyframes bookmark-bar-in {
+  from {
+    transform: translateX(-50%) translateY(2px);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(-50%) translateY(0);
+    opacity: 1;
+  }
+}
+
+/* Capsule count bounce — the count span re-mounts on change (key) so this
+   replays on every add; the fly-to-capsule dot lands on this bounce. */
+@keyframes bookmark-badge-pop {
+  0% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.35);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+/* Jump-target flash: the message row glows gold for ~1.2s after a bookmark
+   jump (class toggled imperatively — the row is inside the virtual list, a
+   re-render just for the flash would fight LegendList recycling). */
+.bookmark-flash {
+  animation: bookmark-flash-fade 1.2s ease-out;
+}
+
+/* Exact selection highlight for bookmark jumps (CSS Custom Highlight API —
+   paints over the Range the locator re-found, without touching the
+   React-managed DOM). Registered/removed from lib/textFind.ts. */
+::highlight(bookmark-target) {
+  background-color: rgb(var(--warning) / 0.35);
+  color: inherit;
+}
+
+@keyframes bookmark-flash-fade {
+  0% {
+    background-color: rgb(var(--warning) / 0.18);
+    box-shadow: inset 2px 0 0 rgb(var(--warning) / 0.8);
+  }
+  100% {
+    background-color: transparent;
+    box-shadow: inset 2px 0 0 rgb(var(--warning) / 0);
+  }
+}
+
+/* Reduced motion: bar/badge animations flatten to no-ops; the flash still
+   signals the target but as a static tint for its full duration (an
+   instantly-disappearing signal would be easy to miss without motion). */
+@media (prefers-reduced-motion: reduce) {
+  @keyframes bookmark-bar-in {
+    from {
+      transform: translateX(-50%);
+      opacity: 1;
+    }
+    to {
+      transform: translateX(-50%);
+      opacity: 1;
+    }
+  }
+
+  @keyframes bookmark-badge-pop {
+    from {
+      transform: scale(1);
+    }
+    to {
+      transform: scale(1);
+    }
+  }
+
+  .bookmark-flash {
+    animation: none;
+    background-color: rgb(var(--warning) / 0.14);
+    box-shadow: inset 2px 0 0 rgb(var(--warning) / 0.6);
+  }
+}
+
 /* ───────────── Stream live-activity animations ─────────────
  * While a turn runs, the turn pills in the message stream (TurnStatRow in
  * ChatPane.tsx, TurnPanel in MessageBlocks.tsx) show an equalizer glyph, and

@@ -18,13 +18,15 @@ import {
   IconChevronRight,
   IconGripVertical,
 } from "@renderer/lib/icons.js";
-import { useSessionStore, EMPTY_MESSAGES, EMPTY_TODOS, EMPTY_SUBAGENTS, EMPTY_CHAT_QUEUE, EMPTY_ELEMENT_QUEUE, EMPTY_PROMPT_QUEUE, type Block, type ChatMessage, type TodoItem, type TurnMeta, type QueuedPrompt } from "@renderer/stores/sessionStore.js";
+import { useSessionStore, EMPTY_MESSAGES, EMPTY_TODOS, EMPTY_SUBAGENTS, EMPTY_CHAT_QUEUE, EMPTY_ELEMENT_QUEUE, EMPTY_PROMPT_QUEUE, EMPTY_BOOKMARKS, type Block, type ChatMessage, type TodoItem, type TurnMeta, type QueuedPrompt } from "@renderer/stores/sessionStore.js";
 import { useToastStore } from "@renderer/stores/toastStore.js";
 import { api } from "@renderer/lib/api.js";
+import { findNormalizedTextRange, highlightRange } from "@renderer/lib/textFind.js";
 import { useI18n } from "@renderer/lib/i18n/index.js";
 import { useNow } from "@renderer/hooks/useNow.js";
 import { useComposerRowFit } from "@renderer/hooks/useComposerRowFit.js";
 import type { SubagentSnapshot } from "@contracts/runtime";
+import type { SessionBookmark } from "@contracts/session";
 import type { FileSearchEntry } from "@contracts/ipc";
 import { prepareImageForSend } from "@renderer/lib/imageResize.js";
 import type { PromptImage } from "@renderer/stores/sessionStore.js";
@@ -56,6 +58,8 @@ import { EmptyThreadWelcome } from "./EmptyThreadWelcome.js";
 import { SlashCommandPicker } from "./SlashCommandPicker.js";
 import { StatusCapsule } from "./StatusCapsule.js";
 import { MessageTimeline, type UserItemIndexMap } from "./MessageTimeline.js";
+import { SelectionToolbar, type SelectionToolbarState } from "./SelectionToolbar.js";
+import { BookmarkFly } from "./BookmarkFly.js";
 import { LegendList, type LegendListRef } from "@legendapp/list/react";
 
 /**
@@ -108,6 +112,31 @@ interface PendingImage {
 
 /** Ceiling for staged images (matches the SendTurn contract's max 20). */
 const MAX_PENDING_IMAGES = 20;
+
+/** Stable empty reference for the timeline's bookmark items (memo stability —
+ *  never return a fresh [] from the derivation when there's nothing to show). */
+const EMPTY_BOOKMARK_TIMELINE: {
+  bookmarkId: string;
+  message: ChatMessage;
+  index: number;
+  excerpt: string;
+  title: string | null;
+}[] = [];
+
+/** Nearest scrollable ancestor of `el` below (and excluding) `stopAt` —
+ *  i.e. the virtual list's own scroll container. Jump centering targets THIS
+ *  element only: a bare scrollIntoView also scrolls every scrollable
+ *  ancestor (app shell panes), which can leave the row visually off even
+ *  though "something" scrolled. */
+function findScrollParent(el: Element, stopAt: Element): HTMLElement | null {
+  let cur: HTMLElement | null = el.parentElement;
+  while (cur && cur !== stopAt) {
+    const oy = getComputedStyle(cur).overflowY;
+    if ((oy === "auto" || oy === "scroll") && cur.scrollHeight > cur.clientHeight + 4) return cur;
+    cur = cur.parentElement;
+  }
+  return null;
+}
 
 /** Preserve a user-typed message's single line breaks when rendering through
  *  Markdown: a lone "\n" is a soft break that markdown collapses to a space,
@@ -1057,6 +1086,28 @@ function ChatPaneForSession({
         .filter((b): b is Extract<Block, { kind: "plan" }> => b.kind === "plan"),
     [messages],
   );
+  // ── Message bookmarks (selection → "添加书签" → capsule + timeline) ──
+  const bookmarks: SessionBookmark[] = useSessionStore((s) =>
+    s.bookmarksBySession[sessionId] ?? EMPTY_BOOKMARKS,
+  );
+  const addBookmark = useSessionStore((s) => s.addBookmark);
+  const removeBookmark = useSessionStore((s) => s.removeBookmark);
+  const renameBookmark = useSessionStore((s) => s.renameBookmark);
+  // Floating [copy | add bookmark] toolbar anchored to the current text
+  // selection inside the message stream. Local UI state is fine here: the
+  // document holds exactly ONE selection and only the frontmost pane can
+  // receive the mouseup that opens the toolbar (background tabs are
+  // display:none, no mouse events).
+  const [selectionToolbar, setSelectionToolbar] = useState<SelectionToolbarState | null>(null);
+  // Fly-to-capsule animation: a small dot travels from the selection to the
+  // status capsule right after adding a bookmark. Carries only the start
+  // point; the target rect is read live (the capsule segment may be mounting
+  // for the very first time as the optimistic count lands).
+  const [bookmarkFlyFrom, setBookmarkFlyFrom] = useState<{ top: number; left: number } | null>(null);
+  // Message-stream container (selection-ownership check) and capsule wrapper
+  // (fly-animation target), both scoped to THIS pane instance.
+  const streamAreaRef = useRef<HTMLDivElement>(null);
+  const capsuleWrapRef = useRef<HTMLDivElement>(null);
   // Messages this thread's user has previously sent, oldest → newest, as
   // plain text. Drives the Up/Down history recall in the composer. Derived
   // from the message stream (the user message's `text` block holds exactly
@@ -1203,6 +1254,216 @@ function ChatPaneForSession({
     }
     return m;
   }, [renderItems]);
+  // All-message version of the map above — drives BOOKMARK jumps, which can
+  // land on assistant replies (where the key conclusions live), not just user
+  // messages. `single` rows map their own id; a `turnGroup` maps each of its
+  // textMsgs to the GROUP's index (a jump lands on the turn's head — v1
+  // doesn't pin-point inside the group, the flash highlights the reply row
+  // once mounted).
+  const msgToRenderIndex = useMemo<Map<string, number>>(() => {
+    const m = new Map<string, number>();
+    for (let i = 0; i < renderItems.length; i++) {
+      const item = renderItems[i];
+      if (item.kind === "single") {
+        m.set(item.msg.id, i);
+      } else if (item.kind === "turnGroup") {
+        for (const msg of item.textMsgs) m.set(msg.id, i);
+      }
+    }
+    return m;
+  }, [renderItems]);
+
+  /** Scroll to the message a bookmark/timeline dash points at and flash the
+   *  row. Silently no-ops when the id no longer maps (a stale bookmark whose
+   *  message was truncated away).
+   *
+   *  Deterministic aiming via LegendList's own state: `getState().
+   *  positionAtIndex(index)` gives the list's current position for the item
+   *  (measured when rendered before, 80px-estimate otherwise) and
+   *  `scrollToOffset` returns a promise — so we aim, AWAIT the scroll, and
+   *  only then look at the DOM. Each retry re-aims with drift correction:
+   *  a mounted reference row's real offset vs its claimed positionAtIndex
+   *  exposes how far the estimate is off globally, and the correction is
+   *  applied to the target. Residual error (and the "reply deep inside a
+   *  tall turnGroup" case) is finished off by exact centering of the found
+   *  row inside the list's own scroll container. Keyword fallback (excerpt
+   *  head) covers the pathological case where the id row can't be found but
+   *  its text is mounted. */
+  const jumpToMessage = useCallback(
+    (messageId: string, excerpt?: string) => {
+      const index = msgToRenderIndex.get(messageId);
+      const ref = virtualListRef.current;
+      const root = streamAreaRef.current;
+      if (index === undefined || !ref || !root) return;
+      const needle = excerpt?.replace(/\s+/g, " ").trim().slice(0, 48);
+
+      const findRow = (): Element | null => {
+        const row = root.querySelector(`[data-message-id="${CSS.escape(messageId)}"]`);
+        if (row) return row;
+        if (!needle) return null;
+        return (
+          [...root.querySelectorAll("[data-message-id]")].find((el) =>
+            (el.textContent ?? "").replace(/\s+/g, " ").includes(needle),
+          ) ?? null
+        );
+      };
+
+      const centerAndFlash = (row: Element) => {
+        const scroller = findScrollParent(row, root);
+        // Precise target: the exact text the user had selected, re-found in
+        // the rendered markdown (whitespace-normalized match across node
+        // boundaries). Full excerpt first; a short prefix as fallback for
+        // selections that spanned two messages at add time. Painted via the
+        // CSS Custom Highlight API — no DOM mutation for React to clobber.
+        let range: Range | null = null;
+        if (needle) {
+          range = findNormalizedTextRange(row, needle);
+          if (!range && needle.length > 16) range = findNormalizedTextRange(row, needle.slice(0, 16));
+        }
+        if (range && highlightRange(range, 2600)) {
+          const rRect = range.getBoundingClientRect();
+          if (scroller) {
+            const cRect = scroller.getBoundingClientRect();
+            const target =
+              scroller.scrollTop + (rRect.top - cRect.top) - cRect.height / 2 + rRect.height / 2;
+            scroller.scrollTo({ top: Math.max(target, 0), behavior: "smooth" });
+          } else {
+            row.scrollIntoView({ block: "center", behavior: "smooth" });
+          }
+          return;
+        }
+        // Fallback: selection text not found (or no Highlight API) — center
+        // and flash the whole row instead.
+        if (scroller) {
+          const cRect = scroller.getBoundingClientRect();
+          const rRect = row.getBoundingClientRect();
+          const target =
+            scroller.scrollTop + (rRect.top - cRect.top) - cRect.height / 2 + rRect.height / 2;
+          scroller.scrollTo({ top: Math.max(target, 0), behavior: "smooth" });
+        } else {
+          row.scrollIntoView({ block: "center", behavior: "smooth" });
+        }
+        row.classList.add("bookmark-flash");
+        window.setTimeout(() => row.classList.remove("bookmark-flash"), 1400);
+      };
+
+      let attempts = 0;
+      const locate = async (): Promise<void> => {
+        attempts += 1;
+        const row = findRow();
+        if (row) {
+          centerAndFlash(row);
+          return;
+        }
+        if (attempts >= 5) return;
+        // Target not mounted — re-aim with drift correction from a mounted
+        // reference row, then await the scroll before looking again.
+        const state = ref.getState();
+        let aim = state.positionAtIndex(index);
+        const refEl = root.querySelector("[data-message-id]");
+        const refId = refEl?.getAttribute("data-message-id") ?? null;
+        const refIdx = refId ? msgToRenderIndex.get(refId) : undefined;
+        if (refEl instanceof HTMLElement && refIdx !== undefined) {
+          const scroller = findScrollParent(refEl, root);
+          if (scroller) {
+            const actual =
+              scroller.scrollTop +
+              (refEl.getBoundingClientRect().top - scroller.getBoundingClientRect().top);
+            const claimed = state.positionAtIndex(refIdx);
+            if (Number.isFinite(claimed)) aim += actual - claimed;
+          }
+        }
+        await ref.scrollToOffset({ offset: Math.max(aim - state.scrollLength / 4, 0), animated: false });
+        window.setTimeout(() => void locate(), 120);
+      };
+
+      void (async () => {
+        const state = ref.getState();
+        await ref.scrollToOffset({
+          offset: Math.max(state.positionAtIndex(index) - state.scrollLength / 4, 0),
+          animated: false,
+        });
+        await locate();
+      })();
+    },
+    [msgToRenderIndex],
+  );
+
+  /** mouseup on the message stream: capture the finished text selection and
+   *  open the floating [copy | add bookmark] toolbar. Runs after a tick so
+   *  the selection is final. Selections outside this pane's container (the
+   *  composer, another pane) never reach this — the handler is bound to this
+   *  pane's stream area — but the containment check guards selections that
+   *  END here after starting elsewhere. */
+  const handleStreamMouseUp = useCallback(() => {
+    window.setTimeout(() => {
+      const container = streamAreaRef.current;
+      if (!container) return;
+      const sel = window.getSelection();
+      if (!sel || sel.isCollapsed || sel.rangeCount === 0) return;
+      const text = sel.toString();
+      if (!text || text.trim().length === 0) return;
+      const node = sel.anchorNode;
+      if (!node || !container.contains(node)) return;
+      const element =
+        node.nodeType === Node.TEXT_NODE ? node.parentElement : (node as Element);
+      const host = element?.closest("[data-message-id]");
+      const messageId = host?.getAttribute("data-message-id");
+      if (!messageId) return;
+      const rect = sel.getRangeAt(0).getBoundingClientRect();
+      if (rect.width === 0 && rect.height === 0) return;
+      const role = messages.find((m) => m.id === messageId)?.role;
+      setSelectionToolbar({
+        rect: { top: rect.top, bottom: rect.bottom, left: rect.left, right: rect.right },
+        text,
+        messageId,
+        role: role === "user" ? "user" : "assistant",
+      });
+    }, 0);
+  }, [messages]);
+
+  /** Selection-toolbar "add bookmark": persist via the store (optimistic —
+   *  the capsule segment appears immediately), start the fly-to-capsule
+   *  animation from the selection, clear the selection, toast. */
+  const handleAddBookmark = useCallback(
+    (sel: SelectionToolbarState) => {
+      // Collapse whitespace for the list display; full fidelity isn't needed
+      // — the excerpt exists to RECOGNIZE the entry, the jump goes by
+      // messageId alone.
+      const excerpt = sel.text.trim().replace(/\s+/g, " ").slice(0, 120);
+      void addBookmark(sessionId, { messageId: sel.messageId, excerpt, role: sel.role });
+      setBookmarkFlyFrom({ top: sel.rect.top, left: (sel.rect.left + sel.rect.right) / 2 });
+      window.getSelection()?.removeAllRanges();
+      setSelectionToolbar(null);
+      useToastStore.getState().push({
+        kind: "info",
+        title: t("chatStream.bookmark.addedToast"),
+      });
+    },
+    [addBookmark, sessionId, t],
+  );
+
+  // Timeline bookmark dashes: live (non-stale) bookmarks resolved to their
+  // message + render index. Stale entries (message truncated away by an
+  // edit-resend / compact) are skipped — they'd have nothing to jump to (the
+  // popover renders them greyed out with a manual delete affordance).
+  const bookmarkedTimelineItems = useMemo(() => {
+    if (bookmarks.length === 0) return EMPTY_BOOKMARK_TIMELINE;
+    const out: {
+      bookmarkId: string;
+      message: ChatMessage;
+      index: number;
+      excerpt: string;
+      title: string | null;
+    }[] = [];
+    for (const b of bookmarks) {
+      const index = msgToRenderIndex.get(b.messageId);
+      if (index === undefined) continue;
+      const msg = messages.find((m) => m.id === b.messageId);
+      if (msg) out.push({ bookmarkId: b.id, message: msg, index, excerpt: b.excerpt, title: b.title });
+    }
+    return out;
+  }, [bookmarks, messages, msgToRenderIndex]);
   // Current virtual-list scroll offset, updated on each scroll event.
   // Used by MessageTimeline to compute which user message is active.
   const [virtualScrollTop, setVirtualScrollTop] = useState(0);
@@ -2303,16 +2564,19 @@ function ChatPaneForSession({
   return (
     <div className="relative flex h-full flex-col" data-chat-root>
       {/* Message stream area */}
-      <div className={cn("relative flex min-h-0", empty ? "h-0" : "flex-1")}>
+      <div
+        ref={streamAreaRef}
+        onMouseUp={handleStreamMouseUp}
+        className={cn("relative flex min-h-0", empty ? "h-0" : "flex-1")}
+      >
       {/* Left-edge timeline of user messages */}
       {!empty && (
         <MessageTimeline
           messages={messages}
           scrollTop={virtualScrollTop}
           userItemIndices={userMsgToRenderIndex}
-          onJumpToIndex={(index) => {
-            void virtualListRef.current?.scrollToIndex({ index, animated: true, viewPosition: 0 });
-          }}
+          bookmarkedItems={bookmarkedTimelineItems}
+          onJumpItem={(messageId, _index, excerpt) => jumpToMessage(messageId, excerpt)}
         />
       )}
       {/* Virtual message list */}
@@ -2379,18 +2643,39 @@ function ChatPaneForSession({
           pill itself is clickable, the rest of the overlay passes pointer
           events through to the scroll surface beneath. The popover drops
           down from the pill inside this non-clipping wrapper. Renders when
-          there are todos, subagents, OR any plan blocks in the session
-          history (the plan shows as an icon + count in the pill). */}
-      {!empty && (todos.length > 0 || subagents.length > 0 || planBlocks.length > 0) && (
-        <div className="pointer-events-none absolute right-8 top-2 z-30 flex justify-end">
+          there are todos, subagents, plan blocks, OR bookmarks in the
+          session history. The wrapper ref is the fly-to-capsule bookmark
+          animation's landing target. */}
+      {!empty && (todos.length > 0 || subagents.length > 0 || planBlocks.length > 0 || bookmarks.length > 0) && (
+        <div ref={capsuleWrapRef} className="pointer-events-none absolute right-8 top-2 z-30 flex justify-end">
           <StatusCapsule
             subagents={subagents}
             todos={todos}
             planCount={planBlocks.length}
             planBlocks={planBlocks}
+            bookmarks={bookmarks}
+            isBookmarkStale={(b) => !msgToRenderIndex.has(b.messageId)}
+            onPickBookmark={(b) => jumpToMessage(b.messageId, b.excerpt)}
+            onRemoveBookmark={(b) => void removeBookmark(sessionId, b.id)}
+            onRenameBookmark={(b, title) => void renameBookmark(sessionId, b.id, title)}
             onPickPlan={(p) => openPlanDrawer(sessionId, p)}
           />
         </div>
+      )}
+
+      {/* Floating [copy | add bookmark] toolbar over the current text
+          selection (portals to body — see SelectionToolbar). */}
+      {selectionToolbar && (
+        <SelectionToolbar
+          state={selectionToolbar}
+          onAddBookmark={handleAddBookmark}
+          onClose={() => setSelectionToolbar(null)}
+        />
+      )}
+
+      {/* One-shot fly-to-capsule bookmark dot (portals to body). */}
+      {bookmarkFlyFrom && (
+        <BookmarkFly from={bookmarkFlyFrom} targetRef={capsuleWrapRef} onDone={() => setBookmarkFlyFrom(null)} />
       )}
 
       {/* Jump-to-bottom button. Shows a new-activity count while a turn is
@@ -3057,6 +3342,11 @@ const MessageRow = memo(function MessageRow({
 
   return (
     <div
+      // Bookmark anchor: the selection toolbar resolves the message a text
+      // selection belongs to by walking up from the selection's anchor node
+      // to this attribute; jump-to-bookmark uses it to flash the row after
+      // scrolling. Static per row — no effect on the memo shallow-compare.
+      data-message-id={msg.id}
       className={cn(
         "group",
         // Vertical rhythm is driven by the chat-density CSS vars (see

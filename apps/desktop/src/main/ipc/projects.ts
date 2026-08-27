@@ -12,6 +12,7 @@ import {
   ProjectSessionsSchema,
   RenameSessionSchema,
   SessionSearchSchema,
+  UpdateBookmarksSchema,
 } from "@contracts/ipc";
 import type { Project } from "@contracts/session";
 import { uid } from "@main/utils.js";
@@ -141,6 +142,22 @@ export function registerProjectHandlers(ipcMain: IpcMain): void {
     if (!session) throw new Error(`session not found after pin: ${input.id}`);
     broadcastSessionChanged(session);
     log.info(`session ${input.pinned ? "pinned" : "unpinned"}: ${input.id}`);
+    return { session };
+  });
+
+  // Replace a session's bookmark list (full-array write from the renderer).
+  // The mutating renderer patches its cached row from the returned full
+  // session; other clients only get the slim session.changed broadcast (the
+  // desktop is single-window, so no other renderer holds the bookmark bucket).
+  ipcMain.handle(IPC.SESSION_UPDATE_BOOKMARKS, (_evt, raw) => {
+    const input = UpdateBookmarksSchema.parse(raw);
+    // `title` is optional in the schema (pre-rename rows parse unchanged);
+    // normalize absent → null so the stored domain type stays strict.
+    const bookmarks = input.bookmarks.map((b) => ({ ...b, title: b.title ?? null }));
+    SessionRepo.updateBookmarks(input.id, bookmarks);
+    const session = SessionRepo.get(input.id);
+    if (!session) throw new Error(`session not found after updateBookmarks: ${input.id}`);
+    broadcastSessionChanged(session);
     return { session };
   });
 
