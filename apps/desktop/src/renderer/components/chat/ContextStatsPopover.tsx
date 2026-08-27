@@ -31,7 +31,7 @@ import { useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { cn } from "@renderer/lib/cn.js";
 import { useI18n } from "@renderer/lib/i18n/index.js";
-import { fmtTokens, getContextBreakdown, warningColor } from "@renderer/lib/contextWindow.js";
+import { fmtCacheHitRate, fmtTokens, getContextBreakdown, warningColor } from "@renderer/lib/contextWindow.js";
 import type { ContextSnapshot, TurnUsageRecord } from "@contracts/runtime";
 import { ContextTooltipBody } from "./ContextRing.js";
 import { IconCalendarStats, IconChartBar, IconClock } from "@renderer/lib/icons.js";
@@ -204,8 +204,8 @@ function HistoryView({
   const ordered = [...history].reverse();
   // Per-turn "input" isn't stored directly — derive it as the non-cached,
   // non-output share of totalProcessedTokens (mirrors the live tooltip's
-  // `freshInput` definition in getContextBreakdown). Cache read/write are
-  // summed separately for the 合计 row.
+  // `freshInput` definition in getContextBreakdown). `prompt` (input + cache
+  // read + cache write) is the hit-rate denominator for the 合计 row.
   const totals = history.reduce(
     (acc, r) => {
       const input = Math.max(
@@ -215,10 +215,10 @@ function HistoryView({
       acc.input += input;
       acc.output += r.outputTokens;
       acc.cacheRead += r.cacheReadTokens;
-      acc.cacheWrite += r.cacheCreationTokens;
+      acc.prompt += Math.max(0, r.totalProcessedTokens - r.outputTokens);
       return acc;
     },
-    { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    { input: 0, output: 0, cacheRead: 0, prompt: 0 },
   );
 
   return (
@@ -246,7 +246,7 @@ function HistoryView({
                 <th className="px-1 py-1 text-right font-medium">{t("chat.context.colInput")}</th>
                 <th className="px-1 py-1 text-right font-medium">{t("chat.context.colOutput")}</th>
                 <th className="px-1 py-1 text-right font-medium">{t("chat.context.colCacheRead")}</th>
-                <th className="px-1 py-1 text-right font-medium">{t("chat.context.colCacheWrite")}</th>
+                <th className="px-1 py-1 text-right font-medium">{t("chat.context.colCacheHit")}</th>
                 <th className="px-1 py-1 text-right font-medium">{t("chat.context.colUsed")}</th>
               </tr>
             </thead>
@@ -286,7 +286,7 @@ function HistoryView({
                       {r.cacheReadTokens > 0 ? fmtTokens(r.cacheReadTokens) : "—"}
                     </td>
                     <td className="whitespace-nowrap px-1 py-1 text-right text-content-muted">
-                      {r.cacheCreationTokens > 0 ? fmtTokens(r.cacheCreationTokens) : "—"}
+                      {fmtCacheHitRate(r.cacheReadTokens, r.totalProcessedTokens - r.outputTokens)}
                     </td>
                     <td className="whitespace-nowrap px-1 py-1 text-right text-content-muted">
                       {pct}%
@@ -308,7 +308,7 @@ function HistoryView({
                   {fmtTokens(totals.cacheRead)}
                 </td>
                 <td className="whitespace-nowrap px-1 py-1 text-right font-medium text-content">
-                  {fmtTokens(totals.cacheWrite)}
+                  {fmtCacheHitRate(totals.cacheRead, totals.prompt)}
                 </td>
                 <td className="px-1 py-1 text-right text-content-subtle">—</td>
               </tr>

@@ -36,7 +36,7 @@ export const zh = {
   "lib.context.title": "上下文占用",
   "lib.context.input": "输入",
   "lib.context.cacheRead": "缓存读取",
-  "lib.context.cacheWrite": "缓存写入",
+  "lib.context.cacheHit": "缓存命中率",
   "lib.context.output": "输出",
   "lib.context.processed": "本轮处理",
 

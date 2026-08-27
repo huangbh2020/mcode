@@ -176,11 +176,22 @@ export class OpenAiToAnthropicSse {
     }
 
     if (chunk.usage) {
+      // OpenAI's prompt_tokens INCLUDES the cached portion; Anthropic's
+      // input_tokens EXCLUDES it (cache tokens live in separate fields). The
+      // cached count must be split out and subtracted, or downstream sums
+      // like input + cacheRead double-count it. Math.max guards against
+      // gateways reporting cached > prompt_tokens.
+      const cached =
+        chunk.usage.prompt_tokens_details?.cached_tokens ??
+        chunk.usage.prompt_cache_hit_tokens ??
+        0;
       this.usage = {
-        input_tokens: chunk.usage.prompt_tokens ?? 0,
+        input_tokens: Math.max(0, (chunk.usage.prompt_tokens ?? 0) - cached),
         output_tokens: chunk.usage.completion_tokens ?? 0,
+        // No OpenAI equivalent: caching is automatic upstream and write
+        // volume is never reported.
         cache_creation_input_tokens: 0,
-        cache_read_input_tokens: 0,
+        cache_read_input_tokens: cached,
       };
     }
 

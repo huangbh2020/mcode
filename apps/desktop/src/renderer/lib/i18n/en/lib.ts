@@ -33,7 +33,7 @@ export const en = {
   "lib.context.title": "Context usage",
   "lib.context.input": "Input",
   "lib.context.cacheRead": "Cache read",
-  "lib.context.cacheWrite": "Cache write",
+  "lib.context.cacheHit": "Cache hit",
   "lib.context.output": "Output",
   "lib.context.processed": "Processed this turn",
 

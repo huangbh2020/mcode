@@ -259,7 +259,7 @@ export const en = {
   "chat.context.colInput": "Input",
   "chat.context.colOutput": "Output",
   "chat.context.colCacheRead": "Cache read",
-  "chat.context.colCacheWrite": "Cache write",
+  "chat.context.colCacheHit": "Cache hit",
   "chat.context.colUsed": "Used",
   "chat.context.total": "Total",
   "chat.context.rowTooltip": "Processed {processed} · cumulative {used}",

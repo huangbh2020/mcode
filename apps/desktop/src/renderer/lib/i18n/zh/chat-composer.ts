@@ -265,7 +265,7 @@ export const zh = {
   "chat.context.colInput": "输入",
   "chat.context.colOutput": "输出",
   "chat.context.colCacheRead": "缓存读",
-  "chat.context.colCacheWrite": "缓存写",
+  "chat.context.colCacheHit": "缓存命中率",
   "chat.context.colUsed": "占用",
   "chat.context.total": "合计",
   "chat.context.rowTooltip": "处理 {processed} · 累计占用 {used}",

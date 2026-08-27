@@ -75,6 +75,13 @@ export interface ContextBreakdownRow {
   hint?: string;
 }
 
+/** Cache-hit percentage with one decimal ("82.4%"); "—" when the prompt
+ *  denominator is 0/unknown (gateway sent no usage). */
+export function fmtCacheHitRate(cacheRead: number, promptTokens: number): string {
+  if (promptTokens <= 0) return "—";
+  return `${Math.round((cacheRead / promptTokens) * 1000) / 10}%`;
+}
+
 /**
  * Structured token breakdown shared by ContextRing and StatusCapsule.
  * Keeps both surfaces in sync and avoids duplicating the fresh-input math.
@@ -88,10 +95,15 @@ export function getContextBreakdown(s: ContextSnapshot): {
   const cacheRead = s.cacheReadTokens ?? 0;
   const cacheCreation = s.cacheCreationTokens ?? 0;
   const freshInput = Math.max(0, s.usedTokens - cacheRead - cacheCreation);
+  // Hit-rate denominator = totalProcessed - output (input + cache read +
+  // cache write), the same cumulative basis as cacheRead itself. usedTokens
+  // would be wrong here: in merged snapshots it is a path-A window read while
+  // cacheRead is run-cumulative, so the ratio could exceed 100%.
+  const promptVolume = Math.max(0, s.totalProcessedTokens - s.outputTokens);
   const rows: ContextBreakdownRow[] = [
     { key: "input", label: translate(locale, "lib.context.input"), value: fmtTokens(freshInput) },
     { key: "cache-read", label: translate(locale, "lib.context.cacheRead"), value: fmtTokens(cacheRead) },
-    { key: "cache-write", label: translate(locale, "lib.context.cacheWrite"), value: fmtTokens(cacheCreation) },
+    { key: "cache-hit", label: translate(locale, "lib.context.cacheHit"), value: fmtCacheHitRate(cacheRead, promptVolume) },
     { key: "output", label: translate(locale, "lib.context.output"), value: fmtTokens(s.outputTokens) },
     {
       key: "processed",

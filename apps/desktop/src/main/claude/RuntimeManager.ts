@@ -73,6 +73,13 @@ interface SessionRuntime {
 
 const approvalBridge = new ApprovalBridge();
 
+/** How long the turn.done handler waits before settling a stashed pending
+ *  turn-end record with whatever snapshot is known. Must exceed the adapter's
+ *  path-B control-channel race (CONTEXT_USAGE_PATH_B_TIMEOUT_MS = 3s) so an
+ *  imminent REAL turn-end snapshot settles via the token-usage.updated branch
+ *  first; the timer only backfills when no snapshot ever comes. */
+const TURN_END_SETTLE_GRACE_MS = 4_000;
+
 class RuntimeManager {
   private sessions = new Map<string, SessionRuntime>();
   /** Optional observer fired for every emitted RuntimeEvent (after the
@@ -131,6 +138,26 @@ class RuntimeManager {
             endedAt: Date.now(),
             durationMs: Math.max(0, Date.now() - rt.turnStartedAt),
           };
+          // Ordering, as observed in production (usage history silently lost on
+          // single-turn sessions): the adapter emits the turn-end snapshot from
+          // handleResult BEFORE flushFinal's turn.done, so this stash used to
+          // sit forever — the earlier token-usage.updated found nothing pending,
+          // and single-turn sessions (side chats) had no next sendTurn to
+          // backfill. Two settle paths now cover both orders:
+          //  - the snapshot already landed → settle on a short grace timer
+          //    (path C publishes synchronously; only a slow path-B control
+          //    request lands later, ≤ its 3s race). Waiting the grace out lets
+          //    an imminent REAL snapshot win via the branch below instead of
+          //    freezing a stale mid-turn path-A value into the record.
+          //  - the snapshot truly never arrives → the same timer backfills with
+          //    the last-known snapshot rather than dropping the turn entirely.
+          setTimeout(() => {
+            try {
+              this.settlePendingTurnEnd(session.id, rt);
+            } catch {
+              /* settle already logs its own persistence errors */
+            }
+          }, TURN_END_SETTLE_GRACE_MS).unref();
         }
       } else if (e.type === "todo.update") {
         try {
