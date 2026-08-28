@@ -17,7 +17,10 @@ import { createPortal } from "react-dom";
 import type { SubagentSnapshot } from "@contracts/runtime";
 import type { SessionBookmark } from "@contracts/session";
 import type { TodoItem, Block } from "@renderer/stores/sessionStore.js";
-import { ActivitySections } from "@renderer/components/chat/ActivityPopover.js";
+import {
+  ActivitySections,
+  type ActivitySectionKey,
+} from "@renderer/components/chat/ActivityPopover.js";
 
 /** A `kind: "plan"` block - the frozen per-turn plan in the message stream. */
 type PlanBlock = Extract<Block, { kind: "plan" }>;
@@ -31,6 +34,8 @@ export function ActivitySheet({
   onRemoveBookmark,
   onClose,
   onPickPlan,
+  collapsedSections,
+  onToggleSection,
 }: {
   todos: TodoItem[];
   planBlocks: PlanBlock[];
@@ -46,6 +51,10 @@ export function ActivitySheet({
    *  that plan's markdown content. The sheet is closed by the caller
    *  (StatusCapsule) before this fires. */
   onPickPlan: (plan: string) => void;
+  /** Section collapse state — owned by StatusCapsule so it survives sheet
+   *  open/close cycles; forwarded to the section stack unchanged. */
+  collapsedSections?: ReadonlySet<ActivitySectionKey>;
+  onToggleSection?: (key: ActivitySectionKey) => void;
 }) {
   return createPortal(
     <div className="fixed inset-0 z-50">
@@ -74,6 +83,8 @@ export function ActivitySheet({
             onRemoveBookmark={onRemoveBookmark}
             onPickPlan={onPickPlan}
             scrollLists={false}
+            collapsedSections={collapsedSections}
+            onToggleSection={onToggleSection}
           />
         </div>
       </div>

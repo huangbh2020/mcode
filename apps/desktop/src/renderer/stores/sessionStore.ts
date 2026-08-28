@@ -1801,8 +1801,37 @@ function toRecords(sessionId: string, messages: ChatMessage[]): MessageRecord[] 
   }));
 }
 
+/** Drop net-zero entries (`adds === 0 && dels === 0`) from `turn-files`
+ *  blocks, and the block itself when nothing remains. Such entries are noise:
+ *  a byte-identical rewrite, or a created file that was deleted again before
+ *  the turn ended. FileSnapshot.freeze() filters them at the source now, but
+ *  blocks persisted BEFORE that fix still carry them — prune at hydration so
+ *  historical cards read the same as newly recorded ones. Returns the input
+ *  array untouched when there is nothing to prune (cheap path for the common
+ *  case). */
+function pruneUnchangedTurnFileBlocks(blocks: Block[]): Block[] {
+  let changed = false;
+  const next: Block[] = [];
+  for (const b of blocks) {
+    if (b.kind !== "turn-files") {
+      next.push(b);
+      continue;
+    }
+    const files = b.files.filter((f) => f.adds > 0 || f.dels > 0);
+    if (files.length === b.files.length) {
+      next.push(b);
+      continue;
+    }
+    changed = true;
+    if (files.length > 0) next.push({ ...b, files });
+    // files.length === 0 → the whole card was noise; drop the block.
+  }
+  return changed ? next : blocks;
+}
+
 function fromRecords(records: MessageRecord[]): ChatMessage[] {
-  return records.map((r) => {
+  const out: ChatMessage[] = [];
+  for (const r of records) {
     // Legacy rows: content is the blocks array. New rows: content is
     // { blocks, turnMeta? }. Degrade gracefully on unknown shapes.
     let blocks: Block[] = [];
@@ -1814,15 +1843,22 @@ function fromRecords(records: MessageRecord[]): ChatMessage[] {
       if (Array.isArray(obj.blocks)) blocks = obj.blocks;
       if (obj.turnMeta) turnMeta = obj.turnMeta;
     }
-    return {
+    const pruned = pruneUnchangedTurnFileBlocks(blocks);
+    // A message that consisted ONLY of pruned-to-nothing turn-files card(s)
+    // would linger as a blank row — drop it (mirrors the plan-block pruning
+    // in freezeOrPrunePlanBlocks). Messages that were already empty stay as
+    // they were (pre-existing shape, rendering handles them).
+    if (pruned.length === 0 && blocks.length > 0) continue;
+    out.push({
       id: r.id,
       sessionId: r.sessionId,
       role: r.role === "user" ? "user" : "assistant",
-      blocks,
+      blocks: pruned,
       createdAt: r.createdAt,
       ...(turnMeta ? { turnMeta } : {}),
-    };
-  });
+    });
+  }
+  return out;
 }
 
 /** Stable empty arrays so selectors never return a fresh [] (Zustand Object.is). */
@@ -2212,63 +2248,12 @@ function materializeSessionEntry(entry: SessionListEntry): Session {
   };
 }
 
-/** In-memory cleanup for a hard-deleted session — shared by the local
- *  `deleteSession` action and the remote `session.deleted` event reducer, so a
- *  phone deleting a thread cleans the desktop's lists/tabs/buckets exactly
- *  like a local delete. Pure: takes the current state, returns the patch. */
-function applySessionDeletedState(s: SessionState, id: string): Partial<SessionState> {
-  // Find which project + cache owns this session.
-  let projectId: string | undefined;
-  let inArchived = false;
-  let inPinned = false;
-  for (const [pid, list] of Object.entries(s.sessionsByProject)) {
-    if (list?.some((sess) => sess.id === id)) { projectId = pid; inArchived = false; break; }
-  }
-  // Pinned rows aren't in the per-project caches — they live in the global
-  // pinned bucket, so look there before the archived bin.
-  if (!projectId) {
-    const pinnedRow = s.pinnedSessions.find((sess) => sess.id === id);
-    if (pinnedRow) { projectId = pinnedRow.projectId; inPinned = true; }
-  }
-  if (!projectId) {
-    for (const [pid, list] of Object.entries(s.archivedSessionsByProject)) {
-      if (list?.some((sess) => sess.id === id)) { projectId = pid; inArchived = true; break; }
-    }
-  }
-  if (!projectId) return {};
-  const prevList = inPinned
-    ? s.pinnedSessions
-    : (inArchived ? s.archivedSessionsByProject : s.sessionsByProject)[projectId] ?? [];
-  const nextList = prevList.filter((sess) => sess.id !== id);
-  // For a pinned row the project's active window is untouched; all
-  // total/hasMore math below must reference it rather than the pinned bucket.
-  const activeWindowLen = inPinned
-    ? (s.sessionsByProject[projectId]?.length ?? 0)
-    : nextList.length;
-  const sessionsByProject = { ...s.sessionsByProject };
-  const archivedByProject = { ...s.archivedSessionsByProject };
-  // Replace the touched cache. Empty archived cache entries are dropped
-  // so the "已归档" bin doesn't render empty project groups.
-  if (inPinned) {
-    // Row leaves the pinned bucket only; project caches are untouched.
-  } else if (inArchived) {
-    if (nextList.length > 0) archivedByProject[projectId] = nextList;
-    else delete archivedByProject[projectId];
-  } else {
-    sessionsByProject[projectId] = nextList;
-  }
-  // Active-thread totals only move when an active (non-archived,
-  // non-pinned) row is deleted; archived / pinned rows aren't part of the
-  // active count.
-  const totalActive = inArchived || inPinned
-    ? (s.sessionsTotalByProject[projectId] ?? 0)
-    : Math.max((s.sessionsTotalByProject[projectId] ?? 0) - 1, 0);
-  const hasMoreActive = inPinned
-    ? (s.sessionsHasMoreByProject[projectId] ?? false)
-    : totalActive > activeWindowLen;
-  // Also drop all per-session buckets for this id. The session is gone
-  // for good; no point keeping its messages / running flag / question
-  // / approval queue / files in memory.
+/** Per-session buckets + queues to drop when ANY session is hard-deleted —
+ *  shared verbatim by the main-session and side-chat paths of
+ *  applySessionDeletedState. Pure: copies every touched bucket, removes the
+ *  id's entry (and any timers / queue rows keyed by it), returns the patch
+ *  fragment. Runs synchronously inside set() callbacks. */
+function dropSessionBuckets(s: SessionState, id: string) {
   const messagesBySession = { ...s.messagesBySession };
   delete messagesBySession[id];
   const hasMoreMessagesBySession = { ...s.hasMoreMessagesBySession };
@@ -2287,8 +2272,7 @@ function applySessionDeletedState(s: SessionState, id: string): Partial<SessionS
   delete interruptedBySession[id];
   const upstreamIssueBySession = { ...s.upstreamIssueBySession };
   delete upstreamIssueBySession[id];
-  // Also drop the hint's decay timer (module-level side effect — idempotent,
-  // and this builder only runs synchronously inside set() callbacks).
+  // Also drop the hint's decay timer (module-level side effect — idempotent).
   const issueTimer = upstreamIssueDecayTimers.get(id);
   if (issueTimer) {
     clearTimeout(issueTimer);
@@ -2328,20 +2312,10 @@ function applySessionDeletedState(s: SessionState, id: string): Partial<SessionS
   delete planApprovalDraftBySession[id];
   const composerDraftBySession = { ...s.composerDraftBySession };
   delete composerDraftBySession[id];
+  const sideChatSeedBySession = { ...s.sideChatSeedBySession };
+  delete sideChatSeedBySession[id];
   const pendingApprovals = s.pendingApprovals.filter((p) => p.sessionId !== id);
-  // Drop the session from the tab strip too. If it was the active tab,
-  // the focus jumps to the previous tab (openTab logic replicated
-  // inline since we're already inside a `set` callback).
-  const idx = s.openTabs.indexOf(id);
-  const openTabs = idx === -1 ? s.openTabs : s.openTabs.filter((sid) => sid !== id);
-  const wasActive = s.activeSessionId === id;
-  if (!wasActive) {
-    return {
-      sessionsByProject,
-      archivedSessionsByProject: archivedByProject,
-      ...(inPinned ? { pinnedSessions: nextList } : {}),
-      sessionsTotalByProject: { ...s.sessionsTotalByProject, [projectId]: totalActive },
-      sessionsHasMoreByProject: { ...s.sessionsHasMoreByProject, [projectId]: hasMoreActive },
+  return {
     messagesBySession,
     hasMoreMessagesBySession,
     loadingMessagesBySession,
@@ -2368,8 +2342,116 @@ function applySessionDeletedState(s: SessionState, id: string): Partial<SessionS
     planTabActiveBySession,
     planApprovalDraftBySession,
     composerDraftBySession,
+    sideChatSeedBySession,
     pendingApprovals,
-    openTabs,
+  };
+}
+
+/** In-memory cleanup for a hard-deleted session — shared by the local
+ *  `deleteSession` action and the remote `session.deleted` event reducer, so a
+ *  phone deleting a thread cleans the desktop's lists/tabs/buckets exactly
+ *  like a local delete. Covers side chats too: kind="side" rows live outside
+ *  the left-bar caches, in their parent's sideChatsByParent bucket. Pure:
+ *  takes the current state, returns the patch. */
+function applySessionDeletedState(s: SessionState, id: string): Partial<SessionState> {
+  // Find which project + cache owns this session.
+  let projectId: string | undefined;
+  let inArchived = false;
+  let inPinned = false;
+  for (const [pid, list] of Object.entries(s.sessionsByProject)) {
+    if (list?.some((sess) => sess.id === id)) { projectId = pid; inArchived = false; break; }
+  }
+  // Pinned rows aren't in the per-project caches — they live in the global
+  // pinned bucket, so look there before the archived bin.
+  if (!projectId) {
+    const pinnedRow = s.pinnedSessions.find((sess) => sess.id === id);
+    if (pinnedRow) { projectId = pinnedRow.projectId; inPinned = true; }
+  }
+  if (!projectId) {
+    for (const [pid, list] of Object.entries(s.archivedSessionsByProject)) {
+      if (list?.some((sess) => sess.id === id)) { projectId = pid; inArchived = true; break; }
+    }
+  }
+  if (!projectId) {
+    // Not in the left-bar caches — check the ask-tab buckets. Side chats
+    // (kind="side") hang off their parent under sideChatsByParent and are
+    // invisible everywhere else. Hard-deleting one removes it from that
+    // list; if it was open, the panel falls back to the list view (the
+    // derived view switch needs no explicit reset beyond clearing the id).
+    const parent = Object.keys(s.sideChatsByParent).find((key) =>
+      s.sideChatsByParent[key]?.some((x) => x.id === id),
+    );
+    if (!parent) return {};
+    const list = s.sideChatsByParent[parent] ?? [];
+    return {
+      sideChatsByParent: { ...s.sideChatsByParent, [parent]: list.filter((x) => x.id !== id) },
+      ...dropSessionBuckets(s, id),
+      ...(s.activeSideChatId === id ? { activeSideChatId: null } : {}),
+    };
+  }
+  const prevList = inPinned
+    ? s.pinnedSessions
+    : (inArchived ? s.archivedSessionsByProject : s.sessionsByProject)[projectId] ?? [];
+  const nextList = prevList.filter((sess) => sess.id !== id);
+  // For a pinned row the project's active window is untouched; all
+  // total/hasMore math below must reference it rather than the pinned bucket.
+  const activeWindowLen = inPinned
+    ? (s.sessionsByProject[projectId]?.length ?? 0)
+    : nextList.length;
+  const sessionsByProject = { ...s.sessionsByProject };
+  const archivedByProject = { ...s.archivedSessionsByProject };
+  // Replace the touched cache. Empty archived cache entries are dropped
+  // so the "已归档" bin doesn't render empty project groups.
+  if (inPinned) {
+    // Row leaves the pinned bucket only; project caches are untouched.
+  } else if (inArchived) {
+    if (nextList.length > 0) archivedByProject[projectId] = nextList;
+    else delete archivedByProject[projectId];
+  } else {
+    sessionsByProject[projectId] = nextList;
+  }
+  // Active-thread totals only move when an active (non-archived,
+  // non-pinned) row is deleted; archived / pinned rows aren't part of the
+  // active count.
+  const totalActive = inArchived || inPinned
+    ? (s.sessionsTotalByProject[projectId] ?? 0)
+    : Math.max((s.sessionsTotalByProject[projectId] ?? 0) - 1, 0);
+  const hasMoreActive = inPinned
+    ? (s.sessionsHasMoreByProject[projectId] ?? false)
+    : totalActive > activeWindowLen;
+  // Drop all per-session buckets for this id (helper above). The session is
+  // gone for good; no point keeping its messages / running flag / question
+  // / approval queue / files in memory. The ask-tab list goes too: deleting
+  // a main session orphans its side chats in the DB (delete() nulls their
+  // parent_session_id), so the in-memory bucket would only go stale — and
+  // an open side chat of the deleted parent falls back to the list view.
+  const dropped = dropSessionBuckets(s, id);
+  const hadSideChats = id in s.sideChatsByParent;
+  const sideChatsByParent = { ...s.sideChatsByParent };
+  let activeSideChatId = s.activeSideChatId;
+  if (hadSideChats) {
+    if ((sideChatsByParent[id] ?? []).some((x) => x.id === activeSideChatId)) {
+      activeSideChatId = null;
+    }
+    delete sideChatsByParent[id];
+  }
+  // Drop the session from the tab strip too. If it was the active tab,
+  // the focus jumps to the previous tab (openTab logic replicated
+  // inline since we're already inside a `set` callback).
+  const idx = s.openTabs.indexOf(id);
+  const openTabs = idx === -1 ? s.openTabs : s.openTabs.filter((sid) => sid !== id);
+  const wasActive = s.activeSessionId === id;
+  if (!wasActive) {
+    return {
+      sessionsByProject,
+      archivedSessionsByProject: archivedByProject,
+      ...(inPinned ? { pinnedSessions: nextList } : {}),
+      sessionsTotalByProject: { ...s.sessionsTotalByProject, [projectId]: totalActive },
+      sessionsHasMoreByProject: { ...s.sessionsHasMoreByProject, [projectId]: hasMoreActive },
+      ...dropped,
+      ...(hadSideChats ? { sideChatsByParent } : {}),
+      ...(activeSideChatId !== s.activeSideChatId ? { activeSideChatId } : {}),
+      openTabs,
     };
   }
   // Was the active tab. Land on the previous tab if any, otherwise the
@@ -2392,39 +2474,16 @@ function applySessionDeletedState(s: SessionState, id: string): Partial<SessionS
     ? findSession(sessionsByProject, archivedByProject, inPinned ? nextList : s.pinnedSessions, finalActive)
     : undefined;
   // Clear the new active session's unread badge - it's now visible.
-  if (finalActive) delete unreadBySession[finalActive];
+  if (finalActive) delete dropped.unreadBySession[finalActive];
   return {
     sessionsByProject,
     archivedSessionsByProject: archivedByProject,
     ...(inPinned ? { pinnedSessions: nextList } : {}),
     sessionsTotalByProject: { ...s.sessionsTotalByProject, [projectId]: totalActive },
     sessionsHasMoreByProject: { ...s.sessionsHasMoreByProject, [projectId]: hasMoreActive },
-    messagesBySession,
-    hasMoreMessagesBySession,
-    loadingMessagesBySession,
-    loadingOlderBySession,
-    historyLoadedBySession,
-    runningBySession,
-    runningTurnStartedAt,
-    interruptedBySession,
-    upstreamIssueBySession,
-    unreadBySession,
-    todosBySession,
-    planBySession,
-    subagentsBySession,
-    pendingQuestionBySession,
-    turnFilesBySession,
-    bookmarksBySession,
-    chatFileQueueBySession,
-    chatElementQueueBySession,
-    contextSnapshotBySession,
-    usageHistoryBySession,
-    pendingPlanApprovalBySession,
-    planDrawerPlanBySession,
-    planTabActiveBySession,
-    planApprovalDraftBySession,
-    composerDraftBySession,
-    pendingApprovals,
+    ...dropped,
+    ...(hadSideChats ? { sideChatsByParent } : {}),
+    ...(activeSideChatId !== s.activeSideChatId ? { activeSideChatId } : {}),
     openTabs,
     sessions: isActiveProject ? nextList : s.sessions,
     activeSessionId: finalActive,
@@ -3190,10 +3249,17 @@ const LIVE_FILES_ID = "current";
  *
  *  Returns the new messages array; pure (no store mutation). */
 function upsertLiveTurnFilesBlock(messages: ChatMessage[], files: TurnFileEntry[]): ChatMessage[] {
+  // Defensive mirror of FileSnapshot.freeze's net-zero filter: entries with
+  // no actual change are pure noise on the card, and filtering them at RENDER
+  // time instead would break the path-set equality the `turn.rewound` matcher
+  // relies on (card files vs echoed targetFiles). No-op for events emitted by
+  // the fixed freeze(); keeps the card honest for any other source.
+  const visible = files.filter((f) => f.adds > 0 || f.dels > 0);
+  if (visible.length === 0) return messages;
   const block: Block = {
     kind: "turn-files",
     filesId: LIVE_FILES_ID,
-    files,
+    files: visible,
     isLatestTurn: true,
   };
   let next = messages;
@@ -8126,17 +8192,30 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         permissionMode: s.permissionMode,
         customModelId: resolvedModel.customModelId,
       });
-      set((st) => ({
-        sideChatsByParent: {
-          ...st.sideChatsByParent,
-          [parentSessionId]: [session, ...(st.sideChatsByParent[parentSessionId] ?? [])],
-        },
-        activeSideChatId: session.id,
-        // Locally-created: empty bucket IS the full history (same as startSession).
-        messagesBySession: { ...st.messagesBySession, [session.id]: [] },
-        hasMoreMessagesBySession: { ...st.hasMoreMessagesBySession, [session.id]: false },
-        historyLoadedBySession: { ...st.historyLoadedBySession, [session.id]: true },
-      }));
+      set((st) => {
+        const existing = st.sideChatsByParent[parentSessionId] ?? [];
+        return {
+          sideChatsByParent: {
+            ...st.sideChatsByParent,
+            // The main process reuses the parent's still-fresh "Quick ask"
+            // shell when one exists — that row is already in the list, so it
+            // updates in place (prepending would duplicate the React key and
+            // teleport an old row to the top; the list is created_at-ordered
+            // like the DB query behind hydrateSideChats). New rows land at
+            // the front, matching listSideByParent's DESC order.
+            [parentSessionId]: existing.some((x) => x.id === session.id)
+              ? existing.map((x) => (x.id === session.id ? session : x))
+              : [session, ...existing],
+          },
+          activeSideChatId: session.id,
+          // Locally-created — or a reused shell, which by definition has no
+          // messages (the first sent question rewrites the placeholder
+          // title): empty bucket IS the full history (same as startSession).
+          messagesBySession: { ...st.messagesBySession, [session.id]: [] },
+          hasMoreMessagesBySession: { ...st.hasMoreMessagesBySession, [session.id]: false },
+          historyLoadedBySession: { ...st.historyLoadedBySession, [session.id]: true },
+        };
+      });
     } catch (err) {
       console.error("createSideChat failed:", err);
     }

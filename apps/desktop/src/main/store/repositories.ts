@@ -481,6 +481,25 @@ export const SessionRepo = {
     return row ? rowToSession(row) : undefined;
   },
 
+  /** Newest still-fresh side chat of a parent — the ask tab's "new chat"
+   *  button reuses this row instead of stacking empty ones (same rule as
+   *  findFreshByProject: the "Quick ask" placeholder is rewritten by the
+   *  first sent question, so a placeholder title means never used). */
+  findFreshSideByParent(parentSessionId: string): Session | undefined {
+    const db = getDb();
+    const stmt = db.prepare(
+      `SELECT * FROM sessions
+       WHERE kind = 'side' AND parent_session_id = ?
+         AND status = 'idle' AND title = 'Quick ask'
+       ORDER BY updated_at DESC, created_at DESC LIMIT 1`,
+    );
+    stmt.bind([v(parentSessionId)]);
+    const found = stmt.step();
+    const row = found ? (stmt.getAsObject() as unknown as SessionRow) : undefined;
+    stmt.free();
+    return row ? rowToSession(row) : undefined;
+  },
+
   /** List a main session's side chats (kind='side', parent = the given id),
    *  newest first. Powers the right-panel ask tab's list view. Unlike the
    *  left-bar list this orders by `created_at` — side chats are immutable

@@ -100,6 +100,8 @@ export const en = {
   "sideChat.loading": "Loading sub-sessions…",
   "sideChat.subagentsSection": "Subagents",
   "sideChat.subagentWaiting": "Waiting for output…",
+  "sideChat.deleteChat": "Delete sub-session",
+  "sideChat.deleteChatDesc": "Permanently delete sub-session \"{title}\"? Its messages are removed with it. This cannot be undone.",
 
   /* ── center pane ── */
   "layout.loadingPlan": "Loading plan…",

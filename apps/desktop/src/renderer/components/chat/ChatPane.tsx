@@ -158,6 +158,12 @@ const NEAR_BOTTOM_THRESHOLD = 80;
  *  async and the store dedupes concurrent calls. */
 const NEAR_TOP_THRESHOLD = 120;
 
+/** Slack (px) for the timeline's active-dash walk: a user message counts as
+ *  "scrolled past" once its item top is within this distance of the viewport
+ *  top, so the dash flips as the row's head clears the top edge instead of
+ *  requiring an exact overlap. */
+const ACTIVE_DASH_LEAD = 24;
+
 /** Format a wall-clock ms timestamp as HH:MM:SS (local time). */
 function fmtClock(ms: number): string {
   const d = new Date(ms);
@@ -1573,9 +1579,11 @@ function ChatPaneForSession({
     }
     return out;
   }, [bookmarks, messages, msgToRenderIndex]);
-  // Current virtual-list scroll offset, updated on each scroll event.
-  // Used by MessageTimeline to compute which user message is active.
-  const [virtualScrollTop, setVirtualScrollTop] = useState(0);
+  // The user message currently at/above the viewport top — the timeline's
+  // accent "you are here" dash. Computed on each scroll event from the
+  // virtual list's REAL per-item positions (positionAtIndex); the scroll
+  // offset lives only in the handler now.
+  const [activeUserId, setActiveUserId] = useState<string | null>(null);
 
   /** Detect an @ or / trigger token at the caret and drive the inline picker.
    *  - `@` (mention): must be at line start or preceded by whitespace.
@@ -2133,12 +2141,27 @@ function ChatPaneForSession({
     }
   }, [stageImageFile, t]);
 
-  // Scroll callback from LegendList: update scroll position for MessageTimeline
-  // and jump-to-bottom button state.
+  // Scroll callback from LegendList: update the timeline's active dash and
+  // jump-to-bottom button state.
+  //
+  // Active dash: the LAST user message whose item top sits at/above the
+  // viewport top (+ACTIVE_DASH_LEAD slack). Positions come from the list's
+  // own state — positionAtIndex returns measured offsets for rendered items
+  // and size-based estimates for the rest, both in scroll-offset space and
+  // monotonically increasing, so the first item past the boundary ends the
+  // walk. The scroll offset itself is NOT stored: the old scrollTop/80
+  // item-index estimate saturated after ~two screens in tall sessions and
+  // pinned the highlight to the last user dash regardless of the viewport.
   const handleVirtualScroll = useCallback(() => {
     const state = virtualListRef.current?.getState();
     if (!state) return;
-    setVirtualScrollTop(state.scroll);
+    let active: string | null = null;
+    for (const [id, idx] of userMsgToRenderIndex) {
+      const pos = state.positionAtIndex(idx);
+      if (Number.isFinite(pos) && pos <= state.scroll + ACTIVE_DASH_LEAD) active = id;
+      else break;
+    }
+    setActiveUserId(active);
     const distanceFromEnd = state.contentLength - state.scroll - state.scrollLength;
     setShowJumpBottom(distanceFromEnd >= NEAR_BOTTOM_THRESHOLD);
     // Near-top: load one page of older history. Cheap to call repeatedly —
@@ -2146,7 +2169,7 @@ function ChatPaneForSession({
     if (state.scroll < NEAR_TOP_THRESHOLD) {
       void loadOlderMessages(sessionId);
     }
-  }, [loadOlderMessages, sessionId]);
+  }, [loadOlderMessages, sessionId, userMsgToRenderIndex]);
 
   // First-page history fetch in flight for this session (bucket still
   // undefined). Drives a skeleton in place of the empty-thread welcome so
@@ -2660,7 +2683,7 @@ function ChatPaneForSession({
       {!empty && (
         <MessageTimeline
           messages={messages}
-          scrollTop={virtualScrollTop}
+          activeId={activeUserId}
           userItemIndices={userMsgToRenderIndex}
           bookmarkedItems={bookmarkedTimelineItems}
           onJumpItem={(messageId, _index, excerpt) => jumpToMessage(messageId, excerpt)}

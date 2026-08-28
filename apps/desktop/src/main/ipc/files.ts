@@ -388,7 +388,9 @@ function rankNameMatches(
 ): FileSearchEntry[] {
   const hits: FileSearchEntry[] = [];
   for (const f of files) {
-    if (includeExts && !includeExts.has(extOf(f.name))) continue;
+    // An empty set means "no filter" (the renderer omits includeExts when the
+    // file-type box is blank) — a bare truthiness check would drop every file.
+    if (includeExts && includeExts.size > 0 && !includeExts.has(extOf(f.name))) continue;
     const hay = `${f.name}\n${f.relPath}`.toLowerCase();
     if (!hay.includes(query)) continue;
     hits.push({ name: f.name, path: f.abs, relativePath: f.relPath });

@@ -94,7 +94,16 @@ export function getContextBreakdown(s: ContextSnapshot): {
   const locale = useSessionStore.getState().locale;
   const cacheRead = s.cacheReadTokens ?? 0;
   const cacheCreation = s.cacheCreationTokens ?? 0;
-  const freshInput = Math.max(0, s.usedTokens - cacheRead - cacheCreation);
+  // Fresh input must stay on the throughput basis (totalProcessed - output -
+  // cache read - cache write), the same formula as the history table and
+  // turnFlowModel.usageInputTokens. Subtracting the cache fields from
+  // `usedTokens` instead mixes bases — usedTokens is a single window read
+  // while they are run-cumulative (whole turn on Claude, whole session on
+  // Pi) — and clamps to 0 on any cached multi-step turn.
+  const freshInput = Math.max(
+    0,
+    s.totalProcessedTokens - s.outputTokens - cacheRead - cacheCreation,
+  );
   // Hit-rate denominator = totalProcessed - output (input + cache read +
   // cache write), the same cumulative basis as cacheRead itself. usedTokens
   // would be wrong here: in merged snapshots it is a path-A window read while

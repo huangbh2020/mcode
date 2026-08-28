@@ -12,7 +12,7 @@ import type { SubagentSnapshot } from "@contracts/runtime";
 import type { SessionBookmark } from "@contracts/session";
 import type { TodoItem, Block } from "@renderer/stores/sessionStore.js";
 import { isElectron } from "@renderer/lib/platform.js";
-import { ActivityPopover } from "./ActivityPopover.js";
+import { ActivityPopover, useCollapsedSections } from "./ActivityPopover.js";
 import { ActivitySheet } from "@renderer/components/mobile/ActivitySheet.js";
 
 /** A `kind: "plan"` block - the frozen per-turn plan in the message stream. */
@@ -108,6 +108,10 @@ export function StatusCapsule({
   onPickPlan: (plan: string) => void;
 }) {
   const [open, setOpen] = useState(false);
+  // Collapsed sections of the expanded popover/sheet. Lives here (not inside
+  // the popover, which unmounts on close) so the user's collapsed sections
+  // survive open/close cycles within the session pane.
+  const { collapsedSections, toggleSection } = useCollapsedSections();
   const { t } = useI18n();
   const runningAgents = subagents.filter((a) => a.status === "running").length;
   const hasSubagents = subagents.length > 0;
@@ -146,7 +150,7 @@ export function StatusCapsule({
       <div
         className={cn(
           "rounded-full bg-gradient-to-b p-px transition-all duration-200",
-          "from-black/20 to-black/5 dark:from-white/25 dark:to-white/[0.05] shadow-lg shadow-black/10",
+          "from-black/25 to-black/10 dark:from-white/30 dark:to-white/[0.08] shadow-lg shadow-black/10",
           !open && "hover:-translate-y-0.5 hover:shadow-xl hover:shadow-black/15",
         )}
       >
@@ -157,7 +161,7 @@ export function StatusCapsule({
             "flex w-full items-center gap-1 rounded-full px-2 py-1 text-[11px] font-medium tabular-nums backdrop-blur-md transition-all",
             "shadow-[inset_0_1px_0_rgb(255_255_255/0.12)]",
             "hover:brightness-95 dark:hover:brightness-110",
-            "bg-surface/75 text-content",
+            "bg-surface-muted/90 text-content",
           )}
           title={t("chatStream.activity.capsuleTitle")}
         >
@@ -227,7 +231,7 @@ export function StatusCapsule({
           {/* Expand/collapse affordance - a chevron that flips when the
               popover is open. Separated from the segments by a thin divider
               so it reads as a control, not another metric. */}
-          <span className="ml-0.5 h-3 w-px bg-gradient-to-b from-transparent via-edge/80 to-transparent" />
+          <span className="ml-0.5 h-3 w-px bg-gradient-to-b from-transparent via-content-subtle/50 to-transparent" />
           <IconChevronDown
             size={12}
             className={cn(
@@ -245,6 +249,8 @@ export function StatusCapsule({
             subagents={subagents}
             bookmarks={bookmarks}
             isBookmarkStale={isBookmarkStale}
+            collapsedSections={collapsedSections}
+            onToggleSection={toggleSection}
             onPickBookmark={(b) => {
               // Close the popover first, then scroll — the popover's anchor
               // would shift mid-flight otherwise.
@@ -275,6 +281,8 @@ export function StatusCapsule({
             subagents={subagents}
             bookmarks={bookmarks}
             isBookmarkStale={isBookmarkStale}
+            collapsedSections={collapsedSections}
+            onToggleSection={toggleSection}
             onRemoveBookmark={onRemoveBookmark}
             onClose={() => setOpen(false)}
             onPickPlan={(plan) => {
@@ -288,8 +296,12 @@ export function StatusCapsule({
 }
 
 /** Thin vertical divider between capsule segments — a vertical gradient
- * (transparent → edge → transparent) so the line fades out at both ends
- * instead of hard-stopping. */
+ *  (transparent → subtle-text tone → transparent) so the line fades out at
+ *  both ends instead of hard-stopping. Uses --content-subtle rather than
+ *  --edge because the pill's fill is --surface-muted, which --edge
+ *  (#2d3340 on #2c313c in dark) can't separate from. */
 function Divider() {
-  return <span className="h-3 w-px bg-gradient-to-b from-transparent via-edge/80 to-transparent" />;
+  return (
+    <span className="h-3 w-px bg-gradient-to-b from-transparent via-content-subtle/50 to-transparent" />
+  );
 }

@@ -12,13 +12,20 @@
  * sit as adjacent gold dashes.
  *
  * Virtual-list mode (default):
- *   - `scrollTop`, `userItemIndices`, and `onJumpToIndex` are provided by
- *     the parent (ChatPane) which owns the LegendList ref.
- *   - The active dash is computed from the current scroll position and item
- *     order rather than DOM offsetTop.
+ *   - `userItemIndices` and `onJumpToIndex` are provided by the parent
+ *     (ChatPane) which owns the LegendList ref.
+ *   - The active dash is decided by the parent: ChatPane reads the virtual
+ *     list's real per-item positions (getState().positionAtIndex) on scroll
+ *     and passes the resulting `activeId` down. An earlier in-component
+ *     estimate (scrollTop / 80px) saturated after ~two screens of scroll in
+ *     tall sessions — the highlight then sat on the LAST user dash no matter
+ *     where the viewport was, which read as bookmarks sitting "above the
+ *     current position" right after jumping to one.
  *
  * Feature set:
- *   - Active dash highlight (the last user message scrolled past).
+ *   - Active dash highlight (the user message at/above the viewport top —
+ *     computed by ChatPane from the list's real positions, passed as
+ *     `activeId`).
  *   - Hover card with timestamp + text body (bookmark dashes show the
  *     bookmark's excerpt instead of the full message text).
  *   - Click to scroll to that message (via onJumpItem).
@@ -76,9 +83,10 @@ function blocksToText(blocks: Block[], t: Translate): string {
 
 interface MessageTimelineProps {
   messages: ChatMessage[];
-  /** Current scroll offset of the virtual list's viewport. Used to compute
-   *  which user message is active. Zero when no user messages exist. */
-  scrollTop?: number;
+  /** The user message currently at/above the viewport top (computed by the
+   *  parent from the virtual list's real positions). Rendered as the accent
+   *  "you are here" dash. Null when no user messages exist. */
+  activeId?: string | null;
   /** Map of user-message id → its index in the LegendList data array. */
   userItemIndices?: UserItemIndexMap;
   /** Live bookmarks for gold dashes (user + assistant messages alike). */
@@ -105,7 +113,7 @@ interface DashEntry {
 
 export function MessageTimeline({
   messages,
-  scrollTop = 0,
+  activeId = null,
   userItemIndices,
   bookmarkedItems,
   onJumpItem,
@@ -163,45 +171,6 @@ export function MessageTimeline({
     out.sort((a, b) => a.index - b.index);
     return out;
   }, [userMessages, bookmarkGroups, userItemIndices]);
-
-  // Compute active user-message id from scroll position + item ordering.
-  // The "active" one is the LAST user message whose LegendList item index
-  // is estimated to be at or above the viewport top. Since we don't have
-  // exact pixel positions for each item, we approximate by walking items in
-  // order and picking the last one we've "scrolled past" based on a simple
-  // linear estimate.
-  const activeId = useMemo<string | null>(() => {
-    if (userMessages.length === 0 || !userItemIndices || userItemIndices.size === 0) {
-      return null;
-    }
-    // Build an ordered list of (messageId, renderIndex) sorted by renderIndex.
-    const indexed = userMessages
-      .map((m) => ({
-        id: m.id,
-        idx: userItemIndices.get(m.id) ?? -1,
-      }))
-      .filter((x) => x.idx >= 0)
-      .sort((a, b) => a.idx - b.idx);
-
-    if (indexed.length === 0) return null;
-
-    // With virtual lists we don't have exact pixel positions per item.
-    // We use a heuristic based on scrollTop and relative item indices:
-    // the active user message is the last one that is "likely" above the
-    // viewport top.
-    //
-    // Since @legendapp/list renders items sequentially, items with lower
-    // indices appear before (above) items with higher indices. We estimate
-    // that roughly `scrollTop / 80` items have been scrolled past (80px is
-    // our estimatedItemSize). The active one is the closest to that boundary.
-    const estimatedIdx = scrollTop > 0 ? Math.floor(scrollTop / 80) : 0;
-
-    let active: string | null = null;
-    for (const x of indexed) {
-      if (x.idx <= estimatedIdx + 2) active = x.id;
-    }
-    return active;
-  }, [userMessages, scrollTop, userItemIndices]);
 
   if (dashes.length === 0) return null;
 

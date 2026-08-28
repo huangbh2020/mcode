@@ -20,11 +20,33 @@ export function createOrReuseSession(
   input: StartSessionInput,
   source: "desktop" | "mobile",
 ): { session: Session; reused: boolean } {
-  // Side-chat Q&A sessions: every request creates a fresh row (one main
-  // session → many side chats). No fresh-row reuse, no session.changed
-  // broadcast — the desktop ask tab consumes the IPC return value directly
-  // and mobile doesn't manage side chats at all.
+  // Side-chat Q&A sessions: reuse the parent's still-fresh "Quick ask" row
+  // when one exists (same anti-stacking rule as main sessions below — a
+  // placeholder title means the first question never landed, so the shell is
+  // empty and refocusing it beats creating another one). No session.changed
+  // broadcast — side chats are invisible to the left-bar/mobile lists by
+  // design; the desktop ask tab consumes the IPC return value directly and
+  // mobile doesn't manage side chats at all.
   if (input.kind === "side") {
+    if (input.parentSessionId) {
+      const fresh = SessionRepo.findFreshSideByParent(input.parentSessionId);
+      if (fresh) {
+        // Re-aim at the current composer config (updateSettings skips
+        // undefined fields and bumps updated_at; the ask tab sorts by
+        // created_at, so the row stays in place in its list).
+        SessionRepo.updateSettings(fresh.id, {
+          providerId: input.providerId,
+          model: input.model,
+          effort: input.effort,
+          permissionMode: input.permissionMode,
+          customModelId: input.customModelId ?? null,
+        });
+        const session = SessionRepo.get(fresh.id) ?? fresh;
+        runtimeManager.bindSession(session);
+        log.info(`side chat reused: ${session.id} (parent ${input.parentSessionId}, project ${input.projectId}, ${source})`);
+        return { session, reused: true };
+      }
+    }
     const now = Date.now();
     const session: Session = {
       id: uid("sess_"),

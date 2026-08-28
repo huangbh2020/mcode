@@ -17,7 +17,7 @@ import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { cn } from "@renderer/lib/cn.js";
 import { useI18n } from "@renderer/lib/i18n/index.js";
-import { IconBookmark, IconCheck, IconCopy, IconMessageChatbot } from "@renderer/lib/icons.js";
+import { IconBookmark, IconCheck, IconCopy, IconMessages } from "@renderer/lib/icons.js";
 
 /** What the owning ChatPane captured at mouseup: a viewport-space snapshot of
  *  the selection plus the message it belongs to (resolved from
@@ -141,7 +141,7 @@ export function SelectionToolbar({
         title={t("chatStream.bookmark.askSideChat")}
         className="flex items-center gap-1 rounded-md px-1.5 py-1 text-[10px] text-content-subtle transition-colors hover:bg-surface-hover hover:text-accent"
       >
-        <IconMessageChatbot size={12} />
+        <IconMessages size={12} />
       </button>
     </div>,
     document.body,

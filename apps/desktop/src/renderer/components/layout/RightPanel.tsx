@@ -4,7 +4,7 @@ import {
   IconGitBranch,
   IconWorld,
   IconListDetails,
-  IconMessageChatbot,
+  IconMessages,
   IconArrowsMaximize,
   IconArrowsMinimize,
 } from "@renderer/lib/icons.js";
@@ -103,7 +103,7 @@ export function RightPanel() {
           onClick={() => setTab("sidechat")}
           title={t("layout.tabSideChat") + hintFor("sidechat.open")}
         >
-          <IconMessageChatbot size={16} className="shrink-0" />
+          <IconMessages size={16} className="shrink-0" />
         </RailButton>
         {/* Wide-panel (3:7) mode - hide the left sidebar + center editor and
             split the workspace into this right panel (7/10) + the chat column

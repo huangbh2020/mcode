@@ -325,11 +325,9 @@ export function SearchDialog() {
 
   const toggleMode = () => {
     setMode((m) => (m === "name" ? "content" : "name"));
-    // Different modes target different result sets; clear both so no stale hits
-    // linger while the new mode's (debounced) search runs.
-    setQuery("");
-    setNameResults([]);
-    setGrepResults([]);
+    // Keep the query: the search effect re-runs on `mode` change (debounced),
+    // and each mode's success handler clears the other mode's result set, so
+    // stale hits never linger while the new mode's search runs.
     setActiveIdx(0);
     inputRef.current?.focus();
   };

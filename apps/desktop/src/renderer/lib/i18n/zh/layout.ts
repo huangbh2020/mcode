@@ -103,6 +103,8 @@ export const zh = {
   "sideChat.loading": "加载子会话…",
   "sideChat.subagentsSection": "子代理",
   "sideChat.subagentWaiting": "等待输出…",
+  "sideChat.deleteChat": "删除子会话",
+  "sideChat.deleteChatDesc": "确认彻底删除子会话「{title}」？聊天记录将一并删除，此操作不可恢复。",
 
   /* ── center pane ── */
   "layout.loadingPlan": "加载计划…",

@@ -21,11 +21,13 @@ import { cn } from "@renderer/lib/cn.js";
 import { formatRelativeTime } from "@renderer/lib/time.js";
 import {
   IconArrowLeft,
-  IconMessageChatbot,
+  IconMessages,
   IconPlus,
+  IconTrash,
 } from "@renderer/lib/icons.js";
 import { useI18n } from "@renderer/lib/i18n/index.js";
 import { useSessionStore, type Block } from "@renderer/stores/sessionStore.js";
+import { ConfirmDialog } from "@renderer/components/ui/index.js";
 import { ChatPane } from "@renderer/components/chat/ChatPane.js";
 import { MessageBlocks } from "./MessageBlocks.js";
 import { SUBAGENT_STATUS_META, fmtUsage } from "./ActivityPopover.js";
@@ -142,6 +144,10 @@ function SideChatListView({
   onOpen: (id: string) => void;
 }) {
   const { t } = useI18n();
+  const deleteSession = useSessionStore((s) => s.deleteSession);
+  // Row awaiting delete confirmation — held so the dialog can show the
+  // row's display title (placeholder resolved) while it's open.
+  const [pendingDelete, setPendingDelete] = useState<Session | null>(null);
   // Running first (stable sort keeps arrival order within each group) — the
   // live ones are what the user wants to check; finished ones stay reviewable
   // below until the next turn clears the roster.
@@ -159,16 +165,9 @@ function SideChatListView({
     <div className="flex h-full flex-col">
       {/* Header: owning main session + the create button. */}
       <div className="flex h-9 shrink-0 items-center gap-2 border-b border-edge bg-surface px-2.5">
-        <IconMessageChatbot size={14} className="shrink-0 text-accent" />
+        <IconMessages size={14} className="shrink-0 text-accent" />
         <div className="min-w-0 flex-1 truncate text-xs text-content-muted">
-          {hasMainSession ? (
-            <>
-              <span className="text-content-subtle">{t("sideChat.parentPrefix")} · </span>
-              {parentTitle ?? ""}
-            </>
-          ) : (
-            t("sideChat.noMainSession")
-          )}
+          {hasMainSession ? (parentTitle ?? "") : t("sideChat.noMainSession")}
         </div>
         <button
           type="button"
@@ -207,18 +206,34 @@ function SideChatListView({
           <p className="px-2 py-4 text-xs text-content-subtle">{t("sideChat.loading")}</p>
         ) : sideChats.length === 0 && !(orderedSubagents && orderedSubagents.length > 0) ? (
           <div className="flex h-full flex-col items-center justify-center gap-2 px-6 text-center">
-            <IconMessageChatbot size={22} className="text-content-subtle" />
+            <IconMessages size={22} className="text-content-subtle" />
             <p className="text-xs font-medium text-content-muted">{t("sideChat.emptyTitle")}</p>
             <p className="text-[11px] leading-relaxed text-content-subtle">{t("sideChat.emptyHint")}</p>
           </div>
         ) : (
           <ul className="space-y-0.5">
             {sideChats.map((s) => (
-              <SideChatRow key={s.id} session={s} onOpen={onOpen} />
+              <SideChatRow key={s.id} session={s} onOpen={onOpen} onDelete={setPendingDelete} />
             ))}
           </ul>
         )}
       </div>
+
+      {/* Delete confirmation — hard-deletes the side chat (messages cascade
+          in the DB); the row leaves the list via applySessionDeletedState. */}
+      <ConfirmDialog
+        open={pendingDelete != null}
+        danger
+        title={t("sideChat.deleteChat")}
+        description={t("sideChat.deleteChatDesc", {
+          title: pendingDelete ? displayTitle(pendingDelete, t("sideChat.titlePlaceholder")) : "",
+        })}
+        confirmText={t("common.delete")}
+        onOpenChange={(open) => { if (!open) setPendingDelete(null); }}
+        onConfirm={() => {
+          if (pendingDelete) void deleteSession(pendingDelete.id);
+        }}
+      />
     </div>
   );
 }
@@ -275,19 +290,34 @@ function SubagentRow({
   );
 }
 
-function SideChatRow({ session, onOpen }: { session: Session; onOpen: (id: string) => void }) {
+/** Row/view title with the "Quick ask" placeholder resolved to the locale
+ *  label — the raw placeholder (the DB-side sentinel for "never used") must
+ *  never reach the UI. */
+function displayTitle(session: Session, placeholder: string): string {
+  return session.title === "Quick ask" ? placeholder : session.title;
+}
+
+function SideChatRow({
+  session,
+  onOpen,
+  onDelete,
+}: {
+  session: Session;
+  onOpen: (id: string) => void;
+  onDelete: (session: Session) => void;
+}) {
   const { t } = useI18n();
   const running = useSessionStore((s) => !!s.runningBySession[session.id]);
-  const isPlaceholder = session.title === "Quick ask";
   return (
-    <li>
+    // The li is the hover surface; the open action and the delete action are
+    // sibling buttons (a button inside a button is invalid HTML). The delete
+    // affordance appears on hover, LeftBar row style, and is gated while the
+    // chat's turn is running — deleting mid-stream would orphan the runtime.
+    <li className="group flex items-center rounded-md pr-0.5 transition-colors hover:bg-surface-hover">
       <button
         type="button"
         onClick={() => onOpen(session.id)}
-        className={cn(
-          "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors",
-          "hover:bg-surface-hover",
-        )}
+        className="flex min-w-0 flex-1 items-center gap-2 px-2 py-1.5 text-left"
       >
         <span
           className={cn(
@@ -297,11 +327,25 @@ function SideChatRow({ session, onOpen }: { session: Session; onOpen: (id: strin
           title={session.title}
         />
         <span className="min-w-0 flex-1 truncate text-xs text-content">
-          {isPlaceholder ? t("sideChat.titlePlaceholder") : session.title}
+          {displayTitle(session, t("sideChat.titlePlaceholder"))}
         </span>
         <span className="shrink-0 text-[10px] text-content-subtle">
           {formatRelativeTime(session.createdAt)}
         </span>
+      </button>
+      <button
+        type="button"
+        disabled={running}
+        onClick={() => onDelete(session)}
+        title={running ? undefined : t("sideChat.deleteChat")}
+        className={cn(
+          "flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-content-subtle transition-all",
+          "hover:bg-surface-hover hover:text-danger focus-visible:opacity-100",
+          "opacity-0 group-hover:opacity-100",
+          running && "pointer-events-none opacity-0",
+        )}
+      >
+        <IconTrash size={13} />
       </button>
     </li>
   );
@@ -409,13 +453,15 @@ function SubagentView({
 function SideChatView({ session, parentRow }: { session: Session; parentRow?: Session }) {
   const { t } = useI18n();
   const closeSideChatView = useSessionStore((s) => s.closeSideChatView);
+  const deleteSession = useSessionStore((s) => s.deleteSession);
   const openTab = useSessionStore((s) => s.openTab);
+  const running = useSessionStore((s) => !!s.runningBySession[session.id]);
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const parentGone = !!session.parentSessionId && !parentRow;
-  const isPlaceholder = session.title === "Quick ask";
 
   return (
     <div className="flex h-full flex-col">
-      {/* Header: back + side chat title + parent jump. */}
+      {/* Header: back + side chat title + parent jump + delete. */}
       <div className="flex h-9 shrink-0 items-center gap-1.5 border-b border-edge bg-surface px-2">
         <button
           type="button"
@@ -427,7 +473,7 @@ function SideChatView({ session, parentRow }: { session: Session; parentRow?: Se
         </button>
         <div className="min-w-0 flex-1">
           <div className="truncate text-xs font-medium text-content">
-            {isPlaceholder ? t("sideChat.titlePlaceholder") : session.title}
+            {displayTitle(session, t("sideChat.titlePlaceholder"))}
           </div>
           {session.parentSessionId ? (
             <button
@@ -451,7 +497,34 @@ function SideChatView({ session, parentRow }: { session: Session; parentRow?: Se
             </span>
           )}
         </div>
+        <button
+          type="button"
+          disabled={running}
+          onClick={() => setConfirmDelete(true)}
+          title={running ? undefined : t("sideChat.deleteChat")}
+          className={cn(
+            "flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-content-muted transition-colors",
+            "hover:bg-surface-hover hover:text-danger",
+            running && "pointer-events-none opacity-40",
+          )}
+        >
+          <IconTrash size={14} />
+        </button>
       </div>
+
+      {/* Delete confirmation — same hard-delete path as the list rows; the
+          cleared activeSideChatId drops the view back to the list. */}
+      <ConfirmDialog
+        open={confirmDelete}
+        danger
+        title={t("sideChat.deleteChat")}
+        description={t("sideChat.deleteChatDesc", {
+          title: displayTitle(session, t("sideChat.titlePlaceholder")),
+        })}
+        confirmText={t("common.delete")}
+        onOpenChange={(open) => { if (!open) setConfirmDelete(false); }}
+        onConfirm={() => { void deleteSession(session.id); }}
+      />
 
       {/* The chat itself — ChatPane is fully sessionId-parameterized on the
           read side; sends carry the explicit sessionId (see handleSend).

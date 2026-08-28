@@ -1,4 +1,11 @@
-import { Fragment, useRef, useState, type ComponentType, type ReactNode } from "react";
+import {
+  Fragment,
+  useCallback,
+  useRef,
+  useState,
+  type ComponentType,
+  type ReactNode,
+} from "react";
 import type { TodoItem, Block } from "@renderer/stores/sessionStore.js";
 import type { SubagentSnapshot } from "@contracts/runtime";
 import type { SessionBookmark } from "@contracts/session";
@@ -9,6 +16,7 @@ import type { TablerIconProps } from "@renderer/lib/icons.js";
 import {
   IconBookmark,
   IconCheck,
+  IconChevronDown,
   IconCircle,
   IconClipboard,
   IconListDetails,
@@ -73,25 +81,86 @@ const BAR_BY_STATUS: Record<SubagentSnapshot["status"], string> = {
   killed: "bg-danger/50",
 };
 
-/** A horizontal section header: icon + title (left), badge/right slot. */
+/** A horizontal section header: icon + title (left), badge/right slot.
+ *  When `onToggle` is present the whole header becomes the section's
+ *  collapse toggle — clickable, with a chevron that turns horizontal while
+ *  collapsed. The `right` slot (counts / running pulse) stays visible in
+ *  both states so a collapsed section still summarizes its content. */
 function SectionHeader({
   icon,
   title,
   right,
+  collapsed,
+  onToggle,
 }: {
   icon: ReactNode;
   title: string;
   right?: ReactNode;
+  collapsed?: boolean;
+  onToggle?: () => void;
 }) {
-  return (
-    <div className="flex items-center justify-between border-b border-edge/40 px-3 py-1.5">
-      <span className="flex items-center gap-1.5 text-[11px] font-semibold tracking-wide text-content-muted">
+  const content = (
+    <>
+      <span className="flex items-center gap-1.5 text-[11px] font-semibold tracking-wide text-content">
         {icon}
         {title}
       </span>
-      {right && <span className="text-[10px] tabular-nums text-content-subtle">{right}</span>}
-    </div>
+      <span className="flex items-center gap-1">
+        {right && <span className="text-[10px] tabular-nums text-content-subtle">{right}</span>}
+        {onToggle && (
+          <IconChevronDown
+            size={12}
+            className={cn(
+              "shrink-0 text-content-subtle transition-transform duration-200",
+              collapsed && "-rotate-90",
+            )}
+          />
+        )}
+      </span>
+    </>
   );
+  if (!onToggle) {
+    return (
+      <div className="flex items-center justify-between border-b border-edge/40 bg-surface-muted/50 px-3 py-1.5">
+        {content}
+      </div>
+    );
+  }
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      aria-expanded={!collapsed}
+      className="flex w-full select-none items-center justify-between border-b border-edge/40 bg-surface-muted/50 px-3 py-1.5 text-left transition-colors hover:bg-surface-muted"
+    >
+      {content}
+    </button>
+  );
+}
+
+/* ── Section collapse state ─────────────────────────────────────────── */
+
+/** Identity of a collapsible section in the activity stack. */
+export type ActivitySectionKey = "plans" | "subagents" | "tasks" | "bookmarks";
+
+/** Shared collapse-set state for the activity sections. Each shell (desktop
+ *  popover / mobile sheet) owns one via its always-mounted ancestor
+ *  (StatusCapsule / the sheet itself), so the user's collapsed sections
+ *  survive popover open/close cycles instead of resetting on every open. */
+export function useCollapsedSections(): {
+  collapsedSections: ReadonlySet<ActivitySectionKey>;
+  toggleSection: (key: ActivitySectionKey) => void;
+} {
+  const [collapsed, setCollapsed] = useState<ReadonlySet<ActivitySectionKey>>(() => new Set());
+  const toggleSection = useCallback((key: ActivitySectionKey) => {
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }, []);
+  return { collapsedSections: collapsed, toggleSection };
 }
 
 /* ── Section: Plan list ────────────────────────────────────────────── */
@@ -110,10 +179,14 @@ function PlanListSection({
   planBlocks,
   onPickPlan,
   scrollLists,
+  collapsed,
+  onToggle,
 }: {
   planBlocks: PlanBlock[];
   onPickPlan: (plan: string) => void;
   scrollLists: boolean;
+  collapsed?: boolean;
+  onToggle?: () => void;
 }) {
   const { t } = useI18n();
   // Newest first: the last plan block in the stream is the most recent turn's.
@@ -123,36 +196,50 @@ function PlanListSection({
       <SectionHeader
         icon={<IconClipboard size={12} className="opacity-80" />}
         title={t("chatStream.activity.plansTitle", { n: planBlocks.length })}
+        collapsed={collapsed}
+        onToggle={onToggle}
       />
-      <ul className={sectionListCls(scrollLists)}>
-        {ordered.map((block, i) => {
-          const title = extractPlanTitle(block.plan) || t("chatStream.activity.planFallback", { n: ordered.length - i });
-          return (
-            <li key={block.planId}>
-              <button
-                type="button"
-                onClick={() => onPickPlan(block.plan)}
-                title={t("chatStream.activity.viewPlan")}
-                className="flex w-full items-center gap-2 px-3 py-1.5 text-left transition-colors hover:bg-surface-muted"
-              >
-                <span className="shrink-0 text-[10px] tabular-nums text-content-subtle">
-                  {ordered.length - i}.
-                </span>
-                <span className="truncate text-[11px] text-content">
-                  {title}
-                </span>
-              </button>
-            </li>
-          );
-        })}
-      </ul>
+      {!collapsed && (
+        <ul className={sectionListCls(scrollLists)}>
+          {ordered.map((block, i) => {
+            const title = extractPlanTitle(block.plan) || t("chatStream.activity.planFallback", { n: ordered.length - i });
+            return (
+              <li key={block.planId}>
+                <button
+                  type="button"
+                  onClick={() => onPickPlan(block.plan)}
+                  title={t("chatStream.activity.viewPlan")}
+                  className="flex w-full items-center gap-2 px-3 py-1.5 text-left transition-colors hover:bg-surface-muted"
+                >
+                  <span className="shrink-0 text-[10px] tabular-nums text-content-subtle">
+                    {ordered.length - i}.
+                  </span>
+                  <span className="truncate text-[11px] text-content">
+                    {title}
+                  </span>
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      )}
     </>
   );
 }
 
 /* ── Section: Tasks ─────────────────────────────────────────────────── */
 
-function TasksSection({ todos, scrollLists }: { todos: TodoItem[]; scrollLists: boolean }) {
+function TasksSection({
+  todos,
+  scrollLists,
+  collapsed,
+  onToggle,
+}: {
+  todos: TodoItem[];
+  scrollLists: boolean;
+  collapsed?: boolean;
+  onToggle?: () => void;
+}) {
   const { t } = useI18n();
   const done = todos.filter((td) => td.status === "completed").length;
   const pct = todos.length > 0 ? Math.round((done / todos.length) * 100) : 0;
@@ -166,39 +253,45 @@ function TasksSection({ todos, scrollLists }: { todos: TodoItem[]; scrollLists: 
             {done}/{todos.length} · {pct}%
           </span>
         }
+        collapsed={collapsed}
+        onToggle={onToggle}
       />
-      {/* Overall completion bar — width transitions so checking a task off
-          animates the fill instead of snapping. */}
-      <div className="mx-3 mt-1.5 h-[3px] overflow-hidden rounded-full bg-surface-muted">
-        <div
-          className="h-full rounded-full bg-accent transition-[width] duration-300 ease-out"
-          style={{ width: `${pct}%` }}
-        />
-      </div>
-      <ul className={sectionListCls(scrollLists)}>
-        {todos.map((t, i) => {
-          const meta = STATUS_META[t.status];
-          const StatusIcon = meta.icon;
-          return (
-            <li
-              key={i}
-              className={`flex items-start gap-2 border-l-2 px-3 py-1.5 transition-colors hover:bg-surface-muted ${PRIORITY_BAR[t.priority]}`}
-            >
-              <StatusIcon
-                size={11}
-                className={cn("mt-0.5 shrink-0", meta.cls, meta.spin && "animate-spin")}
-              />
-              <span
-                className={`text-xs leading-relaxed ${
-                  t.status === "completed" ? "text-content-subtle line-through" : "text-content-muted"
-                }`}
-              >
-                {t.content}
-              </span>
-            </li>
-          );
-        })}
-      </ul>
+      {!collapsed && (
+        <>
+          {/* Overall completion bar — width transitions so checking a task off
+              animates the fill instead of snapping. */}
+          <div className="mx-3 mt-1.5 h-[3px] overflow-hidden rounded-full bg-surface-muted">
+            <div
+              className="h-full rounded-full bg-accent transition-[width] duration-300 ease-out"
+              style={{ width: `${pct}%` }}
+            />
+          </div>
+          <ul className={sectionListCls(scrollLists)}>
+            {todos.map((t, i) => {
+              const meta = STATUS_META[t.status];
+              const StatusIcon = meta.icon;
+              return (
+                <li
+                  key={i}
+                  className={`flex items-start gap-2 border-l-2 px-3 py-1.5 transition-colors hover:bg-surface-muted ${PRIORITY_BAR[t.priority]}`}
+                >
+                  <StatusIcon
+                    size={11}
+                    className={cn("mt-0.5 shrink-0", meta.cls, meta.spin && "animate-spin")}
+                  />
+                  <span
+                    className={`text-xs leading-relaxed ${
+                      t.status === "completed" ? "text-content-subtle line-through" : "text-content-muted"
+                    }`}
+                  >
+                    {t.content}
+                  </span>
+                </li>
+              );
+            })}
+          </ul>
+        </>
+      )}
     </>
   );
 }
@@ -209,12 +302,16 @@ function SubagentsSection({
   agents,
   onPick,
   scrollLists,
+  collapsed,
+  onToggle,
 }: {
   agents: SubagentSnapshot[];
   /** Row click — opens the subagent's read-only transcript in the right
    *  panel's sidechat tab. Absent = display-only rows. */
   onPick?: (agent: SubagentSnapshot) => void;
   scrollLists: boolean;
+  collapsed?: boolean;
+  onToggle?: () => void;
 }) {
   const { t } = useI18n();
   const running = agents.filter((a) => a.status === "running").length;
@@ -231,82 +328,86 @@ function SubagentsSection({
             </span>
           ) : null
         }
+        collapsed={collapsed}
+        onToggle={onToggle}
       />
-      <ul className={sectionListCls(scrollLists)}>
-        {agents.map((s) => {
-          const meta = SUBAGENT_STATUS_META[s.status];
-          // Stat chips (badge-ified usage) instead of the joined plain-text
-          // line — each chip keeps tabular-nums so digits stay aligned.
-          const usageParts: string[] = [];
-          if (typeof s.totalTokens === "number")
-            usageParts.push(`${(s.totalTokens / 1000).toFixed(1)}k tok`);
-          if (typeof s.toolUses === "number") usageParts.push(`${s.toolUses} tools`);
-          if (typeof s.durationMs === "number")
-            usageParts.push(`${Math.round(s.durationMs / 1000)}s`);
-          return (
-            <li
-              key={s.taskId}
-              onClick={onPick ? () => onPick(s) : undefined}
-              title={onPick ? t("chatStream.activity.viewSubagent") : undefined}
-              className={cn(
-                "group relative py-1.5 pl-3.5 pr-3 transition-colors",
-                onPick && "cursor-pointer hover:bg-surface-muted",
-              )}
-            >
-              {/* Left status bar — running rows get an animated shimmer track
-                  (a light blob sweeping down); settled rows a static tint. */}
-              {s.status === "running" ? (
-                <span aria-hidden className="capsule-shimmer-track" />
-              ) : (
-                <span
-                  aria-hidden
-                  className={cn(
-                    "absolute bottom-2 left-0 top-2 w-[2px] rounded-full",
-                    BAR_BY_STATUS[s.status],
-                  )}
-                />
-              )}
-              <div className="flex items-center gap-1.5">
-                {s.subagentType && (
-                  <span className="rounded bg-info/20 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wide text-info">
-                    {s.subagentType}
-                  </span>
+      {!collapsed && (
+        <ul className={sectionListCls(scrollLists)}>
+          {agents.map((s) => {
+            const meta = SUBAGENT_STATUS_META[s.status];
+            // Stat chips (badge-ified usage) instead of the joined plain-text
+            // line — each chip keeps tabular-nums so digits stay aligned.
+            const usageParts: string[] = [];
+            if (typeof s.totalTokens === "number")
+              usageParts.push(`${(s.totalTokens / 1000).toFixed(1)}k tok`);
+            if (typeof s.toolUses === "number") usageParts.push(`${s.toolUses} tools`);
+            if (typeof s.durationMs === "number")
+              usageParts.push(`${Math.round(s.durationMs / 1000)}s`);
+            return (
+              <li
+                key={s.taskId}
+                onClick={onPick ? () => onPick(s) : undefined}
+                title={onPick ? t("chatStream.activity.viewSubagent") : undefined}
+                className={cn(
+                  "group relative py-1.5 pl-3.5 pr-3 transition-colors",
+                  onPick && "cursor-pointer hover:bg-surface-muted",
                 )}
-                <span className={`flex items-center gap-1 text-[10px] ${meta.cls}`}>
-                  {meta.spin && <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-warning" />}
-                  {t(meta.labelKey)}
-                </span>
-              </div>
-              <p className="mt-0.5 truncate text-[11px] text-content" title={s.description}>
-                {s.description || t("chatStream.activity.noDescription")}
-              </p>
-              {(usageParts.length > 0 || s.lastToolName) && (
-                <div className="mt-1 flex flex-wrap items-center gap-1">
-                  {s.lastToolName && (
-                    <span className="rounded bg-surface-muted px-1.5 py-0.5 text-[9px] font-medium tabular-nums text-content-muted">
-                      {s.lastToolName}
+              >
+                {/* Left status bar — running rows get an animated shimmer track
+                    (a light blob sweeping down); settled rows a static tint. */}
+                {s.status === "running" ? (
+                  <span aria-hidden className="capsule-shimmer-track" />
+                ) : (
+                  <span
+                    aria-hidden
+                    className={cn(
+                      "absolute bottom-2 left-0 top-2 w-[2px] rounded-full",
+                      BAR_BY_STATUS[s.status],
+                    )}
+                  />
+                )}
+                <div className="flex items-center gap-1.5">
+                  {s.subagentType && (
+                    <span className="rounded bg-info/20 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wide text-info">
+                      {s.subagentType}
                     </span>
                   )}
-                  {usageParts.map((part) => (
-                    <span
-                      key={part}
-                      className="rounded bg-surface-muted px-1.5 py-0.5 text-[9px] tabular-nums text-content-subtle"
-                    >
-                      {part}
-                    </span>
-                  ))}
+                  <span className={`flex items-center gap-1 text-[10px] ${meta.cls}`}>
+                    {meta.spin && <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-warning" />}
+                    {t(meta.labelKey)}
+                  </span>
                 </div>
-              )}
-              {s.summary && (
-                <p className="mt-0.5 truncate text-[10px] italic text-content-subtle" title={s.summary}>
-                  {s.summary}
+                <p className="mt-0.5 truncate text-[11px] text-content" title={s.description}>
+                  {s.description || t("chatStream.activity.noDescription")}
                 </p>
-              )}
-              {s.error && <p className="mt-0.5 text-[10px] text-danger">{s.error}</p>}
-            </li>
-          );
-        })}
-      </ul>
+                {(usageParts.length > 0 || s.lastToolName) && (
+                  <div className="mt-1 flex flex-wrap items-center gap-1">
+                    {s.lastToolName && (
+                      <span className="rounded bg-surface-muted px-1.5 py-0.5 text-[9px] font-medium tabular-nums text-content-muted">
+                        {s.lastToolName}
+                      </span>
+                    )}
+                    {usageParts.map((part) => (
+                      <span
+                        key={part}
+                        className="rounded bg-surface-muted px-1.5 py-0.5 text-[9px] tabular-nums text-content-subtle"
+                      >
+                        {part}
+                      </span>
+                    ))}
+                  </div>
+                )}
+                {s.summary && (
+                  <p className="mt-0.5 truncate text-[10px] italic text-content-subtle" title={s.summary}>
+                    {s.summary}
+                  </p>
+                )}
+                {s.error && <p className="mt-0.5 text-[10px] text-danger">{s.error}</p>}
+              </li>
+            );
+          })}
+        </ul>
+      )}
     </>
   );
 }
@@ -338,6 +439,8 @@ function BookmarksSection({
   onRemove,
   onRename,
   scrollLists,
+  collapsed,
+  onToggle,
 }: {
   bookmarks: SessionBookmark[];
   isStale: (b: SessionBookmark) => boolean;
@@ -347,6 +450,8 @@ function BookmarksSection({
    *  sheet) = display-only rows. */
   onRename?: (b: SessionBookmark, title: string) => void;
   scrollLists: boolean;
+  collapsed?: boolean;
+  onToggle?: () => void;
 }) {
   const { t } = useI18n();
   // Inline-edit state for ONE row at a time (the popover is transient, so
@@ -374,105 +479,109 @@ function BookmarksSection({
       <SectionHeader
         icon={<IconBookmark size={12} className="opacity-80" />}
         title={t("chatStream.bookmark.sectionTitle", { n: bookmarks.length })}
+        collapsed={collapsed}
+        onToggle={onToggle}
       />
-      <ul className={sectionListCls(scrollLists)}>
-        {ordered.map((b) => {
-          const stale = isStale(b);
-          const label = b.title ?? b.excerpt;
-          return (
-            <li key={b.id} className="group/row relative">
-              {editingId === b.id ? (
-                <div className="flex w-full items-center px-3 py-1">
-                  <input
-                    autoFocus
-                    value={draft}
-                    maxLength={80}
-                    onChange={(e) => setDraft(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") commitEdit(b);
-                      else if (e.key === "Escape") {
-                        cancelledRef.current = true;
-                        setEditingId(null);
-                      }
-                    }}
-                    onBlur={() => {
-                      if (cancelledRef.current) {
-                        cancelledRef.current = false;
-                        return;
-                      }
-                      commitEdit(b);
-                    }}
-                    placeholder={t("chatStream.bookmark.renamePlaceholder")}
-                    className="min-w-0 flex-1 rounded border border-accent/50 bg-surface-muted px-1.5 py-0.5 text-[11px] text-content outline-none"
-                  />
-                </div>
-              ) : (
-                <>
-                  <button
-                    type="button"
-                    disabled={stale}
-                    onClick={() => onPick(b)}
-                    title={
-                      stale
-                        ? undefined
-                        : b.title
-                          ? b.excerpt
-                          : t("chatStream.bookmark.jumpTitle")
-                    }
-                    className={cn(
-                      "flex w-full items-center gap-2 py-1.5 pl-3 pr-12 text-left transition-colors",
-                      stale ? "cursor-default" : "hover:bg-surface-muted",
-                    )}
-                  >
-                    <IconBookmark
-                      size={11}
-                      className={cn("shrink-0", stale ? "text-content-subtle" : "text-warning")}
+      {!collapsed && (
+        <ul className={sectionListCls(scrollLists)}>
+          {ordered.map((b) => {
+            const stale = isStale(b);
+            const label = b.title ?? b.excerpt;
+            return (
+              <li key={b.id} className="group/row relative">
+                {editingId === b.id ? (
+                  <div className="flex w-full items-center px-3 py-1">
+                    <input
+                      autoFocus
+                      value={draft}
+                      maxLength={80}
+                      onChange={(e) => setDraft(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") commitEdit(b);
+                        else if (e.key === "Escape") {
+                          cancelledRef.current = true;
+                          setEditingId(null);
+                        }
+                      }}
+                      onBlur={() => {
+                        if (cancelledRef.current) {
+                          cancelledRef.current = false;
+                          return;
+                        }
+                        commitEdit(b);
+                      }}
+                      placeholder={t("chatStream.bookmark.renamePlaceholder")}
+                      className="min-w-0 flex-1 rounded border border-accent/50 bg-surface-muted px-1.5 py-0.5 text-[11px] text-content outline-none"
                     />
-                    <span
-                      className={cn(
-                        "min-w-0 flex-1 truncate text-[11px]",
-                        stale ? "text-content-subtle" : "text-content",
-                      )}
-                    >
-                      {label}
-                    </span>
-                    {stale ? (
-                      <span className="shrink-0 rounded bg-surface-muted px-1 text-[9px] text-content-subtle">
-                        {t("chatStream.bookmark.stale")}
-                      </span>
-                    ) : (
-                      <span className="shrink-0 text-[9px] tabular-nums text-content-subtle">
-                        {fmtBookmarkClock(b.createdAt)}
-                      </span>
-                    )}
-                  </button>
-                  {onRename && (
+                  </div>
+                ) : (
+                  <>
                     <button
                       type="button"
-                      onClick={() => startEdit(b)}
-                      title={t("chatStream.bookmark.rename")}
-                      className="absolute right-7 top-1/2 hidden -translate-y-1/2 rounded p-0.5 text-content-subtle transition-colors hover:bg-surface-hover hover:text-content group-hover/row:block"
+                      disabled={stale}
+                      onClick={() => onPick(b)}
+                      title={
+                        stale
+                          ? undefined
+                          : b.title
+                            ? b.excerpt
+                            : t("chatStream.bookmark.jumpTitle")
+                      }
+                      className={cn(
+                        "flex w-full items-center gap-2 py-1.5 pl-3 pr-12 text-left transition-colors",
+                        stale ? "cursor-default" : "hover:bg-surface-muted",
+                      )}
                     >
-                      <IconPencil size={11} />
+                      <IconBookmark
+                        size={11}
+                        className={cn("shrink-0", stale ? "text-content-subtle" : "text-warning")}
+                      />
+                      <span
+                        className={cn(
+                          "min-w-0 flex-1 truncate text-[11px]",
+                          stale ? "text-content-subtle" : "text-content",
+                        )}
+                      >
+                        {label}
+                      </span>
+                      {stale ? (
+                        <span className="shrink-0 rounded bg-surface-muted px-1 text-[9px] text-content-subtle">
+                          {t("chatStream.bookmark.stale")}
+                        </span>
+                      ) : (
+                        <span className="shrink-0 text-[9px] tabular-nums text-content-subtle">
+                          {fmtBookmarkClock(b.createdAt)}
+                        </span>
+                      )}
                     </button>
-                  )}
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onRemove(b);
-                    }}
-                    title={t("chatStream.bookmark.remove")}
-                    className="absolute right-1.5 top-1/2 hidden -translate-y-1/2 rounded p-0.5 text-content-subtle transition-colors hover:bg-surface-hover hover:text-danger group-hover/row:block"
-                  >
-                    <IconX size={11} />
-                  </button>
-                </>
-              )}
-            </li>
-          );
-        })}
-      </ul>
+                    {onRename && (
+                      <button
+                        type="button"
+                        onClick={() => startEdit(b)}
+                        title={t("chatStream.bookmark.rename")}
+                        className="absolute right-7 top-1/2 hidden -translate-y-1/2 rounded p-0.5 text-content-subtle transition-colors hover:bg-surface-hover hover:text-content group-hover/row:block"
+                      >
+                        <IconPencil size={11} />
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onRemove(b);
+                      }}
+                      title={t("chatStream.bookmark.remove")}
+                      className="absolute right-1.5 top-1/2 hidden -translate-y-1/2 rounded p-0.5 text-content-subtle transition-colors hover:bg-surface-hover hover:text-danger group-hover/row:block"
+                    >
+                      <IconX size={11} />
+                    </button>
+                  </>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      )}
     </>
   );
 }
@@ -494,6 +603,11 @@ function BookmarksSection({
  * `scrollLists` selects where scrolling happens: the desktop popover gives
  * each section its own `max-h-60` inner scroll; the mobile sheet passes
  * `false` so the whole stack scrolls as one body.
+ *
+ * Sections are collapsible when `onToggleSection` is provided: each header
+ * becomes a toggle (chevron affordance) and its body hides while collapsed,
+ * the header row (title + counts) remaining as the collapsed summary. The
+ * collapsed set lives in an always-mounted ancestor via `useCollapsedSections`.
  */
 export function ActivitySections({
   todos,
@@ -507,6 +621,8 @@ export function ActivitySections({
   onPickSubagent,
   onPickPlan,
   scrollLists = true,
+  collapsedSections,
+  onToggleSection,
 }: {
   todos: TodoItem[];
   planBlocks: PlanBlock[];
@@ -524,39 +640,83 @@ export function ActivitySections({
   onPickSubagent?: (agent: SubagentSnapshot) => void;
   onPickPlan: (plan: string) => void;
   scrollLists?: boolean;
+  /** Keys currently collapsed. Consulted only when `onToggleSection` is
+   *  also given (that prop is what enables collapsing at all). */
+  collapsedSections?: ReadonlySet<ActivitySectionKey>;
+  /** Present = section headers are collapse toggles. */
+  onToggleSection?: (key: ActivitySectionKey) => void;
 }) {
   const showPlan = planBlocks.length > 0;
   const showSubagents = subagents.length > 0;
   const showTasks = todos.length > 0;
   const showBookmarks = (bookmarks?.length ?? 0) > 0 && !!onRemoveBookmark;
 
+  // Const locals so narrowing survives into the closures below (a narrowed
+  // parameter would reset inside the arrow functions).
+  const toggleKey = onToggleSection;
+  const collapsedOf = (key: ActivitySectionKey): boolean =>
+    toggleKey ? (collapsedSections?.has(key) ?? false) : false;
+  const toggleOf = (key: ActivitySectionKey): (() => void) | undefined => {
+    if (!toggleKey) return undefined;
+    return () => toggleKey(key);
+  };
+
   // Sections in priority order, joined by gradient dividers instead of
   // per-section border-b (the fade-in/out line matches the pill's segment
   // dividers). Each section staggers in (capsule-section-in + i*40ms delay,
   // fill "both" holds the pre-state through the delay).
-  const sections: { key: string; node: ReactNode }[] = [
+  const sections: { key: ActivitySectionKey; node: ReactNode }[] = [
     ...(showPlan
-      ? [{ key: "plans", node: <PlanListSection planBlocks={planBlocks} onPickPlan={onPickPlan} scrollLists={scrollLists} /> }]
-      : []),
-    ...(showSubagents
       ? [
           {
-            key: "subagents",
+            key: "plans" as const,
             node: (
-              <SubagentsSection
-                agents={subagents}
-                onPick={onPickSubagent}
+              <PlanListSection
+                planBlocks={planBlocks}
+                onPickPlan={onPickPlan}
                 scrollLists={scrollLists}
+                collapsed={collapsedOf("plans")}
+                onToggle={toggleOf("plans")}
               />
             ),
           },
         ]
       : []),
-    ...(showTasks ? [{ key: "tasks", node: <TasksSection todos={todos} scrollLists={scrollLists} /> }] : []),
+    ...(showSubagents
+      ? [
+          {
+            key: "subagents" as const,
+            node: (
+              <SubagentsSection
+                agents={subagents}
+                onPick={onPickSubagent}
+                scrollLists={scrollLists}
+                collapsed={collapsedOf("subagents")}
+                onToggle={toggleOf("subagents")}
+              />
+            ),
+          },
+        ]
+      : []),
+    ...(showTasks
+      ? [
+          {
+            key: "tasks" as const,
+            node: (
+              <TasksSection
+                todos={todos}
+                scrollLists={scrollLists}
+                collapsed={collapsedOf("tasks")}
+                onToggle={toggleOf("tasks")}
+              />
+            ),
+          },
+        ]
+      : []),
     ...(showBookmarks
       ? [
           {
-            key: "bookmarks",
+            key: "bookmarks" as const,
             node: (
               <BookmarksSection
                 bookmarks={bookmarks!}
@@ -565,6 +725,8 @@ export function ActivitySections({
                 onRemove={onRemoveBookmark!}
                 onRename={onRenameBookmark}
                 scrollLists={scrollLists}
+                collapsed={collapsedOf("bookmarks")}
+                onToggle={toggleOf("bookmarks")}
               />
             ),
           },
@@ -611,6 +773,8 @@ export function ActivityPopover({
   onRenameBookmark,
   onPickSubagent,
   onPickPlan,
+  collapsedSections,
+  onToggleSection,
 }: {
   todos: TodoItem[];
   planBlocks: PlanBlock[];
@@ -622,9 +786,12 @@ export function ActivityPopover({
   onRenameBookmark?: (b: SessionBookmark, title: string) => void;
   onPickSubagent?: (agent: SubagentSnapshot) => void;
   onPickPlan: (plan: string) => void;
+  /** See `ActivitySections` — forwarded unchanged. */
+  collapsedSections?: ReadonlySet<ActivitySectionKey>;
+  onToggleSection?: (key: ActivitySectionKey) => void;
 }) {
   return (
-    <div className="absolute right-0 top-9 z-30 w-96 origin-top-right animate-[capsule-pop-in_180ms_cubic-bezier(0.2,0.8,0.3,1)] overflow-hidden rounded-2xl border border-edge/70 bg-surface/85 shadow-[inset_0_1px_0_rgb(255_255_255/0.08),0_24px_48px_-12px_rgb(0_0_0/0.35)] backdrop-blur-xl">
+    <div className="absolute right-0 top-9 z-30 w-96 origin-top-right animate-[capsule-pop-in_180ms_cubic-bezier(0.2,0.8,0.3,1)] overflow-hidden rounded-2xl border border-edge bg-surface/95 shadow-[inset_0_1px_0_rgb(255_255_255/0.08),0_24px_48px_-12px_rgb(0_0_0/0.35)] backdrop-blur-xl">
       <ActivitySections
         todos={todos}
         planBlocks={planBlocks}
@@ -636,6 +803,8 @@ export function ActivityPopover({
         onRenameBookmark={onRenameBookmark}
         onPickSubagent={onPickSubagent}
         onPickPlan={onPickPlan}
+        collapsedSections={collapsedSections}
+        onToggleSection={onToggleSection}
       />
     </div>
   );

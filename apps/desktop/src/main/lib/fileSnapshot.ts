@@ -99,7 +99,7 @@ export class FileSnapshot {
   async freeze(): Promise<TurnFileEntry[]> {
     this.frozen = true;
     const out: TurnFileEntry[] = [];
-    for (const rec of this.originals.values()) {
+    for (const [path, rec] of this.originals) {
       const before = rec.exists ? rec.content : "";
       let after = "";
       try {
@@ -110,6 +110,16 @@ export class FileSnapshot {
         after = "";
       }
       const { adds, dels } = countLineDiff(before, after);
+      // Net-zero against the pre-turn state: the content is byte-identical
+      // (no-op rewrite), or a created file that is gone again by turn end
+      // (written then deleted mid-turn, or the write never landed). Such an
+      // entry has nothing to review and nothing to restore, so drop it from
+      // BOTH the emitted list and the snapshot — the card's path set must
+      // keep matching hasPaths()/restore() for the rewind flow.
+      if (adds === 0 && dels === 0) {
+        this.originals.delete(path);
+        continue;
+      }
       out.push({
         filePath: rec.absPath,
         kind: rec.exists ? "modified" : "created",
