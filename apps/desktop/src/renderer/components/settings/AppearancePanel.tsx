@@ -7,6 +7,7 @@ import { useSessionStore, CHAT_FONT_SIZE_MIN, CHAT_FONT_SIZE_MAX, RIGHT_PANEL_FO
 import { Button, Select } from "@renderer/components/ui/index.js";
 import { IconRefresh, IconSun, IconMoon, IconDeviceDesktop } from "@renderer/lib/icons.js";
 import { useI18n, type MessageId } from "@renderer/lib/i18n/index.js";
+import { editorThemePresetsForMode } from "@renderer/lib/editorThemes.js";
 import type { ThemeName } from "@contracts/theme";
 import type { ReactNode } from "react";
 import { PanelHeader } from "./PanelHeader.js";
@@ -77,6 +78,69 @@ const THEME_OPTIONS: { value: ThemeName; labelKey: MessageId; icon: ReactNode }[
   { value: "dark", labelKey: "settings.appearance.themeDark", icon: <IconMoon size={14} className="text-content-muted" /> },
   { value: "system", labelKey: "settings.appearance.themeSystem", icon: <IconDeviceDesktop size={14} className="text-content-muted" /> },
 ];
+
+/** Mini preview strip for an editor scheme: the scheme's editor-background
+ *  square followed by its four headline token colors (keyword / string /
+ *  number / comment) so the picker communicates the palette at a glance. */
+function SchemeSwatch({ swatch }: { swatch: (ReturnType<typeof editorThemePresetsForMode>)[number]["swatch"] }) {
+  return (
+    <span className="inline-flex shrink-0 items-center gap-1" aria-hidden>
+      <span
+        className="h-3 w-4 rounded-[3px] border border-edge"
+        style={{ backgroundColor: swatch.background }}
+      />
+      {[swatch.keyword, swatch.string, swatch.number, swatch.comment].map((c) => (
+        <span key={c} className="h-2 w-2 rounded-full" style={{ backgroundColor: c }} />
+      ))}
+    </span>
+  );
+}
+
+/** One editor color-scheme Select, bound to the store's per-mode choice.
+ *  Options come from lib/editorThemes.ts; picking one re-themes every
+ *  mounted Monaco instance live (useMonacoTheme subscribes to the store). */
+function EditorSchemeSelect({ mode, id }: { mode: "dark" | "light"; id: string }) {
+  const { t } = useI18n();
+  const value = useSessionStore((s) =>
+    mode === "dark" ? s.editorTheme.dark : s.editorTheme.light,
+  );
+  const setEditorTheme = useSessionStore((s) => s.setEditorTheme);
+  const presets = editorThemePresetsForMode(mode);
+  return (
+    <Select.Root
+      value={value}
+      onValueChange={(v) => void setEditorTheme(mode, v as (typeof presets)[number]["id"])}
+    >
+      <Select.Trigger id={id} className="w-full">
+        <Select.Value>
+          {(val: string) => {
+            const p = presets.find((x) => x.id === val) ?? presets[0];
+            return (
+              <span className="flex items-center gap-1.5">
+                <SchemeSwatch swatch={p.swatch} />
+                {t(p.labelKey)}
+              </span>
+            );
+          }}
+        </Select.Value>
+      </Select.Trigger>
+      <Select.Portal>
+        <Select.Positioner>
+          <Select.Popup>
+            <Select.List>
+              {presets.map((p) => (
+                <Select.Item key={p.id} value={p.id}>
+                  <SchemeSwatch swatch={p.swatch} />
+                  <Select.ItemText>{t(p.labelKey)}</Select.ItemText>
+                </Select.Item>
+              ))}
+            </Select.List>
+          </Select.Popup>
+        </Select.Positioner>
+      </Select.Portal>
+    </Select.Root>
+  );
+}
 
 export function AppearancePanel() {
   const { t } = useI18n();
@@ -176,6 +240,21 @@ export function AppearancePanel() {
               </Select.Positioner>
             </Select.Portal>
           </Select.Root>
+        </SettingRow>
+
+        {/* ── Editor color scheme (one pick per app theme) ── */}
+        <SettingRow
+          title={t("settings.appearance.editorThemeDark")}
+          desc={t("settings.appearance.editorThemeDesc")}
+          htmlFor="setting-editor-theme-dark"
+        >
+          <EditorSchemeSelect mode="dark" id="setting-editor-theme-dark" />
+        </SettingRow>
+        <SettingRow
+          title={t("settings.appearance.editorThemeLight")}
+          htmlFor="setting-editor-theme-light"
+        >
+          <EditorSchemeSelect mode="light" id="setting-editor-theme-light" />
         </SettingRow>
 
         {/* ── User message background color ── */}

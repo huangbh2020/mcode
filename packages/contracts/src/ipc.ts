@@ -399,6 +399,17 @@ export const UI_USER_MSG_COLOR_SETTING_KEY = "ui.userMessageColor";
 export const UI_ACCENT_COLOR_SETTING_KEY = "ui.accentColor";
 
 /**
+ * Setting key under which the user's per-mode editor color-scheme choice is
+ * persisted. Value is a JSON object `{ "dark": "<id>", "light": "<id>" }` with
+ * one Monaco scheme id per app theme — the ids name themes registered by the
+ * renderer's lib/editorThemes.ts (mcode-dark, mcode-one-dark, …), so the ids
+ * are only meaningful renderer-side; the store validates them on hydrate and
+ * falls back to the defaults on any unknown value. Missing/empty = defaults
+ * (the "Mcode" pair: chrome mirroring the app tokens, stock token palettes).
+ */
+export const UI_EDITOR_THEME_SETTING_KEY = "ui.editorTheme";
+
+/**
  * Setting key under which the active right-panel tab is persisted.
  * Value is one of "files" | "git" | "browser" | "turns". The right panel reads it
  * at boot and restores the last-used tab. "browser" re-enables the browser as an

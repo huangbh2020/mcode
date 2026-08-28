@@ -29,6 +29,7 @@
  */
 import * as monaco from "monaco-editor";
 import { loader } from "@monaco-editor/react";
+import { EDITOR_THEME_PRESETS } from "./editorThemes.js";
 
 // Worker entries — Vite compiles each into a dedicated worker file.
 // The `editorWorker` is mandatory (base services); the language workers are
@@ -68,55 +69,18 @@ self.MonacoEnvironment = {
 loader.config({ monaco });
 
 /**
- * Custom dark theme ("mcode-dark") — the stock "vs-dark" paints Monaco on
- * #1e1e1e, which clashes with the app's neutral dark-gray surface (#18181b,
- * styles.css --surface) and makes the editor read as a foreign gray block.
- * This theme inherits vs-dark's token colors (`base: "vs-dark", inherit:
- * true`) and only re-paints the chrome: background, gutters, line numbers,
- * selection, widgets, scrollbars and diff gutters — all mirroring the app
- * tokens so the editor melts into the surrounding panes. Registered at module
- * load (side effect), before any Editor mounts; FileEditor/PlanViewer select
- * it via useMonacoTheme(). Keep the hex values in sync with styles.css. */
-monaco.editor.defineTheme("mcode-dark", {
-  base: "vs-dark",
-  inherit: true,
-  rules: [],
-  colors: {
-    "editor.background": "#18181b", // --surface
-    "editor.foreground": "#e7e8ec", // --content
-    "editorLineNumber.foreground": "#9ea2ab", // --content-subtle
-    "editorLineNumber.activeForeground": "#bcbfc6", // --content-muted
-    "editorCursor.foreground": "#e7e8ec",
-    "editor.selectionBackground": "#264f78aa",
-    "editor.inactiveSelectionBackground": "#264f7840",
-    "editor.lineHighlightBackground": "#2c2d3322",
-    "editor.lineHighlightBorder": "#00000000",
-    "editorIndentGuide.background1": "#2c2d3340",
-    "editorIndentGuide.activeBackground1": "#9ea2ab80",
-    "editorBracketMatch.background": "#10b9812a", // --accent tint
-    "editorBracketMatch.border": "#10b98188",
-    "editorGutter.background": "#18181b",
-    "editorWidget.background": "#202126", // --surface-muted
-    "editorWidget.border": "#292a2f", // --edge
-    "editorSuggestWidget.background": "#202126",
-    "editorSuggestWidget.border": "#292a2f",
-    "editorSuggestWidget.selectedBackground": "#2c2d33", // --surface-hover
-    "editorHoverWidget.background": "#202126",
-    "editorHoverWidget.border": "#292a2f",
-    "editorError.foreground": "#f87171",
-    "editorWarning.foreground": "#fbbf24",
-    "editorInfo.foreground": "#a78bfa",
-    "scrollbarSlider.background": "#2c2d3366",
-    "scrollbarSlider.hoverBackground": "#2c2d33",
-    "scrollbarSlider.activeBackground": "#44454c",
-    "minimap.background": "#18181b",
-    "minimapSlider.background": "#2c2d3377",
-    "diffEditor.insertedTextBackground": "#10b98122",
-    "diffEditor.removedTextBackground": "#f8717122",
-    "diffEditor.insertedLineBackground": "#10b98114",
-    "diffEditor.removedLineBackground": "#f8717114",
-  },
-});
+ * Editor color schemes ("mcode-dark", "mcode-one-dark", …) — defined in
+ * lib/editorThemes.ts as pickable presets and registered here at module load
+ * (side effect), before any Editor mounts. The two "Mcode" schemes inherit
+ * the stock vs-dark / vs token colors and only re-paint the chrome
+ * (background, gutters, line numbers, selection, widgets, scrollbars, diff
+ * gutters) so the editor melts into the surrounding panes; the rest carry
+ * their own well-known palettes. FileEditor/PlanViewer select the active
+ * scheme via useMonacoTheme() (app light/dark mode + the user's persisted
+ * choice under the `ui.editorTheme` settings key). */
+for (const preset of EDITOR_THEME_PRESETS) {
+  monaco.editor.defineTheme(preset.id, preset.data);
+}
 
 export { monaco };
 

@@ -22,6 +22,7 @@ import type { CustomModelPublic } from "@contracts/customModel";
 import { api } from "@renderer/lib/api.js";
 import { isElectron } from "@renderer/lib/platform.js";
 import { translate } from "@renderer/lib/i18n/core.js";
+import { DEFAULT_EDITOR_THEME_CHOICE, parseEditorThemeChoice, type EditorThemeChoice, type EditorThemeId } from "@renderer/lib/editorThemes.js";
 import {
   DISPLAY_MODE_SETTING_KEY,
   UI_LOCALE_SETTING_KEY,
@@ -58,6 +59,7 @@ import {
   UI_LAST_SESSION_SETTING_KEY,
   UI_SHORTCUTS_SETTING_KEY,
   UI_CHAT_DENSITY_SETTING_KEY,
+  UI_EDITOR_THEME_SETTING_KEY,
   AUTO_ARCHIVE_SETTING_KEY,
   DEFAULT_AUTO_ARCHIVE_CONFIG,
   parseAutoArchiveConfig,
@@ -656,6 +658,13 @@ export interface SessionState {
    *  into the `accent` Tailwind token used by buttons, links, selected
    *  states, focus rings, and the prompt-card accents. */
   accentColor: string | null;
+  /** Monaco editor color-scheme choice, one scheme id per app theme (the
+   *  file editor + plan viewer follow the effective light/dark mode; the
+   *  dark scheme applies in dark mode, the light one in light mode).
+   *  Persisted as JSON in the `settings` table under `ui.editorTheme`;
+   *  themes themselves are registered by lib/monacoSetup.ts from
+   *  lib/editorThemes.ts. Consumed by FileEditor's useMonacoTheme(). */
+  editorTheme: EditorThemeChoice;
   /** User's keyboard-shortcut overrides: commandId → Accelerator. Only the
    *  entries the user has rebound live here; every other command falls back
    *  to its compiled-in `defaultAccelerator` (see lib/shortcuts.ts). Persisted
@@ -1449,6 +1458,10 @@ export interface SessionState {
   /** Set the global brand/accent color ("R G B" triplet, or null for the
    *  theme default). Persists to the `settings` table. */
   setAccentColor: (rgb: string | null) => Promise<void>;
+  /** Set the Monaco editor color scheme for one app mode ("dark"|"light").
+   *  The whole per-mode choice persists to the `settings` table as one JSON
+   *  blob; mounted editors re-render live via useMonacoTheme(). */
+  setEditorTheme: (mode: "dark" | "light", id: EditorThemeId) => Promise<void>;
   /** Bind (or rebind) a keyboard shortcut for `commandId`. Pass `null` to
    *  clear the override and fall back to the compiled-in default. Persists
    *  the whole override map to the `settings` table as one JSON blob. */
@@ -3725,6 +3738,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   voiceModelDir: "",
   userMessageColor: null,
   accentColor: null,
+  editorTheme: DEFAULT_EDITOR_THEME_CHOICE,
   shortcutOverrides: {},
   shortcutRecording: false,
     messagesBySession: {},
@@ -4177,6 +4191,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           UI_RIGHT_PANEL_FONT_SIZE_SETTING_KEY,
           UI_USER_MSG_COLOR_SETTING_KEY,
           UI_ACCENT_COLOR_SETTING_KEY,
+          UI_EDITOR_THEME_SETTING_KEY,
           UI_SHORTCUTS_SETTING_KEY,
           UI_PANE_WIDTHS_SETTING_KEY,
           UI_RIGHT_PANEL_TAB_SETTING_KEY,
@@ -4224,6 +4239,11 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       if (colorRaw && RGB_TRIPLET_RE.test(colorRaw)) set({ userMessageColor: colorRaw });
       const accentRaw = ds[UI_ACCENT_COLOR_SETTING_KEY];
       if (accentRaw && RGB_TRIPLET_RE.test(accentRaw)) set({ accentColor: accentRaw });
+      // Editor color scheme (per-mode Monaco theme ids; unknown ids inside a
+      // corrupt row fall back to the defaults field-by-field).
+      if (ds[UI_EDITOR_THEME_SETTING_KEY] != null) {
+        set({ editorTheme: parseEditorThemeChoice(ds[UI_EDITOR_THEME_SETTING_KEY]) });
+      }
       // Voice-input prefs. Validate against the schemas so a corrupt row can't
       // crash the store; keep defaults otherwise.
       const voiceModeRaw = ds[UI_VOICE_INPUT_MODE_SETTING_KEY];
@@ -7289,6 +7309,22 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       });
     } catch (err) {
       console.error("setting.set(accentColor) failed:", err);
+    }
+  },
+
+  setEditorTheme: async (mode, id) => {
+    // Optimistic: the new choice is in the store immediately so mounted
+    // editors re-theme live; the DB write is fire-and-forget like the other
+    // appearance setters.
+    const next = { ...get().editorTheme, [mode]: id };
+    set({ editorTheme: next });
+    try {
+      await api.setting.set({
+        key: UI_EDITOR_THEME_SETTING_KEY,
+        value: JSON.stringify(next),
+      });
+    } catch (err) {
+      console.error("setting.set(editorTheme) failed:", err);
     }
   },
 

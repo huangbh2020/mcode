@@ -1053,9 +1053,11 @@ function useGitDiffPair(
   return projMap?.[filePath];
 }
 
-/** Tracks the effective Monaco theme by watching the `.dark` class on <html>.
- *  Monaco can't react to CSS, so we explicitly switch its theme when the app
- *  theme flips. Returns "mcode-dark" or "light".
+/** Tracks the effective Monaco theme by watching the `.dark` class on <html>
+ *  and layering the user's editor color-scheme choice (Settings → 外观) on
+ *  top: dark mode renders the user's dark scheme, light mode their light one
+ *  (defaults "mcode-dark" / "mcode-light"). Monaco can't react to CSS, so we
+ *  explicitly switch its theme when the app theme flips.
  *
  *  The switch is deferred ~150ms after the class change so it lands as the
  *  CSS theme transition (styles.css .theme-transition, 180ms) finishes —
@@ -1081,7 +1083,9 @@ export function useMonacoTheme(): string {
       window.clearTimeout(timer);
     };
   }, []);
-  return dark ? "mcode-dark" : "light";
+  const darkScheme = useSessionStore((s) => s.editorTheme.dark);
+  const lightScheme = useSessionStore((s) => s.editorTheme.light);
+  return dark ? darkScheme : lightScheme;
 }
 
 /** True for `.md` / `.markdown` files - gates the preview/edit toolbar toggle
