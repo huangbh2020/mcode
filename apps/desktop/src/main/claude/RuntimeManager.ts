@@ -7,7 +7,7 @@
  */
 import { sendToRenderer } from "@main/window.js";
 import { IPC } from "@contracts/ipc";
-import type { RuntimeEvent, PermissionMode, ContextSnapshot, TurnUsageRecord, TurnFileEntry, UserMessageEvent, UpstreamIssueEvent, SubagentTranscriptBlock } from "@contracts/runtime";
+import type { RuntimeEvent, PermissionMode, ContextSnapshot, TurnUsageRecord, TurnFileEntry, UserMessageEvent, UpstreamIssueEvent, SubagentTranscriptBlock, SubagentSnapshot } from "@contracts/runtime";
 import type { Session } from "@contracts/session";
 import type { ProviderContext, TurnHandle, StartTurnRequest, UserInputAnswers, PlanApprovalDecision } from "@contracts/provider";
 import { providerRegistry } from "@main/providers/registry.js";
@@ -53,11 +53,17 @@ interface SessionRuntime {
    *  deltas against this map. A background subagent that outlives its
    *  spawning turn accrues later growth to whichever turn is settling then. */
   subagentTokensByTask: Map<string, number>;
-  /** Merged subagent transcripts of the current turn, keyed by the spawning
-   *  Task tool_use id. Updated (per key) from `subagent.transcript` events
-   *  and persisted whole after each update; cleared when the next turn
-   *  starts (mirrors the roster's cycle). */
+  /** Merged subagent transcripts, keyed by the spawning Task tool_use id.
+   *  Updated (per key) from `subagent.transcript` events and persisted whole
+   *  after each update. ACCUMULATES ACROSS TURNS — the side-panel subagent
+   *  viewer is a review surface, entries live for the session's lifetime
+   *  (replayed to the renderer at each turn start; see sendTurn). */
   subagentTranscripts: Map<string, SubagentTranscriptBlock[]>;
+  /** Latest subagent roster (REPLACE snapshots from `subagent.update`).
+   *  Accumulated across turns the same way as subagentTranscripts — a new
+   *  turn's adapter starts with EMPTY state, so without this carry-over its
+   *  first roster flush would REPLACE the renderer's/DB's history away. */
+  lastSubagents: SubagentSnapshot[];
   /** Subagent token growth observed since the last usage-history record
    *  settled (i.e. during the current turn). Copied into the record as
    *  `subagentTokens` and reset by settlePendingTurnEnd. */
@@ -186,12 +192,15 @@ class RuntimeManager {
         } catch (err) {
           log.error(`failed to persist subagents: ${(err as Error).message}`);
         }
-        // Attribute each agent's token growth to the turn that is currently
-        // settling (see subagentTokensByTask). Values are monotonic per agent
-        // (adapter-clamped), so positive deltas are the agent's real burn;
-        // a decrease never arrives but is defensively ignored anyway.
         const rt = this.sessions.get(session.id);
         if (rt) {
+          // Carry the roster across turns (a fresh adapter starts empty —
+          // see sendTurn's replay).
+          rt.lastSubagents = e.agents;
+          // Attribute each agent's token growth to the turn that is currently
+          // settling (see subagentTokensByTask). Values are monotonic per agent
+          // (adapter-clamped), so positive deltas are the agent's real burn;
+          // a decrease never arrives but is defensively ignored anyway.
           for (const a of e.agents) {
             const tok = typeof a.totalTokens === "number" && a.totalTokens > 0 ? a.totalTokens : 0;
             const prev = rt.subagentTokensByTask.get(a.taskId) ?? 0;
@@ -304,6 +313,7 @@ class RuntimeManager {
       subagentTokensByTask: new Map(),
       turnSubagentTokens: 0,
       subagentTranscripts: new Map(),
+      lastSubagents: [],
     });
   }
 
@@ -410,17 +420,25 @@ class RuntimeManager {
     // undo turn N-1 instead of fully undoing turn N.
     getFileSnapshot(session.id).clear();
 
-    // A new turn rebuilds the subagent roster — the previous turn's
-    // transcripts (and their persisted copies) must not survive into it,
-    // or a reopen would resurrect unreachable entries keyed by tool_use ids
-    // the new roster no longer carries.
-    if (rt.subagentTranscripts.size > 0) {
-      rt.subagentTranscripts.clear();
-      try {
-        SessionRepo.updateSubagentTranscripts(session.id, null);
-      } catch (err) {
-        log.error(`failed to clear subagent transcripts: ${(err as Error).message}`);
-      }
+    // Subagent history is SESSION-scoped, not turn-scoped: replay the
+    // accumulated roster + transcripts so the fresh turn's adapter (which
+    // starts with EMPTY state) can't REPLACE them away with its first
+    // flush — the capsule and the side-panel viewer keep showing earlier
+    // turns' subagents, running ones first, until the session is deleted.
+    if (rt.lastSubagents.length > 0) {
+      rt.ctx.emit({
+        type: "subagent.update",
+        sessionId: session.id,
+        agents: rt.lastSubagents,
+      });
+    }
+    for (const [parentToolUseId, blocks] of rt.subagentTranscripts) {
+      rt.ctx.emit({
+        type: "subagent.transcript",
+        sessionId: session.id,
+        parentToolUseId,
+        blocks,
+      });
     }
 
     // If the session is bound to a custom-model config, decrypt its

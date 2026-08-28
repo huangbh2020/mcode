@@ -2704,6 +2704,11 @@ function hydrateCapsule(
       subagents && Array.isArray(subagents) && subagents.length > 0
         ? sanitizeSubagentRoster(subagents)
         : null;
+    // A RUNNING turn owns the roster — its event stream is fresher than the
+    // cached row (which predates the turn), so hydrating from it would clobber
+    // live subagents. The turn.done row-patch syncs the terminal state; only
+    // an at-rest session hydrates from the row.
+    const running = s.runningBySession[sessionId] === true;
     const hasTodos = !!(todos && Array.isArray(todos) && todos.length > 0);
     const hasSubagents = !!cleanSubagents;
     const hasPlan = !!(planDraft && planDraft.phase !== "cleared" && planDraft.plan);
@@ -2721,11 +2726,14 @@ function hydrateCapsule(
     const todosSame = hasTodos
       ? s.todosBySession[sessionId] === todos
       : !(sessionId in s.todosBySession);
-    const subagentsSame = interrupted
-      ? false
-      : hasSubagents
-        ? s.subagentsBySession[sessionId] === cleanSubagents
-        : !(sessionId in s.subagentsBySession);
+    // Running turn: skip the roster slice entirely (see `running` above).
+    const subagentsSame = running
+      ? true
+      : interrupted
+        ? false
+        : hasSubagents
+          ? s.subagentsBySession[sessionId] === cleanSubagents
+          : !(sessionId in s.subagentsBySession);
     const planSame = hasPlan
       ? s.planBySession[sessionId] === planDraft
       : !(sessionId in s.planBySession);
@@ -2837,6 +2845,11 @@ function hydrateSubagentTranscripts(
   const sess = findSession(get().sessionsByProject, get().archivedSessionsByProject, get().pinnedSessions, sessionId);
   const transcripts = sess?.subagentTranscripts ?? null;
   set((s) => {
+    // A running turn owns the transcripts — its event stream is fresher than
+    // the cached row (which predates the turn); hydrating from it would
+    // clobber live subagent content. turn.done's row-patch syncs the final
+    // state; only an at-rest session hydrates from the row.
+    if (s.runningBySession[sessionId] === true) return {};
     const hasValue = !!(transcripts && Object.keys(transcripts).length > 0);
     const hadValue = sessionId in s.subagentTranscriptsBySession;
     if (hasValue ? s.subagentTranscriptsBySession[sessionId] === transcripts : !hadValue) return {};
@@ -5250,33 +5263,28 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       blocks,
       createdAt: Date.now(),
     };
-    set((s) => {
-      // A new turn rebuilds the subagent roster on the adapter side — drop the
-      // previous turn's transcripts so stale entries can't linger in the
-      // side-panel viewer (mirrors the roster's REPLACE cycle).
-      const transcripts = { ...s.subagentTranscriptsBySession };
-      delete transcripts[sessionId];
-      return {
-        messagesBySession: {
-          ...s.messagesBySession,
-          [sessionId]: [...(s.messagesBySession[sessionId] ?? []), userMsg],
-        },
-        runningBySession: { ...s.runningBySession, [sessionId]: true },
-        subagentTranscriptsBySession: transcripts,
-        // Stamp the turn's start time NOW (send moment), not when the first
-        // assistant block arrives. This anchors the synthesized "开始 · 用时"
-        // row that renders before any token lands, and the real turnMeta
-        // (stamped at the first delta/tool/plan) falls back to this value so
-        // the timing is continuous across the handoff. Reuses userMsg.createdAt
-        // (not a fresh Date.now()) so the turn-done incremental persist's
-        // `createdAt >= anchor` filter can never tick past the user message
-        // and drop it from the persisted tail on a millisecond boundary.
-        runningTurnStartedAt: { ...s.runningTurnStartedAt, [sessionId]: userMsg.createdAt },
-        // A new turn supersedes any prior manual interrupt: clear the sentinel
-        // so subagent.update / turn.done events for THIS turn aren't filtered.
-        interruptedBySession: { ...s.interruptedBySession, [sessionId]: false },
-      };
-    });
+    set((s) => ({
+      messagesBySession: {
+        ...s.messagesBySession,
+        [sessionId]: [...(s.messagesBySession[sessionId] ?? []), userMsg],
+      },
+      runningBySession: { ...s.runningBySession, [sessionId]: true },
+      // NOTE: subagent roster/transcripts are intentionally NOT cleared here
+      // — they are session-scoped history now; main replays the accumulated
+      // state at each turn start (RuntimeManager.sendTurn).
+      // Stamp the turn's start time NOW (send moment), not when the first
+      // assistant block arrives. This anchors the synthesized "开始 · 用时"
+      // row that renders before any token lands, and the real turnMeta
+      // (stamped at the first delta/tool/plan) falls back to this value so
+      // the timing is continuous across the handoff. Reuses userMsg.createdAt
+      // (not a fresh Date.now()) so the turn-done incremental persist's
+      // `createdAt >= anchor` filter can never tick past the user message
+      // and drop it from the persisted tail on a millisecond boundary.
+      runningTurnStartedAt: { ...s.runningTurnStartedAt, [sessionId]: userMsg.createdAt },
+      // A new turn supersedes any prior manual interrupt: clear the sentinel
+      // so subagent.update / turn.done events for THIS turn aren't filtered.
+      interruptedBySession: { ...s.interruptedBySession, [sessionId]: false },
+    }));
 
 	    // 2. fire the turn; events stream back via ingestEvent. Run the IPC in
 	    //    the BACKGROUND and return true the moment the user message lands
@@ -5704,19 +5712,29 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       return;
     }
 
-    // Turn end: snapshot the final subagent transcripts onto the cached
-    // session row(s). hydrateSubagentTranscripts reads the ROW, and the row
-    // as loaded predates this turn's transcripts — without this patch a
-    // tab-switch-and-back would clobber the live bucket with the stale row
-    // value. (Main persists the same data to DB, so a restart reloads it via
-    // the row naturally.) Done once here rather than per transcript event —
-    // those fire per subagent MESSAGE and must not re-render the left bar.
+    // Turn end: snapshot the final subagent roster + transcripts onto the
+    // cached session row(s). hydrateCapsule / hydrateSubagentTranscripts read
+    // the ROW, and the row as loaded predates this turn — without this patch
+    // a tab-switch-and-back would clobber the live buckets with the stale row
+    // value (the "subagents vanish after the turn ends" symptom). (Main
+    // persists the same data to DB, so a restart reloads it via the row
+    // naturally.) Done once here rather than per event — those fire per
+    // subagent MESSAGE and must not re-render the left bar.
     if (e.type === "turn.done") {
       const transcripts = get().subagentTranscriptsBySession[sid];
-      if (transcripts && Object.keys(transcripts).length > 0) {
+      const agents = get().subagentsBySession[sid];
+      if ((transcripts && Object.keys(transcripts).length > 0) || (agents && agents.length > 0)) {
         set((s) => {
           const mapRow = (x: Session) =>
-            x.id === sid ? { ...x, subagentTranscripts: transcripts } : x;
+            x.id === sid
+              ? {
+                  ...x,
+                  ...(transcripts && Object.keys(transcripts).length > 0
+                    ? { subagentTranscripts: transcripts }
+                    : {}),
+                  ...(agents && agents.length > 0 ? { subagents: agents } : {}),
+                }
+              : x;
           const patch: Partial<SessionState> = {};
           for (const [pid, list] of Object.entries(s.sessionsByProject)) {
             if (list?.some((x) => x.id === sid)) {
