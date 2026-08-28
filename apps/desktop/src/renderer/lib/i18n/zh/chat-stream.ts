@@ -89,6 +89,7 @@ export const zh = {
   "chatStream.activity.subagentsTitle": "子代理 · {n} 个",
   "chatStream.activity.runningCount": "{n} 运行中",
   "chatStream.activity.noDescription": "(无描述)",
+  "chatStream.activity.viewSubagent": "查看子代理详情",
   "chatStream.subagent.statusRunning": "运行中",
   "chatStream.subagent.statusCompleted": "已完成",
   "chatStream.subagent.statusFailed": "失败",

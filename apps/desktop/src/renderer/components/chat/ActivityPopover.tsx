@@ -205,7 +205,17 @@ function TasksSection({ todos, scrollLists }: { todos: TodoItem[]; scrollLists: 
 
 /* ── Section: Subagents ────────────────────────────────────────────── */
 
-function SubagentsSection({ agents, scrollLists }: { agents: SubagentSnapshot[]; scrollLists: boolean }) {
+function SubagentsSection({
+  agents,
+  onPick,
+  scrollLists,
+}: {
+  agents: SubagentSnapshot[];
+  /** Row click — opens the subagent's read-only transcript in the right
+   *  panel's sidechat tab. Absent = display-only rows. */
+  onPick?: (agent: SubagentSnapshot) => void;
+  scrollLists: boolean;
+}) {
   const { t } = useI18n();
   const running = agents.filter((a) => a.status === "running").length;
   return (
@@ -236,7 +246,12 @@ function SubagentsSection({ agents, scrollLists }: { agents: SubagentSnapshot[];
           return (
             <li
               key={s.taskId}
-              className="group relative py-1.5 pl-3.5 pr-3 transition-colors hover:bg-surface-muted"
+              onClick={onPick ? () => onPick(s) : undefined}
+              title={onPick ? t("chatStream.activity.viewSubagent") : undefined}
+              className={cn(
+                "group relative py-1.5 pl-3.5 pr-3 transition-colors",
+                onPick && "cursor-pointer hover:bg-surface-muted",
+              )}
             >
               {/* Left status bar — running rows get an animated shimmer track
                   (a light blob sweeping down); settled rows a static tint. */}
@@ -489,6 +504,7 @@ export function ActivitySections({
   onPickBookmark,
   onRemoveBookmark,
   onRenameBookmark,
+  onPickSubagent,
   onPickPlan,
   scrollLists = true,
 }: {
@@ -503,6 +519,9 @@ export function ActivitySections({
   onRemoveBookmark?: (b: SessionBookmark) => void;
   /** Present = rows offer the inline rename pencil. */
   onRenameBookmark?: (b: SessionBookmark, title: string) => void;
+  /** Subagent row click — opens its read-only transcript. Absent (mobile
+   *  sheet) = display-only rows. */
+  onPickSubagent?: (agent: SubagentSnapshot) => void;
   onPickPlan: (plan: string) => void;
   scrollLists?: boolean;
 }) {
@@ -519,7 +538,20 @@ export function ActivitySections({
     ...(showPlan
       ? [{ key: "plans", node: <PlanListSection planBlocks={planBlocks} onPickPlan={onPickPlan} scrollLists={scrollLists} /> }]
       : []),
-    ...(showSubagents ? [{ key: "subagents", node: <SubagentsSection agents={subagents} scrollLists={scrollLists} /> }] : []),
+    ...(showSubagents
+      ? [
+          {
+            key: "subagents",
+            node: (
+              <SubagentsSection
+                agents={subagents}
+                onPick={onPickSubagent}
+                scrollLists={scrollLists}
+              />
+            ),
+          },
+        ]
+      : []),
     ...(showTasks ? [{ key: "tasks", node: <TasksSection todos={todos} scrollLists={scrollLists} /> }] : []),
     ...(showBookmarks
       ? [
@@ -577,6 +609,7 @@ export function ActivityPopover({
   onPickBookmark,
   onRemoveBookmark,
   onRenameBookmark,
+  onPickSubagent,
   onPickPlan,
 }: {
   todos: TodoItem[];
@@ -587,6 +620,7 @@ export function ActivityPopover({
   onPickBookmark?: (b: SessionBookmark) => void;
   onRemoveBookmark?: (b: SessionBookmark) => void;
   onRenameBookmark?: (b: SessionBookmark, title: string) => void;
+  onPickSubagent?: (agent: SubagentSnapshot) => void;
   onPickPlan: (plan: string) => void;
 }) {
   return (
@@ -600,6 +634,7 @@ export function ActivityPopover({
         onPickBookmark={onPickBookmark}
         onRemoveBookmark={onRemoveBookmark}
         onRenameBookmark={onRenameBookmark}
+        onPickSubagent={onPickSubagent}
         onPickPlan={onPickPlan}
       />
     </div>

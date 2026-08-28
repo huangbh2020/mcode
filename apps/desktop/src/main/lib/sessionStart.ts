@@ -51,6 +51,7 @@ export function createOrReuseSession(
       turnFiles: null,
       usageHistory: null,
       bookmarks: null,
+      subagentTranscripts: null,
       createdAt: now,
       updatedAt: now,
     };
@@ -110,6 +111,7 @@ export function createOrReuseSession(
     turnFiles: null,
     usageHistory: null,
     bookmarks: null,
+    subagentTranscripts: null,
     createdAt: now,
     updatedAt: now,
   };

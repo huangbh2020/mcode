@@ -101,6 +101,8 @@ export const zh = {
   "sideChat.goToParent": "跳到关联的主会话",
   "sideChat.titlePlaceholder": "新子会话",
   "sideChat.loading": "加载子会话…",
+  "sideChat.subagentsSection": "子代理",
+  "sideChat.subagentWaiting": "等待输出…",
 
   /* ── center pane ── */
   "layout.loadingPlan": "加载计划…",

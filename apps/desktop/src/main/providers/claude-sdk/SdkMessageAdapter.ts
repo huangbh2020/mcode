@@ -25,6 +25,8 @@ import type {
   PlanUpdateEvent,
   SubagentUpdateEvent,
   SubagentSnapshot,
+  SubagentTranscriptBlock,
+  SubagentTranscriptEvent,
 } from "@contracts/runtime";
 import type { ProviderContext } from "@contracts/provider";
 import { FileSnapshot, FILE_MUTATING_TOOLS, getToolFilePath, normalizeToolFilePath } from "@main/lib/fileSnapshot.js";
@@ -296,6 +298,20 @@ interface AdapterState {
    *  task_progress / task_updated edge events, then flushed as a single
    *  `subagent.update` event (REPLACE semantics). */
   subagents: Map<string, SubagentSnapshot>;
+  /** Per-subagent live transcripts, keyed by the spawning Task tool_use id
+   *  (== the `parent_tool_use_id` on forwarded subagent messages, ==
+   *  SubagentSnapshot.toolUseId). Fed by handleSubagentAssistant/User when
+   *  forwardSubagentText is on, flushed as replace-semantics
+   *  `subagent.transcript` events. Per-turn lifetime like the rest of this
+   *  state (the adapter is constructed per turn). */
+  subagentTranscripts: Map<string, SubagentTranscriptBlock[]>;
+  /** toolCallId → owning transcript key + the tool_use block awaiting its
+   *  tool_result. Subagent tool_results arrive as separate forwarded user
+   *  messages; this map routes the result back onto its block in place. */
+  subagentPendingTools: Map<
+    string,
+    { parent: string; block: Extract<SubagentTranscriptBlock, { kind: "tool_use" }> }
+  >;
   /** task_ids of non-agent tasks (bash commands, workflows) we deliberately
    *  keep OUT of the subagent roster. task_started tags them with task_type,
    *  but task_progress / task_updated don't carry it — without remembering
@@ -451,6 +467,8 @@ export class SdkMessageAdapter {
       textScanners: new Map(),
       lastKnownContextWindow: 0,
       subagents: new Map(),
+      subagentTranscripts: new Map(),
+      subagentPendingTools: new Map(),
       ignoredTaskIds: new Set(),
       inPlanMode: false,
       pendingContextUsage: null,
@@ -786,6 +804,11 @@ export class SdkMessageAdapter {
       isBackgrounded: m.is_backgrounded ?? false,
     };
     this.state.subagents.set(m.task_id, snapshot);
+    // Open the transcript bucket so forwarded subagent messages have a home
+    // even if they somehow race ahead of this edge (defensive ordering).
+    if (m.tool_use_id && !this.state.subagentTranscripts.has(m.tool_use_id)) {
+      this.state.subagentTranscripts.set(m.tool_use_id, []);
+    }
     this.flushSubagents();
   }
 
@@ -935,6 +958,14 @@ export class SdkMessageAdapter {
   }
 
   private handleStreamEvent(m: SDKPartialAssistantMessage): void {
+    // First contamination guard for forwarded subagent streams
+    // (forwardSubagentText): subagent deltas must NEVER enter the main
+    // message flow — not even allocating blockMessageIds for them (a later
+    // main-agent stream could reuse the index slot and get mislabeled). The
+    // subagent's complete messages arrive separately as assistant/user
+    // envelopes carrying parent_tool_use_id and are routed to the transcript
+    // channel instead.
+    if (m.parent_tool_use_id) return;
     const ev = m.event;
     if (!ev) return;
 
@@ -1135,6 +1166,16 @@ export class SdkMessageAdapter {
       });
     }
 
+    // Forwarded subagent message (forwardSubagentText). The usage path above
+    // still ran — subagent occupancy deliberately counts toward the session
+    // total (same as it did before the blocks were routed off the main
+    // stream). Everything below belongs to the main agent only, so hand the
+    // blocks to the transcript channel and stop here.
+    if (m.parent_tool_use_id) {
+      this.handleSubagentAssistant(m.parent_tool_use_id, blocks);
+      return;
+    }
+
     for (const [idx, b] of blocks.entries()) {
       // Track the narration text so a subsequent tool_use block (which
       // claude's SDK sends as a SEPARATE assistant message — one content
@@ -1153,16 +1194,10 @@ export class SdkMessageAdapter {
         continue;
       }
       if (b.type === "tool_use" && b.id && b.name) {
-        // TODO(subagent-stream): subagent tool_use blocks carry a non-null
-        // `parent_tool_use_id` on the message envelope. They are currently
-        // filtered out of the main event stream to keep the main agent's
-        // process surface clean (the Task tool call itself is the only
-        // visible trace; subagent progress is summarized in the
-        // ActivityPopover via subagent.update snapshots). When we add a
-        // dedicated subagent transcript view, route these blocks there
-        // instead of dropping them.
-        if (m.parent_tool_use_id) continue;
-
+        // Subagent tool_use blocks never reach here — handleAssistant routes
+        // parented messages to the transcript channel before the block loop.
+        // The Task tool call itself (parentless) is the only visible trace of
+        // the subagent in the main stream.
         if (this.state.emittedToolUse.has(b.id)) continue;
         this.state.emittedToolUse.add(b.id);
         this.state.toolUseNames.set(b.id, b.name);
@@ -1399,17 +1434,17 @@ export class SdkMessageAdapter {
   }
 
   private handleUser(m: SDKUserMessage): void {
+    // Forwarded subagent tool_results — route to the transcript channel (the
+    // matching tool_use was routed there from handleAssistant too).
+    if (m.parent_tool_use_id) {
+      this.handleSubagentUser(m);
+      return;
+    }
     const blocks = (m.message as { content?: Array<{ type: string; tool_use_id?: string; is_error?: boolean; content?: unknown }> }).content;
     if (!blocks) return;
 
     for (const b of blocks) {
       if (b.type === "tool_result" && b.tool_use_id) {
-        // TODO(subagent-stream): filter subagent tool_result blocks (non-null
-        // `parent_tool_use_id`) out of the main stream - their corresponding
-        // tool_use was already dropped in handleAssistant. When we add a
-        // dedicated subagent transcript view, route these there instead.
-        if (m.parent_tool_use_id) continue;
-
         this.state.resultedToolUseIds.add(b.tool_use_id);
         this.ctx.emit({
           type: "tool.result",
@@ -1420,6 +1455,74 @@ export class SdkMessageAdapter {
         } satisfies ToolResultEvent);
       }
     }
+  }
+
+  /** Fold a forwarded subagent assistant message into its transcript:
+   *  text/thinking/tool_use blocks append in order (tool_use starts as
+   *  "running" and is registered for the later tool_result), then the whole
+   *  transcript is emitted (replace semantics). Message-level granularity —
+   *  the subagent viewer is a read-only "what is it doing" surface, char
+   *  streaming would only multiply events. */
+  private handleSubagentAssistant(
+    parentToolUseId: string,
+    blocks: Array<{ type: string; id?: string; name?: string; input?: unknown }>,
+  ): void {
+    let list = this.state.subagentTranscripts.get(parentToolUseId);
+    if (!list) {
+      list = [];
+      this.state.subagentTranscripts.set(parentToolUseId, list);
+    }
+    for (const b of blocks) {
+      if (b.type === "text" || b.type === "thinking") {
+        const text = (b as { text?: unknown }).text;
+        if (typeof text === "string" && text.trim().length > 0) {
+          list.push({ kind: b.type, text });
+        }
+      } else if (b.type === "tool_use" && b.id && b.name) {
+        const block: Extract<SubagentTranscriptBlock, { kind: "tool_use" }> = {
+          kind: "tool_use",
+          toolCallId: b.id,
+          toolName: b.name,
+          input: b.input,
+          status: "running",
+        };
+        list.push(block);
+        this.state.subagentPendingTools.set(b.id, { parent: parentToolUseId, block });
+      }
+    }
+    this.flushSubagentTranscript(parentToolUseId);
+  }
+
+  /** Fold a forwarded subagent user message (tool_result blocks) onto the
+   *  pending tool_use blocks of its transcript: fills result + flips status
+   *  to done/error, then re-emits. Unknown ids are ignored (defensive —
+   *  e.g. a result for a tool call whose message raced past turn teardown). */
+  private handleSubagentUser(m: SDKUserMessage): void {
+    const blocks = (m.message as { content?: Array<{ type: string; tool_use_id?: string; is_error?: boolean; content?: unknown }> }).content;
+    if (!blocks) return;
+    for (const b of blocks) {
+      if (b.type !== "tool_result" || !b.tool_use_id) continue;
+      const pending = this.state.subagentPendingTools.get(b.tool_use_id);
+      if (!pending) continue;
+      this.state.subagentPendingTools.delete(b.tool_use_id);
+      pending.block.status = b.is_error ? "error" : "done";
+      pending.block.result = b.content;
+      this.flushSubagentTranscript(pending.parent);
+    }
+  }
+
+  /** Emit one subagent's transcript as a replace-semantics event. Fresh
+   *  array + shallow block copies — later in-place edits (tool_result
+   *  backfill) must not alias what the renderer already stored. */
+  private flushSubagentTranscript(parentToolUseId: string): void {
+    const blocks = this.state.subagentTranscripts.get(parentToolUseId);
+    if (!blocks) return;
+    this.ctx.emit({
+      type: "subagent.transcript",
+      sessionId: this.sessionId,
+      parentToolUseId,
+      blocks: blocks.map((b) => ({ ...b })),
+    } satisfies SubagentTranscriptEvent);
   }
 
   private async handleResult(m: SDKResultMessage): Promise<void> {

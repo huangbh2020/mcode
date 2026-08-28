@@ -9,6 +9,7 @@ import type {
   PlanApprovalRequestEvent,
   PlanUpdateEvent,
   SubagentSnapshot,
+  SubagentTranscriptBlock,
   ContextSnapshot,
   TurnUsageRecord,
   SessionListEntry,
@@ -906,6 +907,12 @@ export interface SessionState {
    *  Empty array = no subagents active. Includes recently-completed ones
    *  until the next turn clears them. */
   subagentsBySession: Record<string, SubagentSnapshot[]>;
+  /** Per-session subagent live transcripts (the side-panel subagent viewer).
+   *  Outer key = sessionId, inner key = the spawning Task tool_use id (same
+   *  id as SubagentSnapshot.toolUseId). NOT persisted — process-lifetime
+   *  data rebuilt each turn; cleared when a new turn starts (mirroring the
+   *  roster's rebuild cycle). */
+  subagentTranscriptsBySession: Record<string, Record<string, SubagentTranscriptBlock[]>>;
   /** Per-session context-window snapshot (from `token-usage.updated` events).
    *  The adapter already did all the math (usedTokens / maxTokens / pct /
    *  warning), so the renderer only stores + renders. Keyed by sessionId so
@@ -1004,6 +1011,11 @@ export interface SessionState {
    *  drained by the side chat's own ChatPane instance. One-shot channel,
    *  not persisted — same hand-off pattern as chatFileQueueBySession. */
   sideChatSeedBySession: Record<string, string>;
+  /** One-shot "open this subagent's transcript" request from outside the
+   *  side panel (the ActivityPopover's subagent row click). Carries the
+   *  PARENT session id (ownership check) + the subagent's taskId; consumed
+   *  and drained by SideChatPanel. Not persisted. */
+  pendingSubagentView: { sessionId: string; taskId: string } | null;
 
   /* ── IDE right-panel state ──
    *  Editor state (open files, active file, view mode, expanded tree dirs)
@@ -1626,6 +1638,12 @@ export interface SessionState {
   askInSideChat: (text: string) => Promise<void>;
   /** Clear a side chat's pending seed after its ChatPane consumed it. */
   drainSideChatSeed: (sessionId: string) => void;
+  /** Open a subagent's read-only transcript in the right panel's sidechat
+   *  tab (from the ActivityPopover's subagent row). Reveals the panel and
+   *  posts a one-shot request SidePanel consumes to enter the view. */
+  openSubagentTranscript: (sessionId: string, taskId: string) => void;
+  /** Clear the one-shot subagent-view request after consumption. */
+  clearPendingSubagentView: () => void;
 
   /** Replace a single project's saved terminal quick-commands. Persists the
    *  whole per-project map (JSON-encoded) to settings. Both the terminal
@@ -2169,6 +2187,7 @@ function materializeSessionEntry(entry: SessionListEntry): Session {
     usageHistory: null,
     turnFiles: null,
     bookmarks: null,
+    subagentTranscripts: null,
   };
 }
 
@@ -2262,6 +2281,8 @@ function applySessionDeletedState(s: SessionState, id: string): Partial<SessionS
   delete planBySession[id];
   const subagentsBySession = { ...s.subagentsBySession };
   delete subagentsBySession[id];
+  const subagentTranscriptsBySession = { ...s.subagentTranscriptsBySession };
+  delete subagentTranscriptsBySession[id];
   const pendingQuestionBySession = { ...s.pendingQuestionBySession };
   delete pendingQuestionBySession[id];
   const turnFilesBySession = { ...s.turnFilesBySession };
@@ -2313,6 +2334,7 @@ function applySessionDeletedState(s: SessionState, id: string): Partial<SessionS
     todosBySession,
     planBySession,
     subagentsBySession,
+    subagentTranscriptsBySession,
     pendingQuestionBySession,
     turnFilesBySession,
     bookmarksBySession,
@@ -2799,6 +2821,29 @@ function hydrateBookmarks(
       delete next[sessionId];
     }
     return { bookmarksBySession: next };
+  });
+}
+
+/** Hydrate the per-session subagent transcripts from the session row (the
+ *  side-panel subagent viewer's data source). Persisted by main after every
+ *  transcript update; absent/empty on the row clears the bucket so switching
+ *  sessions doesn't leave the previous thread's transcripts up. Mirrors
+ *  hydrateBookmarks's pattern (including the reference-equality guard). */
+function hydrateSubagentTranscripts(
+  set: (partial: Partial<SessionState> | ((s: SessionState) => Partial<SessionState>)) => void,
+  get: () => SessionState,
+  sessionId: string,
+): void {
+  const sess = findSession(get().sessionsByProject, get().archivedSessionsByProject, get().pinnedSessions, sessionId);
+  const transcripts = sess?.subagentTranscripts ?? null;
+  set((s) => {
+    const hasValue = !!(transcripts && Object.keys(transcripts).length > 0);
+    const hadValue = sessionId in s.subagentTranscriptsBySession;
+    if (hasValue ? s.subagentTranscriptsBySession[sessionId] === transcripts : !hadValue) return {};
+    const next = { ...s.subagentTranscriptsBySession };
+    if (hasValue) next[sessionId] = transcripts;
+    else delete next[sessionId];
+    return { subagentTranscriptsBySession: next };
   });
 }
 
@@ -3645,6 +3690,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   planTabActiveBySession: {},
   planApprovalDraftBySession: {},
   subagentsBySession: {},
+  subagentTranscriptsBySession: {},
   contextSnapshotBySession: {},
   usageHistoryBySession: {},
   pendingQuestionBySession: {},
@@ -3660,6 +3706,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   sideChatsByParent: {},
   activeSideChatId: null,
   sideChatSeedBySession: {},
+  pendingSubagentView: null,
   // IDE right-panel. Editor state is per-project (keyed by projectId);
   // init() hydrates from the settings table. rightPanelTab / ideEditorMode
   // are global user prefs.
@@ -4487,6 +4534,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     hydrateTurnFiles(set, get, sessionId);
     hydrateUsageHistory(set, get, sessionId);
     hydrateBookmarks(set, get, sessionId);
+    hydrateSubagentTranscripts(set, get, sessionId);
     set((s) => {
       // Clear the unread badge - the user is now looking at this session.
       // Activating a session also pulls the unified center bar back to the
@@ -4518,6 +4566,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     hydrateTurnFiles(set, get, sessionId);
     hydrateUsageHistory(set, get, sessionId);
     hydrateBookmarks(set, get, sessionId);
+    hydrateSubagentTranscripts(set, get, sessionId);
     set((s) => {
       // Clear the unread badge - the user is now looking at this session.
       const unreadBySession = { ...s.unreadBySession };
@@ -5201,25 +5250,33 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       blocks,
       createdAt: Date.now(),
     };
-    set((s) => ({
-      messagesBySession: {
-        ...s.messagesBySession,
-        [sessionId]: [...(s.messagesBySession[sessionId] ?? []), userMsg],
-      },
-      runningBySession: { ...s.runningBySession, [sessionId]: true },
-      // Stamp the turn's start time NOW (send moment), not when the first
-      // assistant block arrives. This anchors the synthesized "开始 · 用时"
-      // row that renders before any token lands, and the real turnMeta
-      // (stamped at the first delta/tool/plan) falls back to this value so
-      // the timing is continuous across the handoff. Reuses userMsg.createdAt
-      // (not a fresh Date.now()) so the turn-done incremental persist's
-      // `createdAt >= anchor` filter can never tick past the user message
-      // and drop it from the persisted tail on a millisecond boundary.
-      runningTurnStartedAt: { ...s.runningTurnStartedAt, [sessionId]: userMsg.createdAt },
-      // A new turn supersedes any prior manual interrupt: clear the sentinel
-      // so subagent.update / turn.done events for THIS turn aren't filtered.
-      interruptedBySession: { ...s.interruptedBySession, [sessionId]: false },
-    }));
+    set((s) => {
+      // A new turn rebuilds the subagent roster on the adapter side — drop the
+      // previous turn's transcripts so stale entries can't linger in the
+      // side-panel viewer (mirrors the roster's REPLACE cycle).
+      const transcripts = { ...s.subagentTranscriptsBySession };
+      delete transcripts[sessionId];
+      return {
+        messagesBySession: {
+          ...s.messagesBySession,
+          [sessionId]: [...(s.messagesBySession[sessionId] ?? []), userMsg],
+        },
+        runningBySession: { ...s.runningBySession, [sessionId]: true },
+        subagentTranscriptsBySession: transcripts,
+        // Stamp the turn's start time NOW (send moment), not when the first
+        // assistant block arrives. This anchors the synthesized "开始 · 用时"
+        // row that renders before any token lands, and the real turnMeta
+        // (stamped at the first delta/tool/plan) falls back to this value so
+        // the timing is continuous across the handoff. Reuses userMsg.createdAt
+        // (not a fresh Date.now()) so the turn-done incremental persist's
+        // `createdAt >= anchor` filter can never tick past the user message
+        // and drop it from the persisted tail on a millisecond boundary.
+        runningTurnStartedAt: { ...s.runningTurnStartedAt, [sessionId]: userMsg.createdAt },
+        // A new turn supersedes any prior manual interrupt: clear the sentinel
+        // so subagent.update / turn.done events for THIS turn aren't filtered.
+        interruptedBySession: { ...s.interruptedBySession, [sessionId]: false },
+      };
+    });
 
 	    // 2. fire the turn; events stream back via ingestEvent. Run the IPC in
 	    //    the BACKGROUND and return true the moment the user message lands
@@ -5647,6 +5704,36 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       return;
     }
 
+    // Turn end: snapshot the final subagent transcripts onto the cached
+    // session row(s). hydrateSubagentTranscripts reads the ROW, and the row
+    // as loaded predates this turn's transcripts — without this patch a
+    // tab-switch-and-back would clobber the live bucket with the stale row
+    // value. (Main persists the same data to DB, so a restart reloads it via
+    // the row naturally.) Done once here rather than per transcript event —
+    // those fire per subagent MESSAGE and must not re-render the left bar.
+    if (e.type === "turn.done") {
+      const transcripts = get().subagentTranscriptsBySession[sid];
+      if (transcripts && Object.keys(transcripts).length > 0) {
+        set((s) => {
+          const mapRow = (x: Session) =>
+            x.id === sid ? { ...x, subagentTranscripts: transcripts } : x;
+          const patch: Partial<SessionState> = {};
+          for (const [pid, list] of Object.entries(s.sessionsByProject)) {
+            if (list?.some((x) => x.id === sid)) {
+              patch.sessionsByProject = {
+                ...(patch.sessionsByProject ?? s.sessionsByProject),
+                [pid]: list.map(mapRow),
+              };
+            }
+          }
+          if (s.pinnedSessions.some((x) => x.id === sid)) {
+            patch.pinnedSessions = s.pinnedSessions.map(mapRow);
+          }
+          return patch;
+        });
+      }
+    }
+
     // Stop → freeze the transcript: while the interrupt sentinel is set, drop
     // any remaining content-carrying events from the aborted turn. flushFinal
     // emits buffered text.delta / thinking / tool.result while the SDK
@@ -6001,6 +6088,22 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           ? e.agents.map((a) => (a.status === "running" ? { ...a, status: "killed" as const } : a))
           : e.agents;
         return { subagentsBySession: { ...s.subagentsBySession, [sid]: agents } };
+      });
+      return;
+    }
+    // subagent.transcript: REPLACE one subagent's transcript (inner key =
+    // the spawning Task tool_use id). Process-lifetime data — no persistence,
+    // cleared when the next turn starts (see sendPrompt).
+    if (e.type === "subagent.transcript") {
+      set((s) => {
+        const inner = s.subagentTranscriptsBySession[sid];
+        if (inner?.[e.parentToolUseId] === e.blocks) return {};
+        return {
+          subagentTranscriptsBySession: {
+            ...s.subagentTranscriptsBySession,
+            [sid]: { ...(inner ?? {}), [e.parentToolUseId]: e.blocks },
+          },
+        };
       });
       return;
     }
@@ -8036,6 +8139,15 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       delete next[sessionId];
       return { sideChatSeedBySession: next };
     });
+  },
+
+  openSubagentTranscript: (sessionId, taskId) => {
+    set({ pendingSubagentView: { sessionId, taskId }, rightOpen: true });
+    get().setRightPanelTab("sidechat");
+  },
+
+  clearPendingSubagentView: () => {
+    set({ pendingSubagentView: null });
   },
 
   setCustomCommandsByProject: (projectId, commands) => {

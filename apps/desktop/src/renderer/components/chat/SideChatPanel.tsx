@@ -7,9 +7,16 @@
  * appears in the left-bar lists, and its history survives restarts. One main
  * session can own many side chats — this panel lists them per parent and
  * hosts one at a time in a reused ChatPane.
+ *
+ * The list ALSO surfaces the main session's live SUBAGENTS (Task-tool
+ * children) above the side-chat list: running first, finished ones kept for
+ * review until the next turn. Clicking one opens a read-only transcript view
+ * (no composer — the subagent is driven by the model, not the user) fed by
+ * the `subagent.transcript` event channel.
  */
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { Session } from "@contracts/session";
+import type { SubagentSnapshot, SubagentTranscriptBlock } from "@contracts/runtime";
 import { cn } from "@renderer/lib/cn.js";
 import { formatRelativeTime } from "@renderer/lib/time.js";
 import {
@@ -18,8 +25,10 @@ import {
   IconPlus,
 } from "@renderer/lib/icons.js";
 import { useI18n } from "@renderer/lib/i18n/index.js";
-import { useSessionStore } from "@renderer/stores/sessionStore.js";
+import { useSessionStore, type Block } from "@renderer/stores/sessionStore.js";
 import { ChatPane } from "@renderer/components/chat/ChatPane.js";
+import { MessageBlocks } from "./MessageBlocks.js";
+import { SUBAGENT_STATUS_META, fmtUsage } from "./ActivityPopover.js";
 
 export function SideChatPanel() {
   const activeSessionId = useSessionStore((s) => s.activeSessionId);
@@ -27,11 +36,39 @@ export function SideChatPanel() {
     s.activeSessionId ? s.sideChatsByParent[s.activeSessionId] : undefined,
   );
   const activeSideChatId = useSessionStore((s) => s.activeSideChatId);
+  const subagents = useSessionStore((s) =>
+    s.activeSessionId ? s.subagentsBySession[s.activeSessionId] : undefined,
+  );
   const hydrateSideChats = useSessionStore((s) => s.hydrateSideChats);
   const createSideChat = useSessionStore((s) => s.createSideChat);
   const selectSideChat = useSessionStore((s) => s.selectSideChat);
   const closeSideChatView = useSessionStore((s) => s.closeSideChatView);
   const openTab = useSessionStore((s) => s.openTab);
+  // The subagent whose read-only transcript is open (by taskId). Local state:
+  // leaving the tab or switching the parent session falls back to the list —
+  // derived, so a roster rebuild that drops the id also resets the view.
+  const [viewSubagentTaskId, setViewSubagentTaskId] = useState<string | null>(null);
+  useEffect(() => {
+    setViewSubagentTaskId(null);
+  }, [activeSessionId]);
+  // One-shot open request from OUTSIDE the panel (the ActivityPopover's
+  // subagent row): enter the requested view when it belongs to the current
+  // parent, then drain the request either way (chatFileQueue hand-off
+  // pattern). The panel mounts on tab switch — its first effect run consumes
+  // whatever request opened it.
+  const pendingSubagentView = useSessionStore((s) => s.pendingSubagentView);
+  const clearPendingSubagentView = useSessionStore((s) => s.clearPendingSubagentView);
+  useEffect(() => {
+    if (!pendingSubagentView) return;
+    if (pendingSubagentView.sessionId === activeSessionId) {
+      setViewSubagentTaskId(pendingSubagentView.taskId);
+    }
+    clearPendingSubagentView();
+  }, [pendingSubagentView, activeSessionId, clearPendingSubagentView]);
+  const viewedSubagent = viewSubagentTaskId
+    ? subagents?.find((a) => a.taskId === viewSubagentTaskId)
+    : undefined;
+
   // Parent row lookup (title + liveness) spans the active window + pinned
   // bucket — a pinned main session still owns its side chats.
   const mainSessions = useSessionStore((s) => s.sessionsByProject[s.activeProjectId ?? ""]);
@@ -51,6 +88,16 @@ export function SideChatPanel() {
     if (activeSessionId) void hydrateSideChats(activeSessionId);
   }, [activeSessionId, hydrateSideChats]);
 
+  if (viewedSubagent && activeSessionId) {
+    return (
+      <SubagentView
+        agent={viewedSubagent}
+        sessionId={activeSessionId}
+        onBack={() => setViewSubagentTaskId(null)}
+      />
+    );
+  }
+
   // The chat view only applies when the active side chat belongs to the
   // CURRENT parent — after a main-session switch the stale id falls back to
   // the list view (derived, so no reset effect is needed).
@@ -67,6 +114,8 @@ export function SideChatPanel() {
       hasMainSession={!!activeSessionId}
       parentTitle={parentRow?.title}
       sideChats={sideChats}
+      subagents={subagents}
+      onOpenSubagent={setViewSubagentTaskId}
       onCreate={() => void createSideChat()}
       onOpen={(id) => void selectSideChat(id)}
     />
@@ -79,16 +128,33 @@ function SideChatListView({
   hasMainSession,
   parentTitle,
   sideChats,
+  subagents,
+  onOpenSubagent,
   onCreate,
   onOpen,
 }: {
   hasMainSession: boolean;
   parentTitle?: string;
   sideChats: ReadonlyArray<Session> | undefined;
+  subagents: ReadonlyArray<SubagentSnapshot> | undefined;
+  onOpenSubagent: (taskId: string) => void;
   onCreate: () => void;
   onOpen: (id: string) => void;
 }) {
   const { t } = useI18n();
+  // Running first (stable sort keeps arrival order within each group) — the
+  // live ones are what the user wants to check; finished ones stay reviewable
+  // below until the next turn clears the roster.
+  const orderedSubagents = useMemo(
+    () =>
+      subagents
+        ? [...subagents].sort(
+            (a, b) =>
+              (a.status === "running" ? 0 : 1) - (b.status === "running" ? 0 : 1),
+          )
+        : undefined,
+    [subagents],
+  );
   return (
     <div className="flex h-full flex-col">
       {/* Header: owning main session + the create button. */}
@@ -123,9 +189,23 @@ function SideChatListView({
 
       {/* List body. */}
       <div className="min-h-0 flex-1 overflow-y-auto p-1.5">
+        {/* Live subagents (model-initiated Task children) — read-only
+            transcripts behind each row. */}
+        {orderedSubagents && orderedSubagents.length > 0 && (
+          <div className="mb-2">
+            <div className="px-2 pb-1 pt-1 text-[10px] font-semibold uppercase tracking-wide text-content-subtle">
+              {t("sideChat.subagentsSection")}
+            </div>
+            <ul className="space-y-0.5">
+              {orderedSubagents.map((a) => (
+                <SubagentRow key={a.taskId} agent={a} onOpen={() => onOpenSubagent(a.taskId)} />
+              ))}
+            </ul>
+          </div>
+        )}
         {sideChats === undefined ? (
           <p className="px-2 py-4 text-xs text-content-subtle">{t("sideChat.loading")}</p>
-        ) : sideChats.length === 0 ? (
+        ) : sideChats.length === 0 && !(orderedSubagents && orderedSubagents.length > 0) ? (
           <div className="flex h-full flex-col items-center justify-center gap-2 px-6 text-center">
             <IconMessageChatbot size={22} className="text-content-subtle" />
             <p className="text-xs font-medium text-content-muted">{t("sideChat.emptyTitle")}</p>
@@ -140,6 +220,58 @@ function SideChatListView({
         )}
       </div>
     </div>
+  );
+}
+
+function SubagentRow({
+  agent,
+  onOpen,
+}: {
+  agent: SubagentSnapshot;
+  onOpen: () => void;
+}) {
+  const { t } = useI18n();
+  const running = agent.status === "running";
+  const usage = fmtUsage(agent);
+  return (
+    <li>
+      <button
+        type="button"
+        onClick={onOpen}
+        title={agent.description}
+        className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-surface-hover"
+      >
+        <span
+          className={cn(
+            "h-1.5 w-1.5 shrink-0 rounded-full",
+            running
+              ? "animate-pulse bg-accent"
+              : agent.status === "completed"
+                ? "bg-accent/50"
+                : agent.status === "failed" || agent.status === "killed"
+                  ? "bg-danger/70"
+                  : "bg-content-subtle/40",
+          )}
+        />
+        <span className="min-w-0 flex-1">
+          <span className="flex items-center gap-1.5">
+            {agent.subagentType && (
+              <span className="shrink-0 rounded bg-info/20 px-1 text-[9px] font-medium uppercase tracking-wide text-info">
+                {agent.subagentType}
+              </span>
+            )}
+            <span className="min-w-0 flex-1 truncate text-xs text-content">
+              {agent.description || t("sideChat.titlePlaceholder")}
+            </span>
+          </span>
+          {(agent.lastToolName || usage) && (
+            <span className="mt-0.5 block truncate text-[10px] text-content-subtle">
+              {[agent.lastToolName, usage].filter(Boolean).join(" · ")}
+            </span>
+          )}
+        </span>
+      </button>
+    </li>
   );
 }
 
@@ -172,6 +304,103 @@ function SideChatRow({ session, onOpen }: { session: Session; onOpen: (id: strin
         </span>
       </button>
     </li>
+  );
+}
+
+/* ── Subagent read-only transcript view ── */
+
+/** SubagentTranscriptBlock → renderer Block. The contracts type mirrors the
+ *  renderer's Block members field-for-field — the explicit mapping (rather
+ *  than a cast) keeps the drift surface visible and the strict style. */
+function mapTranscriptBlock(b: SubagentTranscriptBlock): Block {
+  if (b.kind === "text") return { kind: "text", text: b.text };
+  if (b.kind === "thinking") return { kind: "thinking", text: b.text };
+  return {
+    kind: "tool_use",
+    toolCallId: b.toolCallId,
+    toolName: b.toolName,
+    input: b.input,
+    status: b.status,
+    ...(b.result !== undefined ? { result: b.result } : {}),
+  };
+}
+
+function SubagentView({
+  agent,
+  sessionId,
+  onBack,
+}: {
+  agent: SubagentSnapshot;
+  sessionId: string;
+  onBack: () => void;
+}) {
+  const { t } = useI18n();
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const rawBlocks = useSessionStore(
+    (s) => s.subagentTranscriptsBySession[sessionId]?.[agent.toolUseId ?? ""],
+  );
+  const blocks = useMemo(
+    () => (rawBlocks ?? []).map(mapTranscriptBlock),
+    [rawBlocks],
+  );
+  const running = agent.status === "running";
+  const usage = fmtUsage(agent);
+  const meta = SUBAGENT_STATUS_META[agent.status];
+
+  // Follow the tail while the subagent is live — new blocks scroll the view
+  // to the bottom (same auto-follow intent as the main stream).
+  useEffect(() => {
+    if (running) scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
+  }, [blocks, running]);
+
+  return (
+    <div className="flex h-full flex-col">
+      {/* Header: back + subagent description + status/usage. */}
+      <div className="flex h-9 shrink-0 items-center gap-1.5 border-b border-edge bg-surface px-2">
+        <button
+          type="button"
+          onClick={onBack}
+          title={t("sideChat.backToList")}
+          className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-content-muted transition-colors hover:bg-surface-hover hover:text-content"
+        >
+          <IconArrowLeft size={15} />
+        </button>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-1.5">
+            {agent.subagentType && (
+              <span className="shrink-0 rounded bg-info/20 px-1 text-[9px] font-medium uppercase tracking-wide text-info">
+                {agent.subagentType}
+              </span>
+            )}
+            <span className="truncate text-xs font-medium text-content">
+              {agent.description || t("sideChat.titlePlaceholder")}
+            </span>
+          </div>
+          <div className="flex items-center gap-1 text-[10px] text-content-subtle">
+            <span className={cn("flex items-center gap-1", meta.cls)}>
+              {running && (
+                <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-warning" />
+              )}
+              {t(meta.labelKey)}
+            </span>
+            {usage && <span className="truncate">· {usage}</span>}
+          </div>
+        </div>
+      </div>
+
+      {/* Read-only transcript — MessageBlocks is a pure presentational
+          component (no composer, no send path, no per-session store buckets);
+          the subagent is model-driven, the user only watches. */}
+      <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-2.5 py-2">
+        {blocks.length === 0 ? (
+          <p className="px-2 py-4 text-xs text-content-subtle">
+            {t("sideChat.subagentWaiting")}
+          </p>
+        ) : (
+          <MessageBlocks blocks={blocks} />
+        )}
+      </div>
+    </div>
   );
 }
 

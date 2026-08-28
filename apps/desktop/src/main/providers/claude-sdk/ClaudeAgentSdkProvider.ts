@@ -455,6 +455,13 @@ export class ClaudeAgentSdkProvider implements AgentProvider {
       permissionMode: (isUiPlanMode ? "default" : req.permissionMode) as Options["permissionMode"],
       resume: req.resumeProviderSessionId ?? undefined,
       includePartialMessages: true,
+      // Forward the subagents' full conversation (text/thinking included, not
+      // just tool_use/tool_result) as assistant/user messages carrying the
+      // spawning Task tool_use id in `parent_tool_use_id`. The adapter routes
+      // those to the per-subagent transcript channel (subagent.transcript)
+      // for the side-panel subagent viewer — they never enter the main
+      // message stream (see SdkMessageAdapter's parent_tool_use_id guards).
+      forwardSubagentText: true,
       // Skills: when the user picked specific skills in the composer, pass them
       // as an explicit allowlist so the model's `Skill` tool can actually reach
       // them. This is REQUIRED because query() runs the bundled binary with

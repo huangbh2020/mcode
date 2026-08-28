@@ -1094,6 +1094,7 @@ function ChatPaneForSession({
   const removeBookmark = useSessionStore((s) => s.removeBookmark);
   const renameBookmark = useSessionStore((s) => s.renameBookmark);
   const askInSideChat = useSessionStore((s) => s.askInSideChat);
+  const openSubagentTranscript = useSessionStore((s) => s.openSubagentTranscript);
   const sideChatSeed = useSessionStore((s) => s.sideChatSeedBySession[sessionId]);
   const drainSideChatSeed = useSessionStore((s) => s.drainSideChatSeed);
   // Floating [copy | add bookmark] toolbar anchored to the current text
@@ -2728,6 +2729,7 @@ function ChatPaneForSession({
             bookmarks={bookmarks}
             isBookmarkStale={(b) => !msgToRenderIndex.has(b.messageId)}
             onPickBookmark={(b) => jumpToMessage(b.messageId, b.excerpt)}
+            onPickSubagent={(agent) => openSubagentTranscript(sessionId, agent.taskId)}
             onRemoveBookmark={(b) => void removeBookmark(sessionId, b.id)}
             onRenameBookmark={(b, title) => void renameBookmark(sessionId, b.id, title)}
             onPickPlan={(p) => openPlanDrawer(sessionId, p)}

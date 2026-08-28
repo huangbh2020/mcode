@@ -86,6 +86,7 @@ export const en = {
   "chatStream.activity.subagentsTitle": "Subagents · {n}",
   "chatStream.activity.runningCount": "{n} running",
   "chatStream.activity.noDescription": "(no description)",
+  "chatStream.activity.viewSubagent": "View subagent details",
   "chatStream.subagent.statusRunning": "Running",
   "chatStream.subagent.statusCompleted": "Completed",
   "chatStream.subagent.statusFailed": "Failed",

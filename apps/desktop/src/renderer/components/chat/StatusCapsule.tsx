@@ -76,6 +76,7 @@ export function StatusCapsule({
   onPickBookmark,
   onRemoveBookmark,
   onRenameBookmark,
+  onPickSubagent,
   onPickPlan,
 }: {
   subagents: SubagentSnapshot[];
@@ -99,6 +100,9 @@ export function StatusCapsule({
   onRemoveBookmark?: (b: SessionBookmark) => void;
   /** Rename a bookmark (inline edit in the popover row). */
   onRenameBookmark?: (b: SessionBookmark, title: string) => void;
+  /** Subagent row click — opens its read-only transcript in the right
+   *  panel's sidechat tab. */
+  onPickSubagent?: (agent: SubagentSnapshot) => void;
   /** Called when the user clicks a plan title in the popover - opens the
    *  right-side PlanDrawer with that plan's full content. */
   onPickPlan: (plan: string) => void;
@@ -249,6 +253,11 @@ export function StatusCapsule({
             }}
             onRemoveBookmark={onRemoveBookmark}
             onRenameBookmark={onRenameBookmark}
+            onPickSubagent={(agent) => {
+              // Close the popover first, then reveal the transcript view.
+              setOpen(false);
+              onPickSubagent?.(agent);
+            }}
             onPickPlan={(plan) => {
               // Close the popover, then open the drawer via the callback.
               setOpen(false);

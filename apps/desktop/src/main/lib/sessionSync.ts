@@ -33,6 +33,7 @@ export function toSessionListEntry(s: Session): SessionListEntry {
     usageHistory: _uh,
     turnFiles: _tf,
     bookmarks: _bm,
+    subagentTranscripts: _st,
     ...entry
   } = s;
   return entry;

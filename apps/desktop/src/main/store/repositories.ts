@@ -210,6 +210,7 @@ interface SessionRow {
   turn_files: string | null;
   usage_history: string | null;
   bookmarks: string | null;
+  subagent_transcripts: string | null;
   created_at: number;
   updated_at: number;
 }
@@ -237,6 +238,9 @@ function rowToSession(r: SessionRow): Session {
     turnFiles: (r.turn_files ? safeJson(r.turn_files) : null) as TurnFileEntry[] | null,
     usageHistory: (r.usage_history ? safeJson(r.usage_history) : null) as TurnUsageRecord[] | null,
     bookmarks: (r.bookmarks ? safeJson(r.bookmarks) : null) as SessionBookmark[] | null,
+    subagentTranscripts: (r.subagent_transcripts
+      ? safeJson(r.subagent_transcripts)
+      : null) as Session["subagentTranscripts"],
     createdAt: r.created_at,
     updatedAt: r.updated_at,
   };
@@ -246,8 +250,8 @@ export const SessionRepo = {
   create(s: Session): void {
     getDb().run(
       `INSERT INTO sessions
-       (id, project_id, provider_id, claude_session_id, kind, parent_session_id, title, status, model, effort, permission_mode, custom_model_id, archived, pinned_at, context_snapshot, todos, subagents, plan_draft, turn_files, usage_history, bookmarks, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (id, project_id, provider_id, claude_session_id, kind, parent_session_id, title, status, model, effort, permission_mode, custom_model_id, archived, pinned_at, context_snapshot, todos, subagents, plan_draft, turn_files, usage_history, bookmarks, subagent_transcripts, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         v(s.id),
         v(s.projectId),
@@ -270,6 +274,7 @@ export const SessionRepo = {
         v(s.turnFiles ? JSON.stringify(s.turnFiles) : null),
         v(s.usageHistory ? JSON.stringify(s.usageHistory) : null),
         v(s.bookmarks ? JSON.stringify(s.bookmarks) : null),
+        v(s.subagentTranscripts ? JSON.stringify(s.subagentTranscripts) : null),
         v(s.createdAt),
         v(s.updatedAt),
       ],
@@ -537,6 +542,18 @@ export const SessionRepo = {
   updateBookmarks(id: string, bookmarks: SessionBookmark[]): void {
     getDb().run("UPDATE sessions SET bookmarks = ?, updated_at = ? WHERE id = ?", [
       v(JSON.stringify(bookmarks)),
+      v(Date.now()),
+      v(id),
+    ]);
+    persist();
+  },
+
+  /** Persist the current turn's subagent transcripts (full map replace —
+   *  the adapter emits replace-semantics per-agent arrays, RuntimeManager
+   *  keeps the merged map). Pass null to clear (new turn starting). */
+  updateSubagentTranscripts(id: string, transcripts: Session["subagentTranscripts"]): void {
+    getDb().run("UPDATE sessions SET subagent_transcripts = ?, updated_at = ? WHERE id = ?", [
+      v(transcripts ? JSON.stringify(transcripts) : null),
       v(Date.now()),
       v(id),
     ]);

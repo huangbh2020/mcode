@@ -141,6 +141,10 @@ function migrate(database: Database): void {
   // User-placed message bookmarks (capsule + timeline markers). JSON blob of
   // SessionBookmark[]; null for sessions with no bookmarks.
   addColumnIfMissing(database, "sessions", "bookmarks", "TEXT");
+  // Final subagent transcripts of the most recent turn (side-panel viewer).
+  // JSON blob of Record<toolUseId, SubagentTranscriptBlock[]>; cleared at
+  // the start of each new turn.
+  addColumnIfMissing(database, "sessions", "subagent_transcripts", "TEXT");
   // Per-turn token/cost history. JSON array of TurnUsageRecord; appended at
   // each turn-end so the context-stats history popover survives restart.
   addColumnIfMissing(database, "sessions", "usage_history", "TEXT");

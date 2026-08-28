@@ -7,7 +7,7 @@
  */
 import { sendToRenderer } from "@main/window.js";
 import { IPC } from "@contracts/ipc";
-import type { RuntimeEvent, PermissionMode, ContextSnapshot, TurnUsageRecord, TurnFileEntry, UserMessageEvent, UpstreamIssueEvent } from "@contracts/runtime";
+import type { RuntimeEvent, PermissionMode, ContextSnapshot, TurnUsageRecord, TurnFileEntry, UserMessageEvent, UpstreamIssueEvent, SubagentTranscriptBlock } from "@contracts/runtime";
 import type { Session } from "@contracts/session";
 import type { ProviderContext, TurnHandle, StartTurnRequest, UserInputAnswers, PlanApprovalDecision } from "@contracts/provider";
 import { providerRegistry } from "@main/providers/registry.js";
@@ -53,6 +53,11 @@ interface SessionRuntime {
    *  deltas against this map. A background subagent that outlives its
    *  spawning turn accrues later growth to whichever turn is settling then. */
   subagentTokensByTask: Map<string, number>;
+  /** Merged subagent transcripts of the current turn, keyed by the spawning
+   *  Task tool_use id. Updated (per key) from `subagent.transcript` events
+   *  and persisted whole after each update; cleared when the next turn
+   *  starts (mirrors the roster's cycle). */
+  subagentTranscripts: Map<string, SubagentTranscriptBlock[]>;
   /** Subagent token growth observed since the last usage-history record
    *  settled (i.e. during the current turn). Copied into the record as
    *  `subagentTokens` and reset by settlePendingTurnEnd. */
@@ -196,6 +201,24 @@ class RuntimeManager {
             }
           }
         }
+      } else if (e.type === "subagent.transcript") {
+        // Merge the per-agent replace-semantics array into the turn's map and
+        // persist the whole map. Event rate is message-level (a few per tool
+        // call), and persist() is coalesced — cheap enough to write through
+        // every time, which keeps the DB row recoverable even if the app dies
+        // mid-turn.
+        const rt = this.sessions.get(session.id);
+        if (rt) {
+          rt.subagentTranscripts.set(e.parentToolUseId, e.blocks);
+          try {
+            SessionRepo.updateSubagentTranscripts(
+              session.id,
+              Object.fromEntries(rt.subagentTranscripts),
+            );
+          } catch (err) {
+            log.error(`failed to persist subagent transcripts: ${(err as Error).message}`);
+          }
+        }
       } else if (e.type === "plan.update") {
         try {
           SessionRepo.updatePlanDraft(session.id, { plan: e.plan, phase: e.phase });
@@ -280,6 +303,7 @@ class RuntimeManager {
       turnCount: 0,
       subagentTokensByTask: new Map(),
       turnSubagentTokens: 0,
+      subagentTranscripts: new Map(),
     });
   }
 
@@ -385,6 +409,19 @@ class RuntimeManager {
     // files would still be in the snapshot and rewind would partially
     // undo turn N-1 instead of fully undoing turn N.
     getFileSnapshot(session.id).clear();
+
+    // A new turn rebuilds the subagent roster — the previous turn's
+    // transcripts (and their persisted copies) must not survive into it,
+    // or a reopen would resurrect unreachable entries keyed by tool_use ids
+    // the new roster no longer carries.
+    if (rt.subagentTranscripts.size > 0) {
+      rt.subagentTranscripts.clear();
+      try {
+        SessionRepo.updateSubagentTranscripts(session.id, null);
+      } catch (err) {
+        log.error(`failed to clear subagent transcripts: ${(err as Error).message}`);
+      }
+    }
 
     // If the session is bound to a custom-model config, decrypt its
     // credentials (main-process only) and pass them through to the provider

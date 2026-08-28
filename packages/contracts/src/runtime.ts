@@ -495,6 +495,44 @@ export interface SubagentUpdateEvent {
   agents: SubagentSnapshot[];
 }
 
+/**
+ * One rendered block of a subagent's live transcript. Field names and shapes
+ * deliberately mirror the renderer store's `Block` union (text / thinking /
+ * tool_use members) so the transcript can feed `MessageBlocks` directly —
+ * only the members a subagent can produce are modeled. NOT persisted: the
+ * transcript is process-lifetime data (rebuilt from scratch on a rerun);
+ * the aggregated roster in `SubagentUpdateEvent` is what survives restarts.
+ */
+export type SubagentTranscriptBlock =
+  | { kind: "text"; text: string }
+  | { kind: "thinking"; text: string }
+  | {
+      kind: "tool_use";
+      toolCallId: string;
+      toolName: string;
+      input: unknown;
+      /** "running" until the subagent's tool_result lands (status done/error). */
+      status: "running" | "done" | "error";
+      result?: unknown;
+    };
+
+/**
+ * Replace-semantics transcript for ONE subagent, keyed by the Task
+ * tool_use id that spawned it (== `SubagentSnapshot.toolUseId`, ==
+ * `parent_tool_use_id` on forwarded subagent messages). Emitted after every
+ * forwarded subagent assistant/user message is folded in — message-level
+ * granularity (no char streaming), which matches the subagent viewer's
+ * read-only "check what it's doing" purpose.
+ */
+export interface SubagentTranscriptEvent {
+  type: "subagent.transcript";
+  sessionId: string;
+  /** The originating Task tool_use id. */
+  parentToolUseId: string;
+  /** The full transcript so far (replace, not append). */
+  blocks: SubagentTranscriptBlock[];
+}
+
 /** Emitted when a context compaction completes (manual `/compact` or auto).
  *  Carries the token counts before/after so the renderer can show a summary
  *  card in the message stream telling the user what happened. */
@@ -544,7 +582,7 @@ export interface BrowserImageEvent {
  */
 export type SessionListEntry = Omit<
   Session,
-  "contextSnapshot" | "todos" | "subagents" | "planDraft" | "usageHistory" | "turnFiles" | "bookmarks"
+  "contextSnapshot" | "todos" | "subagents" | "planDraft" | "usageHistory" | "turnFiles" | "bookmarks" | "subagentTranscripts"
 >;
 
 /** A session row was created or mutated (title / archive / pin / rename …).
@@ -686,6 +724,7 @@ export type RuntimeEvent =
   | PlanApprovalRequestEvent
   | PlanUpdateEvent
   | SubagentUpdateEvent
+  | SubagentTranscriptEvent
   | ContextUsageEvent
   | ErrorEvent
   | TurnDoneEvent

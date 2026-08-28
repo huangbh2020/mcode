@@ -7,6 +7,7 @@ import type {
   EffortLevel,
   ContextSnapshot,
   SubagentSnapshot,
+  SubagentTranscriptBlock,
   PlanUpdateEvent,
   TurnFileEntry,
   TurnUsageRecord,
@@ -121,6 +122,12 @@ export interface Session {
    *  markers survive a session reopen). Null for sessions with no bookmarks.
    *  JSON-serialized in the DB. */
   bookmarks: SessionBookmark[] | null;
+  /** Final subagent transcripts of the most recent turn, keyed by the
+   *  spawning Task tool_use id (same keys as SubagentSnapshot.toolUseId).
+   *  Persisted so the side-panel subagent viewer still works after a session
+   *  reopen; cleared when a new turn starts (mirrors the roster cycle).
+   *  Null for sessions that never ran subagents. JSON-serialized in the DB. */
+  subagentTranscripts: Record<string, SubagentTranscriptBlock[]> | null;
   createdAt: number;
   updatedAt: number;
 }

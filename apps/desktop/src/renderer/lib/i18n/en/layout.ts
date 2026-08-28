@@ -98,6 +98,8 @@ export const en = {
   "sideChat.goToParent": "Jump to the parent session",
   "sideChat.titlePlaceholder": "New sub-session",
   "sideChat.loading": "Loading sub-sessions…",
+  "sideChat.subagentsSection": "Subagents",
+  "sideChat.subagentWaiting": "Waiting for output…",
 
   /* ── center pane ── */
   "layout.loadingPlan": "Loading plan…",
