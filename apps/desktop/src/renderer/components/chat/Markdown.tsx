@@ -435,9 +435,11 @@ function buildComponents(): Components {
   blockquote({ children }) {
     return <blockquote className="my-[var(--chat-md-gap-md)] border-l-2 border-edge pl-3 text-content-muted">{children}</blockquote>;
   },
-  // Bold stays at the brightest content color even inside muted contexts
-  // (lists / tables / blockquotes all inherit --content-muted), so emphasized
-  // words still pop against the dimmer surrounding text.
+  // Bold is full --content: in paragraphs that matches the body color (weight
+  // alone marks emphasis); in muted contexts (lists / tables / blockquotes) the
+  // extra brightness keeps emphasized words legible. Dark chat lists soften
+  // that jump via the `.dark .chat-md li strong` rule in styles.css — see the
+  // "Chat markdown list lift" block there for the rationale.
   strong({ children }) {
     return <strong className="text-content">{children}</strong>;
   },
@@ -511,7 +513,7 @@ export const Markdown = memo(function Markdown({
   // between message rows.
   return (
     <div
-      className="break-words text-content [font-size:var(--chat-font-size)] [line-height:var(--chat-md-leading)] [font-weight:var(--chat-font-weight)] [&>p]:my-[var(--chat-md-gap-sm)] [&:first-child]:mt-0 [&:last-child]:mb-0"
+      className="chat-md break-words text-content [font-size:var(--chat-font-size)] [line-height:var(--chat-md-leading)] [font-weight:var(--chat-font-weight)] [&>p]:my-[var(--chat-md-gap-sm)] [&:first-child]:mt-0 [&:last-child]:mb-0"
     >
       <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={rehypePlugins} components={components}>
         {children}

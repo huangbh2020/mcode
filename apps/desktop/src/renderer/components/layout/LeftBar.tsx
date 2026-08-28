@@ -623,58 +623,59 @@ function LeftBarBase({
         </div>
       </div>
 
-      {/* Pinned sessions — a global section ABOVE the project tree collecting
-          the pinned threads of every project (pinned rows leave their
-          project's list and live here until unpinned). Mirrors the archived
-          bin's collapsible-header pattern, but defaults open and sits on top.
-          Hidden entirely when nothing is pinned. */}
-      {pinnedSessions.length > 0 && (
-        <div className="mb-2">
-          <button
-            onClick={() => setPinnedOpen(!pinnedOpen)}
-            className={cn(
-              "flex w-full items-center gap-1 rounded px-1 py-0.5 font-medium uppercase tracking-wide [font-size:var(--rp-fs-md)]",
-              "text-content-subtle transition-colors hover:bg-surface-hover/60",
-            )}
-          >
-            <IconChevronRight
-              size={12}
-              className={cn(
-                "shrink-0 transition-transform",
-                pinnedOpen && "rotate-90",
-              )}
-            />
-            <IconPin size={12} className="shrink-0 text-accent/70" />
-            {t("layout.pinnedSection", { n: pinnedSessions.length })}
-          </button>
-          {pinnedOpen && (
-            <ul className="mt-1 space-y-0.5">
-              {pinnedSessions.map((s) => (
-                <SessionRow
-                  key={s.id}
-                  session={s}
-                  active={s.id === activeSessionId}
-                  isRunning={!!runningBySession[s.id]}
-                  unreadCount={unreadBySession[s.id] ?? 0}
-                  onSelect={() => void openTab(s.id)}
-                  onTogglePin={() => void setSessionPinned(s.id, !s.pinnedAt)}
-                  onArchive={() => void archiveSession(s.id, true)}
-                  onDelete={() => void deleteSession(s.id)}
-                  registerNode={registerNode}
-                  onContext={(x, y) => setCtxMenu({ session: s, x, y })}
-                />
-              ))}
-            </ul>
-          )}
-        </div>
-      )}
-
       {/* Project → session tree. A single DndContext wraps both view modes:
           flat list reorders in place; grouped view reorders within the
           flattened display order AND supports cross-group drag-to-reassign
           (handled live in onDragOver). Group headers are droppable targets
           (not draggable) so dropping a project on a header moves it there. */}
       <div className="min-h-0 flex-1 overflow-y-auto">
+        {/* Pinned sessions — a global section collecting the pinned threads
+            of every project (pinned rows leave their project's list and live
+            here until unpinned). Rendered INSIDE the scroll region, above the
+            project tree, so it scrolls together with the grouped projects
+            instead of staying fixed while the tree scrolls under it. Mirrors
+            the archived bin's collapsible-header pattern, but defaults open.
+            Hidden entirely when nothing is pinned. */}
+        {pinnedSessions.length > 0 && (
+          <div className="mb-2">
+            <button
+              onClick={() => setPinnedOpen(!pinnedOpen)}
+              className={cn(
+                "flex w-full items-center gap-1 rounded px-1 py-0.5 font-medium uppercase tracking-wide [font-size:var(--rp-fs-md)]",
+                "text-content-subtle transition-colors hover:bg-surface-hover/60",
+              )}
+            >
+              <IconChevronRight
+                size={12}
+                className={cn(
+                  "shrink-0 transition-transform",
+                  pinnedOpen && "rotate-90",
+                )}
+              />
+              <IconPin size={12} className="shrink-0 text-accent/70" />
+              {t("layout.pinnedSection", { n: pinnedSessions.length })}
+            </button>
+            {pinnedOpen && (
+              <ul className="mt-1 space-y-0.5">
+                {pinnedSessions.map((s) => (
+                  <SessionRow
+                    key={s.id}
+                    session={s}
+                    active={s.id === activeSessionId}
+                    isRunning={!!runningBySession[s.id]}
+                    unreadCount={unreadBySession[s.id] ?? 0}
+                    onSelect={() => void openTab(s.id)}
+                    onTogglePin={() => void setSessionPinned(s.id, !s.pinnedAt)}
+                    onArchive={() => void archiveSession(s.id, true)}
+                    onDelete={() => void deleteSession(s.id)}
+                    registerNode={registerNode}
+                    onContext={(x, y) => setCtxMenu({ session: s, x, y })}
+                  />
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
         {projects.length === 0 ? null : (
           <DndContext
             sensors={sensors}

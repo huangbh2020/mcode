@@ -281,6 +281,30 @@ div:has(> [role="menu"]) {
   --content-subtle: 184 188 196; /* #b8bcc4 */
 }
 
+/* ───────────── Chat markdown list lift (dark only) ─────────────
+ * Model replies are dominated by bullet/numbered lists, which render at
+ * --content-muted — one full tier below paragraph text. Objectively that is
+ * ~9.2:1 (well past AA), but perceptually the whole reply body reads dimmer
+ * than its intro sentences, and the full-bright `strong` labels inside
+ * bullets (Markdown.tsx renders strong at --content) make the regular list
+ * text look dimmer still by simultaneous contrast. Scoped to .chat-md (the
+ * Markdown root) so only the chat stream shifts while chrome/settings keep
+ * the global ramp; light mode is unaffected (the text-content-muted
+ * utilities stay in place as the light fallback).
+ *   list body  #bcbfc6 → 60% muted + 40% content ≈ #cfcfd5  ≈9.2:1 → ≈10.8:1
+ *   li strong  #e7e8ec → 70% content + 30% muted ≈ #dcdce1 — narrows the
+ *              in-line white/gray jump; the weight bump still marks emphasis
+ * Nested lists recompute the mix from the static RGB vars, not from the
+ * inherited color, so it doesn't compound at depth. Markers stay at
+ * --content-subtle (decorative, no lift needed). */
+.dark .chat-md ul,
+.dark .chat-md ol {
+  color: color-mix(in srgb, rgb(var(--content-muted)) 60%, rgb(var(--content)));
+}
+.dark .chat-md li strong {
+  color: color-mix(in srgb, rgb(var(--content)) 70%, rgb(var(--content-muted)));
+}
+
 /* ───────────── Font-weight ladder shifts ─────────────
  * Pairs with the base font-weight set on :root (500, light) and .dark (600,
  * dark). Because the inherited base is lifted, the raw Tailwind utilities
