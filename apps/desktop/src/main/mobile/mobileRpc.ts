@@ -31,6 +31,7 @@ import {
   RewindTurnSchema,
   ProjectSessionsSchema,
   SessionSearchSchema,
+  BookmarkSearchSchema,
   SessionMessagesSchema,
   SaveMessagesSchema,
   UpsertMessagesSchema,
@@ -114,6 +115,12 @@ const HANDLERS: Record<string, RpcHandler> = {
     const input = SessionSearchSchema.parse(raw);
     const sessions = SessionRepo.searchByTitle(input.query, { limit: input.limit });
     return { sessions };
+  },
+
+  "session:searchBookmarks": (raw) => {
+    const input = BookmarkSearchSchema.parse(raw);
+    const results = SessionRepo.searchBookmarks(input.query, { limit: input.limit });
+    return { results };
   },
 
   "session:messages": (raw) => {

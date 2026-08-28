@@ -1095,6 +1095,8 @@ function ChatPaneForSession({
   const renameBookmark = useSessionStore((s) => s.renameBookmark);
   const askInSideChat = useSessionStore((s) => s.askInSideChat);
   const openSubagentTranscript = useSessionStore((s) => s.openSubagentTranscript);
+  const pendingBookmarkJump = useSessionStore((s) => s.pendingBookmarkJump);
+  const clearPendingBookmarkJump = useSessionStore((s) => s.clearPendingBookmarkJump);
   const sideChatSeed = useSessionStore((s) => s.sideChatSeedBySession[sessionId]);
   const drainSideChatSeed = useSessionStore((s) => s.drainSideChatSeed);
   // Floating [copy | add bookmark] toolbar anchored to the current text
@@ -1453,6 +1455,23 @@ function ChatPaneForSession({
     },
     [msgToRenderIndex],
   );
+
+  // One-shot cross-session jump (the Ctrl+K palette's bookmark result): wait
+  // for the target message to land in the stream (openTab's history prefetch
+  // is async), then jump + highlight. History fully loaded without the
+  // message = stale bookmark (truncated away) — drop the request, the session
+  // still opens (the palette's openTab already ran), just without a jump.
+  const historyLoaded = useSessionStore((s) => !!s.historyLoadedBySession[sessionId]);
+  useEffect(() => {
+    if (!pendingBookmarkJump || pendingBookmarkJump.sessionId !== sessionId) return;
+    const found = messages.some((m) => m.id === pendingBookmarkJump.messageId);
+    if (!found) {
+      if (historyLoaded) clearPendingBookmarkJump();
+      return;
+    }
+    clearPendingBookmarkJump();
+    jumpToMessage(pendingBookmarkJump.messageId, pendingBookmarkJump.excerpt);
+  }, [pendingBookmarkJump, messages, historyLoaded, sessionId, clearPendingBookmarkJump, jumpToMessage]);
 
   /** mouseup on the message stream: capture the finished text selection and
    *  open the floating [copy | add bookmark] toolbar. Runs after a tick so

@@ -44,12 +44,13 @@ import {
 } from "@renderer/lib/commands.js";
 import { resolveShortcut, acceleratorToDisplayString } from "@renderer/lib/shortcuts.js";
 import type { Session } from "@contracts/session";
-import type { FileSearchEntry, FileGrepEntry } from "@contracts/ipc";
+import type { FileSearchEntry, FileGrepEntry, BookmarkSearchResult } from "@contracts/ipc";
 import {
   IconLoader2,
   IconFile,
   IconFileSearch,
   IconAlertTriangle,
+  IconBookmark,
 } from "@renderer/lib/icons.js";
 import { getProviderIcon } from "@renderer/lib/providerIcon.js";
 import { useI18n, type MessageId } from "@renderer/lib/i18n/index.js";
@@ -75,7 +76,7 @@ const GREP_MAX_PER_FILE = 3;
 /** Which kind(s) of results the palette should search + render. `all` mixes
  *  every kind (the original behaviour); the others scope to a single type so
  *  the user can target threads / files / content without noise. */
-type SearchScope = "all" | "command" | "session" | "file" | "grep";
+type SearchScope = "all" | "command" | "session" | "bookmark" | "file" | "grep";
 
 /** Tab descriptor: id + dictionary key + whether it needs an active project
  *  to be useful (file/content searches are project-scoped). Ordered for
@@ -85,6 +86,7 @@ const SCOPE_TABS: { id: SearchScope; labelKey: MessageId; needsProject: boolean 
   { id: "all", labelKey: "layout.palette.all", needsProject: false },
   { id: "command", labelKey: "layout.palette.command", needsProject: false },
   { id: "session", labelKey: "layout.palette.session", needsProject: false },
+  { id: "bookmark", labelKey: "layout.palette.bookmark", needsProject: false },
   { id: "file", labelKey: "layout.palette.file", needsProject: true },
   { id: "grep", labelKey: "layout.palette.grep", needsProject: true },
 ];
@@ -102,17 +104,19 @@ function scopeIncludes(scope: SearchScope, group: PaletteGroup): boolean {
 type PaletteItem =
   | (CommandDef & { kind: "command" })
   | { kind: "session"; session: Session }
+  | { kind: "bookmark"; result: BookmarkSearchResult }
   | { kind: "file"; file: FileSearchEntry }
   | { kind: "grep"; match: FileGrepEntry };
 
-/** Fixed group order for rendering. Commands always come first; the three
- *  search groups follow so the user reads top-down "action → thing → file". */
-const GROUP_ORDER = ["command", "session", "file", "grep"] as const;
+/** Fixed group order for rendering. Commands always come first; the search
+ *  groups follow so the user reads top-down "action → thing → file". */
+const GROUP_ORDER = ["command", "session", "bookmark", "file", "grep"] as const;
 type PaletteGroup = (typeof GROUP_ORDER)[number];
 
 const GROUP_LABELS: Record<PaletteGroup, MessageId> = {
   command: "layout.palette.command",
   session: "layout.palette.session",
+  bookmark: "layout.palette.bookmark",
   file: "layout.palette.file",
   grep: "layout.palette.grep",
 };
@@ -152,6 +156,7 @@ export function CommandPalette() {
   // no longer matches is dropped).
   const reqIdRef = useRef(0);
   const [sessions, setSessions] = useState<AsyncResult<Session[]>>(undefined);
+  const [bookmarkHits, setBookmarkHits] = useState<AsyncResult<BookmarkSearchResult[]>>(undefined);
   const [files, setFiles] = useState<AsyncResult<FileSearchEntry[]>>(undefined);
   const [greps, setGreps] = useState<AsyncResult<FileGrepEntry[]>>(undefined);
 
@@ -180,16 +185,20 @@ export function CommandPalette() {
   // on its own longer GREP_DEBOUNCE_MS so typing never churns rg per keystroke.
   useEffect(() => {
     const wantSession = scopeIncludes(scope, "session");
+    const wantBookmark = scopeIncludes(scope, "bookmark");
     const wantFile = scopeIncludes(scope, "file") && !!projectPath;
     const wantGrep = scopeIncludes(scope, "grep") && !!projectPath;
     if (!open || !isSearching) {
       setSessions(undefined);
+      setBookmarkHits(undefined);
       setFiles(undefined);
       setGreps(undefined);
       return;
     }
     if (wantSession) setSessions({ loading: true });
     else setSessions(undefined);
+    if (wantBookmark) setBookmarkHits({ loading: true });
+    else setBookmarkHits(undefined);
     if (wantFile) setFiles({ loading: true });
     else setFiles(undefined);
     if (wantGrep) setGreps({ loading: true });
@@ -207,6 +216,18 @@ export function CommandPalette() {
           .catch(() => {
             if (reqIdRef.current !== myId) return;
             setSessions({ loading: false, value: [] });
+          });
+      }
+      if (wantBookmark) {
+        void api.session
+          .searchBookmarks({ query: trimmed, limit: SESSION_SEARCH_LIMIT })
+          .then((res) => {
+            if (reqIdRef.current !== myId) return;
+            setBookmarkHits({ loading: false, value: res.results ?? [] });
+          })
+          .catch(() => {
+            if (reqIdRef.current !== myId) return;
+            setBookmarkHits({ loading: false, value: [] });
           });
       }
       if (wantFile) {
@@ -255,6 +276,7 @@ export function CommandPalette() {
     setQuery("");
     setScope("all");
     setSessions(undefined);
+    setBookmarkHits(undefined);
     setFiles(undefined);
     setGreps(undefined);
     reqIdRef.current++;
@@ -278,6 +300,25 @@ export function CommandPalette() {
             await store.selectProject(sess.projectId);
           }
           await store.openTab(sess.id);
+        };
+        void run();
+        break;
+      }
+      case "bookmark": {
+        const hit = item.result;
+        // Open the owning session, then stage the jump — the target pane
+        // consumes it once its (async) history load brings the bookmarked
+        // message in, and jumps + highlights the exact selection text.
+        const run = async () => {
+          if (hit.projectId !== store.activeProjectId) {
+            await store.selectProject(hit.projectId);
+          }
+          await store.openTab(hit.sessionId);
+          store.setPendingBookmarkJump({
+            sessionId: hit.sessionId,
+            messageId: hit.bookmark.messageId,
+            excerpt: hit.bookmark.excerpt,
+          });
         };
         void run();
         break;
@@ -310,6 +351,9 @@ export function CommandPalette() {
       if (scopeIncludes(scope, "session") && sessions && !sessions.loading) {
         for (const s of sessions.value) out.push({ kind: "session", session: s });
       }
+      if (scopeIncludes(scope, "bookmark") && bookmarkHits && !bookmarkHits.loading) {
+        for (const r of bookmarkHits.value) out.push({ kind: "bookmark", result: r });
+      }
       if (scopeIncludes(scope, "file") && files && !files.loading) {
         for (const f of files.value) out.push({ kind: "file", file: f });
       }
@@ -318,13 +362,14 @@ export function CommandPalette() {
       }
     }
     return out;
-  }, [commandItems, trimmed, isSearching, scope, sessions, files, greps]);
+  }, [commandItems, trimmed, isSearching, scope, sessions, bookmarkHits, files, greps]);
 
   // Bucket items by group (preserving GROUP_ORDER) for sectioned rendering.
   const grouped = useMemo(() => {
     const buckets: Record<PaletteGroup, PaletteItem[]> = {
       command: [],
       session: [],
+      bookmark: [],
       file: [],
       grep: [],
     };
@@ -332,6 +377,7 @@ export function CommandPalette() {
     const loadingFor: Record<PaletteGroup, boolean> = {
       command: false,
       session: scopeIncludes(scope, "session") && (sessions?.loading ?? false),
+      bookmark: scopeIncludes(scope, "bookmark") && (bookmarkHits?.loading ?? false),
       file: scopeIncludes(scope, "file") && (files?.loading ?? false),
       grep: scopeIncludes(scope, "grep") && (greps?.loading ?? false),
     };
@@ -340,7 +386,7 @@ export function CommandPalette() {
       items: buckets[g],
       loading: loadingFor[g],
     })).filter((x) => x.items.length > 0 || x.loading);
-  }, [items, scope, sessions, files, greps]);
+  }, [items, scope, sessions, bookmarkHits, files, greps]);
 
   const totalCount = items.length;
 
@@ -573,6 +619,8 @@ function placeholderFor(t: Translator, scope: SearchScope): string {
       return t("layout.palette.placeholder.command");
     case "session":
       return t("layout.palette.placeholder.session");
+    case "bookmark":
+      return t("layout.palette.placeholder.bookmark");
     case "file":
       return t("layout.palette.placeholder.file");
     case "grep":
@@ -602,6 +650,8 @@ function rowKey(item: PaletteItem, idx: number): string {
       return `cmd:${item.id}`;
     case "session":
       return `ses:${item.session.id}`;
+    case "bookmark":
+      return `bm:${item.result.sessionId}:${item.result.bookmark.id}`;
     case "file":
       return `file:${item.file.path}`;
     case "grep":
@@ -629,6 +679,8 @@ function PaletteRow({ item, onClick }: { item: PaletteItem; onClick: () => void 
         <CommandRowContent cmd={item} />
       ) : item.kind === "session" ? (
         <SessionRowContent session={item.session} />
+      ) : item.kind === "bookmark" ? (
+        <BookmarkRowContent result={item.result} />
       ) : item.kind === "file" ? (
         <FileRowContent file={item.file} />
       ) : (
@@ -666,6 +718,27 @@ function SessionRowContent({ session }: { session: Session }) {
     <>
       <Icon size={15} className={cn("shrink-0", color)} />
       <span className="min-w-0 flex-1 truncate">{title}</span>
+    </>
+  );
+}
+
+function BookmarkRowContent({ result }: { result: BookmarkSearchResult }) {
+  const { t } = useI18n();
+  const b = result.bookmark;
+  // Renamed bookmarks show the user's title with the original selection as
+  // the secondary line; untitled ones lead with the excerpt itself.
+  const sessionTitle = result.sessionTitle?.trim() || t("lib.untitledSession");
+  return (
+    <>
+      <IconBookmark size={15} className="shrink-0 text-warning" />
+      <span className="min-w-0 flex-1 leading-tight">
+        <span className="block truncate font-medium">
+          {b.title?.trim() || b.excerpt}
+        </span>
+        <span className="block truncate text-[11px] text-content-subtle">
+          {b.title?.trim() ? b.excerpt : sessionTitle}
+        </span>
+      </span>
     </>
   );
 }

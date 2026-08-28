@@ -388,6 +388,51 @@ export const SessionRepo = {
     return out;
   },
 
+  /** Cross-session bookmark search for the Ctrl+K palette: substring match
+   *  over each bookmark's title (user rename) + excerpt (the selected text at
+   *  add time). The bookmarks column is a small JSON array per session, so
+   *  pull the non-null rows (most-recently-active first) and filter in
+   *  memory — sql.js LIKE over the raw JSON string would also match keys /
+   *  unrelated fields. */
+  searchBookmarks(
+    query: string,
+    opts?: { limit?: number },
+  ): Array<{ bookmark: SessionBookmark; sessionId: string; sessionTitle: string; projectId: string }> {
+    const q = query.trim().toLowerCase();
+    if (!q) return [];
+    const limit = opts?.limit ?? 30;
+    const stmt = getDb().prepare(
+      "SELECT id, project_id, title, bookmarks FROM sessions WHERE archived = 0 AND kind = 'chat' AND bookmarks IS NOT NULL ORDER BY updated_at DESC",
+    );
+    const out: Array<{
+      bookmark: SessionBookmark;
+      sessionId: string;
+      sessionTitle: string;
+      projectId: string;
+    }> = [];
+    outer: while (stmt.step()) {
+      const row = stmt.getAsObject() as unknown as {
+        id: string;
+        project_id: string;
+        title: string;
+        bookmarks: string;
+      };
+      const list = safeJson(row.bookmarks);
+      if (!Array.isArray(list)) continue;
+      for (const raw of list) {
+        if (!raw || typeof raw !== "object") continue;
+        const bm = raw as SessionBookmark;
+        const hay = `${bm.title ?? ""} ${bm.excerpt ?? ""}`.toLowerCase();
+        if (hay.includes(q)) {
+          out.push({ bookmark: bm, sessionId: row.id, sessionTitle: row.title, projectId: row.project_id });
+          if (out.length >= limit) break outer;
+        }
+      }
+    }
+    stmt.free();
+    return out;
+  },
+
   /** Non-archived, unpinned sessions across ALL projects whose `updated_at`
    *  is older than `cutoffMs`. Candidate feed for the auto-archiver, which
    *  applies the per-project thresholds on top; pinned sessions are excluded

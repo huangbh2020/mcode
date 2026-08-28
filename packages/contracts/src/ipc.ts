@@ -5,7 +5,7 @@
  */
 import { z } from "zod";
 import type { RuntimeEvent } from "./runtime.js";
-import type { Project, Session, MessageRecord, TurnInput, ApprovalDecision } from "./session.js";
+import type { Project, Session, MessageRecord, TurnInput, ApprovalDecision, SessionBookmark } from "./session.js";
 import type { ProviderCapabilities, UserInputAnswers, BuiltinModelOption } from "./provider.js";
 import type { CustomModelPublic, CustomModelInput, TestCustomModelResult } from "./customModel.js";
 import type { PiProviderConfig, PiProviderPublic } from "./piModel.js";
@@ -920,6 +920,26 @@ export const SessionSearchSchema = z.object({
   limit: z.number().int().positive().optional(),
 });
 export type SessionSearchInput = z.infer<typeof SessionSearchSchema>;
+
+/** One cross-session bookmark hit for the Ctrl+K palette. Carries the owning
+ *  session's identity so the palette can open it, plus the bookmark itself
+ *  (excerpt = the selected text at add time, title = the user rename). */
+export interface BookmarkSearchResult {
+  bookmark: SessionBookmark;
+  sessionId: string;
+  sessionTitle: string;
+  projectId: string;
+}
+
+/** Cross-session bookmark search (title + excerpt substring). Scans the
+ *  bookmarks JSON column of non-archived chat sessions — bookmark data is
+ *  small (single-digit entries per session), so an in-memory filter over the
+ *  non-null rows is fine at workspace scale. */
+export const BookmarkSearchSchema = z.object({
+  query: z.string(),
+  limit: z.number().int().positive().optional(),
+});
+export type BookmarkSearchInput = z.infer<typeof BookmarkSearchSchema>;
 
 /* A persisted message: content is opaque JSON (text/thinking/tool_use blocks).
  * P2's renderer serializes its ChatMessage.blocks array here.
@@ -3196,6 +3216,8 @@ export interface RpcMap {
   // Sessions (P2 persistence)
   /** Cross-project session search by title substring (Ctrl+K unified search). */
   "session.search": (input: SessionSearchInput) => Promise<{ sessions: Session[] }>;
+  /** Cross-session bookmark search (Ctrl+K unified search). */
+  "session.searchBookmarks": (input: BookmarkSearchInput) => Promise<{ results: BookmarkSearchResult[] }>;
   /** All pinned non-archived sessions across projects (most recent pin
    *  first) — powers the left bar's global pinned section above the project
    *  tree. */
@@ -3591,6 +3613,7 @@ export const IPC = {
   SESSION_UPDATE_BOOKMARKS: "session:updateBookmarks",
   SESSION_LIST_PINNED: "session:listPinned",
   SESSION_SEARCH: "session:search",
+  SESSION_SEARCH_BOOKMARKS: "session:searchBookmarks",
   SESSION_MESSAGES: "session:messages",
   SESSION_SAVE_MESSAGES: "session:saveMessages",
   SESSION_UPSERT_MESSAGES: "session:upsertMessages",

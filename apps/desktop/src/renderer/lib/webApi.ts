@@ -387,6 +387,7 @@ const project: Api["project"] = {
 
 const session: Api["session"] = {
   search: (input) => rpc("session:search", input),
+  searchBookmarks: (input) => rpc("session:searchBookmarks", input),
   messages: (input) => rpc("session:messages", input),
   saveMessages: (input) => rpc("session:saveMessages", input),
   upsertMessages: (input) => rpc("session:upsertMessages", input),

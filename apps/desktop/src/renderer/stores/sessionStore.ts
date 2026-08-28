@@ -1016,6 +1016,17 @@ export interface SessionState {
    *  PARENT session id (ownership check) + the subagent's taskId; consumed
    *  and drained by SideChatPanel. Not persisted. */
   pendingSubagentView: { sessionId: string; taskId: string } | null;
+  /** One-shot "open this session and jump to this bookmark" request (the
+   *  Ctrl+K palette's bookmark result click). Consumed by the target
+   *  session's ChatPane once the message stream holds the target message
+   *  (openTab's history prefetch is async); cleared without jumping when the
+   *  history is loaded but the message is gone (stale bookmark / truncated
+   *  by an edit-resend). Not persisted. */
+  pendingBookmarkJump: {
+    sessionId: string;
+    messageId: string;
+    excerpt?: string;
+  } | null;
 
   /* ── IDE right-panel state ──
    *  Editor state (open files, active file, view mode, expanded tree dirs)
@@ -1644,6 +1655,16 @@ export interface SessionState {
   openSubagentTranscript: (sessionId: string, taskId: string) => void;
   /** Clear the one-shot subagent-view request after consumption. */
   clearPendingSubagentView: () => void;
+  /** Queue a one-shot jump-to-bookmark for `sessionId`'s ChatPane (the
+   *  palette's bookmark result). The caller is responsible for opening the
+   *  session (selectProject/openTab) — this only stages the jump. */
+  setPendingBookmarkJump: (jump: {
+    sessionId: string;
+    messageId: string;
+    excerpt?: string;
+  }) => void;
+  /** Clear the one-shot bookmark jump (consumed, or abandoned as stale). */
+  clearPendingBookmarkJump: () => void;
 
   /** Replace a single project's saved terminal quick-commands. Persists the
    *  whole per-project map (JSON-encoded) to settings. Both the terminal
@@ -3720,6 +3741,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   activeSideChatId: null,
   sideChatSeedBySession: {},
   pendingSubagentView: null,
+  pendingBookmarkJump: null,
   // IDE right-panel. Editor state is per-project (keyed by projectId);
   // init() hydrates from the settings table. rightPanelTab / ideEditorMode
   // are global user prefs.
@@ -8166,6 +8188,14 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
   clearPendingSubagentView: () => {
     set({ pendingSubagentView: null });
+  },
+
+  setPendingBookmarkJump: (jump) => {
+    set({ pendingBookmarkJump: jump });
+  },
+
+  clearPendingBookmarkJump: () => {
+    set({ pendingBookmarkJump: null });
   },
 
   setCustomCommandsByProject: (projectId, commands) => {

@@ -46,6 +46,8 @@ const api = {
     /** Cross-project session title search (Ctrl+K unified search). */
     search: ((input) =>
       ipcRenderer.invoke(IPC.SESSION_SEARCH, input)) as RpcMap["session.search"],
+    searchBookmarks: ((input) =>
+      ipcRenderer.invoke(IPC.SESSION_SEARCH_BOOKMARKS, input)) as RpcMap["session.searchBookmarks"],
     messages: ((input) =>
       ipcRenderer.invoke(IPC.SESSION_MESSAGES, input)) as RpcMap["session.messages"],
     saveMessages: ((input) =>

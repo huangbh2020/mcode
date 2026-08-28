@@ -12,6 +12,7 @@ import {
   ProjectSessionsSchema,
   RenameSessionSchema,
   SessionSearchSchema,
+  BookmarkSearchSchema,
   UpdateBookmarksSchema,
 } from "@contracts/ipc";
 import type { Project } from "@contracts/session";
@@ -64,6 +65,13 @@ export function registerProjectHandlers(ipcMain: IpcMain): void {
     const input = SessionSearchSchema.parse(raw);
     const sessions = SessionRepo.searchByTitle(input.query, { limit: input.limit });
     return { sessions };
+  });
+
+  // Cross-session bookmark search (Ctrl+K unified search palette).
+  ipcMain.handle(IPC.SESSION_SEARCH_BOOKMARKS, (_evt, raw) => {
+    const input = BookmarkSearchSchema.parse(raw);
+    const results = SessionRepo.searchBookmarks(input.query, { limit: input.limit });
+    return { results };
   });
 
   // Hard-delete a project (cascades to its sessions + messages via DB FKs).
