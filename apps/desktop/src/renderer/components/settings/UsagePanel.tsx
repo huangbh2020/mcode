@@ -167,6 +167,7 @@ export function UsagePanel() {
         { key: "turns", label: t("settings.usage.summary.turns"), value: summary.turns.toLocaleString() },
         { key: "sessions", label: t("settings.usage.summary.sessions"), value: summary.sessions.toLocaleString() },
         { key: "totalTokens", label: t("settings.usage.summary.totalTokens"), value: fmtTokens(summary.totalTokens) },
+        { key: "subagentTokens", label: t("settings.usage.summary.subagentTokens"), value: fmtTokens(summary.subagentTokens) },
         { key: "outputTokens", label: t("settings.usage.summary.outputTokens"), value: fmtTokens(summary.outputTokens) },
         { key: "cacheRead", label: t("settings.usage.summary.cacheRead"), value: fmtTokens(summary.cacheReadTokens) },
         { key: "cacheWrite", label: t("settings.usage.summary.cacheWrite"), value: fmtTokens(summary.cacheCreationTokens) },

@@ -26,6 +26,7 @@ import {
 } from "@renderer/lib/icons.js";
 import {
   buildTurnGroups,
+  cacheHitRate,
   countActions,
   fmtClockTime,
   fmtDuration,
@@ -53,7 +54,7 @@ const EMPTY_SUBAGENTS: SubagentSnapshot[] = [];
  * each turn of the active session: the user prompt it received, every action
  * it took while processing (thinking, tool calls, subagent delegations,
  * questions back to the user, plans, touched files), its reply, and what the
- * turn cost in tokens / USD / wall time.
+ * turn cost in tokens / wall time.
  *
  * Everything is derived from store state that already exists — the message
  * stream (turn grouping via the implicit user-message boundary + `turnMeta`)
@@ -149,13 +150,16 @@ export function TurnFlowPanel() {
       usageHistory.reduce(
         (acc, r) => {
           acc.tokens += r.totalProcessedTokens;
-          acc.cost += r.costUsd ?? 0;
+          acc.cacheRead += r.cacheReadTokens;
+          acc.inputSide += r.totalProcessedTokens - r.outputTokens;
           return acc;
         },
-        { tokens: 0, cost: 0 },
+        { tokens: 0, cacheRead: 0, inputSide: 0 },
       ),
     [usageHistory],
   );
+  const cacheHitPct =
+    totals.inputSide > 0 ? ((totals.cacheRead / totals.inputSide) * 100).toFixed(1) : null;
 
   /* ── empty states ── */
   if (!sessionId) {
@@ -188,7 +192,7 @@ export function TurnFlowPanel() {
       className="h-full overflow-y-auto"
       style={{ fontSize: "var(--right-panel-font-size)" }}
     >
-      {/* Summary header: turn count + session-wide token/cost totals. */}
+      {/* Summary header: turn count + session-wide token totals. */}
       <div className="sticky top-0 z-10 flex items-center gap-2 border-b border-edge bg-surface px-3 py-2">
         <span className="flex items-center gap-1.5 text-[11px] font-semibold text-content">
           <IconListDetails size={12} className="opacity-80" />
@@ -197,7 +201,9 @@ export function TurnFlowPanel() {
         <span className="ml-auto flex items-center gap-1.5 text-[10px] tabular-nums text-content-subtle">
           <span>{t("ide.turns.summaryTurns", { n: groups.length })}</span>
           {totals.tokens > 0 && <span>· {fmtTokens(totals.tokens)} tokens</span>}
-          {totals.cost > 0 && <span>· ${totals.cost.toFixed(2)}</span>}
+          {cacheHitPct != null && (
+            <span>· {t("ide.turns.cacheHit", { n: cacheHitPct })}</span>
+          )}
         </span>
       </div>
 
@@ -371,7 +377,6 @@ function TurnSection({
           {usage && (
             <span className="ml-auto rounded-full bg-surface-muted px-1.5 py-0.5 tabular-nums">
               {fmtTokens(usage.totalProcessedTokens)} tok
-              {usage.costUsd != null && usage.costUsd > 0 ? ` · $${usage.costUsd.toFixed(2)}` : ""}
             </span>
           )}
         </div>
@@ -671,21 +676,17 @@ function BlockStep({
 
 /* ─────────────── usage bar ─────────────── */
 
-/** Per-turn token cost: a stacked, four-segment bar (input / output / cache
- * read / cache write — same palette as the action categories) plus a legend
- * with the absolute numbers and the turn's cost / model / duration. */
+/** Per-turn token cost: a stacked, three-segment bar (input / output / cache
+ * read — same palette as the action categories) plus a legend with the
+ * absolute numbers and the turn's cache hit rate / duration / model. */
 function UsageBar({ record }: { record: TurnUsageRecord }) {
   const { t } = useI18n();
   const input = usageInputTokens(record);
+  const hit = cacheHitRate(record);
   const parts = [
     { label: t("ide.turns.legendInput"), value: input, cls: "bg-accent" },
     { label: t("ide.turns.legendOutput"), value: record.outputTokens, cls: "bg-emerald-500" },
     { label: t("ide.turns.legendCacheRead"), value: record.cacheReadTokens, cls: "bg-violet-400" },
-    {
-      label: t("ide.turns.legendCacheWrite"),
-      value: record.cacheCreationTokens,
-      cls: "bg-amber-400",
-    },
   ];
   const total = parts.reduce((s, p) => s + p.value, 0);
   return (
@@ -713,7 +714,7 @@ function UsageBar({ record }: { record: TurnUsageRecord }) {
         <span className="font-medium text-content-muted">
           {t("ide.turns.usageTotal", { n: fmtTokens(record.totalProcessedTokens) })}
         </span>
-        {record.costUsd != null && record.costUsd > 0 && <span>${record.costUsd.toFixed(3)}</span>}
+        {hit != null && <span>{t("ide.turns.cacheHit", { n: (hit * 100).toFixed(1) })}</span>}
         <span>{fmtDuration(record.durationMs)}</span>
         {record.model && <span className="truncate">{record.model}</span>}
       </div>

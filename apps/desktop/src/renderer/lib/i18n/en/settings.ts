@@ -598,6 +598,7 @@ export const en = {
   "settings.usage.summary.turns": "Turns",
   "settings.usage.summary.sessions": "Sessions",
   "settings.usage.summary.totalTokens": "Total tokens",
+  "settings.usage.summary.subagentTokens": "Subagent tokens",
   "settings.usage.summary.outputTokens": "Output tokens",
   "settings.usage.summary.cacheRead": "Cache reads",
   "settings.usage.summary.cacheWrite": "Cache writes",

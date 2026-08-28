@@ -1,21 +1,32 @@
-import { useRef, useState } from "react";
+import { Fragment, useRef, useState, type ComponentType, type ReactNode } from "react";
 import type { TodoItem, Block } from "@renderer/stores/sessionStore.js";
 import type { SubagentSnapshot } from "@contracts/runtime";
 import type { SessionBookmark } from "@contracts/session";
 import { cn } from "@renderer/lib/cn.js";
 import { useI18n, type MessageId } from "@renderer/lib/i18n/index.js";
 import { extractPlanTitle } from "./StatusCapsule.js";
-import { IconBookmark, IconPencil, IconX } from "@renderer/lib/icons.js";
+import type { TablerIconProps } from "@renderer/lib/icons.js";
+import {
+  IconBookmark,
+  IconCheck,
+  IconCircle,
+  IconClipboard,
+  IconListDetails,
+  IconLoader2,
+  IconPencil,
+  IconX,
+  PiRobot,
+} from "@renderer/lib/icons.js";
 
 /** A `kind: "plan"` block - the frozen per-turn plan in the message stream. */
 type PlanBlock = Extract<Block, { kind: "plan" }>;
 
 /* ── Tasks section (extracted from the old TodosPopover) ────────────── */
 
-const STATUS_META: Record<TodoItem["status"], { icon: string; cls: string }> = {
-  pending: { icon: "○", cls: "text-content-subtle" },
-  in_progress: { icon: "◐", cls: "text-warning" },
-  completed: { icon: "✓", cls: "text-accent" },
+const STATUS_META: Record<TodoItem["status"], { icon: ComponentType<TablerIconProps>; cls: string; spin?: boolean }> = {
+  pending: { icon: IconCircle, cls: "text-content-subtle" },
+  in_progress: { icon: IconLoader2, cls: "text-warning", spin: true },
+  completed: { icon: IconCheck, cls: "text-accent" },
 };
 
 const PRIORITY_BAR: Record<TodoItem["priority"], string> = {
@@ -53,23 +64,32 @@ export function fmtUsage(snap: SubagentSnapshot): string {
 const sectionListCls = (scrollLists: boolean) =>
   cn("overflow-y-auto py-1", scrollLists ? "max-h-60" : "max-h-none");
 
+/** Static left-bar tint for settled subagents (running rows use the
+ * animated shimmer track instead). */
+const BAR_BY_STATUS: Record<SubagentSnapshot["status"], string> = {
+  running: "",
+  completed: "bg-accent/50",
+  failed: "bg-danger/50",
+  killed: "bg-danger/50",
+};
+
 /** A horizontal section header: icon + title (left), badge/right slot. */
 function SectionHeader({
   icon,
   title,
   right,
 }: {
-  icon: string;
+  icon: ReactNode;
   title: string;
-  right?: React.ReactNode;
+  right?: ReactNode;
 }) {
   return (
-    <div className="flex items-center justify-between border-b border-white/5 px-3 py-1.5">
-      <span className="text-[11px] font-semibold text-content-muted">
-        <span className="mr-1 opacity-80">{icon}</span>
+    <div className="flex items-center justify-between border-b border-edge/40 px-3 py-1.5">
+      <span className="flex items-center gap-1.5 text-[11px] font-semibold tracking-wide text-content-muted">
+        {icon}
         {title}
       </span>
-      {right && <span className="text-[10px] text-content-subtle">{right}</span>}
+      {right && <span className="text-[10px] tabular-nums text-content-subtle">{right}</span>}
     </div>
   );
 }
@@ -101,7 +121,7 @@ function PlanListSection({
   return (
     <>
       <SectionHeader
-        icon="📋"
+        icon={<IconClipboard size={12} className="opacity-80" />}
         title={t("chatStream.activity.plansTitle", { n: planBlocks.length })}
       />
       <ul className={sectionListCls(scrollLists)}>
@@ -139,7 +159,7 @@ function TasksSection({ todos, scrollLists }: { todos: TodoItem[]; scrollLists: 
   return (
     <>
       <SectionHeader
-        icon="✓"
+        icon={<IconListDetails size={12} className="opacity-80" />}
         title={t("chatStream.activity.tasksTitle")}
         right={
           <span className="rounded-full bg-surface-muted px-2 py-0.5 tabular-nums">
@@ -147,15 +167,27 @@ function TasksSection({ todos, scrollLists }: { todos: TodoItem[]; scrollLists: 
           </span>
         }
       />
+      {/* Overall completion bar — width transitions so checking a task off
+          animates the fill instead of snapping. */}
+      <div className="mx-3 mt-1.5 h-[3px] overflow-hidden rounded-full bg-surface-muted">
+        <div
+          className="h-full rounded-full bg-accent transition-[width] duration-300 ease-out"
+          style={{ width: `${pct}%` }}
+        />
+      </div>
       <ul className={sectionListCls(scrollLists)}>
         {todos.map((t, i) => {
           const meta = STATUS_META[t.status];
+          const StatusIcon = meta.icon;
           return (
             <li
               key={i}
-              className={`flex items-start gap-2 border-l-2 px-3 py-1.5 ${PRIORITY_BAR[t.priority]}`}
+              className={`flex items-start gap-2 border-l-2 px-3 py-1.5 transition-colors hover:bg-surface-muted ${PRIORITY_BAR[t.priority]}`}
             >
-              <span className={`mt-0.5 shrink-0 text-xs ${meta.cls}`}>{meta.icon}</span>
+              <StatusIcon
+                size={11}
+                className={cn("mt-0.5 shrink-0", meta.cls, meta.spin && "animate-spin")}
+              />
               <span
                 className={`text-xs leading-relaxed ${
                   t.status === "completed" ? "text-content-subtle line-through" : "text-content-muted"
@@ -179,7 +211,7 @@ function SubagentsSection({ agents, scrollLists }: { agents: SubagentSnapshot[];
   return (
     <>
       <SectionHeader
-        icon="🤖"
+        icon={<PiRobot size={12} className="opacity-80" />}
         title={t("chatStream.activity.subagentsTitle", { n: agents.length })}
         right={
           running > 0 ? (
@@ -193,9 +225,32 @@ function SubagentsSection({ agents, scrollLists }: { agents: SubagentSnapshot[];
       <ul className={sectionListCls(scrollLists)}>
         {agents.map((s) => {
           const meta = SUBAGENT_STATUS_META[s.status];
-          const usage = fmtUsage(s);
+          // Stat chips (badge-ified usage) instead of the joined plain-text
+          // line — each chip keeps tabular-nums so digits stay aligned.
+          const usageParts: string[] = [];
+          if (typeof s.totalTokens === "number")
+            usageParts.push(`${(s.totalTokens / 1000).toFixed(1)}k tok`);
+          if (typeof s.toolUses === "number") usageParts.push(`${s.toolUses} tools`);
+          if (typeof s.durationMs === "number")
+            usageParts.push(`${Math.round(s.durationMs / 1000)}s`);
           return (
-            <li key={s.taskId} className="border-l-2 border-l-info/60 px-3 py-1.5">
+            <li
+              key={s.taskId}
+              className="group relative py-1.5 pl-3.5 pr-3 transition-colors hover:bg-surface-muted"
+            >
+              {/* Left status bar — running rows get an animated shimmer track
+                  (a light blob sweeping down); settled rows a static tint. */}
+              {s.status === "running" ? (
+                <span aria-hidden className="capsule-shimmer-track" />
+              ) : (
+                <span
+                  aria-hidden
+                  className={cn(
+                    "absolute bottom-2 left-0 top-2 w-[2px] rounded-full",
+                    BAR_BY_STATUS[s.status],
+                  )}
+                />
+              )}
               <div className="flex items-center gap-1.5">
                 {s.subagentType && (
                   <span className="rounded bg-info/20 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wide text-info">
@@ -210,10 +265,22 @@ function SubagentsSection({ agents, scrollLists }: { agents: SubagentSnapshot[];
               <p className="mt-0.5 truncate text-[11px] text-content" title={s.description}>
                 {s.description || t("chatStream.activity.noDescription")}
               </p>
-              {(usage || s.lastToolName) && (
-                <p className="mt-0.5 text-[10px] text-content-subtle">
-                  {[s.lastToolName, usage].filter(Boolean).join(" · ")}
-                </p>
+              {(usageParts.length > 0 || s.lastToolName) && (
+                <div className="mt-1 flex flex-wrap items-center gap-1">
+                  {s.lastToolName && (
+                    <span className="rounded bg-surface-muted px-1.5 py-0.5 text-[9px] font-medium tabular-nums text-content-muted">
+                      {s.lastToolName}
+                    </span>
+                  )}
+                  {usageParts.map((part) => (
+                    <span
+                      key={part}
+                      className="rounded bg-surface-muted px-1.5 py-0.5 text-[9px] tabular-nums text-content-subtle"
+                    >
+                      {part}
+                    </span>
+                  ))}
+                </div>
               )}
               {s.summary && (
                 <p className="mt-0.5 truncate text-[10px] italic text-content-subtle" title={s.summary}>
@@ -290,7 +357,7 @@ function BookmarksSection({
   return (
     <>
       <SectionHeader
-        icon="🔖"
+        icon={<IconBookmark size={12} className="opacity-80" />}
         title={t("chatStream.bookmark.sectionTitle", { n: bookmarks.length })}
       />
       <ul className={sectionListCls(scrollLists)}>
@@ -399,11 +466,12 @@ function BookmarksSection({
 
 /**
  * Shared section stack for both shells of the activity capsule: the desktop
- * anchored popover and the mobile bottom sheet. Renders up to three sections
- * - Plan, Subagents, Tasks - in priority order. Each section is omitted
- * entirely when its source state is empty (no Todos -> no Tasks section), so
- * the stack gracefully degrades to whatever the active session is actually
- * doing right now.
+ * anchored popover and the mobile bottom sheet. Renders up to four sections
+ * - Plan, Subagents, Tasks, Bookmarks - in priority order, joined by gradient
+ * dividers. Each section is omitted entirely when its source state is empty
+ * (no Todos -> no Tasks section), so the stack gracefully degrades to
+ * whatever the active session is actually doing right now. Sections stagger
+ * in on mount (capsule-section-in + index*40ms delay).
  *
  * The Plan section is a clickable title list (not the full content).
  * Clicking a plan title opens the plan viewer via `onPickPlan`.
@@ -443,35 +511,53 @@ export function ActivitySections({
   const showTasks = todos.length > 0;
   const showBookmarks = (bookmarks?.length ?? 0) > 0 && !!onRemoveBookmark;
 
+  // Sections in priority order, joined by gradient dividers instead of
+  // per-section border-b (the fade-in/out line matches the pill's segment
+  // dividers). Each section staggers in (capsule-section-in + i*40ms delay,
+  // fill "both" holds the pre-state through the delay).
+  const sections: { key: string; node: ReactNode }[] = [
+    ...(showPlan
+      ? [{ key: "plans", node: <PlanListSection planBlocks={planBlocks} onPickPlan={onPickPlan} scrollLists={scrollLists} /> }]
+      : []),
+    ...(showSubagents ? [{ key: "subagents", node: <SubagentsSection agents={subagents} scrollLists={scrollLists} /> }] : []),
+    ...(showTasks ? [{ key: "tasks", node: <TasksSection todos={todos} scrollLists={scrollLists} /> }] : []),
+    ...(showBookmarks
+      ? [
+          {
+            key: "bookmarks",
+            node: (
+              <BookmarksSection
+                bookmarks={bookmarks!}
+                isStale={isBookmarkStale ?? (() => false)}
+                onPick={(b) => onPickBookmark?.(b)}
+                onRemove={onRemoveBookmark!}
+                onRename={onRenameBookmark}
+                scrollLists={scrollLists}
+              />
+            ),
+          },
+        ]
+      : []),
+  ];
+
   return (
     <>
-      {showPlan && (
-        <div className="border-b border-white/5">
-          <PlanListSection planBlocks={planBlocks} onPickPlan={onPickPlan} scrollLists={scrollLists} />
-        </div>
-      )}
-      {showSubagents && (
-        <div className="border-b border-white/5">
-          <SubagentsSection agents={subagents} scrollLists={scrollLists} />
-        </div>
-      )}
-      {showTasks && (
-        <div className="border-b border-white/5">
-          <TasksSection todos={todos} scrollLists={scrollLists} />
-        </div>
-      )}
-      {showBookmarks && (
-        <div className="border-b border-white/5">
-          <BookmarksSection
-            bookmarks={bookmarks!}
-            isStale={isBookmarkStale ?? (() => false)}
-            onPick={(b) => onPickBookmark?.(b)}
-            onRemove={onRemoveBookmark!}
-            onRename={onRenameBookmark}
-            scrollLists={scrollLists}
-          />
-        </div>
-      )}
+      {sections.map((section, i) => (
+        <Fragment key={section.key}>
+          {i > 0 && (
+            <div
+              aria-hidden
+              className="mx-3 h-px bg-gradient-to-r from-transparent via-edge/50 to-transparent"
+            />
+          )}
+          <div
+            className="animate-[capsule-section-in_200ms_ease-out_both]"
+            style={{ animationDelay: `${i * 40}ms` }}
+          >
+            {section.node}
+          </div>
+        </Fragment>
+      ))}
     </>
   );
 }
@@ -504,7 +590,7 @@ export function ActivityPopover({
   onPickPlan: (plan: string) => void;
 }) {
   return (
-    <div className="absolute right-0 top-9 z-30 w-96 overflow-hidden rounded-xl border border-white/10 bg-surface shadow-2xl">
+    <div className="absolute right-0 top-9 z-30 w-96 origin-top-right animate-[capsule-pop-in_180ms_cubic-bezier(0.2,0.8,0.3,1)] overflow-hidden rounded-2xl border border-edge/70 bg-surface/85 shadow-[inset_0_1px_0_rgb(255_255_255/0.08),0_24px_48px_-12px_rgb(0_0_0/0.35)] backdrop-blur-xl">
       <ActivitySections
         todos={todos}
         planBlocks={planBlocks}

@@ -19,7 +19,10 @@
  *    would surface as a negative diff, clamped to 0 by the differ.
  *
  * `usedTokens` (context-window occupancy) is intentionally NOT part of usage
- * stats — it measures window state, not consumption.
+ * stats — it measures window state, not consumption. `subagentTokens` (the
+ * per-agent occupancy+output proxy from the subagent roster) is tracked
+ * SEPARATELY from totalTokens, which covers the main loop only; it cannot be
+ * attributed per model, so it only feeds the summary.
  */
 import type {
   UsageDayStat,
@@ -54,6 +57,9 @@ interface NormalizedTurn {
   vendor: string | null;
   model: string | null;
   totalTokens: number;
+  /** Subagent-attributed tokens (occupancy+output proxy). Pi records never
+   *  carry the field (no subagent roster) — normalized to 0. */
+  subagentTokens: number;
   outputTokens: number;
   cacheReadTokens: number;
   cacheCreationTokens: number;
@@ -154,6 +160,7 @@ function loadTurnRecords(): NormalizedTurn[] {
           vendor,
           model: r.model ?? null,
           totalTokens: diffCumulative(finiteNum(prev?.totalProcessedTokens), finiteNum(r.totalProcessedTokens)) ?? 0,
+          subagentTokens: diffCumulative(finiteNum(prev?.subagentTokens), finiteNum(r.subagentTokens)) ?? 0,
           outputTokens: diffCumulative(finiteNum(prev?.outputTokens), finiteNum(r.outputTokens)) ?? 0,
           cacheReadTokens: diffCumulative(finiteNum(prev?.cacheReadTokens), finiteNum(r.cacheReadTokens)) ?? 0,
           cacheCreationTokens: diffCumulative(finiteNum(prev?.cacheCreationTokens), finiteNum(r.cacheCreationTokens)) ?? 0,
@@ -166,6 +173,7 @@ function loadTurnRecords(): NormalizedTurn[] {
           vendor,
           model: r.model ?? null,
           totalTokens: Math.max(0, finiteNum(r.totalProcessedTokens) ?? 0),
+          subagentTokens: Math.max(0, finiteNum(r.subagentTokens) ?? 0),
           outputTokens: Math.max(0, finiteNum(r.outputTokens) ?? 0),
           cacheReadTokens: Math.max(0, finiteNum(r.cacheReadTokens) ?? 0),
           cacheCreationTokens: Math.max(0, finiteNum(r.cacheCreationTokens) ?? 0),
@@ -211,6 +219,7 @@ export function buildUsageStats(preset: UsageStatsPreset): UsageStatsResult {
     turns: 0,
     sessions: 0,
     totalTokens: 0,
+    subagentTokens: 0,
     outputTokens: 0,
     cacheReadTokens: 0,
     cacheCreationTokens: 0,
@@ -223,6 +232,7 @@ export function buildUsageStats(preset: UsageStatsPreset): UsageStatsResult {
     summary.turns += 1;
     sessionIds.add(r.sessionId);
     summary.totalTokens += r.totalTokens;
+    summary.subagentTokens += r.subagentTokens;
     summary.outputTokens += r.outputTokens;
     summary.cacheReadTokens += r.cacheReadTokens;
     summary.cacheCreationTokens += r.cacheCreationTokens;

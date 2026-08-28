@@ -96,6 +96,7 @@ export const zh = {
 
   // ── Message bookmarks (selection toolbar / capsule / timeline) ──
   "chatStream.bookmark.add": "添加书签",
+  "chatStream.bookmark.askSideChat": "发送到子会话",
   "chatStream.bookmark.copied": "已复制",
   "chatStream.bookmark.capsuleTitle": "书签（{n} 个）",
   "chatStream.bookmark.sectionTitle": "书签 · {n} 个",

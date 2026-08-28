@@ -281,7 +281,7 @@ export const en = {
   "ide.turns.legendInput": "Input",
   "ide.turns.legendOutput": "Output",
   "ide.turns.legendCacheRead": "Cache read",
-  "ide.turns.legendCacheWrite": "Cache write",
   "ide.turns.usageTotal": "{n} tokens total",
+  "ide.turns.cacheHit": "{n}% cache hit",
   "ide.turns.noUsage": "No usage record",
 } as const;

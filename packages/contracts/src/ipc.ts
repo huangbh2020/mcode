@@ -2384,6 +2384,9 @@ export interface UsageSummaryStat {
   /** Distinct sessions that contributed at least one turn in the range. */
   sessions: number;
   totalTokens: number;
+  /** Tokens attributed to Task-tool subagents (main-loop tokens excluded —
+   *  see TurnUsageRecord.subagentTokens). Not attributed per model. */
+  subagentTokens: number;
   outputTokens: number;
   cacheReadTokens: number;
   cacheCreationTokens: number;

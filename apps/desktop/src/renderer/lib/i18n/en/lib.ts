@@ -22,7 +22,7 @@ export const en = {
   "lib.commands.toggleRight": "Toggle right sidebar",
   "lib.commands.toggleTerminal": "Toggle bottom terminal",
   "lib.commands.toggleBrowser": "Toggle browser panel",
-  "lib.commands.openSideChat": "Quick ask (won't interrupt the session)",
+  "lib.commands.openSideChat": "Sub-sessions (won't interrupt the session)",
   "lib.commands.toggleWide": "Toggle wide mode (chat + panel)",
   "lib.commands.themeLight": "Theme: light",
   "lib.commands.themeDark": "Theme: dark",
@@ -49,7 +49,7 @@ export const en = {
   "lib.slash.compact": "Compact the conversation (summarize and release context)",
   "lib.slash.init": "Generate the project guide file AGENTS.md",
   "lib.slash.browser": "Open a page in the built-in browser (navigate/snapshot/click/screenshot)",
-  "lib.slash.sidechat": "Open the side-panel quick ask (won't interrupt this session)",
+  "lib.slash.sidechat": "Open sub-sessions (won't interrupt this session)",
 
   /* ── lib/imageResize.ts (send-time errors surfaced as toasts) ── */
   "lib.image.invalidData": "{name}: not valid image data",

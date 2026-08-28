@@ -998,6 +998,12 @@ export interface SessionState {
    *  to the list view when it doesn't, so switching threads can't strand
    *  the user in another thread's chat view. */
   activeSideChatId: string | null;
+  /** One-shot seed text waiting to be dropped into a side chat's composer,
+   *  keyed by the SIDE chat's session id. Written by askInSideChat (the
+   *  message-stream selection toolbar's "发送到侧边对话" action), consumed and
+   *  drained by the side chat's own ChatPane instance. One-shot channel,
+   *  not persisted — same hand-off pattern as chatFileQueueBySession. */
+  sideChatSeedBySession: Record<string, string>;
 
   /* ── IDE right-panel state ──
    *  Editor state (open files, active file, view mode, expanded tree dirs)
@@ -1611,6 +1617,15 @@ export interface SessionState {
   selectSideChat: (sessionId: string) => Promise<void>;
   /** Leave the chat view, back to the ask tab's list view. */
   closeSideChatView: () => void;
+  /** Send a main-session text selection to the side chat: ensures an active
+   *  side chat exists for the ACTIVE main session (creating one if needed),
+   *  reveals the right panel's ask tab, and seeds the side chat's composer
+   *  with the text (see sideChatSeedBySession). No-op without an active
+   *  main session or a configured model (createSideChat raises the config
+   *  dialog in that case). */
+  askInSideChat: (text: string) => Promise<void>;
+  /** Clear a side chat's pending seed after its ChatPane consumed it. */
+  drainSideChatSeed: (sessionId: string) => void;
 
   /** Replace a single project's saved terminal quick-commands. Persists the
    *  whole per-project map (JSON-encoded) to settings. Both the terminal
@@ -3644,6 +3659,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   // Side chat (right-panel ask tab). Lists hydrate on demand per parent.
   sideChatsByParent: {},
   activeSideChatId: null,
+  sideChatSeedBySession: {},
   // IDE right-panel. Editor state is per-project (keyed by projectId);
   // init() hydrates from the settings table. rightPanelTab / ideEditorMode
   // are global user prefs.
@@ -7990,6 +8006,37 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   },
 
   closeSideChatView: () => set({ activeSideChatId: null }),
+
+  askInSideChat: async (text) => {
+    const trimmed = text.trim();
+    if (!trimmed) return;
+    const parent = get().activeSessionId;
+    if (!parent) return;
+    // Ensure the active side chat belongs to the CURRENT parent — the user
+    // may have switched main sessions since the last one was opened (a stale
+    // activeSideChatId would route the quote into another thread).
+    let target = get().activeSideChatId;
+    const owned =
+      !!target && (get().sideChatsByParent[parent] ?? []).some((s) => s.id === target);
+    if (!owned) {
+      await get().createSideChat();
+      target = get().activeSideChatId;
+      if (!target) return; // no model configured — config dialog is up
+    }
+    get().openSideChatPanel();
+    set((s) => ({
+      sideChatSeedBySession: { ...s.sideChatSeedBySession, [target as string]: trimmed },
+    }));
+  },
+
+  drainSideChatSeed: (sessionId) => {
+    set((s) => {
+      if (!(sessionId in s.sideChatSeedBySession)) return {};
+      const next = { ...s.sideChatSeedBySession };
+      delete next[sessionId];
+      return { sideChatSeedBySession: next };
+    });
+  },
 
   setCustomCommandsByProject: (projectId, commands) => {
     set((s) => ({

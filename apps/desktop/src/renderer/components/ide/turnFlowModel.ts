@@ -210,6 +210,15 @@ export function usageInputTokens(r: TurnUsageRecord): number {
   return Math.max(0, r.totalProcessedTokens - r.outputTokens - r.cacheReadTokens - r.cacheCreationTokens);
 }
 
+/** Cache hit rate for a turn: cache-read tokens as a share of all input-side
+ * tokens (fresh input + cache read + cache write; output excluded). Null when
+ * the turn had no input-side tokens at all. */
+export function cacheHitRate(r: TurnUsageRecord): number | null {
+  const denom = r.totalProcessedTokens - r.outputTokens;
+  if (denom <= 0) return null;
+  return Math.min(1, r.cacheReadTokens / denom);
+}
+
 /** Count tool-produced screenshots per toolCallId, so a tool node can show a
  * camera chip without rendering the (large base64) images themselves. */
 export function imageCountsByToolCall(blocks: Block[]): Map<string, number> {

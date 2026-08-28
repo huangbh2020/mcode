@@ -545,11 +545,11 @@ body {
 }
 
 /* ───────────── Message bookmark animations ─────────────
- * Selection toolbar pop-in, capsule badge bounce on count change, and the
- * jump-target row flash. Referenced via Tailwind arbitrary-animation classes
- * (animate-[bookmark-bar-in_…], animate-[bookmark-badge-pop_…]) and the
+ * Selection toolbar pop-in and the jump-target row flash. Referenced via
+ * Tailwind arbitrary-animation classes (animate-[bookmark-bar-in_…]) and the
  * imperative .bookmark-flash class ChatPane toggles on the row after
- * scrollToIndex. */
+ * scrollToIndex. The capsule count bounce lives in the capsule block below
+ * (capsule-count-pop). */
 
 /* Floating [copy | add bookmark] toolbar — small fade-up so it doesn't
    hard-cut over the selection. */
@@ -561,20 +561,6 @@ body {
   to {
     transform: translateX(-50%) translateY(0);
     opacity: 1;
-  }
-}
-
-/* Capsule count bounce — the count span re-mounts on change (key) so this
-   replays on every add; the fly-to-capsule dot lands on this bounce. */
-@keyframes bookmark-badge-pop {
-  0% {
-    transform: scale(1);
-  }
-  50% {
-    transform: scale(1.35);
-  }
-  100% {
-    transform: scale(1);
   }
 }
 
@@ -604,7 +590,7 @@ body {
   }
 }
 
-/* Reduced motion: bar/badge animations flatten to no-ops; the flash still
+/* Reduced motion: the bar animation flattens to a no-op; the flash still
    signals the target but as a static tint for its full duration (an
    instantly-disappearing signal would be easy to miss without motion). */
 @media (prefers-reduced-motion: reduce) {
@@ -616,15 +602,6 @@ body {
     to {
       transform: translateX(-50%);
       opacity: 1;
-    }
-  }
-
-  @keyframes bookmark-badge-pop {
-    from {
-      transform: scale(1);
-    }
-    to {
-      transform: scale(1);
     }
   }
 
@@ -725,6 +702,170 @@ body {
       transform: none;
       opacity: 1;
     }
+  }
+}
+
+/* ───────────── Status capsule (glass pill + activity popover) ─────────────
+ * Shared motion vocabulary for the top-right status capsule: pill entrance,
+ * count bounce, popover drop-in, staggered sections, the running-agent halo
+ * and the subagent shimmer bar. Referenced via Tailwind arbitrary-animation
+ * classes (animate-[capsule-in_…]) plus the .capsule-breathe /
+ * .capsule-shimmer-track utilities below. */
+
+/* Pill pop-in on first mount (tiny scale + drop from above). */
+@keyframes capsule-in {
+  from {
+    transform: scale(0.92) translateY(-4px);
+    opacity: 0;
+  }
+  to {
+    transform: scale(1) translateY(0);
+    opacity: 1;
+  }
+}
+
+/* Popover drop-in — the element anchors the scale at the pill via
+   origin-top-right; the spring-ish bezier gives a light settle. */
+@keyframes capsule-pop-in {
+  from {
+    transform: scale(0.96) translateY(-4px);
+    opacity: 0;
+  }
+  to {
+    transform: scale(1) translateY(0);
+    opacity: 1;
+  }
+}
+
+/* Popover section stagger — each section pairs this with an inline
+   animation-delay (i * 40ms) and fill-mode "both", which holds the
+   pre-entrance state through the delay. */
+@keyframes capsule-section-in {
+  from {
+    transform: translateY(4px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+/* Count bounce — generalized from bookmark-badge-pop: every count span in
+   the pill re-mounts on change (key) so the bounce replays on any delta. */
+@keyframes capsule-count-pop {
+  0% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.35);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+/* Running-agent halo — a blurred amber layer behind the pill breathes via
+   opacity (animating box-shadow instead would repaint every frame). */
+.capsule-breathe {
+  animation: capsule-breathe 2.2s ease-in-out infinite;
+}
+
+@keyframes capsule-breathe {
+  0%,
+  100% {
+    opacity: 0.35;
+  }
+  50% {
+    opacity: 0.9;
+  }
+}
+
+/* Subagent running indicator — a 2px track whose ::before light blob sweeps
+   downward (starts translated -100%, animates to +100%). */
+.capsule-shimmer-track {
+  position: absolute;
+  top: 2px;
+  bottom: 2px;
+  left: 0;
+  width: 2px;
+  overflow: hidden;
+  border-radius: 1px;
+  background-color: rgb(var(--warning) / 0.25);
+}
+
+.capsule-shimmer-track::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(180deg, transparent, rgb(var(--warning)), transparent);
+  transform: translateY(-100%);
+  animation: capsule-shimmer 1.6s ease-in-out infinite;
+}
+
+@keyframes capsule-shimmer {
+  to {
+    transform: translateY(100%);
+  }
+}
+
+/* Reduced motion: entrances and the count bounce flatten to no-ops; the
+   halo and shimmer hold a static tint so the states stay readable. */
+@media (prefers-reduced-motion: reduce) {
+  @keyframes capsule-in {
+    from {
+      transform: none;
+      opacity: 1;
+    }
+    to {
+      transform: none;
+      opacity: 1;
+    }
+  }
+
+  @keyframes capsule-pop-in {
+    from {
+      transform: none;
+      opacity: 1;
+    }
+    to {
+      transform: none;
+      opacity: 1;
+    }
+  }
+
+  @keyframes capsule-section-in {
+    from {
+      transform: none;
+      opacity: 1;
+    }
+    to {
+      transform: none;
+      opacity: 1;
+    }
+  }
+
+  @keyframes capsule-count-pop {
+    from {
+      transform: scale(1);
+    }
+    to {
+      transform: scale(1);
+    }
+  }
+
+  .capsule-breathe {
+    animation: none;
+    opacity: 0.5;
+  }
+
+  .capsule-shimmer-track::before {
+    animation: none;
+    transform: none;
   }
 }
 

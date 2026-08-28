@@ -346,13 +346,13 @@ const STATIC_COMMANDS: StaticCommandDef[] = [
     id: "sidechat.open",
     labelKey: "lib.commands.openSideChat",
     group: "布局",
-    keywords: ["sidechat", "quick ask", "question", "ask", "问答", "提问", "快速问答"],
+    keywords: ["sidechat", "subsession", "sub-session", "quick ask", "question", "ask", "子会话", "问答", "提问", "快速问答"],
     icon: IconMessageChatbot,
     defaultAccelerator: DEFAULT_SHORTCUTS["sidechat.open"],
     perform: (s) => {
       // Reveal the right panel + focus the ask tab. No session is created —
-      // creation is the explicit "+ 新问答" action inside the panel, so the
-      // shortcut never litters hidden sessions on casual presses.
+      // creation is the explicit "+ 新建子会话" action inside the panel, so
+      // the shortcut never litters hidden sessions on casual presses.
       s.openSideChatPanel();
     },
   },

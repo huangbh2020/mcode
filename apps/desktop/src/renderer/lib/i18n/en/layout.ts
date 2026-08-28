@@ -86,18 +86,18 @@ export const en = {
   "layout.closeSidebarBrowser": "Close sidebar browser",
 
   /* ── side chat (right-panel ask tab) ── */
-  "layout.tabSideChat": "Quick Ask",
-  "sideChat.open": "Open quick ask (won't interrupt the running session)",
-  "sideChat.newChat": "New question",
+  "layout.tabSideChat": "Sub-sessions",
+  "sideChat.open": "Open sub-sessions (won't interrupt the running session)",
+  "sideChat.newChat": "New sub-session",
   "sideChat.parentPrefix": "Main session",
   "sideChat.noMainSession": "Open a main session first",
-  "sideChat.emptyTitle": "No questions yet",
+  "sideChat.emptyTitle": "No sub-sessions yet",
   "sideChat.emptyHint": "Spot something in the main session's output you don't follow? Ask here — the main session keeps running, fully independent.",
-  "sideChat.backToList": "Back to the question list",
+  "sideChat.backToList": "Back to the sub-session list",
   "sideChat.parentDeleted": "Main session deleted",
   "sideChat.goToParent": "Jump to the parent session",
-  "sideChat.titlePlaceholder": "New question",
-  "sideChat.loading": "Loading questions…",
+  "sideChat.titlePlaceholder": "New sub-session",
+  "sideChat.loading": "Loading sub-sessions…",
 
   /* ── center pane ── */
   "layout.loadingPlan": "Loading plan…",

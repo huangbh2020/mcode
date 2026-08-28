@@ -601,6 +601,7 @@ export const zh = {
   "settings.usage.summary.turns": "对话轮次",
   "settings.usage.summary.sessions": "涉及会话",
   "settings.usage.summary.totalTokens": "总 Tokens",
+  "settings.usage.summary.subagentTokens": "子代理 Tokens",
   "settings.usage.summary.outputTokens": "输出 Tokens",
   "settings.usage.summary.cacheRead": "缓存读取",
   "settings.usage.summary.cacheWrite": "缓存写入",

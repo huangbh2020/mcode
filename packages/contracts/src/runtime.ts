@@ -234,8 +234,16 @@ export interface TurnUsageRecord {
   cacheReadTokens: number;
   /** Tokens written to cache this turn (0 if none). */
   cacheCreationTokens: number;
-  /** Estimated USD cost this turn, if known. */
+  /** Estimated USD cost this turn, if known.
+   *  @see {@link ContextSnapshot.costUsd} — includes subagent activity. */
   costUsd?: number;
+  /** Tokens attributed to Task-tool subagents this turn: the CLI's per-agent
+   *  occupancy+output proxy, summed as positive deltas of each agent's
+   *  (monotonic) `totalTokens`. Deliberately NOT folded into
+   *  totalProcessedTokens (which covers the main loop only) — the two have
+   *  different semantics, and costUsd already includes subagents on the CLI
+   *  side. Undefined/0 = no subagent activity this turn. */
+  subagentTokens?: number;
   /** Window occupancy AFTER this turn (cumulative context size). */
   usedTokens: number;
   /** Active model for this turn, if known. */

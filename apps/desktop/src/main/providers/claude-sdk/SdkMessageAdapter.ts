@@ -791,7 +791,19 @@ export class SdkMessageAdapter {
 
   private handleTaskProgress(m: TaskProgressEnvelope): void {
     if (this.state.ignoredTaskIds.has(m.task_id)) return; // non-agent task
+    // CLI semantics (verified against the bundled 2.1.238 binary):
+    // usage.total_tokens = latestInputTokens + cumulativeOutputTokens, where
+    // latestInputTokens is OVERWRITTEN from each assistant message's API
+    // usage. Third-party gateways omit usage on some responses (the CLI then
+    // persists zeros), which resets latestInputTokens to 0 — the reported
+    // total collapses to the accumulated output only (a few k, or ~0). The
+    // true value is monotonic non-decreasing apart from in-subagent
+    // microcompact, so a per-task max filters the collapse; 0 / missing is
+    // "no data this event" and keeps the last good value.
+    const tok = m.usage?.total_tokens;
     const cur = this.state.subagents.get(m.task_id);
+    const nextTokens =
+      typeof tok === "number" && tok > 0 ? Math.max(cur?.totalTokens ?? 0, tok) : cur?.totalTokens;
     if (!cur) {
       // Progress without a prior start — synthesize a minimal snapshot so
       // the roster stays consistent. Defensive: SDK normally pairs these.
@@ -801,7 +813,7 @@ export class SdkMessageAdapter {
         description: m.description ?? "",
         subagentType: m.subagent_type,
         status: "running",
-        totalTokens: m.usage?.total_tokens,
+        totalTokens: nextTokens,
         toolUses: m.usage?.tool_uses,
         durationMs: m.usage?.duration_ms,
         lastToolName: m.last_tool_name,
@@ -814,7 +826,7 @@ export class SdkMessageAdapter {
         // preserve it if the progress payload omits one.
         description: m.description || cur.description,
         subagentType: m.subagent_type ?? cur.subagentType,
-        totalTokens: m.usage?.total_tokens ?? cur.totalTokens,
+        totalTokens: nextTokens,
         toolUses: m.usage?.tool_uses ?? cur.toolUses,
         durationMs: m.usage?.duration_ms ?? cur.durationMs,
         lastToolName: m.last_tool_name ?? cur.lastToolName,

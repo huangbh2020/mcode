@@ -25,7 +25,7 @@ export const zh = {
   "lib.commands.toggleRight": "切换右侧栏",
   "lib.commands.toggleTerminal": "切换底部终端",
   "lib.commands.toggleBrowser": "切换浏览器面板",
-  "lib.commands.openSideChat": "快速问答（不影响当前会话）",
+  "lib.commands.openSideChat": "子会话（不影响当前会话）",
   "lib.commands.toggleWide": "切换宽屏模式 (聊天+面板)",
   "lib.commands.themeLight": "主题：浅色",
   "lib.commands.themeDark": "主题：深色",
@@ -52,7 +52,7 @@ export const zh = {
   "lib.slash.compact": "压缩对话历史(总结并释放上下文)",
   "lib.slash.init": "生成项目说明文件 AGENTS.md",
   "lib.slash.browser": "用应用内浏览器打开网页(导航/快照/点击/截图)",
-  "lib.slash.sidechat": "打开侧边栏快速问答(不影响当前会话)",
+  "lib.slash.sidechat": "打开子会话(不影响当前会话)",
 
   /* ── lib/imageResize.ts (send-time errors surfaced as toasts) ── */
   "lib.image.invalidData": "{name}: 不是有效的图片数据",

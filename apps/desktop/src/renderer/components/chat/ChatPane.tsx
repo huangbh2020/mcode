@@ -1093,6 +1093,9 @@ function ChatPaneForSession({
   const addBookmark = useSessionStore((s) => s.addBookmark);
   const removeBookmark = useSessionStore((s) => s.removeBookmark);
   const renameBookmark = useSessionStore((s) => s.renameBookmark);
+  const askInSideChat = useSessionStore((s) => s.askInSideChat);
+  const sideChatSeed = useSessionStore((s) => s.sideChatSeedBySession[sessionId]);
+  const drainSideChatSeed = useSessionStore((s) => s.drainSideChatSeed);
   // Floating [copy | add bookmark] toolbar anchored to the current text
   // selection inside the message stream. Local UI state is fine here: the
   // document holds exactly ONE selection and only the frontmost pane can
@@ -1171,28 +1174,89 @@ function ChatPaneForSession({
   // no message is being edited.
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
   const virtualListRef = useRef<LegendListRef>(null);
-  // Briefly suspend maintainScrollAtEnd's onItemLayout trigger while the user
-  // expands/collapses a TurnPanel. With the prop left at `true`, LegendList
-  // normalizes it to {onItemLayout:true, animated:false}, which snaps scroll
-  // to keep the bottom pinned on EVERY item-height change. During the panel's
-  // 200ms height transition that fires every frame → every frame snaps scroll
-  // → the expanded content gets shoved upward ("往上挤") and the two animations
-  // beat against each other ("闪一下"). We only pause the itemLayout trigger,
-  // keeping onDataChange so live streaming still auto-follows new messages.
-  // Toggled from TurnPanel via onToggleCollapse; auto-cleared after the
-  // transition settles.
-  const [bottomAnchorPaused, setBottomAnchorPaused] = useState(false);
-  const pauseBottomAnchorTimer = useRef<number | null>(null);
-  const pauseBottomAnchor = useCallback(() => {
-    setBottomAnchorPaused(true);
-    if (pauseBottomAnchorTimer.current != null) {
-      window.clearTimeout(pauseBottomAnchorTimer.current);
-    }
-    pauseBottomAnchorTimer.current = window.setTimeout(() => {
-      setBottomAnchorPaused(false);
-      pauseBottomAnchorTimer.current = null;
-    }, 280);
+  // Recompute the "jump to bottom" button visibility from the live scroll
+  // state. Returns true if the list is near the bottom (button hidden), false
+  // otherwise. Used both by the onScroll handler and the data-change effect so
+  // the button stays correct when content grows without a scroll event (e.g.
+  // streaming deltas append while the user is parked mid-history).
+  //
+  // LegendList's `getState()` exposes three relevant values:
+  //   - scroll        : current scroll offset from the top
+  //   - scrollLength  : the *viewport* height (NOT total content height!)
+  //   - contentLength : total scrollable content height
+  // Distance from the bottom is therefore `contentLength - scroll - scrollLength`
+  // (mirrors the library's own `distanceFromEnd` in checkAtBottom.ts). The
+  // previous code used `scrollLength - scroll`, which treats the viewport
+  // height as the content height and only surfaces the button after scrolling
+  // up past ~one viewport minus 80px.
+  const recomputeNearBottom = useCallback((): boolean => {
+    const state = virtualListRef.current?.getState();
+    if (!state) return true; // no list yet -> treat as "at bottom" (no button)
+    const distanceFromEnd = state.contentLength - state.scroll - state.scrollLength;
+    return distanceFromEnd < NEAR_BOTTOM_THRESHOLD;
   }, []);
+  // Briefly suspend maintainScrollAtEnd while a TurnPanel expands/collapses.
+  // Two suspension levels:
+  //  - "layout" (manual user toggle): drop the itemLayout/layout triggers so
+  //    LegendList stops snapping scroll to hold the bottom pinned on EVERY
+  //    item-height change of the 200ms transition — that snap per frame
+  //    shoved the expanded content upward ("往上挤") and the two animations
+  //    beat against each other ("闪一下"). dataChange stays on so live
+  //    streaming still auto-follows new messages.
+  //  - "full" (the one-shot fold-away of a just-completed turn): ALSO drop
+  //    dataChange. The turn.done regroup itself is a data change, and
+  //    turn-files/plan cards keep landing for a few hundred ms after the
+  //    turn ends — a live dataChange snap would yank scroll against the
+  //    running fold transition.
+  const [anchorSuspension, setAnchorSuspension] = useState<"layout" | "full" | null>(null);
+  const pauseBottomAnchorTimer = useRef<number | null>(null);
+  const settleScrollTimer = useRef<number | null>(null);
+  const pauseBottomAnchor = useCallback(
+    (opts?: { suspendDataChange?: boolean }) => {
+      const mode: "layout" | "full" = opts?.suspendDataChange ? "full" : "layout";
+      setAnchorSuspension(mode);
+      if (pauseBottomAnchorTimer.current != null) {
+        window.clearTimeout(pauseBottomAnchorTimer.current);
+      }
+      pauseBottomAnchorTimer.current = window.setTimeout(() => {
+        pauseBottomAnchorTimer.current = null;
+        setAnchorSuspension(null);
+      }, mode === "full" ? 360 : 280);
+      if (mode === "full") {
+        // After the 200ms fold transition settles, glide back to the bottom
+        // IF the user was following along. While the process rows collapsed,
+        // the scroll container's native clamping usually kept the bottom
+        // pinned already; this covers estimate undershoot from the regroup
+        // and the turn-files card that lands just after turn.done. The
+        // near-bottom check is snapshotted at pause START (before any height
+        // changed) and OR-ed with the settle-time check: content changes
+        // inside the window (the fold shrinking, the turn-files card growing)
+        // distort the live distance-from-end, so the snapshot carries the
+        // user's true intent; the live check still catches users who were
+        // mid-list and remain mid-list.
+        const wasNearBottom = recomputeNearBottom();
+        if (settleScrollTimer.current != null) {
+          window.clearTimeout(settleScrollTimer.current);
+        }
+        settleScrollTimer.current = window.setTimeout(() => {
+          settleScrollTimer.current = null;
+          if (wasNearBottom || recomputeNearBottom()) {
+            void virtualListRef.current?.scrollToEnd({ animated: true });
+          }
+        }, 240);
+      }
+    },
+    [recomputeNearBottom],
+  );
+  // Session switch / unmount mid-transition: drop pending timers so they
+  // never fire against a stale list.
+  useEffect(
+    () => () => {
+      if (pauseBottomAnchorTimer.current != null) window.clearTimeout(pauseBottomAnchorTimer.current);
+      if (settleScrollTimer.current != null) window.clearTimeout(settleScrollTimer.current);
+    },
+    [],
+  );
   // Rich-text editor handle (replaces the old <textarea> ref). Exposes
   // focus/serialize/insertSkill/etc. — see ComposerEditor.tsx.
   const editorRef = useRef<ComposerEditorHandle>(null);
@@ -1442,6 +1506,31 @@ function ChatPaneForSession({
     },
     [addBookmark, sessionId, t],
   );
+
+  /** Selection-toolbar "发送到子会话": route the selected text to the side
+   *  chat (opening/creating it), clear the selection, close the toolbar.
+   *  The panel opening is itself the feedback — no toast. */
+  const handleAskSideChat = useCallback(
+    (sel: SelectionToolbarState) => {
+      void askInSideChat(sel.text);
+      window.getSelection()?.removeAllRanges();
+      setSelectionToolbar(null);
+    },
+    [askInSideChat],
+  );
+
+  // Side-chat seed: text sent from a main-session selection. ChatPane mounts
+  // for BOTH main and side sessions — only the side-chat instance finds a
+  // seed under its own sessionId. Delivered as a CONTENT CARD above the
+  // composer (same chip + popover + compose-at-send pipeline as a bulky
+  // paste), not inline text — the quote can be long, and the card keeps the
+  // input area free for the user's actual question.
+  useEffect(() => {
+    if (sideChatSeed === undefined) return;
+    drainSideChatSeed(sessionId);
+    setTags((prev) => [...prev, makeContentTag(sideChatSeed)]);
+    editorRef.current?.focus();
+  }, [sideChatSeed, sessionId, drainSideChatSeed]);
 
   // Timeline bookmark dashes: live (non-stale) bookmarks resolved to their
   // message + render index. Stale entries (message truncated away by an
@@ -2024,28 +2113,6 @@ function ChatPaneForSession({
     }
   }, [stageImageFile, t]);
 
-  // Recompute the "jump to bottom" button visibility from the live scroll
-  // state. Returns true if the list is near the bottom (button hidden), false
-  // otherwise. Used both by the onScroll handler and the data-change effect so
-  // the button stays correct when content grows without a scroll event (e.g.
-  // streaming deltas append while the user is parked mid-history).
-  //
-  // LegendList's `getState()` exposes three relevant values:
-  //   - scroll        : current scroll offset from the top
-  //   - scrollLength  : the *viewport* height (NOT total content height!)
-  //   - contentLength : total scrollable content height
-  // Distance from the bottom is therefore `contentLength - scroll - scrollLength`
-  // (mirrors the library's own `distanceFromEnd` in checkAtBottom.ts). The
-  // previous code used `scrollLength - scroll`, which treats the viewport
-  // height as the content height and only surfaces the button after scrolling
-  // up past ~one viewport minus 80px.
-  const recomputeNearBottom = useCallback((): boolean => {
-    const state = virtualListRef.current?.getState();
-    if (!state) return true; // no list yet -> treat as "at bottom" (no button)
-    const distanceFromEnd = state.contentLength - state.scroll - state.scrollLength;
-    return distanceFromEnd < NEAR_BOTTOM_THRESHOLD;
-  }, []);
-
   // Scroll callback from LegendList: update scroll position for MessageTimeline
   // and jump-to-bottom button state.
   const handleVirtualScroll = useCallback(() => {
@@ -2596,14 +2663,19 @@ function ChatPaneForSession({
                 return `turn:${item.turnMeta?.startedAt ?? ""}`;
               }}
               maintainScrollAtEnd={
-                bottomAnchorPaused
-                  ? // While a panel is expanding/collapsing, drop the
-                    // itemLayout/layout triggers so LegendList stops snapping
-                    // scroll to hold the bottom pinned against our height
-                    // transition. onDataChange stays on so streaming still
-                    // follows new messages.
+                anchorSuspension === "layout"
+                  ? // Manual expand/collapse: drop the itemLayout/layout
+                    // triggers so LegendList stops snapping scroll to hold
+                    // the bottom pinned against our height transition.
+                    // onDataChange stays on so streaming still follows new
+                    // messages.
                     { on: { dataChange: true } }
-                  : true
+                  : anchorSuspension === "full"
+                    ? // Just-completed turn fold-away: also drop dataChange —
+                      // the turn.done regroup itself is a data change and
+                      // turn-files/plan cards keep landing right after it.
+                      { on: {} }
+                    : true
               }
               // extraData drives LegendList's "should re-render all visible
               // items" check. renderItems alone isn't enough: toggling the
@@ -2669,6 +2741,7 @@ function ChatPaneForSession({
         <SelectionToolbar
           state={selectionToolbar}
           onAddBookmark={handleAddBookmark}
+          onAskSideChat={handleAskSideChat}
           onClose={() => setSelectionToolbar(null)}
         />
       )}

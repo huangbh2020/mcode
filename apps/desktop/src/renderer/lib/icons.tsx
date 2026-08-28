@@ -58,6 +58,7 @@ export {
   // Status / feedback
   IconInfoCircle,
   IconAlertCircle,
+  IconCircle,
   IconMessageChatbot,
   IconQuote,
   IconAlertTriangle,

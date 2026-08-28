@@ -47,6 +47,16 @@ interface SessionRuntime {
    *  `token-usage.updated` events). Read at `turn.done` to build the
    *  per-turn usage history entry. */
   lastContextSnapshot?: ContextSnapshot;
+  /** Last-known totalTokens per subagent taskId, from the REPLACE rosters in
+   *  `subagent.update`. The adapter clamps gateway-noise collapses, so each
+   *  agent's value is monotonic — per-turn consumption is the sum of positive
+   *  deltas against this map. A background subagent that outlives its
+   *  spawning turn accrues later growth to whichever turn is settling then. */
+  subagentTokensByTask: Map<string, number>;
+  /** Subagent token growth observed since the last usage-history record
+   *  settled (i.e. during the current turn). Copied into the record as
+   *  `subagentTokens` and reset by settlePendingTurnEnd. */
+  turnSubagentTokens: number;
   /** Per-turn usage history for this session. Hydrated from the persisted
    *  session row at bind; appended at each `turn.done` and written back. */
   usageHistory: TurnUsageRecord[];
@@ -171,6 +181,21 @@ class RuntimeManager {
         } catch (err) {
           log.error(`failed to persist subagents: ${(err as Error).message}`);
         }
+        // Attribute each agent's token growth to the turn that is currently
+        // settling (see subagentTokensByTask). Values are monotonic per agent
+        // (adapter-clamped), so positive deltas are the agent's real burn;
+        // a decrease never arrives but is defensively ignored anyway.
+        const rt = this.sessions.get(session.id);
+        if (rt) {
+          for (const a of e.agents) {
+            const tok = typeof a.totalTokens === "number" && a.totalTokens > 0 ? a.totalTokens : 0;
+            const prev = rt.subagentTokensByTask.get(a.taskId) ?? 0;
+            if (tok > prev) {
+              rt.turnSubagentTokens += tok - prev;
+              rt.subagentTokensByTask.set(a.taskId, tok);
+            }
+          }
+        }
       } else if (e.type === "plan.update") {
         try {
           SessionRepo.updatePlanDraft(session.id, { plan: e.plan, phase: e.phase });
@@ -253,6 +278,8 @@ class RuntimeManager {
       turnStartedAt: 0,
       usageHistory: session.usageHistory ?? [],
       turnCount: 0,
+      subagentTokensByTask: new Map(),
+      turnSubagentTokens: 0,
     });
   }
 
@@ -277,6 +304,12 @@ class RuntimeManager {
     if (!pending) return;
     rt.pendingTurnEnd = undefined;
     const snap = rt.lastContextSnapshot;
+    // Consume this turn's subagent token growth no matter which settle path
+    // fired (snapshot arrival / grace timer / next-turn flush) — even when no
+    // snapshot means no record is written, the turn is over and the next
+    // turn's growth must start from zero.
+    const subagentTokens = rt.turnSubagentTokens;
+    rt.turnSubagentTokens = 0;
     if (!snap) return;
     try {
       const record: TurnUsageRecord = {
@@ -287,6 +320,7 @@ class RuntimeManager {
         cacheReadTokens: snap.cacheReadTokens ?? 0,
         cacheCreationTokens: snap.cacheCreationTokens ?? 0,
         costUsd: snap.costUsd,
+        subagentTokens: subagentTokens > 0 ? subagentTokens : undefined,
         usedTokens: snap.usedTokens,
         model: snap.model,
       };

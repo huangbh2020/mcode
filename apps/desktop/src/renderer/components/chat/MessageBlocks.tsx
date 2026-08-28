@@ -447,6 +447,13 @@ function StatusIcon({ status }: { status: "running" | "done" | "error" }) {
   return null;
 }
 
+/** Freshness window within which a completed turn's TurnPanel mounts open
+ *  and plays its one-shot fold-away (see TurnPanel). Sized to cover the
+ *  turn.done regroup frame plus LegendList's deferred item mount; a panel
+ *  mounting later than this falls back to the instant collapsed state, so
+ *  slow frames degrade to today's behavior instead of a late flash. */
+const JUST_COMPLETED_MS = 350;
+
 /** Collapsible panel that hides a whole turn's process data (thinking +
  *  tool calls + any text the model emitted between tool calls, like "let me
  *  read this file first") behind a one-line "HH:MM:SS · NN.Ns" header. This is
@@ -505,12 +512,31 @@ export function TurnPanel({
   /** Fired the instant the panel is toggled by the user OR auto-collapsed at
    *  the reply boundary. The parent (ChatPane) uses it to briefly suspend
    *  LegendList's maintainScrollAtEnd so the height transition doesn't fight
-   *  a snap-to-bottom on every transition frame ("往上挤/闪一下"). */
-  onToggleCollapse?: () => void;
+   *  a snap-to-bottom on every transition frame ("往上挤/闪一下").
+   *  `suspendDataChange: true` (the auto-collapse path only) also suspends
+   *  the dataChange trigger, because the post-turn.done regroup itself IS a
+   *  data change and turn-files/plan cards keep landing for a few hundred ms
+   *  after the turn ends — a live dataChange snap would yank scroll against
+   *  the running fold transition. */
+  onToggleCollapse?: (opts?: { suspendDataChange?: boolean }) => void;
   /** Project root for file-path resolution, forwarded to BlockView. */
   projectPath?: string | null;
 }) {
   const completed = turnMeta?.endedAt !== undefined;
+  // A turn that JUST completed mounts OPEN for one painted frame and then
+  // folds shut via the normal 200ms grid transition (mount effect below).
+  // While streaming, the raw stream renders flat — no TurnPanel at all (see
+  // ChatPane's groupMessagesForRender) — and at turn.done the regroup swaps
+  // those flat rows for this panel in a single layout pass. Mounting already
+  // collapsed made that swap instantaneous: thousands of px of process rows
+  // vanishing in one frame, which read as the stream "jumping". Mounting open
+  // keeps frame #1 visually continuous with the streaming view (both states
+  // are rows of collapsed single-line cards), and the transition then folds
+  // it away smoothly. The freshness window makes this a one-shot: hydrated
+  // history and recycle-remounts outside the window mount collapsed as
+  // before, so this never replays on old turns.
+  const justCompleted =
+    completed && Date.now() - (turnMeta?.endedAt ?? 0) < JUST_COMPLETED_MS;
   // Defaults OPEN while the turn is still running AND the model hasn't moved
   // into its final reply yet (turnActive) — so the user can watch the model
   // work. The moment the final reply starts streaming (or the turn ends,
@@ -520,7 +546,21 @@ export function TurnPanel({
   // seeding from BOTH flags (not just `completed`) means a remount mid-reply
   // lands collapsed instead of re-expanding the already-finished process
   // surface.
-  const [open, setOpen] = useState(!completed && turnActive);
+  const [open, setOpen] = useState(justCompleted || (!completed && turnActive));
+
+  // One-shot fold-away for the just-completed turn. Deliberately a PASSIVE
+  // effect: the open state must paint at least one frame so the grid
+  // transition has two rendered values (1fr → 0fr) to interpolate — flipping
+  // in useLayoutEffect would mount at 0fr directly and never animate. The
+  // suspendDataChange pause covers both the fold frames and the turn-files /
+  // plan cards that land right after turn.done.
+  useEffect(() => {
+    if (!justCompleted) return;
+    onToggleCollapse?.({ suspendDataChange: true });
+    setOpen(false);
+    // Mount-only: justCompleted is a mount-time constant by construction.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Auto-collapse the runtime turnActive true→false edge: a remount isn't
   // guaranteed at the reply boundary (the panel often stays mounted across

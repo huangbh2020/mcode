@@ -283,7 +283,7 @@ export const zh = {
   "ide.turns.legendInput": "输入",
   "ide.turns.legendOutput": "输出",
   "ide.turns.legendCacheRead": "缓存读",
-  "ide.turns.legendCacheWrite": "缓存写",
   "ide.turns.usageTotal": "共 {n} tokens",
+  "ide.turns.cacheHit": "缓存命中 {n}%",
   "ide.turns.noUsage": "无用量记录",
 } as const;
