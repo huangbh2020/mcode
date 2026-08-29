@@ -19,6 +19,7 @@ export type {
   RelayStatus,
   RelayVpsConfig,
   RelayVpsConfigInput,
+  RelayForwarderChoice,
 } from "./relay.js";
 export {
   RelayVpsConfigSchema,
@@ -1242,6 +1243,9 @@ export const SaveCustomModelSchema = z.object({
   protocol: ProtocolSchema.optional(),
   authToken: z.string().optional(),
   models: z.array(CustomModelEntrySchema).min(1),
+  /** Task-subagent model pin (one of models[].id); the store drops a value
+   *  not present in the list. Absent = follow the main session's model. */
+  subagentModel: z.string().optional(),
   disableNonEssentialTraffic: z.boolean().optional(),
   timeoutMs: z.number().optional(),
 });

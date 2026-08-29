@@ -289,6 +289,7 @@ export const CustomModelStore = {
         protocol: resolveProtocol(m.protocol),
         authTokenMasked: maskToken(cleartext),
         models: m.models,
+        subagentModel: m.subagentModel,
         disableNonEssentialTraffic: m.disableNonEssentialTraffic ?? true,
         timeoutMs: m.timeoutMs,
         createdAt: m.createdAt,
@@ -305,6 +306,14 @@ export const CustomModelStore = {
     const keys = readKeyMap();
     const now = Date.now();
     const disableTraffic = input.disableNonEssentialTraffic ?? true;
+    // Subagent pin must reference a model this config actually serves; a stale
+    // id (e.g. the model row was removed in the same edit) is dropped rather
+    // than persisted — see ApiConfig.subagentModel.
+    const validIds = new Set(input.models.map((m) => m.id));
+    const subagentModel =
+      input.subagentModel && validIds.has(input.subagentModel)
+        ? input.subagentModel
+        : undefined;
 
     if (input.id) {
       const idx = metas.findIndex((m) => m.id === input.id);
@@ -320,6 +329,7 @@ export const CustomModelStore = {
         authMode: resolveAuthMode(input.authMode),
         protocol: resolveProtocol(input.protocol),
         models: input.models,
+        subagentModel,
         disableNonEssentialTraffic: disableTraffic,
         timeoutMs: input.timeoutMs,
       };
@@ -334,6 +344,7 @@ export const CustomModelStore = {
         authMode: resolveAuthMode(input.authMode),
         protocol: resolveProtocol(input.protocol),
         models: input.models,
+        subagentModel,
         disableNonEssentialTraffic: disableTraffic,
         timeoutMs: input.timeoutMs,
         createdAt: now,
@@ -387,6 +398,9 @@ export const CustomModelStore = {
       resolved = meta.roles?.[selected as LegacyRoleKey]?.requestModel?.trim();
     }
     const selectedModel = resolved ?? models[0].id;
+    // Drop a pin the model list no longer contains (the UI validates on
+    // save; this is the belt-and-suspenders for hand-edited JSON).
+    const pinned = meta.subagentModel;
 
     return {
       baseUrl: meta.baseUrl,
@@ -395,6 +409,8 @@ export const CustomModelStore = {
       protocol: resolveProtocol(meta.protocol),
       selectedModel,
       models,
+      subagentModel:
+        pinned && models.some((m) => m.id === pinned) ? pinned : undefined,
       disableNonEssentialTraffic: meta.disableNonEssentialTraffic ?? true,
       timeoutMs: meta.timeoutMs,
     };

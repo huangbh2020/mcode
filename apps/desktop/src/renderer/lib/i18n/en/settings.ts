@@ -598,6 +598,12 @@ export const en = {
   "settings.outputStyle.loadFailed": "Failed to load styles",
   "settings.outputStyle.stale": "missing",
 
+  // ── ClaudeProviderForm · subagent model ──
+  "settings.subagentModel.select": "Subagent model",
+  "settings.subagentModel.hint":
+    "Claude sessions on this provider run Task-tool subagents with the picked model; applies from the next turn. \"Follow main session\" leaves it untouched.",
+  "settings.subagentModel.follow": "Follow main session",
+
   // ── UsagePanel ──
   "settings.usage.title": "Usage",
   "settings.usage.desc": "Token usage aggregated from every session's turn history. Pi sessions are counted as increments.",

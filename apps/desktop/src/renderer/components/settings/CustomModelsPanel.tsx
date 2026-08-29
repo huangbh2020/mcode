@@ -197,6 +197,11 @@ type TestState =
   | { status: "ok"; detail: string }
   | { status: "fail"; error: string };
 
+/** Select sentinel for the subagent-model "follow main session" option. The
+ *  form state stores "" for that case (maps at the boundary — a bare "" would
+ *  be ambiguous as a Select value). */
+const SUBAGENT_FOLLOW_MAIN = "__subagent_follow_main__";
+
 interface ClaudeModelFormState {
   /** Gateway-side model id, e.g. "deepseek-v4-pro". */
   id: string;
@@ -212,6 +217,9 @@ interface ClaudeFormState {
   authToken: string;
   /** Flat model list — mirrors the Pi form's models array. */
   models: ClaudeModelFormState[];
+  /** Model id from `models` pinned for Task-tool subagents; "" = follow the
+   *  main session's model (no CLAUDE_CODE_SUBAGENT_MODEL override). */
+  subagentModel: string;
   disableNonEssentialTraffic: boolean;
   timeoutMs: string;
 }
@@ -228,6 +236,7 @@ function emptyClaudeForm(): ClaudeFormState {
     protocol: "anthropic",
     authToken: "",
     models: [],
+    subagentModel: "",
     disableNonEssentialTraffic: true,
     timeoutMs: "",
   };
@@ -242,6 +251,7 @@ function claudeFormFromConfig(m: CustomModelPublic): ClaudeFormState {
     protocol: m.protocol,
     authToken: "",
     models: m.models.map((e) => ({ id: e.id, supports1m: Boolean(e.supports1m) })),
+    subagentModel: m.subagentModel ?? "",
     disableNonEssentialTraffic: m.disableNonEssentialTraffic ?? true,
     timeoutMs: m.timeoutMs ? String(m.timeoutMs) : "",
   };
@@ -530,6 +540,13 @@ export function CustomModelsPanel() {
       setError(t("settings.customModels.errTimeout"));
       return;
     }
+    // The pin must reference a saved model row; drop it otherwise (the store
+    // re-validates, this just avoids persisting a value the UI could show as
+    // selected while its model row was being removed in the same edit).
+    const subagentModel =
+      claudeForm.subagentModel && seen.has(claudeForm.subagentModel)
+        ? claudeForm.subagentModel
+        : undefined;
     setSaving(true);
     setError(null);
     try {
@@ -541,6 +558,7 @@ export function CustomModelsPanel() {
         protocol: claudeForm.protocol,
         authToken: claudeForm.authToken.trim() || undefined,
         models,
+        subagentModel,
         disableNonEssentialTraffic: claudeForm.disableNonEssentialTraffic,
         timeoutMs,
       });
@@ -972,6 +990,49 @@ function ClaudeProviderForm({
           })}
         </div>
       </div>
+
+      {/* Subagent-model pin — a per-config setting: Claude sessions running
+          on THIS provider route Task-tool subagents through the picked model
+          (CLAUDE_CODE_SUBAGENT_MODEL). "" = follow the main session's model.
+          Options come from the model rows above, so a pin whose row was
+          deleted in this edit simply disappears from the list and is dropped
+          on save. */}
+      <Field label={t("settings.subagentModel.select")}>
+        <Select.Root
+          value={form.subagentModel || SUBAGENT_FOLLOW_MAIN}
+          onValueChange={(v) => update("subagentModel", v === SUBAGENT_FOLLOW_MAIN ? "" : (v as string))}
+        >
+          <Select.Trigger className="w-full">
+            <Select.Value>
+              {(val: string | null) => (
+                <span
+                  className={cn(
+                    "flex items-center",
+                    (!val || val === SUBAGENT_FOLLOW_MAIN) && "text-content-subtle",
+                  )}
+                >
+                  {val && val !== SUBAGENT_FOLLOW_MAIN
+                    ? val
+                    : t("settings.subagentModel.follow")}
+                </span>
+              )}
+            </Select.Value>
+          </Select.Trigger>
+          <Select.Portal><Select.Positioner><Select.Popup><Select.List>
+            <Select.Item value={SUBAGENT_FOLLOW_MAIN}>
+              <Select.ItemText>{t("settings.subagentModel.follow")}</Select.ItemText>
+            </Select.Item>
+            {form.models.filter((m) => m.id.trim()).map((m) => (
+              <Select.Item key={m.id.trim()} value={m.id.trim()}>
+                <Select.ItemText>{m.id.trim()}</Select.ItemText>
+              </Select.Item>
+            ))}
+          </Select.List></Select.Popup></Select.Positioner></Select.Portal>
+        </Select.Root>
+      </Field>
+      <p className="text-[0.6428em] leading-relaxed text-content-subtle">
+        {t("settings.subagentModel.hint")}
+      </p>
 
       {/* Advanced */}
       <button type="button" onClick={() => setAdvancedOpen((v) => !v)} className="flex items-center gap-1 pt-1 text-[0.7857em] text-content-subtle hover:text-content-muted">

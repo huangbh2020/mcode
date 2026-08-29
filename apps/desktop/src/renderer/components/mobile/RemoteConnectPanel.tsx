@@ -12,7 +12,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import QRCode from "qrcode";
-import { Button, Switch } from "@renderer/components/ui/index.js";
+import { Button, Select, Switch } from "@renderer/components/ui/index.js";
 import { cn } from "@renderer/lib/cn.js";
 import {
   IconCopy,
@@ -26,7 +26,7 @@ import {
 } from "@renderer/lib/icons.js";
 import { api } from "@renderer/lib/api.js";
 import { copyText } from "@renderer/lib/clipboard.js";
-import type { RelayStatus, RelayVpsConfig } from "@contracts/ipc";
+import type { RelayStatus, RelayVpsConfig, RelayForwarderChoice } from "@contracts/ipc";
 import { RELAY_AUTO_START_SETTING_KEY } from "@contracts/relay";
 import { useI18n } from "@renderer/lib/i18n/index.js";
 
@@ -37,6 +37,14 @@ const STATE_LABELS: Record<RelayStatus["state"], string> = {
   connected: "已连接",
   error: "连接失败",
 };
+
+/** Options for the forwarder selector. Labels resolve the "auto" choice
+ *  differently per locale, so they go through t(). */
+const FORWARDER_OPTIONS: ReadonlyArray<{ value: RelayForwarderChoice; labelKey: "layout.relayForwarderAuto" | "layout.relayForwarderSocat" | "layout.relayForwarderPython3" }> = [
+  { value: "auto", labelKey: "layout.relayForwarderAuto" },
+  { value: "socat", labelKey: "layout.relayForwarderSocat" },
+  { value: "python3", labelKey: "layout.relayForwarderPython3" },
+];
 
 export function RemoteConnectPanel() {
   const { t } = useI18n();
@@ -49,6 +57,7 @@ export function RemoteConnectPanel() {
     username: "root",
     password: "",
     publicPort: "7331",
+    forwarder: "auto" as RelayForwarderChoice,
   });
   const [pairingCode, setPairingCode] = useState<string | null>(null);
   const [pairingUrl, setPairingUrl] = useState<string | null>(null);
@@ -83,6 +92,7 @@ export function RemoteConnectPanel() {
           username: c.config.username,
           password: c.config.password,
           publicPort: String(c.config.publicPort),
+          forwarder: c.config.forwarder ?? "auto",
         });
       }
     } catch {
@@ -148,6 +158,7 @@ export function RemoteConnectPanel() {
         username: form.username.trim() || "root",
         password: form.password,
         publicPort: parseInt(form.publicPort, 10) || 7331,
+        forwarder: form.forwarder,
       });
       const result = await api.relay.connect();
       if (!result.ok) {
@@ -273,6 +284,35 @@ export function RemoteConnectPanel() {
                 disabled={isBusy}
               />
             </label>
+            <div className="col-span-2 flex flex-col gap-1">
+              <span className="text-xs font-medium text-content-muted">{t("layout.relayForwarder")}</span>
+              <Select.Root
+                value={form.forwarder}
+                onValueChange={(v) => setForm({ ...form, forwarder: v as RelayForwarderChoice })}
+                disabled={isBusy}
+              >
+                <Select.Trigger className="w-full justify-between px-3 py-2 text-sm">
+                  <Select.Value>
+                    {(val: string) =>
+                      t(FORWARDER_OPTIONS.find((o) => o.value === val)?.labelKey ?? "layout.relayForwarderAuto")
+                    }
+                  </Select.Value>
+                </Select.Trigger>
+                <Select.Portal>
+                  <Select.Positioner>
+                    <Select.Popup>
+                      <Select.List>
+                        {FORWARDER_OPTIONS.map((opt) => (
+                          <Select.Item key={opt.value} value={opt.value}>
+                            <Select.ItemText>{t(opt.labelKey)}</Select.ItemText>
+                          </Select.Item>
+                        ))}
+                      </Select.List>
+                    </Select.Popup>
+                  </Select.Positioner>
+                </Select.Portal>
+              </Select.Root>
+            </div>
           </div>
         </div>
       )}

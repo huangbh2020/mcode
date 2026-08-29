@@ -34,6 +34,7 @@ import { resolveGitBash } from "@main/lib/binaryResolve.js";
 import { samePath } from "@main/lib/pathGuard.js";
 import { getMcpManagement, readProjectMcpServers } from "@main/lib/mcpConfig.js";
 import { getOutputStyleSetting } from "@main/lib/outputStyleConfig.js";
+import { resolveSubagentModelValue } from "@main/lib/subagentModel.js";
 import { normalizeBashCommand } from "@main/lib/msysPath.js";
 import {
   browserList,
@@ -523,6 +524,24 @@ export class ClaudeAgentSdkProvider implements AgentProvider {
       // Standard Anthropic endpoint: still redirect the config root so Mcode
       // manages its own skills/settings, but no auth/model overrides needed.
       options.env = { ...process.env, CLAUDE_CONFIG_DIR: MCODE_CONFIG_DIR };
+    }
+
+    // Subagent model pin (per provider config, settings panel「模型配置」):
+    // CLAUDE_CODE_SUBAGENT_MODEL is the binary's native channel for routing
+    // Task-tool subagents. Layered AFTER the block above so the pin overrides
+    // the custom-endpoint path's default mirror of the main model. The value
+    // is re-checked against the config's model list (see subagentModel.ts) —
+    // a stale id is dropped with a warning rather than injected, because a
+    // broken id here kills the Task tool with 503s (the exact failure the
+    // tier-mirroring exists to prevent). Official-endpoint turns and configs
+    // without a pin keep following the main model.
+    const pinnedSubagentModel = resolveSubagentModelValue(req.apiConfig);
+    if (pinnedSubagentModel) {
+      options.env = { ...options.env, CLAUDE_CODE_SUBAGENT_MODEL: pinnedSubagentModel };
+    } else if (req.apiConfig?.subagentModel) {
+      ctx.log.warn(
+        `subagent model pin ignored: id ${JSON.stringify(req.apiConfig.subagentModel)} not in config ${req.apiConfig.baseUrl} model list`,
+      );
     }
 
     // Bash tool shell: force Git Bash when one is resolvable. claude.exe's own

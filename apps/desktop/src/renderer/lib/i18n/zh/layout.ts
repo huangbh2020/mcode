@@ -165,6 +165,10 @@ export const zh = {
   "layout.relayAutoStartOn": "开启",
   "layout.relayAutoStartOff": "关闭",
   "layout.relayConnected": "远程访问已启用",
+  "layout.relayForwarder": "转发服务",
+  "layout.relayForwarderAuto": "自动（优先 socat，缺失时用 python3）",
+  "layout.relayForwarderSocat": "socat",
+  "layout.relayForwarderPython3": "python3",
   "layout.activeDevices": "{n} 台设备活跃",
 
   /* ── image preview (ui) ── */

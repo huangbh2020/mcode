@@ -92,6 +92,11 @@ export interface ApiConfig {
    *  onto the background-tier env vars so background requests also route to
    *  the user's gateway. */
   models: CustomModelEntry[];
+  /** Model id (one of `models[].id`) pinned for Task-tool subagents in
+   *  sessions using this config — injected per-turn as
+   *  CLAUDE_CODE_SUBAGENT_MODEL, overriding the default mirror of the
+   *  selected model. Absent = follow the main session's model. */
+  subagentModel?: string;
   /** Disable Claude Code's non-essential (telemetry) traffic. Default true
    *  for custom endpoints — almost always what you want on a gateway. */
   disableNonEssentialTraffic: boolean;
@@ -136,6 +141,9 @@ export interface CustomModelPublic {
   /** Masked token, e.g. "sk-***ab12". For display only. */
   authTokenMasked: string;
   models: CustomModelEntry[];
+  /** Task-subagent model pinned for this config (one of `models[].id`), or
+   *  undefined = follow the main session's model. See ApiConfig.subagentModel. */
+  subagentModel?: string;
   disableNonEssentialTraffic: boolean;
   timeoutMs?: number;
   createdAt: number;
@@ -152,6 +160,9 @@ export interface CustomModelMeta {
   /** Wire protocol. Absent on legacy records; resolve via {@link resolveProtocol}. */
   protocol?: Protocol;
   models: CustomModelEntry[];
+  /** Task-subagent model pinned for this config, or undefined = follow the
+   *  main session's model. See ApiConfig.subagentModel. */
+  subagentModel?: string;
   disableNonEssentialTraffic: boolean;
   timeoutMs?: number;
   createdAt: number;
@@ -172,6 +183,10 @@ export interface CustomModelInput {
   authToken?: string;
   /** The flat model list (≥1 entry, enforced by the IPC schema). */
   models: CustomModelEntry[];
+  /** Task-subagent model to pin for this config. Must be one of
+   *  `models[].id`; a value not in the list is dropped by the store (falls
+   *  back to following the main model). Empty/undefined = no pin. */
+  subagentModel?: string;
   disableNonEssentialTraffic?: boolean;
   timeoutMs?: number;
 }

@@ -52,6 +52,9 @@ const MAX_RECONNECT_ATTEMPTS = 5;
 /** Reconnect delay base (exponential backoff). */
 const RECONNECT_BASE_DELAY_MS = 2000;
 
+/** Interval between VPS port-state polls during forwarder cleanup/start. */
+const PORT_POLL_INTERVAL_MS = 250;
+
 class RelayManagerImpl {
   private conn: Client | null = null;
   private config: RelayVpsConfig | null = null;
@@ -257,61 +260,138 @@ class RelayManagerImpl {
     });
   }
 
-  /** Deploy the forwarder on the VPS: try socat first, then python3. */
+  /** Deploy the forwarder on the VPS, honoring the user's forwarder choice:
+   *  "auto" tries socat first and falls back to python3; "socat"/"python3"
+   *  force the choice and fail with an explicit error (no silent fallback,
+   *  so the user always knows which program is actually running). */
   private async deployForwarder(conn: Client, cfg: RelayVpsConfig): Promise<void> {
     this.setState({ state: "deploying" });
     this.tunnelPort = await pickRandomPort();
 
-    // Check if a forwarder is already running for our public port.
-    const checkRunning = await execAsync(
-      conn,
-      `pgrep -f "TCP-LISTEN:${cfg.publicPort}" || pgrep -f "forwarder.py.*${cfg.publicPort}"`,
-    );
-    if (checkRunning.trim()) {
-      // Forwarder might be from a previous session with a different tunnelPort.
-      // Kill it and restart with the current tunnelPort.
-      log.info("relay: killing stale forwarder");
-      await execAsync(
-        conn,
-        `pkill -f "TCP-LISTEN:${cfg.publicPort}" || true; pkill -f "forwarder.py.*${cfg.publicPort}" || true`,
-      ).catch(() => {});
-      await sleep(500);
-    }
+    // Kill any forwarder left over from a previous session (disconnect leaves
+    // it running on purpose) and wait until the port is genuinely free —
+    // binding over a half-dead listener kills the new forwarder with
+    // EADDRINUSE (the 2026-08-28 "socat start failed" WARN).
+    await this.cleanupForwarder(conn, cfg.publicPort);
 
-    // Try socat (simplest — one-liner, no file upload).
-    const socatPath = await execAsync(conn, "which socat 2>/dev/null");
-    if (socatPath.trim()) {
-      log.info("relay: using socat forwarder");
-      const cmd = `nohup socat TCP-LISTEN:${cfg.publicPort},fork,reuseaddr TCP:127.0.0.1:${this.tunnelPort} >/dev/null 2>&1 &`;
-      await execAsync(conn, cmd);
-      // Verify it's listening.
-      await sleep(300);
-      const check = await execAsync(conn, `pgrep -f "TCP-LISTEN:${cfg.publicPort}"`);
-      if (check.trim()) {
-        this.setState({ forwarderType: "socat" });
-        log.info(`relay: socat forwarder started on port ${cfg.publicPort}`);
-        return;
+    const choice = cfg.forwarder ?? "auto";
+
+    // socat one-liner (simplest — no file upload). Skipped entirely when the
+    // user explicitly forced python3.
+    if (choice !== "python3") {
+      const socatPath = await execAsync(conn, "which socat 2>/dev/null");
+      if (socatPath.trim()) {
+        log.info("relay: using socat forwarder");
+        await execAsync(conn, "mkdir -p ~/.mcode");
+        const cmd =
+          `nohup socat TCP-LISTEN:${cfg.publicPort},fork,reuseaddr ` +
+          `TCP:127.0.0.1:${this.tunnelPort} >~/.mcode/forwarder.log 2>&1 &`;
+        await execAsync(conn, cmd);
+        // Verify it is actually LISTENING. A pgrep name match can hit a
+        // stale forwarder, but a listener on a confirmed-free port can only
+        // be the process we just started.
+        if (await this.waitForPortState(conn, cfg.publicPort, 2000, true)) {
+          this.setState({ forwarderType: "socat" });
+          log.info(`relay: socat forwarder started on port ${cfg.publicPort}`);
+          return;
+        }
+        const detail = await this.forwarderErrorDetail(conn);
+        if (choice === "socat") {
+          throw new Error(
+            `socat 转发器启动失败${detail ?? "，请登录 VPS 查看 ~/.mcode/forwarder.log"}`,
+          );
+        }
+        log.warn(`relay: socat start failed (${detail ?? "no stderr"}), falling back to python3`);
+      } else if (choice === "socat") {
+        throw new Error("VPS 上未安装 socat（转发服务已指定为 socat），请先安装：apt install socat");
       }
-      log.warn("relay: socat start failed, falling back to python3");
     }
 
-    // Fallback: python3 forwarder script.
+    // python3 forwarder script — user-forced, or auto fallback when socat is
+    // unavailable / failed to start.
     const pythonPath = await execAsync(conn, "which python3 2>/dev/null");
     if (!pythonPath.trim()) {
-      throw new Error("VPS 上没有 socat 或 python3，请安装其一：apt install socat 或 apt install python3");
+      throw new Error(
+        choice === "python3"
+          ? "VPS 上未安装 python3（转发服务已指定为 python3），请先安装：apt install python3"
+          : "VPS 上没有 socat 或 python3，请安装其一：apt install socat 或 apt install python3",
+      );
     }
 
     log.info("relay: using python3 forwarder");
     await this.uploadForwarderScript(conn);
-    const cmd = `nohup python3 ~/.mcode/forwarder.py ${cfg.publicPort} ${this.tunnelPort} >/dev/null 2>&1 &`;
+    const cmd = `nohup python3 ~/.mcode/forwarder.py ${cfg.publicPort} ${this.tunnelPort} >~/.mcode/forwarder.log 2>&1 &`;
     await execAsync(conn, cmd);
-    await sleep(500);
-    const check = await execAsync(conn, `pgrep -f "forwarder.py.*${cfg.publicPort}"`);
-    if (!check.trim()) {
-      throw new Error("python3 forwarder 启动失败，请检查 VPS 端口是否被占用");
+    if (!(await this.waitForPortState(conn, cfg.publicPort, 2500, true))) {
+      const detail = await this.forwarderErrorDetail(conn);
+      throw new Error(
+        `python3 转发器启动失败${detail ?? "，请登录 VPS 查看 ~/.mcode/forwarder.log"}`,
+      );
     }
     this.setState({ forwarderType: "python3" });
     log.info(`relay: python3 forwarder started on port ${cfg.publicPort}`);
+  }
+
+  /** Kill forwarders from previous sessions and wait until the public port
+   *  is really released (SIGTERM, then SIGKILL, then a loud error).
+   *
+   *  The pgrep/pkill patterns deliberately use the "[T]CP-LISTEN" bracket
+   *  trick: the remote command runs as `bash -c '<cmd>'`, and a plain
+   *  pattern matches that wrapper's own command line. That made pgrep report
+   *  a phantom forwarder on every connect, and pkill SIGTERM the wrapper
+   *  mid-compound so the second pkill never ran — a stale python3 forwarder
+   *  survived every reconnect, held the port forever, and the relay silently
+   *  pointed the phone at a dead tunnel port while status showed
+   *  "connected" (2026-08-28 incident). */
+  private async cleanupForwarder(conn: Client, publicPort: number): Promise<void> {
+    const socatPat = `[T]CP-LISTEN:${publicPort}`;
+    const pyPat = `[f]orwarder\\.py.*${publicPort}`;
+
+    const found = await execAsync(conn, `pgrep -f "${socatPat}"; pgrep -f "${pyPat}"`);
+    if (found.trim()) {
+      log.info("relay: killing stale forwarder");
+      await execAsync(conn, `pkill -f "${socatPat}"; pkill -f "${pyPat}"`);
+    }
+
+    if (await this.waitForPortState(conn, publicPort, 3000, false)) return;
+
+    // Still held after SIGTERM — escalate to SIGKILL.
+    log.warn("relay: forwarder did not exit after SIGTERM, sending SIGKILL");
+    await execAsync(conn, `pkill -9 -f "${socatPat}"; pkill -9 -f "${pyPat}"`);
+    if (await this.waitForPortState(conn, publicPort, 2500, false)) return;
+
+    const holder = (
+      await execAsync(conn, `ss -ltnp 2>/dev/null | grep ":${publicPort}"`)
+    ).trim();
+    throw new Error(
+      `VPS 端口 ${publicPort} 释放失败${holder ? `（当前占用：${holder}）` : ""}，请登录 VPS 手动排查：ss -ltnp | grep ${publicPort}`,
+    );
+  }
+
+  /** Poll the VPS until `publicPort` reaches the wanted state (listening /
+   *  free) or the timeout elapses. */
+  private async waitForPortState(
+    conn: Client,
+    publicPort: number,
+    timeoutMs: number,
+    wantListening: boolean,
+  ): Promise<boolean> {
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+      const count = await countPortListeners(conn, publicPort);
+      if (wantListening ? count > 0 : count === 0) return true;
+      if (Date.now() >= deadline) return false;
+      await sleep(PORT_POLL_INTERVAL_MS);
+    }
+  }
+
+  /** Best-effort tail of the forwarder's stderr log (null when nothing
+   *  useful) — surfaced in start-failure errors so bind failures become
+   *  diagnosable instead of vanishing into /dev/null. */
+  private async forwarderErrorDetail(conn: Client): Promise<string | null> {
+    const tail = await execAsync(conn, `tail -c 300 ~/.mcode/forwarder.log 2>/dev/null`);
+    const text = tail.trim().replace(/\s+/g, " ").slice(0, 160);
+    return text || null;
   }
 
   /** Upload forwarder.py to the VPS via SFTP. */
@@ -373,6 +453,11 @@ class RelayManagerImpl {
   /** Schedule a reconnection with exponential backoff. */
   private scheduleReconnect(): void {
     if (this.intentionalDisconnect) return;
+    // A dropped connection fires BOTH "error" and "close"; without this
+    // guard two timers race and run doConnect concurrently, deploying two
+    // forwarders that fight over the public port (seen in the 2026-08-16
+    // logs: duplicate "SSH connected" + "Unable to bind" tunnel errors).
+    if (this.reconnectTimer) return;
     if (this.reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
       this.setState({
         state: "error",
@@ -427,6 +512,17 @@ function execAsync(conn: Client, cmd: string): Promise<string> {
       });
     });
   });
+}
+
+/** Count sockets listening on `port` on the VPS. ss and netstat both put the
+ *  local address in column 4, so one awk works for both; when neither tool
+ *  exists the pipeline yields 0 ("free"), degrading to the old blind
+ *  behavior rather than blocking deployment. */
+function countPortListeners(conn: Client, port: number): Promise<number> {
+  return execAsync(
+    conn,
+    `(ss -ltn 2>/dev/null || netstat -tln 2>/dev/null) | awk '{print $4}' | grep -c ":${port}$"`,
+  ).then((out) => parseInt(out.trim(), 10) || 0);
 }
 
 /** Translate raw SSH errors into user-friendly Chinese messages. */

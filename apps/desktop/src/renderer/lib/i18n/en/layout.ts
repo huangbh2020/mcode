@@ -162,6 +162,10 @@ export const en = {
   "layout.relayAutoStartOn": "On",
   "layout.relayAutoStartOff": "Off",
   "layout.relayConnected": "Remote access enabled",
+  "layout.relayForwarder": "Forwarder service",
+  "layout.relayForwarderAuto": "Auto (socat first, python3 fallback)",
+  "layout.relayForwarderSocat": "socat",
+  "layout.relayForwarderPython3": "python3",
   "layout.activeDevices": "{n} device(s) active",
 
   /* ── image preview (ui) ── */

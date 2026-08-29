@@ -26,6 +26,12 @@ export const RELAY_AUTO_START_SETTING_KEY = "relay.autoStart";
 /** Default public port on the VPS that the phone connects to. */
 export const RELAY_DEFAULT_PUBLIC_PORT = 7331;
 
+/** Which program to deploy on the VPS as the public-port forwarder.
+ *  - "auto": try socat first, fall back to the python3 script (default)
+ *  - "socat" / "python3": force the choice; deploy fails with an explicit
+ *    error when the binary is missing on the VPS (no silent fallback). */
+export type RelayForwarderChoice = "auto" | "socat" | "python3";
+
 /** Lifecycle state of the relay connection, surfaced to the renderer. */
 export type RelayState =
   | "idle" // never connected / disconnected
@@ -50,6 +56,9 @@ export interface RelayVpsConfig {
   privateKeyPath?: string;
   /** Public port on the VPS that the phone connects to. Default 7331. */
   publicPort: number;
+  /** Forwarder program to deploy on the VPS. Absent (older saved configs)
+   *  behaves as "auto". */
+  forwarder?: RelayForwarderChoice;
 }
 
 /** A snapshot of the relay's current status, returned by `relay.status`. */
@@ -77,6 +86,7 @@ export const RelayVpsConfigSchema = z.object({
   password: z.string().max(256).default(""),
   privateKeyPath: z.string().max(512).optional(),
   publicPort: z.number().int().min(1).max(65535).default(RELAY_DEFAULT_PUBLIC_PORT),
+  forwarder: z.enum(["auto", "socat", "python3"]).default("auto"),
 });
 
 export type RelayVpsConfigInput = z.infer<typeof RelayVpsConfigSchema>;

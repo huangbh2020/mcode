@@ -601,6 +601,12 @@ export const zh = {
   "settings.outputStyle.loadFailed": "加载风格列表失败",
   "settings.outputStyle.stale": "已失效",
 
+  // ── ClaudeProviderForm · 子代理模型 ──
+  "settings.subagentModel.select": "子代理模型",
+  "settings.subagentModel.hint":
+    "使用此供应商的 Claude 会话中,Task 子代理改用该模型运行;下一轮对话生效。跟随主会话时不干预。",
+  "settings.subagentModel.follow": "跟随主会话",
+
   // ── UsagePanel ──
   "settings.usage.title": "用量统计",
   "settings.usage.desc": "汇总各会话每轮对话的 token 用量。Pi 会话按增量折算。",
