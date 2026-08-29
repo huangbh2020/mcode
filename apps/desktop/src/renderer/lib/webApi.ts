@@ -441,6 +441,7 @@ const file: Api["file"] = {
   mkdir: () => webUnsupported("file.mkdir"),
   delete: () => webUnsupported("file.delete"),
   rename: () => webUnsupported("file.rename"),
+  copy: () => webUnsupported("file.copy"),
 };
 
 const git: Api["git"] = {
@@ -461,6 +462,9 @@ const git: Api["git"] = {
   showFile: () => webUnsupported("git.showFile"),
   listBranches: () => webUnsupported("git.listBranches"),
   checkout: () => webUnsupported("git.checkout"),
+  mergePreview: () => webUnsupported("git.mergePreview"),
+  merge: () => webUnsupported("git.merge"),
+  mergeAbort: () => webUnsupported("git.mergeAbort"),
 };
 
 const setting: Api["setting"] = {

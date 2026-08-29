@@ -14,11 +14,14 @@ import {
   IconLoader2,
   IconExternalLink,
   IconClipboard,
+  IconClipboardText,
   IconCopy,
   IconMessage,
   IconCheck,
+  IconAlertCircle,
   IconFolderPlus,
   IconFilePlus,
+  IconFiles,
   IconEdit,
   IconTrash,
   IconWorld,
@@ -75,6 +78,18 @@ const NewInParentContext = createContext<StartNewInParent | null>(null);
  *  load). Null when rendered outside a container — the rename clash check then
  *  falls back to server-side rejection. */
 const SiblingNamesContext = createContext<Set<string> | null>(null);
+
+/** Tree-scoped clipboard for the file "复制/粘贴" pair. The FileTree root owns
+ *  the copied path; file rows call `copyFile` from their right-click menu,
+ *  while directory rows and the blank-area menu read `copiedFile` to surface a
+ *  粘贴 item (hidden when nothing is stashed). Scoped to one tree instance, so
+ *  the clipboard never leaks across projects. Null when rendered outside a
+ *  FileTree — the copy item is then hidden and paste never applies. */
+interface FileClipboardValue {
+  copiedFile: string | null;
+  copyFile: (path: string) => void;
+}
+const FileClipboardContext = createContext<FileClipboardValue | null>(null);
 
 /* ───────────────────────── context menu ───────────────────────── */
 
@@ -144,18 +159,24 @@ function NewEntryMenuItems({ onStart }: { onStart: (kind: NewEntryKind) => void 
 
 /** Copy-to-clipboard with a brief inline "已复制" toast pinned to the row's
  *  top-right. Shared by the file and directory context menus. Returns the
- *  copy handler and the toast element (render once per row, near the trigger). */
+ *  copy handler, a standalone `flash` (show the same toast without touching
+ *  the OS clipboard — used by the tree-scoped file 复制), and the toast
+ *  element (render once per row, near the trigger). */
 function useCopyFeedback() {
   const { t } = useI18n();
   const [copied, setCopied] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const copy = useCallback((text: string) => {
-    void navigator.clipboard.writeText(text).then(() => {
-      setCopied(true);
-      if (timer.current) clearTimeout(timer.current);
-      timer.current = setTimeout(() => setCopied(false), 1500);
-    });
+  const flash = useCallback(() => {
+    setCopied(true);
+    if (timer.current) clearTimeout(timer.current);
+    timer.current = setTimeout(() => setCopied(false), 1500);
   }, []);
+  const copy = useCallback(
+    (text: string) => {
+      void navigator.clipboard.writeText(text).then(flash);
+    },
+    [flash],
+  );
   useEffect(() => () => { if (timer.current) clearTimeout(timer.current); }, []);
   const toast = copied ? (
     <div className="pointer-events-none absolute right-2 top-0 z-50 flex -translate-y-full items-center gap-1 rounded-md bg-accent/15 px-1.5 py-0.5 text-accent [font-size:var(--right-panel-font-size)] shadow-sm">
@@ -163,7 +184,29 @@ function useCopyFeedback() {
       {t("common.copied")}
     </div>
   ) : null;
-  return { copy, toast };
+  return { copy, flash, toast };
+}
+
+/** Paste-failure feedback: a brief danger toast pinned like the copy toast.
+ *  Success needs no toast — the refreshed tree (plus the auto-expanded target
+ *  directory) is the feedback. */
+function usePasteFailure() {
+  const { t } = useI18n();
+  const [failed, setFailed] = useState(false);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const reportPasteFailed = useCallback(() => {
+    setFailed(true);
+    if (timer.current) clearTimeout(timer.current);
+    timer.current = setTimeout(() => setFailed(false), 2000);
+  }, []);
+  useEffect(() => () => { if (timer.current) clearTimeout(timer.current); }, []);
+  const toast = failed ? (
+    <div className="pointer-events-none absolute right-2 top-0 z-50 flex -translate-y-full items-center gap-1 rounded-md bg-danger/15 px-1.5 py-0.5 text-danger [font-size:var(--right-panel-font-size)] shadow-sm">
+      <IconAlertCircle size={10} />
+      {t("ide.tree.pasteFailed")}
+    </div>
+  ) : null;
+  return { reportPasteFailed, toast };
 }
 
 /* ───────────────────────── inline new-entry row ───────────────────────── */
@@ -499,6 +542,26 @@ export function FileTree({ projectPath }: { projectPath: string }) {
     [bumpReload, creating, openFileInIde],
   );
 
+  // Tree-scoped clipboard for the 复制/粘贴 pair (see FileClipboardContext).
+  const [copiedFile, setCopiedFile] = useState<string | null>(null);
+  const fileClipboard = useMemo(
+    () => ({ copiedFile, copyFile: setCopiedFile }),
+    [copiedFile],
+  );
+  const { reportPasteFailed, toast: pasteFailedToast } = usePasteFailure();
+  // Paste the stashed file into the project root. Name clashes are resolved
+  // main-side ("name 副本.ext", never overwrites); failure pins a danger toast.
+  const handlePasteRoot = useCallback(async () => {
+    if (!copiedFile) return;
+    const result = await api.file.copy({
+      srcPath: copiedFile,
+      destDir: projectPath,
+      suffix: t("ide.tree.copyNameSuffix"),
+    });
+    if (result.ok) bumpReload();
+    else reportPasteFailed();
+  }, [copiedFile, projectPath, bumpReload, reportPasteFailed, t]);
+
   // Registry of mounted file-node buttons, used by the reveal effect below.
   // useRef (not state) so register/unregister never triggers a re-render; the
   // reveal effect polls it via rAF. Cleared implicitly on remount
@@ -592,9 +655,11 @@ export function FileTree({ projectPath }: { projectPath: string }) {
 
   // The blank-area context menu (new file/folder at the project root) wraps
   // the whole tree body, including the empty-directory case so a brand-new
-  // project can still create its first entry via right-click.
+  // project can still create its first entry via right-click. The body is
+  // `relative` so the paste-failure toast can pin to its top-right.
   const treeBody = (
-    <div className="min-h-full py-1 [font-size:var(--right-panel-font-size)]">
+    <div className="relative min-h-full py-1 [font-size:var(--right-panel-font-size)]">
+      {pasteFailedToast}
       {creating && (
         <InlineNewEntryRow
           depth={0}
@@ -620,29 +685,41 @@ export function FileTree({ projectPath }: { projectPath: string }) {
   );
 
   return (
-    <FileNodeRegistryContext.Provider value={registerNode}>
-      <FileTreeActionsContext.Provider value={{ reloadSignal, bumpReload }}>
-        {/* NewInParentContext at the root level: a file row whose nearest
-            container IS the project root forwards "新建" here, opening the
-            root-level inline row. Deeper DirNodes override this provider. */}
-        <NewInParentContext.Provider value={startCreating}>
-          <ContextMenu.Root>
-            <ContextMenu.Trigger
-              render={<div className="min-h-full" />}
-            >
-              {treeBody}
-            </ContextMenu.Trigger>
-            <ContextMenu.Portal>
-              <ContextMenu.Positioner>
-                <ContextMenu.Popup className={MENU_POPUP_CLASS}>
-                  <NewEntryMenuItems onStart={startCreating} />
-                </ContextMenu.Popup>
-              </ContextMenu.Positioner>
-            </ContextMenu.Portal>
-          </ContextMenu.Root>
-        </NewInParentContext.Provider>
-      </FileTreeActionsContext.Provider>
-    </FileNodeRegistryContext.Provider>
+    <FileClipboardContext.Provider value={fileClipboard}>
+      <FileNodeRegistryContext.Provider value={registerNode}>
+        <FileTreeActionsContext.Provider value={{ reloadSignal, bumpReload }}>
+          {/* NewInParentContext at the root level: a file row whose nearest
+              container IS the project root forwards "新建" here, opening the
+              root-level inline row. Deeper DirNodes override this provider. */}
+          <NewInParentContext.Provider value={startCreating}>
+            <ContextMenu.Root>
+              <ContextMenu.Trigger
+                render={<div className="min-h-full" />}
+              >
+                {treeBody}
+              </ContextMenu.Trigger>
+              <ContextMenu.Portal>
+                <ContextMenu.Positioner>
+                  <ContextMenu.Popup className={MENU_POPUP_CLASS}>
+                    <NewEntryMenuItems onStart={startCreating} />
+                    {copiedFile && (
+                      <>
+                        <MenuSeparator />
+                        <MenuItem
+                          icon={<IconClipboardText size={12} />}
+                          label={t("ide.tree.paste")}
+                          onClick={() => void handlePasteRoot()}
+                        />
+                      </>
+                    )}
+                  </ContextMenu.Popup>
+                </ContextMenu.Positioner>
+              </ContextMenu.Portal>
+            </ContextMenu.Root>
+          </NewInParentContext.Provider>
+        </FileTreeActionsContext.Provider>
+      </FileNodeRegistryContext.Provider>
+    </FileClipboardContext.Provider>
   );
 }
 
@@ -795,6 +872,8 @@ function DirNode({
   // Pending delete confirmation dialog state.
   const [pendingDelete, setPendingDelete] = useState(false);
   const { copy: copyWithFeedback, toast: copiedToast } = useCopyFeedback();
+  const { reportPasteFailed, toast: pasteFailedToast } = usePasteFailure();
+  const fileClipboard = useContext(FileClipboardContext);
   const closeFilesUnderDir = useSessionStore((s) => s.closeFilesUnderDir);
   const renamePathInIde = useSessionStore((s) => s.renamePathInIde);
   // In-flight delete guard so a double-confirm can't fire twice.
@@ -902,6 +981,27 @@ function DirNode({
     closeFilesUnderDir(endPath);
   }, [actions, endPath, closeFilesUnderDir]);
 
+  // Paste the tree's stashed file into this directory. On success the row is
+  // expanded (a collapsed dir would otherwise swallow the result silently)
+  // and the tree re-scans; on failure a danger toast pins to the row. The
+  // destination uses `endPath` so a compact-folders row pastes into the real
+  // (deepest) dir it displays.
+  const handlePaste = useCallback(async () => {
+    const src = fileClipboard?.copiedFile;
+    if (!src) return;
+    const result = await api.file.copy({
+      srcPath: src,
+      destDir: endPath,
+      suffix: t("ide.tree.copyNameSuffix"),
+    });
+    if (!result.ok) {
+      reportPasteFailed();
+      return;
+    }
+    setDirExpanded(entry.path, true);
+    actions?.bumpReload();
+  }, [fileClipboard, endPath, entry.path, setDirExpanded, actions, reportPasteFailed, t]);
+
   // Lowercased child names for the inline row's clash check (stable per load).
   const childNames = useMemo(() => {
     const set = new Set<string>();
@@ -982,6 +1082,13 @@ function DirNode({
                   label={t("ide.tree.copyRelPath")}
                   onClick={() => copyWithFeedback(relativePath(endPath, projectPath))}
                 />
+                {fileClipboard?.copiedFile && (
+                  <MenuItem
+                    icon={<IconClipboardText size={12} />}
+                    label={t("ide.tree.paste")}
+                    onClick={() => void handlePaste()}
+                  />
+                )}
                 <MenuSeparator />
                 <MenuItem
                   icon={<IconEdit size={12} />}
@@ -1000,6 +1107,7 @@ function DirNode({
         </ContextMenu.Root>
         )}
         {copiedToast}
+        {pasteFailedToast}
         <ConfirmDialog
           open={pendingDelete}
           title={t("ide.tree.deleteFolderTitle")}
@@ -1069,7 +1177,10 @@ function FileNodeRow({
   // "Create sibling" intent surface: opens the inline new-entry row in the
   // nearest container (the file's parent dir). Null outside a FileTree.
   const startNewInParent = useContext(NewInParentContext);
-  const { copy: copyWithFeedback, toast: copiedToast } = useCopyFeedback();
+  const { copy: copyWithFeedback, flash: flashCopied, toast: copiedToast } = useCopyFeedback();
+  // Tree-scoped file clipboard: stash this file for a later 粘贴 into any
+  // directory (or the project root). Null outside a FileTree — item hidden.
+  const fileClipboard = useContext(FileClipboardContext);
   const enqueueChatFile = useSessionStore((s) => s.enqueueChatFile);
   // Tree-wide reload signal — used to re-scan after rename/delete. Null when
   // rendered outside a FileTree (the menu items are then hidden anyway).
@@ -1177,6 +1288,18 @@ function FileNodeRow({
                 label={t("ide.tree.revealInFileManager")}
                 onClick={() => void api.shell.showItemInFolder({ path })}
               />
+              {fileClipboard && (
+                <MenuItem
+                  icon={<IconFiles size={12} />}
+                  label={t("ide.tree.copyFile")}
+                  onClick={() => {
+                    fileClipboard.copyFile(path);
+                    // Same inline confirmation as the path copies — the file
+                    // itself goes to the tree's clipboard, not the OS one.
+                    flashCopied();
+                  }}
+                />
+              )}
               <MenuItem
                 icon={<IconClipboard size={12} />}
                 label={t("ide.tree.copyAbsPath")}

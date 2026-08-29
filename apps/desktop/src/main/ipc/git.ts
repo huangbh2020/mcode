@@ -33,6 +33,7 @@ import {
   GitShowCommitSchema,
   GitShowFileSchema,
   GitCheckoutSchema,
+  GitMergeSchema,
 } from "@contracts/ipc";
 import type {
   GitRepo,
@@ -45,6 +46,7 @@ import type {
   GitCommitDetail,
   GitBranchInfo,
   GitBranchListResult,
+  GitMergePreviewResult,
 } from "@contracts/ipc";
 import { ProjectRepo, SettingRepo } from "@main/store/repositories.js";
 import { CustomModelStore } from "@main/lib/secretStore.js";
@@ -374,6 +376,42 @@ export function mapStatus(raw: import("simple-git").StatusResult): GitStatusResu
     ahead: raw.ahead || 0,
     behind: raw.behind || 0,
     files,
+  };
+}
+
+/* ───────────────────────── merge helpers ───────────────────────── */
+
+/** True while a merge is in progress (MERGE_HEAD exists). simple-git's raw()
+ *  rejects on non-zero exit, and `rev-parse --verify -q` exits 1 when the ref
+ *  is missing — so the catch path IS the "no" answer. */
+async function mergeInProgress(git: import("simple-git").SimpleGit): Promise<boolean> {
+  try {
+    await git.revparse(["--verify", "--quiet", "MERGE_HEAD"]);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Read-only preview of merging `source` into HEAD: one
+ *  `git rev-list --left-right --count HEAD...source` gives both sides.
+ *  left = commits only HEAD has, right = commits only `source` has. */
+async function mergePreview(
+  git: import("simple-git").SimpleGit,
+  source: string,
+): Promise<GitMergePreviewResult> {
+  const out = await git.raw(["rev-list", "--left-right", "--count", `HEAD...${source}`]);
+  const [leftRaw, rightRaw] = out.trim().split(/\s+/);
+  const left = Number.parseInt(leftRaw ?? "", 10);
+  const right = Number.parseInt(rightRaw ?? "", 10);
+  if (Number.isNaN(left) || Number.isNaN(right)) {
+    return { ok: false, upToDate: false, fastForward: false, incomingCommits: 0, error: "无法解析分支差异" };
+  }
+  return {
+    ok: true,
+    upToDate: right === 0,
+    fastForward: left === 0 && right > 0,
+    incomingCommits: right,
   };
 }
 
@@ -993,6 +1031,115 @@ export function registerGitHandlers(ipcMain: IpcMain): void {
     } catch (err) {
       const msg = (err as Error).message;
       log.warn(`git.checkout failed for ${input.repoPath}: ${msg}`);
+      return { ok: false, error: msg };
+    }
+  });
+
+  /* ── git:mergePreview - read-only preview of merging `source` into HEAD ── */
+  ipcMain.handle(IPC.GIT_MERGE_PREVIEW, async (_evt, raw) => {
+    const input = GitMergeSchema.parse(raw);
+    if (!findContainingProject(input.repoPath)) {
+      log.warn(`git.mergePreview refused - repoPath outside any project: ${input.repoPath}`);
+      return { ok: false, upToDate: false, fastForward: false, incomingCommits: 0, error: "仓库路径不在任何已添加的项目内" };
+    }
+    try {
+      const git = (await loadSimpleGit())(input.repoPath);
+      return await mergePreview(git, input.source);
+    } catch (err) {
+      const msg = (err as Error).message;
+      log.warn(`git.mergePreview failed for ${input.repoPath}: ${msg}`);
+      return { ok: false, upToDate: false, fastForward: false, incomingCommits: 0, error: msg };
+    }
+  });
+
+  /* ── git:merge - merge `source` into the current branch ── */
+  ipcMain.handle(IPC.GIT_MERGE, async (_evt, raw) => {
+    const input = GitMergeSchema.parse(raw);
+    if (!findContainingProject(input.repoPath)) {
+      return { ok: false, error: "仓库路径不在任何已添加的项目内" };
+    }
+    try {
+      const git = (await loadSimpleGit())(input.repoPath);
+
+      // Refuse when a merge is already in flight — a second `git merge` with
+      // MERGE_HEAD present would fail confusingly or nest state.
+      if (await mergeInProgress(git)) {
+        return { ok: false, error: "已有进行中的合并,请先解决冲突或放弃本次合并" };
+      }
+
+      // No-op guard: HEAD already contains everything `source` has. Skipped by
+      // the UI in the common path (it previews first), but the merge must stay
+      // side-effect-free if invoked directly.
+      const preview = await mergePreview(git, input.source);
+      if (!preview.ok) {
+        return { ok: false, error: preview.error };
+      }
+      if (preview.upToDate) {
+        log.info(`git.merge no-op (already up to date) in ${input.repoPath}`);
+        return { ok: true, upToDate: true };
+      }
+
+      const sourceTip = (await git.revparse([input.source])).trim();
+      try {
+        // --no-edit keeps git from trying to open an editor for the merge
+        // commit message (there is no TTY here); it uses the default
+        // "Merge branch 'x'" message.
+        await git.raw(["merge", "--no-edit", input.source]);
+      } catch (mergeErr) {
+        // A merge conflict surfaces as a non-zero exit. Inspect status to tell
+        // a conflict (ok:true + conflict flag, so the UI can offer AI
+        // resolution / abort) apart from a genuine failure (ok:false).
+        const st = await git.status().catch(() => null);
+        const conflicted = st?.conflicted ?? [];
+        if (conflicted.length > 0) {
+          log.warn(`git.merge produced ${conflicted.length} conflict(s) in ${input.repoPath}`);
+          broadcastGitChanged(input.repoPath);
+          return { ok: true, conflict: true, conflictedFiles: conflicted };
+        }
+        throw mergeErr;
+      }
+      // Merge exited cleanly — still verify no silent conflicted state remains
+      // (same double-check the pull handler does).
+      const st = await git.status().catch(() => null);
+      const conflicted = st?.conflicted ?? [];
+      if (conflicted.length > 0) {
+        log.warn(`git.merge left ${conflicted.length} conflict(s) in ${input.repoPath}`);
+        broadcastGitChanged(input.repoPath);
+        return { ok: true, conflict: true, conflictedFiles: conflicted };
+      }
+      // Fast-forward ⟺ HEAD now sits exactly on `source`'s tip (no merge
+      // commit was created). Comparing hashes is exact even when the tip
+      // itself is a merge commit.
+      const headAfter = (await git.revparse(["HEAD"])).trim();
+      const fastForward = headAfter === sourceTip;
+      log.info(`git.merge succeeded in ${input.repoPath} (${fastForward ? "fast-forward" : "merge commit"})`);
+      broadcastGitChanged(input.repoPath);
+      return { ok: true, fastForward };
+    } catch (err) {
+      const msg = (err as Error).message;
+      log.warn(`git.merge failed for ${input.repoPath}: ${msg}`);
+      return { ok: false, error: msg };
+    }
+  });
+
+  /* ── git:mergeAbort - abort an in-progress merge, restoring the pre-merge state ── */
+  ipcMain.handle(IPC.GIT_MERGE_ABORT, async (_evt, raw) => {
+    const input = GitRepoPathSchema.parse(raw);
+    if (!findContainingProject(input.repoPath)) {
+      return { ok: false, error: "仓库路径不在任何已添加的项目内" };
+    }
+    try {
+      const git = (await loadSimpleGit())(input.repoPath);
+      if (!(await mergeInProgress(git))) {
+        return { ok: false, error: "当前没有进行中的合并" };
+      }
+      await git.raw(["merge", "--abort"]);
+      log.info(`git.mergeAbort succeeded in ${input.repoPath}`);
+      broadcastGitChanged(input.repoPath);
+      return { ok: true };
+    } catch (err) {
+      const msg = (err as Error).message;
+      log.warn(`git.mergeAbort failed for ${input.repoPath}: ${msg}`);
       return { ok: false, error: msg };
     }
   });

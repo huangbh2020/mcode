@@ -6,7 +6,7 @@ import { cn } from "@renderer/lib/cn.js";
 import { joinPath, basename } from "@renderer/lib/path.js";
 import { formatRelativeTime, formatFullTime } from "@renderer/lib/time.js";
 import { browserUuid } from "@renderer/lib/uuid.js";
-import type { GitRepo, GitStatusResult, GitFileStatus, GitBranchInfo, GitBranchListResult } from "@contracts/ipc";
+import type { GitRepo, GitStatusResult, GitFileStatus, GitBranchInfo, GitBranchListResult, GitMergePreviewResult } from "@contracts/ipc";
 import { EMPTY_TURN_FILES, useSessionStore } from "@renderer/stores/sessionStore.js";
 import type { TurnFileEntry } from "@renderer/lib/turnFiles.js";
 import { lineDiff, diffSummary } from "@renderer/lib/lineDiff.js";
@@ -35,13 +35,14 @@ import {
   IconCircleXFilled,
   IconX,
   IconTag,
+  IconGitMerge,
 } from "@renderer/lib/icons.js";
 import { useI18n, type MessageId } from "@renderer/lib/i18n/index.js";
 
 /** A single git operation log entry - one per pull/push/commit/sync/etc. */
 type GitOpLogEntry = {
   id: string;
-  op: "pull" | "push" | "commit" | "sync" | "stage" | "unstage" | "discard";
+  op: "pull" | "push" | "commit" | "sync" | "stage" | "unstage" | "discard" | "merge" | "mergeAbort";
   /** "success" for ok results, "failure" for !ok results or thrown exceptions. */
   status: "success" | "failure";
   /** Full error message (only for failures). Omitted for successes. */
@@ -60,6 +61,8 @@ const OP_LABEL_KEYS: Record<GitOpLogEntry["op"], MessageId> = {
   stage: "ide.git.stage",
   unstage: "ide.git.unstage",
   discard: "ide.git.discard",
+  merge: "ide.git.merge",
+  mergeAbort: "ide.git.mergeAbort",
 };
 
 /** Max number of log entries kept per repo. Older entries are dropped. */
@@ -91,21 +94,39 @@ export function GitRepoCard({ repo }: { repo: GitRepo }) {
   const [error, setError] = useState<string | null>(null);
   const [logs, setLogs] = useState<GitOpLogEntry[]>([]);
   const [commitMsg, setCommitMsg] = useState("");
-  const [busy, setBusy] = useState<"push" | "pull" | "commit" | null>(null);
+  const [busy, setBusy] = useState<"push" | "pull" | "commit" | "merge" | null>(null);
   const [pendingDiscard, setPendingDiscard] = useState<string[] | null>(null);
-  // Merge-conflict state: when git pull produces conflicts we surface a
-  // confirmation dialog offering to resolve them via AI. `conflictFiles`
-  // doubles as the dialog's open trigger (null = closed).
+  // Merge-conflict state: when a merge/pull produces conflicts we surface a
+  // dialog offering AI resolution or aborting the merge. `conflictFiles`
+  // doubles as the dialog's open trigger (null = closed). `conflictSource` /
+  // `conflictBranch` describe where the conflicts came from so the dialog can
+  // word itself correctly ("合并 feature-x 时…" vs "拉取后…").
   const [conflictFiles, setConflictFiles] = useState<string[] | null>(null);
+  const [conflictSource, setConflictSource] = useState<"pull" | "merge">("pull");
+  const [conflictBranch, setConflictBranch] = useState<string | null>(null);
   const [resolving, setResolving] = useState(false);
+  // "放弃合并" (git merge --abort) in-flight flag for the conflict dialog.
+  const [aborting, setAborting] = useState(false);
   // Branch picker state: the grouped branch/tag list (fetched on menu open),
   // a search filter, the in-flight checkout, and the "new branch" dialog.
+  // The menu is CONTROLLED so the merge action can close it before opening
+  // the confirm dialog (two stacked overlays would be confusing).
+  const [branchMenuOpen, setBranchMenuOpen] = useState(false);
   const [branches, setBranches] = useState<GitBranchListResult | null>(null);
   const [branchesLoading, setBranchesLoading] = useState(false);
   const [branchQuery, setBranchQuery] = useState("");
   const [checkingOut, setCheckingOut] = useState(false);
   const [newBranchOpen, setNewBranchOpen] = useState(false);
   const [newBranchName, setNewBranchName] = useState("");
+  // Branch-merge state: `mergeTarget` is the branch picked in the picker (a
+  // non-null value opens the confirm dialog); `mergePreviewData` holds the
+  // read-only preview (incoming commits / fast-forward / up-to-date) fetched
+  // when the dialog opens, so the user knows what the merge will do BEFORE
+  // confirming; `merging` is the in-flight merge itself.
+  const [mergeTarget, setMergeTarget] = useState<GitBranchInfo | null>(null);
+  const [mergePreviewLoading, setMergePreviewLoading] = useState(false);
+  const [mergePreviewData, setMergePreviewData] = useState<GitMergePreviewResult | null>(null);
+  const [merging, setMerging] = useState(false);
   const collapsedGitRepos = useSessionStore((s) => s.collapsedGitRepos);
   const toggleCollapsedGitRepo = useSessionStore((s) => s.toggleCollapsedGitRepo);
   const conflictResolveModel = useSessionStore((s) => s.conflictResolveModel);
@@ -211,6 +232,82 @@ export function GitRepoCard({ repo }: { repo: GitRepo }) {
     setNewBranchName("");
     await handleCheckout("HEAD", name);
   }, [newBranchName, handleCheckout]);
+
+  /** Open the merge confirm dialog for a branch (hover action in the branch
+   *  picker). Closes the picker first so only one overlay is up, then fetches
+   *  the read-only preview so the dialog can state what will happen. */
+  const openMergeDialog = useCallback(
+    (b: GitBranchInfo) => {
+      setBranchMenuOpen(false);
+      setMergeTarget(b);
+      setMergePreviewLoading(true);
+      setMergePreviewData(null);
+      api.git
+        .mergePreview({ repoPath: repo.path, source: b.name })
+        .then((data) => setMergePreviewData(data))
+        .catch(() => setMergePreviewData(null))
+        .finally(() => setMergePreviewLoading(false));
+    },
+    [repo.path],
+  );
+
+  /** Merge `mergeTarget` into the current branch. Conflicts route into the
+   *  same AI-resolution dialog pull uses (with an added "abort merge" escape
+   *  hatch); success is logged and the card refreshed. */
+  const handleMerge = async () => {
+    if (!mergeTarget || merging) return;
+    setMerging(true);
+    setBusy("merge");
+    setError(null);
+    try {
+      const res = await api.git.merge({ repoPath: repo.path, source: mergeTarget.name });
+      if (!res.ok) {
+        setError(res.error ?? t("ide.git.mergeFailed"));
+        prependLog({ op: "merge", status: "failure", message: res.error });
+      } else if (res.conflict && res.conflictedFiles && res.conflictedFiles.length > 0) {
+        setConflictSource("merge");
+        setConflictBranch(mergeTarget.name);
+        setConflictFiles(res.conflictedFiles);
+      } else {
+        prependLog({ op: "merge", status: "success" });
+      }
+      setMergeTarget(null);
+      await refresh();
+    } catch (err) {
+      const msg = (err as Error).message ?? t("ide.git.mergeFailed");
+      setError(msg);
+      prependLog({ op: "merge", status: "failure", message: msg });
+    } finally {
+      setMerging(false);
+      setBusy(null);
+    }
+  };
+
+  /** Abort an in-progress merge (`git merge --abort`), restoring the
+   *  pre-merge working tree. The "undo" escape hatch in the conflict dialog —
+   *  a merge that turned out to be a bad idea should be one click to undo,
+   *  not a terminal command. */
+  const handleMergeAbort = async () => {
+    setAborting(true);
+    setError(null);
+    try {
+      const res = await api.git.mergeAbort({ repoPath: repo.path });
+      if (!res.ok) {
+        setError(res.error ?? t("ide.git.mergeAbortFailed"));
+        prependLog({ op: "mergeAbort", status: "failure", message: res.error });
+      } else {
+        prependLog({ op: "mergeAbort", status: "success" });
+        setConflictFiles(null);
+        await refresh();
+      }
+    } catch (err) {
+      const msg = (err as Error).message ?? t("ide.git.mergeAbortFailed");
+      setError(msg);
+      prependLog({ op: "mergeAbort", status: "failure", message: msg });
+    } finally {
+      setAborting(false);
+    }
+  };
 
   /** Filtered branch groups for the search box (matches name or commit subject). */
   const filteredBranches = useMemo(() => {
@@ -424,6 +521,8 @@ export function GitRepoCard({ repo }: { repo: GitRepo }) {
       } else if (res.conflict && res.conflictedFiles && res.conflictedFiles.length > 0) {
         // Pull succeeded but left a merge conflict. Offer AI resolution via a
         // confirmation dialog instead of just a red banner.
+        setConflictSource("pull");
+        setConflictBranch(null);
         setConflictFiles(res.conflictedFiles);
       } else {
         prependLog({ op: "pull", status: "success" });
@@ -532,7 +631,13 @@ export function GitRepoCard({ repo }: { repo: GitRepo }) {
         </div>
         {/* Row 2: branch + ahead/behind + remote actions. */}
         <div className="flex items-center gap-1.5">
-          <Menu.Root onOpenChange={(open) => open && void loadBranches()}>
+          <Menu.Root
+            open={branchMenuOpen}
+            onOpenChange={(open) => {
+              setBranchMenuOpen(open);
+              if (open) void loadBranches();
+            }}
+          >
             <Menu.Trigger
               className={cn(
                 "flex shrink-0 items-center gap-0.5 rounded bg-surface-muted px-1.5 py-0.5 font-mono [font-size:var(--rp-fs-xxs)] text-content-muted transition-colors",
@@ -612,6 +717,7 @@ export function GitRepoCard({ repo }: { repo: GitRepo }) {
                             items={filteredBranches.local}
                             localNames={new Set(filteredBranches.local.map((b) => b.name))}
                             onCheckout={handleCheckout}
+                            onMerge={openMergeDialog}
                           />
                         )}
                         {filteredBranches.remote.length > 0 && (
@@ -620,6 +726,7 @@ export function GitRepoCard({ repo }: { repo: GitRepo }) {
                             items={filteredBranches.remote}
                             localNames={new Set(filteredBranches.local.map((b) => b.name))}
                             onCheckout={handleCheckout}
+                            onMerge={openMergeDialog}
                           />
                         )}
                         {filteredBranches.tags.length > 0 && (
@@ -784,7 +891,12 @@ export function GitRepoCard({ repo }: { repo: GitRepo }) {
               <div className="min-w-0 flex-1">
                 <Dialog.Title>{t("ide.git.conflictTitle")}</Dialog.Title>
                 <Dialog.Description className="mt-1">
-                  {t("ide.git.conflictDesc", { n: conflictFiles?.length ?? 0 })}
+                  {conflictSource === "merge" && conflictBranch
+                    ? t("ide.git.conflictDescMerge", {
+                        source: conflictBranch,
+                        n: conflictFiles?.length ?? 0,
+                      })
+                    : t("ide.git.conflictDesc", { n: conflictFiles?.length ?? 0 })}
                 </Dialog.Description>
                 {conflictFiles && conflictFiles.length > 0 && (
                   <div className="mt-2 max-h-28 overflow-y-auto rounded-md border border-edge bg-surface-muted px-2 py-1.5">
@@ -809,14 +921,27 @@ export function GitRepoCard({ repo }: { repo: GitRepo }) {
                 )}
               </div>
             </div>
-            <div className="mt-4 flex justify-end gap-2">
-              <Button variant="ghost" size="sm" onClick={() => setConflictFiles(null)} disabled={resolving}>
-                {t("ide.git.resolveLater")}
+            <div className="mt-4 flex items-center justify-between gap-2">
+              {/* Escape hatch: unwind the whole merge back to the pre-merge
+                  state (git merge --abort). One click, no terminal needed. */}
+              <Button
+                variant="danger"
+                size="sm"
+                onClick={handleMergeAbort}
+                disabled={resolving || aborting}
+              >
+                {aborting ? <IconLoader2 size={12} className="animate-spin" /> : <IconX size={12} />}
+                {t("ide.git.mergeAbort")}
               </Button>
-              <Button size="sm" onClick={handleResolveConflicts} disabled={resolving || !conflictResolveModel}>
-                {resolving ? <IconLoader2 size={12} className="animate-spin" /> : <IconSparkles size={12} />}
-                {t("ide.git.resolveWithAi")}
-              </Button>
+              <div className="flex justify-end gap-2">
+                <Button variant="ghost" size="sm" onClick={() => setConflictFiles(null)} disabled={resolving}>
+                  {t("ide.git.resolveLater")}
+                </Button>
+                <Button size="sm" onClick={handleResolveConflicts} disabled={resolving || !conflictResolveModel}>
+                  {resolving ? <IconLoader2 size={12} className="animate-spin" /> : <IconSparkles size={12} />}
+                  {t("ide.git.resolveWithAi")}
+                </Button>
+              </div>
             </div>
             <Dialog.Close />
           </Dialog.Popup>
@@ -850,6 +975,97 @@ export function GitRepoCard({ repo }: { repo: GitRepo }) {
               <Button size="sm" onClick={handleCreateBranch} disabled={!newBranchName.trim() || checkingOut}>
                 {checkingOut ? <IconLoader2 size={12} className="animate-spin" /> : <IconPlus size={12} />}
                 {t("ide.git.createAndSwitch")}
+              </Button>
+            </div>
+            <Dialog.Close />
+          </Dialog.Popup>
+        </Dialog.Portal>
+      </Dialog.Root>
+
+      {/* ── Merge-branch confirm dialog ──
+          Direction is FIXED (source → current branch) and stated in plain
+          words — the classic merge usability trap is getting the direction
+          backwards. The preview fetched on open tells the user what will
+          happen (incoming commits / fast-forward / nothing to do) BEFORE the
+          button becomes worth clicking. */}
+      <Dialog.Root
+        open={mergeTarget !== null}
+        onOpenChange={(open) => {
+          if (!open && !merging) setMergeTarget(null);
+        }}
+      >
+        <Dialog.Portal>
+          <Dialog.Backdrop />
+          <Dialog.Popup className="w-[400px] max-w-[90vw] p-4">
+            <div className="flex items-start gap-3 pr-6">
+              <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-accent/10 text-accent">
+                <IconGitMerge size={16} />
+              </span>
+              <div className="min-w-0 flex-1">
+                <Dialog.Title>{t("ide.git.mergeBranch")}</Dialog.Title>
+                <Dialog.Description className="mt-1">
+                  {t("ide.git.mergeDesc", {
+                    source: mergeTarget?.name ?? "",
+                    target: status?.branch || "HEAD",
+                  })}
+                </Dialog.Description>
+                <div className="mt-2 space-y-1 text-[11px]">
+                  {mergePreviewLoading ? (
+                    <div className="flex items-center gap-1.5 text-content-subtle">
+                      <IconLoader2 size={12} className="animate-spin" />
+                      {t("common.loading")}
+                    </div>
+                  ) : mergePreviewData?.ok ? (
+                    mergePreviewData.upToDate ? (
+                      <div className="flex items-center gap-1.5 text-content-subtle">
+                        <IconCheck size={12} className="shrink-0 text-accent" />
+                        {t("ide.git.mergeUpToDate")}
+                      </div>
+                    ) : (
+                      <>
+                        <div className="flex items-center gap-1.5 text-content-muted">
+                          <IconGitCommit size={12} className="shrink-0 text-content-subtle" />
+                          {t("ide.git.mergeIncoming", { n: mergePreviewData.incomingCommits })}
+                        </div>
+                        {mergePreviewData.fastForward && (
+                          <div className="flex items-center gap-1.5 text-content-muted">
+                            <IconChevronDown size={12} className="shrink-0 text-info" />
+                            {t("ide.git.mergeFastForward")}
+                          </div>
+                        )}
+                      </>
+                    )
+                  ) : (
+                    <div className="flex items-start gap-1.5 text-danger">
+                      <IconAlertTriangle size={12} className="mt-0.5 shrink-0" />
+                      <span className="break-words">
+                        {mergePreviewData?.error ?? t("ide.git.mergePreviewFailed")}
+                      </span>
+                    </div>
+                  )}
+                  {/* Dirty working tree: git may refuse the merge (or mix in
+                      uncommitted content). Warn loudly but don't block —
+                      git itself rejects unsafe merges. */}
+                  {(status?.files.length ?? 0) > 0 && (
+                    <div className="flex items-start gap-1.5 text-warning">
+                      <IconAlertTriangle size={12} className="mt-0.5 shrink-0" />
+                      {t("ide.git.mergeDirty")}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+            <div className="mt-4 flex justify-end gap-2">
+              <Button variant="ghost" size="sm" onClick={() => setMergeTarget(null)} disabled={merging}>
+                {t("common.cancel")}
+              </Button>
+              <Button
+                size="sm"
+                onClick={handleMerge}
+                disabled={merging || mergePreviewLoading || !mergePreviewData?.ok || mergePreviewData.upToDate}
+              >
+                {merging ? <IconLoader2 size={12} className="animate-spin" /> : <IconGitMerge size={12} />}
+                {t("ide.git.merge")}
               </Button>
             </div>
             <Dialog.Close />
@@ -1132,6 +1348,7 @@ function BranchGroup({
   items,
   localNames,
   onCheckout,
+  onMerge,
   icon,
 }: {
   label: string;
@@ -1140,8 +1357,13 @@ function BranchGroup({
    *  for remote refs. */
   localNames: Set<string>;
   onCheckout: (branch: string, newBranch?: string) => void;
+  /** When provided, non-current local/remote rows get a hover "merge into
+   *  current branch" action. Tags are excluded (merging a tag is rare and
+   *  would clutter the row). */
+  onMerge?: (b: GitBranchInfo) => void;
   icon?: React.ReactNode;
 }) {
+  const { t } = useI18n();
   const handleClick = (b: GitBranchInfo) => {
     if (b.current) return;
     if (b.type === "remote") {
@@ -1166,7 +1388,7 @@ function BranchGroup({
           key={`${b.type}/${b.name}`}
           onClick={() => handleClick(b)}
           className={cn(
-            "flex w-full items-center gap-1.5 px-2 py-1 text-left text-[11px] outline-none select-none",
+            "group flex w-full items-center gap-1.5 px-2 py-1 text-left text-[11px] outline-none select-none",
             "data-[highlighted]:bg-surface-muted",
             b.current ? "text-accent" : "text-content-muted",
           )}
@@ -1174,9 +1396,31 @@ function BranchGroup({
           <span className="shrink-0 opacity-80">{icon ?? <IconGitBranch size={11} />}</span>
           <span className="min-w-0 flex-1 truncate font-mono">{b.name}</span>
           {b.label && (
-            <span className="min-w-0 max-w-[120px] truncate text-[10px] text-content-subtle" title={b.label}>
+            <span
+              className="min-w-0 max-w-[120px] truncate text-[10px] text-content-subtle group-hover:opacity-0"
+              title={b.label}
+            >
               {b.label}
             </span>
+          )}
+          {/* Hover "merge into current branch" — fades in where the subject
+              label was. stopPropagation keeps the click from also activating
+              the surrounding checkout menu item. */}
+          {!b.current && b.type !== "tag" && onMerge && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onMerge(b);
+              }}
+              title={t("ide.git.mergeIntoBranch")}
+              className={cn(
+                "flex h-5 w-5 shrink-0 items-center justify-center rounded text-content-subtle transition-opacity",
+                "opacity-0 hover:bg-surface-hover hover:text-accent group-hover:opacity-100",
+              )}
+            >
+              <IconGitMerge size={11} />
+            </button>
           )}
           {b.current && <IconCheck size={11} className="shrink-0" />}
         </Menu.Item>

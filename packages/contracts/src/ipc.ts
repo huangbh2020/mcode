@@ -1626,6 +1626,26 @@ export const FileRenameSchema = z.object({
 });
 export type FileRenameInput = z.infer<typeof FileRenameSchema>;
 
+/** Copy a file into a target directory (file-tree "复制/粘贴" pair). Both the
+ *  source file and the destination directory must resolve inside known project
+ *  roots; directories cannot be copied through this channel. If the plain
+ *  destination name already exists the handler derives a free name by appending
+ *  `suffix` (locale word for "copy", e.g. "副本"/"copy") and a counter — paste
+ *  never overwrites. On refusal or failure `ok` is false and the handler logs.
+ *  Returns `{ ok }`. */
+export const FileCopySchema = z.object({
+  /** Absolute path of the file to copy. Must resolve inside a known project
+   *  root and be a regular file (not a directory). */
+  srcPath: z.string(),
+  /** Absolute path of the directory to copy into. Must resolve inside a known
+   *  project root. */
+  destDir: z.string(),
+  /** Locale word used when deriving a clash-free name ("副本" / "copy").
+   *  Defaults to "copy" when omitted. */
+  suffix: z.string().optional(),
+});
+export type FileCopyInput = z.infer<typeof FileCopySchema>;
+
 /** Native multi-file picker (project-external files allowed). Used by the
  *  composer "添加上下文" button to attach files that live outside the active
  *  project root — unlike the project-scoped `file.search`, this surfaces any
@@ -2026,6 +2046,50 @@ export const GitCheckoutSchema = z.object({
     .optional(),
 });
 export type GitCheckoutInput = z.infer<typeof GitCheckoutSchema>;
+
+/* ── Git branch merge ── */
+
+/** Input for `git.mergePreview` / `git.merge`: merge `source` INTO the
+ *  currently checked-out branch (HEAD). `source` may be a local branch, a
+ *  remote-tracking ref (`origin/foo`) or any safe ref — same charset
+ *  restriction as `GitCheckoutSchema.branch`. The merge direction is fixed
+ *  (source → current branch) so the UI can always state it unambiguously. */
+export const GitMergeSchema = z.object({
+  repoPath: z.string(),
+  source: z.string().regex(/^[A-Za-z0-9._/\-@^{}~]+$/, "invalid git ref"),
+});
+export type GitMergeInput = z.infer<typeof GitMergeSchema>;
+
+/** Preview of a pending merge, computed WITHOUT touching the working tree
+ *  (a single `git rev-list --left-right --count HEAD...source`). Feeds the
+ *  confirm dialog: how many commits would come in, whether the merge would
+ *  fast-forward, and whether it would be a no-op. */
+export interface GitMergePreviewResult {
+  ok: boolean;
+  error?: string;
+  /** True when HEAD already contains every commit of `source` — nothing to do. */
+  upToDate: boolean;
+  /** True when the merge can fast-forward (HEAD has no commits `source` lacks). */
+  fastForward: boolean;
+  /** Commits reachable from `source` but not from HEAD. */
+  incomingCommits: number;
+}
+
+/** Result of `git.merge`. Mirrors `GitOpResult`'s conflict shape (pull parity)
+ *  and adds merge-specific metadata for the UI's post-merge feedback. */
+export interface GitMergeResult {
+  ok: boolean;
+  error?: string;
+  /** Set when the merge stopped with conflicts. The repo is left in a merging
+   *  state (MERGE_HEAD present); `git.mergeAbort` can unwind it to the
+   *  pre-merge state. */
+  conflict?: boolean;
+  conflictedFiles?: string[];
+  /** True when HEAD already contained everything (no merge was executed). */
+  upToDate?: boolean;
+  /** True when the merge fast-forwarded (no merge commit was created). */
+  fastForward?: boolean;
+}
 
 /* ── Skill discovery (composer slash-command menu) ──
  *  The composer's `/` menu lists skills discovered by scanning the local
@@ -3333,6 +3397,7 @@ export interface RpcMap {
   "file.delete": (input: FileDeleteInput) => Promise<{ ok: boolean }>;
   /** Rename a file or directory in place, scoped to a project root. */
   "file.rename": (input: FileRenameInput) => Promise<{ ok: boolean }>;
+  "file.copy": (input: FileCopyInput) => Promise<{ ok: boolean }>;
   /** Grep file contents under a project root (line-level matches). */
   "file.grep": (input: FileGrepInput) => Promise<FileGrepResult>;
   /** ripgrep availability snapshot (drives the search-dialog install banner). */
@@ -3378,6 +3443,15 @@ export interface RpcMap {
   /** Check out a branch / tag / ref. With `newBranch`, creates a new local
    *  branch from the target and checks it out (tracking branch or new branch). */
   "git.checkout": (input: GitCheckoutInput) => Promise<GitOpResult>;
+  /** Preview a merge of `source` into the current branch without touching the
+   *  working tree (incoming commit count / fast-forward / up-to-date). */
+  "git.mergePreview": (input: GitMergeInput) => Promise<GitMergePreviewResult>;
+  /** Merge `source` into the current branch. Conflicts are reported via
+   *  `conflict` + `conflictedFiles` (same shape as git.pull). */
+  "git.merge": (input: GitMergeInput) => Promise<GitMergeResult>;
+  /** Abort an in-progress merge (`git merge --abort`). Fails when the repo is
+   *  not in a merging state. */
+  "git.mergeAbort": (input: GitRepoPathInput) => Promise<GitOpResult>;
   // Integrated terminal (P4 IDE right panel)
   /** Spawn a PTY in the project cwd (or a subdir). */
   "terminal.create": (input: TerminalCreateInput) => Promise<TerminalCreateResult>;
@@ -3697,6 +3771,8 @@ export const IPC = {
   FILE_DELETE: "file:delete",
   // Rename a file or directory in place (file-tree "重命名")
   FILE_RENAME: "file:rename",
+  // Copy a file into a directory (file-tree "复制" + "粘贴" pair)
+  FILE_COPY: "file:copy",
   FILE_GREP: "file:grep",
   RG_STATUS: "rg:status",
   RG_INSTALL: "rg:install",
@@ -3718,6 +3794,9 @@ export const IPC = {
   GIT_SHOW_FILE: "git:showFile",
   GIT_LIST_BRANCHES: "git:listBranches",
   GIT_CHECKOUT: "git:checkout",
+  GIT_MERGE_PREVIEW: "git:mergePreview",
+  GIT_MERGE: "git:merge",
+  GIT_MERGE_ABORT: "git:mergeAbort",
   // Integrated terminal (P4 IDE right panel)
   TERMINAL_CREATE: "terminal:create",
   TERMINAL_WRITE: "terminal:write",

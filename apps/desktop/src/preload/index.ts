@@ -234,6 +234,9 @@ const api = {
     /** Rename a file or directory in place. Returns ok. */
     rename: ((input) =>
       ipcRenderer.invoke(IPC.FILE_RENAME, input)) as RpcMap["file.rename"],
+    /** Copy a file into a directory (auto-renames on name clash). Returns ok. */
+    copy: ((input) =>
+      ipcRenderer.invoke(IPC.FILE_COPY, input)) as RpcMap["file.copy"],
   },
 
   /** ripgrep availability + one-click install (search dialog banner). */
@@ -293,6 +296,12 @@ const api = {
       ipcRenderer.invoke(IPC.GIT_LIST_BRANCHES, input)) as RpcMap["git.listBranches"],
     checkout: ((input) =>
       ipcRenderer.invoke(IPC.GIT_CHECKOUT, input)) as RpcMap["git.checkout"],
+    mergePreview: ((input) =>
+      ipcRenderer.invoke(IPC.GIT_MERGE_PREVIEW, input)) as RpcMap["git.mergePreview"],
+    merge: ((input) =>
+      ipcRenderer.invoke(IPC.GIT_MERGE, input)) as RpcMap["git.merge"],
+    mergeAbort: ((input) =>
+      ipcRenderer.invoke(IPC.GIT_MERGE_ABORT, input)) as RpcMap["git.mergeAbort"],
   },
 
   /** Integrated terminal (xterm in renderer ↔ node-pty in main). Paths on

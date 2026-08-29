@@ -19,10 +19,11 @@
  *  - `file:mkdir`     — recursive directory creation (file-tree 新建文件夹)
  *  - `file:delete`    — trash a file or directory (file-tree 删除, recoverable)
  *  - `file:rename`    — in-place rename, same parent dir (file-tree 重命名)
+ *  - `file:copy`      — copy a file into a dir, auto-rename on clash (file-tree 复制/粘贴)
  */
 import type { IpcMain } from "electron";
 import { app, clipboard, nativeImage, shell } from "electron";
-import { readFile, writeFile, readdir, mkdir, rename, access, stat } from "node:fs/promises";
+import { readFile, writeFile, readdir, mkdir, rename, copyFile, access, stat } from "node:fs/promises";
 import { TextDecoder } from "node:util";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import {
@@ -35,6 +36,7 @@ import {
   FileMkdirSchema,
   FileDeleteSchema,
   FileRenameSchema,
+  FileCopySchema,
   FileGrepSchema,
   ClipboardSaveFileSchema,
   ClipboardWriteImageSchema,
@@ -791,6 +793,81 @@ export function registerFileHandlers(ipcMain: IpcMain): void {
     } catch (err) {
       log.error(
         `file.rename failed for ${input.oldPath} -> ${input.newPath}: ${(err as Error).message}`,
+      );
+      return { ok: false };
+    }
+  });
+
+  /* ── file:copy — copy a file into a directory, auto-renaming on clash ── */
+  // File-tree "复制/粘贴" pair: the renderer stashes the copied file's path in
+  // its own UI state and later pastes it into a directory via this channel.
+  // Both paths must resolve inside known project roots; only regular files
+  // are copyable. The destination never overwrites: if the plain name is
+  // taken, "name 副本.ext" (suffix supplied by the renderer, locale-aware),
+  // then "name 副本 2.ext", … until a free name is found. Pasting into the
+  // file's own directory therefore doubles as "duplicate in place".
+  ipcMain.handle(IPC.FILE_COPY, async (_evt, raw) => {
+    const input = FileCopySchema.parse(raw);
+    const srcRoot = ProjectRepo.listPaths().find((p) => pathWithin(p, input.srcPath));
+    if (!srcRoot) {
+      log.warn(`file.copy refused — srcPath outside any project root: ${input.srcPath}`);
+      return { ok: false };
+    }
+    const destRoot = ProjectRepo.listPaths().find((p) => pathWithin(p, input.destDir));
+    if (!destRoot) {
+      log.warn(`file.copy refused — destDir outside any project root: ${input.destDir}`);
+      return { ok: false };
+    }
+    try {
+      // Source must be an existing regular file; directories are out of scope.
+      const st = await stat(input.srcPath);
+      if (!st.isFile()) {
+        log.warn(`file.copy refused — not a regular file: ${input.srcPath}`);
+        return { ok: false };
+      }
+      // Destination must be an existing directory (the tree node it came from).
+      const dst = await stat(input.destDir);
+      if (!dst.isDirectory()) {
+        log.warn(`file.copy refused — destDir is not a directory: ${input.destDir}`);
+        return { ok: false };
+      }
+      const name = basename(input.srcPath);
+      const suffix = input.suffix?.trim() || "copy";
+      const dot = name.lastIndexOf(".");
+      const stem = dot > 0 ? name.slice(0, dot) : name;
+      const ext = dot > 0 ? name.slice(dot) : "";
+      // Derive a free destination name: plain, then "stem suffix.ext", then
+      // "stem suffix 2.ext", … — access() ENOENT means the name is free.
+      // If the probe budget runs out, fail rather than overwrite the last
+      // candidate (copyFile without COPYFILE_EXCL would clobber it).
+      let target = join(input.destDir, name);
+      let free = false;
+      for (let i = 1; i <= 1000; i++) {
+        try {
+          await access(target);
+        } catch (probeErr) {
+          const code = (probeErr as NodeJS.ErrnoException).code;
+          if (code === "ENOENT") {
+            free = true;
+            break; // Free name found.
+          }
+          throw probeErr; // EACCES etc. — the copy would fail anyway.
+        }
+        const counter = i === 1 ? "" : ` ${i}`;
+        target = join(input.destDir, `${stem} ${suffix}${counter}${ext}`);
+      }
+      if (!free) {
+        log.warn(`file.copy refused — no free name under: ${input.destDir}`);
+        return { ok: false };
+      }
+      await copyFile(input.srcPath, target);
+      log.info(
+        `file.copy: ${relative(srcRoot, input.srcPath) || input.srcPath} -> ${relative(destRoot, target) || target}`,
+      );
+      return { ok: true };
+    } catch (err) {
+      log.error(
+        `file.copy failed for ${input.srcPath} -> ${input.destDir}: ${(err as Error).message}`,
       );
       return { ok: false };
     }
