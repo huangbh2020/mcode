@@ -2134,9 +2134,12 @@ export interface SkillInfo {
 }
 
 /** List skills for a project root. `projectPath` must match a persisted
- *  Project.path (main cross-checks, same containment guard as file ops). */
+ * Project.path (main cross-checks, same containment guard as file ops); it is
+ * optional — when omitted, only the user-global root (~/.mcode/skills) is
+ * scanned (the settings panel's "no projects yet" state still lists global
+ * skills). */
 export const SkillsListSchema = z.object({
-  projectPath: z.string(),
+  projectPath: z.string().optional(),
 });
 export type SkillsListInput = z.infer<typeof SkillsListSchema>;
 
@@ -2147,11 +2150,14 @@ const SKILL_NAME_RE = /^[A-Za-z0-9_-]+$/;
 
 /** Read one skill's full SKILL.md source. Returns the complete file text (no
  *  truncation — skills can be large). A missing file resolves to empty
- *  content so the editor opens cleanly for a not-yet-written skill. */
+ *  content so the editor opens cleanly for a not-yet-written skill.
+ *  `projectPath` is only required for `source: "project"` (it must match a
+ *  persisted Project.path); global skills resolve without it. */
 export const SkillsReadSchema = z.object({
   /** Project root (must match a persisted Project.path). Only used to verify
-   *  the caller's identity; the skill itself is resolved by `source` + `name`. */
-  projectPath: z.string(),
+   *  the caller's identity when source is "project"; the skill itself is
+   *  resolved by `source` + `name`. */
+  projectPath: z.string().optional(),
   /** Which skills root to read from: user-global or the active project. */
   source: z.enum(["global", "project"]),
   /** Skill name (= directory name under <root>/.claude/skills/). */
@@ -2162,9 +2168,12 @@ export type SkillsReadInput = z.infer<typeof SkillsReadSchema>;
 /** Write (create or overwrite) a skill's SKILL.md. Creates the skill directory
  *  if absent; always writes the full file content (complete overwrite).
  *  `newName` is reserved for future rename support (when set and differs from
- *  `name`, the skill directory is moved first); v1 UI leaves it unset. */
+ *  `name`, the skill directory is moved first); v1 UI leaves it unset.
+ *  `projectPath` is only required for `source: "project"`; a global skill can
+ *  be created even when no project exists at all (settings panel's
+ *  "no projects yet" state). */
 export const SkillsSaveSchema = z.object({
-  projectPath: z.string(),
+  projectPath: z.string().optional(),
   source: z.enum(["global", "project"]),
   name: z.string().regex(SKILL_NAME_RE, "invalid skill name"),
   /** Full SKILL.md text (frontmatter + body). Written verbatim. */
@@ -2175,9 +2184,10 @@ export type SkillsSaveInput = z.infer<typeof SkillsSaveSchema>;
 
 /** Delete a skill directory. For a symlinked skill only the link is removed
  *  (the target - e.g. a gstack checkout - is left intact); for a real
- *  directory the whole skill folder is removed recursively. */
+ *  directory the whole skill folder is removed recursively. `projectPath` is
+ *  only required for `source: "project"`. */
 export const SkillsDeleteSchema = z.object({
-  projectPath: z.string(),
+  projectPath: z.string().optional(),
   source: z.enum(["global", "project"]),
   name: z.string().regex(SKILL_NAME_RE, "invalid skill name"),
 });

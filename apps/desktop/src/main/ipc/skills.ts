@@ -358,21 +358,20 @@ async function scanZcodePluginSkillDirs(): Promise<string[]> {
 }
 
 /** Shared skills-list core — used by both the desktop IPC handler and the
- *  mobile RPC whitelist. Containment guard: projectPath must be a persisted
- *  Project root, otherwise returns []. */
-export async function listSkillsForProject(projectPath: string): Promise<SkillInfo[]> {
-  const project = findKnownProject(projectPath);
-  if (!project) {
-    return [];
-  }
-  const globalDir = resolveSkillRoot("global", project.path);
-  const projectDir = resolveSkillRoot("project", project.path);
+ *  mobile RPC whitelist. `projectPath` is optional: when omitted (or when it
+ *  isn't a persisted Project root), only the user-global root is scanned —
+ *  the settings panel relies on this to list global skills even with no
+ *  projects at all. */
+export async function listSkillsForProject(projectPath: string | undefined): Promise<SkillInfo[]> {
+  const project = projectPath ? findKnownProject(projectPath) : null;
 
   const byName = new Map<string, SkillInfo>();
   try {
     // Global first, then project — so project entries override.
-    await scanSkillsRoot(globalDir, "global", byName);
-    await scanSkillsRoot(projectDir, "project", byName);
+    await scanSkillsRoot(resolveSkillRoot("global", ""), "global", byName);
+    if (project) {
+      await scanSkillsRoot(resolveSkillRoot("project", project.path), "project", byName);
+    }
   } catch (err) {
     // Should be unreachable (scanSkillsRoot never throws), but be defensive:
     // a broken skills dir must never break the composer.
@@ -387,16 +386,16 @@ export async function listSkillsForProject(projectPath: string): Promise<SkillIn
 }
 
 /** Shared skills-read core — used by both the desktop IPC handler and the
- *  mobile RPC whitelist. Returns "" when the project is unknown or the skill
- *  dir escapes the skills root. */
+ *  mobile RPC whitelist. `projectPath` is only required for project-scoped
+ *  skills; global skills resolve without it. Returns "" when a project skill
+ *  is requested with no/unknown project or the skill dir escapes the root. */
 export async function readSkillForProject(
-  projectPath: string,
+  projectPath: string | undefined,
   source: SkillSource,
   name: string,
 ): Promise<string> {
-  const project = findKnownProject(projectPath);
-  if (!project) return "";
-  const root = resolveSkillRoot(source, project.path);
+  const root = resolveSkillRootForRequest(source, projectPath);
+  if (!root) return "";
   const skillDir = path.join(root, name);
   // Containment guard: the resolved skill dir must stay inside the root.
   if (!pathWithin(root, skillDir)) return "";
@@ -406,6 +405,23 @@ export async function readSkillForProject(
     // Missing file (e.g. a skill dir without SKILL.md) → empty editor.
     return "";
   }
+}
+
+/** Resolve the skills root for a read/save/delete request, or null when the
+ *  request is invalid: project-scoped ops need a persisted Project root,
+ *  global ops never look at projectPath. Centralizes the source-dependent
+ *  project guard the three mutation/read handlers share. */
+function resolveSkillRootForRequest(
+  source: SkillSource,
+  projectPath: string | undefined,
+): string | null {
+  if (source === "global") {
+    return resolveSkillRoot("global", "");
+  }
+  if (!projectPath) return null;
+  const project = findKnownProject(projectPath);
+  if (!project) return null;
+  return resolveSkillRoot("project", project.path);
 }
 
 export function registerSkillsHandlers(ipcMain: IpcMain): void {
@@ -425,9 +441,8 @@ export function registerSkillsHandlers(ipcMain: IpcMain): void {
   // ── Create or overwrite a skill's SKILL.md ──
   ipcMain.handle(IPC.SKILLS_SAVE, async (_evt, raw) => {
     const input = SkillsSaveSchema.parse(raw);
-    const project = findKnownProject(input.projectPath);
-    if (!project) return { ok: false, error: "未知的项目路径" };
-    const root = resolveSkillRoot(input.source, project.path);
+    const root = resolveSkillRootForRequest(input.source, input.projectPath);
+    if (!root) return { ok: false, error: "未知的项目路径" };
     const skillDir = path.join(root, input.name);
     if (!pathWithin(root, skillDir)) {
       return { ok: false, error: "无效的 skill 路径" };
@@ -458,9 +473,8 @@ export function registerSkillsHandlers(ipcMain: IpcMain): void {
   // ── Delete a skill directory ──
   ipcMain.handle(IPC.SKILLS_DELETE, async (_evt, raw) => {
     const input = SkillsDeleteSchema.parse(raw);
-    const project = findKnownProject(input.projectPath);
-    if (!project) return { ok: false, error: "未知的项目路径" };
-    const root = resolveSkillRoot(input.source, project.path);
+    const root = resolveSkillRootForRequest(input.source, input.projectPath);
+    if (!root) return { ok: false, error: "未知的项目路径" };
     const skillDir = path.join(root, input.name);
     if (!pathWithin(root, skillDir)) {
       return { ok: false, error: "无效的 skill 路径" };

@@ -6,9 +6,11 @@
  * global skills (~/.mcode/skills, Mcode's own CLAUDE_CONFIG_DIR). Global skills
  * are populated by the "Import" feature, which scans external tools (Claude
  * Code, Codex, Zcode) and copies selected skills into ~/.mcode/skills so they
- * become available to the SDK (including under custom endpoints). Both kinds
- * can be viewed, edited, and deleted here; new skills are created as
- * project-scoped only.
+ * become available to the SDK (including under custom endpoints) — or created
+ * directly via the new-skill form's scope selector. Both kinds can be viewed,
+ * edited, and deleted here. With no project at all, the panel degrades to
+ * global-only management (list / create / edit / delete all work without a
+ * projectPath).
  *
  * ## Layout
  *
@@ -17,7 +19,7 @@
  *   │ • pdf       [全局]      │  - editing existing -             │
  *   │ • my-skill  [项目]      │  full SKILL.md source textarea    │
  *   │ + 新建 Skill            │  - or creating new -              │
- *   │ + 导入 Skill            │  name / description / body        │
+ *   │ + 导入 Skill            │  scope / name / description / body│
  *   └─────────────────────────┤  · 保存/删除                      │
  *                              └───────────────────────────────────┘
  *
@@ -76,13 +78,17 @@ type Selection =
   | null;
 
 interface NewForm {
+  /** Where the skill will be created: project dir or the global ~/.mcode/skills.
+   *  Defaults to "project" (current behavior); forced to "global" when no
+   *  project exists at all (the only creatable scope then). */
+  scope: SkillSource;
   name: string;
   description: string;
   body: string;
 }
 
-function emptyNewForm(): NewForm {
-  return { name: "", description: "", body: "" };
+function emptyNewForm(scope: SkillSource): NewForm {
+  return { scope, name: "", description: "", body: "" };
 }
 
 /** Selection key for a SkillInfo — stable identity across reloads. */
@@ -114,16 +120,18 @@ export function SkillsPanel() {
   const [listLoading, setListLoading] = useState(false);
 
   const loadPanelSkills = useCallback(async () => {
-    if (!projectPath) {
-      setPanelSkills(EMPTY_PANEL_SKILLS);
-      return;
-    }
     setListLoading(true);
     try {
-      const { skills } = await api.skills.list({ projectPath });
+      // Without a project (no projects exist at all), list global skills only —
+      // projectPath is optional in the contract and main scans ~/.mcode/skills
+      // alone when it's absent.
+      const { skills } = await api.skills.list(
+        projectPath ? { projectPath } : {},
+      );
       // Show both project-scoped and global skills. Global skills live under
-      // ~/.mcode/skills (populated by the Import feature) and are editable/
-      // deletable here the same way project skills are.
+      // ~/.mcode/skills (populated by the Import feature or the new-skill
+      // form's global scope) and are editable/deletable here the same way
+      // project skills are.
       setPanelSkills(skills.length ? skills : EMPTY_PANEL_SKILLS);
     } catch (err) {
       console.error("SkillsPanel load failed:", err);
@@ -171,7 +179,6 @@ export function SkillsPanel() {
   }, [loadPanelSkills, managedProjectId, activeProjectId, reloadSkills]);
 
   const startEdit = async (skill: SkillInfo) => {
-    if (!projectPath) return;
     setSelected({ kind: "skill", source: skill.source, name: skill.name });
     setNewForm(null);
     setError(null);
@@ -179,7 +186,7 @@ export function SkillsPanel() {
     setEditContent(null);
     try {
       const { content } = await api.skills.read({
-        projectPath,
+        projectPath: projectPath ?? undefined,
         source: skill.source,
         name: skill.name,
       });
@@ -194,7 +201,8 @@ export function SkillsPanel() {
 
   const startAdd = () => {
     setSelected({ kind: "new" });
-    setNewForm(emptyNewForm());
+    // Default scope: the managed project; global-only when there is none.
+    setNewForm(emptyNewForm(projectPath ? "project" : "global"));
     setEditContent(null);
     setError(null);
   };
@@ -208,12 +216,12 @@ export function SkillsPanel() {
 
   const saveEdit = async () => {
     const sel = selected;
-    if (!projectPath || !sel || sel.kind !== "skill" || editContent === null) return;
+    if (!sel || sel.kind !== "skill" || editContent === null) return;
     setSaving(true);
     setError(null);
     try {
       const res = await api.skills.save({
-        projectPath,
+        projectPath: projectPath ?? undefined,
         source: sel.source,
         name: sel.name,
         content: editContent,
@@ -232,7 +240,9 @@ export function SkillsPanel() {
 
   const saveNew = async () => {
     const sel = selected;
-    if (!projectPath || !sel || sel.kind !== "new" || !newForm) return;
+    if (!sel || sel.kind !== "new" || !newForm) return;
+    // A project-scoped creation needs a project; global works without one.
+    if (newForm.scope === "project" && !projectPath) return;
     const name = newForm.name.trim();
     if (!SKILL_NAME_RE.test(name)) {
       setError(t("settings.nameCharsError"));
@@ -250,8 +260,8 @@ export function SkillsPanel() {
     setError(null);
     try {
       const res = await api.skills.save({
-        projectPath,
-        source: "project",
+        projectPath: projectPath ?? undefined,
+        source: newForm.scope,
         name,
         content,
       });
@@ -261,7 +271,7 @@ export function SkillsPanel() {
       }
       await refreshAfterMutation();
       // Land on the freshly created skill so the user sees it selected.
-      setSelected({ kind: "skill", source: "project", name });
+      setSelected({ kind: "skill", source: newForm.scope, name });
       setNewForm(null);
       setEditContent(content);
     } catch (err) {
@@ -273,10 +283,10 @@ export function SkillsPanel() {
 
   const confirmDelete = async () => {
     const target = pendingDelete;
-    if (!projectPath || !target) return;
+    if (!target) return;
     try {
       const res = await api.skills.delete({
-        projectPath,
+        projectPath: projectPath ?? undefined,
         source: target.source,
         name: target.name,
       });
@@ -429,7 +439,7 @@ export function SkillsPanel() {
               variant="ghost"
               size="sm"
               onClick={startAdd}
-              disabled={selected?.kind === "new" || !projectPath}
+              disabled={selected?.kind === "new"}
               className="w-full justify-center gap-1"
             >
               <IconPlus size={12} />
@@ -455,6 +465,7 @@ export function SkillsPanel() {
             <NewSkillForm
               form={newForm}
               setForm={setNewForm}
+              canUseProject={!!projectPath}
               saving={saving}
               error={error}
               onSave={() => void saveNew()}
@@ -601,10 +612,14 @@ function SkillSourceEditor({
   );
 }
 
-/** Structured form for creating a new skill (name / description / body). */
+/** Structured form for creating a new skill (scope / name / description /
+ *  body). The scope selector picks between the managed project and the global
+ *  ~/.mcode/skills root; the project option is disabled when no project
+ *  exists (the form then locks to global). */
 function NewSkillForm({
   form,
   setForm,
+  canUseProject,
   saving,
   error,
   onSave,
@@ -612,6 +627,9 @@ function NewSkillForm({
 }: {
   form: NewForm;
   setForm: React.Dispatch<React.SetStateAction<NewForm | null>>;
+  /** False when no project exists — the project scope option is disabled and
+   *  global is the only choice. */
+  canUseProject: boolean;
   saving: boolean;
   error: string | null;
   onSave: () => void;
@@ -622,6 +640,10 @@ function NewSkillForm({
   const update = <K extends keyof NewForm>(key: K, value: NewForm[K]) =>
     setForm((prev) => (prev ? { ...prev, [key]: value } : prev));
   const { t } = useI18n();
+  const scopes: Array<{ value: SkillSource; label: string; disabled?: boolean }> = [
+    { value: "project", label: t("settings.skills.sourceProject"), disabled: !canUseProject },
+    { value: "global", label: t("settings.skills.sourceGlobal") },
+  ];
   return (
     <div className="flex min-h-full flex-col">
       <div className="mb-2 flex items-center gap-1.5">
@@ -629,12 +651,58 @@ function NewSkillForm({
         <span className="text-[0.8571em] font-medium text-content">{t("settings.skills.newSkill")}</span>
       </div>
       <p className="mb-2 text-[0.7143em] leading-relaxed text-content-subtle">
-        {t("settings.skills.newSkillIntro1")}
-        <code className="rounded bg-surface-muted px-0.5">.claude/skills</code>
-        {t("settings.skills.newSkillIntro2")}
-        <code className="rounded bg-surface-muted px-0.5">allowed-tools</code>
-        {t("settings.skills.newSkillIntro3")}
+        {form.scope === "project" ? (
+          <>
+            {t("settings.skills.newSkillIntro1")}
+            <code className="rounded bg-surface-muted px-0.5">.claude/skills</code>
+            {t("settings.skills.newSkillIntro2")}
+            <code className="rounded bg-surface-muted px-0.5">allowed-tools</code>
+            {t("settings.skills.newSkillIntro3")}
+          </>
+        ) : (
+          <>
+            {t("settings.skills.newSkillGlobalIntro1")}
+            <code className="rounded bg-surface-muted px-0.5">~/.mcode/skills</code>
+            {t("settings.skills.newSkillGlobalIntro2")}
+            <code className="rounded bg-surface-muted px-0.5">allowed-tools</code>
+            {t("settings.skills.newSkillIntro3")}
+          </>
+        )}
       </p>
+
+      <Field label={t("settings.skills.fieldScope")}>
+        <div className="flex w-full gap-1" role="radiogroup" aria-label={t("settings.skills.fieldScope")}>
+          {scopes.map((s) => {
+            const active = form.scope === s.value;
+            return (
+              <button
+                key={s.value}
+                type="button"
+                role="radio"
+                aria-checked={active}
+                disabled={s.disabled}
+                onClick={() => update("scope", s.value)}
+                title={
+                  s.disabled
+                    ? t("settings.skills.scopeProjectDisabled")
+                    : s.value === "project"
+                      ? t("settings.skills.scopeProjectHint")
+                      : t("settings.skills.scopeGlobalHint")
+                }
+                className={cn(
+                  "flex-1 rounded border px-2 py-1 text-[0.7857em] transition-colors",
+                  active
+                    ? "border-accent bg-accent/10 font-medium text-accent"
+                    : "border-edge bg-surface text-content-muted hover:bg-surface-hover/60 hover:text-content",
+                  s.disabled && "cursor-not-allowed opacity-50 hover:bg-surface hover:text-content-muted",
+                )}
+              >
+                {s.label}
+              </button>
+            );
+          })}
+        </div>
+      </Field>
 
       <Field label={t("settings.skills.fieldName")}>
         <input
@@ -724,11 +792,20 @@ const TOOL_BADGE_CLS: Record<SkillTool, string> = {
   local: "bg-surface-hover text-content-muted",
 };
 
+/** Fixed tab order: the three external agents by install-base, then the local
+ *  folder pseudo-source last (it's the "additional source" tab). */
+const TOOL_ORDER: SkillTool[] = ["claude-code", "codex", "zcode", "local"];
+
 /** Modal dialog for importing skills from external tools (Claude Code, Codex,
  *  Zcode) into Mcode's own ~/.mcode/skills directory. On open, scans all
- *  external sources; presents a grouped, checkbox-selectable list; and copies
- *  the selected skill directories on confirm. Skills already present at the
- *  destination are marked and excluded from selection. */
+ *  external sources; presents a TAB-PER-AGENT, checkbox-selectable list; and
+ *  copies the selected skill directories on confirm. Skills already present
+ *  at the destination are marked and excluded from selection.
+ *
+ *  The selection Set is GLOBAL across tabs (keyed by sourcePath), so picks
+ *  accumulate as the user flips between agents; each tab badge shows its own
+ *  selected count, and the footer shows the total. The "本地" tab always
+ *  exists and hosts the folder picker (plus its scanned skills). */
 function ImportSkillsDialog({
   open,
   onOpenChange,
@@ -752,10 +829,13 @@ function ImportSkillsDialog({
     skipped: string[];
     errors: Array<{ name: string; error: string }>;
   } | null>(null);
-  // User-picked local directory (the import dialog's "select folder" flow).
-  // When set, its scanned skills appear under the "本地" group. Reset every
-  // time the dialog opens.
+  // User-picked local directory (the "本地" tab's "select folder" flow). When
+  // set, its scanned skills appear under the local tab. Reset every time the
+  // dialog opens.
   const [localDir, setLocalDir] = useState<string | null>(null);
+  // Which agent's tab is showing. Reset on open; falls back to the first tab
+  // that actually has skills when the stored one has none (see `activeTool`).
+  const [activeToolRaw, setActiveToolRaw] = useState<SkillTool>("claude-code");
 
   // Scan external sources whenever the dialog opens or the local folder changes.
   useEffect(() => {
@@ -766,26 +846,21 @@ function ImportSkillsDialog({
     setResult(null);
     if (localDir === null) setSelected(new Set());
     setExisting(new Set());
+    setActiveToolRaw("claude-code");
     void (async () => {
       try {
-        // Scan external tools (+ the picked local dir if any) and (if we have
-        // a project) fetch the current global skills to mark already-imported
-        // ones as "existing".
-        const promises: [Promise<{ sources: ExternalSkillInfo[] }>, Promise<{ skills: SkillInfo[] }> | null] = [
+        // Scan external tools (+ the picked local dir if any) and fetch the
+        // current global skills (projectPath optional — works with no project)
+        // to mark already-imported ones as "existing".
+        const [scanRes, listRes] = await Promise.all([
           api.skills.scanSources(localDir ? { localDir } : {}),
-          null,
-        ];
-        if (projectPath) {
-          promises[1] = api.skills.list({ projectPath });
-        }
-        const [scanRes, listRes] = await Promise.all(promises);
+          api.skills.list(projectPath ? { projectPath } : {}),
+        ]);
         if (cancelled) return;
         setSources(scanRes.sources);
         const existingNames = new Set<string>();
-        if (listRes) {
-          for (const s of listRes.skills) {
-            if (s.source === "global") existingNames.add(s.name);
-          }
+        for (const s of listRes.skills) {
+          if (s.source === "global") existingNames.add(s.name);
         }
         setExisting(existingNames);
       } catch (err) {
@@ -818,7 +893,31 @@ function ImportSkillsDialog({
     },
     {} as Record<SkillTool, ExternalSkillInfo[]>,
   );
-  const toolOrder: SkillTool[] = ["claude-code", "codex", "zcode", "local"];
+
+  // Tabs: the three agents appear only when they have skills; "本地" is always
+  // present (it hosts the folder picker). `activeTool` falls back to the first
+  // non-empty tab when the stored one is empty, so the strip never lands on a
+  // tab with nothing in it.
+  const tabs = TOOL_ORDER.filter((tool) => tool === "local" || (grouped[tool]?.length ?? 0) > 0);
+  const activeTool = tabs.includes(activeToolRaw) ? activeToolRaw : (tabs[0] ?? "local");
+  const activeItems = grouped[activeTool] ?? [];
+
+  // Select-all toggle for the active tab: adds every not-yet-present skill of
+  // the tab, or clears them all when everything importable is already picked.
+  const importableItems = activeItems.filter((s) => !existing.has(s.name));
+  const allActiveSelected =
+    importableItems.length > 0 && importableItems.every((s) => selected.has(s.sourcePath));
+  const toggleSelectAllForActive = () => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (allActiveSelected) {
+        for (const s of importableItems) next.delete(s.sourcePath);
+      } else {
+        for (const s of importableItems) next.add(s.sourcePath);
+      }
+      return next;
+    });
+  };
 
   const selectedCount = selected.size;
 
@@ -852,8 +951,9 @@ function ImportSkillsDialog({
   };
 
   // Pick a local folder to scan for skills (in addition to the fixed external
-  // tool dirs). Sets localDir, which triggers the open-effect to re-scan with
-  // the folder included. Clearing selection first avoids stale picks pointing
+  // tool dirs). Sets localDir → the open-effect re-scans with it, its skills
+  // land in the "本地" tab, and we switch to that tab so the user immediately
+  // sees what was found. Clearing selection first avoids stale picks pointing
   // at a folder that's no longer in the list.
   const pickLocalFolder = async () => {
     try {
@@ -861,6 +961,7 @@ function ImportSkillsDialog({
       if (!picked) return; // user cancelled
       setSelected(new Set());
       setLocalDir(picked);
+      setActiveToolRaw("local");
     } catch (err) {
       setError((err as Error).message);
     }
@@ -870,6 +971,54 @@ function ImportSkillsDialog({
     setSelected(new Set());
     setLocalDir(null);
   };
+
+  // The local-folder picker card — rendered inside the "本地" tab when tabs are
+  // showing, and above the empty state when no external skills were found at
+  // all (so the local-import path stays discoverable in either case).
+  const localPicker = (
+    <div className="rounded border border-edge bg-surface/40 p-2">
+      <div className="flex items-center gap-2">
+        <IconFolder size={14} className="shrink-0 text-content-subtle" />
+        <span className="text-[0.7143em] font-medium text-content-muted">
+          {t("settings.skills.localFolder")}
+        </span>
+        <div className="flex-1" />
+        {localDir ? (
+          <button
+            type="button"
+            onClick={clearLocalFolder}
+            className="text-[0.7143em] text-content-subtle hover:text-content"
+          >
+            {t("settings.skills.clear")}
+          </button>
+        ) : null}
+      </div>
+      <div className="mt-1.5 flex items-center gap-2">
+        {localDir ? (
+          <span
+            className="min-w-0 flex-1 truncate rounded bg-surface px-1.5 py-1 font-mono text-[0.7143em] text-content-subtle"
+            title={localDir}
+          >
+            {localDir}
+          </span>
+        ) : (
+          <span className="min-w-0 flex-1 text-[0.7143em] text-content-subtle">
+            {t("settings.skills.localFolderHint")}
+          </span>
+        )}
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => void pickLocalFolder()}
+          disabled={loading}
+          className="shrink-0 gap-1"
+        >
+          <IconFolder size={12} />
+          {t("settings.skills.chooseFolder")}
+        </Button>
+      </div>
+    </div>
+  );
 
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
@@ -883,133 +1032,143 @@ function ImportSkillsDialog({
           </Dialog.Description>
           <Dialog.Close />
 
-          {/* Body: scrollable skill list */}
+          {/* Body: tab strip + scrollable skill list */}
           <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
-            {/* ── Local folder picker ──
-                Always shown so the user can import from an arbitrary local
-                directory (a single skill, or a collection of skills). Picking a
-                folder sets localDir → the open-effect re-scans with it and the
-                results appear in the local group below. */}
-            <div className="mb-3 rounded border border-edge bg-surface/40 p-2">
-              <div className="flex items-center gap-2">
-                <IconFolder size={14} className="shrink-0 text-content-subtle" />
-                <span className="text-[0.7143em] font-medium text-content-muted">
-                  {t("settings.skills.localFolder")}
-                </span>
-                <div className="flex-1" />
-                {localDir ? (
-                  <button
-                    type="button"
-                    onClick={clearLocalFolder}
-                    className="text-[0.7143em] text-content-subtle hover:text-content"
-                  >
-                    {t("settings.skills.clear")}
-                  </button>
-                ) : null}
-              </div>
-              <div className="mt-1.5 flex items-center gap-2">
-                {localDir ? (
-                  <span
-                    className="min-w-0 flex-1 truncate rounded bg-surface px-1.5 py-1 font-mono text-[0.7143em] text-content-subtle"
-                    title={localDir}
-                  >
-                    {localDir}
-                  </span>
-                ) : (
-                  <span className="min-w-0 flex-1 text-[0.7143em] text-content-subtle">
-                    {t("settings.skills.localFolderHint")}
-                  </span>
-                )}
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => void pickLocalFolder()}
-                  disabled={loading}
-                  className="shrink-0 gap-1"
-                >
-                  <IconFolder size={12} />
-                  {t("settings.skills.chooseFolder")}
-                </Button>
-              </div>
-            </div>
-
             {loading ? (
               <div className="flex items-center justify-center gap-2 py-8 text-[0.7857em] text-content-subtle">
                 <IconLoader2 size={14} className="animate-spin" />
                 {t("settings.scanning")}
               </div>
             ) : sources.length === 0 ? (
-              <div className="py-8 text-center text-[0.7857em] leading-relaxed text-content-subtle">
-                {t("settings.skills.importEmpty1")}
-                <br />
-                {t("settings.skills.importEmpty2a")}
-                {t("settings.skills.importEmpty2b")}
+              <div className="space-y-3">
+                {localPicker}
+                <div className="py-8 text-center text-[0.7857em] leading-relaxed text-content-subtle">
+                  {t("settings.skills.importEmpty1")}
+                  <br />
+                  {t("settings.skills.importEmpty2a")}
+                  {t("settings.skills.importEmpty2b")}
+                </div>
               </div>
             ) : (
-              <div className="space-y-3">
-                {toolOrder.map((tool) => {
-                  const items = grouped[tool];
-                  if (!items || items.length === 0) return null;
-                  return (
-                    <div key={tool}>
-                      <div className="mb-1 flex items-center gap-1.5">
+              <div className="space-y-2">
+                {/* ── Tab strip: one tab per agent, 本地 always present ──
+                    Selection is global across tabs; each tab shows its total
+                    count and (in accent) how many of them are picked. */}
+                <div
+                  role="tablist"
+                  aria-label={t("settings.skills.importTitle")}
+                  className="flex items-center gap-0.5 border-b border-edge"
+                >
+                  {tabs.map((tool) => {
+                    const items = grouped[tool] ?? [];
+                    const picked = items.filter((s) => selected.has(s.sourcePath)).length;
+                    const isActive = tool === activeTool;
+                    return (
+                      <button
+                        key={tool}
+                        type="button"
+                        role="tab"
+                        aria-selected={isActive}
+                        onClick={() => setActiveToolRaw(tool)}
+                        className={cn(
+                          "flex items-center gap-1.5 rounded-t-md border-b-2 px-2.5 py-1.5 transition-colors",
+                          isActive
+                            ? "border-accent bg-surface text-content"
+                            : "border-transparent text-content-muted hover:bg-surface-muted/50 hover:text-content",
+                        )}
+                      >
                         <span
                           className={cn(
-                            "rounded px-1.5 py-0.5 text-[10px] font-medium",
+                            "rounded px-1 text-[10px] font-medium leading-tight",
                             TOOL_BADGE_CLS[tool],
                           )}
                         >
                           {tool === "local" ? t("settings.skills.toolLocal") : TOOL_LABELS[tool]}
                         </span>
-                        <span className="text-[0.7143em] text-content-subtle">
-                          {t("settings.skills.skillCount", { n: items.length })}
+                        <span className="tabular-nums text-[0.7143em] text-content-subtle">
+                          {items.length}
                         </span>
-                      </div>
-                      <div className="space-y-0.5">
-                        {items.map((s) => {
-                          const isExisting = existing.has(s.name);
-                          const isChecked = selected.has(s.sourcePath);
-                          return (
-                            <label
-                              key={s.sourcePath}
-                              className={cn(
-                                "flex cursor-pointer items-start gap-2 rounded px-2 py-1.5 transition-colors",
-                                isExisting
-                                  ? "opacity-50"
-                                  : isChecked
-                                    ? "bg-accent/8"
-                                    : "hover:bg-surface-hover/60",
-                              )}
-                            >
-                              <input
-                                type="checkbox"
-                                checked={isChecked}
-                                disabled={isExisting}
-                                onChange={() => toggle(s.sourcePath)}
-                                className="mt-0.5 shrink-0"
-                              />
-                              <div className="min-w-0 flex-1">
-                                <div className="flex items-center gap-1">
-                                  <span className="truncate text-[0.7857em] font-medium text-content">
-                                    {s.name}
-                                  </span>
-                                  {isExisting && (
-                                    <span className="shrink-0 rounded bg-surface-hover px-1 text-[9px] text-content-subtle">
-                                      {t("settings.importExisting")}
-                                    </span>
-                                  )}
-                                </div>
-                                <p className="truncate text-[0.7143em] text-content-subtle">
-                                  {s.description || t("settings.skills.noDesc")}
-                                </p>
-                              </div>
-                            </label>
-                          );
-                        })}
-                      </div>
+                        {picked > 0 && (
+                          <span className="rounded-full bg-accent/15 px-1.5 text-[10px] font-medium leading-tight text-accent tabular-nums">
+                            {picked}
+                          </span>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {/* The folder picker lives in the 本地 tab (it's that tab's
+                    source selector), not above the whole list. */}
+                {activeTool === "local" && localPicker}
+
+                {activeItems.length > 0 ? (
+                  <div>
+                    <div className="mb-1 flex items-center gap-1.5">
+                      <span className="text-[0.7143em] text-content-subtle">
+                        {t("settings.skills.skillCount", { n: activeItems.length })}
+                      </span>
+                      <div className="flex-1" />
+                      <button
+                        type="button"
+                        onClick={toggleSelectAllForActive}
+                        disabled={importableItems.length === 0}
+                        className="text-[0.7143em] text-accent hover:underline disabled:text-content-subtle disabled:no-underline"
+                      >
+                        {allActiveSelected
+                          ? t("settings.skills.deselectAll")
+                          : t("settings.skills.selectAll")}
+                      </button>
                     </div>
-                  );
-                })}
+                    <div className="space-y-0.5">
+                      {activeItems.map((s) => {
+                        const isExisting = existing.has(s.name);
+                        const isChecked = selected.has(s.sourcePath);
+                        return (
+                          <label
+                            key={s.sourcePath}
+                            className={cn(
+                              "flex cursor-pointer items-start gap-2 rounded px-2 py-1.5 transition-colors",
+                              isExisting
+                                ? "opacity-50"
+                                : isChecked
+                                  ? "bg-accent/8"
+                                  : "hover:bg-surface-hover/60",
+                            )}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={isChecked}
+                              disabled={isExisting}
+                              onChange={() => toggle(s.sourcePath)}
+                              className="mt-0.5 shrink-0"
+                            />
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-center gap-1">
+                                <span className="truncate text-[0.7857em] font-medium text-content">
+                                  {s.name}
+                                </span>
+                                {isExisting && (
+                                  <span className="shrink-0 rounded bg-surface-hover px-1 text-[9px] text-content-subtle">
+                                    {t("settings.importExisting")}
+                                  </span>
+                                )}
+                              </div>
+                              <p className="truncate text-[0.7143em] text-content-subtle">
+                                {s.description || t("settings.skills.noDesc")}
+                              </p>
+                            </div>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ) : (
+                  // Only reachable on the 本地 tab before a folder is picked.
+                  <div className="py-6 text-center text-[0.7857em] leading-relaxed text-content-subtle">
+                    {t("settings.skills.localTabEmpty")}
+                  </div>
+                )}
               </div>
             )}
 

@@ -540,6 +540,15 @@ export const en = {
   "settings.skills.importEmpty2b": "or click \"Choose folder\" above to import from a local directory.",
   "settings.skills.toolLocal": "Local",
   "settings.skills.skillCount": "{n} skills",
+  "settings.skills.selectAll": "Select all",
+  "settings.skills.deselectAll": "Deselect all",
+  "settings.skills.localTabEmpty": "This tab imports skills from a local folder (a single skill or a collection); click \"Choose folder\" above to start.",
+  "settings.skills.fieldScope": "Scope",
+  "settings.skills.scopeProjectDisabled": "No projects yet — project skills unavailable",
+  "settings.skills.scopeProjectHint": "Stored in the selected project's .claude/skills; available to that project only",
+  "settings.skills.scopeGlobalHint": "Stored in ~/.mcode/skills; available to every project",
+  "settings.skills.newSkillGlobalIntro1": "Fill in the name, description and body; a standard frontmatter is generated on save. Global skills are stored in ",
+  "settings.skills.newSkillGlobalIntro2": " and are available to every project. Later you can add advanced fields such as ",
 
   // ── TerminalPanel ──
   "settings.terminal.title": "Terminal",

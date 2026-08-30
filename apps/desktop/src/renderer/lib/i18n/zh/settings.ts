@@ -543,6 +543,15 @@ export const zh = {
   "settings.skills.importEmpty2b": "或点上方「选择文件夹」从本地导入。",
   "settings.skills.toolLocal": "本地",
   "settings.skills.skillCount": "{n} 个 skill",
+  "settings.skills.selectAll": "全选",
+  "settings.skills.deselectAll": "取消全选",
+  "settings.skills.localTabEmpty": "此 Tab 从本地文件夹导入 skill(支持单个 skill 或 skill 集合),点上方「选择文件夹」开始。",
+  "settings.skills.fieldScope": "作用域 (Scope)",
+  "settings.skills.scopeProjectDisabled": "暂无项目,无法创建项目 skill",
+  "settings.skills.scopeProjectHint": "存放到所选项目的 .claude/skills,仅该项目可用",
+  "settings.skills.scopeGlobalHint": "存放到 ~/.mcode/skills,所有项目可用",
+  "settings.skills.newSkillGlobalIntro1": "填写名称、描述和正文,保存时会自动生成标准 frontmatter。全局 skill 存放到 ",
+  "settings.skills.newSkillGlobalIntro2": ",所有项目可用。之后可在编辑模式补充 ",
 
   // ── TerminalPanel ──
   "settings.terminal.title": "终端",
