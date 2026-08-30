@@ -1,10 +1,11 @@
 import { useState } from "react";
 import { Menu } from "@base-ui/react/menu";
 import { cn } from "@renderer/lib/cn.js";
-import { IconCheck, IconBolt, IconChevronDown } from "@renderer/lib/icons.js";
+import { IconCheck, IconBolt, IconChevronDown, IconChevronRight } from "@renderer/lib/icons.js";
 import { useI18n, type MessageId } from "@renderer/lib/i18n/index.js";
 import { useSessionStore } from "@renderer/stores/sessionStore.js";
 import { useSuppressBrowserView } from "@renderer/hooks/useSuppressBrowserView.js";
+import { useNarrowViewport } from "@renderer/hooks/useNarrowViewport.js";
 
 /**
  * Reasoning-effort / thinking-level picker for the composer toolbar.
@@ -18,6 +19,13 @@ import { useSuppressBrowserView } from "@renderer/hooks/useSuppressBrowserView.j
  *
  * Uses @base-ui/react Menu like PermissionModeDropdown; the popup renders
  * through Menu.Portal so it isn't clipped by the composer card's overflow.
+ *
+ * Presentation: layout="chip" (default) renders the compact composer chip;
+ * layout="row" (the collapsed-toolbar popup) renders a full-width settings
+ * row — icon + label on the left, current level + chevron on the right — and
+ * opens the menu to the RIGHT of the row so the popup's vertical list stays
+ * visible; on phone-class viewports (no room for panel + menu side by side)
+ * it opens upward instead, where the tall screen has plenty of space.
  */
 
 /** Fallback label when the current value isn't in the provider's level list
@@ -42,7 +50,17 @@ const EFFORT_HINT_KEYS: Record<string, MessageId> = {
   max: "chat.effort.hintMax",
 };
 
-export function EffortDropdown() {
+export function EffortDropdown({
+  layout = "chip",
+}: {
+  /** Presentation: composer chip ("chip") vs settings row ("row"). */
+  layout?: "chip" | "row";
+}) {
+  const stacked = layout === "row";
+  // Stacked rows cascade to the RIGHT; phone-class viewports have no room
+  // for panel + menu side by side, so they open upward instead (vertical
+  // space is plentiful there). Chip mode always opens upward.
+  const cascade = stacked && !useNarrowViewport();
   const { t } = useI18n();
   // While the menu is open the embedded browser view is suppressed so the
   // portaled popup (which can extend over the browser's rect in narrow/wide
@@ -68,20 +86,46 @@ export function EffortDropdown() {
     <Menu.Root open={open} onOpenChange={setOpen}>
       <Menu.Trigger
         className={cn(
-          "composer-chip flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-medium transition-all duration-150 ease-out",
-          "text-content-muted hover:scale-105 hover:bg-accent/10 hover:text-accent active:scale-95",
+          stacked
+            ? "flex w-full items-center justify-between gap-2 rounded-lg px-2.5 py-2 text-[13px] outline-none select-none transition-colors duration-100"
+            : "composer-chip flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-medium transition-all duration-150 ease-out",
+          stacked
+            ? "text-content-muted hover:bg-surface-muted hover:text-content"
+            : "text-content-muted hover:scale-105 hover:bg-accent/10 hover:text-accent active:scale-95",
         )}
         title="Reasoning effort for the next session"
       >
-        <IconBolt size={13} className="shrink-0 opacity-80" />
-        <span className="min-w-0 truncate">{labelFor(levels, effort)}</span>
-        <IconChevronDown size={11} className="shrink-0 opacity-60" />
+        {stacked ? (
+          <>
+            <span className="flex min-w-0 items-center gap-2">
+              <IconBolt size={14} className="shrink-0 opacity-80" />
+              <span className="shrink-0 font-medium text-content">{t("chat.effort.rowLabel")}</span>
+            </span>
+            <span className="flex min-w-0 items-center gap-1">
+              <span className="min-w-0 truncate text-xs text-content-muted">
+                {labelFor(levels, effort)}
+              </span>
+              <IconChevronRight size={12} className="shrink-0 opacity-60" />
+            </span>
+          </>
+        ) : (
+          <>
+            <IconBolt size={13} className="shrink-0 opacity-80" />
+            <span className="min-w-0 truncate">{labelFor(levels, effort)}</span>
+            <IconChevronDown size={11} className="shrink-0 opacity-60" />
+          </>
+        )}
       </Menu.Trigger>
       <Menu.Portal>
-        <Menu.Positioner side="top" align="start">
+        <Menu.Positioner
+          side={cascade ? "right" : "top"}
+          align="start"
+          sideOffset={cascade ? 6 : 0}
+        >
           <Menu.Popup
             className={cn(
-              "z-50 min-w-[240px] origin-bottom-left rounded-lg border border-edge bg-surface py-1.5 shadow-2xl",
+              "z-50 min-w-[240px] rounded-lg border border-edge bg-surface py-1.5 shadow-2xl",
+              cascade ? "origin-top-left" : "origin-bottom-left",
               "data-[ending-style]:scale-95 data-[ending-style]:opacity-0",
               "data-[starting-style]:scale-95 data-[starting-style]:opacity-0",
               "transition-[transform,opacity] duration-100",

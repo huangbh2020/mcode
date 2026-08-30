@@ -2,16 +2,29 @@
  * MobileSettingsSheet — the minimal settings surface of the web (phone) shell.
  *
  * The desktop SettingsPage (language servers, models, shortcuts, …) is
- * Electron-bound; the phone gets the essentials instead: theme, the server it
- * is paired with, and unpairing. Rendered as a bottom sheet over the chat.
+ * Electron-bound; the phone gets the essentials instead: theme, the
+ * center-pane display mode, the server it is paired with, and unpairing.
+ * Rendered as a bottom sheet over the chat.
  */
 import { useEffect, useState } from "react";
 import { cn } from "@renderer/lib/cn.js";
 import { api } from "@renderer/lib/api.js";
 import { applyThemeClass } from "@renderer/lib/theme.js";
 import { clearAuth } from "@renderer/lib/webApi.js";
+import { useSessionStore } from "@renderer/stores/sessionStore.js";
+import { useI18n, type MessageId } from "@renderer/lib/i18n/index.js";
 import type { ThemeName } from "@contracts/theme";
-import { IconX, IconSun, IconMoon, IconDeviceDesktop, IconUnlink, IconLink } from "@renderer/lib/icons.js";
+import type { DisplayMode } from "@contracts/ipc";
+import {
+  IconX,
+  IconSun,
+  IconMoon,
+  IconDeviceDesktop,
+  IconUnlink,
+  IconLink,
+  IconSquare,
+  IconStack2,
+} from "@renderer/lib/icons.js";
 
 const THEME_OPTIONS: Array<{ value: ThemeName; label: string; icon: typeof IconSun }> = [
   { value: "system", label: "跟随系统", icon: IconDeviceDesktop },
@@ -19,9 +32,23 @@ const THEME_OPTIONS: Array<{ value: ThemeName; label: string; icon: typeof IconS
   { value: "dark", label: "深色", icon: IconMoon },
 ];
 
+/** Same two options (and dictionary keys) as the desktop GeneralPanel's
+ *  selector — it's one persisted pref shared by both shells. */
+const DISPLAY_MODE_OPTIONS: Array<{
+  value: DisplayMode;
+  labelKey: MessageId;
+  icon: typeof IconSun;
+}> = [
+  { value: "single", labelKey: "settings.general.displayModeSingle", icon: IconSquare },
+  { value: "tabs", labelKey: "settings.general.displayModeTabs", icon: IconStack2 },
+];
+
 export function MobileSettingsSheet({ open, onClose }: { open: boolean; onClose: () => void }) {
   const [theme, setTheme] = useState<ThemeName>("system");
   const [unpairConfirm, setUnpairConfirm] = useState(false);
+  const { t } = useI18n();
+  const displayMode = useSessionStore((s) => s.displayMode);
+  const setDisplayMode = useSessionStore((s) => s.setDisplayMode);
 
   useEffect(() => {
     if (!open) return;
@@ -54,7 +81,7 @@ export function MobileSettingsSheet({ open, onClose }: { open: boolean; onClose:
         className="absolute inset-0 bg-black/40"
         onClick={onClose}
       />
-      <div className="absolute inset-x-0 bottom-0 flex flex-col gap-4 rounded-t-2xl border-t border-edge bg-surface p-4 pb-6 text-content">
+      <div className="absolute inset-x-0 bottom-0 flex max-h-[85vh] flex-col gap-4 overflow-y-auto rounded-t-2xl border-t border-edge bg-surface p-4 pb-6 text-content">
         <div className="flex items-center justify-between">
           <h2 className="text-sm font-semibold">设置</h2>
           <button
@@ -91,6 +118,40 @@ export function MobileSettingsSheet({ open, onClose }: { open: boolean; onClose:
               );
             })}
           </div>
+        </div>
+
+        {/* Display mode — the desktop-shared center-pane pref. On the phone
+            it gates the SessionTabs strip above the chat (tabs) vs.
+            drawer-only session switching (single). */}
+        <div className="flex flex-col gap-2">
+          <span className="text-xs font-medium text-content-muted">
+            {t("settings.general.displayMode")}
+          </span>
+          <div className="grid grid-cols-2 gap-2">
+            {DISPLAY_MODE_OPTIONS.map((opt) => {
+              const Icon = opt.icon;
+              const active = displayMode === opt.value;
+              return (
+                <button
+                  key={opt.value}
+                  type="button"
+                  onClick={() => void setDisplayMode(opt.value)}
+                  className={cn(
+                    "flex h-16 flex-col items-center justify-center gap-1 rounded-xl border text-xs",
+                    active
+                      ? "border-accent bg-accent/10 text-accent"
+                      : "border-edge bg-surface-muted/50 text-content-muted hover:bg-surface-muted",
+                  )}
+                >
+                  <Icon size={18} />
+                  {t(opt.labelKey)}
+                </button>
+              );
+            })}
+          </div>
+          <p className="text-[11px] leading-relaxed text-content-subtle">
+            {t("settings.mobile.displayModeHint")}
+          </p>
         </div>
 
         {/* Server */}

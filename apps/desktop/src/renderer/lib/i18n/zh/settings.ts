@@ -633,4 +633,8 @@ export const zh = {
   "settings.usage.unknownModel": "未知模型",
   "settings.usage.unknownVendor": "未知厂商",
   "settings.usage.empty": "暂无用量数据,完成一轮对话后此处会出现统计。",
+
+  // ── mobile settings sheet (MobileSettingsSheet) ──
+  "settings.mobile.displayModeHint":
+    "Tab 模式下,聊天区顶部会显示会话标签条,用于在已打开的会话间切换;该偏好与电脑端共享。",
 } as const;

@@ -169,6 +169,7 @@ export const zh = {
   "chat.model.notConfigured": "尚未配置模型,点击下方添加",
   "chat.model.manage": "添加 / 管理模型…",
   "chat.model.default": "默认",
+  "chat.model.rowLabel": "模型",
 
   // ── model config guard dialog ──
   "chat.modelConfig.title": "尚未配置模型",
@@ -185,6 +186,7 @@ export const zh = {
   "chat.effort.hintHigh": "更多思考",
   "chat.effort.hintXhigh": "深度思考",
   "chat.effort.hintMax": "最充分,最慢",
+  "chat.effort.rowLabel": "思考",
 
   // ── permission mode dropdown ──
   "chat.permission.section": "权限级别",
@@ -192,6 +194,7 @@ export const zh = {
   "chat.permission.hintAcceptEdits": "工作目录内的文件编辑自动放行",
   "chat.permission.hintPlan": "只读探索,所有写操作都需审批",
   "chat.permission.hintBypass": "跳过所有权限检查(慎用)",
+  "chat.permission.rowLabel": "权限",
 
   // ── provider (SDK) dropdown ──
   "chat.provider.locked": "该会话的 SDK 已固定,不可更改",
@@ -255,6 +258,7 @@ export const zh = {
 
   // ── context ring + context stats popover ──
   "chat.context.stats": "上下文统计",
+  "chat.context.rowLabel": "上下文",
   "chat.context.modelLine": "模型 · {model}",
   "chat.context.viewDetails": "查看详情",
   "chat.context.turns": "{n} 轮",

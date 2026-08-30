@@ -15,17 +15,24 @@ import { ComposerToolbar } from "./ComposerToolbar.js";
  * on locale and selected values). The inline chip row (Model / Effort /
  * Permission / ContextRing rendered by {@link ComposerToolbar}) is then hidden
  * by CSS, and THIS toggle icon takes its place. Clicking it pops a panel that
- * hosts the *same* `ComposerToolbar` — so the controls collapse to a single
- * icon visually, but behaviour is identical to the wide-mode chip row (no
- * duplicated logic).
+ * hosts the *same* `ComposerToolbar` in its `layout="row"` presentation — a
+ * vertical settings list where each control is a full-width labelled row
+ * (field name left, current value right); each dropdown cascades to the
+ * right of its row, or upward on phone-class viewports (useNarrowViewport).
+ * The controls collapse to a single icon visually, but behaviour is
+ * identical to the wide-mode chip row (no duplicated logic). Shared by the
+ * desktop narrow pane, the side-chat panel, and the phone shell — the
+ * vertical list is the usable shape in all three: it exists precisely
+ * because horizontal space ran out, and labelled rows let the user read the
+ * whole next-turn config (model / thinking / permission / context) at a
+ * glance before opening anything.
  *
  * The toggle is hidden by default (`display:none` via the `.composer-chips-toggle`
  * rule) and only revealed by the collapsed state; in wide mode it is absent
  * from the layout entirely.
  *
- * The popup deliberately uses `overflow-visible` so that `ModelDropdown` —
- * whose submenu is an absolute panel relative to its own wrapper (not a portal)
- * — can still render upward beyond the popup's box. Effort/Permission use
+ * The popup deliberately uses `overflow-visible` so that nested portaled
+ * menus can still render beyond the popup's box. Effort/Permission use
  * `Menu.Portal` and ContextRing uses a hover tooltip, so neither is affected.
  */
 export function ComposerToolbarToggle({ sessionId }: { sessionId: string }) {
@@ -65,16 +72,14 @@ export function ComposerToolbarToggle({ sessionId }: { sessionId: string }) {
           <Popover.Positioner side="top" align="start" className="z-50">
             <Popover.Popup
               className={cn(
-                // overflow-visible: let non-portal child dropdowns (Model) escape.
-                "z-50 overflow-visible rounded-xl border border-edge bg-surface p-2 shadow-2xl",
+                // overflow-visible: let portaled child menus escape the box.
+                "z-50 overflow-visible rounded-xl border border-edge bg-surface p-1.5 shadow-2xl",
                 "data-[ending-style]:scale-95 data-[ending-style]:opacity-0",
                 "data-[starting-style]:scale-95 data-[starting-style]:opacity-0",
                 "transition-[transform,opacity] duration-100",
               )}
             >
-              <div className="flex items-center gap-2">
-                <ComposerToolbar sessionId={sessionId} />
-              </div>
+              <ComposerToolbar sessionId={sessionId} layout="row" />
             </Popover.Popup>
           </Popover.Positioner>
         </Popover.Portal>

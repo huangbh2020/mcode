@@ -8,10 +8,12 @@ import {
   IconShieldHalfFilled,
   IconShieldLock,
   IconChevronDown,
+  IconChevronRight,
 } from "@renderer/lib/icons.js";
 import { useI18n, type MessageId } from "@renderer/lib/i18n/index.js";
 import { useSessionStore } from "@renderer/stores/sessionStore.js";
 import { useSuppressBrowserView } from "@renderer/hooks/useSuppressBrowserView.js";
+import { useNarrowViewport } from "@renderer/hooks/useNarrowViewport.js";
 import type { PermissionModeOption } from "@contracts/provider";
 
 /**
@@ -30,6 +32,14 @@ import type { PermissionModeOption } from "@contracts/provider";
  *
  * Uses @base-ui/react Menu for state management, keyboard navigation,
  * and positioning, with a compact chip-style trigger.
+ *
+ * Presentation: layout="chip" (default) renders the compact composer chip;
+ * layout="row" (the collapsed-toolbar popup) renders a full-width settings
+ * row — mode icon + label on the left, current mode + chevron on the right
+ * (the value keeps its semantic color so the risk telegraph survives) — and
+ * opens the menu to the RIGHT of the row so the popup's vertical list stays
+ * visible; on phone-class viewports (no room for panel + menu side by side)
+ * it opens upward instead, where the tall screen has plenty of space.
  */
 
 const ICON_BY_NAME: Record<string, React.ReactNode> = {
@@ -62,7 +72,17 @@ const PERMISSION_HINT_KEYS: Record<string, MessageId> = {
   bypassPermissions: "chat.permission.hintBypass",
 };
 
-export function PermissionModeDropdown() {
+export function PermissionModeDropdown({
+  layout = "chip",
+}: {
+  /** Presentation: composer chip ("chip") vs settings row ("row"). */
+  layout?: "chip" | "row";
+}) {
+  const stacked = layout === "row";
+  // Stacked rows cascade to the RIGHT; phone-class viewports have no room
+  // for panel + menu side by side, so they open upward instead (vertical
+  // space is plentiful there). Chip mode always opens upward.
+  const cascade = stacked && !useNarrowViewport();
   const { t } = useI18n();
   // While the menu is open the embedded browser view is suppressed so the
   // portaled popup stays visible/clickable when it extends over the browser.
@@ -90,25 +110,55 @@ export function PermissionModeDropdown() {
     <Menu.Root open={open} onOpenChange={setOpen}>
       <Menu.Trigger
         className={cn(
-          "composer-chip flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-medium transition-all duration-150 ease-out",
-          "text-content-muted hover:scale-105 hover:bg-accent/10 active:scale-95",
-          // Only switch the label to accent on hover for the neutral mode —
-          // riskier modes (warning/danger) keep their semantic color so the
-          // chip never loses its risk telegraph.
-          !modeColor && "hover:text-accent",
-          modeColor,
+          stacked
+            ? "flex w-full items-center justify-between gap-2 rounded-lg px-2.5 py-2 text-[13px] outline-none select-none transition-colors duration-100"
+            : "composer-chip flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-medium transition-all duration-150 ease-out",
+          stacked
+            ? "text-content-muted hover:bg-surface-muted hover:text-content"
+            : cn(
+                "text-content-muted hover:scale-105 hover:bg-accent/10 active:scale-95",
+                // Only switch the label to accent on hover for the neutral mode —
+                // riskier modes (warning/danger) keep their semantic color so the
+                // chip never loses its risk telegraph.
+                !modeColor && "hover:text-accent",
+                modeColor,
+              ),
         )}
         title="Permission mode for the next session"
       >
-        <span className="shrink-0 opacity-90">{chipIcon}</span>
-        <span className="min-w-0 truncate">{chipLabel}</span>
-        <IconChevronDown size={11} className="shrink-0 opacity-60" />
+        {stacked ? (
+          <>
+            <span className="flex min-w-0 items-center gap-2">
+              <span className="shrink-0 opacity-90">{chipIcon}</span>
+              <span className="shrink-0 font-medium text-content">
+                {t("chat.permission.rowLabel")}
+              </span>
+            </span>
+            <span className="flex min-w-0 items-center gap-1">
+              <span className={cn("min-w-0 truncate text-xs", modeColor || "text-content-muted")}>
+                {chipLabel}
+              </span>
+              <IconChevronRight size={12} className="shrink-0 opacity-60" />
+            </span>
+          </>
+        ) : (
+          <>
+            <span className="shrink-0 opacity-90">{chipIcon}</span>
+            <span className="min-w-0 truncate">{chipLabel}</span>
+            <IconChevronDown size={11} className="shrink-0 opacity-60" />
+          </>
+        )}
       </Menu.Trigger>
       <Menu.Portal>
-        <Menu.Positioner side="top" align="start">
+        <Menu.Positioner
+          side={cascade ? "right" : "top"}
+          align="start"
+          sideOffset={cascade ? 6 : 0}
+        >
           <Menu.Popup
             className={cn(
-              "z-50 min-w-[260px] origin-bottom-left rounded-lg border border-edge bg-surface py-1.5 shadow-2xl",
+              "z-50 min-w-[260px] rounded-lg border border-edge bg-surface py-1.5 shadow-2xl",
+              cascade ? "origin-top-left" : "origin-bottom-left",
               "data-[ending-style]:scale-95 data-[ending-style]:opacity-0",
               "data-[starting-style]:scale-95 data-[starting-style]:opacity-0",
               "transition-[transform,opacity] duration-100",

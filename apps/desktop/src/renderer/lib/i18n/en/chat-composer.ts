@@ -163,6 +163,7 @@ export const en = {
   "chat.model.notConfigured": "No model configured yet — add one below",
   "chat.model.manage": "Add / manage models…",
   "chat.model.default": "Default",
+  "chat.model.rowLabel": "Model",
 
   // ── model config guard dialog ──
   "chat.modelConfig.title": "No model configured",
@@ -179,6 +180,7 @@ export const en = {
   "chat.effort.hintHigh": "More thinking",
   "chat.effort.hintXhigh": "Deep thinking",
   "chat.effort.hintMax": "Most thorough, slowest",
+  "chat.effort.rowLabel": "Thinking",
 
   // ── permission mode dropdown ──
   "chat.permission.section": "Permission level",
@@ -186,6 +188,7 @@ export const en = {
   "chat.permission.hintAcceptEdits": "Auto-allow file edits inside the working directory",
   "chat.permission.hintPlan": "Read-only exploration; every write requires approval",
   "chat.permission.hintBypass": "Skip all permission checks (use with care)",
+  "chat.permission.rowLabel": "Permissions",
 
   // ── provider (SDK) dropdown ──
   "chat.provider.locked": "This session's SDK is fixed and cannot be changed",
@@ -249,6 +252,7 @@ export const en = {
 
   // ── context ring + context stats popover ──
   "chat.context.stats": "Context stats",
+  "chat.context.rowLabel": "Context",
   "chat.context.modelLine": "Model · {model}",
   "chat.context.viewDetails": "View details",
   "chat.context.turns": "{n} turns",

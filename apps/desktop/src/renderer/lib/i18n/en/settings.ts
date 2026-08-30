@@ -630,4 +630,8 @@ export const en = {
   "settings.usage.unknownModel": "Unknown model",
   "settings.usage.unknownVendor": "Unknown vendor",
   "settings.usage.empty": "No usage yet — stats appear here after your first completed turn.",
+
+  // ── mobile settings sheet (MobileSettingsSheet) ──
+  "settings.mobile.displayModeHint":
+    "In tabs mode, a session tab strip appears above the chat for switching between open threads. This preference is shared with the desktop.",
 } as const;
