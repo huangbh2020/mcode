@@ -245,7 +245,7 @@ export function MobileSessionDrawer({
       />
       <aside
         className={cn(
-          "absolute inset-y-0 left-0 flex w-[min(88vw,340px)] flex-col border-r border-edge bg-surface shadow-2xl",
+          "absolute inset-y-0 left-0 flex w-[min(88vw,340px)] flex-col border-r border-edge bg-surface-muted shadow-2xl",
           "transition-transform duration-200 ease-out",
           entered ? "translate-x-0" : "-translate-x-full",
         )}
@@ -255,7 +255,7 @@ export function MobileSessionDrawer({
             only way across views (the active segment doubles as the
             "where am I" cue; 会话 is the way back from files/git). */}
         <div className="flex shrink-0 items-center gap-1 px-3 pb-1 pt-3">
-          <div className="flex min-w-0 flex-1 items-center gap-0.5 rounded-xl bg-surface-muted/60 p-0.5">
+          <div className="flex min-w-0 flex-1 items-center gap-0.5 rounded-xl bg-surface/60 p-0.5">
             {NAV_ITEMS.map(({ id, labelKey, icon: NavIcon }) => (
               <button
                 key={id}
@@ -277,7 +277,7 @@ export function MobileSessionDrawer({
             type="button"
             aria-label="关闭"
             onClick={onClose}
-            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-content-muted active:bg-surface-muted"
+            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-content-muted active:bg-surface-hover"
           >
             <IconX size={18} />
           </button>
@@ -285,7 +285,7 @@ export function MobileSessionDrawer({
 
         {/* Search */}
         <div className="shrink-0 px-3 pb-2 pt-1">
-          <div className="flex h-10 items-center gap-2 rounded-xl border border-edge bg-surface-muted/60 px-3">
+          <div className="flex h-10 items-center gap-2 rounded-xl border border-edge bg-surface/60 px-3">
             <IconSearch size={16} className="shrink-0 text-content-subtle" />
             <input
               value={query}
@@ -302,7 +302,7 @@ export function MobileSessionDrawer({
                 type="button"
                 aria-label="清除搜索"
                 onClick={() => setQuery("")}
-                className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-content-subtle active:bg-surface-muted"
+                className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-content-subtle active:bg-surface-hover"
               >
                 <IconX size={14} />
               </button>
@@ -356,7 +356,7 @@ export function MobileSessionDrawer({
                   <button
                     type="button"
                     onClick={() => setPinnedOpen(!pinnedOpen)}
-                    className="flex min-h-[40px] w-full items-center gap-1.5 rounded-lg px-3 text-xs font-medium uppercase tracking-wide text-content-subtle active:bg-surface-muted"
+                    className="flex min-h-[40px] w-full items-center gap-1.5 rounded-lg px-3 text-xs font-medium uppercase tracking-wide text-content-subtle active:bg-surface-hover"
                   >
                     <IconChevronRight
                       size={14}
@@ -400,7 +400,7 @@ export function MobileSessionDrawer({
                                 <button
                                   type="button"
                                   onClick={() => void loadMoreSessions(p.id)}
-                                  className="flex min-h-[44px] w-full items-center rounded-lg px-3 text-left text-sm text-content-subtle active:bg-surface-muted"
+                                  className="flex min-h-[44px] w-full items-center rounded-lg px-3 text-left text-sm text-content-subtle active:bg-surface-hover"
                                 >
                                   加载更多
                                   {total > sessions.length ? `（还有 ${total - sessions.length} 条）` : ""}
@@ -421,7 +421,7 @@ export function MobileSessionDrawer({
                   <button
                     type="button"
                     onClick={() => setArchiveOpen((v) => !v)}
-                    className="flex min-h-[44px] w-full items-center gap-2 rounded-lg px-3 text-left active:bg-surface-muted"
+                    className="flex min-h-[44px] w-full items-center gap-2 rounded-lg px-3 text-left active:bg-surface-hover"
                   >
                     <IconChevronRight
                       size={14}
@@ -574,7 +574,7 @@ function SheetShell({
       />
       <div
         className={cn(
-          "absolute inset-x-0 bottom-0 rounded-t-2xl border-t border-edge bg-surface pb-2 shadow-2xl",
+          "absolute inset-x-0 bottom-0 rounded-t-2xl border-t border-edge bg-surface-muted pb-2 shadow-2xl",
           "transition-transform duration-200 ease-out",
           entered ? "translate-y-0" : "translate-y-full",
         )}
@@ -605,7 +605,7 @@ function SheetItem({
       type="button"
       onClick={onClick}
       className={cn(
-        "flex min-h-12 w-full items-center gap-3 px-4 text-left text-sm active:bg-surface-muted",
+        "flex min-h-12 w-full items-center gap-3 px-4 text-left text-sm active:bg-surface-hover",
         danger ? "text-danger" : "text-content",
       )}
     >
@@ -768,7 +768,7 @@ function RenameSheet({
           <button
             type="button"
             onClick={onClose}
-            className="h-10 flex-1 rounded-xl border border-edge text-sm text-content-muted active:bg-surface-muted"
+            className="h-10 flex-1 rounded-xl border border-edge text-sm text-content-muted active:bg-surface-hover"
           >
             取消
           </button>
@@ -813,7 +813,7 @@ function SessionRow({
         type="button"
         onClick={onPick}
         className={cn(
-          "flex min-h-[48px] min-w-0 flex-1 items-center gap-2.5 rounded-lg py-1.5 pl-3 pr-1 text-left active:bg-surface-muted",
+          "flex min-h-[48px] min-w-0 flex-1 items-center gap-2.5 rounded-lg py-1.5 pl-3 pr-1 text-left active:bg-surface-hover",
           active && "bg-surface-hover",
         )}
       >
@@ -842,7 +842,7 @@ function SessionRow({
         type="button"
         aria-label="更多操作"
         onClick={onMore}
-        className="flex w-11 shrink-0 items-center justify-center self-stretch rounded-lg text-content-subtle active:bg-surface-muted"
+        className="flex w-11 shrink-0 items-center justify-center self-stretch rounded-lg text-content-subtle active:bg-surface-hover"
       >
         <IconDotsVertical size={18} />
       </button>
@@ -877,7 +877,7 @@ function ProjectHeader({
       <button
         type="button"
         onClick={onToggle}
-        className="flex min-h-[44px] min-w-0 flex-1 items-center gap-2 rounded-lg px-3 text-left active:bg-surface-muted"
+        className="flex min-h-[44px] min-w-0 flex-1 items-center gap-2 rounded-lg px-3 text-left active:bg-surface-hover"
       >
         <IconChevronRight
           size={14}
@@ -894,7 +894,7 @@ function ProjectHeader({
         type="button"
         aria-label={t("layout.newSessionHere")}
         onClick={onNewSession}
-        className="flex w-11 shrink-0 items-center justify-center self-stretch rounded-lg text-content-subtle active:bg-surface-muted"
+        className="flex w-11 shrink-0 items-center justify-center self-stretch rounded-lg text-content-subtle active:bg-surface-hover"
       >
         <IconPlus size={18} />
       </button>
@@ -923,7 +923,7 @@ function ArchivedRow({
         type="button"
         aria-label="归档项操作"
         onClick={onMore}
-        className="flex w-11 shrink-0 items-center justify-center self-stretch rounded-lg text-content-subtle active:bg-surface-muted"
+        className="flex w-11 shrink-0 items-center justify-center self-stretch rounded-lg text-content-subtle active:bg-surface-hover"
       >
         <IconDotsVertical size={18} />
       </button>

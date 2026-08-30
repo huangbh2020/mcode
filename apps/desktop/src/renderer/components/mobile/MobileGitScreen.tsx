@@ -2,22 +2,23 @@
  * MobileGitScreen — the mobile git panel (bottom-nav page of the web shell).
  *
  * A focused, mobile-first take on the desktop GitRepoCard: discover repos under
- * the active project, show changed/staged files with stage toggles, edit a
- * commit message (with AI generation), commit / commit-and-push, and sync with
- * the remote. Actions live in two contextual zones instead of one button soup:
- * the branch bar hosts the remote ops (拉取 / 推送 / 同步, next to the
- * ahead/behind counts they resolve), and the commit box hosts the staging ops
- * (提交 / 提交并推送). The operations map 1:1 to the `git:*` mobile RPC
- * whitelist, which reuses the desktop git module's helpers (same path guard,
- * same simple-git loader, same LLM commit-message core) — behavior is
- * identical, only the transport differs.
+ * the active project, switch branches (bottom-sheet picker with search /
+ * remote-tracking / new-branch flows), show changed/staged files with stage
+ * toggles, edit a commit message (with AI generation), commit /
+ * commit-and-push, and sync with the remote. Actions live in two contextual
+ * zones instead of one button soup: the branch bar hosts the remote ops
+ * (拉取 / 推送 / 同步, next to the ahead/behind counts they resolve), and the
+ * commit box hosts the staging ops (提交 / 提交并推送). The operations map 1:1
+ * to the `git:*` mobile RPC whitelist, which reuses the desktop git module's
+ * helpers (same path guard, same simple-git loader, same LLM commit-message
+ * core) — behavior is identical, only the transport differs.
  */
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { api } from "@renderer/lib/api.js";
 import { useSessionStore } from "@renderer/stores/sessionStore.js";
 import { useToastStore } from "@renderer/stores/toastStore.js";
 import { cn } from "@renderer/lib/cn.js";
-import type { GitRepo, GitStatusResult, GitStatusCode } from "@contracts/ipc";
+import type { GitRepo, GitStatusResult, GitStatusCode, GitBranchInfo, GitBranchListResult } from "@contracts/ipc";
 import {
   IconGitBranch,
   IconRefresh,
@@ -30,9 +31,13 @@ import {
   IconSparkles,
   IconFile,
   IconCopy,
+  IconChevronDown,
+  IconTag,
+  IconPlus,
 } from "@renderer/lib/icons.js";
 import { copyText } from "@renderer/lib/clipboard.js";
 import { browserUuid } from "@renderer/lib/uuid.js";
+import { useI18n } from "@renderer/lib/i18n/index.js";
 import { parsePatch, PatchRows } from "./PatchView.js";
 
 /** Compact per-status glyphs for the file-list badges. */
@@ -59,6 +64,7 @@ const STATUS_COLOR: Record<string, string> = {
 };
 
 export function MobileGitScreen() {
+  const { t } = useI18n();
   const activeProjectId = useSessionStore((s) => s.activeProjectId);
   const projects = useSessionStore((s) => s.projects);
   const commitGenModel = useSessionStore((s) => s.commitGenModel);
@@ -95,6 +101,10 @@ export function MobileGitScreen() {
   const genRequestIdRef = useRef<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [diffPath, setDiffPath] = useState<{ path: string; staged: boolean } | null>(null);
+  // Branch-switcher bottom sheet (opened by tapping the branch in the status
+  // bar). The heavy lifting (list / search / checkout / create) lives in
+  // BranchSheet; the parent only refreshes after a successful switch.
+  const [branchSheetOpen, setBranchSheetOpen] = useState(false);
 
   // Discover repos when the project changes.
   const discover = useCallback(async () => {
@@ -325,17 +335,29 @@ export function MobileGitScreen() {
             </select>
           )}
 
-          {/* Branch status + remote actions — one bar. The branch line owns
-              the ahead/behind state; the three sync buttons dock right of it
-              and reuse the ↑/↓ arrows so each button pairs with the count it
-              resolves (推送 ↔ ↑领先, 拉取 ↔ ↓落后). */}
+          {/* Branch status + remote actions — one bar. The branch chip is a
+              tappable button: it opens the branch-switcher sheet (chevron is
+              the affordance). The ahead/behind counts sit OUTSIDE the button —
+              they are read-only state, not part of the tap target. The three
+              sync buttons dock right of the bar and reuse the ↑/↓ arrows so
+              each button pairs with the count it resolves (推送 ↔ ↑领先,
+              拉取 ↔ ↓落后). */}
           {status && (
             <div className="mb-2 flex shrink-0 items-center gap-2">
-              <div className="flex min-w-0 flex-1 items-center gap-1.5 text-xs text-content-muted">
-                <IconGitBranch size={13} className="shrink-0" />
-                <span className="min-w-0 truncate font-mono text-content" title={status.branch}>
-                  {status.branch || "(无分支)"}
-                </span>
+              <div className="flex min-w-0 flex-1 items-center gap-1 text-xs text-content-muted">
+                <button
+                  type="button"
+                  onClick={() => setBranchSheetOpen(true)}
+                  disabled={!!busy || !repoPath}
+                  title={t("ide.git.switchBranch")}
+                  className="flex min-w-0 items-center gap-1.5 rounded-lg py-1 pl-1 pr-1.5 active:bg-surface-hover disabled:opacity-50"
+                >
+                  <IconGitBranch size={13} className="shrink-0" />
+                  <span className="min-w-0 max-w-[38vw] truncate font-mono text-content">
+                    {status.branch || t("ide.git.noBranches")}
+                  </span>
+                  <IconChevronDown size={12} className="shrink-0 text-content-subtle" />
+                </button>
                 {status.ahead > 0 && (
                   <span
                     className="flex shrink-0 items-center gap-0.5 text-accent"
@@ -541,6 +563,14 @@ export function MobileGitScreen() {
         </div>
       )}
 
+      {branchSheetOpen && repoPath && (
+        <BranchSheet
+          repoPath={repoPath}
+          onClose={() => setBranchSheetOpen(false)}
+          onChanged={refresh}
+        />
+      )}
+
       {diffPath && repoPath && (
         <DiffOverlay repoPath={repoPath} file={diffPath} onClose={() => setDiffPath(null)} />
       )}
@@ -548,11 +578,314 @@ export function MobileGitScreen() {
   );
 }
 
+/**
+ * BranchSheet — the bottom-sheet branch switcher, opened from the branch chip
+ * in the status bar. Lists local branches / remote branches / tags with a
+ * search filter and a "new branch" flow, reusing the desktop picker's ref
+ * semantics: local → `git checkout <name>`; remote → switch to the same-named
+ * local branch when one exists, otherwise create a tracking branch; tag →
+ * detached-HEAD checkout. Chrome follows the mobile shell's muted surface
+ * (the same layer as the top bar / drawer / settings sheet), with wells and
+ * press states inverted one step (surface / hover).
+ */
+function BranchSheet({
+  repoPath,
+  onClose,
+  onChanged,
+}: {
+  repoPath: string;
+  onClose: () => void;
+  /** Called after a successful checkout so the parent refreshes its status. */
+  onChanged: () => Promise<void> | void;
+}) {
+  const { t } = useI18n();
+  const [branches, setBranches] = useState<GitBranchListResult | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [query, setQuery] = useState("");
+  // Display name of the ref with an in-flight checkout — drives the per-row
+  // spinner and disables the rest of the list while a switch is running.
+  const [checkingOut, setCheckingOut] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  // New-branch flow: collapsed "+" row ↔ expanded inline input (autofocus).
+  const [creating, setCreating] = useState(false);
+  const [newName, setNewName] = useState("");
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    api.git
+      .listBranches({ repoPath })
+      .then((res) => {
+        if (!cancelled) setBranches(res.branches);
+      })
+      .catch(() => {
+        if (!cancelled) setBranches(null);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [repoPath]);
+
+  const checkout = async (
+    branch: string,
+    opts?: { newBranch?: string; busyKey?: string },
+  ) => {
+    if (checkingOut) return;
+    setCheckingOut(opts?.busyKey ?? opts?.newBranch ?? branch);
+    setError(null);
+    try {
+      const res = await api.git.checkout({ repoPath, branch, newBranch: opts?.newBranch });
+      if (!res.ok) {
+        setError(res.error ?? t("ide.git.checkoutFailed"));
+        return;
+      }
+      useToastStore.getState().push({
+        kind: "info",
+        title: t("ide.git.switchedTo", { branch: opts?.newBranch ?? branch }),
+        duration: 3000,
+      });
+      await onChanged();
+      onClose();
+    } catch (err) {
+      setError((err as Error).message ?? t("ide.git.checkoutFailed"));
+    } finally {
+      setCheckingOut(null);
+    }
+  };
+
+  /** Same ref semantics as the desktop picker's BranchGroup. */
+  const pick = (b: GitBranchInfo, localNames: Set<string>) => {
+    if (b.current || checkingOut) return;
+    if (b.type === "remote") {
+      // `origin/foo` -> short name `foo`. Track if no local branch yet.
+      const shortName = b.name.includes("/") ? b.name.slice(b.name.indexOf("/") + 1) : b.name;
+      if (localNames.has(shortName)) {
+        void checkout(shortName);
+      } else {
+        void checkout(b.name, { newBranch: shortName, busyKey: b.name });
+      }
+    } else {
+      void checkout(b.name);
+    }
+  };
+
+  const createNew = () => {
+    const name = newName.trim();
+    if (!name || checkingOut) return;
+    setCreating(false);
+    setNewName("");
+    void checkout("HEAD", { newBranch: name });
+  };
+
+  // Search filter (name + commit subject), same fields as the desktop picker.
+  const filtered = useMemo(() => {
+    if (!branches) return null;
+    const q = query.trim().toLowerCase();
+    if (!q) return branches;
+    const match = (b: GitBranchInfo) =>
+      b.name.toLowerCase().includes(q) || b.label.toLowerCase().includes(q);
+    return {
+      current: branches.current,
+      detached: branches.detached,
+      local: branches.local.filter(match),
+      remote: branches.remote.filter(match),
+      tags: branches.tags.filter(match),
+    };
+  }, [branches, query]);
+
+  const localNames = useMemo(
+    () => new Set(branches?.local.map((b) => b.name) ?? []),
+    [branches],
+  );
+
+  const groups: { label: string; items: GitBranchInfo[] }[] | null = filtered
+    ? [
+        { label: t("ide.git.localBranches"), items: filtered.local },
+        { label: t("ide.git.remoteBranches"), items: filtered.remote },
+        { label: t("ide.git.tags"), items: filtered.tags },
+      ]
+    : null;
+  const totalRefs = filtered
+    ? filtered.local.length + filtered.remote.length + filtered.tags.length
+    : 0;
+
+  return (
+    <div className="fixed inset-0 z-50">
+      <button
+        type="button"
+        aria-label="关闭"
+        className="absolute inset-0 bg-black/40"
+        onClick={onClose}
+      />
+      <div className="absolute inset-x-0 bottom-0 flex max-h-[78vh] flex-col rounded-t-2xl border-t border-edge bg-surface-muted shadow-2xl">
+        <div className="flex justify-center pb-1 pt-2">
+          <span className="h-1 w-8 rounded-full bg-edge" />
+        </div>
+        <div className="flex h-9 shrink-0 items-center justify-between px-4">
+          <span className="text-sm font-semibold text-content">{t("ide.git.switchBranch")}</span>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="关闭"
+            className="flex h-8 w-8 items-center justify-center rounded-lg text-content-muted active:bg-surface-hover"
+          >
+            <IconX size={16} />
+          </button>
+        </div>
+
+        {/* Search — filters by branch/tag name and commit subject. */}
+        <div className="shrink-0 px-4 pb-2 pt-1">
+          <div className="flex h-10 items-center gap-2 rounded-xl border border-edge bg-surface/60 px-3">
+            <input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder={t("ide.git.searchBranches")}
+              // text-base: iOS Safari zooms on focus below 16px (same as the
+              // drawer's search box).
+              className="min-w-0 flex-1 bg-transparent text-base text-content outline-none placeholder:text-content-subtle"
+            />
+            {query && (
+              <button
+                type="button"
+                onClick={() => setQuery("")}
+                aria-label="清除搜索"
+                className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-content-subtle active:bg-surface-hover"
+              >
+                <IconX size={13} />
+              </button>
+            )}
+          </div>
+        </div>
+
+        {/* New branch — a collapsed "+" row keeps the sheet calm for the
+            common switch flow; tapping expands an inline input. */}
+        <div className="shrink-0 px-4 pb-2">
+          {creating ? (
+            <div className="flex items-center gap-2">
+              <input
+                autoFocus
+                value={newName}
+                onChange={(e) => setNewName(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && createNew()}
+                placeholder={t("ide.git.newBranchNamePlaceholder")}
+                className="h-10 min-w-0 flex-1 rounded-xl border border-input-edge bg-surface/60 px-3 text-base text-content outline-none focus:border-accent"
+              />
+              <button
+                type="button"
+                onClick={createNew}
+                disabled={!newName.trim() || !!checkingOut}
+                className="h-10 shrink-0 rounded-xl border border-edge px-3 text-xs text-content active:bg-surface-hover disabled:opacity-50"
+              >
+                {t("ide.git.createBranchAction")}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setCreating(false);
+                  setNewName("");
+                }}
+                aria-label="取消新建分支"
+                className="flex h-10 w-9 shrink-0 items-center justify-center rounded-xl text-content-muted active:bg-surface-hover"
+              >
+                <IconX size={15} />
+              </button>
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setCreating(true)}
+              disabled={!!checkingOut}
+              className="flex min-h-[40px] w-full items-center gap-1.5 rounded-lg px-1 text-left text-xs text-content-muted active:bg-surface-hover disabled:opacity-50"
+            >
+              <IconPlus size={14} className="shrink-0" />
+              {t("ide.git.newBranch")}
+            </button>
+          )}
+        </div>
+
+        {error && (
+          <div className="mx-4 mb-2 shrink-0">
+            <ErrorBanner message={error} onDismiss={() => setError(null)} />
+          </div>
+        )}
+
+        {/* Grouped ref list — 44px rows for touch targets, two-line rows so
+            the commit subject survives narrow screens (the desktop picker
+            truncates it to the right; that doesn't fit a phone). */}
+        <div className="min-h-0 flex-1 overflow-y-auto pb-4">
+          {loading ? (
+            <div className="flex items-center justify-center py-8">
+              <IconLoader2 size={16} className="animate-spin text-content-subtle" />
+            </div>
+          ) : !filtered ? (
+            <div className="py-8 text-center text-xs text-content-subtle">
+              {t("ide.git.cannotReadBranches")}
+            </div>
+          ) : totalRefs === 0 ? (
+            <div className="py-8 text-center text-xs text-content-subtle">{t("ide.git.noMatch")}</div>
+          ) : (
+            groups?.map(({ label, items }) =>
+              items.length === 0 ? null : (
+                <div key={label}>
+                  <div className="px-4 pb-0.5 pt-2 text-[10px] font-medium uppercase tracking-wide text-content-subtle">
+                    {label}
+                  </div>
+                  {items.map((b) => {
+                    const switching = checkingOut === b.name;
+                    return (
+                      <button
+                        key={`${b.type}/${b.name}`}
+                        type="button"
+                        onClick={() => pick(b, localNames)}
+                        disabled={!!checkingOut}
+                        className={cn(
+                          "flex min-h-[44px] w-full items-center gap-2.5 px-4 text-left active:bg-surface-hover disabled:opacity-60",
+                          b.current && "text-accent",
+                        )}
+                      >
+                        {switching ? (
+                          <IconLoader2 size={14} className="shrink-0 animate-spin" />
+                        ) : b.type === "tag" ? (
+                          <IconTag size={14} className="shrink-0 text-content-subtle" />
+                        ) : (
+                          <IconGitBranch size={14} className="shrink-0 text-content-subtle" />
+                        )}
+                        <span className="min-w-0 flex-1">
+                          <span
+                            className={cn(
+                              "block truncate font-mono text-xs",
+                              b.current ? "text-accent" : "text-content",
+                            )}
+                          >
+                            {b.name}
+                          </span>
+                          {b.label && (
+                            <span className="block truncate text-[10px] text-content-subtle">
+                              {b.commit} {b.label}
+                            </span>
+                          )}
+                        </span>
+                        {b.current && <IconCheck size={14} className="shrink-0" />}
+                      </button>
+                    );
+                  })}
+                </div>
+              ),
+            )
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /** Git-operation error banner: multi-line-friendly message with copy (for
  *  pasting the failure into a search / chat) and dismiss affordances. Copy
  *  uses the shared helper so it works over the mobile shell's plain-HTTP
- *  LAN transport, where navigator.clipboard is unavailable. */
-function ErrorBanner({ message, onDismiss }: { message: string; onDismiss: () => void }) {
+ *  LAN transport, where navigator.clipboard is unavailable. */function ErrorBanner({ message, onDismiss }: { message: string; onDismiss: () => void }) {
   const [copied, setCopied] = useState(false);
   useEffect(() => {
     if (!copied) return;

@@ -73,6 +73,118 @@ export async function loadSimpleGit(): Promise<typeof simpleGitFn> {
   return simpleGitLoader;
 }
 
+/** Grouped ref list for the branch picker (local / remote / tags + current).
+ *  Shared by the desktop `git:listBranches` IPC handler and the mobile git
+ *  RPC whitelist so both surfaces see identical data. Does NOT apply the
+ *  project-containment guard — callers do that themselves (their refusal
+ *  payloads differ). */
+export async function listBranchesForRepo(repoPath: string): Promise<GitBranchListResult> {
+  const git = (await loadSimpleGit())(repoPath);
+  // `for-each-ref` gives us refname / short hash / subject in one shot.
+  // NOTE: `for-each-ref` uses `%NN` (two hex digits) for byte escapes - NOT
+  // the `%xNN` form that `git log --format` uses. So `%1f` = unit sep
+  // (field), `%0a` = LF (record). `%x1f` would be emitted literally and
+  // break parsing. `*HEAD` symrefs under refs/remotes are excluded - they
+  // duplicate a real remote branch and would confuse checkout.
+  const fmt = "%(refname)%1f%(objectname:short)%1f%(contents:subject)%0a";
+  const rawRefs = await git.raw([
+    "for-each-ref",
+    `--format=${fmt}`,
+    "refs/heads",
+    "refs/remotes",
+    "refs/tags",
+  ]);
+
+  // Determine current ref (branch name, or empty under detached HEAD).
+  let current = "";
+  let detached = false;
+  const curBranch = await git.revparse(["--abbrev-ref", "HEAD"]).catch(() => "");
+  current = (curBranch || "").trim();
+  if (current === "HEAD" || current === "") {
+    detached = true;
+    current = "";
+  }
+
+  const local: GitBranchInfo[] = [];
+  const remote: GitBranchInfo[] = [];
+  const tags: GitBranchInfo[] = [];
+
+  for (const record of rawRefs.split("\n")) {
+    const line = record.trim();
+    if (!line) continue;
+    const [refname, commit, label] = line.split("\x1f");
+    if (!refname) continue;
+
+    // refs/heads/<name>
+    if (refname.startsWith("refs/heads/")) {
+      const name = refname.slice("refs/heads/".length);
+      local.push({
+        name,
+        current: name === current,
+        commit: commit || "",
+        label: label || "",
+        type: "local",
+      });
+      continue;
+    }
+    // refs/remotes/<remote>/<name> - skip <remote>/HEAD symrefs.
+    if (refname.startsWith("refs/remotes/")) {
+      const full = refname.slice("refs/remotes/".length);
+      if (full.endsWith("/HEAD")) continue;
+      remote.push({
+        name: full,
+        current: full === current,
+        commit: commit || "",
+        label: label || "",
+        type: "remote",
+      });
+      continue;
+    }
+    // refs/tags/<name>
+    if (refname.startsWith("refs/tags/")) {
+      const name = refname.slice("refs/tags/".length);
+      // Under detached HEAD, mark the tag matching the current commit.
+      tags.push({
+        name,
+        current: false,
+        commit: commit || "",
+        label: label || "",
+        type: "tag",
+      });
+    }
+  }
+
+  return { current, detached, local, remote, tags };
+}
+
+/** Switch the working tree to another ref. `newBranch` (when set) creates a
+ *  local branch from `branch` first (`git checkout -b`). Shared by the
+ *  desktop `git:checkout` IPC handler and the mobile git RPC whitelist.
+ *  Never throws — failures come back as `{ ok: false, error }`. */
+export async function checkoutRef(
+  repoPath: string,
+  branch: string,
+  newBranch?: string,
+): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const git = (await loadSimpleGit())(repoPath);
+    if (newBranch) {
+      // `git checkout -b <newBranch> <branch>` - create + switch.
+      await git.checkoutBranch(newBranch, branch);
+      log.info(`git.checkout created ${newBranch} from ${branch} in ${repoPath}`);
+    } else {
+      await git.checkout(branch);
+      log.info(`git.checkout switched to ${branch} in ${repoPath}`);
+    }
+    broadcastGitChanged(repoPath);
+    return { ok: true };
+  } catch (err) {
+    const msg = (err as Error).message;
+    log.warn(`git.checkout failed for ${repoPath}: ${msg}`);
+    return { ok: false, error: msg };
+  }
+}
+
 /** Max recursion depth for repo discovery. Keeps the scan fast on deep trees
  *  while still finding nested monorepo packages. */
 export const MAX_SCAN_DEPTH = 3;
@@ -928,82 +1040,7 @@ export function registerGitHandlers(ipcMain: IpcMain): void {
       return { branches: { current: "", detached: false, local: [], remote: [], tags: [] } };
     }
     try {
-      const git = (await loadSimpleGit())(input.repoPath);
-      // `for-each-ref` gives us refname / short hash / subject in one shot.
-      // NOTE: `for-each-ref` uses `%NN` (two hex digits) for byte escapes - NOT
-      // the `%xNN` form that `git log --format` uses. So `%1f` = unit sep
-      // (field), `%0a` = LF (record). `%x1f` would be emitted literally and
-      // break parsing. `*HEAD` symrefs under refs/remotes are excluded - they
-      // duplicate a real remote branch and would confuse checkout.
-      const fmt = "%(refname)%1f%(objectname:short)%1f%(contents:subject)%0a";
-      const rawRefs = await git.raw([
-        "for-each-ref",
-        `--format=${fmt}`,
-        "refs/heads",
-        "refs/remotes",
-        "refs/tags",
-      ]);
-
-      // Determine current ref (branch name, or empty under detached HEAD).
-      let current = "";
-      let detached = false;
-      const curBranch = await git.revparse(["--abbrev-ref", "HEAD"]).catch(() => "");
-      current = (curBranch || "").trim();
-      if (current === "HEAD" || current === "") {
-        detached = true;
-        current = "";
-      }
-
-      const local: GitBranchInfo[] = [];
-      const remote: GitBranchInfo[] = [];
-      const tags: GitBranchInfo[] = [];
-
-      for (const record of rawRefs.split("\n")) {
-        const line = record.trim();
-        if (!line) continue;
-        const [refname, commit, label] = line.split("\x1f");
-        if (!refname) continue;
-
-        // refs/heads/<name>
-        if (refname.startsWith("refs/heads/")) {
-          const name = refname.slice("refs/heads/".length);
-          local.push({
-            name,
-            current: name === current,
-            commit: commit || "",
-            label: label || "",
-            type: "local",
-          });
-          continue;
-        }
-        // refs/remotes/<remote>/<name> - skip <remote>/HEAD symrefs.
-        if (refname.startsWith("refs/remotes/")) {
-          const full = refname.slice("refs/remotes/".length);
-          if (full.endsWith("/HEAD")) continue;
-          remote.push({
-            name: full,
-            current: full === current,
-            commit: commit || "",
-            label: label || "",
-            type: "remote",
-          });
-          continue;
-        }
-        // refs/tags/<name>
-        if (refname.startsWith("refs/tags/")) {
-          const name = refname.slice("refs/tags/".length);
-          // Under detached HEAD, mark the tag matching the current commit.
-          tags.push({
-            name,
-            current: false,
-            commit: commit || "",
-            label: label || "",
-            type: "tag",
-          });
-        }
-      }
-
-      return { branches: { current, detached, local, remote, tags } };
+      return { branches: await listBranchesForRepo(input.repoPath) };
     } catch (err) {
       log.warn(`git.listBranches failed for ${input.repoPath}: ${(err as Error).message}`);
       return { branches: { current: "", detached: false, local: [], remote: [], tags: [] } };
@@ -1016,23 +1053,7 @@ export function registerGitHandlers(ipcMain: IpcMain): void {
     if (!findContainingProject(input.repoPath)) {
       return { ok: false, error: "仓库路径不在任何已添加的项目内" };
     }
-    try {
-      const git = (await loadSimpleGit())(input.repoPath);
-      if (input.newBranch) {
-        // `git checkout -b <newBranch> <branch>` - create + switch.
-        await git.checkoutBranch(input.newBranch, input.branch);
-        log.info(`git.checkout created ${input.newBranch} from ${input.branch} in ${input.repoPath}`);
-      } else {
-        await git.checkout(input.branch);
-        log.info(`git.checkout switched to ${input.branch} in ${input.repoPath}`);
-      }
-      broadcastGitChanged(input.repoPath);
-      return { ok: true };
-    } catch (err) {
-      const msg = (err as Error).message;
-      log.warn(`git.checkout failed for ${input.repoPath}: ${msg}`);
-      return { ok: false, error: msg };
-    }
+    return checkoutRef(input.repoPath, input.branch, input.newBranch);
   });
 
   /* ── git:mergePreview - read-only preview of merging `source` into HEAD ── */

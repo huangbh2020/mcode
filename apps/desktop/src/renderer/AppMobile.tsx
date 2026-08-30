@@ -140,8 +140,10 @@ function MobileShell() {
     <div className="flex h-full w-full flex-col bg-surface text-content">
       {/* Top bar — kept at exactly h-10 (40px) so the shared Dialog backdrop
           (`top-10` in components/ui/dialog.tsx) still aligns with the shell
-          chrome without platform-specific CSS. */}
-      <div className="flex h-10 shrink-0 items-center gap-1 border-b border-edge px-1.5">
+          chrome without platform-specific CSS. bg-surface-muted (same as the
+          desktop Titlebar) lifts the chrome one step off the bg-surface main
+          panel so the bar reads as a distinct layer in both themes. */}
+      <div className="flex h-10 shrink-0 items-center gap-1 border-b border-edge bg-surface-muted px-1.5">
         <button
           type="button"
           aria-label="打开会话列表"

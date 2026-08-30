@@ -8,8 +8,8 @@
  * path guard the desktop IPC handlers use, and calls simple-git / the shared
  * commit-gen core. Operations are the focused subset the mobile Git panel
  * needs: discover / status / diff / stage / unstage / commit / push / pull /
- * generateCommitMessage. Dangerous ops (discard, resolveConflicts) are
- * intentionally NOT exposed to mobile.
+ * listBranches / checkout / generateCommitMessage. Dangerous ops (discard,
+ * resolveConflicts) are intentionally NOT exposed to mobile.
  */
 import { resolve, relative } from "node:path";
 import {
@@ -21,6 +21,7 @@ import {
   GitDiffSchema,
   GitGenerateCommitSchema,
   GitCancelGenerateCommitSchema,
+  GitCheckoutSchema,
   type GitRepo,
 } from "@contracts/ipc";
 import { ProjectRepo } from "@main/store/repositories.js";
@@ -31,6 +32,8 @@ import {
   findGitRepos,
   generateCommitMessageForRepo,
   cancelCommitMessageGeneration,
+  listBranchesForRepo,
+  checkoutRef,
   MAX_SCAN_DEPTH,
 } from "@main/ipc/git.js";
 import { registerMobileRpcHandlers, type RpcHandler } from "./mobileRpc.js";
@@ -167,6 +170,25 @@ const handlers: Record<string, RpcHandler> = {
     } catch (err) {
       return { ok: false, error: (err as Error).message };
     }
+  },
+
+  "git:listBranches": async (raw) => {
+    const input = GitRepoPathSchema.parse(raw);
+    if (!findContainingProject(input.repoPath)) {
+      return { branches: { current: "", detached: false, local: [], remote: [], tags: [] } };
+    }
+    try {
+      return { branches: await listBranchesForRepo(input.repoPath) };
+    } catch (err) {
+      log.warn(`mobile git.listBranches failed for ${input.repoPath}: ${(err as Error).message}`);
+      return { branches: { current: "", detached: false, local: [], remote: [], tags: [] } };
+    }
+  },
+
+  "git:checkout": async (raw) => {
+    const input = GitCheckoutSchema.parse(raw);
+    if (!findContainingProject(input.repoPath)) return { ok: false, error: REFUSE };
+    return checkoutRef(input.repoPath, input.branch, input.newBranch);
   },
 
   "git:generateCommitMessage": async (raw) => {

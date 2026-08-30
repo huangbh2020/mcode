@@ -81,13 +81,13 @@ export function MobileSettingsSheet({ open, onClose }: { open: boolean; onClose:
         className="absolute inset-0 bg-black/40"
         onClick={onClose}
       />
-      <div className="absolute inset-x-0 bottom-0 flex max-h-[85vh] flex-col gap-4 overflow-y-auto rounded-t-2xl border-t border-edge bg-surface p-4 pb-6 text-content">
+      <div className="absolute inset-x-0 bottom-0 flex max-h-[85vh] flex-col gap-4 overflow-y-auto rounded-t-2xl border-t border-edge bg-surface-muted p-4 pb-6 text-content">
         <div className="flex items-center justify-between">
           <h2 className="text-sm font-semibold">设置</h2>
           <button
             type="button"
             onClick={onClose}
-            className="flex h-8 w-8 items-center justify-center rounded-lg text-content-muted hover:bg-surface-muted"
+            className="flex h-8 w-8 items-center justify-center rounded-lg text-content-muted hover:bg-surface-hover"
           >
             <IconX size={16} />
           </button>
@@ -109,7 +109,7 @@ export function MobileSettingsSheet({ open, onClose }: { open: boolean; onClose:
                     "flex h-16 flex-col items-center justify-center gap-1 rounded-xl border text-xs",
                     active
                       ? "border-accent bg-accent/10 text-accent"
-                      : "border-edge bg-surface-muted/50 text-content-muted hover:bg-surface-muted",
+                      : "border-edge bg-surface/50 text-content-muted hover:bg-surface-hover",
                   )}
                 >
                   <Icon size={18} />
@@ -140,7 +140,7 @@ export function MobileSettingsSheet({ open, onClose }: { open: boolean; onClose:
                     "flex h-16 flex-col items-center justify-center gap-1 rounded-xl border text-xs",
                     active
                       ? "border-accent bg-accent/10 text-accent"
-                      : "border-edge bg-surface-muted/50 text-content-muted hover:bg-surface-muted",
+                      : "border-edge bg-surface/50 text-content-muted hover:bg-surface-hover",
                   )}
                 >
                   <Icon size={18} />
@@ -157,7 +157,7 @@ export function MobileSettingsSheet({ open, onClose }: { open: boolean; onClose:
         {/* Server */}
         <div className="flex flex-col gap-2">
           <span className="text-xs font-medium text-content-muted">连接</span>
-          <div className="flex items-center gap-2 rounded-xl border border-edge bg-surface-muted/50 px-3 py-2.5 text-xs text-content-muted">
+          <div className="flex items-center gap-2 rounded-xl border border-edge bg-surface/50 px-3 py-2.5 text-xs text-content-muted">
             <IconLink size={14} className="shrink-0" />
             <span className="truncate">已连接至 {window.location.origin || "未知服务器"}</span>
           </div>
@@ -182,7 +182,7 @@ export function MobileSettingsSheet({ open, onClose }: { open: boolean; onClose:
             <button
               type="button"
               onClick={() => setUnpairConfirm(true)}
-              className="flex h-9 items-center justify-center gap-1.5 rounded-lg border border-edge px-3 text-xs text-danger hover:bg-surface-muted"
+              className="flex h-9 items-center justify-center gap-1.5 rounded-lg border border-edge px-3 text-xs text-danger hover:bg-surface-hover"
             >
               <IconUnlink size={14} />
               解除与这台电脑的配对
