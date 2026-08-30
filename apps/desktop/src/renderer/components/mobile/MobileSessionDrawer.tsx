@@ -16,6 +16,9 @@
  *    menus. Delete arms on the first tap and fires on the second, replacing
  *    the desktop inline-confirm icons. New-session-in-project lives on the
  *    project header's always-visible "+" instead (no hover on touch).
+ *  - The header hosts the shell's view switcher (会话/文件/Git segmented
+ *    control) — the bottom tab bar was removed for screen space, so this is
+ *    the only way across views and doubles as the "where am I" cue.
  *  - A title search box rides on the same cross-project `session:search`
  *    RPC as the desktop Ctrl+K palette; picking a result switches project
  *    first, then opens the tab (mirrors CommandPalette).
@@ -24,7 +27,7 @@
  *    reorder, and the settings / locate / theme rail (settings already
  *    lives in the mobile top bar and MobileSettingsSheet).
  */
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, type ComponentType } from "react";
 import { createPortal } from "react-dom";
 import type { ReactNode } from "react";
 import { cn } from "@renderer/lib/cn.js";
@@ -33,6 +36,7 @@ import { getProviderIcon } from "@renderer/lib/providerIcon.js";
 import { formatRelativeTime } from "@renderer/lib/time.js";
 import { useSessionStore } from "@renderer/stores/sessionStore.js";
 import { useI18n } from "@renderer/lib/i18n/index.js";
+import type { MessageId } from "@renderer/lib/i18n/core.js";
 import { Input } from "@renderer/components/ui/index.js";
 import type { Project, Session } from "@contracts/session";
 import {
@@ -42,13 +46,31 @@ import {
   IconDotsVertical,
   IconChevronRight,
   IconFolder,
+  IconMessage,
+  IconGitBranch,
   IconArchive,
   IconPin,
   IconPinnedFilled,
   IconPencil,
   IconTrash,
   IconLoader2,
+  type TablerIconProps,
 } from "@renderer/lib/icons.js";
+
+/** The phone shell's three destinations. Owned here (not AppMobile) because
+ *  the drawer's header segmented control is the only switcher since the
+ *  bottom tab bar was removed. */
+export type MobileView = "chat" | "files" | "git";
+
+const NAV_ITEMS: ReadonlyArray<{
+  id: MobileView;
+  labelKey: MessageId;
+  icon: ComponentType<TablerIconProps>;
+}> = [
+  { id: "chat", labelKey: "layout.nav.chat", icon: IconMessage },
+  { id: "files", labelKey: "layout.nav.files", icon: IconFolder },
+  { id: "git", labelKey: "layout.nav.git", icon: IconGitBranch },
+];
 
 /** Which row's action sheet is open. Archived rows are discriminated from
  *  active ones so the sheet offers restore instead of archive. */
@@ -61,12 +83,18 @@ export function MobileSessionDrawer({
   open,
   onClose,
   onPickSession,
+  view,
+  onPickView,
 }: {
   open: boolean;
   onClose: () => void;
   /** Fired when a session was picked or created — the caller flips the
-   *  bottom-nav view back to "chat" so the user lands on the thread. */
+   *  view back to "chat" so the user lands on the thread. */
   onPickSession: () => void;
+  /** Current shell view — highlights the matching header nav segment. */
+  view: MobileView;
+  /** Segment tap: the caller switches view and closes the drawer. */
+  onPickView: (view: MobileView) => void;
 }) {
   const projects = useSessionStore((s) => s.projects);
   const activeProjectId = useSessionStore((s) => s.activeProjectId);
@@ -222,14 +250,34 @@ export function MobileSessionDrawer({
           entered ? "translate-x-0" : "-translate-x-full",
         )}
       >
-        {/* Header */}
-        <div className="flex shrink-0 items-center justify-between px-4 pb-1 pt-3">
-          <span className="text-base font-semibold text-content">会话</span>
+        {/* Header — the segmented view switcher takes the row a plain title
+            used to occupy: it's the most visible slot in the drawer and the
+            only way across views (the active segment doubles as the
+            "where am I" cue; 会话 is the way back from files/git). */}
+        <div className="flex shrink-0 items-center gap-1 px-3 pb-1 pt-3">
+          <div className="flex min-w-0 flex-1 items-center gap-0.5 rounded-xl bg-surface-muted/60 p-0.5">
+            {NAV_ITEMS.map(({ id, labelKey, icon: NavIcon }) => (
+              <button
+                key={id}
+                type="button"
+                onClick={() => onPickView(id)}
+                className={cn(
+                  "flex h-9 min-w-0 flex-1 items-center justify-center gap-1.5 rounded-lg text-sm active:bg-surface-hover/60",
+                  view === id
+                    ? "bg-surface-hover font-medium text-accent"
+                    : "text-content-muted",
+                )}
+              >
+                <NavIcon size={15} className="shrink-0" />
+                <span className="truncate">{t(labelKey)}</span>
+              </button>
+            ))}
+          </div>
           <button
             type="button"
             aria-label="关闭"
             onClick={onClose}
-            className="flex h-9 w-9 items-center justify-center rounded-lg text-content-muted active:bg-surface-muted"
+            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-content-muted active:bg-surface-muted"
           >
             <IconX size={18} />
           </button>

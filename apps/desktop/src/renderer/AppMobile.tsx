@@ -11,6 +11,9 @@
  *    touch-first MobileSessionDrawer slide-over, and the chat column is the
  *    whole screen (ChatPane's container queries already adapt the
  *    gutters/composer to the narrow width).
+ *  - No bottom tab bar (removed for screen space): the drawer's header
+ *    segmented control (会话/文件/Git) is the view switcher, and the top bar
+ *    title mirrors the current view so "where am I" stays visible.
  *  - Settings is the minimal MobileSettingsSheet instead of SettingsPage.
  *  - displayMode (single/tabs, a desktop-shared pref) gates the tab strip:
  *    the default "single" hides it (the drawer is the session switcher);
@@ -24,7 +27,7 @@ import { ModelConfigPrompt } from "./components/chat/ModelConfigPrompt.js";
 import { Toaster } from "./components/layout/Toaster.js";
 import { PairingScreen } from "./components/mobile/PairingScreen.js";
 import { MobileSettingsSheet } from "./components/mobile/MobileSettingsSheet.js";
-import { MobileSessionDrawer } from "./components/mobile/MobileSessionDrawer.js";
+import { MobileSessionDrawer, type MobileView } from "./components/mobile/MobileSessionDrawer.js";
 import { MobileFilesScreen } from "./components/mobile/MobileFilesScreen.js";
 import { MobileGitScreen } from "./components/mobile/MobileGitScreen.js";
 import { MobileViewerOverlay } from "./components/mobile/MobileViewerOverlay.js";
@@ -32,14 +35,12 @@ import { useClaudeEvents } from "./hooks/useClaudeEvents.js";
 import { useSessionStore } from "./stores/sessionStore.js";
 import { useTheme } from "./lib/theme.js";
 import { useChatAppearance, useRightPanelAppearance } from "./lib/appearance.js";
+import { useI18n } from "./lib/i18n/index.js";
 import { isPaired, onAuthLost } from "./lib/webApi.js";
-import { cn } from "./lib/cn.js";
 import {
   IconMenu2,
   IconSettings,
-  IconMessage,
   IconFolder,
-  IconGitBranch,
   SpinnerIcon,
 } from "./lib/icons.js";
 
@@ -97,7 +98,7 @@ function MobileShell() {
   }, [init]);
 
   const [drawerOpen, setDrawerOpen] = useState(false);
-  const [view, setView] = useState<"chat" | "files" | "git">("chat");
+  const [view, setView] = useState<MobileView>("chat");
   const activeSessionId = useSessionStore((s) => s.activeSessionId);
   const displayMode = useSessionStore((s) => s.displayMode);
   const running = useSessionStore((s) =>
@@ -114,6 +115,7 @@ function MobileShell() {
   );
   const settingsOpen = useSessionStore((s) => s.settingsOpen);
   const setSettingsOpen = useSessionStore((s) => s.setSettingsOpen);
+  const { t } = useI18n();
 
   // Picking a session in the drawer activates it — close the drawer on any
   // activation (tab-strip clicks are no-ops here since the drawer is closed).
@@ -150,11 +152,23 @@ function MobileShell() {
         </button>
         <div className="flex min-w-0 flex-1 items-center justify-center gap-1.5 px-1">
           {running && <SpinnerIcon size={13} className="shrink-0 animate-spin text-accent" />}
-          <span className="min-w-0 shrink truncate text-sm font-medium">{title}</span>
+          {/* With the bottom tab bar gone, the title doubles as the "where am
+              I" cue — files/git views show the view name (their own breadcrumb
+              / header carries the project context) instead of the thread
+              title. The spinner stays: the active session running is useful
+              context from any view. */}
+          <span className="min-w-0 shrink truncate text-sm font-medium">
+            {view === "files"
+              ? t("layout.nav.files")
+              : view === "git"
+                ? t("layout.nav.git")
+                : title}
+          </span>
           {/* Mobile counterpart of the desktop Titlebar's ActiveProjectChip —
               without it, the thread's owning project is invisible outside the
-              drawer (fresh sessions show as a bare "New session" title). */}
-          {activeSessionId && activeProject && (
+              drawer (fresh sessions show as a bare "New session" title).
+              Chat-scoped, so it hides in the files/git views. */}
+          {view === "chat" && activeSessionId && activeProject && (
             <span className="flex min-w-0 shrink items-center gap-1 px-1 text-xs text-content-subtle">
               <IconFolder size={13} className="shrink-0" />
               <span className="truncate">{activeProject.name}</span>
@@ -179,6 +193,11 @@ function MobileShell() {
           open={drawerOpen}
           onClose={() => setDrawerOpen(false)}
           onPickSession={() => setView("chat")}
+          view={view}
+          onPickView={(v) => {
+            setView(v);
+            setDrawerOpen(false);
+          }}
         />
 
         {/* Chat column: tab strip (only in `tabs` displayMode — the default
@@ -198,30 +217,6 @@ function MobileShell() {
           <MobileGitScreen />
         )}
       </div>
-
-      {/* Bottom nav — 会话 / 文件(只读) / Git. */}
-      <nav className="flex h-12 shrink-0 border-t border-edge">
-        {(
-          [
-            { id: "chat", label: "会话", icon: IconMessage },
-            { id: "files", label: "文件", icon: IconFolder },
-            { id: "git", label: "Git", icon: IconGitBranch },
-          ] as const
-        ).map(({ id, label, icon: NavIcon }) => (
-          <button
-            key={id}
-            type="button"
-            onClick={() => setView(id)}
-            className={cn(
-              "flex flex-1 flex-col items-center justify-center gap-0.5 text-[10px]",
-              view === id ? "text-accent" : "text-content-muted",
-            )}
-          >
-            <NavIcon size={18} />
-            {label}
-          </button>
-        ))}
-      </nav>
 
       {/* Shared overlays — the send-time model-config guard + toasts. (The
           Ctrl+K CommandPalette is desktop-only: its only entry point is the
