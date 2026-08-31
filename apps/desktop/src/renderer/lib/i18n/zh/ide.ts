@@ -41,6 +41,8 @@ export const zh = {
   /* ── file editor / open tabs ── */
   "ide.editor.lspStarting": "{name} 服务器启动中…",
   "ide.editor.lspStartingHint": "语言服务器正在启动,首个跳转/悬停请求会等待就绪(Java 首次导入可能需要几分钟)",
+  "ide.editor.lspImporting": "{name} 项目导入中…",
+  "ide.editor.lspImportingHint": "正在导入 Maven/Gradle 项目(每个工作区仅此一次),跳转/悬停等请求会排队,导入完成后自动恢复;之后启动会快很多",
   "ide.editor.lspFailed": "{name} 服务器启动失败",
   "ide.editor.lspRestartHint": "点击重新启动该语言服务器",
   "ide.editor.lspRestartFailed": "{name} 服务器重启失败",

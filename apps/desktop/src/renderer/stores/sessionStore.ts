@@ -1172,7 +1172,7 @@ export interface SessionState {
    *  driven by `lsp:event` stateChanged pushes (see LspStateChangedPayload).
    *  The editor toolbar reads it to show a loading pill while a server starts
    *  and a failure notice when it couldn't start. Ephemeral. */
-  lspPhasesByWorkspace: Record<string, { phase: "starting" | "running" | "stopped"; error?: string }>;
+  lspPhasesByWorkspace: Record<string, { phase: "starting" | "running" | "stopped" | "importing"; error?: string; detail?: string }>;
 
   /** True once `init()` has started - guards against React StrictMode's
    *  double-effect in dev firing init twice. */
@@ -1494,6 +1494,12 @@ export interface SessionState {
    *  and leave the existing state. Also re-applies the TS-Worker diagnostic
    *  suppression when the typescript server is enabled. */
   reloadLspLanguages: () => Promise<void>;
+  /** Kick off the active project's Java server in the background
+   *  (LspManager.prewarm): the one-time Maven/Gradle import then runs while
+   *  the user browses instead of blocking the first Java file they open.
+   *  No-op when java is disabled / no active project / on web. Main-side
+   *  ensureServer is idempotent, so repeated calls are cheap. */
+  prewarmJavaLspForActiveProject: () => void;
   /** Re-fetch the skill list for the active project from main (scans
    *  ~/.claude/skills + the project's .claude/skills). Safe to call anytime;
    *  no-op silently when there is no active project. */
@@ -3854,7 +3860,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   navBackByProject: {},
   navForwardByProject: {},
   lspLanguages: [] as LspLanguageState[],
-  lspPhasesByWorkspace: {} as Record<string, { phase: "starting" | "running" | "stopped"; error?: string }>,
+  lspPhasesByWorkspace: {} as Record<string, { phase: "starting" | "running" | "stopped" | "importing"; error?: string; detail?: string }>,
 
   /** True once `init()` has started, to guard against React StrictMode's
    *  double-effect in dev (which would otherwise fire init twice). */
@@ -4173,11 +4179,18 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       api.on.lspEvent((msg) => {
         if (msg.type !== "stateChanged") return;
         const p = msg.payload as LspStateChangedPayload;
-        if (!p || (p.phase !== "starting" && p.phase !== "running" && p.phase !== "stopped")) return;
+        if (
+          !p ||
+          (p.phase !== "starting" &&
+            p.phase !== "running" &&
+            p.phase !== "stopped" &&
+            p.phase !== "importing")
+        )
+          return;
         set((s) => ({
           lspPhasesByWorkspace: {
             ...s.lspPhasesByWorkspace,
-            [`${msg.workspacePath}::${msg.language}`]: { phase: p.phase, error: p.error },
+            [`${msg.workspacePath}::${msg.language}`]: { phase: p.phase, error: p.error, detail: p.detail },
           },
         }));
       });
@@ -4456,6 +4469,8 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     }));
     // Load skills for the freshly activated project's `/` menu.
     void get().reloadSkills();
+    // Fresh Java workspace → start its import immediately in the background.
+    get().prewarmJavaLspForActiveProject();
     return project.id;
   },
 
@@ -4486,6 +4501,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     // Skills are project-scoped (project's .claude/skills overlays the global
     // dir), so refresh the composer `/` menu for the newly active project.
     void get().reloadSkills();
+    // Start the Java import for the newly active project in the background
+    // so opening a Java file later doesn't wait behind it.
+    get().prewarmJavaLspForActiveProject();
   },
 
   toggleProjectExpanded: (projectId) =>
@@ -7589,6 +7607,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     try {
       const { languages } = await api.lsp.list();
       set({ lspLanguages: languages });
+      // Java just enabled (or hydration finished with it enabled) → start
+      // the import now rather than at the first openDocument.
+      get().prewarmJavaLspForActiveProject();
       // When the TypeScript server is enabled, suppress Monaco's built-in
       // tsWorker diagnostics so we don't get duplicate squiggles. The setup
       // module exposes this toggle; it's a no-op if Monaco isn't loaded yet.
@@ -7606,6 +7627,17 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     } catch (err) {
       console.error("reloadLspLanguages failed:", err);
     }
+  },
+
+  prewarmJavaLspForActiveProject: () => {
+    if (!isElectron) return;
+    if (!get().lspLanguages.some((l) => l.language === "java" && l.enabled)) return;
+    const pid = get().activeProjectId;
+    const path = pid ? get().projects.find((p) => p.id === pid)?.path : undefined;
+    if (!path) return;
+    void api.lsp.prewarm({ workspacePath: path }).catch((err) => {
+      console.debug("lsp prewarm skipped:", err);
+    });
   },
 
   reloadSkills: async () => {

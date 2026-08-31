@@ -24,9 +24,9 @@
  * renderer can't point a server at arbitrary files.
  */
 import { spawn, type ChildProcess } from "node:child_process";
-import { createWriteStream, existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
+import { createWriteStream, existsSync, mkdirSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { readFile, rm, unlink } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { request as httpRequest } from "node:https";
 import { app } from "electron";
 import {
@@ -109,7 +109,15 @@ const REQUEST_TIMEOUT_MS = 60_000;
  *  import the entire project (Maven/Gradle) on first start, which can take
  *  minutes on large projects. */
 const INITIALIZE_TIMEOUT_MS = 180_000;
+/** Java feature requests get the same leeway: during a first-time project
+ *  import jdtls queues hover/definition/etc. behind the import job, and a
+ *  large multi-module Maven workspace easily backs up past 60s. */
+const JAVA_REQUEST_TIMEOUT_MS = 180_000;
 const INSTALL_LOG_MAX = 8192;
+/** Health-check probe timeout. jdtls has no --version mode and any server
+ *  that doesn't print a version and exit within this window is treated as
+ *  hung (killed + reported failed) rather than spinning forever. */
+const PROBE_TIMEOUT_MS = 10_000;
 /** Max consecutive spawn failures before we stop retrying (prevents an
  *  infinite restart loop when the server can't start -- e.g. missing Java). */
 const MAX_SPAWN_FAILURES = 3;
@@ -644,6 +652,26 @@ class LspManagerImpl {
         error: `未找到 ${spec.displayName} 可执行文件(${spec.binaryNames.join(" / ")}),请先安装或在高级中指定路径`,
       };
     }
+
+    // jdtls must NOT be probed with --version: it has no such mode, so the
+    // argument is forwarded to Equinox and a FULL server (JVM, -Xmx1G) starts
+    // and never exits -- the probe promise never resolved and the settings
+    // button spun forever, leaking a java process per click. Verify the
+    // installation statically instead: the equinox launcher jar is exactly
+    // what buildJavaSpawnCommand needs to start, and the JDK was already
+    // checked above.
+    if (language === "java") {
+      try {
+        findJavaLauncherJar(resolved, this.javaInstallDir());
+        return { ok: true };
+      } catch (err) {
+        return {
+          ok: false,
+          error: `已找到启动器 ${resolved},但 ${(err as Error).message}。jdtls 安装可能不完整,请重新安装。`,
+        };
+      }
+    }
+
     // Probe with --version (most servers support it; gopls uses -h).
     const probeArgs = language === "go" ? ["version"] : ["--version"];
     return new Promise<LspOpResult>((resolveP) => {
@@ -653,16 +681,26 @@ class LspManagerImpl {
         shell: process.platform === "win32",
       });
       let out = "";
+      // Guard against servers that ignore --version and hang: kill the probe
+      // tree and report failure instead of never resolving.
+      const timer = setTimeout(() => {
+        killProbeTree(p);
+        resolveP({ ok: false, error: `探测超时(${PROBE_TIMEOUT_MS / 1000}s):服务器未响应 ${probeArgs.join(" ")}` });
+      }, PROBE_TIMEOUT_MS);
+      const finish = (r: LspOpResult): void => {
+        clearTimeout(timer);
+        resolveP(r);
+      };
       p.stdout?.on("data", (c: Buffer) => (out += c.toString("utf8")));
       p.stderr?.on("data", (c: Buffer) => (out += c.toString("utf8")));
-      p.on("error", (err) => resolveP({ ok: false, error: err.message }));
+      p.on("error", (err) => finish({ ok: false, error: err.message }));
       p.on("exit", (code) => {
         if (code === 0) {
-          resolveP({ ok: true });
+          finish({ ok: true });
         } else {
           // Some servers exit non-zero on --version but still work; treat any
           // output as a soft pass.
-          resolveP(out.trim() ? { ok: true } : { ok: false, error: `退出码 ${code}` });
+          finish(out.trim() ? { ok: true } : { ok: false, error: `退出码 ${code}` });
         }
       });
     });
@@ -805,12 +843,56 @@ class LspManagerImpl {
     this.assertWorkspace(workspacePath);
     const handle = await this.ensureServer(workspacePath, language);
     try {
-      const result = await this.sendRequest(handle, method, params);
+      const result = await this.sendRequest(
+        handle,
+        method,
+        params,
+        language === "java" ? JAVA_REQUEST_TIMEOUT_MS : REQUEST_TIMEOUT_MS,
+      );
       return { result };
     } catch (err) {
       const e = err as { code?: number; message: string };
       return { error: { code: e.code ?? -32603, message: e.message } };
     }
+  }
+
+  /* ───────────────────────── prewarm ───────────────────────── */
+
+  /** Kick off the Java server for a workspace WITHOUT waiting for the user
+   *  to open a Java file. jdtls' one-time project import (minutes on large
+   *  multi-module Maven/Gradle workspaces) queues every feature request
+   *  behind it, so the first openDocument used to eat the whole import.
+   *  Starting when the project becomes ACTIVE hides that wait inside the
+   *  time the user spends browsing. Fire-and-forget: ensureServer pushes
+   *  starting/importing/running events as it progresses, and its crash-loop
+   *  guard makes repeated calls harmless. Only prewarms java — the other
+   *  servers initialize in seconds, nothing to hide. */
+  async prewarm(workspacePath: string): Promise<LspOpResult> {
+    try {
+      this.assertWorkspace(workspacePath);
+    } catch (err) {
+      return { ok: false, error: (err as Error).message };
+    }
+    const config = this.getConfig("java");
+    if (!config?.enabled) {
+      // Not an error: opted-out languages simply have nothing to prewarm.
+      return { ok: false, error: "Java 语言服务器未启用" };
+    }
+    const spec = LANGUAGE_SPECS.java;
+    if (!this.resolveServerPath(spec, config)) {
+      return { ok: false, error: "未找到 jdtls 可执行文件" };
+    }
+    // Skip obvious non-Java workspaces (no build file at the root): spawning
+    // jdtls there just burns a 1GB+ JVM for an empty/invisible project.
+    const isJavaWorkspace = ["pom.xml", "build.gradle", "build.gradle.kts", "settings.gradle", "settings.gradle.kts"].some(
+      (f) => existsSync(join(workspacePath, f)),
+    );
+    if (!isJavaWorkspace) return { ok: true };
+    log.info(`lsp: prewarming java for ${workspacePath}`);
+    void this.ensureServer(workspacePath, "java").catch((err) => {
+      log.info(`lsp: java prewarm did not start for ${workspacePath}: ${(err as Error).message}`);
+    });
+    return { ok: true };
   }
 
   /* ───────────────────────── server lifecycle ───────────────────────── */
@@ -841,14 +923,39 @@ class LspManagerImpl {
     };
   }
 
+  /** Rotate a corrupt jdtls per-workspace data dir aside so the next start
+   *  does a clean import. Rename first (keeps the evidence inspectable); fall
+   *  back to a recursive delete if the rename hits a lingering lock. No-op
+   *  when the dir is already gone. */
+  private rotateJavaWorkspaceData(workspacePath: string): void {
+    const dataDir = join(this.javaInstallDir(), "workspaces", hashPath(workspacePath));
+    if (!existsSync(dataDir)) return;
+    const stamp = new Date()
+      .toISOString()
+      .replace(/[-:]/g, "")
+      .replace("T", "-")
+      .slice(0, 15); // yyyymmdd-hhmmss
+    const corrupt = `${dataDir}.corrupt-${stamp}`;
+    try {
+      renameSync(dataDir, corrupt);
+      log.warn(`lsp[java]: corrupt workspace data rotated to ${corrupt}; restarting with a fresh workspace (project will be re-imported)`);
+    } catch {
+      try {
+        rmSync(dataDir, { recursive: true, force: true });
+        log.warn(`lsp[java]: corrupt workspace data removed (${dataDir}); restarting with a fresh workspace (project will be re-imported)`);
+      } catch (err) {
+        log.warn(`lsp[java]: failed to rotate corrupt workspace ${dataDir}: ${(err as Error).message}`);
+      }
+    }
+  }
+
   /** Construct the Java command line to launch jdtls directly via the Equinox
    *  launcher. This mirrors what the Python `bin/jdtls` script does but without
    *  the stdio-pipe issues of nested process spawning.
    *  @param javaHome Optional override JDK home (JAVA_HOME). When set, jdtls
    *         runs with this JDK instead of the system `java`. This lets users
    *         whose project targets Java 8 run jdtls with a separate Java 17+.
-   *  @throws if the Java version is < 17 (jdtls 1.37.0 requirement). */
-  private async buildJavaSpawnCommand(
+   *  @throws if the Java version is < 17 (jdtls 1.37.0 requirement). */  private async buildJavaSpawnCommand(
     workspacePath: string,
     userArgs: string[],
     javaHome?: string,
@@ -900,8 +1007,14 @@ class LspManagerImpl {
 
   /** Lazily spawn (or reuse) the server for (workspacePath, language). Throws
    *  if the language is disabled, the server binary isn't found, or the server
-   *  has failed to start too many times recently (crash-loop guard). */
-  private async ensureServer(workspacePath: string, language: LspLanguageId): Promise<ServerHandle> {
+   *  has failed to start too many times recently (crash-loop guard).
+   *  `allowWorkspaceRecovery` gates the java corrupt-workspace retry so the
+   *  single recursive retry can't loop. */
+  private async ensureServer(
+    workspacePath: string,
+    language: LspLanguageId,
+    allowWorkspaceRecovery = true,
+  ): Promise<ServerHandle> {
     this.assertWorkspace(workspacePath);
     const key = serverKey(workspacePath, language);
     const existing = this.servers.get(key);
@@ -1076,6 +1189,18 @@ class LspManagerImpl {
           error: (err as Error).message,
         });
       }
+      // Equinox exit 13 = the -data workspace could not be opened. In practice
+      // that's a corrupt saved workspace tree (ObjectNotFoundException in
+      // SaveManager.restore -- commonly triggered when files it tracked, e.g.
+      // Maven target/ output, are deleted externally between saves). jdtls can
+      // never start again on that data dir, so rotate it aside and retry once
+      // with a fresh workspace (which re-imports the project).
+      if (language === "java" && allowWorkspaceRecovery && handle.proc.exitCode === 13) {
+        this.rotateJavaWorkspaceData(workspacePath);
+        // The retry must not be blocked by the failure we just recorded.
+        this.spawnFailures.delete(key);
+        return this.ensureServer(workspacePath, language, false);
+      }
       throw err;
     }
   }
@@ -1119,6 +1244,12 @@ class LspManagerImpl {
         workspace: {
           workspaceEdit: {},
           didChangeConfiguration: {},
+        },
+        window: {
+          // Opt in to $/progress so jdtls reports project-import progress
+          // (otherwise it stays silent and a first-time import looks like a
+          // hung server).
+          workDoneProgress: true,
         },
       },
       initializationOptions: spec.initOptions ?? {},
@@ -1202,7 +1333,15 @@ class LspManagerImpl {
         const entry = handle.pending.get(id);
         if (entry) {
           handle.pending.delete(id);
-          entry.reject(new Error(`LSP 请求超时: ${method}`));
+          // lspManager.request() returns timeouts as {error} instead of
+          // throwing, so the IPC layer never logs them -- record it here or
+          // the failure is invisible in main.log.
+          log.warn(`lsp[${handle.language}]: request timed out after ${timeoutMs / 1000}s: ${method}`);
+          const hint =
+            handle.language === "java"
+              ? "(Java 首次启动会导入整个 Maven/Gradle 项目,期间请求会排队,导入完成后即恢复)"
+              : "";
+          entry.reject(new Error(`LSP 请求超时: ${method}${hint}`));
         }
       }, timeoutMs);
       handle.pending.set(id, { resolve: resolveP, reject: rejectP, timer });
@@ -1306,6 +1445,60 @@ class LspManagerImpl {
       case "$/cancelRequest":
         // We don't support server-initiated cancellation.
         break;
+      case "language/status": {
+        // jdtls status notifications. Probe-verified shapes (1.37):
+        //   {type:"Starting", message:"24% Starting Java Language Server - Importing project welfare-service"}
+        //   {type:"ServiceReady"| "Started", ...} after the import finishes,
+        //   {type:"ProjectStatus", message:"Importing ..."} on re-imports.
+        // The Starting messages stream continuously through startup+import —
+        // forwarded as stateChanged{importing, detail} so the editor pill
+        // shows live progress (percentage + current module) instead of a
+        // mystery wait, plus log events for observability.
+        const p = (req.params ?? {}) as { type?: string; message?: string };
+        {
+          const text = [p.type, p.message].filter(Boolean).join(": ");
+          if (text) {
+            log.info(`lsp[${handle.language}] status: ${text}`);
+            this.pushEvent(handle, "log", { level: "info", message: text });
+          }
+        }
+        if (p.type === "Starting") {
+          const m = /^(\d+)%\s*(.*)$/.exec(p.message ?? "");
+          if (m) {
+            const action = m[2].replace(/^Starting Java Language Server\s*[-–]\s*/i, "").trim();
+            this.pushEvent(handle, "stateChanged", {
+              phase: "importing",
+              running: false,
+              detail: `${m[1]}%${action ? ` · ${action}` : ""}`,
+            });
+          }
+        } else if (p.type === "ServiceReady" || p.type === "Started") {
+          this.pushEvent(handle, "stateChanged", { phase: "running", running: true });
+        } else if (p.type === "ProjectStatus") {
+          this.pushEvent(handle, "stateChanged", {
+            phase: p.message ? "importing" : "running",
+            running: !p.message,
+          });
+        }
+        break;
+      }
+      case "$/progress": {
+        // Server job progress (jdtls project import, formatting, ...).
+        // Surfaced as log events so "requests are slow because the server is
+        // importing" is visible instead of a mystery timeout.
+        const p = (req.params ?? {}) as {
+          value?: { kind?: string; title?: string; message?: string; percentage?: number };
+        };
+        const v = p.value ?? {};
+        if (v.kind === "begin" || v.kind === "report") {
+          const text = [v.title, v.message].filter(Boolean).join(" · ") + (v.percentage != null ? ` ${Math.round(v.percentage)}%` : "");
+          if (text) {
+            log.info(`lsp[${handle.language}] progress: ${text}`);
+            this.pushEvent(handle, "log", { level: "info", message: text });
+          }
+        }
+        break;
+      }
       default:
         // Other server-initiated requests (e.g. workspace/configuration) get a
         // response so the server doesn't hang. workspace/configuration expects
@@ -1489,6 +1682,44 @@ function findLauncherJar(pluginsDir: string): string {
   const jar = entries.find((e) => /^org\.eclipse\.equinox\.launcher_\d/.test(e));
   if (!jar) throw new Error(`未在 ${pluginsDir} 中找到 equinox launcher jar`);
   return join(pluginsDir, jar);
+}
+
+/** Locate the equinox launcher jar for an installed jdtls, given how the
+ *  server binary was resolved. Checks the in-app install dir first, then
+ *  directories relative to the binary for PATH-installed releases (typical
+ *  layout: <release>/bin/jdtls + <release>/plugins/...). Returns the jar path
+ *  or throws with the checked locations. */
+function findJavaLauncherJar(resolved: string, installDir: string): string {
+  const bin = dirname(resolved);
+  const candidates = [...new Set([join(installDir, "plugins"), join(bin, "plugins"), join(dirname(bin), "plugins")])];
+  for (const dir of candidates) {
+    try {
+      return findLauncherJar(dir);
+    } catch {
+      // try the next candidate layout
+    }
+  }
+  throw new Error(`未找到 org.eclipse.equinox.launcher_*.jar(检查过 ${candidates.join("、")})`);
+}
+
+/** Kill a health-check probe process. On win32 the spawn used shell:true, so
+ *  p.pid is the cmd.exe wrapper and the actual server is its child --
+ *  p.kill() alone would orphan it, hence taskkill /T (tree). */
+function killProbeTree(p: ChildProcess): void {
+  if (p.pid == null) return;
+  if (process.platform === "win32") {
+    try {
+      spawn("taskkill", ["/pid", String(p.pid), "/T", "/F"], { windowsHide: true, stdio: "ignore" });
+      return;
+    } catch {
+      // fall through to the plain kill
+    }
+  }
+  try {
+    p.kill();
+  } catch {
+    // already dead
+  }
 }
 
 /** The platform-specific config directory name for jdtls. */

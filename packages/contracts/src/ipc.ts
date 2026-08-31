@@ -2581,13 +2581,20 @@ export interface LspLanguageState {
  *  a failed start carries the reason in `error`. */
 export interface LspStateChangedPayload {
   /** "starting" = spawned, initialize handshake in flight (can take minutes
-   *  for Java); "running" = initialize done; "stopped" = exited/failed. */
-  phase: "starting" | "running" | "stopped";
+   *  for Java); "running" = initialize done; "stopped" = exited/failed;
+   *  "importing" = (Java) initialize done but jdtls is still importing the
+   *  project — requests queue behind the import job, so the editor should
+   *  explain the wait instead of showing a generic running state. */
+  phase: "starting" | "running" | "stopped" | "importing";
   /** Boolean view of the phase (running === phase === "running"), kept for
    *  consumers that only care whether the server is usable. */
   running: boolean;
   /** Failure reason when the server couldn't start (phase "stopped"). */
   error?: string;
+  /** Human-readable progress detail for the phase — jdtls reports live
+   *  import progress ("24% · Importing project welfare-service") on every
+   *  language/status update while importing. */
+  detail?: string;
 }
 
 /** A diagnostic pushed from the server via publishDiagnostics. Mirrors LSP
@@ -2643,6 +2650,17 @@ export type LspSetPathInput = z.infer<typeof LspSetPathSchema>;
 
 export const LspHealthCheckSchema = z.object({ language: LspLanguageSchema });
 export type LspHealthCheckInput = z.infer<typeof LspHealthCheckSchema>;
+
+/** Pre-warm a workspace's Java server: spawn it (and thus start the one-time
+ *  Maven/Gradle project import) WITHOUT waiting for the user to open a Java
+ *  file. Called when a project becomes active so the import runs while the
+ *  user browses instead of blocking their first openDocument. Fire-and-forget
+ *  semantics; idempotent (a live server is reused, never restarted). */
+export const LspPrewarmSchema = z.object({
+  /** Project root to pre-warm (must be a known project). */
+  workspacePath: z.string(),
+});
+export type LspPrewarmInput = z.infer<typeof LspPrewarmSchema>;
 
 /** Restart a language server for one workspace. Unlike a toggle-off/on this
  *  immediately relaunches (with the crash-loop guard cleared) so the editor's
@@ -3624,6 +3642,7 @@ export interface RpcMap {
   "lsp.setPath": (input: LspSetPathInput) => Promise<{ languages: LspLanguageState[] }>;
   /** Verify the server binary runs (--version or --help probe). */
   "lsp.healthCheck": (input: LspHealthCheckInput) => Promise<LspOpResult>;
+  "lsp.prewarm": (input: LspPrewarmInput) => Promise<LspOpResult>;
   /** Restart a language server for one workspace (stop + clear the crash-loop
    *  guard + immediately relaunch). Clicking a startup-failure notice calls
    *  this after the user fixes the environment. */
@@ -3880,6 +3899,7 @@ export const IPC = {
   LSP_TOGGLE: "lsp:toggle",
   LSP_SET_PATH: "lsp:setPath",
   LSP_HEALTH_CHECK: "lsp:healthCheck",
+  LSP_PREWARM: "lsp:prewarm",
   LSP_RESTART: "lsp:restart",
   LSP_OPEN_DOC: "lsp:openDocument",
   LSP_CLOSE_DOC: "lsp:closeDocument",

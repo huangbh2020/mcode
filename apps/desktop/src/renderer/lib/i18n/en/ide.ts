@@ -39,6 +39,8 @@ export const en = {
   /* ── file editor / open tabs ── */
   "ide.editor.lspStarting": "{name} server starting…",
   "ide.editor.lspStartingHint": "The language server is starting; the first jump/hover request waits for it (Java's first import can take minutes)",
+  "ide.editor.lspImporting": "{name} importing project…",
+  "ide.editor.lspImportingHint": "Importing the Maven/Gradle project (once per workspace). Jump/hover requests queue behind it and resume automatically when the import finishes; later startups are much faster",
   "ide.editor.lspFailed": "{name} server failed to start",
   "ide.editor.lspRestartHint": "Click to restart the language server",
   "ide.editor.lspRestartFailed": "{name} server restart failed",

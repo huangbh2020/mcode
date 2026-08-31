@@ -17,6 +17,7 @@ import {
   LspToggleSchema,
   LspSetPathSchema,
   LspHealthCheckSchema,
+  LspPrewarmSchema,
   LspRestartSchema,
   LspOpenDocSchema,
   LspCloseDocSchema,
@@ -99,6 +100,17 @@ export function registerLspHandlers(ipcMain: IpcMain): void {
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       log.error(`lsp.healthCheck failed: ${msg}`);
+      return { ok: false, error: msg };
+    }
+  });
+
+  ipcMain.handle(IPC.LSP_PREWARM, async (_evt, raw) => {
+    try {
+      const input = LspPrewarmSchema.parse(raw);
+      return await lspManager.prewarm(input.workspacePath);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      log.warn(`lsp.prewarm failed: ${msg}`);
       return { ok: false, error: msg };
     }
   });

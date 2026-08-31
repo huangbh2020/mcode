@@ -297,6 +297,16 @@ function EditorToolbar({
             {t("ide.editor.lspStarting", { name: LSP_LANGUAGE_DISPLAY[lspLanguageId] })}
           </span>
         )}
+        {lspStatus?.phase === "importing" && lspLanguageId && (
+          <span
+            className="flex items-center gap-1 text-[11px] text-content-subtle"
+            title={t("ide.editor.lspImportingHint")}
+          >
+            <IconLoader2 size={11} className="animate-spin" />
+            {t("ide.editor.lspImporting", { name: LSP_LANGUAGE_DISPLAY[lspLanguageId] })}
+            {lspStatus.detail ? ` ${lspStatus.detail}` : ""}
+          </span>
+        )}
         {lspStatus?.phase === "stopped" && lspStatus.error && lspLanguageId && (
           <button
             type="button"
