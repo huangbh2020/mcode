@@ -102,7 +102,14 @@ app.whenReady().then(async () => {
   // renderer starts loading immediately. IPC handlers await `awaitDb()`
   // internally (see ipc/index.ts), so any request that arrives before the DB
   // is ready simply queues instead of failing.
-  void initDb();
+  void initDb().then(() => {
+    // Legacy cleanup: the browser password vault was removed; wipe any
+    // credentials older builds persisted under this key (nothing reads it
+    // anymore; SettingRepo has no delete, so overwrite with an empty map).
+    if (SettingRepo.get("browser.credentials")) {
+      SettingRepo.set("browser.credentials", "{}");
+    }
+  });
 
   // CSP only in production - in dev, Vite injects inline HMR scripts that a
   // strict CSP would block, leaving the page blank.
@@ -129,9 +136,9 @@ app.whenReady().then(async () => {
   registerIpcHandlers();
   logStartup("IPC handlers registered");
 
-  // HTTP Basic Auth for the embedded browser: BrowserManager auto-fills a
-  // saved credential for the origin, or pushes an "authRequest" event so the
-  // renderer shows a login dialog (answered via the browser.authRespond RPC).
+  // HTTP Basic Auth for the embedded browser: BrowserManager pushes an
+  // "authRequest" event so the renderer shows a login dialog (answered via
+  // the browser.authRespond RPC; credentials are used for that request only).
   // Requests not from a browser view are ignored (default cancel behavior).
   app.on("login", (event, webContents, _details, authInfo, callback) => {
     event.preventDefault();

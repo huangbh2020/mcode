@@ -18,7 +18,6 @@ import { DeviceToolbar } from "./DeviceToolbar.js";
 import { BrowserTabs, type BrowserTabDisplay } from "./BrowserTabs.js";
 import { PickedElementsBar } from "./PickedElementsBar.js";
 import { ConfirmDialog } from "@renderer/components/ui/confirm-dialog.js";
-import { CredentialDialog } from "./CredentialDialog.js";
 import { AuthPromptDialog } from "./AuthPromptDialog.js";
 import { useI18n } from "@renderer/lib/i18n/index.js";
 
@@ -110,8 +109,6 @@ export function BrowserPanel({ mode }: BrowserPanelProps) {
    *  active WebContentsView so the (renderer-DOM) dialog isn't covered by the
    *  OS-level view floating above the stage. */
   const [confirmDestroy, setConfirmDestroy] = useState(false);
-  /** Credential-vault dialog visibility (same hide-view-while-open pattern). */
-  const [credentialsOpen, setCredentialsOpen] = useState(false);
   /** Pending HTTP Basic Auth request pushed by main ("authRequest" event).
    *  Non-null shows the login dialog (view hidden while it's up). */
   const [authRequest, setAuthRequest] = useState<BrowserAuthRequest | null>(null);
@@ -809,28 +806,6 @@ export function BrowserPanel({ mode }: BrowserPanelProps) {
     void api.browser.historyClear({}).then(() => refreshHistory());
   }, [refreshHistory]);
 
-  /** Credential vault dialog — hide the active view while it's open (same
-   *  pattern as the destroy-confirm dialog), restore on close. */
-  const handleCredentialsOpenChange = useCallback(
-    (open: boolean) => {
-      if (!isActive) {
-        setCredentialsOpen(open);
-        return;
-      }
-      const tab = activeTabIdRef.current
-        ? tabsRef.current.find((t) => t.id === activeTabIdRef.current)
-        : null;
-      if (open) {
-        if (tab) void api.browser.hide({ browserId: tab.browserId });
-      } else if (tab) {
-        lastBoundsRef.current = null;
-        showActiveView();
-      }
-      setCredentialsOpen(open);
-    },
-    [isActive, showActiveView],
-  );
-
   /** Auth dialog closed: restore the (previously hidden) active view. */
   const handleAuthClose = useCallback(() => {
     setAuthRequest(null);
@@ -1018,7 +993,6 @@ export function BrowserPanel({ mode }: BrowserPanelProps) {
         onRemoveHistoryEntry={handleRemoveHistoryEntry}
         onClearHistory={handleClearHistory}
         onHistoryMenuOpenChange={handleHistoryMenuOpenChange}
-        onOpenCredentials={() => handleCredentialsOpenChange(true)}
       />
       {/* Device toolbar — the DevTools-style row (device dropdown + custom
           dims + rotate), toggled by the 📱 button above. Rendered between the
@@ -1114,10 +1088,6 @@ export function BrowserPanel({ mode }: BrowserPanelProps) {
         }}
         onConfirm={handleConfirmDestroy}
       />
-
-      {/* Credential vault (manual password manager). The active view is
-          hidden while open via handleCredentialsOpenChange. */}
-      <CredentialDialog open={credentialsOpen} onOpenChange={handleCredentialsOpenChange} />
 
       {/* HTTP Basic Auth prompt (pushed by main as an "authRequest" event;
           the view is hidden while it's up, restored on close). */}

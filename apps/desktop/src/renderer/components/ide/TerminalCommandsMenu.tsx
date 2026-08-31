@@ -7,6 +7,8 @@ import {
   IconBookmark,
   IconPlus,
   IconPlayerPlay,
+  IconPencil,
+  IconTrash,
 } from "@renderer/lib/icons.js";
 import type { CustomCommand } from "@contracts/ipc";
 import { useI18n } from "@renderer/lib/i18n/index.js";
@@ -22,12 +24,17 @@ const EMPTY: CustomCommand[] = [];
  * A bookmark-shaped toolbar button that opens an upward dropdown listing the
  * **active project's** saved commands. Clicking a command's name runs it in a
  * NEW terminal tab (auto-created + switched to); the hover-revealed play
- * button runs it in the current active terminal instead. The menu also carries
- * an inline **quick-add** flow (name + command) - editing and deleting existing
- * commands is done in Settings -> 终端.
+ * button runs it in the current active terminal instead. Hover-revealed
+ * pencil/trash buttons edit/delete the command in place (delete is immediate,
+ * same as Settings -> 终端), and the bottom menu item opens the inline
+ * add/edit dialog (blank id = add mode, non-blank = edit mode).
  *
  * Commands are scoped per-project (see `customCommandsByProject` in the store).
  * When no project is active the menu is disabled.
+ *
+ * The Menu.Root is controlled: opening the dialog from a row action closes the
+ * dropdown first (plain buttons inside the popup don't auto-close it), while
+ * delete keeps it open for consecutive management.
  *
  * Mirrors the base-ui Menu styling of the composer dropdowns
  * (ModelDropdown / ComposerOptionsDropdown) so it reads as part of the same
@@ -47,26 +54,41 @@ export function TerminalCommandsMenu({
     activeProjectId ? s.customCommandsByProject[activeProjectId] ?? EMPTY : EMPTY,
   );
   const addCustomCommand = useSessionStore((s) => s.addCustomCommand);
+  const updateCustomCommand = useSessionStore((s) => s.updateCustomCommand);
+  const removeCustomCommand = useSessionStore((s) => s.removeCustomCommand);
 
-  // Quick-add dialog state: null = closed, otherwise a blank draft.
-  const [adding, setAdding] = useState<{ name: string; command: string } | null>(null);
+  const [menuOpen, setMenuOpen] = useState(false);
+  // Dialog state: null = closed; otherwise the draft being edited (blank id =
+  // add mode, non-blank id = edit mode).
+  const [editing, setEditing] = useState<{ id: string | null; name: string; command: string } | null>(null);
 
-  const openAdd = () => setAdding({ name: "", command: "" });
+  const openAdd = () => setEditing({ id: null, name: "", command: "" });
+  const openEdit = (cmd: CustomCommand) => setEditing({ id: cmd.id, name: cmd.name, command: cmd.command });
 
   const save = () => {
-    if (!adding || !activeProjectId) return;
-    const name = adding.name.trim();
-    const command = adding.command.trim();
+    if (!editing || !activeProjectId) return;
+    const name = editing.name.trim();
+    const command = editing.command.trim();
     if (!name || !command) return; // require both fields
-    addCustomCommand(activeProjectId, { name, command });
-    setAdding(null);
+    if (editing.id) {
+      updateCustomCommand(activeProjectId, { id: editing.id, name, command });
+    } else {
+      addCustomCommand(activeProjectId, { name, command });
+    }
+    setEditing(null);
+  };
+
+  const remove = (id: string) => {
+    if (!activeProjectId) return;
+    removeCustomCommand(activeProjectId, id);
+    setEditing(null);
   };
 
   const disabled = !activeProjectId;
 
   return (
     <>
-      <Menu.Root>
+      <Menu.Root open={menuOpen} onOpenChange={setMenuOpen}>
         <Menu.Trigger
           render={
             <button
@@ -86,7 +108,7 @@ export function TerminalCommandsMenu({
           <Menu.Positioner side="top" align="end" sideOffset={4}>
             <Menu.Popup
               className={cn(
-                "z-50 min-w-[240px] origin-bottom-right rounded-md border border-edge bg-surface py-1 shadow-2xl",
+                "z-50 min-w-[260px] origin-bottom-right rounded-md border border-edge bg-surface py-1 shadow-2xl",
                 "data-[ending-style]:scale-95 data-[ending-style]:opacity-0",
                 "data-[starting-style]:scale-95 data-[starting-style]:opacity-0",
                 "transition-[transform,opacity] duration-100",
@@ -123,8 +145,9 @@ export function TerminalCommandsMenu({
                         {cmd.command}
                       </span>
                     </button>
-                    {/* Hover-revealed: run in the CURRENT terminal (the long-form
-                        play icon hints "re-use existing"). Edit/delete in Settings. */}
+                    {/* Hover-revealed: run in the CURRENT terminal (play), edit
+                        (pencil, closes the menu + opens the dialog), delete
+                        (trash, immediate, menu stays open). */}
                     <div className="flex shrink-0 items-center opacity-0 group-hover:opacity-100 data-[highlighted]:opacity-100">
                       <button
                         type="button"
@@ -133,6 +156,25 @@ export function TerminalCommandsMenu({
                         onClick={() => onRun(cmd.command)}
                       >
                         <IconPlayerPlay size={11} />
+                      </button>
+                      <button
+                        type="button"
+                        className="rounded p-0.5 text-content-subtle hover:bg-surface-hover hover:text-content"
+                        title={t("common.edit")}
+                        onClick={() => {
+                          setMenuOpen(false);
+                          openEdit(cmd);
+                        }}
+                      >
+                        <IconPencil size={11} />
+                      </button>
+                      <button
+                        type="button"
+                        className="rounded p-0.5 text-content-subtle hover:bg-surface-hover hover:text-danger"
+                        title={t("common.delete")}
+                        onClick={() => remove(cmd.id)}
+                      >
+                        <IconTrash size={11} />
                       </button>
                     </div>
                   </div>
@@ -155,25 +197,25 @@ export function TerminalCommandsMenu({
         </Menu.Portal>
       </Menu.Root>
 
-      {/* Quick-add dialog (controlled). Edit/delete existing commands is in
-          Settings -> 终端. */}
-      <Dialog.Root open={adding !== null} onOpenChange={(open) => !open && setAdding(null)}>
+      {/* Add / edit dialog (controlled). Same shape as the Settings -> 终端
+          dialog so both entry points behave identically. */}
+      <Dialog.Root open={editing !== null} onOpenChange={(open) => !open && setEditing(null)}>
         <Dialog.Portal>
           <Dialog.Backdrop />
           <Dialog.Popup className="w-[420px] max-w-[90vw] p-4">
-            <Dialog.Title>{t("ide.term.addCommand")}</Dialog.Title>
+            <Dialog.Title>{editing?.id ? t("ide.term.editCommand") : t("ide.term.addCommand")}</Dialog.Title>
             <Dialog.Description className="mt-1">
-              {t("ide.term.addCommandDesc")}
+              {editing?.id ? t("ide.term.editCommandDesc") : t("ide.term.addCommandDesc")}
             </Dialog.Description>
 
             <div className="mt-4 flex flex-col gap-3">
               <label className="flex flex-col gap-1">
                 <span className="text-[11px] font-medium text-content-muted">{t("ide.term.nameLabel")}</span>
                 <Input
-                  value={adding?.name ?? ""}
+                  value={editing?.name ?? ""}
                   placeholder={t("ide.term.namePlaceholder")}
                   onChange={(e) =>
-                    adding && setAdding({ ...adding, name: (e.target as HTMLInputElement).value })
+                    editing && setEditing({ ...editing, name: (e.target as HTMLInputElement).value })
                   }
                   autoFocus
                 />
@@ -181,10 +223,10 @@ export function TerminalCommandsMenu({
               <label className="flex flex-col gap-1">
                 <span className="text-[11px] font-medium text-content-muted">{t("ide.term.commandLabel")}</span>
                 <textarea
-                  value={adding?.command ?? ""}
+                  value={editing?.command ?? ""}
                   placeholder={t("ide.term.commandPlaceholder")}
                   rows={3}
-                  onChange={(e) => adding && setAdding({ ...adding, command: e.target.value })}
+                  onChange={(e) => editing && setEditing({ ...editing, command: e.target.value })}
                   className={cn(
                     "w-full resize-y rounded border border-edge bg-surface px-2.5 py-1.5 font-mono text-xs leading-relaxed text-content placeholder:text-content-subtle outline-none transition-colors",
                     "focus:border-accent",
@@ -193,18 +235,35 @@ export function TerminalCommandsMenu({
               </label>
             </div>
 
-            <div className="mt-4 flex items-center justify-end gap-2">
-              <Button variant="ghost" size="sm" onClick={() => setAdding(null)}>
-                {t("common.cancel")}
-              </Button>
-              <Button
-                variant="primary"
-                size="sm"
-                onClick={save}
-                disabled={!adding?.name.trim() || !adding?.command.trim()}
-              >
-                {t("common.save")}
-              </Button>
+            <div className="mt-4 flex items-center justify-between">
+              <div>
+                {editing?.id && (
+                  <Button
+                    variant="danger"
+                    size="sm"
+                    onClick={() => {
+                      // Re-check inside the closure: `editing` may have changed
+                      // between render and click.
+                      if (editing?.id) remove(editing.id);
+                    }}
+                  >
+                    {t("common.delete")}
+                  </Button>
+                )}
+              </div>
+              <div className="flex gap-2">
+                <Button variant="ghost" size="sm" onClick={() => setEditing(null)}>
+                  {t("common.cancel")}
+                </Button>
+                <Button
+                  variant="primary"
+                  size="sm"
+                  onClick={save}
+                  disabled={!editing?.name.trim() || !editing?.command.trim()}
+                >
+                  {t("common.save")}
+                </Button>
+              </div>
             </div>
             <Dialog.Close />
           </Dialog.Popup>

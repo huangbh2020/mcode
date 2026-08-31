@@ -37,7 +37,6 @@ import { IPC, resolveBrowserDeviceSpec, BROWSER_DATA_DIR_SETTING_KEY } from "@co
 import type {
   BrowserCreateResult,
   BrowserOpResult,
-  BrowserCredentialsFillResult,
   BrowserDevicePreset,
   BrowserOrientation,
   BrowserViewport,
@@ -50,7 +49,16 @@ import { SettingRepo } from "@main/store/repositories.js";
 import { PICKER_INJECT_SCRIPT, PICKER_REMOVE_SCRIPT } from "./pickerScript.js";
 import { SNAPSHOT_SCRIPT, buildClickScript, buildTypeScript, buildEvaluateScript } from "./snapshotScript.js";
 import { AddressHistory } from "./addressHistory.js";
-import { BrowserCredentialStore, urlOrigin } from "./credentialStore.js";
+
+/** Normalize a URL to its origin (scheme://host[:port]). Returns "" for URLs
+ *  the URL constructor can't parse. */
+function urlOrigin(url: string): string {
+  try {
+    return new URL(url).origin;
+  } catch {
+    return "";
+  }
+}
 
 /** Metadata for a live browser view, returned by `list()` for agent discovery. */
 export interface BrowserInfo {
@@ -456,12 +464,6 @@ class BrowserManagerImpl {
     wc.on("did-start-loading", () => push("loading", { isLoading: true }));
     wc.on("did-stop-loading", () => push("loading", { isLoading: false }));
     wc.on("did-navigate", (_e, url) => {
-      // New page: reset the Basic Auth auto-fill retry guard for THIS view
-      // (keys are `${wcId}:${origin}` — only drop this view's entries).
-      const prefix = `${wc.id}:`;
-      for (const key of this.autoFilledOrigins) {
-        if (key.startsWith(prefix)) this.autoFilledOrigins.delete(key);
-      }
       // Address-bar history (main is the single writer; renderer only reads
       // and requests removals). The title may still be blank this early —
       // page-title-updated below refreshes the entry via record()'s dedupe.
@@ -900,7 +902,7 @@ class BrowserManagerImpl {
     }
   }
 
-  // ── Credential vault + Basic Auth ───────────────────────────────────
+  // ── HTTP Basic Auth ─────────────────────────────────────────────────
 
   /** Pending HTTP Basic Auth prompts: requestId -> Electron login callback.
    *  Filled by handleLogin(), drained by respondAuth(). */
@@ -909,18 +911,11 @@ class BrowserManagerImpl {
     { browserId: string; origin: string; callback: (u: string, p: string) => void }
   >();
 
-  /** Origins we already auto-filled a saved credential for, keyed by
-   *  `${webContentsId}:${origin}`. Cleared on did-navigate: a second login
-   *  event for the same page means the saved credential was REJECTED, so we
-   *  prompt instead of looping. */
-  private readonly autoFilledOrigins = new Set<string>();
-
   /** Route an Electron `app.on("login")` event. Only requests from the
    *  embedded browser's webContents are handled (others — e.g. the app shell
    *  itself — fall through, and the default no-handler behavior cancels).
-   *  Saved credential for the origin → auto-fill; otherwise push an
-   *  "authRequest" event so the renderer shows a login dialog. Registered in
-   *  main/index.ts. */
+   *  Pushes an "authRequest" event so the renderer shows a login dialog.
+   *  Registered in main/index.ts. */
   handleLogin(
     webContentsId: number,
     url: string,
@@ -932,17 +927,6 @@ class BrowserManagerImpl {
     const origin = urlOrigin(url);
     if (!origin) {
       callback("", "");
-      return;
-    }
-    // A failed previous attempt arrives as another login event for the same
-    // URL — don't loop with the same (wrong) saved credential; prompt instead.
-    // There's no reliable retry flag on AuthInfo, so track the origins we
-    // already auto-filled during this page load via a small in-flight set.
-    const alreadyTried = this.autoFilledOrigins.has(`${webContentsId}:${origin}`);
-    const saved = alreadyTried ? undefined : BrowserCredentialStore.get(origin);
-    if (saved) {
-      this.autoFilledOrigins.add(`${webContentsId}:${origin}`);
-      callback(saved.username, saved.password);
       return;
     }
     const requestId = randomUUID();
@@ -975,80 +959,14 @@ class BrowserManagerImpl {
   }
 
   /** Renderer's answer to an "authRequest" push. Empty username = cancel. */
-  respondAuth(
-    requestId: string,
-    username: string,
-    password: string,
-    save: boolean,
-  ): void {
+  respondAuth(requestId: string, username: string, password: string): void {
     const pending = this.pendingAuths.get(requestId);
     if (!pending) return;
     this.pendingAuths.delete(requestId);
-    if (save && username) {
-      BrowserCredentialStore.save(pending.origin, username, password);
-    }
     try {
       pending.callback(username, password);
     } catch {
       /* webContents gone */
-    }
-  }
-
-  /** Fill a saved credential into the view's current page login form
-   *  (heuristic: first visible password input + nearest preceding text-like
-   *  input). The username/password are JSON-encoded into the script source
-   *  (same pattern as buildTypeScript), so they can't break out of it — and
-   *  the cleartext password never leaves the main process. */
-  async fillCredentials(
-    id: string,
-    origin?: string,
-  ): Promise<BrowserCredentialsFillResult> {
-    const live = this.get(id);
-    if (!live) return { ok: false, error: "浏览器不存在或已关闭" };
-    const wc = live.view.webContents;
-    if (wc.isDestroyed()) return { ok: false, error: "浏览器已销毁" };
-    const targetOrigin = origin ?? urlOrigin(wc.getURL());
-    if (!targetOrigin) return { ok: false, error: "当前页面无法识别来源" };
-    const cred = BrowserCredentialStore.get(targetOrigin);
-    if (!cred) return { ok: false, error: `没有 ${targetOrigin} 的已保存凭证` };
-    const script = `(function () {
-      const data = ${JSON.stringify({ u: cred.username, p: cred.password })};
-      const setValue = (el, value) => {
-        const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
-        const setter = Object.getOwnPropertyDescriptor(proto, "value")?.set;
-        if (setter) setter.call(el, value); else el.value = value;
-        el.dispatchEvent(new Event("input", { bubbles: true }));
-        el.dispatchEvent(new Event("change", { bubbles: true }));
-      };
-      const passwords = [...document.querySelectorAll("input[type=password]")]
-        .filter((el) => !el.disabled && !el.readOnly);
-      const pw = passwords[0];
-      if (!pw) return { ok: false, error: "页面上没有找到密码输入框" };
-      setValue(pw, data.p);
-      // Username: the closest preceding visible text-like input in the same form
-      // (or the whole document when the form is missing).
-      const scope = pw.form ?? document;
-      const candidates = [...scope.querySelectorAll(
-        "input[type=text], input[type=email], input:not([type]), input[type=tel]"
-      )].filter((el) => !el.disabled && !el.readOnly && el !== pw);
-      const user = candidates
-        .filter((el) => el.compareDocumentPosition(pw) & Node.DOCUMENT_POSITION_FOLLOWING)
-        .pop() ?? candidates[0];
-      if (user) setValue(user, data.u);
-      pw.focus();
-      return { ok: true };
-    })()`;
-    try {
-      const res = (await wc.executeJavaScript(script, true)) as {
-        ok?: boolean;
-        error?: string;
-      };
-      if (res && res.error) return { ok: false, error: res.error };
-      return { ok: true };
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      log.warn(`browser fillCredentials failed: ${id} ${msg}`);
-      return { ok: false, error: `填充失败: ${msg}` };
     }
   }
 

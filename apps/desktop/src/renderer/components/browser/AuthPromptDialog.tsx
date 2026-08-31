@@ -9,10 +9,10 @@ import { useI18n } from "@renderer/lib/i18n/index.js";
 
 /**
  * HTTP Basic Auth prompt for the embedded browser. Shown when a page asks for
- * credentials and no saved one matched (main pushes a browser:event
- * "authRequest" and parks the Electron login callback). On submit the answer
- * goes back via browser.authRespond; the optional "保存密码" checkbox stores
- * the credential encrypted (safeStorage) so future requests auto-fill.
+ * credentials (main pushes a browser:event "authRequest" and parks the
+ * Electron login callback). On submit the answer goes back via
+ * browser.authRespond and is used for that request only (nothing is
+ * persisted).
  */
 export function AuthPromptDialog({
   request,
@@ -24,13 +24,11 @@ export function AuthPromptDialog({
   const { t } = useI18n();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
-  const [save, setSave] = useState(true);
 
   useEffect(() => {
     if (request) {
       setUsername("");
       setPassword("");
-      setSave(true);
     }
   }, [request]);
 
@@ -41,7 +39,6 @@ export function AuthPromptDialog({
       requestId: request.requestId,
       username: u,
       password: p,
-      save: save && !!u,
     });
     onClose();
   };
@@ -83,15 +80,6 @@ export function AuthPromptDialog({
                 if (e.key === "Enter" && username) answer(username, password);
               }}
             />
-            <label className="flex cursor-pointer select-none items-center gap-1.5 text-[11px] text-content-muted">
-              <input
-                type="checkbox"
-                checked={save}
-                onChange={(e) => setSave(e.target.checked)}
-                className="accent-[var(--color-accent)]"
-              />
-              {t("browser.savePassword")}
-            </label>
           </div>
           <div className="mt-3 flex justify-end gap-2">
             <Button variant="ghost" size="sm" onClick={() => answer("", "")}>

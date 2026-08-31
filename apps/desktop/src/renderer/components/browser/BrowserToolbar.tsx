@@ -11,7 +11,6 @@ import {
   IconDeviceMobile,
   IconArrowsMaximize,
   IconArrowsMinimize,
-  IconKey,
   IconClock,
   IconTrash,
 } from "@renderer/lib/icons.js";
@@ -66,8 +65,6 @@ export interface BrowserToolbarProps {
   /** Fired as the history dropdown opens/closes — the parent hides/shows the
    *  OS-level WebContentsView so the renderer-DOM dropdown isn't covered. */
   onHistoryMenuOpenChange: (open: boolean) => void;
-  /** Open the credential vault dialog. */
-  onOpenCredentials: () => void;
   /** Request to destroy the browser entirely — the parent opens a
    *  confirmation dialog; on confirm all tabs/views are torn down. */
   onRequestDestroy: () => void;
@@ -130,7 +127,6 @@ export function BrowserToolbar({
   onRemoveHistoryEntry,
   onClearHistory,
   onHistoryMenuOpenChange,
-  onOpenCredentials,
 }: BrowserToolbarProps) {
   const { t } = useI18n();
   // Address-history dropdown state. Local because only this input drives it;
@@ -312,12 +308,6 @@ export function BrowserToolbar({
           </div>
         )}
       </div>
-
-      {/* Credential vault — manage saved passwords + fill them into the
-          current page's login form. */}
-      <ToolButton onClick={onOpenCredentials} title={t("browser.credentials")}>
-        <IconKey size={16} />
-      </ToolButton>
 
       {/* Element picker toggle. Accent when active. */}
       <ToolButton onClick={onTogglePickMode} active={pickMode} title={pickMode ? t("browser.exitPick") : t("browser.pickElement")}>

@@ -15,7 +15,6 @@ export const en = {
   "browser.history": "History",
   "browser.removeHistoryEntry": "Remove this entry",
   "browser.clearHistory": "Clear history…",
-  "browser.credentials": "Password vault",
   "browser.exitPick": "Exit element picking",
   "browser.pickElement": "Pick page element",
   "browser.collapseDeviceToolbar": "Collapse device toolbar",
@@ -37,20 +36,7 @@ export const en = {
   "browser.authDesc": "{origin} is asking for a username and password (HTTP Basic Auth).",
   "browser.username": "Username",
   "browser.password": "Password",
-  "browser.savePassword": "Save password (encrypted; signs in automatically next time)",
   "browser.signIn": "Sign in",
-
-  /* ── credential vault ── */
-  "browser.vaultTitle": "Browser password vault",
-  "browser.vaultDesc":
-    "Save credentials per site (encrypted with the OS keychain). HTTP Basic Auth prompts use them automatically, and the toolbar key menu can fill the current page's login form.",
-  "browser.noCredentials": "No saved credentials",
-  "browser.editingCredential": "Edit {origin}",
-  "browser.addCredential": "Add credential",
-  "browser.passwordKeep": "Password (leave blank to keep)",
-  "browser.invalidOrigin": "Enter a valid site origin (e.g. https://example.com)",
-  "browser.usernameRequired": "Username is required",
-  "browser.cancelEdit": "Cancel editing",
 
   /* ── device toolbar ── */
   "browser.device": "Device",

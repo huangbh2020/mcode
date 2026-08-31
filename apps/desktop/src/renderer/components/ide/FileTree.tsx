@@ -81,10 +81,10 @@ const SiblingNamesContext = createContext<Set<string> | null>(null);
 
 /** Tree-scoped clipboard for the file "复制/粘贴" pair. The FileTree root owns
  *  the copied path; file rows call `copyFile` from their right-click menu,
- *  while directory rows and the blank-area menu read `copiedFile` to surface a
- *  粘贴 item (hidden when nothing is stashed). Scoped to one tree instance, so
- *  the clipboard never leaks across projects. Null when rendered outside a
- *  FileTree — the copy item is then hidden and paste never applies. */
+ *  while file rows, directory rows and the blank-area menu read `copiedFile`
+ *  to surface a 粘贴 item (hidden when nothing is stashed). Scoped to one tree
+ *  instance, so the clipboard never leaks across projects. Null when rendered
+ *  outside a FileTree — the copy item is then hidden and paste never applies. */
 interface FileClipboardValue {
   copiedFile: string | null;
   copyFile: (path: string) => void;
@@ -1178,6 +1178,7 @@ function FileNodeRow({
   // nearest container (the file's parent dir). Null outside a FileTree.
   const startNewInParent = useContext(NewInParentContext);
   const { copy: copyWithFeedback, flash: flashCopied, toast: copiedToast } = useCopyFeedback();
+  const { reportPasteFailed, toast: pasteFailedToast } = usePasteFailure();
   // Tree-scoped file clipboard: stash this file for a later 粘贴 into any
   // directory (or the project root). Null outside a FileTree — item hidden.
   const fileClipboard = useContext(FileClipboardContext);
@@ -1215,6 +1216,25 @@ function FileNodeRow({
     closeFileInIde(path);
   }, [actions, path, closeFileInIde]);
 
+  // Paste the tree's stashed file into this file's parent dir (VS Code parity:
+  // pasting on a file targets its containing folder). The parent is necessarily
+  // expanded — this row is rendered inside it — so the pasted entry appears as
+  // soon as the tree re-scans; failure pins a danger toast to the row.
+  const handlePaste = useCallback(async () => {
+    const src = fileClipboard?.copiedFile;
+    if (!src) return;
+    const result = await api.file.copy({
+      srcPath: src,
+      destDir: dirname(path),
+      suffix: t("ide.tree.copyNameSuffix"),
+    });
+    if (!result.ok) {
+      reportPasteFailed();
+      return;
+    }
+    actions?.bumpReload();
+  }, [fileClipboard, path, actions, reportPasteFailed, t]);
+
   return (
     <div className="relative">
       {renaming ? (
@@ -1247,6 +1267,10 @@ function FileNodeRow({
               className={cn(
                 "flex w-full items-center gap-1 py-0.5 pr-2 text-left transition-colors",
                 active ? "bg-accent/15 text-content" : "text-content-muted hover:bg-surface-hover/50",
+                // Copied-file marker (VS Code parity): the row sitting in the
+                // tree clipboard stays dimmed until pasted or another file is
+                // copied, making the pending 粘贴 visible at a glance.
+                fileClipboard?.copiedFile === path && "opacity-60",
               )}
               style={{ paddingLeft: depth * 12 + 4 }}
               title={path}
@@ -1300,6 +1324,13 @@ function FileNodeRow({
                   }}
                 />
               )}
+              {fileClipboard?.copiedFile && (
+                <MenuItem
+                  icon={<IconClipboardText size={12} />}
+                  label={t("ide.tree.paste")}
+                  onClick={() => void handlePaste()}
+                />
+              )}
               <MenuItem
                 icon={<IconClipboard size={12} />}
                 label={t("ide.tree.copyAbsPath")}
@@ -1342,6 +1373,7 @@ function FileNodeRow({
       </ContextMenu.Root>
       )}
       {copiedToast}
+      {pasteFailedToast}
       <ConfirmDialog
         open={pendingDelete}
         title={t("ide.tree.deleteFileTitle")}

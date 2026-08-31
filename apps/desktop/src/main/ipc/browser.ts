@@ -28,16 +28,11 @@ import {
   BrowserSetDeviceSchema,
   BrowserHistoryRemoveSchema,
   BrowserHistoryClearSchema,
-  BrowserCredentialsListSchema,
-  BrowserCredentialsSaveSchema,
-  BrowserCredentialsRemoveSchema,
-  BrowserCredentialsFillSchema,
   BrowserAuthRespondSchema,
 } from "@contracts/ipc";
 import { isKnownProjectPath } from "@main/lib/pathGuard.js";
 import { BrowserManager } from "@main/browser/BrowserManager.js";
 import { AddressHistory } from "@main/browser/addressHistory.js";
-import { BrowserCredentialStore } from "@main/browser/credentialStore.js";
 import { log } from "@main/lib/logger.js";
 
 export function registerBrowserHandlers(ipcMain: IpcMain): void {
@@ -202,57 +197,11 @@ export function registerBrowserHandlers(ipcMain: IpcMain): void {
     }
   });
 
-  // ── Credential vault (passwords stay in main; list omits them) ──
-
-  ipcMain.handle(IPC.BROWSER_CREDENTIALS_LIST, async () => {
-    try {
-      BrowserCredentialsListSchema.parse({});
-      return { credentials: BrowserCredentialStore.list() };
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      log.error(`browser.credentialsList failed: ${msg}`);
-      return { credentials: [] };
-    }
-  });
-
-  ipcMain.handle(IPC.BROWSER_CREDENTIALS_SAVE, async (_evt, raw) => {
-    try {
-      const input = BrowserCredentialsSaveSchema.parse(raw);
-      return { credentials: BrowserCredentialStore.save(input.origin, input.username, input.password) };
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      log.error(`browser.credentialsSave failed: ${msg}`);
-      return { credentials: BrowserCredentialStore.list() };
-    }
-  });
-
-  ipcMain.handle(IPC.BROWSER_CREDENTIALS_REMOVE, async (_evt, raw) => {
-    try {
-      const input = BrowserCredentialsRemoveSchema.parse(raw);
-      return { credentials: BrowserCredentialStore.remove(input.origin) };
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      log.error(`browser.credentialsRemove failed: ${msg}`);
-      return { credentials: BrowserCredentialStore.list() };
-    }
-  });
-
-  ipcMain.handle(IPC.BROWSER_CREDENTIALS_FILL, async (_evt, raw) => {
-    try {
-      const input = BrowserCredentialsFillSchema.parse(raw);
-      return await BrowserManager.fillCredentials(input.browserId, input.origin);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      log.error(`browser.credentialsFill failed: ${msg}`);
-      return { ok: false as const, error: msg };
-    }
-  });
-
   // Answer a pending HTTP Basic Auth prompt (see BrowserEventMessage "authRequest").
   ipcMain.handle(IPC.BROWSER_AUTH_RESPOND, async (_evt, raw) => {
     try {
       const input = BrowserAuthRespondSchema.parse(raw);
-      BrowserManager.respondAuth(input.requestId, input.username, input.password, input.save ?? false);
+      BrowserManager.respondAuth(input.requestId, input.username, input.password);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       log.error(`browser.authRespond failed: ${msg}`);
