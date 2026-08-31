@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSessionStore } from "@renderer/stores/sessionStore.js";
 import type { Block, ChatMessage } from "@renderer/stores/sessionStore.js";
 import type { SubagentSnapshot, TurnUsageRecord } from "@contracts/runtime";
@@ -10,12 +10,15 @@ import { useI18n } from "@renderer/lib/i18n/index.js";
 import {
   IconAlertTriangle,
   IconArrowsMinimize,
+  IconArrowsSplit,
   IconBrain,
   IconCheck,
   IconChevronDown,
   IconChevronRight,
   IconClipboard,
   IconFileCode,
+  IconGitFork,
+  IconGitMerge,
   IconListDetails,
   IconLoader2,
   IconMessage,
@@ -25,19 +28,25 @@ import {
   IconX,
 } from "@renderer/lib/icons.js";
 import {
+  buildFlowRows,
   buildTurnGroups,
   cacheHitRate,
   countActions,
+  findSubagentSnapshot,
   fmtClockTime,
   fmtDuration,
   imageCountsByToolCall,
   matchUsageRecords,
+  stepAccent,
   SUBAGENT_TOOLS,
   toolCategory,
   TOOL_BADGE_CLS,
   turnFilesTotals,
   usageInputTokens,
   userMessagePreview,
+  type FlowRow,
+  type FlowStep,
+  type StepAccent,
   type TurnGroup,
 } from "./turnFlowModel.js";
 
@@ -50,11 +59,14 @@ const EMPTY_SUBAGENTS: SubagentSnapshot[] = [];
 /**
  * Turn Flow panel — the right-panel "turns" tab body.
  *
- * A vertical, timeline-style visualization of how the model worked through
- * each turn of the active session: the user prompt it received, every action
- * it took while processing (thinking, tool calls, subagent delegations,
- * questions back to the user, plans, touched files), its reply, and what the
- * turn cost in tokens / wall time.
+ * A session MAP, not a replay: the chat stream is the reading surface, this
+ * panel shows the structure the linear chat cannot — the per-turn timeline
+ * with parallel tool batches bracketed (same-message tool_use calls execute
+ * concurrently), subagent delegations as indented fork/join lanes running
+ * beside the main spine, and per-turn token / wall-time cost. Every step is
+ * click-to-jump: it locates its carrying message in the chat stream (via the
+ * bookmark-jump channel ChatPane already consumes), so the map doubles as a
+ * navigation index into the conversation.
  *
  * Everything is derived from store state that already exists — the message
  * stream (turn grouping via the implicit user-message boundary + `turnMeta`)
@@ -84,6 +96,30 @@ export function TurnFlowPanel() {
     sessionId ? (s.runningBySession[sessionId] ?? false) : false,
   );
   const loadOlder = useSessionStore((s) => s.loadOlderMessages);
+  const displayMode = useSessionStore((s) => s.displayMode);
+  const setPendingBookmarkJump = useSessionStore((s) => s.setPendingBookmarkJump);
+  const setCenterTabFocus = useSessionStore((s) => s.setCenterTabFocus);
+  const openSubagentTranscript = useSessionStore((s) => s.openSubagentTranscript);
+
+  /* Step click → locate the carrying message in the chat stream. Rides the
+   * existing bookmark-jump channel (ChatPane consumes it: virtual-list
+   * aiming with retries + center + flash). In tabs mode an editor-focused
+   * center pane must flip back to chat first — otherwise the target pane
+   * stays display:none and its list never measures. */
+  const jumpToChat = useCallback(
+    (messageId: string) => {
+      if (!sessionId) return;
+      setPendingBookmarkJump({ sessionId, messageId });
+      if (displayMode === "tabs") setCenterTabFocus("chat");
+    },
+    [sessionId, displayMode, setPendingBookmarkJump, setCenterTabFocus],
+  );
+  const openSubagent = useCallback(
+    (taskId: string) => {
+      if (sessionId) openSubagentTranscript(sessionId, taskId);
+    },
+    [sessionId, openSubagentTranscript],
+  );
 
   const groups = useMemo(() => buildTurnGroups(messages), [messages]);
   const usageByTurn = useMemo(
@@ -235,6 +271,8 @@ export function TurnFlowPanel() {
             }
             expanded={expanded.has(g.index)}
             onToggle={() => toggle(g.index)}
+            onJump={jumpToChat}
+            onOpenSubagent={openSubagent}
           />
         ))}
       </div>
@@ -287,6 +325,8 @@ function TurnSection({
   waitingModel,
   expanded,
   onToggle,
+  onJump,
+  onOpenSubagent,
 }: {
   group: TurnGroup;
   usage?: TurnUsageRecord;
@@ -294,6 +334,8 @@ function TurnSection({
   waitingModel: boolean;
   expanded: boolean;
   onToggle: () => void;
+  onJump: (messageId: string) => void;
+  onOpenSubagent: (taskId: string) => void;
 }) {
   const { t } = useI18n();
   const allBlocks = useMemo(
@@ -302,6 +344,7 @@ function TurnSection({
   );
   const counts = useMemo(() => countActions(allBlocks), [allBlocks]);
   const imageCounts = useMemo(() => imageCountsByToolCall(allBlocks), [allBlocks]);
+  const rows = useMemo(() => buildFlowRows(group.assistantMessages), [group.assistantMessages]);
   const live = group.running || waitingModel;
   const now = useNowWhile(live);
 
@@ -389,16 +432,29 @@ function TurnSection({
           <div className="relative">
             <div className="absolute bottom-3 left-[9px] top-3 w-px bg-edge" />
             <div className="space-y-1">
-              {group.userMessage && <UserStep message={group.userMessage} />}
+              {group.userMessage && <UserStep message={group.userMessage} onJump={onJump} />}
               {waitingModel && <WaitingStep />}
-              {allBlocks.map((b, i) => (
-                <BlockStep
-                  key={`${b.kind}-${i}`}
-                  block={b}
-                  subagents={subagents}
-                  imageCounts={imageCounts}
-                />
-              ))}
+              {rows.map((row) =>
+                row.parallel ? (
+                  <ParallelBatchRow
+                    key={row.key}
+                    row={row}
+                    subagents={subagents}
+                    imageCounts={imageCounts}
+                    onJump={onJump}
+                    onOpenSubagent={onOpenSubagent}
+                  />
+                ) : (
+                  <BlockStep
+                    key={row.key}
+                    step={row.steps[0]}
+                    subagents={subagents}
+                    imageCounts={imageCounts}
+                    onJump={onJump}
+                    onOpenSubagent={onOpenSubagent}
+                  />
+                ),
+              )}
             </div>
           </div>
           {usage ? (
@@ -438,12 +494,17 @@ function StepGlyph({
   );
 }
 
-/** The user-prompt node: what the model received this turn. */
-function UserStep({ message }: { message: ChatMessage }) {
+/** The user-prompt node: what the model received this turn. Clicking jumps
+ * to the message in the chat stream. */
+function UserStep({ message, onJump }: { message: ChatMessage; onJump: (messageId: string) => void }) {
   const { t } = useI18n();
   const { text, attachments } = userMessagePreview(message);
   return (
-    <div className="relative flex items-start gap-2 py-1 pl-0.5">
+    <div
+      onClick={() => onJump(message.id)}
+      title={t("ide.turns.jumpToChat")}
+      className="relative flex cursor-pointer items-start gap-2 rounded-md py-1 pl-0.5 pr-1.5 transition-colors hover:bg-surface-hover"
+    >
       <StepGlyph className="bg-accent/15 text-accent">
         <IconUser size={11} />
       </StepGlyph>
@@ -481,25 +542,46 @@ function WaitingStep() {
 }
 
 /** One model-action node, dispatched on the block kind. Tool-use blocks get
- * the category-tinted badge + ToolIcon mapping shared with the chat stream,
- * so every tool reads with the same glyph it has in the conversation. */
+ *  the category-tinted badge + ToolIcon mapping shared with the chat stream,
+ *  so every tool reads with the same glyph it has in the conversation.
+ *
+ *  Every row is click-to-jump: it locates the message carrying the block in
+ *  the chat stream. Error rows and human-gate rows (questions, plan
+ *  submissions) carry a left accent bar so they stand out while scanning.
+ *  Task delegations grow a fork/join lane below the node (SubagentLane). */
 function BlockStep({
-  block,
+  step,
   subagents,
   imageCounts,
+  onJump,
+  onOpenSubagent,
 }: {
-  block: Block;
+  step: FlowStep;
   subagents: SubagentSnapshot[];
   imageCounts: Map<string, number>;
+  onJump: (messageId: string) => void;
+  onOpenSubagent: (taskId: string) => void;
 }) {
   const { t } = useI18n();
+  const block = step.block;
   const imageCount =
     block.kind === "tool_use" ? (imageCounts.get(block.toolCallId) ?? 0) : 0;
+  const accent = stepAccent(block);
+  const lane =
+    block.kind === "tool_use" && SUBAGENT_TOOLS.has(block.toolName) ? (
+      <SubagentLane
+        block={block}
+        snapshot={findSubagentSnapshot(subagents, block)}
+        onOpenSubagent={onOpenSubagent}
+      />
+    ) : null;
+  const jumpTitle = t("ide.turns.jumpToChat");
+  const jump = () => onJump(step.messageId);
 
   if (block.kind === "text") {
     if (!block.text.trim()) return null;
     return (
-      <div className="relative flex items-start gap-2 py-1 pl-0.5">
+      <StepRow accent={accent} title={jumpTitle} onClick={jump} lane={lane}>
         <StepGlyph className="bg-emerald-500/15 text-emerald-500">
           <IconMessage size={11} />
         </StepGlyph>
@@ -511,14 +593,14 @@ function BlockStep({
             {block.text.trim()}
           </p>
         </div>
-      </div>
+      </StepRow>
     );
   }
 
   if (block.kind === "thinking") {
     if (!block.text.trim()) return null;
     return (
-      <div className="relative flex items-start gap-2 py-1 pl-0.5">
+      <StepRow accent={accent} title={jumpTitle} onClick={jump} lane={lane}>
         <StepGlyph className="bg-violet-400/15 text-violet-400">
           <IconBrain size={11} />
         </StepGlyph>
@@ -530,20 +612,15 @@ function BlockStep({
             {block.text.trim()}
           </p>
         </div>
-      </div>
+      </StepRow>
     );
   }
 
   if (block.kind === "tool_use") {
     const cat = toolCategory(block.toolName);
     const summary = toolSummary(block.toolName, block.input);
-    const snap = SUBAGENT_TOOLS.has(block.toolName)
-      ? subagents.find(
-          (a) => a.toolUseId === block.toolCallId || a.toolUseId === `synthetic:${block.toolCallId}`,
-        )
-      : undefined;
     return (
-      <div className="relative flex items-start gap-2 py-0.5 pl-0.5">
+      <StepRow accent={accent} title={jumpTitle} onClick={jump} lane={lane}>
         <StepGlyph className={TOOL_BADGE_CLS[cat]}>
           <ToolIcon name={block.toolName} className="!size-[11px]" />
         </StepGlyph>
@@ -566,37 +643,13 @@ function BlockStep({
               </span>
             )}
           </div>
-          {summary && (
+          {summary && !lane && (
             <p className="truncate text-[10px] leading-snug text-content-subtle" title={summary}>
               {summary}
             </p>
           )}
-          {snap && (
-            <div className="mt-0.5 flex flex-wrap items-center gap-x-1.5 text-[10px] text-content-subtle">
-              <span
-                className={cn(
-                  "flex items-center gap-0.5",
-                  SUBAGENT_STATUS_META[snap.status].cls,
-                )}
-              >
-                {SUBAGENT_STATUS_META[snap.status].spin && (
-                  <IconLoader2 size={9} className="animate-spin" />
-                )}
-                {t(SUBAGENT_STATUS_META[snap.status].labelKey)}
-              </span>
-              {(snap.totalTokens != null || snap.toolUses != null || snap.durationMs != null) && (
-                <span className="tabular-nums">
-                  {t("ide.turns.subagentDetail", {
-                    tokens: snap.totalTokens != null ? fmtTokens(snap.totalTokens) : "—",
-                    tools: snap.toolUses ?? "—",
-                    dur: snap.durationMs != null ? fmtDuration(snap.durationMs) : "—",
-                  })}
-                </span>
-              )}
-            </div>
-          )}
         </div>
-      </div>
+      </StepRow>
     );
   }
 
@@ -608,7 +661,7 @@ function BlockStep({
           ? "ide.turns.planReady"
           : "ide.turns.planDrafting";
     return (
-      <div className="relative flex items-center gap-2 py-0.5 pl-0.5">
+      <StepRow accent={accent} title={jumpTitle} onClick={jump} lane={lane}>
         <StepGlyph className="bg-indigo-400/15 text-indigo-400">
           <IconClipboard size={11} />
         </StepGlyph>
@@ -616,14 +669,14 @@ function BlockStep({
         <span className="rounded-full bg-indigo-400/15 px-1.5 py-0.5 text-[10px] text-indigo-400">
           {t(phaseKey)}
         </span>
-      </div>
+      </StepRow>
     );
   }
 
   if (block.kind === "turn-files") {
     const totals = turnFilesTotals([block]);
     return (
-      <div className="relative flex items-center gap-2 py-0.5 pl-0.5">
+      <StepRow accent={accent} title={jumpTitle} onClick={jump} lane={lane}>
         <StepGlyph className="bg-warning/15 text-warning">
           <IconFileCode size={11} />
         </StepGlyph>
@@ -633,13 +686,13 @@ function BlockStep({
         </span>
         <span className="text-[10px] tabular-nums text-accent">+{totals.adds}</span>
         <span className="text-[10px] tabular-nums text-danger">−{totals.dels}</span>
-      </div>
+      </StepRow>
     );
   }
 
   if (block.kind === "compact-summary") {
     return (
-      <div className="relative flex items-center gap-2 py-0.5 pl-0.5">
+      <StepRow accent={accent} title={jumpTitle} onClick={jump} lane={lane}>
         <StepGlyph className="bg-surface-muted text-content-muted">
           <IconArrowsMinimize size={11} />
         </StepGlyph>
@@ -649,13 +702,13 @@ function BlockStep({
         <span className="text-[10px] tabular-nums text-content-subtle">
           {fmtTokens(block.preTokens)} → {block.postTokens != null ? fmtTokens(block.postTokens) : "—"}
         </span>
-      </div>
+      </StepRow>
     );
   }
 
   if (block.kind === "error") {
     return (
-      <div className="relative flex items-start gap-2 py-0.5 pl-0.5">
+      <StepRow accent={accent} title={jumpTitle} onClick={jump} lane={lane}>
         <StepGlyph className="bg-danger/15 text-danger">
           <IconAlertTriangle size={11} />
         </StepGlyph>
@@ -665,13 +718,202 @@ function BlockStep({
             {block.message}
           </p>
         </div>
-      </div>
+      </StepRow>
     );
   }
 
   // attachment / image blocks have no standalone node here — attachments are
   // counted on the user step and images render as chips on their tool node.
   return null;
+}
+
+/** Click shell shared by every step row: jump-to-chat on click, hover state,
+ *  and the left accent bar + soft tint for error / human-gate steps. The
+ *  optional lane (Task delegations) hangs below the shell inside the same
+ *  relative wrapper, so parallel-batch nesting keeps working. */
+function StepRow({
+  accent,
+  title,
+  onClick,
+  lane,
+  children,
+}: {
+  accent: StepAccent;
+  title: string;
+  onClick: () => void;
+  lane?: React.ReactNode;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="relative">
+      <div
+        onClick={onClick}
+        title={title}
+        className={cn(
+          "relative flex cursor-pointer items-start gap-2 rounded-md py-1 pl-0.5 pr-1.5 transition-colors hover:bg-surface-hover",
+          accent === "danger" && "bg-danger/5 hover:bg-danger/10",
+          accent === "attention" && "bg-amber-400/5 hover:bg-amber-400/10",
+        )}
+      >
+        {accent && (
+          <span
+            className={cn(
+              "absolute bottom-1 left-0 top-1 w-[2px] rounded-full",
+              accent === "danger" ? "bg-danger" : "bg-amber-400",
+            )}
+          />
+        )}
+        {children}
+      </div>
+      {lane}
+    </div>
+  );
+}
+
+/** Indented lane under a Task node — the delegation's own life beside the
+ *  main spine. The dashed rail reads as a parallel branch: forked at the
+ *  spawn node, running its own steps (last tool + live usage), joining back
+ *  with an end time once done. Chat's linear stream cannot express this
+ *  overlap; here it is the point of the view.
+ *
+ *  Live snapshots come from the subagent roster; rehydrated historical turns
+ *  have no roster, so the lane degrades to status derived from the tool_use
+ *  block plus the Task input's description. Header click opens the
+ *  subagent's transcript in the side chat (live snapshots only). */
+function SubagentLane({
+  block,
+  snapshot,
+  onOpenSubagent,
+}: {
+  block: Extract<Block, { kind: "tool_use" }>;
+  snapshot?: SubagentSnapshot;
+  onOpenSubagent: (taskId: string) => void;
+}) {
+  const { t } = useI18n();
+  const status: SubagentSnapshot["status"] =
+    snapshot?.status ??
+    (block.status === "error" ? "failed" : block.status === "running" ? "running" : "completed");
+  const meta = SUBAGENT_STATUS_META[status];
+  const inputDesc =
+    block.input && typeof block.input === "object" && "description" in block.input
+      ? (block.input as { description?: unknown }).description
+      : undefined;
+  const description = snapshot?.description ?? (typeof inputDesc === "string" ? inputDesc : "");
+  const joinCls =
+    status === "completed"
+      ? "text-accent"
+      : status === "running"
+        ? "text-warning"
+        : "text-danger";
+
+  return (
+    <div className="relative my-0.5 ml-[18px] rounded-r-md border-l border-dashed border-edge pl-2 pr-1">
+      <div
+        onClick={snapshot ? () => onOpenSubagent(snapshot.taskId) : undefined}
+        title={snapshot ? t("ide.turns.openTranscript") : undefined}
+        className={cn(
+          "flex items-center gap-1.5 rounded-md px-1 py-0.5",
+          snapshot && "cursor-pointer transition-colors hover:bg-surface-hover",
+        )}
+      >
+        <IconGitFork size={10} className="shrink-0 text-content-subtle" />
+        {description && (
+          <span className="truncate text-[10px] font-medium text-content-muted" title={description}>
+            {description}
+          </span>
+        )}
+        {snapshot?.subagentType && (
+          <span className="shrink-0 rounded-full bg-fuchsia-400/15 px-1.5 py-0.5 text-[9px] text-fuchsia-400">
+            {snapshot.subagentType}
+          </span>
+        )}
+        {snapshot?.isBackgrounded && (
+          <span className="shrink-0 rounded-full bg-surface-muted px-1.5 py-0.5 text-[9px] text-content-subtle">
+            {t("ide.turns.backgroundTag")}
+          </span>
+        )}
+        <span
+          className={cn(
+            "ml-auto flex shrink-0 items-center gap-0.5 text-[10px] font-medium",
+            meta.cls,
+          )}
+        >
+          {meta.spin && <IconLoader2 size={9} className="animate-spin" />}
+          {t(meta.labelKey)}
+        </span>
+      </div>
+      {snapshot?.lastToolName && (
+        <div className="truncate px-1 text-[10px] leading-snug text-content-subtle">
+          {t("ide.turns.subagentLast", { tool: snapshot.lastToolName })}
+        </div>
+      )}
+      {snapshot?.summary && (
+        <div
+          className="truncate px-1 text-[10px] leading-snug text-content-subtle"
+          title={snapshot.summary}
+        >
+          {snapshot.summary}
+        </div>
+      )}
+      {(snapshot?.totalTokens != null || snapshot?.toolUses != null || snapshot?.durationMs != null) && (
+        <div className="px-1 text-[10px] tabular-nums leading-snug text-content-subtle">
+          {t("ide.turns.subagentDetail", {
+            tokens: snapshot?.totalTokens != null ? fmtTokens(snapshot.totalTokens) : "—",
+            tools: snapshot?.toolUses ?? "—",
+            dur: snapshot?.durationMs != null ? fmtDuration(snapshot.durationMs) : "—",
+          })}
+        </div>
+      )}
+      {status !== "running" && (
+        <div className={cn("flex items-center gap-1 px-1 py-0.5 text-[9px]", joinCls)}>
+          <IconGitMerge size={9} className="shrink-0" />
+          {snapshot?.endedAt != null
+            ? t("ide.turns.joinAt", { time: fmtClockTime(snapshot.endedAt) })
+            : t("ide.turns.joinLabel")}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Bracketed cluster of the tool calls that arrived in ONE assistant
+ *  message — the SDK executes them concurrently, so they render as a group
+ *  hanging off the main spine rather than as fake-sequential rows. The
+ *  label pill straddles the top border like a code bracket. */
+function ParallelBatchRow({
+  row,
+  subagents,
+  imageCounts,
+  onJump,
+  onOpenSubagent,
+}: {
+  row: FlowRow;
+  subagents: SubagentSnapshot[];
+  imageCounts: Map<string, number>;
+  onJump: (messageId: string) => void;
+  onOpenSubagent: (taskId: string) => void;
+}) {
+  const { t } = useI18n();
+  return (
+    <div className="relative my-1 ml-3 rounded-md border border-edge/70 bg-surface-muted/40 pb-0.5 pl-1 pr-1 pt-2">
+      <span className="absolute -top-[7px] left-2 z-10 flex items-center gap-0.5 rounded-full border border-edge bg-surface px-1 text-[9px] font-medium text-content-subtle">
+        <IconArrowsSplit size={9} />
+        {t("ide.turns.parallelBatch", { n: row.steps.length })}
+      </span>
+      <div className="space-y-0.5">
+        {row.steps.map((s) => (
+          <BlockStep
+            key={s.key}
+            step={s}
+            subagents={subagents}
+            imageCounts={imageCounts}
+            onJump={onJump}
+            onOpenSubagent={onOpenSubagent}
+          />
+        ))}
+      </div>
+    </div>
+  );
 }
 
 /* ─────────────── usage bar ─────────────── */

@@ -9,7 +9,7 @@
  * owns rendering and locale.
  */
 import type { Block, ChatMessage, TurnMeta } from "@renderer/stores/sessionStore.js";
-import type { TurnUsageRecord } from "@contracts/runtime";
+import type { SubagentSnapshot, TurnUsageRecord } from "@contracts/runtime";
 
 /** One turn = a user message + the assistant messages after it, up to the
  * next user message. Turn boundaries are implicit in the stream (there is no
@@ -78,6 +78,103 @@ export function matchUsageRecords(
     out.set(turn.index, rec);
   }
   return out;
+}
+
+/* ── flow rows (expanded turn body) ─────────────────────────────────── */
+
+/** One renderable step on a turn's timeline: a block plus the anchors the
+ * panel needs to act on it — the message that carries the block (the
+ * jump-to-chat target) and its position inside the SDK's concurrency
+ * grouping. */
+export interface FlowStep {
+  key: string;
+  block: Block;
+  /** Message carrying the block; clicking the step locates this message in
+   * the chat stream. */
+  messageId: string;
+  /** Total tool_use blocks in the SAME assistant message. The SDK executes
+   * same-message tool calls concurrently, so >1 marks a parallel batch. */
+  batchTotal: number;
+  /** 0-based index within that batch (non-tool blocks are singletons 0/1). */
+  batchIndex: number;
+}
+
+/** One timeline row: a single step, or a bracketed group of same-message
+ * tool_use blocks that ran in parallel (`parallel` ⇔ steps.length > 1). */
+export interface FlowRow {
+  key: string;
+  steps: FlowStep[];
+  parallel: boolean;
+}
+
+/** Flatten a turn's assistant messages into timeline rows. Tool calls that
+ * arrived in one assistant message become ONE bracketed row (they genuinely
+ * execute concurrently); every other block becomes a singleton row in stream
+ * order. Tool rows keep their batch position so the renderer never has to
+ * re-derive grouping. */
+export function buildFlowRows(assistantMessages: ChatMessage[]): FlowRow[] {
+  const rows: FlowRow[] = [];
+  for (const m of assistantMessages) {
+    let batch: FlowStep[] = [];
+    const flushBatch = () => {
+      if (batch.length === 0) return;
+      rows.push(
+        batch.length > 1
+          ? { key: `batch-${batch[0].key}`, steps: batch, parallel: true }
+          : { key: batch[0].key, steps: batch, parallel: false },
+      );
+      batch = [];
+    };
+    let toolCount = 0;
+    for (const b of m.blocks) if (b.kind === "tool_use") toolCount++;
+    let toolIdx = 0;
+    m.blocks.forEach((b, i) => {
+      if (b.kind === "tool_use") {
+        batch.push({
+          key: `${m.id}:${i}`,
+          block: b,
+          messageId: m.id,
+          batchTotal: toolCount,
+          batchIndex: toolIdx++,
+        });
+      } else {
+        flushBatch();
+        rows.push({
+          key: `${m.id}:${i}`,
+          steps: [{ key: `${m.id}:${i}`, block: b, messageId: m.id, batchTotal: 1, batchIndex: 0 }],
+          parallel: false,
+        });
+      }
+    });
+    flushBatch();
+  }
+  return rows;
+}
+
+/** Resolve the live subagent snapshot for a Task tool_use block. The adapter
+ * correlates snapshots via the originating tool_use id (synthetic- prefixed
+ * for progress-only agents the CLI spawns without a Task call in-stream). */
+export function findSubagentSnapshot(
+  subagents: SubagentSnapshot[],
+  block: Block,
+): SubagentSnapshot | undefined {
+  if (block.kind !== "tool_use") return undefined;
+  return subagents.find(
+    (a) => a.toolUseId === block.toolCallId || a.toolUseId === `synthetic:${block.toolCallId}`,
+  );
+}
+
+/** Left-accent treatment for steps the user should not scroll past without
+ * noticing: hard errors (danger) and human-in-the-loop gates — questions and
+ * plan-approval submissions (attention amber). Null = plain step. */
+export type StepAccent = "danger" | "attention" | null;
+
+export function stepAccent(block: Block): StepAccent {
+  if (block.kind === "error") return "danger";
+  if (block.kind === "tool_use") {
+    if (QUESTION_TOOLS.has(block.toolName) || block.toolName === "ExitPlanMode") return "attention";
+  }
+  return null;
 }
 
 /* ── tool classification ────────────────────────────────────────────── */

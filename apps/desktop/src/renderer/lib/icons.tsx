@@ -147,6 +147,8 @@ export {
   IconGitBranch,
   IconGitCommit,
   IconGitMerge,
+  IconGitFork,
+  IconArrowsSplit,
   IconFileSymlink,
   IconSparkles,
   IconAt,

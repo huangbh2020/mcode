@@ -1025,12 +1025,13 @@ export interface SessionState {
    *  PARENT session id (ownership check) + the subagent's taskId; consumed
    *  and drained by SideChatPanel. Not persisted. */
   pendingSubagentView: { sessionId: string; taskId: string } | null;
-  /** One-shot "open this session and jump to this bookmark" request (the
-   *  Ctrl+K palette's bookmark result click). Consumed by the target
-   *  session's ChatPane once the message stream holds the target message
-   *  (openTab's history prefetch is async); cleared without jumping when the
-   *  history is loaded but the message is gone (stale bookmark / truncated
-   *  by an edit-resend). Not persisted. */
+  /** One-shot "open this session and jump to this message" request.
+   *  Producers: the Ctrl+K palette's bookmark result click, and the turn
+   *  flow panel's step rows (locate-in-chat navigation). Consumed by the
+   *  target session's ChatPane once the message stream holds the target
+   *  message (openTab's history prefetch is async); cleared without jumping
+   *  when the history is loaded but the message is gone (stale bookmark /
+   *  truncated by an edit-resend). Not persisted. */
   pendingBookmarkJump: {
     sessionId: string;
     messageId: string;
