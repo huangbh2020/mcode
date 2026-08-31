@@ -190,6 +190,12 @@ pnpm build
 - **jdtls 工作区损坏自愈**:Equinox 退出码 13 = `-data` 工作区打不开(典型:`SaveManager.restore` 抛 `ObjectNotFoundException`,Maven `target/` 生成文件在服务器保存后被 `mvn clean` 等外部删除所致;损坏的是落盘元数据,每次启动必崩)。`ensureServer` 的 initialize 失败路径检测到 java + exitCode 13 时,把 `workspaces/<hash>` 轮换为 `.corrupt-<时间戳>`(rename 失败退回 rmSync)并**自动重试一次**(递归传 `allowWorkspaceRecovery=false` 防循环,重试前清该 key 崩溃计数);新工作区会重新导入项目。健康检查同理:jdtls 无 `--version` 模式(参数会被转发给 Equinox 起完整服务器且永不退出),`healthCheck` 对 java 走静态检查(launcher jar 存在性),通用 `--version` 探测加 10s 超时 + win32 `taskkill /T` 杀树兜底。
 - **Java 首次导入:预热 + 进度可视化**(jdtls 无"分批导入" API,导入是整体后台任务,只能把时机提前 + 让等待可解释):① **预热**——渲染层在项目激活时(`selectProject`/启动水合/新建项目,以及设置页启用 Java 后的 `reloadLspLanguages`)调 `lsp.prewarm` IPC,main 侧 `LspManager.prewarm` 校验已知项目 + java 已启用 + 根目录有 pom/gradle 标记文件后 fire-and-forget `ensureServer`(幂等,活句柄复用不重启),把一次性导入藏进用户浏览项目的时间窗,而不是卡在第一次打开 .java 文件;只预热 java(其它语言秒级启动,无需隐藏),不预热无构建文件的目录(避免白烧 1GB JVM)。② **importing 相位**——探针实证 jdtls 1.37 通过 `language/status` 持续下发 `{type:"Starting", message:"24% Starting Java Language Server - Importing project xxx"}`,`LspStateChangedPayload.phase` 增加 `"importing"` + `detail` 字段,onMessage 把 Starting+百分比消息映射为 `stateChanged{importing, detail:"24% · Importing project xxx"}`,ServiceReady/Started 映射回 running;编辑器 pill(`FileEditor`)显示"{name} 项目导入中… 24% · Importing project xxx",取代神秘超时。③ java 功能请求超时 180s(`JAVA_REQUEST_TIMEOUT_MS`),`sendRequest` 超时打 WARN 进 main.log + java 超时消息附导入提示。工作区 data 目录按项目持久化,导入一次后续启动走恢复路径,秒级就绪。
 
+### 集成终端环境刷新(win32,2026-08-31)
+
+- **问题**:PTY 环境此前是主进程 `process.env` 的冻结快照,启动链路丢失、或 app 启动后才安装的工具(nvm/java/sdkman)在集成终端里不可见——典型症状 `nvm list` 报 `ERROR open \settings.txt`(nvm-windows 靠 `NVM_HOME` 定位,进程里缺这个变量)。系统 PowerShell 正常是因为它由 Explorer 用"当前注册表合并值"启动。POSIX 无此问题:`shellResolve` 用 `-l` login shell,每次建终端都重 source profile。
+- **修复**(`main/terminal/envRefresh.ts` 的 `buildTerminalEnv`,`TerminalManager.create` 已 async 化):win32 下每次创建终端时用一次 powershell.exe 现读 HKLM `Session Manager\Environment` + HKCU\Environment(**不用 `reg.exe`**——管道输出是 OEM 代码页,中文 PATH 条目会乱码;PS 里显式 UTF-8),值取**原始未展开**形态(`DoNotExpandEnvironmentNames`,否则会用过期 env 预展开),再按 Windows 构建新进程 env 的语义合并:用户值覆盖系统值、PATH = 系统+用户拼接后展开 `%VAR%`(查找顺序注册表优先、process.env 兜底——USERPROFILE 这类 volatile 变量不在注册表键里)、注册表值大小写不敏感覆盖快照同名项、快照里注册表没有的 PATH 条目去重后**追加回尾部**(保住 `pnpm dev` 等启动链注入的路径)。结果 10s TTL + in-flight 缓存(终端成对创建只读一次注册表),~300ms 冷启动开销。
+- **失败策略**:任何失败(PS 缺失/超时 8s/解析不出)降级为纯继承 env 并打 WARN,终端创建永不因刷新而失败。非 win32 平台是 no-op 直通。
+
 ### 前端组件与图标
 
 #### 组件库

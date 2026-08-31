@@ -40,7 +40,7 @@ export function registerTerminalHandlers(ipcMain: IpcMain): void {
 
       const shellSetting = SettingRepo.get(TERMINAL_SHELL_SETTING_KEY);
 
-      return TerminalManager.create({
+      return await TerminalManager.create({
         projectPath,
         cwd,
         cols: input.cols,

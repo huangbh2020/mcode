@@ -15,6 +15,7 @@ import type { TerminalInfo } from "@contracts/ipc";
 import { sendToRenderer } from "@main/window.js";
 import { log } from "@main/lib/logger.js";
 import { resolveDefaultShell } from "./shellResolve.js";
+import { buildTerminalEnv } from "./envRefresh.js";
 
 const require = createRequire(import.meta.url);
 
@@ -100,7 +101,12 @@ function ensureSpawnHelperExecutable(): void {
 class TerminalManagerImpl {
   private readonly terminals = new Map<string, LiveTerminal>();
 
-  create(opts: CreateTerminalOpts): CreateTerminalSuccess | CreateTerminalFailure {
+  /**
+   * Async because the env build refreshes the live Windows registry environment
+   * (see envRefresh.ts) before spawning — a fresh system-terminal-equivalent
+   * env costs one short-lived powershell.exe run (~hundreds of ms cold).
+   */
+  async create(opts: CreateTerminalOpts): Promise<CreateTerminalSuccess | CreateTerminalFailure> {
     const cols = opts.cols ?? 80;
     const rows = opts.rows ?? 24;
     const resolved = resolveDefaultShell(opts.shell ?? opts.shellSetting ?? null);
@@ -117,9 +123,13 @@ class TerminalManagerImpl {
       };
     }
 
-    const env: Record<string, string> = {};
-    for (const [k, v] of Object.entries(process.env)) {
-      if (typeof v === "string") env[k] = v;
+    const { env, registryVarsApplied } = await buildTerminalEnv();
+    if (process.platform === "win32") {
+      if (registryVarsApplied === null) {
+        log.warn("terminal env: registry refresh failed, using inherited process env");
+      } else {
+        log.info(`terminal env: refreshed ${registryVarsApplied} vars from live registry`);
+      }
     }
     env.TERM = "xterm-256color";
     env.COLORTERM = env.COLORTERM ?? "truecolor";

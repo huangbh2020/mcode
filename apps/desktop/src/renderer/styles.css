@@ -134,6 +134,17 @@ div:has(> [role="menu"]) {
    * Consumed via text-success in MessageBlocks / TurnFilesCard / git panels. */
   --success: 5 150 105; /* emerald-600 */
 
+  /* Git history graph lane colors (GitHistoryView commit gutter). Fixed
+   * palette on purpose — NOT the semantic tokens: lane rails are identity
+   * colors ("which branch is this"), so borrowing --danger/--success would
+   * repaint meaning. Lane 0 is the trunk (first-parent rail). Consumed via
+   * rgb(var(--git-lane-N)) in commitGraph rendering; cycles past lane 4. */
+  --git-lane-0: 2 132 199; /* sky-600 */
+  --git-lane-1: 124 58 237; /* violet-600 */
+  --git-lane-2: 217 119 6; /* amber-600 */
+  --git-lane-3: 225 29 72; /* rose-600 */
+  --git-lane-4: 5 150 105; /* emerald-600 */
+
   /* Chat appearance — user-configurable. Overridden at runtime by
    * lib/appearance.ts (setProperty on <html>) when the user changes them
    * in Settings. These are the theme defaults (= current hardcoded look):
@@ -235,6 +246,14 @@ div:has(> [role="menu"]) {
   /* Fixed git "additions" green — dark counterpart of :root's --success
    * (mirrors the default dark accent, emerald-500). See :root for rationale. */
   --success: 16 185 129; /* emerald-500 */
+
+  /* Git graph lanes — dark counterparts of :root's palette (400 shades for
+   * contrast on the slate surface). See :root for rationale. */
+  --git-lane-0: 56 189 248; /* sky-400 */
+  --git-lane-1: 167 139 250; /* violet-400 */
+  --git-lane-2: 251 191 36; /* amber-400 */
+  --git-lane-3: 251 113 133; /* rose-400 */
+  --git-lane-4: 52 211 153; /* emerald-400 */
 
   /* Chat appearance defaults for dark mode (neutral gray, one shade
    * brighter than the light default for readable contrast on zinc-900).

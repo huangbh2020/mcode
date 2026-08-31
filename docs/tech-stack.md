@@ -223,6 +223,7 @@ Synara 拆独立 server 后用 WebSocket 通信(为多客户端/多 provider)。
 - **安全**: create 的 `cwd` 必须落在已知 `Project.path` 内（`pathGuard`）
 - **原生模块**: `node-pty` 必须 external，不可打进 main bundle。开发机若 ABI 不匹配，在 `apps/desktop` 执行 `pnpm rebuild:native`（`electron-builder install-app-deps`）。Windows 需对应 Electron ABI 的 prebuild；pnpm 若忽略 build scripts，prebuild 目录仍可用。
 - **Shell 默认**: Win `pwsh → powershell → git-bash → cmd`；POSIX `$SHELL → bash → zsh → sh`。可用 settings key `terminal.shell` 覆盖。
+- **环境刷新(win32)**: `envRefresh.ts` 的 `buildTerminalEnv()` 在每次创建终端时用 powershell.exe(显式 UTF-8、读原始未展开值)现读 HKLM+HKCU 注册表,按"系统+用户合并、PATH 拼接展开、覆盖快照同名项"重建 PTY env——否则 PTY 继承主进程启动时的冻结快照,启动后才安装的工具(nvm 等)不可见;失败降级纯继承,POSIX 直通(login shell 自带刷新)。`TerminalManager.create` 因此是 async。
 
 ## 七、版本与升级注意
 

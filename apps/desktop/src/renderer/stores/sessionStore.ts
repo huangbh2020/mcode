@@ -3009,6 +3009,13 @@ function hydrateUsageHistory(
     // have, or both sides are empty — otherwise re-switching to an
     // already-loaded tab clones the map and trips a subscriber re-render.
     if (hasValue ? s.usageHistoryBySession[sessionId] === history : !hadValue) return {};
+    // Defensive: a live bucket can be AHEAD of the row cache — the turn.done
+    // append mirrors into the row, but that mirror is best-effort (archived
+    // rows aren't patched; any future append path that misses it would
+    // regress the same way). Hydration reads the ROW; it must never shrink a
+    // bucket that holds strictly more records than the row knows about.
+    const live = s.usageHistoryBySession[sessionId];
+    if (live && live.length > (history?.length ?? 0)) return {};
     const next = { ...s.usageHistoryBySession };
     if (history && Array.isArray(history) && history.length > 0) {
       next[sessionId] = history;
@@ -6786,6 +6793,32 @@ export const useSessionStore = create<SessionState>((set, get) => ({
                     } satisfies TurnUsageRecord,
                   ]
                 : prevHistory;
+            // Mirror the appended record into the session row cache — same
+            // rationale as the contextSnapshot mirror in token-usage.updated:
+            // hydrateUsageHistory re-reads the ROW on every selectSession /
+            // openTab, and the row as loaded predates this turn. Without the
+            // mirror, switching away and back replaces the bucket with the
+            // stale row value, wiping this turn's record until the next full
+            // list reload (turns panel shows 无用量记录).
+            let rowsUsagePatch: Partial<SessionState> | null = null;
+            if (history !== prevHistory) {
+              const cached = findSession(
+                s.sessionsByProject, s.archivedSessionsByProject, s.pinnedSessions, sid,
+              );
+              if (cached && cached.usageHistory !== history) {
+                rowsUsagePatch = {
+                  sessionsByProject: patchSessionInCache(
+                    s.sessionsByProject, cached.projectId, sid, { usageHistory: history },
+                  ),
+                };
+                const pinnedIdx = s.pinnedSessions.findIndex((x) => x.id === sid);
+                if (pinnedIdx !== -1) {
+                  rowsUsagePatch.pinnedSessions = s.pinnedSessions.map((x, i) =>
+                    i === pinnedIdx ? { ...x, usageHistory: history } : x,
+                  );
+                }
+              }
+            }
             return {
               runningBySession: { ...s.runningBySession, [sid]: false },
               // Turn closed - drop the send-time anchor so the synthesized
@@ -6814,6 +6847,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
                 ? s.subagentsBySession
                 : { ...s.subagentsBySession, [sid]: [] },
               usageHistoryBySession: { ...s.usageHistoryBySession, [sid]: history },
+              ...(rowsUsagePatch ?? {}),
             };
           });
           // Turn closed — drop any live upstream-retry hint (the channel may

@@ -767,6 +767,10 @@ export function registerGitHandlers(ipcMain: IpcMain): void {
         "log",
         `--max-count=${limit + 1}`,
         `--skip=${skip}`,
+        // Topo order keeps each branch's commits contiguous so the history
+        // view's graph gutter draws clean lanes; date order interleaves
+        // branches and makes lanes jump row to row.
+        "--topo-order",
         "--format=%H%x1f%h%x1f%s%x1f%b%x1f%an%x1f%aI%x1f%P%x1e",
       ];
       if (input.ref) args.push(input.ref);

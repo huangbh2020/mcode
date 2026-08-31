@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "@renderer/lib/api.js";
 import { cn } from "@renderer/lib/cn.js";
 import { joinPath, basename } from "@renderer/lib/path.js";
@@ -13,8 +13,44 @@ import {
   IconAlertTriangle,
 } from "@renderer/lib/icons.js";
 import { useI18n } from "@renderer/lib/i18n/index.js";
+import { layoutCommitGraph, type CommitGraphRow } from "./commitGraph.js";
 
 const PAGE_SIZE = 50;
+
+/* ── commit graph gutter geometry ── */
+
+/** Px between lane centers. 12 keeps 9px dots a lane apart with a visible
+ *  gap, holding the gutter under ~60px even at the 5-lane cap below. */
+const LANE_W = 12;
+/** Left inset of lane 0's center — keeps dots off the row's left edge. */
+const LANE_PAD = 7;
+/** Lanes beyond this index clamp onto the last lane (overlapping rails): a
+ *  wild history degrades visually instead of widening the narrow right
+ *  panel indefinitely. Reachable only with many concurrent merged branches. */
+const MAX_LANES = 5;
+/** Normalized y (viewBox 0-100) of the node dot ≈ the vertical center of a
+ *  row's first text line. Rows are uniform two-line truncated rows, so this
+ *  fraction is stable across all rows. */
+const DOT_Y = 32;
+/** Bezier control-point y for lane-change edges (dot → row bottom). */
+const CURVE_MID = 66;
+/** Row instructions if the layout somehow lacks an entry for a commit —
+ *  renders a plain lane-0 dot with no rails. Lengths always match today. */
+const FALLBACK_ROW: CommitGraphRow = {
+  lane: 0,
+  incoming: false,
+  connections: [],
+  through: [],
+  isMerge: false,
+};
+
+function laneX(lane: number): number {
+  return LANE_PAD + Math.min(lane, MAX_LANES - 1) * LANE_W;
+}
+
+function laneColor(lane: number): string {
+  return `rgb(var(--git-lane-${Math.min(lane, MAX_LANES - 1)}))`;
+}
 
 /**
  * Git history browser for the right-panel Git tab.
@@ -96,6 +132,11 @@ export function GitHistoryView({ repos }: { repos: GitRepo[] }) {
   useEffect(() => {
     void loadCommits();
   }, [gitChangeVersion, loadCommits]);
+
+  // Graph gutter layout over the full loaded list — recomputed on append so
+  // rails stay continuous across page boundaries (see commitGraph.ts).
+  const graph = useMemo(() => layoutCommitGraph(commits), [commits]);
+  const gutterW = LANE_PAD * 2 + (Math.min(graph.laneCount, MAX_LANES) - 1) * LANE_W;
 
   const openCommit = async (commit: GitCommitInfo) => {
     setSelected(commit);
@@ -231,8 +272,15 @@ export function GitHistoryView({ repos }: { repos: GitRepo[] }) {
           </div>
         ) : (
           <div className="py-1">
-            {commits.map((c) => (
-              <CommitRow key={c.hash} commit={c} onClick={() => void openCommit(c)} />
+            {commits.map((c, i) => (
+              <CommitRow
+                key={c.hash}
+                commit={c}
+                graph={graph.rows[i] ?? FALLBACK_ROW}
+                gutterW={gutterW}
+                isHead={i === 0}
+                onClick={() => void openCommit(c)}
+              />
             ))}
             {hasMore && (
               <div className="px-2 py-2">
@@ -264,23 +312,38 @@ export function GitHistoryView({ repos }: { repos: GitRepo[] }) {
 
 function CommitRow({
   commit,
+  graph,
+  gutterW,
+  isHead,
   onClick,
 }: {
   commit: GitCommitInfo;
+  graph: CommitGraphRow;
+  gutterW: number;
+  isHead: boolean;
   onClick: () => void;
 }) {
   return (
+    // No left padding: the graph gutter starts at the row's padding-box edge
+    // so the rails SVG (absolute left-0) and the dot share one coordinate
+    // space. Lane 0's own inset provides the breathing room instead.
     <button
       type="button"
       onClick={onClick}
-      className="flex w-full flex-col gap-0.5 px-2.5 py-1.5 text-left transition-colors hover:bg-surface-hover/50"
+      className="relative flex w-full flex-col gap-0.5 py-1.5 pr-2.5 text-left transition-colors hover:bg-surface-hover/50"
     >
+      <GraphRails graph={graph} gutterW={gutterW} />
       <div className="flex min-w-0 items-center gap-1.5">
-        <IconGitCommit size={12} className="shrink-0 text-content-subtle" />
+        <span className="relative self-stretch shrink-0" style={{ width: gutterW }}>
+          <CommitDot graph={graph} isHead={isHead} />
+        </span>
         <span className="shrink-0 font-mono [font-size:var(--rp-fs-xxs)] text-accent">{commit.shortHash}</span>
         <span className="min-w-0 truncate [font-size:var(--right-panel-font-size)] text-content">{commit.subject}</span>
       </div>
-      <div className="flex items-center gap-1.5 pl-[18px] [font-size:var(--rp-fs-xxs)] text-content-subtle">
+      <div
+        className="flex items-center gap-1.5 [font-size:var(--rp-fs-xxs)] text-content-subtle"
+        style={{ paddingLeft: gutterW + 6 }}
+      >
         <span className="truncate">{commit.author}</span>
         <span>·</span>
         <span className="shrink-0" title={formatFullTime(commit.authoredAt)}>
@@ -288,6 +351,94 @@ function CommitRow({
         </span>
       </div>
     </button>
+  );
+}
+
+/**
+ * Rail segments behind one commit row. An SVG stretched over the row's full
+ * height (viewBox height normalized to 100, preserveAspectRatio="none"), so
+ * verticals and lane-change beziers land on the next row's rails no matter
+ * the row's pixel height. Each row draws only within its own bounds: rails
+ * leaving the dot end at the bottom edge, rails arriving at the dot start at
+ * the top edge — adjacent rows chain seamlessly.
+ */
+function GraphRails({ graph, gutterW }: { graph: CommitGraphRow; gutterW: number }) {
+  return (
+    <svg
+      // h-full is load-bearing: an absolutely positioned replaced element
+      // with auto height resolves to its viewBox ratio (100px), not the row
+      // height — rails would spill into the next row without it.
+      className="pointer-events-none absolute left-0 top-0 h-full"
+      width={gutterW}
+      viewBox={`0 0 ${gutterW} 100`}
+      preserveAspectRatio="none"
+      aria-hidden="true"
+    >
+      {graph.through.map((lane) => (
+        <line
+          key={`t-${lane}`}
+          x1={laneX(lane)}
+          y1={0}
+          x2={laneX(lane)}
+          y2={100}
+          strokeWidth={1.5}
+          vectorEffect="non-scaling-stroke"
+          style={{ stroke: laneColor(lane) }}
+        />
+      ))}
+      {graph.incoming && (
+        <line
+          x1={laneX(graph.lane)}
+          y1={0}
+          x2={laneX(graph.lane)}
+          y2={DOT_Y}
+          strokeWidth={1.5}
+          vectorEffect="non-scaling-stroke"
+          style={{ stroke: laneColor(graph.lane) }}
+        />
+      )}
+      {graph.connections.map((conn, i) =>
+        conn.toLane === conn.fromLane ? (
+          <line
+            key={`c-${i}`}
+            x1={laneX(conn.toLane)}
+            y1={DOT_Y}
+            x2={laneX(conn.toLane)}
+            y2={100}
+            strokeWidth={1.5}
+            vectorEffect="non-scaling-stroke"
+            style={{ stroke: laneColor(conn.toLane) }}
+          />
+        ) : (
+          <path
+            key={`c-${i}`}
+            d={`M ${laneX(conn.fromLane)} ${DOT_Y} C ${laneX(conn.fromLane)} ${CURVE_MID}, ${laneX(conn.toLane)} ${CURVE_MID}, ${laneX(conn.toLane)} 100`}
+            fill="none"
+            strokeWidth={1.5}
+            vectorEffect="non-scaling-stroke"
+            style={{ stroke: laneColor(conn.toLane) }}
+          />
+        ),
+      )}
+    </svg>
+  );
+}
+
+/** The commit's node. A DOM element (not SVG) so it auto-centers with the
+ *  first text line regardless of font size; being later in paint order it
+ *  covers the rails passing behind it. Merge commits and HEAD draw larger. */
+function CommitDot({ graph, isHead }: { graph: CommitGraphRow; isHead: boolean }) {
+  const size = graph.isMerge || isHead ? 9 : 7;
+  return (
+    <span
+      className="absolute top-1/2 -translate-y-1/2 rounded-full"
+      style={{
+        left: laneX(graph.lane) - size / 2,
+        width: size,
+        height: size,
+        backgroundColor: laneColor(graph.lane),
+      }}
+    />
   );
 }
 

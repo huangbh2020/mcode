@@ -1929,7 +1929,8 @@ export interface GitCommitInfo {
   author: string;
   /** Author date as ISO-8601 string. */
   authoredAt: string;
-  /** Parent commit hashes (empty for root commits). Present on showCommit. */
+  /** Parent commit hashes (empty for root commits). Returned by git.log and
+   *  showCommit alike — log's %P field feeds it (see parseLogOutput). */
   parents?: string[];
 }
 
