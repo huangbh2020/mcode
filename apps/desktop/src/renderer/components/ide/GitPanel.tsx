@@ -1,14 +1,15 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { api } from "@renderer/lib/api.js";
 import { cn } from "@renderer/lib/cn.js";
-import { useSessionStore } from "@renderer/stores/sessionStore.js";
+import { useSessionStore, selectActiveEnvPath } from "@renderer/stores/sessionStore.js";
 import type { GitRepo } from "@contracts/ipc";
 import { GitRepoCard } from "./GitRepoCard.js";
 import { GitHistoryView } from "./GitHistoryView.js";
-import { IconGitBranch, IconGitCommit, IconLoader2, IconRefresh } from "@renderer/lib/icons.js";
+import { WorktreeManagerPanel } from "./WorktreeManagerPanel.js";
+import { IconGitBranch, IconGitCommit, IconGitFork, IconLoader2, IconRefresh } from "@renderer/lib/icons.js";
 import { useI18n } from "@renderer/lib/i18n/index.js";
 
-type GitSubTab = "changes" | "history";
+type GitSubTab = "changes" | "history" | "worktrees";
 
 /**
  * Git panel — the right-panel "Git" tab body.
@@ -25,14 +26,12 @@ type GitSubTab = "changes" | "history";
  */
 export function GitPanel() {
   const { t } = useI18n();
-  const activeProjectId = useSessionStore((s) => s.activeProjectId);
-  const projects = useSessionStore((s) => s.projects);
   const [subTab, setSubTab] = useState<GitSubTab>("changes");
 
-  const projectPath = useMemo(() => {
-    if (!activeProjectId) return null;
-    return projects.find((p) => p.id === activeProjectId)?.path ?? null;
-  }, [activeProjectId, projects]);
+  // Follows the active session's environment — a materialized worktree
+  // session gets the worktree's OWN repo in this panel (its commits, its
+  // status); local sessions see the project's repos as before.
+  const projectPath = useSessionStore(selectActiveEnvPath);
 
   const [repos, setRepos] = useState<GitRepo[]>([]);
   const [loading, setLoading] = useState(true);
@@ -112,6 +111,12 @@ export function GitPanel() {
           icon={<IconGitCommit size={12} />}
           label={t("ide.git.history")}
         />
+        <SubTabButton
+          active={subTab === "worktrees"}
+          onClick={() => setSubTab("worktrees")}
+          icon={<IconGitFork size={12} />}
+          label={t("ide.git.worktreeTab")}
+        />
         <div className="ml-auto flex items-center gap-1 px-1.5">
           <span className="[font-size:var(--rp-fs-xxs)] text-content-subtle">{t("ide.git.repoCount", { n: repos.length })}</span>
           <button
@@ -132,6 +137,10 @@ export function GitPanel() {
               <GitRepoCard key={repo.path} repo={repo} />
             ))}
           </div>
+        </div>
+      ) : subTab === "worktrees" ? (
+        <div className="flex min-h-0 flex-1 flex-col">
+          <WorktreeManagerPanel repos={repos} />
         </div>
       ) : (
         <div className="min-h-0 flex-1">

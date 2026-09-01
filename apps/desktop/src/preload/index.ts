@@ -306,6 +306,12 @@ const api = {
       ipcRenderer.invoke(IPC.GIT_MERGE, input)) as RpcMap["git.merge"],
     mergeAbort: ((input) =>
       ipcRenderer.invoke(IPC.GIT_MERGE_ABORT, input)) as RpcMap["git.mergeAbort"],
+    worktreeList: ((input) =>
+      ipcRenderer.invoke(IPC.GIT_WORKTREE_LIST, input)) as RpcMap["git.worktreeList"],
+    worktreeMergeBack: ((input) =>
+      ipcRenderer.invoke(IPC.GIT_WORKTREE_MERGE_BACK, input)) as RpcMap["git.worktreeMergeBack"],
+    worktreeRemove: ((input) =>
+      ipcRenderer.invoke(IPC.GIT_WORKTREE_REMOVE, input)) as RpcMap["git.worktreeRemove"],
   },
 
   /** Integrated terminal (xterm in renderer ↔ node-pty in main). Paths on

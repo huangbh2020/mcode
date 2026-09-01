@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState, type ReactNode } from "react";
-import { useSessionStore } from "@renderer/stores/sessionStore.js";
+import { useSessionStore, selectActiveEnvPath } from "@renderer/stores/sessionStore.js";
 import { cn } from "@renderer/lib/cn.js";
 import { api } from "@renderer/lib/api.js";
 import {
@@ -78,10 +78,10 @@ export function TerminalPanel({ active }: { active: boolean }) {
   const activeProjectId = useSessionStore((s) => s.activeProjectId);
   const projects = useSessionStore((s) => s.projects);
 
-  const projectPath = useMemo(() => {
-    if (!activeProjectId) return null;
-    return projects.find((p) => p.id === activeProjectId)?.path ?? null;
-  }, [activeProjectId, projects]);
+  // Follows the active session's environment — a worktree session's
+  // terminals open IN the isolated checkout (its own bucket, separate from
+  // the project-root terminals).
+  const projectPath = useSessionStore(selectActiveEnvPath);
 
   // Terminal state is keyed by project path and kept in refs (NOT React state).
   // The reason: when the user switches projects we must NOT unmount the other

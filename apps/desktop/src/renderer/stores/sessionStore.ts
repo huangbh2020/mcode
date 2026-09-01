@@ -21,6 +21,7 @@ import { getLastCursor, type NavEntry } from "@renderer/lib/editorNav.js";
 import type { CustomModelPublic } from "@contracts/customModel";
 import { api } from "@renderer/lib/api.js";
 import { isElectron } from "@renderer/lib/platform.js";
+import { normWorktreeKey } from "@renderer/lib/worktree.js";
 import { translate } from "@renderer/lib/i18n/core.js";
 import { DEFAULT_EDITOR_THEME_CHOICE, parseEditorThemeChoice, type EditorThemeChoice, type EditorThemeId } from "@renderer/lib/editorThemes.js";
 import {
@@ -63,6 +64,8 @@ import {
   AUTO_ARCHIVE_SETTING_KEY,
   DEFAULT_AUTO_ARCHIVE_CONFIG,
   parseAutoArchiveConfig,
+  SESSION_WORKTREE_DEFAULT_SETTING_KEY,
+  WORKTREE_NAMES_SETTING_KEY,
   ShortcutBindingsSchema,
   type AutoArchiveConfig,
   type DisplayMode,
@@ -570,6 +573,18 @@ export interface SessionState {
   activeSessionId: string | null;
   /** Which projects are expanded in the tree (UI-only, not persisted). */
   expandedProjects: Record<string, boolean>;
+  /** Per-project left-bar VIEW: false (default) = local threads only,
+   *  true = worktree groups. Flipped by the project row's fork toggle;
+   *  auto-flipped (to true) when a worktree thread activates so the active
+   *  row is always visible. UI-only, not persisted. */
+  worktreeViewByProject: Record<string, boolean>;
+  /** Which worktree group nodes are expanded in the tree (UI-only, keyed by
+   *  normalized worktree path; not persisted). */
+  expandedWorktrees: Record<string, boolean>;
+  /** Left-bar display names for worktree directories (normalized path →
+   *  name). Persisted in the `settings` table; cosmetic only — missing
+   *  entries fall back to the directory basename. */
+  worktreeNames: Record<string, string>;
   /** Whether the "archived" section at the bottom of the tree is expanded. */
   archivedViewOpen: boolean;
 
@@ -853,6 +868,13 @@ export interface SessionState {
    *  only surfaces the 4 user-facing ones. See PermissionMode in
    *  @contracts/runtime for the full list. */
   permissionMode: PermissionMode;
+  /** Default working environment for NEW sessions: false = local (project
+   *  root), true = isolated detached worktree materialized on the first
+   *  turn. Persisted (settings key `session.worktreeDefault`) so the choice
+   *  sticks across restarts. Flipping the chip while the ACTIVE session is
+   *  still an un-materialized worktree intent edits THAT session instead
+   *  (see setWorktreeMode) — the slot itself only seeds new rows. */
+  worktreeMode: boolean;
   /** Provider powering the next session ("claude-sdk" / "pi-sdk"). Chosen in
    *  the composer's provider chip; persisted on the session row at creation.
    *  Once a session has messages, this is read-only (a session's provider is
@@ -1188,11 +1210,20 @@ export interface SessionState {
   addProjectFromFolder: () => Promise<string | null>;
   selectProject: (projectId: string) => Promise<void>;
   toggleProjectExpanded: (projectId: string) => void;
+  /** Flip a project's left-bar view between local threads and worktree
+   *  groups (drives the project row's fork toggle). */
+  setProjectWorktreeView: (projectId: string, on: boolean) => void;
+  /** Toggle a worktree group node's expanded state in the left-bar tree
+   *  (keyed by raw worktree path; normalized internally). */
+  toggleWorktreeExpanded: (worktreePath: string) => void;
+  /** Set (or clear, empty name) the left-bar display name for a worktree
+   *  directory. Optimistic local patch + fire-and-forget settings write. */
+  renameWorktree: (worktreePath: string, name: string) => Promise<void>;
   setArchivedViewOpen: (open: boolean) => void;
   /** Fetch the next page of active sessions for a project and append it to
    *  `sessionsByProject[projectId]`. No-op when there are no more to load. */
   loadMoreSessions: (projectId: string) => Promise<void>;
-  startSession: (projectId?: string, overrides?: { providerId?: string; model?: string; customModelId?: string | null }) => Promise<void>;
+  startSession: (projectId?: string, overrides?: { providerId?: string; model?: string; customModelId?: string | null; worktreePath?: string }) => Promise<void>;
   /** Switch the active session (and load its history if not cached).
    *  Always replaces the center pane content. In `single` displayMode
    *  this is the only navigation primitive; in `tabs` mode it's used
@@ -1484,6 +1515,13 @@ export interface SessionState {
   shortcutRecording: boolean;
   setShortcutRecording: (recording: boolean) => void;
   setPermissionMode: (mode: PermissionMode) => void;
+  /** Toggle the working-environment chip. When the ACTIVE session is an
+   *  un-materialized worktree intent, the flip edits THAT session's envMode
+   *  (updateSettings) instead of the global default — the chip reads as
+   *  "this thread's environment" until the first turn locks it. Otherwise
+   *  (local/absent/materialized sessions) it flips the persisted default for
+   *  NEW sessions. */
+  setWorktreeMode: (mode: boolean) => void;
   /** Switch the provider for the NEXT session (no effect once a session has
    *  messages — a session's provider is fixed at creation). */
   setProvider: (id: string) => void;
@@ -2568,6 +2606,22 @@ function syncConfigFromSession(
   // preserved.
   if (!get().expandedProjects[sess.projectId]) {
     patch.expandedProjects = { ...get().expandedProjects, [sess.projectId]: true };
+  }
+  // Same idea for the session's worktree group: activating a thread bound to
+  // an isolated checkout must reveal the group node it buckets under,
+  // otherwise the newly-active row stays invisible inside a collapsed group.
+  if (sess.worktreePath && !get().expandedWorktrees[normWorktreeKey(sess.worktreePath)]) {
+    patch.expandedWorktrees = {
+      ...get().expandedWorktrees,
+      [normWorktreeKey(sess.worktreePath)]: true,
+    };
+  }
+  // ...and the project's left-bar VIEW must show the side the active thread
+  // lives on: a worktree thread while the project shows local-only would be
+  // invisible. Only flips toward worktrees — activating a local thread never
+  // yanks the user out of a worktree view they opened deliberately.
+  if (sess.worktreePath && !get().worktreeViewByProject[sess.projectId]) {
+    patch.worktreeViewByProject = { ...get().worktreeViewByProject, [sess.projectId]: true };
   }
   set(patch);
 
@@ -3704,6 +3758,36 @@ function schedulePaneWidthPersist(get: () => SessionState): void {
   }, 400);
 }
 
+/** The effective working-environment root of the ACTIVE session: the thread's
+ *  materialized worktree when it runs isolated, the project root otherwise.
+ *  Drives the IDE surfaces (file tree / git panel / terminal / LSP
+ *  workspace) so they follow the session's environment instead of always
+ *  showing the project checkout. Returns a stable string|null. */
+export function selectActiveEnvPath(s: {
+  activeProjectId: string | null;
+  activeSessionId: string | null;
+  sessions: Session[];
+  pinnedSessions: Session[];
+  sessionsByProject: Record<string, Session[]>;
+  projects: { id: string; path: string }[];
+}): string | null {
+  const pid = s.activeProjectId;
+  if (!pid) return null;
+  const sid = s.activeSessionId;
+  if (sid) {
+    let sess = s.sessions.find((x) => x.id === sid);
+    if (!sess) sess = s.pinnedSessions.find((x) => x.id === sid);
+    if (!sess) {
+      for (const list of Object.values(s.sessionsByProject)) {
+        const hit = list?.find((x) => x.id === sid);
+        if (hit) { sess = hit; break; }
+      }
+    }
+    if (sess?.worktreePath) return sess.worktreePath;
+  }
+  return s.projects.find((p) => p.id === pid)?.path ?? null;
+}
+
 export const useSessionStore = create<SessionState>((set, get) => ({
   projects: [],
   activeProjectId: null,
@@ -3716,6 +3800,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   sessions: [],
   activeSessionId: null,
   expandedProjects: {},
+  worktreeViewByProject: {},
+  expandedWorktrees: {},
+  worktreeNames: {},
   archivedViewOpen: false,
   // openTabs is filled by `init` (lands on the first non-archived session,
   // if any) and by `startSession`. Defaulting to [] here means there's no
@@ -3812,6 +3899,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   bottomTerminalHeight: 280,
   editorWidthPct: 50,
   permissionMode: "default",
+  worktreeMode: false,
   providerId: DEFAULT_PROVIDER_ID,
   model: "default",
   customModelId: null,
@@ -3916,12 +4004,33 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           UI_LAST_PROJECT_SETTING_KEY,
           UI_LAST_SESSION_SETTING_KEY,
           UI_COMPOSER_MODEL_SETTING_KEY,
+          SESSION_WORKTREE_DEFAULT_SETTING_KEY,
+          WORKTREE_NAMES_SETTING_KEY,
         ],
       })
       .catch((err) => {
         console.error("setting.getMany(first-paint) failed:", err);
         return {} as Record<string, string | null>;
       });
+
+    // Composer's default working environment for new sessions (isolated
+    // worktree vs local). Cheap boolean — folded into the first-paint batch
+    // so the chip renders correctly on frame one.
+    try {
+      const value = fp[SESSION_WORKTREE_DEFAULT_SETTING_KEY];
+      if (value === "true") set({ worktreeMode: true });
+    } catch (err) {
+      console.error("apply(worktreeMode) failed:", err);
+    }
+
+    // Left-bar display names for worktree directories. Cosmetic — a failed
+    // parse just falls back to directory basenames for every group.
+    try {
+      const value = fp[WORKTREE_NAMES_SETTING_KEY];
+      if (value) set({ worktreeNames: JSON.parse(value) as Record<string, string> });
+    } catch (err) {
+      console.error("apply(worktreeNames) failed:", err);
+    }
 
     // displayMode determines single vs tabs layout - needed before first render
     // of the center pane so the right structure mounts.
@@ -4550,6 +4659,40 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       };
     }),
 
+  // Worktree group nodes hold few sessions (one directory, few threads), so
+  // unlike toggleProjectExpanded there is no pagination cache to reset — a
+  // pure expand-state flip.
+  toggleWorktreeExpanded: (worktreePath) =>
+    set((s) => {
+      const key = normWorktreeKey(worktreePath);
+      return {
+        expandedWorktrees: { ...s.expandedWorktrees, [key]: !s.expandedWorktrees[key] },
+      };
+    }),
+
+  setProjectWorktreeView: (projectId, on) =>
+    set((s) => {
+      if (!!s.worktreeViewByProject[projectId] === on) return s;
+      return { worktreeViewByProject: { ...s.worktreeViewByProject, [projectId]: on } };
+    }),
+
+  renameWorktree: async (worktreePath, name) => {
+    const key = normWorktreeKey(worktreePath);
+    const trimmed = name.trim();
+    const next = { ...get().worktreeNames };
+    if (trimmed) next[key] = trimmed;
+    else delete next[key];
+    // Optimistic local patch — the group header renames immediately; the
+    // settings write is fire-and-forget (a failed write costs the name on
+    // next boot, same trade-off as the other cosmetic settings).
+    set({ worktreeNames: next });
+    try {
+      await api.setting.set({ key: WORKTREE_NAMES_SETTING_KEY, value: JSON.stringify(next) });
+    } catch (err) {
+      console.error("setting.set(worktreeNames) failed:", err);
+    }
+  },
+
   setArchivedViewOpen: (open) => set({ archivedViewOpen: open }),
 
   /** Fetch the next page of active sessions for a project and append to the
@@ -4595,6 +4738,12 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       model: model !== "default" ? model : undefined,
       effort: get().effort,
       permissionMode: get().permissionMode,
+      // Working-environment intent from the composer chip — materialized on
+      // the first turn (see sendTurn's resolveSessionCwd), never here. An
+      // explicit worktreePath (LeftBar "在此工作树中新建会话") BINDS the new
+      // session to an existing managed checkout instead of creating one.
+      envMode: overrides?.worktreePath ? "worktree" : (get().worktreeMode ? "worktree" : "local"),
+      worktreePath: overrides?.worktreePath,
       customModelId:
         overrides?.customModelId !== undefined ? overrides.customModelId : get().customModelId,
     });
@@ -4653,6 +4802,17 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         activeProjectId: projectId,
         activeSessionId: session.id,
         expandedProjects: { ...s.expandedProjects, [projectId]: true },
+        // The new thread's side of the project view must be the visible one:
+        // a worktree-bound session needs the fork view, a local one the
+        // default list — otherwise the freshly activated row is invisible.
+        worktreeViewByProject: {
+          ...s.worktreeViewByProject,
+          [projectId]: !!session.worktreePath,
+        },
+        // A worktree-bound new session must land inside a VISIBLE group node.
+        expandedWorktrees: session.worktreePath
+          ? { ...s.expandedWorktrees, [normWorktreeKey(session.worktreePath)]: true }
+          : s.expandedWorktrees,
         messagesBySession: { ...s.messagesBySession, [session.id]: [] },
         hasMoreMessagesBySession: { ...s.hasMoreMessagesBySession, [session.id]: false },
         // Locally-created session: the empty bucket IS the full history — mark
@@ -6098,6 +6258,58 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           // else: archived remotely but outside the loaded bin page — the
           // refresh path will pick it up.
         }
+        // Cached pre-change row (same id) — the gain/loss probes below
+        // compare it against the incoming entry.
+        const prevEntry =
+          s.sessionsByProject[entry.projectId]?.find((x) => x.id === entry.id) ??
+          s.pinnedSessions.find((x) => x.id === entry.id);
+        // Worktree-MATERIALIZE flip (gain direction): the entry just GAINED a
+        // worktreePath — its first turn created the isolated checkout
+        // (the composer-chip path materializes on sendTurn, long after the
+        // session was activated, so the activation-time flip never ran). If
+        // the materialized row is the ACTIVE session, the project's view
+        // must follow it into the fork view and reveal the group —
+        // otherwise the freshly materialized thread silently vanishes from
+        // the local list the user is looking at.
+        if (entry.worktreePath && !prevEntry?.worktreePath && entry.id === s.activeSessionId) {
+          if (!s.worktreeViewByProject[entry.projectId]) {
+            patch.worktreeViewByProject = {
+              ...s.worktreeViewByProject,
+              [entry.projectId]: true,
+            };
+          }
+          const gainedKey = normWorktreeKey(entry.worktreePath);
+          if (!s.expandedWorktrees[gainedKey]) {
+            patch.expandedWorktrees = {
+              ...s.expandedWorktrees,
+              [gainedKey]: true,
+            };
+          }
+        }
+        // Worktree-degenerate view flip: this entry just LOST its
+        // worktreePath — its directory was removed and clearWorktreePath
+        // degraded it back to local (each referenced session broadcasts its
+        // own changed event, so this fires once per row). When the project's
+        // LAST worktree-bound row degenerates, fall its left-bar view back
+        // to the local list — the fork view would otherwise render an empty
+        // "no threads" while every local thread sits hidden in the other
+        // view (the "删除工作树后会话不见了" trap).
+        if (!entry.worktreePath && prevEntry?.worktreePath) {
+          const stillBound =
+            (s.sessionsByProject[entry.projectId]?.some(
+              (x) => x.id !== entry.id && !!x.worktreePath,
+            ) ?? false) ||
+            s.pinnedSessions.some(
+              (x) => x.id !== entry.id && x.projectId === entry.projectId && !!x.worktreePath,
+            );
+          if (!stillBound && s.worktreeViewByProject[entry.projectId]) {
+            patch.worktreeViewByProject = {
+              ...s.worktreeViewByProject,
+              [entry.projectId]: false,
+            };
+            touched = true;
+          }
+        }
         if (!touched) return {};
         // Keep the derived `sessions` alias (active project's list) fresh.
         if (s.activeProjectId === entry.projectId && patch.sessionsByProject) {
@@ -7463,6 +7675,42 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         console.error("updateSettings(permissionMode) failed:", err);
       });
     }
+  },
+
+  setWorktreeMode: (mode) => {
+    set({ worktreeMode: mode });
+    const g = get();
+    const sessionId = g.activeSessionId;
+    const active = sessionId
+      ? findSession(g.sessionsByProject, g.archivedSessionsByProject, g.pinnedSessions, sessionId)
+      : undefined;
+    // Any UN-MATERIALIZED session in the foreground (local OR worktree
+    // intent — it still has no git footprint) → the flip edits THAT
+    // session's environment, both directions. This is what makes the chip
+    // read as "this thread's environment" until the first turn locks it.
+    if (active && !active.worktreePath) {
+      void api.session
+        .updateSettings({ sessionId: active.id, envMode: mode ? "worktree" : "local" })
+        .catch((err) => {
+          console.error("updateSettings(envMode) failed:", err);
+        });
+      // Patch the cached row so the chip reflects it locally without
+      // waiting for the session.changed round-trip.
+      set((s) => ({
+        sessionsByProject: patchSessionInCache(s.sessionsByProject, active.projectId, active.id, {
+          envMode: mode ? ("worktree" as const) : ("local" as const),
+        }),
+      }));
+      return;
+    }
+    // No session in the foreground (empty state) — or the session is already
+    // materialized (locked; the UI disables switching): fall through to the
+    // persisted DEFAULT for new sessions.
+    void api.setting
+      .set({ key: SESSION_WORKTREE_DEFAULT_SETTING_KEY, value: mode ? "true" : "false" })
+      .catch((err) => {
+        console.error("setting.set(worktreeDefault) failed:", err);
+      });
   },
 
   /** Persist the active session's model. See `setPermissionMode` for the

@@ -45,6 +45,7 @@ import { MessageBlocks, TurnPanel, type ProceduralBlock, type BeforeContentMap }
 import { AttachMenuButton } from "./AttachMenuButton.js";
 import { MicButton } from "./MicButton.js";
 import { ComposerToolbar } from "./ComposerToolbar.js";
+import { WorktreeModeChip } from "./WorktreeModeChip.js";
 import { ComposerToolbarToggle } from "./ComposerToolbarToggle.js";
 import { ProviderDropdown } from "./ProviderDropdown.js";
 import { QuestionPrompt } from "./QuestionPrompt.js";
@@ -2917,6 +2918,12 @@ function ChatPaneForSession({
               onDismiss={dismissQuestion}
             />
           )}
+          {/* Working-environment picker — OUTSIDE the composer card, a quiet
+              text trigger on its own row just above it (left-aligned). Hidden
+              entirely for projects without a git repo (self-hides). */}
+          <div className="flex items-center px-1 pb-1">
+            <WorktreeModeChip sessionId={sessionId} />
+          </div>
           <div
             className={cn(
               "relative flex min-w-0 flex-col overflow-hidden rounded-2xl border border-edge-input bg-surface transition-all duration-200",

@@ -9,6 +9,7 @@ import { useI18n, type MessageId } from "@renderer/lib/i18n/index.js";
 import type { ChatDensity, DisplayMode, AutoArchiveConfig, Locale } from "@contracts/ipc";
 import type { ReactNode } from "react";
 import { SettingRow } from "./SettingRow.js";
+import { WorktreeRootSetting } from "./WorktreeRootSetting.js";
 import { PanelHeader } from "./PanelHeader.js";
 import { SettingsSection } from "./SettingsSection.js";
 import { TitleGenPanel } from "./TitleGenPanel.js";
@@ -152,6 +153,14 @@ export function GeneralPanel() {
               </Select.Positioner>
             </Select.Portal>
           </Select.Root>
+        </SettingRow>
+
+        {/* ── Isolated-session worktree root (managed directory) ── */}
+        <SettingRow
+          title={t("settings.general.worktreeRoot")}
+          desc={t("settings.general.worktreeRootDesc")}
+        >
+          <WorktreeRootSetting />
         </SettingRow>
 
         {/* ── Center-pane display mode ── */}

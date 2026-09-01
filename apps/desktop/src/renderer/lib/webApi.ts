@@ -467,6 +467,9 @@ const git: Api["git"] = {
   mergePreview: () => webUnsupported("git.mergePreview"),
   merge: () => webUnsupported("git.merge"),
   mergeAbort: () => webUnsupported("git.mergeAbort"),
+  worktreeList: () => webUnsupported("git.worktreeList"),
+  worktreeMergeBack: () => webUnsupported("git.worktreeMergeBack"),
+  worktreeRemove: () => webUnsupported("git.worktreeRemove"),
 };
 
 const setting: Api["setting"] = {

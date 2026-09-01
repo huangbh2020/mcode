@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { EMPTY_TURN_FILES, useSessionStore } from "@renderer/stores/sessionStore.js";
+import { EMPTY_TURN_FILES, useSessionStore, selectActiveEnvPath } from "@renderer/stores/sessionStore.js";
 import type { TurnFileEntry } from "@renderer/lib/turnFiles.js";
 import { FileTree } from "./FileTree.js";
 import { cn } from "@renderer/lib/cn.js";
@@ -75,7 +75,12 @@ export function FilesPanel() {
     return projects.find((p) => p.id === activeProjectId) ?? null;
   }, [activeProjectId, projects]);
 
-  const projectPath = activeProject?.path ?? null;
+  // The tree follows the ACTIVE SESSION's environment: a materialized
+  // worktree session browses its isolated checkout (the guards admit session
+  // worktree roots), everything else browses the project root. FileTree
+  // remounts on this value changing — switching environments swaps the tree.
+  const envPath = useSessionStore(selectActiveEnvPath);
+  const projectPath = envPath ?? activeProject?.path ?? null;
   const projectName = activeProject?.name ?? null;
 
   if (!projectPath) {

@@ -19,7 +19,7 @@
 import type { editor, languages, IDisposable, IRange, MarkerSeverity, Uri } from "monaco-editor";
 import type { LspDiagnostic, LspLanguageId } from "@contracts/ipc";
 import { api } from "@renderer/lib/api.js";
-import { useSessionStore } from "@renderer/stores/sessionStore.js";
+import { useSessionStore, selectActiveEnvPath } from "@renderer/stores/sessionStore.js";
 import { useEffect, useRef, useSyncExternalStore } from "react";
 
 /** Map a Monaco language id to the LSP language id we route requests through.
@@ -73,10 +73,10 @@ export function ensureLspProviders(
    *  server was spawned with this root; requests must carry it so the manager
    *  routes to the right server. */
   const workspacePath = (): string | null => {
-    const s = useSessionStore.getState();
-    const pid = s.activeProjectId;
-    if (!pid) return null;
-    return s.projects.find((p) => p.id === pid)?.path ?? null;
+    // Follows the active session's environment: worktree sessions get an
+    // LSP workspace rooted at their isolated checkout (a fresh import for
+    // jdtls; cheap for TS servers).
+    return selectActiveEnvPath(useSessionStore.getState());
   };
 
   /** Forward an LSP request to main. Throws on failure (no active project,

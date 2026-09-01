@@ -125,6 +125,17 @@ export interface Session {
    *  survives a session reopen). Null for sessions that never saw a file edit.
    *  Cleared (set to null) after a rewind. JSON-serialized in the DB. */
   turnFiles: TurnFileEntry[] | null;
+  /** Working environment of this session's turns. "worktree" = turns run in
+   *  an isolated git worktree (detached checkout) instead of the project
+   *  root, so parallel sessions never stomp on each other's working tree.
+   *  Recorded as INTENT at session creation; the worktree is materialized
+   *  (and `worktreePath` backfilled) when the first turn is sent. Undefined
+   *  (= "local") for all pre-existing rows. */
+  envMode?: "local" | "worktree";
+  /** Absolute path of this session's worktree once materialized. Null while
+   *  still intent-only and for local sessions forever. Persisted so a
+   *  restarted app keeps routing the session's turns into the worktree. */
+  worktreePath?: string | null;
   /** User-placed message bookmarks (persisted so the capsule + timeline
    *  markers survive a session reopen). Null for sessions with no bookmarks.
    *  JSON-serialized in the DB. */

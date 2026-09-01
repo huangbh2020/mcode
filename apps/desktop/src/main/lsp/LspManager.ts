@@ -43,7 +43,7 @@ import {
 import { log } from "@main/lib/logger.js";
 import { sendToRenderer } from "@main/window.js";
 import { SettingRepo } from "@main/store/repositories.js";
-import { isKnownProjectPath, findContainingProject } from "@main/lib/pathGuard.js";
+import { isKnownWorkspaceRoot, findContainingWorkspaceRoot } from "@main/lib/pathGuard.js";
 import { which } from "@main/lib/binaryResolve.js";
 import {
   ALL_LANGUAGE_SPECS,
@@ -1553,7 +1553,7 @@ class LspManagerImpl {
 
   /** Security: workspacePath must be a known project root. */
   private assertWorkspace(workspacePath: string): void {
-    if (!isKnownProjectPath(workspacePath)) {
+    if (!isKnownWorkspaceRoot(workspacePath)) {
       throw new Error(`工作区路径不是已知项目: ${workspacePath}`);
     }
   }
@@ -1562,7 +1562,7 @@ class LspManagerImpl {
    *  live inside SOME known project root. */
   private assertPaths(workspacePath: string, filePath: string): void {
     this.assertWorkspace(workspacePath);
-    const containing = findContainingProject(filePath);
+    const containing = findContainingWorkspaceRoot(filePath);
     if (!containing) {
       throw new Error(`文件路径不在任何已知项目内: ${filePath}`);
     }

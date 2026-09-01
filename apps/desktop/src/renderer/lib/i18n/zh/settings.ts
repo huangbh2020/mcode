@@ -34,6 +34,11 @@ export const zh = {
   "settings.general.sectionDisplay": "显示与布局",
   "settings.general.language": "界面语言",
   "settings.general.languageDesc": "切换应用界面显示语言，修改后立即生效。",
+  "settings.general.worktreeRoot": "工作树根目录",
+  "settings.general.worktreeRootDesc": "隔离会话的工作树创建于此目录(默认在应用数据目录,通常位于系统盘)。仅对之后新建的工作树生效;已创建的不受影响。",
+  "settings.general.worktreeRootDefault": "默认(应用数据目录)",
+  "settings.general.worktreeRootBrowse": "浏览…",
+  "settings.general.worktreeRootReset": "恢复默认",
   "settings.general.languageZh": "简体中文",
   "settings.general.languageEn": "English",
 

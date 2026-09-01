@@ -241,6 +241,8 @@ interface SessionRow {
   usage_history: string | null;
   bookmarks: string | null;
   subagent_transcripts: string | null;
+  env_mode: string;
+  worktree_path: string | null;
   created_at: number;
   updated_at: number;
 }
@@ -271,6 +273,8 @@ function rowToSession(r: SessionRow): Session {
     subagentTranscripts: (r.subagent_transcripts
       ? safeJson(r.subagent_transcripts)
       : null) as Session["subagentTranscripts"],
+    envMode: r.env_mode === "worktree" ? "worktree" : "local",
+    worktreePath: r.worktree_path ?? null,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
   };
@@ -280,8 +284,8 @@ export const SessionRepo = {
   create(s: Session): void {
     getDb().run(
       `INSERT INTO sessions
-       (id, project_id, provider_id, claude_session_id, kind, parent_session_id, title, status, model, effort, permission_mode, custom_model_id, archived, pinned_at, context_snapshot, todos, subagents, plan_draft, turn_files, usage_history, bookmarks, subagent_transcripts, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (id, project_id, provider_id, claude_session_id, kind, parent_session_id, title, status, model, effort, permission_mode, custom_model_id, archived, pinned_at, context_snapshot, todos, subagents, plan_draft, turn_files, usage_history, bookmarks, subagent_transcripts, env_mode, worktree_path, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         v(s.id),
         v(s.projectId),
@@ -305,6 +309,8 @@ export const SessionRepo = {
         v(s.usageHistory ? JSON.stringify(s.usageHistory) : null),
         v(s.bookmarks ? JSON.stringify(s.bookmarks) : null),
         v(s.subagentTranscripts ? JSON.stringify(s.subagentTranscripts) : null),
+        v(s.envMode ?? "local"),
+        v(s.worktreePath ?? null),
         v(s.createdAt),
         v(s.updatedAt),
       ],
@@ -557,6 +563,88 @@ export const SessionRepo = {
     persist();
   },
 
+  /** Backfill the materialized worktree path (first-turn materialization).
+   *  Written BEFORE the turn is dispatched so a crash between creation and
+   *  turn-start still leaves the session pointing at its worktree. */
+  updateWorktreePath(id: string, worktreePath: string): void {
+    getDb().run("UPDATE sessions SET worktree_path = ?, updated_at = ? WHERE id = ?", [
+      v(worktreePath),
+      v(Date.now()),
+      v(id),
+    ]);
+    persist();
+  },
+
+  /** Degenerate a session back to local (its worktree was removed): null
+   *  the worktreePath AND reset envMode to "local". Resetting the mode is
+   *  the load-bearing half — with envMode left at "worktree", the next turn
+   *  would hit resolveSessionCwd's un-materialized branch and silently
+   *  create a NEW worktree instead of running in the project root the user
+   *  was shown. History is kept. */
+  clearWorktreePath(id: string): void {
+    getDb().run(
+      "UPDATE sessions SET worktree_path = NULL, env_mode = 'local' WHERE id = ?",
+      [v(id)],
+    );
+    persist();
+  },
+
+  /** Session counts per worktree path (GROUP BY over the non-null rows) —
+   *  feeds the worktree manager's orphan detection ("no session references
+   *  this path anymore → safe to clean up"). */
+  worktreeReferenceCounts(): Record<string, number> {
+    const stmt = getDb().prepare(
+      "SELECT worktree_path AS path, COUNT(*) AS n FROM sessions WHERE worktree_path IS NOT NULL GROUP BY worktree_path",
+    );
+    const out: Record<string, number> = {};
+    while (stmt.step()) {
+      const row = stmt.getAsObject() as unknown as { path: string; n: number };
+      out[row.path] = row.n;
+    }
+    stmt.free();
+    return out;
+  },
+
+  /** All distinct materialized worktree paths (the session-environment
+   *  roots). Feeds the path guards' "second legal root" — worktree sessions
+   *  may operate inside their isolated checkout even though it sits outside
+   *  every registered project. */
+  listWorktreeRoots(): string[] {
+    const stmt = getDb().prepare(
+      "SELECT DISTINCT worktree_path FROM sessions WHERE worktree_path IS NOT NULL",
+    );
+    const out: string[] = [];
+    while (stmt.step()) {
+      const row = stmt.getAsObject() as unknown as { worktree_path: string };
+      if (row.worktree_path) out.push(row.worktree_path);
+    }
+    stmt.free();
+    return out;
+  },
+
+  /** All sessions (any kind/state) whose worktree_path points at the given
+   *  directory. Powers the removal guard ("a running turn blocks worktree
+   *  deletion"). Compared in JS with separator/case normalization — git's
+   *  porcelain may echo the path in a different surface form than the one
+   *  we stored at creation time. */
+  listByWorktreePath(worktreePath: string): Session[] {
+    const norm = (p: string) => {
+      const n = p.replace(/\\/g, "/").replace(/\/+$/, "");
+      return process.platform === "win32" || process.platform === "darwin"
+        ? n.toLowerCase()
+        : n;
+    };
+    const target = norm(worktreePath);
+    const stmt = getDb().prepare("SELECT * FROM sessions WHERE worktree_path IS NOT NULL");
+    const out: Session[] = [];
+    while (stmt.step()) {
+      const s = rowToSession(stmt.getAsObject() as unknown as SessionRow);
+      if (s.worktreePath && norm(s.worktreePath) === target) out.push(s);
+    }
+    stmt.free();
+    return out;
+  },
+
   updateTitle(id: string, title: string): void {
     getDb().run("UPDATE sessions SET title = ?, updated_at = ? WHERE id = ?", [v(title), v(Date.now()), v(id)]);
     persist();
@@ -744,7 +832,7 @@ export const SessionRepo = {
    *  customModelId, providerId). */
   updateSettings(
     id: string,
-    patch: { model?: string; effort?: string; permissionMode?: string; customModelId?: string | null; providerId?: string },
+    patch: { model?: string; effort?: string; permissionMode?: string; customModelId?: string | null; providerId?: string; envMode?: string; worktreePath?: string | null },
   ): void {
     const sets: string[] = [];
     const vals: BindValue[] = [];
@@ -753,6 +841,12 @@ export const SessionRepo = {
     if (patch.permissionMode !== undefined) { sets.push("permission_mode = ?"); vals.push(v(patch.permissionMode)); }
     if (patch.customModelId !== undefined) { sets.push("custom_model_id = ?"); vals.push(v(patch.customModelId)); }
     if (patch.providerId !== undefined) { sets.push("provider_id = ?"); vals.push(v(patch.providerId)); }
+    // Working-environment intent (fresh-row re-aim at "new session"). Only
+    // meaningful while the row is still un-materialized; later writes are
+    // ignored by the callers.
+    if (patch.envMode !== undefined) { sets.push("env_mode = ?"); vals.push(v(patch.envMode)); }
+    // null clears a leftover bind (fresh row re-aimed back at local).
+    if (patch.worktreePath !== undefined) { sets.push("worktree_path = ?"); vals.push(v(patch.worktreePath)); }
     if (sets.length === 0) return;
     sets.push("updated_at = ?");
     vals.push(v(Date.now()), v(id));

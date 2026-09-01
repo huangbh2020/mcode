@@ -31,6 +31,59 @@ import { log } from "@main/lib/logger.js";
 import { broadcastSessionChanged } from "@main/lib/sessionSync.js";
 import { createOrReuseSession } from "@main/lib/sessionStart.js";
 import { generateSessionTitle } from "@main/ipc/titleGen.js";
+import { createDetachedWorktree, nextWorktreeDir } from "@main/lib/worktreeOps.js";
+import { stat } from "node:fs/promises";
+import { join } from "node:path";
+import type { Project, Session } from "@contracts/session";
+
+/** Resolve the working directory a session's turn must run in.
+ *
+ *  - local session → the project root (unchanged historical behavior);
+ *  - worktree session, not yet materialized → create the detached worktree
+ *    NOW (intent-first, materialize-on-first-turn), persist its path BEFORE
+ *    the turn is dispatched (a crash between creation and turn-start still
+ *    leaves the session pointing at its worktree), and return it;
+ *  - materialized worktree session → its recorded path (restart-safe),
+ *    with a friendly error when the directory has since disappeared.
+ *
+ *  Every downstream mechanism (write guard, bash guard, MCP injection,
+ *  file snapshot) keys off this cwd, so isolation between parallel worktree
+ *  sessions — and from the local checkout — rides on this single value. */
+async function resolveSessionCwd(session: Session, project: Project): Promise<string> {
+  if (session.envMode !== "worktree") return project.path;
+
+  if (!session.worktreePath) {
+    // Materialize. The project root itself must be a git repo (the base is
+    // HEAD as seen from the user's checkout).
+    const hasGit = await stat(join(project.path, ".git"))
+      .then(() => true)
+      .catch(() => false);
+    if (!hasGit) {
+      throw new Error("当前项目根目录不是 Git 仓库,无法创建工作树会话");
+    }
+    const target = await nextWorktreeDir(project.path, session.id);
+    const res = await createDetachedWorktree(project.path, target);
+    if (!res.ok) {
+      throw new Error(`创建隔离工作树失败:${res.error}`);
+    }
+    SessionRepo.updateWorktreePath(session.id, target);
+    // Re-read so the broadcast + the returned session snapshot both carry
+    // the materialized path (renderer flips its badge off this).
+    const updatedRow = SessionRepo.get(session.id) ?? session;
+    broadcastSessionChanged(updatedRow);
+    log.info(`worktree session materialized: ${session.id} -> ${target}`);
+    return target;
+  }
+
+  // Already materialized: verify the directory still exists.
+  const exists = await stat(session.worktreePath).then(() => true).catch(() => false);
+  if (!exists) {
+    throw new Error(
+      `会话的工作树目录已不存在:${session.worktreePath}(可能被手动删除)。请在 Git 面板清理后新建会话。`,
+    );
+  }
+  return session.worktreePath;
+}
 
 export function registerClaudeHandlers(ipcMain: IpcMain): void {
   // ── health check: is the default provider's binary functional? ──
@@ -113,11 +166,20 @@ export function registerClaudeHandlers(ipcMain: IpcMain): void {
     }
 
     SessionRepo.updateStatus(session.id, "running");
-    // Lazily bind a runtime for this session (no-op if already bound).
+    // Resolve the turn's cwd (worktree materialization happens here — before
+    // bindSession so the runtime sees the final environment). Throws surface
+    // as an IPC rejection the renderer toasts; re-sending retries cleanly
+    // (the path is id-derived, so a retry never creates a second worktree).
+    const cwd = await resolveSessionCwd(updated, project);
+    // Materialization may have backfilled worktreePath — refresh the
+    // snapshot so the returned session (and the renderer's badge) carries it.
+    if (updated.envMode === "worktree" && !updated.worktreePath) {
+      updated = SessionRepo.get(session.id) ?? updated;
+    }
     runtimeManager.bindSession(updated);
     await runtimeManager.sendTurn(updated, {
       prompt: input.prompt,
-      cwd: project.path,
+      cwd,
       skills: input.skills,
       images: input.images,
       // User-message echo payload from the renderer (cross-client bubble).
@@ -213,7 +275,13 @@ export function registerClaudeHandlers(ipcMain: IpcMain): void {
       const prompt = composeSentinelAnswerPrompt(input.answers);
       SessionRepo.updateStatus(session.id, "running");
       runtimeManager.bindSession(session);
-      await runtimeManager.sendTurn(session, { prompt, cwd: project.path });
+      // Worktree sessions are always materialized by the time a sentinel
+      // follow-up exists (the first turn created it) — route the cwd the
+      // same way sendTurn does so the answer lands in the right checkout.
+      await runtimeManager.sendTurn(session, {
+        prompt,
+        cwd: session.worktreePath ?? project.path,
+      });
       return;
     }
 
@@ -324,6 +392,7 @@ export function registerClaudeHandlers(ipcMain: IpcMain): void {
       permissionMode: input.permissionMode,
       customModelId: input.customModelId,
       providerId: input.providerId,
+      envMode: input.envMode,
     });
     if (input.permissionMode) {
       runtimeManager.setPermissionMode(input.sessionId, input.permissionMode);

@@ -50,9 +50,12 @@ import type {
   FileSearchResult,
   FileGrepResult,
 } from "@contracts/ipc";
-import { ProjectRepo } from "@main/store/repositories.js";
 import { log } from "@main/lib/logger.js";
 import { resolveRg, rgListFiles, rgGrep } from "@main/lib/rgSearch.js";
+import {
+  isKnownWorkspaceRoot,
+  findContainingWorkspaceRoot,
+} from "@main/lib/pathGuard.js";
 import { cachedTreeFiles, sortDirents, SEARCH_MAX_DEPTH, SEARCH_MAX_VISIT } from "@main/lib/walkCache.js";
 
 /** Compare two filesystem paths for equality after normalizing (resolving
@@ -271,11 +274,12 @@ const BINARY_MIME: Record<string, string> = {
 };
 
 /** Shared guarded single-file utf-8 read — used by both the desktop IPC
- *  handler and the mobile RPC whitelist. Scans every persisted project for a
- *  root containing the path; clipboard-paste temp files (app-owned) are
- *  allowed outside projects. Degrades to empty content instead of throwing. */
+ *  handler and the mobile RPC whitelist. Scans every persisted project AND
+ *  every session worktree root for one containing the path; clipboard-paste
+ *  temp files (app-owned) are allowed outside both. Degrades to empty
+ *  content instead of throwing. */
 export async function readFileGuarded(filePath: string): Promise<{ content: string }> {
-  const root = ProjectRepo.listPaths().find((p) => pathWithin(p, filePath));
+  const root = findContainingWorkspaceRoot(filePath);
   if (!root && !isPasteTempPath(filePath)) {
     log.warn(`file.readFile refused — path outside any project root: ${filePath}`);
     return { content: "" };
@@ -291,9 +295,9 @@ export async function readFileGuarded(filePath: string): Promise<{ content: stri
 }
 
 /** Shared guarded binary read (base64 data URL) — same boundary as
- *  {@link readFileGuarded}. */
+ * {@link readFileGuarded}. */
 export async function readBinaryGuarded(filePath: string): Promise<{ dataUrl: string }> {
-  const root = ProjectRepo.listPaths().find((p) => pathWithin(p, filePath));
+  const root = findContainingWorkspaceRoot(filePath);
   if (!root && !isPasteTempPath(filePath)) {
     log.warn(`file.readBinary refused - path outside any project root: ${filePath}`);
     return { dataUrl: "" };
@@ -323,7 +327,7 @@ export async function listDirGuarded(
   projectPath: string,
   dirPath: string,
 ): Promise<{ entries: FileTreeEntry[] }> {
-  const known = ProjectRepo.listPaths().some((p) => samePath(p, projectPath));
+  const known = isKnownWorkspaceRoot(projectPath);
   if (!known) {
     log.warn(`file.listDir refused — unknown projectPath: ${projectPath}`);
     return { entries: [] };
@@ -418,7 +422,7 @@ function rankNameMatches(
 export async function searchFilesGuarded(
   input: FileSearchInput,
 ): Promise<FileSearchResult> {
-  const known = ProjectRepo.listPaths().some((p) => samePath(p, input.projectPath));
+  const known = isKnownWorkspaceRoot(input.projectPath);
   if (!known) {
     log.warn(`file.search refused — unknown projectPath: ${input.projectPath}`);
     return { files: [], truncated: false, incompleteScan: false };
@@ -502,7 +506,7 @@ export async function searchFilesGuarded(
  *  `incompleteScan` reports the walk budget running out — both prevent an
  *  incomplete result from masquerading as exhaustive. */
 export async function grepFilesGuarded(input: FileGrepInput): Promise<FileGrepResult> {
-  const known = ProjectRepo.listPaths().some((p) => samePath(p, input.projectPath));
+  const known = isKnownWorkspaceRoot(input.projectPath);
   if (!known) {
     log.warn(`file.grep refused - unknown projectPath: ${input.projectPath}`);
     return { matches: [], truncated: false, incompleteScan: false };
@@ -677,9 +681,9 @@ export function registerFileHandlers(ipcMain: IpcMain): void {
   /* ── file:writeFile — utf-8 write, creates parent dirs, scoped to a root ── */
   ipcMain.handle(IPC.FILE_WRITE, async (_evt, raw) => {
     const input = FileWriteSchema.parse(raw);
-    // Same root-scoping guard as readFile: accept the first project whose
-    // root contains the target path.
-    const root = ProjectRepo.listPaths().find((p) => pathWithin(p, input.filePath));
+    // Same root-scoping guard as readFile: accept the first workspace root
+    // (project or session worktree) containing the target path.
+    const root = findContainingWorkspaceRoot(input.filePath);
     if (!root) {
       log.warn(`file.writeFile refused — path outside any project root: ${input.filePath}`);
       return { ok: false };
@@ -708,7 +712,7 @@ export function registerFileHandlers(ipcMain: IpcMain): void {
     const input = FileMkdirSchema.parse(raw);
     // Same root-scoping guard as writeFile: accept the first project whose
     // root contains the target path.
-    const root = ProjectRepo.listPaths().find((p) => pathWithin(p, input.dirPath));
+    const root = findContainingWorkspaceRoot(input.dirPath);
     if (!root) {
       log.warn(`file.mkdir refused — path outside any project root: ${input.dirPath}`);
       return { ok: false };
@@ -728,7 +732,7 @@ export function registerFileHandlers(ipcMain: IpcMain): void {
   // the OS recycle bin / Trash. Refuses anything outside a project root.
   ipcMain.handle(IPC.FILE_DELETE, async (_evt, raw) => {
     const input = FileDeleteSchema.parse(raw);
-    const root = ProjectRepo.listPaths().find((p) => pathWithin(p, input.targetPath));
+    const root = findContainingWorkspaceRoot(input.targetPath);
     if (!root) {
       log.warn(`file.delete refused — path outside any project root: ${input.targetPath}`);
       return { ok: false };
@@ -749,7 +753,7 @@ export function registerFileHandlers(ipcMain: IpcMain): void {
   // foot-gun through this channel), so it's refused here.
   ipcMain.handle(IPC.FILE_RENAME, async (_evt, raw) => {
     const input = FileRenameSchema.parse(raw);
-    const root = ProjectRepo.listPaths().find((p) => pathWithin(p, input.oldPath));
+    const root = findContainingWorkspaceRoot(input.oldPath);
     if (!root) {
       log.warn(`file.rename refused — oldPath outside any project root: ${input.oldPath}`);
       return { ok: false };
@@ -808,12 +812,12 @@ export function registerFileHandlers(ipcMain: IpcMain): void {
   // file's own directory therefore doubles as "duplicate in place".
   ipcMain.handle(IPC.FILE_COPY, async (_evt, raw) => {
     const input = FileCopySchema.parse(raw);
-    const srcRoot = ProjectRepo.listPaths().find((p) => pathWithin(p, input.srcPath));
+    const srcRoot = findContainingWorkspaceRoot(input.srcPath);
     if (!srcRoot) {
       log.warn(`file.copy refused — srcPath outside any project root: ${input.srcPath}`);
       return { ok: false };
     }
-    const destRoot = ProjectRepo.listPaths().find((p) => pathWithin(p, input.destDir));
+    const destRoot = findContainingWorkspaceRoot(input.destDir);
     if (!destRoot) {
       log.warn(`file.copy refused — destDir outside any project root: ${input.destDir}`);
       return { ok: false };

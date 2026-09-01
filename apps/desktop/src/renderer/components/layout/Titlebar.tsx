@@ -12,6 +12,7 @@ import {
 import { getProviderIcon } from "@renderer/lib/providerIcon.js";
 import { useSessionStore } from "@renderer/stores/sessionStore.js";
 import { ProjectBranchIndicator } from "@renderer/components/chat/ProjectBranchIndicator.js";
+import { WorktreeMergeToolbarButton } from "@renderer/components/chat/WorktreeMergeBack.js";
 import { resolveShortcut, acceleratorToDisplayString } from "@renderer/lib/shortcuts.js";
 import { useI18n } from "@renderer/lib/i18n/index.js";
 
@@ -195,6 +196,12 @@ export function Titlebar({
                 without closing the open file. Sits right of the branch pill. */}
             {!isBrowserMode && <EditorColumnToggle />}
             <div className="flex-1" />
+            {/* Worktree merge-back (Land) — session-scoped, right-aligned with
+                the panel toggles. Shown only while the active session runs in
+                a worktree with unmerged changes; self-hiding otherwise (the
+                component returns null). Hidden while the browser overlay is
+                open, same as the panel toggles (kept during wide mode). */}
+            {!isBrowserOverlay && <WorktreeMergeToolbarButton />}
             {/* Bottom terminal toggle - hidden while the browser overlay is
                 open, same as the side-panel toggles (kept during wide mode). */}
             {!isBrowserOverlay && (

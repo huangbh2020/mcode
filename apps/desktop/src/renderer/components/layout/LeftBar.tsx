@@ -21,6 +21,8 @@ import { CSS } from "@dnd-kit/utilities";
 import { cn } from "@renderer/lib/cn.js";
 import {
   IconFolder,
+  IconGitFork,
+  IconGitMerge,
   IconChevronRight,
   IconPlus,
   IconArchive,
@@ -50,6 +52,8 @@ import { Button, ConfirmDialog, Dialog, Input } from "@renderer/components/ui/in
 import { BrandLogo } from "./BrandLogo.js";
 import { SidebarQuickActions } from "./SidebarQuickActions.js";
 import { api } from "@renderer/lib/api.js";
+import { normWorktreeKey, worktreeDisplayName } from "@renderer/lib/worktree.js";
+import { WorktreeMergeBackDialog, WorktreeRemoveDialog } from "@renderer/components/chat/WorktreeMergeBack.js";
 import { hexToTriplet, tripletToHex } from "@renderer/lib/colorUtils.js";
 import { formatRelativeTime, formatFullTime } from "@renderer/lib/time.js";
 import { useSessionStore } from "@renderer/stores/sessionStore.js";
@@ -102,11 +106,17 @@ function LeftBarBase({
   const archivedSessionsByProject = useSessionStore((s) => s.archivedSessionsByProject);
   const activeSessionId = useSessionStore((s) => s.activeSessionId);
   const expandedProjects = useSessionStore((s) => s.expandedProjects);
+  const worktreeViewByProject = useSessionStore((s) => s.worktreeViewByProject);
+  const expandedWorktrees = useSessionStore((s) => s.expandedWorktrees);
+  const worktreeNames = useSessionStore((s) => s.worktreeNames);
   const archivedViewOpen = useSessionStore((s) => s.archivedViewOpen);
   const pinnedSessions = useSessionStore((s) => s.pinnedSessions);
 
   const addProject = useSessionStore((s) => s.addProjectFromFolder);
   const toggleProjectExpanded = useSessionStore((s) => s.toggleProjectExpanded);
+  const setProjectWorktreeView = useSessionStore((s) => s.setProjectWorktreeView);
+  const toggleWorktreeExpanded = useSessionStore((s) => s.toggleWorktreeExpanded);
+  const renameWorktree = useSessionStore((s) => s.renameWorktree);
   const setArchivedViewOpen = useSessionStore((s) => s.setArchivedViewOpen);
   const loadMoreSessions = useSessionStore((s) => s.loadMoreSessions);
   const startSession = useSessionStore((s) => s.startSession);
@@ -259,6 +269,18 @@ function LeftBarBase({
       if (!st.expandedProjects[projectId]) {
         st.toggleProjectExpanded(projectId);
       }
+      // Same reveal for the worktree group node the target thread buckets
+      // under — a collapsed group keeps the row unmounted, so tryScroll would
+      // silently miss it even with the project expanded.
+      const target = st.sessionsByProject[projectId]?.find((s) => s.id === id);
+      if (target?.worktreePath && !st.expandedWorktrees[normWorktreeKey(target.worktreePath)]) {
+        st.toggleWorktreeExpanded(target.worktreePath);
+      }
+      // ...and the project must be in the FORK view, or a worktree thread
+      // would stay unrendered even with the group expanded.
+      if (target?.worktreePath && !st.worktreeViewByProject[projectId]) {
+        st.setProjectWorktreeView(projectId, true);
+      }
       await new Promise((r) => requestAnimationFrame(() => r(null)));
       if (tryScroll()) return;
 
@@ -283,13 +305,34 @@ function LeftBarBase({
   // not the cursor, which doesn't match the expected behavior).
   const [ctxMenu, setCtxMenu] = useState<{ session: Session; x: number; y: number } | null>(null);
 
-  // ── Rename dialog state. Shared by sessions and projects; `kind` picks
-  // the dialog copy and the dispatch target on submit.
+  // ── Rename dialog state. Shared by sessions, projects, and worktree
+  // groups; `kind` picks the dialog copy and the dispatch target on submit.
+  // For kind "worktree" `id` carries the RAW worktree path.
   const [renaming, setRenaming] = useState<{
     id: string;
     title: string;
-    kind: "session" | "project";
+    kind: "session" | "project" | "worktree";
   } | null>(null);
+
+  // ── Right-click context menu for worktree group nodes (new session in
+  // this worktree / rename). Same controlled-Menu + virtual-anchor pattern
+  // as the session and project menus below. `projectId` rides along so the
+  // menu can spawn the new thread in the right project.
+  const [wtCtxMenu, setWtCtxMenu] = useState<
+    | { projectId: string; worktreePath: string; x: number; y: number }
+    | null
+  >(null);
+
+  // ── Group-level merge-back dialog (left panel's "全量合并"): every
+  // session under a worktree shares ONE checkout, so a single merge-back of
+  // the directory covers all their unmerged work.
+  const [wtMerge, setWtMerge] = useState<{ repoPath: string; worktreePath: string } | null>(null);
+
+  // ── Group-level removal (guarded by the shared confirm dialog — dirty
+  // trees get the patch-export / force options). On success the backend
+  // degrades every referencing session back to local and broadcasts, which
+  // also flips this project's view back to the local list.
+  const [wtRemove, setWtRemove] = useState<{ repoPath: string; worktreePath: string } | null>(null);
 
   // ── Delete confirmation dialog state. A single controlled ConfirmDialog
   // replaces the three native confirm() calls (active project, archived
@@ -513,6 +556,15 @@ function LeftBarBase({
           onArchiveSession={(sid) => void archiveSession(sid, true)}
           onDeleteSession={(s) => void deleteSession(s.id)}
           onTogglePinSession={(s) => void setSessionPinned(s.id, !s.pinnedAt)}
+          onNewWorktreeHere={(s) => void startSession(s.projectId, { worktreePath: s.worktreePath ?? undefined })}
+          worktreeView={!!worktreeViewByProject[p.id]}
+          onToggleWorktreeView={(on) => setProjectWorktreeView(p.id, on)}
+          worktreeNames={worktreeNames}
+          expandedWorktrees={expandedWorktrees}
+          onToggleWorktree={(path) => toggleWorktreeExpanded(path)}
+          onNewSessionInWorktree={(path) => void startSession(p.id, { worktreePath: path })}
+          onRemoveWorktree={(path) => setWtRemove({ repoPath: p.path, worktreePath: path })}
+          onContextWorktree={(path, x, y) => setWtCtxMenu({ projectId: p.id, worktreePath: path, x, y })}
           registerNode={registerNode}
           onContextSession={(session, x, y) => setCtxMenu({ session, x, y })}
           onContextProject={(x, y) => setProjectCtxMenu({ project: p, x, y })}
@@ -526,9 +578,10 @@ function LeftBarBase({
     },
     [
       sessionsByProject, sessionsHasMoreByProject, sessionsTotalByProject,
-      expandedProjects, activeProjectId, activeSessionId, activeSessionProjectId,
+      expandedProjects, worktreeViewByProject, expandedWorktrees, worktreeNames,
+      activeProjectId, activeSessionId, activeSessionProjectId,
       runningBySession,
-      toggleProjectExpanded, startSession, loadMoreSessions, openTab,
+      toggleProjectExpanded, setProjectWorktreeView, toggleWorktreeExpanded, startSession, loadMoreSessions, openTab,
       archiveSession, deleteSession, setSessionPinned, registerNode,
     ],
   );
@@ -737,6 +790,11 @@ function LeftBarBase({
                     onTogglePin={() => void setSessionPinned(s.id, !s.pinnedAt)}
                     onArchive={() => void archiveSession(s.id, true)}
                     onDelete={() => void deleteSession(s.id)}
+                    onNewWorktreeSession={
+                      s.worktreePath
+                        ? () => void startSession(s.projectId, { worktreePath: s.worktreePath ?? undefined })
+                        : undefined
+                    }
                     registerNode={registerNode}
                     onContext={(x, y) => setCtxMenu({ session: s, x, y })}
                   />
@@ -941,6 +999,64 @@ function LeftBarBase({
           setCtxMenu(null);
           void setSessionPinned(s.id, !s.pinnedAt);
         }}
+        onNewWorktreeSession={(s) => {
+          setCtxMenu(null);
+          void startSession(s.projectId, { worktreePath: s.worktreePath ?? undefined });
+        }}
+      />
+
+      {/* Right-click context menu for worktree group nodes. */}
+      <WorktreeContextMenu
+        ctxMenu={wtCtxMenu}
+        onClose={() => setWtCtxMenu(null)}
+        onNewSession={(path) => {
+          setWtCtxMenu(null);
+          const projectId = wtCtxMenu?.projectId;
+          if (projectId) void startSession(projectId, { worktreePath: path });
+        }}
+        onMergeBack={(path) => {
+          setWtCtxMenu(null);
+          // The merge anchors on the owning project's root (the repo the
+          // worktree was created from — materialization requires `.git`
+          // there).
+          const proj = wtCtxMenu ? projects.find((p) => p.id === wtCtxMenu.projectId) : undefined;
+          if (proj) setWtMerge({ repoPath: proj.path, worktreePath: path });
+        }}
+        onRename={(path) => {
+          setWtCtxMenu(null);
+          setRenaming({ id: path, title: worktreeDisplayName(path, worktreeNames), kind: "worktree" });
+        }}
+        onRemove={(path) => {
+          setWtCtxMenu(null);
+          const proj = wtCtxMenu ? projects.find((p) => p.id === wtCtxMenu.projectId) : undefined;
+          if (proj) setWtRemove({ repoPath: proj.path, worktreePath: path });
+        }}
+      />
+
+      {/* Group-level removal — the guarded confirm dialog (dirty trees get
+          the patch-export / force options). On success the backend clears
+          every referencing session's worktreePath and broadcasts; the
+          existing degenerate-event fallback flips the project's view back
+          to the local list. */}
+      <WorktreeRemoveDialog
+        open={!!wtRemove}
+        onOpenChange={(o) => {
+          if (!o) setWtRemove(null);
+        }}
+        repoPath={wtRemove?.repoPath ?? null}
+        worktreePath={wtRemove?.worktreePath ?? ""}
+      />
+
+      {/* Group-level merge-back — one shared checkout, one merge covers all
+          the group's sessions. */}
+      <WorktreeMergeBackDialog
+        open={!!wtMerge}
+        onOpenChange={(o) => {
+          if (!o) setWtMerge(null);
+        }}
+        sessionId={null}
+        worktreePath={wtMerge?.worktreePath ?? ""}
+        repoPath={wtMerge?.repoPath ?? null}
       />
 
       {/* Right-click context menu for project rows. Hosts the "移动到分组"
@@ -975,13 +1091,15 @@ function LeftBarBase({
         }}
       />
 
-      {/* Rename dialog (shared by the session / project context menus). */}
+      {/* Rename dialog (shared by the session / project / worktree menus). */}
       <RenameDialog
         renaming={renaming}
         onClose={() => setRenaming(null)}
         onSubmit={async (id, title, kind) => {
           if (kind === "project") {
             await renameProject(id, title);
+          } else if (kind === "worktree") {
+            await renameWorktree(id, title);
           } else {
             await renameSession(id, title);
           }
@@ -1067,6 +1185,24 @@ interface ProjectNodeProps {
   onDeleteSession: (session: Session) => void;
   /** Toggle a session's pinned state (project-scoped top-of-list pin). */
   onTogglePinSession: (session: Session) => void;
+  /** "New session bound to this worktree session's checkout" — passed down
+   *  to materialized worktree rows. */
+  onNewWorktreeHere: (session: Session) => void;
+  /** This project's left-bar view: false = local threads only (default),
+   *  true = worktree groups. Flipped by the row's fork toggle. */
+  worktreeView: boolean;
+  onToggleWorktreeView: (on: boolean) => void;
+  /** Left-bar display names for worktree directories (normalized path →
+   *  name). Resolved by WorktreeGroupNode headers. */
+  worktreeNames: Record<string, string>;
+  /** Which worktree group nodes are expanded (normalized path → bool). */
+  expandedWorktrees: Record<string, boolean>;
+  onToggleWorktree: (worktreePath: string) => void;
+  /** New thread bound to this worktree directory (group header "+"). */
+  onNewSessionInWorktree: (worktreePath: string) => void;
+  /** Remove the worktree directory (guarded confirm dialog at bar level). */
+  onRemoveWorktree: (worktreePath: string) => void;
+  onContextWorktree: (worktreePath: string, x: number, y: number) => void;
   /** Register a session row's DOM node for scroll-into-view. */
   registerNode: (id: string, el: HTMLLIElement | null) => void;
   /** Open the right-click context menu for a session at the given coords. */
@@ -1094,10 +1230,61 @@ function ProjectNode(props: ProjectNodeProps) {
     runningBySession, unreadBySession,
     onToggleExpand, onNewSession, onLoadMore, onSelectSession,
     onDelete, onArchiveSession, onDeleteSession, onTogglePinSession,
+    onNewWorktreeHere, worktreeView, onToggleWorktreeView, worktreeNames, expandedWorktrees,
+    onToggleWorktree, onNewSessionInWorktree, onRemoveWorktree, onContextWorktree,
     registerNode, onContextSession, onContextProject,
     sortableRef, sortableStyle, sortableListeners, sortableAttributes, isDragging,
   } = props;
   const loaded = sessions.length;
+
+  // ── Worktree bucketing. Sessions bound to a materialized (or freshly
+  // bound) isolated checkout group under ONE collapsible directory node per
+  // worktree, so a directory reads like a folder of threads; local sessions
+  // stay in the flat list above the groups. Insertion order of the Map gives
+  // group order — `sessions` is newest-first, so the group containing the
+  // most recently active worktree thread sorts first. Pagination is
+  // untouched: loadMore appends to `sessions` and rows re-bucket naturally.
+  const { localSessions, worktreeGroups } = useMemo(() => {
+    const local: Session[] = [];
+    const buckets = new Map<string, { path: string; sessions: Session[] }>();
+    for (const s of sessions) {
+      if (!s.worktreePath) {
+        local.push(s);
+        continue;
+      }
+      const key = normWorktreeKey(s.worktreePath);
+      const bucket = buckets.get(key);
+      if (bucket) bucket.sessions.push(s);
+      else buckets.set(key, { path: s.worktreePath, sessions: [s] });
+    }
+    return { localSessions: local, worktreeGroups: Array.from(buckets.values()) };
+  }, [sessions]);
+
+  // Shared row renderer so local sessions and rows inside a worktree group
+  // are identical (same hover actions, context menu). `inWorktreeGroup`
+  // trims the worktree furniture for group members: the group node itself
+  // already carries the fork identity and its "+" spawns siblings, so the
+  // per-row fork badge and "new session in this worktree" hover button are
+  // pure noise there. (Pinned rows keep both — they sit OUTSIDE the group.)
+  const renderSessionRow = (s: Session, inWorktreeGroup = false) => (
+    <SessionRow
+      key={s.id}
+      session={s}
+      active={s.id === activeSessionId}
+      isRunning={!!runningBySession[s.id]}
+      unreadCount={unreadBySession[s.id] ?? 0}
+      onSelect={() => onSelectSession(s.id)}
+      onTogglePin={() => onTogglePinSession(s)}
+      onArchive={() => onArchiveSession(s.id)}
+      onDelete={() => onDeleteSession(s)}
+      onNewWorktreeSession={
+        !inWorktreeGroup && s.worktreePath ? () => onNewWorktreeHere(s) : undefined
+      }
+      hideWorktreeBadge={inWorktreeGroup}
+      registerNode={registerNode}
+      onContext={(x, y) => onContextSession(s, x, y)}
+    />
+  );
 
   return (
     <li
@@ -1155,6 +1342,26 @@ function ProjectNode(props: ProjectNodeProps) {
           <span className="truncate">{project.name}</span>
         </button>
 
+        {/* Worktree view toggle — only for projects that HAVE worktree
+            threads. Local list and worktree groups never mix: the fork flips
+            the expanded list between the two views. Hidden (opacity) while
+            idle so the row stays quiet; accent + always visible while the
+            worktree view is ON so the flipped state is discoverable. */}
+        {worktreeGroups.length > 0 && (
+          <button
+            onClick={() => onToggleWorktreeView(!worktreeView)}
+            className={cn(
+              "flex shrink-0 items-center rounded px-1 transition-colors",
+              worktreeView
+                ? "text-accent"
+                : "text-content-subtle opacity-0 hover:text-accent group-hover:opacity-100",
+            )}
+            title={worktreeView ? t("layout.showLocalThreads") : t("layout.showWorktreeThreads")}
+          >
+            <IconGitFork size={12} />
+          </button>
+        )}
+
         {/* New session in this project */}
         <button
           onClick={onNewSession}
@@ -1177,24 +1384,52 @@ function ProjectNode(props: ProjectNodeProps) {
         <ul className="ml-3 mt-0.5 space-y-0.5 border-l border-edge/50 pl-2">
           {loaded === 0 ? (
             <li className="px-2 py-1 text-content-subtle [font-size:var(--rp-fs-md)]">{t("layout.noThreads")}</li>
+          ) : worktreeView ? (
+            /* Fork view — worktree groups only; the local list never mixes in. */
+            worktreeGroups.length > 0 ? (
+              worktreeGroups.map((group) => {
+                const key = normWorktreeKey(group.path);
+                return (
+                  <WorktreeGroupNode
+                    key={key}
+                    worktreePath={group.path}
+                    displayName={worktreeDisplayName(group.path, worktreeNames)}
+                    sessions={group.sessions}
+                    expanded={!!expandedWorktrees[key]}
+                    onToggle={() => onToggleWorktree(group.path)}
+                    onNewSession={() => onNewSessionInWorktree(group.path)}
+                    onRemove={() => onRemoveWorktree(group.path)}
+                    onContext={(x, y) => onContextWorktree(group.path, x, y)}
+                    renderSession={renderSessionRow}
+                  />
+                );
+              })
+            ) : (
+              <li className="px-2 py-1 text-content-subtle [font-size:var(--rp-fs-md)]">{t("layout.noThreads")}</li>
+            )
+          ) : localSessions.length > 0 ? (
+            /* Default view — local threads only. */
+            localSessions.map((s) => renderSessionRow(s))
+          ) : worktreeGroups.length > 0 ? (
+            /* Every loaded thread lives in a worktree — point at the fork. */
+            <li>
+              <button
+                onClick={() => onToggleWorktreeView(true)}
+                className={cn(
+                  "w-full rounded px-2 py-1 text-left text-content-subtle transition-colors [font-size:var(--rp-fs-md)]",
+                  "hover:bg-surface-hover/60 hover:text-accent",
+                )}
+              >
+                {t("layout.threadsInWorktrees")}
+              </button>
+            </li>
           ) : (
-            sessions.map((s) => (
-              <SessionRow
-                key={s.id}
-                session={s}
-                active={s.id === activeSessionId}
-                isRunning={!!runningBySession[s.id]}
-                unreadCount={unreadBySession[s.id] ?? 0}
-                onSelect={() => onSelectSession(s.id)}
-                onTogglePin={() => onTogglePinSession(s)}
-                onArchive={() => onArchiveSession(s.id)}
-                onDelete={() => onDeleteSession(s)}
-                registerNode={registerNode}
-                onContext={(x, y) => onContextSession(s, x, y)}
-              />
-            ))
+            <li className="px-2 py-1 text-content-subtle [font-size:var(--rp-fs-md)]">{t("layout.noThreads")}</li>
           )}
-          {hasMore && (
+          {/* Load-more is the LOCAL list's pagination — the fork view shows
+              whole worktree groups and has no paging of its own, so the
+              button would load rows the user can't even see here. */}
+          {hasMore && !worktreeView && (
             <li>
               <button
                 onClick={onLoadMore}
@@ -1224,7 +1459,7 @@ function SessionRowIcon({ providerId, className }: { providerId: string; classNa
 }
 
 function SessionRow({
-  session, active, isRunning, unreadCount, onSelect, onTogglePin, onArchive, onDelete, registerNode, onContext,
+  session, active, isRunning, unreadCount, onSelect, onTogglePin, onArchive, onDelete, onNewWorktreeSession, hideWorktreeBadge, registerNode, onContext,
 }: {
   session: Session;
   active: boolean;
@@ -1238,6 +1473,14 @@ function SessionRow({
   onTogglePin: () => void;
   onArchive: () => void;
   onDelete: () => void;
+  /** "New session in this worktree" — present only for materialized worktree
+   *  rows OUTSIDE a worktree group (pinned section); creates a fresh thread
+   *  BOUND to the same isolated checkout. Group members don't get it — the
+   *  group header's "+" is that entry point. */
+  onNewWorktreeSession?: () => void;
+  /** True when the row renders INSIDE a worktree group node: the group
+   *  already carries the fork identity, so the per-row fork badge is noise. */
+  hideWorktreeBadge?: boolean;
   registerNode: (id: string, el: HTMLLIElement | null) => void;
   onContext: (x: number, y: number) => void;
 }) {
@@ -1305,6 +1548,15 @@ function SessionRow({
       <SessionRowIcon providerId={session.providerId} className="shrink-0" />
 
       <span className="min-w-0 flex-1 truncate">{session.title}</span>
+
+      {/* Worktree marker — this thread runs in an isolated detached checkout
+          (parallel task). Small accent fork next to the title; full path via
+          the row tooltip is unnecessary noise. */}
+      {session.worktreePath && !hideWorktreeBadge && (
+        <span className="flex shrink-0 text-accent/80" title={t("chat.worktree.active")}>
+          <IconGitFork size={11} />
+        </span>
+      )}
 
       {/* Relative time of the last activity (updatedAt), docked to the right
           edge. The row swaps between two right-aligned payloads: the time
@@ -1382,6 +1634,15 @@ function SessionRow({
           edge instead of sharing space with hidden-but-reserved buttons. */}
       {showActions && (
         <>
+          {onNewWorktreeSession && (
+            <HoverIconButton
+              onClick={onNewWorktreeSession}
+              title={t("layout.newSessionInWorktree")}
+              className="opacity-100"
+            >
+              <IconGitFork size={13} />
+            </HoverIconButton>
+          )}
           <HoverIconButton
             onClick={onTogglePin}
             title={isPinned ? t("layout.unpin") : t("layout.pin")}
@@ -1417,6 +1678,102 @@ function SessionRow({
           size={12}
           className="shrink-0 animate-spin text-accent"
         />
+      )}
+    </li>
+  );
+}
+
+/* ── Worktree group node (directory of threads sharing one checkout) ──
+ * Collapsible header bucketing every session bound to the same isolated
+ * worktree directory, so a worktree reads like a folder of threads under its
+ * project. Mirrors ProjectNode's row layout (chevron + icon + name) but is
+ * NOT sortable — group order follows the sessions' recency. "+" creates a
+ * new thread bound to the SAME checkout (shared directory + node_modules);
+ * right-click opens the worktree context menu (new session / rename). */
+
+interface WorktreeGroupNodeProps {
+  worktreePath: string;
+  displayName: string;
+  sessions: Session[];
+  expanded: boolean;
+  onToggle: () => void;
+  onNewSession: () => void;
+  onRemove: () => void;
+  onContext: (x: number, y: number) => void;
+  renderSession: (s: Session, inWorktreeGroup?: boolean) => React.ReactNode;
+}
+
+function WorktreeGroupNode({
+  worktreePath, displayName, sessions, expanded,
+  onToggle, onNewSession, onRemove, onContext, renderSession,
+}: WorktreeGroupNodeProps) {
+  const { t } = useI18n();
+  return (
+    <li>
+      <div
+        onContextMenu={(e) => {
+          e.preventDefault();
+          onContext(e.clientX, e.clientY);
+        }}
+        className="group flex items-center gap-1 rounded px-1 py-1 [font-size:var(--right-panel-font-size)] text-content-muted hover:bg-surface-hover/60"
+      >
+        {/* Expand / collapse toggle */}
+        <button
+          onClick={onToggle}
+          className="flex w-3 shrink-0 items-center justify-center text-content-subtle"
+          title={expanded ? t("layout.collapse") : t("layout.expand")}
+        >
+          <IconChevronRight
+            size={10}
+            className={cn("transition-transform", expanded && "rotate-90")}
+          />
+        </button>
+
+        {/* Directory name (+ thread count) → click toggles expand/collapse */}
+        <button
+          onClick={onToggle}
+          className="flex min-w-0 flex-1 items-center gap-1 text-left"
+          title={worktreePath}
+        >
+          <IconGitFork size={13} className="shrink-0 text-accent/80" />
+          <span className="truncate">{displayName}</span>
+          <span className="shrink-0 rounded bg-surface-muted px-1 text-content-subtle [font-size:var(--rp-fs-sm)]">
+            {sessions.length}
+          </span>
+        </button>
+
+        {/* New session bound to this worktree — hover only, mirrors the
+            project row's "+" button. */}
+        <button
+          onClick={onNewSession}
+          className={cn(
+            "flex shrink-0 items-center rounded px-1 text-content-subtle opacity-0 transition-colors",
+            "hover:text-accent group-hover:opacity-100",
+          )}
+          title={t("layout.newSessionInWorktree")}
+        >
+          <IconPlus size={12} />
+        </button>
+
+        {/* Remove the worktree — hover, danger-tinted on hover. Opens the
+            same guarded confirm dialog as the context-menu entry (running
+            turns refuse; dirty trees get patch-export / force options). */}
+        <button
+          onClick={onRemove}
+          className={cn(
+            "flex shrink-0 items-center rounded px-1 text-content-subtle opacity-0 transition-colors",
+            "hover:text-danger group-hover:opacity-100",
+          )}
+          title={t("chat.worktree.removeWt")}
+        >
+          <IconTrash size={12} />
+        </button>
+      </div>
+
+      {expanded && (
+        <ul className="ml-3 mt-0.5 space-y-0.5 border-l border-edge/50 pl-2">
+          {sessions.map((s) => renderSession(s, true))}
+        </ul>
       )}
     </li>
   );
@@ -1510,10 +1867,13 @@ interface SessionContextMenuProps {
   onCopyTitle: (session: Session) => void;
   onOpenFolder: (session: Session) => void;
   onTogglePin: (session: Session) => void;
+  /** "New session in this worktree" — present only for materialized
+   *  worktree sessions; spawns a sibling thread on the same checkout. */
+  onNewWorktreeSession?: (session: Session) => void;
 }
 
 function SessionContextMenu({
-  ctxMenu, onClose, onRename, onCopyTitle, onOpenFolder, onTogglePin,
+  ctxMenu, onClose, onRename, onCopyTitle, onOpenFolder, onTogglePin, onNewWorktreeSession,
 }: SessionContextMenuProps) {
   const { t } = useI18n();
   // Virtual anchor pinned to the cursor coords so the popup opens where the
@@ -1577,6 +1937,18 @@ function SessionContextMenu({
               <IconCopy size={14} className="shrink-0" />
               {t("layout.copySessionTitle")}
             </Menu.Item>
+            {session?.worktreePath && onNewWorktreeSession && (
+              <Menu.Item
+                onClick={() => onNewWorktreeSession(session)}
+                className={cn(
+                  "flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs outline-none select-none",
+                  "text-content-muted data-[highlighted]:bg-surface-muted",
+                )}
+              >
+                <IconGitFork size={14} className="shrink-0" />
+                {t("layout.newSessionInWorktree")}
+              </Menu.Item>
+            )}
             <Menu.Item
               onClick={() => session && onOpenFolder(session)}
               className={cn(
@@ -1594,16 +1966,110 @@ function SessionContextMenu({
   );
 }
 
+/* ── Worktree right-click context menu ──
+ * Opened from a worktree group node's header. Entries: spawn a sibling
+ * thread bound to the same checkout, merge the directory's work back into
+ * the local branch (all sessions of the group share one checkout, so one
+ * merge covers everything), rename the directory's left-bar display name,
+ * and REMOVE the worktree (guarded confirm dialog; referencing sessions
+ * degrade back to local). */
+
+interface WorktreeContextMenuProps {
+  ctxMenu: { worktreePath: string; x: number; y: number } | null;
+  onClose: () => void;
+  onNewSession: (worktreePath: string) => void;
+  onMergeBack: (worktreePath: string) => void;
+  onRename: (worktreePath: string) => void;
+  onRemove: (worktreePath: string) => void;
+}
+
+function WorktreeContextMenu({
+  ctxMenu, onClose, onNewSession, onMergeBack, onRename, onRemove,
+}: WorktreeContextMenuProps) {
+  const { t } = useI18n();
+  // Virtual anchor pinned to the cursor coords (same as SessionContextMenu).
+  const anchor = useMemo(() => {
+    const x = ctxMenu?.x ?? 0;
+    const y = ctxMenu?.y ?? 0;
+    return {
+      getBoundingClientRect: () => ({
+        x, y, top: y, left: x, bottom: y, right: x, width: 0, height: 0, toJSON: () => ({}),
+      }),
+    };
+  }, [ctxMenu?.x, ctxMenu?.y]);
+
+  const worktreePath = ctxMenu?.worktreePath;
+
+  return (
+    <Menu.Root open={!!ctxMenu} onOpenChange={(open) => { if (!open) onClose(); }}>
+      <Menu.Portal>
+        <Menu.Positioner anchor={anchor} side="bottom" align="start">
+          <Menu.Popup
+            className={cn(
+              "z-50 min-w-[180px] origin-top-left rounded-md border border-edge bg-surface py-1 shadow-2xl",
+              "data-[ending-style]:scale-95 data-[ending-style]:opacity-0",
+              "data-[starting-style]:scale-95 data-[starting-style]:opacity-0",
+              "transition-[transform,opacity] duration-100",
+            )}
+          >
+            <Menu.Item
+              onClick={() => worktreePath && onNewSession(worktreePath)}
+              className={cn(
+                "flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs outline-none select-none",
+                "text-content-muted data-[highlighted]:bg-surface-muted",
+              )}
+            >
+              <IconGitFork size={14} className="shrink-0" />
+              {t("layout.newSessionInWorktree")}
+            </Menu.Item>
+            <Menu.Item
+              onClick={() => worktreePath && onMergeBack(worktreePath)}
+              className={cn(
+                "flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs outline-none select-none",
+                "text-content-muted data-[highlighted]:bg-surface-muted",
+              )}
+            >
+              <IconGitMerge size={14} className="shrink-0" />
+              {t("layout.mergeWorktreeBack")}
+            </Menu.Item>
+            <Menu.Item
+              onClick={() => worktreePath && onRename(worktreePath)}
+              className={cn(
+                "flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs outline-none select-none",
+                "text-content-muted data-[highlighted]:bg-surface-muted",
+              )}
+            >
+              <IconPencil size={14} className="shrink-0" />
+              {t("layout.renameWorktree")}
+            </Menu.Item>
+            <Menu.Item
+              onClick={() => worktreePath && onRemove(worktreePath)}
+              className={cn(
+                "flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs outline-none select-none",
+                "text-danger data-[highlighted]:bg-surface-muted",
+              )}
+            >
+              <IconTrash size={14} className="shrink-0" />
+              {t("chat.worktree.removeWt")}
+            </Menu.Item>
+          </Menu.Popup>
+        </Menu.Positioner>
+      </Menu.Portal>
+    </Menu.Root>
+  );
+}
+
 /* ── Rename dialog ── */
 
 /** The rename target's kind drives the dialog copy and the dispatch target;
- *  ids are unique across tables so `id` alone disambiguates on submit. */
-type RenameTarget = { id: string; title: string; kind: "session" | "project" };
+ *  ids are unique across tables so `id` alone disambiguates on submit —
+ *  except kind "worktree", where `id` carries the RAW worktree path. */
+type RenameTarget = { id: string; title: string; kind: "session" | "project" | "worktree" };
 
 interface RenameDialogProps {
   renaming: RenameTarget | null;
   onClose: () => void;
-  onSubmit: (id: string, title: string, kind: "session" | "project") => Promise<void>;
+  onSubmit: (id: string, title: string, kind: "session" | "project" | "worktree") => Promise<void>;
 }
 
 function RenameDialog({ renaming, onClose, onSubmit }: RenameDialogProps) {
@@ -1621,25 +2087,38 @@ function RenameDialog({ renaming, onClose, onSubmit }: RenameDialogProps) {
     void onSubmit(renaming.id, trimmed, renaming.kind);
   };
 
-  const isProject = renaming?.kind === "project";
+  const copy =
+    renaming?.kind === "project"
+      ? {
+          title: t("layout.renameProject"),
+          desc: t("layout.renameProjectDesc"),
+          placeholder: t("layout.projectNamePlaceholder"),
+        }
+      : renaming?.kind === "worktree"
+        ? {
+            title: t("layout.renameWorktree"),
+            desc: t("layout.renameWorktreeDesc"),
+            placeholder: t("layout.worktreeNamePlaceholder"),
+          }
+        : {
+            title: t("layout.renameThread"),
+            desc: t("layout.renameThreadDesc"),
+            placeholder: t("layout.threadTitlePlaceholder"),
+          };
 
   return (
     <Dialog.Root open={!!renaming} onOpenChange={(open) => { if (!open) onClose(); }}>
       <Dialog.Portal>
         <Dialog.Backdrop />
         <Dialog.Popup className="w-[420px] max-w-[90vw] p-4">
-          <Dialog.Title>
-            {isProject ? t("layout.renameProject") : t("layout.renameThread")}
-          </Dialog.Title>
-          <Dialog.Description className="mt-1">
-            {isProject ? t("layout.renameProjectDesc") : t("layout.renameThreadDesc")}
-          </Dialog.Description>
+          <Dialog.Title>{copy.title}</Dialog.Title>
+          <Dialog.Description className="mt-1">{copy.desc}</Dialog.Description>
 
           <div className="mt-4">
             <Input
               value={value}
               autoFocus
-              placeholder={isProject ? t("layout.projectNamePlaceholder") : t("layout.threadTitlePlaceholder")}
+              placeholder={copy.placeholder}
               onChange={(e) => setValue((e.target as HTMLInputElement).value)}
               onKeyDown={(e) => {
                 if (e.key === "Enter") { e.preventDefault(); submit(); }

@@ -31,6 +31,11 @@ export const en = {
   "settings.general.sectionDisplay": "Display & Layout",
   "settings.general.language": "Interface language",
   "settings.general.languageDesc": "Switch the display language of the app. Applies immediately.",
+  "settings.general.worktreeRoot": "Worktree root directory",
+  "settings.general.worktreeRootDesc": "Isolated-session worktrees are created under this directory (default: the app data directory, usually on the system drive). Only affects future worktrees; existing ones keep their path.",
+  "settings.general.worktreeRootDefault": "Default (app data directory)",
+  "settings.general.worktreeRootBrowse": "Browse…",
+  "settings.general.worktreeRootReset": "Reset to default",
   "settings.general.languageZh": "简体中文",
   "settings.general.languageEn": "English",
 

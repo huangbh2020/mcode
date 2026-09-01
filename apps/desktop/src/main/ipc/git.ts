@@ -34,7 +34,15 @@ import {
   GitShowFileSchema,
   GitCheckoutSchema,
   GitMergeSchema,
+  GitWorktreeListSchema,
+  GitWorktreeMergeBackSchema,
+  GitWorktreeRemoveSchema,
 } from "@contracts/ipc";
+import {
+  listWorktrees,
+  mergeBackWorktree,
+  removeWorktree,
+} from "@main/lib/worktreeOps.js";
 import type {
   GitRepo,
   GitStatusResult,
@@ -49,6 +57,7 @@ import type {
   GitMergePreviewResult,
 } from "@contracts/ipc";
 import { ProjectRepo, SettingRepo } from "@main/store/repositories.js";
+import { findContainingWorkspaceRoot, isKnownWorkspaceRoot } from "@main/lib/pathGuard.js";
 import { CustomModelStore } from "@main/lib/secretStore.js";
 import { buildCustomEnv, resolveActiveModel } from "@main/providers/claude-sdk/customEnv.js";
 import { resolveSdkBinaryPath } from "@main/providers/claude-sdk/sdkBinaryPath.js";
@@ -215,12 +224,14 @@ function pathWithin(root: string, abs: string): boolean {
   return a.startsWith(r + sep);
 }
 
-/** Verify a repoPath is inside SOME persisted project root. Returns the
- *  matching project root, or null if the path is outside all roots (refuse).
- *  Exported so the mobile git RPC whitelist enforces the same boundary. */
+/** Verify a repoPath is inside SOME persisted project root — or is/contains
+ *  a session worktree (the isolated checkouts live outside every project by
+ *  design, yet the worktree session's Git panel legitimately operates
+ *  there). Returns the matching root, or null if the path is outside all
+ *  legal roots (refuse). Exported so the mobile git RPC whitelist enforces
+ *  the same boundary. */
 export function findContainingProject(repoPath: string): string | null {
-  const root = ProjectRepo.listPaths().find((p) => pathWithin(p, repoPath));
-  return root ?? null;
+  return findContainingWorkspaceRoot(repoPath);
 }
 
 /** Resolve a custom-model config for an LLM-driven git operation (commit
@@ -302,20 +313,37 @@ export async function generateCommitMessageForRepo(input: {
   customModelId?: string;
   customModelRole?: string;
   requestId?: string;
+  /** "staged" (default) = index vs HEAD; "worktree" = working tree vs HEAD
+   *  (staged AND unstaged) — used by the worktree merge-back dialog, whose
+   *  pre-merge auto-commit captures ALL uncommitted changes. */
+  scope?: "staged" | "worktree";
 }): Promise<{ ok: boolean; message?: string; error?: string; cancelled?: boolean }> {
   try {
-    // 1. Collect the staged diff (index vs HEAD).
+    // 1. Collect the diff the generation is based on. The worktree scope
+    //    reads the whole working tree against HEAD — `git diff --cached`
+    //    alone would report "nothing staged" for agent edits that were never
+    //    staged, which is the COMMON case for a worktree session.
     const git = (await loadSimpleGit())(input.repoPath);
-    const diff = await git.diff(["--cached"]);
+    const diff =
+      input.scope === "worktree"
+        ? await git.diff(["HEAD"])
+        : await git.diff(["--cached"]);
     if (!diff.trim()) {
-      return { ok: false, error: "没有已暂存的更改可生成提交信息" };
+      return {
+        ok: false,
+        error:
+          input.scope === "worktree"
+            ? "没有未提交的更改可生成提交信息"
+            : "没有已暂存的更改可生成提交信息",
+      };
     }
 
     // 2. Build the prompt (see header comment for the shape contract).
     const formatPrompt = input.prompt?.trim() || DEFAULT_COMMIT_FORMAT_PROMPT;
+    const diffLabel = input.scope === "worktree" ? "git diff HEAD" : "git diff --cached";
     const userPrompt =
       `# 格式与语言偏好\n${formatPrompt}\n\n` +
-      `--- git diff --cached ---\n${diff}\n--- end diff ---`;
+      `--- ${diffLabel} ---\n${diff}\n--- end diff ---`;
 
     // 3. Resolve the model config. OpenAI-protocol configs get their bridge
     //    activated here too (see resolveModelForGitOp).
@@ -534,13 +562,20 @@ export function registerGitHandlers(ipcMain: IpcMain): void {
   ipcMain.handle(IPC.GIT_DISCOVER_REPOS, async (_evt, raw) => {
     const input = GitDiscoverReposSchema.parse(raw);
     // Verify the project path is a known persisted project.
-    const known = ProjectRepo.listPaths().some((p) => resolve(p) === resolve(input.projectPath));
+    // Project root OR a session worktree root (the worktree session's Git
+    // panel scans its own isolated checkout).
+    const known = isKnownWorkspaceRoot(input.projectPath);
     if (!known) {
       log.warn(`git.discoverRepos refused — unknown projectPath: ${input.projectPath}`);
       return { repos: [] };
     }
     try {
-      const repoPaths = await findGitRepos(input.projectPath, MAX_SCAN_DEPTH);
+      // rootOnly → depth 0: findGitRepos returns [root] iff `.git` exists at
+      // the root level itself, skipping the recursive scan entirely.
+      const repoPaths = await findGitRepos(
+        input.projectPath,
+        input.rootOnly ? 0 : MAX_SCAN_DEPTH,
+      );
       const repos: GitRepo[] = repoPaths.map((p) => {
         const rel = relative(input.projectPath, p);
         const name = rel === "" ? input.projectPath.split(/[/\\]/).pop() || p : rel;
@@ -840,6 +875,7 @@ export function registerGitHandlers(ipcMain: IpcMain): void {
       customModelId: input.customModelId ?? undefined,
       customModelRole: input.customModelRole ?? undefined,
       requestId: input.requestId,
+      scope: input.scope,
     });
   });
 
@@ -1167,6 +1203,50 @@ export function registerGitHandlers(ipcMain: IpcMain): void {
       log.warn(`git.mergeAbort failed for ${input.repoPath}: ${msg}`);
       return { ok: false, error: msg };
     }
+  });
+
+  /* ── git:worktreeList / worktreeMergeBack / worktreeRemove ──
+   * Thin shells over lib/worktreeOps (isolated agent-session lifecycle).
+   * The repoPath guard stays the project-containment one — all three
+   * operations anchor on the user's LOCAL checkout inside a project; the
+   * worktree itself lives outside every project root by design. */
+  ipcMain.handle(IPC.GIT_WORKTREE_LIST, async (_evt, raw) => {
+    const input = GitWorktreeListSchema.parse(raw);
+    if (!findContainingProject(input.repoPath)) {
+      log.warn(`git.worktreeList refused — repoPath outside any project: ${input.repoPath}`);
+      return { worktrees: [] };
+    }
+    try {
+      return { worktrees: await listWorktrees(input.repoPath) };
+    } catch (err) {
+      log.warn(`git.worktreeList failed for ${input.repoPath}: ${(err as Error).message}`);
+      return { worktrees: [] };
+    }
+  });
+
+  ipcMain.handle(IPC.GIT_WORKTREE_MERGE_BACK, async (_evt, raw) => {
+    const input = GitWorktreeMergeBackSchema.parse(raw);
+    if (!findContainingProject(input.repoPath)) {
+      return { ok: false, error: "仓库路径不在任何已添加的项目内" };
+    }
+    const res = await mergeBackWorktree(input.repoPath, input.worktreePath, {
+      message: input.message,
+    });
+    if (res.ok) broadcastGitChanged(input.repoPath);
+    return res;
+  });
+
+  ipcMain.handle(IPC.GIT_WORKTREE_REMOVE, async (_evt, raw) => {
+    const input = GitWorktreeRemoveSchema.parse(raw);
+    if (!findContainingProject(input.repoPath)) {
+      return { ok: false, error: "仓库路径不在任何已添加的项目内" };
+    }
+    const res = await removeWorktree(input.repoPath, input.worktreePath, {
+      force: input.force,
+      exportPatch: input.exportPatch,
+    });
+    if (res.ok) broadcastGitChanged(input.repoPath);
+    return res;
   });
 }
 

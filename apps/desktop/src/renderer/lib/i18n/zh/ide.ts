@@ -135,6 +135,7 @@ export const zh = {
   "ide.git.rescan": "重新扫描",
   "ide.git.changes": "更改",
   "ide.git.history": "历史",
+  "ide.git.worktreeTab": "工作树",
   "ide.git.repoCount": "{n} 仓",
   "ide.git.rescanRepos": "重新扫描仓库",
   "ide.git.pull": "拉取",

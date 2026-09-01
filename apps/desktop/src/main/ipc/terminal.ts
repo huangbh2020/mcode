@@ -18,7 +18,7 @@ import {
   TerminalListSchema,
   TERMINAL_SHELL_SETTING_KEY,
 } from "@contracts/ipc";
-import { isKnownProjectPath, pathWithin } from "@main/lib/pathGuard.js";
+import { isKnownWorkspaceRoot, pathWithin } from "@main/lib/pathGuard.js";
 import { SettingRepo } from "@main/store/repositories.js";
 import { TerminalManager } from "@main/terminal/TerminalManager.js";
 import { log } from "@main/lib/logger.js";
@@ -29,7 +29,7 @@ export function registerTerminalHandlers(ipcMain: IpcMain): void {
       const input = TerminalCreateSchema.parse(raw);
       const projectPath = resolve(input.projectPath);
 
-      if (!isKnownProjectPath(projectPath)) {
+      if (!isKnownWorkspaceRoot(projectPath)) {
         return { ok: false as const, error: "未知项目路径，拒绝创建终端" };
       }
 

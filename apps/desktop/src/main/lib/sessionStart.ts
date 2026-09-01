@@ -16,6 +16,29 @@ import { broadcastSessionChanged } from "@main/lib/sessionSync.js";
  *  requester's current config. A brand-new row is only created when the
  *  project has no fresh row left (first click, or the previous one was
  *  used/archived/deleted). */
+/** Validate and apply a worktree BIND intent: the named directory must be
+ *  an already-materialized worktree of some other session (never a raw
+ *  arbitrary path — that would let a session escape the managed roots), and
+ *  only meaningful with envMode="worktree". Writes the path onto the fresh
+ *  row so its first turn reuses the checkout instead of creating one. */
+function applyWorktreeBind(input: StartSessionInput, sessionId: string): void {
+  if (input.envMode !== "worktree" || !input.worktreePath) return;
+  const roots = SessionRepo.listWorktreeRoots();
+  const norm = (p: string) => {
+    const n = p.replace(/\\/g, "/").replace(/\/+$/, "");
+    return process.platform === "win32" || process.platform === "darwin"
+      ? n.toLowerCase()
+      : n;
+  };
+  const target = norm(input.worktreePath);
+  if (!roots.some((r) => norm(r) === target)) {
+    log.warn(`worktree bind ignored — ${input.worktreePath} is not a managed worktree root`);
+    return;
+  }
+  SessionRepo.updateWorktreePath(sessionId, input.worktreePath);
+  log.info(`session ${sessionId} bound to existing worktree ${input.worktreePath}`);
+}
+
 export function createOrReuseSession(
   input: StartSessionInput,
   source: "desktop" | "mobile",
@@ -101,7 +124,15 @@ export function createOrReuseSession(
         effort: input.effort,
         permissionMode: input.permissionMode,
         customModelId: input.customModelId ?? null,
+        envMode: input.envMode ?? "local",
+        // A fresh row reused as a local thread must not keep a worktree path
+        // left over from an earlier bind — it would render under the wrong
+        // left-bar group with a fork badge while actually running in the
+        // project root. Fresh rows are by definition un-materialized, so
+        // clearing is always safe here.
+        worktreePath: input.envMode === "worktree" ? undefined : null,
       });
+      applyWorktreeBind(input, fresh.id);
       const session = SessionRepo.get(fresh.id) ?? fresh;
       runtimeManager.bindSession(session);
       broadcastSessionChanged(session);
@@ -124,6 +155,9 @@ export function createOrReuseSession(
     effort: input.effort,
     permissionMode: input.permissionMode,
     customModelId: input.customModelId ?? null,
+    // Isolated-environment intent; the worktree materializes on first turn.
+    envMode: input.envMode ?? "local",
+    worktreePath: null,
     archived: false,
     pinnedAt: null, // new sessions are never pinned
     contextSnapshot: null,
@@ -138,8 +172,14 @@ export function createOrReuseSession(
     updatedAt: now,
   };
   SessionRepo.create(session);
-  runtimeManager.bindSession(session);
-  broadcastSessionChanged(session);
-  log.info(`session started: ${session.id} (provider ${session.providerId}, project ${input.projectId}, ${source})`);
-  return { session, reused: false };
+  applyWorktreeBind(input, session.id);
+  // Re-read after the bind: applyWorktreeBind writes worktree_path directly
+  // to the DB, and broadcasting/returning the stale in-memory object (which
+  // carries worktreePath: null) made the renderer file the new session under
+  // the project's flat list instead of its worktree group.
+  const bound = SessionRepo.get(session.id) ?? session;
+  runtimeManager.bindSession(bound);
+  broadcastSessionChanged(bound);
+  log.info(`session started: ${bound.id} (provider ${bound.providerId}, project ${input.projectId}, ${source})`);
+  return { session: bound, reused: false };
 }

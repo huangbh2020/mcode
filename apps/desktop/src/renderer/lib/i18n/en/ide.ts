@@ -133,6 +133,7 @@ export const en = {
   "ide.git.rescan": "Rescan",
   "ide.git.changes": "Changes",
   "ide.git.history": "History",
+  "ide.git.worktreeTab": "Worktrees",
   "ide.git.repoCount": "{n} repos",
   "ide.git.rescanRepos": "Rescan repositories",
   "ide.git.pull": "Pull",

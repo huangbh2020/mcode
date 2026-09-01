@@ -109,6 +109,31 @@ export type Locale = z.infer<typeof LocaleSchema>;
  */
 export const AUTO_ARCHIVE_SETTING_KEY = "session.autoArchive";
 
+/**
+ * Setting key persisting the composer's default working environment for NEW
+ * sessions ("true" = isolated worktree, "false"/absent = local project root).
+ * Read at first paint into sessionStore's `worktreeMode` slot; written by
+ * setWorktreeMode whenever the default (not a session-specific intent) flips.
+ */
+export const SESSION_WORKTREE_DEFAULT_SETTING_KEY = "session.worktreeDefault";
+
+/**
+ * Setting key persisting the managed ROOT directory for isolated-session
+ * worktrees (absolute path; empty/absent = the default
+ * <userData>/worktrees). Read fresh on every worktree creation, so a change
+ * only affects FUTURE worktrees — materialized sessions keep their recorded
+ * path regardless.
+ */
+export const WORKTREE_ROOT_SETTING_KEY = "worktree.root";
+
+/**
+ * Setting key persisting left-bar DISPLAY NAMES for worktree directories, as
+ * a JSON map of normalized worktree path → name. Purely cosmetic — a session
+ * never reads its worktree name; missing entries fall back to the directory
+ * basename. Written by the left bar's "rename worktree" dialog.
+ */
+export const WORKTREE_NAMES_SETTING_KEY = "worktree.names";
+
 /** zod schema for the auto-archive rules persisted under AUTO_ARCHIVE_SETTING_KEY. */
 export const AutoArchiveConfigSchema = z.object({
   /** Master switch — when false, the AutoArchiver is a no-op. */
@@ -666,6 +691,19 @@ export const StartSessionSchema = z.object({
   /** For kind="side": the main session this Q&A thread belongs to. Enables
    *  traceability (one main session → many side chats). Ignored for chat. */
   parentSessionId: z.string().optional(),
+  /** Working-environment intent for the new session. "worktree" records that
+   *  the session's turns should run in an isolated detached checkout — the
+   *  worktree itself is created when the FIRST turn is sent (intent-first,
+   *  materialize-late), so unused sessions never leave empty worktrees
+   *  behind. Only meaningful for kind="chat". */
+  envMode: z.enum(["local", "worktree"]).optional(),
+  /** BIND to an existing managed worktree directory instead of creating a
+   *  fresh one: the new session shares the checkout (and its dependencies)
+   *  of an already-materialized worktree session — "continue working in the
+   *  same directory with a fresh thread". Must name a directory some OTHER
+   *  session already references (main validates); ignored otherwise. Only
+   *  meaningful together with envMode="worktree". */
+  worktreePath: z.string().optional(),
 });
 export type StartSessionInput = z.infer<typeof StartSessionSchema>;
 
@@ -820,6 +858,10 @@ export const UpdateSessionSettingsSchema = z.object({
    *  messages yet — once a turn has run the provider is fixed at creation, so
    *  the main handler rejects this field for non-empty sessions. */
   providerId: z.string().optional(),
+  /** Working-environment intent flip (composer chip). Only meaningful while
+   *  the session is un-materialized (no worktreePath yet) — the main-side
+   *  updateSettings writes it, materialization later locks the environment. */
+  envMode: z.enum(["local", "worktree"]).optional(),
 });
 export type UpdateSessionSettingsInput = z.infer<typeof UpdateSessionSettingsSchema>;
 
@@ -1827,9 +1869,13 @@ export interface GitOpResult {
   conflictedFiles?: string[];
 }
 
-/** Discover all git repos under a project root (recursive, max depth 3). */
+/** Discover all git repos under a project root (recursive, max depth 3).
+ *  `rootOnly: true` checks ONLY the root level itself (`.git` present there)
+ *  — used by the worktree picker, whose materialization requires a repo at
+ *  the project root; a repo nested in a subdirectory doesn't qualify. */
 export const GitDiscoverReposSchema = z.object({
   projectPath: z.string(),
+  rootOnly: z.boolean().optional(),
 });
 export type GitDiscoverReposInput = z.infer<typeof GitDiscoverReposSchema>;
 
@@ -1899,6 +1945,11 @@ export const GitGenerateCommitSchema = z.object({
    *  SDK query is registered under this id so git.cancelGenerateCommit can
    *  abort an in-flight generation. */
   requestId: z.string().optional(),
+  /** Which diff feeds the generation: "staged" (default — index vs HEAD,
+   *  the commit-box flow) or "worktree" (working tree vs HEAD, staged AND
+   *  unstaged — the worktree merge-back flow, where agent changes are
+   *  typically uncommitted). */
+  scope: z.enum(["staged", "worktree"]).optional(),
 });
 export type GitGenerateCommitInput = z.infer<typeof GitGenerateCommitSchema>;
 
@@ -2107,6 +2158,95 @@ export interface GitMergeResult {
   upToDate?: boolean;
   /** True when the merge fast-forwarded (no merge commit was created). */
   fastForward?: boolean;
+}
+
+/* ── Git worktrees (isolated agent sessions) ──
+ *  Minimal single-direction lifecycle: a "worktree" session materializes a
+ *  DETACHED checkout (no branch — git forbids one branch checked out in two
+ *  worktrees, and branch naming is a user-level decision deferred to merge
+ *  time), works in isolation, then merges its HEAD commit back into the
+ *  local checkout's current branch and is removed. Worktrees live under a
+ *  managed root (userData/worktrees/<repo>/<sessionId>) OUTSIDE every
+ *  registered project root, so the project-scoped path guards never see
+ *  them and the isolation boundary rides on the per-turn cwd alone. */
+
+/** One linked checkout in a `git.worktreeList` result (main worktree
+ *  included as the first entry, `main: true`, so the UI can state the
+ *  merge-back target). */
+export interface GitWorktreeInfo {
+  /** Absolute path of the worktree directory. */
+  path: string;
+  /** Abbreviated HEAD commit hash (merge-back source; empty when missing). */
+  head: string;
+  /** Checked-out branch short name; always "" for our detached worktrees. */
+  branch: string;
+  /** True for the repository's main worktree (the original checkout). */
+  main: boolean;
+  /** True when the worktree has uncommitted changes. */
+  dirty: boolean;
+  /** True when the directory no longer exists on disk (prunable). */
+  missing: boolean;
+  /** How many sessions reference this path as their worktreePath. Zero =
+   *  orphan (its session was deleted) — safe to clean up. */
+  referencedBy: number;
+  /** True when the worktree's HEAD is already contained in the MAIN
+   *  worktree's HEAD (changes merged back) — safe to clean up. */
+  merged: boolean;
+}
+
+export const GitWorktreeListSchema = z.object({
+  /** The repo to list worktrees of. Any worktree of the repo works. */
+  repoPath: z.string(),
+});
+export type GitWorktreeListInput = z.infer<typeof GitWorktreeListSchema>;
+
+/** Merge a worktree's work back into the local checkout's CURRENT branch.
+ *  Orchestrated server-side: dirty worktree → auto-commit on its detached
+ *  HEAD → `git merge --no-edit <worktree HEAD>` in the local repo. */
+export const GitWorktreeMergeBackSchema = z.object({
+  repoPath: z.string(),
+  worktreePath: z.string(),
+  /** Commit message for the pre-merge auto-commit of uncommitted worktree
+   *  changes. Optional — blank/absent falls back to the built-in default
+   *  ("worktree: auto-commit before merge back (<dir>)"). */
+  message: z.string().optional(),
+});
+export type GitWorktreeMergeBackInput = z.infer<typeof GitWorktreeMergeBackSchema>;
+
+export interface GitWorktreeMergeBackResult {
+  ok: boolean;
+  error?: string;
+  /** True when the worktree had uncommitted changes that were auto-committed
+   *  on its detached HEAD before merging. */
+  committedChanges?: boolean;
+  /** The local branch the merge landed on (for the UI's result message). */
+  targetBranch?: string;
+  /** True when the merge fast-forwarded (no merge commit). */
+  fastForward?: boolean;
+  /** Set when the merge stopped with conflicts — the local repo is left in a
+   *  merging state; the existing conflict-resolution UI applies. */
+  conflict?: boolean;
+  conflictedFiles?: string[];
+}
+
+export const GitWorktreeRemoveSchema = z.object({
+  repoPath: z.string(),
+  worktreePath: z.string(),
+  /** Skip the uncommitted-changes check and pass --force. */
+  force: z.boolean().optional(),
+  /** Before removing, persist the worktree's uncommitted diff as a patch
+   *  under userData/worktree-snapshots/ (last-resort recovery for discarded
+   *  work). `patchPath` in the result tells the user where it went. */
+  exportPatch: z.boolean().optional(),
+});
+export type GitWorktreeRemoveInput = z.infer<typeof GitWorktreeRemoveSchema>;
+
+export interface GitWorktreeRemoveResult {
+  ok: boolean;
+  error?: string;
+  /** Absolute path of the exported patch, when exportPatch was requested
+   *  and succeeded. */
+  patchPath?: string;
 }
 
 /* ── Skill discovery (composer slash-command menu) ──
@@ -3455,6 +3595,12 @@ export interface RpcMap {
   /** Abort an in-progress merge (`git merge --abort`). Fails when the repo is
    *  not in a merging state. */
   "git.mergeAbort": (input: GitRepoPathInput) => Promise<GitOpResult>;
+  /** List the repo's worktrees (linked + main) with lifecycle state. */
+  "git.worktreeList": (input: GitWorktreeListInput) => Promise<{ worktrees: GitWorktreeInfo[] }>;
+  /** Merge a worktree's HEAD back into the local current branch. */
+  "git.worktreeMergeBack": (input: GitWorktreeMergeBackInput) => Promise<GitWorktreeMergeBackResult>;
+  /** Remove a worktree (optionally force / with a patch export first). */
+  "git.worktreeRemove": (input: GitWorktreeRemoveInput) => Promise<GitWorktreeRemoveResult>;
   // Integrated terminal (P4 IDE right panel)
   /** Spawn a PTY in the project cwd (or a subdir). */
   "terminal.create": (input: TerminalCreateInput) => Promise<TerminalCreateResult>;
@@ -3789,6 +3935,10 @@ export const IPC = {
   GIT_MERGE_PREVIEW: "git:mergePreview",
   GIT_MERGE: "git:merge",
   GIT_MERGE_ABORT: "git:mergeAbort",
+  // Git worktrees (isolated agent sessions)
+  GIT_WORKTREE_LIST: "git:worktreeList",
+  GIT_WORKTREE_MERGE_BACK: "git:worktreeMergeBack",
+  GIT_WORKTREE_REMOVE: "git:worktreeRemove",
   // Integrated terminal (P4 IDE right panel)
   TERMINAL_CREATE: "terminal:create",
   TERMINAL_WRITE: "terminal:write",

@@ -155,6 +155,11 @@ function migrate(database: Database): void {
   // instead of cascading (the Q&A history is kept).
   addColumnIfMissing(database, "sessions", "kind", "TEXT NOT NULL DEFAULT 'chat'");
   addColumnIfMissing(database, "sessions", "parent_session_id", "TEXT");
+  // Isolated-agent-session environment: 'worktree' rows run their turns in a
+  // detached git worktree (created on first turn, path backfilled) instead of
+  // the project root. 'local' keeps every pre-migration row as-is.
+  addColumnIfMissing(database, "sessions", "env_mode", "TEXT NOT NULL DEFAULT 'local'");
+  addColumnIfMissing(database, "sessions", "worktree_path", "TEXT");
   addColumnIfMissing(database, "projects", "archived", "INTEGER NOT NULL DEFAULT 0");
   // Optional user-assigned group name for the left-bar "grouped" view. NULL
   // means the project is ungrouped; the renderer treats "" / undefined as null.
