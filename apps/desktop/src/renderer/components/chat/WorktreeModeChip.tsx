@@ -9,6 +9,7 @@ import {
   IconGitFork,
   IconFolder,
   IconCheck,
+  IconChevronDown,
 } from "@renderer/lib/icons.js";
 import { useI18n } from "@renderer/lib/i18n/index.js";
 
@@ -135,9 +136,14 @@ export function WorktreeModeChip({
       <Menu.Root open={open} onOpenChange={setOpen}>
         <Menu.Trigger
           className={cn(
-            "inline-flex select-none items-center gap-1 rounded px-1 py-0.5 text-[11px] outline-none transition-colors duration-100",
-            "hover:bg-surface-muted",
-            on ? "text-accent" : "text-content-subtle hover:text-content-muted",
+            // Clickable WITHOUT a hard border: chevron + icon + hover states
+            // carry the affordance so the quiet row above the composer stays
+            // visually light.
+            "inline-flex select-none items-center gap-1.5 rounded-md px-2 py-1 text-xs outline-none transition-colors duration-100",
+            "hover:bg-surface-hover",
+            on
+              ? "text-accent hover:bg-accent/10"
+              : "text-content-muted hover:text-content",
           )}
           title={
             on
@@ -145,8 +151,9 @@ export function WorktreeModeChip({
               : t("chat.worktree.chipTitleLocal")
           }
         >
-          <span className="shrink-0 opacity-90">{on ? <IconGitFork size={11} /> : <IconFolder size={11} />}</span>
+          <span className="shrink-0 opacity-90">{on ? <IconGitFork size={12} /> : <IconFolder size={12} />}</span>
           <span className="truncate">{triggerLabel}</span>
+          <IconChevronDown size={12} className="shrink-0 opacity-60" />
         </Menu.Trigger>
         <Menu.Portal>
           <Menu.Positioner

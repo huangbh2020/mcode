@@ -8,9 +8,11 @@ import {
   IconTerminal2,
   IconCode,
   IconFolder,
+  IconGitFork,
 } from "@renderer/lib/icons.js";
 import { getProviderIcon } from "@renderer/lib/providerIcon.js";
 import { useSessionStore } from "@renderer/stores/sessionStore.js";
+import { worktreeDisplayName } from "@renderer/lib/worktree.js";
 import { ProjectBranchIndicator } from "@renderer/components/chat/ProjectBranchIndicator.js";
 import { WorktreeMergeToolbarButton } from "@renderer/components/chat/WorktreeMergeBack.js";
 import { resolveShortcut, acceleratorToDisplayString } from "@renderer/lib/shortcuts.js";
@@ -192,6 +194,10 @@ export function Titlebar({
                 switch branches. Only renders when a project is active and is a
                 git repo. Sits right of the thread title. */}
             <ToolbarBranchIndicator />
+            {/* Worktree chip — the active thread's isolated-checkout name.
+                Renders only for worktree sessions; local threads leave no
+                gap (the component returns null). */}
+            <ActiveWorktreeChip />
             {/* Editor column toggle - shows/hides the center-pane editor column
                 without closing the open file. Sits right of the branch pill. */}
             {!isBrowserMode && <EditorColumnToggle />}
@@ -310,6 +316,38 @@ function ActiveProjectChip() {
     >
       <IconFolder size={13} className="shrink-0" />
       <span className="truncate">{project.name}</span>
+    </div>
+  );
+}
+
+/** Active-session worktree chip: fork icon + the worktree's display name
+ *  (custom name if renamed, else directory basename), full path in the hover
+ *  tooltip. Accent-tinted to read as "this thread is isolated". Renders only
+ *  while the ACTIVE session runs in a materialized worktree — local threads
+ *  render nothing. Atomic selectors (primitive / stable ref) per the
+ *  ActiveThreadTitle note; the session may live in any list bucket. */
+function ActiveWorktreeChip() {
+  const worktreePath = useSessionStore((s) => {
+    if (!s.activeSessionId) return null;
+    const sess =
+      s.sessions.find((x) => x.id === s.activeSessionId) ??
+      s.pinnedSessions.find((x) => x.id === s.activeSessionId);
+    if (sess) return sess.worktreePath ?? null;
+    for (const list of Object.values(s.sessionsByProject)) {
+      const hit = list?.find((x) => x.id === s.activeSessionId);
+      if (hit) return hit.worktreePath ?? null;
+    }
+    return null;
+  });
+  const worktreeNames = useSessionStore((s) => s.worktreeNames);
+  if (!worktreePath) return null;
+  return (
+    <div
+      className="flex min-w-0 max-w-[160px] shrink-0 items-center gap-1 px-1 text-xs text-accent"
+      title={worktreePath}
+    >
+      <IconGitFork size={13} className="shrink-0" />
+      <span className="truncate">{worktreeDisplayName(worktreePath, worktreeNames)}</span>
     </div>
   );
 }
