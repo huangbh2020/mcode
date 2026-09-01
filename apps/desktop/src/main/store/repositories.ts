@@ -42,6 +42,7 @@ interface ProjectRow {
   archived: number;
   group: string | null;
   sort_order: number;
+  pinned_at: number | null;
   created_at: number;
   updated_at: number;
 }
@@ -56,6 +57,7 @@ function rowToProject(r: ProjectRow): Project {
     // renderer only ever sees null | <non-empty group name>.
     group: r.group && r.group.length > 0 ? r.group : null,
     sortOrder: r.sort_order ?? 0,
+    pinnedAt: r.pinned_at ?? null,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
   };
@@ -100,8 +102,11 @@ export const ProjectRepo = {
 
   list(): Project[] {
     const db = getDb();
+    // Pinned projects float to the top (most recent pin first); unpinned rows
+    // keep their drag order. `(pinned_at IS NULL)` yields 0/1 so pinned rows
+    // (0) sort ahead — same trick as the sessions pinned_at ordering.
     const stmt = db.prepare(
-      "SELECT * FROM projects ORDER BY sort_order ASC, created_at ASC",
+      "SELECT * FROM projects ORDER BY (pinned_at IS NULL) ASC, pinned_at DESC, sort_order ASC, created_at ASC",
     );
     const out: Project[] = [];
     while (stmt.step()) out.push(rowToProject(stmt.getAsObject() as unknown as ProjectRow));
@@ -155,6 +160,31 @@ export const ProjectRepo = {
     getDb().run("UPDATE projects SET `group` = ?, updated_at = ? WHERE id = ?", [
       v(group ?? null),
       v(Date.now()),
+      v(id),
+    ]);
+    persist();
+    rootPathsCache = null;
+  },
+
+  /** Rename a project (display-only; the path is never touched). */
+  rename(id: string, name: string): void {
+    getDb().run("UPDATE projects SET name = ?, updated_at = ? WHERE id = ?", [
+      v(name),
+      v(Date.now()),
+      v(id),
+    ]);
+    persist();
+    rootPathsCache = null;
+  },
+
+  /** Pin/unpin a project: pinned rows write the current timestamp (most
+   *  recent pin sorts first), unpinned rows write NULL. Mirrors
+   *  SessionRepo.setPinned — sort_order is left alone so unpinning returns
+   *  the project to its drag-order position, and `updated_at` is not bumped
+   *  (pinning is metadata, not activity). */
+  setPinned(id: string, pinned: boolean): void {
+    getDb().run("UPDATE projects SET pinned_at = ? WHERE id = ?", [
+      v(pinned ? Date.now() : null),
       v(id),
     ]);
     persist();

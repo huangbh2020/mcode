@@ -383,6 +383,8 @@ const project: Api["project"] = {
   archive: (input) => rpc("project:archive", input),
   setGroup: (input) => rpc("project:setGroup", input),
   reorder: (input) => rpc("project:reorder", input),
+  setPinned: (input) => rpc("project:pin", input),
+  rename: (input) => rpc("project:rename", input),
 };
 
 const session: Api["session"] = {

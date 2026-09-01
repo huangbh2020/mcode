@@ -851,6 +851,19 @@ export const ReorderProjectsSchema = z.object({
   orderedIds: z.array(z.string()),
 });
 export type ReorderProjectsInput = z.infer<typeof ReorderProjectsSchema>;
+/* Pin/unpin a project. Pinned projects float above the left bar's project
+ * tree (and out of their group) in a dedicated section, most recent pin
+ * first — the project-level counterpart of PinSessionSchema. */
+export const PinProjectSchema = z.object({ id: z.string(), pinned: z.boolean() });
+export type PinProjectInput = z.infer<typeof PinProjectSchema>;
+/* Rename a project (user-edited display name). Display-only: the project's
+ * path — the functional key used for cwd / path guards — is never touched.
+ * Mirrors RenameSessionSchema's trim-and-clamp contract. */
+export const RenameProjectSchema = z.object({
+  id: z.string(),
+  name: z.string().min(1).max(200),
+});
+export type RenameProjectInput = z.infer<typeof RenameProjectSchema>;
 export const DeleteSessionSchema = z.object({ id: z.string() });
 export const ArchiveSessionSchema = z.object({ id: z.string(), archived: z.boolean() });
 
@@ -3274,6 +3287,10 @@ export interface RpcMap {
   "project.setGroup": (input: SetProjectGroupInput) => Promise<{ project: Project }>;
   /** Persist a drag-to-reorder: writes sort_order = index for each id. */
   "project.reorder": (input: ReorderProjectsInput) => Promise<void>;
+  /** Pin/unpin a project (top-of-left-bar pinned section). Returns the updated row. */
+  "project.pin": (input: PinProjectInput) => Promise<{ project: Project }>;
+  /** Rename a project (display-only). Returns the updated row. */
+  "project.rename": (input: RenameProjectInput) => Promise<{ project: Project }>;
   // Sessions (P2 persistence)
   /** Cross-project session search by title substring (Ctrl+K unified search). */
   "session.search": (input: SessionSearchInput) => Promise<{ sessions: Session[] }>;
@@ -3664,6 +3681,8 @@ export const IPC = {
   PROJECT_ARCHIVE: "project:archive",
   PROJECT_SET_GROUP: "project:setGroup",
   PROJECT_REORDER: "project:reorder",
+  PROJECT_PIN: "project:pin",
+  PROJECT_RENAME: "project:rename",
   SESSION_DELETE: "session:delete",
   SESSION_ARCHIVE: "session:archive",
   SESSION_RENAME: "session:rename",

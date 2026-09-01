@@ -1228,6 +1228,15 @@ export interface SessionState {
   /** Assign a project to a group (left-bar "grouped" view). Pass null to
    *  remove it from any group. */
   setProjectGroup: (id: string, group: string | null) => Promise<void>;
+  /** Rename a project (display-only; the on-disk folder is untouched). The
+   *  returned project replaces the stale copy in state. */
+  renameProject: (id: string, name: string) => Promise<void>;
+  /** Pin/unpin a project. Pinning MOVES the row: out of the flat list / its
+   *  group and into the pinned section above the left bar's project tree
+   *  (most recent pin first); unpinning returns it to its drag-order spot.
+   *  Refetches the whole list afterwards — the row's position changes, and
+   *  the DB's ordering is the single source of truth for it. */
+  setProjectPinned: (id: string, pinned: boolean) => Promise<void>;
   /** Persist a drag-to-reorder. `orderedIds` is the full visible project id
    *  list in the new order. */
   reorderProjects: (orderedIds: string[]) => Promise<void>;
@@ -7217,6 +7226,24 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   setProjectGroup: async (id, group) => {
     const { project } = await api.project.setGroup({ id, group });
     set((s) => ({ projects: s.projects.map((p) => (p.id === id ? project : p)) }));
+  },
+
+  /** Rename a project (display-only). The returned project replaces the
+   *  stale copy in state — every consumer (left bar, archive bin, settings
+   *  project pickers) reads the same `projects` array and follows along. */
+  renameProject: async (id, name) => {
+    const { project } = await api.project.rename({ id, name });
+    set((s) => ({ projects: s.projects.map((p) => (p.id === id ? project : p)) }));
+  },
+
+  /** Pin/unpin a project. The row's POSITION changes (pinned section vs
+   *  flat list / group), and the authoritative ordering lives in the DB's
+   *  list query — rather than hand-maintaining that order in the renderer,
+   *  refetch the whole (small) list after the write. */
+  setProjectPinned: async (id, pinned) => {
+    await api.project.setPinned({ id, pinned });
+    const { projects } = await api.project.list();
+    set({ projects });
   },
 
   /** Persist a drag-to-reorder. The renderer sends the full ordered id list

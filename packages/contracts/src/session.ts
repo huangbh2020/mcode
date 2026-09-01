@@ -64,6 +64,13 @@ export interface Project {
    *  pre-migration rows, which all default to 0). New projects are appended
    *  with MAX(sort_order)+1 so they land at the end. */
   sortOrder: number;
+  /** Pin timestamp (ms epoch) when the user pinned this project to the top of
+   *  the left bar; null = not pinned. Pinned projects leave the flat list /
+   *  their group and render in a dedicated pinned section above the tree
+   *  (most recent pin first) until unpinned — mirroring sessions' pinnedAt.
+   *  sort_order is NOT touched by pinning, so unpinning returns the project
+   *  to its drag-order position. */
+  pinnedAt: number | null;
   createdAt: number;
   updatedAt: number;
 }

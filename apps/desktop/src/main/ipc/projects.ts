@@ -6,6 +6,8 @@ import {
   ArchiveProjectSchema,
   SetProjectGroupSchema,
   ReorderProjectsSchema,
+  PinProjectSchema,
+  RenameProjectSchema,
   DeleteSessionSchema,
   ArchiveSessionSchema,
   PinSessionSchema,
@@ -30,6 +32,7 @@ export function registerProjectHandlers(ipcMain: IpcMain): void {
       name: input.name,
       path: input.path,
       archived: false,
+      pinnedAt: null,
       // Placeholder — ProjectRepo.create overwrites this with MAX+1; the
       // re-read below returns the authoritative row (with the real sort_order).
       sortOrder: 0,
@@ -106,6 +109,29 @@ export function registerProjectHandlers(ipcMain: IpcMain): void {
     const input = ReorderProjectsSchema.parse(raw);
     ProjectRepo.reorder(input.orderedIds);
     log.info(`projects reordered: ${input.orderedIds.length} items`);
+  });
+
+  // Pin/unpin a project. Pinned projects leave the flat list / their group
+  // and render in the left bar's pinned section above the project tree
+  // (most recent pin first). Mirrors the session pin handler's shape.
+  ipcMain.handle(IPC.PROJECT_PIN, (_evt, raw) => {
+    const input = PinProjectSchema.parse(raw);
+    ProjectRepo.setPinned(input.id, input.pinned);
+    const project = ProjectRepo.get(input.id);
+    if (!project) throw new Error(`project not found after pin: ${input.id}`);
+    log.info(`project ${input.pinned ? "pinned" : "unpinned"}: ${input.id}`);
+    return { project };
+  });
+
+  // Rename a project (display-only; the path — the functional key for cwd /
+  // path guards — is never touched).
+  ipcMain.handle(IPC.PROJECT_RENAME, (_evt, raw) => {
+    const input = RenameProjectSchema.parse(raw);
+    ProjectRepo.rename(input.id, input.name);
+    const project = ProjectRepo.get(input.id);
+    if (!project) throw new Error(`project not found after rename: ${input.id}`);
+    log.info(`project renamed: ${input.id} -> "${input.name}"`);
+    return { project };
   });
 
   // Hard-delete a session (cascades to its messages via DB FK).

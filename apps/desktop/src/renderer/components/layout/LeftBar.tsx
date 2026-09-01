@@ -125,6 +125,8 @@ function LeftBarBase({
   const unreadBySession = useSessionStore((s) => s.unreadBySession);
   const renameSession = useSessionStore((s) => s.renameSession);
   const setSessionPinned = useSessionStore((s) => s.setSessionPinned);
+  const renameProject = useSessionStore((s) => s.renameProject);
+  const setProjectPinned = useSessionStore((s) => s.setProjectPinned);
   const projectView = useSessionStore((s) => s.projectView);
   const setProjectView = useSessionStore((s) => s.setProjectView);
   const setProjectGroup = useSessionStore((s) => s.setProjectGroup);
@@ -240,14 +242,19 @@ function LeftBarBase({
 
       // Reveal ancestors so the row can mount at all. Grouped view: expand
       // the owning group when collapsed (identity return when already open —
-      // React bails out, no extra render). Then expand the project row when
-      // collapsed — the toggle's expand path is a pure local set, so it
-      // never clobbers the loaded slice (the pagination loop below refills
-      // whatever a prior collapse trimmed away).
+      // React bails out, no extra render). A PINNED parent renders inside the
+      // pinned-projects section instead — expand that section too when it's
+      // collapsed (mirrors the pinned-session branch above). Then expand the
+      // project row when collapsed — the toggle's expand path is a pure local
+      // set, so it never clobbers the loaded slice (the pagination loop below
+      // refills whatever a prior collapse trimmed away).
       const proj = st.projects.find((p) => p.id === projectId);
       if (st.projectView === "grouped" && proj?.group) {
         const groupName = proj.group;
         setCollapsedGroups((g) => (g[groupName] ? { ...g, [groupName]: false } : g));
+      }
+      if (proj?.pinnedAt != null) {
+        setPinnedProjectsOpen(true);
       }
       if (!st.expandedProjects[projectId]) {
         st.toggleProjectExpanded(projectId);
@@ -276,8 +283,13 @@ function LeftBarBase({
   // not the cursor, which doesn't match the expected behavior).
   const [ctxMenu, setCtxMenu] = useState<{ session: Session; x: number; y: number } | null>(null);
 
-  // ── Rename dialog state.
-  const [renaming, setRenaming] = useState<{ id: string; title: string } | null>(null);
+  // ── Rename dialog state. Shared by sessions and projects; `kind` picks
+  // the dialog copy and the dispatch target on submit.
+  const [renaming, setRenaming] = useState<{
+    id: string;
+    title: string;
+    kind: "session" | "project";
+  } | null>(null);
 
   // ── Delete confirmation dialog state. A single controlled ConfirmDialog
   // replaces the three native confirm() calls (active project, archived
@@ -310,6 +322,8 @@ function LeftBarBase({
   // Expand state for the global pinned section (in-memory, defaults open so
   // the feature is discoverable; mirrors the archived bin's local toggle).
   const [pinnedOpen, setPinnedOpen] = useState(true);
+  // Same pattern for the pinned-PROJECTS section above the project tree.
+  const [pinnedProjectsOpen, setPinnedProjectsOpen] = useState(true);
 
   // Split into active vs archived. Active projects show in the tree;
   // archived projects (whole-project archive) show as their own rows in
@@ -317,6 +331,14 @@ function LeftBarBase({
   // are grouped by their parent project in the bin.
   const activeProjects = projects.filter((p) => !p.archived);
   const archivedProjects = projects.filter((p) => p.archived);
+
+  // Pinned projects leave the flat list / their group and render in a
+  // dedicated pinned section ABOVE the tree (most recent pin first — the
+  // store refetches the DB-ordered list after every pin toggle, so this
+  // array's order already carries it). Everything below (grouped buckets,
+  // drag order) operates on the remaining tree projects only.
+  const pinnedProjects = activeProjects.filter((p) => p.pinnedAt != null);
+  const treeProjects = activeProjects.filter((p) => p.pinnedAt == null);
 
   // Archived sessions grouped by their (still-active) parent project, in
   // the same project order as the tree above. Empty groups are skipped.
@@ -327,13 +349,15 @@ function LeftBarBase({
 
   // ── Grouped view buckets. In "grouped" mode the active tree clusters
   // projects under collapsible headers keyed by `Project.group`. Groups are
-  // ordered by first appearance (activeProjects is already created_at-ASC);
+  // ordered by first appearance (treeProjects is already created_at-ASC);
   // ungrouped projects (group == null) render in a trailing flat section.
+  // Pinned projects never enter a bucket — they render in the pinned section
+  // above the tree, outside (and independent of) their group.
   // Memoized so the bucketing only re-runs when the project list changes.
   const { groupedProjects, ungroupedProjects, knownGroups } = useMemo(() => {
     const grouped = new Map<string, Project[]>();
     const ungrouped: Project[] = [];
-    for (const p of activeProjects) {
+    for (const p of treeProjects) {
       const g = p.group && p.group.length > 0 ? p.group : null;
       if (g == null) {
         ungrouped.push(p);
@@ -358,20 +382,23 @@ function LeftBarBase({
       ungroupedProjects: ungrouped,
       knownGroups: Array.from(sorted.keys()),
     };
-  }, [activeProjects, groupMeta]);
+  }, [treeProjects, groupMeta]);
 
   // ── Drag-to-reorder. A single SortableContext covers every visible
   // project (flat list OR all groups flattened in display order). sortable
   // ids are namespaced ("proj:<id>" / "group:<name>") so project ids never
   // collide with group-header droppables. `displayOrder` is the flattened
-  // visible order used by onDragEnd to compute from/to indices.
+  // visible order used by onDragEnd to compute from/to indices. Pinned
+  // projects are NOT part of it — they render outside the SortableContext,
+  // and their sort_order stays frozen while pinned (unpinning returns them
+  // to their drag-order spot).
   const displayOrder = useMemo(() => {
-    if (projectView === "flat") return activeProjects;
+    if (projectView === "flat") return treeProjects;
     const out: Project[] = [];
     for (const projs of groupedProjects.values()) out.push(...projs);
     out.push(...ungroupedProjects);
     return out;
-  }, [projectView, activeProjects, groupedProjects, ungroupedProjects]);
+  }, [projectView, treeProjects, groupedProjects, ungroupedProjects]);
 
   // Sortable ids: projects always; group headers too in grouped view (so
   // groups can be dragged to reorder among themselves). Both are namespaced
@@ -393,8 +420,8 @@ function LeftBarBase({
   );
 
   const findProjectById = useCallback(
-    (id: string) => activeProjects.find((p) => p.id === id),
-    [activeProjects],
+    (id: string) => treeProjects.find((p) => p.id === id),
+    [treeProjects],
   );
 
   // Live cross-group reassignment while dragging. Fires as the pointer moves
@@ -455,12 +482,15 @@ function LeftBarBase({
     [displayOrder, reorderProjects, groupedProjects, setGroupOrder],
   );
 
-  // Shared <ProjectNode> renderer. Hoisted as a callback so both the flat and
-  // grouped views render identical rows (and the group node can embed it).
-  // Bound to onContextMenu to open the project-grouping context menu.
+  // Shared <ProjectNode> renderer. Hoisted as a callback so the flat view,
+  // the grouped view, AND the pinned-projects section render identical rows
+  // (and the group node can embed it). Bound to onContextMenu to open the
+  // project-grouping context menu. `sortable` wraps the row in
+  // SortableProjectNode — false for pinned rows, which render outside the
+  // DndContext (pinning, not dragging, is how they got there).
   const renderProjectNode = useCallback(
-    (p: Project) => (
-      <SortableProjectNode key={p.id} projectId={p.id}>
+    (p: Project, sortable = true) => {
+      const node = (
         <ProjectNode
           project={p}
           sessions={sessionsByProject[p.id] ?? []}
@@ -487,8 +517,13 @@ function LeftBarBase({
           onContextSession={(session, x, y) => setCtxMenu({ session, x, y })}
           onContextProject={(x, y) => setProjectCtxMenu({ project: p, x, y })}
         />
-      </SortableProjectNode>
-    ),
+      );
+      return sortable ? (
+        <SortableProjectNode projectId={p.id}>{node}</SortableProjectNode>
+      ) : (
+        node
+      );
+    },
     [
       sessionsByProject, sessionsHasMoreByProject, sessionsTotalByProject,
       expandedProjects, activeProjectId, activeSessionId, activeSessionProjectId,
@@ -629,6 +664,40 @@ function LeftBarBase({
           (handled live in onDragOver). Group headers are droppable targets
           (not draggable) so dropping a project on a header moves it there. */}
       <div className="min-h-0 flex-1 overflow-y-auto">
+        {/* Pinned projects — the project-level counterpart of the pinned
+            sessions section below: pinned projects leave the flat list /
+            their group and live here until unpinned. Rows are full
+            ProjectNodes (expandable, context menu, delete) rendered OUTSIDE
+            the DndContext — dragging is the unpinned list's ordering tool,
+            pinning is this section's. Rendered ABOVE the pinned-sessions
+            section (project-before-thread mirrors the tree's hierarchy).
+            Hidden entirely when nothing is pinned. */}
+        {pinnedProjects.length > 0 && (
+          <div className="mb-2">
+            <button
+              onClick={() => setPinnedProjectsOpen(!pinnedProjectsOpen)}
+              className={cn(
+                "flex w-full items-center gap-1 rounded px-1 py-0.5 font-medium uppercase tracking-wide [font-size:var(--rp-fs-md)]",
+                "text-content-subtle transition-colors hover:bg-surface-hover/60",
+              )}
+            >
+              <IconChevronRight
+                size={12}
+                className={cn(
+                  "shrink-0 transition-transform",
+                  pinnedProjectsOpen && "rotate-90",
+                )}
+              />
+              <IconPin size={12} className="shrink-0 text-accent/70" />
+              {t("layout.pinnedProjectsSection", { n: pinnedProjects.length })}
+            </button>
+            {pinnedProjectsOpen && (
+              <ul className="mt-1 space-y-0.5">
+                {pinnedProjects.map((p) => renderProjectNode(p, false))}
+              </ul>
+            )}
+          </div>
+        )}
         {/* Pinned sessions — a global section collecting the pinned threads
             of every project (pinned rows leave their project's list and live
             here until unpinned). Rendered INSIDE the scroll region, above the
@@ -686,7 +755,7 @@ function LeftBarBase({
             <SortableContext items={sortableItems} strategy={verticalListSortingStrategy}>
               {projectView === "flat" ? (
                 <ul className="space-y-0.5">
-                  {activeProjects.map((p) => renderProjectNode(p))}
+                  {treeProjects.map((p) => renderProjectNode(p))}
                 </ul>
               ) : (
                 <ul className="space-y-0.5">
@@ -705,7 +774,13 @@ function LeftBarBase({
                       }
                       onDeleteGroup={() => {
                         // Removing a group nulls every member's group field.
-                        projs.forEach((p) => void setProjectGroup(p.id, null));
+                        // Look members up across ALL active projects, not just
+                        // the bucket — pinned members sit outside the tree but
+                        // keep their `group` for when they return, and leaving
+                        // it set would resurrect a ghost group on unpin.
+                        activeProjects
+                          .filter((p) => p.group === groupName)
+                          .forEach((p) => void setProjectGroup(p.id, null));
                       }}
                       onSetColor={(rgb) => setGroupColor(groupName, rgb)}
                       renderProject={renderProjectNode}
@@ -855,7 +930,7 @@ function LeftBarBase({
       <SessionContextMenu
         ctxMenu={ctxMenu}
         onClose={() => setCtxMenu(null)}
-        onRename={(s) => { setCtxMenu(null); setRenaming({ id: s.id, title: s.title }); }}
+        onRename={(s) => { setCtxMenu(null); setRenaming({ id: s.id, title: s.title, kind: "session" }); }}
         onCopyTitle={(s) => { void navigator.clipboard.writeText(s.title); setCtxMenu(null); }}
         onOpenFolder={(s) => {
           setCtxMenu(null);
@@ -869,11 +944,19 @@ function LeftBarBase({
       />
 
       {/* Right-click context menu for project rows. Hosts the "移动到分组"
-          actions (existing groups + 新建分组 + 移出分组). */}
+          actions (existing groups + 新建分组 + 移出分组), plus pin / rename. */}
       <ProjectContextMenu
         ctxMenu={projectCtxMenu}
         knownGroups={knownGroups}
         onClose={() => setProjectCtxMenu(null)}
+        onTogglePin={(p) => {
+          void setProjectPinned(p.id, p.pinnedAt == null);
+          setProjectCtxMenu(null);
+        }}
+        onRename={(p) => {
+          setProjectCtxMenu(null);
+          setRenaming({ id: p.id, title: p.name, kind: "project" });
+        }}
         onMoveToGroup={(pid, group) => {
           void setProjectGroup(pid, group);
           setProjectCtxMenu(null);
@@ -892,12 +975,16 @@ function LeftBarBase({
         }}
       />
 
-      {/* Rename dialog (shared by the context menu). */}
+      {/* Rename dialog (shared by the session / project context menus). */}
       <RenameDialog
         renaming={renaming}
         onClose={() => setRenaming(null)}
-        onSubmit={async (id, title) => {
-          await renameSession(id, title);
+        onSubmit={async (id, title, kind) => {
+          if (kind === "project") {
+            await renameProject(id, title);
+          } else {
+            await renameSession(id, title);
+          }
           setRenaming(null);
         }}
       />
@@ -1032,6 +1119,17 @@ function ProjectNode(props: ProjectNodeProps) {
           isDragging && "opacity-50",
         )}
       >
+        {/* Pinned marker — always-visible badge at the very LEFT edge (before
+            the chevron), mirroring SessionRow's pinned badge so a pinned
+            project reads as pinned at a glance. */}
+        {project.pinnedAt != null && (
+          <IconPinnedFilled
+            size={12}
+            className="shrink-0 text-accent/80"
+            aria-label={t("layout.pinned")}
+          />
+        )}
+
         {/* Expand / collapse toggle */}
         <button
           onClick={onToggleExpand}
@@ -1498,10 +1596,14 @@ function SessionContextMenu({
 
 /* ── Rename dialog ── */
 
+/** The rename target's kind drives the dialog copy and the dispatch target;
+ *  ids are unique across tables so `id` alone disambiguates on submit. */
+type RenameTarget = { id: string; title: string; kind: "session" | "project" };
+
 interface RenameDialogProps {
-  renaming: { id: string; title: string } | null;
+  renaming: RenameTarget | null;
   onClose: () => void;
-  onSubmit: (id: string, title: string) => Promise<void>;
+  onSubmit: (id: string, title: string, kind: "session" | "project") => Promise<void>;
 }
 
 function RenameDialog({ renaming, onClose, onSubmit }: RenameDialogProps) {
@@ -1516,24 +1618,28 @@ function RenameDialog({ renaming, onClose, onSubmit }: RenameDialogProps) {
   const trimmed = value.trim();
   const submit = () => {
     if (!renaming || !trimmed) return;
-    void onSubmit(renaming.id, trimmed);
+    void onSubmit(renaming.id, trimmed, renaming.kind);
   };
+
+  const isProject = renaming?.kind === "project";
 
   return (
     <Dialog.Root open={!!renaming} onOpenChange={(open) => { if (!open) onClose(); }}>
       <Dialog.Portal>
         <Dialog.Backdrop />
         <Dialog.Popup className="w-[420px] max-w-[90vw] p-4">
-          <Dialog.Title>{t("layout.renameThread")}</Dialog.Title>
+          <Dialog.Title>
+            {isProject ? t("layout.renameProject") : t("layout.renameThread")}
+          </Dialog.Title>
           <Dialog.Description className="mt-1">
-            {t("layout.renameThreadDesc")}
+            {isProject ? t("layout.renameProjectDesc") : t("layout.renameThreadDesc")}
           </Dialog.Description>
 
           <div className="mt-4">
             <Input
               value={value}
               autoFocus
-              placeholder={t("layout.threadTitlePlaceholder")}
+              placeholder={isProject ? t("layout.projectNamePlaceholder") : t("layout.threadTitlePlaceholder")}
               onChange={(e) => setValue((e.target as HTMLInputElement).value)}
               onKeyDown={(e) => {
                 if (e.key === "Enter") { e.preventDefault(); submit(); }
@@ -1754,13 +1860,16 @@ function SortableProjectNode({
 /* ── Project right-click context menu ──
  * Hosts the "移动到分组" actions: a flat list of existing groups (click to
  * assign), "新建分组…" (opens the group dialog), and "移出分组" (only when
- * the project is currently grouped). Plus an "open in file manager" entry
- * for parity with the session context menu. */
+ * the project is currently grouped). Plus pin (top of the menu, mirroring
+ * the session menu), rename, and an "open in file manager" entry for parity
+ * with the session context menu. */
 
 interface ProjectContextMenuProps {
   ctxMenu: { project: Project; x: number; y: number } | null;
   knownGroups: string[];
   onClose: () => void;
+  onTogglePin: (project: Project) => void;
+  onRename: (project: Project) => void;
   onMoveToGroup: (projectId: string, group: string) => void;
   onCreateGroup: (projectId: string) => void;
   onRemoveFromGroup: (projectId: string) => void;
@@ -1769,7 +1878,7 @@ interface ProjectContextMenuProps {
 
 function ProjectContextMenu({
   ctxMenu, knownGroups, onClose,
-  onMoveToGroup, onCreateGroup, onRemoveFromGroup, onOpenFolder,
+  onTogglePin, onRename, onMoveToGroup, onCreateGroup, onRemoveFromGroup, onOpenFolder,
 }: ProjectContextMenuProps) {
   const { t } = useI18n();
   const anchor = useMemo(() => {
@@ -1784,6 +1893,7 @@ function ProjectContextMenu({
 
   const project = ctxMenu?.project;
   const currentGroup = project?.group && project.group.length > 0 ? project.group : null;
+  const isPinned = project?.pinnedAt != null;
 
   const itemClass = cn(
     "flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs outline-none select-none",
@@ -1802,6 +1912,25 @@ function ProjectContextMenu({
               "transition-[transform,opacity] duration-100",
             )}
           >
+            <Menu.Item
+              onClick={() => project && onTogglePin(project)}
+              className={itemClass}
+            >
+              {isPinned ? (
+                <IconPinnedFilled size={14} className="shrink-0 text-accent" />
+              ) : (
+                <IconPin size={14} className="shrink-0" />
+              )}
+              {isPinned ? t("layout.unpin") : t("layout.pin")}
+            </Menu.Item>
+            <Menu.Item
+              onClick={() => project && onRename(project)}
+              className={itemClass}
+            >
+              <IconPencil size={14} className="shrink-0" />
+              {t("common.rename")}
+            </Menu.Item>
+            <Menu.Separator className="my-1 h-px bg-edge" />
             {/* Section: move to an existing group. Each row shows the group
                 name with a check on the currently-assigned one. */}
             {knownGroups.length > 0 && (

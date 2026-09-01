@@ -163,6 +163,12 @@ function migrate(database: Database): void {
   // pre-migration rows fall back to created_at ordering; new projects get
   // MAX(sort_order)+1 so they append to the end.
   addColumnIfMissing(database, "projects", "sort_order", "INTEGER NOT NULL DEFAULT 0");
+  // Pin timestamp for the left bar's pinned-projects section (NULL = not
+  // pinned). Pinned projects leave the flat list / their group and render
+  // above the tree, most recent pin first; sort_order is untouched so
+  // unpinning returns the project to its drag-order position. Mirrors
+  // sessions.pinned_at above.
+  addColumnIfMissing(database, "projects", "pinned_at", "INTEGER");
 
   // Composite index for paginated message reads (cursor on created_at). The
   // single-column idx_messages_session above serves the same queries but

@@ -46,6 +46,8 @@ import {
   DeleteProjectSchema,
   SetProjectGroupSchema,
   ReorderProjectsSchema,
+  PinProjectSchema,
+  RenameProjectSchema,
   SkillsListSchema,
   SkillsReadSchema,
   FileListDirSchema,
@@ -402,6 +404,22 @@ const HANDLERS: Record<string, RpcHandler> = {
     ProjectRepo.setGroup(input.id, input.group);
     const project = ProjectRepo.get(input.id);
     if (!project) throw new RpcError(`project not found after setGroup: ${input.id}`, 500);
+    return { project };
+  },
+
+  "project:pin": (raw) => {
+    const input = PinProjectSchema.parse(raw);
+    ProjectRepo.setPinned(input.id, input.pinned);
+    const project = ProjectRepo.get(input.id);
+    if (!project) throw new RpcError(`project not found after pin: ${input.id}`, 500);
+    return { project };
+  },
+
+  "project:rename": (raw) => {
+    const input = RenameProjectSchema.parse(raw);
+    ProjectRepo.rename(input.id, input.name);
+    const project = ProjectRepo.get(input.id);
+    if (!project) throw new RpcError(`project not found after rename: ${input.id}`, 500);
     return { project };
   },
 

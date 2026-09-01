@@ -41,6 +41,10 @@ const api = {
       ipcRenderer.invoke(IPC.PROJECT_SET_GROUP, input)) as RpcMap["project.setGroup"],
     reorder: ((input) =>
       ipcRenderer.invoke(IPC.PROJECT_REORDER, input)) as RpcMap["project.reorder"],
+    setPinned: ((input) =>
+      ipcRenderer.invoke(IPC.PROJECT_PIN, input)) as RpcMap["project.pin"],
+    rename: ((input) =>
+      ipcRenderer.invoke(IPC.PROJECT_RENAME, input)) as RpcMap["project.rename"],
   },
   session: {
     /** Cross-project session title search (Ctrl+K unified search). */
