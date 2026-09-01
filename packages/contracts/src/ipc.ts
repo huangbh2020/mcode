@@ -2189,8 +2189,12 @@ export interface GitWorktreeInfo {
   /** How many sessions reference this path as their worktreePath. Zero =
    *  orphan (its session was deleted) — safe to clean up. */
   referencedBy: number;
-  /** True when the worktree's HEAD is already contained in the MAIN
-   *  worktree's HEAD (changes merged back) — safe to clean up. */
+  /** True when NOTHING is left to merge: the worktree's HEAD is already
+   *  contained in the MAIN worktree's HEAD AND the tree is clean. The
+   *  ancestor probe alone is trivially true until someone commits inside
+   *  the worktree (it detaches at the main HEAD; agents edit without
+   *  committing), so a dirty tree must NOT read as merged — safe to clean
+   *  up only when both hold. */
   merged: boolean;
 }
 

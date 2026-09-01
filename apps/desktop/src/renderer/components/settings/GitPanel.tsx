@@ -7,6 +7,7 @@ import { useI18n, type MessageId } from "@renderer/lib/i18n/index.js";
 import { PanelHeader } from "./PanelHeader.js";
 import { SettingsSection } from "./SettingsSection.js";
 import { SettingRow } from "./SettingRow.js";
+import { WorktreeRootSetting } from "./WorktreeRootSetting.js";
 import type { GitDiffOpenMode } from "@contracts/ipc";
 import type { ReactNode } from "react";
 
@@ -37,6 +38,10 @@ const MODEL_NONE = "__none__";
  * `"cfg_abc:deepseek-v4-pro"`) in the settings table; at commit-generation
  * time it's split back into `customModelId` + `customModelRole` for the IPC
  * call.
+ *
+ * Also hosts the isolated-session worktree root directory setting (where
+ * managed worktrees are materialized) — it's a git-worktree concern, so it
+ * lives here rather than in GeneralPanel.
  */
 export function GitPanel() {
   const { t } = useI18n();
@@ -257,6 +262,19 @@ export function GitPanel() {
               {t("settings.git.noModelsFallback")}
             </p>
           )}
+        </SettingRow>
+      </SettingsSection>
+
+      {/* ── 工作树(隔离会话的托管根目录) ── */}
+      <SettingsSection
+        title={t("settings.git.worktreeSection")}
+        desc={t("settings.git.worktreeSectionDesc")}
+      >
+        <SettingRow
+          title={t("settings.git.worktreeRoot")}
+          desc={t("settings.git.worktreeRootDesc")}
+        >
+          <WorktreeRootSetting />
         </SettingRow>
       </SettingsSection>
     </section>

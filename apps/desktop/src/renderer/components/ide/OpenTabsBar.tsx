@@ -28,6 +28,7 @@ import {
 import { FileTypeIcon } from "@renderer/lib/fileIcon.js";
 import { TabBarChevronButton, TabBarOverflowMenu } from "../layout/TabBarChrome.js";
 import { useI18n } from "@renderer/lib/i18n/index.js";
+import { useCursorAnchor } from "@renderer/hooks/useCursorAnchor.js";
 
 /** Stable empty array so the selector never returns a fresh [] (Zustand
  *  Object.is rule — a new [] every render causes an infinite loop). */
@@ -567,17 +568,9 @@ export function FileTabContextMenu({
   const { t } = useI18n();
   // Virtual anchor at the cursor position so the menu opens exactly where the
   // user right-clicked (base-ui's ContextMenu.Trigger anchors to the element
-  // edge, not the cursor).
-  const anchor = useMemo(() => {
-    const x = ctxMenu?.x ?? 0;
-    const y = ctxMenu?.y ?? 0;
-    return {
-      getBoundingClientRect: () => ({
-        x, y, top: y, left: x, bottom: y, right: x, width: 0, height: 0,
-        toJSON: () => ({}),
-      }),
-    };
-  }, [ctxMenu?.x, ctxMenu?.y]);
+  // edge, not the cursor); frozen at the last coords during the exit
+  // transition so the closing popup doesn't flash at the top-left corner.
+  const anchor = useCursorAnchor(ctxMenu);
 
   const path = ctxMenu?.path;
 

@@ -60,13 +60,13 @@ export function WorktreeRootSetting() {
       >
         <IconFolder size={12} className="shrink-0 text-content-subtle" />
         <span className="truncate">
-          {root ?? t("settings.general.worktreeRootDefault")}
+          {root ?? t("settings.git.worktreeRootDefault")}
         </span>
       </div>
       <div className="flex items-center gap-2">
         <Button variant="outline" size="sm" onClick={browse} disabled={busy}>
           <IconFolder size={12} />
-          {t("settings.general.worktreeRootBrowse")}
+          {t("settings.git.worktreeRootBrowse")}
         </Button>
         {root && (
           <Button
@@ -75,7 +75,7 @@ export function WorktreeRootSetting() {
             onClick={() => void save(null)}
             disabled={busy}
           >
-            {t("settings.general.worktreeRootReset")}
+            {t("settings.git.worktreeRootReset")}
           </Button>
         )}
       </div>

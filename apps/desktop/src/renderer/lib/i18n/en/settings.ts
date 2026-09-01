@@ -31,11 +31,6 @@ export const en = {
   "settings.general.sectionDisplay": "Display & Layout",
   "settings.general.language": "Interface language",
   "settings.general.languageDesc": "Switch the display language of the app. Applies immediately.",
-  "settings.general.worktreeRoot": "Worktree root directory",
-  "settings.general.worktreeRootDesc": "Isolated-session worktrees are created under this directory (default: the app data directory, usually on the system drive). Only affects future worktrees; existing ones keep their path.",
-  "settings.general.worktreeRootDefault": "Default (app data directory)",
-  "settings.general.worktreeRootBrowse": "Browse…",
-  "settings.general.worktreeRootReset": "Reset to default",
   "settings.general.languageZh": "简体中文",
   "settings.general.languageEn": "English",
 
@@ -322,7 +317,7 @@ export const en = {
   "settings.customModels.thinkingValue": "Mapped value",
 
   // ── GitPanel ──
-  "settings.git.desc": "Configure how diffs open, plus AI-assisted commit message generation and merge conflict resolution.",
+  "settings.git.desc": "Configure how diffs open, AI-assisted commit message generation and merge conflict resolution, plus the isolated-session worktree root directory.",
   "settings.git.diffSection": "Diff view",
   "settings.git.diffSectionDesc": "Where the diff viewer opens when you click a modified file in the Git panel. Dialog mode supports multiple tabs at once.",
   "settings.git.diffMode": "Open in",
@@ -342,6 +337,13 @@ export const en = {
   "settings.git.resolveModel": "Resolution model",
   "settings.git.resolveModelDesc": "The specific model used to resolve merge conflicts. Add models under \"Models\" first. There is no default model — AI conflict resolution is unavailable until one is picked.",
   "settings.git.noModelsFallback": "No models available — add one under \"Models\" first.",
+  "settings.git.worktreeSection": "Worktrees",
+  "settings.git.worktreeSectionDesc": "Settings for isolated-session git worktrees (managed directories).",
+  "settings.git.worktreeRoot": "Worktree root directory",
+  "settings.git.worktreeRootDesc": "Isolated-session worktrees are created under this directory (default: the app data directory, usually on the system drive). Only affects future worktrees; existing ones keep their path.",
+  "settings.git.worktreeRootDefault": "Default (app data directory)",
+  "settings.git.worktreeRootBrowse": "Browse…",
+  "settings.git.worktreeRootReset": "Reset to default",
 
   // ── LspLanguagesPanel ──
   "settings.lsp.title": "Language servers",

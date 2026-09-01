@@ -208,10 +208,16 @@ export async function listWorktrees(repoPath: string): Promise<GitWorktreeInfo[]
           .then((st) => st.files.length > 0)
           .catch(() => false);
       }
-      // "Merged" = this worktree's HEAD is already contained in the MAIN
-      // worktree's HEAD. Skipped for the main entry itself (idx 0).
+      // "Merged" = NOTHING left to merge: HEAD contained in the MAIN
+      // worktree's HEAD AND the tree clean. The ancestor probe alone is
+      // trivially true in the dominant flow (worktrees detach at the main
+      // HEAD and the agent edits WITHOUT committing, so HEADs stay equal
+      // until merge-back's auto-commit) — it would badge a tree full of
+      // unmerged uncommitted work as "merged", and the panel renders merged
+      // INSTEAD of dirty, i.e. a green "safe to delete" signal. Skipped for
+      // the main entry itself (idx 0).
       const merged =
-        idx > 0 && !missing && e.head
+        idx > 0 && !missing && e.head && !dirty
           ? await isAncestor(git, e.head, mainHead).catch(() => false)
           : false;
       return {

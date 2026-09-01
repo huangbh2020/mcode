@@ -36,6 +36,7 @@ import {
   IconList,
   IconCategoryFilled,
   IconArrowRight,
+  IconArrowsExchange,
   IconPalette,
   IconSearch,
   IconPin,
@@ -57,6 +58,7 @@ import { WorktreeMergeBackDialog, WorktreeRemoveDialog } from "@renderer/compone
 import { hexToTriplet, tripletToHex } from "@renderer/lib/colorUtils.js";
 import { formatRelativeTime, formatFullTime } from "@renderer/lib/time.js";
 import { useSessionStore } from "@renderer/stores/sessionStore.js";
+import { useCursorAnchor } from "@renderer/hooks/useCursorAnchor.js";
 import type { Project, Session } from "@contracts/session";
 import { useI18n, type MessageId } from "@renderer/lib/i18n/index.js";
 
@@ -564,6 +566,7 @@ function LeftBarBase({
           onToggleWorktree={(path) => toggleWorktreeExpanded(path)}
           onNewSessionInWorktree={(path) => void startSession(p.id, { worktreePath: path })}
           onRemoveWorktree={(path) => setWtRemove({ repoPath: p.path, worktreePath: path })}
+          onMergeWorktree={(path) => setWtMerge({ repoPath: p.path, worktreePath: path })}
           onContextWorktree={(path, x, y) => setWtCtxMenu({ projectId: p.id, worktreePath: path, x, y })}
           registerNode={registerNode}
           onContextSession={(session, x, y) => setCtxMenu({ session, x, y })}
@@ -1202,6 +1205,9 @@ interface ProjectNodeProps {
   onNewSessionInWorktree: (worktreePath: string) => void;
   /** Remove the worktree directory (guarded confirm dialog at bar level). */
   onRemoveWorktree: (worktreePath: string) => void;
+  /** Merge the worktree directory's work back into the local branch
+   *  (preview dialog at bar level — one shared checkout, one merge). */
+  onMergeWorktree: (worktreePath: string) => void;
   onContextWorktree: (worktreePath: string, x: number, y: number) => void;
   /** Register a session row's DOM node for scroll-into-view. */
   registerNode: (id: string, el: HTMLLIElement | null) => void;
@@ -1231,7 +1237,7 @@ function ProjectNode(props: ProjectNodeProps) {
     onToggleExpand, onNewSession, onLoadMore, onSelectSession,
     onDelete, onArchiveSession, onDeleteSession, onTogglePinSession,
     onNewWorktreeHere, worktreeView, onToggleWorktreeView, worktreeNames, expandedWorktrees,
-    onToggleWorktree, onNewSessionInWorktree, onRemoveWorktree, onContextWorktree,
+    onToggleWorktree, onNewSessionInWorktree, onRemoveWorktree, onMergeWorktree, onContextWorktree,
     registerNode, onContextSession, onContextProject,
     sortableRef, sortableStyle, sortableListeners, sortableAttributes, isDragging,
   } = props;
@@ -1343,22 +1349,22 @@ function ProjectNode(props: ProjectNodeProps) {
         </button>
 
         {/* Worktree view toggle — only for projects that HAVE worktree
-            threads. Local list and worktree groups never mix: the fork flips
-            the expanded list between the two views. Hidden (opacity) while
-            idle so the row stays quiet; accent + always visible while the
-            worktree view is ON so the flipped state is discoverable. */}
+            threads. Local list and worktree groups never mix: the exchange
+            arrows flip the expanded list between the two views. Hover-only
+            in both states so the row stays quiet; the ON state keeps an
+            accent tint, and the flipped state is evident from the expanded
+            worktree groups themselves. */}
         {worktreeGroups.length > 0 && (
           <button
             onClick={() => onToggleWorktreeView(!worktreeView)}
             className={cn(
-              "flex shrink-0 items-center rounded px-1 transition-colors",
-              worktreeView
-                ? "text-accent"
-                : "text-content-subtle opacity-0 hover:text-accent group-hover:opacity-100",
+              "flex shrink-0 items-center rounded px-1 opacity-0 transition-colors",
+              "group-hover:opacity-100 hover:text-accent",
+              worktreeView ? "text-accent" : "text-content-subtle",
             )}
             title={worktreeView ? t("layout.showLocalThreads") : t("layout.showWorktreeThreads")}
           >
-            <IconGitFork size={12} />
+            <IconArrowsExchange size={12} />
           </button>
         )}
 
@@ -1393,11 +1399,13 @@ function ProjectNode(props: ProjectNodeProps) {
                   <WorktreeGroupNode
                     key={key}
                     worktreePath={group.path}
+                    repoPath={project.path}
                     displayName={worktreeDisplayName(group.path, worktreeNames)}
                     sessions={group.sessions}
                     expanded={!!expandedWorktrees[key]}
                     onToggle={() => onToggleWorktree(group.path)}
                     onNewSession={() => onNewSessionInWorktree(group.path)}
+                    onMergeBack={() => onMergeWorktree(group.path)}
                     onRemove={() => onRemoveWorktree(group.path)}
                     onContext={(x, y) => onContextWorktree(group.path, x, y)}
                     renderSession={renderSessionRow}
@@ -1693,24 +1701,50 @@ function SessionRow({
 
 interface WorktreeGroupNodeProps {
   worktreePath: string;
+  /** Owning project root — the repo the worktree was created from; anchors
+   *  both the merge-eligibility probe and the merge-back dialog. */
+  repoPath: string;
   displayName: string;
   sessions: Session[];
   expanded: boolean;
   onToggle: () => void;
   onNewSession: () => void;
+  onMergeBack: () => void;
   onRemove: () => void;
   onContext: (x: number, y: number) => void;
   renderSession: (s: Session, inWorktreeGroup?: boolean) => React.ReactNode;
 }
 
 function WorktreeGroupNode({
-  worktreePath, displayName, sessions, expanded,
-  onToggle, onNewSession, onRemove, onContext, renderSession,
+  worktreePath, repoPath, displayName, sessions, expanded,
+  onToggle, onNewSession, onMergeBack, onRemove, onContext, renderSession,
 }: WorktreeGroupNodeProps) {
   const { t } = useI18n();
+
+  // ── Merge-back eligibility — probed ON HOVER, not polled: the button only
+  // exists while the row is being pointed at, so an idle group costs nothing.
+  // "Has work" uses the same probe as the Titlebar merge button: dirty files
+  // OR commits not contained in the main checkout's HEAD (worktreeList's
+  // `merged` flag is the ancestor probe). A clean, fully-merged worktree
+  // renders no button; re-probing happens on every mouseenter, so a merge
+  // or removal that clears the work is reflected the next time the user
+  // hovers (leaving and returning is the natural gesture after a dialog).
+  const [mergeable, setMergeable] = useState(false);
+  const probeMerge = useCallback(async () => {
+    try {
+      const { worktrees } = await api.git.worktreeList({ repoPath });
+      const target = normWorktreeKey(worktreePath);
+      const mine = worktrees.find((w) => normWorktreeKey(w.path) === target);
+      setMergeable(!!mine && (mine.dirty || !mine.merged));
+    } catch {
+      setMergeable(false);
+    }
+  }, [repoPath, worktreePath]);
+
   return (
     <li>
       <div
+        onMouseEnter={() => void probeMerge()}
         onContextMenu={(e) => {
           e.preventDefault();
           onContext(e.clientX, e.clientY);
@@ -1741,6 +1775,24 @@ function WorktreeGroupNode({
             {sessions.length}
           </span>
         </button>
+
+        {/* Merge back into the local branch — hover-only AND gated on the
+            hover probe: shown just while the directory actually has unmerged
+            work (dirty files or new commits), so a clean/fully-merged tree
+            stays quiet. Accent tint marks "work waiting to land"; opens the
+            same preview dialog as the context-menu entry. */}
+        {mergeable && (
+          <button
+            onClick={onMergeBack}
+            className={cn(
+              "flex shrink-0 items-center rounded px-1 text-accent opacity-0 transition-colors",
+              "group-hover:opacity-100",
+            )}
+            title={t("layout.mergeWorktreeBack")}
+          >
+            <IconGitMerge size={12} />
+          </button>
+        )}
 
         {/* New session bound to this worktree — hover only, mirrors the
             project row's "+" button. */}
@@ -1877,16 +1929,8 @@ function SessionContextMenu({
 }: SessionContextMenuProps) {
   const { t } = useI18n();
   // Virtual anchor pinned to the cursor coords so the popup opens where the
-  // user right-clicked (base-ui's Menu.Positioner accepts a VirtualElement).
-  const anchor = useMemo(() => {
-    const x = ctxMenu?.x ?? 0;
-    const y = ctxMenu?.y ?? 0;
-    return {
-      getBoundingClientRect: () => ({
-        x, y, top: y, left: x, bottom: y, right: x, width: 0, height: 0, toJSON: () => ({}),
-      }),
-    };
-  }, [ctxMenu?.x, ctxMenu?.y]);
+  // user right-clicked; frozen at the last coords during the exit transition.
+  const anchor = useCursorAnchor(ctxMenu);
 
   const session = ctxMenu?.session;
   const isPinned = !!session?.pinnedAt;
@@ -1988,15 +2032,7 @@ function WorktreeContextMenu({
 }: WorktreeContextMenuProps) {
   const { t } = useI18n();
   // Virtual anchor pinned to the cursor coords (same as SessionContextMenu).
-  const anchor = useMemo(() => {
-    const x = ctxMenu?.x ?? 0;
-    const y = ctxMenu?.y ?? 0;
-    return {
-      getBoundingClientRect: () => ({
-        x, y, top: y, left: x, bottom: y, right: x, width: 0, height: 0, toJSON: () => ({}),
-      }),
-    };
-  }, [ctxMenu?.x, ctxMenu?.y]);
+  const anchor = useCursorAnchor(ctxMenu);
 
   const worktreePath = ctxMenu?.worktreePath;
 
@@ -2360,15 +2396,7 @@ function ProjectContextMenu({
   onTogglePin, onRename, onMoveToGroup, onCreateGroup, onRemoveFromGroup, onOpenFolder,
 }: ProjectContextMenuProps) {
   const { t } = useI18n();
-  const anchor = useMemo(() => {
-    const x = ctxMenu?.x ?? 0;
-    const y = ctxMenu?.y ?? 0;
-    return {
-      getBoundingClientRect: () => ({
-        x, y, top: y, left: x, bottom: y, right: x, width: 0, height: 0, toJSON: () => ({}),
-      }),
-    };
-  }, [ctxMenu?.x, ctxMenu?.y]);
+  const anchor = useCursorAnchor(ctxMenu);
 
   const project = ctxMenu?.project;
   const currentGroup = project?.group && project.group.length > 0 ? project.group : null;

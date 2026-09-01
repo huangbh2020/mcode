@@ -34,11 +34,6 @@ export const zh = {
   "settings.general.sectionDisplay": "显示与布局",
   "settings.general.language": "界面语言",
   "settings.general.languageDesc": "切换应用界面显示语言，修改后立即生效。",
-  "settings.general.worktreeRoot": "工作树根目录",
-  "settings.general.worktreeRootDesc": "隔离会话的工作树创建于此目录(默认在应用数据目录,通常位于系统盘)。仅对之后新建的工作树生效;已创建的不受影响。",
-  "settings.general.worktreeRootDefault": "默认(应用数据目录)",
-  "settings.general.worktreeRootBrowse": "浏览…",
-  "settings.general.worktreeRootReset": "恢复默认",
   "settings.general.languageZh": "简体中文",
   "settings.general.languageEn": "English",
 
@@ -325,7 +320,7 @@ export const zh = {
   "settings.customModels.thinkingValue": "映射值",
 
   // ── GitPanel ──
-  "settings.git.desc": "配置差异查看方式,以及 AI 辅助的提交信息生成与合并冲突解决。",
+  "settings.git.desc": "配置差异查看方式、AI 辅助的提交信息生成与合并冲突解决,以及隔离会话的工作树根目录。",
   "settings.git.diffSection": "差异打开方式",
   "settings.git.diffSectionDesc": "点击 Git 面板中的修改文件时,差异查看器的打开位置。弹框模式支持同时打开多个标签。",
   "settings.git.diffMode": "打开方式",
@@ -345,6 +340,13 @@ export const zh = {
   "settings.git.resolveModel": "解决模型",
   "settings.git.resolveModelDesc": "选择用于解决合并冲突的具体模型。需要先在「模型配置」中添加模型。没有默认模型,未选择则无法使用 AI 解决冲突。",
   "settings.git.noModelsFallback": "暂无可用模型,请先在「模型配置」中添加。",
+  "settings.git.worktreeSection": "工作树",
+  "settings.git.worktreeSectionDesc": "隔离会话的 git 工作树(托管目录)相关设置。",
+  "settings.git.worktreeRoot": "工作树根目录",
+  "settings.git.worktreeRootDesc": "隔离会话的工作树创建于此目录(默认在应用数据目录,通常位于系统盘)。仅对之后新建的工作树生效;已创建的不受影响。",
+  "settings.git.worktreeRootDefault": "默认(应用数据目录)",
+  "settings.git.worktreeRootBrowse": "浏览…",
+  "settings.git.worktreeRootReset": "恢复默认",
 
   // ── LspLanguagesPanel ──
   "settings.lsp.title": "语言服务器",
