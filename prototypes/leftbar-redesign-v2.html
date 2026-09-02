@@ -1,0 +1,441 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Mcode 左侧栏 v2 · 分层树减法版</title>
+<style>
+/* ══════════════════════════════════════════════════════════════
+   左侧栏 v2 —— 「分层树 · 减法版」
+   保留 v1 方案A的骨架:层级感 + worktree 泳道常驻;
+   砍掉所有装饰性元素。基线即推荐态,右侧开关可实时拨动可选元素。
+   ══════════════════════════════════════════════════════════════ */
+:root{
+  --surface:#1a1d24;
+  --surface-muted:#2c313c;
+  --surface-hover:#3a404e;
+  --content:#e7e8ec;
+  --content-muted:#bcbfc6;
+  --content-subtle:#9ea2ab;
+  --edge:#2d3340;
+  --accent:#10b981;
+  --danger:#f87171;
+  --amber:#d97706;
+  --page-bg:#111318;
+  --ghost:#14171d;
+}
+body.light{
+  --surface:#ffffff;--surface-muted:#f4f4f5;--surface-hover:#e4e4e7;
+  --content:#09090b;--content-muted:#3f3f46;--content-subtle:#71717a;
+  --edge:#e4e4e7;--accent:#059669;--danger:#dc2626;--amber:#b45309;
+  --page-bg:#eceef1;--ghost:#f6f7f9;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{
+  font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Segoe UI","Microsoft YaHei",sans-serif;
+  background:var(--page-bg);color:var(--content);
+  display:flex;flex-direction:column;overflow:hidden;transition:background .25s;
+}
+
+/* ── 页面框架 ── */
+.page-head{flex:none;display:flex;align-items:center;gap:16px;padding:14px 22px 10px}
+.page-head h1{font-size:15px;font-weight:650}
+.page-head .sub{font-size:12px;color:var(--content-subtle);margin-top:2px}
+#themeBtn{
+  margin-left:auto;border:1px solid var(--edge);background:var(--surface);color:var(--content-subtle);
+  width:30px;height:30px;border-radius:8px;cursor:pointer;font-size:14px;
+}
+#themeBtn:hover{color:var(--content);background:var(--surface-hover)}
+.stage{flex:1;min-height:0;display:flex;gap:20px;padding:4px 22px 18px;align-items:stretch;justify-content:center}
+
+/* 应用外框 */
+.app-frame{flex:none;display:flex;border-radius:14px;overflow:hidden;border:1px solid var(--edge);background:var(--surface);box-shadow:0 18px 50px rgba(0,0,0,.35)}
+.ghost-center{width:300px;background:var(--ghost);border-left:1px solid var(--edge);position:relative}
+.ghost-center::before{content:"聊天 / 编辑区(不动)";position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:var(--content-subtle);font-size:12px;opacity:.6;letter-spacing:2px}
+
+/* ── 右侧面板 ── */
+.panel{width:330px;flex:none;display:flex;flex-direction:column;gap:12px;overflow-y:auto;font-size:12.5px;line-height:1.6}
+.card{background:var(--surface);border:1px solid var(--edge);border-radius:14px;padding:14px 16px}
+.card h2{font-size:13px;font-weight:700;display:flex;align-items:center;gap:7px;margin-bottom:8px}
+.card h2 .n{font-size:10px;font-weight:800;color:var(--content-subtle)}
+.cut-list{list-style:none}
+.cut-list li{padding:4px 0;border-bottom:1px dashed color-mix(in srgb,var(--edge) 70%,transparent);color:var(--content-subtle)}
+.cut-list li:last-child{border-bottom:0}
+.cut-list b{color:var(--content-muted);font-weight:600;text-decoration:line-through;text-decoration-color:color-mix(in srgb,var(--danger) 55%,transparent)}
+.cut-list .to{color:var(--content-muted)}
+.opt-list{display:flex;flex-direction:column;gap:2px}
+.opt{display:flex;align-items:flex-start;gap:9px;padding:6px 4px;border-radius:8px;cursor:pointer}
+.opt:hover{background:var(--surface-muted)}
+.opt input{margin-top:2.5px;accent-color:var(--accent);width:14px;height:14px;flex:none;cursor:pointer}
+.opt .t{flex:1}
+.opt .t .name{font-weight:600}
+.opt .t .name .rec{font-size:9.5px;font-weight:800;color:var(--accent);border:1px solid color-mix(in srgb,var(--accent) 45%,transparent);border-radius:99px;padding:1px 6px;margin-left:6px;vertical-align:1px}
+.opt .t .d{font-size:11px;color:var(--content-subtle)}
+.verdict{font-size:11.5px;color:var(--content-subtle);border-radius:9px;padding:9px 11px;background:color-mix(in srgb,var(--accent) 7%,var(--surface));border:1px solid color-mix(in srgb,var(--accent) 22%,transparent)}
+
+/* ══════════ 侧栏 mock ══════════ */
+.lb{width:272px;flex:none;display:flex;flex-direction:column;background:var(--surface);font-size:12px}
+.lb *{user-select:none}
+.traffic{flex:none;height:34px;display:flex;align-items:center;gap:7px;padding:0 14px}
+.traffic i{width:12px;height:12px;border-radius:50%}
+.traffic i:nth-child(1){background:#ff5f57}.traffic i:nth-child(2){background:#febc2e}.traffic i:nth-child(3){background:#28c840}
+.lb-scroll{flex:1;min-height:0;overflow-y:auto;padding:0 8px 8px}
+.lb-scroll::-webkit-scrollbar{width:8px}
+.lb-scroll::-webkit-scrollbar-thumb{background:var(--surface-hover);border-radius:4px;border:2px solid var(--surface)}
+.ic{width:13px;height:13px;flex:none;stroke:currentColor;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.ic.s{width:11px;height:11px}.ic.xs{width:10px;height:10px}
+.chev{transition:transform .15s}
+/* 折叠:头部行携带 .open,兄弟内容区显示/隐藏(点内容行不会冒泡折叠) */
+.rkids,.lbody{display:none}
+.ph.open+.rkids,.row.open+.rkids,.lhead.open+.lbody{display:block}
+.ph.open .chev,.row.open .chev,.lhead.open .chev{transform:rotate(90deg)}
+
+/* 现状样式的快捷入口(不动) */
+.quick{padding:2px 8px 8px;display:flex;flex-direction:column;gap:2px}
+.qa{display:flex;align-items:center;gap:8px;padding:6px 6px;border-radius:8px;color:var(--content-muted);font-weight:500}
+.qa:hover{background:color-mix(in srgb,var(--accent) 10%,transparent);color:var(--accent)}
+.qa kbd{margin-left:auto;font-family:inherit;font-size:10px;padding:1px 5px;border-radius:4px;border:1px solid var(--edge);background:var(--surface-muted);color:var(--content-subtle)}
+
+/* 小节头 */
+.lb-header{display:flex;align-items:center;justify-content:space-between;padding:2px 9px 4px}
+.lb-header h4{font-size:10.5px;font-weight:600;text-transform:uppercase;letter-spacing:.8px;color:var(--content-subtle)}
+
+/* 置顶(素) */
+.pinsec{margin-bottom:2px}
+.pinsec .ph{
+  display:flex;align-items:center;gap:5px;padding:3px 6px;cursor:pointer;border-radius:6px;
+  font-size:10.5px;font-weight:600;letter-spacing:.6px;color:var(--content-subtle);
+}
+.pinsec .ph:hover{background:var(--surface-hover)}
+.pinsec .ph .n{opacity:.7}
+
+/* 行通用 */
+.row{position:relative;display:flex;align-items:center;gap:7px;padding:4px 7px;border-radius:7px;cursor:pointer;color:var(--content-muted)}
+.row:hover{background:color-mix(in srgb,var(--surface-hover) 55%,transparent)}
+.row.on{background:var(--surface-hover);color:var(--content)}
+.row.on::before{content:"";position:absolute;left:0;top:5px;bottom:5px;width:2px;border-radius:2px;background:var(--accent)}
+.row .ttl{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px}
+.srow{margin-left:13px}
+.acts{display:flex;gap:1px;opacity:0;flex:none}
+.row:hover .acts{opacity:1}
+.abtn{display:flex;align-items:center;justify-content:center;width:19px;height:19px;border-radius:5px;border:0;background:transparent;color:var(--content-subtle);cursor:pointer}
+.abtn:hover{background:var(--surface-hover);color:var(--content)}
+.abtn.danger:hover{color:var(--danger)}
+.abtn.go:hover{color:var(--accent)}
+.stime{flex:none;font-size:10px;color:color-mix(in srgb,var(--content-subtle) 72%,transparent)}
+.badge{flex:none;min-width:15px;padding:1px 4px;border-radius:99px;text-align:center;font-size:9.5px;font-weight:700;line-height:1.45;background:color-mix(in srgb,var(--accent) 85%,transparent);color:#fff}
+.spin{width:11px;height:11px;flex:none;border-radius:50%;border:2px solid color-mix(in srgb,var(--accent) 30%,transparent);border-top-color:var(--accent);animation:spin .8s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* 色点 */
+.pd{width:7px;height:7px;border-radius:50%;flex:none}
+.pd.claude{background:#D97757}.pd.pi{background:#A78BFA}
+.pdot{width:7px;height:7px;border-radius:50%;flex:none}
+.avatar{display:none;width:18px;height:18px;border-radius:5px;align-items:center;justify-content:center;font-size:9.5px;font-weight:750;color:#fff;flex:none}
+.lb.opt-avatar .avatar{display:flex}
+.lb.opt-avatar .pdot{display:none}
+
+/* 项目行 */
+.cnt{display:none;font-size:10px;color:var(--content-subtle);flex:none}
+.lb.opt-count .cnt{display:inline}
+
+/* 时间分组(默认关) */
+.tlabel{display:none;font-size:9.5px;font-weight:700;letter-spacing:.7px;color:var(--content-subtle);opacity:.75;padding:7px 0 2px 20px}
+.lb.opt-timegroup .tlabel{display:block}
+
+/* 泳道 */
+.lane{margin:3px 0 3px 13px;border:1px solid var(--edge);border-radius:9px;background:color-mix(in srgb,var(--surface-muted) 30%,var(--surface));overflow:hidden}
+.lane .lhead{display:flex;align-items:center;gap:6px;padding:4px 6px;cursor:pointer}
+.lane .lhead:hover{background:color-mix(in srgb,var(--surface-hover) 35%,transparent)}
+.lane .lname{flex:1;min-width:0;font-size:11.5px;font-weight:600;color:var(--content-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.lane .lhead .ic.fork{color:var(--accent)}
+.lane .lbody{border-top:1px solid color-mix(in srgb,var(--edge) 60%,transparent);padding:2px 4px 3px}
+.lane .lbody .row{margin-left:0}
+.bchip{display:none;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:9.5px;line-height:1;padding:2.5px 6px;border-radius:99px;background:var(--surface-hover);color:var(--content-subtle);flex:none}
+.lb.opt-branch .bchip{display:inline-block}
+.sdot{display:none;width:6px;height:6px;border-radius:50%;flex:none}
+.lb.opt-dot .sdot{display:inline-block}
+.sdot.dirty{background:var(--amber)}
+.sdot.merged{background:color-mix(in srgb,var(--accent) 45%,var(--content-subtle))}
+
+/* 分组行 */
+.grp{display:flex;align-items:center;gap:5px;padding:4px 7px;border-radius:7px;cursor:pointer;font-size:11px;font-weight:600;color:var(--content-subtle)}
+.grp:hover{background:color-mix(in srgb,var(--surface-hover) 55%,transparent)}
+.grp .gdot{width:7px;height:7px;border-radius:2px;background:#8b5cf6}
+.grp .n{font-weight:400;opacity:.7}
+
+/* 归档入口(素) */
+.archline{display:flex;align-items:center;gap:6px;margin-top:8px;padding:4px 7px;border-radius:7px;font-size:11px;color:var(--content-subtle);cursor:pointer}
+.archline:hover{background:var(--surface-hover);color:var(--content)}
+.archline .n{margin-left:auto;font-size:10px}
+
+/* footer(现状) */
+.footer{flex:none;display:flex;align-items:center;gap:4px;margin:6px 8px 0;border-top:1px solid var(--edge);padding:7px 2px 4px}
+.footer .st{display:flex;align-items:center;gap:7px;flex:1;padding:4px 6px;border-radius:6px;color:var(--content-subtle);cursor:pointer}
+.footer .st:hover{background:var(--surface-hover);color:var(--content)}
+.footer .sq{display:flex;align-items:center;justify-content:center;width:26px;height:26px;border-radius:6px;color:var(--content-subtle);cursor:pointer;border:0;background:transparent}
+.footer .sq:hover{background:var(--surface-hover);color:var(--content)}
+.hint{font-size:10.5px;color:var(--content-subtle);text-align:center;padding:2px 0 6px}
+</style>
+</head>
+<body>
+
+<svg width="0" height="0" style="position:absolute"><defs>
+  <symbol id="i-chev" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></symbol>
+  <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/></symbol>
+  <symbol id="i-fork" viewBox="0 0 24 24"><circle cx="6" cy="5" r="2"/><circle cx="18" cy="5" r="2"/><circle cx="6" cy="19" r="2"/><path d="M6 7v2a4 4 0 0 0 4 4h4a4 4 0 0 0 4-4V7M6 13v4"/></symbol>
+  <symbol id="i-merge" viewBox="0 0 24 24"><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="18" r="2.5"/><path d="M6 8.5v7M6 12c6 0 6 2.5 9.5 4.5"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+  <symbol id="i-pin" viewBox="0 0 24 24"><path d="M9 4h6l-1 6 4 3H6l4-3-1-6zM12 13v7"/></symbol>
+  <symbol id="i-archive" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="4" rx="1"/><path d="M5 8v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8M10 12h4"/></symbol>
+  <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 7h16M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2M6 7l1 13a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1l1-13M10 11v6M14 11v6"/></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></symbol>
+  <symbol id="i-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2l1.2 2.6 2.8-.6.4 2.9 2.9.4-.6 2.8L21 12l-2.3 1.9.6 2.8-2.9.4-.4 2.9-2.8-.6L12 22l-1.2-2.6-2.8.6-.4-2.9-2.9-.4.6-2.8L3 12l2.3-1.9-.6-2.8 2.9-.4.4-2.9 2.8.6L12 2z"/></symbol>
+  <symbol id="i-list" viewBox="0 0 24 24"><path d="M8 6h13M8 12h13M8 18h13M3.5 6h.01M3.5 12h.01M3.5 18h.01"/></symbol>
+  <symbol id="i-cat" viewBox="0 0 24 24"><path d="M4 5h16v14H4zM4 12h16"/></symbol>
+  <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></symbol>
+  <symbol id="i-focus" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3"/></symbol>
+</defs></svg>
+
+<header class="page-head">
+  <div>
+    <h1>左侧栏 v2 · 分层树减法版</h1>
+    <div class="sub">骨架保留 v1 方案A(层级 + 泳道常驻),砍掉全部装饰;右侧开关实时拨动仍拿不准的元素 —— v1 原型在同目录 leftbar-redesign.html</div>
+  </div>
+  <button id="themeBtn">🌙</button>
+</header>
+
+<main class="stage">
+  <!-- ════════ 侧栏 mock ════════ -->
+  <section class="app-frame">
+    <div class="lb" id="lb">
+      <div class="traffic"><i></i><i></i><i></i></div>
+
+      <!-- 快捷入口:维持现状,不在本次改动范围 -->
+      <div class="quick">
+        <div class="qa"><svg class="ic"><use href="#i-plus"/></svg>新建会话<kbd>⌘N</kbd></div>
+        <div class="qa"><svg class="ic"><use href="#i-search"/></svg>搜索<kbd>⌘K</kbd></div>
+      </div>
+
+      <div class="lb-header">
+        <h4>项目</h4>
+        <div style="display:flex;gap:2px;color:var(--content-subtle)">
+          <svg class="ic s"><use href="#i-list"/></svg>
+          <svg class="ic s"><use href="#i-cat"/></svg>
+          <svg class="ic s"><use href="#i-plus"/></svg>
+        </div>
+      </div>
+
+      <div class="lb-scroll">
+        <!-- 置顶:素小节,无卡片盒 -->
+        <div class="pinsec">
+          <div class="ph open" data-toggle>
+            <svg class="ic xs chev"><use href="#i-chev"/></svg>
+            置顶 <span class="n">3</span>
+          </div>
+          <div class="rkids">
+            <div class="row">
+              <span class="pdot" style="background:#3b82f6"></span>
+              <span class="avatar" style="background:#3b82f6">C</span>
+              <span class="ttl" style="font-weight:600">cc-gui</span>
+              <span class="acts"><button class="abtn"><svg class="ic s"><use href="#i-pin"/></svg></button></span>
+            </div>
+            <div class="row">
+              <span class="pd claude"></span>
+              <span class="ttl">worktree 隔离会话设计</span>
+              <span class="stime">2 小时</span>
+            </div>
+            <div class="row">
+              <span class="pd pi"></span>
+              <span class="ttl">里程碑复盘</span>
+              <span class="stime">昨天</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- cc-gui 展开 -->
+        <div>
+          <div class="row open" data-toggle>
+            <svg class="ic xs chev"><use href="#i-chev"/></svg>
+            <span class="pdot" style="background:#3b82f6"></span>
+            <span class="avatar" style="background:#3b82f6">C</span>
+            <span class="ttl" style="font-weight:600">cc-gui</span>
+            <span class="cnt">4</span>
+            <span class="acts"><button class="abtn go" title="在此项目下新建会话"><svg class="ic s"><use href="#i-plus"/></svg></button></span>
+          </div>
+          <div class="rkids">
+            <div class="tlabel">今天</div>
+            <div class="row srow on">
+              <span class="pd pi"></span>
+              <span class="ttl">左侧栏重设计原型</span>
+              <span class="spin"></span>
+            </div>
+            <div class="row srow">
+              <span class="pd claude"></span>
+              <span class="ttl">网桥截断误判修复</span>
+              <span class="stime">2 小时</span>
+              <span class="acts">
+                <button class="abtn"><svg class="ic s"><use href="#i-pin"/></svg></button>
+                <button class="abtn"><svg class="ic s"><use href="#i-archive"/></svg></button>
+                <button class="abtn danger"><svg class="ic s"><use href="#i-trash"/></svg></button>
+              </span>
+            </div>
+
+            <!-- 泳道 1:branch,有未合并 -->
+            <div class="lane">
+              <div class="lhead open" data-toggle>
+                <svg class="ic xs chev"><use href="#i-chev"/></svg>
+                <svg class="ic s fork"><use href="#i-fork"/></svg>
+                <span class="lname">左侧栏重设计</span>
+                <span class="bchip">mcode/leftbar</span>
+                <span class="sdot dirty" title="有未合并改动"></span>
+                <span class="acts">
+                  <button class="abtn go" title="合并回本地分支"><svg class="ic s"><use href="#i-merge"/></svg></button>
+                  <button class="abtn" title="在此工作树中新建会话"><svg class="ic s"><use href="#i-plus"/></svg></button>
+                </span>
+              </div>
+              <div class="lbody">
+                <div class="row"><span class="pd pi"></span><span class="ttl">原型探索 A</span><span class="stime">刚刚</span></div>
+                <div class="row"><span class="pd claude"></span><span class="ttl">原型探索 B</span><span class="stime">1 小时</span></div>
+              </div>
+            </div>
+
+            <!-- 泳道 2:detached,已合并(安静) -->
+            <div class="lane">
+              <div class="lhead" data-toggle>
+                <svg class="ic xs chev"><use href="#i-chev"/></svg>
+                <svg class="ic s fork" style="color:color-mix(in srgb,var(--accent) 65%,var(--content-subtle))"><use href="#i-fork"/></svg>
+                <span class="lname">网桥回归验证</span>
+                <span class="bchip">detached</span>
+                <span class="sdot merged" title="已合并,无待合并内容"></span>
+                <span class="acts"><button class="abtn" title="在此工作树中新建会话"><svg class="ic s"><use href="#i-plus"/></svg></button></span>
+              </div>
+              <div class="lbody">
+                <div class="row"><span class="pd claude"></span><span class="ttl">回归复测</span><span class="stime">3 天</span></div>
+              </div>
+            </div>
+
+            <div class="tlabel">昨天</div>
+            <div class="row srow"><span class="pd claude"></span><span class="ttl">LSP jdtls 工作区自愈</span><span class="stime">昨天</span></div>
+            <div class="row srow"><span class="pd pi"></span><span class="ttl">settings 面板 i18n 清理</span><span class="stime">3 天</span></div>
+            <div class="row srow" style="color:var(--content-subtle);justify-content:center;font-size:10.5px">加载更多(还有 6 条)</div>
+          </div>
+        </div>
+
+        <!-- blog-site 折叠,有未读 -->
+        <div>
+          <div class="row" data-toggle>
+            <svg class="ic xs chev"><use href="#i-chev"/></svg>
+            <span class="pdot" style="background:#d97706"></span>
+            <span class="avatar" style="background:#d97706">B</span>
+            <span class="ttl" style="font-weight:600">blog-site</span>
+            <span class="badge">3</span>
+          </div>
+        </div>
+
+        <!-- 分组视图 -->
+        <div class="grp"><svg class="ic xs chev"><use href="#i-chev"/></svg><span class="gdot"></span>工作<span class="n">2</span></div>
+      </div>
+
+      <!-- 归档:素文字入口 -->
+      <div style="margin:4px 8px 0">
+        <div class="archline">
+          <svg class="ic s"><use href="#i-archive"/></svg>已归档<span class="n">5 ›</span>
+        </div>
+      </div>
+
+      <div class="footer">
+        <div class="st"><svg class="ic"><use href="#i-gear"/></svg>设置</div>
+        <button class="sq"><svg class="ic"><use href="#i-focus"/></svg></button>
+        <button class="sq"><svg class="ic"><use href="#i-sun"/></svg></button>
+      </div>
+      <div class="hint">hover 行/泳道看操作 · 点小节头折叠</div>
+    </div>
+    <div class="ghost-center"></div>
+  </section>
+
+  <!-- ════════ 右侧面板 ════════ -->
+  <aside class="panel">
+    <div class="card">
+      <h2>✂️ 相比上一版删掉的 <span class="n">(7 项)</span></h2>
+      <ul class="cut-list">
+        <li><b>置顶 accent 卡片盒</b> → 素文字小节,行还是那些行</li>
+        <li><b>会话两行制 meta 行</b> → 单行;provider 名文本删除,色点承载</li>
+        <li><b>项目元信息行</b>(n 会话 · n 工作树)→ 删,项目内有什么展开即见</li>
+        <li><b>「…」聚合菜单按钮</b> → 删;hover 只留「+」,其余全在右键菜单</li>
+        <li><b>状态点脉冲动画</b> → 静态 6px 点(琥珀=未合并 / 灰绿=已合并)</li>
+        <li><b>新建会话 accent 主按钮 + 搜索图标化</b> → 快捷入口区维持现状不动</li>
+        <li><b>归档虚线框入口</b> → 一行素文字(弹层交互保留)</li>
+      </ul>
+    </div>
+
+    <div class="card">
+      <h2>⚙️ 可选元素 <span class="n">(实时生效)</span></h2>
+      <div class="opt-list">
+        <label class="opt">
+          <input type="checkbox" data-opt="opt-avatar">
+          <span class="t"><span class="name">项目彩色头像<span class="rec">默认关</span></span>
+          <span class="d">开=18px 首字母头像;关=7px 纯色点(更素,层级感靠字重/缩进)</span></span>
+        </label>
+        <label class="opt">
+          <input type="checkbox" data-opt="opt-count">
+          <span class="t"><span class="name">项目行会话计数<span class="rec">默认关</span></span>
+          <span class="d">折叠时右侧的数字;运行 spinner / 未读徽章不受此开关控制(是状态不是装饰)</span></span>
+        </label>
+        <label class="opt">
+          <input type="checkbox" data-opt="opt-timegroup">
+          <span class="t"><span class="name">时间分组标签<span class="rec">默认关</span></span>
+          <span class="d">今天 / 昨天 / 更早;时间已在每行右侧,标签是否还需要?</span></span>
+        </label>
+        <label class="opt">
+          <input type="checkbox" data-opt="opt-time" checked>
+          <span class="t"><span class="name">会话相对时间<span class="rec">推荐开</span></span>
+          <span class="d">右置的「2 小时 / 昨天」;信息性元素,删掉后扫读失去时间坐标</span></span>
+        </label>
+        <label class="opt">
+          <input type="checkbox" data-opt="opt-branch" checked>
+          <span class="t"><span class="name">泳道分支 chip<span class="rec">推荐开</span></span>
+          <span class="d">mcode/xxx / detached;分支是强删后的找回凭据,建议保留</span></span>
+        </label>
+        <label class="opt">
+          <input type="checkbox" data-opt="opt-dot" checked>
+          <span class="t"><span class="name">泳道合并状态点<span class="rec">推荐开</span></span>
+          <span class="d">"有没有活等着合并"是泳道的核心信号</span></span>
+        </label>
+        <label class="opt">
+          <input type="checkbox" data-opt="opt-pin" checked>
+          <span class="t"><span class="name">置顶小节<span class="rec">推荐开</span></span>
+          <span class="d">跨项目置顶是现有功能,只留最素的呈现;关掉看无置顶时的样子</span></span>
+        </label>
+      </div>
+    </div>
+
+    <div class="card verdict">
+      <b>保留的骨架(不变)</b>:项目→会话树、泳道常驻(删除隐藏的视图切换)、泳道卡片式分组、选中态 accent 竖条、hover 行内操作、右键菜单全集、归档弹层。
+      拨好组合后告诉我编号即可,按此实施。
+    </div>
+  </aside>
+</main>
+
+<script>
+// 开关 → mock 根 class
+const lb=document.getElementById('lb');
+document.querySelectorAll('input[data-opt]').forEach(cb=>{
+  cb.addEventListener('change',()=>lb.classList.toggle(cb.dataset.opt,cb.checked));
+});
+// 折叠
+document.addEventListener('click',e=>{
+  if(e.target.closest('.abtn'))return;
+  const t=e.target.closest('[data-toggle]');
+  if(t)t.classList.toggle('open');
+});
+// 主题
+const tb=document.getElementById('themeBtn');
+tb.addEventListener('click',()=>{
+  document.body.classList.toggle('light');
+  tb.textContent=document.body.classList.contains('light')?'☀️':'🌙';
+});
+</script>
+</body>
+</html>

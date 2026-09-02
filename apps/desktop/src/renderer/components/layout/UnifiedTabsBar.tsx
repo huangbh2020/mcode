@@ -55,6 +55,7 @@ export function UnifiedTabsBar() {
   const activeId = useSessionStore((s) => s.activeSessionId);
   const sessionsByProject = useSessionStore((s) => s.sessionsByProject);
   const pinnedSessions = useSessionStore((s) => s.pinnedSessions);
+  const streamSessions = useSessionStore((s) => s.streamSessions);
   const runningBySession = useSessionStore((s) => s.runningBySession);
   const unreadBySession = useSessionStore((s) => s.unreadBySession);
   const selectSession = useSessionStore((s) => s.selectSession);
@@ -244,7 +245,7 @@ export function UnifiedTabsBar() {
           >
             <SortableContext items={tabs} strategy={horizontalListSortingStrategy}>
               {tabs.map((id) => {
-                const sess = findSession(sessionsByProject, pinnedSessions, id);
+                const sess = findSession(sessionsByProject, pinnedSessions, streamSessions, id);
                 return (
                   <SortableSessionTab
                     key={id}
@@ -379,7 +380,7 @@ export function UnifiedTabsBar() {
           heading={t("ide.editor.openTabs")}
           items={[
             ...tabs.map((id) => {
-              const sess = findSession(sessionsByProject, pinnedSessions, id);
+              const sess = findSession(sessionsByProject, pinnedSessions, streamSessions, id);
               return {
                 key: id,
                 label: sess?.title ?? "(unknown)",

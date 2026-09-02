@@ -18,6 +18,11 @@ export interface ProviderIconMeta {
   Icon: ComponentType<{ size?: number; className?: string }>;
   /** Tailwind text-color class (brand accent). */
   color: string;
+  /** Brand hex for the small leading dot in stream-sidebar cards (the full
+   *  icon is too heavy inside a 3-line card; a 7px dot carries the identity). */
+  dot: string;
+  /** Short brand name for the card's meta line. */
+  label: string;
 }
 
 /** Fallback for unknown provider ids (e.g. a persisted id whose provider
@@ -25,11 +30,13 @@ export interface ProviderIconMeta {
 const FALLBACK: ProviderIconMeta = {
   Icon: IconTerminal,
   color: "text-content-subtle",
+  dot: "#9ea2ab",
+  label: "",
 };
 
 const PROVIDER_ICONS: Record<string, ProviderIconMeta> = {
-  "claude-sdk": { Icon: SiClaude, color: "text-[#D97757]" },
-  "pi-sdk": { Icon: PiBrandIcon, color: "text-black dark:text-content" },
+  "claude-sdk": { Icon: SiClaude, color: "text-[#D97757]", dot: "#D97757", label: "Claude" },
+  "pi-sdk": { Icon: PiBrandIcon, color: "text-black dark:text-content", dot: "#A78BFA", label: "Pi" },
 };
 
 export function getProviderIcon(providerId: string | null | undefined): ProviderIconMeta {

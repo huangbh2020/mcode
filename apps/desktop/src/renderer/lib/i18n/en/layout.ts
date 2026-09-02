@@ -61,6 +61,20 @@ export const en = {
   "layout.newSessionInProject": "Start a new session in the current project",
   "layout.needProject": "Open a project first",
 
+  /* ── stream sidebar (session-first left-bar view) ── */
+  "layout.stream.switchToStream": "Switch to session stream view",
+  "layout.stream.switchToTree": "Switch to project tree view",
+  "layout.stream.scopeAll": "All projects",
+  "layout.stream.scopeGroupCap": "Groups",
+  "layout.stream.scopeWorktree": "Worktree",
+  "layout.stream.statusWorking": "Working {dur}",
+  "layout.stream.statusInput": "Needs input",
+  "layout.stream.statusFailed": "Failed",
+  "layout.stream.statusDone": "Done",
+  "layout.stream.unmerged": "Unmerged",
+  "layout.stream.empty": "No sessions yet",
+  "layout.stream.showMore": "Show more ({n} left)",
+
   /* ── project groups ── */
   "layout.moveToGroup": "Move to group",
   "layout.newGroupMenu": "New group…",
@@ -71,8 +85,10 @@ export const en = {
   "layout.removeFromGroup": "Remove from group",
   "layout.groupNamePlaceholder": "Group name",
   "layout.groupColor": "Group color",
+  "layout.projectColor": "Project color",
   "layout.setColor": "Set color",
   "layout.customColor": "Custom",
+  "layout.projectManageIcon": "Manage project (rename / group / color)",
   "layout.resetColor": "Reset to default",
   "layout.dissolveGroup": "Dissolve group (projects are kept)",
   "layout.color.emerald": "Emerald",

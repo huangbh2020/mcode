@@ -26,6 +26,7 @@ import { translate } from "@renderer/lib/i18n/core.js";
 import { DEFAULT_EDITOR_THEME_CHOICE, parseEditorThemeChoice, type EditorThemeChoice, type EditorThemeId } from "@renderer/lib/editorThemes.js";
 import {
   DISPLAY_MODE_SETTING_KEY,
+  LEFTBAR_MODE_SETTING_KEY,
   UI_LOCALE_SETTING_KEY,
   DEFAULT_PROVIDER_ID,
   UI_CHAT_FONT_SIZE_SETTING_KEY,
@@ -66,14 +67,17 @@ import {
   parseAutoArchiveConfig,
   SESSION_WORKTREE_DEFAULT_SETTING_KEY,
   WORKTREE_NAMES_SETTING_KEY,
+  PROJECT_COLORS_SETTING_KEY,
   ShortcutBindingsSchema,
   type AutoArchiveConfig,
   type DisplayMode,
+  type LeftBarMode,
   type Locale,
   type VoiceInputMode,
   type VoiceEngine,
   type ChatDensity,
   type ProjectView,
+  type GitWorktreeInfo,
   type ProjectGroupsMeta,
   type ProjectGroupMeta,
   type RightPanelTab,
@@ -577,6 +581,32 @@ export interface SessionState {
    *  `session.listPinned` and maintained incrementally by the pin/archive/
    *  delete mutations and the cross-client `session.changed` reducer. */
   pinnedSessions: Session[];
+
+  /* ── stream sidebar cache ("stream" leftBarMode) ──
+   *  Flat cross-project aggregate behind `session.listAll` — the SAME rows
+   *  `sessionsByProject` serves, just merged (newest-first, pinned excluded
+   *  because pinned threads render in the stream's pinned block). The two
+   *  caches are independent: mutations mark `streamDirty` and the stream
+   *  view refetches its first page on the next paint (a 10-row local
+   *  SELECT beats duplicating the per-project patch logic). */
+  streamSessions: Session[];
+  /** More rows remain server-side beyond `streamSessions`. */
+  streamHasMore: boolean;
+  /** Server-side total matching the aggregate filter. */
+  streamTotal: number;
+  /** A mutation/event invalidated the cached first page (ordering, title,
+   *  archive, pin, …). The stream view refetches while visible. */
+  streamDirty: boolean;
+
+  /** Sessions whose LAST turn ended in an error — the stream sidebar's red
+   *  「失败」status label. Cleared when a new turn starts. */
+  turnErrorBySession: Record<string, boolean>;
+
+  /** Per-repo worktree inventory for the stream sidebar's inline branch /
+   *  unmerged indicators, cached against `gitChangeVersionByRepo` as the
+   *  invalidation key (bumped version = stale entry). */
+  worktreeInfoByRepo: Record<string, { version: number; worktrees: GitWorktreeInfo[] }>;
+
   /** Sessions of the active project (derived view; components may read either). */
   sessions: Session[];
   activeSessionId: string | null;
@@ -594,6 +624,10 @@ export interface SessionState {
    *  name). Persisted in the `settings` table; cosmetic only — missing
    *  entries fall back to the directory basename. */
   worktreeNames: Record<string, string>;
+  /** Per-project avatar color overrides (projectId → hex). Persisted under
+   *  `project.colors`; cosmetic only — missing entries fall back to the
+   *  deterministic name-hash color (lib/projectAvatar.ts). */
+  projectColors: Record<string, string>;
   /** Whether the "archived" section at the bottom of the tree is expanded. */
   archivedViewOpen: boolean;
 
@@ -608,6 +642,11 @@ export interface SessionState {
   openTabs: string[];
   /** How the center pane renders. Persisted in the `settings` table. */
   displayMode: DisplayMode;
+  /** Which left-bar view is mounted: the classic project tree ("tree",
+   *  default) or the session-first flat stream ("stream", T3-style cards
+   *  with a project scope filter). Persisted; the two views are pure
+   *  renderers over the same store data. */
+  leftBarMode: LeftBarMode;
   /** Which tab kind owns the center content area in `tabs` displayMode: the
    *  active session's chat ("chat") or the editor — file / plan tab
    *  ("editor"). Only read in `tabs` mode; `single` mode keeps the legacy
@@ -1236,6 +1275,11 @@ export interface SessionState {
    *  `sessionsByProject[projectId]`. No-op when there are no more to load. */
   loadMoreSessions: (projectId: string) => Promise<void>;
   startSession: (projectId?: string, overrides?: { providerId?: string; model?: string; customModelId?: string | null; worktreePath?: string }) => Promise<void>;
+  /** Move a FRESH local session to a different project (the directory
+   *  switcher in the new-session composer panel). Main-side guards reject
+   *  anything that already started (messages / materialized worktree / bad
+   *  target); the renderer caches migrate only after the IPC accepts. */
+  moveSession: (sessionId: string, toProjectId: string) => Promise<void>;
   /** Switch the active session (and load its history if not cached).
    *  Always replaces the center pane content. In `single` displayMode
    *  this is the only navigation primitive; in `tabs` mode it's used
@@ -1459,6 +1503,20 @@ export interface SessionState {
   /** Update the center-pane display mode. Persists to the `settings`
    *  table so the choice survives restart. */
   setDisplayMode: (mode: DisplayMode) => Promise<void>;
+  /** Switch the left-bar view between the project tree and the session
+   *  stream. Instant local flip + fire-and-forget persistence (same
+   *  pattern as setDisplayMode). */
+  setLeftBarMode: (mode: LeftBarMode) => Promise<void>;
+  /** (Re)fetch the stream sidebar's aggregate first page. No-op when the
+   *  cache is warm and clean; `reset` forces a refetch. */
+  loadStreamSessions: (reset?: boolean) => Promise<void>;
+  /** Append the next aggregate page to `streamSessions`. No-op when
+   *  `streamHasMore` is false. */
+  loadMoreStreamSessions: () => Promise<void>;
+  /** Refresh `worktreeInfoByRepo[repoPath]` when its gitChangeVersion is
+   *  newer than the cached entry (or nothing is cached). Cheap to call —
+   *  a warm, current cache is a pure no-op. */
+  ensureWorktreeInfo: (repoPath: string) => Promise<void>;
   /** Switch the unified center tab bar's focus (tabs displayMode) between
    *  the chat view and the editor view. Most flips flow through natural
    *  actions (selectSession / openFileInIde / setIdeActiveFile / ...);
@@ -1479,6 +1537,9 @@ export interface SessionState {
   setProjectView: (mode: ProjectView) => Promise<void>;
   /** Set a group's color ("R G B" triplet or null for default). */
   setGroupColor: (name: string, rgb: string | null) => void;
+  /** Set / clear a project's custom avatar color (new-session panel's
+   *  manage menu). null falls back to the name-hash default. */
+  setProjectColor: (id: string, hex: string | null) => void;
   /** Persist a new group order (full ordered name list). */
   setGroupOrder: (orderedNames: string[]) => void;
   /** Migrate group metadata when a group is renamed. */
@@ -2179,21 +2240,30 @@ function isPathWithinRoot(root: string, abs: string): boolean {
  *  init / project expand; further pages are appended on "加载更多". */
 const SESSION_PAGE_SIZE = 5;
 
+/** Page size for the stream sidebar's cross-project aggregate (rich cards
+ *  are ~3x taller than tree rows, so the page is only 2x). */
+const STREAM_PAGE_SIZE = 10;
+
 /** Messages per page when lazily loading session history. Large enough that a
  *  typical conversation fills the viewport in one fetch, small enough that
  *  very long threads (thousands of rows) stay snappy on first open. */
 const MESSAGE_PAGE_SIZE = 200;
 
 /** Find a session across the active per-project caches, the archived bin,
- *  and the global pinned bucket by id. The archived cache is consulted so
- *  that config hydration still finds a session a user just restored (and so
+ *  the global pinned bucket, and the stream sidebar's cross-project
+ *  aggregate by id. The archived cache is consulted so that config
+ *  hydration still finds a session a user just restored (and so
  *  deleted/restored fallbacks don't miss rows that were moved between
  *  caches); the pinned bucket because pinned rows LEAVE their project's
- *  active list and live in the global pinned section instead. */
+ *  active list and live in the global pinned section instead; the stream
+ *  aggregate because the stream view pages through `session.listAll`, so a
+ *  page-2+ row exists ONLY there — without this fallback its tab renders
+ *  "(unknown)" and config hydration silently no-ops. */
 function findSession(
   sessionsByProject: Record<string, Session[]>,
   archivedByProject: Record<string, Session[]>,
   pinnedSessions: Session[],
+  streamSessions: Session[],
   id: string,
 ): Session | undefined {
   for (const list of Object.values(sessionsByProject)) {
@@ -2206,7 +2276,7 @@ function findSession(
     const hit = list?.find((s) => s.id === id);
     if (hit) return hit;
   }
-  return undefined;
+  return streamSessions.find((s) => s.id === id);
 }
 
 /** Immutably patch a single cached session row (looked up by id across both
@@ -2347,6 +2417,8 @@ function dropSessionBuckets(s: SessionState, id: string) {
   delete runningBySession[id];
   const runningTurnStartedAt = { ...s.runningTurnStartedAt };
   delete runningTurnStartedAt[id];
+  const turnErrorBySession = { ...s.turnErrorBySession };
+  delete turnErrorBySession[id];
   const interruptedBySession = { ...s.interruptedBySession };
   delete interruptedBySession[id];
   const upstreamIssueBySession = { ...s.upstreamIssueBySession };
@@ -2402,6 +2474,7 @@ function dropSessionBuckets(s: SessionState, id: string) {
     historyLoadedBySession,
     runningBySession,
     runningTurnStartedAt,
+    turnErrorBySession,
     interruptedBySession,
     upstreamIssueBySession,
     unreadBySession,
@@ -2531,6 +2604,7 @@ function applySessionDeletedState(s: SessionState, id: string): Partial<SessionS
       ...(hadSideChats ? { sideChatsByParent } : {}),
       ...(activeSideChatId !== s.activeSideChatId ? { activeSideChatId } : {}),
       openTabs,
+      streamDirty: true,
     };
   }
   // Was the active tab. Land on the previous tab if any, otherwise the
@@ -2550,7 +2624,7 @@ function applySessionDeletedState(s: SessionState, id: string): Partial<SessionS
   // model/effort/permission.
   const finalActive = nextActive ?? nextInProject?.id ?? null;
   const sess = finalActive
-    ? findSession(sessionsByProject, archivedByProject, inPinned ? nextList : s.pinnedSessions, finalActive)
+    ? findSession(sessionsByProject, archivedByProject, inPinned ? nextList : s.pinnedSessions, s.streamSessions, finalActive)
     : undefined;
   // Clear the new active session's unread badge - it's now visible.
   if (finalActive) delete dropped.unreadBySession[finalActive];
@@ -2570,6 +2644,7 @@ function applySessionDeletedState(s: SessionState, id: string): Partial<SessionS
     effort: sess?.effort ?? s.effort,
     permissionMode: sess?.permissionMode ?? s.permissionMode,
     customModelId: sess?.customModelId ?? s.customModelId,
+    streamDirty: true,
   };
 }
 
@@ -2583,7 +2658,7 @@ function syncConfigFromSession(
   get: () => SessionState,
   sessionId: string,
 ): void {
-  const sess = findSession(get().sessionsByProject, get().archivedSessionsByProject, get().pinnedSessions, sessionId);
+  const sess = findSession(get().sessionsByProject, get().archivedSessionsByProject, get().pinnedSessions, get().streamSessions, sessionId);
   if (!sess) return;
   // Keep activeProjectId in lockstep with the active session's owning project.
   // Without this, switching to a thread in project B while activeProjectId
@@ -2816,7 +2891,7 @@ function hydrateContextSnapshot(
   get: () => SessionState,
   sessionId: string,
 ): void {
-  const sess = findSession(get().sessionsByProject, get().archivedSessionsByProject, get().pinnedSessions, sessionId);
+  const sess = findSession(get().sessionsByProject, get().archivedSessionsByProject, get().pinnedSessions, get().streamSessions, sessionId);
   const snapshot = sess?.contextSnapshot;
   if (!snapshot || !isValidSnapshot(snapshot)) {
     // No usable snapshot on the row - leave any existing slot as-is so we
@@ -2867,7 +2942,7 @@ function hydrateCapsule(
   get: () => SessionState,
   sessionId: string,
 ): void {
-  const sess = findSession(get().sessionsByProject, get().archivedSessionsByProject, get().pinnedSessions, sessionId);
+  const sess = findSession(get().sessionsByProject, get().archivedSessionsByProject, get().pinnedSessions, get().streamSessions, sessionId);
   const todos = sess?.todos ?? null;
   const subagents = sess?.subagents ?? null;
   const planDraft = sess?.planDraft ?? null;
@@ -2959,7 +3034,7 @@ function hydrateTurnFiles(
   get: () => SessionState,
   sessionId: string,
 ): void {
-  const sess = findSession(get().sessionsByProject, get().archivedSessionsByProject, get().pinnedSessions, sessionId);
+  const sess = findSession(get().sessionsByProject, get().archivedSessionsByProject, get().pinnedSessions, get().streamSessions, sessionId);
   const turnFiles = sess?.turnFiles ?? null;
   set((s) => {
     const hasValue = !!(turnFiles && Array.isArray(turnFiles) && turnFiles.length > 0);
@@ -2989,7 +3064,7 @@ function hydrateBookmarks(
   get: () => SessionState,
   sessionId: string,
 ): void {
-  const sess = findSession(get().sessionsByProject, get().archivedSessionsByProject, get().pinnedSessions, sessionId);
+  const sess = findSession(get().sessionsByProject, get().archivedSessionsByProject, get().pinnedSessions, get().streamSessions, sessionId);
   const bookmarks = sess?.bookmarks ?? null;
   set((s) => {
     const hasValue = !!(bookmarks && Array.isArray(bookmarks) && bookmarks.length > 0);
@@ -3017,7 +3092,7 @@ function hydrateSubagentTranscripts(
   get: () => SessionState,
   sessionId: string,
 ): void {
-  const sess = findSession(get().sessionsByProject, get().archivedSessionsByProject, get().pinnedSessions, sessionId);
+  const sess = findSession(get().sessionsByProject, get().archivedSessionsByProject, get().pinnedSessions, get().streamSessions, sessionId);
   const transcripts = sess?.subagentTranscripts ?? null;
   set((s) => {
     // A running turn owns the transcripts — its event stream is fresher than
@@ -3075,7 +3150,7 @@ function hydrateUsageHistory(
   get: () => SessionState,
   sessionId: string,
 ): void {
-  const sess = findSession(get().sessionsByProject, get().archivedSessionsByProject, get().pinnedSessions, sessionId);
+  const sess = findSession(get().sessionsByProject, get().archivedSessionsByProject, get().pinnedSessions, get().streamSessions, sessionId);
   const history = sess?.usageHistory ?? null;
   set((s) => {
     const hasValue = !!(history && Array.isArray(history) && history.length > 0);
@@ -3815,6 +3890,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   worktreeViewByProject: {},
   expandedWorktrees: {},
   worktreeNames: {},
+  projectColors: {},
   archivedViewOpen: false,
   // openTabs is filled by `init` (lands on the first non-archived session,
   // if any) and by `startSession`. Defaulting to [] here means there's no
@@ -3824,6 +3900,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   // `tabs` (unified tab bar) — new users land on the tabbed center pane;
   // anyone who explicitly picked a mode keeps their stored choice.
   displayMode: "tabs",
+  // Left-bar view: classic project tree is the default; init() overwrites
+  // from the persisted ui.leftBarMode preference.
+  leftBarMode: "tree",
   // Center focus for the unified tab bar (`tabs` displayMode). UI-only.
   centerTabFocus: "chat",
   // UI language. Persisted in `settings` table; init() overwrites from the
@@ -3870,6 +3949,13 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     historyLoadedBySession: {},
   runningBySession: {},
   runningTurnStartedAt: {},
+  turnErrorBySession: {},
+  // Stream sidebar cache: empty + dirty so the first mount fetches.
+  streamSessions: [],
+  streamHasMore: false,
+  streamTotal: 0,
+  streamDirty: true,
+  worktreeInfoByRepo: {},
   interruptedBySession: {},
   turnIncompleteBySession: {},
   upstreamIssueBySession: {},
@@ -4009,6 +4095,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       .getMany({
         keys: [
           DISPLAY_MODE_SETTING_KEY,
+          LEFTBAR_MODE_SETTING_KEY,
           UI_LOCALE_SETTING_KEY,
           UI_CHAT_DENSITY_SETTING_KEY,
           UI_PROJECT_VIEW_SETTING_KEY,
@@ -4018,6 +4105,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           UI_COMPOSER_MODEL_SETTING_KEY,
           SESSION_WORKTREE_DEFAULT_SETTING_KEY,
           WORKTREE_NAMES_SETTING_KEY,
+          PROJECT_COLORS_SETTING_KEY,
         ],
       })
       .catch((err) => {
@@ -4049,6 +4137,15 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       console.error("apply(worktreeNames) failed:", err);
     }
 
+    // Per-project avatar color overrides. Cosmetic — a failed parse just
+    // falls back to the name-hash defaults everywhere.
+    try {
+      const value = fp[PROJECT_COLORS_SETTING_KEY];
+      if (value) set({ projectColors: JSON.parse(value) as Record<string, string> });
+    } catch (err) {
+      console.error("apply(projectColors) failed:", err);
+    }
+
     // displayMode determines single vs tabs layout - needed before first render
     // of the center pane so the right structure mounts.
     try {
@@ -4056,6 +4153,14 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       if (value === "single" || value === "tabs") set({ displayMode: value });
     } catch (err) {
       console.error("apply(displayMode) failed:", err);
+    }
+
+    // leftBarMode determines which sidebar component mounts on frame one.
+    try {
+      const value = fp[LEFTBAR_MODE_SETTING_KEY];
+      if (value === "tree" || value === "stream") set({ leftBarMode: value });
+    } catch (err) {
+      console.error("apply(leftBarMode) failed:", err);
     }
 
     // locale drives every translated string — must land before first paint so
@@ -4855,6 +4960,75 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     if (overrides) syncConfigFromSession(set, get, session.id);
   },
 
+  /** Re-aim a fresh local session at another project (composer directory
+   *  switcher). The main handler validates (no messages, un-materialized,
+   *  existing target) and broadcasts `session.changed` for the moved row —
+   *  which lands BEFORE this invoke resolves (same ordering startSession
+   *  documents), so the echo has already upserted the slim row into the NEW
+   *  project's loaded bucket. What the echo does NOT do is evict the row
+   *  from the OLD project's cache — that cleanup lives here, totals
+   *  included. */
+  moveSession: async (sessionId, toProjectId) => {
+    const sess = findSession(
+      get().sessionsByProject,
+      get().archivedSessionsByProject,
+      get().pinnedSessions,
+      get().streamSessions,
+      sessionId,
+    );
+    if (!sess || sess.projectId === toProjectId) return;
+    const fromProjectId = sess.projectId;
+    try {
+      await api.session.updateSettings({ sessionId, projectId: toProjectId });
+    } catch (err) {
+      console.error("moveSession: updateSettings rejected the move:", err);
+      return;
+    }
+    set((s) => {
+      const fromList = s.sessionsByProject[fromProjectId];
+      if (!fromList) return {};
+      const nextFrom = fromList.filter((x) => x.id !== sessionId);
+      if (nextFrom.length === fromList.length) return {};
+      const total = Math.max((s.sessionsTotalByProject[fromProjectId] ?? 0) - 1, 0);
+      return {
+        sessionsByProject: { ...s.sessionsByProject, [fromProjectId]: nextFrom },
+        sessionsTotalByProject: { ...s.sessionsTotalByProject, [fromProjectId]: total },
+        sessionsHasMoreByProject: {
+          ...s.sessionsHasMoreByProject,
+          [fromProjectId]: total > SESSION_PAGE_SIZE,
+        },
+        // `sessions` mirrors the ACTIVE project's bucket — refresh it when
+        // the eviction touched that project.
+        sessions: s.activeProjectId === fromProjectId ? nextFrom : s.sessions,
+        streamDirty: true,
+      };
+    });
+    // The active thread moved: follow it into the new project and make sure
+    // its first page is loaded (the echo SKIPS unloaded buckets).
+    if (get().activeSessionId === sessionId) {
+      set({ activeProjectId: toProjectId });
+      try {
+        const page = await api.project.sessions({
+          projectId: toProjectId,
+          limit: SESSION_PAGE_SIZE,
+          offset: 0,
+          archived: false,
+        });
+        set((s) => ({
+          sessionsByProject: { ...s.sessionsByProject, [toProjectId]: page.sessions },
+          sessionsTotalByProject: { ...s.sessionsTotalByProject, [toProjectId]: page.total },
+          sessionsHasMoreByProject: {
+            ...s.sessionsHasMoreByProject,
+            [toProjectId]: page.hasMore,
+          },
+          sessions: s.activeProjectId === toProjectId ? page.sessions : s.sessions,
+        }));
+      } catch (err) {
+        console.error("moveSession: project.sessions reload failed:", err);
+      }
+    }
+  },
+
   /** Activate an existing session and load its persisted history.
    *  Per-thread config (model / effort / permissionMode / customModelId) is
    *  hydrated from the session row via `syncConfigFromSession` BEFORE the
@@ -5075,7 +5249,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       if (nextActive && nextActive !== s.activeSessionId) {
         // Defer to the set body: we can't call syncConfigFromSession
         // here because it uses the same `set`. Inline the same lookup.
-        const sess = findSession(s.sessionsByProject, s.archivedSessionsByProject, s.pinnedSessions, nextActive);
+        const sess = findSession(s.sessionsByProject, s.archivedSessionsByProject, s.pinnedSessions, s.streamSessions, nextActive);
         const unreadBySession = { ...s.unreadBySession };
         delete unreadBySession[nextActive];
         return {
@@ -5307,6 +5481,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           sessionsHasMoreByProject: { ...s.sessionsHasMoreByProject, [projectId]: hasMoreActive },
           sessions: isActiveProject ? nextActive : s.sessions,
           openTabs,
+          streamDirty: true,
         };
       }
       // Archived the active session → jump to the next visible one.
@@ -5318,7 +5493,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         nextActiveId = idx > 0 ? openTabs[idx - 1] : openTabs[0];
       }
       const sess = nextActiveId
-        ? findSession(sessionsByProject, archivedByProject, nextPinned, nextActiveId)
+        ? findSession(sessionsByProject, archivedByProject, nextPinned, s.streamSessions, nextActiveId)
         : undefined;
       // Clear the new active session's unread badge - it's now visible.
       const unreadBySession = { ...s.unreadBySession };
@@ -5337,6 +5512,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         permissionMode: sess?.permissionMode ?? s.permissionMode,
         customModelId: sess?.customModelId ?? s.customModelId,
         unreadBySession,
+        streamDirty: true,
       };
     });
   },
@@ -5368,7 +5544,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       const sessions = s.activeProjectId === projectId
         ? (sessionsByProject[projectId] ?? s.sessions)
         : s.sessions;
-      return { sessionsByProject, archivedSessionsByProject, pinnedSessions, sessions };
+      return { sessionsByProject, archivedSessionsByProject, pinnedSessions, sessions, streamDirty: true };
     });
   },
 
@@ -5377,8 +5553,10 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     // Pinning MOVES the row: out of the project's active window and into the
     // global pinned section above the project tree (unpinning moves it back).
     // The shared state builder also runs for the cross-client
-    // `session.changed` echo, so this stays idempotent.
-    set((s) => applySessionPinnedState(s, session));
+    // `session.changed` echo, so this stays idempotent. streamDirty either
+    // way — pin state decides which stream section (pinned block vs live
+    // list) renders the row.
+    set((s) => ({ ...applySessionPinnedState(s, session), streamDirty: true }));
   },
 
   addBookmark: async (sessionId, input) => {
@@ -5595,6 +5773,10 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         [sessionId]: [...(s.messagesBySession[sessionId] ?? []), userMsg],
       },
       runningBySession: { ...s.runningBySession, [sessionId]: true },
+      // A new turn supersedes the previous one's error label + floats the
+      // session to the top of the stream list.
+      turnErrorBySession: { ...s.turnErrorBySession, [sessionId]: false },
+      streamDirty: true,
       // NOTE: subagent roster/transcripts are intentionally NOT cleared here
       // — they are session-scoped history now; main replays the accumulated
       // state at each turn start (RuntimeManager.sendTurn).
@@ -5796,6 +5978,8 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         [sessionId]: [...truncated, userMsg],
       },
       runningBySession: { ...s.runningBySession, [sessionId]: true },
+      turnErrorBySession: { ...s.turnErrorBySession, [sessionId]: false },
+      streamDirty: true,
       // Same anchor rule as sendPrompt: reuse userMsg.createdAt so the
       // turn-done incremental persist can never filter out the user message.
       runningTurnStartedAt: { ...s.runningTurnStartedAt, [sessionId]: userMsg.createdAt },
@@ -6350,6 +6534,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           patch.customModelId = entry.customModelId;
           patch.providerId = entry.providerId;
         }
+        // Remote change reached the caches — the stream aggregate may be
+        // stale too (ordering / title / pin / worktree fields).
+        patch.streamDirty = true;
         return patch;
       });
       return;
@@ -6520,7 +6707,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         // Keep the in-memory session row cache in sync. Only touch the list
         // entry actually found (no-op if this session isn't in the cache, e.g.
         // archived / not yet loaded).
-        const cached = findSession(s.sessionsByProject, s.archivedSessionsByProject, s.pinnedSessions, sid);
+        const cached = findSession(s.sessionsByProject, s.archivedSessionsByProject, s.pinnedSessions, s.streamSessions, sid);
         if (cached && cached.contextSnapshot !== e.snapshot) {
           patch.sessionsByProject = patchSessionInCache(
             s.sessionsByProject, cached.projectId, sid, { contextSnapshot: e.snapshot },
@@ -6918,6 +7105,8 @@ export const useSessionStore = create<SessionState>((set, get) => ({
             return {
               runningBySession: { ...s.runningBySession, [sid]: false },
               runningTurnStartedAt,
+              // Stream sidebar's 「失败」label — sticky until the next turn.
+              turnErrorBySession: { ...s.turnErrorBySession, [sid]: true },
               // Only drop approvals + files belonging to this session; the
               // head pendingApprovals is per-session already, but it's a
               // flat array - filter down to the affected one.
@@ -7049,7 +7238,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
             let rowsUsagePatch: Partial<SessionState> | null = null;
             if (history !== prevHistory) {
               const cached = findSession(
-                s.sessionsByProject, s.archivedSessionsByProject, s.pinnedSessions, sid,
+                s.sessionsByProject, s.archivedSessionsByProject, s.pinnedSessions, s.streamSessions, sid,
               );
               if (cached && cached.usageHistory !== history) {
                 rowsUsagePatch = {
@@ -7359,6 +7548,62 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     }
   },
 
+  setLeftBarMode: async (mode) => {
+    set({ leftBarMode: mode });
+    // Entering the stream with a warm-but-dirty cache should show fresh
+    // data; entering with a clean cache is instant.
+    if (mode === "stream") set({ streamDirty: true });
+    try {
+      await api.setting.set({ key: LEFTBAR_MODE_SETTING_KEY, value: mode });
+    } catch (err) {
+      console.error("setting.set(leftBarMode) failed:", err);
+    }
+  },
+
+  loadStreamSessions: async (reset) => {
+    const s = get();
+    if (!reset && s.streamSessions.length > 0 && !s.streamDirty) return;
+    try {
+      const res = await api.session.listAll({ offset: 0, limit: STREAM_PAGE_SIZE });
+      set({ streamSessions: res.sessions, streamHasMore: res.hasMore, streamTotal: res.total, streamDirty: false });
+    } catch (err) {
+      console.error("session.listAll failed:", err);
+    }
+  },
+
+  loadMoreStreamSessions: async () => {
+    const s = get();
+    if (!s.streamHasMore) return;
+    try {
+      const res = await api.session.listAll({ offset: s.streamSessions.length, limit: STREAM_PAGE_SIZE });
+      set((st) => ({
+        streamSessions: [...st.streamSessions, ...res.sessions],
+        streamHasMore: res.hasMore,
+        streamTotal: res.total,
+      }));
+    } catch (err) {
+      console.error("session.listAll(more) failed:", err);
+    }
+  },
+
+  ensureWorktreeInfo: async (repoPath) => {
+    const s = get();
+    const version = s.gitChangeVersionByRepo[repoPath] ?? 0;
+    const cached = s.worktreeInfoByRepo[repoPath];
+    if (cached && cached.version === version) return;
+    try {
+      const { worktrees } = await api.git.worktreeList({ repoPath });
+      // Re-check under the set: a git event may have bumped the version
+      // mid-flight; storing the OLD version would pin a stale entry only
+      // until the next ensure — harmless either way.
+      set((st) => ({
+        worktreeInfoByRepo: { ...st.worktreeInfoByRepo, [repoPath]: { version, worktrees } },
+      }));
+    } catch (err) {
+      console.error("git.worktreeList(ensure) failed:", err);
+    }
+  },
+
   /** Direct focus switch for the unified center tab bar (tabs displayMode).
    *  See the `centerTabFocus` field doc — natural actions flip it too. */
   setCenterTabFocus: (focus) => {
@@ -7434,6 +7679,19 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     };
     set({ groupMeta: next });
     get().persistGroupMeta(next);
+  },
+
+  /** Set / clear a project's avatar color override. State flips immediately;
+    * the settings write is fire-and-forget (a failed write costs at most a
+    * reverted color on next launch — same trade as worktreeNames). */
+  setProjectColor: (id, hex) => {
+    const next = { ...get().projectColors };
+    if (hex) next[id] = hex;
+    else delete next[id];
+    set({ projectColors: next });
+    api.setting
+      .set({ key: PROJECT_COLORS_SETTING_KEY, value: JSON.stringify(next) })
+      .catch((err: unknown) => console.error("setting.set(projectColors) failed:", err));
   },
 
   /** Persist a new group order. `orderedNames` is the full group-name list in
@@ -7707,7 +7965,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     const g = get();
     const sessionId = g.activeSessionId;
     const active = sessionId
-      ? findSession(g.sessionsByProject, g.archivedSessionsByProject, g.pinnedSessions, sessionId)
+      ? findSession(g.sessionsByProject, g.archivedSessionsByProject, g.pinnedSessions, g.streamSessions, sessionId)
       : undefined;
     // Any UN-MATERIALIZED session in the foreground (local OR worktree
     // intent — it still has no git footprint) → the choice edits THAT
@@ -7877,7 +8135,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     const bucket = get().messagesBySession[sid];
     if (bucket && bucket.length > 0) return;
 
-    const sess = findSession(get().sessionsByProject, get().archivedSessionsByProject, get().pinnedSessions, sid);
+    const sess = findSession(get().sessionsByProject, get().archivedSessionsByProject, get().pinnedSessions, get().streamSessions, sid);
     if (!sess || sess.providerId === id) return;
     const projectId = sess.projectId;
 
@@ -8199,6 +8457,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       get().sessionsByProject,
       get().archivedSessionsByProject,
       get().pinnedSessions,
+      get().streamSessions,
       sessionId,
     );
     const projectId = sess?.projectId ?? get().activeProjectId;

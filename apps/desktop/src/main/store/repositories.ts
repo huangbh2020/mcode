@@ -410,6 +410,46 @@ export const SessionRepo = {
     return out;
   },
 
+  /** Cross-project aggregate of non-archived chat sessions, newest-first —
+   *  the stream sidebar's flat "全部项目" list. Mirrors {@link listByProject}'s
+   *  active-list semantics (pinned EXCLUDED — pinned threads render in the
+   *  stream's pinned block, exactly as the tree hoists them into its global
+   *  pinned section), same updated_at DESC / created_at DESC order. */
+  listAll(opts?: { limit?: number; offset?: number }): Session[] {
+    const db = getDb();
+    let sql =
+      "SELECT * FROM sessions WHERE archived = 0 AND pinned_at IS NULL AND kind = 'chat'" +
+      " ORDER BY updated_at DESC, created_at DESC";
+    const params: BindValue[] = [];
+    if (opts?.limit !== undefined) {
+      sql += " LIMIT ?";
+      params.push(v(opts.limit));
+      if (opts?.offset !== undefined) {
+        sql += " OFFSET ?";
+        params.push(v(opts.offset));
+      }
+    }
+    const stmt = db.prepare(sql);
+    stmt.bind(params);
+    const out: Session[] = [];
+    while (stmt.step()) out.push(rowToSession(stmt.getAsObject() as unknown as SessionRow));
+    stmt.free();
+    return out;
+  },
+
+  /** Count matching {@link listAll}'s filter — the aggregate `total` for
+   *  stream pagination. */
+  countAll(): number {
+    const db = getDb();
+    const stmt = db.prepare(
+      "SELECT COUNT(*) AS n FROM sessions WHERE archived = 0 AND pinned_at IS NULL AND kind = 'chat'",
+    );
+    stmt.step();
+    const n = (stmt.getAsObject() as { n: number }).n;
+    stmt.free();
+    return n;
+  },
+
   /** Cross-project title-substring search (Ctrl+K unified search). Scans all
    *  non-archived sessions across every project, newest first. Desktop-scale
    *  session counts make a full-table LIKE scan cheap; no FTS index needed. */
@@ -827,10 +867,10 @@ export const SessionRepo = {
   },
 
   /** Update session-scoped settings (model, effort, permissionMode,
-   *  customModelId, providerId). */
+   *  customModelId, providerId, project re-aim). */
   updateSettings(
     id: string,
-    patch: { model?: string; effort?: string; permissionMode?: string; customModelId?: string | null; providerId?: string; envMode?: string; wtStyle?: string | null; worktreePath?: string | null },
+    patch: { model?: string; effort?: string; permissionMode?: string; customModelId?: string | null; providerId?: string; envMode?: string; wtStyle?: string | null; worktreePath?: string | null; projectId?: string },
   ): void {
     const sets: string[] = [];
     const vals: BindValue[] = [];
@@ -839,6 +879,9 @@ export const SessionRepo = {
     if (patch.permissionMode !== undefined) { sets.push("permission_mode = ?"); vals.push(v(patch.permissionMode)); }
     if (patch.customModelId !== undefined) { sets.push("custom_model_id = ?"); vals.push(v(patch.customModelId)); }
     if (patch.providerId !== undefined) { sets.push("provider_id = ?"); vals.push(v(patch.providerId)); }
+    // Directory re-aim (new-session panel's switcher). The FRESH-ONLY guard
+    // lives in the IPC handler; this is just the write.
+    if (patch.projectId !== undefined) { sets.push("project_id = ?"); vals.push(v(patch.projectId)); }
     // Working-environment intent (fresh-row re-aim at "new session"). Only
     // meaningful while the row is still un-materialized; later writes are
     // ignored by the callers.
@@ -877,6 +920,20 @@ function rowToMessage(r: MessageRow): MessageRecord {
 }
 
 export const MessageRepo = {
+  /**
+   * Cheap existence probe: does the session hold ANY persisted message?
+   * Backs the updateSettings freshness guard (the directory re-aim is only
+   * for threads that haven't started yet) without pulling message bodies.
+   */
+  hasAny(sessionId: string): boolean {
+    const db = getDb();
+    const stmt = db.prepare("SELECT 1 FROM messages WHERE session_id = ? LIMIT 1");
+    stmt.bind([v(sessionId)]);
+    const found = stmt.step();
+    stmt.free();
+    return found;
+  },
+
   /**
    * Replace all messages for a session with the given snapshot. The renderer
    * sends the full ChatMessage[] at turn boundaries (turn.done / error); we

@@ -47,6 +47,7 @@ export function SessionTabs() {
   const activeId = useSessionStore((s) => s.activeSessionId);
   const sessionsByProject = useSessionStore((s) => s.sessionsByProject);
   const pinnedSessions = useSessionStore((s) => s.pinnedSessions);
+  const streamSessions = useSessionStore((s) => s.streamSessions);
   const runningBySession = useSessionStore((s) => s.runningBySession);
   const unreadBySession = useSessionStore((s) => s.unreadBySession);
   const selectSession = useSessionStore((s) => s.selectSession);
@@ -162,7 +163,7 @@ export function SessionTabs() {
               strategy={horizontalListSortingStrategy}
             >
               {tabs.map((id) => {
-                const sess = findSession(sessionsByProject, pinnedSessions, id);
+                const sess = findSession(sessionsByProject, pinnedSessions, streamSessions, id);
                 const isActive = id === activeId;
                 const running = !!runningBySession[id];
                 const unread = unreadBySession[id] ?? 0;
@@ -212,7 +213,7 @@ export function SessionTabs() {
         <TabBarOverflowMenu
           heading="Open tabs"
           items={tabs.map((id) => {
-            const sess = findSession(sessionsByProject, pinnedSessions, id);
+            const sess = findSession(sessionsByProject, pinnedSessions, streamSessions, id);
             return {
               key: id,
               label: sess?.title ?? "(unknown)",
@@ -375,12 +376,16 @@ export function SortableSessionTab({
 }
 
 /** Find a session across the per-project cache by id, falling back to the
- *  global pinned bucket (pinned rows leave their project's list). Returns
- *  undefined if neither has it (init race / unknown id). Exported for the
- *  unified tab bar, which resolves session rows the same way. */
+ *  global pinned bucket (pinned rows leave their project's list) and the
+ *  stream sidebar's cross-project aggregate (a `session.listAll` page-2+
+ *  row exists ONLY there — without the fallback its tab renders
+ *  "(unknown)"). Returns undefined if none has it (init race / unknown id).
+ *  Exported for the unified tab bar, which resolves session rows the same
+ *  way. */
 export function findSession(
   sessionsByProject: Record<string, Session[]>,
   pinnedSessions: Session[],
+  streamSessions: Session[],
   id: string,
 ): Session | undefined {
   for (const list of Object.values(sessionsByProject)) {
@@ -388,5 +393,7 @@ export function findSession(
     const hit = list.find((s) => s.id === id);
     if (hit) return hit;
   }
-  return pinnedSessions.find((s) => s.id === id);
+  const pinnedHit = pinnedSessions.find((s) => s.id === id);
+  if (pinnedHit) return pinnedHit;
+  return streamSessions.find((s) => s.id === id);
 }

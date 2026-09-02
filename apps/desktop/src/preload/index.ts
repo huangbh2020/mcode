@@ -80,6 +80,8 @@ const api = {
       )) as RpcMap["session.updateBookmarks"],
     listPinned: (() =>
       ipcRenderer.invoke(IPC.SESSION_LIST_PINNED)) as RpcMap["session.listPinned"],
+    listAll: ((input) =>
+      ipcRenderer.invoke(IPC.SESSION_LIST_ALL, input)) as RpcMap["session.listAll"],
   },
   setting: {
     get: ((input) =>

@@ -285,6 +285,10 @@ export const en = {
 
   /* ── worktree environment (composer chip / merge-back / manager) ── */
   "chat.worktree.rowLabel": "Environment",
+  "chat.directory.chipTitle": "Working directory of the new session; click to switch projects (before the first message is sent)",
+  "chat.directory.rowHint": "Click to switch the new session's directory",
+  "chat.directory.manageIconTitle": "Manage project (rename / group / color)",
+  "chat.directory.manageHint": "Use the ⋯ at a row's end to manage the project (rename / group / color)",
   "chat.worktree.local": "Local",
   "chat.worktree.hintLocal": "Work in the project root",
   "chat.worktree.optionWtDetached": "Worktree · Experiment",

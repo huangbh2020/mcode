@@ -52,6 +52,8 @@ import { getProviderIcon } from "@renderer/lib/providerIcon.js";
 import { Button, ConfirmDialog, Dialog, Input } from "@renderer/components/ui/index.js";
 import { BrandLogo } from "./BrandLogo.js";
 import { SidebarQuickActions } from "./SidebarQuickActions.js";
+import { HoverIconButton, RenameDialog, SessionContextMenu, ArchivedRow } from "./SidebarShared.js";
+import { LeftBarModeSwitch } from "./StreamSidebar.js";
 import { api } from "@renderer/lib/api.js";
 import { normWorktreeKey, worktreeDisplayName } from "@renderer/lib/worktree.js";
 import { WorktreeMergeBackDialog, WorktreeRemoveDialog } from "@renderer/components/chat/WorktreeMergeBack.js";
@@ -603,7 +605,7 @@ function LeftBarBase({
           sidebar (setLeftOpen(false)) — settings remain in the footer. */}
       {isMac ? (
         <div
-          className="-mt-2 mb-2 flex h-10 items-center pl-[70px]"
+          className="-mt-2 mb-2 flex h-10 items-center gap-1 pl-[70px]"
           style={{ WebkitAppRegion: "drag" } as React.CSSProperties}
         >
           <button
@@ -618,16 +620,19 @@ function LeftBarBase({
           >
             <IconLayoutSidebarLeftExpand size={18} className="shrink-0" />
           </button>
+          {/* Tree ↔ stream view switch (same spot in both sidebars). */}
+          <LeftBarModeSwitch />
         </div>
       ) : (
         <div className="mb-2" style={{ WebkitAppRegion: "drag" } as React.CSSProperties}>
-          <button
-            type="button"
-            onClick={() => setLeftOpen(false)}
-            className={cn(
-              "group flex w-full items-center gap-2.5 rounded-lg px-2 py-2 text-left transition-colors",
-              "hover:bg-surface-hover/60",
-            )}
+          <div className="flex items-center gap-1">
+            <button
+              type="button"
+              onClick={() => setLeftOpen(false)}
+              className={cn(
+                "group flex min-w-0 flex-1 items-center gap-2.5 rounded-lg px-2 py-2 text-left transition-colors",
+                "hover:bg-surface-hover/60",
+              )}
             style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
             title={t("layout.hideLeftPanel")}
           >
@@ -640,7 +645,10 @@ function LeftBarBase({
                 {t("layout.tagline")}
               </span>
             </span>
-          </button>
+            </button>
+            {/* Tree ↔ stream view switch (same spot in both sidebars). */}
+            <LeftBarModeSwitch />
+          </div>
         </div>
       )}
 
@@ -1005,6 +1013,26 @@ function LeftBarBase({
         onNewWorktreeSession={(s) => {
           setCtxMenu(null);
           void startSession(s.projectId, { worktreePath: s.worktreePath ?? undefined });
+        }}
+        onMergeWorktree={(s) => {
+          setCtxMenu(null);
+          const proj = findProject(s.projectId);
+          if (proj && s.worktreePath) setWtMerge({ repoPath: proj.path, worktreePath: s.worktreePath });
+        }}
+        onRenameWorktree={(s) => {
+          setCtxMenu(null);
+          if (s.worktreePath) {
+            setRenaming({
+              id: s.worktreePath,
+              title: worktreeDisplayName(s.worktreePath, worktreeNames),
+              kind: "worktree",
+            });
+          }
+        }}
+        onRemoveWorktree={(s) => {
+          setCtxMenu(null);
+          const proj = findProject(s.projectId);
+          if (proj && s.worktreePath) setWtRemove({ repoPath: proj.path, worktreePath: s.worktreePath });
         }}
       />
 
@@ -1831,185 +1859,6 @@ function WorktreeGroupNode({
   );
 }
 
-/* ── Hover-revealed inline icon button (archive / delete) ── */
-
-function HoverIconButton({
-  onClick, title, danger, className, children,
-}: {
-  onClick: () => void;
-  title: string;
-  danger?: boolean;
-  className?: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <button
-      onClick={(e) => { e.stopPropagation(); onClick(); }}
-      className={cn(
-        "flex shrink-0 items-center rounded px-1 text-content-subtle opacity-0 transition-colors",
-        "hover:bg-surface-hover group-hover:opacity-100",
-        danger ? "hover:text-danger" : "hover:text-content",
-        className,
-      )}
-      title={title}
-    >
-      {children}
-    </button>
-  );
-}
-
-/* ── Archived row (restore + hard-delete actions inline) ── */
-
-function ArchivedRow({
-  icon, title, subtitle, onRestore, onDelete,
-}: {
-  icon: React.ReactNode;
-  title: string;
-  subtitle?: string;
-  onRestore: () => void;
-  onDelete: () => void;
-}) {
-  const { t } = useI18n();
-  return (
-    <li
-      className={cn(
-        "flex items-center gap-1 rounded px-1 py-1 text-content-subtle [font-size:var(--right-panel-font-size)]",
-        "hover:bg-surface-hover/60",
-      )}
-    >
-      {icon}
-      <span className="min-w-0 flex-1 truncate">
-        {title}
-        {subtitle && (
-          <span className="ml-1 text-content-subtle/70 [font-size:var(--rp-fs-sm)]">
-            · {subtitle}
-          </span>
-        )}
-      </span>
-      <button
-        onClick={(e) => { e.stopPropagation(); onRestore(); }}
-        className={cn(
-          "shrink-0 rounded px-1 text-content-subtle transition-colors [font-size:var(--rp-fs-sm)]",
-          "hover:text-accent",
-        )}
-        title={t("layout.restoreToList")}
-      >
-        {t("layout.restore")}
-      </button>
-      <button
-        onClick={(e) => { e.stopPropagation(); onDelete(); }}
-        className={cn(
-          "shrink-0 rounded px-1 text-content-subtle transition-colors [font-size:var(--rp-fs-sm)]",
-          "hover:text-danger",
-        )}
-        title={t("layout.deleteForever")}
-      >
-        {t("layout.deleteShort")}
-      </button>
-    </li>
-  );
-}
-
-/* ── Session right-click context menu ── */
-
-interface SessionContextMenuProps {
-  ctxMenu: { session: Session; x: number; y: number } | null;
-  onClose: () => void;
-  onRename: (session: Session) => void;
-  onCopyTitle: (session: Session) => void;
-  onOpenFolder: (session: Session) => void;
-  onTogglePin: (session: Session) => void;
-  /** "New session in this worktree" — present only for materialized
-   *  worktree sessions; spawns a sibling thread on the same checkout. */
-  onNewWorktreeSession?: (session: Session) => void;
-}
-
-function SessionContextMenu({
-  ctxMenu, onClose, onRename, onCopyTitle, onOpenFolder, onTogglePin, onNewWorktreeSession,
-}: SessionContextMenuProps) {
-  const { t } = useI18n();
-  // Virtual anchor pinned to the cursor coords so the popup opens where the
-  // user right-clicked; frozen at the last coords during the exit transition.
-  const anchor = useCursorAnchor(ctxMenu);
-
-  const session = ctxMenu?.session;
-  const isPinned = !!session?.pinnedAt;
-
-  return (
-    <Menu.Root open={!!ctxMenu} onOpenChange={(open) => { if (!open) onClose(); }}>
-      <Menu.Portal>
-        <Menu.Positioner anchor={anchor} side="bottom" align="start">
-          <Menu.Popup
-            className={cn(
-              "z-50 min-w-[180px] origin-top-left rounded-md border border-edge bg-surface py-1 shadow-2xl",
-              "data-[ending-style]:scale-95 data-[ending-style]:opacity-0",
-              "data-[starting-style]:scale-95 data-[starting-style]:opacity-0",
-              "transition-[transform,opacity] duration-100",
-            )}
-          >
-            <Menu.Item
-              onClick={() => session && onTogglePin(session)}
-              className={cn(
-                "flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs outline-none select-none",
-                "text-content-muted data-[highlighted]:bg-surface-muted",
-              )}
-            >
-              {isPinned ? (
-                <IconPinnedFilled size={14} className="shrink-0 text-accent" />
-              ) : (
-                <IconPin size={14} className="shrink-0" />
-              )}
-              {isPinned ? t("layout.unpin") : t("layout.pin")}
-            </Menu.Item>
-            <Menu.Item
-              onClick={() => session && onRename(session)}
-              className={cn(
-                "flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs outline-none select-none",
-                "text-content-muted data-[highlighted]:bg-surface-muted",
-              )}
-            >
-              <IconPencil size={14} className="shrink-0" />
-              {t("common.rename")}
-            </Menu.Item>
-            <Menu.Item
-              onClick={() => session && onCopyTitle(session)}
-              className={cn(
-                "flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs outline-none select-none",
-                "text-content-muted data-[highlighted]:bg-surface-muted",
-              )}
-            >
-              <IconCopy size={14} className="shrink-0" />
-              {t("layout.copySessionTitle")}
-            </Menu.Item>
-            {session?.worktreePath && onNewWorktreeSession && (
-              <Menu.Item
-                onClick={() => onNewWorktreeSession(session)}
-                className={cn(
-                  "flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs outline-none select-none",
-                  "text-content-muted data-[highlighted]:bg-surface-muted",
-                )}
-              >
-                <IconGitFork size={14} className="shrink-0" />
-                {t("layout.newSessionInWorktree")}
-              </Menu.Item>
-            )}
-            <Menu.Item
-              onClick={() => session && onOpenFolder(session)}
-              className={cn(
-                "flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs outline-none select-none",
-                "text-content-muted data-[highlighted]:bg-surface-muted",
-              )}
-            >
-              <IconFolder size={14} className="shrink-0" />
-              {t("layout.openInFileManager")}
-            </Menu.Item>
-          </Menu.Popup>
-        </Menu.Positioner>
-      </Menu.Portal>
-    </Menu.Root>
-  );
-}
-
 /* ── Worktree right-click context menu ──
  * Opened from a worktree group node's header. Entries: spawn a sibling
  * thread bound to the same checkout, merge the directory's work back into
@@ -2092,90 +1941,6 @@ function WorktreeContextMenu({
         </Menu.Positioner>
       </Menu.Portal>
     </Menu.Root>
-  );
-}
-
-/* ── Rename dialog ── */
-
-/** The rename target's kind drives the dialog copy and the dispatch target;
- *  ids are unique across tables so `id` alone disambiguates on submit —
- *  except kind "worktree", where `id` carries the RAW worktree path. */
-type RenameTarget = { id: string; title: string; kind: "session" | "project" | "worktree" };
-
-interface RenameDialogProps {
-  renaming: RenameTarget | null;
-  onClose: () => void;
-  onSubmit: (id: string, title: string, kind: "session" | "project" | "worktree") => Promise<void>;
-}
-
-function RenameDialog({ renaming, onClose, onSubmit }: RenameDialogProps) {
-  const { t } = useI18n();
-  const [value, setValue] = useState("");
-
-  // Seed the input whenever a new rename target is set.
-  useEffect(() => {
-    if (renaming) setValue(renaming.title);
-  }, [renaming]);
-
-  const trimmed = value.trim();
-  const submit = () => {
-    if (!renaming || !trimmed) return;
-    void onSubmit(renaming.id, trimmed, renaming.kind);
-  };
-
-  const copy =
-    renaming?.kind === "project"
-      ? {
-          title: t("layout.renameProject"),
-          desc: t("layout.renameProjectDesc"),
-          placeholder: t("layout.projectNamePlaceholder"),
-        }
-      : renaming?.kind === "worktree"
-        ? {
-            title: t("layout.renameWorktree"),
-            desc: t("layout.renameWorktreeDesc"),
-            placeholder: t("layout.worktreeNamePlaceholder"),
-          }
-        : {
-            title: t("layout.renameThread"),
-            desc: t("layout.renameThreadDesc"),
-            placeholder: t("layout.threadTitlePlaceholder"),
-          };
-
-  return (
-    <Dialog.Root open={!!renaming} onOpenChange={(open) => { if (!open) onClose(); }}>
-      <Dialog.Portal>
-        <Dialog.Backdrop />
-        <Dialog.Popup className="w-[420px] max-w-[90vw] p-4">
-          <Dialog.Title>{copy.title}</Dialog.Title>
-          <Dialog.Description className="mt-1">{copy.desc}</Dialog.Description>
-
-          <div className="mt-4">
-            <Input
-              value={value}
-              autoFocus
-              placeholder={copy.placeholder}
-              onChange={(e) => setValue((e.target as HTMLInputElement).value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") { e.preventDefault(); submit(); }
-                if (e.key === "Escape") { e.preventDefault(); onClose(); }
-              }}
-              onFocus={(e) => (e.target as HTMLInputElement).select()}
-            />
-          </div>
-
-          <div className="mt-4 flex items-center justify-end gap-2">
-            <Button variant="ghost" size="sm" onClick={onClose}>
-              {t("common.cancel")}
-            </Button>
-            <Button variant="primary" size="sm" onClick={submit} disabled={!trimmed}>
-              {t("common.save")}
-            </Button>
-          </div>
-          <Dialog.Close />
-        </Dialog.Popup>
-      </Dialog.Portal>
-    </Dialog.Root>
   );
 }
 

@@ -1,0 +1,460 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Mcode 左侧栏 v3 · T3 Code 式</title>
+<style>
+/* ══════════════════════════════════════════════════════════════
+   左侧栏 v3 —— 按 T3 Code 当前侧栏(Sidebar.tsx, apps/web)重设计
+   结构:内联搜索 + 项目过滤下拉 → 置顶卡片 ─ 分隔线 → 活跃富卡片(平铺)
+        → 归档 shelf(收起);状态=行内彩色标签(收件箱模型)
+   ══════════════════════════════════════════════════════════════ */
+:root{
+  --surface:#1a1d24;--surface-muted:#2c313c;--surface-hover:#3a404e;
+  --content:#e7e8ec;--content-muted:#bcbfc6;--content-subtle:#9ea2ab;
+  --edge:#2d3340;--accent:#10b981;--danger:#f87171;
+  --sky:#38bdf8;--amber:#fbbf24;--indigo:#818cf8;
+  --page-bg:#111318;--ghost:#14171d;
+}
+body.light{
+  --surface:#fff;--surface-muted:#f4f4f5;--surface-hover:#e4e4e7;
+  --content:#09090b;--content-muted:#3f3f46;--content-subtle:#71717a;
+  --edge:#e4e4e7;--accent:#059669;--danger:#dc2626;
+  --sky:#0284c7;--amber:#b45309;--indigo:#4f46e5;
+  --page-bg:#eceef1;--ghost:#f6f7f9;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{
+  font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Segoe UI","Microsoft YaHei",sans-serif;
+  background:var(--page-bg);color:var(--content);
+  display:flex;flex-direction:column;overflow:hidden;transition:background .25s;
+}
+.page-head{flex:none;display:flex;align-items:center;gap:16px;padding:14px 22px 10px}
+.page-head h1{font-size:15px;font-weight:650}
+.page-head .sub{font-size:12px;color:var(--content-subtle);margin-top:2px}
+#themeBtn{margin-left:auto;border:1px solid var(--edge);background:var(--surface);color:var(--content-subtle);width:30px;height:30px;border-radius:8px;cursor:pointer;font-size:14px}
+#themeBtn:hover{color:var(--content);background:var(--surface-hover)}
+.stage{flex:1;min-height:0;display:flex;gap:20px;padding:4px 22px 18px;align-items:stretch;justify-content:center}
+.app-frame{flex:none;display:flex;border-radius:14px;overflow:hidden;border:1px solid var(--edge);background:var(--surface);box-shadow:0 18px 50px rgba(0,0,0,.35)}
+.ghost-center{width:300px;background:var(--ghost);border-left:1px solid var(--edge);position:relative}
+.ghost-center::before{content:"聊天 / 编辑区(不动)";position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:var(--content-subtle);font-size:12px;opacity:.6;letter-spacing:2px}
+
+/* ── 说明面板 ── */
+.panel{width:342px;flex:none;display:flex;flex-direction:column;gap:12px;overflow-y:auto;font-size:12.5px;line-height:1.62}
+.card{background:var(--surface);border:1px solid var(--edge);border-radius:14px;padding:14px 16px}
+.card h2{font-size:13px;font-weight:700;margin-bottom:8px}
+.card ul{padding-left:16px;color:var(--content-muted)}
+.card li{margin:4px 0}
+.card li b{color:var(--content);font-weight:650}
+.card .src{margin-top:8px;padding-top:8px;border-top:1px dashed var(--edge);font-size:11px;color:var(--content-subtle)}
+.verdict{font-size:11.5px;color:var(--content-subtle);border-radius:9px;padding:9px 11px;background:color-mix(in srgb,var(--accent) 7%,var(--surface));border:1px solid color-mix(in srgb,var(--accent) 22%,transparent)}
+
+/* ════════ 侧栏 ════════ */
+.lb{width:266px;flex:none;display:flex;flex-direction:column;background:var(--surface);font-size:12px}
+.lb *{user-select:none}
+.traffic{flex:none;height:34px;display:flex;align-items:center;gap:7px;padding:0 14px}
+.traffic i{width:12px;height:12px;border-radius:50%}
+.traffic i:nth-child(1){background:#ff5f57}.traffic i:nth-child(2){background:#febc2e}.traffic i:nth-child(3){background:#28c840}
+.ic{width:15px;height:15px;flex:none;stroke:currentColor;fill:none;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+.ic.s{width:12px;height:12px}.ic.xs{width:10px;height:10px}
+
+/* 固定头部:现状快捷入口(整行,原样式) + 项目过滤行 */
+.lb-fixed{flex:none;padding:2px 8px 8px;display:flex;flex-direction:column;gap:5px}
+.quick{display:flex;flex-direction:column;gap:2px}
+.qa{
+  display:flex;align-items:center;gap:8px;padding:6px 6px;border-radius:8px;
+  color:var(--content-muted);font-weight:500;cursor:pointer;transition:background .12s;
+}
+.qa:hover{background:color-mix(in srgb,var(--accent) 10%,transparent);color:var(--accent)}
+.qa kbd{
+  margin-left:auto;font-family:inherit;font-size:10px;padding:1px 5px;border-radius:4px;
+  border:1px solid var(--edge);background:var(--surface-muted);color:var(--content-subtle);
+}
+.qa .relay{flex:none;color:var(--accent)}
+.iconbtn{
+  flex:none;width:30px;height:30px;border-radius:8px;border:0;background:transparent;
+  color:var(--content-subtle);display:flex;align-items:center;justify-content:center;cursor:pointer;transition:.12s;
+}
+.iconbtn:hover{background:var(--surface-muted);color:var(--content)}
+.scoperow{display:flex;gap:5px}
+.scopebtn{
+  flex:1;display:flex;align-items:center;gap:7px;min-width:0;height:28px;padding:0 8px;border-radius:8px;
+  border:0;background:transparent;color:var(--content-muted);cursor:pointer;font:inherit;font-size:12px;font-weight:500;
+}
+.scopebtn:hover{background:var(--surface-muted)}
+.scopebtn .nm{flex:1;min-width:0;text-align:left;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.scope-pop{
+  position:absolute;z-index:30;left:10px;width:246px;margin-top:2px;border:1px solid var(--edge);
+  border-radius:10px;background:var(--surface);box-shadow:0 14px 36px rgba(0,0,0,.45);overflow:hidden;display:none;
+}
+.scope-pop.show{display:block}
+.scope-pop .it{display:flex;align-items:center;gap:8px;padding:6.5px 10px;font-size:12px;color:var(--content-muted);cursor:pointer}
+.scope-pop .it:hover{background:var(--surface-muted)}
+.scope-pop .it.on{color:var(--accent);font-weight:600}
+.scope-pop .it .n{margin-left:auto;font-size:10px;color:var(--content-subtle)}
+.scope-pop .cap{padding:6px 10px 2px;font-size:9.5px;font-weight:700;letter-spacing:.7px;color:var(--content-subtle)}
+.scope-pop .new{border-top:1px solid var(--edge);color:var(--accent)}
+
+/* 滚动主体 */
+.lb-scroll{flex:1;min-height:0;overflow-y:auto;padding:0 8px 8px}
+.lb-scroll::-webkit-scrollbar{width:8px}
+.lb-scroll::-webkit-scrollbar-thumb{background:var(--surface-hover);border-radius:4px;border:2px solid var(--surface)}
+.plist{display:flex;flex-direction:column;gap:1px}
+.divider{height:1px;background:color-mix(in srgb,var(--edge) 60%,transparent);margin:6px 10px}
+
+/* ══ 富卡片(三行) ══ */
+.tcard{
+  position:relative;display:flex;flex-direction:column;justify-content:center;gap:3px;
+  min-height:66px;padding:8px 9px;border-radius:9px;cursor:pointer;
+  color:var(--content-muted);
+}
+.tcard:hover{background:var(--surface-muted)}
+.tcard.active{background:var(--surface-hover);color:var(--content)}
+.tcard.recede{opacity:.72;transition:opacity .12s}
+.tcard.recede:hover{opacity:1}
+.l1{display:flex;align-items:center;gap:5px;min-width:0;height:14px}
+.l1 .pav{width:14px;height:14px;border-radius:4px;flex:none;display:flex;align-items:center;justify-content:center;font-size:8px;font-weight:750;color:#fff}
+.l1 .pnm{flex:1;min-width:0;font-size:10.5px;font-weight:500;color:var(--content-subtle);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pinmark{flex:none;color:color-mix(in srgb,var(--content-subtle) 65%,transparent)}
+/* 状态槽:状态标签 ↔ hover 操作 */
+.slot{flex:none;display:flex;justify-content:end;min-width:34px;position:relative;height:14px}
+.stat{display:inline-flex;align-items:center;gap:3.5px;font-size:10.5px;font-weight:600;font-variant-numeric:tabular-nums}
+.stat .ic{width:12px;height:12px}
+.stat.working{color:var(--sky)}
+.stat.approval{color:var(--amber)}
+.stat.failed{color:var(--danger)}
+.stat.done{color:var(--accent)}
+.stat.time{color:var(--content-subtle);font-weight:400}
+.tcard:hover .stat{display:none}
+.acts{display:none;gap:1px}
+.tcard:hover .acts{display:flex}
+.abtn{width:19px;height:19px;border-radius:5px;border:0;background:transparent;color:var(--content-subtle);display:flex;align-items:center;justify-content:center;cursor:pointer}
+.abtn:hover{background:var(--surface-hover);color:var(--content)}
+.abtn.danger:hover{color:var(--danger)}
+.l2{display:flex;min-width:0;font-size:12.5px;font-weight:500;color:var(--content);overflow:hidden}
+.l2 span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tcard.recede .l2{color:var(--content-muted)}
+.tcard .l2.dim{color:var(--content-subtle)}
+.l3{display:flex;align-items:center;gap:5px;min-width:0;height:13px;font-size:10.5px;color:var(--content-subtle)}
+.wtmark{display:inline-flex;align-items:center;gap:4px;min-width:0;color:color-mix(in srgb,var(--accent) 80%,var(--content-subtle))}
+.wtmark .mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:9.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.unmerged{flex:none;display:inline-flex;align-items:center;gap:3px;font-size:9.5px;color:var(--amber)}
+.unmerged i{width:5px;height:5px;border-radius:50%;background:var(--amber)}
+.l3 .prov{margin-left:auto;flex:none;display:flex;align-items:center;gap:4px}
+.pv{width:7px;height:7px;border-radius:50%}
+.pv.claude{background:#D97757}.pv.pi{background:#A78BFA}
+.l3 .fill{flex:1}
+
+/* ══ 归档 shelf ══ */
+.shelf-h{
+  display:flex;align-items:center;gap:7px;width:100%;margin-top:6px;padding:3px 4px;
+  border:0;background:transparent;cursor:pointer;font:inherit;
+}
+.shelf-h .lb-t{font-size:11px;font-weight:600;color:color-mix(in srgb,var(--content-subtle) 70%,transparent)}
+.shelf-h .hl{flex:1;height:1px;background:color-mix(in srgb,var(--edge) 60%,transparent)}
+.shelf-h .chev{transition:transform .15s;color:var(--content-subtle)}
+.shelf-h.open .chev{transform:rotate(180deg)}
+.arow{
+  display:flex;align-items:center;gap:7px;height:32px;padding:0 8px;border-radius:8px;cursor:pointer;
+  color:var(--content-subtle);
+}
+.arow:hover{background:var(--surface-muted);color:var(--content-muted)}
+.arow .pav{width:14px;height:14px;border-radius:4px;flex:none;display:flex;align-items:center;justify-content:center;font-size:8px;font-weight:750;color:#fff;opacity:.4;filter:grayscale(.7)}
+.arow:hover .pav{opacity:1;filter:none}
+.arow .t{flex:1;min-width:0;font-size:11.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.arow .tm{flex:none;font-size:10px;opacity:.75}
+.arow .op{display:none;gap:1px}
+.arow:hover .tm{display:none}
+.arow:hover .op{display:flex}
+
+/* footer */
+.footer{flex:none;display:flex;align-items:center;gap:4px;margin:6px 8px 0;border-top:1px solid var(--edge);padding:7px 2px 4px}
+.footer .st{display:flex;align-items:center;gap:7px;flex:1;padding:4px 6px;border-radius:6px;color:var(--content-subtle);cursor:pointer}
+.footer .st:hover{background:var(--surface-hover);color:var(--content)}
+.sq{width:26px;height:26px;border-radius:6px;border:0;background:transparent;color:var(--content-subtle);display:flex;align-items:center;justify-content:center;cursor:pointer}
+.sq:hover{background:var(--surface-hover);color:var(--content)}
+.empty{padding:18px 8px;text-align:center;font-size:11px;color:var(--content-subtle)}
+
+/* 右键菜单(worktree 行 / 普通行) */
+.ctx{
+  position:fixed;z-index:50;min-width:200px;border:1px solid var(--edge);border-radius:10px;
+  background:var(--surface);box-shadow:0 14px 36px rgba(0,0,0,.45);padding:4px;display:none;
+}
+.ctx.show{display:block}
+.ctx .ci{display:flex;align-items:center;gap:9px;padding:6px 9px;border-radius:6px;font-size:11.5px;color:var(--content-muted);cursor:pointer}
+.ctx .ci:hover{background:var(--surface-muted);color:var(--content)}
+.ctx .ci.danger{color:var(--danger)}
+.ctx .sep{height:1px;background:var(--edge);margin:3px 6px}
+</style>
+</head>
+<body>
+
+<svg width="0" height="0" style="position:absolute"><defs>
+  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+  <symbol id="i-mobile" viewBox="0 0 24 24"><rect x="7" y="2" width="10" height="20" rx="2"/><path d="M11 18h2"/></symbol>
+  <symbol id="i-world" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 2.6 3.8 5.7 3.8 9S14.5 18.4 12 21c-2.5-2.6-3.8-5.7-3.8-9S9.5 5.6 12 3z"/></symbol>
+  <symbol id="i-merge" viewBox="0 0 24 24"><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="18" r="2.5"/><path d="M6 8.5v7M6 12c6 0 6 2.5 9.5 4.5"/></symbol>
+  <symbol id="i-pencil" viewBox="0 0 24 24"><path d="M17 3a2.8 2.8 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/></symbol>
+  <symbol id="i-pen" viewBox="0 0 24 24"><path d="M12 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.4 2.6a2.1 2.1 0 0 1 3 3L13 14l-4 1 1-4 8.4-8.4z"/></symbol>
+  <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/></symbol>
+  <symbol id="i-folder-plus" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/><path d="M12 10v6M9 13h6"/></symbol>
+  <symbol id="i-chev" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></symbol>
+  <symbol id="i-pin" viewBox="0 0 24 24"><path d="M9 4h6l-1 6 4 3H6l4-3-1-6zM12 13v7"/></symbol>
+  <symbol id="i-fork" viewBox="0 0 24 24"><circle cx="6" cy="5" r="2"/><circle cx="18" cy="5" r="2"/><circle cx="6" cy="19" r="2"/><path d="M6 7v2a4 4 0 0 0 4 4h4a4 4 0 0 0 4-4V7M6 13v4"/></symbol>
+  <symbol id="i-dashed" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" stroke-dasharray="3.5 3.5"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M8.5 12.2l2.4 2.4 4.6-5"/></symbol>
+  <symbol id="i-pause" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M10 9.5v5M14 9.5v5"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></symbol>
+  <symbol id="i-archive" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="4" rx="1"/><path d="M5 8v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8M10 12h4"/></symbol>
+  <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 7h16M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2M6 7l1 13a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1l1-13"/></symbol>
+  <symbol id="i-undo" viewBox="0 0 24 24"><path d="M9 14L4 9l5-5"/><path d="M4 9h10a6 6 0 0 1 0 12h-3"/></symbol>
+  <symbol id="i-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2l1.2 2.6 2.8-.6.4 2.9 2.9.4-.6 2.8L21 12l-2.3 1.9.6 2.8-2.9.4-.4 2.9-2.8-.6L12 22l-1.2-2.6-2.8.6-.4-2.9-2.9-.4.6-2.8L3 12l2.3-1.9-.6-2.8 2.9-.4.4-2.9 2.8.6L12 2z"/></symbol>
+  <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></symbol>
+  <symbol id="i-focus" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3"/></symbol>
+</defs></svg>
+
+<header class="page-head">
+  <div>
+    <h1>左侧栏 v3 · T3 Code 式重设计(迭代 2)</h1>
+    <div class="sub">快捷入口区保留现状(新建会话/搜索/连接手机)+ 项目过滤下拉 + 三行富卡片 + 行内状态标签 + 置顶分隔线 + 归档 shelf;worktree 操作收进右键菜单(试试右键带分支的行)</div>
+  </div>
+  <button id="themeBtn">🌙</button>
+</header>
+
+<main class="stage">
+  <section class="app-frame">
+    <div class="lb" id="lb">
+      <div class="traffic"><i></i><i></i><i></i></div>
+
+      <!-- 固定头部:现状快捷入口(新建会话/搜索/连接手机,原样式)+ 项目过滤 -->
+      <div class="lb-fixed" style="position:relative">
+        <div class="quick">
+          <div class="qa" title="在当前项目下新建会话">
+            <svg class="ic"><use href="#i-plus"/></svg>新建会话<kbd>⌘N</kbd>
+          </div>
+          <div class="qa" title="全局搜索 ⌘K">
+            <svg class="ic"><use href="#i-search"/></svg>搜索<kbd>⌘K</kbd>
+          </div>
+          <div class="qa" title="连接手机">
+            <svg class="ic"><use href="#i-mobile"/></svg>连接手机
+            <svg class="ic s relay"><use href="#i-world"/></svg>
+          </div>
+        </div>
+        <div class="scoperow">
+          <button class="scopebtn" id="scopeBtn">
+            <svg class="ic s" id="scopeLead"><use href="#i-folder"/></svg>
+            <span class="nm" id="scopeName">全部项目</span>
+            <svg class="ic s" style="color:var(--content-subtle)"><use href="#i-chev"/></svg>
+          </button>
+          <button class="iconbtn" title="添加项目"><svg class="ic"><use href="#i-folder-plus"/></svg></button>
+        </div>
+        <div class="scope-pop" id="scopePop"></div>
+      </div>
+
+      <div class="lb-scroll"><div class="plist" id="plist"></div></div>
+
+      <div class="footer">
+        <div class="st"><svg class="ic"><use href="#i-gear"/></svg>设置</div>
+        <button class="sq" title="定位到当前会话"><svg class="ic"><use href="#i-focus"/></svg></button>
+        <button class="sq"><svg class="ic"><use href="#i-sun"/></svg></button>
+      </div>
+    </div>
+    <div class="ghost-center"></div>
+  </section>
+
+  <aside class="panel">
+    <div class="card">
+      <h2>🧬 T3 Code 源码对照</h2>
+      <ul>
+        <li><b>行内状态标签</b>替代 spinner/未读徽章:<b>◌ 运行中(天蓝+时长) / 待审批(琥珀) / 等待输入(靛蓝) / 失败(红) / ✓ 完成(绿,未读时)</b>;颜色是全系统约定</li>
+        <li><b>收件箱模型</b>:运行中的行整体淡出——"working threads aren't your problem yet", prominence 留给需要人的行(待审批/完成未读/失败)</li>
+        <li><b>三行富卡片</b>:① 项目 favicon+项目名 ② 标题 ③ 分支(「Always the branch——行最稳定的标识」)+ 终端/PR/diff/provider</li>
+        <li><b>平铺 + 项目过滤</b>:不再按项目建树;每张卡自带项目身份行,顶部「全部项目 ▾」下拉切范围(下拉内可搜索项目)</li>
+        <li><b>置顶 = 卡片 + hairline 分隔线</b>,可拖拽排序;归档 = <b>Settled shelf</b>(收起、灰度头像、hover 恢复)</li>
+        <li>双击行内重命名;T3 原版为内联搜索输入框(<b>未采纳</b>——Mcode 已有 ⌘K 全局搜索,快捷入口区整块保留现状);默认宽 256px</li>
+      </ul>
+      <div class="src">出处:apps/web/src/components/Sidebar.tsx(4048 行)、sidebar/SidebarChrome.tsx;状态色 Working sky-400 / Approval amber-300 / Input indigo-300 / Failed red-300 / Done emerald。</div>
+    </div>
+    <div class="card">
+      <h2>🔀 Mcode 概念映射</h2>
+      <ul>
+        <li><b>快捷入口区不动</b>:新建会话(⌘N)/ 搜索(⌘K)/ 连接手机 三行维持现状样式与位置,只在其下加项目过滤行</li>
+        <li>项目 favicon → <b>项目色块头像</b>(Mcode 无 favicon,取名称哈希色+首字母)</li>
+        <li>worktree → <b>行内 fork + mcode/* 分支名</b>(T3 正是行属性而非容器);同树多会话各自成行;原泳道的合并回/在此新建/重命名/移除 → <b>worktree 行右键菜单</b>(试右键带分支的行)</li>
+        <li>未合并 → 分支旁 <b>琥珀点+「未合并」</b>(对应 T3 的 PR 徽标位)</li>
+        <li>provider → 行尾小色点(Claude 橙 / Pi 紫)</li>
+        <li>Settled shelf → <b>归档 shelf</b>(Mcode 无 snooze/settle 生命周期,归档即终点,语义不变)</li>
+        <li>项目分组「工作」→ 进过滤下拉的分组项;项目树/泳道/时间分组标签全部退场</li>
+      </ul>
+    </div>
+    <div class="card verdict">
+      <b>这是方向性变化</b>:从「项目树」转为「会话流」——项目退居过滤器和卡片身份行。worktree 泳道、树线缩进、时间分组都不再存在。若认可此方向,实施时 store 需加行内状态推导(运行时长/待审批/失败),归档改 shelf;搜索与项目过滤为增量能力。
+    </div>
+  </aside>
+</main>
+
+<script>
+/* ── 数据模型(与 Mcode 现实概念对齐) ── */
+const PROJECTS={
+  ccgui:{name:"cc-gui",color:"#3b82f6",group:null},
+  blog:{name:"blog-site",color:"#d97706",group:null},
+  data:{name:"data-sync",color:"#8b5cf6",group:"工作"},
+  docs:{name:"cc-gui-docs",color:"#0d9488",group:"工作"},
+};
+const THREADS=[
+  // 置顶
+  {p:"ccgui",t:"worktree 隔离会话设计",stat:"time",time:"2 小时",pv:"claude",pin:true},
+  {p:"blog",t:"里程碑复盘",stat:"time",time:"昨天",pv:"pi",pin:true},
+  // 活跃
+  {p:"ccgui",t:"左侧栏重设计原型",stat:"working",dur:"04:32",pv:"pi",wt:"mcode/leftbar",unmerged:true,active:true},
+  {p:"ccgui",t:"网桥截断回归",stat:"working",dur:"12:07",pv:"claude",wt:"mcode/bridge-fix"},
+  {p:"blog",t:"文章排版调整",stat:"approval",pv:"claude"},
+  {p:"ccgui",t:"LSP jdtls 工作区自愈",stat:"done",pv:"claude"},
+  {p:"data",t:"分页游标重构",stat:"failed",pv:"claude"},
+  {p:"ccgui",t:"settings 面板 i18n 清理",stat:"time",time:"3 天",pv:"pi",quiet:true},
+  {p:"blog",t:"RSS 生成器",stat:"time",time:"上周",pv:"pi",quiet:true},
+];
+const ARCHIVED=[
+  {p:"ccgui",t:"旧版三栏布局",time:"2 周前"},
+  {p:"ccgui",t:"实验: effect-ts",time:"3 周前"},
+  {p:"blog",t:"首页草稿",time:"上个月"},
+  {p:"ccgui",t:"移动端抽屉 v1",time:"上个月"},
+  {p:"docs",t:"部署文档旧版",time:"上个月"},
+];
+const STAT={
+  working:{cls:"working",icon:"i-dashed",label:d=>`运行中 ${d}`},
+  approval:{cls:"approval",icon:"",label:()=> "待审批"},
+  failed:{cls:"failed",icon:"",label:()=> "失败"},
+  done:{cls:"done",icon:"i-check",label:()=> "完成"},
+  time:{cls:"time",icon:"",label:t=>t},
+};
+const pav=p=>`<span class="pav" style="background:${PROJECTS[p].color}">${PROJECTS[p].name[0].toUpperCase()}</span>`;
+const pvdot=v=>`<span class="pv ${v}"></span>`;
+
+let scope="all";
+const scopeBtn=document.getElementById("scopeBtn"),scopePop=document.getElementById("scopePop"),
+      scopeName=document.getElementById("scopeName"),
+      plist=document.getElementById("plist");
+
+function scopeItems(){
+  const items=[{k:"all",icon:"i-folder",name:"全部项目"}];
+  for(const[k,p]of Object.entries(PROJECTS))if(!p.group)items.push({k,avatar:k,name:p.name});
+  items.push({cap:"分组"});
+  for(const p of Object.values(PROJECTS))if(p.group&&!items.some(i=>i.name===p.group))items.push({k:"g:"+p.group,icon:"i-folder",name:p.group});
+  items.push({newI:true});
+  return items;
+}
+function renderScopePop(){
+  scopePop.innerHTML=scopeItems().map(i=>{
+    if(i.cap)return`<div class="cap">${i.cap}</div>`;
+    if(i.newI)return`<div class="it new"><svg class="ic s"><use href="#i-folder-plus"/></svg>添加项目…</div>`;
+    const lead=i.avatar?pav(i.avatar):`<svg class="ic s"><use href="#${i.icon}"/></svg>`;
+    const n=i.k==="all"?`<span class="n">${THREADS.length}</span>`:"";
+    return`<div class="it ${scope===i.k?"on":""}" data-k="${i.k}">${lead}<span style="flex:1">${i.name}</span>${n}</div>`;
+  }).join("");
+  scopePop.querySelectorAll(".it[data-k]").forEach(el=>el.onclick=()=>{
+    scope=el.dataset.k;applyScope();scopePop.classList.remove("show");
+  });
+}
+function applyScope(){
+  let name,color;
+  if(scope==="all"){name="全部项目";}
+  else if(scope.startsWith("g:")){name=scope.slice(2);}
+  else{name=PROJECTS[scope].name;color=PROJECTS[scope].color;}
+  scopeName.textContent=name;
+  document.getElementById("scopeLead").outerHTML=color
+    ?`<span class="pav" id="scopeLead" style="background:${color}">${name[0].toUpperCase()}</span>`
+    :`<svg class="ic s" id="scopeLead"><use href="#i-folder"/></svg>`;
+  render();
+}
+function inScope(t){
+  if(scope==="all")return true;
+  if(scope.startsWith("g:"))return PROJECTS[t.p].group===scope.slice(2);
+  return t.p===scope;
+}
+function render(){
+  const K=THREADS.filter(inScope);
+  const pinned=K.filter(t=>t.pin),live=K.filter(t=>!t.pin);
+  const statusHTML=t=>{
+    const s=STAT[t.stat];
+    return `<span class="stat ${s.cls}">${s.icon?`<svg class="ic s"><use href="#${s.icon}"/></svg>`:""}<span>${s.label(t.dur||t.time)}</span></span>`;
+  };
+  const card=t=>`
+    <div class="tcard ${t.active?"active":""} ${t.stat==="working"&&!t.active?"recede":""}" data-wt="${t.wt||""}" title="${t.t}(双击重命名 · 右键更多)">
+      <div class="l1">${pav(t.p)}<span class="pnm">${PROJECTS[t.p].name}</span>
+        ${t.pin?`<span class="pinmark"><svg class="ic xs"><use href="#i-pin"/></svg></span>`:""}
+        <span class="slot">
+          ${statusHTML(t)}
+          <span class="acts">
+            <button class="abtn" title="置顶"><svg class="ic s"><use href="#i-pin"/></svg></button>
+            <button class="abtn" title="归档"><svg class="ic s"><use href="#i-archive"/></svg></button>
+            <button class="abtn danger" title="删除"><svg class="ic s"><use href="#i-trash"/></svg></button>
+          </span>
+        </span>
+      </div>
+      <div class="l2 ${t.quiet?"dim":""}"><span>${t.t}</span></div>
+      <div class="l3">
+        ${t.wt?`<span class="wtmark"><svg class="ic xs"><use href="#i-fork"/></svg><span class="mono">${t.wt}</span></span>${t.unmerged?`<span class="unmerged"><i></i>未合并</span>`:""}`:""}
+        <span class="fill"></span>
+        <span class="prov">${pvdot(t.pv)}</span>
+      </div>
+    </div>`;
+  const shelf=`
+    <button class="shelf-h" id="shelfBtn">
+      <span class="lb-t">已归档 (${ARCHIVED.length})</span><span class="hl"></span>
+      <svg class="ic s chev"><use href="#i-chev"/></svg>
+    </button>
+    <div id="shelfBody" style="display:none">
+      ${ARCHIVED.map(a=>`
+        <div class="arow" title="${a.t}">${pav(a.p)}<span class="t">${a.t}</span>
+          <span class="tm">${a.time}</span>
+          <span class="op">
+            <button class="abtn" title="恢复"><svg class="ic s"><use href="#i-undo"/></svg></button>
+            <button class="abtn danger" title="彻底删除"><svg class="ic s"><use href="#i-trash"/></svg></button>
+          </span>
+        </div>`).join("")}
+    </div>`;
+  plist.innerHTML=
+    (K.length===0)?`<div class="empty">没有会话</div>`:
+    (pinned.length?pinned.map(card).join("")+`<div class="divider"></div>`:"")+
+    live.map(card).join("")+shelf;
+  const sb=document.getElementById("shelfBtn");
+  if(sb)sb.onclick=()=>{const b=document.getElementById("shelfBody");const open=b.style.display!=="none";b.style.display=open?"none":"block";sb.classList.toggle("open",!open);};
+}
+scopeBtn.onclick=e=>{e.stopPropagation();renderScopePop();scopePop.classList.toggle("show");};
+document.addEventListener("click",e=>{if(!e.target.closest(".scope-pop"))scopePop.classList.remove("show");});
+render();
+
+/* 右键菜单:worktree 行承载原泳道操作(合并回/在此新建/重命名/移除),普通行是会话操作 */
+const ctx=document.createElement("div");ctx.className="ctx";document.body.appendChild(ctx);
+document.addEventListener("contextmenu",e=>{
+  const card=e.target.closest(".tcard");
+  if(!card)return;
+  e.preventDefault();
+  const wt=card.dataset.wt;
+  ctx.innerHTML=wt?`
+    <div class="ci"><svg class="ic s"><use href="#i-plus"/></svg>在此工作树中新建会话</div>
+    <div class="ci"><svg class="ic s"><use href="#i-merge"/></svg>合并回本地分支(${wt})</div>
+    <div class="ci"><svg class="ic s"><use href="#i-pencil"/></svg>重命名工作树</div>
+    <div class="sep"></div>
+    <div class="ci danger"><svg class="ic s"><use href="#i-trash"/></svg>移除工作树…</div>`
+  :`
+    <div class="ci"><svg class="ic s"><use href="#i-pin"/></svg>置顶 / 取消置顶</div>
+    <div class="ci"><svg class="ic s"><use href="#i-pencil"/></svg>重命名(双击行亦可)</div>
+    <div class="ci"><svg class="ic s"><use href="#i-archive"/></svg>归档</div>
+    <div class="sep"></div>
+    <div class="ci danger"><svg class="ic s"><use href="#i-trash"/></svg>删除会话…</div>`;
+  ctx.classList.add("show");
+  ctx.style.left=Math.min(e.clientX,innerWidth-230)+"px";
+  ctx.style.top=Math.min(e.clientY,innerHeight-190)+"px";
+});
+document.addEventListener("click",e=>{if(!e.target.closest(".ctx"))ctx.classList.remove("show");});
+document.getElementById("themeBtn").onclick=function(){
+  document.body.classList.toggle("light");this.textContent=document.body.classList.contains("light")?"☀️":"🌙";
+};
+</script>
+</body>
+</html>

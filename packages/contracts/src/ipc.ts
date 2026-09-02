@@ -82,6 +82,19 @@ export const DisplayModeSchema = z.enum(["single", "tabs"]);
 export type DisplayMode = z.infer<typeof DisplayModeSchema>;
 
 /**
+ * Left-bar view preference:
+ *  - "tree" (default): the classic project → session tree.
+ *  - "stream": the session-first flat list (T3-style cards with a project
+ *    scope filter).
+ *
+ * Persisted in the `settings` table under this key, same hydration pattern
+ * as `ui.displayMode` (first-paint getMany → sessionStore.leftBarMode).
+ */
+export const LEFTBAR_MODE_SETTING_KEY = "ui.leftBarMode";
+export const LeftBarModeSchema = z.enum(["tree", "stream"]);
+export type LeftBarMode = z.infer<typeof LeftBarModeSchema>;
+
+/**
  * UI language preference:
  *  - "zh" (default): Simplified Chinese — the project's original UI language.
  *  - "en": English.
@@ -133,6 +146,14 @@ export const WORKTREE_ROOT_SETTING_KEY = "worktree.root";
  * basename. Written by the left bar's "rename worktree" dialog.
  */
 export const WORKTREE_NAMES_SETTING_KEY = "worktree.names";
+
+/** Settings key for per-project avatar color overrides ("project.colors") —
+ *  a JSON map of projectId → hex. Purely cosmetic; missing entries fall back
+ *  to the deterministic name-hash color (see the renderer's
+ *  lib/projectAvatar.ts). Written by the new-session panel's project manage
+ *  menu; keeping colors out of the projects table avoids a DB migration for
+ *  what is a display-only concern (same trade as worktree.names). */
+export const PROJECT_COLORS_SETTING_KEY = "project.colors";
 
 /** zod schema for the auto-archive rules persisted under AUTO_ARCHIVE_SETTING_KEY. */
 export const AutoArchiveConfigSchema = z.object({
@@ -871,6 +892,12 @@ export const UpdateSessionSettingsSchema = z.object({
    *  as envMode. null clears the intent back to the detached default (used
    *  when flipping the session to local so no stale intent lingers). */
   wtStyle: z.enum(["detached", "branch"]).nullable().optional(),
+  /** Directory re-aim (new-session panel's directory switcher): move a FRESH
+   *  local session to another project. The main handler honors it only while
+   *  the session has no messages and no materialized worktree, and only onto
+   *  an existing non-archived project — otherwise the whole call rejects and
+   *  nothing changes. */
+  projectId: z.string().optional(),
 });
 export type UpdateSessionSettingsInput = z.infer<typeof UpdateSessionSettingsSchema>;
 
@@ -987,6 +1014,16 @@ export const ProjectSessionsSchema = z.object({
   archived: z.boolean().optional(),
 });
 export type ProjectSessionsInput = z.infer<typeof ProjectSessionsSchema>;
+
+/** Cross-project aggregate of non-archived chat sessions, newest-first —
+ *  the stream sidebar's flat "全部项目" list. Same paging contract as
+ *  project.sessions (offset + hasMore/total), just without the projectId
+ *  filter. */
+export const SessionListAllSchema = z.object({
+  limit: z.number().int().positive().optional(),
+  offset: z.number().int().nonnegative().optional(),
+});
+export type SessionListAllInput = z.infer<typeof SessionListAllSchema>;
 
 /** Cross-project session search by title substring. The unified Ctrl+K search
  *  palette uses this to list threads across the whole workspace (not just the
@@ -3450,6 +3487,8 @@ export interface RpcMap {
   "project.create": (input: CreateProjectInput) => Promise<{ project: Project }>;
   "project.list": () => Promise<{ projects: Project[] }>;
   "project.sessions": (input: ProjectSessionsInput) => Promise<{ sessions: Session[]; hasMore: boolean; total: number }>;
+  /** Cross-project non-archived sessions, newest-first (stream sidebar). */
+  "session.listAll": (input: SessionListAllInput) => Promise<{ sessions: Session[]; hasMore: boolean; total: number }>;
   /** Hard-delete a project; its sessions + messages cascade-delete (DB FK). */
   "project.delete": (input: { id: string }) => Promise<void>;
   /** Set a project's archived flag (soft-delete; restorable). */
@@ -3870,6 +3909,7 @@ export const IPC = {
   SESSION_PIN: "session:pin",
   SESSION_UPDATE_BOOKMARKS: "session:updateBookmarks",
   SESSION_LIST_PINNED: "session:listPinned",
+  SESSION_LIST_ALL: "session:listAll",
   SESSION_SEARCH: "session:search",
   SESSION_SEARCH_BOOKMARKS: "session:searchBookmarks",
   SESSION_MESSAGES: "session:messages",

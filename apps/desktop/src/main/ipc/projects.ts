@@ -12,6 +12,7 @@ import {
   ArchiveSessionSchema,
   PinSessionSchema,
   ProjectSessionsSchema,
+  SessionListAllSchema,
   RenameSessionSchema,
   SessionSearchSchema,
   BookmarkSearchSchema,
@@ -198,5 +199,17 @@ export function registerProjectHandlers(ipcMain: IpcMain): void {
   // All pinned sessions across projects — feeds the left bar's pinned section.
   ipcMain.handle(IPC.SESSION_LIST_PINNED, () => {
     return { sessions: SessionRepo.listPinned() };
+  });
+
+  // Cross-project aggregate (stream sidebar's flat "全部项目" list). Same
+  // paging contract as PROJECT_SESSIONS: default page 5, hasMore/total.
+  ipcMain.handle(IPC.SESSION_LIST_ALL, (_evt, raw) => {
+    const input = SessionListAllSchema.parse(raw);
+    const limit = input.limit ?? 10;
+    const offset = input.offset ?? 0;
+    const sessions = SessionRepo.listAll({ limit, offset });
+    const total = SessionRepo.countAll();
+    const hasMore = offset + sessions.length < total;
+    return { sessions, hasMore, total };
   });
 }

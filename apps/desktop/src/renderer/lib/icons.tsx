@@ -143,6 +143,7 @@ export {
   IconFolder,
   IconFolderOpen,
   IconFolderPlus,
+  IconFolderMinus,
   IconFiles,
   IconGitBranch,
   IconGitCommit,

@@ -25,7 +25,7 @@ import {
   resolveShortcut,
   acceleratorToDisplayTokens,
 } from "@renderer/lib/shortcuts.js";
-import { IconPlus, IconSearch } from "@renderer/lib/icons.js";
+import { IconGitFork, IconPlus, IconSearch } from "@renderer/lib/icons.js";
 import { Kbd } from "@renderer/components/ui/index.js";
 import { MobileConnectButton } from "@renderer/components/layout/MobileConnectDialog.js";
 import { useI18n } from "@renderer/lib/i18n/index.js";
@@ -42,18 +42,23 @@ function ShortcutBadge({ commandId }: { commandId: string }) {
 export function SidebarQuickActions({
   showSearch = true,
   showConnectPhone = true,
+  newSessionOverride,
 }: {
   /** Hide the 搜索 entry (mobile drawer: no keyboard to trigger Ctrl+K). */
   showSearch?: boolean;
   /** Hide the 连接手机 entry (mobile drawer: the visitor is already the phone). */
   showConnectPhone?: boolean;
+  /** When set, 新建会话 dispatches here instead of the default
+   *  active-project start (stream view scoped to a worktree: spawn the
+   *  session in THAT checkout). Title flips to the worktree wording. */
+  newSessionOverride?: () => void;
 } = {}) {
   const { t } = useI18n();
   const startSession = useSessionStore((s) => s.startSession);
   const setCommandPaletteOpen = useSessionStore((s) => s.setCommandPaletteOpen);
   const activeProjectId = useSessionStore((s) => s.activeProjectId);
 
-  const canNewSession = activeProjectId !== null;
+  const canNewSession = newSessionOverride != null || activeProjectId !== null;
 
   return (
     <div className="mb-2 flex flex-col gap-1">
@@ -62,10 +67,17 @@ export function SidebarQuickActions({
       <button
         type="button"
         onClick={() => {
-          if (canNewSession) void startSession();
+          if (newSessionOverride) newSessionOverride();
+          else if (canNewSession) void startSession();
         }}
         disabled={!canNewSession}
-        title={canNewSession ? t("layout.newSessionInProject") : t("layout.needProject")}
+        title={
+          newSessionOverride
+            ? t("layout.newSessionInWorktree")
+            : canNewSession
+              ? t("layout.newSessionInProject")
+              : t("layout.needProject")
+        }
         className={cn(
           "flex w-full items-center gap-2 rounded-lg px-1 py-2 transition-colors",
           "[font-size:var(--right-panel-font-size)]",
@@ -74,7 +86,11 @@ export function SidebarQuickActions({
             : "cursor-not-allowed text-content-subtle opacity-50",
         )}
       >
-        <IconPlus size={16} className="shrink-0" />
+        {newSessionOverride ? (
+          <IconGitFork size={16} className="shrink-0" />
+        ) : (
+          <IconPlus size={16} className="shrink-0" />
+        )}
         <span className="flex-1 text-left font-medium">{t("layout.newSession")}</span>
         <ShortcutBadge commandId="session.new" />
       </button>

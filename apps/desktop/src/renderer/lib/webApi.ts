@@ -401,6 +401,7 @@ const session: Api["session"] = {
   pin: (input) => rpc("session:pin", input),
   updateBookmarks: (input) => rpc("session:updateBookmarks", input),
   listPinned: () => rpc("session:listPinned"),
+  listAll: (input) => rpc("session:listAll", input),
 };
 
 const provider: Api["provider"] = {

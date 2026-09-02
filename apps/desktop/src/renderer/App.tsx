@@ -4,6 +4,7 @@ import { ThreePaneLayout } from "./components/layout/ThreePaneLayout.js";
 import { Divider } from "./components/layout/Divider.js";
 import { Titlebar } from "./components/layout/Titlebar.js";
 import { LeftBar } from "./components/layout/LeftBar.js";
+import { StreamSidebar } from "./components/layout/StreamSidebar.js";
 import { ChatPane } from "./components/chat/ChatPane.js";
 import { SessionTabs } from "./components/layout/SessionTabs.js";
 import { UnifiedTabsBar } from "./components/layout/UnifiedTabsBar.js";
@@ -120,6 +121,7 @@ export function App() {
    *  can toggle them. Workspace-only — the settings view pins leftOpen=true /
    *  rightOpen=false. NOT persisted (matches original behavior). */
   const leftOpen = useSessionStore((s) => s.leftOpen);
+  const leftBarMode = useSessionStore((s) => s.leftBarMode);
   const setLeftOpen = useSessionStore((s) => s.setLeftOpen);
   const rightOpen = useSessionStore((s) => s.rightOpen);
   const setRightOpen = useSessionStore((s) => s.setRightOpen);
@@ -218,7 +220,10 @@ export function App() {
           style={{ flexGrow: 0, flexBasis: `${leftWidthPct}%` }}
         >
           <div className="min-h-0 flex-1 overflow-y-auto">
-            <LeftBar />
+            {/* Left-bar view preference: classic project tree or the
+                session-first stream. Both are pure renderers over the same
+                store; switching keeps running turns untouched. */}
+            {leftBarMode === "stream" ? <StreamSidebar /> : <LeftBar />}
           </div>
         </aside>
       )}

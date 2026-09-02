@@ -64,6 +64,20 @@ export const zh = {
   "layout.newSessionInProject": "在当前项目下新建会话",
   "layout.needProject": "请先打开一个项目",
 
+  /* ── stream sidebar (session-first left-bar view) ── */
+  "layout.stream.switchToStream": "切换为会话流视图",
+  "layout.stream.switchToTree": "切换为项目树视图",
+  "layout.stream.scopeAll": "全部项目",
+  "layout.stream.scopeGroupCap": "分组",
+  "layout.stream.scopeWorktree": "工作树",
+  "layout.stream.statusWorking": "运行中 {dur}",
+  "layout.stream.statusInput": "等待输入",
+  "layout.stream.statusFailed": "失败",
+  "layout.stream.statusDone": "完成",
+  "layout.stream.unmerged": "未合并",
+  "layout.stream.empty": "暂无会话",
+  "layout.stream.showMore": "显示更多（还有 {n} 条）",
+
   /* ── project groups ── */
   "layout.moveToGroup": "移动到分组",
   "layout.newGroupMenu": "新建分组…",
@@ -74,8 +88,10 @@ export const zh = {
   "layout.removeFromGroup": "移出分组",
   "layout.groupNamePlaceholder": "分组名称",
   "layout.groupColor": "分组颜色",
+  "layout.projectColor": "项目颜色",
   "layout.setColor": "设置颜色",
   "layout.customColor": "自定义",
+  "layout.projectManageIcon": "管理项目（重命名 / 分组 / 颜色）",
   "layout.resetColor": "恢复默认",
   "layout.dissolveGroup": "解散分组（不删除项目）",
   "layout.color.emerald": "翠绿",

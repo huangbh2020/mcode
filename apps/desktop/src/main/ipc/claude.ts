@@ -427,6 +427,28 @@ export function registerClaudeHandlers(ipcMain: IpcMain): void {
   // next tool call (canUseTool reads the bridge's current value).
   ipcMain.handle(IPC.SESSION_UPDATE_SETTINGS, (_evt, raw) => {
     const input = UpdateSessionSettingsSchema.parse(raw);
+    // Directory re-aim (new-session panel's directory switcher). Honored
+    // ONLY for a thread that hasn't started — no persisted messages, no
+    // materialized worktree — and only onto an existing non-archived
+    // project. Anything else rejects the WHOLE call so the renderer keeps
+    // its caches instead of half-applying a move.
+    if (input.projectId !== undefined) {
+      const sess = SessionRepo.get(input.sessionId);
+      if (!sess) throw new Error(`updateSettings: unknown session ${input.sessionId}`);
+      const target = ProjectRepo.get(input.projectId);
+      if (!target || target.archived) {
+        throw new Error("updateSettings: move target project missing or archived");
+      }
+      if (sess.worktreePath) {
+        throw new Error("updateSettings: session already materialized in a worktree");
+      }
+      if (MessageRepo.hasAny(input.sessionId)) {
+        throw new Error("updateSettings: session already has messages");
+      }
+      if (sess.projectId !== input.projectId) {
+        SessionRepo.updateSettings(input.sessionId, { projectId: input.projectId });
+      }
+    }
     SessionRepo.updateSettings(input.sessionId, {
       model: input.model,
       effort: input.effort,

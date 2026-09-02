@@ -291,6 +291,10 @@ export const zh = {
 
   /* ── worktree environment (composer chip / merge-back / manager) ── */
   "chat.worktree.rowLabel": "工作环境",
+  "chat.directory.chipTitle": "新会话的工作目录;点击可切换到其他项目(首条消息发送前有效)",
+  "chat.directory.rowHint": "点击切换新会话目录",
+  "chat.directory.manageIconTitle": "管理项目(重命名 / 分组 / 颜色)",
+  "chat.directory.manageHint": "行末 ⋯ 可管理项目(重命名 / 分组 / 颜色)",
   "chat.worktree.local": "本地",
   "chat.worktree.hintLocal": "在项目根目录工作",
   "chat.worktree.optionWtDetached": "工作树 · 实验",

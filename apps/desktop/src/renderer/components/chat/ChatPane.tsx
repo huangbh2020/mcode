@@ -46,6 +46,7 @@ import { AttachMenuButton } from "./AttachMenuButton.js";
 import { MicButton } from "./MicButton.js";
 import { ComposerToolbar } from "./ComposerToolbar.js";
 import { WorktreeModeChip } from "./WorktreeModeChip.js";
+import { SessionDirectoryChip } from "./SessionDirectoryChip.js";
 import { ComposerToolbarToggle } from "./ComposerToolbarToggle.js";
 import { ProviderDropdown } from "./ProviderDropdown.js";
 import { QuestionPrompt } from "./QuestionPrompt.js";
@@ -2922,10 +2923,13 @@ function ChatPaneForSession({
               onDismiss={dismissQuestion}
             />
           )}
-          {/* Working-environment picker — OUTSIDE the composer card, a quiet
-              text trigger on its own row just above it (left-aligned). Hidden
-              entirely for projects without a git repo (self-hides). */}
-          <div className="flex items-center px-1 pb-1">
+          {/* Composer-top chips row — directory switcher (fresh LOCAL
+              sessions only, hidden when there's <2 projects) then the
+              working-environment picker. Both are quiet text triggers
+              OUTSIDE the composer card; each hides itself once the
+              conversation starts. */}
+          <div className="flex items-center gap-1 px-1 pb-1">
+            <SessionDirectoryChip sessionId={sessionId} />
             <WorktreeModeChip sessionId={sessionId} />
           </div>
           <div
