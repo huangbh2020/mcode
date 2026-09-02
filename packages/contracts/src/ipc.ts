@@ -2214,6 +2214,16 @@ export const GitWorktreeListSchema = z.object({
 });
 export type GitWorktreeListInput = z.infer<typeof GitWorktreeListSchema>;
 
+/** Single-worktree probe — the cheap variant `git.worktreeStatus` serves to
+ *  pollers that only care about ONE tree (the Titlebar merge button): same
+ *  enrichment semantics as the list, but one status probe instead of one
+ *  per linked worktree. Null status = not a registered worktree. */
+export const GitWorktreeStatusSchema = z.object({
+  repoPath: z.string(),
+  worktreePath: z.string(),
+});
+export type GitWorktreeStatusInput = z.infer<typeof GitWorktreeStatusSchema>;
+
 /** Merge a worktree's work back into the local checkout's CURRENT branch.
  *  Orchestrated server-side: dirty worktree → auto-commit on its detached
  *  HEAD → `git merge --no-edit <worktree HEAD>` in the local repo. */
@@ -2248,9 +2258,11 @@ export const GitWorktreeRemoveSchema = z.object({
   worktreePath: z.string(),
   /** Skip the uncommitted-changes check and pass --force. */
   force: z.boolean().optional(),
-  /** Before removing, persist the worktree's uncommitted diff as a patch
-   *  under userData/worktree-snapshots/ (last-resort recovery for discarded
-   *  work). `patchPath` in the result tells the user where it went. */
+  /** Before removing, persist the worktree's FULL unmerged work (commits
+   *  since the merge-base with the main HEAD, plus uncommitted edits) as a
+   *  binary patch under userData/worktree-snapshots/ (last-resort recovery
+   *  for discarded work). `patchPath` in the result tells the user where it
+   *  went. */
   exportPatch: z.boolean().optional(),
 });
 export type GitWorktreeRemoveInput = z.infer<typeof GitWorktreeRemoveSchema>;
@@ -3616,6 +3628,10 @@ export interface RpcMap {
   "git.mergeAbort": (input: GitRepoPathInput) => Promise<GitOpResult>;
   /** List the repo's worktrees (linked + main) with lifecycle state. */
   "git.worktreeList": (input: GitWorktreeListInput) => Promise<{ worktrees: GitWorktreeInfo[] }>;
+  /** Lifecycle state of ONE worktree (cheap probe for pollers). */
+  "git.worktreeStatus": (
+    input: GitWorktreeStatusInput,
+  ) => Promise<{ status: GitWorktreeInfo | null }>;
   /** Merge a worktree's HEAD back into the local current branch. */
   "git.worktreeMergeBack": (input: GitWorktreeMergeBackInput) => Promise<GitWorktreeMergeBackResult>;
   /** Remove a worktree (optionally force / with a patch export first). */
@@ -3956,6 +3972,7 @@ export const IPC = {
   GIT_MERGE_ABORT: "git:mergeAbort",
   // Git worktrees (isolated agent sessions)
   GIT_WORKTREE_LIST: "git:worktreeList",
+  GIT_WORKTREE_STATUS: "git:worktreeStatus",
   GIT_WORKTREE_MERGE_BACK: "git:worktreeMergeBack",
   GIT_WORKTREE_REMOVE: "git:worktreeRemove",
   // Integrated terminal (P4 IDE right panel)

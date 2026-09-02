@@ -68,12 +68,14 @@ export function WorktreeMergeToolbarButton() {
       return;
     }
     try {
-      const { worktrees } = await api.git.worktreeList({ repoPath });
-      const target = normWorktreeKey(worktreePath);
-      const mine = worktrees.find((w) => normWorktreeKey(w.path) === target);
+      // Single-tree probe (worktreeStatus), NOT worktreeList: the list
+      // enriches EVERY linked tree with its own `git status` child process,
+      // and this runs on a 12s interval — the poller must only ever pay for
+      // the one tree it cares about.
+      const { status } = await api.git.worktreeStatus({ repoPath, worktreePath });
       // "Has work" = uncommitted files OR commits not contained in the main
-      // HEAD (worktreeList's `merged` flag is the ancestor probe).
-      setHasChanges(!!mine && (mine.dirty || !mine.merged));
+      // HEAD (worktreeStatus's `merged` flag is the ancestor probe).
+      setHasChanges(!!status && (status.dirty || !status.merged));
     } catch {
       setHasChanges(false);
     }
@@ -84,7 +86,10 @@ export function WorktreeMergeToolbarButton() {
   }, [refresh]);
   useEffect(() => {
     if (!worktreePath) return;
-    const timer = setInterval(() => void refresh(), 12_000);
+    const timer = setInterval(() => {
+      if (document.hidden) return; // no git probing while the window is hidden
+      void refresh();
+    }, 12_000);
     return () => clearInterval(timer);
   }, [worktreePath, refresh]);
 
@@ -143,6 +148,12 @@ export function WorktreeRemoveDialog({
   onRemoved?: () => void;
 }) {
   const { t } = useI18n();
+  // "Exportable" = dirty OR carrying commits the main branch doesn't have —
+  // both are work that dies with the directory (committed work on a detached
+  // HEAD leaves no ref behind), so the patch option must appear for either.
+  const [exportable, setExportable] = useState(false);
+  // Dirty specifically — gates the force checkbox, which is about
+  // uncommitted changes git's worktree remove would refuse to delete.
   const [dirty, setDirty] = useState(false);
   const [force, setForce] = useState(false);
   const [exportPatch, setExportPatch] = useState(true);
@@ -153,8 +164,9 @@ export function WorktreeRemoveDialog({
   // discarded commits live instead of closing silently.
   const [retained, setRetained] = useState<string | null>(null);
 
-  // Probe dirtiness on open so the force/patch options only appear when they
-  // matter (normalized match — porcelain path vs stored path surface forms).
+  // Probe lifecycle state on open so the force/patch options only appear
+  // when they matter (single-tree probe — the backend matches the porcelain
+  // path against ours with normalization, so no renderer-side matching).
   useEffect(() => {
     if (!open) {
       setError(null);
@@ -167,11 +179,11 @@ export function WorktreeRemoveDialog({
     if (!repoPath) return;
     let cancelled = false;
     api.git
-      .worktreeList({ repoPath })
-      .then(({ worktrees }) => {
+      .worktreeStatus({ repoPath, worktreePath })
+      .then(({ status }) => {
         if (cancelled) return;
-        const target = normWorktreeKey(worktreePath);
-        setDirty(!!worktrees.find((w) => normWorktreeKey(w.path) === target)?.dirty);
+        setDirty(!!status?.dirty);
+        setExportable(!!status && (status.dirty || !status.merged));
       })
       .catch(() => {});
     return () => {
@@ -227,26 +239,30 @@ export function WorktreeRemoveDialog({
                   </span>
                 </div>
               )}
-              {!retained && dirty && (
+              {!retained && (exportable || dirty) && (
                 <div className="mt-2.5 space-y-1.5">
-                  <label className="flex items-center gap-1.5 text-xs text-content-muted">
-                    <input
-                      type="checkbox"
-                      checked={exportPatch}
-                      onChange={(e) => setExportPatch(e.target.checked)}
-                      className="accent-accent"
-                    />
-                    {t("chat.worktree.exportPatch")}
-                  </label>
-                  <label className="flex items-center gap-1.5 text-xs text-content-muted">
-                    <input
-                      type="checkbox"
-                      checked={force}
-                      onChange={(e) => setForce(e.target.checked)}
-                      className="accent-accent"
-                    />
-                    {t("chat.worktree.forceRemove")}
-                  </label>
+                  {exportable && (
+                    <label className="flex items-center gap-1.5 text-xs text-content-muted">
+                      <input
+                        type="checkbox"
+                        checked={exportPatch}
+                        onChange={(e) => setExportPatch(e.target.checked)}
+                        className="accent-accent"
+                      />
+                      {t("chat.worktree.exportPatch")}
+                    </label>
+                  )}
+                  {dirty && (
+                    <label className="flex items-center gap-1.5 text-xs text-content-muted">
+                      <input
+                        type="checkbox"
+                        checked={force}
+                        onChange={(e) => setForce(e.target.checked)}
+                        className="accent-accent"
+                      />
+                      {t("chat.worktree.forceRemove")}
+                    </label>
+                  )}
                 </div>
               )}
               {error && (
@@ -363,14 +379,6 @@ export function WorktreeMergeBackDialog({
     }
   };
 
-  const defaultCommitMessage = useCallback(
-    () =>
-      `worktree: auto-commit before merge back (${
-        worktreePath.split(/[\\/]/).pop() ?? "worktree"
-      })`,
-    [worktreePath],
-  );
-
   const load = useCallback(async () => {
     if (!repoPath) return;
     setError(null);
@@ -379,7 +387,11 @@ export function WorktreeMergeBackDialog({
     setInfo(null);
     setPreview(null);
     setMainBranch("");
-    setCommitMessage(defaultCommitMessage());
+    // Starts EMPTY: the input's placeholder describes the backend's built-in
+    // default, and a blank submit falls back to that same default server-side
+    // — the exact string lives in ONE place (worktreeOps autoCommitMessage),
+    // never duplicated here.
+    setCommitMessage("");
     setPreviewLoading(true);
     try {
       const { worktrees } = await api.git.worktreeList({ repoPath });
@@ -409,7 +421,7 @@ export function WorktreeMergeBackDialog({
       setError((err as Error).message);
       setPreviewLoading(false);
     }
-  }, [repoPath, worktreePath, defaultCommitMessage]);
+  }, [repoPath, worktreePath]);
 
   useEffect(() => {
     if (open) void load();
@@ -562,6 +574,9 @@ export function WorktreeMergeBackDialog({
                     <Input
                       value={commitMessage}
                       onChange={(e) => setCommitMessage((e.target as HTMLInputElement).value)}
+                      placeholder={t("chat.worktree.commitMsgPlaceholder", {
+                        name: worktreePath.split(/[\\/]/).pop() ?? "worktree",
+                      })}
                       className="min-w-0 flex-1 text-xs"
                     />
                     <Button

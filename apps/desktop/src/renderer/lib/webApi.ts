@@ -468,6 +468,7 @@ const git: Api["git"] = {
   merge: () => webUnsupported("git.merge"),
   mergeAbort: () => webUnsupported("git.mergeAbort"),
   worktreeList: () => webUnsupported("git.worktreeList"),
+  worktreeStatus: () => webUnsupported("git.worktreeStatus"),
   worktreeMergeBack: () => webUnsupported("git.worktreeMergeBack"),
   worktreeRemove: () => webUnsupported("git.worktreeRemove"),
 };

@@ -5,6 +5,7 @@ import { ProjectRepo, SessionRepo } from "@main/store/repositories.js";
 import { runtimeManager } from "@main/claude/RuntimeManager.js";
 import { log } from "@main/lib/logger.js";
 import { broadcastSessionChanged } from "@main/lib/sessionSync.js";
+import { normPathKey } from "@main/lib/pathNorm.js";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 
@@ -26,14 +27,8 @@ import { join } from "node:path";
 function applyWorktreeBind(input: StartSessionInput, sessionId: string): void {
   if (input.envMode !== "worktree" || !input.worktreePath) return;
   const roots = SessionRepo.listWorktreeRoots();
-  const norm = (p: string) => {
-    const n = p.replace(/\\/g, "/").replace(/\/+$/, "");
-    return process.platform === "win32" || process.platform === "darwin"
-      ? n.toLowerCase()
-      : n;
-  };
-  const target = norm(input.worktreePath);
-  if (!roots.some((r) => norm(r) === target)) {
+  const target = normPathKey(input.worktreePath);
+  if (!roots.some((r) => normPathKey(r) === target)) {
     log.warn(`worktree bind ignored — ${input.worktreePath} is not a managed worktree root`);
     return;
   }

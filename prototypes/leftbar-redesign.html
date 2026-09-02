@@ -1,0 +1,1089 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Mcode 左侧栏重设计 · 原型</title>
+<style>
+/* ══════════════════════════════════════════════════════════════
+   Mcode 左侧栏重设计原型
+   — 4 个方向:0 现状基准 / A 分层树 / B 时间流 / C 双栏工作台
+   — 全部使用应用的语义 token(见 :root),右上角可切亮色
+   ══════════════════════════════════════════════════════════════ */
+:root{
+  --surface:#1a1d24;
+  --surface-muted:#2c313c;
+  --surface-hover:#3a404e;
+  --content:#e7e8ec;
+  --content-muted:#bcbfc6;
+  --content-subtle:#9ea2ab;
+  --edge:#2d3340;
+  --accent:#10b981;
+  --danger:#f87171;
+  --amber:#d97706;
+  --page-bg:#111318;
+  --ghost:#14171d;
+}
+body.light{
+  --surface:#ffffff;
+  --surface-muted:#f4f4f5;
+  --surface-hover:#e4e4e7;
+  --content:#09090b;
+  --content-muted:#3f3f46;
+  --content-subtle:#71717a;
+  --edge:#e4e4e7;
+  --accent:#059669;
+  --danger:#dc2626;
+  --amber:#b45309;
+  --page-bg:#eceef1;
+  --ghost:#f6f7f9;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{
+  font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Segoe UI","Microsoft YaHei",sans-serif;
+  background:var(--page-bg);
+  color:var(--content);
+  display:flex;flex-direction:column;
+  overflow:hidden;
+  transition:background .25s;
+}
+
+/* ── 页面框架 ─────────────────────────────── */
+.page-head{
+  flex:none;display:flex;align-items:center;gap:16px;
+  padding:14px 22px 10px;
+}
+.page-head h1{font-size:15px;font-weight:650;letter-spacing:.2px}
+.page-head .sub{font-size:12px;color:var(--content-subtle)}
+.tabs{display:flex;gap:4px;margin-left:auto;background:var(--surface);border:1px solid var(--edge);border-radius:10px;padding:3px}
+.tab{
+  border:0;background:transparent;color:var(--content-subtle);
+  font-size:12.5px;font-weight:550;padding:5px 12px;border-radius:7px;cursor:pointer;
+  transition:all .15s;white-space:nowrap;
+}
+.tab:hover{color:var(--content)}
+.tab.on{background:var(--surface-hover);color:var(--content)}
+.tab b{font-weight:700;margin-right:4px}
+#themeBtn{
+  border:1px solid var(--edge);background:var(--surface);color:var(--content-subtle);
+  width:30px;height:30px;border-radius:8px;cursor:pointer;font-size:14px;
+}
+#themeBtn:hover{color:var(--content);background:var(--surface-hover)}
+
+.stage{flex:1;min-height:0;display:flex;gap:22px;padding:6px 22px 18px;align-items:stretch}
+
+/* 说明面板 */
+.notes{
+  width:300px;flex:none;display:flex;flex-direction:column;gap:10px;
+  padding:16px;background:var(--surface);border:1px solid var(--edge);border-radius:14px;
+  overflow-y:auto;font-size:12.5px;line-height:1.65;
+}
+.notes h2{font-size:13.5px;font-weight:700;display:flex;align-items:center;gap:8px}
+.notes h2 .tag{
+  font-size:10px;font-weight:800;padding:2px 7px;border-radius:99px;
+  background:color-mix(in srgb,var(--accent) 18%,transparent);color:var(--accent);
+}
+.notes h3{font-size:11px;font-weight:700;color:var(--content-subtle);text-transform:uppercase;letter-spacing:.6px;margin-top:6px}
+.notes ul{padding-left:16px;color:var(--content-muted)}
+.notes li{margin:3px 0}
+.notes li b{color:var(--content);font-weight:650}
+.notes .src{font-size:11.5px;color:var(--content-subtle);border-top:1px dashed var(--edge);padding-top:8px;margin-top:auto}
+.notes .verdict{
+  border-radius:9px;padding:8px 10px;font-size:11.5px;line-height:1.55;
+  background:color-mix(in srgb,var(--accent) 8%,var(--surface));
+  border:1px solid color-mix(in srgb,var(--accent) 25%,transparent);
+}
+
+/* 应用外框:左侧栏 mock + 中央聊天残影 */
+.app-frame{
+  flex:none;display:flex;border-radius:14px;overflow:hidden;
+  border:1px solid var(--edge);background:var(--surface);
+  box-shadow:0 18px 50px rgba(0,0,0,.35);
+}
+.ghost-center{
+  width:340px;flex:none;background:var(--ghost);position:relative;
+  border-left:1px solid var(--edge);
+}
+.ghost-center::before{
+  content:"聊天 / 编辑区(不动)";position:absolute;inset:0;
+  display:flex;align-items:center;justify-content:center;
+  color:var(--content-subtle);font-size:12px;opacity:.6;letter-spacing:2px;
+}
+
+/* ══════════════════════════════════════════
+   左侧栏通用
+   ══════════════════════════════════════════ */
+.lb{
+  width:296px;flex:none;display:flex;flex-direction:column;
+  background:var(--surface);font-size:12px;
+}
+.lb *{user-select:none}
+.traffic{
+  flex:none;height:34px;display:flex;align-items:center;gap:7px;padding:0 14px;
+}
+.traffic i{width:12px;height:12px;border-radius:50%}
+.traffic i:nth-child(1){background:#ff5f57}.traffic i:nth-child(2){background:#febc2e}.traffic i:nth-child(3){background:#28c840}
+.lb-scroll{flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;padding:0 8px 8px}
+.lb-scroll::-webkit-scrollbar{width:8px}
+.lb-scroll::-webkit-scrollbar-thumb{background:var(--surface-hover);border-radius:4px;border:2px solid var(--surface)}
+
+/* 图标 */
+.ic{width:14px;height:14px;flex:none;stroke:currentColor;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.ic.s{width:11px;height:11px}.ic.xs{width:10px;height:10px}
+.chev{transition:transform .15s}
+.open>.row .chev,.open>.head .chev{transform:rotate(90deg)}
+
+/* 通用行内操作(hover 显示) */
+.acts{display:flex;gap:1px;opacity:0;transition:opacity .12s}
+.row:hover .acts,.head:hover .acts{opacity:1}
+.abtn{
+  display:flex;align-items:center;justify-content:center;width:20px;height:20px;
+  border-radius:5px;border:0;background:transparent;color:var(--content-subtle);cursor:pointer;
+}
+.abtn:hover{background:var(--surface-hover);color:var(--content)}
+.abtn.danger:hover{color:var(--danger)}
+.abtn.go:hover{color:var(--accent)}
+
+/* 徽标 */
+.badge{
+  min-width:16px;padding:1px 5px;border-radius:99px;text-align:center;
+  font-size:10px;font-weight:700;line-height:1.4;
+  background:color-mix(in srgb,var(--accent) 85%,transparent);color:#fff;
+}
+.spin{
+  width:12px;height:12px;flex:none;border-radius:50%;
+  border:2px solid color-mix(in srgb,var(--accent) 30%,transparent);
+  border-top-color:var(--accent);
+  animation:spin .8s linear infinite;
+}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* provider 小圆点 */
+.pd{width:7px;height:7px;border-radius:50%;flex:none}
+.pd.claude{background:#e8833a}.pd.pi{background:#a78bfa}.pd.bridge{background:#38bdf8}
+
+/* 项目头像 */
+.avatar{
+  width:22px;height:22px;flex:none;border-radius:6px;
+  display:flex;align-items:center;justify-content:center;
+  font-size:11px;font-weight:750;color:#fff;
+}
+.avatar.sm{width:16px;height:16px;border-radius:4.5px;font-size:9px}
+.av-blue{background:#3b82f6}.av-amber{background:#d97706}.av-violet{background:#8b5cf6}.av-teal{background:#0d9488}.av-rose{background:#e11d48}
+
+/* 分支 chip */
+.bchip{
+  font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+  font-size:9.5px;line-height:1;padding:3px 6px;border-radius:99px;
+  background:var(--surface-hover);color:var(--content-subtle);flex:none;
+}
+
+/* ══════════════════════════════════════════
+   V0 · 现状基准(模拟现有 LeftBar)
+   ══════════════════════════════════════════ */
+.v0 .quick{padding:2px 8px 8px;display:flex;flex-direction:column;gap:2px}
+.v0 .qa{
+  display:flex;align-items:center;gap:8px;padding:7px 6px;border-radius:8px;
+  color:var(--content-muted);font-weight:500;
+}
+.v0 .qa:hover{background:color-mix(in srgb,var(--accent) 10%,transparent);color:var(--accent)}
+.v0 .qa kbd{
+  margin-left:auto;font-family:inherit;font-size:10px;padding:1px 5px;border-radius:4px;
+  border:1px solid var(--edge);background:var(--surface-muted);color:var(--content-subtle);
+}
+.v0 .lb-header{
+  display:flex;align-items:center;justify-content:space-between;padding:2px 9px 4px;
+}
+.v0 .lb-header h4{font-size:10.5px;font-weight:600;text-transform:uppercase;letter-spacing:.8px;color:var(--content-subtle)}
+.v0 .hbtns{display:flex;gap:2px;opacity:0}
+.v0 .lb-header:hover .hbtns{opacity:1}
+.v0 .sec-head{
+  display:flex;align-items:center;gap:5px;padding:4px 5px;border-radius:6px;cursor:pointer;
+  font-size:10.5px;font-weight:600;text-transform:uppercase;letter-spacing:.8px;color:var(--content-subtle);
+}
+.v0 .sec-head:hover{background:var(--surface-hover)}
+.v0 .sec-head .ic.pin{color:color-mix(in srgb,var(--accent) 70%,var(--content-subtle))}
+.v0 .row{
+  display:flex;align-items:center;gap:5px;padding:4.5px 5px;border-radius:6px;cursor:pointer;
+  color:var(--content-muted);
+}
+.v0 .row:hover{background:color-mix(in srgb,var(--surface-hover) 60%,transparent)}
+.v0 .row.on{background:var(--surface-hover);color:var(--content);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--accent) 35%,transparent)}
+.v0 .tree{margin-left:11px;border-left:1px solid color-mix(in srgb,var(--edge) 50%,transparent);padding-left:7px}
+.v0 .time{margin-left:auto;font-size:10px;color:color-mix(in srgb,var(--content-subtle) 70%,transparent)}
+.v0 .cnt{font-size:9.5px;padding:1px 4px;border-radius:4px;background:var(--surface-muted);color:var(--content-subtle)}
+.v0 .forkmark{color:color-mix(in srgb,var(--accent) 80%,var(--content))}
+.v0 .archived{
+  flex:none;margin:6px 8px 0;border-top:1px solid var(--edge);padding-top:6px;
+}
+.v0 .arch-list{display:none;padding:4px 2px}
+.v0 .archived.open .arch-list{display:block}
+.v0 .arch-row{display:flex;align-items:center;gap:5px;padding:3.5px 5px;border-radius:6px;font-size:11px;color:var(--content-subtle);cursor:pointer}
+.v0 .arch-row:hover{background:color-mix(in srgb,var(--surface-hover) 60%,transparent)}
+.v0 .arch-row .lnk{margin-left:auto;font-size:10px}
+.v0 .arch-row .lnk.r{color:var(--accent)}.v0 .arch-row .lnk.d{color:var(--danger)}
+.v0 .footer{
+  flex:none;display:flex;align-items:center;gap:4px;margin:6px 8px 0;
+  border-top:1px solid var(--edge);padding:7px 2px 4px;
+}
+.v0 .footer .st{display:flex;align-items:center;gap:7px;flex:1;padding:4px 6px;border-radius:6px;color:var(--content-subtle);cursor:pointer}
+.v0 .footer .st:hover{background:var(--surface-hover);color:var(--content)}
+
+/* ══════════════════════════════════════════
+   V-A · 分层树
+   ══════════════════════════════════════════ */
+.va .quick{padding:2px 10px 10px;display:flex;gap:6px}
+.va .qa{
+  flex:1;display:flex;align-items:center;justify-content:center;gap:7px;
+  padding:6.5px 8px;border-radius:8px;border:1px solid var(--edge);
+  background:var(--surface-muted);color:var(--content-muted);font-weight:600;font-size:12px;cursor:pointer;
+}
+.va .qa.main{background:color-mix(in srgb,var(--accent) 14%,var(--surface));border-color:color-mix(in srgb,var(--accent) 35%,transparent);color:var(--accent)}
+.va .qa:hover{filter:brightness(1.15)}
+.va .qa kbd{font-family:inherit;font-size:9.5px;color:var(--content-subtle)}
+
+/* 置顶盒:项目+会话合排 */
+.va .pinbox{
+  margin:0 2px 8px;border:1px solid color-mix(in srgb,var(--accent) 22%,var(--edge));
+  background:color-mix(in srgb,var(--accent) 5%,var(--surface));
+  border-radius:11px;padding:5px;
+}
+.va .pinbox .ph{
+  display:flex;align-items:center;gap:6px;padding:3px 6px;
+  font-size:10px;font-weight:700;letter-spacing:.8px;color:var(--accent);
+}
+.va .prow{
+  display:flex;align-items:center;gap:8px;padding:5px 6px;border-radius:8px;cursor:pointer;color:var(--content-muted);
+}
+.va .prow:hover{background:var(--surface-hover)}
+.va .prow .ttl{font-size:12px;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.va .prow .meta{font-size:10px;color:var(--content-subtle);flex:none}
+
+/* 区块小标 */
+.va .seclabel{
+  display:flex;align-items:center;gap:6px;padding:6px 8px 3px;
+  font-size:10px;font-weight:700;letter-spacing:.9px;text-transform:uppercase;color:var(--content-subtle);
+}
+.va .seclabel .gdot{width:7px;height:7px;border-radius:2px;background:var(--accent)}
+.va .seclabel .more{margin-left:auto;display:flex;gap:1px}
+
+/* 项目大行 */
+.va .proj{
+  display:flex;align-items:center;gap:9px;padding:6px 8px;border-radius:10px;cursor:pointer;
+}
+.va .proj:hover{background:color-mix(in srgb,var(--surface-hover) 55%,transparent)}
+.va .proj .nm{flex:1;min-width:0}
+.va .proj .nm .t{font-size:12.5px;font-weight:650;color:var(--content);display:flex;align-items:center;gap:5px}
+.va .proj .nm .m{font-size:10.5px;color:var(--content-subtle);margin-top:1px;display:flex;gap:5px;align-items:center}
+.va .proj .rstat{display:flex;align-items:center;gap:6px;flex:none}
+.va .proj .undot{width:7px;height:7px;border-radius:50%;background:var(--accent)}
+.va .proj .chev{color:var(--content-subtle)}
+
+/* 两行会话行 */
+.va .srow{
+  display:flex;align-items:center;gap:8px;padding:6px 8px 6px 10px;margin-left:12px;
+  border-left:1px solid color-mix(in srgb,var(--edge) 55%,transparent);
+  border-radius:0 8px 8px 0;cursor:pointer;position:relative;
+}
+.va .srow:hover{background:color-mix(in srgb,var(--surface-hover) 55%,transparent)}
+.va .srow.on{background:var(--surface-hover)}
+.va .srow.on::before{
+  content:"";position:absolute;left:-1px;top:6px;bottom:6px;width:2px;
+  border-radius:2px;background:var(--accent);
+}
+.va .srow .body{flex:1;min-width:0}
+.va .srow .t{font-size:12px;color:var(--content-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:flex;align-items:center;gap:6px}
+.va .srow.on .t{color:var(--content)}
+.va .srow .m{font-size:10px;color:var(--content-subtle);margin-top:1.5px;display:flex;align-items:center;gap:5px}
+.va .srow .r{flex:none;display:flex;align-items:center;gap:6px}
+.va .srow .time{font-size:10px;color:var(--content-subtle)}
+.vgroup > .kids{display:none}
+.vgroup.open > .kids{display:block}
+.tlabel{font-size:9.5px;font-weight:700;letter-spacing:.7px;color:var(--content-subtle);opacity:.75;padding:6px 0 2px 11px}
+
+/* 工作树泳道 */
+.lane{
+  margin:5px 0 5px 12px;border:1px solid var(--edge);border-radius:10px;
+  background:color-mix(in srgb,var(--surface-muted) 42%,var(--surface));
+  overflow:hidden;
+}
+.lane .lhead{
+  display:flex;align-items:center;gap:7px;padding:6px 8px;cursor:pointer;
+}
+.lane .lhead:hover{background:color-mix(in srgb,var(--surface-hover) 40%,transparent)}
+.lane .lhead .lname{font-size:11.5px;font-weight:600;color:var(--content-muted);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.lane .dot{width:7px;height:7px;border-radius:50%;flex:none}
+.lane .dot.dirty{background:var(--amber);box-shadow:0 0 6px color-mix(in srgb,var(--amber) 60%,transparent)}
+.lane .dot.merged{background:color-mix(in srgb,var(--accent) 60%,var(--content-subtle))}
+.lane .lbody{display:none;border-top:1px solid color-mix(in srgb,var(--edge) 60%,transparent)}
+.lane.open .lbody{display:block}
+.lane .lrow{
+  display:flex;align-items:center;gap:7px;padding:5.5px 8px;cursor:pointer;color:var(--content-muted);
+}
+.lane .lrow:hover{background:color-mix(in srgb,var(--surface-hover) 45%,transparent)}
+.lane .lrow .t{font-size:11.5px;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+/* 归档单行入口 */
+.archline{
+  display:flex;align-items:center;gap:8px;margin:8px 2px 0;padding:7px 9px;
+  border:1px dashed var(--edge);border-radius:9px;color:var(--content-subtle);cursor:pointer;font-size:11.5px;
+}
+.archline:hover{color:var(--content);background:var(--surface-muted);border-style:solid}
+.archline .n{margin-left:auto;font-size:10px;padding:1px 6px;border-radius:99px;background:var(--surface-muted);color:var(--content-subtle)}
+
+/* ══════════════════════════════════════════
+   V-B · 时间流(会话优先)
+   ══════════════════════════════════════════ */
+.vb .switcher{
+  margin:2px 10px 6px;display:flex;align-items:center;gap:9px;padding:7px 9px;
+  border:1px solid var(--edge);border-radius:11px;cursor:pointer;background:var(--surface-muted);
+}
+.vb .switcher:hover{border-color:var(--surface-hover)}
+.vb .switcher .nm{flex:1;font-size:13px;font-weight:650}
+.vb .switcher .sub{font-size:10px;color:var(--content-subtle);font-weight:400}
+.vb .pop{
+  display:none;margin:0 10px 6px;border:1px solid var(--edge);border-radius:11px;
+  background:var(--surface);box-shadow:0 12px 30px rgba(0,0,0,.4);overflow:hidden;
+}
+.vb .pop.show{display:block}
+.vb .pop .pi{display:flex;align-items:center;gap:9px;padding:7px 11px;font-size:12.5px;cursor:pointer;color:var(--content-muted)}
+.vb .pop .pi:hover{background:var(--surface-hover)}
+.vb .pop .pi.on{background:color-mix(in srgb,var(--accent) 10%,transparent);color:var(--accent);font-weight:650}
+.vb .filters{display:flex;gap:5px;padding:0 10px 8px}
+.vb .fchip{
+  border:1px solid var(--edge);background:transparent;border-radius:99px;
+  font-size:10.5px;font-weight:600;color:var(--content-subtle);padding:3.5px 10px;cursor:pointer;
+}
+.vb .fchip.on{background:var(--surface-hover);color:var(--content);border-color:var(--surface-hover)}
+.vb .fchip.run b{color:var(--accent)}
+.vb .seclabel{
+  display:flex;align-items:center;gap:6px;padding:8px 8px 3px;
+  font-size:10px;font-weight:700;letter-spacing:.9px;text-transform:uppercase;color:var(--content-subtle);
+}
+.vb .brow{
+  display:flex;align-items:center;gap:9px;padding:7px 9px;border-radius:10px;cursor:pointer;
+}
+.vb .brow:hover{background:color-mix(in srgb,var(--surface-hover) 55%,transparent)}
+.vb .brow.on{background:var(--surface-hover)}
+.vb .brow .lead{flex:none;display:flex;align-items:center;justify-content:center;width:22px}
+.vb .brow .body{flex:1;min-width:0}
+.vb .brow .t{font-size:12.5px;color:var(--content);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.vb .brow .m{font-size:10px;color:var(--content-subtle);margin-top:2px;display:flex;align-items:center;gap:6px}
+.vb .brow .r{flex:none;display:flex;align-items:center;gap:6px}
+.vb .brow .time{font-size:10px;color:var(--content-subtle)}
+/* 工作树区块:目录对象,不重复列会话 */
+.vb .lanecard{
+  margin:4px 8px;border:1px solid var(--edge);border-radius:10px;padding:7px 10px;
+  display:flex;align-items:center;gap:8px;cursor:pointer;
+  background:color-mix(in srgb,var(--surface-muted) 42%,var(--surface));
+}
+.vb .lanecard:hover{background:var(--surface-muted)}
+.vb .lanecard .nm{font-size:11.5px;font-weight:600;color:var(--content-muted)}
+.vb .lanecard .sub{font-size:10px;color:var(--content-subtle);margin-top:1px}
+
+/* ══════════════════════════════════════════
+   V-C · 双栏工作台(图标轨 + 会话列)
+   ══════════════════════════════════════════ */
+.vc{display:flex;width:300px}
+.vc .rail{
+  width:54px;flex:none;display:flex;flex-direction:column;align-items:center;gap:6px;
+  padding:10px 0;border-right:1px solid var(--edge);background:color-mix(in srgb,var(--surface-muted) 35%,var(--surface));
+}
+.vc .brand{width:28px;height:28px;border-radius:9px;background:var(--accent);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:13px;margin-bottom:2px}
+.vc .rdiv{width:22px;height:1px;background:var(--edge);margin:2px 0}
+.vc .rslot{position:relative;width:34px;height:34px;display:flex;align-items:center;justify-content:center;cursor:pointer;border-radius:10px}
+.vc .rslot:hover{background:var(--surface-hover)}
+.vc .rslot .avatar{width:28px;height:28px;border-radius:9px;font-size:12px}
+.vc .rslot .ind{position:absolute;left:-10px;top:50%;transform:translateY(-50%);width:3px;height:0;border-radius:2px;background:var(--accent);transition:height .15s}
+.vc .rslot.on .ind{height:18px}
+.vc .rslot.on::after{
+  content:"";position:absolute;inset:-2px;border-radius:12px;
+  box-shadow:0 0 0 1.5px color-mix(in srgb,var(--accent) 55%,transparent);
+}
+.vc .rslot .pinmark{
+  position:absolute;right:1px;bottom:1px;width:11px;height:11px;border-radius:50%;
+  background:var(--surface);display:flex;align-items:center;justify-content:center;
+}
+.vc .rslot .pinmark .ic{width:7px;height:7px;color:var(--accent);stroke-width:3}
+.vc .rslot.all .allicon{
+  width:28px;height:28px;border-radius:9px;border:1.5px dashed var(--surface-hover);
+  color:var(--content-subtle);display:flex;align-items:center;justify-content:center;
+}
+.vc .rslot.all.on .allicon{border-color:var(--accent);color:var(--accent);border-style:solid}
+.vc .radd{
+  width:28px;height:28px;border-radius:9px;border:1.5px dashed var(--surface-hover);
+  background:transparent;color:var(--content-subtle);display:flex;align-items:center;justify-content:center;cursor:pointer;
+}
+.vc .radd:hover{color:var(--accent);border-color:var(--accent)}
+.vc .rgap{flex:1}
+.vc .list{flex:1;min-width:0;display:flex;flex-direction:column}
+.vc .lhead{
+  flex:none;display:flex;align-items:center;gap:8px;padding:6px 12px 8px;
+}
+.vc .lhead .nm{font-size:13px;font-weight:700;flex:1}
+.vc .lhead .sub{font-size:10px;color:var(--content-subtle);font-weight:400;display:block;margin-top:1px}
+.vc .lquick{display:flex;gap:6px;padding:0 10px 8px}
+.vc .lnew{
+  flex:1;display:flex;align-items:center;justify-content:center;gap:6px;
+  border:0;border-radius:8px;padding:6px;
+  background:color-mix(in srgb,var(--accent) 16%,var(--surface));color:var(--accent);
+  font-size:11.5px;font-weight:650;cursor:pointer;
+}
+.vc .lnew:hover{filter:brightness(1.15)}
+.vc .licon{
+  width:29px;border:1px solid var(--edge);border-radius:8px;background:transparent;
+  color:var(--content-subtle);display:flex;align-items:center;justify-content:center;cursor:pointer;
+}
+.vc .licon:hover{color:var(--content);background:var(--surface-muted)}
+.vc .srow2{
+  display:flex;align-items:center;gap:8px;padding:6.5px 10px;border-radius:9px;cursor:pointer;
+}
+.vc .srow2:hover{background:color-mix(in srgb,var(--surface-hover) 55%,transparent)}
+.vc .srow2.on{background:var(--surface-hover)}
+.vc .srow2 .body{flex:1;min-width:0}
+.vc .srow2 .t{font-size:12px;color:var(--content-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.vc .srow2.on .t{color:var(--content)}
+.vc .srow2 .m{font-size:10px;color:var(--content-subtle);margin-top:1px}
+.vc .srow2 .r{flex:none}
+.vc .seclabel{
+  display:flex;align-items:center;gap:6px;padding:8px 12px 3px;
+  font-size:9.5px;font-weight:700;letter-spacing:.9px;text-transform:uppercase;color:var(--content-subtle);
+}
+
+/* variant 切换 */
+.variant{display:none}
+.variant.show{display:flex}
+#v-a.show,#v-b.show{display:flex}
+#v-c.show{display:flex}
+.notes-panel{display:none}
+.notes-panel.show{display:flex}
+</style>
+</head>
+<body>
+
+<!-- ═══ SVG 图标库 ═══ -->
+<svg width="0" height="0" style="position:absolute">
+  <defs>
+    <symbol id="i-chev" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></symbol>
+    <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/></symbol>
+    <symbol id="i-fork" viewBox="0 0 24 24"><circle cx="6" cy="5" r="2"/><circle cx="18" cy="5" r="2"/><circle cx="6" cy="19" r="2"/><path d="M6 7v2a4 4 0 0 0 4 4h4a4 4 0 0 0 4-4V7M6 13v4"/></symbol>
+    <symbol id="i-branch" viewBox="0 0 24 24"><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="8" r="2.5"/><path d="M6 8.5v7M18 10.5c0 4-4 4.5-9 4.5"/></symbol>
+    <symbol id="i-merge" viewBox="0 0 24 24"><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="18" r="2.5"/><path d="M6 8.5v7M6 12c6 0 6 2.5 9.5 4.5"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+    <symbol id="i-pin" viewBox="0 0 24 24"><path d="M15 4l5 5-3 1-5 5-1 5-5-5L4 21l1-5-1 1 5-5-1-1 5-5 1-2z"/></symbol>
+    <symbol id="i-pin2" viewBox="0 0 24 24"><path d="M9 4h6l-1 6 4 3H6l4-3-1-6zM12 13v7"/></symbol>
+    <symbol id="i-archive" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="4" rx="1"/><path d="M5 8v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8M10 12h4"/></symbol>
+    <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 7h16M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2M6 7l1 13a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1l1-13M10 11v6M14 11v6"/></symbol>
+    <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></symbol>
+    <symbol id="i-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2l1.2 2.6 2.8-.6.4 2.9 2.9.4-.6 2.8L21 12l-2.3 1.9.6 2.8-2.9.4-.4 2.9-2.8-.6L12 22l-1.2-2.6-2.8.6-.4-2.9-2.9-.4.6-2.8L3 12l2.3-1.9-.6-2.8 2.9-.4.4-2.9 2.8.6L12 2z"/></symbol>
+    <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></symbol>
+    <symbol id="i-more" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.4" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.4" fill="currentColor" stroke="none"/><circle cx="19" cy="12" r="1.4" fill="currentColor" stroke="none"/></symbol>
+    <symbol id="i-exch" viewBox="0 0 24 24"><path d="M4 7h13l-3-3M20 17H7l3 3"/></symbol>
+    <symbol id="i-cat" viewBox="0 0 24 24"><path d="M4 5h16v14H4zM4 12h16"/></symbol>
+    <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></symbol>
+    <symbol id="i-star" viewBox="0 0 24 24"><path d="M12 3l2.7 5.6 6.1.8-4.5 4.2 1.1 6L12 16.8 6.6 19.6l1.1-6L3.2 9.4l6.1-.8L12 3z"/></symbol>
+    <symbol id="i-focus" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3"/></symbol>
+    <symbol id="i-sidebar" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16"/></symbol>
+    <symbol id="i-list" viewBox="0 0 24 24"><path d="M8 6h13M8 12h13M8 18h13M3.5 6h.01M3.5 12h.01M3.5 18h.01"/></symbol>
+    <symbol id="i-spark" viewBox="0 0 24 24"><path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8L12 3zM19 15l.9 2.1L22 18l-2.1.9L19 21l-.9-2.1L16 18l2.1-.9L19 15z"/></symbol>
+  </defs>
+</svg>
+
+<header class="page-head">
+  <div>
+    <h1>Mcode 左侧栏重设计 · 原型</h1>
+    <div class="sub">0 = 现状基准 · A 分层树 · B 时间流 · C 双栏工作台 — 数据与 token 均取自现有应用,先选方向再动代码</div>
+  </div>
+  <nav class="tabs" id="tabs">
+    <button class="tab on" data-v="v0"><b>0</b>现状</button>
+    <button class="tab" data-v="v-a"><b>A</b>分层树</button>
+    <button class="tab" data-v="v-b"><b>B</b>时间流</button>
+    <button class="tab" data-v="v-c"><b>C</b>双栏工作台</button>
+  </nav>
+  <button id="themeBtn" title="切换主题">🌙</button>
+</header>
+
+<main class="stage">
+
+  <!-- ══════════════ V0 现状 ══════════════ -->
+  <section class="app-frame variant show" id="v0">
+    <div class="lb v0">
+      <div class="traffic"><i></i><i></i><i></i></div>
+      <div class="quick">
+        <div class="qa"><svg class="ic"><use href="#i-plus"/></svg>新建会话 <kbd>⌘N</kbd></div>
+        <div class="qa"><svg class="ic"><use href="#i-search"/></svg>搜索 <kbd>⌘K</kbd></div>
+      </div>
+      <div class="lb-header">
+        <h4>项目</h4>
+        <div class="hbtns">
+          <button class="abtn"><svg class="ic s"><use href="#i-list"/></svg></button>
+          <button class="abtn"><svg class="ic s"><use href="#i-cat"/></svg></button>
+          <button class="abtn"><svg class="ic s"><use href="#i-plus"/></svg></button>
+        </div>
+      </div>
+      <div class="lb-scroll">
+        <!-- 置顶项目 -->
+        <div class="sec-head open" data-toggle><svg class="ic s chev"><use href="#i-chev"/></svg><svg class="ic s pin"><use href="#i-pin2"/></svg>置顶项目 (1)</div>
+        <div class="row" style="padding-left:14px"><svg class="ic s" style="color:var(--accent)"><use href="#i-pin2"/></svg><svg class="ic"><use href="#i-folder"/></svg>cc-gui<span class="acts"><button class="abtn go"><svg class="ic s"><use href="#i-plus"/></svg></button></span></div>
+        <!-- 置顶会话 -->
+        <div class="sec-head open" data-toggle style="margin-top:4px"><svg class="ic s chev"><use href="#i-chev"/></svg><svg class="ic s pin"><use href="#i-pin2"/></svg>置顶会话 (2)</div>
+        <div class="row" style="padding-left:14px"><svg class="ic s" style="color:var(--accent)"><use href="#i-pin2"/></svg><span class="pd claude" style="width:13px;height:13px;border-radius:50%;background:transparent;border:1.5px solid #e8833a"></span>worktree 隔离会话设计<span class="acts"><button class="abtn"><svg class="ic s"><use href="#i-pin2"/></svg></button><button class="abtn"><svg class="ic s"><use href="#i-archive"/></svg></button><button class="abtn danger"><svg class="ic s"><use href="#i-trash"/></svg></button></span></div>
+        <div class="row" style="padding-left:14px"><svg class="ic s" style="color:var(--accent)"><use href="#i-pin2"/></svg><span class="pd pi" style="width:13px;height:13px;border-radius:50%;background:transparent;border:1.5px solid #a78bfa"></span>里程碑复盘<span class="acts"><button class="abtn"><svg class="ic s"><use href="#i-pin2"/></svg></button><button class="abtn"><svg class="ic s"><use href="#i-archive"/></svg></button><button class="abtn danger"><svg class="ic s"><use href="#i-trash"/></svg></button></span></div>
+
+        <!-- 项目树 -->
+        <div class="row" style="margin-top:3px"><svg class="ic xs chev"><use href="#i-chev"/></svg><svg class="ic"><use href="#i-folder"/></svg>cc-gui<span class="acts"><button class="abtn" style="color:var(--accent)"><svg class="ic s"><use href="#i-exch"/></svg></button><button class="abtn go"><svg class="ic s"><use href="#i-plus"/></svg></button><button class="abtn danger"><svg class="ic s"><use href="#i-trash"/></svg></button></span></div>
+        <div class="tree">
+          <div class="row on"><span class="pd pi" style="width:13px;height:13px;border-radius:50%;background:transparent;border:1.5px solid #a78bfa"></span>左侧栏重设计原型<span class="spin"></span></div>
+          <div class="row"><span class="pd claude" style="width:13px;height:13px;border-radius:50%;background:transparent;border:1.5px solid #e8833a"></span>网桥截断误判修复<span class="time">2 小时</span><span class="acts"><button class="abtn"><svg class="ic s"><use href="#i-pin2"/></svg></button><button class="abtn"><svg class="ic s"><use href="#i-archive"/></svg></button><button class="abtn danger"><svg class="ic s"><use href="#i-trash"/></svg></button></span></div>
+          <div class="row"><svg class="ic s chev" style="transform:rotate(90deg)"><use href="#i-chev"/></svg><svg class="ic s forkmark"><use href="#i-fork"/></svg>左侧栏重设计<span class="cnt">2</span><span class="acts"><button class="abtn" style="color:var(--accent)"><svg class="ic s"><use href="#i-merge"/></svg></button><button class="abtn go"><svg class="ic s"><use href="#i-plus"/></svg></button><button class="abtn danger"><svg class="ic s"><use href="#i-trash"/></svg></button></span></div>
+          <div class="tree" style="margin-left:9px">
+            <div class="row"><span class="pd pi" style="width:13px;height:13px;border-radius:50%;background:transparent;border:1.5px solid #a78bfa"></span>原型探索 A</div>
+            <div class="row"><span class="pd claude" style="width:13px;height:13px;border-radius:50%;background:transparent;border:1.5px solid #e8833a"></span>原型探索 B</div>
+          </div>
+          <div class="row"><span class="pd claude" style="width:13px;height:13px;border-radius:50%;background:transparent;border:1.5px solid #e8833a"></span>LSP jdtls 工作区自愈<span class="time">昨天</span></div>
+          <div class="row"><span class="pd pi" style="width:13px;height:13px;border-radius:50%;background:transparent;border:1.5px solid #a78bfa"></span>settings 面板 i18n 清理<span class="time">3 天</span></div>
+          <div class="row" style="color:var(--content-subtle);justify-content:center">加载更多(还有 6 条)</div>
+        </div>
+        <div class="row"><svg class="ic xs chev"><use href="#i-chev"/></svg><svg class="ic"><use href="#i-folder"/></svg>blog-site<span class="acts"><button class="abtn go"><svg class="ic s"><use href="#i-plus"/></svg></button><button class="abtn danger"><svg class="ic s"><use href="#i-trash"/></svg></button></span></div>
+        <div class="sec-head" style="margin-top:3px"><svg class="ic s chev"><use href="#i-chev"/></svg><svg class="ic s"><use href="#i-cat"/></svg>工作 (2)</div>
+        <div class="row"><svg class="ic xs chev"><use href="#i-chev"/></svg><svg class="ic"><use href="#i-folder"/></svg>data-sync<span class="acts"><button class="abtn go"><svg class="ic s"><use href="#i-plus"/></svg></button></span></div>
+        <div class="row"><svg class="ic xs chev"><use href="#i-chev"/></svg><svg class="ic"><use href="#i-folder"/></svg>cc-gui-docs<span class="acts"><button class="abtn go"><svg class="ic s"><use href="#i-plus"/></svg></button></span></div>
+      </div>
+      <div class="archived">
+        <div class="sec-head" data-toggle><svg class="ic s chev"><use href="#i-chev"/></svg>已归档 (5)</div>
+        <div class="arch-list">
+          <div class="arch-row"><svg class="ic s"><use href="#i-folder"/></svg>scrapyard<span class="lnk r">恢复</span><span class="lnk d">删</span></div>
+          <div class="arch-row"><svg class="ic s"><use href="#i-folder"/></svg>cc-gui</div>
+          <div class="arch-row" style="padding-left:16px"><span class="pd claude" style="width:11px;height:11px;border-radius:50%;background:transparent;border:1.5px solid #e8833a"></span>旧版三栏布局<span class="lnk r">恢复</span><span class="lnk d">删</span></div>
+          <div class="arch-row" style="padding-left:16px"><span class="pd pi" style="width:11px;height:11px;border-radius:50%;background:transparent;border:1.5px solid #a78bfa"></span>实验: effect-ts<span class="lnk r">恢复</span><span class="lnk d">删</span></div>
+        </div>
+      </div>
+      <div class="footer">
+        <div class="st"><svg class="ic"><use href="#i-gear"/></svg>设置</div>
+        <button class="abtn"><svg class="ic"><use href="#i-focus"/></svg></button>
+        <button class="abtn"><svg class="ic"><use href="#i-sun"/></svg></button>
+      </div>
+    </div>
+    <div class="ghost-center"></div>
+  </section>
+
+  <!-- ══════════════ V-A 分层树 ══════════════ -->
+  <section class="app-frame variant" id="v-a">
+    <div class="lb va">
+      <div class="traffic"><i></i><i></i><i></i></div>
+      <div class="quick">
+        <div class="qa main"><svg class="ic"><use href="#i-plus"/></svg>新建会话<kbd>⌘N</kbd></div>
+        <div class="qa"><svg class="ic"><use href="#i-search"/></svg><kbd>⌘K</kbd></div>
+      </div>
+
+      <div class="lb-scroll">
+        <!-- 置顶:项目+会话合一区块 -->
+        <div class="pinbox">
+          <div class="ph"><svg class="ic s" style="stroke-width:2.2"><use href="#i-pin2"/></svg>置顶</div>
+          <div class="prow">
+            <span class="avatar sm av-blue">C</span>
+            <span class="ttl">cc-gui</span>
+            <span class="meta">项目 · 4 会话</span>
+            <span class="acts"><button class="abtn"><svg class="ic s"><use href="#i-pin2"/></svg></button></span>
+          </div>
+          <div class="prow">
+            <span class="pd claude"></span>
+            <span class="ttl">worktree 隔离会话设计</span>
+            <span class="meta">2 小时</span>
+            <span class="acts"><button class="abtn"><svg class="ic s"><use href="#i-pin2"/></svg></button></span>
+          </div>
+          <div class="prow">
+            <span class="pd pi"></span>
+            <span class="ttl">里程碑复盘</span>
+            <span class="meta">昨天</span>
+            <span class="acts"><button class="abtn"><svg class="ic s"><use href="#i-pin2"/></svg></button></span>
+          </div>
+        </div>
+
+        <div class="seclabel">项目<span class="more"><button class="abtn"><svg class="ic s"><use href="#i-list"/></svg></button><button class="abtn"><svg class="ic s"><use href="#i-plus"/></svg></button></span></div>
+
+        <!-- 项目 cc-gui(激活、展开) -->
+        <div class="vgroup open">
+          <div class="proj" data-toggle>
+            <svg class="ic s chev" style="color:var(--content-subtle)"><use href="#i-chev"/></svg>
+            <span class="avatar av-blue">C</span>
+            <div class="nm">
+              <div class="t">cc-gui</div>
+              <div class="m">4 本地 · 2 工作树</div>
+            </div>
+            <div class="rstat">
+              <span class="spin"></span>
+              <span class="acts"><button class="abtn go"><svg class="ic s"><use href="#i-plus"/></svg></button><button class="abtn"><svg class="ic s"><use href="#i-more"/></svg></button></span>
+            </div>
+          </div>
+          <div class="kids">
+            <div class="tlabel">今天</div>
+            <div class="srow on">
+              <div class="body">
+                <div class="t"><span class="pd pi"></span>左侧栏重设计原型</div>
+                <div class="m">Pi · mcode/leftbar · 刚刚</div>
+              </div>
+              <div class="r"><span class="spin"></span></div>
+            </div>
+            <div class="srow">
+              <div class="body">
+                <div class="t"><span class="pd claude"></span>网桥截断误判修复</div>
+                <div class="m">Claude · 2 小时前</div>
+              </div>
+              <div class="r"><span class="time">2 小时</span></div>
+            </div>
+
+            <!-- 工作树泳道:branch 形态、有未合并 -->
+            <div class="lane open">
+              <div class="lhead" data-toggle>
+                <svg class="ic s chev" style="color:var(--content-subtle)"><use href="#i-chev"/></svg>
+                <svg class="ic s" style="color:var(--accent)"><use href="#i-fork"/></svg>
+                <span class="lname">左侧栏重设计</span>
+                <span class="bchip">mcode/leftbar</span>
+                <span class="dot dirty" title="有未合并改动"></span>
+                <span class="acts"><button class="abtn go" title="合并回本地分支"><svg class="ic s"><use href="#i-merge"/></svg></button><button class="abtn" title="在此工作树新建会话"><svg class="ic s"><use href="#i-plus"/></svg></button></span>
+              </div>
+              <div class="lbody">
+                <div class="lrow"><span class="pd pi"></span><span class="t">原型探索 A</span><span style="font-size:10px;color:var(--content-subtle)">刚刚</span></div>
+                <div class="lrow"><span class="pd claude"></span><span class="t">原型探索 B</span><span style="font-size:10px;color:var(--content-subtle)">1 小时</span></div>
+              </div>
+            </div>
+            <!-- 工作树泳道:detached、已合并(安静) -->
+            <div class="lane">
+              <div class="lhead" data-toggle>
+                <svg class="ic s chev" style="color:var(--content-subtle)"><use href="#i-chev"/></svg>
+                <svg class="ic s" style="color:color-mix(in srgb,var(--accent) 65%,var(--content-subtle))"><use href="#i-fork"/></svg>
+                <span class="lname">网桥回归验证</span>
+                <span class="bchip">detached</span>
+                <span class="dot merged" title="已合并 · 干净"></span>
+                <span class="acts"><button class="abtn"><svg class="ic s"><use href="#i-plus"/></svg></button></span>
+              </div>
+              <div class="lbody">
+                <div class="lrow"><span class="pd claude"></span><span class="t">回归复测</span><span style="font-size:10px;color:var(--content-subtle)">3 天</span></div>
+              </div>
+            </div>
+
+            <div class="tlabel">昨天</div>
+            <div class="srow">
+              <div class="body">
+                <div class="t"><span class="pd claude"></span>LSP jdtls 工作区自愈</div>
+                <div class="m">Claude · 昨天</div>
+              </div>
+              <div class="r"><span class="time">昨天</span></div>
+            </div>
+            <div class="srow">
+              <div class="body">
+                <div class="t"><span class="pd pi"></span>settings 面板 i18n 清理</div>
+                <div class="m">Pi · 3 天前</div>
+              </div>
+              <div class="r"><span class="time">3 天</span></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- blog-site(折叠、有未读) -->
+        <div class="vgroup">
+          <div class="proj" data-toggle>
+            <svg class="ic s chev" style="color:var(--content-subtle)"><use href="#i-chev"/></svg>
+            <span class="avatar av-amber">B</span>
+            <div class="nm">
+              <div class="t">blog-site</div>
+              <div class="m">2 会话</div>
+            </div>
+            <div class="rstat"><span class="badge">3</span></div>
+          </div>
+          <div class="kids"></div>
+        </div>
+
+        <!-- 分组「工作」 -->
+        <div class="seclabel" style="margin-top:6px"><span class="gdot" style="background:#8b5cf6"></span>工作<span class="more"><button class="abtn"><svg class="ic s"><use href="#i-more"/></svg></button></span></div>
+        <div class="vgroup">
+          <div class="proj" data-toggle>
+            <svg class="ic s chev" style="color:var(--content-subtle)"><use href="#i-chev"/></svg>
+            <span class="avatar av-violet">D</span>
+            <div class="nm"><div class="t">data-sync</div><div class="m">1 会话</div></div>
+          </div>
+        </div>
+        <div class="vgroup">
+          <div class="proj" data-toggle>
+            <svg class="ic s chev" style="color:var(--content-subtle)"><use href="#i-chev"/></svg>
+            <span class="avatar av-teal">文</span>
+            <div class="nm"><div class="t">cc-gui-docs</div><div class="m">1 会话</div></div>
+          </div>
+        </div>
+
+        <!-- 归档:单行入口 -->
+        <div class="archline">
+          <svg class="ic s"><use href="#i-archive"/></svg>归档
+          <span class="n">5</span>
+          <svg class="ic s" style="margin-left:2px"><use href="#i-chev"/></svg>
+        </div>
+      </div>
+
+      <div class="footer" style="display:flex;align-items:center;gap:4px;margin:6px 8px 0;border-top:1px solid var(--edge);padding:7px 2px 4px">
+        <div class="st" style="display:flex;align-items:center;gap:7px;flex:1;padding:4px 6px;border-radius:6px;color:var(--content-subtle);cursor:pointer"><svg class="ic"><use href="#i-gear"/></svg>设置</div>
+        <button class="abtn"><svg class="ic"><use href="#i-focus"/></svg></button>
+        <button class="abtn"><svg class="ic"><use href="#i-sun"/></svg></button>
+      </div>
+    </div>
+    <div class="ghost-center"></div>
+  </section>
+
+  <!-- ══════════════ V-B 时间流 ══════════════ -->
+  <section class="app-frame variant" id="v-b">
+    <div class="lb vb" style="width:316px">
+      <div class="traffic"><i></i><i></i><i></i></div>
+
+      <!-- 项目切换器 -->
+      <div class="switcher" id="projSwitch">
+        <span class="avatar av-blue">C</span>
+        <div style="flex:1;min-width:0">
+          <div class="nm">cc-gui</div>
+          <div class="sub">4 本地会话 · 2 工作树</div>
+        </div>
+        <svg class="ic s" style="color:var(--content-subtle)"><use href="#i-chev"/></svg>
+      </div>
+      <div class="pop" id="projPop">
+        <div class="pi on"><svg class="ic s" style="color:var(--accent)"><use href="#i-star"/></svg>当前:cc-gui</div>
+        <div class="pi"><span class="avatar sm" style="background:linear-gradient(135deg,#3b82f6,#8b5cf6)">全</span>全部项目<span style="margin-left:auto;font-size:10px;color:var(--content-subtle)">8</span></div>
+        <div class="pi"><span class="avatar sm av-amber">B</span>blog-site</div>
+        <div style="padding:5px 11px 3px;font-size:9.5px;font-weight:700;letter-spacing:.8px;color:var(--content-subtle)">分组 · 工作</div>
+        <div class="pi"><span class="avatar sm av-violet">D</span>data-sync</div>
+        <div class="pi"><span class="avatar sm av-teal">文</span>cc-gui-docs</div>
+        <div class="pi" style="color:var(--accent)"><svg class="ic s"><use href="#i-plus"/></svg>添加项目</div>
+      </div>
+
+      <!-- 过滤 chips -->
+      <div class="filters">
+        <button class="fchip on">全部</button>
+        <button class="fchip run">运行中 <b>1</b></button>
+        <button class="fchip">工作树</button>
+        <button class="fchip" style="margin-left:auto">+ 新会话</button>
+      </div>
+
+      <div class="lb-scroll" style="padding:0 4px 8px">
+        <div class="seclabel"><svg class="ic xs" style="stroke-width:2.2;color:var(--accent)"><use href="#i-pin2"/></svg>置顶 (2)</div>
+        <div class="brow">
+          <span class="lead"><span class="pd claude"></span></span>
+          <div class="body">
+            <div class="t">worktree 隔离会话设计</div>
+            <div class="m"><span class="avatar sm av-blue">C</span>cc-gui · Claude</div>
+          </div>
+          <div class="r"><span class="time">2 小时</span></div>
+        </div>
+        <div class="brow">
+          <span class="lead"><span class="pd pi"></span></span>
+          <div class="body">
+            <div class="t">里程碑复盘</div>
+            <div class="m"><span class="avatar sm av-amber">B</span>blog-site · Pi</div>
+          </div>
+          <div class="r"><span class="time">昨天</span></div>
+        </div>
+
+        <div class="seclabel">今天</div>
+        <div class="brow on">
+          <span class="lead"><span class="pd pi"></span></span>
+          <div class="body">
+            <div class="t">左侧栏重设计原型</div>
+            <div class="m"><span class="avatar sm av-blue">C</span>cc-gui · Pi · <span class="bchip" style="font-size:8.5px;padding:2px 5px">mcode/leftbar</span></div>
+          </div>
+          <div class="r"><span class="spin"></span></div>
+        </div>
+        <div class="brow">
+          <span class="lead"><span class="pd claude"></span></span>
+          <div class="body">
+            <div class="t">文章排版调整</div>
+            <div class="m"><span class="avatar sm av-amber">B</span>blog-site · Claude</div>
+          </div>
+          <div class="r"><span class="badge">3</span></div>
+        </div>
+        <div class="brow">
+          <span class="lead"><span class="pd claude"></span></span>
+          <div class="body">
+            <div class="t">网桥截断误判修复</div>
+            <div class="m"><span class="avatar sm av-blue">C</span>cc-gui · Claude</div>
+          </div>
+          <div class="r"><span class="time">2 小时</span></div>
+        </div>
+
+        <div class="seclabel">昨天</div>
+        <div class="brow">
+          <span class="lead"><span class="pd claude"></span></span>
+          <div class="body">
+            <div class="t">LSP jdtls 工作区自愈</div>
+            <div class="m"><span class="avatar sm av-blue">C</span>cc-gui · Claude</div>
+          </div>
+          <div class="r"><span class="time">昨天</span></div>
+        </div>
+        <div class="brow">
+          <span class="lead"><span class="pd claude"></span></span>
+          <div class="body">
+            <div class="t">分页游标重构</div>
+            <div class="m"><span class="avatar sm av-violet">D</span>data-sync · Claude</div>
+          </div>
+          <div class="r"><span class="time">昨天</span></div>
+        </div>
+
+        <div class="seclabel">更早</div>
+        <div class="brow">
+          <span class="lead"><span class="pd pi"></span></span>
+          <div class="body">
+            <div class="t">settings 面板 i18n 清理</div>
+            <div class="m"><span class="avatar sm av-blue">C</span>cc-gui · Pi</div>
+          </div>
+          <div class="r"><span class="time">3 天</span></div>
+        </div>
+        <div class="brow">
+          <span class="lead"><span class="pd pi"></span></span>
+          <div class="body">
+            <div class="t">RSS 生成器</div>
+            <div class="m"><span class="avatar sm av-amber">B</span>blog-site · Pi</div>
+          </div>
+          <div class="r"><span class="time">上周</span></div>
+        </div>
+
+        <!-- 工作树:目录对象一览(会话已在上方时间流) -->
+        <div class="seclabel"><svg class="ic xs" style="color:var(--accent)"><use href="#i-fork"/></svg>工作树 (2)</div>
+        <div class="lanecard">
+          <span class="dot dirty" style="width:7px;height:7px;border-radius:50%;background:var(--amber);box-shadow:0 0 6px color-mix(in srgb,var(--amber) 60%,transparent)"></span>
+          <div style="flex:1;min-width:0">
+            <div class="nm">左侧栏重设计</div>
+            <div class="sub">2 会话 · <span class="bchip" style="font-size:8.5px;padding:2px 5px">mcode/leftbar</span></div>
+          </div>
+          <span class="acts" style="opacity:1"><button class="abtn go" title="合并回"><svg class="ic s"><use href="#i-merge"/></svg></button><button class="abtn"><svg class="ic s"><use href="#i-more"/></svg></button></span>
+        </div>
+        <div class="lanecard">
+          <span style="width:7px;height:7px;border-radius:50%;background:color-mix(in srgb,var(--accent) 60%,var(--content-subtle))"></span>
+          <div style="flex:1;min-width:0">
+            <div class="nm">网桥回归验证</div>
+            <div class="sub">1 会话 · <span class="bchip" style="font-size:8.5px;padding:2px 5px">detached</span> · 已合并</div>
+          </div>
+          <span class="acts" style="opacity:1"><button class="abtn"><svg class="ic s"><use href="#i-more"/></svg></button></span>
+        </div>
+
+        <div class="archline" style="margin:10px 6px 0">
+          <svg class="ic s"><use href="#i-archive"/></svg>归档<span class="n">5</span>
+          <svg class="ic s" style="margin-left:2px"><use href="#i-chev"/></svg>
+        </div>
+      </div>
+
+      <div class="footer" style="display:flex;align-items:center;gap:4px;margin:6px 8px 0;border-top:1px solid var(--edge);padding:7px 2px 4px">
+        <div class="st" style="display:flex;align-items:center;gap:7px;flex:1;padding:4px 6px;border-radius:6px;color:var(--content-subtle);cursor:pointer"><svg class="ic"><use href="#i-gear"/></svg>设置</div>
+        <button class="abtn"><svg class="ic"><use href="#i-focus"/></svg></button>
+        <button class="abtn"><svg class="ic"><use href="#i-sun"/></svg></button>
+      </div>
+    </div>
+    <div class="ghost-center"></div>
+  </section>
+
+  <!-- ══════════════ V-C 双栏工作台 ══════════════ -->
+  <section class="app-frame variant" id="v-c">
+    <div class="lb vc">
+      <!-- 图标轨 -->
+      <div class="rail">
+        <div class="brand">M</div>
+        <div class="rslot all" title="全部项目"><span class="allicon"><svg class="ic s"><use href="#i-list"/></svg></span></div>
+        <div class="rdiv"></div>
+        <div class="rslot on" title="cc-gui(置顶)">
+          <span class="ind"></span>
+          <span class="avatar av-blue">C</span>
+          <span class="pinmark"><svg class="ic"><use href="#i-pin2"/></svg></span>
+        </div>
+        <div class="rslot" title="blog-site"><span class="avatar av-amber">B</span></div>
+        <div class="rslot" title="data-sync · 分组:工作"><span class="avatar av-violet">D</span></div>
+        <div class="rslot" title="cc-gui-docs · 分组:工作"><span class="avatar av-teal">文</span></div>
+        <button class="radd" title="添加项目"><svg class="ic s"><use href="#i-plus"/></svg></button>
+        <div class="rgap"></div>
+        <button class="rslot" title="设置" style="border-radius:10px"><svg class="ic" style="width:17px;height:17px;color:var(--content-subtle)"><use href="#i-gear"/></svg></button>
+        <button class="rslot" title="主题"><svg class="ic" style="width:16px;height:16px;color:var(--content-subtle)"><use href="#i-sun"/></svg></button>
+      </div>
+
+      <!-- 会话列(当前项目) -->
+      <div class="list">
+        <div class="lhead">
+          <span class="avatar av-blue">C</span>
+          <div style="flex:1;min-width:0">
+            <div class="nm">cc-gui</div>
+            <span class="sub">~/workspace/cc-gui</span>
+          </div>
+          <button class="abtn"><svg class="ic s"><use href="#i-search"/></svg></button>
+          <button class="abtn"><svg class="ic s"><use href="#i-more"/></svg></button>
+        </div>
+        <div class="lquick">
+          <button class="lnew"><svg class="ic s"><use href="#i-plus"/></svg>新会话<kbd style="font-family:inherit;font-size:9.5px;color:color-mix(in srgb,var(--accent) 70%,var(--content-subtle))">⌘N</kbd></button>
+          <button class="licon" title="搜索"><svg class="ic s"><use href="#i-search"/></svg></button>
+        </div>
+
+        <div class="lb-scroll" style="padding:0 8px 8px">
+          <div class="seclabel">置顶 (1)</div>
+          <div class="srow2">
+            <span class="pd claude"></span>
+            <div class="body"><div class="t">worktree 隔离会话设计</div></div>
+            <span class="r" style="font-size:10px;color:var(--content-subtle)">2 小时</span>
+          </div>
+
+          <div class="seclabel">今天</div>
+          <div class="srow2 on">
+            <span class="pd pi"></span>
+            <div class="body">
+              <div class="t">左侧栏重设计原型</div>
+              <div class="m">mcode/leftbar · 刚刚</div>
+            </div>
+            <span class="r"><span class="spin"></span></span>
+          </div>
+          <div class="srow2">
+            <span class="pd claude"></span>
+            <div class="body"><div class="t">网桥截断误判修复</div></div>
+            <span class="r" style="font-size:10px;color:var(--content-subtle)">2 小时</span>
+          </div>
+
+          <div class="lane open" style="margin:5px 0">
+            <div class="lhead" data-toggle>
+              <svg class="ic s chev" style="color:var(--content-subtle)"><use href="#i-chev"/></svg>
+              <svg class="ic s" style="color:var(--accent)"><use href="#i-fork"/></svg>
+              <span class="lname">左侧栏重设计</span>
+              <span class="bchip">mcode/leftbar</span>
+              <span class="dot dirty"></span>
+              <span class="acts"><button class="abtn go"><svg class="ic s"><use href="#i-merge"/></svg></button><button class="abtn"><svg class="ic s"><use href="#i-plus"/></svg></button></span>
+            </div>
+            <div class="lbody">
+              <div class="lrow"><span class="pd pi"></span><span class="t">原型探索 A</span></div>
+              <div class="lrow"><span class="pd claude"></span><span class="t">原型探索 B</span></div>
+            </div>
+          </div>
+          <div class="lane">
+            <div class="lhead" data-toggle>
+              <svg class="ic s chev" style="color:var(--content-subtle)"><use href="#i-chev"/></svg>
+              <svg class="ic s" style="color:color-mix(in srgb,var(--accent) 65%,var(--content-subtle))"><use href="#i-fork"/></svg>
+              <span class="lname">网桥回归验证</span>
+              <span class="bchip">detached</span>
+              <span class="dot merged"></span>
+            </div>
+            <div class="lbody"><div class="lrow"><span class="pd claude"></span><span class="t">回归复测</span></div></div>
+          </div>
+
+          <div class="seclabel">昨天</div>
+          <div class="srow2">
+            <span class="pd claude"></span>
+            <div class="body"><div class="t">LSP jdtls 工作区自愈</div></div>
+            <span class="r" style="font-size:10px;color:var(--content-subtle)">昨天</span>
+          </div>
+          <div class="srow2">
+            <span class="pd pi"></span>
+            <div class="body"><div class="t">settings 面板 i18n 清理</div></div>
+            <span class="r" style="font-size:10px;color:var(--content-subtle)">3 天</span>
+          </div>
+
+          <div class="archline" style="margin:10px 2px 0">
+            <svg class="ic s"><use href="#i-archive"/></svg>归档<span class="n">5</span>
+            <svg class="ic s" style="margin-left:2px"><use href="#i-chev"/></svg>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="ghost-center"></div>
+  </section>
+
+  <!-- ══════════════ 说明面板 ×4 ══════════════ -->
+  <aside class="notes notes-panel show" id="notes-v0">
+    <h2><span class="tag">0</span>现状基准</h2>
+    <p style="color:var(--content-subtle)">按当前 LeftBar 的结构 1:1 模拟(置顶项目 / 置顶会话两个独立小节、单行会话、树线缩进、hover 交换图标切 worktree 视图、底部归档桶),作为对照基线。</p>
+    <h3>观察到的问题</h3>
+    <ul>
+      <li><b>六层结构一列等价堆叠</b>:置顶项目 → 置顶会话 → 分组 → 项目 → worktree 组 → 会话,行高/图标尺寸几乎一致,层级全靠缩进和树线撑</li>
+      <li>两个置顶小节头(uppercase)占了双份 chrome,内容却常常只有 1-2 行</li>
+      <li>单行会话右侧三态切换(时间 ↔ 未读 ↔ hover 操作),信息塞得满但扫读性一般</li>
+      <li>worktree 视图入口是 hover 才出现的交换图标——最强差异化功能却不可见</li>
+      <li>归档桶常驻底部,随数量无限长高</li>
+    </ul>
+    <div class="src">基准仅用于对比,无参考来源。</div>
+  </aside>
+
+  <aside class="notes notes-panel" id="notes-v-a">
+    <h2><span class="tag">A</span>分层树 — 保留信息架构,重建层级感</h2>
+    <ul>
+      <li><b>置顶合一</b>:项目+会话合并进一个「置顶」卡片(微弱 accent 底色),类型靠头像/圆点区分——砍掉两个小节头</li>
+      <li><b>项目行升格</b>:彩色头像 + 名称 + 「4 本地 · 2 工作树」元信息行,子会话计数/运行态在父行可见,不用展开就知道里面有什么</li>
+      <li><b>会话两行制</b>:标题行 + 元信息行(provider 点 · 分支 chip · 时间),状态(未读/运行)固定右侧;选中态从树线改为左侧 accent 竖条</li>
+      <li><b>工作树变泳道</b>:内嵌圆角卡片,分支名 mono chip + 合并状态点(琥珀=有未合并,绿=已合并),hover 出「合并回 / 新建」——取代隐藏的交换图标</li>
+      <li><b>时间微分组</b>:项目内按 今天 / 昨天 分段,找回时间坐标</li>
+      <li><b>归档压缩</b>:单行虚线入口 + 计数,点开弹层而非常驻长列表</li>
+    </ul>
+    <h3>代价</h3>
+    <ul>
+      <li>两行行高让同屏会话数 ↓ 约 30%(可用紧凑模式兜底)</li>
+      <li>实现改动集中在 LeftBar 表现层,数据/store 不动——<b>迁移成本最低</b></li>
+    </ul>
+    <div class="verdict">适合:想保留「项目树」心智、只求更清晰更有质感。<br>推荐作为默认落地形态。</div>
+    <div class="src">参考:Linear 侧栏层级 / GitHub PR 列表行 / T3 Code 项目 favicon 头像。</div>
+  </aside>
+
+  <aside class="notes notes-panel" id="notes-v-b">
+    <h2><span class="tag">B</span>时间流 — 会话是主角,项目退居切换器</h2>
+    <ul>
+      <li><b>项目 → 顶部切换器</b>:头像 + 名称 + 概要,下拉含「全部项目」与分组;侧栏不再有项目树,整列都是会话</li>
+      <li><b>全局时间分组</b>:置顶 / 今天 / 昨天 / 更早——跨项目统一的时间坐标,和 ChatGPT/Claude 桌面版同构</li>
+      <li><b>全部项目视图</b>:每行带项目头像前缀,一屏纵览所有进行中的工作</li>
+      <li><b>过滤 chips</b>:全部 / 运行中 / 工作树——把「运行中」从逐行找 spinner 变成一键聚焦</li>
+      <li><b>工作树降为目录对象</b>:会话进时间流(meta 带分支 chip),底部「工作树」区块只列目录状态与合并入口——会话与合并单元各归各位,不再混排</li>
+    </ul>
+    <h3>代价</h3>
+    <ul>
+      <li>项目间跳转多一次点击(切换器);「按项目聚合」的心智被替换</li>
+      <li>与现有 tabs 模式的会话 tab 栏存在概念重叠,需要梳理</li>
+    </ul>
+    <div class="verdict">适合:多项目并行、以「任务/线程」为中心的使用方式,最接近 T3 Code / Codex 桌面版的主流形态。</div>
+    <div class="src">参考:T3 Code / OpenAI Codex 桌面三栏(项目↔会话分离)、ChatGPT 时间分组、Slack DM 分节。</div>
+  </aside>
+
+  <aside class="notes notes-panel" id="notes-v-c">
+    <h2><span class="tag">C</span>双栏工作台 — 图标轨 + 会话列</h2>
+    <ul>
+      <li><b>54px 图标轨</b>:项目头像纵排(Discord 式),激活 = 左侧 accent 指示条 + 光环,置顶 = 角标 pin 点;轨道底部沉设置/主题</li>
+      <li><b>会话列只服务当前项目</b>:项目名头部(路径副标题)+ 新会话 CTA + 时间分组 + 工作树泳道——每列职责单一,再无六层堆叠</li>
+      <li><b>「全部项目」= 轨道顶部圆点</b>:列表切跨项目混排(行前缀项目头像),B 方向的时间流可作为该视图的分组方式</li>
+      <li>分组「工作」在轨道上以头像右下角色点表达(或轨道 hover 提示)</li>
+    </ul>
+    <h3>代价</h3>
+    <ul>
+      <li>总宽 ~300px 且结构变动最大:拖拽排序、分组菜单、归档弹层都要重新安置</li>
+      <li>项目数很多时轨道会溢出(>10 个项目需要滚动/收纳)</li>
+    </ul>
+    <div class="verdict">适合:想要最「IDE 工作台」气质、愿意为结构变化买单;也可以只取「轨道」作为未来工作区切换器的种子。</div>
+    <div class="src">参考:Arc 侧栏 / Discord 服务器轨 / Raycast 根栏。</div>
+  </aside>
+</main>
+
+<script>
+// 方向切换
+const tabs=[...document.querySelectorAll('.tab')];
+function show(v){
+  document.querySelectorAll('.variant').forEach(el=>el.classList.toggle('show',el.id===v));
+  document.querySelectorAll('.notes-panel').forEach(el=>el.classList.toggle('show',el.id==='notes-'+v));
+  tabs.forEach(t=>t.classList.toggle('on',t.dataset.v===v));
+}
+tabs.forEach(t=>t.addEventListener('click',()=>show(t.dataset.v)));
+
+// 折叠切换(委托:任何 data-toggle 头部)
+document.addEventListener('click',e=>{
+  const t=e.target.closest('[data-toggle]');
+  if(!t)return;
+  if(e.target.closest('.abtn'))return; // 按钮不触发折叠
+  const host=t.closest('.vgroup,.lane,.archived')||t;
+  host.classList.toggle('open');
+});
+
+// B:项目切换器下拉
+const pop=document.getElementById('projPop');
+document.getElementById('projSwitch').addEventListener('click',()=>pop.classList.toggle('show'));
+
+// 主题切换
+const themeBtn=document.getElementById('themeBtn');
+themeBtn.addEventListener('click',()=>{
+  document.body.classList.toggle('light');
+  themeBtn.textContent=document.body.classList.contains('light')?'☀️':'🌙';
+});
+</script>
+</body>
+</html>

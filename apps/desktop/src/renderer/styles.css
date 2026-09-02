@@ -115,13 +115,13 @@ div:has(> [role="menu"]) {
   --input-edge: 212 212 216; /* zinc-300 */
   /* accent + status (one shade each; tuned per theme for contrast) */
   --accent: 5 150 105; /* emerald-600 */
-  /* Inline code span foreground — light mode drops the brand tint entirely
-   * and uses the plain body color: the accent (emerald-600) only hit ~3.5:1
-   * on the muted recess and even the darkened mix still read as tinted
-   * small text, so light follows the GitHub-light convention of plain
-   * near-black inline code on a gray recess. Dark mode keeps its accent
-   * mix (see the .dark override). Consumed via [color:var(--code-fg)] in
-   * Markdown.tsx. */
+  /* Inline code span foreground — plain body color on BOTH themes (GitHub
+   * convention): the recess background already marks the span as code, so the
+   * text itself stays neutral. Light dropped the accent tint after emerald-600
+   * only hit ~3.5:1 on the muted recess; dark follows the same call — the
+   * 60/40 accent mix read as a brand-tinted tint rather than text, and
+   * repainted whenever the user changed the brand color. Consumed via
+   * [color:var(--code-fg)] in Markdown.tsx. */
   --code-fg: rgb(var(--content));
   --danger: 220 38 38; /* red-600 */
   --warning: 217 119 6; /* amber-600 */
@@ -233,13 +233,6 @@ div:has(> [role="menu"]) {
                             * background. Tuned to read clearly without
                             * being as bright as the muted-text color. */
   --accent: 16 185 129; /* emerald-500 */
-  /* Inline code span foreground — brand accent softened 60/40 toward --content
-   * (near-white). A pure saturated brand color used as small inline-code text
-   * glares against the dark slate recess; leaning it toward the off-white body
-   * text drops saturation and lifts lightness, yielding a calm, readable tint
-   * that still reads as "code" and still follows the user's brand color.
-   * Tunable: raise the accent % for more brand punch, lower it for softer. */
-  --code-fg: color-mix(in srgb, rgb(var(--accent)) 60%, rgb(var(--content)));
   --danger: 248 113 113; /* red-400 */
   --warning: 251 191 36; /* amber-400 */
   --info: 167 139 250; /* violet-400 */

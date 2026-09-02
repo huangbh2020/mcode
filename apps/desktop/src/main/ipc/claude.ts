@@ -36,13 +36,21 @@ import { stat } from "node:fs/promises";
 import { join } from "node:path";
 import type { Project, Session } from "@contracts/session";
 
+/** In-flight materializations, keyed by session id. Concurrent first turns
+ *  (double-send, desktop + mobile racing) both observe `worktreePath: null`
+ *  and would independently probe the disk for the next free directory — an
+ *  interleaving that creates TWO worktrees, one of which the DB race orphans.
+ *  The second caller awaits the first caller's promise instead. */
+const materializing = new Map<string, Promise<string>>();
+
 /** Resolve the working directory a session's turn must run in.
  *
  *  - local session → the project root (unchanged historical behavior);
  *  - worktree session, not yet materialized → create the detached worktree
  *    NOW (intent-first, materialize-on-first-turn), persist its path BEFORE
  *    the turn is dispatched (a crash between creation and turn-start still
- *    leaves the session pointing at its worktree), and return it;
+ *    leaves the session pointing at its worktree), and return it. Concurrent
+ *    materializations for the same session ride ONE in-flight promise;
  *  - materialized worktree session → its recorded path (restart-safe),
  *    with a friendly error when the directory has since disappeared.
  *
@@ -53,45 +61,13 @@ async function resolveSessionCwd(session: Session, project: Project): Promise<st
   if (session.envMode !== "worktree") return project.path;
 
   if (!session.worktreePath) {
-    // Materialize. The project root itself must be a git repo (the base is
-    // HEAD as seen from the user's checkout). When it isn't, DEGRADE to
-    // local instead of throwing: this state is reachable without a UI to
-    // fix it (rows created before creation-time coercion existed, the
-    // project's .git removed after the intent was set — in both the chip
-    // is hidden for non-repo projects, so a hard error would brick every
-    // send forever). Flip the row back and broadcast so all clients'
-    // badges/groupings correct themselves.
-    const hasGit = await stat(join(project.path, ".git"))
-      .then(() => true)
-      .catch(() => false);
-    if (!hasGit) {
-      log.warn(
-        `worktree intent for session ${session.id} dropped — project root is not a git repo (${project.path}); running locally`,
-      );
-      SessionRepo.updateSettings(session.id, { envMode: "local", wtStyle: null });
-      const downgraded = SessionRepo.get(session.id) ?? { ...session, envMode: "local" as const };
-      broadcastSessionChanged(downgraded);
-      return project.path;
-    }
-    // Form fork: "branch" materializes on a generated mcode/* ref (durable
-    // named commits), anything else keeps the classic detached checkout.
-    // nextWorktreeDir's branchStyle probe guarantees the branch name is free
-    // BEFORE worktree add -b ever runs.
-    const branchStyle = session.wtStyle === "branch";
-    const target = await nextWorktreeDir(project.path, session.id, { branchStyle });
-    const res = branchStyle
-      ? await createBranchedWorktree(project.path, target)
-      : await createDetachedWorktree(project.path, target);
-    if (!res.ok) {
-      throw new Error(`创建隔离工作树失败:${res.error}`);
-    }
-    SessionRepo.updateWorktreePath(session.id, target);
-    // Re-read so the broadcast + the returned session snapshot both carry
-    // the materialized path (renderer flips its badge off this).
-    const updatedRow = SessionRepo.get(session.id) ?? session;
-    broadcastSessionChanged(updatedRow);
-    log.info(`worktree session materialized: ${session.id} -> ${target}`);
-    return target;
+    const inFlight = materializing.get(session.id);
+    if (inFlight) return inFlight;
+    const p = materializeWorktreeSession(session, project).finally(() => {
+      materializing.delete(session.id);
+    });
+    materializing.set(session.id, p);
+    return p;
   }
 
   // Already materialized: verify the directory still exists.
@@ -102,6 +78,50 @@ async function resolveSessionCwd(session: Session, project: Project): Promise<st
     );
   }
   return session.worktreePath;
+}
+
+/** The materialization half of resolveSessionCwd (un-materialized worktree
+ *  intent only). Always called under the per-session in-flight lock above. */
+async function materializeWorktreeSession(session: Session, project: Project): Promise<string> {
+  // Materialize. The project root itself must be a git repo (the base is
+  // HEAD as seen from the user's checkout). When it isn't, DEGRADE to
+  // local instead of throwing: this state is reachable without a UI to
+  // fix it (rows created before creation-time coercion existed, the
+  // project's .git removed after the intent was set — in both the chip
+  // is hidden for non-repo projects, so a hard error would brick every
+  // send forever). Flip the row back and broadcast so all clients'
+  // badges/groupings correct themselves.
+  const hasGit = await stat(join(project.path, ".git"))
+    .then(() => true)
+    .catch(() => false);
+  if (!hasGit) {
+    log.warn(
+      `worktree intent for session ${session.id} dropped — project root is not a git repo (${project.path}); running locally`,
+    );
+    SessionRepo.updateSettings(session.id, { envMode: "local", wtStyle: null });
+    const downgraded = SessionRepo.get(session.id) ?? { ...session, envMode: "local" as const };
+    broadcastSessionChanged(downgraded);
+    return project.path;
+  }
+  // Form fork: "branch" materializes on a generated mcode/* ref (durable
+  // named commits), anything else keeps the classic detached checkout.
+  // nextWorktreeDir's branchStyle probe guarantees the branch name is free
+  // BEFORE worktree add -b ever runs.
+  const branchStyle = session.wtStyle === "branch";
+  const target = await nextWorktreeDir(project.path, session.id, { branchStyle });
+  const res = branchStyle
+    ? await createBranchedWorktree(project.path, target)
+    : await createDetachedWorktree(project.path, target);
+  if (!res.ok) {
+    throw new Error(`创建隔离工作树失败:${res.error}`);
+  }
+  SessionRepo.updateWorktreePath(session.id, target);
+  // Re-read so the broadcast + the returned session snapshot both carry
+  // the materialized path (renderer flips its badge off this).
+  const updatedRow = SessionRepo.get(session.id) ?? session;
+  broadcastSessionChanged(updatedRow);
+  log.info(`worktree session materialized: ${session.id} -> ${target}`);
+  return target;
 }
 
 export function registerClaudeHandlers(ipcMain: IpcMain): void {
@@ -187,8 +207,10 @@ export function registerClaudeHandlers(ipcMain: IpcMain): void {
     SessionRepo.updateStatus(session.id, "running");
     // Resolve the turn's cwd (worktree materialization happens here — before
     // bindSession so the runtime sees the final environment). Throws surface
-    // as an IPC rejection the renderer toasts; re-sending retries cleanly
-    // (the path is id-derived, so a retry never creates a second worktree).
+    // as an IPC rejection the renderer toasts; a retry after a FAILED create
+    // probes the next free `<branch>-<n>` directory (materialization itself
+    // is guarded by the per-session in-flight lock, so concurrent sends
+    // never create two worktrees).
     const cwd = await resolveSessionCwd(updated, project);
     // Materialization may have backfilled worktreePath — refresh the
     // snapshot so the returned session (and the renderer's badge) carries it.

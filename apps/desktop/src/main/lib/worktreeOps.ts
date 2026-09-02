@@ -41,6 +41,7 @@ import { SessionRepo, SettingRepo } from "@main/store/repositories.js";
 import { runtimeManager } from "@main/claude/RuntimeManager.js";
 import { broadcastSessionChanged } from "@main/lib/sessionSync.js";
 import { log } from "@main/lib/logger.js";
+import { normPathKey } from "@main/lib/pathNorm.js";
 
 // Own lazy loader (mirrors git.ts's) — importing it from ipc/git.ts would
 // create a cycle once the handlers there pull this module in.
@@ -53,12 +54,24 @@ async function loadSimpleGit(): Promise<typeof simpleGitFn> {
   return simpleGitLoader;
 }
 
-/** Normalize a path for map lookups (case-insensitive on win32, unified
- *  separators) — porcelain output vs. DB values may differ in surface form. */
-function normKey(p: string): string {
-  const ci = process.platform === "win32" || process.platform === "darwin";
-  const n = p.replace(/\\/g, "/").replace(/\/+$/, "");
-  return ci ? n.toLowerCase() : n;
+/** Dirty probe with conservative semantics. `--no-optional-locks` keeps the
+ *  read from touching the index lock (the agent may be mid-turn in this very
+ *  worktree — a plain `git status` refreshes the index and can die on
+ *  index.lock contention). On ANY failure the answer is `known: false` and
+ *  callers must err on the safe side: a failed status must never read as
+ *  "clean", or the remove guard would delete a dirty tree without force and
+ *  without the patch export. Output-based (porcelain line count), never
+ *  exit-code-based — simple-git's raw() silently resolves some non-zero
+ *  exits (see isAncestor's comment). */
+async function worktreeDirty(
+  wtGit: import("simple-git").SimpleGit,
+): Promise<{ count: number; known: boolean }> {
+  try {
+    const out = await wtGit.raw(["--no-optional-locks", "status", "--porcelain"]);
+    return { count: out.split("\n").filter((l) => l.trim()).length, known: true };
+  } catch {
+    return { count: 0, known: false };
+  }
 }
 
 /** The managed root all worktrees live under: the configured directory
@@ -277,19 +290,19 @@ export async function listWorktrees(repoPath: string): Promise<GitWorktreeInfo[]
   const entries = parsePorcelain(raw);
   const mainHead = entries[0]?.head ?? "";
   const refCounts = SessionRepo.worktreeReferenceCounts();
-  const refCountMap = new Map(Object.entries(refCounts).map(([p, n]) => [normKey(p), n]));
+  const refCountMap = new Map(Object.entries(refCounts).map(([p, n]) => [normPathKey(p), n]));
   const gitFn = await loadSimpleGit();
 
   const enriched = await Promise.all(
     entries.map(async (e, idx) => {
       const missing = !(await stat(e.path).then(() => true).catch(() => false));
-      let dirty = false;
-      if (!missing) {
-        dirty = await gitFn(e.path)
-          .status()
-          .then((st) => st.files.length > 0)
-          .catch(() => false);
-      }
+      // Unknown status reads as DIRTY (conservative): the ancestor probe
+      // below would otherwise badge an unreadable tree as "merged" — a
+      // green safe-to-delete signal for a tree we couldn't even read.
+      const probe = missing
+        ? { count: 0, known: true }
+        : await worktreeDirty(gitFn(e.path));
+      const dirty = probe.known ? probe.count > 0 : true;
       // "Merged" = NOTHING left to merge: HEAD contained in the MAIN
       // worktree's HEAD AND the tree clean. The ancestor probe alone is
       // trivially true in the dominant flow (worktrees detach at the main
@@ -309,12 +322,50 @@ export async function listWorktrees(repoPath: string): Promise<GitWorktreeInfo[]
         main: idx === 0,
         dirty,
         missing,
-        referencedBy: refCountMap.get(normKey(e.path)) ?? 0,
+        referencedBy: refCountMap.get(normPathKey(e.path)) ?? 0,
         merged,
       } satisfies GitWorktreeInfo;
     }),
   );
   return enriched;
+}
+
+/** Single-worktree lifecycle probe — the cheap endpoint the Titlebar merge
+ *  button polls (12s). `listWorktrees` enriches EVERY linked tree (one git
+ *  status child process each) just to answer "is THIS one dirty / merged";
+ *  this variant resolves exactly one entry: same porcelain parse, same
+ *  enrichment semantics, but a single status probe and a single merge-base.
+ *  Returns null when the path isn't a registered worktree of the repo. */
+export async function worktreeStatus(
+  repoPath: string,
+  worktreePath: string,
+): Promise<GitWorktreeInfo | null> {
+  const git = (await loadSimpleGit())(repoPath);
+  const raw = await git.raw(["worktree", "list", "--porcelain"]);
+  const entries = parsePorcelain(raw);
+  const idx = entries.findIndex((e) => normPathKey(e.path) === normPathKey(worktreePath));
+  if (idx < 0) return null;
+  const e = entries[idx];
+  const mainHead = entries[0]?.head ?? "";
+  const missing = !(await stat(e.path).then(() => true).catch(() => false));
+  const probe = missing
+    ? { count: 0, known: true }
+    : await worktreeDirty((await loadSimpleGit())(e.path));
+  const dirty = probe.known ? probe.count > 0 : true;
+  const merged =
+    idx > 0 && !missing && e.head && !dirty
+      ? await isAncestor(git, e.head, mainHead).catch(() => false)
+      : false;
+  return {
+    path: e.path,
+    head: e.head.slice(0, 7),
+    branch: e.branch,
+    main: idx === 0,
+    dirty,
+    missing,
+    referencedBy: SessionRepo.listByWorktreePath(e.path).length,
+    merged,
+  } satisfies GitWorktreeInfo;
 }
 
 /* ─────────────────────────── merge back ─────────────────────────── */
@@ -362,9 +413,18 @@ export async function mergeBackWorktree(
 ): Promise<GitWorktreeMergeBackResult> {
   try {
     const wtGit = (await loadSimpleGit())(worktreePath);
-    const st = await wtGit.status();
+    // Unknown status REFUSES the merge (rather than silently skipping the
+    // auto-commit): proceeding dirty-but-unreadable would merge only the
+    // committed part while the dialog reports full success.
+    const probe = await worktreeDirty(wtGit);
+    if (!probe.known) {
+      return {
+        ok: false,
+        error: "无法读取工作树的 git 状态(可能被其他进程占用),请稍后重试",
+      };
+    }
     let committedChanges = false;
-    if (st.files.length > 0) {
+    if (probe.count > 0) {
       const message = opts.message?.trim() || autoCommitMessage(worktreePath);
       await commitAll(wtGit, message);
       committedChanges = true;
@@ -433,11 +493,13 @@ export async function mergeBackWorktree(
 
 /** Remove a linked worktree. Guards: (1) sessions referencing the path with
  *  running turns block removal; (2) a dirty worktree refuses unless `force`;
- *  (3) `exportPatch` persists the uncommitted diff under
- *  userData/worktree-snapshots/ before deleting. A missing directory is
- *  self-healed via `git worktree prune`. A generated `mcode/*` branch is
- *  deleted alongside (`git branch -d` — unmerged refs are refused and
- *  RETAINED, surfacing as `retainedBranch`). */
+ *  (2b) an unreadable git status blocks removal (never treated as clean);
+ *  (3) `exportPatch` persists the FULL unmerged work (commits since the
+ *  merge-base PLUS uncommitted edits) under userData/worktree-snapshots/
+ *  before deleting. A missing directory is self-healed via `git worktree
+ *  prune`. A generated `mcode/*` branch is deleted alongside (`git branch
+ *  -d` — unmerged refs are refused and RETAINED, surfacing as
+ *  `retainedBranch`). */
 export async function removeWorktree(
   repoPath: string,
   worktreePath: string,
@@ -465,12 +527,12 @@ export async function removeWorktree(
     // surfacing the fatal to the user. The parsed entry (branch + HEAD) is
     // kept for the post-remove branch cleanup below.
     const git = (await loadSimpleGit())(repoPath);
-    const normTarget = normKey(worktreePath);
+    const normTarget = normPathKey(worktreePath);
     let entry: { path: string; head: string; branch: string } | null = null;
     let registered = true;
     try {
       const raw = await git.raw(["worktree", "list", "--porcelain"]);
-      entry = parsePorcelain(raw).find((w) => normKey(w.path) === normTarget) ?? null;
+      entry = parsePorcelain(raw).find((w) => normPathKey(w.path) === normTarget) ?? null;
       registered = entry !== null;
     } catch {
       registered = true; // probe failure → assume registered, try the git way
@@ -478,17 +540,51 @@ export async function removeWorktree(
 
     if (registered && dirExists) {
       const wtGit = (await loadSimpleGit())(worktreePath);
-      const st = await wtGit.status().catch(() => null);
-      const dirty = !!st && st.files.length > 0;
+      const probe = await worktreeDirty(wtGit);
+      // Unknown status blocks removal outright: the dirty guard below is the
+      // data-safety rail, and an unreadable tree must not slip through it as
+      // "clean" (no force required, no patch exported).
+      if (!probe.known) {
+        return {
+          ok: false,
+          error: "无法读取工作树的 git 状态(可能被其他进程占用),请稍后重试",
+        };
+      }
+      const dirty = probe.count > 0;
+      // Committed-but-unmerged work is just as unrecoverable as uncommitted
+      // edits when the tree goes away (detached HEADs leave no ref behind) —
+      // the export option must fire for it too, not only for a dirty tree.
+      const mainHead = await git
+        .revparse(["HEAD"])
+        .then((s) => s.trim())
+        .catch(() => "");
+      const unmerged =
+        !!entry?.head && !!mainHead
+          ? !(await isAncestor(git, entry.head, mainHead).catch(() => false))
+          : false;
       if (dirty && !opts.force) {
         return {
           ok: false,
-          error: `工作树有 ${st!.files.length} 个未提交的更改,请先合并回、或勾选强制删除/导出补丁`,
+          error: `工作树有 ${probe.count} 个未提交的更改,请先合并回、或勾选强制删除/导出补丁`,
         };
       }
-      if (dirty && opts.exportPatch) {
+      if ((dirty || unmerged) && opts.exportPatch) {
         try {
-          const patch = await wtGit.diff(["--binary", "--full-index", "HEAD"]);
+          // Full-work patch, not just the uncommitted tail: `git diff <base>`
+          // with no end ref compares base → WORKING TREE, capturing commits
+          // AND uncommitted edits in one patch. base = merge-base with the
+          // main HEAD (all work since the fork point); probe failure or
+          // unrelated histories degrade to HEAD (the old uncommitted-only
+          // behavior) rather than blocking the removal.
+          let base = "HEAD";
+          if (mainHead) {
+            const mb = await wtGit
+              .raw(["merge-base", "HEAD", mainHead])
+              .then((s) => s.trim())
+              .catch(() => "");
+            if (mb) base = mb;
+          }
+          const patch = await wtGit.raw(["--no-optional-locks", "diff", "--binary", "--full-index", base]);
           if (patch.trim()) {
             await mkdir(snapshotDir(), { recursive: true });
             const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);

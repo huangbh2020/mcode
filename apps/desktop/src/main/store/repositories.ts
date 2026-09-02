@@ -16,6 +16,7 @@ import type {
   SessionBookmark,
 } from "@contracts/session";
 import type { ContextSnapshot, SubagentSnapshot, TurnFileEntry, TurnUsageRecord } from "@contracts/runtime";
+import { normPathKey } from "@main/lib/pathNorm.js";
 import { getDb, persist } from "./db.js";
 
 /* sql.js binds `?` params positionally as an array. Values must be
@@ -631,18 +632,12 @@ export const SessionRepo = {
    *  porcelain may echo the path in a different surface form than the one
    *  we stored at creation time. */
   listByWorktreePath(worktreePath: string): Session[] {
-    const norm = (p: string) => {
-      const n = p.replace(/\\/g, "/").replace(/\/+$/, "");
-      return process.platform === "win32" || process.platform === "darwin"
-        ? n.toLowerCase()
-        : n;
-    };
-    const target = norm(worktreePath);
+    const target = normPathKey(worktreePath);
     const stmt = getDb().prepare("SELECT * FROM sessions WHERE worktree_path IS NOT NULL");
     const out: Session[] = [];
     while (stmt.step()) {
       const s = rowToSession(stmt.getAsObject() as unknown as SessionRow);
-      if (s.worktreePath && norm(s.worktreePath) === target) out.push(s);
+      if (s.worktreePath && normPathKey(s.worktreePath) === target) out.push(s);
     }
     stmt.free();
     return out;

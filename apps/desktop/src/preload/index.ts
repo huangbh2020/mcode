@@ -308,6 +308,8 @@ const api = {
       ipcRenderer.invoke(IPC.GIT_MERGE_ABORT, input)) as RpcMap["git.mergeAbort"],
     worktreeList: ((input) =>
       ipcRenderer.invoke(IPC.GIT_WORKTREE_LIST, input)) as RpcMap["git.worktreeList"],
+    worktreeStatus: ((input) =>
+      ipcRenderer.invoke(IPC.GIT_WORKTREE_STATUS, input)) as RpcMap["git.worktreeStatus"],
     worktreeMergeBack: ((input) =>
       ipcRenderer.invoke(IPC.GIT_WORKTREE_MERGE_BACK, input)) as RpcMap["git.worktreeMergeBack"],
     worktreeRemove: ((input) =>

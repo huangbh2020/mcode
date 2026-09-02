@@ -263,26 +263,34 @@ function WorktreeManagerRow({
                     </span>
                   </div>
                 )}
-                {!retained && info.dirty && (
+                {/* Remove confirm. The patch-export option appears for dirty
+                    trees AND clean-but-unmerged ones (committed work dies
+                    with the directory too, and a detached HEAD leaves no ref
+                    behind); force only concerns uncommitted changes. */}
+                {!retained && (info.dirty || !info.merged) && (
                   <div className="mt-2.5 space-y-1.5">
-                    <label className="flex items-center gap-1.5 text-xs text-content-muted">
-                      <input
-                        type="checkbox"
-                        checked={exportPatch}
-                        onChange={(e) => setExportPatch(e.target.checked)}
-                        className="accent-accent"
-                      />
-                      {t("chat.worktree.exportPatch")}
-                    </label>
-                    <label className="flex items-center gap-1.5 text-xs text-content-muted">
-                      <input
-                        type="checkbox"
-                        checked={force}
-                        onChange={(e) => setForce(e.target.checked)}
-                        className="accent-accent"
-                      />
-                      {t("chat.worktree.forceRemove")}
-                    </label>
+                    {(info.dirty || !info.merged) && (
+                      <label className="flex items-center gap-1.5 text-xs text-content-muted">
+                        <input
+                          type="checkbox"
+                          checked={exportPatch}
+                          onChange={(e) => setExportPatch(e.target.checked)}
+                          className="accent-accent"
+                        />
+                        {t("chat.worktree.exportPatch")}
+                      </label>
+                    )}
+                    {info.dirty && (
+                      <label className="flex items-center gap-1.5 text-xs text-content-muted">
+                        <input
+                          type="checkbox"
+                          checked={force}
+                          onChange={(e) => setForce(e.target.checked)}
+                          className="accent-accent"
+                        />
+                        {t("chat.worktree.forceRemove")}
+                      </label>
+                    )}
                   </div>
                 )}
                 {error && (

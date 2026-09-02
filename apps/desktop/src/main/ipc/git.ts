@@ -35,11 +35,13 @@ import {
   GitCheckoutSchema,
   GitMergeSchema,
   GitWorktreeListSchema,
+  GitWorktreeStatusSchema,
   GitWorktreeMergeBackSchema,
   GitWorktreeRemoveSchema,
 } from "@contracts/ipc";
 import {
   listWorktrees,
+  worktreeStatus,
   mergeBackWorktree,
   removeWorktree,
 } from "@main/lib/worktreeOps.js";
@@ -1205,9 +1207,9 @@ export function registerGitHandlers(ipcMain: IpcMain): void {
     }
   });
 
-  /* ── git:worktreeList / worktreeMergeBack / worktreeRemove ──
+  /* ── git:worktreeList / worktreeStatus / worktreeMergeBack / worktreeRemove ──
    * Thin shells over lib/worktreeOps (isolated agent-session lifecycle).
-   * The repoPath guard stays the project-containment one — all three
+   * The repoPath guard stays the project-containment one — all four
    * operations anchor on the user's LOCAL checkout inside a project; the
    * worktree itself lives outside every project root by design. */
   ipcMain.handle(IPC.GIT_WORKTREE_LIST, async (_evt, raw) => {
@@ -1221,6 +1223,20 @@ export function registerGitHandlers(ipcMain: IpcMain): void {
     } catch (err) {
       log.warn(`git.worktreeList failed for ${input.repoPath}: ${(err as Error).message}`);
       return { worktrees: [] };
+    }
+  });
+
+  ipcMain.handle(IPC.GIT_WORKTREE_STATUS, async (_evt, raw) => {
+    const input = GitWorktreeStatusSchema.parse(raw);
+    if (!findContainingProject(input.repoPath)) {
+      log.warn(`git.worktreeStatus refused — repoPath outside any project: ${input.repoPath}`);
+      return { status: null };
+    }
+    try {
+      return { status: await worktreeStatus(input.repoPath, input.worktreePath) };
+    } catch (err) {
+      log.warn(`git.worktreeStatus failed for ${input.repoPath}: ${(err as Error).message}`);
+      return { status: null };
     }
   });
 
