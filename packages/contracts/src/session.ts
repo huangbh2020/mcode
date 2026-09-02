@@ -126,12 +126,20 @@ export interface Session {
    *  Cleared (set to null) after a rewind. JSON-serialized in the DB. */
   turnFiles: TurnFileEntry[] | null;
   /** Working environment of this session's turns. "worktree" = turns run in
-   *  an isolated git worktree (detached checkout) instead of the project
-   *  root, so parallel sessions never stomp on each other's working tree.
-   *  Recorded as INTENT at session creation; the worktree is materialized
-   *  (and `worktreePath` backfilled) when the first turn is sent. Undefined
-   *  (= "local") for all pre-existing rows. */
+   *  an isolated git worktree instead of the project root, so parallel
+   *  sessions never stomp on each other's working tree. Recorded as INTENT at
+   *  session creation; the worktree is materialized (and `worktreePath`
+   *  backfilled) when the first turn is sent. Undefined (= "local") for all
+   *  pre-existing rows. */
   envMode?: "local" | "worktree";
+  /** Worktree FORM, only read while envMode="worktree" and un-materialized:
+   *  "branch" materializes the worktree on a generated `mcode/*` branch
+   *  (commits are named and durable — real feature work), "detached" (the
+   *  default, also NULL/absent) materializes the classic detached checkout
+   *  (experimental verification; merge-back then discard). Pure intent — once
+   *  materialized the form is self-evident from the checkout itself, and this
+   *  field stops mattering. */
+  wtStyle?: "detached" | "branch" | null;
   /** Absolute path of this session's worktree once materialized. Null while
    *  still intent-only and for local sessions forever. Persisted so a
    *  restarted app keeps routing the session's turns into the worktree. */

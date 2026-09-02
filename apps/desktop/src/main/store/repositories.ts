@@ -243,6 +243,7 @@ interface SessionRow {
   subagent_transcripts: string | null;
   env_mode: string;
   worktree_path: string | null;
+  wt_style: string | null;
   created_at: number;
   updated_at: number;
 }
@@ -275,6 +276,7 @@ function rowToSession(r: SessionRow): Session {
       : null) as Session["subagentTranscripts"],
     envMode: r.env_mode === "worktree" ? "worktree" : "local",
     worktreePath: r.worktree_path ?? null,
+    wtStyle: r.wt_style === "branch" ? "branch" : r.wt_style === "detached" ? "detached" : null,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
   };
@@ -284,8 +286,8 @@ export const SessionRepo = {
   create(s: Session): void {
     getDb().run(
       `INSERT INTO sessions
-       (id, project_id, provider_id, claude_session_id, kind, parent_session_id, title, status, model, effort, permission_mode, custom_model_id, archived, pinned_at, context_snapshot, todos, subagents, plan_draft, turn_files, usage_history, bookmarks, subagent_transcripts, env_mode, worktree_path, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (id, project_id, provider_id, claude_session_id, kind, parent_session_id, title, status, model, effort, permission_mode, custom_model_id, archived, pinned_at, context_snapshot, todos, subagents, plan_draft, turn_files, usage_history, bookmarks, subagent_transcripts, env_mode, worktree_path, wt_style, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         v(s.id),
         v(s.projectId),
@@ -311,6 +313,7 @@ export const SessionRepo = {
         v(s.subagentTranscripts ? JSON.stringify(s.subagentTranscripts) : null),
         v(s.envMode ?? "local"),
         v(s.worktreePath ?? null),
+        v(s.wtStyle ?? null),
         v(s.createdAt),
         v(s.updatedAt),
       ],
@@ -832,7 +835,7 @@ export const SessionRepo = {
    *  customModelId, providerId). */
   updateSettings(
     id: string,
-    patch: { model?: string; effort?: string; permissionMode?: string; customModelId?: string | null; providerId?: string; envMode?: string; worktreePath?: string | null },
+    patch: { model?: string; effort?: string; permissionMode?: string; customModelId?: string | null; providerId?: string; envMode?: string; wtStyle?: string | null; worktreePath?: string | null },
   ): void {
     const sets: string[] = [];
     const vals: BindValue[] = [];
@@ -845,6 +848,9 @@ export const SessionRepo = {
     // meaningful while the row is still un-materialized; later writes are
     // ignored by the callers.
     if (patch.envMode !== undefined) { sets.push("env_mode = ?"); vals.push(v(patch.envMode)); }
+    // Worktree-form intent, same un-materialized-only contract as envMode.
+    // null clears a stale intent (row flipped back to local).
+    if (patch.wtStyle !== undefined) { sets.push("wt_style = ?"); vals.push(v(patch.wtStyle)); }
     // null clears a leftover bind (fresh row re-aimed back at local).
     if (patch.worktreePath !== undefined) { sets.push("worktree_path = ?"); vals.push(v(patch.worktreePath)); }
     if (sets.length === 0) return;

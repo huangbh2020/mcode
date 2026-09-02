@@ -160,6 +160,11 @@ function migrate(database: Database): void {
   // the project root. 'local' keeps every pre-migration row as-is.
   addColumnIfMissing(database, "sessions", "env_mode", "TEXT NOT NULL DEFAULT 'local'");
   addColumnIfMissing(database, "sessions", "worktree_path", "TEXT");
+  // Worktree FORM intent (only read while env_mode='worktree' and the path is
+  // still NULL): 'branch' materializes on a generated mcode/* branch, NULL or
+  // 'detached' keeps the classic detached checkout. Stops mattering once the
+  // worktree exists — the form is self-evident from the checkout.
+  addColumnIfMissing(database, "sessions", "wt_style", "TEXT");
   addColumnIfMissing(database, "projects", "archived", "INTEGER NOT NULL DEFAULT 0");
   // Optional user-assigned group name for the left-bar "grouped" view. NULL
   // means the project is ungrouped; the renderer treats "" / undefined as null.

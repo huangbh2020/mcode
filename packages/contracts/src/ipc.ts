@@ -692,11 +692,16 @@ export const StartSessionSchema = z.object({
    *  traceability (one main session → many side chats). Ignored for chat. */
   parentSessionId: z.string().optional(),
   /** Working-environment intent for the new session. "worktree" records that
-   *  the session's turns should run in an isolated detached checkout — the
-   *  worktree itself is created when the FIRST turn is sent (intent-first,
+   *  the session's turns should run in an isolated checkout — the worktree
+   *  itself is created when the FIRST turn is sent (intent-first,
    *  materialize-late), so unused sessions never leave empty worktrees
    *  behind. Only meaningful for kind="chat". */
   envMode: z.enum(["local", "worktree"]).optional(),
+  /** Worktree FORM for envMode="worktree": "branch" materializes on a
+   *  generated `mcode/*` branch (durable named commits — feature work),
+   *  "detached" (default) keeps the classic detached checkout (experimental
+   *  verification). Ignored for local sessions. */
+  wtStyle: z.enum(["detached", "branch"]).optional(),
   /** BIND to an existing managed worktree directory instead of creating a
    *  fresh one: the new session shares the checkout (and its dependencies)
    *  of an already-materialized worktree session — "continue working in the
@@ -862,6 +867,10 @@ export const UpdateSessionSettingsSchema = z.object({
    *  the session is un-materialized (no worktreePath yet) — the main-side
    *  updateSettings writes it, materialization later locks the environment. */
   envMode: z.enum(["local", "worktree"]).optional(),
+  /** Worktree FORM flip (composer chip) — same un-materialized-only contract
+   *  as envMode. null clears the intent back to the detached default (used
+   *  when flipping the session to local so no stale intent lingers). */
+  wtStyle: z.enum(["detached", "branch"]).nullable().optional(),
 });
 export type UpdateSessionSettingsInput = z.infer<typeof UpdateSessionSettingsSchema>;
 
@@ -2178,7 +2187,8 @@ export interface GitWorktreeInfo {
   path: string;
   /** Abbreviated HEAD commit hash (merge-back source; empty when missing). */
   head: string;
-  /** Checked-out branch short name; always "" for our detached worktrees. */
+  /** Checked-out branch short name; "" for detached worktrees. Populated for
+   *  branch-style worktrees (generated `mcode/*` refs). */
   branch: string;
   /** True for the repository's main worktree (the original checkout). */
   main: boolean;
@@ -2251,6 +2261,11 @@ export interface GitWorktreeRemoveResult {
   /** Absolute path of the exported patch, when exportPatch was requested
    *  and succeeded. */
   patchPath?: string;
+  /** Set when the worktree ran on a generated `mcode/*` branch that could
+   *  NOT be auto-deleted (typically a forced removal of an unmerged tree —
+   *  `git branch -d` refuses, by design). The branch is RETAINED as the
+   *  recovery path for the discarded commits; surface it to the user. */
+  retainedBranch?: string;
 }
 
 /* ── Skill discovery (composer slash-command menu) ──

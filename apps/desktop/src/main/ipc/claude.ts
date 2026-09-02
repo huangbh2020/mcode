@@ -31,7 +31,7 @@ import { log } from "@main/lib/logger.js";
 import { broadcastSessionChanged } from "@main/lib/sessionSync.js";
 import { createOrReuseSession } from "@main/lib/sessionStart.js";
 import { generateSessionTitle } from "@main/ipc/titleGen.js";
-import { createDetachedWorktree, nextWorktreeDir } from "@main/lib/worktreeOps.js";
+import { createBranchedWorktree, createDetachedWorktree, nextWorktreeDir } from "@main/lib/worktreeOps.js";
 import { stat } from "node:fs/promises";
 import { join } from "node:path";
 import type { Project, Session } from "@contracts/session";
@@ -61,8 +61,15 @@ async function resolveSessionCwd(session: Session, project: Project): Promise<st
     if (!hasGit) {
       throw new Error("当前项目根目录不是 Git 仓库,无法创建工作树会话");
     }
-    const target = await nextWorktreeDir(project.path, session.id);
-    const res = await createDetachedWorktree(project.path, target);
+    // Form fork: "branch" materializes on a generated mcode/* ref (durable
+    // named commits), anything else keeps the classic detached checkout.
+    // nextWorktreeDir's branchStyle probe guarantees the branch name is free
+    // BEFORE worktree add -b ever runs.
+    const branchStyle = session.wtStyle === "branch";
+    const target = await nextWorktreeDir(project.path, session.id, { branchStyle });
+    const res = branchStyle
+      ? await createBranchedWorktree(project.path, target)
+      : await createDetachedWorktree(project.path, target);
     if (!res.ok) {
       throw new Error(`创建隔离工作树失败:${res.error}`);
     }
@@ -393,6 +400,7 @@ export function registerClaudeHandlers(ipcMain: IpcMain): void {
       customModelId: input.customModelId,
       providerId: input.providerId,
       envMode: input.envMode,
+      wtStyle: input.wtStyle,
     });
     if (input.permissionMode) {
       runtimeManager.setPermissionMode(input.sessionId, input.permissionMode);

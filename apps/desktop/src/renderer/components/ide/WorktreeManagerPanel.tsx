@@ -134,6 +134,10 @@ function WorktreeManagerRow({
   const [exportPatch, setExportPatch] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Set when removal succeeded but the generated mcode/* branch was unmerged
+  // and therefore RETAINED — the dialog stays open showing where the
+  // discarded commits live instead of closing silently.
+  const [retained, setRetained] = useState<string | null>(null);
 
   const handleRemove = async () => {
     if (busy) return;
@@ -148,6 +152,10 @@ function WorktreeManagerRow({
       });
       if (!res.ok) {
         setError(res.error ?? t("chat.worktree.removeFailed"));
+        return;
+      }
+      if (res.retainedBranch) {
+        setRetained(res.retainedBranch);
         return;
       }
       setConfirmOpen(false);
@@ -177,7 +185,20 @@ function WorktreeManagerRow({
           <span className="truncate text-xs text-content" title={info.path}>
             {basename(info.path)}
           </span>
-          <span className="shrink-0 font-mono text-[10px] text-content-subtle">{info.head}</span>
+          {info.branch ? (
+            // Branch-style worktree: the generated ref IS the work's name —
+            // show it ahead of the abbreviated SHA (detached rows show the
+            // SHA alone, as before).
+            <span
+              className="flex shrink-0 items-center gap-0.5 font-mono text-[10px] text-content-subtle"
+              title={info.branch}
+            >
+              <IconGitBranch size={10} className="shrink-0" />
+              {info.branch}
+            </span>
+          ) : (
+            <span className="shrink-0 font-mono text-[10px] text-content-subtle">{info.head}</span>
+          )}
           {badge && (
             <span className={cn("shrink-0 text-[10px]", badge.cls)}>{badge.text}</span>
           )}
@@ -211,7 +232,15 @@ function WorktreeManagerRow({
       <Dialog.Root
         open={confirmOpen}
         onOpenChange={(o) => {
-          if (!o && !busy) setConfirmOpen(false);
+          if (!o && !busy) {
+            setConfirmOpen(false);
+            // Closing after a retained-branch removal still refreshes the
+            // list — the worktree itself is gone either way.
+            if (retained) {
+              setRetained(null);
+              onRemoved();
+            }
+          }
         }}
       >
         <Dialog.Portal>
@@ -226,7 +255,15 @@ function WorktreeManagerRow({
                 <Dialog.Description className="mt-1">
                   {t("chat.worktree.removeDesc", { path: info.path })}
                 </Dialog.Description>
-                {info.dirty && (
+                {retained && (
+                  <div className="mt-2 flex items-start gap-1.5 rounded border border-warning/30 bg-warning/10 px-2 py-1.5 text-[11px] text-warning">
+                    <IconGitBranch size={12} className="mt-0.5 shrink-0" />
+                    <span className="break-words">
+                      {t("chat.worktree.retainedBranch", { branch: retained })}
+                    </span>
+                  </div>
+                )}
+                {!retained && info.dirty && (
                   <div className="mt-2.5 space-y-1.5">
                     <label className="flex items-center gap-1.5 text-xs text-content-muted">
                       <input
@@ -258,12 +295,14 @@ function WorktreeManagerRow({
             </div>
             <div className="mt-4 flex justify-end gap-2">
               <Button variant="ghost" size="sm" onClick={() => setConfirmOpen(false)} disabled={busy}>
-                {t("common.cancel")}
+                {t(retained ? "common.close" : "common.cancel")}
               </Button>
-              <Button variant="danger" size="sm" onClick={handleRemove} disabled={busy}>
-                {busy ? <IconLoader2 size={12} className="animate-spin" /> : <IconTrash size={12} />}
-                {t("common.delete")}
-              </Button>
+              {!retained && (
+                <Button variant="danger" size="sm" onClick={handleRemove} disabled={busy}>
+                  {busy ? <IconLoader2 size={12} className="animate-spin" /> : <IconTrash size={12} />}
+                  {t("common.delete")}
+                </Button>
+              )}
             </div>
             <Dialog.Close />
           </Dialog.Popup>

@@ -24,6 +24,7 @@ import { useSuppressBrowserView } from "@renderer/hooks/useSuppressBrowserView.j
 import { Button, Dialog, Input } from "@renderer/components/ui/index.js";
 import {
   IconGitMerge,
+  IconGitBranch,
   IconLoader2,
   IconAlertTriangle,
   IconCheck,
@@ -147,6 +148,10 @@ export function WorktreeRemoveDialog({
   const [exportPatch, setExportPatch] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Set when removal succeeded but the generated mcode/* branch was unmerged
+  // and therefore RETAINED — the dialog stays open showing where the
+  // discarded commits live instead of closing silently.
+  const [retained, setRetained] = useState<string | null>(null);
 
   // Probe dirtiness on open so the force/patch options only appear when they
   // matter (normalized match — porcelain path vs stored path surface forms).
@@ -156,6 +161,7 @@ export function WorktreeRemoveDialog({
       setForce(false);
       setExportPatch(true);
       setBusy(false);
+      setRetained(null);
       return;
     }
     if (!repoPath) return;
@@ -181,6 +187,10 @@ export function WorktreeRemoveDialog({
       const res = await api.git.worktreeRemove({ repoPath, worktreePath, force, exportPatch });
       if (!res.ok) {
         setError(res.error ?? t("chat.worktree.removeFailed"));
+        return;
+      }
+      if (res.retainedBranch) {
+        setRetained(res.retainedBranch);
         return;
       }
       onOpenChange(false);
@@ -209,7 +219,15 @@ export function WorktreeRemoveDialog({
               <Dialog.Description className="mt-1">
                 {t("chat.worktree.removeDesc", { path: worktreePath })}
               </Dialog.Description>
-              {dirty && (
+              {retained && (
+                <div className="mt-2 flex items-start gap-1.5 rounded border border-warning/30 bg-warning/10 px-2 py-1.5 text-[11px] text-warning">
+                  <IconGitBranch size={12} className="mt-0.5 shrink-0" />
+                  <span className="break-words">
+                    {t("chat.worktree.retainedBranch", { branch: retained })}
+                  </span>
+                </div>
+              )}
+              {!retained && dirty && (
                 <div className="mt-2.5 space-y-1.5">
                   <label className="flex items-center gap-1.5 text-xs text-content-muted">
                     <input
@@ -241,12 +259,14 @@ export function WorktreeRemoveDialog({
           </div>
           <div className="mt-4 flex justify-end gap-2">
             <Button variant="ghost" size="sm" onClick={() => onOpenChange(false)} disabled={busy}>
-              {t("common.cancel")}
+              {t(retained ? "common.close" : "common.cancel")}
             </Button>
-            <Button variant="danger" size="sm" onClick={() => void handleRemove()} disabled={busy}>
-              {busy ? <IconLoader2 size={12} className="animate-spin" /> : <IconTrash size={12} />}
-              {t("chat.worktree.removeWt")}
-            </Button>
+            {!retained && (
+              <Button variant="danger" size="sm" onClick={() => void handleRemove()} disabled={busy}>
+                {busy ? <IconLoader2 size={12} className="animate-spin" /> : <IconTrash size={12} />}
+                {t("chat.worktree.removeWt")}
+              </Button>
+            )}
           </div>
           <Dialog.Close />
         </Dialog.Popup>

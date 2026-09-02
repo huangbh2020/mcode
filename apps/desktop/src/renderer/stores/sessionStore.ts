@@ -539,6 +539,13 @@ export interface GitDiffDialogTab {
   staged?: boolean;
 }
 
+/** Composer working-environment choice (the chip above the textarea). The
+ *  two worktree forms differ ONLY in what materialization creates — a
+ *  detached checkout ("wt-detached", experimental verification) or a
+ *  generated `mcode/*` branch ("wt-branch", real feature work). Also the
+ *  persisted string format of settings key `session.worktreeDefault`. */
+export type EnvChoice = "local" | "wt-detached" | "wt-branch";
+
 export interface SessionState {
   /* ── projects & sessions (tree cache) ──
    * sessions are cached per-project so the left-bar tree can render every
@@ -868,13 +875,16 @@ export interface SessionState {
    *  only surfaces the 4 user-facing ones. See PermissionMode in
    *  @contracts/runtime for the full list. */
   permissionMode: PermissionMode;
-  /** Default working environment for NEW sessions: false = local (project
-   *  root), true = isolated detached worktree materialized on the first
-   *  turn. Persisted (settings key `session.worktreeDefault`) so the choice
-   *  sticks across restarts. Flipping the chip while the ACTIVE session is
-   *  still an un-materialized worktree intent edits THAT session instead
-   *  (see setWorktreeMode) — the slot itself only seeds new rows. */
-  worktreeMode: boolean;
+  /** Default working environment for NEW sessions: "local" (project root),
+   *  "wt-detached" (isolated detached checkout — experimental verification)
+   *  or "wt-branch" (isolated checkout on a generated `mcode/*` branch —
+   *  real feature work). The worktree materializes on the first turn.
+   *  Persisted (settings key `session.worktreeDefault`, same three-value
+   *  strings; the legacy boolean "true" hydrates as "wt-detached") so the
+   *  choice sticks across restarts. Flipping the chip while the ACTIVE
+   *  session is still an un-materialized intent edits THAT session instead
+   *  (see setEnvChoice) — the slot itself only seeds new rows. */
+  envChoice: EnvChoice;
   /** Provider powering the next session ("claude-sdk" / "pi-sdk"). Chosen in
    *  the composer's provider chip; persisted on the session row at creation.
    *  Once a session has messages, this is read-only (a session's provider is
@@ -1515,13 +1525,13 @@ export interface SessionState {
   shortcutRecording: boolean;
   setShortcutRecording: (recording: boolean) => void;
   setPermissionMode: (mode: PermissionMode) => void;
-  /** Toggle the working-environment chip. When the ACTIVE session is an
-   *  un-materialized worktree intent, the flip edits THAT session's envMode
+  /** Pick the working-environment chip. When the ACTIVE session is an
+   *  un-materialized intent, the choice edits THAT session's envMode + wtStyle
    *  (updateSettings) instead of the global default — the chip reads as
    *  "this thread's environment" until the first turn locks it. Otherwise
-   *  (local/absent/materialized sessions) it flips the persisted default for
+   *  (local/absent/materialized sessions) it sets the persisted default for
    *  NEW sessions. */
-  setWorktreeMode: (mode: boolean) => void;
+  setEnvChoice: (choice: EnvChoice) => void;
   /** Switch the provider for the NEXT session (no effect once a session has
    *  messages — a session's provider is fixed at creation). */
   setProvider: (id: string) => void;
@@ -3899,7 +3909,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   bottomTerminalHeight: 280,
   editorWidthPct: 50,
   permissionMode: "default",
-  worktreeMode: false,
+    envChoice: "local",
   providerId: DEFAULT_PROVIDER_ID,
   model: "default",
   customModelId: null,
@@ -4013,14 +4023,19 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         return {} as Record<string, string | null>;
       });
 
-    // Composer's default working environment for new sessions (isolated
-    // worktree vs local). Cheap boolean — folded into the first-paint batch
-    // so the chip renders correctly on frame one.
+    // Composer's default working environment for new sessions. Folded into
+    // the first-paint batch so the chip renders correctly on frame one.
+    // Values are the EnvChoice strings; the pre-forms boolean era persisted
+    // "true"/"false" — "true" hydrates as the detached worktree default.
     try {
       const value = fp[SESSION_WORKTREE_DEFAULT_SETTING_KEY];
-      if (value === "true") set({ worktreeMode: true });
+      if (value === "local" || value === "wt-detached" || value === "wt-branch") {
+        set({ envChoice: value });
+      } else if (value === "true") {
+        set({ envChoice: "wt-detached" });
+      }
     } catch (err) {
-      console.error("apply(worktreeMode) failed:", err);
+      console.error("apply(envChoice) failed:", err);
     }
 
     // Left-bar display names for worktree directories. Cosmetic — a failed
@@ -4741,8 +4756,14 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       // Working-environment intent from the composer chip — materialized on
       // the first turn (see sendTurn's resolveSessionCwd), never here. An
       // explicit worktreePath (LeftBar "在此工作树中新建会话") BINDS the new
-      // session to an existing managed checkout instead of creating one.
-      envMode: overrides?.worktreePath ? "worktree" : (get().worktreeMode ? "worktree" : "local"),
+      // session to an existing managed checkout instead of creating one (the
+      // checkout's own form applies; wtStyle is moot for binds).
+      envMode:
+        overrides?.worktreePath || get().envChoice !== "local" ? "worktree" : "local",
+      wtStyle:
+        !overrides?.worktreePath && get().envChoice !== "local"
+          ? get().envChoice === "wt-branch" ? "branch" : "detached"
+          : undefined,
       worktreePath: overrides?.worktreePath,
       customModelId:
         overrides?.customModelId !== undefined ? overrides.customModelId : get().customModelId,
@@ -7677,20 +7698,24 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     }
   },
 
-  setWorktreeMode: (mode) => {
-    set({ worktreeMode: mode });
+  setEnvChoice: (choice) => {
+    set({ envChoice: choice });
     const g = get();
     const sessionId = g.activeSessionId;
     const active = sessionId
       ? findSession(g.sessionsByProject, g.archivedSessionsByProject, g.pinnedSessions, sessionId)
       : undefined;
     // Any UN-MATERIALIZED session in the foreground (local OR worktree
-    // intent — it still has no git footprint) → the flip edits THAT
+    // intent — it still has no git footprint) → the choice edits THAT
     // session's environment, both directions. This is what makes the chip
     // read as "this thread's environment" until the first turn locks it.
     if (active && !active.worktreePath) {
+      const envMode = choice === "local" ? ("local" as const) : ("worktree" as const);
+      // null on the local flip clears any stale form intent on the row.
+      const wtStyle =
+        choice === "wt-branch" ? ("branch" as const) : choice === "wt-detached" ? ("detached" as const) : null;
       void api.session
-        .updateSettings({ sessionId: active.id, envMode: mode ? "worktree" : "local" })
+        .updateSettings({ sessionId: active.id, envMode, wtStyle })
         .catch((err) => {
           console.error("updateSettings(envMode) failed:", err);
         });
@@ -7698,16 +7723,18 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       // waiting for the session.changed round-trip.
       set((s) => ({
         sessionsByProject: patchSessionInCache(s.sessionsByProject, active.projectId, active.id, {
-          envMode: mode ? ("worktree" as const) : ("local" as const),
+          envMode,
+          wtStyle,
         }),
       }));
       return;
     }
     // No session in the foreground (empty state) — or the session is already
     // materialized (locked; the UI disables switching): fall through to the
-    // persisted DEFAULT for new sessions.
+    // persisted DEFAULT for new sessions. Stored as the EnvChoice string
+    // (the legacy "true"/"false" values still hydrate — see init).
     void api.setting
-      .set({ key: SESSION_WORKTREE_DEFAULT_SETTING_KEY, value: mode ? "true" : "false" })
+      .set({ key: SESSION_WORKTREE_DEFAULT_SETTING_KEY, value: choice })
       .catch((err) => {
         console.error("setting.set(worktreeDefault) failed:", err);
       });

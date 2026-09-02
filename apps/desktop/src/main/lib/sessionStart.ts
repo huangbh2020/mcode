@@ -125,6 +125,9 @@ export function createOrReuseSession(
         permissionMode: input.permissionMode,
         customModelId: input.customModelId ?? null,
         envMode: input.envMode ?? "local",
+        // Worktree-form intent rides along with the environment flip; local
+        // rows carry NULL so no stale intent survives a re-aim.
+        wtStyle: input.envMode === "worktree" ? (input.wtStyle ?? "detached") : null,
         // A fresh row reused as a local thread must not keep a worktree path
         // left over from an earlier bind — it would render under the wrong
         // left-bar group with a fork badge while actually running in the
@@ -157,6 +160,7 @@ export function createOrReuseSession(
     customModelId: input.customModelId ?? null,
     // Isolated-environment intent; the worktree materializes on first turn.
     envMode: input.envMode ?? "local",
+    wtStyle: input.envMode === "worktree" ? (input.wtStyle ?? "detached") : null,
     worktreePath: null,
     archived: false,
     pinnedAt: null, // new sessions are never pinned

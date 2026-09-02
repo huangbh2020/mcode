@@ -2,11 +2,12 @@ import { useEffect, useMemo, useState } from "react";
 import { Menu } from "@base-ui/react/menu";
 import { api } from "@renderer/lib/api.js";
 import { cn } from "@renderer/lib/cn.js";
-import { useSessionStore } from "@renderer/stores/sessionStore.js";
+import { useSessionStore, type EnvChoice } from "@renderer/stores/sessionStore.js";
 import { useSuppressBrowserView } from "@renderer/hooks/useSuppressBrowserView.js";
 import { useNarrowViewport } from "@renderer/hooks/useNarrowViewport.js";
 import {
   IconGitFork,
+  IconGitBranch,
   IconFolder,
   IconCheck,
   IconChevronDown,
@@ -16,7 +17,8 @@ import { useI18n } from "@renderer/lib/i18n/index.js";
 /**
  * The composer's working-environment picker — a MINIMAL text trigger placed
  * at the top-left corner of the composer card (above the textarea), not a
- * chip in the bottom action row. Two short options: 本地 / 工作树.
+ * chip in the bottom action row. Three short options: 本地 / 工作树·实验
+ * (detached) / 工作树·开发 (generated mcode/* branch).
  *
  * Availability: the PROJECT ROOT itself must be a git repo (`discoverRepos`
  * with `rootOnly`, one level — worktree materialization requires `.git` at
@@ -45,8 +47,8 @@ export function WorktreeModeChip({
   const [open, setOpen] = useState(false);
   useSuppressBrowserView(open);
 
-  const worktreeMode = useSessionStore((s) => s.worktreeMode);
-  const setWorktreeMode = useSessionStore((s) => s.setWorktreeMode);
+  const envChoice = useSessionStore((s) => s.envChoice);
+  const setEnvChoice = useSessionStore((s) => s.setEnvChoice);
   const activeProjectId = useSessionStore((s) => s.activeProjectId);
   const projects = useSessionStore((s) => s.projects);
   // This pane's session row (reference-stable selector).
@@ -63,13 +65,13 @@ export function WorktreeModeChip({
   });
 
   const materialized = !!session?.worktreePath;
-  const value: "local" | "worktree" = session
+  const value: EnvChoice = session
     ? session.envMode === "worktree"
-      ? "worktree"
+      ? session.wtStyle === "branch"
+        ? "wt-branch"
+        : "wt-detached"
       : "local"
-    : worktreeMode
-      ? "worktree"
-      : "local";
+    : envChoice;
 
   // Git-repo availability probe for the active project — one level only
   // (`rootOnly`): the worktree can only materialize at the project root, so
@@ -99,22 +101,33 @@ export function WorktreeModeChip({
   // flips null → boolean, project switch re-probes) and crash React with
   // "Rendered more hooks than during the previous render".
 
-  const on = value === "worktree";
-  const triggerLabel = on ? t("chat.worktree.pending") : t("chat.worktree.local");
+  const on = value !== "local";
+  const triggerLabel =
+    value === "local"
+      ? t("chat.worktree.local")
+      : value === "wt-branch"
+        ? t("chat.worktree.pendingBranch")
+        : t("chat.worktree.pendingDetached");
 
   const options = useMemo(
-    () => [
-      {
-        value: "local" as const,
-        label: t("chat.worktree.local"),
-        hint: t("chat.worktree.hintLocal"),
-      },
-      {
-        value: "worktree" as const,
-        label: t("chat.worktree.optionWorktree"),
-        hint: t("chat.worktree.hintWorktree"),
-      },
-    ],
+    () =>
+      [
+        {
+          value: "local" as const,
+          label: t("chat.worktree.local"),
+          hint: t("chat.worktree.hintLocal"),
+        },
+        {
+          value: "wt-detached" as const,
+          label: t("chat.worktree.optionWtDetached"),
+          hint: t("chat.worktree.hintWtDetached"),
+        },
+        {
+          value: "wt-branch" as const,
+          label: t("chat.worktree.optionWtBranch"),
+          hint: t("chat.worktree.hintWtBranch"),
+        },
+      ] satisfies Array<{ value: EnvChoice; label: string; hint: string }>,
     [t],
   );
 
@@ -146,12 +159,22 @@ export function WorktreeModeChip({
               : "text-content-muted hover:text-content",
           )}
           title={
-            on
-              ? t("chat.worktree.chipTitlePending")
-              : t("chat.worktree.chipTitleLocal")
+            value === "local"
+              ? t("chat.worktree.chipTitleLocal")
+              : value === "wt-branch"
+                ? t("chat.worktree.chipTitlePendingBranch")
+                : t("chat.worktree.chipTitlePendingDetached")
           }
         >
-          <span className="shrink-0 opacity-90">{on ? <IconGitFork size={12} /> : <IconFolder size={12} />}</span>
+          <span className="shrink-0 opacity-90">
+            {value === "local" ? (
+              <IconFolder size={12} />
+            ) : value === "wt-branch" ? (
+              <IconGitBranch size={12} />
+            ) : (
+              <IconGitFork size={12} />
+            )}
+          </span>
           <span className="truncate">{triggerLabel}</span>
           <IconChevronDown size={12} className="shrink-0 opacity-60" />
         </Menu.Trigger>
@@ -175,7 +198,7 @@ export function WorktreeModeChip({
                 return (
                   <Menu.Item
                     key={opt.value}
-                    onClick={() => setWorktreeMode(opt.value === "worktree")}
+                    onClick={() => setEnvChoice(opt.value)}
                     className={cn(
                       "flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-[13px] outline-none select-none",
                       "data-[highlighted]:bg-surface-muted",
@@ -184,7 +207,13 @@ export function WorktreeModeChip({
                   >
                     <span className="flex min-w-0 items-center gap-2">
                       <span className="shrink-0 opacity-90">
-                        {opt.value === "worktree" ? <IconGitFork size={11} /> : <IconFolder size={11} />}
+                        {opt.value === "local" ? (
+                          <IconFolder size={11} />
+                        ) : opt.value === "wt-branch" ? (
+                          <IconGitBranch size={11} />
+                        ) : (
+                          <IconGitFork size={11} />
+                        )}
                       </span>
                       <span className="font-medium">{opt.label}</span>
                       <span className="truncate text-xs text-content-subtle">{opt.hint}</span>
