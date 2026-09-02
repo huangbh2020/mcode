@@ -65,6 +65,14 @@ export class OpenAiToAnthropicSse {
   private nextIndex = 0;
   /** Map: OpenAI tool_call.index → Anthropic block index (for that tool_use). */
   private toolIndexMap = new Map<number, number>();
+  /** finish_reason captured off the last choice-bearing chunk (OpenAI
+   *  vocabulary; null when the stream carried none). It arrives on the FINAL
+   *  choice chunk — the trailing usage-only chunk has `choices: []` — which is
+   *  why it must be captured in feed() rather than read at finish() time.
+   *  finish() maps it onto Anthropic's stop_reason. Previously it was dropped
+   *  entirely and every message reported stop_reason "end_turn", even ones
+   *  that ended in tool_use (where Anthropic mandates "tool_use"). */
+  private capturedFinishReason: string | null = null;
   /** Accumulated usage from the final chunk (OpenAI emits it once, at the end). */
   private usage: AnthropicUsage = {
     input_tokens: 0,
@@ -199,6 +207,12 @@ export class OpenAiToAnthropicSse {
     const choice = choices && choices.length > 0 ? choices[0] : undefined;
     const delta = choice?.delta;
 
+    // Capture the terminal finish_reason. Truthy check: intermediate chunks
+    // carry null; only the final choice-bearing chunk sets a real value.
+    if (choice?.finish_reason) {
+      this.capturedFinishReason = choice.finish_reason;
+    }
+
     if (delta) {
       // Reasoning content (DeepSeek/o1-style dedicated field). Checked before
       // text: these models stream reasoning first, so block order matches the
@@ -254,9 +268,11 @@ export class OpenAiToAnthropicSse {
     return events;
   }
 
-  /** Close out the message after the stream ends (or finish_reason seen).
+  /** Close out the message after the stream ends. `stopReason` (explicit
+   *  caller override) wins over the finish_reason captured from the stream;
+   *  when neither arrived, mapStopReason's default ("end_turn") applies.
    *  Returns the tail events: stop the open block, then message_delta + stop. */
-  finish(stopReason: string | null | undefined): AnthropicSseEvent[] {
+  finish(stopReason?: string | null): AnthropicSseEvent[] {
     const events: AnthropicSseEvent[] = [];
     if (!this.started) {
       // Degenerate stream with no chunks at all — still emit a valid envelope.
@@ -284,11 +300,28 @@ export class OpenAiToAnthropicSse {
     this.closeOpenBlock(events);
     events.push({
       type: "message_delta",
-      delta: { stop_reason: mapStopReason(stopReason), stop_sequence: null },
+      delta: {
+        stop_reason: mapStopReason(stopReason ?? this.capturedFinishReason),
+        stop_sequence: null,
+      },
       usage: { ...this.usage },
     });
     events.push({ type: "message_stop" });
     return events;
+  }
+
+  /** Raw OpenAI finish_reason captured from the stream (null if none
+   *  arrived). Read by the bridge server after finish() to detect the
+   *  upstream-dropped-tools failure mode: finish_reason "tool_calls" with
+   *  zero translated tool blocks. */
+  get finishReason(): string | null {
+    return this.capturedFinishReason;
+  }
+
+  /** Number of distinct tool_use blocks the stream produced. Paired with
+   *  finishReason for the dropped-tools diagnostic above. */
+  get toolBlockCount(): number {
+    return this.toolIndexMap.size;
   }
 
   /** Reset for reuse (in case the same instance is recycled across turns).
@@ -302,6 +335,7 @@ export class OpenAiToAnthropicSse {
     this.thinkSplitter = new ThinkTagSplitter();
     this.nextIndex = 0;
     this.toolIndexMap.clear();
+    this.capturedFinishReason = null;
     this.usage = {
       input_tokens: 0,
       output_tokens: 0,

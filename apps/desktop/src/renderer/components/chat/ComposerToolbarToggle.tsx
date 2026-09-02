@@ -10,7 +10,9 @@ import { ComposerToolbar } from "./ComposerToolbar.js";
  * Narrow-composer entry point for the chip cluster.
  *
  * When the chip row can't fit on one line beside the mic/provider/send
- * cluster, `useComposerRowFit` adds `composer-row-collapsed` to the action
+ * cluster — or the composer card itself is narrower than 580px (the width
+ * floor in useComposerRowFit) — `useComposerRowFit` adds
+ * `composer-row-collapsed` to the action
  * row (measured fit — not a fixed breakpoint, since the chips' width depends
  * on locale and selected values). The inline chip row (Model / Effort /
  * Permission / ContextRing rendered by {@link ComposerToolbar}) is then hidden

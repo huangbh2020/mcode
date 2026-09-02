@@ -786,7 +786,9 @@ const BlockView = memo(function BlockView({
             {t(
               block.incompleteKind === "empty-response"
                 ? "chatStream.turnIncomplete.emptyDesc"
-                : "chatStream.turnIncomplete.danglingDesc",
+                : block.incompleteKind === "unfinished-text"
+                  ? "chatStream.turnIncomplete.unfinishedDesc"
+                  : "chatStream.turnIncomplete.danglingDesc",
             )}
           </div>
           {block.pendingToolNames.length > 0 && (

@@ -275,11 +275,16 @@ export interface TurnDoneEvent {
  * renderer can flag the turn (warning card + toast) instead of showing a
  * misleading "回合完成".
  *
- * Two shapes:
+ * Three shapes:
  *  - `dangling-tools` — main-agent tool_use blocks were still unanswered when
  *    the stream closed (the model was mid-tool-flow; its next response after
  *    the last tool_result came back empty).
  *  - `empty-response` — the turn produced no assistant text at all.
+ *  - `unfinished-text` — the final assistant message was text-only but ends
+ *    with continuation punctuation (colon / comma / …) or an unclosed ```
+ *    fence: the model narrated its next step and the announced tool call
+ *    never arrived (observed 2026-09-02 on a bridge that flattens every
+ *    finish_reason to end_turn, so the CLI had no "still working" signal).
  *
  * NOT emitted for user interrupts (dangling tools are expected there) or
  * error-subtype results (the `error` event already surfaces those).
@@ -287,7 +292,7 @@ export interface TurnDoneEvent {
 export interface TurnIncompleteEvent {
   type: "turn.incomplete";
   sessionId: string;
-  kind: "dangling-tools" | "empty-response";
+  kind: "dangling-tools" | "empty-response" | "unfinished-text";
   /** Main-agent tool calls that never received a tool_result
    *  (kind "dangling-tools"; empty for "empty-response"). Names are for
    *  display, ids for correlation with the chat stream's tool cards. */

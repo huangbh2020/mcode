@@ -114,6 +114,8 @@ export const en = {
     "The model channel returned an empty response mid-task, so this turn ended unfinished. Send “Continue” to resume from where it stopped.",
   "chatStream.turnIncomplete.emptyDesc":
     "The model channel returned no reply text this turn. Try resending or switching models.",
+  "chatStream.turnIncomplete.unfinishedDesc":
+    "The model's final text stops mid-sentence — the next step it announced never ran. Send “Continue” to resume from where it stopped.",
   "chatStream.turnIncomplete.pendingTools": "Unfinished calls: {tools}",
 
   // ── MessageBlocks: ExitPlanMode approval-channel failure ──

@@ -54,12 +54,24 @@ async function resolveSessionCwd(session: Session, project: Project): Promise<st
 
   if (!session.worktreePath) {
     // Materialize. The project root itself must be a git repo (the base is
-    // HEAD as seen from the user's checkout).
+    // HEAD as seen from the user's checkout). When it isn't, DEGRADE to
+    // local instead of throwing: this state is reachable without a UI to
+    // fix it (rows created before creation-time coercion existed, the
+    // project's .git removed after the intent was set — in both the chip
+    // is hidden for non-repo projects, so a hard error would brick every
+    // send forever). Flip the row back and broadcast so all clients'
+    // badges/groupings correct themselves.
     const hasGit = await stat(join(project.path, ".git"))
       .then(() => true)
       .catch(() => false);
     if (!hasGit) {
-      throw new Error("当前项目根目录不是 Git 仓库,无法创建工作树会话");
+      log.warn(
+        `worktree intent for session ${session.id} dropped — project root is not a git repo (${project.path}); running locally`,
+      );
+      SessionRepo.updateSettings(session.id, { envMode: "local", wtStyle: null });
+      const downgraded = SessionRepo.get(session.id) ?? { ...session, envMode: "local" as const };
+      broadcastSessionChanged(downgraded);
+      return project.path;
     }
     // Form fork: "branch" materializes on a generated mcode/* ref (durable
     // named commits), anything else keeps the classic detached checkout.

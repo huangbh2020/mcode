@@ -250,8 +250,10 @@ export type Block =
   | { kind: "error"; message: string }
   | { kind: "turn-incomplete"; /** Mirrors TurnIncompleteEvent.kind —
     * "dangling-tools" = the turn closed with unanswered tool_use;
-    * "empty-response" = tools ran but the model never replied with text. */
-    incompleteKind: "dangling-tools" | "empty-response";
+    * "empty-response" = tools ran but the model never replied with text;
+    * "unfinished-text" = the final text-only message ends with continuation
+    * punctuation — the announced next step never arrived. */
+    incompleteKind: "dangling-tools" | "empty-response" | "unfinished-text";
     /** Display names of the tool calls that never got a result
      *  ("dangling-tools" only). */
     pendingToolNames: string[] }
@@ -6890,7 +6892,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
               get().locale,
               e.kind === "empty-response"
                 ? "chatStream.turnIncomplete.emptyDesc"
-                : "chatStream.turnIncomplete.danglingDesc",
+                : e.kind === "unfinished-text"
+                  ? "chatStream.turnIncomplete.unfinishedDesc"
+                  : "chatStream.turnIncomplete.danglingDesc",
             ),
           );
           set((s) => ({ turnIncompleteBySession: { ...s.turnIncompleteBySession, [sid]: true } }));

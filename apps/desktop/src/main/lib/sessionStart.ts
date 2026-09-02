@@ -1,10 +1,12 @@
 import type { Session } from "@contracts/session";
 import { DEFAULT_PROVIDER_ID, type StartSessionInput } from "@contracts/ipc";
 import { uid } from "@main/utils.js";
-import { SessionRepo } from "@main/store/repositories.js";
+import { ProjectRepo, SessionRepo } from "@main/store/repositories.js";
 import { runtimeManager } from "@main/claude/RuntimeManager.js";
 import { log } from "@main/lib/logger.js";
 import { broadcastSessionChanged } from "@main/lib/sessionSync.js";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 
 /** Shared implementation behind the desktop `claude:startSession` IPC and the
  *  mobile RPC of the same name: create a session row for a "new session"
@@ -37,6 +39,26 @@ function applyWorktreeBind(input: StartSessionInput, sessionId: string): void {
   }
   SessionRepo.updateWorktreePath(sessionId, input.worktreePath);
   log.info(`session ${sessionId} bound to existing worktree ${input.worktreePath}`);
+}
+
+/** Worktree intent can only materialize where the PROJECT ROOT is itself a
+ *  git repo. The persisted new-session default (`session.worktreeDefault`)
+ *  is project-agnostic, so a worktree choice made in one repo leaks into
+ *  non-repo projects — where the composer chip is hidden and the user has no
+ *  UI to flip it back, bricking the first turn (resolveSessionCwd). Coerce
+ *  such rows to local right here. A BIND (explicit worktreePath) always
+ *  survives: its checkout already exists, so the project root's repo-ness is
+ *  irrelevant. */
+function coerceEnvMode(input: StartSessionInput): "local" | "worktree" {
+  if (input.envMode !== "worktree" || input.worktreePath) return input.envMode ?? "local";
+  const project = ProjectRepo.get(input.projectId);
+  // Unknown project: leave the intent alone, the turn path will fail loudly.
+  if (!project) return "worktree";
+  if (!existsSync(join(project.path, ".git"))) {
+    log.warn(`worktree intent ignored — project root is not a git repo: ${project.path}`);
+    return "local";
+  }
+  return "worktree";
 }
 
 export function createOrReuseSession(
@@ -108,6 +130,10 @@ export function createOrReuseSession(
     return { session, reused: false };
   }
 
+  // Coerced environment (non-repo projects can't carry worktree intent —
+  // see coerceEnvMode); computed once for both write paths below.
+  const envMode = coerceEnvMode(input);
+
   // Only a default-title request can reuse — an explicit title (none of our
   // UIs send one today) always deserves its own row.
   if (input.title === undefined || input.title === "New session") {
@@ -124,16 +150,16 @@ export function createOrReuseSession(
         effort: input.effort,
         permissionMode: input.permissionMode,
         customModelId: input.customModelId ?? null,
-        envMode: input.envMode ?? "local",
+        envMode,
         // Worktree-form intent rides along with the environment flip; local
         // rows carry NULL so no stale intent survives a re-aim.
-        wtStyle: input.envMode === "worktree" ? (input.wtStyle ?? "detached") : null,
+        wtStyle: envMode === "worktree" ? (input.wtStyle ?? "detached") : null,
         // A fresh row reused as a local thread must not keep a worktree path
         // left over from an earlier bind — it would render under the wrong
         // left-bar group with a fork badge while actually running in the
         // project root. Fresh rows are by definition un-materialized, so
         // clearing is always safe here.
-        worktreePath: input.envMode === "worktree" ? undefined : null,
+        worktreePath: envMode === "worktree" ? undefined : null,
       });
       applyWorktreeBind(input, fresh.id);
       const session = SessionRepo.get(fresh.id) ?? fresh;
@@ -159,8 +185,9 @@ export function createOrReuseSession(
     permissionMode: input.permissionMode,
     customModelId: input.customModelId ?? null,
     // Isolated-environment intent; the worktree materializes on first turn.
-    envMode: input.envMode ?? "local",
-    wtStyle: input.envMode === "worktree" ? (input.wtStyle ?? "detached") : null,
+    // Coerced to local for non-repo projects (see coerceEnvMode).
+    envMode,
+    wtStyle: envMode === "worktree" ? (input.wtStyle ?? "detached") : null,
     worktreePath: null,
     archived: false,
     pinnedAt: null, // new sessions are never pinned

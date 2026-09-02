@@ -141,6 +141,13 @@ const CONTEXT_USAGE_PATH_B_TIMEOUT_MS = 3_000;
  *  lag after the last background-agent edge. */
 const SETTLE_GRACE_MS = 1_500;
 
+/** Trailing punctuation that never legitimately ends a COMPLETE final reply:
+ *  (full/half-width) colon, comma, enumeration comma, semicolon. When the
+ *  turn's LAST assistant message is text-only and ends on one of these, the
+ *  model announced a continuation that never arrived — see the
+ *  "unfinished-text" branch of maybeEmitTurnIncomplete. */
+const UNFINISHED_TRAILING_RE = /[：:，,、；;]$/;
+
 function safeJsonParse<T>(s: string): T | undefined {
   try {
     return JSON.parse(s) as T;
@@ -361,6 +368,22 @@ interface AdapterState {
    *  turn with no text at all is the other half of the empty-response
    *  failure mode the turn-incomplete check covers. */
   textEmitted: boolean;
+  /** Joined text blocks of the LAST main-agent assistant message this turn
+   *  ("" when that message carried no text). With lastAssistantHadToolUse,
+   *  feeds the "unfinished-text" half of the turn-incomplete check: a final
+   *  narration ending in continuation punctuation means the announced next
+   *  step never arrived (the gateway dropped the tool call after the text —
+   *  observed 2026-09-02 on a deepseek OpenAI bridge that flattens every
+   *  finish_reason to end_turn). Updated on every MAIN-AGENT assistant
+   *  message (after the subagent-forward early return), so forwarded
+   *  subagent blocks never pollute it. */
+  lastAssistantText: string;
+  /** True if the LAST main-agent assistant message contained a tool_use
+   *  block. The unfinished-text check only fires when the turn's final
+   *  message was text-only — closing on a tool dispatch makes trailing
+   *  punctuation on earlier narration inconclusive (the dispatch itself may
+   *  have been the promised next step). */
+  lastAssistantHadToolUse: boolean;
   /** True once the turn used an interaction tool (EnterPlanMode /
    *  ExitPlanMode / AskUserQuestion). Those turns legitimately end without
    *  narration text — the "payload" lives in the tool input / approval flow —
@@ -479,6 +502,8 @@ export class SdkMessageAdapter {
       toolUseNames: new Map(),
       resultedToolUseIds: new Set(),
       textEmitted: false,
+      lastAssistantText: "",
+      lastAssistantHadToolUse: false,
       interactionToolSeen: false,
       backgroundTaskIds: new Set(),
       contentStarted: false,
@@ -670,9 +695,9 @@ export class SdkMessageAdapter {
   }
 
   /** Detect a "successfully"-ended turn whose stream shows the model never
-   *  finished — the third-party-gateway failure where the model channel
-   *  answers the last tool_result with an EMPTY completion and the CLI
-   *  accepts it as a normal end-of-turn (observed 2026-08-20 on an
+   *  finished its work — the third-party-gateway failure where the model
+   *  channel answers the last tool_result with an EMPTY completion and the
+   *  CLI accepts it as a normal end-of-turn (observed 2026-08-20 on an
    *  OpenAI-protocol bridge: turn died right after a Read tool_use, result
    *  subtype=success, no final text, no error). Without this check the user
    *  just sees the work stop with a "turn complete" toast.
@@ -708,13 +733,19 @@ export class SdkMessageAdapter {
       // error, and the error card covers it. Turns driven by interaction
       // tools (plan mode / AskUserQuestion) legitimately end text-less.
       kind = "empty-response";
+    } else if (this.finalNarrationLooksCutOff()) {
+      kind = "unfinished-text";
     }
     if (!kind) return;
 
     this.ctx.log.warn(
       `turn incomplete (gateway likely returned an empty final response): kind=${kind} pendingToolCalls=[${pending
         .map((c) => c.toolName)
-        .join(", ")}]`,
+        .join(", ")}]${
+        kind === "unfinished-text"
+          ? ` finalTextTail=${JSON.stringify(this.state.lastAssistantText.slice(-80))}`
+          : ""
+      }`,
     );
     this.ctx.emit({
       type: "turn.incomplete",
@@ -722,6 +753,30 @@ export class SdkMessageAdapter {
       kind,
       pendingToolCalls: kind === "dangling-tools" ? pending : [],
     } satisfies TurnIncompleteEvent);
+  }
+
+  /** Third truncation shape (observed 2026-09-02 on the deepseek
+   *  OpenAI-protocol bridge): the model narrated its next step — "先读当前
+   *  完整 `onSplitConfirm`:" — and the announced tool call never arrived;
+   *  the bridge flattens every finish_reason to end_turn, so with no
+   *  tool_use block to keep the loop alive the CLI closed the turn as
+   *  success right after the text. A healthy final reply never ends with
+   *  continuation punctuation (colon / comma / …) or an unclosed ``` fence.
+   *
+   *  Guards: the turn must have RUN tools (this gateway failure happens
+   *  mid-work; pure-chat turns stay out of scope because a lone question to
+   *  the user can legitimately end with a colon), and the final message must
+   *  be text-only — a trailing tool dispatch (e.g. a backgrounded Task)
+   *  makes punctuation on earlier narration inconclusive. */
+  private finalNarrationLooksCutOff(): boolean {
+    if (this.state.emittedToolUse.size === 0) return false;
+    if (!this.state.textEmitted) return false;
+    if (this.state.lastAssistantHadToolUse) return false;
+    const text = this.state.lastAssistantText.trimEnd();
+    if (text.length === 0) return false;
+    if (UNFINISHED_TRAILING_RE.test(text)) return true;
+    // Odd ``` count = a code fence opened but never closed.
+    return (text.match(/```/g) ?? []).length % 2 === 1;
   }
 
   /* ──────────────── per-message-type handlers ──────────────── */
@@ -1175,6 +1230,17 @@ export class SdkMessageAdapter {
       this.handleSubagentAssistant(m.parent_tool_use_id, blocks);
       return;
     }
+
+    // Track the final-message shape for the "unfinished-text" half of the
+    // turn-incomplete check. Computed off the raw content (what the model
+    // actually sent), not off what we re-emit — deltas already rendered the
+    // text; assistant messages only complete tool_use here.
+    this.state.lastAssistantHadToolUse = blocks.some((b) => b.type === "tool_use");
+    this.state.lastAssistantText = blocks
+      .filter((b) => b.type === "text")
+      .map((b) => (b as { text?: unknown }).text)
+      .filter((t): t is string => typeof t === "string")
+      .join("\n");
 
     for (const [idx, b] of blocks.entries()) {
       // Track the narration text so a subsequent tool_use block (which

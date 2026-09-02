@@ -944,14 +944,18 @@ function ChatPaneForSession({
   chipsMode?: ComposerChipsMode;
 }) {
   const { t, locale } = useI18n();
-  // Content-aware collapse of the composer's bottom action row: when the chip
-  // cluster (Model/Effort/Permission/ContextRing) can't fit on one line next
-  // to the mic/provider/send cluster, `collapsed` hides the chips and shows
-  // the single-icon menu toggle instead (see useComposerRowFit). Narrow hosts
-  // (`chipsMode="collapsed"`, i.e. the side-chat panel) skip measuring and
-  // stay folded at every width.
-  const { rowRef: composerActionRowRef, collapsed: composerChipsCollapsed } =
-    useComposerRowFit(chipsMode === "collapsed");
+  // Collapse of the composer's bottom action row into the single-icon menu
+  // toggle (see useComposerRowFit): when the composer card is narrower than
+  // 580px, or — above that floor — when the chip cluster
+  // (Model/Effort/Permission/ContextRing) can't fit on one line next to the
+  // mic/provider/send cluster, `collapsed` hides the chips and shows the
+  // toggle instead. Narrow hosts (`chipsMode="collapsed"`, i.e. the side-chat
+  // panel) skip measuring and stay folded at every width.
+  const {
+    rowRef: composerActionRowRef,
+    cardRef: composerCardRef,
+    collapsed: composerChipsCollapsed,
+  } = useComposerRowFit(chipsMode === "collapsed");
   const messages = useSessionStore((s) =>
     s.messagesBySession[sessionId] ?? EMPTY_MESSAGES,
   );
@@ -2925,6 +2929,7 @@ function ChatPaneForSession({
             <WorktreeModeChip sessionId={sessionId} />
           </div>
           <div
+            ref={composerCardRef}
             className={cn(
               "relative flex min-w-0 flex-col overflow-hidden rounded-2xl border border-edge-input bg-surface transition-all duration-200",
               "focus-within:border-accent focus-within:shadow-[0_0_0_3px_rgb(var(--accent)/0.12)]",

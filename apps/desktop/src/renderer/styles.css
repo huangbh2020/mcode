@@ -1059,13 +1059,14 @@ body {
  * the inline px-2.5 / gap-2 utilities. */
 
 /* Wide mode (default): the inline chip row is shown; the narrow-mode toggle
- * entry is absent from the layout. Collapsing into the toggle is driven by
- * MEASURED fit instead of a fixed width breakpoint: the chip row's min width
- * depends on locale and selected values (and the pane width isn't the same as
- * the composer's real width — side gutters + the always-visible
+ * entry is absent from the layout. Collapsing into the toggle has two
+ * triggers, both toggled via `composer-row-collapsed` on the action row by
+ * the useComposerRowFit hook: (1) a width floor — the composer card under
+ * 580px always folds; (2) measured fit above the floor — the chip row's min
+ * width depends on locale and selected values (and the pane width isn't the
+ * same as the composer's real width — side gutters + the always-visible
  * mic/provider/send cluster eat into it), so only content can tell when the
- * row stops fitting. `composer-row-collapsed` is toggled by the
- * useComposerRowFit hook on the action row. */
+ * row stops fitting. */
 [data-chat-root] .composer-chips-toggle {
   display: none;
 }

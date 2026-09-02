@@ -363,6 +363,36 @@ async function handleMessages(
   const decoder = new TextDecoder();
   let sseBuffer = "";
 
+  /** Parse one SSE frame (the text between two blank-line separators) and
+   *  feed its data chunk to the translator. Returns how many chunks were
+   *  fed (0 for [DONE] / empty / malformed frames). Malformed frames are
+   *  logged and skipped — dropping them silently made truncations
+   *  unattributable after the fact. */
+  const processFrame = (frame: string): number => {
+    // Each frame is one or more `data: ...` lines. OpenAI sends a single
+    // data line per frame; we parse anything that starts with "data:".
+    const dataLines = frame
+      .split("\n")
+      .filter((l) => l.startsWith("data:"))
+      .map((l) => l.slice(5).trimStart());
+    const dataStr = dataLines.join("\n");
+    if (!dataStr || dataStr === "[DONE]") {
+      // [DONE] is the terminator — nothing to feed.
+      return 0;
+    }
+    let chunk: OpenAIChunk;
+    try {
+      chunk = JSON.parse(dataStr) as OpenAIChunk;
+    } catch {
+      log.warn(`bridge: malformed SSE frame skipped: ${dataStr.slice(0, 200)}`);
+      return 0;
+    }
+    for (const ev of translator.feed(chunk)) {
+      writeSseEvent(res, ev);
+    }
+    return 1;
+  };
+
   try {
     for (;;) {
       const { done, value } = await reader.read();
@@ -375,34 +405,36 @@ async function handleMessages(
       while ((sep = sseBuffer.indexOf("\n\n")) >= 0) {
         const frame = sseBuffer.slice(0, sep);
         sseBuffer = sseBuffer.slice(sep + 2);
-        // Each frame is one or more `data: ...` lines. OpenAI sends a single
-        // data line per frame; we parse anything that starts with "data:".
-        const dataLines = frame
-          .split("\n")
-          .filter((l) => l.startsWith("data:"))
-          .map((l) => l.slice(5).trimStart());
-        const dataStr = dataLines.join("\n");
-        if (!dataStr || dataStr === "[DONE]") {
-          // [DONE] is the terminator — close out below after the loop.
-          continue;
-        }
-        let chunk: OpenAIChunk;
-        try {
-          chunk = JSON.parse(dataStr) as OpenAIChunk;
-        } catch {
-          // Malformed frame — skip rather than kill the whole stream.
-          continue;
-        }
-        for (const ev of translator.feed(chunk)) {
-          writeSseEvent(res, ev);
-        }
+        processFrame(frame);
       }
     }
+    // Flush the decoder (a multi-byte char can straddle the last read), then
+    // process whatever is left in the buffer as a final frame. Some upstreams
+    // close the socket right after the last `data:` line without the trailing
+    // blank line — and that frame typically carries the tool_call fragments
+    // + finish_reason. Until 2026-09-02 the residue was dropped silently,
+    // which produced exactly the "text streamed fine, the announced tool call
+    // never arrived" truncation shape; recovering it (or at least logging it
+    // as malformed) makes the next occurrence attributable.
+    sseBuffer += decoder.decode();
+    const tail = sseBuffer.trim();
+    if (tail && processFrame(tail) > 0) {
+      log.info(`bridge: recovered tail SSE frame after stream end (${tail.length} bytes) — upstream omitted the trailing blank line`);
+    }
     // Stream ended. Close any open block + emit message_delta/message_stop.
-    // We don't know a precise stop_reason from a bare stream end; the final
-    // chunk's finish_reason would have been fed already if present.
-    for (const ev of translator.finish(undefined)) {
+    // The translator captured finish_reason off the final choice-bearing
+    // chunk and maps it onto Anthropic's stop_reason (a bare stream end with
+    // no finish_reason anywhere degrades to end_turn).
+    for (const ev of translator.finish()) {
       writeSseEvent(res, ev);
+    }
+    // Upstream-blame diagnostic: the stream TERMINATED claiming tool_calls,
+    // yet not a single tool_call fragment was translated. That combination
+    // means the upstream generated the call but dropped its wire fragments —
+    // the CLI then sees a text-only end_turn message and closes the turn as
+    // success (surfaced downstream as a turn.incomplete "unfinished-text").
+    if (translator.finishReason === "tool_calls" && translator.toolBlockCount === 0) {
+      log.warn("bridge: upstream finished with finish_reason=tool_calls but no tool-call fragments arrived — upstream dropped them");
     }
   } catch (err) {
     log.error(`bridge: stream read failed: ${(err as Error).message}`);

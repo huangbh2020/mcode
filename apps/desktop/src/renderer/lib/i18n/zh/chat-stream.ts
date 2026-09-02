@@ -117,6 +117,8 @@ export const zh = {
     "模型通道在任务中途返回了空响应，本轮未完成。直接发送「继续」可从中断处恢复。",
   "chatStream.turnIncomplete.emptyDesc":
     "模型通道未返回任何回复文本，本轮没有产出。建议重发或切换模型。",
+  "chatStream.turnIncomplete.unfinishedDesc":
+    "模型的收尾文本停在未写完的语句上，宣告的下一步没有发出。直接发送「继续」可从中断处恢复。",
   "chatStream.turnIncomplete.pendingTools": "未完成的调用：{tools}",
 
   // ── MessageBlocks: ExitPlanMode 审批通道故障警告 ──
