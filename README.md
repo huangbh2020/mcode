@@ -256,6 +256,14 @@ Pre-built binaries are published on [GitHub Releases](https://github.com/huangbh
 
 MIT. This project does not redistribute or bundle any agent binary — each SDK manages its own bundled runtime internally (Claude's Agent SDK and Pi's coding-agent SDK both manage their own).
 
+### Community
+
+Join the Mcode user group on WeChat — scan the QR code below to ask questions, share feedback, or just chat about the project:
+
+![Mcode WeChat user group QR code](docs/images/沟通群二维码.png)
+
+> Group QR codes expire — if the code is no longer valid or the group is full, please open an [issue](https://github.com/huangbh2020/mcode/issues) to reach us.
+
 ---
 
 If Mcode helps you, please ⭐ star the project and share it with others — every share helps more people discover it.

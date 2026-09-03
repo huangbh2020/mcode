@@ -256,6 +256,14 @@ pnpm package
 
 MIT。本项目不重新分发或内嵌任何 agent 二进制——各 SDK 自行管理其运行时（Claude Agent SDK 与 Pi coding-agent SDK 均如此）。
 
+### 交流群
+
+欢迎加入 Mcode 微信交流群——使用疑问、问题反馈、功能讨论都可以在群里聊，微信扫码即可加入：
+
+![Mcode 微信交流群二维码](docs/images/沟通群二维码.png)
+
+> 群二维码有时效，如提示已过期或已满员，请提 [issue](https://github.com/huangbh2020/mcode/issues) 联系我们。
+
 ---
 
 如果 Mcode 帮到了你，欢迎 ⭐ Star 这个项目，并把链接分享给需要的人——你的每一次分享都是在帮开源项目被更多人发现。
