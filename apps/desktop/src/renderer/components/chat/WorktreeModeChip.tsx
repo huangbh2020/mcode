@@ -17,8 +17,8 @@ import { useI18n } from "@renderer/lib/i18n/index.js";
 /**
  * The composer's working-environment picker — a MINIMAL text trigger placed
  * at the top-left corner of the composer card (above the textarea), not a
- * chip in the bottom action row. Three short options: 本地 / 工作树·实验
- * (detached) / 工作树·开发 (generated mcode/* branch).
+ * chip in the bottom action row. Three short options: 本地 / 工作树·沙盒
+ * (detached) / 工作树·分支 (generated mcode/* branch).
  *
  * Availability: the PROJECT ROOT itself must be a git repo (`discoverRepos`
  * with `rootOnly`, one level — worktree materialization requires `.git` at

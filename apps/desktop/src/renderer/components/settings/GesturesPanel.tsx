@@ -134,16 +134,18 @@ export function GesturesPanel() {
               </Select.Value>
             </Select.Trigger>
             <Select.Portal>
-              <Select.Popup>
-                <Select.List>
-                  <Select.Item value="right">
-                    <Select.ItemText>{t("settings.gestures.triggerRight")}</Select.ItemText>
-                  </Select.Item>
-                  <Select.Item value="middle">
-                    <Select.ItemText>{t("settings.gestures.triggerMiddle")}</Select.ItemText>
-                  </Select.Item>
-                </Select.List>
-              </Select.Popup>
+              <Select.Positioner>
+                <Select.Popup>
+                  <Select.List>
+                    <Select.Item value="right">
+                      <Select.ItemText>{t("settings.gestures.triggerRight")}</Select.ItemText>
+                    </Select.Item>
+                    <Select.Item value="middle">
+                      <Select.ItemText>{t("settings.gestures.triggerMiddle")}</Select.ItemText>
+                    </Select.Item>
+                  </Select.List>
+                </Select.Popup>
+              </Select.Positioner>
             </Select.Portal>
           </Select.Root>
         </SettingRow>

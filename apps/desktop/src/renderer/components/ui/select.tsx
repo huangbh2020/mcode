@@ -10,14 +10,21 @@
  *       <Select.Value placeholder="Pick one" />
  *     </Select.Trigger>
  *     <Select.Portal>
- *       <Select.Popup>
- *         <Select.List>
- *           <Select.Item value="a">Option A</Select.Item>
- *           <Select.Item value="b">Option B</Select.Item>
- *         </Select.List>
- *       </Select.Popup>
+ *       <Select.Positioner>
+ *         <Select.Popup>
+ *           <Select.List>
+ *             <Select.Item value="a">Option A</Select.Item>
+ *             <Select.Item value="b">Option B</Select.Item>
+ *           </Select.List>
+ *         </Select.Popup>
+ *       </Select.Positioner>
  *     </Select.Portal>
  *   </Select.Root>
+ *
+ *   ⚠️ The Positioner is NOT optional: `Select.Popup` reads its positioning
+ *   context from it and throws ("SelectPositionerContext is missing") on
+ *   mount without it — which React surfaces as a crash in <SelectPopup> the
+ *   moment the popup opens.
  */
 import { Select as BaseSelect } from "@base-ui/react/select";
 import { cn } from "@renderer/lib/cn.js";
