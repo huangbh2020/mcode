@@ -1987,6 +1987,17 @@ export const GitDiffSchema = z.object({
 });
 export type GitDiffInput = z.infer<typeof GitDiffSchema>;
 
+/** Full old-side blob for the working-tree diff view. `index` reads the
+ *  staged snapshot (`git show :path`), `"HEAD"` reads the last commit
+ *  (`git show HEAD:path`). A missing blob (untracked / newly added /
+ *  staged deletion) yields "". */
+export const GitFileBlobSchema = z.object({
+  repoPath: z.string(),
+  filePath: z.string(),
+  side: z.enum(["index", "HEAD"]),
+});
+export type GitFileBlobInput = z.infer<typeof GitFileBlobSchema>;
+
 /** Discard (revert) local changes to specific files. For tracked files this
  *  runs `git checkout -- <files>` (restores to index/HEAD); for untracked files
  *  it runs `git clean -f -- <files>` (removes them). The handler decides per
@@ -3658,6 +3669,8 @@ export interface RpcMap {
   "git.pull": (input: GitRepoPathInput) => Promise<GitOpResult>;
   /** Get the unstaged diff patch for a single file. */
   "git.diff": (input: GitDiffInput) => Promise<{ patch: string }>;
+  /** Full old-side blob for the Git panel's diff view (`git show rev:path`). */
+  "git.fileBlob": (input: GitFileBlobInput) => Promise<{ content: string }>;
   /** Discard local changes to specific files (checkout tracked / clean untracked). */
   "git.discard": (input: GitDiscardInput) => Promise<GitOpResult>;
   /** Generate a commit message from the staged diff via an LLM one-shot call. */
@@ -4022,6 +4035,7 @@ export const IPC = {
   GIT_PUSH: "git:push",
   GIT_PULL: "git:pull",
   GIT_DIFF: "git:diff",
+  GIT_FILE_BLOB: "git:fileBlob",
   GIT_DISCARD: "git:discard",
   GIT_GENERATE_COMMIT: "git:generateCommitMessage",
   GIT_CANCEL_GENERATE_COMMIT: "git:cancelGenerateCommitMessage",

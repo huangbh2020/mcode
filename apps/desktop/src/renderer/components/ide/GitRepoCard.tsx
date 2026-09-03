@@ -1663,7 +1663,7 @@ function FileRow({
 }) {
   const { t } = useI18n();
   const openFileInIde = useSessionStore((s) => s.openFileInIde);
-  const setGitDiffBefore = useSessionStore((s) => s.setGitDiffBefore);
+  const setGitDiffPair = useSessionStore((s) => s.setGitDiffPair);
   const gitDiffOpenMode = useSessionStore((s) => s.gitDiffOpenMode);
   const openGitDiffDialogTab = useSessionStore((s) => s.openGitDiffDialogTab);
   const [diffTally, setDiffTally] = useState<{ adds: number; dels: number } | null>(null);
@@ -1695,30 +1695,29 @@ function FileRow({
 
   // Click → open in center editor with diff. Fetches the appropriate diff
   // (staged vs HEAD for staged files, working tree for unstaged), stashes
-  // the "before" content, and opens the file in diff mode.
+  // the diff pair, and opens the file in diff mode.
   const handleClick = async () => {
-    let before: string | undefined;
-    let after: string | undefined;
-    try {
-      const { patch } = await api.git.diff({ repoPath, filePath: file.path, staged: !!staged });
-      if (patch) {
-        const parsed = parsePatchToBeforeAfter(patch);
-        before = parsed.before;
-        after = parsed.after;
-        setGitDiffBefore(absPath, before);
-      }
-    } catch {
-      // fall through - open in edit mode if diff fetch fails
-    }
     if (gitDiffOpenMode === "dialog") {
-      // Dialog open-mode: open (or refresh) a diff tab in the floating dialog.
-      // Staged vs unstaged of the same path are distinct tabs (id suffix).
-      // Staged diffs always supply `after` from the patch (index blob); unstaged
+      // Dialog open-mode: compact patch-scoped diff — both sides are
+      // reconstructed from the patch (changed regions ± context). Staged
+      // diffs always supply `after` from the patch (index blob); unstaged
       // may omit it so DiffPane reads the live working tree from disk.
+      let before = "";
+      let after: string | undefined;
+      try {
+        const { patch } = await api.git.diff({ repoPath, filePath: file.path, staged: !!staged });
+        if (patch) {
+          const parsed = parsePatchToBeforeAfter(patch);
+          before = parsed.before;
+          after = parsed.after;
+        }
+      } catch {
+        // fall through with empty before
+      }
       openGitDiffDialogTab({
         id: `${absPath}::${staged ? "staged" : "work"}`,
         filePath: absPath,
-        before: before ?? "",
+        before,
         after: staged ? (after ?? "") : after,
         title: basename(file.path),
         repoPath,
@@ -1726,6 +1725,27 @@ function FileRow({
         staged: !!staged,
       });
       return;
+    }
+    // Center open-mode: full-file diff. The old side comes from the git
+    // object database — index snapshot for unstaged, HEAD for staged — never
+    // from a patch reconstruction, which only covers changed regions and
+    // would paint the rest of the file as additions. The new side is the
+    // live working tree (DiffPane reads it from disk when `after` is
+    // omitted); a staged file pins both sides to blobs so the view shows
+    // exactly what staging changed, independent of later working-tree edits.
+    try {
+      if (staged) {
+        const [head, index] = await Promise.all([
+          api.git.fileBlob({ repoPath, filePath: file.path, side: "HEAD" }),
+          api.git.fileBlob({ repoPath, filePath: file.path, side: "index" }),
+        ]);
+        setGitDiffPair(absPath, { before: head.content, after: index.content });
+      } else {
+        const { content } = await api.git.fileBlob({ repoPath, filePath: file.path, side: "index" });
+        setGitDiffPair(absPath, { before: content });
+      }
+    } catch {
+      // fall through — without a stashed pair FileEditor opens in edit mode
     }
     openFileInIde(absPath, { diff: true });
   };
@@ -1893,7 +1913,6 @@ function parsePatchToBeforeAfter(patch: string): { before: string; after: string
       continue;
     }
     if (!inHunk) continue;
-    if (line.startsWith("+++") || line.startsWith("---")) continue;
     if (line.startsWith("+")) {
       afterLines.push(line.slice(1));
     } else if (line.startsWith("-")) {

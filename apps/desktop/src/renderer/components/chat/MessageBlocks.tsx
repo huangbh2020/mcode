@@ -732,6 +732,16 @@ const BlockView = memo(function BlockView({
         block.skillNames && block.skillNames.length > 0
           ? Array.from(new Set([...block.skillNames, ...knownSkillNames]))
           : knownSkillNames;
+      // Whitespace-only text blocks render nothing. They are stream
+      // artifacts: the bridge's <think> segmenter forwards the bare newlines
+      // models emit around reasoning sections, and each isolated run became
+      // a standalone text block — an empty Markdown container whose
+      // surrounding block gaps read as a blank line in the chat. The guard
+      // must sit AFTER useDeferredValue: a streaming block can start
+      // whitespace-only and grow prose within its lifetime, and a conditional
+      // hook would crash React ("rendered more hooks than previous render").
+      // eslint-disable-next-line react-hooks/rules-of-hooks
+      if (!block.text.trim()) return null;
       return (
         <Markdown projectPath={projectPath} skillNames={skillNames}>
           {deferredText}

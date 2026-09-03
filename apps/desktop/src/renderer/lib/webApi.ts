@@ -456,6 +456,7 @@ const git: Api["git"] = {
   push: (input) => rpc("git:push", input),
   pull: (input) => rpc("git:pull", input),
   diff: (input) => rpc("git:diff", input),
+  fileBlob: (input) => rpc("git:fileBlob", input),
   discard: () => webUnsupported("git.discard"),
   generateCommitMessage: (input) => rpc("git:generateCommitMessage", input),
   cancelGenerateCommitMessage: (input) => rpc("git:cancelGenerateCommitMessage", input),

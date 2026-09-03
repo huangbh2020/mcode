@@ -284,6 +284,8 @@ const api = {
       ipcRenderer.invoke(IPC.GIT_PULL, input)) as RpcMap["git.pull"],
     diff: ((input) =>
       ipcRenderer.invoke(IPC.GIT_DIFF, input)) as RpcMap["git.diff"],
+    fileBlob: ((input) =>
+      ipcRenderer.invoke(IPC.GIT_FILE_BLOB, input)) as RpcMap["git.fileBlob"],
     discard: ((input) =>
       ipcRenderer.invoke(IPC.GIT_DISCARD, input)) as RpcMap["git.discard"],
     generateCommitMessage: ((input) =>

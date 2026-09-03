@@ -472,7 +472,6 @@ function parsePatchToBeforeAfter(patch: string): { before: string; after: string
       continue;
     }
     if (!inHunk) continue;
-    if (line.startsWith("+++") || line.startsWith("---")) continue;
     if (line.startsWith("+")) {
       afterLines.push(line.slice(1));
     } else if (line.startsWith("-")) {

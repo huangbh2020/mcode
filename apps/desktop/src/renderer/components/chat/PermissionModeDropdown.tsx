@@ -112,7 +112,7 @@ export function PermissionModeDropdown({
         className={cn(
           stacked
             ? "flex w-full items-center justify-between gap-2 rounded-lg px-2.5 py-2 text-[13px] outline-none select-none transition-colors duration-100"
-            : "composer-chip flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-medium transition-all duration-150 ease-out",
+            : "composer-chip flex min-w-0 items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-medium transition-all duration-150 ease-out",
           stacked
             ? "text-content-muted hover:bg-surface-muted hover:text-content"
             : cn(

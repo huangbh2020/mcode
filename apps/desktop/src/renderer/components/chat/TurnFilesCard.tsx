@@ -110,7 +110,7 @@ export function TurnFilesCard({
   );
 
   return (
-    <div className={cn("rounded-lg border border-edge bg-surface-muted/60 shadow-sm text-xs text-content-muted", rewound && "opacity-60")}>
+    <div className={cn("mb-[5px] rounded-lg border border-edge bg-surface-muted/60 shadow-sm text-xs text-content-muted", rewound && "opacity-60")}>
       <div
         role="button"
         tabIndex={0}

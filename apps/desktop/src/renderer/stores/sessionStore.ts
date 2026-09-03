@@ -1942,13 +1942,39 @@ function findMsg(list: ChatMessage[], messageId: string): ChatMessage | undefine
  * we detect with Array.isArray for backward compatibility. Reloading a
  * session round-trips the exact blocks (and turn timing) the renderer built. */
 function toRecords(sessionId: string, messages: ChatMessage[]): MessageRecord[] {
-  return messages.map((m) => ({
-    id: m.id,
-    sessionId,
-    role: m.role,
-    content: m.turnMeta ? { blocks: m.blocks, turnMeta: m.turnMeta } : m.blocks,
-    createdAt: m.createdAt,
-  }));
+  return messages.map((m) => {
+    // Whitespace-only text blocks are stream artifacts (see
+    // pruneBlankTextBlocks) — assistant rows persist without them. User rows
+    // persist verbatim: edit-resend round-trips their blocks as-is.
+    const blocks = m.role === "assistant" ? pruneBlankTextBlocks(m.blocks) : m.blocks;
+    return {
+      id: m.id,
+      sessionId,
+      role: m.role,
+      content: m.turnMeta ? { blocks, turnMeta: m.turnMeta } : blocks,
+      createdAt: m.createdAt,
+    };
+  });
+}
+
+/** Drop whitespace-only text blocks — blank lines that stream into the
+ *  transcript when a model emits bare newlines around a reasoning section
+ *  (the bridge's <think> segmenter forwards them, and each run isolated by a
+ *  flush-window boundary became a standalone text block). Pruned on save AND
+ *  at hydration (rows persisted before this fix carry them). Returns the
+ *  input untouched when there is nothing to prune (cheap common path).
+ *  Mirrors pruneUnchangedTurnFileBlocks. */
+function pruneBlankTextBlocks(blocks: Block[]): Block[] {
+  let changed = false;
+  const next: Block[] = [];
+  for (const b of blocks) {
+    if (b.kind === "text" && b.text.trim() === "") {
+      changed = true;
+      continue;
+    }
+    next.push(b);
+  }
+  return changed ? next : blocks;
 }
 
 /** Drop net-zero entries (`adds === 0 && dels === 0`) from `turn-files`
@@ -1993,7 +2019,14 @@ function fromRecords(records: MessageRecord[]): ChatMessage[] {
       if (Array.isArray(obj.blocks)) blocks = obj.blocks;
       if (obj.turnMeta) turnMeta = obj.turnMeta;
     }
-    const pruned = pruneUnchangedTurnFileBlocks(blocks);
+    let pruned = pruneUnchangedTurnFileBlocks(blocks);
+    // Historical assistant rows may carry whitespace-only text blocks (blank
+    // lines the pre-fix stream persisted) — prune them like the turn-files
+    // noise above. User rows keep their blocks verbatim.
+    if (r.role !== "user") {
+      const noBlank = pruneBlankTextBlocks(pruned);
+      if (noBlank !== pruned) pruned = noBlank;
+    }
     // A message that consisted ONLY of pruned-to-nothing turn-files card(s)
     // would linger as a blank row — drop it (mirrors the plan-block pruning
     // in freezeOrPrunePlanBlocks). Messages that were already empty stay as
@@ -3642,15 +3675,28 @@ function freezeLatestTurnFilesBlock(messages: ChatMessage[], endedAt: number): C
  * Zustand store, so it doesn't trigger React re-renders on accumulation.
  */
 
+type DeltaSeg = { k: "text" | "thinking"; text: string };
+
 type DeltaEntry = {
   sessionId: string;
   messageId: string;
-  /** Accumulated text (via text.delta) */
-  text: string;
-  /** Accumulated thinking (via thinking delta) — only one of text/thinking is
-   *  populated per call, but we carry both to consolidate into one flush. */
-  thinking: string;
+  /** Content segments in TRUE arrival order. A flush window routinely
+   *  straddles a text↔thinking boundary (the bridge's <think> segmenter
+   *  interleaves the two every few chunks) — the segments must then apply in
+   *  stream order. The old two-slot shape (`text` + `thinking` strings,
+   *  always applied text-first) swapped the blocks across the boundary:
+   *  prose landed before the reasoning that preceded it. */
+  segs: DeltaSeg[];
 };
+
+/** Append one delta to an entry, preserving order: consecutive chunks of the
+ *  same kind merge into the trailing segment; a kind switch opens a new one. */
+function appendDelta(entry: DeltaEntry, k: "text" | "thinking", text: string): void {
+  if (!text) return;
+  const last = entry.segs[entry.segs.length - 1];
+  if (last && last.k === k) last.text += text;
+  else entry.segs.push({ k, text });
+}
 
 const deltaBuf = new Map<string, DeltaEntry>();
 
@@ -3772,43 +3818,26 @@ function flushDeltas(): void {
           // Message already exists — we'll replace it below.
         }
 
-        // Apply accumulated text
-        if (e.text) {
-          const blocks = msg.blocks;
+        // Apply the buffered segments in arrival order (see DeltaEntry.segs —
+        // a window straddling a text↔thinking boundary must not swap them).
+        for (const seg of e.segs) {
+          const cur = findMsg(next, e.messageId);
+          if (!cur) break;
+          const blocks = cur.blocks;
           const lastBlock = blocks[blocks.length - 1];
-          if (lastBlock && lastBlock.kind === "text") {
-            const updatedMsg = {
-              ...msg,
-              blocks: [...blocks.slice(0, -1), { ...lastBlock, text: lastBlock.text + e.text }],
-            };
-            next = next.map((m) => (m.id === msg!.id ? updatedMsg : m));
+          let updatedMsg: ChatMessage;
+          if (seg.k === "text") {
+            updatedMsg =
+              lastBlock && lastBlock.kind === "text"
+                ? { ...cur, blocks: [...blocks.slice(0, -1), { ...lastBlock, text: lastBlock.text + seg.text }] }
+                : { ...cur, blocks: [...blocks, { kind: "text", text: seg.text } as Block] };
           } else {
-            const updatedMsg = {
-              ...msg,
-              blocks: [...blocks, { kind: "text", text: e.text } as Block],
-            };
-            next = next.map((m) => (m.id === msg!.id ? updatedMsg : m));
+            updatedMsg =
+              lastBlock && lastBlock.kind === "thinking"
+                ? { ...cur, blocks: [...blocks.slice(0, -1), { ...lastBlock, text: lastBlock.text + seg.text }] }
+                : { ...cur, blocks: [...blocks, { kind: "thinking", text: seg.text } as Block] };
           }
-          msg = findMsg(next, e.messageId)!;
-        }
-
-        // Apply accumulated thinking
-        if (e.thinking) {
-          const blocks = msg!.blocks;
-          const lastBlock = blocks[blocks.length - 1];
-          if (lastBlock && lastBlock.kind === "thinking") {
-            const updatedMsg = {
-              ...msg,
-              blocks: [...blocks.slice(0, -1), { ...lastBlock, text: lastBlock.text + e.thinking }],
-            };
-            next = next.map((m) => (m.id === msg!.id ? updatedMsg : m));
-          } else {
-            const updatedMsg = {
-              ...msg,
-              blocks: [...blocks, { kind: "thinking", text: e.thinking } as Block],
-            };
-            next = next.map((m) => (m.id === msg!.id ? updatedMsg : m));
-          }
+          next = next.map((m) => (m.id === cur.id ? updatedMsg : m));
         }
       }
 
@@ -6994,9 +7023,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           const key = `${sid}:${e.messageId}`;
           const existing = deltaBuf.get(key);
           if (existing) {
-            existing.text += e.text;
+            appendDelta(existing, "text", e.text);
           } else {
-            deltaBuf.set(key, { sessionId: sid, messageId: e.messageId, text: e.text, thinking: "" });
+            deltaBuf.set(key, { sessionId: sid, messageId: e.messageId, segs: [{ k: "text", text: e.text }] });
           }
           scheduleDeltaFlush();
           // Don't add to `next` — flushDeltas mutates the store directly.
@@ -7006,9 +7035,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           const key = `${sid}:${e.messageId}`;
           const existing = deltaBuf.get(key);
           if (existing) {
-            existing.thinking += e.text;
+            appendDelta(existing, "thinking", e.text);
           } else {
-            deltaBuf.set(key, { sessionId: sid, messageId: e.messageId, text: "", thinking: e.text });
+            deltaBuf.set(key, { sessionId: sid, messageId: e.messageId, segs: [{ k: "thinking", text: e.text }] });
           }
           scheduleDeltaFlush();
           break;

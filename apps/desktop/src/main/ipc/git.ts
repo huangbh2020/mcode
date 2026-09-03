@@ -25,6 +25,7 @@ import {
   GitUnstageSchema,
   GitCommitSchema,
   GitDiffSchema,
+  GitFileBlobSchema,
   GitDiscardSchema,
   GitGenerateCommitSchema,
   GitCancelGenerateCommitSchema,
@@ -746,6 +747,28 @@ export function registerGitHandlers(ipcMain: IpcMain): void {
     } catch (err) {
       log.warn(`git.diff failed for ${input.repoPath}/${input.filePath}: ${(err as Error).message}`);
       return { patch: "" };
+    }
+  });
+
+  /* ── git:fileBlob — full old-side content for the diff view ──
+     Unstaged diffs compare index ↔ working tree, staged diffs HEAD ↔ index;
+     the old side is therefore `:path` (index) vs `HEAD:path`. Missing blobs
+     (untracked / newly added / staged deletion) surface as "". */
+  ipcMain.handle(IPC.GIT_FILE_BLOB, async (_evt, raw) => {
+    const input = GitFileBlobSchema.parse(raw);
+    if (!findContainingProject(input.repoPath)) {
+      return { content: "" };
+    }
+    try {
+      const git = (await loadSimpleGit())(input.repoPath);
+      const rev = input.side === "HEAD" ? "HEAD" : "";
+      const content = await showBlob(git, rev, input.filePath);
+      // Index blobs are LF-normalized; matching the disk side's CRLF would
+      // otherwise paint every line as changed in the diff view.
+      return { content: content.replace(/\r\n/g, "\n") };
+    } catch (err) {
+      log.warn(`git.fileBlob failed for ${input.repoPath}/${input.filePath}: ${(err as Error).message}`);
+      return { content: "" };
     }
   });
 

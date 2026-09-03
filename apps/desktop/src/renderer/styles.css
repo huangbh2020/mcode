@@ -1121,6 +1121,20 @@ body {
   display: inline-flex;
 }
 
+/* Overflow protection: the chip cluster's containers shrink freely (min-w-0
+ * down the flex chain), so every chip trigger must be shrinkable too — a chip
+ * that refuses to shrink keeps its natural width and PAINTS OVER the adjacent
+ * mic/provider/send cluster while the containers get narrower around it. With
+ * min-width: 0 each chip degrades gracefully instead (its value text carries
+ * `truncate` → ellipsis), and the row's combined minimum width sits far below
+ * the 580px fold floor — so above the floor overlap is structurally
+ * impossible, and below it the fold into the toggle icon takes over. Applied
+ * at the CSS level (not just per-component classes) so any chip added to the
+ * cluster later inherits the same guarantee. */
+[data-chat-root] .composer-chips-root > .composer-chip {
+  min-width: 0;
+}
+
 /* Narrow-pane cosmetics only (gaps/paddings) — the collapse decision itself
  * lives in useComposerRowFit. */
 @container (width < 30rem) {
