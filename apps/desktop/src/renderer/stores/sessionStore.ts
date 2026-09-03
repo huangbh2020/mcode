@@ -2819,25 +2819,19 @@ function syncConfigFromSession(
 /**
  * Resolve the model a send should actually use.
  *
- * An explicit selection (`model !== "default"`) passes through untouched —
- * except for pi, whose ids must resolve against `piAvailableModels` (the
- * picker's only surface): a stale id (provider deleted mid-session, or a
- * builtin-catalog id like "anthropic/…" picked before the list was filtered
- * to user-configured providers) falls through to the default resolution
- * instead of sending a model that was never actually configured.
- * "default" (the chip's "默认"/auto) means "the first configured model" —
- * the lists mirror the ModelDropdown's selectable surface per provider:
+ * Only an EXPLICIT selection passes through: `model !== "default"` and still
+ * resolvable against the active provider's model surface (claude and pi have
+ * no default model — the user must pick one). For pi the id must resolve
+ * against `piAvailableModels` (the picker's only surface): a stale id
+ * (provider deleted mid-session, or a builtin-catalog id like "anthropic/…"
+ * picked before the list was filtered to user-configured providers) is not
+ * sent — it was never actually configured.
  *
- *   - pi-sdk   → `piAvailableModels` (dynamic, user-configured) → first id
- *   - claude   → `customModels` (user-configured gateways) → first config's
- *                first model (same pick as `setCustomModel`'s fallback)
- *   - other    → `capabilities.builtinModels` → first concrete entry
- *                (skipping the "default"/Auto placeholder)
- *
- * Returns null when the active provider has NO model to send with — the
- * caller then prompts the user to configure one instead of silently falling
- * back to the provider's internal default (which, after an SDK switch to
- * auto, is exactly the trap this guard exists to avoid).
+ * "default" (nothing picked — the chip shows "选择模型") returns null, as
+ * does a provider with nothing selectable at all. The caller then blocks the
+ * send: it toasts a "select a model" nudge when the provider HAS selectable
+ * models (`hasSelectableModel`), or opens the config dialog when it has
+ * none — never silently falls back to a first/implicit model.
  */
 function resolveSendModel(
   s: Pick<SessionState, "model" | "customModelId" | "providerId" | "providers" | "customModels" | "piAvailableModels">,
@@ -2847,21 +2841,48 @@ function resolveSendModel(
     if (s.model !== "default" && s.piAvailableModels.some((m) => m.id === s.model)) {
       return { model: s.model, customModelId: null };
     }
-    const first = s.piAvailableModels[0];
-    return first ? { model: first.id, customModelId: null } : null;
-  }
-  if (s.model !== "default") return { model: s.model, customModelId: s.customModelId };
-  if (!provider) return null;
-  if (provider.id === "claude-sdk") {
-    for (const cfg of s.customModels) {
-      const first = cfg.models.find((m) => m.id.trim());
-      if (first) return { model: first.id, customModelId: cfg.id };
-    }
     return null;
   }
+  if (s.model !== "default") return { model: s.model, customModelId: s.customModelId };
+  if (!provider || provider.id === "claude-sdk") return null;
+  // Other providers may declare usable built-ins (Auto placeholder skipped):
+  // "default" keeps resolving to the first concrete entry for them.
   const builtins = provider.capabilities.builtinModels ?? [];
   const first = builtins.find((b) => b.id !== "default") ?? builtins[0];
   return first ? { model: first.id, customModelId: null } : null;
+}
+
+/** Whether the active provider has ANY selectable model (regardless of
+ *  whether one is picked) — mirrors the ModelDropdown's selectable surface
+ *  per provider. Distinguishes the send-guard outcomes: nothing selectable →
+ *  the config dialog is the only way out; selectable-but-unpicked → a light
+ *  toast nudge to pick one. */
+function hasSelectableModel(
+  s: Pick<SessionState, "providerId" | "providers" | "customModels" | "piAvailableModels">,
+): boolean {
+  const provider = s.providers.find((p) => p.id === s.providerId);
+  if (provider?.id === "pi-sdk") return s.piAvailableModels.length > 0;
+  if (provider?.id === "claude-sdk") {
+    return s.customModels.some((cfg) => cfg.models.some((m) => m.id.trim()));
+  }
+  return (provider?.capabilities.builtinModels?.length ?? 0) > 0;
+}
+
+/** Raise the send-time model guard UI after resolveSendModel returned null:
+ *  selectable-but-unpicked → light toast nudge to pick a model; nothing
+ *  selectable → the config dialog (the only way out). Shared by sendPrompt /
+ *  editAndResendMessage / drainPromptQueueIfIdle / createSideChat. */
+function raiseModelGuard(): void {
+  const s = useSessionStore.getState();
+  if (hasSelectableModel(s)) {
+    useToastStore.getState().push({
+      kind: "warning",
+      title: translate(s.locale, "store.toast.selectModelFirst"),
+      body: translate(s.locale, "store.toast.selectModelFirstBody"),
+    });
+  } else {
+    useSessionStore.setState({ modelConfigPromptOpen: true });
+  }
 }
 
 /** Persist the composer's current provider/model choice — the "next session"
@@ -5852,14 +5873,13 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     // Another thread's running turn shouldn't lock the composer in this one.
     if (get().runningBySession[sessionId]) return false;
 
-    // Resolve the model BEFORE showing the user message: "default" (auto,
-    // e.g. right after an SDK switch) means "first configured model"; a
-    // provider with nothing configured can't send at all — prompt the user
-    // to configure one instead of silently using the provider's internal
-    // default. Aborting here leaves the composer untouched.
+    // Resolve the model BEFORE showing the user message: claude and pi have
+    // NO default model — an unselected model ("default") blocks the send, as
+    // does a provider with nothing configured at all. Aborting here leaves
+    // the composer untouched.
     const resolvedModel = resolveSendModel(get());
     if (!resolvedModel) {
-      set({ modelConfigPromptOpen: true });
+      raiseModelGuard();
       return false;
     }
 
@@ -6041,11 +6061,11 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     // race the truncation against live event ingestion.
     if (get().runningBySession[sessionId]) return;
 
-    // Same send-model guard as sendPrompt: auto → first configured model;
-    // nothing configured → prompt instead of silently falling back.
+    // Same send-model guard as sendPrompt: no default model — an unpicked
+    // model or an empty provider blocks the resend.
     const resolvedModel = resolveSendModel(get());
     if (!resolvedModel) {
-      set({ modelConfigPromptOpen: true });
+      raiseModelGuard();
       return;
     }
 
@@ -8962,11 +8982,11 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     const q = s.promptQueueBySession[sessionId];
     if (!q || q.length === 0) return;
     const head = q[0];
-    // Send-time model guard, checked BEFORE dropping the head: if the active
-    // provider has nothing configured, the subsequent sendPrompt would be
-    // blocked and the dropped item lost. Keep it queued + raise the dialog.
+    // Send-time model guard, checked BEFORE dropping the head: if the send
+    // would be blocked (no model picked / none configured), the dropped item
+    // would be lost. Keep it queued + raise the guard UI.
     if (!resolveSendModel(s)) {
-      set({ modelConfigPromptOpen: true });
+      raiseModelGuard();
       return;
     }
     // Drop the head from the queue BEFORE sending so the user sees it leave
@@ -9077,12 +9097,11 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     const s = get();
     const parentSessionId = s.activeSessionId;
     if (!parentSessionId) return;
-    // Same send-model guard as sendPrompt: "default" resolves to the first
-    // configured model; nothing configured → raise the config dialog instead
-    // of silently using the provider's internal default.
+    // Same send-model guard as sendPrompt: no default model — an unpicked
+    // model or an empty provider blocks the side chat.
     const resolvedModel = resolveSendModel(s);
     if (!resolvedModel) {
-      set({ modelConfigPromptOpen: true });
+      raiseModelGuard();
       return;
     }
     // The parent main session's row carries the owning projectId (FK is
@@ -9097,7 +9116,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         kind: "side",
         parentSessionId,
         providerId: s.providerId,
-        model: resolvedModel.model !== "default" ? resolvedModel.model : undefined,
+        model: resolvedModel.model,
         effort: s.effort,
         permissionMode: s.permissionMode,
         customModelId: resolvedModel.customModelId,

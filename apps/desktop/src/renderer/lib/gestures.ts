@@ -48,7 +48,7 @@ export const MAX_POINTS = 512;
  * stroke currently resolves to before you let go.
  */
 export const DEFAULT_GESTURES: Record<string, GestureSequence> = {
-  "session.close": ["D", "R"], // ↓→ 关闭当前会话
+  "session.close": ["D", "R"], // ↓→ 关闭当前会话(编辑器聚焦时先关文件/计划)
   "session.new": ["D", "L"], // ↓← 新建会话
   "layout.toggle-bottom-terminal": ["D"], // ↓ 显示/隐藏终端
   "layout.toggle-left": ["L"], // ← 显示/隐藏左侧栏

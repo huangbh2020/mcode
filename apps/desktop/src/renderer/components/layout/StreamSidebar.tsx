@@ -30,7 +30,8 @@ import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState } fro
 import { Menu } from "@base-ui/react/menu";
 import {
   IconArchive,
-  IconArrowsExchange,
+  IconInbox,
+  IconListTree,
   IconCheck,
   IconChevronRight,
   IconDots,
@@ -98,7 +99,8 @@ export function LeftBarModeSwitch() {
       style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
       title={mode === "tree" ? t("layout.stream.switchToStream") : t("layout.stream.switchToTree")}
     >
-      <IconArrowsExchange size={16} className="shrink-0" />
+      {/* Destination-view glyph: shows the view clicking leads to, matching the tooltip. */}
+      {mode === "tree" ? <IconInbox size={18} className="shrink-0" /> : <IconListTree size={18} className="shrink-0" />}
     </button>
   );
 }

@@ -123,17 +123,21 @@ export function ModelDropdown({
   //   - custom config  → only when this provider supports custom endpoints
   //   - pi model       → resolved from the dynamic piAvailableModels list
   //   - built-in alias → from the provider's capabilities.builtinModels
-  //   - fallback       → "默认" instead of the raw id (which would be a
-  //                      confusing internal string for the user)
+  //   - fallback       → "选择模型" — claude and pi have NO default model;
+  //                      an unresolved id means nothing is picked, and the
+  //                      send guard blocks the turn until one is chosen
   const activeCustom = supportsCustomEndpoint
     ? customModels.find((m) => m.id === customModelId)
     : undefined;
   const activeEntry = activeCustom?.models.find((e) => e.id === model);
   const builtin = builtinModels.find((b) => b.id === model);
   const piModel = isPi ? piAvailableModels.find((b) => b.id === model) : undefined;
+  const unselected = !(activeCustom
+    ? activeEntry
+    : piModel ?? builtin);
   const chipLabel = activeCustom
-    ? (activeEntry?.id ?? t("chat.model.default"))
-    : piModel?.label ?? builtin?.label ?? t("chat.model.default");
+    ? (activeEntry?.id ?? t("chat.model.unselected"))
+    : piModel?.label ?? builtin?.label ?? t("chat.model.unselected");
 
   const pickCustomModel = (cfgId: string, modelId: string) => {
     setCustomModel(cfgId, modelId);
@@ -155,7 +159,10 @@ export function ModelDropdown({
             : "composer-chip flex min-w-0 items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-medium transition-all duration-150 ease-out",
           stacked
             ? "text-content-muted hover:bg-surface-muted hover:text-content"
-            : "text-content-muted hover:scale-105 hover:bg-accent/10 hover:text-accent active:scale-95",
+            : "hover:scale-105 hover:bg-accent/10 hover:text-accent active:scale-95",
+          // Nothing picked yet: nudge with the accent tone so the composer
+          // visibly asks for a choice instead of reading as "auto".
+          unselected && !stacked && "text-accent",
         )}
         title={t("chat.model.selectTitle")}
       >
@@ -166,7 +173,7 @@ export function ModelDropdown({
               <span className="shrink-0 font-medium text-content">{t("chat.model.rowLabel")}</span>
             </span>
             <span className="flex min-w-0 items-center gap-1">
-              <span className="min-w-0 truncate text-xs text-content-muted">{chipLabel}</span>
+              <span className={cn("min-w-0 truncate text-xs", unselected ? "text-accent" : "text-content-muted")}>{chipLabel}</span>
               <IconChevronRight size={12} className="shrink-0 opacity-60" />
             </span>
           </>

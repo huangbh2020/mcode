@@ -9,6 +9,8 @@ export const en = {
   /* ── lib/commands.ts (command palette labels) ── */
   "lib.commands.closeTab": "Close current tab",
   "lib.commands.closeSession": "Close current session",
+  "lib.commands.closeFocusedFile": "Close current file",
+  "lib.commands.closeFocusedPlan": "Close plan tab",
   "lib.commands.openPalette": "Open command palette",
   "lib.commands.displaySingle": "Display mode: single session",
   "lib.commands.displayTabs": "Display mode: tabs",

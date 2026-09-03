@@ -163,6 +163,7 @@ export const en = {
   "chat.model.notConfigured": "No model configured yet — add one below",
   "chat.model.manage": "Add / manage models…",
   "chat.model.default": "Default",
+  "chat.model.unselected": "Select model",
   "chat.model.rowLabel": "Model",
 
   // ── model config guard dialog ──

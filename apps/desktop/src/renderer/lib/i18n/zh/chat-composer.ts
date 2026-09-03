@@ -169,6 +169,7 @@ export const zh = {
   "chat.model.notConfigured": "尚未配置模型,点击下方添加",
   "chat.model.manage": "添加 / 管理模型…",
   "chat.model.default": "默认",
+  "chat.model.unselected": "选择模型",
   "chat.model.rowLabel": "模型",
 
   // ── model config guard dialog ──

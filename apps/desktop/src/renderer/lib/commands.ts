@@ -103,6 +103,34 @@ export interface CommandDef {
 
 /* ───────────────────── static commands ───────────────────── */
 
+/** Focus state needed by `editorCenterTarget` — a narrow Pick so callers can
+ *  pass any SessionState-shaped object. */
+type CloseFocusState = Pick<
+  SessionState,
+  | "displayMode"
+  | "widePanelOpen"
+  | "centerTabFocus"
+  | "activeProjectId"
+  | "ideActiveFileByProject"
+  | "activeSessionId"
+  | "planTabActiveBySession"
+>;
+
+/** What currently holds the unified center bar instead of the chat: the plan
+ *  tab or an editor file. Mirrors the store's `isSessionChatOnScreen` rule —
+ *  tabs display mode, editor focused, and NOT wide-panel (the center editor
+ *  is hidden there, the chat column stays visible, so the session close
+ *  semantic wins). Null when the chat holds the center. */
+function editorCenterTarget(s: CloseFocusState): "file" | "plan" | null {
+  if (s.displayMode !== "tabs" || s.widePanelOpen || s.centerTabFocus !== "editor") {
+    return null;
+  }
+  const sid = s.activeSessionId;
+  if (sid && (s.planTabActiveBySession[sid] ?? false)) return "plan";
+  const pid = s.activeProjectId;
+  return pid && (s.ideActiveFileByProject[pid] ?? null) ? "file" : null;
+}
+
 /** Internal shape: same as CommandDef but with a dictionary key instead of a
  *  baked label, resolved per-collect against the current UI locale. */
 type StaticCommandDef = Omit<CommandDef, "label"> & { labelKey: MessageId };
@@ -156,12 +184,30 @@ const STATIC_COMMANDS: StaticCommandDef[] = [
     icon: IconX,
     // Unlike tab.close (a center-tab command, tabs display-mode only), this
     // always targets the ACTIVE SESSION — the semantic the default ↓→ mouse
-    // gesture wants. Closes via the same closeTab action, so running-turn
-    // handling (detach, keep streaming) and focus flow are identical.
+    // gesture wants. Context-aware like tab.close though: while the editor
+    // holds the center (a file or plan tab is focused, tabs mode only), the
+    // first stroke closes THAT — the user is looking at the editor, so
+    // "close" must not yank the session out from under it — and only falls
+    // back to the session once the editor is empty. Closes via the same
+    // closeTab action, so running-turn handling (detach, keep streaming) and
+    // focus flow are identical.
     perform: (s) => {
+      const target = editorCenterTarget(s);
+      if (target === "plan" && s.activeSessionId) {
+        s.closePlanDrawer(s.activeSessionId);
+        return;
+      }
+      if (target === "file" && s.activeProjectId) {
+        const file = s.ideActiveFileByProject[s.activeProjectId];
+        if (file) {
+          s.closeFileInIde(file);
+          return;
+        }
+      }
       if (s.activeSessionId) s.closeTab(s.activeSessionId);
     },
-    available: (s) => s.activeSessionId !== null,
+    available: (s) =>
+      s.activeSessionId !== null || editorCenterTarget(s) !== null,
   },
   {
     id: "voice.dictation",
@@ -452,6 +498,28 @@ const STATIC_COMMANDS: StaticCommandDef[] = [
 
 /* ───────────────────── dynamic commands ───────────────────── */
 
+/** Resolve a static command's display label. session.close is context-aware
+ *  (it closes the focused file/plan while the editor holds the center), so
+ *  its label resolves against the live state — the palette and the gesture
+ *  badge must name what the command will actually do right now. */
+function commandLabel(
+  cmd: StaticCommandDef,
+  s: SessionState,
+  locale: Locale,
+): string {
+  if (cmd.id === "session.close") {
+    switch (editorCenterTarget(s)) {
+      case "file":
+        return translate(locale, "lib.commands.closeFocusedFile");
+      case "plan":
+        return translate(locale, "lib.commands.closeFocusedPlan");
+      default:
+        return translate(locale, "lib.commands.closeSession");
+    }
+  }
+  return translate(locale, cmd.labelKey);
+}
+
 /** Build the full command list for the current store state.
  *
  *  Merges the static commands with dynamic "switch to session X" entries
@@ -469,7 +537,7 @@ export function collectCommands(s: SessionState): CommandDef[] {
   const locale = s.locale;
   const cmds: CommandDef[] = STATIC_COMMANDS.filter(
     (c) => !c.available || c.available(s),
-  ).map((c) => ({ ...c, label: translate(locale, c.labelKey) }));
+  ).map((c) => ({ ...c, label: commandLabel(c, s, locale) }));
 
   // Dynamic: "switch to session" — one per session in the active project's
   // currently-loaded page. Rendered under the 会话 group so the user can
@@ -497,10 +565,18 @@ export function collectCommands(s: SessionState): CommandDef[] {
  *  filtering `collectCommands` applies — for surfaces that must name a
  *  command even while it's currently filtered out (the mouse-gesture badge,
  *  conflict prompts). Dynamic `session.switch.*` ids and unknowns return
- *  null; callers fall back to whatever they have. */
-export function commandDisplayName(id: string, locale: Locale): string | null {
+ *  null; callers fall back to whatever they have. Pass the live store state
+ *  (the gesture hook has it) so the context-aware session.close names its
+ *  actual target in the current center-pane state; without it the label
+ *  falls back to the default "close session" wording. */
+export function commandDisplayName(
+  id: string,
+  locale: Locale,
+  state?: SessionState,
+): string | null {
   const cmd = STATIC_COMMANDS.find((c) => c.id === id);
   if (!cmd) return null;
+  if (state) return commandLabel(cmd, state, locale);
   return translate(locale, cmd.labelKey);
 }
 

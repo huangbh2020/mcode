@@ -72,8 +72,10 @@ export function useMouseGestures(): void {
 
     /** Live badge content for a (partial) stroke: arrows + the bound
      *  command's label once it matches. Labels are cached per stroke —
-     *  locale/commands can't change mid-drag, so per-move cost stays at the
-     *  recognizer itself. `commandDisplayName` skips the availability filter
+     *  locale/commands/center-pane focus can't change mid-drag (the cache is
+     *  cleared at pointerdown for that reason: labels are resolved against
+     *  the live state, so a cached one from a stroke in a different context
+     *  would go stale). `commandDisplayName` skips the availability filter
      *  so the badge names the command even while it's filtered out (the
      *  stroke then simply won't dispatch, same as the keyboard). */
     const labelCache = new Map<string, string>();
@@ -85,7 +87,7 @@ export function useMouseGestures(): void {
       if (label === undefined) {
         const state = useSessionStore.getState();
         label =
-          commandDisplayName(id, state.locale) ??
+          commandDisplayName(id, state.locale, state) ??
           collectCommands(state).find((c) => c.id === id)?.label ??
           id;
         labelCache.set(id, label);
@@ -223,6 +225,7 @@ export function useMouseGestures(): void {
       cancelled = false;
       points = [{ x: e.clientX, y: e.clientY }];
       suppressMenuUntil = 0;
+      labelCache.clear();
       attachTransient();
       // Middle trigger: cancel the pointerdown so Chromium's mousedown-driven
       // autoscroll never starts. Right-button presses pass through untouched.

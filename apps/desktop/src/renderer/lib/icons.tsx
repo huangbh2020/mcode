@@ -214,6 +214,8 @@ export {
   IconAdjustmentsHorizontal,
   IconList,
   IconListDetails,
+  IconListTree,
+  IconInbox,
   IconListCheck,
   IconSquare,
   IconLanguage,

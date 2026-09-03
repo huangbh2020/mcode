@@ -14,4 +14,7 @@ export const zh = {
   "store.toast.turnComplete": "回合完成",
   "store.toast.turnCompleteBody": "Agent 已完成本轮任务",
   "store.toast.turnIncomplete": "任务提前中断",
+  // ── send-time model guard (sessionStore.raiseModelGuard) ──
+  "store.toast.selectModelFirst": "请先选择模型",
+  "store.toast.selectModelFirstBody": "在输入框的模型选择器中选定模型后再发送",
 } as const;

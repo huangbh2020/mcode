@@ -12,6 +12,8 @@ export const zh = {
   /* ── lib/commands.ts (command palette labels) ── */
   "lib.commands.closeTab": "关闭当前标签页",
   "lib.commands.closeSession": "关闭当前会话",
+  "lib.commands.closeFocusedFile": "关闭当前文件",
+  "lib.commands.closeFocusedPlan": "关闭计划页签",
   "lib.commands.openPalette": "打开命令面板",
   "lib.commands.displaySingle": "显示模式：单会话",
   "lib.commands.displayTabs": "显示模式：标签页",
