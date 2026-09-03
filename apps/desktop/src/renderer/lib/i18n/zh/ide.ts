@@ -80,6 +80,7 @@ export const zh = {
   "ide.editor.scrollTabsRight": "向右滚动标签",
   "ide.editor.openFiles": "打开的文件",
   "ide.editor.openTabs": "打开的标签页",
+  "ide.editor.multiRowTabs": "多行显示标签",
   "ide.editor.planTab": "计划",
   "ide.editor.viewPlan": "查看计划内容",
   "ide.editor.closeTabAria": "关闭标签页",

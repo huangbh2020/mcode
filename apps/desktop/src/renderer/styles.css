@@ -1152,6 +1152,67 @@ body {
   }
 }
 
+/* ───────────── Model pick guard nudge ─────────────
+ * Sending with no model picked is blocked at the store. Instead of a global
+ * toast, the model chip itself answers: a short horizontal shake draws the
+ * eye to the exact control to act on, and a small floating hint (rendered in
+ * a portal just above the chip, fixed-positioned from its rect) names what
+ * to do. Classes are toggled imperatively by ModelDropdown's pulse effect —
+ * .model-chip-nudge on the trigger for ~420ms, .model-pick-hint mounted for
+ * ~2.4s. The hint animates a 4px rise-in; position comes from inline
+ * left/top, the translate(-50%,-100%-6px) centering lives here so the JSX
+ * stays layout-free. */
+.model-chip-nudge {
+  animation: model-chip-shake 0.4s ease-in-out;
+}
+
+@keyframes model-chip-shake {
+  0%,
+  100% {
+    transform: translateX(0);
+  }
+  25% {
+    transform: translateX(-3px);
+  }
+  50% {
+    transform: translateX(3px);
+  }
+  75% {
+    transform: translateX(-2px);
+  }
+}
+
+.model-pick-hint {
+  position: fixed;
+  z-index: 60;
+  transform: translate(-50%, calc(-100% - 6px));
+  animation: model-hint-in 0.16s ease-out;
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+@keyframes model-hint-in {
+  from {
+    transform: translate(-50%, calc(-100% - 2px));
+    opacity: 0;
+  }
+  to {
+    transform: translate(-50%, calc(-100% - 6px));
+    opacity: 1;
+  }
+}
+
+/* Reduced motion: the shake flattens away (the accent-colored "选择模型" text
+   already reads as "act here"); the hint stays but as a static bubble. */
+@media (prefers-reduced-motion: reduce) {
+  .model-chip-nudge {
+    animation: none;
+  }
+  .model-pick-hint {
+    animation: none;
+  }
+}
+
 /* ───────────── Composer rich-text editor (Tiptap) ─────────────
  * The composer's contenteditable replaces a plain <textarea>. These rules give
  * it the same look as the old textarea (font, padding) and add the two things a

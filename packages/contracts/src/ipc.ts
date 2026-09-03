@@ -82,6 +82,16 @@ export const DisplayModeSchema = z.enum(["single", "tabs"]);
 export type DisplayMode = z.infer<typeof DisplayModeSchema>;
 
 /**
+ * Tab-bar layout preference: when "true", the center tab strips (unified
+ * bar in `tabs` displayMode, plus the session strip / editor file strip in
+ * `single` mode) wrap their tabs onto multiple rows instead of scrolling
+ * one horizontal row (capped at ~3 rows, then vertical scroll). Toggled
+ * from the tab bars' "⋯" overflow menu. Same hydration pattern as
+ * `ui.displayMode` (first-paint getMany → sessionStore.tabBarMultiRow).
+ */
+export const TAB_BAR_MULTI_ROW_SETTING_KEY = "ui.tabBarMultiRow";
+
+/**
  * Left-bar view preference:
  *  - "tree" (default): the classic project → session tree.
  *  - "stream": the session-first flat list (T3-style cards with a project

@@ -28,6 +28,7 @@ import { DEFAULT_GESTURE_SETTINGS } from "@renderer/lib/gestures.js";
 import { DEFAULT_EDITOR_THEME_CHOICE, parseEditorThemeChoice, type EditorThemeChoice, type EditorThemeId } from "@renderer/lib/editorThemes.js";
 import {
   DISPLAY_MODE_SETTING_KEY,
+  TAB_BAR_MULTI_ROW_SETTING_KEY,
   LEFTBAR_MODE_SETTING_KEY,
   UI_LOCALE_SETTING_KEY,
   DEFAULT_PROVIDER_ID,
@@ -655,6 +656,10 @@ export interface SessionState {
   openTabs: string[];
   /** How the center pane renders. Persisted in the `settings` table. */
   displayMode: DisplayMode;
+  /** Whether the tab strips wrap their tabs onto multiple rows instead of
+   *  scrolling one horizontal row (toggled from the bars' "⋯" overflow
+   *  menu). Persisted under `ui.tabBarMultiRow`. */
+  tabBarMultiRow: boolean;
   /** Which left-bar view is mounted: the classic project tree ("tree",
    *  default) or the session-first flat stream ("stream", T3-style cards
    *  with a project scope filter). Persisted; the two views are pure
@@ -844,6 +849,12 @@ export interface SessionState {
    *  when the active provider has no configured model to send with (model is
    *  auto/"default" and nothing is configured). NOT persisted. */
   modelConfigPromptOpen: boolean;
+  /** Send-blocked-because-no-model-picked pulse counter. Bumped by the
+   *  send-time guard instead of firing a global toast: the ModelDropdown chip
+   *  watches this nonce and answers in place — a short shake + a small
+   *  floating "请先选择模型" hint anchored above the chip. Monotonic so
+   *  repeat sends while blocked re-trigger the nudge. NOT persisted. */
+  modelGuardPulse: number;
   /** Command palette (Cmd/Ctrl+K) visibility. Toggled by the global hotkey
    *  wired in App.tsx and by any in-app "command palette" affordance. The
    *  palette itself (CommandPalette.tsx) reads this to mount/unmount. */
@@ -1516,6 +1527,10 @@ export interface SessionState {
   /** Update the center-pane display mode. Persists to the `settings`
    *  table so the choice survives restart. */
   setDisplayMode: (mode: DisplayMode) => Promise<void>;
+  /** Toggle multi-row tab wrapping for the center tab strips. Instant
+   *  local flip + fire-and-forget persistence (same pattern as
+   *  setDisplayMode). */
+  setTabBarMultiRow: (on: boolean) => void;
   /** Switch the left-bar view between the project tree and the session
    *  stream. Instant local flip + fire-and-forget persistence (same
    *  pattern as setDisplayMode). */
@@ -2869,17 +2884,14 @@ function hasSelectableModel(
 }
 
 /** Raise the send-time model guard UI after resolveSendModel returned null:
- *  selectable-but-unpicked → light toast nudge to pick a model; nothing
- *  selectable → the config dialog (the only way out). Shared by sendPrompt /
- *  editAndResendMessage / drainPromptQueueIfIdle / createSideChat. */
+ *  selectable-but-unpicked → bump `modelGuardPulse` so the ModelDropdown chip
+ *  nudges in place (shake + floating hint — far lighter than a global toast);
+ *  nothing selectable → the config dialog (the only way out). Shared by
+ *  sendPrompt / editAndResendMessage / drainPromptQueueIfIdle / createSideChat. */
 function raiseModelGuard(): void {
   const s = useSessionStore.getState();
   if (hasSelectableModel(s)) {
-    useToastStore.getState().push({
-      kind: "warning",
-      title: translate(s.locale, "store.toast.selectModelFirst"),
-      body: translate(s.locale, "store.toast.selectModelFirstBody"),
-    });
+    useSessionStore.setState({ modelGuardPulse: s.modelGuardPulse + 1 });
   } else {
     useSessionStore.setState({ modelConfigPromptOpen: true });
   }
@@ -4012,6 +4024,10 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   // `tabs` (unified tab bar) — new users land on the tabbed center pane;
   // anyone who explicitly picked a mode keeps their stored choice.
   displayMode: "tabs",
+  // Tab strips wrap onto multiple rows instead of horizontal scrolling.
+  // Persisted under `ui.tabBarMultiRow`; init() overwrites from the DB.
+  // Default false = the classic single scrolling row.
+  tabBarMultiRow: false,
   // Left-bar view: classic project tree is the default; init() overwrites
   // from the persisted ui.leftBarMode preference.
   leftBarMode: "tree",
@@ -4082,6 +4098,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   settingsOpen: false,
   settingsSection: null,
   modelConfigPromptOpen: false,
+  modelGuardPulse: 0,
   commandPaletteOpen: false,
   // File search dialog (opened from the Files panel search button / Cmd+Shift+F
   // / command palette). Pure in-memory, mirrors commandPaletteOpen.
@@ -4212,6 +4229,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       .getMany({
         keys: [
           DISPLAY_MODE_SETTING_KEY,
+          TAB_BAR_MULTI_ROW_SETTING_KEY,
           LEFTBAR_MODE_SETTING_KEY,
           UI_LOCALE_SETTING_KEY,
           UI_CHAT_DENSITY_SETTING_KEY,
@@ -4271,6 +4289,15 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       if (value === "single" || value === "tabs") set({ displayMode: value });
     } catch (err) {
       console.error("apply(displayMode) failed:", err);
+    }
+
+    // Multi-row tab wrapping — must land before the bars' first render so
+    // they don't flash the single-row layout.
+    try {
+      const value = fp[TAB_BAR_MULTI_ROW_SETTING_KEY];
+      if (value === "true") set({ tabBarMultiRow: true });
+    } catch (err) {
+      console.error("apply(tabBarMultiRow) failed:", err);
     }
 
     // leftBarMode determines which sidebar component mounts on frame one.
@@ -7713,6 +7740,13 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     } catch (err) {
       console.error("setting.set(displayMode) failed:", err);
     }
+  },
+
+  setTabBarMultiRow: (on) => {
+    set({ tabBarMultiRow: on });
+    // Fire-and-forget — a failed write keeps the in-session choice.
+    api.setting.set({ key: TAB_BAR_MULTI_ROW_SETTING_KEY, value: on ? "true" : "false" })
+      .catch((err) => console.error("setting.set(tabBarMultiRow) failed:", err));
   },
 
   setLeftBarMode: async (mode) => {

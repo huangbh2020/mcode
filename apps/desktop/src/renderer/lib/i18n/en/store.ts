@@ -11,7 +11,4 @@ export const en = {
   "store.toast.turnComplete": "Turn complete",
   "store.toast.turnCompleteBody": "The agent has finished this turn",
   "store.toast.turnIncomplete": "Task ended early",
-  // ── send-time model guard (sessionStore.raiseModelGuard) ──
-  "store.toast.selectModelFirst": "Select a model first",
-  "store.toast.selectModelFirstBody": "Pick a model from the composer's model picker before sending",
 } as const;

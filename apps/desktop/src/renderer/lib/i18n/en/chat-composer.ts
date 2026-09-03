@@ -164,6 +164,7 @@ export const en = {
   "chat.model.manage": "Add / manage models…",
   "chat.model.default": "Default",
   "chat.model.unselected": "Select model",
+  "chat.model.pickHint": "Pick a model first",
   "chat.model.rowLabel": "Model",
 
   // ── model config guard dialog ──

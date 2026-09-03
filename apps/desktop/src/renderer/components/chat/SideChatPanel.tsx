@@ -175,14 +175,13 @@ function SideChatListView({
           onClick={onCreate}
           title={t("sideChat.newChat")}
           className={cn(
-            "flex h-6 shrink-0 items-center gap-1 rounded-md px-2 text-[11px] font-medium transition-colors",
+            "flex h-6 w-6 shrink-0 items-center justify-center rounded-md transition-colors",
             hasMainSession
               ? "bg-accent/15 text-accent hover:bg-accent/25"
-              : "cursor-not-allowed bg-surface-muted text-content-subtle opacity-50",
+              : "cursor-not-allowed bg-accent/5 text-content-subtle opacity-50",
           )}
         >
-          <IconPlus size={12} />
-          {t("sideChat.newChat")}
+          <IconPlus size={14} />
         </button>
       </div>
 

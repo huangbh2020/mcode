@@ -11,6 +11,7 @@ import {
 import {
   SortableContext,
   horizontalListSortingStrategy,
+  rectSortingStrategy,
 } from "@dnd-kit/sortable";
 import { basename } from "@renderer/lib/path.js";
 import { cn } from "@renderer/lib/cn.js";
@@ -61,6 +62,10 @@ export function UnifiedTabsBar() {
   const selectSession = useSessionStore((s) => s.selectSession);
   const closeTab = useSessionStore((s) => s.closeTab);
   const reorderTab = useSessionStore((s) => s.reorderTab);
+  // Multi-row wrapping (toggled from the ⋯ overflow menu) vs the classic
+  // single horizontally-scrolling row.
+  const multiRow = useSessionStore((s) => s.tabBarMultiRow);
+  const setTabBarMultiRow = useSessionStore((s) => s.setTabBarMultiRow);
 
   // ── File tabs (scoped to the active project) ──
   const pid = useSessionStore((s) => s.activeProjectId);
@@ -141,6 +146,12 @@ export function UnifiedTabsBar() {
       const node = tabNodes.current.get(activeTabKey);
       const el = scrollRef.current;
       if (!node || !el) return;
+      // Multi-row layout has no horizontal overflow — just reveal the tab's
+      // row vertically (the track scrolls vertically past the ~3-row cap).
+      if (multiRow) {
+        node.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "smooth" });
+        return;
+      }
       const nodeRect = node.getBoundingClientRect();
       const viewRect = el.getBoundingClientRect();
       const BUFFER = 10; // px - keep the close button clear of the edge fade
@@ -166,7 +177,7 @@ export function UnifiedTabsBar() {
       cancelAnimationFrame(raf2);
       if (t) clearTimeout(t);
     };
-  }, [activeTabKey, tabs.length, openFiles.length, hasPlanTab, recomputeScrollState]);
+  }, [activeTabKey, tabs.length, openFiles.length, hasPlanTab, multiRow, recomputeScrollState]);
 
   const scrollByPage = useCallback((dir: 1 | -1) => {
     const el = scrollRef.current;
@@ -174,15 +185,20 @@ export function UnifiedTabsBar() {
     el.scrollBy({ left: dir * el.clientWidth * 0.8, behavior: "smooth" });
   }, []);
 
-  const onWheel = useCallback((e: React.WheelEvent) => {
-    // Translate vertical wheel into horizontal scroll so a plain mouse
-    // wheel can navigate the strip. Trackpad horizontal is already deltaX.
-    const el = scrollRef.current;
-    if (!el) return;
-    if (e.deltaY !== 0 && e.deltaX === 0) {
-      el.scrollLeft += e.deltaY;
-    }
-  }, []);
+  const onWheel = useCallback(
+    (e: React.WheelEvent) => {
+      // Translate vertical wheel into horizontal scroll so a plain mouse
+      // wheel can navigate the strip. Trackpad horizontal is already deltaX.
+      // In multi-row mode the wheel scrolls rows natively instead.
+      if (multiRow) return;
+      const el = scrollRef.current;
+      if (!el) return;
+      if (e.deltaY !== 0 && e.deltaX === 0) {
+        el.scrollLeft += e.deltaY;
+      }
+    },
+    [multiRow],
+  );
 
   // ── Drag-and-drop (reorder, within the same tab kind) ─────────────────
   // A 6px movement activates a drag; anything less is treated as a click.
@@ -216,7 +232,12 @@ export function UnifiedTabsBar() {
   );
 
   if (tabs.length === 0 && openFiles.length === 0 && !hasPlanTab) return null;
-  const overflowing = canScrollLeft || canScrollRight;
+  // The ⋯ overflow menu doubles as the multi-row toggle's home, so it stays
+  // mounted in multi-row mode even though nothing scrolls horizontally.
+  const showOverflowMenu = multiRow || canScrollLeft || canScrollRight;
+  // rectSortingStrategy understands wrapped 2-D layouts; the horizontal
+  // strategy would drag tabs along a single axis only.
+  const sortStrategy = multiRow ? rectSortingStrategy : horizontalListSortingStrategy;
 
   return (
     <div className="flex shrink-0 items-center gap-0.5 border-b border-edge-panel bg-surface/40 px-2 py-1.5">
@@ -236,14 +257,21 @@ export function UnifiedTabsBar() {
           ref={scrollRef}
           onScroll={recomputeScrollState}
           onWheel={onWheel}
-          className="no-scrollbar flex items-end gap-0.5 overflow-x-auto"
+          className={cn(
+            "no-scrollbar flex gap-0.5",
+            multiRow
+              ? // Wrapped rows, capped at ~3 rows — beyond that the track
+                // scrolls vertically.
+                "max-h-[82px] flex-wrap content-start items-start overflow-y-auto"
+              : "items-end overflow-x-auto",
+          )}
         >
           <DndContext
             sensors={sensors}
             collisionDetection={closestCenter}
             onDragEnd={onDragEnd}
           >
-            <SortableContext items={tabs} strategy={horizontalListSortingStrategy}>
+            <SortableContext items={tabs} strategy={sortStrategy}>
               {tabs.map((id) => {
                 const sess = findSession(sessionsByProject, pinnedSessions, streamSessions, id);
                 return (
@@ -274,7 +302,7 @@ export function UnifiedTabsBar() {
               <div aria-hidden className="mx-1.5 h-4 w-px shrink-0 self-center bg-content-subtle/50" />
             )}
 
-            <SortableContext items={openFiles} strategy={horizontalListSortingStrategy}>
+            <SortableContext items={openFiles} strategy={sortStrategy}>
               {openFiles.map((path) => (
                 <SortableFileTab
                   key={path}
@@ -373,11 +401,13 @@ export function UnifiedTabsBar() {
       )}
 
       {/* Overflow menu — lists every tab (sessions first, then files, then
-          the plan tab) for quick jumping. Only shown when the strip actually
-          overflows. */}
-      {overflowing && (
+          the plan tab) for quick jumping. Shown when the strip overflows,
+          and always in multi-row mode (it hosts the layout toggle). */}
+      {showOverflowMenu && (
         <TabBarOverflowMenu
           heading={t("ide.editor.openTabs")}
+          multiRow={multiRow}
+          onToggleMultiRow={setTabBarMultiRow}
           items={[
             ...tabs.map((id) => {
               const sess = findSession(sessionsByProject, pinnedSessions, streamSessions, id);

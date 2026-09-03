@@ -78,6 +78,7 @@ export const en = {
   "ide.editor.scrollTabsRight": "Scroll tabs right",
   "ide.editor.openFiles": "Open files",
   "ide.editor.openTabs": "Open tabs",
+  "ide.editor.multiRowTabs": "Show tabs in multiple rows",
   "ide.editor.planTab": "Plan",
   "ide.editor.viewPlan": "View the plan",
   "ide.editor.closeTabAria": "Close tab",

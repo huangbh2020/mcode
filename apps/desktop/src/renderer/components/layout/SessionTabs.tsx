@@ -11,6 +11,7 @@ import {
 import {
   SortableContext,
   horizontalListSortingStrategy,
+  rectSortingStrategy,
   useSortable,
   arrayMove,
 } from "@dnd-kit/sortable";
@@ -53,6 +54,10 @@ export function SessionTabs() {
   const selectSession = useSessionStore((s) => s.selectSession);
   const closeTab = useSessionStore((s) => s.closeTab);
   const reorderTab = useSessionStore((s) => s.reorderTab);
+  // Multi-row wrapping (toggled from the ⋯ overflow menu) vs the classic
+  // single horizontally-scrolling row.
+  const multiRow = useSessionStore((s) => s.tabBarMultiRow);
+  const setTabBarMultiRow = useSessionStore((s) => s.setTabBarMultiRow);
 
   const scrollRef = useRef<HTMLDivElement>(null);
   // Maps a tab id → its DOM node, used to scrollIntoView the active tab.
@@ -96,15 +101,20 @@ export function SessionTabs() {
     el.scrollBy({ left: dir * el.clientWidth * 0.8, behavior: "smooth" });
   }, []);
 
-  const onWheel = useCallback((e: React.WheelEvent) => {
-    // Translate vertical wheel into horizontal scroll so a plain mouse
-    // wheel can navigate the strip. Trackpad horizontal is already deltaX.
-    const el = scrollRef.current;
-    if (!el) return;
-    if (e.deltaY !== 0 && e.deltaX === 0) {
-      el.scrollLeft += e.deltaY;
-    }
-  }, []);
+  const onWheel = useCallback(
+    (e: React.WheelEvent) => {
+      // Translate vertical wheel into horizontal scroll so a plain mouse
+      // wheel can navigate the strip. Trackpad horizontal is already deltaX.
+      // In multi-row mode the wheel scrolls rows natively instead.
+      if (multiRow) return;
+      const el = scrollRef.current;
+      if (!el) return;
+      if (e.deltaY !== 0 && e.deltaX === 0) {
+        el.scrollLeft += e.deltaY;
+      }
+    },
+    [multiRow],
+  );
 
   // ── Drag-and-drop (reorder) ──────────────────────────────────────────
   // A 6px movement activates a drag; anything less is treated as a click
@@ -130,7 +140,12 @@ export function SessionTabs() {
   );
 
   if (tabs.length === 0) return null;
-  const overflowing = canScrollLeft || canScrollRight;
+  // The ⋯ overflow menu doubles as the multi-row toggle's home, so it stays
+  // mounted in multi-row mode even though nothing scrolls horizontally.
+  const showOverflowMenu = multiRow || canScrollLeft || canScrollRight;
+  // rectSortingStrategy understands wrapped 2-D layouts; the horizontal
+  // strategy would drag tabs along a single axis only.
+  const sortStrategy = multiRow ? rectSortingStrategy : horizontalListSortingStrategy;
 
   return (
     <div className="flex shrink-0 items-center gap-0.5 border-b border-edge bg-surface/40 px-2 py-1.5">
@@ -151,7 +166,14 @@ export function SessionTabs() {
           ref={scrollRef}
           onScroll={recomputeScrollState}
           onWheel={onWheel}
-          className="no-scrollbar flex items-end gap-0.5 overflow-x-auto"
+          className={cn(
+            "no-scrollbar flex gap-0.5",
+            multiRow
+              ? // Wrapped rows, capped at ~3 rows — beyond that the track
+                // scrolls vertically.
+                "max-h-[82px] flex-wrap content-start items-start overflow-y-auto"
+              : "items-end overflow-x-auto",
+          )}
         >
           <DndContext
             sensors={sensors}
@@ -160,7 +182,7 @@ export function SessionTabs() {
           >
             <SortableContext
               items={tabs}
-              strategy={horizontalListSortingStrategy}
+              strategy={sortStrategy}
             >
               {tabs.map((id) => {
                 const sess = findSession(sessionsByProject, pinnedSessions, streamSessions, id);
@@ -207,11 +229,14 @@ export function SessionTabs() {
         />
       )}
 
-      {/* Overflow menu — lists every tab for quick jumping. Only shown when
-          the strip actually overflows (otherwise it's pure noise). */}
-      {overflowing && (
+      {/* Overflow menu — lists every tab for quick jumping. Shown when the
+          strip overflows, and always in multi-row mode (it hosts the layout
+          toggle). */}
+      {showOverflowMenu && (
         <TabBarOverflowMenu
           heading="Open tabs"
+          multiRow={multiRow}
+          onToggleMultiRow={setTabBarMultiRow}
           items={tabs.map((id) => {
             const sess = findSession(sessionsByProject, pinnedSessions, streamSessions, id);
             return {

@@ -1,8 +1,10 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { Menu } from "@base-ui/react/menu";
 import { cn } from "@renderer/lib/cn.js";
 import { useI18n } from "@renderer/lib/i18n/index.js";
 import {
+  IconAlertTriangle,
   IconCheck,
   IconChevronDown,
   IconChevronRight,
@@ -64,9 +66,10 @@ export function ModelDropdown({
   const { t } = useI18n();
   // While the menu (or its nested submenu) is open the embedded browser view
   // is suppressed so the portaled popup stays visible/clickable over the
-  // browser's rect in narrow/wide layouts.
+  // browser's rect in narrow/wide layouts. Same while the send-guard hint is
+  // up (it's a portal too). Declared after `hint` state below — hoisted hook
+  // order is stable because both states precede it on every render.
   const [open, setOpen] = useState(false);
-  useSuppressBrowserView(open);
   const model = useSessionStore((s) => s.model);
   const customModelId = useSessionStore((s) => s.customModelId);
   const customModels = useSessionStore((s) => s.customModels);
@@ -139,6 +142,45 @@ export function ModelDropdown({
     ? (activeEntry?.id ?? t("chat.model.unselected"))
     : piModel?.label ?? builtin?.label ?? t("chat.model.unselected");
 
+  // Send-time "no model picked" guard: the store bumps `modelGuardPulse`
+  // instead of firing a global toast, and the chip answers in place — a short
+  // shake plus a small floating "请先选择模型" hint right above it (portal, so
+  // the composer card's overflow-hidden can't clip it). The pulse is a
+  // monotonic counter, so a repeat blocked send re-triggers the nudge even
+  // though the value only ever grows. The chip and the guard read the same
+  // model surface, so a pulse always coincides with `unselected`.
+  const modelGuardPulse = useSessionStore((s) => s.modelGuardPulse);
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const [nudge, setNudge] = useState(false);
+  const [hint, setHint] = useState<{ x: number; y: number } | null>(null);
+  useEffect(() => {
+    if (!modelGuardPulse) return;
+    const rect = triggerRef.current?.getBoundingClientRect();
+    // A hidden instance (chip row folded into the narrow-mode toggle, popup
+    // host not mounted) has no anchor — the visible sibling answers instead.
+    if (!rect || rect.width === 0) return;
+    setNudge(true);
+    // Center the bubble on the chip, clamped so the text can't leave the
+    // viewport edges.
+    const x = Math.min(Math.max(rect.left + rect.width / 2, 80), window.innerWidth - 80);
+    setHint({ x, y: rect.top });
+    const stopNudge = window.setTimeout(() => setNudge(false), 420);
+    const hideHint = window.setTimeout(() => setHint(null), 2400);
+    return () => {
+      window.clearTimeout(stopNudge);
+      window.clearTimeout(hideHint);
+    };
+  }, [modelGuardPulse]);
+  // A pick resolves the complaint — drop the nudge/bubble immediately instead
+  // of letting the bubble linger out its timeout next to a now-valid label.
+  useEffect(() => {
+    if (!unselected) {
+      setNudge(false);
+      setHint(null);
+    }
+  }, [unselected]);
+  useSuppressBrowserView(open || hint !== null);
+
   const pickCustomModel = (cfgId: string, modelId: string) => {
     setCustomModel(cfgId, modelId);
   };
@@ -151,7 +193,8 @@ export function ModelDropdown({
   };
 
   return (
-    <Menu.Root open={open} onOpenChange={setOpen}>
+    <>
+      <Menu.Root open={open} onOpenChange={setOpen}>
       <Menu.Trigger
         className={cn(
           stacked
@@ -163,7 +206,10 @@ export function ModelDropdown({
           // Nothing picked yet: nudge with the accent tone so the composer
           // visibly asks for a choice instead of reading as "auto".
           unselected && !stacked && "text-accent",
+          // Blocked-send pulse from the store guard (see the effect above).
+          nudge && "model-chip-nudge",
         )}
+        ref={triggerRef}
         title={t("chat.model.selectTitle")}
       >
         {stacked ? (
@@ -445,6 +491,18 @@ export function ModelDropdown({
           </Menu.Popup>
         </Menu.Positioner>
       </Menu.Portal>
-    </Menu.Root>
+      </Menu.Root>
+      {hint &&
+        createPortal(
+          <div
+            className="model-pick-hint flex items-center gap-1.5 rounded-lg border border-warning/40 bg-surface px-2.5 py-1.5 text-xs font-medium text-warning shadow-lg"
+            style={{ left: hint.x, top: hint.y }}
+          >
+            <IconAlertTriangle size={13} className="shrink-0" />
+            <span>{t("chat.model.pickHint")}</span>
+          </div>,
+          document.body,
+        )}
+    </>
   );
 }
