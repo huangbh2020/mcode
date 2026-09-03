@@ -615,19 +615,8 @@ function StreamSidebarBase() {
               "text-content-muted hover:bg-surface-hover/60",
             )}
           >
-            {scope?.startsWith("wt:") ? (
-              <IconGitFork size={16} className="shrink-0 text-accent/80" />
-            ) : scope != null && !scope.startsWith("g:") && projectById.get(scope) ? (
-              <span
-                className="flex h-4 w-4 shrink-0 items-center justify-center rounded text-[9px] font-bold text-white"
-                style={{ backgroundColor: projectDisplayColor(projectById.get(scope)!, projectColors) }}
-                aria-hidden
-              >
-                {projectInitial(projectById.get(scope)!.name)}
-              </span>
-            ) : (
-              <IconFolder size={16} className="shrink-0 text-content-subtle" />
-            )}
+            {/* Fixed all-projects glyph — the label carries the current scope. */}
+            <IconFolder size={16} className="shrink-0 text-content-subtle" />
             <span className="min-w-0 flex-1 truncate font-medium">{scopeLabel}</span>
             <IconChevronRight size={12} className="shrink-0 rotate-90 text-content-subtle" />
           </Menu.Trigger>
