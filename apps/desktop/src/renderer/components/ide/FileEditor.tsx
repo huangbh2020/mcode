@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
-import Editor, { DiffEditor } from "@monaco-editor/react";
+import Editor, { DiffEditor, useMonaco } from "@monaco-editor/react";
 import type { editor } from "monaco-editor";
 import { api } from "@renderer/lib/api.js";
 import { cn } from "@renderer/lib/cn.js";
@@ -33,6 +33,16 @@ import { useI18n } from "@renderer/lib/i18n/index.js";
 import type { MessageId } from "@renderer/lib/i18n/core.js";
 import { setLastCursor, type NavEntry } from "@renderer/lib/editorNav.js";
 import { resolveShortcut, acceleratorToDisplayString } from "@renderer/lib/shortcuts.js";
+// Monaco model cache (keepCurrentModel ownership): hot tab switches reuse the
+// cached TextModel — tokenization, undo history and unsaved edits survive.
+import {
+  getModelEntry,
+  getBaseline,
+  registerModel,
+  updateBaseline,
+  disposeModel,
+  setDisplayedPath,
+} from "@renderer/lib/editorModelCache.js";
 
 /**
  * File editor — wraps Monaco for a single open file. Supports two modes:
@@ -388,23 +398,106 @@ function EditorToolbar({
 
 /** Per-file editor view states (scroll position + cursor selection), keyed by
  *  absolute file path. App.tsx mounts FileEditor with `key={filePath}`, so
- *  every file switch tears the Monaco instance down completely — and the
- *  @monaco-editor/react built-in view-state cache only saves on a `path`
- *  change of a live editor or on unmount with `keepCurrentModel`, neither of
- *  which happens in that flow. This cache survives the remounts so re-opening
- *  a file puts the user back where they left off. */
+ *  every file switch tears the Monaco instance down (the TextModel survives
+ *  via the model cache — see editorModelCache.ts — but the editor widget and
+ *  its view state do not). The @monaco-editor/react built-in view-state cache
+ *  also stashes on `keepCurrentModel` unmount, but this eager-stashed cache
+ *  is the primary: re-opening a file puts the user back where they left off. */
 const viewStateCache = new Map<string, editor.ICodeEditorViewState>();
 
 /** Editable Monaco instance for one file. Loads content on mount; tracks
  *  dirty state; Ctrl+S saves. Wires LSP document sync + providers when the
  *  file's language has a server enabled. Re-opening a file restores its last
  *  scroll position / cursor from `viewStateCache`. */
+/** Context of the file whose model the persistent editor is displaying.
+ *  Everything acting on "the current file" (save, LSP notify, dirty tracking,
+ *  model ownership) reads this ref so closures survive every model swap. */
+interface ReadyCtx {
+  path: string;
+  projectPath: string;
+  pid: string | null;
+}
+
+/** Ensure a cached model exists for `path` holding `content` — create it (the
+ *  EditPane owns model creation; the lib never creates models because `value`
+ *  stays undefined for the Editor's whole life) or adopt an orphan lib-side
+ *  model. */
+function adoptModel(
+  monaco: typeof import("monaco-editor"),
+  path: string,
+  content: string,
+): void {
+  if (getModelEntry(path)) return;
+  const uri = monaco.Uri.parse(filePathToUri(path));
+  let model = monaco.editor.getModel(uri) ?? null;
+  if (model) {
+    // Orphan (created lib-side before the cache knew) — adopt and sync.
+    try {
+      model.setValue(content);
+    } catch {
+      model = null; // disposed — fall through to create
+    }
+  }
+  if (!model || model.isDisposed()) {
+    model = monaco.editor.createModel(content, languageForExt(extname(path)), uri);
+  }
+  registerModel(path, model, content);
+}
+
 function EditPane({ filePath, projectPath }: { filePath: string; projectPath: string }) {
   const { t } = useI18n();
   const editorRef = useRef<editor.IStandaloneCodeEditor | null>(null);
   const monacoRef = useRef<typeof import("monaco-editor") | null>(null);
-  const [content, setContent] = useState<string | null>(null); // null = loading
+  // Monaco namespace from the loader (local instance — see monacoSetup.ts).
+  // Null until the loader resolves; the first model creation waits for it.
+  const monacoInstance = useMonaco();
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
+  // PERSISTENT EDITOR: this component is NOT keyed by file. The single Monaco
+  // instance below swaps models via the `path` prop (the lib does
+  // saveViewState → setModel → restoreViewState on the live widget), so a
+  // file switch no longer tears the editor down.
+  //
+  // readyPath — the file whose model is currently displayed. Warm start: when
+  // a cached model already exists for the incoming file, display it on the
+  // first render (no spinner frame).
+  const [readyPath, setReadyPath] = useState<string | null>(() =>
+    filePath && getModelEntry(filePath) ? filePath : null,
+  );
+  // loadingPath — a file whose first-time content read is in flight (no
+  // cached model). While it differs from readyPath, the editor keeps showing
+  // the previous file (hold-last-ready) under a loading veil.
+  const [loadingPath, setLoadingPath] = useState<string | null>(null);
+  // Set when the freshness check finds the DISPLAYED file changed on disk
+  // while its model holds unsaved edits — the user decides (reload or keep).
+  const [externalChange, setExternalChange] = useState(false);
+  // Context of the displayed file (see ReadyCtx).
+  const readyCtxRef = useRef<ReadyCtx | null>(null);
+  // Latest-ref mirror of the loader's monaco namespace — async callbacks
+  // (a read's .then) must never act on a stale null from their own render.
+  const monacoInstanceRef = useRef(monacoInstance);
+  useEffect(() => {
+    monacoInstanceRef.current = monacoInstance;
+  }, [monacoInstance]);
+  // Set false once the component unmounts; async callbacks check it before
+  // touching state / the displayed-model marker.
+  const disposedRef = useRef(false);
+  useEffect(() => {
+    disposedRef.current = false;
+    return () => {
+      disposedRef.current = true;
+    };
+  }, []);
+  // readSeq invalidates in-flight first reads when the target file changes
+  // quickly; flipSeq invalidates in-flight freshness checks on every swap.
+  const readSeqRef = useRef(0);
+  const flipSeqRef = useRef(0);
+  // A first read that completed before the loader had a monaco namespace.
+  const pendingCreateRef = useRef<{ path: string; content: string; projectPath: string } | null>(
+    null,
+  );
+  // The freshness check is pointless right after a model was created from a
+  // fresh read — skip it once for that path.
+  const skipVerifyPathRef = useRef<string | null>(null);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // LSP document-sync version counter (incremented on each didChange).
   const lspVersionRef = useRef(1);
@@ -417,120 +510,24 @@ function EditPane({ filePath, projectPath }: { filePath: string; projectPath: st
   const ideRevealNonce = useSessionStore((s) => s.ideRevealNonce);
   const idePendingReveal = useSessionStore((s) => s.idePendingReveal);
 
-  // Load the file content once per filePath.
-  useEffect(() => {
-    let cancelled = false;
-    setContent(null);
-    api.file
-      .readFile({ filePath })
-      .then(({ content }) => {
-        if (!cancelled) {
-          setContent(content);
-          ideDirtyTracker.set(filePath, false);
-        }
-      })
-      .catch(() => {
-        if (!cancelled) setContent(""); // degrade to empty
-      });
-    return () => {
-      cancelled = true;
+  // Warm-start init (idempotent): adopt the display context for a cached
+  // first file and mark it as the displayed model for the store's ownership
+  // rule (store close/rename actions never dispose the displayed model).
+  if (readyCtxRef.current === null && readyPath !== null) {
+    readyCtxRef.current = {
+      path: readyPath,
+      projectPath,
+      pid: useSessionStore.getState().activeProjectId,
     };
-  }, [filePath]);
+    setDisplayedPath(readyPath);
+  }
 
-  // Ctrl+S handler. We attach via Monaco's addCommand so it works regardless
-  // of focus, and only when the editor is ready.
-  const handleSave = useCallback(async () => {
-    if (content === null) return;
-    const editor = editorRef.current;
-    if (!editor) return;
-    const value = editor.getValue();
-    setSaveState("saving");
-    const ok = await useSessionStore.getState().saveFileContent(filePath, value);
-    if (ok) {
-      setContent(value); // new baseline
-      ideDirtyTracker.set(filePath, false);
-      setSaveState("saved");
-      if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
-      saveTimerRef.current = setTimeout(() => setSaveState("idle"), 1500);
-      // Tell the LSP server the file was saved (best-effort).
-      if (projectPath) void notifyLspSave(projectPath, filePath, language, value);
-    } else {
-      setSaveState("error");
-    }
-  }, [content, filePath]);
-
-  const language = languageForExt(extname(filePath));
-
-  // Theme: follow the .dark class on <html>.
-  const theme = useMonacoTheme();
-
-  // Wire Ctrl+S / Cmd+S to save + LSP providers + document open. Monaco passes
-  // its monaco namespace into onMount, which is where we register the
-  // keybinding (we need the monaco KeyMod/KeyCode constants to compose the
-  // chord) and the LSP providers (we need the monaco.languages API).
-  const handleEditorMount = (editor_: editor.IStandaloneCodeEditor, monaco: typeof import("monaco-editor")) => {
-    editorRef.current = editor_;
-    monacoRef.current = monaco;
-    editor_.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {
-      void handleSave();
-    });
-
-    // Register LSP providers for this language (idempotent - once per language
-    // id globally). Providers route requests through the active project's LSP
-    // server via api.lsp.request.
-    ensureLspProviders(monaco, language);
-
-    // Open the document in the server (lazily starts the server if enabled).
-    // If no server is enabled for this language, this is a silent no-op.
-    if (projectPath) {
-      void openLspDocument(projectPath, filePath, language);
-    }
-
-    // Restore the scroll position / cursor from a previous visit of this file
-    // (stashed eagerly by the listeners below). A pending goto-def reveal
-    // still wins — applyReveal() below runs after this and re-positions.
-    const saved = viewStateCache.get(filePath);
-    if (saved) editor_.restoreViewState(saved);
-
-    // Stash the view state eagerly on every scroll / selection change. The
-    // library's unmount cleanup disposes the model before any save-on-unmount
-    // we could register here would run (child cleanup beats parent cleanup,
-    // and saveViewState needs a live model), so an eager save is the only
-    // reliable stash point across the key-remount flow.
-    const stashViewState = () => {
-      const vs = editor_.saveViewState();
-      if (vs) viewStateCache.set(filePath, vs);
-    };
-    // Track the primary cursor alongside the view state (lib/editorNav): the
-    // store's navigation-history actions read it to snapshot the OUTGOING
-    // location when the user navigates away (Alt+← back target).
-    const stashCursor = () => {
-      const p = editor_.getPosition();
-      if (p) setLastCursor(filePath, { line: p.lineNumber, column: p.column });
-    };
-    // Seed the cursor now (post view-state restore) so a file opened for the
-    // first time this session still has a known location.
-    stashCursor();
-    editorDisposablesRef.current.push(
-      editor_.onDidScrollChange(stashViewState),
-      editor_.onDidChangeCursorSelection(() => {
-        stashViewState();
-        stashCursor();
-      }),
-    );
-
-    // Apply a pending goto-def reveal now that the editor is ready. Needed for
-    // cross-file jumps: the EditPane mounts, the reveal effect runs with
-    // editorRef still null (onMount hasn't fired), so we must re-check here.
-    applyReveal();
-  };
-
-  /** Scroll to + focus the pending reveal target for this file, if any, and
-   *  clear it. Shared by the nonce effect (already-mounted editor) and
-   *  onMount (freshly-mounted editor from a cross-file jump).
+  /** Scroll to + focus the pending reveal target if it targets the DISPLAYED
+   *  file, and clear it. Shared by the nonce effect (reveal into the
+   *  already-displayed file) and onMount / the post-swap effect.
    *
    *  The target is revealed at the CENTER of the viewport (VS Code behavior).
-   *  On the mount path the editor may still carry a degenerate layout from
+   *  On a fresh mount the editor may still carry a degenerate layout from
    *  creation time (viewport ≈ 0–1 lines tall) — revealLineInCenter would
    *  then compute a top-aligned offset and the target lands on the FIRST
    *  visible line once automaticLayout settles. Two guards: force a
@@ -539,7 +536,7 @@ function EditPane({ filePath, projectPath }: { filePath: string; projectPath: st
    *  later user resize never jumps the scroll back). */
   const applyReveal = () => {
     const reveal = useSessionStore.getState().idePendingReveal;
-    if (!reveal || reveal.filePath !== filePath) return;
+    if (!reveal || reveal.filePath !== readyCtxRef.current?.path) return;
     const ed = editorRef.current;
     if (!ed) return;
     const doReveal = () => {
@@ -566,38 +563,310 @@ function EditPane({ filePath, projectPath }: { filePath: string; projectPath: st
     editorDisposablesRef.current.push({ dispose: stopRetry });
   };
 
-  // Goto-definition reveal: when the store has a pending reveal for this file,
-  // scroll to it and clear. Re-runs on the nonce bump (so a reveal into an
-  // already-mounted editor works, not just on mount).
+  /** Swap the displayed model to `path` (a cache entry must exist — either a
+   *  warm hit or just created by createAndShow). Runs the leave-bookkeeping
+   *  for the previously displayed file: dispose its model when it has left
+   *  its project's open list (the store skips exactly this file — it may
+   *  still be attached to the live editor at action time), close its LSP
+   *  document, drop a pending didChange (the didOpen below resends the full
+   *  text anyway). */
+  const flipTo = (path: string, forProjectPath: string) => {
+    const prev = readyCtxRef.current;
+    if (prev?.path === path) return;
+    flipSeqRef.current += 1;
+    if (prev) {
+      const open = prev.pid
+        ? useSessionStore.getState().ideOpenFilesByProject[prev.pid]
+        : undefined;
+      if (!open || !open.includes(prev.path)) {
+        disposeModel(prev.path);
+        ideDirtyTracker.set(prev.path, false);
+      }
+      if (prev.projectPath) void closeLspDocument(prev.projectPath, prev.path);
+      if (changeDebounceRef.current) {
+        clearTimeout(changeDebounceRef.current);
+        changeDebounceRef.current = null;
+      }
+    }
+    readyCtxRef.current = {
+      path,
+      projectPath: forProjectPath,
+      pid: useSessionStore.getState().activeProjectId,
+    };
+    setDisplayedPath(path);
+    setExternalChange(false);
+    setReadyPath(path);
+  };
+
+  /** First-time display of a file with no cached model: create the model
+   *  from the freshly-read content, then swap. The loader may still be
+   *  resolving — park the request and let the flush effect finish it. */
+  const createAndShow = (path: string, content: string, forProjectPath: string) => {
+    if (disposedRef.current) return;
+    const monaco = monacoInstanceRef.current;
+    if (!monaco) {
+      pendingCreateRef.current = { path, content, projectPath: forProjectPath };
+      return;
+    }
+    adoptModel(monaco, path, content);
+    skipVerifyPathRef.current = path;
+    setLoadingPath(null);
+    flipTo(path, forProjectPath);
+  };
+
+  // Follow filePath (runs on every file switch): cached model → swap
+  // immediately; otherwise read the file, create the model, then swap. Until
+  // then the editor keeps displaying the previous file — no spinner, no
+  // teardown.
+  useEffect(() => {
+    if (!filePath) return;
+    if (readyCtxRef.current?.path === filePath) {
+      // Same file, but its project may have changed underneath (rare) —
+      // keep the LSP/workspace context in sync.
+      if (readyCtxRef.current.projectPath !== projectPath) {
+        readyCtxRef.current = { ...readyCtxRef.current, projectPath };
+      }
+      return;
+    }
+    const seq = ++readSeqRef.current;
+    if (getModelEntry(filePath)) {
+      setLoadingPath(null);
+      flipTo(filePath, projectPath);
+      return;
+    }
+    setLoadingPath(filePath);
+    api.file
+      .readFile({ filePath })
+      .then(({ content }) => {
+        if (seq !== readSeqRef.current) return;
+        createAndShow(filePath, content, projectPath);
+      })
+      .catch(() => {
+        if (seq !== readSeqRef.current) return;
+        createAndShow(filePath, "", projectPath); // degrade to empty
+      });
+  }, [filePath, projectPath]);
+
+  // The loader resolved after a first-read completed — finish the parked
+  // model creation + swap (only if the parked file is still the target; a
+  // switch in the meantime just keeps the model cached).
+  useEffect(() => {
+    const p = pendingCreateRef.current;
+    if (!monacoInstance || !p || disposedRef.current) return;
+    pendingCreateRef.current = null;
+    adoptModel(monacoInstance, p.path, p.content);
+    if (p.path === filePath) {
+      skipVerifyPathRef.current = p.path;
+      setLoadingPath(null);
+      flipTo(p.path, p.projectPath);
+    }
+  }, [monacoInstance, filePath]);
+
+  // Post-swap bookkeeping for the newly displayed file: LSP provider
+  // registration + didOpen, view-state restore, freshness verification,
+  // pending reveal. Declared after the follow effect and running per
+  // readyPath change, it executes AFTER the lib's child effects — i.e. after
+  // the model swap has actually happened.
+  useEffect(() => {
+    if (!readyPath) return;
+    const ctx = readyCtxRef.current;
+    if (!ctx || ctx.path !== readyPath) return;
+    const seq = flipSeqRef.current;
+    const language = languageForExt(extname(readyPath));
+    if (monacoRef.current) ensureLspProviders(monacoRef.current, language);
+    // Open the document in the server (lazily starts the server if enabled).
+    // If no server is enabled for this language, this is a silent no-op.
+    if (ctx.projectPath) void openLspDocument(ctx.projectPath, readyPath, language);
+    // Our eager-stashed view state wins over the lib's swap-time restore
+    // (both hold the same data; ours is the more recent eager stash).
+    const saved = viewStateCache.get(readyPath);
+    if (saved) editorRef.current?.restoreViewState(saved);
+    // Freshness verification (skipped when the model was just created from a
+    // fresh read — its content IS the disk content).
+    if (skipVerifyPathRef.current === readyPath) {
+      skipVerifyPathRef.current = null;
+    } else {
+      api.file
+        .readFile({ filePath: readyPath })
+        .then(({ content: disk }) => {
+          if (disposedRef.current || seq !== flipSeqRef.current) return;
+          const entry = getModelEntry(readyPath);
+          if (!entry || disk === entry.baseline) return;
+          if (ideDirtyTracker.has(readyPath)) {
+            setExternalChange(true);
+          } else {
+            try {
+              entry.model.setValue(disk);
+            } catch {
+              return; // model disposed mid-flight
+            }
+            updateBaseline(readyPath, disk);
+            ideDirtyTracker.set(readyPath, false);
+          }
+        })
+        .catch(() => {
+          // Unreadable — keep showing the current content.
+        });
+    }
+    applyReveal();
+  }, [readyPath]);
+
+  // Goto-definition reveal: when the store has a pending reveal for the
+  // DISPLAYED file, scroll to it and clear. Re-runs on the nonce bump (a
+  // reveal into the already-displayed file); a reveal targeting a file that
+  // is still loading is applied by the post-swap effect above once the swap
+  // lands.
   useEffect(() => {
     applyReveal();
-  }, [ideRevealNonce, idePendingReveal, filePath]);
+  }, [ideRevealNonce, idePendingReveal]);
 
-  // LSP diagnostics subscription: applies publishDiagnostics markers to this
-  // file's model and clears them on unmount.
+  // Ctrl+S. Attached once for the editor's lifetime; the handler reads the
+  // displayed-file context from a ref so it survives every model swap.
+  const handleSave = useCallback(async () => {
+    const ed = editorRef.current;
+    const ctx = readyCtxRef.current;
+    if (!ed || !ctx) return;
+    const value = ed.getValue();
+    setSaveState("saving");
+    const ok = await useSessionStore.getState().saveFileContent(ctx.path, value);
+    if (ok) {
+      updateBaseline(ctx.path, value);
+      ideDirtyTracker.set(ctx.path, false);
+      setSaveState("saved");
+      if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+      saveTimerRef.current = setTimeout(() => setSaveState("idle"), 1500);
+      // Tell the LSP server the file was saved (best-effort).
+      if (ctx.projectPath) {
+        void notifyLspSave(ctx.projectPath, ctx.path, languageForExt(extname(ctx.path)), value);
+      }
+    } else {
+      setSaveState("error");
+    }
+  }, []);
+  const handleSaveRef = useRef(handleSave);
+  useEffect(() => {
+    handleSaveRef.current = handleSave;
+  }, [handleSave]);
+
+  // Reload from disk after an external change was detected while the model
+  // held unsaved edits — the user explicitly chose to discard them.
+  const reloadFromDisk = useCallback(() => {
+    setExternalChange(false);
+    const ctx = readyCtxRef.current;
+    if (!ctx) return;
+    void api.file
+      .readFile({ filePath: ctx.path })
+      .then(({ content: disk }) => {
+        try {
+          getModelEntry(ctx.path)?.model.setValue(disk);
+        } catch {
+          return; // model disposed — nothing to refresh
+        }
+        updateBaseline(ctx.path, disk);
+        ideDirtyTracker.set(ctx.path, false);
+      })
+      .catch(() => {
+        // Unreadable — keep the current content.
+      });
+  }, []);
+
+  // Theme: follow the .dark class on <html>.
+  const theme = useMonacoTheme();
+
+  // Monaco passes its monaco namespace into onMount, which is where we
+  // register Ctrl+S (once for the editor's lifetime) and the LSP providers.
+  const handleEditorMount = (editor_: editor.IStandaloneCodeEditor, monaco: typeof import("monaco-editor")) => {
+    editorRef.current = editor_;
+    monacoRef.current = monaco;
+    editor_.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {
+      void handleSaveRef.current();
+    });
+
+    // Register LSP providers for the first displayed language (idempotent —
+    // once per language id globally). The post-swap effect re-runs this on
+    // every model swap so a language change across files stays covered.
+    const mountPath = readyCtxRef.current?.path;
+    if (mountPath) ensureLspProviders(monaco, languageForExt(extname(mountPath)));
+
+    // Restore the scroll position / cursor from a previous visit of this
+    // file (stashed eagerly by the listeners below). A pending goto-def
+    // reveal still wins — applyReveal() below runs after this and
+    // re-positions.
+    if (mountPath) {
+      const saved = viewStateCache.get(mountPath);
+      if (saved) editor_.restoreViewState(saved);
+    }
+
+    // Stash the view state eagerly on every scroll / selection change. Paths
+    // are resolved from readyCtxRef at event time, so these listeners
+    // outlive individual file swaps for the editor's whole life.
+    const stashViewState = () => {
+      const p = readyCtxRef.current?.path;
+      const vs = editor_.saveViewState();
+      if (p && vs) viewStateCache.set(p, vs);
+    };
+    // Track the primary cursor alongside the view state (lib/editorNav): the
+    // store's navigation-history actions read it to snapshot the OUTGOING
+    // location when the user navigates away (Alt+← back target).
+    const stashCursor = () => {
+      const p = readyCtxRef.current?.path;
+      const pos = editor_.getPosition();
+      if (p && pos) setLastCursor(p, { line: pos.lineNumber, column: pos.column });
+    };
+    // Seed the cursor now (post view-state restore) so a file opened for
+    // the first time this session still has a known location.
+    stashCursor();
+    editorDisposablesRef.current.push(
+      editor_.onDidScrollChange(stashViewState),
+      editor_.onDidChangeCursorSelection(() => {
+        stashViewState();
+        stashCursor();
+      }),
+    );
+
+    // Apply a pending goto-def reveal now that the editor is ready. Needed
+    // for cross-file jumps: the reveal effect runs with editorRef still null
+    // (onMount hasn't fired), so we must re-check here.
+    applyReveal();
+  };
+
+  // LSP diagnostics subscription: applies publishDiagnostics markers to the
+  // DISPLAYED file's model; re-subscribes (and clears the old file's
+  // markers) when the displayed file changes.
   useLspDiagnostics(
-    filePath,
+    readyPath ?? filePath,
     () => monacoRef.current,
     () => editorRef.current,
   );
 
-  // Clear the saved-indicator timer, stop the editor listeners (view-state
-  // stash / cursor tracking / reveal retry) + close the LSP document on
-  // unmount.
+  // Final teardown — the editor column went away (focus moved to chat / no
+  // active file / mode switched to diff or preview). Model-cache ownership
+  // for the last displayed file: dispose when it has left its project's open
+  // list; keep it cached otherwise (with unsaved edits + token cache) for an
+  // instant remount.
   useEffect(() => {
     return () => {
       if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
       if (changeDebounceRef.current) clearTimeout(changeDebounceRef.current);
       editorDisposablesRef.current.forEach((d) => d.dispose());
       editorDisposablesRef.current = [];
-      // Report clean on unmount so a re-open doesn't show a stale dirty dot.
-      ideDirtyTracker.set(filePath, false);
-      // Tell the server this document closed (best-effort).
-      if (projectPath) void closeLspDocument(projectPath, filePath);
+      const ctx = readyCtxRef.current;
+      if (ctx) {
+        const open = ctx.pid
+          ? useSessionStore.getState().ideOpenFilesByProject[ctx.pid]
+          : undefined;
+        if (!open || !open.includes(ctx.path)) {
+          disposeModel(ctx.path);
+          ideDirtyTracker.set(ctx.path, false);
+        }
+        if (ctx.projectPath) void closeLspDocument(ctx.projectPath, ctx.path);
+      }
+      setDisplayedPath(null);
     };
-  }, [filePath, projectPath]);
+  }, []);
 
-  if (content === null) {
+  // Before the very first model is ready there is nothing to display.
+  if (!readyPath) {
     return (
       <div className="flex h-full items-center justify-center gap-1.5 text-[11px] text-content-subtle">
         <IconLoader2 size={12} className="animate-spin" />
@@ -610,23 +879,30 @@ function EditPane({ filePath, projectPath }: { filePath: string; projectPath: st
     <div className="relative h-full">
       <Editor
         height="100%"
-        path={filePathToUri(filePath)} // model URI = canonical file:// URI (matches LSP server)
-        language={language}
-        value={content}
+        path={filePathToUri(readyPath)} // model URI = canonical file:// URI (matches LSP server)
+        language={languageForExt(extname(readyPath))}
         theme={theme}
+        // The lib never syncs content (no `value` prop) and never disposes
+        // models on unmount — the model cache owns both jobs. File switches
+        // land here as a model swap on the live widget.
+        keepCurrentModel
         onChange={(value) => {
+          const ctx = readyCtxRef.current;
+          if (!ctx) return;
           const v = value ?? "";
-          // Dirty if content diverges from the saved baseline.
-          const dirty = v !== content;
-          ideDirtyTracker.set(filePath, dirty);
+          // Dirty if content diverges from the cached baseline (the content
+          // the model was loaded/saved with).
+          const baseline = getBaseline(ctx.path);
+          ideDirtyTracker.set(ctx.path, baseline !== undefined ? v !== baseline : false);
           // Notify the LSP server of the change (debounced). The server needs
           // the full text (incremental sync isn't worth the complexity here).
-          if (projectPath) {
+          if (ctx.projectPath) {
             if (changeDebounceRef.current) clearTimeout(changeDebounceRef.current);
             lspVersionRef.current += 1;
             const version = lspVersionRef.current;
+            const { projectPath: pp, path: p } = ctx;
             changeDebounceRef.current = setTimeout(() => {
-              void notifyLspChange(projectPath, filePath, language, v, version);
+              void notifyLspChange(pp, p, languageForExt(extname(p)), v, version);
             }, 300);
           }
         }}
@@ -644,6 +920,31 @@ function EditPane({ filePath, projectPath }: { filePath: string; projectPath: st
           scrollbar: { verticalScrollbarSize: 8, horizontalScrollbarSize: 8 },
         }}
       />
+      {/* Hold-last-ready veil: a first-time file is still being read — the
+          previous file stays visible (and interactive) underneath. */}
+      {loadingPath && loadingPath !== readyPath && (
+        <div className="absolute inset-0 z-10 flex items-center justify-center bg-surface/70">
+          <div className="flex items-center gap-1.5 text-[11px] text-content-subtle">
+            <IconLoader2 size={12} className="animate-spin" />
+            {t("ide.editor.readingFile")}
+          </div>
+        </div>
+      )}
+      {/* External-change banner (top-center): the file changed on disk while
+          the cached model held unsaved edits. Reload discards them. */}
+      {externalChange && (
+        <div className="absolute left-1/2 top-3 z-10 flex -translate-x-1/2 items-center gap-2 rounded-md border border-edge bg-surface px-2.5 py-1 text-[11px] shadow-sm">
+          <IconAlertTriangle size={12} className="shrink-0 text-content-muted" />
+          <span className="text-content-muted">{t("ide.editor.externalChanged")}</span>
+          <button
+            type="button"
+            onClick={reloadFromDisk}
+            className="rounded px-1.5 py-0.5 text-accent transition-colors hover:bg-surface-hover"
+          >
+            {t("ide.editor.reloadFromDisk")}
+          </button>
+        </div>
+      )}
       {/* Save status toast — bottom-right, non-blocking. */}
       {saveState !== "idle" && (
         <div

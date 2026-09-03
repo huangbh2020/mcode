@@ -95,6 +95,8 @@ export const zh = {
   "ide.editor.gotoSearching": "正在查找{kind}…",
   "ide.editor.gotoNoneFound": "未找到{kind}",
   "ide.editor.gotoFailed": "查找{kind}失败",
+  "ide.editor.externalChanged": "文件已被外部修改",
+  "ide.editor.reloadFromDisk": "重新加载",
 
   /* ── search dialog ── */
   "ide.search.modeNameHint": "当前:文件名搜索 - 点击切到内容搜索",

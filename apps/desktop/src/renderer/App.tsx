@@ -753,7 +753,10 @@ function EditorColumn({
               </div>
             }
           >
-            <FileEditor key={filePath} filePath={filePath} projectPath={projectPath} />
+            {/* NOT keyed by filePath: the editor is persistent and swaps
+                models on file switches (see EditPane / editorModelCache) —
+                a full remount per file would stutter. */}
+            <FileEditor filePath={filePath} projectPath={projectPath} />
           </Suspense>
         ) : (
           <div className="flex h-full items-center justify-center text-[11px] text-content-subtle">

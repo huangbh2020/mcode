@@ -18,6 +18,7 @@ import type { TurnFileEntry } from "@renderer/lib/turnFiles.js";
 import type { ContentTag } from "@renderer/lib/contentTag.js";
 import { isValidSnapshot } from "@renderer/lib/contextWindow.js";
 import { getLastCursor, type NavEntry } from "@renderer/lib/editorNav.js";
+import { disposeModel, getDisplayedPath } from "@renderer/lib/editorModelCache.js";
 import type { CustomModelPublic } from "@contracts/customModel";
 import { api } from "@renderer/lib/api.js";
 import { isElectron } from "@renderer/lib/platform.js";
@@ -5391,6 +5392,18 @@ export const useSessionStore = create<SessionState>((set, get) => ({
    *  If it was active, fall back to the first remaining project. */
   deleteProject: async (id) => {
     await api.project.delete({ id });
+    // Model cache: none of the deleted project's files will be in any open
+    // list after this, so dispose their models — except the DISPLAYED one
+    // (still attached to the live editor; EditPane's teardown owns it once
+    // the re-render tears the column down).
+    const before = get();
+    const removedOpen = before.ideOpenFilesByProject[id];
+    const displayed = getDisplayedPath();
+    if (removedOpen) {
+      for (const p of removedOpen) {
+        if (p !== displayed) disposeModel(p);
+      }
+    }
     set((s) => {
       const projects = s.projects.filter((p) => p.id !== id);
       const sessionsByProject = { ...s.sessionsByProject };
@@ -9141,6 +9154,16 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         : existing
           ? prev
           : [...prev, canonicalPath];
+    // Replace mode discards every other tab — drop their cached models now
+    // (background tabs get no unmount event). The currently DISPLAYED file
+    // is skipped: its model is attached to the live editor; EditPane's swap
+    // bookkeeping disposes it once the swap lands.
+    if (mode === "replace") {
+      const displayed = getDisplayedPath();
+      for (const p of prev) {
+        if (p !== canonicalPath && p !== displayed) disposeModel(p);
+      }
+    }
     const prevViewMode = get().ideFileViewModeByProject[pid] ?? {};
     const viewMode = { ...prevViewMode };
     // A review/diff request is an explicit intent -> force diff mode (don't
@@ -9282,6 +9305,12 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     if (active === filePath) {
       active = open[idx - 1] ?? open[idx] ?? null;
     }
+    // Model cache: never dispose the DISPLAYED file's model here — it is
+    // attached to the live editor (which may briefly differ from the active
+    // file while a newly-activated file is still loading). EditPane's swap
+    // bookkeeping disposes it once the swap lands and it has left the open
+    // list. Background tabs get no unmount event, so dispose them here.
+    if (getDisplayedPath() !== filePath) disposeModel(filePath);
     // Clean up the per-file view mode for the closed file.
     const prevViewMode = get().ideFileViewModeByProject[pid] ?? {};
     const viewMode = { ...prevViewMode };
@@ -9326,6 +9355,12 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       const idx = prevOpen.indexOf(active);
       active = open[idx - 1] ?? open[idx] ?? null;
     }
+    // Model cache: same displayed-file rule as closeFileInIde — dispose the
+    // rest here, EditPane's swap bookkeeping owns the displayed one.
+    const displayed = getDisplayedPath();
+    for (const p of removed) {
+      if (p !== displayed) disposeModel(p);
+    }
     // Clean up per-file view-mode + diff-before for the removed paths.
     const prevViewMode = get().ideFileViewModeByProject[pid] ?? {};
     const viewMode: Record<string, FileViewMode> = {};
@@ -9367,6 +9402,13 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       const prevExpanded = get().ideExpandedDirsByProject[pid] ?? [];
       const hadExpanded = prevExpanded.some((d) => d === oldPath || d.startsWith(prefix));
       if (!hadDescendant && !hadExpanded) return; // nothing under it
+      // Model cache: models are keyed by the OLD paths — dispose every one
+      // except the DISPLAYED file's (its live editor swaps away first, then
+      // EditPane's swap bookkeeping disposes the stale-path model).
+      const displayedDir = getDisplayedPath();
+      for (const p of prevOpen) {
+        if (p !== displayedDir) disposeModel(p);
+      }
       const open = prevOpen.map((p) => (p === oldPath ? newPath : p.startsWith(prefix) ? newPath + p.slice(oldPath.length) : p));
       let active = get().ideActiveFileByProject[pid] ?? null;
       if (active) {
@@ -9398,6 +9440,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     const prevOpen = get().ideOpenFilesByProject[pid] ?? [];
     const idx = prevOpen.indexOf(oldPath);
     if (idx === -1) return;
+    // Model cache: dispose the old-path model unless it's the DISPLAYED file
+    // (owned by EditPane's swap bookkeeping).
+    if (getDisplayedPath() !== oldPath) disposeModel(oldPath);
     const open = prevOpen.slice();
     open[idx] = newPath;
     let active = get().ideActiveFileByProject[pid] ?? null;
@@ -9427,6 +9472,12 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     const prev = get().ideOpenFilesByProject[pid] ?? [];
     if (!prev.includes(keepFilePath)) return;
     const open = [keepFilePath];
+    // Model cache: dispose the dropped background models; the DISPLAYED one
+    // (if among the dropped) is owned by EditPane's swap bookkeeping.
+    const displayed = getDisplayedPath();
+    for (const p of prev) {
+      if (p !== keepFilePath && p !== displayed) disposeModel(p);
+    }
     // Clean up per-file view-mode + diff-before for the dropped paths.
     const prevViewMode = get().ideFileViewModeByProject[pid] ?? {};
     const viewMode: Record<string, FileViewMode> = {};
@@ -9448,6 +9499,12 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     if (!pid) return;
     const prev = get().ideOpenFilesByProject[pid] ?? [];
     if (prev.length === 0) return;
+    // Model cache: dispose all background models; the DISPLAYED one is
+    // owned by EditPane's swap/teardown bookkeeping.
+    const displayed = getDisplayedPath();
+    for (const p of prev) {
+      if (p !== displayed) disposeModel(p);
+    }
     set((s) => {
       // Unified-bar fallback: no files left — the plan tab may still own the
       // editor view; otherwise return to the chat.

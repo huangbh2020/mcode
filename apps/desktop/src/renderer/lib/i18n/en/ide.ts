@@ -93,6 +93,8 @@ export const en = {
   "ide.editor.gotoSearching": "Finding {kind}…",
   "ide.editor.gotoNoneFound": "No {kind} found",
   "ide.editor.gotoFailed": "{kind} search failed",
+  "ide.editor.externalChanged": "File changed on disk",
+  "ide.editor.reloadFromDisk": "Reload",
 
   /* ── search dialog ── */
   "ide.search.modeNameHint": "Current: file name search — click to switch to content search",
