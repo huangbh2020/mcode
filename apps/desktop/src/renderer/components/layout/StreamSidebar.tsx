@@ -2,7 +2,8 @@
  * StreamSidebar — the session-first left-bar view ("stream" leftBarMode),
  * modeled on T3 Code's current sidebar (apps/web Sidebar.tsx):
  *
- *   [现状快捷入口: 新建会话 / 搜索 / 连接手机]   (SidebarQuickActions, untouched)
+ *   [现状快捷入口: 新建会话 / 搜索 / 连接手机]   (SidebarQuickActions,原样式;
+ *      新建会话在 scope 指向项目/工作树时改道到该处)
  *   [📁 全部项目 ▾]  [+]                        (scope filter + add project)
  *   ── pinned cards ── hairline ── live cards ── (flat, each card carries
  *      its project identity + an inline status label; running rows recede)
@@ -182,18 +183,37 @@ function StreamSidebarBase() {
     for (const p of projects) void ensureWorktreeInfo(p.path);
   }, [projects, gitChangeVersionByRepo, ensureWorktreeInfo]);
 
-  // ── Project lookup + scope filter. Scope is UI-local: null = 全部项目,
-  // "g:<name>" = a project group, otherwise a projectId.
+  // ── Project lookup + scope filter. Scope lives in the store (persisted
+  // under `ui.streamScope`): null = 全部项目, "g:<name>" = a project group,
+  // otherwise a projectId — so the last selected project is still selected
+  // the next time the user enters the view.
   const projectById = useMemo(() => {
     const map = new Map<string, Project>();
     for (const p of projects) map.set(p.id, p);
     return map;
   }, [projects]);
 
-  const [scope, setScope] = useState<string | null>(null);
-  // Controlled so the manage ⋯ button can close the dropdown before the
-  // project manage menu opens (single menu on screen, same as the chip).
+  const streamScope = useSessionStore((s) => s.streamScope);
+  // Store action, aliased to the old local-setter name — every scope menu
+  // row writes through it (persisting the choice for the next visit).
+  const setScope = useSessionStore((s) => s.setStreamScope);
   const [scopeOpen, setScopeOpen] = useState(false);
+  // A persisted scope can go stale (project deleted / archived, group
+  // dissolved) between write and read — degrade those to the unfiltered
+  // view instead of an empty list. Reactive (not dropped at hydration)
+  // because the project list lands AFTER the sidebar's first paint.
+  // Worktree scopes pass through: their matcher is safe and the inventory
+  // probe may simply not have landed yet.
+  const scope = useMemo(() => {
+    if (streamScope == null) return null;
+    if (streamScope.startsWith("g:")) {
+      const name = streamScope.slice(2);
+      return projects.some((p) => !p.archived && p.group === name) ? streamScope : null;
+    }
+    if (streamScope.startsWith("wt:")) return streamScope;
+    const project = projectById.get(streamScope);
+    return project && !project.archived ? streamScope : null;
+  }, [streamScope, projectById]);
   const scopeMatches = useCallback(
     (s: Session) => {
       if (scope == null) return true;
@@ -244,6 +264,13 @@ function StreamSidebarBase() {
     }
     return null;
   }, [scope, worktreesByProject]);
+
+  // The plain project the scope points at, if any (group / worktree / null
+  // scopes don't single one out). The 新建会话 quick action spawns the new
+  // thread HERE instead of the active project — the user filtered to this
+  // project, so that's where "new session" should land.
+  const scopedProjectId =
+    scope != null && !scope.startsWith("g:") && !scope.startsWith("wt:") ? scope : null;
 
   const scopeLabel = useMemo(() => {
     if (scope == null) return t("layout.stream.scopeAll");
@@ -558,14 +585,19 @@ function StreamSidebarBase() {
       )}
 
       {/* 快捷入口 — 现状组件,原样挂载。Scoped to a managed worktree, the
-          新建会话 entry spawns the session in THAT checkout instead of the
-          active project. */}
+          新建会话 entry spawns the session in THAT checkout; scoped to a
+          plain project, it spawns under THAT project — both instead of the
+          active project, since the user has explicitly narrowed where they
+          are working. */}
       <SidebarQuickActions
         newSessionOverride={
           scopedWorktree
             ? () => void startSession(scopedWorktree.projectId, { worktreePath: scopedWorktree.path })
-            : undefined
+            : scopedProjectId
+              ? () => void startSession(scopedProjectId)
+              : undefined
         }
+        newSessionOverrideTitle={scopedWorktree ? undefined : scopedProjectId ? t("layout.newSessionHere") : undefined}
       />
 
       {/* Scope filter: 全部项目 / per-project (+ its worktrees) / group +
@@ -712,7 +744,10 @@ function StreamSidebarBase() {
                   )}
                 >
                   {t("layout.stream.showMore", {
-                    n: Math.max(streamTotal - liveSessions.length - pinnedList.length, 0),
+                    // streamTotal counts the CURRENT scope's unpinned rows
+                    // (the server filters by scope; pinned never counted) —
+                    // so the remainder is total minus the loaded live rows.
+                    n: Math.max(streamTotal - liveSessions.length, 0),
                   })}
                 </button>
               </li>
@@ -958,10 +993,17 @@ function StreamCard({
   // prominence budget stays with rows that need a human (T3 semantics).
   const recede = status.kind === "working" && !active;
 
+  // The meta line (L3) only ever carries content for a worktree-bound
+  // session (fork + branch) or a local session whose project root is a git
+  // repo (checked-out branch). A local session in a NON-git project has
+  // neither — the card degrades to two lines and the provider icon moves up
+  // next to the title instead of orphaning an empty row.
+  const hasMetaLine = session.worktreePath != null || localBranch != null;
+
   const statusLabel = (() => {
     if (status.kind === "working") {
       return (
-        <span className="flex items-center gap-1 font-semibold text-[#0284c7] dark:text-[#38bdf8]">
+        <span className="flex items-center gap-1 font-semibold text-[#0369a1] dark:text-[#38bdf8]">
           <IconLoader2 size={11} className="animate-spin" />
           {t("layout.stream.statusWorking", { dur: formatRunningDuration(now - status.startedAt) })}
         </span>
@@ -979,7 +1021,7 @@ function StreamCard({
     }
     if (status.kind === "done") {
       return (
-        <span className="flex items-center gap-1 font-semibold text-accent">
+        <span className="flex items-center gap-1 font-semibold text-accent-strong">
           <IconCheck size={12} />
           {t("layout.stream.statusDone")}
         </span>
@@ -1096,38 +1138,54 @@ function StreamCard({
         </span>
       </div>
 
-      {/* L2 — title. */}
-      <div className="min-w-0 truncate text-[12.5px] font-medium text-content">
-        {session.title}
+      {/* L2 — title. Sized/colored exactly like the tree view's SessionRow
+          title (rp font-size var, the row's own color — muted at rest,
+          content when active — and regular weight): a fixed 12.5px medium
+          text-content diverged visibly from the old panel, most of all in
+          the light theme where --content is near-black. When the meta line
+          has nothing to say (local session, project not a git repo), the
+          card degrades to TWO lines and the provider icon — otherwise an
+          orphan at the right edge of an empty L3 — moves up here, trailing
+          the title. */}
+      <div className="flex min-w-0 items-center gap-1.5 [font-size:var(--right-panel-font-size)]">
+        <span className="min-w-0 flex-1 truncate">{session.title}</span>
+        {!hasMetaLine && (
+          <span className="flex shrink-0 items-center" title={providerLabel || undefined}>
+            <ProviderIcon size={12} className={cn("shrink-0", providerColor)} />
+          </span>
+        )}
       </div>
 
-      {/* L3 — worktree identity + provider dot ("always the branch"). */}
-      <div className="flex h-3.5 min-w-0 items-center gap-1.5 text-[10.5px] text-content-subtle">
-        {session.worktreePath ? (
-          <span className="flex min-w-0 items-center gap-1">
-            <IconGitFork size={10} className="shrink-0 text-accent/80" />
-            <span className="min-w-0 truncate font-mono text-[9.5px]" title={session.worktreePath}>
-              {worktreeBranch || session.worktreePath.split(/[/\\/]/).pop()}
-            </span>
-            {worktreeUnmerged && (
-              <span className="flex shrink-0 items-center gap-1 text-[9.5px] text-[#b45309] dark:text-[#fbbf24]" title={t("layout.stream.unmerged")}>
-                <span className="h-[5px] w-[5px] rounded-full bg-[#d97706] dark:bg-[#f59e0b]" aria-hidden />
-                {t("layout.stream.unmerged")}
+      {/* L3 — worktree identity + provider dot ("always the branch"). Only
+          rendered when it HAS content: a local session in a non-git project
+          (or before the probe lands) skips the line entirely — an empty
+          flex-1 spacer + a lone provider icon read as a blank row. */}
+      {hasMetaLine && (
+        <div className="flex h-3.5 min-w-0 items-center gap-1.5 text-[10.5px] text-content-subtle">
+          {session.worktreePath ? (
+            <span className="flex min-w-0 items-center gap-1">
+              <IconGitFork size={10} className="shrink-0 text-accent/80" />
+              <span className="min-w-0 truncate font-mono text-[9.5px]" title={session.worktreePath}>
+                {worktreeBranch || session.worktreePath.split(/[/\\/]/).pop()}
               </span>
-            )}
+              {worktreeUnmerged && (
+                <span className="flex shrink-0 items-center gap-1 text-[9.5px] text-[#b45309] dark:text-[#fbbf24]" title={t("layout.stream.unmerged")}>
+                  <span className="h-[5px] w-[5px] rounded-full bg-[#d97706] dark:bg-[#f59e0b]" aria-hidden />
+                  {t("layout.stream.unmerged")}
+                </span>
+              )}
+            </span>
+          ) : (
+            <span className="flex min-w-0 items-center gap-1" title={localBranch ?? undefined}>
+              <IconGitBranch size={10} className="shrink-0 text-content-subtle/80" />
+              <span className="min-w-0 truncate font-mono text-[9.5px]">{localBranch}</span>
+            </span>
+          )}
+          <span className="ml-auto flex shrink-0 items-center" title={providerLabel || undefined}>
+            <ProviderIcon size={12} className={cn("shrink-0", providerColor)} />
           </span>
-        ) : localBranch ? (
-          <span className="flex min-w-0 items-center gap-1" title={localBranch}>
-            <IconGitBranch size={10} className="shrink-0 text-content-subtle/80" />
-            <span className="min-w-0 truncate font-mono text-[9.5px]">{localBranch}</span>
-          </span>
-        ) : (
-          <span className="flex-1" />
-        )}
-        <span className="ml-auto flex shrink-0 items-center" title={providerLabel || undefined}>
-          <ProviderIcon size={12} className={cn("shrink-0", providerColor)} />
-        </span>
-      </div>
+        </div>
+      )}
     </li>
   );
 }

@@ -476,7 +476,7 @@ function SplitCenterPane() {
           FileEditor or PlanViewer based on which tab is active). */}
       {editorVisible && (
         <div
-          className="flex min-w-0 flex-col border-l border-edge bg-surface"
+          className="flex min-w-0 flex-col border-l border-edge-panel bg-surface"
           style={{ flexGrow: 0, flexBasis: `${editorWidthPct}%` }}
         >
           <EditorColumn filePath={activeFile} />
@@ -488,18 +488,40 @@ function SplitCenterPane() {
 
 /** The chat half: SessionTabs strip (in tabs mode) + the active ChatPane.
  *
- *  In tabs mode every open tab's ChatPane is mounted simultaneously and
- *  backgrounded via CSS (display:none). This keeps each pane's composer
- *  draft, scroll position, and Tiptap undo history alive across tab switches
- *  — switching is instant instead of re-mounting and re-measuring. Events
- *  still stream into backgrounded panes (they read their own session bucket).
+ *  BOTH display modes keep every pane in the keep-alive bucket mounted and
+ *  background the inactive ones via CSS (display:none). This keeps each
+ *  pane's composer draft, scroll position, and Tiptap undo history alive
+ *  across switches — switching is a visibility swap instead of re-mounting
+ *  and re-measuring, so a left-bar click lands instantly. Events still
+ *  stream into backgrounded panes (they read their own session bucket).
  *  Closing a tab removes its id from openTabs, letting React unmount it.
- *
- *  In single mode the legacy keyed remount is preserved (one pane at a time). */
+ *  Tabs mode shows the bucket in the SessionTabs strip; single mode has no
+ *  strip, so the bucket self-prunes: only the active session plus the most
+ *  recently TOUCHED ones stay mounted (see keepAliveOrder). */
+
+/** LRU of recently-activated sessions for single mode's keep-alive window.
+ *  Module-level so it survives ChatColumn re-mounts (mode switches). Tabs
+ *  mode doesn't consult it — its bucket is the user's own tab strip. */
+const keepAliveOrder: string[] = [];
+const KEEP_ALIVE_MAX = 8;
+
 function ChatColumn() {
   const displayMode = useSessionStore((s) => s.displayMode);
   const activeSessionId = useSessionStore((s) => s.activeSessionId);
   const openTabs = useSessionStore((s) => s.openTabs);
+
+  // Touch the LRU whenever the foreground session changes (single-mode
+  // window membership follows usage, not just open order).
+  useEffect(() => {
+    if (activeSessionId == null) return;
+    const i = keepAliveOrder.indexOf(activeSessionId);
+    if (i >= 0) keepAliveOrder.splice(i, 1);
+    keepAliveOrder.push(activeSessionId);
+    if (keepAliveOrder.length > KEEP_ALIVE_MAX * 2) {
+      keepAliveOrder.splice(0, keepAliveOrder.length - KEEP_ALIVE_MAX * 2);
+    }
+  }, [activeSessionId]);
+
   if (displayMode === "tabs") {
     return (
       <div className="flex min-h-0 flex-1 flex-col">
@@ -517,8 +539,39 @@ function ChatColumn() {
       </div>
     );
   }
-  // single mode: legacy behavior — one ChatPane, swapped by activeSessionId.
-  return <ChatPane key={activeSessionId ?? "empty"} sessionId={activeSessionId} />;
+
+  // single mode: same keep-alive structure, no tab strip. Without it the
+  // keyed remount (`key={activeSessionId}`) tore down and rebuilt the whole
+  // ChatPane on every left-bar switch — composer Tiptap re-init, full
+  // timeline re-parse — which read as a lag before the new session appeared.
+  //
+  // Mounted set = the active session (always — defends against a path that
+  // activates a session without adding it to openTabs; the tabs branch makes
+  // the same assumption the other way) + the most recently touched ones that
+  // are still in openTabs (the filter hands pane lifetime to openTabs'
+  // delete/archive cleanup, so panes of removed sessions unmount instead of
+  // lingering here). Sessions pushed out of the window unmount and re-mount
+  // cold on their next visit — same cost as the old keyed remount, so the
+  // window can only ever improve on the baseline.
+  if (activeSessionId == null) {
+    return <ChatPane sessionId={null} />;
+  }
+  const keepAlive = keepAliveOrder
+    .slice(-KEEP_ALIVE_MAX)
+    .filter((sid) => sid !== activeSessionId && openTabs.includes(sid));
+  const panes = [activeSessionId, ...keepAlive];
+  return (
+    <div className="relative min-h-0 flex-1">
+      {panes.map((sid) => (
+        <div
+          key={sid}
+          className={`absolute inset-0 ${sid === activeSessionId ? "" : "hidden"}`}
+        >
+          <ChatPane sessionId={sid} isActive={sid === activeSessionId} />
+        </div>
+      ))}
+    </div>
+  );
 }
 
 /** Wide-panel (3:7) split — the chat column (3) on the left and the full
@@ -572,7 +625,7 @@ function WidePanelSplit() {
       />
       {/* Right panel - the right share (files/git/browser tabs). */}
       <div
-        className="flex min-w-0 flex-col border-l border-edge bg-surface"
+        className="flex min-w-0 flex-col border-l border-edge-panel bg-surface"
         style={{ flexGrow: 0, flexBasis: `${widePanelPct}%` }}
       >
         <RightPanel />

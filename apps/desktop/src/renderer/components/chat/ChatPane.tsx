@@ -3500,10 +3500,13 @@ const MessageRow = memo(function MessageRow({
           // User messages get a native tooltip showing the full send date-time
           // on hover (assistant messages have no createdAt tooltip - the
           // per-turn stat row already shows timing).
+          // .user-bubble-fill (not bg-userBubble/<alpha>): the tint strength
+          // must differ per theme — 15% over white is visible, over the
+          // near-black dark surface it isn't (see --user-bubble-alpha).
           title={isUser ? fmtFullDateTime(msg.createdAt) : undefined}
           className={
             isUser
-              ? "overflow-hidden rounded-lg bg-userBubble/10 px-3 py-2 text-content [font-size:var(--chat-font-size)]"
+              ? "user-bubble-fill overflow-hidden rounded-lg px-3 py-2 text-content [font-size:var(--chat-font-size)]"
               : "text-content [font-size:var(--chat-font-size)]"
           }
         >
@@ -3686,7 +3689,7 @@ function UserMessageEditor({
   const canSubmit = text.trim().length > 0;
 
   return (
-    <div className="rounded-lg border border-accent/40 bg-userBubble/10 px-3 py-2 [font-size:var(--chat-font-size)]">
+    <div className="user-bubble-fill rounded-lg border border-accent/40 px-3 py-2 [font-size:var(--chat-font-size)]">
       {/* Attachment chips (read-only) - mirror the composer's chip-above-textarea
           layout. Only shown if the original message had attachments. These are
           non-interactive previews (the attachments are preserved as-is on

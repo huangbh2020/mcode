@@ -249,6 +249,18 @@ export const UI_LAST_PROJECT_SETTING_KEY = "ui.lastProjectId";
  *  re-open the exact thread the user was on before quitting. */
 export const UI_LAST_SESSION_SETTING_KEY = "ui.lastSessionId";
 
+/**
+ * Setting key persisting the stream sidebar's project scope filter
+ * ("ui.leftBarMode" = "stream") so re-entering the view — remount or relaunch
+ * — restores the last selected project / group / worktree instead of
+ * resetting to the unfiltered view. Encoded exactly like the component's
+ * scope state: "" = 全部项目, "g:<name>" = a group, "wt:<normWorktreeKey>" =
+ * a worktree checkout, otherwise a projectId. A stale id (project deleted or
+ * archived since) is degraded to the unfiltered view by the sidebar's
+ * validation at render time, not here.
+ */
+export const UI_STREAM_SCOPE_SETTING_KEY = "ui.streamScope";
+
 /** Metadata for a single project group. */
 export const ProjectGroupMetaSchema = z.object({
   color: z.string().nullable().optional(),
@@ -1018,10 +1030,22 @@ export type ProjectSessionsInput = z.infer<typeof ProjectSessionsSchema>;
 /** Cross-project aggregate of non-archived chat sessions, newest-first —
  *  the stream sidebar's flat "全部项目" list. Same paging contract as
  *  project.sessions (offset + hasMore/total), just without the projectId
- *  filter. */
+ *  filter — unless an optional scope narrows it: the sidebar's scope switch
+ *  must also re-scope `hasMore` / `total`, or the bottom "显示更多" button
+ *  keeps counting the unfiltered aggregate after the user switches
+ *  projects. */
 export const SessionListAllSchema = z.object({
   limit: z.number().int().positive().optional(),
   offset: z.number().int().nonnegative().optional(),
+  /** Project scope: only rows whose project_id is in this list. A plain
+   *  project scope sends one id, a group scope its member ids. Absent =
+   *  all projects. */
+  projectIds: z.array(z.string()).optional(),
+  /** Worktree-checkout scope: only sessions bound to that isolated
+   *  checkout, as a normalized path key (renderer's normWorktreeKey form —
+   *  main compares with its normPathKey twin, since stored paths and
+   *  porcelain output differ in separators/casing surface). */
+  worktreeKey: z.string().optional(),
 });
 export type SessionListAllInput = z.infer<typeof SessionListAllSchema>;
 

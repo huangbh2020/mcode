@@ -43,6 +43,7 @@ export function SidebarQuickActions({
   showSearch = true,
   showConnectPhone = true,
   newSessionOverride,
+  newSessionOverrideTitle,
 }: {
   /** Hide the 搜索 entry (mobile drawer: no keyboard to trigger Ctrl+K). */
   showSearch?: boolean;
@@ -50,8 +51,13 @@ export function SidebarQuickActions({
   showConnectPhone?: boolean;
   /** When set, 新建会话 dispatches here instead of the default
    *  active-project start (stream view scoped to a worktree: spawn the
-   *  session in THAT checkout). Title flips to the worktree wording. */
+   *  session in THAT checkout; scoped to a plain project: spawn it under
+   *  THAT project). Title flips to the override wording unless
+   *  `newSessionOverrideTitle` says otherwise. */
   newSessionOverride?: () => void;
+  /** Already-translated tooltip for the override state (defaults to the
+   *  worktree wording — the original override case). */
+  newSessionOverrideTitle?: string;
 } = {}) {
   const { t } = useI18n();
   const startSession = useSessionStore((s) => s.startSession);
@@ -73,7 +79,7 @@ export function SidebarQuickActions({
         disabled={!canNewSession}
         title={
           newSessionOverride
-            ? t("layout.newSessionInWorktree")
+            ? newSessionOverrideTitle ?? t("layout.newSessionInWorktree")
             : canNewSession
               ? t("layout.newSessionInProject")
               : t("layout.needProject")

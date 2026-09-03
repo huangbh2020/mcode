@@ -137,7 +137,13 @@ export function WorktreeModeChip({
   // hides it too, fresh or not: its isolation is already communicated by the
   // left-bar fork badge/group and the Titlebar Land button, so a permanent
   // badge above the composer is noise, not information.
-  const isFreshSession = !session || session.title === "New session";
+  // Freshness requires the ROW to exist. A missing row with a non-null
+  // sessionId is a side chat (side sessions live outside the main list
+  // buckets the selector scans) — NOT a new session: rendering the picker
+  // there would show environment options the side session can never use,
+  // and a pick would silently edit the GLOBAL new-session default instead
+  // of any session. Same rule SessionDirectoryChip applies.
+  const isFreshSession = session != null && session.title === "New session";
   const showPicker = isFreshSession && !materialized;
 
   // No repo (or still probing) / not a new-session context → render nothing.

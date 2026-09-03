@@ -43,8 +43,15 @@ export default {
         edge: {
           DEFAULT: "rgb(var(--edge) / <alpha-value>)",
           input: "rgb(var(--input-edge) / <alpha-value>)",
+          panel: "rgb(var(--panel-edge) / <alpha-value>)",
         },
-        accent: "rgb(var(--accent) / <alpha-value>)",
+        // DEFAULT = brand (buttons/icons/rings); strong = the small-TEXT
+        // variant — light needs a 700 stop for the 4.5:1 AA bar, dark
+        // mirrors DEFAULT (see --accent-strong in styles.css).
+        accent: {
+          DEFAULT: "rgb(var(--accent) / <alpha-value>)",
+          strong: "rgb(var(--accent-strong) / <alpha-value>)",
+        },
         danger: "rgb(var(--danger) / <alpha-value>)",
         warning: "rgb(var(--warning) / <alpha-value>)",
         info: "rgb(var(--info) / <alpha-value>)",

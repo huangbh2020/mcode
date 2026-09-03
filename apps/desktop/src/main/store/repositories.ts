@@ -414,14 +414,33 @@ export const SessionRepo = {
    *  the stream sidebar's flat "全部项目" list. Mirrors {@link listByProject}'s
    *  active-list semantics (pinned EXCLUDED — pinned threads render in the
    *  stream's pinned block, exactly as the tree hoists them into its global
-   *  pinned section), same updated_at DESC / created_at DESC order. */
-  listAll(opts?: { limit?: number; offset?: number }): Session[] {
+   *  pinned section), same updated_at DESC / created_at DESC order.
+   *
+   *  Optional scope filters (the sidebar's scope switch re-scopes pagination,
+   *  so `hasMore`/`total` must count the scoped set, not the aggregate):
+   *  `projectIds` narrows to those projects (SQL IN); `worktreeKey` narrows
+   *  to sessions bound to that checkout — matched in JS via normPathKey
+   *  (stored paths and the renderer's normalized key differ in separator /
+   *  casing surface), which rules out SQL LIMIT/OFFSET: the full match is
+   *  materialized first, then sliced. */
+  listAll(opts?: {
+    limit?: number;
+    offset?: number;
+    projectIds?: string[];
+    worktreeKey?: string;
+  }): Session[] {
     const db = getDb();
-    let sql =
-      "SELECT * FROM sessions WHERE archived = 0 AND pinned_at IS NULL AND kind = 'chat'" +
-      " ORDER BY updated_at DESC, created_at DESC";
+    if (opts?.projectIds && opts.projectIds.length === 0) return [];
+    const where = ["archived = 0", "pinned_at IS NULL", "kind = 'chat'"];
     const params: BindValue[] = [];
-    if (opts?.limit !== undefined) {
+    if (opts?.projectIds) {
+      where.push(`project_id IN (${opts.projectIds.map(() => "?").join(", ")})`);
+      for (const id of opts.projectIds) params.push(v(id));
+    }
+    const wtKey = opts?.worktreeKey;
+    if (wtKey !== undefined) where.push("worktree_path IS NOT NULL");
+    let sql = `SELECT * FROM sessions WHERE ${where.join(" AND ")} ORDER BY updated_at DESC, created_at DESC`;
+    if (wtKey === undefined && opts?.limit !== undefined) {
       sql += " LIMIT ?";
       params.push(v(opts.limit));
       if (opts?.offset !== undefined) {
@@ -432,20 +451,43 @@ export const SessionRepo = {
     const stmt = db.prepare(sql);
     stmt.bind(params);
     const out: Session[] = [];
-    while (stmt.step()) out.push(rowToSession(stmt.getAsObject() as unknown as SessionRow));
+    while (stmt.step()) {
+      const s = rowToSession(stmt.getAsObject() as unknown as SessionRow);
+      if (wtKey !== undefined && (!s.worktreePath || normPathKey(s.worktreePath) !== wtKey)) continue;
+      out.push(s);
+    }
     stmt.free();
+    if (wtKey !== undefined) {
+      const offset = opts?.offset ?? 0;
+      return opts?.limit !== undefined ? out.slice(offset, offset + opts.limit) : out.slice(offset);
+    }
     return out;
   },
 
   /** Count matching {@link listAll}'s filter — the aggregate `total` for
-   *  stream pagination. */
-  countAll(): number {
+   *  stream pagination. Takes the same scope filters so a scoped view's
+   *  "show more" counts its own set. */
+  countAll(opts?: { projectIds?: string[]; worktreeKey?: string }): number {
     const db = getDb();
-    const stmt = db.prepare(
-      "SELECT COUNT(*) AS n FROM sessions WHERE archived = 0 AND pinned_at IS NULL AND kind = 'chat'",
-    );
-    stmt.step();
-    const n = (stmt.getAsObject() as { n: number }).n;
+    if (opts?.projectIds && opts.projectIds.length === 0) return 0;
+    const where = ["archived = 0", "pinned_at IS NULL", "kind = 'chat'"];
+    const params: BindValue[] = [];
+    if (opts?.projectIds) {
+      where.push(`project_id IN (${opts.projectIds.map(() => "?").join(", ")})`);
+      for (const id of opts.projectIds) params.push(v(id));
+    }
+    const wtKey = opts?.worktreeKey;
+    if (wtKey !== undefined) where.push("worktree_path IS NOT NULL");
+    const stmt = db.prepare(`SELECT * FROM sessions WHERE ${where.join(" AND ")}`);
+    stmt.bind(params);
+    let n = 0;
+    while (stmt.step()) {
+      const row = stmt.getAsObject() as unknown as { worktree_path: string | null };
+      if (wtKey !== undefined && (!row.worktree_path || normPathKey(row.worktree_path) !== wtKey)) {
+        continue;
+      }
+      n++;
+    }
     stmt.free();
     return n;
   },

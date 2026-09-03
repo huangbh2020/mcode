@@ -59,7 +59,12 @@ export function SessionDirectoryChip({ sessionId }: { sessionId: string | null }
 
   // New-session stage + local environment only — worktree-bound or
   // worktree-intent sessions have their directory decided by the checkout.
-  const isFresh = !session || session.title === "New session";
+  // Freshness requires the ROW to exist: a non-null sessionId whose row the
+  // selector can't find is a side chat (side sessions live outside the main
+  // list buckets) — its directory is bound to the parent, so no switcher.
+  // (The old `!session ||` read the miss as "fresh" and rendered a switcher
+  // whose rows were dead clicks inside the side-chat panel.)
+  const isFresh = session != null && session.title === "New session";
   const isLocal = session ? !session.worktreePath && session.envMode !== "worktree" : true;
   const candidates = projects.filter((p) => !p.archived);
   const current = session

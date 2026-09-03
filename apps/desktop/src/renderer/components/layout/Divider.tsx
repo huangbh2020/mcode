@@ -5,7 +5,9 @@
  * and CenterPane (chat|editor). Hand-rolled with mousedown -> document
  * mousemove/mouseup listeners, matching the codebase's no-library style.
  *
- * Visuals: the visible line is a 1px hairline (`bg-edge`) that lights up
+ * Visuals: the visible line is a 1px hairline (`bg-edge-panel` — the lighter
+ * structural-divider token; these lines run full window height and read as
+ * heavy rules at the darker card-border value) that lights up
  * (`bg-accent/50`) on hover or while dragging - it reads like a border, not a
  * thick bar. The *draggable* hit area, however, is wider: an invisible
  * absolutely-positioned layer extends symmetrically (±5px) beyond the 1px
@@ -142,7 +144,7 @@ export function Divider({
       {!hideLine && (
         <div
           className={cn(
-            "pointer-events-none absolute inset-0 bg-edge transition-colors group-hover/divider:bg-accent/50 group-active/divider:bg-accent/70",
+            "pointer-events-none absolute inset-0 bg-edge-panel transition-colors group-hover/divider:bg-accent/50 group-active/divider:bg-accent/70",
             isVertical ? "w-px left-0" : "h-px top-0",
           )}
         />

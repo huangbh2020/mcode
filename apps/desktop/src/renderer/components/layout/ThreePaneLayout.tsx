@@ -94,7 +94,7 @@ export function ThreePaneLayout({
          behind the arc. Non-scrolling overflow-hidden is xterm-safe (see the
          note on the right sidebar).
          Stacks the center content above an optional bottom terminal bar. */}
-      <main className="relative z-10 flex min-w-0 flex-1 flex-col overflow-hidden rounded-tl-3xl rounded-bl-3xl border-t border-edge bg-surface">
+      <main className="relative z-10 flex min-w-0 flex-1 flex-col overflow-hidden rounded-tl-3xl rounded-bl-3xl border-t border-edge-panel bg-surface">
         <div className="min-h-0 flex-1 overflow-hidden">{center}</div>
         {/* Bottom terminal bar — keep-alive: always rendered, height collapses
             to 0 when closed so PTYs/scrollback survive. overflow-hidden clips
@@ -111,7 +111,7 @@ export function ThreePaneLayout({
             )}
             <div
               className={cn(
-                "shrink-0 overflow-hidden border-edge transition-[height] duration-150 ease-out",
+                "shrink-0 overflow-hidden border-edge-panel transition-[height] duration-150 ease-out",
                 bottomTerminalOpen ? "border-t" : "h-0",
               )}
               style={bottomTerminalOpen ? { height: bottomTerminalHeight } : undefined}
@@ -136,10 +136,10 @@ export function ThreePaneLayout({
          internally, and xterm FitAddon breaks under a scrolling ancestor. */}
       {rightOpen && (
         <aside
-          className="flex h-full shrink-0 flex-col overflow-hidden border-t border-edge bg-surface"
+          className="flex h-full shrink-0 flex-col overflow-hidden border-t border-edge-panel bg-surface"
           style={{ width: rightWidth }}
         >
-          <div className="min-h-0 flex-1 overflow-hidden border-l border-edge/60">{right}</div>
+          <div className="min-h-0 flex-1 overflow-hidden border-l border-edge-panel/60">{right}</div>
         </aside>
       )}
     </>

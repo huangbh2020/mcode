@@ -59,6 +59,7 @@ import {
   UI_PROJECT_GROUPS_SETTING_KEY,
   UI_LAST_PROJECT_SETTING_KEY,
   UI_LAST_SESSION_SETTING_KEY,
+  UI_STREAM_SCOPE_SETTING_KEY,
   UI_SHORTCUTS_SETTING_KEY,
   UI_CHAT_DENSITY_SETTING_KEY,
   UI_EDITOR_THEME_SETTING_KEY,
@@ -597,6 +598,12 @@ export interface SessionState {
   /** A mutation/event invalidated the cached first page (ordering, title,
    *  archive, pin, …). The stream view refetches while visible. */
   streamDirty: boolean;
+  /** The stream sidebar's project scope filter: null = 全部项目,
+   *  "g:<name>" = a group, "wt:<normWorktreeKey>" = a worktree checkout,
+   *  otherwise a projectId. Persisted under `ui.streamScope` so re-entering
+   *  the view (remount or relaunch) restores the last selected project
+   *  instead of resetting to the unfiltered view. */
+  streamScope: string | null;
 
   /** Sessions whose LAST turn ended in an error — the stream sidebar's red
    *  「失败」status label. Cleared when a new turn starts. */
@@ -1507,6 +1514,9 @@ export interface SessionState {
    *  stream. Instant local flip + fire-and-forget persistence (same
    *  pattern as setDisplayMode). */
   setLeftBarMode: (mode: LeftBarMode) => Promise<void>;
+  /** Set the stream sidebar's project scope filter. Persists under
+   *  `ui.streamScope` so the selection survives remounts and relaunches. */
+  setStreamScope: (scope: string | null) => void;
   /** (Re)fetch the stream sidebar's aggregate first page. No-op when the
    *  cache is warm and clean; `reset` forces a refetch. */
   loadStreamSessions: (reset?: boolean) => Promise<void>;
@@ -2243,6 +2253,35 @@ const SESSION_PAGE_SIZE = 5;
 /** Page size for the stream sidebar's cross-project aggregate (rich cards
  *  are ~3x taller than tree rows, so the page is only 2x). */
 const STREAM_PAGE_SIZE = 10;
+
+/** Monotonic token guarding the stream cache against overlapping fetches.
+ *  A scope switch (or init's landing set re-dirtying) can start a new first
+ *  page fetch while an earlier one is still in flight — the earlier
+ *  response, resolving late, must not clobber the newer scope's pages (the
+ *  "切了项目列表又跳回去" race). */
+let streamFetchSeq = 0;
+
+/** Resolve the stream sidebar's scope into `session.listAll` filter params.
+ *  Applies the same staleness validation the sidebar renders with (a deleted
+ *  / archived project or a dissolved group degrades to the unfiltered view),
+ *  so the fetched pages always match what the scope chip says it's showing.
+ *  Group scopes resolve to their member ids here — the server filters by
+ *  project_id; worktree scopes pass their normalized key through for the
+ *  main-side normPathKey comparison. */
+function streamScopeQuery(
+  scope: string | null,
+  projects: Project[],
+): { projectIds?: string[]; worktreeKey?: string } {
+  if (scope == null) return {};
+  if (scope.startsWith("g:")) {
+    const name = scope.slice(2);
+    const ids = projects.filter((p) => !p.archived && p.group === name).map((p) => p.id);
+    return ids.length > 0 ? { projectIds: ids } : {};
+  }
+  if (scope.startsWith("wt:")) return { worktreeKey: scope.slice(3) };
+  const project = projects.find((p) => p.id === scope);
+  return project && !project.archived ? { projectIds: [scope] } : {};
+}
 
 /** Messages per page when lazily loading session history. Large enough that a
  *  typical conversation fills the viewport in one fetch, small enough that
@@ -3955,6 +3994,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   streamHasMore: false,
   streamTotal: 0,
   streamDirty: true,
+  // Stream scope filter: unfiltered until init() hydrates the persisted
+  // ui.streamScope choice.
+  streamScope: null,
   worktreeInfoByRepo: {},
   interruptedBySession: {},
   turnIncompleteBySession: {},
@@ -4102,6 +4144,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           UI_PROJECT_GROUPS_SETTING_KEY,
           UI_LAST_PROJECT_SETTING_KEY,
           UI_LAST_SESSION_SETTING_KEY,
+          UI_STREAM_SCOPE_SETTING_KEY,
           UI_COMPOSER_MODEL_SETTING_KEY,
           SESSION_WORKTREE_DEFAULT_SETTING_KEY,
           WORKTREE_NAMES_SETTING_KEY,
@@ -4161,6 +4204,18 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       if (value === "tree" || value === "stream") set({ leftBarMode: value });
     } catch (err) {
       console.error("apply(leftBarMode) failed:", err);
+    }
+
+    // Stream sidebar scope filter. "" = the unfiltered "全部项目" view
+    // (setStreamScope's null encoding); a stale project/group id is NOT
+    // dropped here — the sidebar degrades it to the unfiltered view once
+    // the live project list is known, which also keeps an early hydration
+    // (projects still empty) from discarding a valid scope.
+    try {
+      const value = fp[UI_STREAM_SCOPE_SETTING_KEY];
+      if (value != null) set({ streamScope: value === "" ? null : value });
+    } catch (err) {
+      console.error("apply(streamScope) failed:", err);
     }
 
     // locale drives every translated string — must land before first paint so
@@ -4374,6 +4429,11 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       // mode this is informational; in `tabs` mode it shows the initial
       // open tab. Either way the user starts with a coherent state.
       openTabs: landingSession ? [landingSession.id] : [],
+      // The project list only NOW exists — an early-mounted stream sidebar
+      // (leftBarMode hydrates before this) may have fetched its first page
+      // unfiltered, because the persisted scope couldn't resolve against an
+      // empty project list. Re-dirty so the scope-aware fetch supersedes it.
+      streamDirty: true,
     });
     if (landingSession) {
       try {
@@ -4742,6 +4802,11 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       // its own first session.
       openTabs: next ? [next.id] : [],
     }));
+    // An explicit project selection is the new "where I am" — remember it as
+    // the next launch's landing project. A project WITH sessions persists via
+    // selectSession → syncConfigFromSession below; an EMPTY project otherwise
+    // silently fell back to the first project on restart.
+    void api.setting.set({ key: UI_LAST_PROJECT_SETTING_KEY, value: projectId });
     if (next) {
       await get().selectSession(next.id);
     }
@@ -5007,6 +5072,14 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     // its first page is loaded (the echo SKIPS unloaded buckets).
     if (get().activeSessionId === sessionId) {
       set({ activeProjectId: toProjectId });
+      // The directory chip's project pick is an explicit "I work here now" —
+      // record it as the next launch's landing spot. The UI_LAST_* pair is
+      // otherwise only written by syncConfigFromSession (session ACTIVATION),
+      // which a move doesn't trigger — without this, a restart would land on
+      // the pre-move project and a new session would default there instead
+      // of the project the user chose in the new-session panel.
+      void api.setting.set({ key: UI_LAST_PROJECT_SETTING_KEY, value: toProjectId });
+      void api.setting.set({ key: UI_LAST_SESSION_SETTING_KEY, value: sessionId });
       try {
         const page = await api.project.sessions({
           projectId: toProjectId,
@@ -7560,11 +7633,34 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     }
   },
 
+  setStreamScope: (scope) => {
+    // Dirty, not just a value swap: the cached pages were fetched under the
+    // OLD scope — the view must refetch its first page so the list AND the
+    // bottom "显示更多" count (hasMore/total are scope-filtered server-side)
+    // follow the switched-to project.
+    set({ streamScope: scope, streamDirty: true });
+    // setting.set only accepts strings — the unfiltered "全部项目" state is
+    // encoded as the empty string (mirror of the hydration rule in init).
+    // Fire-and-forget: a failed write just means the next visit falls back
+    // to the unfiltered view.
+    api.setting
+      .set({ key: UI_STREAM_SCOPE_SETTING_KEY, value: scope ?? "" })
+      .catch((err) => console.error("setting.set(streamScope) failed:", err));
+  },
+
   loadStreamSessions: async (reset) => {
     const s = get();
     if (!reset && s.streamSessions.length > 0 && !s.streamDirty) return;
+    const seq = ++streamFetchSeq;
     try {
-      const res = await api.session.listAll({ offset: 0, limit: STREAM_PAGE_SIZE });
+      const res = await api.session.listAll({
+        offset: 0,
+        limit: STREAM_PAGE_SIZE,
+        ...streamScopeQuery(s.streamScope, s.projects),
+      });
+      // Superseded by a newer fetch (scope flipped / re-dirty mid-flight):
+      // the newer response owns the cache.
+      if (seq !== streamFetchSeq) return;
       set({ streamSessions: res.sessions, streamHasMore: res.hasMore, streamTotal: res.total, streamDirty: false });
     } catch (err) {
       console.error("session.listAll failed:", err);
@@ -7574,8 +7670,14 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   loadMoreStreamSessions: async () => {
     const s = get();
     if (!s.streamHasMore) return;
+    const seq = ++streamFetchSeq;
     try {
-      const res = await api.session.listAll({ offset: s.streamSessions.length, limit: STREAM_PAGE_SIZE });
+      const res = await api.session.listAll({
+        offset: s.streamSessions.length,
+        limit: STREAM_PAGE_SIZE,
+        ...streamScopeQuery(s.streamScope, s.projects),
+      });
+      if (seq !== streamFetchSeq) return;
       set((st) => ({
         streamSessions: [...st.streamSessions, ...res.sessions],
         streamHasMore: res.hasMore,

@@ -95,26 +95,46 @@ div:has(> [role="menu"]) {
    * scope (.dark) overrides this with its own heavier 600 base. */
   font-weight: 500;
 
-  /* surfaces (backgrounds) */
-  --surface: 255 255 255; /* white */
-  --surface-muted: 244 244 245; /* zinc-100 */
-  --surface-hover: 228 228 231; /* zinc-200 */
+  /* surfaces (backgrounds). Muted/hover carry a slight cool bias (B channel
+   * above R/G — the light counterpart of the dark ramp's slate tint) so all
+   * three panes share one color temperature across themes. Muted sits one
+   * stop deeper than zinc-100: at zinc-100 the sidebar track resolved to
+   * ~1.10:1 against the white main surface — visually one continuous sheet;
+   * the deeper step (~1.16:1) plus the darker --edge below restores the
+   * track/recess layering without touching the white "paper" work area. */
+  --surface: 255 255 255; /* white — center pane, right panel, popups */
+  --surface-muted: 240 242 246; /* cool zinc-100/150 — sidebar track, inset wells */
+  --surface-hover: 226 229 235; /* cool zinc-200 — hover/active fills */
   /* content (text) — deepened one stop for stronger contrast on white.
    * Body stays at near-black zinc-950; muted/subtle drop one shade each
    * (zinc-700 / zinc-500) so secondary text doesn't wash out. */
   --content: 9 9 11; /* zinc-950 — near-black, max contrast on white */
   --content-muted: 63 63 70; /* zinc-700 — one stop darker than before */
   --content-subtle: 113 113 122; /* zinc-500 — one stop darker than before */
-  /* borders */
-  --edge: 228 228 231; /* zinc-200 */
-  /* Brighter border for the composer input box. In dark mode the regular
-   * --edge (zinc-800) is nearly invisible against the zinc-900 background,
-   * so the input box outline disappears. This token sits one+ stop brighter
-   * so the box reads clearly at a glance in both themes. Only the composer
+  /* borders. --edge is a cool zinc-300, one stop DEEPER than --surface-hover:
+   * borders must read as separators on white (~1.46:1) — the old zinc-200
+   * equaled the hover fill, so panel dividers / card outlines washed out and
+   * hover feedback had the same value as the border it sat next to. */
+  --edge: 213 216 222; /* cool zinc-300 */
+  /* Structural pane dividers (three-pane shell borders, the draggable
+   * splitter hairlines, the tab-strip underline) — one stop LIGHTER than
+   * --edge: these lines run the full window height, and at the card-border
+   * value they read as heavy rules across the whole UI. Cards and in-panel
+   * separators keep --edge. */
+  --panel-edge: 222 225 231; /* cool zinc-250 (~1.35:1 on white) */
+  /* Composer input box outline — one stop deeper than --edge so the box
+   * reads clearly at a glance in both themes (dark needs the brighter-than-
+   * edge direction, light the deeper-than-edge direction). Only the composer
    * container uses it — panel dividers / cards keep --edge. */
-  --input-edge: 212 212 216; /* zinc-300 */
-  /* accent + status (one shade each; tuned per theme for contrast) */
-  --accent: 5 150 105; /* emerald-600 */
+  --input-edge: 202 205 212;
+  /* accent + status. Light text-bearing tokens sit at the 700 stop: the 600
+   * shades resolved to ~3.2:1 (amber) / ~3.8:1 (emerald) on white — below
+   * the 4.5:1 AA bar for the small colored text they feed (approval prompts,
+   * diff tallies, status labels). Dark keeps its 400/500 shades, which pass
+   * from the other side on near-black. Icons/dots only need the 3:1
+   * non-text bar, but sharing the darker token keeps light chrome coherent. */
+  --accent: 5 150 105; /* emerald-600 — brand: buttons, icons, focus rings */
+  --accent-strong: 4 120 87; /* emerald-700 — small accent TEXT (≥4.5:1) */
   /* Inline code span foreground — plain body color on BOTH themes (GitHub
    * convention): the recess background already marks the span as code, so the
    * text itself stays neutral. Light dropped the accent tint after emerald-600
@@ -123,16 +143,17 @@ div:has(> [role="menu"]) {
    * repainted whenever the user changed the brand color. Consumed via
    * [color:var(--code-fg)] in Markdown.tsx. */
   --code-fg: rgb(var(--content));
-  --danger: 220 38 38; /* red-600 */
-  --warning: 217 119 6; /* amber-600 */
-  --info: 124 58 237; /* violet-600 */
+  --danger: 220 38 38; /* red-600 — already 4.8:1 on white, no change needed */
+  --warning: 180 83 9; /* amber-700 (was 600 / 3.2:1) */
+  --info: 124 58 237; /* violet-600 — 5.7:1 on white */
   /* Fixed git "additions" green — intentionally NOT the brand accent. Diff
    * +/- tallies are semantic (added/removed lines), like --danger red, so
-   * they must not repaint when the user changes the brand color. The value
-   * equals the DEFAULT accent (emerald-600) so the factory look is
-   * unchanged; a custom brand color simply stops bleeding into diff stats.
+   * they must not repaint when the user changes the brand color. Light uses
+   * emerald-700 (5.5:1 on white — the tallies are small text; emerald-600
+   * resolved to 3.8:1), dark emerald-500; together they bracket the DEFAULT
+   * accent, so a custom brand color simply stops bleeding into diff stats.
    * Consumed via text-success in MessageBlocks / TurnFilesCard / git panels. */
-  --success: 5 150 105; /* emerald-600 */
+  --success: 4 120 87; /* emerald-700 */
 
   /* Git history graph lane colors (GitHistoryView commit gutter). Fixed
    * palette on purpose — NOT the semantic tokens: lane rails are identity
@@ -162,6 +183,12 @@ div:has(> [role="menu"]) {
    * Markdown.tsx. */
   --chat-font-weight: 450;
   --user-bubble: 82 82 91; /* default = zinc-500 (neutral gray), R G B triplet */
+  /* Bubble tint strength is theme-scoped (consumed via .user-bubble-fill):
+   * one alpha can't serve both themes. 15% of the default over white lands
+   * ~1.26:1 — a visible soft bubble; over the near-black dark surface the
+   * SAME 15% resolved to ~1.1:1 (the "bubble you can't see" report).
+   * .dark raises it — see there. */
+  --user-bubble-alpha: 0.15;
 
   /* Global side-panel + settings base font size - user-configurable via
    * Settings -> 外观 -> 全局字体大小. Despite the var's legacy name it drives
@@ -228,11 +255,16 @@ div:has(> [role="menu"]) {
   --edge: 45 51 64; /* #2d3340 — slate-tinted to match the muted/hover ramp;
                      * one notch below hover so borders read as separators,
                      * not highlights. */
+  --panel-edge: 45 51 64; /* mirrors dark --edge — the lighter structural
+                           * divider is a light-mode-only concern */
   --input-edge: 95 99 110; /* cool gray — brighter than --edge so the
                             * composer box outline stays visible on the
                             * background. Tuned to read clearly without
                             * being as bright as the muted-text color. */
   --accent: 16 185 129; /* emerald-500 */
+  --accent-strong: 16 185 129; /* emerald-500 — dark accent is already ~6.6:1
+                                 * on the slate surface, so the small-text
+                                 * variant can simply mirror it */
   --danger: 248 113 113; /* red-400 */
   --warning: 251 191 36; /* amber-400 */
   --info: 167 139 250; /* violet-400 */
@@ -259,6 +291,13 @@ div:has(> [role="menu"]) {
    * across themes. */
   --chat-font-weight: 500;
   --user-bubble: 113 113 122; /* default = zinc-500 (\#71717a) */
+  /* Low-alpha gray over #1a1d24 barely moves: 15% ≈ 1.1:1, indistinguishable
+   * from the chat surface. 25% lands the bubble at ~1.30:1 — the same
+   * layering step as --surface-muted vs --surface (sidebar track vs main),
+   * which reads as a clear-but-calm layer in the dark ramp. Applies to ANY
+   * user-picked bubble color, not just the default (the tint strength is the
+   * problem, not the default hue). */
+  --user-bubble-alpha: 0.25;
 
   /* Global side-panel + settings base font size - user-configurable via
    * Settings -> 外观 -> 全局字体大小. Despite the var's legacy name it drives
@@ -739,6 +778,17 @@ body {
       opacity: 1;
     }
   }
+}
+
+/* ───────────── User message bubble fill ─────────────
+ * The bubble color (--user-bubble) is user-configurable, so the fill must
+ * stay an alpha tint of that color — but the tint STRENGTH is a theme
+ * property (dark needs much more over a near-black surface). Consumed via
+ * .user-bubble-fill in ChatPane instead of bg-userBubble/<alpha>, whose
+ * alpha is baked into the class name and can't vary by theme. */
+
+.user-bubble-fill {
+  background-color: rgb(var(--user-bubble) / var(--user-bubble-alpha));
 }
 
 /* ───────────── Status capsule (glass pill + activity popover) ─────────────
