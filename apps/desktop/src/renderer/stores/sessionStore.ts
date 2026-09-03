@@ -24,6 +24,7 @@ import { api } from "@renderer/lib/api.js";
 import { isElectron } from "@renderer/lib/platform.js";
 import { normWorktreeKey } from "@renderer/lib/worktree.js";
 import { translate } from "@renderer/lib/i18n/core.js";
+import { DEFAULT_GESTURE_SETTINGS } from "@renderer/lib/gestures.js";
 import { DEFAULT_EDITOR_THEME_CHOICE, parseEditorThemeChoice, type EditorThemeChoice, type EditorThemeId } from "@renderer/lib/editorThemes.js";
 import {
   DISPLAY_MODE_SETTING_KEY,
@@ -62,6 +63,7 @@ import {
   UI_LAST_SESSION_SETTING_KEY,
   UI_STREAM_SCOPE_SETTING_KEY,
   UI_SHORTCUTS_SETTING_KEY,
+  UI_GESTURES_SETTING_KEY,
   UI_CHAT_DENSITY_SETTING_KEY,
   UI_EDITOR_THEME_SETTING_KEY,
   AUTO_ARCHIVE_SETTING_KEY,
@@ -71,12 +73,15 @@ import {
   WORKTREE_NAMES_SETTING_KEY,
   PROJECT_COLORS_SETTING_KEY,
   ShortcutBindingsSchema,
+  GestureSettingsSchema,
   type AutoArchiveConfig,
   type DisplayMode,
   type LeftBarMode,
   type Locale,
   type VoiceInputMode,
   type VoiceEngine,
+  type GestureSettings,
+  type GestureSequence,
   type ChatDensity,
   type ProjectView,
   type GitWorktreeInfo,
@@ -1598,6 +1603,23 @@ export interface SessionState {
    *  a bound chord mid-recording would both record it AND fire its command). */
   shortcutRecording: boolean;
   setShortcutRecording: (recording: boolean) => void;
+  /** Mouse-gesture settings (enabled / trigger button / binding overrides).
+   *  Persisted as one JSON blob under `ui.gestures`; hydrated in
+   *  initDeferred. Overrides-only, mirroring shortcutOverrides. */
+  gestureSettings: GestureSettings;
+  /** Bind (or rebind) a mouse gesture for `commandId`. Pass `null` to clear
+   *  the override and fall back to the compiled-in default. Persists the
+   *  whole settings blob. */
+  setGestureOverride: (commandId: string, seq: GestureSequence | null) => void;
+  setGestureEnabled: (enabled: boolean) => void;
+  setGestureTrigger: (trigger: "right" | "middle") => void;
+  /** Clear every gesture override, restoring all defaults. Persists. */
+  resetAllGestures: () => void;
+  /** The commandId whose gesture is being re-recorded in the settings panel,
+   *  or null. The global gesture listener stands down while this is set so a
+   *  captured stroke records instead of dispatching. */
+  gestureRecording: string | null;
+  setGestureRecording: (commandId: string | null) => void;
   setPermissionMode: (mode: PermissionMode) => void;
   /** Pick the working-environment chip. When the ACTIVE session is an
    *  un-materialized intent, the choice edits THAT session's envMode + wtStyle
@@ -4011,6 +4033,8 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   editorTheme: DEFAULT_EDITOR_THEME_CHOICE,
   shortcutOverrides: {},
   shortcutRecording: false,
+  gestureSettings: DEFAULT_GESTURE_SETTINGS,
+  gestureRecording: null,
     messagesBySession: {},
     hasMoreMessagesBySession: {},
     loadingMessagesBySession: {},
@@ -4566,6 +4590,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           UI_VOICE_MIC_PERMISSION_SETTING_KEY,
           UI_VOICE_MODEL_DIR_SETTING_KEY,
           AUTO_ARCHIVE_SETTING_KEY,
+          UI_GESTURES_SETTING_KEY,
         ],
       })
       .catch((err) => {
@@ -4618,6 +4643,13 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       if (shortcutsRaw) {
         const parsed = ShortcutBindingsSchema.safeParse(JSON.parse(shortcutsRaw));
         if (parsed.success) set({ shortcutOverrides: parsed.data });
+      }
+      // Mouse gestures — same overrides-only pattern as shortcuts; safeParse
+      // rejects malformed blobs so a corrupt row can't crash the store.
+      const gesturesRaw = ds[UI_GESTURES_SETTING_KEY];
+      if (gesturesRaw) {
+        const parsed = GestureSettingsSchema.safeParse(JSON.parse(gesturesRaw));
+        if (parsed.success) set({ gestureSettings: parsed.data });
       }
     } catch (err) {
       console.error("apply(appearance deferred) failed:", err);
@@ -8081,6 +8113,72 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     } catch (err) {
       console.error("setting.set(shortcuts reset) failed:", err);
     }
+  },
+
+  /** Bind (or rebind) a mouse gesture. Optimistic like setShortcutOverride:
+   *  the in-memory override flips immediately so the next stroke uses it;
+   *  the DB write is fire-and-forget. `null` removes the override, falling
+   *  back to the compiled-in default (or to "no gesture"). */
+  setGestureOverride: (commandId, seq) => {
+    const cur = get().gestureSettings;
+    const overrides = { ...cur.overrides };
+    if (seq && seq.length > 0) overrides[commandId] = seq;
+    else delete overrides[commandId];
+    const next = { ...cur, overrides };
+    set({ gestureSettings: next });
+    try {
+      void api.setting.set({
+        key: UI_GESTURES_SETTING_KEY,
+        value: JSON.stringify(next),
+      });
+    } catch (err) {
+      console.error("setting.set(gestures) failed:", err);
+    }
+  },
+
+  setGestureEnabled: (enabled) => {
+    const next = { ...get().gestureSettings, enabled };
+    set({ gestureSettings: next });
+    try {
+      void api.setting.set({
+        key: UI_GESTURES_SETTING_KEY,
+        value: JSON.stringify(next),
+      });
+    } catch (err) {
+      console.error("setting.set(gestures enabled) failed:", err);
+    }
+  },
+
+  setGestureTrigger: (trigger) => {
+    const next = { ...get().gestureSettings, trigger };
+    set({ gestureSettings: next });
+    try {
+      void api.setting.set({
+        key: UI_GESTURES_SETTING_KEY,
+        value: JSON.stringify(next),
+      });
+    } catch (err) {
+      console.error("setting.set(gestures trigger) failed:", err);
+    }
+  },
+
+  /** Clear all gesture overrides, restoring the compiled-in defaults. */
+  resetAllGestures: () => {
+    const next = { ...get().gestureSettings, overrides: {} };
+    set({ gestureSettings: next });
+    try {
+      void api.setting.set({
+        key: UI_GESTURES_SETTING_KEY,
+        value: JSON.stringify(next),
+      });
+    } catch (err) {
+      console.error("setting.set(gestures reset) failed:", err);
+    }
+  },
+
+  /** Toggle the "recording a gesture" sentinel (holds the target commandId). */
+  setGestureRecording: (commandId) => {
+    set({ gestureRecording: commandId });
   },
 
   /** Toggle the "recording a chord" sentinel. The global keydown listener

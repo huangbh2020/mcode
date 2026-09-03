@@ -17,6 +17,7 @@ import {
   IconInfoCircle,
   IconChartBar,
   IconMicrophone,
+  IconHandMove,
   McpIcon,
   type TablerIconProps,
 } from "@renderer/lib/icons.js";
@@ -25,6 +26,7 @@ import { SkillsPanel } from "./SkillsPanel.js";
 import { McpPanel } from "./McpPanel.js";
 import { AppearancePanel } from "./AppearancePanel.js";
 import { ShortcutsPanel } from "./ShortcutsPanel.js";
+import { GesturesPanel } from "./GesturesPanel.js";
 import { GeneralPanel } from "./GeneralPanel.js";
 import { GitPanel } from "./GitPanel.js";
 import { TerminalPanel } from "./TerminalPanel.js";
@@ -51,7 +53,7 @@ import { AboutPanel } from "./AboutPanel.js";
  * Note: the legacy “Claude CLI 路径” panel was removed - the Agent SDK bundles
  * its own claude binary, so an externally-configured path is no longer used.
  */
-type SectionId = "general" | "custom-models" | "skills" | "mcp" | "appearance" | "shortcuts" | "voice" | "notifications" | "git" | "terminal" | "browser" | "lsp-languages" | "usage" | "about";
+type SectionId = "general" | "custom-models" | "skills" | "mcp" | "appearance" | "shortcuts" | "gestures" | "voice" | "notifications" | "git" | "terminal" | "browser" | "lsp-languages" | "usage" | "about";
 
 interface NavItem {
   id: SectionId;
@@ -92,6 +94,7 @@ const NAV_GROUPS: NavGroup[] = [
     items: [
       { id: "voice", labelKey: "settings.nav.voice", icon: IconMicrophone },
       { id: "shortcuts", labelKey: "settings.nav.shortcuts", icon: IconKeyboard },
+      { id: "gestures", labelKey: "settings.nav.gestures", icon: IconHandMove },
       { id: "notifications", labelKey: "settings.nav.notifications", icon: IconBell },
     ],
   },
@@ -215,6 +218,7 @@ export function SettingsPage() {
           {active === "appearance" && <AppearancePanel />}
           {active === "custom-models" && <CustomModelsPanel />}
           {active === "shortcuts" && <ShortcutsPanel />}
+          {active === "gestures" && <GesturesPanel />}
           {active === "voice" && <VoicePanel />}
           {active === "skills" && <SkillsPanel />}
           {active === "mcp" && <McpPanel />}

@@ -195,6 +195,7 @@ export {
   // Objects
   IconKey,
   IconKeyboard,
+  IconHandMove,
   IconLink,
   IconUnlink,
   IconLock,

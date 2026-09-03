@@ -503,6 +503,27 @@ export const en = {
   "settings.shortcuts.resetTitle": "Reset to the default shortcut",
   "settings.shortcuts.reset": "Reset",
 
+  // ── mouse gestures panel ──
+  "settings.nav.gestures": "Mouse Gestures",
+  "settings.gestures.title": "Mouse gestures",
+  "settings.gestures.desc": "Hold the right mouse button and drag to draw a gesture; press without dragging and the normal context menu opens. Gestures and shortcuts share the same command registry.",
+  "settings.gestures.enabled": "Enable mouse gestures",
+  "settings.gestures.sectionGeneral": "General",
+  "settings.gestures.trigger": "Trigger button",
+  "settings.gestures.triggerRight": "Right button",
+  "settings.gestures.triggerMiddle": "Middle button",
+  "settings.gestures.triggerMiddleNote": "Middle-button triggering disables the browser's default autoscroll",
+  "settings.gestures.resetAll": "Reset all to defaults",
+  "settings.gestures.resetAllTitle": "Clear all custom gestures and restore the default bindings",
+  "settings.gestures.modify": "Change",
+  "settings.gestures.reset": "Reset",
+  "settings.gestures.resetTitle": "Reset to the default gesture",
+  "settings.gestures.unbound": "Unbound",
+  "settings.gestures.recordingHint": "Hold and drag to draw the gesture…",
+  "settings.gestures.conflict": "Already used by \"{label}\"",
+  "settings.gestures.overwrite": "Overwrite",
+  "settings.gestures.footer": "Note: gestures are unavailable over the title-bar drag area and the embedded browser; the terminal's right-click (copy/paste) is unaffected. Each gesture binds exactly one command; conflicts are detected while recording. A press only becomes a gesture after dragging past a threshold, so small jitter can't misfire.",
+
   // ── SkillsPanel ──
   "settings.skills.desc1": "Manage Claude skills (SKILL.md). Project skills live in ",
   "settings.skills.desc2": " of the selected project and are available to that project only. Global skills are imported from Claude Code / Codex / Zcode into ",

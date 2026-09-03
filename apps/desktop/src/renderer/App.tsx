@@ -20,6 +20,7 @@ import { UpdateNotification } from "./components/layout/UpdateNotification.js";
 import { VoiceListeningOverlay } from "./components/layout/VoiceListeningOverlay.js";
 import { useClaudeEvents } from "./hooks/useClaudeEvents.js";
 import { useGlobalShortcuts } from "./hooks/useGlobalShortcuts.js";
+import { useMouseGestures } from "./hooks/useMouseGestures.js";
 import { useSessionStore } from "./stores/sessionStore.js";
 import type { BrowserDevicePreset } from "@contracts/ipc";
 import { api } from "./lib/api.js";
@@ -95,6 +96,9 @@ export function App() {
   // Global keyboard shortcuts (Cmd+K palette, Cmd+B sidebar, etc.). Mounts a
   // single capture-phase window listener; rebinding in settings re-subscribes.
   useGlobalShortcuts();
+  // Global mouse gestures (hold right button + drag). Same listener pattern;
+  // detached entirely while disabled in settings.
+  useMouseGestures();
   // Apply + keep in sync the color scheme (.dark on <html>).
   useTheme();
   // Apply + keep in sync the chat appearance CSS vars (--chat-font-size,

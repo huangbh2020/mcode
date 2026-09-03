@@ -28,7 +28,7 @@
  * identifiers for the settings shortcuts panel.
  */
 import type { ComponentType } from "react";
-import type { Accelerator } from "@contracts/ipc";
+import type { Accelerator, Locale } from "@contracts/ipc";
 import type { SessionState } from "@renderer/stores/sessionStore.js";
 import type { TablerIconProps } from "@renderer/lib/icons.js";
 import { api } from "@renderer/lib/api.js";
@@ -147,6 +147,21 @@ const STATIC_COMMANDS: StaticCommandDef[] = [
       if (s.activeSessionId) s.closeTab(s.activeSessionId);
     },
     available: (s) => s.displayMode === "tabs" && s.openTabs.length > 0,
+  },
+  {
+    id: "session.close",
+    labelKey: "lib.commands.closeSession",
+    group: "会话",
+    keywords: ["close", "session", "chat", "thread", "关闭", "会话"],
+    icon: IconX,
+    // Unlike tab.close (a center-tab command, tabs display-mode only), this
+    // always targets the ACTIVE SESSION — the semantic the default ↓→ mouse
+    // gesture wants. Closes via the same closeTab action, so running-turn
+    // handling (detach, keep streaming) and focus flow are identical.
+    perform: (s) => {
+      if (s.activeSessionId) s.closeTab(s.activeSessionId);
+    },
+    available: (s) => s.activeSessionId !== null,
   },
   {
     id: "voice.dictation",
@@ -476,6 +491,17 @@ export function collectCommands(s: SessionState): CommandDef[] {
   }
 
   return cmds;
+}
+
+/** Resolve a static command's display label by id, WITHOUT the `available`
+ *  filtering `collectCommands` applies — for surfaces that must name a
+ *  command even while it's currently filtered out (the mouse-gesture badge,
+ *  conflict prompts). Dynamic `session.switch.*` ids and unknowns return
+ *  null; callers fall back to whatever they have. */
+export function commandDisplayName(id: string, locale: Locale): string | null {
+  const cmd = STATIC_COMMANDS.find((c) => c.id === id);
+  if (!cmd) return null;
+  return translate(locale, cmd.labelKey);
 }
 
 /** Case-insensitive substring match against a command's label + keywords.

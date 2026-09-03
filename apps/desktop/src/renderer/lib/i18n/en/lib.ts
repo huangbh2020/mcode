@@ -3,8 +3,12 @@ export const en = {
   /* ── shared ── */
   "lib.untitledSession": "Untitled session",
 
+  /* ── lib/gestures.ts + useMouseGestures (gesture badge) ── */
+  "lib.gestures.unrecognized": "No matching gesture",
+
   /* ── lib/commands.ts (command palette labels) ── */
   "lib.commands.closeTab": "Close current tab",
+  "lib.commands.closeSession": "Close current session",
   "lib.commands.openPalette": "Open command palette",
   "lib.commands.displaySingle": "Display mode: single session",
   "lib.commands.displayTabs": "Display mode: tabs",

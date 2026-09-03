@@ -6,8 +6,12 @@ export const zh = {
   /* ── shared ── */
   "lib.untitledSession": "无标题会话",
 
+  /* ── lib/gestures.ts + useMouseGestures (gesture badge) ── */
+  "lib.gestures.unrecognized": "未识别手势",
+
   /* ── lib/commands.ts (command palette labels) ── */
   "lib.commands.closeTab": "关闭当前标签页",
+  "lib.commands.closeSession": "关闭当前会话",
   "lib.commands.openPalette": "打开命令面板",
   "lib.commands.displaySingle": "显示模式：单会话",
   "lib.commands.displayTabs": "显示模式：标签页",

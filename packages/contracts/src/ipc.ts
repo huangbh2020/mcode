@@ -301,6 +301,35 @@ export const ShortcutBindingsSchema = z.record(z.string(), AcceleratorSchema);
 export type ShortcutBindings = z.infer<typeof ShortcutBindingsSchema>;
 
 /**
+ * Setting key under which the mouse-gesture settings are persisted as one
+ * JSON blob: `{ enabled, trigger, overrides }`. `overrides` follows the same
+ * overrides-only rule as `ui.shortcuts`: only user-rebound bindings are
+ * stored (commandId → direction sequence); every other command falls back to
+ * the compiled-in `DEFAULT_GESTURES` table (see lib/gestures.ts), so a version
+ * bump that adds new default gestures takes effect automatically while
+ * preserving older overrides.
+ */
+export const UI_GESTURES_SETTING_KEY = "ui.gestures";
+
+/** One mouse-gesture direction, screen coordinates (y grows downward). */
+export const GestureDirectionSchema = z.enum([
+  "L", "R", "U", "D", "UL", "UR", "DL", "DR",
+]);
+export type GestureDirection = z.infer<typeof GestureDirectionSchema>;
+
+/** A complete gesture stroke: 1–8 quantized direction segments (e.g. ["D","R"]). */
+export const GestureSequenceSchema = z.array(GestureDirectionSchema).min(1).max(8);
+export type GestureSequence = z.infer<typeof GestureSequenceSchema>;
+
+/** Whole-blob schema for `ui.gestures`. */
+export const GestureSettingsSchema = z.object({
+  enabled: z.boolean().default(true),
+  trigger: z.enum(["right", "middle"]).default("right"),
+  overrides: z.record(z.string(), GestureSequenceSchema).default({}),
+});
+export type GestureSettings = z.infer<typeof GestureSettingsSchema>;
+
+/**
  * Setting key under which the user's preferred chat content font size (px)
  * is persisted. Value is a numeric string like "14". Validated/clamped in
  * the renderer store action (12–20 px). Mirrors the displayMode pipeline.

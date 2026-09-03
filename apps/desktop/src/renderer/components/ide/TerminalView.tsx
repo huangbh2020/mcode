@@ -560,6 +560,9 @@ export function TerminalView({
       ref={hostRef}
       className={cn("h-full min-h-0 w-full overflow-hidden", className)}
       data-terminal-session={sessionKey}
+      // Exempt from mouse gestures: the terminal's right-click IS its
+      // copy/paste interaction and must never be swallowed by a stroke.
+      data-gesture-exclude=""
       // xterm needs a non-zero box; parent supplies flex-1 min-h-0.
       style={{ padding: "4px 6px 6px" }}
     />
