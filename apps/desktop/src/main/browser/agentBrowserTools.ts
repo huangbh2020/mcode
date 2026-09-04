@@ -464,7 +464,7 @@ export const BROWSER_TOOL_SPECS: Record<string, BrowserToolSpec> = {
     name: "browser_navigate",
     description:
       "在应用内浏览器中导航到指定 URL(支持 http/https 网页与 file:/// 本地文件,本地文件 Windows 形如 file:///D:/dir/page.html)。若没有打开的浏览器视图会自动创建并显示一个。" +
-      "device 可选——desktop(PC 全宽,默认)/iphone/android(移动端模拟),测试移动端页面时用后两者。导航后需调用 browser_snapshot 读取页面内容。",
+      "device 可选——desktop(桌面全宽,默认)/iphone/android(移动端模拟),测试移动端页面时用后两者。导航后需调用 browser_snapshot 读取页面内容。",
     promptSnippet: "browser_navigate({url, device?}): 打开网页或 file:/// 本地文件;device 可选 desktop/iphone/android",
   },
   browser_snapshot: {

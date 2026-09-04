@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Menu } from "@base-ui/react/menu";
 import { cn } from "@renderer/lib/cn.js";
 import { useI18n } from "@renderer/lib/i18n/index.js";
@@ -39,10 +39,12 @@ export function AttachMenuButton({
   onSlashCommand: () => void;
 }) {
   const { t } = useI18n();
-  // While the menu is open the embedded browser view is suppressed so the
-  // portaled popup stays visible/clickable over the browser's rect.
+  // While the menu is open the embedded browser view is suppressed — but only
+  // when the portaled popup actually reaches the browser's rect (the ref lets
+  // useSuppressBrowserView measure it); otherwise the browser stays visible.
   const [open, setOpen] = useState(false);
-  useSuppressBrowserView(open);
+  const popupRef = useRef<HTMLDivElement>(null);
+  useSuppressBrowserView(open, popupRef);
 
   return (
     <Menu.Root open={open} onOpenChange={setOpen}>
@@ -61,6 +63,7 @@ export function AttachMenuButton({
       <Menu.Portal>
         <Menu.Positioner side="top" align="start">
           <Menu.Popup
+            ref={popupRef}
             className={cn(
               "z-50 min-w-[200px] origin-bottom-left rounded-lg border border-edge bg-surface py-1.5 shadow-2xl",
               "data-[ending-style]:scale-95 data-[ending-style]:opacity-0",

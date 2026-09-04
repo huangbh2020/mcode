@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Menu } from "@base-ui/react/menu";
 import { cn } from "@renderer/lib/cn.js";
 import { IconCheck, IconBolt, IconChevronDown, IconChevronRight } from "@renderer/lib/icons.js";
@@ -62,11 +62,12 @@ export function EffortDropdown({
   // space is plentiful there). Chip mode always opens upward.
   const cascade = stacked && !useNarrowViewport();
   const { t } = useI18n();
-  // While the menu is open the embedded browser view is suppressed so the
-  // portaled popup (which can extend over the browser's rect in narrow/wide
-  // layouts) stays visible and clickable. See useSuppressBrowserView.
+  // While the menu is open the embedded browser view is suppressed — but only
+  // when the portaled popup actually reaches the browser's rect (the ref lets
+  // useSuppressBrowserView measure it). See useSuppressBrowserView.
   const [open, setOpen] = useState(false);
-  useSuppressBrowserView(open);
+  const popupRef = useRef<HTMLDivElement>(null);
+  useSuppressBrowserView(open, popupRef);
   const effort = useSessionStore((s) => s.effort);
   const setEffort = useSessionStore((s) => s.setEffort);
   const providerId = useSessionStore((s) => s.providerId);
@@ -123,6 +124,7 @@ export function EffortDropdown({
           sideOffset={cascade ? 6 : 0}
         >
           <Menu.Popup
+            ref={popupRef}
             className={cn(
               "z-50 min-w-[240px] rounded-lg border border-edge bg-surface py-1.5 shadow-2xl",
               cascade ? "origin-top-left" : "origin-bottom-left",

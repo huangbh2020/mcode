@@ -2243,12 +2243,6 @@ export const LEFT_WIDTH_PCT_MAX = 40;
 export const LEFT_WIDTH_PCT_DEFAULT = 20;
 export const RIGHT_WIDTH_MIN = 240;
 export const RIGHT_WIDTH_MAX = 640;
-/** Right-panel width that fits the sidebar browser's default iPhone 14 Pro
- *  emulation (393 CSS pt) plus the 48px icon rail + border. When the browser
- *  tab is FIRST opened (no tabs yet), the panel is widened to at least this so
- *  the mobile view isn't clamped narrower than a real phone. Never shrinks a
- *  wider panel; falls inside RIGHT_WIDTH_MAX. */
-export const RIGHT_WIDTH_BROWSER_FIT = 442;
 export const BOTTOM_TERMINAL_HEIGHT_MIN = 80;
 export const BOTTOM_TERMINAL_HEIGHT_MAX = 600;
 export const EDITOR_WIDTH_PCT_MIN = 20;
@@ -3537,13 +3531,14 @@ const LIVE_FILES_ID = "current";
  *
  *  Attach target resolution (in priority order):
  *  1. The trailing assistant message of the currently-OPEN turn (turnMeta with
- *     no endedAt) - the normal mid-stream case.
- *  2. The most recent assistant message - the realistic late-arrival case.
- *     turn.files is emitted from flushFinal (after an async freeze()), which
- *     runs AFTER the `result` message already emitted turn.done. So by the
- *     time turn.files reaches the renderer the turn is closed and (1) finds
- *     nothing; the file list still belongs to this just-closed turn, so we
- *     attach it to the turn's (now-ended) trailing assistant message WITHOUT
+ *     no endedAt) - the normal end-of-turn case: flushFinal emits turn.files
+ *     BEFORE its turn.done, so the turn is still open when the card lands.
+ *  2. The most recent assistant message - the interrupted-turn case. After a
+ *     user stop, interrupt() stamps endedAt on every open turn locally, and
+ *     the aborted turn's flushFinal (running while the SDK generator unwinds)
+ *     emits its turn.files only afterwards - the turn is closed by then and
+ *     (1) finds nothing. The file list still belongs to that just-stopped
+ *     turn, so we attach it to the most recent assistant message WITHOUT
  *     opening a new turn. Opening a new turn here would spawn a phantom
  *     "开始 · 用时 <1s" stat row that never finalizes.
  *  3. A brand-new assistant message (no turnMeta) - defensive fallback when no
@@ -3570,14 +3565,14 @@ function upsertLiveTurnFilesBlock(messages: ChatMessage[], files: TurnFileEntry[
   let next = messages;
   let targetIndex = findOpenTurnTrailingAssistant(next);
   if (targetIndex === -1) {
-    // turn.files normally arrives at the very end of the stream (flushFinal),
-    // but the SDK emits turn.done from the `result` message BEFORE flushFinal
-    // runs its async freeze() + emit. So by the time turn.files reaches the
-    // renderer, turn.done has ALREADY been processed: every assistant message
-    // of this turn carries a turnMeta.endedAt, and findOpenTurnTrailingAssistant
-    // returns -1. The file list still belongs to THIS just-closed turn, so
-    // fall back to the most recent assistant message (the turn's trailing
-    // one, now ended) and attach the block there - WITHOUT opening a new turn.
+    // Normal end-of-turn arrival finds the turn still open (flushFinal emits
+    // turn.files BEFORE its turn.done). Reaching here means the turn was
+    // closed locally already - the interrupted-turn path, where interrupt()
+    // stamped endedAt on every open turn while the aborted turn's
+    // flushFinal() was still unwinding. The file list still belongs to THAT
+    // turn, so fall back to the most recent assistant message and attach the
+    // block there - WITHOUT opening a new turn (a phantom "开始 · 用时" stat
+    // row would never finalize).
     for (let i = next.length - 1; i >= 0; i--) {
       const m = next[i];
       if (m && m.role === "assistant") {
@@ -6980,9 +6975,23 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       //     assistant message — the per-turn card the user actually sees in
       //     the stream. Frozen in place at turn.done, persisted via the
       //     blocks round-trip, so every turn keeps its own card in history.
+      // Collect the rows the card surgery actually touches so they can be
+      // persisted below — the carrier message is NOT always the last one in
+      // the array (on the interrupt-then-send path the queued prompt's user
+      // bubble is appended before this event lands), so persisting
+      // `list[length-1]` wrote the wrong row and lost the card from the DB.
+      const changedMessages: ChatMessage[] = [];
       set((s) => {
         const list = s.messagesBySession[sid] ?? EMPTY_MESSAGES;
         const next = upsertLiveTurnFilesBlock(list, e.files);
+        if (next !== list) {
+          // upsertLiveTurnFilesBlock only replaces/appends touched messages —
+          // every other row keeps its reference, so index-wise inequality is
+          // an exact changed-rows diff.
+          for (let i = 0; i < next.length; i++) {
+            if (next[i] !== list[i]) changedMessages.push(next[i]);
+          }
+        }
         return {
           turnFilesBySession: { ...s.turnFilesBySession, [sid]: e.files },
           messagesBySession: next === list
@@ -6990,22 +6999,14 @@ export const useSessionStore = create<SessionState>((set, get) => ({
             : { ...s.messagesBySession, [sid]: next },
         };
       });
-      // turn.files is emitted from flushFinal(), which runs AFTER the `result`
-      // message already emitted turn.done. So the saveMessages fired at turn.done
-      // captured a snapshot WITHOUT this card. Persist just the changed message
-      // now (the card is attached to the just-closed turn's trailing assistant
-      // message) so it survives restart - otherwise reopening the session loses
-      // every turn's modified-files card. IPC ordering preserves "last write
-      // wins" since this call lands after the turn.done one.
-      //
-      // Incremental upsert: only the trailing assistant message gained a block,
-      // so we only need to write that one row instead of the whole session.
-      {
-        const list = get().messagesBySession[sid];
-        if (list && list.length > 0) {
-          const last = list[list.length - 1];
-          void api.session.upsertMessages({ sessionId: sid, messages: toRecords(sid, [last]) });
-        }
+      // Persist the touched rows so the card survives restart. This is the
+      // ONLY persist some arrivals get: an interrupted turn's closing
+      // turn.done{interrupted} is dropped by the stale-guard above, so its
+      // late turn.files never gets a turn.done persist pass. IPC ordering
+      // preserves "last write wins" for the normal path (this lands after
+      // the turn.done persist, which already covers the card).
+      if (changedMessages.length > 0) {
+        void api.session.upsertMessages({ sessionId: sid, messages: toRecords(sid, changedMessages) });
       }
       return;
     }
@@ -7616,8 +7617,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     // Reveal the browser sidebar + stage the URL. BrowserPanel opens it in a
     // NEW tab: when tabs already exist it creates one for the URL; when none
     // exist (panel first opened) the first-tab effect loads it into the
-    // initial tab. Goes through setRightPanelTab so the first-open panel-width
-    // fit (iPhone 14 Pro) applies here too.
+    // initial tab.
     get().setRightPanelTab("browser");
     set({ rightOpen: true, pendingBrowserUrl: url });
   },
@@ -9091,18 +9091,6 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   /* ─────────────────── IDE right-panel actions ─────────────────── */
 
   setRightPanelTab: (tab) => {
-    // First-time browser open: the sidebar browser defaults to the iPhone 14
-    // Pro preset (393 CSS pt wide). If the right panel is narrower than that
-    // (default 360), widen it so the mobile view renders at true device size
-    // instead of being clamped by syncBounds to the narrow stage. Only on the
-    // FIRST open (no tabs yet) and never shrinks an already-wider panel — the
-    // user's manually-dragged width is respected from then on.
-    if (tab === "browser") {
-      const s = get();
-      if (s.browserTabs.length === 0 && s.rightWidth < RIGHT_WIDTH_BROWSER_FIT) {
-        set({ rightWidth: clampRightWidth(RIGHT_WIDTH_BROWSER_FIT) });
-      }
-    }
     set({ rightPanelTab: tab });
     void api.setting.set({ key: UI_RIGHT_PANEL_TAB_SETTING_KEY, value: tab }).catch((err) => {
       console.error("setting.set(rightPanelTab) failed:", err);

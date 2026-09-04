@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Menu } from "@base-ui/react/menu";
 import { cn } from "@renderer/lib/cn.js";
 import { IconCheck, IconChevronDown, IconDots } from "@renderer/lib/icons.js";
@@ -33,8 +33,9 @@ import { useI18n } from "@renderer/lib/i18n/index.js";
 export function SessionDirectoryChip({ sessionId }: { sessionId: string | null }) {
   const { t } = useI18n();
   const [open, setOpen] = useState(false);
-  useSuppressBrowserView(open);
-
+  const popupRef = useRef<HTMLDivElement>(null);
+  // manageMenu is declared further down (before the early return); a ref
+  // mirror here would trip TDZ — the suppression hook call sits next to it.
   const projects = useSessionStore((s) => s.projects);
   const projectColors = useSessionStore((s) => s.projectColors);
   const moveSession = useSessionStore((s) => s.moveSession);
@@ -79,6 +80,9 @@ export function SessionDirectoryChip({ sessionId }: { sessionId: string | null }
   // ── Manage menu (⋯ icon on a project row) + its dialogs. ──
   const [manageMenu, setManageMenu] = useState<ManageMenuState | null>(null);
   const [renaming, setRenaming] = useState<RenameTarget | null>(null);
+  // The manage menu closes the switcher before opening, so it must keep the
+  // suppression alive on its own — with no popup ref it suppresses everywhere.
+  useSuppressBrowserView(open || manageMenu !== null, popupRef);
   const manageAnchor = useCursorAnchor(manageMenu);
   const managed = manageMenu?.project ?? null;
 
@@ -147,6 +151,7 @@ export function SessionDirectoryChip({ sessionId }: { sessionId: string | null }
           <Menu.Portal>
             <Menu.Positioner side="top" align="start" sideOffset={4}>
               <Menu.Popup
+                ref={popupRef}
                 className={cn(
                   "z-50 min-w-[200px] origin-bottom-left rounded-lg border border-edge bg-surface py-1 shadow-2xl",
                   "data-[ending-style]:scale-95 data-[ending-style]:opacity-0",

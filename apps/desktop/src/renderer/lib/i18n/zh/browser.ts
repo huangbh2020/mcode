@@ -45,7 +45,7 @@ export const zh = {
   "browser.device": "设备",
   "browser.desktopDevice": "桌面端",
   "browser.customDevice": "自定义",
-  "browser.pcFullWidth": "PC 全宽",
+  "browser.fullWidth": "全宽",
   "browser.deviceTitle": "设备: {label} {dims}",
   "browser.customWidthTitle": "自定义宽度 (px)",
   "browser.customWidthAria": "自定义宽度",

@@ -42,7 +42,7 @@ export const en = {
   "browser.device": "Device",
   "browser.desktopDevice": "Desktop",
   "browser.customDevice": "Custom",
-  "browser.pcFullWidth": "PC full width",
+  "browser.fullWidth": "Full width",
   "browser.deviceTitle": "Device: {label} {dims}",
   "browser.customWidthTitle": "Custom width (px)",
   "browser.customWidthAria": "Custom width",

@@ -179,7 +179,14 @@ export function ModelDropdown({
       setHint(null);
     }
   }, [unselected]);
-  useSuppressBrowserView(open || hint !== null);
+  // Suppression covers the menu AND the hint bubble (both portal above the
+  // DOM) — but only when one of them actually reaches the browser's rect;
+  // unmounted popups' refs measure null and are skipped (see
+  // useSuppressBrowserView).
+  const popupRef = useRef<HTMLDivElement>(null);
+  const subPopupRef = useRef<HTMLDivElement>(null);
+  const hintRef = useRef<HTMLDivElement>(null);
+  useSuppressBrowserView(open || hint !== null, [popupRef, subPopupRef, hintRef]);
 
   const pickCustomModel = (cfgId: string, modelId: string) => {
     setCustomModel(cfgId, modelId);
@@ -239,6 +246,7 @@ export function ModelDropdown({
           sideOffset={cascade ? 6 : 0}
         >
           <Menu.Popup
+            ref={popupRef}
             className={cn(
               "z-50 min-w-[260px] rounded-lg border border-edge bg-surface py-1.5 shadow-2xl",
               cascade ? "origin-top-left" : "origin-bottom-left",
@@ -322,6 +330,7 @@ export function ModelDropdown({
                       <Menu.Portal>
                         <Menu.Positioner side="right" align="start" sideOffset={4}>
                           <Menu.Popup
+                            ref={subPopupRef}
                             className={cn(
                               "z-50 min-w-[220px] origin-left rounded-lg border border-edge bg-surface py-1.5 shadow-2xl",
                               "data-[ending-style]:scale-95 data-[ending-style]:opacity-0",
@@ -406,6 +415,7 @@ export function ModelDropdown({
                       <Menu.Portal>
                         <Menu.Positioner side="right" align="start" sideOffset={4}>
                           <Menu.Popup
+                            ref={subPopupRef}
                             className={cn(
                               "z-50 min-w-[220px] origin-left rounded-lg border border-edge bg-surface py-1.5 shadow-2xl",
                               "data-[ending-style]:scale-95 data-[ending-style]:opacity-0",
@@ -495,6 +505,7 @@ export function ModelDropdown({
       {hint &&
         createPortal(
           <div
+            ref={hintRef}
             className="model-pick-hint flex items-center gap-1.5 rounded-lg border border-warning/40 bg-surface px-2.5 py-1.5 text-xs font-medium text-warning shadow-lg"
             style={{ left: hint.x, top: hint.y }}
           >

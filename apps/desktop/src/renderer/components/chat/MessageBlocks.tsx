@@ -601,7 +601,7 @@ export function TurnPanel({
   return (
     <div className="[font-size:var(--chat-fs-sm)]">
       <div className="my-2 flex items-center gap-2.5">
-        <div className="h-px flex-1 bg-gradient-to-r from-transparent to-edge" />
+        <div className="turn-pill-line-r h-px flex-1" />
         <button
           onClick={(e) => {
             // Pause maintainScrollAtEnd BEFORE toggling so LegendList doesn't
@@ -609,7 +609,7 @@ export function TurnPanel({
             onToggleCollapse?.();
             toggleHoldPosition(e, setOpen);
           }}
-          className="flex items-center gap-1.5 rounded-full border border-edge bg-surface-muted px-3 py-1 text-xs shadow-sm transition-colors hover:bg-surface-hover/60"
+          className="turn-pill-fill flex items-center gap-1.5 rounded-full border border-edge px-3 py-1 text-xs shadow-sm transition-colors hover:bg-surface-hover/60"
         >
           {turnActive && (
             <span
@@ -633,7 +633,7 @@ export function TurnPanel({
               ends so historical cards never show a stale operation. */}
           {turnActive && <CurrentOpTicker op={runningTool} turnActive={turnActive} />}
         </button>
-        <div className="h-px flex-1 bg-gradient-to-l from-transparent to-edge" />
+        <div className="turn-pill-line-l h-px flex-1" />
       </div>
       {/* Smooth height transition via the grid-template-rows 0fr→1fr trick.
           The outer grid animates its single track between 0 (collapsed) and

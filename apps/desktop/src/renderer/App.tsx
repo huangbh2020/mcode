@@ -21,6 +21,7 @@ import { VoiceListeningOverlay } from "./components/layout/VoiceListeningOverlay
 import { useClaudeEvents } from "./hooks/useClaudeEvents.js";
 import { useGlobalShortcuts } from "./hooks/useGlobalShortcuts.js";
 import { useMouseGestures } from "./hooks/useMouseGestures.js";
+import { useSuppressBrowserView } from "./hooks/useSuppressBrowserView.js";
 import { useSessionStore } from "./stores/sessionStore.js";
 import type { BrowserDevicePreset } from "@contracts/ipc";
 import { api } from "./lib/api.js";
@@ -658,14 +659,11 @@ function WidePlanDialog() {
     activeSessionId ? !!s.pendingPlanApprovalBySession[activeSessionId] : false,
   );
   const closePlanDrawer = useSessionStore((s) => s.closePlanDrawer);
-  const suppressBrowserView = useSessionStore((s) => s.suppressBrowserView);
 
   const open = widePanelOpen && planTabActive && !!planText;
-  useEffect(() => {
-    if (!open) return;
-    suppressBrowserView(true);
-    return () => suppressBrowserView(false);
-  }, [open, suppressBrowserView]);
+  // Full-window DOM overlay: the browser view must hide while it's up (no
+  // popup ref — the overlay always "overlaps").
+  useSuppressBrowserView(open);
 
   if (!open) return null;
   return (

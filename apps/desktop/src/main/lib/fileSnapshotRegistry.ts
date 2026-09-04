@@ -12,9 +12,13 @@ import { FileSnapshot } from "./fileSnapshot.js";
 
 const snapshots = new Map<string, FileSnapshot>();
 
-/** Get (or create) the snapshot for a session. The runtime calls this
- *  on first sendTurn; the provider calls it on every startTurn to look
- *  up the latest instance. */
+/** Get (or create) the snapshot for a session. The runtime REPLACES the
+ *  entry at each sendTurn (dropFileSnapshot — an in-place clear() would
+ *  race an interrupted turn's late freeze() and leak its `frozen` flag
+ *  into the new turn), so a captured instance is TURN-scoped: adapters
+ *  must freeze/emit via the instance they captured at startTurn, while
+ *  recordPre lookups made during the turn resolve to the current turn's
+ *  instance. */
 export function getFileSnapshot(sessionId: string): FileSnapshot {
   let snap = snapshots.get(sessionId);
   if (!snap) {

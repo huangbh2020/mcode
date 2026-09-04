@@ -18,7 +18,6 @@ import { useI18n, type MessageId } from "@renderer/lib/i18n/index.js";
  * Pixel 7, …) pass through untranslated. */
 const PRESET_LABEL_KEYS: Partial<Record<BrowserDevicePreset, MessageId>> = {
   desktop: "browser.desktopDevice",
-  pc: "browser.desktopDevice",
   custom: "browser.customDevice",
 };
 
@@ -72,13 +71,12 @@ export function DeviceToolbar({
     device === "custom"
       ? `${customWidth ?? 390}×${customHeight ?? 844}`
       : device === "desktop"
-        ? t("browser.pcFullWidth")
+        ? t("browser.fullWidth")
         : landscape
           ? `${current?.height ?? ""}×${current?.width ?? ""}`
           : `${current?.width ?? ""}×${current?.height ?? ""}`;
-  // "desktop" is the no-emulation default but is intentionally not part of
-  // BROWSER_DEVICE_PRESETS (see contracts), so `current` is undefined for it —
-  // resolve a friendly label so the trigger never shows the raw id.
+  // "desktop" is the no-emulation default; resolve a friendly label so the
+  // trigger never shows the raw id.
   const displayLabel =
     device === "desktop" ? t("browser.desktopDevice") : presetLabel(device, current?.label ?? device);
 
@@ -100,7 +98,7 @@ export function DeviceToolbar({
             className="max-w-[10rem]"
           >
             <span className="flex min-w-0 items-center gap-1.5">
-              {device === "desktop" || device === "pc" ? (
+              {device === "desktop" ? (
                 <IconDeviceDesktop size={14} className="shrink-0" />
               ) : (
                 <IconDeviceMobile size={14} className="shrink-0" />
@@ -119,7 +117,7 @@ export function DeviceToolbar({
                     <Select.Item key={p.id} value={p.id}>
                       <Select.ItemText>
                         <span className="flex items-center gap-1.5">
-                          {p.id === "desktop" || p.id === "pc" ? (
+                          {p.id === "desktop" ? (
                             <IconDeviceDesktop size={14} className="shrink-0" />
                           ) : (
                             <IconDeviceMobile size={14} className="shrink-0" />

@@ -263,11 +263,11 @@ const MOBILE_USER_AGENTS: Partial<Record<BrowserDevicePreset, DeviceUaSpec>> = {
 };
 
 /** Whether a device preset should present a mobile UA. Desktop (no emulation)
- *  and the 1920×1080 "pc" preset are desktop; the phone/tablet presets always
- *  mobile; "custom" is mobile only while narrow enough to be a phone/tablet
- *  viewport (wide custom sizes behave like desktop pages). */
+ *  is desktop; the phone/tablet presets always mobile; "custom" is mobile only
+ *  while narrow enough to be a phone/tablet viewport (wide custom sizes behave
+ *  like desktop pages). */
 function isMobileUa(device: BrowserDevicePreset, effWidth: number): boolean {
-  if (device === "desktop" || device === "pc") return false;
+  if (device === "desktop") return false;
   if (device === "custom") return effWidth <= 1024;
   return true;
 }
@@ -625,10 +625,17 @@ class BrowserManagerImpl {
   /** Attach + restore last bounds. Called when the panel reopens. When the
    *  view was created by the agent (never measured by the renderer), lastBounds
    *  is still HIDDEN_BOUNDS — fall back to a default on-screen region so the
-   *  page is visible and capturable instead of a 1x1 offscreen blank. */
+   *  page is visible and capturable instead of a 1x1 offscreen blank.
+   *
+   *  Idempotent: re-showing an already-visible view is a no-op. This matters
+   *  because addChildView on an attached view re-orders/re-hosts the native
+   *  surface — the compositor drops a frame and the panel visibly flashes
+   *  white. The renderer calls show() liberally (popup open/close resyncs), so
+   *  the dedupe here is what keeps redundant calls flicker-free. */
   show(id: string): BrowserOpResult {
     const live = this.get(id);
     if (!live) return { ok: false, error: "浏览器不存在或已关闭" };
+    if (live.visible) return { ok: true };
     const win = getMainWindow();
     if (!win || win.isDestroyed()) return { ok: false, error: "主窗口未就绪" };
     try {
@@ -648,10 +655,11 @@ class BrowserManagerImpl {
    *  toggling the panel back on restores the page. Dimensions are PRESERVED
    *  (only x/y move offscreen) so capturePage still reads a valid backing
    *  store from the hidden view — agent screenshots of a hidden panel don't
-   *  need to flash the page on-screen. */
+   *  need to flash the page on-screen. Idempotent (no-op when already hidden). */
   hide(id: string): BrowserOpResult {
     const live = this.get(id);
     if (!live) return { ok: false, error: "浏览器不存在或已关闭" };
+    if (!live.visible) return { ok: true };
     try {
       live.view.setBounds({ x: -9999, y: -9999, width: live.lastBounds.width, height: live.lastBounds.height });
       live.visible = false;

@@ -22,9 +22,10 @@ import { useI18n } from "@renderer/lib/i18n/index.js";
  *    - Files   → shows FilesPanel in the main area
  *    - Git     → shows GitPanel in the main area
  *    - Browser → toggles an embedded browser panel in the main area
- *      (mobile-first sidebar mode). Clicking again closes it. The PC-fullscreen
- *      overlay is a separate container rendered at the App root; while that
- *      overlay is open the right panel isn't visible at all.
+ *      (sidebar mode, desktop-sized pages by default). Clicking again closes
+ *      it. The PC-fullscreen overlay is a separate container rendered at the
+ *      App root; while that overlay is open the right panel isn't visible at
+ *      all.
  *
  *  The active panel (files / git) is read from / written to the session store
  *  (persisted in the settings table), so it survives restarts. The browser tab

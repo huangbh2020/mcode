@@ -4,7 +4,7 @@ import type { editor } from "monaco-editor";
 import { api } from "@renderer/lib/api.js";
 import { cn } from "@renderer/lib/cn.js";
 import { extname } from "@renderer/lib/path.js";
-import { useSessionStore } from "@renderer/stores/sessionStore.js";
+import { useSessionStore, selectActiveEnvPath } from "@renderer/stores/sessionStore.js";
 import { useToastStore } from "@renderer/stores/toastStore.js";
 import type { TurnFileEntry } from "@renderer/lib/turnFiles.js";
 import { ideDirtyTracker } from "./OpenTabsBar.js";
@@ -21,6 +21,8 @@ import {
   closeLspDocument,
   notifyLspChange,
   notifyLspSave,
+  bindModelToPath,
+  unbindModel,
   filePathToUri,
   monacoLanguageToLsp,
   LSP_LANGUAGE_DISPLAY,
@@ -1249,6 +1251,13 @@ export function DiffPane({
   // on unmount (widget first, then models).
   const editorRef = useRef<import("monaco-editor").editor.IDiffEditor | null>(null);
   const monacoRef = useRef<typeof import("monaco-editor") | null>(null);
+  // The diff's two sides are ANONYMOUS Monaco models (inmemory://model/N) —
+  // kept in state so the LSP binding effect re-runs once the DiffEditor has
+  // actually mounted (onMount) and whenever a file switch recreates them.
+  const [diffModels, setDiffModels] = useState<{
+    original: import("monaco-editor").editor.ITextModel;
+    modified: import("monaco-editor").editor.ITextModel;
+  } | null>(null);
 
   useEffect(() => {
     // History pair: both sides are already known — don't touch the disk.
@@ -1270,6 +1279,30 @@ export function DiffPane({
       cancelled = true;
     };
   }, [filePath, after]);
+
+  // LSP navigation in the diff view (F12 / Ctrl+F12 / Shift+F12 / hover /
+  // references peek): ① bind the anonymous models to the real file so
+  // requests resolve to a file:// URI the server knows; ② didOpen the file
+  // on the server (lazily starts it; the diff may be the FIRST editor
+  // surface the user opens — e.g. 审查 on a turn-files card — before
+  // EditPane has ever run). The workspace follows the providers' own routing
+  // (selectActiveEnvPath, worktree-aware) so the doc and the queries land on
+  // the same server. History diffs (`after != null`) query against the
+  // on-disk file, so positions in heavily changed regions are approximate —
+  // the same trade-off as any diff review surface; unchanged code navigates
+  // exactly.
+  useEffect(() => {
+    if (!diffModels) return;
+    bindModelToPath(diffModels.original, filePath);
+    bindModelToPath(diffModels.modified, filePath);
+    const envPath = selectActiveEnvPath(useSessionStore.getState());
+    if (envPath) void openLspDocument(envPath, filePath, language);
+    return () => {
+      unbindModel(diffModels.original);
+      unbindModel(diffModels.modified);
+      if (envPath) void closeLspDocument(envPath, filePath);
+    };
+  }, [diffModels, filePath, language]);
 
   // On unmount: dispose the widget FIRST, then the models. This is the
   // reverse of what the library does by default, and avoids the listener race.
@@ -1301,41 +1334,56 @@ export function DiffPane({
   }
 
   return (
-    <DiffEditor
-      height="100%"
-      language={language}
-      original={before}
-      modified={modified}
-      theme={theme}
-      // Prevent the library from disposing models on unmount — we handle it
-      // ourselves (widget first) to avoid the dispose-order race.
-      keepCurrentOriginalModel
-      keepCurrentModifiedModel
-      loading={<div className="text-[11px] text-content-subtle">{t("ide.editor.loadingDiff")}</div>}
-      onMount={(editor, monaco) => {
-        editorRef.current = editor;
-        monacoRef.current = monaco;
-      }}
-      options={{
-        readOnly: true,
-        renderSideBySide: true,
-        // Center column is often <900px (chat | editor split). Monaco's default
-        // then collapses side-by-side into inline mode, which paints TWO line-
-        // number gutters (original | modified) on a single pane — looks like a
-        // duplicated 行号栏. Keep true side-by-side regardless of width.
-        useInlineViewWhenSpaceIsLimited: false,
-        minimap: { enabled: false },
-        fontSize: 12,
-        scrollBeyondLastLine: false,
-        automaticLayout: true,
-        // Slim gutters: no breakpoint glyph column, tighter line-number width.
-        glyphMargin: false,
-        folding: false,
-        lineDecorationsWidth: 8,
-        lineNumbersMinChars: 3,
-        scrollbar: { verticalScrollbarSize: 8, horizontalScrollbarSize: 8 },
-      }}
-    />
+    <div className="relative h-full">
+      <DiffEditor
+        height="100%"
+        language={language}
+        original={before}
+        modified={modified}
+        theme={theme}
+        // Prevent the library from disposing models on unmount — we handle it
+        // ourselves (widget first) to avoid the dispose-order race.
+        keepCurrentOriginalModel
+        keepCurrentModifiedModel
+        loading={<div className="text-[11px] text-content-subtle">{t("ide.editor.loadingDiff")}</div>}
+        onMount={(editor, monaco) => {
+          editorRef.current = editor;
+          monacoRef.current = monaco;
+          // Register the navigation providers for this language (idempotent)
+          // and hand this mount's models to the LSP binding effect above.
+          ensureLspProviders(monaco, language);
+          const originalModel = editor.getOriginalEditor().getModel();
+          const modifiedModel = editor.getModifiedEditor().getModel();
+          if (originalModel && modifiedModel) {
+            setDiffModels({ original: originalModel, modified: modifiedModel });
+          }
+        }}
+        options={{
+          readOnly: true,
+          renderSideBySide: true,
+          // Center column is often <900px (chat | editor split). Monaco's default
+          // then collapses side-by-side into inline mode, which paints TWO line-
+          // number gutters (original | modified) on a single pane — looks like a
+          // duplicated 行号栏. Keep true side-by-side regardless of width.
+          useInlineViewWhenSpaceIsLimited: false,
+          minimap: { enabled: false },
+          fontSize: 12,
+          scrollBeyondLastLine: false,
+          automaticLayout: true,
+          // Slim gutters: no breakpoint glyph column, tighter line-number width.
+          glyphMargin: false,
+          folding: false,
+          lineDecorationsWidth: 8,
+          lineNumbersMinChars: 3,
+          scrollbar: { verticalScrollbarSize: 8, horizontalScrollbarSize: 8 },
+        }}
+      />
+      {/* LSP goto activity pill — bottom-center, non-blocking, same as the
+          edit pane: a diff-pane F12 can take seconds on a cold server, and
+          cross-file jumps hand off to the store, so the query needs visible
+          feedback. */}
+      <GotoActivityPill />
+    </div>
   );
 }
 

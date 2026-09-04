@@ -97,7 +97,7 @@ function SelectIcon({ className, ...props }: SelectIconProps) {
 /* ───────── Popup ───────── */
 
 export interface SelectPopupProps
-  extends React.ComponentPropsWithoutRef<typeof BaseSelect.Popup> {}
+  extends React.ComponentPropsWithRef<typeof BaseSelect.Popup> {}
 
 function SelectPopup({ className, ...props }: SelectPopupProps) {
   return (

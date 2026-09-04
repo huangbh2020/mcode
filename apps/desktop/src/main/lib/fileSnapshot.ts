@@ -160,10 +160,13 @@ export class FileSnapshot {
     return restoreFiles(cwd, ordered);
   }
 
-  /** Drop the restore records. Called by the runtime after a
-   *  successful rewind (so the next turn starts clean) and when a
-   *  session is disposed. Also called at the start of each turn
-   *  to bound memory. */
+  /** Drop the restore records. Now only called after a successful LIVE
+   *  rewind (the contents are back on disk, nothing left to restore).
+   *  Turn start and session dispose drop the whole registry entry
+   *  instead (fileSnapshotRegistry.dropFileSnapshot) — an interrupted
+   *  turn's adapter keeps its own instance, so its late freeze() still
+   *  sees the records and its `frozen` flag can't leak into the next
+   *  turn's snapshot. */
   clear(): void {
     this.originals.clear();
     this.frozen = false;

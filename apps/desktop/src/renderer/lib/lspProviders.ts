@@ -58,6 +58,24 @@ const registeredLanguages = new Set<string>();
 /** Disposers for all registered providers (kept for app lifetime). */
 const providerDisposers: IDisposable[] = [];
 
+/** Diff panes show ANONYMOUS Monaco models (inmemory://model/N) — the LSP
+ *  server only knows real file:// URIs, so requests arriving from a diff
+ *  model need the model→file mapping below. Keyed by model URI string;
+ *  DiffPane binds on mount / file switch and unbinds on unmount. */
+const modelPathBindings = new Map<string, string>();
+
+/** Bind an anonymous model (typically one of DiffPane's two sides) to the
+ *  real file it displays, so LSP requests can address the file. */
+export function bindModelToPath(model: { uri: Uri }, filePath: string): void {
+  modelPathBindings.set(model.uri.toString(), filePath);
+}
+
+/** Release a binding established by `bindModelToPath`. Safe on unknown models
+ *  (no-op) — models may already be gone at cleanup time. */
+export function unbindModel(model: { uri: Uri } | null | undefined): void {
+  if (model) modelPathBindings.delete(model.uri.toString());
+}
+
 /** Register definition/references/hover providers for `languageId` if not
  *  already registered. Returns nothing; disposers are retained internally. */
 export function ensureLspProviders(
@@ -123,10 +141,10 @@ export function ensureLspProviders(
           // Extract the path from the RAW LSP result (not from Monaco's Uri,
           // which lowercases the Windows drive letter). This preserves the
           // original case so openFileInIde's path matches the store.
+          const currentPath = uriToFilePath(decodeURIComponentSafe(docUri));
           const firstRaw = firstRawLocation(result);
           if (firstRaw) {
             const targetPath = uriToFilePath(decodeURIComponentSafe(firstRaw.uri));
-            const currentPath = uriToFilePath(decodeURIComponentSafe(docUri));
             if (targetPath !== currentPath) {
               // Cross-file: open via the store (which records the outgoing
               // location into the navigation history itself).
@@ -140,15 +158,18 @@ export function ensureLspProviders(
             }
           }
           // Same-file (or raw extraction failed): return locations so Monaco
-          // navigates natively. Monaco's jump bypasses the store, so record the
-          // pre-jump position here for Alt+← (navigation history).
+          // navigates natively. Locations pointing at this file are rewritten
+          // onto the model's own URI (a no-op in the edit pane; in the diff
+          // pane this is what makes in-pane jumps work at all). Monaco's jump
+          // bypasses the store, so record the pre-jump position here for
+          // Alt+← (navigation history).
           useSessionStore.getState().pushNavHistory({
-            filePath: uriToFilePath(decodeURIComponentSafe(docUri)),
+            filePath: currentPath,
             line: position.lineNumber,
             column: position.column,
           });
           lspGotoTracker.end(activity, "done");
-          return locs;
+          return rewriteToModelUri(locs, model, currentPath);
         } catch (err) {
           lspGotoTracker.end(
             activity,
@@ -174,7 +195,14 @@ export function ensureLspProviders(
           });
           const locs = toMonacoLocations(result, monaco);
           lspGotoTracker.end(activity, locs && locs.length > 0 ? "done" : "empty");
-          return locs;
+          if (!locs) return null;
+          // Same-file references are rewritten onto the model's own URI so
+          // they're clickable inside the diff pane (no-op in the edit pane).
+          return rewriteToModelUri(
+            locs,
+            model,
+            uriToFilePath(decodeURIComponentSafe(modelToLspUri(model))),
+          );
         } catch (err) {
           lspGotoTracker.end(
             activity,
@@ -206,10 +234,10 @@ export function ensureLspProviders(
             return null;
           }
           // Cross-file navigation: open the first target via the store.
+          const currentPath = uriToFilePath(decodeURIComponentSafe(docUri));
           const firstRaw = firstRawLocation(result);
           if (firstRaw) {
             const targetPath = uriToFilePath(decodeURIComponentSafe(firstRaw.uri));
-            const currentPath = uriToFilePath(decodeURIComponentSafe(docUri));
             if (targetPath !== currentPath) {
               gotoLocation(
                 targetPath,
@@ -220,16 +248,17 @@ export function ensureLspProviders(
               return null;
             }
           }
-          // Same-file: return locations so Monaco navigates natively. Record
+          // Same-file: return locations so Monaco navigates natively (rewritten
+          // onto the model's own URI — see the definition provider). Record
           // the pre-jump position for Alt+← (navigation history), same as the
           // definition provider above.
           useSessionStore.getState().pushNavHistory({
-            filePath: uriToFilePath(decodeURIComponentSafe(docUri)),
+            filePath: currentPath,
             line: position.lineNumber,
             column: position.column,
           });
           lspGotoTracker.end(activity, "done");
-          return locs;
+          return rewriteToModelUri(locs, model, currentPath);
         } catch (err) {
           lspGotoTracker.end(
             activity,
@@ -384,6 +413,28 @@ function firstRawLocation(result: unknown): LspLocation | null {
     return result.find(isLocation) ?? null;
   }
   return null;
+}
+
+/** Rewrite Locations that resolve to the CURRENT model's own file onto the
+ *  MODEL's URI. Monaco's standalone navigation (revealDefinition, peek
+ *  references) only follows a Location whose URI exactly equals the source
+ *  editor's model URI (`findModel` does a strict string compare and returns
+ *  null otherwise). In the edit pane the model URI already equals the file
+ *  URI, so this is a no-op there; in the diff pane the models are anonymous
+ *  (inmemory://), and without the rewrite same-file jumps would silently do
+ *  nothing. Locations in OTHER files keep their file URI (the peek widget
+ *  lists them; clicking cross-file is handled by the cross-file branch for
+ *  definition/implementation). */
+function rewriteToModelUri(
+  locs: languages.Location[],
+  model: { uri: Uri },
+  currentPath: string,
+): languages.Location[] {
+  return locs.map((l) =>
+    uriToFilePath(decodeURIComponentSafe(l.uri.toString())) === currentPath
+      ? { uri: model.uri as Uri, range: l.range }
+      : l,
+  );
 }
 
 /** decodeURIComponent that returns the input unchanged on failure (some LSP
@@ -546,11 +597,15 @@ function uriToFilePath(uri: string): string {
 }
 
 /** Convert a Monaco model's URI to the canonical `file://` URI the LSP server
- *  expects. Since FileEditor creates models with `path={filePathToUri(filePath)}`
- *  (a `file://` URI), `model.uri.toString()` already yields the canonical form.
- *  The fsPath fallback exists for safety in case a model was created with a
- *  bare path (e.g. legacy code or test harnesses). */
+ *  expects. Anonymous models bound via `bindModelToPath` (DiffPane's two
+ *  sides) resolve through the binding table. FileEditor creates models with
+ *  `path={filePathToUri(filePath)}` (a `file://` URI), so `model.uri.toString()`
+ *  already yields the canonical form. The fsPath fallback exists for safety in
+ *  case a model was created with a bare path (e.g. legacy code or test
+ *  harnesses). */
 function modelToLspUri(model: { uri: Uri }): string {
+  const bound = modelPathBindings.get(model.uri.toString());
+  if (bound) return filePathToUri(bound);
   const uriStr = model.uri.toString();
   if (uriStr.startsWith("file:")) return uriStr;
   // Fallback: bare path model -- re-encode via fsPath.

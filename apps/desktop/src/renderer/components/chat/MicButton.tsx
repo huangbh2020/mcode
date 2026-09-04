@@ -231,7 +231,8 @@ function MicButtonDesktop({
   }, [listening, isContinuous, endListen]);
 
   const [menuOpen, setMenuOpen] = useState(false);
-  useSuppressBrowserView(menuOpen);
+  const menuPopupRef = useRef<HTMLDivElement>(null);
+  useSuppressBrowserView(menuOpen, menuPopupRef);
 
   // Mode switch persists (store setter → settings table).
   const handleModeChange = (mode: VoiceInputMode) => {
@@ -357,6 +358,7 @@ function MicButtonDesktop({
         <Menu.Portal>
           <Menu.Positioner side="top" align="end">
             <Menu.Popup
+              ref={menuPopupRef}
               className={cn(
                 "z-50 min-w-[190px] origin-bottom-left rounded-lg border border-edge bg-surface py-1.5 shadow-2xl",
                 "data-[ending-style]:scale-95 data-[ending-style]:opacity-0",

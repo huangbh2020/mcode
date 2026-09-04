@@ -62,14 +62,14 @@ export function ContextStatsPopover({
    *  avoiding a redundant first screen. Defaults to "current". */
   initialView?: View;
 }) {
+  const panelRef = useRef<HTMLDivElement>(null);
   // This popover is only mounted while open (parent gates `open && anchorRect`),
-  // so a constant-true suppression suppresses the browser view for its whole
-  // lifetime — the portaled panel can otherwise be covered by the OS-level view
-  // in narrow/wide layouts.
-  useSuppressBrowserView(true);
+  // so a constant-true suppression covers its whole lifetime — but only when
+  // the panel actually reaches the browser's rect (panelRef lets
+  // useSuppressBrowserView measure it); otherwise the browser stays visible.
+  useSuppressBrowserView(true, panelRef);
   const [view, setView] = useState<View>(initialView);
   const breakdown = getContextBreakdown(snapshot);
-  const panelRef = useRef<HTMLDivElement>(null);
   // Whether the panel has room to sit ABOVE the ring; falls back to below.
   // Computed after first measure so we can read the panel's own height.
   const [placeAbove, setPlaceAbove] = useState(true);

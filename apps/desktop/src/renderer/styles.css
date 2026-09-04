@@ -791,6 +791,26 @@ body {
   background-color: rgb(var(--user-bubble) / var(--user-bubble-alpha));
 }
 
+/* ───────────── Turn divider (开始 · 用时 pill + flanking rules) ─────────────
+ * TurnStatRow (ChatPane) and the TurnPanel header (MessageBlocks) echo the
+ * user-message bubble color: the pill fill and the gradient hairlines that
+ * flank it are alpha tints of --user-bubble, so picking a bubble color in
+ * Settings tints the whole divider with it. Same theme-scoped alpha as
+ * .user-bubble-fill (dark needs the stronger tint to register on the
+ * near-black surface). With the default gray bubble the result is nearly
+ * indistinguishable from the old surface-muted/edge look. */
+.turn-pill-fill {
+  background-color: rgb(var(--user-bubble) / var(--user-bubble-alpha));
+}
+
+.turn-pill-line-r {
+  background: linear-gradient(to right, transparent, rgb(var(--user-bubble) / var(--user-bubble-alpha)));
+}
+
+.turn-pill-line-l {
+  background: linear-gradient(to left, transparent, rgb(var(--user-bubble) / var(--user-bubble-alpha)));
+}
+
 /* ───────────── Status capsule (glass pill + activity popover) ─────────────
  * Shared motion vocabulary for the top-right status capsule: pill entrance,
  * count bounce, popover drop-in, staggered sections, the running-agent halo

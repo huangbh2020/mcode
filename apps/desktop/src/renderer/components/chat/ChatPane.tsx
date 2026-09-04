@@ -222,8 +222,8 @@ function TurnStatRow({ meta }: { meta: TurnMeta }) {
 
   return (
     <div className="my-3 flex items-center gap-2.5">
-      <div className="h-px flex-1 bg-gradient-to-r from-transparent to-edge" />
-      <div className="flex items-center gap-1.5 rounded-full border border-edge bg-surface-muted px-3 py-1 text-xs shadow-sm">
+      <div className="turn-pill-line-r h-px flex-1" />
+      <div className="turn-pill-fill flex items-center gap-1.5 rounded-full border border-edge px-3 py-1 text-xs shadow-sm">
         {live && (
           <span className="live-eq shrink-0" aria-hidden>
             <span />
@@ -235,7 +235,7 @@ function TurnStatRow({ meta }: { meta: TurnMeta }) {
         <span className="text-content-subtle">·</span>
         <span className="tabular-nums text-content-muted">{fmtDuration(duration)}</span>
       </div>
-      <div className="h-px flex-1 bg-gradient-to-l from-transparent to-edge" />
+      <div className="turn-pill-line-l h-px flex-1" />
     </div>
   );
 }

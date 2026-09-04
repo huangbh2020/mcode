@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Popover } from "@base-ui/react/popover";
 import { cn } from "@renderer/lib/cn.js";
 import { useI18n } from "@renderer/lib/i18n/index.js";
@@ -40,10 +40,12 @@ import { ComposerToolbar } from "./ComposerToolbar.js";
 export function ComposerToolbarToggle({ sessionId }: { sessionId: string }) {
   const { t } = useI18n();
   // The popup hosts the full chip row and is wider than a narrow/wide-mode
-  // chat column, so it can extend over the browser's rect — suppress the
-  // browser view while open to keep it visible/clickable.
+  // chat column, so it CAN extend over the browser's rect — suppress the
+  // browser view while open, but only when the popup (measured via the ref)
+  // actually reaches the browser's rect. See useSuppressBrowserView.
   const [open, setOpen] = useState(false);
-  useSuppressBrowserView(open);
+  const popupRef = useRef<HTMLDivElement>(null);
+  useSuppressBrowserView(open, popupRef);
   return (
     <span className="composer-chips-toggle shrink-0">
       <Popover.Root open={open} onOpenChange={setOpen}>
@@ -73,6 +75,7 @@ export function ComposerToolbarToggle({ sessionId }: { sessionId: string }) {
               ui/select.tsx's Positioner wrapper. */}
           <Popover.Positioner side="top" align="start" className="z-50">
             <Popover.Popup
+              ref={popupRef}
               className={cn(
                 // overflow-visible: let portaled child menus escape the box.
                 "z-50 overflow-visible rounded-xl border border-edge bg-surface p-1.5 shadow-2xl",

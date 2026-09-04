@@ -18,6 +18,7 @@ import {
 import { DiffPane } from "./FileEditor.js";
 import type { GitFileStatus, GitStatusResult } from "@contracts/ipc";
 import { useI18n, type MessageId } from "@renderer/lib/i18n/index.js";
+import { useSuppressBrowserView } from "@renderer/hooks/useSuppressBrowserView.js";
 
 /**
  * Git diff dialog - the "dialog" open-mode for viewing git file diffs.
@@ -70,13 +71,10 @@ export function GitDiffDialog() {
   // all renderer DOM, so this dialog would be covered by it while the browser
   // panel is open. Increment the global suppression counter while the dialog is
   // visible (BrowserPanel then hides the active view and restores it on close).
-  const suppressBrowserView = useSessionStore((s) => s.suppressBrowserView);
   const dialogVisible = open && tabs.length > 0;
-  useEffect(() => {
-    if (!dialogVisible) return;
-    suppressBrowserView(true);
-    return () => suppressBrowserView(false);
-  }, [dialogVisible, suppressBrowserView]);
+  // Full modal (backdrop covers the window): suppress unconditionally while
+  // visible — no popup ref, the hook then always hides the browser view.
+  useSuppressBrowserView(dialogVisible);
 
   const refreshStatus = useCallback(async (repoPath: string) => {
     setStatusLoading(true);

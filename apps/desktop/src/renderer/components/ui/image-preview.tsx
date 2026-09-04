@@ -17,7 +17,7 @@ import { useEffect, useRef, useState } from "react";
 import { Dialog } from "./dialog.js";
 import { cn } from "@renderer/lib/cn.js";
 import { api } from "@renderer/lib/api.js";
-import { useSessionStore } from "@renderer/stores/sessionStore.js";
+import { useSuppressBrowserView } from "@renderer/hooks/useSuppressBrowserView.js";
 import { useI18n } from "@renderer/lib/i18n/index.js";
 import {
   IconArrowsMaximize,
@@ -130,12 +130,9 @@ export function ImageWithPreview({
   // covered by it. Increment the global suppression counter while open so
   // BrowserPanel hides the view; the cleanup decrements on close/unmount so it
   // restores. A counter composes safely if multiple overlays ever stack.
-  const suppressBrowserView = useSessionStore((s) => s.suppressBrowserView);
-  useEffect(() => {
-    if (!open) return;
-    suppressBrowserView(true);
-    return () => suppressBrowserView(false);
-  }, [open, suppressBrowserView]);
+  // Fullscreen lightbox: suppress unconditionally while open (no popup ref —
+  // it always overlaps the browser's rect).
+  useSuppressBrowserView(open);
 
   const curSrc = gallerySrcs[Math.min(viewIdx, count - 1)] ?? src;
   const curAlt = count > 1 ? `${alt} ${Math.min(viewIdx, count - 1) + 1}/${count}` : alt;

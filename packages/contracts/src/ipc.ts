@@ -3320,7 +3320,6 @@ export const BrowserCreateSchema = z.object({
       "android",
       "galaxy-s23",
       "ipad-mini",
-      "pc",
       "custom",
     ])
     .optional(),
@@ -3378,13 +3377,12 @@ export const BrowserCloseSchema = z.object({
 });
 export type BrowserCloseInput = z.infer<typeof BrowserCloseSchema>;
 
-/** Device presets for the browser panel's H5/mobile emulation. "desktop" is
- *  the default (no emulation); the mobile presets set a viewport width/height
- *  + deviceScaleFactor + mobile screenPosition via enableDeviceEmulation.
- *  "pc" is a large desktop-sized viewport (1920×1080) used in the sidebar with
- *  a scroll container (page renders at true PC size; scrolling pans the view).
- *  "custom" uses the width/height passed at set-device time instead of a fixed
- *  preset. */
+/** Device presets for the browser panel's device emulation. "desktop" is the
+ *  default (no emulation — the page viewport follows the panel's actual size,
+ *  like a normal desktop browser window); the mobile presets set a viewport
+ *  width/height + deviceScaleFactor + mobile screenPosition via
+ *  enableDeviceEmulation. "custom" uses the width/height passed at set-device
+ *  time instead of a fixed preset. */
 export type BrowserDevicePreset =
   | "desktop"
   | "iphone"
@@ -3392,7 +3390,6 @@ export type BrowserDevicePreset =
   | "android"
   | "galaxy-s23"
   | "ipad-mini"
-  | "pc"
   | "custom";
 
 /** Screen orientation for device emulation. "landscape" swaps the preset's
@@ -3416,13 +3413,11 @@ export interface BrowserDeviceSpec {
  *  "custom" is a menu entry (no fixed dims; width/height come from the input
  *  fields at set time).
  *
- *  Note: "desktop" (no-emulation, fill-the-panel) is still a valid
- *  BrowserDevicePreset — it's the default device and the sentinel used when
- *  collapsing the toolbar disables emulation. But it is intentionally NOT
- *  listed here: it isn't a selectable menu entry, only the renamed
- *  "桌面端" (= the former "PC 1920×1080", fixed emulation) is. */
+ *  "desktop" (no-emulation) is both the default device for new tabs and the
+ *  selectable "桌面端" menu entry: the page viewport follows the panel's real
+ *  size (responsive) instead of pinning a fixed emulated viewport. */
 export const BROWSER_DEVICE_PRESETS: BrowserDeviceSpec[] = [
-  { id: "pc", label: "桌面端", width: 1920, height: 1080, scale: 1 },
+  { id: "desktop", label: "桌面端", width: 0, height: 0, scale: 1 },
   { id: "iphone", label: "iPhone 14", width: 390, height: 844, scale: 3 },
   { id: "iphone-se", label: "iPhone SE", width: 375, height: 667, scale: 2 },
   { id: "android", label: "Pixel 7", width: 412, height: 915, scale: 2.625 },
@@ -3461,7 +3456,6 @@ export const BrowserSetDeviceSchema = z.object({
     "android",
     "galaxy-s23",
     "ipad-mini",
-    "pc",
     "custom",
   ]),
   /** Custom viewport width (required when device === "custom"). */

@@ -418,7 +418,21 @@ class RuntimeManager {
     // expects when clicking 撤销本轮. Without the clear, turn N-1's
     // files would still be in the snapshot and rewind would partially
     // undo turn N-1 instead of fully undoing turn N.
-    getFileSnapshot(session.id).clear();
+    //
+    // DROP the registry entry instead of clear()-ing it in place: an
+    // INTERRUPTED previous turn's adapter is still unwinding toward its
+    // flushFinal() (ac.abort() resolves the interrupt IPC long before the
+    // SDK generator actually rejects), and that adapter holds this
+    // session's snapshot instance. An in-place clear() here would (a)
+    // empty its records before freeze() runs — the aborted turn's
+    // "本轮修改" card is lost — and (b) leave freeze()'s `frozen=true`
+    // flag stuck on the SHARED instance, so every recordPre() of this
+    // new turn is silently dropped and the new turn's card is lost too
+    // (2026-09-04 bug report: both turns' cards missing after
+    // interrupt-then-send). Replacing the instance lets the old
+    // adapter's late freeze() work on its own (stale) records while
+    // this turn starts from a virgin snapshot.
+    dropFileSnapshot(session.id);
 
     // Subagent history is SESSION-scoped, not turn-scoped: replay the
     // accumulated roster + transcripts so the fresh turn's adapter (which

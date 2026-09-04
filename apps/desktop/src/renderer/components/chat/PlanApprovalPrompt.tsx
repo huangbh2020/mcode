@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useSessionStore, type PlanHandoffTarget } from "@renderer/stores/sessionStore.js";
 import { cn } from "@renderer/lib/cn.js";
 import { useI18n } from "@renderer/lib/i18n/index.js";
@@ -111,10 +111,14 @@ export function PlanApprovalPrompt({
   const [handoffProviderId, setHandoffProviderId] = useState(sessionProviderId);
   const [remodelKey, setRemodelKey] = useState<string | null>(null);
   const [newSessionKey, setNewSessionKey] = useState<string | null>(null);
-  // While any select popup is open the embedded browser view is suppressed so
-  // the portaled popup stays clickable over the browser's rect.
+  // While any select popup is open the embedded browser view is suppressed —
+  // but only when the open popup actually reaches the browser's rect (the
+  // refs let useSuppressBrowserView measure whichever select is open; closed
+  // siblings' refs measure null and are skipped).
   const [menuOpen, setMenuOpen] = useState(false);
-  useSuppressBrowserView(menuOpen);
+  const modelPopupRef = useRef<HTMLDivElement>(null);
+  const providerPopupRef = useRef<HTMLDivElement>(null);
+  useSuppressBrowserView(menuOpen, [modelPopupRef, providerPopupRef]);
 
   // Selectable models for a provider, mirroring the ModelDropdown surface:
   // pi → dynamic piAvailableModels; custom-endpoint providers → their gateway
@@ -275,7 +279,7 @@ export function PlanApprovalPrompt({
       </Select.Trigger>
       <Select.Portal>
         <Select.Positioner align="start">
-          <Select.Popup className="max-h-60 overflow-y-auto">
+          <Select.Popup ref={modelPopupRef} className="max-h-60 overflow-y-auto">
             <Select.List>
               {options.map((o) => (
                 <Select.Item key={o.key} value={o.key}>
@@ -339,7 +343,7 @@ export function PlanApprovalPrompt({
                 </Select.Trigger>
                 <Select.Portal>
                   <Select.Positioner align="start">
-                    <Select.Popup>
+                    <Select.Popup ref={providerPopupRef}>
                       <Select.List>
                         {providers.map((p) => (
                           <Select.Item key={p.id} value={p.id}>

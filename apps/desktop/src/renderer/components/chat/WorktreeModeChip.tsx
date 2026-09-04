@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Menu } from "@base-ui/react/menu";
 import { api } from "@renderer/lib/api.js";
 import { cn } from "@renderer/lib/cn.js";
@@ -45,7 +45,8 @@ export function WorktreeModeChip({
   const stacked = layout === "row";
   const cascade = stacked && !useNarrowViewport();
   const [open, setOpen] = useState(false);
-  useSuppressBrowserView(open);
+  const popupRef = useRef<HTMLDivElement>(null);
+  useSuppressBrowserView(open, popupRef);
 
   const envChoice = useSessionStore((s) => s.envChoice);
   const setEnvChoice = useSessionStore((s) => s.setEnvChoice);
@@ -191,6 +192,7 @@ export function WorktreeModeChip({
             sideOffset={cascade ? 6 : 4}
           >
             <Menu.Popup
+              ref={popupRef}
               className={cn(
                 "z-50 min-w-[240px] rounded-lg border border-edge bg-surface py-1 shadow-2xl",
                 cascade ? "origin-top-left" : "origin-bottom-left",

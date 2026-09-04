@@ -1,6 +1,12 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { cn } from "@renderer/lib/cn.js";
 import { api } from "@renderer/lib/api.js";
+import {
+  setBrowserStageRect,
+  shouldSuppressBrowserView,
+  subscribeOcclusion,
+  getOcclusionVersion,
+} from "@renderer/lib/browserOcclusion.js";
 import { useSessionStore } from "@renderer/stores/sessionStore.js";
 import type { BrowserTab } from "@renderer/stores/sessionStore.js";
 import { localPathToFileUrl } from "@renderer/lib/browserUrl.js";
@@ -27,9 +33,10 @@ import { useI18n } from "@renderer/lib/i18n/index.js";
  * - `mode="overlay"`: a full-workspace overlay (below the 40px titlebar) — the
  *   PC-fullscreen experience. Picked elements stage in a bottom bar and only
  *   enter the composer when the user clicks "添加".
- * - `mode="sidebar"`: embedded inside the right IDE panel — the mobile-first
- *   experience. New tabs default to the iPhone device preset, the view fills
- *   the sidebar width, and picked elements go straight to the composer.
+ * - `mode="sidebar"`: embedded inside the right IDE panel. New tabs default to
+ *   the desktop preset (no emulation — the page fills the panel like a normal
+ *   browser window; the device toolbar offers phone/tablet emulation), and
+ *   picked elements go straight to the composer.
  *
  * Tabs live in the session store (`browserTabs` / `browserActiveTabId`) so they
  * survive a container swap: switching modes unmounts one container (hiding the
@@ -191,18 +198,22 @@ export function BrowserPanel({ mode }: BrowserPanelProps) {
    *  rAF-throttled by callers. Background tabs are visible:false in main, so
    *  their setBounds is a no-op - only the active view moves.
    *
-   *  The "pc" preset keeps the page's true 1920×1080 layout (the emulated
-   *  viewport is pinned to 1920×1080 via setDevice's viewportWidth/Height
-   *  override) but clamps the physical view to the stage so a narrow sidebar
-   *  never overflows onto the chat/other panels. The user scrolls inside the
-   *  native window (the page's own scrollbar) to see the rest of the page. */
+   *  Desktop (the default, no emulation) fills the stage: the page viewport
+   *  follows the panel's real size. Mobile presets size the view to the
+   *  emulated device (clamped to the stage when it doesn't fit). */
   const syncBounds = useCallback(() => {
     const id = activeTabIdRef.current;
     const tab = tabsRef.current.find((t) => t.id === id);
     const stage = stageRef.current;
     if (!tab || !stage) return;
     const r = stage.getBoundingClientRect();
-    if (r.width < 1 || r.height < 1) return;
+    if (r.width < 1 || r.height < 1) {
+      setBrowserStageRect(null);
+      return;
+    }
+    // Publish the stage rect so the occlusion decision (hide the view only
+    // when an open popup actually reaches it) uses live geometry.
+    setBrowserStageRect({ left: r.left, top: r.top, right: r.right, bottom: r.bottom });
     // Device emulation active only while the device toolbar is open (collapsed
     // = desktop full width). Desktop fills the stage.
     const dims =
@@ -215,18 +226,7 @@ export function BrowserPanel({ mode }: BrowserPanelProps) {
     let viewY: number;
     let effW: number | undefined;
     let effH: number | undefined;
-    if (dims && tab.device === "pc") {
-      // PC preset: keep the true 1920×1080 emulated viewport (PC page layout)
-      // but clamp the physical view to the stage so it never overflows the
-      // sidebar onto other panels. The page renders its full PC layout and the
-      // user scrolls inside the native window to see beyond the visible area.
-      viewW = r.width;
-      viewH = r.height;
-      viewX = Math.round(r.left);
-      viewY = Math.round(r.top);
-      effW = dims.width;
-      effH = dims.height;
-    } else if (dims) {
+    if (dims) {
       // Other presets: the view's physical size MUST equal the emulated
       // viewport or the page gets clipped (content "显示不完整") and
       // capturePage() returns black frames. When the device dims fit the
@@ -330,11 +330,9 @@ export function BrowserPanel({ mode }: BrowserPanelProps) {
       setError(t("browser.selectProjectFirst"));
       return null;
     }
-    // Sidebar starts in mobile mode. We pass initialDevice so the main process
-    // applies emulation at dom-ready (the safe earliest point) — calling
-    // setDevice synchronously here crashes the GPU process before it's ready.
-    const initialDevice = mode === "sidebar" ? "iphone" : undefined;
-    const res = await api.browser.create({ projectPath, initialDevice });
+    // Default to the desktop preset (no emulation — the page fills the panel).
+    // Mobile/tablet emulation is opt-in via the device toolbar.
+    const res = await api.browser.create({ projectPath });
     if (!res.ok) {
       setError(res.error);
       return null;
@@ -349,8 +347,7 @@ export function BrowserPanel({ mode }: BrowserPanelProps) {
       canGoBack: false,
       canGoForward: false,
       pickMode: false,
-      // Sidebar defaults to mobile; overlay defaults to desktop.
-      device: mode === "sidebar" ? "iphone" : "desktop",
+      device: "desktop",
     };
     // Load the start page: an explicit initial URL (e.g. a local file opened
     // from the file tree) if given, otherwise a blank page.
@@ -375,7 +372,7 @@ export function BrowserPanel({ mode }: BrowserPanelProps) {
     setError(null);
     showActiveView();
     return tab;
-  }, [projectPath, mode, addTab, setActiveTabId, syncBounds, showActiveView, t]);
+  }, [projectPath, addTab, setActiveTabId, syncBounds, showActiveView, t]);
 
   // First time THIS container becomes active with no tabs at all: create the
   // initial tab. (Tabs are shared, so this only fires once per session no
@@ -429,7 +426,9 @@ export function BrowserPanel({ mode }: BrowserPanelProps) {
   // state); the other container will re-show it when it activates.
   useEffect(() => {
     if (!isActive) {
-      // Container deactivating: hide the active tab's view.
+      // Container deactivating: hide the active tab's view + drop the stage
+      // rect (no active browser surface for the occlusion decision).
+      setBrowserStageRect(null);
       const tab = activeTabIdRef.current
         ? tabsRef.current.find((t) => t.id === activeTabIdRef.current)
         : null;
@@ -448,30 +447,59 @@ export function BrowserPanel({ mode }: BrowserPanelProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isActive, showActiveView]);
 
-  // React to the suppression counter: while > 0 a renderer-DOM overlay (image
-  // lightbox, etc.) must cover the OS-level WebContentsView, which always floats
-  // above the DOM — so hide the active view and restore it when the counter
-  // returns to zero. Only this (active) container owns the view, so inactive
-  // containers no-op (their view is already hidden by the isActive effect
-  // above). Mirrors the device-dropdown / confirm-destroy hide pattern.
-  useEffect(() => {
+  // React to the suppression counter: while > 0, a renderer-DOM overlay may
+  // need to cover the OS-level WebContentsView (which always floats above the
+  // DOM). Hide the active view ONLY when one of the open popups actually
+  // reaches the browser's stage rect — popups elsewhere (composer dropdowns
+  // in the center pane, etc.) keep the view onscreen; unconditionally hiding
+  // it blanked the whole panel (white stage) whenever any dropdown opened
+  // anywhere. Geometry changes re-run this via the occlusion version (popup
+  // moved/closed) and the ResizeObserver schedule below (stage moved). Only
+  // this (active) container owns the view, so inactive containers no-op.
+  // Unknown geometry (no measurable popup) suppresses conservatively — the
+  // old always-hide behavior. Mirrors the device-dropdown / confirm-destroy
+  // hide pattern.
+  const occlusionVersion = useSyncExternalStore(subscribeOcclusion, getOcclusionVersion);
+  const prevSuppressedRef = useRef(0);
+  const reconcileBrowserOcclusion = useCallback(() => {
     if (!isActive) return;
     const tab = activeTabIdRef.current
       ? tabsRef.current.find((t) => t.id === activeTabIdRef.current)
       : null;
     if (!tab) return;
-    if (suppressed > 0) {
+    const prev = prevSuppressedRef.current;
+    prevSuppressedRef.current = suppressed;
+    if (suppressed === 0) {
+      // Steady idle state — nothing to reconcile (bounds sync owns visibility).
+      // Only the release transition (last popup closed) re-shows the view.
+      if (prev > 0) {
+        lastBoundsRef.current = null;
+        showActiveView();
+      }
+      return;
+    }
+    if (shouldSuppressBrowserView()) {
       void api.browser.hide({ browserId: tab.browserId });
     } else {
+      // Popups are open but none reaches the browser's rect — keep the view
+      // up (this also re-shows after an overlapping popup moved away).
       lastBoundsRef.current = null;
       showActiveView();
     }
-  }, [suppressed, isActive, showActiveView]);
+  }, [suppressed, isActive, showActiveView, occlusionVersion]);
+  useEffect(() => {
+    reconcileBrowserOcclusion();
+  }, [reconcileBrowserOcclusion]);
+  /** Latest reconcile for the resize/scroll scheduling below (whose effect
+   *  is scoped to the mount). */
+  const reconcileRef = useRef(reconcileBrowserOcclusion);
+  reconcileRef.current = reconcileBrowserOcclusion;
 
   // When the component unmounts (container swap / panel close), hide the active
   // view so it can't linger over the workspace. The view survives in main.
   useEffect(() => {
     return () => {
+      setBrowserStageRect(null);
       const tab = activeTabIdRef.current
         ? tabsRef.current.find((t) => t.id === activeTabIdRef.current)
         : null;
@@ -484,9 +512,10 @@ export function BrowserPanel({ mode }: BrowserPanelProps) {
     };
   }, []);
 
-  // ResizeObserver -> syncBounds (rAF-throttled inside). The stage is also a
-  // scroll container for the "pc" preset (the view pans with scrollLeft/Top),
-  // so scroll events re-sync the bounds the same way.
+  // ResizeObserver -> syncBounds + occlusion reconcile (rAF-throttled inside).
+  // Scroll events feed the same path. The reconcile rides along because the
+  // stage moving (window resize, panel divider drag) can flip whether an open
+  // popup overlaps it.
   useEffect(() => {
     if (!isActive) return;
     const stage = stageRef.current;
@@ -494,7 +523,10 @@ export function BrowserPanel({ mode }: BrowserPanelProps) {
     let raf = 0;
     const schedule = () => {
       cancelAnimationFrame(raf);
-      raf = requestAnimationFrame(syncBounds);
+      raf = requestAnimationFrame(() => {
+        syncBounds();
+        reconcileRef.current();
+      });
     };
     const ro = new ResizeObserver(schedule);
     ro.observe(stage);
@@ -1011,8 +1043,8 @@ export function BrowserPanel({ mode }: BrowserPanelProps) {
       {/* The stage is the measurement target for the active tab's
           WebContentsView. The view floats above it at OS level, so this div
           stays visually empty - its only job is to occupy the right rect. The
-          spacer just fills the stage for every device (the "pc" preset no longer
-          pans via stage scroll — the page scrolls inside the native window).
+          spacer just fills the stage for every device (pages scroll inside
+          the native window).
           The background is fixed white (matching BrowserManager's view
           background) so the browser's page area never follows the app theme. */}
       <div ref={stageRef} className="relative min-h-0 flex-1 overflow-auto bg-white">
