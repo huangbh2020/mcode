@@ -392,7 +392,6 @@ function piConfigFromForm(form: PiFormState): PiProviderConfig {
 
 interface CodexModelFormState {
   id: string;
-  label: string;
   /** 1M context toggle (Pi-style): on → contextWindow 1,000,000, spawned as
    *  a process-local `-c model_context_window` override. */
   context1m: boolean;
@@ -412,7 +411,7 @@ const emptyCodexForm = (): CodexFormState => ({
   name: "",
   baseUrl: "",
   apiKey: "",
-  models: [{ id: "", label: "", context1m: false }],
+  models: [{ id: "", context1m: false }],
 });
 
 const codexFormFromConfig = (cfg: CodexProviderPublic): CodexFormState => ({
@@ -420,7 +419,7 @@ const codexFormFromConfig = (cfg: CodexProviderPublic): CodexFormState => ({
   name: cfg.name,
   baseUrl: cfg.baseUrl,
   apiKey: "",
-  models: cfg.models.map((m) => ({ id: m.id, label: m.label ?? "", context1m: m.contextWindow === 1_000_000 })),
+  models: cfg.models.map((m) => ({ id: m.id, context1m: m.contextWindow === 1_000_000 })),
 });
 
 /* ════════════════════════ unified list ════════════════════════ */
@@ -764,7 +763,6 @@ export function CustomModelsPanel() {
         baseUrl: codexForm.baseUrl.trim(),
         models: valid.map((m) => ({
           id: m.id.trim(),
-          ...(m.label.trim() ? { label: m.label.trim() } : {}),
           ...(m.context1m ? { contextWindow: 1_000_000 } : {}),
         })),
         apiKey: codexForm.apiKey,
@@ -1021,7 +1019,7 @@ function CodexProviderForm({
     setForm({ ...form, [key]: value });
   const updateModel = (idx: number, patch: Partial<CodexModelFormState>) =>
     setForm({ ...form, models: form.models.map((m, i) => (i === idx ? { ...m, ...patch } : m)) });
-  const addModel = () => setForm({ ...form, models: [...form.models, { id: "", label: "", context1m: false }] });
+  const addModel = () => setForm({ ...form, models: [...form.models, { id: "", context1m: false }] });
   const removeModel = (idx: number) => setForm({ ...form, models: form.models.filter((_, i) => i !== idx) });
 
   return (
@@ -1070,9 +1068,8 @@ function CodexProviderForm({
         )}
         <div className="space-y-1.5">
           {form.models.map((m, idx) => (
-            <div key={idx} className="grid grid-cols-[1fr_1fr_auto_auto] items-center gap-1.5 rounded border border-edge bg-surface/40 p-2">
+            <div key={idx} className="grid grid-cols-[1fr_auto_auto] items-center gap-1.5 rounded border border-edge bg-surface/40 p-2">
               <Input value={m.id} onChange={(e) => updateModel(idx, { id: e.target.value })} placeholder={t("settings.customModels.modelIdPlaceholder")} />
-              <Input value={m.label} onChange={(e) => updateModel(idx, { label: e.target.value })} placeholder={t("settings.customModels.displayNamePlaceholder")} />
               <label className="flex items-center gap-1 justify-self-center" title={t("settings.customModels.enable1m")}>
                 <Switch checked={m.context1m} onCheckedChange={(v) => updateModel(idx, { context1m: v })} label={t("settings.customModels.enable1m")} />
                 <span className="text-[0.6428em] text-content-muted">1M</span>
