@@ -53,6 +53,12 @@ export interface CodexAppServerClientOptions {
   cwd: string;
   /** Full env for the child (caller composes CODEX_HOME + keys + PATH). */
   env: Record<string, string>;
+  /** Extra CLI args appended after "app-server" — per-PROCESS config
+   *  overrides via `-c key=value` (priority over config.toml). Used for
+   *  per-session settings like model_context_window: one process per turn
+   *  makes these naturally session-scoped, so concurrent sessions with
+   *  different values never race on the shared config file. */
+  extraArgs?: string[];
   /** Invoked on unexpected process exit. */
   onExit?: (code: number | null, signal: string | null) => void;
   /** Logger sink (provider context's log). */
@@ -100,7 +106,7 @@ export class CodexAppServerClient {
     this.started = true;
     this.disposed = false;
 
-    const child = spawn(this.opts.codexPath, ["app-server"], {
+    const child = spawn(this.opts.codexPath, ["app-server", ...(this.opts.extraArgs ?? [])], {
       cwd: this.opts.cwd,
       env: this.opts.env,
       stdio: ["pipe", "pipe", "pipe"],

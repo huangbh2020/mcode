@@ -240,7 +240,12 @@ export const CodexModelsStore = {
       baseUrl: config.baseUrl.trim(),
       models: config.models
         .filter((m) => m.id?.trim())
-        .map((m: CodexModelOption) => ({ id: m.id.trim(), ...(m.label?.trim() ? { label: m.label.trim() } : {}), ...(m.hint?.trim() ? { hint: m.hint.trim() } : {}) })),
+        .map((m: CodexModelOption) => ({
+          id: m.id.trim(),
+          ...(m.label?.trim() ? { label: m.label.trim() } : {}),
+          ...(m.hint?.trim() ? { hint: m.hint.trim() } : {}),
+          ...(typeof m.contextWindow === "number" && m.contextWindow > 0 ? { contextWindow: m.contextWindow } : {}),
+        })),
     };
     const idx = providers.findIndex((p) => p.id === id);
     if (idx >= 0) providers[idx] = stored;

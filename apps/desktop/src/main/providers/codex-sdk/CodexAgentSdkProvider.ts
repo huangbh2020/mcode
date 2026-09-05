@@ -261,14 +261,26 @@ export class CodexAgentSdkProvider implements AgentProvider {
     const mode = normalizeCodexMode(req.permissionMode);
     const { sandbox, approvalPolicy } = codexModeToPolicy(mode);
 
+    // Per-model context-window override (third-party models the codex catalog
+    // doesn't know). Passed as a PROCESS-LOCAL `-c` CLI override — priority
+    // over config.toml and scoped to this turn's app-server process, so
+    // concurrent sessions with different windows never race on the shared
+    // config file (verified: config/read reflects the flag value).
+    const selectedModel = providers.find((p) => p.id === providerId)?.models.find((m) => m.id === modelId);
+    const contextWindow = selectedModel?.contextWindow;
+
     /* ── 4. Spawn app-server (env carries CODEX_HOME + provider keys) ── */
     const env = await buildCodexEnv(ctx);
     const client = new CodexAppServerClient({
       codexPath,
       cwd: req.cwd,
       env,
+      ...(contextWindow ? { extraArgs: ["-c", `model_context_window=${contextWindow}`] } : {}),
       log: ctx.log,
     });
+    if (contextWindow) {
+      ctx.log.info(`codex: model "${providerId}/${modelId}" context window override: ${contextWindow}`);
+    }
 
     // File snapshot: approval-gated writes recordPre before we answer;
     // sandboxed writes reconstruct from the turn diff at freeze.

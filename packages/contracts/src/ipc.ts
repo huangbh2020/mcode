@@ -1483,6 +1483,9 @@ export const SaveCodexProviderSchema = z.object({
       id: z.string().min(1),
       label: z.string().optional(),
       hint: z.string().optional(),
+      /** Optional context-window override (spawned as `-c
+       *  model_context_window=<n>`, process-local). */
+      contextWindow: z.number().int().positive().optional(),
     }),
   ).min(1),
   apiKey: z.string().optional(),

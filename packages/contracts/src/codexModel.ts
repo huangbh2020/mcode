@@ -23,6 +23,13 @@ export interface CodexModelOption {
   label?: string;
   /** Optional trailing hint in the picker (e.g. "1M"). */
   hint?: string;
+  /** Context window override for models the codex catalog doesn't know
+   *  (third-party endpoints). When set, the app-server process is spawned
+   *  with `-c model_context_window=<n>` — a PROCESS-LOCAL config override
+   *  (priority over config.toml), so concurrent sessions with different
+   *  windows never race on the shared config file. Omitted → codex's
+   *  fallback metadata. */
+  contextWindow?: number;
 }
 
 /** Persisted shape of one provider entry (settings table, no secrets). */
