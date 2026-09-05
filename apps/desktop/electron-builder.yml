@@ -52,6 +52,11 @@ asarUnpack:
   - "**/*.{node,dll}"
   - "**/sql.js/**"
   - "**/node_modules/@anthropic-ai/claude-agent-sdk-*/**"
+  # The codex npm wrapper ships its native binary in platform packages
+  # (@openai/codex-<platform> aliases of @openai/codex@<version>-<platform>)
+  # under vendor/<triple>/bin — spawn can't exec from inside the asar, same
+  # story as the claude binary above.
+  - "**/node_modules/@openai/codex*/**"
   - "**/node_modules/node-pty/build/Release/**"
   - "**/node_modules/node-pty/prebuilds/**"
 

@@ -22,7 +22,7 @@ import {
   IconArrowsExchange,
   IconPlugConnected,
 } from "@renderer/lib/icons.js";
-import { SiClaude, SiGoogle } from "@renderer/lib/icons.js";
+import { SiClaude, OpenAIBrandIcon, SiGoogle } from "@renderer/lib/icons.js";
 import type {
   CustomModelPublic,
   CustomModelEntry,
@@ -40,6 +40,7 @@ import {
   type PiModelDefinition,
   type PiThinkingKey,
 } from "@contracts/piModel";
+import type { CodexProviderPublic } from "@contracts/codexModel";
 
 /**
  * Unified model-config panel — the single "模型配置" settings surface.
@@ -386,10 +387,47 @@ function piConfigFromForm(form: PiFormState): PiProviderConfig {
   return cfg;
 }
 
+
+/* ════════════════════════ Codex form state ════════════════════════ */
+
+interface CodexModelFormState {
+  id: string;
+  label: string;
+}
+
+interface CodexFormState {
+  /** Slug id (TOML table key + env suffix). Locked after creation. */
+  id: string;
+  name: string;
+  baseUrl: string;
+  apiKey: string;
+  models: CodexModelFormState[];
+}
+
+const emptyCodexForm = (): CodexFormState => ({
+  id: "",
+  name: "",
+  baseUrl: "",
+  apiKey: "",
+  models: [{ id: "", label: "" }],
+});
+
+const codexFormFromConfig = (cfg: CodexProviderPublic): CodexFormState => ({
+  id: cfg.id,
+  name: cfg.name,
+  baseUrl: cfg.baseUrl,
+  apiKey: "",
+  models: cfg.models.map((m) => ({ id: m.id, label: m.label ?? "" })),
+});
+
 /* ════════════════════════ unified list ════════════════════════ */
 
-type Family = "claude" | "pi";
-type Selection = { kind: "claude"; id: string | "new" } | { kind: "pi"; id: string | "new" } | null;
+type Family = "claude" | "pi" | "codex";
+type Selection =
+  | { kind: "claude"; id: string | "new" }
+  | { kind: "pi"; id: string | "new" }
+  | { kind: "codex"; id: string | "new" }
+  | null;
 type ListItem = { kind: Family; id: string; name: string; sub: string };
 
 /* ════════════════════════ main panel ════════════════════════ */
@@ -401,9 +439,11 @@ export function CustomModelsPanel() {
 
   const [tab, setTab] = useState<Family>("claude");
   const [piProviders, setPiProviders] = useState<Record<string, PiProviderPublic>>({});
+  const [codexProviders, setCodexProviders] = useState<CodexProviderPublic[]>([]);
   const [selection, setSelection] = useState<Selection>(null);
   const [claudeForm, setClaudeForm] = useState<ClaudeFormState | null>(null);
   const [piForm, setPiForm] = useState<PiFormState | null>(null);
+  const [codexForm, setCodexForm] = useState<CodexFormState | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [test, setTest] = useState<TestState>({ status: "idle" });
@@ -418,12 +458,37 @@ export function CustomModelsPanel() {
     }
   };
 
+  const reloadCodex = async () => {
+    try {
+      const { providers } = await api.codexModels.list();
+      setCodexProviders(providers);
+    } catch (err) {
+      console.error("codexModels.list failed:", err);
+    }
+  };
+
   useEffect(() => {
     void reloadPi();
+    void reloadCodex();
   }, []);
 
   const listItems = useMemo<ListItem[]>(() => {
-    if (tab !== "claude") {
+    if (tab === "codex") {
+      return codexProviders.map((p) => ({
+        kind: "codex" as const,
+        id: p.id,
+        name: p.name,
+        sub: [
+          p.models.length > 0
+            ? t("settings.customModels.modelCount", { n: p.models.length })
+            : t("settings.customModels.noModels"),
+          p.hasApiKey
+            ? t("settings.customModels.keyConfigured")
+            : t("settings.customModels.keyNotConfigured"),
+        ].join(" · "),
+      }));
+    }
+    if (tab === "pi") {
       return Object.entries(piProviders).map(([name, cfg]) => ({
         kind: "pi" as const,
         id: name,
@@ -450,7 +515,7 @@ export function CustomModelsPanel() {
           : t("settings.customModels.noModels"),
       };
     });
-  }, [tab, customModels, piProviders, t]);
+  }, [tab, customModels, piProviders, codexProviders, t]);
 
   const isSelected = (item: ListItem) =>
     selection?.kind === item.kind && selection.id === item.id;
@@ -459,6 +524,7 @@ export function CustomModelsPanel() {
     setSelection({ kind: "claude", id: "new" });
     setClaudeForm(emptyClaudeForm());
     setPiForm(null);
+    setCodexForm(null);
     setTest({ status: "idle" });
     setError(null);
   };
@@ -468,10 +534,27 @@ export function CustomModelsPanel() {
     setClaudeForm(null);
     setError(null);
   };
+  const startNewCodex = () => {
+    setSelection({ kind: "codex", id: "new" });
+    setCodexForm(emptyCodexForm());
+    setClaudeForm(null);
+    setPiForm(null);
+    setError(null);
+  };
+  const startEditCodex = (id: string) => {
+    const cfg = codexProviders.find((p) => p.id === id);
+    if (!cfg) return;
+    setSelection({ kind: "codex", id });
+    setCodexForm(codexFormFromConfig(cfg));
+    setClaudeForm(null);
+    setPiForm(null);
+    setError(null);
+  };
   const startEditClaude = (m: CustomModelPublic) => {
     setSelection({ kind: "claude", id: m.id });
     setClaudeForm(claudeFormFromConfig(m));
     setPiForm(null);
+    setCodexForm(null);
     setTest({ status: "idle" });
     setError(null);
   };
@@ -481,12 +564,14 @@ export function CustomModelsPanel() {
     setSelection({ kind: "pi", id: name });
     setPiForm(piFormFromConfig(name, cfg));
     setClaudeForm(null);
+    setCodexForm(null);
     setError(null);
   };
   const cancel = () => {
     setSelection(null);
     setClaudeForm(null);
     setPiForm(null);
+    setCodexForm(null);
     setTest({ status: "idle" });
     setError(null);
   };
@@ -506,9 +591,11 @@ export function CustomModelsPanel() {
     if (!selection || selection.id === "new") {
       if (selection?.kind === "claude") return claudeForm?.authToken ?? null;
       if (selection?.kind === "pi") return piForm?.apiKey ?? null;
+      if (selection?.kind === "codex") return codexForm?.apiKey ?? null;
       return null;
     }
     if (selection.kind === "claude") return (await api.customModel.getToken({ id: selection.id })).token;
+    if (selection.kind === "codex") return (await api.codexModels.getApiKey({ id: selection.id })).apiKey;
     return (await api.piModels.getApiKey({ name: selection.id })).apiKey;
   };
 
@@ -654,6 +741,41 @@ export function CustomModelsPanel() {
     }
   };
 
+  const saveCodex = async () => {
+    if (!codexForm) return;
+    if (!codexForm.id.trim()) return setError(t("settings.customModels.errCodexId"));
+    if (!/^[a-zA-Z0-9_-]+$/.test(codexForm.id.trim()))
+      return setError(t("settings.customModels.errCodexIdFormat"));
+    if (!codexForm.name.trim()) return setError(t("settings.customModels.errProviderName"));
+    if (!codexForm.baseUrl.trim()) return setError(t("settings.customModels.errBaseUrl"));
+    const valid = codexForm.models.filter((m) => m.id.trim());
+    if (valid.length === 0) return setError(t("settings.customModels.errNeedModel"));
+    if (selection?.id === "new" && !codexForm.apiKey.trim())
+      return setError(t("settings.customModels.errApiKey"));
+    setSaving(true);
+    setError(null);
+    try {
+      const { providers } = await api.codexModels.save({
+        id: codexForm.id.trim(),
+        name: codexForm.name.trim(),
+        baseUrl: codexForm.baseUrl.trim(),
+        models: valid.map((m) => ({
+          id: m.id.trim(),
+          ...(m.label.trim() ? { label: m.label.trim() } : {}),
+        })),
+        apiKey: codexForm.apiKey,
+      });
+      setCodexProviders(providers);
+      setSelection({ kind: "codex", id: codexForm.id.trim() });
+      setCodexForm(null);
+      void useSessionStore.getState().reloadCodexAvailableModels();
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const confirmRemove = async () => {
     const target = pendingDelete;
     if (!target) return;
@@ -661,6 +783,10 @@ export function CustomModelsPanel() {
       if (target.kind === "claude") {
         const { models } = await api.customModel.delete({ id: target.id });
         useSessionStore.setState({ customModels: models });
+      } else if (target.kind === "codex") {
+        const { providers } = await api.codexModels.delete({ id: target.id });
+        setCodexProviders(providers);
+        void useSessionStore.getState().reloadCodexAvailableModels();
       } else {
         const { providers } = await api.piModels.delete({ name: target.id });
         setPiProviders(providers);
@@ -682,8 +808,14 @@ export function CustomModelsPanel() {
 
       {/* ───────── Claude / Pi family tabs ───────── */}
       <div className="mb-3 flex w-fit items-center gap-0.5 rounded-lg border border-edge bg-surface/40 p-0.5">
-        {(["claude", "pi"] as const).map((k) => {
-          const count = k === "claude" ? customModels.length : Object.keys(piProviders).length;
+        {(["claude", "pi", "codex"] as const).map((k) => {
+          const count =
+            k === "claude"
+              ? customModels.length
+              : k === "codex"
+                ? codexProviders.length
+                : Object.keys(piProviders).length;
+          const label = k === "claude" ? "Claude" : k === "codex" ? "Codex" : "Pi";
           return (
             <button
               key={k}
@@ -695,7 +827,8 @@ export function CustomModelsPanel() {
               )}
             >
               {k === "claude" ? <SiClaude size={13} className={tab === k ? "text-accent" : "text-content-subtle"} /> : null}
-              {k === "claude" ? "Claude" : "Pi"}
+              {k === "codex" ? <OpenAIBrandIcon size={13} className={tab === k ? "text-accent" : "text-content-subtle"} /> : null}
+              {label}
               <span className="tabular-nums text-[0.8571em] text-content-subtle">{count}</span>
             </button>
           );
@@ -718,7 +851,9 @@ export function CustomModelsPanel() {
                   onClick={() =>
                     item.kind === "claude"
                       ? startEditClaude(customModels.find((m) => m.id === item.id)!)
-                      : startEditPi(item.id)
+                      : item.kind === "codex"
+                        ? startEditCodex(item.id)
+                        : startEditPi(item.id)
                   }
                   className={cn(
                     "relative block w-full rounded px-2.5 py-1.5 text-left transition-colors",
@@ -734,7 +869,13 @@ export function CustomModelsPanel() {
             {selection?.id === "new" && selection.kind === tab && (
               <div className="relative block w-full rounded border border-dashed border-accent/60 bg-accent/5 px-2.5 py-1.5 text-left text-[0.7857em] italic text-accent">
                 <span className="absolute left-0 top-1/2 h-4 w-0.5 -translate-y-1/2 rounded-full bg-accent" />
-                {t(tab === "pi" ? "settings.customModels.newPi" : "settings.customModels.newClaude")}
+                {t(
+                  tab === "pi"
+                    ? "settings.customModels.newPi"
+                    : tab === "codex"
+                      ? "settings.customModels.newCodex"
+                      : "settings.customModels.newClaude",
+                )}
               </div>
             )}
             {listItems.length === 0 && !(selection?.id === "new" && selection.kind === tab) && (
@@ -747,6 +888,10 @@ export function CustomModelsPanel() {
             {tab === "claude" ? (
               <Button variant="outline" size="sm" onClick={startNewClaude} disabled={selection?.id === "new"} className="w-full justify-center gap-1">
                 <IconPlus size={12} /> {t("settings.customModels.addClaude")}
+              </Button>
+            ) : tab === "codex" ? (
+              <Button variant="outline" size="sm" onClick={startNewCodex} disabled={selection?.id === "new"} className="w-full justify-center gap-1">
+                <IconPlus size={12} /> {t("settings.customModels.addCodex")}
               </Button>
             ) : (
               <Button variant="outline" size="sm" onClick={startNewPi} disabled={selection?.id === "new"} className="w-full justify-center gap-1">
@@ -772,6 +917,19 @@ export function CustomModelsPanel() {
               onCancel={cancel}
               onDelete={claudeForm.id ? () => setPendingDelete({ kind: "claude", id: claudeForm.id! }) : undefined}
             />
+          ) : selection?.kind === "codex" && codexForm ? (
+            <CodexProviderForm
+              key={`codex:${selection.id}`}
+              form={codexForm}
+              setForm={setCodexForm}
+              saving={saving}
+              error={error}
+              revealToken={revealToken}
+              isEdit={selection.id !== "new"}
+              onSave={() => void saveCodex()}
+              onCancel={cancel}
+              onDelete={selection.id !== "new" ? () => setPendingDelete({ kind: "codex", id: selection.id }) : undefined}
+            />
           ) : selection?.kind === "pi" && piForm ? (
             <PiProviderForm
               key={`pi:${selection.id}`}
@@ -793,9 +951,21 @@ export function CustomModelsPanel() {
 
       <ConfirmDialog
         open={pendingDelete != null}
-        title={t(pendingDelete?.kind === "pi" ? "settings.customModels.deletePiTitle" : "settings.customModels.deleteClaudeTitle")}
+        title={t(
+          pendingDelete?.kind === "pi"
+            ? "settings.customModels.deletePiTitle"
+            : pendingDelete?.kind === "codex"
+              ? "settings.customModels.deleteCodexTitle"
+              : "settings.customModels.deleteClaudeTitle",
+        )}
         description={
-          pendingDelete?.kind === "pi" ? (
+          pendingDelete?.kind === "codex" ? (
+            <>
+              {t("settings.customModels.deleteConfirmPre")}
+              <code className="rounded bg-surface-muted px-1">{pendingDelete.id}</code>
+              {t("settings.customModels.deleteCodexPost")}
+            </>
+          ) : pendingDelete?.kind === "pi" ? (
             <>
               {t("settings.customModels.deleteConfirmPre")}
               <code className="rounded bg-surface-muted px-1">{pendingDelete.id}</code>
@@ -814,6 +984,114 @@ export function CustomModelsPanel() {
         onOpenChange={(open) => { if (!open) setPendingDelete(null); }}
         onConfirm={() => void confirmRemove()}
       />
+    </div>
+  );
+}
+
+
+/* ════════════════════════ Codex provider form ════════════════════════ */
+
+function CodexProviderForm({
+  form,
+  setForm,
+  saving,
+  error,
+  revealToken,
+  isEdit,
+  onSave,
+  onCancel,
+  onDelete,
+}: {
+  form: CodexFormState;
+  setForm: (f: CodexFormState | null) => void;
+  saving: boolean;
+  error: string | null;
+  revealToken: () => Promise<string | null>;
+  isEdit: boolean;
+  onSave: () => void;
+  onCancel: () => void;
+  onDelete?: () => void;
+}) {
+  const { t } = useI18n();
+  const update = <K extends keyof CodexFormState>(key: K, value: CodexFormState[K]) =>
+    setForm({ ...form, [key]: value });
+  const updateModel = (idx: number, patch: Partial<CodexModelFormState>) =>
+    setForm({ ...form, models: form.models.map((m, i) => (i === idx ? { ...m, ...patch } : m)) });
+  const addModel = () => setForm({ ...form, models: [...form.models, { id: "", label: "" }] });
+  const removeModel = (idx: number) => setForm({ ...form, models: form.models.filter((_, i) => i !== idx) });
+
+  return (
+    <div className="space-y-2.5">
+      <div className="grid grid-cols-2 gap-2">
+        <Field label={t("settings.customModels.codexIdLabel")} hint={t("settings.customModels.codexIdHint")}>
+          <Input
+            value={form.id}
+            onChange={(e) => update("id", e.target.value)}
+            disabled={isEdit}
+            placeholder="deepseek"
+          />
+        </Field>
+        <Field label={t("settings.customModels.providerNameLabel")}>
+          <Input value={form.name} onChange={(e) => update("name", e.target.value)} placeholder="DeepSeek" />
+        </Field>
+      </div>
+
+      <Field label="Base URL" hint={t("settings.customModels.codexResponsesNote")}>
+        <Input value={form.baseUrl} onChange={(e) => update("baseUrl", e.target.value)} placeholder="https://api.deepseek.com/v1" />
+      </Field>
+
+      <Field label="API Key" hint={t("settings.customModels.apiKeyHint")}>
+        <SecretInput
+          value={form.apiKey}
+          onChange={(v) => update("apiKey", v)}
+          placeholder={isEdit ? t("settings.customModels.apiKeyKeepPlaceholder") : "sk-..."}
+          onReveal={revealToken}
+        />
+      </Field>
+
+      {/* Models sub-table */}
+      <div>
+        <div className="mb-1 flex items-center justify-between">
+          <span className="text-[0.7857em] font-medium text-content-muted">
+            {t("settings.customModels.modelListTitle", { n: form.models.filter((m) => m.id.trim()).length })}
+          </span>
+          <button type="button" onClick={addModel} className="flex items-center gap-1 text-[0.7857em] text-accent hover:text-accent/80">
+            <IconPlus size={11} /> {t("settings.customModels.addModel")}
+          </button>
+        </div>
+        {form.models.length === 0 && (
+          <p className="rounded border border-dashed border-edge px-2 py-3 text-center text-[0.7143em] text-content-subtle">
+            {t("settings.customModels.modelsEmpty")}
+          </p>
+        )}
+        <div className="space-y-1.5">
+          {form.models.map((m, idx) => (
+            <div key={idx} className="grid grid-cols-[1fr_1fr_auto] items-center gap-1.5 rounded border border-edge bg-surface/40 p-2">
+              <Input value={m.id} onChange={(e) => updateModel(idx, { id: e.target.value })} placeholder={t("settings.customModels.modelIdPlaceholder")} />
+              <Input value={m.label} onChange={(e) => updateModel(idx, { label: e.target.value })} placeholder={t("settings.customModels.displayNamePlaceholder")} />
+              <Button variant="ghost" size="icon" onClick={() => removeModel(idx)} title={t("settings.customModels.deleteModel")}>
+                <IconTrash size={12} />
+              </Button>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {error && (
+        <p className="rounded border border-danger/40 bg-danger/10 px-2 py-1.5 text-[0.7857em] text-danger">{error}</p>
+      )}
+
+      <div className="flex items-center justify-end gap-2 pt-1">
+        {onDelete && (
+          <Button variant="ghost" size="sm" onClick={onDelete} className="mr-auto text-danger hover:text-danger">
+            <IconTrash size={12} /> {t("common.delete")}
+          </Button>
+        )}
+        <Button variant="outline" size="sm" onClick={onCancel}>{t("common.cancel")}</Button>
+        <Button size="sm" onClick={onSave} disabled={saving}>
+          {saving ? t("settings.saving") : isEdit ? t("settings.customModels.update") : t("common.save")}
+        </Button>
+      </div>
     </div>
   );
 }

@@ -9,6 +9,7 @@ import type { Project, Session, MessageRecord, TurnInput, ApprovalDecision, Sess
 import type { ProviderCapabilities, UserInputAnswers, BuiltinModelOption } from "./provider.js";
 import type { CustomModelPublic, CustomModelInput, TestCustomModelResult } from "./customModel.js";
 import type { PiProviderConfig, PiProviderPublic } from "./piModel.js";
+import type { CodexProviderPublic } from "./codexModel.js";
 import type { ThemeName, EffectiveTheme, ThemeChangedMessage } from "./theme.js";
 import type { PairingStartResult, PairedDevice } from "./mobile.js";
 import type { RelayStatus, RelayVpsConfig, RelayVpsConfigInput } from "./relay.js";
@@ -1465,6 +1466,37 @@ export type DeletePiProviderInput = z.infer<typeof DeletePiProviderSchema>;
  *  into the pi authStorage at turn time. */
 export const GetPiApiKeySchema = z.object({ name: z.string().min(1) });
 export type GetPiApiKeyInput = z.infer<typeof GetPiApiKeySchema>;
+
+/* ── Codex model providers (third-party Responses-API endpoints driving the
+      Codex harness; materialized into <CODEX_HOME>/config.toml) ── */
+
+/** Save (create/update) one Codex provider. `config` carries the metadata
+ *  (name/baseUrl/models); `apiKey` is encrypted separately (safeStorage,
+ *  `codexProviderKeys`) and never lands in config.toml — empty string means
+ *  "preserve the existing key" when updating; required when creating. */
+export const SaveCodexProviderSchema = z.object({
+  id: z.string().min(1),
+  name: z.string().min(1),
+  baseUrl: z.string().min(1),
+  models: z.array(
+    z.object({
+      id: z.string().min(1),
+      label: z.string().optional(),
+      hint: z.string().optional(),
+    }),
+  ).min(1),
+  apiKey: z.string().optional(),
+});
+export type SaveCodexProviderInput = z.infer<typeof SaveCodexProviderSchema>;
+
+export const DeleteCodexProviderSchema = z.object({ id: z.string().min(1) });
+export type DeleteCodexProviderInput = z.infer<typeof DeleteCodexProviderSchema>;
+
+/** Cleartext apiKey getter — same security carve-out as
+ *  customModel.getToken / piModels.getApiKey: settings-UI eye icon only,
+ *  never a turn-time path (turn-time resolution happens inside main). */
+export const GetCodexApiKeySchema = z.object({ id: z.string().min(1) });
+export type GetCodexApiKeyInput = z.infer<typeof GetCodexApiKeySchema>;
 
 /* ── Theme / color scheme ── */
 
@@ -3653,6 +3685,14 @@ export interface RpcMap {
    *  returns getAvailable() projected into BuiltinModelOption[] shape for
    *  the composer's model picker. */
   "piModels.listAvailable": () => Promise<{ models: BuiltinModelOption[] }>;
+  // Codex model providers (visual editor for <CODEX_HOME>/config.toml's
+  // [model_providers]; keys live in the encrypted settings map)
+  "codexModels.list": () => Promise<{ providers: CodexProviderPublic[] }>;
+  "codexModels.save": (input: SaveCodexProviderInput) => Promise<{ providers: CodexProviderPublic[] }>;
+  "codexModels.delete": (input: DeleteCodexProviderInput) => Promise<{ providers: CodexProviderPublic[] }>;
+  /** Settings UI eye-icon only — same security carve-out as
+   *  customModel.getToken / piModels.getApiKey. */
+  "codexModels.getApiKey": (input: GetCodexApiKeyInput) => Promise<{ apiKey: string | null }>;
   // Theme / color scheme
   "theme.get": () => Promise<GetThemeResult>;
   "theme.set": (input: SetThemeInput) => Promise<GetThemeResult>;
@@ -4031,6 +4071,11 @@ export const IPC = {
   PI_MODELS_DELETE: "piModels:delete",
   PI_MODELS_GET_API_KEY: "piModels:getApiKey",
   PI_MODELS_LIST_AVAILABLE: "piModels:listAvailable",
+  // Codex model providers (materialized into <CODEX_HOME>/config.toml)
+  CODEX_MODELS_LIST: "codexModels:list",
+  CODEX_MODELS_SAVE: "codexModels:save",
+  CODEX_MODELS_DELETE: "codexModels:delete",
+  CODEX_MODELS_GET_API_KEY: "codexModels:getApiKey",
   // Theme / color scheme
   THEME_GET: "theme:get",
   THEME_SET: "theme:set",

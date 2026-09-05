@@ -17,6 +17,9 @@ allowBuilds:
   protobufjs: false
   ssh2: true
 
+minimumReleaseAgeExclude:
+  - '@openai/codex@0.153.4-darwin-arm64 || 0.153.4-darwin-x64 || 0.153.4-linux-arm64 || 0.153.4-linux-x64 || 0.153.4-win32-arm64 || 0.153.4-win32-x64 || 0.153.4'
+
 # pnpm 11 moved settings from package.json's `pnpm` field into this file.
 # Override app-builder-lib to ^25.1.0: electron-builder@25.1.0's CLI requires
 # `app-builder-lib/out/util/config/load`, which doesn't exist in the 25.0.0

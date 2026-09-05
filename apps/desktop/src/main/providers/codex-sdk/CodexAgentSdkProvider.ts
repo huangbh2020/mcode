@@ -1,0 +1,924 @@
+/**
+ * Codex agent provider — drives the OpenAI Codex harness via the
+ * `codex app-server` JSON-RPC protocol (stdio JSONL) and implements the
+ * AgentProvider interface from @contracts/provider.
+ *
+ * ## Route decision (vs the official @openai/codex-sdk)
+ * The published TS SDK wraps `codex exec --experimental-json`: one process
+ * per turn, NO approval callbacks, NO interrupt API, NO diff/usage events.
+ * Mcode's core interactions (tool approval, plan approval, per-turn file
+ * card + rewind) need the app-server protocol — the same one the VS Code
+ * extension speaks. We spawn the vendored binary directly; the only thing
+ * we take from the npm package is the platform binary itself.
+ *
+ * ## How Codex differs from Claude / Pi
+ *   - Permissions: sandbox × approvalPolicy, codex-native modes
+ *     (readonly/workspace/full/bypass) — NOT Claude's 4 modes. The OS
+ *     sandbox (Seatbelt/Landlock) is the primary containment; approvals are
+ *     server-initiated requests when an action wants to escape it.
+ *   - No canUseTool: approvals arrive as server→client REQUESTS
+ *     (commandExecution / fileChange requestApproval) bridged to the host's
+ *     IPC approval card. "Always allow" maps to acceptForSession (server
+ *     grants for the rest of the thread). There is NO edit-then-approve.
+ *   - File tracking: no pre-write hook for sandboxed writes. The turn's
+ *     cumulative unified diff (turn/diff/updated) is reverse-applied at
+ *     freeze time to reconstruct pre-turn content (CodexFileSnapshot);
+ *     approval-gated writes recordPre before we answer accept.
+ *   - Custom tools: no registerTool / in-process MCP. AskUserQuestion,
+ *     plan tools and browser tools ride thread/start's experimental
+ *     `dynamicTools` (functions the server calls back over JSON-RPC).
+ *   - Model/auth: third-party Responses-API endpoints from
+ *     CodexModelsStore — config.toml [model_providers] materialized into the
+ *     isolated CODEX_HOME (~/.mcode/codex); keys ride the process env
+ *     (MCODE_CODEX_KEY_<ID>), never disk. Model ids look like
+ *     "providerId/modelId" (same shape as Pi).
+ *   - Process model: one app-server per TURN (like Claude's one CLI per
+ *     turn), thread identity persisted via ctx.onProviderSessionId and
+ *     restored with thread/resume on subsequent turns.
+ */
+import { randomUUID } from "node:crypto";
+import { homedir, tmpdir } from "node:os";
+import path from "node:path";
+import { promises as fs, statSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import type {
+  AgentProvider,
+  StartTurnRequest,
+  ProviderContext,
+  TurnHandle,
+  ProviderCapabilities,
+  ApprovalRequest,
+  ProviderApprovalDecision,
+} from "@contracts/provider";
+import type { ServerRequestFrame } from "./CodexAppServerClient.js";
+import { CodexAppServerClient } from "./CodexAppServerClient.js";
+import { CodexMessageAdapter } from "./CodexMessageAdapter.js";
+import { CodexFileSnapshot } from "./CodexFileSnapshot.js";
+import { resolveCodexBinaryPath } from "./codexBinaryResolve.js";
+import {
+  CodexModelsStore,
+  codexHomePath,
+  codexKeyEnvVar,
+} from "@main/lib/codexModelsStore.js";
+import { getOrSetFileSnapshot } from "@main/lib/fileSnapshotRegistry.js";
+import { getMcpManagement } from "@main/lib/mcpConfig.js";
+import { CODEX_IDENTITY_PROMPT, joinPromptSections } from "@main/lib/systemPrompt.js";
+import { ASK_NATIVE_TOOL_PROMPT } from "@main/lib/askQuestion.js";
+import {
+  parseQuestions,
+  formatAnswersForModel,
+} from "@main/lib/askQuestion.js";
+import {
+  browserList,
+  browserNavigate,
+  browserSnapshot,
+  browserClick,
+  browserType,
+  browserEvaluate,
+  browserScreenshot,
+  BROWSER_TOOL_SPECS,
+  browserToolsUsagePrompt,
+} from "@main/browser/agentBrowserTools.js";
+
+/* ── Codex-native capability descriptors ── */
+
+/** Codex's own permission modes: (sandbox, approvalPolicy) pairs. Deliberately
+ *  NOT Claude's 4 modes — codex's OS-level sandbox is a different containment
+ *  model, and the UI renders whatever a provider declares. */
+export const CODEX_PERMISSION_MODES = [
+  {
+    value: "codex-readonly",
+    label: "Read Only",
+    icon: "shield",
+    hint: "只读沙箱:不能写文件、不能联网,适合调研与评审",
+  },
+  {
+    value: "codex-workspace",
+    label: "Workspace",
+    icon: "shieldCheck",
+    color: "text-warning",
+    hint: "工作区沙箱:cwd 内自动读写,越界操作需审批(推荐)",
+  },
+  {
+    value: "codex-full",
+    label: "Full Access",
+    icon: "shieldHalf",
+    color: "text-info",
+    hint: "无沙箱:每个命令/写操作都会弹审批",
+  },
+  {
+    value: "codex-bypass",
+    label: "Bypass",
+    icon: "shieldLock",
+    color: "text-danger",
+    hint: "跳过所有检查与审批(慎用)",
+  },
+] as const;
+
+type CodexPermissionMode = (typeof CODEX_PERMISSION_MODES)[number]["value"];
+
+/** camelCase SandboxPolicy `type` for turn/start's sandboxPolicy object form
+ *  (thread/start takes the kebab SandboxMode string; turn overrides use the
+ *  tagged object — see SandboxPolicy in the protocol schema). */
+function sandboxPolicyType(mode: CodexPermissionMode): string {
+  switch (mode) {
+    case "codex-readonly": return "readOnly";
+    case "codex-full":
+    case "codex-bypass": return "dangerFullAccess";
+    case "codex-workspace":
+    default: return "workspaceWrite";
+  }
+}
+
+/** The (sandbox, approvalPolicy) pair a UI mode maps to. Values are the
+ *  app-server's wire spellings: SandboxMode is kebab-case
+ *  ("read-only"|"workspace-write"|"danger-full-access"), approvalPolicy is
+ *  "on-request"|"never" ("untrusted" exists but is being retired upstream). */
+function codexModeToPolicy(mode: CodexPermissionMode): {
+  sandbox: string;
+  approvalPolicy: string;
+} {
+  switch (mode) {
+    case "codex-readonly":
+      return { sandbox: "read-only", approvalPolicy: "on-request" };
+    case "codex-full":
+      return { sandbox: "danger-full-access", approvalPolicy: "on-request" };
+    case "codex-bypass":
+      return { sandbox: "danger-full-access", approvalPolicy: "never" };
+    case "codex-workspace":
+    default:
+      return { sandbox: "workspace-write", approvalPolicy: "on-request" };
+  }
+}
+
+/** Static baseline for the model picker (matches the official catalog at the
+ *  pinned CLI version). Dynamic discovery rides the model/list RPC once a
+ *  provider is configured. */
+const CODEX_BUILTIN_MODELS = [
+  { id: "openai/gpt-5.5", label: "gpt-5.5", hint: "OpenAI" },
+  { id: "openai/gpt-5.6-terra", label: "gpt-5.6-terra", hint: "OpenAI" },
+  { id: "openai/gpt-5.6-luna", label: "gpt-5.6-luna", hint: "OpenAI" },
+];
+
+export class CodexAgentSdkProvider implements AgentProvider {
+  readonly id = "codex-sdk";
+  readonly displayName = "Codex";
+  readonly capabilities: ProviderCapabilities = {
+    // Approvals arrive as server→client requests bridged to the host's
+    // approval card (see the requestApproval handler in startTurn).
+    supportsApproval: true,
+    supportsResume: true, // thread/resume via persisted threadId
+    supportsStreaming: true, // item/agentMessage/delta
+    supportsMcp: true, // config.toml [mcp_servers] materialization
+    supportsAskUserQuestion: true, // dynamicTools ask_user_question
+    thinkingLevels: [
+      { value: "default", label: "Auto", hint: "让 Codex 自选" },
+      { value: "minimal", label: "Minimal", hint: "极少思考" },
+      { value: "low", label: "Low", hint: "快速" },
+      { value: "medium", label: "Med", hint: "平衡" },
+      { value: "high", label: "High", hint: "更多思考" },
+      { value: "xhigh", label: "XHigh", hint: "深度思考(依模型支持)" },
+    ],
+    permissionModes: [...CODEX_PERMISSION_MODES],
+    builtinModels: CODEX_BUILTIN_MODELS,
+    supportsCustomEndpoint: false, // Codex manages its own model-provider panel
+  };
+
+  async startTurn(req: StartTurnRequest, ctx: ProviderContext): Promise<TurnHandle> {
+    const ac = new AbortController();
+
+    /* ── 1. Binary + config bootstrap ── */
+    const codexPath = resolveCodexBinaryPath();
+    if (!codexPath) {
+      return failTurn(ctx, req.sessionId, "CODEX_BINARY_MISSING", "未找到 Codex CLI 二进制:请确认 @openai/codex 依赖安装完整(或重新安装应用)。");
+    }
+
+    // Materialize config.toml (model_providers) + AGENTS.md into the isolated
+    // CODEX_HOME. Cleartext keys never land here — they ride the env.
+    const providers = await CodexModelsStore.listPublic();
+    if (providers.length === 0) {
+      return failTurn(ctx, req.sessionId, "CODEX_NO_MODEL", "Codex 未配置任何模型:请先在「设置 → 模型配置 → Codex」中添加模型端点后再发送。");
+    }
+    await CodexModelsStore.ensureConfigMaterialized(req.cwd);
+    await ensureCodexHomeIdentity();
+    const mcpManagement = await getMcpManagement();
+    const browserToolsEnabled = !mcpManagement.browserDisabled;
+
+    /* ── 2. Model resolution ("providerId/modelId", Pi-style) ── */
+    const configured = new Set(providers.map((p) => p.id));
+    let providerId: string | null = null;
+    let modelId: string | null = null;
+    if (req.model && req.model !== "default") {
+      const slash = req.model.indexOf("/");
+      if (slash > 0 && slash < req.model.length - 1) {
+        const p = req.model.slice(0, slash);
+        const m = req.model.slice(slash + 1);
+        if (configured.has(p)) {
+          providerId = p;
+          modelId = m;
+        } else {
+          ctx.log.warn(`codex: model "${req.model}" names unconfigured provider "${p}", falling back to the first configured provider`);
+        }
+      }
+    }
+    if (!providerId || !modelId) {
+      const first = providers[0];
+      providerId = first.id;
+      modelId = first.models[0]?.id ?? null;
+      if (modelId) ctx.log.info(`codex: falling back to first configured model "${providerId}/${modelId}"`);
+    }
+    if (!modelId) {
+      return failTurn(ctx, req.sessionId, "CODEX_NO_MODEL", "Codex 所选模型端点没有可用模型:请在「设置 → 模型配置 → Codex」补全模型列表。");
+    }
+
+    /* ── 3. Permission mode → sandbox/approvalPolicy ── */
+    const mode = (req.permissionMode && req.permissionMode.startsWith("codex-")
+      ? req.permissionMode
+      : "codex-workspace") as CodexPermissionMode;
+    const { sandbox, approvalPolicy } = codexModeToPolicy(mode);
+
+    /* ── 4. Spawn app-server (env carries CODEX_HOME + provider keys) ── */
+    const env = await buildCodexEnv(ctx);
+    const client = new CodexAppServerClient({
+      codexPath,
+      cwd: req.cwd,
+      env,
+      log: ctx.log,
+    });
+
+    // File snapshot: approval-gated writes recordPre before we answer;
+    // sandboxed writes reconstruct from the turn diff at freeze.
+    const snapshot = getOrSetFileSnapshot(req.sessionId, () => new CodexFileSnapshot(req.cwd)) as CodexFileSnapshot;
+    const adapter = new CodexMessageAdapter(ctx, req.sessionId, snapshot);
+
+    // Plan-mode state — in-process boolean (synchronous, mirrors Pi's
+    // extension pattern; ctx.getPermissionMode rides async IPC and races).
+    const planMode = { active: false };
+    // Turn-scoped state the request handlers close over.
+    const activeTurn = { threadId: null as string | null, turnId: null as string | null };
+
+    client.handleRequest((frame) =>
+      handleServerRequest(frame, {
+        ctx,
+        req,
+        snapshot,
+        planMode,
+        activeTurn,
+      }),
+    );
+    const unsubscribe = client.onNotification((frame) => adapter.handleNotification(frame));
+
+    let finished = false;
+    const done = (async () => {
+      try {
+        await client.start();
+
+        // Thread identity: resume the persisted thread, or start a new one.
+        const threadParams: Record<string, unknown> = {
+          cwd: req.cwd,
+          sandbox,
+          approvalPolicy,
+          model: modelId,
+          modelProvider: providerId,
+          // Experimental (requires initialize capabilities.experimentalApi):
+          // register Mcode's host-side tools (ask/plan/browser).
+          dynamicTools: buildDynamicTools(browserToolsEnabled),
+        };
+        let threadId: string | null = null;
+        if (req.resumeProviderSessionId) {
+          try {
+            const resumed = (await client.request("thread/resume", {
+              threadId: req.resumeProviderSessionId,
+              excludeTurns: true,
+            })) as { thread?: { id?: string } } | undefined;
+            threadId = resumed?.thread?.id ?? null;
+          } catch (err) {
+            ctx.log.warn(`codex: thread/resume failed (${(err as Error).message}), starting a new thread`);
+          }
+        }
+        if (!threadId) {
+          const started = (await client.request("thread/start", threadParams)) as { thread?: { id?: string } } | undefined;
+          threadId = started?.thread?.id ?? null;
+        }
+        if (!threadId) throw new Error("thread/start 未返回 threadId");
+        activeTurn.threadId = threadId;
+        ctx.onProviderSessionId?.(threadId);
+
+        // Register Mcode's skill roots so the model can invoke user/project
+        // skills ($name). Best-effort: failure only means no skills.
+        try {
+          await client.request("skills/extraRoots/set", {
+            extraRoots: skillRootsFor(req.cwd),
+          });
+        } catch (err) {
+          ctx.log.warn(`codex: skills/extraRoots/set failed: ${(err as Error).message}`);
+        }
+
+        // Turn input: text + images (local files — codex takes paths, not
+        // inline base64).
+        const input: Array<Record<string, unknown>> = [
+          { type: "text", text: req.prompt },
+        ];
+        if (req.images?.length) {
+          for (const img of req.images) {
+            const p = await writeTempImage(img.data, img.mimeType);
+            input.push({ type: "localImage", path: p });
+          }
+        }
+
+        // Per-turn overrides: model/provider/effort persist to the thread
+        // ("this turn and subsequent turns" per protocol docs).
+        const startedTurn = (await client.request("turn/start", {
+          threadId,
+          input,
+          model: modelId,
+          modelProvider: providerId,
+          approvalPolicy,
+          sandboxPolicy: { type: sandboxPolicyType(mode) },
+          ...(req.effort && req.effort !== "default" ? { effort: req.effort } : {}),
+        })) as { turn?: { id?: string } } | undefined;
+        activeTurn.turnId = startedTurn?.turn?.id ?? null;
+
+        // turn/start returns immediately; the turn's real completion is
+        // notification-driven (adapter resolves waitTurnDone on
+        // turn/completed). Abort races the wait — on abort we request
+        // turn/interrupt and wait for the final state either way.
+        const abortedPromise = new Promise<"interrupted">((resolve) => {
+          if (ac.signal.aborted) resolve("interrupted");
+          else ac.signal.addEventListener("abort", () => resolve("interrupted"), { once: true });
+        });
+        const reason = await Promise.race([adapter.waitTurnDone(), abortedPromise]);
+
+        if (reason === "interrupted" && activeTurn.turnId) {
+          try {
+            await client.request("turn/interrupt", { threadId, turnId: activeTurn.turnId });
+          } catch {
+            /* turn may have completed concurrently */
+          }
+        }
+
+        // Give the notification pump a short grace to deliver the terminal
+        // turn/completed (it may still be in flight right after interrupt).
+        await Promise.race([
+          adapter.waitTurnDone(),
+          new Promise((r) => setTimeout(r, 2000)),
+        ]);
+        if (!adapter.hasTurnEnded) {
+          adapter.finalizeAborted();
+        }
+        await adapter.flushFinal();
+      } catch (err) {
+        if (ac.signal.aborted) {
+          if (!adapter.hasTurnEnded) adapter.finalizeAborted();
+          await adapter.flushFinal();
+        } else {
+          ctx.log.error(`codex turn failed: ${(err as Error).message}`);
+          ctx.emit({
+            type: "error",
+            sessionId: req.sessionId,
+            message: (err as Error).message,
+            code: "CODEX_SDK_ERROR",
+          });
+          if (!adapter.hasTurnEnded) adapter.finalizeError();
+          await adapter.flushFinal();
+        }
+      } finally {
+        unsubscribe();
+        finished = true;
+        try {
+          await client.dispose();
+        } catch {
+          /* process already gone */
+        }
+      }
+    })();
+
+    return {
+      done,
+      interrupt: () => {
+        ac.abort();
+        adapter.markAborted();
+      },
+      isRunning: () => !finished && !ac.signal.aborted,
+    };
+  }
+
+  /** Version probe for the settings UI. */
+  async healthCheck(): Promise<{ ok: boolean; version?: string; error?: string }> {
+    try {
+      const codexPath = resolveCodexBinaryPath();
+      if (!codexPath) return { ok: false, error: "未找到 Codex CLI 二进制" };
+      const r = spawnSync(codexPath, ["--version"], { timeout: 10_000, encoding: "utf-8" });
+      if (r.error) return { ok: false, error: r.error.message };
+      const version = (r.stdout ?? "").trim().split("\n")[0] || undefined;
+      return { ok: r.status === 0 || Boolean(version), version };
+    } catch (err) {
+      return { ok: false, error: (err as Error).message };
+    }
+  }
+}
+
+/* ── helpers ── */
+
+/** Emit an error + error-reason turn.done and return a dead handle. */
+function failTurn(
+  ctx: ProviderContext,
+  sessionId: string,
+  code: string,
+  message: string,
+): TurnHandle {
+  ctx.log.error(`codex: ${message}`);
+  ctx.emit({ type: "error", sessionId, message, code });
+  ctx.emit({ type: "turn.done", sessionId, reason: "error" });
+  return { done: Promise.resolve(), interrupt: () => {}, isRunning: () => false };
+}
+
+/** Child env: isolated CODEX_HOME + every configured provider key (the TOML
+ *  env_key references pick these up) + inherited PATH/HOME for sandbox
+ *  helpers. Keys are decrypted per turn and never persisted. */
+async function buildCodexEnv(ctx: ProviderContext): Promise<Record<string, string>> {
+  const env: Record<string, string> = {
+    ...(process.env as Record<string, string>),
+    CODEX_HOME: codexHomePath(),
+  };
+  const providers = await CodexModelsStore.listPublic();
+  for (const p of providers) {
+    if (!p.hasApiKey) continue;
+    const key = CodexModelsStore.resolveApiKey(p.id);
+    if (key) {
+      env[codexKeyEnvVar(p.id)] = key;
+    } else {
+      ctx.log.warn(`codex: failed to decrypt key for provider "${p.id}"`);
+    }
+  }
+  return env;
+}
+
+/** Mcode skill roots made visible to codex: the global manager root plus
+ *  the project's .claude/skills (same pair the Claude provider exposes via
+ *  Options.skills discovery). Only existing dirs are sent. */
+function skillRootsFor(cwd: string): string[] {
+  const roots = [path.join(homedir(), ".mcode", "skills"), path.join(cwd, ".claude", "skills")];
+  return roots.filter((r) => {
+    try {
+      return statSync(r).isDirectory();
+    } catch {
+      return false;
+    }
+  });
+}
+
+/** Write CODEX_HOME/AGENTS.md — Codex's global instructions file, which we
+ *  own inside the isolated home. Idempotent (writes only on drift). */
+async function ensureCodexHomeIdentity(): Promise<void> {
+  const dir = codexHomePath();
+  await fs.mkdir(dir, { recursive: true });
+  const content = `${joinPromptSections(
+    CODEX_IDENTITY_PROMPT,
+    ASK_NATIVE_TOOL_PROMPT,
+    PLAN_MODE_PROMPT,
+    browserToolsUsagePrompt(),
+    process.platform === "win32" ? WIN32_PATH_HINT : "",
+  )}\n`;
+  const file = path.join(dir, "AGENTS.md");
+  try {
+    const prev = await fs.readFile(file, "utf-8");
+    if (prev === content) return;
+  } catch {
+    /* first write */
+  }
+  await fs.writeFile(file, content, "utf-8");
+}
+
+const WIN32_PATH_HINT = [
+  `## Windows 路径`,
+  `本机 Windows 下 bash 可能运行在 WSL 或 Git Bash 中。写文件时始终使用 Windows 原生路径(如 D:\\workspace\\file.ts);不要使用 /mnt/<drive>/... 形式的路径。`,
+].join("\n");
+
+const PLAN_MODE_PROMPT = [
+  `## 计划模式工具`,
+  `当任务复杂或涉及重要修改时,先制定计划再执行:`,
+  `1. 调用 enter_plan_mode 进入计划模式`,
+  `2. 使用只读方式充分调研;如需验证可写文件/执行命令,但每个修改操作都需用户审批`,
+  `3. 调用 exit_plan_mode({plan: "你的详细计划"}) 提交计划给用户审批`,
+  `4. 用户批准后退出计划模式开始执行;拒绝则留在计划模式修改计划`,
+  `计划文本应为结构化的 Markdown,包含目标、步骤、影响范围。`,
+  `仅当任务复杂、多步或涉及重要修改时才进入计划模式;简单、单步或目标明确的任务直接执行,不要走计划流程。`,
+].join("\n");
+
+/** Server→client request routing context. */
+interface RequestDeps {
+  ctx: ProviderContext;
+  req: StartTurnRequest;
+  snapshot: CodexFileSnapshot;
+  planMode: { active: boolean };
+  activeTurn: { threadId: string | null; turnId: string | null };
+}
+
+/** Dispatch the server's request frames: approvals, user input, dynamic
+ *  tool calls. */
+async function handleServerRequest(
+  frame: ServerRequestFrame,
+  deps: RequestDeps,
+): Promise<unknown> {
+  const { method, params } = frame;
+  const p = (params ?? {}) as Record<string, unknown>;
+
+  // ── Approvals (v2 item/* + legacy aliases) ──
+  if (
+    method === "item/commandExecution/requestApproval" ||
+    method === "execCommandApproval"
+  ) {
+    return decideApproval(deps, {
+      toolName: "Bash",
+      input: { command: p.command ?? "" },
+      description: typeof p.reason === "string" ? p.reason : undefined,
+      p,
+    });
+  }
+  if (
+    method === "item/fileChange/requestApproval" ||
+    method === "applyPatchApproval"
+  ) {
+    // NOTE: the params carry only grantRoot (the directory being granted),
+    // not per-file paths — pre-turn content reconstruction rides the turn
+    // diff (CodexFileSnapshot), not the approval hook.
+    return decideApproval(deps, {
+      toolName: "file_change",
+      input: {
+        ...(typeof p.grantRoot === "string" ? { grantRoot: p.grantRoot } : {}),
+      },
+      description: typeof p.reason === "string" ? p.reason : undefined,
+      p,
+    });
+  }
+
+  // ── Codex-native user input (elicitation) ──
+  if (method === "item/tool/requestUserInput") {
+    return answerNativeUserInput(p, deps);
+  }
+
+  // ── Dynamic tool invocations (our registered host tools) ──
+  if (method === "item/tool/call") {
+    return invokeDynamicTool(p, deps);
+  }
+
+  // Unknown server request — respond with empty result so the server
+  // unblocks (calibrate against the generated schema as new kinds appear).
+  deps.ctx.log.warn(`codex: unhandled server request "${method}"`);
+  return {};
+}
+
+/** Shared decision pipeline for both approval kinds. */
+async function decideApproval(
+  deps: RequestDeps,
+  args: {
+    toolName: string;
+    input: unknown;
+    description?: string;
+    p: Record<string, unknown>;
+  },
+): Promise<unknown> {
+  const { ctx, req } = deps;
+  // Live mode read — a mid-turn mode flip applies to the next approval.
+  const mode = (ctx.getPermissionMode?.() ?? req.permissionMode ?? "codex-workspace") as CodexPermissionMode;
+
+  // Bypass = never-ask (the server normally won't even ask under policy
+  // "never"; this covers servers that ask anyway).
+  if (mode === "codex-bypass") {
+    return { decision: "accept" };
+  }
+
+  const alwaysAllowed = ctx.isToolAlwaysAllowed?.(args.toolName) ?? false;
+  let decision: ProviderApprovalDecision;
+  if (alwaysAllowed) {
+    decision = { allow: true };
+  } else {
+    const requestApproval = ctx.requestApproval;
+    if (!requestApproval) {
+      // No bridge (shouldn't happen) — deny safe.
+      return { decision: "decline" };
+    }
+    const approvalReq: ApprovalRequest = {
+      requestId: randomUUID(),
+      toolName: args.toolName,
+      input: args.input,
+      ...(args.description ? { description: args.description } : {}),
+    };
+    decision = await requestApproval(approvalReq);
+  }
+
+  if (!decision.allow) {
+    return { decision: "decline" };
+  }
+  // "Always allow" upgrades to a session-scoped server grant so identical
+  // actions stop prompting for this thread (codex's acceptForSession).
+  return { decision: "acceptForSession" };
+}
+
+/** Codex's native user-input request ({questions: [{title, options?}]},
+ *  answers keyed by question title). Bridges to the same renderer question
+ *  card as our dynamic ask_user_question tool. */
+async function answerNativeUserInput(p: Record<string, unknown>, deps: RequestDeps): Promise<unknown> {
+  const { ctx } = deps;
+  const requestUserInput = ctx.requestUserInput;
+  const rawQuestions = Array.isArray(p.questions) ? p.questions : [];
+  const questions = rawQuestions.map((q) => {
+    const obj = (q ?? {}) as { title?: string; options?: string[] | null };
+    const title = typeof obj.title === "string" ? obj.title : "问题";
+    return {
+      header: title.slice(0, 20),
+      question: title,
+      multiSelect: false,
+      options: (obj.options ?? []).filter((o): o is string => typeof o === "string").map((label) => ({ label })),
+    };
+  });
+  if (!requestUserInput || questions.length === 0) {
+    return { answers: {} };
+  }
+  const decision = await requestUserInput({ requestId: randomUUID(), questions });
+  if (decision.dismissed) {
+    return { answers: {} };
+  }
+  // answers: {[questionTitle]: {answers: string[]}}
+  const out: Record<string, { answers: string[] }> = {};
+  for (const q of questions) {
+    const v = decision.answers[q.question];
+    if (v == null) continue;
+    out[q.question] = { answers: Array.isArray(v) ? v : [String(v)] };
+  }
+  return { answers: out };
+}
+
+/* ── dynamic tools ── */
+
+/** JSON-schema function descriptors handed to thread/start. Names use
+ *  snake_case (codex tool conventions). */
+function buildDynamicTools(browserToolsEnabled: boolean): Array<Record<string, unknown>> {
+  const tools: Array<Record<string, unknown>> = [
+    {
+      type: "function",
+      name: "ask_user_question",
+      description:
+        "Ask the user a question when you need information or a decision. " +
+        "Provide a clear question and 2-4 options. After calling this tool, STOP and wait for the answer.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          questions: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                header: { type: "string", description: "A short label for the question" },
+                question: { type: "string", description: "The full question text" },
+                multiSelect: { type: "boolean", description: "Whether multiple options can be selected" },
+                options: {
+                  type: "array",
+                  items: {
+                    type: "object",
+                    properties: {
+                      label: { type: "string" },
+                      description: { type: "string" },
+                    },
+                    required: ["label"],
+                  },
+                },
+              },
+              required: ["header", "question", "multiSelect", "options"],
+            },
+          },
+        },
+        required: ["questions"],
+      },
+    },
+    {
+      type: "function",
+      name: "enter_plan_mode",
+      description:
+        "进入计划模式:先只读调研、必要时经用户逐项审批做验证,然后用 exit_plan_mode 提交计划。",
+      inputSchema: { type: "object", properties: {} },
+    },
+    {
+      type: "function",
+      name: "exit_plan_mode",
+      description:
+        "提交你的执行计划给用户审批。批准后退出计划模式开始执行;拒绝则留在计划模式修改计划。",
+      inputSchema: {
+        type: "object",
+        properties: {
+          plan: { type: "string", description: "完整的执行计划(Markdown),包含目标、步骤、影响范围" },
+        },
+        required: ["plan"],
+      },
+    },
+  ];
+  // Browser tools (read-only trio + side-effect ones) — descriptions come
+  // from the shared spec so Claude/Pi/Codex stay in sync. Gated by the MCP
+  // panel's builtin-browser switch (same flag Claude's in-process MCP server
+  // uses).
+  if (!browserToolsEnabled) return tools;
+  const schema = (props: Record<string, unknown>, required: string[] = []): Record<string, unknown> => ({
+    type: "object",
+    properties: props,
+    ...(required.length ? { required } : {}),
+  });
+  const optId = { type: "string", description: "目标浏览器视图 id;省略则用第一个已开视图" };
+  tools.push(
+    {
+      type: "function",
+      name: "browser_list",
+      description: BROWSER_TOOL_SPECS.browser_list.description,
+      inputSchema: schema({}),
+    },
+    {
+      type: "function",
+      name: "browser_navigate",
+      description: BROWSER_TOOL_SPECS.browser_navigate.description,
+      inputSchema: schema({
+        url: { type: "string", description: "目标 URL,http(s):// 网页或 file:/// 本地文件" },
+        browserId: optId,
+      }, ["url"]),
+    },
+    {
+      type: "function",
+      name: "browser_snapshot",
+      description: BROWSER_TOOL_SPECS.browser_snapshot.description,
+      inputSchema: schema({ browserId: optId }),
+    },
+    {
+      type: "function",
+      name: "browser_click",
+      description: BROWSER_TOOL_SPECS.browser_click.description,
+      inputSchema: schema({
+        selector: { type: "string", description: "要点击元素的 CSS selector(来自 browser_snapshot)" },
+        browserId: optId,
+      }, ["selector"]),
+    },
+    {
+      type: "function",
+      name: "browser_type",
+      description: BROWSER_TOOL_SPECS.browser_type.description,
+      inputSchema: schema({
+        selector: { type: "string", description: "目标输入元素的 CSS selector" },
+        text: { type: "string", description: "要输入的文本内容" },
+        browserId: optId,
+      }, ["selector", "text"]),
+    },
+    {
+      type: "function",
+      name: "browser_evaluate",
+      description: BROWSER_TOOL_SPECS.browser_evaluate.description,
+      inputSchema: schema({
+        script: { type: "string", description: "要在页面中执行的 JavaScript 代码" },
+        browserId: optId,
+      }, ["script"]),
+    },
+    {
+      type: "function",
+      name: "browser_screenshot",
+      description: BROWSER_TOOL_SPECS.browser_screenshot.description,
+      inputSchema: schema({ browserId: optId }),
+    },
+  );
+  return tools;
+}
+
+/** Execute a dynamic-tool invocation from the server against host bridges. */
+async function invokeDynamicTool(p: Record<string, unknown>, deps: RequestDeps): Promise<unknown> {
+  const name = typeof p.tool === "string" ? p.tool : typeof p.name === "string" ? p.name : "";
+  const args = (p.arguments ?? p.args ?? {}) as Record<string, unknown>;
+  const { ctx, req, planMode } = deps;
+  const text = (t: string): unknown => ({ success: true, contentItems: [{ type: "inputText", text: t }] });
+  const fail = (t: string): unknown => ({ success: false, contentItems: [{ type: "inputText", text: t }] });
+
+  try {
+    switch (name) {
+      case "ask_user_question": {
+        const requestUserInput = ctx.requestUserInput;
+        if (!requestUserInput) return text("提问不可用");
+        const questions = parseQuestions(args);
+        if (questions.length === 0) return text("参数格式错误:未解析出有效问题");
+        const decision = await requestUserInput({
+          requestId: randomUUID(),
+          questions,
+        });
+        if (decision.dismissed) {
+          return text("用户关闭了提问,未提供答案,请继续当前任务");
+        }
+        return text(formatAnswersForModel(decision.answers, questions));
+      }
+      case "enter_plan_mode": {
+        planMode.active = true;
+        ctx.emit({ type: "mode.change", sessionId: req.sessionId, mode: "plan", source: "model" });
+        ctx.emit({ type: "plan.update", sessionId: req.sessionId, plan: "", phase: "drafting" });
+        return text(
+          "已进入计划模式。请只读调研(必要时经审批验证),完成后调用 exit_plan_mode 提交计划。",
+        );
+      }
+      case "exit_plan_mode": {
+        const plan = typeof args.plan === "string" ? args.plan : "";
+        ctx.emit({ type: "plan.update", sessionId: req.sessionId, plan, phase: "ready" });
+        const requestPlanApproval = ctx.requestPlanApproval;
+        if (!requestPlanApproval) {
+          planMode.active = false;
+          ctx.emit({ type: "mode.change", sessionId: req.sessionId, mode: "default", source: "model" });
+          return text("计划审批不可用,已自动退出计划模式。");
+        }
+        try {
+          const decision = await requestPlanApproval({ requestId: randomUUID(), plan });
+          if (decision.approved) {
+            const finalPlan = decision.editedPlan ?? plan;
+            planMode.active = false;
+            ctx.emit({ type: "mode.change", sessionId: req.sessionId, mode: "default", source: "model" });
+            const feedback = decision.feedback?.trim();
+            return text(`计划已批准,开始执行:\n\n${finalPlan}${feedback ? `\n\n用户调整意见:${feedback}` : ""}`);
+          }
+          const reason = decision.reason ?? "用户未提供理由";
+          ctx.emit({ type: "plan.update", sessionId: req.sessionId, plan, phase: "drafting" });
+          return text(`计划被用户拒绝。原因:${reason}。你仍处于计划模式,请修改计划后重新调用 exit_plan_mode。`);
+        } catch (err) {
+          planMode.active = false;
+          ctx.emit({ type: "plan.update", sessionId: req.sessionId, plan: "", phase: "cleared" });
+          ctx.emit({ type: "mode.change", sessionId: req.sessionId, mode: "default", source: "model" });
+          throw err;
+        }
+      }
+      case "browser_list":
+        return toContent(browserList());
+      case "browser_navigate":
+        return toContent(
+          await browserNavigate(
+            { url: String(args.url ?? ""), browserId: optStr(args.browserId), device: optDevice(args.device) },
+            req.cwd,
+          ),
+        );
+      case "browser_snapshot":
+        return toContent(await browserSnapshot({ browserId: optStr(args.browserId) }));
+      case "browser_click":
+        return toContent(await browserClick({ selector: String(args.selector ?? ""), browserId: optStr(args.browserId) }));
+      case "browser_type":
+        return toContent(
+          await browserType({
+            selector: String(args.selector ?? ""),
+            text: String(args.text ?? ""),
+            browserId: optStr(args.browserId),
+          }),
+        );
+      case "browser_evaluate":
+        return toContent(
+          await browserEvaluate({ script: String(args.script ?? ""), browserId: optStr(args.browserId) }),
+        );
+      case "browser_screenshot": {
+        const r = await browserScreenshot({ browserId: optStr(args.browserId) }, {
+          toolCallId: typeof p.callId === "string" ? p.callId : randomUUID(),
+          sessionId: req.sessionId,
+          turnNumber: req.turnNumber,
+          onImage: (info) => {
+            ctx.emit({
+              type: "browser.image",
+              sessionId: req.sessionId,
+              toolCallId: info.toolCallId,
+              data: info.data,
+              mimeType: info.mimeType,
+            });
+          },
+        });
+        return toContent(r);
+      }
+      default:
+        return fail(`未知工具:${name}`);
+    }
+  } catch (err) {
+    return fail(`工具执行失败:${(err as Error).message}`);
+  }
+}
+
+/** Shared ToolResult (TextBlock|ImageBlock) → dynamic-tool response. */
+function toContent(r: { content: Array<{ type: string; text?: string; data?: string; mimeType?: string }>; details?: unknown }): unknown {
+  return {
+    success: true,
+    contentItems: r.content.map((b) =>
+      b.type === "image"
+        ? { type: "inputImage", imageUrl: `data:${b.mimeType ?? "image/png"};base64,${b.data ?? ""}` }
+        : { type: "inputText", text: b.text ?? "" },
+    ),
+  };
+}
+
+function optStr(v: unknown): string | undefined {
+  return typeof v === "string" && v ? v : undefined;
+}
+
+function optDevice(v: unknown): "desktop" | "iphone" | "android" | undefined {
+  return v === "iphone" || v === "android" || v === "desktop" ? v : undefined;
+}
+
+/** Persist a base64 image to a temp file for turn input (codex takes file
+ *  paths for local images, not inline base64). */
+async function writeTempImage(base64: string, mimeType: string): Promise<string> {
+  const ext = mimeType.includes("jpeg") ? "jpg" : mimeType.includes("webp") ? "webp" : mimeType.includes("gif") ? "gif" : "png";
+  const file = path.join(tmpdir(), `mcode-codex-${randomUUID()}.${ext}`);
+  await fs.writeFile(file, Buffer.from(base64, "base64"));
+  return file;
+}

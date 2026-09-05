@@ -164,6 +164,20 @@ const api = {
       ipcRenderer.invoke(IPC.PI_MODELS_GET_API_KEY, input)) as RpcMap["piModels.getApiKey"],
   },
 
+  /** Codex model providers — third-party Responses-API endpoints driving the
+   *  Codex harness (materialized into <CODEX_HOME>/config.toml). Cleartext
+   *  keys stay in the encrypted settings map; getApiKey is the settings-UI
+   *  eye-icon carve-out only. */
+  codexModels: {
+    list: (() => ipcRenderer.invoke(IPC.CODEX_MODELS_LIST)) as RpcMap["codexModels.list"],
+    save: ((input) =>
+      ipcRenderer.invoke(IPC.CODEX_MODELS_SAVE, input)) as RpcMap["codexModels.save"],
+    delete: ((input) =>
+      ipcRenderer.invoke(IPC.CODEX_MODELS_DELETE, input)) as RpcMap["codexModels.delete"],
+    getApiKey: ((input) =>
+      ipcRenderer.invoke(IPC.CODEX_MODELS_GET_API_KEY, input)) as RpcMap["codexModels.getApiKey"],
+  },
+
   /** Color scheme: get/set the preference; theme.changed fires when the
    *  effective theme changes (incl. OS-side changes in 'system' mode). */
   theme: {

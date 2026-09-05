@@ -28,6 +28,22 @@ export function getFileSnapshot(sessionId: string): FileSnapshot {
   return snap;
 }
 
+/** Get (or create via factory) the snapshot for a session. Providers whose
+ *  snapshot needs extra turn hooks (Codex: unified-diff reconstruction)
+ *  pass a factory so a dropFileSnapshot at sendTurn is followed by their
+ *  specialized instance at startTurn. */
+export function getOrSetFileSnapshot(
+  sessionId: string,
+  create: () => FileSnapshot,
+): FileSnapshot {
+  let snap = snapshots.get(sessionId);
+  if (!snap) {
+    snap = create();
+    snapshots.set(sessionId, snap);
+  }
+  return snap;
+}
+
 /** Drop the snapshot for a session entirely (e.g. session deleted). */
 export function dropFileSnapshot(sessionId: string): void {
   snapshots.delete(sessionId);

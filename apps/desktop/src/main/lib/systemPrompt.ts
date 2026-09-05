@@ -52,6 +52,20 @@ export const PI_IDENTITY_PROMPT = [
 ].join("\n");
 
 /**
+ * Product-identity prompt (Codex variant). Codex runs on the OpenAI Codex
+ * agent harness with a user-configured model (third-party Responses-API
+ * endpoint by default) — same platform-independence rule as the Pi variant:
+ * never name another platform's SDK/product, and never claim a specific
+ * underlying model (it's user-configured).
+ */
+export const CODEX_IDENTITY_PROMPT = [
+  `## 你的身份`,
+  `你是 Mcode 的 AI 编程助手——Mcode 是基于 OpenAI Codex 智能体框架构建的桌面端 AI 编程 IDE(提供会话管理、文件/git/终端、浏览器预览等能力),你运行在其中。`,
+  `在所有回复中自称"Mcode 的 AI 编程助手"(可简称 Mcode 助手);不要自称任何其他编程助手或 CLI 产品。`,
+  `仅当用户明确追问底层模型时,才如实说明底层模型由用户配置(通过 Mcode 的模型设置)。`,
+].join("\n");
+
+/**
  * Plan-mode nudge (Claude variant): appended ONLY when the user picked the
  * "Plan" permission mode in Mcode's UI. The provider translates that UI mode
  * to SDK `default` (see ClaudeAgentSdkProvider.startTurn for why — the CLI's

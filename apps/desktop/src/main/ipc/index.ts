@@ -6,6 +6,7 @@ import { registerClaudeHandlers } from "./claude.js";
 import { registerDialogHandlers } from "./dialog.js";
 import { registerCustomModelHandlers } from "./customModel.js";
 import { registerPiModelsHandlers } from "./piModels.js";
+import { registerCodexModelsHandlers } from "./codexModels.js";
 import { registerThemeHandlers } from "./theme.js";
 import { registerFileHandlers } from "./files.js";
 import { registerRgHandlers } from "./rg.js";
@@ -56,6 +57,7 @@ export function registerIpcHandlers(): void {
   registerDialogHandlers(ipc);
   registerCustomModelHandlers(ipc);
   registerPiModelsHandlers(ipc);
+  registerCodexModelsHandlers(ipc);
   registerThemeHandlers(ipc);
   registerFileHandlers(ipc);
   registerRgHandlers(ipc);

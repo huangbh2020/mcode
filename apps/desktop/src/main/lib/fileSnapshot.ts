@@ -48,11 +48,14 @@ interface FileRecord {
 export type FrozenFile = TurnFileEntry;
 
 export class FileSnapshot {
-  private originals = new Map<string, FileRecord>();
+  /** protected (not private) so CodexFileSnapshot can subclass: codex has no
+   *  pre-write hook for auto-approved edits and rebuilds `before` from the
+   *  turn's unified diff instead (see codex-sdk/CodexFileSnapshot.ts). */
+  protected originals = new Map<string, FileRecord>();
   /** Once frozen, recordPre() is a no-op. Lets us safely call
    *  freeze() at turn end and have any straggling tool_use events
    *  (rare, but possible) be ignored. */
-  private frozen = false;
+  protected frozen = false;
 
   /** Number of files currently snapshotted (used by tests and the
    *  empty-after-freeze check). */

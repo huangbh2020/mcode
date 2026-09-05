@@ -79,9 +79,11 @@ export function ModelDropdown({
   const providerId = useSessionStore((s) => s.providerId);
   const providers = useSessionStore((s) => s.providers);
   const piAvailableModels = useSessionStore((s) => s.piAvailableModels);
+  const codexAvailableModels = useSessionStore((s) => s.codexAvailableModels);
 
   const provider = providers.find((p) => p.id === providerId);
   const isPi = provider?.id === "pi-sdk";
+  const isCodex = provider?.id === "codex-sdk";
   const isClaude = provider?.id === "claude-sdk";
   // Built-in aliases come from the provider's capabilities (claude: static
   // aliases Auto/Sonnet/Opus/Fable). Pi declares none — its models are dynamic
@@ -114,10 +116,30 @@ export function ModelDropdown({
     return groups;
   }, [isPi, piAvailableModels]);
   const piModelCount = piAvailableModels.length;
-  // "管理模型" lands on the unified model-config settings section. Both claude
-  // (custom endpoints) and pi (models.json providers) now live on the same
-  // "custom-models" page, distinguished by a type badge in its left list.
-  const manageTarget: string | null = isPi || isClaude ? "custom-models" : null;
+  // Codex surfaces its configured third-party providers exactly like pi: a
+  // supplier-grouped dynamic list (codexAvailableModels), no custom-endpoint
+  // section, no builtin aliases.
+  const showCodexModels = isCodex && codexAvailableModels.length > 0;
+  const codexGroups = useMemo(() => {
+    if (!isCodex) return [];
+    const groups: { supplier: string; models: typeof codexAvailableModels }[] = [];
+    for (const b of codexAvailableModels) {
+      const supplier = b.supplier ?? b.id.split("/")[0] ?? b.id;
+      let g = groups.find((x) => x.supplier === supplier);
+      if (!g) {
+        g = { supplier, models: [] };
+        groups.push(g);
+      }
+      g.models.push(b);
+    }
+    return groups;
+  }, [isCodex, codexAvailableModels]);
+  const codexModelCount = codexAvailableModels.length;
+  // "管理模型" lands on the unified model-config settings section. claude
+  // (custom endpoints), pi (models.json providers) and codex (Responses-API
+  // providers) live on the same "custom-models" page, distinguished by a
+  // type badge in its left list.
+  const manageTarget: string | null = isPi || isClaude || isCodex ? "custom-models" : null;
 
   // Chip label: resolve the current `model` against the ACTIVE provider's
   // model surface only. Model ids are per-provider (claude uses gateway model
@@ -135,12 +157,13 @@ export function ModelDropdown({
   const activeEntry = activeCustom?.models.find((e) => e.id === model);
   const builtin = builtinModels.find((b) => b.id === model);
   const piModel = isPi ? piAvailableModels.find((b) => b.id === model) : undefined;
+  const codexModel = isCodex ? codexAvailableModels.find((b) => b.id === model) : undefined;
   const unselected = !(activeCustom
     ? activeEntry
-    : piModel ?? builtin);
+    : piModel ?? codexModel ?? builtin);
   const chipLabel = activeCustom
     ? (activeEntry?.id ?? t("chat.model.unselected"))
-    : piModel?.label ?? builtin?.label ?? t("chat.model.unselected");
+    : piModel?.label ?? codexModel?.label ?? builtin?.label ?? t("chat.model.unselected");
 
   // Send-time "no model picked" guard: the store bumps `modelGuardPulse`
   // instead of firing a global toast, and the chip answers in place — a short
@@ -261,7 +284,7 @@ export function ModelDropdown({
                 aliases at all (its models are user-configured, surfaced via
                 the pi "模型列表" section). Future providers that declare
                 builtinModels still surface them here. */}
-            {!isClaude && !isPi && builtinModels.length > 0 && (
+            {!isClaude && !isPi && !isCodex && builtinModels.length > 0 && (
               <div className="border-b border-edge/60 pb-1">
                 <div className="px-3 py-1 text-xs uppercase tracking-wide text-content-subtle">
                   {t("chat.model.builtin")}
@@ -354,6 +377,81 @@ export function ModelDropdown({
                                     <span className="truncate font-medium">{b.label}</span>
                                     {b.hint && (
                                       <span className="shrink-0 rounded bg-accent/15 px-1 text-[10px] text-accent">1M</span>
+                                    )}
+                                  </span>
+                                  {active && <IconCheck size={14} className="shrink-0" />}
+                                </Menu.Item>
+                              );
+                            })}
+                          </Menu.Popup>
+                        </Menu.Positioner>
+                      </Menu.Portal>
+                    </Menu.SubmenuRoot>
+                  );
+                })}
+              </div>
+            )}
+
+            {/* Codex models: configured third-party providers from the Codex
+                settings panel, grouped by supplier (same shape as pi's). Each
+                entry is a "providerId/modelId" string resolved by
+                CodexAgentSdkProvider at turn time via the TOML
+                model_providers materialization. */}
+            {showCodexModels && (
+              <div className="border-b border-edge/60 pb-1">
+                <div className="flex items-center justify-between px-3 py-1">
+                  <span className="text-xs uppercase tracking-wide text-content-subtle">{t("chat.model.list")}</span>
+                  <span className="text-xs text-content-subtle">{codexModelCount}</span>
+                </div>
+                {codexGroups.map((group) => {
+                  const groupActive = group.models.some((b) => model === b.id);
+                  const groupRow = (
+                    <span className="flex min-w-0 items-center gap-2">
+                      <span className="truncate font-medium">{group.supplier}</span>
+                      {groupActive && <IconCheck size={14} className="shrink-0" />}
+                    </span>
+                  );
+                  const groupClasses = cn(
+                    "flex w-full items-center justify-between px-3 py-2 text-left text-[13px] outline-none select-none",
+                    "data-[highlighted]:bg-surface-muted data-[highlighted]:text-content",
+                    groupActive ? "text-accent" : "text-content-muted",
+                  );
+                  return (
+                    <Menu.SubmenuRoot key={group.supplier}>
+                      <Menu.SubmenuTrigger
+                        openOnHover
+                        closeDelay={120}
+                        className={groupClasses}
+                      >
+                        {groupRow}
+                        <IconChevronRight size={12} className="ml-2 shrink-0 opacity-60" />
+                      </Menu.SubmenuTrigger>
+                      <Menu.Portal>
+                        <Menu.Positioner side="right" align="start" sideOffset={4}>
+                          <Menu.Popup
+                            className={cn(
+                              "z-50 min-w-[220px] origin-left rounded-lg border border-edge bg-surface py-1.5 shadow-2xl",
+                              "data-[ending-style]:scale-95 data-[ending-style]:opacity-0",
+                              "data-[starting-style]:scale-95 data-[starting-style]:opacity-0",
+                              "transition-[transform,opacity] duration-100",
+                            )}
+                          >
+                            {group.models.map((b) => {
+                              const active = model === b.id;
+                              return (
+                                <Menu.Item
+                                  key={b.id}
+                                  onClick={() => setModel(b.id)}
+                                  className={cn(
+                                    "flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-[13px] outline-none select-none",
+                                    "data-[highlighted]:bg-surface-muted",
+                                    active ? "text-accent" : "text-content-muted",
+                                  )}
+                                >
+                                  <span className="flex min-w-0 items-baseline gap-2">
+                                    <span className="truncate font-medium">{b.label}</span>
+                                    {b.hint && (
+                                      <span className="shrink-0 rounded bg-accent/15 px-1 text-[10px] text-accent">{b.hint}</span>
                                     )}
                                   </span>
                                   {active && <IconCheck size={14} className="shrink-0" />}
@@ -462,7 +560,7 @@ export function ModelDropdown({
                 configured providers still gets the "管理模型" entry below, so
                 it only hits this branch when the pi SDK itself failed to load
                 (piAvailableModels stays empty but manageTarget is set). */}
-            {!isClaude && !isPi && builtinModels.length === 0 && !showPiModels && !showCustomSection && (
+            {!isClaude && !isPi && !isCodex && builtinModels.length === 0 && !showPiModels && !showCustomSection && (
               <div className="px-3 py-2 text-[13px] text-content-subtle">
                 {t("chat.model.noneAvailable")}
               </div>
@@ -475,6 +573,12 @@ export function ModelDropdown({
             )}
             {/* Pi with no discovered models: nudge toward the Pi models panel. */}
             {isPi && !showPiModels && (
+              <div className="px-3 py-2 text-[13px] text-content-subtle">
+                {t("chat.model.notConfigured")}
+              </div>
+            )}
+            {/* Codex with no configured providers: nudge toward the Codex panel. */}
+            {isCodex && !showCodexModels && (
               <div className="px-3 py-2 text-[13px] text-content-subtle">
                 {t("chat.model.notConfigured")}
               </div>

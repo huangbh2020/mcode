@@ -976,6 +976,12 @@ export interface SessionState {
    *  ModelDropdown when the active provider is pi-sdk, since pi's
    *  `capabilities.builtinModels` is empty (models are dynamic). */
   piAvailableModels: BuiltinModelOption[];
+  /** Codex models the user can pick (configured third-party providers from
+   *  the settings panel, projected to "providerId/modelId"). Populated by
+   *  `reloadCodexAvailableModels` — used by ModelDropdown when the active
+   *  provider is codex-sdk, since codex's `capabilities.builtinModels` is
+   *  empty (models come from user config, mirroring pi). */
+  codexAvailableModels: BuiltinModelOption[];
   /** Discovered skills for the composer `/` menu. Cached per active project
    *  (global ~/.claude/skills + the project's .claude/skills); refreshed on
    *  init and project switch. Empty list = no skills installed. */
@@ -1653,6 +1659,7 @@ export interface SessionState {
    *  ModelDropdown when the active provider is pi-sdk). Called on init and
    *  after any PiModelsPanel save/delete. */
   reloadPiAvailableModels: () => Promise<void>;
+  reloadCodexAvailableModels: () => Promise<void>;
   setModel: (model: string) => void;
   setEffort: (effort: EffortLevel) => void;
   setCustomModel: (id: string | null, model?: string) => void;
@@ -2097,6 +2104,7 @@ const EMPTY_CUSTOM_MODELS: CustomModelPublic[] = [];
 const EMPTY_LAST_MODEL_BY_PROVIDER: Record<string, { model: string; customModelId: string | null }> = {};
 const EMPTY_PROVIDERS: ProviderInfo[] = [];
 const EMPTY_PI_MODELS: BuiltinModelOption[] = [];
+const EMPTY_CODEX_MODELS: BuiltinModelOption[] = [];
 const EMPTY_SKILLS: SkillInfo[] = [];
 const EMPTY_SESSIONS: Session[] = [];
 export const EMPTY_SUBAGENTS: SubagentSnapshot[] = [];
@@ -2843,11 +2851,17 @@ function syncConfigFromSession(
  * none — never silently falls back to a first/implicit model.
  */
 function resolveSendModel(
-  s: Pick<SessionState, "model" | "customModelId" | "providerId" | "providers" | "customModels" | "piAvailableModels">,
+  s: Pick<SessionState, "model" | "customModelId" | "providerId" | "providers" | "customModels" | "piAvailableModels" | "codexAvailableModels">,
 ): { model: string; customModelId: string | null } | null {
   const provider = s.providers.find((p) => p.id === s.providerId);
   if (provider?.id === "pi-sdk") {
     if (s.model !== "default" && s.piAvailableModels.some((m) => m.id === s.model)) {
+      return { model: s.model, customModelId: null };
+    }
+    return null;
+  }
+  if (provider?.id === "codex-sdk") {
+    if (s.model !== "default" && s.codexAvailableModels.some((m) => m.id === s.model)) {
       return { model: s.model, customModelId: null };
     }
     return null;
@@ -2867,10 +2881,11 @@ function resolveSendModel(
  *  the config dialog is the only way out; selectable-but-unpicked → a light
  *  toast nudge to pick one. */
 function hasSelectableModel(
-  s: Pick<SessionState, "providerId" | "providers" | "customModels" | "piAvailableModels">,
+  s: Pick<SessionState, "providerId" | "providers" | "customModels" | "piAvailableModels" | "codexAvailableModels">,
 ): boolean {
   const provider = s.providers.find((p) => p.id === s.providerId);
   if (provider?.id === "pi-sdk") return s.piAvailableModels.length > 0;
+  if (provider?.id === "codex-sdk") return s.codexAvailableModels.length > 0;
   if (provider?.id === "claude-sdk") {
     return s.customModels.some((cfg) => cfg.models.some((m) => m.id.trim()));
   }
@@ -2918,7 +2933,7 @@ function persistComposerSelection(
  *  the entry when still valid, null when the model was deleted (caller then
  *  falls back to "default"). */
 function isValidRememberedModel(
-  s: Pick<SessionState, "providers" | "customModels" | "piAvailableModels">,
+  s: Pick<SessionState, "providers" | "customModels" | "piAvailableModels" | "codexAvailableModels">,
   providerId: string,
   entry: { model: string; customModelId: string | null } | undefined,
 ): entry is { model: string; customModelId: string | null } {
@@ -2927,6 +2942,9 @@ function isValidRememberedModel(
   if (!provider) return false;
   if (provider.id === "pi-sdk") {
     return s.piAvailableModels.some((m) => m.id === entry.model);
+  }
+  if (provider.id === "codex-sdk") {
+    return s.codexAvailableModels.some((m) => m.id === entry.model);
   }
   if (provider.id === "claude-sdk") {
     const cfg = s.customModels.find((m) => m.id === entry.customModelId);
@@ -2968,6 +2986,9 @@ function validateComposerSelection(
     patch = { providerId: DEFAULT_PROVIDER_ID, model: "default", customModelId: null };
   } else if (provider.id === "pi-sdk") {
     const ok = s.piAvailableModels.some((m) => m.id === s.model);
+    if (!ok) patch = { model: "default", customModelId: null };
+  } else if (provider.id === "codex-sdk") {
+    const ok = s.codexAvailableModels.some((m) => m.id === s.model);
     if (!ok) patch = { model: "default", customModelId: null };
   } else if (provider.id === "claude-sdk") {
     // Valid only when the custom config still exists AND the selected model
@@ -4134,6 +4155,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   customModels: EMPTY_CUSTOM_MODELS,
   providers: EMPTY_PROVIDERS,
   piAvailableModels: EMPTY_PI_MODELS,
+  codexAvailableModels: EMPTY_CODEX_MODELS,
   skills: EMPTY_SKILLS,
   effort: "high",
   todosBySession: {},
@@ -4566,6 +4588,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     // — may take a moment on first run while the SDK loads; the dropdown
     // shows an empty state until it resolves.
     void get().reloadPiAvailableModels();
+    void get().reloadCodexAvailableModels();
 
     // Skill list for the composer `/` menu (scans ~/.claude/skills + the
     // active project's .claude/skills).
@@ -8494,6 +8517,26 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       validateComposerSelection(set, get);
     } catch (err) {
       console.error("reloadPiAvailableModels failed:", err);
+    }
+  },
+
+  reloadCodexAvailableModels: async () => {
+    try {
+      const { providers } = await api.codexModels.list();
+      const models = providers.flatMap((p) =>
+        p.models.map((m) => ({
+          id: `${p.id}/${m.id}`,
+          label: m.label ?? m.id,
+          hint: m.hint,
+          supplier: p.name,
+        })),
+      );
+      set({ codexAvailableModels: models });
+      // A persisted composer pick whose codex model was deleted falls back
+      // to auto.
+      validateComposerSelection(set, get);
+    } catch (err) {
+      console.error("reloadCodexAvailableModels failed:", err);
     }
   },
 
