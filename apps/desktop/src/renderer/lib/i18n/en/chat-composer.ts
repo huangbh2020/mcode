@@ -182,7 +182,7 @@ export const en = {
   "chat.effort.hintHigh": "More thinking",
   "chat.effort.hintXhigh": "Deep thinking",
   "chat.effort.hintMax": "Most thorough, slowest",
-  "chat.effort.hintCodexDefault": "Omit effort; the model applies its own default (GPT-5.6 defaults to medium)",
+  "chat.effort.hintCodexDefault": "Omit effort; the model applies its own default level",
   "chat.effort.hintCodexMinimal": "Minimal reasoning, speed first",
   "chat.effort.hintCodexLow": "Fast responses with lighter reasoning; useful for straightforward queries and short explanations",
   "chat.effort.hintCodexMedium": "A solid balance of reasoning depth and latency for general-purpose tasks",

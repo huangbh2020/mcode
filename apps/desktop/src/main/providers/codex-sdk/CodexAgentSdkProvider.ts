@@ -196,7 +196,7 @@ export class CodexAgentSdkProvider implements AgentProvider {
     // the enum but is a Responses-API persistence mechanism, not a picker
     // option — intentionally not surfaced.
     thinkingLevels: [
-      { value: "default", label: "Default", hint: "不显式指定,由模型使用自身默认(GPT-5.6 默认 medium)" },
+      { value: "default", label: "Default", hint: "不显式指定 effort,由模型使用自身默认档位" },
       { value: "minimal", label: "Minimal", hint: "最少推理,速度优先" },
       { value: "low", label: "Low", hint: "更快的响应、较轻的推理;适合简单问答与短解释" },
       { value: "medium", label: "Medium", hint: "推理深度与时延平衡,适合日常任务" },
