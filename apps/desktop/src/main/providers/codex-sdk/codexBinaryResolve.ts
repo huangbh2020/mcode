@@ -20,9 +20,9 @@
  *     we resolve via the wrapper's package.json directory when possible and
  *     fall back to direct require.resolve of the platform package.
  */
-import { existsSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
 import { createRequire } from "node:module";
-import { join } from "node:path";
+import { basename as pathBasename, join } from "node:path";
 
 /** The platform-package suffix, e.g. "darwin-arm64" / "win32-x64". */
 function platformSuffix(): string {
@@ -72,12 +72,13 @@ function findBinaryInPackage(pkgDir: string): string | null {
  */
 export function resolveCodexBinaryPath(): string | null {
   const req = createRequire(import.meta.url);
-
-  // 1) Direct require.resolve of the platform package's binary.
   const pkg = `@openai/codex-${platformSuffix()}`;
+
+  // 1) Direct require.resolve of the platform package from the main chunk's
+  //    context. Works under npm/yarn hoisted layouts; under pnpm the platform
+  //    package is NOT hoisted into apps/desktop/node_modules, so this usually
+  //    fails and we fall through to (2).
   try {
-    // Resolve the platform package's package.json to get its directory —
-    // robust across pnpm's virtual-store layout.
     const pkgJson = req.resolve(`${pkg}/package.json`);
     const dir = join(pkgJson, "..");
     const found = findBinaryInPackage(dir);
@@ -86,20 +87,52 @@ export function resolveCodexBinaryPath(): string | null {
     // fall through
   }
 
-  // 2) pnpm fallback: sibling node_modules next to the wrapper package.
+  // 2) Resolve the platform package FROM the wrapper package's context —
+  //    exactly how the wrapper's own bin/codex.js finds the binary. This
+  //    handles pnpm's scope-sibling layout (the platform package lives at
+  //    .pnpm/.../node_modules/@openai/codex-darwin-arm64, a SIBLING of
+  //    @openai/codex, NOT a nested node_modules under it) and every hoisted
+  //    layout alike, because it delegates to Node's own resolution.
   try {
     const wrapperJson = req.resolve("@openai/codex/package.json");
-    const wrapperDir = join(wrapperJson, "..");
-    const sibling = join(wrapperDir, "node_modules", pkg);
-    if (existsSync(sibling)) {
-      const found = findBinaryInPackage(sibling);
-      if (found) return toUnpackedPath(found);
+    const wrapperRequire = createRequire(wrapperJson);
+    const platformJson = wrapperRequire.resolve(`${pkg}/package.json`);
+    const dir = join(platformJson, "..");
+    const found = findBinaryInPackage(dir);
+    if (found) return toUnpackedPath(found);
+  } catch {
+    // fall through
+  }
+
+  // 3) pnpm store-direct probe. pnpm's symlink for the wrapper's aliased
+  //    optional dep (`@openai/codex-darwin-arm64: npm:@openai/codex@x-plat`)
+  //    is observed to DANGLE (it targets .../node_modules/@openai/codex while
+  //    the store entry dir is .../@openai/codex-darwin-arm64), and pnpm
+  //    reinstalls keep reverting manual repairs — so Node resolution (2)
+  //    can't be trusted for this layout. Instead, locate the store entry by
+  //    its deterministic directory name (@openai+codex@<ver>-<suffix>) and
+  //    probe the package inside directly.
+  try {
+    const wrapperJson = req.resolve("@openai/codex/package.json");
+    let dir = join(wrapperJson, "..");
+    for (let i = 0; i < 8 && dir !== join(dir, ".."); i++) {
+      if (pathBasename(dir) === ".pnpm") {
+        const suffix = platformSuffix();
+        for (const entry of readdirSync(dir)) {
+          if (!entry.startsWith("@openai+codex@") || !entry.endsWith(`-${suffix}`)) continue;
+          const candidate = join(dir, entry, "node_modules", "@openai", "codex-darwin-arm64");
+          const found = findBinaryInPackage(candidate);
+          if (found) return toUnpackedPath(found);
+        }
+        break;
+      }
+      dir = join(dir, "..");
     }
   } catch {
     // fall through
   }
 
-  // 3) Packaged-app fallback: construct directly from process.resourcesPath
+  // 4) Packaged-app fallback: construct directly from process.resourcesPath
   //    (covers require.resolve failing to walk to node_modules from the main
   //    chunk's location).
   if (process.resourcesPath) {
