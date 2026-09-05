@@ -556,8 +556,9 @@ export interface CompactResultEvent {
 
 /** An agent tool captured a screenshot (or other image) that should be shown
  *  inline in the conversation. Emitted by Pi's `browser_screenshot` tool via
- *  `ctx.emit`; Claude's in-process MCP server surfaces images through the
- *  normal tool_result content (parsed by the store). Both paths key off
+ *  `ctx.emit`, and by the Codex adapter for native `imageGeneration` items.
+ *  Claude's in-process MCP server surfaces images through the normal
+ *  tool_result content (parsed by the store). All paths key off
  *  `toolCallId` to attach the image as a block next to the tool_use card. */
 export interface BrowserImageEvent {
   type: "browser.image";
@@ -565,8 +566,9 @@ export interface BrowserImageEvent {
   toolCallId: string;
   /** Base64-encoded image bytes (no data: prefix). */
   data: string;
-  /** Image MIME type — always "image/png" for screenshots today. */
-  mimeType: "image/png";
+  /** Image MIME type — "image/png" for screenshots; codex-generated images
+   *  may also be jpeg/webp/gif. */
+  mimeType: "image/png" | "image/jpeg" | "image/webp" | "image/gif";
 }
 
 /**

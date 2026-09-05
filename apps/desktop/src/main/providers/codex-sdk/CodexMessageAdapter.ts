@@ -19,8 +19,12 @@
  *     `{tokenUsage: {last, total, modelContextWindow}}` — `last` is the
  *     final request's context size (the honest occupancy read),
  *     `modelContextWindow` the model's real window when known.
+ *   - Image items: `imageGeneration` {result(b64), savedPath, revisedPrompt,
+ *     status, failure} renders as a synthetic tool card + inline image via
+ *     `browser.image`; `imageView` {path} (view_image tool) as a path card.
  */
 import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
 import type { RuntimeEvent, TurnDoneReason, ContextUsageEvent } from "@contracts/runtime";
 import type { ProviderContext } from "@contracts/provider";
 import type { NotificationFrame } from "./CodexAppServerClient.js";
@@ -40,6 +44,10 @@ export class CodexMessageAdapter {
   /** Per-item thinking message ids (text vs summary channels). */
   private reasoningTextIds = new Map<string, string>();
   private reasoningSummaryIds = new Map<string, string>();
+  /** Image items (imageGeneration / imageView) whose synthetic tool-use card
+   *  has been emitted — item/started may be skipped for them, so the
+   *  completed handler re-checks before emitting image + result. */
+  private imageItemsSeen = new Set<string>();
 
   constructor(
     private readonly ctx: ProviderContext,
@@ -244,6 +252,27 @@ export class CodexMessageAdapter {
           });
         }
         break;
+      case "imageGeneration":
+        this.handleImageGeneration(item, completed);
+        break;
+      case "imageView":
+        // Model viewed a local image (codex view_image tool). Lightweight
+        // card with the path only — viewed ≠ generated, and the same file
+        // may already be visible elsewhere in the conversation.
+        if (!completed) {
+          this.imageItemsSeen.add(item.id);
+          this.emitToolUse(item.id, "view_image", { path: item.path ?? "" });
+        } else {
+          this.ensureImageCard(item.id, "view_image", { path: item.path ?? "" });
+          this.emit({
+            type: "tool.result",
+            sessionId: this.sessionId,
+            toolCallId: item.id,
+            isError: false,
+            content: item.path ?? "",
+          });
+        }
+        break;
       case "dynamicToolCall":
         // Our own host-side tools — the invocation round-trip already
         // produced the user-visible result text via the response; the item
@@ -268,10 +297,69 @@ export class CodexMessageAdapter {
         });
         break;
       // userMessage (input echo),collab_agent_tool_call, sub_agent_activity,
-      // sleep, image_view, review markers, context_compaction — ignored.
+      // sleep, review markers, context_compaction — ignored.
       default:
         break;
     }
+  }
+
+  /** Codex-native image generation (schema-calibrated 0.153.4): item shape is
+   *  {result: string, status, revisedPrompt?, savedPath?, failure?}. The
+   *  generated image is attached inline via the shared `browser.image` path
+   *  (store splices it right after the synthetic tool-use card); the card's
+   *  result text carries the revised prompt / failure. Reads are synchronous
+   *  to keep emission order intact inside the notification pump. */
+  private handleImageGeneration(
+    item: Extract<ThreadItem, { type: "imageGeneration" }>,
+    completed: boolean,
+  ): void {
+    if (!completed) {
+      this.imageItemsSeen.add(item.id);
+      this.emitToolUse(item.id, "image_generation", item.revisedPrompt ? { revisedPrompt: item.revisedPrompt } : {});
+      return;
+    }
+    this.ensureImageCard(item.id, "image_generation", item.revisedPrompt ? { revisedPrompt: item.revisedPrompt } : {});
+    const failure = item.failure;
+    if (failure) {
+      this.emit({
+        type: "tool.result",
+        sessionId: this.sessionId,
+        toolCallId: item.id,
+        isError: true,
+        content:
+          failure.type === "usageLimitExceeded"
+            ? `image generation usage limit exceeded (limit ${failure.limitId ?? "unknown"})`
+            : `image generation failed (${failure.type ?? item.status ?? "unknown"})`,
+      });
+      return;
+    }
+    const img = resolveGeneratedImage(item);
+    if (img) {
+      this.emit({
+        type: "browser.image",
+        sessionId: this.sessionId,
+        toolCallId: item.id,
+        data: img.data,
+        mimeType: img.mimeType,
+      });
+    }
+    this.emit({
+      type: "tool.result",
+      sessionId: this.sessionId,
+      toolCallId: item.id,
+      isError: !img,
+      content:
+        item.revisedPrompt ??
+        (img ? item.status ?? "" : typeof item.result === "string" && item.result.length <= 200 ? item.result : item.status ?? ""),
+    });
+  }
+
+  /** Emit the synthetic tool-use card for an image item if `item/started`
+   *  never carried it (the card must exist before image/result can attach). */
+  private ensureImageCard(id: string, toolName: string, input: unknown): void {
+    if (this.imageItemsSeen.has(id)) return;
+    this.imageItemsSeen.add(id);
+    this.emitToolUse(id, toolName, input);
   }
 
   private emitToolUse(toolCallId: string, toolName: string, input: unknown): void {
@@ -353,6 +441,42 @@ function changeKind(kind: unknown): string {
   return typeof kind === "string" ? kind : "update";
 }
 
+const IMAGE_MIME_BY_EXT: Record<string, "image/png" | "image/jpeg" | "image/webp" | "image/gif"> = {
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".webp": "image/webp",
+  ".gif": "image/gif",
+};
+
+/** Result strings below this length are treated as status text, not image
+ *  data — real base64 payloads are kilobytes at minimum. */
+const BASE64_MIN_LENGTH = 1024;
+
+/** imageGeneration item → inline image (base64 + mime). Prefers savedPath
+ *  (exact bytes + true mime); falls back to the `result` string when it
+ *  looks like base64 image data. Returns null when neither yields an image
+ *  (the card then surfaces the status text as a failed result). */
+function resolveGeneratedImage(
+  item: Extract<ThreadItem, { type: "imageGeneration" }>,
+): { data: string; mimeType: "image/png" | "image/jpeg" | "image/webp" | "image/gif" } | null {
+  if (item.savedPath) {
+    try {
+      const data = readFileSync(item.savedPath);
+      const ext = item.savedPath.slice(item.savedPath.lastIndexOf(".")).toLowerCase();
+      return { data: data.toString("base64"), mimeType: IMAGE_MIME_BY_EXT[ext] ?? "image/png" };
+    } catch {
+      // savedPath unreadable (deleted between generation and display) —
+      // fall through to the result-string heuristic.
+    }
+  }
+  const result = item.result;
+  if (typeof result === "string" && result.length >= BASE64_MIN_LENGTH && /^[A-Za-z0-9+/=\r\n]+$/.test(result)) {
+    return { data: result.replace(/[\r\n]/g, ""), mimeType: "image/png" };
+  }
+  return null;
+}
+
 /* ── app-server payload shapes (calibrated against 0.153.4 live + schema) ── */
 
 type ThreadItem =
@@ -365,6 +489,18 @@ type ThreadItem =
   | { type: "webSearch"; id: string; query?: string }
   | { type: "plan"; id: string; text?: string }
   | { type: "userMessage"; id: string }
-  | { type: "error"; id: string; message?: string };
+  | { type: "error"; id: string; message?: string }
+  | {
+      type: "imageGeneration";
+      id: string;
+      /** Base64 image data per the schema — used as fallback when savedPath
+       *  is absent (OpenAI image_generation_call carries b64 here). */
+      result?: string;
+      status?: string;
+      revisedPrompt?: string | null;
+      savedPath?: string | null;
+      failure?: { type?: string; limitId?: string; resetsAt?: number | null } | null;
+    }
+  | { type: "imageView"; id: string; path?: string };
 
 export const newCodexRequestId = randomUUID;
