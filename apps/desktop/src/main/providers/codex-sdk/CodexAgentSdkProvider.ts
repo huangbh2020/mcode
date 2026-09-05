@@ -101,20 +101,20 @@ export const CODEX_PERMISSION_MODES = [
     value: "read-only",
     label: "Read Only",
     icon: "shield",
-    hint: "Codex 可读取当前工作区文件;编辑文件或访问互联网需要审批",
+    hint: "仅可读取当前工作区文件;编辑文件或访问互联网需要审批",
   },
   {
     value: "default",
     label: "Default",
     icon: "shieldCheck",
-    hint: "Codex 可读写当前工作区文件并执行命令;访问互联网或修改工作区外文件需要审批",
+    hint: "可读写当前工作区文件并执行命令;访问互联网或修改工作区外文件需要审批",
   },
   {
     value: "full-access",
     label: "Full Access",
     icon: "shieldLock",
     color: "text-danger",
-    hint: "Codex 可修改工作区外文件并访问互联网,无需审批;请谨慎使用",
+    hint: "可修改工作区外文件并访问互联网,无需审批;请谨慎使用",
   },
 ] as const;
 

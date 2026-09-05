@@ -195,9 +195,9 @@ export const en = {
   // ── permission mode dropdown ──
   "chat.permission.section": "Permission level",
   "chat.permission.hintDefault": "Standard behavior; tools request approval per the rules",
-  "chat.permission.hintCodexReadOnly": "Codex can read files in the current workspace. Approval is required to edit files or access the internet",
-  "chat.permission.hintCodexDefault": "Codex can read and edit files in the current workspace, and run commands. Approval is required to access the internet or edit other files",
-  "chat.permission.hintCodexFullAccess": "Codex can edit files outside this workspace and access the internet without asking for approval. Exercise caution",
+  "chat.permission.hintCodexReadOnly": "Files in the current workspace can be read; approval is required to edit files or access the internet",
+  "chat.permission.hintCodexDefault": "Files in the current workspace can be read and edited, and commands can run; approval is required to access the internet or edit files outside the workspace",
+  "chat.permission.hintCodexFullAccess": "Files outside the workspace can be edited and the internet accessed without approval. Exercise caution",
   "chat.permission.hintAcceptEdits": "Auto-allow file edits inside the working directory",
   "chat.permission.hintPlan": "Read-only exploration; every write requires approval",
   "chat.permission.hintBypass": "Skip all permission checks (use with care)",
