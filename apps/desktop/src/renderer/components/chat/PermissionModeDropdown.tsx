@@ -64,12 +64,20 @@ const FALLBACK_LABEL: Record<string, string> = {
  *  hints as data (declared in main, identical for claude + pi); resolve known
  *  modes through the dictionary at render time and fall back to the declared
  *  hint for unknown/future values. Labels (Default/Plan/…) are intentionally
- *  locale-neutral and stay as declared. */
+ *  locale-neutral and stay as declared.
+ *
+ *  Lookup is PROVIDER-QUALIFIED first (`"<providerId>:<value>"`): values
+ *  collide across providers with different semantics — codex's "default" is
+ *  the official :workspace profile (workspace-write + on-request), not
+ *  Claude's default — so codex carries its own three entries. */
 const PERMISSION_HINT_KEYS: Record<string, MessageId> = {
   default: "chat.permission.hintDefault",
   acceptEdits: "chat.permission.hintAcceptEdits",
   plan: "chat.permission.hintPlan",
   bypassPermissions: "chat.permission.hintBypass",
+  "codex-sdk:read-only": "chat.permission.hintCodexReadOnly",
+  "codex-sdk:default": "chat.permission.hintCodexDefault",
+  "codex-sdk:full-access": "chat.permission.hintCodexFullAccess",
 };
 
 export function PermissionModeDropdown({
@@ -172,7 +180,8 @@ export function PermissionModeDropdown({
             </div>
             {modes.map((m) => {
               const active = m.value === permissionMode;
-              const hintKey = PERMISSION_HINT_KEYS[m.value];
+              const hintKey =
+                PERMISSION_HINT_KEYS[`${providerId}:${m.value}`] ?? PERMISSION_HINT_KEYS[m.value];
               return (
                 <Menu.Item
                   key={m.value}

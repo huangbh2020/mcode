@@ -82,56 +82,76 @@ import {
 
 /* ── Codex-native capability descriptors ── */
 
-/** Codex's own permission modes: (sandbox, approvalPolicy) pairs. Deliberately
- *  NOT Claude's 4 modes — codex's OS-level sandbox is a different containment
- *  model, and the UI renders whatever a provider declares. */
+/** Codex's own permission presets — the official Permission Profiles surface
+ *  (labels and semantics lifted verbatim from the codex binary's profile
+ *  definitions; NOT Mcode-invented combinations):
+ *    :read-only          "Read Only"    — read workspace files; approval
+ *                                        required to edit or access internet
+ *    :workspace          "Default"      — read+edit workspace files, run
+ *                                        commands; approval required for
+ *                                        internet or out-of-workspace edits
+ *                                        (identical to Agent mode)
+ *    :danger-full-access "Full Access"  — edit anywhere + internet, no
+ *                                        approval. Exercise caution.
+ *  Values are the profile names without the leading colon ("default" lands on
+ *  the same neutral slot Claude/Pi use, so new codex sessions start in the
+ *  official Default profile out of the box). */
 export const CODEX_PERMISSION_MODES = [
   {
-    value: "codex-readonly",
+    value: "read-only",
     label: "Read Only",
     icon: "shield",
-    hint: "只读沙箱:不能写文件、不能联网,适合调研与评审",
+    hint: "Codex 可读取当前工作区文件;编辑文件或访问互联网需要审批",
   },
   {
-    value: "codex-workspace",
-    label: "Workspace",
+    value: "default",
+    label: "Default",
     icon: "shieldCheck",
-    color: "text-warning",
-    hint: "工作区沙箱:cwd 内自动读写,越界操作需审批(推荐)",
+    hint: "Codex 可读写当前工作区文件并执行命令;访问互联网或修改工作区外文件需要审批",
   },
   {
-    value: "codex-full",
+    value: "full-access",
     label: "Full Access",
-    icon: "shieldHalf",
-    color: "text-info",
-    hint: "无沙箱:每个命令/写操作都会弹审批",
-  },
-  {
-    value: "codex-bypass",
-    label: "Bypass",
     icon: "shieldLock",
     color: "text-danger",
-    hint: "跳过所有检查与审批(慎用)",
+    hint: "Codex 可修改工作区外文件并访问互联网,无需审批;请谨慎使用",
   },
 ] as const;
 
 type CodexPermissionMode = (typeof CODEX_PERMISSION_MODES)[number]["value"];
+
+/** Legacy values from the first implementation (pre-official-presets). A
+ *  session row persisted with one still resolves to its nearest official
+ *  profile instead of silently falling back to Default. */
+const LEGACY_MODE_MAP: Record<string, CodexPermissionMode> = {
+  "codex-readonly": "read-only",
+  "codex-workspace": "default",
+  "codex-full": "full-access",
+  "codex-bypass": "full-access",
+};
+
+/** Normalize a persisted/UI permission-mode value to an official codex
+ *  profile value. Unknown/absent → "default" (codex's own default). */
+function normalizeCodexMode(mode: string | undefined | null): CodexPermissionMode {
+  if (!mode) return "default";
+  if (mode === "read-only" || mode === "default" || mode === "full-access") return mode;
+  return LEGACY_MODE_MAP[mode] ?? "default";
+}
 
 /** camelCase SandboxPolicy `type` for turn/start's sandboxPolicy object form
  *  (thread/start takes the kebab SandboxMode string; turn overrides use the
  *  tagged object — see SandboxPolicy in the protocol schema). */
 function sandboxPolicyType(mode: CodexPermissionMode): string {
   switch (mode) {
-    case "codex-readonly": return "readOnly";
-    case "codex-full":
-    case "codex-bypass": return "dangerFullAccess";
-    case "codex-workspace":
+    case "read-only": return "readOnly";
+    case "full-access": return "dangerFullAccess";
+    case "default":
     default: return "workspaceWrite";
   }
 }
 
-/** The (sandbox, approvalPolicy) pair a UI mode maps to. Values are the
- *  app-server's wire spellings: SandboxMode is kebab-case
+/** The (sandbox, approvalPolicy) pair each official profile maps to. Values
+ *  are the app-server's wire spellings: SandboxMode is kebab-case
  *  ("read-only"|"workspace-write"|"danger-full-access"), approvalPolicy is
  *  "on-request"|"never" ("untrusted" exists but is being retired upstream). */
 function codexModeToPolicy(mode: CodexPermissionMode): {
@@ -139,13 +159,11 @@ function codexModeToPolicy(mode: CodexPermissionMode): {
   approvalPolicy: string;
 } {
   switch (mode) {
-    case "codex-readonly":
+    case "read-only":
       return { sandbox: "read-only", approvalPolicy: "on-request" };
-    case "codex-full":
-      return { sandbox: "danger-full-access", approvalPolicy: "on-request" };
-    case "codex-bypass":
+    case "full-access":
       return { sandbox: "danger-full-access", approvalPolicy: "never" };
-    case "codex-workspace":
+    case "default":
     default:
       return { sandbox: "workspace-write", approvalPolicy: "on-request" };
   }
@@ -232,9 +250,7 @@ export class CodexAgentSdkProvider implements AgentProvider {
     }
 
     /* ── 3. Permission mode → sandbox/approvalPolicy ── */
-    const mode = (req.permissionMode && req.permissionMode.startsWith("codex-")
-      ? req.permissionMode
-      : "codex-workspace") as CodexPermissionMode;
+    const mode = normalizeCodexMode(req.permissionMode);
     const { sandbox, approvalPolicy } = codexModeToPolicy(mode);
 
     /* ── 4. Spawn app-server (env carries CODEX_HOME + provider keys) ── */
@@ -581,11 +597,12 @@ async function decideApproval(
 ): Promise<unknown> {
   const { ctx, req } = deps;
   // Live mode read — a mid-turn mode flip applies to the next approval.
-  const mode = (ctx.getPermissionMode?.() ?? req.permissionMode ?? "codex-workspace") as CodexPermissionMode;
+  const mode = normalizeCodexMode(ctx.getPermissionMode?.() ?? req.permissionMode);
 
-  // Bypass = never-ask (the server normally won't even ask under policy
-  // "never"; this covers servers that ask anyway).
-  if (mode === "codex-bypass") {
+  // Full Access maps to approvalPolicy "never" (official semantics: act
+  // without asking). The server normally won't ask under that policy; this
+  // covers an escalation prompt arriving anyway — auto-accept mirrors "never".
+  if (mode === "full-access") {
     return { decision: "accept" };
   }
 

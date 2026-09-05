@@ -193,6 +193,9 @@ export const zh = {
   // ── permission mode dropdown ──
   "chat.permission.section": "权限级别",
   "chat.permission.hintDefault": "标准行为,工具按规则触发审批",
+  "chat.permission.hintCodexReadOnly": "Codex 可读取当前工作区文件;编辑文件或访问互联网需要审批",
+  "chat.permission.hintCodexDefault": "Codex 可读写当前工作区文件并执行命令;访问互联网或修改工作区外文件需要审批",
+  "chat.permission.hintCodexFullAccess": "Codex 可修改工作区外文件并访问互联网,无需审批;请谨慎使用",
   "chat.permission.hintAcceptEdits": "工作目录内的文件编辑自动放行",
   "chat.permission.hintPlan": "只读探索,所有写操作都需审批",
   "chat.permission.hintBypass": "跳过所有权限检查(慎用)",
