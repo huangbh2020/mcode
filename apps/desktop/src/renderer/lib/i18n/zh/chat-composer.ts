@@ -188,6 +188,14 @@ export const zh = {
   "chat.effort.hintHigh": "更多思考",
   "chat.effort.hintXhigh": "深度思考",
   "chat.effort.hintMax": "最充分,最慢",
+  "chat.effort.hintCodexDefault": "不显式指定,由模型使用自身默认(GPT-5.6 默认 medium)",
+  "chat.effort.hintCodexMinimal": "最少推理,速度优先",
+  "chat.effort.hintCodexLow": "更快的响应、较轻的推理;适合简单问答与短解释",
+  "chat.effort.hintCodexMedium": "推理深度与时延平衡,适合日常任务",
+  "chat.effort.hintCodexHigh": "更深的推理,面向复杂问题",
+  "chat.effort.hintCodexXhigh": "超高推理深度,面向复杂问题",
+  "chat.effort.hintCodexMax": "最大推理深度,面向最难的问题",
+  "chat.effort.hintCodexUltra": "最大推理并自动任务委派(可能主动使用多个子代理)",
   "chat.effort.rowLabel": "思考",
 
   // ── permission mode dropdown ──

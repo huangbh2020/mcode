@@ -182,6 +182,14 @@ export const en = {
   "chat.effort.hintHigh": "More thinking",
   "chat.effort.hintXhigh": "Deep thinking",
   "chat.effort.hintMax": "Most thorough, slowest",
+  "chat.effort.hintCodexDefault": "Omit effort; the model applies its own default (GPT-5.6 defaults to medium)",
+  "chat.effort.hintCodexMinimal": "Minimal reasoning, speed first",
+  "chat.effort.hintCodexLow": "Fast responses with lighter reasoning; useful for straightforward queries and short explanations",
+  "chat.effort.hintCodexMedium": "A solid balance of reasoning depth and latency for general-purpose tasks",
+  "chat.effort.hintCodexHigh": "Greater reasoning depth for complex problems",
+  "chat.effort.hintCodexXhigh": "Extra high reasoning for complex problems",
+  "chat.effort.hintCodexMax": "Maximum reasoning depth for the hardest problems",
+  "chat.effort.hintCodexUltra": "Maximum reasoning with automatic task delegation (may proactively use multiple agents)",
   "chat.effort.rowLabel": "Thinking",
 
   // ── permission mode dropdown ──

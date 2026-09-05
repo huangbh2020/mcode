@@ -38,7 +38,12 @@ function labelFor(levels: { value: string; label: string }[] | undefined, value:
  *  hints as data (declared in main, not localizable there); we resolve the
  *  known levels through the dictionary at render time and fall back to the
  *  provider-declared hint for unknown/future values. Labels (Auto/Low/…) are
- *  intentionally locale-neutral and stay as declared. */
+ *  intentionally locale-neutral and stay as declared.
+ *
+ *  Lookup is PROVIDER-QUALIFIED first (`"<providerId>:<value>"`): values
+ *  collide across providers with different semantics — codex's level set and
+ *  per-level meaning are its own (official model-catalog preset texts), so
+ *  codex carries its own entries and never reads claude/pi's. */
 const EFFORT_HINT_KEYS: Record<string, MessageId> = {
   default: "chat.effort.hintDefault",
   off: "chat.effort.hintOff",
@@ -48,6 +53,14 @@ const EFFORT_HINT_KEYS: Record<string, MessageId> = {
   high: "chat.effort.hintHigh",
   xhigh: "chat.effort.hintXhigh",
   max: "chat.effort.hintMax",
+  "codex-sdk:default": "chat.effort.hintCodexDefault",
+  "codex-sdk:minimal": "chat.effort.hintCodexMinimal",
+  "codex-sdk:low": "chat.effort.hintCodexLow",
+  "codex-sdk:medium": "chat.effort.hintCodexMedium",
+  "codex-sdk:high": "chat.effort.hintCodexHigh",
+  "codex-sdk:xhigh": "chat.effort.hintCodexXhigh",
+  "codex-sdk:max": "chat.effort.hintCodexMax",
+  "codex-sdk:ultra": "chat.effort.hintCodexUltra",
 };
 
 export function EffortDropdown({
@@ -138,7 +151,8 @@ export function EffortDropdown({
             </div>
             {levels.map((m) => {
               const active = m.value === effort;
-              const hintKey = EFFORT_HINT_KEYS[m.value];
+              const hintKey =
+                EFFORT_HINT_KEYS[`${providerId}:${m.value}`] ?? EFFORT_HINT_KEYS[m.value];
               const hint = hintKey
                 ? t(hintKey, { provider: provider?.displayName ?? "" })
                 : m.hint;

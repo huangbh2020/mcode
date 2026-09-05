@@ -189,13 +189,21 @@ export class CodexAgentSdkProvider implements AgentProvider {
     supportsStreaming: true, // item/agentMessage/delta
     supportsMcp: true, // config.toml [mcp_servers] materialization
     supportsAskUserQuestion: true, // dynamicTools ask_user_question
+    // Codex's own reasoning-effort surface, verbatim: values are the binary's
+    // effort enum, labels its TUI display names, hints its model-catalog
+    // preset descriptions (translated). "default" = omit effort → the model's
+    // own default (e.g. GPT-5.6 defaults to medium). "persistent" exists in
+    // the enum but is a Responses-API persistence mechanism, not a picker
+    // option — intentionally not surfaced.
     thinkingLevels: [
-      { value: "default", label: "Auto", hint: "让 Codex 自选" },
-      { value: "minimal", label: "Minimal", hint: "极少思考" },
-      { value: "low", label: "Low", hint: "快速" },
-      { value: "medium", label: "Med", hint: "平衡" },
-      { value: "high", label: "High", hint: "更多思考" },
-      { value: "xhigh", label: "XHigh", hint: "深度思考(依模型支持)" },
+      { value: "default", label: "Default", hint: "不显式指定,由模型使用自身默认(GPT-5.6 默认 medium)" },
+      { value: "minimal", label: "Minimal", hint: "最少推理,速度优先" },
+      { value: "low", label: "Low", hint: "更快的响应、较轻的推理;适合简单问答与短解释" },
+      { value: "medium", label: "Medium", hint: "推理深度与时延平衡,适合日常任务" },
+      { value: "high", label: "High", hint: "更深的推理,面向复杂问题" },
+      { value: "xhigh", label: "XHigh", hint: "超高推理深度,面向复杂问题" },
+      { value: "max", label: "Max", hint: "最大推理深度,面向最难的问题" },
+      { value: "ultra", label: "Ultra", hint: "最大推理并自动任务委派(可能主动使用多个子代理)" },
     ],
     permissionModes: [...CODEX_PERMISSION_MODES],
     builtinModels: CODEX_BUILTIN_MODELS,
