@@ -23,6 +23,7 @@
 import { homedir } from "node:os";
 import path from "node:path";
 import { promises as fs } from "node:fs";
+import { randomUUID } from "node:crypto";
 import type { CodexModelOption, CodexProviderConfig, CodexProviderPublic } from "@contracts/codexModel";
 import { SettingRepo } from "@main/store/repositories.js";
 import { encrypt, decrypt } from "@main/lib/secretStore.js";
@@ -143,9 +144,12 @@ function mcpServerToml(name: string, raw: unknown): string | null {
   return lines.join("\n");
 }
 
-/** Write <CODEX_HOME>/config.toml from current settings state.
- *  `cwd` (when provided) enables project-scope .mcp.json materialization for
- *  servers the user explicitly enabled (same allowlist semantics as the
+/** Write <CODEX_HOME>/config.toml from current settings state. Skips the
+ *  write entirely when the content is unchanged (a running app-server may
+ *  read the file at any moment — every turn start materializes) and writes
+ *  atomically (tmp + rename) so a concurrent reader never sees a truncated
+ *  file. `cwd` (when provided) enables project-scope .mcp.json materialization
+ *  for servers the user explicitly enabled (same allowlist semantics as the
  *  Claude provider). */
 async function materializeConfigToml(cwd?: string): Promise<void> {
   const providers = readProviders();
@@ -204,7 +208,24 @@ async function materializeConfigToml(cwd?: string): Promise<void> {
 
   const dir = codexHomePath();
   await fs.mkdir(dir, { recursive: true });
-  await fs.writeFile(path.join(dir, "config.toml"), lines.join("\n"), "utf-8");
+  const file = path.join(dir, "config.toml");
+  const content = lines.join("\n");
+  try {
+    const prev = await fs.readFile(file, "utf-8");
+    if (prev === content) return;
+  } catch {
+    /* first write */
+  }
+  // Atomic replace: tmp file in the same directory + rename, so a concurrent
+  // app-server reading config.toml never observes a half-written file.
+  const tmp = path.join(dir, `.config.toml.${randomUUID()}.tmp`);
+  await fs.writeFile(tmp, content, "utf-8");
+  try {
+    await fs.rename(tmp, file);
+  } catch (err) {
+    await fs.rm(tmp, { force: true }).catch(() => {});
+    throw err;
+  }
 }
 
 export const CodexModelsStore = {

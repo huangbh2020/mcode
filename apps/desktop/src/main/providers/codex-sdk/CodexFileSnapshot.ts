@@ -2,21 +2,14 @@
  * Codex per-turn file snapshot — extends FileSnapshot with unified-diff
  * reconstruction for auto-approved edits.
  *
- * ## The gap this bridges
- * Claude/Pi expose a pre-write interception point (canUseTool / extension
- * tool_call), where `recordPre` captures exact pre-turn content. Codex's
- * app-server only surfaces file changes AFTER they land, as a cumulative
- * per-turn unified diff (`turn/diff/updated`). Two capture paths feed this
- * class:
- *
- *   1. Approval-requested writes (plan / full-access modes): the approval
- *      handler calls `recordPre` BEFORE answering `accept` — exact content,
- *      identical semantics to Claude/Pi.
- *   2. Auto-approved writes (workspace sandbox): the adapter forwards every
- *      `turn/diff/updated` payload to {@link setTurnDiff}; freeze()
- *      reconstructs each path's pre-turn content by reverse-applying the
- *      diff to the current on-disk content. Reconstruction is conservative —
- *      any hunk mismatch drops the rewind entry (the card stays honest).
+ * The app-server only surfaces file changes AFTER they land, as a cumulative
+ * per-turn unified diff (`turn/diff/updated`). That diff is the ONLY capture
+ * path on this provider: unlike Claude/Pi there is no pre-write hook, and the
+ * approval request params carry only `grantRoot` (no per-file paths), so the
+ * approval handler cannot recordPre either — freeze() reconstructs each
+ * changed path's pre-turn content by reverse-applying the diff to the current
+ * on-disk content. Reconstruction is conservative — any hunk mismatch drops
+ * the rewind entry (the card stays honest).
  *
  * Deleted files (present pre-turn, removed in-turn) reconstruct via the
  * diff's whole-file deletion section and restore as `modified` entries

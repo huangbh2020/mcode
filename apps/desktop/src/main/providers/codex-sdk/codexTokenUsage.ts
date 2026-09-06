@@ -17,12 +17,6 @@ export interface CodexUsage {
   totalTokens?: number;
 }
 
-/** Heuristic context window by model id (best-effort; unknown → 128k). */
-function contextWindowForModel(modelId: string | undefined): number {
-  if (modelId && /^(gpt-5|gpt-6|codex)/i.test(modelId)) return 272_000;
-  return 128_000;
-}
-
 /** Build the display-ready snapshot, or undefined when nothing has been
  *  reported yet (skip-emit semantics mirror the Pi adapter). */
 export function buildCodexTokenSnapshot(

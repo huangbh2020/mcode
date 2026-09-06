@@ -89,7 +89,10 @@ export class ApprovalBridge {
   resolveApproval(requestId: string, decision: ProviderApprovalDecision, always?: boolean): string | null {
     const p = this.pendingApprovals.get(requestId);
     if (!p) return null;
-    p.resolve(decision);
+    // Surface the "always allow" intent on the decision itself so providers
+    // with a server-side session grant (codex acceptForSession) can scope
+    // their grant accordingly (one-shot "accept" vs session-wide).
+    p.resolve(decision.allow && always ? { ...decision, persist: true } : decision);
     this.pendingApprovals.delete(requestId);
     // Record "always allow" so canUseTool auto-approves this tool next time.
     if (decision.allow && always) {

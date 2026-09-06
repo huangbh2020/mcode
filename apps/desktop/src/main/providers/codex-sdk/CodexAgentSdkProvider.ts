@@ -48,7 +48,6 @@ import type {
   TurnHandle,
   ProviderCapabilities,
   ApprovalRequest,
-  ProviderApprovalDecision,
 } from "@contracts/provider";
 import type { ServerRequestFrame } from "./CodexAppServerClient.js";
 import { CodexAppServerClient } from "./CodexAppServerClient.js";
@@ -169,14 +168,12 @@ function codexModeToPolicy(mode: CodexPermissionMode): {
   }
 }
 
-/** Static baseline for the model picker (matches the official catalog at the
- *  pinned CLI version). Dynamic discovery rides the model/list RPC once a
- *  provider is configured. */
-const CODEX_BUILTIN_MODELS = [
-  { id: "openai/gpt-5.5", label: "gpt-5.5", hint: "OpenAI" },
-  { id: "openai/gpt-5.6-terra", label: "gpt-5.6-terra", hint: "OpenAI" },
-  { id: "openai/gpt-5.6-luna", label: "gpt-5.6-luna", hint: "OpenAI" },
-];
+/* ── static baseline for the model picker ── */
+// No builtinModels: codex's own catalog entries (gpt-5.x via ChatGPT auth)
+// are unreachable inside Mcode's isolated CODEX_HOME (no auth.json is ever
+// written there), and the picker drives off the user-configured
+// `codexAvailableModels` projection instead. Dynamic model/list discovery is
+// a possible future enhancement, not wired today.
 
 export class CodexAgentSdkProvider implements AgentProvider {
   readonly id = "codex-sdk";
@@ -206,7 +203,6 @@ export class CodexAgentSdkProvider implements AgentProvider {
       { value: "ultra", label: "Ultra", hint: "最大推理并自动任务委派(可能主动使用多个子代理)" },
     ],
     permissionModes: [...CODEX_PERMISSION_MODES],
-    builtinModels: CODEX_BUILTIN_MODELS,
     supportsCustomEndpoint: false, // Codex manages its own model-provider panel
   };
 
@@ -271,24 +267,52 @@ export class CodexAgentSdkProvider implements AgentProvider {
 
     /* ── 4. Spawn app-server (env carries CODEX_HOME + provider keys) ── */
     const env = await buildCodexEnv(ctx);
+    // File snapshot: sandboxed writes reconstruct from the turn diff at
+    // freeze (there is no pre-write hook; approval params carry only
+    // grantRoot, so no recordPre path exists on this provider).
+    const snapshot = getOrSetFileSnapshot(req.sessionId, () => new CodexFileSnapshot(req.cwd)) as CodexFileSnapshot;
+    // User-configured per-model context window doubles as the occupancy
+    // fallback when the server never reports modelContextWindow (third-party
+    // endpoints often don't) — the adapter's hardcoded default would
+    // understate usage for smaller windows.
+    const adapter = new CodexMessageAdapter(ctx, req.sessionId, snapshot, contextWindow);
+    // Set once the onExit handler has surfaced an unexpected process death,
+    // so the done() catch doesn't emit a second (duplicate) error card.
+    let crashEmitted = false;
     const client = new CodexAppServerClient({
       codexPath,
       cwd: req.cwd,
       env,
       ...(contextWindow ? { extraArgs: ["-c", `model_context_window=${contextWindow}`] } : {}),
       log: ctx.log,
+      onExit: (code, signal) => {
+        // Mid-turn process death: no client request is pending, so nothing
+        // else rejects the waitTurnDone race — finalize here or the turn
+        // hangs forever until the user hits stop.
+        ctx.log.error(`codex app-server exited unexpectedly (code=${code ?? "null"} signal=${signal ?? "null"})`);
+        crashEmitted = true;
+        ctx.emit({
+          type: "error",
+          sessionId: req.sessionId,
+          message: "Codex app-server 进程意外退出,回合已终止。",
+          code: "CODEX_APP_SERVER_EXITED",
+        });
+        if (!ac.signal.aborted && !adapter.hasTurnEnded) adapter.finalizeError();
+      },
     });
     if (contextWindow) {
       ctx.log.info(`codex: model "${providerId}/${modelId}" context window override: ${contextWindow}`);
     }
 
-    // File snapshot: approval-gated writes recordPre before we answer;
-    // sandboxed writes reconstruct from the turn diff at freeze.
-    const snapshot = getOrSetFileSnapshot(req.sessionId, () => new CodexFileSnapshot(req.cwd)) as CodexFileSnapshot;
-    const adapter = new CodexMessageAdapter(ctx, req.sessionId, snapshot);
-
-    // Plan-mode state — in-process boolean (synchronous, mirrors Pi's
-    // extension pattern; ctx.getPermissionMode rides async IPC and races).
+    // Plan-mode state — in-process boolean (synchronous; ctx.getPermissionMode
+    // rides async IPC and races). ⚠️ ENFORCEMENT SCOPE: unlike Pi's extension
+    // (whose tool_call handler gates EVERY tool), codex's native tools
+    // (Bash/apply_patch) never round-trip through us, and the sandbox cannot
+    // be downgraded mid-turn — so plan mode here is advisory for sandboxed
+    // workspace writes (covered by the AGENTS.md prompt) and user-prompted
+    // for sandbox-escaping actions (approvals still surface while active).
+    // The boolean drives the plan card/composer chip lifecycle and is reset
+    // in the turn finally-block if the turn ends mid-plan.
     const planMode = { active: false };
     // Turn-scoped state the request handlers close over.
     const activeTurn = { threadId: null as string | null, turnId: null as string | null };
@@ -303,6 +327,9 @@ export class CodexAgentSdkProvider implements AgentProvider {
       }),
     );
     const unsubscribe = client.onNotification((frame) => adapter.handleNotification(frame));
+
+    // Temp files written for turn-input images (deleted in finally).
+    const tempImagePaths: string[] = [];
 
     let finished = false;
     const done = (async () => {
@@ -323,9 +350,20 @@ export class CodexAgentSdkProvider implements AgentProvider {
         let threadId: string | null = null;
         if (req.resumeProviderSessionId) {
           try {
+            // ⚠️ turn/start SILENTLY DROPS unknown fields on 0.153.4 — its
+            // params have no modelProvider (verified live: an override to a
+            // different provider still hit the thread's original endpoint).
+            // Provider/model switches across turns MUST ride thread/resume,
+            // whose params officially carry model/modelProvider/cwd/sandbox/
+            // approvalPolicy as thread configuration overrides.
             const resumed = (await client.request("thread/resume", {
               threadId: req.resumeProviderSessionId,
               excludeTurns: true,
+              cwd: req.cwd,
+              sandbox,
+              approvalPolicy,
+              model: modelId,
+              modelProvider: providerId,
             })) as { thread?: { id?: string } } | undefined;
             threadId = resumed?.thread?.id ?? null;
           } catch (err) {
@@ -358,17 +396,19 @@ export class CodexAgentSdkProvider implements AgentProvider {
         if (req.images?.length) {
           for (const img of req.images) {
             const p = await writeTempImage(img.data, img.mimeType);
+            tempImagePaths.push(p);
             input.push({ type: "localImage", path: p });
           }
         }
 
-        // Per-turn overrides: model/provider/effort persist to the thread
-        // ("this turn and subsequent turns" per protocol docs).
+        // Per-turn overrides: model/effort/sandbox/approvalPolicy are official
+        // turn/start params. modelProvider is deliberately NOT sent here —
+        // turn/start has no such field and silently drops it (provider
+        // switches ride thread/resume above).
         const startedTurn = (await client.request("turn/start", {
           threadId,
           input,
           model: modelId,
-          modelProvider: providerId,
           approvalPolicy,
           sandboxPolicy: { type: sandboxPolicyType(mode) },
           ...(req.effort && req.effort !== "default" ? { effort: req.effort } : {}),
@@ -409,18 +449,39 @@ export class CodexAgentSdkProvider implements AgentProvider {
           await adapter.flushFinal();
         } else {
           ctx.log.error(`codex turn failed: ${(err as Error).message}`);
-          ctx.emit({
-            type: "error",
-            sessionId: req.sessionId,
-            message: (err as Error).message,
-            code: "CODEX_SDK_ERROR",
-          });
+          // A crash already surfaced its own error card via onExit — don't
+          // duplicate it with the transport-failure card here.
+          if (!crashEmitted) {
+            ctx.emit({
+              type: "error",
+              sessionId: req.sessionId,
+              message: (err as Error).message,
+              code: "CODEX_SDK_ERROR",
+            });
+          }
           if (!adapter.hasTurnEnded) adapter.finalizeError();
           await adapter.flushFinal();
         }
       } finally {
         unsubscribe();
         finished = true;
+        // The turn ended with the model still in plan mode (interrupt, error,
+        // or the model simply stopped without calling exit_plan_mode) — the
+        // per-turn planMode closure dies here, so reset the renderer's plan
+        // state to match or the composer chip stays stuck on plan.
+        if (planMode.active) {
+          planMode.active = false;
+          ctx.emit({ type: "mode.change", sessionId: req.sessionId, mode: "default", source: "model" });
+          ctx.emit({ type: "plan.update", sessionId: req.sessionId, plan: "", phase: "cleared" });
+        }
+        // Codex takes file paths for turn images — delete the temp copies.
+        for (const p of tempImagePaths) {
+          try {
+            await fs.unlink(p);
+          } catch {
+            /* best-effort */
+          }
+        }
         try {
           await client.dispose();
         } catch {
@@ -627,30 +688,32 @@ async function decideApproval(
   }
 
   const alwaysAllowed = ctx.isToolAlwaysAllowed?.(args.toolName) ?? false;
-  let decision: ProviderApprovalDecision;
   if (alwaysAllowed) {
-    decision = { allow: true };
-  } else {
-    const requestApproval = ctx.requestApproval;
-    if (!requestApproval) {
-      // No bridge (shouldn't happen) — deny safe.
-      return { decision: "decline" };
-    }
-    const approvalReq: ApprovalRequest = {
-      requestId: randomUUID(),
-      toolName: args.toolName,
-      input: args.input,
-      ...(args.description ? { description: args.description } : {}),
-    };
-    decision = await requestApproval(approvalReq);
+    // Recorded "always allow" — re-affirm the session-scoped server grant.
+    return { decision: "acceptForSession" };
   }
+
+  const requestApproval = ctx.requestApproval;
+  if (!requestApproval) {
+    // No bridge (shouldn't happen) — deny safe.
+    return { decision: "decline" };
+  }
+  const approvalReq: ApprovalRequest = {
+    requestId: randomUUID(),
+    toolName: args.toolName,
+    input: args.input,
+    ...(args.description ? { description: args.description } : {}),
+  };
+  const decision = await requestApproval(approvalReq);
 
   if (!decision.allow) {
     return { decision: "decline" };
   }
-  // "Always allow" upgrades to a session-scoped server grant so identical
-  // actions stop prompting for this thread (codex's acceptForSession).
-  return { decision: "acceptForSession" };
+  // Scope the server grant to what the user actually chose: a one-shot
+  // approval maps to codex's "accept" (this execution only); "always allow"
+  // (persist, recorded host-side by ApprovalBridge) upgrades to
+  // acceptForSession so identical actions stop prompting for this thread.
+  return { decision: decision.persist ? "acceptForSession" : "accept" };
 }
 
 /** Codex's native user-input request ({questions: [{title, options?}]},
@@ -774,6 +837,7 @@ function buildDynamicTools(browserToolsEnabled: boolean): Array<Record<string, u
       description: BROWSER_TOOL_SPECS.browser_navigate.description,
       inputSchema: schema({
         url: { type: "string", description: "目标 URL,http(s):// 网页或 file:/// 本地文件" },
+        device: { type: "string", enum: ["desktop", "iphone", "android"], description: "设备仿真档位,默认 desktop" },
         browserId: optId,
       }, ["url"]),
     },

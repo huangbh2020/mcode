@@ -41,6 +41,10 @@ export class CodexMessageAdapter {
   /** Terminal error text for the current turn (surfaced once). */
   private lastUsage: CodexUsage | null = null;
   private modelContextWindow: number | null = null;
+  /** Occupancy fallback when the server never reports modelContextWindow —
+   *  the user-configured per-model context window (or undefined to use the
+   *  token-snapshot's static default). */
+  private readonly contextWindowFallback: number | undefined;
   /** Per-item thinking message ids (text vs summary channels). */
   private reasoningTextIds = new Map<string, string>();
   private reasoningSummaryIds = new Map<string, string>();
@@ -53,7 +57,10 @@ export class CodexMessageAdapter {
     private readonly ctx: ProviderContext,
     private readonly sessionId: string,
     private readonly snapshots: CodexFileSnapshot,
-  ) {}
+    contextWindowFallback?: number,
+  ) {
+    this.contextWindowFallback = contextWindowFallback;
+  }
 
   markAborted(): void {
     this.aborted = true;
@@ -220,7 +227,9 @@ export class CodexMessageAdapter {
             sessionId: this.sessionId,
             toolCallId: item.id,
             isError: item.status === "failed" || item.error != null,
-            content: item.error ? String(item.error) : (item.result ?? ""),
+            content: item.error != null
+              ? stringifyResult(item.error)
+              : stringifyResult(item.result),
           });
         }
         break;
@@ -274,9 +283,17 @@ export class CodexMessageAdapter {
         }
         break;
       case "dynamicToolCall":
-        // Our own host-side tools — the invocation round-trip already
-        // produced the user-visible result text via the response; the item
-        // is just the ledger entry.
+        // Mcode's host-side tools (ask_user_question / plan / browser_*).
+        // Rendered as a regular tool card so dynamic tool usage is visible
+        // and auditable like Claude/Pi tool calls — and so the inline-image
+        // path has a card to attach to (browser_screenshot's browser.image
+        // event is keyed by callId; the card from item/started covers the
+        // item.id spelling, the store dedupes when both coincide).
+        if (!completed) {
+          this.emitToolUse(item.id, item.tool ?? "dynamic_tool", item.arguments ?? {});
+        } else {
+          this.emitDynamicToolResult(item);
+        }
         break;
       case "plan":
         if (completed && typeof item.text === "string" && item.text.trim()) {
@@ -362,6 +379,41 @@ export class CodexMessageAdapter {
     this.emitToolUse(id, toolName, input);
   }
 
+  /** dynamicToolCall completed → tool.result. Text contentItems join into
+   *  the result text; inputImage contentItems (e.g. browser_screenshot's
+   *  round-tripped image) emit as `browser.image` keyed by the item id so
+   *  the store splices them inline under this card. */
+  private emitDynamicToolResult(
+    item: Extract<ThreadItem, { type: "dynamicToolCall" }>,
+  ): void {
+    const items = Array.isArray(item.contentItems) ? item.contentItems : [];
+    const texts: string[] = [];
+    for (const ci of items) {
+      const obj = (ci ?? {}) as { type?: string; text?: unknown; imageUrl?: unknown };
+      if (obj.type === "inputImage" && typeof obj.imageUrl === "string") {
+        const img = parseDataUrlImage(obj.imageUrl);
+        if (img) {
+          this.emit({
+            type: "browser.image",
+            sessionId: this.sessionId,
+            toolCallId: item.id,
+            data: img.data,
+            mimeType: img.mimeType,
+          });
+        }
+      } else if (typeof obj.text === "string") {
+        texts.push(obj.text);
+      }
+    }
+    this.emit({
+      type: "tool.result",
+      sessionId: this.sessionId,
+      toolCallId: item.id,
+      isError: item.success === false || item.status === "failed",
+      content: texts.join("\n"),
+    });
+  }
+
   private emitToolUse(toolCallId: string, toolName: string, input: unknown): void {
     this.emit({
       type: "tool.use",
@@ -409,7 +461,10 @@ export class CodexMessageAdapter {
   }
 
   private emitTurnEndSnapshot(): void {
-    const snapshot = buildCodexTokenSnapshot(this.lastUsage, this.modelContextWindow ?? undefined);
+    const snapshot = buildCodexTokenSnapshot(
+      this.lastUsage,
+      this.modelContextWindow ?? this.contextWindowFallback,
+    );
     if (!snapshot) return;
     this.emit({ type: "token-usage.updated", sessionId: this.sessionId, snapshot });
   }
@@ -432,6 +487,22 @@ function parsePlanTextTodos(text: string): Array<{ content: string; status: "pen
     });
 }
 
+/** MCP tool result/error → display text. Objects/arrays stringify (a raw
+ *  String() would render "[object Object]"); strings and primitives pass
+ *  through; null/undefined collapse to "". */
+function stringifyResult(v: unknown): string {
+  if (v == null) return "";
+  if (typeof v === "string") return v;
+  if (typeof v === "object") {
+    try {
+      return JSON.stringify(v, null, 2);
+    } catch {
+      return String(v);
+    }
+  }
+  return String(v);
+}
+
 /** PatchChangeKind tagged-union → simple string for the card input. */
 function changeKind(kind: unknown): string {
   if (kind && typeof kind === "object") {
@@ -448,6 +519,16 @@ const IMAGE_MIME_BY_EXT: Record<string, "image/png" | "image/jpeg" | "image/webp
   ".webp": "image/webp",
   ".gif": "image/gif",
 };
+
+/** data URL (data:image/png;base64,...) → inline image payload, or null when
+ *  the URL isn't a base64 image data URL we can render. */
+function parseDataUrlImage(
+  url: string,
+): { data: string; mimeType: "image/png" | "image/jpeg" | "image/webp" | "image/gif" } | null {
+  const m = /^data:image\/(png|jpeg|webp|gif);base64,([A-Za-z0-9+/=\r\n]+)$/.exec(url.trim());
+  if (!m) return null;
+  return { mimeType: `image/${m[1]}` as "image/png" | "image/jpeg" | "image/webp" | "image/gif", data: m[2].replace(/[\r\n]/g, "") };
+}
 
 /** Result strings below this length are treated as status text, not image
  *  data — real base64 payloads are kilobytes at minimum. */
@@ -485,11 +566,22 @@ type ThreadItem =
   | { type: "commandExecution"; id: string; command?: string; aggregatedOutput?: string | null; exitCode?: number | null; status?: string; cwd?: string | null }
   | { type: "fileChange"; id: string; changes?: Array<{ path: string; kind?: unknown; diff?: string }>; status?: string }
   | { type: "mcpToolCall"; id: string; server?: string; tool?: string; result?: unknown; error?: unknown; status?: string }
-  | { type: "dynamicToolCall"; id: string; tool?: string; namespace?: string | null; status?: string; success?: boolean | null; contentItems?: unknown[] | null }
   | { type: "webSearch"; id: string; query?: string }
   | { type: "plan"; id: string; text?: string }
   | { type: "userMessage"; id: string }
   | { type: "error"; id: string; message?: string }
+  | {
+      type: "dynamicToolCall";
+      id: string;
+      tool?: string;
+      namespace?: string | null;
+      status?: string;
+      success?: boolean | null;
+      arguments?: unknown;
+      /** Response contentItems echoed back by the server — inputText for
+       *  text results, inputImage (data URL) for e.g. browser_screenshot. */
+      contentItems?: Array<{ type?: string; text?: unknown; imageUrl?: unknown } | unknown> | null;
+    }
   | {
       type: "imageGeneration";
       id: string;
