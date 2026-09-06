@@ -2,8 +2,7 @@ import { useSessionStore, EMPTY_USAGE } from "@renderer/stores/sessionStore.js";
 import { useI18n } from "@renderer/lib/i18n/index.js";
 import { IconChartBar } from "@renderer/lib/icons.js";
 import { ModelDropdown } from "./ModelDropdown.js";
-import { EffortDropdown } from "./EffortDropdown.js";
-import { PermissionModeDropdown } from "./PermissionModeDropdown.js";
+import { EffortChip, PermissionChip } from "./EffortPermissionControl.js";
 import { ContextRing } from "./ContextRing.js";
 
 /**
@@ -14,13 +13,13 @@ import { ContextRing } from "./ContextRing.js";
  *   line with the send button. Compact + muted so the textarea stays the
  *   focal point.
  *   - Model: dropdown (built-in + custom configs).
- *   - Effort: dropdown (Auto → Max), same base-ui Menu style as Permission.
- *   - Permission mode: dropdown showing the 4 user-facing modes. Kept as its
- *     own chip (not folded into a shared menu): the semantic color telegraphs
- *     risky modes (Edit Auto amber / Plan blue / Bypass red) at a glance, and
- *     each setting is directly reachable with one click.
+ *   - Effort / Permission mode: two separate chips, each opening a block-grid
+ *     popover ({@link EffortChip} / {@link PermissionChip}) — every option is
+ *     a tappable tile with a short caption; selections apply in place and the
+ *     panel stays open. The permission chip keeps the semantic color
+ *     telegraph for risky modes (Edit Auto amber / Plan violet / Bypass red).
  *   - Context ring: occupancy indicator for the active session, pinned at the
- *     right end of the chip row (after Permission).
+ *     right end of the chip row (after the two chips).
  *
  * - layout="row": the vertical settings list hosted inside the narrow-mode
  *   toggle's popup ({@link ComposerToolbarToggle}). Each control becomes a
@@ -64,8 +63,8 @@ export function ComposerToolbar({
     return (
       <div className="flex w-72 flex-col items-stretch gap-0.5">
         <ModelDropdown layout="row" />
-        <EffortDropdown layout="row" />
-        <PermissionModeDropdown layout="row" />
+        <EffortChip layout="row" />
+        <PermissionChip layout="row" />
         {contextSnapshot && (
           <div className="mt-1 flex items-center justify-between gap-2 border-t border-edge/60 px-2.5 pt-2">
             <span className="flex items-center gap-2 text-[13px] font-medium text-content-muted">
@@ -82,8 +81,8 @@ export function ComposerToolbar({
   return (
     <div className="composer-chips composer-chips-root flex min-w-0 items-center gap-1">
       <ModelDropdown />
-      <EffortDropdown />
-      <PermissionModeDropdown />
+      <EffortChip />
+      <PermissionChip />
       {contextSnapshot && (
         <span className="ml-1 inline-flex shrink-0 items-center border-l border-edge/60 pl-2">
           <ContextRing snapshot={contextSnapshot} history={usageHistory} />

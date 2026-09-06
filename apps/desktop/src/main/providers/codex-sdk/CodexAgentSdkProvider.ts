@@ -275,15 +275,46 @@ export class CodexAgentSdkProvider implements AgentProvider {
     // fallback when the server never reports modelContextWindow (third-party
     // endpoints often don't) — the adapter's hardcoded default would
     // understate usage for smaller windows.
-    const adapter = new CodexMessageAdapter(ctx, req.sessionId, snapshot, contextWindow);
+    const adapter = new CodexMessageAdapter(ctx, req.sessionId, snapshot, contextWindow, async (threadId) => {
+      // thread/read bootstrap for subagent transcripts (see adapter). The
+      // client isn't constructed yet when the adapter is — resolve lazily.
+      const client = clientRef;
+      if (!client) return [];
+      const res = (await client.request("thread/read", {
+        threadId,
+        includeTurns: true,
+      })) as { thread?: { turns?: Array<{ items?: unknown[] }> } } | undefined;
+      const items: unknown[] = [];
+      for (const turn of res?.thread?.turns ?? []) {
+        for (const it of turn.items ?? []) items.push(it);
+      }
+      return items as import("./CodexMessageAdapter.js").ThreadItem[];
+    });
     // Set once the onExit handler has surfaced an unexpected process death,
     // so the done() catch doesn't emit a second (duplicate) error card.
     let crashEmitted = false;
+    // Late-bound client handle for the adapter's thread/read bootstrap (the
+    // client is constructed below, after the adapter).
+    let clientRef: CodexAppServerClient | null = null;
     const client = new CodexAppServerClient({
       codexPath,
       cwd: req.cwd,
       env,
-      ...(contextWindow ? { extraArgs: ["-c", `model_context_window=${contextWindow}`] } : {}),
+      extraArgs: [
+        // Collab spawnAgent threads are spawned by the server itself and do
+        // NOT inherit the main thread's model/modelProvider (thread/start and
+        // thread/resume overrides apply to the main thread only) — they fall
+        // back to the process default, which without this pin is codex's
+        // builtin model (gpt-5.6-sol); third-party gateways then reject the
+        // unknown name (2026-09-06 实测 DeepSeek 网关 invalid_request_error)。
+        // Explicit thread/turn params keep priority for the main thread, and
+        // per-turn processes make the pin session-safe (no shared-file races).
+        "-c",
+        `model=${modelId}`,
+        "-c",
+        `model_provider=${providerId}`,
+        ...(contextWindow ? ["-c", `model_context_window=${contextWindow}`] : []),
+      ],
       log: ctx.log,
       onExit: (code, signal) => {
         // Mid-turn process death: no client request is pending, so nothing
@@ -300,6 +331,7 @@ export class CodexAgentSdkProvider implements AgentProvider {
         if (!ac.signal.aborted && !adapter.hasTurnEnded) adapter.finalizeError();
       },
     });
+    clientRef = client;
     if (contextWindow) {
       ctx.log.info(`codex: model "${providerId}/${modelId}" context window override: ${contextWindow}`);
     }
@@ -376,6 +408,9 @@ export class CodexAgentSdkProvider implements AgentProvider {
         }
         if (!threadId) throw new Error("thread/start 未返回 threadId");
         activeTurn.threadId = threadId;
+        // Item notifications carry threadId — the adapter routes non-main
+        // thread items to the subagent transcript viewer.
+        adapter.setMainThreadId(threadId);
         ctx.onProviderSessionId?.(threadId);
 
         // Register Mcode's skill roots so the model can invoke user/project

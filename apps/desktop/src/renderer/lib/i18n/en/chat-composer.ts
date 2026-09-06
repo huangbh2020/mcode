@@ -191,6 +191,23 @@ export const en = {
   "chat.effort.hintCodexMax": "Maximum reasoning depth for the hardest problems",
   "chat.effort.hintCodexUltra": "Maximum reasoning with automatic task delegation (may proactively use multiple agents)",
   "chat.effort.rowLabel": "Thinking",
+  // ── effort block-picker tile captions:short phrases inside the tile; full text stays in hint* ──
+  "chat.effort.tileDefault": "Model picks",
+  "chat.effort.tileOff": "Off",
+  "chat.effort.tileMinimal": "Minimal",
+  "chat.effort.tileLow": "Fastest",
+  "chat.effort.tileMedium": "Balanced",
+  "chat.effort.tileHigh": "More thought",
+  "chat.effort.tileXhigh": "Deep",
+  "chat.effort.tileMax": "Most thorough",
+  "chat.effort.tileCodexDefault": "Model default",
+  "chat.effort.tileCodexMinimal": "Least reasoning",
+  "chat.effort.tileCodexLow": "Fast response",
+  "chat.effort.tileCodexMedium": "Balanced",
+  "chat.effort.tileCodexHigh": "Deeper reasoning",
+  "chat.effort.tileCodexXhigh": "Extra deep",
+  "chat.effort.tileCodexMax": "Max depth",
+  "chat.effort.tileCodexUltra": "Reasoning + delegation",
 
   // ── permission mode dropdown ──
   "chat.permission.section": "Permission level",
@@ -202,6 +219,14 @@ export const en = {
   "chat.permission.hintPlan": "Read-only exploration; every write requires approval",
   "chat.permission.hintBypass": "Skip all permission checks (use with care)",
   "chat.permission.rowLabel": "Permissions",
+  // ── permission block-picker tile captions:short phrases inside the tile; full text stays in hint* ──
+  "chat.permission.tilePlan": "Read-only",
+  "chat.permission.tileDefault": "Standard approval",
+  "chat.permission.tileAcceptEdits": "Edits auto-allowed",
+  "chat.permission.tileBypass": "Skip checks",
+  "chat.permission.tileCodexReadOnly": "Read only",
+  "chat.permission.tileCodexDefault": "Workspace write",
+  "chat.permission.tileCodexFullAccess": "No approval",
 
   // ── provider (SDK) dropdown ──
   "chat.provider.locked": "This session's SDK is fixed and cannot be changed",

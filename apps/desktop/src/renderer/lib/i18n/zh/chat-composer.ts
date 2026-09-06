@@ -197,6 +197,23 @@ export const zh = {
   "chat.effort.hintCodexMax": "最大推理深度,面向最难的问题",
   "chat.effort.hintCodexUltra": "最大推理并自动任务委派(可能主动使用多个子代理)",
   "chat.effort.rowLabel": "思考",
+  // ── effort block-picker tile captions:2–4 字短语放在档位块内;完整说明仍走 hint* ──
+  "chat.effort.tileDefault": "模型自选",
+  "chat.effort.tileOff": "关闭",
+  "chat.effort.tileMinimal": "极少推理",
+  "chat.effort.tileLow": "最快",
+  "chat.effort.tileMedium": "平衡",
+  "chat.effort.tileHigh": "更多思考",
+  "chat.effort.tileXhigh": "深度思考",
+  "chat.effort.tileMax": "最充分",
+  "chat.effort.tileCodexDefault": "模型默认",
+  "chat.effort.tileCodexMinimal": "最少推理",
+  "chat.effort.tileCodexLow": "快速响应",
+  "chat.effort.tileCodexMedium": "平衡",
+  "chat.effort.tileCodexHigh": "更深推理",
+  "chat.effort.tileCodexXhigh": "超高推理",
+  "chat.effort.tileCodexMax": "最大深度",
+  "chat.effort.tileCodexUltra": "推理+委派",
 
   // ── permission mode dropdown ──
   "chat.permission.section": "权限级别",
@@ -208,6 +225,14 @@ export const zh = {
   "chat.permission.hintPlan": "只读探索,所有写操作都需审批",
   "chat.permission.hintBypass": "跳过所有权限检查(慎用)",
   "chat.permission.rowLabel": "权限",
+  // ── permission block-picker tile captions:短语放在模式块内;完整说明仍走 hint* ──
+  "chat.permission.tilePlan": "只读探索",
+  "chat.permission.tileDefault": "标准审批",
+  "chat.permission.tileAcceptEdits": "编辑放行",
+  "chat.permission.tileBypass": "跳过检查",
+  "chat.permission.tileCodexReadOnly": "仅读取",
+  "chat.permission.tileCodexDefault": "工作区可写",
+  "chat.permission.tileCodexFullAccess": "无需审批",
 
   // ── provider (SDK) dropdown ──
   "chat.provider.locked": "该会话的 SDK 已固定,不可更改",

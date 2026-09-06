@@ -1159,6 +1159,10 @@ function ChatPaneForSession({
   // instead of overlaying it. The composer stays mounted (state + Tiptap
   // history preserved) via `hidden` (display:none); it just isn't rendered.
   const hasPendingPrompt = !!headApproval || !!pendingPlanApproval || !!pendingQuestion;
+  // Voice model selected AND downloaded — the mic button stays hidden until
+  // the user sets one up in Settings → 语音输入 (refreshed when the dialog
+  // closes, so a first download makes the button appear without a restart).
+  const voiceModelReady = useSessionStore((s) => s.voiceModelReady);
 
   // Per-session prompt queue (FIFO). Survives tab switches — it lives in the
   // store, not component state, so draining from the turn-done handler can
@@ -3248,12 +3252,16 @@ function ChatPaneForSession({
                     writes into the same textarea that stays editable while a
                     turn runs (type-ahead + enqueue), so the mic keeps working
                     mid-turn; it only locks when a bottom prompt (approval /
-                    plan / question) hides the composer. */}
-                <MicButton
-                  sessionId={sessionId ?? ""}
-                  editorRef={editorRef}
-                  disabled={hasPendingPrompt}
-                />
+                    plan / question) hides the composer. Hidden entirely until
+                    a voice model is selected + downloaded — before that there
+                    is nothing to dictate with (see voiceModelReady). */}
+                {voiceModelReady && (
+                  <MicButton
+                    sessionId={sessionId ?? ""}
+                    editorRef={editorRef}
+                    disabled={hasPendingPrompt}
+                  />
+                )}
                 {/* SDK picker pinned left of the send button — always visible
                     (unlike the chip row, which collapses in narrow mode); locked
                     to a read-only chip once the thread has messages. */}

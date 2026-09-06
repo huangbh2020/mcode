@@ -729,6 +729,14 @@ export interface SessionState {
    *  configured). The app never downloads models — the user fetches the files
    *  themselves and points Settings → 语音输入 → 模型目录 here. */
   voiceModelDir: string;
+  /** True when a voice model is both SELECTED and present on disk (from
+   *  `voice.modelList`, which rescans the model root). The composer's mic
+   *  button renders only while this is true — before the user downloads a
+   *  model in Settings → 语音输入 there is nothing to dictate with, so the
+   *  icon stays hidden instead of failing on click. Refreshed at boot and
+   *  whenever the settings dialog closes (covers select/download/remove done
+   *  inside the panel). */
+  voiceModelReady: boolean;
   /** Custom user-message background color as an "R G B" triplet string
    *  (e.g. "124 58 237"), or null to use the theme default. Persisted in
    *  the `settings` table. Applied to <html> as --user-bubble. */
@@ -959,14 +967,26 @@ export interface SessionState {
   model: string;
   /** Custom-model config bound to the active session (null = built-in). */
   customModelId: string | null;
-  /** Last user-picked model per provider ("记住每个 SDK 上次选的模型").
-   *  Written by setModel / setCustomModel / setProvider (which stashes the
-   *  outgoing provider's selection); read when switching SDKs back so the
-   *  composer re-selects the model the user last used with that provider
-   *  instead of snapping to "default". Persisted as part of the composer
-   *  selection setting. Entries whose model was deleted are dropped (see
-   *  validateComposerSelection / rememberProviderModel). */
-  lastModelByProvider: Record<string, { model: string; customModelId: string | null }>;
+  /** Last user-picked composer config per provider ("记住每个 SDK 上次选的
+   *  模型 / 思考级别 / 权限级别"). The model binding is written by setModel /
+   *   setCustomModel; the thinking-level + permission-mode slots by setEffort /
+   *   setPermissionMode; setProvider stashes the OUTGOING provider's full
+   *  snapshot and restores the target's remembered one — switching SDKs back
+   *  re-selects what the user last used with that provider (values the target
+   *  doesn't declare are snapped to "default" via coerceSlotsForProvider)
+   *  instead of carrying the outgoing provider's values over. Persisted as
+   *  part of the composer selection setting. Entries whose model was deleted
+   *  are dropped (see validateComposerSelection). */
+  lastModelByProvider: Record<
+    string,
+    {
+      model: string;
+      customModelId: string | null;
+      /** Optional: older persisted entries carry only the model binding. */
+      effort?: EffortLevel;
+      permissionMode?: PermissionMode;
+    }
+  >;
   /** User-defined custom-model configs (desensitized — tokens masked). */
   customModels: CustomModelPublic[];
   /** Registered AI backends from `provider.list`. Empty until initDeferred. */
@@ -1595,6 +1615,9 @@ export interface SessionState {
   /** Set the default voice-input mode (continuous | pushToTalk). Persists to
    *  the `settings` table. */
   setVoiceInputMode: (mode: VoiceInputMode) => Promise<void>;
+  /** Re-check whether a voice model is selected AND downloaded
+   *  (`voice.modelList` rescans disk) and update `voiceModelReady`. */
+  refreshVoiceModelStatus: () => Promise<void>;
   /** Set the default speech-recognition language tag ("zh-CN" | "en-US"). */
   setVoiceLang: (lang: string) => Promise<void>;
   /** Set the preferred ASR engine ("zipformer" | "parakeet"). */
@@ -2760,6 +2783,35 @@ function applySessionDeletedState(s: SessionState, id: string): Partial<SessionS
   };
 }
 
+/** Coerce the composer's effort / permissionMode view slots onto a provider's
+ *  declared option lists. Level/mode ids are provider-namespaced exactly like
+ *  model ids — claude's acceptEdits/plan/bypassPermissions are not codex
+ *  modes, pi's "off" is not a claude level — so a value left over from the
+ *  outgoing provider renders as a raw id in the chip and gets sent to an SDK
+ *  that can't interpret it. Values the target provider doesn't declare snap
+ *  to "default" (the neutral slot every provider declares for both lists);
+ *  values valid for both providers pass through untouched. Callers apply this
+ *  on every provider switch (setProvider) and on re-syncs that can surface a
+ *  stale persisted value (syncConfigFromSession, reloadProviders). */
+function coerceSlotsForProvider(
+  s: Pick<SessionState, "providers" | "effort" | "permissionMode">,
+  providerId: string,
+): { effort: SessionState["effort"]; permissionMode: SessionState["permissionMode"] } {
+  const provider = s.providers.find((p) => p.id === providerId);
+  const levels = provider?.capabilities.thinkingLevels;
+  const modes = provider?.capabilities.permissionModes;
+  return {
+    effort:
+      levels && levels.length > 0 && !levels.some((l) => l.value === s.effort)
+        ? "default"
+        : s.effort,
+    permissionMode:
+      modes && modes.length > 0 && !modes.some((m) => m.value === s.permissionMode)
+        ? "default"
+        : s.permissionMode,
+  };
+}
+
 /** Read a session's persisted config (model / effort / permissionMode /
  *  customModelId) into the global view slots so the composer renders the
  *  active thread's choices. If the session can't be found (not yet loaded,
@@ -2779,11 +2831,16 @@ function syncConfigFromSession(
   // activates a session (selectSession / openTab / rewindTurn) routes through
   // this helper, so this single sync covers all of them.
   const prevPid = get().activeProjectId;
+  // effort / permissionMode are provider-namespaced (see coerceSlotsForProvider):
+  // a row persisted before a provider switch — or before this coercion existed —
+  // can carry a value its own provider doesn't declare; snap it to "default"
+  // here so the composer never renders a raw foreign id.
+  const coerced = coerceSlotsForProvider(get(), sess.providerId);
   const patch: Partial<SessionState> = {
     providerId: sess.providerId,
     model: sess.model,
-    effort: sess.effort,
-    permissionMode: sess.permissionMode,
+    effort: coerced.effort,
+    permissionMode: coerced.permissionMode,
     customModelId: sess.customModelId,
     activeProjectId: sess.projectId,
   };
@@ -2904,6 +2961,21 @@ function raiseModelGuard(): void {
   } else {
     useSessionStore.setState({ modelConfigPromptOpen: true });
   }
+}
+
+/** Snapshot of the composer's per-provider remembered config — the value
+ *  shape of `lastModelByProvider`. Every writer (setModel / setCustomModel /
+ *  setEffort / setPermissionMode / setProvider's outgoing stash) records the
+ *  FULL current config so the entry is always a complete restore point. */
+function rememberedEntryOf(
+  s: Pick<SessionState, "model" | "customModelId" | "effort" | "permissionMode">,
+): { model: string; customModelId: string | null; effort: EffortLevel; permissionMode: PermissionMode } {
+  return {
+    model: s.model,
+    customModelId: s.customModelId,
+    effort: s.effort,
+    permissionMode: s.permissionMode,
+  };
 }
 
 /** Persist the composer's current provider/model choice — the "next session"
@@ -4081,6 +4153,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   voiceEngine: "zipformer" as const,
   voiceMicPermission: "",
   voiceModelDir: "",
+  voiceModelReady: false,
   userMessageColor: null,
   accentColor: null,
   editorTheme: DEFAULT_EDITOR_THEME_CHOICE,
@@ -4403,7 +4476,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         if (parsed && typeof parsed === "object" && typeof parsed.providerId === "string") {
           // Per-provider remembered models (newer format). Guarded shape check;
           // malformed entries are simply ignored.
-          let lastMap: Record<string, { model: string; customModelId: string | null }> = {};
+          let lastMap: SessionState["lastModelByProvider"] = {};
           if (parsed.lastModelByProvider && typeof parsed.lastModelByProvider === "object") {
             for (const [k, v] of Object.entries(
               parsed.lastModelByProvider as Record<string, unknown>,
@@ -4413,10 +4486,19 @@ export const useSessionStore = create<SessionState>((set, get) => ({
                 typeof v === "object" &&
                 typeof (v as { model?: unknown }).model === "string"
               ) {
-                const cid = (v as { customModelId?: unknown }).customModelId;
+                const rec = v as { model: string; customModelId?: unknown; effort?: unknown; permissionMode?: unknown };
+                const cid = rec.customModelId;
                 lastMap[k] = {
-                  model: (v as { model: string }).model,
+                  model: rec.model,
                   customModelId: typeof cid === "string" ? cid : null,
+                  // Optional slots (older entries carry only the model
+                  // binding). String-typed only; validity against the
+                  // provider's declared options is enforced by
+                  // coerceSlotsForProvider once reloadProviders resolves.
+                  ...(typeof rec.effort === "string" ? { effort: rec.effort as EffortLevel } : {}),
+                  ...(typeof rec.permissionMode === "string"
+                    ? { permissionMode: rec.permissionMode as PermissionMode }
+                    : {}),
                 };
               }
             }
@@ -4434,6 +4516,13 @@ export const useSessionStore = create<SessionState>((set, get) => ({
               : typeof parsed.customModelId === "string"
                 ? parsed.customModelId
                 : null,
+            // Remembered thinking/permission slots ride along with the model
+            // restore; without an entry the boot defaults stand (effort
+            // "high", permission "default") until a session re-syncs.
+            ...(remembered?.effort !== undefined ? { effort: remembered.effort } : {}),
+            ...(remembered?.permissionMode !== undefined
+              ? { permissionMode: remembered.permissionMode }
+              : {}),
             lastModelByProvider: lastMap,
           });
         }
@@ -4702,6 +4791,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       if (voiceMicRaw === "granted" || voiceMicRaw === "denied") set({ voiceMicPermission: voiceMicRaw });
       const voiceModelDirRaw = ds[UI_VOICE_MODEL_DIR_SETTING_KEY];
       if (voiceModelDirRaw) set({ voiceModelDir: voiceModelDirRaw });
+      // Mic visibility: a model must be selected AND on disk — modelList
+      // rescans the root, so this is authoritative, not just the setting row.
+      void get().refreshVoiceModelStatus();
       // Shortcut overrides — parsed from the ui.shortcuts JSON blob.
       // safeParse rejects malformed blobs so a corrupt row can't crash the
       // store; on failure we keep the empty default (all defaults apply).
@@ -7546,8 +7638,13 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     }
   },
 
-  setSettingsOpen: (open, section) =>
-    set(open ? { settingsOpen: true, settingsSection: section ?? null } : { settingsOpen: false, settingsSection: null }),
+  setSettingsOpen: (open, section) => {
+    set(open ? { settingsOpen: true, settingsSection: section ?? null } : { settingsOpen: false, settingsSection: null });
+    // Closing the settings dialog may have changed the voice model setup
+    // (download / select / remove in 语音输入) — re-check so the composer mic
+    // appears/disappears without a restart.
+    if (!open) void get().refreshVoiceModelStatus();
+  },
 
   setModelConfigPromptOpen: (open) => set({ modelConfigPromptOpen: open }),
 
@@ -8108,6 +8205,23 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     } catch (err) {
       console.error("setting.set(voiceModelDir) failed:", err);
     }
+    // The model root moved — the downloaded set (and thus readiness) may have
+    // changed with it (the new dir can already contain catalog models).
+    void get().refreshVoiceModelStatus();
+  },
+
+  refreshVoiceModelStatus: async () => {
+    try {
+      const res = await api.voice.modelList();
+      // Ready = a model is selected AND its files are actually on disk
+      // (modelList rescans the root). A selection pointing at a removed
+      // download keeps the mic hidden instead of failing on click.
+      set({ voiceModelReady: !!res.selected && res.downloaded.includes(res.selected) });
+    } catch (err) {
+      // Desktop voice engine not ready — keep the previous flag (boot default
+      // false hides the mic, which is the safe side).
+      console.error("voice.modelList failed:", err);
+    }
   },
 
   setUserMessageColor: async (rgb) => {
@@ -8271,12 +8385,21 @@ export const useSessionStore = create<SessionState>((set, get) => ({
    *  (or app restart) will re-hydrate from the row. */
   setPermissionMode: (mode) => {
     const sessionId = get().activeSessionId;
-    set({ permissionMode: mode });
+    set((s) => ({
+      permissionMode: mode,
+      // Refresh the per-provider memory so the pick survives a provider
+      // switch (setProvider restores it) and an app restart.
+      lastModelByProvider: {
+        ...s.lastModelByProvider,
+        [s.providerId]: { ...rememberedEntryOf(s), permissionMode: mode },
+      },
+    }));
     if (sessionId) {
       void api.session.updateSettings({ sessionId, permissionMode: mode }).catch((err) => {
         console.error("updateSettings(permissionMode) failed:", err);
       });
     }
+    persistComposerSelection(get());
   },
 
   setEnvChoice: (choice) => {
@@ -8329,7 +8452,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       model,
       lastModelByProvider: {
         ...s.lastModelByProvider,
-        [s.providerId]: { model, customModelId: s.customModelId },
+        [s.providerId]: { ...rememberedEntryOf(s), model },
       },
     }));
     if (sessionId) {
@@ -8344,12 +8467,21 @@ export const useSessionStore = create<SessionState>((set, get) => ({
    *  for the pattern. */
   setEffort: (effort) => {
     const sessionId = get().activeSessionId;
-    set({ effort });
+    set((s) => ({
+      effort,
+      // Refresh the per-provider memory so the pick survives a provider
+      // switch (setProvider restores it) and an app restart.
+      lastModelByProvider: {
+        ...s.lastModelByProvider,
+        [s.providerId]: { ...rememberedEntryOf(s), effort },
+      },
+    }));
     if (sessionId) {
       void api.session.updateSettings({ sessionId, effort }).catch((err) => {
         console.error("updateSettings(effort) failed:", err);
       });
     }
+    persistComposerSelection(get());
   },
 
   /** Pick a built-in model or one of a custom-config's models. Both
@@ -8376,7 +8508,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         model: nextModel,
         lastModelByProvider: {
           ...s.lastModelByProvider,
-          [s.providerId]: { model: nextModel, customModelId: id },
+          [s.providerId]: { ...rememberedEntryOf(s), model: nextModel, customModelId: id },
         },
       };
     });
@@ -8428,13 +8560,29 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     if (providerChanged) {
       const s = get();
       const nextMap = { ...s.lastModelByProvider };
-      nextMap[prevProviderId] = { model: s.model, customModelId: s.customModelId };
+      // Full outgoing snapshot — model binding AND the thinking/permission
+      // slots, so switching back restores everything the user had picked.
+      nextMap[prevProviderId] = rememberedEntryOf(s);
       const remembered = nextMap[id];
       restored =
         isValidRememberedModel(s, id, remembered) && remembered.model !== "default"
           ? { model: remembered.model, customModelId: remembered.customModelId }
           : { model: "default", customModelId: null };
-      set({ providerId: id, ...restored, lastModelByProvider: nextMap });
+      // effort / permissionMode are provider-namespaced too (claude's
+      // acceptEdits is not a codex mode). Restore the target provider's
+      // remembered slots — falling back to the current values when it has
+      // none (values valid for both providers pass through) — then coerce
+      // against the target's declared options so a stale remembered value
+      // snaps to "default" instead of rendering as a raw foreign id.
+      const coerced = coerceSlotsForProvider(
+        {
+          providers: s.providers,
+          effort: remembered?.effort ?? s.effort,
+          permissionMode: remembered?.permissionMode ?? s.permissionMode,
+        },
+        id,
+      );
+      set({ providerId: id, ...restored, ...coerced, lastModelByProvider: nextMap });
     } else {
       restored = { model: get().model, customModelId: get().customModelId };
       set({ providerId: id });
@@ -8462,7 +8610,17 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       const patchRow = (list: Session[]): Session[] =>
         list.map((x) =>
           x.id === sid
-            ? { ...x, providerId: id, model: restored.model, customModelId: restored.customModelId }
+            ? {
+                ...x,
+                providerId: id,
+                model: restored.model,
+                customModelId: restored.customModelId,
+                // Persist the SAME slots the composer now shows (possibly
+                // coerced above) so a later syncConfigFromSession doesn't
+                // resurrect a stale cross-provider value from the row.
+                effort: s.effort,
+                permissionMode: s.permissionMode,
+              }
             : x,
         );
       const nextByProject = { ...s.sessionsByProject };
@@ -8488,7 +8646,14 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     void api.session
       .updateSettings(
         providerChanged
-          ? { sessionId: sid, providerId: id, model: restored.model, customModelId: restored.customModelId }
+          ? {
+              sessionId: sid,
+              providerId: id,
+              model: restored.model,
+              customModelId: restored.customModelId,
+              effort: get().effort,
+              permissionMode: get().permissionMode,
+            }
           : { sessionId: sid, providerId: id },
       )
       .catch((err) => {
@@ -8503,6 +8668,11 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       // A persisted composer pick for a provider that no longer exists falls
       // back to the default provider + auto.
       validateComposerSelection(set, get);
+      // Capabilities just arrived (or changed while the app was closed): snap
+      // effort / permissionMode leftovers the active provider doesn't declare
+      // onto "default" — the boot-time counterpart of setProvider's coercion.
+      const s = get();
+      set(coerceSlotsForProvider(s, s.providerId));
     } catch (err) {
       console.error("reloadProviders failed:", err);
     }
@@ -8773,7 +8943,11 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         customModelId: target.customModelId,
         lastModelByProvider: {
           ...s.lastModelByProvider,
-          [s.providerId]: { model: target.model, customModelId: target.customModelId },
+          [s.providerId]: {
+            ...rememberedEntryOf(s),
+            model: target.model,
+            customModelId: target.customModelId,
+          },
         },
       }));
       void api.session

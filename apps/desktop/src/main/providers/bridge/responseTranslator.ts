@@ -40,7 +40,7 @@ import type {
   AnthropicUsage,
   OpenAIChunk,
 } from "./types.js";
-import { ThinkTagSplitter, type ThinkSegment } from "./thinkTagSplitter.js";
+import { ThinkTagSplitter, type ThinkSegment } from "@main/lib/thinkTagSplitter.js";
 
 /** Sentinel for "no block currently open" (avoids number|undefined juggling). */
 const NO_BLOCK = -1;

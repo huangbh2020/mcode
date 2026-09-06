@@ -9,6 +9,11 @@
  * stream so enclosed content is routed to a thinking block while
  * everything else stays text.
  *
+ * Shared by both consumers of OpenAI-protocol surfaces: the claude-side
+ * bridge (providers/bridge/responseTranslator.ts, Anthropic SSE re-emission)
+ * and the codex app-server adapter (item/agentMessage/delta → the main
+ * thread's text/thinking channels). Pure module — no imports.
+ *
  * ## Streaming safety
  *
  * A tag can straddle chunk boundaries (`<th` + `ink>`), so a per-chunk

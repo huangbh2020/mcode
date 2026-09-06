@@ -1,0 +1,797 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Composer · 思考级别 × 权限模式 控件重设计</title>
+<style>
+  /* ===== app 真实 token(取自 apps/desktop/src/renderer/styles.css)===== */
+  :root{
+    --surface:255 255 255;
+    --surface-muted:240 242 246;
+    --surface-hover:226 229 235;
+    --content:9 9 11;
+    --content-muted:63 63 70;
+    --content-subtle:113 113 122;
+    --edge:213 216 222;
+    --input-edge:202 205 212;
+    --accent:5 150 105;
+    --accent-strong:4 120 87;
+    --danger:220 38 38;
+    --warning:180 83 9;
+    --info:124 58 237;
+    --success:4 120 87;
+    --shadow-pop:0 12px 32px rgb(9 9 11 / .14), 0 2px 8px rgb(9 9 11 / .08);
+    --shadow-card:0 1px 3px rgb(9 9 11 / .05);
+  }
+  [data-theme="dark"]{
+    --surface:26 29 36;
+    --surface-muted:44 49 60;
+    --surface-hover:58 64 78;
+    --content:231 232 236;
+    --content-muted:188 191 198;
+    --content-subtle:158 162 171;
+    --edge:45 51 64;
+    --input-edge:95 99 110;
+    --accent:16 185 129;
+    --accent-strong:16 185 129;
+    --danger:248 113 113;
+    --warning:251 191 36;
+    --info:167 139 250;
+    --success:16 185 129;
+    --shadow-pop:0 16px 40px rgb(0 0 0 / .5), 0 2px 10px rgb(0 0 0 / .35);
+    --shadow-card:0 1px 3px rgb(0 0 0 / .3);
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0;background:rgb(var(--surface-muted));color:rgb(var(--content));
+    font-family:-apple-system,"SF Pro Text","Segoe UI","PingFang SC","Microsoft YaHei",system-ui,sans-serif;
+    -webkit-font-smoothing:antialiased;transition:background .25s;
+  }
+  button{font-family:inherit}
+  .wrap{max-width:980px;margin:0 auto;padding-bottom:48px}
+
+  /* ===== 顶栏 ===== */
+  .topbar{display:flex;align-items:center;gap:14px;padding:16px 22px 14px;flex-wrap:wrap}
+  .topbar h1{font-size:15px;margin:0;font-weight:700}
+  .topbar .sub{font-size:12px;color:rgb(var(--content-subtle));margin-top:2px}
+  .spacer{flex:1}
+  .mini-seg{display:flex;background:rgb(var(--surface));border:1px solid rgb(var(--edge));border-radius:9px;padding:3px;gap:2px}
+  .mini-seg button{border:none;background:none;cursor:pointer;padding:5px 12px;border-radius:6px;font-size:12px;font-weight:600;color:rgb(var(--content-muted))}
+  .mini-seg button.cur{background:rgb(var(--accent)/.1);color:rgb(var(--accent-strong))}
+  .icon-btn{width:30px;height:30px;border-radius:8px;border:1px solid rgb(var(--edge));background:rgb(var(--surface));color:rgb(var(--content-muted));display:grid;place-items:center;cursor:pointer}
+  .icon-btn:hover{color:rgb(var(--accent-strong));border-color:rgb(var(--accent)/.4)}
+
+  /* ===== 版本切换 ===== */
+  .tabs{display:flex;gap:8px;padding:2px 22px 4px;flex-wrap:wrap}
+  .tab{padding:8px 14px;border-radius:10px;border:1px solid transparent;background:none;cursor:pointer;font-size:13px;font-weight:600;color:rgb(var(--content-muted))}
+  .tab:hover{background:rgb(var(--surface-hover)/.6)}
+  .tab.cur{background:rgb(var(--surface));border-color:rgb(var(--edge));color:rgb(var(--content));box-shadow:var(--shadow-card)}
+  .tab em{font-style:normal;font-size:10px;font-weight:700;color:rgb(var(--accent-strong));background:rgb(var(--accent)/.12);border-radius:5px;padding:2px 6px;margin-left:6px;vertical-align:1px}
+
+  /* ===== 舞台:模拟聊天 + composer ===== */
+  .stage{margin:12px 22px 0;background:rgb(var(--surface));border:1px solid rgb(var(--edge));border-radius:16px;min-height:472px;display:flex;flex-direction:column;box-shadow:var(--shadow-card)}
+  .chat{flex:1;padding:20px 26px 8px;display:flex;flex-direction:column;gap:10px}
+  .msg{font-size:13px;line-height:1.6;padding:8px 13px;border-radius:12px;max-width:72%}
+  .msg.user{align-self:flex-end;background:rgb(var(--accent)/.1);color:rgb(var(--content));border-bottom-right-radius:4px}
+  .msg.ai{align-self:flex-start;background:rgb(var(--surface-muted));color:rgb(var(--content-muted));border-bottom-left-radius:4px}
+
+  .composer{margin:6px 26px 22px;position:relative;background:rgb(var(--surface));border:1.5px solid rgb(var(--input-edge));border-radius:16px;box-shadow:var(--shadow-card);transition:border-color .2s, box-shadow .2s}
+  .composer:focus-within{border-color:rgb(var(--accent));box-shadow:0 0 0 3px rgb(var(--accent)/.12)}
+  .fake-input{padding:14px 16px 10px;font-size:13.5px;color:rgb(var(--content-subtle));min-height:46px}
+
+  .action-row{display:flex;align-items:center;padding:2px 10px 8px}
+  .ar-left{display:flex;align-items:center;gap:1px;min-width:0}
+  .ar-right{margin-left:auto;display:flex;align-items:center;gap:4px}
+  .ibtn{width:28px;height:28px;border-radius:8px;display:grid;place-items:center;color:rgb(var(--content-subtle));border:none;background:none;cursor:pointer;transition:background .15s,color .15s}
+  .ibtn:hover{background:rgb(var(--accent)/.08);color:rgb(var(--accent-strong))}
+  .send{width:30px;height:30px;border-radius:9px;background:rgb(var(--accent));color:#fff;display:grid;place-items:center;border:none;cursor:pointer}
+  .ring-chip{margin-left:8px;display:inline-flex;align-items:center;border-left:1px solid rgb(var(--edge)/.6);padding-left:10px}
+
+  /* ===== 通用 chip ===== */
+  .chip{display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 10px;border-radius:9px;font-size:12px;font-weight:500;color:rgb(var(--content-muted));background:none;border:none;cursor:pointer;transition:background .15s,color .15s,transform .15s;white-space:nowrap}
+  .chip:hover{background:rgb(var(--accent)/.08);color:rgb(var(--accent-strong))}
+  .chip:active{transform:scale(.96)}
+  .chip.model{color:rgb(var(--content-muted))}
+
+  /* 合并触发 chip */
+  .chip-wrap{position:relative;display:inline-flex}
+  .mode-chip{gap:8px;color:rgb(var(--content-muted))}
+  .mode-chip:hover{background:rgb(var(--accent)/.1)}
+  .mode-chip.open{background:rgb(var(--accent)/.13);color:rgb(var(--accent-strong))}
+  .mode-chip .seg{display:inline-flex;align-items:center;gap:4px;min-width:0}
+  .mode-chip .sep{width:1px;height:14px;background:rgb(var(--edge));flex:none}
+  .mode-chip .caret{display:inline-flex;transition:transform .18s;opacity:.55}
+  .mode-chip.open .caret{transform:rotate(180deg)}
+
+  /* ===== 弹层面板(V1 / V2)===== */
+  .panel{position:absolute;bottom:calc(100% + 10px);left:-6px;width:318px;background:rgb(var(--surface));border:1px solid rgb(var(--edge));border-radius:13px;box-shadow:var(--shadow-pop);padding:4px;z-index:60;transform-origin:16px 100%;animation:pop .16s ease-out}
+  .panel[hidden]{display:none}
+  @keyframes pop{from{opacity:0;transform:translateY(7px) scale(.965)}to{opacity:1;transform:none}}
+  .sec{padding:11px 13px 13px}
+  .sec + .sec{border-top:1px solid rgb(var(--edge)/.65)}
+  .sec-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:9px}
+  .sec-title{font-size:11px;letter-spacing:.06em;color:rgb(var(--content-subtle));font-weight:700}
+  .sec-val{font-size:12px;font-weight:700;color:rgb(var(--accent-strong));display:inline-flex;gap:4px;align-items:center}
+  .hint{margin-top:12px;font-size:11.5px;line-height:1.55;color:rgb(var(--content-muted));background:rgb(var(--surface-muted));border-radius:8px;padding:7px 10px;display:flex;gap:7px;align-items:flex-start;min-height:31px}
+  .hint svg{flex:none;margin-top:2px;color:rgb(var(--content-subtle))}
+
+  /* 阶梯轨道 */
+  .track{position:relative;height:54px;margin:2px 12px 0}
+  .track .rail{position:absolute;left:0;right:0;top:14px;height:4px;border-radius:2px;background:rgb(var(--surface-hover))}
+  .track .fill{position:absolute;left:0;top:14px;height:4px;border-radius:2px;background:linear-gradient(90deg,rgb(var(--accent)/.4),rgb(var(--accent)));transition:width .22s ease}
+  .stop{position:absolute;top:16px;transform:translate(-50%,-50%);width:24px;height:24px;border-radius:50%;display:grid;place-items:center;background:none;border:none;cursor:pointer;padding:0}
+  .stop .dot{width:9px;height:9px;border-radius:50%;background:rgb(var(--edge));transition:all .15s}
+  .stop:hover .dot{transform:scale(1.3);background:rgb(var(--content-subtle))}
+  .stop.on .dot{background:rgb(var(--accent)/.55)}
+  .stop.on:hover .dot{background:rgb(var(--accent))}
+  .stop.cur .dot{width:14px;height:14px;background:rgb(var(--accent));box-shadow:0 0 0 3.5px rgb(var(--accent)/.22)}
+  .stop .lbl{position:absolute;top:21px;left:50%;transform:translateX(-50%);font-size:10px;color:rgb(var(--content-subtle));white-space:nowrap;pointer-events:none}
+  .stop.cur .lbl{color:rgb(var(--accent-strong));font-weight:700}
+  .anchor{position:absolute;top:-4px;font-size:10px;color:rgb(var(--content-subtle));pointer-events:none}
+
+  /* 权限卡格(V1) */
+  .cards{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+  .pcard{position:relative;display:flex;align-items:center;gap:9px;padding:8px 11px;border-radius:9px;border:1px solid rgb(var(--edge));background:rgb(var(--surface));cursor:pointer;text-align:left;transition:all .15s}
+  .pcard:hover{border-color:rgb(var(--input-edge));background:rgb(var(--surface-hover)/.45)}
+  .pcard .t{font-size:12px;font-weight:600;color:rgb(var(--content));line-height:1.2}
+  .pcard .s{font-size:10px;color:rgb(var(--content-subtle));margin-top:1px}
+  .pcard .ck{position:absolute;top:5px;right:6px;display:none;color:inherit}
+  .pcard.cur{box-shadow:0 0 0 1.5px rgb(var(--accent)), 0 0 0 5px rgb(var(--accent)/.1)}
+  .pcard.cur .ck{display:block;color:rgb(var(--accent-strong))}
+  .pcard.cur[data-c="info"]{box-shadow:0 0 0 1.5px rgb(var(--info)), 0 0 0 5px rgb(var(--info)/.1)}
+  .pcard.cur[data-c="info"] .ck{color:rgb(var(--info))}
+  .pcard.cur[data-c="warning"]{box-shadow:0 0 0 1.5px rgb(var(--warning)), 0 0 0 5px rgb(var(--warning)/.12)}
+  .pcard.cur[data-c="warning"] .ck{color:rgb(var(--warning))}
+  .pcard.cur[data-c="danger"]{box-shadow:0 0 0 1.5px rgb(var(--danger)), 0 0 0 5px rgb(var(--danger)/.1)}
+  .pcard.cur[data-c="danger"] .ck{color:rgb(var(--danger))}
+
+  /* ===== V2:轻量双轨 ===== */
+  .panel.slim{width:272px}
+  .sec.slim{padding:9px 12px 10px}
+  .sec.slim .sec-title{font-size:10px}
+  .sec.slim .sec-val{font-size:11.5px}
+  /* 轻量思考轨道:default 并回轨道,无独立 pill */
+  .track.slim{height:46px;margin:2px 10px 0}
+  .track.slim .rail{top:15px;height:3px}
+  .track.slim .fill{top:15px;height:3px}
+  .track.slim .stop{top:17px;width:20px;height:20px}
+  .track.slim .stop .dot{width:7px;height:7px}
+  .track.slim .stop:hover .dot{transform:scale(1.25)}
+  .track.slim .stop.cur .dot{width:11px;height:11px;box-shadow:0 0 0 3px rgb(var(--accent)/.2)}
+  .track.slim .stop .lbl{top:16px;font-size:9.5px}
+  /* 轻量权限轨道:小色点 + 标签,无图标圆泡 */
+  .prail{position:relative;height:52px;margin:2px 14px 0}
+  .prail .rail{position:absolute;left:0;right:0;top:14px;height:3px;border-radius:2px;background:linear-gradient(90deg,rgb(var(--success)/.7),rgb(var(--warning)/.75),rgb(var(--danger)/.8))}
+  .pstop{position:absolute;top:16px;transform:translate(-50%,-50%);width:60px;background:none;border:none;cursor:pointer;padding:0;display:flex;flex-direction:column;align-items:center;gap:5px}
+  .pstop .dot{width:8px;height:8px;border-radius:50%;background:rgb(var(--edge));transition:all .15s}
+  .pstop:hover .dot{transform:scale(1.25)}
+  .pstop.cur .dot{background:rgb(var(--accent));box-shadow:0 0 0 3px rgb(var(--accent)/.2)}
+  .pstop.cur[data-c="info"] .dot{background:rgb(var(--info));box-shadow:0 0 0 3px rgb(var(--info)/.22)}
+  .pstop.cur[data-c="warning"] .dot{background:rgb(var(--warning));box-shadow:0 0 0 3px rgb(var(--warning)/.25)}
+  .pstop.cur[data-c="danger"] .dot{background:rgb(var(--danger));box-shadow:0 0 0 3px rgb(var(--danger)/.22)}
+  .pstop .lbl{font-size:9.5px;font-weight:600;color:rgb(var(--content-subtle));white-space:nowrap;max-width:58px;overflow:hidden;text-overflow:ellipsis}
+  .pstop.cur .lbl{color:rgb(var(--content));font-weight:700}
+  /* 轻 hint:无底色单行,最大两行截断 */
+  .hint-soft{margin-top:7px;font-size:11px;line-height:1.5;color:rgb(var(--content-muted));display:flex;gap:6px;align-items:flex-start}
+  .hint-soft svg{flex:none;margin-top:2px;color:rgb(var(--content-subtle))}
+  .hint-soft span{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+
+  /* ===== V3:内联分段 ===== */
+  .inline{overflow:hidden;max-height:0;opacity:0;transition:max-height .24s ease,opacity .2s ease}
+  .inline.open{max-height:220px;opacity:1}
+  .inline-inner{border-top:1px solid rgb(var(--edge)/.65);margin:0 12px;padding:11px 2px 11px;display:flex;flex-direction:column;gap:10px}
+  .segrow{display:flex;align-items:center;gap:10px}
+  .rowlabel{font-size:11px;font-weight:700;color:rgb(var(--content-subtle));display:inline-flex;gap:4px;align-items:center;width:50px;flex:none}
+  .seg{display:flex;flex:1;min-width:0;background:rgb(var(--surface-muted));border:1px solid rgb(var(--edge)/.55);border-radius:9px;padding:3px;gap:2px}
+  .seg button{flex:1;min-width:0;padding:5px 2px;border:none;background:none;border-radius:6px;font-size:11.5px;font-weight:500;color:rgb(var(--content-muted));cursor:pointer;display:flex;align-items:center;justify-content:center;white-space:nowrap;transition:all .13s}
+  .seg button:hover{color:rgb(var(--content));background:rgb(var(--surface-hover)/.6)}
+  .seg button.cur{background:rgb(var(--surface));color:rgb(var(--accent-strong));font-weight:700;box-shadow:0 0 0 1px rgb(var(--accent)/.55), 0 1px 2px rgb(9 9 11/.08)}
+  .seg button.cur[data-c="info"]{color:rgb(var(--info));box-shadow:0 0 0 1px rgb(var(--info)/.6), 0 1px 2px rgb(9 9 11/.08)}
+  .seg button.cur[data-c="warning"]{color:rgb(var(--warning));box-shadow:0 0 0 1px rgb(var(--warning)/.65), 0 1px 2px rgb(9 9 11/.08)}
+  .seg button.cur[data-c="danger"]{color:rgb(var(--danger));box-shadow:0 0 0 1px rgb(var(--danger)/.6), 0 1px 2px rgb(9 9 11/.08)}
+  .seg.tight button{font-size:10.5px;padding:5px 1px}
+  .inline-hints{display:flex;flex-direction:column;gap:3px;padding:0 2px}
+  .inline-hints div{font-size:11px;color:rgb(var(--content-subtle));display:flex;gap:6px;align-items:center;line-height:1.5}
+  .inline-hints svg{flex:none}
+
+  /* ===== V4:分体块选(两个独立下拉,弹层为块状网格) ===== */
+  .blocks{display:grid;gap:5px}
+  .blocks.e3{grid-template-columns:repeat(3,1fr)}
+  .blocks.e4{grid-template-columns:repeat(4,1fr)}
+  .blocks.p2{grid-template-columns:repeat(2,1fr)}
+  .blocks.p3{grid-template-columns:repeat(3,1fr)}
+  .btile{position:relative;display:flex;flex-direction:column;align-items:flex-start;gap:2px;padding:7px 9px;border-radius:8px;border:1px solid rgb(var(--edge));background:rgb(var(--surface));cursor:pointer;text-align:left;transition:all .13s;min-width:0}
+  .btile:hover{border-color:rgb(var(--input-edge));background:rgb(var(--surface-hover)/.45)}
+  .btile .t{display:flex;align-items:center;gap:4px;font-size:11.5px;font-weight:600;color:rgb(var(--content));line-height:1.2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%}
+  .btile .s{font-size:9.5px;color:rgb(var(--content-subtle));line-height:1.3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%}
+  .btile .ck{position:absolute;top:4px;right:5px;display:none;color:rgb(var(--accent-strong))}
+  .btile.cur{border-color:rgb(var(--accent));background:rgb(var(--accent)/.07)}
+  .btile.cur .ck{display:block}
+  .btile.cur[data-c="info"]{border-color:rgb(var(--info));background:rgb(var(--info)/.06)}
+  .btile.cur[data-c="info"] .ck{color:rgb(var(--info))}
+  .btile.cur[data-c="warning"]{border-color:rgb(var(--warning));background:rgb(var(--warning)/.08)}
+  .btile.cur[data-c="warning"] .ck{color:rgb(var(--warning))}
+  .btile.cur[data-c="danger"]{border-color:rgb(var(--danger));background:rgb(var(--danger)/.06)}
+  .btile.cur[data-c="danger"] .ck{color:rgb(var(--danger))}
+
+  /* ===== 说明卡 ===== */
+  .notes{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin:14px 22px 0}
+  .note{background:rgb(var(--surface));border:1px solid rgb(var(--edge));border-radius:12px;padding:13px 15px}
+  .note h4{font-size:12px;margin:0 0 8px;display:flex;align-items:center;gap:6px}
+  .note ul{margin:0;padding-left:16px;font-size:12px;color:rgb(var(--content-muted));line-height:1.8}
+  .note.key h4{color:rgb(var(--accent-strong))}
+  .note.pro h4{color:rgb(var(--success))}
+  .note.con h4{color:rgb(var(--warning))}
+
+  .foot{margin:18px 22px 0;font-size:11.5px;color:rgb(var(--content-subtle));line-height:1.7}
+</style>
+</head>
+<body data-theme="light">
+<div class="wrap">
+
+  <header class="topbar">
+    <div>
+      <h1>Composer ·「思考级别 × 权限模式」控件重设计</h1>
+      <div class="sub">两个下拉合并为一个入口 · 三个可交互方案 · 色板取自 app 真实 token · 点击合并 chip 体验</div>
+    </div>
+    <div class="spacer"></div>
+    <div class="mini-seg" id="provSeg">
+      <button data-p="claude" class="cur">Claude</button>
+      <button data-p="codex">Codex</button>
+    </div>
+    <button class="icon-btn" id="themeBtn" title="切换亮 / 暗"></button>
+  </header>
+
+  <nav class="tabs">
+    <button class="tab cur" data-v="v1">V1 · 弹层面板<em>推荐</em></button>
+    <button class="tab" data-v="v2">V2 · 轻量双轨</button>
+    <button class="tab" data-v="v3">V3 · 内联分段</button>
+    <button class="tab" data-v="v4">V4 · 分体块选</button>
+  </nav>
+
+  <!-- ============ V1 ============ -->
+  <section class="version" id="sec-v1">
+    <div class="stage">
+      <div class="chat">
+        <div class="msg user">帮我把 setSessionList 里的排序逻辑抽成独立函数</div>
+        <div class="msg ai">好的,我先定位相关代码,再拆分与验证……</div>
+      </div>
+      <div class="composer">
+        <div class="fake-input">输入消息,Enter 发送 · Shift+Enter 换行</div>
+        <div class="action-row">
+          <div class="ar-left">
+            <button class="ibtn" data-ic="paperclip"></button>
+            <button class="chip model" id="model-v1"></button>
+            <span class="chip-wrap">
+              <button class="chip mode-chip" id="chip-v1"></button>
+              <div class="panel" id="panel-v1" hidden></div>
+            </span>
+            <span class="ring-chip" id="ring1"></span>
+          </div>
+          <div class="ar-right">
+            <button class="ibtn" data-ic="mic"></button>
+            <button class="send" data-ic="send"></button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="notes">
+      <div class="note key"><h4>设计要点</h4><ul>
+        <li>两个下拉 → 一个 chip:<b>⚡ 档位 │ 🛡 模式</b>,横向净省宽</li>
+        <li>弹层 = 思考「阶梯轨道」+ 权限「2×2 风险卡格」</li>
+        <li>hover 任意档位即时预览说明;点击即生效,<b>面板保持打开</b></li>
+      </ul></div>
+      <div class="note pro"><h4>优势</h4><ul>
+        <li>信息密度与可发现性平衡最好,hint 常驻可见</li>
+        <li>codex 8 档也不拥挤;claude/codex 自适应</li>
+        <li>与现有 Menu 习惯最接近,迁移成本低</li>
+      </ul></div>
+      <div class="note con"><h4>代价</h4><ul>
+        <li>仍需一次点击打开面板</li>
+        <li>弹层会短暂遮挡上方消息</li>
+      </ul></div>
+    </div>
+  </section>
+
+  <!-- ============ V2 ============ -->
+  <section class="version" id="sec-v2" hidden>
+    <div class="stage">
+      <div class="chat">
+        <div class="msg user">帮我把 setSessionList 里的排序逻辑抽成独立函数</div>
+        <div class="msg ai">好的,我先定位相关代码,再拆分与验证……</div>
+      </div>
+      <div class="composer">
+        <div class="fake-input">输入消息,Enter 发送 · Shift+Enter 换行</div>
+        <div class="action-row">
+          <div class="ar-left">
+            <button class="ibtn" data-ic="paperclip"></button>
+            <button class="chip model" id="model-v2"></button>
+            <span class="chip-wrap">
+              <button class="chip mode-chip" id="chip-v2"></button>
+              <div class="panel slim" id="panel-v2" hidden></div>
+            </span>
+            <span class="ring-chip" id="ring2"></span>
+          </div>
+          <div class="ar-right">
+            <button class="ibtn" data-ic="mic"></button>
+            <button class="send" data-ic="send"></button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="notes">
+      <div class="note key"><h4>设计要点</h4><ul>
+        <li><b>轻量</b>:面板 272px,无大图标——思考的 Default 并回轨道当普通驻点,权限用小色点代替图标圆泡</li>
+        <li>文案与系统完全一致:档位取 capabilities,说明取 <b>chat.effort / chat.permission</b> 现有词条</li>
+        <li>防撑开:面板宽度恒定;档位 &gt; 6 个时驻点标签自动隐藏(悬停显示「label · 说明」)</li>
+      </ul></div>
+      <div class="note pro"><h4>优势</h4><ul>
+        <li>视觉最轻:细轨道 + 小色点,不抢输入框注意力</li>
+        <li>风险梯度仍一眼可见(绿→黄→红);8 档不拥挤</li>
+      </ul></div>
+      <div class="note con"><h4>代价</h4><ul>
+        <li>权限站点无图标,风险色只剩选中的那颗点</li>
+        <li>Default 档在轨道最左端,「模型自选」与「手动档」混排</li>
+      </ul></div>
+    </div>
+  </section>
+
+  <!-- ============ V3 ============ -->
+  <section class="version" id="sec-v3" hidden>
+    <div class="stage">
+      <div class="chat">
+        <div class="msg user">帮我把 setSessionList 里的排序逻辑抽成独立函数</div>
+        <div class="msg ai">好的,我先定位相关代码,再拆分与验证……</div>
+      </div>
+      <div class="composer">
+        <div class="fake-input">输入消息,Enter 发送 · Shift+Enter 换行</div>
+        <div class="inline" id="inline-v3">
+          <div class="inline-inner" id="inlineInner-v3"></div>
+        </div>
+        <div class="action-row">
+          <div class="ar-left">
+            <button class="ibtn" data-ic="paperclip"></button>
+            <button class="chip model" id="model-v3"></button>
+            <span class="chip-wrap">
+              <button class="chip mode-chip" id="chip-v3"></button>
+            </span>
+            <span class="ring-chip" id="ring3"></span>
+          </div>
+          <div class="ar-right">
+            <button class="ibtn" data-ic="mic"></button>
+            <button class="send" data-ic="send"></button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="notes">
+      <div class="note key"><h4>设计要点</h4><ul>
+        <li><b>无弹层</b>:点击 chip 在输入框内向下展开两条分段控件</li>
+        <li>思考 6–8 段 / 权限 3–4 段,全部选项平铺,底部常驻双 hint</li>
+        <li>选中段按语义着色(权限风险色保留)</li>
+      </ul></div>
+      <div class="note pro"><h4>优势</h4><ul>
+        <li>零悬停、零遮挡,一键直达任何档位(两次点击封顶)</li>
+        <li>触屏 / 窄窗口同样可用,交互最直接</li>
+      </ul></div>
+      <div class="note con"><h4>代价</h4><ul>
+        <li>占用输入框纵向空间,展开有布局跳动</li>
+        <li>codex 8 段时标签较挤,需缩字号</li>
+      </ul></div>
+    </div>
+  </section>
+
+  <!-- ============ V4 ============ -->
+  <section class="version" id="sec-v4" hidden>
+    <div class="stage">
+      <div class="chat">
+        <div class="msg user">帮我把 setSessionList 里的排序逻辑抽成独立函数</div>
+        <div class="msg ai">好的,我先定位相关代码,再拆分与验证……</div>
+      </div>
+      <div class="composer">
+        <div class="fake-input">输入消息,Enter 发送 · Shift+Enter 换行</div>
+        <div class="action-row">
+          <div class="ar-left">
+            <button class="ibtn" data-ic="paperclip"></button>
+            <button class="chip model" id="model-v4"></button>
+            <span class="chip-wrap">
+              <button class="chip mode-chip" id="chip-v4e"></button>
+              <div class="panel slim" id="panel-v4e" hidden></div>
+            </span>
+            <span class="chip-wrap">
+              <button class="chip mode-chip" id="chip-v4p"></button>
+              <div class="panel slim" id="panel-v4p" hidden style="left:auto;right:-6px"></div>
+            </span>
+            <span class="ring-chip" id="ring4"></span>
+          </div>
+          <div class="ar-right">
+            <button class="ibtn" data-ic="mic"></button>
+            <button class="send" data-ic="send"></button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="notes">
+      <div class="note key"><h4>设计要点</h4><ul>
+        <li>思考 / 权限<b>仍是两个独立下拉</b>,触发 chip 与现在一致</li>
+        <li>弹层改为<b>块状网格</b>:全部档位一屏平铺(label + 短语说明),点块即选、面板保持打开</li>
+        <li>说明压成 2–4 字短语放进块内,完整说明经原生 title 悬停查看</li>
+      </ul></div>
+      <div class="note pro"><h4>优势</h4><ul>
+        <li>零层级:打开即全览,任何档位两次点击封顶</li>
+        <li>与现有双 chip 习惯一致,迁移心智成本最低</li>
+      </ul></div>
+      <div class="note con"><h4>代价</h4><ul>
+        <li>codex 8 档为 4×2 网格,块内较密</li>
+        <li>短语说明损失细节,依赖 title 悬停补全</li>
+      </ul></div>
+    </div>
+  </section>
+
+  <p class="foot">
+    落地说明:三个方案的数据层完全不变——档位/模式列表仍来自 <code>capabilities.thinkingLevels / permissionModes</code>,说明文案复用 <code>EFFORT_HINT_KEYS / PERMISSION_HINT_KEYS</code>(含 codex 专属 hint),生效直接走 <code>setEffort / setPermissionMode</code>(乐观更新 + per-session 持久化)。<code>ModelDropdown</code> 与 <code>ContextRing</code> 位置不动。
+  </p>
+</div>
+
+<script>
+/* ================= 数据(模拟 provider capabilities 下发) ================= */
+/* label / hint 与系统一字不差:
+ * label 取 provider capabilities(ClaudeAgentSdkProvider / CodexAgentSdkProvider),
+ * hint 取 chat.effort.hint* / chat.permission.hint*(zh 词典)。
+ * sh = 块选版的短语说明(设计稿用,落地时走新词条)。
+ * 权限轨道按风险从低到高排列,label 不变。 */
+const DATA = {
+  claude: {
+    model: "Claude Sonnet 4.6",
+    efforts: [
+      { v:"default", lbl:"Auto",  sh:"模型自选", hint:"让 Claude 自选" },
+      { v:"low",     lbl:"Low",    sh:"最快",     hint:"最快,少思考" },
+      { v:"medium",  lbl:"Med",    sh:"平衡",     hint:"平衡" },
+      { v:"high",    lbl:"High",   sh:"更多思考", hint:"更多思考" },
+      { v:"xhigh",   lbl:"XHigh",  sh:"深度思考", hint:"深度思考" },
+      { v:"max",     lbl:"Max",    sh:"最充分",   hint:"最充分,最慢" },
+    ],
+    perms: [
+      { v:"plan",              lbl:"Plan",     sh:"只读探索", icon:"eye",         c:"info",    hint:"只读探索,所有写操作都需审批" },
+      { v:"default",           lbl:"Default",  sh:"标准审批", icon:"shield",      c:null,      hint:"标准行为,工具按规则触发审批" },
+      { v:"acceptEdits",       lbl:"Edit Auto",sh:"编辑放行", icon:"edit",        c:"warning", hint:"工作目录内的文件编辑自动放行" },
+      { v:"bypassPermissions", lbl:"Bypass",   sh:"跳过检查", icon:"lock",        c:"danger",  hint:"跳过所有权限检查(慎用)" },
+    ],
+  },
+  codex: {
+    model: "gpt-5.6",
+    efforts: [
+      { v:"default", lbl:"Default", sh:"模型默认", hint:"不显式指定 effort,由模型使用自身默认档位" },
+      { v:"minimal", lbl:"Minimal", sh:"最少推理", hint:"最少推理,速度优先" },
+      { v:"low",     lbl:"Low",     sh:"快速响应", hint:"更快的响应、较轻的推理;适合简单问答与短解释" },
+      { v:"medium",  lbl:"Medium",  sh:"平衡",     hint:"推理深度与时延平衡,适合日常任务" },
+      { v:"high",    lbl:"High",    sh:"更深推理", hint:"更深的推理,面向复杂问题" },
+      { v:"xhigh",   lbl:"XHigh",   sh:"超高推理", hint:"超高推理深度,面向复杂问题" },
+      { v:"max",     lbl:"Max",     sh:"最大深度", hint:"最大推理深度,面向最难的问题" },
+      { v:"ultra",   lbl:"Ultra",   sh:"推理+委派", hint:"最大推理并自动任务委派(可能主动使用多个子代理)" },
+    ],
+    perms: [
+      { v:"read-only",   lbl:"Read Only",   sh:"仅读取",     icon:"eye",         c:null,      hint:"仅可读取当前工作区文件;编辑文件或访问互联网需要审批" },
+      { v:"default",     lbl:"Default",     sh:"工作区可写", icon:"shieldCheck", c:null,      hint:"可读写当前工作区文件并执行命令;访问互联网或修改工作区外文件需要审批" },
+      { v:"full-access", lbl:"Full Access", sh:"无需审批",   icon:"lock",        c:"danger",  hint:"可修改工作区外文件并访问互联网,无需审批;请谨慎使用" },
+    ],
+  },
+};
+
+/* ================= 图标(feather 风格,stroke) ================= */
+const ICONS = {
+  bolt:'<path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z"/>',
+  shield:'<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>',
+  shieldCheck:'<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><polyline points="9 11.5 11 13.5 15 9.5"/>',
+  lock:'<rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>',
+  eye:'<path d="M2 12s3.5-6.5 10-6.5S22 12 22 12s-3.5 6.5-10 6.5S2 12 2 12z"/><circle cx="12" cy="12" r="2.6"/>',
+  edit:'<path d="M17 3a2.85 2.85 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/>',
+  paperclip:'<path d="M21.4 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 1 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/>',
+  mic:'<rect x="9" y="1.5" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0 0 14 0"/><line x1="12" y1="18" x2="12" y2="22"/><line x1="8.5" y1="22" x2="15.5" y2="22"/>',
+  send:'<line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/>',
+  check:'<polyline points="20 6 9 17 4 12"/>',
+  chevDown:'<polyline points="6 9 12 15 18 9"/>',
+  sun:'<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>',
+  moon:'<path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/>',
+};
+const icon = (n, s=14, style="") =>
+  `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="${style}">${ICONS[n]}</svg>`;
+const colVar = (c) => c ? `rgb(var(--${c}))` : "";
+document.querySelectorAll("[data-ic]").forEach(el => { el.innerHTML = icon(el.dataset.ic, el.querySelector(".send")?16:15); });
+
+/* ================= 状态 ================= */
+let prov = "claude";
+const st = {
+  v1: { effort:"xhigh", perm:"default",    open:false },
+  v2: { effort:"high",  perm:"acceptEdits",open:false },
+  v3: { effort:"medium",perm:"default",    open:false },
+  v4: { effort:"high",  perm:"default",    openE:false, openP:false },
+};
+const D = () => DATA[prov];
+const effOf = s => D().efforts.find(x => x.v === s.effort);
+const permOf = s => D().perms.find(x => x.v === s.perm);
+
+/* ================= 渲染:触发 chip ================= */
+function chipHTML(vid){
+  const s = st[vid], e = effOf(s), p = permOf(s);
+  const pc = p.c ? ` style="color:${colVar(p.c)}"` : "";
+  return `<span class="seg">${icon("bolt",13)}<span>${e.lbl}</span></span>
+    <span class="sep"></span>
+    <span class="seg">${icon(p.icon,13,pc)}<span>${p.lbl}</span></span>
+    <span class="caret">${icon("chevDown",11)}</span>`;
+}
+
+/* ================= 渲染:V1 面板 ================= */
+function trackHTML(efforts, activeV, onCls, slim){
+  const n = efforts.length, ai = efforts.findIndex(m => m.v === activeV);
+  // 防撑开:驻点 > 6 个时不挂常驻标签(悬停经 hint 行显示 label · 说明)
+  const showLbl = n <= 6;
+  return `<div class="track ${slim?"slim ":""}${onCls||""}">
+    <div class="rail"></div>
+    <div class="fill" style="width:${n>1 ? (ai/(n-1))*100 : 0}%"></div>
+    ${efforts.map((m,i)=>`
+      <button type="button" class="stop ${i<=ai?"on":""} ${i===ai?"cur":""}" data-v="${m.v}" style="left:${(i/(n-1))*100}%">
+        <i class="dot"></i>${showLbl?`<span class="lbl">${m.lbl}</span>`:""}
+      </button>`).join("")}
+  </div>`;
+}
+function cardHTML(m){
+  const ic = m.c ? ` style="color:${colVar(m.c)}"` : "";
+  return `<button type="button" class="pcard ${st.v1.perm===m.v?"cur":""}" data-v="${m.v}" data-c="${m.c||""}">
+    ${icon(m.icon,16,ic)}
+    <span class="t">${m.lbl}</span>
+    <span class="ck">${icon("check",13)}</span>
+  </button>`;
+}
+function renderPanelV1(){
+  const s = st.v1, d = D(), e = effOf(s), p = permOf(s);
+  const el = document.getElementById("panel-v1");
+  el.innerHTML = `
+    <div class="sec">
+      <div class="sec-head"><span class="sec-title">思考级别</span>
+        <span class="sec-val">${icon("bolt",12)}${e.lbl}</span></div>
+      ${trackHTML(d.efforts, s.effort)}
+      <div class="hint">${icon("bolt",13)}<span>${e.hint}</span></div>
+    </div>
+    <div class="sec">
+      <div class="sec-head"><span class="sec-title">权限级别</span>
+        <span class="sec-val">${icon(p.icon,12,p.c?`color:${colVar(p.c)}`:"")}${p.lbl}</span></div>
+      <div class="cards">${d.perms.map(cardHTML).join("")}</div>
+      <div class="hint">${icon(p.icon,13)}<span>${p.hint}</span></div>
+    </div>`;
+  el.querySelectorAll(".stop").forEach(b => {
+    const m = d.efforts.find(x => x.v === b.dataset.v);
+    b.addEventListener("click", () => { s.effort = m.v; renderAll(); });
+    b.addEventListener("mouseenter", () => preview(el, "bolt", `${m.lbl} · ${m.hint}`, 0));
+    b.addEventListener("mouseleave", () => preview(el, "bolt", effOf(s).hint, 0));
+  });
+  el.querySelectorAll(".pcard").forEach(b => {
+    const m = d.perms.find(x => x.v === b.dataset.v);
+    b.addEventListener("click", () => { s.perm = m.v; renderAll(); });
+    b.addEventListener("mouseenter", () => preview(el, m.icon, `${m.lbl} · ${m.hint}`, 1));
+    b.addEventListener("mouseleave", () => preview(el, permOf(s).icon, permOf(s).hint, 1));
+  });
+}
+function preview(panel, ic, text, secIdx){
+  const h = panel.querySelectorAll(".hint")[secIdx];
+  h.innerHTML = `${icon(ic,13)}<span>${text}</span>`;
+}
+
+/* ================= 渲染:V2 面板 ================= */
+function renderPanelV2(){
+  const s = st.v2, d = D(), p = permOf(s);
+  const el = document.getElementById("panel-v2");
+  const e = effOf(s);
+  el.innerHTML = `
+    <div class="sec slim">
+      <div class="sec-head"><span class="sec-title">思考级别</span>
+        <span class="sec-val">${icon("bolt",11)}${e.lbl}</span></div>
+      ${trackHTML(d.efforts, s.effort, "", true)}
+      <div class="hint-soft" data-h="e">${icon("bolt",11)}<span>${e.hint}</span></div>
+    </div>
+    <div class="sec slim">
+      <div class="sec-head"><span class="sec-title">权限级别</span>
+        <span class="sec-val"${p.c?` style="color:${colVar(p.c)}"`:""}>${icon(p.icon,11,p.c?`color:${colVar(p.c)}`:"")}${p.lbl}</span></div>
+      <div class="prail">
+        <div class="rail"></div>
+        ${d.perms.map((m,i)=>`
+          <button type="button" class="pstop ${s.perm===m.v?"cur":""}" data-v="${m.v}" data-c="${m.c||""}" style="left:${(i/(d.perms.length-1))*100}%">
+            <i class="dot"></i><span class="lbl">${m.lbl}</span>
+          </button>`).join("")}
+      </div>
+      <div class="hint-soft" data-h="p">${icon(p.icon,11,p.c?`color:${colVar(p.c)}`:"")}<span>${p.hint}</span></div>
+    </div>`;
+  const eh = el.querySelector('[data-h="e"]'), ph = el.querySelector('[data-h="p"]');
+  el.querySelectorAll(".stop").forEach(b => {
+    const m = d.efforts.find(x => x.v === b.dataset.v);
+    b.addEventListener("click", () => { s.effort = m.v; renderAll(); });
+    b.addEventListener("mouseenter", () => { eh.innerHTML = `${icon("bolt",11)}<span>${m.lbl} · ${m.hint}</span>`; });
+    b.addEventListener("mouseleave", () => { eh.innerHTML = `${icon("bolt",11)}<span>${effOf(s).hint}</span>`; });
+  });
+  el.querySelectorAll(".pstop").forEach(b => {
+    const m = d.perms.find(x => x.v === b.dataset.v);
+    b.addEventListener("click", () => { s.perm = m.v; renderAll(); });
+    b.addEventListener("mouseenter", () => { ph.innerHTML = `${icon(m.icon,11,m.c?`color:${colVar(m.c)}`:"")}<span>${m.lbl} · ${m.hint}</span>`; });
+    b.addEventListener("mouseleave", () => {
+      const c = permOf(s);
+      ph.innerHTML = `${icon(c.icon,11,c.c?`color:${colVar(c.c)}`:"")}<span>${c.hint}</span>`;
+    });
+  });
+}
+
+/* ================= 渲染:V3 内联 ================= */
+function renderInlineV3(){
+  const s = st.v3, d = D(), e = effOf(s), p = permOf(s);
+  const tight = d.efforts.length > 6 ? "tight" : "";
+  document.getElementById("inlineInner-v3").innerHTML = `
+    <div class="segrow">
+      <span class="rowlabel">${icon("bolt",12)}思考</span>
+      <div class="seg ${tight}">
+        ${d.efforts.map(m=>`<button type="button" class="${s.effort===m.v?"cur":""}" data-v="${m.v}">${m.lbl}</button>`).join("")}
+      </div>
+    </div>
+    <div class="segrow">
+      <span class="rowlabel">${icon("shield",12)}权限</span>
+      <div class="seg">
+        ${d.perms.map(m=>`<button type="button" class="${s.perm===m.v?"cur":""}" data-v="${m.v}" data-c="${m.c||""}">${m.c?icon(m.icon,12,`color:${colVar(m.c)}`):icon(m.icon,12)}${m.lbl}</button>`).join("")}
+      </div>
+    </div>
+    <div class="inline-hints">
+      <div id="h3e">${icon("bolt",12)}<span>${e.hint}</span></div>
+      <div id="h3p">${icon(p.icon,12,p.c?`color:${colVar(p.c)}`:"")}<span>${p.hint}</span></div>
+    </div>`;
+  const root = document.getElementById("inlineInner-v3");
+  root.querySelectorAll(".seg")[0].querySelectorAll("button").forEach(b => {
+    const m = d.efforts.find(x => x.v === b.dataset.v);
+    b.addEventListener("click", () => { s.effort = m.v; renderAll(); });
+    b.addEventListener("mouseenter", () => { document.getElementById("h3e").innerHTML = `${icon("bolt",12)}<span>${m.hint}</span>`; });
+    b.addEventListener("mouseleave", () => { document.getElementById("h3e").innerHTML = `${icon("bolt",12)}<span>${effOf(s).hint}</span>`; });
+  });
+  root.querySelectorAll(".seg")[1].querySelectorAll("button").forEach(b => {
+    const m = d.perms.find(x => x.v === b.dataset.v);
+    b.addEventListener("click", () => { s.perm = m.v; renderAll(); });
+    b.addEventListener("mouseenter", () => { document.getElementById("h3p").innerHTML = `${icon(m.icon,12,m.c?`color:${colVar(m.c)}`:"")}<span>${m.hint}</span>`; });
+    b.addEventListener("mouseleave", () => { document.getElementById("h3p").innerHTML = `${icon(permOf(s).icon,12,permOf(s).c?`color:${colVar(permOf(s).c)}`:"")}<span>${permOf(s).hint}</span>`; });
+  });
+}
+
+/* ================= 渲染:V4 分体块选 ================= */
+function renderPanelV4E(){
+  const s = st.v4, d = D();
+  const el = document.getElementById("panel-v4e");
+  const cols = d.efforts.length > 6 ? "e4" : "e3";
+  const cur = d.efforts.find(x => x.v === s.effort);
+  el.innerHTML = `
+    <div class="sec slim">
+      <div class="sec-head"><span class="sec-title">思考级别</span>
+        <span class="sec-val">${icon("bolt",11)}${cur ? cur.lbl : s.effort}</span></div>
+      <div class="blocks ${cols}">
+        ${d.efforts.map(m=>`
+          <button type="button" class="btile ${s.effort===m.v?"cur":""}" data-v="${m.v}" title="${m.hint}">
+            <span class="t">${m.lbl}</span><span class="s">${m.sh}</span>
+            <span class="ck">${icon("check",11)}</span>
+          </button>`).join("")}
+      </div>
+    </div>`;
+  el.querySelectorAll(".btile").forEach(b =>
+    b.addEventListener("click", () => { s.effort = b.dataset.v; renderAll(); }));
+}
+function renderPanelV4P(){
+  const s = st.v4, d = D();
+  const el = document.getElementById("panel-v4p");
+  const cols = d.perms.length > 3 ? "p2" : "p3";
+  const cur = d.perms.find(x => x.v === s.perm);
+  el.innerHTML = `
+    <div class="sec slim">
+      <div class="sec-head"><span class="sec-title">权限级别</span>
+        <span class="sec-val"${cur&&cur.c?` style="color:${colVar(cur.c)}"`:""}>${icon(cur?cur.icon:"shield",11,cur&&cur.c?`color:${colVar(cur.c)}`:"")}${cur ? cur.lbl : s.perm}</span></div>
+      <div class="blocks ${cols}">
+        ${d.perms.map(m=>`
+          <button type="button" class="btile ${s.perm===m.v?"cur":""}" data-v="${m.v}" data-c="${m.c||""}" title="${m.hint}">
+            <span class="t">${icon(m.icon,11,m.c?`color:${colVar(m.c)}`:"")}${m.lbl}</span><span class="s">${m.sh}</span>
+            <span class="ck">${icon("check",11)}</span>
+          </button>`).join("")}
+      </div>
+    </div>`;
+  el.querySelectorAll(".btile").forEach(b =>
+    b.addEventListener("click", () => { s.perm = b.dataset.v; renderAll(); }));
+}
+
+/* ================= 总渲染 ================= */
+const RING = `<svg width="26" height="26" viewBox="0 0 36 36">
+  <circle cx="18" cy="18" r="15" fill="none" stroke="rgb(var(--surface-hover))" stroke-width="3.5"/>
+  <circle cx="18" cy="18" r="15" fill="none" stroke="rgb(var(--accent))" stroke-width="3.5" stroke-linecap="round" stroke-dasharray="39.6 94.2" transform="rotate(-90 18 18)"/>
+  <text x="18" y="21.5" text-anchor="middle" font-size="9" font-weight="600" fill="rgb(var(--content-muted))">42%</text></svg>`;
+
+function renderAll(){
+  ["v1","v2","v3"].forEach(vid => {
+    document.getElementById("chip-"+vid).innerHTML = chipHTML(vid);
+    document.getElementById("chip-"+vid).classList.toggle("open", st[vid].open);
+    document.getElementById("model-"+vid).textContent = D().model + " ▾";
+  });
+  // V4:分体双 chip
+  const s4 = st.v4, e4 = D().efforts.find(x => x.v === s4.effort), p4 = D().perms.find(x => x.v === s4.perm);
+  const cE = document.getElementById("chip-v4e"), cP = document.getElementById("chip-v4p");
+  cE.innerHTML = `${icon("bolt",13)}<span>${e4 ? e4.lbl : s4.effort}</span><span class="caret">${icon("chevDown",11)}</span>`;
+  cE.classList.toggle("open", s4.openE);
+  cP.innerHTML = `${icon(p4.icon,13,p4.c?`color:${colVar(p4.c)}`:"")}<span>${p4 ? p4.lbl : s4.perm}</span><span class="caret">${icon("chevDown",11)}</span>`;
+  cP.classList.toggle("open", s4.openP);
+  document.getElementById("model-v4").textContent = D().model + " ▾";
+  const pE = document.getElementById("panel-v4e");
+  pE.hidden = !s4.openE; if (s4.openE) renderPanelV4E();
+  const pP = document.getElementById("panel-v4p");
+  pP.hidden = !s4.openP; if (s4.openP) renderPanelV4P();
+  const p1 = document.getElementById("panel-v1");
+  p1.hidden = !st.v1.open; if (st.v1.open) renderPanelV1();
+  const p2 = document.getElementById("panel-v2");
+  p2.hidden = !st.v2.open; if (st.v2.open) renderPanelV2();
+  document.getElementById("inline-v3").classList.toggle("open", st.v3.open);
+  renderInlineV3();
+}
+
+/* ================= 事件 ================= */
+["v1","v2","v3"].forEach(vid => {
+  document.getElementById("chip-"+vid).addEventListener("click", (ev) => {
+    ev.stopPropagation();
+    const wasOpen = st[vid].open;
+    closeAll();
+    st[vid].open = !wasOpen;
+    renderAll();
+  });
+});
+/* V4 双 chip:打开一个关掉另一个 */
+function closeAllV4(){ st.v4.openE = false; st.v4.openP = false; }
+[["chip-v4e","openE"],["chip-v4p","openP"]].forEach(([cid, key]) => {
+  document.getElementById(cid).addEventListener("click", (ev) => {
+    ev.stopPropagation();
+    const wasOpen = st.v4[key];
+    closeAll();
+    st.v4[key] = !wasOpen;
+    renderAll();
+  });
+});
+function closeAll(){ st.v1.open = false; st.v2.open = false; st.v3.open = false; closeAllV4(); }
+document.addEventListener("click", (ev) => {
+  if (!ev.target.closest(".chip-wrap")) { if (st.v1.open || st.v2.open || st.v3.open || st.v4.openE || st.v4.openP) { closeAll(); renderAll(); } }
+});
+document.addEventListener("keydown", (ev) => {
+  if (ev.key === "Escape" && (st.v1.open || st.v2.open || st.v3.open || st.v4.openE || st.v4.openP)) { closeAll(); renderAll(); }
+});
+
+/* tab 切换 */
+document.querySelectorAll(".tab").forEach(t => t.addEventListener("click", () => {
+  document.querySelectorAll(".tab").forEach(x => x.classList.toggle("cur", x === t));
+  ["v1","v2","v3","v4"].forEach(v => document.getElementById("sec-"+v).hidden = (t.dataset.v !== v));
+  closeAll(); renderAll();
+}));
+
+/* provider 切换 */
+document.querySelectorAll("#provSeg button").forEach(b => b.addEventListener("click", () => {
+  prov = b.dataset.p;
+  document.querySelectorAll("#provSeg button").forEach(x => x.classList.toggle("cur", x === b));
+  Object.values(st).forEach(s => {
+    if (!D().efforts.some(m => m.v === s.effort)) s.effort = "high";
+    if (!D().perms.some(m => m.v === s.perm)) s.perm = "default";
+  });
+  renderAll();
+}));
+
+/* 主题切换 */
+const themeBtn = document.getElementById("themeBtn");
+function drawTheme(){ themeBtn.innerHTML = icon(document.body.dataset.theme === "dark" ? "sun" : "moon", 15); }
+themeBtn.addEventListener("click", () => {
+  document.body.dataset.theme = document.body.dataset.theme === "dark" ? "light" : "dark";
+  drawTheme();
+});
+
+/* 初始 */
+document.getElementById("ring1").innerHTML = RING;
+document.getElementById("ring2").innerHTML = RING;
+document.getElementById("ring3").innerHTML = RING;
+document.getElementById("ring4").innerHTML = RING;
+drawTheme();
+renderAll();
+</script>
+</body>
+</html>
