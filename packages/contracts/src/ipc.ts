@@ -3327,6 +3327,22 @@ export const BROWSER_SCREENSHOT_DIR_SETTING_KEY = "browser.screenshotDir";
  *  after an app restart. */
 export const BROWSER_DATA_DIR_SETTING_KEY = "browser.dataDir";
 
+/** Setting key for "remember browser sign-in state" (default on). When
+ *  enabled, BrowserManager snapshots ALL live cookies of the embedded browser
+ *  into `browser.cookieVault` on a background timer and before quit, and
+ *  re-injects them into the browser session before its first navigation —
+ *  sign-in state (including session cookies from sites where "remember me"
+ *  was unchecked) survives app restarts. Needed because Electron ≤ 40 never
+ *  commits cookies to disk for persistent partitions; from Electron 41 the
+ *  native store works and the vault merely shadows it. Stored as "0" to
+ *  disable; missing = enabled. */
+export const BROWSER_PERSIST_LOGIN_SETTING_KEY = "browser.persistLogin";
+
+/** Setting key holding the browser cookie vault — a JSON array of
+ *  `VaultCookie` snapshots written by BrowserManager (main only) and restored
+ *  when a browser view's session is first created after a restart. */
+export const BROWSER_COOKIE_VAULT_SETTING_KEY = "browser.cookieVault";
+
 /** Setting key for the address-bar history (JSON array of
  *  `BrowserHistoryEntry`, most-recent first, capped at 50). Written only by
  *  the main process (BrowserManager on did-navigate); the renderer reads it

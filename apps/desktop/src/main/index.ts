@@ -230,7 +230,23 @@ async function maybeAutoStartRelay(): Promise<void> {
 }
 
 // Close PTYs + bridge servers + LSP servers + browser views + DB cleanly on shutdown (best-effort).
-app.on("before-quit", () => {
+//
+// Cookie vault: before-quit does NOT wait for async work, so the first
+// invocation preventDefaults, snapshots the embedded browser's cookies into
+// the settings table (time-boxed so a hung cookie store can never wedge the
+// quit), then re-enters quit; the second pass runs the synchronous teardown
+// below (which is also what closes the DB the vault row was written to).
+let sessionCookiesFlushed = false;
+app.on("before-quit", (event) => {
+  if (!sessionCookiesFlushed) {
+    event.preventDefault();
+    const timeout = new Promise<void>((r) => setTimeout(r, 3000).unref());
+    void Promise.race([BrowserManager.saveCookieVault(), timeout]).finally(() => {
+      sessionCookiesFlushed = true;
+      app.quit();
+    });
+    return;
+  }
   BridgeRegistry.disposeAll();
   TerminalManager.disposeAll();
   lspManager.disposeAll();

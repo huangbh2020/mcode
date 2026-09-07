@@ -30,10 +30,18 @@ import {
   WebContentsView,
   type Rectangle,
   type Session,
+  type Cookie,
+  type CookiesSetDetails,
   type IpcMainEvent,
   type AuthInfo,
 } from "electron";
-import { IPC, resolveBrowserDeviceSpec, BROWSER_DATA_DIR_SETTING_KEY } from "@contracts/ipc";
+import {
+  IPC,
+  resolveBrowserDeviceSpec,
+  BROWSER_COOKIE_VAULT_SETTING_KEY,
+  BROWSER_DATA_DIR_SETTING_KEY,
+  BROWSER_PERSIST_LOGIN_SETTING_KEY,
+} from "@contracts/ipc";
 import type {
   BrowserCreateResult,
   BrowserOpResult,
@@ -142,6 +150,9 @@ interface LiveBrowser {
    *  the OS preference (see pinColorScheme). Released before the mobile UA
    *  override takes the (single) debugger slot. */
   csDebuggerAttached: boolean;
+  /** Resolves once the cookie vault has been restored into this view's
+   *  session (or was skipped). Navigation must wait for it — see loadUrl. */
+  ready: Promise<void>;
 }
 
 /** Offscreen parking rect used while hidden (keeps the view alive but unseen). */
@@ -204,6 +215,37 @@ function browserSession(): Session {
     return session.fromPartition(BROWSER_PARTITION);
   }
   return session.fromPath(dir);
+}
+
+/** Whether cookies should survive restarts via the vault
+ *  (`browser.persistLogin`; missing = on, "0" = off). */
+function isPersistLoginEnabled(): boolean {
+  return SettingRepo.get(BROWSER_PERSIST_LOGIN_SETTING_KEY) !== "0";
+}
+
+/** How often the cookie vault is refreshed in the background, so a force-kill
+ *  (dev Ctrl+C, crash) loses at most one interval of sign-in state. */
+const PERSIST_LOGIN_INTERVAL_MS = 5 * 60 * 1000;
+
+/** Upper bound on vaulted cookies. A panel browser accumulates far fewer;
+ *  the cap just keeps the settings row bounded if something pathological
+ *  (tracker explosion) happens. Newest wins is NOT applied — the array is
+ *  the session's live cookie list, order is Chromium's. */
+const COOKIE_VAULT_MAX = 400;
+
+/** Serializable snapshot of one cookie. `expirationDate` is omitted for
+ *  session cookies, which therefore restore as session cookies — full
+ *  fidelity, no expiry rewriting. */
+interface VaultCookie {
+  name: string;
+  value: string;
+  domain: string;
+  hostOnly: boolean;
+  path: string;
+  secure: boolean;
+  httpOnly: boolean;
+  sameSite?: Cookie["sameSite"];
+  expirationDate?: number;
 }
 
 /** User-Agent + platform metadata used while a mobile preset is active.
@@ -301,6 +343,9 @@ class BrowserManagerImpl {
   private readonly wcToBrowser = new Map<number, string>();
   /** Registered once; the picker-result listener keys off `event.sender`. */
   private pickerListenerInstalled = false;
+  /** Background cookie-vault save timer (see saveCookieVault).
+   *  Started once with the first browser view; never stopped (process exits). */
+  private persistTimer: NodeJS.Timeout | null = null;
 
   create(projectPath: string, initialDevice?: BrowserDevicePreset): BrowserCreateResult {
     const win = getMainWindow();
@@ -309,6 +354,7 @@ class BrowserManagerImpl {
     }
 
     const id = randomUUID();
+    const ses = browserSession();
     let view: WebContentsView;
     try {
       view = new WebContentsView({
@@ -317,7 +363,7 @@ class BrowserManagerImpl {
           // isolated from the app shell's default session, so cookies/login/
           // storage live in the browser's data directory (user-configurable
           // via the browser.dataDir setting) instead of mixing with app data.
-          session: browserSession(),
+          session: ses,
           // contextIsolation stays on so the page can't touch the preload's
           // scope; the browserPicker preload exposes only mcodeBridge.pickElement.
           // sandbox is OFF because the preload is built as ESM (.mjs) and
@@ -353,6 +399,7 @@ class BrowserManagerImpl {
       defaultUserAgent: view.webContents.getUserAgent(),
       uaDebuggerAttached: false,
       csDebuggerAttached: false,
+      ready: this.restoreCookieVault(ses),
     };
     this.browsers.set(id, live);
     this.wcToBrowser.set(view.webContents.id, id);
@@ -361,6 +408,7 @@ class BrowserManagerImpl {
 
     this.installPickerListener();
     this.attachNavigationEvents(live);
+    this.ensurePersistTimer();
 
     // Apply an optional initial device-emulation preset once the renderer is
     // ready. Calling enableDeviceEmulation before the GPU/renderer process is
@@ -520,7 +568,12 @@ class BrowserManagerImpl {
     const live = this.get(id);
     if (!live) return { ok: false, error: "浏览器不存在或已关闭" };
     try {
-      void live.view.webContents.loadURL(url);
+      const wc = live.view.webContents;
+      // Navigation waits for the cookie vault restore so login state (which
+      // only exists as in-memory cookies after the re-inject) is present from
+      // the very first request — otherwise the site would see an anonymous
+      // session and bounce to its login page.
+      void live.ready.then(() => wc.loadURL(url));
       return { ok: true };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -908,6 +961,127 @@ class BrowserManagerImpl {
       log.error(`browser clearCache failed: ${msg}`);
       return { ok: false, error: msg };
     }
+  }
+
+  // ── Cookie vault (remember sign-in across restarts) ──
+  // Electron ≤ 40 (Chromium ≤ 144) NEVER commits cookies to disk for
+  // persistent partitions — even page-set persistent cookies ("remember me")
+  // vanish on restart, and the on-disk Cookies DB stays empty (verified
+  // empirically on Electron 33/34/36/38/40; works from 41 on). Chromium's own
+  // store can therefore not be relied on: we snapshot ALL live cookies into
+  // the settings table on a background timer and before quit, and re-inject
+  // them into the session before its first navigation (restoreCookieVault).
+  // Gated by `browser.persistLogin` (default on). Once the app upgrades to
+  // Electron ≥ 41 the native store works again; the vault simply keeps
+  // shadowing it as a belt-and-braces copy.
+
+  /** Snapshot the session's live cookies into the settings table. Runs on the
+   *  background timer and from the app's before-quit hook. */
+  async saveCookieVault(): Promise<{ ok: boolean; saved: number }> {
+    if (!isPersistLoginEnabled()) return { ok: true, saved: 0 };
+    const ses = browserSession();
+    const cookies = await ses.cookies.get({});
+    const vault: VaultCookie[] = cookies
+      .filter((c): c is Cookie & { domain: string } => !!c.domain) // file:// cookies can't be expressed as a set() url
+      .map((c) => ({
+        name: c.name,
+        value: c.value,
+        domain: c.domain,
+        hostOnly: c.hostOnly ?? false,
+        path: c.path ?? "/",
+        secure: c.secure ?? false,
+        httpOnly: c.httpOnly ?? false,
+        sameSite: c.sameSite,
+        ...(c.session ? {} : { expirationDate: c.expirationDate }),
+      }))
+      .slice(0, COOKIE_VAULT_MAX);
+    SettingRepo.set(BROWSER_COOKIE_VAULT_SETTING_KEY, JSON.stringify(vault));
+    // Belt-and-braces for Electron ≥ 41, where the native store does commit.
+    try {
+      await ses.cookies.flushStore();
+    } catch {
+      /* native store best-effort only */
+    }
+    if (vault.length !== this.lastVaultSaved) {
+      log.info(`browser: cookie vault saved (${vault.length} cookies)`);
+      this.lastVaultSaved = vault.length;
+    }
+    return { ok: true, saved: vault.length };
+  }
+
+  /** Re-inject the vaulted cookies into `ses` (once per session instance).
+   *  Session cookies restore as session cookies, expired entries are skipped,
+   *  and SameSite is preserved on the first attempt (Electron rejects some
+   *  attribute combos like "no_restriction" without secure — the retry drops
+   *  just the SameSite attribute rather than the whole cookie). */
+  private vaultRestored = new WeakSet<Session>();
+  private lastVaultSaved = -1;
+
+  private async restoreCookieVault(ses: Session): Promise<void> {
+    if (this.vaultRestored.has(ses)) return;
+    this.vaultRestored.add(ses);
+    if (!isPersistLoginEnabled()) return;
+    const raw = SettingRepo.get(BROWSER_COOKIE_VAULT_SETTING_KEY);
+    if (!raw) return;
+    let vault: VaultCookie[];
+    try {
+      const parsed: unknown = JSON.parse(raw);
+      if (!Array.isArray(parsed)) return;
+      vault = parsed as VaultCookie[];
+    } catch {
+      log.warn("browser: cookie vault is corrupt, ignoring");
+      return;
+    }
+    const now = Math.floor(Date.now() / 1000);
+    let restored = 0;
+    for (const c of vault) {
+      if (!c || typeof c.name !== "string" || typeof c.domain !== "string" || !c.domain) continue;
+      if (typeof c.expirationDate === "number" && c.expirationDate <= now) continue;
+      const host = c.domain.startsWith(".") ? c.domain.slice(1) : c.domain;
+      const details: CookiesSetDetails = {
+        url: `${c.secure ? "https" : "http"}://${host}${c.path || "/"}`,
+        name: c.name,
+        value: c.value,
+        path: c.path,
+        secure: c.secure,
+        httpOnly: c.httpOnly,
+      };
+      // hostOnly cookies must NOT pass domain — that would widen them to subdomains.
+      if (!c.hostOnly) details.domain = c.domain;
+      if (typeof c.expirationDate === "number") details.expirationDate = c.expirationDate;
+      if (c.sameSite && c.sameSite !== "unspecified") {
+        try {
+          await ses.cookies.set({ ...details, sameSite: c.sameSite });
+          restored++;
+          continue;
+        } catch {
+          /* fall through to the no-SameSite retry */
+        }
+      }
+      try {
+        await ses.cookies.set(details);
+        restored++;
+      } catch (err) {
+        log.warn(
+          `browser: cookie vault restore failed for ${c.name}@${c.domain}: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
+    if (restored > 0) log.info(`browser: cookie vault restored (${restored} cookies)`);
+  }
+
+  /** Start the background vault timer (once; unref'd so it never holds the
+   *  process open). */
+  private ensurePersistTimer(): void {
+    if (this.persistTimer) return;
+    this.persistTimer = setInterval(() => {
+      void this.saveCookieVault().catch((err) => {
+        log.warn(
+          `browser: cookie vault save failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      });
+    }, PERSIST_LOGIN_INTERVAL_MS);
+    this.persistTimer.unref?.();
   }
 
   // ── HTTP Basic Auth ─────────────────────────────────────────────────

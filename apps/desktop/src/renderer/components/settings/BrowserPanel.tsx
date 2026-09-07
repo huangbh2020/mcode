@@ -1,26 +1,33 @@
 import { useEffect, useState } from "react";
 import { api } from "@renderer/lib/api.js";
 import { useI18n } from "@renderer/lib/i18n/index.js";
-import { Button, ConfirmDialog, Input } from "@renderer/components/ui/index.js";
+import { Button, ConfirmDialog, Input, Switch } from "@renderer/components/ui/index.js";
 import { PanelHeader } from "./PanelHeader.js";
 import { SettingsSection } from "./SettingsSection.js";
 import { SettingRow } from "./SettingRow.js";
 import {
   BROWSER_DATA_DIR_SETTING_KEY,
+  BROWSER_PERSIST_LOGIN_SETTING_KEY,
   BROWSER_SCREENSHOT_DIR_SETTING_KEY,
 } from "@contracts/ipc";
 
 /**
- * Browser settings — screenshot directory, browser data directory, cache.
+ * Browser settings — screenshot directory, browser data directory, sign-in
+ * persistence, cache.
  *
  * - Screenshot dir: where the agent's browser_screenshot tool saves PNGs
- *   (bound to `browser.screenshotDir`, read by the main-process saver on every
- *   save — no store field / no new IPC).
+ *   (bound to `browser.screenshotDir`; the main-process saver reads it on
+ *   every save — no store field / no new IPC).
  * - Data dir: where the embedded browser's session data (cookies, form/login
  *   records, localStorage, IndexedDB …) lives. Bound to `browser.dataDir`; the
  *   main process reads it when creating the browser session. Electron caches
  *   Session objects by partition string, so a change only takes effect after
  *   an app restart — the UI says so.
+ * - Sign-in persistence: main snapshots all browser cookies into the settings
+ *   table (`browser.persistLogin` / `browser.cookieVault`) on a background
+ *   timer and before quit, and re-injects them into the session before its
+ *   first navigation after a restart. This is needed because Electron ≤ 40
+ *   never commits cookies to disk for persistent partitions.
  * - Cache: clears HTTP cache + temporary site storage via `api.browser.clearCache`
  *   (a dedicated IPC into main). Cookies/login state are preserved.
  */
@@ -34,6 +41,10 @@ export function BrowserPanel() {
       <SettingsSection title={t("settings.browser.sectionStorage")}>
         <ScreenshotDirRow />
         <DataDirRow />
+      </SettingsSection>
+
+      <SettingsSection title={t("settings.browser.sectionLogin")}>
+        <PersistLoginRow />
       </SettingsSection>
 
       <CacheSection />
@@ -186,6 +197,52 @@ function DataDirRow() {
           {t("settings.browser.savedDataDir")}
         </p>
       )}
+    </SettingRow>
+  );
+}
+
+/** Remember sign-in across restarts (browser.persistLogin). Main snapshots
+ *  all browser cookies into the settings table on a timer and before quit,
+ *  and re-injects them into the browser session before its first navigation —
+ *  session cookies from sites where "remember me" was unchecked survive
+ *  restarts too. */
+function PersistLoginRow() {
+  const { t } = useI18n();
+  const [enabled, setEnabled] = useState(true);
+  const [loaded, setLoaded] = useState(false);
+
+  useEffect(() => {
+    void (async () => {
+      const { value } = await api.setting.get({ key: BROWSER_PERSIST_LOGIN_SETTING_KEY });
+      setEnabled(value !== "0");
+      setLoaded(true);
+    })();
+  }, []);
+
+  const toggle = async (checked: boolean) => {
+    setEnabled(checked);
+    try {
+      await api.setting.set({
+        key: BROWSER_PERSIST_LOGIN_SETTING_KEY,
+        value: checked ? "1" : "0",
+      });
+    } catch {
+      setEnabled(!checked); // revert the optimistic flip on failure
+    }
+  };
+
+  return (
+    <SettingRow
+      layout="horizontal"
+      title={t("settings.browser.persistLogin")}
+      desc={t("settings.browser.persistLoginDesc")}
+    >
+      <Switch
+        checked={enabled}
+        onCheckedChange={(v) => void toggle(v)}
+        disabled={!loaded}
+        label={t("settings.browser.persistLogin")}
+      />
     </SettingRow>
   );
 }

@@ -41,7 +41,7 @@ import {
   FILE_DRAG_MIME,
 } from "@renderer/lib/contentTag.js";
 import type { SkillInfo, BuiltInCommand } from "@renderer/lib/slashCommands.js";
-import { MessageBlocks, TurnPanel, type ProceduralBlock, type BeforeContentMap } from "./MessageBlocks.js";
+import { MessageBlocks, TurnPanel, BatchToolGroup, isFoldableBlock, type ProceduralBlock, type BeforeContentMap } from "./MessageBlocks.js";
 import { AttachMenuButton } from "./AttachMenuButton.js";
 import { MicButton } from "./MicButton.js";
 import { ComposerToolbar } from "./ComposerToolbar.js";
@@ -290,6 +290,31 @@ type RenderItem =
       tightTop?: boolean;
     }
   | {
+      // Live-turn cross-message fold run: contiguous FOLDABLE blocks
+      // (thinking / batch tools / MCP / skills) merged ACROSS assistant
+      // messages into ONE ops card while the turn streams. The agent loop
+      // emits one assistant message per think→act cycle, so per-message
+      // grouping spawns a tiny card per cycle; this kind renders the whole
+      // run as a single BatchToolGroup. Exists only in the live layout —
+      // the completed turn folds everything into a turnGroup/TurnPanel.
+      kind: "opsGroup";
+      blocks: ProceduralBlock[];
+      /** Id of the first contributing message. Stable across re-runs while
+       *  the run grows (runs only append), so LegendList recycling keeps the
+       *  group's expand/collapse state alive during streaming. */
+      anchorId: string;
+      /** True only on the stream's LAST live row (drives the tail loader
+       *  spinner). Exactly one live row carries it — a fold run can absorb
+       *  the tail message's blocks, so flagging by message id would leave
+       *  the stream with no spinner (or two, when a message splits). */
+      isStreamingTail: boolean;
+      /** The turn's meta when this group is the turn's FIRST live row (the
+       *  opener message contributed only foldable blocks, so no single row
+       *  would render the "开始 · 用时" stat). */
+      turnMeta?: TurnMeta;
+      tightTop?: boolean;
+    }
+  | {
       kind: "turnGroup";
       /** The turn's process surface, in order: thinking, tool calls, AND any
        *  text the model emitted between tools (e.g. "let me read this first").
@@ -445,36 +470,106 @@ function groupMessagesForRender(
     // its own single item instead; each message's own MessageBlocks still
     // folds consecutive batch tools into one card.
     if (isStreamingTail) {
-      // Each live message carries its OWN blocks verbatim — plan and
-      // turn-files blocks included. The footer cards are NOT extracted to
-      // the stream's end here: re-pinning a live plan card to the bottom
-      // meant every newly streamed message landed ABOVE it, pushing it
-      // further down while maintainScrollAtEnd kept re-snapping scroll to
-      // the moving end — the card visibly jumped on each delta ("闪烁"),
-      // especially during post-approval execution and plan revision, where
-      // output keeps flowing long after the card appeared. Keeping the card
-      // inline on its host message gives it a stable position: new content
-      // appends BELOW it and scrolls past naturally. When the turn
-      // completes, the branch below re-runs the footer extraction and pins
-      // the frozen cards to the turn's end in one coherent re-layout (the
-      // turn collapses into a panel at that moment anyway).
-      const byMsg = new Map<ChatMessage, Block[]>();
+      // LIVE turn → block-level grouping. The turn's blocks are partitioned
+      // in arrival order into two row kinds: contiguous FOLDABLE runs
+      // (thinking / batch tools / MCP / skills — see isFoldableBlock) merge
+      // ACROSS assistant messages into a single opsGroup card, while display
+      // blocks (narration text, images, plan / turn-files / error,
+      // AskUserQuestion …) emit as per-message single items. The agent loop
+      // emits one assistant message per think→act cycle, so per-message
+      // grouping spawns a tiny "N 个操作" card per cycle; merging at the
+      // block level turns the whole burst into ONE card (broken only by the
+      // model's narration, which must stay readable).
+      //
+      // Footer cards (plan / turn-files) are NOT extracted to the stream's
+      // end here: re-pinning a live plan card to the bottom meant every
+      // newly streamed message landed ABOVE it, pushing it further down
+      // while maintainScrollAtEnd kept re-snapping scroll to the moving end
+      // — the card visibly jumped on each delta ("闪烁"), especially during
+      // post-approval execution and plan revision, where output keeps
+      // flowing long after the card appeared. Keeping the card inline on
+      // its host message gives it a stable position: new content appends
+      // BELOW it and scrolls past naturally. When the turn completes, the
+      // branch below re-runs the footer extraction and pins the frozen
+      // cards to the turn's end in one coherent re-layout (the turn
+      // collapses into a panel at that moment anyway).
+      //
+      // Classification is per-BLOCK, so a narration message never changes
+      // identity when its tool_use lands (the tool joins the adjacent run;
+      // the text row stays put) — the flicker the old all-flat layout
+      // guarded against cannot reappear.
+      type LiveRow =
+        | { kind: "ops"; blocks: ProceduralBlock[]; anchorId: string }
+        | { kind: "msg"; msg: ChatMessage; blocks: Block[] };
+      const rows: LiveRow[] = [];
+      let run: ProceduralBlock[] = [];
+      let runAnchorId = "";
+      let curMsg: ChatMessage | null = null;
+      let curBlocks: Block[] = [];
+      const flushRun = () => {
+        if (run.length > 0) {
+          rows.push({ kind: "ops", blocks: run, anchorId: runAnchorId });
+          run = [];
+        }
+      };
+      const flushMsg = () => {
+        if (curMsg && curBlocks.length > 0) {
+          rows.push({ kind: "msg", msg: curMsg, blocks: curBlocks });
+        }
+        curMsg = null;
+        curBlocks = [];
+      };
       for (const { block, msg } of turnBlocks) {
-        const arr = byMsg.get(msg);
-        if (arr) arr.push(block);
-        else byMsg.set(msg, [block]);
+        if (isFoldableBlock(block)) {
+          flushMsg();
+          if (run.length === 0) runAnchorId = msg.id;
+          run.push(block);
+        } else {
+          flushRun();
+          if (curMsg !== msg) {
+            flushMsg();
+            curMsg = msg;
+          }
+          curBlocks.push(block);
+        }
       }
-      const streamingTailId = lastMsg?.id;
+      flushRun();
+      flushMsg();
+
+      // The turn's opener usually consists of foldable blocks only, so the
+      // first live row is often an opsGroup and no single row would render
+      // the "开始 · 用时" stat — carry the meta on the group explicitly.
+      const liveTurnMeta = turnMeta;
       let liveRowIdx = 0;
-      for (const [msg, blocks] of byMsg) {
-        items.push({
-          kind: "single",
-          msg: { ...msg, blocks },
-          isStreamingTail: msg.id === streamingTailId,
-          isTurnTail: false,
-          tightTop: liveRowIdx > 0,
-        });
+      for (const row of rows) {
+        if (row.kind === "ops") {
+          items.push({
+            kind: "opsGroup",
+            blocks: row.blocks,
+            anchorId: row.anchorId,
+            isStreamingTail: false,
+            ...(liveRowIdx === 0 ? { turnMeta: liveTurnMeta } : {}),
+            tightTop: liveRowIdx > 0,
+          });
+        } else {
+          items.push({
+            kind: "single",
+            msg: { ...row.msg, blocks: row.blocks },
+            isStreamingTail: false,
+            isTurnTail: false,
+            tightTop: liveRowIdx > 0,
+          });
+        }
         liveRowIdx++;
+      }
+      // Exactly one live row carries the streaming tail (the loader
+      // spinner): the LAST row, whatever its kind. A fold run absorbs the
+      // tail message's blocks, so the old "flag the tail message" rule
+      // would leave the stream with no spinner at all — and splitting a
+      // message across rows could flag two.
+      const lastRow = items[items.length - 1];
+      if (lastRow && (lastRow.kind === "single" || lastRow.kind === "opsGroup")) {
+        lastRow.isStreamingTail = true;
       }
       turnBlocks = [];
       turnMeta = undefined;
@@ -2557,6 +2652,35 @@ function ChatPaneForSession({
           </div>
         );
       }
+      if (item.kind === "opsGroup") {
+        return (
+          <div className="px-[var(--chat-gutter)]">
+            <div
+              className={cn(
+                "mx-auto max-w-5xl",
+                item.tightTop
+                  ? "mt-[var(--chat-block-gap)]"
+                  : "mt-[var(--chat-row-gap-assistant)]",
+              )}
+            >
+              {/* Turn stat row when this group opens the turn (the opener
+                  message's blocks all folded into it). Mirrors MessageRow's
+                  stat placement. */}
+              {item.turnMeta && <TurnStatRow meta={item.turnMeta} />}
+              {/* turnActive is always true: opsGroup rows exist only while
+                  the turn streams, so every group's header ticker stays live
+                  (the group whose tool is executing shows it rolling; the
+                  rest show their last op dimmed). */}
+              <BatchToolGroup blocks={item.blocks} turnActive projectPath={projectPath} />
+              {item.isStreamingTail && (
+                <div className="mt-1.5 flex items-center gap-1.5">
+                  <IconLoader2 size={12} className="animate-spin text-accent" />
+                </div>
+              )}
+            </div>
+          </div>
+        );
+      }
       if (item.kind === "pendingTurn") {
         // Synthesized pre-token running row: just the stat row (which carries
         // its own spinner via the `live` branch) plus a streaming-tail
@@ -2722,6 +2846,11 @@ function ChatPaneForSession({
               keyExtractor={(item) => {
                 if (item.kind === "single") return item.msg.id;
                 if (item.kind === "pendingTurn") return "pending-turn";
+                // Live fold run: keyed by its first contributing message. The
+                // run only ever APPENDS (new cycles join the trailing run), so
+                // the key is stable while the group grows and its expanded
+                // state survives LegendList recycling during streaming.
+                if (item.kind === "opsGroup") return `ops:${item.anchorId}`;
                 // Use turnMeta.startedAt as stable key — it's set once when the turn
                 // begins and never changes, so the TurnPanel (and expanded Edit cards
                 // inside it) survive LegendList recycling during streaming.

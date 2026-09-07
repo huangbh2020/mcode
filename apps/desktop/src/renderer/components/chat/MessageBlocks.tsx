@@ -172,7 +172,7 @@ export type ThinkingBlock = Extract<Block, { kind: "thinking" }>;
 export type ProceduralBlock = ThinkingBlock | ToolUseBlock;
 type Segment =
   | { kind: "single"; block: Block; defaultOpen?: boolean }
-  | { kind: "batch"; blocks: ToolUseBlock[] }
+  | { kind: "batch"; blocks: ProceduralBlock[] }
   | { kind: "gallery"; blocks: Extract<Block, { kind: "image" }>[] };
 
 /** Tool calls that are HIGH-FREQUENCY, LOW-INFO operations - the model fires
@@ -181,6 +181,17 @@ type Segment =
  *  call's detail is rarely worth the vertical space. MultiEdit/TodoWrite are
  *  included too: they're mechanical (batch edits / task-list updates), not
  *  narrative. The ticker on the group header still shows what's running live.
+ *
+ *  MCP tools (`mcp__server__tool`) and skill invocations (Skill; SlashCommand
+ *  is the legacy name) fold too — from the stream's point of view they are
+ *  just as mechanical, and an MCP-heavy turn otherwise litters the stream
+ *  with one standalone card per call. MCP is matched by prefix so every
+ *  server's tools are covered without enumerating them.
+ *
+ *  Edit/Write fold as well (2026-09-08, user call): their per-file diffs stay
+ *  one click away inside the expanded group, and the "本轮修改" turn-files
+ *  card still gives the turn-level summary. Group failures surface via the
+ *  header's error glyph, so a broken edit is never buried silently.
  *
  *  Provider-neutral: Claude (claude-sdk) capitalizes tool names (Read/Grep/…)
  *  while Pi (pi-sdk) lowercases them (read/grep/…). The renderer sees raw
@@ -191,33 +202,54 @@ const BATCH_TOOL_NAMES = new Set([
   // Claude (capitalized)
   "Read", "Glob", "Grep",
   "Bash", "PowerShell",
-  "MultiEdit", "NotebookEdit",
+  "Edit", "Write", "MultiEdit", "NotebookEdit",
   "TodoWrite", "TaskCreate", "TaskUpdate",
   "WebSearch", "WebFetch",
+  // Skill / slash-command invocations (lowercase alias for safety)
+  "Skill", "SlashCommand", "skill",
   // Pi (lowercase) — find is Pi's glob, ls is Pi-only
-  "read", "find", "grep", "bash", "ls",
+  "read", "find", "grep", "bash", "ls", "edit", "write",
 ]);
-function isBatchTool(b: Block): b is ToolUseBlock {
-  return b.kind === "tool_use" && BATCH_TOOL_NAMES.has(b.toolName);
+/** A block that folds into a batch group: batch tool calls (see
+ *  {@link BATCH_TOOL_NAMES}), any MCP tool (`mcp__*` prefix), and thinking
+ *  segments — the model's reasoning is process narration of the same low
+ *  signal value as the calls around it, and a thinking-heavy turn otherwise
+ *  spends one standalone row per segment. Exported for ChatPane's live-turn
+ *  cross-message run partitioning (the streaming layout merges foldable
+ *  blocks across assistant messages into one card). */
+export function isFoldableBlock(b: Block): b is ProceduralBlock {
+  return (
+    b.kind === "thinking" ||
+    (b.kind === "tool_use" &&
+      (BATCH_TOOL_NAMES.has(b.toolName) || b.toolName.startsWith("mcp__")))
+  );
+}
+/** Narrow a fold-run member to its tool-call half (thinking has no status/
+ *  result machinery — the group header only reads those off tool calls). */
+function isToolBlock(b: ProceduralBlock): b is ToolUseBlock {
+  return b.kind === "tool_use";
 }
 
 /** Linear scan over a turn's blocks, producing render segments.
  *
  *  Grouping rule (by "is this worth independent vertical space?"):
- *   - BATCH tools (Read/Bash/Grep/...) -> accumulate into a `batch` run; the
- *     run survives across interleaved text (narration between commands) so a
- *     burst of N reads + commentary folds into ONE group card, not N cards.
- *   - thinking, Task (subagent), AskUserQuestion, Edit, Write -> always
- *     standalone: they break the batch run and emit as their own segment.
- *   - text / error -> standalone, but do NOT break the run (so a batch burst
- *     split by narration still merges back into one group).
+ *   - FOLDABLE blocks (batch tools incl. Edit/Write, MCP calls, skill
+ *     invocations, thinking segments) accumulate into a `batch` run — a burst
+ *     of N reads + edits + MCP calls + reasoning folds into ONE group card,
+ *     not N standalone rows.
+ *   - Task (subagent), AskUserQuestion, EnterPlanMode/ExitPlanMode -> always
+ *     standalone: they break the fold run and emit as their own segment.
+ *   - text / error / other display blocks -> standalone and break the run too
+ *     (a narration line splits the surrounding calls into two groups).
  *
- *  This is the inverse of the old behavior which grouped thinking INTO the
- *  tool run; thinking is now pulled out as a peer, and only low-info batch
- *  tools collapse together. Edit/Write breaking the run is preserved. */
+ *  Thinking used to be pulled out as a peer of the standalone tools; it now
+ *  folds into the run like any other low-info process block. This is the
+ *  inverse of the oldest behavior which grouped thinking INTO the tool run,
+ *  then pulled it out again - the pendulum settled on "thinking follows the
+ *  same fold rules as the low-info calls it narrates". */
 function groupBlocks(blocks: Block[]): Segment[] {
   const out: Segment[] = [];
-  let run: ToolUseBlock[] = [];
+  let run: ProceduralBlock[] = [];
   let images: Extract<Block, { kind: "image" }>[] = [];
   const flushTools = () => {
     if (run.length > 0) {
@@ -242,11 +274,11 @@ function groupBlocks(blocks: Block[]): Segment[] {
       // Images don't break a tool batch, but a tool breaks an image run.
       flushTools();
       images.push(b);
-    } else if (isBatchTool(b)) {
+    } else if (isFoldableBlock(b)) {
       flushImages();
       run.push(b);
     } else {
-      // thinking / standalone tool / text / error / other blocks break both runs.
+      // Standalone tools / text / error / other blocks break both runs.
       flushTools();
       flushImages();
       out.push({ kind: "single", block: b, defaultOpen: false });
@@ -257,19 +289,22 @@ function groupBlocks(blocks: Block[]): Segment[] {
   return out;
 }
 
-/** A collapsible card for a run of consecutive BATCH tool calls (Read/Bash/
- *  Grep/...) INSIDE an expanded TurnPanel. One summary line when collapsed
- *  (tool tally + live ticker), each child tool card folded underneath when
- *  expanded. Only low-info batch tools land here; thinking, Task (subagent),
- *  AskUserQuestion, Edit and Write are pulled out by groupBlocks as their own
- *  standalone rows - so this group never hides a high-signal action. */
-function BatchToolGroup({
+/** A collapsible card for a run of consecutive FOLDABLE blocks (batch tools
+ *  incl. Edit/Write, MCP calls, skill invocations, thinking segments) INSIDE
+ *  an expanded TurnPanel. One summary line when collapsed (block tally + live
+ *  ticker), each child folded underneath when expanded. Only low-signal
+ *  process blocks land here; Task (subagent) and AskUserQuestion are pulled
+ *  out by groupBlocks as their own standalone rows - so this group never
+ *  hides a high-signal action. Exported for ChatPane's live-turn rendering:
+ *  the streaming layout emits cross-message fold runs as standalone list
+ *  items (see groupMessagesForRender's opsGroup kind). */
+export function BatchToolGroup({
   blocks,
   beforeMap,
   turnActive = false,
   projectPath,
 }: {
-  blocks: ToolUseBlock[];
+  blocks: ProceduralBlock[];
   beforeMap?: BeforeContentMap;
   /** Whether the owning turn is still streaming. Drives the current-operation
    *  ticker on the header so the user can see what this group is executing
@@ -281,24 +316,31 @@ function BatchToolGroup({
   const [open, setOpen] = useState(false);
   const { t } = useI18n();
 
-  const aggregateStatus: "running" | "done" | "error" = blocks.some((b) => b.status === "running")
+  const toolBlocks = blocks.filter(isToolBlock);
+  const aggregateStatus: "running" | "done" | "error" = toolBlocks.some((b) => b.status === "running")
     ? "running"
-    : blocks.some((b) => b.status === "error")
+    : toolBlocks.some((b) => b.status === "error")
       ? "error"
       : "done";
 
   // The newest tool currently executing inside this group (drives the header
-  // ticker). Reverse scan picks the most recent running tool.
+  // ticker). Reverse scan picks the most recent running tool; thinking blocks
+  // never participate (they have no execution status).
   const runningTool = useMemo(() => {
-    for (let i = blocks.length - 1; i >= 0; i--) {
-      if (blocks[i].status === "running") return blocks[i];
+    for (let i = toolBlocks.length - 1; i >= 0; i--) {
+      if (toolBlocks[i].status === "running") return toolBlocks[i];
     }
     return null;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [blocks]);
 
-  // Tool-name tally in first-invocation order.
+  // Block tally in first-appearance order. Thinking segments count under the
+  // localized "思考" label so the tally reads as one uniform list.
   const counts = new Map<string, number>();
-  for (const b of blocks) counts.set(b.toolName, (counts.get(b.toolName) ?? 0) + 1);
+  for (const b of blocks) {
+    const name = b.kind === "thinking" ? t("chatStream.thinking") : b.toolName;
+    counts.set(name, (counts.get(name) ?? 0) + 1);
+  }
   const breakdown = [...counts.entries()].map(([n, c]) => `${n} ×${c}`).join(" · ");
 
   const label = t("chatStream.opCount", { n: blocks.length });
@@ -312,8 +354,15 @@ function BatchToolGroup({
         {/* 操作集合: a stack of layers reads as "a set of folded operations",
             clearer than the toolbox wrench for the N-ops batch header. */}
         <IconStack2 size={13} className="shrink-0 text-content-subtle" />
-        <span className="font-medium text-content-muted">{label}</span>
-        {breakdown && <span className="truncate text-content-subtle">{breakdown}</span>}
+        {/* shrink-0 + whitespace-nowrap: the count label is the row's anchor
+            and must never wrap or shrink — under squeeze the breakdown (and
+            the ticker) give way instead. Same pattern as the Collapsible
+            thinking header. */}
+        <span className="shrink-0 whitespace-nowrap font-medium text-content-muted">{label}</span>
+        {/* min-w-0 lets truncate actually bite: a flex item defaults to
+            min-width:auto, which would push the row wide instead of
+            ellipsizing the (potentially very long, mcp__-heavy) tally. */}
+        {breakdown && <span className="min-w-0 truncate text-content-subtle">{breakdown}</span>}
         {/* Live current-operation ticker - only while the turn is streaming.
             Sits right of the tool tally and rolls up like a slot machine as
             the agent moves between commands. Rendered inside the <button>
@@ -463,11 +512,12 @@ const JUST_COMPLETED_MS = 350;
  *  and stays visible.
  *
  *  Inside the expanded panel, blocks are grouped by signal value (see
- *  `groupBlocks`): high-frequency/low-info BATCH tools (Read/Bash/Grep/...)
- *  collapse into a single "操作集合" card so a burst of 20 reads takes one
- *  line, not 20; while thinking, Task (subagent), AskUserQuestion, Edit and
- *  Write render as their own standalone rows - they're high-signal and
- *  shouldn't be buried inside a collapsed group.
+ *  `groupBlocks`): low-info process blocks (Read/Bash/Grep/… batch tools,
+ *  Edit/Write, MCP calls, skill invocations, thinking segments) collapse into
+ *  a single "操作集合" card so a burst of 20 reads takes one line, not 20;
+ *  while Task (subagent) and AskUserQuestion render as their own standalone
+ *  rows - they're high-signal and shouldn't be buried inside a collapsed
+ *  group.
  *
  *  - While the turn is still running (turnMeta.endedAt undefined) the panel
  *    stays OPEN by default so the user can watch the model work; the header

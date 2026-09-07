@@ -206,9 +206,12 @@ export const en = {
 
   // ── BrowserPanel ──
   "settings.browser.title": "Browser",
-  "settings.browser.desc": "Configure the embedded browser: where screenshots and browser data live, and cache cleanup.",
+  "settings.browser.desc": "Configure the embedded browser: where screenshots and browser data live, sign-in persistence, and cache cleanup.",
   "settings.browser.screenshotSection": "Screenshot folder",
   "settings.browser.sectionStorage": "Storage Locations",
+  "settings.browser.sectionLogin": "Sign-in State",
+  "settings.browser.persistLogin": "Remember sign-in state",
+  "settings.browser.persistLoginDesc": "When enabled, all browser cookies — including session cookies from sites where you didn't check \"remember me\" — are saved on quit and restored on the next launch, so signed-in sites survive restarts. A site can still expire the session server-side.",
   "settings.browser.sectionCache": "Cache",
   "settings.lsp.section": "Server list",
   "settings.browser.screenshotSectionDesc": "Screenshots taken by the agent's browser_screenshot tool are saved here, grouped into subfolders by session and turn: <dir>/<sessionID>/turn-<n>/. Leave empty to use the system Pictures folder.",
