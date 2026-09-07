@@ -43,7 +43,7 @@ import { useI18n, type MessageId } from "@renderer/lib/i18n/index.js";
 /** A single git operation log entry - one per pull/push/commit/sync/etc. */
 type GitOpLogEntry = {
   id: string;
-  op: "pull" | "push" | "commit" | "sync" | "stage" | "unstage" | "discard" | "merge" | "mergeAbort";
+  op: "pull" | "push" | "commit" | "sync" | "stage" | "unstage" | "discard" | "merge" | "mergeAbort" | "deleteBranch";
   /** "success" for ok results, "failure" for !ok results or thrown exceptions. */
   status: "success" | "failure";
   /** Full error message (only for failures). Omitted for successes. */
@@ -64,6 +64,7 @@ const OP_LABEL_KEYS: Record<GitOpLogEntry["op"], MessageId> = {
   discard: "ide.git.discard",
   merge: "ide.git.merge",
   mergeAbort: "ide.git.mergeAbort",
+  deleteBranch: "ide.git.deleteBranch",
 };
 
 /** Max number of log entries kept per repo. Older entries are dropped. */
@@ -116,6 +117,14 @@ export function GitRepoCard({ repo }: { repo: GitRepo }) {
   const [checkingOut, setCheckingOut] = useState(false);
   const [newBranchOpen, setNewBranchOpen] = useState(false);
   const [newBranchName, setNewBranchName] = useState("");
+  // Branch-delete state: `pendingDelete` is the local branch picked for
+  // deletion (non-null opens the confirm dialog); `deleteError` surfaces
+  // git's own message (e.g. "not fully merged") inside the dialog, and
+  // `deleteNeedsForce` flips the confirm button into a force `-D` retry.
+  const [pendingDelete, setPendingDelete] = useState<GitBranchInfo | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [deleteNeedsForce, setDeleteNeedsForce] = useState(false);
   // Branch-merge state: `mergeTarget` is the branch picked in the picker (a
   // non-null value opens the confirm dialog); `mergePreviewData` holds the
   // read-only preview (incoming commits / fast-forward / up-to-date) fetched
@@ -247,6 +256,42 @@ export function GitRepoCard({ repo }: { repo: GitRepo }) {
     },
     [repo.path],
   );
+
+  /** Open the delete confirm dialog for a local branch (hover action in the
+   *  branch picker). Closes the picker first so only one overlay is up. */
+  const openDeleteDialog = useCallback((b: GitBranchInfo) => {
+    setBranchMenuOpen(false);
+    setPendingDelete(b);
+    setDeleteError(null);
+    setDeleteNeedsForce(false);
+  }, []);
+
+  /** Delete `pendingDelete`. A plain `-d` refuses to drop branches with
+   *  unmerged commits — when git says "not fully merged" the dialog switches
+   *  to offering a force `-D` retry instead. */
+  const handleDeleteBranch = async (force: boolean) => {
+    if (!pendingDelete || deleting) return;
+    setDeleting(true);
+    setDeleteError(null);
+    try {
+      const res = await api.git.deleteBranch({ repoPath: repo.path, branch: pendingDelete.name, force });
+      if (!res.ok) {
+        const msg = res.error ?? t("ide.git.deleteBranchFailed");
+        setDeleteError(msg);
+        if (/not fully merged|未完全合并/i.test(msg)) setDeleteNeedsForce(true);
+        return;
+      }
+      prependLog({ op: "deleteBranch", status: "success" });
+      setPendingDelete(null);
+      await refresh();
+    } catch (err) {
+      const msg = (err as Error).message ?? t("ide.git.deleteBranchFailed");
+      setDeleteError(msg);
+      prependLog({ op: "deleteBranch", status: "failure", message: msg });
+    } finally {
+      setDeleting(false);
+    }
+  };
 
   /** Merge `mergeTarget` into the current branch. Conflicts route into the
    *  same AI-resolution dialog pull uses (with an added "abort merge" escape
@@ -658,6 +703,7 @@ export function GitRepoCard({ repo }: { repo: GitRepo }) {
                             localNames={new Set(filteredBranches.local.map((b) => b.name))}
                             onCheckout={handleCheckout}
                             onMerge={openMergeDialog}
+                            onDelete={openDeleteDialog}
                           />
                         )}
                         {filteredBranches.remote.length > 0 && (
@@ -845,6 +891,62 @@ export function GitRepoCard({ repo }: { repo: GitRepo }) {
         </Dialog.Portal>
       </Dialog.Root>
 
+      {/* ── Delete branch confirmation dialog ──
+          Plain `-d` first; when git refuses (unmerged commits) the dialog
+          surfaces the error and flips to a force `-D` retry button. */}
+      <Dialog.Root
+        open={pendingDelete !== null}
+        onOpenChange={(open) => {
+          if (!open && !deleting) setPendingDelete(null);
+        }}
+      >
+        <Dialog.Portal>
+          <Dialog.Backdrop />
+          <Dialog.Popup className="w-[360px] max-w-[90vw] p-4">
+            <div className="flex items-start gap-3 pr-6">
+              <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-danger/10 text-danger">
+                <IconAlertTriangle size={16} />
+              </span>
+              <div className="min-w-0 flex-1">
+                <Dialog.Title>{t("ide.git.deleteBranchQ")}</Dialog.Title>
+                <Dialog.Description className="mt-1 break-all">
+                  {t("ide.git.deleteBranchDesc", { branch: pendingDelete?.name ?? "" })}
+                </Dialog.Description>
+              </div>
+            </div>
+            {deleteError && (
+              <div className="mt-3 max-h-24 overflow-y-auto whitespace-pre-wrap break-all rounded bg-danger/10 px-2.5 py-1.5 text-[11px] text-danger">
+                {deleteError}
+              </div>
+            )}
+            {deleteError && deleteNeedsForce && (
+              <div className="mt-2 text-[11px] text-content-muted">
+                {t("ide.git.deleteBranchUnmerged")}
+              </div>
+            )}
+            <div className="mt-4 flex justify-end gap-2">
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setPendingDelete(null)}
+                disabled={deleting}
+              >
+                {t("common.cancel")}
+              </Button>
+              <Button
+                variant="danger"
+                size="sm"
+                onClick={() => void handleDeleteBranch(deleteNeedsForce)}
+                disabled={deleting}
+              >
+                {deleting ? <IconLoader2 size={12} className="animate-spin" /> : <IconTrash size={12} />}
+                {deleteNeedsForce ? t("ide.git.deleteBranchForce") : t("common.delete")}
+              </Button>
+            </div>
+          </Dialog.Popup>
+        </Dialog.Portal>
+      </Dialog.Root>
+
       {/* ── Merge-conflict: AI resolution dialog (shared with the worktree
           merge-back dialog) ── */}
       <MergeConflictResolveDialog
@@ -856,11 +958,7 @@ export function GitRepoCard({ repo }: { repo: GitRepo }) {
         conflictedFiles={conflictFiles ?? []}
         source={conflictSource}
         branch={conflictBranch}
-        onResolved={(n) => {
-          setConflictFiles(null);
-          // Pre-fill a merge commit message so the user can finish the merge.
-          // The repo is now staged for the merge commit (files added by AI).
-          setCommitMsg(`Merge: conflicts auto-resolved by AI${n ? ` (${n} files)` : ""}`);
+        onKickoff={() => {
           setError(null);
           void refresh();
         }}
@@ -869,7 +967,6 @@ export function GitRepoCard({ repo }: { repo: GitRepo }) {
           setConflictFiles(null);
           void refresh();
         }}
-        onError={(msg) => setError(msg)}
         onAbortError={(msg) => {
           setError(msg);
           prependLog({ op: "mergeAbort", status: "failure", message: msg });
@@ -1277,6 +1374,7 @@ function BranchGroup({
   localNames,
   onCheckout,
   onMerge,
+  onDelete,
   icon,
 }: {
   label: string;
@@ -1289,6 +1387,10 @@ function BranchGroup({
    *  current branch" action. Tags are excluded (merging a tag is rare and
    *  would clutter the row). */
   onMerge?: (b: GitBranchInfo) => void;
+  /** When provided, non-current LOCAL rows get a hover "delete branch"
+   *  action. Remote rows are excluded — deleting one means pushing a ref
+   *  deletion to the remote, which the picker deliberately doesn't offer. */
+  onDelete?: (b: GitBranchInfo) => void;
   icon?: React.ReactNode;
 }) {
   const { t } = useI18n();
@@ -1348,6 +1450,24 @@ function BranchGroup({
               )}
             >
               <IconGitMerge size={11} />
+            </button>
+          )}
+          {/* Hover "delete branch" (local rows only) — same fade-in pattern as
+              the merge action; stopPropagation keeps checkout from firing. */}
+          {!b.current && b.type === "local" && onDelete && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onDelete(b);
+              }}
+              title={t("ide.git.deleteBranch")}
+              className={cn(
+                "flex h-5 w-5 shrink-0 items-center justify-center rounded text-content-subtle transition-opacity",
+                "opacity-0 hover:bg-surface-hover hover:text-danger group-hover:opacity-100",
+              )}
+            >
+              <IconTrash size={11} />
             </button>
           )}
           {b.current && <IconCheck size={11} className="shrink-0" />}

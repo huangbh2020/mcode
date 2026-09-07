@@ -1,10 +1,10 @@
 /**
  * Agent runtimes (download-on-demand) settings panel.
  *
- * One compact ROW per agent runtime (Claude Code / Codex CLI / Pi Coding
- * Agent): brand icon + name + status badge on the left, a single muted
- * detail line in the middle (active version, disk size, upstream news), and
- * install/update/remove actions on the right. The payloads themselves are
+ * One compact ROW per agent runtime (Claude / Codex / Pi): brand icon + name
+ * + status badge on the left, a single muted detail line in the middle (the
+ * one effective version, disk size), and install/update/remove actions on the
+ * right. The payloads themselves are
  * NOT bundled with the installer (~600MB per platform); the main-process
  * RuntimeInstaller downloads them from the npm registry into
  * userData/runtimes on demand (see main/runtimes/runtimeInstaller.ts).
@@ -42,9 +42,9 @@ import {
 
 /** Display names — proper nouns, untranslated. */
 const AGENT_META: Record<RuntimeAgentId, { label: string }> = {
-  claude: { label: "Claude Code" },
-  codex: { label: "Codex CLI" },
-  pi: { label: "Pi Coding Agent" },
+  claude: { label: "Claude" },
+  codex: { label: "Codex" },
+  pi: { label: "Pi" },
 };
 
 function formatBytes(n: number): string {
@@ -173,6 +173,11 @@ function RuntimeRow({
   const showProgress = installing && progress !== undefined;
   // Local snapshot so the closures below keep the narrowed non-null type.
   const activePath = state.activePath;
+  // The ONE version this row shows (collapsed line + expanded field): the
+  // copy actually in use, falling back to the expected version before any
+  // install exists. Upstream latest is intentionally not displayed — the
+  // "update available" badge covers that signal.
+  const version = state.installedVersion ?? state.activeVersion ?? state.expectedVersion;
   // Expanded detail (path + versions + source). Collapsed by default — the
   // row itself stays the single-line summary.
   const [expanded, setExpanded] = useState(false);
@@ -208,9 +213,6 @@ function RuntimeRow({
     );
   } else if (state.expectedVersion) {
     details.push(t("settings.runtimes.detailExpected", { v: state.expectedVersion }));
-  }
-  if (state.latestVersion !== null && state.latestVersion !== state.expectedVersion) {
-    details.push(t("settings.runtimes.detailLatest", { v: state.latestVersion }));
   }
 
   return (
@@ -292,17 +294,9 @@ function RuntimeRow({
           <DetailRow label={t("settings.runtimes.field.source")}>
             {sourceLabel(state, t)}
           </DetailRow>
-          <DetailRow label={t("settings.runtimes.field.expected")}>
-            <span className="font-mono">v{state.expectedVersion}</span>
-          </DetailRow>
-          {state.activeVersion !== null && (
-            <DetailRow label={t("settings.runtimes.field.active")}>
-              <span className="font-mono">v{state.activeVersion}</span>
-            </DetailRow>
-          )}
-          {state.latestVersion !== null && (
-            <DetailRow label={t("settings.runtimes.field.latest")}>
-              <span className="font-mono">v{state.latestVersion}</span>
+          {version && (
+            <DetailRow label={t("settings.runtimes.field.version")}>
+              <span className="font-mono">v{version}</span>
             </DetailRow>
           )}
           {state.installed && state.diskBytes > 0 && (

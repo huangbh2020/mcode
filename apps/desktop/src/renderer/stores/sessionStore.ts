@@ -1325,7 +1325,7 @@ export interface SessionState {
   /** Fetch the next page of active sessions for a project and append it to
    *  `sessionsByProject[projectId]`. No-op when there are no more to load. */
   loadMoreSessions: (projectId: string) => Promise<void>;
-  startSession: (projectId?: string, overrides?: { providerId?: string; model?: string; customModelId?: string | null; worktreePath?: string }) => Promise<void>;
+  startSession: (projectId?: string, overrides?: { providerId?: string; model?: string; customModelId?: string | null; worktreePath?: string; /** Force the working-environment intent (bypasses the composer's env chip — e.g. a conflict-resolution session must stay in the real checkout). */ envMode?: "local" | "worktree" }) => Promise<void>;
   /** Move a FRESH local session to a different project (the directory
    *  switcher in the new-session composer panel). Main-side guards reject
    *  anything that already started (messages / materialized worktree / bad
@@ -5154,11 +5154,16 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       // the first turn (see sendTurn's resolveSessionCwd), never here. An
       // explicit worktreePath (LeftBar "在此工作树中新建会话") BINDS the new
       // session to an existing managed checkout instead of creating one (the
-      // checkout's own form applies; wtStyle is moot for binds).
+      // checkout's own form applies; wtStyle is moot for binds). `envMode`
+      // override wins over the chip (conflict-resolution sessions force
+      // "local" — the agent must work in the real checkout, not a worktree).
       envMode:
-        overrides?.worktreePath || get().envChoice !== "local" ? "worktree" : "local",
+        overrides?.envMode ??
+        (overrides?.worktreePath || get().envChoice !== "local" ? "worktree" : "local"),
       wtStyle:
-        !overrides?.worktreePath && get().envChoice !== "local"
+        !overrides?.envMode &&
+        !overrides?.worktreePath &&
+        get().envChoice !== "local"
           ? get().envChoice === "wt-branch" ? "branch" : "detached"
           : undefined,
       worktreePath: overrides?.worktreePath,

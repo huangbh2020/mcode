@@ -2105,23 +2105,6 @@ export const GitCancelGenerateCommitSchema = z.object({
 });
 export type GitCancelGenerateCommitInput = z.infer<typeof GitCancelGenerateCommitSchema>;
 
-/** Input for git.resolveConflicts: resolve all unmerged files in a repo via
- *  an AI one-shot call. `repoPath` scopes the operation; `customModelId` +
- *  `customModelRole` select the specific model (a config + its role binding,
- *  same shape as git.generateCommitMessage); null = use the built-in model.
- *  The handler reads each conflicted file's conflict markers, asks the model
- *  for a resolved version, writes it back, and runs `git add`. It does NOT
- *  commit — the user completes the merge commit after reviewing. */
-export const GitResolveConflictsSchema = z.object({
-  repoPath: z.string(),
-  /** Custom-model config id (from CustomModelStore). null = use built-in. */
-  customModelId: z.string().nullable(),
-  /** Which role binding within the config to use (e.g. "sonnet"). Ignored
-   *  when customModelId is null. */
-  customModelRole: z.string().nullable(),
-});
-export type GitResolveConflictsInput = z.infer<typeof GitResolveConflictsSchema>;
-
 /* ── Git history (log / show commit / show file at revision) ── */
 
 /** One commit in a `git.log` / `git.showCommit` result. */
@@ -2260,6 +2243,18 @@ export const GitCheckoutSchema = z.object({
     .optional(),
 });
 export type GitCheckoutInput = z.infer<typeof GitCheckoutSchema>;
+
+/** Delete a LOCAL branch (`git branch -d` / `-D` with `force`). Remote and
+ *  tag rows are not deletable from the picker (deleting a remote branch means
+ *  pushing a ref deletion — out of scope here). `branch` reuses the checkout
+ *  branch-name charset. */
+export const GitDeleteBranchSchema = z.object({
+  repoPath: z.string(),
+  branch: z.string().regex(/^[A-Za-z0-9._/\-]+$/, "invalid branch name"),
+  /** Force delete (`git branch -D`) — skips the fully-merged safety check. */
+  force: z.boolean().optional(),
+});
+export type GitDeleteBranchInput = z.infer<typeof GitDeleteBranchSchema>;
 
 /* ── Git branch merge ── */
 
@@ -3840,10 +3835,6 @@ export interface RpcMap {
   /** Generate a commit message from the staged diff via an LLM one-shot call. */
   "git.generateCommitMessage": (input: GitGenerateCommitInput) => Promise<{ ok: boolean; message?: string; error?: string }>;
   "git.cancelGenerateCommitMessage": (input: GitCancelGenerateCommitInput) => Promise<{ ok: boolean }>;
-  /** Resolve all merge conflicts in a repo via an AI one-shot call. Reads each
-   *  conflicted file, asks the model for a resolved version, writes it back and
-   *  runs `git add`. Does NOT commit. Returns the resolved file paths. */
-  "git.resolveConflicts": (input: GitResolveConflictsInput) => Promise<{ ok: boolean; resolvedFiles?: string[]; error?: string }>;
   /** Paginated commit log for a repo (newest first). */
   "git.log": (input: GitLogInput) => Promise<{ commits: GitCommitInfo[]; hasMore: boolean }>;
   /** Meta + changed files for one commit. */
@@ -3857,6 +3848,8 @@ export interface RpcMap {
   /** Check out a branch / tag / ref. With `newBranch`, creates a new local
    *  branch from the target and checks it out (tracking branch or new branch). */
   "git.checkout": (input: GitCheckoutInput) => Promise<GitOpResult>;
+  /** Delete a local branch (`git branch -d`; `-D` with `force`). */
+  "git.deleteBranch": (input: GitDeleteBranchInput) => Promise<GitOpResult>;
   /** Preview a merge of `source` into the current branch without touching the
    *  working tree (incoming commit count / fast-forward / up-to-date). */
   "git.mergePreview": (input: GitMergeInput) => Promise<GitMergePreviewResult>;
@@ -4225,12 +4218,12 @@ export const IPC = {
   GIT_DISCARD: "git:discard",
   GIT_GENERATE_COMMIT: "git:generateCommitMessage",
   GIT_CANCEL_GENERATE_COMMIT: "git:cancelGenerateCommitMessage",
-  GIT_RESOLVE_CONFLICTS: "git:resolveConflicts",
   GIT_LOG: "git:log",
   GIT_SHOW_COMMIT: "git:showCommit",
   GIT_SHOW_FILE: "git:showFile",
   GIT_LIST_BRANCHES: "git:listBranches",
   GIT_CHECKOUT: "git:checkout",
+  GIT_DELETE_BRANCH: "git:deleteBranch",
   GIT_MERGE_PREVIEW: "git:mergePreview",
   GIT_MERGE: "git:merge",
   GIT_MERGE_ABORT: "git:mergeAbort",

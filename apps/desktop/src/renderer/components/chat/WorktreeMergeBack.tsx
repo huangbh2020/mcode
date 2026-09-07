@@ -336,6 +336,10 @@ export function WorktreeMergeBackDialog({
   // success; then the merge is STAGED but uncommitted — the dialog switches
   // to a finish step (editable message + "finish merge commit").
   const [resolvedCount, setResolvedCount] = useState<number | null>(null);
+  // True while the resolution session (opened from the shared dialog) is
+  // working on the conflicts — a poller watches the repo's merge state and
+  // flips to the finish step once no unmerged paths remain.
+  const [awaitingResolution, setAwaitingResolution] = useState(false);
   // The shared conflict-resolution dialog's open flag (the conflict banner's
   // "resolve with AI" button opens it — the window is NOT auto-opened so the
   // user can also choose to abort or handle it manually elsewhere).
@@ -447,6 +451,38 @@ export function WorktreeMergeBackDialog({
   useEffect(() => {
     if (open) void load();
   }, [open, load]);
+
+  // Session-based AI resolution runs asynchronously in its own conversation —
+  // poll the repo's merge state while awaiting it: once no unmerged paths
+  // remain (resolutions staged), surface the finish-merge step. Also catches
+  // a resolution the user completed after leaving and reopening this dialog.
+  useEffect(() => {
+    if (!open || !awaitingResolution || !repoPath) return;
+    let cancelled = false;
+    const timer = setInterval(async () => {
+      try {
+        const { status } = await api.git.status({ repoPath });
+        if (cancelled) return;
+        const unmerged = status.files.filter(
+          (f) => f.index === "unmerged" || f.workingTree === "unmerged",
+        );
+        const staged = status.files.filter(
+          (f) => f.index !== "unmodified" && f.index !== "untracked",
+        );
+        if (unmerged.length === 0 && staged.length > 0) {
+          setAwaitingResolution(false);
+          setResolvedCount(staged.length);
+          setMergeCommitMsg(`Merge: conflicts auto-resolved by AI (${staged.length} files)`);
+        }
+      } catch {
+        // transient probe failure — keep polling
+      }
+    }, 3000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [open, awaitingResolution, repoPath]);
 
   // "Work to merge" = new commits OR uncommitted worktree changes (the
   // backend auto-commits a dirty worktree before merging). `upToDate` only
@@ -739,15 +775,17 @@ export function WorktreeMergeBackDialog({
           conflictedFiles={conflictFiles}
           source="merge"
           branch={info?.branch || info?.head || null}
-          onResolved={(n) => {
-            setResolvedCount(n);
-            setMergeCommitMsg(`Merge: conflicts auto-resolved by AI${n ? ` (${n} files)` : ""}`);
+          onKickoff={() => {
+            // Resolution moved into a dedicated session — watch the merge
+            // state and surface the finish step once the agent has staged
+            // the resolutions.
+            setAwaitingResolution(true);
+            void load();
           }}
           onAborted={() => {
             // Merge unwound — re-probe so the dialog returns to mergeable state.
             void load();
           }}
-          onError={setError}
         />
       )}
     </>

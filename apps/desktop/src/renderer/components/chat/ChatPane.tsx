@@ -2851,21 +2851,6 @@ function ChatPaneForSession({
           ? "flex flex-1 items-center justify-center overflow-hidden"
           : "shrink-0 pb-3",
       )}>
-        {/* Ambient accent glow behind the empty-state welcome. A soft radial
-            highlight anchored at the top center gives the home screen depth —
-            in dark mode it reads as a halo behind the brand badge; in light
-            mode the low alpha keeps it as a barely-there tint. Pointer-events
-            none so it never intercepts clicks. */}
-        {empty && (
-          <div
-            className="pointer-events-none absolute inset-0"
-            aria-hidden
-            style={{
-              background:
-                "radial-gradient(ellipse 80% 50% at 50% 0%, rgb(var(--accent)/0.07), transparent 70%)",
-            }}
-          />
-        )}
         <div className={cn("relative w-full", empty ? "max-w-4xl" : "mx-auto max-w-5xl pt-5")}>
           {empty && (
             <EmptyThreadWelcome projectName={projectName} />

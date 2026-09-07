@@ -306,8 +306,6 @@ const api = {
       ipcRenderer.invoke(IPC.GIT_GENERATE_COMMIT, input)) as RpcMap["git.generateCommitMessage"],
     cancelGenerateCommitMessage: ((input) =>
       ipcRenderer.invoke(IPC.GIT_CANCEL_GENERATE_COMMIT, input)) as RpcMap["git.cancelGenerateCommitMessage"],
-    resolveConflicts: ((input) =>
-      ipcRenderer.invoke(IPC.GIT_RESOLVE_CONFLICTS, input)) as RpcMap["git.resolveConflicts"],
     log: ((input) =>
       ipcRenderer.invoke(IPC.GIT_LOG, input)) as RpcMap["git.log"],
     showCommit: ((input) =>
@@ -318,6 +316,8 @@ const api = {
       ipcRenderer.invoke(IPC.GIT_LIST_BRANCHES, input)) as RpcMap["git.listBranches"],
     checkout: ((input) =>
       ipcRenderer.invoke(IPC.GIT_CHECKOUT, input)) as RpcMap["git.checkout"],
+    deleteBranch: ((input) =>
+      ipcRenderer.invoke(IPC.GIT_DELETE_BRANCH, input)) as RpcMap["git.deleteBranch"],
     mergePreview: ((input) =>
       ipcRenderer.invoke(IPC.GIT_MERGE_PREVIEW, input)) as RpcMap["git.mergePreview"],
     merge: ((input) =>

@@ -1,17 +1,16 @@
 /**
- * AI merge-conflict resolution dialog, shared by every surface that can land
+ * Merge-conflict resolution dialog, shared by every surface that can land
  * the repo in a merge-conflict state:
  *
  *  - `GitRepoCard` (pull / branch-merge results),
- *  - `WorktreeMergeBackDialog` (merge-back of an isolated worktree).
+ *  - `WorktreeMergeBack` (merge-back of an isolated worktree).
  *
- * The backend (`git.resolveConflicts`) self-discovers the unmerged set from
- * the repo's merge state — the `conflictedFiles` prop is display-only. Two
+ * "用 AI 解决" opens a NEW Mcode session (bound to the project that owns the
+ * repo) whose kickoff prompt asks the agent to resolve the conflicted files
+ * and stage them — the work happens visibly in that conversation instead of
+ * a hidden background query. The merge commit stays with the user. Two
  * escape hatches ride along: "abort merge" (git merge --abort) and "handle
- * manually later". On AI success the repo stays in the merging state with
- * everything staged — the caller's `onResolved` decides how the user finishes
- * the merge commit (GitRepoCard pre-fills its commit box; the merge-back
- * dialog offers a dedicated finish button).
+ * manually later".
  */
 import { useState } from "react";
 import { api } from "@renderer/lib/api.js";
@@ -20,6 +19,44 @@ import { Button, Dialog } from "@renderer/components/ui/index.js";
 import { IconAlertTriangle, IconLoader2, IconSparkles, IconX } from "@renderer/lib/icons.js";
 import { useI18n } from "@renderer/lib/i18n/index.js";
 
+/** Nearest project whose root contains `repoPath`. The repo originally came
+ *  from that project's discoverRepos scan, so a match always exists in
+ *  practice; longest root wins (nested repos). */
+function findProjectIdForRepo(
+  repoPath: string,
+  projects: { id: string; path: string }[],
+): string | null {
+  const norm = (p: string) => p.replace(/[\\/]+$/, "");
+  const target = norm(repoPath);
+  let best: { id: string; len: number } | null = null;
+  for (const p of projects) {
+    const root = norm(p.path);
+    if (target === root || target.startsWith(root + "/") || target.startsWith(root + "\\")) {
+      if (!best || root.length > best.len) best = { id: p.id, len: root.length };
+    }
+  }
+  return best?.id ?? null;
+}
+
+/** Kickoff prompt for the resolution session. The file list is a snapshot
+ *  from click time — the agent re-probes the live unmerged set itself. */
+function buildConflictPrompt(repoPath: string, snapshotFiles: string[]): string {
+  const fileList = snapshotFiles.map((f) => `- ${f}`).join("\n");
+  return [
+    `解决 git 仓库 ${repoPath} 的合并冲突。该仓库当前处于合并进行中状态(存在 MERGE_HEAD)。触发「用 AI 解决」时检测到的冲突文件:`,
+    fileList || "(未列出)",
+    "",
+    "请按以下步骤处理:",
+    `1. 运行 git -C ${repoPath} diff --name-only --diff-filter=U 获取当前实际的冲突文件列表(以上仅为快照,以实际结果为准)。`,
+    "2. 逐个打开冲突文件,阅读 <<<<<<< / ======= / >>>>>>> 标记两侧的改动,结合语义给出正确的合并结果——保留双方有意义的修改,不要机械地只取一边。",
+    "3. 编辑文件,移除全部冲突标记,确保内容完整、语法正确。",
+    "4. 全部解决后用 git add 将这些文件写入暂存区。",
+    "5. 不要执行 git commit——合并提交由用户检查后自行完成;也不要执行 git merge --abort。",
+    "6. 某个冲突若无法确定正确结果,保留该文件的冲突标记、不要 git add 它,并在回复中说明原因。",
+    "最后逐一总结每个文件的处理结果。",
+  ].join("\n");
+}
+
 export function MergeConflictResolveDialog({
   open,
   onOpenChange,
@@ -27,9 +64,8 @@ export function MergeConflictResolveDialog({
   conflictedFiles,
   source,
   branch,
-  onResolved,
+  onKickoff,
   onAborted,
-  onError,
   onAbortError,
 }: {
   open: boolean;
@@ -43,12 +79,11 @@ export function MergeConflictResolveDialog({
   source: "pull" | "merge" | "state";
   /** Source branch name for `source: "merge"` descriptions. */
   branch?: string | null;
-  /** AI resolution succeeded — conflicts staged, merge commit still pending. */
-  onResolved?: (resolvedCount: number) => void;
+  /** The resolution session was kicked off — the dialog has closed; callers
+   *  can refresh their view of the (still mid-merge) repo. */
+  onKickoff?: () => void;
   /** The user aborted the merge; the repo is back at its pre-merge state. */
   onAborted?: () => void;
-  /** AI-resolution failure — shown inline AND handed to the caller. */
-  onError?: (message: string) => void;
   /** Merge-abort failure, kept separate so callers can log/classify the op
    *  (GitRepoCard's operation log distinguishes mergeAbort entries). */
   onAbortError?: (message: string) => void;
@@ -60,44 +95,54 @@ export function MergeConflictResolveDialog({
   // Last failure from either action, rendered inline (the dialog stays open
   // so the user can retry or take the abort escape hatch).
   const [actionError, setActionError] = useState<string | null>(null);
+  // Optional dedicated model (Settings → Git) — seeds the resolution
+  // session's config. Stored as "configId:roleKey".
   const conflictResolveModel = useSessionStore((s) => s.conflictResolveModel);
 
-  // Resolve the merge conflicts via AI. Reads the conflict-resolution model
-  // from settings (stored as "configId:roleKey" — split it back, mirroring
-  // CommitBox's commitGenModel handling), asks the backend to resolve every
-  // conflicted file, then hands the outcome to the caller.
-  const handleResolveConflicts = async () => {
-    let customModelId: string | null = null;
-    let customModelRole: string | null = null;
-    if (conflictResolveModel) {
-      const colonIdx = conflictResolveModel.lastIndexOf(":");
-      if (colonIdx > 0) {
-        customModelId = conflictResolveModel.slice(0, colonIdx);
-        customModelRole = conflictResolveModel.slice(colonIdx + 1);
-      } else {
-        customModelId = conflictResolveModel;
-      }
-    }
+  // Resolve the merge conflicts in a NEW session: create a session bound to
+  // the project that owns the repo, then send it a kickoff prompt describing
+  // the conflict. The agent works visibly in that conversation (edits +
+  // git add); the merge commit stays with the user.
+  const handleResolveWithSession = async () => {
     setResolving(true);
     setActionError(null);
     try {
-      const res = await api.git.resolveConflicts({
-        repoPath,
-        customModelId,
-        customModelRole,
-      });
-      if (res.ok) {
-        onOpenChange(false);
-        onResolved?.(res.resolvedFiles?.length ?? 0);
-      } else {
-        const msg = res.error ?? t("ide.git.resolveFailed");
-        setActionError(msg);
-        onError?.(msg);
+      const store = useSessionStore.getState();
+      const projectId = findProjectIdForRepo(repoPath, store.projects);
+      if (!projectId) {
+        setActionError(t("ide.git.resolveNoProject"));
+        return;
       }
-    } catch {
-      const msg = t("ide.git.resolveFailed");
-      setActionError(msg);
-      onError?.(msg);
+      let overrides: Parameters<typeof store.startSession>[1] = { envMode: "local" };
+      if (conflictResolveModel) {
+        const colonIdx = conflictResolveModel.lastIndexOf(":");
+        overrides = {
+          providerId: "claude-sdk",
+          customModelId:
+            colonIdx > 0 ? conflictResolveModel.slice(0, colonIdx) : conflictResolveModel,
+          model: colonIdx > 0 ? conflictResolveModel.slice(colonIdx + 1) : undefined,
+          envMode: "local",
+        };
+      }
+      await store.startSession(projectId, overrides);
+      const sessionId = useSessionStore.getState().activeSessionId;
+      if (!sessionId) throw new Error(t("ide.git.resolveFailed"));
+      const sent = await store.sendPrompt(
+        buildConflictPrompt(repoPath, conflictedFiles),
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        sessionId,
+      );
+      // false = the store's send-time guard fired (e.g. no model configured —
+      // it raises its own guiding toast). Keep the dialog open for a retry.
+      if (!sent) return;
+      onOpenChange(false);
+      onKickoff?.();
+    } catch (err) {
+      setActionError((err as Error).message || t("ide.git.resolveFailed"));
     } finally {
       setResolving(false);
     }
@@ -169,11 +214,12 @@ export function MergeConflictResolveDialog({
                   </ul>
                 </div>
               )}
-              {/* No default model for AI resolution — surface the missing
-                  config instead of letting the call fail after the fact. */}
-              {!conflictResolveModel && (
-                <p className="mt-2 text-[11px] text-warning">{t("ide.git.resolveNoModel")}</p>
-              )}
+              {/* Resolution opens a real session — the agent works visibly
+                  in that conversation, edits the files and stages them; the
+                  merge commit stays with the user. */}
+              <p className="mt-2 text-[11px] text-content-subtle">
+                {t("ide.git.resolveOpenSession")}
+              </p>
               {actionError && (
                 <p className="mt-2 break-words text-[11px] text-danger">{actionError}</p>
               )}
@@ -197,8 +243,8 @@ export function MergeConflictResolveDialog({
               </Button>
               <Button
                 size="sm"
-                onClick={() => void handleResolveConflicts()}
-                disabled={resolving || !conflictResolveModel}
+                onClick={() => void handleResolveWithSession()}
+                disabled={resolving}
               >
                 {resolving ? <IconLoader2 size={12} className="animate-spin" /> : <IconSparkles size={12} />}
                 {t("ide.git.resolveWithAi")}

@@ -407,6 +407,19 @@ function EditorToolbar({
  *  is the primary: re-opening a file puts the user back where they left off. */
 const viewStateCache = new Map<string, editor.ICodeEditorViewState>();
 
+/** Per-file DIFF view states (scroll + cursor of BOTH panes), keyed by
+ *  absolute file path. The diff pane reuses one anonymous model pair across
+ *  file switches and the library resets scroll on every content swap / widget
+ *  remount — this cache puts each file back where the user left it. Mirrors
+ *  `viewStateCache` (edit pane) above. */
+const diffViewStateCache = new Map<
+  string,
+  {
+    original: editor.ICodeEditorViewState;
+    modified: editor.ICodeEditorViewState;
+  }
+>();
+
 /** Editable Monaco instance for one file. Loads content on mount; tracks
  *  dirty state; Ctrl+S saves. Wires LSP document sync + providers when the
  *  file's language has a server enabled. Re-opening a file restores its last
@@ -1259,6 +1272,82 @@ export function DiffPane({
     modified: import("monaco-editor").editor.ITextModel;
   } | null>(null);
 
+  // ── Scroll-position persistence (per file, mirrors EditPane's cache) ──
+  // Latest-ref mirror of filePath: the stash/restore listeners below attach
+  // to the widget's sub-editors in onMount and outlive file switches (the
+  // widget only remounts when a working-tree read flashes the loading veil),
+  // so they must resolve the file being VIEWED at event time.
+  const filePathRef = useRef(filePath);
+  filePathRef.current = filePath;
+  // Snapshot of the INCOMING file's cached view state, taken at render time —
+  // before the library's content-swap effects run (child effects precede the
+  // parent's, and their setValue resets scroll, which would otherwise stash
+  // the reset position over the cache entry). Every restore re-seeds the
+  // cache from this snapshot first, so swap-time corruption is repaired; the
+  // snapshot is replaced on the next file switch. (The library setValue's the
+  // two sides in DIFFERENT commits — original with the props, modified with
+  // the async-read state — so a "suppress stash until settled" flag can't be
+  // keyed to a single effect; the snapshot sidesteps ordering entirely.)
+  const pendingRestoreRef = useRef<{
+    original: editor.ICodeEditorViewState;
+    modified: editor.ICodeEditorViewState;
+  } | null>(null);
+  const prevFilePathRef = useRef(filePath);
+  if (prevFilePathRef.current !== filePath) {
+    prevFilePathRef.current = filePath;
+    pendingRestoreRef.current = diffViewStateCache.get(filePath) ?? null;
+  }
+  // Listener disposables of the CURRENT widget incarnation — replaced on
+  // every onMount (remount) and disposed on unmount.
+  const diffListenersRef = useRef<{ dispose(): void }[]>([]);
+  // Set by the stash handler on every scroll, cleared on every successful
+  // restore. The onDidUpdateDiff re-assertion only fires while this is false:
+  // on a huge file the diff computation finishes long after the swap, and a
+  // user scroll in that window must not be reverted by it.
+  const dirtySinceRestoreRef = useRef(false);
+
+  /** Re-apply the cached view state (both panes) for the file being viewed.
+   *  Re-seeds the cache from the render-time snapshot first (repairing any
+   *  reset-position stash the library's own setValue produced this switch),
+   *  then restores. Safe to call repeatedly — until the user scrolls again
+   *  the cache holds exactly what's on screen, so re-restores are no-ops. */
+  const restoreViewState = useCallback(() => {
+    const diffEditor = editorRef.current;
+    const path = filePathRef.current;
+    if (!diffEditor || !path) return;
+    const pending = pendingRestoreRef.current;
+    if (pending) diffViewStateCache.set(path, pending);
+    const cached = diffViewStateCache.get(path);
+    if (!cached) return;
+    try {
+      diffEditor.getOriginalEditor().restoreViewState(cached.original);
+      diffEditor.getModifiedEditor().restoreViewState(cached.modified);
+      dirtySinceRestoreRef.current = false;
+    } catch {
+      // widget torn down mid-restore
+    }
+  }, []);
+
+  // Restore after every swap / mount / content change. Child effects (the
+  // library's setValue) run first, so this always lands on settled content;
+  // onDidUpdateDiff re-asserts the position later — before the diff is
+  // computed the widget's scroll sync is a flat 1:1 mapping, so the panes can
+  // drift briefly until it lands. A run whose commit saw NO rendered content
+  // change (e.g. the diffModels state update after a mount) is a spurious
+  // re-run: the swap has fully settled, so the snapshot's job is done — clear
+  // it, or a later same-file content change would restore the stale snapshot
+  // over the user's latest scroll position.
+  const prevSwapContentRef = useRef({ filePath, before, modified });
+  useEffect(() => {
+    restoreViewState();
+    const swapped =
+      prevSwapContentRef.current.filePath !== filePath ||
+      prevSwapContentRef.current.before !== before ||
+      prevSwapContentRef.current.modified !== modified;
+    prevSwapContentRef.current = { filePath, before, modified };
+    if (!swapped) pendingRestoreRef.current = null;
+  }, [filePath, before, modified, diffModels, restoreViewState]);
+
   useEffect(() => {
     // History pair: both sides are already known — don't touch the disk.
     if (after != null) {
@@ -1304,10 +1393,14 @@ export function DiffPane({
     };
   }, [diffModels, filePath, language]);
 
-  // On unmount: dispose the widget FIRST, then the models. This is the
-  // reverse of what the library does by default, and avoids the listener race.
+  // On unmount: dispose this incarnation's listeners, then the widget FIRST,
+  // then the models. This is the reverse of what the library does by default,
+  // and avoids the listener race. (The view-state cache was already stashed
+  // eagerly on every scroll — nothing to save here.)
   useEffect(() => {
     return () => {
+      diffListenersRef.current.forEach((d) => d.dispose());
+      diffListenersRef.current = [];
       const editor = editorRef.current;
       const monaco = monacoRef.current;
       if (editor && monaco) {
@@ -1357,6 +1450,32 @@ export function DiffPane({
           if (originalModel && modifiedModel) {
             setDiffModels({ original: originalModel, modified: modifiedModel });
           }
+          // Re-wire the scroll persistence listeners to THIS widget
+          // incarnation (the previous incarnation's disposables are dead
+          // after its unmount). Stashes are unconditional — the restore path
+          // repairs any reset-position stash the library's own setValue
+          // produces during a file switch (see pendingRestoreRef).
+          diffListenersRef.current.forEach((d) => d.dispose());
+          const stashViewState = () => {
+            const path = filePathRef.current;
+            const originalVs = editor.getOriginalEditor().saveViewState();
+            const modifiedVs = editor.getModifiedEditor().saveViewState();
+            dirtySinceRestoreRef.current = true;
+            if (path && originalVs && modifiedVs) {
+              diffViewStateCache.set(path, { original: originalVs, modified: modifiedVs });
+            }
+          };
+          diffListenersRef.current = [
+            editor.getOriginalEditor().onDidScrollChange(stashViewState),
+            editor.getModifiedEditor().onDidScrollChange(stashViewState),
+            // Re-assert the cached position once diffs are (re)computed: the
+            // post-swap restore can land before the diff exists, while the
+            // widget's two panes still scroll 1:1. Skipped when the user has
+            // scrolled since the last restore — never revert their scroll.
+            editor.onDidUpdateDiff(() => {
+              if (!dirtySinceRestoreRef.current) restoreViewState();
+            }),
+          ];
         }}
         options={{
           readOnly: true,

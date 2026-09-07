@@ -29,11 +29,11 @@ import {
   GitDiscardSchema,
   GitGenerateCommitSchema,
   GitCancelGenerateCommitSchema,
-  GitResolveConflictsSchema,
   GitLogSchema,
   GitShowCommitSchema,
   GitShowFileSchema,
   GitCheckoutSchema,
+  GitDeleteBranchSchema,
   GitMergeSchema,
   GitWorktreeListSchema,
   GitWorktreeStatusSchema,
@@ -197,6 +197,43 @@ export async function checkoutRef(
   }
 }
 
+/** Delete a local branch (`git branch -d`; `-D` when `force`). Only local
+ *  branches are deletable from the picker — remote rows would require pushing
+ *  a ref deletion to the remote. Never throws — failures come back as
+ *  `{ ok: false, error }`. */
+export async function deleteLocalBranchForRepo(
+  repoPath: string,
+  branch: string,
+  force?: boolean,
+): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const git = (await loadSimpleGit())(repoPath);
+    const flag = force ? "-D" : "-d";
+    // Capture git's own message (e.g. "not fully merged") for the dialog.
+    let rawOut = "";
+    try {
+      rawOut = await git.raw(["branch", flag, branch]);
+    } catch (err) {
+      rawOut = (err as Error).message;
+    }
+    // simple-git's raw() can swallow non-zero exits (same lesson as the
+    // merge-base probe) — verify the ref is really gone before claiming ok.
+    const local = await git.branchLocal();
+    if (local.all.includes(branch)) {
+      const msg = rawOut.trim() || `git branch ${flag} ${branch} failed`;
+      log.warn(`git.deleteBranch failed for ${repoPath}: ${msg}`);
+      return { ok: false, error: msg };
+    }
+    log.info(`git.deleteBranch removed ${branch} in ${repoPath}`);
+    broadcastGitChanged(repoPath);
+    return { ok: true };
+  } catch (err) {
+    const msg = (err as Error).message;
+    log.warn(`git.deleteBranch failed for ${repoPath}: ${msg}`);
+    return { ok: false, error: msg };
+  }
+}
+
 /** Max recursion depth for repo discovery. Keeps the scan fast on deep trees
  *  while still finding nested monorepo packages. */
 export const MAX_SCAN_DEPTH = 3;
@@ -218,14 +255,6 @@ const SCAN_IGNORE = new Set([
   "target",
   "out",
 ]);
-
-/** True if `abs` is inside `root` (or equals it), after normalizing both. */
-function pathWithin(root: string, abs: string): boolean {
-  const r = resolve(root);
-  const a = resolve(abs);
-  if (a === r) return true;
-  return a.startsWith(r + sep);
-}
 
 /** Verify a repoPath is inside SOME persisted project root — or is/contains
  *  a session worktree (the isolated checkouts live outside every project by
@@ -528,10 +557,17 @@ export function mapStatus(raw: import("simple-git").StatusResult): GitStatusResu
  *  rejects on non-zero exit, and `rev-parse --verify -q` exits 1 when the ref
  *  is missing — so the catch path IS the "no" answer. */
 async function mergeInProgress(git: import("simple-git").SimpleGit): Promise<boolean> {
+  // simple-git RESOLVES instead of rejecting on exit-1-with-empty-stderr —
+  // exactly the shape `--quiet` rev-parse of a missing MERGE_HEAD produces
+  // (same lesson as the merge-base isAncestor probe in worktreeOps). A
+  // throw-based check here read "merging" forever and refused every merge,
+  // so the verdict is the OUTPUT: non-empty = the ref exists.
   try {
-    await git.revparse(["--verify", "--quiet", "MERGE_HEAD"]);
-    return true;
+    const out = await git.revparse(["--verify", "--quiet", "MERGE_HEAD"]);
+    return out.trim().length > 0;
   } catch {
+    // Hard failure (not a repo, etc.) — not a merge state; let the merge
+    // itself surface git's real error.
     return false;
   }
 }
@@ -911,192 +947,6 @@ export function registerGitHandlers(ipcMain: IpcMain): void {
     return { ok: true };
   });
 
-  /* ── git:resolveConflicts — AI-resolve all merge conflicts in a repo ── */
-  ipcMain.handle(IPC.GIT_RESOLVE_CONFLICTS, async (_evt, raw) => {
-    const input = GitResolveConflictsSchema.parse(raw);
-    if (!findContainingProject(input.repoPath)) {
-      return { ok: false, error: "仓库路径不在任何已添加的项目内" };
-    }
-    // There is no default model — AI resolution requires an explicitly
-    // selected conflict-resolve model (Settings → Git).
-    if (!input.customModelId) {
-      return { ok: false, error: "未配置冲突解决模型,请先在「设置 → Git」中选择" };
-    }
-    try {
-      const git = (await loadSimpleGit())(input.repoPath);
-      // 1. Gather the current conflicted files. (simple-git exposes them via
-      //    `status().conflicted`.)
-      const status = await git.status();
-      let conflicted = status.conflicted ?? [];
-      if (conflicted.length === 0) {
-        return { ok: false, error: "未检测到冲突文件" };
-      }
-
-      // 2. Read each conflicted file's full content (with conflict markers).
-      //    Skip files that are too large (> MAX_CONFLICT_FILE_BYTES) to avoid
-      //    blowing up the prompt; they are left unresolved and reported back.
-      const MAX_CONFLICT_FILE_BYTES = 100_000;
-      const files: { path: string; content: string }[] = [];
-      const skipped: string[] = [];
-      for (const relPath of conflicted) {
-        const abs = resolve(input.repoPath, relPath);
-        try {
-          const buf = await readFile(abs);
-          if (buf.byteLength > MAX_CONFLICT_FILE_BYTES) {
-            skipped.push(relPath);
-            continue;
-          }
-          files.push({ path: relPath, content: buf.toString("utf8") });
-        } catch (readErr) {
-          log.warn(`git.resolveConflicts: failed to read ${relPath}: ${(readErr as Error).message}`);
-          skipped.push(relPath);
-        }
-      }
-      if (files.length === 0) {
-        return { ok: false, error: "冲突文件无法读取(可能过大或已损坏),请手动解决" };
-      }
-
-      // 3. Build the user prompt. Each file is wrapped with a header carrying
-      //    its path so the model can map its JSON output back to the file.
-      const filesBlock = files
-        .map(
-          (f) =>
-            `=== FILE: ${f.path} ===\n${f.content}\n=== END FILE: ${f.path} ===`,
-        )
-        .join("\n\n");
-      const userPrompt =
-        `仓库 ${input.repoPath} 在合并后产生了 ${conflicted.length} 个冲突文件。` +
-        `请逐一解决冲突并输出每个文件的完整最终内容。\n\n${filesBlock}`;
-
-      // 4. Resolve the model config (required — no built-in fallback).
-      //    OpenAI-protocol configs activate the bridge here too (see
-      //    resolveModelForGitOp).
-      const { query } = await import("@anthropic-ai/claude-agent-sdk");
-      const ac = new AbortController();
-      const timer = setTimeout(() => ac.abort(), 120000); // 120s — conflicts can be large
-
-      let releaseBridge: (() => void) | undefined;
-      try {
-        let model: string | undefined;
-        let env: import("@anthropic-ai/claude-agent-sdk").Options["env"];
-
-        const resolved = await resolveModelForGitOp(
-          input.customModelId,
-          input.customModelRole ?? undefined,
-        );
-        if (!resolved.ok) {
-          return { ok: false, error: resolved.error };
-        }
-        releaseBridge = resolved.releaseBridge;
-        const cfg = resolved.config;
-        model = resolveActiveModel(cfg);
-        env = buildCustomEnv(cfg);
-
-        // Resolve the real on-disk binary path (see generateCommitMessage).
-        const binaryPath = resolveSdkBinaryPath();
-
-        const q = query({
-          prompt: userPrompt,
-          options: {
-            abortController: ac,
-            maxTurns: 1,
-            model,
-            env,
-            systemPrompt: CONFLICT_RESOLVE_SYSTEM_PROMPT,
-            settingSources: ["project", "local"],
-            includePartialMessages: false,
-            // See generateCommitMessage above — must override the asar-internal
-            // path in a packaged app or spawn fails with ENOTDIR.
-            ...(binaryPath ? { pathToClaudeCodeExecutable: binaryPath } : {}),
-          },
-        });
-
-        // 5. Collect the assistant's text response.
-        let message = "";
-        for await (const m of q) {
-          if (m.type === "assistant") {
-            const content = (m as { message?: { content?: Array<{ type: string; text?: string }> } }).message?.content;
-            if (Array.isArray(content)) {
-              message = content
-                .filter((b) => b.type === "text" && b.text)
-                .map((b) => b.text!)
-                .join("\n");
-            }
-          }
-          if (m.type === "result") break;
-        }
-        clearTimeout(timer);
-
-        // 6. Parse the JSON array the model was instructed to emit, write each
-        //    resolved file back to disk, and `git add` it.
-        const parsed = parseConflictResolution(message);
-        if (!parsed) {
-          return {
-            ok: false,
-            error: "模型未返回可解析的冲突解决方案(JSON)。请检查模型能力或手动解决。",
-          };
-        }
-
-        const resolvedFiles: string[] = [];
-        const seenPaths = new Set(parsed.map((r) => r.path));
-        for (const { path: relPath, content } of parsed) {
-          if (!relPath || typeof content !== "string") continue;
-          // Guard against path traversal: the resolved path must remain inside
-          // the repo and must be one of the conflicted files.
-          const abs = resolve(input.repoPath, relPath);
-          if (!pathWithin(input.repoPath, abs)) {
-            log.warn(`git.resolveConflicts: skipping out-of-repo path ${relPath}`);
-            continue;
-          }
-          if (!conflicted.includes(relPath)) {
-            log.warn(`git.resolveConflicts: skipping path not in conflict set: ${relPath}`);
-            continue;
-          }
-          try {
-            await writeFile(abs, content, "utf8");
-            await git.add(relPath);
-            resolvedFiles.push(relPath);
-          } catch (writeErr) {
-            log.warn(`git.resolveConflicts: failed to write/add ${relPath}: ${(writeErr as Error).message}`);
-          }
-        }
-
-        if (resolvedFiles.length === 0) {
-          return { ok: false, error: "模型未给出可写回的冲突解决方案" };
-        }
-
-        const note =
-          skipped.length > 0
-            ? `(${skipped.length} 个文件过大被跳过,需手动解决)`
-            : undefined;
-        const unresolved = conflicted.filter((p) => !seenPaths.has(p));
-        log.info(
-          `git.resolveConflicts resolved ${resolvedFiles.length}/${conflicted.length} file(s) in ${input.repoPath}` +
-            (unresolved.length ? `, ${unresolved.length} unresolved` : ""),
-        );
-        broadcastGitChanged(input.repoPath);
-        return {
-          ok: true,
-          resolvedFiles,
-          error: note,
-        };
-      } finally {
-        clearTimeout(timer);
-        releaseBridge?.();
-      }
-    } catch (err) {
-      const msg = (err as Error).message || String(err);
-      log.warn(`git.resolveConflicts failed for ${input.repoPath}: ${msg}`);
-      if (/401|unauthorized|invalid.*key/i.test(msg)) {
-        return { ok: false, error: "认证失败,请检查模型配置的 Token/Key" };
-      }
-      if (/503|no available channel/i.test(msg)) {
-        return { ok: false, error: "网关无此模型渠道,请检查模型名配置" };
-      }
-      return { ok: false, error: msg };
-    }
-  });
-
   /* ── git:listBranches - local / remote branches + tags (grouped) ── */
   ipcMain.handle(IPC.GIT_LIST_BRANCHES, async (_evt, raw) => {
     const input = GitRepoPathSchema.parse(raw);
@@ -1119,6 +969,15 @@ export function registerGitHandlers(ipcMain: IpcMain): void {
       return { ok: false, error: "仓库路径不在任何已添加的项目内" };
     }
     return checkoutRef(input.repoPath, input.branch, input.newBranch);
+  });
+
+  /* ── git:deleteBranch - delete a local branch (-d / -D with force) ── */
+  ipcMain.handle(IPC.GIT_DELETE_BRANCH, async (_evt, raw) => {
+    const input = GitDeleteBranchSchema.parse(raw);
+    if (!findContainingProject(input.repoPath)) {
+      return { ok: false, error: "仓库路径不在任何已添加的项目内" };
+    }
+    return deleteLocalBranchForRepo(input.repoPath, input.branch, input.force);
   });
 
   /* ── git:mergePreview - read-only preview of merging `source` into HEAD ── */
@@ -1150,6 +1009,7 @@ export function registerGitHandlers(ipcMain: IpcMain): void {
       // Refuse when a merge is already in flight — a second `git merge` with
       // MERGE_HEAD present would fail confusingly or nest state.
       if (await mergeInProgress(git)) {
+        log.warn(`git.merge refused - merge already in progress in ${input.repoPath}`);
         return { ok: false, error: "已有进行中的合并,请先解决冲突或放弃本次合并" };
       }
 
@@ -1313,68 +1173,6 @@ const COMMIT_GEN_SYSTEM_PROMPT = [
  * {@link COMMIT_GEN_SYSTEM_PROMPT} carries all output-shape constraints.
  */
 const DEFAULT_COMMIT_FORMAT_PROMPT = "使用中文生成提交信息,默认遵循 Conventional Commits 规范。";
-
-/**
- * Fixed system prompt for AI conflict resolution. NEVER overridden — this is
- * what guarantees parseable JSON output of resolved file contents. The model
- * must keep BOTH sides' necessary changes, drop the conflict markers, and
- * emit a clean final version of every file.
- */
-const CONFLICT_RESOLVE_SYSTEM_PROMPT = [
-  "你是一个 Git 合并冲突解决助手。你的唯一职责是阅读带有冲突标记(`<<<<<<<`、`=======`、`>>>>>>>`)的文件,输出每个文件解决冲突后的完整最终内容。",
-  "",
-  "解决原则:",
-  "1. 综合考虑「我们的改动」(ours)与「他们的改动」(theirs)两边的意图,尽可能保留双方必要的改动;若两边确有矛盾无法兼顾,选择语义上更合理的一方,并在该处用注释简要说明。",
-  "2. 删除所有冲突标记行(`<<<<<<<`、`=======`、`>>>>>>>`)及其分支标签,输出干净的最终文件。",
-  "3. 不要臆造文件中原本不存在的内容;不要新增功能;保持文件的语法与结构合法。",
-  "4. 输出必须是单个 JSON 数组,且不包含任何 Markdown 代码块标记或其它包裹符号。数组每个元素形如 {\"path\": \"文件相对路径\", \"content\": \"解决后的完整文件内容\"}。",
-  "5. path 必须与输入中给出的 FILE 路径完全一致;content 必须是该文件的完整内容(不是 diff,不是片段)。",
-].join("\n");
-
-/**
- * Parse the model's conflict-resolution output into `{ path, content }[]`.
- *
- * The model is instructed to emit a bare JSON array. In practice it sometimes
- * wraps it in a ```json fence or adds stray prose, so we try, in order:
- *   1. Strip a leading ```lang\n / trailing ``` fence (if present), then
- *      JSON.parse the whole thing.
- *   2. Otherwise, extract the first balanced `[...]` substring and parse that.
- * Returns null if no valid array can be recovered.
- */
-function parseConflictResolution(
-  raw: string,
-): { path: string; content: string }[] | null {
-  if (!raw || !raw.trim()) return null;
-  const tryParse = (s: string): { path: string; content: string }[] | null => {
-    try {
-      const v = JSON.parse(s);
-      if (Array.isArray(v)) {
-        return v
-          .map((it) =>
-            it && typeof it === "object" && "path" in it && "content" in it
-              ? { path: String(it.path), content: String(it.content) }
-              : null,
-          )
-          .filter((x): x is { path: string; content: string } => x !== null);
-      }
-    } catch {
-      /* fall through */
-    }
-    return null;
-  };
-  // 1. Strip code fences, then parse.
-  const fenced = raw.trim().replace(/^```[a-zA-Z]*\n?/, "").replace(/\n?```$/, "").trim();
-  const r1 = tryParse(fenced);
-  if (r1 && r1.length > 0) return r1;
-  // 2. Extract the first balanced [...] block.
-  const start = raw.indexOf("[");
-  const end = raw.lastIndexOf("]");
-  if (start !== -1 && end !== -1 && end > start) {
-    const r2 = tryParse(raw.slice(start, end + 1));
-    if (r2 && r2.length > 0) return r2;
-  }
-  return null;
-}
 
 /* ───────────────────────── history helpers ───────────────────────── */
 
