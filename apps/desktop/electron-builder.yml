@@ -14,6 +14,15 @@ directories:
   output: release
   buildResources: build
 
+# Disable @electron/rebuild: with pnpm it stats cross-platform optional
+# dependencies at node_modules/.pnpm/node_modules/<pkg> and dies with ENOENT
+# when they aren't installed (claude-agent-sdk-darwin-arm64 on Windows — the
+# SDK lists every platform package as an optionalDependency). Nothing in the
+# dependency tree needs rebuilding anyway: node-pty ships N-API prebuilds for
+# all platforms (dev already loads them straight from prebuilds/ inside
+# Electron) and sherpa-onnx is prebuilt.
+npmRebuild: false
+
 # electron-vite emits to out/{main,preload,renderer}. We ship those plus the
 # package.json (electron-builder needs it to resolve the main entry + version).
 # node_modules are pruned by electron-builder automatically; the globs below
@@ -37,12 +46,24 @@ files:
   # the workspace symlink resolves outside the app dir, which the packager
   # rejects ("path must be under appDir").
   - "!**/node_modules/@mcode/**"
+  # The claude JS SDK (in dependencies, needed in-process) lists its platform
+  # binary packages (@anthropic-ai/claude-agent-sdk-<platform>-<arch>, 209MB
+  # of claude.exe on win32) as optionalDependencies — electron-builder's
+  # dependency collector would ship the matching-platform one even though the
+  # runtime binary is download-on-demand now (userData/runtimes, see
+  # main/runtimes/runtimeInstaller.ts). Exclude every platform variant; the
+  # dash in the pattern keeps the JS package (claude-agent-sdk) itself.
+  - "!**/node_modules/@anthropic-ai/claude-agent-sdk-*/**"
 
 # node-pty ships a native .node addon; sql.js loads a wasm/asm.js blob at
 # runtime. Unpack them from the asar so they can be require()'d from disk.
-# The Claude Agent SDK's platform subpackages (...-win32-x64 etc.) ship a
-# native claude binary that child_process.spawn must execute - it can't be
-# loaded from inside the asar virtual fs, so unpack those subpackages too.
+#
+# The agent runtime binaries (claude / codex) are NO LONGER bundled: their
+# platform packages moved to devDependencies and are downloaded on demand
+# into userData/runtimes (see main/runtimes/runtimeInstaller.ts) — that keeps
+# ~600MB per platform out of the installer. The resolvers in
+# providers/claude-sdk/sdkBinaryPath.ts and providers/codex-sdk/
+# codexBinaryResolve.ts look there first.
 #
 # node-pty's conpty.node also needs sibling .exe files (conpty/OpenConsole.exe,
 # winpty-agent.exe) discoverable on disk - those are .exe so the {node,dll}
@@ -51,12 +72,6 @@ files:
 asarUnpack:
   - "**/*.{node,dll}"
   - "**/sql.js/**"
-  - "**/node_modules/@anthropic-ai/claude-agent-sdk-*/**"
-  # The codex npm wrapper ships its native binary in platform packages
-  # (@openai/codex-<platform> aliases of @openai/codex@<version>-<platform>)
-  # under vendor/<triple>/bin — spawn can't exec from inside the asar, same
-  # story as the claude binary above.
-  - "**/node_modules/@openai/codex*/**"
   - "**/node_modules/node-pty/build/Release/**"
   - "**/node_modules/node-pty/prebuilds/**"
 

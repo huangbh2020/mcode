@@ -20,6 +20,7 @@ import { registerMcpHandlers } from "./mcp.js";
 import { registerOutputStyleHandlers } from "./outputStyle.js";
 import { registerUsageHandlers } from "./usage.js";
 import { registerLspHandlers } from "./lsp.js";
+import { registerRuntimesHandlers } from "./runtimes.js";
 import { registerBrowserHandlers } from "./browser.js";
 import { registerNotificationHandlers } from "./notifications.js";
 import { registerMobileHandlers } from "./mobile.js";
@@ -71,6 +72,7 @@ export function registerIpcHandlers(): void {
   registerOutputStyleHandlers(ipc);
   registerUsageHandlers(ipc);
   registerLspHandlers(ipc);
+  registerRuntimesHandlers(ipc);
   registerBrowserHandlers(ipc);
   registerNotificationHandlers(ipc);
   registerMobileHandlers(ipc);

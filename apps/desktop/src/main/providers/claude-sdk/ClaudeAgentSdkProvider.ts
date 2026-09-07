@@ -7,6 +7,7 @@
  */
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
+import { is } from "@main/utils.js";
 import type { Options, CanUseTool, OnUserDialog, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import type {
   AgentProvider,
@@ -482,13 +483,21 @@ export class ClaudeAgentSdkProvider implements AgentProvider {
       debug: process.platform === "win32" ? true : undefined,
     };
 
-    // In a packaged Electron app, the SDK resolves its bundled `claude` binary
-    // to a path INSIDE app.asar. spawn() can't execute an .exe from the asar
-    // virtual fs ("exists but failed to launch"), so we point it at the real
-    // on-disk copy under app.asar.unpacked. No-op in dev (null -> SDK resolves
-    // node_modules itself). See sdkBinaryPath.ts for the full rationale.
+    // The runtime binary comes from the managed install
+    // (userData/runtimes, downloaded via Settings → Agent Runtimes) or, in
+    // dev, from node_modules. Point the SDK at the real on-disk path — the
+    // asar-unpacked fallback in sdkBinaryPath.ts only matters for builds that
+    // still bundle the platform package. Missing runtime (packaged, not yet
+    // downloaded) → friendly error instead of the SDK's cryptic spawn
+    // failure. See sdkBinaryPath.ts for the full rationale.
     const binaryPath = resolveSdkBinaryPath();
-    if (binaryPath) options.pathToClaudeCodeExecutable = binaryPath;
+    if (binaryPath) {
+      options.pathToClaudeCodeExecutable = binaryPath;
+    } else if (is.prod) {
+      throw new Error(
+        "Claude 未安装。请到 设置 → Agent 点击安装(Claude is not installed — open Settings → Agent and install it).",
+      );
+    }
 
     // Plan files location: the bundled CLI forces the model to write its plan
     // to a file before calling ExitPlanMode (the tool errors with "No plan file

@@ -212,7 +212,7 @@ export class CodexAgentSdkProvider implements AgentProvider {
     /* ── 1. Binary + config bootstrap ── */
     const codexPath = resolveCodexBinaryPath();
     if (!codexPath) {
-      return failTurn(ctx, req.sessionId, "CODEX_BINARY_MISSING", "未找到 Codex CLI 二进制:请确认 @openai/codex 依赖安装完整(或重新安装应用)。");
+      return failTurn(ctx, req.sessionId, "CODEX_BINARY_MISSING", "未找到 Codex:请到 设置 → Agent 下载安装(Codex is missing — open Settings → Agent and install it).");
     }
 
     // Materialize config.toml (model_providers) + AGENTS.md into the isolated
@@ -539,7 +539,7 @@ export class CodexAgentSdkProvider implements AgentProvider {
   async healthCheck(): Promise<{ ok: boolean; version?: string; error?: string }> {
     try {
       const codexPath = resolveCodexBinaryPath();
-      if (!codexPath) return { ok: false, error: "未找到 Codex CLI 二进制" };
+      if (!codexPath) return { ok: false, error: "未找到 Codex(设置 → Agent 可安装)" };
       const r = spawnSync(codexPath, ["--version"], { timeout: 10_000, encoding: "utf-8" });
       if (r.error) return { ok: false, error: r.error.message };
       const version = (r.stdout ?? "").trim().split("\n")[0] || undefined;

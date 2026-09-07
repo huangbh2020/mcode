@@ -44,3 +44,7 @@ pnpm-debug.log*
 
 # ZCode session artifacts (local planning drafts, scratch)
 .zcode/
+
+# Pi runtime meta-package build output (22MB tarball + staging tree, produced
+# by apps/desktop/build/pack-pi-runtime.cjs; republish via npm, never commit)
+apps/desktop/build/pi-runtime-dist/

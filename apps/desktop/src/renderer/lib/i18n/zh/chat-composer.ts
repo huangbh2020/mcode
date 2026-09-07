@@ -41,11 +41,7 @@ export const zh = {
   // ── voice input (麦克风按钮) ──
   "chat.voice.startListening": "开始语音输入",
   "chat.voice.stopListening": "停止语音输入",
-  "chat.voice.pushToTalk": "按住说话",
-  "chat.voice.pushToTalkTitle": "按住开始说话,松开即结束",
-  "chat.voice.continuous": "连续语音",
-  "chat.voice.continuousTitle": "点击开始听写,再点一下结束",
-  "chat.voice.modeMenu": "切换语音输入模式",
+  "chat.voice.toggleTitle": "点击开始语音输入,再点一下结束",
   "chat.voice.listening": "正在聆听…",
   "chat.voice.micDenied": "麦克风权限被拒绝",
   "chat.voice.micDeniedDesc": "请在系统设置中允许麦克风访问,以使用语音输入。",
@@ -55,11 +51,9 @@ export const zh = {
   "chat.voice.engineFailDesc": "语音模型加载失败,请检查网络后重试。",
   "chat.voice.noModel": "语音模型未就绪",
   "chat.voice.noModelDesc": "请先在「设置 → 语音输入」下载并选择识别模型,即将为你打开该页面。",
-  "chat.voice.manageModels": "下载语言模型…",
   "chat.voice.lockedTitle": "等待审批或确认期间,暂不能语音输入",
   "chat.voice.dictationCancelled": "已取消本次听写",
-  "chat.voice.overlayHintPtt": "松开快捷键结束 · Esc 取消",
-  "chat.voice.overlayHintContinuous": "点击麦克风或再按快捷键结束 · Esc 取消",
+  "chat.voice.overlayHint": "点击麦克风或再按快捷键结束 · Esc 取消",
 
   // ── running turn (jump-to-bottom badge) ──
   "chat.live.newActivity": "{n} 条新动态",
@@ -238,6 +232,8 @@ export const zh = {
   "chat.provider.locked": "该会话的 SDK 已固定,不可更改",
   "chat.provider.selectTitle": "选择会话使用的 SDK",
   "chat.provider.section": "选择 SDK",
+  "chat.provider.notInstalled": "运行时未安装",
+  "chat.provider.manage": "管理 Agent…",
 
   // ── slash command picker ──
   "chat.slash.tabCommands": "命令",
@@ -360,7 +356,10 @@ export const zh = {
   "chat.worktree.mergeUpToDate": "改动已全部在本地分支中,无需合并",
   "chat.worktree.mergeDone": "已合并到 {target}。",
   "chat.worktree.mergeDoneHint": "任务完成的话,可删除该工作树。",
-  "chat.worktree.mergeConflict": "合并产生 {n} 个冲突,请到 Git 面板「更改」页签解决后提交,再重试合并。",
+  "chat.worktree.mergeConflict": "合并产生 {n} 个冲突,可使用 AI 自动解决,也可以放弃本次合并。",
+  "chat.worktree.conflictResolved": "AI 已解决 {n} 个冲突并写入暂存区,请检查结果后完成合并提交。",
+  "chat.worktree.mergeCommitLabel": "合并提交信息",
+  "chat.worktree.finishMerge": "完成合并提交",
   "chat.worktree.previewFailed": "无法读取合并信息",
   "chat.worktree.removeWt": "删除工作树",
   "chat.worktree.keepWt": "保留工作树",

@@ -25,6 +25,7 @@ import { Button, Dialog, Input } from "@renderer/components/ui/index.js";
 import {
   IconGitMerge,
   IconGitBranch,
+  IconGitCommit,
   IconLoader2,
   IconAlertTriangle,
   IconCheck,
@@ -32,6 +33,7 @@ import {
   IconSparkles,
 } from "@renderer/lib/icons.js";
 import { useI18n } from "@renderer/lib/i18n/index.js";
+import { MergeConflictResolveDialog } from "@renderer/components/ide/MergeConflictResolveDialog.js";
 
 /* ───────────────────────── toolbar button ───────────────────────── */
 
@@ -296,8 +298,11 @@ export function WorktreeRemoveDialog({
 /** "Merge the isolated work back" flow: preview (incoming commits / ff /
  *  up-to-date) → confirm → merge (server auto-commits uncommitted changes
  *  first) → done state offering worktree removal. Conflicts surface inline
- *  with a pointer to the Git panel's conflict tooling; the worktree is kept
- *  so the user can resolve and retry. */
+ *  with an AI-resolution entry: a prompt plus a button that opens the shared
+ *  `MergeConflictResolveDialog` (the same AI resolution / abort-merge window
+ *  the Git panel uses), then a finish step commits the staged merge — the
+ *  whole loop completes without leaving this dialog. The worktree is kept so
+ *  the user can retry after aborting. */
 export function WorktreeMergeBackDialog({
   open,
   onOpenChange,
@@ -327,6 +332,18 @@ export function WorktreeMergeBackDialog({
     fastForward: boolean;
   } | null>(null);
   const [conflictFiles, setConflictFiles] = useState<string[] | null>(null);
+  // Post-AI-resolution state: null until the shared resolve dialog reports
+  // success; then the merge is STAGED but uncommitted — the dialog switches
+  // to a finish step (editable message + "finish merge commit").
+  const [resolvedCount, setResolvedCount] = useState<number | null>(null);
+  // The shared conflict-resolution dialog's open flag (the conflict banner's
+  // "resolve with AI" button opens it — the window is NOT auto-opened so the
+  // user can also choose to abort or handle it manually elsewhere).
+  const [conflictOpen, setConflictOpen] = useState(false);
+  // Finish-merge commit: message + in-flight flag. Pre-filled after AI
+  // resolution, editable like GitRepoCard's post-resolve prefill.
+  const [mergeCommitMsg, setMergeCommitMsg] = useState("");
+  const [committing, setCommitting] = useState(false);
   const [removing, setRemoving] = useState(false);
   // Pre-merge auto-commit message for the worktree's uncommitted changes.
   // Seeded with the built-in default so the user sees (and can edit) exactly
@@ -384,6 +401,10 @@ export function WorktreeMergeBackDialog({
     setError(null);
     setDone(null);
     setConflictFiles(null);
+    setResolvedCount(null);
+    setConflictOpen(false);
+    setMergeCommitMsg("");
+    setCommitting(false);
     setInfo(null);
     setPreview(null);
     setMainBranch("");
@@ -461,6 +482,29 @@ export function WorktreeMergeBackDialog({
     }
   };
 
+  // Finish the merge after AI resolution: the conflicts are resolved and
+  // staged, so a plain commit on the main checkout lands the merge commit
+  // (same manual-review step GitRepoCard's post-resolve prefill implies).
+  const handleFinishMerge = async () => {
+    if (!repoPath || committing) return;
+    const msg = mergeCommitMsg.trim();
+    if (!msg) return;
+    setCommitting(true);
+    setError(null);
+    try {
+      const res = await api.git.commit({ repoPath, message: msg });
+      if (!res.ok) {
+        setError(res.error ?? t("ide.git.commitFailed"));
+        return;
+      }
+      setDone({ targetBranch: mainBranch || "?", fastForward: false });
+    } catch (err) {
+      setError((err as Error).message ?? t("ide.git.commitFailed"));
+    } finally {
+      setCommitting(false);
+    }
+  };
+
   const handleRemove = async () => {
     if (!repoPath || removing) return;
     setRemoving(true);
@@ -479,164 +523,233 @@ export function WorktreeMergeBackDialog({
   };
 
   return (
-    <Dialog.Root
-      open={open}
-      onOpenChange={(o) => {
-        if (!o && !busy && !removing) onOpenChange(false);
-      }}
-    >
-      <Dialog.Portal>
-        <Dialog.Backdrop />
-        <Dialog.Popup className="w-[420px] max-w-[90vw] p-4">
-          <div className="flex items-start gap-3 pr-6">
-            <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-accent/10 text-accent">
-              <IconGitMerge size={16} />
-            </span>
-            <div className="min-w-0 flex-1">
-              <Dialog.Title>{t("chat.worktree.mergeBackQ")}</Dialog.Title>
-              <Dialog.Description className="mt-1">
-                {t("chat.worktree.mergeBackDesc", {
-                  target: done?.targetBranch || mainBranch || "HEAD",
-                })}
-              </Dialog.Description>
-              <div className="mt-2 space-y-1 text-[11px]">
-                {previewLoading ? (
-                  <div className="flex items-center gap-1.5 text-content-subtle">
-                    <IconLoader2 size={12} className="animate-spin" />
-                    {t("common.loading")}
-                  </div>
-                ) : done ? (
-                  <div className="flex items-start gap-1.5">
-                    <IconCheck size={12} className="mt-0.5 shrink-0 text-accent" />
-                    <span className="text-content-muted">
-                      {t("chat.worktree.mergeDone", { target: done.targetBranch })}
-                      {t("chat.worktree.mergeDoneHint")}
-                    </span>
-                  </div>
-                ) : conflictFiles ? (
-                  <div className="flex items-start gap-1.5 text-warning">
-                    <IconAlertTriangle size={12} className="mt-0.5 shrink-0" />
-                    <span className="break-words">
-                      {t("chat.worktree.mergeConflict", { n: conflictFiles.length })}
-                    </span>
-                  </div>
-                ) : preview?.ok ? (
-                  preview.upToDate && !info?.dirty ? (
-                    // Truly nothing to do: no new commits AND a clean
-                    // worktree. rev-list only counts commits — "upToDate"
-                    // alone must NOT read as "nothing to merge" when the
-                    // worktree still holds uncommitted file changes.
+    <>
+      <Dialog.Root
+        open={open}
+        onOpenChange={(o) => {
+          if (!o && !busy && !removing) onOpenChange(false);
+        }}
+      >
+        <Dialog.Portal>
+          <Dialog.Backdrop />
+          <Dialog.Popup className="w-[420px] max-w-[90vw] p-4">
+            <div className="flex items-start gap-3 pr-6">
+              <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-accent/10 text-accent">
+                <IconGitMerge size={16} />
+              </span>
+              <div className="min-w-0 flex-1">
+                <Dialog.Title>{t("chat.worktree.mergeBackQ")}</Dialog.Title>
+                <Dialog.Description className="mt-1">
+                  {t("chat.worktree.mergeBackDesc", {
+                    target: done?.targetBranch || mainBranch || "HEAD",
+                  })}
+                </Dialog.Description>
+                <div className="mt-2 space-y-1 text-[11px]">
+                  {previewLoading ? (
                     <div className="flex items-center gap-1.5 text-content-subtle">
-                      <IconCheck size={12} className="shrink-0 text-accent" />
-                      {t("chat.worktree.mergeUpToDate")}
+                      <IconLoader2 size={12} className="animate-spin" />
+                      {t("common.loading")}
                     </div>
+                  ) : done ? (
+                    <div className="flex items-start gap-1.5">
+                      <IconCheck size={12} className="mt-0.5 shrink-0 text-accent" />
+                      <span className="text-content-muted">
+                        {t("chat.worktree.mergeDone", { target: done.targetBranch })}
+                        {t("chat.worktree.mergeDoneHint")}
+                      </span>
+                    </div>
+                  ) : resolvedCount !== null ? (
+                    // AI resolved the conflicts (staged, merge uncommitted).
+                    <div className="flex items-start gap-1.5">
+                      <IconCheck size={12} className="mt-0.5 shrink-0 text-accent" />
+                      <span className="break-words text-content-muted">
+                        {t("chat.worktree.conflictResolved", { n: resolvedCount })}
+                      </span>
+                    </div>
+                  ) : conflictFiles ? (
+                    <div className="space-y-1.5">
+                      <div className="flex items-start gap-1.5 text-warning">
+                        <IconAlertTriangle size={12} className="mt-0.5 shrink-0" />
+                        <span className="break-words">
+                          {t("chat.worktree.mergeConflict", { n: conflictFiles.length })}
+                        </span>
+                      </div>
+                      {/* Entry point: opens the shared AI-resolution window (same
+                          one the Git panel uses, abort-merge included). */}
+                      <div>
+                        <Button variant="outline" size="sm" onClick={() => setConflictOpen(true)}>
+                          <IconSparkles size={12} />
+                          {t("ide.git.resolveWithAi")}
+                        </Button>
+                      </div>
+                    </div>
+                  ) : preview?.ok ? (
+                    preview.upToDate && !info?.dirty ? (
+                      // Truly nothing to do: no new commits AND a clean
+                      // worktree. rev-list only counts commits — "upToDate"
+                      // alone must NOT read as "nothing to merge" when the
+                      // worktree still holds uncommitted file changes.
+                      <div className="flex items-center gap-1.5 text-content-subtle">
+                        <IconCheck size={12} className="shrink-0 text-accent" />
+                        {t("chat.worktree.mergeUpToDate")}
+                      </div>
+                    ) : (
+                      <>
+                        {!preview.upToDate && (
+                          <div className="flex items-center gap-1.5 text-content-muted">
+                            <IconCheck size={12} className="shrink-0 text-content-subtle" />
+                            {t("chat.worktree.mergeIncoming", { n: preview.incomingCommits })}
+                          </div>
+                        )}
+                        {info?.dirty && (
+                          <div className="flex items-start gap-1.5 text-warning">
+                            <IconAlertTriangle size={12} className="mt-0.5 shrink-0" />
+                            {t("chat.worktree.wtDirty")}
+                          </div>
+                        )}
+                      </>
+                    )
                   ) : (
-                    <>
-                      {!preview.upToDate && (
-                        <div className="flex items-center gap-1.5 text-content-muted">
-                          <IconCheck size={12} className="shrink-0 text-content-subtle" />
-                          {t("chat.worktree.mergeIncoming", { n: preview.incomingCommits })}
-                        </div>
-                      )}
-                      {info?.dirty && (
-                        <div className="flex items-start gap-1.5 text-warning">
-                          <IconAlertTriangle size={12} className="mt-0.5 shrink-0" />
-                          {t("chat.worktree.wtDirty")}
-                        </div>
-                      )}
-                    </>
-                  )
-                ) : (
-                  <div className="flex items-start gap-1.5 text-danger">
-                    <IconAlertTriangle size={12} className="mt-0.5 shrink-0" />
-                    <span className="break-words">
-                      {preview?.error ?? t("chat.worktree.previewFailed")}
-                    </span>
+                    <div className="flex items-start gap-1.5 text-danger">
+                      <IconAlertTriangle size={12} className="mt-0.5 shrink-0" />
+                      <span className="break-words">
+                        {preview?.error ?? t("chat.worktree.previewFailed")}
+                      </span>
+                    </div>
+                  )}
+                  {error && (
+                    <div className="flex items-start gap-1.5 text-danger">
+                      <IconAlertTriangle size={12} className="mt-0.5 shrink-0" />
+                      <span className="break-words">{error}</span>
+                    </div>
+                  )}
+                </div>
+                {/* Editable commit message for the auto-commit — only relevant
+                    while the worktree is dirty and nothing has landed yet.
+                    The sparkles generate one from the worktree's uncommitted
+                    diff via the same model the Git panel's commit box uses. */}
+                {info?.dirty && !done && !conflictFiles && (
+                  <div className="mt-3">
+                    <div className="text-[11px] text-content-subtle">
+                      {t("chat.worktree.commitMsgLabel")}
+                    </div>
+                    <div className="mt-1 flex items-center gap-1.5">
+                      <Input
+                        value={commitMessage}
+                        onChange={(e) => setCommitMessage((e.target as HTMLInputElement).value)}
+                        placeholder={t("chat.worktree.commitMsgPlaceholder", {
+                          name: worktreePath.split(/[\\/]/).pop() ?? "worktree",
+                        })}
+                        className="min-w-0 flex-1 text-xs"
+                      />
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => void handleGenerateMessage()}
+                        disabled={generating}
+                        title={t("chat.worktree.genCommit")}
+                      >
+                        {generating ? (
+                          <IconLoader2 size={12} className="animate-spin" />
+                        ) : (
+                          <IconSparkles size={12} />
+                        )}
+                        {t("chat.worktree.genCommit")}
+                      </Button>
+                    </div>
                   </div>
                 )}
-                {error && (
-                  <div className="flex items-start gap-1.5 text-danger">
-                    <IconAlertTriangle size={12} className="mt-0.5 shrink-0" />
-                    <span className="break-words">{error}</span>
+                {/* Finish-merge step: after AI resolution the merge is already
+                    staged — editable message + explicit commit, mirroring
+                    GitRepoCard's post-resolve prefill. */}
+                {resolvedCount !== null && !done && (
+                  <div className="mt-3">
+                    <div className="text-[11px] text-content-subtle">
+                      {t("chat.worktree.mergeCommitLabel")}
+                    </div>
+                    <div className="mt-1 flex items-center gap-1.5">
+                      <Input
+                        value={mergeCommitMsg}
+                        onChange={(e) => setMergeCommitMsg((e.target as HTMLInputElement).value)}
+                        className="min-w-0 flex-1 text-xs"
+                      />
+                      <Button
+                        size="sm"
+                        onClick={() => void handleFinishMerge()}
+                        disabled={committing || !mergeCommitMsg.trim()}
+                      >
+                        {committing ? (
+                          <IconLoader2 size={12} className="animate-spin" />
+                        ) : (
+                          <IconGitCommit size={12} />
+                        )}
+                        {t("chat.worktree.finishMerge")}
+                      </Button>
+                    </div>
                   </div>
                 )}
               </div>
-              {/* Editable commit message for the auto-commit — only relevant
-                  while the worktree is dirty and nothing has landed yet.
-                  The sparkles generate one from the worktree's uncommitted
-                  diff via the same model the Git panel's commit box uses. */}
-              {info?.dirty && !done && !conflictFiles && (
-                <div className="mt-3">
-                  <div className="text-[11px] text-content-subtle">
-                    {t("chat.worktree.commitMsgLabel")}
-                  </div>
-                  <div className="mt-1 flex items-center gap-1.5">
-                    <Input
-                      value={commitMessage}
-                      onChange={(e) => setCommitMessage((e.target as HTMLInputElement).value)}
-                      placeholder={t("chat.worktree.commitMsgPlaceholder", {
-                        name: worktreePath.split(/[\\/]/).pop() ?? "worktree",
-                      })}
-                      className="min-w-0 flex-1 text-xs"
-                    />
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => void handleGenerateMessage()}
-                      disabled={generating}
-                      title={t("chat.worktree.genCommit")}
-                    >
-                      {generating ? (
-                        <IconLoader2 size={12} className="animate-spin" />
-                      ) : (
-                        <IconSparkles size={12} />
-                      )}
-                      {t("chat.worktree.genCommit")}
-                    </Button>
-                  </div>
-                </div>
+            </div>
+            <div className="mt-4 flex justify-end gap-2">
+              {done ? (
+                <>
+                  <Button variant="danger" size="sm" onClick={handleRemove} disabled={removing}>
+                    {removing ? (
+                      <IconLoader2 size={12} className="animate-spin" />
+                    ) : (
+                      <IconTrash size={12} />
+                    )}
+                    {t("chat.worktree.removeWt")}
+                  </Button>
+                  <Button size="sm" onClick={() => onOpenChange(false)}>
+                    {t("chat.worktree.keepWt")}
+                  </Button>
+                </>
+              ) : (
+                <>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => onOpenChange(false)}
+                    disabled={busy || removing}
+                  >
+                    {t("common.cancel")}
+                  </Button>
+                  <Button size="sm" onClick={handleMerge} disabled={!canMerge}>
+                    {busy ? (
+                      <IconLoader2 size={12} className="animate-spin" />
+                    ) : (
+                      <IconGitMerge size={12} />
+                    )}
+                    {t("ide.git.merge")}
+                  </Button>
+                </>
               )}
             </div>
-          </div>
-          <div className="mt-4 flex justify-end gap-2">
-            {done ? (
-              <>
-                <Button variant="danger" size="sm" onClick={handleRemove} disabled={removing}>
-                  {removing ? (
-                    <IconLoader2 size={12} className="animate-spin" />
-                  ) : (
-                    <IconTrash size={12} />
-                  )}
-                  {t("chat.worktree.removeWt")}
-                </Button>
-                <Button size="sm" onClick={() => onOpenChange(false)}>
-                  {t("chat.worktree.keepWt")}
-                </Button>
-              </>
-            ) : (
-              <>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => onOpenChange(false)}
-                  disabled={busy || removing}
-                >
-                  {t("common.cancel")}
-                </Button>
-                <Button size="sm" onClick={handleMerge} disabled={!canMerge}>
-                  {busy ? (
-                    <IconLoader2 size={12} className="animate-spin" />
-                  ) : (
-                    <IconGitMerge size={12} />
-                  )}
-                  {t("ide.git.merge")}
-                </Button>
-              </>
-            )}
-          </div>
-          <Dialog.Close />
-        </Dialog.Popup>
-      </Dialog.Portal>
-    </Dialog.Root>
+            <Dialog.Close />
+          </Dialog.Popup>
+        </Dialog.Portal>
+      </Dialog.Root>
+      {/* ── Merge-conflict: shared AI-resolution window (Git panel parity) ── */}
+      {conflictFiles !== null && repoPath && (
+        <MergeConflictResolveDialog
+          open={conflictOpen}
+          onOpenChange={setConflictOpen}
+          repoPath={repoPath}
+          conflictedFiles={conflictFiles}
+          source="merge"
+          branch={info?.branch || info?.head || null}
+          onResolved={(n) => {
+            setResolvedCount(n);
+            setMergeCommitMsg(`Merge: conflicts auto-resolved by AI${n ? ` (${n} files)` : ""}`);
+          }}
+          onAborted={() => {
+            // Merge unwound — re-probe so the dialog returns to mergeable state.
+            void load();
+          }}
+          onError={setError}
+        />
+      )}
+    </>
   );
 }

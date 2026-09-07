@@ -191,6 +191,9 @@ export const zh = {
     "拉取后产生 {n} 个冲突文件。可以由 AI 自动读取冲突标记并解决冲突,解决后会写回文件并暂存,保留合并状态供你检查后手动提交。",
   "ide.git.conflictDescMerge":
     "合并 {source} 时产生 {n} 个冲突文件。可以由 AI 自动读取冲突标记并解决冲突,解决后会写回文件并暂存,保留合并状态供你检查后手动提交;也可以放弃本次合并,恢复到合并前的状态。",
+  "ide.git.conflictDescState":
+    "检测到 {n} 个存在未解决冲突的文件,上一次合并尚未完成。可以让 AI 自动读取冲突标记并解决冲突,解决后会写回文件并暂存,保留合并状态供你检查后手动提交;也可以放弃本次合并,恢复到合并前的状态。",
+  "ide.git.mergeStateBanner": "合并进行中,{n} 个文件存在未解决的冲突",
   "ide.git.conflictMore": "…还有 {n} 个",
   "ide.git.resolveLater": "稍后手动处理",
   "ide.git.resolveWithAi": "用 AI 解决",

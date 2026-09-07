@@ -8,7 +8,7 @@
  * feedback that dictation started.
  *
  * Shows a running duration (proof the mic is still alive) plus a
- * mode-specific "how to stop" hint and the Esc-cancel affordance.
+ * "how to stop" hint and the Esc-cancel affordance.
  *
  * Reuses the live-activity equalizer (`.live-eq`) for the animation and the
  * badge pop-in keyframes; fully pointer-transparent so it never blocks the
@@ -17,7 +17,6 @@
 import { useEffect, useState } from "react";
 import { cn } from "@renderer/lib/cn.js";
 import { useI18n } from "@renderer/lib/i18n/index.js";
-import { useSessionStore } from "@renderer/stores/sessionStore.js";
 import { onVoiceActiveChange } from "@renderer/lib/voiceController.js";
 
 /** mm:ss for the duration readout. */
@@ -31,7 +30,6 @@ export function VoiceListeningOverlay() {
   const { t } = useI18n();
   const [active, setActive] = useState(false);
   const [seconds, setSeconds] = useState(0);
-  const voiceInputMode = useSessionStore((s) => s.voiceInputMode);
 
   useEffect(() => onVoiceActiveChange(setActive), []);
 
@@ -72,9 +70,7 @@ export function VoiceListeningOverlay() {
           {formatDuration(seconds)}
         </span>
         <span className="text-[0.7rem] text-content-subtle">
-          {voiceInputMode === "pushToTalk"
-            ? t("chat.voice.overlayHintPtt")
-            : t("chat.voice.overlayHintContinuous")}
+          {t("chat.voice.overlayHint")}
         </span>
       </div>
     </div>

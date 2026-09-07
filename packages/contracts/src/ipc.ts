@@ -368,20 +368,6 @@ export const UI_RIGHT_PANEL_FONT_SIZE_SETTING_KEY = "ui.rightPanelFontSize";
 export const UI_PASTE_TAG_THRESHOLD_CHARS_SETTING_KEY = "ui.pasteTagThresholdChars";
 
 /**
- * Setting key under which the default voice-input mode is persisted.
- * Value is "continuous" (click to start/stop continuous dictation) or
- * "pushToTalk" (hold the mic button to talk, release to stop).
- * Hydrated into sessionStore.voiceInputMode at boot; the composer mic button
- * reads it as its default mode (the user can still flip it per-use from the
- * mic button's menu).
- */
-export const UI_VOICE_INPUT_MODE_SETTING_KEY = "ui.voiceInputMode";
-
-/** zod schema + TS union for the voice-input default mode. */
-export const VoiceInputModeSchema = z.enum(["continuous", "pushToTalk"]);
-export type VoiceInputMode = z.infer<typeof VoiceInputModeSchema>;
-
-/**
  * Setting key under which the default speech-recognition language is
  * persisted. Value is a BCP-47-ish tag like "zh-CN" or "en-US" (used to pick
  * the ASR model / decoder language). Hydrated into sessionStore.voiceLang.
@@ -3046,6 +3032,103 @@ export type LspRequestResult =
   | { result: unknown }
   | { error: { code: number; message: string } };
 
+/* ── Agent runtimes (download-on-demand) ──
+ *  The claude / codex binaries and the pi JS runtime are NOT bundled with the
+ *  installer (~600MB per platform); they live under userData/runtimes and are
+ *  downloaded on demand from the npm registry. The settings panel lists one
+ *  card per agent via `runtimes.list`; install/remove go through
+ *  `runtimes.install` / `runtimes.remove`; live download/extract progress is
+ *  pushed over the `runtimes:event` channel. The pinned expected version comes
+ *  from this app's own package.json (see runtimeInstaller.ts). */
+
+export const RuntimeAgentSchema = z.enum(["claude", "codex", "pi"]);
+export type RuntimeAgentId = z.infer<typeof RuntimeAgentSchema>;
+
+/** Where the provider currently loads a runtime from. "managed" = the
+ *  on-demand install under userData/runtimes (what this panel installs);
+ *  "dev" = node_modules of a development checkout (devDependencies / the
+ *  SDK's platform optionalDependency — absent in packaged builds);
+ *  "bundled" = a legacy build that still ships the payload in
+ *  app.asar.unpacked. null = not available anywhere → the provider errors
+ *  on use and the panel should offer the install button. */
+export type RuntimeAgentSource = "managed" | "dev" | "bundled";
+
+/** Snapshot of one agent runtime for the settings panel. Read-only display
+ *  data; mutations happen through install/remove and are reflected by
+ *  re-listing plus `runtimes:event` pushes. */
+export interface RuntimeAgentState {
+  agent: RuntimeAgentId;
+  /** Version this Mcode build expects (pinned in package.json). */
+  expectedVersion: string;
+  /** Version installed under userData/runtimes, or null when absent. Note:
+   *  a runtime can be USABLE without being installed here (see `source`). */
+  installedVersion: string | null;
+  /** Where the runtime is currently loaded from (see RuntimeAgentSource). */
+  source: RuntimeAgentSource | null;
+  /** Version of the copy the provider actually loads (= installedVersion
+   *  when source is "managed", else the dev/bundled fallback's version).
+   *  Null when nothing is usable. */
+  activeVersion: string | null;
+  /** Absolute path of the payload the provider actually loads (binary /
+   *  package.json). Null when nothing is usable. */
+  activePath: string | null;
+  /** Latest version advertised by the registry, or null when the check
+   *  hasn't run yet / failed (offline). Populated lazily by `runtimes.list`. */
+  latestVersion: string | null;
+  /** Whether a managed copy exists under userData/runtimes. */
+  installed: boolean;
+  /** The ACTIVE copy (managed, else dev/bundled fallback) differs from the
+   *  version this Mcode build expects. Happens after the app itself
+   *  updated; the panel offers an update. */
+  updateAvailable: boolean;
+  installing: boolean;
+  /** Tail of the last install/remove error. Empty when healthy. */
+  lastError: string;
+  /** On-disk footprint of the managed install (bytes; 0 when absent). */
+  diskBytes: number;
+  /** Managed install location of the active version (display only). */
+  installPath: string | null;
+}
+
+/** `runtimes:event` payload — coarse phase + fraction for one agent. */
+export interface RuntimeProgressPayload {
+  agent: RuntimeAgentId;
+  phase: "downloading" | "extracting" | "done" | "error";
+  /** 0..1 during "downloading"; -1 when Content-Length is unknown. */
+  progress: number;
+  /** Populated when phase === "error". */
+  error?: string;
+}
+
+export interface RuntimeEventMessage {
+  channel: "runtimes:event";
+  payload: RuntimeProgressPayload;
+}
+
+// -- RPC input schemas --
+
+export const RuntimesListSchema = z.object({});
+export type RuntimesListInput = z.infer<typeof RuntimesListSchema>;
+
+export const RuntimesInstallSchema = z.object({ agent: RuntimeAgentSchema });
+export type RuntimesInstallInput = z.infer<typeof RuntimesInstallSchema>;
+
+/** Install from a user-picked LOCAL PATH. Escape hatch when the registry path
+ *  fails: @mcode/runtime-pi not published yet, stale mirror, offline.
+ *  Accepted: the agent's install directory (claude platform package dir /
+ *  codex vendored package dir / pi meta-package dir with node_modules/), the
+ *  agent binary file itself (claude/codex), or an npm-shaped .tgz. Mirrors
+ *  `lsp.installFromFile` but path-based. */
+export const RuntimesInstallLocalSchema = z.object({
+  agent: RuntimeAgentSchema,
+  /** Absolute local path (directory, binary, or .tgz). */
+  localPath: z.string().min(1),
+});
+export type RuntimesInstallLocalInput = z.infer<typeof RuntimesInstallLocalSchema>;
+
+export const RuntimesRemoveSchema = z.object({ agent: RuntimeAgentSchema });
+export type RuntimesRemoveInput = z.infer<typeof RuntimesRemoveSchema>;
+
 export interface ClaudeEventMessage {
   channel: "claude:event";
   sessionId: string;
@@ -3218,7 +3301,8 @@ export type MainToRendererMessage =
   | NotificationFocusSessionMessage
   | RelayEventMessage
   | VoiceResultMessage
-  | VoiceDownloadProgressMessage;
+  | VoiceDownloadProgressMessage
+  | RuntimeEventMessage;
 
 /* ── Integrated terminal (xterm.js + node-pty) ──
  *  PTY processes live in main. Renderer only sees opaque terminalIds and
@@ -3949,6 +4033,23 @@ export interface RpcMap {
   /** Forward an arbitrary LSP request (definition/references/hover/...) to the
    *  server and await its response. */
   "lsp.request": (input: LspRequestInput) => Promise<LspRequestResult>;
+  // Agent runtimes (download-on-demand, settings panel)
+  /** List the claude/codex/pi runtimes: expected vs installed vs latest
+   *  version, install state and disk footprint. `latestVersion` is fetched
+   *  from the registry on each call (best-effort, null when offline). */
+  "runtimes.list": () => Promise<{ runtimes: RuntimeAgentState[] }>;
+  /** Download + install (or update/reinstall) a runtime into
+   *  userData/runtimes. Resolves when the install fully finished. */
+  "runtimes.install": (input: RuntimesInstallInput) => Promise<{ ok: boolean; error?: string }>;
+  /** Install a runtime from a user-picked local path (install directory,
+   *  binary, or .tgz). The version is taken from the package.json when
+   *  available, else the expected version. */
+  "runtimes.installLocal": (
+    input: RuntimesInstallLocalInput,
+  ) => Promise<{ ok: boolean; error?: string; version?: string }>;
+  /** Delete an installed runtime from disk. Rejected while any turn is
+   *  running. */
+  "runtimes.remove": (input: RuntimesRemoveInput) => Promise<{ ok: boolean; error?: string }>;
   // ── Mobile companion (LAN pairing + device management) ──
   /** Begin a pairing session: returns QR URL + 6-digit code + endpoint.
    *  Optional `host` overrides auto-detected LAN IP (for multi-NIC machines
@@ -4206,6 +4307,12 @@ export const IPC = {
   LSP_DID_CHANGE: "lsp:didChange",
   LSP_DID_SAVE: "lsp:didSave",
   LSP_REQUEST: "lsp:request",
+  // Agent runtimes (download-on-demand): list/install/remove + progress push
+  RUNTIMES_LIST: "runtimes:list",
+  RUNTIMES_INSTALL: "runtimes:install",
+  RUNTIMES_INSTALL_LOCAL: "runtimes:installLocal",
+  RUNTIMES_REMOVE: "runtimes:remove",
+  RUNTIMES_EVENT: "runtimes:event",
   // Mobile companion (LAN pairing + device management) — invoke/handle (RPC).
   MOBILE_START_PAIRING: "mobile:startPairing",
   MOBILE_GET_PAIRING: "mobile:getPairing",

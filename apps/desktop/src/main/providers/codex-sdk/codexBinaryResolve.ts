@@ -23,6 +23,7 @@
 import { existsSync, readdirSync } from "node:fs";
 import { createRequire } from "node:module";
 import { basename as pathBasename, join } from "node:path";
+import { getManagedRuntimeRoot, listManagedVersions } from "@main/runtimes/managedRuntimeRoots.js";
 
 /** The platform-package suffix, e.g. "darwin-arm64" / "win32-x64". */
 function platformSuffix(): string {
@@ -64,13 +65,48 @@ function findBinaryInPackage(pkgDir: string): string | null {
   return null;
 }
 
+/** Public alias for the payload probe — runtimeInstaller.ts reuses it to
+ *  verify an extracted codex package and to report the install path. */
+export function findCodexBinaryInPackage(pkgDir: string): string | null {
+  return findBinaryInPackage(pkgDir);
+}
+
+/** Public alias for the vendored triple (vendor/<triple>/bin layout), used by
+ *  runtimeInstaller.ts when placing a user-picked single codex binary. */
+export function codexVendorTriple(): string | null {
+  return vendorTriple();
+}
+
 /**
- * Resolve the codex binary path. In dev, resolves from node_modules (pnpm
- * layout aware). In a packaged app, returns the real on-disk path under
- * `app.asar.unpacked`. Returns null when nothing can be located (caller
- * surfaces a "Codex CLI 未安装" error).
+ * Resolve the codex binary path. Lookup order:
+ *   0) managed runtime downloaded via the settings panel
+ *      (`<userData>/runtimes/codex/<version>/vendor/...`) — highest priority,
+ *      works in dev and packaged apps alike;
+ *   1-3) node_modules resolution (dev) — unchanged;
+ *   4) packaged-app fallback under app.asar.unpacked (kept for forward-compat
+ *      in case a build ever bundles the platform package again).
+ * Returns null when nothing can be located (caller surfaces a "Codex CLI 未安装"
+ * error that points at the runtime download panel).
  */
 export function resolveCodexBinaryPath(): string | null {
+  // 0) Managed runtime (download-on-demand). Scanned newest-version first;
+  //    the installer prunes older versions, so this is normally the only one.
+  const managedRoot = getManagedRuntimeRoot();
+  if (managedRoot) {
+    for (const version of listManagedVersions("codex")) {
+      const dir = join(managedRoot, "codex", version);
+      const found = findBinaryInPackage(dir);
+      if (found) return found;
+    }
+  }
+  return resolveBundledCodexBinaryPath();
+}
+
+/**
+ * The legacy source: node_modules (dev checkout, pnpm-layout aware) and the
+ * app.asar.unpacked fallback (builds that still bundle the platform package).
+ */
+export function resolveBundledCodexBinaryPath(): string | null {
   const req = createRequire(import.meta.url);
   const pkg = `@openai/codex-${platformSuffix()}`;
 

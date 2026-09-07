@@ -35,11 +35,7 @@ export const en = {
   // ── voice input (mic button) ──
   "chat.voice.startListening": "Start voice input",
   "chat.voice.stopListening": "Stop voice input",
-  "chat.voice.pushToTalk": "Hold to talk",
-  "chat.voice.pushToTalkTitle": "Press and hold to speak; release to finish",
-  "chat.voice.continuous": "Continuous",
-  "chat.voice.continuousTitle": "Click to start dictation; click again to stop",
-  "chat.voice.modeMenu": "Switch voice input mode",
+  "chat.voice.toggleTitle": "Click to start dictation; click again to stop",
   "chat.voice.listening": "Listening…",
   "chat.voice.micDenied": "Microphone access denied",
   "chat.voice.micDeniedDesc": "Allow microphone access in your system settings to use voice input.",
@@ -49,11 +45,9 @@ export const en = {
   "chat.voice.engineFailDesc": "The speech model could not be loaded. Check your connection and try again.",
   "chat.voice.noModel": "Voice model not ready",
   "chat.voice.noModelDesc": "Download and select a speech model under Settings → Voice Input first — opening that page for you now.",
-  "chat.voice.manageModels": "Download speech models…",
   "chat.voice.lockedTitle": "Voice input is paused while a prompt awaits your answer",
   "chat.voice.dictationCancelled": "Dictation cancelled",
-  "chat.voice.overlayHintPtt": "Release shortcut to finish · Esc to cancel",
-  "chat.voice.overlayHintContinuous": "Click mic or press shortcut again to finish · Esc to cancel",
+  "chat.voice.overlayHint": "Click mic or press shortcut again to finish · Esc to cancel",
 
   // ── running turn (jump-to-bottom badge) ──
   "chat.live.newActivity": "{n} new updates",
@@ -232,6 +226,8 @@ export const en = {
   "chat.provider.locked": "This session's SDK is fixed and cannot be changed",
   "chat.provider.selectTitle": "Choose the SDK for the session",
   "chat.provider.section": "Choose SDK",
+  "chat.provider.notInstalled": "Runtime not installed",
+  "chat.provider.manage": "Manage agents…",
 
   // ── slash command picker ──
   "chat.slash.tabCommands": "Commands",
@@ -354,7 +350,10 @@ export const en = {
   "chat.worktree.mergeUpToDate": "All changes are already in the local branch — nothing to merge",
   "chat.worktree.mergeDone": "Merged into {target}.",
   "chat.worktree.mergeDoneHint": "If the task is done, you can remove the worktree.",
-  "chat.worktree.mergeConflict": "The merge produced {n} conflict(s) — resolve them in the Git panel's Changes tab, then retry.",
+  "chat.worktree.mergeConflict": "The merge produced {n} conflict(s). Resolve them with AI, or abort the merge.",
+  "chat.worktree.conflictResolved": "AI resolved {n} conflict(s) and staged them — review the result, then finish the merge commit.",
+  "chat.worktree.mergeCommitLabel": "Merge commit message",
+  "chat.worktree.finishMerge": "Finish merge",
   "chat.worktree.previewFailed": "Cannot read merge preview",
   "chat.worktree.removeWt": "Remove worktree",
   "chat.worktree.keepWt": "Keep worktree",

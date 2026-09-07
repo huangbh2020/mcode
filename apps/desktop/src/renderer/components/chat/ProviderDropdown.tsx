@@ -2,10 +2,27 @@ import { useRef, useState } from "react";
 import { Menu } from "@base-ui/react/menu";
 import { cn } from "@renderer/lib/cn.js";
 import { useI18n } from "@renderer/lib/i18n/index.js";
-import { IconCheck, IconChevronDown, IconLock } from "@renderer/lib/icons.js";
+import { IconCheck, IconChevronDown, IconLock, IconSettings } from "@renderer/lib/icons.js";
 import { getProviderIcon } from "@renderer/lib/providerIcon.js";
 import { useSessionStore } from "@renderer/stores/sessionStore.js";
 import { useSuppressBrowserView } from "@renderer/hooks/useSuppressBrowserView.js";
+import type { RuntimeAgentId } from "@contracts/ipc";
+
+/** Provider id → runtime agent ("claude-sdk" → "claude", …). Providers
+ *  outside the runtime-backed trio (future ones) map to null and are never
+ *  gated. */
+function runtimeAgentFor(providerId: string): RuntimeAgentId | null {
+  switch (providerId) {
+    case "claude-sdk":
+      return "claude";
+    case "pi-sdk":
+      return "pi";
+    case "codex-sdk":
+      return "codex";
+    default:
+      return null;
+  }
+}
 
 /**
  * Provider (AI backend) picker for the composer toolbar.
@@ -15,6 +32,10 @@ import { useSuppressBrowserView } from "@renderer/hooks/useSuppressBrowserView.j
  * messages its provider is fixed at creation — the chip stays visible but
  * becomes read-only (icon + name + lock, no dropdown) so the conversation's
  * SDK remains legible in the composer.
+ *
+ * Providers whose runtime isn't usable (not installed AND no dev/bundled
+ * fallback — see RuntimeAgentState.source) are greyed out and unselectable;
+ * a footer entry deep-links into Settings → Agent Runtimes to install one.
  *
  * Placement: directly left of the send button in ChatPane (not in the
  * ComposerToolbar chip row), so it stays visible even when the chip row
@@ -32,6 +53,9 @@ export function ProviderDropdown() {
   const providerId = useSessionStore((s) => s.providerId);
   const providers = useSessionStore((s) => s.providers);
   const setProvider = useSessionStore((s) => s.setProvider);
+  const runtimes = useSessionStore((s) => s.runtimes);
+  const reloadRuntimes = useSessionStore((s) => s.reloadRuntimes);
+  const setSettingsOpen = useSessionStore((s) => s.setSettingsOpen);
   const activeSessionId = useSessionStore((s) => s.activeSessionId);
   // The active thread has messages → its provider is locked.
   const hasMessages = useSessionStore((s) => {
@@ -39,6 +63,17 @@ export function ProviderDropdown() {
     const bucket = s.messagesBySession[activeSessionId];
     return bucket !== undefined && bucket.length > 0;
   });
+
+  // Availability per provider, derived from the runtime list. Before the list
+  // hydrates (and on the web shell, where reloadRuntimes no-ops) it's empty —
+  // treat every provider as available rather than flashing everything greyed.
+  const runtimeByAgent = new Map(runtimes.map((r) => [r.agent, r]));
+  const isAvailable = (pid: string): boolean => {
+    const agent = runtimeAgentFor(pid);
+    if (agent === null || runtimes.length === 0) return true;
+    const rt = runtimeByAgent.get(agent);
+    return rt !== undefined && rt.source !== null;
+  };
 
   // Single-provider installs need no picker.
   if (providers.length <= 1) return null;
@@ -82,7 +117,15 @@ export function ProviderDropdown() {
 
   // Unlocked (new thread): clicking the chip opens the provider menu.
   return (
-    <Menu.Root open={open} onOpenChange={setOpen}>
+    <Menu.Root
+      open={open}
+      onOpenChange={(next) => {
+        // Refresh availability when (re)opening — installs from the settings
+        // panel (or first hydration races) are reflected on the next open.
+        if (next) void reloadRuntimes();
+        setOpen(next);
+      }}
+    >
       <Menu.Trigger render={chip} />
       <Menu.Portal>
         <Menu.Positioner side="top" align="start">
@@ -102,13 +145,16 @@ export function ProviderDropdown() {
               const activeItem = p.id === providerId;
               const meta = getProviderIcon(p.id);
               const ItemIcon = meta.Icon;
+              const available = isAvailable(p.id);
               return (
                 <Menu.Item
                   key={p.id}
+                  disabled={!available}
                   className={cn(
                     "flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-[13px] outline-none select-none",
                     "data-[highlighted]:bg-surface-muted",
                     activeItem ? "text-accent" : "text-content-muted",
+                    !available && "cursor-not-allowed opacity-40",
                   )}
                   onClick={() => setProvider(p.id)}
                 >
@@ -116,10 +162,31 @@ export function ProviderDropdown() {
                     <ItemIcon size={14} className={cn("shrink-0", meta.color)} />
                     <span className="truncate font-medium">{p.displayName}</span>
                   </span>
-                  {activeItem && <IconCheck size={14} className="shrink-0" />}
+                  {!available ? (
+                    <span className="shrink-0 text-[11px] text-content-subtle">
+                      {t("chat.provider.notInstalled")}
+                    </span>
+                  ) : activeItem ? (
+                    <IconCheck size={14} className="shrink-0" />
+                  ) : null}
                 </Menu.Item>
               );
             })}
+            {/* Manage entry → Settings → Agent Runtimes (install / update). */}
+            <div className="mx-3 my-1 border-t border-edge" />
+            <Menu.Item
+              className={cn(
+                "flex w-full items-center gap-2 px-3 py-2 text-left text-[13px] outline-none select-none",
+                "text-content-muted data-[highlighted]:bg-surface-muted data-[highlighted]:text-content",
+              )}
+              onClick={() => {
+                setOpen(false);
+                setSettingsOpen(true, "runtimes");
+              }}
+            >
+              <IconSettings size={14} className="shrink-0" />
+              <span className="truncate">{t("chat.provider.manage")}</span>
+            </Menu.Item>
           </Menu.Popup>
         </Menu.Positioner>
       </Menu.Portal>

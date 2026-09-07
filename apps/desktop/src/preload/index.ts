@@ -514,8 +514,32 @@ const api = {
     status: (() => ipcRenderer.invoke(IPC.RELAY_STATUS)) as RpcMap["relay.status"],
   },
 
+  /** Agent runtimes (settings panel): the download-on-demand claude/codex/pi
+   *  payloads. install() resolves when the whole pipeline finished; live
+   *  progress arrives over `on.runtimesEvent`. */
+  runtimes: {
+    list: (() => ipcRenderer.invoke(IPC.RUNTIMES_LIST)) as RpcMap["runtimes.list"],
+    install: ((input) =>
+      ipcRenderer.invoke(IPC.RUNTIMES_INSTALL, input)) as RpcMap["runtimes.install"],
+    installLocal: ((input) =>
+      ipcRenderer.invoke(IPC.RUNTIMES_INSTALL_LOCAL, input)) as RpcMap["runtimes.installLocal"],
+    remove: ((input) =>
+      ipcRenderer.invoke(IPC.RUNTIMES_REMOVE, input)) as RpcMap["runtimes.remove"],
+  },
+
   // ── Push events (main → renderer) ──
   on: {
+    /** Runtimes push events: download/extract progress and done/error per
+     *  agent. Filter by `msg.payload.agent` / `msg.payload.phase`. */
+    runtimesEvent(handler: (msg: Extract<MainToRendererMessage, { channel: "runtimes:event" }>) => void): () => void {
+      const listener = (_e: unknown, msg: MainToRendererMessage) => {
+        if (msg.channel === IPC.RUNTIMES_EVENT) handler(msg);
+      };
+      ipcRenderer.on(IPC.RUNTIMES_EVENT, listener);
+      return () => {
+        ipcRenderer.off(IPC.RUNTIMES_EVENT, listener);
+      };
+    },
     /** Subscribe to claude:event push channel. Returns an unsubscribe fn. */
     claudeEvent(handler: (msg: Extract<MainToRendererMessage, { channel: "claude:event" }>) => void): () => void {
       const listener = (_e: unknown, msg: MainToRendererMessage) => {

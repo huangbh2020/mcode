@@ -1,20 +1,13 @@
 /**
  * Voice-input mic button for the composer action row.
  *
- * Two capture modes (switchable via the caret menu, default persisted in the
- * settings table):
- *   - continuous  : click → start dictation, click again → stop, text commits.
- *   - pushToTalk  : press-and-hold to speak, release to stop ("按住说话").
- *
- * Microphone audio is streamed to the main-process sherpa-onnx ASR engine via
- * `useVoiceInput`; the transcript is written DIRECTLY into the composer as it
- * streams (each partial rewrites the tail the previous one produced — see
- * `applyLiveText`), so the user sees the text appear in the input box while
- * speaking and can edit it right after the listen ends.
- *
- * The default mode/language come from the store's persisted voice settings;
- * flipping the mode here also persists it, so "我记得上次用的模式" behavior is
- * kept across sessions.
+ * Click once to start dictation, click again to stop — the transcript
+ * commits. Microphone audio is streamed to the main-process sherpa-onnx ASR
+ * engine via `useVoiceInput`; the transcript is written DIRECTLY into the
+ * composer as it streams (each partial rewrites the tail the previous one
+ * produced — see `applyLiveText`), so the user sees the text appear in the
+ * input box while speaking and can edit it right after the listen ends. Esc
+ * while listening discards the partial text.
  *
  * Desktop-only: the ASR engine lives in the Electron main process (no bridge
  * exists over the mobile RPC/SSE transport), and the mobile shell serves the
@@ -22,27 +15,21 @@
  * entirely — render nothing there instead of a button that can never listen.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Menu } from "@base-ui/react/menu";
 import { cn } from "@renderer/lib/cn.js";
 import { useI18n } from "@renderer/lib/i18n/index.js";
 import { useSessionStore } from "@renderer/stores/sessionStore.js";
 import { useToastStore } from "@renderer/stores/toastStore.js";
-import { useSuppressBrowserView } from "@renderer/hooks/useSuppressBrowserView.js";
 import { useVoiceInput } from "@renderer/hooks/useVoiceInput.js";
 import { isElectron } from "@renderer/lib/platform.js";
 import {
   registerVoiceHandle,
   setVoiceActive,
-  type VoiceHandle,
 } from "@renderer/lib/voiceController.js";
 import type { ComposerEditorHandle } from "./ComposerEditor.js";
-import type { VoiceInputMode } from "@contracts/ipc";
 import {
-  IconChevronDown,
-  IconDownload,
   IconMicrophone,
-  IconMicrophoneFilled,
   IconMicrophoneOff,
+  IconWaveSine,
 } from "@renderer/lib/icons.js";
 
 /** Matches the "no model" family of engine errors thrown by main
@@ -75,8 +62,6 @@ function MicButtonDesktop({
   disabled,
 }: MicButtonProps) {
   const { t } = useI18n();
-  const voiceInputMode = useSessionStore((s) => s.voiceInputMode);
-  const setVoiceInputMode = useSessionStore((s) => s.setVoiceInputMode);
   const voiceLang = useSessionStore((s) => s.voiceLang);
   const setSettingsOpen = useSessionStore((s) => s.setSettingsOpen);
   const setVoiceMicPermission = useSessionStore((s) => s.setVoiceMicPermission);
@@ -128,9 +113,9 @@ function MicButtonDesktop({
   });
 
   // Ref mirrors of the hook/composer state — the voiceController handle and
-  // the pointer/keyboard handlers read these synchronously (the `busy` STATE
-  // lags by a render, and the async getUserMedia window would otherwise make
-  // a quick tap's stop a no-op).
+  // the click handler read these synchronously (the `busy` STATE lags by a
+  // render, and the async getUserMedia window would otherwise let a quick
+  // double-click open two listens).
   const busyRef = useRef(false);
   const disabledRef = useRef(false);
   busyRef.current = busy;
@@ -145,8 +130,8 @@ function MicButtonDesktop({
     setArmed(on);
   };
 
-  /** Start a fresh listen (shared by click, pointer-hold and the keyboard
-   *  shortcut). No-op when one is already active or the composer is locked. */
+  /** Start a fresh listen (shared by click and the keyboard shortcut).
+   *  No-op when one is already active or the composer is locked. */
   const beginListen = useCallback(async () => {
     if (armedRef.current || disabledRef.current) return;
     arm(true);
@@ -184,8 +169,6 @@ function MicButtonDesktop({
   /** Visual + logical "listening" — armed covers the async startup window. */
   const listening = armed || busy;
 
-  const isContinuous = voiceInputMode === "continuous";
-
   // Broadcast to the global listening overlay.
   useEffect(() => {
     setVoiceActive(armed);
@@ -220,26 +203,6 @@ function MicButtonDesktop({
     return () => window.removeEventListener("keydown", onKey, true);
   }, [listening, cancelListen]);
 
-  // Hold-to-talk via the keyboard chord loses its keyup when the window loses
-  // focus mid-hold (alt-tab) — the mic would keep recording forever. Losing
-  // focus in push-to-talk mode can only mean the hold is over: stop.
-  useEffect(() => {
-    if (!listening || isContinuous) return;
-    const onBlur = () => void endListen();
-    window.addEventListener("blur", onBlur);
-    return () => window.removeEventListener("blur", onBlur);
-  }, [listening, isContinuous, endListen]);
-
-  const [menuOpen, setMenuOpen] = useState(false);
-  const menuPopupRef = useRef<HTMLDivElement>(null);
-  useSuppressBrowserView(menuOpen, menuPopupRef);
-
-  // Mode switch persists (store setter → settings table).
-  const handleModeChange = (mode: VoiceInputMode) => {
-    setMenuOpen(false);
-    void setVoiceInputMode(mode);
-  };
-
   // Surface mic/model errors as toasts once per error (keyed on the message so
   // repeat failures don't stack toasts). Runs in an effect — the render body
   // must not touch the toast store (setState during MicButton's render would
@@ -273,147 +236,45 @@ function MicButtonDesktop({
     clearMicError();
   }, [micError, t, setSettingsOpen, setVoiceMicPermission, clearMicError]);
 
-  /** Handle a (non-caret) click on the mic button.
-   *  continuous: start/stop toggle. pushToTalk: the pointer handlers talk. */
+  /** Click = toggle: start a fresh listen, or stop the active one and commit. */
   const handleClick = async () => {
-    // Continuous: click toggles start/stop. Push-to-talk: the pointer
-    // handlers own recording — a plain click after release must NOT restart.
-    if (!isContinuous) return;
     if (armedRef.current) {
       await endListen();
       return;
     }
-    if (disabled) return;
+    if (disabledRef.current) return;
     await beginListen();
-  };
-
-  /** Hold-to-talk handlers — active ONLY in pushToTalk mode. */
-  const handlePointerDown = (e: React.PointerEvent<HTMLButtonElement>) => {
-    if (isContinuous || disabled || armedRef.current) return;
-    e.currentTarget.setPointerCapture(e.pointerId);
-    void beginListen();
-  };
-  const handlePointerUp = (e: React.PointerEvent<HTMLButtonElement>) => {
-    if (!armedRef.current) return;
-    if (e.currentTarget.hasPointerCapture(e.pointerId)) {
-      e.currentTarget.releasePointerCapture(e.pointerId);
-    }
-    void endListen();
   };
 
   const title = disabled
     ? t("chat.voice.lockedTitle")
     : listening
-      ? t("chat.voice.listening")
-      : isContinuous
-        ? t("chat.voice.continuousTitle")
-        : t("chat.voice.pushToTalkTitle");
+      ? t("chat.voice.stopListening")
+      : t("chat.voice.toggleTitle");
 
   return (
-    <div className="flex shrink-0 items-center gap-0">
-      {/* Recording half */}
-      <button
-        type="button"
-        disabled={disabled}
-        onClick={handleClick}
-        onPointerDown={handlePointerDown}
-        onPointerUp={handlePointerUp}
-        onPointerCancel={handlePointerUp}
-        title={title}
-        aria-label={
-          listening
-            ? t("chat.voice.stopListening")
-            : t("chat.voice.startListening")
-        }
-        className={cn(
-          "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-xl text-content-muted transition-all duration-150 ease-out",
-          "hover:scale-110 hover:bg-accent/10 hover:text-accent active:scale-95",
-          listening && "bg-accent/10 text-accent hover:text-accent",
-          "disabled:scale-100 disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-content-muted",
-        )}
-      >
-        {listening ? (
-          <IconMicrophoneFilled size={18} className="animate-pulse" />
-        ) : disabled ? (
-          <IconMicrophoneOff size={18} />
-        ) : (
-          <IconMicrophone size={18} />
-        )}
-      </button>
-
-      {/* Mode caret → menu */}
-      <Menu.Root open={menuOpen} onOpenChange={setMenuOpen}>
-        <Menu.Trigger
-          disabled={disabled || listening}
-          title={t("chat.voice.modeMenu")}
-          aria-label={t("chat.voice.modeMenu")}
-          className={cn(
-            "inline-flex h-8 w-4 shrink-0 items-center justify-center rounded-r-xl text-content-subtle transition-colors",
-            "hover:text-content",
-            (disabled || listening) && "cursor-not-allowed opacity-40",
-          )}
-        >
-          <IconChevronDown size={12} />
-        </Menu.Trigger>
-        <Menu.Portal>
-          <Menu.Positioner side="top" align="end">
-            <Menu.Popup
-              ref={menuPopupRef}
-              className={cn(
-                "z-50 min-w-[190px] origin-bottom-left rounded-lg border border-edge bg-surface py-1.5 shadow-2xl",
-                "data-[ending-style]:scale-95 data-[ending-style]:opacity-0",
-                "data-[starting-style]:scale-95 data-[starting-style]:opacity-0",
-                "transition-[transform,opacity] duration-100",
-              )}
-            >
-              <Menu.Item
-                disabled={isContinuous}
-                onClick={() => handleModeChange("continuous")}
-                className={cn(
-                  "flex w-full items-center gap-2 px-3 py-2 text-left text-[13px] outline-none select-none",
-                  "text-content-muted data-[highlighted]:bg-surface-muted data-[highlighted]:text-content",
-                )}
-              >
-                <span className="font-medium">
-                  {t("chat.voice.continuous")}
-                </span>
-                <span className="ml-auto text-xs text-content-subtle">
-                  {isContinuous ? "✓" : ""}
-                </span>
-              </Menu.Item>
-              <Menu.Item
-                disabled={!isContinuous}
-                onClick={() => handleModeChange("pushToTalk")}
-                className={cn(
-                  "flex w-full items-center gap-2 px-3 py-2 text-left text-[13px] outline-none select-none",
-                  "text-content-muted data-[highlighted]:bg-surface-muted data-[highlighted]:text-content",
-                )}
-              >
-                <span className="font-medium">
-                  {t("chat.voice.pushToTalk")}
-                </span>
-                <span className="ml-auto text-xs text-content-subtle">
-                  {!isContinuous ? "✓" : ""}
-                </span>
-              </Menu.Item>
-              <Menu.Separator className="my-1 h-px bg-edge" />
-              <Menu.Item
-                onClick={() => {
-                  setMenuOpen(false);
-                  setSettingsOpen(true, "voice");
-                }}
-                className={cn(
-                  "flex w-full items-center gap-2 px-3 py-2 text-left text-[13px] outline-none select-none",
-                  "text-content-muted data-[highlighted]:bg-surface-muted data-[highlighted]:text-content",
-                )}
-              >
-                <IconDownload size={14} className="text-content-subtle" />
-                {t("chat.voice.manageModels")}
-              </Menu.Item>
-            </Menu.Popup>
-          </Menu.Positioner>
-        </Menu.Portal>
-      </Menu.Root>
-    </div>
+    <button
+      type="button"
+      disabled={disabled}
+      onClick={handleClick}
+      title={title}
+      aria-label={
+        listening ? t("chat.voice.stopListening") : t("chat.voice.startListening")
+      }
+      className={cn(
+        "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-xl text-content-muted transition-all duration-150 ease-out",
+        "hover:scale-110 hover:bg-accent/10 hover:text-accent active:scale-95",
+        listening && "bg-accent/10 text-accent hover:text-accent",
+        "disabled:scale-100 disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-content-muted",
+      )}
+    >
+      {listening ? (
+        <IconWaveSine size={18} className="animate-pulse" />
+      ) : disabled ? (
+        <IconMicrophoneOff size={18} />
+      ) : (
+        <IconMicrophone size={18} />
+      )}
+    </button>
   );
 }

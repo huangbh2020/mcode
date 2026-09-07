@@ -23,6 +23,7 @@
 import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
 import { join } from "node:path";
+import { getManagedRuntimeRoot, listManagedVersions } from "@main/runtimes/managedRuntimeRoots.js";
 
 /** The platform subpackage suffix the SDK looks for, e.g. "win32-x64".
  *  Mirrors the SDK's own resolution (see its `getDefaultExecutable`/`FU`). */
@@ -42,12 +43,39 @@ function toUnpackedPath(p: string): string {
 }
 
 /**
- * Resolve the SDK binary path. In dev, returns null (let the SDK resolve it
- * itself from node_modules). In a packaged app, returns the real on-disk path
- * under `app.asar.unpacked`, or null if it can't be determined (in which case
- * the SDK falls back to its own resolution and we accept the spawn failure).
+ * Resolve the SDK binary path. Lookup order:
+ *   0) managed runtime downloaded via the settings panel
+ *      (`<userData>/runtimes/claude/<version>/claude[.exe]`) — highest
+ *      priority, works in dev and packaged apps (this is the only source in
+ *      packaged builds: the platform package is no longer bundled);
+ *   1) bundled platform package under node_modules / app.asar.unpacked
+ *      (dev only — in dev the SDK could also self-resolve, but returning the
+ *      explicit path keeps dev/packaged behavior identical).
+ * Returns null when nothing exists (caller surfaces a friendly "runtime not
+ * installed" error pointing at the download panel).
  */
 export function resolveSdkBinaryPath(): string | null {
+  // 0) Managed runtime (download-on-demand). The installer prunes older
+  //    versions, so the newest dir is normally the only candidate.
+  const managedRoot = getManagedRuntimeRoot();
+  if (managedRoot) {
+    for (const version of listManagedVersions("claude")) {
+      for (const name of binaryNames()) {
+        const candidate = join(managedRoot, "claude", version, name);
+        if (existsSync(candidate)) return candidate;
+      }
+    }
+  }
+  return resolveBundledSdkBinaryPath();
+}
+
+/**
+ * The legacy source: the SDK's platform package resolved from node_modules
+ * (dev checkout) or app.asar.unpacked (builds that still bundle it). Returns
+ * null in dev when node_modules isn't in play — the SDK then resolves the
+ * binary itself from its own package context.
+ */
+export function resolveBundledSdkBinaryPath(): string | null {
   // Only intervene in packaged Electron apps. In dev (running via electron-vite
   // with ELECTRON_RENDERER_URL set), the SDK resolves node_modules normally.
   if (!!process.env["ELECTRON_RENDERER_URL"]) return null;

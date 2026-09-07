@@ -11,6 +11,7 @@ import { EMPTY_TURN_FILES, useSessionStore } from "@renderer/stores/sessionStore
 import type { TurnFileEntry } from "@renderer/lib/turnFiles.js";
 import { lineDiff, diffSummary } from "@renderer/lib/lineDiff.js";
 import { Button, Dialog } from "@renderer/components/ui/index.js";
+import { MergeConflictResolveDialog } from "@renderer/components/ide/MergeConflictResolveDialog.js";
 import {
   IconChevronDown,
   IconChevronRight,
@@ -102,11 +103,8 @@ export function GitRepoCard({ repo }: { repo: GitRepo }) {
   // `conflictBranch` describe where the conflicts came from so the dialog can
   // word itself correctly ("合并 feature-x 时…" vs "拉取后…").
   const [conflictFiles, setConflictFiles] = useState<string[] | null>(null);
-  const [conflictSource, setConflictSource] = useState<"pull" | "merge">("pull");
+  const [conflictSource, setConflictSource] = useState<"pull" | "merge" | "state">("pull");
   const [conflictBranch, setConflictBranch] = useState<string | null>(null);
-  const [resolving, setResolving] = useState(false);
-  // "放弃合并" (git merge --abort) in-flight flag for the conflict dialog.
-  const [aborting, setAborting] = useState(false);
   // Branch picker state: the grouped branch/tag list (fetched on menu open),
   // a search filter, the in-flight checkout, and the "new branch" dialog.
   // The menu is CONTROLLED so the merge action can close it before opening
@@ -129,7 +127,6 @@ export function GitRepoCard({ repo }: { repo: GitRepo }) {
   const [merging, setMerging] = useState(false);
   const collapsedGitRepos = useSessionStore((s) => s.collapsedGitRepos);
   const toggleCollapsedGitRepo = useSessionStore((s) => s.toggleCollapsedGitRepo);
-  const conflictResolveModel = useSessionStore((s) => s.conflictResolveModel);
   const collapsed = !!collapsedGitRepos[repo.path];
 
   const refresh = useCallback(async () => {
@@ -283,32 +280,6 @@ export function GitRepoCard({ repo }: { repo: GitRepo }) {
     }
   };
 
-  /** Abort an in-progress merge (`git merge --abort`), restoring the
-   *  pre-merge working tree. The "undo" escape hatch in the conflict dialog —
-   *  a merge that turned out to be a bad idea should be one click to undo,
-   *  not a terminal command. */
-  const handleMergeAbort = async () => {
-    setAborting(true);
-    setError(null);
-    try {
-      const res = await api.git.mergeAbort({ repoPath: repo.path });
-      if (!res.ok) {
-        setError(res.error ?? t("ide.git.mergeAbortFailed"));
-        prependLog({ op: "mergeAbort", status: "failure", message: res.error });
-      } else {
-        prependLog({ op: "mergeAbort", status: "success" });
-        setConflictFiles(null);
-        await refresh();
-      }
-    } catch (err) {
-      const msg = (err as Error).message ?? t("ide.git.mergeAbortFailed");
-      setError(msg);
-      prependLog({ op: "mergeAbort", status: "failure", message: msg });
-    } finally {
-      setAborting(false);
-    }
-  };
-
   /** Filtered branch groups for the search box (matches name or commit subject). */
   const filteredBranches = useMemo(() => {
     if (!branches) return null;
@@ -351,6 +322,19 @@ export function GitRepoCard({ repo }: { repo: GitRepo }) {
   );
   const hasStaged = staged.length > 0;
   const hasUnstaged = unstaged.length > 0;
+
+  // Persistent merge-conflict probe: porcelain "UU" entries surface as
+  // "unmerged" codes in status.files. Non-empty means the repo is mid-merge
+  // with unresolved conflicts — possibly long after the transient dialog that
+  // announced them was dismissed (or after an app restart). The banner below
+  // keeps an AI-resolution entry available for as long as the state lasts.
+  const conflictedPaths = useMemo(
+    () =>
+      status?.files
+        .filter((f) => f.index === "unmerged" || f.workingTree === "unmerged")
+        .map((f) => f.path) ?? [],
+    [status],
+  );
 
   /* ── operations ── */
 
@@ -534,50 +518,6 @@ export function GitRepoCard({ repo }: { repo: GitRepo }) {
       prependLog({ op: "pull", status: "failure", message: msg });
     } finally {
       setBusy(null);
-    }
-  };
-
-  // Resolve the current merge conflicts via AI. Reads the conflict-resolution
-  // model from settings, asks the backend to resolve every conflicted file,
-  // then (on success) clears the dialog and pre-fills a merge commit message
-  // for the user to review and submit manually.
-  const handleResolveConflicts = async () => {
-    if (!conflictFiles) return;
-    // conflictResolveModel is stored as "configId:roleKey" — split it back,
-    // mirroring CommitBox's commitGenModel handling.
-    let customModelId: string | null = null;
-    let customModelRole: string | null = null;
-    if (conflictResolveModel) {
-      const colonIdx = conflictResolveModel.lastIndexOf(":");
-      if (colonIdx > 0) {
-        customModelId = conflictResolveModel.slice(0, colonIdx);
-        customModelRole = conflictResolveModel.slice(colonIdx + 1);
-      } else {
-        customModelId = conflictResolveModel;
-      }
-    }
-    setResolving(true);
-    try {
-      const res = await api.git.resolveConflicts({
-        repoPath: repo.path,
-        customModelId,
-        customModelRole,
-      });
-      if (res.ok) {
-        setConflictFiles(null);
-        const resolvedCount = res.resolvedFiles?.length ?? 0;
-        // Pre-fill a merge commit message so the user can finish the merge.
-        // The repo is now staged for the merge commit (files added by AI).
-        setCommitMsg(`Merge: conflicts auto-resolved by AI${resolvedCount ? ` (${resolvedCount} files)` : ""}`);
-        setError(null);
-        await refresh();
-      } else {
-        setError(res.error ?? t("ide.git.resolveFailed"));
-      }
-    } catch {
-      setError(t("ide.git.resolveFailed"));
-    } finally {
-      setResolving(false);
     }
   };
 
@@ -779,6 +719,32 @@ export function GitRepoCard({ repo }: { repo: GitRepo }) {
         </div>
       )}
 
+      {/* ── Merge-in-progress banner ──
+          Persistent trigger for the AI-resolution window: shown whenever the
+          repo holds unresolved conflicts and the transient dialog is closed
+          (dismissed via "handle later", app restart, conflict caused
+          externally). One click re-opens the shared dialog. */}
+      {!collapsed && conflictFiles === null && conflictedPaths.length > 0 && (
+        <div className="flex items-center gap-1.5 border-b border-warning/30 bg-warning/10 px-2.5 py-1.5 [font-size:var(--right-panel-font-size)] text-warning">
+          <IconAlertTriangle size={12} className="shrink-0" />
+          <span className="min-w-0 flex-1 break-words">
+            {t("ide.git.mergeStateBanner", { n: conflictedPaths.length })}
+          </span>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => {
+              setConflictSource("state");
+              setConflictBranch(null);
+              setConflictFiles(conflictedPaths);
+            }}
+          >
+            <IconSparkles size={12} />
+            {t("ide.git.resolveWithAi")}
+          </Button>
+        </div>
+      )}
+
       {/* ── Body ── */}
       {!collapsed && (
         <div className="p-2">
@@ -879,74 +845,36 @@ export function GitRepoCard({ repo }: { repo: GitRepo }) {
         </Dialog.Portal>
       </Dialog.Root>
 
-      {/* ── Merge-conflict: AI resolution dialog ── */}
-      <Dialog.Root open={conflictFiles !== null} onOpenChange={(open) => { if (!open && !resolving) setConflictFiles(null); }}>
-        <Dialog.Portal>
-          <Dialog.Backdrop />
-          <Dialog.Popup className="w-[400px] max-w-[90vw] p-4">
-            <div className="flex items-start gap-3 pr-6">
-              <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-warning/10 text-warning">
-                <IconAlertTriangle size={16} />
-              </span>
-              <div className="min-w-0 flex-1">
-                <Dialog.Title>{t("ide.git.conflictTitle")}</Dialog.Title>
-                <Dialog.Description className="mt-1">
-                  {conflictSource === "merge" && conflictBranch
-                    ? t("ide.git.conflictDescMerge", {
-                        source: conflictBranch,
-                        n: conflictFiles?.length ?? 0,
-                      })
-                    : t("ide.git.conflictDesc", { n: conflictFiles?.length ?? 0 })}
-                </Dialog.Description>
-                {conflictFiles && conflictFiles.length > 0 && (
-                  <div className="mt-2 max-h-28 overflow-y-auto rounded-md border border-edge bg-surface-muted px-2 py-1.5">
-                    <ul className="space-y-0.5">
-                      {conflictFiles.slice(0, 20).map((f) => (
-                        <li key={f} className="truncate font-mono text-[11px] text-content-muted" title={f}>
-                          {f}
-                        </li>
-                      ))}
-                      {conflictFiles.length > 20 && (
-                        <li className="text-[11px] text-content-subtle">{t("ide.git.conflictMore", { n: conflictFiles.length - 20 })}</li>
-                      )}
-                    </ul>
-                  </div>
-                )}
-                {/* No default model for AI resolution — surface the missing
-                    config instead of letting the call fail after the fact. */}
-                {!conflictResolveModel && (
-                  <p className="mt-2 text-[11px] text-warning">
-                    {t("ide.git.resolveNoModel")}
-                  </p>
-                )}
-              </div>
-            </div>
-            <div className="mt-4 flex items-center justify-between gap-2">
-              {/* Escape hatch: unwind the whole merge back to the pre-merge
-                  state (git merge --abort). One click, no terminal needed. */}
-              <Button
-                variant="danger"
-                size="sm"
-                onClick={handleMergeAbort}
-                disabled={resolving || aborting}
-              >
-                {aborting ? <IconLoader2 size={12} className="animate-spin" /> : <IconX size={12} />}
-                {t("ide.git.mergeAbort")}
-              </Button>
-              <div className="flex justify-end gap-2">
-                <Button variant="ghost" size="sm" onClick={() => setConflictFiles(null)} disabled={resolving}>
-                  {t("ide.git.resolveLater")}
-                </Button>
-                <Button size="sm" onClick={handleResolveConflicts} disabled={resolving || !conflictResolveModel}>
-                  {resolving ? <IconLoader2 size={12} className="animate-spin" /> : <IconSparkles size={12} />}
-                  {t("ide.git.resolveWithAi")}
-                </Button>
-              </div>
-            </div>
-            <Dialog.Close />
-          </Dialog.Popup>
-        </Dialog.Portal>
-      </Dialog.Root>
+      {/* ── Merge-conflict: AI resolution dialog (shared with the worktree
+          merge-back dialog) ── */}
+      <MergeConflictResolveDialog
+        open={conflictFiles !== null}
+        onOpenChange={(o) => {
+          if (!o) setConflictFiles(null);
+        }}
+        repoPath={repo.path}
+        conflictedFiles={conflictFiles ?? []}
+        source={conflictSource}
+        branch={conflictBranch}
+        onResolved={(n) => {
+          setConflictFiles(null);
+          // Pre-fill a merge commit message so the user can finish the merge.
+          // The repo is now staged for the merge commit (files added by AI).
+          setCommitMsg(`Merge: conflicts auto-resolved by AI${n ? ` (${n} files)` : ""}`);
+          setError(null);
+          void refresh();
+        }}
+        onAborted={() => {
+          prependLog({ op: "mergeAbort", status: "success" });
+          setConflictFiles(null);
+          void refresh();
+        }}
+        onError={(msg) => setError(msg)}
+        onAbortError={(msg) => {
+          setError(msg);
+          prependLog({ op: "mergeAbort", status: "failure", message: msg });
+        }}
+      />
 
       {/* ── New branch dialog ──
           Creates a local branch from HEAD and switches to it. */}
@@ -1882,6 +1810,7 @@ function RowActionIcon({
 
 function StatusCodeIcon({ code }: { code: GitFileStatus["index"] }) {
   const label =
+    code === "unmerged" ? "U" :
     code === "modified" ? "M" :
     code === "added" ? "A" :
     code === "deleted" ? "D" :
@@ -1889,6 +1818,7 @@ function StatusCodeIcon({ code }: { code: GitFileStatus["index"] }) {
     code === "renamed" ? "R" :
     code === "copied" ? "C" : "·";
   const color =
+    code === "unmerged" ? "text-danger" :
     code === "added" || code === "untracked" ? "text-accent" :
     code === "modified" || code === "renamed" || code === "copied" ? "text-warning" :
     code === "deleted" ? "text-danger" : "text-content-subtle";

@@ -84,6 +84,7 @@ export {
   IconTerminal,
   IconFile,
   IconFileText,
+  IconPackage,
   IconFilePlus,
   IconFileSearch,
   IconFileImport,
@@ -182,6 +183,7 @@ export {
   IconMicrophone,
   IconMicrophoneFilled,
   IconMicrophoneOff,
+  IconWaveSine,
   IconCircleFilled,
   // Layout / window
   IconLayoutSidebarLeftExpand,

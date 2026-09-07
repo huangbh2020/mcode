@@ -531,6 +531,8 @@ const on: Api["on"] = {
   terminalData: () => () => {},
   terminalExit: () => () => {},
   lspEvent: () => () => {},
+  // Runtimes progress is desktop-only (the phone never installs runtimes).
+  runtimesEvent: () => () => {},
   browserEvent: () => () => {},
   themeChanged: () => () => {},
   updateAvailable: () => () => {},

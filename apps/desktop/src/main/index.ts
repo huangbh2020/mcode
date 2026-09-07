@@ -17,6 +17,8 @@ import { notificationManager } from "@main/notifications/NotificationManager.js"
 import { is } from "@main/utils.js";
 import { logStartup } from "@main/lib/startupTimer.js";
 import { log } from "@main/lib/logger.js";
+import { setManagedRuntimeRoot } from "@main/runtimes/managedRuntimeRoots.js";
+import { join } from "node:path";
 
 // App identity for OS-level surfaces (desktop notifications, taskbar grouping,
 // Windows AUMID). setName("Mcode") makes the system notification card title
@@ -33,6 +35,10 @@ import { log } from "@main/lib/logger.js";
 const prevUserData = app.getPath("userData");
 app.setName("Mcode");
 app.setPath("userData", prevUserData);
+// Managed agent runtimes (claude/codex/pi download-on-demand) live under
+// userData/runtimes. Register the root early so the binary/library resolvers
+// can find installed runtimes from the very first turn.
+setManagedRuntimeRoot(join(app.getPath("userData"), "runtimes"));
 // Windows: AppUserModelId drives taskbar grouping + the AUMID the toast center
 // uses to attribute notifications. Harmless on macOS/Linux (ignored).
 if (process.platform === "win32") {

@@ -7,8 +7,8 @@
  *    active selection). Download streams from HuggingFace in the main process
  *    with live progress on `voice:downloadProgress`; a completed download is
  *    activated via `voice.selectModel` (first download auto-selects).
- *  - 麦克风 (SettingsSection): default capture mode (continuous / hold-to-talk)
- *    + recognition language, persisted through the session store.
+ *  - 麦克风 (SettingsSection): recognition language, persisted through the
+ *    session store.
  *
  * The composer mic button deep-links here (`setSettingsOpen(true, "voice")`)
  * when recognition fails because no model is selected.
@@ -23,7 +23,6 @@ import { SettingRow } from "./SettingRow.js";
 import { PanelHeader } from "./PanelHeader.js";
 import { SettingsSection } from "./SettingsSection.js";
 import type {
-  VoiceInputMode,
   VoiceModelInfo,
   VoiceDownloadProgressPayload,
 } from "@contracts/ipc";
@@ -55,8 +54,6 @@ export function VoicePanel() {
   const { t } = useI18n();
 
   // ── Mic capture preferences (moved here from GeneralPanel) ──
-  const voiceInputMode = useSessionStore((s) => s.voiceInputMode);
-  const setVoiceInputMode = useSessionStore((s) => s.setVoiceInputMode);
   const voiceLang = useSessionStore((s) => s.voiceLang);
   const setVoiceLang = useSessionStore((s) => s.setVoiceLang);
 
@@ -265,45 +262,6 @@ export function VoicePanel() {
 
       {/* ── 麦克风 ── */}
       <SettingsSection title={t("settings.voice.sectionMic")}>
-        <SettingRow
-          title={t("settings.voice.mode")}
-          desc={t("settings.voice.modeDesc")}
-          htmlFor="setting-voice-mode"
-        >
-          <Select.Root
-            value={voiceInputMode}
-            onValueChange={(v) => void setVoiceInputMode(v as VoiceInputMode)}
-          >
-            <Select.Trigger id="setting-voice-mode" className="w-full">
-              <Select.Value>
-                {(val: VoiceInputMode) =>
-                  val === "pushToTalk"
-                    ? t("settings.voice.modePush")
-                    : t("settings.voice.modeContinuous")
-                }
-              </Select.Value>
-            </Select.Trigger>
-            <Select.Portal>
-              <Select.Positioner>
-                <Select.Popup>
-                  <Select.List>
-                    <Select.Item value="continuous">
-                      <Select.ItemText>
-                        {t("settings.voice.modeContinuous")}
-                      </Select.ItemText>
-                    </Select.Item>
-                    <Select.Item value="pushToTalk">
-                      <Select.ItemText>
-                        {t("settings.voice.modePush")}
-                      </Select.ItemText>
-                    </Select.Item>
-                  </Select.List>
-                </Select.Popup>
-              </Select.Positioner>
-            </Select.Portal>
-          </Select.Root>
-        </SettingRow>
-
         <SettingRow
           title={t("settings.voice.lang")}
           desc={t("settings.voice.langDesc")}

@@ -217,10 +217,7 @@ const STATIC_COMMANDS: StaticCommandDef[] = [
     icon: IconMicrophone,
     defaultAccelerator: DEFAULT_SHORTCUTS["voice.dictation"],
     available: (s) => s.activeSessionId !== null,
-    // Press to start, press again to stop. The chord ADAPTS to the mic mode:
-    // in push-to-talk the global keyup listener (useGlobalShortcuts) also
-    // stops on release, so holding the chord = holding the talk button; in
-    // continuous mode keyup does nothing and only the toggle applies.
+    // Press to start, press again to stop — mirrors the mic button's click.
     perform: (s) => {
       const sid = s.activeSessionId;
       if (!sid) return;

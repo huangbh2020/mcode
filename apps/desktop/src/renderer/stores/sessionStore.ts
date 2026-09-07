@@ -38,7 +38,6 @@ import {
   UI_USER_MSG_COLOR_SETTING_KEY,
   UI_ACCENT_COLOR_SETTING_KEY,
   UI_RIGHT_PANEL_TAB_SETTING_KEY,
-  UI_VOICE_INPUT_MODE_SETTING_KEY,
   UI_VOICE_LANG_SETTING_KEY,
   UI_VOICE_ENGINE_SETTING_KEY,
   UI_VOICE_MIC_PERMISSION_SETTING_KEY,
@@ -79,7 +78,6 @@ import {
   type DisplayMode,
   type LeftBarMode,
   type Locale,
-  type VoiceInputMode,
   type VoiceEngine,
   type GestureSettings,
   type GestureSequence,
@@ -99,6 +97,9 @@ import {
   type Accelerator,
   type LspLanguageState,
   type LspStateChangedPayload,
+  type RuntimeAgentId,
+  type RuntimeAgentState,
+  type RuntimeProgressPayload,
   type PickedElement,
   type BrowserDevicePreset,
   type BrowserOrientation,
@@ -711,11 +712,6 @@ export interface SessionState {
    *  `shouldPromoteToTag` in contentTag.ts via the composer's
    *  shouldPromotePaste prop. */
   pasteTagThresholdChars: number;
-  /** Default voice-input mode: "continuous" (click to start/stop dictation)
-   *  or "pushToTalk" (hold the mic to talk, release to stop). Persisted in
-   *  the `settings` table; the composer mic button reads it as its default
-   *  and can flip it per-use. */
-  voiceInputMode: VoiceInputMode;
   /** Default speech-recognition language tag (e.g. "zh-CN" | "en-US"). */
   voiceLang: string;
   /** Preferred ASR engine ("zipformer" streaming | "parakeet" offline). Falls
@@ -1291,6 +1287,11 @@ export interface SessionState {
    *  startup from the main process). */
   lspLanguages: LspLanguageState[];
 
+  /** Agent runtime states (claude/codex/pi download-on-demand), hydrated
+   *  lazily when the settings panel mounts. Empty until first load. Not
+   *  persisted. Install progress merges in from `runtimes:event` pushes. */
+  runtimes: RuntimeAgentState[];
+
   /** Language-server lifecycle phase per `${workspacePath}::${language}`,
    *  driven by `lsp:event` stateChanged pushes (see LspStateChangedPayload).
    *  The editor toolbar reads it to show a loading pill while a server starts
@@ -1612,9 +1613,6 @@ export interface SessionState {
   /** Update the paste-to-card threshold (clamped to 50–5000 chars). Persists
    *  to the `settings` table. */
   setPasteTagThresholdChars: (n: number) => Promise<void>;
-  /** Set the default voice-input mode (continuous | pushToTalk). Persists to
-   *  the `settings` table. */
-  setVoiceInputMode: (mode: VoiceInputMode) => Promise<void>;
   /** Re-check whether a voice model is selected AND downloaded
    *  (`voice.modelList` rescans disk) and update `voiceModelReady`. */
   refreshVoiceModelStatus: () => Promise<void>;
@@ -1698,6 +1696,13 @@ export interface SessionState {
    *  No-op when java is disabled / no active project / on web. Main-side
    *  ensureServer is idempotent, so repeated calls are cheap. */
   prewarmJavaLspForActiveProject: () => void;
+  /** Re-fetch the agent runtime states (claude/codex/pi) from main. Called
+   *  when the settings panel mounts and after install/remove finishes. */
+  reloadRuntimes: () => Promise<void>;
+  /** Merge one `runtimes:event` progress payload into `runtimes` (in-flight
+   *  progress / done / error) without a full re-list. No-op when the panel
+   *  hasn't loaded yet. */
+  applyRuntimeProgress: (payload: RuntimeProgressPayload) => void;
   /** Re-fetch the skill list for the active project from main (scans
    *  ~/.claude/skills + the project's .claude/skills). Safe to call anytime;
    *  no-op silently when there is no active project. */
@@ -4147,8 +4152,8 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   // Persisted in `settings` table; init() overwrites from the DB. Default
   // 200 mirrors the previous hardcoded TAG_THRESHOLD_CHARS in contentTag.ts.
   pasteTagThresholdChars: 200,
-  // Default voice input: continuous dictation, Chinese, streaming zipformer.
-  voiceInputMode: "continuous" as const,
+  // Default voice input: Chinese, streaming zipformer. Dictation itself is
+  // click-to-toggle — there is no capture mode to persist.
   voiceLang: "zh-CN",
   voiceEngine: "zipformer" as const,
   voiceMicPermission: "",
@@ -4286,6 +4291,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   navBackByProject: {},
   navForwardByProject: {},
   lspLanguages: [] as LspLanguageState[],
+  runtimes: [] as RuntimeAgentState[],
   lspPhasesByWorkspace: {} as Record<string, { phase: "starting" | "running" | "stopped" | "importing"; error?: string; detail?: string }>,
 
   /** True once `init()` has started, to guard against React StrictMode's
@@ -4688,6 +4694,10 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     // settings panel on mobile), so skip it to avoid a spurious load error.
     if (isElectron) {
       void get().reloadLspLanguages();
+      // Agent runtime availability (claude/codex/pi) — the composer's provider
+      // dropdown greys out providers whose runtime isn't usable, so it needs
+      // this at startup, not only when the settings panel mounts.
+      void get().reloadRuntimes();
       // Track the language-server lifecycle per (workspace, language) so the
       // editor toolbar can show a loading indicator while a server starts
       // (Java's jdtls can take minutes to import a project) and a failure
@@ -4739,7 +4749,6 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           AGENT_OUTPUT_STYLE_SETTING_KEY,
           UI_GIT_COLLAPSED_REPOS_SETTING_KEY,
           UI_PASTE_TAG_THRESHOLD_CHARS_SETTING_KEY,
-          UI_VOICE_INPUT_MODE_SETTING_KEY,
           UI_VOICE_LANG_SETTING_KEY,
           UI_VOICE_ENGINE_SETTING_KEY,
           UI_VOICE_MIC_PERMISSION_SETTING_KEY,
@@ -4777,10 +4786,6 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       }
       // Voice-input prefs. Validate against the schemas so a corrupt row can't
       // crash the store; keep defaults otherwise.
-      const voiceModeRaw = ds[UI_VOICE_INPUT_MODE_SETTING_KEY];
-      if (voiceModeRaw === "continuous" || voiceModeRaw === "pushToTalk") {
-        set({ voiceInputMode: voiceModeRaw });
-      }
       const voiceLangRaw = ds[UI_VOICE_LANG_SETTING_KEY];
       if (voiceLangRaw && voiceLangRaw.length <= 20) set({ voiceLang: voiceLangRaw });
       const voiceEngineRaw = ds[UI_VOICE_ENGINE_SETTING_KEY];
@@ -8162,15 +8167,6 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     }
   },
 
-  setVoiceInputMode: async (mode) => {
-    set({ voiceInputMode: mode });
-    try {
-      await api.setting.set({ key: UI_VOICE_INPUT_MODE_SETTING_KEY, value: mode });
-    } catch (err) {
-      console.error("setting.set(voiceInputMode) failed:", err);
-    }
-  },
-
   setVoiceLang: async (lang) => {
     set({ voiceLang: lang });
     try {
@@ -8734,6 +8730,34 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     } catch (err) {
       console.error("reloadLspLanguages failed:", err);
     }
+  },
+
+  reloadRuntimes: async () => {
+    if (!isElectron) return;
+    try {
+      const { runtimes } = await api.runtimes.list();
+      set({ runtimes });
+    } catch (err) {
+      console.error("reloadRuntimes failed:", err);
+    }
+  },
+
+  applyRuntimeProgress: (payload) => {
+    const { runtimes } = get();
+    if (runtimes.length === 0) return;
+    const next = runtimes.map((rt) => {
+      if (rt.agent !== payload.agent) return rt;
+      if (payload.phase === "error") {
+        return { ...rt, installing: false, lastError: payload.error ?? "" };
+      }
+      if (payload.phase === "done") {
+        // Full truth (installed version / disk bytes) arrives via the
+        // re-list the caller fires after the RPC resolves; mark it healthy.
+        return { ...rt, installing: false, lastError: "" };
+      }
+      return { ...rt, installing: true, lastError: "" };
+    });
+    set({ runtimes: next });
   },
 
   prewarmJavaLspForActiveProject: () => {

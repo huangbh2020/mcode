@@ -189,6 +189,9 @@ export const en = {
     "The pull left {n} conflicted files. AI can read the conflict markers and resolve them automatically; resolved files are written back and staged, keeping the merge state for you to review and commit manually.",
   "ide.git.conflictDescMerge":
     "Merging {source} left {n} conflicted files. AI can read the conflict markers and resolve them automatically; resolved files are written back and staged, keeping the merge state for you to review and commit manually. You can also abort the merge and return to the pre-merge state.",
+  "ide.git.conflictDescState":
+    "{n} file(s) with unresolved conflicts detected — the previous merge never finished. AI can read the conflict markers and resolve them automatically; resolved files are written back and staged, keeping the merge state for you to review and commit manually. You can also abort the merge and return to the pre-merge state.",
+  "ide.git.mergeStateBanner": "Merge in progress — {n} file(s) with unresolved conflicts",
   "ide.git.conflictMore": "…{n} more",
   "ide.git.resolveLater": "Handle manually later",
   "ide.git.resolveWithAi": "Resolve with AI",
