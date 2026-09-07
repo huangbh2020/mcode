@@ -435,6 +435,12 @@ function buildComponents(): Components {
   blockquote({ children }) {
     return <blockquote className="my-[var(--chat-md-gap-md)] border-l-2 border-edge pl-3 text-content-muted">{children}</blockquote>;
   },
+  hr() {
+    // Model-emitted "---". Without an override the browser default renders
+    // (border: 1px inset + 0.5em margins) — a faint double line with
+    // unpredictable spacing that reads as an unexplained gap on dark surfaces.
+    return <hr className="my-[var(--chat-md-gap-md)] border-0 border-t border-edge" />;
+  },
   // Bold is full --content: in paragraphs that matches the body color (weight
   // alone marks emphasis); in muted contexts (lists / tables / blockquotes) the
   // extra brightness keeps emphasized words legible. Dark chat lists soften
@@ -511,9 +517,17 @@ export const Markdown = memo(function Markdown({
   // --chat-md-leading, see the chat-density section in styles.css) so the
   // 对话紧凑度 setting shapes the reply body itself, not just the gaps
   // between message rows.
+  //
+  // Flush edges: the first/last CHILD's own margin is zeroed so this block's
+  // boundary sits flush with whatever container gap surrounds it. Without
+  // this, a first/last <p> (or list/code block) margin collapses OUT of this
+  // div — it has no padding/border/BFC — and max()-collapses with the
+  // container's row/block gap, so identical seams render at different heights
+  // depending on where the block boundary falls. Internal paragraph margins
+  // are untouched; the container alone controls the outer rhythm.
   return (
     <div
-      className="chat-md break-words text-content [font-size:var(--chat-font-size)] [line-height:var(--chat-md-leading)] [font-weight:var(--chat-font-weight)] [&>p]:my-[var(--chat-md-gap-sm)] [&:first-child]:mt-0 [&:last-child]:mb-0"
+      className="chat-md break-words text-content [font-size:var(--chat-font-size)] [line-height:var(--chat-md-leading)] [font-weight:var(--chat-font-weight)] [&>p]:my-[var(--chat-md-gap-sm)] [&>:first-child]:mt-0 [&>:last-child]:mb-0"
     >
       <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={rehypePlugins} components={components}>
         {children}

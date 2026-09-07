@@ -165,6 +165,20 @@ async function materializeConfigToml(cwd?: string): Promise<void> {
     lines.push(`base_url = ${tomlStr(p.baseUrl)}`);
     lines.push(`env_key = ${tomlStr(codexKeyEnvVar(p.id))}`);
     lines.push(`wire_api = "responses"`);
+    // Unlock codex's standalone imagegen tool (`image_gen.imagegen`) for
+    // third-party providers. codex gates that tool behind
+    // `is_openai() || uses_openai_actor_authorization() || (requires_openai_auth && codex-backend auth)`
+    // (core/tools/spec_plan.rs `image_generation_available` + the extension's
+    // own install gate); without it the model's tool list has no image tool
+    // and it answers "no built-in image generation tool available". A nonempty
+    // `x-openai-actor-authorization` header satisfies the gate with zero auth
+    // impact (env_key bearer still wins in `resolve_provider_auth`), while
+    // `requires_openai_auth = true` does NOT unlock the tool when auth comes
+    // from env_key (verified against the real binary, 0.153.4). The header is
+    // an unknown no-op for OpenAI-compatible gateways; codex's standalone web
+    // search stays gated off because third-party models fall back to metadata
+    // with supports_search_tool=false.
+    lines.push(`http_headers = { x-openai-actor-authorization = "mcode" }`);
     lines.push("");
   }
 

@@ -280,6 +280,14 @@ type RenderItem =
       msg: ChatMessage;
       isStreamingTail: boolean;
       isTurnTail: boolean;
+      /** Live-turn flat row that is NOT the turn's first visible row. Renders
+       *  with the block-gap top margin instead of the full assistant row gap:
+       *  a mid-turn seam (tool card → next narration) then measures the same
+       *  as the intra-row text→card gap (card pb + row mt == block gap +
+       *  card pt) instead of jumping up a tier every other row. The turn's
+       *  opener keeps the full row gap so turn-to-turn separation is
+       *  unchanged. */
+      tightTop?: boolean;
     }
   | {
       kind: "turnGroup";
@@ -457,13 +465,16 @@ function groupMessagesForRender(
         else byMsg.set(msg, [block]);
       }
       const streamingTailId = lastMsg?.id;
+      let liveRowIdx = 0;
       for (const [msg, blocks] of byMsg) {
         items.push({
           kind: "single",
           msg: { ...msg, blocks },
           isStreamingTail: msg.id === streamingTailId,
           isTurnTail: false,
+          tightTop: liveRowIdx > 0,
         });
+        liveRowIdx++;
       }
       turnBlocks = [];
       turnMeta = undefined;
@@ -2532,6 +2543,7 @@ function ChatPaneForSession({
                 msg={m}
                 isStreamingTail={item.isStreamingTail}
                 isTurnTail={item.isTurnTail}
+                tightTop={item.tightTop}
                 beforeMap={beforeMap}
                 canEdit={isUser && !sessionBusy && m.id === lastUserMessageId}
                 isEditing={editingMessageId === m.id}
@@ -3395,6 +3407,7 @@ const MessageRow = memo(function MessageRow({
   onCancelEdit,
   onOpenPlan,
   hideTurnStat,
+  tightTop,
   projectPath,
 }: {
   msg: ChatMessage;
@@ -3419,6 +3432,11 @@ const MessageRow = memo(function MessageRow({
    *  message still shows its own stat row. Defaults to false (standalone
    *  single items keep their own). */
   hideTurnStat?: boolean;
+  /** Tighten the row's top margin to the block-gap tier. Set on live-turn
+   *  flat rows after the turn's first: the seam between a tool card and the
+   *  next narration message then equals the intra-row text→card gap instead
+   *  of reading one tier larger every other row. */
+  tightTop?: boolean;
   /** Project root for resolving file paths mentioned in the message text /
    *  shown on tool cards. Session-scoped so backgrounded tabs resolve to
    *  their own project. */
@@ -3496,7 +3514,9 @@ const MessageRow = memo(function MessageRow({
         // mode. mt-[...] preserves the old margin-top semantics.
         isUser
           ? "mt-[var(--chat-row-gap-user)] flex justify-end"
-          : "mt-[var(--chat-row-gap-assistant)]",
+          : tightTop
+            ? "mt-[var(--chat-block-gap)]"
+            : "mt-[var(--chat-row-gap-assistant)]",
       )}
     >
       <div className={isUser ? "max-w-[85%] min-w-0" : "w-full min-w-0"}>
