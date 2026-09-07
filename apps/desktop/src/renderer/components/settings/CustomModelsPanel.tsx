@@ -1058,17 +1058,17 @@ function CodexProviderForm({
         />
       </Field>
 
-      <label className="flex items-start gap-2" title={t("settings.customModels.imageGenHint")}>
+      <div className="flex items-start justify-between gap-3 rounded border border-edge bg-surface/40 p-2.5">
+        <span className="flex flex-col gap-0.5">
+          <span className="text-[0.7857em] font-medium text-content">{t("settings.customModels.imageGen")}</span>
+          <span className="text-[0.7143em] leading-relaxed text-content-subtle">{t("settings.customModels.imageGenHint")}</span>
+        </span>
         <Switch
           checked={form.imageGeneration}
           onCheckedChange={(v) => update("imageGeneration", v)}
           label={t("settings.customModels.imageGen")}
         />
-        <span className="flex flex-col gap-0.5">
-          <span className="text-[0.7857em] text-content">{t("settings.customModels.imageGen")}</span>
-          <span className="text-[0.7143em] text-content-subtle">{t("settings.customModels.imageGenHint")}</span>
-        </span>
-      </label>
+      </div>
 
       {/* Models sub-table */}
       <div>
