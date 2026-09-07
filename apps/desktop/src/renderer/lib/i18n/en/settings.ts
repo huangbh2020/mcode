@@ -307,6 +307,8 @@ export const en = {
   "settings.customModels.maxTokensPlaceholder": "Max output",
   "settings.customModels.maxTokensTitle": "Max output tokens",
   "settings.customModels.enable1m": "Enable 1M context (off = 200k)",
+  "settings.customModels.imageGen": "Image generation",
+  "settings.customModels.imageGenHint": "Unlock codex's image generation tool for this provider. Requires a gateway that backs the OpenAI images API (/v1/images/generations, model gpt-image-2); generated images render inline in the chat",
   "settings.customModels.expandModel": "Expand thinking levels / reasoning / display name",
   "settings.customModels.deleteModel": "Delete model",
   "settings.customModels.reasoningLabel": "Supports reasoning",

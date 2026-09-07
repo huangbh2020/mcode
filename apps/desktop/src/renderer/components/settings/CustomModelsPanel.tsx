@@ -403,6 +403,10 @@ interface CodexFormState {
   name: string;
   baseUrl: string;
   apiKey: string;
+  /** Opt-in unlock for codex's imagegen tool (actor-header injection into
+   *  the provider's config.toml table). Requires a gateway backing the
+   *  OpenAI images API (gpt-image-2). */
+  imageGeneration: boolean;
   models: CodexModelFormState[];
 }
 
@@ -411,6 +415,7 @@ const emptyCodexForm = (): CodexFormState => ({
   name: "",
   baseUrl: "",
   apiKey: "",
+  imageGeneration: false,
   models: [{ id: "", context1m: false }],
 });
 
@@ -419,6 +424,7 @@ const codexFormFromConfig = (cfg: CodexProviderPublic): CodexFormState => ({
   name: cfg.name,
   baseUrl: cfg.baseUrl,
   apiKey: "",
+  imageGeneration: Boolean(cfg.imageGeneration),
   models: cfg.models.map((m) => ({ id: m.id, context1m: m.contextWindow === 1_000_000 })),
 });
 
@@ -761,6 +767,7 @@ export function CustomModelsPanel() {
         id: codexForm.id.trim(),
         name: codexForm.name.trim(),
         baseUrl: codexForm.baseUrl.trim(),
+        ...(codexForm.imageGeneration ? { imageGeneration: true } : {}),
         models: valid.map((m) => ({
           id: m.id.trim(),
           ...(m.context1m ? { contextWindow: 1_000_000 } : {}),
@@ -1050,6 +1057,18 @@ function CodexProviderForm({
           onReveal={revealToken}
         />
       </Field>
+
+      <label className="flex items-start gap-2" title={t("settings.customModels.imageGenHint")}>
+        <Switch
+          checked={form.imageGeneration}
+          onCheckedChange={(v) => update("imageGeneration", v)}
+          label={t("settings.customModels.imageGen")}
+        />
+        <span className="flex flex-col gap-0.5">
+          <span className="text-[0.7857em] text-content">{t("settings.customModels.imageGen")}</span>
+          <span className="text-[0.7143em] text-content-subtle">{t("settings.customModels.imageGenHint")}</span>
+        </span>
+      </label>
 
       {/* Models sub-table */}
       <div>

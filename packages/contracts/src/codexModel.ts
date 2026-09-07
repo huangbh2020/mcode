@@ -40,6 +40,14 @@ export interface CodexProviderConfig {
   baseUrl: string;
   /** Models offered by this provider (>= 1 required). */
   models: CodexModelOption[];
+  /** Opt-in unlock for codex's standalone image generation tool
+   *  (`image_gen.imagegen`). When true, the provider's config.toml table
+   *  gets a nonempty `x-openai-actor-authorization` http_header — codex
+   *  registers imagegen only for `is_openai()` / actor-header / openai-auth
+   *  providers. The gateway must back `/v1/images/generations` with the
+   *  fixed `gpt-image-2` model (codex hardcodes it in the images request).
+   *  Absent/false → no image tool in the model's tool list. */
+  imageGeneration?: boolean;
 }
 
 /** Renderer-facing view of a provider (apiKey never sent — only a presence

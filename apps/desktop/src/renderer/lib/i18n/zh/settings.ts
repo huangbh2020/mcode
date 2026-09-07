@@ -310,6 +310,8 @@ export const zh = {
   "settings.customModels.maxTokensPlaceholder": "最大输出",
   "settings.customModels.maxTokensTitle": "最大输出 token",
   "settings.customModels.enable1m": "启用 1M 上下文(关闭=200k)",
+  "settings.customModels.imageGen": "支持生图",
+  "settings.customModels.imageGenHint": "为该网关解锁 codex 的图像生成工具。需网关支持 OpenAI images API(/v1/images/generations,模型 gpt-image-2);生成的图片会内联渲染在聊天中",
   "settings.customModels.expandModel": "展开思考级别 / 推理 / 显示名",
   "settings.customModels.deleteModel": "删除模型",
   "settings.customModels.reasoningLabel": "支持推理",

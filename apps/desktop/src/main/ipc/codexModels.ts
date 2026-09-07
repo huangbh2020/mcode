@@ -30,7 +30,12 @@ export function registerCodexModelsHandlers(ipcMain: IpcMain): void {
     const input = SaveCodexProviderSchema.parse(raw);
     const providers = await CodexModelsStore.saveProvider(
       input.id,
-      { name: input.name, baseUrl: input.baseUrl, models: input.models },
+      {
+        name: input.name,
+        baseUrl: input.baseUrl,
+        models: input.models,
+        ...(input.imageGeneration ? { imageGeneration: true } : {}),
+      },
       input.apiKey,
     );
     return { providers };

@@ -1474,6 +1474,10 @@ export const SaveCodexProviderSchema = z.object({
       contextWindow: z.number().int().positive().optional(),
     }),
   ).min(1),
+  /** Opt-in: unlock codex's image generation tool by injecting the
+   *  `x-openai-actor-authorization` http_header into the provider's TOML
+   *  table (gateway must back /v1/images/generations with gpt-image-2). */
+  imageGeneration: z.boolean().optional(),
   apiKey: z.string().optional(),
 });
 export type SaveCodexProviderInput = z.infer<typeof SaveCodexProviderSchema>;
