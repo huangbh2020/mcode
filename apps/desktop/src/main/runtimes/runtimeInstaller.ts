@@ -19,13 +19,16 @@
  *      (Mcode's own preassembled meta-package — the pnpm-resolved pi
  *      dependency closure in a flat node_modules layout, packed by
  *      build/pack-pi-runtime.cjs; the version tracks the pinned
- *      @earendil-works/pi-coding-agent in package.json)
+ *      @earendil-works/pi-coding-agent in package.json). Until that package
+ *      is published, a registry miss falls back to assembling the SAME
+ *      closure locally with npm (assemblePiClosureWithNpm).
  *
  * Every install is atomic: download to a temp file (sha512-verified against
  * the registry's dist.integrity), extract into a staging dir, verify the
  * expected payload exists, then rename into place and prune older versions.
  * Progress is pushed to the renderer over `runtimes:event`.
  */
+import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   chmodSync,
@@ -80,6 +83,10 @@ const LATEST_TIMEOUT_MS = 6_000;
 const LATEST_TTL_MS = 10 * 60_000;
 const DISK_TTL_MS = 30_000;
 const PROGRESS_EMIT_INTERVAL_MS = 150;
+/** Safety cap for the local `npm install` pi assembly (140-package closure on
+ *  a slow mirror can take minutes; a hung npm must not wedge the panel's
+ *  installing state forever). */
+const PI_NPM_ASSEMBLE_TIMEOUT_MS = 10 * 60_000;
 
 /* ── expected versions (from this app's package.json) ── */
 
@@ -271,6 +278,61 @@ async function downloadVerifiedTarball(
 
 /* ── disk helpers ── */
 
+/** Assemble the pi dependency closure LOCALLY with npm — the fallback for
+ *  when `@mcode/runtime-pi` isn't on the registry yet (pre-publish window /
+ *  mirror lag). Identical recipe to build/pack-pi-runtime.cjs: a real npm
+ *  install hoists the closure into `<stagingDir>/node_modules` (npm verifies
+ *  each package's integrity itself; --ignore-scripts keeps it hermetic — no
+ *  postinstall of any transitive dep runs). Produces exactly the layout
+ *  `payloadEntryPath("pi", ...)` asserts. */
+async function assemblePiClosureWithNpm(stagingDir: string, version: string): Promise<void> {
+  writeFileSync(
+    join(stagingDir, "package.json"),
+    JSON.stringify({ name: "@mcode/runtime-pi", version, private: true }, null, 2) + "\n",
+  );
+  await new Promise<void>((resolve, reject) => {
+    // win32: npm is npm.cmd, and Node >= 18.20 refuses to spawn .cmd without
+    // a shell (CVE-2024-27980).
+    const child = spawn(
+      "npm",
+      [
+        "install",
+        `@earendil-works/pi-coding-agent@${version}`,
+        "--ignore-scripts",
+        "--omit=dev",
+        "--no-audit",
+        "--no-fund",
+        "--loglevel=error",
+        "--no-save",
+      ],
+      { cwd: stagingDir, shell: process.platform === "win32", stdio: ["ignore", "pipe", "pipe"] },
+    );
+    // Keep only the tail — npm error context lives at the end, and a garbled
+    // CN codepage flood shouldn't grow this without bound.
+    let output = "";
+    const append = (chunk: Buffer | string): void => {
+      output += chunk.toString();
+      if (output.length > 8_000) output = output.slice(-8_000);
+    };
+    const killTimer = setTimeout(() => child.kill(), PI_NPM_ASSEMBLE_TIMEOUT_MS);
+    child.stdout?.on("data", append);
+    child.stderr?.on("data", append);
+    child.on("error", (err) => {
+      clearTimeout(killTimer);
+      reject(new Error(`npm spawn failed: ${err.message}`));
+    });
+    child.on("close", (code) => {
+      clearTimeout(killTimer);
+      if (code === 0) {
+        resolve();
+        return;
+      }
+      const tail = output.trim().split("\n").slice(-4).join(" | ");
+      reject(new Error(`npm install exited ${code ?? "abnormally"}${tail ? `: ${tail}` : ""}`));
+    });
+  });
+}
+
 function dirSize(dir: string): number {
   let total = 0;
   const walk = (p: string): void => {
@@ -434,24 +496,44 @@ export async function installRuntime(agent: RuntimeAgentId): Promise<{ ok: boole
     const expected = loadExpectedVersions()[agent];
     const pkg = npmPackageFor(agent, expected);
     const meta = await fetchPackageMeta(pkg.name, pkg.version);
-    if (!meta) {
+    if (!meta && agent !== "pi") {
       throw new Error(
-        `registry has no ${pkg.name}@${pkg.version} — check the network/mirror, or the version hasn't been published yet ` +
-          `(pi: publish @mcode/runtime-pi, or pack locally with \`pnpm pack:pi-runtime\` and use install-from-file)`,
+        `registry has no ${pkg.name}@${pkg.version} — check the network/mirror, or the version hasn't been published yet`,
       );
     }
-    log.info(`runtime install: ${agent} downloading ${pkg.name}@${pkg.version}`);
-    const tmpTarball = await downloadVerifiedTarball(agent, meta);
-    try {
-      emitProgress(agent, "extracting", -1);
+    if (meta) {
+      log.info(`runtime install: ${agent} downloading ${pkg.name}@${pkg.version}`);
+      const tmpTarball = await downloadVerifiedTarball(agent, meta);
+      try {
+        emitProgress(agent, "extracting", -1);
+        const root = getManagedRuntimeRoot() ?? join(app.getPath("userData"), "runtimes");
+        stagingDir = join(root, agent, `.${expected}.staging-${Date.now()}`);
+        mkdirSync(stagingDir, { recursive: true });
+        const { extract } = await import("tar");
+        // npm tarballs root everything under package/ — strip that prefix.
+        await extract({ file: tmpTarball, cwd: stagingDir, strip: 1 });
+      } finally {
+        rmSync(tmpTarball, { force: true });
+      }
+    } else {
+      // pi registry miss (@mcode/runtime-pi not published / mirror lag yet):
+      // assemble the closure locally with npm instead of a prepacked tarball.
+      emitProgress(agent, "downloading", -1);
       const root = getManagedRuntimeRoot() ?? join(app.getPath("userData"), "runtimes");
       stagingDir = join(root, agent, `.${expected}.staging-${Date.now()}`);
       mkdirSync(stagingDir, { recursive: true });
-      const { extract } = await import("tar");
-      // npm tarballs root everything under package/ — strip that prefix.
-      await extract({ file: tmpTarball, cwd: stagingDir, strip: 1 });
-    } finally {
-      rmSync(tmpTarball, { force: true });
+      log.warn(
+        `runtime install: registry has no ${pkg.name}@${expected} — assembling pi closure locally with npm`,
+      );
+      try {
+        await assemblePiClosureWithNpm(stagingDir, expected);
+      } catch (err) {
+        const reason = err instanceof Error ? err.message : String(err);
+        throw new Error(
+          `registry has no ${pkg.name}@${pkg.version} and local npm assembly failed (${reason}) — ` +
+            `check the network/npm, or pack locally with \`pnpm pack:pi-runtime\` and use install-from-file`,
+        );
+      }
     }
 
     const { finalDir } = finalizeInstall(agent, stagingDir, expected, {
