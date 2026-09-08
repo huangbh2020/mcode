@@ -11,6 +11,9 @@ export const zh = {
   // ── MessageBlocks: batch tool group ──
   "chatStream.opCount": "{n} 个操作",
 
+  // ── RenderErrorBoundary: per-segment render-failure fallback ──
+  "chatStream.renderError": "此内容渲染出错，已跳过（其余内容不受影响）",
+
   // ── MessageBlocks: thinking / tool cards ──
   "chatStream.thinking": "思考",
   "chatStream.tool.input": "输入",

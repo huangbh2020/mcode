@@ -38,7 +38,21 @@ if (isMobileDevice) document.documentElement.dataset.shell = "mobile";
 
 const Root = isElectron ? App : AppMobile;
 
-createRoot(document.getElementById("root")!).render(
+createRoot(document.getElementById("root")!, {
+  // React 19's DEFAULT onUncaughtError logs only "An error occurred in the
+  // <X> component" — no error object, no stack — which left main.log with a
+  // single useless line after a tree-unmounting crash (the 2026-09-08 black
+  // screens). The renderer console is the only forensic sink (main/window.ts
+  // persists it as [renderer:ERROR]), so re-log the full error + component
+  // stack as one pre-formatted string (object args would lose the stack in
+  // Electron's console-message serialization).
+  onUncaughtError: (error, errorInfo) => {
+    const detail = error instanceof Error ? (error.stack ?? error.message) : String(error);
+    console.error(
+      `[react-uncaught] ${detail}${errorInfo.componentStack ? `\n${errorInfo.componentStack}` : ""}`,
+    );
+  },
+}).render(
   <StrictMode>
     <Suspense fallback={null}>
       <Root />
