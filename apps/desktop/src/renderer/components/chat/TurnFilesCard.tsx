@@ -263,7 +263,10 @@ function FileRow({ entry }: { entry: TurnFileEntry }) {
       }
     }
 
-    if (store.gitDiffOpenMode === "dialog") {
+    // Wide-panel (3:7) mode has NO center editor column — a center-mode open
+    // would write invisible store state. Route to the floating diff dialog
+    // there too, so the click always surfaces a visible side-by-side diff.
+    if (store.gitDiffOpenMode === "dialog" || store.widePanelOpen) {
       // Dialog open-mode: open (or refresh) a diff tab in the floating dialog.
       // `after` is omitted on purpose - DiffPane reads the live working-tree
       // file from disk, which is exactly the post-turn content we want to diff
@@ -280,7 +283,9 @@ function FileRow({ entry }: { entry: TurnFileEntry }) {
     }
 
     // Center open-mode: open in the editor column with a side-by-side diff.
-    store.setRightPanelTab("files");
+    // Deliberately no right-panel interaction (no files-tab switch, no panel
+    // yank-open, no tree reveal) — the diff lives in the center pane; the
+    // trailing locate button is the explicit opt-in for the tree.
     store.openFileInIde(entry.filePath, { diff: true, before: entry.before });
   };
 

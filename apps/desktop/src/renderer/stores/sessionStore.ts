@@ -1903,8 +1903,10 @@ export interface SessionState {
   /** Open a file in the Monaco editor (dedup + append to ideOpenFiles, set
    *  active). `opts.diff` opens it in diff mode (used by the 审查 button when
    *  a before-snapshot exists). `opts.line`/`opts.column` (1-based) request a
-   *  goto-definition reveal once the editor mounts. Also bumps ideFocusNonce
-   *  so App opens the right panel if it's collapsed. */
+   *  goto-definition reveal once the editor mounts. Plain opens bump
+   *  ideFocusNonce so App opens the right panel if it's collapsed; diff opens
+   *  don't — they render in the center editor and shouldn't drag the right
+   *  panel (files tab + tree reveal) into view. */
   openFileInIde: (
     filePath: string,
     opts?: { diff?: boolean; before?: string; line?: number; column?: number },
@@ -2278,7 +2280,12 @@ export const LEFT_WIDTH_PCT_MIN = 12;
 export const LEFT_WIDTH_PCT_MAX = 40;
 export const LEFT_WIDTH_PCT_DEFAULT = 20;
 export const RIGHT_WIDTH_MIN = 240;
-export const RIGHT_WIDTH_MAX = 640;
+/** Absolute fallback cap for contexts without a measurable window (never in
+ *  practice — both call sites pass the live row width). */
+const RIGHT_WIDTH_ABS_MAX = 640;
+/** Drag cap as a share of the center|right row: 2:8 — dragging the right
+ *  divider fully left leaves the center pane 20% of the row. */
+export const RIGHT_SHARE_MAX = 0.8;
 export const BOTTOM_TERMINAL_HEIGHT_MIN = 80;
 export const BOTTOM_TERMINAL_HEIGHT_MAX = 600;
 export const EDITOR_WIDTH_PCT_MIN = 20;
@@ -2299,9 +2306,13 @@ export function clampLeftWidthPct(pct: number): number {
     Math.max(LEFT_WIDTH_PCT_MIN, pct),
   );
 }
-export function clampRightWidth(px: number): number {
+export function clampRightWidth(px: number, availablePx?: number): number {
   if (!Number.isFinite(px)) return 360;
-  return Math.min(RIGHT_WIDTH_MAX, Math.max(RIGHT_WIDTH_MIN, Math.round(px)));
+  const max =
+    availablePx != null && availablePx > 0
+      ? Math.max(RIGHT_WIDTH_MIN, Math.round(availablePx * RIGHT_SHARE_MAX))
+      : RIGHT_WIDTH_ABS_MAX;
+  return Math.min(max, Math.max(RIGHT_WIDTH_MIN, Math.round(px)));
 }
 export function clampBottomTerminalHeight(px: number): number {
   if (!Number.isFinite(px)) return 280;
@@ -2315,12 +2326,21 @@ export function clampEditorWidthPct(pct: number): number {
   if (!Number.isFinite(pct)) return 50;
   return Math.min(EDITOR_WIDTH_PCT_MAX, Math.max(EDITOR_WIDTH_PCT_MIN, pct));
 }
+/** Width the center|right pair shares: the window minus the left sidebar's
+ *  percentage share (the sidebar is hidden in wide-panel mode, where this
+ *  pair spans the full window). Feeds the right panel's 2:8 drag cap. */
+function centerRightRowWidth(leftOpen: boolean, leftWidthPct: number): number {
+  if (typeof window === "undefined") return 0;
+  const win = window.innerWidth;
+  const leftPx = leftOpen ? win * (leftWidthPct / 100) : 0;
+  return Math.max(0, win - leftPx);
+}
 /** Wide-panel split bounds. widePanelPct is the right panel's share of the
  *  chat|right split; DEFAULT 70 gives the requested 3:7. The bounds keep the
- *  chat column usable (min 30% = the left panel's floor) and the right panel
+ *  chat column usable (min 20% at the 2:8 drag cap) and the right panel
  *  dominant. In-memory (not persisted). */
 export const WIDE_PANEL_PCT_MIN = 40;
-export const WIDE_PANEL_PCT_MAX = 70;
+export const WIDE_PANEL_PCT_MAX = 80;
 export const WIDE_PANEL_PCT_DEFAULT = 70;
 
 /** Clamp helper for the wide-panel percentage. Falls back to the default on
@@ -4836,7 +4856,17 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           // fixed-width layout is deliberately dropped; the redesigned 3:7
           // layout starts everyone at the percentage default.
           if (Number.isFinite(parsed.leftPct)) patch.leftWidthPct = clampLeftWidthPct(parsed.leftPct!);
-          if (Number.isFinite(parsed.right)) patch.rightWidth = clampRightWidth(parsed.right!);
+          if (Number.isFinite(parsed.right)) {
+            // Clamp against the live row width so a width dragged up to the
+            // 2:8 cap survives a restart (the fixed 640px cap is gone).
+            const leftPct = Number.isFinite(parsed.leftPct)
+              ? parsed.leftPct!
+              : get().leftWidthPct;
+            patch.rightWidth = clampRightWidth(
+              parsed.right!,
+              centerRightRowWidth(get().leftOpen, leftPct),
+            );
+          }
           if (Number.isFinite(parsed.bottomTerminal)) {
             patch.bottomTerminalHeight = clampBottomTerminalHeight(parsed.bottomTerminal!);
           }
@@ -7810,7 +7840,11 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     schedulePaneWidthPersist(get);
   },
   adjustRightWidth: (deltaPx) => {
-    const next = clampRightWidth(get().rightWidth - deltaPx);
+    const s = get();
+    const next = clampRightWidth(
+      s.rightWidth - deltaPx,
+      centerRightRowWidth(s.leftOpen, s.leftWidthPct),
+    );
     set({ rightWidth: next });
     schedulePaneWidthPersist(get);
   },
@@ -9583,8 +9617,11 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       ideActiveFileByProject: { ...s.ideActiveFileByProject, [pid]: canonicalPath },
       ideFileViewModeByProject: { ...s.ideFileViewModeByProject, [pid]: viewMode },
       ideDiffBeforeByProject: { ...s.ideDiffBeforeByProject, [pid]: diffBefore },
-      // Bump the focus nonce so App opens the right panel if collapsed.
-      ideFocusNonce: s.ideFocusNonce + 1,
+      // Bump the focus nonce so App opens the right panel if collapsed — but
+      // only for real file opens. A diff review renders in the CENTER editor;
+      // forcing the right panel (files tab + tree reveal) open for it is pure
+      // noise and cost, so diff opens leave the panel untouched.
+      ...(opts?.diff ? {} : { ideFocusNonce: s.ideFocusNonce + 1 }),
       // Unified center bar (tabs displayMode): opening a file focuses the
       // editor so it gets the full center width. Gated on tabs mode — the
       // split layout in single mode ignores the flag, and keeping single

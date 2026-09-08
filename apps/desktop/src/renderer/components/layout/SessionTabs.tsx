@@ -197,6 +197,7 @@ export function SessionTabs() {
                     isActive={isActive}
                     running={running}
                     unreadCount={unread}
+                    multiRow={multiRow}
                     registerNode={(node) => {
                       if (node) tabNodes.current.set(id, node);
                       else tabNodes.current.delete(id);
@@ -264,6 +265,11 @@ interface SortableTabProps {
    *  accent-colored count badge on non-active tabs so the user can see which
    *  background tabs have new activity. */
   unreadCount: number;
+  /** Multi-row wrapping layout: tabs flex to fill their row between a min
+   *  floor and their max cap, so flexbox breaks lines at the FLOOR width —
+   *  a line only wraps when it genuinely can't hold another tab. Omit for
+   *  the single-row strip (natural-width chips, horizontal scroll). */
+  multiRow?: boolean;
   registerNode: (node: HTMLDivElement | null) => void;
   onActivate: () => void;
   onClose: () => void;
@@ -278,6 +284,7 @@ export function SortableSessionTab({
   isActive,
   running,
   unreadCount,
+  multiRow,
   registerNode,
   onActivate,
   onClose,
@@ -344,7 +351,13 @@ export function SortableSessionTab({
         // Uniform chip style shared with editor file tabs (rounded-md +
         // resting bg). In the unified tab strip the two kinds are told
         // apart by the vertical divider between the groups, not by shape.
-        "group flex max-w-[200px] min-w-0 shrink-0 cursor-pointer select-none items-center gap-1.5 rounded-md px-2.5 py-1 text-[11px] transition-colors",
+        "group flex max-w-[200px] cursor-pointer select-none items-center gap-1.5 rounded-md px-2.5 py-1 text-[11px] transition-colors",
+        // Multi-row: flex-1 (basis 0 + grow) lets tabs stretch between the
+        // shared 170px min floor and the max cap above — line-breaking uses
+        // the floor, so tabs share one line whenever they can fit shrunk,
+        // instead of wrapping at their natural (title) width. Single-row:
+        // fixed natural-width chips inside the horizontally scrolling strip.
+        multiRow ? "min-w-[170px] flex-1" : "min-w-0 shrink-0",
         isActive
           ? "bg-accent/15 text-content ring-1 ring-inset ring-accent/40 dark:text-accent"
           : "bg-surface-muted/60 text-content-muted hover:bg-surface-hover/70 hover:text-content",
@@ -370,29 +383,38 @@ export function SortableSessionTab({
           )}
         />
       )}
-      <span className="truncate">{title}</span>
+      {/* Title fills every free pixel of the chip (flex-1) — on inactive
+          tabs the close button leaves the layout entirely until hover, so
+          the title owns the full tab width. */}
+      <span className="min-w-0 flex-1 truncate">{title}</span>
       {/* Unread badge - shown on non-active tabs with pending unread events.
-          Suppresses on hover so the close button has room; the badge clears
-          when the tab is activated (selectSession). */}
+          Leaves the layout on hover so the appearing close button gets the
+          room (the badge clears when the tab is activated — selectSession). */}
       {!isActive && unreadCount > 0 && (
         <span
           className={cn(
             "shrink-0 rounded-full bg-accent px-1 text-center text-[9px] font-medium leading-[14px] text-white",
-            "min-w-[14px] transition-opacity group-hover:opacity-0",
+            "min-w-[14px] group-hover:hidden",
           )}
         >
           {unreadCount > 9 ? "9+" : unreadCount}
         </span>
       )}
-      {/* Close button - explicit stopPropagation so it never starts a drag
-          and never activates the tab. */}
+      {/* Close button - occupies layout space ONLY when visible: always on
+          the active tab, on hover otherwise. On inactive tabs it's removed
+          from the flow (`hidden`) so the title fills the whole chip; hover
+          swaps it in (shifting the title a few px — standard tab-bar trade).
+          Explicit stopPropagation so it never starts a drag and never
+          activates the tab. */}
       <button
         type="button"
         aria-label="Close tab"
         onClick={handleClose}
         onPointerDown={(e) => e.stopPropagation()}
-        className="ml-0.5 inline-flex h-4 w-4 shrink-0 items-center justify-center rounded text-content-subtle opacity-0 transition-opacity hover:bg-surface-hover hover:text-content group-hover:opacity-100 data-[active=true]:opacity-100"
-        data-active={isActive}
+        className={cn(
+          "ml-0.5 h-4 w-4 shrink-0 items-center justify-center rounded text-content-subtle hover:bg-surface-hover hover:text-content",
+          isActive ? "inline-flex" : "hidden group-hover:inline-flex",
+        )}
       >
         <IconX size={11} />
       </button>

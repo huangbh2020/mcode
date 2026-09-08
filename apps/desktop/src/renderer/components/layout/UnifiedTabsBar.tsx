@@ -282,6 +282,7 @@ export function UnifiedTabsBar() {
                     isActive={id === activeId && !editorFocused}
                     running={!!runningBySession[id]}
                     unreadCount={unreadBySession[id] ?? 0}
+                    multiRow={multiRow}
                     registerNode={(node) => {
                       if (node) tabNodes.current.set(id, node);
                       else tabNodes.current.delete(id);
@@ -309,6 +310,7 @@ export function UnifiedTabsBar() {
                   path={path}
                   isActive={path === activeFile && editorFocused && !planTabActive}
                   dirty={dirtySet.has(path)}
+                  multiRow={multiRow}
                   registerNode={(node) => {
                     if (node) tabNodes.current.set(path, node);
                     else tabNodes.current.delete(path);
@@ -352,10 +354,9 @@ export function UnifiedTabsBar() {
               className={cn(
                 // Matches the file-tab chip look — the plan view is an
                 // editor-kind tab in the post-divider group.
-                "group flex min-w-0 shrink-0 cursor-pointer select-none items-center gap-1.5 rounded-md px-2.5 py-1 text-[11px] transition-colors",
-                // Same state-independent width cap as file tabs — activation
-                // never changes the tab's width.
-                "max-w-[160px]",
+                "group flex max-w-[160px] cursor-pointer select-none items-center gap-1.5 rounded-md px-2.5 py-1 text-[11px] transition-colors",
+                // Same flexible/natural split as the file tabs above.
+                multiRow ? "min-w-[170px] flex-1" : "min-w-0 shrink-0",
                 planTabActive && editorFocused
                   ? "bg-accent/15 text-content ring-1 ring-inset ring-accent/40 dark:text-accent"
                   : "bg-surface-muted/60 text-content-muted hover:bg-surface-hover/70 hover:text-content",
@@ -363,6 +364,8 @@ export function UnifiedTabsBar() {
             >
               <IconClipboard size={12} className="shrink-0 text-accent" />
               <span className="min-w-0 flex-1 truncate">{t("ide.editor.planTab")}</span>
+              {/* Close button leaves the layout on inactive tabs (title fills
+                  the chip); appears on hover, always visible while active. */}
               <button
                 type="button"
                 aria-label={t("ide.editor.closePlanTabAria")}
@@ -371,8 +374,12 @@ export function UnifiedTabsBar() {
                   if (activeId) closePlanDrawer(activeId);
                 }}
                 onPointerDown={(e) => e.stopPropagation()}
-                className="inline-flex h-4 w-4 shrink-0 items-center justify-center rounded text-content-subtle opacity-0 transition-opacity hover:bg-surface-hover hover:text-content group-hover:opacity-100 data-[active=true]:opacity-100"
-                data-active={planTabActive && editorFocused}
+                className={cn(
+                  "ml-0.5 h-4 w-4 shrink-0 items-center justify-center rounded text-content-subtle hover:bg-surface-hover hover:text-content",
+                  planTabActive && editorFocused
+                    ? "inline-flex"
+                    : "hidden group-hover:inline-flex",
+                )}
                 title={t("common.close")}
               >
                 <IconX size={10} />

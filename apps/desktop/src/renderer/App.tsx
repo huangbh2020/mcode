@@ -149,9 +149,10 @@ export function App() {
    *  global shortcut listener (useGlobalShortcuts) via store actions, so we
    *  no longer wire those keys here. */
 
-  // Auto-open the right panel when something requests its attention (the
-  // 审查 button on a turn-files card, or any openFileInIde call). The store
-  // can't reach into this local state, so it bumps a nonce we watch here.
+  // Auto-open the right panel when something requests its attention (plain
+  // openFileInIde calls; diff opens render in the center editor and
+  // deliberately don't bump). The store can't reach into this local state,
+  // so it bumps a nonce we watch here.
   const ideFocusNonce = useSessionStore((s) => s.ideFocusNonce);
   useEffect(() => {
     if (ideFocusNonce > 0) setRightOpen(true);

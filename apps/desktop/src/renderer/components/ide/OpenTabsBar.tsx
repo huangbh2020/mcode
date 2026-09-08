@@ -294,6 +294,7 @@ export function OpenTabsBar() {
                   path={path}
                   isActive={path === activeFile && !planTabActive}
                   dirty={dirtySet.has(path)}
+                  multiRow={multiRow}
                   registerNode={(node) => {
                     if (node) tabNodes.current.set(path, node);
                     else tabNodes.current.delete(path);
@@ -336,10 +337,9 @@ export function OpenTabsBar() {
               className={cn(
                 // Matches the file-tab chip look (rounded-md + resting bg) —
                 // the plan view is an editor-kind tab.
-                "group flex min-w-0 shrink-0 cursor-pointer select-none items-center gap-1.5 rounded-md px-2.5 py-1 text-[11px] transition-colors",
-                // Same state-independent width cap as file tabs — activation
-                // never changes the tab's width.
-                "max-w-[160px]",
+                "group flex max-w-[160px] cursor-pointer select-none items-center gap-1.5 rounded-md px-2.5 py-1 text-[11px] transition-colors",
+                // Same flexible/natural split as the file tabs above.
+                multiRow ? "min-w-[170px] flex-1" : "min-w-0 shrink-0",
                 planTabActive
                   ? "bg-accent/15 text-content ring-1 ring-inset ring-accent/40 dark:text-accent"
                   : "bg-surface-muted/60 text-content-muted hover:bg-surface-hover/70 hover:text-content",
@@ -347,6 +347,8 @@ export function OpenTabsBar() {
             >
               <IconClipboard size={12} className="shrink-0 text-accent" />
               <span className="min-w-0 flex-1 truncate">{t("ide.editor.planTab")}</span>
+              {/* Close button leaves the layout on inactive tabs (title fills
+                  the chip); appears on hover, always visible while active. */}
               <button
                 type="button"
                 aria-label={t("ide.editor.closePlanTabAria")}
@@ -355,8 +357,10 @@ export function OpenTabsBar() {
                   if (activeSessionId) closePlanDrawer(activeSessionId);
                 }}
                 onPointerDown={(e) => e.stopPropagation()}
-                className="inline-flex h-4 w-4 shrink-0 items-center justify-center rounded text-content-subtle opacity-0 transition-opacity hover:bg-surface-hover hover:text-content group-hover:opacity-100 data-[active=true]:opacity-100"
-                data-active={planTabActive}
+                className={cn(
+                  "ml-0.5 h-4 w-4 shrink-0 items-center justify-center rounded text-content-subtle hover:bg-surface-hover hover:text-content",
+                  planTabActive ? "inline-flex" : "hidden group-hover:inline-flex",
+                )}
                 title={t("common.close")}
               >
                 <IconX size={10} />
@@ -446,6 +450,11 @@ interface SortableFileTabProps {
   path: string;
   isActive: boolean;
   dirty: boolean;
+  /** Multi-row wrapping layout: tabs flex to fill their row between a min
+   *  floor and their max cap, so flexbox breaks lines at the FLOOR width —
+   *  a line only wraps when it genuinely can't hold another tab. Omit for
+   *  the single-row strip (natural-width chips, horizontal scroll). */
+  multiRow?: boolean;
   registerNode: (node: HTMLDivElement | null) => void;
   onActivate: () => void;
   onClose: () => void;
@@ -460,6 +469,7 @@ export function SortableFileTab({
   path,
   isActive,
   dirty,
+  multiRow,
   registerNode,
   onActivate,
   onClose,
@@ -526,11 +536,13 @@ export function SortableFileTab({
         // Editor file tabs share the same chip style as session tabs
         // (rounded-md + resting bg); in the unified strip a vertical divider
         // separates the two groups.
-        "group flex min-w-0 shrink-0 cursor-pointer select-none items-center gap-1.5 rounded-md px-2.5 py-1 text-[11px] transition-colors",
-        // Width caps are identical in both states so activating a tab never
-        // stretches it or shifts the strip layout; the always-visible close
-        // button on the active tab just truncates the name a bit harder.
-        "max-w-[160px]",
+        "group flex max-w-[160px] cursor-pointer select-none items-center gap-1.5 rounded-md px-2.5 py-1 text-[11px] transition-colors",
+        // Multi-row: flex-1 (basis 0 + grow) lets tabs stretch between the
+        // shared 170px min floor and the max cap above — line-breaking uses
+        // the floor, so tabs share one line whenever they can fit shrunk,
+        // instead of wrapping at their natural (basename) width. Single-row:
+        // fixed natural-width chips inside the horizontally scrolling strip.
+        multiRow ? "min-w-[170px] flex-1" : "min-w-0 shrink-0",
         isActive
           ? "bg-accent/15 text-content ring-1 ring-inset ring-accent/40 dark:text-accent"
           : "bg-surface-muted/60 text-content-muted hover:bg-surface-hover/70 hover:text-content",
@@ -542,11 +554,11 @@ export function SortableFileTab({
           space is tight. The tab's own max-w governs the overall cap. */}
       <FileTypeIcon path={path} size={13} className="shrink-0 text-content-subtle" />
       <span className="min-w-0 flex-1 truncate font-mono">{basename(path)}</span>
-      {/* Dirty dot (unsaved) OR close button on hover - same rule as before:
-          an unsaved file can't be closed from the bar (would lose edits).
-          The close button is always visible on the active tab (data-active)
-          so the user can close it without hovering; background tabs show it
-          on hover. shrink-0 ensures it's never squeezed out by the name. */}
+      {/* Dirty dot (unsaved) OR close button. The close button occupies
+          layout space ONLY when visible: always on the active tab, on hover
+          otherwise — on inactive tabs it's removed from the flow (`hidden`)
+          so the flex-1 name fills the whole chip. Same rule as before: an
+          unsaved file can't be closed from the bar (would lose edits). */}
       {dirty ? (
         <span
           className="h-1.5 w-1.5 shrink-0 rounded-full bg-accent animate-pulse"
@@ -558,8 +570,10 @@ export function SortableFileTab({
           aria-label={t("ide.editor.closeTabAria")}
           onClick={handleClose}
           onPointerDown={(e) => e.stopPropagation()}
-          className="inline-flex h-4 w-4 shrink-0 items-center justify-center rounded text-content-subtle opacity-0 transition-opacity hover:bg-surface-hover hover:text-content group-hover:opacity-100 data-[active=true]:opacity-100"
-          data-active={isActive}
+          className={cn(
+            "ml-0.5 h-4 w-4 shrink-0 items-center justify-center rounded text-content-subtle hover:bg-surface-hover hover:text-content",
+            isActive ? "inline-flex" : "hidden group-hover:inline-flex",
+          )}
           title={t("common.close")}
         >
           <IconX size={10} />

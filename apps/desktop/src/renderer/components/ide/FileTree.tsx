@@ -619,11 +619,21 @@ export function FileTree({ projectPath }: { projectPath: string }) {
     [projectPath, setDirExpanded],
   );
 
+  // Diff reviews render in the center editor and must not drag the tree
+  // around (per-click ancestor expansion + smooth scroll is pure noise);
+  // plain (edit/preview) opens keep the classic "follow the editor" below.
+  const activeFileIsDiff = useSessionStore((s) =>
+    pid != null &&
+    activeFile != null &&
+    (s.ideFileViewModeByProject[pid]?.[activeFile] ?? null) === "diff",
+  );
+
   // Reveal the currently-active editor file (classic "follow the editor").
   useEffect(() => {
     if (!activeFile || !activeFile.startsWith(projectPath)) return;
+    if (activeFileIsDiff) return;
     return revealPath(activeFile);
-  }, [activeFile, projectPath, revealPath]);
+  }, [activeFile, activeFileIsDiff, projectPath, revealPath]);
 
   // Reveal an explicitly-requested target (store action revealInFileTree,
   // fired by the turn-files card's 定位到工作树 button). Identity-driven: the

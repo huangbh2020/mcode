@@ -175,7 +175,9 @@ export function GitHistoryView({ repos }: { repos: GitRepo[] }) {
       // Both empty usually means binary / missing - still open so the user sees empty panes.
       const absPath = joinPath(repoPath, file.path);
       const store = useSessionStore.getState();
-      if (store.gitDiffOpenMode === "dialog") {
+      // Wide-panel (3:7) mode has no center editor column — a center-mode
+      // open would be invisible, so the floating dialog takes it there too.
+      if (store.gitDiffOpenMode === "dialog" || store.widePanelOpen) {
         // Dialog open-mode: open (or refresh) a history diff tab in the
         // floating dialog (both blobs supplied - DiffPane won't touch disk).
         store.openGitDiffDialogTab({

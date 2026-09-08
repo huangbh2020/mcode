@@ -1745,7 +1745,9 @@ function FileRow({
   // (staged vs HEAD for staged files, working tree for unstaged), stashes
   // the diff pair, and opens the file in diff mode.
   const handleClick = async () => {
-    if (gitDiffOpenMode === "dialog") {
+    // Wide-panel (3:7) mode has no center editor column — a center-mode open
+    // would be invisible, so the floating dialog takes it there as well.
+    if (gitDiffOpenMode === "dialog" || useSessionStore.getState().widePanelOpen) {
       // Dialog open-mode: compact patch-scoped diff — both sides are
       // reconstructed from the patch (changed regions ± context). Staged
       // diffs always supply `after` from the patch (index blob); unstaged
