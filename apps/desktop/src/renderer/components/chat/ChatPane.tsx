@@ -42,6 +42,7 @@ import {
 } from "@renderer/lib/contentTag.js";
 import type { SkillInfo, BuiltInCommand } from "@renderer/lib/slashCommands.js";
 import { MessageBlocks, TurnPanel, BatchToolGroup, isFoldableBlock, type ProceduralBlock, type BeforeContentMap } from "./MessageBlocks.js";
+import { RenderErrorBoundary } from "./RenderErrorBoundary.js";
 import { AttachMenuButton } from "./AttachMenuButton.js";
 import { MicButton } from "./MicButton.js";
 import { ComposerToolbar } from "./ComposerToolbar.js";
@@ -288,6 +289,12 @@ type RenderItem =
        *  opener keeps the full row gap so turn-to-turn separation is
        *  unchanged. */
       tightTop?: boolean;
+      /** Precomputed unique list key for LIVE-turn rows. One message can
+       *  legitimately split into several single rows (display → foldable →
+       *  display interleaving), so the bare msg.id collides; the live branch
+       *  disambiguates occurrences with an #n suffix. Absent everywhere else
+       *  — keyExtractor falls back to msg.id. */
+      liveKey?: string;
     }
   | {
       // Live-turn cross-message fold run: contiguous FOLDABLE blocks
@@ -303,6 +310,11 @@ type RenderItem =
        *  the run grows (runs only append), so LegendList recycling keeps the
        *  group's expand/collapse state alive during streaming. */
       anchorId: string;
+      /** Unique list key — two runs can share one anchor message (tool →
+       *  narration → tool inside one message), so the bare `ops:${anchorId}`
+       *  collides; occurrences get an #n suffix. See the live partition in
+       *  groupMessagesForRender. */
+      liveKey?: string;
       /** True only on the stream's LAST live row (drives the tail loader
        *  spinner). Exactly one live row carries it — a fold run can absorb
        *  the tail message's blocks, so flagging by message id would leave
@@ -499,22 +511,49 @@ function groupMessagesForRender(
       // the text row stays put) — the flicker the old all-flat layout
       // guarded against cannot reappear.
       type LiveRow =
-        | { kind: "ops"; blocks: ProceduralBlock[]; anchorId: string }
-        | { kind: "msg"; msg: ChatMessage; blocks: Block[] };
+        | { kind: "ops"; blocks: ProceduralBlock[]; anchorId: string; key: string }
+        | { kind: "msg"; msg: ChatMessage; blocks: Block[]; key: string };
       const rows: LiveRow[] = [];
       let run: ProceduralBlock[] = [];
       let runAnchorId = "";
       let curMsg: ChatMessage | null = null;
       let curBlocks: Block[] = [];
+      // Occurrence counters for unique row keys. One message CAN split into
+      // several msg rows (display → foldable → display interleaving, e.g.
+      // narration → tool → a tool_result-spliced screenshot → more narration)
+      // and two runs can share one anchor message — keying every row by the
+      // bare msg.id produced DUPLICATE React keys. LegendList recycles cells
+      // by key, so two rows then drove ONE recycled cell whose BlockView got
+      // a different block kind on re-render — and the text branch's extra
+      // useDeferredValue hook made that a "rendered fewer hooks" crash =
+      // tree unmount = the 2026-09-08 black screen. First occurrence keeps
+      // the bare id (so the tail msg row's key still survives the
+      // live→completed re-layout), later ones get an #n suffix.
+      const opsSeq = new Map<string, number>();
+      const msgSeq = new Map<string, number>();
       const flushRun = () => {
         if (run.length > 0) {
-          rows.push({ kind: "ops", blocks: run, anchorId: runAnchorId });
+          const n = opsSeq.get(runAnchorId) ?? 0;
+          opsSeq.set(runAnchorId, n + 1);
+          rows.push({
+            kind: "ops",
+            blocks: run,
+            anchorId: runAnchorId,
+            key: n === 0 ? `ops:${runAnchorId}` : `ops:${runAnchorId}#${n}`,
+          });
           run = [];
         }
       };
       const flushMsg = () => {
         if (curMsg && curBlocks.length > 0) {
-          rows.push({ kind: "msg", msg: curMsg, blocks: curBlocks });
+          const n = msgSeq.get(curMsg.id) ?? 0;
+          msgSeq.set(curMsg.id, n + 1);
+          rows.push({
+            kind: "msg",
+            msg: curMsg,
+            blocks: curBlocks,
+            key: n === 0 ? curMsg.id : `${curMsg.id}#${n}`,
+          });
         }
         curMsg = null;
         curBlocks = [];
@@ -547,6 +586,7 @@ function groupMessagesForRender(
             kind: "opsGroup",
             blocks: row.blocks,
             anchorId: row.anchorId,
+            liveKey: row.key,
             isStreamingTail: false,
             ...(liveRowIdx === 0 ? { turnMeta: liveTurnMeta } : {}),
             tightTop: liveRowIdx > 0,
@@ -555,6 +595,7 @@ function groupMessagesForRender(
           items.push({
             kind: "single",
             msg: { ...row.msg, blocks: row.blocks },
+            liveKey: row.key,
             isStreamingTail: false,
             isTurnTail: false,
             tightTop: liveRowIdx > 0,
@@ -2634,20 +2675,26 @@ function ChatPaneForSession({
         return (
           <div className="px-[var(--chat-gutter)]">
             <div className="mx-auto max-w-5xl">
-              <MessageRow
-                msg={m}
-                isStreamingTail={item.isStreamingTail}
-                isTurnTail={item.isTurnTail}
-                tightTop={item.tightTop}
-                beforeMap={beforeMap}
-                canEdit={isUser && !sessionBusy && m.id === lastUserMessageId}
-                isEditing={editingMessageId === m.id}
-                onStartEdit={(msg) => setEditingMessageId(msg.id)}
-                onSubmitEdit={handleEditSubmit}
-                onCancelEdit={() => setEditingMessageId(null)}
-                onOpenPlan={(p) => openPlanDrawer(sessionId, p)}
-                projectPath={projectPath}
-              />
+              {/* Row-level boundary: MessageBlocks already guards per segment,
+                  but MessageRow's own chrome (stat row, hover actions, edit
+                  form) renders outside them — one broken row must not unmount
+                  the whole stream. */}
+              <RenderErrorBoundary>
+                <MessageRow
+                  msg={m}
+                  isStreamingTail={item.isStreamingTail}
+                  isTurnTail={item.isTurnTail}
+                  tightTop={item.tightTop}
+                  beforeMap={beforeMap}
+                  canEdit={isUser && !sessionBusy && m.id === lastUserMessageId}
+                  isEditing={editingMessageId === m.id}
+                  onStartEdit={(msg) => setEditingMessageId(msg.id)}
+                  onSubmitEdit={handleEditSubmit}
+                  onCancelEdit={() => setEditingMessageId(null)}
+                  onOpenPlan={(p) => openPlanDrawer(sessionId, p)}
+                  projectPath={projectPath}
+                />
+              </RenderErrorBoundary>
             </div>
           </div>
         );
@@ -2671,7 +2718,9 @@ function ChatPaneForSession({
                   the turn streams, so every group's header ticker stays live
                   (the group whose tool is executing shows it rolling; the
                   rest show their last op dimmed). */}
-              <BatchToolGroup blocks={item.blocks} turnActive projectPath={projectPath} />
+              <RenderErrorBoundary>
+                <BatchToolGroup blocks={item.blocks} turnActive projectPath={projectPath} />
+              </RenderErrorBoundary>
               {item.isStreamingTail && (
                 <div className="mt-1.5 flex items-center gap-1.5">
                   <IconLoader2 size={12} className="animate-spin text-accent" />
@@ -2716,15 +2765,17 @@ function ChatPaneForSession({
         >
           <div className="mx-auto max-w-5xl">
             {hasProcess && (
-              <TurnPanel
-                blocks={item.panelBlocks}
-                beforeMap={beforeMap}
-                turnActive={turnActive}
-                turnMeta={item.turnMeta}
-                onOpenPlan={onOpenPlan}
-                onToggleCollapse={pauseBottomAnchor}
-                projectPath={projectPath}
-              />
+              <RenderErrorBoundary>
+                <TurnPanel
+                  blocks={item.panelBlocks}
+                  beforeMap={beforeMap}
+                  turnActive={turnActive}
+                  turnMeta={item.turnMeta}
+                  onOpenPlan={onOpenPlan}
+                  onToggleCollapse={pauseBottomAnchor}
+                  projectPath={projectPath}
+                />
+              </RenderErrorBoundary>
             )}
             {/* Text replies (and plan / turn-files / error blocks) stay
                 visible below the panel. hideTurnStat suppresses the
@@ -2844,13 +2895,16 @@ function ChatPaneForSession({
               data={renderItems}
               renderItem={renderListItem}
               keyExtractor={(item) => {
-                if (item.kind === "single") return item.msg.id;
+                if (item.kind === "single") return item.liveKey ?? item.msg.id;
                 if (item.kind === "pendingTurn") return "pending-turn";
                 // Live fold run: keyed by its first contributing message. The
                 // run only ever APPENDS (new cycles join the trailing run), so
                 // the key is stable while the group grows and its expanded
-                // state survives LegendList recycling during streaming.
-                if (item.kind === "opsGroup") return `ops:${item.anchorId}`;
+                // state survives LegendList recycling during streaming. The
+                // live partition precomputes a disambiguated key (liveKey) —
+                // two runs CAN share one anchor, and duplicate keys recycle
+                // one cell for two rows (see the partition comment).
+                if (item.kind === "opsGroup") return item.liveKey ?? `ops:${item.anchorId}`;
                 // Use turnMeta.startedAt as stable key — it's set once when the turn
                 // begins and never changes, so the TurnPanel (and expanded Edit cards
                 // inside it) survive LegendList recycling during streaming.
@@ -3322,29 +3376,35 @@ function ChatPaneForSession({
                 ))}
               </div>
             )}
-            <ComposerEditor
-              ref={editorRef}
-              editable={!textareaLocked}
-              placeholder={
-                textareaLocked
-                  ? "Claude is working…"
-                  : sessionBusy
-                    ? t("chat.placeholderQueued")
-                    : t("chat.placeholderIdle")
-              }
-              onChange={handleChange}
-              onEnter={handleEnter}
-              onHistoryUp={handleHistoryUp}
-              onHistoryDown={handleHistoryDown}
-              historyNavEnabled={recallEnabled}
-              onPromotePaste={handlePromotePaste}
-              shouldPromotePaste={(text) => shouldPromoteToTag(text, pasteTagThresholdChars)}
-              onPasteFiles={handlePasteFiles}
-              className={cn(
-                "px-3 pt-2.5 text-sm leading-relaxed text-content",
-                (tags.length > 0 || pendingImages.length > 0) && "pt-1.5",
-              )}
-            />
+            {/* Editor-level boundary: a Tiptap render crash here used to take
+                down the whole tree (logged 2026-09-07 <ComposerEditor2>). The
+                fallback card loses the input box but keeps the app alive —
+                switching sessions remounts the composer fresh. */}
+            <RenderErrorBoundary>
+              <ComposerEditor
+                ref={editorRef}
+                editable={!textareaLocked}
+                placeholder={
+                  textareaLocked
+                    ? "Claude is working…"
+                    : sessionBusy
+                      ? t("chat.placeholderQueued")
+                      : t("chat.placeholderIdle")
+                }
+                onChange={handleChange}
+                onEnter={handleEnter}
+                onHistoryUp={handleHistoryUp}
+                onHistoryDown={handleHistoryDown}
+                historyNavEnabled={recallEnabled}
+                onPromotePaste={handlePromotePaste}
+                shouldPromotePaste={(text) => shouldPromoteToTag(text, pasteTagThresholdChars)}
+                onPasteFiles={handlePasteFiles}
+                className={cn(
+                  "px-3 pt-2.5 text-sm leading-relaxed text-content",
+                  (tags.length > 0 || pendingImages.length > 0) && "pt-1.5",
+                )}
+              />
+            </RenderErrorBoundary>
             <div
               ref={composerActionRowRef}
               className={cn(

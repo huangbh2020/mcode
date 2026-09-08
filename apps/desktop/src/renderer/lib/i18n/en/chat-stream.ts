@@ -8,6 +8,9 @@ export const en = {
   // ── MessageBlocks: batch tool group ──
   "chatStream.opCount": "{n} operations",
 
+  // ── RenderErrorBoundary: per-segment render-failure fallback ──
+  "chatStream.renderError": "This item failed to render and was skipped (everything else is unaffected)",
+
   // ── MessageBlocks: thinking / tool cards ──
   "chatStream.thinking": "Thinking",
   "chatStream.tool.input": "Input",

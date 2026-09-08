@@ -35,6 +35,7 @@ import { DiffView } from "./DiffView.js";
 import { PlanStreamBlock } from "./PlanStreamBlock.js";
 import { TurnFilesCard } from "./TurnFilesCard.js";
 import { CurrentOpTicker } from "./CurrentOpTicker.js";
+import { RenderErrorBoundary } from "./RenderErrorBoundary.js";
 import { lineDiff, diffSummary } from "@renderer/lib/lineDiff.js";
 import { FileLink } from "./FileLink.js";
 import { ImageWithPreview } from "@renderer/components/ui/index.js";
@@ -149,15 +150,22 @@ const MessageBlocks = memo(function MessageBlocks({
 }) {
   if (blocks.length === 0) return null;
   const segments = groupBlocks(blocks);
+  const segKeys = segmentKeys(segments);
   return (
     <div className="space-y-[var(--chat-block-gap)]">
       {segments.map((seg, i) =>
         seg.kind === "single" ? (
-          <BlockView key={i} block={seg.block} defaultOpen={seg.defaultOpen} beforeMap={beforeMap} isStreamingTail={isStreamingTail} onOpenPlan={onOpenPlan} projectPath={projectPath} />
+          <RenderErrorBoundary key={segKeys[i]}>
+            <BlockView block={seg.block} defaultOpen={seg.defaultOpen} beforeMap={beforeMap} isStreamingTail={isStreamingTail} onOpenPlan={onOpenPlan} projectPath={projectPath} />
+          </RenderErrorBoundary>
         ) : seg.kind === "gallery" ? (
-          <ImageGallery key={i} blocks={seg.blocks} />
+          <RenderErrorBoundary key={segKeys[i]}>
+            <ImageGallery blocks={seg.blocks} />
+          </RenderErrorBoundary>
         ) : (
-          <BatchToolGroup key={i} blocks={seg.blocks} beforeMap={beforeMap} turnActive={isStreamingTail} projectPath={projectPath} />
+          <RenderErrorBoundary key={segKeys[i]}>
+            <BatchToolGroup blocks={seg.blocks} beforeMap={beforeMap} turnActive={isStreamingTail} projectPath={projectPath} />
+          </RenderErrorBoundary>
         ),
       )}
     </div>
@@ -174,6 +182,26 @@ type Segment =
   | { kind: "single"; block: Block; defaultOpen?: boolean }
   | { kind: "batch"; blocks: ProceduralBlock[] }
   | { kind: "gallery"; blocks: Extract<Block, { kind: "image" }>[] };
+
+/** Stable list keys for a segment list. The segment's HEAD block identifies
+ *  it — tool calls by their unique toolCallId, everything else by kind — with
+ *  a per-base occurrence counter disambiguating repeats. Unlike the array
+ *  index, these keys survive a mid-array block insertion (tool.result splicing
+ *  a screenshot image right after its tool_use card) without rekeying every
+ *  later sibling, so React neither remounts unaffected segments nor reuses an
+ *  instance across different kinds. */
+function segmentKeys(segments: Segment[]): string[] {
+  const counts = new Map<string, number>();
+  return segments.map((seg) => {
+    // `?.` guards a degenerate empty batch/gallery segment — this helper runs
+    // OUTSIDE the per-segment boundaries, so it must not throw itself.
+    const head = seg.kind === "single" ? seg.block : seg.blocks[0];
+    const base = head?.kind === "tool_use" ? `tu:${head.toolCallId}` : `${head?.kind ?? "seg"}`;
+    const n = counts.get(base) ?? 0;
+    counts.set(base, n + 1);
+    return `${base}:${n}`;
+  });
+}
 
 /** Tool calls that are HIGH-FREQUENCY, LOW-INFO operations - the model fires
  *  off Read/Bash/Grep/Glob in long bursts while exploring. Collapsing these
@@ -378,8 +406,14 @@ export function BatchToolGroup({
         // the list scrolls internally instead. The left border marks this as
         // an expanded group body, visually nested under its header.
         <div className="max-h-80 space-y-1.5 overflow-y-auto border-l border-edge py-1 pl-2">
+          {/* Tool calls key by their unique toolCallId (thinking has no id —
+              the run only appends, so the index is stable for it). Each child
+              gets its own boundary: one broken block must not take down the
+              group (or, absent boundaries, the whole tree). */}
           {blocks.map((b, i) => (
-            <BlockView key={i} block={b} beforeMap={beforeMap} projectPath={projectPath} />
+            <RenderErrorBoundary key={b.kind === "tool_use" ? `tu:${b.toolCallId}` : `th:${i}`}>
+              <BlockView block={b} beforeMap={beforeMap} projectPath={projectPath} />
+            </RenderErrorBoundary>
           ))}
         </div>
       )}
@@ -700,28 +734,36 @@ export function TurnPanel({
       >
         <div className="overflow-hidden">
           <div className="space-y-1.5 py-2">
-            {groupBlocks(blocks).map((seg, i) =>
-              seg.kind === "single" ? (
-                <BlockView
-                  key={i}
-                  block={seg.block}
-                  defaultOpen={seg.defaultOpen}
-                  beforeMap={beforeMap}
-                  onOpenPlan={onOpenPlan}
-                  projectPath={projectPath}
-                />
-              ) : seg.kind === "gallery" ? (
-                <ImageGallery key={i} blocks={seg.blocks} />
-              ) : (
-                <BatchToolGroup
-                  key={i}
-                  blocks={seg.blocks}
-                  beforeMap={beforeMap}
-                  turnActive={turnActive}
-                  projectPath={projectPath}
-                />
-              ),
-            )}
+            {(() => {
+              const segments = groupBlocks(blocks);
+              const segKeys = segmentKeys(segments);
+              return segments.map((seg, i) =>
+                seg.kind === "single" ? (
+                  <RenderErrorBoundary key={segKeys[i]}>
+                    <BlockView
+                      block={seg.block}
+                      defaultOpen={seg.defaultOpen}
+                      beforeMap={beforeMap}
+                      onOpenPlan={onOpenPlan}
+                      projectPath={projectPath}
+                    />
+                  </RenderErrorBoundary>
+                ) : seg.kind === "gallery" ? (
+                  <RenderErrorBoundary key={segKeys[i]}>
+                    <ImageGallery blocks={seg.blocks} />
+                  </RenderErrorBoundary>
+                ) : (
+                  <RenderErrorBoundary key={segKeys[i]}>
+                    <BatchToolGroup
+                      blocks={seg.blocks}
+                      beforeMap={beforeMap}
+                      turnActive={turnActive}
+                      projectPath={projectPath}
+                    />
+                  </RenderErrorBoundary>
+                ),
+              );
+            })()}
           </div>
         </div>
       </div>
@@ -755,6 +797,15 @@ const BlockView = memo(function BlockView({
   // or typed as plain text. See useKnownSkillNames.
   const knownSkillNames = useKnownSkillNames();
   const { t } = useI18n();
+  // Hoisted ABOVE the switch so every branch calls the same hooks in the same
+  // order. The text branch used to be the ONLY branch adding useDeferredValue,
+  // which made the hook count kind-dependent: when a recycled list cell is
+  // re-rendered with a different block kind (duplicate-key collision, LegendList
+  // cell reuse), the same BlockView instance changed its hook count mid-life and
+  // React threw "rendered more/fewer hooks than during the previous render" —
+  // an uncaught render error with no boundary, i.e. the black screen. Deferring
+  // an empty constant for non-text kinds is a no-op.
+  const deferredText = useDeferredValue(block.kind === "text" ? block.text : "");
 
   switch (block.kind) {
     case "text": {
@@ -772,12 +823,6 @@ const BlockView = memo(function BlockView({
       // of code blocks is itself deferred inside <Markdown> (lazy highlighter
       // singleton + LRU cache + useMemo on rawCode), so the expensive path is
       // already guarded without sacrificing live markdown formatting.
-      // eslint-disable-next-line react-hooks/rules-of-hooks
-      const deferredText = useDeferredValue(block.text);
-      // Merge pill-recorded names with the full known set so that plain-typed
-      // /name references (and DB-restored messages without skillNames) also
-      // highlight. When block.skillNames is empty this is just knownSkillNames
-      // (stable reference) so Markdown's memo isn't broken.
       const skillNames =
         block.skillNames && block.skillNames.length > 0
           ? Array.from(new Set([...block.skillNames, ...knownSkillNames]))
@@ -787,10 +832,10 @@ const BlockView = memo(function BlockView({
       // models emit around reasoning sections, and each isolated run became
       // a standalone text block — an empty Markdown container whose
       // surrounding block gaps read as a blank line in the chat. The guard
-      // must sit AFTER useDeferredValue: a streaming block can start
-      // whitespace-only and grow prose within its lifetime, and a conditional
-      // hook would crash React ("rendered more hooks than previous render").
-      // eslint-disable-next-line react-hooks/rules-of-hooks
+      // sits AFTER the useDeferredValue call above (hoisted out of the
+      // switch): a streaming block can start whitespace-only and grow prose
+      // within its lifetime, and a conditional hook would crash React
+      // ("rendered more hooks than previous render").
       if (!block.text.trim()) return null;
       return (
         <Markdown projectPath={projectPath} skillNames={skillNames}>
