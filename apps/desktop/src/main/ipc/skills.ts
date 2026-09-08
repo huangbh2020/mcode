@@ -16,7 +16,10 @@
  * Additionally, the settings panel's "Import" feature scans external tools'
  * skill directories (Claude Code ~/.claude/skills, Codex ~/.codex/skills,
  * Zcode ~/.agents/skills + ~/.zcode/skills + plugin cache) and copies selected
- * skills into ~/.mcode/skills so they become available in Mcode.
+ * skills into ~/.mcode/skills so they become available in Mcode. The user can
+ * also point it at a local directory (a single skill or a collection) or a
+ * single markdown file (imported as a one-file skill, materialized as
+ * <name>/SKILL.md).
  */
 import type { IpcMain } from "electron";
 import { promises as fs } from "node:fs";
@@ -24,6 +27,7 @@ import { homedir } from "node:os";
 import path, { sep } from "node:path";
 import {
   IPC,
+  SKILL_NAME_RE,
   SkillsListSchema,
   SkillsReadSchema,
   SkillsSaveSchema,
@@ -239,6 +243,45 @@ async function scanLocalSkillDir(
   }
   // Case 2: treat as a skills root — scan each subdirectory.
   await scanExternalSkillsRoot(real, "local", into);
+}
+
+/** Scan a user-picked single FILE as a one-file skill (the import dialog's
+ *  "select file" flow). The file's markdown body IS the SKILL.md content;
+ *  importing materializes it as <name>/SKILL.md under ~/.mcode/skills.
+ *  - Only .md/.markdown files qualify (case-insensitive); anything else is
+ *    skipped (the renderer pre-filters, this is the defensive backstop).
+ *  - Name: frontmatter `name` → file stem; a file literally named SKILL.md
+ *    falls back to its PARENT directory name ("SKILL" is never a useful name).
+ *  Appends to `into` keyed like the dir flow. Never throws. */
+async function scanLocalSkillFile(
+  file: string,
+  into: Map<string, ExternalSkillInfo>,
+): Promise<void> {
+  const real = await safeRealPath(file);
+  if (!real) return;
+  try {
+    const st = await fs.stat(real);
+    if (!st.isFile()) return;
+  } catch {
+    return;
+  }
+  const base = path.basename(real);
+  const ext = path.extname(base).toLowerCase();
+  if (ext !== ".md" && ext !== ".markdown") return;
+  const md = await readTextHead(real);
+  if (md == null) return;
+  const fm = parseSkillFrontmatter(md);
+  const isSkillMd = base.toLowerCase() === "skill.md";
+  // Slice (not path.basename(real, ext)): ext is lowercased, so basename's
+  // exact-suffix strip would miss "READ.MD" and keep the extension in the name.
+  const stem = isSkillMd ? path.basename(path.dirname(real)) : base.slice(0, base.length - ext.length);
+  const name = fm.name?.trim() || stem;
+  into.set(`local:${real}:${name}`, {
+    name,
+    description: fm.description?.trim() ?? "",
+    tool: "local",
+    sourcePath: real,
+  });
 }
 
 /**
@@ -521,9 +564,14 @@ export function registerSkillsHandlers(ipcMain: IpcMain): void {
       for (const dir of pluginDirs) {
         await scanExternalSkillsRoot(dir, "zcode", byKey);
       }
-      // User-picked local directory (import dialog's "select folder" flow).
+      // User-picked local directory (import dialog's "select folder" flow) and
+      // single file (the "select file" flow). Independent picks; either may be
+      // absent.
       if (input.localDir) {
         await scanLocalSkillDir(input.localDir, byKey);
+      }
+      if (input.localFile) {
+        await scanLocalSkillFile(input.localFile, byKey);
       }
     } catch (err) {
       log.warn(`skills.scanSources failed: ${(err as Error).message}`);
@@ -543,10 +591,14 @@ export function registerSkillsHandlers(ipcMain: IpcMain): void {
   });
 
   // ── Import (copy) selected skills into ~/.mcode/skills ──
-  // Copies each selected skill's directory tree from its external source into
-  // the global Mcode skills root. Skills that already exist at the destination
-  // are skipped (not overwritten) to protect user edits. Returns per-skill
-  // imported / skipped / error lists so the UI can report precisely.
+  // Copies each selected skill (a source directory tree, or a single markdown
+  // file from the "select file" flow) from its external source into the global
+  // Mcode skills root. Directory sources copy wholesale (fs.cp recursive);
+  // file sources become <name>/SKILL.md. Names are validated per-item — one
+  // un-importable skill errors just that item instead of rejecting the batch.
+  // Skills that already exist at the destination are skipped (not overwritten)
+  // to protect user edits. Returns per-skill imported / skipped / error lists
+  // so the UI can report precisely.
   ipcMain.handle(IPC.SKILLS_IMPORT, async (_evt, raw) => {
     const input = SkillsImportSchema.parse(raw);
     const globalRoot = resolveSkillRoot("global", "");
@@ -554,23 +606,29 @@ export function registerSkillsHandlers(ipcMain: IpcMain): void {
     const skipped: string[] = [];
     const errors: Array<{ name: string; error: string }> = [];
     for (const item of input.skills) {
+      // Name charset check (moved here from the zod schema so an invalid name
+      // — e.g. a CJK file stem — fails only this item, with a readable error).
+      if (!SKILL_NAME_RE.test(item.name)) {
+        errors.push({ name: item.name, error: "无效的 skill 名" });
+        continue;
+      }
       const destDir = path.join(globalRoot, item.name);
       // Containment guard: destination must stay inside the global skills root.
       if (!pathWithin(globalRoot, destDir)) {
         errors.push({ name: item.name, error: "无效的 skill 名" });
         continue;
       }
-      // Source must exist and be a directory (the scan guaranteed this, but
-      // the user may have deleted it between scan and import).
+      // Source must exist (the scan guaranteed it, but the user may have
+      // deleted it between scan and import).
       let srcStat: import("node:fs").Stats;
       try {
         srcStat = await fs.stat(item.sourcePath);
       } catch {
-        errors.push({ name: item.name, error: "源目录不存在" });
+        errors.push({ name: item.name, error: "源路径不存在" });
         continue;
       }
-      if (!srcStat.isDirectory()) {
-        errors.push({ name: item.name, error: "源路径不是目录" });
+      if (!srcStat.isDirectory() && !srcStat.isFile()) {
+        errors.push({ name: item.name, error: "源路径不是目录或文件" });
         continue;
       }
       // Skip if the destination already exists (don't overwrite user edits).
@@ -583,9 +641,15 @@ export function registerSkillsHandlers(ipcMain: IpcMain): void {
       }
       try {
         await fs.mkdir(globalRoot, { recursive: true });
-        // fs.cp with recursive:true copies the entire directory tree
-        // (SKILL.md + references/ + assets/ + scripts/ etc.).
-        await fs.cp(item.sourcePath, destDir, { recursive: true });
+        if (srcStat.isDirectory()) {
+          // fs.cp with recursive:true copies the entire directory tree
+          // (SKILL.md + references/ + assets/ + scripts/ etc.).
+          await fs.cp(item.sourcePath, destDir, { recursive: true });
+        } else {
+          // Single-file skill: the picked markdown file IS the SKILL.md body.
+          await fs.mkdir(destDir, { recursive: true });
+          await fs.copyFile(item.sourcePath, path.join(destDir, "SKILL.md"));
+        }
         imported.push(item.name);
       } catch (err) {
         errors.push({ name: item.name, error: (err as Error).message });

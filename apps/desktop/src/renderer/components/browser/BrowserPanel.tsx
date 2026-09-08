@@ -374,6 +374,51 @@ export function BrowserPanel({ mode }: BrowserPanelProps) {
     return tab;
   }, [projectPath, addTab, setActiveTabId, syncBounds, showActiveView, t]);
 
+  /** Adopt a view that main created for a page-initiated new-window request
+   *  ("tabOpened" event, target=_blank / window.open): register the tab and —
+   *  unless the link was opened in the background (middle/ctrl-click) — switch
+   *  focus to it, hiding the outgoing active view first exactly like
+   *  createTab does. The view itself already exists in main and is already
+   *  loading the URL, so unlike createTab there is no browser.create /
+   *  loadUrl round-trip here. */
+  const adoptWindowOpenTab = useCallback(
+    (browserId: string, info: { url?: string; title?: string; background?: boolean }) => {
+      // Duplicate push → the tab already exists; its navigation events keep
+      // url/title fresh, nothing to adopt.
+      if (tabsRef.current.some((t) => t.browserId === browserId)) return;
+      const tab: BrowserTab = {
+        id: newTabId(),
+        browserId,
+        url: typeof info.url === "string" ? info.url : "",
+        title: typeof info.title === "string" ? info.title : "",
+        loading: false,
+        canGoBack: false,
+        canGoForward: false,
+        pickMode: false,
+        device: "desktop",
+      };
+      addTab(tab);
+      tabsRef.current = [...tabsRef.current, tab];
+      if (info.background) return; // opened behind the current tab — keep focus
+      const prevId = activeTabIdRef.current;
+      const prevTab = prevId ? tabsRef.current.find((t) => t.id === prevId) : null;
+      if (prevTab) {
+        // Turn off pick mode on the outgoing tab (picker doesn't cross tabs).
+        if (prevTab.pickMode) {
+          void api.browser.setPickMode({ browserId: prevTab.browserId, enabled: false });
+          patchTabInStore(prevTab.browserId, { pickMode: false });
+        }
+        void api.browser.hide({ browserId: prevTab.browserId });
+      }
+      setActiveTabId(tab.id);
+      // Refs lag the store by one render — update them NOW so showActiveView()
+      // measures + targets the new tab, not the outgoing one.
+      activeTabIdRef.current = tab.id;
+      showActiveView();
+    },
+    [addTab, setActiveTabId, patchTabInStore, showActiveView],
+  );
+
   // First time THIS container becomes active with no tabs at all: create the
   // initial tab. (Tabs are shared, so this only fires once per session no
   // matter which container mounts first.) creatingTabRef skips the redundant
@@ -578,6 +623,14 @@ export function BrowserPanel({ mode }: BrowserPanelProps) {
         if (tab) void api.browser.hide({ browserId: tab.browserId });
         return;
       }
+      // Main created a fresh view for a page-initiated new-window request
+      // (target=_blank / window.open): adopt it as a new panel tab. Must be
+      // handled BEFORE the browserId lookup below — the tab doesn't exist yet.
+      if (msg.type === "tabOpened") {
+        const p = (msg.payload as { url?: string; title?: string; background?: boolean }) ?? {};
+        adoptWindowOpenTab(msg.browserId, p);
+        return;
+      }
       const tab = tabsRef.current.find((t) => t.browserId === msg.browserId);
       if (!tab) return; // not one of our tabs (e.g. stale view)
       if (msg.type === "navigation") {
@@ -608,7 +661,7 @@ export function BrowserPanel({ mode }: BrowserPanelProps) {
       }
     });
     return unsub;
-  }, [isActive, mode, enqueueChatElement, patchTabInStore, refreshHistory]);
+  }, [isActive, mode, adoptWindowOpenTab, enqueueChatElement, patchTabInStore, refreshHistory]);
 
   // Clear the pick flash + floating preview after a moment.
   useEffect(() => {

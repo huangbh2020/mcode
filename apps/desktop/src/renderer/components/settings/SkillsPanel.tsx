@@ -56,6 +56,7 @@ import {
   IconLoader2,
   IconDownload,
   IconFolder,
+  IconFileText,
 } from "@renderer/lib/icons.js";
 import type { SkillInfo, SkillSource, ExternalSkillInfo, SkillTool } from "@contracts/ipc";
 
@@ -829,10 +830,11 @@ function ImportSkillsDialog({
     skipped: string[];
     errors: Array<{ name: string; error: string }>;
   } | null>(null);
-  // User-picked local directory (the "本地" tab's "select folder" flow). When
-  // set, its scanned skills appear under the local tab. Reset every time the
-  // dialog opens.
+  // User-picked local directory and/or single skill file (the "本地" tab's
+  // "select folder" / "select file" flows). Both are independent scan sources
+  // and may be combined; "清除" resets both.
   const [localDir, setLocalDir] = useState<string | null>(null);
+  const [localFile, setLocalFile] = useState<string | null>(null);
   // Which agent's tab is showing. Reset on open; falls back to the first tab
   // that actually has skills when the stored one has none (see `activeTool`).
   const [activeToolRaw, setActiveToolRaw] = useState<SkillTool>("claude-code");
@@ -844,16 +846,19 @@ function ImportSkillsDialog({
     setLoading(true);
     setError(null);
     setResult(null);
-    if (localDir === null) setSelected(new Set());
+    if (localDir === null && localFile === null) setSelected(new Set());
     setExisting(new Set());
     setActiveToolRaw("claude-code");
     void (async () => {
       try {
-        // Scan external tools (+ the picked local dir if any) and fetch the
-        // current global skills (projectPath optional — works with no project)
-        // to mark already-imported ones as "existing".
+        // Scan external tools (+ the picked local dir / file if any) and fetch
+        // the current global skills (projectPath optional — works with no
+        // project) to mark already-imported ones as "existing".
         const [scanRes, listRes] = await Promise.all([
-          api.skills.scanSources(localDir ? { localDir } : {}),
+          api.skills.scanSources({
+            ...(localDir ? { localDir } : {}),
+            ...(localFile ? { localFile } : {}),
+          }),
           api.skills.list(projectPath ? { projectPath } : {}),
         ]);
         if (cancelled) return;
@@ -872,8 +877,8 @@ function ImportSkillsDialog({
     return () => {
       cancelled = true;
     };
-    // localDir is a dep: picking a new folder re-scans with it included.
-  }, [open, projectPath, localDir]);
+    // localDir/localFile are deps: picking a new folder/file re-scans with it.
+  }, [open, projectPath, localDir, localFile]);
 
   // Selection key is sourcePath (unique per skill per tool).
   const toggle = (sourcePath: string) => {
@@ -967,14 +972,40 @@ function ImportSkillsDialog({
     }
   };
 
+  // Pick a single skill FILE (the "select file" flow): the markdown file IS
+  // the SKILL.md body; importing materializes it as <name>/SKILL.md. Uses the
+  // generic multi-file picker (first selection). Markdown-only is pre-checked
+  // here so the user sees an error instead of a silent no-op from the scan
+  // (main skips non-.md files defensively).
+  const pickLocalFile = async () => {
+    try {
+      const { paths } = await api.pickFiles({ title: t("settings.skills.chooseFile") });
+      const picked = paths[0];
+      if (!picked) return; // user cancelled
+      const dot = picked.lastIndexOf(".");
+      const ext = dot >= 0 ? picked.slice(dot + 1).toLowerCase() : "";
+      if (ext !== "md" && ext !== "markdown") {
+        setError(t("settings.skills.fileTypeError"));
+        return;
+      }
+      setSelected(new Set());
+      setLocalFile(picked);
+      setActiveToolRaw("local");
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  };
+
   const clearLocalFolder = () => {
     setSelected(new Set());
     setLocalDir(null);
+    setLocalFile(null);
   };
 
   // The local-folder picker card — rendered inside the "本地" tab when tabs are
   // showing, and above the empty state when no external skills were found at
   // all (so the local-import path stays discoverable in either case).
+  const hasLocalPick = localDir != null || localFile != null;
   const localPicker = (
     <div className="rounded border border-edge bg-surface/40 p-2">
       <div className="flex items-center gap-2">
@@ -983,7 +1014,7 @@ function ImportSkillsDialog({
           {t("settings.skills.localFolder")}
         </span>
         <div className="flex-1" />
-        {localDir ? (
+        {hasLocalPick ? (
           <button
             type="button"
             onClick={clearLocalFolder}
@@ -993,29 +1024,53 @@ function ImportSkillsDialog({
           </button>
         ) : null}
       </div>
-      <div className="mt-1.5 flex items-center gap-2">
-        {localDir ? (
-          <span
-            className="min-w-0 flex-1 truncate rounded bg-surface px-1.5 py-1 font-mono text-[0.7143em] text-content-subtle"
-            title={localDir}
-          >
-            {localDir}
-          </span>
+      <div className="mt-1.5 flex items-start gap-2">
+        {hasLocalPick ? (
+          <div className="min-w-0 flex-1 space-y-1">
+            {localDir && (
+              <span
+                className="block truncate rounded bg-surface px-1.5 py-1 font-mono text-[0.7143em] text-content-subtle"
+                title={localDir}
+              >
+                {localDir}
+              </span>
+            )}
+            {localFile && (
+              <span
+                className="block truncate rounded bg-surface px-1.5 py-1 font-mono text-[0.7143em] text-content-subtle"
+                title={localFile}
+              >
+                {localFile}
+              </span>
+            )}
+          </div>
         ) : (
-          <span className="min-w-0 flex-1 text-[0.7143em] text-content-subtle">
+          <span className="min-w-0 flex-1 text-[0.7143em] leading-relaxed text-content-subtle">
             {t("settings.skills.localFolderHint")}
           </span>
         )}
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={() => void pickLocalFolder()}
-          disabled={loading}
-          className="shrink-0 gap-1"
-        >
-          <IconFolder size={12} />
-          {t("settings.skills.chooseFolder")}
-        </Button>
+        <div className="flex shrink-0 gap-1">
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => void pickLocalFolder()}
+            disabled={loading}
+            className="gap-1"
+          >
+            <IconFolder size={12} />
+            {t("settings.skills.chooseFolder")}
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => void pickLocalFile()}
+            disabled={loading}
+            className="gap-1"
+          >
+            <IconFileText size={12} />
+            {t("settings.skills.chooseFile")}
+          </Button>
+        </div>
       </div>
     </div>
   );

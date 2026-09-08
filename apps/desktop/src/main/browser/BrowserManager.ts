@@ -17,14 +17,17 @@
  * preserves browsing state). close() destroys. disposeAll() on app quit.
  *
  * Security: each view runs with contextIsolation + sandbox + a locked-down
- * preload that exposes only `mcodeBridge.pickElement`. External links
- * (target=_blank) are routed to the system browser, never opened in-view.
+ * preload that exposes only `mcodeBridge.pickElement`. New-window requests
+ * (target=_blank) for web URLs become new in-panel tabs on the same session;
+ * other protocols go to the system browser. Desktop pages see a plain Chrome
+ * UA (the Electron/app tail is stripped) — sign-in flows refuse webview UAs.
  */
 import { randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import {
   ipcMain,
+  safeStorage,
   shell,
   session,
   WebContentsView,
@@ -39,6 +42,7 @@ import {
   IPC,
   resolveBrowserDeviceSpec,
   BROWSER_COOKIE_VAULT_SETTING_KEY,
+  BROWSER_COOKIE_VAULT_ENC_SETTING_KEY,
   BROWSER_DATA_DIR_SETTING_KEY,
   BROWSER_PERSIST_LOGIN_SETTING_KEY,
 } from "@contracts/ipc";
@@ -66,6 +70,19 @@ function urlOrigin(url: string): string {
   } catch {
     return "";
   }
+}
+
+/** Strip the Electron/app-name tokens Electron appends after the Safari marker
+ *  (`…Safari/537.36 AppName/1.2.3 Electron/33.0.0` → `…Safari/537.36`) so
+ *  desktop-mode pages see a plain Chrome UA. Sites like Google sign-in and
+ *  some Cloudflare-protected hosts refuse embedded-webview UAs outright; the
+ *  Chrome token itself stays genuine (real Chromium version), only the trailing
+ *  framework identifiers are removed. Falls back to removing just the
+ *  Electron/app tail if the Safari marker is ever absent. */
+function chromeLikeUserAgent(ua: string): string {
+  const m = ua.match(/^.*?Safari\/[\d.]+/);
+  if (m) return m[0];
+  return ua.replace(/\s*[\w.-]+\/[\d.]+\s+Electron\/[\d.]+\s*$|\s+Electron\/[\d.]+\s*$/, "").trim();
 }
 
 /** Metadata for a live browser view, returned by `list()` for agent discovery. */
@@ -348,9 +365,35 @@ class BrowserManagerImpl {
   private persistTimer: NodeJS.Timeout | null = null;
 
   create(projectPath: string, initialDevice?: BrowserDevicePreset): BrowserCreateResult {
+    const spawned = this.spawnView(projectPath);
+    if ("error" in spawned) return { ok: false, error: spawned.error };
+    const live = spawned.live;
+
+    // Apply an optional initial device-emulation preset once the renderer is
+    // ready. Calling enableDeviceEmulation before the GPU/renderer process is
+    // initialized (i.e. synchronously right after create) crashes Chromium on
+    // Windows; dom-ready is the safe earliest point. Only applied if it differs
+    // from the default "desktop" (which is a no-op disable).
+    if (initialDevice && initialDevice !== "desktop") {
+      const applyOnce = () => {
+        this.setDevice(live.id, initialDevice);
+        live.view.webContents.removeListener("dom-ready", applyOnce);
+      };
+      live.view.webContents.on("dom-ready", applyOnce);
+    }
+
+    return { ok: true, browserId: live.id };
+  }
+
+  /** Core view construction shared by the panel's create() and the
+   *  window-open ("open as a new tab") path. Creates the WebContentsView on
+   *  the shared browser session, registers it, wires navigation events, and
+   *  installs the window-open handler that turns target=_blank / window.open
+   *  into in-panel tabs (see handleWindowOpen). */
+  private spawnView(projectPath: string): { live: LiveBrowser } | { error: string } {
     const win = getMainWindow();
     if (!win || win.isDestroyed()) {
-      return { ok: false, error: "主窗口未就绪，无法创建浏览器" };
+      return { error: "主窗口未就绪，无法创建浏览器" };
     }
 
     const id = randomUUID();
@@ -380,12 +423,22 @@ class BrowserManagerImpl {
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       log.error(`browser view create failed: ${msg}`);
-      return { ok: false, error: `创建浏览器视图失败: ${msg}` };
+      return { error: `创建浏览器视图失败: ${msg}` };
     }
 
     view.setBackgroundColor(BROWSER_BACKGROUND);
     // Start offscreen + invisible until the renderer sends real bounds + show().
     view.setBounds(HIDDEN_BOUNDS);
+
+    // Present a plain Chrome UA on desktop pages — chromeLikeUserAgent strips
+    // the Electron/app-name tail, which sign-in flows (Google & friends) and
+    // some anti-bot layers refuse outright. The cleaned value doubles as the
+    // desktop default that the mobile-emulation path restores on turn-off.
+    const rawUserAgent = view.webContents.getUserAgent();
+    const desktopUserAgent = chromeLikeUserAgent(rawUserAgent);
+    if (desktopUserAgent && desktopUserAgent !== rawUserAgent) {
+      view.webContents.setUserAgent(desktopUserAgent);
+    }
 
     const live: LiveBrowser = {
       id,
@@ -396,7 +449,7 @@ class BrowserManagerImpl {
       pickMode: false,
       device: "desktop",
       viewport: { device: "desktop", orientation: "portrait" },
-      defaultUserAgent: view.webContents.getUserAgent(),
+      defaultUserAgent: desktopUserAgent || rawUserAgent,
       uaDebuggerAttached: false,
       csDebuggerAttached: false,
       ready: this.restoreCookieVault(ses),
@@ -410,29 +463,55 @@ class BrowserManagerImpl {
     this.attachNavigationEvents(live);
     this.ensurePersistTimer();
 
-    // Apply an optional initial device-emulation preset once the renderer is
-    // ready. Calling enableDeviceEmulation before the GPU/renderer process is
-    // initialized (i.e. synchronously right after create) crashes Chromium on
-    // Windows; dom-ready is the safe earliest point. Only applied if it differs
-    // from the default "desktop" (which is a no-op disable).
-    if (initialDevice && initialDevice !== "desktop") {
-      const applyOnce = () => {
-        this.setDevice(id, initialDevice);
-        live.view.webContents.removeListener("dom-ready", applyOnce);
-      };
-      live.view.webContents.on("dom-ready", applyOnce);
-    }
-
-    // External links (target=_blank, window.open) go to the system browser,
-    // never open a new Electron window inside the view.
-    view.webContents.setWindowOpenHandler(({ url }) => {
-      if (url) void shell.openExternal(url);
+    // New-window requests (target=_blank, window.open) become in-panel tabs
+    // for web URLs so browsing never leaves the app; other protocols
+    // (mailto: & co) still go to the system browser. The handler must return
+    // synchronously — the adoption work is fire-and-forget.
+    view.webContents.setWindowOpenHandler(({ url, disposition }) => {
+      void this.handleWindowOpen(live, url, disposition);
       return { action: "deny" };
     });
 
     log.info(`browser created: ${id} project=${projectPath}`);
     void this.pinColorScheme(live);
-    return { ok: true, browserId: id };
+    return { live };
+  }
+
+  /** Adopt a page-initiated new-window request as a new in-panel tab. Web
+   *  URLs (http/https/file) spawn a fresh view on the SAME browser session
+   *  (cookies shared, so OAuth popups land on the signed-in session) and push
+   *  a "tabOpened" event; the renderer adopts the new browserId into its tab
+   *  strip and takes over visibility/bounds. Everything else — other
+   *  protocols, unparseable URLs, spawn failures — falls back to the system
+   *  browser, mirroring the previous open-everything-externally behavior. */
+  private handleWindowOpen(parent: LiveBrowser, rawUrl: string, disposition: string): void {
+    if (!rawUrl) return;
+    let proto = "";
+    try {
+      proto = new URL(rawUrl).protocol;
+    } catch {
+      /* unparseable → system browser below */
+    }
+    if (proto === "http:" || proto === "https:" || proto === "file:") {
+      const spawned = this.spawnView(parent.projectPath);
+      if ("live" in spawned) {
+        const child = spawned.live;
+        // loadUrl waits for the cookie vault restore before the first request.
+        this.loadUrl(child.id, rawUrl);
+        sendToRenderer(IPC.BROWSER_EVENT, {
+          channel: IPC.BROWSER_EVENT,
+          browserId: child.id,
+          type: "tabOpened",
+          payload: { url: rawUrl, background: disposition === "background-tab" },
+        });
+        log.info(`browser window-open → new tab: ${child.id} url=${rawUrl} (from ${parent.id})`);
+        return;
+      }
+      log.warn(`browser window-open tab spawn failed, falling back to system browser: ${spawned.error}`);
+    }
+    shell.openExternal(rawUrl).catch((err: unknown) => {
+      log.warn(`browser openExternal failed for ${rawUrl}: ${err instanceof Error ? err.message : String(err)}`);
+    });
   }
 
   /** Pin this view's `prefers-color-scheme` media query to the OS's real
@@ -971,6 +1050,9 @@ class BrowserManagerImpl {
   // store can therefore not be relied on: we snapshot ALL live cookies into
   // the settings table on a background timer and before quit, and re-inject
   // them into the session before its first navigation (restoreCookieVault).
+  // The snapshot is safeStorage-encrypted when the OS credential store is
+  // available (cookies are credentials); plaintext is the fallback where it
+  // isn't, and the restore fallback for vaults written before encryption.
   // Gated by `browser.persistLogin` (default on). Once the app upgrades to
   // Electron ≥ 41 the native store works again; the vault simply keeps
   // shadowing it as a belt-and-braces copy.
@@ -995,7 +1077,28 @@ class BrowserManagerImpl {
         ...(c.session ? {} : { expirationDate: c.expirationDate }),
       }))
       .slice(0, COOKIE_VAULT_MAX);
-    SettingRepo.set(BROWSER_COOKIE_VAULT_SETTING_KEY, JSON.stringify(vault));
+    const plain = JSON.stringify(vault);
+    // Cookies are credentials — store them via the OS credential store
+    // (DPAPI/Keychain/keyring) when available; base64 ciphertext in the
+    // settings table. Plaintext legacy key is the fallback where encryption
+    // is unavailable (Linux without a keyring) and remains the restore
+    // fallback for vaults written before the encrypted key existed.
+    let encrypted = false;
+    try {
+      if (safeStorage.isEncryptionAvailable()) {
+        SettingRepo.set(BROWSER_COOKIE_VAULT_ENC_SETTING_KEY, safeStorage.encryptString(plain).toString("base64"));
+        encrypted = true;
+        // Migration: once an encrypted copy exists, blank the plaintext one.
+        if (SettingRepo.get(BROWSER_COOKIE_VAULT_SETTING_KEY)) {
+          SettingRepo.set(BROWSER_COOKIE_VAULT_SETTING_KEY, "");
+        }
+      }
+    } catch (err) {
+      log.warn(
+        `browser: cookie vault encryption failed (storing plaintext): ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+    if (!encrypted) SettingRepo.set(BROWSER_COOKIE_VAULT_SETTING_KEY, plain);
     // Belt-and-braces for Electron ≥ 41, where the native store does commit.
     try {
       await ses.cookies.flushStore();
@@ -1021,7 +1124,21 @@ class BrowserManagerImpl {
     if (this.vaultRestored.has(ses)) return;
     this.vaultRestored.add(ses);
     if (!isPersistLoginEnabled()) return;
-    const raw = SettingRepo.get(BROWSER_COOKIE_VAULT_SETTING_KEY);
+    // Preferred source: safeStorage-encrypted vault. Decrypt failure (e.g.
+    // the DB row was copied from another OS user) falls through to the legacy
+    // plaintext key rather than losing all sign-in state.
+    let raw: string | null = null;
+    const enc = SettingRepo.get(BROWSER_COOKIE_VAULT_ENC_SETTING_KEY);
+    if (enc && safeStorage.isEncryptionAvailable()) {
+      try {
+        raw = safeStorage.decryptString(Buffer.from(enc, "base64"));
+      } catch (err) {
+        log.warn(
+          `browser: cookie vault decrypt failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
+    if (!raw) raw = SettingRepo.get(BROWSER_COOKIE_VAULT_SETTING_KEY);
     if (!raw) return;
     let vault: VaultCookie[];
     try {

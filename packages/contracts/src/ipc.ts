@@ -2462,7 +2462,11 @@ export type SkillsListInput = z.infer<typeof SkillsListSchema>;
 /** Skill name charset — kebab-case-ish identifiers only. Restricting here
  *  (and again in main with pathWithin) prevents path-traversal via `../` or
  *  absolute paths. Matches what the SDK / Claude Code itself accepts. */
-const SKILL_NAME_RE = /^[A-Za-z0-9_-]+$/;
+/** Skill name charset — also enforced per-item by the import handler (main
+ *  imports this), since SkillsImportItemSchema deliberately does NOT regex-check
+ *  the name (a scan result may carry an arbitrary display name; a bad one must
+ *  fail just that item, not the whole batch via a zod parse error). */
+export const SKILL_NAME_RE = /^[A-Za-z0-9_-]+$/;
 
 /** Read one skill's full SKILL.md source. Returns the complete file text (no
  *  truncation — skills can be large). A missing file resolves to empty
@@ -2540,22 +2544,31 @@ export interface ExternalSkillInfo {
  *  When `localDir` is provided, also scans that user-picked directory:
  *  if it directly contains a SKILL.md it is treated as a single skill,
  *  otherwise each SKILL.md-bearing subdirectory is treated as a skill (same
- *  rule as scanning a tool's skills root). Always resolves (degrades to an
- *  empty list on any IO error). */
+ *  rule as scanning a tool's skills root). When `localFile` is provided, that
+ *  user-picked single markdown file is treated as one single-file skill (its
+ *  frontmatter/`name` or file stem names the skill; importing materializes it
+ *  as <name>/SKILL.md). Both picks are independent and may be combined.
+ *  Always resolves (degrades to an empty list on any IO error). */
 export const SkillsScanSourcesSchema = z.object({
   /** Optional: a user-picked local directory to scan in addition to the fixed
    *  external tool dirs. Used by the import dialog's "select folder" flow. */
   localDir: z.string().optional(),
+  /** Optional: a user-picked single skill file (.md/.markdown) to import as a
+   *  one-file skill. Used by the import dialog's "select file" flow. */
+  localFile: z.string().optional(),
 });
 export type SkillsScanSourcesInput = z.infer<typeof SkillsScanSourcesSchema>;
 
-/** A single skill to import: the source directory (from a scan result) and
- *  the name to use as the destination directory under ~/.mcode/skills. */
+/** A single skill to import: the source directory OR single file (from a scan
+ *  result) and the name to use as the destination directory under
+ *  ~/.mcode/skills. The name is validated per-item by the handler (regex),
+ *  not here — one un-importable skill must not reject the whole batch. */
 export const SkillsImportItemSchema = z.object({
-  /** Absolute path to the source skill directory (from a scanSources result). */
+  /** Absolute path to the source skill directory or file (from a scanSources
+   *  result). */
   sourcePath: z.string(),
   /** Destination skill name (directory name under ~/.mcode/skills). */
-  name: z.string().regex(SKILL_NAME_RE, "invalid skill name"),
+  name: z.string().min(1),
 });
 
 /** Import (copy) selected skills from external tools into ~/.mcode/skills.
@@ -3201,6 +3214,9 @@ export interface PickedElement {
  *  - "crashed":    the renderer process died; the view needs recreating.
  *  - "agentOpened": an agent tool created/reused a browser view; the renderer
  *    should switch the right panel to the browser tab so the view is visible.
+ *  - "tabOpened": a page opened a link in a new window (target=_blank /
+ *    window.open); main created a fresh view for it and the renderer should
+ *    adopt that browserId as a new panel tab (payload: BrowserTabOpened).
  *  - "authRequest": a page asked for HTTP Basic Auth; the payload is a
  *    BrowserAuthRequest and the renderer should show a login dialog, then
  *    answer via the browser.authRespond RPC. */
@@ -3213,8 +3229,18 @@ export interface BrowserEventMessage {
     | "pickResult"
     | "crashed"
     | "agentOpened"
+    | "tabOpened"
     | "authRequest";
   payload: unknown;
+}
+
+/** Payload of the "tabOpened" browser push event. `background` is true when
+ *  the link was opened behind the current tab (middle/ctrl-click); the
+ *  renderer adds the tab without switching to it in that case. */
+export interface BrowserTabOpened {
+  url: string;
+  title?: string;
+  background?: boolean;
 }
 
 /** Payload of the "authRequest" browser push event. The requestId maps 1:1 to
@@ -3340,8 +3366,20 @@ export const BROWSER_PERSIST_LOGIN_SETTING_KEY = "browser.persistLogin";
 
 /** Setting key holding the browser cookie vault — a JSON array of
  *  `VaultCookie` snapshots written by BrowserManager (main only) and restored
- *  when a browser view's session is first created after a restart. */
+ *  when a browser view's session is first created after a restart. Legacy
+ *  (plaintext) location: new writes go to `browser.cookieVault.enc` via
+ *  safeStorage; this key remains only as the restore fallback for vaults
+ *  written before the encrypted key existed (and when OS-level encryption is
+ *  unavailable, e.g. Linux without a keyring). */
 export const BROWSER_COOKIE_VAULT_SETTING_KEY = "browser.cookieVault";
+
+/** Setting key holding the safeStorage-encrypted cookie vault (base64
+ *  ciphertext of the same `VaultCookie` JSON array). Preferred over
+ *  `browser.cookieVault` on both save and restore; sign-in cookies are
+ *  credentials, so they must not sit in the DB in plaintext where the OS
+ *  supports encryption (DPAPI on Windows, Keychain on macOS, kwallet/gnome-
+ *  keyring on Linux — with automatic plaintext fallback where it doesn't). */
+export const BROWSER_COOKIE_VAULT_ENC_SETTING_KEY = "browser.cookieVault.enc";
 
 /** Setting key for the address-bar history (JSON array of
  *  `BrowserHistoryEntry`, most-recent first, capped at 50). Written only by
