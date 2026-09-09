@@ -5168,7 +5168,15 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       }
       const prevList = s.sessionsByProject[projectId] ?? EMPTY_SESSIONS;
       const total = s.sessionsTotalByProject[projectId] ?? prevList.length;
-      const trimmed = prevList.slice(0, SESSION_PAGE_SIZE);
+      // Reset ONLY the local section's pagination cache — the worktree
+      // section is not paginated, so there is nothing to reset there, and
+      // trimming it away would evict OPEN worktree threads from the cache:
+      // tab / toolbar titles resolve by id against these caches (the stream
+      // fallback is stale or empty in tree mode), so a trimmed row renders
+      // "(unknown)" and syncConfigFromSession silently no-ops (reproduced:
+      // open a worktree thread → collapse its project).
+      const { local, worktree } = splitSessionSections(prevList);
+      const trimmed = [...local.slice(0, SESSION_PAGE_SIZE), ...worktree];
       const isActive = projectId === s.activeProjectId;
       return {
         expandedProjects: { ...s.expandedProjects, [projectId]: false },
