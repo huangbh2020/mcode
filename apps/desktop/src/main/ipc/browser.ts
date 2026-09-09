@@ -257,4 +257,13 @@ export function registerBrowserHandlers(ipcMain: IpcMain): void {
       return { ok: false as const, error: msg };
     }
   });
+
+  ipcMain.handle(IPC.BROWSER_CLEAR_COOKIES, async () => {
+    try {
+      return await BrowserManager.clearBrowserCookies();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return { ok: false as const, error: msg };
+    }
+  });
 }

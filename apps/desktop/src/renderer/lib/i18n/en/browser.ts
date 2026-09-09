@@ -26,6 +26,16 @@ export const en = {
   "browser.bookmarkEmpty": "No bookmarks yet",
   "browser.removeBookmark": "Remove this bookmark",
   "browser.historyEmpty": "No history yet",
+  "browser.openInNewTab": "Open in new tab",
+  "browser.today": "Today",
+  "browser.yesterday": "Yesterday",
+  "browser.earlier": "Earlier",
+  "browser.downloads": "Downloads",
+  "browser.downloadActive": "{n} downloading",
+  "browser.privacy": "Privacy & cache",
+  "browser.clearCache": "Clear browsing cache…",
+  "browser.clearCookies": "Clear sign-in state (cookies)…",
+  "browser.clearCookiesConfirm": "This signs you out of all sites and wipes the remembered sign-in state; it will not come back after a restart. Continue?",
 
   /* ── panel ── */
   "browser.selectProjectFirst": "Select a project first",

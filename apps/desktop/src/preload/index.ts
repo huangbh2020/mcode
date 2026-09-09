@@ -384,6 +384,8 @@ const api = {
       ipcRenderer.invoke(IPC.BROWSER_SET_DEVICE, input)) as RpcMap["browser.setDevice"],
     clearCache: (() =>
       ipcRenderer.invoke(IPC.BROWSER_CLEAR_CACHE)) as RpcMap["browser.clearCache"],
+    clearCookies: (() =>
+      ipcRenderer.invoke(IPC.BROWSER_CLEAR_COOKIES)) as RpcMap["browser.clearCookies"],
     historyRemove: ((input) =>
       ipcRenderer.invoke(IPC.BROWSER_HISTORY_REMOVE, input)) as RpcMap["browser.historyRemove"],
     historyClear: (() =>

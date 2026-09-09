@@ -29,6 +29,16 @@ export const zh = {
   "browser.bookmarkEmpty": "暂无收藏",
   "browser.removeBookmark": "删除该收藏",
   "browser.historyEmpty": "暂无历史记录",
+  "browser.openInNewTab": "在新标签页打开",
+  "browser.today": "今天",
+  "browser.yesterday": "昨天",
+  "browser.earlier": "更早",
+  "browser.downloads": "下载",
+  "browser.downloadActive": "{n} 项下载中",
+  "browser.privacy": "隐私与缓存",
+  "browser.clearCache": "清除浏览缓存…",
+  "browser.clearCookies": "清除登录状态(Cookie)…",
+  "browser.clearCookiesConfirm": "将退出所有网站的登录状态,并清空记忆的登录信息,重启后不会恢复。确定继续?",
 
   /* ── panel ── */
   "browser.selectProjectFirst": "请先选择一个项目",

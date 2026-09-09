@@ -4045,6 +4045,10 @@ export interface RpcMap {
    *  (localStorage / IndexedDB / service workers / etc.). Cookies and login
    *  data are preserved, so the user stays signed in. */
   "browser.clearCache": () => Promise<BrowserOpResult>;
+  /** Clear ALL cookies from the shared browser session (sign-out everywhere)
+   *  AND wipe the persisted cookie vault, so sign-ins cannot resurrect on
+   *  restart via restoreCookieVault. */
+  "browser.clearCookies": () => Promise<BrowserOpResult>;
   /** Remove one entry from the address-bar history. */
   "browser.historyRemove": (input: BrowserHistoryRemoveInput) => Promise<BrowserOpResult>;
   /** Clear the whole address-bar history. */
@@ -4397,6 +4401,9 @@ export const IPC = {
   BROWSER_BOOKMARK_REMOVE: "browser:bookmarkRemove",
   BROWSER_SET_DEVICE: "browser:setDevice",
   BROWSER_CLEAR_CACHE: "browser:clearCache",
+  // Clear sign-in state (cookies) of the embedded browser — separate from
+  // clearCache, which deliberately keeps cookies so users stay signed in.
+  BROWSER_CLEAR_COOKIES: "browser:clearCookies",
   // Address history + HTTP Basic Auth (embedded browser)
   BROWSER_HISTORY_REMOVE: "browser:historyRemove",
   BROWSER_HISTORY_CLEAR: "browser:historyClear",

@@ -1,0 +1,534 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Mcode 浏览器「更多」菜单 · 树形重构</title>
+<style>
+/* ══════════════════════════════════════════════════════════════
+   浏览器面板「更多」弹层重构 —— 三段平铺 → 菜单树
+   方案 A:树形折叠面板(推荐,多开)
+   方案 B:Chrome 式级联菜单(hover 向左弹出子面板)
+   数据源 / freeze 契约不变,纯展示层重构。
+   ══════════════════════════════════════════════════════════════ */
+:root{
+  --surface:#1a1d24;--surface-muted:#2c313c;--surface-hover:#3a404e;
+  --content:#e7e8ec;--content-muted:#bcbfc6;--content-subtle:#9ea2ab;
+  --edge:#2d3340;--accent:#10b981;--danger:#f87171;
+  --sky:#38bdf8;--amber:#fbbf24;--indigo:#818cf8;
+  --page-bg:#111318;--ghost:#14171d;--page:#0f1218;
+}
+body.light{
+  --surface:#fff;--surface-muted:#f4f4f5;--surface-hover:#e4e4e7;
+  --content:#09090b;--content-muted:#3f3f46;--content-subtle:#71717a;
+  --edge:#e4e4e7;--accent:#059669;--danger:#dc2626;
+  --sky:#0284c7;--amber:#b45309;--indigo:#4f46e5;
+  --page-bg:#eceef1;--ghost:#f6f7f9;--page:#e8eaee;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{
+  font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Segoe UI","Microsoft YaHei",sans-serif;
+  background:var(--page-bg);color:var(--content);
+  display:flex;flex-direction:column;overflow:hidden;transition:background .25s;
+}
+.page-head{flex:none;display:flex;align-items:center;gap:16px;padding:14px 22px 10px}
+.page-head h1{font-size:15px;font-weight:650}
+.page-head .sub{font-size:12px;color:var(--content-subtle);margin-top:2px}
+#themeBtn{margin-left:auto;border:1px solid var(--edge);background:var(--surface);color:var(--content-subtle);width:30px;height:30px;border-radius:8px;cursor:pointer;font-size:14px}
+#themeBtn:hover{color:var(--content);background:var(--surface-hover)}
+.stage{flex:1;min-height:0;display:flex;gap:22px;padding:4px 22px 18px;overflow:auto;align-items:flex-start;justify-content:center}
+
+/* ── 浏览器侧栏 mock ── */
+.frame-wrap{flex:none;display:flex;flex-direction:column;gap:8px}
+.frame-wrap .cap{font-size:12px;font-weight:650;text-align:center;color:var(--content-muted)}
+.frame-wrap .cap b{color:var(--content)}
+.frame-wrap .cap.rec{color:var(--accent)}
+.app-frame{width:400px;flex:none;display:flex;flex-direction:column;border-radius:14px;overflow:hidden;border:1px solid var(--edge);background:var(--surface);box-shadow:0 18px 50px rgba(0,0,0,.35);height:600px}
+
+/* tab strip */
+.tabs{flex:none;height:34px;display:flex;align-items:center;gap:6px;padding:0 8px;background:var(--ghost);border-bottom:1px solid var(--edge)}
+.tab{display:flex;align-items:center;gap:6px;height:24px;padding:0 9px;border-radius:6px;font-size:11px;color:var(--content-muted);cursor:pointer;max-width:150px}
+.tab span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tab.on{background:var(--surface);color:var(--content);box-shadow:0 1px 3px rgba(0,0,0,.25)}
+.tab .x{width:12px;height:12px;border-radius:3px;display:flex;align-items:center;justify-content:center;color:var(--content-subtle);flex:none}
+.tab .x:hover{background:var(--surface-hover)}
+.tab-new{width:22px;height:22px;border-radius:6px;display:flex;align-items:center;justify-content:center;color:var(--content-subtle);cursor:pointer}
+.tab-new:hover{background:var(--surface-hover)}
+
+/* toolbar(对齐真实 BrowserToolbar:h-11) */
+.toolbar{flex:none;height:44px;display:flex;align-items:center;gap:4px;padding:0 8px;background:var(--surface);border-bottom:1px solid var(--edge);position:relative;z-index:5}
+.tb{width:26px;height:26px;border:0;border-radius:6px;background:transparent;color:var(--content-muted);display:flex;align-items:center;justify-content:center;cursor:pointer;flex:none;transition:.12s}
+.tb:hover{background:var(--surface-hover);color:var(--content)}
+.addr{flex:1;min-width:0;height:26px;border:1px solid var(--edge);border-radius:7px;background:var(--surface-muted);color:var(--content-muted);font-size:11.5px;display:flex;align-items:center;padding:0 9px;gap:6px;overflow:hidden;white-space:nowrap}
+.addr .lock{color:var(--content-subtle);flex:none}
+.addr i{font-style:normal;overflow:hidden;text-overflow:ellipsis}
+.anchor{position:relative}
+.anchor.open .tb{background:color-mix(in srgb,var(--accent) 18%,transparent);color:var(--accent)}
+
+/* 页面快照 ghost(弹层浮在其上 —— 对应 freeze 契约) */
+.page-ghost{flex:1;background:var(--page);position:relative;font-size:11px;color:var(--content-subtle)}
+.page-ghost .lines{position:absolute;inset:18px 22px;opacity:.5}
+.page-ghost .l{height:9px;border-radius:4px;background:var(--surface-hover);margin-bottom:9px}
+.page-ghost .l:nth-child(1){width:38%}.page-ghost .l:nth-child(2){width:86%}
+.page-ghost .l:nth-child(3){width:72%}.page-ghost .l:nth-child(4){width:90%}
+.page-ghost .l:nth-child(5){width:55%}.page-ghost .l:nth-child(7){width:82%}
+.page-ghost .frozen{position:absolute;left:10px;bottom:10px;font-size:10px;padding:3px 8px;border-radius:6px;background:var(--surface);border:1px dashed var(--edge);opacity:.85}
+
+/* ════════ 弹层通用 ════════ */
+.menu{
+  position:absolute;top:6px;right:8px;z-index:20;width:302px;
+  background:var(--surface);border:1px solid var(--edge);border-radius:11px;
+  box-shadow:0 14px 38px rgba(0,0,0,.45);overflow:visible;font-size:12px;
+  display:flex;flex-direction:column;max-height:478px;
+}
+.m-scroll{overflow-y:auto;scrollbar-width:thin;border-radius:0 0 10px 10px;min-height:0}
+.mrow{
+  display:flex;align-items:center;gap:9px;padding:7px 12px;cursor:pointer;
+  color:var(--content);transition:background .1s;user-select:none;
+}
+.mrow:hover{background:var(--surface-hover)}
+.mrow .ic{width:14px;height:14px;flex:none;color:var(--content-muted)}
+.mrow .lbl{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mrow .kbd{font-size:10px;color:var(--content-subtle);border:1px solid var(--edge);background:var(--surface-muted);border-radius:4px;padding:1px 5px;flex:none}
+.mrow.star-on{color:var(--accent)}
+.mrow.star-on .ic{color:var(--accent)}
+.m-sep{height:1px;background:var(--edge);flex:none}
+
+/* 徽标 / 标签 */
+.count{font-size:10px;color:var(--content-subtle);background:var(--surface-muted);border-radius:8px;padding:1px 6px;flex:none}
+.tag-new{font-size:9px;color:var(--accent);border:1px solid color-mix(in srgb,var(--accent) 45%,transparent);background:color-mix(in srgb,var(--accent) 9%,transparent);border-radius:4px;padding:0 4px;flex:none}
+.tag-prog{font-size:9px;color:var(--amber);flex:none;display:flex;align-items:center;gap:3px}
+
+/* ════════ 方案 A:树形节点 ════════ */
+.tnode{border-bottom:1px solid var(--edge)}
+.tnode:last-child{border-bottom:0}
+.tnode-head{display:flex;align-items:center;gap:8px;padding:7px 10px;cursor:pointer;user-select:none;color:var(--content);transition:background .1s}
+.tnode-head:hover{background:var(--surface-hover)}
+.chev{width:12px;height:12px;flex:none;color:var(--content-subtle);transition:transform .15s}
+.tnode.open .chev{transform:rotate(90deg)}
+.tnode-head .ic{width:14px;height:14px;flex:none;color:var(--content-muted)}
+.tnode-head .lbl{flex:1;font-weight:550}
+.tnode-head .quick{
+  width:20px;height:20px;border-radius:5px;display:none;align-items:center;justify-content:center;
+  color:var(--content-subtle);flex:none;
+}
+.tnode-head:hover .quick{display:flex}
+.tnode-head .quick:hover{background:var(--surface);color:var(--content)}
+.tnode-body{display:none;padding:1px 0 5px}
+.tnode.open .tnode-body{display:block}
+
+/* 条目行(收藏 / 历史 / 下载共用) */
+.brow{display:flex;align-items:center;gap:8px;padding:5px 10px 5px 30px;cursor:pointer;transition:background .1s;position:relative}
+.brow:hover{background:var(--surface-hover)}
+.fav{width:16px;height:16px;border-radius:4px;flex:none;display:flex;align-items:center;justify-content:center;font-size:9px;font-weight:700;color:#1a1d24}
+.brow .meta{flex:1;min-width:0}
+.brow .t{font-size:11.5px;color:var(--content);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.brow .u{font-size:10px;color:var(--content-subtle);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.brow .ops{display:none;gap:2px;flex:none}
+.brow:hover .ops{display:flex}
+.brow .ops .op{width:20px;height:20px;border-radius:5px;display:flex;align-items:center;justify-content:center;color:var(--content-subtle)}
+.brow .ops .op:hover{background:var(--surface);color:var(--content)}
+.brow .ops .op.del:hover{color:var(--danger)}
+
+/* 历史分组小标题 */
+.hgroup{display:flex;align-items:center;gap:6px;padding:5px 10px 3px 30px;font-size:10px;color:var(--content-subtle);letter-spacing:.4px}
+.hgroup::after{content:"";flex:1;height:1px;background:var(--edge)}
+
+/* 下载进度条 */
+.dl-bar{height:3px;border-radius:2px;background:var(--surface-muted);margin-top:4px;overflow:hidden}
+.dl-bar i{display:block;height:100%;width:64%;border-radius:2px;background:var(--amber)}
+
+/* 节点底部的分区动作(清空历史等) */
+.node-foot{display:flex;padding:2px 10px 4px 30px}
+.node-foot .fa{
+  font-size:10.5px;color:var(--content-muted);padding:3px 7px;border-radius:5px;cursor:pointer;
+}
+.node-foot .fa:hover{background:var(--surface-hover);color:var(--content)}
+.node-foot .fa.warn:hover{color:var(--danger)}
+
+/* ════════ 方案 B:级联 ════════ */
+.app-frame.wide{width:472px}
+.ci{display:flex;align-items:center;gap:9px;padding:7px 12px;cursor:pointer;color:var(--content);user-select:none;transition:background .1s}
+.ci:hover,.ci.hot{background:var(--surface-hover)}
+.ci .ic{width:14px;height:14px;flex:none;color:var(--content-muted)}
+.ci .lbl{flex:1}
+.ci .sub{width:12px;height:12px;flex:none;color:var(--content-subtle)}
+.flyout{
+  position:absolute;top:0;right:calc(100% + 6px);width:238px;max-height:460px;overflow-y:auto;
+  background:var(--surface);border:1px solid var(--edge);border-radius:11px;
+  box-shadow:0 14px 38px rgba(0,0,0,.45);padding:5px 0;display:none;font-size:12px;
+}
+.flyout.show{display:block}
+.fly-head{display:flex;align-items:center;gap:7px;padding:6px 12px 6px;font-size:10px;font-weight:650;letter-spacing:.5px;text-transform:uppercase;color:var(--content-subtle)}
+.fly-head .sp{flex:1}
+.fly-act{font-size:10.5px;color:var(--content-muted);padding:2px 6px;border-radius:4px;cursor:pointer;text-transform:none;letter-spacing:0}
+.fly-act:hover{background:var(--surface-hover);color:var(--content)}
+
+/* ── 说明面板 ── */
+.panel{width:348px;flex:none;display:flex;flex-direction:column;gap:12px;font-size:12.5px;line-height:1.62}
+.card{background:var(--surface);border:1px solid var(--edge);border-radius:14px;padding:14px 16px}
+.card h2{font-size:13px;font-weight:700;margin-bottom:8px}
+.card ul{padding-left:16px;color:var(--content-muted)}
+.card li{margin:4px 0}
+.card li b{color:var(--content);font-weight:650}
+.card .src{margin-top:8px;padding-top:8px;border-top:1px dashed var(--edge);font-size:11px;color:var(--content-subtle)}
+.verdict{font-size:11.5px;color:var(--content-subtle);border-radius:9px;padding:9px 11px;background:color-mix(in srgb,var(--accent) 7%,var(--surface));border:1px solid color-mix(in srgb,var(--accent) 22%,transparent)}
+.badge-old{display:inline-block;font-size:10px;color:var(--danger);border:1px solid color-mix(in srgb,var(--danger) 40%,transparent);border-radius:4px;padding:0 4px;margin-right:4px}
+.ic{stroke:currentColor;fill:none;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+.ic.fill{fill:currentColor;stroke:none}
+</style>
+</head>
+<body>
+
+<svg width="0" height="0" style="position:absolute">
+  <symbol id="i-dots" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.6" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.6" fill="currentColor" stroke="none"/><circle cx="19" cy="12" r="1.6" fill="currentColor" stroke="none"/></symbol>
+  <symbol id="i-star" viewBox="0 0 24 24"><path d="M12 17.75l-6.172 3.245 1.179-6.873-4.993-4.867 6.9-1.002L12 2l3.086 6.253 6.9 1.002-4.993 4.867 1.179 6.873z"/></symbol>
+  <symbol id="i-max" viewBox="0 0 24 24"><path d="M4 8V5.5A1.5 1.5 0 0 1 5.5 4H8M16 4h2.5A1.5 1.5 0 0 1 20 5.5V8M20 16v2.5a1.5 1.5 0 0 1-1.5 1.5H16M8 20H5.5A1.5 1.5 0 0 1 4 18.5V16"/></symbol>
+  <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></symbol>
+  <symbol id="i-dl" viewBox="0 0 24 24"><path d="M4 17v1.5A2.5 2.5 0 0 0 6.5 21h11a2.5 2.5 0 0 0 2.5-2.5V17M7.5 10.5L12 15l4.5-4.5M12 15V3.5"/></symbol>
+  <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 7h16M10 11.5v5M14 11.5v5M5.5 7l1 12a2 2 0 0 0 2 1.8h7a2 2 0 0 0 2-1.8l1-12M9.5 7V4.5A1.5 1.5 0 0 1 11 3h2a1.5 1.5 0 0 1 1.5 1.5V7"/></symbol>
+  <symbol id="i-chev" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></symbol>
+  <symbol id="i-chevl" viewBox="0 0 24 24"><path d="M15 6l-6 6 6 6"/></symbol>
+  <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 3l7 2.8v5.4c0 4.4-2.9 7.8-7 9.8-4.1-2-7-5.4-7-9.8V5.8z"/><path d="M9.3 12.2l2 2 3.6-3.9"/></symbol>
+  <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3.5 7A1.8 1.8 0 0 1 5.3 5.2h4.2l2 2.1h7.2A1.8 1.8 0 0 1 20.5 9.1v7.8a1.8 1.8 0 0 1-1.8 1.8H5.3a1.8 1.8 0 0 1-1.8-1.8z"/></symbol>
+  <symbol id="i-ext" viewBox="0 0 24 24"><path d="M11 6.5H7A2.5 2.5 0 0 0 4.5 9v8A2.5 2.5 0 0 0 7 19.5h8a2.5 2.5 0 0 0 2.5-2.5v-4M13.5 10.5l6-6M14.5 4.5h5v5"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5.5v13M5.5 12h13"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24"><path d="M6.5 6.5l11 11M17.5 6.5l-11 11"/></symbol>
+  <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 11a8.1 8.1 0 0 0-15.5-2m-.5-4v4h4M4 13a8.1 8.1 0 0 0 15.5 2m.5 4v-4h-4"/></symbol>
+</svg>
+
+<div class="page-head">
+  <div>
+    <h1>浏览器「更多」菜单 · 树形重构</h1>
+    <div class="sub">三段平铺 → 菜单树 · 点击工具栏 ⋯ 打开 · 弹层浮在冻结快照上(契约不变)· 点击节点展开/收起试试</div>
+  </div>
+  <button id="themeBtn" title="切换主题">◐</button>
+</div>
+
+<div class="stage">
+
+  <!-- ════════ 方案 A ════════ -->
+  <div class="frame-wrap">
+    <div class="cap rec">方案 A · 树形折叠面板(推荐 · 多开)</div>
+    <div class="app-frame">
+      <div class="tabs">
+        <div class="tab on"><span>GitHub - claude-agent-sdk</span><span class="x"><svg class="ic" width="8" height="8"><use href="#i-x"/></svg></span></div>
+        <div class="tab"><span>MDN Web Docs</span></div>
+        <div class="tab-new"><svg class="ic" width="12" height="12"><use href="#i-plus"/></svg></div>
+      </div>
+      <div class="toolbar">
+        <button class="tb"><svg class="ic" width="15" height="15"><use href="#i-chevl"/></svg></button>
+        <button class="tb"><svg class="ic" width="15" height="15"><use href="#i-chev"/></svg></button>
+        <button class="tb"><svg class="ic" width="13" height="13"><use href="#i-refresh"/></svg></button>
+        <div class="addr"><svg class="ic lock" width="10" height="10" style="transform:rotate(0deg)"><use href="#i-shield"/></svg><i>github.com/anthropics/claude-agent-sdk</i></div>
+        <button class="tb"><svg class="ic" width="14" height="14"><use href="#i-max"/></svg></button>
+        <div class="anchor open">
+          <button class="tb"><svg class="ic" width="14" height="14"><use href="#i-dots"/></svg></button>
+
+          <!-- ── 方案 A 弹层 ── -->
+          <div class="menu">
+            <!-- 一级动作 -->
+            <div class="mrow star-on">
+              <svg class="ic fill" width="14" height="14"><use href="#i-star"/></svg>
+              <span class="lbl">取消收藏此页</span>
+            </div>
+            <div class="mrow">
+              <svg class="ic" width="14" height="14"><use href="#i-max"/></svg>
+              <span class="lbl">展开为 PC 全屏</span>
+            </div>
+            <div class="m-sep"></div>
+
+            <div class="m-scroll">
+              <!-- ★ 收藏 -->
+              <div class="tnode open">
+                <div class="tnode-head" onclick="this.parentNode.classList.toggle('open')">
+                  <svg class="chev ic"><use href="#i-chev"/></svg>
+                  <svg class="ic"><use href="#i-star"/></svg>
+                  <span class="lbl">收藏</span>
+                  <span class="count">6</span>
+                  <span class="quick" title="收藏此页"><svg class="ic" width="11" height="11"><use href="#i-plus"/></svg></span>
+                </div>
+                <div class="tnode-body">
+                  <div class="brow">
+                    <span class="fav" style="background:#e2b714">G</span>
+                    <div class="meta"><div class="t">GitHub</div><div class="u">github.com</div></div>
+                    <div class="ops">
+                      <span class="op"><svg class="ic" width="11" height="11"><use href="#i-ext"/></svg></span>
+                      <span class="op del"><svg class="ic" width="11" height="11"><use href="#i-trash"/></svg></span>
+                    </div>
+                  </div>
+                  <div class="brow">
+                    <span class="fav" style="background:#38bdf8">M</span>
+                    <div class="meta"><div class="t">MDN Web Docs</div><div class="u">developer.mozilla.org</div></div>
+                    <div class="ops">
+                      <span class="op"><svg class="ic" width="11" height="11"><use href="#i-ext"/></svg></span>
+                      <span class="op del"><svg class="ic" width="11" height="11"><use href="#i-trash"/></svg></span>
+                    </div>
+                  </div>
+                  <div class="brow">
+                    <span class="fav" style="background:#a78bfa">T</span>
+                    <div class="meta"><div class="t">Tailwind CSS</div><div class="u">tailwindcss.com</div></div>
+                    <div class="ops">
+                      <span class="op"><svg class="ic" width="11" height="11"><use href="#i-ext"/></svg></span>
+                      <span class="op del"><svg class="ic" width="11" height="11"><use href="#i-trash"/></svg></span>
+                    </div>
+                  </div>
+                  <div class="brow">
+                    <span class="fav" style="background:#f87171">R</span>
+                    <div class="meta"><div class="t">React</div><div class="u">react.dev</div></div>
+                    <div class="ops">
+                      <span class="op"><svg class="ic" width="11" height="11"><use href="#i-ext"/></svg></span>
+                      <span class="op del"><svg class="ic" width="11" height="11"><use href="#i-trash"/></svg></span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- 🕘 历史 -->
+              <div class="tnode open">
+                <div class="tnode-head" onclick="this.parentNode.classList.toggle('open')">
+                  <svg class="chev ic"><use href="#i-chev"/></svg>
+                  <svg class="ic"><use href="#i-clock"/></svg>
+                  <span class="lbl">历史记录</span>
+                  <span class="count">48</span>
+                  <span class="quick" title="清空历史"><svg class="ic" width="11" height="11"><use href="#i-trash"/></svg></span>
+                </div>
+                <div class="tnode-body">
+                  <div class="hgroup">今天</div>
+                  <div class="brow">
+                    <span class="fav" style="background:#e2b714">G</span>
+                    <div class="meta"><div class="t">claude-agent-sdk README</div><div class="u">github.com · 14:32</div></div>
+                    <div class="ops"><span class="op del"><svg class="ic" width="11" height="11"><use href="#i-trash"/></svg></span></div>
+                  </div>
+                  <div class="brow">
+                    <span class="fav" style="background:#38bdf8">M</span>
+                    <div class="meta"><div class="t">WebContentsView API</div><div class="u">electronjs.org · 13:58</div></div>
+                    <div class="ops"><span class="op del"><svg class="ic" width="11" height="11"><use href="#i-trash"/></svg></span></div>
+                  </div>
+                  <div class="hgroup">昨天</div>
+                  <div class="brow">
+                    <span class="fav" style="background:#a78bfa">T</span>
+                    <div class="meta"><div class="t">Tailwind — customizing colors</div><div class="u">tailwindcss.com · 昨天</div></div>
+                    <div class="ops"><span class="op del"><svg class="ic" width="11" height="11"><use href="#i-trash"/></svg></span></div>
+                  </div>
+                  <div class="brow">
+                    <span class="fav" style="background:#34d399">S</span>
+                    <div class="meta"><div class="t">Stack Overflow — electron drag</div><div class="u">stackoverflow.com · 昨天</div></div>
+                    <div class="ops"><span class="op del"><svg class="ic" width="11" height="11"><use href="#i-trash"/></svg></span></div>
+                  </div>
+                  <div class="node-foot">
+                    <span class="fa warn">清空历史记录…</span>
+                  </div>
+                </div>
+              </div>
+
+              <!-- ⬇ 下载 -->
+              <div class="tnode">
+                <div class="tnode-head" onclick="this.parentNode.classList.toggle('open')">
+                  <svg class="chev ic"><use href="#i-chev"/></svg>
+                  <svg class="ic"><use href="#i-dl"/></svg>
+                  <span class="lbl">下载</span>
+                  <span class="tag-prog"><span style="width:5px;height:5px;border-radius:50%;background:var(--amber);display:inline-block"></span>1 项下载中</span>
+                  <span class="quick"><svg class="ic" width="11" height="11"><use href="#i-folder"/></svg></span>
+                </div>
+                <div class="tnode-body">
+                  <div class="brow">
+                    <span class="fav" style="background:var(--surface-muted);color:var(--content-muted)">ZIP</span>
+                    <div class="meta">
+                      <div class="t">claude-agent-sdk-0.3.tgz</div>
+                      <div class="u">4.9 MB · 下载中</div>
+                      <div class="dl-bar"><i></i></div>
+                    </div>
+                  </div>
+                  <div class="brow">
+                    <span class="fav" style="background:var(--surface-muted);color:var(--content-muted)">PNG</span>
+                    <div class="meta"><div class="t">screenshot-landing.png</div><div class="u">1.2 MB · 已完成</div></div>
+                    <div class="ops">
+                      <span class="op" title="打开文件"><svg class="ic" width="11" height="11"><use href="#i-ext"/></svg></span>
+                      <span class="op" title="在文件夹中显示"><svg class="ic" width="11" height="11"><use href="#i-folder"/></svg></span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- 🛡 隐私与缓存 -->
+              <div class="tnode">
+                <div class="tnode-head" onclick="this.parentNode.classList.toggle('open')">
+                  <svg class="chev ic"><use href="#i-chev"/></svg>
+                  <svg class="ic"><use href="#i-shield"/></svg>
+                  <span class="lbl">隐私与缓存</span>
+                </div>
+                <div class="tnode-body">
+                  <div class="mrow" style="padding-left:30px">
+                    <span class="lbl">清除浏览缓存…</span>
+                    <span class="tag-new">新</span>
+                  </div>
+                  <div class="mrow" style="padding-left:30px">
+                    <span class="lbl">清除登录状态(Cookie)…</span>
+                    <span class="tag-new">新</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="page-ghost">
+        <div class="lines"><div class="l"></div><div class="l"></div><div class="l"></div><div class="l"></div><div class="l"></div><div class="l"></div><div class="l"></div></div>
+        <div class="frozen">冻结的页面快照(菜单打开期间 OS view 暂停)</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ════════ 方案 B ════════ -->
+  <div class="frame-wrap">
+    <div class="cap">方案 B · Chrome 式级联菜单(hover 向左弹出 · 框加宽以容纳子面板)</div>
+    <div class="app-frame wide">
+      <div class="tabs">
+        <div class="tab on"><span>GitHub - claude-agent-sdk</span><span class="x"><svg class="ic" width="8" height="8"><use href="#i-x"/></svg></span></div>
+        <div class="tab"><span>MDN Web Docs</span></div>
+        <div class="tab-new"><svg class="ic" width="12" height="12"><use href="#i-plus"/></svg></div>
+      </div>
+      <div class="toolbar">
+        <button class="tb"><svg class="ic" width="15" height="15"><use href="#i-chevl"/></svg></button>
+        <button class="tb"><svg class="ic" width="15" height="15"><use href="#i-chev"/></svg></button>
+        <button class="tb"><svg class="ic" width="13" height="13"><use href="#i-refresh"/></svg></button>
+        <div class="addr"><svg class="ic lock" width="10" height="10"><use href="#i-shield"/></svg><i>github.com/anthropics/claude-agent-sdk</i></div>
+        <button class="tb"><svg class="ic" width="14" height="14"><use href="#i-max"/></svg></button>
+        <div class="anchor open">
+          <button class="tb"><svg class="ic" width="14" height="14"><use href="#i-dots"/></svg></button>
+
+          <!-- ── 方案 B 弹层:根菜单 + 级联子面板 ── -->
+          <div class="menu cascade" style="width:200px" id="cascadeMenu">
+            <div class="mrow star-on">
+              <svg class="ic fill" width="14" height="14"><use href="#i-star"/></svg>
+              <span class="lbl">取消收藏此页</span>
+            </div>
+            <div class="m-sep"></div>
+            <div class="ci" data-pane="bm">
+              <svg class="ic"><use href="#i-star"/></svg><span class="lbl">收藏</span>
+              <span class="count">6</span><svg class="sub ic"><use href="#i-chev"/></svg>
+            </div>
+            <div class="ci hot" data-pane="hs">
+              <svg class="ic"><use href="#i-clock"/></svg><span class="lbl">历史记录</span>
+              <span class="count">48</span><svg class="sub ic"><use href="#i-chev"/></svg>
+            </div>
+            <div class="ci" data-pane="dl">
+              <svg class="ic"><use href="#i-dl"/></svg><span class="lbl">下载</span>
+              <svg class="sub ic"><use href="#i-chev"/></svg>
+            </div>
+            <div class="m-sep"></div>
+            <div class="mrow">
+              <svg class="ic"><use href="#i-shield"/></svg><span class="lbl">清除浏览缓存…</span><span class="tag-new">新</span>
+            </div>
+            <div class="mrow">
+              <svg class="ic"><use href="#i-max"/></svg><span class="lbl">展开为 PC 全屏</span>
+            </div>
+
+            <!-- 子面板:收藏 -->
+            <div class="flyout" id="pane-bm" style="top:36px">
+              <div class="fly-head"><svg class="ic" width="11" height="11"><use href="#i-star"/></svg>收藏<span class="sp"></span><span class="fly-act">收藏此页</span></div>
+              <div class="brow"><span class="fav" style="background:#e2b714">G</span><div class="meta"><div class="t">GitHub</div><div class="u">github.com</div></div><div class="ops"><span class="op del"><svg class="ic" width="11" height="11"><use href="#i-trash"/></svg></span></div></div>
+              <div class="brow"><span class="fav" style="background:#38bdf8">M</span><div class="meta"><div class="t">MDN Web Docs</div><div class="u">developer.mozilla.org</div></div><div class="ops"><span class="op del"><svg class="ic" width="11" height="11"><use href="#i-trash"/></svg></span></div></div>
+              <div class="brow"><span class="fav" style="background:#a78bfa">T</span><div class="meta"><div class="t">Tailwind CSS</div><div class="u">tailwindcss.com</div></div><div class="ops"><span class="op del"><svg class="ic" width="11" height="11"><use href="#i-trash"/></svg></span></div></div>
+              <div class="brow"><span class="fav" style="background:#f87171">R</span><div class="meta"><div class="t">React</div><div class="u">react.dev</div></div><div class="ops"><span class="op del"><svg class="ic" width="11" height="11"><use href="#i-trash"/></svg></span></div></div>
+            </div>
+
+            <!-- 子面板:历史(默认展开) -->
+            <div class="flyout show" id="pane-hs" style="top:67px">
+              <div class="fly-head"><svg class="ic" width="11" height="11"><use href="#i-clock"/></svg>历史记录<span class="sp"></span><span class="fly-act">清空…</span></div>
+              <div class="hgroup" style="padding-left:12px">今天</div>
+              <div class="brow" style="padding-left:12px"><span class="fav" style="background:#e2b714">G</span><div class="meta"><div class="t">claude-agent-sdk README</div><div class="u">github.com · 14:32</div></div><div class="ops"><span class="op del"><svg class="ic" width="11" height="11"><use href="#i-trash"/></svg></span></div></div>
+              <div class="brow" style="padding-left:12px"><span class="fav" style="background:#38bdf8">M</span><div class="meta"><div class="t">WebContentsView API</div><div class="u">electronjs.org · 13:58</div></div><div class="ops"><span class="op del"><svg class="ic" width="11" height="11"><use href="#i-trash"/></svg></span></div></div>
+              <div class="hgroup" style="padding-left:12px">昨天</div>
+              <div class="brow" style="padding-left:12px"><span class="fav" style="background:#a78bfa">T</span><div class="meta"><div class="t">Tailwind — customizing colors</div><div class="u">tailwindcss.com · 昨天</div></div><div class="ops"><span class="op del"><svg class="ic" width="11" height="11"><use href="#i-trash"/></svg></span></div></div>
+              <div class="brow" style="padding-left:12px"><span class="fav" style="background:#34d399">S</span><div class="meta"><div class="t">Stack Overflow — electron drag</div><div class="u">stackoverflow.com · 昨天</div></div><div class="ops"><span class="op del"><svg class="ic" width="11" height="11"><use href="#i-trash"/></svg></span></div></div>
+            </div>
+
+            <!-- 子面板:下载 -->
+            <div class="flyout" id="pane-dl" style="top:98px">
+              <div class="fly-head"><svg class="ic" width="11" height="11"><use href="#i-dl"/></svg>下载</div>
+              <div class="brow" style="padding-left:12px"><span class="fav" style="background:var(--surface-muted);color:var(--content-muted)">ZIP</span><div class="meta"><div class="t">claude-agent-sdk-0.3.tgz</div><div class="u">4.9 MB · 下载中</div><div class="dl-bar"><i></i></div></div></div>
+              <div class="brow" style="padding-left:12px"><span class="fav" style="background:var(--surface-muted);color:var(--content-muted)">PNG</span><div class="meta"><div class="t">screenshot-landing.png</div><div class="u">1.2 MB · 已完成</div></div><div class="ops"><span class="op"><svg class="ic" width="11" height="11"><use href="#i-ext"/></svg></span><span class="op"><svg class="ic" width="11" height="11"><use href="#i-folder"/></svg></span></div></div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="page-ghost">
+        <div class="lines"><div class="l"></div><div class="l"></div><div class="l"></div><div class="l"></div><div class="l"></div><div class="l"></div><div class="l"></div></div>
+        <div class="frozen">冻结的页面快照(菜单打开期间 OS view 暂停)</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ════════ 说明 ════════ -->
+  <div class="panel">
+    <div class="card">
+      <h2>现状问题</h2>
+      <ul>
+        <li><span class="badge-old">现状</span>三段平铺:全屏切换 + 收藏段(max-h-44)+ 历史段(max-h-44),<b>两个列表互相挤压</b>,收藏一多历史就只剩几行,反之亦然。</li>
+        <li><span class="badge-old">现状</span>「收藏此页」「清空历史」藏在分段头部的小字按钮里,<b>动作与列表混杂</b>,不易发现。</li>
+        <li><span class="badge-old">现状</span>下载条只有底部临时条,<b>没有历史入口</b>;<code>browser.clearCache</code> RPC 已存在但无 UI。</li>
+      </ul>
+    </div>
+
+    <div class="card">
+      <h2>方案 A · 树形折叠面板(推荐)</h2>
+      <ul>
+        <li><b>一级动作</b>:收藏此页(星标态)/ 展开全屏 —— 最高频操作不再藏进分段头。</li>
+        <li><b>三个可展开节点</b>(多开,非手风琴):收藏 / 历史记录(按 今天·昨天 分组)/ 下载 / 隐私与缓存。一次只关注一类,列表各自滚动。</li>
+        <li>节点头<b>计数徽标</b> + hover 快捷动作(收藏 +、清空历史 🗑、打开下载目录);条目行 hover 出现 打开新标签 / 删除。</li>
+        <li>下载节点显示<b>实时状态</b>(下载中进度条 / 已完成),与底部 DownloadBar 同一数据源。</li>
+        <li>交互成本最低:仍是单击开 → 单击选,键盘 ↑↓ 移动、→ 展开、← 收起、Esc 关闭。</li>
+      </ul>
+    </div>
+
+    <div class="card">
+      <h2>方案 B · Chrome 式级联</h2>
+      <ul>
+        <li>根菜单极窄(200px),hover「收藏 / 历史 / 下载」向<b>左</b>弹出子面板(右锚定,左侧是页面快照区,空间足够)。</li>
+        <li>优点:视觉最像桌面浏览器,根层干净。</li>
+        <li>缺点:hover 级联在触摸板/精确度差时易滑出;子面板与根菜单 <b>两块浮层都要盖在冻结快照上</b>,遮挡判定与 Esc 处理翻倍;窄侧栏下子面板宽度预算紧张。</li>
+      </ul>
+    </div>
+
+    <div class="card">
+      <h2>共性约束(两个方案一致)</h2>
+      <ul>
+        <li><b>数据源零改动</b>:bookmarks / history 仍是 settings 表既有 key,下载复用 DownloadBar 的注册表。</li>
+        <li><b>freeze 契约不变</b>:开合仍走 <code>onMoreMenuOpenChange</code>,弹层是同层 renderer DOM,浮在冻结快照上。</li>
+        <li><b>条目点击走既有智能打开</b>(空白标签页复用否则新开);删除单条 / 清空动作原样保留。</li>
+        <li>i18n 新增词条(zh/en 同步):<code>browser.downloads</code> / <code>privacy</code> / <code>today</code> / <code>yesterday</code> / <code>clearCache</code> 等;「隐私与缓存」两项是建议新增(清缓存 RPC 已有,Cookie 清除需补一个 IPC)。</li>
+      </ul>
+      <div class="src">原型交互:点击节点头可展开/收起(A);hover 根项切换子面板(B);右上 ◐ 切换明暗。</div>
+    </div>
+
+    <div class="verdict">
+      建议 <b>方案 A</b>:信息密度与操作直达性更好,无级联 hover 的命中难题,浮层管理保持单一(一个弹层、一份 freeze 逻辑),实现改动收敛在 BrowserToolbar 一个组件内。
+    </div>
+  </div>
+</div>
+
+<script>
+// 明暗切换
+document.getElementById("themeBtn").onclick = () => document.body.classList.toggle("light");
+
+// 方案 B:hover / click 切换子面板
+(function(){
+  const menu = document.getElementById("cascadeMenu");
+  if(!menu) return;
+  const panes = menu.querySelectorAll(".flyout");
+  const items = menu.querySelectorAll(".ci");
+  function activate(name){
+    items.forEach(i => i.classList.toggle("hot", i.dataset.pane === name));
+    panes.forEach(p => p.classList.toggle("show", p.id === "pane-" + name));
+  }
+  items.forEach(i => {
+    i.addEventListener("mouseenter", () => activate(i.dataset.pane));
+    i.addEventListener("click", () => activate(i.dataset.pane));
+  });
+})();
+</script>
+</body>
+</html>

@@ -1219,6 +1219,25 @@ class BrowserManagerImpl {
     }
   }
 
+  /** Clear ALL cookies from the shared browser session (sign-out everywhere).
+   *  The persisted cookie vault is wiped too — restoreCookieVault re-injects
+   *  the snapshot before a new view's first navigation, so skipping that would
+   *  silently undo the clear on the next spawn/restart. Complement of
+   *  clearBrowserCache, which deliberately keeps cookies. */
+  async clearBrowserCookies(): Promise<BrowserOpResult> {
+    try {
+      await browserSession().clearStorageData({ storages: ["cookies"] });
+      SettingRepo.set(BROWSER_COOKIE_VAULT_ENC_SETTING_KEY, "");
+      SettingRepo.set(BROWSER_COOKIE_VAULT_SETTING_KEY, "");
+      log.info("browser cookies cleared (live session + persisted vault)");
+      return { ok: true };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      log.error(`browser clearCookies failed: ${msg}`);
+      return { ok: false, error: msg };
+    }
+  }
+
   // ── Cookie vault (remember sign-in across restarts) ──
   // Electron ≤ 40 (Chromium ≤ 144) NEVER commits cookies to disk for
   // persistent partitions — even page-set persistent cookies ("remember me")

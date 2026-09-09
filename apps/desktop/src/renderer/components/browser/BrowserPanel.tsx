@@ -776,6 +776,16 @@ export function BrowserPanel({ mode }: BrowserPanelProps) {
     }
     setDownloads((cur) => cur.filter((d) => d.downloadId !== downloadId));
   }, []);
+
+  /** Privacy rows in the More-menu tree: cache clear keeps cookies (main is
+   *  deliberate about the split); cookie clear also wipes the persisted
+   *  vault, so sign-ins cannot resurrect on restart. */
+  const handleClearCache = useCallback(() => {
+    void api.browser.clearCache();
+  }, []);
+  const handleClearCookies = useCallback(() => {
+    void api.browser.clearCookies();
+  }, []);
   // Unmount: clear every pending auto-dismiss timer (the container swap on
   // mode switch unmounts this component mid-download routinely).
   useEffect(() => {
@@ -965,6 +975,15 @@ export function BrowserPanel({ mode }: BrowserPanelProps) {
       void createTab(normalizeUrl(raw));
     },
     [activeTab, handleNavigate, createTab],
+  );
+
+  /** Force a NEW tab for a URL — the More-menu tree's open-in-new-tab op on
+   *  bookmark rows (the smart open above keeps blank-tab reuse). */
+  const handleOpenUrlNewTab = useCallback(
+    (raw: string) => {
+      void createTab(normalizeUrl(raw));
+    },
+    [createTab],
   );
 
   const handleBack = useCallback(() => {
@@ -1271,6 +1290,12 @@ export function BrowserPanel({ mode }: BrowserPanelProps) {
         onToggleBookmark={handleToggleBookmark}
         onRemoveBookmark={handleRemoveBookmark}
         onOpenUrl={handleOpenUrlSmart}
+        onOpenUrlNewTab={handleOpenUrlNewTab}
+        downloads={downloads}
+        onDownloadOpen={handleDownloadOpen}
+        onDownloadReveal={handleDownloadReveal}
+        onClearCache={handleClearCache}
+        onClearCookies={handleClearCookies}
         onRemoveHistoryEntry={handleRemoveHistoryEntry}
         onClearHistory={handleClearHistory}
         onHistoryMenuOpenChange={handleHistoryMenuOpenChange}
