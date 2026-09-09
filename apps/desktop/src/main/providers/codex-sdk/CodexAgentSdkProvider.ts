@@ -73,6 +73,17 @@ import {
   browserSnapshot,
   browserClick,
   browserType,
+  browserKeys,
+  browserScroll,
+  browserWait,
+  browserHistory,
+  browserSelect,
+  browserFind,
+  browserSwitchTab,
+  browserCloseTab,
+  browserUploadFile,
+  browserSavePdf,
+  browserDownloads,
   browserEvaluate,
   browserScreenshot,
   BROWSER_TOOL_SPECS,
@@ -887,19 +898,143 @@ function buildDynamicTools(browserToolsEnabled: boolean): Array<Record<string, u
       name: "browser_click",
       description: BROWSER_TOOL_SPECS.browser_click.description,
       inputSchema: schema({
-        selector: { type: "string", description: "要点击元素的 CSS selector(来自 browser_snapshot)" },
+        index: { type: "number", description: "要点击元素的索引(来自最近一次 browser_snapshot 的 [n]),优先使用" },
+        selector: { type: "string", description: "要点击元素的 CSS selector(index 的替代写法)" },
+        coordinateX: { type: "number", description: "视口坐标点击的 X(canvas 等无 selector 元素用)" },
+        coordinateY: { type: "number", description: "视口坐标点击的 Y" },
         browserId: optId,
-      }, ["selector"]),
+      }),
     },
     {
       type: "function",
       name: "browser_type",
       description: BROWSER_TOOL_SPECS.browser_type.description,
       inputSchema: schema({
-        selector: { type: "string", description: "目标输入元素的 CSS selector" },
-        text: { type: "string", description: "要输入的文本内容" },
+        index: { type: "number", description: "目标输入元素的索引(来自最近一次 browser_snapshot),优先使用" },
+        selector: { type: "string", description: "目标输入元素的 CSS selector(index 的替代写法)" },
+        text: { type: "string", description: "要输入的文本内容;空串=清空字段" },
+        clear: { type: "boolean", description: "true(默认)=清空后输入;false=追加" },
         browserId: optId,
-      }, ["selector", "text"]),
+      }, ["text"]),
+    },
+    {
+      type: "function",
+      name: "browser_keys",
+      description: BROWSER_TOOL_SPECS.browser_keys.description,
+      inputSchema: schema({
+        keys: { type: "string", description: '按键或组合键,如 "Enter" / "Escape" / "Control+a" / "Shift+Enter"' },
+        browserId: optId,
+      }, ["keys"]),
+    },
+    {
+      type: "function",
+      name: "browser_scroll",
+      description: BROWSER_TOOL_SPECS.browser_scroll.description,
+      inputSchema: schema({
+        direction: { type: "string", enum: ["up", "down"], description: "滚动方向" },
+        pages: { type: "number", description: "滚动量(单位=视口高,默认 1;10≈滚到底)" },
+        selector: { type: "string", description: "改为滚动该元素内部的滚动区" },
+        browserId: optId,
+      }, ["direction"]),
+    },
+    {
+      type: "function",
+      name: "browser_wait",
+      description: BROWSER_TOOL_SPECS.browser_wait.description,
+      inputSchema: schema({
+        selector: { type: "string", description: "等待该 CSS selector 元素出现" },
+        text: { type: "string", description: "等待该文本出现在页面中" },
+        seconds: { type: "number", description: "固定等待秒数" },
+        timeoutSeconds: { type: "number", description: "等待超时(默认 10,上限 30)" },
+        browserId: optId,
+      }),
+    },
+    {
+      type: "function",
+      name: "browser_history",
+      description: BROWSER_TOOL_SPECS.browser_history.description,
+      inputSchema: schema({
+        action: { type: "string", enum: ["back", "forward", "reload"], description: "后退/前进/刷新" },
+        browserId: optId,
+      }, ["action"]),
+    },
+    {
+      type: "function",
+      name: "browser_select",
+      description: BROWSER_TOOL_SPECS.browser_select.description,
+      inputSchema: schema({
+        index: { type: "number", description: "下拉框元素的索引(来自最近一次 browser_snapshot),优先使用" },
+        selector: { type: "string", description: "下拉框元素的 CSS selector(index 的替代写法)" },
+        value: { type: "string", description: "选项的 value 或精确可见文本" },
+        browserId: optId,
+      }, ["value"]),
+    },
+    {
+      type: "function",
+      name: "browser_find",
+      description: BROWSER_TOOL_SPECS.browser_find.description,
+      inputSchema: schema({
+        selector: { type: "string", description: "按 CSS 查询元素(与 text 二选一)" },
+        text: { type: "string", description: "在页面文本中搜索(与 selector 二选一)" },
+        regex: { type: "boolean", description: "text 按正则解释(默认字面)" },
+        caseSensitive: { type: "boolean", description: "区分大小写(默认不区分)" },
+        contextChars: { type: "number", description: "文本匹配的上下文字符数(默认 150)" },
+        maxResults: { type: "number", description: "最多返回条数(默认 25)" },
+        attributes: { type: "array", items: { type: "string" }, description: 'selector 模式下要提取的属性,如 ["href","src"]' },
+        cssScope: { type: "string", description: "把查找范围限定在该 CSS selector 内" },
+        browserId: optId,
+      }),
+    },
+    {
+      type: "function",
+      name: "browser_switch_tab",
+      description: BROWSER_TOOL_SPECS.browser_switch_tab.description,
+      inputSchema: schema({
+        browserId: { type: "string", description: "要切换到的浏览器视图 id(browser_list 查询)" },
+      }, ["browserId"]),
+    },
+    {
+      type: "function",
+      name: "browser_close_tab",
+      description: BROWSER_TOOL_SPECS.browser_close_tab.description,
+      inputSchema: schema({
+        browserId: { type: "string", description: "要关闭的浏览器视图 id" },
+      }, ["browserId"]),
+    },
+    {
+      type: "function",
+      name: "browser_upload_file",
+      description: BROWSER_TOOL_SPECS.browser_upload_file.description,
+      inputSchema: schema({
+        index: { type: "number", description: "文件输入框元素的索引(来自最近一次 browser_snapshot),优先使用" },
+        selector: { type: "string", description: '文件输入框元素的 CSS selector(index 的替代写法)' },
+        paths: {
+          type: "array",
+          items: { type: "string" },
+          description: "要上传的本地文件路径数组(绝对路径,或相对项目根的路径)",
+        },
+        browserId: optId,
+      }, ["paths"]),
+    },
+    {
+      type: "function",
+      name: "browser_save_pdf",
+      description: BROWSER_TOOL_SPECS.browser_save_pdf.description,
+      inputSchema: schema({
+        fileName: { type: "string", description: "保存的文件名(不含路径;省略则按时间戳命名)" },
+        paperFormat: { type: "string", enum: ["letter", "legal", "tabloid", "a3", "a4", "a5"], description: "纸张格式,默认 a4" },
+        landscape: { type: "boolean", description: "横向(默认纵向)" },
+        printBackground: { type: "boolean", description: "是否打印背景色/图(默认 true)" },
+        scale: { type: "number", description: "缩放 0.1-2(默认 1)" },
+        headerFooter: { type: "boolean", description: "显示页眉页脚(默认 false)" },
+        browserId: optId,
+      }),
+    },
+    {
+      type: "function",
+      name: "browser_downloads",
+      description: BROWSER_TOOL_SPECS.browser_downloads.description,
+      inputSchema: schema({}),
     },
     {
       type: "function",
@@ -914,7 +1049,10 @@ function buildDynamicTools(browserToolsEnabled: boolean): Array<Record<string, u
       type: "function",
       name: "browser_screenshot",
       description: BROWSER_TOOL_SPECS.browser_screenshot.description,
-      inputSchema: schema({ browserId: optId }),
+      inputSchema: schema({
+        browserId: optId,
+        fullPage: { type: "boolean", description: "true=截整页(含滚动外内容)" },
+      }),
     },
   );
   return tools;
@@ -985,28 +1123,137 @@ async function invokeDynamicTool(p: Record<string, unknown>, deps: RequestDeps):
       case "browser_navigate":
         return toContent(
           await browserNavigate(
-            { url: String(args.url ?? ""), browserId: optStr(args.browserId), device: optDevice(args.device) },
+            {
+              url: String(args.url ?? ""),
+              browserId: optStr(args.browserId),
+              device: optDevice(args.device),
+              newTab: args.newTab === true,
+            },
             req.cwd,
           ),
         );
       case "browser_snapshot":
         return toContent(await browserSnapshot({ browserId: optStr(args.browserId) }));
       case "browser_click":
-        return toContent(await browserClick({ selector: String(args.selector ?? ""), browserId: optStr(args.browserId) }));
-      case "browser_type":
         return toContent(
-          await browserType({
-            selector: String(args.selector ?? ""),
-            text: String(args.text ?? ""),
+          await browserClick({
+            index: typeof args.index === "number" ? args.index : undefined,
+            selector: optStr(args.selector),
+            coordinateX: typeof args.coordinateX === "number" ? args.coordinateX : undefined,
+            coordinateY: typeof args.coordinateY === "number" ? args.coordinateY : undefined,
             browserId: optStr(args.browserId),
           }),
         );
+      case "browser_type":
+        return toContent(
+          await browserType({
+            index: typeof args.index === "number" ? args.index : undefined,
+            selector: optStr(args.selector),
+            text: typeof args.text === "string" ? args.text : "",
+            clear: args.clear !== false,
+            browserId: optStr(args.browserId),
+          }),
+        );
+      case "browser_keys":
+        return toContent(
+          await browserKeys({ keys: String(args.keys ?? ""), browserId: optStr(args.browserId) }),
+        );
+      case "browser_scroll":
+        return toContent(
+          await browserScroll({
+            direction: args.direction === "up" ? "up" : "down",
+            pages: typeof args.pages === "number" ? args.pages : undefined,
+            selector: optStr(args.selector),
+            browserId: optStr(args.browserId),
+          }),
+        );
+      case "browser_wait":
+        return toContent(
+          await browserWait({
+            selector: optStr(args.selector),
+            text: optStr(args.text),
+            seconds: typeof args.seconds === "number" ? args.seconds : undefined,
+            timeoutSeconds: typeof args.timeoutSeconds === "number" ? args.timeoutSeconds : undefined,
+            browserId: optStr(args.browserId),
+          }),
+        );
+      case "browser_history":
+        return toContent(
+          await browserHistory({
+            action: args.action as "back" | "forward" | "reload",
+            browserId: optStr(args.browserId),
+          }),
+        );
+      case "browser_select":
+        return toContent(
+          await browserSelect({
+            index: typeof args.index === "number" ? args.index : undefined,
+            selector: optStr(args.selector),
+            value: String(args.value ?? ""),
+            browserId: optStr(args.browserId),
+          }),
+        );
+      case "browser_find":
+        return toContent(
+          await browserFind({
+            selector: optStr(args.selector),
+            text: optStr(args.text),
+            regex: args.regex === true,
+            caseSensitive: args.caseSensitive === true,
+            contextChars: typeof args.contextChars === "number" ? args.contextChars : undefined,
+            maxResults: typeof args.maxResults === "number" ? args.maxResults : undefined,
+            attributes: Array.isArray(args.attributes)
+              ? (args.attributes as unknown[]).filter((a): a is string => typeof a === "string")
+              : undefined,
+            cssScope: optStr(args.cssScope),
+            browserId: optStr(args.browserId),
+          }),
+        );
+      case "browser_switch_tab":
+        return toContent(await browserSwitchTab({ browserId: String(args.browserId ?? "") }));
+      case "browser_close_tab":
+        return toContent(await browserCloseTab({ browserId: String(args.browserId ?? "") }));
+      case "browser_upload_file":
+        return toContent(
+          await browserUploadFile(
+            {
+              index: typeof args.index === "number" ? args.index : undefined,
+              selector: optStr(args.selector),
+              paths: args.paths,
+              browserId: optStr(args.browserId),
+            },
+            req.cwd,
+          ),
+        );
+      case "browser_save_pdf":
+        return toContent(
+          await browserSavePdf(
+            {
+              fileName: optStr(args.fileName),
+              paperFormat: optStr(args.paperFormat),
+              landscape: args.landscape === true,
+              printBackground: args.printBackground !== false,
+              scale: typeof args.scale === "number" ? args.scale : undefined,
+              headerFooter: args.headerFooter === true,
+              browserId: optStr(args.browserId),
+            },
+            {
+              toolCallId: typeof p.callId === "string" ? p.callId : randomUUID(),
+              sessionId: req.sessionId,
+              turnNumber: req.turnNumber,
+            },
+          ),
+        );
+      case "browser_downloads":
+        return toContent(browserDownloads());
       case "browser_evaluate":
         return toContent(
           await browserEvaluate({ script: String(args.script ?? ""), browserId: optStr(args.browserId) }),
         );
       case "browser_screenshot": {
-        const r = await browserScreenshot({ browserId: optStr(args.browserId) }, {
+        const r = await browserScreenshot(
+          { browserId: optStr(args.browserId), fullPage: args.fullPage === true },
+          {
           toolCallId: typeof p.callId === "string" ? p.callId : randomUUID(),
           sessionId: req.sessionId,
           turnNumber: req.turnNumber,

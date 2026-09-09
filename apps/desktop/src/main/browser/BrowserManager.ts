@@ -23,9 +23,10 @@
  * UA (the Electron/app tail is stripped) — sign-in flows refuse webview UAs.
  */
 import { randomUUID } from "node:crypto";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, statSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import {
+  app,
   ipcMain,
   safeStorage,
   shell,
@@ -37,8 +38,9 @@ import {
   type CookiesSetDetails,
   type IpcMainEvent,
   type AuthInfo,
-} from "electron";
-import {
+  type Debugger,
+  type DownloadItem,
+} from "electron";import {
   IPC,
   resolveBrowserDeviceSpec,
   BROWSER_COOKIE_VAULT_SETTING_KEY,
@@ -59,7 +61,7 @@ import { getOsPrefersDark, getThemePreference } from "@main/lib/theme.js";
 import { log } from "@main/lib/logger.js";
 import { SettingRepo } from "@main/store/repositories.js";
 import { PICKER_INJECT_SCRIPT, PICKER_REMOVE_SCRIPT } from "./pickerScript.js";
-import { SNAPSHOT_SCRIPT, buildClickScript, buildTypeScript, buildEvaluateScript } from "./snapshotScript.js";
+import { SNAPSHOT_SCRIPT, buildClickScript, buildCheckFileInputScript, buildElementCenterScript, buildTypeScript, buildEvaluateScript, buildScrollScript, buildWaitScript, buildSelectScript, buildFindScript } from "./snapshotScript.js";
 import { AddressHistory } from "./addressHistory.js";
 
 /** Normalize a URL to its origin (scheme://host[:port]). Returns "" for URLs
@@ -93,6 +95,81 @@ export interface BrowserInfo {
   title: string;
 }
 
+/** Normalize a model-supplied key name to Electron's accelerator key codes for
+ *  `sendInputEvent`. Accepts KeyboardEvent.key-style names (ArrowUp, Escape…)
+ *  as well as the accelerator names themselves (Up, Esc…). Single characters
+ *  pass through lowercased (shift comes in as an explicit modifier). */
+function normalizeKeyName(raw: string): string | null {
+  const key = raw.trim();
+  if (!key) return null;
+  const named: Record<string, string> = {
+    enter: "Enter",
+    return: "Enter",
+    tab: "Tab",
+    esc: "Esc",
+    escape: "Esc",
+    space: "Space",
+    spacebar: "Space",
+    backspace: "Backspace",
+    delete: "Del",
+    del: "Del",
+    up: "Up",
+    arrowup: "Up",
+    down: "Down",
+    arrowdown: "Down",
+    left: "Left",
+    arrowleft: "Left",
+    right: "Right",
+    arrowright: "Right",
+    pageup: "PageUp",
+    pagedown: "PageDown",
+    home: "Home",
+    end: "End",
+    insert: "Ins",
+    ins: "Ins",
+  };
+  const lower = key.toLowerCase();
+  if (named[lower]) return named[lower];
+  if (/^f([1-9]|1\d|2[0-4])$/.test(lower)) return key.toUpperCase();
+  if (key.length === 1) return key.toLowerCase();
+  return null;
+}
+
+/** Parse a key combo like "Control+Shift+Enter" into sendInputEvent modifiers
+ *  + a key code. CmdOrCtrl maps to Meta on macOS / Control elsewhere (the
+ *  usual convention). Exactly one non-modifier key per combo. */
+function parseKeyCombo(
+  combo: string,
+): { modifiers: Array<"control" | "shift" | "alt" | "meta">; key: string } | { error: string } {
+  const parts = combo
+    .split("+")
+    .map((p) => p.trim())
+    .filter(Boolean);
+  if (parts.length === 0) return { error: "按键为空" };
+  const modifiers: Array<"control" | "shift" | "alt" | "meta"> = [];
+  let key: string | null = null;
+  for (const part of parts) {
+    const lower = part.toLowerCase();
+    if (lower === "control" || lower === "ctrl" || lower === "cmdorctrl") {
+      modifiers.push(process.platform === "darwin" ? "meta" : "control");
+    } else if (lower === "meta" || lower === "cmd" || lower === "command" || lower === "super" || lower === "win") {
+      modifiers.push("meta");
+    } else if (lower === "alt" || lower === "option") {
+      modifiers.push("alt");
+    } else if (lower === "shift") {
+      modifiers.push("shift");
+    } else if (key === null) {
+      const norm = normalizeKeyName(part);
+      if (!norm) return { error: `无法识别的按键 "${part}"(支持 Enter/Escape/Tab/Arrow*/PageUp/F1-F12/单字符等)` };
+      key = norm;
+    } else {
+      return { error: `一次只能按一个主键:"${combo}"` };
+    }
+  }
+  if (key === null) return { error: `组合键缺少主键:"${combo}"` };
+  return { modifiers, key };
+}
+
 /** Result of a `snapshot()` — the structured page data handed to the agent. */
 export interface BrowserSnapshotResult {
   ok: boolean;
@@ -104,22 +181,30 @@ export interface BrowserSnapshotResult {
     html: string;
     bodyText: string;
     interactive: Array<{
+      /** 1-based handle the model passes to browser_click/type/select. */
+      index: number;
       role: string;
       name: string;
       tag: string;
       selector: string;
       text: string;
+      /** False when the element is outside the viewport (scroll to reach it). */
+      inView: boolean;
+      /** Form-state annotations: value=… / [checked] / [disabled] / href=… */
+      state: string[];
     }>;
   };
 }
 
 /** Result of a `click()` — carries post-click url/title so the caller can tell
- *  whether the click triggered a navigation. */
+ *  whether the click triggered a navigation. `obscured` is set when the real
+ *  mouse click path detected another element covering the target's center. */
 export interface BrowserClickResult {
   ok: boolean;
   error?: string;
   url?: string;
   title?: string;
+  obscured?: { tag: string; text: string };
 }
 
 /** Result of an `evaluate()` — like click, plus `result`: a JSON/text
@@ -128,6 +213,108 @@ export interface BrowserClickResult {
 export interface BrowserEvaluateResult extends BrowserClickResult {
   /** Serialized return value of the evaluated script (JSON or String fallback). */
   result?: string;
+}
+
+/** Result of a `scroll()` — where the viewport (or scrolled element) landed,
+ *  so the agent can tell whether more content remains below. */
+export interface BrowserScrollResult extends BrowserClickResult {
+  scrollY?: number;
+  scrollHeight?: number;
+  viewport?: number;
+}
+
+/** Result of a `selectOption()` — the chosen option, or the full option list
+ *  when nothing matched (the agent retries with an exact spelling). */
+export interface BrowserSelectResult extends BrowserClickResult {
+  selected?: { value: string; text: string };
+  options?: Array<{ value: string; text: string; selected?: boolean }>;
+}
+
+/** Result of a `find()` — selector rows (tag/text/selector/attributes) or
+ *  text-match snippets, depending on the query mode. */
+export interface BrowserFindResult extends BrowserClickResult {
+  total?: number;
+  matches?: Array<{
+    tag?: string;
+    text?: string;
+    selector?: string;
+    attributes?: Record<string, string>;
+    snippet?: string;
+  }>;
+}
+
+/** Result of a `waitFor()` — `found:false` means the condition never became
+ *  true within the timeout (still ok:true — the poll itself ran fine). */
+export interface BrowserWaitResult extends BrowserClickResult {
+  found?: boolean;
+  elapsedMs?: number;
+}
+
+/** One tracked download of the shared browser session. Kept in main (recent
+ *  50), pushed to the renderer as a "download" browser:event on start and at
+ *  the terminal state, and listed for agents via the browser_downloads tool. */
+export interface BrowserDownloadEntry {
+  id: string;
+  browserId: string;
+  url: string;
+  filename: string;
+  /** Absolute path the file is being written to (pre-allocated, deduped). */
+  path: string;
+  state: "progressing" | "completed" | "cancelled" | "interrupted";
+  receivedBytes: number;
+  totalBytes: number;
+  startedAt: number;
+  endedAt?: number;
+}
+
+/** Result of a `printToPdf()` — `data` is the PDF bytes base64-encoded (as
+ *  returned by the CDP command); the caller writes it to disk. */
+export interface BrowserPdfResult {
+  ok: boolean;
+  error?: string;
+  data?: string;
+}
+
+/** CDP's printToPDF takes paper size in inches (no named formats), so the
+ *  tool's format enum maps here. */
+const PAPER_SIZES_IN: Record<string, { w: number; h: number }> = {
+  letter: { w: 8.5, h: 11 },
+  legal: { w: 8.5, h: 14 },
+  tabloid: { w: 11, h: 17 },
+  a3: { w: 11.69, h: 16.54 },
+  a4: { w: 8.27, h: 11.69 },
+  a5: { w: 5.83, h: 8.27 },
+};
+
+/** Where downloads land: a fixed subfolder of the OS downloads directory, so
+ *  the agent (and the user) always knows where to look. Created lazily. */
+function browserDownloadsDir(): string {
+  return join(app.getPath("downloads"), "mcode-browser");
+}
+
+/** Dedupe a download filename against existing files on disk: `a.pdf` →
+ *  `a-1.pdf`, `a-2.pdf` … (before the extension). Keeps repeated downloads of
+ *  the same report from silently overwriting each other. */
+function uniqueDownloadPath(dir: string, filename: string): string {
+  const safe = filename.replace(/[\\/:*?"<>|]/g, "_").trim() || "download";
+  const ext = join(dir, safe);
+  try {
+    statSync(ext);
+  } catch {
+    return ext; // does not exist — take it
+  }
+  const dot = safe.lastIndexOf(".");
+  const stem = dot > 0 ? safe.slice(0, dot) : safe;
+  const tail = dot > 0 ? safe.slice(dot) : "";
+  for (let i = 1; i < 1000; i++) {
+    const candidate = join(dir, `${stem}-${i}${tail}`);
+    try {
+      statSync(candidate);
+    } catch {
+      return candidate;
+    }
+  }
+  return join(dir, `${stem}-${Date.now()}${tail}`);
 }
 
 /** Result of a `screenshot()` — `data` is a base64 PNG string. */
@@ -462,6 +649,7 @@ class BrowserManagerImpl {
     this.installPickerListener();
     this.attachNavigationEvents(live);
     this.ensurePersistTimer();
+    this.installDownloadListener();
 
     // New-window requests (target=_blank, window.open) become in-panel tabs
     // for web URLs so browsing never leaves the app; other protocols
@@ -1201,6 +1389,93 @@ class BrowserManagerImpl {
     this.persistTimer.unref?.();
   }
 
+  // ── Download tracking ─────────────────────────────────────────────────
+  // The embedded browser auto-downloads into a fixed folder (no save dialog —
+  // that would block on UI the agent can't answer). Every download is tracked
+  // here (recent 50), pushed to the renderer as a "download" browser:event on
+  // start + terminal state, and listed for agents via the browser_downloads
+  // tool (they then read the file with the normal file tools).
+
+  /** Cap on remembered downloads; newest first. */
+  private static readonly DOWNLOADS_MAX = 50;
+  private readonly downloads: BrowserDownloadEntry[] = [];
+  private downloadListenerInstalled = false;
+
+  /** Hook the shared browser session's will-download ONCE. Registered lazily
+   *  with the first spawned view (same pattern as the vault timer) because
+   *  `app.getPath("downloads")` isn't guaranteed before app ready. */
+  private installDownloadListener(): void {
+    if (this.downloadListenerInstalled) return;
+    this.downloadListenerInstalled = true;
+    browserSession().on("will-download", (_event, item: DownloadItem, wc) => {
+      const browserId = wc.isDestroyed() ? "" : (this.wcToBrowser.get(wc.id) ?? "");
+      const dir = browserDownloadsDir();
+      try {
+        mkdirSync(dir, { recursive: true });
+      } catch (err) {
+        log.warn(
+          `browser: download dir mkdir failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+      const path = uniqueDownloadPath(dir, item.getFilename());
+      // Pre-allocate the save path: no dialog, deterministic location, name
+      // deduped against existing files (-1, -2 … before the extension).
+      item.setSavePath(path);
+      const entry: BrowserDownloadEntry = {
+        id: randomUUID(),
+        browserId,
+        url: item.getURL(),
+        filename: item.getFilename(),
+        path,
+        state: "progressing",
+        receivedBytes: 0,
+        totalBytes: item.getTotalBytes(),
+        startedAt: Date.now(),
+      };
+      this.downloads.unshift(entry);
+      if (this.downloads.length > BrowserManagerImpl.DOWNLOADS_MAX) this.downloads.length = BrowserManagerImpl.DOWNLOADS_MAX;
+      this.pushDownload(entry);
+      log.info(`browser download started: ${entry.filename} → ${path}`);
+      item.on("updated", (_e, state) => {
+        entry.receivedBytes = item.getReceivedBytes();
+        if (state === "interrupted") entry.state = "interrupted";
+      });
+      item.once("done", (_e, state) => {
+        entry.state = state;
+        entry.receivedBytes = item.getReceivedBytes();
+        entry.endedAt = Date.now();
+        this.pushDownload(entry);
+        log.info(`browser download ${state}: ${entry.filename} (${entry.receivedBytes} bytes)`);
+      });
+    });
+  }
+
+  /** Push a download start/state-change to the renderer. browserId may be ""
+   *  (download from a non-browser webContents on the shared session) — the
+   *  renderer's browserId lookup just won't match a tab, which is fine. */
+  private pushDownload(entry: BrowserDownloadEntry): void {
+    sendToRenderer(IPC.BROWSER_EVENT, {
+      channel: IPC.BROWSER_EVENT,
+      browserId: entry.browserId,
+      type: "download",
+      payload: {
+        downloadId: entry.id,
+        filename: entry.filename,
+        path: entry.path,
+        url: entry.url,
+        state: entry.state,
+        receivedBytes: entry.receivedBytes,
+        totalBytes: entry.totalBytes,
+      },
+    });
+  }
+
+  /** Recent downloads, newest first (a defensive copy — callers must not
+   *  mutate the tracked entries). */
+  listDownloads(): BrowserDownloadEntry[] {
+    return this.downloads.map((d) => ({ ...d }));
+  }
+
   // ── HTTP Basic Auth ─────────────────────────────────────────────────
 
   /** Pending HTTP Basic Auth prompts: requestId -> Electron login callback.
@@ -1332,19 +1607,62 @@ class BrowserManagerImpl {
     }
   }
 
-  /** Programmatically click the element matching a CSS selector. The selector
-   *  is JSON-encoded before substitution into the click script (see
-   *  `buildClickScript`), so it can't break out of the `querySelector` call.
-   *  Returns post-click url/title so the caller can detect navigation. */
+  /** Click the element matching a CSS selector.
+   *
+   *  Primary path is a REAL mouse event pair (mouseDown + mouseUp) dispatched
+   *  at the element's viewport center: the injected ELEMENT_CENTER_SCRIPT
+   *  scrolls it into view, computes the center, and checks what actually sits
+   *  at that point. Going through Chromium's input pipeline means
+   *  hover/mousedown-sensitive UI (dropdown menus, focus rings) behaves like a
+   *  user click — the old `el.click()` path only fired a synthetic DOM click
+   *  event and silently no-oped on such components. When the center point is
+   *  covered by an overlay, the click still lands (that's what a human would
+   *  hit) and `obscured` reports the covering element so the model can adapt
+   *  (e.g. dismiss a cookie banner first).
+   *
+   *  Fallback to the programmatic `el.click()` script when the element has no
+   *  layout box (hidden inputs) or script injection fails (strict CSP). */
   async click(id: string, selector: string): Promise<BrowserClickResult> {
     const live = this.get(id);
     if (!live) return { ok: false, error: "浏览器不存在或已关闭" };
     if (typeof selector !== "string" || selector.length === 0) {
       return { ok: false, error: "selector 不能为空" };
     }
+    const wc = live.view.webContents;
+    if (wc.isDestroyed()) return { ok: false, error: "浏览器已销毁" };
+
+    // Real input needs the view on the visible surface — park it onscreen if
+    // the user has another panel tab active (same trade-off as screenshot's
+    // temp-show, minus the restore: the agent keeps browsing visibly).
+    if (!live.visible) this.show(id);
+    try {
+      const center = (await wc.executeJavaScript(buildElementCenterScript(selector), true)) as {
+        ok?: boolean;
+        error?: string;
+        fallback?: boolean;
+        x?: number;
+        y?: number;
+        obscured?: { tag: string; text: string };
+      };
+      if (center && center.error) return { ok: false, error: center.error };
+      if (center && center.ok && typeof center.x === "number" && typeof center.y === "number") {
+        wc.focus();
+        const base = { x: center.x, y: center.y, button: "left" as const, clickCount: 1 };
+        wc.sendInputEvent({ type: "mouseDown", ...base });
+        wc.sendInputEvent({ type: "mouseUp", ...base });
+        // Give page handlers/navigation a beat to react before we report state.
+        await new Promise((r) => setTimeout(r, 250));
+        return { ok: true, url: wc.getURL(), title: wc.getTitle(), obscured: center.obscured ?? undefined };
+      }
+      // center.fallback (no layout box) or a thrown/injected-script failure →
+      // fall through to the programmatic click below.
+    } catch {
+      /* CSP-strict pages can reject executeJavaScript — fall back below */
+    }
+
     try {
       const script = buildClickScript(selector);
-      const res = (await live.view.webContents.executeJavaScript(script, true)) as {
+      const res = (await wc.executeJavaScript(script, true)) as {
         ok?: boolean;
         error?: string;
         url?: string;
@@ -1359,14 +1677,35 @@ class BrowserManagerImpl {
     }
   }
 
+  /** Click at raw viewport coordinates (CSS px, same space as
+   *  getBoundingClientRect). The escape hatch for canvas maps / clickable divs
+   *  that no CSS selector can address. */
+  async clickAt(id: string, x: number, y: number): Promise<BrowserClickResult> {
+    const live = this.get(id);
+    if (!live) return { ok: false, error: "浏览器不存在或已关闭" };
+    if (!Number.isFinite(x) || !Number.isFinite(y) || x < 0 || y < 0) {
+      return { ok: false, error: `坐标无效: (${x}, ${y})` };
+    }
+    const wc = live.view.webContents;
+    if (wc.isDestroyed()) return { ok: false, error: "浏览器已销毁" };
+    if (!live.visible) this.show(id);
+    wc.focus();
+    const base = { x: Math.round(x), y: Math.round(y), button: "left" as const, clickCount: 1 };
+    wc.sendInputEvent({ type: "mouseDown", ...base });
+    wc.sendInputEvent({ type: "mouseUp", ...base });
+    await new Promise((r) => setTimeout(r, 250));
+    return { ok: true, url: wc.getURL(), title: wc.getTitle() };
+  }
+
   /** Type text into an element (input / textarea / contenteditable) selected by
    *  CSS selector. Uses the element's native value setter + dispatches
    *  input/change events so React/Vue controlled inputs pick the value up (a
-   *  plain `el.value = text` assignment silently no-ops on them). Returns
+   *  plain `el.value = text` assignment silently no-ops on them). `clear=false`
+   *  appends to the current value instead of replacing it. The element ends up
+   *  focused, so a follow-up `sendKeys({keys:"Enter"})` acts on it. Returns
    *  post-action url/title like click(). The script (buildTypeScript)
-   *  JSON-encodes both selector and text, so neither can break out of the
-   *  querySelector / value assignment. */
-  async type(id: string, selector: string, text: string): Promise<BrowserClickResult> {
+   *  JSON-encodes selector/text/clear, so none of them can break out. */
+  async type(id: string, selector: string, text: string, clear = true): Promise<BrowserClickResult> {
     const live = this.get(id);
     if (!live) return { ok: false, error: "浏览器不存在或已关闭" };
     if (typeof selector !== "string" || selector.length === 0) {
@@ -1376,7 +1715,7 @@ class BrowserManagerImpl {
       return { ok: false, error: "text 必须是字符串" };
     }
     try {
-      const script = buildTypeScript(selector, text);
+      const script = buildTypeScript(selector, text, clear);
       const res = (await live.view.webContents.executeJavaScript(script, true)) as {
         ok?: boolean;
         error?: string;
@@ -1423,6 +1762,224 @@ class BrowserManagerImpl {
     }
   }
 
+  /** Scroll the page window (or a specific element's scrollable box) by a
+   *  fraction of the viewport height. Returns the resulting scroll position so
+   *  the agent knows where it landed and whether more content remains. */
+  async scroll(
+    id: string,
+    direction: "up" | "down",
+    pages: number,
+    selector?: string,
+  ): Promise<BrowserScrollResult> {
+    const live = this.get(id);
+    if (!live) return { ok: false, error: "浏览器不存在或已关闭" };
+    try {
+      const script = buildScrollScript({ selector: selector || undefined, direction, pages });
+      const res = (await live.view.webContents.executeJavaScript(script, true)) as {
+        ok?: boolean;
+        error?: string;
+        scrollY?: number;
+        scrollHeight?: number;
+        viewport?: number;
+        url?: string;
+        title?: string;
+      };
+      if (res && res.error) return { ok: false, error: res.error };
+      return {
+        ok: true,
+        scrollY: res?.scrollY,
+        scrollHeight: res?.scrollHeight,
+        viewport: res?.viewport,
+        url: res?.url,
+        title: res?.title,
+      };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      log.warn(`browser scroll failed: ${id} ${msg}`);
+      return { ok: false, error: `滚动失败: ${msg}` };
+    }
+  }
+
+  /** Press a key or shortcut combo (e.g. "Enter", "Escape", "Control+a") via
+   *  `sendInputEvent` — goes through Chromium's real input pipeline, so form
+   *  default submissions (Enter), focus movement (Tab) and page keyboard
+   *  shortcuts all behave like a user pressing the key. The currently focused
+   *  element receives the event. NOT for entering text — use type() for that. */
+  async sendKeys(id: string, keys: string): Promise<BrowserClickResult> {
+    const live = this.get(id);
+    if (!live) return { ok: false, error: "浏览器不存在或已关闭" };
+    if (typeof keys !== "string" || !keys.trim()) return { ok: false, error: "keys 不能为空" };
+    const parsed = parseKeyCombo(keys);
+    if ("error" in parsed) return { ok: false, error: parsed.error };
+    const wc = live.view.webContents;
+    if (wc.isDestroyed()) return { ok: false, error: "浏览器已销毁" };
+    try {
+      wc.focus();
+      const mods = parsed.modifiers.length ? parsed.modifiers : undefined;
+      wc.sendInputEvent({ type: "keyDown", keyCode: parsed.key, modifiers: mods });
+      wc.sendInputEvent({ type: "keyUp", keyCode: parsed.key, modifiers: mods });
+    } catch (err) {
+      return { ok: false, error: `按键失败: ${err instanceof Error ? err.message : String(err)}` };
+    }
+    await new Promise((r) => setTimeout(r, 200));
+    return { ok: true, url: wc.getURL(), title: wc.getTitle() };
+  }
+
+  /** Navigate history: back / forward / reload, then wait for the page to
+   *  settle so a subsequent snapshot sees the new content. Mirrors the panel's
+   *  own toolbar buttons (goBack/goForward/reload), exposed to agents. */
+  async historyAction(id: string, action: "back" | "forward" | "reload"): Promise<BrowserClickResult> {
+    const live = this.get(id);
+    if (!live) return { ok: false, error: "浏览器不存在或已关闭" };
+    const wc = live.view.webContents;
+    if (wc.isDestroyed()) return { ok: false, error: "浏览器已销毁" };
+    const nav = wc.navigationHistory;
+    try {
+      if (action === "back") {
+        if (!nav.canGoBack()) return { ok: false, error: "没有可后退的历史记录" };
+        nav.goBack();
+      } else if (action === "forward") {
+        if (!nav.canGoForward()) return { ok: false, error: "没有可前进的历史记录" };
+        nav.goForward();
+      } else {
+        wc.reload();
+      }
+    } catch (err) {
+      return { ok: false, error: `导航失败: ${err instanceof Error ? err.message : String(err)}` };
+    }
+    const loaded = await this.waitForLoad(id);
+    if (!loaded.ok) return { ok: false, error: loaded.error };
+    return { ok: true, url: loaded.url ?? wc.getURL(), title: loaded.title ?? wc.getTitle() };
+  }
+
+  /** Select an option in a native <select> dropdown by value or exact visible
+   *  text. On no match, returns the option list so the agent can retry with an
+   *  exact spelling. Custom (div-based) dropdown widgets are rejected with a
+   *  hint to click them open instead. */
+  async selectOption(id: string, selector: string, value: string): Promise<BrowserSelectResult> {
+    const live = this.get(id);
+    if (!live) return { ok: false, error: "浏览器不存在或已关闭" };
+    if (typeof selector !== "string" || selector.length === 0) {
+      return { ok: false, error: "selector 不能为空" };
+    }
+    try {
+      const script = buildSelectScript(selector, value);
+      const res = (await live.view.webContents.executeJavaScript(script, true)) as {
+        ok?: boolean;
+        error?: string;
+        options?: Array<{ value: string; text: string; selected?: boolean }>;
+        selected?: { value: string; text: string };
+        url?: string;
+        title?: string;
+      };
+      if (res && res.error) {
+        return { ok: false, error: res.error, options: res.options, url: res?.url, title: res?.title };
+      }
+      return {
+        ok: true,
+        selected: res?.selected,
+        url: res?.url,
+        title: res?.title,
+      };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      log.warn(`browser select failed: ${id} ${msg}`);
+      return { ok: false, error: `下拉选择失败: ${msg}` };
+    }
+  }
+
+  /** Poll a wait condition (element presence / text presence) until it holds
+   *  or the timeout expires. Polling (instead of one injected script with a
+   *  busy loop) keeps the page responsive and survives navigations mid-wait —
+   *  a throwing poll (navigation aborted the script) just retries. */
+  async waitFor(
+    id: string,
+    arg: { selector?: string; text?: string },
+    timeoutMs: number,
+  ): Promise<BrowserWaitResult> {
+    const live = this.get(id);
+    if (!live) return { ok: false, error: "浏览器不存在或已关闭" };
+    const wc = live.view.webContents;
+    if (wc.isDestroyed()) return { ok: false, error: "浏览器已销毁" };
+    const script = buildWaitScript(arg);
+    const start = Date.now();
+    const intervalMs = 300;
+    let lastReason = "";
+    for (;;) {
+      if (wc.isDestroyed()) return { ok: false, error: "浏览器已销毁" };
+      try {
+        const res = (await wc.executeJavaScript(script, true)) as {
+          found?: boolean;
+          error?: string;
+          reason?: string;
+          url?: string;
+          title?: string;
+        };
+        if (res?.error) return { ok: false, error: res.error };
+        if (res?.found) {
+          return { ok: true, found: true, elapsedMs: Date.now() - start, url: res.url, title: res.title };
+        }
+        lastReason = res?.reason ?? lastReason;
+      } catch {
+        /* navigation aborted the evaluation — keep polling until timeout */
+      }
+      if (Date.now() - start >= timeoutMs) {
+        return {
+          ok: true,
+          found: false,
+          elapsedMs: Date.now() - start,
+          url: wc.getURL(),
+          title: wc.getTitle(),
+          error: lastReason || undefined,
+        };
+      }
+      await new Promise((r) => setTimeout(r, intervalMs));
+    }
+  }
+
+  /** Find elements by CSS selector (with attribute extraction) or search the
+   *  page text (literal/regex, with context snippets). The cheap alternative
+   *  to dumping raw HTML through evaluate(). */
+  async find(
+    id: string,
+    arg: {
+      selector?: string;
+      text?: string;
+      regex?: boolean;
+      caseSensitive?: boolean;
+      contextChars?: number;
+      maxResults?: number;
+      attributes?: string[];
+      cssScope?: string;
+    },
+  ): Promise<BrowserFindResult> {
+    const live = this.get(id);
+    if (!live) return { ok: false, error: "浏览器不存在或已关闭" };
+    try {
+      const script = buildFindScript(arg);
+      const res = (await live.view.webContents.executeJavaScript(script, true)) as {
+        ok?: boolean;
+        error?: string;
+        total?: number;
+        matches?: BrowserFindResult["matches"];
+        url?: string;
+        title?: string;
+      };
+      if (res && res.error) return { ok: false, error: res.error };
+      return {
+        ok: true,
+        total: res?.total,
+        matches: res?.matches ?? [],
+        url: res?.url,
+        title: res?.title,
+      };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      log.warn(`browser find failed: ${id} ${msg}`);
+      return { ok: false, error: `查找失败: ${msg}` };
+    }
+  }
+
   /** Capture the current page as a PNG screenshot. `capturePage()` renders the
    *  view's current composite — if the page is mid-navigation the result may be
    *  blank, so callers should snapshot/click after navigation settles. Retries
@@ -1441,12 +1998,24 @@ class BrowserManagerImpl {
    *  active we temporarily size the view to the emulated rect (centered), wait
    *  a frame, capture, then restore — exactly like the default temp-show below,
    *  but with matching dimensions. */
-  async screenshot(id: string): Promise<BrowserScreenshotResult> {
+  async screenshot(id: string, opts?: { fullPage?: boolean }): Promise<BrowserScreenshotResult> {
     const live = this.get(id);
     if (!live) return { ok: false, error: "浏览器不存在或已关闭" };
     const wc = live.view.webContents;
     if (wc.isDestroyed()) return { ok: false, error: "浏览器已销毁" };
-    log.info(`browser screenshot start: ${id} url=${wc.getURL()} visible=${live.visible} isLoading=${wc.isLoading()}`);
+    log.info(`browser screenshot start: ${id} url=${wc.getURL()} visible=${live.visible} isLoading=${wc.isLoading()} fullPage=${opts?.fullPage === true}`);
+
+    // Full-page capture goes through the CDP debugger: it renders the whole
+    // scrollable document without touching visibility/bounds and works on a
+    // hidden view. On failure (debugger slot held by DevTools, protocol error)
+    // degrade to the plain viewport capture rather than failing the tool.
+    if (opts?.fullPage) {
+      const full = await this.captureFullPage(id);
+      if (full !== null) {
+        return { ok: true, data: full, mimeType: "image/png" };
+      }
+      log.warn(`browser full-page capture unavailable, falling back to viewport: ${id}`);
+    }
 
     // If the view is offscreen/hidden (user switched panels, or it was never
     // measured), temporarily bring it on-screen so capturePage gets real pixels.
@@ -1520,6 +2089,171 @@ class BrowserManagerImpl {
       log.warn(`browser screenshot produced EMPTY image after retry: ${id} url=${wc.getURL()}`);
     }
     return { ok: true, data: result.data, mimeType: "image/png" };
+  }
+
+  /** Run `fn` with the CDP debugger attached to the view, normalizing the
+   *  single-slot discipline in one place: Electron's debugger is a single slot
+   *  per webContents — attach() throws when one of OUR sessions (mobile UA
+   *  override / color-scheme pin) already holds it, then we simply reuse that
+   *  session and do NOT detach at the end; only a slot THIS call attached is
+   *  released. A slot held by real DevTools makes sendCommand fail, which
+   *  surfaces as `{ ok:false }` (callers degrade). */
+  private async withDebugger<T>(
+    id: string,
+    fn: (dbg: Debugger) => Promise<T>,
+  ): Promise<{ ok: true; value: T } | { ok: false; error: string }> {
+    const live = this.get(id);
+    if (!live) return { ok: false, error: "浏览器不存在或已关闭" };
+    const wc = live.view.webContents;
+    if (wc.isDestroyed()) return { ok: false, error: "浏览器已销毁" };
+    let attachedHere = false;
+    try {
+      wc.debugger.attach("1.3");
+      attachedHere = true;
+    } catch {
+      /* already attached — ours (UA/color-scheme) or DevTools; try the command */
+    }
+    try {
+      return { ok: true, value: await fn(wc.debugger) };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      log.warn(`browser CDP command failed: ${id} ${msg}`);
+      return { ok: false, error: msg };
+    } finally {
+      if (attachedHere) {
+        try {
+          wc.debugger.detach();
+        } catch {
+          /* view tearing down — ignore */
+        }
+      }
+    }
+  }
+
+  /** Full-page capture via the CDP debugger: Page.captureScreenshot with
+   *  captureBeyondViewport renders the entire scrollable document without
+   *  resizing the view or touching visibility (works offscreen — unlike
+   *  capturePage, which needs the view composited). Returns null on failure;
+   *  the caller degrades to the viewport capture. */
+  private async captureFullPage(id: string): Promise<string | null> {
+    const res = await this.withDebugger<{ data?: string }>(id, (dbg) =>
+      dbg.sendCommand("Page.captureScreenshot", {
+        format: "png",
+        captureBeyondViewport: true,
+      }) as Promise<{ data?: string }>,
+    );
+    const data = res.ok ? res.value?.data : undefined;
+    return typeof data === "string" && data.length > 0 ? data : null;
+  }
+
+  /** Render the page to PDF via CDP Page.printToPDF (whole document, exactly
+   *  what Ctrl+P would produce, without touching visibility). Returns the PDF
+   *  bytes base64-encoded; the caller persists them. `paperFormat` maps
+   *  through PAPER_SIZES_IN (CDP takes inches); `landscape` only flips the
+   *  orientation flag — Chromium swaps the paper dims itself. */
+  async printToPdf(
+    id: string,
+    opts: {
+      paperFormat?: string;
+      landscape?: boolean;
+      printBackground?: boolean;
+      scale?: number;
+      headerFooter?: boolean;
+    },
+  ): Promise<BrowserPdfResult> {
+    const live = this.get(id);
+    if (!live) return { ok: false, error: "浏览器不存在或已关闭" };
+    const wc = live.view.webContents;
+    if (wc.isDestroyed()) return { ok: false, error: "浏览器已销毁" };
+    const format = (opts.paperFormat ?? "a4").toLowerCase();
+    const paper = PAPER_SIZES_IN[format];
+    if (!paper) {
+      return { ok: false, error: `不支持的纸张格式 "${opts.paperFormat}"(可选 letter/legal/tabloid/a3/a4/a5)` };
+    }
+    const scale =
+      typeof opts.scale === "number" && Number.isFinite(opts.scale) ? Math.min(Math.max(opts.scale, 0.1), 2) : 1;
+    const res = await this.withDebugger<{ data?: string }>(id, (dbg) =>
+      dbg.sendCommand("Page.printToPDF", {
+        landscape: opts.landscape === true,
+        printBackground: opts.printBackground !== false,
+        scale,
+        paperWidth: paper.w,
+        paperHeight: paper.h,
+        marginTop: 0.4,
+        marginBottom: 0.4,
+        marginLeft: 0.4,
+        marginRight: 0.4,
+        displayHeaderFooter: opts.headerFooter === true,
+      }) as Promise<{ data?: string }>,
+    );
+    if (!res.ok) return { ok: false, error: `PDF 生成失败: ${res.error}` };
+    const data = res.value?.data;
+    if (typeof data !== "string" || data.length === 0) {
+      return { ok: false, error: "PDF 生成失败(空输出)" };
+    }
+    return { ok: true, data };
+  }
+
+  /** Set files on an `<input type="file">` via CDP DOM.setFileInputFiles —
+   *  the same mechanism Playwright's setInputFiles uses: Chromium acts as if
+   *  the user picked the files, so input/change events fire natively and
+   *  React/Vue state updates. No file content crosses the boundary (paths
+   *  only), so large uploads don't round-trip through executeJavaScript. The
+   *  pre-check script gives a friendly error when the selector misses a file
+   *  input; the CDP path is skipped entirely in that case. */
+  async setFileInputFiles(
+    id: string,
+    selector: string,
+    paths: string[],
+  ): Promise<BrowserClickResult> {
+    const live = this.get(id);
+    if (!live) return { ok: false, error: "浏览器不存在或已关闭" };
+    const wc = live.view.webContents;
+    if (wc.isDestroyed()) return { ok: false, error: "浏览器已销毁" };
+    if (typeof selector !== "string" || selector.length === 0) {
+      return { ok: false, error: "selector 不能为空" };
+    }
+    if (!paths.length) return { ok: false, error: "paths 不能为空" };
+    for (const p of paths) {
+      try {
+        if (!statSync(p).isFile()) return { ok: false, error: `不是文件: ${p}` };
+      } catch {
+        return { ok: false, error: `文件不存在: ${p}` };
+      }
+    }
+    // Friendly pre-check (also validates the selector in page terms — CDP's
+    // DOM.querySelector failure message is cryptic about which side failed).
+    try {
+      const check = (await wc.executeJavaScript(buildCheckFileInputScript(selector), true)) as {
+        ok?: boolean;
+        error?: string;
+      };
+      if (check?.error) return { ok: false, error: check.error };
+    } catch {
+      /* CSP-strict page — fall through and let CDP surface its own error */
+    }
+    const res = await this.withDebugger<unknown>(id, async (dbg) => {
+      // depth:0 returns just the root handle (skip serializing the whole
+      // subtree on big pages) — DOM.querySelector still searches the live
+      // document regardless of the returned depth.
+      const doc = (await dbg.sendCommand("DOM.getDocument", { depth: 0 })) as {
+        root?: { nodeId?: number };
+      };
+      const root = doc?.root?.nodeId;
+      if (!root) throw new Error("DOM.getDocument 未返回根节点");
+      const q = (await dbg.sendCommand("DOM.querySelector", { nodeId: root, selector })) as {
+        nodeId?: number;
+      };
+      if (!q?.nodeId) throw new Error(`element not found for selector: ${selector}`);
+      await dbg.sendCommand("DOM.setFileInputFiles", { files: paths, nodeId: q.nodeId });
+      return true;
+    });
+    if (!res.ok) {
+      if (/element not found/.test(res.error)) return { ok: false, error: res.error };
+      return { ok: false, error: `设置文件失败: ${res.error}` };
+    }
+    await new Promise((r) => setTimeout(r, 200));
+    return { ok: true, url: wc.getURL(), title: wc.getTitle() };
   }
 
   /** Capture the current page as a single base64 PNG frame WITHOUT touching

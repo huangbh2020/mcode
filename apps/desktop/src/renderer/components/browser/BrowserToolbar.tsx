@@ -249,7 +249,7 @@ export function BrowserToolbar({
   };
   return (
     <div className="flex h-11 shrink-0 items-center gap-1 border-b border-edge bg-surface px-2">
-      {mode === "overlay" ? (
+      {mode === "overlay" && (
         <>
           {/* Overlay: "返回工作台" leaves the fullscreen overlay (views stay
               alive). Visually distinct (accent on hover) so the user sees how
@@ -261,17 +261,10 @@ export function BrowserToolbar({
           <ToolButton onClick={onSwitchMode} title={t("browser.switchToSidebar")}>
             <IconArrowsMinimize size={16} />
           </ToolButton>
+          <div className="mx-1 h-5 w-px bg-edge" />
         </>
-      ) : (
-        /* Sidebar: "展开为 PC 全屏" swaps to the fullscreen overlay. The
-           sidebar has no "close" button here — exiting is via the rail icon
-           toggle, or closing every tab. */
-        <ToolButton onClick={onSwitchMode} title={t("browser.expandFullscreen")}>
-          <IconArrowsMaximize size={16} />
-        </ToolButton>
       )}
-
-      <div className="mx-1 h-5 w-px bg-edge" />
+      {/* Sidebar: the fullscreen expand moved into the More menu (top item). */}
 
       <ToolButton onClick={onBack} disabled={!canGoBack} title={t("browser.back")}>
         <IconChevronLeft size={18} />
@@ -435,6 +428,22 @@ export function BrowserToolbar({
               "rounded-md border border-edge bg-surface shadow-xl",
             )}
           >
+            {/* ── View switch (sidebar only — the overlay keeps its leading
+                buttons) ── */}
+            {mode === "sidebar" && (
+              <button
+                type="button"
+                onClick={() => {
+                  setMoreMenuOpen(false);
+                  onSwitchMode();
+                }}
+                className="flex w-full items-center gap-2 border-b border-edge px-2.5 py-2 text-left text-xs text-content transition-colors hover:bg-surface-hover"
+              >
+                <IconArrowsMaximize size={13} className="shrink-0 text-content-muted" />
+                {t("browser.expandFullscreen")}
+              </button>
+            )}
+
             {/* ── Bookmarks ── */}
             <div className="flex items-center justify-between border-b border-edge px-2.5 py-1.5">
               <span className="flex items-center gap-1.5 text-[10px] font-medium uppercase tracking-wide text-content-subtle">

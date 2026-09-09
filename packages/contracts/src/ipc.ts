@@ -3224,7 +3224,10 @@ export interface PickedElement {
  *    adopt that browserId as a new panel tab (payload: BrowserTabOpened).
  *  - "authRequest": a page asked for HTTP Basic Auth; the payload is a
  *    BrowserAuthRequest and the renderer should show a login dialog, then
- *    answer via the browser.authRespond RPC. */
+ *    answer via the browser.authRespond RPC.
+ *  - "download": the embedded browser started/finished a file download
+ *    (payload: BrowserDownloadProgress); the renderer currently only logs it —
+ *    the agent reads state via the browser_downloads tool. */
 export interface BrowserEventMessage {
   channel: "browser:event";
   browserId: string;
@@ -3235,8 +3238,23 @@ export interface BrowserEventMessage {
     | "crashed"
     | "agentOpened"
     | "tabOpened"
-    | "authRequest";
+    | "authRequest"
+    | "download";
   payload: unknown;
+}
+
+/** Payload of the "download" browser push event. Emitted when a download
+ *  starts and again when it reaches a terminal state (completed / cancelled /
+ *  interrupted); progress ticks are intentionally not pushed (the agent polls
+ *  browser_downloads instead). `path` is where the file is being written. */
+export interface BrowserDownloadProgress {
+  downloadId: string;
+  filename: string;
+  path: string;
+  url: string;
+  state: "progressing" | "completed" | "cancelled" | "interrupted";
+  receivedBytes: number;
+  totalBytes: number;
 }
 
 /** Payload of the "tabOpened" browser push event. `background` is true when
