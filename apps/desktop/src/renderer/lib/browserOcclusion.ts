@@ -25,6 +25,21 @@ export interface OcclusionRect {
   bottom: number;
 }
 
+/** Sentinel for a ref-aware occluder whose popup hasn't mounted/measured yet.
+ *  React portals mount their node one render AFTER `open` flips (base-ui's
+ *  FloatingPortal creates the container div via setState in a layout effect),
+ *  so a popup ref is still null when the hook's effect registers geometry.
+ *  That state must NOT mean "suppress everywhere" — it hid the view for 1-2
+ *  frames on EVERY popup open (hide → rAF remeasure → show = the "browser
+ *  flashes when a select opens" bug). An occluder holding this rect is
+ *  treated as never overlapping: the popup is still invisible in its
+ *  opacity-0 entry transition at that point, and the hook's rAF remeasure
+ *  replaces the sentinel with the real rect within a frame — the view hides
+ *  (if truly overlapped) before the popup becomes visible. Distinct from
+ *  `null`, which stays reserved for ref-less callers (full-window dialogs)
+ *  meaning "suppress everywhere". */
+export const OCCLUDER_UNMEASURED: OcclusionRect = { left: 0, top: 0, right: 0, bottom: 0 };
+
 let stageRect: OcclusionRect | null = null;
 let nextOccluderId = 1;
 /** occluderId -> viewport rect; null = "geometry unknown, suppress everywhere". */
