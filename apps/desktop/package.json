@@ -1,6 +1,6 @@
 {
   "name": "@mcode/desktop",
-  "version": "0.1.52",
+  "version": "0.1.53",
   "private": true,
   "description": "Mcode - Desktop GUI for Claude Code",
   "author": "huangbh",
