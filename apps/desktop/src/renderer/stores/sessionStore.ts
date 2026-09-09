@@ -568,10 +568,13 @@ export interface SessionState {
    * as a convenience alias for the active project's sessions. */
   projects: Project[];
   activeProjectId: string | null;
-  /** Active (non-archived) sessions per project — paginated: only the first
-   *  `SESSION_PAGE_SIZE` rows are loaded on init / project expand, and
-   *  `loadMoreSessions(projectId)` appends the next page. `sessions` is kept
-   *  as a convenience alias for the active project's loaded page. */
+  /** Active (non-archived) sessions per project — a TWO-SECTION array (see
+   *  splitSessionSections): the first `SESSION_PAGE_SIZE` LOCAL rows are
+   *  loaded on init / project expand and `loadMoreSessions(projectId)` appends
+   *  the next page; worktree-bound threads follow after (fetched in full, see
+   *  loadWorktreeSessions). Pagination math (total / hasMore / offset) counts
+   *  the LOCAL section only. `sessions` is kept as a convenience alias for
+   *  the active project's cached page. */
   sessionsByProject: Record<string, Session[]>;
   /** `true` when a project has more active sessions on the server than are
    *  currently loaded into `sessionsByProject[pid]`. Drives the "加载更多"
@@ -1325,6 +1328,14 @@ export interface SessionState {
   /** Fetch the next page of active sessions for a project and append it to
    *  `sessionsByProject[projectId]`. No-op when there are no more to load. */
   loadMoreSessions: (projectId: string) => Promise<void>;
+  /** (Re)fetch a project's worktree-bound threads in full and merge them into
+   *  the cache's worktree section (local section untouched). A directory
+   *  holds few threads, so this is unpaginated (capped well beyond realistic
+   *  use). Fired on init, project expand and project selection; the
+   *  `session.changed` reducer maintains the section incrementally in
+   *  between. No-op when the project's cache isn't loaded (init brings both
+   *  sections together). */
+  loadWorktreeSessions: (projectId: string) => Promise<void>;
   startSession: (projectId?: string, overrides?: { providerId?: string; model?: string; customModelId?: string | null; worktreePath?: string; /** Force the working-environment intent (bypasses the composer's env chip — e.g. a conflict-resolution session must stay in the real checkout). */ envMode?: "local" | "worktree" }) => Promise<void>;
   /** Move a FRESH local session to a different project (the directory
    *  switcher in the new-session composer panel). Main-side guards reject
@@ -2368,8 +2379,15 @@ function isPathWithinRoot(root: string, abs: string): boolean {
 }
 
 /** Page size for the left-bar thread list. The first page is fetched on
- *  init / project expand; further pages are appended on "加载更多". */
+ *  init / project expand; further pages are appended on "加载更多". The list
+ *  counts LOCAL threads only — worktree threads are fetched separately so a
+ *  worktree-heavy project never eats into these 5 rows. */
 const SESSION_PAGE_SIZE = 5;
+
+/** Hard cap for a project's full worktree-section fetch. A worktree
+ *  directory holds few threads by design, so this is not pagination — just a
+ *  sanity bound far beyond realistic use. */
+const WORKTREE_SESSIONS_FETCH_LIMIT = 500;
 
 /** Page size for the stream sidebar's cross-project aggregate (rich cards
  *  are ~3x taller than tree rows, so the page is only 2x). */
@@ -2381,6 +2399,11 @@ const STREAM_PAGE_SIZE = 10;
  *  response, resolving late, must not clobber the newer scope's pages (the
  *  "切了项目列表又跳回去" race). */
 let streamFetchSeq = 0;
+
+/** Per-project in-flight guard for loadWorktreeSessions — only the latest
+ *  fetch for a project may apply, so a slow response can't clobber a newer
+ *  one (expand → collapse → expand fires overlapping fetches). */
+const worktreeFetchSeq: Record<string, number> = {};
 
 /** Resolve the stream sidebar's scope into `session.listAll` filter params.
  *  Applies the same staleness validation the sidebar renders with (a deleted
@@ -2437,6 +2460,19 @@ function findSession(
     if (hit) return hit;
   }
   return streamSessions.find((s) => s.id === id);
+}
+
+/** The per-project thread cache is a TWO-SECTION array: local threads first
+ *  (the paginated, worktree-excluding list — the only section the pagination
+ *  math counts), worktree-bound threads after (fetched in full, ordered among
+ *  themselves, never part of the local list's page math). Every incremental
+ *  write to the cache must preserve this invariant — these two helpers are
+ *  the canonical split / reassemble. */
+function splitSessionSections(list: Session[]): { local: Session[]; worktree: Session[] } {
+  const local: Session[] = [];
+  const worktree: Session[] = [];
+  for (const s of list) (s.worktreePath ? worktree : local).push(s);
+  return { local, worktree };
 }
 
 /** Immutably patch a single cached session row (looked up by id across both
@@ -2496,20 +2532,37 @@ function applySessionPinnedState(s: SessionState, session: Session): Partial<Ses
     ? sortPinnedByRecency([session, ...withoutPinned])
     : withoutPinned;
 
-  // Project active window (if loaded).
+  // Project active window (if loaded) — a TWO-SECTION array (see
+  // splitSessionSections): local threads (the paginated list, the only one
+  // the totals count) then worktree-bound threads.
   const activeList = s.sessionsByProject[projectId];
   if (activeList) {
+    const { local, worktree } = splitSessionSections(activeList);
     let next: Session[];
     let totalDelta = 0;
     if (isPinned || session.archived) {
       // Leaving the active window — pinned rows render in the global pinned
-      // section, archived rows in the bin.
-      next = activeList.filter((x) => x.id !== session.id);
-      if (next.length !== activeList.length) totalDelta = -1;
-    } else if (activeList.some((x) => x.id === session.id)) {
-      next = activeList.map((x) => (x.id === session.id ? { ...x, ...session } : x));
+      // section, archived rows in the bin. A worktree-bound row leaves the
+      // worktree section, which the LOCAL total never counted.
+      const wasLocal = local.some((x) => x.id === session.id);
+      next = [
+        ...local.filter((x) => x.id !== session.id),
+        ...worktree.filter((x) => x.id !== session.id),
+      ];
+      if (wasLocal) totalDelta = -1;
+    } else if (session.worktreePath) {
+      // A worktree-bound row returns into the worktree section (newest-first
+      // within it) — never into the paginated local list.
+      next = [
+        ...local.filter((x) => x.id !== session.id),
+        ...(worktree.some((x) => x.id === session.id)
+          ? worktree.map((x) => (x.id === session.id ? { ...x, ...session } : x))
+          : insertByActivity(worktree, session)),
+      ];
+    } else if (local.some((x) => x.id === session.id)) {
+      next = [...local.map((x) => (x.id === session.id ? { ...x, ...session } : x)), ...worktree];
     } else {
-      next = insertByActivity(activeList, session);
+      next = [...insertByActivity(local, session), ...worktree];
       totalDelta = 1;
     }
     patch.sessionsByProject = { ...s.sessionsByProject, [projectId]: next };
@@ -2518,7 +2571,7 @@ function applySessionPinnedState(s: SessionState, session: Session): Partial<Ses
       patch.sessionsTotalByProject = { ...s.sessionsTotalByProject, [projectId]: total };
       patch.sessionsHasMoreByProject = {
         ...s.sessionsHasMoreByProject,
-        [projectId]: total > next.length,
+        [projectId]: total > next.filter((x) => !x.worktreePath).length,
       };
     }
   }
@@ -2670,8 +2723,17 @@ function applySessionDeletedState(s: SessionState, id: string): Partial<SessionS
   let projectId: string | undefined;
   let inArchived = false;
   let inPinned = false;
+  // True when the deleted row sat in the cache's worktree SECTION — the
+  // LOCAL total (which the worktree section never counts) must stay put.
+  let deletedWasWorktree = false;
   for (const [pid, list] of Object.entries(s.sessionsByProject)) {
-    if (list?.some((sess) => sess.id === id)) { projectId = pid; inArchived = false; break; }
+    const hit = list?.find((sess) => sess.id === id);
+    if (hit) {
+      projectId = pid;
+      inArchived = false;
+      deletedWasWorktree = !!hit.worktreePath;
+      break;
+    }
   }
   // Pinned rows aren't in the per-project caches — they live in the global
   // pinned bucket, so look there before the archived bin.
@@ -2722,13 +2784,13 @@ function applySessionDeletedState(s: SessionState, id: string): Partial<SessionS
   } else {
     sessionsByProject[projectId] = nextList;
   }
-  // Active-thread totals only move when an active (non-archived,
-  // non-pinned) row is deleted; archived / pinned rows aren't part of the
-  // active count.
-  const totalActive = inArchived || inPinned
+  // Active-thread totals only move when an active (non-archived, non-pinned,
+  // non-worktree-section) row is deleted; archived / pinned / worktree rows
+  // aren't part of the active count.
+  const totalActive = inArchived || inPinned || deletedWasWorktree
     ? (s.sessionsTotalByProject[projectId] ?? 0)
     : Math.max((s.sessionsTotalByProject[projectId] ?? 0) - 1, 0);
-  const hasMoreActive = inPinned
+  const hasMoreActive = inPinned || deletedWasWorktree
     ? (s.sessionsHasMoreByProject[projectId] ?? false)
     : totalActive > activeWindowLen;
   // Drop all per-session buckets for this id (helper above). The session is
@@ -4589,8 +4651,12 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     }
 
     // Eagerly load the FIRST page of active sessions for every project so
-    // the tree renders without a round-trip per expand. The archived bin is
-    // also pre-fetched (grouped by project) so the bottom section is ready.
+    // the tree renders without a round-trip per expand. The paginated list
+    // counts LOCAL threads only; worktree-bound threads are fetched in full
+    // alongside (a directory holds few) and parked AFTER the local section,
+    // so a project heavy with worktree threads still shows its first 5 local
+    // rows without pressing "load more". The archived bin is also pre-fetched
+    // (grouped by project) so the bottom section is ready.
     const byProject: Record<string, Session[]> = {};
     const hasMoreByProject: Record<string, boolean> = {};
     const totalByProject: Record<string, number> = {};
@@ -4598,13 +4664,22 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     try {
       await Promise.all(
         projects.map(async (p) => {
-          const active = await api.project.sessions({
-            projectId: p.id,
-            limit: SESSION_PAGE_SIZE,
-            offset: 0,
-            archived: false,
-          });
-          byProject[p.id] = active.sessions;
+          const [active, worktreePage] = await Promise.all([
+            api.project.sessions({
+              projectId: p.id,
+              limit: SESSION_PAGE_SIZE,
+              offset: 0,
+              archived: false,
+              worktree: "exclude",
+            }),
+            api.project.sessions({
+              projectId: p.id,
+              archived: false,
+              worktree: "only",
+              limit: WORKTREE_SESSIONS_FETCH_LIMIT,
+            }),
+          ]);
+          byProject[p.id] = [...active.sessions, ...worktreePage.sessions];
           hasMoreByProject[p.id] = active.hasMore;
           totalByProject[p.id] = active.total;
           const archived = await api.project.sessions({
@@ -5057,6 +5132,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       // its own first session.
       openTabs: next ? [next.id] : [],
     }));
+    // Catch up the worktree section for the newly selected project (see
+    // toggleProjectExpanded — incremental echoes in between, refetch here).
+    void get().loadWorktreeSessions(projectId);
     // An explicit project selection is the new "where I am" — remember it as
     // the next launch's landing project. A project WITH sessions persists via
     // selectSession → syncConfigFromSession below; an EMPTY project otherwise
@@ -5073,14 +5151,16 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     get().prewarmJavaLspForActiveProject();
   },
 
-  toggleProjectExpanded: (projectId) =>
+  toggleProjectExpanded: (projectId) => {
+    const wasExpanded = !!get().expandedProjects[projectId];
     set((s) => {
-      const wasExpanded = !!s.expandedProjects[projectId];
       // Collapsing resets the per-project pagination cache back to the first
       // page so the next expand shows the initial slice again (instead of the
       // full list accumulated by "加载更多"). The server-side total is
       // unchanged, so `hasMore` is recomputed from it; the list is trimmed in
-      // place — no IPC, no flicker.
+      // place — no IPC, no flicker. The trim keeps the array head, i.e. the
+      // LOCAL section; worktree rows past the page may linger until the
+      // expand-path refetch below restores the full section.
       if (!wasExpanded) {
         return {
           expandedProjects: { ...s.expandedProjects, [projectId]: true },
@@ -5099,16 +5179,23 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         },
         sessions: isActive ? trimmed : s.sessions,
       };
-    }),
+    });
+    // Expanding refreshes the worktree section: `session.changed` echoes
+    // maintain it incrementally in between, and this is the cheap catch-up
+    // that also re-syncs its updated_at order after local mutations.
+    if (!wasExpanded) void get().loadWorktreeSessions(projectId);
+  },
 
   // Worktree group nodes hold few sessions (one directory, few threads), so
   // unlike toggleProjectExpanded there is no pagination cache to reset — a
-  // pure expand-state flip.
+  // pure expand-state flip. Groups render EXPANDED by default (absent key),
+  // so the flip is computed against `!== false`, not the raw falsy value:
+  // flipping an untouched (undefined) group must COLLAPSE it, not write true.
   toggleWorktreeExpanded: (worktreePath) =>
     set((s) => {
       const key = normWorktreeKey(worktreePath);
       return {
-        expandedWorktrees: { ...s.expandedWorktrees, [key]: !s.expandedWorktrees[key] },
+        expandedWorktrees: { ...s.expandedWorktrees, [key]: !(s.expandedWorktrees[key] !== false) },
       };
     }),
 
@@ -5137,30 +5224,65 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
   setArchivedViewOpen: (open) => set({ archivedViewOpen: open }),
 
-  /** Fetch the next page of active sessions for a project and append to the
-   *  cached list. Updates `hasMore` / `total` from the server response so the
-   *  "加载更多" affordance reflects the truth. No-op when nothing more to load. */
+  /** Fetch the next page of active LOCAL sessions for a project and append
+   *  to the cached list's local section (the worktree section parked after
+   *  it is untouched). Updates `hasMore` / `total` from the server response
+   *  so the "加载更多" affordance reflects the truth. No-op when nothing
+   *  more to load. */
   loadMoreSessions: async (projectId) => {
     if (!get().sessionsHasMoreByProject[projectId]) return;
-    const offset = (get().sessionsByProject[projectId] ?? []).length;
+    // The offset counts LOCAL rows only — the worktree section after them is
+    // not part of this list's pagination.
+    const offset = splitSessionSections(get().sessionsByProject[projectId] ?? []).local.length;
     const page = await api.project.sessions({
       projectId,
       limit: SESSION_PAGE_SIZE,
       offset,
       archived: false,
+      worktree: "exclude",
     });
     set((s) => {
-      const prev = s.sessionsByProject[projectId] ?? [];
+      const { local, worktree } = splitSessionSections(s.sessionsByProject[projectId] ?? []);
       // De-dup in case a session was created mid-fetch (newest-first means
       // newly-created rows would slide in ahead of the next page; we drop
       // any overlap by id rather than risk showing a row twice).
-      const seen = new Set(prev.map((x) => x.id));
-      const merged = [...prev, ...page.sessions.filter((x) => !seen.has(x.id))];
+      const seen = new Set(local.map((x) => x.id));
+      const merged = [...local, ...page.sessions.filter((x) => !seen.has(x.id)), ...worktree];
       const isActive = projectId === s.activeProjectId;
       return {
         sessionsByProject: { ...s.sessionsByProject, [projectId]: merged },
         sessionsHasMoreByProject: { ...s.sessionsHasMoreByProject, [projectId]: page.hasMore },
         sessionsTotalByProject: { ...s.sessionsTotalByProject, [projectId]: page.total },
+        sessions: isActive ? merged : s.sessions,
+      };
+    });
+  },
+
+  loadWorktreeSessions: async (projectId) => {
+    const seq = (worktreeFetchSeq[projectId] ?? 0) + 1;
+    worktreeFetchSeq[projectId] = seq;
+    const res = await api.project.sessions({
+      projectId,
+      archived: false,
+      worktree: "only",
+      limit: WORKTREE_SESSIONS_FETCH_LIMIT,
+    });
+    set((s) => {
+      // A newer fetch for this project superseded us — applying would revert it.
+      if (worktreeFetchSeq[projectId] !== seq) return {};
+      const prev = s.sessionsByProject[projectId];
+      if (!prev) return {}; // cache not loaded yet — init brings both sections
+      const { local, worktree } = splitSessionSections(prev);
+      // Union with rows that landed in the section while this fetch was in
+      // flight (echo-inserted after the server snapshot) — the next full
+      // fetch prunes them for real if they no longer belong.
+      const fetchedIds = new Set(res.sessions.map((x) => x.id));
+      const strays = worktree.filter((x) => !fetchedIds.has(x.id));
+      const merged = [...local, ...res.sessions, ...strays];
+      if (merged.length === prev.length && merged.every((x, i) => x === prev[i])) return {};
+      const isActive = projectId === s.activeProjectId;
+      return {
+        sessionsByProject: { ...s.sessionsByProject, [projectId]: merged },
         sessions: isActive ? merged : s.sessions,
       };
     });
@@ -5201,6 +5323,42 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         overrides?.customModelId !== undefined ? overrides.customModelId : get().customModelId,
     });
     set((s) => {
+      // Worktree-bound thread (LeftBar "在此工作树中新建会话" bind): it lands
+      // in the cache's worktree SECTION, and the LOCAL list's pagination is
+      // untouched — no total / hasMore churn, the 5 local rows the user is
+      // looking at stay put. The `session.changed` echo may have inserted the
+      // slim row into the section ahead of this resolve (events deliver ahead
+      // of invoke responses) — merge, don't duplicate.
+      if (session.worktreePath) {
+        const { local, worktree } = splitSessionSections(s.sessionsByProject[projectId] ?? []);
+        const existsWt = worktree.some((x) => x.id === session.id);
+        const nextWorktree = existsWt
+          ? worktree.map((x) => (x.id === session.id ? { ...x, ...session } : x))
+          : [session, ...worktree];
+        const merged = [...local, ...nextWorktree];
+        const isactiveWt = projectId === s.activeProjectId;
+        return {
+          sessionsByProject: { ...s.sessionsByProject, [projectId]: merged },
+          sessions: isactiveWt ? merged : s.sessions,
+          activeProjectId: projectId,
+          activeSessionId: session.id,
+          expandedProjects: { ...s.expandedProjects, [projectId]: true },
+          // The new thread's group must be visible: groups render expanded by
+          // default, the explicit true is a harmless no-op (kept for parity
+          // with the local path below).
+          expandedWorktrees: {
+            ...s.expandedWorktrees,
+            [normWorktreeKey(session.worktreePath)]: true,
+          },
+          messagesBySession: { ...s.messagesBySession, [session.id]: [] },
+          hasMoreMessagesBySession: { ...s.hasMoreMessagesBySession, [session.id]: false },
+          // Locally-created session: the empty bucket IS the full history —
+          // mark it hydrated so selectSession/openTab never re-fetch for it.
+          historyLoadedBySession: { ...s.historyLoadedBySession, [session.id]: true },
+          openTabs: s.openTabs.includes(session.id) ? s.openTabs : [...s.openTabs, session.id],
+          centerTabFocus: "chat" as const,
+        };
+      }
       const prevList = s.sessionsByProject[projectId] ?? [];
       // The IPC handler broadcasts a `session.changed` event for cross-client
       // list sync BEFORE returning the invoke response, and Electron delivers
@@ -5314,13 +5472,18 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       if (!fromList) return {};
       const nextFrom = fromList.filter((x) => x.id !== sessionId);
       if (nextFrom.length === fromList.length) return {};
-      const total = Math.max((s.sessionsTotalByProject[fromProjectId] ?? 0) - 1, 0);
+      // Totals count LOCAL rows only — evicting a worktree-bound row (it sat
+      // in the cache's worktree section) leaves them untouched.
+      const movedIsLocal = !sess.worktreePath;
+      const total = movedIsLocal
+        ? Math.max((s.sessionsTotalByProject[fromProjectId] ?? 0) - 1, 0)
+        : (s.sessionsTotalByProject[fromProjectId] ?? 0);
       return {
         sessionsByProject: { ...s.sessionsByProject, [fromProjectId]: nextFrom },
         sessionsTotalByProject: { ...s.sessionsTotalByProject, [fromProjectId]: total },
         sessionsHasMoreByProject: {
           ...s.sessionsHasMoreByProject,
-          [fromProjectId]: total > SESSION_PAGE_SIZE,
+          [fromProjectId]: movedIsLocal ? total > SESSION_PAGE_SIZE : (s.sessionsHasMoreByProject[fromProjectId] ?? false),
         },
         // `sessions` mirrors the ACTIVE project's bucket — refresh it when
         // the eviction touched that project.
@@ -5346,16 +5509,24 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           limit: SESSION_PAGE_SIZE,
           offset: 0,
           archived: false,
+          worktree: "exclude",
         });
-        set((s) => ({
-          sessionsByProject: { ...s.sessionsByProject, [toProjectId]: page.sessions },
-          sessionsTotalByProject: { ...s.sessionsTotalByProject, [toProjectId]: page.total },
-          sessionsHasMoreByProject: {
-            ...s.sessionsHasMoreByProject,
-            [toProjectId]: page.hasMore,
-          },
-          sessions: s.activeProjectId === toProjectId ? page.sessions : s.sessions,
-        }));
+        set((s) => {
+          // The fresh local page replaces the local section; the worktree
+          // section is preserved (the moved row, if worktree-bound, arrived
+          // here via the `session.changed` echo and must survive the reload).
+          const prevWt = splitSessionSections(s.sessionsByProject[toProjectId] ?? []).worktree;
+          const merged = [...page.sessions, ...prevWt];
+          return {
+            sessionsByProject: { ...s.sessionsByProject, [toProjectId]: merged },
+            sessionsTotalByProject: { ...s.sessionsTotalByProject, [toProjectId]: page.total },
+            sessionsHasMoreByProject: {
+              ...s.sessionsHasMoreByProject,
+              [toProjectId]: page.hasMore,
+            },
+            sessions: s.activeProjectId === toProjectId ? merged : s.sessions,
+          };
+        });
       } catch (err) {
         console.error("moveSession: project.sessions reload failed:", err);
       }
@@ -6750,31 +6921,60 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         }
         const activeList = s.sessionsByProject[entry.projectId];
         if (activeList) {
-          const exists = activeList.some((x) => x.id === entry.id);
+          // Two-section cache (see splitSessionSections): local threads are
+          // the paginated list the totals count; worktree-bound threads park
+          // behind them. Route the changed row into its section — a row that
+          // MIGRATES (worktree materialize on first turn / directory removal
+          // degrading back to local) leaves one section and enters the other.
+          const { local, worktree } = splitSessionSections(activeList);
+          const inLocalWindow = !entry.archived && entry.pinnedAt == null && !entry.worktreePath;
+          const inWorktreeWindow = !entry.archived && entry.pinnedAt == null && !!entry.worktreePath;
+          const wasLocal = local.some((x) => x.id === entry.id);
+          const shrinkLocalTotals = () => {
+            patch.sessionsTotalByProject = {
+              ...s.sessionsTotalByProject,
+              [entry.projectId]: Math.max((s.sessionsTotalByProject[entry.projectId] ?? 0) - 1, 0),
+            };
+            patch.sessionsHasMoreByProject = {
+              ...s.sessionsHasMoreByProject,
+              [entry.projectId]:
+                (s.sessionsTotalByProject[entry.projectId] ?? 0) - 1 >
+                [...local.filter((x) => x.id !== entry.id), ...worktree].filter(
+                  (x) => !x.worktreePath,
+                ).length,
+            };
+          };
           let next: Session[];
-          if (entry.archived || entry.pinnedAt != null) {
+          if (inWorktreeWindow) {
+            // Upsert into the worktree section (prepend when new — newest
+            // first within it); a row that just materialized its worktreePath
+            // also leaves the local section, shrinking the LOCAL total.
+            next = [
+              ...local.filter((x) => x.id !== entry.id),
+              ...(worktree.some((x) => x.id === entry.id)
+                ? worktree.map((x) => (x.id === entry.id ? { ...x, ...entry } : x))
+                : [materializeSessionEntry(entry), ...worktree]),
+            ];
+            if (wasLocal) shrinkLocalTotals();
+          } else if (!inLocalWindow) {
             // Left the active window — archived (moved to the bin) or pinned
             // (moved to the global pinned section above the project tree);
-            // drop it from the active window; totals shrink accordingly.
-            next = activeList.filter((x) => x.id !== entry.id);
-            if (next.length !== activeList.length) {
-              patch.sessionsTotalByProject = {
-                ...s.sessionsTotalByProject,
-                [entry.projectId]: Math.max((s.sessionsTotalByProject[entry.projectId] ?? 0) - 1, 0),
-              };
-              patch.sessionsHasMoreByProject = {
-                ...s.sessionsHasMoreByProject,
-                [entry.projectId]: (s.sessionsTotalByProject[entry.projectId] ?? 0) - 1 > next.length,
-              };
-            }
-          } else if (exists) {
+            // drop it from both sections; totals shrink only when it
+            // actually left the LOCAL section.
+            next = [
+              ...local.filter((x) => x.id !== entry.id),
+              ...worktree.filter((x) => x.id !== entry.id),
+            ];
+            if (wasLocal) shrinkLocalTotals();
+          } else if (wasLocal) {
             // Merge the slim entry OVER the cached row so heavy payloads
             // (contextSnapshot / turnFiles / …) survive the update.
-            next = activeList.map((x) => (x.id === entry.id ? { ...x, ...entry } : x));
+            next = [...local.map((x) => (x.id === entry.id ? { ...x, ...entry } : x)), ...worktree];
           } else {
-            // A session created on another client — materialize it at the
-            // head of the loaded window.
-            next = [materializeSessionEntry(entry), ...activeList];
+            // A session created on another client — or a worktree row that
+            // just degraded back to local (directory removal) — materialize
+            // it at the head of the local window; the local total grows.
+            next = [materializeSessionEntry(entry), ...local, ...worktree];
             patch.sessionsTotalByProject = {
               ...s.sessionsTotalByProject,
               [entry.projectId]: (s.sessionsTotalByProject[entry.projectId] ?? 0) + 1,

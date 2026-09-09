@@ -58,8 +58,15 @@ export function registerProjectHandlers(ipcMain: IpcMain): void {
     // thread list paginates with a default page size of 5.
     const limit = input.limit ?? (archived ? undefined : 5);
     const offset = input.offset ?? 0;
-    const sessions = SessionRepo.listByProject(input.projectId, { limit, offset, archived });
-    const total = SessionRepo.countByProject(input.projectId, archived);
+    // `worktree` narrows both the page and the count — the count MUST mirror
+    // the list's filter or hasMore counts rows the list never returns.
+    const sessions = SessionRepo.listByProject(input.projectId, {
+      limit,
+      offset,
+      archived,
+      worktree: input.worktree,
+    });
+    const total = SessionRepo.countByProject(input.projectId, archived, input.worktree);
     const hasMore = limit !== undefined ? offset + sessions.length < total : false;
     return { sessions, hasMore, total };
   });

@@ -36,7 +36,6 @@ import {
   IconList,
   IconCategoryFilled,
   IconArrowRight,
-  IconArrowsExchange,
   IconPalette,
   IconSearch,
   IconPin,
@@ -69,8 +68,11 @@ import { useI18n, type MessageId } from "@renderer/lib/i18n/index.js";
  * icon buttons revealed on hover for every row, plus a collapsible "archived"
  * section at the bottom grouped by project.
  *
- * Sessions are paginated: only the first SESSION_PAGE_SIZE (5) threads load
- * per project, and a "加载更多" button under the list appends the next page.
+ * Sessions are paginated: only the first SESSION_PAGE_SIZE (5) LOCAL threads
+ * load per project, and a "加载更多" button under the list appends the next
+ * page. Worktree-bound threads load separately (in full) and render as group
+ * nodes ABOVE the local list, so a worktree-heavy project never eats into
+ * the local list's first page.
  *
  * Replaces the old two flat lists (Projects / Sessions) which had no project
  * switching and no lifecycle actions. Sessions are cached per-project in the
@@ -110,7 +112,6 @@ function LeftBarBase({
   const archivedSessionsByProject = useSessionStore((s) => s.archivedSessionsByProject);
   const activeSessionId = useSessionStore((s) => s.activeSessionId);
   const expandedProjects = useSessionStore((s) => s.expandedProjects);
-  const worktreeViewByProject = useSessionStore((s) => s.worktreeViewByProject);
   const expandedWorktrees = useSessionStore((s) => s.expandedWorktrees);
   const worktreeNames = useSessionStore((s) => s.worktreeNames);
   const archivedViewOpen = useSessionStore((s) => s.archivedViewOpen);
@@ -118,7 +119,6 @@ function LeftBarBase({
 
   const addProject = useSessionStore((s) => s.addProjectFromFolder);
   const toggleProjectExpanded = useSessionStore((s) => s.toggleProjectExpanded);
-  const setProjectWorktreeView = useSessionStore((s) => s.setProjectWorktreeView);
   const toggleWorktreeExpanded = useSessionStore((s) => s.toggleWorktreeExpanded);
   const renameWorktree = useSessionStore((s) => s.renameWorktree);
   const setArchivedViewOpen = useSessionStore((s) => s.setArchivedViewOpen);
@@ -275,15 +275,12 @@ function LeftBarBase({
       }
       // Same reveal for the worktree group node the target thread buckets
       // under — a collapsed group keeps the row unmounted, so tryScroll would
-      // silently miss it even with the project expanded.
+      // silently miss it even with the project expanded. Groups render
+      // EXPANDED by default (undefined = expanded); only a user's explicit
+      // collapse (false) needs undoing here.
       const target = st.sessionsByProject[projectId]?.find((s) => s.id === id);
-      if (target?.worktreePath && !st.expandedWorktrees[normWorktreeKey(target.worktreePath)]) {
+      if (target?.worktreePath && st.expandedWorktrees[normWorktreeKey(target.worktreePath)] === false) {
         st.toggleWorktreeExpanded(target.worktreePath);
-      }
-      // ...and the project must be in the FORK view, or a worktree thread
-      // would stay unrendered even with the group expanded.
-      if (target?.worktreePath && !st.worktreeViewByProject[projectId]) {
-        st.setProjectWorktreeView(projectId, true);
       }
       await new Promise((r) => requestAnimationFrame(() => r(null)));
       if (tryScroll()) return;
@@ -561,8 +558,6 @@ function LeftBarBase({
           onDeleteSession={(s) => void deleteSession(s.id)}
           onTogglePinSession={(s) => void setSessionPinned(s.id, !s.pinnedAt)}
           onNewWorktreeHere={(s) => void startSession(s.projectId, { worktreePath: s.worktreePath ?? undefined })}
-          worktreeView={!!worktreeViewByProject[p.id]}
-          onToggleWorktreeView={(on) => setProjectWorktreeView(p.id, on)}
           worktreeNames={worktreeNames}
           expandedWorktrees={expandedWorktrees}
           onToggleWorktree={(path) => toggleWorktreeExpanded(path)}
@@ -583,10 +578,10 @@ function LeftBarBase({
     },
     [
       sessionsByProject, sessionsHasMoreByProject, sessionsTotalByProject,
-      expandedProjects, worktreeViewByProject, expandedWorktrees, worktreeNames,
+      expandedProjects, expandedWorktrees, worktreeNames,
       activeProjectId, activeSessionId, activeSessionProjectId,
       runningBySession,
-      toggleProjectExpanded, setProjectWorktreeView, toggleWorktreeExpanded, startSession, loadMoreSessions, openTab,
+      toggleProjectExpanded, toggleWorktreeExpanded, startSession, loadMoreSessions, openTab,
       archiveSession, deleteSession, setSessionPinned, registerNode,
     ],
   );
@@ -1219,14 +1214,11 @@ interface ProjectNodeProps {
   /** "New session bound to this worktree session's checkout" — passed down
    *  to materialized worktree rows. */
   onNewWorktreeHere: (session: Session) => void;
-  /** This project's left-bar view: false = local threads only (default),
-   *  true = worktree groups. Flipped by the row's fork toggle. */
-  worktreeView: boolean;
-  onToggleWorktreeView: (on: boolean) => void;
   /** Left-bar display names for worktree directories (normalized path →
    *  name). Resolved by WorktreeGroupNode headers. */
   worktreeNames: Record<string, string>;
-  /** Which worktree group nodes are expanded (normalized path → bool). */
+  /** Which worktree group nodes are expanded (normalized path → bool).
+   *  Absent key = expanded (groups show their threads by default). */
   expandedWorktrees: Record<string, boolean>;
   onToggleWorktree: (worktreePath: string) => void;
   /** New thread bound to this worktree directory (group header "+"). */
@@ -1264,7 +1256,7 @@ function ProjectNode(props: ProjectNodeProps) {
     runningBySession, unreadBySession,
     onToggleExpand, onNewSession, onLoadMore, onSelectSession,
     onDelete, onArchiveSession, onDeleteSession, onTogglePinSession,
-    onNewWorktreeHere, worktreeView, onToggleWorktreeView, worktreeNames, expandedWorktrees,
+    onNewWorktreeHere, worktreeNames, expandedWorktrees,
     onToggleWorktree, onNewSessionInWorktree, onRemoveWorktree, onMergeWorktree, onContextWorktree,
     registerNode, onContextSession, onContextProject,
     sortableRef, sortableStyle, sortableListeners, sortableAttributes, isDragging,
@@ -1273,11 +1265,12 @@ function ProjectNode(props: ProjectNodeProps) {
 
   // ── Worktree bucketing. Sessions bound to a materialized (or freshly
   // bound) isolated checkout group under ONE collapsible directory node per
-  // worktree, so a directory reads like a folder of threads; local sessions
-  // stay in the flat list above the groups. Insertion order of the Map gives
-  // group order — `sessions` is newest-first, so the group containing the
-  // most recently active worktree thread sorts first. Pagination is
-  // untouched: loadMore appends to `sessions` and rows re-bucket naturally.
+  // worktree, so a directory reads like a folder of threads; the groups
+  // render ABOVE the local threads, which stay in the flat list below.
+  // Insertion order of the Map gives group order — `sessions` is newest-first,
+  // so the group containing the most recently active worktree thread sorts
+  // first. Pagination is untouched: loadMore appends local rows and rows
+  // re-bucket naturally.
   const { localSessions, worktreeGroups } = useMemo(() => {
     const local: Session[] = [];
     const buckets = new Map<string, { path: string; sessions: Session[] }>();
@@ -1376,26 +1369,6 @@ function ProjectNode(props: ProjectNodeProps) {
           <span className="truncate">{project.name}</span>
         </button>
 
-        {/* Worktree view toggle — only for projects that HAVE worktree
-            threads. Local list and worktree groups never mix: the exchange
-            arrows flip the expanded list between the two views. Hover-only
-            in both states so the row stays quiet; the ON state keeps an
-            accent tint, and the flipped state is evident from the expanded
-            worktree groups themselves. */}
-        {worktreeGroups.length > 0 && (
-          <button
-            onClick={() => onToggleWorktreeView(!worktreeView)}
-            className={cn(
-              "flex shrink-0 items-center rounded px-1 opacity-0 transition-colors",
-              "group-hover:opacity-100 hover:text-accent",
-              worktreeView ? "text-accent" : "text-content-subtle",
-            )}
-            title={worktreeView ? t("layout.showLocalThreads") : t("layout.showWorktreeThreads")}
-          >
-            <IconArrowsExchange size={12} />
-          </button>
-        )}
-
         {/* New session in this project */}
         <button
           onClick={onNewSession}
@@ -1418,10 +1391,13 @@ function ProjectNode(props: ProjectNodeProps) {
         <ul className="ml-3 mt-0.5 space-y-0.5 border-l border-edge/50 pl-2">
           {loaded === 0 ? (
             <li className="px-2 py-1 text-content-subtle [font-size:var(--rp-fs-md)]">{t("layout.noThreads")}</li>
-          ) : worktreeView ? (
-            /* Fork view — worktree groups only; the local list never mixes in. */
-            worktreeGroups.length > 0 ? (
-              worktreeGroups.map((group) => {
+          ) : (
+            <>
+              {/* Mixed list — ONE collapsible directory node per worktree
+                  FIRST, then the local threads. Groups render EXPANDED by
+                  default (absent key = expanded) so worktree threads are
+                  visible without an extra click. */}
+              {worktreeGroups.map((group) => {
                 const key = normWorktreeKey(group.path);
                 return (
                   <WorktreeGroupNode
@@ -1430,7 +1406,7 @@ function ProjectNode(props: ProjectNodeProps) {
                     repoPath={project.path}
                     displayName={worktreeDisplayName(group.path, worktreeNames)}
                     sessions={group.sessions}
-                    expanded={!!expandedWorktrees[key]}
+                    expanded={expandedWorktrees[key] !== false}
                     onToggle={() => onToggleWorktree(group.path)}
                     onNewSession={() => onNewSessionInWorktree(group.path)}
                     onMergeBack={() => onMergeWorktree(group.path)}
@@ -1439,33 +1415,14 @@ function ProjectNode(props: ProjectNodeProps) {
                     renderSession={renderSessionRow}
                   />
                 );
-              })
-            ) : (
-              <li className="px-2 py-1 text-content-subtle [font-size:var(--rp-fs-md)]">{t("layout.noThreads")}</li>
-            )
-          ) : localSessions.length > 0 ? (
-            /* Default view — local threads only. */
-            localSessions.map((s) => renderSessionRow(s))
-          ) : worktreeGroups.length > 0 ? (
-            /* Every loaded thread lives in a worktree — point at the fork. */
-            <li>
-              <button
-                onClick={() => onToggleWorktreeView(true)}
-                className={cn(
-                  "w-full rounded px-2 py-1 text-left text-content-subtle transition-colors [font-size:var(--rp-fs-md)]",
-                  "hover:bg-surface-hover/60 hover:text-accent",
-                )}
-              >
-                {t("layout.threadsInWorktrees")}
-              </button>
-            </li>
-          ) : (
-            <li className="px-2 py-1 text-content-subtle [font-size:var(--rp-fs-md)]">{t("layout.noThreads")}</li>
+              })}
+              {localSessions.map((s) => renderSessionRow(s))}
+            </>
           )}
-          {/* Load-more is the LOCAL list's pagination — the fork view shows
-              whole worktree groups and has no paging of its own, so the
-              button would load rows the user can't even see here. */}
-          {hasMore && !worktreeView && (
+          {/* Load-more pages the project's LOCAL list; the remaining count is
+              local-only too — the worktree section shares the cache array but
+              not this pagination. */}
+          {hasMore && (
             <li>
               <button
                 onClick={onLoadMore}
@@ -1475,7 +1432,9 @@ function ProjectNode(props: ProjectNodeProps) {
                 )}
               >
                 {t("layout.loadMore")}
-                {total > 0 ? t("layout.loadMoreRemaining", { n: Math.max(total - loaded, 0) }) : ""}
+                {total > 0
+                  ? t("layout.loadMoreRemaining", { n: Math.max(total - localSessions.length, 0) })
+                  : ""}
               </button>
             </li>
           )}

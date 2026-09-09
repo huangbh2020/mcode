@@ -334,10 +334,13 @@ export const SessionRepo = {
    *  which loads the first page and appends on "load more"). `opts.archived`
    *  filters by the soft-delete flag: omit for all (pinned included), `false`
    *  for the active thread list (pinned excluded), `true` for the archived
-   *  bin (pinned included — a pinned-then-archived row stays visible there). */
+   *  bin (pinned included — a pinned-then-archived row stays visible there).
+   *  `opts.worktree` narrows by worktree binding ("exclude" = local threads
+   *  only, "only" = worktree-bound only) so the tree's paginated list and its
+   *  worktree groups can be fetched independently. */
   listByProject(
     projectId: string,
-    opts?: { limit?: number; offset?: number; archived?: boolean },
+    opts?: { limit?: number; offset?: number; archived?: boolean; worktree?: "exclude" | "only" },
   ): Session[] {
     const db = getDb();
     // Side-chat sessions are managed by the right-panel ask tab keyed by
@@ -347,6 +350,11 @@ export const SessionRepo = {
     if (opts?.archived !== undefined) {
       where.push("archived = ?");
       params.push(opts.archived ? 1 : 0);
+    }
+    if (opts?.worktree === "exclude") {
+      where.push("worktree_path IS NULL");
+    } else if (opts?.worktree === "only") {
+      where.push("worktree_path IS NOT NULL");
     }
     // Pinned sessions are EXCLUDED from the active list — they render in the
     // left bar's global "pinned" section above the project tree instead of
@@ -372,11 +380,17 @@ export const SessionRepo = {
     return out;
   },
 
-  /** Count sessions for a project, optionally filtered by archived flag.
-   *  Used to compute `hasMore` for pagination. Matches {@link listByProject}'s
-   *  filters: the active count (`archived === false`) excludes pinned
-   *  sessions so it lines up with what the paginated active list returns. */
-  countByProject(projectId: string, archived?: boolean): number {
+  /** Count sessions for a project, optionally filtered by archived flag and
+   *  worktree binding. Used to compute `hasMore` for pagination. Matches
+   *  {@link listByProject}'s filters: the active count (`archived === false`)
+   *  excludes pinned sessions so it lines up with what the paginated active
+   *  list returns, and the `worktree` filter must mirror the list's or the
+   *  pagination math counts rows the list will never return. */
+  countByProject(
+    projectId: string,
+    archived?: boolean,
+    worktree?: "exclude" | "only",
+  ): number {
     const db = getDb();
     const where = ["project_id = ?", "kind = 'chat'"];
     const params: BindValue[] = [v(projectId)];
@@ -386,6 +400,11 @@ export const SessionRepo = {
     }
     if (archived === false) {
       where.push("pinned_at IS NULL");
+    }
+    if (worktree === "exclude") {
+      where.push("worktree_path IS NULL");
+    } else if (worktree === "only") {
+      where.push("worktree_path IS NOT NULL");
     }
     const stmt = db.prepare(`SELECT COUNT(*) AS n FROM sessions WHERE ${where.join(" AND ")}`);
     stmt.bind(params);

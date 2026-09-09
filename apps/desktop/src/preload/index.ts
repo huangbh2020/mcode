@@ -374,6 +374,12 @@ const api = {
       ipcRenderer.invoke(IPC.BROWSER_HIDE, input)) as RpcMap["browser.hide"],
     close: ((input) =>
       ipcRenderer.invoke(IPC.BROWSER_CLOSE, input)) as RpcMap["browser.close"],
+    captureFrame: ((input) =>
+      ipcRenderer.invoke(IPC.BROWSER_CAPTURE_FRAME, input)) as RpcMap["browser.captureFrame"],
+    bookmarkAdd: ((input) =>
+      ipcRenderer.invoke(IPC.BROWSER_BOOKMARK_ADD, input)) as RpcMap["browser.bookmarkAdd"],
+    bookmarkRemove: ((input) =>
+      ipcRenderer.invoke(IPC.BROWSER_BOOKMARK_REMOVE, input)) as RpcMap["browser.bookmarkRemove"],
     setDevice: ((input) =>
       ipcRenderer.invoke(IPC.BROWSER_SET_DEVICE, input)) as RpcMap["browser.setDevice"],
     clearCache: (() =>

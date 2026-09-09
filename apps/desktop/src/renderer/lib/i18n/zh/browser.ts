@@ -22,7 +22,13 @@ export const zh = {
   "browser.pickElement": "选择页面元素",
   "browser.collapseDeviceToolbar": "收起设备工具栏",
   "browser.deviceToolbar": "设备工具栏 (切换尺寸)",
-  "browser.closeBrowser": "关闭浏览器",
+  "browser.moreMenu": "更多",
+  "browser.bookmarks": "收藏",
+  "browser.bookmarkPage": "收藏此页",
+  "browser.unbookmarkPage": "取消收藏此页",
+  "browser.bookmarkEmpty": "暂无收藏",
+  "browser.removeBookmark": "删除该收藏",
+  "browser.historyEmpty": "暂无历史记录",
 
   /* ── panel ── */
   "browser.selectProjectFirst": "请先选择一个项目",
@@ -30,9 +36,6 @@ export const zh = {
   "browser.pickOverlayHint": "点击页面元素以添加到输入框 · 按 Esc 退出",
   "browser.addedToInput": "已添加到输入框",
   "browser.pickedToList": "已拾取到列表",
-  "browser.closeBrowserQ": "关闭浏览器？",
-  "browser.closeBrowserDesc": "关闭后将销毁所有打开的标签页，未保存的页面内容将丢失。",
-  "browser.confirmClose": "确定关闭",
 
   /* ── basic auth prompt ── */
   "browser.authTitle": "需要登录 — {host}",

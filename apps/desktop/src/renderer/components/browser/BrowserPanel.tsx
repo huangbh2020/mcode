@@ -13,9 +13,11 @@ import { localPathToFileUrl } from "@renderer/lib/browserUrl.js";
 import {
   resolveBrowserDeviceSpec,
   BROWSER_ADDRESS_HISTORY_SETTING_KEY,
+  BROWSER_BOOKMARKS_SETTING_KEY,
   type PickedElement,
   type BrowserDevicePreset,
   type BrowserOrientation,
+  type BrowserBookmarkEntry,
   type BrowserHistoryEntry,
   type BrowserAuthRequest,
 } from "@contracts/ipc";
@@ -23,7 +25,6 @@ import { BrowserToolbar } from "./BrowserToolbar.js";
 import { DeviceToolbar } from "./DeviceToolbar.js";
 import { BrowserTabs, type BrowserTabDisplay } from "./BrowserTabs.js";
 import { PickedElementsBar } from "./PickedElementsBar.js";
-import { ConfirmDialog } from "@renderer/components/ui/confirm-dialog.js";
 import { AuthPromptDialog } from "./AuthPromptDialog.js";
 import { useI18n } from "@renderer/lib/i18n/index.js";
 
@@ -112,15 +113,25 @@ export function BrowserPanel({ mode }: BrowserPanelProps) {
   const removeTab = useSessionStore((s) => s.removeBrowserTab);
   const patchTabInStore = useSessionStore((s) => s.patchBrowserTab);
 
-  /** Confirm-destroy dialog visibility. Opening the dialog first hides the
-   *  active WebContentsView so the (renderer-DOM) dialog isn't covered by the
-   *  OS-level view floating above the stage. */
-  const [confirmDestroy, setConfirmDestroy] = useState(false);
   /** Pending HTTP Basic Auth request pushed by main ("authRequest" event).
    *  Non-null shows the login dialog (view hidden while it's up). */
   const [authRequest, setAuthRequest] = useState<BrowserAuthRequest | null>(null);
+  /** Frozen-frame placeholder while a toolbar menu (history / device) is open
+   *  over the stage: a base64 PNG of the page captured right before the real
+   *  view parks offscreen, pinned to the stage at the view's exact rect. The
+   *  menu floats over this snapshot as plain DOM instead of blanking the
+   *  panel to white — nothing reflows, the page just freezes for the menu's
+   *  lifetime. Purely in-memory (IPC → <img>), dropped when the menu closes. */
+  const [freezeFrame, setFreezeFrame] = useState<{
+    browserId: string;
+    data: string;
+    rect: { left: number; top: number; width: number; height: number } | null;
+  } | null>(null);
   /** Address-bar history, read from settings (main is the single writer). */
   const [history, setHistory] = useState<BrowserHistoryEntry[]>([]);
+  /** Bookmarked pages for the More menu, read from settings (main is the
+   *  single writer via browser.bookmarkAdd / bookmarkRemove). */
+  const [bookmarks, setBookmarks] = useState<BrowserBookmarkEntry[]>([]);
   /** Error message shown in the stage when tab creation fails (e.g. no active
    *  project). Renders in the placeholder div so it isn't covered by a view. */
   const [error, setError] = useState<string | null>(null);
@@ -168,6 +179,11 @@ export function BrowserPanel({ mode }: BrowserPanelProps) {
    *  createTab() before the first tab lands in the store, opening the browser
    *  with two duplicate tabs. */
   const creatingTabRef = useRef(false);
+  /** Monotonic token for freeze/unfreeze orchestration: each open or close
+   *  bumps it, async steps compare against the value they captured, so a
+   *  stale close-grace timer can't clear a newer freeze and a freeze that
+   *  finished after its menu closed won't hide the view into the snapshot. */
+  const freezeSeqRef = useRef(0);
 
   /** Whether THIS container is currently the active one (owns the views). The
    *  overlay is active while `browserPanelOpen`; the sidebar is active while
@@ -322,6 +338,76 @@ export function BrowserPanel({ mode }: BrowserPanelProps) {
   useEffect(() => {
     showActiveViewRef.current = (attempt?: number) => showActiveView(attempt ?? 0);
   }, [showActiveView]);
+
+  /** Freeze the active view into a stage-pinned snapshot, then park the view.
+   *  Called when a toolbar menu (history / device) opens: the menu renders as
+   *  plain DOM floating over the snapshot instead of a white stage. Capture
+   *  failure degrades to the old plain hide (menu over white). */
+  const freezeViewForMenu = useCallback(async () => {
+    const tab = activeTabIdRef.current
+      ? tabsRef.current.find((t) => t.id === activeTabIdRef.current)
+      : null;
+    if (!tab) return;
+    // Stage-relative rect of the view (desktop = full stage; device emulation
+    // = the centered device column) so the placeholder lands exactly where
+    // the real view was.
+    const stage = stageRef.current;
+    const viewBounds = lastBoundsRef.current;
+    const stageRect = stage?.getBoundingClientRect() ?? null;
+    const rect =
+      stageRect && viewBounds && stageRect.width > 0
+        ? {
+            left: viewBounds.x - stageRect.left,
+            top: viewBounds.y - stageRect.top,
+            width: viewBounds.w,
+            height: viewBounds.h,
+          }
+        : null;
+    const cap = await api.browser.captureFrame({ browserId: tab.browserId }).catch(() => null);
+    // Re-validate after the async capture: the active tab may have changed.
+    const still = activeTabIdRef.current
+      ? tabsRef.current.find((t) => t.id === activeTabIdRef.current)
+      : null;
+    if (!still || still.browserId !== tab.browserId) return;
+    if (cap?.ok && cap.data) {
+      setFreezeFrame({ browserId: tab.browserId, data: cap.data, rect });
+      const seq = ++freezeSeqRef.current;
+      // Double rAF: the first fires before the placeholder's paint, the
+      // second after one committed paint — parking the view from here can't
+      // flash white between hide and placeholder.
+      await new Promise<void>((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+      );
+      // The menu closed while we were freezing (unfreeze bumped the seq):
+      // keep the view up and drop our snapshot instead of hiding into it.
+      if (freezeSeqRef.current !== seq) {
+        setFreezeFrame(null);
+        return;
+      }
+    }
+    void api.browser.hide({ browserId: tab.browserId });
+  }, []);
+
+  /** Reverse of freezeViewForMenu: bring the live view back FIRST (the native
+   *  surface paints over the snapshot the moment it's onscreen — it sits
+   *  above all DOM), then drop the snapshot after a short grace so the
+   *  addChildView re-host frame can't flash through. The seq guard stops a
+   *  stale grace timer from clearing a snapshot captured by a NEWER open
+   *  (fast close→reopen). */
+  const unfreezeViewForMenu = useCallback(() => {
+    lastBoundsRef.current = null;
+    showActiveView();
+    const seq = ++freezeSeqRef.current;
+    window.setTimeout(() => {
+      if (freezeSeqRef.current === seq) setFreezeFrame(null);
+    }, 150);
+  }, [showActiveView]);
+
+  // A frozen snapshot belongs to the tab it was captured from — drop it if
+  // the active tab changes (menu mid-flight, tab switch via shortcut, …).
+  useEffect(() => {
+    setFreezeFrame(null);
+  }, [activeTabId]);
 
   /** Create a new browser view (main) + a new tab entry, hide the old active
    *  tab's view, show the new one, and focus it. Returns the new tab or null. */
@@ -607,6 +693,63 @@ export function BrowserPanel({ mode }: BrowserPanelProps) {
     refreshHistory();
   }, [refreshHistory]);
 
+  // Bookmarks: same settings-backed read pattern as the history above.
+  const refreshBookmarks = useCallback(() => {
+    void api.setting
+      .get({ key: BROWSER_BOOKMARKS_SETTING_KEY })
+      .then((res) => {
+        try {
+          const parsed = res.value ? JSON.parse(res.value) : [];
+          setBookmarks(Array.isArray(parsed) ? parsed : []);
+        } catch {
+          setBookmarks([]);
+        }
+      })
+      .catch(() => {});
+  }, []);
+  useEffect(() => {
+    refreshBookmarks();
+  }, [refreshBookmarks]);
+
+  /** Bookmark / unbookmark the active page (by URL match against the list). */
+  const handleToggleBookmark = useCallback(() => {
+    const tab = activeTabIdRef.current
+      ? tabsRef.current.find((t) => t.id === activeTabIdRef.current)
+      : null;
+    if (!tab || !tab.url || tab.url === "about:blank") return;
+    const already = bookmarks.some((b) => b.url === tab.url);
+    const req = already
+      ? api.browser.bookmarkRemove({ url: tab.url })
+      : api.browser.bookmarkAdd({ url: tab.url, title: tab.title });
+    void req.then(refreshBookmarks);
+  }, [bookmarks, refreshBookmarks]);
+
+  const handleRemoveBookmark = useCallback(
+    (url: string) => {
+      void api.browser.bookmarkRemove({ url }).then(refreshBookmarks);
+    },
+    [refreshBookmarks],
+  );
+
+  /** More-menu open/close — same freeze-frame contract as the history
+   *  dropdown; the list is refreshed on open so entries are current. */
+  const handleMoreMenuOpenChange = useCallback(
+    (open: boolean) => {
+      if (!isActive) return;
+      const tab = activeTabIdRef.current
+        ? tabsRef.current.find((t) => t.id === activeTabIdRef.current)
+        : null;
+      if (!tab) return;
+      if (open) {
+        refreshBookmarks();
+        void freezeViewForMenu();
+      } else {
+        unfreezeViewForMenu();
+      }
+    },
+    [isActive, freezeViewForMenu, unfreezeViewForMenu, refreshBookmarks],
+  );
+
   // Subscribe to browser:event pushes. Route each event to the owning tab by
   // browserId and update that tab's state only. Subscribed whenever this
   // container is active (the other container takes over otherwise).
@@ -760,13 +903,14 @@ export function BrowserPanel({ mode }: BrowserPanelProps) {
 
   /** The device dropdown is a renderer-DOM popup; the page behind it is an
    *  OS-level WebContentsView that always floats above the DOM. So while the
-   *  dropdown is open we hide the active view (parked offscreen, session kept)
-   *  and re-show + re-sync it when the dropdown closes — the same pattern the
-   *  confirm-destroy dialog uses. Only acts when this container is active.
-   *  Edge cases are covered by the existing isActive show/hide effect: if the
-   *  container deactivates while the menu is open (settings opened, mode
-   *  switch, project switch), its hide effect hides the view anyway, and
-   *  reactivation re-shows it via the show branch. */
+   *  dropdown is open we freeze the page into a stage-pinned snapshot and
+   *  park the view — the menu floats over the frozen frame instead of a
+   *  white stage — and re-show the view when it closes (the snapshot lingers
+   *  a few frames to mask the re-host flash). Only acts when this container
+   *  is active. Edge cases are covered by the existing isActive show/hide
+   *  effect: if the container deactivates while the menu is open (settings
+   *  opened, mode switch, project switch), its hide effect hides the view
+   *  anyway, and reactivation re-shows it via the show branch. */
   const handleDeviceMenuOpenChange = useCallback(
     (open: boolean) => {
       deviceMenuOpenRef.current = open;
@@ -776,13 +920,12 @@ export function BrowserPanel({ mode }: BrowserPanelProps) {
         : null;
       if (!tab) return;
       if (open) {
-        void api.browser.hide({ browserId: tab.browserId });
+        void freezeViewForMenu();
       } else {
-        lastBoundsRef.current = null;
-        showActiveView();
+        unfreezeViewForMenu();
       }
     },
-    [isActive, showActiveView],
+    [isActive, freezeViewForMenu, unfreezeViewForMenu],
   );
 
   /** Switch the active tab's device/viewport. The main process applies
@@ -861,7 +1004,7 @@ export function BrowserPanel({ mode }: BrowserPanelProps) {
     requestAnimationFrame(syncBounds);
   }, [setDeviceToolbarOpen, handleViewportChange, syncBounds]);
 
-  /** Address-history dropdown open/close — same hide/show pattern as the
+  /** Address-history dropdown open/close — same freeze-frame pattern as the
    *  device dropdown above (renderer-DOM popup vs OS-level view). */
   const handleHistoryMenuOpenChange = useCallback(
     (open: boolean) => {
@@ -871,13 +1014,12 @@ export function BrowserPanel({ mode }: BrowserPanelProps) {
         : null;
       if (!tab) return;
       if (open) {
-        void api.browser.hide({ browserId: tab.browserId });
+        void freezeViewForMenu();
       } else {
-        lastBoundsRef.current = null;
-        showActiveView();
+        unfreezeViewForMenu();
       }
     },
-    [isActive, showActiveView],
+    [isActive, freezeViewForMenu, unfreezeViewForMenu],
   );
 
   const handleRemoveHistoryEntry = useCallback(
@@ -991,40 +1133,6 @@ export function BrowserPanel({ mode }: BrowserPanelProps) {
     }
   }, [mode, handleReturnToSidebar, setRightPanelTab, setOpen]);
 
-  /** "关闭浏览器" button: open a confirmation dialog before tearing down all
-   *  tabs. We hide the active view first so the OS-level WebContentsView can't
-   *  cover the renderer-DOM dialog. Cancel restores the view. */
-  const handleRequestDestroy = useCallback(() => {
-    const tab = activeTabIdRef.current
-      ? tabsRef.current.find((t) => t.id === activeTabIdRef.current)
-      : null;
-    if (tab) {
-      if (tab.pickMode) {
-        void api.browser.setPickMode({ browserId: tab.browserId, enabled: false });
-        patchTabInStore(tab.browserId, { pickMode: false });
-      }
-      void api.browser.hide({ browserId: tab.browserId });
-    }
-    setConfirmDestroy(true);
-  }, [patchTabInStore]);
-
-  /** Confirm: destroy every tab's view in main, clear shared state, exit. */
-  const handleConfirmDestroy = useCallback(() => {
-    for (const t of tabsRef.current) {
-      void api.browser.close({ browserId: t.browserId });
-    }
-    setTabs([]);
-    setActiveTabId(null);
-    lastBoundsRef.current = null;
-    setPickedItems([]);
-    setConfirmDestroy(false);
-    if (mode === "overlay") {
-      setOpen(false);
-    } else {
-      setRightPanelTab("files");
-    }
-  }, [mode, setTabs, setActiveTabId, setOpen, setRightPanelTab]);
-
   // Sync the shared tab count to the store so the rail/Titlebar badges work.
   // (Only one container is active at a time, so no double-counting.)
   useEffect(() => {
@@ -1073,11 +1181,16 @@ export function BrowserPanel({ mode }: BrowserPanelProps) {
         onToggleDeviceToolbar={handleToggleDeviceToolbar}
         onClose={handleClose}
         onSwitchMode={handleSwitchMode}
-        onRequestDestroy={handleRequestDestroy}
         history={history}
+        bookmarks={bookmarks}
+        currentBookmarked={!!activeTab && bookmarks.some((b) => b.url === activeTab.url)}
+        onToggleBookmark={handleToggleBookmark}
+        onRemoveBookmark={handleRemoveBookmark}
+        onOpenUrl={handleNavigate}
         onRemoveHistoryEntry={handleRemoveHistoryEntry}
         onClearHistory={handleClearHistory}
         onHistoryMenuOpenChange={handleHistoryMenuOpenChange}
+        onMoreMenuOpenChange={handleMoreMenuOpenChange}
       />
       {/* Device toolbar — the DevTools-style row (device dropdown + custom
           dims + rotate), toggled by the 📱 button above. Rendered between the
@@ -1102,6 +1215,32 @@ export function BrowserPanel({ mode }: BrowserPanelProps) {
           background) so the browser's page area never follows the app theme. */}
       <div ref={stageRef} className="relative min-h-0 flex-1 overflow-auto bg-white">
         <div className="h-full w-full" />
+        {/* Frozen-frame placeholder: while a toolbar menu is open the real
+            view is parked offscreen and this snapshot pins the page's last
+            painted frame to the stage — the menu floats over it as plain DOM
+            instead of a white void. pointer-events-none lets clicks fall
+            through to the stage (outside-click closes the menu). The rect is
+            null when the view bounds weren't measured yet — cover the stage
+            as the fallback. */}
+        {freezeFrame && activeTab?.browserId === freezeFrame.browserId && (
+          <img
+            src={`data:image/png;base64,${freezeFrame.data}`}
+            alt=""
+            aria-hidden
+            draggable={false}
+            className="pointer-events-none absolute select-none"
+            style={
+              freezeFrame.rect
+                ? {
+                    left: freezeFrame.rect.left,
+                    top: freezeFrame.rect.top,
+                    width: freezeFrame.rect.width,
+                    height: freezeFrame.rect.height,
+                  }
+                : { inset: 0, width: "100%", height: "100%" }
+            }
+          />
+        )}
         {error && (
           <div className="absolute inset-0 flex items-center justify-center">
             <p className="text-sm text-content-muted">{error}</p>
@@ -1150,29 +1289,6 @@ export function BrowserPanel({ mode }: BrowserPanelProps) {
           onAdd={handleAddPicked}
         />
       )}
-
-      {/* Destroy confirmation. Rendered at panel root so it sits above the
-          stage; the active view was already hidden in handleRequestDestroy so
-          the dialog isn't covered by the OS-level WebContentsView. Cancel
-          restores the view since the panel stays open. */}
-      <ConfirmDialog
-        open={confirmDestroy}
-        title={t("browser.closeBrowserQ")}
-        description={t("browser.closeBrowserDesc")}
-        confirmText={t("browser.confirmClose")}
-        cancelText={t("common.cancel")}
-        danger
-        onOpenChange={(o) => {
-          setConfirmDestroy(o);
-          if (!o) {
-            // Cancel: re-show the active view (panel is still active).
-            if (!isActive) return;
-            lastBoundsRef.current = null;
-            showActiveView();
-          }
-        }}
-        onConfirm={handleConfirmDestroy}
-      />
 
       {/* HTTP Basic Auth prompt (pushed by main as an "authRequest" event;
           the view is hidden while it's up, restored on close). */}

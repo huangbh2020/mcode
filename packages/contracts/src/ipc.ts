@@ -1041,15 +1041,20 @@ export const OpenFileSchema = z.object({ path: z.string() });
 export type OpenFileInput = z.infer<typeof OpenFileSchema>;
 
 /** List a project's sessions with optional pagination + archived filter.
- *  The left-bar tree loads the first `limit` (default 5) non-archived threads
- *  and appends the next page on "load more"; the archived bin requests
+ *  The left-bar tree loads the first `limit` (default 5) non-archived LOCAL
+ *  threads and appends the next page on "load more"; the archived bin requests
  *  `archived: true` (unpaginated). `hasMore` / `total` let the UI decide
- *  whether to render the "load more" affordance. */
+ *  whether to render the "load more" affordance. `worktree` narrows the query
+ *  by worktree binding: "exclude" = local threads only (the tree's paginated
+ *  list — worktree threads are fetched separately so they never eat into the
+ *  5-row first page), "only" = worktree-bound threads only (the tree's
+ *  worktree groups, fetched in full — a directory holds few threads). */
 export const ProjectSessionsSchema = z.object({
   projectId: z.string(),
   limit: z.number().int().positive().optional(),
   offset: z.number().int().nonnegative().optional(),
   archived: z.boolean().optional(),
+  worktree: z.enum(["exclude", "only"]).optional(),
 });
 export type ProjectSessionsInput = z.infer<typeof ProjectSessionsSchema>;
 
@@ -3388,6 +3393,21 @@ export const BROWSER_COOKIE_VAULT_ENC_SETTING_KEY = "browser.cookieVault.enc";
  *  browser.historyClear RPCs. */
 export const BROWSER_ADDRESS_HISTORY_SETTING_KEY = "browser.addressHistory";
 
+/** Setting key for the browser panel's page bookmarks (JSON array of
+ *  `BrowserBookmarkEntry`, most-recent first, capped at 100). Single writer is
+ *  the main process (browser.bookmarkAdd / bookmarkRemove RPCs); the renderer
+ *  reads it via setting.get — the exact pattern of the address history. */
+export const BROWSER_BOOKMARKS_SETTING_KEY = "browser.bookmarks";
+
+/** One bookmarked page in the browser panel's "More" menu. */
+export interface BrowserBookmarkEntry {
+  url: string;
+  /** Page title at bookmark time (may be empty). */
+  title: string;
+  /** Epoch ms of when the bookmark was added. */
+  addedAt: number;
+}
+
 /** One address-bar history entry. */
 export interface BrowserHistoryEntry {
   url: string;
@@ -3548,6 +3568,34 @@ export const BrowserCloseSchema = z.object({
   browserId: z.string().min(1),
 });
 export type BrowserCloseInput = z.infer<typeof BrowserCloseSchema>;
+
+export const BrowserBookmarkAddSchema = z.object({
+  url: z.string().min(1),
+  title: z.string(),
+});
+export type BrowserBookmarkAddInput = z.infer<typeof BrowserBookmarkAddSchema>;
+
+export const BrowserBookmarkRemoveSchema = z.object({
+  url: z.string().min(1),
+});
+export type BrowserBookmarkRemoveInput = z.infer<typeof BrowserBookmarkRemoveSchema>;
+
+export const BrowserCaptureFrameSchema = z.object({
+  browserId: z.string().min(1),
+});
+export type BrowserCaptureFrameInput = z.infer<typeof BrowserCaptureFrameSchema>;
+
+/** Result of browser.captureFrame: one PNG frame of the page for the
+ *  renderer's frozen-frame placeholder (toolbar menus float over this
+ *  snapshot while the real view parks offscreen). `data` is base64 PNG.
+ *  ok:false = capture failed (compositor not ready, view gone) — the caller
+ *  degrades to the plain hide. Purely in-memory: never persisted. */
+export interface BrowserCaptureFrameResult {
+  ok: boolean;
+  data?: string;
+  mimeType?: "image/png";
+  error?: string;
+}
 
 /** Device presets for the browser panel's device emulation. "desktop" is the
  *  default (no emulation — the page viewport follows the panel's actual size,
@@ -3955,6 +4003,13 @@ export interface RpcMap {
   "browser.hide": (input: BrowserHideInput) => Promise<BrowserOpResult>;
   /** Destroy the view and drop it from the manager. */
   "browser.close": (input: BrowserCloseInput) => Promise<BrowserOpResult>;
+  /** Capture one frame of the current page (visibility untouched) for the
+   *  renderer's frozen-frame placeholder. */
+  "browser.captureFrame": (input: BrowserCaptureFrameInput) => Promise<BrowserCaptureFrameResult>;
+  /** Bookmark a page (dedupe by URL, move to front). */
+  "browser.bookmarkAdd": (input: BrowserBookmarkAddInput) => Promise<BrowserOpResult>;
+  /** Remove one bookmark by URL. */
+  "browser.bookmarkRemove": (input: BrowserBookmarkRemoveInput) => Promise<BrowserOpResult>;
   /** Set the device emulation preset (desktop / iphone / android). */
   "browser.setDevice": (input: BrowserSetDeviceInput) => Promise<BrowserOpResult>;
   /** Clear the embedded browser's HTTP cache + temporary site storage
@@ -4303,6 +4358,9 @@ export const IPC = {
   BROWSER_SHOW: "browser:show",
   BROWSER_HIDE: "browser:hide",
   BROWSER_CLOSE: "browser:close",
+  BROWSER_CAPTURE_FRAME: "browser:captureFrame",
+  BROWSER_BOOKMARK_ADD: "browser:bookmarkAdd",
+  BROWSER_BOOKMARK_REMOVE: "browser:bookmarkRemove",
   BROWSER_SET_DEVICE: "browser:setDevice",
   BROWSER_CLEAR_CACHE: "browser:clearCache",
   // Address history + HTTP Basic Auth (embedded browser)

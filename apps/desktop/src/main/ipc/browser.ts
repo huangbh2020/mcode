@@ -25,6 +25,9 @@ import {
   BrowserShowSchema,
   BrowserHideSchema,
   BrowserCloseSchema,
+  BrowserCaptureFrameSchema,
+  BrowserBookmarkAddSchema,
+  BrowserBookmarkRemoveSchema,
   BrowserSetDeviceSchema,
   BrowserHistoryRemoveSchema,
   BrowserHistoryClearSchema,
@@ -33,6 +36,7 @@ import {
 import { isKnownProjectPath } from "@main/lib/pathGuard.js";
 import { BrowserManager } from "@main/browser/BrowserManager.js";
 import { AddressHistory } from "@main/browser/addressHistory.js";
+import { Bookmarks } from "@main/browser/bookmarks.js";
 import { log } from "@main/lib/logger.js";
 
 export function registerBrowserHandlers(ipcMain: IpcMain): void {
@@ -147,6 +151,19 @@ export function registerBrowserHandlers(ipcMain: IpcMain): void {
     }
   });
 
+  // Frozen-frame placeholder for renderer-DOM menus: one in-memory PNG frame
+  // of the page, visibility untouched (the renderer floats its menu over the
+  // snapshot while the real view parks offscreen).
+  ipcMain.handle(IPC.BROWSER_CAPTURE_FRAME, async (_evt, raw) => {
+    try {
+      const input = BrowserCaptureFrameSchema.parse(raw);
+      return await BrowserManager.captureFrame(input.browserId);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return { ok: false as const, error: msg };
+    }
+  });
+
   ipcMain.handle(IPC.BROWSER_SET_DEVICE, async (_evt, raw) => {
     try {
       const input = BrowserSetDeviceSchema.parse(raw);
@@ -190,6 +207,28 @@ export function registerBrowserHandlers(ipcMain: IpcMain): void {
   ipcMain.handle(IPC.BROWSER_HISTORY_CLEAR, async () => {
     try {
       AddressHistory.clear();
+      return { ok: true as const };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return { ok: false as const, error: msg };
+    }
+  });
+
+  ipcMain.handle(IPC.BROWSER_BOOKMARK_ADD, async (_evt, raw) => {
+    try {
+      const input = BrowserBookmarkAddSchema.parse(raw);
+      Bookmarks.add(input.url, input.title);
+      return { ok: true as const };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return { ok: false as const, error: msg };
+    }
+  });
+
+  ipcMain.handle(IPC.BROWSER_BOOKMARK_REMOVE, async (_evt, raw) => {
+    try {
+      const input = BrowserBookmarkRemoveSchema.parse(raw);
+      Bookmarks.remove(input.url);
       return { ok: true as const };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);

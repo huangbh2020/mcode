@@ -376,7 +376,15 @@ export function MobileSessionDrawer({
               )}
               {activeProjects.map((p) => {
                 const sessions = sessionsByProject[p.id] ?? [];
-                const total = sessionsTotalByProject[p.id] ?? sessions.length;
+                // The cache is a two-section array (paginated LOCAL rows, then
+                // the full worktree section — see splitSessionSections). The
+                // stored total counts the LOCAL section only; the flat mobile
+                // list shows both, so the header/load-more counts add the
+                // loaded worktree rows back on.
+                const localLoaded = sessions.filter((s) => !s.worktreePath).length;
+                const total =
+                  (sessionsTotalByProject[p.id] ?? localLoaded) +
+                  (sessions.length - localLoaded);
                 const hasMore = !!sessionsHasMoreByProject[p.id];
                 const expanded = !!expandedProjects[p.id];
                 return (

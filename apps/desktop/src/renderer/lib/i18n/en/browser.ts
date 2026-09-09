@@ -19,7 +19,13 @@ export const en = {
   "browser.pickElement": "Pick page element",
   "browser.collapseDeviceToolbar": "Collapse device toolbar",
   "browser.deviceToolbar": "Device toolbar (resize)",
-  "browser.closeBrowser": "Close browser",
+  "browser.moreMenu": "More",
+  "browser.bookmarks": "Bookmarks",
+  "browser.bookmarkPage": "Bookmark this page",
+  "browser.unbookmarkPage": "Remove bookmark from this page",
+  "browser.bookmarkEmpty": "No bookmarks yet",
+  "browser.removeBookmark": "Remove this bookmark",
+  "browser.historyEmpty": "No history yet",
 
   /* ── panel ── */
   "browser.selectProjectFirst": "Select a project first",
@@ -27,9 +33,6 @@ export const en = {
   "browser.pickOverlayHint": "Click page elements to add them to the input · Esc to exit",
   "browser.addedToInput": "Added to input",
   "browser.pickedToList": "Picked to list",
-  "browser.closeBrowserQ": "Close browser?",
-  "browser.closeBrowserDesc": "All open tabs will be destroyed and unsaved page content will be lost.",
-  "browser.confirmClose": "Close",
 
   /* ── basic auth prompt ── */
   "browser.authTitle": "Sign in required — {host}",

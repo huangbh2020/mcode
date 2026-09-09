@@ -1522,6 +1522,46 @@ class BrowserManagerImpl {
     return { ok: true, data: result.data, mimeType: "image/png" };
   }
 
+  /** Capture the current page as a single base64 PNG frame WITHOUT touching
+   *  visibility. Powers the renderer's frozen-frame placeholder: toolbar
+   *  menus (history / device) float over this snapshot while the real view
+   *  parks offscreen, so the page stays visually present instead of blanking
+   *  to a white stage. Callers capture while the view is onscreen (panel
+   *  active) — unlike screenshot() there is no temp-show/restore and no
+   *  emulation rect dance. An empty frame (capture raced a navigation, or
+   *  the compositor isn't ready yet) retries once, then reports ok:false so
+   *  the renderer degrades to the plain hide. The frame lives entirely in
+   *  memory (IPC → <img>) and is never persisted. */
+  async captureFrame(
+    id: string,
+  ): Promise<{ ok: boolean; data?: string; mimeType?: "image/png"; error?: string }> {
+    const live = this.get(id);
+    if (!live) return { ok: false, error: "浏览器不存在或已关闭" };
+    const wc = live.view.webContents;
+    if (wc.isDestroyed()) return { ok: false, error: "浏览器已销毁" };
+    const capture = async (): Promise<string | null> => {
+      try {
+        const image = await wc.capturePage();
+        const png = image.toPNG();
+        return png.length > 0 ? png.toString("base64") : null;
+      } catch {
+        return null;
+      }
+    };
+    let data = await capture();
+    if (data === null) {
+      // The compositor can be momentarily unavailable right after
+      // create/navigate — one short retry before giving up.
+      await new Promise((r) => setTimeout(r, 150));
+      data = await capture();
+    }
+    if (data === null) {
+      log.warn(`browser captureFrame produced no image: ${id} url=${wc.getURL()}`);
+      return { ok: false, error: "截图失败" };
+    }
+    return { ok: true, data, mimeType: "image/png" };
+  }
+
   /** The on-screen rect that matches the view's current device-emulation
    *  viewport (centered in the main window), or null for desktop (no
    *  emulation). capturePage() needs the view's physical bounds to equal the
