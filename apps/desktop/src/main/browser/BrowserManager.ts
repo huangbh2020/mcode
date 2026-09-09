@@ -267,24 +267,13 @@ export interface BrowserDownloadEntry {
   endedAt?: number;
 }
 
-/** Result of a `printToPdf()` — `data` is the PDF bytes base64-encoded (as
- *  returned by the CDP command); the caller writes it to disk. */
+/** Result of a `printToPdf()` — `data` is the PDF bytes base64-encoded; the
+ *  caller writes it to disk. */
 export interface BrowserPdfResult {
   ok: boolean;
   error?: string;
   data?: string;
 }
-
-/** CDP's printToPDF takes paper size in inches (no named formats), so the
- *  tool's format enum maps here. */
-const PAPER_SIZES_IN: Record<string, { w: number; h: number }> = {
-  letter: { w: 8.5, h: 11 },
-  legal: { w: 8.5, h: 14 },
-  tabloid: { w: 11, h: 17 },
-  a3: { w: 11.69, h: 16.54 },
-  a4: { w: 8.27, h: 11.69 },
-  a5: { w: 5.83, h: 8.27 },
-};
 
 /** Where downloads land: a fixed subfolder of the OS downloads directory, so
  *  the agent (and the user) always knows where to look. Created lazily. */
@@ -1476,6 +1465,32 @@ class BrowserManagerImpl {
     return this.downloads.map((d) => ({ ...d }));
   }
 
+  /** Act on a tracked download from the panel's download bar. The renderer
+   *  only ever passes the downloadId; the path is resolved HERE from the
+   *  registry, so no renderer-supplied filesystem path is ever trusted.
+   *  "open" (launch with the OS default app) is refused unless the download
+   *  completed — opening a half-written or cancelled file is never useful. */
+  downloadAction(downloadId: string, action: "open" | "reveal"): BrowserOpResult {
+    const entry = this.downloads.find((d) => d.id === downloadId);
+    if (!entry) return { ok: false, error: "下载记录不存在或已被清理" };
+    try {
+      if (action === "open") {
+        if (entry.state !== "completed") {
+          return { ok: false, error: "下载尚未完成,无法打开" };
+        }
+        void shell.openPath(entry.path).then((err) => {
+          if (err) log.warn(`browser download openPath failed: ${entry.path} ${err}`);
+        });
+      } else {
+        // Selects the item inside its folder (opens the folder when needed).
+        shell.showItemInFolder(entry.path);
+      }
+      return { ok: true };
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
   // ── HTTP Basic Auth ─────────────────────────────────────────────────
 
   /** Pending HTTP Basic Auth prompts: requestId -> Electron login callback.
@@ -2146,11 +2161,21 @@ class BrowserManagerImpl {
     return typeof data === "string" && data.length > 0 ? data : null;
   }
 
-  /** Render the page to PDF via CDP Page.printToPDF (whole document, exactly
-   *  what Ctrl+P would produce, without touching visibility). Returns the PDF
-   *  bytes base64-encoded; the caller persists them. `paperFormat` maps
-   *  through PAPER_SIZES_IN (CDP takes inches); `landscape` only flips the
-   *  orientation flag — Chromium swaps the paper dims itself. */
+  /** Render the page to PDF via Electron's own printing-stack API
+   *  (`webContents.printToPDF`), returning the PDF bytes base64-encoded for
+   *  the caller to persist.
+   *
+   *  ⚠️ NOT the CDP `Page.printToPDF`: that DevTools method only exists in
+   *  headless Chromium — headed Electron never registers it, so
+   *  `debugger.sendCommand("Page.printToPDF")` fails with -32601
+   *  "'Page.printToPDF' wasn't found" on EVERY page (page-independent). The
+   *  native API renders through the same pipeline as silent Ctrl+P, works
+   *  offscreen, and needs no debugger slot at all.
+   *
+   *  `paperFormat` maps to Electron's named page sizes (A0-A6/Legal/Letter/
+   *  Tabloid/Ledger); `landscape` flips the orientation; margins stay at the
+   *  printer default (custom margins are in PIXELS in this Electron — easy to
+   *  get wrong, and the default looks right). */
   async printToPdf(
     id: string,
     opts: {
@@ -2166,32 +2191,57 @@ class BrowserManagerImpl {
     const wc = live.view.webContents;
     if (wc.isDestroyed()) return { ok: false, error: "浏览器已销毁" };
     const format = (opts.paperFormat ?? "a4").toLowerCase();
-    const paper = PAPER_SIZES_IN[format];
-    if (!paper) {
+    // Our lowercase tool enum → Electron's named page sizes (see
+    // PrintToPDFOptions.pageSize). The old CDP inch table is gone with it.
+    const PAGE_SIZE_NAMES: Record<string, "Letter" | "Legal" | "Tabloid" | "A3" | "A4" | "A5"> = {
+      letter: "Letter",
+      legal: "Legal",
+      tabloid: "Tabloid",
+      a3: "A3",
+      a4: "A4",
+      a5: "A5",
+    };
+    const pageSize = PAGE_SIZE_NAMES[format];
+    if (!pageSize) {
       return { ok: false, error: `不支持的纸张格式 "${opts.paperFormat}"(可选 letter/legal/tabloid/a3/a4/a5)` };
     }
     const scale =
       typeof opts.scale === "number" && Number.isFinite(opts.scale) ? Math.min(Math.max(opts.scale, 0.1), 2) : 1;
-    const res = await this.withDebugger<{ data?: string }>(id, (dbg) =>
-      dbg.sendCommand("Page.printToPDF", {
+    // Header/footer values render INVISIBLY unless the template sets an
+    // explicit font-size (Chromium's documented gotcha) — so the flag comes
+    // with default Chrome-style templates (date up top, url + page numbers
+    // below). Empty templates + displayHeaderFooter would print nothing.
+    const headerFooter = opts.headerFooter === true;
+    try {
+      const buf = await wc.printToPDF({
         landscape: opts.landscape === true,
         printBackground: opts.printBackground !== false,
         scale,
-        paperWidth: paper.w,
-        paperHeight: paper.h,
-        marginTop: 0.4,
-        marginBottom: 0.4,
-        marginLeft: 0.4,
-        marginRight: 0.4,
-        displayHeaderFooter: opts.headerFooter === true,
-      }) as Promise<{ data?: string }>,
-    );
-    if (!res.ok) return { ok: false, error: `PDF 生成失败: ${res.error}` };
-    const data = res.value?.data;
-    if (typeof data !== "string" || data.length === 0) {
-      return { ok: false, error: "PDF 生成失败(空输出)" };
+        pageSize,
+        displayHeaderFooter: headerFooter,
+        ...(headerFooter
+          ? {
+              headerTemplate:
+                '<span class="date" style="font-size:8px; margin-right:0.4in;"></span>' +
+                '<span class="title" style="font-size:8px; margin-left:0.4in;"></span>',
+              footerTemplate:
+                '<span class="url" style="font-size:8px; margin-right:0.4in;"></span>' +
+                '<span class="pageNumber" style="font-size:8px;"></span>' +
+                '<span style="font-size:8px;">/</span>' +
+                '<span class="totalPages" style="font-size:8px;"></span>',
+            }
+          : {}),
+      });
+      const data = buf.length > 0 ? buf.toString("base64") : "";
+      if (!data) {
+        return { ok: false, error: "PDF 生成失败(空输出)" };
+      }
+      return { ok: true, data };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      log.warn(`browser printToPdf failed: ${id} ${msg}`);
+      return { ok: false, error: `PDF 生成失败: ${msg}` };
     }
-    return { ok: true, data };
   }
 
   /** Set files on an `<input type="file">` via CDP DOM.setFileInputFiles —

@@ -20,11 +20,13 @@ import {
   type BrowserBookmarkEntry,
   type BrowserHistoryEntry,
   type BrowserAuthRequest,
+  type BrowserDownloadProgress,
 } from "@contracts/ipc";
 import { BrowserToolbar } from "./BrowserToolbar.js";
 import { DeviceToolbar } from "./DeviceToolbar.js";
 import { BrowserTabs, type BrowserTabDisplay } from "./BrowserTabs.js";
 import { PickedElementsBar } from "./PickedElementsBar.js";
+import { DownloadBar, type DownloadBarItem } from "./DownloadBar.js";
 import { AuthPromptDialog } from "./AuthPromptDialog.js";
 import { useI18n } from "@renderer/lib/i18n/index.js";
 
@@ -147,6 +149,13 @@ export function BrowserPanel({ mode }: BrowserPanelProps) {
   /** The most recently picked element, shown as a brief floating preview card
    *  that animates in then fades out (the "浮窗预览" feedback). */
   const [flashPreview, setFlashPreview] = useState<PickedElement | null>(null);
+  /** Download-bar chips, fed by "download" browser:event pushes (start +
+   *  terminal state; newest first, capped). Terminal-state chips are
+   *  auto-dismissed by timers held in downloadTimersRef. Session-transient
+   *  view only — `browser_downloads` (main registry) stays the source of
+   *  truth for the agent. */
+  const [downloads, setDownloads] = useState<DownloadBarItem[]>([]);
+  const downloadTimersRef = useRef(new Map<string, ReturnType<typeof setTimeout>>());
 
   const stageRef = useRef<HTMLDivElement | null>(null);
   /** Latest bounds sent to main, so re-showing the active tab can re-sync. */
@@ -750,6 +759,33 @@ export function BrowserPanel({ mode }: BrowserPanelProps) {
     [isActive, freezeViewForMenu, unfreezeViewForMenu, refreshBookmarks],
   );
 
+  /** Download-bar actions. The renderer only ever passes the downloadId —
+   *  main resolves the path from its own registry (BrowserDownloadActionSchema
+   *  carries no path), so no renderer-supplied filesystem path is trusted. */
+  const handleDownloadOpen = useCallback((downloadId: string) => {
+    void api.browser.downloadAction({ downloadId, action: "open" });
+  }, []);
+  const handleDownloadReveal = useCallback((downloadId: string) => {
+    void api.browser.downloadAction({ downloadId, action: "reveal" });
+  }, []);
+  const handleDownloadDismiss = useCallback((downloadId: string) => {
+    const timer = downloadTimersRef.current.get(downloadId);
+    if (timer) {
+      clearTimeout(timer);
+      downloadTimersRef.current.delete(downloadId);
+    }
+    setDownloads((cur) => cur.filter((d) => d.downloadId !== downloadId));
+  }, []);
+  // Unmount: clear every pending auto-dismiss timer (the container swap on
+  // mode switch unmounts this component mid-download routinely).
+  useEffect(() => {
+    const timers = downloadTimersRef.current;
+    return () => {
+      for (const timer of timers.values()) clearTimeout(timer);
+      timers.clear();
+    };
+  }, []);
+
   // Subscribe to browser:event pushes. Route each event to the owning tab by
   // browserId and update that tab's state only. Subscribed whenever this
   // container is active (the other container takes over otherwise).
@@ -764,6 +800,36 @@ export function BrowserPanel({ mode }: BrowserPanelProps) {
         setAuthRequest(req);
         const tab = tabsRef.current.find((t) => t.browserId === msg.browserId);
         if (tab) void api.browser.hide({ browserId: tab.browserId });
+        return;
+      }
+      // Download tracking: update-or-insert the bar chip. Must be handled
+      // BEFORE the browserId lookup below — the owning view may not have an
+      // adopted tab (agent-created views, window-open races), and the
+      // download is still worth showing. A terminal state also schedules the
+      // chip's auto-dismiss (~8s; timer tracked so unmount/dismiss can clear).
+      if (msg.type === "download") {
+        const p = msg.payload as BrowserDownloadProgress;
+        if (!p || typeof p.downloadId !== "string") return;
+        setDownloads((prev) => {
+          const item: DownloadBarItem = {
+            downloadId: p.downloadId,
+            filename: p.filename,
+            path: p.path,
+            state: p.state,
+            receivedBytes: p.receivedBytes,
+            totalBytes: p.totalBytes,
+          };
+          const idx = prev.findIndex((d) => d.downloadId === p.downloadId);
+          const next = idx >= 0 ? prev.map((d, i) => (i === idx ? item : d)) : [item, ...prev];
+          return next.slice(0, 10);
+        });
+        if (p.state !== "progressing") {
+          const timer = setTimeout(() => {
+            downloadTimersRef.current.delete(p.downloadId);
+            setDownloads((cur) => cur.filter((d) => d.downloadId !== p.downloadId));
+          }, 8000);
+          downloadTimersRef.current.set(p.downloadId, timer);
+        }
         return;
       }
       // Main created a fresh view for a page-initiated new-window request
@@ -1278,6 +1344,17 @@ export function BrowserPanel({ mode }: BrowserPanelProps) {
           </div>
         )}
       </div>
+      {/* Download bar (both modes): Chrome-style chips for downloads started
+          by the embedded browser — spinner while in flight, click a completed
+          chip to open the file, folder button reveals it. Auto-hides when
+          empty; its height shrinks the stage (bounds re-sync via the stage
+          ResizeObserver). */}
+      <DownloadBar
+        items={downloads}
+        onOpen={handleDownloadOpen}
+        onReveal={handleDownloadReveal}
+        onDismiss={handleDownloadDismiss}
+      />
       {/* Picked-elements bar (overlay mode only): a Chrome-download-bar-style
           strip showing all elements picked in this browser session. The sidebar
           flow enqueues immediately so it has no staging bar. */}

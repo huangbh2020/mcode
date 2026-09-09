@@ -61,4 +61,14 @@ export const en = {
   "browser.clear": "Clear",
   "browser.add": "Add",
   "browser.addAndReturn": "Add to input and return to the main panel",
+
+  /* ── download bar ── */
+  "browser.downloadBarLabel": "Downloads",
+  "browser.downloadStateProgressing": "Downloading",
+  "browser.downloadStateCompleted": "Done",
+  "browser.downloadStateCancelled": "Cancelled",
+  "browser.downloadStateInterrupted": "Failed",
+  "browser.downloadOpenFile": "Open file",
+  "browser.downloadRevealFolder": "Show in folder",
+  "browser.downloadDismiss": "Dismiss",
 } as const;

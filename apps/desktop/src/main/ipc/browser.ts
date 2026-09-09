@@ -32,6 +32,7 @@ import {
   BrowserHistoryRemoveSchema,
   BrowserHistoryClearSchema,
   BrowserAuthRespondSchema,
+  BrowserDownloadActionSchema,
 } from "@contracts/ipc";
 import { isKnownProjectPath } from "@main/lib/pathGuard.js";
 import { BrowserManager } from "@main/browser/BrowserManager.js";
@@ -244,6 +245,16 @@ export function registerBrowserHandlers(ipcMain: IpcMain): void {
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       log.error(`browser.authRespond failed: ${msg}`);
+    }
+  });
+
+  ipcMain.handle(IPC.BROWSER_DOWNLOAD_ACTION, async (_evt, raw) => {
+    try {
+      const input = BrowserDownloadActionSchema.parse(raw);
+      return BrowserManager.downloadAction(input.downloadId, input.action);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return { ok: false as const, error: msg };
     }
   });
 }

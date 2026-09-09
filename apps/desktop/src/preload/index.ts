@@ -390,6 +390,8 @@ const api = {
       ipcRenderer.invoke(IPC.BROWSER_HISTORY_CLEAR)) as RpcMap["browser.historyClear"],
     authRespond: ((input) =>
       ipcRenderer.invoke(IPC.BROWSER_AUTH_RESPOND, input)) as RpcMap["browser.authRespond"],
+    downloadAction: ((input) =>
+      ipcRenderer.invoke(IPC.BROWSER_DOWNLOAD_ACTION, input)) as RpcMap["browser.downloadAction"],
   },
 
   /** Language servers (LSP): install/enable per language, then sync documents

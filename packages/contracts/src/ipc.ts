@@ -3593,6 +3593,17 @@ export const BrowserBookmarkAddSchema = z.object({
 });
 export type BrowserBookmarkAddInput = z.infer<typeof BrowserBookmarkAddSchema>;
 
+/** Act on a tracked browser download from the panel's download bar. The
+ *  renderer passes only the downloadId — main resolves the path from its own
+ *  download registry, so an arbitrary filesystem path never crosses IPC.
+ *  "open" launches the file with the OS default app (only allowed once the
+ *  download completed); "reveal" selects it in the containing folder. */
+export const BrowserDownloadActionSchema = z.object({
+  downloadId: z.string().min(1),
+  action: z.enum(["open", "reveal"]),
+});
+export type BrowserDownloadActionInput = z.infer<typeof BrowserDownloadActionSchema>;
+
 export const BrowserBookmarkRemoveSchema = z.object({
   url: z.string().min(1),
 });
@@ -4040,6 +4051,11 @@ export interface RpcMap {
   "browser.historyClear": (input: BrowserHistoryClearInput) => Promise<BrowserOpResult>;
   /** Answer a pending HTTP Basic Auth prompt (see "authRequest" push event). */
   "browser.authRespond": (input: BrowserAuthRespondInput) => Promise<void>;
+  /** Open a tracked download's file with the OS default app ("open", only
+   *  allowed once the download completed) or select it in the containing
+   *  folder ("reveal"). The path is resolved main-side from the download
+   *  registry — see BrowserDownloadActionSchema. */
+  "browser.downloadAction": (input: BrowserDownloadActionInput) => Promise<BrowserOpResult>;
   /** App version + runtime info for the About panel. */
   "app.info": () => Promise<AppInfoResult>;
   /** Check for updates on the GitHub Releases channel. Returns the current
@@ -4385,6 +4401,8 @@ export const IPC = {
   BROWSER_HISTORY_REMOVE: "browser:historyRemove",
   BROWSER_HISTORY_CLEAR: "browser:historyClear",
   BROWSER_AUTH_RESPOND: "browser:authRespond",
+  // Download bar (embedded browser): open file / reveal in folder
+  BROWSER_DOWNLOAD_ACTION: "browser:downloadAction",
   // App / runtime info (About panel)
   APP_INFO: "app:info",
   // Auto-update (electron-updater)

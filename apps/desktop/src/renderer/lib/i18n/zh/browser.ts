@@ -64,4 +64,14 @@ export const zh = {
   "browser.clear": "清空",
   "browser.add": "添加",
   "browser.addAndReturn": "添加到输入框并返回主面板",
+
+  /* ── download bar ── */
+  "browser.downloadBarLabel": "下载",
+  "browser.downloadStateProgressing": "下载中",
+  "browser.downloadStateCompleted": "已完成",
+  "browser.downloadStateCancelled": "已取消",
+  "browser.downloadStateInterrupted": "已中断",
+  "browser.downloadOpenFile": "打开文件",
+  "browser.downloadRevealFolder": "在文件夹中显示",
+  "browser.downloadDismiss": "移除",
 } as const;
