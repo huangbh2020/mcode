@@ -949,6 +949,24 @@ export function BrowserPanel({ mode }: BrowserPanelProps) {
     [activeTab, patchTabInStore],
   );
 
+  /** Smart open for bookmark / history entries (the toolbar's More menu):
+   *  reuse the active tab ONLY when it's still blank (fresh tab, nothing
+   *  loaded yet) — otherwise open a new tab, so picking a bookmark never
+   *  clobbers a page the user is reading. The address bar keeps plain
+   *  handleNavigate (typing there always targets the current tab). */
+  const handleOpenUrlSmart = useCallback(
+    (raw: string) => {
+      const active = activeTab;
+      const u = active?.url.trim();
+      if (active && (u === "" || u === "about:blank")) {
+        handleNavigate(raw);
+        return;
+      }
+      void createTab(normalizeUrl(raw));
+    },
+    [activeTab, handleNavigate, createTab],
+  );
+
   const handleBack = useCallback(() => {
     if (activeTab) void api.browser.goBack({ browserId: activeTab.browserId });
   }, [activeTab]);
@@ -1252,7 +1270,7 @@ export function BrowserPanel({ mode }: BrowserPanelProps) {
         currentBookmarked={!!activeTab && bookmarks.some((b) => b.url === activeTab.url)}
         onToggleBookmark={handleToggleBookmark}
         onRemoveBookmark={handleRemoveBookmark}
-        onOpenUrl={handleNavigate}
+        onOpenUrl={handleOpenUrlSmart}
         onRemoveHistoryEntry={handleRemoveHistoryEntry}
         onClearHistory={handleClearHistory}
         onHistoryMenuOpenChange={handleHistoryMenuOpenChange}
