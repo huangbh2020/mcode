@@ -67,3 +67,39 @@ export function relativePath(absPath: string, root: string): string {
   // Not under root - return the normalized input unchanged (defensive).
   return normAbs;
 }
+
+/** Resolve `rel` against `baseDir` and collapse `.`/`..` segments — the
+ *  renderer-side stand-in for `path.resolve`/`path.normalize`.
+ *  `resolveRelativePath("D:/proj/docs", "images/../img/a.png")`
+ *    -> `"D:/proj/docs/img/a.png"`.
+ *  Absolute inputs (drive-letter or POSIX root) are normalized in place
+ *  without joining; `..` never escapes past a filesystem root. Output uses
+ *  forward slashes (drive paths keep their `D:` prefix, POSIX keeps `/`).
+ *  Renderer-safe: pure string arithmetic over both separators. */
+export function resolveRelativePath(baseDir: string, rel: string): string {
+  const normRel = rel.replace(/\\/g, "/");
+  const joinedNorm = (
+    /^[A-Za-z]:[\\/]/.test(normRel) || normRel.startsWith("/")
+      ? normRel
+      : joinPath(baseDir.replace(/[\\/]+$/, ""), normRel)
+  ).replace(/\\/g, "/");
+  // Absolute joined paths (POSIX "/..." or drive "D:/...") clamp `..` at the
+  // filesystem root; only slash-rooted paths get the leading "/" back on
+  // output — drive paths start with the letter, not a slash.
+  const isAbsolute = joinedNorm.startsWith("/") || /^[A-Za-z]:\//.test(joinedNorm);
+  const slashRoot = joinedNorm.startsWith("/");
+  const segments: string[] = [];
+  for (const seg of joinedNorm.split("/")) {
+    if (!seg || seg === ".") continue;
+    if (seg === "..") {
+      if (segments.length > 0 && segments[segments.length - 1] !== "..") {
+        segments.pop();
+      } else if (!isAbsolute) {
+        segments.push("..");
+      }
+      continue;
+    }
+    segments.push(seg);
+  }
+  return (slashRoot ? "/" : "") + segments.join("/");
+}

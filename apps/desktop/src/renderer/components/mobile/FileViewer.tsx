@@ -13,6 +13,7 @@ import { useEffect, useState } from "react";
 import { api } from "@renderer/lib/api.js";
 import { Markdown } from "@renderer/components/chat/Markdown.js";
 import { useI18n } from "@renderer/lib/i18n/index.js";
+import { dirname } from "@renderer/lib/path.js";
 import { IconArrowUp, IconCode, IconEye, IconLoader2, IconPhoto } from "@renderer/lib/icons.js";
 
 /** File extension → shiki language id for the fenced-code renderer. */
@@ -144,7 +145,7 @@ export function FileViewerContent({ name, path }: { name: string; path: string }
   return (
     <div className="relative min-h-0 flex-1">
       <div className="absolute inset-0 overflow-auto px-3 py-2">
-        <Markdown>{isMd && !sourceView ? content : markdown}</Markdown>
+        <Markdown baseDir={dirname(path)}>{isMd && !sourceView ? content : markdown}</Markdown>
       </div>
       {isMd && (
         <button

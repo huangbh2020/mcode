@@ -13,7 +13,7 @@
  * Resolution is click-triggered and IPC-bound, never at render time, so this
  * component is cheap to embed in streaming markdown text nodes.
  */
-import { useMemo, useRef, useState, type MouseEvent, type KeyboardEvent } from "react";
+import { useMemo, useRef, useState, type MouseEvent, type KeyboardEvent, type ReactNode } from "react";
 import { Menu } from "@base-ui/react/menu";
 import { cn } from "@renderer/lib/cn.js";
 import { useI18n } from "@renderer/lib/i18n/index.js";
@@ -42,25 +42,33 @@ const MENU_ITEM_CLASS = cn(
 export function FileLink({
   token,
   projectPath,
+  display,
+  asLink = false,
 }: {
   token: string;
   /** Project root to resolve relative tokens against. When null/undefined,
    *  only absolute-path tokens can be opened (safe degradation). */
   projectPath?: string | null;
+  /** Rendered content (defaults to `token`). Lets a markdown anchor keep the
+   *  model's link text instead of the raw href. */
+  display?: ReactNode;
+  /** Render as a real `<a href>` (markdown link position) instead of a
+   *  `<span>`; clicks are intercepted and resolved exactly the same way. */
+  asLink?: boolean;
 }) {
-  const spanRef = useRef<HTMLSpanElement | null>(null);
+  const elRef = useRef<HTMLElement | null>(null);
   const [loading, setLoading] = useState(false);
   const [candidates, setCandidates] = useState<ResolvedCandidate[] | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const { t } = useI18n();
 
-  /** Virtual anchor built from the span's current rect, so the candidate
+  /** Virtual anchor built from the element's current rect, so the candidate
    *  menu opens right below the clicked token. Recomputed each open via the
    *  controlled `open` transition (we only need it while open). */
   const anchor = useMemo(
     () => ({
       getBoundingClientRect: () => {
-        const el = spanRef.current;
+        const el = elRef.current;
         if (!el) {
           return { x: 0, y: 0, top: 0, left: 0, bottom: 0, right: 0, width: 0, height: 0, toJSON: () => ({}) };
         }
@@ -105,13 +113,13 @@ export function FileLink({
     }
   };
 
-  const handleClick = (e: MouseEvent<HTMLSpanElement>) => {
+  const handleClick = (e: MouseEvent<HTMLElement>) => {
     e.preventDefault();
     e.stopPropagation();
     void resolve();
   };
 
-  const handleKeyDown = (e: KeyboardEvent<HTMLSpanElement>) => {
+  const handleKeyDown = (e: KeyboardEvent<HTMLElement>) => {
     if (e.key === "Enter" || e.key === " ") {
       e.preventDefault();
       e.stopPropagation();
@@ -124,24 +132,47 @@ export function FileLink({
     setMenuOpen(false);
   };
 
+  const content = (
+    <>
+      {display ?? token}
+      {loading && <IconLoader2 size={10} className="ml-0.5 inline animate-spin align-baseline opacity-70" />}
+    </>
+  );
+
   return (
     <>
-      <span
-        ref={spanRef}
-        role="button"
-        tabIndex={0}
-        title={t("chatStream.fileLink.clickToOpen")}
-        onClick={handleClick}
-        onKeyDown={handleKeyDown}
-        className={cn(
-          "cursor-pointer rounded-[2px] underline decoration-dotted decoration-accent/60 underline-offset-2",
-          "text-accent hover:bg-accent/10",
-          loading && "opacity-60",
-        )}
-      >
-        {token}
-        {loading && <IconLoader2 size={10} className="ml-0.5 inline animate-spin align-baseline opacity-70" />}
-      </span>
+      {asLink ? (
+        <a
+          ref={(el) => {
+            elRef.current = el;
+          }}
+          href={token}
+          title={t("chatStream.fileLink.clickToOpen")}
+          onClick={handleClick}
+          onAuxClick={(e) => e.preventDefault()}
+          className={cn("cursor-pointer underline hover:opacity-80", loading && "opacity-60")}
+        >
+          {content}
+        </a>
+      ) : (
+        <span
+          ref={(el) => {
+            elRef.current = el;
+          }}
+          role="button"
+          tabIndex={0}
+          title={t("chatStream.fileLink.clickToOpen")}
+          onClick={handleClick}
+          onKeyDown={handleKeyDown}
+          className={cn(
+            "cursor-pointer rounded-[2px] underline decoration-dotted decoration-accent/60 underline-offset-2",
+            "text-accent hover:bg-accent/10",
+            loading && "opacity-60",
+          )}
+        >
+          {content}
+        </span>
+      )}
 
       <Menu.Root open={menuOpen} onOpenChange={(open) => setMenuOpen(open)}>
         <Menu.Portal>

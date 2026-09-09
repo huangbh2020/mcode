@@ -3,7 +3,7 @@ import Editor, { DiffEditor, useMonaco } from "@monaco-editor/react";
 import type { editor } from "monaco-editor";
 import { api } from "@renderer/lib/api.js";
 import { cn } from "@renderer/lib/cn.js";
-import { extname } from "@renderer/lib/path.js";
+import { dirname, extname } from "@renderer/lib/path.js";
 import { useSessionStore, selectActiveEnvPath } from "@renderer/stores/sessionStore.js";
 import { useToastStore } from "@renderer/stores/toastStore.js";
 import type { TurnFileEntry } from "@renderer/lib/turnFiles.js";
@@ -1107,7 +1107,12 @@ function MarkdownPreviewPane({ filePath, projectPath }: { filePath: string; proj
   }
   return (
     <div className="h-full overflow-auto bg-surface px-6 py-4 [--chat-font-size:13px]">
-      <Markdown projectPath={projectPath}>{content}</Markdown>
+      <Markdown
+        projectPath={projectPath}
+        baseDir={dirname(filePath) || projectPath}
+      >
+        {content}
+      </Markdown>
     </div>
   );
 }

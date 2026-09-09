@@ -15,16 +15,20 @@
  * code-block HTML, which is produced from known content (the code text) and
  * is thus safe by construction.
  */
-import { memo, useState, useMemo, useRef, useLayoutEffect, createContext, useContext } from "react";
-import ReactMarkdown from "react-markdown";
+import { memo, useState, useEffect, useMemo, useRef, useLayoutEffect, createContext, useContext } from "react";
+import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
 import { cn } from "@renderer/lib/cn.js";
 import { useI18n } from "@renderer/lib/i18n/index.js";
-import { IconCheck, IconChevronDown, IconChevronUp, IconCopy } from "@renderer/lib/icons.js";
+import { IconCheck, IconChevronDown, IconChevronUp, IconCopy, IconLoader2 } from "@renderer/lib/icons.js";
 import type { Components } from "react-markdown";
 import { codeCacheKey, getCodeHtml, setCodeHtml } from "@renderer/lib/markdownCache.js";
+import { fileHrefToPath, isAbsolutePath, isLocalFileHref } from "@renderer/lib/fileLink.js";
+import { resolveRelativePath } from "@renderer/lib/path.js";
+import { api } from "@renderer/lib/api.js";
+import { FileLink } from "./FileLink.js";
 
 // ── Lazy highlighter singleton ────────────────────────────────────────
 // Initialised on first encounter of a fenced code block; kept alive for the
@@ -265,6 +269,120 @@ function rehypeSkillInline(skillRe: RegExp) {
 // ── react-markdown component overrides ────────────────────────────────
 
 /**
+ * Project root of the session whose message is being rendered — consumed by
+ * the `a`/`img` overrides to resolve local file links. A context (not a
+ * `buildComponents` argument) keeps the components object identity stable
+ * across project switches, so code-block collapse state survives.
+ */
+const MarkdownProjectContext = createContext<string | null>(null);
+
+/**
+ * Absolute directory that relative local paths in links/images resolve
+ * against. Set ONLY by contexts that know the source file's location (the
+ * IDE's .md preview passes the previewed file's directory); chat leaves it
+ * null, so relative refs keep the search-based FileLink resolution and local
+ * images render as chips instead of inline `<img>`.
+ */
+const MarkdownBaseDirContext = createContext<string | null>(null);
+
+/** data-URL cache for local images referenced by markdown. Promise-valued so
+ *  concurrent renders of the same path share one IPC read; failures are
+ *  cached too (as "") so a re-render doesn't spam the backend. FIFO-capped so
+ *  a long session can't grow it unboundedly. Cached data URLs may go stale if
+ *  the image file is rewritten in place — acceptable for a preview pane
+ *  (re-opening the file reloads the pane but reuses bytes; remount of the app
+ *  clears). */
+const mdImageDataUrls = new Map<string, Promise<string>>();
+const MD_IMAGE_CACHE_CAP = 60;
+
+function loadMarkdownImageDataUrl(filePath: string): Promise<string> {
+  const cached = mdImageDataUrls.get(filePath);
+  if (cached) return cached;
+  const promise = api.file
+    .readBinary({ filePath })
+    .then(({ dataUrl }) => dataUrl)
+    .catch(() => "");
+  mdImageDataUrls.set(filePath, promise);
+  if (mdImageDataUrls.size > MD_IMAGE_CACHE_CAP) {
+    const oldest = mdImageDataUrls.keys().next().value;
+    if (oldest !== undefined) mdImageDataUrls.delete(oldest);
+  }
+  return promise;
+}
+
+/**
+ * Inline local image for markdown contexts that HAVE a base directory (the
+ * IDE's .md preview). Loads bytes via `file.readBinary` (main-side path guard
+ * applies) and renders a real `<img>` from a data: URL — the webview cannot
+ * fetch drive-letter/relative URLs directly. Loading shows the alt text with
+ * a spinner; a failed read (missing file / outside known roots) degrades to
+ * the clickable file chip.
+ */
+function MarkdownLocalImage({
+  filePath,
+  projectPath,
+  alt,
+}: {
+  filePath: string;
+  projectPath: string | null;
+  alt: string;
+}) {
+  // null = loading, "" = failed, otherwise a data: URL.
+  const [dataUrl, setDataUrl] = useState<string | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    setDataUrl(null);
+    loadMarkdownImageDataUrl(filePath).then((url) => {
+      if (!cancelled) setDataUrl(url);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [filePath]);
+
+  if (dataUrl === null) {
+    return (
+      <span className="my-[var(--chat-md-gap-xs)] inline-flex items-center gap-1 align-middle text-content-subtle [font-size:var(--chat-fs-xs)]">
+        <IconLoader2 size={12} className="animate-spin" />
+        {alt}
+      </span>
+    );
+  }
+  if (!dataUrl) {
+    return (
+      <span className="my-[var(--chat-md-gap-xs)] inline-flex max-w-full items-center gap-1 rounded border border-edge/60 bg-surface-muted/60 px-1.5 py-0.5 align-middle text-content-muted [font-size:var(--chat-fs-xs)]">
+        <FileLink
+          token={filePath}
+          projectPath={projectPath}
+          display={alt ? <span className="text-info underline">{alt}</span> : undefined}
+        />
+      </span>
+    );
+  }
+  return (
+    <img
+      src={dataUrl}
+      alt={alt}
+      className="my-[var(--chat-md-gap-xs)] max-h-[420px] max-w-full rounded border border-edge/60 align-middle"
+    />
+  );
+}
+
+/**
+ * Preserve local-file paths in link/image URLs. react-markdown's default
+ * sanitizer treats `D:/...` as an unknown protocol (`d`) and `file://` as
+ * unsafe, rewriting BOTH to "" — the anchor then carries `href=""` and
+ * clicking it re-opens the app's own origin (dev: http://localhost:5173/)
+ * in the system browser via the main window's window-open guard. Web URLs
+ * keep the default behavior (http/https/mailto preserved, `javascript:` etc.
+ * stripped).
+ */
+function urlTransform(url: string): string {
+  if (isLocalFileHref(url)) return url;
+  return defaultUrlTransform(url);
+}
+
+/**
  * Vestigial: formerly consumed by the `text` component override (now removed)
  * to skip path linkification inside code. Code-context skipping now happens
  * in the `rehypeSkillInline` plugin via {@link isCodeElement}. Kept because
@@ -420,11 +538,66 @@ function buildComponents(): Components {
   },
 
   a({ children, href }) {
+    const projectPath = useContext(MarkdownProjectContext);
+    const baseDir = useContext(MarkdownBaseDirContext);
+    const raw = (href ?? "").trim();
+    // Sanitized-away href (e.g. `javascript:`): an `<a href="">` would navigate
+    // the app's own origin on click — render a non-navigating span instead.
+    if (!raw) {
+      return <span className="text-info underline">{children}</span>;
+    }
+    // Local file path (drive-letter / file:// / scheme-less): resolve and open
+    // in the IDE instead of navigating — see fileLink.ts. In a base-dir
+    // context (md preview) relative refs resolve against the previewed file's
+    // directory so the exact sibling file opens instead of a search match.
+    if (isLocalFileHref(raw)) {
+      const path = fileHrefToPath(raw);
+      const token =
+        baseDir && !isAbsolutePath(path) ? resolveRelativePath(baseDir, path) : path;
+      return (
+        <FileLink
+          token={token}
+          projectPath={projectPath}
+          asLink
+          display={<span className="text-info underline hover:opacity-80">{children}</span>}
+        />
+      );
+    }
     return (
       <a href={href} target="_blank" rel="noreferrer" className="text-info underline hover:text-info">
         {children}
       </a>
     );
+  },
+  // Local-path images can't be loaded by the webview (drive-letter "scheme"
+  // / file:// / relative refs are not fetchable). With a base directory (md
+  // preview) resolve against it and render inline via file.readBinary; in
+  // chat (no base dir) render a clickable file chip that opens the IDE's
+  // image preview. Web images pass through untouched.
+  img({ src, alt }) {
+    const projectPath = useContext(MarkdownProjectContext);
+    const baseDir = useContext(MarkdownBaseDirContext);
+    const raw = (src ?? "").trim();
+    if (isLocalFileHref(raw)) {
+      const path = fileHrefToPath(raw);
+      const absolute =
+        baseDir && !isAbsolutePath(path) ? resolveRelativePath(baseDir, path) : path;
+      if (baseDir) {
+        return (
+          <MarkdownLocalImage filePath={absolute} projectPath={projectPath ?? null} alt={alt ?? ""} />
+        );
+      }
+      return (
+        <span className="my-[var(--chat-md-gap-xs)] inline-flex max-w-full items-center gap-1 rounded border border-edge/60 bg-surface-muted/60 px-1.5 py-0.5 align-middle text-content-muted [font-size:var(--chat-fs-xs)]">
+          <FileLink
+            token={absolute}
+            projectPath={projectPath}
+            display={alt ? <span className="text-info underline">{alt}</span> : undefined}
+          />
+        </span>
+      );
+    }
+    return <img src={src} alt={alt ?? ""} />;
   },
   ul({ children }) {
     return <ul className="my-[var(--chat-md-gap-sm)] list-disc space-y-[var(--chat-md-gap-xs)] pl-5 text-content-muted marker:text-content-subtle">{children}</ul>;
@@ -485,6 +658,7 @@ export const Markdown = memo(function Markdown({
   children,
   projectPath,
   skillNames,
+  baseDir,
 }: {
   children: string;
   /** Project root — reserved for future inline file-path linkification.
@@ -495,6 +669,11 @@ export const Markdown = memo(function Markdown({
    *  `/name` in this text. Passed to the `rehypeSkillInline` plugin which
    *  transforms matching text nodes at the hast level. */
   skillNames?: ReadonlyArray<string>;
+  /** Absolute directory that relative local paths in links/images resolve
+   *  against (the previewed .md file's directory). When set, local images
+   *  render INLINE (loaded via file.readBinary) and relative links open the
+   *  exact sibling file; leave unset for chat output. */
+  baseDir?: string | null;
 }) {
   // Build a single regex matching any known `/skillName` at its boundary.
   // Sorted longest-first so a skill named `pdf` doesn't shadow `pdf-generator`.
@@ -529,9 +708,18 @@ export const Markdown = memo(function Markdown({
     <div
       className="chat-md break-words text-content [font-size:var(--chat-font-size)] [line-height:var(--chat-md-leading)] [font-weight:var(--chat-font-weight)] [&>p]:my-[var(--chat-md-gap-sm)] [&>:first-child]:mt-0 [&>:last-child]:mb-0"
     >
-      <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={rehypePlugins} components={components}>
-        {children}
-      </ReactMarkdown>
+      <MarkdownProjectContext.Provider value={projectPath ?? null}>
+        <MarkdownBaseDirContext.Provider value={baseDir ?? null}>
+          <ReactMarkdown
+            remarkPlugins={[remarkGfm, remarkMath]}
+            rehypePlugins={rehypePlugins}
+            urlTransform={urlTransform}
+            components={components}
+          >
+            {children}
+          </ReactMarkdown>
+        </MarkdownBaseDirContext.Provider>
+      </MarkdownProjectContext.Provider>
     </div>
   );
 });

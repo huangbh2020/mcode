@@ -124,15 +124,39 @@ function normalizeRel(p: string): string {
   return s;
 }
 
-/** Read the list of known project root paths from the store (non-reactive). */
-function knownProjectRoots(): string[] {
-  return useSessionStore.getState().projects.map((p) => p.path);
+/**
+ * All filesystem roots a chat-emitted path may legally open: registered
+ * project roots plus every known worktree checkout (session-bound paths and
+ * the per-repo git worktree probe). Mirrors the main-side workspace-root
+ * guard — without the worktree roots, absolute paths emitted by a worktree
+ * session (its cwd IS the worktree) would resolve to "no match".
+ */
+function knownWorkspaceRoots(): string[] {
+  const s = useSessionStore.getState();
+  const roots: string[] = [];
+  for (const p of s.projects) {
+    if (p.path) roots.push(p.path);
+  }
+  const pushSessionRoots = (sessions: ReadonlyArray<{ worktreePath?: string | null }>) => {
+    for (const sess of sessions) {
+      if (sess.worktreePath) roots.push(sess.worktreePath);
+    }
+  };
+  for (const list of Object.values(s.sessionsByProject)) pushSessionRoots(list ?? []);
+  pushSessionRoots(s.pinnedSessions);
+  pushSessionRoots(s.streamSessions);
+  for (const info of Object.values(s.worktreeInfoByRepo)) {
+    for (const wt of info.worktrees) {
+      if (wt.path) roots.push(wt.path);
+    }
+  }
+  return roots;
 }
 
-/** True if `absPath` is contained by one of the known project roots. */
+/** True if `absPath` is contained by one of the known project/worktree roots. */
 function isUnderKnownProject(absPath: string): boolean {
   const norm = absPath.replace(/\\/g, "/");
-  for (const root of knownProjectRoots()) {
+  for (const root of knownWorkspaceRoots()) {
     const r = root.replace(/\\/g, "/").replace(/\/+$/, "");
     if (!r) continue;
     if (norm === r || norm.startsWith(r + "/")) return true;
@@ -143,6 +167,62 @@ function isUnderKnownProject(absPath: string): boolean {
 /** True if `token` is an absolute path (POSIX or Windows drive). */
 export function isAbsolutePath(token: string): boolean {
   return token.startsWith("/") || /^[A-Za-z]:[\\/]/.test(token);
+}
+
+/**
+ * True when a markdown `href` should be treated as a local file path rather
+ * than a web URL: `file://` URIs, scheme-less paths (absolute, relative, or
+ * UNC), and single-letter "schemes" (Windows drives: `D:/x`, `D:\x`). Real
+ * web schemes (http/https/mailto/…) return false and keep the default
+ * external-open flow; `#fragment` and empty hrefs return false.
+ */
+export function isLocalFileHref(href: string): boolean {
+  const h = href.trim();
+  if (!h || h.startsWith("#")) return false;
+  if (/^file:\/\//i.test(h)) return true;
+  const scheme = /^([A-Za-z][A-Za-z0-9+.-]*):/.exec(h);
+  if (!scheme) return true; // no scheme -> path (docs/x.md, ./x.md, /a/b, \\srv\share)
+  return scheme[1].length === 1; // single-letter scheme = drive letter
+}
+
+/**
+ * Percent-decode `s`, tolerating sequences that aren't valid encoding: runs of
+ * consecutive `%XX` groups are decoded as one UTF-8 unit (`%E5%B0%8F` -> 小),
+ * while malformed runs (a literal `%of` in a filename) are kept verbatim
+ * instead of aborting the whole string like `decodeURIComponent` would.
+ */
+function decodePercentLenient(s: string): string {
+  return s.replace(/(?:%[0-9A-Fa-f]{2})+/g, (run) => {
+    try {
+      return decodeURIComponent(run);
+    } catch {
+      return run;
+    }
+  });
+}
+
+/**
+ * Convert a markdown href into a filesystem path (pure, no IPC).
+ *
+ * Two things to undo:
+ *  - `file://` URIs: strip the `file://[host]` prefix and the extra leading
+ *    slash of drive URIs (`file:///D:/x` -> `D:/x`).
+ *  - Percent-encoding: the markdown pipeline encodes non-ASCII in URLs at the
+ *    hast layer (mdast-util-to-hast -> normalizeUri), so a Chinese filename
+ *    arrives as `Mcode-%E5%B0%8F….md` and no filesystem lookup would match.
+ *    Decode before resolving; stray `%` runs that aren't valid encoding keep
+ *    the raw form.
+ */
+export function fileHrefToPath(href: string): string {
+  let h = href.trim();
+  if (/^file:\/\//i.test(h)) {
+    h = h.replace(/^file:\/\/(?:localhost)?/i, "");
+    if (/^\/[A-Za-z]:[\\/]/.test(h)) h = h.slice(1);
+  }
+  if (h.includes("%")) {
+    h = decodePercentLenient(h);
+  }
+  return h;
 }
 
 /**
