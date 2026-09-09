@@ -133,6 +133,13 @@ export function App() {
   const bottomTerminalOpen = useSessionStore((s) => s.bottomTerminalOpen);
   const setBottomTerminalOpen = useSessionStore((s) => s.setBottomTerminalOpen);
   const widePanelOpen = useSessionStore((s) => s.widePanelOpen);
+  // Wide-panel (3:7) split share + its resize/reset actions. The wide mode
+  // reuses the layout's right aside (percentage width) instead of mounting a
+  // second RightPanel inside the center column, so toggling wide never
+  // unmounts the right panel (file tree, git scan, browser view ownership).
+  const widePanelPct = useSessionStore((s) => s.widePanelPct);
+  const adjustWidePanelPct = useSessionStore((s) => s.adjustWidePanelPct);
+  const resetWidePanelPct = useSessionStore((s) => s.resetWidePanelPct);
 
   /** Draggable pane sizes + resize actions (from the store; persisted). */
   const leftWidthPct = useSessionStore((s) => s.leftWidthPct);
@@ -174,6 +181,18 @@ export function App() {
     if (w <= 0) return;
     adjustLeftWidthPct((deltaPx / w) * 100);
   };
+  // Wide mode: the layout's center|right divider drives the wide split. Same
+  // px→percentage-points conversion as handleLeftResize — wide mode forces
+  // the left sidebar closed (store guard), so the window width IS the layout
+  // row width that widePanelPct is a share of. The sign flip (dragging right
+  // shrinks the right panel) lives in adjustWidePanelPct.
+  const handleWidePanelResize = (deltaPx: number) => {
+    const el = rootRef.current;
+    if (!el) return;
+    const w = el.getBoundingClientRect().width;
+    if (w <= 0) return;
+    adjustWidePanelPct((deltaPx / w) * 100);
+  };
 
   return (
     // bg-surface-muted (matching the sidebar/toolbar/track) so the left
@@ -203,36 +222,35 @@ export function App() {
         the sidebar and the toolbar/track share the same muted surface, a
         hairline would cut the continuous frame; the resize cursor is the
         affordance) and double-click resets to the default. Wide-panel mode
-        forces leftOpen=false in the store, so the aside hides itself without
-        special-casing here. While the settings view is open the aside is
-        hidden via CSS (`hidden`, stays mounted to preserve scroll) so
-        settings renders FULL-WIDTH below the toolbar instead of only over
-        the right column.
+        forces leftOpen=false in the store — the aside responds by CSS-hiding
+        (below), NOT unmounting, so toggling wide never cold-rebuilds the
+        project tree / stream list (which would refetch sessions via IPC).
+        While the settings view is open the aside is hidden via CSS too
+        (stays mounted to preserve scroll) so settings renders FULL-WIDTH
+        below the toolbar instead of only over the right column.
         bg-surface-muted matches the toolbar to the right and the panel track,
         so all three read as one continuous frame — no right-edge rounding;
         rounded-tl alone carries the window-corner arc on macOS.
       */}
-      {leftOpen && (
-        <aside
-          className={cn(
-            // min-w-0 kills the flex `min-width: auto` content floor —
-            // without it the widest nowrap row in LeftBar (e.g. a long
-            // session title, which contributes its full text width to
-            // min-content) propped the aside open no matter how small
-            // leftWidthPct got.
-            "flex h-full min-w-0 shrink-0 flex-col rounded-tl-3xl bg-surface-muted",
-            settingsOpen && "hidden",
-          )}
-          style={{ flexGrow: 0, flexBasis: `${leftWidthPct}%` }}
-        >
-          <div className="min-h-0 flex-1 overflow-y-auto">
-            {/* Left-bar view preference: classic project tree or the
-                session-first stream. Both are pure renderers over the same
-                store; switching keeps running turns untouched. */}
-            {leftBarMode === "stream" ? <StreamSidebar /> : <LeftBar />}
-          </div>
-        </aside>
-      )}
+      <aside
+        className={cn(
+          // min-w-0 kills the flex `min-width: auto` content floor —
+          // without it the widest nowrap row in LeftBar (e.g. a long
+          // session title, which contributes its full text width to
+          // min-content) propped the aside open no matter how small
+          // leftWidthPct got.
+          "flex h-full min-w-0 shrink-0 flex-col rounded-tl-3xl bg-surface-muted",
+          (!leftOpen || settingsOpen) && "hidden",
+        )}
+        style={{ flexGrow: 0, flexBasis: `${leftWidthPct}%` }}
+      >
+        <div className="min-h-0 flex-1 overflow-y-auto">
+          {/* Left-bar view preference: classic project tree or the
+              session-first stream. Both are pure renderers over the same
+              store; switching keeps running turns untouched. */}
+          {leftBarMode === "stream" ? <StreamSidebar /> : <LeftBar />}
+        </div>
+      </aside>
       {leftOpen && !settingsOpen && (
         <Divider
           orientation="vertical"
@@ -283,19 +301,31 @@ export function App() {
             on its side; the center pane (bg-surface) separates from the
             track by the flat color step alone (no shadow). */}
         <div className="relative flex min-h-0 flex-1 bg-surface-muted">
+          {/*
+            Center is ONE stable tree across wide mode (CenterPane takes the
+            wide flag as a render variation) — the old ternary swap
+            `<WidePanelSplit/> : <CenterPane/>` remounted every ChatPane
+            (Tiptap, timeline) + the whole right panel on each toggle, which
+            read as a lag. Wide mode only re-shapes the layout: the right
+            aside switches to the percentage share (rightWidthPct) and stays
+            open (setWidePanelOpen forces rightOpen=true on enter and
+            restores the snapshot on exit), so RightPanel — file tree, git
+            scan, browser view ownership — is never torn down.
+          */}
           <ThreePaneLayout
             left={null}
-            center={widePanelOpen ? <WidePanelSplit /> : <CenterPane />}
+            center={<CenterPane wide={widePanelOpen} />}
             right={<RightPanel />}
             leftOpen={false}
-            rightOpen={widePanelOpen ? false : rightOpen}
+            rightOpen={rightOpen}
             bottomTerminal={<BottomTerminalBar active={bottomTerminalOpen} />}
             bottomTerminalOpen={bottomTerminalOpen}
             rightWidth={rightWidth}
+            rightWidthPct={widePanelOpen ? widePanelPct : undefined}
             bottomTerminalHeight={bottomTerminalHeight}
-            onResizeRight={adjustRightWidth}
+            onResizeRight={widePanelOpen ? handleWidePanelResize : adjustRightWidth}
             onResizeBottomTerminal={adjustBottomTerminalHeight}
-            onResetRight={resetRightWidth}
+            onResetRight={widePanelOpen ? resetWidePanelPct : resetRightWidth}
             onResetBottomTerminal={resetBottomTerminalHeight}
           />
           {/* Git diff dialog (the "dialog" open-mode). Portaled to <body>;
@@ -348,13 +378,19 @@ export function App() {
  *  mode keeps the legacy layout: a horizontal split between the chat column
  *  (left) and the file-editor column (right), where the editor column only
  *  appears when a file or plan tab is open (see the design notes in
- *  docs/tech-stack.md). */
-function CenterPane() {
+ *  docs/tech-stack.md).
+ *
+ *  `wide` (wide-panel 3:7 mode) is a RENDER VARIATION, not a different tree:
+ *  the same components stay mounted and only the editor surface is hidden
+ *  (the plan opens as the WidePlanDialog overlay instead). Toggling wide is
+ *  a relayout, never a remount — the chat panes (Tiptap composers, scroll,
+ *  drafts) and everything else below this point survive the toggle. */
+function CenterPane({ wide }: { wide: boolean }) {
   const displayMode = useSessionStore((s) => s.displayMode);
   if (displayMode === "tabs") {
-    return <UnifiedTabbedPane />;
+    return <UnifiedTabbedPane wide={wide} />;
   }
-  return <SplitCenterPane />;
+  return <SplitCenterPane wide={wide} />;
 }
 
 /** `tabs` displayMode: ONE tab bar (UnifiedTabsBar) mixing session tabs and
@@ -363,8 +399,16 @@ function CenterPane() {
  *  for whichever view is active). All open tabs' ChatPanes stay mounted and
  *  are backgrounded via CSS (`hidden`) so drafts / scroll / undo survive
  *  focus flips (same keep-alive trick the old tabs-mode chat column used);
- *  the editor column mounts only while an editor tab holds the focus. */
-function UnifiedTabbedPane() {
+ *  the editor column mounts only while an editor tab holds the focus.
+ *
+ *  In wide mode the editor has no surface (the plan opens as the
+ *  WidePlanDialog overlay instead), so the strip swaps to the session-only
+ *  SessionTabs (file tabs would be dead controls) and an editor tab holding
+ *  the focus keeps its host mounted but `hidden` — the editor host is a
+ *  SIBLING of the pane host, so the strip swap and the hide never remount
+ *  the ChatPanes below. Monaco therefore survives the wide toggle and
+ *  re-shows instantly on exit. */
+function UnifiedTabbedPane({ wide }: { wide: boolean }) {
   // The active file is scoped to the active project - switching projects
   // swaps to that project's open files (or hides the editor if none).
   const activeProjectId = useSessionStore((s) => s.activeProjectId);
@@ -382,26 +426,40 @@ function UnifiedTabbedPane() {
   // closed by a path that didn't recompute the flag) fall back to the chat
   // instead of showing an empty editor.
   const showEditor = centerTabFocus === "editor" && (!!activeFile || planTabActive);
+  // Wide mode: only a FILE editor stays mounted (hidden keep-alive). A plan
+  // tab's surface is owned by the WidePlanDialog overlay — keeping a second
+  // hidden PlanViewer here would double the markdown/Monaco work on every
+  // streamed plan update. Visible only when not wide; the chat pane is the
+  // wide-mode surface, matching isSessionChatOnScreen's wide semantics.
+  const editorMounted = showEditor && !(wide && !activeFile);
+  const editorVisible = showEditor && !wide;
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <UnifiedTabsBar />
+      {wide ? <SessionTabs /> : <UnifiedTabsBar />}
       <div className="relative min-h-0 flex-1">
         {openTabs.map((sid) => (
           <div
             key={sid}
             className={cn(
               "absolute inset-0",
-              sid === activeSessionId && !showEditor ? "" : "hidden",
+              sid === activeSessionId && !editorVisible ? "" : "hidden",
             )}
           >
-            <ChatPane sessionId={sid} isActive={sid === activeSessionId && !showEditor} />
+            <ChatPane sessionId={sid} isActive={sid === activeSessionId && !editorVisible} />
           </div>
         ))}
-        {showEditor && (
-          <div className="absolute inset-0 flex min-h-0 flex-col">
+        {editorMounted && (
+          <div
+            className={cn(
+              "absolute inset-0 flex min-h-0 flex-col",
+              !editorVisible && "hidden",
+            )}
+          >
             {/* hideTabsBar: the unified bar above already shows the file
-                tabs — a second OpenTabsBar would duplicate them. */}
+                tabs — a second OpenTabsBar would duplicate them. In wide
+                mode the strip is SessionTabs, and the hidden host renders
+                no bar at all. */}
             <EditorColumn filePath={activeFile} hideTabsBar />
           </div>
         )}
@@ -415,8 +473,13 @@ function UnifiedTabbedPane() {
  *  column is omitted and the chat column takes the full width — the layout
  *  the user sees when they haven't clicked any files yet. The editor column
  *  hosts the Monaco FileEditor + its own tab bar (OpenTabsBar), and is only
- *  rendered when `ideActiveFile` is non-null. */
-function SplitCenterPane() {
+ *  rendered when `ideActiveFile` is non-null.
+ *
+ *  Wide mode CSS-hides the editor column (keep-alive) and lets the chat fill
+ *  the center — the right panel lives in the layout's aside beside it. Both
+ *  columns are siblings of the same flex row, so the hide is a class flip,
+ *  never a remount. */
+function SplitCenterPane({ wide }: { wide: boolean }) {
   // The active file is scoped to the active project - switching projects
   // swaps to that project's open files (or hides the editor if none).
   const activeProjectId = useSessionStore((s) => s.activeProjectId);
@@ -433,8 +496,12 @@ function SplitCenterPane() {
 
   // The editor column is visible when EITHER a file is active OR the plan tab
   // is active. (The plan tab's mere existence in the bar doesn't force the
-  // editor visible - only when it's the active tab.)
-  const editorVisible = !!activeFile || planTabActive;
+  // editor visible - only when it's the active tab.) Wide mode keeps a FILE
+  // editor mounted but `hidden` (keep-alive, same trick as the chat panes) so
+  // exiting wide restores it without a Monaco rebuild; a plan tab's surface
+  // is owned by the WidePlanDialog overlay, so no second hidden PlanViewer.
+  const editorMounted = (!!activeFile || planTabActive) && !(wide && !activeFile);
+  const editorVisible = editorMounted && !wide;
 
   // Draggable chat|editor split. The editor column's share is a persisted
   // percentage; the chat column gets the remainder. The Divider reports a px
@@ -468,8 +535,8 @@ function SplitCenterPane() {
       >
         <ChatColumn />
       </div>
-      {/* Divider between chat and editor - only when the editor column is
-          visible (a file or plan is active). */}
+      {/* Divider between chat and editor - only while the editor column is
+          actually visible (a hidden keep-alive column gets no handle). */}
       {editorVisible && (
         <Divider
           orientation="vertical"
@@ -477,12 +544,15 @@ function SplitCenterPane() {
           onDoubleClick={resetEditorWidthPct}
         />
       )}
-      {/* Editor column - visible when a file or plan tab is open. Always
-          rendered through EditorColumn (which includes the tab bar + either
-          FileEditor or PlanViewer based on which tab is active). */}
-      {editorVisible && (
+      {/* Editor column - mounted while a file or plan tab is open; wide mode
+          keeps it mounted but `hidden` (flexBasis is inert under display:none,
+          the chat's flexGrow:1 above takes the full width). */}
+      {editorMounted && (
         <div
-          className="flex min-w-0 flex-col border-l border-edge-panel bg-surface"
+          className={cn(
+            "flex min-w-0 flex-col border-l border-edge-panel bg-surface",
+            !editorVisible && "hidden",
+          )}
           style={{ flexGrow: 0, flexBasis: `${editorWidthPct}%` }}
         >
           <EditorColumn filePath={activeFile} />
@@ -576,66 +646,6 @@ function ChatColumn() {
           <ChatPane sessionId={sid} isActive={sid === activeSessionId} />
         </div>
       ))}
-    </div>
-  );
-}
-
-/** Wide-panel (3:7) split — the chat column (3) on the left and the full
- *  right panel (7) on the right, shown while `widePanelOpen`. Replaces the
- *  ThreePaneLayout center+right composition entirely: the left sidebar is
- *  hidden and the center editor column never renders here. The split is
- *  draggable (percentage-based, same pattern as the chat|editor split);
- *  double-click resets to the default 3:7. */
-function WidePanelSplit() {
-  const widePanelPct = useSessionStore((s) => s.widePanelPct);
-  const rightOpen = useSessionStore((s) => s.rightOpen);
-  const adjustWidePanelPct = useSessionStore((s) => s.adjustWidePanelPct);
-  const resetWidePanelPct = useSessionStore((s) => s.resetWidePanelPct);
-  const splitRef = useRef<HTMLDivElement>(null);
-
-  // Convert a px drag delta into a percentage-point delta relative to the
-  // container width (the sign flip lives in adjustWidePanelPct).
-  const handleResize = (deltaPx: number) => {
-    const el = splitRef.current;
-    if (!el) return;
-    const w = el.getBoundingClientRect().width;
-    if (w <= 0) return;
-    adjustWidePanelPct((deltaPx / w) * 100);
-  };
-
-  // The titlebar right-panel toggle drives `rightOpen`. While hidden in wide
-  // mode the right column is omitted and the chat takes the full width.
-  if (!rightOpen) {
-    return (
-      <div ref={splitRef} className="flex h-full min-h-0">
-        <div className="flex min-w-0 flex-1 flex-col">
-          <ChatColumn />
-        </div>
-      </div>
-    );
-  }
-
-  return (
-    <div ref={splitRef} className="flex h-full min-h-0">
-      {/* Chat column - the left share. ChatColumn keeps its single/tabs mode. */}
-      <div
-        className="flex min-w-0 flex-col"
-        style={{ flexGrow: 0, flexBasis: `${100 - widePanelPct}%` }}
-      >
-        <ChatColumn />
-      </div>
-      <Divider
-        orientation="vertical"
-        onResize={handleResize}
-        onDoubleClick={resetWidePanelPct}
-      />
-      {/* Right panel - the right share (files/git/browser tabs). */}
-      <div
-        className="flex min-w-0 flex-col border-l border-edge-panel bg-surface"
-        style={{ flexGrow: 0, flexBasis: `${widePanelPct}%` }}
-      >
-        <RightPanel />
-      </div>
     </div>
   );
 }

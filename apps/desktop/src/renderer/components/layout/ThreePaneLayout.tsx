@@ -19,6 +19,12 @@ interface Props {
    *  Optional — SettingsPage reuses this shell without drag handles. */
   leftWidth?: number;
   rightWidth?: number;
+  /** Wide-panel mode: the right panel's share as a percentage of the layout
+   *  row. When set it overrides rightWidth — wide mode keeps the SAME
+   *  RightPanel instance in this aside (no unmount/remount) and only
+   *  re-shapes it; the onResize/onReset callbacks switch to the wide split's
+   *  percentage-based handlers. */
+  rightWidthPct?: number;
   bottomTerminalHeight?: number;
   onResizeLeft?: (deltaPx: number) => void;
   onResizeRight?: (deltaPx: number) => void;
@@ -52,6 +58,7 @@ export function ThreePaneLayout({
   bottomTerminalOpen = false,
   leftWidth,
   rightWidth,
+  rightWidthPct,
   bottomTerminalHeight,
   onResizeLeft,
   onResizeRight,
@@ -137,7 +144,7 @@ export function ThreePaneLayout({
       {rightOpen && (
         <aside
           className="flex h-full shrink-0 flex-col overflow-hidden border-t border-edge-panel bg-surface"
-          style={{ width: rightWidth }}
+          style={{ width: rightWidthPct !== undefined ? `${rightWidthPct}%` : rightWidth }}
         >
           <div className="min-h-0 flex-1 overflow-hidden border-l border-edge-panel/60">{right}</div>
         </aside>
