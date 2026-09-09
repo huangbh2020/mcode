@@ -35,6 +35,7 @@ import { resolveGitBash } from "@main/lib/binaryResolve.js";
 import { samePath } from "@main/lib/pathGuard.js";
 import { getMcpManagement, readProjectMcpServers } from "@main/lib/mcpConfig.js";
 import { getOutputStyleSetting } from "@main/lib/outputStyleConfig.js";
+import { getEnabledPlugins, getPluginMcpServers } from "@main/plugins/pluginManager.js";
 import { resolveSubagentModelValue } from "@main/lib/subagentModel.js";
 import { normalizeBashCommand } from "@main/lib/msysPath.js";
 import {
@@ -1180,6 +1181,42 @@ export class ClaudeAgentSdkProvider implements AgentProvider {
         ...(typeof options.settings === "object" ? options.settings : {}),
         outputStyle,
       };
+    }
+
+    // --- Plugins (settings → Plugins; docs/plugin-feasibility.md v1) ---
+    // Enabled plugins ride the SDK's native loader: skills/commands/agents
+    // are assembled by the CLI engine per turn (zero host-side copying). Two
+    // host-side rails:
+    //  1. skipMcpDiscovery — Mcode owns plugin MCP connections and injects
+    //     them into options.mcpServers below under "<plugin>__<server>"
+    //     (session-level granularity; the MCP panel lists/toggles them).
+    //  2. disableAllHooks — v1 runs NO plugin hooks. Hooks would otherwise
+    //     be executed natively by the CLI engine; they are parsed + shown in
+    //     the panel, never run (per-hook review is the v1.5 plan).
+    const enabledPlugins = await getEnabledPlugins();
+    if (enabledPlugins.length > 0) {
+      options.plugins = enabledPlugins.map((p) => ({
+        type: "local" as const,
+        path: p.rootDir,
+        skipMcpDiscovery: true,
+      }));
+      if (enabledPlugins.some((p) => p.hasHooks)) {
+        options.settings = {
+          ...(typeof options.settings === "object" ? options.settings : {}),
+          disableAllHooks: true,
+        };
+      }
+      const pluginMcp = await getPluginMcpServers();
+      if (pluginMcp.length > 0) {
+        const servers = options.mcpServers ?? {};
+        for (const [name, config] of pluginMcp) {
+          // Contracts McpServerConfig is transport-shape-compatible with the
+          // SDK's McpServerConfig union (stdio/http/sse); the cast is for the
+          // passthrough extras the SDK type doesn't model.
+          servers[name] = config as unknown as NonNullable<Options["mcpServers"]>[string];
+        }
+        options.mcpServers = servers;
+      }
     }
 
     const gate = makeSettleGate();

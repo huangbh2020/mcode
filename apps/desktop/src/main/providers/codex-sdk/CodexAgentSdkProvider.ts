@@ -425,10 +425,12 @@ export class CodexAgentSdkProvider implements AgentProvider {
         ctx.onProviderSessionId?.(threadId);
 
         // Register Mcode's skill roots so the model can invoke user/project
-        // skills ($name). Best-effort: failure only means no skills.
+        // skills ($name), plus the skills directories of ENABLED plugins
+        // (settings → Plugins). Best-effort: failure only means no skills.
         try {
+          const { getEnabledPluginSkillRoots } = await import("@main/plugins/pluginManager.js");
           await client.request("skills/extraRoots/set", {
-            extraRoots: skillRootsFor(req.cwd),
+            extraRoots: [...skillRootsFor(req.cwd), ...(await getEnabledPluginSkillRoots())],
           });
         } catch (err) {
           ctx.log.warn(`codex: skills/extraRoots/set failed: ${(err as Error).message}`);

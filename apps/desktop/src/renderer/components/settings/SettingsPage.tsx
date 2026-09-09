@@ -19,6 +19,7 @@ import {
   IconMicrophone,
   IconHandMove,
   IconPackage,
+  IconPuzzle,
   McpIcon,
   type TablerIconProps,
 } from "@renderer/lib/icons.js";
@@ -26,6 +27,7 @@ import { CustomModelsPanel } from "./CustomModelsPanel.js";
 import { RuntimesPanel } from "./RuntimesPanel.js";
 import { SkillsPanel } from "./SkillsPanel.js";
 import { McpPanel } from "./McpPanel.js";
+import { PluginsPanel } from "./PluginsPanel.js";
 import { AppearancePanel } from "./AppearancePanel.js";
 import { ShortcutsPanel } from "./ShortcutsPanel.js";
 import { GesturesPanel } from "./GesturesPanel.js";
@@ -55,7 +57,7 @@ import { AboutPanel } from "./AboutPanel.js";
  * Note: the legacy “Claude CLI 路径” panel was removed - the Agent SDK bundles
  * its own claude binary, so an externally-configured path is no longer used.
  */
-type SectionId = "general" | "runtimes" | "custom-models" | "skills" | "mcp" | "appearance" | "shortcuts" | "gestures" | "voice" | "notifications" | "git" | "terminal" | "browser" | "lsp-languages" | "usage" | "about";
+type SectionId = "general" | "runtimes" | "custom-models" | "skills" | "mcp" | "plugins" | "appearance" | "shortcuts" | "gestures" | "voice" | "notifications" | "git" | "terminal" | "browser" | "lsp-languages" | "usage" | "about";
 
 interface NavItem {
   id: SectionId;
@@ -90,6 +92,7 @@ const NAV_GROUPS: NavGroup[] = [
       { id: "custom-models", labelKey: "settings.nav.customModels", icon: IconRobot },
       { id: "skills", labelKey: "settings.nav.skills", icon: IconSparkles },
       { id: "mcp", labelKey: "settings.nav.mcp", icon: McpIcon },
+      { id: "plugins", labelKey: "settings.nav.plugins", icon: IconPuzzle },
     ],
   },
   {
@@ -226,6 +229,7 @@ export function SettingsPage() {
           {active === "skills" && <SkillsPanel />}
           {active === "runtimes" && <RuntimesPanel />}
           {active === "mcp" && <McpPanel />}
+          {active === "plugins" && <PluginsPanel />}
           {active === "notifications" && <NotificationsPanel />}
           {active === "git" && <GitPanel />}
           {active === "terminal" && <TerminalPanel />}

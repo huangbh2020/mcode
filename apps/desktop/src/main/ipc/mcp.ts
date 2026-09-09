@@ -22,6 +22,10 @@ import {
 import { ProjectRepo } from "@main/store/repositories.js";
 import { samePath } from "@main/lib/pathGuard.js";
 import {
+  listPluginMcpPanelEntries,
+  setPluginMcpDisabled,
+} from "@main/plugins/pluginManager.js";
+import {
   readUserClaudeJson,
   writeUserClaudeJson,
   mcpServersOf,
@@ -87,6 +91,13 @@ export function registerMcpHandlers(ipcMain: IpcMain): void {
       }
     }
 
+    // Plugin-contributed servers: entries of ENABLED plugins, namespaced
+    // "<plugin>__<server>". The per-server toggle flips the denylist in the
+    // plugins settings; the plugin's own enable switch is the master gate.
+    for (const entry of await listPluginMcpPanelEntries()) {
+      servers.push(entry);
+    }
+
     // Built-in in-process browser server.
     servers.push({
       name: MCP_RESERVED_NAME,
@@ -97,7 +108,7 @@ export function registerMcpHandlers(ipcMain: IpcMain): void {
     });
 
     servers.sort((a, b) =>
-      a.scope === b.scope ? a.name.localeCompare(b.name) : a.scope === "user" ? -1 : b.scope === "user" ? 1 : a.scope === "project" ? -1 : 1,
+      a.scope === b.scope ? a.name.localeCompare(b.name) : a.scope === "user" ? -1 : b.scope === "user" ? 1 : a.scope === "project" ? -1 : b.scope === "plugin" ? -1 : 1,
     );
     return { servers };
   });
@@ -111,6 +122,13 @@ export function registerMcpHandlers(ipcMain: IpcMain): void {
         state.browserDisabled = !input.enabled;
         saveMcpManagement(state);
         return { ok: true };
+      }
+
+      if (input.scope === "plugin") {
+        // Plugin-contributed server: flip its entry on the plugins.mcpDisabled
+        // denylist. The config itself lives in the plugin tree and is never
+        // rewritten here.
+        return setPluginMcpDisabled(input.name, !input.enabled);
       }
 
       if (input.scope === "project") {

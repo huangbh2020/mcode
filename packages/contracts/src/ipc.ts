@@ -13,6 +13,70 @@ import type { CodexProviderPublic } from "./codexModel.js";
 import type { ThemeName, EffectiveTheme, ThemeChangedMessage } from "./theme.js";
 import type { PairingStartResult, PairedDevice } from "./mobile.js";
 import type { RelayStatus, RelayVpsConfig, RelayVpsConfigInput } from "./relay.js";
+import type {
+  PluginState,
+  PluginMarketplaceState,
+  PluginsInstallLocalInput,
+  PluginsInstallGitInput,
+  PluginsInstallMarketplaceInput,
+  PluginsSetEnabledInput,
+  PluginsRemoveInput,
+  PluginsMarketplaceAddInput,
+  PluginsMarketplaceRemoveInput,
+  PluginsMarketplaceRefreshInput,
+} from "./plugin.js";
+
+// Re-export the plugin contracts so consumers can import from "@contracts/ipc"
+// (mirrors the relay.ts pattern).
+export {
+  PLUGINS_ENABLED_SETTING_KEY,
+  PLUGINS_MARKETPLACES_SETTING_KEY,
+  PLUGINS_MCP_DISABLED_SETTING_KEY,
+  PLUGIN_MANIFEST_DIRS,
+  PLUGIN_NAME_RE,
+  PluginManifestSchema,
+  PluginMarketEntrySourceSchema,
+  PluginMarketEntrySchema,
+  PluginMarketplaceManifestSchema,
+  PluginsListSchema,
+  PluginsInstallLocalSchema,
+  PluginsInstallGitSchema,
+  PluginsInstallMarketplaceSchema,
+  PluginsSetEnabledSchema,
+  PluginsRemoveSchema,
+  PluginsMarketplaceListSchema,
+  PluginsMarketplaceAddSchema,
+  PluginsMarketplaceRemoveSchema,
+  PluginsMarketplaceRefreshSchema,
+} from "./plugin.js";
+export type {
+  PluginManifest,
+  PluginMarketEntrySource,
+  PluginMarketplaceManifest,
+  PluginSkillSummary,
+  PluginCommandSummary,
+  PluginAgentSummary,
+  PluginHookSummary,
+  PluginMcpKind,
+  PluginMcpServerSummary,
+  PluginComponents,
+  PluginSourceKind,
+  PluginSourceInfo,
+  PluginState,
+  PluginMarketplaceRecord,
+  PluginMarketEntry,
+  PluginMarketplaceState,
+  PluginsListInput,
+  PluginsInstallLocalInput,
+  PluginsInstallGitInput,
+  PluginsInstallMarketplaceInput,
+  PluginsSetEnabledInput,
+  PluginsRemoveInput,
+  PluginsMarketplaceListInput,
+  PluginsMarketplaceAddInput,
+  PluginsMarketplaceRemoveInput,
+  PluginsMarketplaceRefreshInput,
+} from "./plugin.js";
 
 // Re-export relay types so consumers can import from "@contracts/ipc".
 export type {
@@ -2689,8 +2753,11 @@ export interface McpManagementState {
   projectEnabled?: Array<{ projectPath: string; name: string }>;
 }
 
-/** Which source a listed MCP server comes from. */
-export type McpScope = "user" | "project" | "builtin";
+/** Which source a listed MCP server comes from. "plugin" = contributed by an
+ *  enabled plugin (namespaced `<plugin>__<server>`); toggling it flips the
+ *  per-server entry on the plugins.mcpDisabled list without touching the
+ *  plugin's own enable state. */
+export type McpScope = "user" | "project" | "builtin" | "plugin";
 
 /** Transport kind shown in the panel badges; "builtin" = in-process server. */
 export type McpKind = "stdio" | "http" | "sse" | "builtin";
@@ -2714,10 +2781,11 @@ export const McpListSchema = z.object({
 });
 export type McpListInput = z.infer<typeof McpListSchema>;
 
-/** Toggle a server. `projectPath` is required for scope "project". */
+/** Toggle a server. `projectPath` is required for scope "project". Scope
+ *  "plugin" toggles one plugin-contributed server (plugins.mcpDisabled). */
 export const McpToggleSchema = z.object({
   name: z.string().min(1),
-  scope: z.enum(["user", "project", "builtin"]),
+  scope: z.enum(["user", "project", "builtin", "plugin"]),
   projectPath: z.string().optional(),
   enabled: z.boolean(),
 });
@@ -4194,6 +4262,42 @@ export interface RpcMap {
   /** Delete an installed runtime from disk. Rejected while any turn is
    *  running. */
   "runtimes.remove": (input: RuntimesRemoveInput) => Promise<{ ok: boolean; error?: string }>;
+  // ── Plugins (settings panel; docs/plugin-feasibility.md v1) ──
+  /** List installed plugins (manifest + component summaries + enable state).
+   *  Enabled plugins are delivered to providers at the next turn start. */
+  "plugins.list": () => Promise<{ plugins: PluginState[] }>;
+  /** Install from a local plugin directory or .zip. Lands DISABLED; the
+   *  renderer shows the component-review dialog and calls setEnabled. */
+  "plugins.installLocal": (
+    input: PluginsInstallLocalInput,
+  ) => Promise<{ ok: boolean; error?: string; plugin?: PluginState }>;
+  /** Install by shallow-cloning a git repository. Same review flow. */
+  "plugins.installGit": (
+    input: PluginsInstallGitInput,
+  ) => Promise<{ ok: boolean; error?: string; plugin?: PluginState }>;
+  /** Install one entry of a user-added marketplace. Same review flow. */
+  "plugins.installMarketplace": (
+    input: PluginsInstallMarketplaceInput,
+  ) => Promise<{ ok: boolean; error?: string; plugin?: PluginState }>;
+  /** Enable/disable a plugin for subsequent turns. */
+  "plugins.setEnabled": (input: PluginsSetEnabledInput) => Promise<{ ok: boolean; error?: string }>;
+  /** Uninstall every installed version of a plugin. Rejected while any turn
+   *  is running. */
+  "plugins.remove": (input: PluginsRemoveInput) => Promise<{ ok: boolean; error?: string }>;
+  /** List user-added marketplaces with their parsed entries. */
+  "plugins.marketplaceList": () => Promise<{ marketplaces: PluginMarketplaceState[] }>;
+  /** Add a marketplace (git URL or local directory). */
+  "plugins.marketplaceAdd": (
+    input: PluginsMarketplaceAddInput,
+  ) => Promise<{ ok: boolean; error?: string }>;
+  /** Remove a marketplace (cloned tree deleted; installed plugins stay). */
+  "plugins.marketplaceRemove": (
+    input: PluginsMarketplaceRemoveInput,
+  ) => Promise<{ ok: boolean; error?: string }>;
+  /** Re-fetch a marketplace's tree. */
+  "plugins.marketplaceRefresh": (
+    input: PluginsMarketplaceRefreshInput,
+  ) => Promise<{ ok: boolean; error?: string }>;
   // ── Mobile companion (LAN pairing + device management) ──
   /** Begin a pairing session: returns QR URL + 6-digit code + endpoint.
    *  Optional `host` overrides auto-detected LAN IP (for multi-NIC machines
@@ -4465,6 +4569,19 @@ export const IPC = {
   RUNTIMES_INSTALL_LOCAL: "runtimes:installLocal",
   RUNTIMES_REMOVE: "runtimes:remove",
   RUNTIMES_EVENT: "runtimes:event",
+  // Plugins (settings panel): list/install (local/git/marketplace)/enable/
+  // remove + marketplace management. No push channel — every RPC resolves
+  // when done and the panel re-lists.
+  PLUGINS_LIST: "plugins:list",
+  PLUGINS_INSTALL_LOCAL: "plugins:installLocal",
+  PLUGINS_INSTALL_GIT: "plugins:installGit",
+  PLUGINS_INSTALL_MARKETPLACE: "plugins:installMarketplace",
+  PLUGINS_SET_ENABLED: "plugins:setEnabled",
+  PLUGINS_REMOVE: "plugins:remove",
+  PLUGINS_MARKETPLACE_LIST: "plugins:marketplaceList",
+  PLUGINS_MARKETPLACE_ADD: "plugins:marketplaceAdd",
+  PLUGINS_MARKETPLACE_REMOVE: "plugins:marketplaceRemove",
+  PLUGINS_MARKETPLACE_REFRESH: "plugins:marketplaceRefresh",
   // Mobile companion (LAN pairing + device management) — invoke/handle (RPC).
   MOBILE_START_PAIRING: "mobile:startPairing",
   MOBILE_GET_PAIRING: "mobile:getPairing",

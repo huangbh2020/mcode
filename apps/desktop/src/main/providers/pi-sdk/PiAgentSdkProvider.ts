@@ -42,6 +42,7 @@ import { buildPiSkillLoader, rewriteSkillPrefix, createMntNormalizingReadTool } 
 import { createMcodeExtension } from "./mcodeExtension.js";
 import { getFileSnapshot } from "@main/lib/fileSnapshotRegistry.js";
 import { resolveGitBash } from "@main/lib/binaryResolve.js";
+import { getEnabledPluginSkillRoots } from "@main/plugins/pluginManager.js";
 
 /** Pi's permission modes, shown in the composer dropdown. Pi has no native
  *  permission system — the inline extension's `tool_call` handler interprets
@@ -249,6 +250,9 @@ export class PiAgentSdkProvider implements AgentProvider {
       sdk,
       cwd: req.cwd,
       allowNames: req.skills && req.skills.length > 0 ? req.skills : undefined,
+      // Skills of ENABLED plugins (settings → Plugins) ride the same
+      // additionalSkillPaths channel; Pi has no plugin concept of its own.
+      extraSkillPaths: await getEnabledPluginSkillRoots(),
       extensionFactories: [mcodeExtension],
     });
 
