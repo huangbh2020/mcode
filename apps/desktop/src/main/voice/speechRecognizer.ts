@@ -57,6 +57,21 @@ interface Session {
   /** Last text pushed as a partial — dedupes the push channel (decode()
    *  runs many times per second; text changes less often). */
   lastEmitted: string;
+  /** The segment committed last. A decoder that was NOT reset keeps its
+   *  result, so the next endpoint re-commits exactly this text (see
+   *  `isStaleSegment`). */
+  lastCommittedSegment: string;
+  /** Whether non-silent audio arrived since that commit — the difference
+   *  between "the user said it again" and "the decoder never let go". */
+  spokeSinceCommit: boolean;
+  /** Consecutive silence samples, from our own energy gate (see `feedPcm`). */
+  silentSamples: number;
+  /** Decaying peak envelope of the recent audio — the reference level for
+   *  that gate, so a quiet mic does not read as silence. */
+  peakEnvelope: number;
+  /** The stale-segment drop is logged once per listen; it otherwise repeats
+   *  on every batch while the engine sits in its broken state. */
+  staleDropLogged: boolean;
 }
 
 /** Minimal structural types for the `sherpa-onnx-node` addon. We duck-type it
@@ -94,6 +109,28 @@ const FEATURE_DIM = 80;
  *  we append a sentence mark matched to the segment's dominant script:
  *  。 for CJK, ". " for Latin. */
 const HAS_CJK = /[\u3400-\u4dbf\u4e00-\u9fff\u3040-\u30ff]/;
+
+/* ── our own silence gate ──
+ * The decoder MUST be reset when the speaker pauses: an un-reset streaming
+ * transducer keeps its last result, so every further endpoint re-commits the
+ * same sentence — measured with sherpa-onnx 1.13.6, one sentence re-committed
+ * 11 times during 3 s of silence ("转换后的文字重重复复出现"). Upstream's
+ * endpoint rules are what normally triggers that reset, but depending on them
+ * alone means a single engine/build quirk on a user's machine turns into an
+ * endless repeat, so the audio itself is measured here as a backstop. */
+/** Peak amplitude that always counts as silence, whatever the recent level
+ *  (−40 dBFS peak): below every plausible speech level, so a quiet talker is
+ *  never cut mid-sentence, yet above a quiet room's noise floor. */
+const SILENCE_PEAK_FLOOR = 0.01;
+/** A batch also reads as silence when its peak falls this far below the recent
+ *  peak envelope — keeps a quiet talker (or a low-gain mic) from being cut. */
+const SILENCE_PEAK_RATIO = 0.1;
+/** Peak-envelope decay per batch (one batch ≈ 250 ms of audio). */
+const PEAK_ENVELOPE_DECAY = 0.9;
+/** Continuous silence that forces a commit + reset on its own. Matches the
+ *  engine's rule2 trailing-silence threshold, so when the engine behaves the
+ *  two agree instead of double-segmenting. */
+const SILENCE_RESET_SAMPLES = (SAMPLE_RATE * 12) / 10;
 
 /** Drop the cached recognizer so the next session rebuilds against the
  *  currently-selected model. Called when a model is deleted from disk (the
@@ -199,8 +236,67 @@ export async function startSession(
     committedText: "",
     currentSegment: "",
     lastEmitted: "",
+    lastCommittedSegment: "",
+    spokeSinceCommit: false,
+    silentSamples: 0,
+    peakEnvelope: 0,
+    staleDropLogged: false,
   });
   log.info(`[voice] session started ${sessionId}`);
+}
+
+/** True when the decoder is still holding the segment we just committed:
+ *  the text is identical to the last commit and no speech arrived in between.
+ *  Re-committing it would append the same sentence again (the repeat bug);
+ *  the `spokeSinceCommit` half keeps a user who genuinely says the same thing
+ *  twice — "谢谢" … "谢谢" — from being dropped. */
+function isStaleSegment(s: Session, segment: string): boolean {
+  return (
+    segment !== "" && segment === s.lastCommittedSegment && !s.spokeSinceCommit
+  );
+}
+
+/** Close the current segment: append it to the transcript (unless it is the
+ *  decoder's stale leftover) and reset the decoder for the next one.
+ *
+ *  The reset is verified: upstream drops the carried decoder context from the
+ *  public result (both catalog models report an empty result right after a
+ *  reset), and if some build ever keeps text in it, replaying that text is
+ *  what we would do forever — so such a stream is replaced outright. */
+function commitSegment(s: Session, rec: OnlineRecognizer): void {
+  const segment = s.currentSegment;
+  // Decided before the counters are cleared — it reads `spokeSinceCommit`.
+  const stale = isStaleSegment(s, segment);
+  s.currentSegment = "";
+  s.silentSamples = 0;
+  s.spokeSinceCommit = false;
+
+  if (segment) {
+    if (stale) {
+      if (!s.staleDropLogged) {
+        s.staleDropLogged = true;
+        log.warn(
+          `[voice] decoder re-emitted the committed segment without new speech; dropped it`,
+        );
+      }
+    } else {
+      s.committedText += segment + (HAS_CJK.test(segment) ? "。" : ". ");
+      s.lastCommittedSegment = segment;
+    }
+  }
+
+  if (!s.stream) return;
+  rec.reset(s.stream);
+  // A result that survived the reset would be re-committed at the next
+  // endpoint. Start over instead: a fresh stream has no carried context.
+  const after = rec.getResult(s.stream);
+  if (after.text) {
+    log.warn(
+      `[voice] decoder kept ${after.text.length} chars after reset — rebuilding the stream`,
+    );
+    s.stream = rec.createStream();
+    s.lastCommittedSegment = "";
+  }
 }
 
 /** Feed a 16 kHz mono Float32 chunk into the active session. */
@@ -211,6 +307,25 @@ export function feedPcm(sessionId: string, pcm: Float32Array): void {
     log.info(`[voice] first pcm chunk ${sessionId} (${pcm.length} samples)`);
   }
   s.fedSamples += pcm.length;
+
+  // Measure the batch ourselves (see the silence-gate note above the
+  // constants): the decoder must not keep sitting on its last result.
+  let peak = 0;
+  for (let i = 0; i < pcm.length; i++) {
+    const v = pcm[i] ?? 0;
+    const a = v < 0 ? -v : v;
+    if (a > peak) peak = a;
+  }
+  s.peakEnvelope = Math.max(peak, s.peakEnvelope * PEAK_ENVELOPE_DECAY);
+  const silent =
+    peak < Math.max(SILENCE_PEAK_FLOOR, s.peakEnvelope * SILENCE_PEAK_RATIO);
+  if (silent) {
+    s.silentSamples += pcm.length;
+  } else {
+    s.silentSamples = 0;
+    s.spokeSinceCommit = true;
+  }
+
   try {
     s.stream.acceptWaveform({ samples: pcm, sampleRate: SAMPLE_RATE });
   } catch (err) {
@@ -228,19 +343,13 @@ export function feedPcm(sessionId: string, pcm: Float32Array): void {
       // Endpoint (trailing silence): commit the segment and RESET the
       // decoder. Without the reset the streaming transducer tends to loop on
       // repeated tokens after silence, and the partial text never segments.
-      if (rec.isEndpoint(s.stream)) {
-        // Commit the segment with a script-matched sentence mark (see HAS_CJK)
-        // and RESET the decoder. Without the reset the streaming transducer
-        // tends to loop on repeated tokens after silence, and the partial text
-        // never segments.
-        if (s.currentSegment) {
-          s.committedText +=
-            s.currentSegment + (HAS_CJK.test(s.currentSegment) ? "。" : ". ");
-        }
-        s.currentSegment = "";
-        rec.reset(s.stream);
-      }
+      if (rec.isEndpoint(s.stream)) commitSegment(s, rec);
     }
+    // Backstop for the same reset: if the engine reported no endpoint through
+    // a pause longer than its own trailing-silence rule, close the segment
+    // anyway. A decoder left unreset re-commits its last result at every
+    // later endpoint, which is the repeat users see as duplicated text.
+    if (s.silentSamples >= SILENCE_RESET_SAMPLES) commitSegment(s, rec);
     const text = s.committedText + s.currentSegment;
     if (text && text !== s.lastEmitted) {
       s.lastEmitted = text;
@@ -264,6 +373,12 @@ export function stopSession(sessionId: string): { text: string } {
         rec.decode(s.stream);
         const r = rec.getResult(s.stream);
         if (r.text) s.currentSegment = r.text;
+      }
+      // Same guard as a commit: a segment the decoder never let go of (no
+      // speech since the last commit) must not be appended twice.
+      if (isStaleSegment(s, s.currentSegment)) {
+        log.info(`[voice] stop: dropped stale tail segment`);
+        s.currentSegment = "";
       }
       text = s.committedText + s.currentSegment;
     }
