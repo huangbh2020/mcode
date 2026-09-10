@@ -2786,16 +2786,20 @@ export interface McpServerEntry {
   kind: McpKind;
   detail: string;
   enabled: boolean;
-  /** Remote (http/sse) server the CLI has flagged as requiring OAuth and
-   *  holding no stored token (mcp-needs-auth-cache.json). The session-side
-   *  tools stay unavailable until the user completes the browser login —
-   *  surfaced in the panel as a badge + an authorize action. */
+  /** Remote (http/sse) server that requires an OAuth login and holds no
+   *  usable token, so its tools stay unavailable until the user completes the
+   *  browser login — surfaced as an amber badge + a 去授权 action.
+   *
+   *  Two sources: the CLI's mcp-needs-auth-cache.json (written on an actual
+   *  401 while connecting) and a proactive probe of the endpoint, so the entry
+   *  appears before the first turn stumbles into it. Beats `authorized`. */
   needsAuth?: boolean;
-  /** Remote server holding a stored OAuth token (.credentials.json, non-
-   *  darwin only — darwin keeps MCP tokens in the Keychain where Mcode can't
-   *  read them, so the flag never sets there). Shows an "authorized" badge
-   *  + a sign-out action in the panel. Mutually exclusive with needsAuth in
-   *  practice (a stored token wins over a stale needs-auth cache entry). */
+  /** Remote server holding a stored OAuth token (the CLI's credential store —
+   *  `.credentials.json` on win/linux, the macOS Keychain on darwin). Shows an
+   *  "authorized" badge + a sign-out action in the panel. Mutually exclusive
+   *  with needsAuth, and loses to it: needsAuth is written on a real 401 while
+   *  connecting, so a stored token the runtime can't use (wrong credential
+   *  key, expired, revoked) must not mask an unauthenticated server. */
   authorized?: boolean;
 }
 
@@ -2818,21 +2822,36 @@ export const McpToggleSchema = z.object({
 export type McpToggleInput = z.infer<typeof McpToggleSchema>;
 
 /** Run the OAuth browser login for a remote (http/sse) MCP server via the
- *  Claude CLI (`claude mcp login`). The server is temporarily registered in
- *  the user config under exactly `name` (the namespaced `<plugin>__<server>`
- *  form for plugin servers — OAuth tokens are keyed by name + URL, so the
- *  per-turn injected server must match) and removed again afterwards; the
- *  token itself persists in CLAUDE_CONFIG_DIR/.credentials.json. */
+ *  Claude CLI (`claude mcp login`). The server is registered under exactly
+ *  `name` (the namespaced `<plugin>__<server>` form for plugin servers) for
+ *  the duration of the flow and restored afterwards; the token itself persists
+ *  in the CLI's credential store.
+ *
+ *  `url`/`kind` are only a fallback identity. The CLI keys OAuth credentials by
+ *  a hash of the server NAME plus its `{ type, url, headers }`, so the main
+ *  process resolves the server's real config by name across every source
+ *  (user file / disable stash / plugin / project .mcp.json) and re-registers it
+ *  verbatim — headers included. Registering a stripped config would store the
+ *  token under a key the per-turn injected server never looks up. */
 export const McpAuthorizeSchema = z.object({
   name: z.string().min(1),
   url: z.string().url(),
   kind: z.enum(["http", "sse"]),
+  /** Source the clicked row came from. Scopes the main-side config lookup so a
+   *  name shared by two sources (a user and a project server both called
+   *  "github") resolves to the config that row actually points at — picking the
+   *  other one's url/headers would file the token under a key the server never
+   *  looks up. */
+  scope: z.enum(["user", "project", "builtin", "plugin"]).optional(),
+  /** Project whose .mcp.json the row came from (scope "project"). */
+  projectPath: z.string().optional(),
 });
 export type McpAuthorizeInput = z.infer<typeof McpAuthorizeSchema>;
 
 /** Clear the stored OAuth token (`claude mcp logout`). Same identity shape as
  *  authorize — the CLI resolves the server from the config file and keys the
- *  credentials by name + URL. */
+ *  credentials by name + url + headers, so the same real-config registration
+ *  applies. */
 export const McpUnauthorizeSchema = McpAuthorizeSchema;
 export type McpUnauthorizeInput = McpAuthorizeInput;
 

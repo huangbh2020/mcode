@@ -1006,6 +1006,20 @@ function readPluginMcpEntries(p: EnabledPlugin): Array<[string, unknown]> {
   return out;
 }
 
+/** Raw config of one namespaced plugin MCP server among ENABLED plugins,
+ *  ignoring the per-server disable list. The MCP panel's OAuth login/logout
+ *  needs the server's full config (headers included) even while it is turned
+ *  off, because the CLI's credential identity is a hash of name + url +
+ *  headers. Returns null when no enabled plugin declares it. */
+export async function getPluginMcpServerConfig(fullName: string): Promise<unknown | null> {
+  for (const p of await getEnabledPlugins()) {
+    for (const [serverName, raw] of readPluginMcpEntries(p)) {
+      if (`${p.name}__${serverName}` === fullName) return raw;
+    }
+  }
+  return null;
+}
+
 /** Namespaced MCP server entries of enabled plugins:
  *  `[["<plugin>__<server>", config], ...]`, honoring the per-server disable
  *  list (plugins.mcpDisabled, written by the MCP panel). Invalid configs are

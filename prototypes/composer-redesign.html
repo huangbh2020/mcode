@@ -1,0 +1,1208 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Composer · 输入框面板重设计（四方案）</title>
+<style>
+  /* =========================================================================
+   * Composer 输入框面板重设计 · 交互原型
+   *
+   * 目标:在保留现有功能(附件 / 模型 / 思考级别 / 权限 / 上下文环 / SDK /
+   * 语音 / 发送-排队-停止 / 标签 / 图片 / 队列)的前提下,把"能用"做成
+   * "好看 + 有动效",并解决窄屏折叠时的**跳变**(现在 display:none ↔
+   * inline-flex 是瞬时切换,没有任何过渡)。
+   *
+   * 「宽屏 / 窄屏」在本原型里 = **输入框卡片的宽度**,它由聊天栏宽度决定:
+   *   - 普通模式、左右栏收起 → 卡片很宽 → 动作行铺开(chips inline)
+   *   - 宽屏模式(聊天+面板 3:7)、侧栏展开、窗口变小 → 卡片变窄 → 折叠
+   * 所以"宽屏切窄屏要有动画"本质是:**卡片宽度连续变化时,动作行要连续地
+   * 收拢**,而不是在某个断点上瞬移。四个方案都按这个前提设计,并且都支持
+   * 拖动分隔条时的连续增宽/收窄(下面的宽度滑块就是模拟这件事)。
+   * ========================================================================= */
+
+  /* ===== 真实 token(取自 apps/desktop/src/renderer/styles.css) ===== */
+  :root{
+    --surface:255 255 255;
+    --surface-muted:240 242 246;
+    --surface-hover:226 229 235;
+    --content:9 9 11;
+    --content-muted:63 63 70;
+    --content-subtle:113 113 122;
+    --edge:213 216 222;
+    --panel-edge:222 225 231;
+    --input-edge:202 205 212;
+    --accent:5 150 105;
+    --accent-strong:4 120 87;
+    --danger:220 38 38;
+    --warning:180 83 9;
+    --info:124 58 237;
+    --success:4 120 87;
+    --user-bubble:82 82 91;
+    --shadow-card:0 1px 2px rgb(9 9 11 / .05);
+    --shadow-pop:0 14px 40px -12px rgb(9 9 11 / .22), 0 2px 8px rgb(9 9 11 / .06);
+  }
+  [data-theme="dark"]{
+    --surface:26 29 36;
+    --surface-muted:44 49 60;
+    --surface-hover:58 64 78;
+    --content:231 232 236;
+    --content-muted:188 191 198;
+    --content-subtle:158 162 171;
+    --edge:45 51 64;
+    --panel-edge:40 46 58;
+    --input-edge:95 99 110;
+    --accent:16 185 129;
+    --accent-strong:16 185 129;
+    --danger:248 113 113;
+    --warning:251 191 36;
+    --info:167 139 250;
+    --success:16 185 129;
+    --user-bubble:148 163 184;
+    --shadow-card:0 1px 2px rgb(0 0 0 / .3);
+    --shadow-pop:0 16px 44px rgb(0 0 0 / .55), 0 2px 10px rgb(0 0 0 / .35);
+  }
+
+  /* ===== 动效曲线(四个方案共用同一套,只是编排不同) ===== */
+  :root{
+    --ease-out:cubic-bezier(.22,1,.36,1);      /* 位移/收拢:快起慢落 */
+    --spring:cubic-bezier(.34,1.56,.64,1);     /* 出场的轻微回弹 */
+    --ease-in-out:cubic-bezier(.65,0,.35,1);
+    --dur-collapse:360ms;                      /* 折叠壳宽度过渡 */
+    --dur-fade:220ms;                          /* 同期的透明度过渡 */
+    --stagger:22ms;                            /* 逐项错峰 */
+    --slack:24px;                              /* 回滞,防临界抖动(镜像现有 RESHOW_SLACK_PX) */
+  }
+
+  *{box-sizing:border-box}
+  body{
+    margin:0;background:rgb(var(--surface-muted));color:rgb(var(--content));
+    font-family:-apple-system,"SF Pro Text","Segoe UI","PingFang SC","Microsoft YaHei",system-ui,sans-serif;
+    -webkit-font-smoothing:antialiased;transition:background .25s;
+  }
+  button{font-family:inherit}
+  .ic{display:block;flex:none}
+  .wrap{max-width:1120px;margin:0 auto;padding:0 22px 56px}
+
+  /* ===== 页头 ===== */
+  .topbar{padding:20px 0 12px}
+  .topbar h1{font-size:16px;margin:0 0 6px;font-weight:700}
+  .topbar p{margin:0;font-size:12.5px;line-height:1.7;color:rgb(var(--content-muted));max-width:860px}
+  .topbar code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11.5px;
+    background:rgb(var(--surface));border:1px solid rgb(var(--edge));border-radius:5px;padding:1px 5px}
+
+  /* ===== 控制条(吸顶) ===== */
+  .ctrlbar{
+    position:sticky;top:0;z-index:80;display:flex;align-items:center;gap:16px;flex-wrap:wrap;
+    padding:10px 14px;margin:6px 0 18px;border-radius:14px;
+    background:rgb(var(--surface)/.86);backdrop-filter:blur(10px);
+    border:1px solid rgb(var(--edge));box-shadow:var(--shadow-card);
+  }
+  .cg{display:flex;align-items:center;gap:6px}
+  .cg>label{font-size:11px;font-weight:700;color:rgb(var(--content-subtle));letter-spacing:.04em}
+  .seg{display:flex;background:rgb(var(--surface-muted));border:1px solid rgb(var(--edge)/.6);border-radius:9px;padding:2px;gap:2px}
+  .seg button{border:none;background:none;cursor:pointer;padding:5px 10px;border-radius:6px;
+    font-size:11.5px;font-weight:600;color:rgb(var(--content-muted));transition:all .15s}
+  .seg button:hover{color:rgb(var(--content));background:rgb(var(--surface-hover)/.7)}
+  .seg button.cur{background:rgb(var(--surface));color:rgb(var(--accent-strong));
+    box-shadow:0 0 0 1px rgb(var(--accent)/.5), 0 1px 2px rgb(9 9 11/.08)}
+  .slider{display:flex;align-items:center;gap:8px;flex:1;min-width:240px}
+  input[type=range]{
+    -webkit-appearance:none;appearance:none;flex:1;height:4px;border-radius:2px;
+    background:linear-gradient(90deg,rgb(var(--accent)/.28),rgb(var(--surface-hover)));
+    outline:none;margin:0
+  }
+  input[type=range]::-webkit-slider-thumb{
+    -webkit-appearance:none;width:16px;height:16px;border-radius:50%;background:rgb(var(--surface));
+    border:2px solid rgb(var(--accent));box-shadow:0 1px 4px rgb(9 9 11/.2);cursor:grab;
+    transition:transform .15s var(--spring)
+  }
+  input[type=range]::-webkit-slider-thumb:hover{transform:scale(1.15)}
+  input[type=range]::-webkit-slider-thumb:active{cursor:grabbing;transform:scale(1.05)}
+  .wbadge{font-size:11.5px;color:rgb(var(--content-subtle));white-space:nowrap;
+    font-variant-numeric:tabular-nums}
+  .wbadge b{color:rgb(var(--content));font-weight:700}
+  .wbadge .mode{display:inline-block;margin-left:6px;padding:1px 7px;border-radius:999px;
+    font-size:10.5px;font-weight:700;background:rgb(var(--accent)/.12);color:rgb(var(--accent-strong))}
+  .icon-btn{width:30px;height:30px;border-radius:9px;border:1px solid rgb(var(--edge));
+    background:rgb(var(--surface));color:rgb(var(--content-muted));display:grid;place-items:center;
+    cursor:pointer;transition:all .15s}
+  .icon-btn:hover{color:rgb(var(--accent-strong));border-color:rgb(var(--accent)/.45)}
+
+  /* ===== 方案区块 ===== */
+  .variant{margin:0 0 34px;scroll-margin-top:76px}
+  .vhead{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin:0 0 4px}
+  .vhead h2{font-size:14.5px;margin:0;font-weight:700}
+  .vhead .tag{display:inline-flex;align-items:center;height:19px;padding:0 7px;border-radius:6px;
+    font-size:10.5px;font-weight:700;background:rgb(var(--accent)/.12);color:rgb(var(--accent-strong))}
+  .vhead .tag.gray{background:rgb(var(--surface-hover));color:rgb(var(--content-muted))}
+  .vhead .tag.amber{background:rgb(var(--warning)/.14);color:rgb(var(--warning))}
+  .vhead .tag.violet{background:rgb(var(--info)/.14);color:rgb(var(--info))}
+  .vdesc{margin:0 0 10px;font-size:12.5px;line-height:1.75;color:rgb(var(--content-muted));max-width:900px}
+  .vdesc b{color:rgb(var(--content))}
+  .vmeta{display:flex;gap:8px;flex-wrap:wrap;margin:8px 0 0;font-size:11.5px;color:rgb(var(--content-subtle))}
+  .vmeta span{display:inline-flex;align-items:center;gap:5px;background:rgb(var(--surface));
+    border:1px solid rgb(var(--edge));border-radius:7px;padding:3px 8px}
+  .vmeta b{color:rgb(var(--content-muted));font-weight:700}
+  /* 实时档位读数:拖宽度滑块时每个方案各自告诉你它现在处于第几档 —— 四个方案的
+     阈值不同,所以同一宽度下读数不同,这正是它们的分歧点。 */
+  .vmeta .tierpill em{font-style:normal;font-weight:700;color:rgb(var(--accent-strong));
+    font-variant-numeric:tabular-nums}
+  .vmeta .tierpill[data-folded="1"]{border-color:rgb(var(--warning)/.5)}
+  .vmeta .tierpill[data-folded="1"] em{color:rgb(var(--warning))}
+
+  /* ===== 舞台:模拟聊天 + composer ===== */
+  .stagebox{display:flex;justify-content:center;overflow-x:auto;padding:2px 0 4px}
+  .stage{
+    width:var(--pane-w,860px);max-width:100%;flex:none;
+    background:rgb(var(--surface));border:1px solid rgb(var(--edge));border-radius:16px;
+    display:flex;flex-direction:column;min-height:300px;box-shadow:var(--shadow-card);
+    transition:width .28s var(--ease-out);overflow:hidden
+  }
+  .chat{flex:1;padding:18px 24px 6px;display:flex;flex-direction:column;gap:9px;overflow:hidden}
+  .msg{font-size:12.5px;line-height:1.65;padding:7px 12px;border-radius:12px;max-width:74%}
+  .msg.u{align-self:flex-end;background:rgb(var(--user-bubble)/.13);color:rgb(var(--content))}
+  .msg.a{align-self:flex-start;background:rgb(var(--surface-muted));color:rgb(var(--content-muted))}
+  .msg .mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11.5px}
+
+  /* =========================================================================
+   * 卡片本体:四个方案共用同一套"质感"基线
+   * ========================================================================= */
+  .composer{padding:0 var(--gutter,48px) 18px;transition:padding .28s var(--ease-out)}
+  .card{
+    position:relative;display:flex;flex-direction:column;min-width:0;
+    background:rgb(var(--surface));border:1px solid rgb(var(--input-edge));border-radius:18px;
+    box-shadow:var(--shadow-card);
+    transition:border-color .2s var(--ease-out),box-shadow .32s var(--ease-out),
+               transform .32s var(--ease-out),background .2s;
+  }
+  /* 悬停:极轻的抬升,不搶焦点态 */
+  .card:hover{box-shadow:0 2px 8px -2px rgb(9 9 11/.08)}
+  /* 聚焦:accent 描边 + 柔光环,顶部一条 accent 发丝线"点亮" */
+  .card.focus{border-color:rgb(var(--accent)/.5);
+    box-shadow:0 0 0 3.5px rgb(var(--accent)/.1), 0 12px 32px -18px rgb(var(--accent)/.5)}
+  .card::after{
+    content:"";position:absolute;left:16px;right:16px;top:-1px;height:1px;border-radius:2px;
+    background:linear-gradient(90deg,transparent,rgb(var(--accent)/.65),transparent);
+    opacity:0;transition:opacity .34s var(--ease-out);pointer-events:none
+  }
+  .card.focus::after{opacity:1}
+
+  /* 运行中:顶部扫光进度条(承载"回合进行中"的信息,也把静止的框变活) */
+  .card[data-busy="1"]::before{
+    content:"";position:absolute;left:0;right:0;top:0;height:2px;border-radius:18px 18px 0 0;
+    background:linear-gradient(90deg,transparent,rgb(var(--accent)/.15) 20%,rgb(var(--accent)) 50%,
+               rgb(var(--accent)/.15) 80%,transparent);
+    background-size:220% 100%;animation:sweep 1.6s linear infinite
+  }
+  @keyframes sweep{from{background-position:130% 0}to{background-position:-130% 0}}
+
+  /* 拖拽文件到输入框:整卡呼吸高亮 */
+  .card.dragover{border-color:rgb(var(--accent));box-shadow:0 0 0 4px rgb(var(--accent)/.16)}
+
+  /* ---- 卡内上半部分:队列 / 标签 / 图片 ---- */
+  .extras{display:flex;flex-direction:column;gap:6px;padding:10px 12px 0}
+  .extras:empty{display:none}
+  .exrow{display:flex;flex-wrap:wrap;gap:6px}
+  .tag{
+    display:inline-flex;align-items:center;gap:6px;height:25px;padding:0 6px 0 8px;border-radius:8px;
+    border:1px solid rgb(var(--edge));background:rgb(var(--surface-muted)/.75);
+    font-size:11.5px;font-weight:500;color:rgb(var(--content-muted));white-space:nowrap;max-width:220px;
+    animation:tagIn .36s var(--spring) both
+  }
+  .tag .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .tag .x{display:grid;place-items:center;width:15px;height:15px;border-radius:5px;border:none;
+    background:none;color:rgb(var(--content-subtle));cursor:pointer;transition:all .15s}
+  .tag .x:hover{background:rgb(var(--danger)/.12);color:rgb(var(--danger))}
+  .tag.paste{border-color:rgb(var(--accent)/.35);background:rgb(var(--accent)/.07);color:rgb(var(--accent-strong))}
+  @keyframes tagIn{from{opacity:0;transform:translateY(7px) scale(.93)}to{opacity:1;transform:none}}
+  .thumb{
+    position:relative;width:52px;height:52px;border-radius:11px;overflow:hidden;flex:none;
+    border:1px solid rgb(var(--edge));background:linear-gradient(135deg,rgb(var(--info)/.5),rgb(var(--accent)/.55));
+    animation:tagIn .36s var(--spring) both
+  }
+  .thumb::after{content:"";position:absolute;inset:0;background:
+    radial-gradient(60% 55% at 30% 30%,rgb(255 255 255/.5),transparent),rgb(9 9 11/.08)}
+  .thumb .x{position:absolute;right:3px;top:3px;z-index:2;width:17px;height:17px;border-radius:50%;
+    border:none;background:rgb(9 9 11/.55);color:#fff;display:grid;place-items:center;cursor:pointer;
+    opacity:0;transform:scale(.8);transition:all .18s var(--spring)}
+  .thumb:hover .x{opacity:1;transform:none}
+
+  /* 队列(运行中提交的后续消息) */
+  .queue{border-radius:11px;border:1px solid rgb(var(--edge));background:rgb(var(--surface-muted)/.5);
+    padding:7px 8px}
+  .queue .qh{display:flex;justify-content:space-between;align-items:center;
+    font-size:10px;font-weight:700;letter-spacing:.06em;color:rgb(var(--content-subtle));margin-bottom:5px}
+  .qitem{display:flex;align-items:center;gap:6px;padding:4px 6px;border-radius:7px;
+    font-size:11.5px;color:rgb(var(--content-muted));
+    animation:qIn .34s var(--ease-out) both}
+  .qitem+.qitem{margin-top:3px}
+  .qitem .n{font-size:10px;color:rgb(var(--content-subtle));font-variant-numeric:tabular-nums}
+  .qitem .t{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .qitem .g{opacity:.4}
+  @keyframes qIn{from{opacity:0;transform:translateX(-8px)}to{opacity:1;transform:none}}
+
+  /* ---- 编辑区 ---- */
+  .editor{
+    padding:11px 14px 4px;font-size:14px;line-height:1.65;color:rgb(var(--content));
+    min-height:66px;max-height:180px;overflow-y:auto;outline:none;word-break:break-word;white-space:pre-wrap
+  }
+  .editor:empty::before{content:attr(data-ph);color:rgb(var(--content-subtle));pointer-events:none}
+  .editor .caret{
+    display:inline-block;width:1.5px;height:1.05em;background:rgb(var(--accent));
+    vertical-align:-2px;margin-left:1px;animation:blink 1.05s steps(1,end) infinite
+  }
+  @keyframes blink{0%,49%{opacity:1}50%,100%{opacity:0}}
+  .editor .pill{display:inline-flex;align-items:center;gap:2px;color:rgb(var(--accent));
+    font-weight:600;font-size:.87em}
+  .card[data-busy="1"] .editor{color:rgb(var(--content-subtle))}
+
+  /* =========================================================================
+   * 关键零件:动作行 + 折叠壳
+   * ========================================================================= */
+  .row{display:flex;align-items:center;justify-content:space-between;gap:8px;
+    padding:2px 9px 8px;min-width:0}
+  .cluster{display:flex;align-items:center;gap:2px;min-width:0}
+  .cluster.right{flex:none}
+
+  /* ⭐ 折叠壳(全案共用) ------------------------------------------------------
+   * 每个可折叠控件都包一层 grid 壳:`grid-template-columns` 在 1fr ↔ 0fr 之间
+   * 是**可动画的宽度过渡**(Chromium 107+ / Safari 16+,Electron 33 = Chromium 130
+   * 原生支持),子元素 overflow:hidden 自然裁剪。相比现在的 display:none,
+   * 它有三个好处:
+   *   1. 不瞬移 —— 收拢/展开全程连续,拖动分隔条时像"呼吸";
+   *   2. 不需要 JS 量宽度 —— 现有 useComposerRowFit 的测量只用于**决定**折叠,
+   *      不再需要参与动画;
+   *   3. 元素不卸载 —— chip 内部状态(下拉是否打开、滚动位置)不丢。
+   * collapsed 的壳额外用负 margin 抵消行 gap,否则会留下 2px 的空缝。 */
+  .slot{display:grid;grid-template-columns:1fr;min-width:0;flex:none;
+    transition:grid-template-columns var(--dur-collapse) var(--ease-out),
+               opacity var(--dur-fade) var(--ease-out),
+               margin var(--dur-collapse) var(--ease-out);
+    transition-delay:calc(var(--i,0) * var(--stagger))
+  }
+  /* 内层用 <i> 只是因为它最短,但 <i> 天生斜体 —— 不重置的话 chip 文字会掉进
+     斜体衬线回退字体里,宽度和观感都不对。 */
+  .slot>i{display:inline-flex;align-items:center;min-width:0;overflow:hidden;font-style:normal}
+  .row[data-dir="out"] .slot{transition-delay:calc((var(--n,6) - 1 - var(--i,0)) * var(--stagger))}
+  .slot[data-off="1"]{grid-template-columns:0fr;opacity:0}
+  /* 收拢的壳会留下一个行 gap 的空缝(2px / 岛内 1px),用等量负 margin 抵掉。
+     只作用于动作行与浮动岛里的壳 —— 嵌在 chip 内部的壳(如方案 C 的微型上下文弧)
+     两边没有 gap,加了会平白位移。 */
+  .cluster>.slot[data-off="1"]:not(:first-child){margin-inline-start:-2px}
+  .island>.slot[data-off="1"]:not(:first-child){margin-inline-start:-1px}
+
+  /* ---- 圆形图标按钮 ---- */
+  .ibtn{width:30px;height:30px;border-radius:10px;display:grid;place-items:center;flex:none;
+    border:none;background:none;color:rgb(var(--content-subtle));cursor:pointer;
+    transition:background .16s,color .16s,transform .24s var(--spring)}
+  .ibtn:hover{background:rgb(var(--accent)/.1);color:rgb(var(--accent-strong));transform:scale(1.08)}
+  .ibtn:active{transform:scale(.94)}
+  .ibtn[disabled]{opacity:.4;cursor:not-allowed;transform:none;background:none}
+
+  /* ---- chip ---- */
+  /* gap 也是可插值的,紧凑态把它收到 0:文字段与箭头段同时在收宽度,gap 同步归零,
+     于是 chip 的宽度一路平滑缩到"只有图标" —— chip 自己不需要被量宽度、也不需要写死宽度。 */
+  .chip{display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 9px;border-radius:9px;
+    border:none;background:none;cursor:pointer;white-space:nowrap;flex:none;
+    font-size:11.5px;font-weight:600;color:rgb(var(--content-muted));
+    transition:background .16s,color .16s,transform .24s var(--spring),
+               gap var(--dur-collapse) var(--ease-out)}
+  .chip[data-compact="1"]{gap:0}
+  .chip:hover{background:rgb(var(--accent)/.09);color:rgb(var(--accent-strong));transform:translateY(-1px)}
+  .chip:active{transform:translateY(0) scale(.97)}
+  /* 权限 chip 的风险提示只走"文字 + 图标"染色(对齐 EffortPermissionControl 的
+     activeMode.color —— 它是个 text-* 类,没有底色),hover 才给一点填充。铺底色会
+     在方案 D 的浮动岛里变成"岛中套药丸",所以这里刻意保持安静。 */
+  .chip[data-c="info"].on{color:rgb(var(--info))}
+  .chip[data-c="warning"].on{color:rgb(var(--warning))}
+  .chip[data-c="danger"].on{color:rgb(var(--danger))}
+  .chip[data-c].on:hover{background:color-mix(in srgb,currentColor 12%,transparent)}
+  .chip .vt{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+  .chip .cv{display:inline-flex;opacity:.5;transition:transform .22s var(--ease-out)}
+  .chip:hover .cv{transform:translateY(1.5px)}
+  /* chip 内的文字段也用折叠壳压宽度(tier 变紧凑时只留图标) */
+  .lblwrap{display:grid;grid-template-columns:1fr;min-width:0;
+    transition:grid-template-columns var(--dur-collapse) var(--ease-out)}
+  .lblwrap>i{display:inline-flex;min-width:0;overflow:hidden;white-space:nowrap;font-style:normal}
+  /* 紧凑态:任何容器上的 data-compact 都作用到它内部的文字壳 —— 药丸(.minipill)与
+     并合 chip(.modechip)不是 .chip,所以选择器要并列写,否则它们的文字收不掉。 */
+  .chip[data-compact="1"] .lblwrap,
+  .minipill[data-compact="1"] .lblwrap,
+  .modechip[data-compact="1"] .lblwrap{grid-template-columns:0fr}
+
+  /* provider 芯片(dot + 品牌名) */
+  .pdot{width:7px;height:7px;border-radius:50%;flex:none;box-shadow:0 0 0 2px rgb(var(--edge)/.5)}
+  .pglyph{width:15px;height:15px;border-radius:5px;display:grid;place-items:center;flex:none;
+    font-size:10px;font-weight:800;color:#fff}
+
+  /* ---- 上下文环 ---- */
+  .ringwrap{display:inline-flex;align-items:center;gap:6px;padding:0 4px}
+  .ring{transform:rotate(0deg)}
+  .ring-arc{transition:stroke-dasharray .6s var(--ease-out),stroke .3s}
+  .ringpct{font-size:11px;font-weight:600;color:rgb(var(--content-subtle));
+    font-variant-numeric:tabular-nums}
+  .card[data-busy="1"] .ringpct{color:rgb(var(--content-muted))}
+
+  /* ---- 发送 / 停止 / 排队 ---- */
+  .send{width:32px;height:32px;border-radius:11px;display:grid;place-items:center;flex:none;
+    border:none;cursor:pointer;background:rgb(var(--accent));color:#fff;
+    transition:transform .28s var(--spring),box-shadow .28s,background .2s,color .2s,opacity .2s;
+    position:relative}
+  .send:hover{transform:scale(1.1);box-shadow:0 6px 18px -6px rgb(var(--accent)/.65)}
+  .send:active{transform:scale(.93)}
+  /* 有内容:轻微放大 + 常驻柔光,提示"可以发了" */
+  .send[data-ready="1"]{transform:scale(1.05);box-shadow:0 4px 16px -5px rgb(var(--accent)/.55)}
+  .send[data-ready="1"]:hover{transform:scale(1.12)}
+  /* 空:退成中性,不发散注意力 */
+  .send[disabled]{background:rgb(var(--surface-hover));color:rgb(var(--content-subtle));
+    box-shadow:none;transform:none;cursor:not-allowed}
+  /* 运行中:停止键 + 外圈旋转的锥形进度环(把"正在跑"从顶栏搬进按钮本身) */
+  .stop{width:32px;height:32px;border-radius:11px;display:grid;place-items:center;flex:none;
+    border:none;cursor:pointer;background:rgb(var(--danger));color:#fff;position:relative;
+    transition:transform .28s var(--spring),box-shadow .28s}
+  .stop:hover{transform:scale(1.1);box-shadow:0 6px 18px -6px rgb(var(--danger)/.6)}
+  .stop::before{
+    content:"";position:absolute;inset:-4px;border-radius:15px;pointer-events:none;
+    background:conic-gradient(from 0deg,rgb(var(--accent)/0) 0 62%,rgb(var(--accent)/.9) 86%,rgb(var(--accent)/0) 100%);
+    -webkit-mask:radial-gradient(farthest-side,transparent calc(100% - 2.5px),#000 calc(100% - 2.5px));
+    mask:radial-gradient(farthest-side,transparent calc(100% - 2.5px),#000 calc(100% - 2.5px));
+    animation:spin 1.35s linear infinite
+  }
+  @keyframes spin{to{transform:rotate(360deg)}}
+  /* 发送启动:图标"飞出→从另一侧回到位",配合按钮脉冲 */
+  .send.launch{animation:sendPulse .5s var(--ease-out)}
+  .send.launch .ic{animation:launch .5s var(--ease-in-out)}
+  @keyframes launch{
+    0%{transform:translate(0,0) scale(1);opacity:1}
+    42%{transform:translate(13px,-13px) scale(.55);opacity:0}
+    43%{transform:translate(-11px,11px) scale(.55);opacity:0}
+    100%{transform:translate(0,0) scale(1);opacity:1}
+  }
+  @keyframes sendPulse{0%{box-shadow:0 0 0 0 rgb(var(--accent)/.45)}100%{box-shadow:0 0 0 12px rgb(var(--accent)/0)}}
+
+  /* =========================================================================
+   * 方案 A · 融合收起(保守增强:结构不动,补齐动效与质感)
+   * ========================================================================= */
+
+  /* =========================================================================
+   * 方案 B · 迷你药丸(窄屏不再只剩一个齿轮图标,而是把三枚 chip 合成一颗
+   * 仍可分段点击的药丸;再窄才降级为纯图标,最后才是单图标)
+   * ========================================================================= */
+  .minipill{
+    display:inline-flex;align-items:center;height:28px;padding:0 4px;border-radius:9px;
+    border:1px solid rgb(var(--edge));background:rgb(var(--surface-muted)/.6);
+    box-shadow:inset 0 1px 0 rgb(255 255 255/.35)
+  }
+  [data-theme="dark"] .minipill{box-shadow:none}
+  .minipill[data-compact="1"] .mseg{gap:0}
+  .minipill .mseg{display:inline-flex;align-items:center;gap:5px;height:22px;padding:0 7px;
+    border:none;background:none;border-radius:6px;cursor:pointer;white-space:nowrap;
+    font-size:11.5px;font-weight:600;color:rgb(var(--content-muted));
+    transition:background .15s,color .15s}
+  .minipill .mseg:hover{background:rgb(var(--accent)/.11);color:rgb(var(--accent-strong))}
+  .minipill .mmid{width:1px;height:14px;background:rgb(var(--edge));flex:none;
+    transition:opacity .3s var(--ease-out),width .3s var(--ease-out)}
+  .minipill[data-compact="1"] .mmid{opacity:.5}
+  .minipill .lvl{display:inline-flex;gap:2px;align-items:center}
+  .minipill .lvl i{font-style:normal;width:3px;border-radius:1.5px;background:rgb(var(--content-subtle));opacity:.45;
+    transition:height .3s var(--spring),opacity .3s,background .3s}
+  .minipill .lvl i.on{opacity:1;background:rgb(var(--accent))}
+
+  /* =========================================================================
+   * 方案 C · 级联折叠(把"580px 一刀切"换成逐级让位,每级只掉一个控件)
+   * ========================================================================= */
+  .modechip{display:inline-flex;align-items:center;gap:7px;height:28px;padding:0 9px;border-radius:9px;
+    border:1px solid rgb(var(--edge));background:rgb(var(--surface-muted)/.5);cursor:pointer;
+    font-size:11.5px;font-weight:600;color:rgb(var(--content-muted));white-space:nowrap;flex:none;
+    transition:background .16s,border-color .16s,transform .24s var(--spring),
+               gap var(--dur-collapse) var(--ease-out)}
+  .modechip[data-compact="1"]{gap:4px}
+  .modechip:hover{background:rgb(var(--surface-hover)/.6);transform:translateY(-1px)}
+  .modechip .sep{width:1px;height:13px;background:rgb(var(--edge));flex:none}
+  .modechip .mi{display:inline-flex;align-items:center;gap:4px}
+  .gear .gbadge{position:absolute;right:3px;top:3px;width:5px;height:5px;border-radius:50%;
+    box-shadow:0 0 0 1.5px rgb(var(--surface))}
+  .gear{position:relative}
+
+  /* =========================================================================
+   * 方案 D · 悬浮双岛(控件脱离卡片底边,成为两枚可"对接"的浮动岛)
+   * ========================================================================= */
+  /* 对接动画的关键:两岛之间放一个 flex-grow:1 的弹性隔断,宽屏时它吃掉全部
+   * 余量把两岛顶到两端,窄屏时它 grow → 0,两岛自然贴在一起。flex-grow 是
+   * **可插值的数字**,所以这是一次纯粹的连续过渡 —— 不需要换 justify-content
+   * (那是离散属性,会瞬移)。行用 flex-end 对齐,于是合并后的底栏停在右下角,
+   * 发送键的位置不动(不能为了好看牺牲肌肉记忆)。 */
+  .islands{display:flex;align-items:center;justify-content:flex-end;
+    padding:0 10px 10px;min-width:0}
+  .islands .spacer{flex:1 1 0;min-width:0;
+    transition:flex-grow var(--dur-collapse) var(--ease-out)}
+  .islands[data-docked="1"] .spacer{flex-grow:0}
+  .island{display:inline-flex;align-items:center;gap:1px;padding:2px;flex:none;min-width:0;
+    border:1px solid rgb(var(--edge));border-radius:12px;
+    background:rgb(var(--surface)/.9);backdrop-filter:blur(6px);
+    box-shadow:0 1px 2px rgb(9 9 11/.05),0 6px 18px -12px rgb(9 9 11/.35);
+    transition:border-radius var(--dur-collapse) var(--ease-out),
+               border-color var(--dur-collapse) var(--ease-out)}
+  /* 对接态:相接的两侧圆角归零;左岛右描边转透明,由右岛的左描边充当那道竖分隔线 */
+  .islands[data-docked="1"] .island.left{
+    border-top-right-radius:0;border-bottom-right-radius:0;border-right-color:transparent}
+  .islands[data-docked="1"] .island.right{
+    border-top-left-radius:0;border-bottom-left-radius:0}
+  .card.d .editor{padding:14px 15px 8px;min-height:74px}
+  .card.d{border-radius:20px}
+
+  /* ===== 动效零件区 ===== */
+  .parts{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+  @media (max-width:900px){.parts{grid-template-columns:repeat(2,1fr)}}
+  .part{background:rgb(var(--surface));border:1px solid rgb(var(--edge));border-radius:13px;
+    padding:12px;display:flex;flex-direction:column;gap:9px;box-shadow:var(--shadow-card)}
+  .part h3{margin:0;font-size:12.5px;font-weight:700}
+  .part .spec{font-size:11px;line-height:1.65;color:rgb(var(--content-subtle));
+    font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+  .part .demo{height:64px;display:grid;place-items:center;border-radius:10px;
+    background:rgb(var(--surface-muted)/.55);border:1px dashed rgb(var(--edge))}
+  .part .play{align-self:flex-start;font-size:11px;font-weight:600;padding:4px 10px;border-radius:7px;
+    border:1px solid rgb(var(--edge));background:rgb(var(--surface));color:rgb(var(--content-muted));
+    cursor:pointer;transition:all .15s}
+  .part .play:hover{border-color:rgb(var(--accent)/.45);color:rgb(var(--accent-strong))}
+  .demoTag{display:inline-flex;align-items:center;gap:6px;height:25px;padding:0 9px;border-radius:8px;
+    border:1px solid rgb(var(--edge));background:rgb(var(--surface));font-size:11.5px;
+    color:rgb(var(--content-muted))}
+  .demoTag.go{animation:tagIn .36s var(--spring) both}
+  .demoSend{width:32px;height:32px;border-radius:11px;background:rgb(var(--accent));color:#fff;
+    display:grid;place-items:center;border:none;cursor:pointer}
+  .demoSend.go{animation:sendPulse .5s var(--ease-out)}
+  .demoSend.go .ic{animation:launch .5s var(--ease-in-out)}
+  .demoCard{width:190px;border-radius:14px;border:1px solid rgb(var(--input-edge));
+    background:rgb(var(--surface));padding:8px 10px;font-size:11.5px;color:rgb(var(--content-subtle));
+    transition:border-color .2s,box-shadow .32s}
+  .demoCard.focus{border-color:rgb(var(--accent)/.5);
+    box-shadow:0 0 0 3.5px rgb(var(--accent)/.1),0 12px 32px -18px rgb(var(--accent)/.5)}
+
+  /* ===== 对比表 ===== */
+  table{border-collapse:separate;border-spacing:0;width:100%;font-size:12px;
+    background:rgb(var(--surface));border:1px solid rgb(var(--edge));border-radius:13px;overflow:hidden}
+  th,td{text-align:left;padding:9px 11px;border-bottom:1px solid rgb(var(--edge)/.7);vertical-align:top}
+  th{background:rgb(var(--surface-muted)/.6);font-size:11px;letter-spacing:.04em;
+    color:rgb(var(--content-subtle));font-weight:700}
+  tr:last-child td{border-bottom:none}
+  td b{color:rgb(var(--content))}
+  .dotline{display:inline-flex;align-items:center;gap:5px}
+  .dotline i{width:7px;height:7px;border-radius:50%;flex:none}
+  .foot{margin:26px 0 0;font-size:11.5px;line-height:1.8;color:rgb(var(--content-subtle));
+    border-top:1px solid rgb(var(--edge));padding-top:14px}
+  .foot b{color:rgb(var(--content-muted))}
+</style>
+</head>
+<body data-theme="light">
+
+<div class="wrap">
+  <div class="topbar">
+    <h1>Composer 输入框面板 · 重设计四方案</h1>
+    <p>
+      现有的输入框功能已很齐全,问题在两处:<b>① 质感</b>——圆角混用(卡片 16px / 图标按钮 12px / chip 8px)、静止时是一根 1px 灰线、聚焦只有描边变色、发送键没有任何"提交"反馈;
+      <b>② 宽窄切换是瞬移</b>——折叠靠 <code>display:none ↔ inline-flex</code> 互换(<code>styles.css</code> 的 <code>.composer-row-collapsed</code> 规则),所以开关侧栏、进出宽屏模式(聊天+面板 3:7)、拖分隔条时,动作行会在某个像素上"啪"地换一种形态。
+      下面四个方案都修这两点,差别在于<b>窄屏最终长成什么、以及怎么过去</b>。
+    </p>
+    <p style="margin-top:6px">
+      拖动下方的<b>宽度滑块</b>就是在模拟"卡片变窄/变宽"(它同时驱动四个方案,便于横向对比);也可以在聊天框里直接打字,发送键会实时响应。
+    </p>
+  </div>
+
+  <div class="ctrlbar">
+    <div class="cg">
+      <label>预设</label>
+      <div class="seg" id="presets">
+        <button data-w="900">宽 900</button>
+        <button data-w="700">中 700</button>
+        <button data-w="520">窄 520</button>
+        <button data-w="360">极窄 360</button>
+      </div>
+    </div>
+    <div class="slider">
+      <label for="w">宽度</label>
+      <input type="range" id="w" min="330" max="980" step="1" value="620">
+      <span class="wbadge">栏 <b id="wv">620</b>px · 卡片 <b id="cv">—</b>px
+        <span class="mode" id="mv">宽</span></span>
+    </div>
+    <div class="cg">
+      <label>内容</label>
+      <div class="seg" id="states">
+        <button data-s="idle">空</button>
+        <button data-s="typed">输入</button>
+        <button data-s="attach">附件</button>
+        <button data-s="busy">运行中</button>
+      </div>
+    </div>
+    <button class="icon-btn" id="themeBtn" title="切换主题"></button>
+  </div>
+
+  <main id="stages"></main>
+
+  <section class="variant" id="parts">
+    <div class="vhead"><h2>通用动效零件(四个方案共用)</h2>
+      <span class="tag gray">点击每个盒子播放</span></div>
+    <p class="vdesc">无论最终选哪个方案,底层的"手感"是同一套。这里把六个零件单独拆出来,方便逐条确认力度与时长。</p>
+    <div class="parts" id="partsGrid"></div>
+  </section>
+
+  <section class="variant" id="compare">
+    <div class="vhead"><h2>横向对比</h2></div>
+    <table>
+      <thead><tr>
+        <th style="width:104px">方案</th><th style="width:190px">窄屏形态</th><th>过渡手法</th>
+        <th style="width:96px">观感</th><th style="width:150px">改动量</th><th style="width:130px">风险</th>
+      </tr></thead>
+      <tbody>
+        <tr>
+          <td><b>A 融合收起</b></td>
+          <td>齿轮图标(同现状),但带权限色点</td>
+          <td>chip 逐个 0fr 收拢 + 图标回弹旋转入场;展开反序错峰</td>
+          <td class="dotline"><i style="background:rgb(var(--content-subtle))"></i>稳重</td>
+          <td>最小:只加动效与质感,结构零改动</td>
+          <td>最低。等价于现有行为加一层过渡</td>
+        </tr>
+        <tr>
+          <td><b>B 迷你药丸</b></td>
+          <td>一颗可分段点的药丸:模型 ▾ | ⚡级别 | 🛡权限,再窄降为纯图标</td>
+          <td>三枚 chip 的边框/底色淡出、彼此滑近溶成一颗药丸</td>
+          <td class="dotline"><i style="background:rgb(var(--info))"></i>精巧</td>
+          <td>中:新增 Minipill 组件 + 两级紧凑态 CSS</td>
+          <td>低-中。窄屏下可点目标变多,需要保证触控尺寸</td>
+        </tr>
+        <tr>
+          <td><b>C 级联折叠</b></td>
+          <td>逐级让位:先并"思考+权限",再收上下文环,最后才是齿轮</td>
+          <td>每个控件有自己的阈值,收窄是连续的"呼吸"而非断点跳变</td>
+          <td class="dotline"><i style="background:rgb(var(--content-muted))"></i>克制</td>
+          <td>中:useComposerRowFit 改成多级判定 + 并合态 chip</td>
+          <td>中。层级多,需要真机回归四级宽度</td>
+        </tr>
+        <tr>
+          <td><b>D 悬浮双岛</b></td>
+          <td>两岛对接成一条底栏;更窄时左岛塌成齿轮</td>
+          <td>岛间距 → 0、相接圆角归零、"咔"地连成一体</td>
+          <td class="dotline"><i style="background:rgb(var(--accent))"></i>亮眼</td>
+          <td>大:动作行改为浮动件,卡片留白与投影一起调</td>
+          <td>中-高。与现有"卡片底边内嵌操作行"的视觉惯例差异最大</td>
+        </tr>
+      </tbody>
+    </table>
+    <p class="foot">
+      <b>推荐</b>:以 <b>A 的质感与零件</b>为底座(它不改变交互模型,风险最低),再把 <b>C 的逐级让位</b>作为宽窄过渡策略 —— 两者叠加就是"看起来新、用起来还是原来那套"的组合。<b>B</b> 单独的价值在于窄屏不再丢失"当前模型/级别/权限"的可读性,如果觉得窄屏只剩齿轮可接受,就不必上 B。<b>D</b> 观感最强,但它把控件搬出了卡片,和项目里其它面板(会话流卡片、计划卡、审批卡)的语汇不太一致,建议只在想明显"换风格"时选。
+    </p>
+  </section>
+</div>
+
+<script>
+/* =========================================================================
+ * 图标(Tabler 风格 24 视图框,描边 1.8)
+ * ========================================================================= */
+const ICONS = {
+  plus:'<path d="M12 5v14M5 12h14"/>',
+  chev:'<path d="M6 9l6 6 6-6"/>',
+  send:'<path d="M10 14L21 3"/><path d="M21 3l-6.5 18a.55.55 0 0 1-1 0L10 14 3 10.5a.55.55 0 0 1 0-1L21 3z"/>',
+  stop:'<rect x="7.5" y="7.5" width="9" height="9" rx="2.2" fill="currentColor" stroke="none"/>',
+  clip:'<path d="M15 7l-6.5 6.5a1.5 1.5 0 0 0 2.12 2.12L17 9.24a3 3 0 0 0-4.24-4.24L5.4 12.36a5 5 0 0 0 7.07 7.07l5.3-5.3"/>',
+  file:'<path d="M14 3v4a1 1 0 0 0 1 1h4"/><path d="M5 21V5a2 2 0 0 1 2-2h7l5 5v13a2 2 0 0 1-2 2z"/>',
+  photo:'<rect x="4" y="4" width="16" height="16" rx="2.5"/><circle cx="9" cy="9" r="1.4"/><path d="M4 16.5l4-4 5 5 3-3 4 4"/>',
+  x:'<path d="M6 6l12 12M18 6L6 18"/>',
+  bolt:'<path d="M13 3v7h6l-8 11v-7H5z"/>',
+  bulb:'<path d="M9.5 18h5"/><path d="M10.5 21h3"/><path d="M12 3a6 6 0 0 1 3.9 10.6V16H8.1v-2.4A6 6 0 0 1 12 3z"/>',
+  shield:'<path d="M12 3a12 12 0 0 0 8.5 3A12 12 0 0 1 12 21a12 12 0 0 1-8.5-15A12 12 0 0 0 12 3z"/>',
+  shieldCheck:'<path d="M12 3a12 12 0 0 0 8.5 3A12 12 0 0 1 12 21a12 12 0 0 1-8.5-15A12 12 0 0 0 12 3z"/><path d="M9 12l2 2 4-4"/>',
+  cpu:'<rect x="6.5" y="6.5" width="11" height="11" rx="2.5"/><path d="M9.5 2.5v2M14.5 2.5v2M9.5 19.5v2M14.5 19.5v2M2.5 9.5h2M2.5 14.5h2M19.5 9.5h2M19.5 14.5h2"/>',
+  mic:'<path d="M9.5 5a2.5 2.5 0 0 1 5 0v4.5a2.5 2.5 0 0 1-5 0z"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0"/><path d="M12 17.5V21"/>',
+  gear:'<path d="M4 7h16M4 12h16M4 17h16"/>'+
+    '<circle cx="15" cy="7" r="2.2" style="fill:rgb(var(--surface))"/>'+
+    '<circle cx="9" cy="12" r="2.2" style="fill:rgb(var(--surface))"/>'+
+    '<circle cx="17" cy="17" r="2.2" style="fill:rgb(var(--surface))"/>',
+  grip:'<circle cx="9" cy="6" r="1" fill="currentColor" stroke="none"/><circle cx="15" cy="6" r="1" fill="currentColor" stroke="none"/><circle cx="9" cy="12" r="1" fill="currentColor" stroke="none"/><circle cx="15" cy="12" r="1" fill="currentColor" stroke="none"/><circle cx="9" cy="18" r="1" fill="currentColor" stroke="none"/><circle cx="15" cy="18" r="1" fill="currentColor" stroke="none"/>',
+  sparkle:'<path d="M12 3.5l1.7 4.6 4.8 1.7-4.8 1.7L12 16.1l-1.7-4.6L5.5 9.8l4.8-1.7z"/><path d="M18.5 15.5l.8 2.2 2.2.8-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.8z"/>',
+  chart:'<path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/>',
+  lock:'<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/>',
+  moon:'<path d="M12 3a6.5 6.5 0 0 0 9 9 9 9 0 1 1-9-9z"/>',
+  sun:'<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>',
+  check:'<path d="M5 12.5l4.5 4.5L19 7"/>',
+};
+function ic(n,s=14,style){
+  return '<svg class="ic" width="'+s+'" height="'+s+'" viewBox="0 0 24 24" fill="none" '+
+    'stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"'+
+    (style?' style="'+style+'"':'')+'>'+(ICONS[n]||'')+'</svg>';
+}
+/** 上下文占用的告警色阶(55% 琥珀 / 80% 红),对齐 contextWindow 的分档 */
+function ringColor(pct){ return pct>=80?'var(--danger)':pct>=55?'var(--warning)':'var(--accent)'; }
+/** 上下文环:实心环 + 百分比数字 */
+function ringHTML(pct,size){
+  const r=13, c=2*Math.PI*r, col = ringColor(pct);
+  return '<span class="ringwrap">'+
+    '<svg class="ring" width="'+(size||22)+'" height="'+(size||22)+'" viewBox="0 0 36 36">'+
+      '<circle cx="18" cy="18" r="'+r+'" fill="none" stroke="rgb(var(--surface-hover))" stroke-width="3.4"/>'+
+      '<circle class="ring-arc" cx="18" cy="18" r="'+r+'" fill="none" stroke="rgb('+col+')" stroke-width="3.4" '+
+        'stroke-linecap="round" stroke-dasharray="'+(c*pct/100).toFixed(1)+' '+c.toFixed(1)+'" '+
+        'transform="rotate(-90 18 18)"/>'+
+    '</svg><span class="ringpct">'+pct+'%</span></span>';
+}
+/** 思考级别的柱状指示(窄屏下用它替代文字) */
+function lvlHTML(level,max){
+  let out='<span class="lvl">';
+  for(let i=0;i<max;i++) out+='<i class="'+(i<level?'on':'')+'" style="height:'+(5+i*2)+'px"></i>';
+  return out+'</span>';
+}
+
+/* =========================================================================
+ * 方案装配:每个方案一段动作行 + 自己的阈值函数
+ * 阈值刻意各不相同 —— 它们衡量的是"卡片宽度",也就是用户实际拖动的东西。
+ * 全部带 24px 回滞(--slack),镜像 useComposerRowFit 的 RESHOW_SLACK_PX。
+ * ========================================================================= */
+const CFG = {
+  claude:{name:'Claude',dot:'#D97757',glyph:'✳'},
+  codex:{name:'Codex',dot:'#10A37F',glyph:'◎'},
+  pi:{name:'Pi',dot:'#A78BFA',glyph:'π'},
+};
+const CTX = 42;   /* 上下文占用示意值 */
+
+const VARIANT_DATA = [
+  {
+    id:'A', key:'a', name:'方案 A · 融合收起',
+    tags:[['结构不变','gray'],['动效 + 质感',''],['风险最低','']],
+    desc:'保持现在的交互模型(宽屏铺开三枚 chip,窄屏收成一个齿轮图标),把力气全花在<b>过渡</b>与<b>质感</b>上:chip 逐个收进壳里、齿轮图标回弹旋转入场、卡片聚焦点亮顶部发丝线、运行中顶部扫光、发送键有"起飞"反馈。展开时反序错峰,所以拉宽窗口是"一层层长回来",不是一次性弹出。',
+    meta:[['折叠阈值','卡片 < 580px(沿用现状)'],['过渡时长','360ms / 错峰 22ms'],['曲线','cubic-bezier(.22,1,.36,1)']],
+    tiers:[580],
+    thresholds:'580px',
+  },
+  {
+    id:'B', key:'b', name:'方案 B · 迷你药丸',
+    tags:[['窄屏可读',''],['分段可点','violet'],['推荐搭配 A','gray']],
+    desc:'窄屏不再"只剩一个齿轮"——三枚 chip 先<b>溶成一颗药丸</b>:一颗带描边的容器内部三段并列(模型 ▾ | ⚡思考级别 | 🛡权限),每段仍是独立可点目标,打开各自的浮层。再窄一档,药丸内部段落变紧凑(文字收成图标 + 柱状级别 + 权限色点),最后才降级为单个齿轮。好处是窄屏下"当前用什么模型、什么级别、什么权限"仍然一眼可见,而不是要点开才知道。',
+    meta:[['三档阈值','560 / 470 / 370px'],['并合动画','360ms 淡出边框 + 滑近'],['触控','段落高 22px,间距 ≥6px(需真机复核)']],
+    tiers:[560,470,370],
+    thresholds:'560 / 470 / 370px',
+  },
+  {
+    id:'C', key:'c', name:'方案 C · 级联折叠',
+    tags:[['连续让位',''],['替换 580 断点',''],['推荐搭配 A','gray']],
+    desc:'现在的问题是<b>一刀切</b>:卡片差 1px 到 580,动作行就整个换形态,所以拖分隔条时观感最差。这个方案把折叠拆成四级,每级只让掉一个控件:① 思考级别与权限<b>并成一枚"思考·权限"chip</b>;② 上下文环收进模型 chip 的右端(变成一个小弧,占用超阈值才提醒);③ 模型与并合 chip 都只留图标;④ 最后才是齿轮。每级有独立阈值,收窄过程像"呼吸",并且<b>信息不会整块消失</b>——齿轮图标上留一个权限语义色点。',
+    meta:[['四级阈值','720 / 600 / 470px'],['并合态','思考 + 权限 合成一枚 chip'],['兜底','齿轮带权限色点,不让语义全丢']],
+    tiers:[720,600,470],
+    thresholds:'720 / 600 / 470px',
+  },
+  {
+    id:'D', key:'d', name:'方案 D · 悬浮双岛',
+    tags:[['视觉最强','amber'],['改动最大','amber'],['建议慎选','gray']],
+    desc:'把操作行从"卡片底边内侧"请出来,变成两枚<b>浮动岛</b>:左岛 = 附件 + 配置,右岛 = 语音 + SDK + 发送;输入文字独占卡片主体,留白更大、卡片更圆。窄屏时两岛<b>对接</b>成一条底栏(岛间距归零、相接圆角归一、中间补一道竖分隔),再窄则左岛塌成齿轮。视觉上像"两个模块咔地拼上",是目前四个里最抓眼的;代价是与项目里其它卡片(审批卡、计划卡、会话流卡片)的语汇不太一致。',
+    meta:[['对接阈值','卡片 ≥ 620px 双岛分离'],['对接动画','gap → 0 + 圆角归零,360ms'],['代价','卡片留白/投影体系需一起调整']],
+    tiers:[620,500],
+    thresholds:'620 / 500px',
+  },
+];
+
+/* ---- 动作行模板(四个方案各自的结构) ---- */
+function slots(arr){ return arr.map(function(s,i){
+  return '<span class="slot" id="'+s.id+'" style="--i:'+i+'" '+(s.off?'data-off="1"':'')+'>'+
+         '<i>'+s.html+'</i></span>';
+}).join(''); }
+
+function attachBtn(){ return '<button class="ibtn" title="添加附件 / 图片 / 斜杠命令">'+ic('plus',17)+'</button>'; }
+
+/* 每个可紧凑的 chip 都是 [图标][文字壳][箭头壳]:两段壳一起收,chip 就缩成图标按钮。 */
+function chevSlot(){ return '<span class="lblwrap"><i>'+ic('chev',11,'opacity:.5')+'</i></span>'; }
+function chipModel(){
+  return '<button class="chip" data-compact="0" title="模型">'+ic('cpu',13)+
+    '<span class="lblwrap"><i><span class="vt">Opus 4.6</span></i></span>'+chevSlot()+'</button>';
+}
+function chipEffort(level){
+  return '<button class="chip" data-compact="0" title="思考级别">'+ic('bulb',13)+
+    '<span class="lblwrap"><i><span class="vt">思考 高</span></i></span>'+chevSlot()+'</button>';
+}
+function chipPerm(){
+  return '<button class="chip on" data-c="warning" data-compact="0" title="权限模式">'+
+    ic('shield',13)+'<span class="lblwrap"><i><span class="vt">编辑自动</span></i></span>'+chevSlot()+'</button>';
+}
+function providerChip(id){
+  return '<button class="chip" id="'+(id||'')+'" data-compact="0" title="SDK(会话开始后锁定)">'+
+    '<span class="pglyph" style="background:'+CFG.claude.dot+'">'+CFG.claude.glyph+'</span>'+
+    '<span class="lblwrap"><i><span class="vt">'+CFG.claude.name+'</span></i></span>'+chevSlot()+'</button>';
+}
+function micBtn(disabled){ return '<button class="ibtn" '+(disabled?'disabled ':'')+'title="语音输入">'+ic('mic',16)+'</button>'; }
+function sendBtn(){ return '<button class="send" data-ready="1" title="发送">'+ic('send',16)+'</button>'; }
+function stopBtn(){ return '<button class="stop" title="停止生成">'+ic('stop',14)+'</button>'; }
+/** 窄屏兜底图标。带一个权限语义色点 —— 信息可以收起来,但"当前是什么权限"不能整块消失。 */
+function gearBtn(badge){ return '<button class="ibtn gear" title="设置本回合(模型 / 思考 / 权限 / 上下文)">'+
+  ic('gear',17)+(badge?'<span class="gbadge" style="background:rgb(var(--warning))"></span>':'')+'</button>'; }
+
+/** 各方案的动作行。左簇包一层 .cluster(gap 2px),壳的负 margin 才能精确抵掉它。 */
+function rowHTML(v){
+  const R=function(inner){ return '<span class="cluster">'+inner+'</span>'+
+    '<span class="cluster right">'+micBtn()+providerChip('prov-'+v.key)+sendBtn()+'</span>'; };
+  if(v.key==='a'){
+    return '<div class="row" id="row-a" data-dir="in" style="--n:6">'+
+      R(slots([
+        {id:'a-attach',html:attachBtn()},
+        {id:'a-model', html:chipModel()},
+        {id:'a-effort',html:chipEffort()},
+        {id:'a-perm',  html:chipPerm()},
+        {id:'a-ring',  html:ringHTML(CTX)},
+        {id:'a-gear',  html:gearBtn(true),off:true},
+      ]))+'</div>';
+  }
+  if(v.key==='b'){
+    /* 注意 id 不能叫 b-pill —— 外壳(槽)已经占了那个 id,重复 id 时 getElementById
+       会拿到外壳,data-compact 就写到外壳上、内部文字永远收不掉。 */
+    const pill='<div class="minipill" id="b-pillbox" data-compact="0">'+
+      '<button class="mseg" title="模型">'+ic('cpu',13)+
+        '<span class="lblwrap"><i><span class="vt">Opus 4.6</span></i></span></button>'+
+      '<span class="mmid"></span>'+
+      '<button class="mseg" title="思考级别">'+ic('bulb',13)+
+        '<span class="lblwrap"><i><span class="vt">高</span></i></span>'+lvlHTML(3,5)+'</button>'+
+      '<span class="mmid"></span>'+
+      '<button class="mseg" title="权限模式" style="color:rgb(var(--warning))">'+ic('shield',13)+
+        '<span class="lblwrap"><i><span class="vt">编辑自动</span></i></span></button>'+
+      '</div>';
+    return '<div class="row" id="row-b" data-dir="in" style="--n:7">'+
+      R(slots([
+        {id:'b-attach',html:attachBtn()},
+        {id:'b-model', html:chipModel()},
+        {id:'b-effort',html:chipEffort()},
+        {id:'b-perm',  html:chipPerm()},
+        {id:'b-ring',  html:ringHTML(CTX)},
+        {id:'b-pill',  html:pill,off:true},
+        {id:'b-gear',  html:gearBtn(true),off:true},
+      ]))+'</div>';
+  }
+  if(v.key==='c'){
+    const mode='<button class="modechip" id="c-modebtn" data-compact="0" title="思考级别与权限模式">'+
+      ic('bulb',13)+'<span class="lblwrap"><i><span class="vt">高</span></i></span>'+
+      '<span class="sep"></span>'+
+      ic('shield',13,'color:rgb(var(--warning))')+
+      '<span class="lblwrap"><i><span class="vt">编辑自动</span></i></span>'+ic('chev',11,'opacity:.5')+'</button>';
+    /* 模型 chip 右端挂一枚微型上下文弧(环的降级形态):环收走时它长出来,
+       占用到警告区间就变琥珀,免得窄屏彻底看不到上下文压力 */
+    const modelWithArc='<button class="chip" id="c-modelbtn" data-compact="0" title="模型">'+ic('cpu',13)+
+      '<span class="lblwrap"><i><span class="vt">Opus 4.6</span></i></span>'+
+      '<span class="slot" id="c-arc" style="--i:3"><i>'+
+      '<svg width="15" height="15" viewBox="0 0 36 36" style="margin-left:4px">'+
+      '<circle cx="18" cy="18" r="14" fill="none" stroke="rgb(var(--surface-hover))" stroke-width="4.5"/>'+
+      '<circle cx="18" cy="18" r="14" fill="none" stroke="rgb('+ringColor(CTX)+')" stroke-width="4.5" '+
+      'stroke-linecap="round" stroke-dasharray="'+(2*Math.PI*14*CTX/100).toFixed(1)+' '+(2*Math.PI*14).toFixed(1)+
+      '" transform="rotate(-90 18 18)"/></svg></i></span>'+
+      ic('chev',11,'opacity:.5')+'</button>';
+    return '<div class="row" id="row-c" data-dir="in" style="--n:7">'+
+      R(slots([
+        {id:'c-attach',html:attachBtn()},
+        {id:'c-model', html:modelWithArc},
+        {id:'c-effort',html:chipEffort()},
+        {id:'c-perm',  html:chipPerm()},
+        {id:'c-ring',  html:ringHTML(CTX)},
+        {id:'c-mode',  html:mode,off:true},
+        {id:'c-gear',  html:gearBtn(true),off:true},
+      ]))+'</div>';
+  }
+  /* D:两枚浮动岛 + 中间的弹性隔断(见 .islands 注释) */
+  return '<div class="islands" id="islands-d" data-docked="0">'+
+      '<span class="island left">'+attachBtn()+
+        '<span class="slot" id="d-model" style="--i:1"><i>'+chipModel()+'</i></span>'+
+        '<span class="slot" id="d-effort" style="--i:2"><i>'+chipEffort()+'</i></span>'+
+        '<span class="slot" id="d-perm" style="--i:3"><i>'+chipPerm()+'</i></span>'+
+        '<span class="slot" id="d-ring" style="--i:4"><i>'+ringHTML(CTX)+'</i></span>'+
+        '<span class="slot" id="d-gear" style="--i:5" data-off="1"><i>'+gearBtn(true)+'</i></span>'+
+      '</span>'+
+      '<span class="spacer"></span>'+
+      '<span class="island right">'+micBtn()+
+        '<span class="slot" id="d-prov" style="--i:1"><i>'+providerChip('prov-d')+'</i></span>'+
+        sendBtn()+'</span>'+
+    '</div>';
+}
+
+/* ---- 整个舞台 ---- */
+function stageHTML(v){
+  return '<section class="variant" id="v'+v.id+'">'+
+    '<div class="vhead"><h2>'+v.name+'</h2>'+
+      v.tags.map(function(t){return '<span class="tag '+t[1]+'">'+t[0]+'</span>';}).join('')+'</div>'+
+    '<p class="vdesc">'+v.desc+'</p>'+
+    '<div class="vmeta">'+v.meta.map(function(m){return '<span><b>'+m[0]+'</b>'+m[1]+'</span>';}).join('')+
+      '<span class="tierpill" id="tier-'+v.key+'" data-folded="0"><b>当前档位</b><em>0</em>/'+v.tiers.length+'</span></div>'+
+    '<div class="stagebox" style="margin-top:12px"><div class="stage" data-stage="'+v.key+'">'+
+      '<div class="chat">'+
+        '<div class="msg a">已经把 <span class="mono">useComposerRowFit</span> 的折叠判定读完了,现在收窄到 580px 以下时,chips 会被 CSS 直接 <span class="mono">display:none</span> 掉。</div>'+
+        '<div class="msg u">那就把这段改成有过渡的,顺便把输入框整体做得好看一点。</div>'+
+        '<div class="msg a" style="max-width:60%">收到,下面的输入框就是改后的样子 —— 拖上面的宽度滑块看它怎么收。</div>'+
+      '</div>'+
+      '<div class="composer">'+
+        '<div class="card'+(v.key==='d'?' d':'')+'" data-card="'+v.key+'">'+
+          '<div class="extras" id="ex-'+v.key+'"></div>'+
+          '<div class="editor" contenteditable="true" spellcheck="false" data-ed="'+v.key+'"></div>'+
+          rowHTML(v)+
+        '</div>'+
+      '</div>'+
+    '</div></div>'+
+  '</section>';
+}
+
+document.getElementById('stages').innerHTML = VARIANT_DATA.map(stageHTML).join('');
+
+/* =========================================================================
+ * 内容状态(空 / 输入 / 附件 / 运行中)—— 四个方案同时切换,便于对比
+ * ========================================================================= */
+const TEXT = '把 composer 的动作行改成有过渡的收拢,并统一圆角与聚焦态。';
+let state='idle';
+
+function renderState(){
+  VARIANT_DATA.forEach(function(v){
+    const card=document.querySelector('[data-card="'+v.key+'"]');
+    const ex=document.getElementById('ex-'+v.key);
+    const ed=document.querySelector('[data-ed="'+v.key+'"]');
+    if(!card||!ex||!ed) return;
+    card.dataset.busy = state==='busy' ? '1' : '0';
+
+    if(state==='idle'){ ex.innerHTML=''; ed.textContent=''; ed.dataset.ph='给 Claude 发消息…(Enter 发送,Shift+Enter 换行)'; }
+    if(state==='typed'){ ex.innerHTML=''; ed.textContent=TEXT; }
+    if(state==='attach'){
+      ex.innerHTML='<div class="exrow">'+
+        '<span class="tag">'+ic('file',12)+'<span class="nm">useComposerRowFit.ts</span><button class="x">'+ic('x',10)+'</button></span>'+
+        '<span class="tag paste">'+ic('clip',12)+'<span class="nm">粘贴内容 · 1.2k 字</span><button class="x">'+ic('x',10)+'</button></span>'+
+        '</div>'+
+        '<div class="exrow"><div class="thumb"><button class="x">'+ic('x',10)+'</button></div></div>';
+      ed.textContent='参考这张标注图,重点看折叠那一段。';
+    }
+    if(state==='busy'){
+      ex.innerHTML='<div class="queue"><div class="qh"><span>待发送</span><span>2 条</span></div>'+
+        '<div class="qitem" style="animation-delay:.03s"><span class="g">'+ic('grip',12)+'</span><span class="n">1.</span>'+
+          '<span class="t">顺便把发送键的按下反馈加上</span></div>'+
+        '<div class="qitem" style="animation-delay:.09s"><span class="g">'+ic('grip',12)+'</span><span class="n">2.</span>'+
+          '<span class="t">窄屏下 SDK 芯片也应收成图标</span></div></div>';
+      ed.textContent=''; ed.dataset.ph='Claude 正在工作…(仍可输入,会自动排队)';
+    }
+    /* 运行中:右侧换成停止键(含旋转锥形环);空且非运行才是禁用发送 */
+    const row=document.querySelector('#v'+v.id+' [data-stage="'+v.key+'"] .row, #v'+v.id+' [data-stage="'+v.key+'"] .islands');
+    if(row){
+      const old=row.querySelector('.send, .stop');
+      if(old){
+        const neo = state==='busy' ? stopBtn() : sendBtn();
+        old.outerHTML=neo;
+        if(state!=='busy'){
+          const b=row.querySelector('.send');
+          b.dataset.ready = (state==='idle') ? '0' : '1';
+          if(state==='idle') b.disabled=true;
+        }
+      }
+    }
+  });
+}
+
+/* =========================================================================
+ * 阈值判定(带 24px 回滞,镜像 useComposerRowFit 的 RESHOW_SLACK_PX)
+ *   ths: 逐级阈值(递减)。返回 tier:0 = 最展开,数字越大越折叠。
+ * ========================================================================= */
+const SLACK=24;
+const prevTier={};
+function tierFor(key,w,ths){
+  let t=0; while(t<ths.length && w<ths[t]) t++;
+  const prev=prevTier[key];
+  if(prev!=null && t<prev){            /* 正在变宽:逐级要求"越过阈值 + SLACK"才升回去 */
+    let u=prev;
+    while(u>0 && w>=ths[u-1]+SLACK) u--;
+    t=u;
+  }
+  prevTier[key]=t;
+  return t;
+}
+
+/* 逐方案的层级 → 各槽位开关。刻意用"显式判定"而不是数据表:每个方案的让位
+   顺序本身就是设计决策,写成代码最清楚,后续也能直接照着改 useComposerRowFit。 */
+function applyTier(v,tier){
+  const set=function(id,off){
+    const el=document.getElementById(id);
+    if(el) el.dataset.off = off ? '1' : '0';
+  };
+  const compact=function(id,on){
+    const el=document.getElementById(id);
+    if(el) el.dataset.compact = on ? '1' : '0';
+  };
+  /* 右侧 SDK 芯片:任何方案进入折叠档就收成品牌图标 —— 现在它始终保留全名
+     (最多 140px),窄屏时正是它把整行挤爆的元凶之一。 */
+  compact('prov-'+v.key, tier>=1);
+
+  if(v.key==='a'){
+    const off = tier>=1;
+    set('a-model',off); set('a-effort',off); set('a-perm',off); set('a-ring',off);
+    set('a-gear',!off);                  /* 齿轮只在折叠档出现,并带权限语义色点 */
+  }
+  if(v.key==='b'){
+    const merged = tier>=1;              /* ①② 三枚 chip 溶成药丸 */
+    set('b-model',merged); set('b-effort',merged); set('b-perm',merged); set('b-ring',merged);
+    set('b-pill', !(tier===1||tier===2));/* 药丸只在 1/2 档出现 */
+    set('b-gear', tier<3);               /* ③ 最窄档才降级为单图标 */
+    compact('b-pillbox', tier>=2);       /* ② 药丸内部文字收成图标 + 柱状级别 */
+  }
+  if(v.key==='c'){
+    set('c-ring', tier>=1);              /* ① 先让掉上下文环 */
+    set('c-arc',  tier<1);               /* 环的位置改成模型 chip 右端的小弧 */
+    set('c-effort',tier>=1); set('c-perm',tier>=1);
+    set('c-mode', !(tier===1||tier===2));/* ② 思考 + 权限并成一枚,仅 1/2 档可见 */
+    compact('c-modelbtn', tier>=2);      /* ③ 模型 / 并合 chip 只留图标 */
+    compact('c-modebtn',  tier>=2);
+    set('c-model', tier>=3);
+    set('c-gear',  tier<3);              /* ④ 齿轮兜底(带权限色点) */
+  }
+  if(v.key==='d'){
+    const islands=document.getElementById('islands-d');
+    if(islands) islands.dataset.docked = tier>=1 ? '1' : '0';
+    set('d-ring',tier>=1);               /* 对接后先让掉上下文环 */
+    const off = tier>=2;                 /* 更窄:左岛整体塌成齿轮(右岛原地不动) */
+    set('d-model',off); set('d-effort',off); set('d-perm',off);
+    set('d-gear',!off);
+  }
+}
+
+/* =========================================================================
+ * 宽度 → 卡片宽度(忠实复刻 styles.css 的 --chat-gutter 阶梯 + 列宽上限 max-w-5xl)
+ * ========================================================================= */
+function gutterFor(paneW){
+  if(paneW < 448) return 20;
+  if(paneW < 704) return 48;
+  if(paneW < 1024) return 80;
+  return 128;
+}
+function applyWidth(paneW){
+  const g=gutterFor(paneW);
+  const card=Math.min(paneW-2*g,1024);
+  /* #bare 模式会把控制条(含这几个读数)整块移除,所以都要判空 —— 这里一旦抛错,
+     后面的层级判定就全不执行,表现是"窄屏完全不折叠"。 */
+  const wv=document.getElementById('wv'), cv=document.getElementById('cv');
+  if(wv) wv.textContent=paneW;
+  if(cv) cv.textContent=Math.round(card);
+  document.querySelectorAll('.stage').forEach(function(s){ s.style.setProperty('--pane-w',paneW+'px'); });
+  document.querySelectorAll('.composer').forEach(function(c){ c.style.setProperty('--gutter',g+'px'); });
+  /* 每个方案各自判定层级(阈值不同,所以窄屏形态也不同)。同时给出收/展方向:
+     收拢时错峰从右往左(最后消失的先走),展开时从左往右 —— 这样"长回来"和
+     "收进去"看起来是两条不同的路径,而不是同一段动画倒放。 */
+  VARIANT_DATA.forEach(function(v){
+    const prev = prevTier[v.key];
+    const tier=tierFor(v.key,card,v.tiers);
+    const dir = (prev==null || tier<=prev) ? 'in' : 'out';
+    const row=document.querySelector('#v'+v.id+' [data-dir]');
+    if(row && row.dataset.dir!==dir) row.dataset.dir=dir;
+    applyTier(v,tier);
+    const tp=document.getElementById('tier-'+v.key);
+    if(tp){
+      tp.querySelector('em').textContent=tier;
+      tp.dataset.folded = tier>0 ? '1':'0';
+    }
+  });
+  /* 徽标:以方案 A 的口径说明整体处于宽/窄(用户最熟悉的那条线) */
+  const mv=document.getElementById('mv');
+  if(mv){
+    mv.textContent = card<580 ? '窄屏形态' : '宽屏形态';
+    mv.style.background = card<580 ? 'rgb(var(--warning)/.14)' : 'rgb(var(--accent)/.12)';
+    mv.style.color = card<580 ? 'rgb(var(--warning))' : 'rgb(var(--accent-strong))';
+  }
+  /* 预览播放:演示"发送"键的应声 */
+  document.querySelectorAll('.send').forEach(function(b){
+    b.dataset.ready = (state==='idle') ? '0' : '1';
+    b.disabled = state==='idle';
+  });
+}
+
+/* =========================================================================
+ * 交互接线
+ * ========================================================================= */
+const wEl=document.getElementById('w');
+function fromSlider(){ applyWidth(Number(wEl.value)); syncPresets(); }
+wEl.addEventListener('input',fromSlider);
+document.getElementById('presets').addEventListener('click',function(e){
+  const b=e.target.closest('button'); if(!b) return;
+  wEl.value=b.dataset.w; fromSlider();
+});
+function syncPresets(){
+  document.querySelectorAll('#presets button').forEach(function(b){
+    b.classList.toggle('cur', b.dataset.w===wEl.value);
+  });
+}
+document.getElementById('states').addEventListener('click',function(e){
+  const b=e.target.closest('button'); if(!b) return;
+  state=b.dataset.s;
+  document.querySelectorAll('#states button').forEach(function(x){ x.classList.toggle('cur',x===b); });
+  renderState(); applyWidth(Number(wEl.value));
+});
+
+/* 卡片聚焦 / 打字 / 发送 */
+document.querySelectorAll('.editor').forEach(function(ed){
+  const card=ed.closest('.card');
+  ed.addEventListener('focus',function(){ card.classList.add('focus'); });
+  ed.addEventListener('blur',function(){ card.classList.remove('focus'); });
+  ed.addEventListener('input',function(){
+    /* contenteditable 删空后常留一个 <br>,`:empty` 就不再命中、占位符回不来。
+       这里主动清干净,等价于真实 ComposerEditor 的 syncEmptyClass。 */
+    const empty=ed.textContent.trim()==='';
+    if(empty && ed.innerHTML!=='') ed.innerHTML='';
+    document.querySelectorAll('.send').forEach(function(b){
+      b.dataset.ready = empty?'0':'1'; b.disabled=empty;
+    });
+    /* 在卡片里打字后,把全局状态切到"输入"(保持滑块与徽标一致) */
+    const t=document.querySelector('#states button[data-s="typed"]');
+    if(t && !t.classList.contains('cur')){ state='typed';
+      document.querySelectorAll('#states button').forEach(function(x){ x.classList.toggle('cur',x===t); });
+      document.querySelectorAll('.card').forEach(function(c){ c.dataset.busy='0'; });
+    }
+  });
+});
+/* 点发送 → 播放"起飞"动画 */
+document.addEventListener('click',function(e){
+  const b=e.target.closest('.send');
+  if(!b||b.disabled) return;
+  b.classList.remove('launch'); void b.offsetWidth; b.classList.add('launch');
+  setTimeout(function(){ b.classList.remove('launch'); },560);
+  const card=b.closest('.card'); const ed=card&&card.querySelector('.editor');
+  if(ed){ ed.textContent=''; ed.dataset.ph='给 Claude 发消息…(Enter 发送,Shift+Enter 换行)'; }
+  document.querySelectorAll('.send').forEach(function(x){ x.dataset.ready='0'; x.disabled=true; });
+});
+/* 标签/图片的关闭按钮(纯演示,点掉就移除) */
+document.addEventListener('click',function(e){
+  const x=e.target.closest('.extras .x');
+  if(!x) return;
+  const host=x.closest('.tag')||x.closest('.thumb');
+  if(host){ host.style.transition='opacity .18s,transform .18s'; host.style.opacity='0';
+    host.style.transform='scale(.9)'; setTimeout(function(){ host.remove(); },180); }
+});
+/* 拖到输入框上:高亮(演示 useComposerRowFit 之外的既有 dragOver 反馈) */
+document.querySelectorAll('.editor').forEach(function(ed){
+  const card=ed.closest('.card');
+  card.addEventListener('dragover',function(e){ e.preventDefault(); card.classList.add('dragover'); });
+  card.addEventListener('dragleave',function(){ card.classList.remove('dragover'); });
+  card.addEventListener('drop',function(e){ e.preventDefault(); card.classList.remove('dragover'); });
+});
+
+/* 主题 */
+const themeBtn=document.getElementById('themeBtn');
+function drawTheme(){
+  const dark=document.body.dataset.theme==='dark';
+  themeBtn.innerHTML=ic(dark?'sun':'moon',15);
+}
+themeBtn.addEventListener('click',function(){
+  document.body.dataset.theme = document.body.dataset.theme==='dark'?'light':'dark';
+  drawTheme();
+});
+
+/* =========================================================================
+ * 动效零件:六个可单独播放的微交互
+ * ========================================================================= */
+const PARTS=[
+  {
+    t:'聚焦光环',
+    spec:'border-color .2s / box-shadow .32s\n顶部发丝线 opacity .34s\n曲线 ease-out(.22,1,.36,1)',
+    demo:'<div class="demoCard" id="p-focus">给 Claude 发消息…</div>',
+    play:function(el){
+      const c=el.querySelector('.demoCard');
+      c.classList.toggle('focus');
+      el.querySelector('.play').textContent = c.classList.contains('focus')?'恢复静止':'播放聚焦';
+    },
+    btn:'播放聚焦',
+  },
+  {
+    t:'发送启动',
+    spec:'图标 launch .5s ease-in-out\n按钮 sendPulse .5s(外扩光环)\n位移 13px,中途缩到 .55',
+    demo:'<button class="demoSend" id="p-send">'+ic('send',16)+'</button>',
+    play:function(el){
+      const b=el.querySelector('.demoSend');
+      b.classList.remove('go'); void b.offsetWidth; b.classList.add('go');
+    },
+    btn:'播放发送',
+  },
+  {
+    t:'运行中环形进度',
+    spec:'conic-gradient 弧 + 遮罩成环\nspin 1.35s linear infinite\n卡片顶部另加 1.6s 扫光',
+    demo:'<button class="stop">'+ic('stop',14)+'</button>',
+    play:null, btn:'常驻(无需播放)',
+  },
+  {
+    t:'附件标签入场',
+    spec:'tagIn .36s spring(.34,1.56,.64,1)\ntranslateY(7px) + scale(.93)\n多枚错峰 30–90ms',
+    demo:'<div style="display:flex;gap:6px"><span class="demoTag" id="p-tag">'+ic('file',12)+'useComposerRowFit.ts</span></div>',
+    play:function(el){
+      const t=el.querySelector('.demoTag');
+      t.classList.remove('go'); void t.offsetWidth; t.classList.add('go');
+    },
+    btn:'播放入场',
+  },
+  {
+    t:'队列项滑入',
+    spec:'qIn .34s ease-out\ntranslateX(-8px) → 0\n错峰 30 / 90ms',
+    demo:'<div style="display:flex;flex-direction:column;gap:4px;width:170px">'+
+         '<div class="qitem" id="p-q1"><span class="g">'+ic('grip',12)+'</span><span class="n">1.</span><span class="t">顺便把发送键反馈加上</span></div>'+
+         '<div class="qitem" id="p-q2"><span class="g">'+ic('grip',12)+'</span><span class="n">2.</span><span class="t">窄屏 SDK 芯片收图标</span></div></div>',
+    play:function(el){
+      ['p-q1','p-q2'].forEach(function(id,i){
+        const n=el.querySelector('#'+id);
+        n.style.animation='none'; void n.offsetWidth;
+        n.style.animation='qIn .34s ease-out '+(i*0.06)+'s both';
+      });
+    },
+    btn:'播放滑入',
+  },
+  {
+    t:'上下文环增长',
+    spec:'stroke-dasharray .6s ease-out\n色阶 55% 琥珀 / 80% 红\n数字随环同步变化',
+    demo:'<div id="p-ring" style="display:flex;align-items:center;gap:8px">'+ringHTML(18)+'</div>',
+    play:function(el){
+      const seq=[18,42,61,84,42]; let i=0;
+      const tick=function(){
+        el.querySelector('#p-ring').innerHTML=ringHTML(seq[i]);
+        i=(i+1)%seq.length;
+      };
+      tick(); clearInterval(el._t); el._t=setInterval(tick,900);
+    },
+    btn:'播放增长',
+  },
+];
+document.getElementById('partsGrid').innerHTML = PARTS.map(function(p,i){
+  return '<div class="part"><h3>'+p.t+'</h3><div class="demo">'+p.demo+'</div>'+
+    '<div class="spec">'+p.spec.replace(/\n/g,'<br>')+'</div>'+
+    '<button class="play" data-i="'+i+'">'+p.btn+'</button></div>';
+}).join('');
+document.getElementById('partsGrid').addEventListener('click',function(e){
+  const b=e.target.closest('.play'); if(!b) return;
+  const p=PARTS[Number(b.dataset.i)];
+  if(p&&p.play) p.play(b.closest('.part'));
+});
+
+/* 初始。支持用地址栏 hash 直接落到某一帧,便于截图/分享:
+   composer-redesign.html#w=520&state=attach&theme=dark */
+function readHash(){
+  const h={}; (location.hash||'').replace(/^#/,'').split('&').forEach(function(kv){
+    if(!kv) return; const p=kv.split('='); h[p[0]]=decodeURIComponent(p[1]||'');
+  });
+  return h;
+}
+const H=readHash();
+if(H.theme==='dark'||H.theme==='light') document.body.dataset.theme=H.theme;
+/* #only=a 只留某一个方案(单独截图 / 贴链接给别人看单个方案时用) */
+if(H.only){
+  const keep=H.only.toUpperCase();
+  VARIANT_DATA.forEach(function(v){
+    if(v.id!==keep){ const el=document.getElementById('v'+v.id); if(el) el.remove(); }
+  });
+  ['parts','compare'].forEach(function(id){
+    const el=document.getElementById(id); if(el) el.remove();
+  });
+}
+/* #bare=1 连页头/控制条/假聊天/方案说明都去掉,只剩输入框本体(单独审图/截图用) */
+if(H.bare){
+  ['.topbar','.ctrlbar','.chat','.vhead','.vdesc','.vmeta'].forEach(function(sel){
+    document.querySelectorAll(sel).forEach(function(el){ el.remove(); });
+  });
+  document.querySelector('.wrap').style.padding='0';
+}
+if(H.w && Number(H.w)>=330 && Number(H.w)<=980) wEl.value=H.w;
+if(H.state && ['idle','typed','attach','busy'].indexOf(H.state)>=0) state=H.state;
+drawTheme();
+syncPresets();
+document.querySelectorAll('#states button').forEach(function(x){
+  x.classList.toggle('cur', x.dataset.s===state);
+});
+renderState();
+applyWidth(Number(wEl.value));
+</script>
+</body>
+</html>

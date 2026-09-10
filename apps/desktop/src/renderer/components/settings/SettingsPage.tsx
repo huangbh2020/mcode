@@ -88,11 +88,11 @@ const NAV_GROUPS: NavGroup[] = [
   {
     labelKey: "settings.navGroup.ai",
     items: [
-      { id: "runtimes", labelKey: "settings.nav.runtimes", icon: IconPackage },
       { id: "custom-models", labelKey: "settings.nav.customModels", icon: IconRobot },
+      { id: "runtimes", labelKey: "settings.nav.runtimes", icon: IconPackage },
+      { id: "plugins", labelKey: "settings.nav.plugins", icon: IconPuzzle },
       { id: "skills", labelKey: "settings.nav.skills", icon: IconSparkles },
       { id: "mcp", labelKey: "settings.nav.mcp", icon: McpIcon },
-      { id: "plugins", labelKey: "settings.nav.plugins", icon: IconPuzzle },
     ],
   },
   {

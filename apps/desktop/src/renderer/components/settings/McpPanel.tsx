@@ -246,6 +246,11 @@ export function McpPanel() {
         // nothing else there — verified for user/plugin scopes).
         url: s.detail,
         kind: s.kind === "sse" ? "sse" : "http",
+        // The main process resolves the server's real config (headers
+        // included) by name; scope pins WHICH source to read, since a name can
+        // exist in both user and project scope.
+        scope: s.scope,
+        projectPath: s.scope === "project" ? projectPath ?? undefined : undefined,
       });
       if (!res.ok) setError(t("settings.mcp.authorizeFailed", { error: res.error ?? "" }));
       await load();
@@ -266,6 +271,8 @@ export function McpPanel() {
         name: s.name,
         url: s.detail,
         kind: s.kind === "sse" ? "sse" : "http",
+        scope: s.scope,
+        projectPath: s.scope === "project" ? projectPath ?? undefined : undefined,
       });
       if (!res.ok) setError(t("settings.mcp.unauthorizeFailed", { error: res.error ?? "" }));
       await load();
