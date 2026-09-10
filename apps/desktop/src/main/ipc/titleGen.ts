@@ -140,7 +140,9 @@ export async function generateSessionTitle(
     releaseBridge = resolved.releaseBridge;
     const cfg = resolved.config;
     model = resolveActiveModel(cfg);
-    env = buildCustomEnv(cfg);
+    // Session id, so the gateway's session header follows the conversation the
+    // title is generated for rather than the process-wide fallback.
+    env = buildCustomEnv(cfg, { sessionId: session.id });
 
     // Resolve the real on-disk binary path (unpacks from asar in a packaged
     // app). See git.ts:generateCommitMessage for the full rationale.

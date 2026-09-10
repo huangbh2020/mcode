@@ -244,6 +244,7 @@ export const zh = {
   "chat.slash.builtin": "内置",
   "chat.slash.project": "项目",
   "chat.slash.global": "全局",
+  "chat.slash.plugin": "插件",
   "chat.kbd.navigate": "导航",
   "chat.slash.switchTab": "切 tab",
   "chat.slash.insert": "插入",

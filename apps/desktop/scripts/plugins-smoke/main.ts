@@ -19,7 +19,7 @@ import { SettingRepo } from "./stub-repositories.js";
 
 import {
   findPluginManifest,
-  pluginSkillsDir,
+  pluginSkillsDirs,
   summarizeComponents,
 } from "../../src/main/plugins/pluginManifest.js";
 import {
@@ -219,9 +219,44 @@ writeFileSync(
 
 /* escaping-manifest plugin (component path must be rejected) */
 mkdirSync(path.join(fixtureDir, "escape-plugin", ".claude-plugin"), { recursive: true });
+mkdirSync(path.join(fixtureDir, "escape-plugin", "skills-local", "local-skill"), { recursive: true });
+writeFileSync(
+  path.join(fixtureDir, "escape-plugin", "skills-local", "local-skill", "SKILL.md"),
+  `---
+name: local-skill
+description: In-root skill
+---
+body`,
+);
 writeFileSync(
   path.join(fixtureDir, "escape-plugin", ".claude-plugin", "plugin.json"),
   JSON.stringify({ name: "escape-plugin", skills: "../../fixtures/demo-plugin/skills" }),
+);
+
+/* array-form manifest plugin (Claude's string[] component paths — real
+ * official-marketplace manifests use both forms) */
+mkdirSync(path.join(fixtureDir, "array-plugin", ".claude-plugin"), { recursive: true });
+mkdirSync(path.join(fixtureDir, "array-plugin", "skills-a", "alpha"), { recursive: true });
+mkdirSync(path.join(fixtureDir, "array-plugin", "skills-b", "beta"), { recursive: true });
+writeFileSync(
+  path.join(fixtureDir, "array-plugin", "skills-a", "alpha", "SKILL.md"),
+  `---
+name: alpha
+description: From skills-a
+---
+body`,
+);
+writeFileSync(
+  path.join(fixtureDir, "array-plugin", "skills-b", "beta", "SKILL.md"),
+  `---
+name: beta
+description: From skills-b
+---
+body`,
+);
+writeFileSync(
+  path.join(fixtureDir, "array-plugin", ".claude-plugin", "plugin.json"),
+  JSON.stringify({ name: "array-plugin", skills: ["./skills-a", "./skills-b"] }),
 );
 
 /* invalid-name plugin (zod must reject) */
@@ -259,7 +294,16 @@ writeFileSync(
 
 /* zip of demo-plugin (wrapped in a top-level dir, GitHub-style) */
 const zipPath = path.join(base, "demo-plugin.zip");
-execSync(`zip -qr "${zipPath}" demo-plugin`, { cwd: fixtureDir });
+try {
+  execSync(`zip -qr "${zipPath}" demo-plugin`, { cwd: fixtureDir });
+} catch {
+  // Windows dev boxes often lack the zip CLI; PowerShell's Compress-Archive
+  // writes the same standard archive (the installer's bsdtar reads both).
+  execSync(
+    `powershell -NoProfile -Command "Compress-Archive -Path 'demo-plugin' -DestinationPath '${zipPath.replace(/'/g, "''")}' -Force"`,
+    { cwd: fixtureDir },
+  );
+}
 
 /* ── 1. manifest discovery + component summary ── */
 console.log("\n[1] manifest discovery & component summary");
@@ -292,11 +336,28 @@ eq(comps.mcpServers[0].detail, "node server.js", "mcp detail is command line");
 const zRes = findPluginManifest(path.join(fixtureDir, "zcode-plugin"));
 ok(zRes != null && zRes.manifest.name === "zcode-plugin", ".zcode-plugin layout discovered");
 
-const escSkills = pluginSkillsDir(path.join(fixtureDir, "escape-plugin"), {
+const escSkills = pluginSkillsDirs(path.join(fixtureDir, "escape-plugin"), {
   name: "escape-plugin",
   skills: "../../fixtures/demo-plugin/skills",
 } as never);
-ok(escSkills === null, "escaping skills path rejected (in-root guard)");
+eq(escSkills, [], "escaping skills path rejected (in-root guard)");
+
+const arrRes = findPluginManifest(path.join(fixtureDir, "array-plugin"));
+ok(arrRes != null, "array-form skills manifest parses");
+const arrComps = summarizeComponents(path.join(fixtureDir, "array-plugin"), arrRes!.manifest);
+eq(
+  arrComps.skills.map((s) => s.name),
+  ["alpha", "beta"],
+  "array-form skills merged from both roots",
+);
+eq(
+  pluginSkillsDirs(path.join(fixtureDir, "escape-plugin"), {
+    name: "escape-plugin",
+    skills: ["../../fixtures/demo-plugin/skills", "./skills-local"],
+  } as never),
+  [path.join(fixtureDir, "escape-plugin", "skills-local")],
+  "array-form: escaping entries dropped, in-root kept",
+);
 
 /* ── 2. install from local dir ── */
 console.log("\n[2] install from local directory");

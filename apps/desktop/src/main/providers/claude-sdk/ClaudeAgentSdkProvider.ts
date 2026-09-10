@@ -745,8 +745,10 @@ export class ClaudeAgentSdkProvider implements AgentProvider {
     // the binary can't boot.
     if (req.apiConfig) {
       // Custom endpoint: buildCustomEnv layers on auth, per-tier model bindings,
-      // and CLAUDE_CONFIG_DIR on top of process.env.
-      options.env = buildCustomEnv(req.apiConfig);
+      // gateway request headers, and CLAUDE_CONFIG_DIR on top of process.env.
+      // The session id names the gateway's session header (gateways that
+      // require one want a stable id per conversation, not per request).
+      options.env = buildCustomEnv(req.apiConfig, { sessionId: req.sessionId });
     } else {
       // Standard Anthropic endpoint: still redirect the config root so Mcode
       // manages its own skills/settings, but no auth/model overrides needed.

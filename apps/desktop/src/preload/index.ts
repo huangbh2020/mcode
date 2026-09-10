@@ -466,6 +466,10 @@ const api = {
       ipcRenderer.invoke(IPC.MCP_LIST, input)) as RpcMap["mcp.list"],
     toggle: ((input) =>
       ipcRenderer.invoke(IPC.MCP_TOGGLE, input)) as RpcMap["mcp.toggle"],
+    authorize: ((input) =>
+      ipcRenderer.invoke(IPC.MCP_AUTHORIZE, input)) as RpcMap["mcp.authorize"],
+    unauthorize: ((input) =>
+      ipcRenderer.invoke(IPC.MCP_UNAUTHORIZE, input)) as RpcMap["mcp.unauthorize"],
     save: ((input) =>
       ipcRenderer.invoke(IPC.MCP_SAVE, input)) as RpcMap["mcp.save"],
     remove: ((input) =>

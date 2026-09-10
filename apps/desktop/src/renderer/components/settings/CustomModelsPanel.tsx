@@ -29,6 +29,7 @@ import type {
   AuthMode,
   Protocol,
 } from "@contracts/customModel";
+import { isValidHeaderName, isValidHeaderValue } from "@contracts/customModel";
 import { PanelHeader } from "./PanelHeader.js";
 import {
   PI_KNOWN_APIS,
@@ -209,6 +210,32 @@ interface ClaudeModelFormState {
   supports1m: boolean;
 }
 
+/** One editable row of the custom-headers list. Held as rows rather than a
+ *  record so a half-typed row can sit in the form while the user is editing
+ *  it; {@link customHeadersFromRows} converts on save. */
+interface CustomHeaderRow {
+  name: string;
+  value: string;
+}
+
+/** Rows → the persisted record. Rows that are entirely empty are dropped (they
+ *  are just unused UI slots); a partially filled or malformed row is a hard
+ *  error rather than a silent skip, so a typo can't quietly fail to be sent.
+ *  Validation uses the same rule the main process applies at request time. */
+function customHeadersFromRows(
+  rows: CustomHeaderRow[],
+): { ok: true; headers: Record<string, string> | undefined } | { ok: false } {
+  const out: Record<string, string> = {};
+  for (const row of rows) {
+    const name = row.name.trim();
+    const value = row.value.trim();
+    if (!name && !value) continue;
+    if (!isValidHeaderName(name) || !isValidHeaderValue(value)) return { ok: false };
+    out[name] = value;
+  }
+  return { ok: true, headers: Object.keys(out).length > 0 ? out : undefined };
+}
+
 interface ClaudeFormState {
   id?: string;
   name: string;
@@ -223,6 +250,8 @@ interface ClaudeFormState {
   subagentModel: string;
   disableNonEssentialTraffic: boolean;
   timeoutMs: string;
+  /** Extra request headers for the endpoint. See CustomHeaders in contracts. */
+  customHeaders: CustomHeaderRow[];
 }
 
 function emptyClaudeModel(): ClaudeModelFormState {
@@ -240,6 +269,7 @@ function emptyClaudeForm(): ClaudeFormState {
     subagentModel: "",
     disableNonEssentialTraffic: true,
     timeoutMs: "",
+    customHeaders: [],
   };
 }
 
@@ -255,6 +285,7 @@ function claudeFormFromConfig(m: CustomModelPublic): ClaudeFormState {
     subagentModel: m.subagentModel ?? "",
     disableNonEssentialTraffic: m.disableNonEssentialTraffic ?? true,
     timeoutMs: m.timeoutMs ? String(m.timeoutMs) : "",
+    customHeaders: Object.entries(m.customHeaders ?? {}).map(([name, value]) => ({ name, value })),
   };
 }
 
@@ -642,6 +673,11 @@ export function CustomModelsPanel() {
       claudeForm.subagentModel && seen.has(claudeForm.subagentModel)
         ? claudeForm.subagentModel
         : undefined;
+    const headersResult = customHeadersFromRows(claudeForm.customHeaders);
+    if (!headersResult.ok) {
+      setError(t("settings.customModels.errHeader"));
+      return;
+    }
     setSaving(true);
     setError(null);
     try {
@@ -656,6 +692,7 @@ export function CustomModelsPanel() {
         subagentModel,
         disableNonEssentialTraffic: claudeForm.disableNonEssentialTraffic,
         timeoutMs,
+        customHeaders: headersResult.headers,
       });
       useSessionStore.setState({ customModels: saved });
       const landedId = claudeForm.id ?? saved[saved.length - 1]?.id ?? null;
@@ -692,6 +729,13 @@ export function CustomModelsPanel() {
       });
       return;
     }
+    // Probe with the same headers a saved turn would send: an endpoint that
+    // requires one would otherwise always fail its test.
+    const headersResult = customHeadersFromRows(claudeForm.customHeaders);
+    if (!headersResult.ok) {
+      setTest({ status: "fail", error: t("settings.customModels.errHeader") });
+      return;
+    }
     setError(null);
     setTest({ status: "testing", idx });
     try {
@@ -704,6 +748,7 @@ export function CustomModelsPanel() {
         supports1m: entry?.supports1m ?? false,
         disableNonEssentialTraffic: claudeForm.disableNonEssentialTraffic,
         timeoutMs,
+        customHeaders: headersResult.headers,
       });
       setTest(
         result.ok
@@ -1162,7 +1207,11 @@ function ClaudeProviderForm({
   const isEdit = !!form.id;
   const isOpenAi = form.protocol === "openai";
   const { t } = useI18n();
-  const [advancedOpen, setAdvancedOpen] = useState(Boolean(form.timeoutMs));
+  // Open by default when anything inside it is already configured, so an
+  // existing value is never hidden behind a collapsed section.
+  const [advancedOpen, setAdvancedOpen] = useState(
+    Boolean(form.timeoutMs) || form.customHeaders.length > 0,
+  );
 
   const update = <K extends keyof ClaudeFormState>(key: K, value: ClaudeFormState[K]) =>
     setForm({ ...form, [key]: value });
@@ -1172,6 +1221,16 @@ function ClaudeProviderForm({
   const addModel = () => setForm({ ...form, models: [...form.models, emptyClaudeModel()] });
   const removeModel = (idx: number) =>
     setForm({ ...form, models: form.models.filter((_, i) => i !== idx) });
+
+  const updateHeader = (idx: number, patch: Partial<CustomHeaderRow>) =>
+    update(
+      "customHeaders",
+      form.customHeaders.map((h, i) => (i === idx ? { ...h, ...patch } : h)),
+    );
+  const addHeader = () =>
+    update("customHeaders", [...form.customHeaders, { name: "", value: "" }]);
+  const removeHeader = (idx: number) =>
+    update("customHeaders", form.customHeaders.filter((_, i) => i !== idx));
 
   return (
     <div className="space-y-2.5">
@@ -1351,6 +1410,46 @@ function ClaudeProviderForm({
               <input type="checkbox" checked={form.disableNonEssentialTraffic} onChange={(e) => update("disableNonEssentialTraffic", e.target.checked)} className="accent-accent" />
               {t("settings.customModels.disableTelemetry")}
             </label>
+          </div>
+
+          {/* Extra request headers. Sent by BOTH delivery paths — the direct
+              Anthropic one and the local protocol bridge — so a gateway that
+              needs a routing/tenant hint works either way. */}
+          <div className="space-y-1.5 border-t border-edge pt-2">
+            <div className="flex items-center justify-between">
+              <span className="text-[0.7857em] text-content-muted">
+                {t("settings.customModels.customHeadersLabel")}
+              </span>
+              <Button variant="ghost" size="sm" onClick={addHeader}>
+                <IconPlus size={12} />
+                {t("settings.customModels.customHeadersAdd")}
+              </Button>
+            </div>
+            {form.customHeaders.map((h, idx) => (
+              <div key={idx} className="grid grid-cols-[1fr_1fr_auto] items-center gap-1.5">
+                <Input
+                  value={h.name}
+                  onChange={(e) => updateHeader(idx, { name: e.target.value })}
+                  placeholder={t("settings.customModels.customHeadersNamePlaceholder")}
+                />
+                <Input
+                  value={h.value}
+                  onChange={(e) => updateHeader(idx, { value: e.target.value })}
+                  placeholder={t("settings.customModels.customHeadersValuePlaceholder")}
+                />
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={() => removeHeader(idx)}
+                  title={t("settings.customModels.customHeadersRemove")}
+                >
+                  <IconTrash size={13} />
+                </Button>
+              </div>
+            ))}
+            <p className="text-[0.6428em] leading-relaxed text-content-subtle">
+              {t("settings.customModels.customHeadersHint")}
+            </p>
           </div>
         </div>
       )}

@@ -238,6 +238,7 @@ export const en = {
   "chat.slash.builtin": "Built-in",
   "chat.slash.project": "Project",
   "chat.slash.global": "Global",
+  "chat.slash.plugin": "Plugin",
   "chat.kbd.navigate": "navigate",
   "chat.slash.switchTab": "switch tabs",
   "chat.slash.insert": "insert",

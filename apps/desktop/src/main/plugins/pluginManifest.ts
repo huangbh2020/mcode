@@ -206,27 +206,42 @@ function resolveInRoot(root: string, rel: string): string | null {
   return existsSync(abs) ? abs : null;
 }
 
-/** The plugin's skills directory, if declared/defaulted and present. */
-export function pluginSkillsDir(root: string, manifest: PluginManifest): string | null {
-  return resolveInRoot(root, manifest.skills ?? "skills");
+/** Normalize a manifest component field to a path list: undefined → the
+ *  conventional default, string → single entry, array → as-is (Claude's
+ *  plugin.json allows both forms; real plugins use both). */
+function componentPaths(value: string | string[] | undefined, fallback: string): string[] {
+  if (value === undefined) return [fallback];
+  return Array.isArray(value) ? value : [value];
 }
 
-export function pluginCommandsDir(root: string, manifest: PluginManifest): string | null {
-  return resolveInRoot(root, manifest.commands ?? "commands");
+/** Resolve every declared path, keeping only the ones that exist in-root. */
+function resolveAllInRoot(root: string, rels: string[]): string[] {
+  return rels
+    .map((rel) => resolveInRoot(root, rel))
+    .filter((p): p is string => p !== null);
 }
 
-export function pluginAgentsDir(root: string, manifest: PluginManifest): string | null {
-  return resolveInRoot(root, manifest.agents ?? "agents");
+/** The plugin's skills directories, if declared/defaulted and present. */
+export function pluginSkillsDirs(root: string, manifest: PluginManifest): string[] {
+  return resolveAllInRoot(root, componentPaths(manifest.skills, "skills"));
 }
 
-export function pluginHooksFile(root: string, manifest: PluginManifest): string | null {
-  return resolveInRoot(root, manifest.hooks ?? "hooks/hooks.json");
+export function pluginCommandsDirs(root: string, manifest: PluginManifest): string[] {
+  return resolveAllInRoot(root, componentPaths(manifest.commands, "commands"));
 }
 
-/** The plugin's MCP definition file: manifest `mcpServers` path or the
+export function pluginAgentsDirs(root: string, manifest: PluginManifest): string[] {
+  return resolveAllInRoot(root, componentPaths(manifest.agents, "agents"));
+}
+
+export function pluginHooksFiles(root: string, manifest: PluginManifest): string[] {
+  return resolveAllInRoot(root, componentPaths(manifest.hooks, "hooks/hooks.json"));
+}
+
+/** The plugin's MCP definition files: manifest `mcpServers` path(s) or the
  *  conventional root `.mcp.json`. */
-export function pluginMcpFile(root: string, manifest: PluginManifest): string | null {
-  return resolveInRoot(root, manifest.mcpServers ?? ".mcp.json");
+export function pluginMcpFiles(root: string, manifest: PluginManifest): string[] {
+  return resolveAllInRoot(root, componentPaths(manifest.mcpServers, ".mcp.json"));
 }
 
 /* ── Component summaries ── */
@@ -329,14 +344,8 @@ export function describePluginMcp(config: unknown): {
 
 /** Build the full component summary for an installed/being-reviewed plugin. */
 export function summarizeComponents(root: string, manifest: PluginManifest): PluginComponents {
-  const skillsDir = pluginSkillsDir(root, manifest);
-  const commandsDir = pluginCommandsDir(root, manifest);
-  const agentsDir = pluginAgentsDir(root, manifest);
-  const hooksFile = pluginHooksFile(root, manifest);
-  const mcpFile = pluginMcpFile(root, manifest);
-
   const mcpServers: PluginComponents["mcpServers"] = [];
-  if (mcpFile) {
+  for (const mcpFile of pluginMcpFiles(root, manifest)) {
     try {
       const cfg = JSON.parse(readFileSync(mcpFile, "utf-8")) as Record<string, unknown>;
       const servers = (cfg.mcpServers ?? cfg) as Record<string, unknown>;
@@ -351,11 +360,22 @@ export function summarizeComponents(root: string, manifest: PluginManifest): Plu
     }
   }
 
+  const skills = pluginSkillsDirs(root, manifest).flatMap(scanSkillDirs).sort(
+    (a, b) => a.name.localeCompare(b.name),
+  );
+  const commands = pluginCommandsDirs(root, manifest).flatMap(scanMarkdownFiles).sort(
+    (a, b) => a.name.localeCompare(b.name),
+  );
+  const agents = pluginAgentsDirs(root, manifest).flatMap(scanMarkdownFiles).sort(
+    (a, b) => a.name.localeCompare(b.name),
+  );
+  const hooks = pluginHooksFiles(root, manifest).flatMap(parseHooksFile);
+
   return {
-    skills: skillsDir ? scanSkillDirs(skillsDir) : [],
-    commands: commandsDir ? scanMarkdownFiles(commandsDir) : [],
-    agents: agentsDir ? scanMarkdownFiles(agentsDir) : [],
-    hooks: hooksFile ? parseHooksFile(hooksFile) : [],
+    skills,
+    commands,
+    agents,
+    hooks,
     mcpServers,
   };
 }

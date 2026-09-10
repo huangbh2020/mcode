@@ -66,11 +66,26 @@
  * The suffix is carried ONLY on `ANTHROPIC_MODEL` (the primary turn's model)
  * — when the selected model's entry declares `supports1m`. Background tier
  * vars use the bare name; see above.
+ *
+ * ## Request headers — `ANTHROPIC_CUSTOM_HEADERS`
+ *
+ * The endpoint's `customHeaders` (plus an auto session id for gateways that
+ * require one) ride `ANTHROPIC_CUSTOM_HEADERS`, one `Name: Value` per line.
+ * This mirrors {@link ../../bridge/bridgeServer.ts} for the `openai` protocol,
+ * where the bridge merges the same set into its upstream request instead —
+ * the two paths must stay in sync, which is why the shared policy lives in
+ * {@link ../../upstreamHeaders.ts}.
  */
 import type { ApiConfig, CustomModelEntry } from "@contracts/customModel";
 import type { Options } from "@anthropic-ai/claude-agent-sdk";
+import { randomBytes } from "node:crypto";
 import { homedir } from "node:os";
 import path from "node:path";
+import {
+  formatCustomHeaderLines,
+  parseCustomHeaderLines,
+  resolveUpstreamHeaders,
+} from "@main/providers/upstreamHeaders.js";
 
 /** Mcode's own Claude config directory. We always set CLAUDE_CONFIG_DIR to
  *  this path so the bundled claude binary reads its user-level config
@@ -80,6 +95,14 @@ import path from "node:path";
  *  Mcode's turns, and user-level skills live under ~/.mcode/skills where
  *  Mcode's import feature places them. */
 export const MCODE_CONFIG_DIR = path.join(homedir(), ".mcode");
+
+/** Session id handed to a gateway that requires one when the caller has no
+ *  Mcode session to name — the connection probe, title generation, the
+ *  commit-message helper. Stable for the process lifetime so such traffic
+ *  still looks like ONE conversation to the gateway instead of a fresh id per
+ *  request. Live turns pass their real session id instead (see
+ *  {@link buildCustomEnv}). */
+const PROCESS_SESSION_ID = `mcode-${randomBytes(6).toString("hex")}`;
 
 /** The config entry driving this turn: the session's selected model when it's
  *  still configured, else the first entry. Callers guarantee at least one
@@ -120,7 +143,16 @@ export function resolveActiveModel(cfg: ApiConfig): string | undefined {
   return entry.supports1m ? with1MSuffix(entry.id) : entry.id;
 }
 
-export function buildCustomEnv(cfg: ApiConfig): NonNullable<Options["env"]> {
+/**
+ * @param opts.sessionId Mcode session driving this turn. Only used to name the
+ *   gateway's required session header — see the `ANTHROPIC_CUSTOM_HEADERS`
+ *   block below. Callers without a session (probe / title / commit-message
+ *   helpers) may omit it and get a stable per-process id instead.
+ */
+export function buildCustomEnv(
+  cfg: ApiConfig,
+  opts?: { sessionId?: string },
+): NonNullable<Options["env"]> {
   const env: NonNullable<Options["env"]> = { ...process.env };
 
   env.ANTHROPIC_BASE_URL = cfg.baseUrl;
@@ -190,6 +222,41 @@ export function buildCustomEnv(cfg: ApiConfig): NonNullable<Options["env"]> {
   // Per-request timeout (ms). The SDK honors API_TIMEOUT_MS.
   if (cfg.timeoutMs && cfg.timeoutMs > 0) {
     env.API_TIMEOUT_MS = String(cfg.timeoutMs);
+  }
+
+  // Gateway request headers. The binary forwards ANTHROPIC_CUSTOM_HEADERS on
+  // every API request, which is exactly the channel a direct (anthropic-
+  // protocol) endpoint needs. Two parts:
+  //
+  //   - whatever the user configured on the endpoint (routing hints, tenant
+  //     ids, a home-grown auth scheme);
+  //   - an auto session id for gateways that refuse to route without one
+  //     (OpenCode Zen's "Go" plan answers `400 MissingSessionID` otherwise).
+  //     Named after the Mcode session so one conversation keeps one id, which
+  //     is what the gateway wants it for (routing + prompt caching).
+  //
+  // Merged OVER any inherited OS-level value: ANTHROPIC_CUSTOM_HEADERS is a
+  // documented Claude Code knob, and someone may have set it globally (e.g. as
+  // a workaround before this field existed). Clobbering it would silently
+  // break their setup.
+  //
+  // Skipped for the `openai` protocol: there the baseUrl has already been
+  // rewritten to the local bridge, so these headers would be addressed to
+  // localhost rather than the gateway — the bridge owns upstream headers for
+  // that protocol (and injects its own session id, since only it still knows
+  // the real gateway host).
+  if (cfg.protocol === "anthropic") {
+    const upstreamHeaders = resolveUpstreamHeaders(
+      {
+        ...parseCustomHeaderLines(env.ANTHROPIC_CUSTOM_HEADERS),
+        ...cfg.customHeaders,
+      },
+      cfg.baseUrl,
+      opts?.sessionId ? `mcode-${opts.sessionId}` : PROCESS_SESSION_ID,
+    );
+    if (Object.keys(upstreamHeaders).length > 0) {
+      env.ANTHROPIC_CUSTOM_HEADERS = formatCustomHeaderLines(upstreamHeaders);
+    }
   }
 
   // Always redirect the claude binary's user-level config root to Mcode's

@@ -43,6 +43,7 @@ import type {
   CustomModelEntry,
 } from "@contracts/customModel";
 import { resolveProtocol } from "@contracts/customModel";
+import { sanitizeCustomHeaders } from "@main/providers/upstreamHeaders.js";
 import { SettingRepo } from "@main/store/repositories.js";
 import { log } from "@main/lib/logger.js";
 
@@ -252,9 +253,19 @@ function readMeta(): MigratedMeta[] {
   try {
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
-    return (parsed as unknown[]).map((r) =>
-      migrateMeta(r && typeof r === "object" ? (r as Record<string, unknown>) : {}),
-    );
+    return (parsed as unknown[]).map((r) => {
+      const meta = migrateMeta(r && typeof r === "object" ? (r as Record<string, unknown>) : {});
+      // Normalize the extra headers at the single read choke point. Every
+      // consumer (the settings panel, resolveApiConfig for a live turn) then
+      // sees exactly what the request will carry, and a hand-edited record
+      // with a malformed name/value loses just that one row instead of
+      // breaking every request. An all-invalid map collapses to undefined so
+      // records nobody configured headers on stay byte-identical.
+      const headers = sanitizeCustomHeaders(meta.customHeaders);
+      return Object.keys(headers).length > 0
+        ? { ...meta, customHeaders: headers }
+        : { ...meta, customHeaders: undefined };
+    });
   } catch {
     return [];
   }
@@ -292,6 +303,7 @@ export const CustomModelStore = {
         subagentModel: m.subagentModel,
         disableNonEssentialTraffic: m.disableNonEssentialTraffic ?? true,
         timeoutMs: m.timeoutMs,
+        customHeaders: m.customHeaders,
         createdAt: m.createdAt,
       };
     });
@@ -314,6 +326,11 @@ export const CustomModelStore = {
       input.subagentModel && validIds.has(input.subagentModel)
         ? input.subagentModel
         : undefined;
+    // Extra headers are sanitized on write as well as on read (see readMeta),
+    // so a caller bypassing the settings form can't persist a name/value the
+    // request path would silently drop — or that fetch() would reject outright.
+    const headers = sanitizeCustomHeaders(input.customHeaders);
+    const customHeaders = Object.keys(headers).length > 0 ? headers : undefined;
 
     if (input.id) {
       const idx = metas.findIndex((m) => m.id === input.id);
@@ -332,6 +349,7 @@ export const CustomModelStore = {
         subagentModel,
         disableNonEssentialTraffic: disableTraffic,
         timeoutMs: input.timeoutMs,
+        customHeaders,
       };
       if (input.authToken) keys[input.id] = encrypt(input.authToken);
     } else {
@@ -347,6 +365,7 @@ export const CustomModelStore = {
         subagentModel,
         disableNonEssentialTraffic: disableTraffic,
         timeoutMs: input.timeoutMs,
+        customHeaders,
         createdAt: now,
       });
       keys[id] = encrypt(input.authToken);
@@ -413,6 +432,9 @@ export const CustomModelStore = {
         pinned && models.some((m) => m.id === pinned) ? pinned : undefined,
       disableNonEssentialTraffic: meta.disableNonEssentialTraffic ?? true,
       timeoutMs: meta.timeoutMs,
+      // Already normalized by readMeta; forwarded verbatim so both delivery
+      // paths (ANTHROPIC_CUSTOM_HEADERS / bridge upstream) send one set.
+      customHeaders: meta.customHeaders,
     };
   },
 };

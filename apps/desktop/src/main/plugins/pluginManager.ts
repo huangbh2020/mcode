@@ -57,8 +57,8 @@ import {
   findPluginManifest,
   findPluginManifestDeep,
   findMarketplaceManifestFile,
-  pluginSkillsDir,
-  pluginMcpFile,
+  pluginSkillsDirs,
+  pluginMcpFiles,
   pluginVersionOf,
   summarizeComponents,
   describePluginMcp,
@@ -199,9 +199,29 @@ async function gitClone(url: string, dest: string, ref?: string): Promise<void> 
   }
 }
 
+/** GNU tar's message when `C:\...` is misread as a remote `host:file` target
+ *  (an MSYS/Git Bash tar sitting ahead of System32's bsdtar in PATH). */
+const TAR_REMOTE_HOST_RE = /Cannot connect to .* resolve failed/i;
+
 /** Extract a .zip via the platform tool. bsdtar (macOS / Windows 10+) reads
- *  zip natively; Linux GNU tar doesn't, so unzip is the fallback there. */
+ *  zip natively; Linux GNU tar doesn't, so unzip is the fallback there.
+ *
+ *  win32 discipline: PATH can surface an MSYS/Git Bash GNU tar before the
+ *  system bsdtar, and GNU tar misreads `C:\...` as a remote target — so prefer
+ *  the System32 bsdtar explicitly, and when a PATH tar fails with exactly that
+ *  remote-host signature, retry once with `--force-local` (GNU tar's own
+ *  opt-in for colon paths; a healthy bsdtar never needs the retry). */
 async function extractZip(zipPath: string, dest: string): Promise<void> {
+  if (process.platform === "win32") {
+    const systemTar = path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "tar.exe");
+    const tarBin = existsSync(systemTar) ? systemTar : "tar";
+    let viaTar = await runCommand(tarBin, ["-xf", zipPath, "-C", dest], { timeoutMs: 60_000 });
+    if (!viaTar.ok && TAR_REMOTE_HOST_RE.test(viaTar.message)) {
+      viaTar = await runCommand(tarBin, ["--force-local", "-xf", zipPath, "-C", dest], { timeoutMs: 60_000 });
+    }
+    if (viaTar.ok) return;
+    throw new Error(`zip 解压失败:${viaTar.message}`);
+  }
   const viaTar = await runCommand("tar", ["-xf", zipPath, "-C", dest], { timeoutMs: 60_000 });
   if (viaTar.ok) return;
   if (process.platform === "linux") {
@@ -769,26 +789,22 @@ export async function getEnabledPlugins(): Promise<EnabledPlugin[]> {
 }
 
 /** Existing skills directories of enabled plugins — appended to Codex's
- *  `skills/extraRoots/set` and Pi's `additionalSkillPaths`. */
+ *  `skills/extraRoots/set` and Pi's `additionalSkillPaths`. A manifest may
+ *  declare multiple skills roots (Claude's string[] form). */
 export async function getEnabledPluginSkillRoots(): Promise<string[]> {
   const roots: string[] = [];
   for (const p of await getEnabledPlugins()) {
-    const dir = pluginSkillsDir(p.rootDir, p.manifest);
-    if (dir) roots.push(dir);
+    roots.push(...pluginSkillsDirs(p.rootDir, p.manifest));
   }
   return roots;
 }
 
-/** Namespaced MCP server entries of enabled plugins:
- *  `[["<plugin>__<server>", config], ...]`, honoring the per-server disable
- *  list (plugins.mcpDisabled, written by the MCP panel). Invalid configs are
- *  skipped — a broken plugin server never blocks a turn. */
-export async function getPluginMcpServers(): Promise<Array<[string, McpServerConfig]>> {
-  const disabled = readMcpDisabled();
-  const out: Array<[string, McpServerConfig]> = [];
-  for (const p of await getEnabledPlugins()) {
-    const file = pluginMcpFile(p.rootDir, p.manifest);
-    if (!file) continue;
+/** Raw `[serverName, config]` pairs across every MCP definition file of a
+ *  plugin (the manifest may declare multiple — Claude's string[] form).
+ *  Unreadable files are skipped, never fatal. */
+function readPluginMcpEntries(p: EnabledPlugin): Array<[string, unknown]> {
+  const out: Array<[string, unknown]> = [];
+  for (const file of pluginMcpFiles(p.rootDir, p.manifest)) {
     let cfg: unknown;
     try {
       cfg = JSON.parse(readFileSync(file, "utf-8"));
@@ -801,6 +817,21 @@ export async function getPluginMcpServers(): Promise<Array<[string, McpServerCon
         : null;
     if (!servers || typeof servers !== "object" || Array.isArray(servers)) continue;
     for (const [serverName, raw] of Object.entries(servers as Record<string, unknown>)) {
+      out.push([serverName, raw]);
+    }
+  }
+  return out;
+}
+
+/** Namespaced MCP server entries of enabled plugins:
+ *  `[["<plugin>__<server>", config], ...]`, honoring the per-server disable
+ *  list (plugins.mcpDisabled, written by the MCP panel). Invalid configs are
+ *  skipped — a broken plugin server never blocks a turn. */
+export async function getPluginMcpServers(): Promise<Array<[string, McpServerConfig]>> {
+  const disabled = readMcpDisabled();
+  const out: Array<[string, McpServerConfig]> = [];
+  for (const p of await getEnabledPlugins()) {
+    for (const [serverName, raw] of readPluginMcpEntries(p)) {
       const parsed = McpServerConfigSchema.safeParse(raw);
       if (!parsed.success) continue;
       const fullName = `${p.name}__${serverName}`;
@@ -833,20 +864,7 @@ export async function listPluginMcpPanelEntries(): Promise<
   const disabled = readMcpDisabled();
   const out: Array<{ name: string; scope: "plugin"; kind: "stdio" | "http" | "sse"; detail: string; enabled: boolean }> = [];
   for (const p of await getEnabledPlugins()) {
-    const file = pluginMcpFile(p.rootDir, p.manifest);
-    if (!file) continue;
-    let cfg: unknown;
-    try {
-      cfg = JSON.parse(readFileSync(file, "utf-8"));
-    } catch {
-      continue;
-    }
-    const servers =
-      cfg && typeof cfg === "object" && !Array.isArray(cfg)
-        ? (cfg as Record<string, unknown>).mcpServers ?? cfg
-        : null;
-    if (!servers || typeof servers !== "object" || Array.isArray(servers)) continue;
-    for (const [serverName, raw] of Object.entries(servers as Record<string, unknown>)) {
+    for (const [serverName, raw] of readPluginMcpEntries(p)) {
       const desc = describePluginMcp(raw);
       if (!desc) continue;
       const fullName = `${p.name}__${serverName}`;

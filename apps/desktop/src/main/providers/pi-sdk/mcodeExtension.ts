@@ -179,6 +179,11 @@ export interface CreateMcodeExtensionOptions {
   /** 1-based turn number within the session (see StartTurnRequest.turnNumber).
    *  Passed to the browser tools so screenshots land in per-turn folders. */
   turnNumber?: number;
+  /** Whether the in-app browser tools should be registered. Mirrors the MCP
+   *  panel's built-in server switch (`browserDisabled` — same gate as the
+   *  Claude provider's options.mcpServers injection); read per-turn by the
+   *  provider, so flipping it lands on the next message. */
+  browserToolsEnabled: boolean;
 }
 
 /**
@@ -192,7 +197,7 @@ export interface CreateMcodeExtensionOptions {
  * useful for debugging whether the extension loaded.
  */
 export function createMcodeExtension(opts: CreateMcodeExtensionOptions): InlineExtension {
-  const { ctx, cwd, strict, sessionId, projectPath, turnNumber } = opts;
+  const { ctx, cwd, strict, sessionId, projectPath, turnNumber, browserToolsEnabled } = opts;
 
   // ── Plan mode state (per-turn, in-process) ──────────────────────────
   // Tracked here rather than via ctx.getPermissionMode() because the latter
@@ -211,9 +216,14 @@ export function createMcodeExtension(opts: CreateMcodeExtensionOptions): InlineE
     factory: (pi: ExtensionAPI) => {
       registerToolCallGuard(pi, { ctx, cwd, strict, sessionId, planMode });
       registerAskUserQuestionTool(pi, ctx);
-      registerBrowserTools(pi, { ctx, sessionId, projectPath, turnNumber });
+      // Browser tools + their usage prompt ride the same switch: when the
+      // built-in server is disabled in the MCP panel, the model must neither
+      // see the tools nor the prompt section advertising them.
+      if (browserToolsEnabled) {
+        registerBrowserTools(pi, { ctx, sessionId, projectPath, turnNumber });
+      }
       registerPlanModeTools(pi, { ctx, sessionId, planMode });
-      registerSystemPromptInjector(pi);
+      registerSystemPromptInjector(pi, { browserToolsEnabled });
     },
   };
 }
@@ -1010,7 +1020,10 @@ const PLAN_MODE_PROMPT = [
  * bypass it. Sections are joined via `joinPromptSections` (blank-line
  * separation) shared with the Claude provider to avoid drift.
  */
-function registerSystemPromptInjector(pi: ExtensionAPI): void {
+function registerSystemPromptInjector(
+  pi: ExtensionAPI,
+  deps: { browserToolsEnabled: boolean },
+): void {
   pi.on(
     "before_agent_start",
     async (event: BeforeAgentStartEvent): Promise<BeforeAgentStartEventResult | void> => {
@@ -1019,7 +1032,10 @@ function registerSystemPromptInjector(pi: ExtensionAPI): void {
         PI_IDENTITY_PROMPT,
         ASK_NATIVE_TOOL_PROMPT,
         PLAN_MODE_PROMPT,
-        browserToolsUsagePrompt(),
+        // Advertise the browser tools only when they are actually registered
+        // (MCP panel's built-in switch) — otherwise the model would call
+        // tools that don't exist.
+        ...(deps.browserToolsEnabled ? [browserToolsUsagePrompt()] : []),
       );
       const next = base ? `${base}\n\n${injected}` : injected;
       return { systemPrompt: next };

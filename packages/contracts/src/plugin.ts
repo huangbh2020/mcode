@@ -51,23 +51,27 @@ export const PLUGIN_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
  *  Component fields are directory/file names RELATIVE to the plugin root;
  *  component paths that escape the plugin root are rejected by the resolver
  *  (not by the schema — the schema only checks shape). Unknown fields pass
- *  through so future manifest keys survive a round-trip. */
+ *  through so future manifest keys survive a round-trip.
+ *
+ *  Component paths accept Claude's full form: a single relative path OR an
+ *  array of them (official-marketplace manifests use both — rejecting arrays
+ *  made such plugins uninstallable). Resolvers normalize to string[]. */
 export const PluginManifestSchema = z
   .object({
     name: z.string().regex(PLUGIN_NAME_RE),
     version: z.string().optional(),
     description: z.string().optional(),
     author: z.union([z.string(), z.record(z.string(), z.unknown())]).optional(),
-    /** Skills directory name (default "skills"). */
-    skills: z.string().optional(),
-    /** Commands directory name (default "commands"). */
-    commands: z.string().optional(),
-    /** Agents directory name (default "agents"). */
-    agents: z.string().optional(),
-    /** Hooks definition file, relative (default "hooks/hooks.json"). */
-    hooks: z.string().optional(),
-    /** MCP servers definition file, relative (default ".mcp.json" at root). */
-    mcpServers: z.string().optional(),
+    /** Skills directory name(s) (default "skills"). */
+    skills: z.union([z.string(), z.array(z.string())]).optional(),
+    /** Commands directory name(s) (default "commands"). */
+    commands: z.union([z.string(), z.array(z.string())]).optional(),
+    /** Agents directory name(s) (default "agents"). */
+    agents: z.union([z.string(), z.array(z.string())]).optional(),
+    /** Hooks definition file(s), relative (default "hooks/hooks.json"). */
+    hooks: z.union([z.string(), z.array(z.string())]).optional(),
+    /** MCP servers definition file(s), relative (default ".mcp.json" at root). */
+    mcpServers: z.union([z.string(), z.array(z.string())]).optional(),
   })
   .passthrough();
 export type PluginManifest = z.infer<typeof PluginManifestSchema>;

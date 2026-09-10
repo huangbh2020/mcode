@@ -3,8 +3,8 @@
 #
 # Bundles scripts/plugins-smoke/main.ts with esbuild (tsconfig paths apply),
 # aliasing @main/store/repositories.js to the in-memory stub so the manager
-# runs without electron/sql.js, and redirecting HOME so ~/.mcode/plugins is
-# a scratch dir. See main.ts for the covered scenarios.
+# runs without electron/sql.js, and redirecting HOME/USERPROFILE so
+# ~/.mcode/plugins is a scratch dir. See main.ts for the covered scenarios.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 
@@ -24,4 +24,7 @@ if [[ -z "$ESBUILD" ]]; then ESBUILD="npx esbuild"; fi
 
 SMOKE_HOME="$OUT/home"
 mkdir -p "$SMOKE_HOME"
-HOME="$SMOKE_HOME" node "$OUT/smoke.mjs"
+# Node's os.homedir() honors HOME only on POSIX; on win32 it reads USERPROFILE
+# (libuv), so both must point at the scratch home or the smoke silently
+# operates on — and leaves fixtures inside — the real ~/.mcode/plugins.
+HOME="$SMOKE_HOME" USERPROFILE="$SMOKE_HOME" node "$OUT/smoke.mjs"

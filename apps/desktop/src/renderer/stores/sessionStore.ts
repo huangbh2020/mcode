@@ -6982,7 +6982,17 @@ export const useSessionStore = create<SessionState>((set, get) => ({
             // A session created on another client — or a worktree row that
             // just degraded back to local (directory removal) — materialize
             // it at the head of the local window; the local total grows.
-            next = [materializeSessionEntry(entry), ...local, ...worktree];
+            // Merge over the cached row (whichever section it sat in) so a
+            // degraded worktree row keeps its heavy payloads, and drop the
+            // stale copy it left behind: keeping the old worktree-bound row
+            // alive would re-bucket it into its dead worktree group and the
+            // left bar would keep rendering the removed worktree.
+            const prevRow = activeList.find((x) => x.id === entry.id);
+            next = [
+              prevRow ? { ...prevRow, ...entry } : materializeSessionEntry(entry),
+              ...local.filter((x) => x.id !== entry.id),
+              ...worktree.filter((x) => x.id !== entry.id),
+            ];
             patch.sessionsTotalByProject = {
               ...s.sessionsTotalByProject,
               [entry.projectId]: (s.sessionsTotalByProject[entry.projectId] ?? 0) + 1,

@@ -1452,6 +1452,12 @@ const AuthModeSchema = z.enum(["auth_token", "api_key"]);
 
 const ProtocolSchema = z.enum(["anthropic", "openai"]);
 
+/** Extra request headers for a custom endpoint, keyed by header name. Shape
+ *  only — names/values are validated in main (see
+ *  `providers/upstreamHeaders.ts`), which owns the delivery rules and drops
+ *  entries a gateway would reject instead of failing the whole save. */
+const CustomHeadersSchema = z.record(z.string(), z.string());
+
 /** Save (create or update) a custom-model config. On update, an omitted
  *  `authToken` keeps the existing stored token; on create, `authToken` is
  *  required. At least one model entry is required. */
@@ -1468,6 +1474,7 @@ export const SaveCustomModelSchema = z.object({
   subagentModel: z.string().optional(),
   disableNonEssentialTraffic: z.boolean().optional(),
   timeoutMs: z.number().optional(),
+  customHeaders: CustomHeadersSchema.optional(),
 });
 export type SaveCustomModelInput = CustomModelInput;
 
@@ -1488,6 +1495,9 @@ export const TestCustomModelSchema = z.object({
   supports1m: z.boolean().optional(),
   disableNonEssentialTraffic: z.boolean().optional(),
   timeoutMs: z.number().optional(),
+  /** Headers to probe with, so an endpoint that requires one (and would
+   *  otherwise fail the test) can be verified before saving. */
+  customHeaders: CustomHeadersSchema.optional(),
 });
 export type TestCustomModelInput = z.infer<typeof TestCustomModelSchema>;
 
@@ -2489,7 +2499,11 @@ export interface GitWorktreeRemoveResult {
  *  and the user sends it as a normal turn (SDK is started with
  *  `skills: "all"`, so the agent recognizes and runs the skill). */
 
-export type SkillSource = "global" | "project";
+/** Where a composer skill was discovered. "plugin" = contributed by an
+ *  ENABLED plugin (read-only inventory: the composer menu lists it and the
+ *  SDK loads it per-turn, but it has no user-editable file root — the skills
+ *  read/save/delete handlers reject this source). */
+export type SkillSource = "global" | "project" | "plugin";
 
 /** One registered AI backend surfaced to the renderer via `provider.list`.
  *  The capabilities descriptor drives which composer chips / dropdown entries
@@ -2771,6 +2785,17 @@ export interface McpServerEntry {
   kind: McpKind;
   detail: string;
   enabled: boolean;
+  /** Remote (http/sse) server the CLI has flagged as requiring OAuth and
+   *  holding no stored token (mcp-needs-auth-cache.json). The session-side
+   *  tools stay unavailable until the user completes the browser login —
+   *  surfaced in the panel as a badge + an authorize action. */
+  needsAuth?: boolean;
+  /** Remote server holding a stored OAuth token (.credentials.json, non-
+   *  darwin only — darwin keeps MCP tokens in the Keychain where Mcode can't
+   *  read them, so the flag never sets there). Shows an "authorized" badge
+   *  + a sign-out action in the panel. Mutually exclusive with needsAuth in
+   *  practice (a stored token wins over a stale needs-auth cache entry). */
+  authorized?: boolean;
 }
 
 /** List MCP servers for the settings panel. `projectPath` scopes the project
@@ -2790,6 +2815,25 @@ export const McpToggleSchema = z.object({
   enabled: z.boolean(),
 });
 export type McpToggleInput = z.infer<typeof McpToggleSchema>;
+
+/** Run the OAuth browser login for a remote (http/sse) MCP server via the
+ *  Claude CLI (`claude mcp login`). The server is temporarily registered in
+ *  the user config under exactly `name` (the namespaced `<plugin>__<server>`
+ *  form for plugin servers — OAuth tokens are keyed by name + URL, so the
+ *  per-turn injected server must match) and removed again afterwards; the
+ *  token itself persists in CLAUDE_CONFIG_DIR/.credentials.json. */
+export const McpAuthorizeSchema = z.object({
+  name: z.string().min(1),
+  url: z.string().url(),
+  kind: z.enum(["http", "sse"]),
+});
+export type McpAuthorizeInput = z.infer<typeof McpAuthorizeSchema>;
+
+/** Clear the stored OAuth token (`claude mcp logout`). Same identity shape as
+ *  authorize — the CLI resolves the server from the config file and keys the
+ *  credentials by name + URL. */
+export const McpUnauthorizeSchema = McpAuthorizeSchema;
+export type McpUnauthorizeInput = McpAuthorizeInput;
 
 /** MCP server name charset — same family as skill names (letters, digits,
  *  underscore, hyphen). The name becomes a JSON object key, not a path, but
@@ -4187,6 +4231,11 @@ export interface RpcMap {
    *  file and the management stash; project/builtin update the management
    *  state. Takes effect on the next turn. */
   "mcp.toggle": (input: McpToggleInput) => Promise<{ ok: boolean; error?: string }>;
+  /** Run the OAuth browser login for a remote MCP server (claude mcp login).
+   *  Opens the system browser; resolves when the CLI reports the flow done. */
+  "mcp.authorize": (input: McpAuthorizeInput) => Promise<{ ok: boolean; error?: string }>;
+  /** Clear a remote MCP server's stored OAuth token (claude mcp logout). */
+  "mcp.unauthorize": (input: McpUnauthorizeInput) => Promise<{ ok: boolean; error?: string }>;
   /** Add a user-scope server (writes into ~/.mcode/.claude.json). */
   "mcp.save": (input: McpSaveInput) => Promise<{ ok: boolean; error?: string }>;
   /** Remove a user-scope server (from both the config file and the stash). */
@@ -4540,6 +4589,8 @@ export const IPC = {
   // MCP management (settings panel): list / toggle / add / remove / import
   MCP_LIST: "mcp:list",
   MCP_TOGGLE: "mcp:toggle",
+  MCP_AUTHORIZE: "mcp:authorize",
+  MCP_UNAUTHORIZE: "mcp:unauthorize",
   MCP_SAVE: "mcp:save",
   MCP_REMOVE: "mcp:remove",
   MCP_SCAN_IMPORT: "mcp:scanImport",

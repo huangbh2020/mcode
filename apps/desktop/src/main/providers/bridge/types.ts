@@ -229,4 +229,7 @@ export interface UpstreamConfig {
   authToken: string;
   authMode: "auth_token" | "api_key";
   timeoutMs?: number;
+  /** Extra headers to send upstream (the config's `customHeaders`). Merged by
+   *  `upstreamHeaders()` so both delivery paths send one header set. */
+  customHeaders?: Record<string, string>;
 }

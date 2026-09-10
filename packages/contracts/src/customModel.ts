@@ -36,6 +36,12 @@
  * 2. **Non-essential traffic.** Claude Code phones home to Anthropic's
  *    telemetry endpoints by default; on a third-party gateway those fail.
  *    `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` turns them off.
+ *
+ * 3. **Request headers.** Some gateways want more than a bearer token — a
+ *    routing hint, a tenant id, or a scheme of their own — and some (OpenCode
+ *    Zen's "Go" plan) reject every request that lacks one. `customHeaders`
+ *    carries those, and the delivery rules live in
+ *    `apps/desktop/src/main/providers/upstreamHeaders.ts`.
  */
 
 /** How the credential is presented to the upstream. */
@@ -58,6 +64,46 @@ const DEFAULT_PROTOCOL: Protocol = "anthropic";
  *  {@link resolveAuthMode}'s pattern so old records upgrade transparently. */
 export function resolveProtocol(p: Protocol | undefined): Protocol {
   return p ?? DEFAULT_PROTOCOL;
+}
+
+/**
+ * Extra request headers sent to the endpoint on every API request, keyed by
+ * header name (`{ "x-opencode-session": "…" }`).
+ *
+ * Needed because gateways differ in what they want beyond a bearer token: a
+ * routing hint, an org/tenant id, or a non-standard auth scheme. It is also
+ * how a user overrides the session id Mcode auto-supplies for endpoints known
+ * to require one — see `providers/upstreamHeaders.ts` for the delivery rules
+ * and the auto-injection.
+ *
+ * Values are NOT secrets in the credential sense (the token has its own
+ * encrypted store) and they cross the IPC boundary in cleartext, so the
+ * settings UI can render them for editing.
+ */
+export type CustomHeaders = Record<string, string>;
+
+/** RFC 7230 `token` — the only shape an HTTP header name may take. */
+const HEADER_NAME_RE = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
+
+/** Longest value we forward. Generous for a JWT-ish routing token, short
+ *  enough that a pasted wall of text reads as a config mistake.
+ *  Exported for the settings form, which mirrors the same limit in its
+ *  validation message. */
+export const MAX_CUSTOM_HEADER_VALUE_LEN = 4096;
+
+/** Whether `name` may be used as a request-header name. Lives here rather than
+ *  in the main-process delivery code because the settings form validates with
+ *  the very same rule — a mismatch would let the form accept a row that the
+ *  request path then drops. */
+export function isValidHeaderName(name: string): boolean {
+  return HEADER_NAME_RE.test(name.trim());
+}
+
+/** Whether `value` may be used as a request-header value. CR/LF are rejected
+ *  outright: the value is written straight into a header, so an embedded
+ *  newline could forge additional headers (or a body). */
+export function isValidHeaderValue(value: string): boolean {
+  return !/[\r\n]/.test(value) && value.length <= MAX_CUSTOM_HEADER_VALUE_LEN;
 }
 
 /** One selectable model on a custom endpoint. Mirrors the Pi side's flat
@@ -102,6 +148,10 @@ export interface ApiConfig {
   disableNonEssentialTraffic: boolean;
   /** Per-request timeout in ms (passed through as API_TIMEOUT_MS). */
   timeoutMs?: number;
+  /** Extra headers for the endpoint, sent on both delivery paths (the direct
+   *  Anthropic one via ANTHROPIC_CUSTOM_HEADERS, the bridge one merged into the
+   *  upstream request). See {@link CustomHeaders}. */
+  customHeaders?: CustomHeaders;
 }
 
 /** Credential storage shape (encrypted at rest, decrypted in main only). */
@@ -124,6 +174,7 @@ export interface CustomModel {
   models: CustomModelEntry[];
   disableNonEssentialTraffic: boolean;
   timeoutMs?: number;
+  customHeaders?: CustomHeaders;
   createdAt: number;
 }
 
@@ -146,6 +197,7 @@ export interface CustomModelPublic {
   subagentModel?: string;
   disableNonEssentialTraffic: boolean;
   timeoutMs?: number;
+  customHeaders?: CustomHeaders;
   createdAt: number;
 }
 
@@ -165,6 +217,7 @@ export interface CustomModelMeta {
   subagentModel?: string;
   disableNonEssentialTraffic: boolean;
   timeoutMs?: number;
+  customHeaders?: CustomHeaders;
   createdAt: number;
 }
 
@@ -189,6 +242,9 @@ export interface CustomModelInput {
   subagentModel?: string;
   disableNonEssentialTraffic?: boolean;
   timeoutMs?: number;
+  /** Extra request headers for the endpoint; an empty map clears them. See
+   *  {@link CustomHeaders}. */
+  customHeaders?: CustomHeaders;
 }
 
 /** Result of a connection probe using the user-supplied (not-yet-saved) values. */

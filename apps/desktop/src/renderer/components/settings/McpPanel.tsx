@@ -34,6 +34,8 @@ import {
   IconDownload,
   IconLoader2,
   IconFolder,
+  IconExternalLink,
+  IconLockOpen,
 } from "@renderer/lib/icons.js";
 import {
   MCP_RESERVED_NAME,
@@ -88,6 +90,69 @@ function KindBadge({ kind }: { kind: McpKind }) {
     >
       {labelKey ? t(labelKey) : KIND_RAW[kind]}
     </span>
+  );
+}
+
+/** Right-side extras for a remote server's OAuth state: 「已授权」badge +
+ *  sign-out (a stored token exists), or 「待授权」badge + browser login (the
+ *  CLI flagged the server as requiring OAuth with no token). Renders nothing
+ *  for local servers or remote ones with no known OAuth history. */
+function OAuthRowActions({
+  s,
+  busy,
+  onAuthorize,
+  onUnauthorize,
+}: {
+  s: McpServerEntry;
+  busy: boolean;
+  onAuthorize: () => void;
+  onUnauthorize: () => void;
+}) {
+  const { t } = useI18n();
+  if (s.authorized) {
+    return (
+      <>
+        <span
+          title={t("settings.mcp.unauthorizeHint")}
+          className="shrink-0 rounded bg-emerald-500/15 px-1 text-[9px] leading-tight text-emerald-500"
+        >
+          {t("settings.mcp.authorized")}
+        </span>
+        <Button
+          variant="ghost"
+          size="sm"
+          className="gap-1"
+          disabled={busy}
+          onClick={onUnauthorize}
+          title={t("settings.mcp.unauthorizeHint")}
+        >
+          {busy ? <IconLoader2 size={12} className="animate-spin" /> : <IconLockOpen size={12} />}
+          {t("settings.mcp.unauthorize")}
+        </Button>
+      </>
+    );
+  }
+  if (!s.needsAuth) return null;
+  return (
+    <>
+      <span
+        title={t("settings.mcp.authorizeHint")}
+        className="shrink-0 rounded bg-amber-500/15 px-1 text-[9px] leading-tight text-amber-500"
+      >
+        {t("settings.mcp.needsAuth")}
+      </span>
+      <Button
+        variant="secondary"
+        size="sm"
+        className="gap-1"
+        disabled={busy}
+        onClick={onAuthorize}
+        title={t("settings.mcp.authorizeHint")}
+      >
+        {busy ? <IconLoader2 size={12} className="animate-spin" /> : <IconExternalLink size={12} />}
+        {t("settings.mcp.authorize")}
+      </Button>
+    </>
   );
 }
 
@@ -168,6 +233,49 @@ export function McpPanel() {
     }
   };
 
+  /** OAuth browser login for a remote server flagged needsAuth. Blocks until
+   *  the CLI reports the flow done (success or failure) — the button spins
+   *  meanwhile; the browser tab does the actual Canva/… account login. */
+  const authorize = async (s: McpServerEntry) => {
+    setError(null);
+    setBusyKey(rowKey(s));
+    try {
+      const res = await api.mcp.authorize({
+        name: s.name,
+        // For http/sse rows `detail` IS the server URL (the describers put
+        // nothing else there — verified for user/plugin scopes).
+        url: s.detail,
+        kind: s.kind === "sse" ? "sse" : "http",
+      });
+      if (!res.ok) setError(t("settings.mcp.authorizeFailed", { error: res.error ?? "" }));
+      await load();
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusyKey(null);
+    }
+  };
+
+  /** Clear a remote server's stored OAuth token (claude mcp logout). Same
+   *  identity (name + URL) as authorize — credentials are keyed by both. */
+  const unauthorize = async (s: McpServerEntry) => {
+    setError(null);
+    setBusyKey(rowKey(s));
+    try {
+      const res = await api.mcp.unauthorize({
+        name: s.name,
+        url: s.detail,
+        kind: s.kind === "sse" ? "sse" : "http",
+      });
+      if (!res.ok) setError(t("settings.mcp.unauthorizeFailed", { error: res.error ?? "" }));
+      await load();
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusyKey(null);
+    }
+  };
+
   const userServers = servers.filter((s) => s.scope === "user");
   const projectServers = servers.filter((s) => s.scope === "project");
   const pluginServers = servers.filter((s) => s.scope === "plugin");
@@ -214,6 +322,12 @@ export function McpPanel() {
               }
               desc={<span className="font-mono">{s.detail}</span>}
             >
+              <OAuthRowActions
+                s={s}
+                busy={busyKey === rowKey(s)}
+                onAuthorize={() => void authorize(s)}
+                onUnauthorize={() => void unauthorize(s)}
+              />
               <Switch
                 checked={s.enabled}
                 onCheckedChange={() => void toggle(s)}
@@ -322,6 +436,12 @@ export function McpPanel() {
                   </span>
                 }
               >
+                <OAuthRowActions
+                s={s}
+                busy={busyKey === rowKey(s)}
+                onAuthorize={() => void authorize(s)}
+                onUnauthorize={() => void unauthorize(s)}
+              />
                 <Switch
                   checked={s.enabled}
                   onCheckedChange={() => void toggle(s)}
@@ -354,6 +474,12 @@ export function McpPanel() {
               }
               desc={<span className="font-mono">{s.detail}</span>}
             >
+              <OAuthRowActions
+                s={s}
+                busy={busyKey === rowKey(s)}
+                onAuthorize={() => void authorize(s)}
+                onUnauthorize={() => void unauthorize(s)}
+              />
               <Switch
                 checked={s.enabled}
                 onCheckedChange={() => void toggle(s)}
