@@ -112,13 +112,28 @@ interface SpawnResult {
   message: string;
 }
 
+interface RunOpts {
+  cwd?: string;
+  timeoutMs?: number;
+  /** Spawn WITHOUT the proxy env vars (http(s)_proxy / ALL_PROXY) — used by
+   *  gitClone's proxy-bypass retry so curl can't fall back to them. */
+  noProxyEnv?: boolean;
+}
+
+const PROXY_ENV_RE = /^(https?_proxy|all_proxy)$/i;
+
 function runCommand(
   cmd: string,
   args: string[],
-  opts: { cwd?: string; timeoutMs?: number } = {},
+  opts: RunOpts = {},
 ): Promise<SpawnResult> {
   return new Promise((resolve) => {
-    const child = spawn(cmd, args, { cwd: opts.cwd, windowsHide: true });
+    const env = opts.noProxyEnv
+      ? Object.fromEntries(
+          Object.entries(process.env).filter(([k]) => !PROXY_ENV_RE.test(k)),
+        )
+      : undefined;
+    const child = spawn(cmd, args, { cwd: opts.cwd, windowsHide: true, env });
     let tail = "";
     let settled = false;
     const finish = (r: SpawnResult) => {
@@ -147,13 +162,41 @@ function runCommand(
   });
 }
 
-/** Shallow-clone a git repo into `dest` (which must not exist). */
+/** curl's message when a configured proxy refuses the connection — the
+ *  "proxy app is configured but not running" signature. Only this failure
+ *  justifies bypassing the user's proxy: a RUNNING proxy that fails for
+ *  auth/DNS/timeout reasons must stay in the path (it may be the only route
+ *  to GitHub, and bypassing it would silently leak the request direct). */
+const PROXY_REFUSED_RE = /Failed to connect to (?:127\.0\.0\.1|localhost|\[?::1\]?)\s*port/i;
+
+/** Shallow-clone a git repo into `dest` (which must not exist).
+ *
+ *  Proxy fallback: Mcode spawns git with the inherited environment, so a
+ *  machine whose git config / shell env points at a currently-dead local
+ *  proxy (Clash/v2ray off — "Failed to connect to 127.0.0.1 port 7897") fails
+ *  on the very first hop. When — and only when — the failure is a proxy
+ *  connect-refused, retry once with proxies stripped: command-line `-c
+ *  http.proxy=` overrides git config files, and the cleaned env stops curl's
+ *  env-var fallback. */
 async function gitClone(url: string, dest: string, ref?: string): Promise<void> {
-  const args = ["clone", "--depth", "1", "--quiet"];
-  if (ref) args.push("--branch", ref);
-  args.push(url, dest);
-  const res = await runCommand("git", args, { timeoutMs: GIT_TIMEOUT_MS });
-  if (!res.ok) throw new Error(`git clone 失败:${res.message}`);
+  const baseArgs = ["clone", "--depth", "1", "--quiet"];
+  if (ref) baseArgs.push("--branch", ref);
+  baseArgs.push(url, dest);
+  const direct = await runCommand("git", baseArgs, { timeoutMs: GIT_TIMEOUT_MS });
+  if (direct.ok) return;
+  if (!PROXY_REFUSED_RE.test(direct.message)) {
+    throw new Error(`git clone 失败:${direct.message}`);
+  }
+  const bypass = await runCommand(
+    "git",
+    ["-c", "http.proxy=", "-c", "https.proxy=", ...baseArgs],
+    { timeoutMs: GIT_TIMEOUT_MS, noProxyEnv: true },
+  );
+  if (!bypass.ok) {
+    throw new Error(
+      `git clone 失败(代理不可用,绕过代理直连也失败):${bypass.message}。若 GitHub 需要代理访问,请先开启代理软件再重试。`,
+    );
+  }
 }
 
 /** Extract a .zip via the platform tool. bsdtar (macOS / Windows 10+) reads
