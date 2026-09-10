@@ -35,6 +35,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { z } from "zod";
 import {
+  BUILTIN_MARKETPLACES,
   PLUGINS_ENABLED_SETTING_KEY,
   PLUGINS_MARKETPLACES_SETTING_KEY,
   PLUGINS_MCP_DISABLED_SETTING_KEY,
@@ -68,6 +69,10 @@ export const PLUGINS_ROOT = path.join(MCODE_CONFIG_DIR, "plugins");
 const MARKETPLACES_DIR = path.join(PLUGINS_ROOT, "marketplaces");
 const INSTALL_RECORD_FILE = ".mcode-install.json";
 const GIT_TIMEOUT_MS = 120_000;
+/** Archive downloads are one shot per install and can be tens of MB on a slow
+ *  link — generous, but bounded so a stalled socket cannot hold the install
+ *  (and the panel's busy state) forever. */
+const DOWNLOAD_TIMEOUT_MS = 300_000;
 
 /* ── Settings-table helpers ── */
 
@@ -199,10 +204,80 @@ async function gitClone(url: string, dest: string, ref?: string): Promise<void> 
   }
 }
 
+/** Node's fetch/undici collapses EVERY network failure into the bare string
+ *  "fetch failed" — the actionable part (ECONNREFUSED to a proxy port,
+ *  ENOTFOUND, TLS/cert errors) hangs off `cause`. Walk the chain so the panel
+ *  shows something a user can act on. */
+function describeFetchError(err: unknown): string {
+  const parts: string[] = [];
+  let cur: unknown = err;
+  for (let depth = 0; depth < 4 && cur instanceof Error; depth++) {
+    if (cur.message) parts.push(cur.message);
+    cur = (cur as { cause?: unknown }).cause;
+  }
+  return parts.join(" ← ") || String(err);
+}
+
+/** Last-resort transport when the platform has no curl: node's fetch. Ignores
+ *  the proxy environment entirely (undici does not read it), which is exactly
+ *  why curl goes first. */
+async function downloadViaFetch(url: string, dest: string): Promise<void> {
+  try {
+    const res = await fetch(url, { redirect: "follow" });
+    if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
+    await fs.writeFile(dest, Buffer.from(await res.arrayBuffer()));
+  } catch (err) {
+    throw new Error(
+      `下载失败:${describeFetchError(err)}(${url})。若该地址需要代理访问,请先开启代理软件再重试。`,
+    );
+  }
+}
+
+/** Download `url` into `dest` (marketplace zip entries: `{source:"url"}` —
+ *  152 of the official catalog's 292 entries, so this path is not exotic).
+ *
+ *  Transport is curl for the same reason gitClone uses git: it resolves
+ *  proxies the way the rest of the machine does, and — the part undici's fetch
+ *  cannot do — it can be re-run with the proxy env stripped. On a machine whose
+ *  shell/git point at a currently-dead local proxy, `fetch` dies on the first
+ *  hop (as the useless "fetch failed") while a git clone of the SAME host
+ *  succeeds via the bypass; zip installs must not be the one path that fails
+ *  there. Same rule as gitClone for when to bypass: only a proxy
+ *  connect-refused, never a running proxy that failed for auth/DNS reasons.
+ *
+ *  Order: curl (inherited env) → curl (proxies stripped) → node fetch (only
+ *  when curl is missing, e.g. a minimal Linux image). */
+async function downloadFile(url: string, dest: string): Promise<void> {
+  const args = [
+    "-fL",
+    "--silent",
+    "--show-error",
+    "--retry",
+    "2",
+    "--connect-timeout",
+    "15",
+    "-o",
+    dest,
+    url,
+  ];
+  const first = await runCommand("curl", args, { timeoutMs: DOWNLOAD_TIMEOUT_MS });
+  if (first.ok) return;
+  // runCommand reports a missing binary as "<cmd> 无法启动: …" (spawn ENOENT).
+  if (/无法启动/.test(first.message)) return downloadViaFetch(url, dest);
+  if (!PROXY_REFUSED_RE.test(first.message)) throw new Error(`下载失败:${first.message}`);
+  const bypass = await runCommand("curl", args, {
+    timeoutMs: DOWNLOAD_TIMEOUT_MS,
+    noProxyEnv: true,
+  });
+  if (bypass.ok) return;
+  throw new Error(
+    `下载失败(代理不可用,绕过代理直连也失败):${bypass.message}。若该地址需要代理访问,请先开启代理软件再重试。`,
+  );
+}
+
 /** GNU tar's message when `C:\...` is misread as a remote `host:file` target
  *  (an MSYS/Git Bash tar sitting ahead of System32's bsdtar in PATH). */
 const TAR_REMOTE_HOST_RE = /Cannot connect to .* resolve failed/i;
-
 /** Extract a .zip via the platform tool. bsdtar (macOS / Windows 10+) reads
  *  zip natively; Linux GNU tar doesn't, so unzip is the fallback there.
  *
@@ -315,7 +390,11 @@ const installing = new Set<string>();
 /** What stagePluginSource/finalizePluginInstall need to know about where the
  *  payload comes from. `git`/`local-*` come from the RPCs; `marketplace-path`
  *  is a resolved marketplace-relative directory; `git-subdir` clones a repo
- *  and takes a subdirectory of it; `remote-zip` downloads an archive. */
+ *  and takes a subdirectory of it; `remote-zip` downloads an ARCHIVE.
+ *
+ *  Marketplace `{source:"url"}` entries split across `git` and `remote-zip` by
+ *  URL shape (see urlLooksLikeArchive) — the official catalog's 152 of them are
+ *  all `https://github.com/<owner>/<repo>.git`. */
 type StageKind = "git" | "git-subdir" | "local-dir" | "local-zip" | "marketplace-path" | "remote-zip";
 
 interface StageSource {
@@ -367,17 +446,21 @@ async function stagePluginSource(source: StageSource): Promise<StageOutcome> {
       await fs.cp(sub, path.join(stagingDir, "plugin"), { recursive: true });
       await fs.rm(path.join(stagingDir, "repo"), { recursive: true, force: true });
     } else if (source.kind === "remote-zip") {
-      // `{source:"url", url}` — download the archive with node's built-in
-      // fetch, then run the same platform zip extraction as local zips.
+      // `{source:"url", url}` whose path ends in an archive extension — fetch it
+      // and run the same platform extraction as local zips. Transport/proxy
+      // policy lives in downloadFile (same discipline as gitClone).
       const tmpZip = path.join(stagingDir, "..", `.dl-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.zip`);
       try {
-        const res = await fetch(source.ref, { redirect: "follow" });
-        if (!res.ok || !res.body) {
-          throw new Error(`下载失败:HTTP ${res.status}(${source.ref})`);
+        await downloadFile(source.ref, tmpZip);
+        try {
+          await extractZip(tmpZip, stagingDir);
+        } catch (err) {
+          // The URL claimed an archive but the bytes say otherwise — point at
+          // the likely mistake instead of leaving a bare tar error.
+          throw new Error(
+            `${err instanceof Error ? err.message : String(err)}。该地址看起来是压缩包但无法解压;若它其实是 git 仓库,请改用「从 Git 安装」`,
+          );
         }
-        const buf = Buffer.from(await res.arrayBuffer());
-        await fs.writeFile(tmpZip, buf);
-        await extractZip(tmpZip, stagingDir);
       } finally {
         await fs.rm(tmpZip, { force: true }).catch(() => {});
       }
@@ -516,6 +599,66 @@ export function removePlugin(name: string): { ok: boolean; error?: string } {
 
 /* ── Marketplaces ── */
 
+/** Canonical form of a git URL for identity comparison: case, trailing slashes
+ *  and a `.git` suffix are noise — the same repository typed as
+ *  `https://github.com/x/y`, `.../y.git` or with a trailing slash must match
+ *  one built-in entry, not produce three. */
+function normalizeGitUrl(url: string): string {
+  return url
+    .trim()
+    .replace(/\/+$/, "")
+    .replace(/\.git$/i, "")
+    .toLowerCase();
+}
+
+const BUILTIN_MARKETPLACE_URLS = new Set(BUILTIN_MARKETPLACES.map((b) => normalizeGitUrl(b.url)));
+
+/** True for a record pointing at one of the shipped catalogs (tested by URL, so
+ *  it also holds for records written before the URL was declared built-in). */
+function isBuiltinMarketplaceRecord(rec: PluginMarketplaceRecord): boolean {
+  return (
+    rec.builtin === true ||
+    (rec.source.kind === "git" && BUILTIN_MARKETPLACE_URLS.has(normalizeGitUrl(rec.source.ref)))
+  );
+}
+
+/** Materialize a record for every shipped marketplace that is missing, and
+ *  adopt an existing copy of the same repository (matched by URL) as built-in.
+ *  Idempotent and write-free unless something actually changed, so it is safe
+ *  to call on every list. User records keep their order; new built-ins append
+ *  (a user's own catalogs stay first, which is also where the panel opens). */
+function ensureBuiltinMarketplaceRecords(
+  records: PluginMarketplaceRecord[],
+): PluginMarketplaceRecord[] {
+  let changed = false;
+  const knownUrls = new Set<string>();
+  const out: PluginMarketplaceRecord[] = [];
+  for (const rec of records) {
+    if (rec.source.kind === "git") knownUrls.add(normalizeGitUrl(rec.source.ref));
+    if (isBuiltinMarketplaceRecord(rec) && rec.builtin !== true) {
+      changed = true;
+      out.push({ ...rec, builtin: true });
+    } else {
+      out.push(rec);
+    }
+  }
+  for (const def of BUILTIN_MARKETPLACES) {
+    if (knownUrls.has(normalizeGitUrl(def.url))) continue;
+    // Name clash with an unrelated user marketplace: skip this one rather than
+    // taking over a directory the user is already using under that name.
+    if (out.some((r) => r.name === def.name)) continue;
+    out.push({
+      name: def.name,
+      source: { kind: "git", ref: def.url },
+      addedAt: new Date().toISOString(),
+      builtin: true,
+    });
+    changed = true;
+  }
+  if (changed) writeJsonSetting(PLUGINS_MARKETPLACES_SETTING_KEY, out);
+  return out;
+}
+
 /** Locate + parse a marketplace tree's manifest
  *  (`.claude-plugin/marketplace.json`, root `marketplace.json` fallback).
  *
@@ -590,6 +733,16 @@ export async function addMarketplace(input: {
   name?: string;
 }): Promise<{ ok: boolean; error?: string }> {
   const records = readMarketplaceRecords();
+  // Same repository (however it was spelled) already listed — usually one of the
+  // shipped catalogs, which must be refreshed rather than added a second time.
+  if (
+    input.kind === "git" &&
+    records.some(
+      (r) => r.source.kind === "git" && normalizeGitUrl(r.source.ref) === normalizeGitUrl(input.ref),
+    )
+  ) {
+    return { ok: false, error: `该仓库已在插件市场中:${input.ref}` };
+  }
   const staging = path.join(PLUGINS_ROOT, `.mp-staging-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
   try {
     await materializeMarketplaceTree({ kind: input.kind, ref: input.ref }, staging);
@@ -630,7 +783,13 @@ function sanitizeMarketplaceName(ref: string): string {
 
 export function removeMarketplace(name: string): { ok: boolean; error?: string } {
   const records = readMarketplaceRecords();
-  if (!records.some((r) => r.name === name)) return { ok: false, error: `marketplace ${name} 不存在` };
+  const rec = records.find((r) => r.name === name);
+  if (!rec) return { ok: false, error: `marketplace ${name} 不存在` };
+  // Shipped catalogs are part of the product surface, not user state: the panel
+  // hides their remove action, and this is the guard for any other caller.
+  if (isBuiltinMarketplaceRecord(rec)) {
+    return { ok: false, error: `内置插件市场不可移除,可刷新:${name}` };
+  }
   writeJsonSetting(
     PLUGINS_MARKETPLACES_SETTING_KEY,
     records.filter((r) => r.name !== name),
@@ -661,7 +820,9 @@ export async function refreshMarketplace(name: string): Promise<{ ok: boolean; e
  *  the installed plugin set by name. */
 export function listMarketplaces(): PluginMarketplaceState[] {
   const installed = new Set(listPlugins().map((p) => p.name));
-  return readMarketplaceRecords().map((rec) => {
+  // Also the seeding point for the shipped catalogs: any list call (i.e. opening
+  // the plugin panel) makes sure they are present in the records.
+  return ensureBuiltinMarketplaceRecords(readMarketplaceRecords()).map((rec) => {
     const dir = marketplaceDirOf(rec.name);
     const manifest = existsSync(dir) ? readMarketplaceManifest(dir) : null;
     return {
@@ -669,6 +830,8 @@ export function listMarketplaces(): PluginMarketplaceState[] {
       sourceKind: rec.source.kind,
       sourceRef: rec.source.ref,
       addedAt: rec.addedAt,
+      builtin: rec.builtin === true,
+      cloned: existsSync(dir),
       plugins: (manifest?.plugins ?? []).map((e) => ({
         marketplace: rec.name,
         name: e.name,
@@ -678,6 +841,26 @@ export function listMarketplaces(): PluginMarketplaceState[] {
       })),
     };
   });
+}
+
+/** True when a marketplace `{source:"url"}` points at a downloadable archive
+ *  rather than a repository.
+ *
+ *  The Claude marketplace schema uses `url` for BOTH, and a repository URL is
+ *  the dominant case by far — all 152 `url` entries of
+ *  anthropics/claude-plugins-official are `https://github.com/<owner>/<repo>.git`
+ *  (verified against the real manifest). Treating those as downloads fetched
+ *  GitHub's HTML repo page with HTTP 200 and handed it to tar, which failed
+ *  with the very unhelpful "Unrecognized archive format" — half the catalog
+ *  could not be installed. Only an archive-extension path is downloaded. */
+function urlLooksLikeArchive(url: string): boolean {
+  let pathname = url;
+  try {
+    pathname = new URL(url).pathname;
+  } catch {
+    /* not a parseable URL — fall back to the raw string */
+  }
+  return /\.(zip|tgz|tar\.gz|tar)$/i.test(pathname);
 }
 
 /** Resolve a marketplace entry's `source` into an installable source.
@@ -728,7 +911,7 @@ function resolveMarketplaceEntrySource(
   }
   if (src.source === "url") {
     return {
-      kind: "remote-zip",
+      kind: urlLooksLikeArchive(src.url) ? "remote-zip" : "git",
       ref: src.url,
       info: { kind: "marketplace", ref: `${marketplaceName}:${src.url}` },
     };

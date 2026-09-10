@@ -29,6 +29,7 @@ import type {
 // Re-export the plugin contracts so consumers can import from "@contracts/ipc"
 // (mirrors the relay.ts pattern).
 export {
+  BUILTIN_MARKETPLACES,
   PLUGINS_ENABLED_SETTING_KEY,
   PLUGINS_MARKETPLACES_SETTING_KEY,
   PLUGINS_MCP_DISABLED_SETTING_KEY,

@@ -11,7 +11,8 @@
  * and HOME redirected to a scratch dir, so ~/.mcode/plugins is faked.
  */
 import { execSync } from "node:child_process";
-import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -463,8 +464,36 @@ console.log("\n[8] marketplace lifecycle");
 const mpAdd = await addMarketplace({ kind: "local", ref: mpDir });
 ok(mpAdd.ok, "addMarketplace(local) ok", mpAdd.error ?? "");
 const mps = listMarketplaces();
-eq(mps.length, 1, "one marketplace listed");
+eq(mps.length, 3, "user marketplace + the 2 shipped catalogs are listed");
 eq(mps[0].name, "test-mp", "marketplace name from manifest");
+eq(mps[0].builtin, false, "user marketplace is not built-in");
+eq(mps[0].cloned, true, "user marketplace tree is on disk");
+// Built-ins are seeded by the list call: user records keep their order, the
+// shipped catalogs append, and both are listed BEFORE their first fetch.
+eq(
+  mps.slice(1).map((m) => m.name),
+  ["zcode-plugins-official", "claude-plugins-official"],
+  "shipped catalogs appended in declaration order",
+);
+eq(
+  mps.slice(1).every((m) => m.builtin && !m.cloned && m.plugins.length === 0),
+  true,
+  "built-ins marked builtin, listed unfetched with an empty catalog",
+);
+// Shipped catalogs are product surface, not user state: not removable, and
+// adding the same repo by hand is refused instead of duplicating the catalog.
+const builtinRemove = removeMarketplace("claude-plugins-official");
+ok(!builtinRemove.ok, "built-in marketplace cannot be removed", builtinRemove.error ?? "");
+const builtinDupAdd = await addMarketplace({
+  kind: "git",
+  ref: "https://github.com/anthropics/claude-plugins-official.git",
+});
+ok(
+  !builtinDupAdd.ok,
+  "same repo cannot be added twice (.git suffix normalized)",
+  builtinDupAdd.error ?? "",
+);
+eq(listMarketplaces().length, 3, "refused mutations changed nothing");
 eq(mps[0].plugins.length, 2, "two catalog entries");
 eq(mps[0].plugins[0].installed, true, "demo-plugin entry marked installed");
 eq(mps[0].plugins[1].installed, false, "gh-plugin entry not installed");
@@ -512,6 +541,88 @@ ok(
 removeMarketplace("official-style");
 removePlugin("subdir-plugin");
 
+/* ── 8c. remote-zip marketplace entry (the {source:"url"} path) ── */
+console.log("\n[8c] remote-zip marketplace entry over loopback HTTP");
+// 152 of the official catalog's 292 entries are {source:"url"} archives, and
+// that path used to be a bare `fetch`: no proxy handling (undici ignores the
+// proxy env), no retry, and undici's "fetch failed" swallows the cause — which
+// is how a whole class of installs died with nothing actionable. It now goes
+// through curl with the same proxy discipline as gitClone, so serve the zip
+// fixture over loopback and exercise the real transport (machines without curl
+// take the fetch fallback — both must pass this).
+const zipBytes = readFileSync(zipPath);
+const zipServer = createServer((req, res) => {
+  // 404 for every other path, so the missing-archive case has something to fail
+  // ON and must report the status instead of the old bare "fetch failed".
+  if (req.url !== "/demo-plugin.zip") {
+    res.writeHead(404, { "content-type": "text/plain" });
+    res.end("not found");
+    return;
+  }
+  res.writeHead(200, { "content-type": "application/zip" });
+  res.end(zipBytes);
+});
+await new Promise<void>((resolve) => zipServer.listen(0, "127.0.0.1", resolve));
+const zipAddr = zipServer.address();
+const zipPort = typeof zipAddr === "object" && zipAddr ? zipAddr.port : 0;
+
+const remoteMpDir = path.join(fixtureDir, "remote-mp");
+mkdirSync(path.join(remoteMpDir, ".claude-plugin"), { recursive: true });
+writeFileSync(
+  path.join(remoteMpDir, ".claude-plugin", "marketplace.json"),
+  JSON.stringify({
+    name: "remote-mp",
+    plugins: [
+      {
+        name: "demo-plugin",
+        description: "url entry served over loopback",
+        source: { source: "url", url: `http://127.0.0.1:${zipPort}/demo-plugin.zip` },
+      },
+      {
+        name: "missing-plugin",
+        description: "url entry pointing at a 404",
+        source: { source: "url", url: `http://127.0.0.1:${zipPort}/nope.zip` },
+      },
+      {
+        // The shape 152 of the official catalog's 292 entries use: a url source
+        // that is a REPOSITORY, not an archive. It must be cloned — treating it
+        // as a download fetched GitHub's HTML page and died in tar with
+        // "Unrecognized archive format".
+        name: "git-url-plugin",
+        description: "url entry that is a git repo",
+        source: { source: "url", url: `file://${gitRepo}` },
+      },
+    ],
+  }),
+);
+const remoteMpAdd = await addMarketplace({ kind: "local", ref: remoteMpDir });
+ok(remoteMpAdd.ok, "remote-zip marketplace added", remoteMpAdd.error ?? "");
+const gitUrlInstall = await installFromMarketplace("remote-mp", "git-url-plugin");
+ok(gitUrlInstall.ok, "url source that is a repo installs (git clone)", gitUrlInstall.error ?? "");
+eq(gitUrlInstall.plugin?.name, "git-plugin", "repo-url entry installed under its manifest name");
+const remoteInstall = await installFromMarketplace("remote-mp", "demo-plugin");
+ok(
+  remoteInstall.ok,
+  "url-source entry installs (download + extract)",
+  remoteInstall.error ?? "",
+);
+eq(remoteInstall.plugin?.name, "demo-plugin", "archive installed under its manifest name");
+ok(
+  (remoteInstall.plugin?.components.skills.length ?? 0) > 0,
+  "downloaded archive keeps its components",
+);
+// A dead archive URL must report WHAT failed. Before this, the user got the
+// bare "fetch failed" that undici emits for every network error.
+const missing404 = await installFromMarketplace("remote-mp", "missing-plugin");
+ok(!missing404.ok, "unreachable archive fails the install", missing404.error ?? "");
+ok(
+  /404/.test(missing404.error ?? ""),
+  "failure names the HTTP status instead of a bare 'fetch failed'",
+  missing404.error ?? "",
+);
+await new Promise<void>((resolve) => zipServer.close(() => resolve()));
+removeMarketplace("remote-mp");
+
 /* ── 9. remove cleanup ── */
 console.log("\n[9] remove cleanup");
 setPluginMcpDisabled("demo-plugin__fetcher", true);
@@ -528,7 +639,9 @@ eq(denylisted.length, 0, "per-plugin MCP denylist cleared on remove");
 
 const mpRemove = removeMarketplace("test-mp");
 ok(mpRemove.ok, "marketplace removed");
-eq(listMarketplaces().length, 0, "no marketplaces left");
+const afterRemove = listMarketplaces();
+eq(afterRemove.filter((m) => !m.builtin).length, 0, "no user marketplaces left");
+eq(afterRemove.length, 2, "shipped catalogs survive the removal of every user marketplace");
 
 /* ── summary ── */
 console.log(`\n${passed} passed, ${failed} failed`);

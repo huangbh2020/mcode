@@ -40,7 +40,7 @@
  * outside this panel, so nothing goes into the session store. Every mutation
  * RPC resolves when done and ends with a full re-list — no push channel.
  */
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Menu } from "@base-ui/react/menu";
 import { cn } from "@renderer/lib/cn.js";
 import { api } from "@renderer/lib/api.js";
@@ -303,6 +303,7 @@ export function PluginsPanel() {
       />
       <MarketplacePane
         className={tab === "market" ? "flex" : "hidden"}
+        visible={tab === "market"}
         marketplaces={marketplaces}
         loaded={loaded}
         ops={ops}
@@ -1028,11 +1029,16 @@ function GitInstallForm({
  *  the query was written for the catalog you are leaving). */
 function MarketplacePane({
   className,
+  visible,
   marketplaces,
   loaded,
   ops,
 }: {
   className?: string;
+  /** True while this pane is the shown tab. The panes stay mounted, so without
+   *  it the first-fetch effect below would clone catalogs while the user is
+   *  still on the 已安装 tab. */
+  visible: boolean;
   marketplaces: PluginMarketplaceState[];
   loaded: boolean;
   ops: PanelOps;
@@ -1114,6 +1120,24 @@ function MarketplacePane({
       ops.setBusyKey(null);
     }
   };
+
+  /* A shipped marketplace (BUILTIN_MARKETPLACES) is listed before it has ever
+     been cloned, so fetch it the first time it is actually looked at — that is
+     the one moment downloading a catalog is unambiguously what the user wants.
+     One attempt per marketplace per mount: a failure surfaces in the error
+     banner and leaves the Refresh button, never a retry loop. `busyKey` gates
+     it to one clone at a time when both built-ins still need fetching. */
+  const fetchTried = useRef<Set<string>>(new Set());
+  // Ref mirror so the effect's deps stay primitive (mpAction is rebuilt every
+  // render — same idiom as useSuppressBrowserView).
+  const refreshRef = useRef<(name: string) => void>(() => {});
+  refreshRef.current = (name) => void mpAction(name, "refresh");
+  useEffect(() => {
+    if (!visible || !loaded || !active || !active.builtin || active.cloned) return;
+    if (ops.busyKey || fetchTried.current.has(active.name)) return;
+    fetchTried.current.add(active.name);
+    refreshRef.current(active.name);
+  }, [visible, loaded, active, ops.busyKey]);
 
   /** Refresh every marketplace sequentially — each one re-clones, so firing
    *  them in parallel would just contend for the network and the git lock. */
@@ -1358,6 +1382,7 @@ function MarketplaceCatalog({
 }) {
   const { t } = useI18n();
   const busy = busyKey != null;
+  const fetching = busyKey === `mp:refresh:${marketplace.name}`;
 
   return (
     <div className="overflow-hidden rounded-xl border border-edge bg-surface">
@@ -1372,6 +1397,11 @@ function MarketplaceCatalog({
         >
           {marketplace.sourceKind === "git" ? "git" : t("settings.plugins.source.local-dir")}
         </span>
+        {marketplace.builtin && (
+          <span className="shrink-0 rounded bg-accent/10 px-1.5 py-0.5 text-[0.72em] text-accent-strong">
+            {t("settings.plugins.mpBuiltin")}
+          </span>
+        )}
         <span className="min-w-0 flex-1 truncate font-mono text-[0.7857em] text-content-subtle">
           {marketplace.sourceRef}
         </span>
@@ -1387,24 +1417,29 @@ function MarketplaceCatalog({
         >
           <IconRefresh
             size={13}
-            className={cn(
-              "text-content-subtle hover:text-accent",
-              busyKey === `mp:refresh:${marketplace.name}` && "animate-spin",
-            )}
+            className={cn("text-content-subtle hover:text-accent", fetching && "animate-spin")}
           />
         </Button>
-        <Button
-          variant="ghost"
-          size="icon"
-          title={t("settings.plugins.mpRemove")}
-          onClick={onRemove}
-          disabled={busy}
-          className="hover:text-danger"
-        >
-          <IconTrash size={13} className="text-content-subtle" />
-        </Button>
+        {/* Shipped catalogs carry no remove action (the main process refuses it
+            too) — this just keeps a dead control off the screen. */}
+        {!marketplace.builtin && (
+          <Button
+            variant="ghost"
+            size="icon"
+            title={t("settings.plugins.mpRemove")}
+            onClick={onRemove}
+            disabled={busy}
+            className="hover:text-danger"
+          >
+            <IconTrash size={13} className="text-content-subtle" />
+          </Button>
+        )}
       </div>
-      {entries.length === 0 ? (
+      {!marketplace.cloned ? (
+        <div className="px-3 py-2.5 text-[0.7857em] text-content-subtle">
+          {t(fetching ? "settings.plugins.mpFetching" : "settings.plugins.mpNotFetched")}
+        </div>
+      ) : entries.length === 0 ? (
         <div className="px-3 py-2.5 text-[0.7857em] text-content-subtle">
           {t("settings.plugins.mpNoEntries")}
         </div>

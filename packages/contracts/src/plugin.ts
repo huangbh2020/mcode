@@ -36,6 +36,27 @@ export const PLUGINS_MARKETPLACES_SETTING_KEY = "plugins.marketplaces";
  *  (namespaced `<plugin>__<server>` names). Value = JSON.stringify(string[]). */
 export const PLUGINS_MCP_DISABLED_SETTING_KEY = "plugins.mcpDisabled";
 
+/* ── Built-in marketplaces ── */
+
+/** Marketplaces Mcode ships with: the canonical catalogs of the two plugin
+ *  ecosystems it targets (ZCode's own, and Anthropic's official one). They are
+ *  always listed — the manager materializes a record for any of these that is
+ *  missing, so a fresh install (or a wiped settings row) still finds them, and
+ *  adding one by hand is refused rather than duplicated.
+ *
+ *  Matching is by git URL, normalized (case, trailing slashes, `.git`), NOT by
+ *  name: the cloned manifest's own name wins, and an existing user-added copy
+ *  of the same repository is adopted as built-in instead of showing up twice.
+ *  Built-ins can be refreshed but not removed; `name` here is the directory name
+ *  used for the record before the first clone lands. */
+export const BUILTIN_MARKETPLACES: ReadonlyArray<{ name: string; url: string }> = [
+  { name: "zcode-plugins-official", url: "https://github.com/zai-org/zcode-plugins" },
+  {
+    name: "claude-plugins-official",
+    url: "https://github.com/anthropics/claude-plugins-official",
+  },
+];
+
 /* ── Manifest (plugin.json) ── */
 
 /** Where a plugin's manifest is looked up, in probe order. The Claude layout
@@ -205,12 +226,14 @@ export interface PluginState {
   components: PluginComponents;
 }
 
-/** A marketplace added by the user. The cloned/copied tree lives under
- *  `~/.mcode/plugins/marketplaces/<name>/`. */
+/** A marketplace added by the user (or materialized from BUILTIN_MARKETPLACES).
+ *  The cloned/copied tree lives under `~/.mcode/plugins/marketplaces/<name>/`. */
 export interface PluginMarketplaceRecord {
   name: string;
   source: { kind: "git" | "local"; ref: string };
   addedAt: string;
+  /** True for the catalogs in BUILTIN_MARKETPLACES: refreshable, not removable. */
+  builtin?: boolean;
 }
 
 /** A marketplace listing entry for the Discover tab. `installed` is computed
@@ -229,6 +252,13 @@ export interface PluginMarketplaceState {
   sourceKind: "git" | "local";
   sourceRef: string;
   addedAt: string;
+  /** Shipped with Mcode (see BUILTIN_MARKETPLACES) — the panel badges it and
+   *  drops the remove action. */
+  builtin: boolean;
+  /** False until the tree has been fetched into the marketplaces directory. A
+   *  built-in is listed before its first clone, so the panel can say "拉取中 /
+   *  待拉取" instead of the misleading "清单为空或无法解析". */
+  cloned: boolean;
   plugins: PluginMarketEntry[];
 }
 

@@ -27,4 +27,7 @@ mkdir -p "$SMOKE_HOME"
 # Node's os.homedir() honors HOME only on POSIX; on win32 it reads USERPROFILE
 # (libuv), so both must point at the scratch home or the smoke silently
 # operates on — and leaves fixtures inside — the real ~/.mcode/plugins.
-HOME="$SMOKE_HOME" USERPROFILE="$SMOKE_HOME" node "$OUT/smoke.mjs"
+# NO_PROXY: the remote-zip case serves its fixture over 127.0.0.1 with curl,
+# which (unlike undici) DOES honor proxy env vars — a machine-wide proxy
+# would otherwise route the loopback request through it and fail the test.
+HOME="$SMOKE_HOME" USERPROFILE="$SMOKE_HOME" NO_PROXY="127.0.0.1,localhost" no_proxy="127.0.0.1,localhost" node "$OUT/smoke.mjs"
