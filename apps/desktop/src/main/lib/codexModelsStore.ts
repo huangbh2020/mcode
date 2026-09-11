@@ -209,6 +209,18 @@ async function materializeConfigToml(cwd?: string): Promise<void> {
         }
       }
     }
+    // Plugins: MCP servers contributed by ENABLED plugins, injected under the
+    // same "<plugin>__<server>" namespace the Claude provider passes per turn
+    // (options.mcpServers) — one namespace, identical tool names across
+    // providers. Best-effort, same as the scopes above.
+    try {
+      const { getPluginMcpServers } = await import("@main/plugins/pluginManager.js");
+      for (const [name, cfg] of await getPluginMcpServers()) {
+        sources.push([name, cfg]);
+      }
+    } catch (err) {
+      log.warn(`codexModels: plugin MCP sync failed (continuing without): ${(err as Error).message}`);
+    }
     let wrote = 0;
     for (const [name, cfg] of sources) {
       const toml = mcpServerToml(name, cfg);

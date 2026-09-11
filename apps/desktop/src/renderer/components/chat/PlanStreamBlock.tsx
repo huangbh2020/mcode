@@ -2,7 +2,7 @@ import { cn } from "@renderer/lib/cn.js";
 import { useI18n } from "@renderer/lib/i18n/index.js";
 import { IconRocket } from "@renderer/lib/icons.js";
 import { Markdown } from "./Markdown.js";
-import { extractPlanTitle } from "./StatusCapsule.js";
+import { extractPlanTitle } from "./activityShared.js";
 import type { PlanUpdateEvent } from "@contracts/runtime";
 
 /** Max characters of plan text to preview inline before truncating. The full

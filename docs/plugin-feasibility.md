@@ -4,7 +4,7 @@
 >
 > 状态:**可行性结论已定,待排期实施**。调研日期 2026-09-09,所有三家(Claude Code / Codex CLI / ZCode)的插件机制均为**本机实测**(二进制 --help 探测、本机插件目录剖析、官方文档核对),非纯文档转述。
 
-**结论先行:Mcode 做插件系统高度可行,且是「管道大半已铺好」的状态。** skills 与 MCP 两类组件的投递通道在三个 provider 侧均已存在(Mcode 为隔离配置目录、codex skills RPC、Pi skill bridge 各自建过一遍);剩余工作主要是插件生命周期管理这层「壳」——清单解析、安装管线、启用/禁用、设置页面板。建议 v1 以 **skills + MCP servers** 为核心组件面,Claude 侧后续用 SDK 原生 `options.plugins` 解锁全组件。
+**结论先行:Mcode 做插件系统高度可行,且是「管道大半已铺好」的状态。** skills 与 MCP 两类组件的投递通道在三个 provider 侧均已存在(Mcode 为隔离配置目录、codex skills RPC、Pi skill bridge 各自建过一遍);剩余工作主要是插件生命周期管理这层「壳」——清单解析、安装管线、启用/禁用、设置页面板。建议 v1 以 **skills + MCP servers** 为核心组件面,Claude 侧后续用 SDK 原生 `options.plugins` 解锁全组件。hooks 采取「v1 明示不执行 → v1.5 Claude 透传 → v3 宿主统一 runner」的分段路线(分析见四.2)。
 
 ---
 
@@ -120,22 +120,63 @@ marketplace.json 同样采纳 Claude 形态(`.claude-plugin/marketplace.json`):`
 | MCP servers | 原生,或 `skipMcpDiscovery` + 并入 Mcode MCP 管理面 | config.toml 物化 | ❌ | ✅ v1 核心(两家);并入现有 MCP 面板统一展示 |
 | commands | 原生 | 无直接等价物 | 无 | v2:Claude 原生 + composer「预制指令」翻译(Mcode 作为 GUI 能比 CLI 做得更好的地方) |
 | agents(子代理) | 原生(`agents/*.md`) | 无声明式等价物 | 无 | v2(仅 Claude) |
-| hooks | 原生 | 未验证 | extension 事件部分覆盖 | **v1 不执行**(可解析展示);v3 慎做 + 逐条审批 |
+| hooks | 原生(`options.plugins` 加载时由 CLI 引擎执行) | 未验证 | extension 事件部分覆盖 | v1 解析 + **明示**不执行 → v1.5 Claude 透传(路线 A) → v3 宿主统一 runner(路线 B) |
 
 ### 3.4 安装与安全模型
 
 - 安装来源:git 仓库 / 本地目录 / zip(对齐 marketplace source 三形态);下载-校验-落位复用 runtimeInstaller 骨架;
 - **安装时组件审查**:展示清单全部组件 + MCP server 将运行的 command/env + hooks 将执行的命令,显式确认后才启用——把工具审批的安全姿态前移到插件安装;
+- **不支持组件明示而非静默**:插件包含当前 provider/当前阶段不支持的组件(尤其 hooks)时,安装确认与面板必须标注「此插件含 N 条 hooks,当前未启用」——静默 no-op 让用户以为插件的自动化行为在生效而实际没有,比显式不完整更糟;
 - MCP server 启用后并入现有 MCP 管理面板(可单独禁用);插件的 MCP 条目带插件命名空间前缀,卸载即移除;
 - `userConfig`(插件自定义配置)走 settings 表;标记 `sensitive` 的值进 safeStorage——补齐 ZCode 的已知短板;
 - 路径守卫沿用现有纪律:插件内声明的 skill/command 路径必须在插件根内(ZCode 同款校验:绝对路径或逃逸插件根即拒)。
+
+### 3.5 安装后如何使用:各组件的触发路径
+
+「启用」≠「有感」——各组件的使用方式完全不同,必须逐一说清:
+
+| 组件 | 用户如何触发 | 模型如何感知 | Mcode 的承担 |
+|------|------------|------------|-------------|
+| skills | 通常无需显式——描述进入上下文后模型自主加载;也可在 composer 用 `/name` skill pill 显式点选 | 系统提示中的 skill 清单(name + description) | 三家投递管道(2.1)让插件 skill 进入各自发现路径;composer 现有 skill pill 交互对插件 skill **零改动生效** |
+| commands | **斜杠命令**——`/review`、`/deploy-check`,这就是 commands 组件的本体 | 不自动感知(纯客户端 prompt 模板,不是工具) | Mcode 宿主端展开:读 command `.md` → 替换 `$ARGUMENTS` → 发送展开后的 prompt;composer 提供命令补全(v2) |
+| MCP tools | 无需显式——模型按需调用 | 工具清单(`mcp__<server>__<tool>`) | 已并入现有 MCP 管理面 |
+| agents | 无需显式——主 agent 经 Task 工具委派 | 子代理定义进入 agents 清单 | Claude 原生(v2) |
+| hooks | 无需显式——生命周期事件自动触发 | — | v1 不执行,面板明示(见 3.4) |
+
+**「能否用斜杠命令触发插件」——双重 yes:**
+
+1. **skills 可以**:`/name` 触发是 Mcode composer 的现有交互(piSkillBridge 已把 `/name` 改写为 Pi 的 `/skill:name`),插件 skill 经既有发现路径**免费获得**这套交互;
+2. **commands 组件本身就是一组斜杠命令**:插件安装启用后,`/插件命令` 即成为输入框里的新入口——这正是插件对用户最可见的形态。
+
+**关键坑(Mcode 特有,CLI 没有的问题)**:Claude CLI 的斜杠展开是**交互模式**的客户端行为;Mcode 经 `--input-format stream-json` 驱动,CLI **不会**重新解析提示文本里的 `/name`(`ClaudeAgentSdkProvider` 的 options.skills 注释记录了同一事实)。推论:
+
+- skills 之所以在 Mcode 里能用,靠的是模型侧 Skill 工具 + 描述注入(模型自主调用),**不依赖**文本解析;
+- commands 没有等价机制——模板展开必须由 Mcode 宿主自己做。这份展开逻辑与 provider 无关(三家同一套:读 `.md`、替换参数、发送展开文本),做完后斜杠命令在三个 provider 上行为一致——这正是 v2「composer 预制指令」的真实内容,也是 GUI 宿主能比 CLI 做得更一致的地方。
 
 ---
 
 ## 四、差距与风险
 
 1. **Pi 的能力天花板**:无 MCP、无命令概念。这是 provider 客观差异而非缺陷——靠能力矩阵如实呈现。skills 类插件(生态里占比最大)三家全通,是安全的 MVP 面。
-2. **Hooks 是最大的安全洞**:等于让插件在生命周期事件里跑任意 shell。v1 只解析不执行;即便 v3 启用,也应做到每条 hook 单独审批 + 默认关。
+2. **Hooks:最大的安全洞,也是决定单插件完整性的组件**——等于让插件在生命周期事件里跑任意 shell。「不支持 hooks 则插件功能不完整」需要三层限定:
+   - **单插件层面**:确实不完整,无法回避,只能明示(见 3.4「明示而非静默」原则);
+   - **生态层面**:主流插件形态是 skills + MCP(头部插件清一色 MCP 形态),hooks 是少数派组件;
+   - **跨 provider 层面**:hooks 本来就无互认——同一插件在 Codex/Pi 上同样没有 hooks。「插件功能完整」在多 provider 世界里从来是 per-provider 概念,能力矩阵如实呈现,不是 Mcode 制造的缺口。
+
+   hooks 在 CLI 里承担的多数职责,GUI 宿主已有原生等价物;真缺口只有工具后处理:
+
+   | hooks 在 CLI 里的典型用途 | Mcode 已有的等价物 |
+   |---|---|
+   | PreToolUse 拦截危险操作 | canUseTool 审批桥(交互式,强于脚本拦截) |
+   | Stop 回合结束通知 | GUI toast + turn.done 事件 |
+   | SessionStart 注入上下文 | 宿主已控制各 provider 的 systemPrompt 注入点 |
+   | PostToolUse 自动 lint/format | **真缺口**——无宿主等价物,唯一必须 hooks 的场景 |
+
+   对应两条执行路线(排期见第五节):
+   - **路线 A(Claude 透传,低成本)**:`options.plugins` 加载插件时,hooks 由 Claude CLI 引擎**原生执行**——Mcode 无需自写 hook runner,工作量全在安全壳(安装时逐条审查、面板活跃可见);仅惠及 Claude 会话,与 Codex/Pi 的原生现状一致;
+   - **路线 B(宿主统一 hook runner,provider 中立但有拦截盲区)**:Mcode 的架构位置比 CLI 更适合做统一 hook 层——所有 provider 的生命周期事件都流经宿主。PostToolUse 类三家全可行(Claude/Pi 的 tool_result、Codex 的 `item/completed` 通知都流经 adapter);**PreToolUse 拦截/改写仅 Claude(canUseTool)与 Pi(`tool_call` handler)可行**——Codex 沙箱内工具(Bash/apply_patch)不经过宿主,只有逃逸沙箱动作才发审批请求,codex 会话上 pre-hook 只能观察不能拦截,硬限制。工作量在 runner 本身:事件集定义(从宿主可观测的生命周期边沿派生)、超时、退出码→block/allow 映射、跨平台 shell。
+
+   **安全底线(不论路线)**:hooks 默认关、安装时逐条审查、面板上活跃可见。
 3. **Codex 原生插件子系统未校准**(2026-09-09 实测):`codex plugin` CLI 子命令存在,但最小 marketplace 清单(尝试过 `.codex-plugin/marketplace.json`、根 `marketplace.json`、个人市场 `~/.agents/plugins/marketplace.json` 三种摆放 + 补 version 字段)均未通过校验("marketplace root does not contain a supported manifest");二进制内嵌的校验字符串显示 plugin.json 要求严格 semver、author 对象、`interface.*` 仅 https URL 等;另有 "[plugins feature is disabled" 字符串**疑似 feature 门控**。→ **v1 完全不耦合 codex 原生插件**,走 extraRoots + config.toml 翻译路线(两条已在生产验证);原生通道留作后续优化,实施前须按「协议硬事实」纪律重新探测。
 4. **Commands 的跨端落差**:Claude 原生;Codex/Pi 无等价物。翻译方案(composer 预制指令)是 Mcode 自有 UI 概念,需进 i18n 词典。
 5. **SDK 版本纪律**:AGENTS.md 记 0.3.238,`package.json`/node_modules 实际 0.3.258——`options.plugins` 在 0.3.258 实测存在;若版本有变,升级回归清单须加上「插件加载」链路。
@@ -152,19 +193,26 @@ marketplace.json 同样采纳 Claude 形态(`.claude-plugin/marketplace.json`):`
 - 启用/禁用(settings 表持久化,per-provider 投递);
 - **skills + MCP 两类组件**投递三家管道(Claude `options.plugins` / Codex extraRoots+config.toml / Pi skillBridge);
 - 设置页 Plugins 面板(Installed / Discover 双 tab,对齐 RuntimesPanel 交互范式;UI 文案全进 zh/en 词典);
-- 安装时组件审查确认(重点展示 MCP 的 command/env 与 hooks 内容)。
+- 安装时组件审查确认(重点展示 MCP 的 command/env 与 hooks 内容;不支持的组件**明示**当前未启用)。
+
+### v1.5(路线 A:Claude hooks 透传)
+
+- `options.plugins` 加载插件,hooks 由 Claude CLI 引擎原生执行——Mcode 不写 hook runner,工作量全在安全壳;
+- 安装时逐条 hook 审查:每条 hook 展示事件、matcher、完整命令,逐条确认后才启用;
+- 面板呈现活跃 hooks(哪个插件、哪些事件、什么命令);
+- 仅惠及 Claude 会话——与 Codex/Pi 的原生现状一致,经能力矩阵如实呈现。
 
 ### v2
 
 - 插件 `userConfig`(sensitive 值走 safeStorage);
 - 版本更新检测与升级;
 - Claude 侧经 `options.plugins` 启用 commands / agents 全组件;
-- commands 的 composer「预制指令」翻译(三家可用)。
+- commands 的 composer「预制指令」翻译(三家可用):宿主端模板展开——command 选择器 → 读 `.md` → 替换 `$ARGUMENTS` → 发送展开后的 prompt(stream-json 模式 CLI 不解析 `/name`,展开必须在 Mcode 侧做,见 3.5)。
 
 ### v3(慎做)
 
-- hooks 执行 + 逐条审批 + 默认关;
-- codex 原生 `codex plugin` 通道(前置:清单 schema 校准 + feature 门控探测);
+- **路线 B:宿主统一 hook runner**(provider 中立;codex pre-hook 只能观察不能拦截——沙箱内工具不经过宿主,硬限制),逐 hook 审批 + 默认关;
+- codex 原生 `codex plugin` 通道(前置:manifest schema 校准 + feature 门控探测);
 - 跨 marketplace 依赖解析。
 
 ---
@@ -174,7 +222,7 @@ marketplace.json 同样采纳 Claude 形态(`.claude-plugin/marketplace.json`):`
 | 项 | 现状 | 动作 |
 |----|------|------|
 | codex marketplace.json 精确 schema | 最小清单三次摆放均被拒 | 找一份可用市场仓库对照,或反编译校验器;确认是否需 `--enable plugins` |
-| SDK `options.plugins` 端到端 | 类型与 CLI 旗标实证,未跑真会话 | v1 开工首日做冒烟:本地插件目录 + skill/command,验证加载与权限交互 |
+| SDK `options.plugins` 端到端 | 类型与 CLI 旗标实证,未跑真会话 | v1 开工首日做冒烟:本地插件目录 + skill/command,验证加载与权限交互;v1.5 实施前补一条:**hooks 在 SDK 模式下是否真被 CLI 引擎执行**(文档声明支持,未实测) |
 | 插件 MCP 与 Mcode MCP 管理面的合并形态 | 两种路线(原生托管 vs `skipMcpDiscovery` 自管) | 按审批 UI 统一性决策;倾向自管(与现有面板一致) |
 | Pi 侧 MCP 桥接可行性 | `supportsMcp: false` | 若强需求,评估 extension 内 MCP client(工作量大,暂不做) |
 

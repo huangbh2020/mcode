@@ -1,0 +1,601 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Git 面板重设计 · 三方案对比</title>
+<style>
+/* ══════════════════════════════════════════════════════════════════════
+   Token 层 —— 逐值抄自 apps/desktop/src/renderer/styles.css（:root / .dark），
+   保证原型配色与真实应用一致，评审时看到的对比度就是实现后的对比度。
+   ══════════════════════════════════════════════════════════════════════ */
+:root{
+  --surface:255 255 255;
+  --surface-muted:240 242 246;
+  --surface-hover:226 229 235;
+  --content:9 9 11;
+  --content-muted:63 63 70;
+  --content-subtle:113 113 122;
+  --edge:213 216 222;
+  --panel-edge:222 225 231;
+  --input-edge:202 205 212;
+  --accent:5 150 105;
+  --accent-strong:4 120 87;
+  --danger:220 38 38;
+  --warning:180 83 9;
+  --info:124 58 237;
+  --success:4 120 87;
+  --right-panel-font-size:14px;
+  color-scheme:light;
+}
+.dark{
+  --surface:26 29 36;
+  --surface-muted:44 49 60;
+  --surface-hover:58 64 78;
+  --content:231 232 236;
+  --content-muted:188 191 198;
+  --content-subtle:158 162 171;
+  --edge:45 51 64;
+  --panel-edge:45 51 64;
+  --input-edge:95 99 110;
+  --accent:16 185 129;
+  --accent-strong:16 185 129;
+  --danger:248 113 113;
+  --warning:251 191 36;
+  --info:167 139 250;
+  --success:16 185 129;
+  color-scheme:dark;
+}
+/* 字号阶梯：calc 派生，跟随 --right-panel-font-size（= 设置里的「全局字体大小」）。
+   这是本原型与现状最大的排版差异来源：现状只用 base(14) 与 xxs(10) 两级，
+   且分支菜单/弹窗里有 12 处硬编码 text-[11px]/[10px]，完全不跟随该设置。 */
+*{box-sizing:border-box}
+:root{
+  --rp-fs-md:calc(var(--right-panel-font-size) * .9286);
+  --rp-fs-sm:calc(var(--right-panel-font-size) * .8571);
+  --rp-fs-xs:calc(var(--right-panel-font-size) * .7857);
+  --rp-fs-xxs:calc(var(--right-panel-font-size) * .7143);
+}
+body{
+  margin:0;font-weight:500;
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,"PingFang SC","Microsoft YaHei UI","Microsoft YaHei",sans-serif;
+  -webkit-font-smoothing:antialiased;
+  background:rgb(var(--surface-muted));color:rgb(var(--content));
+}
+body.dark{font-weight:600}
+.mono{font-family:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,"Liberation Mono",monospace}
+.tnum{font-variant-numeric:tabular-nums}
+.fs-base{font-size:var(--right-panel-font-size)}
+.fs-md{font-size:var(--rp-fs-md)}
+.fs-sm{font-size:var(--rp-fs-sm)}
+.fs-xs{font-size:var(--rp-fs-xs)}
+.fs-xxs{font-size:var(--rp-fs-xxs)}
+.c{color:rgb(var(--content))}
+.cm{color:rgb(var(--content-muted))}
+.cs{color:rgb(var(--content-subtle))}
+.accent{color:rgb(var(--accent))}
+.strong{color:rgb(var(--accent-strong))}
+.danger{color:rgb(var(--danger))}
+.warn{color:rgb(var(--warning))}
+.succ{color:rgb(var(--success))}
+.info{color:rgb(var(--info))}
+.ell{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+svg{display:block;flex:none}
+*{scrollbar-width:thin;scrollbar-color:rgb(var(--surface-hover)) transparent}
+*::-webkit-scrollbar{width:8px;height:8px}
+*::-webkit-scrollbar-thumb{background:rgb(var(--surface-hover));border-radius:4px}
+
+/* ══════════════════════ 文档外壳 ══════════════════════ */
+.doc-bar{
+  position:sticky;top:0;z-index:50;display:flex;align-items:center;gap:14px;flex-wrap:wrap;
+  padding:12px 22px;border-bottom:1px solid rgb(var(--edge));
+  background:color-mix(in srgb,rgb(var(--surface)) 92%,transparent);backdrop-filter:blur(10px);
+}
+.doc-bar h1{margin:0;font-size:15px;font-weight:600}
+.doc-bar .sub{font-size:12px;color:rgb(var(--content-subtle))}
+.spacer{flex:1}
+.ctl{display:flex;align-items:center;gap:8px;font-size:12px;color:rgb(var(--content-muted))}
+.ctl input[type=range]{width:130px;accent-color:rgb(var(--accent))}
+.btn{
+  display:inline-flex;align-items:center;gap:6px;padding:5px 11px;border-radius:6px;cursor:pointer;
+  border:1px solid rgb(var(--edge));background:rgb(var(--surface));color:rgb(var(--content-muted));
+  font-size:12px;font-weight:600;font-family:inherit;
+}
+.btn:hover{background:rgb(var(--surface-hover));color:rgb(var(--content))}
+.wrap{padding:22px 22px 60px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(390px,1fr));gap:26px;align-items:start}
+.cell{display:flex;flex-direction:column;gap:12px;min-width:0}
+.cell-head{display:flex;align-items:baseline;gap:9px}
+.badge{
+  flex:none;display:grid;place-items:center;height:20px;min-width:20px;padding:0 6px;border-radius:5px;
+  background:rgb(var(--accent));color:rgb(var(--surface));font-size:11px;font-weight:700;letter-spacing:.03em;
+}
+.cell-head h2{margin:0;font-size:13px;font-weight:600}
+.cell-head .sub{font-size:11px;color:rgb(var(--content-subtle))}
+
+/* ══════════════════════ 右栏框架（rail + tab 条）—— 三方案共用的真实宿主 ══════════════════════ */
+.frame{
+  width:var(--pw,360px);height:660px;display:flex;flex-direction:column;overflow:hidden;
+  border:1px solid rgb(var(--panel-edge));border-radius:7px;background:rgb(var(--surface));
+  box-shadow:0 1px 3px rgb(0 0 0 / .06),0 10px 30px rgb(0 0 0 / .05);
+}
+.rail{display:flex;height:36px;flex:none;align-items:center;gap:4px;padding:0 6px;border-bottom:1px solid rgb(var(--edge));background:rgb(var(--surface))}
+.rbtn{display:grid;place-items:center;width:28px;height:28px;border-radius:6px;border:0;background:transparent;color:rgb(var(--content-muted));cursor:pointer}
+.rbtn:hover{background:rgb(var(--surface-hover));color:rgb(var(--content))}
+.rbtn[data-on]{background:rgb(var(--accent) / .15);color:rgb(var(--accent))}
+.rbtn.badge{position:relative}
+.badge-dot{position:absolute;right:0;top:0;display:grid;place-items:center;height:14px;min-width:14px;border-radius:999px;background:rgb(var(--accent));color:rgb(var(--surface));font-size:9px;font-weight:700;padding:0 3px}
+.tabstrip{display:flex;flex:none;align-items:center;gap:0;border-bottom:1px solid rgb(var(--edge))}
+.tab{
+  display:flex;align-items:center;gap:5px;padding:7px 11px;border:0;background:transparent;cursor:pointer;
+  font-family:inherit;font-size:var(--rp-fs-sm);font-weight:600;color:rgb(var(--content-subtle));
+  border-bottom:2px solid transparent;
+}
+.tab:hover{color:rgb(var(--content-muted))}
+.tab[data-on]{color:rgb(var(--content));border-bottom-color:rgb(var(--accent))}
+.tabstrip .tail{display:flex;align-items:center;gap:6px;margin-left:auto;padding-right:8px}
+.icon-btn{
+  display:grid;place-items:center;width:24px;height:24px;border-radius:5px;border:0;background:transparent;
+  color:rgb(var(--content-subtle));cursor:pointer;
+}
+.icon-btn:hover{background:rgb(var(--surface-hover));color:rgb(var(--content))}
+.body{flex:1;min-height:0;overflow-y:auto;overflow-x:hidden}
+
+/* ══════════════════════ 共用列表件 ══════════════════════
+   对齐网格（本原型统一执行）：
+     面板 body padding-x = 6  →  行 padding-x = 6  →  文字起点恒为 12px
+   组头 / repo 头 / 文件行 左边缘严格对齐（现状：操作日志 px-2.5 与文件行 px-1 差约 2px）。 */
+.pad{padding:0 6px}
+.row{display:flex;align-items:center;gap:7px;height:26px;padding:0 6px;border-radius:5px;cursor:pointer}
+.row:hover{background:rgb(var(--surface-hover) / .55)}
+.stack{display:flex;flex-direction:column;gap:2px}
+
+/* 状态字母：新增/未跟踪 用 --success（固定 git 绿，不随品牌色改），
+   修改 用 --warning，冲突/删除 用 --danger —— 与 diff 的 +/- 同一套语义色。
+   现状把 untracked/added 画成 --accent（品牌色，用户可自定义），同一屏出现两种绿。 */
+.code{width:13px;flex:none;text-align:center;font-size:var(--rp-fs-xs);font-weight:700}
+.code.untracked,.code.added{color:rgb(var(--success))}
+.code.modified,.code.renamed,.code.copied{color:rgb(var(--warning))}
+.code.deleted,.code.unmerged{color:rgb(var(--danger))}
+.pathname{min-width:0;flex:1;display:flex;align-items:baseline;gap:6px;overflow:hidden}
+.pathname .base{font-size:var(--rp-fs-md);color:rgb(var(--content-muted))}
+.pathname .dir{font-size:var(--rp-fs-xs);color:rgb(var(--content-subtle));overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* ± 计数常驻（现状 group-hover:opacity-0 会恰好在你要操作时把数字藏掉），
+   hover 时动作按钮以绝对定位浮上来盖住它，而不是把它擦掉。 */
+.tally{flex:none;display:flex;gap:5px;font-size:var(--rp-fs-sm);font-weight:600}
+.rowacts{
+  position:absolute;right:4px;top:50%;transform:translateY(-50%);
+  display:flex;gap:2px;opacity:0;transition:opacity .1s;background:rgb(var(--surface-hover));border-radius:5px;
+}
+.row:hover .rowacts{opacity:1}
+.rowrel{position:relative}
+.ra{display:grid;place-items:center;width:20px;height:20px;border:0;border-radius:4px;background:transparent;color:rgb(var(--content-subtle));cursor:pointer}
+.ra:hover{background:rgb(var(--surface-hover));color:rgb(var(--content))}
+.ra.d:hover{color:rgb(var(--danger))}
+/* 组头：xs(11) 胶囊计数，右端动作同权重（现状「全部暂存」常驻文字 vs「全部放弃」hover 垃圾桶，权重不一致） */
+.ghead{display:flex;align-items:center;gap:6px;padding:6px 6px 3px}
+.ghead .lbl{display:flex;align-items:center;gap:5px;font-size:var(--rp-fs-xs);font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:rgb(var(--content-subtle))}
+.ghead .cnt{display:inline-grid;place-items:center;min-width:16px;height:15px;padding:0 4px;border-radius:4px;background:rgb(var(--surface-muted));font-size:var(--rp-fs-xxs);font-weight:700;color:rgb(var(--content-muted))}
+.ghead .acts{margin-left:auto;display:flex;align-items:center;gap:2px}
+.txtbtn{border:0;background:transparent;padding:2px 6px;border-radius:4px;font-family:inherit;font-size:var(--rp-fs-xs);font-weight:600;color:rgb(var(--content-subtle));cursor:pointer}
+.txtbtn:hover{background:rgb(var(--surface-hover));color:rgb(var(--content))}
+.txtbtn.d:hover{background:rgb(var(--danger) / .1);color:rgb(var(--danger))}
+
+/* 提交区（三方案都常驻 —— 现状 {hasStaged && <CommitBox/>} 导致刚打开面板时根本没有提交框） */
+.commit{display:flex;flex-direction:column;gap:6px;padding:8px 6px 6px}
+.cmsg{position:relative}
+.cmsg textarea{
+  width:100%;min-height:38px;resize:none;padding:8px 46px 8px 9px;border-radius:7px;
+  border:1px solid rgb(var(--input-edge));background:rgb(var(--surface));
+  font-family:inherit;font-size:var(--rp-fs-md);line-height:1.5;color:rgb(var(--content));outline:none;
+}
+.cmsg textarea::placeholder{color:rgb(var(--content-subtle))}
+.cmsg textarea:focus{border-color:rgb(var(--accent))}
+.cmsg textarea:disabled{opacity:.55}
+.cmsg .ic{position:absolute;right:5px;top:5px;display:flex;gap:2px}
+.cmsg .ic button{display:grid;place-items:center;width:22px;height:22px;border:0;border-radius:5px;background:transparent;color:rgb(var(--content-subtle));cursor:pointer}
+.cmsg .ic button:hover{background:rgb(var(--surface-hover));color:rgb(var(--accent))}
+.split{display:flex;overflow:hidden;border-radius:7px}
+.split .main{
+  flex:1;display:flex;align-items:center;justify-content:center;gap:6px;padding:7px 10px;border:0;
+  background:rgb(var(--accent));color:rgb(var(--surface));font-family:inherit;font-size:var(--rp-fs-sm);font-weight:600;cursor:pointer;
+}
+.split .main:hover{filter:brightness(1.08)}
+.split .more{display:grid;place-items:center;padding:0 7px;border:0;background:rgb(var(--accent));color:rgb(var(--surface));cursor:pointer}
+.split[data-off] .main,.split[data-off] .more{background:rgb(var(--surface-hover));color:rgb(var(--content-subtle));cursor:not-allowed}
+.hint{display:flex;align-items:center;gap:5px;padding:0 6px 8px;font-size:var(--rp-fs-xs);color:rgb(var(--content-subtle))}
+.empty{display:flex;align-items:center;gap:6px;padding:8px 6px;font-size:var(--rp-fs-md);color:rgb(var(--content-subtle))}
+hr.sep{margin:0;border:0;border-top:1px solid rgb(var(--edge))}
+
+/* ══════════════════════ 方案 A：扁平清单 ══════════════════════ */
+.repohead{
+  position:sticky;top:0;z-index:6;display:flex;align-items:center;gap:7px;
+  padding:6px;background:rgb(var(--surface));border-bottom:1px solid rgb(var(--edge));
+}
+.repohead .name{font-size:var(--rp-fs-md);font-weight:600;color:rgb(var(--content));flex:none;max-width:116px}
+.pill{
+  display:inline-flex;align-items:center;gap:4px;padding:2px 6px;border-radius:5px;flex:none;max-width:150px;
+  border:1px solid rgb(var(--edge));background:rgb(var(--surface-muted));
+  font-size:var(--rp-fs-sm);color:rgb(var(--content-muted));font-weight:500;cursor:pointer;
+}
+.pill:hover{background:rgb(var(--surface-hover));color:rgb(var(--content))}
+/* 可收缩变体：空间不足时先截断分支名而不是仓库名（仓库名更短也更关键） */
+.pill.sh{flex:0 1 auto;min-width:52px}
+.ab{display:inline-flex;align-items:center;gap:2px;flex:none;font-size:var(--rp-fs-xs);font-weight:600}
+.repohead .acts{margin-left:auto;display:flex;align-items:center;gap:1px}
+
+/* ══════════════════════ 方案 B：单仓聚焦 ══════════════════════ */
+.repotabs{display:flex;flex:none;align-items:center;gap:4px;padding:5px 6px;border-bottom:1px solid rgb(var(--edge));overflow-x:auto}
+.rtab{
+  display:flex;align-items:center;gap:5px;flex:none;padding:3px 8px;border-radius:6px;cursor:pointer;
+  border:1px solid transparent;background:transparent;font-family:inherit;font-size:var(--rp-fs-sm);font-weight:600;color:rgb(var(--content-subtle));
+}
+.rtab:hover{background:rgb(var(--surface-hover));color:rgb(var(--content-muted))}
+.rtab[data-on]{background:rgb(var(--surface-muted));border-color:rgb(var(--edge));color:rgb(var(--content))}
+.rtab .dot{width:5px;height:5px;border-radius:999px;background:rgb(var(--accent))}
+/* 状态带：当前分支是面板里最重要的信息，加大到 sm(12) 且用内容色，
+   不再是 10px mono 低对比度药丸。 */
+.statusbar{display:flex;align-items:center;gap:8px;padding:9px 8px;border-bottom:1px solid rgb(var(--edge))}
+.statusbar .branch{
+  display:inline-flex;align-items:center;gap:5px;padding:3px 8px;border-radius:6px;cursor:pointer;max-width:170px;
+  border:1px solid rgb(var(--edge));background:rgb(var(--surface-muted));
+  font-size:var(--rp-fs-sm);font-weight:600;color:rgb(var(--content));
+}
+.statusbar .branch:hover{background:rgb(var(--surface-hover))}
+.summary{display:flex;align-items:center;gap:9px;padding:7px 8px 9px;font-size:var(--rp-fs-xs);color:rgb(var(--content-subtle))}
+.summary b{color:rgb(var(--content-muted));font-weight:600}
+/* 提交区沉底 dock：与聊天输入框同一心智，永远在手边。 */
+.dock{flex:none;border-top:1px solid rgb(var(--edge));background:rgb(var(--surface));padding:8px 6px 6px}
+.bscroll{flex:1;min-height:0;overflow-y:auto}
+
+/* ══════════════════════ 方案 C：工作流三段 ══════════════════════ */
+.filter{display:flex;align-items:center;gap:6px;padding:7px 6px;border-bottom:1px solid rgb(var(--edge))}
+.filter input{
+  flex:1;min-width:0;padding:4px 8px;border-radius:6px;border:1px solid rgb(var(--edge));
+  background:rgb(var(--surface-muted));font-family:inherit;font-size:var(--rp-fs-sm);color:rgb(var(--content));outline:none;
+}
+.filter input::placeholder{color:rgb(var(--content-subtle))}
+.filter>svg{color:rgb(var(--content-subtle));flex:none}
+.filter input:focus{border-color:rgb(var(--accent));background:rgb(var(--surface))}
+/* 勾选框取代 hover 图标：挑文件是一等动作（对齐「AI 改完 → 我挑 → 提交」的真实循环）。 */
+.cb{
+  width:15px;height:15px;flex:none;border-radius:4px;border:1.5px solid rgb(var(--input-edge));
+  background:rgb(var(--surface));display:grid;place-items:center;cursor:pointer;padding:0;
+}
+.cb[data-on]{background:rgb(var(--accent));border-color:rgb(var(--accent));color:rgb(var(--surface))}
+.row.sel{background:rgb(var(--accent) / .07);box-shadow:inset 2px 0 0 rgb(var(--accent))}
+.row.sel:hover{background:rgb(var(--accent) / .1)}
+/* 部分暂存：索引里已有内容，工作区又有新改动 —— 勾选 + 琥珀点。 */
+.partial{width:5px;height:5px;border-radius:999px;background:rgb(var(--warning));flex:none}
+.tray{flex:none;border-top:1px solid rgb(var(--edge));background:rgb(var(--surface));padding:8px 6px 6px}
+.trayhead{display:flex;align-items:center;gap:6px;padding:0 2px 7px;font-size:var(--rp-fs-xs);color:rgb(var(--content-subtle))}
+
+/* ══════════════════════ 说明栏 ══════════════════════ */
+.notes{margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:6px}
+.notes li{position:relative;padding-left:15px;font-size:12px;line-height:1.6;color:rgb(var(--content-muted))}
+.notes li::before{content:"";position:absolute;left:4px;top:8px;width:4px;height:4px;border-radius:999px;background:rgb(var(--accent))}
+.notes li b{color:rgb(var(--content));font-weight:600}
+.card{border:1px solid rgb(var(--edge));border-radius:8px;padding:13px 15px;background:rgb(var(--surface))}
+.card h3{margin:0 0 9px;font-size:12px;font-weight:600;letter-spacing:.03em;text-transform:uppercase;color:rgb(var(--content-subtle))}
+.verify{margin-top:26px}
+.verify .notes li::before{background:rgb(var(--danger))}
+kbd{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11px;padding:1px 5px;border:1px solid rgb(var(--edge));border-radius:4px;background:rgb(var(--surface-muted));color:rgb(var(--content-muted))}
+</style>
+</head>
+<body>
+
+<!-- 图标 sprite（Tabler 形状，24 viewBox，stroke 由 use 处的 CSS 控制） -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
+<g id="i-folder" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></g>
+<g id="i-branch" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="7" cy="5.5" r="2.2"/><circle cx="7" cy="18.5" r="2.2"/><circle cx="17" cy="5.5" r="2.2"/><path d="M7 7.7v8.6M17 7.7v1.6a3.6 3.6 0 0 1-3.6 3.6H7"/></g>
+<g id="i-world" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M3.5 9h17M3.5 15h17M12 3a15 15 0 0 1 0 18a15 15 0 0 1 0-18"/></g>
+<g id="i-list" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M12 7h8M12 12h8M12 17h8"/><circle cx="5" cy="7" r="1.4" fill="currentColor" stroke="none"/><circle cx="5" cy="12" r="1.4" fill="currentColor" stroke="none"/><circle cx="5" cy="17" r="1.4" fill="currentColor" stroke="none"/></g>
+<g id="i-chat" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h11a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2H9l-4 3v-3H4V5z"/><path d="M17 9h3v8h-2v3l-3-3h-4"/></g>
+<g id="i-expand" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M5 9V5h4M15 5h4v4M19 15v4h-4M9 19H5v-4"/></g>
+<g id="i-cdown" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9.5l6 6 6-6"/></g>
+<g id="i-cright" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M9.5 6l6 6-6 6"/></g>
+<g id="i-refresh" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M20 12a8 8 0 1 1-2.6-5.9M20 4v5h-5"/></g>
+<g id="i-up" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V6M6 12l6-6 6 6"/></g>
+<g id="i-down" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v13M6 12l6 6 6-6"/></g>
+<g id="i-spark" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4l1.6 4.4L17 10l-4.4 1.6L11 16l-1.6-4.4L5 10l4.4-1.6z"/><path d="M18 15l.7 1.8L20.5 17.5l-1.8.7L18 20l-.7-1.8L15.5 17.5l1.8-.7z"/></g>
+<g id="i-trash" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M10 7V4.5h4V7M6.5 7l.9 12.5h9.2L17.5 7M10 10.5v6M14 10.5v6"/></g>
+<g id="i-plus" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></g>
+<g id="i-minus" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M5 12h14"/></g>
+<g id="i-check" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7"/></g>
+<g id="i-dots" fill="currentColor" stroke="none"><circle cx="12" cy="5.5" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="12" cy="18.5" r="1.6"/></g>
+<g id="i-alert" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4.5l8.5 15h-17z"/><path d="M12 10v4.5M12 17.2v.01"/></g>
+<g id="i-max" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9V4h5M20 9V4h-5M20 15v5h-5M4 15v5h5"/></g>
+<g id="i-search" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="10.5" cy="10.5" r="6"/><path d="M15 15l4.5 4.5"/></g>
+<g id="i-commit" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="12" cy="12" r="3.6"/><path d="M2.5 12h5.9M15.6 12h5.9"/></g>
+</defs></svg>
+
+<div class="doc-bar">
+  <h1>Git 面板重设计</h1>
+  <span class="sub">右栏 360px（默认）· 同一份数据 · 真实 token</span>
+  <span class="spacer"></span>
+  <label class="ctl">面板宽 <input id="w" type="range" min="240" max="480" step="20" value="360" /><span id="wv" class="mono tnum">360</span></label>
+  <button class="btn" id="theme">切换深色</button>
+</div>
+
+<div class="wrap">
+  <p style="max-width:900px;margin:0 0 20px;font-size:12.5px;line-height:1.75;color:rgb(var(--content-muted))">
+    三个方案共用同一份仓库数据、同一套语义 token，<b>只在结构上分道</b>：A 走扁平清单（先修布局），B 走单仓聚焦（先修信息密度），C 走勾选式工作流（先修交互）。<b>三案共有的排版修复</b>见页面底部——无论选哪套都该落到实现里。
+  </p>
+  <div class="grid">
+
+    <!-- ══════════ 方案 A ══════════ -->
+    <div class="cell">
+      <div class="cell-head"><span class="badge">A</span><h2>扁平清单</h2><span class="sub">去卡片盒 · 提交框常驻</span></div>
+      <div class="frame" id="fA"></div>
+      <ol class="notes">
+        <li><b>提交框常驻</b>：不再随「是否有暂存文件」出现／消失，主操作不再跳动（现状 <span class="mono">hasStaged && &lt;CommitBox/&gt;</span>：刚打开面板时压根没有提交框）。</li>
+        <li><b>三层边框 → 一层</b>：repo 头改成吸顶分隔条，去掉 <span class="mono">rounded-lg border</span> 卡片盒（面板已有边 + 内边距，卡片是第三层）。</li>
+        <li><b>repo 头压成一行</b>：折叠箭头 · repo 名 · 分支 · ↑↓ · 动作。省掉现在只放名字的整行。</li>
+        <li><b>路径双色</b>：文件名 13px + 目录名 11px 弱化——同名文件（多个 <span class="mono">GitPanel.tsx</span>）不再歧义。</li>
+        <li><b>单一滚动容器</b>：操作日志从卡片底部移出，收进面板 <span class="mono">⋯</span>，消除「滚动套滚动」。</li>
+      </ol>
+    </div>
+
+    <!-- ══════════ 方案 B ══════════ -->
+    <div class="cell">
+      <div class="cell-head"><span class="badge">B</span><h2>单仓聚焦</h2><span class="sub">仓库页签 · 提交区沉底</span></div>
+      <div class="frame" id="fB"></div>
+      <ol class="notes">
+        <li><b>一次一个仓</b>：仓库页签只在 repos &gt; 1 时出现；单仓项目（多数）零多余 chrome。</li>
+        <li><b>当前分支升级为主角</b>：从 10px mono 低对比度药丸 → 12px 内容色可点状态带（它是面板里最重要的信息）。</li>
+        <li><b>提交区沉底 dock</b>：贴近光标／拇指，与聊天输入框同一心智，永远在手边。</li>
+        <li><b>面板级聚合统计</b>：10 变更 · 已暂存 3 · ↑2 ↓1，不必逐卡扫。</li>
+        <li><b>折叠＝真摘要</b>：折叠后仍是分支 + 计数，而不是现在只有名字的空头。</li>
+      </ol>
+    </div>
+
+    <!-- ══════════ 方案 C ══════════ -->
+    <div class="cell">
+      <div class="cell-head"><span class="badge">C</span><h2>工作流三段</h2><span class="sub">勾选取用 · 暂存托盘</span></div>
+      <div class="frame" id="fC"></div>
+      <ol class="notes">
+        <li><b>勾选框取代 hover 图标</b>：挑文件成为一等动作，对齐「AI 改完 → 我挑 → 提交」的真实循环（Fork / GitKraken 同款）。</li>
+        <li><b>两段合一</b>：勾选态即暂存态，不再有「已暂存／更改」两个要对照的分区。</li>
+        <li><b>部分暂存可辨</b>：索引里已有内容、工作区又有新改动的文件 = 勾选 + 琥珀点。</li>
+        <li><b>底部托盘实时汇总</b>：已选 N 个文件 · +54 −13，勾一只加一笔，提交前所见即所得。</li>
+        <li><b>筛选框 + 丢弃收进右键</b>：多文件时可定位；破坏性操作离开主路径，降低误触。</li>
+      </ol>
+    </div>
+  </div>
+
+  <!-- ══════════ 共性修复 ══════════ -->
+  <div class="card verify">
+    <h3>三案共性修复（无论选哪套都建议一并落地）</h3>
+    <ol class="notes">
+      <li><b>启用完整字号阶梯</b>：现状 Git 面板只用 base(14) 与 xxs(10) 两级，<span class="mono">--rp-fs-md/sm/xs</span> 在整个 <span class="mono">ide/</span> 下只有 2 处引用；且分支菜单与弹窗里有 <b>12 处硬编码</b> <span class="mono">text-[11px] / text-[10px]</span>——它们<b>不跟随设置里的「全局字体大小」</b>。本原型全部走 <span class="mono">--rp-fs-*</span>。</li>
+      <li><b>对齐网格</b>：面板 body padding-x 6 ＋ 行 padding-x 6 ＝ 文字起点恒为 12px，组头／repo 头／文件行左边缘严格对齐。现状是三个互不相同的左边缘：组头 <span class="mono">8px</span>（body 的 <span class="mono">p-2</span>）、文件行 <span class="mono">12px</span>（再叠 <span class="mono">px-1</span>）、操作日志 <span class="mono">10px</span>（<span class="mono">px-2.5</span>）——同一张卡里三档缩进，肉眼可见。</li>
+      <li><b>状态色归位</b>：未跟踪／新增改用 <span class="mono">--success</span>。现状用 <span class="mono">--accent</span>（品牌色，用户可在设置里改成任意颜色）画「新增」，导致同一屏的 diff <span class="mono">+</span>（success 绿）与状态字母 <span class="mono">A</span>（accent）是两种绿，且改品牌色会让「新增」变色。</li>
+      <li><b>± 计数常驻</b>：现状 <span class="mono">group-hover:opacity-0</span> 恰好在你要操作该文件时把数字擦掉。改为 hover 时动作按钮浮上来覆盖，数字不消失。</li>
+      <li><b>± 计数按仓批量取</b>：现状每个文件行各发一次 <span class="mono">api.git.diff</span> 再解 patch + 逐行 diff——50 个改动文件＝50 次 git 子进程。建议每仓一次 <span class="mono">--numstat</span>／<span class="mono">--porcelain=v2</span>。</li>
+      <li><b>操作日志降权</b>：从「每张卡常驻一行表头 + 160px 内滚」改为面板级 <span class="mono">⋯</span> 或底部状态条——它是排障面，不该常驻占黄金位（且只在内存、切会话即失）。</li>
+    </ol>
+  </div>
+</div>
+
+<script>
+/* ───────────── 数据（同一份，三案共用） ─────────────
+   取真实项目里的路径，长路径 / 深目录 / 同名文件都是刻意保留的压力点。 */
+const DATA = [
+  {
+    name:"my-claude-gui", branch:"feature/plugins", ahead:2, behind:1,
+    staged:[
+      {code:"modified",  base:"GitRepoCard.tsx", dir:"components/ide", adds:48, dels:12},
+      {code:"modified",  base:"ipc.ts",          dir:"contracts/src",  adds:6,  dels:1},
+      {code:"modified",  base:"sessionStore.ts", dir:"stores",         adds:12, dels:3, partial:true},
+    ],
+    unstaged:[
+      {code:"modified",  base:"styles.css",      dir:"renderer",       adds:14, dels:3},
+      {code:"modified",  base:"pluginManager.ts",dir:"main/plugins",   adds:31, dels:0},
+      {code:"modified",  base:"ide.ts",          dir:"i18n/zh",        adds:9,  dels:0},
+      {code:"modified",  base:"GitPanel.tsx",    dir:"components/ide", adds:4,  dels:2},
+      {code:"untracked", base:"turn-flow-redesign.html", dir:"prototypes", adds:212, dels:0},
+      {code:"modified",  base:"AGENTS.md",       dir:"",               adds:12, dels:1},
+      {code:"deleted",   base:"legacyGitPanel.tsx", dir:"components/ide", adds:0, dels:180},
+    ],
+  },
+  {
+    name:"vendor/pi-runtime", branch:"main", ahead:0, behind:0, staged:[], unstaged:[],
+  },
+];
+
+const ico = (id, size=12) => `<svg width="${size}" height="${size}" viewBox="0 0 24 24"><use href="#i-${id}"/></svg>`;
+const CODE_LABEL = {modified:"M", added:"A", untracked:"?", deleted:"D", unmerged:"U", renamed:"R", copied:"C"};
+
+/** 文件行（方案 A / B 共用）：状态字母 + 文件名 + 目录名 + ± 计数 + hover 动作。 */
+function fileRow(f, {staged=false} = {}){
+  const tally = f.code === "deleted"
+    ? `<span class="danger">−${f.dels}</span>`
+    : `${f.adds>0?`<span class="succ">+${f.adds}</span>`:""}${f.dels>0?`<span class="danger">−${f.dels}</span>`:""}`;
+  return `<div class="row rowrel" title="apps/desktop/src/renderer/${f.dir?f.dir+"/":""}${f.base}">
+    <span class="code ${f.code} mono">${CODE_LABEL[f.code]}</span>
+    <span class="pathname"><span class="base mono ell">${f.base}</span><span class="dir ell">${f.dir}</span></span>
+    <span class="tally mono tnum">${tally}</span>
+    <span class="rowacts">
+      <button class="ra" title="${staged?"取消暂存":"暂存"}">${ico(staged?"minus":"plus",11)}</button>
+      ${staged?"":`<button class="ra d" title="放弃更改">${ico("trash",11)}</button>`}
+    </span>
+  </div>`;
+}
+
+function groupHead(label, n, acts, extra=""){
+  return `<div class="ghead ${extra}">
+    <span class="lbl">${ico("cdown",10)}${label}<span class="cnt mono tnum">${n}</span></span>
+    <span class="acts">${acts}</span>
+  </div>`;
+}
+
+function rail(active){
+  const items = [["folder",""],["branch",""],["world",""],["list",""],["chat",""]];
+  return `<div class="rail">
+    ${items.map(([id],i)=>`<button class="rbtn${i===active?"":""}" ${i===active?'data-on':""} title="">${ico(id,16)}</button>`).join("")}
+    <span class="ml" style="margin-left:auto;display:flex;align-items:center;gap:4px">
+      <span style="width:1px;height:20px;background:rgb(var(--edge))"></span>
+      <button class="rbtn">${ico("expand",16)}</button>
+    </span>
+  </div>`;
+}
+
+function tabstrip(tail=""){
+  return `<div class="tabstrip">
+    <button class="tab" data-on>${ico("branch",12)}更改</button>
+    <button class="tab">${ico("commit",12)}历史</button>
+    <button class="tab">${ico("branch",12)}工作树</button>
+    <span class="tail">${tail}</span>
+  </div>`;
+}
+
+/** 提交区（常驻）。两仓共用同一个组件，只看传入的数据决定可用态。 */
+function commitBox({enabled, placeholder, disabledHint}){
+  return `<div class="commit">
+    <div class="cmsg">
+      <textarea ${enabled?"":"disabled"} placeholder="${placeholder}" rows="1"></textarea>
+      <span class="ic">
+        <button title="AI 生成提交信息">${ico("spark",12)}</button>
+        <button title="放大编辑">${ico("max",12)}</button>
+      </span>
+    </div>
+    <div class="split" ${enabled?"":"data-off"}>
+      <button class="main">${ico("commit",11)}提交</button>
+      <button class="more">${ico("cdown",12)}</button>
+    </div>
+    ${disabledHint?`<div class="hint">${ico("check",11)}${disabledHint}</div>`:""}
+  </div>`;
+}
+
+/* ───────────── 方案 A：扁平清单 ───────────── */
+function renderA(){
+  const head = (r) => `<div class="repohead">
+    ${ico("cdown",12)}
+    <span class="name ell">${r.name}</span>
+    <span class="pill mono ell" title="切换分支">${ico("branch",10)}<span class="ell">${r.branch}</span>${ico("cdown",9)}</span>
+    ${r.ahead?`<span class="ab accent" title="领先上游">${ico("up",10)}${r.ahead}</span>`:""}
+    ${r.behind?`<span class="ab info" title="落后上游">${ico("down",10)}${r.behind}</span>`:""}
+    <span class="acts">
+      <button class="icon-btn" title="拉取">${ico("down",12)}</button>
+      <button class="icon-btn" title="推送">${ico("up",12)}</button>
+      <button class="icon-btn" title="刷新状态">${ico("refresh",12)}</button>
+    </span>
+  </div>`;
+
+  const [r1,r2] = DATA;
+  return rail(1) + tabstrip(`<span class="fs-xxs mono tnum cs">2 仓</span><button class="icon-btn" title="重新扫描">${ico("refresh",12)}</button><button class="icon-btn" title="操作日志 / 更多">${ico("dots",12)}</button>`)
+   + `<div class="body">
+      ${head(r1)}
+      ${commitBox({enabled:r1.staged.length>0, placeholder:"提交信息…"})}
+      ${r1.staged.length ? groupHead("已暂存", r1.staged.length, `<button class="txtbtn">全部取消</button>`) : ""}
+      <div class="pad stack">${r1.staged.map(f=>fileRow(f,{staged:true})).join("")}</div>
+      ${groupHead("更改", r1.unstaged.length, `<button class="txtbtn d" title="放弃全部更改">${ico("trash",12)}</button><button class="txtbtn">全部暂存</button>`)}
+      <div class="pad stack">${r1.unstaged.map(f=>fileRow(f)).join("")}</div>
+      <hr class="sep" style="margin:8px 0 0">
+      ${head(r2)}
+      ${commitBox({enabled:false, placeholder:"提交信息…", disabledHint:"工作区干净，没有可提交的更改"})}
+    </div>`;
+}
+
+/* ───────────── 方案 B：单仓聚焦 ───────────── */
+function renderB(){
+  const [r1,r2] = DATA;
+  const total = r1.staged.length + r1.unstaged.length;
+  return rail(1) + tabstrip()
+   + `<div class="repotabs">
+        <button class="rtab" data-on><span class="dot"></span>${r1.name}</button>
+        <button class="rtab">${r2.name}</button>
+      </div>`
+   + `<div class="statusbar">
+        <span class="branch mono ell" title="切换分支">${ico("branch",11)}<span class="ell">${r1.branch}</span>${ico("cdown",10)}</span>
+        ${r1.ahead?`<span class="ab accent">${ico("up",11)}${r1.ahead}</span>`:""}
+        ${r1.behind?`<span class="ab info">${ico("down",11)}${r1.behind}</span>`:""}
+        <span style="margin-left:auto;display:flex;gap:1px">
+          <button class="icon-btn" title="拉取">${ico("down",13)}</button>
+          <button class="icon-btn" title="推送">${ico("up",13)}</button>
+          <button class="icon-btn" title="刷新">${ico("refresh",13)}</button>
+          <button class="icon-btn" title="更多">${ico("dots",13)}</button>
+        </span>
+      </div>
+      <div class="summary">共 <b>${total}</b> 个变更 · 已暂存 <b>${r1.staged.length}</b> · 未暂存 <b>${r1.unstaged.length}</b></div>`
+   + `<hr class="sep">`
+   + `<div class="bscroll">
+        ${groupHead("已暂存", r1.staged.length, `<button class="txtbtn">全部取消</button>`)}
+        <div class="pad stack">${r1.staged.map(f=>fileRow(f,{staged:true})).join("")}</div>
+        ${groupHead("更改", r1.unstaged.length, `<button class="txtbtn d" title="放弃全部更改">${ico("trash",12)}</button><button class="txtbtn">全部暂存</button>`)}
+        <div class="pad stack" style="padding-bottom:8px">${r1.unstaged.map(f=>fileRow(f)).join("")}</div>
+      </div>`
+   + `<div class="dock">${commitBox({enabled:true, placeholder:`提交到 ${r1.branch}…`})}</div>`;
+}
+
+/* ───────────── 方案 C：工作流三段 ───────────── */
+function cRow(f, picked){
+  const isNew = f.code !== "deleted";
+  const tally = `${f.adds>0?`<span class="succ">+${f.adds}</span>`:""}${f.dels>0?`<span class="danger">−${f.dels}</span>`:""}`;
+  return `<div class="row rowrel ${picked?"sel":""}" title="apps/desktop/src/renderer/${f.dir?f.dir+"/":""}${f.base}">
+    <button class="cb" ${picked?'data-on':""} title="${picked?"取消暂存":"暂存并纳入本次提交"}">${picked?ico("check",10):""}</button>
+    <span class="code ${f.code} mono">${CODE_LABEL[f.code]}</span>
+    <span class="pathname"><span class="base mono ell">${f.base}</span><span class="dir ell">${f.dir}</span>${f.partial?`<span class="partial" title="索引中已有内容，工作区又有新改动"></span>`:""}</span>
+    <span class="tally mono tnum">${tally}</span>
+    <span class="rowacts"><button class="ra" title="更多操作">${ico("dots",11)}</button></span>
+  </div>`;
+}
+
+function renderC(){
+  const r = DATA[0];
+  const all = [...r.staged, ...r.unstaged];
+  const picked = r.staged.length;
+  // 已选行的 ± 只统计选中项，让托盘数字与勾选实时一致
+  const sAdd = r.staged.reduce((a,f)=>a+f.adds,0), sDel = r.staged.reduce((a,f)=>a+f.dels,0);
+  const sorted = [...r.staged, ...r.unstaged];
+  return rail(1) + tabstrip(`<button class="icon-btn" title="更多">${ico("dots",12)}</button>`)
+   + `<div class="statusbar" style="padding:7px 6px">
+        <span class="name fs-md ell" style="font-weight:600;flex:none;max-width:104px">${r.name}</span>
+        <span class="pill sh mono ell" title="切换分支">${ico("branch",10)}<span class="ell">${r.branch}</span>${ico("cdown",9)}</span>
+        ${r.ahead?`<span class="ab accent">${ico("up",10)}${r.ahead}</span>`:""}
+        ${r.behind?`<span class="ab info">${ico("down",10)}${r.behind}</span>`:""}
+        <span style="margin-left:auto;display:flex;gap:1px">
+          <button class="icon-btn" title="拉取">${ico("down",13)}</button>
+          <button class="icon-btn" title="推送">${ico("up",13)}</button>
+          <button class="icon-btn" title="刷新">${ico("refresh",13)}</button>
+        </span>
+      </div>`
+   + `<div class="filter">${ico("search",13,"cs")}<input placeholder="筛选文件…" /><button class="txtbtn">全选</button></div>`
+   + `<div class="bscroll" style="padding:4px 6px 6px"><div class="stack">${sorted.map((f,i)=>cRow(f, i < picked)).join("")}</div></div>`
+   + `<div class="tray">
+        <div class="trayhead">
+          <span>已选 <b class="cm mono tnum">${picked}</b> / ${all.length} 个文件</span>
+          <span class="mono tnum" style="margin-left:auto"><span class="succ">+${sAdd}</span> <span class="danger">−${sDel}</span></span>
+          <button class="txtbtn d">清空</button>
+        </div>
+        ${commitBox({enabled:picked>0, placeholder:"提交信息…"})}
+        <div class="hint">${ico("alert",11)}取消勾选的文件留在工作区，不进这次提交</div>
+      </div>`;
+}
+
+document.getElementById("fA").innerHTML = renderA();
+document.getElementById("fB").innerHTML = renderB();
+document.getElementById("fC").innerHTML = renderC();
+
+/* ───────────── 交互：宽度 / 主题 ───────────── */
+const w = document.getElementById("w"), wv = document.getElementById("wv");
+w.addEventListener("input", () => { document.documentElement.style.setProperty("--pw", w.value + "px"); wv.textContent = w.value; });
+document.documentElement.style.setProperty("--pw", w.value + "px");
+
+const tb = document.getElementById("theme");
+tb.addEventListener("click", () => {
+  document.body.classList.toggle("dark");
+  tb.textContent = document.body.classList.contains("dark") ? "切换浅色" : "切换深色";
+});
+
+/* 勾选框在原型里可点，便于体会「勾一只加一笔」的手感 */
+document.addEventListener("click", (e) => {
+  const cb = e.target.closest(".cb"); if (!cb) return;
+  const on = cb.hasAttribute("data-on");
+  on ? cb.removeAttribute("data-on") : cb.setAttribute("data-on", "");
+  cb.innerHTML = on ? "" : `<svg width="10" height="10" viewBox="0 0 24 24"><use href="#i-check"/></svg>`;
+  cb.closest(".row").classList.toggle("sel", !on);
+});
+</script>
+</body>
+</html>

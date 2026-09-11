@@ -39,10 +39,13 @@ function runtimeAgentFor(providerId: string): RuntimeAgentId | null {
  *
  * Placement: directly left of the send button in ChatPane (not in the
  * ComposerToolbar chip row), so it stays visible even when the chip row
- * collapses in narrow mode. The model dropdown adapts to the chosen
- * provider's capabilities automatically.
+ * collapses in narrow mode. At collapsed tiers (composer card under the
+ * merge threshold — see useComposerRowFit) `compact` folds the label away
+ * through an animatable grid shell, leaving the brand icon (plus the lock
+ * while the session is fixed): the full name was one of the widest items
+ * squeezing the narrow composer, and the tooltip keeps it legible.
  */
-export function ProviderDropdown() {
+export function ProviderDropdown({ compact = false }: { compact?: boolean }) {
   const { t } = useI18n();
   // While the menu is open the embedded browser view is suppressed — but only
   // when the portaled popup actually reaches the browser's rect (the ref lets
@@ -88,13 +91,16 @@ export function ProviderDropdown() {
     return (
       <span
         className={cn(
-          "composer-chip flex shrink-0 items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-medium",
+          "composer-chip composer-provider-chip flex shrink-0 items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-medium",
           "cursor-default text-content-muted",
         )}
+        data-compact={compact ? "1" : "0"}
         title={t("chat.provider.locked")}
       >
         <activeIcon.Icon size={13} className={cn("shrink-0", activeIcon.color)} />
-        <span className="min-w-0 max-w-[140px] truncate">{active?.displayName ?? providerId}</span>
+        <span className="composer-lblwrap">
+          <span className="max-w-[140px] truncate">{active?.displayName ?? providerId}</span>
+        </span>
         <IconLock size={11} className="shrink-0 opacity-50" />
       </span>
     );
@@ -104,14 +110,19 @@ export function ProviderDropdown() {
     <button
       type="button"
       className={cn(
-        "composer-chip flex shrink-0 items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-medium transition-all duration-150 ease-out",
+        "composer-chip composer-provider-chip flex shrink-0 items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-medium transition-all duration-150 ease-out",
         "text-content-muted hover:scale-105 hover:bg-accent/10 hover:text-accent active:scale-95",
       )}
+      data-compact={compact ? "1" : "0"}
       title={t("chat.provider.selectTitle")}
     >
       <activeIcon.Icon size={13} className={cn("shrink-0", activeIcon.color)} />
-      <span className="min-w-0 max-w-[140px] truncate">{active?.displayName ?? providerId}</span>
-      <IconChevronDown size={11} className="shrink-0 opacity-60" />
+      <span className="composer-lblwrap">
+        <span className="flex min-w-0 items-center gap-1">
+          <span className="max-w-[140px] truncate">{active?.displayName ?? providerId}</span>
+          <IconChevronDown size={11} className="shrink-0 opacity-60" />
+        </span>
+      </span>
     </button>
   );
 

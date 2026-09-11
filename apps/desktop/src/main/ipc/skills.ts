@@ -38,6 +38,7 @@ import {
 import type { SkillInfo, SkillSource, ExternalSkillInfo, SkillTool } from "@contracts/ipc";
 import { ProjectRepo } from "@main/store/repositories.js";
 import { log } from "@main/lib/logger.js";
+import { getEnabledPluginSkillRoots } from "@main/plugins/pluginManager.js";
 
 /** Case-insensitive, normalized equality for project-root matching — same
  *  helper logic the file handlers use (they inline it as `samePath`). Paths
@@ -420,6 +421,22 @@ export async function listSkillsForProject(projectPath: string | undefined): Pro
     // a broken skills dir must never break the composer.
     log.warn(`skills.list scan failed: ${(err as Error).message}`);
   }
+  // Enabled plugins' skills LAST — lowest precedence (project > global >
+  // plugin): scanned into a side map so a plugin skill never overrides a
+  // same-named user skill, it only fills the gaps. The SDK loads these the
+  // same way it loads user skills (`skills: "all"`), so a `/name` pill works
+  // identically for either source.
+  try {
+    const pluginByName = new Map<string, SkillInfo>();
+    for (const dir of await getEnabledPluginSkillRoots()) {
+      await scanSkillsRoot(dir, "plugin", pluginByName);
+    }
+    for (const [name, info] of pluginByName) {
+      if (!byName.has(name)) byName.set(name, info);
+    }
+  } catch (err) {
+    log.warn(`plugin skills scan failed: ${(err as Error).message}`);
+  }
   // Stable ordering: project-first then global, alphabetical within each,
   // so the menu doesn't reshuffle between renders.
   return [...byName.values()].sort((a, b) => {
@@ -458,6 +475,10 @@ function resolveSkillRootForRequest(
   source: SkillSource,
   projectPath: string | undefined,
 ): string | null {
+  // Plugin skills are read-only inventory contributed by enabled plugins —
+  // listed in the composer menu, but there is no user-editable file root
+  // (the files live under the plugin's install dir and vanish on uninstall).
+  if (source === "plugin") return null;
   if (source === "global") {
     return resolveSkillRoot("global", "");
   }

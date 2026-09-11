@@ -1,0 +1,857 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Mcode 中栏 Tab 条重设计 · 双端单条</title>
+<style>
+/* ══════════════════════════════════════════════════════════════
+   中栏 Tab 条重设计 —— 会话 vs 文件
+   ──────────────────────────────────────────────────────────────
+   硬约束(用户给定):
+     ① 一条 strip            不换行、不拆成两条
+     ② 两类同屏可见          谁都不折叠成锚点 / 计数 chip
+     ③ 文件永不折叠          文件标签永远带文件名
+   由 ① ② ③ 推出的唯一结构:**双端单条**
+     · 会话端钉住(不参与横向滚动)—— 「我在哪」永不被推出视野
+     · 文件端滚动(全部文件都在)—— 溢出靠滚,不靠折
+     · 宽度不够时只「压缩」,让位顺序由「身份载体」决定:
+       会话身份 = 颜色(左栏同源色块)→ 可一路压到 6px 色点
+       文件身份 = 文字(文件图标会重复)  → 只能压宽度,绝不去文字
+   窄宽度全部由 CSS 容器查询驱动(容器 = 中栏自身),
+   与 styles.css 里 .chat-ledger-head 的既有做法一致,可直接搬。
+   ══════════════════════════════════════════════════════════════ */
+:root{
+  --surface:#1a1d24;--surface-muted:#2c313c;--surface-hover:#3a404e;
+  --content:#e7e8ec;--content-muted:#bcbfc6;--content-subtle:#9ea2ab;
+  --edge:#2d3340;--accent:#10b981;--danger:#f87171;
+  --sky:#38bdf8;--amber:#fbbf24;--indigo:#818cf8;--violet:#a78bfa;
+  --page-bg:#111318;--ghost:#14171d;--chat-bg:#15181f;
+  --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+  /* 滑块驱动的预览宽度 —— 只作用于 .scrub-target */
+  --nw:580px;
+}
+body.light{
+  --surface:#fff;--surface-muted:#f4f4f5;--surface-hover:#e4e4e7;
+  --content:#09090b;--content-muted:#3f3f46;--content-subtle:#71717a;
+  --edge:#e4e4e7;--accent:#059669;--danger:#dc2626;
+  --sky:#0284c7;--amber:#b45309;--indigo:#4f46e5;--violet:#7c3aed;
+  --page-bg:#eceef1;--ghost:#f6f7f9;--chat-bg:#f8f9fb;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{
+  font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Segoe UI","Microsoft YaHei",sans-serif;
+  background:var(--page-bg);color:var(--content);display:flex;flex-direction:column;overflow:hidden;
+  transition:background .25s;font-size:13px;
+}
+.ic{width:14px;height:14px;flex:none;stroke:currentColor;fill:none;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+.ic.s{width:12px;height:12px}.ic.xs{width:10px;height:10px}
+.mono{font-family:var(--mono)}
+
+/* ── 页头 ── */
+.page-head{flex:none;display:flex;align-items:flex-end;gap:16px;padding:16px 26px 12px;border-bottom:1px solid var(--edge)}
+.page-head h1{font-size:16px;font-weight:650;letter-spacing:-.2px}
+.page-head .sub{font-size:12px;color:var(--content-subtle);margin-top:3px;line-height:1.6;max-width:980px}
+#themeBtn{margin-left:auto;flex:none;border:1px solid var(--edge);background:var(--surface);color:var(--content-subtle);
+  width:32px;height:32px;border-radius:9px;cursor:pointer;font-size:14px}
+#themeBtn:hover{color:var(--content);background:var(--surface-hover)}
+
+.gallery{flex:1;min-height:0;overflow-y:auto;padding:20px 26px 40px;display:flex;flex-direction:column;gap:26px;align-items:center}
+.gallery::-webkit-scrollbar{width:10px}
+.gallery::-webkit-scrollbar-thumb{background:var(--surface-hover);border-radius:5px;border:3px solid var(--page-bg)}
+
+/* ── 方案容器 ── */
+.scheme{width:100%;max-width:1700px;display:flex;gap:22px;align-items:flex-start;flex-wrap:wrap}
+.scheme .frame-col{flex:none;display:flex;flex-direction:column;gap:10px;min-width:0}
+.scheme .notes{flex:1;min-width:290px;display:flex;flex-direction:column;gap:11px}
+.scheme-head{display:flex;align-items:center;gap:9px;margin-bottom:2px;flex-wrap:wrap}
+.scheme-head .tag{
+  flex:none;font-size:10px;font-weight:750;letter-spacing:.5px;padding:2px 8px;border-radius:6px;
+  background:color-mix(in srgb,var(--accent) 16%,transparent);color:var(--accent);
+  border:1px solid color-mix(in srgb,var(--accent) 32%,transparent);
+}
+.scheme-head .tag.warn{background:color-mix(in srgb,var(--danger) 14%,transparent);color:var(--danger);border-color:color-mix(in srgb,var(--danger) 30%,transparent)}
+.scheme-head .tag.pick{background:color-mix(in srgb,var(--sky) 16%,transparent);color:var(--sky);border-color:color-mix(in srgb,var(--sky) 34%,transparent)}
+.scheme-head .tag.dead{background:color-mix(in srgb,var(--content-subtle) 14%,transparent);color:var(--content-subtle);border-color:color-mix(in srgb,var(--content-subtle) 30%,transparent)}
+.scheme-head h2{font-size:14px;font-weight:680}
+.scheme-head .hint{font-size:11.5px;color:var(--content-subtle);margin-left:auto}
+
+/* ── 应用外壳 ── */
+.app-frame{display:flex;width:1240px;max-width:100%;height:374px;border-radius:13px;overflow:hidden;
+  border:1px solid var(--edge);background:var(--surface);box-shadow:0 16px 44px rgba(0,0,0,.32)}
+body.light .app-frame{box-shadow:0 14px 36px rgba(0,0,0,.12)}
+
+.lb{width:190px;flex:none;background:var(--surface);display:flex;flex-direction:column;border-right:1px solid var(--edge)}
+.lb .traffic{height:32px;display:flex;align-items:center;gap:6px;padding:0 13px;flex:none}
+.lb .traffic i{width:11px;height:11px;border-radius:50%}
+.lb .traffic i:nth-child(1){background:#ff5f57}.lb .traffic i:nth-child(2){background:#febc2e}.lb .traffic i:nth-child(3){background:#28c840}
+.lb .qrow{display:flex;align-items:center;gap:8px;padding:5px 10px;margin:0 6px;border-radius:8px;font-size:11.5px;color:var(--content-muted)}
+.lb .qrow:hover{background:var(--surface-muted)}
+.lb .qrow kbd{margin-left:auto;font:inherit;font-size:9.5px;padding:1px 5px;border-radius:4px;border:1px solid var(--edge);background:var(--surface-muted);color:var(--content-subtle)}
+.lb .sep-l{height:1px;background:var(--edge);margin:7px 12px;flex:none}
+.lb .lbl{font-size:9.5px;font-weight:750;letter-spacing:.7px;color:var(--content-subtle);padding:2px 12px 4px}
+.lb .sc{display:flex;align-items:center;gap:7px;padding:6px 9px;margin:0 6px;border-radius:8px;font-size:11.5px;color:var(--content-muted);cursor:default}
+.lb .sc:hover{background:var(--surface-muted)}
+.lb .sc.on{background:var(--surface-hover);color:var(--content)}
+.lb .av{width:16px;height:16px;border-radius:5px;flex:none;display:flex;align-items:center;justify-content:center;
+  font-size:8px;font-weight:800;color:#fff;letter-spacing:-.2px}
+.lb .sc .t{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.lb .sc .st{flex:none;width:6px;height:6px;border-radius:50%;background:var(--content-subtle)}
+.lb .sc .st.run{background:var(--sky)}
+.lb .sc .st.rd{background:var(--accent)}
+
+/* 中栏 = 布局单元 + tab 条的容器查询上下文 */
+.center{flex:1;min-width:0;display:flex;flex-direction:column;background:var(--page-bg);
+  container-type:inline-size;container-name:tabbar}
+.rp{width:150px;flex:none;background:var(--surface);border-left:1px solid var(--edge);padding:9px 0;font-size:11px;color:var(--content-subtle)}
+.rp .lbl{font-size:9.5px;font-weight:750;letter-spacing:.7px;padding:0 12px 5px}
+.rp .f{display:flex;align-items:center;gap:6px;padding:3.5px 12px;color:var(--content-muted);overflow:hidden;white-space:nowrap}
+.rp .f.on{background:var(--surface-hover);color:var(--content)}
+.rp .f span{overflow:hidden;text-overflow:ellipsis}
+
+/* ══════════════════════════════════════════════════════════════
+   ★ 双端单条 —— 本设计的核心结构
+   会话端(.send)flex:none 钉住 / 文件端(.fend)flex:1 滚动
+   ══════════════════════════════════════════════════════════════ */
+.dstrip{flex:none;display:flex;align-items:center;gap:4px;padding:6px 8px;overflow:hidden;
+  border-bottom:1px solid var(--edge);background:color-mix(in srgb,var(--surface) 45%,transparent)}
+.dstrip.baronly{border:1px solid var(--edge);border-radius:10px;background:var(--surface);padding:6px 8px}
+
+/* 会话端:钉住。不参与横向滚动 —— 「我在哪」永远在原地。 */
+.send{display:flex;align-items:center;gap:4px;flex:none;min-width:0}
+
+/* 文件端:占满剩余宽度,自己滚。所有文件都在里面,永远不折。 */
+.fend{position:relative;display:flex;align-items:center;gap:2px;flex:1;min-width:0}
+.ftrack{display:flex;align-items:center;gap:4px;min-width:0;flex:1;
+  overflow-x:auto;scrollbar-width:none}
+.ftrack::-webkit-scrollbar{display:none}
+/* 右缘渐隐:只在文件端真的溢出时出现,提示「右边还有」。 */
+.fend .fade{position:absolute;inset-y:0;right:0;width:26px;pointer-events:none;opacity:0;
+  background:linear-gradient(to left,var(--surface),transparent);transition:opacity .15s}
+.fend.ovf .fade{opacity:1}
+.fend.ovf.atend .fade{opacity:0}
+
+/* ── 通用 chip ── */
+.tab{display:flex;align-items:center;gap:6px;flex:none;max-width:196px;padding:4px 9px;border-radius:6px;
+  font-size:11px;line-height:1.35;white-space:nowrap;cursor:pointer;user-select:none;
+  color:var(--content-muted);background:color-mix(in srgb,var(--surface-muted) 62%,transparent);
+  border:1px solid transparent;transition:background .12s,color .12s}
+.tab:hover{background:color-mix(in srgb,var(--surface-hover) 72%,transparent);color:var(--content)}
+.tab.on{background:color-mix(in srgb,var(--accent) 15%,transparent);color:var(--content);
+  border-color:color-mix(in srgb,var(--accent) 40%,transparent)}
+body.light .tab.on{color:var(--accent)}
+.tab .nm{min-width:0;overflow:hidden;text-overflow:ellipsis}
+.tab.file .nm{font-family:var(--mono);font-size:10.5px}
+.tab .x{flex:none;display:flex;align-items:center;justify-content:center;width:13px;height:13px;border-radius:3px;
+  color:var(--content-subtle);opacity:0;transition:opacity .12s}
+.tab:hover .x,.tab.on .x{opacity:1}
+.tab .x:hover{background:var(--surface-hover);color:var(--content)}
+.dot{width:6px;height:6px;border-radius:50%;flex:none;background:var(--content-subtle)}
+.dot.run{background:var(--sky);animation:pulse 1.4s ease-in-out infinite}
+.dot.dirty{background:var(--accent);animation:pulse 1.4s ease-in-out infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+.badge{flex:none;min-width:14px;height:14px;padding:0 3px;border-radius:999px;background:var(--accent);color:#fff;
+  font-size:9px;font-weight:700;line-height:14px;text-align:center}
+
+/* 会话头像 + 窄屏降级用的色点 */
+.av{width:16px;height:16px;border-radius:5px;flex:none;display:flex;align-items:center;justify-content:center;
+  font-size:8px;font-weight:800;color:#fff;letter-spacing:-.2px}
+.pdot{display:none;width:7px;height:7px;border-radius:50%;flex:none}
+
+/* 会话 = 药丸(圆);文件 = 方片(方)。形状是唯一不占宽度的区分线索,写进基底类。 */
+.pill{border-radius:999px;padding:4px 10px}
+.pill.here{background:color-mix(in srgb,var(--accent) 9%,transparent);
+  border-color:color-mix(in srgb,var(--accent) 26%,transparent);color:var(--content)}
+.pill.here .nm{font-weight:600}
+
+/* 分组标题(第一顺位让位的东西 —— 它不是标签,丢了不丢功能) */
+.cap{display:flex;align-items:center;gap:5px;flex:none;padding:0 3px;font-size:9.5px;font-weight:750;
+  letter-spacing:.6px;color:var(--content-subtle);white-space:nowrap}
+.cap .n{font-weight:700;font-size:9.5px;line-height:13px;padding:0 5px;border-radius:999px;
+  background:color-mix(in srgb,var(--surface-muted) 85%,transparent);color:var(--content-subtle)}
+.cap .proj{color:var(--content-muted);font-weight:650;letter-spacing:0}
+.cap .cap-s,.cap .cap-ic{display:none}
+
+.chev{flex:none;width:19px;height:19px;border-radius:5px;border:0;background:transparent;color:var(--content-subtle);
+  display:flex;align-items:center;justify-content:center;cursor:pointer}
+.chev:hover{background:var(--surface-muted);color:var(--content)}
+.vsep{width:1px;height:16px;flex:none;background:color-mix(in srgb,var(--content-subtle) 42%,transparent);margin:0 5px}
+.vsep.wide{margin:0 14px;height:20px}
+
+/* ── 内容骨架 ── */
+.pane{flex:1;min-height:0;overflow:hidden;padding:14px 16px;display:flex;flex-direction:column;gap:9px;background:var(--chat-bg)}
+.msg{font-size:11.5px;line-height:1.7;color:var(--content-muted)}
+.code{font-family:var(--mono);font-size:11px;line-height:1.85;white-space:pre;overflow:hidden;
+  color:var(--content-muted);background:var(--ghost);border:1px solid var(--edge);border-radius:9px;padding:11px 13px}
+.code .k{color:var(--violet)}.code .s{color:var(--accent)}.code .c{color:var(--content-subtle)}
+.crumb{display:flex;align-items:center;gap:5px;font-size:10.5px;color:var(--content-subtle);font-family:var(--mono)}
+
+/* ── bar-only 预览 ── */
+.mini{width:var(--nw);max-width:none;display:flex;flex-direction:column;gap:5px;
+  container-type:inline-size;container-name:tabbar}
+.mini .mlab{font-size:10.5px;color:var(--content-subtle);display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.mini .mlab b{color:var(--content-muted);font-weight:650}
+.mini .mlab .w{font-family:var(--mono);font-size:10px;padding:1px 5px;border-radius:4px;
+  background:color-mix(in srgb,var(--surface-muted) 70%,transparent);color:var(--content-muted)}
+.stack{display:flex;flex-direction:column;gap:18px}
+.stackscroll{overflow-x:auto;padding-bottom:6px}
+.stackscroll::-webkit-scrollbar{height:9px}
+.stackscroll::-webkit-scrollbar-thumb{background:var(--surface-hover);border-radius:5px;border:3px solid var(--page-bg)}
+
+/* ══════════════════════════════════════════════════════════════
+   窄宽度阶梯 —— 只有「压缩」,任何档位都不折叠
+   容器 = 中栏 / 预览条自身;阈值 = 中栏宽度,不是窗口宽度
+   XL ≥900 / L 740–900 / M 580–740 / S 440–580 / XS <440
+   ══════════════════════════════════════════════════════════════ */
+
+/* L:两端留白先收(30→20),其它不动 */
+@container tabbar (width < 900px){
+  .dstrip .vsep.wide{margin:0 10px;height:18px}
+}
+
+/* M:组标题 → 短名(去项目名);两端留白再收(20→15) */
+@container tabbar (width < 740px){
+  .dstrip .cap .cap-l{display:none}
+  .dstrip .cap .cap-s{display:inline}
+  .dstrip .vsep.wide{margin:0 8px;height:16px}
+}
+
+/* S:组标题 → 图标 + 数字;会话头像 → 色点(会话压到 7px 但仍全在);
+      文件标签开始收宽度(截断,不去文字) */
+@container tabbar (width < 580px){
+  .dstrip .cap .cap-s{display:none}
+  .dstrip .cap .cap-ic{display:block}
+  .dstrip .tab{max-width:118px}
+  .dstrip .tab.pill .av{display:none}
+  .dstrip .tab.pill .pdot{display:block}
+  .dstrip .vsep.wide{margin:0 6px;height:14px}
+}
+
+/* XS:组标题整条让位(数量并入 ⋯ 菜单,那里有完整列表);
+      非当前会话只剩色点(靠颜色认)—— 但当前会话保留标题,它是「我在哪」;
+      文件继续收宽度。注意:文件始终带名字,这一步只改 max-w。 */
+@container tabbar (width < 440px){
+  .dstrip .cap{display:none}
+  .dstrip .tab.pill{padding:4px 6px}
+  .dstrip .tab.pill .nm{display:none}
+  .dstrip .tab.pill.here .nm{display:block;max-width:78px}
+  .dstrip .tab.file{max-width:96px}
+  .dstrip .vsep.wide{margin:0 5px}
+  .dstrip .send .chev{padding:0;width:17px}
+}
+
+/* ── 标注 ── */
+.mark{outline:1.5px dashed var(--danger);outline-offset:2px}
+
+/* 图下说明 */
+.framecap{width:1240px;max-width:100%;display:flex;gap:8px;font-size:11.5px;line-height:1.6;color:var(--content-subtle)}
+.framecap b{color:var(--danger);font-weight:650}
+.framecap .sw{flex:none;width:10px;height:10px;margin-top:4px;border-radius:3px;background:var(--danger);
+  outline:1.5px dashed var(--danger);outline-offset:2px}
+
+/* ── 说明卡 ── */
+.card{background:var(--surface);border:1px solid var(--edge);border-radius:13px;padding:13px 15px;font-size:12.5px;line-height:1.65}
+.card h3{font-size:12.5px;font-weight:700;margin-bottom:7px;display:flex;align-items:center;gap:6px}
+.card ul{padding-left:15px;color:var(--content-muted)}
+.card li{margin:5px 0}
+.card li b{color:var(--content);font-weight:650}
+.card p{color:var(--content-muted)}
+.card p+p{margin-top:7px}
+.card .src{margin-top:9px;padding-top:8px;border-top:1px dashed var(--edge);font-size:11px;color:var(--content-subtle)}
+.pillbox{display:inline-flex;align-items:center;gap:4px;font-size:10.5px;font-weight:700;padding:1px 7px;border-radius:999px}
+.pillbox.g{background:color-mix(in srgb,var(--accent) 16%,transparent);color:var(--accent)}
+.pillbox.r{background:color-mix(in srgb,var(--danger) 15%,transparent);color:var(--danger)}
+.pillbox.b{background:color-mix(in srgb,var(--sky) 16%,transparent);color:var(--sky)}
+.pillbox.a{background:color-mix(in srgb,var(--amber) 18%,transparent);color:var(--amber)}
+.pillbox.n{background:color-mix(in srgb,var(--content-subtle) 16%,transparent);color:var(--content-subtle)}
+
+/* ── 对照表 ── */
+.tbl{width:100%;border-collapse:collapse;font-size:12px}
+.tbl th,.tbl td{padding:8px 10px;text-align:left;border-bottom:1px solid var(--edge);vertical-align:top}
+.tbl th{font-size:10.5px;font-weight:750;letter-spacing:.5px;color:var(--content-subtle);text-transform:uppercase}
+.tbl td{color:var(--content-muted)}
+.tbl td b{color:var(--content);font-weight:650}
+.tbl tr:last-child td{border-bottom:0}
+.tbl code{font-family:var(--mono);font-size:11px;color:var(--content-muted)}
+
+/* ── 图例 / 结论 ── */
+.legend{display:flex;flex-wrap:wrap;gap:9px 18px;font-size:11.5px;color:var(--content-muted);align-items:center}
+.legend .li{display:flex;align-items:center;gap:7px}
+.verdict{border-radius:12px;padding:13px 15px;font-size:12.5px;line-height:1.68;
+  background:color-mix(in srgb,var(--sky) 8%,var(--surface));border:1px solid color-mix(in srgb,var(--sky) 24%,transparent)}
+.verdict b{color:var(--content)}
+.verdict.warm{background:color-mix(in srgb,var(--amber) 8%,var(--surface));border-color:color-mix(in srgb,var(--amber) 26%,transparent)}
+.verdict.good{background:color-mix(in srgb,var(--accent) 8%,var(--surface));border-color:color-mix(in srgb,var(--accent) 26%,transparent)}
+.section-title{width:100%;max-width:1700px;display:flex;align-items:center;gap:10px;padding-top:6px}
+.section-title h2{font-size:15px;font-weight:680}
+.section-title .rule{flex:1;height:1px;background:var(--edge)}
+
+/* ── 滑块 ── */
+.scrub{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:11px 14px;border-radius:12px;
+  background:var(--surface);border:1px solid var(--edge);font-size:12px}
+.scrub .lb2{font-size:11px;font-weight:700;letter-spacing:.4px;color:var(--content-subtle)}
+.scrub input[type=range]{width:min(380px,42vw);accent-color:var(--accent);cursor:pointer}
+.scrub output{font-family:var(--mono);font-size:12px;font-weight:700;color:var(--content);min-width:62px}
+.scrub .presets{display:flex;gap:5px;flex-wrap:wrap}
+.scrub .presets button{border:1px solid var(--edge);background:var(--surface-muted);color:var(--content-muted);
+  font:inherit;font-size:11px;padding:3px 9px;border-radius:7px;cursor:pointer}
+.scrub .presets button:hover{background:var(--surface-hover);color:var(--content)}
+.scrub .tier{margin-left:auto;font-size:11.5px;color:var(--accent);font-weight:650}
+.grid3{display:grid;grid-template-columns:repeat(auto-fit,minmax(290px,1fr));gap:12px}
+.grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:12px}
+
+/* ── 公理链 ── */
+.chain{display:flex;flex-direction:column;gap:0}
+.chain .step{display:flex;gap:11px;padding:11px 0;border-bottom:1px dashed var(--edge)}
+.chain .step:last-child{border-bottom:0}
+.chain .k{flex:none;width:22px;height:22px;border-radius:7px;display:flex;align-items:center;justify-content:center;
+  font-size:11px;font-weight:800;background:color-mix(in srgb,var(--accent) 16%,transparent);color:var(--accent)}
+.chain .k.n{background:color-mix(in srgb,var(--content-subtle) 16%,transparent);color:var(--content-subtle)}
+.chain .tx{flex:1;min-width:0;font-size:12.5px;line-height:1.65;color:var(--content-muted)}
+.chain .tx b{color:var(--content);font-weight:650}
+.chain .tx em{font-style:normal;color:var(--accent);font-weight:650}
+.chain .out{margin-top:2px;font-size:12px;color:var(--content-subtle);font-family:var(--mono)}
+
+@media (max-width:780px){
+  .page-head{flex-wrap:wrap;padding:14px 14px 10px}
+  .gallery{padding:14px 14px 32px;gap:20px}
+  .scheme{gap:14px}
+  .scheme .notes{min-width:0}
+}
+</style>
+</head>
+<body>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
+  <symbol id="i-file" viewBox="0 0 24 24"><path d="M14 3v5h5"/><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h9l5 5v11a2 2 0 0 1-2 2z"/></symbol>
+  <symbol id="i-close" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+  <symbol id="i-clipboard" viewBox="0 0 24 24"><rect x="8" y="2" width="8" height="4" rx="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/></symbol>
+  <symbol id="i-dots" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/></symbol>
+  <symbol id="i-chevl" viewBox="0 0 24 24"><path d="m15 6-6 6 6 6"/></symbol>
+  <symbol id="i-chevr" viewBox="0 0 24 24"><path d="m9 6 6 6-6 6"/></symbol>
+  <symbol id="i-spark" viewBox="0 0 24 24"><path d="M12 3v4M12 17v4M3 12h4M17 12h4M6.3 6.3l2.8 2.8M14.9 14.9l2.8 2.8M17.7 6.3l-2.8 2.8M9.1 14.9l-2.8 2.8"/></symbol>
+  <symbol id="i-msg" viewBox="0 0 24 24"><path d="M21 11.5a8 8 0 0 1-11.6 7.2L4 20l1.3-5.4A8 8 0 1 1 21 11.5z"/></symbol>
+  <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></symbol>
+  <symbol id="i-terminal" viewBox="0 0 24 24"><path d="m5 8 4 4-4 4M13 16h6"/></symbol>
+  <symbol id="i-git" viewBox="0 0 24 24"><circle cx="6" cy="6" r="2.4"/><circle cx="6" cy="18" r="2.4"/><circle cx="18" cy="9" r="2.4"/><path d="M6 8.4v7.2M18 11.4c0 3-3 4.2-6 4.2H8.4"/></symbol>
+</defs></svg>
+
+<header class="page-head">
+  <div>
+    <h1>中栏 Tab 条重设计 · <span style="color:var(--accent)">双端单条</span></h1>
+    <div class="sub">
+      硬约束：<b>一条 strip</b> · <b>会话与文件同屏</b> · <b>文件永不折叠</b>。三者叠加后结构唯一 ——
+      会话端钉住不滚，文件端滚动不全收；宽度不够时只压缩，且压缩顺序由「身份载体」决定。
+    </div>
+  </div>
+  <button id="themeBtn" title="切换明暗">◐</button>
+</header>
+
+<main class="gallery">
+
+<!-- ══════════════════════ 约束 → 设计 ══════════════════════ -->
+<section id="principle" class="scheme" style="align-items:stretch">
+  <div class="notes" style="flex-direction:row;flex-wrap:wrap;gap:12px">
+    <div class="card" style="flex:1;min-width:340px">
+      <h3>三条硬约束,推出唯一结构</h3>
+      <div class="chain">
+        <div class="step">
+          <span class="k">1</span>
+          <div class="tx"><b>一条 strip</b> + 标签数量不设上限
+            <div class="out">⇒ 必须有横向滚动，否则窄屏物理上放不下</div></div>
+        </div>
+        <div class="step">
+          <span class="k">2</span>
+          <div class="tx">既然要滚，问题就变成：<b>滚的时候什么不能滚走？</b>
+            会话是「我在哪」的答案、也是切走再切回的入口
+            <div class="out">⇒ <em>会话端钉住，文件端滚动</em></div></div>
+        </div>
+        <div class="step">
+          <span class="k">3</span>
+          <div class="tx">两侧都必须一直可见（都不折叠）
+            <div class="out">⇒ 宽度不够时只能「压」⇒ 必须定一套让位顺序</div></div>
+        </div>
+        <div class="step">
+          <span class="k n">4</span>
+          <div class="tx">让位顺序看<b>身份载体</b>：会话靠<b>颜色</b>认（左栏同一套色块），
+            文件靠<b>文字</b>认（文件图标会重复 —— 全项目 <code>index.ts</code> 只有一个图标）
+            <div class="out">⇒ <em>会话可一路压到色点；文件只能压宽度，绝不去文字</em></div></div>
+        </div>
+      </div>
+      <div class="src">第 4 条正是「文件不折叠」的来源 —— 它不是妥协，是这条链推出来的唯一解。</div>
+    </div>
+    <div class="card" style="flex:1;min-width:340px">
+      <h3>由此确定的三条设计公理</h3>
+      <ul>
+        <li><b>不对称压缩</b>：会话端可以压到 7px 色点（颜色仍是身份），文件端只压 <code>max-width</code>（名字必须在）。这是整套设计里最重要的一条 —— 它让「窄」和「不折」同时成立。</li>
+        <li><b>钉子不动</b>：会话端 <code>flex:none</code>，永不进入滚动区。切走再切回时，「我在哪条会话」始终在同一水平位置，不需要重新找。</li>
+        <li><b>标题先死，标签后死</b>：两个组标题（<code>会话 3</code> / <code>编辑区 · cc-gui 4</code>）是最先让位的 —— 它们不是标签，去掉不丢任何可点目标。数量最终收进 <code>⋯</code> 菜单。</li>
+      </ul>
+      <div class="src">与前面提过的方案 A/B/C/D 的关系：A（两条栏）与 D（只装当前视图）违反约束 ①②；C 把会话折成纯色块轨道，虽不违反「文件不折叠」，但与本设计第 4 条重合 —— 本设计把 C 的做法只用在<b>会话端</b>，文件端保持完整标签，于是两者的优点合并。</div>
+    </div>
+  </div>
+</section>
+
+<!-- ══════════════════════ 现状 ══════════════════════ -->
+<section id="now" class="scheme">
+  <div class="frame-col">
+    <div class="scheme-head">
+      <span class="tag warn">现状</span>
+      <h2>一条 strip、两种语义、同一张脸</h2>
+      <span class="hint">编辑器聚焦态</span>
+    </div>
+    <div class="app-frame">
+      <aside class="lb">
+        <div class="traffic"><i></i><i></i><i></i></div>
+        <div class="qrow"><svg class="ic s"><use href="#i-plus"/></svg> 新建会话<kbd>⌘N</kbd></div>
+        <div class="qrow"><svg class="ic s"><use href="#i-terminal"/></svg> 终端<kbd>⌘J</kbd></div>
+        <div class="qrow"><svg class="ic s"><use href="#i-git"/></svg> 变更</div>
+        <div class="sep-l"></div>
+        <div class="lbl">会话</div>
+        <div class="sc"><span class="av" style="background:#10b981">CG</span><span class="t">重构会话映射</span><span class="st run"></span></div>
+        <div class="sc on"><span class="av" style="background:#10b981">CG</span><span class="t">RuntimeManager.ts 空指针</span><span class="st"></span></div>
+        <div class="sc"><span class="av" style="background:#818cf8">PM</span><span class="t">marketplace 调研</span><span class="st"></span></div>
+      </aside>
+
+      <div class="center">
+        <div class="dstrip" style="gap:5px">
+          <div class="tab"><svg class="ic s"><use href="#i-spark"/></svg><span class="dot run"></span><span class="nm">重构会话映射</span><span class="x"><svg class="ic xs"><use href="#i-close"/></svg></span></div>
+          <div class="tab mark"><svg class="ic s"><use href="#i-spark"/></svg><span class="dot"></span><span class="nm">RuntimeManager.ts 空指针</span><span class="x"><svg class="ic xs"><use href="#i-close"/></svg></span></div>
+          <div class="tab"><svg class="ic s"><use href="#i-spark"/></svg><span class="dot"></span><span class="nm">marketplace 调研</span><span class="badge">3</span><span class="x"><svg class="ic xs"><use href="#i-close"/></svg></span></div>
+          <div class="vsep"></div>
+          <div class="tab file on mark"><svg class="ic s"><use href="#i-file"/></svg><span class="nm">RuntimeManager.ts</span><span class="dot dirty"></span></div>
+          <div class="tab file"><svg class="ic s"><use href="#i-file"/></svg><span class="nm">runtime.ts</span><span class="x"><svg class="ic xs"><use href="#i-close"/></svg></span></div>
+          <div class="chev" style="margin-left:auto"><svg class="ic s"><use href="#i-dots"/></svg></div>
+        </div>
+        <div class="pane">
+          <div class="crumb"><svg class="ic xs"><use href="#i-file"/></svg> cc-gui / apps/desktop/src/main/claude / RuntimeManager.ts</div>
+          <div class="code"><span class="c">// 当前会话在左栏里,但 tab 条上完全看不出</span>
+<span class="k">const</span> rt = <span class="k">this</span>.runtimes.<span class="k">get</span>(sessionId)
+<span class="k">if</span> (!rt) <span class="k">throw</span> <span class="k">new</span> <span class="s">Error</span>(<span class="s">"no runtime"</span>)
+rt.lastCwd = ctx.cwd
+<span class="k">await</span> provider.<span class="k">sendTurn</span>(turn)</div>
+          <div class="msg">↑ 文件标签点亮着,但<b>没有任何地方显示「我在哪条会话里」</b>——从编辑器点回会话时要靠记忆。</div>
+        </div>
+      </div>
+
+      <aside class="rp">
+        <div class="lbl">资源管理器</div>
+        <div class="f"><svg class="ic xs"><use href="#i-file"/></svg><span>RuntimeManager.ts</span></div>
+        <div class="f"><svg class="ic xs"><use href="#i-file"/></svg><span>pluginManager.ts</span></div>
+        <div class="f"><svg class="ic xs"><use href="#i-file"/></svg><span>runtime.ts</span></div>
+        <div class="f on"><svg class="ic xs"><use href="#i-folder"/></svg><span>providers</span></div>
+      </aside>
+    </div>
+    <div class="framecap"><span class="sw"></span>红框标出的两条标签,左边是<b>会话</b>(标题恰好长得像文件名)、右边是<b>文件</b> ——
+      形态、圆角、字号、静止/激活配色完全一致,只有前置图标和等宽字体这点差别。</div>
+  </div>
+
+  <div class="notes">
+    <div class="card">
+      <h3>现状的五个问题(前三条与宽度无关,后两条在窄屏放大)</h3>
+      <ul>
+        <li><b>形态完全同构</b>:两者都是 <code>rounded-md px-2.5 py-1 text-[11px]</code>,静止态 <code>bg-surface-muted/60</code>、激活态 <code>bg-accent/15 + ring-accent/40</code> 逐字相同(<code>SessionTabs.tsx</code> / <code>OpenTabsBar.tsx</code>)。唯一差异是前置图标与等宽字体。</li>
+        <li><b>后果不对称却同脸</b>:点会话 → 整个中栏换成对话;点文件 → 整个中栏换成编辑器。同构 chip 承载了「模式切换」这种重后果。</li>
+        <li><b>会话焦点丢失</b>:<code>isActive={id === activeId && !editorFocused}</code> —— 编辑器聚焦时,当前会话标签<b>没有任何标记</b>。这就是「我到底在哪」的来源。</li>
+        <li><b>作用域不同却并列</b>:会话是全局的(<code>openTabs</code>),文件是当前项目的(<code>ideOpenFilesByProject[pid]</code>)。切项目时右侧整组静默换掉,没有任何提示。</li>
+        <li><b>会话会被文件挤走</b>:两组共用一个滚动区 —— 文件一多,会话标签被推到视野外,而它恰恰是「我在哪」的答案。这条在窄屏最致命,也是本设计第一刀要切的地方。</li>
+      </ul>
+      <div class="src">两处「反向线索」:会话标题可以是任意自然语言(甚至刚好写成文件名),而文件名永远像文件名;1px 分组线只在两组都有内容时渲染,只剩一组就无法区分。</div>
+    </div>
+  </div>
+</section>
+
+<!-- ══════════════════════ 设计 ══════════════════════ -->
+<section id="design" class="scheme">
+  <div class="frame-col">
+    <div class="scheme-head">
+      <span class="tag pick">设计 · 双端单条</span>
+      <h2>会话端钉住 / 文件端滚动,一条 strip 到底</h2>
+      <span class="hint">宽屏基准态(中栏 1240)</span>
+    </div>
+    <div class="app-frame">
+      <aside class="lb">
+        <div class="traffic"><i></i><i></i><i></i></div>
+        <div class="qrow"><svg class="ic s"><use href="#i-plus"/></svg> 新建会话<kbd>⌘N</kbd></div>
+        <div class="qrow"><svg class="ic s"><use href="#i-terminal"/></svg> 终端<kbd>⌘J</kbd></div>
+        <div class="qrow"><svg class="ic s"><use href="#i-git"/></svg> 变更</div>
+        <div class="sep-l"></div>
+        <div class="lbl">会话</div>
+        <div class="sc"><span class="av" style="background:#10b981">CG</span><span class="t">重构会话映射</span><span class="st run"></span></div>
+        <div class="sc on"><span class="av" style="background:#10b981">CG</span><span class="t">RuntimeManager.ts 空指针</span><span class="st"></span></div>
+        <div class="sc"><span class="av" style="background:#818cf8">PM</span><span class="t">marketplace 调研</span><span class="st"></span></div>
+      </aside>
+
+      <div class="center">
+        <div class="dstrip">
+          <!-- ① 会话端:钉住,不参与横向滚动 -->
+          <span class="cap"><svg class="ic s cap-ic"><use href="#i-msg"/></svg><span class="cap-l">会话</span><span class="cap-s">会话</span> <span class="n">3</span></span>
+          <div class="send">
+            <div class="tab pill"><span class="av" style="background:#10b981">CG</span><span class="pdot" style="background:#10b981"></span><span class="nm">重构会话映射</span><span class="dot run"></span><span class="x"><svg class="ic xs"><use href="#i-close"/></svg></span></div>
+            <div class="tab pill here"><span class="av" style="background:#10b981">CG</span><span class="pdot" style="background:#10b981"></span><span class="nm">RuntimeManager.ts 空指针</span><span class="x"><svg class="ic xs"><use href="#i-close"/></svg></span></div>
+            <div class="tab pill"><span class="av" style="background:#818cf8">PM</span><span class="pdot" style="background:#818cf8"></span><span class="nm">marketplace 调研</span><span class="badge">3</span><span class="x"><svg class="ic xs"><use href="#i-close"/></svg></span></div>
+            <button class="chev" title="新建会话"><svg class="ic s"><use href="#i-plus"/></svg></button>
+          </div>
+
+          <!-- ② 两端之间的钉子:1px 发丝线(成本 1px,窄屏也不该消失) -->
+          <div class="vsep wide"></div>
+
+          <!-- ③ 文件端:占满剩余宽度,自己滚 -->
+          <span class="cap"><svg class="ic s cap-ic"><use href="#i-folder"/></svg><span class="cap-l">编辑区 · <b class="proj">cc-gui</b></span><span class="cap-s">编辑区</span> <span class="n">4</span></span>
+          <div class="fend">
+            <div class="ftrack">
+              <div class="tab file on"><svg class="ic s"><use href="#i-file"/></svg><span class="nm">RuntimeManager.ts</span><span class="dot dirty"></span></div>
+              <div class="tab file"><svg class="ic s"><use href="#i-file"/></svg><span class="nm">SdkMessageAdapter.ts</span><span class="x"><svg class="ic xs"><use href="#i-close"/></svg></span></div>
+              <div class="tab file"><svg class="ic s"><use href="#i-file"/></svg><span class="nm">runtime.ts</span><span class="x"><svg class="ic xs"><use href="#i-close"/></svg></span></div>
+              <div class="tab file"><svg class="ic s"><use href="#i-clipboard"/></svg><span class="nm">执行计划</span><span class="x"><svg class="ic xs"><use href="#i-close"/></svg></span></div>
+              <div class="tab file"><svg class="ic s"><use href="#i-file"/></svg><span class="nm">sessionStore.ts</span></div>
+            </div>
+            <div class="fade"></div>
+          </div>
+          <button class="chev" title="全部标签"><svg class="ic s"><use href="#i-dots"/></svg></button>
+        </div>
+        <div class="pane" style="padding-top:12px">
+          <div class="crumb"><svg class="ic xs"><use href="#i-file"/></svg> cc-gui / apps/desktop/src/main/claude / RuntimeManager.ts</div>
+          <div class="code"><span class="c">// 会话端钉住(左边永远不动) · 文件端滚动(右边自己滚)</span>
+<span class="k">const</span> rt = <span class="k">this</span>.runtimes.<span class="k">get</span>(sessionId)
+<span class="k">if</span> (!rt) <span class="k">throw</span> <span class="k">new</span> <span class="s">Error</span>(<span class="s">"no runtime"</span>)
+rt.lastCwd = ctx.cwd
+<span class="k">await</span> provider.<span class="k">sendTurn</span>(turn)</div>
+        </div>
+      </div>
+
+      <aside class="rp">
+        <div class="lbl">资源管理器</div>
+        <div class="f"><svg class="ic xs"><use href="#i-file"/></svg><span>RuntimeManager.ts</span></div>
+        <div class="f"><svg class="ic xs"><use href="#i-file"/></svg><span>pluginManager.ts</span></div>
+        <div class="f"><svg class="ic xs"><use href="#i-file"/></svg><span>runtime.ts</span></div>
+        <div class="f on"><svg class="ic xs"><use href="#i-folder"/></svg><span>providers</span></div>
+      </aside>
+    </div>
+    <div class="framecap"><span class="sw"></span>关键在<b>滚动容器只包住文件端</b>（<code>.ftrack</code>），
+      会话端与两个组标题都在滚动区之外 —— 所以文件再多，会话也不会被推走。</div>
+  </div>
+
+  <div class="notes">
+    <div class="card">
+      <h3>结构：三个钉子 + 一个滚动区</h3>
+      <ul>
+        <li><b>会话端 <code>.send</code></b>（<code>flex:none</code>）—— 钉住。含会话标签 + <code>+ 新建会话</code>。永不进滚动区。</li>
+        <li><b>中间的 <code>1px</code> 发丝线</b> —— 钉住。成本只有 1px，所以窄屏也不该让它消失（会让位的只是它两侧的留白）。</li>
+        <li><b>编辑区组标题</b> —— 钉住，紧贴滚动区左缘。文件滚动时它不动，始终标明「右边这一串是当前项目的文件」。</li>
+        <li><b>文件端 <code>.ftrack</code></b>（<code>flex:1; overflow-x:auto</code>）—— 唯一的滚动区。所有文件都在里面，横向滚。</li>
+      </ul>
+      <div class="src">对照 VS Code：编辑器组 tab 挂在编辑器面板自己头上；这里把「窗口级导航（会话）」钉在左、「面板级内容（文件）」交给滚动 —— 是同一件事的两种尺度。</div>
+    </div>
+    <div class="card" style="border-color:color-mix(in srgb,var(--accent) 34%,transparent)">
+      <h3>不对称压缩：本设计的核心机制</h3>
+      <div style="overflow-x:auto"><table class="tbl" style="margin-top:2px">
+        <thead><tr><th></th><th>会话端</th><th>文件端</th></tr></thead>
+        <tbody>
+          <tr><td><b>身份载体</b></td><td>颜色 + 字母(左栏同源色块)</td><td>文件名(等宽)</td></tr>
+          <tr><td><b>可以丢</b></td><td>标题、头像 → 7px 色点</td><td><b>只有宽度</b></td></tr>
+          <tr><td><b>不能丢</b></td><td>颜色(丢了同项目会话不可分)</td><td><b>文字</b>(文件图标会重复)</td></tr>
+          <tr><td><b>压缩终点</b></td><td>7px 色点</td><td>96px 截断名</td></tr>
+        </tbody>
+      </table></div>
+      <div class="src">为什么文件不能像会话那样收成图标：全项目所有 <code>.ts</code> 共用同一个文件图标，标签一旦去掉文字就互相无法区分；而会话色块与左栏同源，收成色点后仍能一一对应。</div>
+    </div>
+    <div class="card">
+      <h3>两个状态分开表达（沿用并强化）</h3>
+      <div class="legend" style="flex-direction:column;align-items:flex-start;gap:8px;margin:4px 0">
+        <div class="li"><span class="tab on" style="max-width:none;padding:2px 9px">激活填充</span> 当前<b>视图</b>（中栏正在显示它）</div>
+        <div class="li"><span class="tab pill here" style="max-width:none;font-size:11px">锚点态</span> 当前<b>会话</b>（回对话的目的地，但视图不在它上面）</div>
+      </div>
+      <p>编辑器聚焦时，会话药丸显示锚点态（描边 + 标题加粗 + 无填充），于是「我从哪来、要回哪去」始终可见 —— 这一条修掉现状的 <code>!editorFocused</code> 空洞。</p>
+      <div class="src">窄屏时锚点态的关键作用：非当前会话都压成了色点，只有当前会话保留标题 —— 正是因为它带锚点态，才不会「全都认不出」。</div>
+    </div>
+  </div>
+</section>
+
+<!-- ══════════════════════ 窄宽度阶梯 ══════════════════════ -->
+<div class="section-title" id="ladder"><h2>窄宽度阶梯 · 全程一条 strip，只压缩不折叠</h2><div class="rule"></div></div>
+<section class="scheme" style="flex-direction:column;align-items:stretch;gap:14px">
+  <div class="verdict good">
+    本节全部由 <b>CSS 容器查询</b>驱动 —— 查询对象是「中栏 / 预览条自身的宽度」（容器名 <code>tabbar</code>），
+    不是窗口宽度，也不是 JS 断点。理由与 <code>styles.css</code> 里 <code>.chat-ledger-head</code> 完全相同：
+    <b>中栏被左右侧栏挤压时，拿窗口宽度做阈值会误判「放得下」</b>；拿中栏自己当容器，判断永远与实际排版一致
+    （宽屏 3:7 分栏、手机壳、子会话面板同样成立）。<b>组件里一行 JS 都不用加。</b>
+  </div>
+
+  <div class="scrub">
+    <span class="lb2">拖动改中栏宽度</span>
+    <input type="range" id="wRange" min="320" max="1240" step="10" value="580" aria-label="中栏宽度">
+    <output id="wOut">580px</output>
+    <div class="presets">
+      <button data-w="1240">1240</button>
+      <button data-w="900">900</button>
+      <button data-w="740">740</button>
+      <button data-w="580">580</button>
+      <button data-w="440">440</button>
+      <button data-w="360">360</button>
+    </div>
+    <span class="tier" id="tierOut">Tier M</span>
+  </div>
+
+  <div class="mini scrub-target">
+    <div class="mlab"><b>双端单条</b> <span class="w" id="roundW">580</span> —— 会话端钉在左，文件端自己滚，任何宽度都不折叠</div>
+    <div class="dstrip baronly">
+      <span class="cap"><svg class="ic s cap-ic"><use href="#i-msg"/></svg><span class="cap-l">会话</span><span class="cap-s">会话</span> <span class="n">3</span></span>
+      <div class="send">
+        <div class="tab pill"><span class="av" style="background:#10b981">CG</span><span class="pdot" style="background:#10b981"></span><span class="nm">重构会话映射</span><span class="dot run"></span><span class="x"><svg class="ic xs"><use href="#i-close"/></svg></span></div>
+        <div class="tab pill here"><span class="av" style="background:#10b981">CG</span><span class="pdot" style="background:#10b981"></span><span class="nm">RuntimeManager.ts 空指针</span><span class="x"><svg class="ic xs"><use href="#i-close"/></svg></span></div>
+        <div class="tab pill"><span class="av" style="background:#818cf8">PM</span><span class="pdot" style="background:#818cf8"></span><span class="nm">marketplace 调研</span><span class="badge">3</span><span class="x"><svg class="ic xs"><use href="#i-close"/></svg></span></div>
+        <button class="chev" title="新建会话"><svg class="ic s"><use href="#i-plus"/></svg></button>
+      </div>
+      <div class="vsep wide"></div>
+      <span class="cap"><svg class="ic s cap-ic"><use href="#i-folder"/></svg><span class="cap-l">编辑区 · <b class="proj">cc-gui</b></span><span class="cap-s">编辑区</span> <span class="n">4</span></span>
+      <div class="fend">
+        <div class="ftrack">
+          <div class="tab file on"><svg class="ic s"><use href="#i-file"/></svg><span class="nm">RuntimeManager.ts</span><span class="dot dirty"></span></div>
+          <div class="tab file"><svg class="ic s"><use href="#i-file"/></svg><span class="nm">SdkMessageAdapter.ts</span><span class="x"><svg class="ic xs"><use href="#i-close"/></svg></span></div>
+          <div class="tab file"><svg class="ic s"><use href="#i-file"/></svg><span class="nm">runtime.ts</span><span class="x"><svg class="ic xs"><use href="#i-close"/></svg></span></div>
+          <div class="tab file"><svg class="ic s"><use href="#i-clipboard"/></svg><span class="nm">执行计划</span><span class="x"><svg class="ic xs"><use href="#i-close"/></svg></span></div>
+        </div>
+        <div class="fade"></div>
+      </div>
+      <button class="chev" title="全部标签"><svg class="ic s"><use href="#i-dots"/></svg></button>
+    </div>
+  </div>
+
+  <div class="mini" style="--nw:340px">
+    <div class="mlab"><b>极窄 340</b> <span class="w">Tier XS</span> 组标题全让位 · 非当前会话只剩色点(<b>但仍然都在</b>) · 文件继续截断</div>
+    <div class="dstrip baronly">
+      <span class="cap"><svg class="ic s cap-ic"><use href="#i-msg"/></svg><span class="cap-l">会话</span><span class="cap-s">会话</span> <span class="n">3</span></span>
+      <div class="send">
+        <div class="tab pill"><span class="av" style="background:#10b981">CG</span><span class="pdot" style="background:#10b981"></span><span class="nm">重构会话映射</span><span class="dot run"></span><span class="x"><svg class="ic xs"><use href="#i-close"/></svg></span></div>
+        <div class="tab pill here"><span class="av" style="background:#10b981">CG</span><span class="pdot" style="background:#10b981"></span><span class="nm">RuntimeManager.ts 空指针</span><span class="x"><svg class="ic xs"><use href="#i-close"/></svg></span></div>
+        <div class="tab pill"><span class="av" style="background:#818cf8">PM</span><span class="pdot" style="background:#818cf8"></span><span class="nm">marketplace 调研</span><span class="badge">3</span><span class="x"><svg class="ic xs"><use href="#i-close"/></svg></span></div>
+        <button class="chev" title="新建会话"><svg class="ic s"><use href="#i-plus"/></svg></button>
+      </div>
+      <div class="vsep wide"></div>
+      <span class="cap"><svg class="ic s cap-ic"><use href="#i-folder"/></svg><span class="cap-l">编辑区 · <b class="proj">cc-gui</b></span><span class="cap-s">编辑区</span> <span class="n">4</span></span>
+      <div class="fend">
+        <div class="ftrack">
+          <div class="tab file on"><svg class="ic s"><use href="#i-file"/></svg><span class="nm">RuntimeManager.ts</span><span class="dot dirty"></span></div>
+          <div class="tab file"><svg class="ic s"><use href="#i-file"/></svg><span class="nm">SdkMessageAdapter.ts</span><span class="x"><svg class="ic xs"><use href="#i-close"/></svg></span></div>
+        </div>
+        <div class="fade"></div>
+      </div>
+      <button class="chev" title="全部标签"><svg class="ic s"><use href="#i-dots"/></svg></button>
+    </div>
+  </div>
+
+  <div class="card" style="padding:6px 4px">
+    <table class="tbl">
+      <thead><tr>
+        <th>档位</th><th>中栏宽度</th><th>让位步骤(全部是压缩)</th>
+        <th>会话端</th><th>文件端</th><th>为什么这个顺序</th>
+      </tr></thead>
+      <tbody>
+        <tr>
+          <td><b>XL</b></td><td><code>≥ 900</code></td><td>无让位</td>
+          <td>药丸 + 头像 + 标题</td><td>方片 + 标题,组标题带项目名</td>
+          <td>全部线索在线,项目作用域可见。</td>
+        </tr>
+        <tr>
+          <td><b>L</b></td><td><code>740–900</code></td><td>① 两端留白 <code>30→20px</code></td>
+          <td>不变</td><td>不变</td>
+          <td>留白是唯一「什么都不表达」的宽度,最先还回去。1px 发丝线保留(它表达分组,成本只有 1px)。</td>
+        </tr>
+        <tr>
+          <td><b>M</b></td><td><code>580–740</code></td><td>② 编辑区组标题去项目名<br>③ 两端留白 <code>20→16px</code></td>
+          <td>不变</td><td>不变</td>
+          <td>项目名是最长的文本块、也只在切项目那一刻有用。注意：这里动的是<b>标签之外的</b>东西 —— 标签宽度一点没让。</td>
+        </tr>
+        <tr>
+          <td><b>S</b></td><td><code>440–580</code></td><td>④ 两个组标题 → 图标 + 数字<br>⑤ 会话头像 → 7px 色点<br>⑥ 两端留白 <code>16→12px</code></td>
+          <td>色点 + 标题(标题还在)</td><td>标签 <code>max-w 196→118</code>,名字截断</td>
+          <td>到这一步才开始动标签本身,而且<b>先动会话的(头像→色点)、后动文件的(只收宽度)</b> —— 正是「身份载体」那条公理的直接结果。</td>
+        </tr>
+        <tr>
+          <td><b>XS</b></td><td><code>&lt; 440</code></td><td>⑦ 两个组标题整条让位(数量并入 <code>⋯</code>)<br>⑧ 非当前会话只剩色点<br>⑨ 文件 <code>max-w → 96</code></td>
+          <td>当前会话保留标题(<code>max-w 78</code>),其余纯色点</td><td>标签 <code>max-w 96</code>,<b>名字仍在</b></td>
+          <td>最后让位的是会话标题 —— 而<b>当前会话的标题始终不让</b>,因为它是「我在哪」的答案。文件走到 96px 仍带名字:这条线永不越过。</td>
+        </tr>
+      </tbody>
+    </table>
+    <div style="margin-top:8px;font-size:11px;color:var(--content-subtle);border-top:1px dashed var(--edge);padding-top:8px">
+      <b>两条永不越过的线</b>:①文件标签永远带文件名(最窄 96px 截断,但不只剩图标);②会话色/字母永远在(非当前会话可以没有标题,但不会没有颜色)。
+      这两条保证了任何宽度下「哪条是会话、哪条是什么文件」都还能判断 —— 也就是现状最缺的那件事。
+    </div>
+  </div>
+
+  <div class="grid3">
+    <div class="card" style="border-color:color-mix(in srgb,var(--accent) 34%,transparent)">
+      <h3>① 会话端钉住，修的是最痛的一条</h3>
+      <p>现状两组共用一个滚动区，文件一多会话就被推出视野 —— 而会话恰恰是「我在哪」的答案。
+      本设计把 <code>overflow-x:auto</code> 只包在文件端，<b>会话在结构上不可能被滚走</b>。</p>
+      <div class="src">这一条与宽度无关：宽屏文件多时同样受益。属于「顺手修掉的老问题」。</div>
+    </div>
+    <div class="card" style="border-color:color-mix(in srgb,var(--accent) 34%,transparent)">
+      <h3>② 形状分化必须是基底，不是增强</h3>
+      <p>药丸(会话)/ 方片(文件)是<b>唯一不占宽度的</b>区分线索。必须写在组件基底类里，不能做成「宽屏才有」——
+      否则窄屏会连同标题、头像一起丢掉全部线索，直接退化成现状。</p>
+      <div class="src">这是整套窄屏策略能成立的前提：只要形状在，压缩再多也还能分。</div>
+    </div>
+    <div class="card">
+      <h3>③ 数量必须活到最后一档</h3>
+      <p>组标题可以一路让到消失，但<b>数量不能跟着消失</b> —— 它是「还有没有我没看到的标签」的唯一常驻答案。
+      档位 S 留「图标 + 数字」，XS 才把数字并进 <code>⋯</code> 菜单（那里本来就有完整列表）。</p>
+    </div>
+    <div class="card">
+      <h3>④ 会话数超限的泄压阀</h3>
+      <p>文件端天生能滚，会话端钉住所以有个上限。建议：会话端最多平铺 5 条，多出的收成一颗 <code>+N</code> 色点（点击开 <code>⋯</code> 菜单）。</p>
+      <div class="src">这是唯一允许的「折叠」，且只作用于会话 —— 因为会话有颜色身份兜底，而文件的约束是「永不折叠」。</div>
+    </div>
+    <div class="card">
+      <h3>⑤ 滚轮归属要说清</h3>
+      <p>整条 strip 上滚轮只作用于<b>文件端的轨道</b>（会话端不滚）。若指针停在会话端，滚轮仍应转发给文件端 ——
+      否则会出现「滚了没反应」的死区。这是实现时最容易漏的一处。</p>
+    </div>
+    <div class="card">
+      <h3>⑥ 窄屏的关闭按钮另说</h3>
+      <p>现状 <code>×</code> 是 hover 才出。窄屏（触控）没有 hover，建议<b>激活标签的 × 常驻</b>（已是现状），
+      非激活标签选中后才出 —— 与触控语义一致。会话的 × 只关标签、不中断运行中的回合，需要 tooltip 说清。</p>
+    </div>
+  </div>
+</section>
+
+<!-- ══════════════════════ 被排除 ══════════════════════ -->
+<div class="section-title"><h2>被这三条原则排除的方向（存档，不再展开）</h2><div class="rule"></div></div>
+<section class="scheme" style="align-items:stretch">
+  <div class="notes" style="flex-direction:row;flex-wrap:wrap;gap:12px">
+    <div class="card" style="flex:1;min-width:290px">
+      <h3><span class="pillbox n">排除</span> 两条栏(会话条 / 编辑器条分层)</h3>
+      <p>结构上确实不可能误点、窄屏也不需要任何降级规则 —— 但它<b>违反「一条 strip」</b>，编辑器聚焦时多占约 30px 高度，且要维护两套溢出/滚动状态机。</p>
+      <div class="src">它的正确用法被本设计吸收了：会话端钉住 = 把「会话条」的稳定性拿到一条 strip 里，而不额外占一行。</div>
+    </div>
+    <div class="card" style="flex:1;min-width:290px">
+      <h3><span class="pillbox n">排除</span> 头像轨道(会话压成纯色块)</h3>
+      <p>最省横向空间，但它把「读标题」换成「认颜色 + 悬停」—— <b>悬停在一个本就没有余量的窄条上是最难成立的交互</b>。</p>
+      <div class="src">本设计只借用它的压缩终点（色点），但保留当前会话的标题，并把颜色与左栏打通。</div>
+    </div>
+    <div class="card" style="flex:1;min-width:290px">
+      <h3><span class="pillbox n">排除</span> 上下文条(只装当前视图 + 回到…锚点)</h3>
+      <p>条内永远只有一种类型、构造上零混淆 —— 但它把文件折进一颗 <code>编辑区 · 4 个文件</code> 锚点，
+      <b>直接违反「文件不折叠」</b>；且「agent 刚提到某文件、我要点开看」这个高频动作会从一次点击变成两次。</p>
+      <div class="src">它唯一成立的位置是手机壳那种极端场景 —— 但按本次原则，那里也仍然是一条 strip + 文件端滚动。</div>
+    </div>
+  </div>
+</section>
+
+<!-- ══════════════════════ 共同改进 / 落地 ══════════════════════ -->
+<div class="section-title"><h2>一并要做的修正 &amp; 落地顺序</h2><div class="rule"></div></div>
+<section class="scheme" style="flex-direction:column;align-items:stretch;gap:14px">
+  <div class="grid2">
+    <div class="card">
+      <h3>① 拆分「视图焦点」与「会话锚点」</h3>
+      <p><code>isActive={id === activeId && !editorFocused}</code> 让当前会话在编辑器里完全没有标记。
+      拆成两种视觉：<b>填充 = 正在看它，描边/侧边条 = 我是从这里来的</b>。窄屏下这一条尤其重要 —— 它是「全都压成色点时还能认出当前会话」的唯一依据。</p>
+    </div>
+    <div class="card">
+      <h3>② 关闭语义的提示</h3>
+      <p>会话的 × 只关标签、<b>不中断</b>运行中的回合；文件脏了则没有 ×。hover 给出明确说明
+      （「关闭标签，会话继续运行」/「未保存，请先保存」），让「× 点了会怎样」可预期。</p>
+    </div>
+    <div class="card">
+      <h3>③ 溢出菜单按组分节</h3>
+      <p><code>TabBarOverflowMenu</code> 现在把两类标签平铺成一条列表，同样混淆。加两个小节标题（会话 / 编辑区 · 项目），与条上分组口径一致。
+      窄屏组标题让位后，<b>这个菜单是唯一的完整信息出口</b> —— 更要做对。</p>
+    </div>
+    <div class="card">
+      <h3>④ 新建会话入口</h3>
+      <p>tab 模式目前没有新建会话的按钮（要去左栏）。会话端尾部补一个 <code>+</code>，
+      与「会话端」这个语义块绑定，顺带强化两端的存在感。</p>
+    </div>
+    <div class="card">
+      <h3>⑤ 文件组标注所属项目</h3>
+      <p>文件是<b>项目作用域</b>、会话是全局的。切项目时文件端整组换掉，界面上却没有任何提示。
+      组标题带项目名（宽屏）修掉这一条 —— 它也是组标题唯一「非它不可」的职责，所以排在让位顺序的中间而不是最前。</p>
+    </div>
+    <div class="card" style="border-color:color-mix(in srgb,var(--accent) 34%,transparent)">
+      <h3>⑥ 窄宽度用容器查询自动化</h3>
+      <p>不新增「窄屏开关」设置项。降级规则写成 <code>@container tabbar (width &lt; N)</code>（容器 = 中栏），全部交给 CSS。
+      <b>本设计不需要任何结构级 JS 切换</b>（不像需要「窄屏自动多行 / 退上下文条」的方案）—— 因为任何宽度下结构都一样。</p>
+      <div class="src">这是「一条 strip + 不折叠」带来的额外好处：结构恒定，于是降级纯样式，没有断点跳变、没有 remount。</div>
+    </div>
+  </div>
+
+  <div class="verdict good">
+    <b>落地顺序</b><br>
+    <b>① 改结构</b>：把 <code>UnifiedTabsBar</code> 的单一滚动容器拆成「会话端 <code>.send</code>(flex:none) + 文件端 <code>.fend &gt; .ftrack</code>(flex:1, overflow-x:auto)」，
+    两个组标题移出滚动区。<b>这一步就把「会话被文件挤走」修掉了，且与后续样式改动完全独立。</b><br>
+    <b>② 改形状</b>：<code>SortableSessionTab</code> → 药丸（<code>rounded-full</code> + 项目色头像），<code>SortableFileTab</code> 保持方片。
+    <b>形状写进基底类，不加任何宽度条件。</b><br>
+    <b>③ 拆高亮语义</b>：在读 <code>activeTabKey</code> 之外增加「会话锚点」判定，编辑器聚焦时给当前会话上描边态。<br>
+    <b>④ 加容器查询</b>：<code>styles.css</code> 里给 <code>.center</code> 加 <code>container-type:inline-size; container-name:tabbar</code>，
+    再补 L/M/S/XS 四段 <code>@container</code>（与 <code>.chat-ledger-head</code> 同一模式）。侧栏开合、宽屏 3:7、手机壳自动正确。<br>
+    <b>⑤ 补交互</b>：文件端滚轮转发 + 右缘渐隐；会话端 <code>+N</code> 泄压阀；<code>⋯</code> 菜单分组标题与数量。<br>
+    <b>⑥ 补词条</b>：组标题、关闭语义 tooltip、<code>+N</code> 的类名提示补进 <code>i18n/zh|en/chat-stream.ts</code>，避免硬编码文案。
+  </div>
+</section>
+
+</main>
+
+<script>
+(() => {
+  const root = document.documentElement;
+  const range = document.getElementById("wRange");
+  const out = document.getElementById("wOut");
+  const roundW = document.getElementById("roundW");
+  const tierOut = document.getElementById("tierOut");
+
+  // 与 CSS 里的 @container 阈值同一组数字。这里只负责「念出来」,
+  // 真正的降级由 CSS 完成 —— 改 CSS 阈值时记得同步这张表。
+  const TIERS = [
+    [900, "Tier XL", "无让位"],
+    [740, "Tier L", "两端留白 30→20"],
+    [580, "Tier M", "编辑区去项目名 · 留白 20→16"],
+    [440, "Tier S", "组标题→图标+数字 · 会话头像→色点 · 文件 max-w→118"],
+    [-Infinity, "Tier XS", "组标题让位 · 非当前会话只剩色点 · 文件 max-w→96"],
+  ];
+
+  function apply(w) {
+    root.style.setProperty("--nw", w + "px");
+    out.textContent = w + "px";
+    if (roundW) roundW.textContent = String(w);
+    const hit = TIERS.find(([min]) => w >= min);
+    tierOut.textContent = hit[1] + " · " + hit[2];
+  }
+
+  range.addEventListener("input", () => apply(+range.value));
+  document.querySelectorAll(".scrub [data-w]").forEach((b) =>
+    b.addEventListener("click", () => {
+      range.value = b.dataset.w;
+      apply(+b.dataset.w);
+    }),
+  );
+  apply(+range.value);
+
+  // 文件端溢出检测:只在真的滚得动时显示右缘渐隐,并在滚到底时收起。
+  function wireFades() {
+    document.querySelectorAll(".fend").forEach((fend) => {
+      const track = fend.querySelector(".ftrack");
+      if (!track) return;
+      const update = () => {
+        const ovf = track.scrollWidth > track.clientWidth + 1;
+        const atEnd = track.scrollLeft >= track.scrollWidth - track.clientWidth - 1;
+        fend.classList.toggle("ovf", ovf);
+        fend.classList.toggle("atend", atEnd);
+      };
+      track.addEventListener("scroll", update, { passive: true });
+      new ResizeObserver(update).observe(track);
+      update();
+    });
+  }
+  wireFades();
+
+  document.getElementById("themeBtn").addEventListener("click", () => {
+    document.body.classList.toggle("light");
+  });
+})();
+</script>
+</body>
+</html>

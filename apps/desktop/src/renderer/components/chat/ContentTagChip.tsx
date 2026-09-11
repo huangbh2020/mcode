@@ -35,7 +35,9 @@ export const ContentTagChip = forwardRef<
     <span
       ref={ref}
       className={cn(
-        "inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-[11px] transition-colors",
+        // composer-tag-in: spring entrance when the chip mounts (paste
+        // promotion, file drop, @-mention pick) — see styles.css.
+        "composer-tag-in inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-[11px] transition-colors",
         open
           ? "border-accent bg-accent/20 text-accent"
           : "border-accent/40 bg-accent/10 text-accent hover:border-accent/70 hover:bg-accent/20",

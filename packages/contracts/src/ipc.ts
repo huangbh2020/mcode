@@ -13,6 +13,71 @@ import type { CodexProviderPublic } from "./codexModel.js";
 import type { ThemeName, EffectiveTheme, ThemeChangedMessage } from "./theme.js";
 import type { PairingStartResult, PairedDevice } from "./mobile.js";
 import type { RelayStatus, RelayVpsConfig, RelayVpsConfigInput } from "./relay.js";
+import type {
+  PluginState,
+  PluginMarketplaceState,
+  PluginsInstallLocalInput,
+  PluginsInstallGitInput,
+  PluginsInstallMarketplaceInput,
+  PluginsSetEnabledInput,
+  PluginsRemoveInput,
+  PluginsMarketplaceAddInput,
+  PluginsMarketplaceRemoveInput,
+  PluginsMarketplaceRefreshInput,
+} from "./plugin.js";
+
+// Re-export the plugin contracts so consumers can import from "@contracts/ipc"
+// (mirrors the relay.ts pattern).
+export {
+  BUILTIN_MARKETPLACES,
+  PLUGINS_ENABLED_SETTING_KEY,
+  PLUGINS_MARKETPLACES_SETTING_KEY,
+  PLUGINS_MCP_DISABLED_SETTING_KEY,
+  PLUGIN_MANIFEST_DIRS,
+  PLUGIN_NAME_RE,
+  PluginManifestSchema,
+  PluginMarketEntrySourceSchema,
+  PluginMarketEntrySchema,
+  PluginMarketplaceManifestSchema,
+  PluginsListSchema,
+  PluginsInstallLocalSchema,
+  PluginsInstallGitSchema,
+  PluginsInstallMarketplaceSchema,
+  PluginsSetEnabledSchema,
+  PluginsRemoveSchema,
+  PluginsMarketplaceListSchema,
+  PluginsMarketplaceAddSchema,
+  PluginsMarketplaceRemoveSchema,
+  PluginsMarketplaceRefreshSchema,
+} from "./plugin.js";
+export type {
+  PluginManifest,
+  PluginMarketEntrySource,
+  PluginMarketplaceManifest,
+  PluginSkillSummary,
+  PluginCommandSummary,
+  PluginAgentSummary,
+  PluginHookSummary,
+  PluginMcpKind,
+  PluginMcpServerSummary,
+  PluginComponents,
+  PluginSourceKind,
+  PluginSourceInfo,
+  PluginState,
+  PluginMarketplaceRecord,
+  PluginMarketEntry,
+  PluginMarketplaceState,
+  PluginsListInput,
+  PluginsInstallLocalInput,
+  PluginsInstallGitInput,
+  PluginsInstallMarketplaceInput,
+  PluginsSetEnabledInput,
+  PluginsRemoveInput,
+  PluginsMarketplaceListInput,
+  PluginsMarketplaceAddInput,
+  PluginsMarketplaceRemoveInput,
+  PluginsMarketplaceRefreshInput,
+} from "./plugin.js";
 
 // Re-export relay types so consumers can import from "@contracts/ipc".
 export type {
@@ -1388,6 +1453,12 @@ const AuthModeSchema = z.enum(["auth_token", "api_key"]);
 
 const ProtocolSchema = z.enum(["anthropic", "openai"]);
 
+/** Extra request headers for a custom endpoint, keyed by header name. Shape
+ *  only — names/values are validated in main (see
+ *  `providers/upstreamHeaders.ts`), which owns the delivery rules and drops
+ *  entries a gateway would reject instead of failing the whole save. */
+const CustomHeadersSchema = z.record(z.string(), z.string());
+
 /** Save (create or update) a custom-model config. On update, an omitted
  *  `authToken` keeps the existing stored token; on create, `authToken` is
  *  required. At least one model entry is required. */
@@ -1404,6 +1475,7 @@ export const SaveCustomModelSchema = z.object({
   subagentModel: z.string().optional(),
   disableNonEssentialTraffic: z.boolean().optional(),
   timeoutMs: z.number().optional(),
+  customHeaders: CustomHeadersSchema.optional(),
 });
 export type SaveCustomModelInput = CustomModelInput;
 
@@ -1424,6 +1496,9 @@ export const TestCustomModelSchema = z.object({
   supports1m: z.boolean().optional(),
   disableNonEssentialTraffic: z.boolean().optional(),
   timeoutMs: z.number().optional(),
+  /** Headers to probe with, so an endpoint that requires one (and would
+   *  otherwise fail the test) can be verified before saving. */
+  customHeaders: CustomHeadersSchema.optional(),
 });
 export type TestCustomModelInput = z.infer<typeof TestCustomModelSchema>;
 
@@ -2425,7 +2500,11 @@ export interface GitWorktreeRemoveResult {
  *  and the user sends it as a normal turn (SDK is started with
  *  `skills: "all"`, so the agent recognizes and runs the skill). */
 
-export type SkillSource = "global" | "project";
+/** Where a composer skill was discovered. "plugin" = contributed by an
+ *  ENABLED plugin (read-only inventory: the composer menu lists it and the
+ *  SDK loads it per-turn, but it has no user-editable file root — the skills
+ *  read/save/delete handlers reject this source). */
+export type SkillSource = "global" | "project" | "plugin";
 
 /** One registered AI backend surfaced to the renderer via `provider.list`.
  *  The capabilities descriptor drives which composer chips / dropdown entries
@@ -2689,8 +2768,11 @@ export interface McpManagementState {
   projectEnabled?: Array<{ projectPath: string; name: string }>;
 }
 
-/** Which source a listed MCP server comes from. */
-export type McpScope = "user" | "project" | "builtin";
+/** Which source a listed MCP server comes from. "plugin" = contributed by an
+ *  enabled plugin (namespaced `<plugin>__<server>`); toggling it flips the
+ *  per-server entry on the plugins.mcpDisabled list without touching the
+ *  plugin's own enable state. */
+export type McpScope = "user" | "project" | "builtin" | "plugin";
 
 /** Transport kind shown in the panel badges; "builtin" = in-process server. */
 export type McpKind = "stdio" | "http" | "sse" | "builtin";
@@ -2704,6 +2786,21 @@ export interface McpServerEntry {
   kind: McpKind;
   detail: string;
   enabled: boolean;
+  /** Remote (http/sse) server that requires an OAuth login and holds no
+   *  usable token, so its tools stay unavailable until the user completes the
+   *  browser login — surfaced as an amber badge + a 去授权 action.
+   *
+   *  Two sources: the CLI's mcp-needs-auth-cache.json (written on an actual
+   *  401 while connecting) and a proactive probe of the endpoint, so the entry
+   *  appears before the first turn stumbles into it. Beats `authorized`. */
+  needsAuth?: boolean;
+  /** Remote server holding a stored OAuth token (the CLI's credential store —
+   *  `.credentials.json` on win/linux, the macOS Keychain on darwin). Shows an
+   *  "authorized" badge + a sign-out action in the panel. Mutually exclusive
+   *  with needsAuth, and loses to it: needsAuth is written on a real 401 while
+   *  connecting, so a stored token the runtime can't use (wrong credential
+   *  key, expired, revoked) must not mask an unauthenticated server. */
+  authorized?: boolean;
 }
 
 /** List MCP servers for the settings panel. `projectPath` scopes the project
@@ -2714,14 +2811,49 @@ export const McpListSchema = z.object({
 });
 export type McpListInput = z.infer<typeof McpListSchema>;
 
-/** Toggle a server. `projectPath` is required for scope "project". */
+/** Toggle a server. `projectPath` is required for scope "project". Scope
+ *  "plugin" toggles one plugin-contributed server (plugins.mcpDisabled). */
 export const McpToggleSchema = z.object({
   name: z.string().min(1),
-  scope: z.enum(["user", "project", "builtin"]),
+  scope: z.enum(["user", "project", "builtin", "plugin"]),
   projectPath: z.string().optional(),
   enabled: z.boolean(),
 });
 export type McpToggleInput = z.infer<typeof McpToggleSchema>;
+
+/** Run the OAuth browser login for a remote (http/sse) MCP server via the
+ *  Claude CLI (`claude mcp login`). The server is registered under exactly
+ *  `name` (the namespaced `<plugin>__<server>` form for plugin servers) for
+ *  the duration of the flow and restored afterwards; the token itself persists
+ *  in the CLI's credential store.
+ *
+ *  `url`/`kind` are only a fallback identity. The CLI keys OAuth credentials by
+ *  a hash of the server NAME plus its `{ type, url, headers }`, so the main
+ *  process resolves the server's real config by name across every source
+ *  (user file / disable stash / plugin / project .mcp.json) and re-registers it
+ *  verbatim — headers included. Registering a stripped config would store the
+ *  token under a key the per-turn injected server never looks up. */
+export const McpAuthorizeSchema = z.object({
+  name: z.string().min(1),
+  url: z.string().url(),
+  kind: z.enum(["http", "sse"]),
+  /** Source the clicked row came from. Scopes the main-side config lookup so a
+   *  name shared by two sources (a user and a project server both called
+   *  "github") resolves to the config that row actually points at — picking the
+   *  other one's url/headers would file the token under a key the server never
+   *  looks up. */
+  scope: z.enum(["user", "project", "builtin", "plugin"]).optional(),
+  /** Project whose .mcp.json the row came from (scope "project"). */
+  projectPath: z.string().optional(),
+});
+export type McpAuthorizeInput = z.infer<typeof McpAuthorizeSchema>;
+
+/** Clear the stored OAuth token (`claude mcp logout`). Same identity shape as
+ *  authorize — the CLI resolves the server from the config file and keys the
+ *  credentials by name + url + headers, so the same real-config registration
+ *  applies. */
+export const McpUnauthorizeSchema = McpAuthorizeSchema;
+export type McpUnauthorizeInput = McpAuthorizeInput;
 
 /** MCP server name charset — same family as skill names (letters, digits,
  *  underscore, hyphen). The name becomes a JSON object key, not a path, but
@@ -4119,6 +4251,11 @@ export interface RpcMap {
    *  file and the management stash; project/builtin update the management
    *  state. Takes effect on the next turn. */
   "mcp.toggle": (input: McpToggleInput) => Promise<{ ok: boolean; error?: string }>;
+  /** Run the OAuth browser login for a remote MCP server (claude mcp login).
+   *  Opens the system browser; resolves when the CLI reports the flow done. */
+  "mcp.authorize": (input: McpAuthorizeInput) => Promise<{ ok: boolean; error?: string }>;
+  /** Clear a remote MCP server's stored OAuth token (claude mcp logout). */
+  "mcp.unauthorize": (input: McpUnauthorizeInput) => Promise<{ ok: boolean; error?: string }>;
   /** Add a user-scope server (writes into ~/.mcode/.claude.json). */
   "mcp.save": (input: McpSaveInput) => Promise<{ ok: boolean; error?: string }>;
   /** Remove a user-scope server (from both the config file and the stash). */
@@ -4194,6 +4331,42 @@ export interface RpcMap {
   /** Delete an installed runtime from disk. Rejected while any turn is
    *  running. */
   "runtimes.remove": (input: RuntimesRemoveInput) => Promise<{ ok: boolean; error?: string }>;
+  // ── Plugins (settings panel; docs/plugin-feasibility.md v1) ──
+  /** List installed plugins (manifest + component summaries + enable state).
+   *  Enabled plugins are delivered to providers at the next turn start. */
+  "plugins.list": () => Promise<{ plugins: PluginState[] }>;
+  /** Install from a local plugin directory or .zip. Lands DISABLED; the
+   *  renderer shows the component-review dialog and calls setEnabled. */
+  "plugins.installLocal": (
+    input: PluginsInstallLocalInput,
+  ) => Promise<{ ok: boolean; error?: string; plugin?: PluginState }>;
+  /** Install by shallow-cloning a git repository. Same review flow. */
+  "plugins.installGit": (
+    input: PluginsInstallGitInput,
+  ) => Promise<{ ok: boolean; error?: string; plugin?: PluginState }>;
+  /** Install one entry of a user-added marketplace. Same review flow. */
+  "plugins.installMarketplace": (
+    input: PluginsInstallMarketplaceInput,
+  ) => Promise<{ ok: boolean; error?: string; plugin?: PluginState }>;
+  /** Enable/disable a plugin for subsequent turns. */
+  "plugins.setEnabled": (input: PluginsSetEnabledInput) => Promise<{ ok: boolean; error?: string }>;
+  /** Uninstall every installed version of a plugin. Rejected while any turn
+   *  is running. */
+  "plugins.remove": (input: PluginsRemoveInput) => Promise<{ ok: boolean; error?: string }>;
+  /** List user-added marketplaces with their parsed entries. */
+  "plugins.marketplaceList": () => Promise<{ marketplaces: PluginMarketplaceState[] }>;
+  /** Add a marketplace (git URL or local directory). */
+  "plugins.marketplaceAdd": (
+    input: PluginsMarketplaceAddInput,
+  ) => Promise<{ ok: boolean; error?: string }>;
+  /** Remove a marketplace (cloned tree deleted; installed plugins stay). */
+  "plugins.marketplaceRemove": (
+    input: PluginsMarketplaceRemoveInput,
+  ) => Promise<{ ok: boolean; error?: string }>;
+  /** Re-fetch a marketplace's tree. */
+  "plugins.marketplaceRefresh": (
+    input: PluginsMarketplaceRefreshInput,
+  ) => Promise<{ ok: boolean; error?: string }>;
   // ── Mobile companion (LAN pairing + device management) ──
   /** Begin a pairing session: returns QR URL + 6-digit code + endpoint.
    *  Optional `host` overrides auto-detected LAN IP (for multi-NIC machines
@@ -4436,6 +4609,8 @@ export const IPC = {
   // MCP management (settings panel): list / toggle / add / remove / import
   MCP_LIST: "mcp:list",
   MCP_TOGGLE: "mcp:toggle",
+  MCP_AUTHORIZE: "mcp:authorize",
+  MCP_UNAUTHORIZE: "mcp:unauthorize",
   MCP_SAVE: "mcp:save",
   MCP_REMOVE: "mcp:remove",
   MCP_SCAN_IMPORT: "mcp:scanImport",
@@ -4465,6 +4640,19 @@ export const IPC = {
   RUNTIMES_INSTALL_LOCAL: "runtimes:installLocal",
   RUNTIMES_REMOVE: "runtimes:remove",
   RUNTIMES_EVENT: "runtimes:event",
+  // Plugins (settings panel): list/install (local/git/marketplace)/enable/
+  // remove + marketplace management. No push channel — every RPC resolves
+  // when done and the panel re-lists.
+  PLUGINS_LIST: "plugins:list",
+  PLUGINS_INSTALL_LOCAL: "plugins:installLocal",
+  PLUGINS_INSTALL_GIT: "plugins:installGit",
+  PLUGINS_INSTALL_MARKETPLACE: "plugins:installMarketplace",
+  PLUGINS_SET_ENABLED: "plugins:setEnabled",
+  PLUGINS_REMOVE: "plugins:remove",
+  PLUGINS_MARKETPLACE_LIST: "plugins:marketplaceList",
+  PLUGINS_MARKETPLACE_ADD: "plugins:marketplaceAdd",
+  PLUGINS_MARKETPLACE_REMOVE: "plugins:marketplaceRemove",
+  PLUGINS_MARKETPLACE_REFRESH: "plugins:marketplaceRefresh",
   // Mobile companion (LAN pairing + device management) — invoke/handle (RPC).
   MOBILE_START_PAIRING: "mobile:startPairing",
   MOBILE_GET_PAIRING: "mobile:getPairing",

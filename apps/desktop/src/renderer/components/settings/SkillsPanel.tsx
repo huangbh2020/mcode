@@ -73,8 +73,12 @@ const EMPTY_PANEL_SKILLS: SkillInfo[] = [];
 /** Selection in the left list. `"new"` = the transient create entry;
  *  `null` = empty state. An existing skill is keyed by `${source}:${name}`
  *  (a name can appear under both global + project; the key disambiguates). */
+/** The scopes this editor can read/write. Plugin-contributed skills are
+ *  excluded — they're read-only inventory owned by the Plugins panel. */
+type EditableSkillSource = Exclude<SkillSource, "plugin">;
+
 type Selection =
-  | { kind: "skill"; source: SkillSource; name: string }
+  | { kind: "skill"; source: EditableSkillSource; name: string }
   | { kind: "new" }
   | null;
 
@@ -82,13 +86,13 @@ interface NewForm {
   /** Where the skill will be created: project dir or the global ~/.mcode/skills.
    *  Defaults to "project" (current behavior); forced to "global" when no
    *  project exists at all (the only creatable scope then). */
-  scope: SkillSource;
+  scope: EditableSkillSource;
   name: string;
   description: string;
   body: string;
 }
 
-function emptyNewForm(scope: SkillSource): NewForm {
+function emptyNewForm(scope: EditableSkillSource): NewForm {
   return { scope, name: "", description: "", body: "" };
 }
 
@@ -132,8 +136,12 @@ export function SkillsPanel() {
       // Show both project-scoped and global skills. Global skills live under
       // ~/.mcode/skills (populated by the Import feature or the new-skill
       // form's global scope) and are editable/deletable here the same way
-      // project skills are.
-      setPanelSkills(skills.length ? skills : EMPTY_PANEL_SKILLS);
+      // project skills are. Plugin-contributed skills are excluded — they
+      // are read-only inventory owned by the Plugins panel (install/enable/
+      // uninstall there), and this editor's save/delete would reject them.
+      setPanelSkills(
+        skills.length ? skills.filter((s) => s.source !== "plugin") : EMPTY_PANEL_SKILLS,
+      );
     } catch (err) {
       console.error("SkillsPanel load failed:", err);
       setPanelSkills(EMPTY_PANEL_SKILLS);
@@ -165,7 +173,7 @@ export function SkillsPanel() {
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [pendingDelete, setPendingDelete] = useState<SkillInfo | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<{ source: EditableSkillSource; name: string } | null>(null);
   // Import dialog open state.
   const [importOpen, setImportOpen] = useState(false);
 
@@ -180,7 +188,9 @@ export function SkillsPanel() {
   }, [loadPanelSkills, managedProjectId, activeProjectId, reloadSkills]);
 
   const startEdit = async (skill: SkillInfo) => {
-    setSelected({ kind: "skill", source: skill.source, name: skill.name });
+    // Plugin rows are filtered out of panelSkills, so the wide SkillSource
+    // can only be global|project here.
+    setSelected({ kind: "skill", source: skill.source as EditableSkillSource, name: skill.name });
     setNewForm(null);
     setError(null);
     setLoading(true);
@@ -188,7 +198,9 @@ export function SkillsPanel() {
     try {
       const { content } = await api.skills.read({
         projectPath: projectPath ?? undefined,
-        source: skill.source,
+        // Plugin rows are filtered out of panelSkills — only editable
+        // sources reach this call.
+        source: skill.source as Exclude<SkillSource, "plugin">,
         name: skill.name,
       });
       setEditContent(content);
@@ -486,7 +498,10 @@ export function SkillsPanel() {
                 const target = panelSkills.find(
                   (s) => s.source === selected.source && s.name === selected.name,
                 );
-                if (target) setPendingDelete(target);
+                // selected is editable-scope; the found row matches it.
+                if (target) {
+                  setPendingDelete({ source: target.source as EditableSkillSource, name: target.name });
+                }
               }}
             />
           ) : null}
@@ -641,7 +656,7 @@ function NewSkillForm({
   const update = <K extends keyof NewForm>(key: K, value: NewForm[K]) =>
     setForm((prev) => (prev ? { ...prev, [key]: value } : prev));
   const { t } = useI18n();
-  const scopes: Array<{ value: SkillSource; label: string; disabled?: boolean }> = [
+  const scopes: Array<{ value: EditableSkillSource; label: string; disabled?: boolean }> = [
     { value: "project", label: t("settings.skills.sourceProject"), disabled: !canUseProject },
     { value: "global", label: t("settings.skills.sourceGlobal") },
   ];

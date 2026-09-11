@@ -354,6 +354,13 @@ export interface TurnMeta {
   /** Wall-clock ms when the turn ended (turn.done / error). Undefined while
    *  the turn is still streaming — the renderer treats this as "live". */
   endedAt?: number;
+  /** Model this turn was SENT with (the composer's resolved send-model id,
+   *  e.g. "deepseek-flash" / "claude-sonnet-4-5"), stamped from the send-time
+   *  anchor at turn creation. Recorded per turn because the model can change
+   *  between turns — the stream shows which model produced each reply.
+   *  Undefined for turns that predate this field (they render without it) and
+   *  for turns opened by something other than a send (resumed/legacy). */
+  model?: string;
 }
 
 /**
@@ -801,6 +808,14 @@ export interface SessionState {
    *  NOT persisted - it's transient: cleared on turn.done / error / interrupt
    *  / session delete, alongside runningBySession. */
   runningTurnStartedAt: Record<string, number>;
+  /** Send-time MODEL anchor: the resolved model id the in-flight turn was sent
+   *  with (see resolveSendModel). Consumed by the same three isNewTurn stamping
+   *  sites as runningTurnStartedAt to write `turnMeta.model`, so the stream can
+   *  show which model produced each turn even though the composer's selection
+   *  can change between turns. Read at CREATE time only — unlike the requested
+   *  config it can't be retroactively changed by a later model switch.
+   *  NOT persisted — transient, same lifetime as runningTurnStartedAt. */
+  runningTurnModelBySession: Record<string, string>;
   /** Per-session "用户已手动停止"哨兵。interrupt() 置位,下一个真正启动的
    *  turn (sendPrompt / editAndResendMessage) 清除。存活期间,迟到的
    *  subagent.update / turn.done 不得复活 running 子代理或保留 running roster
@@ -952,8 +967,8 @@ export interface SessionState {
    *  or "wt-branch" (isolated checkout on a generated `mcode/*` branch —
    *  real feature work). The worktree materializes on the first turn.
    *  Persisted (settings key `session.worktreeDefault`, same three-value
-   *  strings; the legacy boolean "true" hydrates as "wt-detached") so the
-   *  choice sticks across restarts. Flipping the chip while the ACTIVE
+   *  strings) so the choice sticks across restarts. Flipping the chip while
+   *  the ACTIVE
    *  session is still an un-materialized intent edits THAT session instead
    *  (see setEnvChoice) — the slot itself only seeds new rows. */
   envChoice: EnvChoice;
@@ -2630,6 +2645,8 @@ function dropSessionBuckets(s: SessionState, id: string) {
   delete runningBySession[id];
   const runningTurnStartedAt = { ...s.runningTurnStartedAt };
   delete runningTurnStartedAt[id];
+  const runningTurnModelBySession = { ...s.runningTurnModelBySession };
+  delete runningTurnModelBySession[id];
   const turnErrorBySession = { ...s.turnErrorBySession };
   delete turnErrorBySession[id];
   const interruptedBySession = { ...s.interruptedBySession };
@@ -2687,6 +2704,7 @@ function dropSessionBuckets(s: SessionState, id: string) {
     historyLoadedBySession,
     runningBySession,
     runningTurnStartedAt,
+    runningTurnModelBySession,
     turnErrorBySession,
     interruptedBySession,
     upstreamIssueBySession,
@@ -2953,6 +2971,8 @@ function syncConfigFromSession(
   // Same idea for the session's worktree group: activating a thread bound to
   // an isolated checkout must reveal the group node it buckets under,
   // otherwise the newly-active row stays invisible inside a collapsed group.
+  // Groups are COLLAPSED by default, so this reveal is the "where am I" cue —
+  // it opens only the group the user just landed in, never the others.
   if (sess.worktreePath && !get().expandedWorktrees[normWorktreeKey(sess.worktreePath)]) {
     patch.expandedWorktrees = {
       ...get().expandedWorktrees,
@@ -3562,6 +3582,9 @@ function upsertLivePlanBlock(
    *  turn's turnMeta, so the real row continues the synthesized pendingTurn
    *  row's timing seamlessly. Omitted on the cleared-phase path. */
   startedAtAnchor?: number,
+  /** Send-time model anchor (runningTurnModelBySession) stamped alongside the
+   *  timing, so a plan-first turn still records which model ran it. */
+  modelAnchor?: string,
 ): ChatMessage[] {
   if (phase === "cleared") {
     // Remove any live plan block from the current turn's trailing assistant
@@ -3602,7 +3625,9 @@ function upsertLivePlanBlock(
       createdAt: Date.now(),
       // Prefer the send-time anchor so timing is continuous with the
       // synthesized pendingTurn row; fall back to now if none was passed.
-      ...(isNewTurn ? { turnMeta: { startedAt: startedAtAnchor ?? Date.now() } } : {}),
+      ...(isNewTurn
+        ? { turnMeta: { startedAt: startedAtAnchor ?? Date.now(), model: modelAnchor } }
+        : {}),
     };
     next = [...next, msg];
     // A new plan-mode turn is opening → demote any prior latest turn-files
@@ -3819,6 +3844,8 @@ function appendCompactSummaryBlock(
   messages: ChatMessage[],
   block: Block,
   startedAt: number,
+  /** Send-time model anchor (see upsertLivePlanBlock.modelAnchor). */
+  model?: string,
 ): ChatMessage[] {
   // Look for an OPEN turn's trailing assistant message (turnMeta present,
   // endedAt undefined = turn.done hasn't landed). This is the correct target
@@ -3841,7 +3868,7 @@ function appendCompactSummaryBlock(
     role: "assistant",
     blocks: [block],
     createdAt: Date.now(),
-    turnMeta: { startedAt },
+    turnMeta: { startedAt, model },
   };
   return [...messages, opener];
 }
@@ -4037,7 +4064,14 @@ function flushDeltas(): void {
             role: "assistant",
             blocks: [],
             createdAt: Date.now(),
-            ...(isNewTurn ? { turnMeta: { startedAt } } : {}),
+            ...(isNewTurn
+              ? {
+                  turnMeta: {
+                    startedAt,
+                    model: useSessionStore.getState().runningTurnModelBySession[sid],
+                  },
+                }
+              : {}),
           };
           next = [...next, msg];
           // A new turn is opening → demote the previous "latest" turn-files
@@ -4255,6 +4289,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     historyLoadedBySession: {},
   runningBySession: {},
   runningTurnStartedAt: {},
+  runningTurnModelBySession: {},
   turnErrorBySession: {},
   // Stream sidebar cache: empty + dirty so the first mount fetches.
   streamSessions: [],
@@ -4429,14 +4464,13 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
     // Composer's default working environment for new sessions. Folded into
     // the first-paint batch so the chip renders correctly on frame one.
-    // Values are the EnvChoice strings; the pre-forms boolean era persisted
-    // "true"/"false" — "true" hydrates as the detached worktree default.
+    // Only the EnvChoice strings hydrate; anything else (including the
+    // legacy boolean era's "true"/"false") is ignored and the factory
+    // default "local" stands — new sessions start in the project root.
     try {
       const value = fp[SESSION_WORKTREE_DEFAULT_SETTING_KEY];
       if (value === "local" || value === "wt-detached" || value === "wt-branch") {
         set({ envChoice: value });
-      } else if (value === "true") {
-        set({ envChoice: "wt-detached" });
       }
     } catch (err) {
       console.error("apply(envChoice) failed:", err);
@@ -5196,14 +5230,14 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
   // Worktree group nodes hold few sessions (one directory, few threads), so
   // unlike toggleProjectExpanded there is no pagination cache to reset — a
-  // pure expand-state flip. Groups render EXPANDED by default (absent key),
-  // so the flip is computed against `!== false`, not the raw falsy value:
-  // flipping an untouched (undefined) group must COLLAPSE it, not write true.
+  // pure expand-state flip. Groups render COLLAPSED by default (absent key),
+  // so the flip tests plain truthiness: flipping an untouched (undefined)
+  // group OPENS it, flipping an open one folds it back.
   toggleWorktreeExpanded: (worktreePath) =>
     set((s) => {
       const key = normWorktreeKey(worktreePath);
       return {
-        expandedWorktrees: { ...s.expandedWorktrees, [key]: !(s.expandedWorktrees[key] !== false) },
+        expandedWorktrees: { ...s.expandedWorktrees, [key]: !s.expandedWorktrees[key] },
       };
     }),
 
@@ -5351,9 +5385,10 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           activeProjectId: projectId,
           activeSessionId: session.id,
           expandedProjects: { ...s.expandedProjects, [projectId]: true },
-          // The new thread's group must be visible: groups render expanded by
-          // default, the explicit true is a harmless no-op (kept for parity
-          // with the local path below).
+          // The new thread's group must be visible: groups render collapsed by
+          // default, so this explicit true is what opens the group the freshly
+          // created thread landed in (a "+" on a folded worktree header must
+          // not spawn an invisible thread).
           expandedWorktrees: {
             ...s.expandedWorktrees,
             [normWorktreeKey(session.worktreePath)]: true,
@@ -6312,6 +6347,13 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       // `createdAt >= anchor` filter can never tick past the user message
       // and drop it from the persisted tail on a millisecond boundary.
       runningTurnStartedAt: { ...s.runningTurnStartedAt, [sessionId]: userMsg.createdAt },
+      // Model anchor: the exact model id this turn is being sent with. Stamped
+      // into turnMeta by the isNewTurn sites so the stream can show which model
+      // produced each reply (the composer's selection may change next turn).
+      runningTurnModelBySession: {
+        ...s.runningTurnModelBySession,
+        [sessionId]: resolvedModel.model,
+      },
       // A new turn supersedes any prior manual interrupt: clear the sentinel
       // so subagent.update / turn.done events for THIS turn aren't filtered.
       interruptedBySession: { ...s.interruptedBySession, [sessionId]: false },
@@ -6368,7 +6410,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           const runningBySession = { ...s.runningBySession, [sessionId]: false };
           const runningTurnStartedAt = { ...s.runningTurnStartedAt };
           delete runningTurnStartedAt[sessionId];
-          return { runningBySession, runningTurnStartedAt };
+          const runningTurnModelBySession = { ...s.runningTurnModelBySession };
+          delete runningTurnModelBySession[sessionId];
+          return { runningBySession, runningTurnStartedAt, runningTurnModelBySession };
         });
         // IPC rejected → no terminal event will arrive to clear the turn, so
         // also try draining the queue here (the session is now idle).
@@ -6506,6 +6550,11 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       // Same anchor rule as sendPrompt: reuse userMsg.createdAt so the
       // turn-done incremental persist can never filter out the user message.
       runningTurnStartedAt: { ...s.runningTurnStartedAt, [sessionId]: userMsg.createdAt },
+      // Same model anchor rule as sendPrompt (a resend re-resolves the model).
+      runningTurnModelBySession: {
+        ...s.runningTurnModelBySession,
+        [sessionId]: resolvedModel.model,
+      },
       // A new turn supersedes any prior manual interrupt: clear the sentinel
       // so subagent.update / turn.done events for THIS turn aren't filtered.
       interruptedBySession: { ...s.interruptedBySession, [sessionId]: false },
@@ -6568,7 +6617,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           const runningBySession = { ...s.runningBySession, [sessionId]: false };
           const runningTurnStartedAt = { ...s.runningTurnStartedAt };
           delete runningTurnStartedAt[sessionId];
-          return { runningBySession, runningTurnStartedAt };
+          const runningTurnModelBySession = { ...s.runningTurnModelBySession };
+          delete runningTurnModelBySession[sessionId];
+          return { runningBySession, runningTurnStartedAt, runningTurnModelBySession };
         });
         get().drainPromptQueueIfIdle(sessionId);
         return;
@@ -6982,7 +7033,17 @@ export const useSessionStore = create<SessionState>((set, get) => ({
             // A session created on another client — or a worktree row that
             // just degraded back to local (directory removal) — materialize
             // it at the head of the local window; the local total grows.
-            next = [materializeSessionEntry(entry), ...local, ...worktree];
+            // Merge over the cached row (whichever section it sat in) so a
+            // degraded worktree row keeps its heavy payloads, and drop the
+            // stale copy it left behind: keeping the old worktree-bound row
+            // alive would re-bucket it into its dead worktree group and the
+            // left bar would keep rendering the removed worktree.
+            const prevRow = activeList.find((x) => x.id === entry.id);
+            next = [
+              prevRow ? { ...prevRow, ...entry } : materializeSessionEntry(entry),
+              ...local.filter((x) => x.id !== entry.id),
+              ...worktree.filter((x) => x.id !== entry.id),
+            ];
             patch.sessionsTotalByProject = {
               ...s.sessionsTotalByProject,
               [entry.projectId]: (s.sessionsTotalByProject[entry.projectId] ?? 0) + 1,
@@ -7142,7 +7203,14 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       set((s) => {
         const list = s.messagesBySession[sid] ?? EMPTY_MESSAGES;
         const hasApproval = !!s.pendingPlanApprovalBySession[sid];
-        const next = upsertLivePlanBlock(list, e.plan, e.phase, hasApproval, s.runningTurnStartedAt[sid] ?? Date.now());
+        const next = upsertLivePlanBlock(
+          list,
+          e.plan,
+          e.phase,
+          hasApproval,
+          s.runningTurnStartedAt[sid] ?? Date.now(),
+          s.runningTurnModelBySession[sid],
+        );
         return {
           planBySession: {
             ...s.planBySession,
@@ -7315,7 +7383,14 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         // payload — re-sync the inline block so it shows exactly what the
         // user is being asked to approve (phase stays "ready" per the prior
         // plan.update emitted by the adapter on ExitPlanMode).
-        const next = upsertLivePlanBlock(list, e.plan, "ready", true, s.runningTurnStartedAt[sid] ?? Date.now());
+        const next = upsertLivePlanBlock(
+          list,
+          e.plan,
+          "ready",
+          true,
+          s.runningTurnStartedAt[sid] ?? Date.now(),
+          s.runningTurnModelBySession[sid],
+        );
         return {
           pendingPlanApprovalBySession: {
             ...s.pendingPlanApprovalBySession,
@@ -7391,7 +7466,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         // seamlessly - same pattern as tool.use / text.delta. Falls back to
         // now if the anchor is missing (resumed/legacy turn).
         const startedAt = s.runningTurnStartedAt[sid] ?? Date.now();
-        const next = appendCompactSummaryBlock(list, block, startedAt);
+        const next = appendCompactSummaryBlock(list, block, startedAt, s.runningTurnModelBySession[sid]);
         return next === list
           ? s
           : { messagesBySession: { ...s.messagesBySession, [sid]: next } };
@@ -7546,7 +7621,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
               role: "assistant",
               blocks: [],
               createdAt: Date.now(),
-              ...(isNewTurn ? { turnMeta: { startedAt } } : {}),
+              ...(isNewTurn
+                ? { turnMeta: { startedAt, model: s.runningTurnModelBySession[sid] } }
+                : {}),
             };
             next = [...next, lastAssistant];
             // A new turn opened (no prior open-turn assistant message) — demote
@@ -7712,7 +7789,13 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           }));
           // Stamp the turn's end time on its first assistant message so
           // the per-turn "工作时长" stat row freezes (stops ticking live).
-          const endedAt = Date.now();
+          //
+          // Prefer the timestamp main stamped on this event: main files the
+          // turn's usage record under that same instant, and the ledger receipt
+          // finds a turn's token count by matching it. Both processes read the
+          // same system clock, so this stays compatible with the renderer-side
+          // startedAt used for durations. Falls back to now for older senders.
+          const endedAt = e.endedAt ?? Date.now();
           next = next.map((m) =>
             m.turnMeta && m.turnMeta.endedAt === undefined
               ? { ...m, turnMeta: { ...m.turnMeta, endedAt } }
@@ -8678,8 +8761,8 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     }
     // No session in the foreground (empty state) — or the session is already
     // materialized (locked; the UI disables switching): fall through to the
-    // persisted DEFAULT for new sessions. Stored as the EnvChoice string
-    // (the legacy "true"/"false" values still hydrate — see init).
+    // persisted DEFAULT for new sessions. Stored as the EnvChoice string;
+    // hydration only accepts those strings (see init).
     void api.setting
       .set({ key: SESSION_WORKTREE_DEFAULT_SETTING_KEY, value: choice })
       .catch((err) => {
@@ -9148,7 +9231,14 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         // on reject it emits phase:"cleared" which removes the block. Either
         // way we flip hasApproval off immediately so the badge doesn't linger.
         const list = s.messagesBySession[sessionId] ?? EMPTY_MESSAGES;
-        const next = upsertLivePlanBlock(list, pending.plan, "ready", false, s.runningTurnStartedAt[sessionId] ?? Date.now());
+        const next = upsertLivePlanBlock(
+          list,
+          pending.plan,
+          "ready",
+          false,
+          s.runningTurnStartedAt[sessionId] ?? Date.now(),
+          s.runningTurnModelBySession[sessionId],
+        );
         // Clear the staged editor draft now that the decision is submitted -
         // the draft only mattered while the approval was pending.
         const { [sessionId]: _dropDraft, ...restDrafts } = s.planApprovalDraftBySession;
@@ -9181,6 +9271,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     // Capture the turn anchor BEFORE interrupt() wipes it, so the badge-flip
     // below lands on the same live plan block the sheet was showing.
     const anchor = s0.runningTurnStartedAt[sessionId] ?? Date.now();
+    const modelAnchor = s0.runningTurnModelBySession[sessionId];
 
     // End the blocked turn WITHOUT answering the ExitPlanMode dialog: the
     // abort means no request.resolved will ever arrive, so clear the local
@@ -9191,7 +9282,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       const { [sessionId]: _drop, ...rest } = s.pendingPlanApprovalBySession;
       const { [sessionId]: _dropDraft, ...restDrafts } = s.planApprovalDraftBySession;
       const list = s.messagesBySession[sessionId] ?? EMPTY_MESSAGES;
-      const next = upsertLivePlanBlock(list, planText, "ready", false, anchor);
+      const next = upsertLivePlanBlock(list, planText, "ready", false, anchor, modelAnchor);
       return {
         pendingPlanApprovalBySession: rest,
         planApprovalDraftBySession: restDrafts,

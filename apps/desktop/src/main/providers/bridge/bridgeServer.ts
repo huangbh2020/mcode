@@ -22,6 +22,12 @@
 import { createServer, type Server, type IncomingMessage, type ServerResponse } from "node:http";
 import { randomBytes } from "node:crypto";
 import { log } from "@main/lib/logger.js";
+import {
+  hasHeader,
+  requiresSessionHeader,
+  resolveUpstreamHeaders,
+  SESSION_HEADER,
+} from "@main/providers/upstreamHeaders.js";
 import { anthropicToOpenAI } from "./requestTranslator.js";
 import { OpenAiToAnthropicSse } from "./responseTranslator.js";
 import type {
@@ -195,17 +201,25 @@ function readJsonBody(req: IncomingMessage): Promise<unknown> {
   });
 }
 
-/** Build the upstream request headers (auth differs between OpenAI & Azure).
+/** Build the upstream request headers (auth differs between OpenAI & Azure),
+ *  then layer the endpoint's own headers on top — the same set the direct
+ *  (anthropic-protocol) path puts on `ANTHROPIC_CUSTOM_HEADERS`, so both paths
+ *  are byte-identical from the gateway's point of view. See
+ *  {@link ../../upstreamHeaders.ts} for the shared policy (sanitizing, and the
+ *  auto session id for gateways that reject requests without one).
  *
- * NOTE: we deliberately do NOT set `Content-Length`. When the body passed to
- * `fetch()` is a string (or Buffer/TypedArray), undici computes it itself.
- * Setting it manually triggers `UND_ERR_INVALID_ARG: invalid content-length
- * header` on the undici 6.x bundled with Electron 33 (Node 20) — undici
- * validates a user-supplied Content-Length against its own derivation and
- * rejects the mismatch. Omitting it lets undici own the value, which is both
- * correct and what every other caller does. The `jsonBody` param is kept only
- * so the signature stays stable (the probe path reuses this shape). */
-function upstreamHeaders(upstream: UpstreamConfig, _jsonBody: string): Record<string, string> {
+ *  User headers are applied LAST and may therefore override the derived
+ *  Content-Type / Authorization — deliberate: a gateway that wants a custom
+ *  auth scheme is exactly the case this field exists for.
+ *
+ *  NOTE: we deliberately do NOT set `Content-Length`. When the body passed to
+ *  `fetch()` is a string (or Buffer/TypedArray), undici computes it itself.
+ *  Setting it manually triggers `UND_ERR_INVALID_ARG: invalid content-length
+ *  header` on the undici 6.x bundled with Electron 33 (Node 20) — undici
+ *  validates a user-supplied Content-Length against its own derivation and
+ *  rejects the mismatch. Omitting it lets undici own the value, which is both
+ *  correct and what every other caller does. */
+function upstreamHeaders(upstream: UpstreamConfig, sessionId: string): Record<string, string> {
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
     Accept: "application/json",
@@ -220,7 +234,7 @@ function upstreamHeaders(upstream: UpstreamConfig, _jsonBody: string): Record<st
     // for the Anthropic env vars; on the OpenAI wire it's always Bearer.
     headers["Authorization"] = `Bearer ${upstream.authToken}`;
   }
-  return headers;
+  return { ...headers, ...resolveUpstreamHeaders(upstream.customHeaders, upstream.baseUrl, sessionId) };
 }
 
 /** Build the full upstream URL, normalizing the path and adding Azure's
@@ -273,11 +287,15 @@ function sendError(res: ServerResponse, status: number, message: string): void {
   );
 }
 
-/** Handle a single `/v1/messages` POST: translate → forward → stream back. */
+/** Handle a single `/v1/messages` POST: translate → forward → stream back.
+ *
+ *  `sessionId` names the upstream's required session header when it wants one
+ *  (see {@link startBridge} for why it is the bridge's id and not a session's). */
 async function handleMessages(
   req: IncomingMessage,
   res: ServerResponse,
   upstream: UpstreamConfig,
+  sessionId: string,
   onStatus?: (s: BridgeStatus) => void,
 ): Promise<void> {
   let body: AnthropicRequest;
@@ -327,7 +345,7 @@ async function handleMessages(
       upstreamUrl,
       {
         method: "POST",
-        headers: upstreamHeaders(upstream, jsonBody),
+        headers: upstreamHeaders(upstream, sessionId),
         body: jsonBody,
       },
       ac.signal,
@@ -458,6 +476,21 @@ export async function startBridge(upstream: UpstreamConfig): Promise<BridgeHandl
       }
     }
   };
+  // Session id for gateways that require one (see upstreamHeaders). The bridge
+  // is shared per config across sessions, and by the time it is built the
+  // config's baseUrl has already been rewritten to this local URL — so the
+  // live-turn env builder can't supply a per-session id to this path. One
+  // stable id per bridge it is: the gateway still sees a single, unchanging
+  // conversation for this endpoint rather than a new one per request, which is
+  // all its routing/prompt-cache contract asks for.
+  const bridgeSessionId = `mcode-${randomBytes(6).toString("hex")}`;
+  if (requiresSessionHeader(upstream.baseUrl)) {
+    log.info(
+      hasHeader(upstream.customHeaders ?? {}, SESSION_HEADER)
+        ? `bridge: upstream requires ${SESSION_HEADER}; using the configured value`
+        : `bridge: upstream requires ${SESSION_HEADER}; injecting a stable id for this bridge (${bridgeSessionId})`,
+    );
+  }
   const server: Server = createServer((req, res) => {
     // The Claude binary POSTs to {baseUrl}/v1/messages. Accept either
     // /v1/messages or a bare /messages for robustness.
@@ -473,7 +506,7 @@ export async function startBridge(upstream: UpstreamConfig): Promise<BridgeHandl
     const rawUrl = req.url ?? "";
     const path = rawUrl.split("?", 2)[0];
     if (req.method === "POST" && (path.endsWith("/v1/messages") || path.endsWith("/messages"))) {
-      handleMessages(req, res, upstream, notifyStatus).catch((err) => {
+      handleMessages(req, res, upstream, bridgeSessionId, notifyStatus).catch((err) => {
         log.error(`bridge: handler threw: ${(err as Error).message}`);
         sendError(res, 500, "internal bridge error");
       });

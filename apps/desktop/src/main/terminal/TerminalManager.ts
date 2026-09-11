@@ -50,8 +50,10 @@ interface LiveTerminal {
 }
 
 /** Lazy-load node-pty so a missing native binary doesn't crash app boot —
- *  failure surfaces on first terminal.create instead. */
-function loadNodePty(): typeof import("node-pty") {
+ *  failure surfaces on first terminal.create instead. Exported for the MCP
+ *  OAuth login flow, which needs a real TTY for `claude mcp login` (the CLI
+ *  refuses authentication when stdin isn't a terminal). */
+export function loadNodePty(): typeof import("node-pty") {
   const mod = require("node-pty") as typeof import("node-pty");
   ensureSpawnHelperExecutable();
   return mod;

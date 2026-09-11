@@ -1,0 +1,1769 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light" data-density="comfortable">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Mcode 聊天流重设计 · 三个方向</title>
+<style>/* ============================================================================
+ * 聊天流重设计 · 交互原型样式
+ *
+ * 分三层:
+ *   1. 令牌层 —— 直接取真实 styles.css 的语义色,保证稿子里的颜色就是产品里的颜色;
+ *      另加一组"动效令牌"(曲线 / 时长 / 错峰),三方案共用。
+ *   2. 纸面层 —— 原型自己的外壳(页头 / 控制条 / 窗口 / 说明区)。
+ *   3. 方案层 —— A 脉络 / B 台账 / C 卡片流,差异只在排布与两态表达,
+ *      原子件(tool 行、状态图标、正文、操作栏)同一套。
+ *
+ * 两态实现原则:所有"结束态"都写在 [data-phase="done"] 下,靠 transition 过渡,
+ * 不换 DOM —— 跑完那一刻是连续收束,不是闪一下。
+ * ========================================================================= */
+
+/* ═══════════════ 1. 令牌 ═══════════════ */
+:root {
+  --surface: 255 255 255;
+  --surface-muted: 240 242 246;
+  --surface-hover: 226 229 235;
+  --content: 9 9 11;
+  --content-muted: 63 63 70;
+  --content-subtle: 113 113 122;
+  --edge: 213 216 222;
+  --panel-edge: 222 225 231;
+  --input-edge: 202 205 212;
+  --accent: 5 150 105;
+  --accent-strong: 4 120 87;
+  --danger: 220 38 38;
+  --warning: 180 83 9;
+  --info: 124 58 237;
+  --success: 4 120 87;
+  --user-bubble: 82 82 91;
+  --user-bubble-alpha: 0.12;
+  --shadow-card: 0 1px 2px rgb(9 9 11 / 0.05);
+  --shadow-pop: 0 14px 40px -12px rgb(9 9 11 / 0.22), 0 2px 8px rgb(9 9 11 / 0.06);
+}
+[data-theme="dark"] {
+  --surface: 26 29 36;
+  --surface-muted: 44 49 60;
+  --surface-hover: 58 64 78;
+  --content: 231 232 236;
+  --content-muted: 188 191 198;
+  --content-subtle: 158 162 171;
+  --edge: 45 51 64;
+  --panel-edge: 40 46 58;
+  --input-edge: 95 99 110;
+  --accent: 16 185 129;
+  --accent-strong: 16 185 129;
+  --danger: 248 113 113;
+  --warning: 251 191 36;
+  --info: 167 139 250;
+  --success: 16 185 129;
+  --user-bubble: 148 163 184;
+  --user-bubble-alpha: 0.16;
+  --shadow-card: 0 1px 2px rgb(0 0 0 / 0.3);
+  --shadow-pop: 0 16px 44px rgb(0 0 0 / 0.55), 0 2px 10px rgb(0 0 0 / 0.35);
+}
+
+/* 动效令牌 —— 三方案共用同一套语汇 */
+:root {
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --dur-fold: 260ms;
+  --dur-enter: 320ms;
+  --stagger: 30ms;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  --chat-fs: 13.5px;
+  --gap-turn: 22px;
+  --gap-block: 7px;
+}
+[data-density="compact"] {
+  --chat-fs: 12.5px;
+  --gap-turn: 14px;
+  --gap-block: 4px;
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+/* 折叠用的 hidden 必须压过组件自身的 display —— 否则 .step/.lnk 这类
+   inline-flex/inline-block 规则(作者样式)会盖掉 UA 的 [hidden]{display:none}。 */
+[hidden] { display: none !important; }
+body {
+  background: rgb(var(--surface-muted));
+  color: rgb(var(--content));
+  font-family: -apple-system, "SF Pro Text", "Segoe UI", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  transition: background 0.25s, color 0.25s;
+}
+button { font-family: inherit; cursor: pointer; }
+code, pre, .mono, .tnum { font-variant-numeric: tabular-nums; }
+
+/* ═══════════════ 2. 纸面层 ═══════════════ */
+.paper { max-width: 1220px; margin: 0 auto; padding: 24px 22px 0; }
+.paper h1 { font-size: 17px; margin: 0 0 8px; font-weight: 700; }
+.psub { margin: 0 0 16px; font-size: 12.5px; line-height: 1.75; color: rgb(var(--content-muted)); max-width: 900px; }
+.psub b { color: rgb(var(--content)); }
+.psub code, .n-list code {
+  font-family: var(--mono); font-size: 11px; background: rgb(var(--surface));
+  border: 1px solid rgb(var(--edge)); border-radius: 4px; padding: 1px 5px;
+}
+
+.ctrlbar {
+  position: sticky; top: 0; z-index: 90; display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+  padding: 9px 13px; margin: 4px 0 16px; border-radius: 13px;
+  background: rgb(var(--surface) / 0.88); backdrop-filter: blur(10px);
+  border: 1px solid rgb(var(--edge)); box-shadow: var(--shadow-card);
+}
+.cg { display: flex; align-items: center; gap: 7px; }
+.cg > label { font-size: 10.5px; font-weight: 700; color: rgb(var(--content-subtle)); letter-spacing: 0.05em; }
+.sep { width: 1px; height: 20px; background: rgb(var(--edge)); }
+.grow { flex: 1; }
+.t-meta { font-size: 11px; color: rgb(var(--content-subtle)); }
+.seg { display: flex; background: rgb(var(--surface-muted)); border: 1px solid rgb(var(--edge) / 0.6); border-radius: 9px; padding: 2px; gap: 2px; }
+.seg button {
+  display: inline-flex; align-items: center; gap: 5px; border: none; background: none;
+  padding: 5px 10px; border-radius: 6px; font-size: 11.5px; font-weight: 600;
+  color: rgb(var(--content-muted)); transition: all 0.16s var(--ease-out);
+}
+.seg button:hover { color: rgb(var(--content)); background: rgb(var(--surface-hover) / 0.7); }
+.seg button[aria-selected="true"] {
+  background: rgb(var(--surface)); color: rgb(var(--accent-strong));
+  box-shadow: 0 0 0 1px rgb(var(--accent) / 0.5), 0 1px 2px rgb(9 9 11 / 0.08);
+}
+
+/* ── 窗口外壳 ── */
+.win {
+  border: 1px solid rgb(var(--edge)); border-radius: 13px; overflow: hidden;
+  background: rgb(var(--surface)); box-shadow: var(--shadow-pop); height: 760px;
+  display: flex; flex-direction: column;
+}
+.tbar {
+  display: flex; align-items: center; gap: 7px; padding: 8px 12px;
+  background: rgb(var(--surface-muted) / 0.7); border-bottom: 1px solid rgb(var(--edge)); flex: none;
+}
+.tl { width: 10px; height: 10px; border-radius: 50%; background: rgb(var(--edge)); }
+.tbar .tt { margin-left: 10px; font-size: 11.5px; color: rgb(var(--content-subtle)); }
+.tbar .tr { margin-left: auto; font-size: 11px; color: rgb(var(--content-subtle)); }
+.tbar .tr b { color: rgb(var(--accent-strong)); }
+.shell { display: flex; min-height: 0; flex: 1; }
+
+.sleft { width: 206px; flex: none; border-right: 1px solid rgb(var(--edge)); padding: 10px 8px; background: rgb(var(--surface-muted) / 0.32); }
+.sl-h { display: flex; align-items: center; gap: 6px; padding: 4px 6px 8px; font-size: 11.5px; font-weight: 600; color: rgb(var(--content-muted)); }
+.sl-h .proj { display: inline-flex; align-items: center; gap: 5px; }
+.sl-h .mini { margin-left: auto; border: none; background: none; color: rgb(var(--content-subtle)); display: inline-flex; padding: 2px; border-radius: 5px; }
+.sl-row { padding: 7px 8px; border-radius: 8px; margin-bottom: 2px; }
+.sl-row.on { background: rgb(var(--accent) / 0.09); box-shadow: inset 0 0 0 1px rgb(var(--accent) / 0.22); }
+.sl-t { font-size: 12px; color: rgb(var(--content-muted)); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sl-row.on .sl-t { color: rgb(var(--content)); font-weight: 600; }
+.sl-s { display: flex; align-items: center; gap: 5px; margin-top: 3px; font-size: 10.5px; color: rgb(var(--content-subtle)); }
+
+.chat { flex: 1; min-width: 0; display: flex; flex-direction: column; background: rgb(var(--surface)); }
+.chat-h { display: flex; align-items: center; gap: 8px; padding: 9px 14px; border-bottom: 1px solid rgb(var(--edge)); flex: none; }
+.ch-t { font-size: 12.5px; font-weight: 600; color: rgb(var(--content-muted)); }
+.ch-r { margin-left: auto; display: flex; gap: 6px; }
+.chip { display: inline-flex; align-items: center; gap: 5px; padding: 3px 8px; border-radius: 999px; font-size: 10.5px; background: rgb(var(--surface-muted)); color: rgb(var(--content-muted)); border: 1px solid rgb(var(--edge) / 0.7); }
+.chip.ghost { background: none; }
+
+.stream { flex: 1; min-height: 0; overflow-y: auto; padding: 16px 20px 10px; scrollbar-width: thin; }
+.stream::-webkit-scrollbar { width: 9px; }
+.stream::-webkit-scrollbar-thumb { background: rgb(var(--edge)); border-radius: 9px; border: 3px solid rgb(var(--surface)); }
+
+.composer {
+  flex: none; margin: 6px 14px 14px; border: 1px solid rgb(var(--input-edge)); border-radius: 12px;
+  padding: 10px 12px; background: rgb(var(--surface));
+  transition: box-shadow 0.3s var(--ease-out), border-color 0.3s;
+}
+.composer[data-running="true"] { border-color: rgb(var(--accent) / 0.45); box-shadow: 0 0 0 3px rgb(var(--accent) / 0.08); }
+.cp-ph { font-size: 12.5px; color: rgb(var(--content-subtle)); }
+.cp-ph kbd { font-family: var(--mono); font-size: 10.5px; border: 1px solid rgb(var(--edge)); border-radius: 4px; padding: 0 4px; background: rgb(var(--surface-muted)); }
+.cp-r { display: flex; align-items: center; gap: 6px; margin-top: 9px; }
+.cp-send { margin-left: auto; width: 26px; height: 26px; border-radius: 8px; border: none; display: inline-flex; align-items: center; justify-content: center; background: rgb(var(--accent)); color: #fff; transition: transform 0.16s var(--spring); }
+.cp-send:hover { transform: scale(1.08); }
+
+.sright { width: 176px; flex: none; border-left: 1px solid rgb(var(--edge)); display: flex; flex-direction: column; background: rgb(var(--surface-muted) / 0.32); }
+.sr-tabs { display: flex; gap: 2px; padding: 8px 8px 4px; }
+.sr-tabs button { flex: 1; border: none; background: none; font-size: 11px; padding: 5px 0; border-radius: 6px; color: rgb(var(--content-subtle)); }
+.sr-tabs button.on { background: rgb(var(--surface)); color: rgb(var(--content)); font-weight: 600; box-shadow: var(--shadow-card); }
+.sr-body { padding: 6px 6px; }
+.sr-f { display: flex; align-items: center; gap: 6px; padding: 6px 7px; border-radius: 7px; font-size: 11.5px; color: rgb(var(--content-muted)); }
+.sr-f:hover { background: rgb(var(--surface-hover) / 0.6); }
+.sr-i { color: rgb(var(--content-subtle)); display: inline-flex; }
+.sr-n { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sr-d { margin-left: auto; font-size: 10.5px; font-family: var(--mono); color: rgb(var(--content-subtle)); }
+.sr-d.mod { color: rgb(var(--success)); }
+.sr-d.new { color: rgb(var(--accent-strong)); }
+
+/* ── 说明区 ── */
+.notes { max-width: 1220px; margin: 16px auto 0; padding: 0 22px 60px; display: grid; gap: 12px; grid-template-columns: 1.25fr 1fr; }
+.ncard { border: 1px solid rgb(var(--edge)); border-radius: 12px; padding: 13px 15px; background: rgb(var(--surface)); box-shadow: var(--shadow-card); }
+.ncard.quiet { background: rgb(var(--surface-muted) / 0.45); }
+.n-h { display: flex; align-items: center; gap: 8px; font-size: 13px; margin-bottom: 6px; }
+.n-lead { margin: 0 0 10px; font-size: 12px; line-height: 1.7; color: rgb(var(--content-muted)); }
+.n-list { margin: 0; padding: 0; list-style: none; display: grid; gap: 8px; }
+.n-list li { display: grid; gap: 2px; font-size: 11.5px; line-height: 1.7; color: rgb(var(--content-muted)); padding-left: 12px; position: relative; }
+.n-list li::before { content: ""; position: absolute; left: 0; top: 8px; width: 4px; height: 4px; border-radius: 50%; background: rgb(var(--accent) / 0.7); }
+.n-list li b { color: rgb(var(--content)); font-size: 12px; }
+.badge { display: inline-flex; align-items: center; gap: 4px; padding: 2px 7px; border-radius: 999px; font-size: 10.5px; font-weight: 600; background: rgb(var(--surface-muted)); color: rgb(var(--content-muted)); }
+.badge.a { background: rgb(var(--accent) / 0.12); color: rgb(var(--accent-strong)); }
+
+@media (max-width: 900px) { .notes { grid-template-columns: 1fr; } }
+
+/* ═══════════════ 3. 聊天流 · 公共 ═══════════════ */
+.turn { max-width: 780px; margin: 0 auto; }
+.turn + .turn { margin-top: var(--gap-turn); }
+.turn.hist { padding-bottom: 18px; border-bottom: 1px dashed rgb(var(--edge)); }
+
+/* 运行角标 / 呼吸点 / 均衡器 / 光标 */
+.live-dot { width: 7px; height: 7px; border-radius: 50%; background: rgb(var(--accent)); flex: none; animation: dot-breathe 1.9s ease-in-out infinite; }
+.eq { display: inline-flex; align-items: flex-end; gap: 2px; height: 11px; }
+.eq i { width: 2.5px; height: 100%; border-radius: 1px; background: rgb(var(--accent)); transform-origin: bottom; animation: eq-bounce 1s ease-in-out infinite; }
+.eq i:nth-child(2) { animation-delay: 0.16s; }
+.eq i:nth-child(3) { animation-delay: 0.32s; }
+.caret { display: inline-block; width: 7px; height: 1.02em; vertical-align: -0.16em; margin-left: 2px; border-radius: 1.5px; background: rgb(var(--accent)); box-shadow: 0 0 8px rgb(var(--accent) / 0.7); animation: caret-blink 1.06s ease-in-out infinite; }
+
+/* 状态图标:运行中圆弧 ←→ 完成对勾,同一格内交叉淡换 */
+.st { position: relative; width: 12px; height: 12px; display: inline-grid; place-items: center; flex: none; }
+.st > span { grid-area: 1 / 1; display: inline-flex; align-items: center; justify-content: center; transition: opacity 0.24s ease, transform 0.32s var(--spring); }
+.st-run > svg { display: none; }
+.st-run { width: 10px; height: 10px; border-radius: 50%; border: 1.6px solid rgb(var(--accent) / 0.26); border-top-color: rgb(var(--accent)); animation: spin 0.72s linear infinite; }
+.st-done { opacity: 0; transform: scale(0.5); color: rgb(var(--accent)); }
+.st-err { opacity: 0; color: rgb(var(--danger)); }
+[data-status="done"] .st-run { opacity: 0; animation: none; }
+[data-status="done"] .st-done { opacity: 1; transform: none; }
+[data-status="error"] .st-run { opacity: 0; animation: none; }
+[data-status="error"] .st-err { opacity: 1; }
+
+/* 涨跌 / 耗时 / 标签 */
+.dst { display: inline-flex; gap: 5px; font-family: var(--mono); font-size: 10.5px; }
+.dst .up { color: rgb(var(--success)); font-weight: 600; }
+.dst .dn { color: rgb(var(--danger)); font-weight: 600; }
+.dur { font-family: var(--mono); font-size: 10.5px; color: rgb(var(--content-subtle)); transition: opacity 0.3s ease; }
+[data-status="running"] .dur { opacity: 0.35; }
+.tag { font-size: 9.5px; padding: 1px 5px; border-radius: 4px; font-weight: 600; }
+.tag.new { background: rgb(var(--accent) / 0.13); color: rgb(var(--accent-strong)); }
+.tag.note { background: rgb(var(--success) / 0.13); color: rgb(var(--success)); }
+.sep { color: rgb(var(--content-subtle)); opacity: 0.6; }
+
+/* 操作按钮 */
+.ab {
+  display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px;
+  border: none; background: none; border-radius: 6px; color: rgb(var(--content-subtle));
+  transition: background 0.16s, color 0.16s, transform 0.16s var(--spring);
+}
+.ab:hover { background: rgb(var(--surface-hover)); color: rgb(var(--content)); transform: translateY(-1px); }
+.ps-chev { display: inline-flex; color: rgb(var(--content-subtle)); transition: transform 0.28s var(--ease-out); }
+.mono-av {
+  width: 26px; height: 26px; border-radius: 9px; flex: none; display: inline-flex; align-items: center; justify-content: center;
+  font-size: 10.5px; font-weight: 800; letter-spacing: 0.02em; color: #fff;
+  background: linear-gradient(140deg, rgb(var(--accent)), rgb(var(--accent-strong)));
+  box-shadow: 0 2px 6px -2px rgb(var(--accent) / 0.7);
+}
+.mono-av.sm { width: 22px; height: 22px; border-radius: 8px; font-size: 9.5px; }
+.mono-av.lg { width: 30px; height: 30px; border-radius: 10px; font-size: 11px; }
+
+/* mini markdown */
+.md { font-size: var(--chat-fs); line-height: 1.68; color: rgb(var(--content)); }
+.md > *:last-child { margin-bottom: 0 !important; }
+.md p { margin: 0 0 8px; }
+.md strong { font-weight: 650; }
+.md code.ic {
+  font-family: var(--mono); font-size: 0.92em; padding: 1px 4px; border-radius: 4px;
+  background: rgb(var(--surface-muted)); border: 1px solid rgb(var(--edge) / 0.6);
+}
+.md ul { margin: 0 0 8px; padding-left: 16px; list-style: none; }
+.md li { position: relative; margin-bottom: 3px; }
+.md li::before { content: ""; position: absolute; left: -11px; top: 0.62em; width: 4px; height: 4px; border-radius: 50%; background: rgb(var(--accent) / 0.75); }
+.md .cb { border: 1px solid rgb(var(--edge)); border-radius: 10px; overflow: hidden; margin: 0 0 9px; background: rgb(var(--surface-muted) / 0.4); }
+.md .cb-h { display: flex; align-items: center; padding: 4px 9px; border-bottom: 1px solid rgb(var(--edge) / 0.6); }
+.md .cb-lang { font-family: var(--mono); font-size: 10px; text-transform: uppercase; letter-spacing: 0.07em; color: rgb(var(--content-subtle)); }
+.md .cb-cp { margin-left: auto; border: none; background: none; color: rgb(var(--content-subtle)); display: inline-flex; padding: 2px; border-radius: 4px; }
+.md .cb-cp:hover { background: rgb(var(--surface-hover)); color: rgb(var(--content)); }
+.md .cb pre { margin: 0; padding: 9px 11px; overflow-x: auto; }
+.md .cb code { font-family: var(--mono); font-size: 11.5px; line-height: 1.62; }
+
+/* ═══════════════ 方案 A · 脉络 ═══════════════ */
+/* 用户气泡:保留现状的右对齐,圆角带方向感 + 右侧滑入 */
+.u-row { display: flex; justify-content: flex-end; margin-bottom: 14px; }
+.ubub {
+  position: relative; max-width: 84%; border-radius: 13px 13px 5px 13px; padding: 8px 12px;
+  background: rgb(var(--user-bubble) / var(--user-bubble-alpha));
+  animation: bubble-in 0.36s var(--ease-out) both;
+}
+[data-theme="dark"] .ubub { background: rgb(var(--user-bubble) / var(--user-bubble-alpha)); }
+.ub-t { font-size: var(--chat-fs); line-height: 1.66; }
+.ub-f { margin-top: 4px; font-size: 10.5px; color: rgb(var(--content-subtle)); opacity: 0.6; text-align: right; }
+.ub-acts { position: absolute; right: 0; bottom: -24px; display: flex; gap: 2px; opacity: 0; transform: translateX(5px); transition: opacity 0.2s, transform 0.24s var(--ease-out); }
+.turn:hover .ub-acts { opacity: 1; transform: none; }
+
+/* 生命线:左脊 + 节点,把这次运行的所有步骤挂在一根线上 */
+.a-row { position: relative; display: grid; grid-template-columns: 18px minmax(0, 1fr); }
+.spine { position: relative; }
+.spine-track { position: absolute; left: 7px; top: 5px; bottom: 5px; width: 2px; border-radius: 2px; background: rgb(var(--edge) / 0.85); }
+.spine-fill {
+  position: absolute; left: 7px; top: 5px; width: 2px; height: 0; border-radius: 2px;
+  background: linear-gradient(to bottom, rgb(var(--accent) / 0), rgb(var(--accent)));
+  box-shadow: 0 0 9px rgb(var(--accent) / 0.45);
+  transition: height 0.55s var(--ease-out), background 0.6s ease, box-shadow 0.6s ease;
+}
+.turn[data-phase="done"] .spine-fill { background: rgb(var(--edge)); box-shadow: none; }
+.spine-ticks { position: absolute; inset: 0; }
+.spine-tick {
+  position: absolute; left: 4px; width: 8px; height: 8px; margin-top: -4px; border-radius: 50%;
+  background: rgb(var(--surface)); border: 2px solid rgb(var(--edge));
+  animation: tick-in 0.36s var(--spring) both;
+}
+.spine-tick.is-live {
+  border-color: rgb(var(--accent));
+  animation: tick-in 0.36s var(--spring) both, tick-pulse 1.9s ease-in-out 0.36s infinite;
+}
+.turn[data-phase="done"] .spine-tick { border-color: rgb(var(--edge) / 0.9); animation: none; }
+/* 折叠后刻度点失去了对应的行,整体淡出,只留脊线本身 */
+.spine-ticks { transition: opacity 0.35s ease 0.12s; }
+.turn[data-phase="done"] .spine-ticks { opacity: 0; }
+
+.a-body { min-width: 0; }
+.proc-sum {
+  display: flex; align-items: center; gap: 7px; width: 100%; text-align: left;
+  border: none; background: none; padding: 3px 7px; margin-left: -7px; border-radius: 8px;
+  font-size: 11.5px; color: rgb(var(--content-subtle)); transition: background 0.16s, color 0.16s;
+}
+.proc-sum:hover { background: rgb(var(--surface-hover) / 0.6); color: rgb(var(--content-muted)); }
+.turn[data-phase="done"] .ps-chev { transform: rotate(-90deg); }
+.ps-live, .ps-done { display: inline-flex; align-items: center; gap: 6px; }
+.ps-done { display: none; }
+.turn[data-phase="done"] .ps-live { display: none; }
+.turn[data-phase="done"] .ps-done { display: inline-flex; }
+.ps-op { max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: rgb(var(--content-muted)); }
+.ps-stat { display: inline-flex; gap: 6px; }
+
+.proc-clip { display: grid; grid-template-rows: 1fr; transition: grid-template-rows var(--dur-fold) var(--ease-out); }
+.proc[data-open="false"] .proc-clip { grid-template-rows: 0fr; }
+.pb-in { overflow: hidden; padding: 3px 0 4px; }
+
+.trow {
+  display: flex; align-items: center; gap: 7px; padding: 3px 7px; border-radius: 7px;
+  font-size: 11.5px; min-width: 0; transition: background 0.16s;
+}
+.trow:hover { background: rgb(var(--surface-muted) / 0.7); }
+.trow[data-on="false"], .thinkr[data-on="false"], .sayr[data-on="false"] { display: none; }
+.trow[data-on="true"] { animation: op-in var(--dur-enter) var(--ease-out) both; }
+.ti { color: rgb(var(--content-subtle)); display: inline-flex; flex: none; }
+.tn { font-weight: 600; color: rgb(var(--content-muted)); flex: none; }
+.tt { font-family: var(--mono); font-size: 10.5px; color: rgb(var(--content-subtle)); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.tm { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; flex: none; }
+.thinkr { display: flex; align-items: center; gap: 7px; padding: 3px 7px; font-size: 11.5px; color: rgb(var(--content-subtle)); }
+.thinkr[data-on="true"] { animation: op-in var(--dur-enter) var(--ease-out) both; }
+.th-i { display: inline-flex; flex: none; color: rgb(var(--accent) / 0.75); }
+.th-t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; border-left: 2px solid rgb(var(--accent) / 0.22); padding-left: 7px; }
+.sayr { display: flex; align-items: baseline; gap: 7px; padding: 3px 7px; font-size: 12px; color: rgb(var(--content-muted)); }
+.sayr[data-on="true"] { animation: op-in var(--dur-enter) var(--ease-out) both; }
+.sy-b { width: 5px; height: 5px; border-radius: 50%; background: rgb(var(--content-subtle) / 0.6); flex: none; }
+
+/* 回复区:同一根脊上的"最后一段"(正文开始前整段隐藏,不悬空一个标签) */
+.reply { position: relative; margin-top: 4px; }
+.turn:not([data-reply-on="true"]) .reply { display: none; }
+.rp-mark { display: flex; align-items: center; gap: 7px; margin: 6px 0 7px 7px; }
+.rp-line { width: 15px; height: 2px; border-radius: 2px; background: rgb(var(--accent)); transition: background 0.5s ease; }
+.rp-txt { font-size: 9.5px; font-weight: 800; letter-spacing: 0.1em; color: rgb(var(--accent-strong)); }
+.turn[data-phase="done"] .rp-line { background: rgb(var(--edge)); }
+.turn[data-phase="done"] .rp-txt { color: rgb(var(--content-subtle)); }
+.rp-md { padding-left: 7px; }
+.a-acts { display: flex; gap: 2px; padding-left: 2px; margin-top: 4px; opacity: 0; transition: opacity 0.2s; }
+.turn:hover .a-acts { opacity: 1; }
+
+/* ═══════════════ 方案 B · 台账 ═══════════════ */
+.instr {
+  position: relative; display: flex; gap: 10px; padding: 10px 12px 10px 14px; border-radius: 12px;
+  background: rgb(var(--surface-muted) / 0.6); border: 1px solid rgb(var(--edge) / 0.75);
+  animation: bubble-in 0.36s var(--ease-out) both;
+}
+.instr::before { content: ""; position: absolute; left: 0; top: 11px; bottom: 11px; width: 3px; border-radius: 0 3px 3px 0; background: rgb(var(--accent) / 0.75); }
+.ins-l { min-width: 0; }
+.ins-meta { display: flex; align-items: center; gap: 5px; font-size: 10px; letter-spacing: 0.03em; color: rgb(var(--content-subtle)); margin-bottom: 4px; }
+.ins-meta .att { display: inline-flex; align-items: center; gap: 4px; }
+.ins-t { font-size: var(--chat-fs); line-height: 1.66; }
+.ins-acts { margin-left: auto; display: flex; gap: 2px; flex: none; opacity: 0; transform: translateX(5px); transition: opacity 0.2s, transform 0.24s var(--ease-out); }
+.turn:hover .ins-acts { opacity: 1; transform: none; }
+
+.ledger {
+  position: relative; margin-top: 10px; border: 1px solid rgb(var(--edge)); border-radius: 12px;
+  overflow: hidden; background: rgb(var(--surface));
+  transition: background 0.4s ease, border-color 0.4s ease;
+}
+.turn[data-phase="done"] .ledger { background: rgb(var(--surface-muted) / 0.34); border-color: rgb(var(--edge) / 0.8); }
+.lg-head {
+  display: flex; align-items: center; gap: 8px; padding: 8px 11px; font-size: 11.5px;
+  border-bottom: 1px solid rgb(var(--edge) / 0.7);
+  transition: border-color var(--dur-fold) ease;
+}
+.ledger[data-open="false"] .lg-head { border-bottom-color: transparent; }
+.lh-live { display: inline-flex; align-items: center; gap: 7px; color: rgb(var(--content-muted)); }
+.lh-live b { color: rgb(var(--accent-strong)); }
+.lh-clock { font-family: var(--mono); color: rgb(var(--content-muted)); }
+.lh-op { max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lh-done { display: none; align-items: center; gap: 6px; color: rgb(var(--content-muted)); }
+.lh-done svg { color: rgb(var(--accent)); }
+.lh-done b { color: rgb(var(--content)); }
+.lh-done > .tnum, .lh-done > span { font-family: inherit; }
+.turn[data-phase="done"] .lh-live { display: none; }
+.turn[data-phase="done"] .lh-done { display: inline-flex; }
+.lh-count { margin-left: auto; font-family: var(--mono); font-size: 10.5px; color: rgb(var(--content-subtle)); transition: opacity 0.3s; }
+.turn[data-phase="done"] .lh-count { opacity: 0; }
+.lh-toggle { border: none; background: none; color: rgb(var(--content-subtle)); display: inline-flex; padding: 2px; border-radius: 5px; transition: transform var(--dur-fold) var(--ease-out), background 0.16s; }
+.lh-toggle:hover { background: rgb(var(--surface-hover)); color: rgb(var(--content)); }
+.ledger[data-open="true"] .lh-toggle { transform: rotate(180deg); }
+
+.lg-clip { display: grid; grid-template-rows: 1fr; transition: grid-template-rows 0.3s var(--ease-out); }
+.ledger[data-open="false"] .lg-clip { grid-template-rows: 0fr; }
+.lg-body { overflow: hidden; }
+
+.lrow {
+  position: relative; display: grid; grid-template-columns: 16px 58px minmax(0, 1fr) auto;
+  align-items: center; gap: 9px; padding: 5px 12px; font-size: 11.5px;
+  border-top: 1px solid rgb(var(--edge) / 0.4);
+  transition: background 0.3s ease;
+}
+.lrow:first-child { border-top: none; }
+.lrow[data-on="false"] { display: none; }
+.lrow[data-on="true"] { animation: lrow-in 0.3s var(--ease-out) both; }
+.lc-ic { color: rgb(var(--content-subtle)); display: inline-flex; }
+.lc-name { font-weight: 600; color: rgb(var(--content-muted)); }
+.lc-tgt { font-family: var(--mono); font-size: 10.5px; color: rgb(var(--content-subtle)); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lc-meta { display: inline-flex; align-items: center; gap: 7px; }
+.lc-bar { position: absolute; left: 0; top: 0; bottom: 0; width: 2px; background: rgb(var(--accent)); opacity: 0; transition: opacity 0.3s; }
+.lrow[data-status="running"] { background: rgb(var(--accent) / 0.07); }
+.lrow[data-status="running"] .lc-name { color: rgb(var(--accent-strong)); }
+.lrow[data-status="running"] .lc-tgt { color: rgb(var(--content-muted)); }
+.lrow[data-status="running"] .lc-bar { opacity: 1; animation: bar-breathe 1.6s ease-in-out infinite; }
+
+.lnote { display: flex; gap: 8px; padding: 5px 12px 5px 15px; font-size: 11px; line-height: 1.6; color: rgb(var(--content-subtle)); border-top: 1px dashed rgb(var(--edge) / 0.55); }
+.lnote[data-on="false"] { display: none; }
+.lnote[data-on="true"] { animation: lrow-in 0.3s var(--ease-out) both; }
+.ln-i { display: inline-flex; margin-top: 3px; flex: none; color: rgb(var(--accent) / 0.7); }
+
+.lg-scan { position: absolute; left: 0; right: 0; bottom: 0; height: 1.5px; background: linear-gradient(90deg, transparent, rgb(var(--accent) / 0.85), transparent); animation: scan 1.9s ease-in-out infinite; transition: opacity 0.35s ease; }
+.turn[data-phase="done"] .lg-scan { opacity: 0; animation: none; }
+
+.rcard {
+  margin-top: 12px; border: 1px solid rgb(var(--edge)); border-radius: 14px; overflow: hidden;
+  background: rgb(var(--surface)); transition: border-color 0.5s ease, box-shadow 0.5s ease;
+}
+.rcard[data-on="false"] { display: none; }
+.rcard[data-on="true"] { animation: card-in 0.4s var(--ease-out) both; }
+.turn[data-phase="running"] .rcard { border-color: rgb(var(--accent) / 0.3); box-shadow: 0 6px 22px -18px rgb(var(--accent) / 0.9); }
+.rc-h { display: flex; align-items: center; gap: 9px; padding: 9px 12px; border-bottom: 1px solid rgb(var(--edge) / 0.6); }
+.rc-hx { min-width: 0; }
+.rc-hx b { display: block; font-size: 12px; }
+.rc-sub { font-size: 10.5px; color: rgb(var(--content-subtle)); }
+.rc-badge { margin-left: auto; display: none; align-items: center; gap: 5px; padding: 3px 9px; border-radius: 999px; font-size: 10.5px; font-weight: 600; }
+.rc-badge.live { background: rgb(var(--accent) / 0.12); color: rgb(var(--accent-strong)); }
+.rc-badge.done { background: rgb(var(--surface-muted)); color: rgb(var(--content-muted)); }
+.turn[data-phase="running"] .rc-badge.live { display: inline-flex; }
+.turn[data-phase="done"] .rc-badge.done { display: inline-flex; }
+.rc-b { padding: 12px 14px; }
+.rc-f, .dc-f {
+  display: flex; align-items: center; gap: 3px; padding: 6px 8px;
+  border-top: 1px solid rgb(var(--edge) / 0.6); background: rgb(var(--surface-muted) / 0.4);
+}
+.fb {
+  display: inline-flex; align-items: center; gap: 5px; border: none; background: none; padding: 4px 8px;
+  border-radius: 7px; font-size: 11px; color: rgb(var(--content-subtle)); opacity: 0.72;
+  transition: opacity 0.16s, background 0.16s, color 0.16s, transform 0.16s var(--spring);
+}
+.fb:hover { opacity: 1; background: rgb(var(--surface-hover)); color: rgb(var(--content)); transform: translateY(-1px); }
+.fb-sp { flex: 1; }
+.fb-meta { font-size: 10.5px; color: rgb(var(--content-subtle)); padding-right: 6px; }
+
+/* ═══════════════ 方案 C · 卡片流 ═══════════════ */
+.ucard {
+  position: relative; padding: 11px 14px; border-radius: 12px 12px 12px 4px;
+  background: linear-gradient(180deg, rgb(var(--accent) / 0.1), rgb(var(--accent) / 0.05));
+  border: 1px solid rgb(var(--accent) / 0.24);
+  animation: bubble-in 0.36s var(--ease-out) both;
+}
+.uc-fold { position: absolute; top: 0; right: 0; width: 20px; height: 20px; border-top-right-radius: 11px; background: linear-gradient(225deg, rgb(var(--accent) / 0.42) 0 47%, transparent 47%); }
+.uc-t { font-size: var(--chat-fs); line-height: 1.68; padding-right: 12px; }
+.uc-f { display: flex; align-items: center; gap: 6px; margin-top: 8px; font-family: var(--mono); font-size: 10px; color: rgb(var(--content-subtle)); }
+.uc-f .att { display: inline-flex; align-items: center; gap: 4px; }
+.uc-acts { margin-left: auto; display: flex; gap: 2px; opacity: 0; transform: translateX(5px); transition: opacity 0.2s, transform 0.24s var(--ease-out); }
+.ucard:hover .uc-acts { opacity: 1; transform: none; }
+
+.dcard {
+  margin-top: 12px; border: 1px solid rgb(var(--edge)); border-radius: 14px; overflow: hidden;
+  background: rgb(var(--surface));
+  transition: border-color 0.5s ease, box-shadow 0.55s ease, transform 0.5s var(--ease-out);
+}
+.dcard[data-on="false"] { display: none; }
+.dcard[data-on="true"] { animation: card-in-spring 0.44s var(--spring) both; }
+.turn[data-phase="running"] .dcard {
+  border-color: rgb(var(--accent) / 0.42);
+  box-shadow: 0 0 0 3px rgb(var(--accent) / 0.06), 0 18px 34px -30px rgb(var(--accent) / 1);
+}
+.turn[data-phase="done"] .dcard { border-color: rgb(var(--edge)); box-shadow: var(--shadow-card); }
+.dc-h { display: flex; align-items: center; gap: 9px; padding: 10px 13px 8px; }
+.dc-hx { min-width: 0; }
+.dc-hx b { display: block; font-size: 12px; }
+.dc-hx span { font-size: 10.5px; color: rgb(var(--content-subtle)); }
+.dc-badge { margin-left: auto; display: none; align-items: center; gap: 5px; padding: 3px 9px; border-radius: 999px; font-size: 10.5px; font-weight: 600; }
+.dc-badge.live { background: rgb(var(--accent) / 0.12); color: rgb(var(--accent-strong)); }
+.dc-badge.done { background: rgb(var(--surface-muted)); color: rgb(var(--content-muted)); }
+.turn[data-phase="running"] .dc-badge.live { display: inline-flex; }
+.turn[data-phase="done"] .dc-badge.done { display: inline-flex; }
+
+.dc-proc { padding: 0 13px 4px; }
+.steps { display: flex; flex-wrap: wrap; align-items: center; }
+.step {
+  display: inline-flex; align-items: center; gap: 5px; padding: 3px 8px; border-radius: 999px;
+  border: 1px solid rgb(var(--edge)); background: rgb(var(--surface-muted) / 0.55);
+  font-size: 10.5px; color: rgb(var(--content-muted)); white-space: nowrap;
+  transition: border-color 0.4s ease, background 0.4s ease, color 0.4s ease, opacity 0.4s ease;
+}
+.step[data-on="false"] { display: none; }
+.step[data-on="true"] { animation: chip-in 0.34s var(--spring) both; }
+.ch-i { display: inline-flex; color: rgb(var(--content-subtle)); }
+.ch-n { font-weight: 600; }
+.ch-t { font-family: var(--mono); font-size: 9.5px; color: rgb(var(--content-subtle)); max-width: 150px; overflow: hidden; text-overflow: ellipsis; }
+.ch-live { display: none; color: rgb(var(--accent)); }
+.step[data-status="done"] .ch-live { display: inline-flex; animation: chip-in 0.34s var(--spring) both; }
+.step[data-status="running"] { border-color: rgb(var(--accent) / 0.55); background: rgb(var(--accent) / 0.09); color: rgb(var(--accent-strong)); animation: chip-live 1.9s ease-in-out infinite; }
+.step[data-status="running"] .ch-i, .step[data-status="running"] .ch-t { color: rgb(var(--accent-strong)); opacity: 0.85; }
+.step[data-status="running"]::after {
+  content: ""; width: 9px; height: 9px; border-radius: 50%; flex: none;
+  border: 1.5px solid rgb(var(--accent) / 0.3); border-top-color: rgb(var(--accent)); animation: spin 0.72s linear infinite;
+}
+.turn[data-phase="done"] .step { border-color: rgb(var(--edge) / 0.85); background: rgb(var(--surface-muted) / 0.4); color: rgb(var(--content-subtle)); }
+.turn[data-phase="done"] .step .ch-n { color: rgb(var(--content-muted)); font-weight: 500; }
+.lnk { display: inline-block; width: 15px; height: 1px; margin: 0 2px; background: repeating-linear-gradient(90deg, rgb(var(--accent) / 0.6) 0 4px, transparent 4px 8px); }
+.lnk[data-on="false"] { display: none; }
+.lnk[data-on="true"] { animation: dash-flow 0.6s linear infinite; }
+.turn[data-phase="done"] .lnk { background: rgb(var(--edge)); animation: none; }
+.step-more { display: inline-flex; align-items: center; gap: 3px; margin-left: 6px; padding: 3px 8px; border-radius: 999px; border: 1px dashed rgb(var(--edge)); font-size: 10.5px; color: rgb(var(--content-subtle)); animation: chip-in 0.3s var(--ease-out) both; }
+.step-more b { color: rgb(var(--content-muted)); }
+.cnarr { display: flex; gap: 7px; padding: 7px 3px 0; font-size: 11px; line-height: 1.6; color: rgb(var(--content-subtle)); }
+.cnarr[data-on="false"] { display: none; }
+.cnarr[data-on="true"] { animation: op-in var(--dur-enter) var(--ease-out) both; }
+.cn-i { display: inline-flex; margin-top: 3px; flex: none; color: rgb(var(--accent) / 0.7); }
+.dc-b { padding: 10px 14px 14px; }
+/* 正文开始前不占位(避免一张空腔卡);历史回合带 data-reply-on,不受影响 */
+.turn:not([data-reply-on="true"]) .dc-b { display: none; }
+.turn-c .dc-b { border-top: 1px solid rgb(var(--edge) / 0.5); margin-top: 9px; padding-top: 12px; }
+
+/* ═══════════════ 关键帧 ═══════════════ */
+@keyframes spin { to { transform: rotate(360deg); } }
+@keyframes bubble-in { from { opacity: 0; transform: translateX(10px); } to { opacity: 1; transform: none; } }
+@keyframes op-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+@keyframes lrow-in { from { opacity: 0; transform: translateX(-7px); } to { opacity: 1; transform: none; } }
+@keyframes chip-in { from { opacity: 0; transform: scale(0.78); } to { opacity: 1; transform: scale(1); } }
+@keyframes card-in { from { opacity: 0; transform: translateY(9px) scale(0.994); } to { opacity: 1; transform: none; } }
+@keyframes card-in-spring { from { opacity: 0; transform: translateY(10px) scale(0.982); } to { opacity: 1; transform: none; } }
+@keyframes tick-in { from { opacity: 0; transform: scale(0.3); } to { opacity: 1; transform: scale(1); } }
+@keyframes tick-pulse { 0%, 100% { box-shadow: 0 0 0 0 rgb(var(--accent) / 0.35); } 50% { box-shadow: 0 0 0 5px rgb(var(--accent) / 0); } }
+@keyframes dot-breathe { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.55; transform: scale(0.82); } }
+@keyframes eq-bounce { 0%, 100% { transform: scaleY(0.3); } 50% { transform: scaleY(1); } }
+@keyframes caret-blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.12; } }
+@keyframes scan { 0% { transform: translateX(-45%); opacity: 0; } 40% { opacity: 1; } 100% { transform: translateX(45%); opacity: 0; } }
+@keyframes bar-breathe { 0%, 100% { opacity: 0.4; } 50% { opacity: 1; } }
+@keyframes chip-live { 0%, 100% { box-shadow: 0 0 0 0 rgb(var(--accent) / 0.22); } 50% { box-shadow: 0 0 0 4px rgb(var(--accent) / 0); } }
+@keyframes dash-flow { to { background-position: 8px 0; } }
+
+/* ═══════════════ 无障碍:减少动态 ═══════════════ */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.001ms !important; animation-iteration-count: 1 !important; transition-duration: 0.001ms !important; }
+  .st-run { border-top-color: rgb(var(--accent)); }
+  .caret { opacity: 1; }
+}
+</style>
+</head>
+<body>
+<div class="paper">
+  <h1>Mcode 聊天流重设计 · 三个方向</h1>
+  <p class="psub">
+    目标:重做「模型输出」与「用户输出」在会话流里的排版,并把<b>运行中</b>与<b>运行结束后</b>做成两种真正不同的形态——
+    运行中让人看清"它正在干什么",结束后让人只看"它交付了什么"。三版共享同一套令牌与动效语汇,差异在
+    过程与回复的表达方式:过程脊(脉络)、运行台账(台账)、步骤链卡片(卡片流)。
+    点「重播动效」可以完整看一遍从用户发问到回合收束的过程;「运行中 / 已完成」可定格对比两态排版。
+  </p>
+</div>
+<div class="paper" style="padding-top:0">
+  <div id="stage"></div>
+</div>
+<div class="notes" id="notes"></div>
+<script>
+
+/* ── icons.js ── */
+/* 图标:统一 24 栅格 / 1.8 描边 / currentColor —— 与产品一致用描边风格。 */
+const I = (inner) => `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor"
+  stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${inner}</svg>`;
+
+const ICONS = {
+  /* ── 工具类 ── */
+  read: I(`<path d="M5 4.5h9.5L19 9v10.5H5z"/><path d="M14 4.5V9h4.5M8 13h8M8 16.5h5"/>`),
+  edit: I(`<path d="M4.5 19.5l4.2-1L19 8.2a2 2 0 0 0-2.8-2.8L5.5 15.6z"/><path d="M15.6 6.4l2.8 2.8"/>`),
+  write: I(`<path d="M5 4.5h9.5L19 9v10.5H5z"/><path d="M14 4.5V9h4.5M12 11.5v6M9 14.5h6"/>`),
+  terminal: I(`<rect x="3" y="5" width="18" height="14" rx="2.6"/><path d="M7.5 10.5l2.5 2.5-2.5 2.5M13 15h4"/>`),
+  search: I(`<circle cx="11" cy="11" r="6.2"/><path d="M15.6 15.6L20 20"/>`),
+  glob: I(`<circle cx="12" cy="12" r="8.2"/><path d="M3.8 12h16.4M12 3.8c2.4 2.5 2.4 13.9 0 16.4-2.4-2.5-2.4-13.9 0-16.4z"/>`),
+  task: I(`<rect x="3.5" y="5" width="17" height="14" rx="2.6"/><circle cx="9" cy="11" r="1.8"/><path d="M5.8 16.4c.7-1.5 1.9-2.2 3.2-2.2s2.5.7 3.2 2.2M15.5 10h3M15.5 13.5h3"/>`),
+  list: I(`<path d="M4 7h16M4 12h11M4 17h7"/>`),
+  ask: I(`<circle cx="12" cy="12" r="8.4"/><path d="M9.6 9.4a2.5 2.5 0 1 1 3.3 2.4c-.6.2-.9.7-.9 1.3v.5M12 16.6h.01"/>`),
+  think: I(`<path d="M12 3.6 13.6 8.9 18.9 10.5 13.6 12.1 12 17.4 10.4 12.1 5.1 10.5 10.4 8.9z"/><path d="M18.6 16.2l.5 1.6 1.6.5-1.6.5-.5 1.6-.5-1.6-1.6-.5 1.6-.5z"/>`),
+  skill: I(`<path d="M12 4.2 14 9l4.8 2-4.8 2-2 4.8L10 13l-4.8-2L10 9z"/><path d="M6 17.5l1 2.5 2.5 1"/>`),
+
+  /* ── 动作类 ── */
+  copy: I(`<rect x="9" y="9" width="11" height="11" rx="2.4"/><path d="M15 9V6.4A2.4 2.4 0 0 0 12.6 4H6.4A2.4 2.4 0 0 0 4 6.4v6.2A2.4 2.4 0 0 0 6.4 15H9"/>`),
+  check: I(`<path d="M5 12.8l4.6 4.6L19 6.6"/>`),
+  pencil: I(`<path d="M4.5 19.5l4.2-1L19 8.2a2 2 0 0 0-2.8-2.8L5.5 15.6z"/>`),
+  rewind: I(`<path d="M4 10.5h9.5a5 5 0 0 1 0 10H8"/><path d="M7.5 6.5 4 10.5l3.5 4"/>`),
+  bookmark: I(`<path d="M6.5 4.5h11v15l-5.5-4-5.5 4z"/>`),
+  chevD: I(`<path d="M6 9.5l6 6 6-6"/>`),
+  chevR: I(`<path d="M9.5 6l6 6-6 6"/>`),
+  x: I(`<path d="M6 6l12 12M18 6L6 18"/>`),
+  clock: I(`<circle cx="12" cy="12" r="8.2"/><path d="M12 7.5V12l3 2"/>`),
+  alert: I(`<path d="M12 4.5 21 19.5H3z"/><path d="M12 10v4M12 16.6h.01"/>`),
+  arrowR: I(`<path d="M5 12h14M13 6l6 6-6 6"/>`),
+  fork: I(`<circle cx="7" cy="5.6" r="2.2"/><circle cx="7" cy="18.4" r="2.2"/><circle cx="17" cy="9.6" r="2.2"/><path d="M7 7.8v8.4M17 11.8c0 2.8-3 3-5 3.4"/>`),
+  folder: I(`<path d="M4 7.4A2 2 0 0 1 6 5.4h3.6l1.8 2.2H18a2 2 0 0 1 2 2v7.8a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z"/>`),
+  file: I(`<path d="M6 4.5h8L18 8.5v11H6z"/><path d="M13.5 4.5V9H18"/>`),
+  link: I(`<path d="M10 14a3.6 3.6 0 0 1 0-5l2-2a3.6 3.6 0 0 1 5 5l-1 1"/><path d="M14 10a3.6 3.6 0 0 1 0 5l-2 2a3.6 3.6 0 0 1-5-5l1-1"/>`),
+  plus: I(`<path d="M12 5.5v13M5.5 12h13"/>`),
+  send: I(`<path d="M5 12h13M12.5 6.5 19 12l-6.5 5.5"/>`),
+  spark: I(`<path d="M12 4.5 13.4 9l4.5 1.4-4.5 1.4L12 16.3l-1.4-4.5L6.1 10.4 10.6 9z"/>`),
+  layers: I(`<path d="M12 4 20 8.4 12 12.8 4 8.4z"/><path d="M4 12.6 12 17l8-4.4M4 16.4 12 20.8l8-4.4"/>`),
+};
+
+/** 取图标(带尺寸)。 */
+const ico = (name, size) => {
+  const s = ICONS[name] || ICONS.file;
+  return size ? s.replace('width="16" height="16"', `width="${size}" height="${size}"`) : s;
+};
+
+
+/* ── data.js ── */
+/* ============================================================================
+ * 内容数据:一条历史回合(已折叠) + 当前回合(用户输入 / 过程 / 最终回复)。
+ * 文案刻意贴着真实开发场景写,便于判断"过程 / 回复"的层级是否清楚。
+ * ========================================================================= */
+
+const SESSION = {
+  project: "cc-gui",
+  branch: "fix/login-loading",
+  model: "Claude Sonnet 4.5",
+  provider: "Claude",
+  providerShort: "CL",
+  clock: "02:14",
+  title: "修弱网下登录页一直转圈",
+};
+
+/** 上一条历史回合(已结束、过程已折叠)—— 用来看"跑完很久之后"的观感。 */
+const HISTORY = {
+  user: "顺便帮我把超时的错误文案统一一下，中英都要。",
+  ops: [
+    { kind: "tool", name: "Grep", icon: "search", target: "timeout", dur: "0.2s" },
+    { kind: "tool", name: "Read", icon: "read", target: "lib/i18n/zh/common.ts", dur: "0.3s" },
+    { kind: "tool", name: "Edit", icon: "edit", target: "lib/i18n/zh/common.ts", dur: "0.4s", adds: 6, dels: 2 },
+    { kind: "tool", name: "Edit", icon: "edit", target: "lib/i18n/en/common.ts", dur: "0.4s", adds: 6, dels: 2 },
+  ],
+  reply:
+    "文案已统一成「请求超时，请稍后重试」/「Request timed out. Please try again.」，`withTimeout` 抛出的 `TimeoutError` 会走这一条，网络断开仍走原来的「请检查网络」。",
+  dur: "8.4s",
+  steps: 4,
+  adds: 12,
+  dels: 4,
+  touched: 2,
+};
+
+/** 当前回合的用户输入。 */
+const USER_TEXT = "登录页在弱网下会一直转圈，帮我看下原因并修掉。别改接口协议。";
+
+const USER_META = { at: "02:14", attach: "粘贴了 1 段控制台日志" };
+
+/** 当前回合的过程序列。status 由播放器推进(最后一条 visible = running)。 */
+const OPS = [
+  { kind: "think", text: "先看登录页的提交链路，重点找 loading 状态被置位之后没有复位的那条路径。" },
+  { kind: "say", text: "先定位登录页的提交逻辑。" },
+  { kind: "tool", name: "Read", icon: "read", target: "apps/desktop/src/renderer/pages/Login.tsx", dur: "0.3s" },
+  { kind: "tool", name: "Grep", icon: "search", target: "setSubmitting", dur: "0.2s" },
+  { kind: "tool", name: "Read", icon: "read", target: "src/renderer/lib/auth.ts", dur: "0.2s" },
+  { kind: "think", text: "catch 分支只写了 error state，没有复位 submitting——请求超时抛错时按钮就永久停在 loading。" },
+  { kind: "tool", name: "Edit", icon: "edit", target: "src/renderer/pages/Login.tsx", dur: "0.4s", adds: 24, dels: 6 },
+  { kind: "tool", name: "Write", icon: "write", target: "src/renderer/lib/withTimeout.ts", dur: "0.3s", adds: 18, created: true },
+  { kind: "tool", name: "Bash", icon: "terminal", target: "pnpm typecheck", dur: "3.1s" },
+  { kind: "tool", name: "Bash", icon: "terminal", target: "pnpm test:auth", dur: "1.8s", note: "12 passed" },
+];
+
+/** 当前回合的最终回复(markdown 子集)。 */
+const REPLY = [
+  "找到原因了：`Login.tsx` 的 `catch` 分支只把错误写进 state，没有复位 `submitting`。弱网下请求超时抛错，按钮就永久停在 loading。",
+  "",
+  "改动三处：",
+  "",
+  "- 新增 `withTimeout()`，8s 后抛 `TimeoutError`，不再让 fetch 无限等",
+  "- 提交流程改成 `try/finally`，任何异常都会复位按钮",
+  "- 超时与网络错误分开提示，不再一律显示「请检查网络」",
+  "",
+  "```ts",
+  "try {",
+  "  setSubmitting(true)",
+  "  await withTimeout(api.login(form), 8000)",
+  "} finally {",
+  "  setSubmitting(false)",
+  "}",
+  "```",
+  "",
+  "要我把超时阈值做成设置项吗？默认 8s。",
+].join("\n");
+
+/** 回合统计(结束后回执用)。 */
+const TURN_STATS = {
+  dur: "12.3s",
+  steps: OPS.filter((o) => o.kind === "tool").length,
+  touched: 3,
+  adds: 42,
+  dels: 6,
+  tokens: "18.4k",
+};
+
+/** 三个方案的自述,用于底部说明区。 */
+const PLANS = {
+  a: {
+    id: "a",
+    name: "方案 A · 脉络",
+    tag: "精修",
+    lead: "结构与现在 1:1 对齐，只重绘视觉与动效。风险最低，可直接落地。",
+    points: [
+      ["识别骨架", "用户消息保持右侧气泡，助手正文无容器——只在左侧加一条「生命线」竖脊，过程节点挂在脊上，一眼看出哪几步属于这次运行。"],
+      ["运行中", "脊线用渐变向下生长、末端节点带呼吸光环；过程摘要行左对齐贴在脊上（不再用居中胶囊），右侧跟实时操作 ticker；正文末尾是一枚闪烁光标，替代现在的转圈小图标。"],
+      ["运行结束", "整条过程脊折叠成一行摘要（`12.3s · 7 步 · 改 3 个文件 +42 −6`），脊线由 accent 渐变为中性灰，刻度点整体淡出；最终回复留在脊线末端并标「回复」。"],
+      ["动效", "块入场上浮 + 逐项错峰 30ms；工具状态 running→done 时图标交叉淡换成对勾并轻微回弹；折叠用 grid-rows 0fr↔1fr；气泡从右侧滑入。"],
+      ["改动面", "ChatPane 的 MessageRow + MessageBlocks 的 TurnPanel/工具卡；styles.css 加约 8 组关键帧。不动消息切分逻辑。"],
+    ],
+  },
+  b: {
+    id: "b",
+    name: "方案 B · 台账",
+    tag: "信息密度最高",
+    lead: "把「过程」做成一张有台头 / 明细 / 回执的运行台账，回复独立成卡。两态差异最大。",
+    points: [
+      ["用户输入", "从气泡变成「指令卡」：左侧色条 + 浅底 + 顶部元信息行（时间 · 附件）。hover 时右上角浮出复制 / 编辑。"],
+      ["运行中", "台账顶部是实时台头：呼吸圆点 + `运行中 00:12` + 正在执行的操作名，右侧 `10 步`。下面按列对齐的明细行（工具｜目标｜耗时），当前行高亮并带左侧进度条，底部一条扫描光带表示还在继续。"],
+      ["运行结束", "台头收成一行回执：`✓ 完成 · 12.3s · 10 步 · 改 3 个文件 +42 −6`，数字向上滚动计数；明细收进折叠区，需要时才展开。"],
+      ["回复区", "最终回复升级为独立卡：头部是 provider 缩写徽标 + 模型名 + 时间 + 完成徽章，正文行高放宽，底部常驻一条低对比操作栏（复制 / 回滚 / 书签），hover 才提亮。"],
+      ["改动面", "需要新增两个组件（TurnLedger / ReplyCard）并改 ChatPane 的 renderItem 分支，比 A 大一档；好处是过程与回复的语义边界最清楚。"],
+    ],
+  },
+  c: {
+    id: "c",
+    name: "方案 C · 卡片流",
+    tag: "视觉变化最大",
+    lead: "弱化气泡、强化卡片与分组：用户侧是指令卡，助手侧是文档卡，过程折成横向步骤链。",
+    points: [
+      ["用户输入", "折角指令卡，accent 淡染底 + 等宽字形（用户输入多为指令/粘贴内容），底部一条元信息行，hover 从右侧滑出操作。"],
+      ["助手输出", "文档卡：头部 provider 渐变徽标 + 名称 + 时间 + 状态徽章；正文；底部常驻操作栏。卡片以 `scale(.985) + 上浮` 弹簧入场。"],
+      ["过程", "横向步骤链（面包屑）：每个工具一枚 chip，运行中最后一枚是「活」的——accent 描边 + 旋转圆弧 + 呼吸，chip 之间连接线流动；超过 4 枚折叠成 `… +N`；结束后全部退成灰描边虚线。"],
+      ["运行结束", "整卡执行一次 settle：边框由 accent 收成中性、阴影收紧，状态徽章由「运行中」翻成「已完成」，步骤链淡化并静态化。"],
+      ["改动面", "改动量最大（卡片容器 + chip 链 + 卡片头部），但对话节奏感最强，适合把过程彻底降为背景信息的用户。"],
+    ],
+  },
+};
+
+
+/* ── primitives.js ── */
+/* ============================================================================
+ * 原语层:三个方案共用的最小件 —— 转义、mini markdown、状态图标、工具行内件。
+ * 差异只在排布方式,原子件刻意做成同一套,保证"同一设计系统"。
+ * ========================================================================= */
+
+const esc = (s) =>
+  String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+/* ───────────────────────── mini markdown ─────────────────────────
+ * 原型只需要渲染 REPLY 里的那几种语法(段落 / 列表 / 围栏代码 / 行内代码 /
+ * 粗体),而且要容忍"流式中途"的未闭合围栏,所以手写一个最小实现,不引依赖。 */
+
+function md(src) {
+  const lines = String(src).split("\n");
+  const out = [];
+  let i = 0;
+  let inFence = false;
+  let fence = [];
+  let list = [];
+
+  const flushList = () => {
+    if (!list.length) return;
+    out.push(`<ul>${list.map((t) => `<li>${inline(t)}</li>`).join("")}</ul>`);
+    list = [];
+  };
+
+  while (i < lines.length) {
+    const line = lines[i];
+    if (/^```/.test(line.trim())) {
+      if (!inFence) {
+        flushList();
+        inFence = true;
+        fence = [];
+        const lang = line.trim().slice(3).trim();
+        if (lang) fence.lang = lang;
+      } else {
+        out.push(codeBlock(fence.join("\n"), fence.lang));
+        inFence = false;
+      }
+      i++;
+      continue;
+    }
+    if (inFence) {
+      fence.push(line);
+      i++;
+      continue;
+    }
+    if (/^\s*[-*]\s+/.test(line)) {
+      list.push(line.replace(/^\s*[-*]\s+/, ""));
+      i++;
+      continue;
+    }
+    flushList();
+    if (line.trim() === "") {
+      i++;
+      continue;
+    }
+    out.push(`<p>${inline(line)}</p>`);
+    i++;
+  }
+  // 流式未完:未闭合的围栏先按代码块渲染,避免"内容突然跳格式"。
+  if (inFence) out.push(codeBlock(fence.join("\n"), fence.lang));
+  flushList();
+  return out.join("");
+}
+
+const inline = (s) =>
+  esc(s)
+    .replace(/`([^`]+)`/g, '<code class="ic">$1</code>')
+    .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+
+const codeBlock = (body, lang) => {
+  const head = lang
+    ? `<div class="cb-h"><span class="cb-lang">${esc(lang)}</span><button class="cb-cp">${ico("copy", 12)}</button></div>`
+    : "";
+  return `<div class="cb">${head}<pre><code>${esc(body)}</code></pre></div>`;
+};
+
+/* ───────────────────────── 原子件 ───────────────────────── */
+
+/** provider 渐变徽标。 */
+const monogram = (txt, cls) => `<span class="mono-av${cls ? " " + cls : ""}">${esc(txt)}</span>`;
+
+/** 状态图标:running 圆弧 / done 对勾 / error 叉。交叉淡换由 CSS 驱动。 */
+const statusGlyph = () =>
+  `<span class="st">
+     <span class="st-run">${ico("clock", 11)}</span>
+     <span class="st-done">${ico("check", 11)}</span>
+     <span class="st-err">${ico("x", 11)}</span>
+   </span>`;
+
+/** 运行中光标。 */
+const caret = () => `<span class="caret" aria-hidden="true"></span>`;
+
+/** 运行中三个跳动的均衡器条。 */
+const eq = () => `<span class="eq" aria-hidden="true"><i></i><i></i><i></i></span>`;
+
+/** 呼吸圆点。 */
+const liveDot = () => `<span class="live-dot" aria-hidden="true"></span>`;
+
+/** 涨跌统计。 */
+const diffStat = (adds, dels) =>
+  `<span class="dst">${adds ? `<b class="up">+${adds}</b>` : ""}${dels ? `<b class="dn">−${dels}</b>` : ""}</span>`;
+
+/** 操作栏按钮。 */
+const actBtn = (icon, label, cls) =>
+  `<button class="ab${cls ? " " + cls : ""}" title="${esc(label)}" aria-label="${esc(label)}">${ico(icon, 13)}</button>`;
+
+/** 工具行 —— 三方案的公共内核,排布由外层容器决定。 */
+function toolRow(op, idx, opts) {
+  const o = opts || {};
+  const created = op.created ? `<span class="tag new">新建</span>` : "";
+  const note = op.note ? `<span class="tag note">${esc(op.note)}</span>` : "";
+  const right = o.right === "dur" && op.dur ? `<span class="dur">${esc(op.dur)}</span>` : "";
+  const showStat = o.stat !== false && (op.adds || op.dels);
+  return `<div class="trow" data-op="${idx}" data-status="running" data-on="false">
+    <span class="ti">${ico(op.icon, o.iconSize || 13)}</span>
+    <span class="tn">${esc(op.name)}</span>
+    <span class="tt" title="${esc(op.target)}">${esc(op.target)}</span>
+    ${created}${note}
+    <span class="tm">${showStat ? diffStat(op.adds, op.dels) : ""}${o.status === false ? "" : statusGlyph()}${right}</span>
+  </div>`;
+}
+
+/** 思考块(折叠成一行摘要)。 */
+function thinkRow(op, idx, opts) {
+  const o = opts || {};
+  return `<div class="thinkr" data-op="${idx}" data-on="false">
+    <span class="th-i">${ico("think", o.iconSize || 13)}</span>
+    <span class="th-t">${esc(op.text)}</span>
+  </div>`;
+}
+
+/** 过程旁白(模型在工具之间说的话)。 */
+function sayRow(op, idx, opts) {
+  const o = opts || {};
+  return `<div class="sayr" data-op="${idx}" data-on="false"><span class="sy-b"></span>${esc(op.text)}${
+    o.caret ? caret() : ""
+  }</div>`;
+}
+
+/** 中间过程块的统一分发。 */
+function procBlock(op, idx, opts) {
+  if (op.kind === "think") return thinkRow(op, idx, opts);
+  if (op.kind === "say") return sayRow(op, idx, opts);
+  return toolRow(op, idx, opts);
+}
+
+
+/* ── blocks.js ── */
+/* ============================================================================
+ * 三个方案的回合渲染器。
+ *
+ * 关键约定(与 app.js 的播放器配合):
+ *   - 每个过程块带 data-op="i" data-on="false",播放器按序把 data-on 翻成
+ *     "true" —— 元素从 display:none 变为可见会**重新触发**入场动画,所以
+ *     "逐个出现"的动效是纯 CSS。
+ *   - 回合根节点带 data-phase="running|done";两态差异全部写在
+ *     [data-phase="done"] 选择器里,靠 transition 平滑过渡(而不是换 DOM),
+ *     这样"跑完那一刻"的折叠/变色/收光是连续的。
+ *   - 正文容器带 data-reply,播放器往里注入已渲染的 markdown。
+ * ========================================================================= */
+
+
+
+/* ───────────────────────── 公共:用户输入 ───────────────────────── */
+
+/** 方案 A:保持现状的右侧气泡,只加圆角方向感与滑入动画。 */
+const userBubble = () => `
+  <div class="u-row">
+    <div class="ubub">
+      <div class="ub-t">${esc(USER_TEXT)}</div>
+      <div class="ub-f"><span class="tnum">${esc(USER_META.at)}</span></div>
+      <div class="ub-acts">${actBtn("copy", "复制")}${actBtn("pencil", "编辑")}</div>
+    </div>
+  </div>`;
+
+/** 方案 B:指令卡 —— 左侧色条 + 元信息行,内容左对齐成"指令"读法。 */
+const userInstr = () => `
+  <div class="instr">
+    <div class="ins-l">
+      <div class="ins-meta">
+        <span>指令</span><span class="sep">·</span><span class="tnum">${esc(USER_META.at)}</span>
+        <span class="sep">·</span><span class="att">${ico("link", 11)}${esc(USER_META.attach)}</span>
+      </div>
+      <div class="ins-t">${esc(USER_TEXT)}</div>
+    </div>
+    <div class="ins-acts">${actBtn("copy", "复制")}${actBtn("pencil", "编辑")}${actBtn("rewind", "回到此处")}</div>
+  </div>`;
+
+/** 方案 C:折角指令卡。 */
+const userCard = () => `
+  <div class="ucard">
+    <span class="uc-fold" aria-hidden="true"></span>
+    <div class="uc-t">${esc(USER_TEXT)}</div>
+    <div class="uc-f">
+      <span class="tnum">${esc(USER_META.at)}</span><span class="sep">·</span>
+      <span class="att">${ico("link", 11)}1 个附件</span>
+      <span class="uc-acts">${actBtn("copy", "复制")}${actBtn("pencil", "编辑")}</span>
+    </div>
+  </div>`;
+
+/* ───────────────────────── 公共:最终回复正文 ───────────────────────── */
+
+const replyBody = (cls) => `<div class="${cls} md" data-reply></div>`;
+
+/* ═══════════════════════════ 方案 A · 脉络 ═══════════════════════════ */
+
+const A_SUM_LIVE = `
+  <span class="ps-live">
+    <span class="ps-clock tnum">02:14</span>
+    <span class="ps-sep">·</span>
+    <span class="ps-dur tnum" data-clock>0.0s</span>
+    ${eq()}
+    <span class="ps-op" data-ticker>等待模型…</span>
+  </span>`;
+
+const A_SUM_DONE = `
+  <span class="ps-done">
+    <span class="ps-clock tnum">02:14</span>
+    <span class="ps-sep">·</span>
+    <span class="ps-dur tnum">${esc(TURN_STATS.dur)}</span>
+    <span class="ps-sep">·</span>
+    <span>${TURN_STATS.steps} 步</span>
+    <span class="ps-sep">·</span>
+    <span>改 ${TURN_STATS.touched} 个文件</span>
+    ${diffStat(TURN_STATS.adds, TURN_STATS.dels)}
+  </span>`;
+
+const turnA = (st) => `
+  <section class="turn turn-a" data-phase="running">
+    ${userBubble()}
+    <div class="a-row">
+      <div class="spine" aria-hidden="true">
+        <span class="spine-track"></span>
+        <span class="spine-fill"></span>
+        <span class="spine-ticks"></span>
+      </div>
+      <div class="a-body">
+        <div class="proc" data-open="true">
+          <button class="proc-sum">
+            <span class="ps-chev">${ico("chevD", 13)}</span>
+            ${A_SUM_LIVE}${A_SUM_DONE}
+          </button>
+          <div class="proc-clip"><div class="pb-in">
+            ${OPS.map((op, i) => procBlock(op, i)).join("")}
+          </div></div>
+        </div>
+        <div class="reply">
+          <div class="rp-mark"><span class="rp-line"></span><span class="rp-txt">回复</span></div>
+          ${replyBody("rp-md")}
+        </div>
+        <div class="a-acts">${actBtn("copy", "复制")}${actBtn("bookmark", "收藏")}</div>
+      </div>
+    </div>
+  </section>`;
+
+/* ═══════════════════════════ 方案 B · 台账 ═══════════════════════════ */
+
+const B_LROW = (op, i) => {
+  if (op.kind === "think" || op.kind === "say") return "";
+  const created = op.created ? `<span class="tag new">新建</span>` : "";
+  const note = op.note ? `<span class="tag note">${esc(op.note)}</span>` : "";
+  return `<div class="lrow" data-op="${i}" data-status="running" data-on="false">
+      <span class="lc-ic">${ico(op.icon, 13)}</span>
+      <span class="lc-name">${esc(op.name)}</span>
+      <span class="lc-tgt" title="${esc(op.target)}">${esc(op.target)}</span>
+      <span class="lc-meta">${created}${note}${op.adds || op.dels ? diffStat(op.adds, op.dels) : ""}
+        <span class="dur">${esc(op.dur || "")}</span>${statusGlyph()}</span>
+      <span class="lc-bar" aria-hidden="true"></span>
+    </div>`;
+};
+
+/** 台账里非工具的过程(思考 / 旁白)用一行细述呈现,不占列。 */
+const B_NOTE = (op, i) => `<div class="lnote" data-op="${i}" data-on="false">
+    <span class="ln-i">${ico(op.kind === "think" ? "think" : "arrowR", 11)}</span>
+    <span class="ln-t">${esc(op.text)}</span>
+  </div>`;
+
+const turnB = () => `
+  <section class="turn turn-b" data-phase="running">
+    ${userInstr()}
+    <div class="ledger">
+      <div class="lg-head">
+        <span class="lh-live">${liveDot()}<b>运行中</b><span class="tnum lh-clock" data-clock>0.0s</span>
+          <span class="sep">·</span><span class="lh-op" data-ticker>等待模型…</span></span>
+        <span class="lh-done">${ico("check", 13)}<b>已完成</b>
+          <span class="tnum">${esc(TURN_STATS.dur)}</span><span class="sep">·</span>
+          <span>${TURN_STATS.steps} 步</span><span class="sep">·</span>
+          <span>改 ${TURN_STATS.touched} 个文件</span>
+          ${diffStat(TURN_STATS.adds, TURN_STATS.dels)}
+          <span class="sep">·</span><span class="tnum">${esc(TURN_STATS.tokens)} tokens</span></span>
+        <span class="lh-count tnum" data-stepcount>0 步</span>
+        <button class="lh-toggle" data-toggle-ledger aria-label="展开明细">${ico("chevD", 13)}</button>
+      </div>
+      <div class="lg-clip"><div class="lg-body">
+        ${OPS.map((op, i) => (op.kind === "tool" ? B_LROW(op, i) : B_NOTE(op, i))).join("")}
+      </div></div>
+      <span class="lg-scan" aria-hidden="true"></span>
+    </div>
+    <div class="rcard" data-on="false">
+      <header class="rc-h">
+        ${monogram(SESSION.providerShort, "sm")}
+        <div class="rc-hx"><b>${esc(SESSION.model)}</b><span class="rc-sub">Mcode · ${esc(SESSION.clock)}</span></div>
+        <span class="rc-badge live">${liveDot()}运行中</span>
+        <span class="rc-badge done">${ico("check", 11)}已完成</span>
+      </header>
+      ${replyBody("rc-b")}
+      <footer class="rc-f">
+        <button class="fb">${ico("copy", 13)}复制</button>
+        <button class="fb">${ico("rewind", 13)}回滚本轮</button>
+        <button class="fb">${ico("bookmark", 13)}收藏</button>
+        <span class="fb-sp"></span>
+        <span class="fb-meta tnum">${esc(TURN_STATS.tokens)} tokens · ${esc(TURN_STATS.dur)}</span>
+      </footer>
+    </div>
+  </section>`;
+
+/* ═══════════════════════════ 方案 C · 卡片流 ═══════════════════════════ */
+
+/** 步骤链:工具折成横向 chip;思考/旁白另起一行低调呈现。
+ *  连接线不能复用 data-op(chip 与线都按 OPS 下标标记,querySelector 会命中
+ *  排在前面的线,导致后面的 chip 永远不被点亮),所以线用 data-lnk-for。 */
+const C_STEPS = () => {
+  let out = "";
+  let first = true;
+  for (let i = 0; i < OPS.length; i++) {
+    if (OPS[i].kind !== "tool") continue;
+    const op = OPS[i];
+    if (!first) out += `<i class="lnk" data-lnk-for="${i}" data-on="false"></i>`;
+    out += `<span class="step" data-op="${i}" data-status="running" data-on="false">
+        <span class="ch-i">${ico(op.icon, 12)}</span><span class="ch-n">${esc(op.name)}</span>
+        <span class="ch-t">${esc(shortTarget(op.target))}</span>
+        <span class="ch-live">${ico("check", 10)}</span>
+      </span>`;
+    first = false;
+  }
+  return `<div class="steps">${out}<span class="step-more" data-more hidden>… <b>+<span data-more-n>0</span></b></span></div>`;
+};
+
+const C_NOTES = () =>
+  OPS.map((op, i) =>
+    op.kind === "tool"
+      ? ""
+      : `<div class="cnarr" data-op="${i}" data-on="false">
+           <span class="cn-i">${ico(op.kind === "think" ? "think" : "arrowR", 11)}</span>
+           <span class="cn-t">${esc(op.text)}</span>
+         </div>`,
+  ).join("");
+
+const turnC = () => `
+  <section class="turn turn-c" data-phase="running">
+    ${userCard()}
+    <div class="dcard" data-on="false">
+      <header class="dc-h">
+        ${monogram(SESSION.providerShort, "lg")}
+        <div class="dc-hx"><b>${esc(SESSION.model)}</b><span>Mcode · ${esc(SESSION.clock)}</span></div>
+        <span class="dc-badge live">${liveDot()}运行中</span>
+        <span class="dc-badge done">${ico("check", 11)}已完成</span>
+      </header>
+      <div class="dc-proc">
+        ${C_STEPS()}
+        ${C_NOTES()}
+      </div>
+      ${replyBody("dc-b")}
+      <footer class="dc-f">
+        <button class="fb">${ico("copy", 13)}复制</button>
+        <button class="fb">${ico("rewind", 13)}回滚本轮</button>
+        <button class="fb">${ico("bookmark", 13)}收藏</button>
+        <span class="fb-sp"></span>
+        <span class="fb-meta tnum" data-clock>0.0s</span>
+      </footer>
+    </div>
+  </section>`;
+
+/** chip 上的目标只显示文件名 —— 路径中段截断("…derer/pages/…")在 chip 里不可读。 */
+const shortTarget = (t) => (t.includes("/") ? t.split("/").pop() : t);
+
+/* ═══════════════════════════ 历史回合(已折叠态) ═══════════════════════════ */
+
+const histOps = () =>
+  HISTORY.ops
+    .map(
+      (op, i) => `<div class="trow hrow" data-op="${i}" data-status="done" data-on="true">
+        <span class="ti">${ico(op.icon, 13)}</span>
+        <span class="tn">${esc(op.name)}</span>
+        <span class="tt">${esc(op.target)}</span>
+        <span class="tm">${op.adds || op.dels ? diffStat(op.adds, op.dels) : ""}</span>
+      </div>`,
+    )
+    .join("");
+
+const histSummary = (cls) => `
+  <button class="${cls}">
+    <span class="ps-chev">${ico("chevR", 13)}</span>
+    <span class="tnum">02:07</span><span class="sep">·</span>
+    <span class="tnum">${esc(HISTORY.dur)}</span><span class="sep">·</span>
+    <span>${HISTORY.steps} 步</span><span class="sep">·</span>
+    <span>改 ${HISTORY.touched} 个文件</span>
+    ${diffStat(HISTORY.adds, HISTORY.dels)}
+  </button>`;
+
+const histReply = (cls) => `<div class="${cls} md">${md(HISTORY.reply)}</div>`;
+
+const historyTurn = (plan) => {
+  if (plan === "b") {
+    return `<section class="turn turn-b hist" data-phase="done" data-reply-on="true">
+      <div class="instr">
+        <div class="ins-l">
+          <div class="ins-meta"><span>指令</span><span class="sep">·</span><span class="tnum">02:07</span></div>
+          <div class="ins-t">${esc(HISTORY.user)}</div>
+        </div>
+        <div class="ins-acts">${actBtn("copy", "复制")}${actBtn("pencil", "编辑")}</div>
+      </div>
+      <div class="ledger">
+        <div class="lg-head">
+          <span class="lh-done">${ico("check", 13)}<b>已完成</b>
+            <span class="tnum">${esc(HISTORY.dur)}</span><span class="sep">·</span>
+            <span>${HISTORY.steps} 步</span><span class="sep">·</span>
+            <span>改 ${HISTORY.touched} 个文件</span>
+            ${diffStat(HISTORY.adds, HISTORY.dels)}</span>
+          <span class="lh-count tnum">${HISTORY.steps} 步</span>
+          <button class="lh-toggle" data-toggle-ledger aria-label="展开明细">${ico("chevD", 13)}</button>
+        </div>
+        <div class="lg-clip"><div class="lg-body">
+          ${HISTORY.ops.map((op, i) => B_LROW(op, i)).join("")}
+        </div></div>
+      </div>
+      <div class="rcard rcard-h">
+        <header class="rc-h">
+          ${monogram(SESSION.providerShort, "sm")}
+          <div class="rc-hx"><b>${esc(SESSION.model)}</b><span class="rc-sub">Mcode · 02:07</span></div>
+          <span class="rc-badge done">${ico("check", 11)}已完成</span>
+        </header>
+        ${histReply("rc-b")}
+        <footer class="rc-f">
+          <button class="fb">${ico("copy", 13)}复制</button>
+          <button class="fb">${ico("rewind", 13)}回滚本轮</button>
+          <span class="fb-sp"></span><span class="fb-meta tnum">4.2k tokens · ${esc(HISTORY.dur)}</span>
+        </footer>
+      </div>
+    </section>`;
+  }
+
+  if (plan === "c") {
+    return `<section class="turn turn-c hist" data-phase="done" data-reply-on="true">
+      <div class="ucard">
+        <span class="uc-fold" aria-hidden="true"></span>
+        <div class="uc-t">${esc(HISTORY.user)}</div>
+        <div class="uc-f"><span class="tnum">02:07</span><span class="uc-acts">${actBtn("copy", "复制")}${actBtn("pencil", "编辑")}</span></div>
+      </div>
+      <div class="dcard">
+        <header class="dc-h">
+          ${monogram(SESSION.providerShort, "lg")}
+          <div class="dc-hx"><b>${esc(SESSION.model)}</b><span>Mcode · 02:07</span></div>
+          <span class="dc-badge done">${ico("check", 11)}已完成</span>
+        </header>
+        <div class="dc-proc">
+          <div class="steps">
+            ${HISTORY.ops
+              .map((op, i) => {
+                const chip = `<span class="step" data-status="done" data-on="true">
+                    <span class="ch-i">${ico(op.icon, 12)}</span><span class="ch-n">${esc(op.name)}</span>
+                    <span class="ch-t">${esc(shortTarget(op.target))}</span></span>`;
+                return (i ? `<i class="lnk" data-on="true"></i>` : "") + chip;
+              })
+              .join("")}
+          </div>
+        </div>
+        ${histReply("dc-b")}
+        <footer class="dc-f">
+          <button class="fb">${ico("copy", 13)}复制</button>
+          <button class="fb">${ico("rewind", 13)}回滚本轮</button>
+          <span class="fb-sp"></span><span class="fb-meta tnum">4.2k tokens · ${esc(HISTORY.dur)}</span>
+        </footer>
+      </div>
+    </section>`;
+  }
+
+  return `<section class="turn turn-a hist" data-phase="done" data-reply-on="true">
+    <div class="u-row">
+      <div class="ubub">
+        <div class="ub-t">${esc(HISTORY.user)}</div>
+        <div class="ub-f"><span class="tnum">02:07</span></div>
+        <div class="ub-acts">${actBtn("copy", "复制")}${actBtn("pencil", "编辑")}</div>
+      </div>
+    </div>
+    <div class="a-row">
+      <div class="spine" aria-hidden="true">
+        <span class="spine-track"></span><span class="spine-fill"></span><span class="spine-ticks"></span>
+      </div>
+      <div class="a-body">
+        <div class="proc" data-open="false">
+          ${histSummary("proc-sum")}
+          <div class="proc-clip"><div class="pb-in">${histOps()}</div></div>
+        </div>
+        <div class="reply">
+          <div class="rp-mark"><span class="rp-line"></span><span class="rp-txt">回复</span></div>
+          ${histReply("rp-md")}
+        </div>
+        <div class="a-acts">${actBtn("copy", "复制")}${actBtn("bookmark", "收藏")}</div>
+      </div>
+    </div>
+  </section>`;
+};
+
+const currentTurn = (plan) => (plan === "b" ? turnB() : plan === "c" ? turnC() : turnA());
+
+
+/* ── app.js ── */
+/* ============================================================================
+ * 外壳 + 播放器。
+ *
+ * 播放器把"一次真实运行"演出来:过程块逐个出现(带入场动画)、运行时钟走字、
+ * 台头 ticker 跟随当前操作、正文打字机、结束那一刻的两态过渡(折叠 / 变色 / 收光)。
+ *
+ * 关键实现选择:**时钟驱动,而不是定时器链**。一次性算好整条时间线,再用 33ms
+ * 的 interval 按"已过去多久"反推该露到第几个过程块、正文该打到第几个字。
+ * 这样即使标签页被浏览器降频(后台标签的 setTimeout/rAF 会被节流甚至停摆),
+ * 下一次 tick 也能立刻追上正确进度,不会卡在半路;滚动/切标签回来仍是对的。
+ * ========================================================================= */
+
+
+
+
+const $ = (sel, root) => (root || document).querySelector(sel);
+const $$ = (sel, root) => Array.from((root || document).querySelectorAll(sel));
+
+const STATE = { plan: "a", theme: "light", density: "comfortable" };
+
+/* ───────────────────────── 时间线 ───────────────────────── */
+
+const TICK_MS = 33;
+const LEAD_IN = 320;      // 用户消息落地 → 第一个过程块
+const CHAR_MS = 9;        // 打字机速度(每字毫秒)
+const REPLY_LEAD = 340;   // 最后一个过程块 → 正文开始
+const SETTLE_MS = 760;    // 正文写完 → 收束完成
+const GAP = { think: 780, say: 620, tool: 480 };
+
+function timeline() {
+  let t = LEAD_IN;
+  const opAt = OPS.map((op) => {
+    const at = t;
+    t += GAP[op.kind] ?? GAP.tool;
+    return at;
+  });
+  const replyStart = t + REPLY_LEAD;
+  const replyEnd = replyStart + REPLY.length * CHAR_MS;
+  return { opAt, replyStart, replyEnd, end: replyEnd + SETTLE_MS };
+}
+
+/* ───────────────────────── 窗口外壳 ───────────────────────── */
+
+const SIDE_SESSIONS = [
+  { t: "修弱网下登录页一直转圈", live: true },
+  { t: "统一超时错误文案", s: "8 分钟前" },
+  { t: "左栏双模式切换后不刷新", s: "1 小时前" },
+  { t: "codex 子代理模型回落", s: "昨天" },
+];
+
+const SIDE_FILES = [
+  { n: "Login.tsx", d: "+24 −6", k: "mod" },
+  { n: "withTimeout.ts", d: "新建", k: "new" },
+  { n: "auth.ts", d: "", k: "" },
+  { n: "sessionStore.ts", d: "", k: "" },
+];
+
+const shell = () => `
+<div class="win">
+  <div class="tbar">
+    <span class="tl"></span><span class="tl"></span><span class="tl"></span>
+    <span class="tt">${esc(SESSION.project)} — ${esc(SESSION.branch)}</span>
+    <span class="tr"><b data-plan-name>${esc(PLANS.a.name)}</b></span>
+  </div>
+  <div class="shell">
+    <aside class="sleft">
+      <div class="sl-h"><span class="proj">${ico("folder", 13)}${esc(SESSION.project)}</span>
+        <button class="mini" type="button">${ico("plus", 12)}</button></div>
+      <div class="sl-list">
+        ${SIDE_SESSIONS.map(
+          (s) => `<div class="sl-row${s.live ? " on" : ""}">
+            <div class="sl-t">${esc(s.t)}</div>
+            <div class="sl-s">${s.live ? liveDot() + "运行中" : esc(s.s)}</div>
+          </div>`,
+        ).join("")}
+      </div>
+    </aside>
+    <main class="chat">
+      <header class="chat-h">
+        <div class="ch-t">${esc(SESSION.title)}</div>
+        <div class="ch-r">
+          <span class="chip">${ico("fork", 12)}${esc(SESSION.branch)}</span>
+          <span class="chip ghost">${esc(SESSION.provider)} · ${esc(SESSION.model)}</span>
+        </div>
+      </header>
+      <div class="stream" data-stream></div>
+      <div class="composer" data-composer>
+        <div class="cp-ph">继续输入，或按 <kbd>/</kbd> 使用命令…</div>
+        <div class="cp-r">
+          <span class="chip ghost">${ico("spark", 12)}Sonnet 4.5</span>
+          <span class="chip ghost">默认权限</span>
+          <button class="cp-send" type="button" data-send>${ico("send", 14)}</button>
+        </div>
+      </div>
+    </main>
+    <aside class="sright">
+      <div class="sr-tabs"><button class="on" type="button">本轮</button><button type="button">文件</button><button type="button">Git</button></div>
+      <div class="sr-body">
+        ${SIDE_FILES.map(
+          (f) => `<div class="sr-f"><span class="sr-i">${ico("file", 12)}</span><span class="sr-n">${esc(f.n)}</span>
+            <span class="sr-d ${f.k}">${esc(f.d)}</span></div>`,
+        ).join("")}
+      </div>
+    </aside>
+  </div>
+</div>`;
+
+/* ───────────────────────── 播放器 ───────────────────────── */
+
+let ticker = null;
+let t0 = 0;
+let tl = null;
+let curTurn = null;
+let shownOps = 0;
+let typed = 0;
+let settled = false;
+
+const fmtDur = (ms) => (ms / 1000).toFixed(1) + "s";
+const VERB = { Read: "读取", Grep: "检索", Edit: "修改", Write: "写入", Bash: "执行", Glob: "扫描", Task: "派发子代理" };
+const setOn = (el, on) => el && el.setAttribute("data-on", on ? "true" : "false");
+const opEl = (i) => $('[data-op="' + i + '"]', curTurn);
+
+/** 点亮/熄灭一个过程块;方案 C 的连接线随其后的 chip 一起亮。 */
+function setOpOn(i, on) {
+  const el = opEl(i);
+  if (el) setOn(el, on);
+  const lnk = $('[data-lnk-for="' + i + '"]', curTurn);
+  if (lnk) setOn(lnk, on);
+  return el;
+}
+
+const opLabel = (i) => {
+  const op = OPS[i];
+  if (!op) return "收尾…";
+  if (op.kind === "think") return "正在推理…";
+  if (op.kind === "say") return "整理结论…";
+  return `正在${VERB[op.name] || "执行"} ${op.target.split("/").pop()}`;
+};
+
+/** 方案 A 的脊线刻度:按已可见过程块的真实位置打点(直接量,不依赖 rAF)。 */
+function markSpine() {
+  const ar = $(".a-row", curTurn);
+  const ticks = $(".spine-ticks", curTurn);
+  if (!ar || !ticks) return;
+  const base = ar.getBoundingClientRect().top;
+  let lastY = 0;
+  $$("[data-op][data-on='true']", ar).forEach((op) => {
+    const i = op.getAttribute("data-op");
+    if (ticks.querySelector('[data-tick="' + i + '"]')) return;
+    const r = op.getBoundingClientRect();
+    const y = Math.max(6, r.top - base + Math.min(r.height / 2, 16));
+    lastY = Math.max(lastY, y);
+    const t = document.createElement("i");
+    t.className = "spine-tick";
+    t.setAttribute("data-tick", i);
+    t.style.top = y + "px";
+    ticks.appendChild(t);
+  });
+  // 最新一个点是"活的";脊线填充跟着长到那里
+  const all = $$(".spine-tick", ticks);
+  all.forEach((x) => x.classList.remove("is-live"));
+  if (!settled && all.length) all[all.length - 1].classList.add("is-live");
+  const fill = $(".spine-fill", curTurn);
+  if (fill && !settled && lastY) fill.style.height = lastY + "px";
+}
+
+/** 把已渲染的 markdown 注入正文,并把光标挂到最深一块文本的尾部。 */
+function paintReply(text, live) {
+  const el = $("[data-reply]", curTurn);
+  if (!el) return;
+  el.innerHTML = md(text);
+  if (live) {
+    let t = el;
+    while (t.lastElementChild) t = t.lastElementChild;
+    t.insertAdjacentHTML("beforeend", caret());
+  }
+}
+
+function setCounters() {
+  const n = OPS.slice(0, shownOps).filter((o) => o.kind === "tool").length;
+  const sc = $("[data-stepcount]", curTurn);
+  if (sc) sc.textContent = n + " 步";
+}
+
+/** 按"已经过去多久"把画面推到该有的样子(幂等)。 */
+function apply(elapsed) {
+  // 1) 过程块逐个露出;除最后一个之外都落成 done
+  while (shownOps < OPS.length && tl.opAt[shownOps] <= elapsed) {
+    const i = shownOps;
+    if (i === 0) {
+      const d = $(".dcard", curTurn); // 方案 C:文档卡随第一个过程块出现
+      if (d) setOn(d, true);
+    }
+    const prev = opEl(i - 1);
+    if (prev) prev.setAttribute("data-status", "done");
+    const el = setOpOn(i, true);
+    el.setAttribute("data-status", "running");
+    shownOps++;
+    const tk = $("[data-ticker]", curTurn);
+    if (tk) tk.textContent = opLabel(i);
+    setCounters();
+    markSpine();
+  }
+
+  const inReply = elapsed >= tl.replyStart;
+  if (inReply && shownOps === OPS.length && !typed) {
+    curTurn.setAttribute("data-reply-on", "true"); // 方案 A:回复标线随正文出现
+    const last = opEl(OPS.length - 1);
+    if (last) last.setAttribute("data-status", "done");
+    const rcard = $(".rcard", curTurn); // 方案 B:回复卡随正文出现
+    if (rcard) setOn(rcard, true);
+    const tk = $("[data-ticker]", curTurn);
+    if (tk) tk.textContent = "正在撰写回复…";
+  }
+
+  // 2) 正文打字机
+  if (inReply) {
+    const want = Math.min(REPLY.length, Math.max(0, Math.floor((elapsed - tl.replyStart) / CHAR_MS)));
+    if (want !== typed) {
+      typed = want;
+      paintReply(REPLY.slice(0, want), true);
+    }
+  }
+
+  // 3) 收束
+  if (elapsed >= tl.replyEnd && !settled) finish();
+}
+
+function finish() {
+  settled = true;
+  paintReply(REPLY, false);
+  curTurn.setAttribute("data-phase", "done");
+  collapseProc();
+  $$(".spine-tick", curTurn).forEach((x) => x.classList.remove("is-live"));
+  const fill = $(".spine-fill", curTurn);
+  const ar = $(".a-row", curTurn);
+  if (fill && ar) fill.style.height = ar.clientHeight + "px";
+  foldSteps();
+  syncComposer(false);
+}
+
+/** 收起过程面:A 是折叠的过程脊,B 是台账明细(都收,幂等)。 */
+function collapseProc() {
+  const proc = $(".proc", curTurn);
+  if (proc) proc.setAttribute("data-open", "false");
+  const ledger = $(".ledger", curTurn);
+  if (ledger) ledger.setAttribute("data-open", "false");
+}
+
+/** 方案 C:结束后把超出 4 枚的步骤折成 "… +N"。 */
+function foldSteps() {
+  const steps = $$(".steps .step[data-op]", curTurn);
+  if (steps.length <= 4) return;
+  steps.slice(4).forEach((s) => (s.hidden = true));
+  $$(".steps .lnk", curTurn).forEach((l, i) => {
+    if (i >= 3) l.hidden = true;
+  });
+  const more = $(".step-more", curTurn);
+  if (more) {
+    more.hidden = false;
+    $("[data-more-n]", more).textContent = String(steps.length - 4);
+  }
+}
+
+function clockTo(txt) {
+  $$("[data-clock]", curTurn).forEach((e) => (e.textContent = txt));
+}
+
+function play() {
+  stop();
+  const stream = $("[data-stream]");
+  if (!stream) return;
+  stream.innerHTML = historyTurn(STATE.plan) + currentTurn(STATE.plan);
+  curTurn = $(".turn:not(.hist)", stream);
+  $("[data-plan-name]").textContent = PLANS[STATE.plan].name;
+
+  tl = timeline();
+  shownOps = 0;
+  typed = 0;
+  settled = false;
+  paintReply("", false);
+  syncComposer(true);
+
+  t0 = Date.now();
+  ticker = setInterval(() => {
+    const elapsed = Date.now() - t0;
+    clockTo(fmtDur(Math.min(elapsed, tl.replyEnd)));
+    apply(elapsed);
+    if (elapsed >= tl.end) stop();
+  }, TICK_MS);
+  apply(0);
+}
+
+function stop() {
+  if (ticker) clearInterval(ticker);
+  ticker = null;
+}
+
+/** 定格到某一态(不播动画,用于快速对比排版)。 */
+function jumpTo(phase) {
+  stop();
+  const stream = $("[data-stream]");
+  if (!stream) return;
+  stream.innerHTML = historyTurn(STATE.plan) + currentTurn(STATE.plan);
+  curTurn = $(".turn:not(.hist)", stream);
+  $("[data-plan-name]").textContent = PLANS[STATE.plan].name;
+  // 方案 C:文档卡在两个态里都在场,差别只是边框/阴影/徽章
+  const dcard = $(".dcard", curTurn);
+  if (dcard) setOn(dcard, true);
+
+  const done = phase === "done";
+  OPS.forEach((op, i) => {
+    const el = setOpOn(i, true);
+    if (!el) return;
+    el.setAttribute("data-status", !done && i === OPS.length - 1 ? "running" : "done");
+  });
+  shownOps = OPS.length;
+  setCounters();
+
+  if (done) {
+    settled = true;
+    typed = REPLY.length;
+    paintReply(REPLY, false);
+    curTurn.setAttribute("data-reply-on", "true");
+    const rcard = $(".rcard", curTurn);
+    if (rcard) setOn(rcard, true);
+    curTurn.setAttribute("data-phase", "done");
+    collapseProc();
+    markSpine();
+    const fill = $(".spine-fill", curTurn);
+    const ar = $(".a-row", curTurn);
+    if (fill && ar) fill.style.height = ar.clientHeight + "px";
+    foldSteps();
+    clockTo(TURN_STATS.dur);
+    syncComposer(false);
+    return;
+  }
+
+  // 运行中定格:露出到第 6 个过程块,正文已流了一半,光标还在
+  settled = false;
+  const upto = 5;
+  OPS.forEach((op, i) => setOpOn(i, i <= upto));
+  shownOps = upto + 1;
+  const el5 = opEl(upto);
+  if (el5) el5.setAttribute("data-status", "running");
+  const tk = $("[data-ticker]", curTurn);
+  if (tk) tk.textContent = opLabel(upto);
+  setCounters();
+  const d = $(".dcard", curTurn);
+  if (d) setOn(d, true);
+  const rcard = $(".rcard", curTurn);
+  if (rcard) setOn(rcard, true);
+  typed = 150;
+  curTurn.setAttribute("data-reply-on", "true");
+  paintReply(REPLY.slice(0, typed), true);
+  markSpine();
+  clockTo("4.8s");
+  syncComposer(true);
+}
+
+const syncComposer = (running) => {
+  const cp = $("[data-composer]");
+  if (!cp) return;
+  cp.setAttribute("data-running", running ? "true" : "false");
+  const ph = $(".cp-ph", cp);
+  if (ph) ph.innerHTML = running ? "模型运行中… 可以继续追加指令（会排队）" : "继续输入，或按 <kbd>/</kbd> 使用命令…";
+};
+
+/* ───────────────────────── 控制条 & 说明 ───────────────────────── */
+
+const bar = () => `
+<div class="ctrlbar">
+  <div class="cg">
+    <label>方案</label>
+    <div class="seg" data-tool="plan">
+      <button type="button" data-plan="a" aria-selected="true">A · 脉络</button>
+      <button type="button" data-plan="b" aria-selected="false">B · 台账</button>
+      <button type="button" data-plan="c" aria-selected="false">C · 卡片流</button>
+    </div>
+  </div>
+  <span class="sep"></span>
+  <div class="cg">
+    <label>状态</label>
+    <div class="seg" data-tool="play">
+      <button type="button" data-act="play">${ico("spark", 13)} 重播动效</button>
+      <button type="button" data-act="run">运行中</button>
+      <button type="button" data-act="done">已完成</button>
+    </div>
+  </div>
+  <span class="sep"></span>
+  <div class="cg">
+    <label>主题</label>
+    <div class="seg" data-tool="theme">
+      <button type="button" data-theme="light" aria-selected="true">浅色</button>
+      <button type="button" data-theme="dark" aria-selected="false">深色</button>
+    </div>
+  </div>
+  <div class="cg">
+    <label>密度</label>
+    <div class="seg" data-tool="density">
+      <button type="button" data-density="comfortable" aria-selected="true">舒适</button>
+      <button type="button" data-density="compact" aria-selected="false">紧凑</button>
+    </div>
+  </div>
+  <span class="grow"></span>
+  <span class="t-meta">快捷键 1 / 2 / 3 切方案 · 空格重播</span>
+</div>`;
+
+function renderNotes() {
+  const p = PLANS[STATE.plan];
+  $("#notes").innerHTML = `
+    <div class="ncard">
+      <div class="n-h"><b>${esc(p.name)}</b><span class="badge a">${esc(p.tag)}</span></div>
+      <p class="n-lead">${esc(p.lead)}</p>
+      <ol class="n-list">
+        ${p.points.map(([t, d]) => `<li><b>${esc(t)}</b><span>${esc(d)}</span></li>`).join("")}
+      </ol>
+    </div>
+    <div class="ncard quiet">
+      <div class="n-h"><b>三个方案共享的东西</b></div>
+      <ul class="n-list">
+        <li><b>过程 / 回复的边界不变</b><span>仍然以「最后一个 tool_use」为界：之前的一切是过程，之后的文本是给用户的回复。三个方案只改这件事怎么被看见。</span></li>
+        <li><b>动效曲线统一</b><span>位移用 <code>cubic-bezier(.22,1,.36,1)</code>，出场回弹用 <code>cubic-bezier(.34,1.56,.64,1)</code>；入场 320ms、折叠 260ms，逐项错峰 30ms。尊重 <code>prefers-reduced-motion</code>。</span></li>
+        <li><b>两态差异全靠属性切换</b><span>所有「结束态」样式写在 <code>[data-phase="done"]</code> 下，靠 transition 过渡而不是换 DOM —— 跑完那一刻是连续收束，不是闪一下。</span></li>
+        <li><b>状态语义沿用现有 token</b><span>运行中 = accent，已完成 = 中性 + 对勾，失败 = danger，不引入新色系。</span></li>
+        <li><b>播放器是时钟驱动的</b><span>整条时间线一次算好，靠「已过去多久」反推进度；切到后台再回来会自动追上，不会卡在半路。</span></li>
+      </ul>
+    </div>`;
+}
+
+/* ───────────────────────── 绑定 ───────────────────────── */
+
+function bind() {
+  document.addEventListener("click", (e) => {
+    const b = e.target.closest("button");
+    if (!b) return;
+    const seg = b.closest("[data-tool]");
+    const tool = seg ? seg.getAttribute("data-tool") : null;
+
+    if (tool === "plan") {
+      STATE.plan = b.getAttribute("data-plan");
+      $$("[data-tool='plan'] button").forEach((x) => x.setAttribute("aria-selected", String(x === b)));
+      renderNotes();
+      play();
+    } else if (tool === "theme") {
+      STATE.theme = b.getAttribute("data-theme");
+      document.documentElement.setAttribute("data-theme", STATE.theme);
+      $$("[data-tool='theme'] button").forEach((x) => x.setAttribute("aria-selected", String(x === b)));
+    } else if (tool === "density") {
+      STATE.density = b.getAttribute("data-density");
+      document.documentElement.setAttribute("data-density", STATE.density);
+      $$("[data-tool='density'] button").forEach((x) => x.setAttribute("aria-selected", String(x === b)));
+    } else if (tool === "play") {
+      const act = b.getAttribute("data-act");
+      if (act === "play") play();
+      else jumpTo(act);
+    } else if (b.hasAttribute("data-toggle-ledger")) {
+      const lg = b.closest(".ledger");
+      if (lg) lg.setAttribute("data-open", lg.getAttribute("data-open") === "true" ? "false" : "true");
+    } else if (b.hasAttribute("data-send")) {
+      play();
+    }
+  });
+
+  document.addEventListener("keydown", (e) => {
+    const plan = { 1: "a", 2: "b", 3: "c" }[e.key];
+    if (plan) {
+      STATE.plan = plan;
+      $$("[data-tool='plan'] button").forEach((x) => x.setAttribute("aria-selected", String(x.getAttribute("data-plan") === plan)));
+      renderNotes();
+      play();
+    } else if (e.code === "Space") {
+      e.preventDefault();
+      play();
+    }
+  });
+}
+
+/* ───────────────────────── 启动 ───────────────────────── */
+
+function boot() {
+  $("#stage").innerHTML = bar() + shell();
+  renderNotes();
+  bind();
+  play();
+}
+
+
+boot();
+</script>
+</body>
+</html>

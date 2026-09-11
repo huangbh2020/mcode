@@ -27,6 +27,7 @@ import type {
   SubagentSnapshot,
   SubagentTranscriptBlock,
   SubagentTranscriptEvent,
+  UpstreamIssueEvent,
 } from "@contracts/runtime";
 import type { ProviderContext } from "@contracts/provider";
 import { FileSnapshot, FILE_MUTATING_TOOLS, getToolFilePath, normalizeToolFilePath } from "@main/lib/fileSnapshot.js";
@@ -959,7 +960,12 @@ export class SdkMessageAdapter {
    *  timeout). The binary retries internally with the delay it reports here;
    *  we don't drive that loop — this is purely the visibility signal. Logged
    *  so a long backoff isn't a silent hang in the main-process log, and so
-   *  triage can correlate a slow turn with upstream throttling.
+   *  triage can correlate a slow turn with upstream throttling. ALSO surfaced
+   *  to the renderer as an `upstream.issue{kind:"retry"}` event — the same
+   *  channel the OpenAI bridge uses — so a multi-second backoff shows the
+   *  retry hint instead of looking like a dead turn. No kind:"ok" is emitted:
+   *  the store's 30s decay timer (re-armed per retry) and turn.done cleanup
+   *  already bound the hint's lifetime.
    *
    *  The loading spinner already stays on (no turn.done is emitted while the
    *  SDK retries), so the user sees the turn as still active. When retries
@@ -970,6 +976,15 @@ export class SdkMessageAdapter {
       `claude: API retry ${m.attempt}/${m.max_retries} after ${m.retry_delay_ms}ms ` +
         `(error=${m.error} status=${m.error_status ?? "n/a"})`,
     );
+    const cause = m.error_status != null ? `${m.error} (HTTP ${m.error_status})` : m.error;
+    this.ctx.emit({
+      type: "upstream.issue",
+      sessionId: this.sessionId,
+      kind: "retry",
+      cause,
+      attempt: m.attempt,
+      attempts: m.max_retries,
+    } satisfies UpstreamIssueEvent);
   }
 
   /** Emit the turn.done event exactly once per turn. Both handleResult (when

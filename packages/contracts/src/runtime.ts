@@ -265,6 +265,19 @@ export interface TurnDoneEvent {
   type: "turn.done";
   sessionId: string;
   reason: TurnDoneReason;
+  /** Main-process wall-clock ms at which the turn ended. Stamped by
+   *  RuntimeManager (the single event exit) and adopted by the renderer as
+   *  `turnMeta.endedAt`, so BOTH sides record the same instant.
+   *
+   *  Why it must be shared: the turn's usage record (SessionRepo
+   *  updateUsageHistory) is filed under this same timestamp. The renderer
+   *  correlates the two to show a turn's token count, and separate
+   *  Date.now() calls in two processes would never match. Both processes read
+   *  the same system clock, so mixing it with renderer-side send timestamps
+   *  (durations) is safe.
+   *
+   *  Optional for backward compatibility with older/other clients. */
+  endedAt?: number;
 }
 
 /**

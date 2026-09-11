@@ -1,0 +1,922 @@
+<!doctype html>
+<html lang="zh-CN" data-mode="sketch">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>手绘风主题 · 设计稿(风格 × 明暗双维度)</title>
+<!-- =========================================================================
+  手绘风主题 · 设计稿/交互原型
+
+  论证「手绘风」作为 Mcode 第三种主题形态的可行性,核心立场:
+  手绘是「风格」维度,不是「明暗」维度 —— 与 ui.theme(system/light/dark)
+  正交,落地为 settings key ui.themeStyle("classic" | "sketch")。
+
+  四个形态:
+    · 纸面手绘(默认)— 浅色纸底 + 墨线 + 手写字体 + 图标抖动滤镜
+    · 牛皮纸        — 暖深底 + 粉笔线,同一套形状语言的深色版(二期)
+    · 经典浅色 / 经典深色 — 现状对照
+
+  设计语言:
+    1. 字体  = 霞鹜文楷(CDN 加载,离线回退系统楷体),仅作用于 UI 文本;
+               代码/终端/diff 保持等宽字体 —— "手绘 chrome + 清晰数据流"。
+    2. 形状  = 不规则 border-radius(手抖线条)+ 硬阴影(贴纸感)+
+               双笔描边(卡片重描一次)+ 虚线铅笔框(内衬区)+ 荧光笔选区。
+    3. 图标  = 一枚全局 SVG feTurbulence 位移滤镜,只挂在 svg 图标上
+               (性能红线:绝不挂根节点/滚动容器/动画元素)。
+    4. 纸纹  = feTurbulence 噪声 data-URI,整页一层,可选关闭。
+
+  顶部控件条可实时切换形态 / 关抖动 / 关纸纹 / 关手绘字体 / 「换一支笔」
+  (随机滤镜 seed,演示线条抖动的可调性)。
+========================================================================== -->
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/lxgw-wenkai-webfont@1.7.0/style.css">
+<style>
+/* ═══ 1. token:四套底色(经典两套 = app 现值;纸面/牛皮纸 = 本设计稿提案) ═══ */
+:root, html[data-mode="light"]{
+  color-scheme:light;
+  --surface:255 255 255; --surface-muted:240 242 246; --surface-hover:226 229 235;
+  --content:9 9 11; --content-muted:63 63 70; --content-subtle:113 113 122;
+  --edge:213 216 222; --panel-edge:222 225 231; --input-edge:202 205 212;
+  --accent:5 150 105; --accent-strong:4 120 87;
+  --danger:220 38 38; --warning:180 83 9; --info:124 58 237; --success:4 120 87;
+  --user-bubble:82 82 91; --user-bubble-alpha:.15;
+  --sys-font:-apple-system,"Segoe UI",system-ui,"PingFang SC","Microsoft YaHei UI","Microsoft YaHei",sans-serif;
+}
+html[data-mode="dark"]{
+  color-scheme:dark;
+  --surface:26 29 36; --surface-muted:44 49 60; --surface-hover:58 64 78;
+  --content:231 232 236; --content-muted:188 191 198; --content-subtle:158 162 171;
+  --edge:45 51 64; --panel-edge:45 51 64; --input-edge:95 99 110;
+  --accent:16 185 129; --accent-strong:16 185 129;
+  --danger:248 113 113; --warning:251 191 36; --info:167 139 250; --success:16 185 129;
+  --user-bubble:113 113 122; --user-bubble-alpha:.25;
+}
+/* 纸面手绘:暖纸底 + 墨线(色相整体偏暖,铅笔灰描边,品牌绿微降饱和保墨感) */
+html[data-mode="sketch"]{
+  color-scheme:light;
+  --surface:252 250 243; --surface-muted:246 242 231; --surface-hover:238 233 219;
+  --content:58 52 44; --content-muted:109 100 86; --content-subtle:141 131 113;
+  --edge:199 189 168; --panel-edge:214 205 186; --input-edge:178 167 144;
+  --accent:8 140 105; --accent-strong:6 118 88;
+  --danger:199 62 52; --warning:173 108 16; --info:112 78 196; --success:22 132 100;
+  --user-bubble:130 120 100; --user-bubble-alpha:.14;
+}
+/* 牛皮纸:手绘形状语言的深色版(粉笔线 + 暖深底),二期可做 */
+html[data-mode="kraft"]{
+  color-scheme:dark;
+  --surface:59 49 38; --surface-muted:51 42 32; --surface-hover:70 59 46;
+  --content:240 231 213; --content-muted:205 194 172; --content-subtle:172 160 137;
+  --edge:105 90 70; --panel-edge:95 81 63; --input-edge:128 112 88;
+  --accent:64 190 142; --accent-strong:64 190 142;
+  --danger:240 116 100; --warning:235 178 80; --info:168 142 245; --success:90 200 150;
+  --user-bubble:205 194 172; --user-bubble-alpha:.18;
+}
+
+/* ═══ 2. 手绘形状配方(仅 sketch-scope 作用域生效;挂在类本身上,
+      全局(body)与局部对照框(.demo)两种宿主都能拿到变量) ═══ */
+.sketch-scope{
+  /* 三档手抖圆角:大=卡片/面板,中=按钮/输入/气泡,小=chip/标签 */
+  --sk-r-lg:255px 18px 225px 18px / 18px 225px 18px 255px;
+  --sk-r-md:95px 9px 85px 10px / 10px 80px 9px 95px;
+  --sk-r-sm:30px 7px 26px 8px / 8px 24px 7px 30px;
+  --sk-r-blob:46% 54% 52% 48% / 54% 46% 54% 46%;
+  /* 硬阴影:实色偏移,贴纸/木刻感,替代柔光 */
+  --sk-sh:3px 4px 0 rgb(var(--content) / .06);
+  --sk-sh-btn:2px 2px 0 rgb(var(--content) / .16);
+  --sk-sh-pop:5px 6px 0 rgb(var(--content) / .12);
+  /* 手写字体栈:CDN 文楷 → 离线回退系统楷体(macOS Kaiti SC / Windows 楷体) */
+  --sk-font:"LXGW WenKai","LXGW WenKai Lite","Kaiti SC","STKaiti","KaiTi","DFKai-SB",var(--sys-font);
+  font-family:var(--sk-font);
+  font-weight:400; /* 楷体只有单一字重,粗体走合成,正文保持 400 防糊 */
+}
+body.sketch-scope :focus-visible{
+  outline:2px dashed rgb(var(--accent) / .6); outline-offset:2px; border-radius:6px;
+}
+/* 图标抖动:一枚全局滤镜,只作用于小尺寸 svg(性能红线见规格节) */
+.sketch-scope .ic{ filter:url(#sk-wobble); }
+body[data-wobble="off"] .ic{ filter:none !important; }
+body[data-font="off"].sketch-scope{ font-family:var(--sys-font); }
+
+/* 纸纹:整页一层噪声(feTurbulence data-URI),可关 */
+body.sketch-scope::after{
+  content:""; position:fixed; inset:0; pointer-events:none; z-index:9999;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='280' height='280'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 0.42 0 0 0 0 0.38 0 0 0 0 0.30 0 0 0 0.05 0'/%3E%3C/filter%3E%3Crect width='280' height='280' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+html[data-mode="kraft"] body.sketch-scope::after{ opacity:.55; }
+body[data-grain="off"]::after{ display:none !important; }
+
+/* 荧光笔选区/高亮 */
+::selection{ background:rgb(var(--accent) / .22); }
+
+/* ═══ 3. 基础 ═══ */
+*{box-sizing:border-box}
+html{background:rgb(var(--surface-muted))}
+body{
+  margin:0; background:rgb(var(--surface-muted)); color:rgb(var(--content));
+  font-family:var(--sys-font); font-size:14px; line-height:1.6;
+  -webkit-font-smoothing:antialiased; transition:background .25s;
+}
+button{font-family:inherit; color:inherit}
+.mono{font-family:"JetBrains Mono","Cascadia Code",Consolas,"Courier New",monospace}
+.ic{display:block; flex:none}
+.wrap{max-width:1240px; margin:0 auto; padding:0 22px 72px}
+
+/* 页头 / 小节标题(手绘波浪下划线) */
+.topbar{padding:26px 0 10px}
+.topbar h1{font-size:19px; margin:0 0 8px; font-weight:700}
+.topbar p{margin:0 0 4px; font-size:12.5px; line-height:1.8; color:rgb(var(--content-muted)); max-width:900px}
+.topbar p b{color:rgb(var(--content)); font-weight:600}
+section{margin-top:38px}
+.sec-h{display:flex; align-items:baseline; gap:12px; margin:0 0 6px}
+.sec-h h2{font-size:15px; margin:0; font-weight:700}
+.sec-h .no{font-size:11px; color:rgb(var(--content-subtle)); font-weight:600}
+.sec-p{margin:0 0 16px; font-size:12px; color:rgb(var(--content-muted)); max-width:880px; line-height:1.8}
+.u-sq{
+  height:7px; margin-top:3px; border-radius:3px;
+  background:rgb(var(--accent) / .7);
+  -webkit-mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 200 10' preserveAspectRatio='none'%3E%3Cpath d='M3 6C30 2 60 9 95 5S160 2 197 6' fill='none' stroke='black' stroke-width='3.4' stroke-linecap='round'/%3E%3C/svg%3E") center / 100% 100% no-repeat;
+  mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 200 10' preserveAspectRatio='none'%3E%3Cpath d='M3 6C30 2 60 9 95 5S160 2 197 6' fill='none' stroke='black' stroke-width='3.4' stroke-linecap='round'/%3E%3C/svg%3E") center / 100% 100% no-repeat;
+}
+.u-sq.w120{max-width:120px}.u-sq.w90{max-width:90px}
+.note{
+  margin:14px 0 0; padding:10px 14px; font-size:12px; line-height:1.8; color:rgb(var(--content-muted));
+  border:1.5px dashed rgb(var(--edge)); border-radius:10px; background:rgb(var(--surface));
+}
+.note b{color:rgb(var(--content))}
+
+/* ═══ 4. 控件条 ═══ */
+.ctrl{
+  position:sticky; top:0; z-index:100; display:flex; align-items:center; gap:14px; flex-wrap:wrap;
+  padding:10px 16px; margin:18px 0 4px;
+  background:rgb(var(--surface)); border:1px solid rgb(var(--edge)); border-radius:12px;
+  box-shadow:0 6px 22px -12px rgb(var(--content)/.28);
+}
+.seg{display:flex; border:1px solid rgb(var(--edge)); border-radius:9px; overflow:hidden; background:rgb(var(--surface-muted))}
+.seg button{
+  border:0; background:transparent; padding:6px 12px; font-size:12px; cursor:pointer;
+  color:rgb(var(--content-muted)); border-right:1px solid rgb(var(--edge));
+}
+.seg button:last-child{border-right:0}
+.seg button.on{background:rgb(var(--accent)); color:#fff; font-weight:600}
+.tgl{display:flex; align-items:center; gap:6px; font-size:12px; color:rgb(var(--content-muted)); cursor:pointer; user-select:none}
+.tgl input{accent-color:rgb(var(--accent)); cursor:pointer}
+.ctrl .hint{font-size:11.5px; color:rgb(var(--content-subtle)); margin-left:auto}
+.ctrl .shuffle{
+  border:1px solid rgb(var(--edge)); background:rgb(var(--surface)); border-radius:8px;
+  padding:5px 10px; font-size:12px; cursor:pointer;
+}
+
+/* ═══ 5. 组件基线(经典观感)—— 手绘覆盖统一挂在 .sketch-scope 前缀 ═══ */
+.card{
+  background:rgb(var(--surface)); border:1px solid rgb(var(--edge)); border-radius:10px;
+  box-shadow:0 1px 2px rgb(var(--content)/.05);
+}
+.sketch-scope .card{
+  border:1.5px solid rgb(var(--edge)); border-radius:var(--sk-r-lg);
+  box-shadow:var(--sk-sh);
+}
+/* 双笔描边:再"重描"一圈,错位不同圆角 = 手绘重复笔触。只给重点卡(composer/审批/计划) */
+.sketch-scope .card.retrace{position:relative}
+.sketch-scope .card.retrace::before{
+  content:""; position:absolute; inset:-3.5px; pointer-events:none;
+  border:1px solid rgb(var(--edge) / .45);
+  border-radius:18px 225px 18px 255px / 255px 18px 225px 18px; /* 镜像 = 第二笔 */
+}
+/* 铅笔虚线内衬框:思考卡 / 代码块 / 终端 */
+.dashed{border:1px dashed rgb(var(--edge)); border-radius:8px}
+.sketch-scope .dashed{border:1.5px dashed rgb(var(--edge)); border-radius:var(--sk-r-md)}
+
+.btn{
+  display:inline-flex; align-items:center; gap:6px; padding:5px 12px; font-size:12.5px;
+  border-radius:8px; border:1px solid rgb(var(--edge)); background:rgb(var(--surface));
+  cursor:pointer; line-height:1.4;
+}
+.btn:hover{background:rgb(var(--surface-hover))}
+.btn.primary{background:rgb(var(--accent)); border-color:rgb(var(--accent-strong)); color:#fff}
+.btn.primary:hover{background:rgb(var(--accent-strong))}
+.btn.ghost{border-color:transparent; background:transparent; color:rgb(var(--content-muted))}
+.btn.ghost:hover{background:rgb(var(--surface-hover)); color:rgb(var(--content))}
+.btn.danger{color:rgb(var(--danger)); border-color:rgb(var(--danger)/.4)}
+.btn.sm{padding:3px 9px; font-size:11.5px}
+.sketch-scope .btn{
+  border-width:1.5px; border-radius:var(--sk-r-md);
+  box-shadow:var(--sk-sh-btn); padding:5px 13px;
+  transition:transform .12s ease, box-shadow .12s ease, background .12s ease;
+}
+.sketch-scope .btn:hover{transform:translate(1px,1px); box-shadow:1px 1px 0 rgb(var(--content)/.16)}
+.sketch-scope .btn:active{transform:translate(2px,2px); box-shadow:none}
+.sketch-scope .btn.ghost{box-shadow:none; border-width:1px}
+.sketch-scope .btn.ghost:hover{transform:none}
+.sketch-scope .btn.primary{background:rgb(var(--accent)); border-color:rgb(var(--accent-strong)); color:#fbf9f2}
+
+.input{
+  width:100%; padding:7px 11px; font-size:12.5px; color:rgb(var(--content));
+  border:1px solid rgb(var(--input-edge)); border-radius:8px; background:rgb(var(--surface));
+}
+.sketch-scope .input{border:1.5px solid rgb(var(--input-edge)); border-radius:var(--sk-r-md)}
+.sketch-scope .input::placeholder{color:rgb(var(--content-subtle))}
+
+.chip{
+  display:inline-flex; align-items:center; gap:5px; padding:2px 9px; font-size:11.5px;
+  border:1px solid rgb(var(--edge)); border-radius:999px; background:rgb(var(--surface)); color:rgb(var(--content-muted));
+}
+.sketch-scope .chip{border-radius:var(--sk-r-sm); border-width:1.5px}
+
+/* 开关 / 复选(手绘:不规则方块 + 抖动对勾) */
+.switch{width:34px; height:19px; border-radius:999px; border:1px solid rgb(var(--edge)); background:rgb(var(--surface-muted)); position:relative; cursor:pointer}
+.switch::after{content:""; position:absolute; top:2px; left:2px; width:13px; height:13px; border-radius:50%; background:rgb(var(--surface)); border:1px solid rgb(var(--edge)); transition:left .15s}
+.switch.on{background:rgb(var(--accent)/.3); border-color:rgb(var(--accent))}
+.switch.on::after{left:16px; background:rgb(var(--accent)); border-color:rgb(var(--accent-strong))}
+.sketch-scope .switch{border-radius:var(--sk-r-sm); border-width:1.5px}
+.sketch-scope .switch::after{border-radius:var(--sk-r-sm)}
+.check{width:16px; height:16px; border:1.5px solid rgb(var(--edge)); border-radius:4px; background:rgb(var(--surface)); display:inline-flex; align-items:center; justify-content:center; color:rgb(var(--accent))}
+.sketch-scope .check{border-radius:var(--sk-r-sm)}
+
+/* 状态胶囊(运行/等待/完成) */
+.spill{display:inline-flex; align-items:center; gap:5px; font-size:11px; padding:1px 8px; border-radius:999px; font-weight:600}
+.spill i{width:6px; height:6px; border-radius:50%; background:currentColor}
+.sketch-scope .spill{border-radius:var(--sk-r-sm)}
+
+/* ═══ 6. 三栏全景 mock ═══ */
+.frame{
+  margin-top:14px; border:1px solid rgb(var(--panel-edge)); border-radius:14px; overflow:hidden;
+  background:rgb(var(--surface)); box-shadow:0 18px 50px -24px rgb(var(--content)/.35);
+}
+.sketch-scope .frame{border:1.5px solid rgb(var(--edge)); border-radius:var(--sk-r-lg); box-shadow:var(--sk-sh-pop)}
+.titlebar{
+  display:flex; align-items:center; gap:10px; padding:8px 14px;
+  border-bottom:1px solid rgb(var(--panel-edge)); background:rgb(var(--surface));
+}
+.sketch-scope .titlebar{border-bottom:1.5px solid rgb(var(--edge))}
+.dot3{display:flex; gap:6px}
+.dot3 i{width:10px; height:10px; border-radius:50%; background:rgb(var(--edge))}
+.sketch-scope .dot3 i{border-radius:var(--sk-r-sm)}
+.tbrand{font-size:12.5px; font-weight:700}
+.tchip{font-size:10.5px; color:rgb(var(--content-subtle)); border:1px solid rgb(var(--edge)); border-radius:999px; padding:0 8px}
+.sketch-scope .tchip{border-radius:var(--sk-r-sm); border-width:1px}
+.winbtns{margin-left:auto; display:flex; gap:10px; color:rgb(var(--content-subtle))}
+
+.tabsbar{
+  display:flex; align-items:center; gap:6px; padding:6px 12px 0;
+  border-bottom:1px solid rgb(var(--panel-edge)); background:rgb(var(--surface-muted));
+}
+.sketch-scope .tabsbar{border-bottom:1.5px solid rgb(var(--edge))}
+.tab{
+  display:inline-flex; align-items:center; gap:7px; padding:5px 12px; font-size:12px;
+  border:1px solid transparent; border-bottom:0; border-radius:9px 9px 0 0; color:rgb(var(--content-muted)); cursor:pointer;
+}
+.tab.active{
+  background:rgb(var(--surface)); border-color:rgb(var(--panel-edge)); color:rgb(var(--content)); position:relative;
+}
+.tab .x{color:rgb(var(--content-subtle)); display:inline-flex}
+.sketch-scope .tab{border-radius:var(--sk-r-sm) var(--sk-r-sm) 0 0; border-width:1.5px}
+.sketch-scope .tab.active::after{
+  content:""; position:absolute; left:10px; right:10px; bottom:2px; height:5px;
+  background:rgb(var(--accent)/.75);
+  -webkit-mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 200 10' preserveAspectRatio='none'%3E%3Cpath d='M3 6C30 2 60 9 95 5S160 2 197 6' fill='none' stroke='black' stroke-width='3.4' stroke-linecap='round'/%3E%3C/svg%3E") center / 100% 100% no-repeat;
+  mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 200 10' preserveAspectRatio='none'%3E%3Cpath d='M3 6C30 2 60 9 95 5S160 2 197 6' fill='none' stroke='black' stroke-width='3.4' stroke-linecap='round'/%3E%3C/svg%3E") center / 100% 100% no-repeat;
+}
+
+.cols{display:grid; grid-template-columns:236px 1fr 26px 272px; min-height:620px}
+
+/* 左栏(会话流) */
+.lbar{border-right:1px solid rgb(var(--panel-edge)); background:rgb(var(--surface-muted)); padding:10px}
+.sketch-scope .lbar{border-right:1.5px solid rgb(var(--edge))}
+.lq{display:flex; gap:6px; margin-bottom:10px}
+.lq .btn{flex:1; justify-content:center; font-size:11.5px}
+.lscope{margin-bottom:10px}
+.scard{padding:9px 11px; margin-bottom:8px; cursor:pointer}
+.scard .r1{display:flex; align-items:center; gap:7px}
+.avatar{
+  width:20px; height:20px; flex:none; display:flex; align-items:center; justify-content:center;
+  font-size:10.5px; font-weight:700; color:#fff; border-radius:6px;
+}
+.sketch-scope .avatar{border-radius:var(--sk-r-sm)}
+.scard .pname{font-size:12px; font-weight:600; flex:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+.scard .r2{font-size:12px; color:rgb(var(--content-muted)); margin-top:3px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+.scard .r3{display:flex; align-items:center; gap:6px; margin-top:4px; font-size:11px; color:rgb(var(--content-subtle))}
+.scard .r3 .mono{font-size:10.5px}
+.scard.sel{background:rgb(var(--accent)/.10); border-color:rgb(var(--accent)/.35)}
+.spill.run{color:#0369a1; background:rgb(2 132 199 / .12)}
+.spill.wait{color:#b45309; background:rgb(180 83 9 / .12)}
+.spill.done{color:rgb(var(--accent-strong)); background:rgb(var(--accent)/.12)}
+html[data-mode="dark"] .spill.run, html[data-mode="kraft"] .spill.run{color:#7dd3fc}
+html[data-mode="dark"] .spill.wait, html[data-mode="kraft"] .spill.wait{color:#fcd34d}
+.pdot{width:7px; height:7px; border-radius:50%; flex:none}
+
+/* 中栏(聊天) */
+.chat{display:flex; flex-direction:column; background:rgb(var(--surface)); min-width:0}
+.stream{flex:1; padding:18px 22px 14px; display:flex; flex-direction:column; gap:14px; overflow:hidden}
+.msg-user{
+  align-self:flex-end; max-width:78%; padding:8px 13px; font-size:13px;
+  background:rgb(var(--user-bubble) / var(--user-bubble-alpha));
+  border:1px solid rgb(var(--edge)); border-radius:12px;
+}
+.sketch-scope .msg-user{
+  background:rgb(var(--accent) / .09);
+  border:1.5px solid rgb(var(--accent) / .45);
+  border-radius:var(--sk-r-md); box-shadow:var(--sk-sh);
+}
+.msg-ai{max-width:92%; font-size:13px; color:rgb(var(--content))}
+.msg-ai p{margin:0 0 8px; line-height:1.75}
+.msg-ai ul{margin:0 0 8px; padding-left:20px}
+.msg-ai li{margin:2px 0; line-height:1.7}
+.inline-code{
+  font-family:"JetBrains Mono",Consolas,monospace; font-size:11.5px;
+  background:rgb(var(--surface-muted)); border:1px solid rgb(var(--edge)); border-radius:4px; padding:0 5px;
+}
+.sketch-scope .inline-code{border-radius:var(--sk-r-sm); border-width:1px}
+.tcard{padding:8px 12px}
+.tcard .th{display:flex; align-items:center; gap:8px; font-size:12px; font-weight:600}
+.tcard .th .t-meta{margin-left:auto; font-size:11px; font-weight:400; color:rgb(var(--content-subtle))}
+.tbody{margin-top:7px; font-size:11.5px; color:rgb(var(--content-muted))}
+.tbody .mono{font-size:11px; color:rgb(var(--content-muted))}
+.kv{display:flex; gap:8px; align-items:baseline; padding:2px 0}
+.kv .k{color:rgb(var(--content-subtle)); flex:none; font-size:11px}
+.filechips{display:flex; flex-wrap:wrap; gap:6px; margin-top:7px}
+.fchip{
+  display:inline-flex; align-items:center; gap:6px; font-size:11px; padding:2px 8px;
+  border:1px solid rgb(var(--edge)); border-radius:6px; background:rgb(var(--surface-muted));
+}
+.sketch-scope .fchip{border-radius:var(--sk-r-sm); border-width:1px}
+.tally-add{color:rgb(var(--success)); font-weight:600}
+.tally-del{color:rgb(var(--danger)); font-weight:600}
+.badge-new{
+  font-size:10px; font-weight:700; color:rgb(var(--accent-strong));
+  background:rgb(var(--accent)/.14); border-radius:999px; padding:0 7px;
+}
+.sketch-scope .badge-new{border-radius:var(--sk-r-sm)}
+.idx{
+  width:22px; height:22px; flex:none; display:flex; align-items:center; justify-content:center;
+  font-size:11px; font-weight:700; color:rgb(var(--accent-strong));
+  border:1.5px solid rgb(var(--accent)/.5); border-radius:50%;
+}
+.sketch-scope .idx{border-radius:var(--sk-r-blob)}
+
+/* 活动轨(右缘 26px) */
+.rail{
+  border-left:1px solid rgb(var(--panel-edge)); background:rgb(var(--surface));
+  display:flex; flex-direction:column; align-items:center; justify-content:center; gap:14px;
+}
+.sketch-scope .rail{border-left:1.5px solid rgb(var(--edge))}
+.rnode{
+  width:22px; height:22px; border-radius:50%; border:1.5px solid rgb(var(--edge));
+  background:rgb(var(--surface)); display:flex; align-items:center; justify-content:center;
+  color:rgb(var(--content-muted)); position:relative; cursor:pointer;
+}
+.rnode.run{border-color:rgb(var(--accent)); color:rgb(var(--accent)); animation:halo 2.2s ease-in-out infinite}
+@keyframes halo{0%,100%{box-shadow:0 0 0 0 rgb(var(--accent)/.28)}50%{box-shadow:0 0 0 5px rgb(var(--accent)/.10)}}
+.sketch-scope .rnode{border-radius:var(--sk-r-blob)}
+
+/* 输入区(composer) */
+.composer{margin:0 18px 16px; padding:10px 12px 9px}
+.composer .ta{border:0; outline:0; width:100%; font-size:13px; background:transparent; color:rgb(var(--content)); resize:none; font-family:inherit}
+.composer .ta::placeholder{color:rgb(var(--content-subtle))}
+.pillbar{display:flex; align-items:center; gap:6px; margin-top:9px; flex-wrap:wrap}
+.pillseg{
+  display:inline-flex; align-items:center; gap:5px; padding:3px 10px; font-size:11.5px;
+  border:1px solid rgb(var(--edge)); border-radius:999px; background:rgb(var(--surface)); color:rgb(var(--content-muted)); cursor:pointer;
+}
+.sketch-scope .pillseg{border-radius:var(--sk-r-sm); border-width:1.5px; box-shadow:1px 1px 0 rgb(var(--content)/.10)}
+.ring{
+  width:22px; height:22px; border-radius:50%; flex:none; display:flex; align-items:center; justify-content:center;
+  background:conic-gradient(rgb(var(--accent)) calc(38 * 1%), rgb(var(--edge)) 0);
+  color:rgb(var(--content-muted));
+}
+.ring i{width:16px; height:16px; border-radius:50%; background:rgb(var(--surface)); display:flex; align-items:center; justify-content:center; font-size:8px; font-style:normal; font-weight:700}
+.sketch-scope .ring{border-radius:50%} /* 环保持正圆:它是仪表不是笔迹 */
+.send{
+  margin-left:auto; width:32px; height:32px; border:none; cursor:pointer;
+  background:rgb(var(--accent)); color:#fff;
+  border-radius:50%; display:flex; align-items:center; justify-content:center;
+}
+.sketch-scope .send{border-radius:var(--sk-r-blob); box-shadow:var(--sk-sh-btn)}
+.send:hover{background:rgb(var(--accent-strong))}
+
+/* 右栏 */
+.rpanel{border-left:1px solid rgb(var(--panel-edge)); background:rgb(var(--surface)); padding:10px; display:flex; flex-direction:column; gap:10px}
+.sketch-scope .rpanel{border-left:1.5px solid rgb(var(--edge))}
+.rtabs{display:flex; gap:2px; border-bottom:1px solid rgb(var(--panel-edge)); padding-bottom:6px}
+.sketch-scope .rtabs{border-bottom:1.5px solid rgb(var(--edge))}
+.rtab{font-size:12px; padding:3px 10px; border-radius:7px; cursor:pointer; color:rgb(var(--content-muted))}
+.rtab.on{background:rgb(var(--surface-hover)); color:rgb(var(--content)); font-weight:600}
+.sketch-scope .rtab{border-radius:var(--sk-r-sm)}
+.tree{font-size:12px}
+.trow{display:flex; align-items:center; gap:6px; padding:2.5px 6px; border-radius:6px; color:rgb(var(--content-muted)); cursor:pointer; white-space:nowrap}
+.trow:hover{background:rgb(var(--surface-hover))}
+.trow.dir{color:rgb(var(--content))}
+.trow.sel{background:rgb(var(--accent)/.10); color:rgb(var(--content))}
+.trow .fd{width:6px; height:6px; border-radius:50%; background:rgb(var(--warning)); flex:none}
+.i1{padding-left:18px}.i2{padding-left:30px}.i3{padding-left:42px}
+.gitrow{display:flex; align-items:center; gap:7px; font-size:11.5px; padding:3px 6px; color:rgb(var(--content-muted))}
+.gitrow .fn{font-family:"JetBrains Mono",Consolas,monospace; font-size:10.5px; flex:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+.term{
+  margin-top:auto; font-size:11px; line-height:1.65; padding:9px 11px;
+  background:rgb(var(--surface-muted)); color:rgb(var(--content-muted));
+}
+.term .pr{color:rgb(var(--accent)); font-weight:700}
+
+/* ═══ 7. 组件对照(gallery) ═══ */
+.pair{display:grid; grid-template-columns:repeat(auto-fit,minmax(360px,1fr)); gap:16px; margin-top:12px}
+.demo{
+  padding:16px; border:1px dashed rgb(var(--content-subtle)/.4); border-radius:12px;
+  background:rgb(var(--surface-muted)); font-size:12.5px;
+}
+.demo .lab{font-size:10.5px; letter-spacing:.08em; color:rgb(var(--content-subtle)); margin-bottom:12px; font-weight:700}
+.demo .row{display:flex; align-items:center; gap:10px; flex-wrap:wrap}
+.demo .row + .row{margin-top:10px}
+/* 局部 token 作用域:让「经典/纸面」并排对照不依赖全局模式 */
+.t-classic{
+  --surface:255 255 255; --surface-muted:240 242 246; --surface-hover:226 229 235;
+  --content:9 9 11; --content-muted:63 63 70; --content-subtle:113 113 122;
+  --edge:213 216 222; --panel-edge:222 225 231; --input-edge:202 205 212;
+  --accent:5 150 105; --accent-strong:4 120 87;
+  --danger:220 38 38; --warning:180 83 9; --info:124 58 237; --success:4 120 87;
+  --user-bubble:82 82 91; --user-bubble-alpha:.15;
+  font-family:var(--sys-font);
+}
+/* 全局手绘模式下,经典对照框内的图标不做抖动(滤镜会被 body 作用域连带) */
+.t-classic .ic{ filter:none !important; }
+.t-paper{
+  --surface:252 250 243; --surface-muted:246 242 231; --surface-hover:238 233 219;
+  --content:58 52 44; --content-muted:109 100 86; --content-subtle:141 131 113;
+  --edge:199 189 168; --panel-edge:214 205 186; --input-edge:178 167 144;
+  --accent:8 140 105; --accent-strong:6 118 88;
+  --danger:199 62 52; --warning:173 108 16; --info:112 78 196; --success:22 132 100;
+  --user-bubble:130 120 100; --user-bubble-alpha:.14;
+}
+/* gallery 里的卡片/审批/提问 */
+.appr{padding:13px 15px}
+.appr .ttl{display:flex; align-items:center; gap:8px; font-size:13px; font-weight:700}
+.appr .desc{font-size:12px; color:rgb(var(--content-muted)); margin-top:6px; line-height:1.7}
+.appr .path{font-size:11px; margin-top:6px; padding:6px 9px; background:rgb(var(--surface-muted)); border-radius:6px}
+.sketch-scope .appr .path{border-radius:var(--sk-r-sm)}
+.appr .acts{display:flex; gap:8px; margin-top:11px}
+.askopt{
+  display:flex; align-items:center; gap:9px; padding:8px 12px; font-size:12.5px;
+  border:1px solid rgb(var(--edge)); border-radius:9px; background:rgb(var(--surface)); cursor:pointer;
+}
+.askopt + .askopt{margin-top:8px}
+.sketch-scope .askopt{border-radius:var(--sk-r-md); border-width:1.5px; box-shadow:var(--sk-sh-btn)}
+.warn{
+  display:flex; gap:10px; padding:11px 14px; font-size:12.5px; line-height:1.7;
+  background:rgb(var(--warning)/.08); border:1px solid rgb(var(--warning)/.35); border-radius:10px; color:rgb(var(--content));
+}
+.sketch-scope .warn{border-width:1.5px; border-radius:var(--sk-r-lg); box-shadow:var(--sk-sh)}
+.err{
+  display:flex; gap:10px; padding:11px 14px; font-size:12.5px;
+  background:rgb(var(--danger)/.07); border:1px solid rgb(var(--danger)/.35); border-radius:10px;
+}
+.sketch-scope .err{border-width:1.5px; border-radius:var(--sk-r-lg); box-shadow:var(--sk-sh)}
+.codeblk{
+  font-size:11.5px; line-height:1.7; padding:11px 14px;
+  background:rgb(var(--surface-muted)); color:rgb(var(--content-muted)); white-space:pre; overflow:auto;
+}
+.codeblk .kw{color:rgb(var(--info))}
+.codeblk .fn{color:rgb(var(--accent-strong))}
+.sketch-scope .codeblk .fn{color:rgb(var(--accent-strong))}
+
+/* ═══ 8. 规格速查表 ═══ */
+table.spec{width:100%; border-collapse:collapse; font-size:12px; margin-top:12px}
+table.spec th, table.spec td{
+  text-align:left; padding:7px 10px; border-bottom:1px solid rgb(var(--panel-edge)); vertical-align:top;
+}
+table.spec th{font-size:11px; color:rgb(var(--content-subtle)); font-weight:700; letter-spacing:.04em}
+table.spec td .sw{display:inline-block; width:13px; height:13px; border-radius:4px; border:1px solid rgb(var(--edge)); vertical-align:-2px; margin-right:7px}
+table.spec code{font-family:"JetBrains Mono",Consolas,monospace; font-size:10.5px; background:rgb(var(--surface-muted)); border-radius:4px; padding:1px 5px}
+.recipe{font-family:"JetBrains Mono",Consolas,monospace; font-size:10.5px; background:rgb(var(--surface-muted)); border-radius:6px; padding:1px 6px}
+footer{margin-top:52px; font-size:12px; color:rgb(var(--content-subtle)); line-height:1.9}
+@media (prefers-reduced-motion:reduce){ .rnode.run{animation:none} }
+</style>
+</head>
+<body class="sketch-scope">
+
+<!-- 全局图标抖动滤镜:「换一支笔」= 随机 baseFrequency seed -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <filter id="sk-wobble" x="-8%" y="-8%" width="116%" height="116%">
+    <feTurbulence id="sk-noise" type="fractalNoise" baseFrequency="0.019 0.032" numOctaves="2" seed="7" result="n"/>
+    <feDisplacementMap in="SourceGraphic" in2="n" scale="2.2" xChannelSelector="R" yChannelSelector="G"/>
+  </filter>
+</svg>
+
+<div class="wrap">
+
+  <!-- ═══════════ 页头 ═══════════ -->
+  <div class="topbar">
+    <h1>手绘风主题 · 设计稿</h1>
+    <p><b>立场:手绘是「风格」维度,不是「明暗」维度。</b>与现有 ui.theme(system/light/dark)正交,落地为 settings key
+      <span class="mono">ui.themeStyle = "classic" | "sketch"</span>;渲染端在 &lt;html&gt; 上同时维护 .dark 与 .sketch 两个 class,
+      主进程 nativeTheme 完全不感知手绘。本稿给出四种形态:纸面手绘(一期目标)/ 牛皮纸(手绘的深色版,二期)/ 经典浅色 / 经典深色(现状对照)。</p>
+    <p><b>三条设计红线:</b>① 代码、终端、diff 保持等宽字体不手绘(可读性优先,"手绘 chrome + 清晰数据流");② 位移滤镜只挂小尺寸 svg 图标,
+      绝不挂根节点 / 滚动容器 / 动画元素;③ 手写字体下 UI 基准字号需上调一档(14 → 15px),否则 11–13px 元信息发虚。</p>
+  </div>
+
+  <!-- ═══════════ 控件条 ═══════════ -->
+  <div class="ctrl">
+    <div class="seg" id="modes"></div>
+    <label class="tgl"><input type="checkbox" id="tgl-wobble" checked> 图标抖动</label>
+    <label class="tgl"><input type="checkbox" id="tgl-grain" checked> 纸纹</label>
+    <label class="tgl"><input type="checkbox" id="tgl-font" checked> 手绘字体</label>
+    <button class="shuffle" id="shuffle">✎ 换一支笔(seed)</button>
+    <span class="hint">字体经 CDN 加载霞鹜文楷,离线自动回退系统楷体;后两项仅手绘形态生效</span>
+  </div>
+
+  <!-- ═══════════ ① 三栏全景 ═══════════ -->
+  <section>
+    <div class="sec-h"><span class="no">①</span><h2>应用全景(左栏会话流 · 中栏聊天 + 活动轨 · 右栏文件/Git/终端)</h2></div>
+    <div class="u-sq w120"></div>
+
+    <div class="frame">
+      <div class="titlebar">
+        <div class="dot3"><i></i><i></i><i></i></div>
+        <span class="tbrand">Mcode</span>
+        <span class="tchip">手绘 · 纸面</span>
+        <div class="winbtns">
+          <span data-ic="minus" data-s="13"></span>
+          <span data-ic="square" data-s="11"></span>
+          <span data-ic="x" data-s="13"></span>
+        </div>
+      </div>
+
+      <div class="tabsbar">
+        <div class="tab active"><span data-ic="message" data-s="13"></span>手绘风主题设计稿<span class="x" data-ic="x" data-s="11"></span></div>
+        <div class="tab"><span data-ic="message" data-s="13"></span>插件系统 v1<span class="x" data-ic="x" data-s="11"></span></div>
+        <div class="tab"><span data-ic="file" data-s="13"></span>activityShared.ts<span class="x" data-ic="x" data-s="11"></span></div>
+        <div class="tab" style="padding:5px 8px"><span data-ic="plus" data-s="13"></span></div>
+      </div>
+
+      <div class="cols">
+        <!-- 左栏 -->
+        <div class="lbar">
+          <div class="lq">
+            <button class="btn sm"><span data-ic="plus" data-s="12"></span>新建</button>
+            <button class="btn sm"><span data-ic="search" data-s="12"></span>搜索</button>
+            <button class="btn sm"><span data-ic="terminal" data-s="12"></span>终端</button>
+          </div>
+          <div class="lscope"><span class="chip"><span data-ic="chev-d" data-s="11"></span>全部项目</span></div>
+
+          <div class="card scard sel">
+            <div class="r1">
+              <span class="avatar" style="background:rgb(8 140 105)">M</span>
+              <span class="pname">my-claude-gui</span>
+              <span class="spill run"><i></i>02:14</span>
+            </div>
+            <div class="r2">手绘风主题:字体与滤镜验证</div>
+            <div class="r3"><span data-ic="branch" data-s="11"></span><span class="mono">feature/plugins</span>·<span class="pdot" style="background:rgb(8 140 105)"></span></div>
+          </div>
+
+          <div class="card scard">
+            <div class="r1">
+              <span class="avatar" style="background:rgb(112 78 196)">P</span>
+              <span class="pname">pi-sdk-integration</span>
+              <span class="spill wait"><i></i>待输入</span>
+            </div>
+            <div class="r2">计划模式审批链路复现</div>
+            <div class="r3"><span data-ic="branch" data-s="11"></span><span class="mono">main</span>·<span class="pdot" style="background:rgb(112 78 196)"></span></div>
+          </div>
+
+          <div class="card scard">
+            <div class="r1">
+              <span class="avatar" style="background:rgb(173 108 16)">C</span>
+              <span class="pname">codex-app-server</span>
+              <span class="spill done">✓</span>
+            </div>
+            <div class="r2">子代理 roster 回填 toolUseId</div>
+            <div class="r3"><span data-ic="branch" data-s="11"></span><span class="mono">main</span>·<span class="pdot" style="background:rgb(173 108 16)"></span></div>
+          </div>
+
+          <div class="card scard">
+            <div class="r1">
+              <span class="avatar" style="background:rgb(2 132 199)">W</span>
+              <span class="pname">web-dash</span>
+            </div>
+            <div class="r2">LSP 面板改单行布局</div>
+            <div class="r3">3 小时前</div>
+          </div>
+
+          <div class="chip" style="margin-top:4px"><span data-ic="chev-r" data-s="11"></span>归档 · 12</div>
+        </div>
+
+        <!-- 中栏:聊天流 -->
+        <div class="chat">
+          <div class="stream">
+            <div class="msg-user">帮我把活动台的子代理时间轴换成真实起止时间,别再全是等宽条了。</div>
+
+            <div class="msg-ai">
+              <p>好的。先看 <span class="inline-code">activityShared.ts</span> 里 <span class="inline-code">subagentEndpoints</span> 的推导:已结束的代理以
+                <span class="inline-code">endedAt</span> 收尾、运行中的以 <span class="inline-code">now</span> 收尾,两者都带累计
+                <span class="inline-code">durationMs</span>,所以条形起点可以直接用 <span class="inline-code">end - durationMs</span> 推出来:</p>
+              <ul>
+                <li>不需要给 <span class="inline-code">SubagentSnapshot</span> 新增字段;</li>
+                <li>面板空隙、行上时钟、条形长度由同一函数推出,三者不可能互相矛盾;</li>
+                <li>运行中的条形顶到右端「现在」刻度即可。</li>
+              </ul>
+            </div>
+
+            <div class="card dashed tcard">
+              <div class="th"><span data-ic="spark" data-s="14"></span>思考<span class="t-meta">6.4s · 已折叠</span></div>
+            </div>
+
+            <div class="card tcard">
+              <div class="th"><span data-ic="terminal" data-s="14"></span>Bash<span class="t-meta">1.2s · ✓</span></div>
+              <div class="tbody"><div class="mono">pnpm typecheck</div><div class="mono" style="color:rgb(var(--success))">✓ 0 errors in 14 files</div></div>
+            </div>
+
+            <div class="card tcard">
+              <div class="th"><span data-ic="pen" data-s="14"></span>本轮修改 · 3 个文件<span class="t-meta"><button class="btn ghost sm">撤销本轮</button></span></div>
+              <div class="filechips">
+                <span class="fchip">activityShared.ts <b class="tally-add">+42</b><b class="tally-del">−8</b></span>
+                <span class="fchip">ActivityConsole.tsx <b class="tally-add">+12</b><b class="tally-del">−3</b></span>
+                <span class="fchip">styles.css <b class="tally-add">+18</b><b class="tally-del">−2</b></span>
+              </div>
+            </div>
+
+            <div class="card tcard retrace">
+              <div class="th"><span class="idx">1</span>手绘主题落地步骤<span class="badge-new">最新</span></div>
+              <div class="tbody">字体资产子集化 → 管道打通(ui.themeStyle)→ 图标滤镜限域 → 硬阴影与纸纹打磨。</div>
+            </div>
+          </div>
+
+          <!-- composer -->
+          <div class="card composer retrace">
+            <textarea class="ta" rows="2" placeholder="回复 Mcode…"></textarea>
+            <div class="pillbar">
+              <span class="pillseg"><span data-ic="plus" data-s="12"></span>附件</span>
+              <span class="pillseg"><span data-ic="spark" data-s="12"></span>GLM-4.7</span>
+              <span class="pillseg"><span data-ic="zap" data-s="12"></span>思考 · 高</span>
+              <span class="pillseg"><span data-ic="shield" data-s="12"></span>计划</span>
+              <span class="ring"><i>38</i></span>
+              <button class="send" title="发送"><span data-ic="send" data-s="15"></span></button>
+            </div>
+          </div>
+        </div>
+
+        <!-- 活动轨 -->
+        <div class="rail">
+          <div class="rnode" title="计划 · 3"><span data-ic="file" data-s="12"></span></div>
+          <div class="rnode run" title="子代理 · 2 运行中"><span data-ic="message" data-s="12"></span></div>
+          <div class="rnode" title="任务 · 1"><span data-ic="check" data-s="12"></span></div>
+          <div class="rnode" title="书签 · 5"><span data-ic="bookmark" data-s="12"></span></div>
+        </div>
+
+        <!-- 右栏 -->
+        <div class="rpanel">
+          <div class="rtabs">
+            <span class="rtab on">文件</span><span class="rtab">Git</span><span class="rtab">终端</span>
+          </div>
+          <div class="tree">
+            <div class="trow dir"><span data-ic="chev-d" data-s="11"></span><span data-ic="folder" data-s="13"></span>src</div>
+            <div class="trow dir i1"><span data-ic="chev-d" data-s="11"></span><span data-ic="folder" data-s="13"></span>renderer</div>
+            <div class="trow dir i2"><span data-ic="chev-r" data-s="11"></span><span data-ic="folder" data-s="13"></span>components</div>
+            <div class="trow i2"><span data-ic="file" data-s="13"></span>theme.ts</div>
+            <div class="trow i2 sel"><span data-ic="file" data-s="13"></span>activityShared.ts</div>
+            <div class="trow i2"><span class="fd"></span><span data-ic="file" data-s="13"></span>ActivityConsole.tsx</div>
+            <div class="trow i1"><span data-ic="file" data-s="13"></span>styles.css</div>
+          </div>
+          <div class="rtabs">
+            <span class="rtab on">Git</span><span class="rtab">文件</span><span class="rtab">终端</span>
+          </div>
+          <div>
+            <div class="gitrow"><span class="chip"><span data-ic="branch" data-s="10"></span>feature/plugins ↑1</span></div>
+            <div class="gitrow"><span data-ic="pen" data-s="11"></span><span class="fn">activityShared.ts</span><b class="tally-add">+42</b><b class="tally-del">−8</b></div>
+            <div class="gitrow"><span data-ic="pen" data-s="11"></span><span class="fn">ActivityConsole.tsx</span><b class="tally-add">+12</b><b class="tally-del">−3</b></div>
+            <div class="gitrow"><button class="btn sm" style="margin-top:4px"><span data-ic="check" data-s="12"></span>提交</button></div>
+          </div>
+          <div class="card dashed term">
+            <div><span class="pr">$</span> pnpm dev</div>
+            <div>ready in 812ms</div>
+            <div><span class="pr">$</span> <span style="opacity:.5">▌</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="note">
+      <b>全景里埋了 8 个手绘触点:</b>窗口/卡片 = 不规则大圆角 + 硬阴影;重点卡(composer、计划卡)= 双笔描边(镜像圆角重描一圈);
+      思考卡 / 终端 / 代码区 = 铅笔虚线框;激活 tab = 手绘波浪下划线;所有 svg 图标 = 位移滤镜抖动;发送键 = 手绘"墨团"圆;
+      会话卡选中 = 荧光笔淡扫;整页覆一层纸纹噪声。上下文环刻意<b>保持正圆</b>——它是仪表不是笔迹。
+    </div>
+  </section>
+
+  <!-- ═══════════ ② 组件对照 ═══════════ -->
+  <section>
+    <div class="sec-h"><span class="no">②</span><h2>组件对照(经典浅色 vs 手绘·纸面,不随全局模式走)</h2></div>
+    <div class="u-sq w120"></div>
+
+    <!-- 按钮 -->
+    <div class="pair">
+      <div class="demo t-classic">
+        <div class="lab">CLASSIC · 经典</div>
+        <div class="row">
+          <button class="btn">默认</button>
+          <button class="btn primary"><span data-ic="check" data-s="13"></span>批准</button>
+          <button class="btn ghost">幽灵</button>
+          <button class="btn danger"><span data-ic="x" data-s="13"></span>拒绝</button>
+        </div>
+        <div class="row"><input class="input" placeholder="输入框…"></div>
+      </div>
+      <div class="demo t-paper sketch-scope">
+        <div class="lab">SKETCH · 手绘</div>
+        <div class="row">
+          <button class="btn">默认</button>
+          <button class="btn primary"><span data-ic="check" data-s="13"></span>批准</button>
+          <button class="btn ghost">幽灵</button>
+          <button class="btn danger"><span data-ic="x" data-s="13"></span>拒绝</button>
+        </div>
+        <div class="row"><input class="input" placeholder="输入框…(聚焦有虚线铅笔框)"></div>
+      </div>
+    </div>
+
+    <!-- 会话卡 -->
+    <div class="pair">
+      <div class="demo t-classic">
+        <div class="lab">会话卡片 · 经典</div>
+        <div class="card scard sel">
+          <div class="r1"><span class="avatar" style="background:rgb(5 150 105)">M</span><span class="pname">my-claude-gui</span><span class="spill run"><i></i>02:14</span></div>
+          <div class="r2">手绘风主题:字体与滤镜验证</div>
+          <div class="r3"><span data-ic="branch" data-s="11"></span><span class="mono">feature/plugins</span></div>
+        </div>
+      </div>
+      <div class="demo t-paper sketch-scope">
+        <div class="lab">会话卡片 · 手绘(选中 = 荧光笔扫过)</div>
+        <div class="card scard sel">
+          <div class="r1"><span class="avatar" style="background:rgb(8 140 105)">M</span><span class="pname">my-claude-gui</span><span class="spill run"><i></i>02:14</span></div>
+          <div class="r2">手绘风主题:字体与滤镜验证</div>
+          <div class="r3"><span data-ic="branch" data-s="11"></span><span class="mono">feature/plugins</span></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 审批卡 + 提问卡 -->
+    <div class="pair">
+      <div class="demo t-classic">
+        <div class="lab">工具审批卡 · 经典</div>
+        <div class="card appr">
+          <div class="ttl"><span data-ic="shield" data-s="15"></span>Bash 请求执行</div>
+          <div class="desc">模型请求在项目内执行以下命令:</div>
+          <div class="path mono">pnpm typecheck</div>
+          <div class="acts">
+            <button class="btn primary sm">总是允许</button>
+            <button class="btn sm">仅本次</button>
+            <button class="btn danger sm">拒绝</button>
+          </div>
+        </div>
+      </div>
+      <div class="demo t-paper sketch-scope">
+        <div class="lab">工具审批卡 · 手绘(双笔描边 + 按钮可"按下去")</div>
+        <div class="card retrace appr">
+          <div class="ttl"><span data-ic="shield" data-s="15"></span>Bash 请求执行</div>
+          <div class="desc">模型请求在项目内执行以下命令:</div>
+          <div class="path mono">pnpm typecheck</div>
+          <div class="acts">
+            <button class="btn primary sm">总是允许</button>
+            <button class="btn sm">仅本次</button>
+            <button class="btn danger sm">拒绝</button>
+          </div>
+        </div>
+        <div class="row" style="margin-top:14px">
+          <div style="flex:1">
+            <div class="askopt"><span class="check"><span data-ic="check" data-s="11"></span></span>方案 A · 纸面手绘(推荐)</div>
+            <div class="askopt"><span class="check" style="border-color:rgb(var(--edge))"></span>方案 B · 只换字体不换形状</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 警告/错误 + 代码 -->
+    <div class="pair">
+      <div class="demo t-classic">
+        <div class="lab">警告卡 / 代码块 · 经典</div>
+        <div class="warn"><span data-ic="zap" data-s="15" style="color:rgb(var(--warning))"></span><div>回合疑似被网关空响应截断,发送「继续」可恢复。</div></div>
+        <div style="height:10px"></div>
+        <div class="card codeblk"><span class="kw">export function</span> <span class="fn">subagentEndpoints</span>(list) {
+  <span class="kw">return</span> list.map(a =&gt; ({ end: a.endedAt ?? now, start: end - a.durationMs }));
+}</div>
+      </div>
+      <div class="demo t-paper sketch-scope">
+        <div class="lab">警告卡 / 代码块 · 手绘(代码不手绘:等宽 + 虚线铅笔框)</div>
+        <div class="warn"><span data-ic="zap" data-s="15" style="color:rgb(var(--warning))"></span><div>回合疑似被网关空响应截断,发送「继续」可恢复。</div></div>
+        <div style="height:10px"></div>
+        <div class="card dashed codeblk"><span class="kw">export function</span> <span class="fn">subagentEndpoints</span>(list) {
+  <span class="kw">return</span> list.map(a =&gt; ({ end: a.endedAt ?? now, start: end - a.durationMs }));
+}</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════ ③ 规格速查 ═══════════ -->
+  <section>
+    <div class="sec-h"><span class="no">③</span><h2>规格速查</h2></div>
+    <div class="u-sq w90"></div>
+
+    <table class="spec">
+      <tr><th style="width:170px">token</th><th>经典浅色(现状)</th><th>纸面手绘(提案)</th><th>牛皮纸(二期)</th></tr>
+      <tr><td>--surface</td><td><span class="sw" style="background:#fff"></span><code>255 255 255</code></td><td><span class="sw" style="background:#fcfaf3"></span><code>252 250 243</code> 暖纸</td><td><span class="sw" style="background:#3b3126"></span><code>59 49 38</code></td></tr>
+      <tr><td>--surface-muted</td><td><span class="sw" style="background:#f0f2f6"></span><code>240 242 246</code></td><td><span class="sw" style="background:#f6f2e7"></span><code>246 242 231</code> 内衬</td><td><span class="sw" style="background:#332a20"></span><code>51 42 32</code></td></tr>
+      <tr><td>--content</td><td><span class="sw" style="background:#09090b"></span><code>9 9 11</code></td><td><span class="sw" style="background:#3a342c"></span><code>58 52 44</code> 墨色</td><td><span class="sw" style="background:#f0e7d5"></span><code>240 231 213</code> 粉笔</td></tr>
+      <tr><td>--edge</td><td><span class="sw" style="background:#d5d8de"></span><code>213 216 222</code></td><td><span class="sw" style="background:#c7bda8"></span><code>199 189 168</code> 铅笔灰</td><td><span class="sw" style="background:#695a46"></span><code>105 90 70</code></td></tr>
+      <tr><td>--accent</td><td><span class="sw" style="background:#059669"></span><code>5 150 105</code></td><td><span class="sw" style="background:#088c69"></span><code>8 140 105</code> 微降饱和保墨感</td><td><span class="sw" style="background:#40be8e"></span><code>64 190 142</code></td></tr>
+      <tr><td>字体</td><td>系统 sans(JetBrains Mono 代码)</td><td>霞鹜文楷,UI 15px 起步;代码/终端不换</td><td>同纸面</td></tr>
+    </table>
+
+    <table class="spec">
+      <tr><th style="width:170px">形状配方</th><th>值 / 规则</th></tr>
+      <tr><td>手抖圆角(大)</td><td><span class="recipe">255px 18px 225px 18px / 18px 225px 18px 255px</span> — 卡片、面板、气泡容器</td></tr>
+      <tr><td>手抖圆角(中)</td><td><span class="recipe">95px 9px 85px 10px / 10px 80px 9px 95px</span> — 按钮、输入框、tab</td></tr>
+      <tr><td>手抖圆角(小)</td><td><span class="recipe">30px 7px 26px 8px / 8px 24px 7px 30px</span> — chip、标签、状态胶囊</td></tr>
+      <tr><td>硬阴影</td><td>卡片 <span class="recipe">3px 4px 0 content/6%</span>;按钮 <span class="recipe">2px 2px 0 content/16%</span>(hover 位移 1px 模拟"按下去")</td></tr>
+      <tr><td>双笔描边</td><td><span class="recipe">::before inset:-3.5px</span> + 镜像圆角 + 45% 透明描边 — 仅重点卡(composer / 审批 / 计划),全量铺开会吵</td></tr>
+      <tr><td>铅笔虚线框</td><td><span class="recipe">1.5px dashed edge</span> — 思考卡、代码块、终端等"内衬数据区"</td></tr>
+      <tr><td>荧光笔</td><td>选中态 <span class="recipe">accent/10% 底 + 35% 边</span>;文本选区 <span class="recipe">::selection accent/22%</span></td></tr>
+      <tr><td>焦点环</td><td>手绘形态下 <span class="recipe">outline: 2px dashed accent/60%</span>(虚线 = 铅笔描焦点)</td></tr>
+      <tr><td>刻意不正</td><td>上下文环、头像、状态点保持正圆/规则形 — 仪表与身份标识不手绘,避免读数歧义</td></tr>
+    </table>
+
+    <table class="spec">
+      <tr><th style="width:170px">字体 / 图标 / 性能</th><th>规则</th></tr>
+      <tr><td>字体栈</td><td><span class="recipe">"LXGW WenKai" → Kaiti SC/STKaiti/楷体 → 系统 sans</span>;生产包用 cn-font-split 按 unicode-range 分包(2–5MB,首屏只下常用几片);OFL 许可可捆绑</td></tr>
+      <tr><td>不手绘清单</td><td>代码块、终端(xterm)、diff、文件树路径、Shiki/Monaco 高亮 — 保持 JetBrains Mono;KaTeX / 图表保持原样</td></tr>
+      <tr><td>字号上调</td><td>手绘形态下 UI 基准 14 → 15px、聊天 13 → 14px(楷体小字号发虚);注意 appearance.ts 的 inline 字号设置优先级更高,需在规格里明示取舍</td></tr>
+      <tr><td>图标滤镜</td><td><span class="recipe">feTurbulence(baseFrequency ≈ .02/.03, octaves 2)+ feDisplacementMap scale 2.2</span>;只挂 svg 图标(≤20px);「换笔」= 换 seed</td></tr>
+      <tr><td>性能红线</td><td>滤镜绝不挂:app 根节点、滚动容器、hover/动画元素、Monaco/WebContentsView;纸纹整页只允许一层 fixed 伪元素</td></tr>
+      <tr><td>落地管道</td><td>① contracts:<span class="mono">ui.themeStyle</span> key + 类型;② main:theme.ts 持久化 + theme.changed 加字段(nativeTheme 不动);③ renderer:applySketchClass + FOUC guard 补 localStorage 同步读;④ AppearancePanel 加「风格」选择;⑤ styles.css 集中一个 <span class="mono">html.sketch</span> 区块,禁止散落</td></tr>
+    </table>
+  </section>
+
+  <footer>
+    下一步:确认纸面观感(尤其字体在小字号下的可读性与图标抖动强度)→ 我把 <span class="mono">ui.themeStyle</span> 主题管道按上表第 ⑤ 行打通,
+    本稿的 CSS 即 <span class="mono">styles.css</span> 里 <span class="mono">html.sketch</span> 区块的蓝本。
+  </footer>
+</div>
+
+<script>
+/* ── 图标字典:24×24 stroke,Tabler 风格(粗细 1.8 / 圆头圆角) ── */
+const ICONS = {
+  minus:'<path d="M5 12h14"/>',
+  square:'<rect x="6" y="6" width="12" height="12" rx="2"/>',
+  x:'<path d="M6 6l12 12M18 6L6 18"/>',
+  check:'<path d="M4 12.5l5 5L20 6.5"/>',
+  plus:'<path d="M12 5v14M5 12h14"/>',
+  search:'<circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/>',
+  'chev-d':'<path d="M6 9l6 6 6-6"/>',
+  'chev-r':'<path d="M9 6l6 6-6 6"/>',
+  terminal:'<path d="M4 17l6-5-6-5M12 19h8"/>',
+  folder:'<path d="M3 7a2 2 0 0 1 2-2h4l2 3h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
+  file:'<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/>',
+  branch:'<circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="8" r="2.5"/><path d="M6 8.5v7M18 10.5c0 4-4 4.5-8 5"/>',
+  message:'<path d="M8 10h8M8 14h5M21 15a2 2 0 0 1-2 2H8l-5 4V6a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>',
+  bookmark:'<path d="M7 3h10a1 1 0 0 1 1 1v17l-6-4-6 4V4a1 1 0 0 1 1-1z"/>',
+  spark:'<path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z"/>',
+  send:'<path d="M22 2L11 13"/><path d="M22 2l-7 20-4-9-9-4z"/>',
+  sun:'<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>',
+  moon:'<path d="M21 12.8A9 9 0 1 1 11.2 3 7 7 0 0 0 21 12.8z"/>',
+  shield:'<path d="M12 3l7 3v5c0 4.6-3 7.6-7 9-4-1.4-7-4.4-7-9V6z"/>',
+  undo:'<path d="M4 10h11a5 5 0 0 1 0 10h-3"/><path d="M8 6l-4 4 4 4"/>',
+  zap:'<path d="M13 2L4 14h6l-1 8 9-12h-6z"/>',
+  pen:'<path d="M17 3l4 4L8 20l-5 1 1-5z"/>',
+};
+document.querySelectorAll('span[data-ic]').forEach(el => {
+  const s = el.dataset.s || 15;
+  el.outerHTML = `<svg class="ic" viewBox="0 0 24 24" width="${s}" height="${s}" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${ICONS[el.dataset.ic] || ''}</svg>`;
+});
+
+/* ── 形态切换 ── */
+const MODES = [
+  ['sketch','纸面手绘'],
+  ['kraft','牛皮纸'],
+  ['light','经典浅色'],
+  ['dark','经典深色'],
+];
+const seg = document.getElementById('modes');
+MODES.forEach(([id, label]) => {
+  const b = document.createElement('button');
+  b.textContent = label; b.dataset.m = id;
+  b.onclick = () => setMode(id);
+  seg.appendChild(b);
+});
+function setMode(m){
+  document.documentElement.dataset.mode = m;
+  const sketchy = m === 'sketch' || m === 'kraft';
+  document.body.classList.toggle('sketch-scope', sketchy);
+  seg.querySelectorAll('button').forEach(b => b.classList.toggle('on', b.dataset.m === m));
+}
+setMode('sketch');
+
+/* ── 开关 ── */
+const bind = (id, attr) => {
+  const el = document.getElementById(id);
+  el.addEventListener('change', () => {
+    if (el.checked) document.body.removeAttribute(attr);
+    else document.body.setAttribute(attr, 'off');
+  });
+};
+bind('tgl-wobble','data-wobble');
+bind('tgl-grain','data-grain');
+bind('tgl-font','data-font');
+
+/* ── 换一支笔:随机滤镜 seed,演示抖动纹路可调 ── */
+document.getElementById('shuffle').onclick = () => {
+  document.getElementById('sk-noise').setAttribute('seed', String(1 + Math.floor(Math.random() * 98)));
+};
+</script>
+</body>
+</html>

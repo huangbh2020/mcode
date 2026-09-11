@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="zh-CN" class="dark">
+<head>
+<meta charset="utf-8">
+<title>折叠时序验证 · 立即翻转 vs 双 rAF</title>
+<link rel="stylesheet" href="/apps/desktop/src/renderer/styles.css">
+<style>
+  body { margin:0; background: rgb(var(--surface)); color: rgb(var(--content));
+    font-family: -apple-system, system-ui, sans-serif; padding: 24px; }
+  .case { border:1px solid rgb(var(--edge)); border-radius:10px; padding:14px 16px; margin-bottom:16px; }
+  h3 { font-size: 13px; margin: 0 0 10px; color: rgb(var(--content-muted)); }
+  .content { padding: 10px 0; font-size: 13px; color: rgb(var(--content-muted)); line-height: 1.7; }
+  .row { padding: 5px 0; border-bottom: 1px solid rgb(var(--edge)/0.4); }
+  .verdict { font-size: 12px; margin-top: 8px; font-family: ui-monospace, Menlo, monospace; line-height: 1.6; }
+  .ok { color: rgb(var(--success)); } .bad { color: rgb(var(--danger)); }
+</style>
+</head>
+<body data-chat-root>
+<div class="case">
+  <h3>A · 立即翻转（等价 React passive effect 抢在首次样式解析之前 setState(false)）</h3>
+  <div id="mountA"></div>
+  <div class="verdict" id="verdictA">pending…</div>
+</div>
+<div class="case">
+  <h3>B · 双 rAF 后翻转（当前实现）</h3>
+  <div id="mountB"></div>
+  <div class="verdict" id="verdictB">pending…</div>
+</div>
+
+<script>
+const filler = Array.from({length: 14}, (_, i) =>
+  `<div class="row">Read src/renderer/lib/module-${i}.ts · 24 行 · ✓</div>`).join("");
+
+/** 忠实模拟挂载：新建元素（data-open="true"）→ 插入 → 按 delayFrames 决定
+ *  在第几个 rAF 翻转。翻转前**不读取任何样式**（这是关键：getComputedStyle
+ *  会强制样式解析，从而掩盖"首次计算值即 0fr"的竞态）。 */
+function runCase(mountEl, verdictEl, label, delayFrames) {
+  mountEl.innerHTML = "";
+  const fold = document.createElement("div");
+  fold.className = "chat-fold";
+  fold.setAttribute("data-open", "true");
+  fold.innerHTML = `<div class="chat-fold-inner"><div class="content">${filler}</div></div>`;
+  mountEl.appendChild(fold);
+
+  // 采样只在翻转之后开始，避免测试本身影响样式解析时机
+  const samples = [];
+  let flipped = false;
+  let frames = 0;
+  const t0 = performance.now();
+  const flip = () => { fold.setAttribute("data-open", "false"); flipped = true; };
+
+  if (delayFrames === 0) flip();
+  else requestAnimationFrame(() => delayFrames === 1 ? flip() : requestAnimationFrame(flip));
+
+  const tick = () => {
+    if (flipped) samples.push(Math.round(fold.getBoundingClientRect().height));
+    if (performance.now() - t0 < 500) { frames++; requestAnimationFrame(tick); return; }
+    const heights = samples;
+    const max = Math.max(...heights, 0);
+    const mid = heights.filter(h => h > 4 && h < max - 4).length;
+    const animated = mid >= 2;
+    verdictEl.innerHTML =
+      `高度轨迹: ${heights.slice(0, 22).join(" → ")}${heights.length > 22 ? " …" : ""}<br>` +
+      `中间帧=${mid} · 判定=<span class="${animated ? "ok" : "bad"}">${animated ? "过渡已播放 ✓" : "瞬缩（未播放）✗"}</span>`;
+    verdictEl.dataset.animated = String(animated);
+    if (--pending === 0) window.__done = true;
+  };
+  requestAnimationFrame(tick);
+}
+
+let pending = 2;
+runCase(document.getElementById("mountA"), document.getElementById("verdictA"), "A", 0);
+runCase(document.getElementById("mountB"), document.getElementById("verdictB"), "B", 2);
+</script>
+</body>
+</html>

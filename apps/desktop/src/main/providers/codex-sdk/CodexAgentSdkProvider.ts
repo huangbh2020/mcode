@@ -367,6 +367,7 @@ export class CodexAgentSdkProvider implements AgentProvider {
         snapshot,
         planMode,
         activeTurn,
+        browserToolsEnabled,
       }),
     );
     const unsubscribe = client.onNotification((frame) => adapter.handleNotification(frame));
@@ -425,10 +426,12 @@ export class CodexAgentSdkProvider implements AgentProvider {
         ctx.onProviderSessionId?.(threadId);
 
         // Register Mcode's skill roots so the model can invoke user/project
-        // skills ($name). Best-effort: failure only means no skills.
+        // skills ($name), plus the skills directories of ENABLED plugins
+        // (settings → Plugins). Best-effort: failure only means no skills.
         try {
+          const { getEnabledPluginSkillRoots } = await import("@main/plugins/pluginManager.js");
           await client.request("skills/extraRoots/set", {
-            extraRoots: skillRootsFor(req.cwd),
+            extraRoots: [...skillRootsFor(req.cwd), ...(await getEnabledPluginSkillRoots())],
           });
         } catch (err) {
           ctx.log.warn(`codex: skills/extraRoots/set failed: ${(err as Error).message}`);
@@ -656,6 +659,11 @@ interface RequestDeps {
   snapshot: CodexFileSnapshot;
   planMode: { active: boolean };
   activeTurn: { threadId: string | null; turnId: string | null };
+  /** MCP panel's built-in browser switch, read at turn start. Enforced at
+   *  invocation (not just registration) because dynamicTools persist in the
+   *  thread rollout and thread/resume cannot re-register them — a resumed
+   *  thread keeps advertising browser_* even when disabled. */
+  browserToolsEnabled: boolean;
 }
 
 /** Dispatch the server's request frames: approvals, user input, dynamic
@@ -1065,6 +1073,14 @@ async function invokeDynamicTool(p: Record<string, unknown>, deps: RequestDeps):
   const { ctx, req, planMode } = deps;
   const text = (t: string): unknown => ({ success: true, contentItems: [{ type: "inputText", text: t }] });
   const fail = (t: string): unknown => ({ success: false, contentItems: [{ type: "inputText", text: t }] });
+
+  // MCP panel's built-in browser switch. Registration-time filtering can't
+  // cover resumed threads (dynamicTools persist in the rollout), so rejected
+  // calls are answered here — the tool stays visible to the model but every
+  // invocation returns this error instead of touching the browser.
+  if (name.startsWith("browser_") && !deps.browserToolsEnabled) {
+    return fail("内置浏览器工具已停用(设置 → MCP)。请改用其他方式完成任务。");
+  }
 
   try {
     switch (name) {

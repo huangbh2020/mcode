@@ -1,0 +1,787 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>设置 · 插件页重设计 — 双栏常驻市场</title>
+<style>
+  /* ===== app 真实 token(取自 apps/desktop/src/renderer/styles.css)===== */
+  :root{
+    --surface:255 255 255;
+    --surface-muted:240 242 246;
+    --surface-hover:226 229 235;
+    --content:9 9 11;
+    --content-muted:63 63 70;
+    --content-subtle:113 113 122;
+    --edge:213 216 222;
+    --input-edge:202 205 212;
+    --accent:5 150 105;
+    --accent-strong:4 120 87;
+    --danger:220 38 38;
+    --warning:180 83 9;
+    --info:124 58 237;
+    --success:4 120 87;
+    --shadow-pop:0 12px 32px rgb(9 9 11 / .14), 0 2px 8px rgb(9 9 11 / .08);
+    --shadow-card:0 1px 3px rgb(9 9 11 / .05);
+  }
+  [data-theme="dark"]{
+    --surface:26 29 36;
+    --surface-muted:44 49 60;
+    --surface-hover:58 64 78;
+    --content:231 232 236;
+    --content-muted:188 191 198;
+    --content-subtle:158 162 171;
+    --edge:45 51 64;
+    --input-edge:95 99 110;
+    --accent:16 185 129;
+    --accent-strong:16 185 129;
+    --danger:248 113 113;
+    --warning:251 191 36;
+    --info:167 139 250;
+    --success:16 185 129;
+    --shadow-pop:0 16px 40px rgb(0 0 0 / .5), 0 2px 10px rgb(0 0 0 / .35);
+    --shadow-card:0 1px 3px rgb(0 0 0 / .3);
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0;background:rgb(var(--surface-muted));color:rgb(var(--content));
+    font-family:-apple-system,"SF Pro Text","Segoe UI","PingFang SC","Microsoft YaHei",system-ui,sans-serif;
+    -webkit-font-smoothing:antialiased;transition:background .25s;
+  }
+  button,input{font-family:inherit;font-size:13px;color:inherit}
+  button{cursor:pointer}
+  :focus-visible{outline:2px solid rgb(var(--accent)/.7);outline-offset:1px;border-radius:6px}
+  .mono{font-family:ui-monospace,SFMono-Regular,Consolas,"Cascadia Mono",monospace}
+  @media (prefers-reduced-motion: reduce){*{transition:none!important}}
+
+  /* ===== 稿件顶栏(非产品 UI)===== */
+  .topbar{display:flex;align-items:center;gap:14px;padding:16px 22px 12px;flex-wrap:wrap;max-width:1280px;margin:0 auto}
+  .topbar h1{font-size:15px;margin:0;font-weight:700}
+  .topbar .sub{font-size:12px;color:rgb(var(--content-subtle));margin-top:2px}
+  .spacer{flex:1}
+  .mini-seg{display:flex;background:rgb(var(--surface));border:1px solid rgb(var(--edge));border-radius:9px;padding:3px;gap:2px}
+  .mini-seg button{border:none;background:none;padding:5px 12px;border-radius:6px;font-size:12px;font-weight:600;color:rgb(var(--content-muted))}
+  .mini-seg button.cur{background:rgb(var(--accent)/.1);color:rgb(var(--accent-strong))}
+  .icon-btn{width:30px;height:30px;border-radius:8px;border:1px solid rgb(var(--edge));background:rgb(var(--surface));color:rgb(var(--content-muted));display:grid;place-items:center}
+  .icon-btn:hover{color:rgb(var(--accent-strong));border-color:rgb(var(--accent)/.4)}
+
+  /* ===== 模拟应用窗口 ===== */
+  .window{
+    max-width:1280px;height:min(780px,calc(100vh - 130px));margin:0 auto;
+    background:rgb(var(--surface));border:1px solid rgb(var(--edge));border-radius:14px;
+    overflow:hidden;display:flex;flex-direction:column;box-shadow:var(--shadow-card);
+  }
+  .titlebar{
+    height:38px;flex:none;display:flex;align-items:center;gap:8px;padding:0 12px;
+    border-bottom:1px solid rgb(var(--edge));background:rgb(var(--surface));
+    font-size:12px;color:rgb(var(--content-subtle));user-select:none;
+  }
+  .titlebar .dot{width:9px;height:9px;border-radius:50%;border:1px solid rgb(var(--edge))}
+  .caption{margin-left:auto;display:flex;gap:14px;padding-left:16px}
+  .caption span{font-size:11px;line-height:1}
+
+  .body-row{flex:1;min-height:0;display:flex}
+
+  /* ===== 左侧设置导航(上下文,非本次设计对象)===== */
+  .snav{width:200px;flex:none;border-right:1px solid rgb(var(--edge));padding:12px 8px;overflow-y:auto;background:rgb(var(--surface))}
+  .snav .grp{font-size:10.5px;font-weight:600;color:rgb(var(--content-subtle));padding:10px 12px 4px;letter-spacing:.04em}
+  .snav button{
+    display:flex;width:100%;align-items:center;gap:8px;border:none;background:none;text-align:left;
+    padding:7px 12px;border-radius:8px;font-size:12.5px;color:rgb(var(--content-muted));position:relative;
+  }
+  .snav button:hover{background:rgb(var(--surface-hover)/.6)}
+  .snav button.cur{background:rgb(var(--surface-hover));color:rgb(var(--content));font-weight:600}
+  .snav button.cur::before{content:"";position:absolute;left:0;top:50%;transform:translateY(-50%);width:2.5px;height:16px;border-radius:2px;background:rgb(var(--accent))}
+  .snav .ico{width:15px;height:15px;flex:none;border:1.4px solid currentColor;border-radius:4px;opacity:.75}
+  .snav button.cur .ico{border-color:rgb(var(--accent));opacity:1}
+
+  /* ===== 内容主区 ===== */
+  .main{flex:1;min-width:0;display:flex;flex-direction:column}
+  .phead{
+    flex:none;display:flex;align-items:center;justify-content:space-between;gap:16px;
+    padding:14px 20px 10px;border-bottom:1px solid rgb(var(--edge));
+  }
+  .phead h2{margin:0;font-size:13.5px;font-weight:600;display:flex;align-items:center;gap:7px}
+  .phead h2 .ico{width:15px;height:15px;border-radius:4px;background:rgb(var(--accent)/.14);display:grid;place-items:center;color:rgb(var(--accent-strong));font-size:10px;font-weight:700}
+
+  /* ── 方案一:双栏 ── */
+  .cols{flex:1;min-height:0;display:grid;grid-template-columns:minmax(0,1fr) 392px}
+  .pane{min-height:0;display:flex;flex-direction:column;min-width:0}
+  .pane + .pane{border-left:1px solid rgb(var(--edge));background:rgb(var(--surface)/.55)}
+
+  /* 工具行 */
+  .ptool{flex:none;display:flex;align-items:center;gap:8px;padding:10px 16px 8px}
+  .search{
+    flex:1;min-width:0;height:29px;padding:0 10px 0 28px;border-radius:8px;
+    border:1px solid rgb(var(--input-edge));background:rgb(var(--surface));color:rgb(var(--content));
+  }
+  .search::placeholder{color:rgb(var(--content-subtle))}
+  .searchwrap{position:relative;flex:1;min-width:0}
+  .searchwrap svg{position:absolute;left:9px;top:50%;transform:translateY(-50%);width:13px;height:13px;color:rgb(var(--content-subtle))}
+  .fseg{display:flex;border:1px solid rgb(var(--edge));border-radius:8px;padding:2px;gap:2px;flex:none}
+  .fseg button{border:none;background:none;padding:4px 9px;border-radius:6px;font-size:12px;color:rgb(var(--content-muted))}
+  .fseg button.cur{background:rgb(var(--surface-hover));color:rgb(var(--content));font-weight:600}
+  .fseg .n{font-size:10.5px;color:rgb(var(--content-subtle));margin-left:3px}
+  .btn{
+    height:29px;padding:0 11px;border-radius:8px;border:1px solid rgb(var(--edge));
+    background:rgb(var(--surface));color:rgb(var(--content-muted));font-size:12.5px;font-weight:600;
+    display:inline-flex;align-items:center;gap:6px;white-space:nowrap;
+  }
+  .btn:hover{color:rgb(var(--content));background:rgb(var(--surface-hover)/.5)}
+  .btn.primary{background:rgb(var(--accent));border-color:rgb(var(--accent));color:#fff}
+  .btn.primary:hover{background:rgb(var(--accent-strong));border-color:rgb(var(--accent-strong))}
+  .btn.ghost{border-color:transparent;background:none}
+  .btn.sm{height:26px;padding:0 9px;font-size:12px}
+  .btn:disabled{opacity:.5;cursor:default}
+  .caret{font-size:9px;transform:translateY(.5px)}
+
+  /* 安装菜单 + 内联表单 */
+  .install-wrap{position:relative;flex:none}
+  .menu{
+    display:none;position:absolute;right:0;top:calc(100% + 6px);z-index:30;width:190px;
+    background:rgb(var(--surface));border:1px solid rgb(var(--edge));border-radius:10px;
+    box-shadow:var(--shadow-pop);padding:4px;
+  }
+  .install-wrap.open .menu{display:block}
+  .menu button{
+    display:flex;width:100%;align-items:center;gap:8px;border:none;background:none;text-align:left;
+    padding:7px 9px;border-radius:7px;font-size:12.5px;color:rgb(var(--content-muted));
+  }
+  .menu button:hover{background:rgb(var(--surface-hover)/.7);color:rgb(var(--content))}
+  .menu svg{width:13px;height:13px;color:rgb(var(--content-subtle))}
+  .install-form{
+    display:none;flex:none;align-items:center;gap:6px;margin:0 16px 8px;padding:7px 8px;
+    border:1px solid rgb(var(--input-edge));border-radius:9px;background:rgb(var(--surface-muted)/.5);
+  }
+  .install-form.show{display:flex}
+  .install-form input{height:27px;border-radius:7px;border:1px solid rgb(var(--input-edge));background:rgb(var(--surface));padding:0 9px;color:rgb(var(--content))}
+  .install-form input.url{flex:1;min-width:0}
+  .install-form input.ref{width:92px}
+  .install-form svg{width:13px;height:13px;flex:none;color:rgb(var(--content-subtle))}
+  .x{border:none;background:none;color:rgb(var(--content-subtle));font-size:14px;padding:2px 4px}
+  .x:hover{color:rgb(var(--content))}
+
+  /* 插件列表 */
+  .plist{flex:1;min-height:0;overflow-y:auto;padding:2px 10px 12px}
+  .plist-inner{border:1px solid rgb(var(--edge));border-radius:11px;background:rgb(var(--surface));overflow:hidden}
+  .prow + .prow{border-top:1px solid rgb(var(--edge))}
+  .rowline{display:flex;align-items:center;gap:10px;padding:9px 12px 9px 10px}
+  .prow:hover .rowline{background:rgb(var(--surface-hover)/.35)}
+  .prow-head{flex:1;min-width:0;display:flex;align-items:center;gap:10px;text-align:left;border:none;background:none;padding:0}
+  .glyph{
+    width:30px;height:30px;flex:none;border-radius:8px;display:grid;place-items:center;
+    font-size:13px;font-weight:700;
+    background:rgb(var(--accent)/.13);color:rgb(var(--accent-strong));
+  }
+  .prow.off .glyph{background:rgb(var(--surface-muted));color:rgb(var(--content-subtle))}
+  .pmain{display:block;flex:1;min-width:0}
+  .tline{display:flex;align-items:center;gap:6px;min-width:0;flex-wrap:wrap}
+  .pname{font-size:13px;font-weight:600;color:rgb(var(--content));white-space:nowrap}
+  .pver{font-size:10.5px;color:rgb(var(--content-subtle))}
+  .chip{font-size:10.5px;padding:1.5px 6px;border-radius:5px;background:rgb(var(--surface-muted));color:rgb(var(--content-subtle));white-space:nowrap}
+  .chip.warn{background:rgb(var(--warning)/.11);color:rgb(var(--warning))}
+  .pdsc{
+    display:block;font-size:11.5px;color:rgb(var(--content-subtle));margin-top:2px;
+    overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  }
+  .prow.off .pname,.prow.off .pdsc{color:rgb(var(--content-subtle))}
+  .prow.off .glyph{background:rgb(var(--surface-muted));color:rgb(var(--content-subtle))}
+  .chev{width:13px;height:13px;flex:none;color:rgb(var(--content-subtle));transition:transform .15s}
+  .prow.open .chev{transform:rotate(90deg)}
+
+  /* switch */
+  .sw{position:relative;flex:none;width:30px;height:17px;display:inline-block}
+  .sw input{position:absolute;opacity:0;inset:0;margin:0;cursor:pointer}
+  .sw i{
+    position:absolute;inset:0;border-radius:99px;background:rgb(var(--surface-hover));
+    border:1px solid rgb(var(--edge));transition:background .15s;pointer-events:none;
+  }
+  .sw i::after{
+    content:"";position:absolute;top:1.5px;left:2px;width:12px;height:12px;border-radius:50%;
+    background:#fff;box-shadow:0 1px 2px rgb(0 0 0/.25);transition:transform .15s;
+  }
+  .sw input:checked + i{background:rgb(var(--accent));border-color:rgb(var(--accent))}
+  .sw input:checked + i::after{transform:translateX(12px)}
+  .trash{border:none;background:none;color:rgb(var(--content-subtle));width:24px;height:24px;flex:none;border-radius:6px;display:grid;place-items:center}
+  .trash:hover{color:rgb(var(--danger));background:rgb(var(--danger)/.08)}
+  .trash svg,.mside svg{width:13px;height:13px}
+
+  /* 展开详情 */
+  .pdetail{display:none;padding:2px 12px 12px 52px}
+  .prow.open .pdetail{display:block}
+  .pdetail .box{border:1px solid rgb(var(--edge));border-radius:9px;background:rgb(var(--surface-muted)/.4);padding:10px 12px}
+  .meta{display:flex;flex-wrap:wrap;gap:4px 16px;font-size:11px;color:rgb(var(--content-subtle));margin-bottom:8px}
+  .meta b{font-weight:600;color:rgb(var(--content-muted))}
+  .matrix{font-size:11px;color:rgb(var(--content-subtle));display:flex;flex-wrap:wrap;gap:3px 14px;padding-bottom:8px;border-bottom:1px solid rgb(var(--edge));margin-bottom:9px}
+  .matrix .w{color:rgb(var(--warning))}
+  .inv + .inv{margin-top:9px}
+  .inv .h{font-size:11px;font-weight:600;color:rgb(var(--content-muted));margin-bottom:4px}
+  .inv li{list-style:none;font-size:11.5px;line-height:1.65;color:rgb(var(--content-muted))}
+  .inv ul{margin:0;padding:0}
+  .inv .nm{font-family:ui-monospace,Consolas,monospace;color:rgb(var(--content))}
+  .path{font-size:10.5px;color:rgb(var(--content-subtle));word-break:break-all;margin-top:9px}
+  .hookbox{margin-top:9px;border:1px solid rgb(var(--warning)/.4);background:rgb(var(--warning)/.05);border-radius:8px;padding:8px 10px}
+  .hookbox .h{display:flex;align-items:center;gap:6px;font-size:11px;font-weight:600;color:rgb(var(--warning));margin-bottom:3px}
+  .hookbox li{list-style:none;font-size:10.5px;color:rgb(var(--content-muted));line-height:1.6}
+  .hookbox ul{margin:0;padding:0}
+
+  .list-empty{padding:28px 12px;text-align:center;font-size:12px;color:rgb(var(--content-subtle));line-height:1.7}
+
+  /* ── 市场列 ── */
+  .mtool{flex:none;display:flex;align-items:center;gap:8px;padding:10px 14px 8px}
+  .mtool .tt{font-size:12.5px;font-weight:600}
+  .mtool .cnt{font-size:11px;color:rgb(var(--content-subtle))}
+  .mside{border:none;background:none;color:rgb(var(--content-subtle));width:24px;height:24px;border-radius:6px;display:grid;place-items:center}
+  .mside:hover{color:rgb(var(--accent-strong));background:rgb(var(--surface-hover)/.6)}
+  .mdesc{flex:none;padding:0 14px 6px;font-size:11px;line-height:1.6;color:rgb(var(--content-subtle))}
+  .mlist{flex:1;min-height:0;overflow-y:auto;padding:2px 14px 12px}
+  .mgroup{border:1px solid rgb(var(--edge));border-radius:11px;background:rgb(var(--surface));overflow:hidden}
+  .mgroup + .mgroup{margin-top:10px}
+  .mg-head{display:flex;align-items:center;gap:7px;padding:9px 12px;border-bottom:1px solid rgb(var(--edge));background:rgb(var(--surface-muted)/.35)}
+  .mg-name{font-size:12.5px;font-weight:600;white-space:nowrap}
+  .mg-kind{font-size:10px;padding:1.5px 6px;border-radius:5px;background:rgb(var(--info)/.1);color:rgb(var(--info));white-space:nowrap}
+  .mg-kind.loc{background:rgb(var(--surface-muted));color:rgb(var(--content-muted))}
+  .mg-cnt{font-size:11px;color:rgb(var(--content-subtle));margin-left:auto;white-space:nowrap}
+  .mentry{display:flex;align-items:center;gap:10px;padding:9px 12px}
+  .mentry + .mentry{border-top:1px solid rgb(var(--edge))}
+  .me-main{flex:1;min-width:0}
+  .me-t{display:flex;align-items:baseline;gap:6px}
+  .me-name{font-size:12.5px;color:rgb(var(--content));font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .me-ver{font-size:10.5px;color:rgb(var(--content-subtle));flex:none}
+  .me-dsc{font-size:11px;color:rgb(var(--content-subtle));margin-top:1px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .tag-inst{flex:none;font-size:10.5px;padding:2px 7px;border-radius:5px;background:rgb(var(--accent)/.1);color:rgb(var(--accent-strong))}
+  [data-theme="dark"] .tag-inst{color:rgb(var(--accent))}
+  .tag-hook{flex:none;font-size:10px;padding:2px 6px;border-radius:5px;background:rgb(var(--warning)/.11);color:rgb(var(--warning))}
+  .mp-add{display:none;margin:10px 0 0;padding:8px;border:1px dashed rgb(var(--input-edge));border-radius:10px;background:rgb(var(--surface-muted)/.35)}
+  .mp-add.show{display:block}
+  .mp-add input{width:100%;height:27px;border-radius:7px;border:1px solid rgb(var(--input-edge));background:rgb(var(--surface));padding:0 9px;color:rgb(var(--content))}
+  .mp-add .row{display:flex;gap:6px;margin-top:7px}
+  .mp-add .row .btn{flex:1;justify-content:center}
+  .mp-addbtn{display:flex;width:100%;align-items:center;justify-content:center;gap:6px;margin-top:10px;padding:9px;border:1px dashed rgb(var(--edge));border-radius:10px;background:none;font-size:12px;font-weight:600;color:rgb(var(--content-muted))}
+  .mp-addbtn:hover{color:rgb(var(--accent-strong));border-color:rgb(var(--accent)/.45)}
+
+  /* ── 方案二:页签 ── */
+  .tabseg{display:none}
+  .window[data-variant="tabs"] .cols{display:block;overflow:hidden}
+  .window[data-variant="tabs"] .tabseg{display:flex}
+  .window[data-variant="tabs"] .pane{display:none;height:100%}
+  .window[data-variant="tabs"] .pane.cur{display:flex}
+  .window[data-variant="tabs"] .pane + .pane{border-left:none;background:rgb(var(--surface))}
+  .window[data-variant="tabs"] .pane{padding:0 24px}
+  .window[data-variant="tabs"] .plist-inner,.window[data-variant="tabs"] .mgroup,.window[data-variant="tabs"] .mp-addbtn,.window[data-variant="tabs"] .mp-add{max-width:860px}
+  .tabseg .n{font-size:10.5px;margin-left:4px;color:rgb(var(--content-subtle))}
+
+  /* ===== 设计说明 ===== */
+  .notes{max-width:1280px;margin:0 auto;padding:18px 22px 48px}
+  .notes h2{font-size:13px;font-weight:700;margin:0 0 8px}
+  .notes ol{margin:0;padding-left:18px;font-size:12px;line-height:1.9;color:rgb(var(--content-muted))}
+  .notes b{color:rgb(var(--content))}
+
+  /* 窄窗降级:双栏纵向堆叠(真实应用最小窗宽下不会触发,仅稿件兜底)。
+     放在页签规则之后:两种方案都退化为整页滚动,面板不再各自限高。 */
+  @media (max-width: 920px){
+    .cols,.window[data-variant="tabs"] .cols{display:block;overflow-y:auto;overflow-x:hidden}
+    .pane,.window[data-variant="tabs"] .pane{display:block;height:auto;padding:0 16px 16px}
+    .window[data-variant="tabs"] .pane{display:none}
+    .window[data-variant="tabs"] .pane.cur{display:block}
+    .pane + .pane{border-left:none;border-top:1px solid rgb(var(--edge))}
+    .plist,.mlist{overflow:visible}
+    .snav{display:none}
+  }
+
+  ::-webkit-scrollbar{width:10px;height:10px}
+  ::-webkit-scrollbar-thumb{background:rgb(var(--content-subtle)/.28);border-radius:8px;border:3px solid transparent;background-clip:content-box}
+  ::-webkit-scrollbar-thumb:hover{background-color:rgb(var(--content-subtle)/.45)}
+</style>
+</head>
+<body data-theme="light">
+
+<div class="topbar">
+  <div>
+    <h1>设置 · 插件页重设计</h1>
+    <div class="sub">双栏常驻市场 · 已安装列表独立滚动 · 安装入口收敛为菜单</div>
+  </div>
+  <div class="spacer"></div>
+  <div class="mini-seg" id="variantSeg">
+    <button data-v="cols" class="cur">方案一 · 双栏同屏</button>
+    <button data-v="tabs">方案二 · 顶部页签</button>
+  </div>
+  <button class="icon-btn" id="themeBtn" title="浅色 / 深色">◐</button>
+</div>
+
+<div class="window" id="win" data-variant="cols">
+  <div class="titlebar">
+    <span class="dot"></span><span class="dot"></span><span class="dot"></span>
+    <span style="margin-left:8px">Mcode — 设置</span>
+    <div class="caption"><span>─</span><span>▢</span><span>✕</span></div>
+  </div>
+  <div class="body-row">
+    <nav class="snav">
+      <div class="grp">通用</div>
+      <button><span class="ico"></span>常规</button>
+      <button><span class="ico"></span>外观</button>
+      <div class="grp">AI 能力</div>
+      <button><span class="ico"></span>运行时</button>
+      <button><span class="ico"></span>自定义模型</button>
+      <button><span class="ico"></span>Skills</button>
+      <button><span class="ico"></span>MCP</button>
+      <button class="cur"><span class="ico"></span>插件</button>
+      <div class="grp">输入与提醒</div>
+      <button><span class="ico"></span>语音</button>
+      <button><span class="ico"></span>快捷键</button>
+      <button><span class="ico"></span>通知</button>
+    </nav>
+
+    <div class="main">
+      <header class="phead">
+        <h2><span class="ico">⊕</span>插件</h2>
+        <div class="mini-seg tabseg" id="tabSeg" style="padding:2px">
+          <button data-tab="installed" class="cur" style="border-radius:6px">已安装<span class="n">9</span></button>
+          <button data-tab="market" style="border-radius:6px">插件市场<span class="n">9</span></button>
+        </div>
+      </header>
+
+      <div class="cols">
+        <!-- ══ 左栏:已安装 ══ -->
+        <section class="pane cur" id="pane-installed">
+          <div class="ptool">
+            <div class="searchwrap">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+              <input class="search" id="q" placeholder="搜索插件或组件…" spellcheck="false">
+            </div>
+            <div class="fseg" id="fseg">
+              <button data-f="all" class="cur">全部<span class="n">9</span></button>
+              <button data-f="on">已启用<span class="n">6</span></button>
+            </div>
+            <div class="install-wrap" id="installWrap">
+              <button class="btn primary" id="installBtn">安装 <span class="caret">▾</span></button>
+              <div class="menu" role="menu">
+                <button data-src="git"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="8" r="2.5"/><path d="M6 8.5v7M18 10.5c0 4-6 3-8.5 5"/></svg>从 Git 安装</button>
+                <button data-src="dir"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>本地目录…</button>
+                <button data-src="zip"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v12m0 0 4-4m-4 4-4-4M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>zip 包…</button>
+              </div>
+            </div>
+          </div>
+          <div class="install-form" id="installForm">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="8" r="2.5"/><path d="M6 8.5v7M18 10.5c0 4-6 3-8.5 5"/></svg>
+            <input class="url mono" placeholder="https://github.com/owner/plugin-repo.git" spellcheck="false">
+            <input class="ref mono" placeholder="分支(可选)" spellcheck="false">
+            <button class="btn primary sm">安装</button>
+            <button class="x" id="installFormX" title="收起">✕</button>
+          </div>
+
+          <div class="plist">
+            <div class="plist-inner" id="plist">
+
+              <div class="prow" data-name="frontend-design 为前端界面提供有态度的视觉方向 skills">
+                <div class="rowline">
+                  <button class="prow-head">
+                    <svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m9 6 6 6-6 6"/></svg>
+                    <span class="glyph">F</span>
+                    <span class="pmain">
+                      <span class="tline">
+                        <span class="pname">frontend-design</span>
+                        <span class="pver mono">v0.1.2</span>
+                        <span class="chip">Skills 1</span>
+                      </span>
+                      <span class="pdsc">为前端界面提供有态度的视觉方向、排版与布局决策</span>
+                    </span>
+                  </button>
+                  <label class="sw"><input type="checkbox" checked aria-label="启用 frontend-design"><i></i></label>
+                  <button class="trash" title="卸载"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16M9 7V4h6v3m-8 0 1 13h8l1-13"/></svg></button>
+                </div>
+              </div>
+
+              <div class="prow" data-name="commit-commands git 提交消息 commands">
+                <div class="rowline">
+                  <button class="prow-head">
+                    <svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m9 6 6 6-6 6"/></svg>
+                    <span class="glyph">C</span>
+                    <span class="pmain">
+                      <span class="tline">
+                        <span class="pname">commit-commands</span>
+                        <span class="pver mono">v1.3.0</span>
+                        <span class="chip">Commands 4</span>
+                      </span>
+                      <span class="pdsc">/commit /amend /release 等提交与发布命令,遵循 Conventional Commits</span>
+                    </span>
+                  </button>
+                  <label class="sw"><input type="checkbox" checked aria-label="启用 commit-commands"><i></i></label>
+                  <button class="trash" title="卸载"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16M9 7V4h6v3m-8 0 1 13h8l1-13"/></svg></button>
+                </div>
+              </div>
+
+              <div class="prow" data-name="pdf-toolkit pdf 文档 skills">
+                <div class="rowline">
+                  <button class="prow-head">
+                    <svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m9 6 6 6-6 6"/></svg>
+                    <span class="glyph">P</span>
+                    <span class="pmain">
+                      <span class="tline">
+                        <span class="pname">pdf-toolkit</span>
+                        <span class="pver mono">v2.0.1</span>
+                        <span class="chip">Skills 3</span>
+                      </span>
+                      <span class="pdsc">PDF 提取、合并与表单填写技能集</span>
+                    </span>
+                  </button>
+                  <label class="sw"><input type="checkbox" checked aria-label="启用 pdf-toolkit"><i></i></label>
+                  <button class="trash" title="卸载"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16M9 7V4h6v3m-8 0 1 13h8l1-13"/></svg></button>
+                </div>
+              </div>
+
+              <div class="prow" data-name="code-review-agents 代码评审 agents">
+                <div class="rowline">
+                  <button class="prow-head">
+                    <svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m9 6 6 6-6 6"/></svg>
+                    <span class="glyph">R</span>
+                    <span class="pmain">
+                      <span class="tline">
+                        <span class="pname">code-review-agents</span>
+                        <span class="pver mono">v0.4.0</span>
+                        <span class="chip">Agents 2</span>
+                      </span>
+                      <span class="pdsc">正确性 / 安全两个独立视角的评审 agent</span>
+                    </span>
+                  </button>
+                  <label class="sw"><input type="checkbox" checked aria-label="启用 code-review-agents"><i></i></label>
+                  <button class="trash" title="卸载"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16M9 7V4h6v3m-8 0 1 13h8l1-13"/></svg></button>
+                </div>
+              </div>
+
+              <div class="prow open" data-name="mcp-postgres postgres 数据库 mcp">
+                <div class="rowline">
+                  <button class="prow-head">
+                    <svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m9 6 6 6-6 6"/></svg>
+                    <span class="glyph">D</span>
+                    <span class="pmain">
+                      <span class="tline">
+                        <span class="pname">mcp-postgres</span>
+                        <span class="pver mono">v1.0.3</span>
+                        <span class="chip">MCP 1</span>
+                      </span>
+                      <span class="pdsc">通过 MCP 协议查询本地 Postgres,只读连接串</span>
+                    </span>
+                  </button>
+                  <label class="sw"><input type="checkbox" checked aria-label="启用 mcp-postgres"><i></i></label>
+                  <button class="trash" title="卸载"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16M9 7V4h6v3m-8 0 1 13h8l1-13"/></svg></button>
+                </div>
+                <div class="pdetail">
+                  <div class="box">
+                    <div class="meta">
+                      <span>来源 <b>插件市场</b> <span class="mono">anthropics/claude-plugins</span></span>
+                      <span>安装于 <b>2026-09-02 14:31</b></span>
+                    </div>
+                    <div class="matrix">
+                      <span>Skills:Claude / Codex / Pi</span>
+                      <span>MCP:Claude / Codex</span>
+                      <span>Commands / Agents:仅 Claude</span>
+                      <span class="w">Hooks:当前不执行</span>
+                    </div>
+                    <div class="inv">
+                      <div class="h">MCP · 1</div>
+                      <ul>
+                        <li><span class="chip mono">stdio</span> <span class="nm">postgres</span> <span class="mono">npx -y @modelcontextprotocol/server-postgres postgresql://localhost:5432/app</span></li>
+                      </ul>
+                      <div style="font-size:10.5px;color:rgb(var(--content-subtle));margin-top:3px">MCP server 将在启用的会话中按上述命令/地址启动。</div>
+                    </div>
+                    <div class="path">路径 <span class="mono">C:\Users\86134\.mcode\plugins\mcp-postgres\1.0.3</span></div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="prow off" data-name="session-hooks hooks 会话自动化">
+                <div class="rowline">
+                  <button class="prow-head">
+                    <svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m9 6 6 6-6 6"/></svg>
+                    <span class="glyph">H</span>
+                    <span class="pmain">
+                      <span class="tline">
+                        <span class="pname">session-hooks</span>
+                        <span class="pver mono">v0.2.0</span>
+                        <span class="chip warn">Hooks 2</span>
+                      </span>
+                      <span class="pdsc">会话开始/结束时的自动化钩子(当前版本不执行)</span>
+                    </span>
+                  </button>
+                  <label class="sw"><input type="checkbox" aria-label="启用 session-hooks"><i></i></label>
+                  <button class="trash" title="卸载"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16M9 7V4h6v3m-8 0 1 13h8l1-13"/></svg></button>
+                </div>
+                <div class="pdetail">
+                  <div class="box">
+                    <div class="meta">
+                      <span>来源 <b>Git</b> <span class="mono">github.com/team/session-hooks</span></span>
+                      <span>安装于 <b>2026-08-28 09:12</b></span>
+                    </div>
+                    <div class="matrix">
+                      <span>Skills:Claude / Codex / Pi</span>
+                      <span class="w">Hooks:当前不执行</span>
+                    </div>
+                    <div class="hookbox">
+                      <div class="h"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v4m0 4h.01M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></svg>已声明 2 条 hooks —— 当前版本不执行,相关自动化不会生效</div>
+                      <ul>
+                        <li class="mono">SessionStart: node ./hooks/notify.js</li>
+                        <li class="mono">SessionEnd (matcher:.*): node ./hooks/cleanup.js</li>
+                      </ul>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="prow off" data-name="ui-snapshot 截图 mcp commands">
+                <div class="rowline">
+                  <button class="prow-head">
+                    <svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m9 6 6 6-6 6"/></svg>
+                    <span class="glyph">U</span>
+                    <span class="pmain">
+                      <span class="tline">
+                        <span class="pname">ui-snapshot</span>
+                        <span class="pver mono">v1.1.0</span>
+                        <span class="chip">MCP 1</span>
+                        <span class="chip">Commands 1</span>
+                      </span>
+                      <span class="pdsc">页面截图与视觉走查工具</span>
+                    </span>
+                  </button>
+                  <label class="sw"><input type="checkbox" aria-label="启用 ui-snapshot"><i></i></label>
+                  <button class="trash" title="卸载"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16M9 7V4h6v3m-8 0 1 13h8l1-13"/></svg></button>
+                </div>
+              </div>
+
+              <div class="prow" data-name="browser-tools 浏览器 mcp skills">
+                <div class="rowline">
+                  <button class="prow-head">
+                    <svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m9 6 6 6-6 6"/></svg>
+                    <span class="glyph">B</span>
+                    <span class="pmain">
+                      <span class="tline">
+                        <span class="pname">browser-tools</span>
+                        <span class="pver mono">v0.5.1</span>
+                        <span class="chip">Skills 1</span>
+                        <span class="chip">MCP 1</span>
+                      </span>
+                      <span class="pdsc">驱动内置浏览器完成抓取与端到端验证</span>
+                    </span>
+                  </button>
+                  <label class="sw"><input type="checkbox" checked aria-label="启用 browser-tools"><i></i></label>
+                  <button class="trash" title="卸载"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16M9 7V4h6v3m-8 0 1 13h8l1-13"/></svg></button>
+                </div>
+              </div>
+
+              <div class="prow" data-name="release-notes 发布说明 commands">
+                <div class="rowline">
+                  <button class="prow-head">
+                    <svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m9 6 6 6-6 6"/></svg>
+                    <span class="glyph">L</span>
+                    <span class="pmain">
+                      <span class="tline">
+                        <span class="pname">release-notes</span>
+                        <span class="pver mono">v1.0.0</span>
+                        <span class="chip">Commands 2</span>
+                      </span>
+                      <span class="pdsc">由 git 历史生成变更日志与发布公告</span>
+                    </span>
+                  </button>
+                  <label class="sw"><input type="checkbox" checked aria-label="启用 release-notes"><i></i></label>
+                  <button class="trash" title="卸载"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16M9 7V4h6v3m-8 0 1 13h8l1-13"/></svg></button>
+                </div>
+              </div>
+
+              <div class="prow" data-name="legacy-notes 笔记 空组件">
+                <div class="rowline">
+                  <button class="prow-head">
+                    <svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m9 6 6 6-6 6"/></svg>
+                    <span class="glyph">N</span>
+                    <span class="pmain">
+                      <span class="tline">
+                        <span class="pname">legacy-notes</span>
+                        <span class="pver mono">v0.9.9</span>
+                      </span>
+                      <span class="pdsc">未声明可识别组件</span>
+                    </span>
+                  </button>
+                  <label class="sw"><input type="checkbox" checked aria-label="启用 legacy-notes"><i></i></label>
+                  <button class="trash" title="卸载"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16M9 7V4h6v3m-8 0 1 13h8l1-13"/></svg></button>
+                </div>
+              </div>
+
+              <div class="list-empty" id="listEmpty" hidden>
+                没有匹配的插件。<br>换个关键词,或到右侧插件市场找找。
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ══ 右栏:插件市场(常驻)══ -->
+        <section class="pane" id="pane-market">
+          <div class="mtool">
+            <span class="tt">插件市场</span>
+            <span class="cnt">2 个来源</span>
+            <span style="flex:1"></span>
+            <button class="mside" title="刷新全部"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-2.6-6.4M21 4v5h-5"/></svg></button>
+          </div>
+          <p class="mdesc">添加 Claude 生态的 marketplace 仓库(git 地址或本地目录),从中浏览并安装插件。</p>
+          <div class="mlist">
+
+            <div class="mgroup">
+              <div class="mg-head">
+                <span class="mg-name">claude-plugins</span>
+                <span class="mg-kind mono">git</span>
+                <span class="mg-cnt">6 个插件</span>
+                <button class="mside" title="刷新"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-2.6-6.4M21 4v5h-5"/></svg></button>
+                <button class="mside" title="移除"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16M9 7V4h6v3m-8 0 1 13h8l1-13"/></svg></button>
+              </div>
+              <div class="mentry">
+                <div class="me-main"><div class="me-t"><span class="me-name">frontend-design</span><span class="me-ver mono">v0.1.2</span></div><div class="me-dsc">有态度的前端视觉方向技能</div></div>
+                <span class="tag-inst">已安装</span>
+              </div>
+              <div class="mentry">
+                <div class="me-main"><div class="me-t"><span class="me-name">pdf-toolkit</span><span class="me-ver mono">v2.0.1</span></div><div class="me-dsc">PDF 提取、合并与表单技能</div></div>
+                <span class="tag-inst">已安装</span>
+              </div>
+              <div class="mentry">
+                <div class="me-main"><div class="me-t"><span class="me-name">git-master</span><span class="me-ver mono">v2.1.0</span></div><div class="me-dsc">分支策略、变基与冲突处理技能</div></div>
+                <button class="btn sm">安装</button>
+              </div>
+              <div class="mentry">
+                <div class="me-main"><div class="me-t"><span class="me-name">doc-exporter</span><span class="me-ver mono">v1.2.2</span></div><div class="me-dsc">会话导出为 Markdown / PDF 文档</div></div>
+                <button class="btn sm">安装</button>
+              </div>
+              <div class="mentry">
+                <div class="me-main"><div class="me-t"><span class="me-name">terminal-wizard</span><span class="me-ver mono">v0.7.0</span></div><div class="me-dsc">常用 shell 管道与脚本速查命令</div></div>
+                <button class="btn sm">安装</button>
+              </div>
+              <div class="mentry">
+                <div class="me-main"><div class="me-t"><span class="me-name">session-search</span><span class="me-ver mono">v0.3.1</span></div><div class="me-dsc">全文检索历史会话内容</div></div>
+                <button class="btn sm">安装</button>
+              </div>
+            </div>
+
+            <div class="mgroup">
+              <div class="mg-head">
+                <span class="mg-name">团队内部市场</span>
+                <span class="mg-kind loc">本地目录</span>
+                <span class="mg-cnt">3 个插件</span>
+                <button class="mside" title="刷新"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-2.6-6.4M21 4v5h-5"/></svg></button>
+                <button class="mside" title="移除"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16M9 7V4h6v3m-8 0 1 13h8l1-13"/></svg></button>
+              </div>
+              <div class="mentry">
+                <div class="me-main"><div class="me-t"><span class="me-name">internal-lint</span><span class="me-ver mono">v0.3.0</span></div><div class="me-dsc">团队 ESLint / 风格规范检查 agent</div></div>
+                <button class="btn sm">安装</button>
+              </div>
+              <div class="mentry">
+                <div class="me-main"><div class="me-t"><span class="me-name">deploy-hooks</span><span class="me-ver mono">v1.0.0</span></div><div class="me-dsc">发布流程钩子模板</div></div>
+                <span class="tag-hook">Hooks</span>
+                <button class="btn sm">安装</button>
+              </div>
+              <div class="mentry">
+                <div class="me-main"><div class="me-t"><span class="me-name">api-mocker</span><span class="me-ver mono">v0.2.4</span></div><div class="me-dsc">由 OpenAPI 生成可用的本地 mock 服务</div></div>
+                <button class="btn sm">安装</button>
+              </div>
+            </div>
+
+            <div class="mp-add" id="mpAdd">
+              <input class="mono" placeholder="marketplace git 地址" spellcheck="false">
+              <div class="row">
+                <button class="btn">添加</button>
+                <button class="btn">本地市场…</button>
+                <button class="x" id="mpAddX" title="收起">✕</button>
+              </div>
+            </div>
+            <button class="mp-addbtn" id="mpAddBtn">＋ 添加插件市场</button>
+
+          </div>
+        </section>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="notes">
+  <h2>设计说明</h2>
+  <ol>
+    <li><b>市场常驻右列(核心修复)</b>:已安装与插件市场各自独立滚动,互不推挤;装再多插件,市场也在原位。右列固定 392px,左列自适应。</li>
+    <li><b>行密度</b>:插件行由约 3 行压缩为 2 行 —— 组件计数徽章内嵌到名称行;启用态由「monogram 底色 + 开关」表达,去掉长文案「已启用」徽标。详情仍是展开式,展开区保留来源 / 安装时间 / 三引擎矩阵 / 路径 / 组件清单。</li>
+    <li><b>安装入口收敛</b>:常驻的 git 输入行 + 「本地目录」「zip 包」两按钮 → 收进「安装 ▾」菜单,选「从 Git 安装」才在工具行下方展开内联表单;降低常态视觉噪音。</li>
+    <li><b>搜索与过滤</b>:搜索框常驻(按名称 / 描述 / 组件匹配);「全部 / 已启用」分段过滤兼作计数展示。</li>
+    <li><b>市场列内部</b>:每个市场是一张分组卡(git / 本地目录徽标 + 数量 + 悬停刷新/移除),条目两行(名称+版本 / 一句描述) + 右侧「安装」;含 hooks 的条目加琥珀色标签,安装前即预警。「添加插件市场」虚线按钮按需展开表单。</li>
+    <li><b>方案二(顶部页签)</b>:改动最小 —— 页头放「已安装 / 插件市场」分段页签,正文整体切换。市场不再被推走,但仍需一次点击才能看到;适合不想引入双栏时的保守选项。</li>
+    <li>视觉完全继承应用现有 token(翡翠 accent、zinc 中性色、卡片 + hairline);切换右上「◐」查看深色。落地时需新增少量 i18n 字符串(搜索占位、过滤项、安装菜单项、市场条目标签等)。</li>
+  </ol>
+</div>
+
+<script>
+  const $ = (s, el=document) => el.querySelector(s);
+  const $$ = (s, el=document) => [...el.querySelectorAll(s)];
+
+  /* 主题 */
+  $("#themeBtn").onclick = () => {
+    const b = document.body;
+    b.dataset.theme = b.dataset.theme === "dark" ? "light" : "dark";
+  };
+
+  /* 方案切换 */
+  const win = $("#win");
+  $$("#variantSeg button").forEach(b => b.onclick = () => {
+    $$("#variantSeg button").forEach(x => x.classList.toggle("cur", x === b));
+    win.dataset.variant = b.dataset.v;
+    if (b.dataset.v === "tabs") showTab("installed");
+  });
+
+  /* 方案二的页签 */
+  function showTab(name){
+    $("#pane-installed").classList.toggle("cur", name === "installed");
+    $("#pane-market").classList.toggle("cur", name === "market");
+    $$("#tabSeg button").forEach(b => b.classList.toggle("cur", b.dataset.tab === name));
+  }
+  $$("#tabSeg button").forEach(b => b.onclick = () => showTab(b.dataset.tab));
+
+  /* 行展开(开关 / 卸载与展开按钮是兄弟节点,互不影响) */
+  $$(".prow-head").forEach(h => h.onclick = () => h.closest(".prow").classList.toggle("open"));
+
+  /* 安装菜单 */
+  const wrap = $("#installWrap");
+  $("#installBtn").onclick = e => { e.stopPropagation(); wrap.classList.toggle("open"); };
+  document.addEventListener("click", e => { if (!wrap.contains(e.target)) wrap.classList.remove("open"); });
+  document.addEventListener("keydown", e => { if (e.key === "Escape") wrap.classList.remove("open"); });
+  $$(".menu button").forEach(b => b.onclick = () => {
+    wrap.classList.remove("open");
+    if (b.dataset.src === "git") $("#installForm").classList.add("show");
+  });
+  $("#installFormX").onclick = () => $("#installForm").classList.remove("show");
+
+  /* 搜索 + 过滤 */
+  let filter = "all";
+  $$("#fseg button").forEach(b => b.onclick = () => {
+    filter = b.dataset.f;
+    $$("#fseg button").forEach(x => x.classList.toggle("cur", x === b));
+    applyFilter();
+  });
+  $("#q").oninput = applyFilter;
+  function applyFilter(){
+    const q = $("#q").value.trim().toLowerCase();
+    let shown = 0;
+    $$("#plist .prow").forEach(r => {
+      const on = r.querySelector(".sw input").checked;
+      const hay = (r.dataset.name + " " + r.textContent).toLowerCase();
+      const hit = (!q || hay.includes(q)) && (filter === "all" || on);
+      r.hidden = !hit;
+      if (hit) shown++;
+    });
+    $("#listEmpty").hidden = shown > 0;
+  }
+
+  /* 添加市场表单 */
+  $("#mpAddBtn").onclick = () => { $("#mpAdd").classList.add("show"); $("#mpAdd input").focus(); };
+  $("#mpAddX").onclick = () => $("#mpAdd").classList.remove("show");
+
+  /* 市场条目「安装」点击 → 变为已安装(示意流转) */
+  $$(".mentry .btn.sm").forEach(b => b.onclick = () => {
+    const tag = document.createElement("span");
+    tag.className = "tag-inst";
+    tag.textContent = "已安装";
+    b.replaceWith(tag);
+  });
+</script>
+</body>
+</html>

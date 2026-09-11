@@ -68,6 +68,11 @@ export interface BuildPiSkillLoaderOptions {
    *  Claude's `Options.skills` allowlist). Empty/undefined → all discovered
    *  skills (mirrors Claude's `"all"` sentinel). */
   allowNames?: string[];
+  /** Additional skill roots beyond Mcode's two defaults — the skills
+   *  directories of ENABLED plugins (settings → Plugins), supplied by the
+   *  provider from pluginManager.getEnabledPluginSkillRoots(). Absent/empty
+   *  keeps the historical pair. */
+  extraSkillPaths?: string[];
   /** Inline extensions to inject via the loader's `extensionFactories` option.
    *  The loader runs each factory during `getExtensions()` (before
    *  `_refreshToolRegistry`), so `pi.registerTool` / `pi.on` are wired before
@@ -94,7 +99,7 @@ export interface BuildPiSkillLoaderOptions {
 export async function buildPiSkillLoader(
   opts: BuildPiSkillLoaderOptions,
 ): Promise<PiResourceLoader> {
-  const { sdk, cwd, allowNames, extensionFactories } = opts;
+  const { sdk, cwd, allowNames, extraSkillPaths, extensionFactories } = opts;
   const allow = allowNames && allowNames.length > 0 ? new Set(allowNames) : undefined;
 
   const loader = new sdk.DefaultResourceLoader({
@@ -107,10 +112,11 @@ export async function buildPiSkillLoader(
     // / `pi.on` are live before the first agent turn. Mcode's extension
     // bridges host approval, AskUserQuestion, and system-prompt injection.
     extensionFactories: extensionFactories ?? [],
-    // Pull in Mcode's two roots alongside Pi's defaults. We deliberately leave
-    // `noSkills` unset so Pi's own `~/.pi/agent/skills` + `<cwd>/.pi/skills`
-    // keep working — existing Pi users aren't disrupted.
-    additionalSkillPaths: mcodeSkillRoots(cwd),
+    // Pull in Mcode's two roots (plus ENABLED plugin skill roots) alongside
+    // Pi's defaults. We deliberately leave `noSkills` unset so Pi's own
+    // `~/.pi/agent/skills` + `<cwd>/.pi/skills` keep working — existing Pi
+    // users aren't disrupted.
+    additionalSkillPaths: [...mcodeSkillRoots(cwd), ...(extraSkillPaths ?? [])],
     // On Windows, append a path-style hint that matches the bash the SDK will
     // actually spawn — native (Git Bash: `/mnt/...` doesn't exist) or WSL
     // (`/mnt/...` is the only absolute form that resolves; `detectBashEnv`

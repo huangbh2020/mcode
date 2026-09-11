@@ -36,6 +36,10 @@ function fingerprint(cfg: ApiConfig): string {
     authToken: cfg.authToken,
     authMode: cfg.authMode,
     timeoutMs: cfg.timeoutMs ?? null,
+    // Headers are baked into every upstream request this server makes, so an
+    // edit that doesn't rebuild would keep sending the OLD set for the rest of
+    // the bridge's life (it outlives the turn that created it).
+    customHeaders: cfg.customHeaders ?? null,
   });
 }
 

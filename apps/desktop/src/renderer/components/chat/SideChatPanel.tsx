@@ -30,7 +30,7 @@ import { useSessionStore, type Block } from "@renderer/stores/sessionStore.js";
 import { ConfirmDialog } from "@renderer/components/ui/index.js";
 import { ChatPane } from "@renderer/components/chat/ChatPane.js";
 import { MessageBlocks } from "./MessageBlocks.js";
-import { SUBAGENT_STATUS_META, fmtUsage } from "./ActivityPopover.js";
+import { SUBAGENT_STATUS_META, fmtUsage } from "./activityShared.js";
 
 export function SideChatPanel() {
   const activeSessionId = useSessionStore((s) => s.activeSessionId);
@@ -53,7 +53,7 @@ export function SideChatPanel() {
   useEffect(() => {
     setViewSubagentTaskId(null);
   }, [activeSessionId]);
-  // One-shot open request from OUTSIDE the panel (the ActivityPopover's
+  // One-shot open request from OUTSIDE the panel (the activity console's
   // subagent row): enter the requested view when it belongs to the current
   // parent, then drain the request either way (chatFileQueue hand-off
   // pattern). The panel mounts on tab switch — its first effect run consumes

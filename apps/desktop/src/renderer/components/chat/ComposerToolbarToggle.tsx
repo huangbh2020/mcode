@@ -7,31 +7,20 @@ import { useSuppressBrowserView } from "@renderer/hooks/useSuppressBrowserView.j
 import { ComposerToolbar } from "./ComposerToolbar.js";
 
 /**
- * Narrow-composer entry point for the chip cluster.
+ * Toggle entry for COLLAPSED composer hosts (the side-chat panel / phone
+ * shell — ChatPane `chipsMode="collapsed"`).
  *
- * When the chip row can't fit on one line beside the mic/provider/send
- * cluster — or the composer card itself is narrower than 580px (the width
- * floor in useComposerRowFit) — `useComposerRowFit` adds
- * `composer-row-collapsed` to the action
- * row (measured fit — not a fixed breakpoint, since the chips' width depends
- * on locale and selected values). The inline chip row (Model / Effort /
- * Permission / ContextRing rendered by {@link ComposerToolbar}) is then hidden
- * by CSS, and THIS toggle icon takes its place. Clicking it pops a panel that
- * hosts the *same* `ComposerToolbar` in its `layout="row"` presentation — a
- * vertical settings list where each control is a full-width labelled row
- * (field name left, current value right); each dropdown cascades to the
- * right of its row, or upward on phone-class viewports (useNarrowViewport).
- * The controls collapse to a single icon visually, but behaviour is
- * identical to the wide-mode chip row (no duplicated logic). Shared by the
- * desktop narrow pane, the side-chat panel, and the phone shell — the
- * vertical list is the usable shape in all three: it exists precisely
- * because horizontal space ran out, and labelled rows let the user read the
- * whole next-turn config (model / thinking / permission / context) at a
- * glance before opening anything.
- *
- * The toggle is hidden by default (`display:none` via the `.composer-chips-toggle`
- * rule) and only revealed by the collapsed state; in wide mode it is absent
- * from the layout entirely.
+ * The main composer always shows the mini pill (see ComposerToolbar), but
+ * hosts that are narrow at EVERY width skip the pill entirely: this single
+ * toggle icon pops a panel hosting the *same* `ComposerToolbar` in its
+ * `layout="row"` presentation — a vertical settings list where each control
+ * is a full-width labelled row (field name left, current value right); each
+ * dropdown cascades to the right of its row, or upward on phone-class
+ * viewports (useNarrowViewport). Behaviour is identical to the pill's
+ * segments (no duplicated logic); the vertical list is the usable shape
+ * here precisely because horizontal space ran out, and labelled rows let
+ * the user read the whole next-turn config (model / thinking / permission /
+ * context) at a glance before opening anything.
  *
  * The popup deliberately uses `overflow-visible` so that nested portaled
  * menus can still render beyond the popup's box. Effort/Permission use

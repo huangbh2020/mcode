@@ -74,6 +74,11 @@ export function registerCustomModelHandlers(ipcMain: IpcMain): void {
       models: [{ id: input.model, ...(input.supports1m ? { supports1m: true } : {}) }],
       disableNonEssentialTraffic: input.disableNonEssentialTraffic ?? true,
       timeoutMs: input.timeoutMs,
+      // Carried so the probe sends the same headers a live turn would — without
+      // this, an endpoint that REQUIRES one (and answers 400 without it) could
+      // never be verified before saving: the test would fail on a config that
+      // works fine.
+      customHeaders: input.customHeaders,
     };
     // BOTH protocols probe through the real live chain (binary + env builder +
     // settingSources) — never a shortcut fetch. OpenAI-format endpoints get a
