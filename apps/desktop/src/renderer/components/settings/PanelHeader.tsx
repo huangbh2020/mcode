@@ -1,61 +1,84 @@
 /**
- * PanelHeader — the sticky toolbar pinned at the top of every settings panel.
+ * PanelHeader — the page header of every settings page.
  *
- * This is the TOP of the visual hierarchy inside a settings page:
- *   1. PanelHeader  — 吸顶工具条:页面标题 + 右侧动作槽,随滚动钉在内容区顶部
- *   2. SettingsSection — 分组标题 (0.93em semibold) + 卡片
- *   3. SettingRow   — 卡片内的设置行
+ * Plan-A structure (prototypes/settings-redesign.html): the header is no
+ * longer a `sticky` bar inside the scrolling body — `SettingsPage` renders a
+ * fixed header slot above the single scroll container and publishes it via
+ * `SettingsShellContext`, and this component portals its <header> into that
+ * slot. The header therefore always spans the full page width (hairline
+ * included) while the panels below scroll underneath it, with no sticky +
+ * negative-margin tricks.
  *
- * There is deliberately NO page-level description line: the nav item the user
- * just clicked already names the page, so a repeated banner description only
- * pushed the first settings card below the fold. Anything worth saying lives
- * on the section or the row that needs it.
+ * Panels keep writing `<PanelHeader title=… icon=… action=…/>` unchanged; the
+ * page icon and the one-line page description default to the values registered
+ * by `SettingsPage` for the active nav item, so page identity lives in one
+ * place (the nav registry) instead of being repeated per panel. A panel can
+ * still override either explicitly.
  *
- * `icon` renders an accent-tinted glyph next to the title; `action` is an
- * optional right-aligned slot (e.g. the shortcuts panel's "恢复全部默认"
- * button or the usage panel's range presets). The bar sticks to the top of
- * the scrolling center pane (`bg-surface` — same as the pane itself — plus a
- * hairline) so cards scroll underneath it; in full-height two-column panels
- * (Skills / custom models) the center pane doesn't scroll, so the bar simply
- * sits at the top.
+ * Visual hierarchy inside a settings page (plan A — two levels):
+ *   1. PanelHeader     — page icon + title (+ description) + right action slot
+ *   2. SettingsSection — card with its own header (icon + title + description)
+ *   3. SettingRow      — setting row inside the card
  *
- * The `mt-5` supplies the initial top gap inside the center pane — the pane
- * itself must stay free of top padding, because Chromium anchors a sticky
- * child below the scroll container's padding-top, which would leave a
- * visible strip above the stuck bar (self-margin does NOT offset the stuck
- * position, so this is the safe way to space it).
+ * The right slot hosts panel actions (e.g. the shortcuts panel's "恢复全部默认"
+ * or the usage panel's range presets); events from it still bubble through the
+ * React tree, so portaling does not change their behaviour.
  */
 import type { ComponentType, ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { cn } from "@renderer/lib/cn.js";
 import type { TablerIconProps } from "@renderer/lib/icons.js";
+import { useSettingsShell } from "./settingsShell.js";
 
 export function PanelHeader({
   title,
+  desc,
   icon: Icon,
   action,
   className,
 }: {
   title: string;
+  /** Subtitle under the title. Defaults to the nav item's description. */
+  desc?: ReactNode;
+  /** Page glyph inside the accent tile. Defaults to the nav item's icon. */
   icon?: ComponentType<TablerIconProps>;
   /** Right-aligned action slot (e.g. a "恢复默认" button). */
   action?: ReactNode;
   className?: string;
 }) {
-  return (
+  const shell = useSettingsShell();
+  const Glyph = Icon ?? shell?.pageIcon;
+  const description = desc ?? shell?.pageDesc;
+
+  const header = (
     <header
       className={cn(
-        "sticky top-0 z-10 mb-1 mt-5 flex items-center justify-between gap-4",
-        "border-b border-edge bg-surface py-2.5",
+        "flex items-center gap-3 border-b border-edge-panel bg-surface px-6 py-3.5",
         className,
       )}
     >
-      <div className="flex min-w-0 items-center gap-2">
-        {Icon && <Icon size={16} className="shrink-0 text-accent" />}
-        <h2 className="truncate text-[0.9286em] font-semibold leading-tight text-content">
+      {Glyph && (
+        <span className="grid h-7 w-7 shrink-0 place-items-center rounded-lg bg-accent/10 text-accent">
+          <Glyph size={17} />
+        </span>
+      )}
+      <div className="flex min-w-0 flex-1 flex-col gap-[3px]">
+        <h2 className="truncate text-[1.1071em] font-semibold leading-tight text-content">
           {title}
         </h2>
+        {description && (
+          <p className="truncate text-[0.8571em] leading-snug text-content-subtle">
+            {description}
+          </p>
+        )}
       </div>
-      {action && <div className="shrink-0">{action}</div>}
+      {action && <div className="flex shrink-0 items-center gap-2">{action}</div>}
     </header>
   );
+
+  // No shell above (bare use): render in place, the component stands alone.
+  if (!shell) return header;
+  // Inside the shell the slot owns the header's position; the ref callback that
+  // fills it flushes before paint, so there is no visible first frame without it.
+  return shell.headerSlot ? createPortal(header, shell.headerSlot) : null;
 }

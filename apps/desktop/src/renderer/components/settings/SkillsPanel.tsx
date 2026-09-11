@@ -326,7 +326,6 @@ export function SkillsPanel() {
   return (
     <div className="mx-auto flex h-full w-full max-w-5xl min-h-0 flex-col">
       <PanelHeader
-        className="mb-3"
         title="Skills"
       />
 

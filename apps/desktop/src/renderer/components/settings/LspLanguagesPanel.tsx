@@ -99,7 +99,7 @@ export function LspLanguagesPanel() {
   }, [reloadLspLanguages]);
 
   return (
-    <section className="mx-auto w-full max-w-3xl space-y-4">
+    <section className="mx-auto w-full max-w-[820px] space-y-4">
       <PanelHeader title={t("settings.lsp.title")} icon={IconCode} />
 
       <SettingsSection title={t("settings.lsp.section")}>

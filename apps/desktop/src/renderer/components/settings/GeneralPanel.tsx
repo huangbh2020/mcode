@@ -112,7 +112,7 @@ export function GeneralPanel() {
   );
 
   return (
-    <section className="mx-auto w-full max-w-3xl space-y-4">
+    <section className="mx-auto w-full max-w-[820px] space-y-4">
       <PanelHeader
         title={t("settings.general.title")}
       />

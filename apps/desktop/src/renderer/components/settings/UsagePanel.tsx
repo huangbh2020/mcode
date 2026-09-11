@@ -177,8 +177,8 @@ export function UsagePanel() {
   return (
     // Constrained width + centered (same pattern as LspLanguagesPanel):
     // the 53-week heatmap stretches by 1fr columns, so at full panel width
-    // the cells grow huge — max-w-3xl keeps them GitHub-sized.
-    <section className="mx-auto w-full max-w-3xl space-y-4">
+    // the cells grow huge — max-w-[820px] keeps them GitHub-sized.
+    <section className="mx-auto w-full max-w-[820px] space-y-4">
       <PanelHeader
         title={t("settings.usage.title")}
         icon={IconChartBar}

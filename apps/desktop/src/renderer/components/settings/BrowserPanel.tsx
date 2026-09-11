@@ -34,7 +34,7 @@ import {
 export function BrowserPanel() {
   const { t } = useI18n();
   return (
-    <section className="mx-auto w-full max-w-3xl space-y-4">
+    <section className="mx-auto w-full max-w-[820px] space-y-4">
       <PanelHeader title={t("settings.browser.title")} />
 
       {/* 存储位置 — 截图目录与数据目录合并为一张卡(两行) */}
