@@ -80,9 +80,9 @@ const THEME_OPTIONS: { value: ThemeName; labelKey: MessageId; icon: ReactNode }[
 ];
 
 /** Theme STYLE — orthogonal to the light/dark scheme above. "sketch" applies
- *  the paper theme (styles.css `html.sketch` section): warm-paper palette,
- *  handwriting face, hand-drawn shapes + icon wobble. Code/terminal/diff
- *  surfaces stay monospace ("手绘 chrome + 清晰数据流"). */
+ *  the hand-drawn theme in BOTH effective modes (styles.css sketch section):
+ *  light = paper (warm paper + ink), dark = kraft (warm deep ground + chalk).
+ *  Code/terminal/diff surfaces stay monospace ("手绘 chrome + 清晰数据流"). */
 const THEME_STYLE_OPTIONS: { value: ThemeStyle; labelKey: MessageId; icon: ReactNode }[] = [
   { value: "classic", labelKey: "settings.appearance.styleClassic", icon: <IconSquare size={14} className="text-content-muted" /> },
   { value: "sketch", labelKey: "settings.appearance.styleSketch", icon: <IconBrush size={14} className="text-content-muted" /> },

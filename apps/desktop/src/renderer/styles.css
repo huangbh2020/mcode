@@ -327,7 +327,10 @@ div:has(> [role="menu"]) {
  * Custom properties cascade — Tailwind's text-content-* utilities read
  * them at the element, so all settings panels pick this up at once.
  * (Portaled dialogs/tooltips outside this subtree keep global tokens.) */
-.dark .settings-root {
+/* :not(.sketch) — kraft(html.sketch.dark)是暖棕底,这套冷灰提亮值落上去
+ * 会冷暖打架;kraft 自己的 muted 对比度(≈7.2:1)不需要提亮。见文件末
+ * 「Sketch theme」区块的牛皮纸配色。 */
+.dark:not(.sketch) .settings-root {
   --content-muted: 208 211 217; /* #d0d3d9 */
   --content-subtle: 184 188 196; /* #b8bcc4 */
 }
@@ -348,11 +351,13 @@ div:has(> [role="menu"]) {
  * Nested lists recompute the mix from the static RGB vars, not from the
  * inherited color, so it doesn't compound at depth. Markers stay at
  * --content-subtle (decorative, no lift needed). */
-.dark .chat-md ul,
-.dark .chat-md ol {
+/* :not(.sketch) — 同 .dark .settings-root 的排除:冷灰 mix 落在 kraft 暖棕
+ * 底上打架,kraft 的对比度也不需要这层提亮(见「Sketch theme」区块)。 */
+.dark:not(.sketch) .chat-md ul,
+.dark:not(.sketch) .chat-md ol {
   color: color-mix(in srgb, rgb(var(--content-muted)) 60%, rgb(var(--content)));
 }
-.dark .chat-md li strong {
+.dark:not(.sketch) .chat-md li strong {
   color: color-mix(in srgb, rgb(var(--content)) 70%, rgb(var(--content-muted)));
 }
 
@@ -1983,12 +1988,13 @@ body:has(.lightbox-root[data-chrome="hidden"]) .lightbox-scrim {
   }
 }
 
-/* ───────────── Sketch theme · 纸面手绘 (ui.themeStyle="sketch") ─────────────
- * prototypes/theme-sketch-redesign.html 的一期落地。立场:手绘是「风格」维度,
- * 与明暗(ui.theme → html.dark)正交 —— 本区块所有规则都挂在 html.sketch 上,
- * 由 lib/theme.ts applyThemeStyle 写入(settings key ui.themeStyle,renderer 的
- * useThemeStyle 挂在 App 根)。牛皮纸(手绘的深色版)是二期:dark+sketch 组合
- * 现在只继承形状语言,颜色维持经典暗色 token。
+/* ───────────── Sketch theme · 手绘 (ui.themeStyle="sketch") ─────────────
+ * prototypes/theme-sketch-redesign.html 的落地(一期纸面 + 二期牛皮纸)。
+ * 立场:手绘是「风格」维度,与明暗(ui.theme → html.dark)正交 —— 本区块
+ * 所有规则都挂在 html.sketch 上,由 lib/theme.ts applyThemeStyle 写入
+ * (settings key ui.themeStyle,renderer 的 useThemeStyle 挂在 App 根)。
+ * 四形态:sketch×light = 纸面手绘(暖纸+墨线);sketch×dark = 牛皮纸
+ * (暖深底+粉笔线,同一套形状语言的深色版);classic 两档 = 现状。
  *
  * 红线(改这里前先读原型「规格速查」节):
  *  · 代码/终端/diff 保持等宽字体:font-mono 工具类在元素级自带等宽栈,body
@@ -2004,7 +2010,7 @@ body:has(.lightbox-root[data-chrome="hidden"]) .lightbox-scrim {
  *    base-ui 修正同款的既有手法)。
  */
 
-/* ── 纸面配色(仅浅色;一期只有纸面,牛皮纸见区块头注释)─────────────────
+/* ── 纸面配色(sketch × light)──────────────────────────────────────────
  * 暖纸底 + 墨线:色相整体偏暖,铅笔灰描边,品牌绿微降饱和保墨感。
  * token 名与 :root/.dark 完全同集,rgb(var()) 消费端零改动。 */
 html.sketch:not(.dark) {
@@ -2025,16 +2031,36 @@ html.sketch:not(.dark) {
   --success: 22 132 100;
   --user-bubble: 130 120 100; /* 暖灰气泡,纸面上的墨水感 */
   --user-bubble-alpha: 0.14;
-  /* 手写字体基准上调一档(14→15px):楷体小字号发虚。用户在设置里显式改过
-   * 字号时 appearance.ts 的 inline 写入优先(默认值改为 removeProperty 正是
-   * 为了让这里的主题默认能生效)——设置页步进器显示的是「用户设定值」而非
-   * 主题生效值,这是原型规格明示的取舍。 */
-  --chat-font-size: 15px;
-  --right-panel-font-size: 15px;
   color-scheme: light;
 }
 
-/* ── 形状配方(明暗无关:dark+sketch 也继承形状语言)────────────────────── */
+/* ── 牛皮纸配色(sketch × dark,2026-09-11 二期)────────────────────────
+ * 手绘形状语言的深色版:暖深底 + 粉笔线。token 取自原型 kraft 表;硬阴影
+ * 配方不变(content 在深色下是粉笔白 → 偏移阴影读作粉笔灰,原型同款)。
+ * --git-lane-* 刻意不重定义(沿用 .dark 的经典车道色):lane 是身份色,
+ * 与主题风格无关。编辑器配色(Monaco/shiki)也继续走用户按明暗自选的
+ * 方案——手绘只接管 chrome,数据流保持自己的可读性调优。 */
+html.sketch.dark {
+  --surface: 59 49 38; /* #3b3126 暖深底 — 主面 */
+  --surface-muted: 51 42 32; /* #332a20 内衬/侧栏轨道/代码井 */
+  --surface-hover: 70 59 46; /* #463b2e hover 填充 */
+  --content: 240 231 213; /* #f0e7d5 粉笔白 */
+  --content-muted: 205 194 172; /* #cdc2ac */
+  --content-subtle: 172 160 137; /* #aca089 */
+  --edge: 105 90 70; /* #695a46 粉笔线 */
+  --panel-edge: 95 81 63; /* #5f513f 结构分隔线 */
+  --input-edge: 128 112 88; /* #807058 输入框描边(比 edge 亮一档) */
+  --accent: 64 190 142; /* #40be8e 粉笔绿 */
+  --accent-strong: 64 190 142; /* 深色底上已够对比,镜像 accent(同 .dark 惯例) */
+  --danger: 240 116 100;
+  --warning: 235 178 80;
+  --info: 168 142 245;
+  --success: 90 200 150;
+  --user-bubble: 205 194 172; /* 粉笔灰气泡 */
+  --user-bubble-alpha: 0.18; /* 深底上略加重,否则气泡不可见(同 .dark 的教训) */
+}
+
+/* ── 形状配方(明暗无关:纸面/牛皮纸共用)─────────────────────────────── */
 html.sketch {
   /* 三档手抖圆角:大=卡片/面板,中=按钮/输入/气泡,小=chip/标签。
    * 值刻意是「不可能的手绘圆角」——相邻角 225px/18px 的悬殊让浏览器按比例
@@ -2046,6 +2072,14 @@ html.sketch {
   --sk-sh: 3px 4px 0 rgb(var(--content) / 0.06);
   --sk-sh-btn: 2px 2px 0 rgb(var(--content) / 0.16);
   --sk-sh-pop: 5px 6px 0 rgb(var(--content) / 0.12);
+  /* 手写字体基准上调一档(14→15px):楷体小字号发虚,纸面/牛皮纸同样适用
+   * (放形状基座而非纸面配色块,让深色形态也拿到)。用户在设置里显式改过
+   * 字号时 appearance.ts 的 inline 写入优先(默认值改为 removeProperty 正是
+   * 为了让这里的主题默认能生效)——设置页步进器显示的是「用户设定值」而非
+   * 主题生效值,这是原型规格明示的取舍。特异性:html.sketch (0,1,1) 压过
+   * .dark (0,1,0),dark+sketch 下同样是 15px。 */
+  --chat-font-size: 15px;
+  --right-panel-font-size: 15px;
   /* 手写字体栈:捆绑的霞鹜文楷(main.tsx,regular+bold 两字重的 unicode-range
    * 切片)→ 系统楷体 → 系统 sans。font-mono 面(代码/终端/diff)元素级自带
    * 等宽栈,不受此 cascade。 */
@@ -2163,7 +2197,8 @@ html.sketch svg.tabler-icon {
 
 /* ── 纸纹:整页一层 feTurbulence 噪声(fixed 伪元素,pointer-events 穿透)──
  * 280px 平铺、5% 透明度的暖色噪声;z-index 与菜单弹层同顶但 pointer-events
- * 为 none,视觉上「整张纸都有纹理」包括弹层之上,交互零影响。 */
+ * 为 none,视觉上「整张纸都有纹理」包括弹层之上,交互零影响。深色(牛皮纸)
+ * 下减淡到 55%:深底上同一噪声会读成污渍而非纸纹(原型 kraft 同款)。 */
 html.sketch body::after {
   content: "";
   position: fixed;
@@ -2171,5 +2206,8 @@ html.sketch body::after {
   pointer-events: none;
   z-index: 9999;
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='280' height='280'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 0.42 0 0 0 0 0.38 0 0 0 0 0.30 0 0 0 0.05 0'/%3E%3C/filter%3E%3Crect width='280' height='280' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+html.sketch.dark body::after {
+  opacity: 0.55;
 }
 
