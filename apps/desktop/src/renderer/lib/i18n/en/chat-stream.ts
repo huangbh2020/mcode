@@ -8,6 +8,17 @@ export const en = {
   // ── MessageBlocks: batch tool group ──
   "chatStream.opCount": "{n} operations",
 
+  // ── Chat stream · Plan A (spine): turn summary / reply mark ──
+  "chatStream.stepCount": "{n} steps",
+  "chatStream.filesChanged": "{n} files changed",
+  "chatStream.waitingModel": "Waiting for model…",
+
+  // ── Running ledger (Plan B) header ──
+  "chatStream.ledgerRunning": "Running",
+  "chatStream.ledgerDone": "Completed",
+  "chatStream.tokensUsed": "{n} tokens",
+  "chatStream.filesChangedShort": "{n} files",
+
   // ── RenderErrorBoundary: per-segment render-failure fallback ──
   "chatStream.renderError": "This item failed to render and was skipped (everything else is unaffected)",
 

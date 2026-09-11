@@ -1,0 +1,2412 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light" data-plan="a" data-density="comfortable">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Mcode 设置面板重设计 · 三个方向</title>
+<style>/* ============================================================================
+ * Mcode 设置页重设计 · 设计系统 + 三套布局
+ * ----------------------------------------------------------------------------
+ * 令牌全部取自 apps/desktop/src/renderer/styles.css —— 稿子里看到的颜色/字号
+ * 就是产品里的真实值,评审时不需要做二次换算。
+ *
+ * 结构:  1 令牌   2 排版与密度   3 原语(PRIMITIVES)   4 方案 A/B/C 布局
+ *        5 富页面块(热力图/表单/列表)
+ * ========================================================================= */
+
+/* ─────────────────────────── 1 令牌 ─────────────────────────── */
+:root{
+  /* surfaces */
+  --surface:255 255 255;
+  --surface-muted:240 242 246;
+  --surface-hover:226 229 235;
+  /* content */
+  --content:9 9 11;
+  --content-muted:63 63 70;
+  --content-subtle:113 113 122;
+  /* borders */
+  --edge:213 216 222;
+  --panel-edge:222 225 231;
+  --input-edge:202 205 212;
+  /* semantic */
+  --accent:5 150 105;
+  --accent-strong:4 120 87;
+  --danger:220 38 38;
+  --warning:180 83 9;
+  --info:124 58 237;
+  --success:4 120 87;
+  --user-bubble:82 82 91;
+
+  /* 设计系统自身的尺度(不是产品令牌,是本次重设计新定义的规则) */
+  --fs:14px;              /* 跟随「全局字体大小」 */
+  --r-card:12px;
+  --r-ctrl:8px;
+  --r-pill:999px;
+  --gap-sec:14px;         /* 卡片/分组间距 */
+  --pad-card:14px;        /* 卡片内边距 */
+  --row-py:12px;          /* 行内上下留白(舒适) */
+  --gutter:24px;          /* 页面左右留白 */
+  --measure:820px;        /* 表单页阅读宽度 */
+  --shadow-card:0 1px 2px rgb(9 9 11 / .04);
+  --shadow-pop:0 10px 30px rgb(9 9 11 / .13), 0 2px 8px rgb(9 9 11 / .07);
+  --shadow-rail:1px 0 0 rgb(var(--edge));
+}
+[data-theme="dark"]{
+  --surface:26 29 36;
+  --surface-muted:44 49 60;
+  --surface-hover:58 64 78;
+  --content:231 232 236;
+  --content-muted:188 191 198;
+  --content-subtle:158 162 171;
+  --edge:45 51 64;
+  --panel-edge:45 51 64;
+  --input-edge:95 99 110;
+  --accent:16 185 129;
+  --accent-strong:16 185 129;
+  --danger:248 113 113;
+  --warning:251 191 36;
+  --info:167 139 250;
+  --success:16 185 129;
+  --shadow-card:0 1px 2px rgb(0 0 0 / .28);
+  --shadow-pop:0 14px 38px rgb(0 0 0 / .5), 0 2px 10px rgb(0 0 0 / .34);
+}
+/* 密度:紧凑把行高与分组间距各收一档,信息量不变 */
+[data-density="compact"]{
+  --row-py:7px;
+  --gap-sec:8px;
+  --pad-card:10px;
+  --gutter:20px;
+}
+
+*{box-sizing:border-box}
+html,body{height:100%}
+body{
+  margin:0;
+  background:rgb(var(--surface-muted));
+  color:rgb(var(--content));
+  font-family:-apple-system,blinkmacsystemfont,"SF Pro Text","Segoe UI","PingFang SC","Microsoft YaHei",system-ui,sans-serif;
+  font-size:var(--fs);
+  -webkit-font-smoothing:antialiased;
+}
+button,input,select,textarea{font:inherit;color:inherit}
+button{cursor:pointer}
+:focus-visible{outline:2px solid rgb(var(--accent)/.65);outline-offset:1px;border-radius:6px}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Cascadia Mono",monospace}
+.num{font-variant-numeric:tabular-nums}
+::-webkit-scrollbar{width:10px;height:10px}
+::-webkit-scrollbar-thumb{background:rgb(var(--content-subtle)/.28);border-radius:99px;border:3px solid transparent;background-clip:content-box}
+::-webkit-scrollbar-thumb:hover{background:rgb(var(--content-subtle)/.45);background-clip:content-box}
+::-webkit-scrollbar-track{background:transparent}
+@media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+
+/* ─────────────────────── 2 原语:排版 ─────────────────────── */
+.t-page{font-size:1.107em;font-weight:650;letter-spacing:-.01em;line-height:1.25}
+.t-card{font-size:.964em;font-weight:600;line-height:1.3}
+.t-row{font-size:.929em;font-weight:500;line-height:1.35}
+.t-desc{font-size:.857em;font-weight:400;line-height:1.55;color:rgb(var(--content-subtle))}
+.t-meta{font-size:.821em;font-weight:500;line-height:1.4;color:rgb(var(--content-subtle));font-variant-numeric:tabular-nums}
+.t-eyebrow{font-size:.786em;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:rgb(var(--content-subtle))}
+.t-code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:.893em}
+
+/* ─────────────────────── 2 原语:控件 ─────────────────────── */
+.btn{
+  display:inline-flex;align-items:center;justify-content:center;gap:6px;
+  height:28px;padding:0 10px;border-radius:var(--r-ctrl);
+  border:1px solid rgb(var(--edge));background:rgb(var(--surface));
+  font-size:.893em;font-weight:600;color:rgb(var(--content-muted));
+  transition:background .14s,color .14s,border-color .14s;white-space:nowrap;
+}
+.btn:hover{background:rgb(var(--surface-hover)/.7);color:rgb(var(--content))}
+.btn.primary{background:rgb(var(--accent));border-color:rgb(var(--accent));color:#fff}
+.btn.primary:hover{background:rgb(var(--accent)/.88);color:#fff}
+.btn.ghost{border-color:transparent;background:transparent}
+.btn.ghost:hover{background:rgb(var(--surface-hover)/.7)}
+.btn.danger{color:rgb(var(--danger));border-color:rgb(var(--danger)/.35)}
+.btn.danger:hover{background:rgb(var(--danger)/.08);color:rgb(var(--danger))}
+.btn.sm{height:24px;padding:0 8px;font-size:.821em}
+.btn.icon{width:28px;padding:0}
+.btn.sm.icon{width:24px}
+.btn[disabled],.btn[aria-disabled="true"]{opacity:.45;pointer-events:none}
+.btn .sp{width:12px;height:12px;border-radius:50%;border:1.5px solid currentColor;border-top-color:transparent;animation:spin .7s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+.inp,.sel,.ta{
+  height:30px;width:100%;padding:0 10px;border-radius:var(--r-ctrl);
+  border:1px solid rgb(var(--input-edge));background:rgb(var(--surface));
+  font-size:.893em;transition:border-color .14s,box-shadow .14s;
+}
+.ta{height:auto;padding:8px 10px;line-height:1.55;resize:vertical}
+.inp:focus,.sel:focus,.ta:focus{outline:none;border-color:rgb(var(--accent)/.8);box-shadow:0 0 0 3px rgb(var(--accent)/.13)}
+.inp::placeholder,.ta::placeholder{color:rgb(var(--content-subtle))}
+.sel{appearance:none;padding-right:26px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:28px;
+  background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2371717a' stroke-width='2.4' stroke-linecap='round'><path d='M6 9l6 6 6-6'/></svg>");
+  background-repeat:no-repeat;background-position:right 8px center}
+.sel.sm{height:26px;font-size:.857em}
+.inp.mono,.ta.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:.857em}
+.inp:disabled,.sel:disabled,.ta:disabled{opacity:.5;pointer-events:none}
+
+/* switch:34×20,开=accent */
+.sw{position:relative;width:34px;height:20px;border-radius:var(--r-pill);background:rgb(var(--content-subtle)/.42);
+  border:none;padding:0;transition:background .16s;flex:none}
+.sw::after{content:"";position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:50%;background:#fff;
+  box-shadow:0 1px 2px rgb(9 9 11 / .3);transition:transform .16s}
+.sw[aria-checked="true"]{background:rgb(var(--accent))}
+.sw[aria-checked="true"]::after{transform:translateX(14px)}
+.sw[disabled]{opacity:.45;pointer-events:none}
+.sw.sm{width:30px;height:18px}
+.sw.sm::after{width:14px;height:14px}
+.sw.sm[aria-checked="true"]::after{transform:translateX(12px)}
+
+/* 分段控制 / 页签 pill */
+.seg{display:inline-flex;padding:2px;gap:2px;border:1px solid rgb(var(--edge));background:rgb(var(--surface-muted)/.7);border-radius:9px}
+.seg button{border:none;background:none;height:24px;padding:0 10px;border-radius:7px;font-size:.857em;font-weight:600;color:rgb(var(--content-muted))}
+.seg button:hover{color:rgb(var(--content))}
+.seg button[aria-selected="true"]{background:rgb(var(--surface));color:rgb(var(--content));box-shadow:0 1px 2px rgb(9 9 11 / .09)}
+[data-theme="dark"] .seg button[aria-selected="true"]{background:rgb(var(--surface-hover));box-shadow:none}
+.seg.tinted button[aria-selected="true"]{background:rgb(var(--accent)/.14);color:rgb(var(--accent-strong));box-shadow:none}
+
+/* 徽标 */
+.badge{display:inline-flex;align-items:center;gap:4px;height:18px;padding:0 6px;border-radius:var(--r-pill);
+  font-size:.786em;font-weight:600;letter-spacing:.01em;white-space:nowrap}
+.badge.n{background:rgb(var(--surface-muted));color:rgb(var(--content-muted))}
+.badge.a{background:rgb(var(--accent)/.13);color:rgb(var(--accent-strong))}
+.badge.w{background:rgb(var(--warning)/.15);color:rgb(var(--warning))}
+.badge.d{background:rgb(var(--danger)/.12);color:rgb(var(--danger))}
+.badge.i{background:rgb(var(--info)/.13);color:rgb(var(--info))}
+.badge.o{background:transparent;border:1px solid rgb(var(--edge));color:rgb(var(--content-subtle))}
+.badge .bdot{width:5px;height:5px;border-radius:50%;background:currentColor}
+
+.kbd{display:inline-flex;align-items:center;justify-content:center;min-width:24px;height:24px;padding:0 6px;
+  border:1px solid rgb(var(--edge));border-bottom-width:2px;border-radius:6px;background:rgb(var(--surface));
+  font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:.929em;font-weight:500;
+  color:rgb(var(--content-muted));line-height:1}
+.kbd.on{border-color:rgb(var(--accent)/.55);color:rgb(var(--accent-strong));background:rgb(var(--accent)/.08)}
+
+.chip{display:inline-flex;align-items:center;gap:4px;height:20px;padding:0 7px;border-radius:6px;
+  background:rgb(var(--surface-muted));font-size:.786em;font-weight:600;color:rgb(var(--content-muted))}
+.chip.w{background:rgb(var(--warning)/.14);color:rgb(var(--warning))}
+
+.dot{width:7px;height:7px;border-radius:50%;flex:none}
+.prog{height:4px;border-radius:99px;background:rgb(var(--content-subtle)/.22);overflow:hidden;flex:1}
+.prog>i{display:block;height:100%;background:rgb(var(--accent));border-radius:99px;transition:width .3s}
+
+.card{background:rgb(var(--surface));border:1px solid rgb(var(--edge));border-radius:var(--r-card);box-shadow:var(--shadow-card)}
+.inset{background:rgb(var(--surface-muted)/.5);border-radius:var(--r-ctrl)}
+.hr{height:1px;background:rgb(var(--edge))}
+.hr.soft{background:rgb(var(--panel-edge))}
+
+/* 空态:虚线卡 + 图标 + 标题 + 提示 + 可选动作(全站唯一写法) */
+.empty{display:flex;flex-direction:column;align-items:center;gap:6px;text-align:center;
+  padding:22px 16px;border:1px dashed rgb(var(--edge));border-radius:var(--r-ctrl);color:rgb(var(--content-subtle))}
+.empty .eico{width:30px;height:30px;border-radius:9px;background:rgb(var(--surface-muted));display:grid;place-items:center;color:rgb(var(--content-subtle));margin-bottom:2px}
+.empty .et{font-size:.893em;font-weight:600;color:rgb(var(--content-muted))}
+.empty .eh{font-size:.857em;line-height:1.5;max-width:44ch}
+
+/* 折叠(全站唯一的展开语义:chevron + 摘要行 + 内嵌面板) */
+.disc>.disc-h{display:flex;align-items:center;gap:8px;cursor:pointer}
+.disc>.disc-h .cv{transition:transform .16s;color:rgb(var(--content-subtle));flex:none}
+.disc[data-open="true"]>.disc-h .cv{transform:rotate(90deg)}
+.disc>.disc-b{display:none}
+.disc[data-open="true"]>.disc-b{display:block}
+
+/* ─────────────────── 3 原语:设置行(三方案共用) ─────────────────── */
+.row{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;
+  column-gap:18px;row-gap:6px;padding:var(--row-py) var(--pad-card)}
+.row.stack{grid-template-columns:minmax(0,1fr);align-items:stretch}
+.row.keep{grid-template-columns:minmax(0,1fr) var(--ctrl-w,240px)}
+.row-l{min-width:0}
+.row-t{display:flex;align-items:center;gap:7px}
+.row-d{margin-top:3px;max-width:64ch}
+.row-c{display:flex;align-items:center;justify-content:flex-end;gap:6px;flex-wrap:nowrap}
+.row.stack .row-c{justify-content:flex-start}
+.row-c>.inp,.row-c>.sel{width:var(--ctrl-w,240px)}
+.row-c>.wide{width:100%}
+/* 与默认值不同的行:标题前一个 accent 点;hover 出现「恢复默认」 */
+.chg .row-t::before{content:"";width:6px;height:6px;border-radius:50%;background:rgb(var(--accent));flex:none;margin-left:-1px}
+.rst{opacity:.32;transition:opacity .14s}
+.row:hover .rst,.rst:focus-visible{opacity:1}
+.saved{display:inline-flex;align-items:center;gap:4px;font-size:.857em;font-weight:600;color:rgb(var(--accent-strong))}
+
+/* 路径/只读值 */
+.pathv{display:flex;align-items:center;gap:6px;height:30px;padding:0 10px;border-radius:var(--r-ctrl);
+  border:1px solid rgb(var(--edge));background:rgb(var(--surface-muted)/.45);
+  font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:.857em;color:rgb(var(--content-muted));min-width:0}
+.pathv span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+/* 色板 */
+.sw-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.sw-dot{width:22px;height:22px;border-radius:50%;border:1px solid rgb(var(--edge));padding:0;position:relative;transition:transform .12s}
+.sw-dot:hover{transform:scale(1.09)}
+.sw-dot[aria-pressed="true"]{box-shadow:0 0 0 2px rgb(var(--surface)),0 0 0 4px rgb(var(--accent))}
+
+/* 热力图 */
+.heat{display:flex;gap:10px;align-items:flex-start}
+.heat .hl{display:grid;grid-template-rows:repeat(7,var(--cell));gap:var(--hgap);font-size:.714em;color:rgb(var(--content-subtle));padding-top:calc(var(--cell) + 2px)}
+.heat .hl span{height:var(--cell);display:flex;align-items:center}
+.heat .hm{overflow:hidden}
+.heat .hm-month{display:flex;gap:var(--hgap);font-size:.714em;color:rgb(var(--content-subtle));margin-bottom:2px}
+.heat .hm-grid{display:grid;grid-auto-flow:column;grid-template-rows:repeat(7,var(--cell));gap:var(--hgap)}
+.heat .hm-grid i{border-radius:2.5px;background:rgb(var(--content-subtle)/.16)}
+.heat .hm-grid i[data-l="1"]{background:rgb(var(--accent)/.32)}
+.heat .hm-grid i[data-l="2"]{background:rgb(var(--accent)/.5)}
+.heat .hm-grid i[data-l="3"]{background:rgb(var(--accent)/.72)}
+.heat .hm-grid i[data-l="4"]{background:rgb(var(--accent))}
+.heat .hm-grid i.dim{opacity:.3}
+
+/* ─────────────────────── 4 方案布局 ─────────────────────── */
+/* 模拟应用窗口 */
+.win{display:flex;flex-direction:column;height:100%;background:rgb(var(--surface));overflow:hidden}
+.tbar{flex:none;height:38px;display:flex;align-items:center;gap:7px;padding:0 12px;
+  border-bottom:1px solid rgb(var(--panel-edge));background:rgb(var(--surface));user-select:none}
+.tbar .tl{width:11px;height:11px;border-radius:50%;border:1px solid rgb(var(--edge))}
+.tbar .tt{margin-left:8px;font-size:.821em;color:rgb(var(--content-subtle))}
+.tbar .tr{margin-left:auto;display:flex;gap:12px;font-size:.786em;color:rgb(var(--content-subtle))}
+.shell{flex:1;min-height:0;display:flex}
+
+/* 设置导航:① 完整栏 ② 图标轨 */
+.snav{flex:none;display:flex;flex-direction:column;border-right:1px solid rgb(var(--panel-edge));background:rgb(var(--surface))}
+.snav .nav-search{padding:10px 10px 6px}
+.snav .ns{position:relative}
+.snav .ns svg{position:absolute;left:8px;top:50%;transform:translateY(-50%);color:rgb(var(--content-subtle))}
+.snav .ns .inp{height:28px;padding-left:27px;font-size:.857em}
+.snav .nav-in{flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;padding:4px 8px 10px}
+.snav .grp{margin-top:10px}
+.snav .grp>b{display:flex;align-items:center;gap:5px;padding:0 8px 4px;font-size:.75em;font-weight:600;
+  letter-spacing:.05em;color:rgb(var(--content-subtle));text-transform:uppercase}
+.snav .grp>b .cv{transition:transform .16s;opacity:.7}
+.snav .grp[data-closed="true"]>.ni{display:none}
+.snav .grp[data-closed="true"]>b .cv{transform:rotate(-90deg)}
+.snav .ni{display:flex;width:100%;align-items:center;gap:9px;border:none;background:none;text-align:left;
+  padding:6px 8px;border-radius:7px;font-size:.929em;color:rgb(var(--content-muted));position:relative}
+.snav .ni:hover{background:rgb(var(--surface-hover)/.65);color:rgb(var(--content))}
+.snav .ni .ico{flex:none;color:rgb(var(--content-subtle));display:grid;place-items:center}
+.snav .ni .lb{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.snav .ni[aria-current="page"]{background:rgb(var(--surface-hover));color:rgb(var(--content));font-weight:600}
+.snav .ni[aria-current="page"]::before{content:"";position:absolute;left:-8px;top:50%;transform:translateY(-50%);
+  width:2.5px;height:16px;border-radius:2px;background:rgb(var(--accent))}
+.snav .ni[aria-current="page"] .ico{color:rgb(var(--accent))}
+.snav .ni .cnt{font-size:.786em;font-weight:600;color:rgb(var(--content-subtle));font-variant-numeric:tabular-nums}
+.snav .nav-foot{flex:none;border-top:1px solid rgb(var(--panel-edge));padding:8px 10px;display:flex;align-items:center;gap:8px}
+/* 图标轨 */
+.snav.rail{width:58px!important;align-items:center;padding-top:8px}
+.snav.rail .nav-search,.snav.rail .grp>b,.snav.rail .ni .lb,.snav.rail .ni .cnt,
+.snav.rail .nav-foot .lg,.snav.rail .nav-foot .badge{display:none}
+.snav.rail .grp+.grp{margin-top:8px;padding-top:8px;border-top:1px solid rgb(var(--panel-edge))}
+.snav.rail .nav-foot{justify-content:center}
+.snav.rail .grp{width:100%;margin-top:6px}
+.snav.rail .grp>b{justify-content:center;padding:0 0 4px}
+.snav.rail .ni{justify-content:center;padding:7px 0;gap:0}
+.snav.rail .ni .ico svg{width:17px;height:17px}
+.snav.rail .nav-foot{justify-content:center}
+
+/* 内容区外壳:固定 chrome + 单一滚动体 */
+.main{flex:1;min-width:0;display:flex;min-height:0}
+.col{flex:1;min-width:0;display:flex;flex-direction:column;min-height:0}
+.phead{flex:none;display:flex;align-items:center;gap:12px;padding:14px var(--gutter) 12px;
+  border-bottom:1px solid rgb(var(--panel-edge));background:rgb(var(--surface));z-index:3}
+.phead .pt{display:flex;flex-direction:column;gap:3px;min-width:0}
+.phead .pacts{margin-left:auto;display:flex;align-items:center;gap:8px;flex:none}
+.pbody{flex:1;min-height:0;overflow-y:auto;padding:16px var(--gutter) 28px}
+.pfoot{flex:none;border-top:1px solid rgb(var(--panel-edge));padding:10px var(--gutter);display:flex;align-items:center;gap:8px;background:rgb(var(--surface))}
+
+/* 方案 A:单列卡片流 */
+[data-plan="a"] .pbody>.wrap{max-width:var(--measure);margin:0 auto;display:flex;flex-direction:column;gap:var(--gap-sec)}
+[data-plan="a"] .card>.ch{display:flex;align-items:flex-start;gap:10px;padding:var(--pad-card) var(--pad-card) 0}
+[data-plan="a"] .card>.ch .ci{width:26px;height:26px;border-radius:8px;background:rgb(var(--surface-muted));display:grid;place-items:center;color:rgb(var(--content-muted));flex:none}
+[data-plan="a"] .card>.ch .ct{flex:1;min-width:0;display:flex;flex-direction:column;gap:3px}
+[data-plan="a"] .card>.ch .cm{flex:none;display:flex;align-items:center;gap:6px}
+[data-plan="a"] .card>.cb{padding-top:10px}
+[data-plan="a"] .rows>*+*{border-top:1px solid rgb(var(--panel-edge))}
+[data-plan="a"] .sub{padding:var(--row-py) var(--pad-card);border-top:1px solid rgb(var(--panel-edge))}
+
+/* 方案 B:导航 + 本页索引 + 详情(工具形) */
+[data-plan="b"] .snav{width:212px}
+[data-plan="b"] .index{width:216px;flex:none;display:flex;flex-direction:column;min-height:0;
+  border-right:1px solid rgb(var(--panel-edge));background:rgb(var(--surface))}
+[data-plan="b"] .index .ih{padding:12px 12px 6px;font-size:.786em;font-weight:600;letter-spacing:.05em;
+  text-transform:uppercase;color:rgb(var(--content-subtle))}
+[data-plan="b"] .index .il{flex:1;min-height:0;overflow-y:auto;padding:2px 8px 10px}
+[data-plan="b"] .index .ii{display:flex;width:100%;align-items:center;gap:8px;border:none;background:none;text-align:left;
+  padding:6px 8px;border-radius:7px;font-size:.893em;color:rgb(var(--content-muted))}
+[data-plan="b"] .index .ii:hover{background:rgb(var(--surface-hover)/.6);color:rgb(var(--content))}
+[data-plan="b"] .index .ii[data-on="true"]{background:rgb(var(--surface-hover));color:rgb(var(--content));font-weight:600}
+[data-plan="b"] .index .ii .im{margin-left:auto;font-size:.786em;color:rgb(var(--content-subtle));flex:none}
+[data-plan="b"] .index .if{border-top:1px solid rgb(var(--panel-edge));padding:8px 10px}
+/* B 的正文:一个整面 + 粘性组头 + 细分隔行(去卡片,提密度) */
+[data-plan="b"] .pbody>.wrap{max-width:920px;display:flex;flex-direction:column;gap:18px}
+[data-plan="b"] .sec-h{position:sticky;top:-16px;z-index:2;display:flex;align-items:center;gap:8px;
+  padding:9px 0 8px;background:linear-gradient(rgb(var(--surface)) 70%,rgb(var(--surface)/0));}
+[data-plan="b"] .sec-h .ct{font-size:.964em;font-weight:650}
+[data-plan="b"] .sec-h .cd{font-size:.857em;color:rgb(var(--content-subtle))}
+[data-plan="b"] .sec-h .cm{margin-left:auto;display:flex;gap:6px;align-items:center}
+[data-plan="b"] .sec-b{border:1px solid rgb(var(--edge));border-radius:10px;background:rgb(var(--surface))}
+[data-plan="b"] .sec-b>.rows>*+*{border-top:1px solid rgb(var(--panel-edge))}
+[data-plan="b"] .sec-b>.sub{padding:var(--row-py) var(--pad-card);border-top:1px solid rgb(var(--panel-edge))}
+/* B 的短字段两列排布 */
+[data-plan="b"] .grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr))}
+[data-plan="b"] .grid2>*{min-width:0}
+[data-plan="b"] .grid2>*+.grid2>*{border-top:1px solid rgb(var(--panel-edge))}
+[data-plan="b"] .grid2>*:nth-child(n+3){border-top:1px solid rgb(var(--panel-edge))}
+
+/* 方案 C:图标轨 + 全局搜索 + 自适应卡片网格 */
+[data-plan="c"] .ctop{flex:none;padding:12px var(--gutter);border-bottom:1px solid rgb(var(--panel-edge));
+  display:flex;align-items:center;gap:10px;background:rgb(var(--surface))}
+[data-plan="c"] .bigsearch{position:relative;flex:1;max-width:520px}
+[data-plan="c"] .bigsearch svg{position:absolute;left:10px;top:50%;transform:translateY(-50%);color:rgb(var(--content-subtle))}
+[data-plan="c"] .bigsearch .inp{height:32px;padding-left:32px;border-radius:10px}
+[data-plan="c"] .bigsearch .kbd{position:absolute;right:7px;top:50%;transform:translateY(-50%)}
+[data-plan="c"] .pbody>.wrap{display:grid;grid-template-columns:repeat(auto-fit,minmax(430px,1fr));
+  gap:var(--gap-sec);align-items:start;max-width:1180px}
+[data-plan="c"] .card{overflow:hidden}
+[data-plan="c"] .card>.ch{display:flex;align-items:center;gap:9px;padding:12px var(--pad-card);
+  border-bottom:1px solid rgb(var(--panel-edge));background:rgb(var(--surface-muted)/.32)}
+[data-plan="c"] .card>.ch .ci{width:24px;height:24px;border-radius:7px;background:rgb(var(--surface));border:1px solid rgb(var(--edge));
+  display:grid;place-items:center;color:rgb(var(--content-muted));flex:none}
+[data-plan="c"] .card>.ch .ct{flex:1;min-width:0}
+[data-plan="c"] .card>.ch .cm{flex:none;display:flex;gap:6px;align-items:center}
+[data-plan="c"] .card>.ch .cd{margin-top:2px}
+[data-plan="c"] .rows>*+*{border-top:1px solid rgb(var(--panel-edge))}
+[data-plan="c"] .card.full{grid-column:1/-1}
+[data-plan="c"] .card.span2{grid-column:span 2}
+[data-plan="c"] .sub{padding:var(--row-py) var(--pad-card);border-top:1px solid rgb(var(--panel-edge))}
+[data-plan="c"] .pbody{padding-top:14px}
+
+/* 搜索结果:命中高亮 + 未命中的卡片收起 */
+/* 搜索过滤:未命中的分组与行收起(三个方案一致) */
+.card[data-hit="false"],section[data-hit="false"],.row[data-hit="false"],.bare[data-hit="false"]{display:none}
+section[id^="sec-"]{scroll-margin-top:64px}
+mark{background:rgb(var(--warning)/.3);color:inherit;border-radius:3px;padding:0 1px}
+
+/* ─────────────────── 5 富页面块 ─────────────────── */
+/* 两栏主从(custom-models / skills) */
+.split{display:grid;gap:var(--gap-sec);align-items:start;min-height:0}
+.split.master{grid-template-columns:236px minmax(0,1fr)}
+.mlist{display:flex;flex-direction:column;border:1px solid rgb(var(--edge));border-radius:var(--r-card);background:rgb(var(--surface));overflow:hidden}
+.mlist .mh{display:flex;align-items:center;gap:8px;padding:9px 11px;border-bottom:1px solid rgb(var(--panel-edge));
+  font-size:.821em;font-weight:600;color:rgb(var(--content-subtle));text-transform:uppercase;letter-spacing:.05em}
+.mlist .mi{display:flex;flex-direction:column;gap:2px;border:none;background:none;text-align:left;padding:8px 11px;
+  border-left:2px solid transparent;color:rgb(var(--content-muted))}
+.mlist .mi:hover{background:rgb(var(--surface-hover)/.55)}
+.mlist .mi[data-on="true"]{background:rgb(var(--surface-hover));border-left-color:rgb(var(--accent));color:rgb(var(--content))}
+.mlist .mi .mt{font-size:.929em;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mlist .mi .ms{font-size:.786em;color:rgb(var(--content-subtle));overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mlist .mi.add{border-left-color:transparent;border-top:1px dashed rgb(var(--edge));color:rgb(var(--accent-strong));align-items:center;flex-direction:row;gap:6px;justify-content:center;font-size:.893em;font-weight:600}
+.mlist .mf{border-top:1px solid rgb(var(--panel-edge));padding:8px}
+
+/* 表单字段(provider 表单/新建 skill) */
+.form{padding:var(--pad-card);display:flex;flex-direction:column;gap:14px}
+.fld{display:flex;flex-direction:column;gap:5px;min-width:0}
+.fld>label{font-size:.893em;font-weight:600}
+.fld .hint{font-size:.821em;color:rgb(var(--content-subtle));line-height:1.5}
+.fgrid{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(210px,1fr))}
+.actions{display:flex;align-items:center;gap:8px;padding-top:12px;border-top:1px solid rgb(var(--panel-edge))}
+.actions .sp{flex:1}
+
+/* 通用卡片列表行(plugins / runtimes / lsp / mcp / skills 列表) */
+.li{display:flex;align-items:center;gap:10px;padding:11px var(--pad-card)}
+.li+.li{border-top:1px solid rgb(var(--panel-edge))}
+.li:hover{background:rgb(var(--surface-muted)/.4)}
+.li .av{width:30px;height:30px;border-radius:9px;display:grid;place-items:center;flex:none;
+  background:rgb(var(--surface-muted));color:rgb(var(--content-muted));font-size:.929em;font-weight:700}
+.li .av.on{background:rgb(var(--accent)/.14);color:rgb(var(--accent-strong))}
+.li .l1{display:flex;align-items:center;gap:7px;flex-wrap:wrap}
+.li .l2{margin-top:3px;font-size:.857em;color:rgb(var(--content-subtle));line-height:1.5}
+.li .lx{flex:1;min-width:0}
+.li .la{display:flex;align-items:center;gap:6px;flex:none}
+.toolbar{display:flex;align-items:center;gap:8px;padding:0 0 10px}
+.ts{position:relative;min-width:0}
+.toolbar .ts{flex:1;max-width:340px}
+.ts svg{position:absolute;left:9px;top:50%;transform:translateY(-50%);color:rgb(var(--content-subtle));pointer-events:none}
+.ts .inp{height:28px;padding-left:29px;font-size:.857em}
+
+/* 关于页 */
+.about{display:flex;flex-direction:column;gap:var(--gap-sec);align-items:stretch;max-width:560px}
+.hero{display:flex;align-items:center;gap:14px;padding:16px}
+.hero .logo{width:52px;height:52px;border-radius:15px;background:rgb(var(--accent));display:grid;place-items:center;color:#fff;flex:none}
+.kv{display:grid;grid-template-columns:120px minmax(0,1fr);font-size:.893em}
+.kv>div{padding:7px var(--pad-card);border-top:1px solid rgb(var(--panel-edge))}
+.kv>div:nth-child(-n+2){border-top:none}
+.kv .k{color:rgb(var(--content-subtle))}
+.kv .v{text-align:right}
+
+/* 演示用:选中的手势轨迹画板 */
+.pad{position:relative;height:96px;border:1px dashed rgb(var(--edge));border-radius:var(--r-ctrl);
+  background:rgb(var(--surface-muted)/.35);display:grid;place-items:center;overflow:hidden}
+.pad .hintp{position:absolute;left:10px;bottom:8px;font-size:.786em;color:rgb(var(--content-subtle))}
+
+/* 注释/说明面板 */
+.notes{max-width:1240px;margin:0 auto;padding:0 22px 40px}
+.notes .nb{display:flex;flex-wrap:wrap;gap:10px}
+.notes .ncard{flex:1 1 300px;background:rgb(var(--surface));border:1px solid rgb(var(--edge));border-radius:10px;padding:12px 13px}
+.notes .ncard b{display:block;font-size:.893em;margin-bottom:5px}
+.notes .ncard p{margin:0;font-size:.857em;line-height:1.6;color:rgb(var(--content-subtle))}
+
+/* 稿纸外层 */
+.paper{max-width:1320px;margin:0 auto;padding:18px 22px 0}
+.paper h1{margin:0 0 3px;font-size:1.143em;font-weight:700}
+.paper .psub{margin:0 0 12px;font-size:.893em;color:rgb(var(--content-subtle));line-height:1.6}
+.ptools{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:12px}
+.ptools .sep{width:1px;height:20px;background:rgb(var(--edge))}
+.pwin{height:min(820px,calc(100vh - 210px));border:1px solid rgb(var(--edge));border-radius:14px;overflow:hidden;
+  background:rgb(var(--surface));box-shadow:var(--shadow-card);box-shadow:0 18px 44px rgb(9 9 11 / .1)}
+[data-theme="dark"] .pwin{box-shadow:0 18px 44px rgb(0 0 0 / .45)}
+.win{height:100%}
+
+/* ============================================================================
+ * 6 通用补充 —— 卡片/行的基础样式(任何方案下都成立),以及富页面块的零件
+ * 方案专属规则在上面已写,特异性更高,会覆盖这里的同名属性。
+ * ========================================================================= */
+.card>.ch{display:flex;align-items:flex-start;gap:10px;padding:var(--pad-card) var(--pad-card) 0}
+.card>.ch .ci{width:26px;height:26px;border-radius:8px;background:rgb(var(--surface-muted));display:grid;place-items:center;color:rgb(var(--content-muted));flex:none}
+.card>.ch .ct{flex:1;min-width:0;display:flex;flex-direction:column;gap:3px}
+.card>.ch .cm{flex:none;display:flex;align-items:center;gap:6px}
+.card>.rows{padding-top:10px}
+.rows>*+*{border-top:1px solid rgb(var(--panel-edge))}
+.sub{padding:var(--row-py) var(--pad-card);border-top:1px solid rgb(var(--panel-edge))}
+.bare{grid-column:1/-1}
+.snote{display:flex;gap:7px;align-items:flex-start;padding:10px var(--pad-card);border-top:1px solid rgb(var(--panel-edge));color:rgb(var(--content-subtle))}
+.snote svg{flex:none;margin-top:2px;opacity:.8}
+.ico-page{width:28px;height:28px;border-radius:8px;background:rgb(var(--accent)/.11);display:grid;place-items:center;color:rgb(var(--accent-strong));flex:none}
+[data-plan="c"] .ico-page{background:rgb(var(--surface-muted));color:rgb(var(--content-muted))}
+.grow{flex:1;min-width:0}
+.wide{width:100%}
+.splitwrap{grid-column:1/-1}
+[data-plan="c"] .about{grid-column:1/-1;max-width:720px}
+
+/* 从属行:缩进 + 左侧导轨,表达"受父开关控制" */
+.row.dsub{padding-left:calc(var(--pad-card) + 14px);position:relative}
+.row.dsub::before{content:"";position:absolute;left:calc(var(--pad-card) + 3px);top:0;bottom:0;width:1.5px;background:rgb(var(--edge));border-radius:2px}
+
+/* 小零件 */
+.stepper{display:inline-flex;align-items:center;border:1px solid rgb(var(--edge));border-radius:var(--r-ctrl);background:rgb(var(--surface));overflow:hidden}
+.stepper button{border:none;background:none;width:28px;height:28px;color:rgb(var(--content-muted));font-size:15px;line-height:1}
+.stepper button:hover{background:rgb(var(--surface-hover)/.7);color:rgb(var(--content))}
+.stepper span{min-width:52px;text-align:center;font-size:.893em}
+.gseq{display:inline-flex;align-items:center;height:22px;padding:0 8px;border-radius:6px;background:rgb(var(--accent)/.11);
+  color:rgb(var(--accent-strong));font-family:ui-monospace,monospace;font-size:.929em;font-weight:700;letter-spacing:.04em}
+.gseq[data-rec="true"]{animation:pulse 1.1s ease-in-out infinite}
+@keyframes pulse{50%{opacity:.45}}
+.swx{display:inline-flex;align-items:center;gap:2px;padding:0 3px;height:15px;border-radius:4px;border:1px solid rgb(var(--edge));margin-right:7px;flex:none}
+.swx i{width:3px;height:7px;border-radius:1px}
+.scrt{display:flex;align-items:center;gap:4px}
+.log{margin:0;padding:9px 11px;border-radius:8px;background:rgb(var(--surface-muted)/.6);border:1px solid rgb(var(--edge));
+  font-family:ui-monospace,monospace;font-size:.786em;line-height:1.65;color:rgb(var(--content-muted));
+  max-height:120px;overflow:auto;white-space:pre-wrap}
+
+/* 详情表(runtime / lsp / 插件展开区共用) */
+.dt{display:flex;flex-direction:column}
+.dtrow{display:flex;align-items:center;gap:10px;padding:5px 0;font-size:.857em}
+.dtrow+.dtrow{border-top:1px solid rgb(var(--panel-edge))}
+.dtrow .k{width:88px;flex:none;color:rgb(var(--content-subtle))}
+.dtrow .v{flex:1;min-width:0;color:rgb(var(--content-muted))}
+.dtrow .v.mono{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.li-detail{padding:12px var(--pad-card) 14px 50px;background:rgb(var(--surface-muted)/.34);
+  border-top:1px solid rgb(var(--panel-edge))}
+.ligroup[data-open="true"]>.li{background:rgb(var(--surface-muted)/.34)}
+.lname{display:flex;align-items:center;gap:7px;width:236px;flex:none;min-width:0}
+.lname>span{white-space:nowrap}
+
+/* 列表容器 */
+.plist{border:1px solid rgb(var(--edge));border-radius:var(--r-card);overflow:hidden;background:rgb(var(--surface))}
+.plist .li+.li{border-top:1px solid rgb(var(--panel-edge))}
+.pl .lx{min-width:0}
+.pl:hover,.lsp-li:hover{background:rgb(var(--surface-muted)/.38)}
+
+/* 统计卡 */
+.sumgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(118px,1fr));gap:9px;padding:var(--pad-card)}
+.sum{display:flex;flex-direction:column;gap:3px;padding:10px 12px;border-radius:8px;background:rgb(var(--surface-muted)/.55)}
+.sum b{font-size:1.286em;font-weight:650;letter-spacing:-.015em}
+.sum span{font-size:.857em;color:rgb(var(--content-subtle))}
+.heat-foot{display:flex;align-items:center;gap:4px;margin-top:10px}
+.heat-foot .lg{width:11px;height:11px;border-radius:2.5px;background:rgb(var(--content-subtle)/.16)}
+.heat-foot .lg[data-l="1"]{background:rgb(var(--accent)/.32)}
+.heat-foot .lg[data-l="2"]{background:rgb(var(--accent)/.5)}
+.heat-foot .lg[data-l="3"]{background:rgb(var(--accent)/.72)}
+.heat-foot .lg[data-l="4"]{background:rgb(var(--accent))}
+.mbar .la{white-space:nowrap}
+
+/* 命令列表编辑器 */
+.cmd-h{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.cmds{list-style:none;margin:9px 0 0;padding:0;display:flex;flex-direction:column;gap:6px}
+.cmd{display:flex;align-items:center;gap:10px;padding:8px 10px;border:1px solid rgb(var(--edge));border-radius:8px;background:rgb(var(--surface))}
+.cmd .cn{font-size:.893em;font-weight:600;flex:none;min-width:96px}
+.cmd .cc{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:rgb(var(--content-subtle))}
+.cmd .ca{display:flex;gap:2px;opacity:0;transition:opacity .14s}
+.cmd:hover .ca{opacity:1}
+
+/* 插件展开区 */
+.pdet{display:flex;flex-direction:column;gap:12px}
+.pdet .inset,.pdet>.dt{padding:2px 0}
+.mx{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.cdet{display:flex;flex-direction:column;gap:6px}
+.cdh{display:flex;align-items:center;gap:6px;font-size:.857em;font-weight:600;color:rgb(var(--content-muted))}
+.cdl{list-style:none;margin:0;padding:0}
+.cdl li{display:flex;align-items:baseline;gap:12px;padding:3px 0;font-size:.857em}
+.cdl li .mono{flex:none;min-width:132px;color:rgb(var(--content))}
+.cdl li .t-desc{min-width:0}
+.warnbox{display:flex;gap:8px;padding:10px 11px;border-radius:8px;background:rgb(var(--warning)/.09);
+  border:1px solid rgb(var(--warning)/.3);color:rgb(var(--warning));font-size:.857em;line-height:1.5}
+.warnbox svg{flex:none;margin-top:2px}
+.warnbox .mono{color:inherit}
+.mktabs{margin-bottom:10px}
+
+/* provider / skill 表单 */
+.fcard{display:flex;align-items:center;gap:12px;justify-content:space-between;padding:11px 12px;
+  border:1px solid rgb(var(--edge));border-radius:8px;background:rgb(var(--surface-muted)/.35)}
+.mrow{display:flex;align-items:center;gap:7px}
+.mcard{border:1px solid rgb(var(--edge));border-radius:8px;padding:8px 9px;display:flex;flex-direction:column;gap:9px}
+.mexp{display:flex;flex-direction:column;gap:10px;padding-top:9px;border-top:1px solid rgb(var(--panel-edge))}
+.mrow .cv{color:rgb(var(--content-subtle))}
+.tagsw{display:inline-flex;align-items:center;gap:5px;font-size:.821em;color:rgb(var(--content-muted));flex:none;white-space:nowrap}
+.tmap{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px 12px;align-items:center}
+.tmap .tk{font-family:ui-monospace,monospace;font-size:.821em;color:rgb(var(--content-subtle));margin-right:-6px}
+.hrow{display:flex;align-items:center;gap:7px}
+.hrow .inp{flex:1;min-width:0}
+
+/* 关于页的更新横幅 */
+.card.up{border-color:rgb(var(--accent)/.4)}
+.upb{display:flex;align-items:flex-start;gap:11px;padding:14px}
+.upb .ci{width:28px;height:28px;border-radius:9px;background:rgb(var(--accent)/.13);color:rgb(var(--accent-strong));display:grid;place-items:center;flex:none}
+.upb .lx{flex:1;min-width:0}
+
+/* 方案 B:主从页的左栏由 index 承担,正文表单占满 */
+[data-plan="b"] .split.master{grid-template-columns:minmax(0,1fr)}
+
+/* 可展开列表行:一个容器包住「行 + 详情」,展开态写在容器上(取代三套各自实现) */
+.ligroup>.li-detail{display:none}
+.ligroup[data-open="true"]>.li-detail{display:block}
+.li>.cv,.li .cv{color:rgb(var(--content-subtle));cursor:pointer;display:grid;place-items:center;
+  width:19px;height:19px;border-radius:5px;flex:none;transition:transform .16s,background .14s,color .14s}
+.li .cv:hover{background:rgb(var(--surface-hover)/.85);color:rgb(var(--content))}
+.ligroup[data-open="true"]>.li>.cv{transform:rotate(90deg)}
+.li-detail{padding-top:2px}
+
+/* 设计说明列表 */
+.nl{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px}
+.nl li{display:flex;flex-direction:column;gap:2px;font-size:.857em;line-height:1.62;color:rgb(var(--content-subtle))}
+.nl li b{color:rgb(var(--content));font-weight:600}
+
+.notes .ncard>.nb b{font-size:.964em}
+
+/* 方案 C:两列卡片里控件列收窄,标签才有宽度 */
+[data-plan="c"] .row-c>.inp,[data-plan="c"] .row-c>.sel{width:200px}
+[data-plan="c"] .card.full{--ctrl-w:260px}
+/* 统计磁贴:4 列 + 3 列,不再出现 6+1 的孤行 */
+.sumgrid{grid-template-columns:repeat(auto-fit,minmax(170px,1fr))}
+/* 索引/主从列表的标题不做大写(专有名词会被改成 SKILLS) */
+.index .ih,.mlist .mh{text-transform:none;letter-spacing:.02em;font-size:.857em}
+/* 表单里的折叠块补齐分割线 */
+.form>.disc{border-top:1px solid rgb(var(--panel-edge));padding-top:13px}
+/* 模型行:输入框限宽,控件不再被推到 800px 之外 */
+.mrow .inp.grow{max-width:440px}
+.mrow>.space{flex:1}
+/* 方案 C:下拉列再宽一档,长模型名不折行 */
+[data-plan="c"] .row-c>.sel{width:220px}
+</style>
+</head>
+<body>
+<div class="paper">
+  <h1>Mcode 设置面板重设计 · 三个方向</h1>
+  <p class="psub">
+    17 个设置页面(常规 / 外观 / 通知 / 语音 / 快捷键 / 鼠标手势 / Git / 终端 / 浏览器 / LSP / 用量 / 关于 /
+    模型配置 / Agent / 插件 / Skills / MCP)全部按<b>同一套设计系统</b>重绘,三个方向共用原语与令牌,差异只在
+    导航形态、内容宽度策略与分组呈现方式。切换方案与页面即可逐页对比;页面内容逐条对齐当前实现,可直接当作改版对照表。
+  </p>
+  <div class="ptools">
+    <div class="seg" data-tool="plan" role="tablist">
+      <button data-plan="a" aria-selected="true">A · 精修卡片流</button>
+      <button data-plan="b" aria-selected="false">B · 双栏工作台</button>
+      <button data-plan="c" aria-selected="false">C · 自适应网格</button>
+    </div>
+    <select class="sel" data-tool="page" style="width:190px" aria-label="跳转页面"></select>
+    <span class="sep"></span>
+    <div class="seg" data-tool="theme">
+      <button data-theme="light" aria-selected="true">浅色</button>
+      <button data-theme="dark" aria-selected="false">深色</button>
+    </div>
+    <div class="seg" data-tool="density">
+      <button data-density="comfortable" aria-selected="true">舒适</button>
+      <button data-density="compact" aria-selected="false">紧凑</button>
+    </div>
+    <span class="sep"></span>
+    <button class="btn" data-act="navPinned">固定导航</button>
+    <span style="flex:1"></span>
+    <span class="t-meta">快捷键:1 / 2 / 3 切方案,[ ] 翻页面</span>
+  </div>
+</div>
+<div class="paper" style="padding-top:0">
+  <div class="pwin" id="stage"></div>
+</div>
+<div class="notes" id="notes"></div>
+<script>
+
+/* ── icons.js ── */
+/* 图标:统一 24 栅格 / 1.8 描边 / currentColor。与产品一致用描边风格,不用 emoji。 */
+const I = (inner) => `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor"
+  stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${inner}</svg>`;
+
+const ICONS = {
+  sliders: I(`<path d="M4 8h9M17 8h3M4 16h3M11 16h9"/><circle cx="15" cy="8" r="2"/><circle cx="9" cy="16" r="2"/>`),
+  palette: I(`<circle cx="12" cy="12" r="8.5"/><circle cx="9" cy="9.5" r="1.2" fill="currentColor" stroke="none"/><circle cx="15" cy="9.5" r="1.2" fill="currentColor" stroke="none"/><circle cx="9.5" cy="15" r="1.2" fill="currentColor" stroke="none"/>`),
+  robot: I(`<rect x="4" y="8" width="16" height="11" rx="3"/><path d="M12 8V5M8.5 5h7"/><circle cx="9.5" cy="13" r="1.1" fill="currentColor" stroke="none"/><circle cx="14.5" cy="13" r="1.1" fill="currentColor" stroke="none"/>`),
+  box: I(`<path d="M12 3.2 20 7.6v8.8L12 20.8 4 16.4V7.6z"/><path d="M4 7.6 12 12l8-4.4M12 12v8.8"/>`),
+  grid: I(`<rect x="4" y="4" width="7" height="7" rx="2"/><rect x="13" y="4" width="7" height="7" rx="2"/><rect x="4" y="13" width="7" height="7" rx="2"/><rect x="13" y="13" width="7" height="7" rx="2"/>`),
+  sparkles: I(`<path d="M12 3.5 13.7 9l5.5 1.7-5.5 1.7L12 18l-1.7-5.6L4.8 10.7 10.3 9z"/><path d="M18.5 16.5l.6 1.9 1.9.6-1.9.6-.6 1.9-.6-1.9-1.9-.6 1.9-.6z"/>`),
+  plug: I(`<path d="M9 3v5M15 3v5M6 8h12v3a6 6 0 0 1-6 6 6 6 0 0 1-6-6z"/><path d="M12 17v4"/>`),
+  mic: I(`<rect x="9" y="3" width="6" height="10" rx="3"/><path d="M5.5 11.5a6.5 6.5 0 0 0 13 0M12 18v3M9 21h6"/>`),
+  keyboard: I(`<rect x="3" y="7" width="18" height="11" rx="2.5"/><path d="M7 11h.01M10.5 11h.01M14 11h.01M17 11h.01M8 14.5h8"/>`),
+  hand: I(`<path d="M8 12V6.5a1.5 1.5 0 0 1 3 0V11V5a1.5 1.5 0 0 1 3 0v6-1.5a1.5 1.5 0 0 1 3 0V14a7 7 0 0 1-7 7h-.5A6.5 6.5 0 0 1 4 14.5V12a1.5 1.5 0 0 1 3 0"/>`),
+  bell: I(`<path d="M6 9a6 6 0 1 1 12 0c0 4 1.5 5.5 1.5 5.5h-15S6 13 6 9"/><path d="M10 18a2 2 0 0 0 4 0"/>`),
+  git: I(`<circle cx="7" cy="6" r="2.4"/><circle cx="7" cy="18" r="2.4"/><circle cx="17" cy="10" r="2.4"/><path d="M7 8.4v7.2M17 12.4c0 3-3 3.2-5 3.6"/>`),
+  terminal: I(`<rect x="3" y="4" width="18" height="16" rx="3"/><path d="M7.5 10l2.5 2.5-2.5 2.5M13 15h4"/>`),
+  globe: I(`<circle cx="12" cy="12" r="8.5"/><path d="M3.5 12h17M12 3.5c2.5 2.6 2.5 14.4 0 17-2.5-2.6-2.5-14.4 0-17z"/>`),
+  code: I(`<path d="M9 7.5 4.5 12 9 16.5M15 7.5 19.5 12 15 16.5M13.5 5l-3 14"/>`),
+  chart: I(`<path d="M4 20h16"/><path d="M7 20V11M12 20V5M17 20v-6"/>`),
+  info: I(`<circle cx="12" cy="12" r="8.5"/><path d="M12 11v5M12 8.2h.01"/>`),
+  search: I(`<circle cx="11" cy="11" r="6.5"/><path d="M16 16l4 4"/>`),
+  chevR: I(`<path d="M9.5 6l6 6-6 6"/>`),
+  chevD: I(`<path d="M6 9.5l6 6 6-6"/>`),
+  plus: I(`<path d="M12 5v14M5 12h14"/>`),
+  trash: I(`<path d="M4 7h16M9 7V5.5A1.5 1.5 0 0 1 10.5 4h3A1.5 1.5 0 0 1 15 5.5V7"/><path d="M6.5 7l.8 12a1.5 1.5 0 0 0 1.5 1.4h6.4a1.5 1.5 0 0 0 1.5-1.4L17.5 7"/>`),
+  refresh: I(`<path d="M20 12a8 8 0 1 1-2.4-5.7"/><path d="M20 4.5V9h-4.5"/>`),
+  download: I(`<path d="M12 4v10M8 10.5l4 4 4-4M5 19h14"/>`),
+  folder: I(`<path d="M4 7.5A2 2 0 0 1 6 5.5h3.6l1.8 2.2H18a2 2 0 0 1 2 2v7.8a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z"/>`),
+  folderOpen: I(`<path d="M4 8V7a2 2 0 0 1 2-2h3.6l1.8 2.2H18a2 2 0 0 1 2 2V10"/><path d="M3 11h18l-2 8H5z"/>`),
+  copy: I(`<rect x="9" y="9" width="11" height="11" rx="2.5"/><path d="M15 6.5A2.5 2.5 0 0 0 12.5 4h-6A2.5 2.5 0 0 0 4 6.5v6A2.5 2.5 0 0 0 6.5 15"/>`),
+  check: I(`<path d="M5 12.5l4.5 4.5L19 7"/>`),
+  x: I(`<path d="M6 6l12 12M18 6L6 18"/>`),
+  alert: I(`<path d="M12 4.5 21 19.5H3z"/><path d="M12 10v4M12 17h.01"/>`),
+  ext: I(`<path d="M14 4h6v6M20 4l-8 8"/><path d="M18 14v4.5A1.5 1.5 0 0 1 16.5 20h-11A1.5 1.5 0 0 1 4 18.5v-11A1.5 1.5 0 0 1 5.5 6H10"/>`),
+  fileImport: I(`<path d="M13 4H7.5A1.5 1.5 0 0 0 6 5.5v13A1.5 1.5 0 0 0 7.5 20h9a1.5 1.5 0 0 0 1.5-1.5V9z"/><path d="M13 4v5h5"/><path d="M12 11.5v5M9.8 14.4l2.2 2.2 2.2-2.2"/>`),
+  stop: I(`<rect x="6" y="6" width="12" height="12" rx="2.5"/>`),
+  pencil: I(`<path d="M4 20h4l10-10a2.5 2.5 0 0 0-3.6-3.6L4.5 16.3z"/><path d="M14.5 7.5l2 2"/>`),
+  eye: I(`<path d="M2.5 12S6 6.5 12 6.5 21.5 12 21.5 12 18 17.5 12 17.5 2.5 12 2.5 12z"/><circle cx="12" cy="12" r="2.8"/>`),
+  layers: I(`<path d="M12 3.5 20.5 8 12 12.5 3.5 8z"/><path d="M4 12.5 12 16.8l8-4.3M4 16.5 12 20.8l8-4.3"/>`),
+  pin: I(`<path d="M9 4h6l-.8 5.2 2.8 2.4H5l2.8-2.4z"/><path d="M12 11.6V20"/>`),
+  filter: I(`<path d="M4 6h16M7 12h10M10 18h4"/>`),
+  key: I(`<circle cx="8" cy="15" r="3.5"/><path d="M10.5 12.5 19 4M16 4h3v3"/>`),
+  shield: I(`<path d="M12 3.5 19 6v6c0 4.2-3 7.2-7 8.5-4-1.3-7-4.3-7-8.5V6z"/><path d="M9.5 12l1.8 1.8 3.4-3.6"/>`),
+  palette2: I(`<path d="M4.5 20.5l1-4 9-9a2.6 2.6 0 0 1 3.7 3.7l-9 9z"/><path d="M12 8.5 15.5 12"/>`),
+  list: I(`<path d="M4 7h16M4 12h16M4 17h10"/>`),
+  arrowRight: I(`<path d="M5 12h13M13 7l5 5-5 5"/>`),
+  folderMove: I(`<path d="M4 8V7a2 2 0 0 1 2-2h3.5l1.7 2H18a2 2 0 0 1 2 2v3"/><path d="M3 13h18l-2 6.5H5z"/><path d="M9 17.5h6"/>`),
+};
+
+/** 取图标 inner svg;size 为可选像素尺寸覆盖 */
+function ico(name, size) {
+  const s = ICONS[name] || ICONS.sliders;
+  return size ? s.replace('width="16" height="16"', `width="${size}" height="${size}"`) : s;
+}
+
+
+/* ── data.js ── */
+/* ============================================================================
+ * 页面数据 —— 设置面板全部 17 个页面 + 4 个内嵌块
+ * 字段逐条对齐 apps/desktop/src/renderer/components/settings/ 现状,
+ * 以便评审时"哪里改了什么"可逐行对照。
+ *
+ * 行类型(k): sw 开关 / sel 下拉 / inp 输入 / num 数字 / ta 多行 / pal 色板
+ *            step 步进 / path 路径 / btns 按钮组 / kbd 快捷键 / gest 手势
+ *            note 卡片内说明 / sub 从属行(缩进,用于开关的依赖项)
+ * 富内容:section.render 指向 render.js 里的专用渲染器
+ * chg:true 表示该行与默认值不同(稿子里用点标记 + hover 恢复默认演示该能力)
+ * ========================================================================= */
+
+const sw  = (t, d, v, o = {}) => ({ k: "sw", t, d, v, ...o });
+const sel = (t, d, v, opt, o = {}) => ({ k: "sel", t, d, v, o: opt, ...o });
+const inp = (t, d, v, o = {}) => ({ k: "inp", t, d, v, ...o });
+const ta  = (t, d, v, o = {}) => ({ k: "ta", t, d, v, ...o });
+const path = (t, d, v, o = {}) => ({ k: "path", t, d, v, ...o });
+const kbd = (t, keys, o = {}) => ({ k: "kbd", t, keys, ...o });
+const gest = (t, seq, o = {}) => ({ k: "gest", t, seq, ...o });
+
+const MODEL_OPTIONS = ["DeepSeek 中转 → deepseek-chat", "Moonshot 中转 → kimi-k2", "本地 Ollama → qwen3-coder"];
+
+/* ───────────────────────── 导航分组 ───────────────────────── */
+const NAV_GROUPS = [
+  { label: "通用", ids: ["general", "appearance"] },
+  { label: "AI 能力", ids: ["custom-models", "runtimes", "plugins", "skills", "mcp"] },
+  { label: "输入与提醒", ids: ["voice", "shortcuts", "gestures", "notifications"] },
+  { label: "工作台", ids: ["git", "terminal", "browser", "lsp-languages"] },
+  { label: "系统", ids: ["usage", "about"] },
+];
+
+/* ───────────────────────── 页面 ───────────────────────── */
+const PAGES = [
+  /* ══ 1 常规 ══ */
+  {
+    id: "general", label: "常规", icon: "sliders", kind: "form",
+    desc: "语言、界面密度、长文本折叠与归档策略。",
+    sections: [
+      {
+        t: "基础", icon: "sliders",
+        rows: [
+          sel("界面语言", "界面文字与日期格式的显示语言。", "简体中文", ["简体中文", "English"]),
+          sel("中间面板显示模式", "标签模式可同时打开多个会话与文件。", "Tab 标签模式", ["单会话模式", "Tab 标签模式"]),
+          sel("对话紧凑度", "控制消息之间的垂直间距。", "舒适", ["紧凑", "舒适", "宽松"]),
+          { k: "num", t: "长文本折叠阈值", d: "超过该长度的粘贴内容在对话中折叠显示(50–2000)。", v: 300, unit: "字符" },
+        ],
+      },
+      {
+        t: "会话自动归档", icon: "box",
+        d: "不活跃的会话会自动移入归档区,可对单个项目设置例外。",
+        rows: [
+          sw("自动归档不活跃会话", "关闭后所有会话都留在活跃列表,需要手动归档。", true),
+          sel("默认不活跃天数", "超过该天数没有新消息即归档。", "30 天", ["7 天", "14 天", "30 天", "60 天", "90 天"]),
+          sel("mcode-gui", "该项目的归档规则,覆盖上面的默认值。", "永不归档", ["永不归档", "7 天", "30 天", "90 天"], { inline: "remove" }),
+          sel("api-gateway", "该项目的归档规则,覆盖上面的默认值。", "90 天", ["永不归档", "7 天", "30 天", "90 天"], { inline: "remove" }),
+          sel("添加项目覆盖", "为某个项目单独指定归档规则。", "选择项目…", ["mcode-gui", "api-gateway", "docs-site"]),
+        ],
+      },
+      {
+        t: "会话标题生成", icon: "sparkles",
+        d: "开启后,在用户发送第一条消息时后台自动调用模型生成简短标题。",
+        rows: [
+          sw("自动生成", "标题生成失败时会退回使用首条消息摘要。", true),
+          sel("生成模型", "选择用于生成标题的模型。", MODEL_OPTIONS[0], MODEL_OPTIONS),
+        ],
+      },
+      {
+        t: "输出风格", icon: "pencil",
+        d: "决定模型如何组织回复。仅 Claude 会话生效。",
+        rows: [
+          { k: "sel", t: "回复风格", d: "自定义风格以 ~/.mcode/output-styles 下的文件为准,点击刷新即可加载。", v: "默认", o: ["默认", "讲解型", "学习型", "简洁型"], refresh: true, wide: true },
+        ],
+      },
+    ],
+  },
+
+  /* ══ 2 外观 ══ */
+  {
+    id: "appearance", label: "外观", icon: "palette", kind: "form",
+    desc: "主题、编辑器配色、品牌色与字号。",
+    sections: [
+      {
+        t: "主题与颜色", icon: "palette",
+        rows: [
+          sel("界面主题", "跟随系统时随操作系统的浅色/深色切换。当前:浅色", "跟随系统", ["浅色", "深色", "跟随系统"]),
+          { k: "custom", key: "editorSchemeDark", t: "编辑器配色 · 深色模式", d: "深色主题下代码编辑器的配色方案。", v: "Mcode 深色" },
+          { k: "custom", key: "editorSchemeLight", t: "编辑器配色 · 浅色模式", d: "浅色主题下代码编辑器的配色方案。", v: "Mcode 浅色" },
+          { k: "pal", t: "用户消息背景色", d: "影响聊天中用户消息气泡的背景色调。", v: "主题默认色(灰色)", cur: 0, opts: ["#52525b", "#059669", "#0284c7", "#4f46e5", "#7c3aed", "#e11d48", "#d97706"], names: ["灰", "翠绿", "天蓝", "靛蓝", "紫罗兰", "玫瑰红", "琥珀"] },
+          { k: "pal", t: "品牌强调色", d: "影响按钮、链接、选中态与输入框聚焦边框。", v: "主题默认色(翠绿)", cur: 1, opts: ["#059669", "#0284c7", "#4f46e5", "#0891b2", "#7c3aed", "#db2777", "#d97706", "#ea580c"], names: ["翠绿", "天蓝", "靛蓝", "青色", "紫罗兰", "樱粉", "琥珀", "橙色"] },
+        ],
+      },
+      {
+        t: "字号", icon: "code",
+        d: "影响整个应用界面(左栏、右栏、设置页与聊天区)。",
+        rows: [
+          { k: "step", t: "全局字体大小", d: "应用界面基准字号(12–18px)。", v: "14px" },
+          { k: "step", t: "聊天字体大小", d: "对话正文基准字号(12–20px)。", v: "14px", chg: true },
+        ],
+        note: "主题与字号切换整窗即时生效,无需重启。",
+      },
+    ],
+  },
+
+  /* ══ 3 通知 ══ */
+  {
+    id: "notifications", label: "通知", icon: "bell", kind: "form",
+    desc: "选择哪些事件通过系统通知提醒。",
+    sections: [
+      {
+        t: "系统通知", icon: "bell",
+        d: "总开关关闭后不再发送任何系统通知,下面的细分项一并停用。",
+        rows: [
+          sw("允许发送系统通知", "由操作系统弹出横幅或通知中心条目。", true),
+          sw("阻塞类事件", "工具审批、问题询问等待你操作的事件。", true, { sub: true }),
+          sw("回合完成", "一轮对话结束时提醒。", true, { sub: true }),
+          sw("错误", "会话出错或被中断时提醒。", true, { sub: true }),
+          sw("后台任务", "后台子代理或长命令结束时提醒。", false, { sub: true, chg: true }),
+        ],
+        sub: { key: "notifyTest" },
+        note: "macOS 首次发送时需在「系统设置 → 通知」中允许 Mcode;窗口处于前台时不重复弹通知。",
+      },
+    ],
+  },
+
+  /* ══ 4 语音 ══ */
+  {
+    id: "voice", label: "语音", icon: "mic", kind: "form",
+    desc: "本地语音识别模型与麦克风设置。",
+    sections: [
+      {
+        t: "语音识别模型", icon: "box", render: "voiceModels",
+        d: "模型在本地运行,音频不会离开本机。",
+      },
+      {
+        t: "模型存储位置", icon: "folder",
+        rows: [
+          path("模型目录", "留空使用应用数据目录下的 models/voice。", "~/Library/Application Support/Mcode/models/voice", { custom: true, actions: ["更改…"], reset: true, stack: true }),
+        ],
+      },
+      {
+        t: "麦克风", icon: "mic",
+        rows: [
+          sel("识别语言", "语言需与所选模型匹配,否则识别率会明显下降。", "中文 (zh-CN)", ["中文 (zh-CN)", "英语 (en-US)"]),
+        ],
+      },
+    ],
+  },
+
+  /* ══ 5 快捷键 ══ */
+  {
+    id: "shortcuts", label: "快捷键", icon: "keyboard", kind: "kbd",
+    desc: "点击右侧组合键即可重新录制;与其他命令冲突时会即时提示。",
+    headerAction: "resetAll",
+    sections: [
+      {
+        t: "会话", icon: "list",
+        rows: [
+          kbd("新建会话", ["⌘", "N"]),
+          kbd("关闭当前会话", ["⌘", "W"]),
+          kbd("打开命令面板", ["⌘", "K"]),
+        ],
+      },
+      {
+        t: "视图与导航", icon: "globe",
+        rows: [
+          kbd("搜索文件", ["⌘", "P"]),
+          kbd("聚焦聊天输入框", ["⌘", "L"]),
+          kbd("打开设置", ["⌘", ","], { state: "override", chg: true }),
+          kbd("语音输入", [], { state: "unset" }),
+        ],
+      },
+      {
+        t: "布局与面板", icon: "layers",
+        rows: [
+          kbd("切换左侧栏", ["⌘", "B"]),
+          kbd("切换右侧栏", ["⌘", "⇧", "B"]),
+          kbd("切换底部终端", ["⌘", "J"]),
+          kbd("切换显示模式", ["⌘", "⇧", "T"]),
+        ],
+      },
+      {
+        t: "编辑器", icon: "code",
+        rows: [
+          kbd("保存文件", ["⌘", "S"], { state: "conflict", conflict: "系统:保存网页" }),
+          kbd("关闭当前标签页", ["⌘", "⇧", "W"]),
+        ],
+      },
+      {
+        t: "外观与主题", icon: "palette",
+        rows: [
+          kbd("切换深/浅主题", ["⌘", "⇧", "L"]),
+        ],
+        note: "录制中按 Esc 取消;恢复默认会把该命令清回内置组合键。",
+      },
+    ],
+  },
+
+  /* ══ 6 鼠标手势 ══ */
+  {
+    id: "gestures", label: "鼠标手势", icon: "hand", kind: "gest",
+    desc: "按住触发键画出箭头序列,松手即执行对应命令。",
+    headerAction: "resetAll",
+    sections: [
+      {
+        t: "通用", icon: "hand",
+        rows: [
+          sw("启用鼠标手势", "关闭后不再识别任何手势。", true),
+          sel("触发按键", "中键触发时会同时禁用浏览器的自动滚动。", "右键", ["右键", "中键"]),
+          sw("显示手势轨迹", "绘制过程中在当前窗口显示轨迹与命令名。", true),
+          { k: "custom", key: "gesturePad" },
+        ],
+      },
+      {
+        t: "会话", icon: "list",
+        rows: [
+          gest("关闭当前会话", ["D", "R"]),
+          gest("新建会话", ["D", "L"]),
+        ],
+      },
+      {
+        t: "布局与面板", icon: "layers",
+        rows: [
+          gest("切换底部终端", ["D"]),
+          gest("切换左侧栏", ["L"]),
+          gest("切换右侧栏", ["R"]),
+        ],
+      },
+      {
+        t: "视图与导航", icon: "globe",
+        rows: [
+          gest("打开设置", [], { state: "unset" }),
+          gest("打开命令面板", [], { state: "unset" }),
+        ],
+        note: "终端内的右键仍是原生复制/粘贴;弹窗与内嵌浏览器不响应手势。",
+      },
+    ],
+  },
+
+  /* ══ 7 Git ══ */
+  {
+    id: "git", label: "Git", icon: "git", kind: "form",
+    desc: "差异查看方式、提交信息生成与合并冲突解决。",
+    sections: [
+      {
+        t: "差异打开方式", icon: "layers",
+        d: "点击 Git 面板中的修改文件时,差异查看器的打开位置。",
+        rows: [
+          sel("打开方式", "主编辑区会复用中间的编辑列;弹窗编辑器支持同时打开多个标签。", "主编辑区", ["主编辑区", "弹窗编辑器(可多标签)"]),
+        ],
+      },
+      {
+        t: "提交信息生成", icon: "sparkles",
+        d: "配置用于自动生成提交信息的模型和提示词。",
+        rows: [
+          sel("生成模型", "留空则不提供生成按钮。", MODEL_OPTIONS[0], ["未选择", ...MODEL_OPTIONS], { wide: true }),
+          ta("格式与语言偏好", "会作为系统提示附加在生成请求中。", "使用中文,一句话概括改动,不超过 50 字,不要以句号结尾。", { stack: true, rows: 4 }),
+        ],
+      },
+      {
+        t: "冲突解决", icon: "git",
+        d: "当 git pull 产生合并冲突时,由该模型协助分析并给出解决建议。",
+        rows: [
+          sel("解决模型", "留空则冲突面板只提供手动编辑器。", "未选择", ["未选择", ...MODEL_OPTIONS], { wide: true }),
+        ],
+      },
+      {
+        t: "工作树", icon: "folderMove",
+        d: "托管工作树的存放位置,新建工作树时会在此目录下创建 checkout。",
+        rows: [
+          path("工作树根目录", "默认放在应用数据目录下,可改到磁盘空间更充裕的位置。", "", { empty: "默认(应用数据目录)", actions: ["浏览…", "恢复默认"], stack: true }),
+        ],
+      },
+    ],
+  },
+
+  /* ══ 8 终端 ══ */
+  {
+    id: "terminal", label: "终端", icon: "terminal", kind: "form",
+    desc: "集成终端的 Shell 与按项目保存的自定义命令。",
+    sections: [
+      {
+        t: "终端 Shell", icon: "terminal",
+        d: "留空时使用系统默认 Shell(登录 Shell,会加载你的 profile)。",
+        rows: [
+          { k: "inp", t: "Shell 路径", d: "例如 /bin/zsh、/opt/homebrew/bin/fish。", v: "", ph: "留空使用系统默认", mono: true, stack: true, save: true, saved: "已保存。新建终端将使用此 Shell。" },
+        ],
+      },
+      {
+        t: "自定义命令", icon: "list",
+        d: "命令按项目保存,可在终端工具栏的一键运行菜单中调用。",
+        rows: [
+          sel("选择项目", "不同项目的命令互不影响。", "mcode-gui (当前工作区)", ["mcode-gui (当前工作区)", "api-gateway", "docs-site"]),
+          { k: "custom", key: "cmdList" },
+        ],
+      },
+    ],
+  },
+
+  /* ══ 9 浏览器 ══ */
+  {
+    id: "browser", label: "浏览器", icon: "globe", kind: "form",
+    desc: "截图与浏览器数据的存放位置、登录状态与缓存。",
+    sections: [
+      {
+        t: "存储位置", icon: "folder",
+        rows: [
+          path("截图目录", "留空时使用系统图片目录。", "~/Pictures/Mcode", { actions: ["选择目录…", "保存"], stack: true, saved: "已保存。后续截图将保存到此目录。" }),
+          path("数据目录", "留空时使用应用默认位置。", "", { empty: "应用默认位置(~/Library/…/browser)", actions: ["选择目录…", "保存"], stack: true, note: "修改后需重启应用生效。" }),
+        ],
+      },
+      {
+        t: "登录状态", icon: "key",
+        rows: [
+          sw("记住网站登录状态", "开启后 Cookie 与本地存储会随浏览器数据目录持久化。", true),
+        ],
+      },
+      {
+        t: "缓存", icon: "trash",
+        d: "清理浏览器缓存可以解决页面显示异常,不影响登录状态。",
+        rows: [
+          { k: "btns", t: "清除缓存数据", d: "将清除 HTTP 缓存、Service Worker 与 IndexedDB。", btns: [{ lbl: "清除缓存", kind: "danger" }], result: { kind: "a", text: "已清除,登录状态已保留。" } },
+        ],
+      },
+      {
+        t: "代理", icon: "globe",
+        rows: [
+          sw("使用系统代理", "跟随操作系统的代理设置访问网页。", true),
+          inp("自定义 User-Agent", "留空使用内置 Chromium 默认值。", "", { ph: "可选", mono: true }),
+        ],
+      },
+    ],
+  },
+
+  /* ══ 10 LSP ══ */
+  {
+    id: "lsp-languages", label: "LSP", icon: "code", kind: "list",
+    desc: "语言服务器的安装、启用与路径覆盖。",
+    headerAction: "refreshProbe",
+    sections: [
+      { t: "服务器列表", icon: "code", render: "lsp", d: "语言服务器按项目工作区独立启动,同一语言可多项目并行。" },
+    ],
+    note: "Java 首次打开会后台导入项目索引,导入期间其余功能可用。",
+  },
+
+  /* ══ 11 用量统计 ══ */
+  {
+    id: "usage", label: "用量统计", icon: "chart", kind: "usage",
+    desc: "对话轮次、Token 消耗与模型分布。",
+    ranges: ["今天", "最近 7 天", "最近 30 天", "全部"],
+    sections: [
+      { t: "", render: "summaryCards" },
+      { t: "每日用量热力图", icon: "chart", render: "heatmap", d: "按天统计的对话轮次,颜色越深表示当天用得越多。" },
+      { t: "模型用量", icon: "robot", render: "modelBars", d: "按 Token 消耗排序,含子代理产生的用量。" },
+    ],
+    note: "统计来自本地会话数据库,不会上传到任何服务器。",
+  },
+
+  /* ══ 12 关于 ══ */
+  {
+    id: "about", label: "关于", icon: "info", kind: "about",
+    desc: "版本、运行环境与更新。",
+    render: "about",
+  },
+
+  /* ══ 13 模型配置 ══ */
+  {
+    id: "custom-models", label: "模型配置", icon: "robot", kind: "split",
+    desc: "管理各 Agent 引擎的端点、密钥与模型清单。",
+    tabs: ["Claude", "Codex", "Pi"],
+    entities: {
+      Claude: [
+        { t: "官方中转", s: "3 个模型 · Bearer", on: true },
+        { t: "备用网关", s: "2 个模型 · x-api-key" },
+      ],
+      Codex: [{ t: "deepseek", s: "1 个模型 · 已配置 Key", on: true }],
+      Pi: [
+        { t: "deepseek", s: "2 个模型 · openai-completions", on: true },
+        { t: "moonshot", s: "1 个模型 · openai-completions" },
+        { t: "本地 Ollama", s: "无模型 · 未配置 Key" },
+      ],
+    },
+    entityAddLabel: { Claude: "新建 Claude 端点", Codex: "新建 Codex 端点", Pi: "新建 Pi Provider" },
+    masterTitle: "供应商",
+    render: "providerForm",
+    note: "密钥经系统安全存储加密保存,不会写入配置文件。",
+  },
+
+  /* ══ 14 Agent 运行时 ══ */
+  {
+    id: "runtimes", label: "Agent", icon: "box", kind: "list",
+    desc: "Claude / Codex / Pi 运行时的安装来源与版本。",
+    sections: [
+      { t: "Claude / Codex / Pi", icon: "box", render: "runtimes", d: "运行时按需下载,存放在应用数据目录;开发环境下会优先使用 node_modules 中的副本。" },
+    ],
+    note: "卸载运行时会让对应 Agent 不可用,直到重新安装。",
+  },
+
+  /* ══ 15 插件 ══ */
+  {
+    id: "plugins", label: "插件", icon: "grid", kind: "list",
+    desc: "浏览插件市场,安装并审查插件的组件。",
+    tabs: ["已安装", "插件市场"],
+    sections: [
+      { t: "已安装", icon: "grid", render: "pluginsInstalled" },
+      { t: "插件市场", icon: "download", render: "pluginsMarket" },
+    ],
+    note: "插件启用后自下一回合生效;hooks 当前版本只做展示,不会执行。",
+  },
+
+  /* ══ 16 Skills ══ */
+  {
+    id: "skills", label: "Skills", icon: "sparkles", kind: "split",
+    desc: "项目级与全局 Skill 的创建、编辑与导入。",
+    entities: {
+      "": [
+        { t: "commit-message", s: "项目 · 生成规范的提交信息", on: true },
+        { t: "pr-review", s: "项目 · 按清单审查改动" },
+        { t: "explain-code", s: "全局 · 逐段解释代码意图" },
+      ],
+    },
+    entityAddLabel: { "": "新建 Skill" },
+    masterTitle: "Skills",
+    render: "skillEditor",
+    topBar: "project",
+  },
+
+  /* ══ 17 MCP ══ */
+  {
+    id: "mcp", label: "MCP 服务器", icon: "plug", kind: "list",
+    desc: "各作用域下的 MCP 服务器与授权状态。",
+    sections: [
+      {
+        t: "用户级", icon: "plug",
+        d: "保存在 Mcode 自己的 Claude 配置(~/.mcode/.claude.json)中,对所有项目生效。",
+        render: "mcpUser",
+      },
+      {
+        t: "项目级", icon: "folder",
+        d: "来自项目目录下的 .mcp.json,出于安全考虑默认关闭,确认来源后可逐个开启。",
+        render: "mcpProject",
+      },
+      {
+        t: "插件", icon: "grid",
+        d: "由启用中的插件声明,关闭插件即随之失效。",
+        render: "mcpPlugin",
+      },
+      {
+        t: "内置", icon: "shield",
+        d: "随应用提供,不可删除。",
+        render: "mcpBuiltin",
+      },
+    ],
+    note: "OAuth 授权信息由 MCP 服务器自身管理,取消授权只清除本地令牌。",
+  },
+];
+
+const PAGE_BY_ID = Object.fromEntries(PAGES.map((p) => [p.id, p]));
+
+
+/* ── primitives.js ── */
+/* ============================================================================
+ * 原语层:设置行 / 分组卡 / 小控件。三个方案共用同一套原语 —— 差异只在布局,
+ * 这正是"统一设计风格"的落点。
+ * ========================================================================= */
+
+const esc = (s) =>
+  String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+/** 搜索命中高亮(仅当有查询词)。 */
+function hl(text, q) {
+  const s = esc(text);
+  if (!q) return s;
+  const i = String(text).toLowerCase().indexOf(q.toLowerCase());
+  if (i < 0) return s;
+  const raw = String(text);
+  return esc(raw.slice(0, i)) + "<mark>" + esc(raw.slice(i, i + q.length)) + "</mark>" + esc(raw.slice(i + q.length));
+}
+
+/** 一行是否被查询命中(标题 + 描述)。 */
+const rowHit = (r, q) => !q || `${r.t || ""} ${r.d || ""} ${r.v || ""}`.toLowerCase().includes(q.toLowerCase());
+
+const badge = (kind, text, dot) =>
+  `<span class="badge ${kind}">${dot ? '<i class="bdot"></i>' : ""}${esc(text)}</span>`;
+
+const resetBtn = () => `<button class="btn ghost sm icon rst" title="恢复默认">${ico("refresh", 13)}</button>`;
+
+/* ───────────────────────── 行控件 ───────────────────────── */
+
+const CTRL = {
+  sw: (r) =>
+    `<button class="sw" role="switch" aria-checked="${r.v ? "true" : "false"}" aria-label="${esc(r.t)}"></button>`,
+
+  sel: (r, plan, st) =>
+    `<div class="sel${r.wide ? " wide" : r.sm ? " sm" : ""}" style="${r.wide ? "width:100%" : r.w ? `width:${r.w}px` : ""}">${hl(r.v, st.q)}</div>`,
+
+  num: (r) => `<input class="inp num" value="${esc(r.v)}" style="width:92px;text-align:right">
+    <span class="t-meta">${esc(r.unit || "")}</span>`,
+
+  inp: (r) => `<input class="inp${r.mono ? " mono" : ""} grow" value="${esc(r.v)}" placeholder="${esc(r.ph || "")}">`,
+
+  ta: (r) => `<textarea class="ta${r.mono ? " mono" : ""}" rows="${r.rows || 4}">${esc(r.v)}</textarea>`,
+
+  pal: (r) => `
+    <div class="sw-row">
+      ${r.opts
+        .map(
+          (c, i) =>
+            `<button class="sw-dot" aria-pressed="${r.cur === i}" title="${esc(r.names[i])}" style="background:${c}"></button>`,
+        )
+        .join("")}
+      <button class="sw-dot" title="自定义颜色" style="background:conic-gradient(#ef4444,#eab308,#22c55e,#06b6d4,#6366f1,#ec4899,#ef4444)"></button>
+      <span class="t-meta" style="margin-left:2px">${esc(r.v)}</span>
+      <button class="btn ghost sm" ${r.cur === -1 ? "disabled" : ""}>${ico("refresh", 13)} 恢复默认</button>
+    </div>`,
+
+  step: (r) => `
+    <div class="stepper">
+      <button title="减小">−</button>
+      <span class="num">${esc(r.v)}</span>
+      <button title="增大">＋</button>
+    </div>`,
+
+  path: (r) => `
+    <div class="row-c" style="width:100%">
+      <div class="pathv grow">${ico("folder", 14)}<span class="mono">${esc(r.v || r.empty || "")}</span></div>
+      ${(r.actions || []).map((a, i) => `<button class="btn${i === (r.actions.length - 1) && i > 0 ? " primary" : ""} sm">${esc(a)}</button>`).join("")}
+      ${r.reset ? resetBtn() : ""}
+    </div>`,
+
+  btns: (r) => `
+    <div class="row-c">
+      ${(r.btns || []).map((b) => `<button class="btn ${b.kind || ""} sm">${esc(b.lbl)}</button>`).join("")}
+      ${r.result ? badge(r.result.kind, r.result.text, true) : ""}
+    </div>`,
+
+  kbd: (r, plan, st) => {
+    if (r.state === "conflict")
+      return `<span class="t-desc" style="color:rgb(var(--warning))">已被「${esc(r.conflict)}」占用</span>
+        <button class="btn sm">取消</button><button class="btn primary sm">${ico("check", 12)} 覆盖</button>`;
+    const keys = r.keys && r.keys.length
+      ? r.keys.map((k) => `<span class="kbd${r.state === "override" ? " on" : ""}">${esc(k)}</span>`).join("")
+      : `<span class="t-desc">未绑定</span>`;
+    return `${keys}
+      <button class="btn sm">${r.state === "recording" ? "按下组合键…" : "修改"}</button>
+      ${r.state === "override" ? `<button class="btn ghost sm icon rst" title="恢复默认">${ico("refresh", 13)}</button>` : ""}`;
+  },
+
+  gest: (r) => {
+    const arrows = { D: "↓", U: "↑", L: "←", R: "→" };
+    const seq = r.seq && r.seq.length
+      ? `<span class="gseq"${r.state === "recording" ? ' data-rec="true"' : ""}>${r.seq.map((s) => arrows[s]).join("")}</span>`
+      : `<span class="t-desc">未绑定</span>`;
+    return `${seq}<button class="btn sm">${r.state === "recording" ? "画出手势…" : "修改"}</button>
+      ${r.seq && r.seq.length ? `<button class="btn ghost sm icon rst" title="恢复默认">${ico("refresh", 13)}</button>` : ""}`;
+  },
+};
+
+/** 单行。plan 决定布局细节;st 携带查询词等交互态。 */
+function renderRow(r, plan, st) {
+  if (r.k === "custom") return BLOCK_ROWS[r.key] ? BLOCK_ROWS[r.key](r, plan, st) : "";
+
+  const stack = r.stack || r.k === "pal" || r.k === "ta" || r.k === "inp" || r.k === "path" || r.k === "btns";
+  const cls = ["row", stack ? "stack" : "", r.chg ? "chg" : "", r.sub ? "dsub" : ""].filter(Boolean).join(" ");
+  const fn = CTRL[r.k] || (() => "");
+  const desc = r.d ? `<div class="t-desc row-d">${hl(r.d, st.q)}</div>` : "";
+  const extra = r.note ? `<div class="t-meta" style="margin-top:4px">${ico("info", 12)} ${esc(r.note)}</div>` : "";
+  const saved = r.saved ? `<div class="saved">${ico("check", 12)} ${esc(r.saved)}</div>` : "";
+  const rst = r.chg && r.k !== "kbd" && r.k !== "gest" ? resetBtn() : "";
+
+  return `<div class="${cls}" data-hit="${rowHit(r, st.q) ? "true" : "false"}">
+    <div class="row-l">
+      <div class="row-t"><span class="t-row">${hl(r.t, st.q)}</span>${r.tag ? badge("o", r.tag) : ""}</div>
+      ${desc}${extra}${saved}
+    </div>
+    <div class="row-c">${rst}${fn(r, plan, st)}</div>
+  </div>`;
+}
+
+/* ───────────────────────── 分组卡 ───────────────────────── */
+
+function renderSectionBodies(sec, page, plan, st) {
+  const rows = (sec.rows || []).map((r) => renderRow(r, plan, st)).join("");
+  const rich = sec.render ? BLOCKS[sec.render](sec, page, plan, st) : "";
+  const sub = sec.sub ? BLOCK_ROWS[sec.sub.key](sec.sub, plan, st) : "";
+  const note = sec.note ? `<div class="snote">${ico("info", 13)}<span class="t-desc">${esc(sec.note)}</span></div>` : "";
+  return `<div class="rows">${rows}${rich}${sub}</div>${note}`;
+}
+
+const chgCount = (sec) => (sec.rows || []).filter((r) => r.chg).length;
+const metaFor = (sec) => {
+  const n = chgCount(sec);
+  return n ? badge("a", `已改 ${n}`) : "";
+};
+
+/** 一个功能分组。三种壳:方案 A 卡片头 / 方案 B 粘性组头 + 面板 / 方案 C 紧凑卡头。 */
+function renderSection(sec, page, plan, st, idx) {
+  if (!sec.t) return `<div class="bare">${renderSectionBodies(sec, page, plan, st)}</div>`;
+  const bodies = renderSectionBodies(sec, page, plan, st);
+  const icon = sec.icon ? ico(sec.icon, plan === "c" ? 14 : 15) : "";
+  const anchor = idx === undefined ? "" : ` id="sec-${idx}"`;
+
+  if (plan === "b") {
+    return `<section${anchor} data-hit="${secHit(sec, st.q) ? "true" : "false"}">
+      <div class="sec-h">
+        <span class="ct">${hl(sec.t, st.q)}</span>
+        ${sec.d ? `<span class="cd">${hl(sec.d, st.q)}</span>` : ""}
+        <span class="cm">${metaFor(sec)}</span>
+      </div>
+      <div class="sec-b">${bodies}</div>
+    </section>`;
+  }
+
+  const head = plan === "c"
+    ? `<div class="ch">
+        ${icon ? `<div class="ci">${icon}</div>` : ""}
+        <div class="ct"><div class="t-card">${hl(sec.t, st.q)}</div>
+          ${sec.d ? `<div class="t-desc cd">${hl(sec.d, st.q)}</div>` : ""}</div>
+        <div class="cm">${metaFor(sec)}</div>
+      </div>`
+    : `<div class="ch">
+        ${icon ? `<div class="ci">${icon}</div>` : ""}
+        <div class="ct"><div class="t-card">${hl(sec.t, st.q)}</div>
+          ${sec.d ? `<div class="t-desc">${hl(sec.d, st.q)}</div>` : ""}</div>
+        <div class="cm">${metaFor(sec)}</div>
+      </div>`;
+
+  const span = sec.render || (sec.rows || []).length >= 6 ? " full" : "";
+  return `<section${anchor} class="card${span}" data-hit="${secHit(sec, st.q) ? "true" : "false"}">${head}${bodies}</section>`;
+}
+
+const secHit = (sec, q) =>
+  !q || `${sec.t} ${sec.d || ""} ${(sec.rows || []).map((r) => `${r.t} ${r.d || ""}`).join(" ")}`.toLowerCase().includes(q.toLowerCase());
+
+/* 富内容渲染器在两处注册:整段(sec.render)与行内(row.k==='custom') */
+const BLOCKS = {};
+const BLOCK_ROWS = {};
+const register = (key, fn) => { BLOCKS[key] = fn; };
+const registerRow = (key, fn) => { BLOCK_ROWS[key] = fn; };
+
+/* 通用小组件 */
+const liRow = (o) => `
+  <div class="li">
+    ${o.av ? `<div class="av${o.on ? " on" : ""}">${esc(o.av)}</div>` : ""}
+    <div class="lx">
+      <div class="l1">${o.l1}</div>
+      ${o.l2 ? `<div class="l2">${o.l2}</div>` : ""}
+    </div>
+    ${o.actions ? `<div class="la">${o.actions}</div>` : ""}
+  </div>`;
+
+const codeRow = (o) => `
+  <div class="li">
+    <div class="lx">
+      <div class="l1"><span class="mono" style="font-size:.929em;font-weight:600">${esc(o.name)}</span>${o.tag || ""}</div>
+      <div class="l2 mono">${esc(o.detail)}</div>
+    </div>
+    <div class="la">${o.actions || ""}</div>
+  </div>`;
+
+const disc = (summary, body, open) => `
+  <div class="disc" data-open="${open ? "true" : "false"}">
+    <div class="disc-h">${summary}</div>
+    <div class="disc-b">${body}</div>
+  </div>`;
+
+
+/* ── blocks.js ── */
+/* ============================================================================
+ * 富页面块 —— 无法用通用行表达的部分(主从列表、图表、安装卡、编辑器…)
+ * 每个块在 3 个方案下共用同一份内容,只按 plan 调整密度/宽度。
+ * ========================================================================= */
+
+
+const mono = (s) => `<span class="mono">${esc(s)}</span>`;
+const chev = (open) => `<span class="cv">${ico("chevR", 14)}</span>`;
+const secret = (v) => `
+  <div class="scrt"><input class="inp mono grow" value="${esc(v)}" type="password">
+    <button class="btn ghost sm icon" title="显示明文">${ico("eye", 14)}</button></div>`;
+
+/* ── 行内块 ───────────────────────────────────────────────── */
+
+registerRow("editorSchemeDark", (r) => schemeRow(r, ["#1a1d24", "#c586c0", "#ce9178", "#b5cea8"], ["Mcode 深色(默认)", "One Dark", "Monokai", "Solarized Dark"]));
+registerRow("editorSchemeLight", (r) => schemeRow(r, ["#ffffff", "#7c3aed", "#047857", "#b45309"], ["Mcode 浅色(默认)", "Solarized Light", "GitHub Light"]));
+
+function schemeRow(r, colors, opts) {
+  return `<div class="row">
+    <div class="row-l"><div class="row-t"><span class="t-row">${esc(r.t)}</span></div>
+      ${r.d ? `<div class="t-desc row-d">${esc(r.d)}</div>` : ""}</div>
+    <div class="row-c"><div class="sel" style="width:230px">
+      <span class="swx" style="background:${colors[0]}"><i style="background:${colors[1]}"></i><i style="background:${colors[2]}"></i><i style="background:${colors[3]}"></i></span>
+      ${esc(r.v)}</div></div></div>`;
+}
+
+registerRow("gesturePad", () => `
+  <div class="row stack">
+    <div class="row-l"><div class="row-t"><span class="t-row">手势预览</span>${badge("n", "演示")}</div>
+      <div class="t-desc row-d">按住触发键画出箭头序列,松手即执行。方向容差为主方向 ±30°,斜向需要明确拐弯。</div></div>
+    <div class="pad">
+      <svg width="260" height="70" viewBox="0 0 260 70" fill="none">
+        <polyline points="40,14 40,44 92,44" stroke="rgb(5 150 105)" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" opacity=".85"/>
+        <circle cx="40" cy="14" r="4.5" fill="rgb(5 150 105)"/>
+        <circle cx="92" cy="44" r="4.5" fill="rgb(5 150 105)" opacity=".45"/>
+        <text x="104" y="49" fill="rgb(113 113 122)" font-size="12" font-family="system-ui">↓→ 关闭当前会话</text>
+        <path d="M180 20 L206 20 M180 44 L200 44" stroke="rgb(113 113 122)" stroke-width="2" stroke-linecap="round" opacity=".35"/>
+        <text x="214" y="24" fill="rgb(113 113 122)" font-size="11" font-family="system-ui">← → ↑ ↓</text>
+        <text x="214" y="48" fill="rgb(113 113 122)" font-size="11" font-family="system-ui">8 方向</text>
+      </svg>
+      <span class="hintp">实时徽章会跟随指针显示当前序列与命令名</span>
+    </div>
+  </div>`);
+
+registerRow("notifyTest", () => `
+  <div class="row dsub">
+    <div class="row-l"><div class="row-t"><span class="t-row">测试通知</span></div>
+      <div class="t-desc row-d">发送一条示例通知,用来确认系统权限与展示样式。</div></div>
+    <div class="row-c"><button class="btn sm">${ico("bell", 13)} 发送测试通知</button></div>
+  </div>`);
+
+registerRow("cmdList", () => `
+  <div class="sub">
+    <div class="cmd-h"><span class="t-row">命令列表 <span class="badge n">2</span></span>
+      <button class="btn ghost sm">${ico("plus", 13)} 添加命令</button></div>
+    <ul class="cmds">
+      ${[["启动开发", "pnpm dev"], ["运行类型检查", "npx tsc --noEmit -p tsconfig.json"]]
+        .map(
+          ([n, c]) => `<li class="cmd">
+            <span class="cn">${esc(n)}</span><span class="cc mono">${esc(c)}</span>
+            <span class="ca"><button class="btn ghost sm icon" title="编辑">${ico("pencil", 13)}</button>
+            <button class="btn ghost sm icon" title="删除">${ico("trash", 13)}</button></span></li>`,
+        )
+        .join("")}
+    </ul>
+  </div>`);
+
+/* ── 语音模型 ─────────────────────────────────────────────── */
+register("voiceModels", () => {
+  const rows = [
+    { n: "中文 · 小型(约 40 MB)", st: "已下载 · 当前使用", act: `<span class="badge a">${ico("check", 11)} 当前使用</span><button class="btn ghost sm icon" title="删除">${ico("trash", 13)}</button>` },
+    { n: "中文 · 中型(约 150 MB)", st: "已下载", act: `<button class="btn sm">使用</button><button class="btn ghost sm icon" title="删除">${ico("trash", 13)}</button>` },
+    { n: "中文 · 大型(约 640 MB)", st: "未下载 · 精度更高,首次识别更慢", act: `<button class="btn sm">${ico("download", 13)} 下载</button>` },
+  ];
+  const downloading = `<div class="row">
+    <div class="row-l"><div class="row-t"><span class="t-row">英语 · 小型(约 40 MB)</span></div>
+      <div class="t-desc row-d">下载中 62% · 24.8 MB / 40 MB</div></div>
+    <div class="row-c" style="min-width:230px"><div class="prog"><i style="width:62%"></i></div>
+      <button class="btn ghost sm icon" title="取消下载">${ico("stop", 13)}</button></div></div>`;
+  return rows
+    .map(
+      (m) => `<div class="row">
+        <div class="row-l"><div class="row-t"><span class="t-row">${esc(m.n)}</span></div>
+          <div class="t-desc row-d">${esc(m.st)}</div></div>
+        <div class="row-c">${m.act}</div></div>`,
+    )
+    .join("") + downloading;
+});
+
+/* ── LSP ──────────────────────────────────────────────────── */
+register("lsp", () => {
+  const stat = (k) =>
+    ({ running: badge("a", "运行中", true), installed: badge("n", "已安装"), missing: badge("o", "未安装"), importing: badge("w", "导入中") }[k]);
+  const acts = (k) =>
+    k === "missing"
+      ? `<button class="btn primary sm">${ico("download", 13)} 安装</button>`
+      : `<button class="btn ghost sm icon" title="重装">${ico("refresh", 13)}</button>
+         <button class="btn ghost sm icon" title="健康检查">${ico("shield", 13)}</button>
+         <button class="btn sm">卸载</button>`;
+
+  const log = (lines) => `<div class="fld"><span class="t-desc">安装输出</span>
+    <pre class="log">${esc(lines)}</pre>
+    <button class="btn ghost sm" style="align-self:flex-start">隐藏安装输出</button></div>`;
+
+  const detail = (o) => `<div class="dt">
+      <div class="dtrow"><span class="k">服务器路径</span>
+        <span class="v mono">${esc(o.path)}</span>
+        <button class="btn ghost sm icon" title="复制">${ico("copy", 13)}</button>
+        <button class="btn ghost sm icon" title="在文件夹中显示">${ico("folderOpen", 13)}</button></div>
+      <div class="dtrow"><span class="k">下载与逃生通道</span>
+        <span class="v" style="display:flex;gap:6px;white-space:normal">
+          <button class="btn sm">${ico("download", 13)} 打开下载页</button>
+          <button class="btn sm">${ico("fileImport", 13)} 从文件安装</button></span></div>
+    </div>
+    <div class="fgrid" style="padding:10px 0 0">
+      <div class="fld"><span class="t-desc">自定义 server 路径(留空 = 自动探测 PATH)</span><input class="inp mono" placeholder="留空自动探测"></div>
+      <div class="fld"><span class="t-desc">额外启动参数(空格分隔)</span><input class="inp mono" placeholder="${esc(o.args || "例如 -Xmx2g")}"></div>
+      ${o.jdk ? `<div class="fld"><span class="t-desc">jdtls 运行时 JDK 路径(需 JDK 17+)</span><input class="inp mono" placeholder="留空 = 使用系统 java"></div>` : ""}
+    </div>
+    ${o.phase ? `<div class="sub t-desc">${esc(o.phase)}</div>` : ""}
+    ${log(o.log)}
+    <div style="display:flex;justify-content:flex-end"><button class="btn primary sm">保存</button></div>`;
+
+  const row = (o) => `
+    <div class="ligroup" data-open="${o.open === true}">
+      <div class="li lsp-li">
+        <span class="cv" data-act="expand" role="button" title="展开/收起详情">${ico("chevR", 14)}</span>
+        <div class="lname">${ico("code", 14)}<span class="t-row">${esc(o.n)}</span>${stat(o.k)}</div>
+        <div class="lx"><span class="t-desc">${esc(o.hint)}</span></div>
+        <div class="la">${acts(o.k)}<button class="sw" role="switch" aria-checked="${o.k !== "missing" ? "true" : "false"}"></button></div>
+      </div>
+      <div class="li-detail">${detail(o)}</div>
+    </div>`;
+
+  return row({
+    n: "TypeScript / JavaScript", k: "running", hint: "typescript-language-server · npm", open: false,
+    path: "/opt/homebrew/bin/typescript-language-server",
+    log: "$ npm i -g typescript-language-server\nadded 1 package in 2.4s\nhealth check ✓ (--version 5.1.1)",
+  }) + row({
+    n: "Python", k: "installed", hint: "basedpyright · pip", open: false,
+    path: "~/.local/bin/basedpyright-langserver",
+    log: "$ pip install basedpyright\nSuccessfully installed basedpyright-1.1.390\nhealth check ✓ (1.1.390)",
+  }) + row({
+    n: "Go", k: "missing", hint: "gopls · go install", open: false,
+    path: "(未安装) 安装后位于 ~/go/bin/gopls",
+    log: "尚未安装。点击「安装」后执行:\n$ go install golang.org/x/tools/gopls@latest",
+  }) + row({
+    n: "Java", k: "importing", hint: "jdtls(自动匹配 JDK 版本)", open: true, jdk: true,
+    path: "~/Library/Application Support/Mcode/lsp/java/plugins/org.eclipse.equinox.launcher_1.6.700.jar",
+    phase: "项目索引导入中 24% · Importing project mcode-gui。导入期间跳转与补全会等待;每个项目只导入一次,之后启动秒级就绪。",
+    log: "$ java -jar jdtls --version\n[Info] Loading Gradle/Maven project…\n[Info] Importing project mcode-gui (24%)\n[Info] Workspace data: ~/Library/Application Support/Mcode/lsp/workspaces/8f2a1c",
+  });
+});
+
+/* ── 用量统计 ─────────────────────────────────────────────── */
+register("summaryCards", () => {
+  const cards = [
+    ["对话轮次", "1,284"], ["涉及会话", "63"], ["总 Tokens", "42.8M"],
+    ["子代理 Tokens", "6.1M"], ["输出 Tokens", "3.4M"], ["缓存读取", "31.2M"], ["缓存写入", "2.8M"],
+  ];
+  return `<div class="sumgrid">${cards
+    .map(([k, v]) => `<div class="sum"><b class="num">${v}</b><span>${esc(k)}</span></div>`)
+    .join("")}</div>`;
+});
+
+register("heatmap", () => {
+  let seed = 20260910;
+  const rnd = () => ((seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff);
+  const weeks = 30;
+  let cells = "";
+  for (let w = 0; w < weeks; w++) {
+    for (let d = 0; d < 7; d++) {
+      const weekend = d === 5 || d === 6;
+      const r = rnd() * (weekend ? 0.35 : 1) * (w > weeks - 6 ? 1.25 : 1);
+      const l = r > 0.82 ? 4 : r > 0.6 ? 3 : r > 0.38 ? 2 : r > 0.16 ? 1 : 0;
+      cells += `<i data-l="${l}" title="${(w * 7 + d) % 30 + 1} 日 · ${l * 3 + 1} 轮"></i>`;
+    }
+  }
+  const months = ["6 月", "7 月", "8 月", "9 月"];
+  return `<div class="sub">
+    <div class="heat" style="--cell:12px;--hgap:3px">
+      <div class="hl"><span>一</span><span></span><span>三</span><span></span><span>五</span><span></span><span>日</span></div>
+      <div class="hm">
+        <div class="hm-month">${months.map((m) => `<span style="width:${7 * 15 - 3}px">${m}</span>`).join("")}</div>
+        <div class="hm-grid">${cells}</div>
+      </div>
+    </div>
+    <div class="heat-foot"><span class="t-meta">少</span>
+      ${[0, 1, 2, 3, 4].map((l) => `<i class="lg" data-l="${l}"></i>`).join("")}
+      <span class="t-meta">多</span>
+      <span class="t-meta" style="margin-left:auto">共 1,284 轮 · 连续打卡 12 天</span></div>
+  </div>`;
+});
+
+register("modelBars", () => {
+  const rows = [
+    ["DS", "DeepSeek 中转", "deepseek-chat", "18.4M", "742 轮", 100],
+    ["MO", "Moonshot 中转", "kimi-k2", "12.1M", "318 轮", 66],
+    ["OL", "本地 Ollama", "qwen3-coder", "7.2M", "164 轮", 39],
+    ["CO", "Codex 端点", "gpt-5.6-sol", "5.1M", "60 轮", 28],
+  ];
+  return rows
+    .map(
+      ([av, v, m, tk, tu, pct]) => `<div class="li mbar">
+        <div class="av">${esc(av)}</div>
+        <div class="lx">
+          <div class="l1"><span class="t-row">${esc(v)}</span><span class="t-meta">${esc(m)}</span></div>
+          <div class="prog" style="margin-top:6px"><i style="width:${pct}%"></i></div>
+        </div>
+        <div class="la t-meta">${esc(tk)} tokens · ${esc(tu)}</div></div>`,
+    )
+    .join("");
+});
+
+/* ── 关于 ─────────────────────────────────────────────────── */
+register("about", () => `
+  <div class="about">
+    <div class="card">
+      <div class="hero">
+        <div class="logo">${ico("layers", 26)}</div>
+        <div>
+          <div class="t-page">Mcode</div>
+          <div class="t-desc" style="margin-top:3px">基于 Claude Agent SDK 构建的桌面端 GUI。不重新实现 agent,只做 Claude 的交互界面。</div>
+          <div class="t-meta" style="margin-top:6px">v0.9.4(build 20260910)</div>
+        </div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="rows">
+        <div class="row"><div class="row-l"><div class="row-t"><span class="t-row">版本</span></div></div>
+          <div class="row-c t-meta">v0.9.4</div></div>
+        <div class="row"><div class="row-l"><div class="row-t"><span class="t-row">许可证</span></div></div>
+          <div class="row-c t-meta">MIT</div></div>
+        <div class="row"><div class="row-l"><div class="row-t"><span class="t-row">运行环境</span></div>
+          <div class="t-desc row-d">Electron 38 · Node.js 22.13 · Chromium 140 · macOS arm64</div></div>
+          <div class="row-c"><button class="btn ghost sm icon" title="复制版本信息">${ico("copy", 13)}</button></div></div>
+      </div>
+    </div>
+    <div class="card up">
+      <div class="upb">
+        <div class="ci">${ico("download", 15)}</div>
+        <div class="lx">
+          <div class="t-row">发现新版本 v0.9.5</div>
+          <div class="t-desc">包含设置页重设计与 12 项修复,约 96 MB。</div>
+          <div class="prog" style="margin-top:8px;max-width:320px"><i style="width:38%"></i></div>
+          <div class="t-meta" style="margin-top:5px">正在下载更新… 38% · 36 MB / 96 MB</div>
+        </div>
+        <button class="btn sm">取消</button>
+      </div>
+    </div>
+    <div class="row-c" style="justify-content:flex-start;gap:8px">
+      <button class="btn">${ico("check", 13)} 复制版本信息</button>
+      <button class="btn">${ico("ext", 13)} GitHub 仓库</button>
+      <button class="btn">${ico("refresh", 13)} 检查更新</button>
+    </div>
+    <div class="snote" style="border:1px solid rgb(var(--edge));border-radius:var(--r-card);background:rgb(var(--surface))">
+      ${ico("info", 13)} <span class="t-desc">Mcode 是 MIT 许可的开源项目,不收集任何遥测数据。会话与配置保存在本机应用数据目录。</span></div>
+  </div>`);
+
+/* ── Agent 运行时 ─────────────────────────────────────────── */
+register("runtimes", (sec, page, plan) => {
+  const row = (o) => `
+    <div class="ligroup" data-open="${o.open === true}">
+      <div class="li">
+        <span class="cv" data-act="expand" role="button" title="展开/收起详情">${ico("chevR", 14)}</span>
+        <div class="lname">${ico(o.ic, 14)}<span class="t-row">${esc(o.n)}</span>${o.badge}</div>
+        <div class="lx"><span class="t-desc">${esc(o.detail)}</span></div>
+        <div class="la">${o.actions}</div>
+      </div>
+      <div class="li-detail">${o.body || ""}</div>
+    </div>`;
+
+  const detail = (o) => `
+    <div class="dt">
+      ${[["来源", o.src], ["版本", o.ver], ["磁盘占用", o.size], ["加载路径", o.path]]
+        .map(
+          ([k, v], i) => `<div class="dtrow"><span class="k">${k}</span>
+            ${i === 3 ? `<span class="v mono">${esc(v)}</span>
+              <button class="btn ghost sm icon" title="复制">${ico("copy", 13)}</button>
+              <button class="btn ghost sm icon" title="在文件夹中显示">${ico("folderOpen", 13)}</button>`
+            : `<span class="v">${esc(v)}</span>`}</div>`,
+        )
+        .join("")}
+    </div>`;
+
+  const prog = (pct, txt) => `<div class="dt"><div class="dtrow"><span class="k">进度</span>
+    <span class="v" style="display:flex;align-items:center;gap:8px;white-space:normal">
+      <span class="prog"><i style="width:${pct}%"></i></span>
+      <span class="t-meta" style="flex:none">${esc(txt)}</span></span></div></div>`;
+
+  return row({
+    n: "Claude", ic: "robot", open: true, badge: badge("a", "已安装", true),
+    detail: "独立安装副本 v2.1.238 · 209 MB",
+    actions: `<button class="btn primary sm">更新到 2.1.240</button>
+      <button class="btn ghost sm icon" title="重新安装">${ico("refresh", 13)}</button>
+      <button class="btn sm">卸载</button>
+      <button class="btn ghost sm icon" title="从本地目录或 .tgz 包安装">${ico("fileImport", 13)}</button>`,
+    body: detail({ src: "独立安装副本(应用数据目录)", ver: "v2.1.238", size: "209 MB", path: "~/Library/Application Support/Mcode/runtimes/claude/2.1.238" }),
+  }) + row({
+    n: "Codex", ic: "terminal", open: false, badge: badge("n", "开发依赖"), detail: "开发依赖 v0.153.4",
+    actions: `<button class="btn ghost sm icon" title="重新安装">${ico("refresh", 13)}</button>
+      <button class="btn sm">卸载</button>
+      <button class="btn ghost sm icon" title="从本地目录或 .tgz 包安装">${ico("fileImport", 13)}</button>`,
+    body: detail({ src: "开发依赖(node_modules,仅开发环境)", ver: "v0.153.4", size: "378 MB", path: "node_modules/@openai/codex" }),
+  }) + row({
+    n: "Pi", ic: "sparkles", open: true, badge: badge("i", "安装中"), detail: "正在解包 @mcode/runtime-pi@0.83.0",
+    actions: `<button class="btn sm">取消</button>`,
+    body: prog(62, "62% · 14 MB / 22 MB"),
+  }) + row({
+    n: "Claude 备用副本", ic: "box", open: false, badge: badge("o", "未安装"), detail: "期望版本 v2.1.240 · 未检测到可用副本",
+    actions: `<button class="btn primary sm">${ico("download", 13)} 安装</button>
+      <button class="btn ghost sm icon" title="从本地目录或 .tgz 包安装">${ico("fileImport", 13)}</button>`,
+    body: `<span class="t-desc">尚未安装。应用更新后会期望新版本,点「安装」从镜像下载并校验 sha512 后落位。</span>`,
+  });
+});
+
+/* ── 插件:已安装 ─────────────────────────────────────────── */
+register("pluginsInstalled", (sec, page, plan, st) => {
+  const chip = (t, n, w) => `<span class="chip${w ? " w" : ""}">${esc(t)}${n ? ` <span class="num">${n}</span>` : ""}</span>`;
+
+  const detail = (o) => `
+    <div class="pdet">
+      <div class="dt">
+        <div class="dtrow"><span class="k">来源</span><span class="v">${esc(o.src)}</span></div>
+        <div class="dtrow"><span class="k">安装于</span><span class="v">${esc(o.at)}</span></div>
+        <div class="dtrow"><span class="k">路径</span><span class="v mono">${esc("~/.mcode/plugins/" + o.name + "/" + o.ver)}</span></div>
+      </div>
+      <div class="mx">
+        <span class="t-desc">组件支持</span>
+        ${o.cmp.skills ? `<span class="chip">Skills:Claude · Codex · Pi</span>` : ""}
+        ${o.cmp.mcp ? `<span class="chip">MCP:Claude · Codex</span>` : ""}
+        ${o.cmp.commands ? `<span class="chip">Commands:仅 Claude</span>` : ""}
+        ${o.cmp.hooks ? `<span class="chip w">Hooks:当前不执行</span>` : ""}
+      </div>
+      <div class="cdet">
+        ${o.cmp.skills ? `<div class="cdh">Skills <span class="badge n">${o.cmp.skills.length}</span></div>
+          <ul class="cdl">${o.cmp.skills.map(([n, d]) => `<li><span class="mono">${esc(n)}</span><span class="t-desc">${esc(d)}</span></li>`).join("")}</ul>` : ""}
+        ${o.cmp.commands ? `<div class="cdh">Commands <span class="badge n">${o.cmp.commands.length}</span></div>
+          <ul class="cdl">${o.cmp.commands.map(([n, d]) => `<li><span class="mono">/${esc(n)}</span><span class="t-desc">${esc(d)}</span></li>`).join("")}</ul>` : ""}
+        ${o.cmp.mcp ? `<div class="cdh">MCP 服务器 <span class="badge n">${o.cmp.mcp.length}</span></div>
+          <ul class="cdl">${o.cmp.mcp.map(([n, k, d]) => `<li><span class="mono">${esc(n)}</span>${badge("o", k)}<span class="t-desc">${esc(d)}</span></li>`).join("")}</ul>` : ""}
+      </div>
+      ${o.cmp.hooks ? `<div class="warnbox">${ico("alert", 14)}
+        <div><b>已声明 ${o.cmp.hooks.length} 条 hooks —— 当前版本不执行,相关自动化不会生效。</b>
+          <ul class="cdl" style="margin-top:5px">${o.cmp.hooks.map(([e, m, c]) => `<li><span class="mono">${esc(e)}</span><span class="t-desc">matcher: ${esc(m)} → <span class="mono">${esc(c)}</span></span></li>`).join("")}</ul></div>
+      </div>` : ""}
+    </div>`;
+
+  const row = (o) => `
+    <div class="ligroup" data-open="${o.open === true}">
+      <div class="li pl">
+        <span class="cv" data-act="expand" role="button" title="展开/收起详情">${ico("chevR", 14)}</span>
+        <div class="av${o.on ? " on" : ""}">${esc(o.name[0].toUpperCase())}</div>
+        <div class="lx">
+          <div class="l1"><span class="t-row">${esc(o.name)}</span><span class="t-meta mono">v${esc(o.ver)}</span>
+            ${o.chips.join("")}</div>
+          <div class="l2">${esc(o.desc)}</div>
+        </div>
+        <div class="la"><button class="sw" role="switch" aria-checked="${o.on ? "true" : "false"}"></button>
+          <button class="btn ghost sm icon" title="卸载">${ico("trash", 13)}</button></div>
+      </div>
+      <div class="li-detail">${detail(o)}</div>
+    </div>`;
+
+  const plugins = [
+    {
+      name: "security-audit", ver: "1.0.2", on: true, open: true, src: "插件市场 · 官方市场", at: "2026-09-08 14:32",
+      desc: "依赖与密钥审查:扫描依赖树、查找硬编码密钥并生成可提交的报告。",
+      chips: [chip("Skills", 3), chip("MCP", 1), chip("Hooks", 2, true)],
+      cmp: {
+        skills: [["audit-deps", "扫描依赖树中的已知漏洞"], ["audit-secrets", "在改动中查找硬编码密钥"], ["audit-report", "汇总为可提交的审查报告"]],
+        mcp: [["security-audit__osv", "http", "https://api.osv.dev/mcp"]],
+        hooks: [["PostToolUse", "Write|Edit", "node ~/.mcode/plugins/security-audit/scan.js"], ["Stop", "*", "node ~/.mcode/plugins/security-audit/report.js"]],
+      },
+    },
+    {
+      name: "code-review", ver: "1.2.0", on: true, src: "插件市场 · 官方市场", at: "2026-09-07 09:14",
+      desc: "按团队清单审查改动,输出可执行的修改建议。",
+      chips: [chip("Skills", 2), chip("Commands", 1)],
+      cmp: { skills: [["review-diff", "按清单逐条核对改动"], ["review-summary", "把意见汇总为 PR 评论"]], commands: [["review", "对当前改动发起一轮审查"]] },
+    },
+    {
+      name: "postgres-toolkit", ver: "0.4.1", on: true, src: "Git · https://github.com/acme/pg-toolkit", at: "2026-09-05 18:02",
+      desc: "MCP 形式暴露的 Postgres 查询与 schema 检查工具。",
+      chips: [chip("MCP", 2)],
+      cmp: { mcp: [["postgres-toolkit__pg", "stdio", "npx -y @mcode/pg-mcp"], ["postgres-toolkit__schema", "stdio", "npx -y @mcode/pg-schema"]] },
+    },
+    {
+      name: "figma-bridge", ver: "0.1.0", on: false, src: "本地目录 · ~/dev/figma-bridge", at: "2026-09-03 11:26",
+      desc: "读取 Figma 文件的结构与样式变量。",
+      chips: [chip("MCP", 1)],
+      cmp: { mcp: [["figma-bridge__figma", "http", "https://mcp.figma.local/sse"]] },
+    },
+  ];
+
+  return `<div class="toolbar">
+      <div class="ts">${ico("search", 13)}<input class="inp" placeholder="搜索插件或组件…" value="${esc(st.q || "")}" data-act="topq"></div>
+      <div class="seg"><button aria-selected="true">全部 <span class="num">4</span></button><button aria-selected="false">已启用 <span class="num">3</span></button></div>
+      <button class="btn sm">${ico("plus", 13)} 安装 ${ico("chevD", 12)}</button>
+    </div>
+    <div class="plist">${plugins.map(row).join("")}</div>`;
+});
+
+/* ── 插件:市场 ───────────────────────────────────────────── */
+register("pluginsMarket", (sec, page, plan, st) => {
+  const entry = (o) => `
+    <div class="li">
+      <div class="lx"><div class="l1"><span class="t-row">${esc(o.n)}</span><span class="t-meta mono">v${esc(o.v)}</span></div>
+        <div class="l2">${esc(o.d)}</div></div>
+      <div class="la">${o.installed ? `<span class="badge a">${ico("check", 11)} 已安装</span>` : `<button class="btn sm">安装</button>`}</div>
+    </div>`;
+  return `<div class="toolbar">
+      <div class="ts">${ico("search", 13)}<input class="inp" placeholder="搜索插件…"></div>
+      <span class="t-meta">292 个插件</span>
+      <button class="btn ghost sm icon" title="刷新全部">${ico("refresh", 13)}</button>
+    </div>
+    <div class="seg mktabs">
+      <button aria-selected="true">官方市场 <span class="num">292</span></button>
+      <button aria-selected="false">团队私有 <span class="num">12</span></button>
+      <button aria-selected="false" title="添加插件市场">${ico("plus", 12)}</button>
+    </div>
+    <div class="card mpcard">
+      <div class="ch"><div class="ci">${ico("git", 14)}</div>
+        <div class="ct"><div class="t-card">官方市场 <span class="badge n">内置</span></div>
+          <div class="t-desc mono">https://github.com/anthropics/claude-plugins</div></div>
+        <div class="cm"><span class="t-meta">292 个插件</span>
+          <button class="btn ghost sm icon" title="刷新">${ico("refresh", 13)}</button></div>
+      </div>
+      ${entry({ n: "security-audit", v: "1.0.2", d: "依赖与密钥审查:扫描依赖树、查找硬编码密钥并生成可提交的报告。", installed: true })}
+      ${entry({ n: "pr-reviewer", v: "2.1.0", d: "按仓库规范自动审查 PR 改动并给出意见。" })}
+      ${entry({ n: "schema-guard", v: "0.9.3", d: "迁移文件与 schema 定义的一致性检查。" })}
+    </div>`;
+});
+
+/* ── MCP 各作用域 ─────────────────────────────────────────── */
+const mcpRow = (o) => `
+  <div class="row">
+    <div class="row-l"><div class="row-t">${mono(o.name)}${badge("o", o.kind)}${o.auth || ""}</div>
+      <div class="t-desc row-d mono">${esc(o.detail)}</div></div>
+    <div class="row-c">${o.acts || ""}<button class="sw" role="switch" aria-checked="${o.on ? "true" : "false"}"></button>
+      ${o.del ? `<button class="btn ghost sm icon" title="删除此 server">${ico("trash", 13)}</button>` : ""}</div>
+  </div>`;
+
+register("mcpUser", () => `
+  ${mcpRow({ name: "github", kind: "http", detail: "https://api.githubcopilot.com/mcp/ · OAuth", on: true, del: true, auth: badge("a", "已授权") })}
+  ${mcpRow({ name: "filesystem", kind: "stdio", detail: "npx -y @modelcontextprotocol/server-filesystem ~/workspace", on: true, del: true })}
+  ${mcpRow({ name: "postgres", kind: "stdio", detail: "npx -y @modelcontextprotocol/server-postgres postgresql://localhost:5432/app", on: false, del: true,
+    acts: `${badge("w", "待授权")}<button class="btn sm">去授权</button>` })}
+  <div class="sub" style="display:flex;gap:8px">
+    <button class="btn ghost sm">${ico("fileImport", 13)} 从 Claude CLI 导入</button>
+    <button class="btn sm">${ico("plus", 13)} 新增 MCP Server</button>
+  </div>`);
+
+register("mcpProject", () => `
+  <div class="row"><div class="row-l"><div class="row-t"><span class="t-row">项目</span></div>
+    <div class="t-desc row-d">切换项目可查看各自的 .mcp.json 条目。</div></div>
+    <div class="row-c"><div class="sel" style="width:220px">mcode-gui(当前工作区)</div></div></div>
+  ${mcpRow({ name: "playwright", kind: "stdio", detail: "npx -y @playwright/mcp@latest", on: true })}
+  ${mcpRow({ name: "local-index", kind: "sse", detail: "http://127.0.0.1:8848/sse · 默认关闭,确认来源后开启", on: false, acts: badge("w", "默认关闭") })}
+  <div class="sub t-desc">${ico("info", 13)} 项目级 server 不提供删除入口,请直接编辑项目中的 .mcp.json。</div>`);
+
+register("mcpPlugin", () => `
+  ${mcpRow({ name: "security-audit__osv", kind: "http", detail: "https://api.osv.dev/mcp · 来自插件 security-audit", on: true })}
+  ${mcpRow({ name: "postgres-toolkit__pg", kind: "stdio", detail: "npx -y @mcode/pg-mcp · 来自插件 postgres-toolkit", on: false })}
+  <div class="sub t-desc">${ico("info", 13)} 插件 MCP 的主开关是插件自身的启用状态;这里的开关用于单独阻断某个 server。</div>`);
+
+register("mcpBuiltin", () => mcpRow({ name: "browser", kind: "内置", detail: "应用内浏览器控制(截图、导航、点击)", on: true, acts: badge("n", "随应用提供") }));
+
+/* ── 模型配置:主从 + 表单 ───────────────────────────────── */
+register("providerForm", (sec, page, plan, st) => {
+  const tab = st.tab || "Claude";
+  const entities = page.entities[tab] || [];
+  const master = plan === "b" ? "" : `
+    <div class="mlist">
+      <div class="mh">${esc(page.masterTitle)} <span class="badge n">${entities.length}</span></div>
+      ${entities.map((e, i) => `<button class="mi" data-on="${i === 0}"><span class="mt">${esc(e.t)}</span><span class="ms">${esc(e.s)}</span></button>`).join("")}
+      <button class="mi add">${ico("plus", 13)} ${esc(page.entityAddLabel[tab])}</button>
+      <div class="mf"><button class="btn sm" style="width:100%">${ico("plus", 13)} ${esc(page.entityAddLabel[tab])}</button></div>
+    </div>`;
+
+  const fld = (label, ctrl, hint) =>
+    `<div class="fld"><label>${esc(label)}</label>${ctrl}${hint ? `<span class="hint">${esc(hint)}</span>` : ""}</div>`;
+
+  const modelRow = (id, extra, tags) => `
+    <div class="mrow"><input class="inp mono grow" value="${esc(id)}"><span class="space"></span>${tags || ""}
+      <button class="btn ghost sm icon" title="用该模型测试连接">${ico("plug", 13)}</button>
+      <button class="btn ghost sm icon" title="删除模型">${ico("trash", 13)}</button></div>`;
+
+  const forms = {
+    Claude: `
+      <div class="fgrid">
+        ${fld("API 格式", `<div class="sel">Anthropic(原生 /v1/messages)</div>`, "OpenAI 格式会经本地协议翻译转发,支持大多数第三方网关。")}
+        ${fld("名称", `<input class="inp" value="官方中转">`)}
+      </div>
+      ${fld("Base URL", `<input class="inp mono" value="https://api.example.com">`)}
+      <div class="fgrid">
+        ${fld("Token / API Key", secret("sk-ant-••••••••••••••••"), "仅保存在本机,不会写入配置文件。")}
+        ${fld("认证方式", `<div class="sel">Bearer</div>`)}
+      </div>
+      <div class="fld"><label>模型列表 <span class="badge n">3</span></label>
+        ${modelRow("claude-sonnet-4-5", "", `<label class="tagsw">${'1M'} <button class="sw sm" role="switch" aria-checked="false"></button></label>`)}
+        ${modelRow("claude-opus-4-1", "", `<label class="tagsw">1M <button class="sw sm" role="switch" aria-checked="true"></button></label>`)}
+        ${modelRow("deepseek-chat", "", `<label class="tagsw">1M <button class="sw sm" role="switch" aria-checked="true"></button></label>`)}
+        <button class="btn ghost sm" style="align-self:flex-start">${ico("plus", 13)} 添加模型</button>
+      </div>
+      ${fld("子代理模型", `<div class="sel">跟随主会话</div>`, "子代理默认继承主会话模型;指定后所有 Task 子代理都用该模型。")}
+      ${disc(`${chev(false)}<span class="t-row">高级选项</span><span class="t-desc" style="margin-left:6px">超时 · 遥测 · 自定义请求头</span>`,
+        `<div class="fgrid" style="padding:12px 0 0">
+          ${fld("超时(ms)", `<input class="inp num" value="3000000">`)}
+          ${fld("禁用遥测", `<label class="tagsw"><button class="sw sm" role="switch" aria-checked="true"></button> 不发送使用统计</label>`)}
+        </div>
+        <div class="fld" style="padding-top:12px"><label>自定义请求头 <span class="badge n">1</span></label>
+          <div class="hrow"><input class="inp mono" value="x-opencode-session"><input class="inp mono" value="mcode-session"><button class="btn ghost sm icon" title="删除">${ico("trash", 13)}</button></div>
+          <button class="btn ghost sm" style="align-self:flex-start">${ico("plus", 13)} 添加</button>
+          <span class="hint">会随每次请求发送,可用于网关要求的额外鉴权或会话头。</span></div>`, false)}
+      <div class="actions"><span class="badge a">${ico("check", 11)} 连接成功 · 812ms</span><span class="sp"></span>
+        <button class="btn danger sm">删除</button><button class="btn sm">取消</button><button class="btn primary sm">保存</button></div>`,
+
+    Codex: `
+      <div class="fgrid">
+        ${fld("Provider ID", `<input class="inp mono" value="deepseek" disabled>`, "创建后不可修改;仅限字母、数字、连字符和下划线。")}
+        ${fld("Provider 名称", `<input class="inp" value="DeepSeek">`)}
+      </div>
+      ${fld("Base URL", `<input class="inp mono" value="https://api.deepseek.com/v1">`, "端点必须支持 OpenAI Responses API;仅支持 chat-completions 的端点无法使用。")}
+      ${fld("API Key", secret("sk-••••••••••••••••"), "留空表示保持现有 Key 不变。")}
+      <div class="fcard"><div><div class="t-row">支持生图</div>
+        <div class="t-desc">为端点开启 imagegen 工具;需要网关支持 OpenAI images 接口。</div></div>
+        <button class="sw" role="switch" aria-checked="false"></button></div>
+      <div class="fld"><label>模型列表 <span class="badge n">1</span></label>
+        ${modelRow("deepseek-chat", "", `<label class="tagsw">1M <button class="sw sm" role="switch" aria-checked="true"></button></label>`)}
+        <button class="btn ghost sm" style="align-self:flex-start">${ico("plus", 13)} 添加模型</button></div>
+      <div class="actions"><span class="sp"></span><button class="btn danger sm">删除</button><button class="btn sm">取消</button><button class="btn primary sm">保存</button></div>`,
+
+    Pi: `
+      <div class="fgrid">
+        ${fld("Provider 名称", `<input class="inp" value="deepseek">`)}
+        ${fld("API 类型", `<div class="sel">openai-completions</div>`)}
+      </div>
+      ${fld("Base URL", `<input class="inp mono" value="https://api.deepseek.com/v1">`)}
+      ${fld("API Key", secret("sk-••••••••••••••••"))}
+      <label class="tagsw"><button class="sw" role="switch" aria-checked="true"></button> 自动添加 Authorization: Bearer 请求头</label>
+      <div class="fld"><label>模型列表 <span class="badge n">2</span></label>
+        <div class="mcard">
+          <div class="mrow"><input class="inp mono grow" value="deepseek-chat"><span class="space"></span>
+            <input class="inp num" value="8192" style="width:84px" title="最大输出 token">
+            <label class="tagsw">1M <button class="sw sm" role="switch" aria-checked="true"></button></label>
+            ${chev(true)}<button class="btn ghost sm icon" title="删除模型">${ico("trash", 13)}</button></div>
+          <div class="mexp">
+            <div class="fgrid">
+              <label class="tagsw"><button class="sw sm" role="switch" aria-checked="true"></button> 支持推理</label>
+              <label class="tagsw"><button class="sw sm" role="switch" aria-checked="false"></button> 支持图片输入</label>
+            </div>
+            <div class="fld"><label>显示名(可选)</label><input class="inp" placeholder="例如 DeepSeek Chat"></div>
+            <div class="fld"><span class="hint">思考级别映射 —— 把 Pi 的思考档位映射到该模型实际支持的参数。</span>
+              <div class="tmap">
+                ${["off", "minimal", "low", "medium"].map((k) => `<span class="tk">${k}</span><div class="sel sm">默认</div>`).join("")}
+              </div></div>
+          </div>
+        </div>
+        <div class="mcard">
+          <div class="mrow"><input class="inp mono grow" value="deepseek-reasoner"><span class="space"></span>
+            <input class="inp num" value="16384" style="width:84px" title="最大输出 token">
+            <label class="tagsw">1M <button class="sw sm" role="switch" aria-checked="false"></button></label>
+            ${chev(false)}<button class="btn ghost sm icon" title="删除模型">${ico("trash", 13)}</button></div>
+        </div>
+        <button class="btn ghost sm" style="align-self:flex-start">${ico("plus", 13)} 添加模型</button></div>
+      <div class="actions"><span class="sp"></span><button class="btn danger sm">删除</button><button class="btn sm">取消</button><button class="btn primary sm">保存</button></div>`,
+  };
+
+  return `<div class="split master">${master}<div class="card">${plan === "b" ? "" : ""}<div class="form">${forms[tab]}</div></div></div>`;
+});
+
+/* ── Skills 编辑器 ───────────────────────────────────────── */
+register("skillEditor", (sec, page, plan, st) => {
+  const list = page.entities[""];
+  const master = plan === "b" ? "" : `
+    <div class="mlist">
+      <div class="mh">Skills <span class="badge n">3</span></div>
+      <button class="mi" data-on="true"><span class="mt">commit-message <span class="badge a">项目</span></span><span class="ms">生成规范的提交信息</span></button>
+      <button class="mi"><span class="mt">pr-review <span class="badge a">项目</span></span><span class="ms">按清单审查改动</span></button>
+      <button class="mi"><span class="mt">explain-code <span class="badge n">全局</span></span><span class="ms">逐段解释代码意图</span></button>
+      <button class="mi add">${ico("plus", 13)} 新建 Skill</button>
+      <div class="mf" style="display:flex;gap:6px"><button class="btn sm" style="flex:1">${ico("plus", 13)} 新建</button>
+        <button class="btn sm" style="flex:1">${ico("download", 13)} 导入</button></div>
+    </div>`;
+
+  return `<div class="split master">${master}
+    <div class="card">
+      <div class="ch"><div class="ci">${ico("sparkles", 14)}</div>
+        <div class="ct"><div class="t-card">commit-message <span class="badge a">项目</span></div>
+          <div class="t-desc">生成规范的提交信息 · <span class="mono">.claude/skills/commit-message/SKILL.md</span></div></div>
+        <div class="cm"><button class="btn ghost sm">${ico("download", 13)} 导出</button></div>
+      </div>
+      <div class="form" style="gap:10px">
+        <div class="fld"><label>SKILL.md 原文</label>
+          <textarea class="ta mono" rows="${plan === "b" ? 14 : 12}">---
+name: commit-message
+description: 按 Conventional Commits 生成中文提交信息
+---
+
+# 提交信息生成
+
+当用户要求生成提交信息时:
+
+1. 先看 \`git diff --staged\`;若为空则看 \`git status --short\`。
+2. 用一句话概括改动**意图**(不是文件清单)。
+3. 输出格式: \`<type>(<scope>): <subject>\`,type 取值 feat/fix/refactor/docs/test/chore。
+4. subject 用中文,不超过 50 字,不以句号结尾。
+5. 有破坏性改动时补 \`BREAKING CHANGE:\` 段落。
+</textarea>
+        <span class="hint">保存后下一次发起会话时生效;项目级 Skill 会被提交到仓库,团队共享。</span></div>
+        <div class="actions"><button class="btn danger sm">删除</button><span class="sp"></span>
+          <button class="btn sm">取消</button><button class="btn primary sm">保存</button></div>
+      </div>
+    </div></div>`;
+});
+
+
+/* ── render.js ── */
+/* ============================================================================
+ * 组合层:导航 / 页面头 / 三种布局 / 页体
+ * 三个方案共享同一份页体内容与同一套原语,差异只有:导航形态、是否有本页索引、
+ * 分组卡片的呈现方式、以及内容宽度策略。
+ * ========================================================================= */
+
+
+
+
+const PAGE_ICON = Object.fromEntries(PAGES.map((p) => [p.id, p.icon]));
+
+function pageMatches(page, q) {
+  if (!q) return true;
+  const k = q.toLowerCase();
+  if (`${page.label} ${page.desc}`.toLowerCase().includes(k)) return true;
+  return (page.sections || []).some((s) => secHit(s, q));
+}
+
+/* ───────────────────────── 导航 ───────────────────────── */
+function renderNav(st) {
+  const rail = st.plan === "c" && !st.navPinned;
+  const items = NAV_GROUPS.map((g) => {
+    const vis = g.ids.filter((id) => pageMatches(PAGE_BY_ID[id], st.q));
+    if (!vis.length) return "";
+    return `<div class="grp" data-closed="${st.closed[g.label] ? "true" : "false"}" data-group="${esc(g.label)}">
+      <b><span class="cv">${ico("chevD", 12)}</span><span class="lb">${esc(g.label)}</span></b>
+      ${vis
+        .map((id) => {
+          const p = PAGE_BY_ID[id];
+          const chg = (p.sections || []).reduce((n, s) => n + (s.rows || []).filter((r) => r.chg).length, 0);
+          return `<button class="ni" data-page="${id}" ${id === st.pageId ? 'aria-current="page"' : ""} title="${esc(p.label)}">
+            <span class="ico">${ico(PAGE_ICON[id], rail ? 17 : 16)}</span>
+            <span class="lb">${hl(p.label, st.q)}</span>
+            ${chg ? `<span class="cnt" title="本页已修改 ${chg} 项">${chg}</span>` : ""}
+          </button>`;
+        })
+        .join("")}
+    </div>`;
+  }).join("");
+
+  return `<nav class="snav${rail ? " rail" : ""}" style="width:${rail ? 58 : st.plan === "b" ? 212 : 236}px">
+    ${rail ? "" : `<div class="nav-search"><div class="ns">${ico("search", 13)}<input class="inp" placeholder="搜索设置…" value="${esc(st.q || "")}" data-act="navq"></div></div>`}
+    <div class="nav-in">${items || `<div class="t-desc" style="padding:14px 10px">没有匹配的设置项。</div>`}</div>
+    <div class="nav-foot">
+      <span class="badge n">v0.9.4</span>
+      <span class="lg t-meta">简体中文</span>
+      <button class="btn ghost sm icon" style="margin-left:auto" title="${st.navPinned ? "收起导航" : "固定导航"}" data-act="pin">${ico(st.navPinned ? "chevR" : "list", 13)}</button>
+    </div>
+  </nav>`;
+}
+
+/* ───────────────────────── 页面头 ───────────────────────── */
+function renderPageHeader(page, st) {
+  const acts = [];
+  if (page.ranges) {
+    acts.push(`<div class="seg tinted">${page.ranges
+      .map((r, i) => `<button aria-selected="${i === 1}">${esc(r)}</button>`).join("")}</div>`);
+  }
+  if (page.tabs) {
+    acts.push(`<div class="seg">${page.tabs
+      .map((t, i) => `<button aria-selected="${(st.tab || page.tabs[0]) === t}" data-act="tab" data-tab="${esc(t)}">${esc(t)}
+        ${page.id === "plugins" ? `<span class="num">${i ? 292 : 4}</span>` : i === 0 ? `<span class="num">2</span>` : i === 1 ? `<span class="num">1</span>` : `<span class="num">3</span>`}</button>`)
+      .join("")}</div>`);
+  }
+  if (page.kind === "kbd" || page.kind === "gest") {
+    acts.push(`<div class="ts" style="width:200px">${ico("search", 13)}<input class="inp" placeholder="搜索命令…"></div>`);
+  }
+  if (page.headerAction === "resetAll") acts.push(`<button class="btn ghost sm">${ico("refresh", 13)} 恢复全部默认</button>`);
+  if (page.headerAction === "refreshProbe") acts.push(`<button class="btn sm">${ico("refresh", 13)} 重新探测</button>`);
+
+  const changed = (page.sections || []).reduce((n, s) => n + (s.rows || []).filter((r) => r.chg).length, 0);
+  if (changed) {
+    acts.unshift(`<span class="badge a">${ico("check", 11)} 本页已改 ${changed} 项</span>
+      <button class="btn ghost sm">恢复本页默认</button>`);
+  }
+
+  const showIcon = st.plan !== "c";
+  return `<header class="phead">
+    ${showIcon ? `<span class="ico-page">${ico(page.icon, 17)}</span>` : ""}
+    <div class="pt">
+      <div class="t-page">${esc(page.label)}</div>
+      <div class="t-desc">${hl(page.desc, st.q)}</div>
+    </div>
+    <div class="pacts">${acts.join("")}</div>
+  </header>`;
+}
+
+/* ───────────────────────── 方案 C 顶栏 ───────────────────────── */
+function renderCTop(page, st) {
+  return `<div class="ctop">
+    <span class="ico-page">${ico(page.icon, 17)}</span>
+    <div class="pt" style="display:flex;flex-direction:column;gap:2px;min-width:0">
+      <div class="t-page">${esc(page.label)}</div>
+      <div class="t-desc">${esc(page.desc)}</div>
+    </div>
+    <div class="bigsearch">${ico("search", 15)}
+      <input class="inp" placeholder="搜索设置项…(试试「归档」「超时」「token」)" value="${esc(st.q || "")}" data-act="topq">
+      <span class="kbd">⌘K</span>
+    </div>
+    <div class="pacts">${page.ranges ? `<div class="seg tinted">${page.ranges.map((r, i) => `<button aria-selected="${i === 1}">${esc(r)}</button>`).join("")}</div>` : ""}
+      ${page.tabs ? `<div class="seg">${page.tabs.map((t, i) => `<button aria-selected="${(st.tab || page.tabs[0]) === t}" data-act="tab" data-tab="${esc(t)}">${esc(t)} <span class="num">${page.id === "plugins" ? (i ? 292 : 4) : i === 0 ? 2 : i === 1 ? 1 : 3}</span></button>`).join("")}</div>` : ""}
+      ${page.headerAction === "resetAll" ? `<button class="btn ghost sm">${ico("refresh", 13)} 恢复全部默认</button>` : ""}
+    </div>
+  </div>`;
+}
+
+/* ───────────────────────── 方案 B 本页索引 ───────────────────────── */
+function renderIndex(page, st) {
+  if (page.kind === "split") {
+    const tab = st.tab || page.tabs?.[0] || "";
+    const list = page.entities[tab] || [];
+    return `<aside class="index">
+      <div class="ih">${esc(page.masterTitle || page.label)}</div>
+      <div class="il">
+        ${list.map((e, i) => `<button class="ii" data-on="${i === 0}"><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(e.t)}</span></button>`).join("")}
+        <button class="ii" style="color:rgb(var(--accent-strong))">${ico("plus", 13)} ${esc(page.entityAddLabel[tab])}</button>
+      </div>
+      <div class="if"><button class="btn sm" style="width:100%">${ico("plus", 13)} 新增</button></div>
+    </aside>`;
+  }
+  const secs = (page.sections || []).filter((s) => s.t);
+  const total = secs.reduce((n, s) => n + (s.rows || []).length, 0);
+  /* 页签页(插件)的索引列直接切页签,其余页面点击滚动定位 —— 索引项永远是活的 */
+  const isTabs = !!page.tabs && secs.length === page.tabs.length;
+  const active = isTabs ? Math.max(0, page.tabs.indexOf(st.tab || page.tabs[0])) : 0;
+  return `<aside class="index">
+    <div class="ih">${isTabs ? "视图" : "本页目录"}</div>
+    <div class="il">
+      ${secs
+        .map((s, i) => {
+          const chg = (s.rows || []).filter((r) => r.chg).length;
+          return `<button class="ii" data-on="${i === active}" ${isTabs ? `data-tab="${esc(page.tabs[i])}"` : `data-anchor="sec-${i}"`}>
+            <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(isTabs ? page.tabs[i] : s.t)}</span>
+            ${chg ? `<span class="im" style="color:rgb(var(--accent-strong))">${chg}</span>` : s.rows ? `<span class="im">${s.rows.length}</span>` : ""}
+          </button>`;
+        })
+        .join("")}
+    </div>
+    <div class="if"><span class="t-meta">${secs.length} 个${isTabs ? "视图" : "分组"}${total ? ` · ${total} 项设置` : ""}</span></div>
+  </aside>`;
+}
+
+/* ───────────────────────── 页体 ───────────────────────── */
+function renderBody(page, st) {
+  if (page.render && page.kind !== "split") return `<div class="wrap">${BLOCKS[page.render]({ t: page.label, d: page.desc }, page, st.plan, st)}</div>`;
+
+  if (page.kind === "split") {
+    const html = BLOCKS[page.render]({ t: page.label, d: page.desc }, page, st.plan, st);
+    return st.plan === "c" ? `<div class="wrap"><div class="splitwrap">${html}</div></div>` : `<div class="wrap wide">${html}</div>`;
+  }
+
+  const secs = page.sections || [];
+  const activeTab = page.tabs ? Math.max(0, page.tabs.indexOf(st.tab || page.tabs[0])) : -1;
+  /* 页签内容两个都渲染、非活动的用 hidden 保活 —— 与产品一致:切回来时
+     搜索词、过滤、展开中的行都还在,不会因为切了一次页签就重置。 */
+  const inner = secs
+    .map((s, i) => {
+      const html = renderSection(s, page, st.plan, st, i);
+      if (activeTab < 0 || secs.length !== page.tabs.length) return html;
+      return `<div data-pane="${i}"${i === activeTab ? "" : " hidden"}>${html}</div>`;
+    })
+    .join("");
+  const note = page.note ? `<div class="snote">${ico("info", 13)}<span class="t-desc">${esc(page.note)}</span></div>` : "";
+  const hit = st.q ? secs.filter((s) => secHit(s, st.q)).length : 0;
+  const hint = st.q ? `<div class="t-meta" style="margin-bottom:2px">${hit} 个分组匹配「${esc(st.q)}」</div>` : "";
+  return `<div class="wrap">${hint}${inner}${note}</div>`;
+}
+
+/* ───────────────────────── 整窗 ───────────────────────── */
+function renderApp(st) {
+  const page = PAGE_BY_ID[st.pageId];
+  return `<div class="win">
+    <div class="tbar">
+      <span class="tl"></span><span class="tl"></span><span class="tl"></span>
+      <span class="tt">Mcode — 设置</span>
+      <span class="tr"><span>${st.plan === "a" ? "方案 A · 精修卡片流" : st.plan === "b" ? "方案 B · 双栏工作台" : "方案 C · 自适应网格"}</span></span>
+    </div>
+    <div class="shell">
+      ${renderNav(st)}
+      ${st.plan === "b" ? renderIndex(page, st) : ""}
+      <div class="main"><div class="col">
+        ${st.plan === "c" ? renderCTop(page, st) : renderPageHeader(page, st)}
+        <div class="pbody">${renderBody(page, st)}</div>
+      </div></div>
+    </div>
+  </div>`;
+}
+
+
+/* ── app.js ── */
+/* ============================================================================
+ * 交互层:方案 / 页面 / 主题 / 密度 / 搜索的切换,以及稿纸级的设计说明。
+ * 纯前端状态,不涉及产品代码。
+ * ========================================================================= */
+
+
+const st = {
+  plan: "a",
+  pageId: "general",
+  theme: "light",
+  density: "comfortable",
+  q: "",
+  tab: undefined,
+  closed: {},
+  navPinned: false,
+};
+
+/* ── 设计说明(随方案切换) ─────────────────────────────── */
+const NOTES = {
+  a: {
+    t: "方案 A · 精修卡片流",
+    lead: "信息架构与现在一致,把每一处细节做对:卡片自带头部、行模板统一、变更可追溯。改动最小、风险最低。",
+    items: [
+      ["分组从「卡外标题 + 卡片」并为「卡片自带头部」", "层级从三层(页面标题 / 分组 / 设置行)降到两层,同样的信息少占约 30px 垂直空间,滚动手感更连贯。"],
+      ["一个滚动容器 + 一个固定页头", "页头不再依赖 sticky 与负边距的技巧占位(现实现需要在注释里解释为什么滚动容器不能有 padding-top),分组头也不再需要卡外小标题。"],
+      ["行模板统一:标签列 + 控件列", "同一张卡内所有控件共用一条视线;长描述不再把控件挤到第二行;控件宽度按控件的语义给(下拉 240px、开关贴右、路径占满)。"],
+      ["开关不再重复写状态词", "「自动归档不活跃会话  [已开启] (开)」—— 开关本身就是状态。状态词只留给描述里真正需要说明的项。"],
+      ["改动可追溯", "与默认值不同的行标一个点,hover 出现「恢复默认」;页头显示「本页已改 n 项」并提供「恢复本页默认」。现在用户没有任何办法知道哪些项被改过。"],
+      ["系统化落地", "行高、间距、圆角、字号全部来自一套尺度,新增页面不必再发明样式(这正是当前 Skills / 插件 / 模型配置写法各异的根因)。"],
+    ],
+    cost: "代价:密度基本不变;17 项导航仍然要靠记忆找;宽窗口下 820px 阅读宽度之外仍是空白。",
+  },
+  b: {
+    t: "方案 B · 双栏工作台",
+    lead: "把「页面」升级成「工作台」:导航 + 本页索引 + 正文。适合设置项会继续变多的项目,是三个方案里信息密度最高的。",
+    items: [
+      ["本页索引列(216px)", "列出这一页有哪些分组、各改了几项、各有多少条设置,点击跳转。长页面(模型配置、MCP、Git)不用再靠上下滚动找定位。"],
+      ["主从页面的列表搬进索引列", "模型配置与 Skills 现在是「210px 列表 + 详情」两栏,1440 窗口下表单只剩 600 多 px。索引列本来就有空余,合并后详情表单拿回全部宽度。"],
+      ["分组头改成 sticky 行,不再画卡片", "只保留发丝线分隔,同样内容高度减少约 25%,观感更接近 IDE/工具而不是网页表单。"],
+      ["页头带面包屑与页级动作", "「设置 / 模型配置」+ 本页动作(恢复本页默认、区间预设、页签),页级操作有固定归属。"],
+      ["窄窗口自适应", "窗口窄于 1200px 时导航降级为图标轨、索引列收起为下拉,不牺牲正文宽度。"],
+    ],
+    cost: "代价:两条侧栏合计约 430px;只有一两个分组的页面(如通知)索引列信息量偏低。",
+  },
+  c: {
+    t: "方案 C · 自适应网格 + 全局搜索",
+    lead: "用宽度换滚动:导航收成图标轨,正文变成自适应卡片网格,顶部常驻设置搜索。三个方案里「找到某个设置」最快的一个。",
+    items: [
+      ["58px 图标轨导航", "水平空间还给内容,可随时固定展开。悬停显示名称,分组靠分隔与提示保留。"],
+      ["自适应卡片网格", "短分组(字号、缓存、登录状态)在宽窗口并排 2–3 列;长内容(热力图、插件列表、provider 表单、SKILL 编辑器)整行跨列。一屏信息量约翻倍,17 页的总滚动长度明显下降。"],
+      ["顶部常驻设置搜索", "输入即过滤:不命中的分组与行直接收起,导航同步过滤,⌘K 聚焦。这是「17 项导航靠记忆」的正解 —— 用户不需要知道「语音识别模型目录」在哪一页。"],
+      ["卡片头部带图标与底色", "分组与页面的从属关系更清楚;卡片之间的边界比发丝线更明确,网格排布下不会粘成一片。"],
+      ["窄窗口降级", "列数随窗口自适应,1280 以下自动回到单列,等于方案 A 的形态(可以直接拖窄窗口验证)。"],
+    ],
+    cost: "代价:改动摇杆最大;搜索要见效需要给每条设置补「关键词」字段(i18n 词条现在只有标题与描述);极宽窗口下需要避免卡片被拉得过宽。",
+  },
+};
+
+const SHARED = {
+  t: "三个方案共有的系统层改动",
+  lead: "以下这些与布局无关,三个方案都会做 —— 它们是当前设置面板最不一致的地方。",
+  items: [
+    ["一套原语替掉按页手写的实现", "开关、下拉、路径选择、色板、步进、折叠、徽标、空态、确认弹窗各只有一种写法。现在空态至少三种(虚线框 / 纯文字 / admonition)、折叠三种(高级选项 / LSP 语言行 / 运行时行)、徽标三套(chips / KindBadge / StatusBadge)。"],
+    ["破坏性操作统一确认", "runtime 卸载与 LSP 卸载不再用原生 window.confirm(样式不受控、无法说明影响),改走与插件/技能一致的确认弹窗。「卸载 Agent 运行时会让该 Agent 不可用」这类后果要在弹窗里写清楚。"],
+    ["保存语义显式区分", "开关 / 下拉 / 色板即改即生效,行内给一次淡淡的「已保存」;只有多字段表单(provider、Skill)才用底部动作条。现在同一个面板里两种模式混用,用户要猜。"],
+    ["列表页统一提供过滤", "快捷键、手势、插件、MCP 列表都在页头同一位置放过滤框;插件页的搜索同时匹配组件名(搜 postgres 能命中 MCP server)。"],
+    ["状态色只有五档", "中性 / 强调 / 警告 / 危险 / 信息,各有实心与描边两态,尺寸统一 18px。斜体、彩色圆点、大写英文不再混用。"],
+    ["键盘可达", "行可聚焦、开关空格切换、折叠 Enter 展开、Esc 退出设置;搜索框与页签遵循标准的 Tab 顺序。"],
+  ],
+  cost: "",
+};
+
+const RECOMMEND = {
+  t: "落地建议(我的推荐)",
+  lead: "不建议三选一后一步到位。系统层与布局可以分两步走,风险与收益都更可控:",
+  items: [
+    ["第一步(1–2 天,低风险)", "落「系统层」:原语组件(SettingRow / SettingsSection / Badge / EmptyState / Disclosure / ConfirmDialog / PathField / ListEditor)、变更标记与恢复默认、页头结构。三个方案都会用到,且不改变现有信息架构 —— 做完这一步,A 方案就完成了 80%。"],
+    ["第二步(按页面推进)", "把导航 + 本页索引按 B 实现(B 对长页面收益最大,且模型配置/Skills 的重复列表能顺势删掉一层),再按 C 给短分组铺自适应网格与全局搜索。两者不冲突:B 的索引列 + C 的网格可以共存。"],
+    ["先不做的", "暂不改信息架构本身(17 个页面的分组是合理的),也不改导航分组的措辞;等接了设置搜索再观察哪些页面几乎没人进,再考虑合并。"],
+  ],
+  cost: "",
+};
+
+/* ── 渲染 ───────────────────────────────────────────────── */
+const stage = document.getElementById("stage");
+const notesEl = document.getElementById("notes");
+
+/** 深链:#方案/页面(如 #b/plugins),方便直接分享或截图某一页。 */
+function readHash() {
+  const m = /^#([abc])\/([a-z-]+)(?:\/(dark|light))?$/.exec(location.hash || "");
+  if (!m) return;
+  if (NOTES[m[1]]) st.plan = m[1];
+  if (PAGE_BY_ID[m[2]]) { st.pageId = m[2]; st.tab = undefined; }
+  if (m[3]) st.theme = m[3];
+}
+
+function writeHash() {
+  const h = `#${st.plan}/${st.pageId}${st.theme === "dark" ? "/dark" : ""}`;
+  if (location.hash !== h) history.replaceState(null, "", h);
+}
+
+function draw() {
+  document.documentElement.dataset.plan = st.plan;
+  document.documentElement.dataset.theme = st.theme;
+  document.documentElement.dataset.density = st.density;
+  stage.innerHTML = renderApp(st);
+  syncTools();
+  writeHash();
+}
+
+function syncTools() {
+  document.querySelectorAll('[data-tool="plan"] button').forEach((b) => b.setAttribute("aria-selected", b.dataset.plan === st.plan));
+  document.querySelectorAll('[data-tool="theme"] button').forEach((b) => b.setAttribute("aria-selected", b.dataset.theme === st.theme));
+  document.querySelectorAll('[data-tool="density"] button').forEach((b) => b.setAttribute("aria-selected", b.dataset.density === st.density));
+  const sel = document.querySelector('[data-tool="page"]');
+  if (sel.value !== st.pageId) sel.value = st.pageId;
+  document.querySelector('[data-act="navPinned"]').textContent = st.navPinned ? "收起导航" : "固定导航";
+}
+
+function drawNotes() {
+  const plan = NOTES[st.plan];
+  const cards = [plan, SHARED, RECOMMEND];
+  notesEl.innerHTML = `<div class="nb">${cards
+    .map(
+      (c, i) => `<div class="ncard"${i === 0 ? ' style="flex:1 1 460px;border-color:rgb(var(--accent)/.45)"' : ""}>
+        <b>${c.t}</b>
+        <p style="margin:0 0 8px">${c.lead}</p>
+        <ul class="nl">${c.items.map(([t, d]) => `<li><b>${t}</b><span>${d}</span></li>`).join("")}</ul>
+        ${c.cost ? `<p style="margin:8px 0 0;color:rgb(var(--content-subtle))">${c.cost}</p>` : ""}
+      </div>`,
+    )
+    .join("")}</div>`;
+}
+
+/* ── 页面下拉 ───────────────────────────────────────────── */
+function fillPageSelect() {
+  const sel = document.querySelector('[data-tool="page"]');
+  sel.innerHTML = NAV_GROUPS.map(
+    (g) => `<optgroup label="${g.label}">${g.ids
+      .map((id) => `<option value="${id}">${PAGE_BY_ID[id].label}</option>`).join("")}</optgroup>`,
+  ).join("");
+  sel.value = st.pageId;
+}
+
+/* ── 事件 ───────────────────────────────────────────────── */
+document.addEventListener("click", (e) => {
+  const t = e.target;
+
+  const planBtn = t.closest('[data-tool="plan"] button');
+  if (planBtn) { st.plan = planBtn.dataset.plan; st.q = ""; draw(); drawNotes(); return; }
+
+  const thBtn = t.closest('[data-tool="theme"] button');
+  if (thBtn) { st.theme = thBtn.dataset.theme; draw(); return; }
+
+  const dBtn = t.closest('[data-tool="density"] button');
+  if (dBtn) { st.density = dBtn.dataset.density; draw(); return; }
+
+  if (t.closest('[data-act="navPinned"]')) { st.navPinned = !st.navPinned; draw(); return; }
+
+  /* —— 窗内 —— */
+  const ni = t.closest("[data-page]");
+  if (ni) { st.pageId = ni.dataset.page; st.q = ""; st.tab = undefined; draw(); return; }
+
+  const gb = t.closest(".grp > b");
+  if (gb) { const g = gb.parentElement.dataset.group; st.closed[g] = !st.closed[g]; draw(); return; }
+
+  const tab = t.closest("[data-tab]");
+  if (tab) { st.tab = tab.dataset.tab; draw(); return; }
+
+  const anchor = t.closest("[data-anchor]");
+  if (anchor) {
+    const el = document.getElementById(anchor.dataset.anchor);
+    if (el) el.scrollIntoView({ block: "start" });
+    document.querySelectorAll(".index .ii").forEach((x) => { if (x.dataset.on !== undefined) x.dataset.on = "false"; });
+    anchor.dataset.on = "true";
+    return;
+  }
+
+  const sw = t.closest(".sw");
+  if (sw) {
+    sw.setAttribute("aria-checked", sw.getAttribute("aria-checked") === "true" ? "false" : "true");
+    return;
+  }
+
+  const dh = t.closest(".disc-h");
+  if (dh) { const d = dh.parentElement; d.dataset.open = d.dataset.open === "true" ? "false" : "true"; return; }
+
+  const exp = t.closest("[data-act='expand']");
+  if (exp) { const g = exp.closest(".ligroup"); if (g) g.dataset.open = g.dataset.open === "true" ? "false" : "true"; return; }
+
+  const mi = t.closest(".mi, .index .ii");
+  if (mi) {
+    const box = mi.closest(".mlist, .index");
+    if (box) box.querySelectorAll(".mi,.ii").forEach((x) => { if (x.dataset.on) x.dataset.on = "false"; });
+    mi.dataset.on = "true";
+  }
+});
+
+document.addEventListener("input", (e) => {
+  const f = e.target;
+  const act = f.dataset && f.dataset.act;
+  if (act === "navq" || act === "topq") {
+    st.q = f.value.trim();
+    const caret = f.selectionStart;
+    draw();
+    const next = stage.querySelector(`[data-act="${act}"]`);
+    if (next) { next.focus(); try { next.setSelectionRange(caret, caret); } catch { /* noop */ } }
+  }
+});
+
+document.addEventListener("change", (e) => {
+  if (e.target.dataset && e.target.dataset.tool === "page") { st.pageId = e.target.value; st.q = ""; st.tab = undefined; draw(); }
+});
+
+document.addEventListener("keydown", (e) => {
+  if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA") return;
+  if (e.key === "1" || e.key === "2" || e.key === "3") {
+    st.plan = { 1: "a", 2: "b", 3: "c" }[e.key]; st.q = ""; draw(); drawNotes();
+  }
+  const ids = PAGES.map((p) => p.id);
+  const i = ids.indexOf(st.pageId);
+  if (e.key === "[") { st.pageId = ids[(i - 1 + ids.length) % ids.length]; st.q = ""; draw(); }
+  if (e.key === "]") { st.pageId = ids[(i + 1) % ids.length]; st.q = ""; draw(); }
+});
+
+readHash();
+fillPageSelect();
+draw();
+drawNotes();
+window.addEventListener("hashchange", () => { readHash(); draw(); drawNotes(); });
+
+</script>
+</body>
+</html>

@@ -1,0 +1,791 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Mcode 中栏 Tab 条重设计 · 会话 vs 文件</title>
+<style>
+/* ══════════════════════════════════════════════════════════════
+   中栏 Tab 条重设计 —— 解决「会话标签 / 文件标签混排、容易搞混」
+   覆盖:tabs 显示模式下 UnifiedTabsBar 的单条混排
+   四个方案: A 分层条 / B 双方言 / C 头像轨道 / D 上下文条
+   ══════════════════════════════════════════════════════════════ */
+:root{
+  --surface:#1a1d24;--surface-muted:#2c313c;--surface-hover:#3a404e;
+  --content:#e7e8ec;--content-muted:#bcbfc6;--content-subtle:#9ea2ab;
+  --edge:#2d3340;--accent:#10b981;--danger:#f87171;
+  --sky:#38bdf8;--amber:#fbbf24;--indigo:#818cf8;--violet:#a78bfa;
+  --page-bg:#111318;--ghost:#14171d;--chat-bg:#15181f;
+  --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+}
+body.light{
+  --surface:#fff;--surface-muted:#f4f4f5;--surface-hover:#e4e4e7;
+  --content:#09090b;--content-muted:#3f3f46;--content-subtle:#71717a;
+  --edge:#e4e4e7;--accent:#059669;--danger:#dc2626;
+  --sky:#0284c7;--amber:#b45309;--indigo:#4f46e5;--violet:#7c3aed;
+  --page-bg:#eceef1;--ghost:#f6f7f9;--chat-bg:#f8f9fb;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{
+  font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Segoe UI","Microsoft YaHei",sans-serif;
+  background:var(--page-bg);color:var(--content);display:flex;flex-direction:column;overflow:hidden;
+  transition:background .25s;font-size:13px;
+}
+.ic{width:14px;height:14px;flex:none;stroke:currentColor;fill:none;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+.ic.s{width:12px;height:12px}.ic.xs{width:10px;height:10px}
+.mono{font-family:var(--mono)}
+
+/* ── 页头 ── */
+.page-head{flex:none;display:flex;align-items:flex-end;gap:16px;padding:16px 26px 12px;border-bottom:1px solid var(--edge)}
+.page-head h1{font-size:16px;font-weight:650;letter-spacing:-.2px}
+.page-head .sub{font-size:12px;color:var(--content-subtle);margin-top:3px;line-height:1.6;max-width:920px}
+#themeBtn{margin-left:auto;flex:none;border:1px solid var(--edge);background:var(--surface);color:var(--content-subtle);
+  width:32px;height:32px;border-radius:9px;cursor:pointer;font-size:14px}
+#themeBtn:hover{color:var(--content);background:var(--surface-hover)}
+
+.gallery{flex:1;min-height:0;overflow-y:auto;padding:20px 26px 40px;display:flex;flex-direction:column;gap:26px;align-items:center}
+.gallery::-webkit-scrollbar{width:10px}
+.gallery::-webkit-scrollbar-thumb{background:var(--surface-hover);border-radius:5px;border:3px solid var(--page-bg)}
+
+/* ── 方案容器 ── */
+.scheme{width:100%;max-width:1700px;display:flex;gap:22px;align-items:flex-start;flex-wrap:wrap}
+.scheme .frame-col{flex:none;display:flex;flex-direction:column;gap:10px;min-width:0}
+.scheme .notes{flex:1;min-width:290px;display:flex;flex-direction:column;gap:11px}
+.scheme-head{display:flex;align-items:center;gap:9px;margin-bottom:2px}
+.scheme-head .tag{
+  flex:none;font-size:10px;font-weight:750;letter-spacing:.5px;padding:2px 8px;border-radius:6px;
+  background:color-mix(in srgb,var(--accent) 16%,transparent);color:var(--accent);
+  border:1px solid color-mix(in srgb,var(--accent) 32%,transparent);
+}
+.scheme-head .tag.warn{background:color-mix(in srgb,var(--danger) 14%,transparent);color:var(--danger);border-color:color-mix(in srgb,var(--danger) 30%,transparent)}
+.scheme-head .tag.pick{background:color-mix(in srgb,var(--sky) 16%,transparent);color:var(--sky);border-color:color-mix(in srgb,var(--sky) 34%,transparent)}
+.scheme-head h2{font-size:14px;font-weight:680}
+.scheme-head .hint{font-size:11.5px;color:var(--content-subtle);margin-left:auto}
+
+/* ── 应用外壳 ── */
+.app-frame{display:flex;width:1240px;max-width:100%;height:374px;border-radius:13px;overflow:hidden;
+  border:1px solid var(--edge);background:var(--surface);box-shadow:0 16px 44px rgba(0,0,0,.32)}
+body.light .app-frame{box-shadow:0 14px 36px rgba(0,0,0,.12)}
+
+.lb{width:190px;flex:none;background:var(--surface);display:flex;flex-direction:column;border-right:1px solid var(--edge)}
+.lb .traffic{height:32px;display:flex;align-items:center;gap:6px;padding:0 13px;flex:none}
+.lb .traffic i{width:11px;height:11px;border-radius:50%}
+.lb .traffic i:nth-child(1){background:#ff5f57}.lb .traffic i:nth-child(2){background:#febc2e}.lb .traffic i:nth-child(3){background:#28c840}
+.lb .qrow{display:flex;align-items:center;gap:8px;padding:5px 10px;margin:0 6px;border-radius:8px;font-size:11.5px;color:var(--content-muted)}
+.lb .qrow:hover{background:var(--surface-muted)}
+.lb .qrow kbd{margin-left:auto;font:inherit;font-size:9.5px;padding:1px 5px;border-radius:4px;border:1px solid var(--edge);background:var(--surface-muted);color:var(--content-subtle)}
+.lb .sep-l{height:1px;background:var(--edge);margin:7px 12px;flex:none}
+.lb .lbl{font-size:9.5px;font-weight:750;letter-spacing:.7px;color:var(--content-subtle);padding:2px 12px 4px}
+.lb .sc{display:flex;align-items:center;gap:7px;padding:6px 9px;margin:0 6px;border-radius:8px;font-size:11.5px;color:var(--content-muted);cursor:default}
+.lb .sc:hover{background:var(--surface-muted)}
+.lb .sc.on{background:var(--surface-hover);color:var(--content)}
+.lb .av{width:16px;height:16px;border-radius:5px;flex:none;display:flex;align-items:center;justify-content:center;
+  font-size:8px;font-weight:800;color:#fff;letter-spacing:-.2px}
+.lb .sc .t{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.lb .sc .st{flex:none;width:6px;height:6px;border-radius:50%;background:var(--content-subtle)}
+.lb .sc .st.run{background:var(--sky)}
+.lb .sc .st.rd{background:var(--accent)}
+
+.center{flex:1;min-width:0;display:flex;flex-direction:column;background:var(--page-bg)}
+.rp{width:150px;flex:none;background:var(--surface);border-left:1px solid var(--edge);padding:9px 0;font-size:11px;color:var(--content-subtle)}
+.rp .lbl{font-size:9.5px;font-weight:750;letter-spacing:.7px;padding:0 12px 5px}
+.rp .f{display:flex;align-items:center;gap:6px;padding:3.5px 12px;color:var(--content-muted);overflow:hidden;white-space:nowrap}
+.rp .f.on{background:var(--surface-hover);color:var(--content)}
+.rp .f span{overflow:hidden;text-overflow:ellipsis}
+
+/* ── Tab 条 ── */
+.bar{flex:none;display:flex;align-items:center;gap:5px;padding:6px 8px;border-bottom:1px solid var(--edge);
+  background:color-mix(in srgb,var(--surface) 45%,transparent);overflow:hidden}
+.bar.editor-chrome{background:color-mix(in srgb,var(--surface) 78%,transparent);padding:5px 8px}
+.bar.spacer{height:11px;padding:0;background:transparent}
+.chev{flex:none;width:19px;height:19px;border-radius:5px;border:0;background:transparent;color:var(--content-subtle);
+  display:flex;align-items:center;justify-content:center;cursor:pointer}
+.chev:hover{background:var(--surface-muted);color:var(--content)}
+.vsep{width:1px;height:16px;flex:none;background:color-mix(in srgb,var(--content-subtle) 42%,transparent);margin:0 5px}
+.vsep.wide{margin:0 15px;height:20px}
+.gap{flex:none;width:22px}
+
+/* 通用 chip(现状:两种标签共用同一形态) */
+.tab{display:flex;align-items:center;gap:6px;flex:none;max-width:196px;padding:4px 9px;border-radius:6px;
+  font-size:11px;line-height:1.35;white-space:nowrap;cursor:pointer;user-select:none;
+  color:var(--content-muted);background:color-mix(in srgb,var(--surface-muted) 62%,transparent);
+  border:1px solid transparent;transition:background .12s,color .12s}
+.tab:hover{background:color-mix(in srgb,var(--surface-hover) 72%,transparent);color:var(--content)}
+.tab.on{background:color-mix(in srgb,var(--accent) 15%,transparent);color:var(--content);
+  border-color:color-mix(in srgb,var(--accent) 40%,transparent)}
+body.light .tab.on{color:var(--accent)}
+.tab .nm{min-width:0;overflow:hidden;text-overflow:ellipsis}
+.tab.file .nm{font-family:var(--mono);font-size:10.5px}
+.tab .x{flex:none;display:flex;align-items:center;justify-content:center;width:13px;height:13px;border-radius:3px;
+  color:var(--content-subtle);opacity:0;transition:opacity .12s}
+.tab:hover .x,.tab.on .x{opacity:1}
+.tab .x:hover{background:var(--surface-hover);color:var(--content)}
+.dot{width:6px;height:6px;border-radius:50%;flex:none;background:var(--content-subtle)}
+.dot.run{background:var(--sky);animation:pulse 1.4s ease-in-out infinite}
+.dot.dirty{background:var(--accent);animation:pulse 1.4s ease-in-out infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+.badge{flex:none;min-width:14px;height:14px;padding:0 3px;border-radius:999px;background:var(--accent);color:#fff;
+  font-size:9px;font-weight:700;line-height:14px;text-align:center}
+
+/* 会话头像(方案 B/C 的区分主元素) */
+.av{width:16px;height:16px;border-radius:5px;flex:none;display:flex;align-items:center;justify-content:center;
+  font-size:8px;font-weight:800;color:#fff;letter-spacing:-.2px}
+.av.lg{width:20px;height:20px;border-radius:6px;font-size:9px}
+
+/* 会话药丸(方案 B:rounded-full,和文件的方片分家) */
+.pill{border-radius:999px;padding:4px 10px}
+.pill.here{background:color-mix(in srgb,var(--accent) 9%,transparent);border-color:color-mix(in srgb,var(--accent) 26%,transparent);color:var(--content)}
+.pill.here .nm{font-weight:600}
+
+/* 文件组容器(方案 B:给文件一个可见的「编辑区」底板) */
+.group{display:flex;align-items:center;gap:4px;flex:none;padding:2px;border-radius:9px;
+  background:color-mix(in srgb,var(--surface-muted) 30%,transparent);
+  border:1px solid color-mix(in srgb,var(--edge) 80%,transparent)}
+
+/* 分组标题 */
+.cap{display:flex;align-items:center;gap:5px;flex:none;padding:0 3px;font-size:9.5px;font-weight:750;
+  letter-spacing:.6px;color:var(--content-subtle);white-space:nowrap}
+.cap .n{font-weight:700;font-size:9.5px;line-height:13px;padding:0 5px;border-radius:999px;
+  background:color-mix(in srgb,var(--surface-muted) 85%,transparent);color:var(--content-subtle)}
+.cap .proj{color:var(--content-muted);font-weight:650;letter-spacing:0}
+
+/* 方案 C:头像轨道 */
+.rail{display:flex;align-items:center;gap:4px;flex:none}
+.avbtn{width:26px;height:26px;border-radius:8px;flex:none;display:flex;align-items:center;justify-content:center;
+  font-size:9.5px;font-weight:800;color:#fff;cursor:pointer;border:1px solid transparent;opacity:.82;
+  transition:opacity .12s,transform .12s}
+.avbtn:hover{opacity:1;transform:translateY(-1px)}
+.avbtn.here{opacity:1;border-color:color-mix(in srgb,var(--accent) 55%,transparent)}
+.avbtn.here::after{content:"";position:absolute}
+.avspin{position:relative}
+.avspin .sp{position:absolute;right:-2px;bottom:-2px;width:8px;height:8px;border-radius:50%;
+  background:var(--sky);border:1.5px solid var(--surface)}
+.expand{display:flex;align-items:center;gap:6px;flex:none;max-width:210px;padding:4px 10px;border-radius:999px;
+  font-size:11px;white-space:nowrap;cursor:pointer;user-select:none;
+  background:color-mix(in srgb,var(--accent) 12%,transparent);color:var(--content);
+  border:1px solid color-mix(in srgb,var(--accent) 34%,transparent)}
+.expand .nm{min-width:0;overflow:hidden;text-overflow:ellipsis;font-weight:600}
+.expand.quiet{background:color-mix(in srgb,var(--surface-muted) 70%,transparent);border-color:color-mix(in srgb,var(--accent) 26%,transparent);color:var(--content-muted)}
+
+/* 锚点 chip(方案 D 的「回到」入口) */
+.anchor{display:flex;align-items:center;gap:6px;flex:none;max-width:250px;padding:4px 10px;border-radius:7px;
+  font-size:11px;white-space:nowrap;cursor:pointer;color:var(--content-muted);
+  background:color-mix(in srgb,var(--surface-muted) 45%,transparent);
+  border:1px dashed color-mix(in srgb,var(--content-subtle) 45%,transparent)}
+.anchor:hover{color:var(--content);border-color:color-mix(in srgb,var(--accent) 50%,transparent)}
+.anchor .nm{min-width:0;overflow:hidden;text-overflow:ellipsis}
+
+/* ── 内容骨架 ── */
+.pane{flex:1;min-height:0;overflow:hidden;padding:14px 16px;display:flex;flex-direction:column;gap:9px;background:var(--chat-bg)}
+.bubble{align-self:flex-end;max-width:76%;padding:7px 11px;border-radius:10px;font-size:11.5px;line-height:1.6;
+  background:color-mix(in srgb,var(--accent) 12%,transparent);
+  border:1px solid color-mix(in srgb,var(--accent) 22%,transparent);color:var(--content)}
+.msg{font-size:11.5px;line-height:1.7;color:var(--content-muted)}
+.toolcard{display:flex;align-items:center;gap:7px;padding:7px 10px;border-radius:8px;font-size:11px;
+  background:color-mix(in srgb,var(--surface) 72%,transparent);border:1px solid var(--edge);color:var(--content-muted)}
+.code{font-family:var(--mono);font-size:11px;line-height:1.85;white-space:pre;overflow:hidden;
+  color:var(--content-muted);background:var(--ghost);border:1px solid var(--edge);border-radius:9px;padding:11px 13px}
+.code .k{color:var(--violet)}.code .s{color:var(--accent)}.code .c{color:var(--content-subtle)}
+.crumb{display:flex;align-items:center;gap:5px;font-size:10.5px;color:var(--content-subtle);font-family:var(--mono)}
+
+/* ── 单条 bar 预览(只有 tab 条,不带外壳) ── */
+.mini{width:1240px;max-width:100%;display:flex;flex-direction:column;gap:5px}
+.mini .mlab{font-size:10.5px;color:var(--content-subtle);display:flex;align-items:center;gap:6px}
+.mini .mlab b{color:var(--content-muted);font-weight:650}
+.baronly{border:1px solid var(--edge);border-radius:10px;background:var(--surface);padding:6px 8px;
+  display:flex;align-items:center;gap:5px;overflow:hidden}
+
+/* ── 标注 ── */
+.anno{position:relative}
+.anno::after{content:attr(data-anno);position:absolute;left:50%;transform:translateX(-50%);bottom:calc(100% + 5px);
+  white-space:nowrap;font-size:9.5px;font-weight:650;padding:2px 7px;border-radius:5px;background:var(--danger);color:#fff;z-index:5}
+.mark{outline:1.5px dashed var(--danger);outline-offset:2px}
+.anno.btm::after{bottom:auto;top:calc(100% + 5px)}
+.anno.ok::after{background:var(--accent)}
+
+/* 图下说明 */
+.framecap{width:1240px;max-width:100%;display:flex;gap:8px;font-size:11.5px;line-height:1.6;color:var(--content-subtle)}
+.framecap b{color:var(--danger);font-weight:650}
+.framecap .sw{flex:none;width:10px;height:10px;margin-top:4px;border-radius:3px;background:var(--danger);
+  outline:1.5px dashed var(--danger);outline-offset:2px}
+
+/* ── 说明卡 ── */
+.card{background:var(--surface);border:1px solid var(--edge);border-radius:13px;padding:13px 15px;font-size:12.5px;line-height:1.65}
+.card h3{font-size:12.5px;font-weight:700;margin-bottom:7px;display:flex;align-items:center;gap:6px}
+.card ul{padding-left:15px;color:var(--content-muted)}
+.card li{margin:5px 0}
+.card li b{color:var(--content);font-weight:650}
+.card p{color:var(--content-muted)}
+.card .src{margin-top:9px;padding-top:8px;border-top:1px dashed var(--edge);font-size:11px;color:var(--content-subtle)}
+.pillbox{display:inline-flex;align-items:center;gap:4px;font-size:10.5px;font-weight:700;padding:1px 7px;border-radius:999px}
+.pillbox.g{background:color-mix(in srgb,var(--accent) 16%,transparent);color:var(--accent)}
+.pillbox.r{background:color-mix(in srgb,var(--danger) 15%,transparent);color:var(--danger)}
+.pillbox.b{background:color-mix(in srgb,var(--sky) 16%,transparent);color:var(--sky)}
+
+/* ── 对照表 ── */
+.tbl{width:100%;border-collapse:collapse;font-size:12px}
+.tbl th,.tbl td{padding:8px 10px;text-align:left;border-bottom:1px solid var(--edge);vertical-align:top}
+.tbl th{font-size:10.5px;font-weight:750;letter-spacing:.5px;color:var(--content-subtle);text-transform:uppercase}
+.tbl td{color:var(--content-muted)}
+.tbl td b{color:var(--content);font-weight:650}
+.tbl tr:last-child td{border-bottom:0}
+
+/* ── 图例 ── */
+.legend{display:flex;flex-wrap:wrap;gap:9px 18px;font-size:11.5px;color:var(--content-muted);align-items:center}
+.legend .li{display:flex;align-items:center;gap:7px}
+.verdict{border-radius:12px;padding:13px 15px;font-size:12.5px;line-height:1.68;
+  background:color-mix(in srgb,var(--sky) 8%,var(--surface));border:1px solid color-mix(in srgb,var(--sky) 24%,transparent)}
+.verdict b{color:var(--content)}
+.section-title{width:100%;max-width:1440px;display:flex;align-items:center;gap:10px;padding-top:6px}
+.section-title h2{font-size:15px;font-weight:680}
+.section-title .rule{flex:1;height:1px;background:var(--edge)}
+</style>
+</head>
+<body>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
+  <symbol id="i-file" viewBox="0 0 24 24"><path d="M14 3v5h5"/><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h9l5 5v11a2 2 0 0 1-2 2z"/></symbol>
+  <symbol id="i-close" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+  <symbol id="i-clipboard" viewBox="0 0 24 24"><rect x="8" y="2" width="8" height="4" rx="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/></symbol>
+  <symbol id="i-dots" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/></symbol>
+  <symbol id="i-chevl" viewBox="0 0 24 24"><path d="m15 6-6 6 6 6"/></symbol>
+  <symbol id="i-chevr" viewBox="0 0 24 24"><path d="m9 6 6 6-6 6"/></symbol>
+  <symbol id="i-back" viewBox="0 0 24 24"><path d="M19 12H5m7-7-7 7 7 7"/></symbol>
+  <symbol id="i-spark" viewBox="0 0 24 24"><path d="M12 3v4M12 17v4M3 12h4M17 12h4M6.3 6.3l2.8 2.8M14.9 14.9l2.8 2.8M17.7 6.3l-2.8 2.8M9.1 14.9l-2.8 2.8"/></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></symbol>
+  <symbol id="i-plusbox" viewBox="0 0 24 24"><path d="M12 3v18M3 12h18"/></symbol>
+  <symbol id="i-msg" viewBox="0 0 24 24"><path d="M21 11.5a8 8 0 0 1-11.6 7.2L4 20l1.3-5.4A8 8 0 1 1 21 11.5z"/></symbol>
+  <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></symbol>
+  <symbol id="i-terminal" viewBox="0 0 24 24"><path d="m5 8 4 4-4 4M13 16h6"/></symbol>
+  <symbol id="i-git" viewBox="0 0 24 24"><circle cx="6" cy="6" r="2.4"/><circle cx="6" cy="18" r="2.4"/><circle cx="18" cy="9" r="2.4"/><path d="M6 8.4v7.2M18 11.4c0 3-3 4.2-6 4.2H8.4"/></symbol>
+</defs></svg>
+
+<header class="page-head">
+  <div>
+    <h1>中栏 Tab 条重设计 · 会话 vs 文件</h1>
+    <div class="sub">
+      <code>tabs</code> 显示模式下,<b>会话标签</b>与<b>文件标签</b>混在同一条 strip 里(vscode 式)。现状两者用<b>完全相同</b>的 chip 样式,
+      只靠「品牌图标 vs 文件图标」和一条 1px 发丝线区分 —— 点击后果却完全不同:一个切对话、一个切编辑器。下面给出四个方向的取舍。
+    </div>
+  </div>
+  <button id="themeBtn" title="切换明暗">◐</button>
+</header>
+
+<main class="gallery">
+
+<!-- ══════════════════════ 现状 ══════════════════════ -->
+<section id="now" class="scheme">
+  <div class="frame-col">
+    <div class="scheme-head">
+      <span class="tag warn">现状</span>
+      <h2>一条 strip、两种语义、同一张脸</h2>
+      <span class="hint">编辑器聚焦态</span>
+    </div>
+    <div class="app-frame">
+      <aside class="lb">
+        <div class="traffic"><i></i><i></i><i></i></div>
+        <div class="qrow"><svg class="ic s"><use href="#i-plus"/></svg> 新建会话<kbd>⌘N</kbd></div>
+        <div class="qrow"><svg class="ic s"><use href="#i-terminal"/></svg> 终端<kbd>⌘J</kbd></div>
+        <div class="qrow"><svg class="ic s"><use href="#i-git"/></svg> 变更</div>
+        <div class="sep-l"></div>
+        <div class="lbl">会话</div>
+        <div class="sc"><span class="av" style="background:#10b981">CG</span><span class="t">重构会话映射</span><span class="st run"></span></div>
+        <div class="sc on"><span class="av" style="background:#10b981">CG</span><span class="t">RuntimeManager.ts 空指针</span><span class="st"></span></div>
+        <div class="sc"><span class="av" style="background:#818cf8">PM</span><span class="t">marketplace 调研</span><span class="st"></span></div>
+      </aside>
+
+      <div class="center">
+        <!-- 现状:会话 chip 与文件 chip 同形态、同色 -->
+        <div class="bar">
+          <div class="tab">​<svg class="ic s"><use href="#i-spark"/></svg><span class="dot run"></span><span class="nm">重构会话映射</span><span class="x"><svg class="ic xs"><use href="#i-close"/></svg></span></div>
+          <div class="tab mark"><svg class="ic s"><use href="#i-spark"/></svg><span class="dot"></span><span class="nm">RuntimeManager.ts 空指针</span><span class="x"><svg class="ic xs"><use href="#i-close"/></svg></span></div>
+          <div class="tab">​<svg class="ic s"><use href="#i-spark"/></svg><span class="dot"></span><span class="nm">marketplace 调研</span><span class="badge">3</span><span class="x"><svg class="ic xs"><use href="#i-close"/></svg></span></div>
+          <div class="vsep"></div>
+          <div class="tab file on mark"><svg class="ic s"><use href="#i-file"/></svg><span class="nm">RuntimeManager.ts</span><span class="dot dirty"></span></div>
+          <div class="tab file"><svg class="ic s"><use href="#i-file"/></svg><span class="nm">runtime.ts</span><span class="x"><svg class="ic xs"><use href="#i-close"/></svg></span></div>
+          <div class="x" style="margin-left:auto;opacity:1"><svg class="ic s" style="color:var(--content-subtle)"><use href="#i-dots"/></svg></div>
+        </div>
+        <div class="pane">
+          <div class="crumb"><svg class="ic xs"><use href="#i-file"/></svg> cc-gui / apps/desktop/src/main/claude / RuntimeManager.ts</div>
+          <div class="code"><span class="c">// 当前会话在左栏里,但 tab 条上完全看不出</span>
+<span class="k">const</span> rt = <span class="k">this</span>.runtimes.<span class="k">get</span>(sessionId)
+<span class="k">if</span> (!rt) <span class="k">throw</span> <span class="k">new</span> <span class="s">Error</span>(<span class="s">"no runtime"</span>)
+rt.lastCwd = ctx.cwd
+<span class="k">await</span> provider.<span class="k">sendTurn</span>(turn)</div>
+          <div class="msg">↑ 文件标签点亮着,但<b>没有任何地方显示「我在哪条会话里」</b>——从编辑器点回会话时要靠记忆。</div>
+        </div>
+      </div>
+
+      <aside class="rp">
+        <div class="lbl">资源管理器</div>
+        <div class="f"><svg class="ic xs"><use href="#i-file"/></svg><span>RuntimeManager.ts</span></div>
+        <div class="f"><svg class="ic xs"><use href="#i-file"/></svg><span>pluginManager.ts</span></div>
+        <div class="f"><svg class="ic xs"><use href="#i-file"/></svg><span>runtime.ts</span></div>
+        <div class="f on"><svg class="ic xs"><use href="#i-folder"/></svg><span>providers</span></div>
+      </aside>
+    </div>
+    <div class="framecap"><span class="sw"></span>红框标出的两条标签,左边是<b>会话</b>(标题恰好长得像文件名)、右边是<b>文件</b> —— 形态、圆角、字号、静止/激活配色完全一致,只有前置图标和等宽字体这点差别。</div>
+  </div>
+
+  <div class="notes">
+    <div class="card">
+      <h3>为什么容易搞混</h3>
+      <ul>
+        <li><b>形态完全同构</b>:两者都是 <code>rounded-md px-2.5 py-1 text-[11px]</code>,静止态 <code>bg-surface-muted/60</code>、激活态 <code>bg-accent/15 + ring-accent/40</code> 逐字相同(见 <code>SessionTabs.tsx</code> 与 <code>OpenTabsBar.tsx</code> 的 <code>SortableFileTab</code>)。唯一差异是前置图标与文件名等宽字体。</li>
+        <li><b>后果不对称</b>:点会话 → 整个中栏换成对话;点文件 → 整个中栏换成编辑器。同构的 chip 承载了「模式切换」这种重后果。</li>
+        <li><b>作用域不同却并列</b>:会话列表是<b>全局</b>的(<code>openTabs</code>),文件列表是<b>当前项目</b>的(<code>ideOpenFilesByProject[pid]</code>)。切到别的项目的会话时,右侧整组标签会静默换掉 —— 让人觉得「我的标签去哪了」。</li>
+        <li><b>焦点丢失</b>:<code>isActive={id === activeId && !editorFocused}</code> —— 编辑器聚焦时,当前会话标签<b>没有任何标记</b>。这条正是「我到底在哪」的困惑来源。</li>
+        <li><b>关闭语义不同、却同一颗 ×</b>:会话 × 只关标签、<b>不中断</b>运行中的回合;文件脏了根本没有 ×。两种语义共用一个图标。</li>
+        <li><b>分组线会消失</b>:1px 发丝线只在两组都有内容时渲染;只剩一组时它与普通单组标签条无法区分。</li>
+      </ul>
+      <div class="src">现状标签形态还有一处「反向线索」:会话标题可以是任意自然语言(甚至刚好写成文件名,如本例),而文件名永远像文件名 —— 靠图标区分的方向本身就不可靠。</div>
+    </div>
+    <div class="card">
+      <h3>图例(后文四个方案共用)</h3>
+      <div class="legend" style="flex-direction:column;align-items:flex-start;gap:8px">
+        <div class="li"><span class="tab on" style="max-width:none;padding:2px 9px">激活填充</span> 当前<b>视图</b>(中栏正在显示它)</div>
+        <div class="li"><span class="pill here" style="font-size:11px;padding:2px 10px;border:1px solid color-mix(in srgb,var(--accent) 26%,transparent);border-radius:999px;background:color-mix(in srgb,var(--accent) 9%,transparent)">锚点态</span> 当前<b>会话</b>(回对话的目的地,但视图不在它上面)</div>
+      </div>
+      <div class="src">「视图焦点」与「会话锚点」是两件事,现状把它们压成了同一个高亮 —— 这是所有方案的共同修正点。</div>
+    </div>
+  </div>
+</section>
+
+<!-- ══════════════════════ 方案 A ══════════════════════ -->
+<section id="a" class="scheme">
+  <div class="frame-col">
+    <div class="scheme-head">
+      <span class="tag">方案 A</span>
+      <h2>分层:会话条 / 编辑器条</h2>
+      <span class="hint">结构分离 · 每条只回答一个问题</span>
+    </div>
+    <div class="app-frame">
+      <aside class="lb">
+        <div class="traffic"><i></i><i></i><i></i></div>
+        <div class="qrow"><svg class="ic s"><use href="#i-plus"/></svg> 新建会话<kbd>⌘N</kbd></div>
+        <div class="qrow"><svg class="ic s"><use href="#i-terminal"/></svg> 终端<kbd>⌘J</kbd></div>
+        <div class="qrow"><svg class="ic s"><use href="#i-git"/></svg> 变更</div>
+        <div class="sep-l"></div>
+        <div class="lbl">会话</div>
+        <div class="sc"><span class="av" style="background:#10b981">CG</span><span class="t">重构会话映射</span><span class="st run"></span></div>
+        <div class="sc on"><span class="av" style="background:#10b981">CG</span><span class="t">RuntimeManager.ts 空指针</span><span class="st"></span></div>
+        <div class="sc"><span class="av" style="background:#818cf8">PM</span><span class="t">marketplace 调研</span><span class="st"></span></div>
+      </aside>
+
+      <div class="center">
+        <!-- 条 1:会话条。常驻,承载「我在哪条对话」。激活锚点用左侧色条 + 文字提亮,而不是填充 -->
+        <div class="bar">
+          <button class="chev"><svg class="ic s"><use href="#i-chevl"/></svg></button>
+          <div class="tab"><span class="av" style="background:#10b981">CG</span><span class="dot run"></span><span class="nm">重构会话映射</span><span class="x"><svg class="ic xs"><use href="#i-close"/></svg></span></div>
+          <div class="tab anchorstate" style="border-left:2px solid var(--accent);color:var(--content);background:color-mix(in srgb,var(--accent) 8%,transparent)"><span class="av" style="background:#10b981">CG</span><span class="dot"></span><span class="nm">RuntimeManager.ts 空指针</span><span class="x"><svg class="ic xs"><use href="#i-close"/></svg></span></div>
+          <div class="tab"><span class="av" style="background:#818cf8">PM</span><span class="dot"></span><span class="nm">marketplace 调研</span><span class="badge">3</span><span class="x"><svg class="ic xs"><use href="#i-close"/></svg></span></div>
+          <button class="chev"><svg class="ic s"><use href="#i-plus"/></svg></button>
+          <button class="chev" style="margin-left:auto"><svg class="ic s"><use href="#i-dots"/></svg></button>
+        </div>
+        <!-- 条 2:编辑器条。只在编辑器聚焦时出现,带自己的「编辑区 · 项目」身份 -->
+        <div class="bar editor-chrome">
+          <span class="cap">编辑区 · <span class="proj">cc-gui</span> <span class="n">4</span></span>
+          <div class="vsep"></div>
+          <div class="tab file on"><svg class="ic s"><use href="#i-file"/></svg><span class="nm">RuntimeManager.ts</span><span class="dot dirty"></span></div>
+          <div class="tab file"><svg class="ic s"><use href="#i-file"/></svg><span class="nm">SdkMessageAdapter.ts</span><span class="x"><svg class="ic xs"><use href="#i-close"/></svg></span></div>
+          <div class="tab file"><svg class="ic s"><use href="#i-file"/></svg><span class="nm">runtime.ts</span><span class="x"><svg class="ic xs"><use href="#i-close"/></svg></span></div>
+          <div class="tab file"><svg class="ic s"><use href="#i-clipboard"/></svg><span class="nm">执行计划</span><span class="x"><svg class="ic xs"><use href="#i-close"/></svg></span></div>
+          <button class="chev" style="margin-left:auto"><svg class="ic s"><use href="#i-dots"/></svg></button>
+        </div>
+        <div class="pane" style="padding-top:12px">
+          <div class="crumb"><svg class="ic xs"><use href="#i-file"/></svg> cc-gui / apps/desktop/src/main/claude / RuntimeManager.ts</div>
+          <div class="code"><span class="c">// 上层 = 会话(全局身份) · 下层 = 当前项目的打开文件</span>
+<span class="k">const</span> rt = <span class="k">this</span>.runtimes.<span class="k">get</span>(sessionId)
+<span class="k">if</span> (!rt) <span class="k">throw</span> <span class="k">new</span> <span class="s">Error</span>(<span class="s">"no runtime"</span>)
+rt.lastCwd = ctx.cwd
+<span class="k">await</span> provider.<span class="k">sendTurn</span>(turn)</div>
+        </div>
+      </div>
+
+      <aside class="rp">
+        <div class="lbl">资源管理器</div>
+        <div class="f"><svg class="ic xs"><use href="#i-file"/></svg><span>RuntimeManager.ts</span></div>
+        <div class="f"><svg class="ic xs"><use href="#i-file"/></svg><span>pluginManager.ts</span></div>
+        <div class="f"><svg class="ic xs"><use href="#i-file"/></svg><span>runtime.ts</span></div>
+        <div class="f on"><svg class="ic xs"><use href="#i-folder"/></svg><span>providers</span></div>
+      </aside>
+    </div>
+
+    <div class="mini">
+      <div class="mlab"><b>对话态</b> —— 编辑器条整条收起,只留会话条(省回那 30px)</div>
+      <div class="baronly">
+        <button class="chev"><svg class="ic s"><use href="#i-chevl"/></svg></button>
+        <div class="tab"><span class="av" style="background:#10b981">CG</span><span class="dot run"></span><span class="nm">重构会话映射</span><span class="x"><svg class="ic xs"><use href="#i-close"/></svg></span></div>
+        <div class="tab on"><span class="av" style="background:#10b981">CG</span><span class="dot"></span><span class="nm">RuntimeManager.ts 空指针</span><span class="x"><svg class="ic xs"><use href="#i-close"/></svg></span></div>
+        <div class="tab"><span class="av" style="background:#818cf8">PM</span><span class="dot"></span><span class="nm">marketplace 调研</span><span class="badge">3</span><span class="x"><svg class="ic xs"><use href="#i-close"/></svg></span></div>
+        <button class="chev"><svg class="ic s"><use href="#i-plus"/></svg></button>
+        <div class="gap"></div>
+        <div class="anchor"><svg class="ic s"><use href="#i-file"/></svg><span>已打开 4 个文件</span><svg class="ic xs"><use href="#i-chevr"/></svg></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="notes">
+    <div class="card">
+      <h3>做法</h3>
+      <ul>
+        <li><b>上层 = 会话条</b>(常驻,全局):回答「我在哪条对话 / 还能切去哪」。永远不被文件挤走,所以会话切换、运行中转圈、未读徽章都在一条稳定的横线上。</li>
+        <li><b>下层 = 编辑器条</b>(仅在编辑器聚焦时出现,<code>bg</code> 略深一档、更薄):回答「这个编辑器里开着哪些文件」。它带自己的身份前缀 <code>编辑区 · cc-gui</code>,顺手把「文件列表是项目作用域」这件事说清楚。</li>
+        <li><b>会话锚点态</b>:编辑器聚焦时,你所在的那条会话用「左侧 2px 强调条 + 微弱底色」标记(不是填充),和「激活填充 = 当前视图」明确区分。回对话的目标一眼可见。</li>
+        <li><b>对话态把编辑器条整条收起</b>,只在会话条右端留一个 <code>已打开 4 个文件 ›</code> 的锚点 chip —— 既不浪费那 30px,也不会「文件凭空消失」。</li>
+      </ul>
+      <div class="src">对照:VS Code 的编辑器组 tab 就挂在编辑器面板自己的头上,而不是和窗口级导航混在一条栏里。会话条在此扮演「窗口级导航」。</div>
+    </div>
+    <div class="card">
+      <h3>取舍</h3>
+      <ul>
+        <li><span class="pillbox g">+</span> 结构上<b>不可能误点</b>:两条栏各只装一种标签,类型混淆这一整类问题消失。</li>
+        <li><span class="pillbox g">+</span> 会话条变稳定,不再随编辑器开合改变内容,会话前后切换的肌肉记忆成立。</li>
+        <li><span class="pillbox g">+</span> 顺手获得「编辑器条自带项目名」「会话锚点态」两个修正点;会话条还能加 <code>+ 新建会话</code>,补上现在 tab 模式缺少的新建入口。</li>
+        <li><span class="pillbox r">−</span> 编辑器聚焦时多一行(~30px)。因为编辑器条在编辑器面板内部、随面板一起出现,切会话时它是整块隐藏/显示的,<b>不会造成内容上下跳动</b>。</li>
+        <li><span class="pillbox r">−</span> 实现量最大:两条独立 strip 的溢出/多行/拖拽状态各一套(可共用现有 <code>TabBarChrome</code> 与 <code>ScrollStrip</code> 逻辑)。</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- ══════════════════════ 方案 B ══════════════════════ -->
+<section id="b" class="scheme">
+  <div class="frame-col">
+    <div class="scheme-head">
+      <span class="tag pick">方案 B · 推荐</span>
+      <h2>单条不变,给两类标签换「方言」+ 组标题</h2>
+      <span class="hint">零布局改动 · 只改形态与文案</span>
+    </div>
+    <div class="app-frame">
+      <aside class="lb">
+        <div class="traffic"><i></i><i></i><i></i></div>
+        <div class="qrow"><svg class="ic s"><use href="#i-plus"/></svg> 新建会话<kbd>⌘N</kbd></div>
+        <div class="qrow"><svg class="ic s"><use href="#i-terminal"/></svg> 终端<kbd>⌘J</kbd></div>
+        <div class="qrow"><svg class="ic s"><use href="#i-git"/></svg> 变更</div>
+        <div class="sep-l"></div>
+        <div class="lbl">会话</div>
+        <div class="sc"><span class="av" style="background:#10b981">CG</span><span class="t">重构会话映射</span><span class="st run"></span></div>
+        <div class="sc on"><span class="av" style="background:#10b981">CG</span><span class="t">RuntimeManager.ts 空指针</span><span class="st"></span></div>
+        <div class="sc"><span class="av" style="background:#818cf8">PM</span><span class="t">marketplace 调研</span><span class="st"></span></div>
+      </aside>
+
+      <div class="center">
+        <!-- 一条 strip:左会话(药丸+头像) / 右文件(方片+等宽)。组标题给出数量与项目作用域 -->
+        <div class="bar">
+          <button class="chev"><svg class="ic s"><use href="#i-chevl"/></svg></button>
+          <span class="cap">会话 <span class="n">3</span></span>
+          <div class="tab pill"><span class="av" style="background:#10b981">CG</span><span class="nm">重构会话映射</span><span class="dot run"></span><span class="x"><svg class="ic xs"><use href="#i-close"/></svg></span></div>
+          <div class="tab pill here"><span class="av" style="background:#10b981">CG</span><span class="nm">RuntimeManager.ts 空指针</span><span class="dot"></span><span class="x"><svg class="ic xs"><use href="#i-close"/></svg></span></div>
+          <button class="chev"><svg class="ic s"><use href="#i-plus"/></svg></button>
+          <button class="chev"><svg class="ic s"><use href="#i-chevr"/></svg></button>
+
+          <div class="vsep wide"></div>
+
+          <span class="cap">编辑区 <span class="proj">cc-gui</span> <span class="n">4</span></span>
+          <div class="group">
+            <div class="tab file on"><svg class="ic s"><use href="#i-file"/></svg><span class="nm">RuntimeManager.ts</span><span class="dot dirty"></span></div>
+            <div class="tab file"><svg class="ic s"><use href="#i-file"/></svg><span class="nm">runtime.ts</span><span class="x"><svg class="ic xs"><use href="#i-close"/></svg></span></div>
+          </div>
+          <button class="chev" style="margin-left:auto"><svg class="ic s"><use href="#i-dots"/></svg></button>
+        </div>
+        <div class="pane">
+          <div class="crumb"><svg class="ic xs"><use href="#i-file"/></svg> cc-gui / apps/desktop/src/main/claude / RuntimeManager.ts</div>
+          <div class="code"><span class="c">// 药丸(会话)与方片(文件)是两种形状 —— 不靠图标也能分</span>
+<span class="k">const</span> rt = <span class="k">this</span>.runtimes.<span class="k">get</span>(sessionId)
+<span class="k">if</span> (!rt) <span class="k">throw</span> <span class="k">new</span> <span class="s">Error</span>(<span class="s">"no runtime"</span>)
+rt.lastCwd = ctx.cwd
+<span class="k">await</span> provider.<span class="k">sendTurn</span>(turn)</div>
+        </div>
+      </div>
+
+      <aside class="rp">
+        <div class="lbl">资源管理器</div>
+        <div class="f"><svg class="ic xs"><use href="#i-file"/></svg><span>RuntimeManager.ts</span></div>
+        <div class="f"><svg class="ic xs"><use href="#i-file"/></svg><span>pluginManager.ts</span></div>
+        <div class="f"><svg class="ic xs"><use href="#i-file"/></svg><span>runtime.ts</span></div>
+        <div class="f on"><svg class="ic xs"><use href="#i-folder"/></svg><span>providers</span></div>
+      </aside>
+    </div>
+
+    <div class="mini">
+      <div class="mlab"><b>对话态</b> —— 同一个 strip,只是焦点回到会话一侧(会话药丸变激活填充,文件退为静止)</div>
+      <div class="baronly">
+        <span class="cap">会话 <span class="n">3</span></span>
+        <div class="tab pill"><span class="av" style="background:#10b981">CG</span><span class="nm">重构会话映射</span><span class="dot run"></span><span class="x"><svg class="ic xs"><use href="#i-close"/></svg></span></div>
+        <div class="tab pill on"><span class="av" style="background:#10b981">CG</span><span class="nm">RuntimeManager.ts 空指针</span><span class="dot"></span><span class="x"><svg class="ic xs"><use href="#i-close"/></svg></span></div>
+        <div class="tab pill"><span class="av" style="background:#818cf8">PM</span><span class="nm">marketplace 调研</span><span class="badge">3</span><span class="x"><svg class="ic xs"><use href="#i-close"/></svg></span></div>
+        <button class="chev"><svg class="ic s"><use href="#i-plus"/></svg></button>
+        <div class="vsep wide"></div>
+        <span class="cap">编辑区 <span class="proj">cc-gui</span> <span class="n">4</span></span>
+        <div class="group">
+          <div class="tab file"><svg class="ic s"><use href="#i-file"/></svg><span class="nm">RuntimeManager.ts</span><span class="dot dirty"></span></div>
+          <div class="tab file"><svg class="ic s"><use href="#i-file"/></svg><span class="nm">runtime.ts</span><span class="x"><svg class="ic xs"><use href="#i-close"/></svg></span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="notes">
+    <div class="card">
+      <h3>做法</h3>
+      <ul>
+        <li><b>会话 = 药丸(pill)</b>:<code>rounded-full</code> + 前置<b>项目色字母头像</b>(和左栏会话卡的头像同一个色块,强化「这是一条对话」),状态圆点/未读徽章收在尾部。</li>
+        <li><b>文件 = 方片(chip)</b>:保持 <code>rounded-md</code> + 文件类型图标 + 等宽文件名,并整体放进一个<b>浅色底板容器</b>里,让「编辑区」成为一个有边界的物件,而不是和会话同流。</li>
+        <li><b>组标题代替发丝线</b>:<code>会话 3</code> / <code>编辑区 cc-gui 4</code>。数量让用户知道「还有几个」;项目名把<b>文件组是项目作用域</b>这件事摆在明面上 —— 切项目时整组换掉就不再意外。发丝线换成 ~30px 的实际留白,不再会「只剩一组就消失」。</li>
+        <li><b>两个状态分开表达</b>:<code>激活填充</code>=当前视图;<code>锚点态</code>(药丸描边 + 标题加粗 + 无填充)=当前会话。编辑器聚焦时,会话药丸显示锚点态,于是「我从哪来、要回哪去」始终可见。</li>
+        <li>会话组尾部补 <code>+ 新建会话</code>,与<span class="pillbox b">方案 A</span> 一致,顺手补上 tab 模式缺的新建入口。</li>
+      </ul>
+      <div class="src">形态先例:Slack 用 <code>#频道</code> vs <code>@头像</code> 区分两类会话;Linear 用「视图 / 议题」两种容器形态。形状差异(圆 vs 方)在余光里就能分辨,不需要看清图标。</div>
+    </div>
+    <div class="card">
+      <h3>取舍</h3>
+      <ul>
+        <li><span class="pillbox g">+</span> <b>零布局改动</b>:还是一条 strip、同样的滚动/多行/拖拽骨架,改动集中在 chip 样式 + 两个标题 + 一处高亮语义。</li>
+        <li><span class="pillbox g">+</span> 不增加高度,不引入第二条滚动条,不打断任何现有交互(溢出菜单、多行换行、中键关闭、右键菜单、跨类拖拽忽略都原样可用)。</li>
+        <li><span class="pillbox g">+</span> 组标题 + 项目名顺手修掉「作用域不一致」与「分组线消失」两个坑。</li>
+        <li><span class="pillbox r">−</span> 仍然是<b>一条</b> strip:误点风险降低但不为零(组标题占了两个位置,窄窗口下它们是最先被挤掉的内容 —— 需要保留「挤不下时标题收成图标」的降级)。</li>
+        <li><span class="pillbox r">−</span> 药丸比方片略宽(全圆角 + 头像),同样窗口宽度下能显示的会话数略少。</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- ══════════════════════ 方案 C ══════════════════════ -->
+<section id="c" class="scheme">
+  <div class="frame-col">
+    <div class="scheme-head">
+      <span class="tag">方案 C</span>
+      <h2>会话压成头像轨道 / 文件独占标签条</h2>
+      <span class="hint">最省横向空间 · 会话切换像工作区切换器</span>
+    </div>
+    <div class="app-frame">
+      <aside class="lb">
+        <div class="traffic"><i></i><i></i><i></i></div>
+        <div class="qrow"><svg class="ic s"><use href="#i-plus"/></svg> 新建会话<kbd>⌘N</kbd></div>
+        <div class="qrow"><svg class="ic s"><use href="#i-terminal"/></svg> 终端<kbd>⌘J</kbd></div>
+        <div class="qrow"><svg class="ic s"><use href="#i-git"/></svg> 变更</div>
+        <div class="sep-l"></div>
+        <div class="lbl">会话</div>
+        <div class="sc"><span class="av" style="background:#10b981">CG</span><span class="t">重构会话映射</span><span class="st run"></span></div>
+        <div class="sc on"><span class="av" style="background:#10b981">CG</span><span class="t">RuntimeManager.ts 空指针</span><span class="st"></span></div>
+        <div class="sc"><span class="av" style="background:#818cf8">PM</span><span class="t">marketplace 调研</span><span class="st"></span></div>
+      </aside>
+
+      <div class="center">
+        <div class="bar">
+          <!-- 会话轨道:只有当前会话展开成带标题的药丸,其余是纯头像块 -->
+          <div class="rail">
+            <div class="avbtn avspin" style="background:#10b981" title="重构会话映射">CG<span class="sp"></span></div>
+            <div class="avbtn" style="background:#818cf8" title="marketplace 调研">PM</div>
+            <div class="expand" title="RuntimeManager.ts 空指针">
+              <svg class="ic s" style="color:var(--accent)"><use href="#i-spark"/></svg>
+              <span class="nm">RuntimeManager.ts 空指针</span>
+              <span class="dot"></span>
+            </div>
+            <div class="avbtn" style="background:#fbbf24" title="语音停顿重复">VO</div>
+            <div class="avbtn" style="background:#a78bfa" title="mcp OAuth 登录">MC</div>
+            <button class="chev"><svg class="ic s"><use href="#i-plus"/></svg></button>
+          </div>
+
+          <div class="vsep wide"></div>
+
+          <span class="cap">编辑区 <span class="proj">cc-gui</span> <span class="n">4</span></span>
+          <div class="tab file on"><svg class="ic s"><use href="#i-file"/></svg><span class="nm">RuntimeManager.ts</span><span class="dot dirty"></span></div>
+          <div class="tab file"><svg class="ic s"><use href="#i-file"/></svg><span class="nm">SdkMessageAdapter.ts</span><span class="x"><svg class="ic xs"><use href="#i-close"/></svg></span></div>
+          <div class="tab file"><svg class="ic s"><use href="#i-file"/></svg><span class="nm">runtime.ts</span><span class="x"><svg class="ic xs"><use href="#i-close"/></svg></span></div>
+          <div class="tab file"><svg class="ic s"><use href="#i-clipboard"/></svg><span class="nm">执行计划</span><span class="x"><svg class="ic xs"><use href="#i-close"/></svg></span></div>
+          <button class="chev" style="margin-left:auto"><svg class="ic s"><use href="#i-dots"/></svg></button>
+        </div>
+        <div class="pane">
+          <div class="crumb"><svg class="ic xs"><use href="#i-file"/></svg> cc-gui / apps/desktop/src/main/claude / RuntimeManager.ts</div>
+          <div class="code"><span class="c">// 会话只剩色块 = 空间换给文件标签;当前会话始终展开</span>
+<span class="k">const</span> rt = <span class="k">this</span>.runtimes.<span class="k">get</span>(sessionId)
+<span class="k">if</span> (!rt) <span class="k">throw</span> <span class="k">new</span> <span class="s">Error</span>(<span class="s">"no runtime"</span>)
+rt.lastCwd = ctx.cwd
+<span class="k">await</span> provider.<span class="k">sendTurn</span>(turn)</div>
+        </div>
+      </div>
+
+      <aside class="rp">
+        <div class="lbl">资源管理器</div>
+        <div class="f"><svg class="ic xs"><use href="#i-file"/></svg><span>RuntimeManager.ts</span></div>
+        <div class="f"><svg class="ic xs"><use href="#i-file"/></svg><span>pluginManager.ts</span></div>
+        <div class="f"><svg class="ic xs"><use href="#i-file"/></svg><span>runtime.ts</span></div>
+        <div class="f on"><svg class="ic xs"><use href="#i-folder"/></svg><span>providers</span></div>
+      </aside>
+    </div>
+
+    <div class="mini">
+      <div class="mlab"><b>会话很多时</b> —— 头像块横向滚动,占用恒定;悬停显标题气泡</div>
+      <div class="baronly">
+        <div class="rail">
+          <div class="avbtn" style="background:#10b981">CG</div>
+          <div class="avbtn" style="background:#818cf8">PM</div>
+          <div class="avbtn" style="background:#fbbf24">VO</div>
+          <div class="avbtn" style="background:#a78bfa">MC</div>
+          <div class="avbtn" style="background:#38bdf8">WT</div>
+          <div class="avbtn" style="background:#f87171">LG</div>
+          <div class="avbtn" style="background:#10b981">PL</div>
+          <div class="expand" style="max-width:150px"><svg class="ic s" style="color:var(--accent)"><use href="#i-spark"/></svg><span class="nm">RuntimeManager.ts 空指针</span><span class="dot"></span></div>
+          <button class="chev"><svg class="ic s"><use href="#i-plus"/></svg><span style="font-size:10px;font-weight:700">3</span></button>
+        </div>
+        <div class="vsep wide"></div>
+        <span class="cap">编辑区 <span class="proj">cc-gui</span> <span class="n">4</span></span>
+        <div class="tab file on"><svg class="ic s"><use href="#i-file"/></svg><span class="nm">RuntimeManager.ts</span><span class="dot dirty"></span></div>
+        <div class="tab file"><svg class="ic s"><use href="#i-file"/></svg><span class="nm">runtime.ts</span></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="notes">
+    <div class="card">
+      <h3>做法</h3>
+      <ul>
+        <li><b>会话降级为「头像轨道」</b>:每条会话一个项目色字母块(复用左栏 <code>projectAvatar</code> 的调色板),<b>当前会话</b>展开成一颗带标题的药丸,其余只留色块 + hover 标题气泡。运行中的会话在色块右下角带一个脉冲小点。</li>
+        <li><b>文件独占带标题的标签条</b>:因为 strip 里只剩文件一种,标题 <code>编辑区 · cc-gui</code> 可以当作纯粹的区段名,不再承担「区分两类」的职责。</li>
+        <li>会话与文件之间是 ~30px 留白 + 1px 分隔,不再是会消失的细线。</li>
+        <li><b>当前会话始终展开</b>,所以在编辑器里也不会丢失「回哪去」的锚点;切换会话 = 点色块,色块原地展开成药丸(有明确的形变动画可做)。</li>
+      </ul>
+      <div class="src">形态先例:Slack / Discord 的工作区切换器、Chrome 的标签组折叠。核心是「长期存在的身份」用紧凑色块表达,「当下在处理的内容」才配给标题宽度。</div>
+    </div>
+    <div class="card">
+      <h3>取舍</h3>
+      <ul>
+        <li><span class="pillbox g">+</span> 会话数增长时占用恒定,横向空间几乎全给文件标签;窗口窄时表现最好。</li>
+        <li><span class="pillbox g">+</span> 会话切换从「读标题」变成「认色块 + 字母」,熟练后更快;左栏与其色块同源,跨面板识别一致。</li>
+        <li><span class="pillbox r">−</span> <b>标题默认不可见</b>:会话名首字母相近(或同一项目下多条会话)时,只靠色块 + 两字母很难区分,要 hover 才知道。这是本方案最实在的代价。</li>
+        <li><span class="pillbox r">−</span> 未读徽章、运行状态只能收成一个小点,信息密度下降。</li>
+        <li><span class="pillbox r">−</span> 拖拽重排的语义变弱(色块拖拽不如标签直观),可能干脆放弃会话重排,只保留文件重排。</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- ══════════════════════ 方案 D ══════════════════════ -->
+<section id="d" class="scheme">
+  <div class="frame-col">
+    <div class="scheme-head">
+      <span class="tag">方案 D · 变体</span>
+      <h2>上下文条:只显示当前视图的标签 + 一个「回到…」锚点</h2>
+      <span class="hint">条内永远只有一种类型</span>
+    </div>
+    <div class="mini" style="width:1240px">
+      <div class="mlab"><b>对话态</b> —— 条内全是会话标签;文件侧只剩一个计数锚点</div>
+      <div class="baronly">
+        <span class="cap">会话 <span class="n">3</span></span>
+        <div class="tab pill on"><span class="av" style="background:#10b981">CG</span><span class="nm">重构会话映射</span><span class="dot"></span><span class="x"><svg class="ic xs"><use href="#i-close"/></svg></span></div>
+        <div class="tab pill"><span class="av" style="background:#818cf8">PM</span><span class="nm">marketplace 调研</span><span class="badge">3</span><span class="x"><svg class="ic xs"><use href="#i-close"/></svg></span></div>
+        <div class="tab pill"><span class="av" style="background:#10b981">CG</span><span class="nm">RuntimeManager.ts 空指针</span><span class="x"><svg class="ic xs"><use href="#i-close"/></svg></span></div>
+        <button class="chev"><svg class="ic s"><use href="#i-plus"/></svg></button>
+        <div class="anchor" style="margin-left:auto"><svg class="ic s"><use href="#i-folder"/></svg><span>编辑区 · 4 个文件</span><svg class="ic xs"><use href="#i-chevr"/></svg></div>
+      </div>
+    </div>
+    <div class="mini" style="width:1240px">
+      <div class="mlab"><b>编辑器态</b> —— 条内全是文件标签;左侧只剩一颗「回到对话」锚点(显示会话标题)</div>
+      <div class="baronly">
+        <div class="anchor" style="border-style:solid;border-color:color-mix(in srgb,var(--accent) 40%,transparent);background:color-mix(in srgb,var(--accent) 10%,transparent);color:var(--content)">
+          <svg class="ic s"><use href="#i-back"/></svg>
+          <span class="av" style="background:#10b981">CG</span>
+          <span class="nm" style="max-width:170px;font-weight:600">RuntimeManager.ts 空指针</span>
+        </div>
+        <div class="vsep wide"></div>
+        <span class="cap">编辑区 <span class="proj">cc-gui</span> <span class="n">4</span></span>
+        <div class="tab file on"><svg class="ic s"><use href="#i-file"/></svg><span class="nm">RuntimeManager.ts</span><span class="dot dirty"></span></div>
+        <div class="tab file"><svg class="ic s"><use href="#i-file"/></svg><span class="nm">SdkMessageAdapter.ts</span><span class="x"><svg class="ic xs"><use href="#i-close"/></svg></span></div>
+        <div class="tab file"><svg class="ic s"><use href="#i-file"/></svg><span class="nm">runtime.ts</span><span class="x"><svg class="ic xs"><use href="#i-close"/></svg></span></div>
+        <div class="tab file"><svg class="ic s"><use href="#i-clipboard"/></svg><span class="nm">执行计划</span><span class="x"><svg class="ic xs"><use href="#i-close"/></svg></span></div>
+        <button class="chev" style="margin-left:auto"><svg class="ic s"><use href="#i-dots"/></svg></button>
+      </div>
+    </div>
+  </div>
+
+  <div class="notes">
+    <div class="card">
+      <h3>做法与取舍</h3>
+      <ul>
+        <li>strip <b>永远只装当前视图的标签</b>(对话→会话标签,编辑器→文件标签),另一侧用一颗锚点 chip 表达「另一处有什么、怎么回去」。类型混淆在构造上归零。</li>
+        <li>与 <span class="pillbox b">方案 A</span> 的区别:不占两行,以「一次点击」为代价 —— 从对话想直接跳到某个<b>具体文件</b>时,得先点 <code>编辑区 · 4 个文件</code> 再选。</li>
+        <li><b>这一条就是否决理由</b>:「agent 刚提到某文件、我要点开看」是本应用的高频动作,现状一次点击可达,方案 D 变成两次。除非给锚点 chip 加「按住即展开文件列表」这类补偿交互,否则不建议。</li>
+        <li>保留价值:如果将来 tab 模式进一步压缩(比如窄屏/移动壳),D 是空间最省的退化形态。</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- ══════════════════════ 共同改进 ══════════════════════ -->
+<div class="section-title"><h2>四个方案都建议一并做的修正</h2><div class="rule"></div></div>
+<section id="shared" class="scheme" style="align-items:stretch">
+  <div class="notes" style="flex-direction:row;flex-wrap:wrap;gap:12px">
+    <div class="card" style="flex:1;min-width:300px">
+      <h3>① 文件组标注所属项目</h3>
+      <p>文件标签存在 <code>ideOpenFilesByProject[activeProjectId]</code>,是<b>项目作用域</b>;会话标签是全局的。切到别的项目的会话时右侧整组会换掉,而界面上没有任何提示。在文件组前固定标注项目名(方案 B/C 的 <code>编辑区 · cc-gui</code>),这类「标签去哪了」的困惑直接消失。</p>
+    </div>
+    <div class="card" style="flex:1;min-width:300px">
+      <h3>② 编辑器聚焦时保留会话锚点</h3>
+      <p><code>isActive={id === activeId && !editorFocused}</code> 让当前会话在编辑器里<b>完全没有标记</b>。把「视图焦点」和「会话锚点」拆成两种视觉:填充 = 正在看它,描边/侧边条 = 我是从这里来的。</p>
+    </div>
+    <div class="card" style="flex:1;min-width:300px">
+      <h3>③ 关闭语义的提示</h3>
+      <p>会话的 × 只关标签、<b>不中断</b>运行中的回合;文件脏了则没有 ×。建议 hover 时给出明确说明(「关闭标签,会话继续运行」/「未保存,请先保存」),让「× 点了会怎样」可预期。</p>
+    </div>
+    <div class="card" style="flex:1;min-width:300px">
+      <h3>④ 溢出菜单也按组分节</h3>
+      <p><code>TabBarOverflowMenu</code> 现在把两类标签平铺成一条列表,同样混淆。加两个小节标题(会话 / 编辑区 · 项目),与条上的分组口径保持一致。</p>
+    </div>
+    <div class="card" style="flex:1;min-width:300px">
+      <h3>⑤ 多行模式下的分组也要成立</h3>
+      <p>多行换行时两类标签会混在同一片网格里,分组线彻底失效。无论选哪个方案,都要保证换行后「会话块」与「文件块」仍是两片,而不是交错。</p>
+    </div>
+    <div class="card" style="flex:1;min-width:300px">
+      <h3>⑥ 新建会话入口</h3>
+      <p>tab 模式目前没有新建会话的按钮(要去左栏)。在会话组尾部补一个 <code>+</code>,与「会话组」这个语义块绑定,顺带强化分组的存在感。</p>
+    </div>
+  </div>
+</section>
+
+<!-- ══════════════════════ 对照 / 推荐 ══════════════════════ -->
+<div class="section-title"><h2>对照与建议</h2><div class="rule"></div></div>
+<section id="verdict" class="scheme" style="flex-direction:column;gap:14px;align-items:stretch">
+  <div class="card" style="padding:6px 4px">
+    <table class="tbl">
+      <thead><tr><th>方案</th><th>误点消除</th><th>新增高度</th><th>实现量</th><th>主要代价</th></tr></thead>
+      <tbody>
+        <tr><td><b>A 分层条</b></td><td>构造上归零(两栏各一种)</td><td>编辑器聚焦时 +30px</td><td>大(两套 strip 状态机)</td><td>多一行;会话条需要独立的溢出/多行策略</td></tr>
+        <tr><td><b>B 双方言 + 组标题</b></td><td>大幅降低(形状 + 标题双重线索)</td><td>0</td><td><b>小</b>(样式 + 文案 + 一处高亮语义)</td><td>仍是一条 strip;窄窗口下标题需降级</td></tr>
+        <tr><td><b>C 头像轨道</b></td><td>大幅降低(色块 vs 标签)</td><td>0</td><td>中(轨道替换会话标签,拖拽语义要重定)</td><td>会话标题默认隐藏,同名/同首字母会话难认</td></tr>
+        <tr><td><b>D 上下文条</b></td><td>构造上归零</td><td>0</td><td>中(需先切视图再选标签)</td><td>从对话直点具体文件多一次点击 —— 不建议</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="verdict">
+    <b>建议:B 先行,把 A 留作下一步。</b><br>
+    理由:B 是<b>唯一一个零布局代价</b>就能拿到大部分收益的方案 —— 形状分化(圆药丸 / 方片)+ 组标题(数量 + 项目作用域)+ 会话锚点态,三件事都只是样式与文案,现有滚动/多行/拖拽/右键菜单逻辑一行不用改,评审和回退成本最低。它直接命中你描述的三类困惑:看不清哪类是哪种(形状)、不知道文件属于哪个项目(组标题)、在编辑器里不知道自己在哪条会话(锚点态)。<br>
+    如果做完 B 仍觉得「一条 strip 里放两种东西」这件事本身别扭,再上 <b>A</b> —— 那时你已经有一套通用的分组语义(C 的组标题、锚点态都可复用),把会话组抬到独立一行只是结构位移,不必重做视觉。<br>
+    <b>C</b> 只在会话数量长期很多、且你习惯用颜色/字母而不是标题找人时更优;<b>D</b> 以高频动作多一次点击为代价,不建议作为主形态。
+  </div>
+
+  <div class="card">
+    <h3>落地顺序(若采纳 B)</h3>
+    <ul>
+      <li>① <code>SortableSessionTab</code> 换药丸形态(项目色头像 + 圆角 + 状态点),<code>SortableFileTab</code> 保持方片并包一层底板容器。</li>
+      <li>② 条上插入两个组标题组件(数量 + 项目名),窄屏时降级为图标 + 数字。</li>
+      <li>③ 拆分高亮语义:<code>activeTabKey</code> 之外增加「会话锚点」判定,编辑器聚焦时给当前会话上描边态。</li>
+      <li>④ <code>TabBarOverflowMenu</code> 增加分组标题;多行模式下保证两组不交错。</li>
+      <li>⑤ 词条补进 <code>i18n/zh|en/chat-stream.ts</code>(组标题、关闭语义提示),避免硬编码文案。</li>
+    </ul>
+  </div>
+</section>
+
+</main>
+
+<script>
+document.getElementById("themeBtn").addEventListener("click", () => {
+  document.body.classList.toggle("light");
+});
+</script>
+</body>
+</html>

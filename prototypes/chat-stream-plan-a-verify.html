@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="zh-CN" class="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>聊天流运行台账 · 结构验证（引真实 styles.css）</title>
+<!-- 引真实产品样式，验证以下类的真实观感：
+       .chat-ledger / .chat-ledger-head / .chat-ledger-body / .chat-ledger-scan
+       .chat-fold / .chat-fold-inner / .chat-caret / .chat-st
+     结构按 ChatPane.wrapLiveSpine（运行中）与 MessageBlocks.TurnPanel（完成态）
+     的实际 DOM 逐层复刻；Tailwind 原子类此处不存在，间距用内联样式近似。 -->
+<link rel="stylesheet" href="/apps/desktop/src/renderer/styles.css">
+<style>
+  body { margin:0; background: rgb(var(--surface)); color: rgb(var(--content));
+    font-family: -apple-system, "SF Pro Text", "PingFang SC", system-ui, sans-serif;
+    padding: 24px 20px 60px; }
+  .stage { max-width: 720px; margin: 0 auto; }
+  /* 量测用：?w=NNN 把舞台（=卡片可用宽）固定成该宽度 */
+  body.__fixed .stage { max-width: var(--stage-w); }
+  .hint { font-size: 12px; color: rgb(var(--content-subtle)); margin: 22px 0 8px;
+    border-left: 3px solid rgb(var(--accent) / .5); padding-left: 8px; }
+  /* 近似 MessageRow / 明细行的 Tailwind 类 */
+  .ubub { max-width: 84%; border-radius: 13px 13px 5px 13px; padding: 8px 12px;
+    background-color: rgb(var(--user-bubble) / var(--user-bubble-alpha)); font-size: 14px; }
+  .fake-row { display:flex; justify-content:flex-end; margin: 18px 0 6px; }
+  .md { font-size: 14px; line-height: 1.65; }
+  .md p { margin: 0 0 8px; }
+  .md code { font-family: ui-monospace, Menlo, monospace; font-size: 12px;
+    background: rgb(var(--surface-muted)); border: 1px solid rgb(var(--edge)/.6);
+    border-radius: 4px; padding: 1px 4px; }
+  .trow { display:flex; align-items:center; gap:8px; padding:5px 0; font-size:12.5px; min-width:0; }
+  .trow .tn { font-weight:600; color: rgb(var(--content-muted)); flex:none; }
+  .trow .tt { font-family: ui-monospace, Menlo, monospace; font-size:11px;
+    color: rgb(var(--content-subtle)); overflow:hidden; text-overflow:ellipsis;
+    white-space:nowrap; min-width:0; }
+  .trow .tm { margin-left:auto; display:inline-flex; align-items:center; gap:6px; flex:none; font-size:11px; }
+  .dst { font-family: ui-monospace, Menlo, monospace; }
+  .dst .up { color: rgb(var(--success)); font-weight:600; }
+  .dst .dn { color: rgb(var(--danger)); font-weight:600; }
+  .eq { display:inline-flex; align-items:flex-end; gap:2px; height:12px; }
+  .eq > span { width:2.5px; height:100%; border-radius:1px; background: rgb(var(--accent));
+    transform-origin:bottom; animation: live-eq-bounce 1s ease-in-out infinite; }
+  .eq > span:nth-child(2) { animation-delay:.16s; }
+  .eq > span:nth-child(3) { animation-delay:.32s; }
+  .mono { font-variant-numeric: tabular-nums; }
+  .sep { opacity:.6; }
+  .mrow { display:inline-flex; min-width:0; align-items:center; gap:6px; flex:none; }
+  .mav { display:inline-flex; width:18px; height:18px; align-items:center; justify-content:center;
+    border-radius:6px; font-size:10px; font-weight:700; color:#fff; }
+  .mname { color: rgb(var(--content-muted)); overflow:hidden; text-overflow:ellipsis;
+    white-space:nowrap; font-size:12px; }
+  .ml { margin-left:auto; flex:none; opacity:.7; font-size:12px; }
+  .done-prefix { display:inline-flex; align-items:center; gap:5px; color: rgb(var(--accent)); }
+  .done-word { font-weight:600; color: rgb(var(--content)); font-size:12px; }
+  .head-stat { display:flex; min-width:0; flex-wrap:wrap; align-items:center; gap:6px; font-size:12px; }
+</style>
+</head>
+<body>
+<div class="stage">
+
+  <div class="hint">① 完成态台账：边框卡片 + 台头（回执 已完成 · 用时 · 步数 · 改 N 个文件 ± · tokens）+ 明细行；回复正文在卡片之外</div>
+
+  <div class="fake-row"><div class="ubub">登录页在弱网下会一直转圈，帮我看下原因并修掉。</div></div>
+
+  <div class="chat-ledger" data-phase="done" data-open="true">
+    <div class="chat-ledger-head">
+      <span class="mrow">
+        <span class="mav" style="background:#0d9488">D</span>
+        <span class="mname chat-model-name">deepseek-flash</span>
+      </span>
+      <span class="head-stat">
+        <span class="done-word">已完成</span>
+        <span class="chat-ledger-clock">
+          <span class="sep">·</span><span class="mono">23:14:05</span>
+        </span>
+        <span class="sep">·</span>
+        <span class="mono chat-ledger-duration">12.3s</span>
+        <span class="sep">·</span><span>7 步</span>
+        <span class="sep">·</span><span class="chat-ledger-files-long">改 3 个文件</span><span class="chat-ledger-files-short">3 文件</span>
+        <span class="dst"><b class="up">+42</b> <b class="dn">−6</b></span>
+        <span class="sep">·</span><span class="mono">18.4k tokens</span>
+      </span>
+      <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"
+        style="margin-left:auto;flex:none;color:rgb(var(--content-subtle));transform:rotate(-90deg)"><path d="M6 9l6 6 6-6"/></svg>
+    </div>
+    <div class="chat-fold" data-open="true">
+      <div class="chat-fold-inner">
+        <div class="chat-ledger-body">
+          <div class="trow"><span class="chat-st" data-status="done" aria-hidden="true"><span class="chat-st-run"></span><span class="chat-st-done"><svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M5 12.8l4.6 4.6L19 6.6"/></svg></span></span><span class="tn">Read</span><span class="tt">src/renderer/pages/Login.tsx</span><span class="tm"></span></div>
+          <div class="trow"><span class="chat-st" data-status="done" aria-hidden="true"><span class="chat-st-run"></span><span class="chat-st-done"><svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M5 12.8l4.6 4.6L19 6.6"/></svg></span></span><span class="tn">Edit</span><span class="tt">src/renderer/pages/Login.tsx</span><span class="tm"><span class="dst"><b class="up">+24</b> <b class="dn">−6</b></span></span></div>
+          <div class="trow"><span class="chat-st" data-status="error" aria-hidden="true" style="color:rgb(var(--danger))"><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg></span><span class="tn">Bash</span><span class="tt">pnpm typecheck</span><span class="tm"></span></div>
+        </div>
+      </div>
+    </div>
+    <span class="chat-ledger-scan" aria-hidden="true"></span>
+  </div>
+
+  <div class="md" style="margin-top:12px">
+    <p>找到原因了：<code>Login.tsx</code> 的 <code>catch</code> 分支只把错误写进 state，没有复位 <code>submitting</code>。弱网下请求超时抛错，按钮就永久停在 loading。</p>
+  </div>
+
+  <div class="hint">② 运行中台账：同一张卡，台头翻成「● 运行中 · 走时 · 实时操作 … N 步」，底部扫描光带表示仍在写入；明细行内执行中的工具显圆弧</div>
+
+  <div class="fake-row"><div class="ubub">再帮我补一个单测。</div></div>
+
+  <div class="chat-ledger" data-phase="running" data-open="true">
+    <div class="chat-ledger-head">
+      <span class="mrow">
+        <span class="mav" style="background:#7c3aed">C</span>
+        <span class="mname chat-model-name">claude-sonnet-4-5</span>
+      </span>
+      <span class="head-stat">
+        <span class="chat-ledger-dot" aria-hidden="true"></span>
+        <span class="chat-ledger-live">运行中</span>
+        <span class="chat-ledger-clock">
+          <span class="mono">23:15:02</span>
+          <span class="sep">·</span>
+        </span>
+        <span class="mono chat-ledger-duration">4.8s</span>
+        <span class="eq" aria-hidden="true"><span></span><span></span><span></span></span>
+        <span style="display:inline-flex;min-width:0;align-items:center;border-left:1px solid rgb(var(--edge));padding-left:8px">
+          <span style="display:inline-flex;align-items:center;gap:6px;white-space:nowrap">
+            <span style="font-weight:500;color:rgb(var(--content))">Edit</span>
+            <span style="font-family:ui-monospace,Menlo,monospace;font-size:11px;color:rgb(var(--content-subtle))">auth.test.ts</span>
+          </span>
+        </span>
+      </span>
+      <span class="ml mono">2 步</span>
+    </div>
+    <div class="chat-ledger-body">
+      <div class="trow"><span class="chat-st" data-status="done" aria-hidden="true"><span class="chat-st-run"></span><span class="chat-st-done"><svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M5 12.8l4.6 4.6L19 6.6"/></svg></span></span><span class="tn">Read</span><span class="tt">src/renderer/lib/__tests__/auth.test.ts</span><span class="tm"></span></div>
+      <div class="trow"><span class="chat-st" data-status="running" aria-hidden="true"><span class="chat-st-run"></span><span class="chat-st-done"><svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M5 12.8l4.6 4.6L19 6.6"/></svg></span></span><span class="tn">Edit</span><span class="tt">src/renderer/lib/__tests__/auth.test.ts</span><span class="tm"><span class="dst"><b class="up">+18</b></span></span></div>
+      <div style="margin-top:6px;display:flex;align-items:center;gap:6px">
+        <span class="chat-caret" aria-hidden="true"></span>
+      </div>
+    </div>
+    <span class="chat-ledger-scan" aria-hidden="true"></span>
+  </div>
+
+  <div class="hint">③ 收起态台账（data-open=false）：只剩回执一行，台头与明细之间的分隔线一并收掉</div>
+
+  <div class="chat-ledger" data-phase="done" data-open="false" style="margin-top:10px">
+    <div class="chat-ledger-head">
+      <span class="mrow">
+        <span class="mav" style="background:#0d9488">D</span>
+        <span class="mname chat-model-name">deepseek-flash</span>
+      </span>
+      <span class="head-stat">
+        <span class="done-word">已完成</span>
+        <span class="sep">·</span><span class="mono chat-ledger-duration">8.4s</span>
+        <span class="sep">·</span><span>4 步</span>
+        <span class="sep">·</span><span class="chat-ledger-files-long">改 2 个文件</span><span class="chat-ledger-files-short">2 文件</span>
+        <span class="dst"><b class="up">+12</b> <b class="dn">−4</b></span>
+        <span class="sep">·</span><span class="mono">4.2k tokens</span>
+      </span>
+      <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"
+        style="margin-left:auto;flex:none;color:rgb(var(--content-subtle));transform:rotate(-90deg)"><path d="M6 9l6 6 6-6"/></svg>
+    </div>
+    <div class="chat-fold" data-open="false">
+      <div class="chat-fold-inner">
+        <div class="chat-ledger-body">
+          <div class="trow"><span class="tn">Grep</span><span class="tt">timeout</span></div>
+        </div>
+      </div>
+    </div>
+    <span class="chat-ledger-scan" aria-hidden="true"></span>
+  </div>
+
+</div>
+<script>
+// ?w=NNN 固定卡片可用宽
+const wm = location.search.match(/[?&]w=(\d+)/);
+if (wm) {
+  document.documentElement.style.setProperty("--stage-w", wm[1] + "px");
+  document.body.classList.add("__fixed");
+}
+// 量测各回执行在给定宽度下是否折行（供开发期核对）
+window.__measureHead = () => [...document.querySelectorAll(".chat-ledger-head")].map((h) => {
+  const hcs = getComputedStyle(h);
+  const content = [...h.children].map((c) => Math.round(c.getBoundingClientRect().width));
+  return {
+    headH: Math.round(h.getBoundingClientRect().height),
+    lineH: Math.round(parseFloat(hcs.fontSize) * 1.5),
+    childWidths: content,
+    wrapped: h.getBoundingClientRect().height > parseFloat(hcs.fontSize) * 2.4,
+  };
+});
+</script>
+</body>
+</html>

@@ -791,24 +791,382 @@ body {
   background-color: rgb(var(--user-bubble) / var(--user-bubble-alpha));
 }
 
-/* ───────────── Turn divider (开始 · 用时 pill + flanking rules) ─────────────
- * TurnStatRow (ChatPane) and the TurnPanel header (MessageBlocks) echo the
- * user-message bubble color: the pill fill and the gradient hairlines that
- * flank it are alpha tints of --user-bubble, so picking a bubble color in
- * Settings tints the whole divider with it. Same theme-scoped alpha as
- * .user-bubble-fill (dark needs the stronger tint to register on the
- * near-black surface). With the default gray bubble the result is nearly
- * indistinguishable from the old surface-muted/edge look. */
-.turn-pill-fill {
-  background-color: rgb(var(--user-bubble) / var(--user-bubble-alpha));
+/* ───────────── Chat stream redesign · 方案A「脉络」 ─────────────
+ * prototypes/chat-stream-redesign.html 方案 A。核心语义:
+ *  - 完成回合 = 左对齐过程摘要行（时钟 · 用时 · N 步 · 改 N 个文件 +a −d），
+ *    过程细节在摘要行后折叠展开（grid-rows 0fr↔1fr，见 .chat-fold）。
+ *  - 运行中 = 摘要行挂均衡器走时 + 实时操作 ticker，流式尾部一枚闪烁光标
+ *    （.chat-caret）替代转圈图标。
+ *  按产品反馈陆续移除的装饰：左脊生命线（spine / 节点刻度）与过程-回复之间
+ *  的分界横线 —— 过程进度改由摘要行的实时操作 ticker 与各工具卡的状态图标
+ *  承载，层级本身已说明哪段是回复。运动令牌见下方 :root。 */
+/* 动效令牌挂在 :root 而不是 [data-chat-root]：这些曲线被 .chat-fold 等
+ * 规则用在 transition/animation 简写里，而 CSS 变量在作用域外解析失败会让
+ * 整条简写失效（动画静默不播放，且不报任何错）。放在 :root 保证任何宿主
+ * 下都可用，也避免"组件搬到 chat root 之外就丢动画"这类隐形回归。 */
+:root {
+  --chat-ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --chat-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
 }
 
-.turn-pill-line-r {
-  background: linear-gradient(to right, transparent, rgb(var(--user-bubble) / var(--user-bubble-alpha)));
+/* 回合根节点：结构标记（运行段包裹与完成态共用同一根），无布局语义。 */
+.chat-turn {
+  position: relative;
 }
 
-.turn-pill-line-l {
-  background: linear-gradient(to left, transparent, rgb(var(--user-bubble) / var(--user-bubble-alpha)));
+/* 过程摘要行（TurnPanel 头）：左对齐，取代旧的居中药丸。等宽 padding 让
+ * hover 底色在文字两侧对称探出；负 margin 曾用于抵消脊柱列的 7px 内缩，
+ * 脊线移除后归零 —— 文字直接与正文左缘对齐。 */
+.chat-proc-sum {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  text-align: left;
+  border: none;
+  background: none;
+  padding: 3px 7px;
+  margin-left: 0;
+  border-radius: 8px;
+  font-size: var(--chat-fs-xs);
+  color: rgb(var(--content-subtle));
+  cursor: pointer;
+  transition: background 0.16s ease, color 0.16s ease;
+}
+
+.chat-proc-sum:hover {
+  background: rgb(var(--surface-hover) / 0.6);
+  color: rgb(var(--content-muted));
+}
+
+/* ── 运行台账（方案B 形态）────────────────────────────────────────────────
+ * 「过程」不再是散落在流里的一串行，而是一张有边框的卡片：台头（运行中时的
+ * 计数 + 实时操作 / 回合结束后的回执）+ 明细（展开后的过程行）。
+ *
+ * 两态共用同一张卡：运行中台头随计时走字、底部一条扫描光带表示"还在继续"；
+ * 回合结束后台头翻成回执（✓ 已完成 · 用时 · N 步 · 改 N 个文件 ±），光带收掉、
+ * 底色沉一档 —— 读作"这份台账已经结清"。data-phase 是回合阶段，data-open 是
+ * 折叠状态；收起时台头与明细之间的分隔线一并收掉，避免一条悬空的分隔线。 */
+.chat-ledger {
+  position: relative;
+  margin-top: var(--chat-block-gap);
+  border: 1px solid rgb(var(--edge));
+  border-radius: 12px;
+  overflow: hidden;
+  background: rgb(var(--surface));
+  transition: background 0.4s ease, border-color 0.4s ease;
+}
+
+.chat-ledger[data-phase="done"] {
+  background: rgb(var(--surface-muted) / 0.34);
+  border-color: rgb(var(--edge) / 0.85);
+}
+
+/* 台头 / 回执：同一行槽位，两态切换内容。 */
+.chat-ledger-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  padding: 7px 11px;
+  border: none;
+  background: none;
+  text-align: left;
+  font-size: var(--chat-fs-xs);
+  color: rgb(var(--content-muted));
+  border-bottom: 1px solid rgb(var(--edge) / 0.7);
+  transition: border-color 260ms var(--chat-ease-out), background 0.16s ease;
+}
+
+button.chat-ledger-head:hover {
+  background: rgb(var(--surface-hover) / 0.5);
+}
+
+.chat-ledger[data-open="false"] .chat-ledger-head {
+  border-bottom-color: transparent;
+}
+
+/* 运行中的呼吸圆点。 */
+.chat-ledger-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex: none;
+  background: rgb(var(--accent));
+  animation: chat-ledger-dot 1.9s ease-in-out infinite;
+}
+
+@keyframes chat-ledger-dot {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.5; transform: scale(0.8); }
+}
+
+.chat-ledger-live {
+  font-weight: 600;
+  color: rgb(var(--accent-strong));
+}
+
+/* 底部扫描光带：运行中表示"还在继续"，结清后收掉。 */
+.chat-ledger-scan {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 1.5px;
+  background: linear-gradient(90deg, transparent, rgb(var(--accent) / 0.85), transparent);
+  animation: chat-ledger-scan 1.9s ease-in-out infinite;
+  transition: opacity 0.35s ease;
+  pointer-events: none;
+}
+
+.chat-ledger[data-phase="done"] .chat-ledger-scan {
+  opacity: 0;
+  animation: none;
+}
+
+@keyframes chat-ledger-scan {
+  0% { transform: translateX(-45%); opacity: 0; }
+  40% { opacity: 1; }
+  100% { transform: translateX(45%); opacity: 0; }
+}
+
+/* 台头是一行摘要（模型 · 状态 · 时钟 · 用时 · 步数 · 文件 ± · tokens）。条目
+ * 多了它会在窄处折成两行，读起来像"两条摘要"——所以按信息价值依次让位，而不
+ * 是让它换行。
+ *
+ * 查询容器就是台头自身（container-type: inline-size），量的是卡片的真实宽度，
+ * 而不是面板宽度：卡片宽度 = 面板宽 − 两侧 gutter（gutter 最多 128px），用面板
+ * 宽度做阈值会在 gutter 宽时误判"放得下"。台头自己就是被约束的那一行，拿它做
+ * 容器得到的判断永远和实际排版一致（侧栏子会话、宽屏 3:7 等宿主同样成立）。
+ *
+ * 让位顺序（阈值按实测所需宽度定，留 ~20px 余量）：
+ *   全量 ≈620px 卡片宽 → 收时钟（时间线位置本身已提供上下文，价值最低）
+ *                       → 收模型名（保留首字母头像，身份不丢）
+ *                       → 压缩"改 N 个文件"的措辞
+ *                       → 最后收耗时。 */
+.chat-ledger-head {
+  container-type: inline-size;
+}
+
+/* 时钟槽的布局归这里管（组件侧不给 Tailwind 的 display 工具类）：否则同一
+ * 优先级下 .flex 与下面的 display:none 谁生效取决于产物顺序，降级会时灵时不灵。 */
+.chat-ledger-clock {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.chat-ledger-files-short {
+  display: none;
+}
+
+@container (width < 37.5rem) {
+  /* ≈600px：先省掉时钟。 */
+  .chat-ledger-clock {
+    display: none;
+  }
+}
+
+@container (width < 33.75rem) {
+  /* ≈540px：模型名收起，只留首字母头像。 */
+  .chat-model-name {
+    display: none;
+  }
+}
+
+@container (width < 29.5rem) {
+  /* ≈470px：措辞压缩。 */
+  .chat-ledger-files-long {
+    display: none;
+  }
+  .chat-ledger-files-short {
+    display: inline;
+  }
+}
+
+@container (width < 25rem) {
+  /* ≈400px（手机壳 / 子会话面板）：最后让位的是耗时。信息优先级
+   * 状态 > 步数/文件± > tokens > 耗时 > 时钟，到这里前两项和时钟都已处理过。 */
+  .chat-ledger-duration {
+    display: none;
+  }
+}
+
+/* 明细区：行与行之间的层次由内容自己给（工具卡自带 hover 行/缩进），这里只
+ * 负责内边距。 */
+.chat-ledger-body {
+  padding: 2px 11px 6px;
+}
+
+/* 过程面的折叠动画（TurnPanel 的展开体）。
+ *   - 外层用 grid-template-rows 0fr↔1fr 做高度收束（内容保持挂载，只被裁剪，
+ *     所以中途重挂载不会闪）；
+ *   - 内层额外做一次 opacity + translateY 的渐隐上移 —— 高度动画被裁剪的内容
+ *     只有一个"硬边"，看上去像被切掉；渐隐让收束读作"内容退场"而不是"被剪断"。
+ *     opacity/transform 走合成器，不额外触发布局，纯粹是观感增益。
+ *   - 时长令牌与 ChatPane 的滚动锚定预算(TURN_FOLD_MS)必须一致：JS 侧用同一个
+ *     常量推导挂起窗口，改这里要同步改常量。 */
+.chat-fold {
+  display: grid;
+  grid-template-rows: 1fr;
+  transition: grid-template-rows 260ms var(--chat-ease-out);
+}
+
+.chat-fold[data-open="false"] {
+  grid-template-rows: 0fr;
+}
+
+.chat-fold-inner {
+  overflow: hidden;
+  opacity: 1;
+  transform: translateY(0);
+  transition: opacity 200ms ease, transform 260ms var(--chat-ease-out);
+}
+
+/* 收起初段让内容先行淡出/上移，避免"硬边"先行；展开时同时淡入。 */
+.chat-fold[data-open="false"] .chat-fold-inner {
+  opacity: 0;
+  transform: translateY(-5px);
+}
+
+/* 流式光标：正文末尾的闪烁块，替代转圈 loader。 */
+.chat-caret {
+  display: inline-block;
+  width: 7px;
+  height: 1.05em;
+  vertical-align: -0.16em;
+  margin-left: 2px;
+  border-radius: 1.5px;
+  background: rgb(var(--accent));
+  box-shadow: 0 0 8px rgb(var(--accent) / 0.7);
+  animation: chat-caret-blink 1.06s ease-in-out infinite;
+}
+
+@keyframes chat-caret-blink {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.12;
+  }
+}
+
+/* 入场动效。chat-bubble-in 只在「刚发出」的用户气泡上由组件层打上（新鲜度
+ * 窗口判定，历史水合/滚动重挂载不重放）；chat-enter 只打在运行中回合的流式
+ * 行上 —— 新块随流到达时上浮入场，历史行保持静态。 */
+.chat-bubble-in {
+  animation: chat-bubble-in 0.32s var(--chat-ease-out) both;
+}
+
+@keyframes chat-bubble-in {
+  from {
+    opacity: 0;
+    transform: translateX(10px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.chat-enter {
+  animation: chat-enter 0.32s var(--chat-ease-out) both;
+}
+
+@keyframes chat-enter {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* 工具行状态图标：运行中圆弧 ↔ 完成对勾在同一格内交叉淡换（error 仍是红
+ * 叉，由组件层直接渲染）。两态 glyph 常驻 DOM，靠 data-status 切换透明度，
+ * transition 保证 running→done 是一次交叉淡换 + 轻微回弹。 */
+.chat-st {
+  position: relative;
+  display: inline-grid;
+  place-items: center;
+  width: 12px;
+  height: 12px;
+  flex: none;
+}
+
+.chat-st > span {
+  grid-area: 1 / 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: opacity 0.24s ease, transform 0.32s var(--chat-spring);
+}
+
+.chat-st-run {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 1.6px solid rgb(var(--accent) / 0.26);
+  border-top-color: rgb(var(--accent));
+  animation: chat-st-spin 0.72s linear infinite;
+}
+
+.chat-st-done {
+  opacity: 0;
+  transform: scale(0.5);
+  color: rgb(var(--accent));
+}
+
+.chat-st[data-status="done"] .chat-st-run {
+  opacity: 0;
+  animation: none;
+}
+
+.chat-st[data-status="done"] .chat-st-done {
+  opacity: 1;
+  transform: none;
+}
+
+@keyframes chat-st-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Reduced motion：光标常亮、入场/生长动画关停、状态圆弧定格为实线扇形、
+ * 全部色彩 transition 即时。信息不丢，只是安静。 */
+@media (prefers-reduced-motion: reduce) {
+  .chat-caret {
+    animation: none;
+    opacity: 1;
+  }
+
+  .chat-bubble-in,
+  .chat-enter {
+    animation: none;
+  }
+
+  .chat-st-run {
+    animation: none;
+    border-top-color: rgb(var(--accent));
+  }
+
+  .chat-st > span,
+  .chat-fold,
+  .chat-fold-inner,
+  .chat-ledger,
+  .chat-ledger-head,
+  .chat-ledger-scan {
+    transition: none;
+  }
+
+  .chat-ledger-dot,
+  .chat-ledger-scan {
+    animation: none;
+  }
 }
 
 /* ───────────── Status capsule (glass pill + activity popover) ─────────────
@@ -1105,57 +1463,285 @@ body {
   --chat-md-leading: 1.75;
 }
 
-/* ───────────── Narrow-composer spacing ─────────────
- * When the chat pane is narrow (side panels open / small window), the
- * composer's bottom action row can overflow its card because the chip cluster
- * (Model/Effort/Permission/ContextRing) has a large min-content width. The
- * structural fix is min-w-0 down the flex chain (in the TSX), which lets the
- * chips shrink/truncate/wrap. On top of that, these container-query rules
- * tighten the row/chip paddings and gaps at narrow widths so the action
- * buttons always stay inside the input box with comfortable spacing.
- *   .composer-action-row → bottom button row (paperclip + chips + send)
- *   .composer-chips      → the chip cluster (ComposerToolbar root)
- *   .composer-chip       → shared class on every chip trigger
- *   .composer-chips-root → the inline chip row (ComposerToolbar), wide mode
- *   .composer-chips-toggle → the single-icon entry shown in narrow mode
- * Unlayered selectors beat Tailwind's layered utilities, so these win over
- * the inline px-2.5 / gap-2 utilities. */
+/* ───────────── Composer action row · mini pill (方案 B, single-pill) ─────────────
+ * The session-config controls live in ONE segmented mini pill at every
+ * composer width (prototypes/composer-redesign.html 方案 B, single-pill
+ * revision): attach "+" → model → effort → permission → context ring.
+ * Nothing folds away — as the card narrows the pill only compacts
+ * (labels → icons + level bars + color dot; ring % collapses, the ring and
+ * the + stay), driven by useComposerRowFit's tier (card < 560px, measured
+ * overflow above it, 24px hysteresis).
+ *   .composer-action-row   → bottom button row (pill + right cluster)
+ *   .composer-chips        → the left cluster wrapping the pill
+ *   .composer-minipill     → the segmented mini pill (ComposerToolbar)
+ *   .composer-minipill-seg → one clickable segment of the pill
+ *   .composer-lblwrap      → 1fr↔0fr grid shell collapsing a label
+ * These rules only style/animate; the tier decision lives in the hook.
+ * Unlayered selectors beat Tailwind's layered utilities, so they win over
+ * inline px/gap utilities. */
 
-/* Wide mode (default): the inline chip row is shown; the narrow-mode toggle
- * entry is absent from the layout. Collapsing into the toggle has two
- * triggers, both toggled via `composer-row-collapsed` on the action row by
- * the useComposerRowFit hook: (1) a width floor — the composer card under
- * 580px always folds; (2) measured fit above the floor — the chip row's min
- * width depends on locale and selected values (and the pane width isn't the
- * same as the composer's real width — side gutters + the always-visible
- * mic/provider/send cluster eat into it), so only content can tell when the
- * row stops fitting. */
-[data-chat-root] .composer-chips-toggle {
-  display: none;
+/* Motion vocabulary shared by every composer transition below. */
+:root {
+  --composer-ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --composer-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --composer-dur-collapse: 360ms;
+  --composer-dur-fade: 220ms;
 }
 
-[data-chat-root] .composer-action-row.composer-row-collapsed .composer-chips-root {
-  display: none;
-}
-[data-chat-root] .composer-action-row.composer-row-collapsed .composer-chips-toggle {
+/* ── Mini pill ──────────────────────────────────────────────────────────
+ * One bordered container; every segment is an independent trigger opening
+ * its own menu/popover — no behaviour change vs the old chip row, just a
+ * tighter container that persists through every width. */
+[data-chat-root] .composer-minipill {
   display: inline-flex;
-}
-
-/* Overflow protection: the chip cluster's containers shrink freely (min-w-0
- * down the flex chain), so every chip trigger must be shrinkable too — a chip
- * that refuses to shrink keeps its natural width and PAINTS OVER the adjacent
- * mic/provider/send cluster while the containers get narrower around it. With
- * min-width: 0 each chip degrades gracefully instead (its value text carries
- * `truncate` → ellipsis), and the row's combined minimum width sits far below
- * the 580px fold floor — so above the floor overlap is structurally
- * impossible, and below it the fold into the toggle icon takes over. Applied
- * at the CSS level (not just per-component classes) so any chip added to the
- * cluster later inherits the same guarantee. */
-[data-chat-root] .composer-chips-root > .composer-chip {
+  align-items: center;
+  height: 1.75rem;            /* 28px — matches the chip row's visual height */
+  padding: 0 0.1875rem;
+  border: 1px solid rgb(var(--edge));
+  border-radius: 0.5625rem;   /* 9px */
+  background: rgb(var(--surface-muted) / 0.6);
+  flex: none;
   min-width: 0;
 }
+[data-chat-root] .composer-minipill-seg {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3125rem;
+  height: 1.375rem;           /* 22px segment — comfortable hit target */
+  padding: 0 0.4375rem;
+  border: none;
+  background: none;
+  border-radius: 0.375rem;
+  cursor: pointer;
+  white-space: nowrap;
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: rgb(var(--content-muted));
+  min-width: 0;
+  flex: none;
+  transition: background 0.15s, color 0.15s, gap var(--composer-dur-collapse) var(--composer-ease-out);
+}
+[data-chat-root] .composer-minipill-seg:hover {
+  background: rgb(var(--accent) / 0.11);
+  color: rgb(var(--accent-strong));
+}
+[data-chat-root] .composer-minipill-seg[data-popup-open] {
+  background: rgb(var(--accent) / 0.12);
+}
+/* Disabled segment (the attach "+" while an approval owns the composer):
+ * no hover play, just the dim. */
+[data-chat-root] .composer-minipill-seg:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+  background: none;
+  color: rgb(var(--content-muted));
+}
+[data-chat-root] .composer-minipill-mid {
+  width: 1px;
+  height: 0.875rem;
+  background: rgb(var(--edge));
+  flex: none;
+  transition: opacity 0.3s var(--composer-ease-out);
+}
+[data-chat-root] .composer-minipill[data-compact="1"] .composer-minipill-mid {
+  opacity: 0.5;
+}
+/* Compact: labels collapse to icons, so the icon↔label gap collapses with
+ * them (the lblwrap shells shrink the width; the gap must follow to zero or
+ * it keeps a phantom notch next to every icon). */
+[data-chat-root] .composer-minipill[data-compact="1"] .composer-minipill-seg {
+  gap: 0;
+}
+/* Context-ring segment: not a trigger of its own (the ring button inside
+ * carries the hover/tooltip), just spacing that matches the other
+ * segments. The ring itself never collapses — only its % label does (via
+ * the lblwrap shell below). */
+[data-chat-root] .composer-minipill-ringseg {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 0.4375rem;
+  flex: none;
+}
 
-/* Narrow-pane cosmetics only (gaps/paddings) — the collapse decision itself
+/* Label collapse shell: the same 1fr ↔ 0fr grid trick at label granularity,
+ * driven by the pill's / provider chip's data-compact — segments and the
+ * provider chip shrink to their icons smoothly, no width bookkeeping. */
+[data-chat-root] .composer-lblwrap {
+  display: grid;
+  grid-template-columns: 1fr;
+  min-width: 0;
+  transition: grid-template-columns var(--composer-dur-collapse) var(--composer-ease-out);
+}
+[data-chat-root] .composer-lblwrap > span {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+[data-chat-root] .composer-minipill[data-compact="1"] .composer-lblwrap,
+[data-chat-root] .composer-provider-chip[data-compact="1"] .composer-lblwrap {
+  grid-template-columns: 0fr;
+}
+
+/* Effort level bars: the pill's compact-friendly value indicator (one bar
+ * per level, lit up to the active rank). Heights are inline; this styles the
+ * ramp + the lit state. */
+[data-chat-root] .composer-lvlbars {
+  display: inline-flex;
+  gap: 2px;
+  align-items: center;
+  flex: none;
+}
+[data-chat-root] .composer-lvlbars > span {
+  width: 3px;
+  border-radius: 1.5px;
+  background: rgb(var(--content-subtle));
+  opacity: 0.45;
+  transition: height 0.3s var(--composer-spring), opacity 0.3s, background 0.3s;
+}
+[data-chat-root] .composer-lvlbars > span.on {
+  opacity: 1;
+  background: rgb(var(--accent));
+}
+
+/* ── Card polish (方案 B 质感 baseline) ──────────────────────────────── */
+/* Focus: an accent hairline lights up along the card's top edge (the border
+ * + halo come from the Tailwind focus-within utilities on the card). */
+[data-chat-root] .composer-card::after {
+  content: "";
+  position: absolute;
+  left: 1rem;
+  right: 1rem;
+  top: 0;
+  height: 1px;
+  border-radius: 2px;
+  background: linear-gradient(90deg, transparent, rgb(var(--accent) / 0.65), transparent);
+  opacity: 0;
+  transition: opacity 0.34s var(--composer-ease-out);
+  pointer-events: none;
+}
+[data-chat-root] .composer-card:focus-within::after {
+  opacity: 1;
+}
+/* Busy: a light sweep runs along the top edge while a turn is in flight —
+ * carries the "working" signal into the card itself. */
+[data-chat-root] .composer-card[data-busy="1"]::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  height: 2px;
+  border-radius: 16px 16px 0 0;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgb(var(--accent) / 0.15) 20%,
+    rgb(var(--accent)) 50%,
+    rgb(var(--accent) / 0.15) 80%,
+    transparent
+  );
+  background-size: 220% 100%;
+  animation: composer-sweep 1.6s linear infinite;
+}
+@keyframes composer-sweep {
+  from { background-position: 130% 0; }
+  to { background-position: -130% 0; }
+}
+
+/* ── Send / stop feedback ─────────────────────────────────────────────── */
+/* Ready (has content): a resident soft glow says "可以发了" without touching
+ * transform (the button's Tailwind hover/active scales own that). */
+[data-chat-root] .composer-send[data-ready="1"] {
+  box-shadow: 0 4px 16px -5px rgb(var(--accent) / 0.55);
+}
+/* Launch: one-shot after a send/enqueue — the icon flies out and re-enters
+ * from the opposite corner while a halo pulse expands around the button.
+ * Toggled via the composer-send-launch class; onAnimationEnd clears it. */
+[data-chat-root] .composer-send-launch {
+  animation: composer-send-pulse 0.5s var(--composer-ease-out);
+}
+[data-chat-root] .composer-send-launch > svg {
+  animation: composer-send-launch-icon 0.5s ease-in-out;
+}
+@keyframes composer-send-launch-icon {
+  0% { transform: translate(0, 0) scale(1); opacity: 1; }
+  42% { transform: translate(13px, -13px) scale(0.55); opacity: 0; }
+  43% { transform: translate(-11px, 11px) scale(0.55); opacity: 0; }
+  100% { transform: translate(0, 0) scale(1); opacity: 1; }
+}
+@keyframes composer-send-pulse {
+  0% { box-shadow: 0 0 0 0 rgb(var(--accent) / 0.45); }
+  100% { box-shadow: 0 0 0 12px rgb(var(--accent) / 0); }
+}
+/* Stop: a conic-progress ring spins around the button while generation
+ * runs — masked to a 2.5px annulus so it reads as a halo, not a disc. */
+[data-chat-root] .composer-stop {
+  position: relative;
+}
+[data-chat-root] .composer-stop::before {
+  content: "";
+  position: absolute;
+  inset: -4px;
+  border-radius: 16px;
+  pointer-events: none;
+  background: conic-gradient(
+    from 0deg,
+    rgb(var(--accent) / 0) 0 62%,
+    rgb(var(--accent) / 0.9) 86%,
+    rgb(var(--accent) / 0) 100%
+  );
+  -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 2.5px), #000 calc(100% - 2.5px));
+  mask: radial-gradient(farthest-side, transparent calc(100% - 2.5px), #000 calc(100% - 2.5px));
+  animation: composer-spin 1.35s linear infinite;
+}
+@keyframes composer-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* ── Entrance animations (tags / queued prompts) ──────────────────────── */
+@keyframes composer-tag-in {
+  from { opacity: 0; transform: translateY(7px) scale(0.93); }
+  to { opacity: 1; transform: none; }
+}
+/* fill "backwards" (not "both"): after the entrance completes the element
+ * returns to its natural styles, so later state classes (e.g. the queue
+ * item's drag dimming opacity-40) aren't held hostage by a filled animation. */
+[data-chat-root] .composer-tag-in {
+  animation: composer-tag-in 0.36s var(--composer-spring) backwards;
+}
+@keyframes composer-q-in {
+  from { opacity: 0; transform: translateX(-8px); }
+  to { opacity: 1; transform: none; }
+}
+[data-chat-root] .composer-q-in {
+  animation: composer-q-in 0.34s var(--composer-ease-out) backwards;
+}
+
+/* Reduced motion: label shells snap instead of animating, and the
+ * decorative loops (sweep / spin / launch) flatten away; entrance animations
+ * degrade to instant appearance so arrival is still perceivable. */
+@media (prefers-reduced-motion: reduce) {
+  [data-chat-root] .composer-lblwrap,
+  [data-chat-root] .composer-minipill-seg {
+    transition: none;
+  }
+  [data-chat-root] .composer-card[data-busy="1"]::before,
+  [data-chat-root] .composer-stop::before {
+    animation: none;
+  }
+  [data-chat-root] .composer-send-launch,
+  [data-chat-root] .composer-send-launch > svg {
+    animation: none;
+  }
+  [data-chat-root] .composer-tag-in,
+  [data-chat-root] .composer-q-in {
+    animation-duration: 0.01s;
+  }
+}
+
+/* Narrow-pane cosmetics only (gaps/paddings) — the tier decision itself
  * lives in useComposerRowFit. */
 @container (width < 30rem) {
   [data-chat-root] .composer-action-row {

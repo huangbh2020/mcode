@@ -6,7 +6,6 @@ import { useI18n } from "@renderer/lib/i18n/index.js";
 import {
   IconAlertTriangle,
   IconCheck,
-  IconChevronDown,
   IconChevronRight,
   IconCpu,
   IconPlus,
@@ -33,13 +32,15 @@ import { useNarrowViewport } from "@renderer/hooks/useNarrowViewport.js";
  * Menu.Portal (document.body), so it isn't clipped by the composer card's
  * overflow-hidden. Config rows with models open a nested submenu.
  *
- * Presentation: layout="chip" (default) renders the compact composer chip;
- * layout="row" (the collapsed-toolbar popup) renders a full-width settings
- * row — icon + label on the left, current value + chevron on the right — and
- * opens the menu to the RIGHT of the row (cascading) so the vertical list in
- * the popup stays visible; on phone-class viewports (no room for panel +
- * menu side by side) it opens upward instead, where the tall screen has
- * plenty of space.
+ * Presentation: layout="pill" (default) renders the picker as a segment of
+ * the composer's mini pill (same menu, borderless segment styling, labels
+ * collapse via the pill's data-compact CSS shells); layout="row" (the
+ * collapsed-hosts toggle popup) renders a full-width settings row — icon +
+ * label on the left, current value + chevron on the right — and opens the
+ * menu to the RIGHT of the row (cascading) so the vertical list in the
+ * popup stays visible; on phone-class viewports (no room for panel + menu
+ * side by side) it opens upward instead, where the tall screen has plenty
+ * of space.
  */
 
 /** Derive the host segment of a base URL for the secondary line. */
@@ -52,10 +53,10 @@ function hostOf(url: string): string {
 }
 
 export function ModelDropdown({
-  layout = "chip",
+  layout = "pill",
 }: {
-  /** Presentation: composer chip ("chip") vs settings row ("row"). */
-  layout?: "chip" | "row";
+  /** Presentation: pill segment ("pill") vs settings row ("row"). */
+  layout?: "pill" | "row";
 }) {
   const stacked = layout === "row";
   // Stacked rows cascade their menu to the RIGHT of the list; on a
@@ -179,8 +180,8 @@ export function ModelDropdown({
   useEffect(() => {
     if (!modelGuardPulse) return;
     const rect = triggerRef.current?.getBoundingClientRect();
-    // A hidden instance (chip row folded into the narrow-mode toggle, popup
-    // host not mounted) has no anchor — the visible sibling answers instead.
+    // A hidden instance (popup host not mounted — the row layout only
+    // exists while the toggle popup is open) has no anchor.
     if (!rect || rect.width === 0) return;
     setNudge(true);
     // Center the bubble on the chip, clamped so the text can't leave the
@@ -228,17 +229,16 @@ export function ModelDropdown({
       <Menu.Trigger
         className={cn(
           stacked
-            ? "flex w-full items-center justify-between gap-2 rounded-lg px-2.5 py-2 text-[13px] outline-none select-none transition-colors duration-100"
-            : "composer-chip flex min-w-0 items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-medium transition-all duration-150 ease-out",
-          stacked
-            ? "text-content-muted hover:bg-surface-muted hover:text-content"
-            : "hover:scale-105 hover:bg-accent/10 hover:text-accent active:scale-95",
+            ? "flex w-full items-center justify-between gap-2 rounded-lg px-2.5 py-2 text-[13px] outline-none select-none transition-colors duration-100 text-content-muted hover:bg-surface-muted hover:text-content"
+            : "composer-minipill-seg",
           // Nothing picked yet: nudge with the accent tone so the composer
-          // visibly asks for a choice instead of reading as "auto".
+          // visibly asks for a choice instead of reading as "auto". Inline
+          // on the pill segment — its unlayered CSS color beats Tailwind.
           unselected && !stacked && "text-accent",
           // Blocked-send pulse from the store guard (see the effect above).
           nudge && "model-chip-nudge",
         )}
+        style={!stacked && unselected ? { color: "rgb(var(--accent))" } : undefined}
         ref={triggerRef}
         title={t("chat.model.selectTitle")}
       >
@@ -255,10 +255,10 @@ export function ModelDropdown({
           </>
         ) : (
           <>
-            <span className="min-w-0 max-w-[180px] truncate">
-              {chipLabel}
+            <IconCpu size={13} className="shrink-0 opacity-80" />
+            <span className="composer-lblwrap">
+              <span className="max-w-[120px] truncate">{chipLabel}</span>
             </span>
-            <IconChevronDown size={11} className="shrink-0 opacity-60" />
           </>
         )}
       </Menu.Trigger>

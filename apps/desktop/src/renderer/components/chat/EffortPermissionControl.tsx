@@ -8,7 +8,6 @@ import {
   IconShieldCheck,
   IconShieldHalfFilled,
   IconShieldLock,
-  IconChevronDown,
   IconChevronRight,
 } from "@renderer/lib/icons.js";
 import { useI18n, type MessageId } from "@renderer/lib/i18n/index.js";
@@ -18,17 +17,15 @@ import { useNarrowViewport } from "@renderer/hooks/useNarrowViewport.js";
 import type { PermissionModeOption, ThinkingLevelOption } from "@contracts/provider";
 
 /**
- * Thinking-level and permission-mode pickers for the composer toolbar (V4,
- * mirrors prototypes/composer-effort-permission.html "分体块选"): two
- * SEPARATE chips — same trigger shape as the classic dropdowns — but each
- * opens a block-grid popover where every option is a tappable tile
+ * Thinking-level and permission-mode pickers for the composer toolbar.
+ * Each opens a block-grid popover where every option is a tappable tile
  * (label + a 2–4-word caption). Selections apply immediately and the panel
  * stays open; Esc / outside click closes.
  *
  * Both lists are NOT hardcoded — they come from the active provider's
  * `capabilities.thinkingLevels` / `capabilities.permissionModes` declarations,
  * so a third provider needs zero UI changes; a provider that declares neither
- * list hides the corresponding chip entirely (`null`).
+ * list hides the corresponding segment entirely (`null`).
  *
  * Tile captions resolve through the dictionary provider-qualified first
  * (`"<providerId>:<value>"` — codex's level/mode semantics are its own), then
@@ -42,12 +39,12 @@ import type { PermissionModeOption, ThinkingLevelOption } from "@contracts/provi
  * modes switch 3→2 columns — the panel keeps a constant width for any
  * provider (codex's 8 levels don't stretch it).
  *
- * Presentation: layout="chip" (default) renders the compact composer chip;
- * layout="row" (the collapsed-toolbar popup) renders a full-width settings
- * row and opens the panel to the RIGHT of the row (cascading like the old
- * menus); on phone-class viewports it opens upward instead. The popup
- * renders through Popover.Portal so it isn't clipped by the composer card's
- * overflow.
+ * Presentation: layout="pill" (default) renders the picker as a segment of
+ * the composer's mini pill (see ComposerToolbar); layout="row" (the
+ * collapsed-hosts toggle popup) renders a full-width settings row and opens
+ * the panel to the RIGHT of the row (cascading like the old menus); on
+ * phone-class viewports it opens upward instead. The popover renders through
+ * Popover.Portal so it isn't clipped by the composer card's overflow.
  */
 
 /** Full-hint i18n keys by level value (provider-qualified entries first) —
@@ -232,12 +229,29 @@ function SectionHeader({
   );
 }
 
+/** Thinking-level bar indicator for the mini pill (prototypes 方案 B): one
+ *  bar per level (capped at 5 — codex declares 8, and 8 bars outgrow the
+ *  segment), lit up to the active level's rank. Purely decorative; the
+ *  segment's title and the popover carry the real value. */
+function LevelBars({ count, activeIndex }: { count: number; activeIndex: number }) {
+  const barCount = Math.min(count, 5);
+  const lit =
+    activeIndex < 0 ? 0 : Math.max(1, Math.round(((activeIndex + 1) / count) * barCount));
+  return (
+    <span className="composer-lvlbars" aria-hidden>
+      {Array.from({ length: barCount }, (_, i) => (
+        <span key={i} className={i < lit ? "on" : undefined} style={{ height: 5 + i * 2 }} />
+      ))}
+    </span>
+  );
+}
+
 /** Thinking-level block picker. */
 export function EffortChip({
-  layout = "chip",
+  layout = "pill",
 }: {
-  /** Presentation: composer chip ("chip") vs settings row ("row"). */
-  layout?: "chip" | "row";
+  /** Presentation: pill segment ("pill") vs settings row ("row"). */
+  layout?: "pill" | "row";
 }) {
   const stacked = layout === "row";
   // Stacked rows cascade to the RIGHT; phone-class viewports have no room
@@ -278,10 +292,9 @@ export function EffortChip({
       <Popover.Trigger
         className={cn(
           stacked
-            ? "flex w-full items-center justify-between gap-2 rounded-lg px-2.5 py-2 text-[13px] outline-none select-none transition-colors duration-100 hover:bg-surface-muted"
-            : "composer-chip flex min-w-0 items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-medium transition-all duration-150 ease-out hover:scale-105 hover:bg-accent/10 hover:text-accent active:scale-95",
-          stacked ? "text-content-muted hover:text-content" : "text-content-muted",
-          open && (stacked ? "bg-surface-muted" : "bg-accent/15 text-accent-strong"),
+            ? "flex w-full items-center justify-between gap-2 rounded-lg px-2.5 py-2 text-[13px] outline-none select-none transition-colors duration-100 hover:bg-surface-muted text-content-muted"
+            : "composer-minipill-seg text-content-muted",
+          open && stacked && "bg-surface-muted",
         )}
         title="Reasoning effort for the next session"
       >
@@ -299,10 +312,12 @@ export function EffortChip({
         ) : (
           <>
             <IconBolt size={13} className="shrink-0 opacity-80" />
-            <span className="min-w-0 truncate">{effortLabel}</span>
-            <IconChevronDown
-              size={11}
-              className={cn("shrink-0 opacity-60 transition-transform duration-150", open && "rotate-180")}
+            <span className="composer-lblwrap">
+              <span className="max-w-[72px] truncate">{effortLabel}</span>
+            </span>
+            <LevelBars
+              count={levels.length}
+              activeIndex={levels.findIndex((l) => l.value === effort)}
             />
           </>
         )}
@@ -352,10 +367,10 @@ export function EffortChip({
 
 /** Permission-mode block picker. */
 export function PermissionChip({
-  layout = "chip",
+  layout = "pill",
 }: {
-  /** Presentation: composer chip ("chip") vs settings row ("row"). */
-  layout?: "chip" | "row";
+  /** Presentation: pill segment ("pill") vs settings row ("row"). */
+  layout?: "pill" | "row";
 }) {
   const stacked = layout === "row";
   const cascade = stacked && !useNarrowViewport();
@@ -397,21 +412,12 @@ export function PermissionChip({
       <Popover.Trigger
         className={cn(
           stacked
-            ? "flex w-full items-center justify-between gap-2 rounded-lg px-2.5 py-2 text-[13px] outline-none select-none transition-colors duration-100 hover:bg-surface-muted"
-            : "composer-chip flex min-w-0 items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-medium transition-all duration-150 ease-out hover:scale-105 hover:bg-accent/10 active:scale-95",
-          stacked
-            ? "text-content-muted hover:text-content"
-            : cn(
-                "text-content-muted",
-                // Only switch the label to accent on hover for the neutral
-                // mode — riskier modes keep their semantic color so the chip
-                // never loses its risk telegraph.
-                !activeMode?.color && !open && "hover:text-accent",
-                open && "bg-accent/15",
-                !open && activeMode?.color,
-                open && !activeMode?.color && "text-accent-strong",
-              ),
+            ? "flex w-full items-center justify-between gap-2 rounded-lg px-2.5 py-2 text-[13px] outline-none select-none transition-colors duration-100 hover:bg-surface-muted text-content-muted"
+            : "composer-minipill-seg",
         )}
+        // Pill segment: inline color so the semantic risk telegraph survives
+        // (the segment's unlayered CSS color beats Tailwind classes).
+        style={!stacked && permColorVar ? { color: `rgb(${permColorVar})` } : undefined}
         title="Permission mode for the next session"
       >
         {stacked ? (
@@ -433,17 +439,12 @@ export function PermissionChip({
           </>
         ) : (
           <>
-            <span
-              className="shrink-0 opacity-90"
-              style={permColorVar ? { color: `rgb(${permColorVar})` } : undefined}
-            >
-              {activeMode ? resolveIcon(activeMode, 11) : <IconShield size={11} />}
+            <span className="shrink-0 opacity-90">
+              {activeMode ? resolveIcon(activeMode, 13) : <IconShield size={13} />}
             </span>
-            <span className={cn("min-w-0 truncate", activeMode?.color)}>{permLabel}</span>
-            <IconChevronDown
-              size={11}
-              className={cn("shrink-0 opacity-60 transition-transform duration-150", open && "rotate-180")}
-            />
+            <span className="composer-lblwrap">
+              <span className="max-w-[84px] truncate">{permLabel}</span>
+            </span>
           </>
         )}
       </Popover.Trigger>

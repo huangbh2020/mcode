@@ -123,10 +123,21 @@ export function ContextRing({
               strokeWidth={stroke}
               strokeLinecap="round"
               strokeDasharray={`${dash} ${c - dash}`}
+              // 方案 B polish: occupancy changes sweep the arc instead of
+              // snapping (stroke-dasharray transitions as a presentation
+              // property in Chromium).
+              className="transition-[stroke-dasharray] duration-500 ease-out"
               transform={`rotate(-90 ${size / 2} ${size / 2})`}
             />
           </svg>
-          <span className="text-[10px] font-medium leading-none">{pct}%</span>
+          {/* The % label sits in a `.composer-lblwrap` grid shell: inside the
+              composer mini pill its data-compact collapses the number to
+              zero width (the ring itself stays — the ring must remain
+              visible at every width); everywhere else (row layout, future
+              hosts) no compact ancestor exists and the label shows. */}
+          <span className="composer-lblwrap">
+            <span className="text-[10px] font-medium leading-none">{pct}%</span>
+          </span>
         </Tooltip.Trigger>
         <Tooltip.Portal>
           <Tooltip.Positioner side="top" sideOffset={6}>

@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light" data-plan="a" data-density="comfortable">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Mcode 设置面板重设计 · 三个方向</title>
+<style>/*__CSS__*/</style>
+</head>
+<body>
+<div class="paper">
+  <h1>Mcode 设置面板重设计 · 三个方向</h1>
+  <p class="psub">
+    17 个设置页面(常规 / 外观 / 通知 / 语音 / 快捷键 / 鼠标手势 / Git / 终端 / 浏览器 / LSP / 用量 / 关于 /
+    模型配置 / Agent / 插件 / Skills / MCP)全部按<b>同一套设计系统</b>重绘,三个方向共用原语与令牌,差异只在
+    导航形态、内容宽度策略与分组呈现方式。切换方案与页面即可逐页对比;页面内容逐条对齐当前实现,可直接当作改版对照表。
+  </p>
+  <div class="ptools">
+    <div class="seg" data-tool="plan" role="tablist">
+      <button data-plan="a" aria-selected="true">A · 精修卡片流</button>
+      <button data-plan="b" aria-selected="false">B · 双栏工作台</button>
+      <button data-plan="c" aria-selected="false">C · 自适应网格</button>
+    </div>
+    <select class="sel" data-tool="page" style="width:190px" aria-label="跳转页面"></select>
+    <span class="sep"></span>
+    <div class="seg" data-tool="theme">
+      <button data-theme="light" aria-selected="true">浅色</button>
+      <button data-theme="dark" aria-selected="false">深色</button>
+    </div>
+    <div class="seg" data-tool="density">
+      <button data-density="comfortable" aria-selected="true">舒适</button>
+      <button data-density="compact" aria-selected="false">紧凑</button>
+    </div>
+    <span class="sep"></span>
+    <button class="btn" data-act="navPinned">固定导航</button>
+    <span style="flex:1"></span>
+    <span class="t-meta">快捷键:1 / 2 / 3 切方案,[ ] 翻页面</span>
+  </div>
+</div>
+<div class="paper" style="padding-top:0">
+  <div class="pwin" id="stage"></div>
+</div>
+<div class="notes" id="notes"></div>
+<script>/*__JS__*/</script>
+</body>
+</html>

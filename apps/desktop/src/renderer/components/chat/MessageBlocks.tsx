@@ -10,6 +10,7 @@ import {
   IconAlertTriangle,
   IconRobot,
   IconClipboard,
+  IconCheck,
   IconFile,
   IconPhoto,
   // Tool-kind icons (left glyph of each action card).
@@ -35,6 +36,8 @@ import { DiffView } from "./DiffView.js";
 import { PlanStreamBlock } from "./PlanStreamBlock.js";
 import { TurnFilesCard } from "./TurnFilesCard.js";
 import { CurrentOpTicker } from "./CurrentOpTicker.js";
+import { ModelBadge } from "./ModelAvatar.js";
+import { fmtTokens } from "@renderer/lib/contextWindow.js";
 import { RenderErrorBoundary } from "./RenderErrorBoundary.js";
 import { lineDiff, diffSummary } from "@renderer/lib/lineDiff.js";
 import { FileLink } from "./FileLink.js";
@@ -204,11 +207,18 @@ function segmentKeys(segments: Segment[]): string[] {
 }
 
 /** Tool calls that are HIGH-FREQUENCY, LOW-INFO operations - the model fires
- *  off Read/Bash/Grep/Glob in long bursts while exploring. Collapsing these
- *  into a single "操作集合" card keeps the stream scannable; each individual
- *  call's detail is rarely worth the vertical space. MultiEdit/TodoWrite are
- *  included too: they're mechanical (batch edits / task-list updates), not
+ *  off Grep/Glob/Bash in long bursts while exploring. Collapsing these into a
+ *  single "操作集合" card keeps the stream scannable; each individual call's
+ *  detail is rarely worth the vertical space. TodoWrite/TaskCreate/TaskUpdate
+ *  are included too: they're mechanical (task-list bookkeeping), not
  *  narrative. The ticker on the group header still shows what's running live.
+ *
+ *  File operations are deliberately NOT in this set (2026-09-11, user call —
+ *  Read/Write/Edit/MultiEdit/NotebookEdit folded between 2026-09-08 and
+ *  then): their cards carry the file path and the change, i.e. exactly what
+ *  the user wants to see without expanding anything, so each renders as its
+ *  own row. The mechanical calls above (plus MCP / skills) are the ones worth
+ *  one shared card per burst.
  *
  *  MCP tools (`mcp__server__tool`) and skill invocations (Skill; SlashCommand
  *  is the legacy name) fold too — from the stream's point of view they are
@@ -216,41 +226,31 @@ function segmentKeys(segments: Segment[]): string[] {
  *  with one standalone card per call. MCP is matched by prefix so every
  *  server's tools are covered without enumerating them.
  *
- *  Edit/Write fold as well (2026-09-08, user call): their per-file diffs stay
- *  one click away inside the expanded group, and the "本轮修改" turn-files
- *  card still gives the turn-level summary. Group failures surface via the
- *  header's error glyph, so a broken edit is never buried silently.
- *
- *  Provider-neutral: Claude (claude-sdk) capitalizes tool names (Read/Grep/…)
- *  while Pi (pi-sdk) lowercases them (read/grep/…). The renderer sees raw
+ *  Provider-neutral: Claude (claude-sdk) capitalizes tool names (Glob/Grep/…)
+ *  while Pi (pi-sdk) lowercases them (grep/…). The renderer sees raw
  *  toolName strings, so the set carries BOTH casings plus Pi-only tools
  *  (find = Pi's glob, ls = Pi-only) — this keeps grouping working without
  *  forcing every call site to normalize. See pi sdk core/tools/*.js. */
 const BATCH_TOOL_NAMES = new Set([
   // Claude (capitalized)
-  "Read", "Glob", "Grep",
+  "Glob", "Grep",
   "Bash", "PowerShell",
-  "Edit", "Write", "MultiEdit", "NotebookEdit",
   "TodoWrite", "TaskCreate", "TaskUpdate",
   "WebSearch", "WebFetch",
   // Skill / slash-command invocations (lowercase alias for safety)
   "Skill", "SlashCommand", "skill",
   // Pi (lowercase) — find is Pi's glob, ls is Pi-only
-  "read", "find", "grep", "bash", "ls", "edit", "write",
+  "find", "grep", "bash", "ls",
 ]);
 /** A block that folds into a batch group: batch tool calls (see
- *  {@link BATCH_TOOL_NAMES}), any MCP tool (`mcp__*` prefix), and thinking
- *  segments — the model's reasoning is process narration of the same low
- *  signal value as the calls around it, and a thinking-heavy turn otherwise
- *  spends one standalone row per segment. Exported for ChatPane's live-turn
- *  cross-message run partitioning (the streaming layout merges foldable
- *  blocks across assistant messages into one card). */
+ *  {@link BATCH_TOOL_NAMES}) and any MCP tool (`mcp__*` prefix). Thinking is
+ *  NOT foldable any more (2026-09-11, user call) — a reasoning segment is
+ *  content the user reads, so it gets its own card like Read/Write/Edit do.
+ *  Exported for ChatPane's live-turn cross-message run partitioning (the
+ *  streaming layout merges foldable blocks across assistant messages into one
+ *  card). */
 export function isFoldableBlock(b: Block): b is ProceduralBlock {
-  return (
-    b.kind === "thinking" ||
-    (b.kind === "tool_use" &&
-      (BATCH_TOOL_NAMES.has(b.toolName) || b.toolName.startsWith("mcp__")))
-  );
+  return b.kind === "tool_use" && (BATCH_TOOL_NAMES.has(b.toolName) || b.toolName.startsWith("mcp__"));
 }
 /** Narrow a fold-run member to its tool-call half (thinking has no status/
  *  result machinery — the group header only reads those off tool calls). */
@@ -261,20 +261,18 @@ function isToolBlock(b: ProceduralBlock): b is ToolUseBlock {
 /** Linear scan over a turn's blocks, producing render segments.
  *
  *  Grouping rule (by "is this worth independent vertical space?"):
- *   - FOLDABLE blocks (batch tools incl. Edit/Write, MCP calls, skill
- *     invocations, thinking segments) accumulate into a `batch` run — a burst
- *     of N reads + edits + MCP calls + reasoning folds into ONE group card,
- *     not N standalone rows.
+ *   - FOLDABLE blocks (batch tools — Glob/Grep/Bash/task-list/web/skills, plus
+ *     MCP calls; see isFoldableBlock) accumulate into a `batch` run — a burst
+ *     of N greps + MCP calls folds into ONE group card, not N standalone rows.
  *   - Task (subagent), AskUserQuestion, EnterPlanMode/ExitPlanMode -> always
  *     standalone: they break the fold run and emit as their own segment.
  *   - text / error / other display blocks -> standalone and break the run too
  *     (a narration line splits the surrounding calls into two groups).
  *
- *  Thinking used to be pulled out as a peer of the standalone tools; it now
- *  folds into the run like any other low-info process block. This is the
- *  inverse of the oldest behavior which grouped thinking INTO the tool run,
- *  then pulled it out again - the pendulum settled on "thinking follows the
- *  same fold rules as the low-info calls it narrates". */
+ *  Thinking, Read and the file-mutation tools are standalone too (2026-09-11,
+ *  user call): thinking folded for a while ("the same low signal as the calls
+ *  it narrates"), but a reasoning segment is read, not skimmed — same call as
+ *  the file operations, whose cards carry the path and the change. */
 function groupBlocks(blocks: Block[]): Segment[] {
   const out: Segment[] = [];
   let run: ProceduralBlock[] = [];
@@ -317,19 +315,20 @@ function groupBlocks(blocks: Block[]): Segment[] {
   return out;
 }
 
-/** A collapsible card for a run of consecutive FOLDABLE blocks (batch tools
- *  incl. Edit/Write, MCP calls, skill invocations, thinking segments) INSIDE
- *  an expanded TurnPanel. One summary line when collapsed (block tally + live
- *  ticker), each child folded underneath when expanded. Only low-signal
- *  process blocks land here; Task (subagent) and AskUserQuestion are pulled
- *  out by groupBlocks as their own standalone rows - so this group never
- *  hides a high-signal action. Exported for ChatPane's live-turn rendering:
- *  the streaming layout emits cross-message fold runs as standalone list
- *  items (see groupMessagesForRender's opsGroup kind). */
+/** A collapsible card for a run of consecutive FOLDABLE blocks (batch tools —
+ *  Glob/Grep/Bash/task-list/web/skills — plus MCP calls) INSIDE an expanded
+ *  TurnPanel. One summary line when collapsed (block tally + live ticker),
+ *  each child folded underneath when expanded. Only low-signal process blocks
+ *  land here; Task (subagent), AskUserQuestion, thinking and the file
+ *  operations are pulled out by groupBlocks as their own standalone rows - so
+ *  this group never hides a high-signal action. Exported for ChatPane's
+ *  live-turn rendering: the streaming layout emits cross-message fold runs as
+ *  standalone list items (see groupMessagesForRender's opsGroup kind). */
 export function BatchToolGroup({
   blocks,
   beforeMap,
   turnActive = false,
+  showTicker = true,
   projectPath,
 }: {
   blocks: ProceduralBlock[];
@@ -339,6 +338,10 @@ export function BatchToolGroup({
    *  right now. Clears when the turn ends so historical cards never show a
    *  stale operation. */
   turnActive?: boolean;
+  /** Whether to render this group's own current-op ticker. Off when the group
+   *  sits inside a running-ledger body: the ledger HEAD already shows the
+   *  turn's current operation, so a per-group ticker would just repeat it. */
+  showTicker?: boolean;
   projectPath?: string | null;
 }) {
   const [open, setOpen] = useState(false);
@@ -377,7 +380,7 @@ export function BatchToolGroup({
     <div className="[font-size:var(--chat-fs-sm)]">
       <button
         onClick={(e) => toggleHoldPosition(e, setOpen)}
-        className="flex w-full items-center gap-2 py-1.5 text-left hover:bg-surface-muted/40"
+        className="flex w-full items-center gap-2 rounded-md py-1.5 text-left hover:bg-surface-muted/40"
       >
         {/* 操作集合: a stack of layers reads as "a set of folded operations",
             clearer than the toolbox wrench for the N-ops batch header. */}
@@ -395,7 +398,7 @@ export function BatchToolGroup({
             Sits right of the tool tally and rolls up like a slot machine as
             the agent moves between commands. Rendered inside the <button>
             (CurrentOpTicker emits only phrasing content). */}
-        {turnActive && <CurrentOpTicker op={runningTool} turnActive={turnActive} />}
+        {turnActive && showTicker && <CurrentOpTicker op={runningTool} turnActive={turnActive} />}
         {/* Error marker on the right - success needs no glyph, only failures
             surface so the user can spot the broken call without expanding. */}
         {aggregateStatus === "error" && <StatusIcon status="error" />}
@@ -412,7 +415,7 @@ export function BatchToolGroup({
               group (or, absent boundaries, the whole tree). */}
           {blocks.map((b, i) => (
             <RenderErrorBoundary key={b.kind === "tool_use" ? `tu:${b.toolCallId}` : `th:${i}`}>
-              <BlockView block={b} beforeMap={beforeMap} projectPath={projectPath} />
+              <BlockView block={b} beforeMap={beforeMap} liveTurn={turnActive} projectPath={projectPath} />
             </RenderErrorBoundary>
           ))}
         </div>
@@ -517,17 +520,29 @@ function ImageGallery({ blocks }: { blocks: Extract<Block, { kind: "image" }>[] 
   );
 }
 
-/** Status icon for tool calls: error→X, running/done→nothing. Running and
- *  done are the common states and don't need a glyph — when the status is
- *  empty the card's own tool icon occupies this slot, and the stream's
- *  single loading indicator already lives at the bottom (isStreamingTail
- *  spinner). Per-card spinners would only add noise, so only surface a glyph
- *  when something actually went wrong. */
-function StatusIcon({ status }: { status: "running" | "done" | "error" }) {
+/** Status icon for tool calls. Error → red X (the only state that always
+ *  deserves a glyph on its own). 方案A「脉络」adds the live two-state glyph:
+ *  while the owning turn is streaming (`live`), a row shows a spinning arc
+ *  while its tool runs and CROSS-FADES to a checkmark (with a slight bounce)
+ *  the moment it completes — both glyphs stay in the DOM and CSS swaps their
+ *  opacity, so the running→done transition is continuous instead of a swap.
+ *  Rows of COMPLETED turns keep the old quiet behavior (no glyph unless
+ *  error): historical panels would otherwise carry a wall of checkmarks. */
+function StatusIcon({ status, live }: { status: "running" | "done" | "error"; live?: boolean }) {
   if (status === "error") {
     return <IconX size={12} className="text-danger" />;
   }
-  return null;
+  if (!live) {
+    return null;
+  }
+  return (
+    <span className="chat-st" data-status={status} aria-hidden="true">
+      <span className="chat-st-run" />
+      <span className="chat-st-done">
+        <IconCheck size={11} />
+      </span>
+    </span>
+  );
 }
 
 /** Freshness window within which a completed turn's TurnPanel mounts open
@@ -535,23 +550,69 @@ function StatusIcon({ status }: { status: "running" | "done" | "error" }) {
  *  turn.done regroup frame plus LegendList's deferred item mount; a panel
  *  mounting later than this falls back to the instant collapsed state, so
  *  slow frames degrade to today's behavior instead of a late flash. */
-const JUST_COMPLETED_MS = 350;
+/** Duration of the process-surface fold (grid 1fr→0fr + inner fade). MUST
+ *  match `.chat-fold`'s transition in styles.css — ChatPane derives its scroll
+ *  anchoring budgets from this constant, so a mismatch would let the list snap
+ *  scroll while the fold is still moving. */
+export const TURN_FOLD_MS = 260;
+
+/** Window after turn.done within which the panel treats its own mount as "the
+ *  completion moment" and plays the one-shot fold. GENEROUS on purpose: for a
+ *  heavy turn the mount can land well after the regroup (React commit +
+ *  LegendList's deferred item mount), and a tight window made the panel mount
+ *  ALREADY COLLAPSED — i.e. the process rows vanished in a single frame, which
+ *  is the "卡了一下" hitch. The `foldedTurns` guard below keeps this generous
+ *  window safe: the fold still plays at most once per turn, so a virtualization
+ *  recycle inside the window cannot replay it. */
+const JUST_COMPLETED_MS = 1200;
+
+/** Turn keys (`startedAt:endedAt`) whose completion fold has already played —
+ *  the at-most-once latch that lets JUST_COMPLETED_MS be generous. Capped so a
+ *  long session can't grow it without bound. */
+const foldedTurns = new Set<string>();
+const FOLDED_TURNS_MAX = 400;
+
+/** PURE check (no latch): did this turn end recently enough that this mount IS
+ *  the completion moment? Feeding a mount-time constant into useState keeps the
+ *  answer stable across the fold's own re-renders. */
+function isCompletionFoldDue(turnMeta?: TurnMeta): boolean {
+  if (turnMeta?.endedAt === undefined) return false;
+  if (foldedTurns.has(`${turnMeta.startedAt}:${turnMeta.endedAt}`)) return false;
+  return Date.now() - turnMeta.endedAt < JUST_COMPLETED_MS;
+}
+
+/** Latch a turn as "fold already played". Called at the moment the fold
+ *  actually STARTS — not at mount — so a mount that never gets to animate
+ *  (unmounted inside the rAF window) doesn't burn the one-shot. */
+function markCompletionFoldPlayed(turnMeta?: TurnMeta): void {
+  if (turnMeta?.endedAt === undefined) return;
+  foldedTurns.add(`${turnMeta.startedAt}:${turnMeta.endedAt}`);
+  if (foldedTurns.size > FOLDED_TURNS_MAX) {
+    // Sets preserve insertion order — drop the oldest entries.
+    const excess = foldedTurns.size - FOLDED_TURNS_MAX;
+    let i = 0;
+    for (const k of foldedTurns) {
+      if (i++ >= excess) break;
+      foldedTurns.delete(k);
+    }
+  }
+}
 
 /** Collapsible panel that hides a whole turn's process data (thinking +
  *  tool calls + any text the model emitted between tool calls, like "let me
- *  read this file first") behind a one-line "HH:MM:SS · NN.Ns" header. This is
- *  the boundary between "model process" and "model output for the user":
+ *  read this file first") behind a one-line summary header. This is the
+ *  boundary between "model process" and "model output for the user":
  *  everything up to and including the last tool call lives inside this panel,
  *  while only the final reply text (after the last tool) renders outside it
  *  and stays visible.
  *
  *  Inside the expanded panel, blocks are grouped by signal value (see
- *  `groupBlocks`): low-info process blocks (Read/Bash/Grep/… batch tools,
- *  Edit/Write, MCP calls, skill invocations, thinking segments) collapse into
- *  a single "操作集合" card so a burst of 20 reads takes one line, not 20;
- *  while Task (subagent) and AskUserQuestion render as their own standalone
- *  rows - they're high-signal and shouldn't be buried inside a collapsed
- *  group.
+ *  `groupBlocks`): low-info process blocks (Glob/Grep/Bash/task-list/web, MCP
+ *  calls, skill invocations) collapse into a single "操作集合" card so a burst
+ *  of 20 greps takes one line, not 20; while thinking, the file operations
+ *  (Read / Write / Edit) and Task/AskUserQuestion render as their own
+ *  standalone rows - the reasoning and the touched files are read for content
+ *  rather than skimmed, so they must not be buried inside a collapsed group.
  *
  *  - While the turn is still running (turnMeta.endedAt undefined) the panel
  *    stays OPEN by default so the user can watch the model work; the header
@@ -561,15 +622,18 @@ const JUST_COMPLETED_MS = 350;
  *  - The panel collapses ONLY when the turn ends (turn.done sets endedAt) -
  *    not when the final reply text starts streaming. The user can still
  *    re-expand by clicking.
- *  - The header is a centered pill flanked by gradient rules: chevron +
- *    "HH:MM:SS · NN.Ns" + live ticker. The equalizer glyph (.live-eq, shown
- *    only while turnActive; slow tempo while no tool is executing) signals
- *    the running state alongside the live duration. */
+ *  - 方案A「脉络」header: a LEFT-ALIGNED summary row hugging the turn's spine
+ *    (replacing the old centered pill + flanking rules). Live state leads with
+ *    the equalizer glyph + clock + ticking duration + current-op ticker; the
+ *    done state reads as the turn's receipt line — clock · duration · N 步 ·
+ *    改 N 个文件 +a −d (the stats are computed by ChatPane from the turn's
+ *    process blocks + trailing turn-files card and passed via `stats`). */
 export function TurnPanel({
   blocks,
   beforeMap,
   turnActive = false,
   turnMeta,
+  stats,
   onOpenPlan,
   onToggleCollapse,
   projectPath,
@@ -591,6 +655,19 @@ export function TurnPanel({
    *  duration baseline; `endedAt` undefined means the turn is still running
    *  (duration ticks live via useNow). */
   turnMeta?: TurnMeta;
+  /** Completed-turn receipt stats for the done-state header (step count,
+   *  files touched, +/- line deltas). Computed by ChatPane; omitted for turns
+   *  with no tool calls (nothing worth receipting). */
+  stats?: {
+    steps: number;
+    files?: number;
+    adds?: number;
+    dels?: number;
+    /** Tokens this turn processed (ChatPane resolves it from the session's
+     *  usage history — it only exists once the turn-end snapshot lands, so the
+     *  receipt shows no token figure until then). */
+    tokens?: number;
+  };
   /** Forwarded to BlockView for plan blocks (opens the PlanDrawer). */
   onOpenPlan?: (plan: string) => void;
   /** Fired the instant the panel is toggled by the user OR auto-collapsed at
@@ -606,21 +683,25 @@ export function TurnPanel({
   /** Project root for file-path resolution, forwarded to BlockView. */
   projectPath?: string | null;
 }) {
+  const { t } = useI18n();
   const completed = turnMeta?.endedAt !== undefined;
   // A turn that JUST completed mounts OPEN for one painted frame and then
-  // folds shut via the normal 200ms grid transition (mount effect below).
-  // While streaming, the raw stream renders flat — no TurnPanel at all (see
-  // ChatPane's groupMessagesForRender) — and at turn.done the regroup swaps
-  // those flat rows for this panel in a single layout pass. Mounting already
-  // collapsed made that swap instantaneous: thousands of px of process rows
-  // vanishing in one frame, which read as the stream "jumping". Mounting open
-  // keeps frame #1 visually continuous with the streaming view (both states
-  // are rows of collapsed single-line cards), and the transition then folds
-  // it away smoothly. The freshness window makes this a one-shot: hydrated
-  // history and recycle-remounts outside the window mount collapsed as
-  // before, so this never replays on old turns.
-  const justCompleted =
-    completed && Date.now() - (turnMeta?.endedAt ?? 0) < JUST_COMPLETED_MS;
+  // folds shut via the .chat-fold transition (mount effect below). While
+  // streaming, the raw stream renders flat — no TurnPanel at all (see ChatPane's
+  // groupMessagesForRender) — and at turn.done the regroup swaps those rows for
+  // this panel in a single layout pass. Mounting already collapsed made that
+  // swap instantaneous: thousands of px of process rows vanishing in one frame,
+  // which read as the stream "jumping". Mounting open keeps frame #1 visually
+  // continuous with the streaming view (both states are rows of collapsed
+  // single-line cards), and the transition then folds it away smoothly.
+  // isCompletionFoldDue() + markCompletionFoldPlayed() keep this to one play
+  // per turn: hydrated history and ordinary recycle-remounts mount collapsed,
+  // and the latch lands only when the fold actually starts.
+  //
+  // useState initializer — deliberately NOT recomputed on later renders. A
+  // re-render during the fold must not flip this back (the initializer's value
+  // is the mount-time answer, which is what the one-shot effect keys off).
+  const [justCompleted] = useState(() => isCompletionFoldDue(turnMeta));
   // Defaults OPEN while the turn is still running AND the model hasn't moved
   // into its final reply yet (turnActive) — so the user can watch the model
   // work. The moment the final reply starts streaming (or the turn ends,
@@ -632,16 +713,51 @@ export function TurnPanel({
   // surface.
   const [open, setOpen] = useState(justCompleted || (!completed && turnActive));
 
-  // One-shot fold-away for the just-completed turn. Deliberately a PASSIVE
-  // effect: the open state must paint at least one frame so the grid
-  // transition has two rendered values (1fr → 0fr) to interpolate — flipping
-  // in useLayoutEffect would mount at 0fr directly and never animate. The
-  // suspendDataChange pause covers both the fold frames and the turn-files /
-  // plan cards that land right after turn.done.
+  // One-shot fold-away for the just-completed turn.
+  //
+  // TIMING IS THE WHOLE POINT HERE. A CSS transition needs the element to have
+  // ALREADY been rendered at the start value; for an element inserted in this
+  // commit that means the browser must have done a style pass with the grid
+  // track at 1fr. A bare passive effect can run before that pass ever happens
+  // (React flushes passive effects in a scheduler task that may land ahead of
+  // the next paint), in which case the browser only ever sees the element's
+  // FIRST computed value — 0fr — and no transition fires at all: the panel
+  // snaps shut in one frame. That race is exactly the irregular "卡了一下"
+  // hitch. Two rAFs force a painted 1fr frame before the flip, so the fold
+  // always animates from a real starting position.
+  //
+  // onToggleCollapse runs BEFORE the flip: it suspends LegendList's
+  // bottom-anchoring for the fold's duration (plus room for the turn-files /
+  // plan cards landing right after turn.done), and settling that state first
+  // keeps the flip's own re-render small.
   useEffect(() => {
     if (!justCompleted) return;
     onToggleCollapse?.({ suspendDataChange: true });
-    setOpen(false);
+    let raf1 = 0;
+    let raf2 = 0;
+    let fallback = 0;
+    let done = false;
+    const fold = () => {
+      if (done) return;
+      done = true;
+      if (fallback) window.clearTimeout(fallback);
+      markCompletionFoldPlayed(turnMeta);
+      setOpen(false);
+    };
+    raf1 = requestAnimationFrame(() => {
+      raf2 = requestAnimationFrame(fold);
+    });
+    // Fallback: rAF is suspended while the window is hidden/minimized, which
+    // would leave a completed turn's panel sitting EXPANDED indefinitely. The
+    // timer collapses it anyway (no animation in that case — nothing is
+    // watching), so the state always lands where it belongs.
+    fallback = window.setTimeout(fold, 400);
+    return () => {
+      done = true;
+      cancelAnimationFrame(raf1);
+      cancelAnimationFrame(raf2);
+      if (fallback) window.clearTimeout(fallback);
+    };
     // Mount-only: justCompleted is a mount-time constant by construction.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -682,58 +798,104 @@ export function TurnPanel({
   const startedAt = turnMeta?.startedAt ?? now;
   const duration = Math.max(0, (turnMeta?.endedAt ?? now) - startedAt);
 
+  // 明细里的工具调用数 —— 运行中台头右侧的"N 步"用它显示。
+  const liveStepCount = toolBlocks.length;
+  const running = !completed;
+
   return (
     <div className="[font-size:var(--chat-fs-sm)]">
-      <div className="my-2 flex items-center gap-2.5">
-        <div className="turn-pill-line-r h-px flex-1" />
-        <button
-          onClick={(e) => {
-            // Pause maintainScrollAtEnd BEFORE toggling so LegendList doesn't
-            // snap-scroll against the height transition mid-flight.
-            onToggleCollapse?.();
-            toggleHoldPosition(e, setOpen);
-          }}
-          className="turn-pill-fill flex items-center gap-1.5 rounded-full border border-edge px-3 py-1 text-xs shadow-sm transition-colors hover:bg-surface-hover/60"
-        >
-          {turnActive && (
-            <span
-              className="live-eq shrink-0"
-              data-tempo={runningTool ? undefined : "slow"}
-              aria-hidden
-            >
-              <span />
-              <span />
-              <span />
-            </span>
-          )}
-          <Chevron open={open} />
-          <span className="tabular-nums text-content-muted">{fmtClock(startedAt)}</span>
-          <span className="text-content-subtle">·</span>
-          <span className="tabular-nums text-content-muted">{fmtDuration(duration)}</span>
-          {/* Live current-operation ticker - only while the turn is streaming.
-              Sits right of the duration and rolls up like a slot machine as the
-              agent moves between commands. Rendered inside the <button>
-              (CurrentOpTicker emits only phrasing content). Clears when the turn
-              ends so historical cards never show a stale operation. */}
-          {turnActive && <CurrentOpTicker op={runningTool} turnActive={turnActive} />}
-        </button>
-        <div className="turn-pill-line-l h-px flex-1" />
-      </div>
-      {/* Smooth height transition via the grid-template-rows 0fr→1fr trick.
-          The outer grid animates its single track between 0 (collapsed) and
-          1fr (expanded); the inner overflow-hidden wrapper is what lets the
-          0fr track actually collapse to zero (grid items default to
-          min-height:auto, which overflow:hidden zeroes out). Content stays
-          mounted in both states — it's just clipped — so remounting mid-stream
-          never re-flashes the blocks. */}
-      <div
-        className={cn(
-          "grid transition-[grid-template-rows] duration-200 ease-out",
-          open ? "grid-rows-[1fr]" : "grid-rows-[0fr]",
-        )}
+      {/* 运行台账（方案B 形态）：外层一张带边框的卡，台头在运行中数着步子、
+          结束后翻成回执，明细收在下面。onToggleCollapse pauses LegendList's
+          bottom-anchoring BEFORE toggling so it doesn't snap-scroll against
+          the fold. */}
+      <div className="chat-ledger" data-phase={completed ? "done" : "running"} data-open={open ? "true" : "false"}>
+      <button
+        type="button"
+        onClick={(e) => {
+          onToggleCollapse?.();
+          toggleHoldPosition(e, setOpen);
+        }}
+        className="chat-ledger-head"
       >
-        <div className="overflow-hidden">
-          <div className="space-y-1.5 py-2">
+        {/* Model that produced this turn — avatar + name on the LEFT, ahead of
+            the timing/stats. Renders nothing for turns without a recorded
+            model (everything before this field existed). */}
+        <ModelBadge model={turnMeta?.model} />
+        {running ? (
+          <span className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5">
+            <span className="chat-ledger-dot" aria-hidden />
+            <span className="chat-ledger-live">{t("chatStream.ledgerRunning")}</span>
+            <span className="chat-ledger-clock">
+              <span className="tabular-nums">{fmtClock(startedAt)}</span>
+              <span className="opacity-60">·</span>
+            </span>
+            <span className="chat-ledger-duration tabular-nums">{fmtDuration(duration)}</span>
+            {/* Live current-operation ticker — rolls like a slot machine as
+                the agent moves between commands. Clears when the turn ends so
+                historical cards never show a stale operation. */}
+            <CurrentOpTicker op={runningTool} turnActive />
+          </span>
+        ) : (
+          <span className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5">
+            <span className="font-semibold text-content">{t("chatStream.ledgerDone")}</span>
+            {/* 时钟在窄栏让位（见 styles.css 的窄栏降级规则）——时间线位置
+                本身已提供上下文，它是这一行里价值最低的一项。 */}
+            <span className="chat-ledger-clock">
+              <span className="opacity-60">·</span>
+              <span className="tabular-nums">{fmtClock(startedAt)}</span>
+            </span>
+            <span className="opacity-60">·</span>
+            <span className="chat-ledger-duration tabular-nums">{fmtDuration(duration)}</span>
+            {stats && stats.steps > 0 && (
+              <>
+                <span className="opacity-60">·</span>
+                <span>{t("chatStream.stepCount", { n: stats.steps })}</span>
+              </>
+            )}
+            {!!stats?.files && stats.files > 0 && (
+              <>
+                <span className="opacity-60">·</span>
+                <span className="chat-ledger-files-long">
+                  {t("chatStream.filesChanged", { n: stats.files })}
+                </span>
+                <span className="chat-ledger-files-short">
+                  {t("chatStream.filesChangedShort", { n: stats.files })}
+                </span>
+              </>
+            )}
+            {!!stats?.adds && stats.adds > 0 && (
+              <span className="font-semibold text-success">+{stats.adds}</span>
+            )}
+            {!!stats?.dels && stats.dels > 0 && (
+              <span className="font-semibold text-danger">−{stats.dels}</span>
+            )}
+            {stats?.tokens != null && (
+              <>
+                <span className="opacity-60">·</span>
+                <span className="tabular-nums">
+                  {t("chatStream.tokensUsed", { n: fmtTokens(stats.tokens) })}
+                </span>
+              </>
+            )}
+          </span>
+        )}
+        {/* Chevron as a direct flex child of the button so ml-auto pins it to
+            the row's right edge in both states (inside the wrapping spans it
+            would only reach the end of their content width). */}
+        <Chevron open={open} className="ml-auto" />
+      </button>
+      {/* Smooth height transition via the grid-template-rows 0fr→1fr trick
+          (see .chat-fold / .chat-fold-inner in styles.css): the outer grid
+          animates its single track between 0 and 1fr, the inner overflow-hidden
+          wrapper is what lets the 0fr track actually collapse to zero (grid
+          items default to min-height:auto, which overflow:hidden zeroes out),
+          and the inner block additionally fades / lifts so the fold reads as
+          content receding instead of a hard clip edge. Content stays mounted in
+          both states — it's just clipped — so remounting mid-stream never
+          re-flashes the blocks. */}
+      <div className="chat-fold" data-open={open ? "true" : "false"}>
+        <div className="chat-fold-inner">
+          <div className="chat-ledger-body space-y-1.5">
             {(() => {
               const segments = groupBlocks(blocks);
               const segKeys = segmentKeys(segments);
@@ -744,6 +906,7 @@ export function TurnPanel({
                       block={seg.block}
                       defaultOpen={seg.defaultOpen}
                       beforeMap={beforeMap}
+                      liveTurn={turnActive}
                       onOpenPlan={onOpenPlan}
                       projectPath={projectPath}
                     />
@@ -767,6 +930,9 @@ export function TurnPanel({
           </div>
         </div>
       </div>
+        {/* 底部扫描光带：运行中表示台账"仍在写入"，结清后由 data-phase 收掉。 */}
+        <span className="chat-ledger-scan" aria-hidden="true" />
+      </div>
     </div>
   );
 }
@@ -776,6 +942,7 @@ const BlockView = memo(function BlockView({
   defaultOpen = false,
   beforeMap,
   isStreamingTail,
+  liveTurn,
   onOpenPlan,
   projectPath,
 }: {
@@ -787,6 +954,11 @@ const BlockView = memo(function BlockView({
    *  useDeferredValue instead). Kept on the signature for interface
    *  stability - MessageBlocks still forwards it down. */
   isStreamingTail?: boolean;
+  /** Whether the owning turn is still streaming. Forwarded to tool cards so
+   *  their status glyph shows the 方案A live arc→check crossfade (running
+   *  arc, cross-fading to a check on completion). Undefined on display-only
+   *  paths — tool cards of settled turns stay glyph-quiet except errors. */
+  liveTurn?: boolean;
   /** Forwarded to PlanStreamBlock - opens the PlanDrawer on click. */
   onOpenPlan?: (plan: string) => void;
   /** Project root for resolving file paths in text blocks and tool cards. */
@@ -852,7 +1024,7 @@ const BlockView = memo(function BlockView({
       );
 
     case "tool_use":
-      return <ToolCard block={block} defaultOpen={defaultOpen} beforeMap={beforeMap} projectPath={projectPath} />;
+      return <ToolCard block={block} defaultOpen={defaultOpen} beforeMap={beforeMap} liveTurn={liveTurn} projectPath={projectPath} />;
 
     case "attachment":
       return (
@@ -1133,11 +1305,13 @@ function ToolCard({
   block,
   defaultOpen = false,
   beforeMap,
+  liveTurn,
   projectPath,
 }: {
   block: Extract<Block, { kind: "tool_use" }>;
   defaultOpen?: boolean;
   beforeMap?: BeforeContentMap;
+  liveTurn?: boolean;
   projectPath?: string | null;
 }) {
   if (block.toolName === "Edit" && isEditInput(block.input)) {
@@ -1149,6 +1323,7 @@ function ToolCard({
         status={block.status}
         result={block.result}
         defaultOpen={defaultOpen}
+        live={liveTurn}
         projectPath={projectPath}
       />
     );
@@ -1162,11 +1337,12 @@ function ToolCard({
         result={block.result}
         defaultOpen={defaultOpen}
         beforeMap={beforeMap}
+        live={liveTurn}
         projectPath={projectPath}
       />
     );
   }
-  return <GenericToolCard block={block} defaultOpen={defaultOpen} projectPath={projectPath} />;
+  return <GenericToolCard block={block} defaultOpen={defaultOpen} live={liveTurn} projectPath={projectPath} />;
 }
 
 /** Edit tool card: line-level diff view. Inside an expanded TurnPanel it
@@ -1180,6 +1356,7 @@ function EditToolCard({
   status,
   result,
   defaultOpen = false,
+  live,
   projectPath,
 }: {
   filePath: string;
@@ -1188,6 +1365,9 @@ function EditToolCard({
   status: "running" | "done" | "error";
   result?: unknown;
   defaultOpen?: boolean;
+  /** Live-turn flag: renders the 方案A running-arc → done-check crossfade
+   *  instead of the quiet error-only glyph. */
+  live?: boolean;
   projectPath?: string | null;
 }) {
   // Seed the open state from defaultOpen so ToolGroup can force-open all
@@ -1203,9 +1383,9 @@ function EditToolCard({
     <div className="[font-size:var(--chat-fs-sm)]">
       <button
         onClick={(e) => toggleHoldPosition(e, setOpen)}
-        className="flex w-full items-center gap-2 py-1.5 text-left hover:bg-surface-muted/50"
+        className="flex w-full items-center gap-2 rounded-md py-1.5 text-left hover:bg-surface-muted/50"
       >
-        <StatusIcon status={status} />
+        <StatusIcon status={status} live={live} />
         <ToolIcon name="Edit" className="text-content-subtle" />
         <span className="font-medium text-content-muted">Edit</span>
         <span className="truncate font-mono text-content-subtle" title={filePath}>
@@ -1244,6 +1424,7 @@ function WriteToolCard({
   result,
   defaultOpen = false,
   beforeMap,
+  live,
   projectPath,
 }: {
   filePath: string;
@@ -1252,6 +1433,9 @@ function WriteToolCard({
   result?: unknown;
   defaultOpen?: boolean;
   beforeMap?: BeforeContentMap;
+  /** Live-turn flag: renders the 方案A running-arc → done-check crossfade
+   *  instead of the quiet error-only glyph. */
+  live?: boolean;
   projectPath?: string | null;
 }) {
   const [open, setOpen] = useState(defaultOpen);
@@ -1283,9 +1467,9 @@ function WriteToolCard({
     <div className="[font-size:var(--chat-fs-sm)]">
       <button
         onClick={(e) => toggleHoldPosition(e, setOpen)}
-        className="flex w-full items-center gap-2 py-1.5 text-left hover:bg-surface-muted/50"
+        className="flex w-full items-center gap-2 rounded-md py-1.5 text-left hover:bg-surface-muted/50"
       >
-        <StatusIcon status={status} />
+        <StatusIcon status={status} live={live} />
         <ToolIcon name="Write" className="text-content-subtle" />
         <span className="font-medium text-content-muted">Write</span>
         <span className="truncate font-mono text-content-subtle" title={filePath}>
@@ -1347,10 +1531,14 @@ function isPlanApprovalChannelFailure(block: Extract<Block, { kind: "tool_use" }
 function GenericToolCard({
   block,
   defaultOpen = false,
+  live,
   projectPath,
 }: {
   block: Extract<Block, { kind: "tool_use" }>;
   defaultOpen?: boolean;
+  /** Live-turn flag: renders the 方案A running-arc → done-check crossfade
+   *  instead of the quiet error-only glyph. */
+  live?: boolean;
   projectPath?: string | null;
 }) {
   const [open, setOpen] = useState(defaultOpen);
@@ -1365,9 +1553,9 @@ function GenericToolCard({
     <div className="[font-size:var(--chat-fs-sm)]">
       <button
         onClick={(e) => toggleHoldPosition(e, setOpen)}
-        className="flex w-full items-center gap-2 py-1.5 text-left hover:bg-surface-muted/50"
+        className="flex w-full items-center gap-2 rounded-md py-1.5 text-left hover:bg-surface-muted/50"
       >
-        <StatusIcon status={block.status} />
+        <StatusIcon status={block.status} live={live} />
         <ToolIcon name={block.toolName} className="text-content-subtle" />
         <span className="font-medium text-content-muted">{block.toolName}</span>
         {summaryToolPath ? (
@@ -1430,7 +1618,7 @@ function Collapsible({
     <div className="[font-size:var(--chat-fs-sm)]">
       <button
         onClick={(e) => toggleHoldPosition(e, setOpen)}
-        className="flex w-full items-center gap-2 py-1.5 text-left text-content-muted hover:bg-surface-muted/40"
+        className="flex w-full items-center gap-2 rounded-md py-1.5 text-left text-content-muted hover:bg-surface-muted/40"
       >
         <IconBulb size={13} className="shrink-0 text-content-subtle" />
         {/* shrink-0 + whitespace-nowrap keep the short label on one line even

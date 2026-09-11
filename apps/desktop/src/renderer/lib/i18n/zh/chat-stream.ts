@@ -11,6 +11,17 @@ export const zh = {
   // ── MessageBlocks: batch tool group ──
   "chatStream.opCount": "{n} 个操作",
 
+  // ── Chat stream · 方案A「脉络」: turn summary / reply mark ──
+  "chatStream.stepCount": "{n} 步",
+  "chatStream.filesChanged": "改 {n} 个文件",
+  "chatStream.waitingModel": "等待模型…",
+
+  // ── 运行台账（方案B 形态）台头 ──
+  "chatStream.ledgerRunning": "运行中",
+  "chatStream.ledgerDone": "已完成",
+  "chatStream.tokensUsed": "{n} tokens",
+  "chatStream.filesChangedShort": "{n} 文件",
+
   // ── RenderErrorBoundary: per-segment render-failure fallback ──
   "chatStream.renderError": "此内容渲染出错，已跳过（其余内容不受影响）",
 

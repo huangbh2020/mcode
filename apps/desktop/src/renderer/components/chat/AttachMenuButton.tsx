@@ -26,11 +26,17 @@ import { useSuppressBrowserView } from "@renderer/hooks/useSuppressBrowserView.j
  */
 export function AttachMenuButton({
   disabled,
+  segment = false,
   onPickFiles,
   onPickImages,
   onSlashCommand,
 }: {
   disabled: boolean;
+  /** Pill-segment presentation: rendered INSIDE the composer mini pill as
+   *  its first segment (ComposerToolbar pill layout) — compact square
+   *  trigger with the pill's hover language instead of the freestanding
+   *  icon-button look. */
+  segment?: boolean;
   /** Open the project-file attach picker (same action as the old paperclip). */
   onPickFiles: () => void;
   /** Open the OS image picker (same action as the old photo button). */
@@ -51,14 +57,15 @@ export function AttachMenuButton({
       <Menu.Trigger
         disabled={disabled}
         className={cn(
-          "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-xl text-content-muted transition-all duration-150 ease-out",
-          "hover:scale-110 hover:bg-accent/10 hover:text-accent active:scale-95",
+          segment
+            ? "composer-minipill-seg w-7 justify-center"
+            : "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-xl text-content-muted transition-all duration-150 ease-out hover:scale-110 hover:bg-accent/10 hover:text-accent active:scale-95",
           "disabled:scale-100 disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-content-muted disabled:hover:scale-100",
         )}
         title={t("chat.attachMenu")}
         aria-label={t("chat.attachMenu")}
       >
-        <IconPlus size={18} />
+        <IconPlus size={segment ? 15 : 18} />
       </Menu.Trigger>
       <Menu.Portal>
         <Menu.Positioner side="top" align="start">

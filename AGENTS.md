@@ -219,6 +219,13 @@ pnpm build
 - **修复**(`main/terminal/envRefresh.ts` 的 `buildTerminalEnv`,`TerminalManager.create` 已 async 化):win32 下每次创建终端时用一次 powershell.exe 现读 HKLM `Session Manager\Environment` + HKCU\Environment(**不用 `reg.exe`**——管道输出是 OEM 代码页,中文 PATH 条目会乱码;PS 里显式 UTF-8),值取**原始未展开**形态(`DoNotExpandEnvironmentNames`,否则会用过期 env 预展开),再按 Windows 构建新进程 env 的语义合并:用户值覆盖系统值、PATH = 系统+用户拼接后展开 `%VAR%`(查找顺序注册表优先、process.env 兜底——USERPROFILE 这类 volatile 变量不在注册表键里)、注册表值大小写不敏感覆盖快照同名项、快照里注册表没有的 PATH 条目去重后**追加回尾部**(保住 `pnpm dev` 等启动链注入的路径)。结果 10s TTL + in-flight 缓存(终端成对创建只读一次注册表),~300ms 冷启动开销。
 - **失败策略**:任何失败(PS 缺失/超时 8s/解析不出)降级为纯继承 env 并打 WARN,终端创建永不因刷新而失败。非 win32 平台是 no-op 直通。
 
+### Composer 输入框·迷你药丸(方案 B·单药丸,2026-09-10,设计原型 `prototypes/composer-redesign.html`)
+
+- **药丸 = 唯一内联形态,任何宽度常驻**(`ComposerToolbar layout="pill"`,替代旧的"宽屏 chip 行"):一颗带描边的分段容器,**+ 附件 → 模型 → 思考级别 → 权限 → 上下文环** 五段并列,每段仍是独立触发器(打开各自原有的菜单/弹层,store 读写、快捷键、模型守卫 nudge 全部原实现)——窄屏下"当前什么模型/级别/权限"仍可读可点。**+ 与环随卡片变窄永不收起**(用户明确的硬要求);环的百分比数字、各段文字标签则按档位经 `composer-lblwrap`(**1fr↔0fr grid 壳**,可动画宽度过渡)平滑收起,紧凑态段落 = 图标 + `LevelBars` 柱状级别(≤5 根,codex 8 级会爆段)+ 权限语义色 inline。
+- **档位(useComposerRowFit 返回 `tier` 0|1)**:0 = 展开(标签 + 环百分比可见)→ 1 = 紧凑(标签收成图标)。判定按**卡片宽 <560px** + **24px 回滞**;tier 0 时保留**实测溢出提升**(冻结 `.composer-minipill` 为 `max-content` 量 `row.scrollWidth`,locale/长模型名在阈值上方提前收紧),`collapseAt` 记卡片宽、只封锁"回 tier 0"。`chipsMode="collapsed"`(SideChatPanel/手机壳)**跳过药丸直接渲染 `ComposerToolbarToggle`**(gear + `layout="row"` 纵向设置弹层)——该宿主每个宽度都窄,纵向列表才是可用形态。
+- **药丸段落化**:AttachMenuButton 增 `segment` 形态(w-7 方形段、IconPlus 15);三 picker 的 `layout` 只剩 `"pill" | "row"`(旧 chip 形态连同 `.composer-chips-root` 一起删除,`composer-chip` 类仅剩 ProviderDropdown 用);`data-popup-open`(base-ui 自动加)高亮打开中的段。**ProviderDropdown 不进药丸**(发送键左侧,会话锁定后只读),但窄档 `compact` 把名称经同一 lblwrap 壳收成品牌图标。分段显隐随 provider capabilities:无 thinkingLevels/permissionModes 时对应段与分隔线(`composer-minipill-mid`)自动消失。
+- **质感层(styles.css,`[data-chat-root]` 作用域)**:`composer-card` 的 `data-busy="1"` 顶部扫光(`composer-sweep`)+ `focus-within` accent 发丝线(`::after` 渐变);发送键 `data-ready` 常驻柔光、发送/入队成功后 `composer-send-launch` 起飞动画(图标飞出→对面回位 + 光环脉冲,`onAnimationEnd` 清 class);停止键 `::before` conic 旋转进度环(radial mask 成 2.5px 环);附件标签/图片/队列项入场动画(`composer-tag-in` spring / `composer-q-in` 滑入,**fill 必须 backwards 不能 both**——both 会持续覆盖元素样式,劫持队列项后续的拖拽 `opacity-40`);ContextRing 弧线 `stroke-dasharray` 500ms 过渡(占用变化扫弧不跳变)。曲线族 `--composer-ease-out/.22,1,.36,1` + `--composer-spring/.34,1.56,.64,1`;`prefers-reduced-motion` 全部降级。
+
 ### 前端组件与图标
 
 #### 组件库

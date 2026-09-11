@@ -354,6 +354,13 @@ export interface TurnMeta {
   /** Wall-clock ms when the turn ended (turn.done / error). Undefined while
    *  the turn is still streaming — the renderer treats this as "live". */
   endedAt?: number;
+  /** Model this turn was SENT with (the composer's resolved send-model id,
+   *  e.g. "deepseek-flash" / "claude-sonnet-4-5"), stamped from the send-time
+   *  anchor at turn creation. Recorded per turn because the model can change
+   *  between turns — the stream shows which model produced each reply.
+   *  Undefined for turns that predate this field (they render without it) and
+   *  for turns opened by something other than a send (resumed/legacy). */
+  model?: string;
 }
 
 /**
@@ -801,6 +808,14 @@ export interface SessionState {
    *  NOT persisted - it's transient: cleared on turn.done / error / interrupt
    *  / session delete, alongside runningBySession. */
   runningTurnStartedAt: Record<string, number>;
+  /** Send-time MODEL anchor: the resolved model id the in-flight turn was sent
+   *  with (see resolveSendModel). Consumed by the same three isNewTurn stamping
+   *  sites as runningTurnStartedAt to write `turnMeta.model`, so the stream can
+   *  show which model produced each turn even though the composer's selection
+   *  can change between turns. Read at CREATE time only — unlike the requested
+   *  config it can't be retroactively changed by a later model switch.
+   *  NOT persisted — transient, same lifetime as runningTurnStartedAt. */
+  runningTurnModelBySession: Record<string, string>;
   /** Per-session "用户已手动停止"哨兵。interrupt() 置位,下一个真正启动的
    *  turn (sendPrompt / editAndResendMessage) 清除。存活期间,迟到的
    *  subagent.update / turn.done 不得复活 running 子代理或保留 running roster
@@ -2630,6 +2645,8 @@ function dropSessionBuckets(s: SessionState, id: string) {
   delete runningBySession[id];
   const runningTurnStartedAt = { ...s.runningTurnStartedAt };
   delete runningTurnStartedAt[id];
+  const runningTurnModelBySession = { ...s.runningTurnModelBySession };
+  delete runningTurnModelBySession[id];
   const turnErrorBySession = { ...s.turnErrorBySession };
   delete turnErrorBySession[id];
   const interruptedBySession = { ...s.interruptedBySession };
@@ -2687,6 +2704,7 @@ function dropSessionBuckets(s: SessionState, id: string) {
     historyLoadedBySession,
     runningBySession,
     runningTurnStartedAt,
+    runningTurnModelBySession,
     turnErrorBySession,
     interruptedBySession,
     upstreamIssueBySession,
@@ -3562,6 +3580,9 @@ function upsertLivePlanBlock(
    *  turn's turnMeta, so the real row continues the synthesized pendingTurn
    *  row's timing seamlessly. Omitted on the cleared-phase path. */
   startedAtAnchor?: number,
+  /** Send-time model anchor (runningTurnModelBySession) stamped alongside the
+   *  timing, so a plan-first turn still records which model ran it. */
+  modelAnchor?: string,
 ): ChatMessage[] {
   if (phase === "cleared") {
     // Remove any live plan block from the current turn's trailing assistant
@@ -3602,7 +3623,9 @@ function upsertLivePlanBlock(
       createdAt: Date.now(),
       // Prefer the send-time anchor so timing is continuous with the
       // synthesized pendingTurn row; fall back to now if none was passed.
-      ...(isNewTurn ? { turnMeta: { startedAt: startedAtAnchor ?? Date.now() } } : {}),
+      ...(isNewTurn
+        ? { turnMeta: { startedAt: startedAtAnchor ?? Date.now(), model: modelAnchor } }
+        : {}),
     };
     next = [...next, msg];
     // A new plan-mode turn is opening → demote any prior latest turn-files
@@ -3819,6 +3842,8 @@ function appendCompactSummaryBlock(
   messages: ChatMessage[],
   block: Block,
   startedAt: number,
+  /** Send-time model anchor (see upsertLivePlanBlock.modelAnchor). */
+  model?: string,
 ): ChatMessage[] {
   // Look for an OPEN turn's trailing assistant message (turnMeta present,
   // endedAt undefined = turn.done hasn't landed). This is the correct target
@@ -3841,7 +3866,7 @@ function appendCompactSummaryBlock(
     role: "assistant",
     blocks: [block],
     createdAt: Date.now(),
-    turnMeta: { startedAt },
+    turnMeta: { startedAt, model },
   };
   return [...messages, opener];
 }
@@ -4037,7 +4062,14 @@ function flushDeltas(): void {
             role: "assistant",
             blocks: [],
             createdAt: Date.now(),
-            ...(isNewTurn ? { turnMeta: { startedAt } } : {}),
+            ...(isNewTurn
+              ? {
+                  turnMeta: {
+                    startedAt,
+                    model: useSessionStore.getState().runningTurnModelBySession[sid],
+                  },
+                }
+              : {}),
           };
           next = [...next, msg];
           // A new turn is opening → demote the previous "latest" turn-files
@@ -4255,6 +4287,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     historyLoadedBySession: {},
   runningBySession: {},
   runningTurnStartedAt: {},
+  runningTurnModelBySession: {},
   turnErrorBySession: {},
   // Stream sidebar cache: empty + dirty so the first mount fetches.
   streamSessions: [],
@@ -6312,6 +6345,13 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       // `createdAt >= anchor` filter can never tick past the user message
       // and drop it from the persisted tail on a millisecond boundary.
       runningTurnStartedAt: { ...s.runningTurnStartedAt, [sessionId]: userMsg.createdAt },
+      // Model anchor: the exact model id this turn is being sent with. Stamped
+      // into turnMeta by the isNewTurn sites so the stream can show which model
+      // produced each reply (the composer's selection may change next turn).
+      runningTurnModelBySession: {
+        ...s.runningTurnModelBySession,
+        [sessionId]: resolvedModel.model,
+      },
       // A new turn supersedes any prior manual interrupt: clear the sentinel
       // so subagent.update / turn.done events for THIS turn aren't filtered.
       interruptedBySession: { ...s.interruptedBySession, [sessionId]: false },
@@ -6368,7 +6408,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           const runningBySession = { ...s.runningBySession, [sessionId]: false };
           const runningTurnStartedAt = { ...s.runningTurnStartedAt };
           delete runningTurnStartedAt[sessionId];
-          return { runningBySession, runningTurnStartedAt };
+          const runningTurnModelBySession = { ...s.runningTurnModelBySession };
+          delete runningTurnModelBySession[sessionId];
+          return { runningBySession, runningTurnStartedAt, runningTurnModelBySession };
         });
         // IPC rejected → no terminal event will arrive to clear the turn, so
         // also try draining the queue here (the session is now idle).
@@ -6506,6 +6548,11 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       // Same anchor rule as sendPrompt: reuse userMsg.createdAt so the
       // turn-done incremental persist can never filter out the user message.
       runningTurnStartedAt: { ...s.runningTurnStartedAt, [sessionId]: userMsg.createdAt },
+      // Same model anchor rule as sendPrompt (a resend re-resolves the model).
+      runningTurnModelBySession: {
+        ...s.runningTurnModelBySession,
+        [sessionId]: resolvedModel.model,
+      },
       // A new turn supersedes any prior manual interrupt: clear the sentinel
       // so subagent.update / turn.done events for THIS turn aren't filtered.
       interruptedBySession: { ...s.interruptedBySession, [sessionId]: false },
@@ -6568,7 +6615,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           const runningBySession = { ...s.runningBySession, [sessionId]: false };
           const runningTurnStartedAt = { ...s.runningTurnStartedAt };
           delete runningTurnStartedAt[sessionId];
-          return { runningBySession, runningTurnStartedAt };
+          const runningTurnModelBySession = { ...s.runningTurnModelBySession };
+          delete runningTurnModelBySession[sessionId];
+          return { runningBySession, runningTurnStartedAt, runningTurnModelBySession };
         });
         get().drainPromptQueueIfIdle(sessionId);
         return;
@@ -7152,7 +7201,14 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       set((s) => {
         const list = s.messagesBySession[sid] ?? EMPTY_MESSAGES;
         const hasApproval = !!s.pendingPlanApprovalBySession[sid];
-        const next = upsertLivePlanBlock(list, e.plan, e.phase, hasApproval, s.runningTurnStartedAt[sid] ?? Date.now());
+        const next = upsertLivePlanBlock(
+          list,
+          e.plan,
+          e.phase,
+          hasApproval,
+          s.runningTurnStartedAt[sid] ?? Date.now(),
+          s.runningTurnModelBySession[sid],
+        );
         return {
           planBySession: {
             ...s.planBySession,
@@ -7325,7 +7381,14 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         // payload — re-sync the inline block so it shows exactly what the
         // user is being asked to approve (phase stays "ready" per the prior
         // plan.update emitted by the adapter on ExitPlanMode).
-        const next = upsertLivePlanBlock(list, e.plan, "ready", true, s.runningTurnStartedAt[sid] ?? Date.now());
+        const next = upsertLivePlanBlock(
+          list,
+          e.plan,
+          "ready",
+          true,
+          s.runningTurnStartedAt[sid] ?? Date.now(),
+          s.runningTurnModelBySession[sid],
+        );
         return {
           pendingPlanApprovalBySession: {
             ...s.pendingPlanApprovalBySession,
@@ -7401,7 +7464,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         // seamlessly - same pattern as tool.use / text.delta. Falls back to
         // now if the anchor is missing (resumed/legacy turn).
         const startedAt = s.runningTurnStartedAt[sid] ?? Date.now();
-        const next = appendCompactSummaryBlock(list, block, startedAt);
+        const next = appendCompactSummaryBlock(list, block, startedAt, s.runningTurnModelBySession[sid]);
         return next === list
           ? s
           : { messagesBySession: { ...s.messagesBySession, [sid]: next } };
@@ -7556,7 +7619,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
               role: "assistant",
               blocks: [],
               createdAt: Date.now(),
-              ...(isNewTurn ? { turnMeta: { startedAt } } : {}),
+              ...(isNewTurn
+                ? { turnMeta: { startedAt, model: s.runningTurnModelBySession[sid] } }
+                : {}),
             };
             next = [...next, lastAssistant];
             // A new turn opened (no prior open-turn assistant message) — demote
@@ -7722,7 +7787,13 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           }));
           // Stamp the turn's end time on its first assistant message so
           // the per-turn "工作时长" stat row freezes (stops ticking live).
-          const endedAt = Date.now();
+          //
+          // Prefer the timestamp main stamped on this event: main files the
+          // turn's usage record under that same instant, and the ledger receipt
+          // finds a turn's token count by matching it. Both processes read the
+          // same system clock, so this stays compatible with the renderer-side
+          // startedAt used for durations. Falls back to now for older senders.
+          const endedAt = e.endedAt ?? Date.now();
           next = next.map((m) =>
             m.turnMeta && m.turnMeta.endedAt === undefined
               ? { ...m, turnMeta: { ...m.turnMeta, endedAt } }
@@ -9158,7 +9229,14 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         // on reject it emits phase:"cleared" which removes the block. Either
         // way we flip hasApproval off immediately so the badge doesn't linger.
         const list = s.messagesBySession[sessionId] ?? EMPTY_MESSAGES;
-        const next = upsertLivePlanBlock(list, pending.plan, "ready", false, s.runningTurnStartedAt[sessionId] ?? Date.now());
+        const next = upsertLivePlanBlock(
+          list,
+          pending.plan,
+          "ready",
+          false,
+          s.runningTurnStartedAt[sessionId] ?? Date.now(),
+          s.runningTurnModelBySession[sessionId],
+        );
         // Clear the staged editor draft now that the decision is submitted -
         // the draft only mattered while the approval was pending.
         const { [sessionId]: _dropDraft, ...restDrafts } = s.planApprovalDraftBySession;
@@ -9191,6 +9269,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     // Capture the turn anchor BEFORE interrupt() wipes it, so the badge-flip
     // below lands on the same live plan block the sheet was showing.
     const anchor = s0.runningTurnStartedAt[sessionId] ?? Date.now();
+    const modelAnchor = s0.runningTurnModelBySession[sessionId];
 
     // End the blocked turn WITHOUT answering the ExitPlanMode dialog: the
     // abort means no request.resolved will ever arrive, so clear the local
@@ -9201,7 +9280,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       const { [sessionId]: _drop, ...rest } = s.pendingPlanApprovalBySession;
       const { [sessionId]: _dropDraft, ...restDrafts } = s.planApprovalDraftBySession;
       const list = s.messagesBySession[sessionId] ?? EMPTY_MESSAGES;
-      const next = upsertLivePlanBlock(list, planText, "ready", false, anchor);
+      const next = upsertLivePlanBlock(list, planText, "ready", false, anchor, modelAnchor);
       return {
         pendingPlanApprovalBySession: rest,
         planApprovalDraftBySession: restDrafts,

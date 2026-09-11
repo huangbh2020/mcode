@@ -118,7 +118,17 @@ class RuntimeManager {
   bindSession(session: Session): void {
     if (this.sessions.has(session.id)) return;
 
-    const emit = (e: RuntimeEvent) => {
+    const emit = (rawEvent: RuntimeEvent) => {
+      // Stamp the turn-end wall-clock ONCE and share it with both consumers:
+      // the usage record filed below (keyed by this timestamp) and the renderer
+      // (which adopts it as turnMeta.endedAt). The renderer uses the match to
+      // show the turn's token count, and two independent Date.now() calls would
+      // never be equal. Stamped here because this is the single exit every
+      // provider event passes through — no per-adapter bookkeeping.
+      const e: RuntimeEvent =
+        rawEvent.type === "turn.done" && rawEvent.endedAt === undefined
+          ? { ...rawEvent, endedAt: Date.now() }
+          : rawEvent;
       sendToRenderer(IPC.CLAUDE_EVENT, { channel: IPC.CLAUDE_EVENT, sessionId: e.sessionId, event: e });
       // Fan out to mobile clients over SSE. Same fire-and-forget contract — a
       // thrown subscriber is swallowed inside broadcast(). No subscribers ⇒
@@ -155,9 +165,14 @@ class RuntimeManager {
         // sendTurn flush it with the last-known snapshot if none ever does.
         const rt = this.sessions.get(session.id);
         if (rt && rt.turnStartedAt > 0) {
+          // Reuse the event's stamped instant (NOT a fresh Date.now()) so the
+          // usage record's endedAt is exactly the value the renderer stored on
+          // turnMeta — that equality is how the receipt finds this turn's
+          // tokens.
+          const endedAt = e.endedAt ?? Date.now();
           rt.pendingTurnEnd = {
-            endedAt: Date.now(),
-            durationMs: Math.max(0, Date.now() - rt.turnStartedAt),
+            endedAt,
+            durationMs: Math.max(0, endedAt - rt.turnStartedAt),
           };
           // Ordering, as observed in production (usage history silently lost on
           // single-turn sessions): the adapter emits the turn-end snapshot from

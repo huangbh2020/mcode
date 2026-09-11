@@ -18,7 +18,7 @@ import {
   IconChevronRight,
   IconGripVertical,
 } from "@renderer/lib/icons.js";
-import { useSessionStore, EMPTY_MESSAGES, EMPTY_TODOS, EMPTY_SUBAGENTS, EMPTY_CHAT_QUEUE, EMPTY_ELEMENT_QUEUE, EMPTY_PROMPT_QUEUE, EMPTY_BOOKMARKS, type Block, type ChatMessage, type TodoItem, type TurnMeta, type QueuedPrompt } from "@renderer/stores/sessionStore.js";
+import { useSessionStore, EMPTY_MESSAGES, EMPTY_TODOS, EMPTY_SUBAGENTS, EMPTY_CHAT_QUEUE, EMPTY_ELEMENT_QUEUE, EMPTY_PROMPT_QUEUE, EMPTY_BOOKMARKS, EMPTY_USAGE, type Block, type ChatMessage, type TodoItem, type TurnMeta, type QueuedPrompt } from "@renderer/stores/sessionStore.js";
 import { useToastStore } from "@renderer/stores/toastStore.js";
 import { api } from "@renderer/lib/api.js";
 import { findNormalizedTextRange, highlightRange } from "@renderer/lib/textFind.js";
@@ -41,9 +41,12 @@ import {
   FILE_DRAG_MIME,
 } from "@renderer/lib/contentTag.js";
 import type { SkillInfo, BuiltInCommand } from "@renderer/lib/slashCommands.js";
-import { MessageBlocks, TurnPanel, BatchToolGroup, isFoldableBlock, type ProceduralBlock, type BeforeContentMap } from "./MessageBlocks.js";
+import { MessageBlocks, TurnPanel, BatchToolGroup, isFoldableBlock, TURN_FOLD_MS, type ProceduralBlock, type BeforeContentMap, type ToolUseBlock } from "./MessageBlocks.js";
+import { CurrentOpTicker } from "./CurrentOpTicker.js";
+import { ModelBadge } from "./ModelAvatar.js";
+import { turnTokenUsage, CUMULATIVE_USAGE_PROVIDER_IDS } from "@renderer/lib/turnTokens.js";
+import type { TurnUsageRecord } from "@contracts/runtime";
 import { RenderErrorBoundary } from "./RenderErrorBoundary.js";
-import { AttachMenuButton } from "./AttachMenuButton.js";
 import { MicButton } from "./MicButton.js";
 import { ComposerToolbar } from "./ComposerToolbar.js";
 import { WorktreeModeChip } from "./WorktreeModeChip.js";
@@ -198,7 +201,7 @@ function fmtDuration(ms: number): string {
 }
 
 /** Per-turn stat row shown ABOVE the first assistant message of a turn:
- *  "开始 14:32:05 · 用时 12.3s". While the turn is still streaming
+ *  "14:32:05 · 12.3s". While the turn is still streaming
  *  (turnMeta.endedAt undefined) the duration ticks live; once the turn ends it
  *  freezes at its final value.
  *
@@ -209,11 +212,24 @@ function fmtDuration(ms: number): string {
  *  every delta flush. A local setInterval would be torn down by each remount's
  *  cleanup before its first 1000ms tick ever fires - leaving the duration
  *  stuck at "<1s" for the whole turn. The global clock survives remounts.
- *  Rendered as a centered pill (timestamp + duration) flanked by gradient
- *  rules so it reads as a distinct turn-separator between the user prompt
- *  and the assistant reply. A live (running) turn shows the equalizer glyph
- *  (.live-eq, shared with TurnPanel's header pill) inside the pill. */
-function TurnStatRow({ meta }: { meta: TurnMeta }) {
+ *
+ *  方案A「脉络」: a slim LEFT-ALIGNED row hugging where the turn's spine
+ *  will settle (no more centered pill + flanking rules). While the turn is
+ *  live it leads with the equalizer glyph (.live-eq); when the turn ends the
+ *  row reads as the quiet meta line above the reply. Used for the pure-text /
+ *  pending / live-opener turn shapes — turns WITH a process surface render
+ *  TurnPanel's own header instead (same visual language, collapsible). */
+function TurnStatRow({
+  meta,
+  op,
+}: {
+  meta: TurnMeta;
+  /** Newest RUNNING tool of this turn — drives the live current-operation
+   *  ticker. Null/undefined shows the equalizer alone (waiting for the model,
+   *  or between commands). */
+  op?: ToolUseBlock | null;
+}) {
+  const { t } = useI18n();
   // Only subscribe to the global ticker while the turn is still running -
   // frozen turns compute a static duration and pay nothing.
   const now = useNow();
@@ -222,24 +238,93 @@ function TurnStatRow({ meta }: { meta: TurnMeta }) {
   const live = meta.endedAt === undefined;
 
   return (
-    <div className="my-3 flex items-center gap-2.5">
-      <div className="turn-pill-line-r h-px flex-1" />
-      <div className="turn-pill-fill flex items-center gap-1.5 rounded-full border border-edge px-3 py-1 text-xs shadow-sm">
-        {live && (
-          <span className="live-eq shrink-0" aria-hidden>
-            <span />
-            <span />
-            <span />
+    <div className="-ml-[7px] flex min-w-0 items-center gap-1.5 rounded-lg px-[7px] py-1 text-content-subtle [font-size:var(--chat-fs-xs)]">
+      {/* Which model is running THIS turn — avatar + name on the left, matching
+          TurnPanel's header. Absent for turns with no recorded model. */}
+      <ModelBadge model={meta.model} />
+      {live && (
+        <span className="live-eq shrink-0" data-tempo={op ? undefined : "slow"} aria-hidden>
+          <span />
+          <span />
+          <span />
+        </span>
+      )}
+      <span className="shrink-0 tabular-nums">{fmtClock(meta.startedAt)}</span>
+      <span className="shrink-0 opacity-60">·</span>
+      <span className="shrink-0 tabular-nums">{fmtDuration(duration)}</span>
+      {/* Live current-operation ticker — rolls like a slot machine as the agent
+          moves between commands. This is the ONE surface carrying live progress
+          in the flat streaming layout, so the ticker belongs here (not only
+          inside the process card). Between commands (and before the first one)
+          the ticker renders nothing, so a placeholder keeps the row from
+          looking like it dropped a field. Phrasing content only, inline. */}
+      {live &&
+        (op ? (
+          <CurrentOpTicker op={op} turnActive />
+        ) : (
+          <span className="min-w-0 truncate border-l border-edge pl-2 text-content-subtle">
+            {t("chatStream.waitingModel")}
           </span>
-        )}
-        <span className="tabular-nums text-content-muted">{fmtClock(meta.startedAt)}</span>
-        <span className="text-content-subtle">·</span>
-        <span className="tabular-nums text-content-muted">{fmtDuration(duration)}</span>
-      </div>
-      <div className="turn-pill-line-l h-px flex-1" />
+        ))}
     </div>
   );
 }
+
+
+/** 运行台账的台头（运行中态）。与 TurnPanel 的回执头同一行槽位：
+ *  [模型徽标] ● 运行中 时钟 · 走时 · 实时操作 ……………………… N 步
+ *
+ *  必须是有 hook 的组件：走时用全应用共享的 useNow（1s 一跳），实时操作是一个
+ *  自带滚动动画的 CurrentOpTicker。渲染它的地方（wrapLiveSpine）是普通函数，
+ *  拼的是 JSX 而不是定义组件，所以这里能正常挂 hook。 */
+function LiveLedgerHead({ turnMeta, blocks }: { turnMeta?: TurnMeta; blocks: Block[] }) {
+  const { t } = useI18n();
+  const now = useNow();
+  const startedAt = turnMeta?.startedAt ?? now;
+  const duration = Math.max(0, now - startedAt);
+  const runningTool = newestRunningTool(blocks);
+  const stepCount = blocks.filter((b) => b.kind === "tool_use").length;
+
+  return (
+    <div className="chat-ledger-head">
+      <ModelBadge model={turnMeta?.model} />
+      <span className="chat-ledger-dot" aria-hidden />
+      <span className="chat-ledger-live">{t("chatStream.ledgerRunning")}</span>
+      <span className="tabular-nums">{fmtClock(startedAt)}</span>
+      <span className="opacity-60">·</span>
+      <span className="tabular-nums">{fmtDuration(duration)}</span>
+      <CurrentOpTicker op={runningTool} turnActive />
+      {stepCount > 0 && (
+        <span className="ml-auto shrink-0 tabular-nums opacity-70">
+          {t("chatStream.stepCount", { n: stepCount })}
+        </span>
+      )}
+    </div>
+  );
+}
+
+/** Newest RUNNING tool among the given blocks — what the live summary row's
+ *  operation ticker shows. Reverse scan so the newest wins; thinking blocks
+ *  never qualify (no execution status). Shared by every surface that renders a
+ *  live turn summary (spine rows, ops cards, pending rows). */
+function newestRunningTool(blocks: readonly Block[]): ToolUseBlock | null {
+  for (let i = blocks.length - 1; i >= 0; i--) {
+    const b = blocks[i];
+    if (b.kind === "tool_use" && b.status === "running") return b;
+  }
+  return null;
+}
+
+/** Placeholder message for the pre-rendered live-segment row (see RenderItem's
+ *  `liveSpine`). Shared as one constant so every accumulated segment row
+ *  reuses the same object identity — it is never rendered. */
+const LIVE_SPINE_SENTINEL_MESSAGE: ChatMessage = {
+  id: "__live_spine__",
+  sessionId: "",
+  role: "assistant",
+  blocks: [],
+  createdAt: 0,
+};
 
 /** Whether a block is "procedural" (model process: thinking / tool calls) —
  *  the surface that gets hidden inside a TurnPanel — vs "display" (text /
@@ -295,10 +380,22 @@ type RenderItem =
        *  disambiguates occurrences with an #n suffix. Absent everywhere else
        *  — keyExtractor falls back to msg.id. */
       liveKey?: string;
+      /** True on rows emitted by the LIVE streaming partition (assistant
+       *  narration / display rows of the running turn). Drives the 方案A
+       *  entrance animation (.chat-enter): new rows float in as they arrive
+       *  mid-stream, while historical rows mount statically. */
+      live?: boolean;
+      /** 方案A live segment: the whole bracketed run (its rows + the
+       *  streaming caret) pre-rendered as ONE element. Set by the accumulation
+       *  pass right before the list — rows carrying it skip MessageRow
+       *  entirely. `msg` is then an unused placeholder (see
+       *  LIVE_SPINE_SENTINEL_MESSAGE) kept only to satisfy the single-item
+       *  shape. */
+      liveSpine?: React.ReactNode;
     }
   | {
       // Live-turn cross-message fold run: contiguous FOLDABLE blocks
-      // (thinking / batch tools / MCP / skills) merged ACROSS assistant
+      // (batch tools / MCP / skills) merged ACROSS assistant
       // messages into ONE ops card while the turn streams. The agent loop
       // emits one assistant message per think→act cycle, so per-message
       // grouping spawns a tiny card per cycle; this kind renders the whole
@@ -306,6 +403,10 @@ type RenderItem =
       // the completed turn folds everything into a turnGroup/TurnPanel.
       kind: "opsGroup";
       blocks: ProceduralBlock[];
+      /** Display blocks the anchoring message emitted BEFORE its first
+       *  foldable block (e.g. a narration line whose tool_use landed a beat
+       *  later). Rendered above the ops card, inside the same spine node. */
+      leading?: Block[];
       /** Id of the first contributing message. Stable across re-runs while
        *  the run grows (runs only append), so LegendList recycling keeps the
        *  group's expand/collapse state alive during streaming. */
@@ -353,6 +454,20 @@ type RenderItem =
       // real assistant turnMeta appears.
       kind: "pendingTurn";
       turnMeta: TurnMeta;
+    }
+  | {
+      // 方案A live segment bookends. The LIVE partition brackets the turn's
+      // step rows with these two zero-height sentinels; the list renderer
+      // accumulates every row between them into ONE `.chat-turn` wrapper so
+      // the running turn carries the same two-state root as the completed
+      // shape. A trailing display row (the final reply) deliberately falls
+      // OUTSIDE the bracket. Sentinels are consumed by the accumulation pass
+      // and never reach a renderer.
+      kind: "liveSpineStart";
+      turnMeta?: TurnMeta;
+    }
+  | {
+      kind: "liveSpineEnd";
     };
 
 /** Whether the assistant message at index `i` is the tail of a COMPLETED turn:
@@ -442,6 +557,10 @@ function groupMessagesForRender(
    *  pendingTurn row before the first assistant block arrives. Undefined
    *  when no turn is in flight or the anchor wasn't stamped. */
   runningTurnStartedAt?: number,
+  /** Send-time model anchor (runningTurnModelBySession[sid]) carried onto the
+   *  synthesized pendingTurn row, so the model is visible from the first frame
+   *  after send — before any assistant block has landed. */
+  runningTurnModel?: string,
 ): RenderItem[] {
   const items: RenderItem[] = [];
 
@@ -484,7 +603,7 @@ function groupMessagesForRender(
     if (isStreamingTail) {
       // LIVE turn → block-level grouping. The turn's blocks are partitioned
       // in arrival order into two row kinds: contiguous FOLDABLE runs
-      // (thinking / batch tools / MCP / skills — see isFoldableBlock) merge
+      // (batch tools / MCP / skills — see isFoldableBlock) merge
       // ACROSS assistant messages into a single opsGroup card, while display
       // blocks (narration text, images, plan / turn-files / error,
       // AskUserQuestion …) emit as per-message single items. The agent loop
@@ -511,41 +630,50 @@ function groupMessagesForRender(
       // the text row stays put) — the flicker the old all-flat layout
       // guarded against cannot reappear.
       type LiveRow =
-        | { kind: "ops"; blocks: ProceduralBlock[]; anchorId: string; key: string }
+        | {
+            kind: "ops";
+            blocks: ProceduralBlock[];
+            anchorId: string;
+            key: string;
+            /** Display blocks this same message contributed BEFORE the run
+             *  opened (e.g. a narration line whose tool_use landed later).
+             *  They stay visible directly above the ops card instead of
+             *  being dropped, which also makes the message land in the
+             *  opsGroup branch — where the 方案A spine lives. */
+            leading?: Block[];
+          }
         | { kind: "msg"; msg: ChatMessage; blocks: Block[]; key: string };
       const rows: LiveRow[] = [];
-      let run: ProceduralBlock[] = [];
-      let runAnchorId = "";
+      let openOps: { blocks: ProceduralBlock[]; anchorId: string; leading: Block[] } | null = null;
       let curMsg: ChatMessage | null = null;
       let curBlocks: Block[] = [];
       // Occurrence counters for unique row keys. One message CAN split into
-      // several msg rows (display → foldable → display interleaving, e.g.
-      // narration → tool → a tool_result-spliced screenshot → more narration)
-      // and two runs can share one anchor message — keying every row by the
-      // bare msg.id produced DUPLICATE React keys. LegendList recycles cells
-      // by key, so two rows then drove ONE recycled cell whose BlockView got
-      // a different block kind on re-render — and the text branch's extra
-      // useDeferredValue hook made that a "rendered fewer hooks" crash =
-      // tree unmount = the 2026-09-08 black screen. First occurrence keeps
-      // the bare id (so the tail msg row's key still survives the
-      // live→completed re-layout), later ones get an #n suffix.
+      // several runs (display → foldable → display → foldable …), so keys are
+      // disambiguated with an #n suffix; the first occurrence keeps the bare
+      // id so the tail msg row's key still survives the live→completed
+      // re-layout. LegendList recycles cells by key, and duplicate keys drove
+      // one recycled cell with two different block kinds — the 2026-09-08
+      // black screen.
       const opsSeq = new Map<string, number>();
       const msgSeq = new Map<string, number>();
-      const flushRun = () => {
-        if (run.length > 0) {
-          const n = opsSeq.get(runAnchorId) ?? 0;
-          opsSeq.set(runAnchorId, n + 1);
+      const flushOps = () => {
+        if (openOps && (openOps.blocks.length > 0 || openOps.leading.length > 0)) {
+          const n = opsSeq.get(openOps.anchorId) ?? 0;
+          opsSeq.set(openOps.anchorId, n + 1);
           rows.push({
             kind: "ops",
-            blocks: run,
-            anchorId: runAnchorId,
-            key: n === 0 ? `ops:${runAnchorId}` : `ops:${runAnchorId}#${n}`,
+            blocks: openOps.blocks,
+            anchorId: openOps.anchorId,
+            key: n === 0 ? `ops:${openOps.anchorId}` : `ops:${openOps.anchorId}#${n}`,
+            ...(openOps.leading.length > 0 ? { leading: openOps.leading } : {}),
           });
-          run = [];
         }
+        openOps = null;
       };
-      const flushMsg = () => {
-        if (curMsg && curBlocks.length > 0) {
+      const flushMsg = (force = false) => {
+        // `force` (end of turn): always emit the buffered display-only message
+        // so a trailing segment isn't swallowed as an ops run's leading row.
+        if ((force || curBlocks.length > 0) && curMsg && (curBlocks.length > 0 || force)) {
           const n = msgSeq.get(curMsg.id) ?? 0;
           msgSeq.set(curMsg.id, n + 1);
           rows.push({
@@ -560,11 +688,27 @@ function groupMessagesForRender(
       };
       for (const { block, msg } of turnBlocks) {
         if (isFoldableBlock(block)) {
-          flushMsg();
-          if (run.length === 0) runAnchorId = msg.id;
-          run.push(block);
+          // Foldable blocks merge ACROSS assistant messages: the agent loop
+          // emits one message per think→act cycle, so per-message grouping
+          // would spawn a tiny card per cycle. They also absorb any display
+          // blocks already buffered for their own message as `leading`, so a
+          // narration + tool pair stays one row (and one live-segment node).
+          if (!openOps) {
+            openOps = { blocks: [], anchorId: msg.id, leading: [] };
+            if (curMsg === msg) {
+              openOps.leading = curBlocks;
+              curMsg = null;
+              curBlocks = [];
+            }
+          } else if (curMsg) {
+            // A display message was buffered when this run opened without
+            // absorbing it (different message) — it is its own row.
+            flushMsg();
+          }
+          openOps.blocks.push(block);
         } else {
-          flushRun();
+          // Display block: flush the open run, then buffer under its message.
+          flushOps();
           if (curMsg !== msg) {
             flushMsg();
             curMsg = msg;
@@ -572,36 +716,83 @@ function groupMessagesForRender(
           curBlocks.push(block);
         }
       }
-      flushRun();
-      flushMsg();
+      flushOps();
+      flushMsg(true);
 
-      // The turn's opener usually consists of foldable blocks only, so the
-      // first live row is often an opsGroup and no single row would render
-      // the "开始 · 用时" stat — carry the meta on the group explicitly.
+      // A turn whose opener is foldable-only (e.g. it starts with a glob or
+      // bash burst) has an opsGroup as its first live row, and no single row
+      // would render the "开始 · 用时" stat — carry the meta on the group
+      // explicitly. A thinking / Read opener is a msg row now (2026-09-11, see
+      // isFoldableBlock), so either shape has to be handled.
       const liveTurnMeta = turnMeta;
-      let liveRowIdx = 0;
-      for (const row of rows) {
+      // The live segment = the process surface: every row up to and including
+      // the last PROCESS row. A trailing display row (the final reply after
+      // the last tool) is deliberately left OUT of the bracketed run: it
+      // belongs below the 「回复」 mark, not inside the process chunk, and it
+      // renders through its own MessageRow.
+      //
+      // The right edge is "the last row carrying a procedural block" (thinking
+      // or any tool_use) — the same rule the completed turn uses to fill the
+      // TurnPanel. It used to be "the last ops row", which only held while
+      // every tool folded into a run: since thinking / Read / Write / Edit
+      // emit as their own rows (2026-09-11, see isFoldableBlock), an ops-row
+      // anchor would leave a trailing Read / thinking card — and the model's
+      // final text — on the SAME side of the edge, so both would jump across
+      // it the moment the turn ends.
+      let lastRunRow = rows.length - 1;
+      for (let k = rows.length - 1; k >= 0; k--) {
+        const row = rows[k];
+        if (row.kind === "ops" || row.blocks.some(isProceduralBlock)) {
+          lastRunRow = k;
+          break;
+        }
+      }
+      for (let k = 0; k < rows.length; k++) {
+        const row = rows[k];
+        if (k > lastRunRow && row.kind === "msg") {
+          // Trailing reply rows render flat, outside the bracketed run.
+          items.push({
+            kind: "single",
+            msg: { ...row.msg, blocks: row.blocks },
+            liveKey: row.key,
+            live: true,
+            isStreamingTail: false,
+            isTurnTail: false,
+            tightTop: true,
+          });
+          continue;
+        }
+        // tightTop only applies after the run's first row — that one keeps the
+        // turn-gap so consecutive turns stay visually separated.
+        const tight = k > 0;
+        if (k === 0) {
+          items.push({ kind: "liveSpineStart", turnMeta: liveTurnMeta });
+        }
         if (row.kind === "ops") {
           items.push({
             kind: "opsGroup",
             blocks: row.blocks,
+            leading: row.leading,
             anchorId: row.anchorId,
             liveKey: row.key,
             isStreamingTail: false,
-            ...(liveRowIdx === 0 ? { turnMeta: liveTurnMeta } : {}),
-            tightTop: liveRowIdx > 0,
+            ...(k === 0 ? { turnMeta: liveTurnMeta } : {}),
+            tightTop: tight,
           });
         } else {
           items.push({
             kind: "single",
             msg: { ...row.msg, blocks: row.blocks },
             liveKey: row.key,
+            live: true,
             isStreamingTail: false,
             isTurnTail: false,
-            tightTop: liveRowIdx > 0,
+            tightTop: tight,
           });
         }
-        liveRowIdx++;
+        if (k === lastRunRow) {
+          items.push({ kind: "liveSpineEnd" });
+        }
       }
       // Exactly one live row carries the streaming tail (the loader
       // spinner): the LAST row, whatever its kind. A fold run absorbs the
@@ -903,7 +1094,9 @@ function groupMessagesForRender(
     if (!openTurnExists) {
       items.push({
         kind: "pendingTurn",
-        turnMeta: { startedAt: runningTurnStartedAt },
+        // The model anchor is stamped at send time, so the very first frame
+        // after sending already shows which model is about to answer.
+        turnMeta: { startedAt: runningTurnStartedAt, model: runningTurnModel },
       });
     }
   }
@@ -1092,17 +1285,18 @@ function ChatPaneForSession({
   chipsMode?: ComposerChipsMode;
 }) {
   const { t, locale } = useI18n();
-  // Collapse of the composer's bottom action row into the single-icon menu
-  // toggle (see useComposerRowFit): when the composer card is narrower than
-  // 580px, or — above that floor — when the chip cluster
-  // (Model/Effort/Permission/ContextRing) can't fit on one line next to the
-  // mic/provider/send cluster, `collapsed` hides the chips and shows the
-  // toggle instead. Narrow hosts (`chipsMode="collapsed"`, i.e. the side-chat
-  // panel) skip measuring and stay folded at every width.
+  // Compactness tier of the composer's mini pill (see useComposerRowFit,
+  // prototypes/composer-redesign.html 方案 B · single-pill revision):
+  //   0 — pill expanded (segment labels + ring % visible)
+  //   1 — pill compact (labels collapse to icons + level bars + color dot;
+  //       the attach + and the context ring themselves NEVER fold away)
+  // The pill is the only inline presentation at every width; collapsed
+  // hosts (`chipsMode="collapsed"`, i.e. the side-chat panel / phone shell)
+  // skip measuring and render the single-icon toggle instead.
   const {
     rowRef: composerActionRowRef,
     cardRef: composerCardRef,
-    collapsed: composerChipsCollapsed,
+    tier: composerTier,
   } = useComposerRowFit(chipsMode === "collapsed");
   const messages = useSessionStore((s) =>
     s.messagesBySession[sessionId] ?? EMPTY_MESSAGES,
@@ -1138,9 +1332,10 @@ function ChatPaneForSession({
   // Merge consecutive purely-procedural assistant messages (thinking + tool
   // only, no text) into single render clusters so a multi-step turn reads
   // as one compact "思考 + N 个操作" card instead of N stacked cards.
+  const runningTurnModel = useSessionStore((s) => s.runningTurnModelBySession[sessionId]);
   const renderItems = useMemo(
-    () => groupMessagesForRender(messages, isRunning, runningTurnStartedAt),
-    [messages, isRunning, runningTurnStartedAt],
+    () => groupMessagesForRender(messages, isRunning, runningTurnStartedAt, runningTurnModel),
+    [messages, isRunning, runningTurnStartedAt, runningTurnModel],
   );
   const sendPrompt = useSessionStore((s) => s.sendPrompt);
   const openSideChatPanel = useSessionStore((s) => s.openSideChatPanel);
@@ -1161,6 +1356,24 @@ function ChatPaneForSession({
   // the PlanViewer in the editor column (not a drawer here). Closing is
   // handled by the PlanViewer's close button in CenterPane.
   const openPlanDrawer = useSessionStore((s) => s.openPlanDrawer);
+  // This session's per-turn usage history (token counts + model), used by the
+  // running-ledger receipt. Hydrated from the session row; a turn's record only
+  // lands at turn END (the turn-end snapshot), so the receipt renders without
+  // the token figure until then.
+  const usageHistory = useSessionStore(
+    (s) => s.usageHistoryBySession[sessionId] ?? EMPTY_USAGE,
+  );
+  // Provider of this session — decides whether the records' token counters are
+  // per-turn (Claude/Codex) or session-cumulative (Pi). See turnTokens.ts.
+  const sessionProviderId = useSessionStore((s) => {
+    for (const list of Object.values(s.sessionsByProject)) {
+      const found = list?.find((x) => x.id === sessionId);
+      if (found) return found.providerId;
+    }
+    const pinned = s.pinnedSessions.find((x) => x.id === sessionId);
+    if (pinned) return pinned.providerId;
+    return s.streamSessions.find((x) => x.id === sessionId)?.providerId ?? null;
+  });
   // Project root absolute path for this session (used by the @ / add-context
   // file pickers). Resolved through the session's projectId → projects[].
   // Pinned sessions aren't in the per-project slices (they live in the global
@@ -1384,10 +1597,18 @@ function ChatPaneForSession({
       if (pauseBottomAnchorTimer.current != null) {
         window.clearTimeout(pauseBottomAnchorTimer.current);
       }
-      pauseBottomAnchorTimer.current = window.setTimeout(() => {
-        pauseBottomAnchorTimer.current = null;
-        setAnchorSuspension(null);
-      }, mode === "full" ? 360 : 280);
+      // Budgets derive from the fold's own duration (TURN_FOLD_MS) so the
+      // suspension always outlives the animation: a shorter budget would
+      // re-enable bottom anchoring mid-fold and snap scroll against a moving
+      // height ("闪一下"). "full" also covers the turn-files / plan cards that
+      // land just after turn.done.
+      pauseBottomAnchorTimer.current = window.setTimeout(
+        () => {
+          pauseBottomAnchorTimer.current = null;
+          setAnchorSuspension(null);
+        },
+        mode === "full" ? TURN_FOLD_MS + 180 : TURN_FOLD_MS + 60,
+      );
       if (mode === "full") {
         // After the 200ms fold transition settles, glide back to the bottom
         // IF the user was following along. While the process rows collapsed,
@@ -1404,12 +1625,14 @@ function ChatPaneForSession({
         if (settleScrollTimer.current != null) {
           window.clearTimeout(settleScrollTimer.current);
         }
+        // Glide back only AFTER the fold has finished — firing while it is
+        // still shrinking fights the transition and reads as a hitch.
         settleScrollTimer.current = window.setTimeout(() => {
           settleScrollTimer.current = null;
           if (wasNearBottom || recomputeNearBottom()) {
             void virtualListRef.current?.scrollToEnd({ animated: true });
           }
-        }, 240);
+        }, TURN_FOLD_MS + 60);
       }
     },
     [recomputeNearBottom],
@@ -1457,6 +1680,10 @@ function ChatPaneForSession({
   // Whether a file-tree drag is currently hovering over the composer —
   // drives a highlight ring so the drop target is discoverable.
   const [dragOver, setDragOver] = useState(false);
+  // Send "launch" feedback (方案 B 质感): a one-shot class on the send button
+  // playing the icon fly-out-and-return + halo pulse for ~0.5s after a prompt
+  // actually leaves the composer (sent or enqueued). Cleared on animationend.
+  const [sendLaunching, setSendLaunching] = useState(false);
   // Which tag's preview popover is open (by id); null = none.
   const [openTagId, setOpenTagId] = useState<string | null>(null);
   // Which queued-prompt card is expanded (by id); null = all collapsed.
@@ -2450,6 +2677,7 @@ function ChatPaneForSession({
     setPendingImages([]);
     setOpenTagId(null);
     setAnchorRect(null);
+    setSendLaunching(true);
   };
 
   /** Queue the typed prompt while a turn is running, instead of sending it.
@@ -2486,6 +2714,7 @@ function ChatPaneForSession({
     setPendingImages([]);
     setOpenTagId(null);
     setAnchorRect(null);
+    setSendLaunching(true);
   };
 
   /** Restore a queued prompt back into the composer for editing: fill the
@@ -2666,15 +2895,167 @@ function ChatPaneForSession({
     return null;
   }, [messages]);
 
+  /** One rendered row of the live segment — the element the list would have
+   *  rendered for that item, with the per-row horizontal resolution stripped
+   *  (the outer `px-[var(--chat-gutter)]` moves to the wrapper instead). */
+  type SegmentRow = {
+    key: string;
+    node: React.ReactNode;
+    tight: boolean;
+  };
+
+  /** Wrap the live segment's rows in the `.chat-turn` root (the structural
+   *  turn marker shared with the completed shape). Returns null when the list
+   *  holds no live-segment rows. */
+  const wrapLiveSpine = (items: RenderItem[], keyPrefix: string) => {
+    let start = -1;
+    let end = -1;
+    for (let i = 0; i < items.length; i++) {
+      if (items[i].kind === "liveSpineStart") start = i;
+      else if (items[i].kind === "liveSpineEnd") end = i;
+      if (start >= 0 && end >= 0) break;
+    }
+    if (start < 0 || end <= start) return null;
+
+    // The streaming tail is flagged on the LAST renderable row of the whole
+    // list (see the live partition). So: does that row sit inside this
+    // bracket? If yes this segment draws the caret; if no, the row outside
+    // does — through its own MessageRow. Rendering it on both sides is what
+    // produced TWO blinking cursors at the end of the text.
+    let lastRenderableIdx = -1;
+    for (let i = items.length - 1; i >= 0; i--) {
+      const k = items[i].kind;
+      if (k === "single" || k === "opsGroup") {
+        lastRenderableIdx = i;
+        break;
+      }
+    }
+    const tailInsideSegment = lastRenderableIdx > start && lastRenderableIdx < end;
+
+    const rows: SegmentRow[] = [];
+    // 台头要用：回合起点（走时基准）、当前执行中的工具（实时操作）、步数。
+    // The head reads the WHOLE spine — not just the folded runs: since
+    // thinking / Read / Write / Edit render as their own rows (2026-09-11),
+    // counting only the runs would drop those steps from "N 步" and hide a
+    // currently-running Read/Edit from the live operation ticker.
+    let turnMeta: TurnMeta | undefined;
+    const liveLedgerBlocks: Block[] = [];
+    for (let i = start + 1; i < end; i++) {
+      const it = items[i];
+      if (it.kind === "liveSpineStart") {
+        // The ledger head's clock/duration come from the turn's own meta. Take
+        // it off the bracket opener: it is always present, whereas the
+        // opsGroup path only carries it when a fold run happens to be the
+        // turn's FIRST row (a text/thinking/Read opener is a msg row now, and
+        // without this the head would fall back to `now` and read 0s).
+        if (it.turnMeta) turnMeta = it.turnMeta;
+        continue;
+      }
+      if (it.kind === "liveSpineEnd") continue;
+      if (it.kind === "opsGroup") {
+        if (it.turnMeta) turnMeta = it.turnMeta;
+        liveLedgerBlocks.push(...it.blocks);
+        rows.push({
+          key: `ops:${it.liveKey ?? it.anchorId}`,
+          tight: !!it.tightTop,
+          node: (
+            // No stat row here: the ledger HEAD already carries this turn's
+            // summary (model · clock · duration · current op · step count).
+            // Rendering it again as the body's first row duplicated the whole
+            // line — the "两行汇总信息" bug.
+            <div>
+              <div>
+                {it.leading && it.leading.length > 0 && (
+                  <RenderErrorBoundary>
+                    <MessageBlocks
+                      blocks={it.leading}
+                      beforeMap={beforeMap}
+                      onOpenPlan={(p) => openPlanDrawer(sessionId, p)}
+                      projectPath={projectPath}
+                    />
+                  </RenderErrorBoundary>
+                )}
+                <RenderErrorBoundary>
+                  <BatchToolGroup
+                    blocks={it.blocks}
+                    turnActive
+                    showTicker={false}
+                    projectPath={projectPath}
+                  />
+                </RenderErrorBoundary>
+              </div>
+            </div>
+          ),
+        });
+      } else if (it.kind === "single") {
+        liveLedgerBlocks.push(...it.msg.blocks);
+        rows.push({
+          key: `msg:${it.liveKey ?? it.msg.id}`,
+          tight: !!it.tightTop,
+          node: (
+            <MessageRow
+              msg={it.msg}
+              tightTop={it.tightTop}
+              beforeMap={beforeMap}
+              projectPath={projectPath}
+            />
+          ),
+        });
+      }
+    }
+
+    const inner = (
+      <>
+        {rows.map((row) => (
+          <div
+            key={row.key}
+            // 首行紧贴台头（间距由台账头/内边距给），其余行用块间距。
+            className={cn("chat-enter", row.tight && "mt-[var(--chat-block-gap)]")}
+          >
+            {row.node}
+          </div>
+        ))}
+        {/* Streaming caret — ONLY when this segment owns the streaming tail
+            (nothing renders after it). Once the model moves into its final
+            reply, that reply is a row OUTSIDE this segment and its own
+            MessageRow draws the caret; rendering one here too is what put TWO
+            blinking cursors at the end of the text. */}
+        {tailInsideSegment && (
+          <div className="mt-1.5 flex items-center gap-1.5">
+            <span className="chat-caret" aria-hidden />
+            {upstreamIssue && <UpstreamRetryHint issue={upstreamIssue} />}
+          </div>
+        )}
+      </>
+    );
+
+    return (
+      <div key={`${keyPrefix}:live-spine`} className="px-[var(--chat-gutter)]">
+        {/* 运行中的过程面与完成态共用同一张台账卡：台头在数步子、底部扫描光带
+            表示仍在写入；回合结束后由 TurnPanel 接手同一形态，只把台头翻成回执。 */}
+        <div className="chat-turn mx-auto mt-[var(--chat-row-gap-assistant)] max-w-5xl">
+          <div className="chat-ledger" data-phase="running" data-open="true">
+            <LiveLedgerHead turnMeta={turnMeta} blocks={liveLedgerBlocks} />
+            <div className="chat-ledger-body">{inner}</div>
+            <span className="chat-ledger-scan" aria-hidden="true" />
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   // Render a single item for LegendList's renderItem.
   const renderListItem = useCallback(
     ({ item }: { item: RenderItem }) => {
       if (item.kind === "single") {
+        // Pre-rendered live segment (see `liveSpine`) — the element is
+        // already fully built, including its own gutter/max-width chrome.
+        if (item.liveSpine) return <>{item.liveSpine}</>;
         const m = item.msg;
         const isUser = m.role === "user";
         return (
           <div className="px-[var(--chat-gutter)]">
-            <div className="mx-auto max-w-5xl">
+            <div className={cn("mx-auto max-w-5xl", item.live && "chat-enter")}>
               {/* Row-level boundary: MessageBlocks already guards per segment,
                   but MessageRow's own chrome (stat row, hover actions, edit
                   form) renders outside them — one broken row must not unmount
@@ -2713,17 +3094,29 @@ function ChatPaneForSession({
               {/* Turn stat row when this group opens the turn (the opener
                   message's blocks all folded into it). Mirrors MessageRow's
                   stat placement. */}
-              {item.turnMeta && <TurnStatRow meta={item.turnMeta} />}
-              {/* turnActive is always true: opsGroup rows exist only while
-                  the turn streams, so every group's header ticker stays live
-                  (the group whose tool is executing shows it rolling; the
-                  rest show their last op dimmed). */}
-              <RenderErrorBoundary>
-                <BatchToolGroup blocks={item.blocks} turnActive projectPath={projectPath} />
-              </RenderErrorBoundary>
+              {item.turnMeta && <TurnStatRow meta={item.turnMeta} op={newestRunningTool(item.blocks)} />}
+              <div>
+                {item.leading && item.leading.length > 0 && (
+                  <RenderErrorBoundary>
+                    <MessageBlocks
+                      blocks={item.leading}
+                      beforeMap={beforeMap}
+                      onOpenPlan={(p) => openPlanDrawer(sessionId, p)}
+                      projectPath={projectPath}
+                    />
+                  </RenderErrorBoundary>
+                )}
+                {/* turnActive is always true: opsGroup rows exist only while
+                    the turn streams, so every group's header ticker stays live
+                    (the group whose tool is executing shows it rolling; the
+                    rest show their last op dimmed). */}
+                <RenderErrorBoundary>
+                  <BatchToolGroup blocks={item.blocks} turnActive projectPath={projectPath} />
+                </RenderErrorBoundary>
+              </div>
               {item.isStreamingTail && (
                 <div className="mt-1.5 flex items-center gap-1.5">
-                  <IconLoader2 size={12} className="animate-spin text-accent" />
+                  <span className="chat-caret" aria-hidden />
                 </div>
               )}
             </div>
@@ -2732,21 +3125,28 @@ function ChatPaneForSession({
       }
       if (item.kind === "pendingTurn") {
         // Synthesized pre-token running row: just the stat row (which carries
-        // its own spinner via the `live` branch) plus a streaming-tail
-        // spinner, mirroring a real streaming assistant message's tail so the
-        // feedback reads as "the model is working". Disappears once a real
-        // assistant turnMeta exists (groupMessagesForRender stops emitting it).
+        // its own live equalizer) plus a blinking caret, mirroring a real
+        // streaming assistant message's tail so the feedback reads as "the
+        // model is about to speak". Disappears once a real assistant turnMeta
+        // exists (groupMessagesForRender stops emitting it).
         return (
           <div className="px-[var(--chat-gutter)]">
-            <div className="mx-auto max-w-5xl">
+            <div className="mx-auto mt-1 max-w-5xl">
               <TurnStatRow meta={item.turnMeta} />
-              <div className="mt-1.5 flex items-center gap-1.5">
-                <IconLoader2 size={12} className="animate-spin text-accent" />
+              <div className="mt-0.5 flex items-center gap-1.5">
+                <span className="chat-caret" aria-hidden />
                 {upstreamIssue && <UpstreamRetryHint issue={upstreamIssue} />}
               </div>
             </div>
           </div>
         );
+      }
+      // Live-segment sentinels are consumed by the accumulation pass
+      // (listItems) and must never reach a renderer; returning null here keeps
+      // the type narrowing honest instead of pretending they carry turnGroup
+      // fields.
+      if (item.kind === "liveSpineStart" || item.kind === "liveSpineEnd") {
+        return null;
       }
       // item.kind === "turnGroup"
       const hasProcess = item.panelBlocks.length > 0;
@@ -2758,80 +3158,142 @@ function ChatPaneForSession({
       // auto-collapses) so the user's focus moves to the reply.
       const turnActive = item.isStreamingTail && item.textMsgs.length === 0;
       const onOpenPlan = (p: string) => openPlanDrawer(sessionId, p);
+      // 完成态摘要统计：步数 = 过程面板里的工具调用数；文件数与 ±行数 =
+      // 回合尾部 turn-files 卡记录的实际改动。
+      let stepCount = 0;
+      for (const b of item.panelBlocks) {
+        if (b.kind === "tool_use") stepCount++;
+      }
+      let filesTouched = 0;
+      let statAdds = 0;
+      let statDels = 0;
+      for (const tm of item.textMsgs) {
+        for (const b of tm.blocks) {
+          if (b.kind !== "turn-files") continue;
+          filesTouched += b.files.length;
+          for (const f of b.files) {
+            statAdds += f.adds;
+            statDels += f.dels;
+          }
+        }
+      }
+      // Token usage for THIS turn (null until the turn-end snapshot lands).
+      const turnTokens = turnTokenUsage(
+        usageHistory,
+        item.turnMeta?.endedAt,
+        sessionProviderId != null && CUMULATIVE_USAGE_PROVIDER_IDS.has(sessionProviderId),
+      );
+      const turnStats =
+        stepCount > 0 || turnTokens != null
+          ? {
+              steps: stepCount,
+              files: filesTouched,
+              adds: statAdds,
+              dels: statDels,
+              tokens: turnTokens ?? undefined,
+            }
+          : undefined;
+      const body = (
+        <>
+          {hasProcess && (
+            <RenderErrorBoundary>
+              <TurnPanel
+                blocks={item.panelBlocks}
+                beforeMap={beforeMap}
+                turnActive={turnActive}
+                turnMeta={item.turnMeta}
+                stats={turnStats}
+                onOpenPlan={onOpenPlan}
+                onToggleCollapse={pauseBottomAnchor}
+                projectPath={projectPath}
+              />
+            </RenderErrorBoundary>
+          )}
+          {/* Text replies (and plan / turn-files / error blocks) stay
+              visible below the panel. hideTurnStat suppresses the
+              per-message stat row ONLY when a TurnPanel is rendered
+              (hasProcess) - its header already shows the turn's 开始/用时,
+              so a second timing line above the reply would be redundant.
+              For pure-text turns (no tools) there's no panel, so we let the
+              first reply message show its own TurnStatRow - otherwise the
+              "开始 · 用时" stat would vanish once the turn ends.
+              tightTop on the FIRST textMsg (process-bearing turns only)
+              tucks the reply under the 「回复」 mark at block-gap tier
+              instead of a full row gap. */}
+          {/*
+              isTurnTail is given to the LAST textMsg that has non-empty text,
+              not the array-last item: the turn-files extraction above re-
+              emits the "本轮修改了 N 个文件" card as a standalone trailing
+              textMsg (no text block), so the array-last index would hand
+              tail status to the card and strip it from the real text reply -
+              hiding that reply's copy button (showCopy gates on isTurnTail).
+              Falling back to the last text-bearing message restores the copy
+              affordance; the card itself never had one (hasTextContent=false).
+          */}
+          {(() => {
+            let lastTextIdx = -1;
+            for (let i = item.textMsgs.length - 1; i >= 0; i--) {
+              if (
+                item.textMsgs[i].blocks.some(
+                  (b) => b.kind === "text" && b.text.trim().length > 0,
+                )
+              ) {
+                lastTextIdx = i;
+                break;
+              }
+            }
+            if (lastTextIdx < 0) lastTextIdx = item.textMsgs.length - 1;
+            return item.textMsgs.map((msg, idx) => (
+              <MessageRow
+                key={msg.id}
+                msg={msg}
+                isStreamingTail={item.isStreamingTail && idx === item.textMsgs.length - 1}
+                isTurnTail={item.isTurnTail && idx === lastTextIdx}
+                beforeMap={beforeMap}
+                hideTurnStat={hasProcess}
+                onOpenPlan={onOpenPlan}
+                projectPath={projectPath}
+              />
+            ));
+          })()}
+          {turnActive && (
+            <div className="mt-1.5 flex items-center gap-1.5">
+              <span className="chat-caret" aria-hidden />
+              {upstreamIssue && <UpstreamRetryHint issue={upstreamIssue} />}
+            </div>
+          )}
+        </>
+      );
+      // 纯文本轮次（无过程面）不进生命线结构：MessageRow 自带的上边距会让
+      // 脊线悬在内容上方，且没有过程可"挂线"——按原排版直出。
+      if (!hasProcess) {
+        return (
+          <div
+            key={item.textMsgs[0]?.id ?? `turn-${item.turnMeta?.startedAt ?? ""}`}
+            className="px-[var(--chat-gutter)]"
+          >
+            <div className="mx-auto max-w-5xl">{body}</div>
+          </div>
+        );
+      }
       return (
         <div
           key={item.textMsgs[0]?.id ?? `turn-${item.turnMeta?.startedAt ?? ""}`}
           className="px-[var(--chat-gutter)]"
         >
-          <div className="mx-auto max-w-5xl">
-            {hasProcess && (
-              <RenderErrorBoundary>
-                <TurnPanel
-                  blocks={item.panelBlocks}
-                  beforeMap={beforeMap}
-                  turnActive={turnActive}
-                  turnMeta={item.turnMeta}
-                  onOpenPlan={onOpenPlan}
-                  onToggleCollapse={pauseBottomAnchor}
-                  projectPath={projectPath}
-                />
-              </RenderErrorBoundary>
-            )}
-            {/* Text replies (and plan / turn-files / error blocks) stay
-                visible below the panel. hideTurnStat suppresses the
-                per-message stat row ONLY when a TurnPanel is rendered
-                (hasProcess) - its header already shows the turn's 开始/用时,
-                so a second timing line above the reply would be redundant.
-                For pure-text turns (no tools) there's no panel, so we let the
-                first reply message show its own TurnStatRow - otherwise the
-                "开始 · 用时" stat would vanish once the turn ends. */}
-            {/*
-                isTurnTail is given to the LAST textMsg that has non-empty text,
-                not the array-last item: the turn-files extraction above re-
-                emits the "本轮修改了 N 个文件" card as a standalone trailing
-                textMsg (no text block), so the array-last index would hand
-                tail status to the card and strip it from the real text reply -
-                hiding that reply's copy button (showCopy gates on isTurnTail).
-                Falling back to the last text-bearing message restores the copy
-                affordance; the card itself never had one (hasTextContent=false).
-            */}
-            {(() => {
-              let lastTextIdx = -1;
-              for (let i = item.textMsgs.length - 1; i >= 0; i--) {
-                if (
-                  item.textMsgs[i].blocks.some(
-                    (b) => b.kind === "text" && b.text.trim().length > 0,
-                  )
-                ) {
-                  lastTextIdx = i;
-                  break;
-                }
-              }
-              if (lastTextIdx < 0) lastTextIdx = item.textMsgs.length - 1;
-              return item.textMsgs.map((msg, idx) => (
-                <MessageRow
-                  key={msg.id}
-                  msg={msg}
-                  isStreamingTail={item.isStreamingTail && idx === item.textMsgs.length - 1}
-                  isTurnTail={item.isTurnTail && idx === lastTextIdx}
-                  beforeMap={beforeMap}
-                  hideTurnStat={hasProcess}
-                  onOpenPlan={onOpenPlan}
-                  projectPath={projectPath}
-                />
-              ));
-            })()}
-            {turnActive && (
-              <div className="mt-1.5 flex items-center gap-1.5">
-                <IconLoader2 size={12} className="animate-spin text-accent" />
-                {upstreamIssue && <UpstreamRetryHint issue={upstreamIssue} />}
-              </div>
-            )}
+          <div className="mx-auto mt-[var(--chat-block-gap)] max-w-5xl">
+            {/* 生命线竖脊：过程面板与最终回复挂同一根线上（方案A 的识别骨架）。
+                aria-hidden —— 纯装饰，状态语义由摘要行文本承载。 */}
+            <div
+              className="chat-turn"
+            >
+              {body}
+            </div>
           </div>
         </div>
       );
     },
-    [beforeMap, sessionBusy, editingMessageId, lastUserMessageId, handleEditSubmit, sessionId, projectPath, upstreamIssue],
+    [beforeMap, sessionBusy, editingMessageId, lastUserMessageId, handleEditSubmit, sessionId, projectPath, upstreamIssue, pauseBottomAnchor, usageHistory, sessionProviderId],
   );
 
   // Footer rendered after all message items. The plan card and per-turn
@@ -2868,6 +3330,43 @@ function ChatPaneForSession({
     );
   }, [loadingOlder]);
 
+  // 方案A: fold the live partition's segment sentinels into the list the
+  // virtualizer actually sees. Done HERE (not in groupMessagesForRender) so
+  // the row elements are built once, by the same callback that renders every
+  // other row — the wrapping is a presentation concern and the grouping pass
+  // stays a pure data transform. When the turn isn't streaming there are no
+  // sentinels and this is a straight passthrough.
+  const listItems = useMemo(() => {
+    const out: RenderItem[] = [];
+    let i = 0;
+    while (i < renderItems.length) {
+      const it = renderItems[i];
+      if (it.kind === "liveSpineStart") {
+        let end = i;
+        while (end < renderItems.length && renderItems[end].kind !== "liveSpineEnd") end++;
+        const wrapped = wrapLiveSpine(renderItems, `ls:${i}`);
+        if (wrapped) {
+          // The row carries its own element (`liveSpine`); the placeholder msg
+          // only satisfies the single-item shape — renderListItem returns
+          // `liveSpine` before ever touching it.
+          out.push({
+            kind: "single",
+            msg: LIVE_SPINE_SENTINEL_MESSAGE,
+            liveKey: `live-spine:${i}`,
+            isStreamingTail: false,
+            isTurnTail: false,
+            liveSpine: wrapped,
+          });
+          i = end + 1;
+          continue;
+        }
+      }
+      out.push(it);
+      i++;
+    }
+    return out;
+  }, [renderItems, wrapLiveSpine]);
+
   return (
     <div className="relative flex h-full flex-col" data-chat-root>
       {/* Message stream area */}
@@ -2892,11 +3391,17 @@ function ChatPaneForSession({
           <div className="min-h-0 flex-1" style={{ position: "relative" }}>
             <LegendList
               ref={virtualListRef}
-              data={renderItems}
+              data={listItems}
               renderItem={renderListItem}
               keyExtractor={(item) => {
                 if (item.kind === "single") return item.liveKey ?? item.msg.id;
                 if (item.kind === "pendingTurn") return "pending-turn";
+                // Live-segment sentinels are consumed by the accumulation
+                // pass (listItems) and should never reach the virtualizer;
+                // give them a stable key anyway so a race can't produce
+                // "undefined".
+                if (item.kind === "liveSpineStart") return "live-spine-start";
+                if (item.kind === "liveSpineEnd") return "live-spine-end";
                 // Live fold run: keyed by its first contributing message. The
                 // run only ever APPENDS (new cycles join the trailing run), so
                 // the key is stable while the group grows and its expanded
@@ -3118,8 +3623,12 @@ function ChatPaneForSession({
           </div>
           <div
             ref={composerCardRef}
+            // composer-card: hooks for the 方案 B polish layers in styles.css —
+            // a busy sweep bar along the top edge while a turn runs, and an
+            // accent hairline that lights up on focus-within.
+            data-busy={sessionBusy ? "1" : "0"}
             className={cn(
-              "relative flex min-w-0 flex-col overflow-hidden rounded-2xl border border-edge-input bg-surface transition-all duration-200",
+              "composer-card relative flex min-w-0 flex-col overflow-hidden rounded-2xl border border-edge-input bg-surface transition-all duration-200",
               "focus-within:border-accent focus-within:shadow-[0_0_0_3px_rgb(var(--accent)/0.12)]",
               // Highlight the composer while a file-tree drag hovers over it.
               dragOver && "border-accent ring-4 ring-accent/20",
@@ -3210,8 +3719,11 @@ function ChatPaneForSession({
                           setDraggedQueueId(null);
                           setDragOverQueueId(null);
                         }}
+                        // Slide-in entrance for newly queued prompts (cap the
+                        // stagger so a big queue doesn't serialize the anim).
+                        style={{ animationDelay: `${Math.min(idx * 40, 160)}ms` }}
                         className={cn(
-                          "rounded-md border px-1.5 py-1 text-[11px] text-content transition-colors",
+                          "composer-q-in rounded-md border px-1.5 py-1 text-[11px] text-content transition-colors",
                           expanded
                             ? "border-accent/40 bg-accent/5"
                             : "border-edge bg-surface/50",
@@ -3356,7 +3868,7 @@ function ChatPaneForSession({
                 {pendingImages.map((img) => (
                   <div
                     key={img.id}
-                    className="group relative h-14 w-14 shrink-0 overflow-hidden rounded-lg border border-edge bg-surface"
+                    className="composer-tag-in group relative h-14 w-14 shrink-0 overflow-hidden rounded-lg border border-edge bg-surface"
                     title={img.name}
                   >
                     <img
@@ -3407,29 +3919,35 @@ function ChatPaneForSession({
             </RenderErrorBoundary>
             <div
               ref={composerActionRowRef}
-              className={cn(
-                "composer-action-row flex flex-wrap items-center justify-between gap-2 px-2.5 pb-2 pt-1.5",
-                composerChipsCollapsed && "composer-row-collapsed",
-              )}
+              className="composer-action-row flex flex-wrap items-center justify-between gap-2 px-2.5 pb-2 pt-1.5"
             >
               <div className="composer-chips flex min-w-0 flex-1 items-center gap-1">
-                {/* Single "+" entry for attachments (files / images) — keeps
-                    the action row calm; direct paste / drag-drop still works
-                    without opening the menu. */}
-                <AttachMenuButton
-                  disabled={inputBlocked}
-                  onPickFiles={openAttachPicker}
-                  onPickImages={() => void handlePickImages()}
-                  onSlashCommand={() => insertTriggerChar("/")}
-                />
-                <ComposerToolbar sessionId={sessionId} />
-                {/* Narrow-mode entry: hidden by default (CSS), replaces the chip
-                    row while `composer-row-collapsed` is set. Pops a panel
-                    hosting the same chips. */}
-                <ComposerToolbarToggle sessionId={sessionId} />
+                {chipsMode === "collapsed" ? (
+                  // Narrow hosts (side-chat panel / phone shell): no pill —
+                  // the single-icon entry popping the vertical settings list
+                  // is the usable shape when the host is narrow at EVERY
+                  // width.
+                  <ComposerToolbarToggle sessionId={sessionId} />
+                ) : (
+                  // The mini pill is the ONLY inline presentation and never
+                  // folds away: attach "+" → model → effort → permission →
+                  // context ring, all in one bordered container at every
+                  // width. `compact` (tier 1) collapses the segment labels
+                  // through CSS grid shells — the + and the ring persist
+                  // ("药丸常驻" per 方案 B single-pill revision).
+                  <ComposerToolbar
+                    sessionId={sessionId}
+                    layout="pill"
+                    compact={composerTier >= 1}
+                    attachDisabled={inputBlocked}
+                    onPickFiles={openAttachPicker}
+                    onPickImages={() => void handlePickImages()}
+                    onSlashCommand={() => insertTriggerChar("/")}
+                  />
+                )}
               </div>
               {/* Right cluster: mic + provider picker + send, always visible
-                  (the chip row collapses in narrow mode; these don't). */}
+                  (the chip row/pill collapse in narrow mode; these don't). */}
               <div className="flex shrink-0 items-center gap-1">
                 {/* Voice input: mic button with continuous / hold-to-talk modes
                     (mode switchable via the caret menu). `sessionId` wires the
@@ -3450,15 +3968,17 @@ function ChatPaneForSession({
                 )}
                 {/* SDK picker pinned left of the send button — always visible
                     (unlike the chip row, which collapses in narrow mode); locked
-                    to a read-only chip once the thread has messages. */}
-                <ProviderDropdown />
+                    to a read-only chip once the thread has messages. At
+                    collapsed tiers the label folds away through the same grid
+                    shell mechanism, leaving the brand icon. */}
+                <ProviderDropdown compact={composerTier >= 1} />
                 {sessionBusy && !hasComposerContent ? (
                   <button
                     onClick={() => void interrupt()}
                     title={t("chat.stopGenerating")}
                     aria-label={t("chat.stopGenerating")}
                     className={cn(
-                      "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-danger text-surface transition-all duration-150 ease-out",
+                      "composer-stop inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-danger text-surface transition-all duration-150 ease-out",
                       "hover:scale-105 hover:brightness-110 active:scale-95 active:brightness-95",
                     )}
                   >
@@ -3470,11 +3990,16 @@ function ChatPaneForSession({
                     disabled={!hasComposerContent}
                     title={sessionBusy ? t("chat.enqueue") : t("chat.send")}
                     aria-label={sessionBusy ? t("chat.enqueue") : t("chat.send")}
+                    data-ready={hasComposerContent ? "1" : "0"}
+                    onAnimationEnd={() => setSendLaunching(false)}
                     className={cn(
-                      "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-accent text-surface shadow-sm transition-all duration-150 ease-out",
+                      "composer-send inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-accent text-surface shadow-sm transition-all duration-150 ease-out",
                       "hover:scale-110 hover:brightness-110 hover:shadow-md hover:shadow-accent/20",
                       "active:scale-95 active:brightness-95",
                       "disabled:scale-100 disabled:cursor-not-allowed disabled:bg-surface-hover disabled:text-content-subtle disabled:shadow-none disabled:hover:scale-100",
+                      // One-shot "launch" feedback after a send/enqueue: icon
+                      // flies out and returns while a halo pulses (CSS).
+                      sendLaunching && "composer-send-launch",
                     )}
                   >
                     <IconSend2 size={16} />
@@ -3618,6 +4143,12 @@ const MessageRow = memo(function MessageRow({
 }) {
   const { t } = useI18n();
   const isUser = msg.role === "user";
+  // 方案A: only a JUST-SENT user bubble plays the slide-in-from-right
+  // entrance. The freshness gate keeps the animation off history hydration
+  // and LegendList scroll remounts (an old bubble re-mounting mid-scroll
+  // must not flash); it is evaluated once per mount, which is exactly the
+  // lifetime of the DOM node the animation runs on.
+  const freshBubble = isUser && Date.now() - msg.createdAt < 2500;
   const copyText = useMemo(() => blocksToText(msg.blocks), [msg.blocks]);
   // User-typed text renders through Markdown, which collapses single "\n"
   // soft breaks into spaces. Map the blocks so user text keeps its typed
@@ -3705,19 +4236,23 @@ const MessageRow = memo(function MessageRow({
           // .user-bubble-fill (not bg-userBubble/<alpha>): the tint strength
           // must differ per theme — 15% over white is visible, over the
           // near-black dark surface it isn't (see --user-bubble-alpha).
+          // 方案A: directional corner radii (tight bottom-right corner points
+          // at the sender) + the freshness-gated slide-in above.
           title={isUser ? fmtFullDateTime(msg.createdAt) : undefined}
           className={
             isUser
-              ? "user-bubble-fill overflow-hidden rounded-lg px-3 py-2 text-content [font-size:var(--chat-font-size)]"
+              ? "user-bubble-fill overflow-hidden rounded-[13px_13px_5px_13px] px-3 py-2 text-content [font-size:var(--chat-font-size)]" +
+                (freshBubble ? " chat-bubble-in" : "")
               : "text-content [font-size:var(--chat-font-size)]"
           }
         >
           <MessageBlocks blocks={renderBlocks} beforeMap={beforeMap} isStreamingTail={isStreamingTail} onOpenPlan={onOpenPlan} projectPath={projectPath} />
-          {/* Streaming loader at the bottom of the content while this
-              message is still receiving deltas. */}
+          {/* Streaming caret at the bottom of the content while this message
+              is still receiving deltas — 方案A replaces the spinner glyph
+              with a blinking caret (the reply is being typed). */}
           {isStreamingTail && (
-            <div className="mt-1.5 flex items-center gap-1.5">
-              <IconLoader2 size={12} className="animate-spin text-accent" />
+            <div className="mt-1 flex items-center gap-1.5">
+              <span className="chat-caret" aria-hidden />
             </div>
           )}
         </div>
