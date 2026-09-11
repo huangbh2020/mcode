@@ -80,7 +80,7 @@ const EMPTY_MARKETPLACES: PluginMarketplaceState[] = [];
  *  scroll container per page keeps the title bar and every content block at
  *  exactly the same width, and `max-w-*` caps it no matter how long the list
  *  gets. */
-const PANEL_COLUMN = "mx-auto w-full max-w-[820px]";
+const PANEL_COLUMN = "mx-auto w-full max-w-3xl";
 
 /** Result shape shared by the three install RPCs. */
 interface InstallResult {
@@ -264,6 +264,7 @@ export function PluginsPanel() {
   return (
     <section className={PANEL_COLUMN}>
       <PanelHeader
+        className="mb-3"
         title={t("settings.plugins.title")}
         icon={IconPuzzle}
         action={

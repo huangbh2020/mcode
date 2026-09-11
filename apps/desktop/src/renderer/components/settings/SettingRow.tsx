@@ -1,23 +1,20 @@
 import type { ReactNode } from "react";
 import { cn } from "@renderer/lib/cn.js";
 
-/** Fixed width of the control column in horizontal rows (plan A: `--ctrl-w`
- *  defaults to 240px). All rows share the same slot so the controls line up as
- *  one visual column down the card — selects/inputs fill it (`w-full`),
- *  switches & steppers right-align inside it. Rows whose control doesn't fit
- *  (long button combos, color palettes) use `layout="vertical"` instead and
- *  own the full row width. */
-const CONTROL_SLOT_WIDTH = 240;
+/** Fixed width of the control column in horizontal rows. All rows share the
+ *  same slot so the controls line up as one visual column down the page —
+ *  selects/inputs fill it (`w-full`), switches & steppers right-align inside
+ *  it. Rows whose control doesn't fit (long button combos, color palettes)
+ *  use `layout="vertical"` instead and own the full row width. */
+const CONTROL_SLOT_WIDTH = 260;
 
 /**
- * One setting = one row. Left side carries a label (+ optional description),
+ * One setting = one row. Left side carries a title (+ optional description),
  * right side carries the control(s) inside a fixed-width slot so every row's
- * control starts at the same x. Plan-A row template is a two-column grid
- * (`minmax(0,1fr) auto`) — a long description no longer pushes the control
- * onto a second line, it just narrows the label column. The parent container
- * draws the row separators (`divide-y divide-edge`) so this component stays a
- * pure layout shell — no borders of its own. Rows carry their own horizontal
- * inset (`px-3.5`) so content never touches the card edges.
+ * control starts at the same x. The parent container draws the row
+ * separators (`divide-y divide-edge`) so this component stays a pure layout
+ * shell — no borders of its own. Rows carry their own horizontal inset
+ * (`px-4`) so content never touches the edges of the containing card.
  *
  * Control-slot conventions (horizontal layout):
  *  - Select / Input / Textarea: give them `w-full` so they fill the slot.
@@ -57,16 +54,16 @@ export function SettingRow({
 
   if (layout === "vertical") {
     return (
-      <div className={cn("flex flex-col gap-2 px-3.5 py-3", className)}>
+      <div className={cn("flex flex-col gap-2 px-4 py-3", className)}>
         <div>
           <TitleTag
             {...(isLabel ? { htmlFor } : {})}
-            className="text-[0.9286em] font-medium leading-snug text-content"
+            className="text-[0.8571em] font-medium text-content"
           >
             {title}
           </TitleTag>
           {desc && (
-            <div className="mt-0.5 text-[0.8571em] leading-relaxed text-content-subtle">
+            <div className="mt-0.5 text-[0.7857em] leading-relaxed text-content-subtle">
               {desc}
             </div>
           )}
@@ -80,19 +77,19 @@ export function SettingRow({
   return (
     <div
       className={cn(
-        "grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-[18px] gap-y-1.5 px-3.5 py-3",
+        "flex flex-wrap items-start justify-between gap-x-6 gap-y-2 px-4 py-3",
         className,
       )}
     >
-      <div className="min-w-0">
+      <div className="min-w-0 flex-1">
         <TitleTag
           {...(isLabel ? { htmlFor } : {})}
-          className="text-[0.9286em] font-medium leading-snug text-content"
+          className="text-[0.8571em] font-medium text-content"
         >
           {title}
         </TitleTag>
         {desc && (
-          <div className="mt-0.5 text-[0.8571em] leading-relaxed text-content-subtle">
+          <div className="mt-0.5 text-[0.7857em] leading-relaxed text-content-subtle">
             {desc}
           </div>
         )}

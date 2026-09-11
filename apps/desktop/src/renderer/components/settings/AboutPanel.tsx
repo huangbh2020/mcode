@@ -257,10 +257,10 @@ export function AboutPanel() {
 
   return (
     <section className="flex min-h-full flex-col items-center px-6 py-10">
-      {/* Page toolbar (title only — consistent with the other panels; the
-          About body below stays a centered identity page). The header itself
-          is placed by the settings shell, not by this flex column. */}
+      {/* Sticky page toolbar (title only — consistent with the other panels;
+          the About body below stays a centered identity page). */}
       <PanelHeader
+        className="w-full self-stretch"
         title={t("settings.nav.about")}
         icon={IconInfoCircle}
       />
@@ -285,7 +285,7 @@ export function AboutPanel() {
       </div>
 
       {/* Runtime info rows */}
-      <div className="mt-8 w-full max-w-md divide-y divide-edge rounded-lg border border-edge bg-surface">
+      <div className="mt-8 w-full max-w-md divide-y divide-edge rounded-lg border border-edge">
         {rows.map((row) => (
           <div
             key={row.label}

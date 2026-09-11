@@ -87,7 +87,7 @@ export function RuntimesPanel() {
   }, [applyRuntimeProgress, reloadRuntimes]);
 
   return (
-    <section className="mx-auto w-full max-w-[820px] space-y-4">
+    <section className="mx-auto w-full max-w-3xl space-y-4">
       <PanelHeader title={t("settings.runtimes.title")} icon={IconPackage} />
 
       <SettingsSection title={t("settings.runtimes.section")}>

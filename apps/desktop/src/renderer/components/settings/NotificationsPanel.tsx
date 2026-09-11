@@ -46,7 +46,7 @@ export function NotificationsPanel() {
   };
 
   return (
-    <section className="mx-auto w-full max-w-[820px] space-y-4">
+    <section className="mx-auto w-full max-w-3xl space-y-4">
       <PanelHeader title={t("settings.notifications.title")} />
 
       {/* Single category → one card of toggle rows. */}

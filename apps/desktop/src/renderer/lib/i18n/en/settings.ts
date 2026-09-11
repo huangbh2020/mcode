@@ -24,10 +24,6 @@ export const en = {
   "settings.navGroup.workbench": "Workbench",
   "settings.navGroup.system": "System",
 
-  // ── left nav search (SettingsPage) ──
-  "settings.nav.searchPlaceholder": "Search settings…",
-  "settings.nav.noResults": "No matching settings.",
-
   // ── GeneralPanel ──
   "settings.general.title": "General",
   "settings.general.desc": "Layout, message display, thread titles and other basic preferences.",
@@ -421,7 +417,6 @@ export const en = {
   // ── RuntimesPanel (Agent runtimes, download-on-demand, one row each) ──
   "settings.nav.runtimes": "Agent",
   "settings.runtimes.title": "Agent",
-  "settings.runtimes.desc": "Download and manage the Claude / Codex / Pi agent runtimes on demand.",
   "settings.runtimes.section": "Claude / Codex / Pi",
   "settings.runtimes.loading": "Loading runtime states…",
   "settings.runtimes.statusInstalled": "Installed",
@@ -457,7 +452,6 @@ export const en = {
 
   // ── McpPanel ──
   "settings.mcp.title": "MCP servers",
-  "settings.mcp.desc": "Manage MCP (Model Context Protocol) servers; changes apply from the next turn for Claude sessions.",
   "settings.mcp.desc1": "Manage MCP (Model Context Protocol) servers. Changes apply from the ",
   "settings.mcp.desc2": "next conversation turn",
   "settings.mcp.desc3": " onward; Claude sessions only (Pi sessions use the extension mechanism). User-level servers live in ",
@@ -535,7 +529,6 @@ export const en = {
 
   // ── PluginsPanel ──
   "settings.plugins.title": "Plugins",
-  "settings.plugins.desc": "Install plugins from a local folder, zip, or Git repo, and enable the skills, commands, MCP servers and hooks they ship.",
   "settings.plugins.loading": "Loading plugins…",
   "settings.plugins.empty":
     "No plugins installed yet. Browse the Marketplaces tab, or use Install to add one from a git repo / local directory / zip archive.",
@@ -635,7 +628,6 @@ export const en = {
 
   // ── ShortcutsPanel (+ ShortcutRecorder) ──
   "settings.shortcuts.title": "Shortcuts",
-  "settings.shortcuts.desc": "Browse and rebind the app's keyboard shortcuts.",
   "settings.shortcuts.desc1": "Click \"Change\" on the right and press a new chord to rebind. Esc cancels recording. Chords with ",
   "settings.shortcuts.desc2": "/",
   "settings.shortcuts.desc3": " still work while typing in inputs.",
@@ -689,7 +681,6 @@ export const en = {
   "settings.gestures.footer": "Note: gestures are unavailable over the title-bar drag area and the embedded browser; the terminal's right-click (copy/paste) is unaffected. Each gesture binds exactly one command; conflicts are detected while recording. A press only becomes a gesture after dragging past a threshold, so small jitter can't misfire.",
 
   // ── SkillsPanel ──
-  "settings.skills.desc": "Manage Claude skills (SKILL.md): project skills are scoped to one project, global skills are available everywhere.",
   "settings.skills.desc1": "Manage Claude skills (SKILL.md). Project skills live in ",
   "settings.skills.desc2": " of the selected project and are available to that project only. Global skills are imported from Claude Code / Codex / Zcode into ",
   "settings.skills.desc3": " and are available to every project. Type ",

@@ -27,10 +27,6 @@ export const zh = {
   "settings.navGroup.workbench": "工作台",
   "settings.navGroup.system": "系统",
 
-  // ── left nav search (SettingsPage) ──
-  "settings.nav.searchPlaceholder": "搜索设置…",
-  "settings.nav.noResults": "没有匹配的设置项。",
-
   // ── GeneralPanel ──
   "settings.general.title": "常规",
   "settings.general.desc": "调整界面布局、消息显示与会话标题等基础偏好。",
@@ -424,7 +420,6 @@ export const zh = {
   // ── RuntimesPanel(Agent 运行时,按需下载,单行布局) ──
   "settings.nav.runtimes": "Agent",
   "settings.runtimes.title": "Agent",
-  "settings.runtimes.desc": "按需下载与管理 Claude / Codex / Pi 三个 Agent 运行时。",
   "settings.runtimes.section": "Claude / Codex / Pi",
   "settings.runtimes.loading": "正在读取运行时状态…",
   "settings.runtimes.statusInstalled": "已安装",
@@ -460,7 +455,6 @@ export const zh = {
 
   // ── McpPanel ──
   "settings.mcp.title": "MCP 服务器",
-  "settings.mcp.desc": "管理 MCP(Model Context Protocol)服务器,改动自下一轮对话起对 Claude 会话生效。",
   "settings.mcp.desc1": "管理 MCP(Model Context Protocol)server。改动自",
   "settings.mcp.desc2": "下一轮对话",
   "settings.mcp.desc3": "起生效;仅 Claude 会话生效(Pi 会话使用扩展机制)。用户级 server 保存在 ",
@@ -538,7 +532,6 @@ export const zh = {
 
   // ── PluginsPanel ──
   "settings.plugins.title": "插件",
-  "settings.plugins.desc": "从本地目录、zip 包或 Git 仓库安装插件,并按需启用其中的技能、命令、MCP 与 hooks。",
   "settings.plugins.loading": "正在读取插件状态…",
   "settings.plugins.empty":
     "还没有安装插件。切到「插件市场」浏览,或用右上角「安装」从 git 仓库 / 本地目录 / zip 包安装。",
@@ -635,7 +628,6 @@ export const zh = {
 
   // ── ShortcutsPanel (+ ShortcutRecorder) ──
   "settings.shortcuts.title": "快捷键",
-  "settings.shortcuts.desc": "查看并重新绑定应用的键盘快捷键。",
   "settings.shortcuts.desc1": "点击右侧「修改」并按下新的组合键即可重新绑定。 Esc 取消录制。带 ",
   "settings.shortcuts.desc2": "/",
   "settings.shortcuts.desc3": " 的组合在输入框内依然生效。",
@@ -688,7 +680,6 @@ export const zh = {
   "settings.shortcuts.reset": "恢复默认",
 
   // ── SkillsPanel ──
-  "settings.skills.desc": "管理 Claude 技能(SKILL.md):项目技能仅该项目可用,全局技能所有项目可用。",
   "settings.skills.desc1": "管理 Claude 技能(SKILL.md)。项目 skill 存放在所选项目的 ",
   "settings.skills.desc2": ",仅该项目可用。全局 skill 通过「导入」功能从 Claude Code / Codex / Zcode 导入到 ",
   "settings.skills.desc3": ",所有项目可用。在输入框输入 ",
