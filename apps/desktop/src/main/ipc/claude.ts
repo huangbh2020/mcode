@@ -17,6 +17,7 @@ import {
   GetSettingSchema,
   SetSettingSchema,
   GetManySettingsSchema,
+  THEME_STYLE_SETTING_KEY,
 } from "@contracts/ipc";
 import type {
   SaveMessagesInput,
@@ -27,6 +28,7 @@ import type { UserInputAnswers } from "@contracts/provider";
 import { SessionRepo, ProjectRepo, MessageRepo, SettingRepo } from "@main/store/repositories.js";
 import { runtimeManager } from "@main/claude/RuntimeManager.js";
 import { providerRegistry } from "@main/providers/registry.js";
+import { updateTitleBarOverlay } from "@main/window.js";
 import { log } from "@main/lib/logger.js";
 import { broadcastSessionChanged } from "@main/lib/sessionSync.js";
 import { createOrReuseSession } from "@main/lib/sessionStart.js";
@@ -414,6 +416,18 @@ export function registerClaudeHandlers(ipcMain: IpcMain): void {
   ipcMain.handle(IPC.SETTING_SET, (_evt, raw) => {
     const input = SetSettingSchema.parse(raw);
     SettingRepo.set(input.key, input.value);
+    // The theme STYLE repaints native chrome accents (win/linux title-bar
+    // overlay) that only main can reach — the renderer's .sketch class does
+    // nothing for them. Refresh on flip; every other key has no main-side
+    // visual. Best-effort: before the window exists (or on macOS, where
+    // updateTitleBarOverlay no-ops) this is a harmless no-op.
+    if (input.key === THEME_STYLE_SETTING_KEY) {
+      try {
+        updateTitleBarOverlay();
+      } catch {
+        // Window not created yet — initTheme's startup sync covers it.
+      }
+    }
   });
 
   ipcMain.handle(IPC.SETTING_GET_MANY, (_evt, raw) => {

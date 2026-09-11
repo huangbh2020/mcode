@@ -14,8 +14,8 @@
  * sync. No polling required.
  */
 import { nativeTheme } from "electron";
-import type { ThemeName, EffectiveTheme } from "@contracts/theme";
-import { THEME_SETTING_KEY } from "@contracts/ipc";
+import type { ThemeName, EffectiveTheme, ThemeStyle } from "@contracts/theme";
+import { THEME_SETTING_KEY, THEME_STYLE_SETTING_KEY } from "@contracts/ipc";
 import { SettingRepo } from "@main/store/repositories.js";
 import { awaitDb } from "@main/store/db.js";
 import { sendToRenderer, updateTitleBarOverlay } from "@main/window.js";
@@ -59,6 +59,23 @@ export function getThemePreference(): ThemeName {
   const raw = SettingRepo.get(THEME_SETTING_KEY);
   if (raw === "dark" || raw === "light" || raw === "system") return raw;
   return "system";
+}
+
+/** Read the persisted theme-STYLE preference ("classic" | "sketch", default
+ *  "classic"). Unlike the color scheme this never touches nativeTheme — the
+ *  renderer owns the `.sketch` class; main reads it ONLY for the native chrome
+ *  accents it controls (title-bar overlay / window background), which can't
+ *  see a CSS class. Safe to call before DB init (window creation precedes
+ *  initTheme's awaitDb): any failure falls back to "classic" = the pre-DB
+ *  look, and the post-DB updateTitleBarOverlay() corrects it at startup. */
+export function getThemeStylePreference(): ThemeStyle {
+  try {
+    const raw = SettingRepo.get(THEME_STYLE_SETTING_KEY);
+    if (raw === "sketch") return "sketch";
+  } catch {
+    // DB row/table not ready yet — classic stands until initTheme syncs.
+  }
+  return "classic";
 }
 
 /** Current resolved theme (what's actually rendering). */

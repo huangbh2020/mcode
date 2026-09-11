@@ -213,6 +213,7 @@ export {
   IconBook,
   IconFlask,
   IconPalette,
+  IconBrush,
   IconDeviceFloppy,
   IconSelector,
   IconAdjustmentsHorizontal,

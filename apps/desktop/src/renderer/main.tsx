@@ -15,6 +15,16 @@ import "katex/dist/katex.min.css";
 // default (SF Mono / Consolas / Menlo). Bundling one variable woff2 per subset
 // keeps the cost small (~200KB total). See tailwind.config.js + TerminalView.
 import "@fontsource-variable/jetbrains-mono";
+// LXGW WenKai — bundled handwriting face for the sketch theme (纸面手绘,
+// styles.css `html.sketch` → --sk-font). Two weights only (400 body + 700 for
+// the chrome weight ladder's 600-800 titles — real bold, no faux synthesis):
+// the mono variant and the light weight stay out (code/terminal keep JetBrains
+// Mono per the design red line; 30MB → 8.8MB). 97 unicode-range slices per
+// weight, so the browser only fetches the woff2 shards the visible text
+// actually touches; font-display:swap falls back to system kaiti while they
+// stream in. Sketch is opt-in — in classic mode none of these files load.
+import "lxgw-wenkai-webfont/lxgwwenkai-regular.css";
+import "lxgw-wenkai-webfont/lxgwwenkai-bold.css";
 
 // Shell selection: Electron gets the desktop three-pane shell; a plain
 // browser (the phone served over LAN) gets the mobile shell. Both are lazy so

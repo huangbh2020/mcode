@@ -1,7 +1,7 @@
 import { BrowserWindow, shell, session, type WebContents } from "electron";
 import { join } from "node:path";
 import { is } from "@main/utils.js";
-import { getEffectiveTheme } from "@main/lib/theme.js";
+import { getEffectiveTheme, getThemeStylePreference } from "@main/lib/theme.js";
 import { log } from "@main/lib/logger.js";
 import { logStartup } from "@main/lib/startupTimer.js";
 import { IPC } from "@contracts/ipc";
@@ -10,9 +10,12 @@ let mainWindow: BrowserWindow | null = null;
 
 /** Background color matching the effective theme, so the first frame (before
  *  React mounts) doesn't flash the wrong color. Mirrors --surface in CSS
- *  (styles.css): light = #ffffff, dark = #1a1d24. */
+ *  (styles.css): light = #ffffff, dark = #1a1d24; the sketch style's paper
+ *  light surface is #fcfaf3 (near-white — the pre-DB fallback below is an
+ *  imperceptible delta). */
 function bgColor(): string {
-  return getEffectiveTheme() === "dark" ? "#1a1d24" : "#ffffff";
+  if (getEffectiveTheme() === "dark") return "#1a1d24";
+  return getThemeStylePreference() === "sketch" ? "#fcfaf3" : "#ffffff";
 }
 
 /** Title-bar overlay colour scheme that matches the app theme. The overlay sits
@@ -22,7 +25,9 @@ function bgColor(): string {
  *  `color` mirrors --surface-muted (the toolbar's background — it matches the
  *  full-height sidebar so they read as one frame); `symbolColor` mirrors
  *  --content-subtle so the button glyphs match the dim UI text tone. Values
- *  must stay in sync with styles.css (.dark block).
+ *  must stay in sync with styles.css (.dark block + the html.sketch:not(.dark)
+ *  paper palette: #f6f2e7 / #8d8371). Dark+sketch keeps the classic dark
+ *  values — phase 1 sketch is light-paper only.
  *
  *  `height` must match the renderer titlebar's height (h-10 = 40px): Electron
  *  draws the overlay aligned to the top of the window, and the buttons are
@@ -30,9 +35,10 @@ function bgColor(): string {
  *  buttons sit too high instead of being vertically centered. */
 function overlayColors() {
   const dark = getEffectiveTheme() === "dark";
+  const sketch = !dark && getThemeStylePreference() === "sketch";
   return {
-    color: dark ? "#2c313c" : "#f4f4f5",
-    symbolColor: dark ? "#9ea2ab" : "#71717a",
+    color: dark ? "#2c313c" : sketch ? "#f6f2e7" : "#f4f4f5",
+    symbolColor: dark ? "#9ea2ab" : sketch ? "#8d8371" : "#71717a",
     height: 40,
   };
 }

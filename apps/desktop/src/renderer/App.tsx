@@ -26,7 +26,7 @@ import { useSessionStore } from "./stores/sessionStore.js";
 import type { BrowserDevicePreset } from "@contracts/ipc";
 import { api } from "./lib/api.js";
 import { useTheme } from "./lib/theme.js";
-import { useChatAppearance, useRightPanelAppearance } from "./lib/appearance.js";
+import { useChatAppearance, useRightPanelAppearance, useThemeStyle } from "./lib/appearance.js";
 import { useI18n } from "./lib/i18n/index.js";
 import { OpenTabsBar } from "./components/ide/OpenTabsBar.js";
 
@@ -109,6 +109,9 @@ export function App() {
   // (--right-panel-font-size) for the left bar, right files/git/terminal
   // panels, and the settings page.
   useRightPanelAppearance();
+  // Apply + keep in sync the theme STYLE (.sketch on <html>, orthogonal to
+  // the light/dark scheme above) from the ui.themeStyle setting.
+  useThemeStyle();
 
   const init = useSessionStore((s) => s.init);
   useEffect(() => {

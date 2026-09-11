@@ -30,6 +30,7 @@ import {
   DISPLAY_MODE_SETTING_KEY,
   TAB_BAR_MULTI_ROW_SETTING_KEY,
   LEFTBAR_MODE_SETTING_KEY,
+  THEME_STYLE_SETTING_KEY,
   UI_LOCALE_SETTING_KEY,
   DEFAULT_PROVIDER_ID,
   UI_CHAT_FONT_SIZE_SETTING_KEY,
@@ -104,6 +105,7 @@ import {
   type BrowserDevicePreset,
   type BrowserOrientation,
 } from "@contracts/ipc";
+import type { ThemeStyle } from "@contracts/theme";
 
 /** One browser tab, shared across the sidebar and overlay containers. `id` is
  *  renderer-local; `browserId` is the main-process view id. All
@@ -676,6 +678,12 @@ export interface SessionState {
    *  with a project scope filter). Persisted; the two views are pure
    *  renderers over the same store data. */
   leftBarMode: LeftBarMode;
+  /** UI theme STYLE, orthogonal to the light/dark scheme: "classic" (default)
+   *  or "sketch" (纸面手绘 — paper palette + handwriting font + hand-drawn
+   *  shapes, styles.css `html.sketch` section). Persisted under
+   *  `ui.themeStyle`; applied to <html> as a `.sketch` class next to `.dark`
+   *  (lib/theme.ts applyThemeStyle via useThemeStyle in lib/appearance.ts). */
+  themeStyle: ThemeStyle;
   /** Which tab kind owns the center content area in `tabs` displayMode: the
    *  active session's chat ("chat") or the editor — file / plan tab
    *  ("editor"). Only read in `tabs` mode; `single` mode keeps the legacy
@@ -1588,6 +1596,10 @@ export interface SessionState {
    *  stream. Instant local flip + fire-and-forget persistence (same
    *  pattern as setDisplayMode). */
   setLeftBarMode: (mode: LeftBarMode) => Promise<void>;
+  /** Switch the UI theme style (classic ↔ sketch). Instant local flip +
+   *  fire-and-forget persistence; the `.sketch` class application reacts
+   *  via useThemeStyle (lib/appearance.ts). */
+  setThemeStyle: (style: ThemeStyle) => void;
   /** Set the stream sidebar's project scope filter. Persists under
    *  `ui.streamScope` so the selection survives remounts and relaunches. */
   setStreamScope: (scope: string | null) => void;
@@ -4240,6 +4252,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   // Left-bar view: classic project tree is the default; init() overwrites
   // from the persisted ui.leftBarMode preference.
   leftBarMode: "tree",
+  // UI theme style (orthogonal to light/dark). Default "classic"; init()
+  // overwrites from the persisted ui.themeStyle preference.
+  themeStyle: "classic",
   // Center focus for the unified tab bar (`tabs` displayMode). UI-only.
   centerTabFocus: "chat",
   // UI language. Persisted in `settings` table; init() overwrites from the
@@ -4444,6 +4459,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           DISPLAY_MODE_SETTING_KEY,
           TAB_BAR_MULTI_ROW_SETTING_KEY,
           LEFTBAR_MODE_SETTING_KEY,
+          THEME_STYLE_SETTING_KEY,
           UI_LOCALE_SETTING_KEY,
           UI_CHAT_DENSITY_SETTING_KEY,
           UI_PROJECT_VIEW_SETTING_KEY,
@@ -4518,6 +4534,16 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       if (value === "tree" || value === "stream") set({ leftBarMode: value });
     } catch (err) {
       console.error("apply(leftBarMode) failed:", err);
+    }
+
+    // Theme style (classic ↔ sketch): reconciles the FOUC guard's
+    // localStorage guess against the SQLite source of truth. Values other
+    // than the two enum members (corrupt row) are ignored → classic stands.
+    try {
+      const value = fp[THEME_STYLE_SETTING_KEY];
+      if (value === "classic" || value === "sketch") set({ themeStyle: value });
+    } catch (err) {
+      console.error("apply(themeStyle) failed:", err);
     }
 
     // Stream sidebar scope filter. "" = the unfiltered "全部项目" view
@@ -8214,6 +8240,16 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     } catch (err) {
       console.error("setting.set(leftBarMode) failed:", err);
     }
+  },
+
+  setThemeStyle: (style) => {
+    set({ themeStyle: style });
+    // Fire-and-forget — a failed write keeps the in-session choice (same
+    // pattern as setTabBarMultiRow). The <html>.sketch class reacts via
+    // useThemeStyle (lib/appearance.ts), which also refreshes the
+    // localStorage cache the boot FOUC guard reads.
+    api.setting.set({ key: THEME_STYLE_SETTING_KEY, value: style })
+      .catch((err) => console.error("setting.set(themeStyle) failed:", err));
   },
 
   setStreamScope: (scope) => {

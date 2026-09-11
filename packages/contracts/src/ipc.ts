@@ -111,6 +111,19 @@ export const THEME_SETTING_KEY = "theme";
 export const ThemeNameSchema = z.enum(["dark", "light", "system"]);
 
 /**
+ * Setting key under which the UI theme STYLE preference is persisted
+ * (prototypes/theme-sketch-redesign.html). Orthogonal to THEME_SETTING_KEY
+ * (light/dark): the renderer mirrors the value as a `.sketch` class on <html>
+ * next to `.dark`, and nativeTheme never sees it. Rides the generic
+ * setting.get/set IPC like the other ui.* keys (first-paint getMany →
+ * sessionStore.themeStyle).
+ */
+export const THEME_STYLE_SETTING_KEY = "ui.themeStyle";
+
+/** zod schema for the theme-style preference (type lives in theme.ts). */
+export const ThemeStyleSchema = z.enum(["classic", "sketch"]);
+
+/**
  * Setting key under which the auto-update flow state is persisted, so reopening
  * the About panel (or restarting the app mid-download) restores the progress /
  * "ready to install" banner instead of dropping the user back to idle.

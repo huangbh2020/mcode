@@ -1983,3 +1983,193 @@ body:has(.lightbox-root[data-chrome="hidden"]) .lightbox-scrim {
   }
 }
 
+/* ───────────── Sketch theme · 纸面手绘 (ui.themeStyle="sketch") ─────────────
+ * prototypes/theme-sketch-redesign.html 的一期落地。立场:手绘是「风格」维度,
+ * 与明暗(ui.theme → html.dark)正交 —— 本区块所有规则都挂在 html.sketch 上,
+ * 由 lib/theme.ts applyThemeStyle 写入(settings key ui.themeStyle,renderer 的
+ * useThemeStyle 挂在 App 根)。牛皮纸(手绘的深色版)是二期:dark+sketch 组合
+ * 现在只继承形状语言,颜色维持经典暗色 token。
+ *
+ * 红线(改这里前先读原型「规格速查」节):
+ *  · 代码/终端/diff 保持等宽字体:font-mono 工具类在元素级自带等宽栈,body
+ *    的手写栈 cascade 不进去;Monaco/xterm 各管各的字体,天然不受影响。
+ *  · 位移滤镜只挂 svg 图标(svg.tabler-icon),绝不挂根节点/滚动容器/动画
+ *    元素 —— feDisplacementMap 挂大子树会整树重栅格化,滚动掉帧。
+ *  · 上下文环/头像/状态点保持正形:rounded-full 刻意不进手抖圆角映射
+ *    (仪表与身份标识不手绘,避免读数歧义)。
+ *  · 本区块集中管理 sketch 规则,禁止把 html.sketch 选择器散落到文件其它
+ *    段落(与 .dark 的组织方式对齐:颜色差异靠 token,形状差异靠工具类映射)。
+ *  · 本区块的规则一律不进 @layer,且带 html.sketch 前缀——层叠序与特异性
+ *    双保险压过 Tailwind 的 rounded-* / shadow-* / border 工具类(文件头
+ *    base-ui 修正同款的既有手法)。
+ */
+
+/* ── 纸面配色(仅浅色;一期只有纸面,牛皮纸见区块头注释)─────────────────
+ * 暖纸底 + 墨线:色相整体偏暖,铅笔灰描边,品牌绿微降饱和保墨感。
+ * token 名与 :root/.dark 完全同集,rgb(var()) 消费端零改动。 */
+html.sketch:not(.dark) {
+  --surface: 252 250 243; /* #fcfaf3 暖纸 — 主面 */
+  --surface-muted: 246 242 231; /* #f6f2e7 内衬/侧栏轨道/代码井 */
+  --surface-hover: 238 233 219; /* #eee9db hover 填充 */
+  --content: 58 52 44; /* #3a342c 墨色 */
+  --content-muted: 109 100 86; /* #6d6456 */
+  --content-subtle: 141 131 113; /* #8d8371 */
+  --edge: 199 189 168; /* #c7bda8 铅笔灰 */
+  --panel-edge: 214 205 186; /* #d6cdba 结构分隔线(比 edge 浅一档) */
+  --input-edge: 178 167 144; /* #b2a790 输入框描边(比 edge 深一档) */
+  --accent: 8 140 105; /* #088c69 微降饱和的墨绿 */
+  --accent-strong: 6 118 88; /* #067658 */
+  --danger: 199 62 52;
+  --warning: 173 108 16;
+  --info: 112 78 196;
+  --success: 22 132 100;
+  --user-bubble: 130 120 100; /* 暖灰气泡,纸面上的墨水感 */
+  --user-bubble-alpha: 0.14;
+  /* 手写字体基准上调一档(14→15px):楷体小字号发虚。用户在设置里显式改过
+   * 字号时 appearance.ts 的 inline 写入优先(默认值改为 removeProperty 正是
+   * 为了让这里的主题默认能生效)——设置页步进器显示的是「用户设定值」而非
+   * 主题生效值,这是原型规格明示的取舍。 */
+  --chat-font-size: 15px;
+  --right-panel-font-size: 15px;
+  color-scheme: light;
+}
+
+/* ── 形状配方(明暗无关:dark+sketch 也继承形状语言)────────────────────── */
+html.sketch {
+  /* 三档手抖圆角:大=卡片/面板,中=按钮/输入/气泡,小=chip/标签。
+   * 值刻意是「不可能的手绘圆角」——相邻角 225px/18px 的悬殊让浏览器按比例
+   * 收缩出歪扭的有机边缘。 */
+  --sk-r-lg: 255px 18px 225px 18px / 18px 225px 18px 255px;
+  --sk-r-md: 95px 9px 85px 10px / 10px 80px 9px 95px;
+  --sk-r-sm: 30px 7px 26px 8px / 8px 24px 7px 30px;
+  /* 硬阴影:实色偏移(贴纸/木刻感),替代柔光。 */
+  --sk-sh: 3px 4px 0 rgb(var(--content) / 0.06);
+  --sk-sh-btn: 2px 2px 0 rgb(var(--content) / 0.16);
+  --sk-sh-pop: 5px 6px 0 rgb(var(--content) / 0.12);
+  /* 手写字体栈:捆绑的霞鹜文楷(main.tsx,regular+bold 两字重的 unicode-range
+   * 切片)→ 系统楷体 → 系统 sans。font-mono 面(代码/终端/diff)元素级自带
+   * 等宽栈,不受此 cascade。 */
+  --sk-font:
+    "LXGW WenKai", "LXGW WenKai Lite", "Kaiti SC", "STKaiti", "KaiTi", "DFKai-SB",
+    -apple-system, "Segoe UI", system-ui, "PingFang SC", "Microsoft YaHei UI",
+    "Microsoft YaHei", sans-serif;
+}
+
+/* 注意必须连 #root 一起覆盖:基础规则是 `html, body, #root { font-family }`
+ * 的分组选择器——#root 自己钉着系统 sans,而整个 React 树渲染在 #root 里、
+ * 从它继承字体;只覆盖 body 一层传不进去(模型回复/全部 chrome 都会漏)。
+ * pre/code 不受影响:浏览器 UA 样式表对它们有直选的 monospace 规则,
+ * 直选永远赢过继承——「代码不手绘」红线因此天然成立。 */
+html.sketch body,
+html.sketch #root {
+  font-family: var(--sk-font);
+  /* 楷体只有单一字重,正文保持 400 防糊;层级靠显式 font-* 工具类的合成
+   * 粗体(全局字重梯子在 html 上,这里在 body/#root 子树落 400)。 */
+  font-weight: 400;
+}
+
+/* font-sans 工具类(Tailwind 默认 sans 栈)语义上就是「UI 正文字体」——
+ * sketch 下映射到同一手写栈(个别输入框/选项列表用它显式钉住字体)。 */
+html.sketch .font-sans {
+  font-family: var(--sk-font);
+}
+
+/* 荧光笔:文本选区 = accent 22% 扫过。 */
+html.sketch ::selection {
+  background: rgb(var(--accent) / 0.22);
+}
+
+/* 焦点环 = 虚线铅笔描焦点(原型规格;覆盖组件的 outline-none——键盘可达性
+ * 信号在手绘形态下换成自己的语言)。排除 Monaco/xterm 的隐藏输入 textarea:
+ * 它们是真实焦点宿主但视觉上不应有框(:not() 只收复合选择器,按各自根
+ * class 逐一排除)。 */
+html.sketch :focus-visible:not(.inputarea):not(.xterm-helper-textarea) {
+  outline: 2px dashed rgb(var(--accent) / 0.6);
+  outline-offset: 2px;
+}
+
+/* ── 工具类映射:把 Tailwind 的规则几何翻译成手抖几何 ──────────────────────
+ * 只映射中大三档 + 基础 .rounded;rounded-full / rounded-sm 刻意不动(区块头
+ * 红线:仪表与身份标识保持正形)。小元素上超大圆角会被浏览器按比例收缩,
+ * 收缩保比例 → 边缘仍是歪扭的有机弧,不会爆形。 */
+html.sketch .rounded,
+html.sketch .rounded-md {
+  border-radius: var(--sk-r-sm);
+}
+html.sketch .rounded-lg {
+  border-radius: var(--sk-r-md);
+}
+html.sketch .rounded-xl,
+html.sketch .rounded-2xl {
+  border-radius: var(--sk-r-lg);
+}
+
+/* 硬阴影:柔光阴影全部换成实色偏移(贴纸感)。 */
+html.sketch .shadow-sm {
+  box-shadow: var(--sk-sh);
+}
+html.sketch .shadow-md,
+html.sketch .shadow-lg,
+html.sketch .shadow-xl,
+html.sketch .shadow-2xl {
+  box-shadow: var(--sk-sh-pop);
+}
+
+/* 墨线:整框描边加粗半像素(1px 铅笔 → 1.5px 墨线)。只影响 .border 全框;
+ * border-t 之类的单向发丝线不动(结构分隔线保持轻)。 */
+html.sketch .border {
+  border-width: 1.5px;
+}
+
+/* 铅笔虚线内衬框:「内衬数据区」的统一标记。聊天代码块(pre 自带 border);
+ * 终端见下一条规则。(思考块在 2026-09-11 无框台账重构后已是无边框行,
+ * 不再描框——强行加框会跟无框设计打架。) */
+html.sketch .chat-md pre {
+  border-style: dashed;
+}
+
+/* 终端 = 内衬数据区。`data-terminal-session` 是 TerminalView 宿主的稳定
+ * 标记(全应用唯一挂载点在 TerminalPanel,底部/右侧终端共用)。宿主原本
+ * h-full/w-full 填满 absolute inset-0 的包装层;sketch 下改绝对定位 + 内缩,
+ * 让虚线框读作「画在纸上的一块区域」,并垫一层浅内衬底色(xterm 自身透明,
+ * 底色由宿主给)。overflow-hidden(类自带)保证 xterm 画布裁进手抖圆角。 */
+html.sketch [data-terminal-session] {
+  position: absolute;
+  inset: 6px 8px 8px;
+  width: auto;
+  height: auto;
+  border: 1.5px dashed rgb(var(--edge));
+  border-radius: var(--sk-r-md);
+  background: rgb(var(--surface-muted) / 0.45);
+}
+
+/* 双笔描边(重描一圈):composer 是页面常驻的重点卡,用 outline 实现——
+ * composer-card 的 ::before/::after 已被 busy 扫光与聚焦发丝线占用。Chromium
+ * 的 outline 跟随 border-radius,正好描出手抖外圈的镜像。 */
+html.sketch [data-chat-root] .composer-card {
+  outline: 1px solid rgb(var(--edge) / 0.45);
+  outline-offset: 3px;
+  box-shadow: var(--sk-sh);
+}
+
+/* ── 图标抖动:一枚全局 feTurbulence 位移滤镜 ─────────────────────────────
+ * 滤镜本体挂在 index.html(首帧前静态存在——Chrome 对引用不存在滤镜的元素
+ * 会直接不渲染,绝不能等 React 挂载)。只挂 svg.tabler-icon(Tabler 的稳定
+ * 根 class);react-icons 的品牌/平台图标保持清晰——身份标识不手绘。
+ * 「换一支笔」(换 seed)二期再接设置项。 */
+html.sketch svg.tabler-icon {
+  filter: url(#sk-wobble);
+}
+
+/* ── 纸纹:整页一层 feTurbulence 噪声(fixed 伪元素,pointer-events 穿透)──
+ * 280px 平铺、5% 透明度的暖色噪声;z-index 与菜单弹层同顶但 pointer-events
+ * 为 none,视觉上「整张纸都有纹理」包括弹层之上,交互零影响。 */
+html.sketch body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 9999;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='280' height='280'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 0.42 0 0 0 0 0.38 0 0 0 0 0.30 0 0 0 0.05 0'/%3E%3C/filter%3E%3Crect width='280' height='280' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
