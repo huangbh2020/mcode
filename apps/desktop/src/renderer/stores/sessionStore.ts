@@ -967,8 +967,8 @@ export interface SessionState {
    *  or "wt-branch" (isolated checkout on a generated `mcode/*` branch —
    *  real feature work). The worktree materializes on the first turn.
    *  Persisted (settings key `session.worktreeDefault`, same three-value
-   *  strings; the legacy boolean "true" hydrates as "wt-detached") so the
-   *  choice sticks across restarts. Flipping the chip while the ACTIVE
+   *  strings) so the choice sticks across restarts. Flipping the chip while
+   *  the ACTIVE
    *  session is still an un-materialized intent edits THAT session instead
    *  (see setEnvChoice) — the slot itself only seeds new rows. */
   envChoice: EnvChoice;
@@ -4462,14 +4462,13 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
     // Composer's default working environment for new sessions. Folded into
     // the first-paint batch so the chip renders correctly on frame one.
-    // Values are the EnvChoice strings; the pre-forms boolean era persisted
-    // "true"/"false" — "true" hydrates as the detached worktree default.
+    // Only the EnvChoice strings hydrate; anything else (including the
+    // legacy boolean era's "true"/"false") is ignored and the factory
+    // default "local" stands — new sessions start in the project root.
     try {
       const value = fp[SESSION_WORKTREE_DEFAULT_SETTING_KEY];
       if (value === "local" || value === "wt-detached" || value === "wt-branch") {
         set({ envChoice: value });
-      } else if (value === "true") {
-        set({ envChoice: "wt-detached" });
       }
     } catch (err) {
       console.error("apply(envChoice) failed:", err);
@@ -8759,8 +8758,8 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     }
     // No session in the foreground (empty state) — or the session is already
     // materialized (locked; the UI disables switching): fall through to the
-    // persisted DEFAULT for new sessions. Stored as the EnvChoice string
-    // (the legacy "true"/"false" values still hydrate — see init).
+    // persisted DEFAULT for new sessions. Stored as the EnvChoice string;
+    // hydration only accepts those strings (see init).
     void api.setting
       .set({ key: SESSION_WORKTREE_DEFAULT_SETTING_KEY, value: choice })
       .catch((err) => {

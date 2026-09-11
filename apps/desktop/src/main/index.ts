@@ -15,6 +15,7 @@ import { initUpdater } from "@main/updater.js";
 import { initAutoArchiver } from "@main/session/AutoArchiver.js";
 import { notificationManager } from "@main/notifications/NotificationManager.js";
 import { is } from "@main/utils.js";
+import { preloadClaudeSdk } from "@main/providers/claude-sdk/ClaudeAgentSdkProvider.js";
 import { logStartup } from "@main/lib/startupTimer.js";
 import { log } from "@main/lib/logger.js";
 import { setManagedRuntimeRoot } from "@main/runtimes/managedRuntimeRoots.js";
@@ -160,6 +161,11 @@ app.whenReady().then(async () => {
   // renderer starts loading its JS/HMR while sql.js parses in parallel.
   createMainWindow();
   logStartup("createMainWindow returned");
+
+  // Warm the Claude Agent SDK module in idle time (deferred 3s). Keeps the
+  // large module out of startup AND out of the first turn's send→first-reply
+  // critical path. Fire-and-forget; failures surface on real first use.
+  preloadClaudeSdk();
 
   // Start the auto-updater (no-op in dev; only active in packaged builds).
   // Fire-and-forget: the first check is delayed 10s anyway, and the updater

@@ -161,6 +161,26 @@ async function loadCreateMcpServer(): Promise<
   return createMcpServerFn;
 }
 
+/** Warm the Agent SDK module in idle time, well after the window is visible.
+ *  The lazy imports above keep the (large) module off the startup path, but
+ *  without this the FIRST turn pays the parse cost inline in startTurn,
+ *  right on the send→first-reply critical path. A deferred fire-and-forget
+ *  import moves it into the gap while the user is still finding their
+ *  project / typing their first message. Errors are swallowed — loadQuery()
+ *  retries on real first use and surfaces failures through the normal turn
+ *  error path. */
+export function preloadClaudeSdk(): void {
+  setTimeout(() => {
+    void loadQuery().catch(() => {});
+    void loadCreateMcpServer().catch(() => {});
+  }, SDK_PRELOAD_DELAY_MS);
+}
+
+/** Delay before the SDK preload fires (see preloadClaudeSdk). Long enough to
+ *  stay out of the startup window-creation burst, short enough to finish
+ *  before a user realistically sends their first message. */
+const SDK_PRELOAD_DELAY_MS = 3_000;
+
 /**
  * Build the in-process MCP server that exposes the `browser_*` tools to
  * Claude (the SDK equivalent of Pi's `pi.registerTool`). Each tool's handler
@@ -1150,12 +1170,35 @@ export class ClaudeAgentSdkProvider implements AgentProvider {
     // the explicit approval lists below, which replace the CLI's first-use
     // approval dialog (our onUserDialog bridge cancels unknown kinds, so an
     // unlisted server would never load anyway).
-    const mcpState = await getMcpManagement();
+    // --- Per-turn host-side config reads (parallelized) ---
+    // Everything below used to be awaited one after another, putting the sum
+    // of five settings/file reads (+ the plugin tree scan) on the critical
+    // path before query() can even spawn the CLI. They're mutually
+    // independent, so they run as one Promise.all batch; the only ordering
+    // that matters is where results land on `options` afterwards, which
+    // mirrors the original sequential composition exactly (mcpServers ←
+    // browser server, settings ← MCP lists → outputStyle → plugin hooks).
+    // One scan feeds both plugin consumers: the plugins option below and the
+    // plugin-MCP merge (which accepts a precomputed set to avoid a second
+    // directory scan).
+    const enabledPluginsPromise = getEnabledPlugins();
+    const [mcpState, browserServer, projectMcpRecord, outputStyle, enabledPlugins, pluginMcp] =
+      await Promise.all([
+        getMcpManagement(),
+        // Pure constructor after the (cached) SDK import — building it
+        // unconditionally is free; only ATTACHING it below is gated on the
+        // browserDisabled setting.
+        buildBrowserMcpServer(req.cwd, ctx, req.sessionId, req.turnNumber),
+        readProjectMcpServers(req.cwd),
+        getOutputStyleSetting(),
+        enabledPluginsPromise,
+        enabledPluginsPromise.then((plugins) => getPluginMcpServers(plugins)),
+      ]);
+
     if (!mcpState.browserDisabled) {
-      const browserServer = await buildBrowserMcpServer(req.cwd, ctx, req.sessionId, req.turnNumber);
       options.mcpServers = { [BROWSER_MCP_SERVER]: browserServer };
     }
-    const projectMcpNames = Object.keys(await readProjectMcpServers(req.cwd));
+    const projectMcpNames = Object.keys(projectMcpRecord);
     if (projectMcpNames.length > 0) {
       const enabledSet = new Set(
         (mcpState.projectEnabled ?? [])
@@ -1177,7 +1220,6 @@ export class ClaudeAgentSdkProvider implements AgentProvider {
     // turns — which is exactly the per-turn granularity Mcode wants (every
     // turn is a fresh query). Never-configured (null) keeps the CLI default
     // and injects nothing.
-    const outputStyle = await getOutputStyleSetting();
     if (outputStyle) {
       options.settings = {
         ...(typeof options.settings === "object" ? options.settings : {}),
@@ -1195,7 +1237,6 @@ export class ClaudeAgentSdkProvider implements AgentProvider {
     //  2. disableAllHooks — v1 runs NO plugin hooks. Hooks would otherwise
     //     be executed natively by the CLI engine; they are parsed + shown in
     //     the panel, never run (per-hook review is the v1.5 plan).
-    const enabledPlugins = await getEnabledPlugins();
     if (enabledPlugins.length > 0) {
       options.plugins = enabledPlugins.map((p) => ({
         type: "local" as const,
@@ -1208,7 +1249,6 @@ export class ClaudeAgentSdkProvider implements AgentProvider {
           disableAllHooks: true,
         };
       }
-      const pluginMcp = await getPluginMcpServers();
       if (pluginMcp.length > 0) {
         const servers = options.mcpServers ?? {};
         for (const [name, config] of pluginMcp) {

@@ -1023,11 +1023,17 @@ export async function getPluginMcpServerConfig(fullName: string): Promise<unknow
 /** Namespaced MCP server entries of enabled plugins:
  *  `[["<plugin>__<server>", config], ...]`, honoring the per-server disable
  *  list (plugins.mcpDisabled, written by the MCP panel). Invalid configs are
- *  skipped — a broken plugin server never blocks a turn. */
-export async function getPluginMcpServers(): Promise<Array<[string, McpServerConfig]>> {
+ *  skipped — a broken plugin server never blocks a turn.
+ *
+ *  `precomputed` lets a caller that already resolved the enabled set (the
+ *  provider's startTurn resolves it once per turn) skip the second directory
+ *  scan this function would otherwise perform. */
+export async function getPluginMcpServers(
+  precomputed?: EnabledPlugin[],
+): Promise<Array<[string, McpServerConfig]>> {
   const disabled = readMcpDisabled();
   const out: Array<[string, McpServerConfig]> = [];
-  for (const p of await getEnabledPlugins()) {
+  for (const p of precomputed ?? (await getEnabledPlugins())) {
     for (const [serverName, raw] of readPluginMcpEntries(p)) {
       const parsed = McpServerConfigSchema.safeParse(raw);
       if (!parsed.success) continue;

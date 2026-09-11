@@ -111,9 +111,25 @@ const WSL_BASH_DIR_RE = /(System32|SysWOW64|WindowsApps)/i;
  *
  * Returns null on non-Windows or when nothing resolves — callers then keep
  * their SDK's default shell resolution (unchanged behavior).
+ *
+ * Memoized (hit AND miss): the provider's startTurn calls this on EVERY turn,
+ * and step 2 shells out to `where.exe git` synchronously (execFileSync blocks
+ * the main process) when Git isn't in a well-known dir — uncached, every
+ * message pays a subprocess spawn before the CLI can even be spawned. The
+ * resolved shell doesn't change within a process (mirrors detectBashEnv's
+ * cache in bashEnv.ts).
  */
+let cachedGitBash: string | null | undefined;
+
 export function resolveGitBash(): string | null {
   if (process.platform !== "win32") return null;
+  if (cachedGitBash !== undefined) return cachedGitBash;
+  const resolved = resolveGitBashUncached();
+  cachedGitBash = resolved;
+  return resolved;
+}
+
+function resolveGitBashUncached(): string | null {
   const exists = (p: string): string | null => (existsSync(p) ? p : null);
 
   // 1. Well-known install dirs (Git for Windows is often NOT on PATH).
