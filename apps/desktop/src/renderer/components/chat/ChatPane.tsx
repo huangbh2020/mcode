@@ -460,9 +460,9 @@ type RenderItem =
       // step rows with these two zero-height sentinels; the list renderer
       // accumulates every row between them into ONE `.chat-turn` wrapper so
       // the running turn carries the same two-state root as the completed
-      // shape. A trailing display row (the final reply) deliberately falls
-      // OUTSIDE the bracket. Sentinels are consumed by the accumulation pass
-      // and never reach a renderer.
+      // shape. 全程卡内（2026-09-11）：支架覆盖回合全部行（工具、思考、模型
+      // 叙述与流式中的最终回复），不再有平铺在卡外的尾随行。Sentinels are
+      // consumed by the accumulation pass and never reach a renderer.
       kind: "liveSpineStart";
       turnMeta?: TurnMeta;
     }
@@ -725,43 +725,15 @@ function groupMessagesForRender(
       // explicitly. A thinking / Read opener is a msg row now (2026-09-11, see
       // isFoldableBlock), so either shape has to be handled.
       const liveTurnMeta = turnMeta;
-      // The live segment = the process surface: every row up to and including
-      // the last PROCESS row. A trailing display row (the final reply after
-      // the last tool) is deliberately left OUT of the bracketed run: it
-      // belongs below the 「回复」 mark, not inside the process chunk, and it
-      // renders through its own MessageRow.
-      //
-      // The right edge is "the last row carrying a procedural block" (thinking
-      // or any tool_use) — the same rule the completed turn uses to fill the
-      // TurnPanel. It used to be "the last ops row", which only held while
-      // every tool folded into a run: since thinking / Read / Write / Edit
-      // emit as their own rows (2026-09-11, see isFoldableBlock), an ops-row
-      // anchor would leave a trailing Read / thinking card — and the model's
-      // final text — on the SAME side of the edge, so both would jump across
-      // it the moment the turn ends.
-      let lastRunRow = rows.length - 1;
-      for (let k = rows.length - 1; k >= 0; k--) {
-        const row = rows[k];
-        if (row.kind === "ops" || row.blocks.some(isProceduralBlock)) {
-          lastRunRow = k;
-          break;
-        }
-      }
+      // 全程卡内（2026-09-11）：支架覆盖回合的全部行——工具、思考与模型的
+      // 叙述/最终回复在流式期间一律留在台账体内。旧设计把"最后一个过程行
+      // 之后"的文本预设为最终回复、平铺在卡外，等下一个工具落地时再收回卡
+      // 内——每个叙述→工具周期都伴随一次行迁移（列表项消失 + DOM 子树重挂载
+      // + Markdown 重解析）和一次可见的内容跳动。完成后仍由 turnGroup 分支
+      // 做过程/回复切分（回复移到面板下方），那次位移与面板折叠动画重合，
+      // 一次性且可预期。
       for (let k = 0; k < rows.length; k++) {
         const row = rows[k];
-        if (k > lastRunRow && row.kind === "msg") {
-          // Trailing reply rows render flat, outside the bracketed run.
-          items.push({
-            kind: "single",
-            msg: { ...row.msg, blocks: row.blocks },
-            liveKey: row.key,
-            live: true,
-            isStreamingTail: false,
-            isTurnTail: false,
-            tightTop: true,
-          });
-          continue;
-        }
         // tightTop only applies after the run's first row — that one keeps the
         // turn-gap so consecutive turns stay visually separated.
         const tight = k > 0;
@@ -790,19 +762,13 @@ function groupMessagesForRender(
             tightTop: tight,
           });
         }
-        if (k === lastRunRow) {
+        if (k === rows.length - 1) {
           items.push({ kind: "liveSpineEnd" });
         }
       }
-      // Exactly one live row carries the streaming tail (the loader
-      // spinner): the LAST row, whatever its kind. A fold run absorbs the
-      // tail message's blocks, so the old "flag the tail message" rule
-      // would leave the stream with no spinner at all — and splitting a
-      // message across rows could flag two.
-      const lastRow = items[items.length - 1];
-      if (lastRow && (lastRow.kind === "single" || lastRow.kind === "opsGroup")) {
-        lastRow.isStreamingTail = true;
-      }
+      // 流式尾光标由 spine 统一绘制（支架覆盖全部行，tailInsideSegment 恒
+      // 为真）；这里不再给任何行打 isStreamingTail——行内 caret 与 spine 的
+      // caret 会在正文末尾叠出两枚闪烁光标。
       turnBlocks = [];
       turnMeta = undefined;
       lastTurnMsgIndex = -1;
@@ -2917,11 +2883,9 @@ function ChatPaneForSession({
     }
     if (start < 0 || end <= start) return null;
 
-    // The streaming tail is flagged on the LAST renderable row of the whole
-    // list (see the live partition). So: does that row sit inside this
-    // bracket? If yes this segment draws the caret; if no, the row outside
-    // does — through its own MessageRow. Rendering it on both sides is what
-    // produced TWO blinking cursors at the end of the text.
+    // 全程卡内（2026-09-11）后支架覆盖回合全部行，流式尾必然落在支架内——
+    // 本段绘制唯一的光标。保留反向扫描作为防御：万一未来再引入支架外的行，
+    // 那行经自己的 MessageRow 画光标，两边都画就是正文末尾的两枚闪烁光标。
     let lastRenderableIdx = -1;
     for (let i = items.length - 1; i >= 0; i--) {
       const k = items[i].kind;
@@ -2940,14 +2904,19 @@ function ChatPaneForSession({
     // currently-running Read/Edit from the live operation ticker.
     let turnMeta: TurnMeta | undefined;
     const liveLedgerBlocks: Block[] = [];
+    // 回合元数据在支架起点的哨兵上，而下面的收集循环从 start+1 起步——永远
+    // 扫不到它（循环内那个 liveSpineStart 分支是死代码，只为防御嵌套）。思考/
+    // 叙述型开场消息以 single 行落地（2026-09-11），回合还没产生 opsGroup 行时
+    // 台头就会退回 `now` 计时并丢掉模型徽标，和正文行 stat 的真实起点拼成
+    // "两行回合栏、两个时钟"。这里直接读哨兵。
+    const spineOpener = items[start];
+    if (spineOpener.kind === "liveSpineStart" && spineOpener.turnMeta) {
+      turnMeta = spineOpener.turnMeta;
+    }
     for (let i = start + 1; i < end; i++) {
       const it = items[i];
       if (it.kind === "liveSpineStart") {
-        // The ledger head's clock/duration come from the turn's own meta. Take
-        // it off the bracket opener: it is always present, whereas the
-        // opsGroup path only carries it when a fold run happens to be the
-        // turn's FIRST row (a text/thinking/Read opener is a msg row now, and
-        // without this the head would fall back to `now` and read 0s).
+        // 防御：正常分区一个回合只有一副支架，不会在支架内再遇到起点哨兵。
         if (it.turnMeta) turnMeta = it.turnMeta;
         continue;
       }
@@ -2988,15 +2957,21 @@ function ChatPaneForSession({
           ),
         });
       } else if (it.kind === "single") {
+        // 兜底：哨兵没带元数据时取正文首行消息自带的（同一回合的 opener），
+        // 保证台头的模型徽标与走时基准永远正确。
+        if (!turnMeta && it.msg.turnMeta) turnMeta = it.msg.turnMeta;
         liveLedgerBlocks.push(...it.msg.blocks);
         rows.push({
           key: `msg:${it.liveKey ?? it.msg.id}`,
           tight: !!it.tightTop,
           node: (
+            // 台账台头已承载本回合的汇总（模型 · 时钟 · 走时 · 实时操作），
+            // 正文行不再渲染自己的 stat 行——否则同一回合出现两行回合栏。
             <MessageRow
               msg={it.msg}
               tightTop={it.tightTop}
               beforeMap={beforeMap}
+              hideTurnStat
               projectPath={projectPath}
             />
           ),
@@ -3015,11 +2990,11 @@ function ChatPaneForSession({
             {row.node}
           </div>
         ))}
-        {/* Streaming caret — ONLY when this segment owns the streaming tail
-            (nothing renders after it). Once the model moves into its final
-            reply, that reply is a row OUTSIDE this segment and its own
-            MessageRow draws the caret; rendering one here too is what put TWO
-            blinking cursors at the end of the text. */}
+        {/* Streaming caret — the bracket covers the whole turn now, so the
+            streaming tail is always inside this segment and this is the
+            stream's ONLY caret (no MessageRow carries isStreamingTail any
+            more; drawing both is what put TWO blinking cursors at the end of
+            the text). */}
         {tailInsideSegment && (
           <div className="mt-1.5 flex items-center gap-1.5">
             <span className="chat-caret" aria-hidden />
@@ -3060,6 +3035,9 @@ function ChatPaneForSession({
                   but MessageRow's own chrome (stat row, hover actions, edit
                   form) renders outside them — one broken row must not unmount
                   the whole stream. */}
+              {/* Live 行（支架外的尾随回复行）归属正在流式的回合，其台头在
+                  上方 spine 里——行自带的 turnMeta 不再渲染第二份 stat。非
+                  live 的单行（用户消息/孤儿 assistant）不受影响。 */}
               <RenderErrorBoundary>
                 <MessageRow
                   msg={m}
@@ -3067,6 +3045,7 @@ function ChatPaneForSession({
                   isTurnTail={item.isTurnTail}
                   tightTop={item.tightTop}
                   beforeMap={beforeMap}
+                  hideTurnStat={item.live}
                   canEdit={isUser && !sessionBusy && m.id === lastUserMessageId}
                   isEditing={editingMessageId === m.id}
                   onStartEdit={(msg) => setEditingMessageId(msg.id)}
