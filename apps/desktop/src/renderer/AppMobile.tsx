@@ -34,7 +34,7 @@ import { MobileViewerOverlay } from "./components/mobile/MobileViewerOverlay.js"
 import { useClaudeEvents } from "./hooks/useClaudeEvents.js";
 import { useSessionStore } from "./stores/sessionStore.js";
 import { useTheme } from "./lib/theme.js";
-import { useChatAppearance, useRightPanelAppearance } from "./lib/appearance.js";
+import { useChatAppearance, useRightPanelAppearance, useThemeStyle } from "./lib/appearance.js";
 import { useI18n } from "./lib/i18n/index.js";
 import { isPaired, onAuthLost } from "./lib/webApi.js";
 import {
@@ -59,6 +59,7 @@ export function AppMobile() {
   useTheme();
   useChatAppearance();
   useRightPanelAppearance();
+  useThemeStyle();
 
   // A 401 anywhere (stale token reopened WITHOUT a nonce) clears auth via the
   // web shim — fall back to the pairing screen so the user can re-pair instead

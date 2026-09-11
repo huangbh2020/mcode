@@ -5,10 +5,10 @@ import { api } from "@renderer/lib/api.js";
 import { hexToTriplet, tripletToHex } from "@renderer/lib/colorUtils.js";
 import { useSessionStore, CHAT_FONT_SIZE_MIN, CHAT_FONT_SIZE_MAX, RIGHT_PANEL_FONT_SIZE_MIN, RIGHT_PANEL_FONT_SIZE_MAX } from "@renderer/stores/sessionStore.js";
 import { Button, Select } from "@renderer/components/ui/index.js";
-import { IconRefresh, IconSun, IconMoon, IconDeviceDesktop } from "@renderer/lib/icons.js";
+import { IconRefresh, IconSun, IconMoon, IconDeviceDesktop, IconSquare, IconBrush } from "@renderer/lib/icons.js";
 import { useI18n, type MessageId } from "@renderer/lib/i18n/index.js";
 import { editorThemePresetsForMode } from "@renderer/lib/editorThemes.js";
-import type { ThemeName } from "@contracts/theme";
+import type { ThemeName, ThemeStyle } from "@contracts/theme";
 import type { ReactNode } from "react";
 import { PanelHeader } from "./PanelHeader.js";
 import { SettingsSection } from "./SettingsSection.js";
@@ -79,6 +79,15 @@ const THEME_OPTIONS: { value: ThemeName; labelKey: MessageId; icon: ReactNode }[
   { value: "system", labelKey: "settings.appearance.themeSystem", icon: <IconDeviceDesktop size={14} className="text-content-muted" /> },
 ];
 
+/** Theme STYLE — orthogonal to the light/dark scheme above. "sketch" applies
+ *  the hand-drawn theme in BOTH effective modes (styles.css sketch section):
+ *  light = paper (warm paper + ink), dark = kraft (warm deep ground + chalk).
+ *  Code/terminal/diff surfaces stay monospace ("手绘 chrome + 清晰数据流"). */
+const THEME_STYLE_OPTIONS: { value: ThemeStyle; labelKey: MessageId; icon: ReactNode }[] = [
+  { value: "classic", labelKey: "settings.appearance.styleClassic", icon: <IconSquare size={14} className="text-content-muted" /> },
+  { value: "sketch", labelKey: "settings.appearance.styleSketch", icon: <IconBrush size={14} className="text-content-muted" /> },
+];
+
 /** Mini preview strip for an editor scheme: the scheme's editor-background
  *  square followed by its four headline token colors (keyword / string /
  *  number / comment) so the picker communicates the palette at a glance. */
@@ -145,6 +154,10 @@ function EditorSchemeSelect({ mode, id }: { mode: "dark" | "light"; id: string }
 export function AppearancePanel() {
   const { t } = useI18n();
   const { theme, effective } = useTheme();
+
+  // ── Theme style (classic ↔ sketch, orthogonal to light/dark) ──
+  const themeStyle = useSessionStore((s) => s.themeStyle);
+  const setThemeStyle = useSessionStore((s) => s.setThemeStyle);
 
   // ── Chat font size ──
   const chatFontSize = useSessionStore((s) => s.chatFontSize);
@@ -230,6 +243,48 @@ export function AppearancePanel() {
                 <Select.Popup>
                   <Select.List>
                     {THEME_OPTIONS.map((o) => (
+                      <Select.Item key={o.value} value={o.value}>
+                        {o.icon}
+                        <Select.ItemText>{t(o.labelKey)}</Select.ItemText>
+                      </Select.Item>
+                    ))}
+                  </Select.List>
+                </Select.Popup>
+              </Select.Positioner>
+            </Select.Portal>
+          </Select.Root>
+        </SettingRow>
+
+        {/* ── Theme style (classic ↔ sketch; independent of light/dark) ── */}
+        <SettingRow
+          title={t("settings.appearance.themeStyle")}
+          desc={t("settings.appearance.themeStyleDesc")}
+          htmlFor="setting-theme-style"
+        >
+          <Select.Root
+            value={themeStyle}
+            onValueChange={(v) => setThemeStyle(v as ThemeStyle)}
+          >
+            <Select.Trigger id="setting-theme-style" className="w-full">
+              <Select.Value>
+                {(val: ThemeStyle) => {
+                  const o =
+                    THEME_STYLE_OPTIONS.find((x) => x.value === val) ??
+                    THEME_STYLE_OPTIONS[0];
+                  return (
+                    <span className="flex items-center gap-1.5">
+                      {o.icon}
+                      {t(o.labelKey)}
+                    </span>
+                  );
+                }}
+              </Select.Value>
+            </Select.Trigger>
+            <Select.Portal>
+              <Select.Positioner>
+                <Select.Popup>
+                  <Select.List>
+                    {THEME_STYLE_OPTIONS.map((o) => (
                       <Select.Item key={o.value} value={o.value}>
                         {o.icon}
                         <Select.ItemText>{t(o.labelKey)}</Select.ItemText>

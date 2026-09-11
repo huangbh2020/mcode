@@ -95,6 +95,9 @@ importers:
       katex:
         specifier: ^0.18.1
         version: 0.18.1
+      lxgw-wenkai-webfont:
+        specifier: ^1.7.0
+        version: 1.7.0
       monaco-editor:
         specifier: ^0.56.0
         version: 0.56.0
@@ -3079,6 +3082,9 @@ packages:
     resolution: {integrity: sha512-nX1x4qUrKqwbIAhv4s9et4FIUVzNOpeY07bsjGUy8gwJrXH/wScImSQqXErmo/b2jZY2r0mohbLA9zVj7u1cNw==}
     engines: {node: '>=12'}
     deprecated: Please update to latest patch version to fix memory leak https://github.com/isaacs/node-lru-cache/issues/227
+
+  lxgw-wenkai-webfont@1.7.0:
+    resolution: {integrity: sha512-kVJmT4xMAyOLhG6q0w63wJkVU7RP8UMQRGoAWj9tnpzL7sWFFYiEHBdUQyW9myqBQFa5SQfWfa2VLYF4IJBL5g==}
 
   magic-string@0.30.10:
     resolution: {integrity: sha512-iIRwTIf0QKV3UAnYK4PU8uiEc4SRh5jX0mwpIwETPpHdhVM4f53RSwS/vXvN1JhGX+Cs7B8qIq3d6AH49O5fAQ==}
@@ -7672,6 +7678,8 @@ snapshots:
       yallist: 4.0.0
 
   lru-cache@7.3.1: {}
+
+  lxgw-wenkai-webfont@1.7.0: {}
 
   magic-string@0.30.10:
     dependencies:

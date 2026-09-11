@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import { useSessionStore } from "@renderer/stores/sessionStore.js";
+import { applyThemeStyle } from "@renderer/lib/theme.js";
 import type { ChatDensity } from "@contracts/ipc";
 
 /**
@@ -35,9 +36,20 @@ import type { ChatDensity } from "@contracts/ipc";
  * `applyThemeClass` is the closest precedent (DOM mutation on <html>).
  */
 
+/** Stylesheet default for both font-size vars (styles.css :root/.dark).
+ *  When the store value equals it we REMOVE the inline property instead of
+ *  writing it, so a theme-scoped stylesheet default can differ — html.sketch
+ *  raises the base to 15px for the handwriting face (kaiti smears below
+ *  ~13px). An explicit user choice still wins via the inline write. */
+const DEFAULT_FONT_SIZE_PX = 14;
+
 /** Write the chat font size as `--chat-font-size` on <html>. */
 export function applyChatFontSize(px: number): void {
-  document.documentElement.style.setProperty("--chat-font-size", `${px}px`);
+  if (px === DEFAULT_FONT_SIZE_PX) {
+    document.documentElement.style.removeProperty("--chat-font-size");
+  } else {
+    document.documentElement.style.setProperty("--chat-font-size", `${px}px`);
+  }
 }
 
 /** Set the message-stream density by writing `data-chat-density` on <html>.
@@ -57,7 +69,11 @@ export function applyChatDensity(mode: ChatDensity): void {
  *  automatically. Also mirrored into the xterm terminal fontSize directly
  *  from the store (see TerminalView). */
 export function applyRightPanelFontSize(px: number): void {
-  document.documentElement.style.setProperty("--right-panel-font-size", `${px}px`);
+  if (px === DEFAULT_FONT_SIZE_PX) {
+    document.documentElement.style.removeProperty("--right-panel-font-size");
+  } else {
+    document.documentElement.style.setProperty("--right-panel-font-size", `${px}px`);
+  }
 }
 
 /** Write the user-message bg color (R G B triplet) as `--user-bubble` on
@@ -128,4 +144,19 @@ export function useRightPanelAppearance(): void {
   useEffect(() => {
     applyRightPanelFontSize(rightPanelFontSize);
   }, [rightPanelFontSize]);
+}
+
+/**
+ * Keep the `.sketch` class on <html> in sync with the session store's
+ * themeStyle (settings key ui.themeStyle, hydrated in the first-paint batch).
+ * Mount once at the app root. The boot-time FOUC guard (lib/theme.ts) has
+ * already applied the localStorage-cached value before React mounts; this
+ * reconciles against the SQLite source of truth once it lands.
+ */
+export function useThemeStyle(): void {
+  const themeStyle = useSessionStore((s) => s.themeStyle);
+
+  useEffect(() => {
+    applyThemeStyle(themeStyle);
+  }, [themeStyle]);
 }
