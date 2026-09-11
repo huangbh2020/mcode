@@ -839,50 +839,49 @@ body {
   color: rgb(var(--content-muted));
 }
 
-/* ── 运行台账（方案B 形态）────────────────────────────────────────────────
- * 「过程」不再是散落在流里的一串行，而是一张有边框的卡片：台头（运行中时的
- * 计数 + 实时操作 / 回合结束后的回执）+ 明细（展开后的过程行）。
- *
- * 两态共用同一张卡：运行中台头随计时走字、底部一条扫描光带表示"还在继续"；
- * 回合结束后台头翻成回执（✓ 已完成 · 用时 · N 步 · 改 N 个文件 ±），光带收掉、
- * 底色沉一档 —— 读作"这份台账已经结清"。data-phase 是回合阶段，data-open 是
- * 折叠状态；收起时台头与明细之间的分隔线一并收掉，避免一条悬空的分隔线。 */
+/* ── 运行台账（2026-09-11 起为无框形态）──────────────────────────────────
+ * 「过程」卡不再是一张有边框的盒子：整个面就是一行安静的元信息台头
+ * （模型 · 状态/时钟 · 用时 · 回执统计），右侧一枚可展开箭头，无边框无底色、
+ * 与下方回复正文同缘对齐、紧贴回复内容。明细展开后台头下方浮现一条分隔发丝线，
+ * 收起时隐藏。运行中台头随计时走字、底部一条扫描光带表示"还在继续"；
+ * 回合后台头翻成回执、光带收掉。data-phase 是回合阶段，data-open 是折叠状态；
+ * data-empty = 无过程明细（纯文本回合）——展开体不渲染、分隔线永藏。 */
 .chat-ledger {
   position: relative;
   margin-top: var(--chat-block-gap);
-  border: 1px solid rgb(var(--edge));
-  border-radius: 12px;
-  overflow: hidden;
-  background: rgb(var(--surface));
-  transition: background 0.4s ease, border-color 0.4s ease;
 }
 
-.chat-ledger[data-phase="done"] {
-  background: rgb(var(--surface-muted) / 0.34);
-  border-color: rgb(var(--edge) / 0.85);
-}
-
-/* 台头 / 回执：同一行槽位，两态切换内容。 */
+/* 台头 / 回执：同一行槽位，两态切换内容。负 margin + 对称 padding 让 hover
+ * 底色向两侧各探出 7px，而文字仍与正文左缘对齐（同 TurnStatRow 的
+ * -ml-[7px] px-[7px] py-1 形态）。 */
 .chat-ledger-head {
   display: flex;
   align-items: center;
   gap: 7px;
-  width: 100%;
-  padding: 7px 11px;
+  width: calc(100% + 14px);
+  margin: 0 -7px;
+  padding: 4px 7px;
   border: none;
+  border-bottom: 1px solid transparent;
+  border-radius: 8px;
   background: none;
   text-align: left;
   font-size: var(--chat-fs-xs);
-  color: rgb(var(--content-muted));
-  border-bottom: 1px solid rgb(var(--edge) / 0.7);
-  transition: border-color 260ms var(--chat-ease-out), background 0.16s ease;
+  color: rgb(var(--content-subtle));
+  transition: border-color 260ms var(--chat-ease-out), background 0.16s ease, color 0.16s ease;
 }
 
 button.chat-ledger-head:hover {
-  background: rgb(var(--surface-hover) / 0.5);
+  background: rgb(var(--surface-hover) / 0.6);
+  color: rgb(var(--content-muted));
 }
 
-.chat-ledger[data-open="false"] .chat-ledger-head {
+/* 展开时分隔台头与明细；收起 / 无明细时保持透明。 */
+.chat-ledger[data-open="true"] .chat-ledger-head {
+  border-bottom-color: rgb(var(--edge) / 0.6);
+}
+
+.chat-ledger[data-empty="true"] .chat-ledger-head {
   border-bottom-color: transparent;
 }
 
@@ -906,14 +905,17 @@ button.chat-ledger-head:hover {
   color: rgb(var(--accent-strong));
 }
 
-/* 底部扫描光带：运行中表示"还在继续"，结清后收掉。 */
+/* 底部扫描光带：运行中表示"还在继续"，结清后收掉。光带固定在台账宽度内，
+ * 靠 background-position 滑动渐变图（背景绘制天然裁剪在元素内）——台账已是
+ * 无框形态、没有 overflow:hidden 可依赖，transform 平移会让光带溢出正文列。 */
 .chat-ledger-scan {
   position: absolute;
   left: 0;
   right: 0;
   bottom: 0;
   height: 1.5px;
-  background: linear-gradient(90deg, transparent, rgb(var(--accent) / 0.85), transparent);
+  background: linear-gradient(90deg, transparent, rgb(var(--accent) / 0.85), transparent) no-repeat;
+  background-size: 45% 100%;
   animation: chat-ledger-scan 1.9s ease-in-out infinite;
   transition: opacity 0.35s ease;
   pointer-events: none;
@@ -925,9 +927,9 @@ button.chat-ledger-head:hover {
 }
 
 @keyframes chat-ledger-scan {
-  0% { transform: translateX(-45%); opacity: 0; }
+  0% { background-position: -30% 0; opacity: 0; }
   40% { opacity: 1; }
-  100% { transform: translateX(45%); opacity: 0; }
+  100% { background-position: 130% 0; opacity: 0; }
 }
 
 /* 台头是一行摘要（模型 · 状态 · 时钟 · 用时 · 步数 · 文件 ± · tokens）。条目
@@ -993,9 +995,9 @@ button.chat-ledger-head:hover {
 }
 
 /* 明细区：行与行之间的层次由内容自己给（工具卡自带 hover 行/缩进），这里只
- * 负责内边距。 */
+ * 负责内边距。无框后台头与明细同回复正文对齐，只留上下呼吸空间。 */
 .chat-ledger-body {
-  padding: 2px 11px 6px;
+  padding: 2px 0 6px;
 }
 
 /* 过程面的折叠动画（TurnPanel 的展开体）。

@@ -9,6 +9,11 @@
    中栏 Tab 条重设计 —— 解决「会话标签 / 文件标签混排、容易搞混」
    覆盖:tabs 显示模式下 UnifiedTabsBar 的单条混排
    四个方案: A 分层条 / B 双方言 / C 头像轨道 / D 上下文条
+   ──────────────────────────────────────────────────────────────
+   本次改版:**窄宽度**。
+   条内的降级全部用 CSS 容器查询驱动(容器 = 中栏 / 单条预览本身),
+   而不是 JS 断点 —— 与 apps/desktop/src/renderer/styles.css 里
+   .chat-ledger-head 的既有做法一致,可直接搬到 styles.css。
    ══════════════════════════════════════════════════════════════ */
 :root{
   --surface:#1a1d24;--surface-muted:#2c313c;--surface-hover:#3a404e;
@@ -17,6 +22,9 @@
   --sky:#38bdf8;--amber:#fbbf24;--indigo:#818cf8;--violet:#a78bfa;
   --page-bg:#111318;--ghost:#14171d;--chat-bg:#15181f;
   --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+  /* 单条预览的宽度 —— 拖上面的滑块改它,全站 bar-only 预览一起变窄。
+     大 app-frame 恒为 1240(宽屏基准),不受影响。 */
+  --nw:1240px;
 }
 body.light{
   --surface:#fff;--surface-muted:#f4f4f5;--surface-hover:#e4e4e7;
@@ -87,7 +95,10 @@ body.light .app-frame{box-shadow:0 14px 36px rgba(0,0,0,.12)}
 .lb .sc .st.run{background:var(--sky)}
 .lb .sc .st.rd{background:var(--accent)}
 
-.center{flex:1;min-width:0;display:flex;flex-direction:column;background:var(--page-bg)}
+/* 中栏:既是布局单元,也是 tab 条的容器查询上下文 ——
+   「条内怎么降级」由中栏的真实宽度决定,而不是窗口宽度。 */
+.center{flex:1;min-width:0;display:flex;flex-direction:column;background:var(--page-bg);
+  container-type:inline-size;container-name:tabbar}
 .rp{width:150px;flex:none;background:var(--surface);border-left:1px solid var(--edge);padding:9px 0;font-size:11px;color:var(--content-subtle)}
 .rp .lbl{font-size:9.5px;font-weight:750;letter-spacing:.7px;padding:0 12px 5px}
 .rp .f{display:flex;align-items:center;gap:6px;padding:3.5px 12px;color:var(--content-muted);overflow:hidden;white-space:nowrap}
@@ -132,6 +143,8 @@ body.light .tab.on{color:var(--accent)}
 .av{width:16px;height:16px;border-radius:5px;flex:none;display:flex;align-items:center;justify-content:center;
   font-size:8px;font-weight:800;color:#fff;letter-spacing:-.2px}
 .av.lg{width:20px;height:20px;border-radius:6px;font-size:9px}
+/* 窄屏降级:头像 → 前置色点。色点几乎不占宽,但仍是「这是会话」+ 项目身份的线索。 */
+.pdot{display:none;width:6px;height:6px;border-radius:50%;flex:none}
 
 /* 会话药丸(方案 B:rounded-full,和文件的方片分家) */
 .pill{border-radius:999px;padding:4px 10px}
@@ -149,6 +162,9 @@ body.light .tab.on{color:var(--accent)}
 .cap .n{font-weight:700;font-size:9.5px;line-height:13px;padding:0 5px;border-radius:999px;
   background:color-mix(in srgb,var(--surface-muted) 85%,transparent);color:var(--content-subtle)}
 .cap .proj{color:var(--content-muted);font-weight:650;letter-spacing:0}
+/* 标题的三档形态:长(带项目名)/ 短(只有类名)/ 图标+数字。默认只出长的一档。 */
+.cap .cap-s{display:none}
+.cap .cap-ic{display:none}
 
 /* 方案 C:头像轨道 */
 .rail{display:flex;align-items:center;gap:4px;flex:none}
@@ -157,7 +173,6 @@ body.light .tab.on{color:var(--accent)}
   transition:opacity .12s,transform .12s}
 .avbtn:hover{opacity:1;transform:translateY(-1px)}
 .avbtn.here{opacity:1;border-color:color-mix(in srgb,var(--accent) 55%,transparent)}
-.avbtn.here::after{content:"";position:absolute}
 .avspin{position:relative}
 .avspin .sp{position:absolute;right:-2px;bottom:-2px;width:8px;height:8px;border-radius:50%;
   background:var(--sky);border:1.5px solid var(--surface)}
@@ -189,12 +204,64 @@ body.light .tab.on{color:var(--accent)}
 .code .k{color:var(--violet)}.code .s{color:var(--accent)}.code .c{color:var(--content-subtle)}
 .crumb{display:flex;align-items:center;gap:5px;font-size:10.5px;color:var(--content-subtle);font-family:var(--mono)}
 
-/* ── 单条 bar 预览(只有 tab 条,不带外壳) ── */
-.mini{width:1240px;max-width:100%;display:flex;flex-direction:column;gap:5px}
-.mini .mlab{font-size:10.5px;color:var(--content-subtle);display:flex;align-items:center;gap:6px}
+/* ── 单条 bar 预览(只有 tab 条,不带外壳) ──
+   宽度由 --nw 驱动、自身是容器查询上下文:拖滑块即可看到真实降级。 */
+.mini{width:var(--nw);max-width:100%;display:flex;flex-direction:column;gap:5px;
+  container-type:inline-size;container-name:tabbar}
+.mini .mlab{font-size:10.5px;color:var(--content-subtle);display:flex;align-items:center;gap:6px;flex-wrap:wrap}
 .mini .mlab b{color:var(--content-muted);font-weight:650}
-.baronly{border:1px solid var(--edge);border-radius:10px;background:var(--surface);padding:6px 8px;
-  display:flex;align-items:center;gap:5px;overflow:hidden}
+.mini .mlab .w{font-family:var(--mono);font-size:10px;padding:1px 5px;border-radius:4px;
+  background:color-mix(in srgb,var(--surface-muted) 70%,transparent);color:var(--content-muted)}
+/* .baronly 与 .bar 同形 —— 顺序在后,覆盖边框/圆角/背景(同特异性,后者生效) */
+.bar.baronly{border:1px solid var(--edge);border-bottom:1px solid var(--edge);border-radius:10px;
+  background:var(--surface);padding:6px 8px;display:flex;align-items:center;gap:5px;overflow:hidden}
+/* 强制多行形态(窄屏的逃生舱):会话一行、文件一行,永不交错 */
+.bar.wrap{flex-direction:column;align-items:stretch;gap:3px}
+.brow{display:flex;align-items:center;gap:4px;min-width:0;overflow:hidden}
+
+/* ══════════════════════════════════════════════════════════════
+   窄宽度阶梯 —— 全部容器查询,查询对象是「中栏 / 预览条本身的宽度」
+   Tier XL ≥760 / L 600–760 / M 460–600 / S 360–460 / XS <360
+   阈值 = 中栏宽度,不是窗口宽度(侧栏开合不改变判断依据)。
+   ══════════════════════════════════════════════════════════════ */
+
+/* Tier L (<760):先收项目名——它是最长的、也最不需要常驻的一块文本。
+   分组留白 30px → 18px。 */
+@container tabbar (width < 760px){
+  .bar .vsep.wide{margin:0 9px;height:18px}
+}
+
+/* Tier M (<600):组标题退成短名;文件组的底板拆掉(两侧 padding+border ≈10px 是纯开销);
+   留白改成发丝线,不再留 30px 空档;标签 max-w 196 → 150。 */
+@container tabbar (width < 600px){
+  .bar .cap .cap-l{display:none}
+  .bar .cap .cap-s{display:inline}
+  .bar .group{background:transparent;border:0;padding:0;gap:4px}
+  .bar .tab{max-width:150px}
+  .bar .chev.dec{display:none}
+}
+
+/* Tier S (<460):组标题只剩「图标 + 数字」;会话头像收成前置色点
+   (色点绝不能一起收掉 —— 否则会话 tab 与文件 tab 又只剩图标差异);
+   标签 max-w → 120。 */
+@container tabbar (width < 460px){
+  .bar .cap .cap-s{display:none}
+  .bar .cap .cap-ic{display:block}
+  .bar .tab{max-width:120px}
+  .bar .tab.pill .av{display:none}
+  .bar .tab.pill .pdot{display:block}
+  .bar .vsep.wide{margin:0 6px;height:14px}
+  .bar .expand{max-width:120px}
+}
+
+/* Tier XS (<360,手机壳 / 子会话面板):标签 → 96px;数量收进 ⋯ 菜单;
+   多行地板 170 → 110(否则一行放不下第二个标签)。 */
+@container tabbar (width < 360px){
+  .bar .tab{max-width:96px}
+  .bar .cap .n{display:none}
+  .bar .expand{max-width:96px}
+  .bar .rail .avbtn{width:22px;height:22px;font-size:8.5px}
+}
 
 /* ── 标注 ── */
 .anno{position:relative}
@@ -222,6 +289,7 @@ body.light .tab.on{color:var(--accent)}
 .pillbox.g{background:color-mix(in srgb,var(--accent) 16%,transparent);color:var(--accent)}
 .pillbox.r{background:color-mix(in srgb,var(--danger) 15%,transparent);color:var(--danger)}
 .pillbox.b{background:color-mix(in srgb,var(--sky) 16%,transparent);color:var(--sky)}
+.pillbox.a{background:color-mix(in srgb,var(--amber) 18%,transparent);color:var(--amber)}
 
 /* ── 对照表 ── */
 .tbl{width:100%;border-collapse:collapse;font-size:12px}
@@ -230,6 +298,7 @@ body.light .tab.on{color:var(--accent)}
 .tbl td{color:var(--content-muted)}
 .tbl td b{color:var(--content);font-weight:650}
 .tbl tr:last-child td{border-bottom:0}
+.tbl code{font-family:var(--mono);font-size:11px;color:var(--content-muted)}
 
 /* ── 图例 ── */
 .legend{display:flex;flex-wrap:wrap;gap:9px 18px;font-size:11.5px;color:var(--content-muted);align-items:center}
@@ -237,9 +306,45 @@ body.light .tab.on{color:var(--accent)}
 .verdict{border-radius:12px;padding:13px 15px;font-size:12.5px;line-height:1.68;
   background:color-mix(in srgb,var(--sky) 8%,var(--surface));border:1px solid color-mix(in srgb,var(--sky) 24%,transparent)}
 .verdict b{color:var(--content)}
-.section-title{width:100%;max-width:1440px;display:flex;align-items:center;gap:10px;padding-top:6px}
+.verdict.warm{background:color-mix(in srgb,var(--amber) 8%,var(--surface));border-color:color-mix(in srgb,var(--amber) 26%,transparent)}
+.section-title{width:100%;max-width:1700px;display:flex;align-items:center;gap:10px;padding-top:6px}
 .section-title h2{font-size:15px;font-weight:680}
 .section-title .rule{flex:1;height:1px;background:var(--edge)}
+
+/* ── 窄宽度演示区 ── */
+.narrow{width:100%;max-width:1700px;display:flex;flex-direction:column;gap:16px}
+/* 三档对照竖排 —— 不是为了好看,是因为横排会被视口宽度截断:
+   .mini 的 max-width:100% 一旦生效,760 与 560 都被压到同一个宽度,
+   两档看不出区别(而且 760 那档会被静默降级成 Tier M)。
+   竖排后每行各自保留真实档位宽度,量到的就是该档的真实排版。
+   注意:不能写 width:auto —— .mini 带 container-type:inline-size,
+   行内尺寸被 contain 掉后,width:auto 的伸缩项会塌成 0(实测 18px)。 */
+/* 外层横向滚动:三行各自按真实档位宽度渲染(760 / 560 / 400),
+   视口不够宽时横向滚,而不是被压窄后假装「这就是该档的样子」。 */
+.trioscroll{overflow-x:auto;padding-bottom:6px}
+.trioscroll::-webkit-scrollbar{height:9px}
+.trioscroll::-webkit-scrollbar-thumb{background:var(--surface-hover);border-radius:5px;border:3px solid var(--page-bg)}
+.trio{display:flex;flex-direction:column;gap:14px;width:max-content;min-width:100%}
+.trio .mini{width:var(--nw);max-width:none;flex:none}
+.scrub{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:11px 14px;border-radius:12px;
+  background:var(--surface);border:1px solid var(--edge);font-size:12px}
+.scrub .lb2{font-size:11px;font-weight:700;letter-spacing:.4px;color:var(--content-subtle)}
+.scrub input[type=range]{width:min(360px,40vw);accent-color:var(--accent);cursor:pointer}
+.scrub output{font-family:var(--mono);font-size:12px;font-weight:700;color:var(--content);min-width:62px}
+.scrub .presets{display:flex;gap:5px;flex-wrap:wrap}
+.scrub .presets button{border:1px solid var(--edge);background:var(--surface-muted);color:var(--content-muted);
+  font:inherit;font-size:11px;padding:3px 9px;border-radius:7px;cursor:pointer}
+.scrub .presets button:hover{background:var(--surface-hover);color:var(--content)}
+.scrub .tier{margin-left:auto;font-size:11.5px;color:var(--accent);font-weight:650}
+.grid3{display:grid;grid-template-columns:repeat(auto-fit,minmax(290px,1fr));gap:12px}
+
+/* 页面自身在窄浏览器窗口下也要能看(原型是用 Mcode 内嵌浏览器打开的) */
+@media (max-width:780px){
+  .page-head{flex-wrap:wrap;padding:14px 14px 10px}
+  .gallery{padding:14px 14px 32px;gap:20px}
+  .scheme{gap:14px}
+  .scheme .notes{min-width:0}
+}
 </style>
 </head>
 <body>
@@ -264,10 +369,11 @@ body.light .tab.on{color:var(--accent)}
 
 <header class="page-head">
   <div>
-    <h1>中栏 Tab 条重设计 · 会话 vs 文件</h1>
+    <h1>中栏 Tab 条重设计 · 会话 vs 文件 · <span style="color:var(--accent)">含窄宽度</span></h1>
     <div class="sub">
       <code>tabs</code> 显示模式下,<b>会话标签</b>与<b>文件标签</b>混在同一条 strip 里(vscode 式)。现状两者用<b>完全相同</b>的 chip 样式,
-      只靠「品牌图标 vs 文件图标」和一条 1px 发丝线区分 —— 点击后果却完全不同:一个切对话、一个切编辑器。下面给出四个方向的取舍。
+      只靠「品牌图标 vs 文件图标」和一条 1px 发丝线区分 —— 点击后果却完全不同:一个切对话、一个切编辑器。
+      下面给出四个方向的取舍,以及<b>五个宽度档位上的降级规则</b>(Tier XL → XS)。
     </div>
   </div>
   <button id="themeBtn" title="切换明暗">◐</button>
@@ -299,10 +405,10 @@ body.light .tab.on{color:var(--accent)}
       <div class="center">
         <!-- 现状:会话 chip 与文件 chip 同形态、同色 -->
         <div class="bar">
-          <div class="tab">​<svg class="ic s"><use href="#i-spark"/></svg><span class="dot run"></span><span class="nm">重构会话映射</span><span class="x"><svg class="ic xs"><use href="#i-close"/></svg></span></div>
+          <div class="tab"><svg class="ic s"><use href="#i-spark"/></svg><span class="dot run"></span><span class="nm">重构会话映射</span><span class="x"><svg class="ic xs"><use href="#i-close"/></svg></span></div>
           <div class="tab mark"><svg class="ic s"><use href="#i-spark"/></svg><span class="dot"></span><span class="nm">RuntimeManager.ts 空指针</span><span class="x"><svg class="ic xs"><use href="#i-close"/></svg></span></div>
-          <div class="tab">​<svg class="ic s"><use href="#i-spark"/></svg><span class="dot"></span><span class="nm">marketplace 调研</span><span class="badge">3</span><span class="x"><svg class="ic xs"><use href="#i-close"/></svg></span></div>
-          <div class="vsep"></div>
+          <div class="tab"><svg class="ic s"><use href="#i-spark"/></svg><span class="dot"></span><span class="nm">marketplace 调研</span><span class="badge">3</span><span class="x"><svg class="ic xs"><use href="#i-close"/></svg></span></div>
+          <div class="vsep grp"></div>
           <div class="tab file on mark"><svg class="ic s"><use href="#i-file"/></svg><span class="nm">RuntimeManager.ts</span><span class="dot dirty"></span></div>
           <div class="tab file"><svg class="ic s"><use href="#i-file"/></svg><span class="nm">runtime.ts</span><span class="x"><svg class="ic xs"><use href="#i-close"/></svg></span></div>
           <div class="x" style="margin-left:auto;opacity:1"><svg class="ic s" style="color:var(--content-subtle)"><use href="#i-dots"/></svg></div>
@@ -339,6 +445,7 @@ rt.lastCwd = ctx.cwd
         <li><b>焦点丢失</b>:<code>isActive={id === activeId && !editorFocused}</code> —— 编辑器聚焦时,当前会话标签<b>没有任何标记</b>。这条正是「我到底在哪」的困惑来源。</li>
         <li><b>关闭语义不同、却同一颗 ×</b>:会话 × 只关标签、<b>不中断</b>运行中的回合;文件脏了根本没有 ×。两种语义共用一个图标。</li>
         <li><b>分组线会消失</b>:1px 发丝线只在两组都有内容时渲染;只剩一组时它与普通单组标签条无法区分。</li>
+        <li><b>窄屏下图标这条线索还会失效</b>:宽度不够时前置图标被挤掉的最先就是它 —— 详见<a href="#narrow" style="color:var(--accent);text-decoration:none">窄宽度阶梯</a>。</li>
       </ul>
       <div class="src">现状标签形态还有一处「反向线索」:会话标题可以是任意自然语言(甚至刚好写成文件名,如本例),而文件名永远像文件名 —— 靠图标区分的方向本身就不可靠。</div>
     </div>
@@ -377,17 +484,17 @@ rt.lastCwd = ctx.cwd
       <div class="center">
         <!-- 条 1:会话条。常驻,承载「我在哪条对话」。激活锚点用左侧色条 + 文字提亮,而不是填充 -->
         <div class="bar">
-          <button class="chev"><svg class="ic s"><use href="#i-chevl"/></svg></button>
-          <div class="tab"><span class="av" style="background:#10b981">CG</span><span class="dot run"></span><span class="nm">重构会话映射</span><span class="x"><svg class="ic xs"><use href="#i-close"/></svg></span></div>
-          <div class="tab anchorstate" style="border-left:2px solid var(--accent);color:var(--content);background:color-mix(in srgb,var(--accent) 8%,transparent)"><span class="av" style="background:#10b981">CG</span><span class="dot"></span><span class="nm">RuntimeManager.ts 空指针</span><span class="x"><svg class="ic xs"><use href="#i-close"/></svg></span></div>
-          <div class="tab"><span class="av" style="background:#818cf8">PM</span><span class="dot"></span><span class="nm">marketplace 调研</span><span class="badge">3</span><span class="x"><svg class="ic xs"><use href="#i-close"/></svg></span></div>
+          <button class="chev dec"><svg class="ic s"><use href="#i-chevl"/></svg></button>
+          <div class="tab"><span class="av" style="background:#10b981">CG</span><span class="pdot" style="background:#10b981"></span><span class="dot run"></span><span class="nm">重构会话映射</span><span class="x"><svg class="ic xs"><use href="#i-close"/></svg></span></div>
+          <div class="tab" style="border-left:2px solid var(--accent);color:var(--content);background:color-mix(in srgb,var(--accent) 8%,transparent)"><span class="av" style="background:#10b981">CG</span><span class="pdot" style="background:#10b981"></span><span class="dot"></span><span class="nm">RuntimeManager.ts 空指针</span><span class="x"><svg class="ic xs"><use href="#i-close"/></svg></span></div>
+          <div class="tab"><span class="av" style="background:#818cf8">PM</span><span class="pdot" style="background:#818cf8"></span><span class="dot"></span><span class="nm">marketplace 调研</span><span class="badge">3</span><span class="x"><svg class="ic xs"><use href="#i-close"/></svg></span></div>
           <button class="chev"><svg class="ic s"><use href="#i-plus"/></svg></button>
           <button class="chev" style="margin-left:auto"><svg class="ic s"><use href="#i-dots"/></svg></button>
         </div>
         <!-- 条 2:编辑器条。只在编辑器聚焦时出现,带自己的「编辑区 · 项目」身份 -->
         <div class="bar editor-chrome">
-          <span class="cap">编辑区 · <span class="proj">cc-gui</span> <span class="n">4</span></span>
-          <div class="vsep"></div>
+          <span class="cap"><svg class="ic s cap-ic"><use href="#i-folder"/></svg><span class="cap-l">编辑区 · <b class="proj">cc-gui</b></span><span class="cap-s">编辑区</span> <span class="n">4</span></span>
+          <div class="vsep wide"></div>
           <div class="tab file on"><svg class="ic s"><use href="#i-file"/></svg><span class="nm">RuntimeManager.ts</span><span class="dot dirty"></span></div>
           <div class="tab file"><svg class="ic s"><use href="#i-file"/></svg><span class="nm">SdkMessageAdapter.ts</span><span class="x"><svg class="ic xs"><use href="#i-close"/></svg></span></div>
           <div class="tab file"><svg class="ic s"><use href="#i-file"/></svg><span class="nm">runtime.ts</span><span class="x"><svg class="ic xs"><use href="#i-close"/></svg></span></div>
@@ -415,11 +522,11 @@ rt.lastCwd = ctx.cwd
 
     <div class="mini">
       <div class="mlab"><b>对话态</b> —— 编辑器条整条收起,只留会话条(省回那 30px)</div>
-      <div class="baronly">
-        <button class="chev"><svg class="ic s"><use href="#i-chevl"/></svg></button>
-        <div class="tab"><span class="av" style="background:#10b981">CG</span><span class="dot run"></span><span class="nm">重构会话映射</span><span class="x"><svg class="ic xs"><use href="#i-close"/></svg></span></div>
-        <div class="tab on"><span class="av" style="background:#10b981">CG</span><span class="dot"></span><span class="nm">RuntimeManager.ts 空指针</span><span class="x"><svg class="ic xs"><use href="#i-close"/></svg></span></div>
-        <div class="tab"><span class="av" style="background:#818cf8">PM</span><span class="dot"></span><span class="nm">marketplace 调研</span><span class="badge">3</span><span class="x"><svg class="ic xs"><use href="#i-close"/></svg></span></div>
+      <div class="bar baronly">
+        <button class="chev dec"><svg class="ic s"><use href="#i-chevl"/></svg></button>
+        <div class="tab"><span class="av" style="background:#10b981">CG</span><span class="pdot" style="background:#10b981"></span><span class="dot run"></span><span class="nm">重构会话映射</span><span class="x"><svg class="ic xs"><use href="#i-close"/></svg></span></div>
+        <div class="tab on"><span class="av" style="background:#10b981">CG</span><span class="pdot" style="background:#10b981"></span><span class="dot"></span><span class="nm">RuntimeManager.ts 空指针</span><span class="x"><svg class="ic xs"><use href="#i-close"/></svg></span></div>
+        <div class="tab"><span class="av" style="background:#818cf8">PM</span><span class="pdot" style="background:#818cf8"></span><span class="dot"></span><span class="nm">marketplace 调研</span><span class="badge">3</span><span class="x"><svg class="ic xs"><use href="#i-close"/></svg></span></div>
         <button class="chev"><svg class="ic s"><use href="#i-plus"/></svg></button>
         <div class="gap"></div>
         <div class="anchor"><svg class="ic s"><use href="#i-file"/></svg><span>已打开 4 个文件</span><svg class="ic xs"><use href="#i-chevr"/></svg></div>
@@ -438,15 +545,16 @@ rt.lastCwd = ctx.cwd
       </ul>
       <div class="src">对照:VS Code 的编辑器组 tab 就挂在编辑器面板自己的头上,而不是和窗口级导航混在一条栏里。会话条在此扮演「窗口级导航」。</div>
     </div>
-    <div class="card">
-      <h3>取舍</h3>
+    <div class="card" style="border-color:color-mix(in srgb,var(--accent) 34%,transparent)">
+      <h3>取舍 <span class="pillbox g" style="margin-left:auto">窄屏最优</span></h3>
       <ul>
-        <li><span class="pillbox g">+</span> 结构上<b>不可能误点</b>:两条栏各只装一种标签,类型混淆这一整类问题消失。</li>
+        <li><span class="pillbox g">+</span> 结构上<b>不可能误点</b>:两条栏各只装一种标签,类型混淆这一整类问题消失 —— 而且这个保证<b>在任何宽度下都成立</b>,不需要降级规则。</li>
         <li><span class="pillbox g">+</span> 会话条变稳定,不再随编辑器开合改变内容,会话前后切换的肌肉记忆成立。</li>
         <li><span class="pillbox g">+</span> 顺手获得「编辑器条自带项目名」「会话锚点态」两个修正点;会话条还能加 <code>+ 新建会话</code>,补上现在 tab 模式缺少的新建入口。</li>
         <li><span class="pillbox r">−</span> 编辑器聚焦时多一行(~30px)。因为编辑器条在编辑器面板内部、随面板一起出现,切会话时它是整块隐藏/显示的,<b>不会造成内容上下跳动</b>。</li>
         <li><span class="pillbox r">−</span> 实现量最大:两条独立 strip 的溢出/多行/拖拽状态各一套(可共用现有 <code>TabBarChrome</code> 与 <code>ScrollStrip</code> 逻辑)。</li>
       </ul>
+      <div class="src">窄屏代价几乎为零:两条栏各自独立溢出滚动,不需要「标题让位」这类降级 —— 这正是它在窄屏反而变强的理由。</div>
     </div>
   </div>
 </section>
@@ -455,7 +563,7 @@ rt.lastCwd = ctx.cwd
 <section id="b" class="scheme">
   <div class="frame-col">
     <div class="scheme-head">
-      <span class="tag pick">方案 B · 推荐</span>
+      <span class="tag pick">方案 B · 推荐(宽屏)</span>
       <h2>单条不变,给两类标签换「方言」+ 组标题</h2>
       <span class="hint">零布局改动 · 只改形态与文案</span>
     </div>
@@ -475,16 +583,16 @@ rt.lastCwd = ctx.cwd
       <div class="center">
         <!-- 一条 strip:左会话(药丸+头像) / 右文件(方片+等宽)。组标题给出数量与项目作用域 -->
         <div class="bar">
-          <button class="chev"><svg class="ic s"><use href="#i-chevl"/></svg></button>
-          <span class="cap">会话 <span class="n">3</span></span>
-          <div class="tab pill"><span class="av" style="background:#10b981">CG</span><span class="nm">重构会话映射</span><span class="dot run"></span><span class="x"><svg class="ic xs"><use href="#i-close"/></svg></span></div>
-          <div class="tab pill here"><span class="av" style="background:#10b981">CG</span><span class="nm">RuntimeManager.ts 空指针</span><span class="dot"></span><span class="x"><svg class="ic xs"><use href="#i-close"/></svg></span></div>
+          <button class="chev dec"><svg class="ic s"><use href="#i-chevl"/></svg></button>
+          <span class="cap"><svg class="ic s cap-ic"><use href="#i-msg"/></svg><span class="cap-l">会话</span><span class="cap-s">会话</span> <span class="n">3</span></span>
+          <div class="tab pill"><span class="av" style="background:#10b981">CG</span><span class="pdot" style="background:#10b981"></span><span class="nm">重构会话映射</span><span class="dot run"></span><span class="x"><svg class="ic xs"><use href="#i-close"/></svg></span></div>
+          <div class="tab pill here"><span class="av" style="background:#10b981">CG</span><span class="pdot" style="background:#10b981"></span><span class="nm">RuntimeManager.ts 空指针</span><span class="dot"></span><span class="x"><svg class="ic xs"><use href="#i-close"/></svg></span></div>
           <button class="chev"><svg class="ic s"><use href="#i-plus"/></svg></button>
           <button class="chev"><svg class="ic s"><use href="#i-chevr"/></svg></button>
 
           <div class="vsep wide"></div>
 
-          <span class="cap">编辑区 <span class="proj">cc-gui</span> <span class="n">4</span></span>
+          <span class="cap"><svg class="ic s cap-ic"><use href="#i-folder"/></svg><span class="cap-l">编辑区 · <b class="proj">cc-gui</b></span><span class="cap-s">编辑区</span> <span class="n">4</span></span>
           <div class="group">
             <div class="tab file on"><svg class="ic s"><use href="#i-file"/></svg><span class="nm">RuntimeManager.ts</span><span class="dot dirty"></span></div>
             <div class="tab file"><svg class="ic s"><use href="#i-file"/></svg><span class="nm">runtime.ts</span><span class="x"><svg class="ic xs"><use href="#i-close"/></svg></span></div>
@@ -512,14 +620,14 @@ rt.lastCwd = ctx.cwd
 
     <div class="mini">
       <div class="mlab"><b>对话态</b> —— 同一个 strip,只是焦点回到会话一侧(会话药丸变激活填充,文件退为静止)</div>
-      <div class="baronly">
-        <span class="cap">会话 <span class="n">3</span></span>
-        <div class="tab pill"><span class="av" style="background:#10b981">CG</span><span class="nm">重构会话映射</span><span class="dot run"></span><span class="x"><svg class="ic xs"><use href="#i-close"/></svg></span></div>
-        <div class="tab pill on"><span class="av" style="background:#10b981">CG</span><span class="nm">RuntimeManager.ts 空指针</span><span class="dot"></span><span class="x"><svg class="ic xs"><use href="#i-close"/></svg></span></div>
-        <div class="tab pill"><span class="av" style="background:#818cf8">PM</span><span class="nm">marketplace 调研</span><span class="badge">3</span><span class="x"><svg class="ic xs"><use href="#i-close"/></svg></span></div>
+      <div class="bar baronly">
+        <span class="cap"><svg class="ic s cap-ic"><use href="#i-msg"/></svg><span class="cap-l">会话</span><span class="cap-s">会话</span> <span class="n">3</span></span>
+        <div class="tab pill"><span class="av" style="background:#10b981">CG</span><span class="pdot" style="background:#10b981"></span><span class="nm">重构会话映射</span><span class="dot run"></span><span class="x"><svg class="ic xs"><use href="#i-close"/></svg></span></div>
+        <div class="tab pill on"><span class="av" style="background:#10b981">CG</span><span class="pdot" style="background:#10b981"></span><span class="nm">RuntimeManager.ts 空指针</span><span class="dot"></span><span class="x"><svg class="ic xs"><use href="#i-close"/></svg></span></div>
+        <div class="tab pill"><span class="av" style="background:#818cf8">PM</span><span class="pdot" style="background:#818cf8"></span><span class="nm">marketplace 调研</span><span class="badge">3</span><span class="x"><svg class="ic xs"><use href="#i-close"/></svg></span></div>
         <button class="chev"><svg class="ic s"><use href="#i-plus"/></svg></button>
         <div class="vsep wide"></div>
-        <span class="cap">编辑区 <span class="proj">cc-gui</span> <span class="n">4</span></span>
+        <span class="cap"><svg class="ic s cap-ic"><use href="#i-folder"/></svg><span class="cap-l">编辑区 · <b class="proj">cc-gui</b></span><span class="cap-s">编辑区</span> <span class="n">4</span></span>
         <div class="group">
           <div class="tab file"><svg class="ic s"><use href="#i-file"/></svg><span class="nm">RuntimeManager.ts</span><span class="dot dirty"></span></div>
           <div class="tab file"><svg class="ic s"><use href="#i-file"/></svg><span class="nm">runtime.ts</span><span class="x"><svg class="ic xs"><use href="#i-close"/></svg></span></div>
@@ -546,9 +654,18 @@ rt.lastCwd = ctx.cwd
         <li><span class="pillbox g">+</span> <b>零布局改动</b>:还是一条 strip、同样的滚动/多行/拖拽骨架,改动集中在 chip 样式 + 两个标题 + 一处高亮语义。</li>
         <li><span class="pillbox g">+</span> 不增加高度,不引入第二条滚动条,不打断任何现有交互(溢出菜单、多行换行、中键关闭、右键菜单、跨类拖拽忽略都原样可用)。</li>
         <li><span class="pillbox g">+</span> 组标题 + 项目名顺手修掉「作用域不一致」与「分组线消失」两个坑。</li>
-        <li><span class="pillbox r">−</span> 仍然是<b>一条</b> strip:误点风险降低但不为零(组标题占了两个位置,窄窗口下它们是最先被挤掉的内容 —— 需要保留「挤不下时标题收成图标」的降级)。</li>
+        <li><span class="pillbox a">−</span> <b>窄屏要额外设计</b>:组标题、头像都是「宽度换信息」的元素,窄窗口下它们是最先被挤掉的 —— 必须补一套降级阶梯(下面整节).</li>
+        <li><span class="pillbox r">−</span> 仍然是<b>一条</b> strip:误点风险降低但不为零。</li>
         <li><span class="pillbox r">−</span> 药丸比方片略宽(全圆角 + 头像),同样窗口宽度下能显示的会话数略少。</li>
       </ul>
+    </div>
+    <div class="card" style="border-color:color-mix(in srgb,var(--sky) 34%,transparent)">
+      <h3>窄屏上的关键取舍 <span class="pillbox b" style="margin-left:auto">见下节</span></h3>
+      <p>B 的三条区分线索(形状 / 组标题 / 头像)里,<b>只有形状不占宽度</b>。所以窄屏降级的正确顺序是:
+      <b>先收组标题 → 再收头像 → 最后才动形状</b>。反过来说,药丸/方片的形状分化必须做成<b>基底样式</b>而不是「宽屏增强」——
+      它是窄屏最后、也是唯一活着的线索,不能跟着标题一起降级。</p>
+      <p>再往窄走(<span class="mono">&lt; 560px</span>),单条 strip 的语义会退化回现状。此时正确的做法不是继续压缩,而是
+      <b>自动切多行</b> —— 会话一行、文件一行,以最低成本在窄屏拿到<span class="pillbox b">方案 A</span> 的确定性。</p>
     </div>
   </div>
 </section>
@@ -592,7 +709,7 @@ rt.lastCwd = ctx.cwd
 
           <div class="vsep wide"></div>
 
-          <span class="cap">编辑区 <span class="proj">cc-gui</span> <span class="n">4</span></span>
+          <span class="cap"><svg class="ic s cap-ic"><use href="#i-folder"/></svg><span class="cap-l">编辑区 · <b class="proj">cc-gui</b></span><span class="cap-s">编辑区</span> <span class="n">4</span></span>
           <div class="tab file on"><svg class="ic s"><use href="#i-file"/></svg><span class="nm">RuntimeManager.ts</span><span class="dot dirty"></span></div>
           <div class="tab file"><svg class="ic s"><use href="#i-file"/></svg><span class="nm">SdkMessageAdapter.ts</span><span class="x"><svg class="ic xs"><use href="#i-close"/></svg></span></div>
           <div class="tab file"><svg class="ic s"><use href="#i-file"/></svg><span class="nm">runtime.ts</span><span class="x"><svg class="ic xs"><use href="#i-close"/></svg></span></div>
@@ -620,7 +737,7 @@ rt.lastCwd = ctx.cwd
 
     <div class="mini">
       <div class="mlab"><b>会话很多时</b> —— 头像块横向滚动,占用恒定;悬停显标题气泡</div>
-      <div class="baronly">
+      <div class="bar baronly">
         <div class="rail">
           <div class="avbtn" style="background:#10b981">CG</div>
           <div class="avbtn" style="background:#818cf8">PM</div>
@@ -629,11 +746,11 @@ rt.lastCwd = ctx.cwd
           <div class="avbtn" style="background:#38bdf8">WT</div>
           <div class="avbtn" style="background:#f87171">LG</div>
           <div class="avbtn" style="background:#10b981">PL</div>
-          <div class="expand" style="max-width:150px"><svg class="ic s" style="color:var(--accent)"><use href="#i-spark"/></svg><span class="nm">RuntimeManager.ts 空指针</span><span class="dot"></span></div>
+          <div class="expand"><svg class="ic s" style="color:var(--accent)"><use href="#i-spark"/></svg><span class="nm">RuntimeManager.ts 空指针</span><span class="dot"></span></div>
           <button class="chev"><svg class="ic s"><use href="#i-plus"/></svg><span style="font-size:10px;font-weight:700">3</span></button>
         </div>
         <div class="vsep wide"></div>
-        <span class="cap">编辑区 <span class="proj">cc-gui</span> <span class="n">4</span></span>
+        <span class="cap"><svg class="ic s cap-ic"><use href="#i-folder"/></svg><span class="cap-l">编辑区 · <b class="proj">cc-gui</b></span><span class="cap-s">编辑区</span> <span class="n">4</span></span>
         <div class="tab file on"><svg class="ic s"><use href="#i-file"/></svg><span class="nm">RuntimeManager.ts</span><span class="dot dirty"></span></div>
         <div class="tab file"><svg class="ic s"><use href="#i-file"/></svg><span class="nm">runtime.ts</span></div>
       </div>
@@ -656,10 +773,11 @@ rt.lastCwd = ctx.cwd
       <ul>
         <li><span class="pillbox g">+</span> 会话数增长时占用恒定,横向空间几乎全给文件标签;窗口窄时表现最好。</li>
         <li><span class="pillbox g">+</span> 会话切换从「读标题」变成「认色块 + 字母」,熟练后更快;左栏与其色块同源,跨面板识别一致。</li>
-        <li><span class="pillbox r">−</span> <b>标题默认不可见</b>:会话名首字母相近(或同一项目下多条会话)时,只靠色块 + 两字母很难区分,要 hover 才知道。这是本方案最实在的代价。</li>
+        <li><span class="pillbox r">−</span> <b>标题默认不可见</b>:会话名首字母相近(或同一项目下多条会话)时,只靠色块 + 两字母很难区分,要 hover 才知道。这是本方案最实在的代价 —— <b>而窄屏会把「hover 才可见」变成「根本没空间 hover」</b>。</li>
         <li><span class="pillbox r">−</span> 未读徽章、运行状态只能收成一个小点,信息密度下降。</li>
         <li><span class="pillbox r">−</span> 拖拽重排的语义变弱(色块拖拽不如标签直观),可能干脆放弃会话重排,只保留文件重排。</li>
       </ul>
+      <div class="src">窄屏结论:占用最省是真的,但它把「读标题」换成了「认颜色 + 悬停」—— 悬停在一个本就没有余量的窄条上是最难成立的交互。</div>
     </div>
   </div>
 </section>
@@ -672,27 +790,27 @@ rt.lastCwd = ctx.cwd
       <h2>上下文条:只显示当前视图的标签 + 一个「回到…」锚点</h2>
       <span class="hint">条内永远只有一种类型</span>
     </div>
-    <div class="mini" style="width:1240px">
+    <div class="mini">
       <div class="mlab"><b>对话态</b> —— 条内全是会话标签;文件侧只剩一个计数锚点</div>
-      <div class="baronly">
-        <span class="cap">会话 <span class="n">3</span></span>
-        <div class="tab pill on"><span class="av" style="background:#10b981">CG</span><span class="nm">重构会话映射</span><span class="dot"></span><span class="x"><svg class="ic xs"><use href="#i-close"/></svg></span></div>
-        <div class="tab pill"><span class="av" style="background:#818cf8">PM</span><span class="nm">marketplace 调研</span><span class="badge">3</span><span class="x"><svg class="ic xs"><use href="#i-close"/></svg></span></div>
-        <div class="tab pill"><span class="av" style="background:#10b981">CG</span><span class="nm">RuntimeManager.ts 空指针</span><span class="x"><svg class="ic xs"><use href="#i-close"/></svg></span></div>
+      <div class="bar baronly">
+        <span class="cap"><svg class="ic s cap-ic"><use href="#i-msg"/></svg><span class="cap-l">会话</span><span class="cap-s">会话</span> <span class="n">3</span></span>
+        <div class="tab pill on"><span class="av" style="background:#10b981">CG</span><span class="pdot" style="background:#10b981"></span><span class="nm">重构会话映射</span><span class="dot"></span><span class="x"><svg class="ic xs"><use href="#i-close"/></svg></span></div>
+        <div class="tab pill"><span class="av" style="background:#818cf8">PM</span><span class="pdot" style="background:#818cf8"></span><span class="nm">marketplace 调研</span><span class="badge">3</span><span class="x"><svg class="ic xs"><use href="#i-close"/></svg></span></div>
+        <div class="tab pill"><span class="av" style="background:#10b981">CG</span><span class="pdot" style="background:#10b981"></span><span class="nm">RuntimeManager.ts 空指针</span><span class="x"><svg class="ic xs"><use href="#i-close"/></svg></span></div>
         <button class="chev"><svg class="ic s"><use href="#i-plus"/></svg></button>
         <div class="anchor" style="margin-left:auto"><svg class="ic s"><use href="#i-folder"/></svg><span>编辑区 · 4 个文件</span><svg class="ic xs"><use href="#i-chevr"/></svg></div>
       </div>
     </div>
-    <div class="mini" style="width:1240px">
+    <div class="mini">
       <div class="mlab"><b>编辑器态</b> —— 条内全是文件标签;左侧只剩一颗「回到对话」锚点(显示会话标题)</div>
-      <div class="baronly">
+      <div class="bar baronly">
         <div class="anchor" style="border-style:solid;border-color:color-mix(in srgb,var(--accent) 40%,transparent);background:color-mix(in srgb,var(--accent) 10%,transparent);color:var(--content)">
           <svg class="ic s"><use href="#i-back"/></svg>
           <span class="av" style="background:#10b981">CG</span>
           <span class="nm" style="max-width:170px;font-weight:600">RuntimeManager.ts 空指针</span>
         </div>
         <div class="vsep wide"></div>
-        <span class="cap">编辑区 <span class="proj">cc-gui</span> <span class="n">4</span></span>
+        <span class="cap"><svg class="ic s cap-ic"><use href="#i-folder"/></svg><span class="cap-l">编辑区 · <b class="proj">cc-gui</b></span><span class="cap-s">编辑区</span> <span class="n">4</span></span>
         <div class="tab file on"><svg class="ic s"><use href="#i-file"/></svg><span class="nm">RuntimeManager.ts</span><span class="dot dirty"></span></div>
         <div class="tab file"><svg class="ic s"><use href="#i-file"/></svg><span class="nm">SdkMessageAdapter.ts</span><span class="x"><svg class="ic xs"><use href="#i-close"/></svg></span></div>
         <div class="tab file"><svg class="ic s"><use href="#i-file"/></svg><span class="nm">runtime.ts</span><span class="x"><svg class="ic xs"><use href="#i-close"/></svg></span></div>
@@ -708,9 +826,227 @@ rt.lastCwd = ctx.cwd
       <ul>
         <li>strip <b>永远只装当前视图的标签</b>(对话→会话标签,编辑器→文件标签),另一侧用一颗锚点 chip 表达「另一处有什么、怎么回去」。类型混淆在构造上归零。</li>
         <li>与 <span class="pillbox b">方案 A</span> 的区别:不占两行,以「一次点击」为代价 —— 从对话想直接跳到某个<b>具体文件</b>时,得先点 <code>编辑区 · 4 个文件</code> 再选。</li>
-        <li><b>这一条就是否决理由</b>:「agent 刚提到某文件、我要点开看」是本应用的高频动作,现状一次点击可达,方案 D 变成两次。除非给锚点 chip 加「按住即展开文件列表」这类补偿交互,否则不建议。</li>
-        <li>保留价值:如果将来 tab 模式进一步压缩(比如窄屏/移动壳),D 是空间最省的退化形态。</li>
+        <li><b>这一条就是否决理由</b>:「agent 刚提到某文件、我要点开看」是本应用的高频动作,现状一次点击可达,方案 D 变成两次。窄屏下这个代价被放大 —— 空间越紧,你越想一步到位。</li>
+        <li><b>但它是窄屏最省空间的形态</b>:条内只有一种标签 + 一颗锚点,是唯一一个「不需要任何降级规则」也不会退化的方案。<b>它的正确位置是 <span class="mono">&lt; 420px</span> 的自动退化形态(手机壳 / 子会话面板),而不是主形态。</b></li>
       </ul>
+      <div class="src">序列:宽屏用 B;中宽用 B+多行(= A 的语义);最窄(<span class="mono">&lt;420px</span>)再退到 D。三者共用同一套「会话锚点态」语义,退化是连续的,不是三套设计。</div>
+    </div>
+  </div>
+</section>
+
+<!-- ══════════════════════ 窄宽度阶梯 ══════════════════════ -->
+<div class="section-title" id="narrow"><h2>窄宽度阶梯 · 中栏 760 / 560 / 400 同时对照</h2><div class="rule"></div></div>
+<section class="narrow">
+  <div class="verdict">
+    这一节全部由 <b>CSS 容器查询</b>驱动 —— 查询对象是「中栏 / 预览条自身的宽度」(容器名 <code>tabbar</code>,即 <code>.center</code> 与 <code>.mini</code>),
+    不是窗口宽度,也不是 JS 断点。理由与 <code>styles.css</code> 里 <code>.chat-ledger-head</code> 完全相同:
+    <b>中栏被左右侧栏挤压时,拿窗口宽度做阈值会误判「放得下」</b>,而拿中栏自己当容器,判断永远与实际排版一致(宽屏 3:7 分栏、手机壳、子会话面板同样成立)。
+  </div>
+
+  <div class="trioscroll"><div class="trio">
+    <div class="mini" style="--nw:760px">
+      <div class="mlab"><b>中栏 760</b> <span class="w">Tier L</span> 收起项目名 · 留白 30→18</div>
+      <div class="bar baronly">
+        <span class="cap"><svg class="ic s cap-ic"><use href="#i-msg"/></svg><span class="cap-l">会话</span><span class="cap-s">会话</span> <span class="n">3</span></span>
+        <div class="tab pill"><span class="av" style="background:#10b981">CG</span><span class="pdot" style="background:#10b981"></span><span class="nm">重构会话映射</span><span class="dot run"></span><span class="x"><svg class="ic xs"><use href="#i-close"/></svg></span></div>
+        <div class="tab pill here"><span class="av" style="background:#10b981">CG</span><span class="pdot" style="background:#10b981"></span><span class="nm">RuntimeManager.ts 空指针</span><span class="x"><svg class="ic xs"><use href="#i-close"/></svg></span></div>
+        <button class="chev"><svg class="ic s"><use href="#i-plus"/></svg></button>
+        <div class="vsep wide"></div>
+        <span class="cap"><svg class="ic s cap-ic"><use href="#i-folder"/></svg><span class="cap-l">编辑区 · <b class="proj">cc-gui</b></span><span class="cap-s">编辑区</span> <span class="n">4</span></span>
+        <div class="group">
+          <div class="tab file on"><svg class="ic s"><use href="#i-file"/></svg><span class="nm">RuntimeManager.ts</span><span class="dot dirty"></span></div>
+          <div class="tab file"><svg class="ic s"><use href="#i-file"/></svg><span class="nm">runtime.ts</span></div>
+        </div>
+        <button class="chev" style="margin-left:auto"><svg class="ic s"><use href="#i-dots"/></svg></button>
+      </div>
+    </div>
+
+    <div class="mini" style="--nw:560px">
+      <div class="mlab"><b>中栏 560</b> <span class="w">Tier M</span> 标题退成短名 · 拆掉文件底板 · 留白改发丝线</div>
+      <div class="bar baronly">
+        <span class="cap"><svg class="ic s cap-ic"><use href="#i-msg"/></svg><span class="cap-l">会话</span><span class="cap-s">会话</span> <span class="n">3</span></span>
+        <div class="tab pill"><span class="av" style="background:#10b981">CG</span><span class="pdot" style="background:#10b981"></span><span class="nm">重构会话映射</span><span class="dot run"></span><span class="x"><svg class="ic xs"><use href="#i-close"/></svg></span></div>
+        <div class="tab pill here"><span class="av" style="background:#10b981">CG</span><span class="pdot" style="background:#10b981"></span><span class="nm">RuntimeManager.ts 空指针</span><span class="x"><svg class="ic xs"><use href="#i-close"/></svg></span></div>
+        <button class="chev"><svg class="ic s"><use href="#i-plus"/></svg></button>
+        <div class="vsep wide"></div>
+        <span class="cap"><svg class="ic s cap-ic"><use href="#i-folder"/></svg><span class="cap-l">编辑区 · <b class="proj">cc-gui</b></span><span class="cap-s">编辑区</span> <span class="n">4</span></span>
+        <div class="group">
+          <div class="tab file on"><svg class="ic s"><use href="#i-file"/></svg><span class="nm">RuntimeManager.ts</span><span class="dot dirty"></span></div>
+          <div class="tab file"><svg class="ic s"><use href="#i-file"/></svg><span class="nm">runtime.ts</span></div>
+        </div>
+        <button class="chev" style="margin-left:auto"><svg class="ic s"><use href="#i-dots"/></svg></button>
+      </div>
+    </div>
+
+    <div class="mini" style="--nw:400px">
+      <div class="mlab"><b>中栏 400</b> <span class="w">Tier S</span> 标题只剩图标+数字 · 头像→色点 · 只剩形状这一条线索</div>
+      <div class="bar baronly">
+        <span class="cap"><svg class="ic s cap-ic"><use href="#i-msg"/></svg><span class="cap-l">会话</span><span class="cap-s">会话</span> <span class="n">3</span></span>
+        <div class="tab pill"><span class="av" style="background:#10b981">CG</span><span class="pdot" style="background:#10b981"></span><span class="nm">重构会话映射</span><span class="dot run"></span><span class="x"><svg class="ic xs"><use href="#i-close"/></svg></span></div>
+        <div class="tab pill here"><span class="av" style="background:#10b981">CG</span><span class="pdot" style="background:#10b981"></span><span class="nm">RuntimeManager.ts 空指针</span><span class="x"><svg class="ic xs"><use href="#i-close"/></svg></span></div>
+        <button class="chev"><svg class="ic s"><use href="#i-plus"/></svg></button>
+        <div class="vsep wide"></div>
+        <span class="cap"><svg class="ic s cap-ic"><use href="#i-folder"/></svg><span class="cap-l">编辑区 · <b class="proj">cc-gui</b></span><span class="cap-s">编辑区</span> <span class="n">4</span></span>
+        <div class="tab file on"><svg class="ic s"><use href="#i-file"/></svg><span class="nm">RuntimeManager.ts</span><span class="dot dirty"></span></div>
+        <div class="tab file"><svg class="ic s"><use href="#i-file"/></svg><span class="nm">runtime.ts</span></div>
+        <button class="chev" style="margin-left:auto"><svg class="ic s"><use href="#i-dots"/></svg></button>
+      </div>
+    </div>
+  </div></div>
+
+  <div class="scrub">
+    <span class="lb2">拖动改中栏宽度</span>
+    <input type="range" id="wRange" min="320" max="1240" step="10" value="1240" aria-label="中栏宽度">
+    <output id="wOut">1240px</output>
+    <div class="presets">
+      <button data-w="1240">1240 宽</button>
+      <button data-w="900">900</button>
+      <button data-w="760">760</button>
+      <button data-w="600">600</button>
+      <button data-w="460">460</button>
+      <button data-w="360">360</button>
+    </div>
+    <span class="tier" id="tierOut">Tier XL · 完整</span>
+  </div>
+
+  <div class="mini">
+    <div class="mlab"><b>B · 单条 strip</b>(上排滑块控制本节所有预览的宽度)</div>
+    <div class="bar baronly">
+      <button class="chev dec"><svg class="ic s"><use href="#i-chevl"/></svg></button>
+      <span class="cap"><svg class="ic s cap-ic"><use href="#i-msg"/></svg><span class="cap-l">会话</span><span class="cap-s">会话</span> <span class="n">3</span></span>
+      <div class="tab pill"><span class="av" style="background:#10b981">CG</span><span class="pdot" style="background:#10b981"></span><span class="nm">重构会话映射</span><span class="dot run"></span><span class="x"><svg class="ic xs"><use href="#i-close"/></svg></span></div>
+      <div class="tab pill here"><span class="av" style="background:#10b981">CG</span><span class="pdot" style="background:#10b981"></span><span class="nm">RuntimeManager.ts 空指针</span><span class="x"><svg class="ic xs"><use href="#i-close"/></svg></span></div>
+      <div class="tab pill"><span class="av" style="background:#818cf8">PM</span><span class="pdot" style="background:#818cf8"></span><span class="nm">marketplace 调研</span><span class="badge">3</span><span class="x"><svg class="ic xs"><use href="#i-close"/></svg></span></div>
+      <button class="chev"><svg class="ic s"><use href="#i-plus"/></svg></button>
+      <div class="vsep wide"></div>
+      <span class="cap"><svg class="ic s cap-ic"><use href="#i-folder"/></svg><span class="cap-l">编辑区 · <b class="proj">cc-gui</b></span><span class="cap-s">编辑区</span> <span class="n">4</span></span>
+      <div class="group">
+        <div class="tab file on"><svg class="ic s"><use href="#i-file"/></svg><span class="nm">RuntimeManager.ts</span><span class="dot dirty"></span></div>
+        <div class="tab file"><svg class="ic s"><use href="#i-file"/></svg><span class="nm">SdkMessageAdapter.ts</span><span class="x"><svg class="ic xs"><use href="#i-close"/></svg></span></div>
+        <div class="tab file"><svg class="ic s"><use href="#i-file"/></svg><span class="nm">runtime.ts</span><span class="x"><svg class="ic xs"><use href="#i-close"/></svg></span></div>
+      </div>
+      <button class="chev" style="margin-left:auto"><svg class="ic s"><use href="#i-dots"/></svg></button>
+    </div>
+  </div>
+
+  <div class="mini">
+    <div class="mlab"><b>B + 窄屏自动多行(推荐逃生舱)</b> —— 中栏 <span class="mono">&lt; 560px</span> 时自动切成这个形态,而不是继续挤</div>
+    <div class="bar baronly wrap">
+      <div class="brow">
+        <span class="cap"><svg class="ic s cap-ic"><use href="#i-msg"/></svg><span class="cap-l">会话</span><span class="cap-s">会话</span> <span class="n">3</span></span>
+        <div class="tab pill here"><span class="av" style="background:#10b981">CG</span><span class="pdot" style="background:#10b981"></span><span class="nm">RuntimeManager.ts 空指针</span><span class="x"><svg class="ic xs"><use href="#i-close"/></svg></span></div>
+        <div class="tab pill"><span class="av" style="background:#10b981">CG</span><span class="pdot" style="background:#10b981"></span><span class="nm">重构会话映射</span><span class="dot run"></span><span class="x"><svg class="ic xs"><use href="#i-close"/></svg></span></div>
+        <div class="tab pill"><span class="av" style="background:#818cf8">PM</span><span class="pdot" style="background:#818cf8"></span><span class="nm">marketplace 调研</span><span class="badge">3</span><span class="x"><svg class="ic xs"><use href="#i-close"/></svg></span></div>
+        <button class="chev"><svg class="ic s"><use href="#i-plus"/></svg></button>
+        <button class="chev" style="margin-left:auto"><svg class="ic s"><use href="#i-dots"/></svg></button>
+      </div>
+      <div class="brow">
+        <span class="cap"><svg class="ic s cap-ic"><use href="#i-folder"/></svg><span class="cap-l">编辑区 · <b class="proj">cc-gui</b></span><span class="cap-s">编辑区</span> <span class="n">4</span></span>
+        <div class="tab file on"><svg class="ic s"><use href="#i-file"/></svg><span class="nm">RuntimeManager.ts</span><span class="dot dirty"></span></div>
+        <div class="tab file"><svg class="ic s"><use href="#i-file"/></svg><span class="nm">SdkMessageAdapter.ts</span><span class="x"><svg class="ic xs"><use href="#i-close"/></svg></span></div>
+        <div class="tab file"><svg class="ic s"><use href="#i-file"/></svg><span class="nm">runtime.ts</span><span class="x"><svg class="ic xs"><use href="#i-close"/></svg></span></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="mini">
+    <div class="mlab"><b>C · 头像轨道</b> —— 窄屏最省宽,但「读标题」退成「认颜色 + 悬停」</div>
+    <div class="bar baronly">
+      <div class="rail">
+        <div class="avbtn" style="background:#10b981">CG</div>
+        <div class="avbtn" style="background:#818cf8">PM</div>
+        <div class="avbtn" style="background:#fbbf24">VO</div>
+        <div class="expand"><svg class="ic s" style="color:var(--accent)"><use href="#i-spark"/></svg><span class="nm">RuntimeManager.ts 空指针</span><span class="dot"></span></div>
+        <button class="chev"><svg class="ic s"><use href="#i-plus"/></svg></button>
+      </div>
+      <div class="vsep wide"></div>
+      <span class="cap"><svg class="ic s cap-ic"><use href="#i-folder"/></svg><span class="cap-l">编辑区 · <b class="proj">cc-gui</b></span><span class="cap-s">编辑区</span> <span class="n">4</span></span>
+      <div class="tab file on"><svg class="ic s"><use href="#i-file"/></svg><span class="nm">RuntimeManager.ts</span><span class="dot dirty"></span></div>
+      <div class="tab file"><svg class="ic s"><use href="#i-file"/></svg><span class="nm">runtime.ts</span><span class="x"><svg class="ic xs"><use href="#i-close"/></svg></span></div>
+      <button class="chev" style="margin-left:auto"><svg class="ic s"><use href="#i-dots"/></svg></button>
+    </div>
+  </div>
+
+  <div class="card" style="padding:6px 4px">
+    <table class="tbl">
+      <thead><tr><th>档位</th><th>中栏宽度</th><th>让位顺序(方案 B)</th><th>会话 tab</th><th>文件 tab</th><th>为什么是这个顺序</th></tr></thead>
+      <tbody>
+        <tr>
+          <td><b>XL</b></td><td><code>≥ 760</code></td>
+          <td>无让位</td>
+          <td>药丸 + 头像 + 标题</td>
+          <td>方片 + 底板,标题 <code>编辑区 · cc-gui</code></td>
+          <td>两条区分线索(形状 + 标题)全在,项目作用域可见。</td>
+        </tr>
+        <tr>
+          <td><b>L</b></td><td><code>600–760</code></td>
+          <td>① 项目名,② 分组留白 30→18px</td>
+          <td>不变</td>
+          <td>标题 <code>编辑区</code>(去项目名)</td>
+          <td>项目名是最长的文本块、也最不需要常驻 —— 它只在切项目那一刻有用。留白属于「奢侈的呼吸感」,先让。</td>
+        </tr>
+        <tr>
+          <td><b>M</b></td><td><code>460–600</code></td>
+          <td>③ 标题正文(退成短名),④ 文件底板,⑤ 收起装饰性 <code>‹</code></td>
+          <td>不变</td>
+          <td>标题 <code>编辑区</code>;底板拆掉(标签回到自由流)</td>
+          <td>底板两侧 padding + 1px border ≈ 10px,是纯视觉容器,窄屏纯浪费。留白改发丝线:窄屏不能既留 30px 空档又画分隔。</td>
+        </tr>
+        <tr>
+          <td><b>S</b></td><td><code>360–460</code></td>
+          <td>⑥ 标题文字,⑦ 会话头像 → 前置色点</td>
+          <td>色点 + 标题;取消头像</td>
+          <td>标题只剩「图标 + 数字」</td>
+          <td><b>色点绝不能一起收掉</b> —— 它是除形状外唯一还剩的「这是会话」线索,且只花 6px。标题退成图标后仍能区分两类,只是丢了类名。</td>
+        </tr>
+        <tr>
+          <td><b>XS</b></td><td><code>&lt; 360</code></td>
+          <td>⑧ 标签 <code>max-w</code> 120→96,⑨ 数量并入 <code>⋯</code> 菜单</td>
+          <td>色点 + 截断标题</td>
+          <td>方片,标题截断</td>
+          <td>到此为止只剩「形状 + 色点」两条线索 —— 已经等于现状的可靠性。所以 <b>Tier S 以下不该继续压缩,该切多行</b>。</td>
+        </tr>
+      </tbody>
+    </table>
+    <div class="src" style="margin-top:8px;font-size:11px;color:var(--content-subtle);border-top:1px dashed var(--edge);padding-top:8px">
+      多行模式另有两条数值:标签的 flex 地板 <code>min-w-[170px]</code> 在 <code>&lt; 460px</code> 时降到 <code>110px</code>(否则一行放不下第二个标签,多行变成「一行一个」);
+      <code>max-h-[82px]</code> 的三行上限在窄屏收到两行 —— 窄屏的用户更经不起条高变化。
+    </div>
+  </div>
+
+  <div class="grid3">
+    <div class="card" style="border-color:color-mix(in srgb,var(--accent) 34%,transparent)">
+      <h3>① 容器查询,不是 JS 断点</h3>
+      <p>降级规则写在 <code>styles.css</code> 里,用 <code>@container tabbar (width &lt; …)</code> 挂到中栏的 <code>container-type:inline-size</code> 上。
+      这样<b>侧栏开合、宽屏 3:7、手机壳、子会话面板全部自动正确</b>,组件里一行 JS 都不用加。</p>
+      <div class="src">复用 <code>.chat-ledger-head</code> 的既有模式 —— 本项目已经在这条路上,没有引入新技术。</div>
+    </div>
+    <div class="card" style="border-color:color-mix(in srgb,var(--accent) 34%,transparent)">
+      <h3>② 形状分化必须是基底,不是增强</h3>
+      <p>药丸(会话)/ 方片(文件)是<b>唯一不占宽度</b>的区分线索。若把它做成「宽屏才有」的样式,窄屏就会连同标题、头像一起丢掉全部线索,退化成现状。
+      所以 <code>rounded-full</code> 与 <code>rounded-md</code> 的分家要写在组件基底类里。</p>
+      <div class="src">这也是「B 先行」成立的前提:它的核心收益恰好是那个不占宽度的收益。</div>
+    </div>
+    <div class="card" style="border-color:color-mix(in srgb,var(--sky) 34%,transparent)">
+      <h3>③ 窄屏用户不让位,让「行」变多</h3>
+      <p>压到 Tier S 时线索已经见底,再降只是把可用性削薄。正确的退出动作是<b>自动切多行</b>(会话一行 / 文件一行)——
+      这正好是<span class="pillbox b">方案 A</span> 的语义,以约 30px 的高度换回「不可能误点」。</p>
+      <div class="src">于是最终形态是连续的:<b>宽屏 B → 中宽 B+多行(=A) → 最窄(&lt;420px)再退到 D</b>。三档共用同一套「会话锚点态」语义,不是三套设计。</div>
+    </div>
+    <div class="card" style="border-color:color-mix(in srgb,var(--amber) 34%,transparent)">
+      <h3>④ 会话组固定、只让文件组滚动(建议一并做)</h3>
+      <p>窄屏下若两组共用一个滚动区,会话标签会被文件挤到视野外 —— 而会话是「我在哪」的答案,恰恰最不该滚出去。
+      建议会话组<b>不参与横向滚动</b>(通常 ≤3 条,~150–200px),只有文件组滚动。</p>
+      <div class="src">这是窄屏最实在的一条改进,也是唯一一条需要动布局的(把滚动容器从「整条」改成「文件组」)。宽屏下两种做法视觉上几乎无差别,可只在窄屏启用。</div>
+    </div>
+    <div class="card">
+      <h3>⑤ 数量必须活下来</h3>
+      <p>组标题逐档让位时,<b>数量不能跟着消失</b> —— 它是「我还有没有没看到的标签」的唯一常驻答案。
+      Tier M 留 <code>图标 + 数字</code>,Tier XS 才把数字并进 <code>⋯</code> 菜单(那里本来就有完整列表)。</p>
+    </div>
+    <div class="card">
+      <h3>⑥ 窄屏的关闭按钮另说</h3>
+      <p>现状是 hover 才出 <code>×</code>。窄屏(触控)没有 hover,<code>×</code> 要么常驻、要么改用长按/中键。建议窄屏下<b>激活标签的 <code>×</code> 常驻</b>(已是现状),非激活标签只在选中后才出 —— 与触控语义一致。</p>
     </div>
   </div>
 </section>
@@ -733,15 +1069,20 @@ rt.lastCwd = ctx.cwd
     </div>
     <div class="card" style="flex:1;min-width:300px">
       <h3>④ 溢出菜单也按组分节</h3>
-      <p><code>TabBarOverflowMenu</code> 现在把两类标签平铺成一条列表,同样混淆。加两个小节标题(会话 / 编辑区 · 项目),与条上的分组口径保持一致。</p>
+      <p><code>TabBarOverflowMenu</code> 现在把两类标签平铺成一条列表,同样混淆。加两个小节标题(会话 / 编辑区 · 项目),与条上的分组口径保持一致。窄屏下标题降级后,这个菜单还是<b>唯一的完整信息出口</b> —— 更要做对。</p>
     </div>
     <div class="card" style="flex:1;min-width:300px">
       <h3>⑤ 多行模式下的分组也要成立</h3>
-      <p>多行换行时两类标签会混在同一片网格里,分组线彻底失效。无论选哪个方案,都要保证换行后「会话块」与「文件块」仍是两片,而不是交错。</p>
+      <p>多行换行时两类标签会混在同一片网格里,分组线彻底失效。方案 B 的窄屏逃生舱要求换行后仍是「会话一行 / 文件一行」两片,而不是交错 —— 即 <b>多行的断行点由分组决定,而不是由宽度自然折行</b>。</p>
     </div>
     <div class="card" style="flex:1;min-width:300px">
       <h3>⑥ 新建会话入口</h3>
       <p>tab 模式目前没有新建会话的按钮(要去左栏)。在会话组尾部补一个 <code>+</code>,与「会话组」这个语义块绑定,顺带强化分组的存在感。</p>
+    </div>
+    <div class="card" style="flex:1;min-width:300px;border-color:color-mix(in srgb,var(--accent) 34%,transparent)">
+      <h3>⑦ 窄宽度用容器查询自动化(本次新增)</h3>
+      <p>不要新增「窄屏开关」这类设置项。把降级规则写成 <code>@container tabbar (width &lt; N)</code>(容器 = 中栏),全部交给 CSS。
+      唯一需要 JS 的是<b>两个结构级切换</b>:<code>&lt;560px</code> 自动进多行、<code>&lt;420px</code> 退上下文条 —— 用 <code>ResizeObserver</code> 读中栏宽度写进 store(与 <code>tabBarMultiRow</code> 同一套状态),而不是新增配置。</p>
     </div>
   </div>
 </section>
@@ -751,31 +1092,48 @@ rt.lastCwd = ctx.cwd
 <section id="verdict" class="scheme" style="flex-direction:column;gap:14px;align-items:stretch">
   <div class="card" style="padding:6px 4px">
     <table class="tbl">
-      <thead><tr><th>方案</th><th>误点消除</th><th>新增高度</th><th>实现量</th><th>主要代价</th></tr></thead>
+      <thead><tr><th>方案</th><th>误点消除</th><th>新增高 度</th><th>实现量</th><th>宽屏(≥760)</th><th>窄屏(460–600)</th><th>极窄(&lt;420)</th></tr></thead>
       <tbody>
-        <tr><td><b>A 分层条</b></td><td>构造上归零(两栏各一种)</td><td>编辑器聚焦时 +30px</td><td>大(两套 strip 状态机)</td><td>多一行;会话条需要独立的溢出/多行策略</td></tr>
-        <tr><td><b>B 双方言 + 组标题</b></td><td>大幅降低(形状 + 标题双重线索)</td><td>0</td><td><b>小</b>(样式 + 文案 + 一处高亮语义)</td><td>仍是一条 strip;窄窗口下标题需降级</td></tr>
-        <tr><td><b>C 头像轨道</b></td><td>大幅降低(色块 vs 标签)</td><td>0</td><td>中(轨道替换会话标签,拖拽语义要重定)</td><td>会话标题默认隐藏,同名/同首字母会话难认</td></tr>
-        <tr><td><b>D 上下文条</b></td><td>构造上归零</td><td>0</td><td>中(需先切视图再选标签)</td><td>从对话直点具体文件多一次点击 —— 不建议</td></tr>
+        <tr>
+          <td><b>A 分层条</b></td><td>构造上归零(两栏各一种)</td><td>编辑器聚焦时 +30px</td><td>大(两套 strip 状态机)</td>
+          <td>可用,但白占一行</td><td><b>最优</b>:不需要任何降级规则</td><td><b>唯一不需要退化的方案</b></td>
+        </tr>
+        <tr>
+          <td><b>B 双方言 + 组标题</b></td><td>大幅降低(形状 + 标题双重线索)</td><td>0</td><td><b>小</b>(样式 + 文案 + 一处高亮语义)</td>
+          <td><b>最优</b>:信息最全</td><td>需按阶梯降级(标题→短名、拆底板)</td><td>线索见底,须切多行或退 D</td>
+        </tr>
+        <tr>
+          <td><b>C 头像轨道</b></td><td>大幅降低(色块 vs 标签)</td><td>0</td><td>中(轨道替换会话标签,拖拽语义要重定)</td>
+          <td>可用,但标题被降级</td><td>省宽最狠</td><td>代价放大:悬停在本就没余量的条上不成立</td>
+        </tr>
+        <tr>
+          <td><b>D 上下文条</b></td><td>构造上归零</td><td>0</td><td>中(需先切视图再选标签)</td>
+          <td>不推荐(直点文件变两次)</td><td>不推荐</td><td><b>反而是正确形态</b></td>
+        </tr>
       </tbody>
     </table>
   </div>
 
   <div class="verdict">
-    <b>建议:B 先行,把 A 留作下一步。</b><br>
-    理由:B 是<b>唯一一个零布局代价</b>就能拿到大部分收益的方案 —— 形状分化(圆药丸 / 方片)+ 组标题(数量 + 项目作用域)+ 会话锚点态,三件事都只是样式与文案,现有滚动/多行/拖拽/右键菜单逻辑一行不用改,评审和回退成本最低。它直接命中你描述的三类困惑:看不清哪类是哪种(形状)、不知道文件属于哪个项目(组标题)、在编辑器里不知道自己在哪条会话(锚点态)。<br>
-    如果做完 B 仍觉得「一条 strip 里放两种东西」这件事本身别扭,再上 <b>A</b> —— 那时你已经有一套通用的分组语义(C 的组标题、锚点态都可复用),把会话组抬到独立一行只是结构位移,不必重做视觉。<br>
-    <b>C</b> 只在会话数量长期很多、且你习惯用颜色/字母而不是标题找人时更优;<b>D</b> 以高频动作多一次点击为代价,不建议作为主形态。
+    <b>建议:宽屏用 B,窄屏自动退化为 A(多行),最窄再退到 D —— 一维连续,不是三套设计。</b><br>
+    <b>宽屏(中栏 ≥760)</b>:B 是唯一零布局代价就能拿到大部分收益的方案 —— 形状分化(圆药丸 / 方片)+ 组标题(数量 + 项目作用域)+ 会话锚点态,三件事都只是样式与文案,现有滚动/多行/拖拽/右键菜单逻辑一行不用改。它直接命中三类困惑:看不清哪类是哪种(形状)、不知道文件属于哪个项目(组标题)、在编辑器里不知道自己在哪条会话(锚点态)。<br>
+    <b>窄屏(460–760)</b>:B 需要一套降级阶梯 —— 按「项目名 → 留白 → 标题正文 → 文件底板 → 头像 → 标题文字 → 标签宽度」的顺序让位。让位的判据只有一条:<b>先收「宽度换信息」的元素,最后才动「形状」</b>,因为形状是唯一不占宽度的线索。<br>
+    <b>极窄(&lt;560 自动多行,&lt;420 退 D)</b>:压到 Tier S 时线索已经见底(只剩形状 + 色点),继续压缩只是把可用性削薄。此时自动切多行 = 用 30px 换回 A 的「不可能误点」;再窄就退到 D 的上下文条 —— 条内只有一种标签,是唯一不需要降级规则也不会退化的形态。<br>
+    <b>A</b> 的实现量最大,但它在窄屏上的收益是零降级成本,所以是「窄屏的正确答案」;把它作为 B 的窄屏退化路径,正好用 B 的样式系统去承载 A 的结构,不必重做视觉。<br>
+    <b>C</b> 只在会话数量长期很多、且习惯用颜色/字母而不是标题找人时更优,且窄屏会把「悬停才可见」的代价放大。
   </div>
 
   <div class="card">
-    <h3>落地顺序(若采纳 B)</h3>
+    <h3>落地顺序(若采纳 B + 窄屏阶梯)</h3>
     <ul>
-      <li>① <code>SortableSessionTab</code> 换药丸形态(项目色头像 + 圆角 + 状态点),<code>SortableFileTab</code> 保持方片并包一层底板容器。</li>
-      <li>② 条上插入两个组标题组件(数量 + 项目名),窄屏时降级为图标 + 数字。</li>
+      <li>① <code>SortableSessionTab</code> 换药丸形态(项目色头像 + 圆角 + 状态点),<code>SortableFileTab</code> 保持方片并包一层底板容器。<b>形状分化写进基底类,不设任何宽度条件。</b></li>
+      <li>② 条上插入两个组标题组件(长/短/图标 三档 DOM 一次写全,由 CSS 切换),项目名与数量分属两个 span 便于逐档隐藏。</li>
       <li>③ 拆分高亮语义:<code>activeTabKey</code> 之外增加「会话锚点」判定,编辑器聚焦时给当前会话上描边态。</li>
-      <li>④ <code>TabBarOverflowMenu</code> 增加分组标题;多行模式下保证两组不交错。</li>
-      <li>⑤ 词条补进 <code>i18n/zh|en/chat-stream.ts</code>(组标题、关闭语义提示),避免硬编码文案。</li>
+      <li>④ <b>在 <code>styles.css</code> 里加 <code>container-type:inline-size; container-name:tabbar</code>(挂 <code>.center</code>)、以及五个 <code>@container tabbar (width &lt; …)</code> 梯队</b> —— 与 <code>.chat-ledger-head</code> 同一模式。侧栏开合、宽屏 3:7、手机壳自动正确。</li>
+      <li>⑤ 两个结构级切换用 <code>ResizeObserver</code> 读中栏宽度写进 store:<code>&lt;560</code> 进多行(按分组断行,不按宽度自然折行)、<code>&lt;420</code> 退上下文条;并相应下调多行的 <code>min-w</code> 地板 170→110、行高上限 82→两行。</li>
+      <li>⑥ <b>会话组固定不横向滚动,只让文件组滚动</b>(可在窄屏启用)。</li>
+      <li>⑦ <code>TabBarOverflowMenu</code> 增加分组标题;多行模式下保证两组不交错。</li>
+      <li>⑧ 词条补进 <code>i18n/zh|en/chat-stream.ts</code>(组标题、关闭语义提示、极窄档的类名提示),避免硬编码文案。</li>
     </ul>
   </div>
 </section>
@@ -783,9 +1141,42 @@ rt.lastCwd = ctx.cwd
 </main>
 
 <script>
-document.getElementById("themeBtn").addEventListener("click", () => {
-  document.body.classList.toggle("light");
-});
+(() => {
+  const root = document.documentElement;
+  const range = document.getElementById("wRange");
+  const out = document.getElementById("wOut");
+  const tierOut = document.getElementById("tierOut");
+
+  // 与 CSS 里的 @container 阈值保持同一组数字 —— 这里只负责「念出来」,
+  // 真正的降级由 CSS 完成(所以改 CSS 阈值时记得同步这张表)。
+  const TIERS = [
+    [760, "Tier XL", "完整"],
+    [600, "Tier L", "收起项目名 · 留白 30→18"],
+    [460, "Tier M", "标题短名 · 拆文件底板 · 换发丝线"],
+    [360, "Tier S", "标题只剩图标+数字 · 头像→色点 · max-w→120"],
+    [-Infinity, "Tier XS", "max-w→96 · 数量并入 ⋯ 菜单"],
+  ];
+
+  function apply(w) {
+    root.style.setProperty("--nw", w + "px");
+    out.textContent = w + "px";
+    const hit = TIERS.find(([min]) => w >= min);
+    tierOut.textContent = hit[1] + " · " + hit[2];
+  }
+
+  range.addEventListener("input", () => apply(+range.value));
+  document.querySelectorAll(".scrub [data-w]").forEach((b) =>
+    b.addEventListener("click", () => {
+      range.value = b.dataset.w;
+      apply(+b.dataset.w);
+    }),
+  );
+  apply(+range.value);
+
+  document.getElementById("themeBtn").addEventListener("click", () => {
+    document.body.classList.toggle("light");
+  });
+})();
 </script>
 </body>
 </html>

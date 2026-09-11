@@ -16,9 +16,8 @@ export const zh = {
   "chatStream.filesChanged": "改 {n} 个文件",
   "chatStream.waitingModel": "等待模型…",
 
-  // ── 运行台账（方案B 形态）台头 ──
+  // ── 运行台账（无框形态）台头 ──
   "chatStream.ledgerRunning": "运行中",
-  "chatStream.ledgerDone": "已完成",
   "chatStream.tokensUsed": "{n} tokens",
   "chatStream.filesChangedShort": "{n} 文件",
 

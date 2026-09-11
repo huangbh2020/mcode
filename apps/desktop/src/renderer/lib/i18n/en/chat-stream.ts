@@ -13,9 +13,8 @@ export const en = {
   "chatStream.filesChanged": "{n} files changed",
   "chatStream.waitingModel": "Waiting for model…",
 
-  // ── Running ledger (Plan B) header ──
+  // ── Running ledger (borderless form) header ──
   "chatStream.ledgerRunning": "Running",
-  "chatStream.ledgerDone": "Completed",
   "chatStream.tokensUsed": "{n} tokens",
   "chatStream.filesChangedShort": "{n} files",
 

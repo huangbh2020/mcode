@@ -3149,7 +3149,6 @@ function ChatPaneForSession({
         return null;
       }
       // item.kind === "turnGroup"
-      const hasProcess = item.panelBlocks.length > 0;
       // turnActive: the turn is still streaming AND the model hasn't started
       // its final reply yet (no post-tool text). While active the TurnPanel
       // auto-expands to show live progress — including any narration text the
@@ -3195,31 +3194,29 @@ function ChatPaneForSession({
           : undefined;
       const body = (
         <>
-          {hasProcess && (
-            <RenderErrorBoundary>
-              <TurnPanel
-                blocks={item.panelBlocks}
-                beforeMap={beforeMap}
-                turnActive={turnActive}
-                turnMeta={item.turnMeta}
-                stats={turnStats}
-                onOpenPlan={onOpenPlan}
-                onToggleCollapse={pauseBottomAnchor}
-                projectPath={projectPath}
-              />
-            </RenderErrorBoundary>
-          )}
-          {/* Text replies (and plan / turn-files / error blocks) stay
-              visible below the panel. hideTurnStat suppresses the
-              per-message stat row ONLY when a TurnPanel is rendered
-              (hasProcess) - its header already shows the turn's 开始/用时,
-              so a second timing line above the reply would be redundant.
-              For pure-text turns (no tools) there's no panel, so we let the
-              first reply message show its own TurnStatRow - otherwise the
-              "开始 · 用时" stat would vanish once the turn ends.
-              tightTop on the FIRST textMsg (process-bearing turns only)
-              tucks the reply under the 「回复」 mark at block-gap tier
-              instead of a full row gap. */}
+          {/* The process panel renders for EVERY turn — turns with no process
+              data (pure-text replies) show the header line only (model ·
+              clock · duration, chevron at the right), keeping the same
+              process-card surface the turn had while it streamed. */}
+          <RenderErrorBoundary>
+            <TurnPanel
+              blocks={item.panelBlocks}
+              beforeMap={beforeMap}
+              turnActive={turnActive}
+              turnMeta={item.turnMeta}
+              stats={turnStats}
+              onOpenPlan={onOpenPlan}
+              onToggleCollapse={pauseBottomAnchor}
+              projectPath={projectPath}
+            />
+          </RenderErrorBoundary>
+          {/* Text replies (and plan / turn-files / error blocks) stay visible
+              below the panel. hideTurnStat is ALWAYS set: the panel header
+              now renders for every turn and already shows the turn's
+              开始/用时, so a second timing line above the reply would be
+              redundant. tightTop on the FIRST textMsg tucks the reply right
+              under the panel header at block-gap tier (紧贴回复内容) instead
+              of a full row gap. */}
           {/*
               isTurnTail is given to the LAST textMsg that has non-empty text,
               not the array-last item: the turn-files extraction above re-
@@ -3250,7 +3247,8 @@ function ChatPaneForSession({
                 isStreamingTail={item.isStreamingTail && idx === item.textMsgs.length - 1}
                 isTurnTail={item.isTurnTail && idx === lastTextIdx}
                 beforeMap={beforeMap}
-                hideTurnStat={hasProcess}
+                hideTurnStat
+                tightTop={idx === 0}
                 onOpenPlan={onOpenPlan}
                 projectPath={projectPath}
               />
@@ -3264,18 +3262,8 @@ function ChatPaneForSession({
           )}
         </>
       );
-      // 纯文本轮次（无过程面）不进生命线结构：MessageRow 自带的上边距会让
-      // 脊线悬在内容上方，且没有过程可"挂线"——按原排版直出。
-      if (!hasProcess) {
-        return (
-          <div
-            key={item.textMsgs[0]?.id ?? `turn-${item.turnMeta?.startedAt ?? ""}`}
-            className="px-[var(--chat-gutter)]"
-          >
-            <div className="mx-auto max-w-5xl">{body}</div>
-          </div>
-        );
-      }
+      // 每个回合现在都渲染过程面板（无过程数据的回合只剩台头行），因此统一
+      // 走生命线结构：卡片与回复挂同一根 .chat-turn 上（方案A 的识别骨架）。
       return (
         <div
           key={item.textMsgs[0]?.id ?? `turn-${item.turnMeta?.startedAt ?? ""}`}

@@ -627,7 +627,14 @@ function markCompletionFoldPlayed(turnMeta?: TurnMeta): void {
  *    the equalizer glyph + clock + ticking duration + current-op ticker; the
  *    done state reads as the turn's receipt line — clock · duration · N 步 ·
  *    改 N 个文件 +a −d (the stats are computed by ChatPane from the turn's
- *    process blocks + trailing turn-files card and passed via `stats`). */
+ *    process blocks + trailing turn-files card and passed via `stats`).
+ *  - 无框形态（2026-09-11）: the surrounding bordered card is gone — the
+ *    header IS the card, a quiet meta line styled like the pure-text turns'
+ *    stat row (model badge · clock · duration), borderless, flush with the
+ *    reply text below, chevron pinned to the row's right edge. Turns WITHOUT
+ *    process data render the panel too (header only; ChatPane no longer
+ *    falls back to a bare TurnStatRow, so every completed turn keeps the same
+ *    process-card surface it had while streaming). */
 export function TurnPanel({
   blocks,
   beforeMap,
@@ -804,11 +811,18 @@ export function TurnPanel({
 
   return (
     <div className="[font-size:var(--chat-fs-sm)]">
-      {/* 运行台账（方案B 形态）：外层一张带边框的卡，台头在运行中数着步子、
-          结束后翻成回执，明细收在下面。onToggleCollapse pauses LegendList's
-          bottom-anchoring BEFORE toggling so it doesn't snap-scroll against
-          the fold. */}
-      <div className="chat-ledger" data-phase={completed ? "done" : "running"} data-open={open ? "true" : "false"}>
+      {/* 无框形态（2026-09-11，替代旧方案B 的带边框卡）：外层不再是有边框/
+          底色的盒，只剩一行安静的元信息台头（模型 · 时钟 · 用时 · 回执统计，
+          右端展开箭头）紧贴回复内容；运行中台头数着步子，结束后翻成回执。
+          data-empty = 无过程明细（纯文本回合）——展开体不渲染、分隔线永藏。
+          onToggleCollapse pauses LegendList's bottom-anchoring BEFORE toggling
+          so it doesn't snap-scroll against the fold. */}
+      <div
+        className="chat-ledger"
+        data-phase={completed ? "done" : "running"}
+        data-open={open ? "true" : "false"}
+        data-empty={blocks.length === 0 || undefined}
+      >
       <button
         type="button"
         onClick={(e) => {
@@ -837,14 +851,12 @@ export function TurnPanel({
           </span>
         ) : (
           <span className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5">
-            <span className="font-semibold text-content">{t("chatStream.ledgerDone")}</span>
             {/* 时钟在窄栏让位（见 styles.css 的窄栏降级规则）——时间线位置
                 本身已提供上下文，它是这一行里价值最低的一项。 */}
             <span className="chat-ledger-clock">
-              <span className="opacity-60">·</span>
               <span className="tabular-nums">{fmtClock(startedAt)}</span>
+              <span className="opacity-60">·</span>
             </span>
-            <span className="opacity-60">·</span>
             <span className="chat-ledger-duration tabular-nums">{fmtDuration(duration)}</span>
             {stats && stats.steps > 0 && (
               <>
@@ -893,6 +905,9 @@ export function TurnPanel({
           content receding instead of a hard clip edge. Content stays mounted in
           both states — it's just clipped — so remounting mid-stream never
           re-flashes the blocks. */}
+      {/* 无过程明细的回合（纯文本回复）没有展开体可渲染：跳过整个 fold,
+          避免展开时出现一条悬空分隔线 + 一段空 padding。 */}
+      {blocks.length > 0 && (
       <div className="chat-fold" data-open={open ? "true" : "false"}>
         <div className="chat-fold-inner">
           <div className="chat-ledger-body space-y-1.5">
@@ -930,6 +945,7 @@ export function TurnPanel({
           </div>
         </div>
       </div>
+      )}
         {/* 底部扫描光带：运行中表示台账"仍在写入"，结清后由 data-phase 收掉。 */}
         <span className="chat-ledger-scan" aria-hidden="true" />
       </div>
