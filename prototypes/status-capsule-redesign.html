@@ -1,0 +1,987 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>聊天区右上角 · 活动胶囊重设计(四方案)</title>
+<style>
+  /* =========================================================================
+   * StatusCapsule(聊天流右上角的活动胶囊)+ ActivityPopover 重设计 · 设计稿
+   *
+   * 现状(StatusCapsule.tsx / ActivityPopover.tsx):
+   *   一颗玻璃药丸 = 计划×N ｜ 子代理数 ｜ 任务 done/total ｜ 书签数 + 下拉箭头
+   *   点击弹 384px 弹层 = 计划列表 / 子代理 / 任务 / 书签 四个可折叠分段竖排。
+   *
+   * 痛点:
+   *   ① 药丸上只有数字——不点开永远不知道"此刻在干什么"(哪个工具、哪个代理)。
+   *   ② 弹层是四段竖排叠栈,内容一多又长又挤;找某一类要滚动,没有导航。
+   *   ③ 四类内容视觉权重完全相同,当前"热"的活动(运行中)不突出。
+   *   ④ 全空时整个消失、出现时挤入,右上有位置跳动感。
+   *   ⑤ 展开态与收起态是两个完全不同的形态,心智上是"开了一个新窗口"。
+   *
+   * 四个方案(同一份数据、同一套交互语义,结构哲学不同):
+   *   A 仪表分段  —— 进化版:药丸分段升级微仪表,弹层从"叠栈"改"页签"
+   *   B 纵向活动栈 —— 取消弹层:每类活动一根行内 chip,悬停预览、点击原地展开
+   *   C 单体指挥卡 —— 取消二段式:一张常驻玻璃卡,收起=头部药丸,展开=全量
+   *   D 轻锚点+宽导航 —— 收起极简圆钮,弹层改 560px 双栏(左导航右内容)
+   *
+   * 所有方案共同保留的既有行为:
+   *   子代理行点击 → 右侧 transcript;计划标题点击 → PlanDrawer;
+   *   书签点击 → 定位消息;BookmarkFly 飞行动画的落点锚点;数字变化弹跳;
+   *   移动端(ActivitySheet)跟随胜出形态做等价改造。
+   * ========================================================================= */
+
+  /* ===== 真实 token(取自 apps/desktop/src/renderer/styles.css) ===== */
+  :root{
+    --surface:255 255 255;
+    --surface-muted:240 242 246;
+    --surface-hover:226 229 235;
+    --content:9 9 11;
+    --content-muted:63 63 70;
+    --content-subtle:113 113 122;
+    --edge:213 216 222;
+    --panel-edge:222 225 231;
+    --accent:5 150 105;
+    --accent-strong:4 120 87;
+    --danger:220 38 38;
+    --warning:180 83 9;
+    --info:124 58 237;
+    --success:4 120 87;
+    --user-bubble:82 82 91;
+    --shadow-card:0 1px 2px rgb(9 9 11 / .05);
+    --shadow-pop:0 14px 40px -12px rgb(9 9 11 / .22), 0 2px 8px rgb(9 9 11 / .06);
+  }
+  [data-theme="dark"]{
+    --surface:26 29 36;
+    --surface-muted:44 49 60;
+    --surface-hover:58 64 78;
+    --content:231 232 236;
+    --content-muted:188 191 198;
+    --content-subtle:158 162 171;
+    --edge:45 51 64;
+    --panel-edge:40 46 58;
+    --accent:16 185 129;
+    --accent-strong:16 185 129;
+    --danger:248 113 113;
+    --warning:251 191 36;
+    --info:167 139 250;
+    --success:16 185 129;
+    --user-bubble:148 163 184;
+    --shadow-card:0 1px 2px rgb(0 0 0 / .3);
+    --shadow-pop:0 16px 44px rgb(0 0 0 / .55), 0 2px 10px rgb(0 0 0 / .35);
+  }
+
+  /* ===== 动效曲线(与 app 内胶囊家族一致) ===== */
+  :root{
+    --ease-out:cubic-bezier(.22,1,.36,1);
+    --spring:cubic-bezier(.34,1.56,.64,1);
+  }
+
+  *{box-sizing:border-box}
+  body{
+    margin:0;background:rgb(var(--surface-muted));color:rgb(var(--content));
+    font-family:-apple-system,"SF Pro Text","Segoe UI","PingFang SC","Microsoft YaHei",system-ui,sans-serif;
+    -webkit-font-smoothing:antialiased;transition:background .25s;
+  }
+  button{font-family:inherit;color:inherit}
+  ul{list-style:none;margin:0;padding:0}
+  p{margin:0}
+  .ic{display:block;flex:none}
+  .wrap{max-width:1180px;margin:0 auto;padding:0 22px 72px}
+
+  /* ===== 页头 ===== */
+  .topbar{padding:22px 0 10px}
+  .topbar h1{font-size:17px;margin:0 0 8px;font-weight:700}
+  .topbar p{margin:0 0 4px;font-size:12.5px;line-height:1.75;color:rgb(var(--content-muted));max-width:900px}
+  .topbar code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11.5px;
+    background:rgb(var(--surface));border:1px solid rgb(var(--edge));border-radius:5px;padding:1px 5px}
+
+  /* ===== 控制条(吸顶) ===== */
+  .ctrlbar{
+    position:sticky;top:0;z-index:80;display:flex;align-items:center;gap:16px;flex-wrap:wrap;
+    padding:10px 14px;margin:8px 0 20px;border-radius:14px;
+    background:rgb(var(--surface)/.86);backdrop-filter:blur(10px);
+    border:1px solid rgb(var(--edge));box-shadow:var(--shadow-card);
+  }
+  .cg{display:flex;align-items:center;gap:6px}
+  .cg>label{font-size:11px;font-weight:700;color:rgb(var(--content-subtle));letter-spacing:.04em}
+  .seg{display:flex;background:rgb(var(--surface-muted));border:1px solid rgb(var(--edge)/.6);border-radius:9px;padding:2px;gap:2px}
+  .seg button{border:none;background:none;cursor:pointer;padding:5px 10px;border-radius:6px;
+    font-size:11.5px;font-weight:600;color:rgb(var(--content-muted));transition:all .15s}
+  .seg button:hover{color:rgb(var(--content));background:rgb(var(--surface-hover)/.7)}
+  .seg button.cur{background:rgb(var(--surface));color:rgb(var(--accent-strong));
+    box-shadow:0 0 0 1px rgb(var(--accent)/.5), 0 1px 2px rgb(9 9 11/.08)}
+  .ctrlhint{font-size:11px;color:rgb(var(--content-subtle));margin-left:auto}
+
+  /* ===== 方案分区 ===== */
+  section.plan{margin:0 0 40px}
+  .plan-h{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin:0 0 6px}
+  .plan-h h2{font-size:15px;margin:0;font-weight:700}
+  .plan-h .en{font-size:11px;color:rgb(var(--content-subtle));font-weight:600;letter-spacing:.06em;text-transform:uppercase}
+  .plan-desc{font-size:12.5px;line-height:1.8;color:rgb(var(--content-muted));max-width:920px;margin:0 0 10px}
+  .traits{display:flex;gap:6px;flex-wrap:wrap;margin:0 0 12px}
+  .trait{font-size:10.5px;font-weight:600;padding:3px 9px;border-radius:999px;border:1px solid rgb(var(--edge));
+    color:rgb(var(--content-muted));background:rgb(var(--surface))}
+  .trait.good{color:rgb(var(--accent-strong));border-color:rgb(var(--accent)/.45);background:rgb(var(--accent)/.08)}
+  .trait.bad{color:rgb(var(--warning));border-color:rgb(var(--warning)/.4);background:rgb(var(--warning)/.08)}
+  [data-theme="light"] .trait.bad{color:rgb(var(--warning))}
+  .trait.info{color:rgb(var(--info));border-color:rgb(var(--info)/.4);background:rgb(var(--info)/.08)}
+
+  /* ===== 演示舞台:模拟聊天面板的右上角 ===== */
+  .stage{
+    position:relative;height:430px;border:1px solid rgb(var(--panel-edge));border-radius:16px;
+    background:rgb(var(--surface));box-shadow:var(--shadow-card);overflow:hidden;
+  }
+  /* 聊天流背景骨架(低透明度,顶部渐隐) */
+  .bd{position:absolute;inset:0;padding:64px 8% 0;opacity:.5;
+    -webkit-mask-image:linear-gradient(180deg,transparent 0,#000 72px);
+    mask-image:linear-gradient(180deg,transparent 0,#000 72px);pointer-events:none}
+  .bd-user{margin:0 0 14px auto;width:46%;border-radius:14px 14px 4px 14px;padding:9px 12px;
+    background:rgb(var(--user-bubble)/.28);font-size:11.5px;color:rgb(var(--content-muted))}
+  .bd-card{border:1px solid rgb(var(--edge)/.7);border-radius:12px;padding:12px 14px;width:78%;background:rgb(var(--surface-muted)/.4)}
+  .bd-agent-h{display:flex;align-items:center;gap:6px;font-size:10px;font-weight:700;color:rgb(var(--content-subtle));margin-bottom:8px}
+  .bd-agent-h i{width:6px;height:6px;border-radius:50%;background:rgb(var(--accent));display:block}
+  .bd-line{height:7px;border-radius:4px;background:rgb(var(--content-subtle)/.22);margin:7px 0}
+  .bd-line.w95{width:95%}.bd-line.w80{width:80%}.bd-line.w60{width:60%}
+  .bd-tool{display:inline-flex;align-items:center;gap:6px;margin:8px 0;border:1px solid rgb(var(--edge));
+    border-radius:8px;padding:4px 8px;font-size:10px;color:rgb(var(--content-subtle));background:rgb(var(--surface-muted)/.6)}
+  .bd-tool b{width:5px;height:5px;border-radius:2px;background:rgb(var(--info)/.7)}
+  /* 舞台角标 */
+  .stage-tag{position:absolute;left:12px;bottom:10px;font-size:10px;color:rgb(var(--content-subtle));
+    font-weight:600;letter-spacing:.05em;opacity:.8}
+
+  /* 胶囊锚点:对齐 app 的 absolute right-8 top-2 */
+  .anchor{position:absolute;top:12px;right:22px;z-index:30}
+
+  /* ===== 通用活动配色 ===== */
+  .c-plan{color:rgb(var(--info))}
+  .c-sub{color:rgb(var(--warning))}
+  .c-task{color:rgb(var(--accent))}
+  .c-bmk{color:rgb(var(--content-subtle))}
+  .t-warn{color:rgb(var(--warning))}
+  .t-ok{color:rgb(var(--accent-strong))}
+  [data-theme="dark"] .t-ok{color:rgb(var(--accent))}
+  .t-bad{color:rgb(var(--danger))}
+
+  /* ===== 通用小零件 ===== */
+  .pdot{display:inline-block;width:5px;height:5px;border-radius:50%;background:rgb(var(--warning));
+    animation:blink 1.2s ease-in-out infinite;margin-right:4px;vertical-align:1px}
+  @keyframes blink{0%,100%{opacity:1}50%{opacity:.25}}
+  .breathe{position:absolute;inset:-6px;border-radius:999px;background:rgb(var(--warning)/.2);
+    filter:blur(10px);animation:breathe 2.2s ease-in-out infinite;pointer-events:none}
+  @keyframes breathe{0%,100%{opacity:.35;transform:scale(.96)}50%{opacity:.9;transform:scale(1.04)}}
+  @keyframes cpop{0%{transform:scale(.55);opacity:.3}60%{transform:scale(1.18)}100%{transform:scale(1)}}
+  .cpop{animation:cpop .2s var(--spring)}
+  @keyframes popin{from{opacity:0;transform:scale(.94) translateY(-5px)}to{opacity:1;transform:none}}
+  .popin{animation:popin .2s var(--ease-out);transform-origin:top right}
+  @keyframes rot{to{transform:rotate(360deg)}}
+  .donut{transform:rotate(-90deg)}
+  .donut circle{fill:none;stroke-width:2.6}
+  .donut .bgc{stroke:rgb(var(--edge))}
+  .donut .fgc{stroke:currentColor;stroke-linecap:round;transition:stroke-dasharray .45s var(--ease-out)}
+  .divider-v{width:1px;height:12px;align-self:center;
+    background:linear-gradient(180deg,transparent,rgb(var(--content-subtle)/.5),transparent)}
+  /* 运行中子代理行的左侧流光 */
+  .shimmer{position:absolute;left:0;top:9px;bottom:9px;width:2px;border-radius:2px;
+    background:rgb(var(--surface-hover));overflow:hidden}
+  .shimmer::after{content:"";position:absolute;left:0;right:0;top:-45%;height:70%;
+    background:linear-gradient(180deg,transparent,rgb(var(--warning)),transparent);
+    animation:sweep 1.5s linear infinite}
+  @keyframes sweep{to{top:120%}}
+  .stag{font-size:9px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;
+    padding:1.5px 6px;border-radius:5px;background:rgb(var(--info)/.16);color:rgb(var(--info))}
+  .sch{font-size:9px;padding:2px 6px;border-radius:5px;background:rgb(var(--surface-muted));
+    color:rgb(var(--content-subtle));font-variant-numeric:tabular-nums;white-space:nowrap}
+  .sch.tool{color:rgb(var(--content-muted));font-weight:600}
+
+  /* =========================================================================
+   * 现状参照(静态复刻)
+   * ========================================================================= */
+  .cur-pill{display:flex;align-items:center;gap:4px;padding:4px 8px;border-radius:999px;
+    font-size:11px;font-weight:500;font-variant-numeric:tabular-nums;
+    background:rgb(var(--surface-muted)/.92);backdrop-filter:blur(10px);
+    box-shadow:inset 0 1px 0 rgb(255 255 255/.12), 0 8px 20px -6px rgb(0 0 0/.3);
+    border:1px solid rgb(var(--edge)/.5)}
+  .cur-pill .seg-ic{display:flex;align-items:center;gap:3px}
+  .painlist{margin:10px 0 0;padding:0;max-width:900px}
+  .painlist li{font-size:12.5px;line-height:1.9;color:rgb(var(--content-muted));padding-left:18px;position:relative}
+  .painlist li::before{content:"";position:absolute;left:2px;top:9px;width:7px;height:7px;border-radius:2px;
+    background:rgb(var(--danger)/.75)}
+
+  /* =========================================================================
+   * 方案 A · 仪表分段 + 页签弹层
+   * ========================================================================= */
+  .a-pill{position:relative;display:flex;align-items:center;gap:5px;padding:4px 6px 4px 9px;border-radius:999px;
+    font-size:11px;font-weight:500;font-variant-numeric:tabular-nums;
+    background:rgb(var(--surface-muted)/.92);backdrop-filter:blur(10px);border:none;cursor:pointer;
+    box-shadow:inset 0 1px 0 rgb(255 255 255/.12), 0 8px 20px -6px rgb(0 0 0/.3), 0 0 0 1px rgb(var(--edge)/.4);
+    transition:transform .18s var(--ease-out), box-shadow .18s}
+  .a-pill:hover{transform:translateY(-1px)}
+  .a-seg{display:flex;align-items:center;gap:4px;color:rgb(var(--content))}
+  .a-seg.muted{color:rgb(var(--content-muted))}
+  .a-seg.hot .donut .fgc{color:rgb(var(--warning))}
+  .a-seg .donut{color:rgb(var(--accent-strong))}
+  [data-theme="dark"] .a-seg .donut{color:rgb(var(--accent))}
+  .a-seg.hot .donut{color:rgb(var(--warning))}
+  .a-chev{transition:transform .2s var(--ease-out);opacity:.6}
+  .a-pill.open .a-chev{transform:rotate(180deg)}
+  /* 弹层 */
+  .a-pop{position:absolute;right:0;top:36px;width:400px;border-radius:16px;overflow:hidden;z-index:40;
+    background:rgb(var(--surface)/.97);backdrop-filter:blur(14px);border:1px solid rgb(var(--edge));
+    box-shadow:var(--shadow-pop)}
+  .a-tabs{display:flex;gap:4px;padding:8px 8px 0}
+  .atab{flex:1;min-width:0;display:flex;align-items:center;justify-content:center;gap:4px;border:none;cursor:pointer;
+    padding:6px 2px;border-radius:9px;font-size:10.5px;font-weight:600;color:rgb(var(--content-subtle));
+    background:transparent;transition:all .15s;font-variant-numeric:tabular-nums;white-space:nowrap;position:relative}
+  .atab:hover{background:rgb(var(--surface-muted));color:rgb(var(--content))}
+  .atab.cur{background:rgb(var(--surface-hover));color:rgb(var(--content));
+    box-shadow:inset 0 0 0 1px rgb(var(--edge))}
+  .atab .cnt{font-size:9.5px;padding:0 5px;border-radius:999px;background:rgb(var(--surface-muted));color:rgb(var(--content-subtle))}
+  .atab.cur .cnt{background:rgb(var(--accent)/.16);color:rgb(var(--accent-strong))}
+  [data-theme="dark"] .atab.cur .cnt{color:rgb(var(--accent))}
+  .atab .runbar{position:absolute;top:1px;left:50%;transform:translateX(-50%);width:16px;height:2px;border-radius:2px;
+    background:rgb(var(--warning));animation:blink 1.2s ease-in-out infinite}
+  .a-body{max-height:264px;overflow-y:auto;padding:4px 0 6px}
+  .a-body::-webkit-scrollbar{width:8px}
+  .a-body::-webkit-scrollbar-thumb{background:rgb(var(--surface-hover));border-radius:4px;border:2px solid transparent;background-clip:content-box}
+  .a-empty{padding:26px 0;text-align:center;font-size:11.5px;color:rgb(var(--content-subtle))}
+
+  /* 通用行(子代理 / 任务 / 计划 / 书签) */
+  .row{position:relative;padding:8px 14px 8px 17px;transition:background .12s;cursor:pointer}
+  .row:hover{background:rgb(var(--surface-muted))}
+  .row .sbar{position:absolute;left:0;top:9px;bottom:9px;width:2px;border-radius:2px}
+  .row .sbar.ok{background:rgb(var(--accent)/.5)}
+  .row .sbar.bad{background:rgb(var(--danger)/.5)}
+  .r-l1{display:flex;align-items:center;gap:6px;min-width:0}
+  .r-l1 .st{font-size:10px;color:rgb(var(--content-subtle))}
+  .r-l1 .st.run{color:rgb(var(--warning));font-weight:600}
+  .r-l1 .tm{margin-left:auto;font-size:9.5px;color:rgb(var(--content-subtle));font-variant-numeric:tabular-nums}
+  .r-desc{margin-top:3px;font-size:11.5px;color:rgb(var(--content));overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .r-chips{display:flex;gap:4px;margin-top:5px;flex-wrap:wrap}
+  /* 任务行 */
+  .trow{display:flex;align-items:flex-start;gap:7px;padding:6px 14px;border-left:2px solid transparent}
+  .trow.p-high{border-left-color:rgb(var(--danger)/.55)}
+  .trow.p-med{border-left-color:rgb(var(--warning)/.55)}
+  .trow.p-low{border-left-color:rgb(var(--content-subtle)/.45)}
+  .trow .txt{font-size:11.5px;line-height:1.55;color:rgb(var(--content-muted))}
+  .trow.done .txt{color:rgb(var(--content-subtle));text-decoration:line-through}
+  .tprog{padding:2px 14px 6px}
+  .tprog .track{height:3px;border-radius:2px;background:rgb(var(--surface-muted));overflow:hidden}
+  .tprog .fill{height:100%;border-radius:2px;background:rgb(var(--accent));transition:width .4s var(--ease-out)}
+  .tprog .lab{font-size:9.5px;color:rgb(var(--content-subtle));margin-top:4px;font-variant-numeric:tabular-nums}
+  /* 计划行 */
+  .prow{display:flex;align-items:center;gap:8px;padding:7px 14px}
+  .prow .idx{font-size:10px;color:rgb(var(--content-subtle));font-variant-numeric:tabular-nums}
+  .prow .ti{font-size:11.5px;color:rgb(var(--content));overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  /* 书签行 */
+  .brow{display:flex;align-items:center;gap:8px;padding:7px 14px}
+  .brow .ti{font-size:11.5px;color:rgb(var(--content));overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}
+  .brow .tm{font-size:9.5px;color:rgb(var(--content-subtle));font-variant-numeric:tabular-nums}
+
+  /* =========================================================================
+   * 方案 B · 纵向活动栈
+   * ========================================================================= */
+  .bstack{display:flex;flex-direction:column;align-items:flex-end;gap:6px}
+  .bitem{display:flex;flex-direction:column;align-items:flex-end;max-width:340px}
+  .bchip{position:relative;display:flex;align-items:center;gap:6px;height:27px;padding:0 10px;border-radius:999px;
+    border:1px solid rgb(var(--edge));background:rgb(var(--surface-muted)/.85);backdrop-filter:blur(8px);
+    font-size:11px;font-weight:600;font-variant-numeric:tabular-nums;cursor:pointer;overflow:hidden;
+    transition:border-color .2s, background .2s, box-shadow .2s;white-space:nowrap}
+  .bchip:hover{border-color:rgb(var(--content-subtle)/.5)}
+  .bchip.hot{border-color:rgb(var(--warning)/.55);background:rgb(var(--surface-muted)/.92)}
+  .bchip .more{max-width:0;opacity:0;overflow:hidden;font-weight:500;color:rgb(var(--content-subtle));
+    transition:max-width .28s var(--ease-out), opacity .2s, margin .28s var(--ease-out);white-space:nowrap}
+  .bchip:hover .more{max-width:230px;opacity:1;margin-left:2px}
+  .bchip .mini-track{width:36px;height:3px;border-radius:2px;background:rgb(var(--surface-hover));overflow:hidden}
+  .bchip .mini-fill{height:100%;background:rgb(var(--accent));transition:width .4s var(--ease-out)}
+  .bchip .tick{color:rgb(var(--content-subtle));font-weight:500}
+  /* 行内展开面板(手风琴) */
+  .bpanel{display:grid;grid-template-rows:0fr;transition:grid-template-rows .32s var(--ease-out);width:100%}
+  .bitem.open .bpanel{grid-template-rows:1fr}
+  .bpanel-in{overflow:hidden;display:flex;justify-content:flex-end}
+  .bcard{margin-top:6px;width:300px;border-radius:13px;overflow:hidden;background:rgb(var(--surface)/.97);
+    backdrop-filter:blur(12px);border:1px solid rgb(var(--edge));box-shadow:var(--shadow-pop);
+    animation:popin .22s var(--ease-out);transform-origin:top right}
+  .bcard-h{display:flex;align-items:center;gap:6px;padding:8px 12px;font-size:10.5px;font-weight:700;
+    color:rgb(var(--content-subtle));border-bottom:1px solid rgb(var(--edge)/.6);letter-spacing:.03em}
+  .bcard-h .r{margin-left:auto;font-weight:500;font-variant-numeric:tabular-nums}
+  .bcard .blist{max-height:216px;overflow-y:auto;padding:3px 0 5px}
+  .bcard .blist::-webkit-scrollbar{width:8px}
+  .bcard .blist::-webkit-scrollbar-thumb{background:rgb(var(--surface-hover));border-radius:4px;border:2px solid transparent;background-clip:content-box}
+  .bdots{display:flex;gap:2.5px;align-items:center}
+  .bdots i{width:5px;height:5px;border-radius:50%;background:rgb(var(--surface-hover))}
+  .bdots i.run{background:rgb(var(--warning));animation:blink 1.2s ease-in-out infinite}
+  .bdots i.ok{background:rgb(var(--accent)/.8)}
+  .bdots i.bad{background:rgb(var(--danger)/.8)}
+
+  /* =========================================================================
+   * 方案 C · 单体指挥卡
+   * ========================================================================= */
+  .ccard{width:300px;border-radius:16px;overflow:hidden;background:rgb(var(--surface)/.94);
+    backdrop-filter:blur(14px);border:1px solid rgb(var(--edge));
+    box-shadow:var(--shadow-pop), inset 0 1px 0 rgb(255 255 255/.06);position:relative}
+  .ccard .breathe{border-radius:16px}
+  .c-head{display:flex;align-items:center;gap:6px;padding:9px 12px 7px}
+  .c-head .ti{font-size:10.5px;font-weight:700;letter-spacing:.06em;color:rgb(var(--content-subtle))}
+  .c-head .live{display:flex;align-items:center;gap:4px;margin-left:auto;font-size:9.5px;font-weight:700;color:rgb(var(--warning))}
+  .c-chev{border:none;background:none;cursor:pointer;padding:2px;border-radius:6px;color:rgb(var(--content-subtle));
+    display:flex;transition:transform .25s var(--ease-out)}
+  .ccard.min .c-chev{transform:rotate(180deg)}
+  .c-spine{display:flex;gap:2px;padding:0 12px;height:4px}
+  .c-spine span{border-radius:2px;min-width:6px;transition:flex .4s var(--ease-out)}
+  .c-spine .s-plan{background:rgb(var(--info)/.75)}
+  .c-spine .s-sub{background:rgb(var(--warning)/.8)}
+  .c-spine .s-task{background:linear-gradient(90deg,rgb(var(--accent)) var(--p,30%),rgb(var(--surface-hover)) var(--p,30%))}
+  .c-spine .s-bmk{background:rgb(var(--content-subtle)/.5)}
+  .c-metrics{display:grid;grid-template-columns:repeat(4,1fr);padding:8px 8px 6px;gap:2px}
+  .cm{border:none;background:none;cursor:pointer;border-radius:10px;padding:6px 2px 5px;text-align:center;
+    transition:background .15s, box-shadow .15s}
+  .cm:hover{background:rgb(var(--surface-muted))}
+  .cm.cur{background:rgb(var(--surface-hover));box-shadow:inset 0 0 0 1px rgb(var(--edge))}
+  .cm .v{font-size:14px;font-weight:700;font-variant-numeric:tabular-nums;color:rgb(var(--content));line-height:1.15}
+  .cm .v small{font-size:10px;font-weight:600;color:rgb(var(--content-subtle))}
+  .cm .k{font-size:9px;color:rgb(var(--content-subtle));margin-top:1px;font-weight:600}
+  .cm.hot .v{color:rgb(var(--warning))}
+  .c-ticker{display:flex;align-items:center;gap:7px;margin:0 12px;padding:7px 10px;border-radius:9px;
+    background:rgb(var(--surface-muted)/.7);font-size:10.5px;color:rgb(var(--content-muted));overflow:hidden}
+  .c-ticker .dot{width:6px;height:6px;border-radius:50%;background:rgb(var(--warning));animation:blink 1.1s ease-in-out infinite;flex:none}
+  .c-ticker .tx{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-variant-numeric:tabular-nums}
+  .c-ticker b{color:rgb(var(--content));font-weight:600}
+  .c-body{max-height:216px;overflow-y:auto;padding:4px 0 6px;border-top:1px solid rgb(var(--edge)/.55);margin-top:8px}
+  .c-body::-webkit-scrollbar{width:8px}
+  .c-body::-webkit-scrollbar-thumb{background:rgb(var(--surface-hover));border-radius:4px;border:2px solid transparent;background-clip:content-box}
+  .ccard.min .c-body,.ccard.min .c-ticker{display:none}
+  .ccard.min .c-spine{padding-bottom:0}
+  .ccard.min{width:264px}
+
+  /* =========================================================================
+   * 方案 D · 轻锚点 + 宽导航弹层
+   * ========================================================================= */
+  .d-fab{position:relative;width:34px;height:34px;border-radius:50%;border:1px solid rgb(var(--edge)/.6);
+    background:rgb(var(--surface-muted)/.92);backdrop-filter:blur(10px);cursor:pointer;
+    box-shadow:0 8px 20px -6px rgb(0 0 0/.3), inset 0 1px 0 rgb(255 255 255/.12);
+    display:flex;align-items:center;justify-content:center;transition:transform .18s var(--ease-out)}
+  .d-fab:hover{transform:translateY(-1px)}
+  .d-fab .total{position:absolute;top:-4px;right:-4px;min-width:15px;height:15px;padding:0 4px;border-radius:999px;
+    background:rgb(var(--content));color:rgb(var(--surface));font-size:9px;font-weight:700;
+    display:flex;align-items:center;justify-content:center;font-variant-numeric:tabular-nums;
+    box-shadow:0 1px 4px rgb(0 0 0/.35)}
+  .d-fab .oring{position:absolute;inset:-4.5px;animation:rot 1.9s linear infinite;pointer-events:none}
+  .d-fab .oring circle{fill:none;stroke:rgb(var(--warning));stroke-width:2.4;stroke-linecap:round;opacity:.9}
+  .d-spark{position:absolute;left:50%;transform:translateX(-50%);bottom:-9px;display:flex;gap:2px;align-items:flex-end;height:9px}
+  .d-spark i{width:3px;border-radius:1.5px;min-height:3px}
+  .d-pop{position:absolute;right:0;top:44px;width:576px;border-radius:16px;overflow:hidden;z-index:40;
+    background:rgb(var(--surface)/.97);backdrop-filter:blur(14px);border:1px solid rgb(var(--edge));
+    box-shadow:var(--shadow-pop);display:grid;grid-template-columns:172px 1fr;animation:popin .2s var(--ease-out);transform-origin:top right}
+  .d-nav{border-right:1px solid rgb(var(--edge)/.6);padding:8px 6px;background:rgb(var(--surface-muted)/.35);display:flex;flex-direction:column;gap:2px}
+  .dnav-it{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:8px 9px;border-radius:9px;border:none;background:none;
+    cursor:pointer;text-align:left;font-size:11.5px;font-weight:600;color:rgb(var(--content-muted));transition:all .13s;width:100%}
+  .dnav-it:hover{background:rgb(var(--surface-muted));color:rgb(var(--content))}
+  .dnav-it.cur{background:rgb(var(--surface-hover));color:rgb(var(--content));box-shadow:inset 0 0 0 1px rgb(var(--edge))}
+  .dnav-it .lb{white-space:nowrap}
+  .dnav-it .n{margin-left:auto;font-size:10px;font-weight:700;color:rgb(var(--content-subtle));font-variant-numeric:tabular-nums}
+  .dnav-it.cur .n{color:rgb(var(--accent-strong))}
+  [data-theme="dark"] .dnav-it.cur .n{color:rgb(var(--accent))}
+  .dnav-it .sub{display:flex;flex-direction:column;gap:3px;flex-basis:100%;margin-top:2px}
+  .dnav-it .sub em{font-style:normal;font-size:9.5px;font-weight:500;color:rgb(var(--content-subtle));
+    overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:118px}
+  .d-pane{display:flex;flex-direction:column;min-width:0}
+  .d-pane-h{display:flex;align-items:center;gap:8px;padding:10px 14px 8px;border-bottom:1px solid rgb(var(--edge)/.5)}
+  .d-pane-h .ti{font-size:12px;font-weight:700}
+  .d-pane-h .meta{margin-left:auto;font-size:10px;color:rgb(var(--content-subtle));font-variant-numeric:tabular-nums}
+  .d-pane-bd{max-height:318px;overflow-y:auto;padding:4px 0 6px}
+  .d-pane-bd::-webkit-scrollbar{width:8px}
+  .d-pane-bd::-webkit-scrollbar-thumb{background:rgb(var(--surface-hover));border-radius:4px;border:2px solid transparent;background-clip:content-box}
+
+  /* ===== 对比表 ===== */
+  .cmp{width:100%;border-collapse:separate;border-spacing:0;font-size:12px;margin-top:8px;
+    border:1px solid rgb(var(--edge));border-radius:12px;overflow:hidden}
+  .cmp th,.cmp td{padding:9px 12px;text-align:left;border-bottom:1px solid rgb(var(--edge)/.55)}
+  .cmp tr:last-child td{border-bottom:none}
+  .cmp th{background:rgb(var(--surface-muted));font-size:11px;color:rgb(var(--content-subtle));font-weight:700}
+  .cmp td:first-child{font-weight:700;white-space:nowrap}
+  .cmp .rec{color:rgb(var(--accent-strong));font-weight:700}
+  [data-theme="dark"] .cmp .rec{color:rgb(var(--accent))}
+  .foot-note{margin-top:14px;font-size:12px;line-height:1.9;color:rgb(var(--content-muted));max-width:920px}
+
+  /* ===== 悬停提示 ===== */
+  [data-tip]{position:relative}
+  [data-tip]:hover::after{content:attr(data-tip);position:absolute;bottom:calc(100% + 6px);left:50%;transform:translateX(-50%);
+    background:rgb(var(--content));color:rgb(var(--surface));font-size:10px;font-weight:600;padding:3px 8px;border-radius:6px;
+    white-space:nowrap;z-index:60;pointer-events:none}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="topbar">
+    <h1>聊天区右上角 · 活动胶囊重设计(四方案)</h1>
+    <p>对象:<code>StatusCapsule.tsx</code>(玻璃药丸:计划 ×N ｜ 子代理数 ｜ 任务 done/total ｜ 书签数)+ <code>ActivityPopover.tsx</code>(384px 四段竖排叠栈弹层)。</p>
+    <p>核心问题:药丸上只有<b>数字</b>没有<b>状态</b>——运行中"此刻在干什么"必须点开才知道;弹层四段竖排在内容多时又长又挤;四类活动视觉权重相同,当前"热"的活动不突出。</p>
+    <p>下面四个方案共用同一份场景数据,收起态、运行态、展开态都可交互。所有方案均保留:子代理行 → 右侧 transcript、计划标题 → PlanDrawer、书签 → 定位消息、BookmarkFly 落点锚点、数字变化弹跳;移动端 ActivitySheet 做等价形态。</p>
+  </header>
+
+  <div class="ctrlbar">
+    <div class="cg"><label>主题</label>
+      <div class="seg" id="segTheme">
+        <button data-th="dark" class="cur">暗色</button><button data-th="light">亮色</button>
+      </div>
+    </div>
+    <div class="cg"><label>场景</label>
+      <div class="seg" id="segScene">
+        <button data-sc="running" class="cur">运行中</button><button data-sc="done">回合完成</button><button data-sc="full">满载拥挤</button>
+      </div>
+    </div>
+    <span class="ctrlhint">点击胶囊 / 分段试试展开;悬停 chip 看预览</span>
+  </div>
+
+  <!-- ══════════════════ 现状参照 ══════════════════ -->
+  <section class="plan">
+    <div class="plan-h"><h2>现状参照</h2><span class="en">current</span></div>
+    <p class="plan-desc">药丸 = 图标 + 计数,弹层 = 四段竖排。问题一目了然:五段挤在一起时"哪段在动"靠一颗小脉冲点,悬停无任何预览。</p>
+    <div class="stage" id="stageCur">
+      <div class="anchor">
+        <div style="position:relative">
+          <span class="breathe" id="curBreathe"></span>
+          <div class="cur-pill" id="curPill"></div>
+        </div>
+      </div>
+      <div class="stage-tag">现状 · 仅示意收起态</div>
+    </div>
+    <ul class="painlist">
+      <li><b>有数字、无状态</b>:子代理段只有 "2",在跑哪个工具/什么描述要开弹层滚到子代理段才能看到。</li>
+      <li><b>弹层是竖排叠栈</b>:四段全展开时高度轻松超 600px,找"任务"要滚过计划和子代理;折叠状态能记住但导航成本仍在。</li>
+      <li><b>权重无差别</b>:书签(冷数据)与运行中子代理(热数据)占用同样的视觉重量。</li>
+      <li><b>任务进度不可读</b>:"2/7" 要心算百分比;完成过程中没有可视的进度感。</li>
+    </ul>
+  </section>
+
+  <!-- ══════════════════ 方案 A ══════════════════ -->
+  <section class="plan">
+    <div class="plan-h"><h2>方案 A · 仪表分段 + 页签弹层</h2><span class="en">A · gauged segments, tabbed popover</span></div>
+    <p class="plan-desc">对现状的<b>最小进化</b>:药丸保持一颗,但子代理 / 任务两段各升级为一枚 15px <b>微进度环</b>(任务 = 完成度弧,子代理 = 运行占比弧);弹层从"四段竖排叠栈"改为<b>分段页签</b>——顶部一排页签(带计数,运行中的页签闪一条琥珀横杠),下方单内容区。热活动(运行中)默认选中页签。</p>
+    <div class="traits">
+      <span class="trait good">学习成本最低(形态延续现状)</span>
+      <span class="trait good">弹层高度恒定,导航 O(1)</span>
+      <span class="trait good">微仪表让进度一眼可读</span>
+      <span class="trait bad">收起态信息量提升有限(仍是数字为主)</span>
+      <span class="trait info">改动范围:胶囊两段 + 弹层壳,四个分段组件基本复用</span>
+    </div>
+    <div class="stage" id="stageA"><div class="stage-tag">方案 A · 点药丸展开;点页签切换</div></div>
+  </section>
+
+  <!-- ══════════════════ 方案 B ══════════════════ -->
+  <section class="plan">
+    <div class="plan-h"><h2>方案 B · 纵向活动栈</h2><span class="en">B · vertical live dock</span></div>
+    <p class="plan-desc">换一个结构哲学:<b>取消弹层</b>。右上角变成一列右对齐的独立 chip(每类活动一根),运行中的 chip 上直接显示<b>当下</b>——子代理 chip 内嵌"工具 · 目标"实时条,任务 chip 内嵌迷你进度条。<b>悬停</b>展开一行预览(正在跑什么),<b>点击</b> chip 原地向下展开迷你卡片(手风琴),不再有浮层。回合结束后整列降饱和为冷色档案态。</p>
+    <div class="traits">
+      <span class="trait good">运行状态"零点击"可见(信息最即时)</span>
+      <span class="trait good">无浮层,展开不遮挡消息流中心</span>
+      <span class="trait good">各类活动天然分组,互不挤压</span>
+      <span class="trait bad">纵向占高;满载时(4+ 类)右边缘变"仪表墙"</span>
+      <span class="trait bad">BookmarkFly 落点从"一颗药丸"变"一根 chip",锚点要改</span>
+      <span class="trait info">改动范围:胶囊整体重写;弹层四个分段组件改造为手风琴卡片</span>
+    </div>
+    <div class="stage" id="stageB"><div class="stage-tag">方案 B · 悬停 chip 看预览;点击原地展开</div></div>
+  </section>
+
+  <!-- ══════════════════ 方案 C ══════════════════ -->
+  <section class="plan">
+    <div class="plan-h"><h2>方案 C · 单体指挥卡</h2><span class="en">C · unified command card</span></div>
+    <p class="plan-desc">取消"收起 / 弹层"二段式:右上角常驻<b>一张玻璃卡</b>。卡内自上而下:活动脊线(四类活动的相对体量,任务段内嵌完成度填充)→ 四格指标(点击切换焦点分区)→ <b>实时操作行</b>(正在跑的工具/代理,流光点缀)→ 焦点分区内容。点右上角箭头整卡收成 264px 的"指标条"——即现状药丸的完全体。一张卡内完成收起 ↔ 展开的连续变形,没有第二个浮层。</p>
+    <div class="traits">
+      <span class="trait good">单一形态,心智最简单(无"开窗口"感)</span>
+      <span class="trait good">实时操作行把"当下"常驻在聊天视野里</span>
+      <span class="trait good">脊线 + 四格指标 = 全局体量与进度一眼可读</span>
+      <span class="trait bad">展开态占位最大(300px 宽),与长代码块争宽度</span>
+      <span class="trait info">改动范围:最大——胶囊与弹层合并重写为一卡;但行组件全部复用</span>
+    </div>
+    <div class="stage" id="stageC"><div class="stage-tag">方案 C · 点四格指标切分区;点箭头收成指标条</div></div>
+  </section>
+
+  <!-- ══════════════════ 方案 D ══════════════════ -->
+  <section class="plan">
+    <div class="plan-h"><h2>方案 D · 轻锚点 + 宽导航弹层</h2><span class="en">D · minimal anchor, two-pane navigator</span></div>
+    <p class="plan-desc">反方向压到极致:收起态只是一枚 <b>34px 圆钮</b>(活动总数角标 + 底下四根按各类数量定高的迷你 spark 柱,运行中套一圈旋转琥珀弧)。弹层则扩张为 <b>576px 双栏导航</b>:左栏 = 四类活动的导航轨(计数 + 运行中直接列出代理名),右栏 = 选中类的完整列表(行更宽敞,统计 chip 不再折行)。为"重会话"(十几个子代理/任务/书签)而设计。</p>
+    <div class="traits">
+      <span class="trait good">收起态最安静(不与内容争视觉)</span>
+      <span class="trait good">双栏导航,大列表浏览效率最高(IDE 感)</span>
+      <span class="trait good">spark 柱把"会话都发生过什么"压缩进 34px</span>
+      <span class="trait bad">收起态信息最少,运行感知靠角标+弧,弱于 B/C</span>
+      <span class="trait bad">576px 弹层在窄中栏可能放不下(需宽度降级)</span>
+      <span class="trait info">改动范围:弹层壳重写为双栏,行组件原样搬进右栏</span>
+    </div>
+    <div class="stage" id="stageD"><div class="stage-tag">方案 D · 点圆钮展开;点左栏导航切换右栏</div></div>
+  </section>
+
+  <!-- ══════════════════ 对比 ══════════════════ -->
+  <section class="plan">
+    <div class="plan-h"><h2>横向对比</h2><span class="en">compare</span></div>
+    <table class="cmp">
+      <tr><th style="width:130px">方案</th><th>运行感知(不看详情就知道在干嘛)</th><th>收起态安静度</th><th>大列表浏览</th><th>实现跨度</th><th>适合</th></tr>
+      <tr><td>A 仪表分段</td><td>★★☆ 微环 + 运行页签横杠</td><td>★★★ 与现状一致</td><td>★★★ 页签直达</td><td>小(复用四分段)</td><td>想稳:低成本拿到进度可读 + 导航升级</td></tr>
+      <tr><td>B 纵向活动栈</td><td>★★★ chip 上直接流式"当下"</td><td>★★ 纵向占高</td><td>★★ 手风琴逐个开</td><td>大(结构重写)</td><td>长回合挂机观察型用户</td></tr>
+      <tr><td>C 单体指挥卡</td><td>★★★ 常驻实时操作行</td><td>★★ 展开时最占位</td><td>★★★ 单卡内切分区</td><td>最大(二合一)</td><td>把"会话活动"当一等公民的形态</td></tr>
+      <tr><td class="rec">D 轻锚点+宽导航</td><td>★☆☆ 仅角标 + 弧</td><td>★★★ 最安静</td><td>★★★ 双栏最优</td><td>中(壳重写,行复用)</td><td class="rec">推荐起点:安静收起 + 重会话导航,兼顾现状心智</td></tr>
+    </table>
+    <p class="foot-note">
+      <b>推荐组合拳</b>:主体走 <b>D</b>(圆钮锚点 + 双栏导航),把 A 的<b>微进度环</b>嫁接到 D 收起态(圆钮内圈即任务完成弧,替代 spark 柱之一),B 的"实时操作行"作为 D 展开态右栏顶部的可选行——三者不冲突。若想先小步验证,A 是最稳的第一步。<br>
+      <b>不做什么</b>:四个方案都不把弹层做成常驻右栏(右侧已有 sidechat / 计划抽屉 / diff,不能再抢);都不引入每秒 tick 的重渲染(运行时长走现有 1s ticker 的既有订阅)。
+    </p>
+  </section>
+</div>
+
+<script>
+/* ═══════════════ 场景数据 ═══════════════ */
+const DATA = {
+  running: {
+    subs: [
+      { type:"research", desc:"调研插件系统可行性方案", status:"running", tool:"Read · docs/plugin-feasibility.md", tokens:"12.4k tok", ntools:8,  time:"42s" },
+      { type:"code",     desc:"重构 SdkMessageAdapter 分发链", status:"running", tool:"Edit · SdkMessageAdapter.ts",     tokens:"8.1k tok",  ntools:5,  time:"1m12s" },
+      { type:"test",     desc:"为 composer 药丸补冒烟断言",   status:"completed", tool:"—",                              tokens:"21.9k tok", ntools:14, time:"3m05s" },
+    ],
+    todos: [
+      { t:"盘点现有胶囊与弹层的职责边界", s:"completed", p:"high" },
+      { t:"对齐 contracts/runtime 的快照类型", s:"completed", p:"med" },
+      { t:"重写 StatusCapsule 分段渲染", s:"in_progress", p:"high" },
+      { t:"迁移 ActivityPopover 分区到新面板", s:"pending", p:"med" },
+      { t:"移动端 ActivitySheet 同步适配", s:"pending", p:"low" },
+      { t:"补 i18n 词条(zh/en)", s:"pending", p:"med" },
+      { t:"typecheck + 冒烟", s:"pending", p:"high" },
+    ],
+    plans: ["插件系统 v1 落地方案","回合流重构:全程卡内流式"],
+    bms: [
+      { ti:"审批竞态:Stream closed 结论", tm:"14:22" },
+      { ti:"网关空响应取证摘录", tm:"15:03" },
+      { ti:"settle 门控三条件", tm:"16:40" },
+      { ti:"药丸回滞阈值实测", tm:"17:12" },
+    ],
+  },
+  done: {
+    subs: [
+      { type:"research", desc:"调研插件系统可行性方案", status:"completed", tool:"—", tokens:"12.4k tok", ntools:8,  time:"42s" },
+      { type:"code",     desc:"重构 SdkMessageAdapter 分发链", status:"completed", tool:"—", tokens:"8.1k tok",  ntools:5,  time:"1m12s" },
+      { type:"test",     desc:"为 composer 药丸补冒烟断言",   status:"completed", tool:"—", tokens:"21.9k tok", ntools:14, time:"3m05s" },
+    ],
+    todos: [
+      { t:"盘点现有胶囊与弹层的职责边界", s:"completed", p:"high" },
+      { t:"对齐 contracts/runtime 的快照类型", s:"completed", p:"med" },
+      { t:"重写 StatusCapsule 分段渲染", s:"completed", p:"high" },
+      { t:"迁移 ActivityPopover 分区到新面板", s:"completed", p:"med" },
+      { t:"移动端 ActivitySheet 同步适配", s:"completed", p:"low" },
+      { t:"补 i18n 词条(zh/en)", s:"completed", p:"med" },
+      { t:"typecheck + 冒烟", s:"completed", p:"high" },
+    ],
+    plans: ["插件系统 v1 落地方案","回合流重构:全程卡内流式"],
+    bms: [
+      { ti:"审批竞态:Stream closed 结论", tm:"14:22" },
+      { ti:"网关空响应取证摘录", tm:"15:03" },
+      { ti:"settle 门控三条件", tm:"16:40" },
+      { ti:"药丸回滞阈值实测", tm:"17:12" },
+    ],
+  },
+  full: {
+    subs: [
+      { type:"research", desc:"调研三方网关的 Responses 协议差异与重试语义", status:"running", tool:"Read · bridge/responseTranslator.ts", tokens:"18.2k tok", ntools:12, time:"2m01s" },
+      { type:"code",     desc:"重构 SdkMessageAdapter 分发链", status:"running", tool:"Edit · SdkMessageAdapter.ts", tokens:"9.4k tok", ntools:7, time:"1m44s" },
+      { type:"code",     desc:"RuntimeManager 用量历史延迟落盘", status:"running", tool:"Grep · pendingTurnEnd", tokens:"6.8k tok", ntools:4, time:"58s" },
+      { type:"docs",     desc:"整理升级验证清单(checksum/对话框 kind)", status:"running", tool:"Write · docs/upgrade-checklist.md", tokens:"3.1k tok", ntools:2, time:"21s" },
+      { type:"test",     desc:"为 composer 药丸补冒烟断言", status:"completed", tool:"—", tokens:"21.9k tok", ntools:14, time:"3m05s" },
+      { type:"test",     desc:"upstream-headers 冒烟 44 断言", status:"failed", tool:"—", tokens:"11.0k tok", ntools:9, time:"1m38s" },
+    ],
+    todos: [
+      { t:"盘点现有胶囊与弹层的职责边界", s:"completed", p:"high" },
+      { t:"对齐 contracts/runtime 的快照类型", s:"completed", p:"med" },
+      { t:"重写 StatusCapsule 分段渲染", s:"completed", p:"high" },
+      { t:"迁移 ActivityPopover 分区到新面板", s:"in_progress", p:"med" },
+      { t:"移动端 ActivitySheet 同步适配", s:"pending", p:"low" },
+      { t:"补 i18n 词条(zh/en)", s:"pending", p:"med" },
+      { t:"typecheck + 冒烟", s:"pending", p:"high" },
+      { t:"BookmarkFly 落点锚点迁移", s:"pending", p:"med" },
+      { t:"满载态回归(6 代理 + 9 任务)", s:"pending", p:"low" },
+    ],
+    plans: ["插件系统 v1 落地方案","回合流重构:全程卡内流式","运行时按需下载管线"],
+    bms: [
+      { ti:"审批竞态:Stream closed 结论", tm:"14:22" },
+      { ti:"网关空响应取证摘录", tm:"15:03" },
+      { ti:"settle 门控三条件", tm:"16:40" },
+      { ti:"药丸回滞阈值实测", tm:"17:12" },
+      { ti:"jdtls 工作区自愈重试", tm:"17:36" },
+      { ti:"桥侧 tail SSE 帧回收证据", tm:"18:02" },
+    ],
+  },
+};
+
+/* ═══════════════ 图标 ═══════════════ */
+const I = (d, extra="") => `<svg class="ic" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" ${extra}>${d}</svg>`;
+const IC = {
+  plan:  I('<path d="M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2"/><rect x="9" y="3" width="6" height="4" rx="2"/>'),
+  sub:   I('<rect x="5" y="9" width="14" height="10" rx="2.5"/><path d="M12 9V5.5"/><circle cx="12" cy="4.2" r="1.2"/><circle cx="9.3" cy="13.5" r="1.05" fill="currentColor" stroke="none"/><circle cx="14.7" cy="13.5" r="1.05" fill="currentColor" stroke="none"/><path d="M9.5 16.6h5"/>'),
+  task:  I('<path d="M13 5h8M13 9h5M13 15h8M13 19h5"/><rect x="3" y="4" width="6" height="6" rx="1.2"/><rect x="3" y="14" width="6" height="6" rx="1.2"/>'),
+  bmk:   I('<path d="M18 7v14l-6-4-6 4V7a4 4 0 0 1 4-4h4a4 4 0 0 1 4 4z"/>'),
+  chev:  I('<path d="M6 9l6 6 6-6"/>'),
+  check: I('<path d="M5 12l5 5 9-10"/>'),
+  circle:I('<circle cx="12" cy="12" r="8.5"/>'),
+  x:     I('<path d="M18 6L6 18M6 6l12 12"/>'),
+  pencil:I('<path d="M4 20h4L18.5 9.5a2.83 2.83 0 1 0-4-4L4 16v4z"/>'),
+};
+const donut = (frac, size=15) => {
+  const C = 2*Math.PI*6.5, on = (C*Math.min(1,Math.max(0,frac))).toFixed(1);
+  return `<svg class="donut" width="${size}" height="${size}" viewBox="0 0 16 16"><circle class="bgc" cx="8" cy="8" r="6.5"/><circle class="fgc" cx="8" cy="8" r="6.5" stroke-dasharray="${on} ${C.toFixed(1)}"/></svg>`;
+};
+
+/* ═══════════════ 状态 ═══════════════ */
+const state = {
+  scene: "running",
+  A: { open:false, tab:"sub" },
+  B: { open:{} },          // key -> bool
+  C: { min:false, focus:"sub" },
+  D: { open:false, nav:"sub" },
+};
+const $ = (s, el=document) => el.querySelector(s);
+
+/* ═══════════════ 行模板(共享) ═══════════════ */
+const ST_LABEL = { running:"运行中", completed:"已完成", failed:"失败", killed:"已终止", in_progress:"进行中", pending:"待办" };
+
+function subRow(s){
+  const run = s.status === "running";
+  const bar = run ? `<span class="shimmer"></span>`
+    : `<span class="sbar ${s.status==="completed"?"ok":"bad"}"></span>`;
+  return `<div class="row" title="点击在右侧打开只读 transcript">
+    ${bar}
+    <div class="r-l1">
+      ${s.type?`<span class="stag">${s.type}</span>`:""}
+      <span class="st ${run?"run":""}">${run?'<span class="pdot"></span>':""}${ST_LABEL[s.status]}</span>
+      <span class="tm">${s.time}</span>
+    </div>
+    <p class="r-desc">${s.desc}</p>
+    <div class="r-chips">
+      ${run&&s.tool&&s.tool!=="—"?`<span class="sch tool">${s.tool}</span>`:""}
+      <span class="sch">${s.tokens}</span><span class="sch">${s.ntools} tools</span>
+    </div>
+  </div>`;
+}
+function taskRows(todos){
+  const done = todos.filter(x=>x.s==="completed").length;
+  const pct = Math.round(done/todos.length*100);
+  const meta = { completed:IC.check+"|ok", in_progress:'<span class="pdot"></span>|warn', pending:IC.circle+"|mut" };
+  const icCls = { completed:"t-ok", in_progress:"t-warn", pending:"" };
+  return `
+  <div class="tprog"><div class="track"><div class="fill" style="width:${pct}%"></div></div>
+    <div class="lab">${done}/${todos.length} · ${pct}%</div></div>
+  ${todos.map(x=>`<div class="trow p-${x.p==="high"?"high":x.p==="med"?"med":"low"} ${x.s==="completed"?"done":""}">
+    <span class="${icCls[x.s]}" style="margin-top:1px">${x.s==="completed"?IC.check:x.s==="in_progress"?IC.check.replace('class="ic"','class="ic" style="opacity:0"'):IC.circle}</span>
+    <span class="txt">${x.t}</span>
+  </div>`).join("")}`;
+}
+function planRows(plans){
+  const n = plans.length;
+  return plans.map((p,i)=>`<div class="prow" title="点击打开右侧计划抽屉"><span class="idx">${n-i}.</span><span class="ti">${p}</span></div>`).join("");
+}
+function bmRows(bms){
+  return bms.map(b=>`<div class="brow" title="点击定位到消息">${IC.bmk.replace('width="13"','width="11"').replace('height="13"','height="11"')}<span class="ti">${b.ti}</span><span class="tm">${b.tm}</span></div>`).join("");
+}
+const sectionBody = (key, d) =>
+  key==="sub" ? d.subs.map(subRow).join("") :
+  key==="task" ? taskRows(d.todos) :
+  key==="plan" ? planRows(d.plans) :
+  bmRows(d.bms);
+
+/* 派生数字 */
+function metrics(d){
+  const run = d.subs.filter(s=>s.status==="running").length;
+  const done = d.todos.filter(t=>t.s==="completed").length;
+  return { plan:d.plans.length, sub:d.subs.length, run, task:d.todos.length, tdone:done, bmk:d.bms.length };
+}
+
+/* ═══════════════ 现状参照 ═══════════════ */
+function renderCur(){
+  const d = DATA[state.scene], m = metrics(d);
+  const running = m.run > 0;
+  $("#curBreathe").style.display = running ? "" : "none";
+  $("#curPill").innerHTML = `
+    <span class="seg-ic c-plan">${IC.plan}<span class="cpop">×${m.plan}</span></span>
+    <span class="divider-v"></span>
+    <span class="seg-ic ${running?"t-warn":""}">${IC.sub}${running?'<span class="pdot" style="margin:0"></span>':""}<span class="cpop">${running?m.run:m.sub}</span></span>
+    <span class="divider-v"></span>
+    <span class="seg-ic">${IC.task}<span class="cpop">${m.tdone}/${m.task}</span></span>
+    <span class="divider-v"></span>
+    <span class="seg-ic" style="color:rgb(var(--warning))">${IC.bmk}<span class="cpop">${m.bmk}</span></span>
+    <span class="divider-v"></span>
+    <span style="opacity:.6;display:flex">${IC.chev.replace('width="13"','width="12"').replace('height="13"','height="12"')}</span>`;
+}
+
+/* ═══════════════ 方案 A ═══════════════ */
+function renderA(){
+  const d = DATA[state.scene], m = metrics(d), st = state.A;
+  const running = m.run > 0;
+  const subFrac = running ? m.run/m.sub : 1;
+  const taskFrac = m.tdone/m.task;
+  const tabs = [
+    { k:"plan", ic:IC.plan,  lab:"计划",   n:`×${m.plan}` },
+    { k:"sub",  ic:IC.sub,   lab:"子代理", n:running?`${m.run}/${m.sub}`:`${m.sub}`, hot:running },
+    { k:"task", ic:IC.task,  lab:"任务",   n:`${m.tdone}/${m.task}` },
+    { k:"bmk",  ic:IC.bmk,   lab:"书签",   n:`${m.bmk}` },
+  ];
+  const el = $("#stageA");
+  const tabTitles = { plan:"计划", sub:"子代理", task:"任务", bmk:"书签" };
+  const metaText = {
+    plan:`共 ${m.plan} 份 · 新的在前`,
+    sub: running ? `${m.run} 个运行中 · 共 ${m.sub}` : `共 ${m.sub} · 全部结束`,
+    task:`${m.tdone}/${m.task} 完成 · ${Math.round(taskFrac*100)}%`,
+    bmk:`共 ${m.bmk} 条`,
+  };
+  el.innerHTML = `
+    <div class="anchor" style="position:relative;top:auto;right:auto;margin:12px 22px 0 auto;width:max-content">
+      <div style="position:relative">
+        ${running?'<span class="breathe"></span>':""}
+        <button class="a-pill ${st.open?"open":""}" id="aPill">
+          <span class="a-seg muted c-plan" style="opacity:1">${IC.plan}<span class="cpop">×${m.plan}</span></span>
+          <span class="divider-v"></span>
+          <span class="a-seg ${running?"hot":""}">${donut(subFrac)}<span class="cpop">${running?m.run:m.sub}</span></span>
+          <span class="divider-v"></span>
+          <span class="a-seg">${donut(taskFrac)}<span class="cpop">${m.tdone}/${m.task}</span></span>
+          <span class="divider-v"></span>
+          <span class="a-seg muted" style="color:rgb(var(--warning))">${IC.bmk}<span class="cpop">${m.bmk}</span></span>
+          <span class="divider-v"></span>
+          <span class="a-chev" style="display:flex">${IC.chev.replace('width="13"','width="12"').replace('height="13"','height="12"')}</span>
+        </button>
+      </div>
+      ${st.open?`
+      <div class="a-pop popin">
+        <div class="a-tabs">
+          ${tabs.map(t=>`<button class="atab ${st.tab===t.k?"cur":""}" data-atact="tab" data-k="${t.k}" style="position:relative">
+            ${t.hot&&t.k!=="task"?`<span class="runbar"></span>`:""}
+            <span style="display:flex;align-items:center;gap:4px" class="${t.k==="plan"?"c-plan":t.k==="sub"&&t.hot?"t-warn":t.k==="task"?"c-task":"c-bmk"}">${t.ic}</span>
+            ${t.lab}<span class="cnt">${t.n}</span>
+          </button>`).join("")}
+        </div>
+        <div class="a-body">${sectionBody(st.tab, d) || `<div class="a-empty">本回合暂无${tabTitles[st.tab]}</div>`}</div>
+      </div>`:""}
+    </div>
+    <div class="stage-tag">方案 A · 点药丸展开;点页签切换${running?"(默认选中运行中的页签)":""}</div>`;
+  $("#aPill").onclick = () => { state.A.open = !state.A.open; renderA(); };
+  el.querySelectorAll("[data-atact]").forEach(b => b.onclick = () => { state.A.tab = b.dataset.k; renderA(); });
+}
+
+/* ═══════════════ 方案 B ═══════════════ */
+function renderB(){
+  const d = DATA[state.scene], m = metrics(d), st = state.B;
+  const running = m.run > 0;
+  const front = d.subs.find(s=>s.status==="running");
+  const inprog = d.todos.find(t=>t.s==="in_progress");
+  const isOpen = k => !!st.open[k];
+  const chips = [];
+  // 子代理 chip
+  chips.push(`
+    <div class="bitem ${isOpen("sub")?"open":""}" data-bk="sub">
+      <button class="bchip ${running?"hot":""}" data-bact="toggle" data-k="sub">
+        <span class="c-sub" style="display:flex">${IC.sub}</span>
+        <span class="${running?"t-warn":""}">${running?`${m.run}/${m.sub} 运行中`:`${m.sub} 个子代理`}</span>
+        <span class="bdots">${d.subs.map(s=>`<i class="${s.status==="running"?"run":s.status==="completed"?"ok":"bad"}"></i>`).join("")}</span>
+        <span class="more">· ${running&&front?front.tool:"全部结束"}</span>
+      </button>
+      <div class="bpanel"><div class="bpanel-in"><div class="bcard">
+        <div class="bcard-h">${IC.sub} 子代理<span class="r">${running?`${m.run} 运行中 · 共 ${m.sub}`:`共 ${m.sub}`}</span></div>
+        <div class="blist">${sectionBody("sub", d)}</div>
+      </div></div></div>
+    </div>`);
+  // 任务 chip
+  const taskPct = Math.round(m.tdone/m.task*100);
+  chips.push(`
+    <div class="bitem ${isOpen("task")?"open":""}" data-bk="task">
+      <button class="bchip" data-bact="toggle" data-k="task">
+        <span class="c-task" style="display:flex">${IC.task}</span>
+        <span>${m.tdone}/${m.task}</span>
+        <span class="mini-track"><span class="mini-fill" style="width:${taskPct}%"></span></span>
+        <span class="more">· ${inprog?inprog.t:"全部完成 ✓"}</span>
+      </button>
+      <div class="bpanel"><div class="bpanel-in"><div class="bcard">
+        <div class="bcard-h">${IC.task} 任务<span class="r">${m.tdone}/${m.task} · ${taskPct}%</span></div>
+        <div class="blist">${sectionBody("task", d)}</div>
+      </div></div></div>
+    </div>`);
+  // 计划 chip
+  chips.push(`
+    <div class="bitem ${isOpen("plan")?"open":""}" data-bk="plan">
+      <button class="bchip" data-bact="toggle" data-k="plan">
+        <span class="c-plan" style="display:flex">${IC.plan}</span><span>×${m.plan}</span>
+        <span class="more">· ${d.plans[0]}</span>
+      </button>
+      <div class="bpanel"><div class="bpanel-in"><div class="bcard">
+        <div class="bcard-h">${IC.plan} 计划<span class="r">共 ${m.plan} 份</span></div>
+        <div class="blist">${sectionBody("plan", d)}</div>
+      </div></div></div>
+    </div>`);
+  // 书签 chip
+  chips.push(`
+    <div class="bitem ${isOpen("bmk")?"open":""}" data-bk="bmk">
+      <button class="bchip" data-bact="toggle" data-k="bmk">
+        <span style="display:flex;color:rgb(var(--warning))">${IC.bmk}</span><span>${m.bmk}</span>
+        <span class="more">· ${d.bms[0].ti}</span>
+      </button>
+      <div class="bpanel"><div class="bpanel-in"><div class="bcard">
+        <div class="bcard-h">${IC.bmk} 书签<span class="r">共 ${m.bmk} 条</span></div>
+        <div class="blist">${sectionBody("bmk", d)}</div>
+      </div></div></div>
+    </div>`);
+
+  $("#stageB").innerHTML = `
+    <div class="anchor" style="top:12px;right:22px">
+      <div class="bstack popin">${chips.join("")}</div>
+    </div>
+    <div class="stage-tag">方案 B · 悬停看预览;点击原地展开/收起</div>`;
+  $("#stageB").querySelectorAll("[data-bact]").forEach(b=>{
+    b.onclick = () => { const k = b.dataset.k; state.B.open[k] = !state.B.open[k]; renderB(); };
+  });
+}
+
+/* ═══════════════ 方案 C ═══════════════ */
+function renderC(){
+  const d = DATA[state.scene], m = metrics(d), st = state.C;
+  const running = m.run > 0;
+  const front = d.subs.find(s=>s.status==="running");
+  const frontTool = d.subs.find(s=>s.status==="running"&&s.tool!=="—");
+  const inprog = d.todos.find(t=>t.s==="in_progress");
+  const taskPct = Math.round(m.tdone/m.task*100);
+  const wPlan = 8 + m.plan*3, wSub = 10 + m.sub*4, wTask = 16 + m.task*2, wBmk = 8 + m.bmk*2;
+  const cells = [
+    { k:"plan", v:`×${m.plan}`,      k2:"计划",   cls:"c-plan" },
+    { k:"sub",  v:`${running?m.run:m.sub}<small>/${m.sub}</small>`, k2:"子代理", cls:running?"t-warn":"c-sub", hot:running },
+    { k:"task", v:`${m.tdone}<small>/${m.task}</small>`,             k2:"任务",   cls:"c-task" },
+    { k:"bmk",  v:`${m.bmk}`,        k2:"书签",   cls:"c-bmk" },
+  ];
+  const ticker = !running ? "" : `
+    <div class="c-ticker"><span class="dot"></span>
+      <span class="tx"><b>${frontTool?frontTool.tool.split(" · ")[0]:"…"}</b> ${frontTool?("· "+frontTool.tool.split(" · ").slice(1).join(" · ")):""}${inprog?` ｜ 下一步:${inprog.t}`:""}</span>
+    </div>`;
+  $("#stageC").innerHTML = `
+    <div class="anchor" style="top:12px;right:22px">
+      <div style="position:relative">
+        ${running&&!st.min?'<span class="breathe"></span>':""}
+        <div class="ccard ${st.min?"min":""} popin">
+          <div class="c-head">
+            <span class="ti">会话活动</span>
+            ${running?`<span class="live"><span class="pdot"></span>LIVE</span>`:`<span class="live" style="color:rgb(var(--accent));animation:none">✓ 已收尾</span>`}
+            <button class="c-chev" data-cact="min" title="${st.min?"展开卡片":"收成指标条"}">${IC.chev}</button>
+          </div>
+          <div class="c-spine">
+            <span class="s-plan" style="flex:${wPlan}"></span>
+            <span class="s-sub"  style="flex:${wSub}"></span>
+            <span class="s-task" style="flex:${wTask};--p:${taskPct}%"></span>
+            <span class="s-bmk"  style="flex:${wBmk}"></span>
+          </div>
+          <div class="c-metrics">
+            ${cells.map(c=>`<button class="cm ${st.focus===c.k?"cur":""} ${c.hot?"hot":""}" data-cact="focus" data-k="${c.k}">
+              <div class="v ${c.cls}">${c.v}</div><div class="k">${c.k2}</div>
+            </button>`).join("")}
+          </div>
+          ${ticker}
+          <div class="c-body">${sectionBody(st.focus, d)}</div>
+        </div>
+      </div>
+    </div>
+    <div class="stage-tag">方案 C · 点四格指标切分区;点箭头收成指标条</div>`;
+  $("#stageC").querySelectorAll("[data-cact]").forEach(b=>{
+    b.onclick = () => {
+      if (b.dataset.cact==="min") state.C.min = !state.C.min;
+      else state.C.focus = b.dataset.k;
+      renderC();
+    };
+  });
+}
+
+/* ═══════════════ 方案 D ═══════════════ */
+function renderD(){
+  const d = DATA[state.scene], m = metrics(d), st = state.D;
+  const running = m.run > 0;
+  const total = m.plan + m.sub + m.task + m.bmk;
+  const spark = [
+    { c:"rgb(var(--info))",    h: m.plan },
+    { c:"rgb(var(--warning))", h: m.sub },
+    { c:"rgb(var(--accent))",  h: m.task },
+    { c:"rgb(var(--content-subtle))", h: m.bmk },
+  ].map(s=>`<i style="background:${s.c};height:${Math.min(9, 3+s.h)}px"></i>`).join("");
+  const front = d.subs.filter(s=>s.status==="running");
+  const navs = [
+    { k:"plan", ic:IC.plan, lab:"计划",   n:m.plan, cls:"c-plan" },
+    { k:"sub",  ic:IC.sub,  lab:"子代理", n:m.sub,  cls:running?"t-warn":"c-sub" },
+    { k:"task", ic:IC.task, lab:"任务",   n:m.task, cls:"c-task" },
+    { k:"bmk",  ic:IC.bmk,  lab:"书签",   n:m.bmk,  cls:"c-bmk" },
+  ];
+  const navTitles = { plan:"计划", sub:"子代理", task:"任务", bmk:"书签" };
+  const metaText = {
+    plan:`共 ${m.plan} 份 · 新的在前`,
+    sub: running ? `${m.run} 运行中 · 共 ${m.sub}` : `共 ${m.sub} · 全部结束`,
+    task:`${m.tdone}/${m.task} · ${Math.round(m.tdone/m.task*100)}%`,
+    bmk:`共 ${m.bmk} 条`,
+  };
+  $("#stageD").innerHTML = `
+    <div class="anchor" style="top:12px;right:22px">
+      <div style="position:relative">
+        ${running&&!st.open?'<span class="breathe" style="inset:-7px"></span>':""}
+        <button class="d-fab" id="dFab" title="会话活动">
+          ${running?`<svg class="oring" width="43" height="43" viewBox="0 0 43 43"><circle cx="21.5" cy="21.5" r="20" stroke-dasharray="26 100"/></svg>`:""}
+          <span class="${running?"t-warn":""}" style="display:flex">${IC.sub}</span>
+          <span class="total cpop">${total}</span>
+          <span class="d-spark">${spark}</span>
+        </button>
+      </div>
+      ${st.open?`
+      <div class="d-pop popin">
+        <div class="d-nav">
+          ${navs.map(n=>`<button class="dnav-it ${st.nav===n.k?"cur":""}" data-dact="nav" data-k="${n.k}">
+            <span class="${n.cls}" style="display:flex">${n.ic}</span><span class="lb">${n.lab}</span><span class="n">${n.n}</span>
+            ${n.k==="sub"&&running?`<span class="sub">${front.map(f=>`<em>${f.desc}</em>`).join("")}</span>`:""}
+          </button>`).join("")}
+        </div>
+        <div class="d-pane">
+          <div class="d-pane-h">
+            <span class="ti">${navTitles[st.nav]}</span>
+            <span class="meta">${metaText[st.nav]}</span>
+          </div>
+          <div class="d-pane-bd">${sectionBody(st.nav, d)}</div>
+        </div>
+      </div>`:""}
+    </div>
+    <div class="stage-tag">方案 D · 点圆钮展开;点左栏导航切换右栏</div>`;
+  $("#dFab").onclick = () => { state.D.open = !state.D.open; renderD(); };
+  $("#stageD").querySelectorAll("[data-dact]").forEach(b=>{
+    b.onclick = () => { state.D.nav = b.dataset.k; renderD(); };
+  });
+}
+
+/* ═══════════════ 舞台背景 + 总渲染 ═══════════════ */
+const BACKDROP = `
+  <div class="bd">
+    <div class="bd-user">把活动胶囊重做一下,运行中的时候我想直接看到在跑什么工具…</div>
+    <div class="bd-card">
+      <div class="bd-agent-h"><i></i>claude · opus · 32k ctx</div>
+      <div class="bd-line w95"></div><div class="bd-line w80"></div>
+      <span class="bd-tool"><b></b>Task · research「调研插件系统可行性」</span>
+      <div class="bd-line w60"></div>
+    </div>
+  </div>`;
+["stageCur","stageA","stageB","stageC","stageD"].forEach(id=>{
+  const el = document.getElementById(id);
+  el.insertAdjacentHTML("afterbegin", BACKDROP);
+});
+
+function renderAll(){ renderCur(); renderA(); renderB(); renderC(); renderD(); }
+renderAll();
+
+/* 控制条 */
+$("#segTheme").addEventListener("click", e=>{
+  const b = e.target.closest("button"); if(!b) return;
+  document.documentElement.dataset.theme = b.dataset.th;
+  $("#segTheme").querySelectorAll("button").forEach(x=>x.classList.toggle("cur", x===b));
+});
+$("#segScene").addEventListener("click", e=>{
+  const b = e.target.closest("button"); if(!b) return;
+  state.scene = b.dataset.sc;
+  $("#segScene").querySelectorAll("button").forEach(x=>x.classList.toggle("cur", x===b));
+  renderAll();
+});
+</script>
+</body>
+</html>

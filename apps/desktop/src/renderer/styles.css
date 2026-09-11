@@ -623,8 +623,7 @@ body {
  * Selection toolbar pop-in and the jump-target row flash. Referenced via
  * Tailwind arbitrary-animation classes (animate-[bookmark-bar-in_…]) and the
  * imperative .bookmark-flash class ChatPane toggles on the row after
- * scrollToIndex. The capsule count bounce lives in the capsule block below
- * (capsule-count-pop). */
+ * scrollToIndex. The activity cluster's motion lives in its own block below. */
 
 /* Floating [copy | add bookmark] toolbar — small fade-up so it doesn't
    hard-cut over the selection. */
@@ -1000,6 +999,15 @@ button.chat-ledger-head:hover {
   padding: 2px 0 6px;
 }
 
+/* 运行中的明细区（ChatPane 的行支架）：行间距统一由每行内容自己给（见
+ * ChatPane.wrapLiveSpine），首行与台头的距离 = 它自己的块间距。这里上内边距
+ * 必须是 0 —— 只要容器有 padding，首行的上边距就折叠不出去，会在台头下多出
+ * 这几像素，首行与其余行差一档（"间隔不一致"）。完成态面板仍用上面那份
+ * padding：它的首块不带上边距，靠这 2px 呼吸。 */
+.chat-ledger[data-phase="running"] .chat-ledger-body {
+  padding-top: 0;
+}
+
 /* 过程面的折叠动画（TurnPanel 的展开体）。
  *   - 外层用 grid-template-rows 0fr↔1fr 做高度收束（内容保持挂载，只被裁剪，
  *     所以中途重挂载不会闪）；
@@ -1171,27 +1179,56 @@ button.chat-ledger-head:hover {
   }
 }
 
-/* ───────────── Status capsule (glass pill + activity popover) ─────────────
- * Shared motion vocabulary for the top-right status capsule: pill entrance,
- * count bounce, popover drop-in, staggered sections, the running-agent halo
- * and the subagent shimmer bar. Referenced via Tailwind arbitrary-animation
- * classes (animate-[capsule-in_…]) plus the .capsule-breathe /
- * .capsule-shimmer-track utilities below. */
+/* ───────────── Activity cluster + console (chat top-right) ─────────────
+ * 方案 B「收放」的动效面:控件体积跟着紧急度走,所以这里只有两件事 ——
+ *   · 聚簇里那条文字横条的展开/收起(max-width + opacity);
+ *   · 活动台面板的入场,以及子代理运行行的扫光。
+ * 圆钮的进度环是 conic-gradient + mask,不需要关键帧;三种状态(空闲/运行/
+ * 告警)的切换只改边框与背景色,过渡写在组件里。 */
 
-/* Pill pop-in on first mount (tiny scale + drop from above). */
-@keyframes capsule-in {
-  from {
-    transform: scale(0.92) translateY(-4px);
-    opacity: 0;
-  }
-  to {
-    transform: scale(1) translateY(0);
-    opacity: 1;
-  }
+/* 文字横条:max-width 0 → 280px。整簇右缘钉在角落,所以只有它自己变宽,
+   圆钮被推着向左让位(文档里「圆钮变成横条的头」就是这个方向)。 */
+.activity-cluster-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
+  overflow: hidden;
+  max-width: 0;
+  opacity: 0;
+  padding-right: 0;
+  transition:
+    max-width 320ms cubic-bezier(0.22, 1, 0.36, 1),
+    opacity 220ms ease-out,
+    padding-right 320ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
-/* Popover drop-in — the element anchors the scale at the pill via
-   origin-top-right; the spring-ish bezier gives a light settle. */
+.activity-cluster-bar.open {
+  max-width: 280px;
+  opacity: 1;
+  padding-right: 11px;
+}
+
+/* 横条里的 34px 迷你进度条(任务占比),与圆钮的环同源。 */
+.activity-cluster-miniprog {
+  display: block;
+  width: 34px;
+  height: 3px;
+  border-radius: 2px;
+  background: rgb(var(--edge));
+  overflow: hidden;
+  flex: none;
+}
+
+.activity-cluster-miniprog > i {
+  display: block;
+  height: 100%;
+  border-radius: 2px;
+  background: rgb(var(--accent));
+  transition: width 300ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+/* Console drop-in — the panel hangs off the cluster's bottom edge. */
 @keyframes capsule-pop-in {
   from {
     transform: scale(0.96) translateY(-4px);
@@ -1203,51 +1240,7 @@ button.chat-ledger-head:hover {
   }
 }
 
-/* Popover section stagger — each section pairs this with an inline
-   animation-delay (i * 40ms) and fill-mode "both", which holds the
-   pre-entrance state through the delay. */
-@keyframes capsule-section-in {
-  from {
-    transform: translateY(4px);
-    opacity: 0;
-  }
-  to {
-    transform: translateY(0);
-    opacity: 1;
-  }
-}
-
-/* Count bounce — generalized from bookmark-badge-pop: every count span in
-   the pill re-mounts on change (key) so the bounce replays on any delta. */
-@keyframes capsule-count-pop {
-  0% {
-    transform: scale(1);
-  }
-  50% {
-    transform: scale(1.35);
-  }
-  100% {
-    transform: scale(1);
-  }
-}
-
-/* Running-agent halo — a blurred amber layer behind the pill breathes via
-   opacity (animating box-shadow instead would repaint every frame). */
-.capsule-breathe {
-  animation: capsule-breathe 2.2s ease-in-out infinite;
-}
-
-@keyframes capsule-breathe {
-  0%,
-  100% {
-    opacity: 0.35;
-  }
-  50% {
-    opacity: 0.9;
-  }
-}
-
-/* Subagent running indicator — a 2px track whose ::before light blob sweeps
+/* Subagent running stripe — a 2px track whose ::before light blob sweeps
    downward (starts translated -100%, animates to +100%). */
 .capsule-shimmer-track {
   position: absolute;
@@ -1279,20 +1272,10 @@ button.chat-ledger-head:hover {
   }
 }
 
-/* Reduced motion: entrances and the count bounce flatten to no-ops; the
-   halo and shimmer hold a static tint so the states stay readable. */
+/* Reduced motion: the panel entrance flattens to a no-op, the bar snaps
+   instead of sliding, and the running stripe holds a static tint so "still
+   running" stays readable without movement. */
 @media (prefers-reduced-motion: reduce) {
-  @keyframes capsule-in {
-    from {
-      transform: none;
-      opacity: 1;
-    }
-    to {
-      transform: none;
-      opacity: 1;
-    }
-  }
-
   @keyframes capsule-pop-in {
     from {
       transform: none;
@@ -1304,29 +1287,8 @@ button.chat-ledger-head:hover {
     }
   }
 
-  @keyframes capsule-section-in {
-    from {
-      transform: none;
-      opacity: 1;
-    }
-    to {
-      transform: none;
-      opacity: 1;
-    }
-  }
-
-  @keyframes capsule-count-pop {
-    from {
-      transform: scale(1);
-    }
-    to {
-      transform: scale(1);
-    }
-  }
-
-  .capsule-breathe {
-    animation: none;
-    opacity: 0.5;
+  .activity-cluster-bar {
+    transition: none;
   }
 
   .capsule-shimmer-track::before {
@@ -1912,4 +1874,112 @@ button.chat-ledger-head:hover {
   font-size: 16px;
 }
 
+/* ───────────── Image lightbox ─────────────
+ * Fullscreen image viewer opened by ImageWithPreview. Three parts: a scrim, the
+ * picture, and ONE control bar docked below the picture (see image-preview.tsx
+ * for the layout contract). Motion vocabulary mirrors the composer curves —
+ * ease-out for entries, nothing bouncy, since chrome that wobbles over a
+ * photograph reads as sloppy.
+ *
+ * Fill mode is `backwards` everywhere, never `both`/`forwards`: a forwards fill
+ * would keep the last keyframe applied after the animation ends and thus
+ * override the idle-hide opacity below (the same trap documented for the
+ * composer's entrance animations).
+ */
+.lightbox-scrim {
+  /* Deeper than the shared backdrop with a soft vignette, so the picture reads
+   * as the brightest surface on screen without a flat black plate behind it. */
+  background: radial-gradient(115% 85% at 50% 42%, rgba(0, 0, 0, 0.72), rgba(0, 0, 0, 0.93));
+  animation: lightbox-scrim-in 180ms ease-out backwards;
+}
+@keyframes lightbox-scrim-in {
+  from {
+    opacity: 0;
+  }
+}
+
+.lightbox-figure {
+  animation: lightbox-figure-in 240ms cubic-bezier(0.22, 1, 0.36, 1) backwards;
+}
+@keyframes lightbox-figure-in {
+  from {
+    opacity: 0;
+    transform: scale(0.975);
+  }
+}
+
+/* The bar's glass: translucent zinc + blur so it reads as a layer above the
+ * photo rather than a slab cut out of it, with a 1px inner hairline instead of
+ * a border (a real border would double up under the blur). */
+.lightbox-bar {
+  background: rgba(24, 24, 27, 0.72);
+  backdrop-filter: blur(16px) saturate(160%);
+  -webkit-backdrop-filter: blur(16px) saturate(160%);
+  box-shadow:
+    0 12px 32px -10px rgba(0, 0, 0, 0.65),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.09);
+}
+
+/* Copy receipt: the button's glyph flips to a check — a one-shot pop makes the
+ * swap register at 17px without adding a second floating element over the
+ * picture. */
+.lightbox-check {
+  animation: lightbox-check-in 260ms cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+@keyframes lightbox-check-in {
+  from {
+    opacity: 0;
+    transform: scale(0.6);
+  }
+}
+
+.lightbox-chrome {
+  transition:
+    opacity 220ms cubic-bezier(0.22, 1, 0.36, 1),
+    transform 220ms cubic-bezier(0.22, 1, 0.36, 1);
+  animation: lightbox-chrome-in 260ms cubic-bezier(0.22, 1, 0.36, 1) backwards;
+}
+@keyframes lightbox-chrome-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
+
+/* Idle: chrome retracts and the cursor goes with it — the image is left alone
+ * on screen. Any pointer move / keypress brings both back (component side).
+ *
+ * Both rules land on DESCENDANTS, not on `.lightbox-root`: the popup is
+ * click-through (the image and the bar re-enable themselves), so it never
+ * becomes the hit-test target itself and a cursor declared on it would never
+ * apply. The two elements that CAN be under the pointer while idle are the
+ * image and the scrim. */
+body:has(.lightbox-root[data-chrome="hidden"]) .lightbox-figure,
+body:has(.lightbox-root[data-chrome="hidden"]) .lightbox-scrim {
+  cursor: none;
+}
+.lightbox-root[data-chrome="hidden"] .lightbox-chrome {
+  opacity: 0;
+  transform: translateY(6px);
+}
+/* `pointer-events: none` has to be repeated on the children: an explicit
+ * `pointer-events: auto` (the bar carries one, so it can sit inside a
+ * click-through popup) re-enables hit-testing under a `none` ancestor, which
+ * would leave an invisible click-blocking bar behind. */
+.lightbox-root[data-chrome="hidden"] .lightbox-chrome,
+.lightbox-root[data-chrome="hidden"] .lightbox-chrome * {
+  pointer-events: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lightbox-scrim,
+  .lightbox-figure,
+  .lightbox-chrome,
+  .lightbox-check {
+    animation: none;
+  }
+  .lightbox-chrome {
+    transition: none;
+  }
+}
 

@@ -276,10 +276,10 @@ function LeftBarBase({
       // Same reveal for the worktree group node the target thread buckets
       // under — a collapsed group keeps the row unmounted, so tryScroll would
       // silently miss it even with the project expanded. Groups render
-      // EXPANDED by default (undefined = expanded); only a user's explicit
-      // collapse (false) needs undoing here.
+      // COLLAPSED by default (absent key = folded), so every group that is not
+      // already explicitly open needs expanding here.
       const target = st.sessionsByProject[projectId]?.find((s) => s.id === id);
-      if (target?.worktreePath && st.expandedWorktrees[normWorktreeKey(target.worktreePath)] === false) {
+      if (target?.worktreePath && !st.expandedWorktrees[normWorktreeKey(target.worktreePath)]) {
         st.toggleWorktreeExpanded(target.worktreePath);
       }
       await new Promise((r) => requestAnimationFrame(() => r(null)));
@@ -1218,7 +1218,8 @@ interface ProjectNodeProps {
    *  name). Resolved by WorktreeGroupNode headers. */
   worktreeNames: Record<string, string>;
   /** Which worktree group nodes are expanded (normalized path → bool).
-   *  Absent key = expanded (groups show their threads by default). */
+   *  Absent key = COLLAPSED — a worktree's threads stay folded until the user
+   *  opens the group (only an explicit `true` renders the rows). */
   expandedWorktrees: Record<string, boolean>;
   onToggleWorktree: (worktreePath: string) => void;
   /** New thread bound to this worktree directory (group header "+"). */
@@ -1394,9 +1395,11 @@ function ProjectNode(props: ProjectNodeProps) {
           ) : (
             <>
               {/* Mixed list — ONE collapsible directory node per worktree
-                  FIRST, then the local threads. Groups render EXPANDED by
-                  default (absent key = expanded) so worktree threads are
-                  visible without an extra click. */}
+                  FIRST, then the local threads. Groups start COLLAPSED (absent
+                  key = folded): a project with many checkouts otherwise dumps
+                  every worktree thread into the tree, burying the local ones.
+                  The header's count badge and its session rows sit one click
+                  away. */}
               {worktreeGroups.map((group) => {
                 const key = normWorktreeKey(group.path);
                 return (
@@ -1406,7 +1409,7 @@ function ProjectNode(props: ProjectNodeProps) {
                     repoPath={project.path}
                     displayName={worktreeDisplayName(group.path, worktreeNames)}
                     sessions={group.sessions}
-                    expanded={expandedWorktrees[key] !== false}
+                    expanded={!!expandedWorktrees[key]}
                     onToggle={() => onToggleWorktree(group.path)}
                     onNewSession={() => onNewSessionInWorktree(group.path)}
                     onMergeBack={() => onMergeWorktree(group.path)}

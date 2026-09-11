@@ -1,0 +1,1665 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Chat 右上角活动胶囊 · 重设计（四方案）</title>
+<style>
+  /* =========================================================================
+   * 聊天区右上角「活动胶囊」重设计 · 交互原型
+   *
+   * 现状(apps/desktop/src/renderer/components/chat/StatusCapsule.tsx + ActivityPopover.tsx):
+   *   一颗玻璃药丸绝对定位在消息流右上角(right-8 top-2),内部最多四段
+   *   「图标 + 数字」并列 —— 📋×2 │ 🤖3 │ ☰4/7 │ 🔖1 │⌄,点击展开 384px
+   *   活动浮层;有子代理在跑时药丸后面呼吸一层琥珀光。
+   *
+   * 下面四个方案针对同一组问题给出不同取舍:
+   *   ① 图标+数字不可读        → 谁都不带文字,含义只存在 title 里
+   *   ② 语义混排              → 书签(用户手动/持久/导航)和子代理·任务(模型
+   *                             实时状态)同权并排,一颗胶囊又当监视器又当收藏夹
+   *   ③ 优先级倒置            → 计划常排第一,"运行中"埋在中段,只有一个小圆点
+   *   ④ 遮挡正文              → 绝对定位浮在消息上方,首条消息被压在玻璃下面
+   *   ⑤ 进度不可见            → 任务段只有 4/7 分数,没有进度条;计划只有个数
+   *   ⑥ 容量与窄栏            → 四段+箭头在窄栏(宽屏 3:7 / 侧栏展开)里挤到 250px+
+   *
+   * 四个方向:
+   *   方案 A · 状态条      保守增强:不动位置与形态,按紧急度重排 + 进度可视化
+   *                        + 悬停出文字标签 + 窄栏自动让位
+   *   方案 B · 停靠台      结构改动:胶囊变成消息流上方一根**真实台头行**,
+   *                        标签常驻铺开,彻底不遮挡;滚动后可收起成 2px 进度线
+   *   方案 C · 指挥台      信息架构:拆成「实时簇(常驻显眼)」+「⋯ 资料(安静)」,
+   *                        运行中与归档彻底分家
+   *   方案 D · 右缘轨      空间改动:竖排节点贴右缘,与左缘的用户消息时间轴对称,
+   *                        容量纵向展开、零遮挡
+   *
+   * 控制条里的「状态 / 列宽 / 主题」驱动全部方案,便于同一条件下横向对比。
+   * #only=c 只看某一个方案(单独截图用);#bare=1 去掉页头与控制条。
+   * ========================================================================= */
+
+  /* ===== 真实 token(取自 apps/desktop/src/renderer/styles.css) ===== */
+  :root{
+    --surface:255 255 255;
+    --surface-muted:240 242 246;
+    --surface-hover:226 229 235;
+    --content:9 9 11;
+    --content-muted:63 63 70;
+    --content-subtle:113 113 122;
+    --edge:213 216 222;
+    --panel-edge:222 225 231;
+    --input-edge:202 205 212;
+    --accent:5 150 105;
+    --accent-strong:4 120 87;
+    --danger:220 38 38;
+    --warning:180 83 9;
+    --info:124 58 237;
+    --success:4 120 87;
+    --user-bubble:82 82 91;
+    --shadow-card:0 1px 2px rgb(9 9 11 / .05);
+    --shadow-pop:0 14px 40px -12px rgb(9 9 11 / .22), 0 2px 8px rgb(9 9 11 / .06);
+    --shadow-pill:0 10px 15px -3px rgb(9 9 11 / .12);
+  }
+  [data-theme="dark"]{
+    --surface:26 29 36;
+    --surface-muted:44 49 60;
+    --surface-hover:58 64 78;
+    --content:231 232 236;
+    --content-muted:188 191 198;
+    --content-subtle:158 162 171;
+    --edge:45 51 64;
+    --panel-edge:40 46 58;
+    --input-edge:95 99 110;
+    --accent:16 185 129;
+    --accent-strong:16 185 129;
+    --danger:248 113 113;
+    --warning:251 191 36;
+    --info:167 139 250;
+    --success:16 185 129;
+    --user-bubble:148 163 184;
+    --shadow-card:0 1px 2px rgb(0 0 0 / .3);
+    --shadow-pop:0 16px 44px rgb(0 0 0 / .55), 0 2px 10px rgb(0 0 0 / .35);
+    --shadow-pill:0 10px 18px -4px rgb(0 0 0 / .5);
+  }
+
+  /* ===== 动效曲线(四方案共用基调) ===== */
+  :root{
+    --ease-out:cubic-bezier(.22,1,.36,1);
+    --spring:cubic-bezier(.34,1.56,.64,1);
+    --lbl:260ms;          /* 标签收/展的宽度过渡 */
+  }
+
+  *{box-sizing:border-box}
+  body{
+    margin:0;background:rgb(var(--surface-muted));color:rgb(var(--content));
+    font-family:-apple-system,"SF Pro Text","Segoe UI","PingFang SC","Microsoft YaHei",system-ui,sans-serif;
+    font-size:13px;-webkit-font-smoothing:antialiased;transition:background .25s;
+  }
+  button{font-family:inherit;cursor:pointer}
+  code,.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+  .ic{display:block;flex:none}
+  .dim{color:rgb(var(--content-subtle))}
+  .wrap{max-width:1240px;margin:0 auto;padding:0 24px 72px}
+
+  /* ===== 页头 ===== */
+  .topbar{padding:22px 0 10px}
+  .topbar h1{font-size:17px;margin:0 0 8px;font-weight:700;letter-spacing:-.01em}
+  .topbar p{margin:0 0 14px;font-size:12.5px;line-height:1.75;color:rgb(var(--content-muted));max-width:900px}
+  .topbar code{font-size:11.5px;background:rgb(var(--surface));border:1px solid rgb(var(--edge));
+    border-radius:5px;padding:1px 5px}
+  .probs{display:grid;grid-template-columns:repeat(auto-fit,minmax(224px,1fr));gap:8px;margin:0 0 6px}
+  .prob{background:rgb(var(--surface));border:1px solid rgb(var(--edge));border-radius:11px;padding:9px 11px;
+    box-shadow:var(--shadow-card)}
+  .prob b{display:block;font-size:11.5px;margin-bottom:3px}
+  .prob span{font-size:11.5px;line-height:1.6;color:rgb(var(--content-muted))}
+  .prob .n{display:inline-grid;place-items:center;width:15px;height:15px;border-radius:50%;
+    background:rgb(var(--surface-muted));color:rgb(var(--content-muted));font-size:9px;font-weight:700;
+    margin-right:5px;vertical-align:1px}
+
+  /* ===== 控制条(吸顶) ===== */
+  .ctrlbar{
+    position:sticky;top:0;z-index:90;display:flex;align-items:center;gap:14px;flex-wrap:wrap;
+    padding:9px 13px;margin:12px 0 22px;border-radius:13px;
+    background:rgb(var(--surface)/.88);backdrop-filter:blur(12px);
+    border:1px solid rgb(var(--edge));box-shadow:var(--shadow-card);
+  }
+  .cg{display:flex;align-items:center;gap:6px}
+  .cg>label{font-size:10.5px;font-weight:700;color:rgb(var(--content-subtle));letter-spacing:.05em}
+  .segctl{display:flex;background:rgb(var(--surface-muted));border:1px solid rgb(var(--edge)/.7);
+    border-radius:9px;padding:2px;gap:2px}
+  .sbtn{border:none;background:none;padding:5px 10px;border-radius:6px;font-size:11.5px;font-weight:600;
+    color:rgb(var(--content-muted));transition:all .15s}
+  .sbtn:hover{color:rgb(var(--content));background:rgb(var(--surface-hover)/.7)}
+  .sbtn.cur{background:rgb(var(--surface));color:rgb(var(--accent-strong));
+    box-shadow:0 0 0 1px rgb(var(--accent)/.5),0 1px 2px rgb(9 9 11/.08)}
+  .links{display:flex;gap:2px;margin-left:auto}
+  .links a{font-size:11px;font-weight:600;color:rgb(var(--content-subtle));text-decoration:none;
+    padding:5px 9px;border-radius:7px;transition:all .15s}
+  .links a:hover{color:rgb(var(--content));background:rgb(var(--surface-hover)/.8)}
+  .slider{display:flex;align-items:center;gap:8px;flex:1;min-width:200px;max-width:330px}
+  input[type=range]{-webkit-appearance:none;appearance:none;flex:1;height:4px;border-radius:2px;margin:0;
+    background:linear-gradient(90deg,rgb(var(--accent)/.3),rgb(var(--surface-hover)));outline:none}
+  input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:15px;height:15px;border-radius:50%;
+    background:rgb(var(--surface));border:2px solid rgb(var(--accent));box-shadow:0 1px 4px rgb(9 9 11/.2)}
+  .readout{font-size:10.5px;font-variant-numeric:tabular-nums;color:rgb(var(--content-subtle));width:62px}
+
+  /* ===== 方案区块 ===== */
+  .variant{scroll-margin-top:74px;margin:0 0 34px}
+  .vhead{margin:0 0 12px}
+  .vhead h2{font-size:14.5px;margin:0 0 5px;font-weight:700;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+  .tag{font-size:10px;font-weight:700;letter-spacing:.04em;padding:2px 7px;border-radius:999px;
+    background:rgb(var(--surface));border:1px solid rgb(var(--edge));color:rgb(var(--content-muted))}
+  .tag.rec{background:rgb(var(--accent)/.12);border-color:rgb(var(--accent)/.45);color:rgb(var(--accent-strong))}
+  .vdesc{margin:0;font-size:12.5px;line-height:1.75;color:rgb(var(--content-muted));max-width:940px}
+  .vdesc b{color:rgb(var(--content))}
+  .vbody{display:flex;gap:20px;align-items:flex-start;flex-wrap:wrap}
+  .colhead{font-size:10.5px;font-weight:700;letter-spacing:.05em;color:rgb(var(--content-subtle));
+    margin:0 0 7px}
+  .notes{list-style:none;margin:0;padding:0;flex:1;min-width:280px;max-width:460px;
+    background:rgb(var(--surface));border:1px solid rgb(var(--edge));border-radius:12px;
+    padding:13px 15px;box-shadow:var(--shadow-card)}
+  .notes li{font-size:12px;line-height:1.7;color:rgb(var(--content-muted));padding-left:15px;position:relative;
+    margin-bottom:8px}
+  .notes li:last-child{margin-bottom:0}
+  .notes li::before{content:"";position:absolute;left:1px;top:8px;width:5px;height:5px;border-radius:50%;
+    background:rgb(var(--accent)/.75)}
+  .notes li b{color:rgb(var(--content))}
+  .notes li.warn::before{background:rgb(var(--warning)/.8)}
+
+  /* ===== 假聊天窗口(所有方案共用的舞台) ===== */
+  .frame{
+    position:relative;width:var(--colw);max-width:100%;height:430px;overflow:hidden;
+    background:rgb(var(--surface));border:1px solid rgb(var(--edge));border-radius:14px;
+    box-shadow:var(--shadow-card);display:flex;flex-direction:column;transition:width .18s var(--ease-out)
+  }
+  .frame-top{display:flex;align-items:center;gap:7px;padding:7px 14px;font-size:10.5px;
+    color:rgb(var(--content-subtle));border-bottom:1px solid rgb(var(--edge)/.5);flex:none}
+  .mbadge{font-size:9.5px;font-weight:600;padding:1px 6px;border-radius:5px;background:rgb(var(--surface-muted));
+    color:rgb(var(--content-muted))}
+  .ledot{width:5px;height:5px;border-radius:50%;background:rgb(var(--warning));animation:pulse 1.6s ease-in-out infinite}
+  .lel{color:rgb(var(--warning));font-weight:600}
+  .optick{display:inline-flex;align-items:center;gap:4px;padding-left:7px;border-left:1px solid rgb(var(--edge));
+    margin-left:3px;max-width:230px;overflow:hidden}
+  .steps{margin-left:auto;flex:none}
+  .frame-body{flex:1;min-height:0;padding:12px 14px;overflow:hidden;display:flex;flex-direction:column;gap:11px}
+  .bubble{align-self:flex-end;max-width:74%;background:rgb(var(--user-bubble));color:rgb(255 255 255);
+    border-radius:12px;padding:7px 11px;font-size:12px;line-height:1.6;
+    box-shadow:0 2px 6px -2px rgb(0 0 0/.18)}
+  .msg{display:flex;flex-direction:column;gap:9px}
+  .msg p{margin:0;font-size:12px;line-height:1.78;color:rgb(var(--content))}
+  .msg p b{font-weight:600}
+  .msg code{font-size:11px;background:rgb(var(--surface-muted));border-radius:4px;padding:1px 4px}
+  .toolrow{display:flex;align-items:center;gap:7px;font-size:11px;color:rgb(var(--content-muted));
+    background:rgb(var(--surface-muted)/.7);border:1px solid rgb(var(--edge)/.6);border-radius:8px;
+    padding:5px 9px}
+  .toolrow b{font-weight:600;color:rgb(var(--content))}
+  .tagok{margin-left:auto;color:rgb(var(--accent));flex:none}
+  .composer{margin:0 14px 14px;border:1px solid rgb(var(--input-edge));border-radius:13px;
+    background:rgb(var(--surface));padding:9px 11px;flex:none;box-shadow:var(--shadow-card)}
+  .composer .ph{font-size:12px;color:rgb(var(--content-subtle));margin-bottom:9px}
+  .minipill{display:inline-flex;align-items:center;gap:0;border:1px solid rgb(var(--edge));border-radius:999px;
+    padding:2px;font-size:10.5px;color:rgb(var(--content-muted))}
+  .minipill span{padding:2px 8px;display:inline-flex;align-items:center;gap:4px;
+    border-right:1px solid rgb(var(--edge)/.7)}
+  .minipill span:last-child{border-right:none}
+  .minipill .go{margin-left:auto;width:20px;height:20px;border-radius:50%;background:rgb(var(--accent));
+    display:grid;place-items:center;color:#fff;flex:none}
+
+  /* ===== 玻璃药丸(现状 + 方案 A 共用底子) ===== */
+  .floatwrap{position:absolute;right:32px;top:8px;z-index:30;display:flex;justify-content:flex-end}
+  .pillwrap{position:relative;animation:cap-in 160ms ease-out}
+  .halo{position:absolute;inset:-6px;border-radius:999px;background:rgb(var(--warning)/.2);
+    filter:blur(6px);animation:breathe 2.4s ease-in-out infinite}
+  .ring{border-radius:999px;padding:1px;box-shadow:var(--shadow-pill);
+    background:linear-gradient(to bottom,rgb(0 0 0/.25),rgb(0 0 0/.10))}
+  [data-theme="dark"] .ring{background:linear-gradient(to bottom,rgb(255 255 255/.3),rgb(255 255 255/.08))}
+  .pill{display:flex;align-items:center;gap:4px;border:none;border-radius:999px;padding:4px 8px;
+    font-size:11px;font-weight:500;font-variant-numeric:tabular-nums;
+    background:rgb(var(--surface-muted)/.9);backdrop-filter:blur(12px);color:rgb(var(--content));
+    box-shadow:inset 0 1px 0 rgb(255 255 255/.12);transition:all .2s}
+  .pill:hover{transform:translateY(-1px)}
+  .cseg{display:flex;align-items:center;gap:4px;flex:none;position:relative}
+  .cseg b{font-weight:600}
+  .cdiv{width:1px;height:12px;flex:none;
+    background:linear-gradient(to bottom,transparent,rgb(var(--content-subtle)/.5),transparent)}
+  .cdiv.strong{height:14px;background:linear-gradient(to bottom,transparent,rgb(var(--content-subtle)/.75),transparent)}
+  .chev{display:flex;margin-left:2px;opacity:.6;transition:transform .2s var(--ease-out)}
+  .lblwrap{display:grid;grid-template-columns:0fr;overflow:hidden;transition:grid-template-columns var(--lbl) var(--ease-out)}
+  .lblwrap>span{overflow:hidden;white-space:nowrap;min-width:0;opacity:0;transition:opacity .18s}
+  .pill:hover .lblwrap,.demohover .lblwrap{grid-template-columns:1fr}
+  .pill:hover .lblwrap>span,.demohover .lblwrap>span{opacity:1}
+  /* 运行中那一段的文字常驻 —— 这是方案 A 最关键的"一眼可读",不依赖 hover */
+  .cseg.live .lblwrap{grid-template-columns:1fr}
+  .cseg.live .lblwrap>span{opacity:1}
+  .pdot{width:5px;height:5px;border-radius:50%;background:rgb(var(--warning));flex:none;
+    animation:pulse 1.5s ease-in-out infinite}
+  .cseg.live{color:rgb(var(--warning));font-weight:600}
+  .cseg.quiet{color:rgb(var(--content-muted));opacity:.85}
+  .cseg.quiet.nav{opacity:.62}
+  /* 任务段的进度下划线:数字之外多一层"还剩多少"的直观读数 */
+  .ubar{position:absolute;left:2px;right:2px;bottom:-1px;height:2px;border-radius:2px;
+    background:rgb(var(--surface-hover));overflow:hidden}
+  .ubar i{display:block;height:100%;background:rgb(var(--accent));border-radius:2px;
+    transition:width .3s var(--ease-out)}
+  .cseg.prog{padding-bottom:2px}
+
+  /* 标注小圆点:挂在段落下方,不压住数字 */
+  .mk{position:absolute;bottom:-9px;right:0;width:14px;height:14px;border-radius:50%;
+    background:rgb(var(--info));color:#fff;font-size:9px;font-weight:700;display:grid;place-items:center;
+    box-shadow:0 0 0 2px rgb(var(--surface));font-variant-numeric:tabular-nums;z-index:5}
+
+  /* ===== 方案 B · 停靠台 ===== */
+  .dock{display:flex;align-items:center;gap:10px;padding:6px 12px;flex:none;
+    border-bottom:1px solid rgb(var(--edge)/.6);background:rgb(var(--surface));font-size:11px;
+    transition:height .2s var(--ease-out),padding .2s var(--ease-out);overflow:hidden}
+  .dock-l{display:flex;align-items:center;gap:7px;min-width:0;color:rgb(var(--content-muted))}
+  .dock-l .strong{color:rgb(var(--content));font-weight:600}
+  .dock-r{display:flex;align-items:center;gap:5px;margin-left:auto;flex:none}
+  .dchip{position:relative;display:inline-flex;align-items:center;gap:5px;border:1px solid rgb(var(--edge));
+    background:rgb(var(--surface-muted)/.6);
+    border-radius:8px;padding:3px 8px;font-size:11px;color:rgb(var(--content-muted));font-weight:500;
+    transition:all .15s;overflow:hidden}
+  .dchip b{color:rgb(var(--content));font-weight:600;font-variant-numeric:tabular-nums}
+  .dchip:hover{background:rgb(var(--surface-hover)/.8);color:rgb(var(--content))}
+  .dchip.live{border-color:rgb(var(--warning)/.45);background:rgb(var(--warning)/.1);color:rgb(var(--warning))}
+  .dchip.live b{color:inherit}
+  .dchipbar{position:absolute;left:0;right:0;bottom:0;height:2px;background:rgb(var(--surface-hover))}
+  .dchipbar>i{display:block;height:100%;background:rgb(var(--accent));transition:width .3s var(--ease-out)}
+  /* 极窄栏:标签收起成纯图标 + 数字,行高与布局不变 */
+  .dock.narrow .dchip>span{display:none}
+  .dock.narrow .dock-l .strong{display:none}
+  .dockline{position:absolute;left:0;right:0;top:0;height:3px;background:rgb(var(--surface-hover));z-index:5}
+  .dockline i{display:block;height:100%;background:rgb(var(--accent));transition:width .3s var(--ease-out)}
+  /* 滚动后收起的形态:整行归零,只在顶边留一条进度线 */
+  .dock.collapsed{height:0;padding-top:0;padding-bottom:0;border-bottom-color:transparent}
+
+  /* ===== 方案 C · 指挥台 ===== */
+  .deck{display:flex;align-items:center;gap:8px}
+  .cluster{display:flex;align-items:center;gap:7px;border-radius:999px;
+    animation:cap-in 200ms var(--spring)}
+  .cl-live{border-radius:999px;padding:4px 9px;font-size:11px;font-weight:600;font-variant-numeric:tabular-nums;
+    color:rgb(var(--warning));background:rgb(var(--warning)/.1);border:1px solid rgb(var(--warning)/.35);
+    backdrop-filter:blur(10px)}
+  .cl-live.hide{display:none}
+  /* 窄栏:实时簇缩到只剩头像 + 任务环(文字与走时让位) */
+  .deck.narrow .lw,.deck.narrow .el{display:none}
+  .avers{display:flex;align-items:center}
+  .avers i{width:16px;height:16px;border-radius:50%;display:grid;place-items:center;font-size:8.5px;
+    font-weight:700;font-style:normal;background:rgb(var(--surface));border:1.5px solid rgb(var(--surface-muted));
+    color:rgb(var(--content-muted));margin-left:-5px}
+  .avers i:first-child{margin-left:0}
+  .avers i.run{border-color:rgb(var(--warning));color:rgb(var(--warning))}
+  .cl-ref{position:relative;border-radius:999px;padding:4px 9px;font-size:11px;font-weight:600;
+    font-variant-numeric:tabular-nums;color:rgb(var(--content-muted));
+    background:rgb(var(--surface-muted)/.92);backdrop-filter:blur(12px);
+    border:1px solid rgb(var(--edge));box-shadow:var(--shadow-pill)}
+  .cl-ref b{color:rgb(var(--content))}
+  .cl-ref:hover{color:rgb(var(--content))}
+  /* 环形进度:16px,不需要读数字也能看出"还剩多少" */
+  .ringlet{width:15px;height:15px;border-radius:50%;flex:none;display:grid;place-items:center;position:relative;
+    background:conic-gradient(rgb(var(--accent)) calc(var(--p,0)*1%),rgb(var(--surface-hover)) 0)}
+  .ringlet::after{content:"";position:absolute;inset:2.5px;border-radius:50%;
+    background:rgb(var(--warning)/.1)}
+  .ringlet.on::after{background:rgb(var(--surface-muted))}
+
+  /* ===== 方案 D · 右缘轨 ===== */
+  .frame.rail .frame-body{padding-right:48px}
+  .frame.rail .composer{margin-right:48px}
+  .railwrap{position:absolute;right:6px;top:50%;transform:translateY(-50%);z-index:30;
+    display:flex;flex-direction:column;gap:7px;align-items:flex-end}
+  .rnode{position:relative;width:26px;height:26px;border-radius:50%;display:grid;place-items:center;
+    background:rgb(var(--surface-muted)/.94);border:1px solid rgb(var(--edge));color:rgb(var(--content-muted));
+    backdrop-filter:blur(10px);box-shadow:var(--shadow-pill);transition:all .18s var(--ease-out)}
+  .rnode:hover{color:rgb(var(--content));transform:translateX(-2px);border-color:rgb(var(--content-subtle)/.6)}
+  .rnode .badge{position:absolute;top:-4px;right:-4px;min-width:13px;height:13px;padding:0 3px;
+    border-radius:999px;background:rgb(var(--surface-hover));color:rgb(var(--content-muted));
+    font-size:8.5px;font-weight:700;display:grid;place-items:center;
+    box-shadow:0 0 0 1.5px rgb(var(--surface))}
+  .rnode.run{color:rgb(var(--warning));border-color:rgb(var(--warning)/.55);background:rgb(var(--warning)/.12)}
+  .rnode.run .badge{background:rgb(var(--warning));color:rgb(255 255 255)}
+  .rnode.run::before{content:"";position:absolute;inset:-4px;border-radius:50%;
+    border:1.5px solid rgb(var(--warning)/.5);animation:halo 2s ease-out infinite}
+  .rnode .prg{position:absolute;inset:-1px;border-radius:50%;
+    background:conic-gradient(rgb(var(--accent)) calc(var(--p,0)*1%),transparent 0);
+    -webkit-mask:radial-gradient(farthest-side,transparent calc(100% - 2.5px),#000 0);
+    mask:radial-gradient(farthest-side,transparent calc(100% - 2.5px),#000 0)}
+  .rlabel{position:absolute;right:32px;top:50%;transform:translateY(-50%);white-space:nowrap;
+    background:rgb(var(--surface));border:1px solid rgb(var(--edge));border-radius:9px;
+    padding:5px 9px;font-size:11px;color:rgb(var(--content));box-shadow:var(--shadow-pop);
+    display:flex;align-items:center;gap:7px;animation:cap-in 150ms var(--ease-out)}
+  .rlabel .sub{color:rgb(var(--content-subtle));font-size:10.5px}
+
+  /* ===== 展开浮层(四方案共用底子,内容不同) ===== */
+  .pop{position:relative;width:384px;max-width:100%;border:1px solid rgb(var(--edge));border-radius:16px;
+    background:rgb(var(--surface)/.97);backdrop-filter:blur(16px);overflow:hidden;
+    box-shadow:inset 0 1px 0 rgb(255 255 255/.08),var(--shadow-pop);animation:pop-in 180ms var(--ease-out)}
+  .pop.anchor-top{position:absolute;right:0;top:34px;z-index:40}
+  .pop-h{display:flex;align-items:center;gap:8px;padding:9px 12px;border-bottom:1px solid rgb(var(--edge)/.5);
+    font-size:11px;color:rgb(var(--content-muted))}
+  .pop-h .strong{color:rgb(var(--content));font-weight:600}
+  .pop-h .right{margin-left:auto;display:flex;align-items:center;gap:5px;font-size:10.5px}
+  .ptabs{display:flex;gap:2px;padding:6px 8px;border-bottom:1px solid rgb(var(--edge)/.5);
+    background:rgb(var(--surface-muted)/.4)}
+  .ptab{border:none;background:none;padding:4px 9px;border-radius:7px;font-size:11px;font-weight:600;
+    color:rgb(var(--content-subtle));display:inline-flex;align-items:center;gap:5px}
+  .ptab .cnt{font-variant-numeric:tabular-nums;font-size:10px;padding:0 5px;border-radius:999px;
+    background:rgb(var(--surface-hover))}
+  .ptab.cur{background:rgb(var(--surface));color:rgb(var(--content));box-shadow:0 0 0 1px rgb(var(--edge))}
+  .ptab.cur .cnt{background:rgb(var(--accent)/.16);color:rgb(var(--accent-strong))}
+  .psec{border-bottom:1px solid rgb(var(--edge)/.4)}
+  .psec:last-child{border-bottom:none}
+  .psec-h{display:flex;align-items:center;gap:6px;padding:7px 12px;background:rgb(var(--surface-muted)/.5);
+    font-size:11px;font-weight:600;color:rgb(var(--content))}
+  .psec-h .r{margin-left:auto;font-size:10px;font-weight:500;color:rgb(var(--content-subtle));
+    font-variant-numeric:tabular-nums;display:flex;align-items:center;gap:5px}
+  .prow{position:relative;display:flex;gap:8px;padding:7px 12px 7px 14px;font-size:11px;
+    border-left:2px solid transparent;transition:background .15s}
+  .prow:hover{background:rgb(var(--surface-muted)/.7)}
+  .prow .body{min-width:0;flex:1}
+  .prow .desc{color:rgb(var(--content));line-height:1.5}
+  .prow .meta{display:flex;flex-wrap:wrap;gap:4px;margin-top:4px}
+  .pchip{font-size:9px;padding:1px 5px;border-radius:4px;background:rgb(var(--surface-muted));
+    color:rgb(var(--content-subtle));font-variant-numeric:tabular-nums}
+  .pchip.type{background:rgb(var(--info)/.16);color:rgb(var(--info));font-weight:600;
+    text-transform:uppercase;letter-spacing:.04em}
+  /* 注意:必须 display:block —— 它是 <span>,inline 元素上 height/overflow 无效,
+     会把内层 <i> 撑成一个整块色块(踩过) */
+  .pbar{display:block;height:3px;border-radius:2px;background:rgb(var(--surface-hover));
+    overflow:hidden;margin-top:5px}
+  .pbar i{display:block;height:100%;border-radius:2px;background:rgb(var(--accent));transition:width .3s var(--ease-out)}
+  .pbar.run i{background:rgb(var(--warning));animation:scan 1.8s ease-in-out infinite}
+  .prow .status{display:inline-flex;align-items:center;gap:5px;font-size:10px;font-weight:600}
+  .st-run{color:rgb(var(--warning))}.st-done{color:rgb(var(--accent))}
+  .st-fail{color:rgb(var(--danger))}.st-idle{color:rgb(var(--content-subtle))}
+  .ptodo{display:flex;gap:7px;padding:6px 12px;font-size:11px;border-left:2px solid transparent}
+  .ptodo.high{border-left-color:rgb(var(--danger))}
+  .ptodo.medium{border-left-color:rgb(var(--warning))}
+  .ptodo.low{border-left-color:rgb(var(--content-subtle)/.5)}
+  .ptodo .txt{line-height:1.5;color:rgb(var(--content-muted))}
+  .ptodo.done .txt{color:rgb(var(--content-subtle));text-decoration:line-through}
+  .pbook{display:flex;align-items:center;gap:8px;padding:7px 12px;font-size:11px}
+  .pbook:hover{background:rgb(var(--surface-muted)/.7)}
+  .pbook .t{min-width:0;flex:1;color:rgb(var(--content));overflow:hidden;text-overflow:ellipsis;
+    white-space:nowrap}
+  .pbook .at{flex:none;font-size:9px;color:rgb(var(--content-subtle));font-variant-numeric:tabular-nums}
+  .split-note{display:flex;align-items:center;gap:6px;padding:6px 12px;font-size:10px;
+    color:rgb(var(--content-subtle));background:rgb(var(--surface-muted)/.35)}
+  .pfoot{display:flex;align-items:center;gap:6px;padding:8px 12px;font-size:10.5px;
+    color:rgb(var(--content-subtle));border-top:1px solid rgb(var(--edge)/.5);background:rgb(var(--surface-muted)/.3)}
+
+  /* ===== 展开态包装 ===== */
+  .expandrow{margin-top:18px;display:flex;gap:20px;align-items:flex-start;flex-wrap:wrap}
+  .expandstage{position:relative;padding:26px 0 0;background:rgb(var(--surface-muted)/.45);
+    border:1px dashed rgb(var(--edge));border-radius:12px;flex:none}
+  .anchorstage{position:relative;padding:8px 30px 20px;border:1px dashed rgb(var(--edge));border-radius:12px;
+    background:rgb(var(--surface-muted)/.45)}
+
+  /* ===== 状态一览(每方案三态) ===== */
+  .statewrap{margin-top:18px}
+  .stategrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(290px,1fr));gap:12px}
+  .statecard{background:rgb(var(--surface));border:1px solid rgb(var(--edge));border-radius:12px;
+    padding:11px 12px 13px;box-shadow:var(--shadow-card)}
+  .cap{font-size:10.5px;color:rgb(var(--content-subtle));margin-bottom:9px;line-height:1.6}
+  .cap b{color:rgb(var(--content));font-size:11.5px;display:block;margin-bottom:2px}
+  .stage{position:relative;min-height:104px;display:flex;align-items:center;justify-content:center;
+    background:rgb(var(--surface-muted)/.5);border:1px solid rgb(var(--edge)/.5);border-radius:10px;
+    padding:10px;overflow:hidden}
+  .stage.dockstage{align-items:flex-start;flex-direction:column;justify-content:flex-start;padding:0;min-height:60px}
+  .stage.railstage{justify-content:flex-end;padding-right:6px;min-height:150px}
+  .stage .ghost{position:absolute;left:10px;right:10px;top:9px;font-size:10.5px;line-height:1.6;
+    color:rgb(var(--content-subtle));opacity:.5;pointer-events:none}
+  .stage.dockstage .ghost{top:38px}
+  .stage.railstage .ghost{right:44px}
+
+  /* ===== 方案 D 展开面板「活动台」 =====
+     不再是"一列清单":头部(节点身份 + 实时摘要 + 在右栏打开) / 汇总条 / 筛选 chip /
+     分区正文 / 页脚动作。四种节点各有一份,内容与强调色不同。 */
+  .flygrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(520px,1fr));gap:14px}
+  /* align-items:stretch + .fly{height:100%}:同一行的两张面板等高(缺口仍由 margin-top 对准) */
+  .flystage{position:relative;display:flex;justify-content:flex-end;align-items:stretch;gap:10px;
+    padding:14px 14px 18px;background:rgb(var(--surface-muted)/.4);border:1px dashed rgb(var(--edge));
+    border-radius:13px;overflow:hidden}
+  .flyrail{display:flex;flex-direction:column;gap:7px;flex:none;margin-top:34px}
+  .rnode.active{border-color:rgb(var(--accent));color:rgb(var(--content));
+    box-shadow:0 0 0 3px rgb(var(--accent)/.16),var(--shadow-pill)}
+  .fly-anchor{flex:none;display:flex}
+  .fly{position:relative;width:404px;height:100%;border:1px solid rgb(var(--edge));border-radius:15px;
+    background:rgb(var(--surface));box-shadow:var(--shadow-pop);display:flex;flex-direction:column;
+    overflow:hidden;animation:pop-in 200ms var(--ease-out)}
+  /* 缺口:对准被点击的那颗节点(top 25.5 = NOTCH_Y 30 − 旋转方块 bbox 中心的 4.5px 偏移) */
+  .fly-notch{position:absolute;right:-5px;top:25.5px;width:9px;height:9px;background:rgb(var(--surface));
+    border-right:1px solid rgb(var(--edge));border-top:1px solid rgb(var(--edge));
+    transform:rotate(45deg);z-index:2}
+  .fly-h{display:flex;align-items:center;gap:9px;padding:10px 12px;flex:none}
+  .fly-ico{width:28px;height:28px;border-radius:9px;display:grid;place-items:center;flex:none}
+  .a-amber{background:rgb(var(--warning)/.14);color:rgb(var(--warning))}
+  .a-accent{background:rgb(var(--accent)/.14);color:rgb(var(--accent-strong))}
+  .a-info{background:rgb(var(--info)/.14);color:rgb(var(--info))}
+  .fly-title{min-width:0;flex:1}
+  .fly-title b{display:block;font-size:12.5px;font-weight:700;letter-spacing:-.01em}
+  .fly-title>span{display:block;font-size:10.5px;color:rgb(var(--content-subtle));margin-top:1px}
+  .fly-acts{display:flex;gap:5px;flex:none}
+  .fbtn{width:24px;height:24px;border-radius:7px;border:1px solid rgb(var(--edge));
+    background:rgb(var(--surface-muted)/.6);color:rgb(var(--content-muted));display:grid;place-items:center;
+    transition:all .15s}
+  .fbtn:hover{background:rgb(var(--surface-hover));color:rgb(var(--content))}
+  .fly-stats{display:flex;align-items:center;gap:8px;padding:7px 12px;font-size:10.5px;
+    color:rgb(var(--content-subtle));font-variant-numeric:tabular-nums;flex-wrap:wrap;flex:none;
+    border-top:1px solid rgb(var(--edge)/.5);border-bottom:1px solid rgb(var(--edge)/.5);
+    background:rgb(var(--surface-muted)/.4)}
+  .fly-stats b{color:rgb(var(--content));font-weight:600}
+  .fly-stats .sep{width:1px;height:11px;background:rgb(var(--edge));flex:none}
+  .fly-stats .warn b{color:rgb(var(--danger))}
+  .fly-tabs{display:flex;gap:4px;padding:7px 10px 3px;flex:none;flex-wrap:wrap}
+  .ftab{border:1px solid transparent;background:none;padding:3px 8px;border-radius:999px;font-size:10.5px;
+    font-weight:600;color:rgb(var(--content-subtle));display:inline-flex;align-items:center;gap:5px;
+    transition:all .15s}
+  .ftab .cnt{font-size:9px;padding:0 4px;border-radius:999px;background:rgb(var(--surface-muted));
+    color:rgb(var(--content-muted));font-variant-numeric:tabular-nums}
+  .ftab:hover{color:rgb(var(--content));background:rgb(var(--surface-muted)/.7)}
+  .ftab.cur{border-color:rgb(var(--edge));background:rgb(var(--surface-muted));color:rgb(var(--content))}
+  .ftab.cur .cnt{background:rgb(var(--accent)/.16);color:rgb(var(--accent-strong))}
+  .fly-body{flex:1;min-height:0;overflow-y:auto}
+  .fsec-h{display:flex;align-items:center;gap:6px;padding:6px 12px;font-size:10px;font-weight:700;
+    letter-spacing:.04em;color:rgb(var(--content-subtle));position:sticky;top:0;z-index:2;
+    background:rgb(var(--surface)/.95);backdrop-filter:blur(6px)}
+  .fsec-h .r{margin-left:auto;font-weight:600;font-variant-numeric:tabular-nums}
+  /* 子代理行 */
+  .frow{position:relative;padding:8px 12px 9px 14px;border-bottom:1px solid rgb(var(--edge)/.35)}
+  .frow:last-child{border-bottom:none}
+  .frow:hover{background:rgb(var(--surface-muted)/.45)}
+  .frow .bar{position:absolute;left:0;top:7px;bottom:7px;width:2px;border-radius:2px}
+  .frow .bar.run{background:rgb(var(--warning));animation:pulse 1.8s ease-in-out infinite}
+  .frow .bar.done{background:rgb(var(--accent)/.5)}
+  .frow .bar.bad{background:rgb(var(--danger)/.5)}
+  .frow-top{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+  .ftype{font-size:8.5px;font-weight:700;letter-spacing:.05em;padding:1px 5px;border-radius:4px;
+    background:rgb(var(--info)/.16);color:rgb(var(--info))}
+  .ftime{margin-left:auto;font-size:9.5px;color:rgb(var(--content-subtle));font-variant-numeric:tabular-nums}
+  .fdesc{margin:4px 0 0;font-size:11.5px;line-height:1.5;color:rgb(var(--content))}
+  .fsum{margin:3px 0 0;font-size:10px;font-style:italic;color:rgb(var(--content-subtle))}
+  .ferr{margin:3px 0 0;font-size:10px;color:rgb(var(--danger))}
+  .fmetrics{display:flex;align-items:center;gap:4px;margin-top:6px;flex-wrap:wrap}
+  .fm{font-size:9px;padding:1px 5px;border-radius:4px;background:rgb(var(--surface-muted));
+    color:rgb(var(--content-subtle));font-variant-numeric:tabular-nums}
+  .fm b{color:rgb(var(--content-muted));font-weight:600}
+  .fgo{margin-left:auto;font-size:10px;font-weight:600;color:rgb(var(--accent-strong));
+    opacity:0;transition:opacity .15s;flex:none}
+  .frow:hover .fgo,.plrow:hover .fgo{opacity:1}
+  /* 迷你时间轴:条形长度 = 该代理在会话时间轴上的真实跨度 */
+  .ftl{position:relative;display:block;height:4px;margin-top:7px;border-radius:2px;
+    background:rgb(var(--surface-muted));overflow:hidden}
+  .ftl i{position:absolute;top:0;bottom:0;border-radius:2px;background:rgb(var(--accent)/.4)}
+  .ftl i.run{background:rgb(var(--warning)/.85)}
+  .ftl i.bad{background:rgb(var(--danger)/.55)}
+  .ftl .now{position:absolute;top:-1px;bottom:-1px;right:0;width:1px;background:rgb(var(--content-subtle)/.55)}
+  /* 任务看板 */
+  .tk-dash{display:flex;align-items:center;gap:11px;width:100%;padding:2px 0}
+  .tk-ring{width:34px;height:34px;border-radius:50%;flex:none;display:grid;place-items:center;position:relative;
+    background:conic-gradient(rgb(var(--accent)) calc(var(--p,0)*1%),rgb(var(--surface-hover)) 0)}
+  .tk-ring::after{content:"";position:absolute;inset:4px;border-radius:50%;background:rgb(var(--surface))}
+  .tk-ring b{position:relative;font-size:9.5px;font-weight:700;font-variant-numeric:tabular-nums}
+  .tk-mid{flex:1;min-width:0}
+  .tk-mid .top{font-size:11px;color:rgb(var(--content-muted));margin-bottom:5px}
+  .tk-mid .top b{color:rgb(var(--content));font-size:12px}
+  .tk-mid .top .rest{float:right;color:rgb(var(--content-subtle));font-size:10px}
+  .tk-seg{display:flex;gap:2px;height:6px}
+  .tk-seg i{flex:1;border-radius:2px;background:rgb(var(--surface-hover))}
+  .tk-seg i.done{background:rgb(var(--accent))}
+  .tk-seg i.now{background:rgb(var(--warning))}
+  .trow{display:flex;align-items:flex-start;gap:7px;padding:6px 12px 6px 14px;font-size:11px;
+    border-left:2px solid transparent;line-height:1.5}
+  .trow.high{border-left-color:rgb(var(--danger)/.65)}
+  .trow.medium{border-left-color:rgb(var(--warning)/.65)}
+  .trow.low{border-left-color:rgb(var(--content-subtle)/.4)}
+  .trow .tx{color:rgb(var(--content-muted))}
+  .trow.done .tx{color:rgb(var(--content-subtle));text-decoration:line-through}
+  .trow .tp{margin-left:auto;flex:none;font-size:8.5px;padding:1px 5px;border-radius:4px;
+    background:rgb(var(--surface-muted));color:rgb(var(--content-subtle))}
+  /* 计划索引 */
+  .plrow{position:relative;display:flex;gap:9px;padding:9px 12px;border-bottom:1px solid rgb(var(--edge)/.35)}
+  .plrow:last-child{border-bottom:none}
+  .plrow:hover{background:rgb(var(--surface-muted)/.45)}
+  .plnum{width:20px;height:20px;border-radius:6px;flex:none;display:grid;place-items:center;font-size:9.5px;
+    font-weight:700;background:rgb(var(--surface-muted));color:rgb(var(--content-muted));
+    font-variant-numeric:tabular-nums}
+  .plrow.cur .plnum{background:rgb(var(--accent)/.16);color:rgb(var(--accent-strong))}
+  .plmain{min-width:0;flex:1}
+  .pltitle{font-size:11.5px;font-weight:600;color:rgb(var(--content));display:flex;align-items:center;gap:6px}
+  .plcur{font-size:8.5px;font-weight:700;padding:1px 5px;border-radius:4px;flex:none;
+    background:rgb(var(--accent)/.16);color:rgb(var(--accent-strong))}
+  .plex{margin:3px 0 0;font-size:10.5px;line-height:1.5;color:rgb(var(--content-subtle));
+    display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+  .plmeta{margin-top:3px;font-size:9.5px;color:rgb(var(--content-subtle));font-variant-numeric:tabular-nums}
+  /* 书签:挂在一条竖向时间轴上(与左侧消息时间轴同语言) */
+  .bkaxis{position:relative;margin:0 12px 6px 12px;padding-left:10px;
+    border-left:1px solid rgb(var(--edge))}
+  .bkrow{position:relative;display:flex;align-items:center;gap:8px;padding:6px 0 6px 6px;font-size:11px}
+  .bkrow:hover .bkacts{opacity:1}
+  .bkdot{position:absolute;left:-15px;top:50%;transform:translateY(-50%);width:8px;height:8px;
+    border-radius:50%;background:rgb(var(--warning))}
+  .bkdot.stale{background:rgb(var(--content-subtle))}
+  .bktext{min-width:0;flex:1;color:rgb(var(--content));overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .bkrow.stale .bktext{color:rgb(var(--content-subtle))}
+  .bkclock{flex:none;font-size:9px;color:rgb(var(--content-subtle));font-variant-numeric:tabular-nums}
+  .bkacts{display:flex;gap:2px;flex:none;color:rgb(var(--content-subtle));opacity:0;transition:opacity .15s}
+  /* 页脚 */
+  .fly-f{display:flex;align-items:center;gap:7px;padding:8px 12px;font-size:10px;
+    color:rgb(var(--content-subtle));border-top:1px solid rgb(var(--edge)/.5);
+    background:rgb(var(--surface-muted)/.35);flex:none}
+  .fly-f .sp{margin-left:auto}
+  .fly-f kbd{font-family:inherit;font-size:9px;padding:1px 4px;border-radius:4px;
+    border:1px solid rgb(var(--edge));background:rgb(var(--surface))}
+
+  /* ===== 对比表 ===== */
+  table.cmp{width:100%;border-collapse:collapse;font-size:11.5px;background:rgb(var(--surface));
+    border:1px solid rgb(var(--edge));border-radius:12px;overflow:hidden}
+  table.cmp th,table.cmp td{text-align:left;padding:9px 11px;border-bottom:1px solid rgb(var(--edge)/.6);
+    vertical-align:top;line-height:1.65}
+  table.cmp th{background:rgb(var(--surface-muted)/.6);font-size:10.5px;font-weight:700;
+    letter-spacing:.03em;color:rgb(var(--content-muted));white-space:nowrap}
+  table.cmp tr:last-child td{border-bottom:none}
+  table.cmp td b{color:rgb(var(--content))}
+  table.cmp .nm{white-space:nowrap;font-weight:600;color:rgb(var(--content))}
+  .rec-note{margin:16px 0 0;padding:12px 15px;border-radius:12px;font-size:12px;line-height:1.75;
+    background:rgb(var(--accent)/.07);border:1px solid rgb(var(--accent)/.3);color:rgb(var(--content-muted))}
+  .rec-note b{color:rgb(var(--content))}
+
+  /* ===== 动效 ===== */
+  @keyframes cap-in{from{opacity:0;transform:scale(.92) translateY(-4px)}to{opacity:1;transform:none}}
+  @keyframes pop-in{from{opacity:0;transform:scale(.97) translateY(-6px)}to{opacity:1;transform:none}}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  .spin{animation:spin .9s linear infinite}
+  @keyframes breathe{0%,100%{opacity:.55}50%{opacity:1}}
+  @keyframes halo{0%{opacity:.7;transform:scale(.96)}100%{opacity:0;transform:scale(1.14)}}
+  @keyframes scan{0%{transform:translateX(-100%)}100%{transform:translateX(100%)}}
+  @media (prefers-reduced-motion:reduce){
+    *,*::before,*::after{animation:none!important;transition:none!important}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="topbar" id="pagehead">
+    <h1>聊天区右上角「活动胶囊」· 重设计四方案</h1>
+    <p>
+      现状是 <code>StatusCapsule.tsx</code> 的一颗玻璃药丸：<code>absolute right-8 top-2</code> 浮在消息流上方，
+      内部最多四段「图标 + 数字」并列（计划 ×2 │ 子代理 3 │ 任务 4/7 │ 书签 1），点开是 384px 的
+      <code>ActivityPopover</code>；有子代理在跑时药丸后面呼吸一层琥珀光。四个方案都认同下面的问题清单，
+      区别在于<b>改哪一层</b>：只改表达（A）、改宿主结构（B）、改信息架构（C）、改摆放位置（D）。
+    </p>
+    <div class="probs">
+      <div class="prob"><b><span class="n">1</span>图标 + 数字不可读</b><span>四段都不带文字，含义只存在于 title 里；新用户第一眼读不出「📋×2」是什么。</span></div>
+      <div class="prob"><b><span class="n">2</span>语义混排</b><span>书签是用户手动收藏的导航锚点，子代理/任务是模型此刻的运行时状态——同权并排，一颗胶囊又当监视器又当收藏夹。</span></div>
+      <div class="prob"><b><span class="n">3</span>优先级倒置</b><span>计划段总排第一，真正紧急的「运行中」埋在中段，只有一颗 5px 小圆点在脉冲。</span></div>
+      <div class="prob"><b><span class="n">4</span>遮挡正文</b><span>绝对定位浮在消息上方，首条消息的正文被压在玻璃下面（见「现状」里的 ④ 标记）。</span></div>
+      <div class="prob"><b><span class="n">5</span>进度不可见</b><span>任务段只有 4/7 这个分数、没有进度条；计划只有个数，看不出哪一份属于当前回合。</span></div>
+      <div class="prob"><b><span class="n">6</span>容量与窄栏</b><span>窄栏（宽屏 3:7 / 侧栏展开）时四段加箭头挤到 250px+，与正文争宽度；竖排又只能容四类。</span></div>
+    </div>
+  </header>
+
+  <div class="ctrlbar" id="ctrlbar">
+    <div class="cg">
+      <label>状态</label>
+      <div class="segctl" id="segState">
+        <button class="sbtn" data-st="calm">安静</button>
+        <button class="sbtn cur" data-st="running">运行中</button>
+        <button class="sbtn" data-st="busy">多任务</button>
+      </div>
+    </div>
+    <div class="cg">
+      <label>列宽</label>
+      <div class="slider">
+        <input type="range" id="colw" min="330" max="820" step="1" value="620">
+        <span class="readout" id="colwOut">620 px</span>
+      </div>
+    </div>
+    <div class="cg">
+      <label>主题</label>
+      <div class="segctl" id="segTheme">
+        <button class="sbtn cur" data-th="light">浅色</button>
+        <button class="sbtn" data-th="dark">深色</button>
+      </div>
+    </div>
+    <nav class="links">
+      <a href="#baseline">现状</a><a href="#vA">A</a><a href="#vB">B</a><a href="#vC">C</a><a href="#vD">D</a><a href="#cmp">对比</a>
+    </nav>
+  </div>
+
+  <!-- ================= 现状 ================= -->
+  <section class="variant" id="baseline">
+    <div class="vhead">
+      <h2><span class="tag">基线</span>现状：四段图标 + 数字，浮在右上角</h2>
+      <p class="vdesc">下面这颗就是现在的实现（结构与类名照搬）。①–⑥ 的标记对应上面那组问题；④ 标在正文上，
+        <b>把「列宽」拉到 380px 以下</b>还能看到 ⑥——窄栏里药丸几乎横跨半个内容区。</p>
+    </div>
+    <div class="vbody">
+      <div>
+        <div class="colhead">在聊天里（实时列宽）</div>
+        <div data-slot="frame-baseline"></div>
+      </div>
+      <ul class="notes">
+        <li><b>① 段内只有图标与数字。</b>「☰ 4/7」得 hover 才知道是任务，触屏上连 title 都没有。</li>
+        <li><b>② 书签与运行时状态同权。</b>书签是用户资产（持久、可改名、可删除），子代理/任务是模型此刻的过程；混在一颗胶囊里，按下它去"看进度"会先撞到一堆收藏。</li>
+        <li><b>③ 计划排第一。</b>计划多的会话里，"运行中"被推到第三段，唯一提示是一颗小圆点。</li>
+        <li class="warn"><b>④ 遮挡。</b>玻璃药丸压在消息正文上；会话开头那条最长的段落正好在它下面。</li>
+        <li><b>⑤ 任务只有分数。</b>4/7 需要心算；展开浮层里才有一条整体进度条。</li>
+        <li class="warn"><b>⑥ 窄栏拥挤。</b>四段 + 分隔线 + 箭头在 <code>wide</code> 模式（聊天只占 30%）下与正文争宽。</li>
+        <li>另外，四类全空时整颗不渲染——这一点四个方案都保留，是好的。</li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- ================= 方案 A ================= -->
+  <section class="variant" id="vA" data-variant="A">
+    <div class="vhead">
+      <h2><span class="tag">方案 A</span>状态条 · 保守增强</h2>
+      <p class="vdesc">位置与形态完全不动，只把<b>表达</b>修好：按紧急度重排（运行中 → 任务 → 计划 → 书签）、
+        给活的那一段配文字与琥珀色、任务段加一条 2px 进度下划线、任何一段 hover 展开文字标签；
+        窄栏时计划与书签自动退到浮层里，只留「实时 + 进度 + 箭头」。改动最小、可以当天上。</p>
+    </div>
+    <div class="vbody">
+      <div>
+        <div class="colhead">在聊天里（实时列宽 · 悬停任一段可展开文字）</div>
+        <div data-slot="frame-A"></div>
+      </div>
+      <ul class="notes">
+        <li><b>重排。</b>运行中的子代理永远第一段并带文字「2 运行中」；没有运行中时退化成安静的「🤖 3」。</li>
+        <li><b>进度下划线。</b>任务段数字下方一条 2px 进度条，一眼看出还剩多少，不用心算 4/7。</li>
+        <li><b>hover 出标签。</b>复用 composer 的 <code>1fr↔0fr</code> 网格壳，悬停时逐段展开文字，静止时仍然紧凑。</li>
+        <li><b>书签让位。</b>换成更粗的分隔线 + 降透明度（0.62），读起来是"另一个世界的东西"，不再与实时状态平权。</li>
+        <li class="warn"><b>窄栏让位。</b>列宽 &lt; 520px 时计划/书签段隐藏，进入浮层；药丸只剩「实时 + 任务 + ⌄」，宽度降到底。</li>
+        <li class="warn"><b>没解决的：</b>④ 遮挡与 ⑥ 容量上限（仍然最多四类、仍然浮在正文上）。这是保守的代价。</li>
+      </ul>
+    </div>
+    <div class="statewrap">
+      <div class="colhead">三种数据状态</div>
+      <div class="stategrid" data-slot="states-A"></div>
+    </div>
+    <div class="expandrow">
+      <div>
+        <div class="colhead">展开态（点击药丸）</div>
+        <div data-slot="exp-A"></div>
+      </div>
+      <ul class="notes">
+        <li><b>顶部多一行实时摘要。</b>「2 个子代理运行中 · 任务 2/5 · 已跑 1m12s」——即使不展开也知道胶囊在报什么。</li>
+        <li><b>运行中的子代理置顶</b>并带进度条；已结束的排在后面，不再混排。</li>
+        <li><b>段落顺序与药丸一致</b>（实时 → 计划 → 任务 → 书签），从药丸到浮层不发生一次"位置重排"的认知跳跃。</li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- ================= 方案 B ================= -->
+  <section class="variant" id="vB" data-variant="B">
+    <div class="vhead">
+      <h2><span class="tag">方案 B</span>停靠台 · 胶囊变成一根真实台头</h2>
+      <p class="vdesc">不再浮在正文上：在消息流上方放一根 34px 的<b>真实布局行</b>（左侧实时摘要、右侧带文字标签的索引）。
+        横向空间足够，标签常驻不必 hover；<b>彻底消灭 ④ 遮挡与 ⑥ 窄栏拥挤</b>。代价是常占一行高度，
+        所以配一个「滚动后收起成 2px 进度线」的行为把空间还回去。</p>
+    </div>
+    <div class="vbody">
+      <div>
+        <div class="colhead">在聊天里（实时列宽 · 台头行占布局）</div>
+        <div data-slot="frame-B"></div>
+      </div>
+      <ul class="notes">
+        <li><b>左：实时摘要。</b>琥珀点 + 「2 个子代理运行中」+ 12 步 + 1m12s。这是"现在在干什么"的常驻答案。</li>
+        <li><b>右：带标签的索引。</b>「计划 2」「任务 2/5」都是常驻文字，不需要 hover、触屏也可读。</li>
+        <li><b>任务 chip 自带进度底纹</b>：chip 内部下沿 2px 进度条，分数之外多一层直观读数。</li>
+        <li class="warn"><b>占用与位移。</b>34px 是常驻成本；四类全空时整行不渲染，所以会话里"活动出现/消失"会有一次高度变化。</li>
+        <li><b>滚动收起。</b>离开顶部后整行高度归零，只在顶边留一条 3px 进度线（截图里的第三种状态）；回到顶部或向上滚动时展开。</li>
+        <li><b>窄栏也成立</b>：标签在极窄时收成图标 + 数字（复用同一套 <code>lblwrap</code>），行永远不换行不换高。</li>
+      </ul>
+    </div>
+    <div class="statewrap">
+      <div class="colhead">三种数据状态（含滚动收起形态）</div>
+      <div class="stategrid" data-slot="states-B"></div>
+    </div>
+    <div class="expandrow">
+      <div>
+        <div class="colhead">展开态（点击右端箭头，从台头右侧垂下）</div>
+        <div class="anchorstage" data-slot="exp-B"></div>
+      </div>
+      <ul class="notes">
+        <li>浮层内容与方案 A 同构（实时摘要 + 运行中置顶 + 计划/任务/书签），差别只在锚点：从台头右端垂下，不再浮在正文里。</li>
+        <li>因为台头本身已经表达了"有什么、多少"，浮层在这里更像<b>下钻</b>而不是"探查"，宽度也可以更窄。</li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- ================= 方案 C ================= -->
+  <section class="variant" id="vC" data-variant="C">
+    <div class="vhead">
+      <h2><span class="tag">方案 C</span>指挥台 · 实时与资料分家</h2>
+      <p class="vdesc">不换位置、不占布局，但把<b>信息架构</b>拆开：左边一簇只说"此刻在跑什么"
+        （运行中的子代理头像 + 任务环 + 走时），空闲时整簇消失；右边一颗安静的
+        <b>⋯ 资料</b>按钮收纳计划、已结束的子代理、书签。改动集中在语义与状态机，遮蔽问题维持现状（但元件更小更靠边）。</p>
+    </div>
+    <div class="vbody">
+      <div>
+        <div class="colhead">在聊天里（实时列宽）</div>
+        <div data-slot="frame-C"></div>
+      </div>
+      <ul class="notes">
+        <li><b>② 语义分家的落地。</b>实时簇是"监视器"（会自动出现、自动消失），⋯ 是"资料柜"（用户资产与历史，永远在）。</li>
+        <li><b>空闲态最安静。</b>没有运行中的东西时整颗只剩「⋯ 6」——比现在的四段安静得多，右上角不再有噪音。</li>
+        <li><b>实时簇可读。</b>带琥珀色、头像、16px 环形进度与走时；一眼即知"两个子代理在跑、任务六成"。</li>
+        <li><b>位置不漂移。</b>⋯ 钉在固定的右端，实时簇向左生长（<code>justify-content:flex-end</code>），出现/消失不会挪动 ⋯ 的位置。</li>
+        <li class="warn"><b>两个目标要学。</b>用户先要知道"实时在左边、资料在右边"；用一周的首次提示缓解。</li>
+        <li class="warn"><b>没解决的：</b>④ 遮挡（但最常用的"看进度"路径不再需要开浮层，遮挡影响变小）。</li>
+      </ul>
+    </div>
+    <div class="statewrap">
+      <div class="colhead">三种数据状态</div>
+      <div class="stategrid" data-slot="states-C"></div>
+    </div>
+    <div class="expandrow">
+      <div>
+        <div class="colhead">展开态（点击 ⋯ → 顶部两个页签）</div>
+        <div data-slot="exp-C"></div>
+      </div>
+      <ul class="notes">
+        <li><b>页签「运行中 2」</b>：只有正在跑的子代理 + 进行中的任务，行短、信息密度低、可以常开。</li>
+        <li><b>页签「资料 9」</b>：计划（含"本轮"标记）、已结束的子代理、全部任务、书签。这是"回头看"的地方。</li>
+        <li>已结束的子代理从实时区移走后，实时页签的行数天然有界，不会随会话变长而越堆越多。</li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- ================= 方案 D ================= -->
+  <section class="variant" id="vD" data-variant="D">
+    <div class="vhead">
+      <h2><span class="tag rec">已选</span><span class="tag">方案 D</span>右缘轨 · 与左侧时间轴对称</h2>
+      <p class="vdesc">把胶囊从"右上角的点"改成"右边的一条轨"：竖排 26px 圆形节点贴住聊天列右缘，垂直居中，
+        与左缘已有的<b>用户消息时间轴</b>形成对称——左边是"你去过哪里"，右边是"agent 正在做什么"。
+        零遮挡、容量纵向展开；代价是与右面板争夺边缘，且标签只在 hover 时出现。</p>
+    </div>
+    <div class="vbody">
+      <div>
+        <div class="colhead">在聊天里（实时列宽 · 静止态；悬停浮出标签见下方状态一览）</div>
+        <div data-slot="frame-D"></div>
+      </div>
+      <ul class="notes">
+        <li><b>④⑥ 一次解决。</b>轨道竖排、只占 26px 宽，永不与正文重叠，也不参与横向竞争。</li>
+        <li><b>容量天然够。</b>四类节点只占约 130px 高，将来加"本轮文件""检查点"等新类别也只是多一颗节点。</li>
+        <li><b>与左缘时间轴对称。</b>左灰/金短划线（消息与书签）↔ 右玻璃圆点（计划/子代理/任务/书签），一条消息走廊。</li>
+        <li><b>进度直接做在节点上</b>：任务节点外圈的 conic 进度；运行中的子代理节点带 amber 光环脉冲。</li>
+        <li><b>hover 浮出标签卡</b>，子代理节点还会直接列出最多两条运行中的行（不必开浮层就能看描述）。</li>
+        <li class="warn"><b>触屏没有 hover。</b>移动端仍走现有底部抽屉（<code>ActivitySheet</code>），此处只影响桌面。</li>
+        <li class="warn"><b>窄栏挤压。</b>26px 轨道要从聊天 gutter 里让出来；<code>wide</code> 模式（聊天 30% 宽）下最紧张，需要把 gutter 收到 12px。</li>
+        <li class="warn"><b>锚点溢出。</b>节点在右缘，浮层必须向左展开，窄栏时容易撞到中心；需要一次"左/右翻转"判定。</li>
+      </ul>
+    </div>
+    <div class="statewrap">
+      <div class="colhead">三种数据状态</div>
+      <div class="stategrid" data-slot="states-D"></div>
+    </div>
+    <div class="expandrow" style="display:block">
+      <div class="colhead">展开面板「活动台」· 四种节点各一张（点击右缘节点向左浮出，缺口对准该节点）</div>
+      <div data-slot="exp-D"></div>
+      <ul class="notes" style="max-width:none;margin-top:16px">
+        <li><b>不再是"一列清单"。</b>统一壳是五段：<b>头部</b>（节点身份 + 实时摘要 + 在右栏打开 / 关闭）→ <b>汇总条</b>（该类的聚合指标）→ <b>筛选 chip</b>（带计数）→ <b>分区正文</b> → <b>页脚动作</b>。四类节点共用骨架、各自的强调色与正文形态不同。</li>
+        <li><b>子代理 = 时间轴。</b>每条代理在会话时间轴上按真实起止铺一条 4px 条形，运行中的条一直顶到右侧的「现在」刻度并呼吸；行内是类型徽标 + 状态 + 起止时钟 + 描述/结果/错误 + 指标 chips。<code>st/dur</code> 来自运行台账的同一份数据，不是装饰。</li>
+        <li><b>把「实时 / 资料」拆分搬进面板。</b>运行中与已结束分区，筛选 chip 可只看运行中；已结束的排在后面 —— 面板在小尺寸下也有了方案 C 的信息架构。</li>
+        <li><b>任务 = 看板。</b>34px conic 环 + 按状态着色的分段进度（一段一项，完成绿 / 进行中琥珀）+ 剩余项数；正文按 进行中 / 待办 / 已完成 分组，每行保留优先级色条，完成的划线降调。</li>
+        <li><b>计划 = 索引。</b>序号芯片 + 标题 + <b>两行摘要</b> + 生成时间，最新一份带「本轮」标记；书签按 今天 / 更早 挂在一条竖向细线上（与左缘消息时间轴同一语言），失效项灰掉但保留位置。</li>
+        <li class="warn"><b>锚点与翻转。</b>面板固定 404px、从节点向左浮出，缺口对准被点节点；窄栏（聊天列 &lt; 460px）时必须翻到右侧或改成底部抽屉，这是实装时要处理的边界。</li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- ================= 对比 ================= -->
+  <section class="variant" id="cmp">
+    <div class="vhead"><h2><span class="tag">对比</span>四方案横向取舍</h2></div>
+    <table class="cmp">
+      <thead>
+        <tr><th>方案</th><th>一句话</th><th>遮挡 ④</th><th>窄栏 ⑥</th><th>一眼可读</th><th>容量</th><th>实现成本</th><th>主要风险</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td class="nm">A 状态条</td>
+          <td>位置形态不动，重排 + 进度 + hover 标签</td>
+          <td>仍有</td><td>缓解（自动让位）</td>
+          <td>中（需 hover）</td><td>中（4 类）</td>
+          <td><b>低</b>（仅 StatusCapsule）</td>
+          <td>根问题（遮挡/容量）留着，可能还要再改一次</td>
+        </tr>
+        <tr>
+          <td class="nm">B 停靠台</td>
+          <td>变成消息流上方一根真实台头行</td>
+          <td><b>消除</b></td><td><b>成立</b>（标签可收）</td>
+          <td><b>高</b>（常驻文字）</td><td>高（整行）</td>
+          <td>中（ChatPane 布局 + 滚动收起）</td>
+          <td>常占 34px；出现/消失有一次高度变化</td>
+        </tr>
+        <tr>
+          <td class="nm">C 指挥台</td>
+          <td>实时一簇 + 资料收进 ⋯</td>
+          <td>仍有（影响变小）</td><td>好（实时簇可缩到点）</td>
+          <td><b>高</b>（实时部分带文字）</td><td>中高</td>
+          <td>中（状态机 + 双页签浮层）</td>
+          <td>两个目标要学；⋯ 位置需钉住不漂移</td>
+        </tr>
+        <tr>
+          <td class="nm">D 右缘轨</td>
+          <td>竖排节点贴右缘，面板=「活动台」（时间轴 / 看板 / 索引）</td>
+          <td><b>消除</b></td><td>好（只占 26px）</td>
+          <td>中（需 hover）</td><td><b>高</b>（纵向）</td>
+          <td>中高（新位置 + 悬停卡 + 翻转判定 + 面板）</td>
+          <td>与右面板争边缘；触屏只能靠底部抽屉</td>
+        </tr>
+      </tbody>
+    </table>
+    <p class="rec-note">
+      <b>已选方案 D，展开面板重做为「活动台」。</b>面板骨架是五段——头部（节点身份 + 实时摘要 + 在右栏打开）、汇总条、筛选 chip、分区正文、页脚动作；
+      四类节点共用骨架，正文按数据类型换形态：子代理是<b>会话时间轴</b>（每条代理按真实起止铺条形，运行中的顶到「现在」刻度），任务是将状态着色的<b>看板</b>，
+      计划是带两行摘要的<b>索引</b>，书签按今天/更早挂在<b>竖线</b>上。原方案 C 最值钱的那条——「实时 vs 资料」的语义拆分——被搬进了面板内部
+      （运行中/已结束分区 + 筛选 chip），所以这次没有丢掉它。
+      实装时优先处理两处边界：面板在窄栏要翻转到右侧或退化成底部抽屉（复用现有 <code>ActivitySheet</code>）；移动端不依赖 hover，点节点即开面板。
+    </p>
+  </section>
+
+</div>
+
+<script>
+/* ======================= 图标（Tabler 原始 path） ======================= */
+const ICONS = {
+  clipboard:["M9 5h-2a2 2 0 0 0 -2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2 -2v-12a2 2 0 0 0 -2 -2h-2","M9 5a2 2 0 0 1 2 -2h2a2 2 0 0 1 2 2a2 2 0 0 1 -2 2h-2a2 2 0 0 1 -2 -2"],
+  robot:["M6 6a2 2 0 0 1 2 -2h8a2 2 0 0 1 2 2v4a2 2 0 0 1 -2 2h-8a2 2 0 0 1 -2 -2l0 -4","M12 2v2","M9 12v9","M15 12v9","M5 16l4 -2","M15 14l4 2","M9 18h6","M10 8v.01","M14 8v.01"],
+  list:["M13 5h8","M13 9h5","M13 15h8","M13 19h5","M3 5a1 1 0 0 1 1 -1h4a1 1 0 0 1 1 1v4a1 1 0 0 1 -1 1h-4a1 1 0 0 1 -1 -1l0 -4","M3 15a1 1 0 0 1 1 -1h4a1 1 0 0 1 1 1v4a1 1 0 0 1 -1 1h-4a1 1 0 0 1 -1 -1l0 -4"],
+  bookmark:["M18 7v14l-6 -4l-6 4v-14a4 4 0 0 1 4 -4h4a4 4 0 0 1 4 4"],
+  chevD:["M6 9l6 6l6 -6"],
+  dots:["M4 12a1 1 0 1 0 2 0a1 1 0 1 0 -2 0","M11 12a1 1 0 1 0 2 0a1 1 0 1 0 -2 0","M18 12a1 1 0 1 0 2 0a1 1 0 1 0 -2 0"],
+  check:["M5 12l5 5l10 -10"],
+  loader:["M12 3a9 9 0 1 0 9 9"],
+  x:["M18 6l-12 12","M6 6l12 12"],
+  pencil:["M4 20h4l10.5 -10.5a2.828 2.828 0 1 0 -4 -4l-10.5 10.5v4","M13.5 6.5l4 4"],
+  activity:["M3 12h4l3 8l4 -16l3 8h4"],
+  archive:["M3 6a2 2 0 0 1 2 -2h14a2 2 0 0 1 2 2a2 2 0 0 1 -2 2h-14a2 2 0 0 1 -2 -2","M5 8v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2 -2v-10","M10 12l4 0"],
+  circle:["M12 12m-9 0a9 9 0 1 0 18 0a9 9 0 1 0 -18 0"],
+  clock:["M12 12m-9 0a9 9 0 1 0 18 0a9 9 0 1 0 -18 0","M12 7v5l3 3"],
+  folder:["M5 4h4l3 3h7a2 2 0 0 1 2 2v8a2 2 0 0 1 -2 2h-14a2 2 0 0 1 -2 -2v-11a2 2 0 0 1 2 -2"],
+  sideRight:["M4 6a2 2 0 0 1 2 -2h12a2 2 0 0 1 2 2v12a2 2 0 0 1 -2 2h-12a2 2 0 0 1 -2 -2l0 -12","M15 4v16","M10 10l-2 2l2 2"],
+};
+const FILLED = new Set(["circle"]);
+function ic(name,size,extra){
+  size = size || 13; extra = extra || "";
+  const p = ICONS[name]; if(!p) return "";
+  const paths = p.map(d=>'<path d="'+d+'"/>').join("");
+  const f = FILLED.has(name);
+  return '<svg class="ic '+extra+'" width="'+size+'" height="'+size+'" viewBox="0 0 24 24" fill="'+
+    (f?"currentColor":"none")+'" stroke="'+(f?"none":"currentColor")+'" stroke-width="1.75" '+
+    'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'+paths+"</svg>";
+}
+
+/* ======================= 数据 ======================= */
+/* st/dur = 相对会话开始的起止秒数(驱动子代理面板里的迷你时间轴);
+   运行中的代理 dur 让它刚好收到 now,条形因此一直顶到"现在"刻度 */
+const SUB = (id,type,desc,status,o) => Object.assign(
+  {id:id,type:type,desc:desc,status:status,tokens:0,tools:0,dur:0,st:0,last:""}, o||{});
+const TODO = (c,s,p) => ({c:c,s:s,p:p});
+/** 计划:标题 + 两行摘要 + 生成时间(索引面板要用摘要,不只是标题) */
+const PLAN = (t,ex,at) => ({t:t,ex:ex,at:at});
+
+/** 会话开始时钟 + 秒 → HH:MM:SS */
+const SESSION_START = 14*3600 + 30*60 + 10;
+
+const DATA = {
+  calm:{
+    now:140,
+    hint:"没有运行中的子代理；任务 3 项（1 完成）· 计划 1 份 · 书签 2 个",
+    subagents:[
+      SUB("s1","explore","扫描 renderer 里所有胶囊相关选择器","completed",
+        {tokens:84000,tools:23,st:30,dur:96,summary:"已定位 StatusCapsule / ActivityPopover / ActivitySheet"})
+    ],
+    todos:[
+      TODO("读取现有胶囊实现，列出问题清单","completed","high"),
+      TODO("梳理四个方案的取舍与成本","in_progress","high"),
+      TODO("补齐中英文词条","pending","medium")
+    ],
+    plans:[
+      PLAN("重构右上角活动胶囊：先统一语义，再谈形态",
+        "四段图标+数字读不出含义;书签(用户资产)与子代理/任务(运行时状态)被摆成同等权重。先拆语义,再谈形态。","14:31")
+    ],
+    bookmarks:[{t:"现状：四段图标+数字混排",at:"14:02"},{t:"用户确认：书签要独立入口",at:"14:21"}]
+  },
+  running:{
+    now:150,
+    hint:"2 个子代理运行中；任务 5 项（2 完成）· 计划 2 份 · 书签 2 个",
+    subagents:[
+      SUB("s1","explore","扫描 renderer 里所有胶囊相关选择器","completed",
+        {tokens:84000,tools:23,st:0,dur:96,summary:"已定位三处实现"}),
+      SUB("s2","general","把胶囊拆成实时簇与资料柜，补齐状态机","running",
+        {tokens:41000,tools:12,st:92,dur:58,last:"Edit"}),
+      SUB("s3","general","为四个方案写交互原型并截图对比","running",
+        {tokens:12000,tools:5,st:126,dur:24,last:"Write"})
+    ],
+    todos:[
+      TODO("读取现有胶囊实现，列出问题清单","completed","high"),
+      TODO("梳理四个方案的取舍与成本","completed","high"),
+      TODO("实现实时簇的状态机","in_progress","high"),
+      TODO("浮层双页签（运行中 / 资料）","in_progress","medium"),
+      TODO("补齐中英文词条","pending","medium")
+    ],
+    plans:[
+      PLAN("重构右上角活动胶囊：先统一语义，再谈形态",
+        "四段图标+数字读不出含义;书签(用户资产)与子代理/任务(运行时状态)被摆成同等权重。先拆语义,再谈形态。","14:31"),
+      PLAN("第二阶段：把实时簇升级为右缘轨",
+        "26px 圆形节点贴聊天列右缘、垂直居中,与左缘用户消息时间轴对称;零遮挡,容量纵向展开。","14:52")
+    ],
+    bookmarks:[{t:"现状：四段图标+数字混排",at:"14:02"},{t:"用户确认：书签要独立入口",at:"14:21"}]
+  },
+  busy:{
+    now:220,
+    hint:"3 个子代理运行中（1 失败）；任务 12 项（7 完成）· 计划 4 份 · 书签 6 个",
+    subagents:[
+      SUB("s1","explore","扫描 renderer 里所有胶囊相关选择器","completed",{tokens:84000,tools:23,st:0,dur:96}),
+      SUB("s2","general","把胶囊拆成实时簇与资料柜","running",{tokens:41000,tools:12,st:124,dur:96,last:"Edit"}),
+      SUB("s3","general","为四个方案写交互原型","running",{tokens:12000,tools:5,st:178,dur:42,last:"Write"}),
+      SUB("s4","review","审查状态机的终态收敛分支","running",{tokens:9000,tools:3,st:196,dur:24,last:"Grep"}),
+      SUB("s5","general","改写 ActivityPopover 的段落顺序","failed",
+        {tokens:31000,tools:9,st:58,dur:64,error:"子代理在上一次工具调用后异常结束"}),
+      SUB("s6","explore","统计历史会话里胶囊的展开率","completed",{tokens:22000,tools:8,st:24,dur:31})
+    ],
+    todos:[
+      TODO("读取现有胶囊实现","completed","high"),
+      TODO("梳理四个方案取舍","completed","high"),
+      TODO("读取浮层与底部抽屉实现","completed","medium"),
+      TODO("实现实时簇状态机","in_progress","high"),
+      TODO("浮层双页签","in_progress","medium"),
+      TODO("任务段 2px 进度下划线","in_progress","medium"),
+      TODO("hover 展开文字标签","in_progress","low"),
+      TODO("窄栏让位规则","completed","medium"),
+      TODO("补中英词条","pending","medium"),
+      TODO("回归：计划审批 / 询问 / 子代理收尾","pending","high"),
+      TODO("更新 AGENTS.md 胶囊一节","pending","low"),
+      TODO("四方案截图对比","pending","low")
+    ],
+    plans:[
+      PLAN("重构右上角活动胶囊：先统一语义，再谈形态",
+        "四段图标+数字读不出含义;书签(用户资产)与子代理/任务(运行时状态)被摆成同等权重。先拆语义,再谈形态。","14:31"),
+      PLAN("第二阶段：把实时簇升级为右缘轨",
+        "26px 圆形节点贴聊天列右缘、垂直居中,与左缘用户消息时间轴对称;零遮挡,容量纵向展开。","14:52"),
+      PLAN("词条改造：胶囊相关 18 条",
+        "zh 是源、en 镜像同一类型;缺键过不了 typecheck。分区前缀 chatStream.activity.* 与 bookmark.* 复用。","15:06"),
+      PLAN("回归计划：四条链路各一遍",
+        "计划审批 / AskUserQuestion / 工具审批 / 子代理收尾。每次动 provider 层都要重跑这四条。","15:12")
+    ],
+    bookmarks:[
+      {t:"现状：四段图标+数字混排",at:"14:02"},
+      {t:"用户确认：书签要独立入口",at:"14:21"},
+      {t:"计划浮层 384px 宽是硬约束",at:"14:35"},
+      {t:"hover 标签用 1fr↔0fr 网格壳",at:"15:02"},
+      {t:"窄栏阈值候选 520px",at:"15:18"},
+      {t:"stale 书签要灰掉不给跳",at:"15:40",stale:true,old:true}
+    ]
+  }
+};
+
+function derive(key){
+  const d = DATA[key];
+  const run = d.subagents.filter(s=>s.status==="running");
+  const done = d.todos.filter(t=>t.s==="completed");
+  const ended = d.subagents.filter(s=>s.status!=="running");
+  const sum = (arr,f) => arr.reduce((a,x)=>a+(f(x)||0),0);
+  return {
+    key:key, hint:d.hint, now:d.now,
+    subagents:d.subagents, running:run, ended:ended,
+    tokens:sum(d.subagents,s=>s.tokens), tools:sum(d.subagents,s=>s.tools),
+    agentMs:sum(d.subagents,s=>s.dur)*1000,
+    todos:d.todos, todoDone:done.length, pct:d.todos.length?Math.round(done.length/d.todos.length*100):0,
+    liveTodos:d.todos.filter(t=>t.s==="in_progress"),
+    pendTodos:d.todos.filter(t=>t.s==="pending"),
+    doneTodos:done,
+    plans:d.plans, bookmarks:d.bookmarks,
+    staleCount:d.bookmarks.filter(b=>b.stale).length,
+    steps:38, elapsed:"1m12s",
+    /* 方案 C 的 ⋯ 计数：计划 + 已结束子代理 + 书签（实时簇不重复计数） */
+    archiveCount:d.plans.length+ended.length+d.bookmarks.length
+  };
+}
+
+/** 秒 → HH:MM:SS,会话开始为基准 */
+function clockOf(sec){
+  const t = SESSION_START + Math.round(sec);
+  const p = (n)=>String(n).padStart(2,"0");
+  return p(Math.floor(t/3600)%24)+":"+p(Math.floor(t/60)%60)+":"+p(t%60);
+}
+
+/* ======================= 小块渲染 ======================= */
+const div = (cls) => '<span class="cdiv'+(cls?" "+cls:"")+'"></span>';
+const lbl = (text) => '<span class="lblwrap"><span>'+text+"</span></span>";
+
+function pillA(s){
+  const live = s.running.length>0;
+  const segs = [];
+  if (s.subagents.length){
+    segs.push(live
+      ? '<span class="cseg live"><span class="pdot"></span>'+ic("robot",13)+"<b>"+s.running.length+
+        "</b>"+lbl("运行中")+"</span>"
+      : '<span class="cseg quiet">'+ic("robot",13)+"<b>"+s.subagents.length+"</b>"+lbl("子代理")+"</span>");
+  }
+  if (s.todos.length){
+    if (segs.length) segs.push(div());
+    segs.push('<span class="cseg prog">'+ic("list",13)+"<b>"+s.todoDone+"/"+s.todos.length+"</b>"+
+      lbl("任务")+'<span class="ubar"><i style="width:'+s.pct+'%"></i></span></span>');
+  }
+  if (s.plans.length){
+    if (segs.length) segs.push(div());
+    segs.push('<span class="cseg quiet plan">'+ic("clipboard",13)+"<b>"+s.plans.length+"</b>"+lbl("计划")+"</span>");
+  }
+  if (s.bookmarks.length){
+    if (segs.length) segs.push(div("strong"));
+    segs.push('<span class="cseg quiet nav">'+ic("bookmark",13)+"<b>"+s.bookmarks.length+"</b>"+lbl("书签")+"</span>");
+  }
+  segs.push(div());
+  segs.push('<span class="chev">'+ic("chevD",12)+"</span>");
+  return '<div class="pillwrap'+(live?" is-live":"")+'">'+(live?'<span class="halo"></span>':"")+
+    '<div class="ring"><button class="pill">'+segs.join("")+"</button></div></div>";
+}
+
+/* 现状:照搬现在的结构(计划在前、无文字、无进度) */
+function pillCurrent(s,annotate){
+  const segs = [];
+  const mk = annotate ? (n,cls) => '<i class="mk'+(cls?" "+cls:"")+'">'+n+"</i>" : () => "";
+  if (s.plans.length){
+    segs.push('<span class="cseg">'+mk(3)+ic("clipboard",13)+"<b>×"+s.plans.length+"</b></span>");
+    segs.push(div());
+  }
+  if (s.subagents.length){
+    segs.push('<span class="cseg">'+(s.running.length?'<span class="pdot"></span>':"")+
+      ic("robot",13,"",s.running.length) + "<b>"+(s.running.length||s.subagents.length)+"</b></span>");
+    segs.push(div());
+  }
+  if (s.todos.length){
+    segs.push('<span class="cseg">'+mk(5)+ic("list",13)+"<b>"+s.todoDone+"/"+s.todos.length+"</b></span>");
+  }
+  if (s.bookmarks.length){
+    segs.push(div());
+    segs.push('<span class="cseg">'+mk(2)+ic("bookmark",13,""," ")+"<b>"+s.bookmarks.length+"</b></span>");
+  }
+  segs.push(div());
+  segs.push('<span class="chev">'+ic("chevD",12)+"</span>");
+  const live = s.running.length>0;
+  return '<div class="pillwrap">'+(live?'<span class="halo"></span>':"")+'<div class="ring">'+
+    '<button class="pill">'+segs.join("")+"</button></div></div>";
+}
+
+function dockBar(s,opts){
+  opts = opts||{};
+  const live = s.running.length>0;
+  const left = live
+    ? '<span class="ledot"></span><span class="strong">'+s.running.length+' 个子代理运行中</span>'+
+      '<span class="dim">·</span><span class="mono">'+s.steps+' 步</span>'+
+      '<span class="dim">·</span><span class="mono">'+s.elapsed+"</span>"
+    : '<span class="dim">本会话</span><span class="dim">·</span><span class="mono">'+s.subagents.length+
+      " 个子代理</span><span class=\"dim\">·</span><span class=\"mono\">"+s.steps+" 步</span>";
+  const chips = [];
+  if (s.plans.length)
+    chips.push('<button class="dchip">'+ic("clipboard",12)+'<span>计划</span><b>'+s.plans.length+"</b></button>");
+  if (s.todos.length)
+    /* 任务 chip 内沿带 2px 进度条:分数之外多一层直观读数 */
+    chips.push('<button class="dchip">'+ic("list",12)+'<span>任务</span><b>'+
+      s.todoDone+"/"+s.todos.length+"</b>"+
+      '<i class="dchipbar"><i style="width:'+s.pct+'%"></i></i></button>');
+  if (s.bookmarks.length)
+    chips.push('<button class="dchip">'+ic("bookmark",12)+'<span>书签</span><b>'+s.bookmarks.length+"</b></button>");
+  chips.push('<button class="dchip">'+ic("chevD",12)+"</button>");
+  const dock = '<div class="dock'+(opts.collapsed?" collapsed":"")+(opts.narrow?" narrow":"")+'">'+
+    '<div class="dock-l">'+left+"</div>"+
+    '<div class="dock-r">'+chips.join("")+"</div></div>";
+  return opts.collapsed
+    ? '<div class="dockline"><i style="width:'+s.pct+'%"></i></div>'+dock
+    : dock;
+}
+
+function deck(s,narrow){
+  const live = s.running.length>0;
+  const avers = s.running.slice(0,3).map((a,i)=>
+    '<i class="run">'+(a.type==="explore"?"E":a.type==="review"?"R":"G")+"</i>").join("");
+  const liveCluster = live
+    ? '<div class="cluster cl-live">'+
+        '<span class="avers">'+avers+"</span>"+
+        "<b>"+s.running.length+'<span class="lw"> 运行中</span></b>'+
+        '<span class="ringlet" style="--p:'+s.pct+'"></span>'+
+        '<span class="mono el">'+s.elapsed+"</span></div>"
+    : "";
+  return '<div class="deck'+(narrow?" narrow":"")+'">'+liveCluster+
+    '<button class="cl-ref">'+ic("dots",14)+"<b>"+s.archiveCount+"</b></button></div>";
+}
+
+function rail(s,opts){
+  opts = opts||{};
+  const live = s.running.length>0;
+  const nodes = [];
+  if (s.todos.length){
+    nodes.push('<div class="rnode"><span class="prg" style="--p:'+s.pct+'"></span>'+ic("list",13)+
+      '<span class="badge">'+s.todoDone+"/"+s.todos.length+"</span></div>");
+  }
+  if (s.subagents.length){
+    const label = opts.label
+      ? '<span class="rlabel">'+ic("robot",12)+"<b>"+(live?s.running.length+" 运行中":s.subagents.length+" 个子代理")+
+        "</b>"+(s.running[0]?'<span class="sub">'+s.running[0].desc+"</span>":'<span class="sub">'+s.subagents[0].desc+"</span>")+
+        "</span>"
+      : "";
+    nodes.push('<div class="rnode'+(live?" run":"")+'">'+label+ic("robot",13)+
+      '<span class="badge">'+(live?s.running.length:s.subagents.length)+"</span></div>");
+  }
+  if (s.plans.length){
+    nodes.push('<div class="rnode">'+ic("clipboard",13)+'<span class="badge">'+s.plans.length+"</span></div>");
+  }
+  if (s.bookmarks.length){
+    nodes.push('<div class="rnode">'+ic("bookmark",13)+'<span class="badge">'+s.bookmarks.length+"</span></div>");
+  }
+  return '<div class="railwrap">'+nodes.join("")+"</div>";
+}
+
+/* ======================= 浮层内容 ======================= */
+function stLabel(s){
+  if (s==="running") return '<span class="status st-run">'+ic("loader",10,"spin")+"运行中</span>";
+  if (s==="completed") return '<span class="status st-done">'+ic("check",10)+"已完成</span>";
+  if (s==="failed") return '<span class="status st-fail">'+ic("x",10)+"失败</span>";
+  return '<span class="status st-idle">'+ic("circle",10)+"已结束</span>";
+}
+function rowSub(a,withBar){
+  const meta = [];
+  if (a.type) meta.push('<span class="pchip type">'+a.type+"</span>");
+  if (a.last && a.status==="running") meta.push('<span class="pchip">'+a.last+"</span>");
+  if (a.tokens) meta.push('<span class="pchip">'+(a.tokens/1000).toFixed(1)+"k tok</span>");
+  if (a.tools) meta.push('<span class="pchip">'+a.tools+" tools</span>");
+  if (a.dur) meta.push('<span class="pchip">'+a.dur+"s</span>");
+  const bar = withBar && a.status==="running"
+    ? '<span class="pbar run"><i style="width:62%"></i></span>'
+    : (withBar ? '<span class="pbar"><i style="width:100%"></i></span>' : "");
+  return '<div class="prow">'+ic(a.status==="running"?"loader":"robot",11,"")+
+    '<span class="body"><span class="desc">'+a.desc+"</span>"+
+    '<span class="meta">'+stLabel(a.status)+meta.join("")+"</span>"+bar+"</span></div>";
+}
+function rowTodo(t){
+  const glyph = t.s==="completed"?ic("check",10):t.s==="in_progress"?ic("loader",10,"spin"):ic("circle",10);
+  const cls = t.s==="completed"?"done":t.s==="in_progress"?"":'';
+  const col = t.s==="completed"?"st-done":t.s==="in_progress"?"st-run":"st-idle";
+  return '<div class="ptodo '+t.p+" "+cls+'"><span class="'+col+'">'+glyph+'</span><span class="txt">'+
+    t.c+"</span></div>";
+}
+function rowPlan(p,cur,n){
+  return '<div class="prow">'+ic("clipboard",11)+'<span class="body"><span class="desc">'+p.t+"</span>"+
+    '<span class="meta"><span class="pchip">第 '+n+" 份</span>"+
+    (cur?'<span class="pchip" style="background:rgb(var(--accent)/.16);color:rgb(var(--accent-strong))">本轮</span>':"")+
+    (p.at?'<span class="pchip">'+p.at+"</span>":"")+
+    "</span></span></div>";
+}
+function rowBook(b){
+  return '<div class="pbook">'+ic("bookmark",11,b.stale?"dim":"")+
+    '<span class="t"'+(b.stale?' style="color:rgb(var(--content-subtle))"':"")+">"+b.t+"</span>"+
+    (b.stale?'<span class="pchip">已失效</span>':'<span class="at">'+b.at+"</span>")+
+    ic("pencil",11,"dim")+ic("x",11,"dim")+"</div>";
+}
+function secH(iconName,title,right){
+  return '<div class="psec-h">'+ic(iconName,12)+"<span>"+title+"</span>"+
+    (right?'<span class="r">'+right+"</span>":"")+"</div>";
+}
+
+/* 通用单栈浮层内容(方案 A / B / D 用):返回 inner HTML,由调用方套壳 */
+function popStackInner(s){
+  const run = s.running, ended = s.ended;
+  let out = "";
+  out += '<div class="pop-h">'+ic("activity",12)+
+    '<span class="strong">活动详情</span>'+
+    '<span class="right">'+(run.length
+      ? '<span class="st-run">'+ic("loader",10,"spin")+run.length+" 运行中</span>"
+      : '<span class="dim">空闲</span>')+"</span></div>";
+  if (run.length){
+    out += '<div class="psec">'+secH("robot","正在运行",run.length+" 个")+
+      run.map(a=>rowSub(a,true)).join("")+"</div>";
+  }
+  if (s.plans.length){
+    out += '<div class="psec">'+secH("clipboard","计划",s.plans.length+" 份")+
+      s.plans.map((p,i)=>rowPlan(p,i===s.plans.length-1,s.plans.length-i)).join("")+"</div>";
+  }
+  if (s.todos.length){
+    out += '<div class="psec">'+secH("list","任务",s.todoDone+"/"+s.todos.length+" · "+s.pct+"%")+
+      '<div style="padding:8px 12px 4px"><span class="pbar"><i style="width:'+s.pct+'%"></i></span></div>'+
+      s.todos.slice(0,6).map(rowTodo).join("")+"</div>";
+  }
+  if (ended.length){
+    out += '<div class="psec">'+secH("archive","已结束",ended.length+" 个")+
+      ended.map(a=>rowSub(a,false)).join("")+"</div>";
+  }
+  if (s.bookmarks.length){
+    out += '<div class="psec">'+secH("bookmark","书签",s.bookmarks.length+" 个")+
+      s.bookmarks.map(rowBook).join("")+"</div>";
+  }
+  return out;
+}
+function popStack(s){ return '<div class="pop">'+popStackInner(s)+"</div>"; }
+
+/* 方案 C 的双页签浮层 */
+function popDeck(s,tab){
+  let out = '<div class="pop">';
+  out += '<div class="ptabs">'+
+    '<button class="ptab'+(tab==="live"?" cur":"")+'">'+ic("activity",12)+"运行中"+
+      (s.running.length?'<span class="cnt">'+s.running.length+"</span>":"")+"</button>"+
+    '<button class="ptab'+(tab==="lib"?" cur":"")+'">'+ic("archive",12)+"资料"+
+      '<span class="cnt">'+s.archiveCount+"</span></button>"+
+    '<span style="margin-left:auto;align-self:center;padding-right:4px" class="dim">384px</span></div>';
+  if (tab==="live"){
+    out += '<div class="split-note">'+ic("activity",11)+"只显示此刻在跑的；结束的会自动移进「资料」</div>";
+    if (s.running.length){
+      out += '<div class="psec">'+secH("robot","子代理",s.running.length+" 个")+
+        s.running.map(a=>rowSub(a,true)).join("")+"</div>";
+    } else {
+      out += '<div class="psec"><div class="prow" style="padding:16px 12px"><span class="body dim">'+
+        "当前没有运行中的子代理</span></div></div>";
+    }
+    if (s.liveTodos.length){
+      out += '<div class="psec">'+secH("list","进行中的任务",s.liveTodos.length+" 项")+
+        s.liveTodos.map(rowTodo).join("")+
+        '<div style="padding:6px 12px 10px"><span class="pbar"><i style="width:'+s.pct+'%"></i></span></div></div>';
+    }
+  } else {
+    if (s.plans.length){
+      out += '<div class="psec">'+secH("clipboard","计划",s.plans.length+" 份")+
+        s.plans.map((p,i)=>rowPlan(p,i===s.plans.length-1,s.plans.length-i)).join("")+"</div>";
+    }
+    if (s.ended.length){
+      out += '<div class="psec">'+secH("archive","已结束的子代理",s.ended.length+" 个")+
+        s.ended.map(a=>rowSub(a,false)).join("")+"</div>";
+    }
+    if (s.todos.length){
+      out += '<div class="psec">'+secH("list","全部任务",s.todoDone+"/"+s.todos.length+" · "+s.pct+"%")+
+        '<div style="padding:8px 12px 4px"><span class="pbar"><i style="width:'+s.pct+'%"></i></span></div>'+
+        s.todos.slice(0,7).map(rowTodo).join("")+"</div>";
+    }
+    if (s.bookmarks.length){
+      out += '<div class="psec">'+secH("bookmark","书签",s.bookmarks.length+" 个")+
+        s.bookmarks.map(rowBook).join("")+
+        '<div class="pfoot">'+ic("check",11)+"选中正文可添加书签；书签永不删除，失效只灰掉</div></div>";
+    }
+  }
+  return out+"</div>";
+}
+
+/* ======================= 假聊天窗口 ======================= */
+function frameBody(){
+  return '<div class="frame-top">'+
+    '<span class="mbadge">DeepSeek-V3.2</span><span class="ledot"></span><span class="lel">运行中</span>'+
+    '<span class="mono dim">14:32:10</span><span class="dim">·</span><span class="mono dim">1m12s</span>'+
+    '<span class="optick"><span class="mono">Grep</span><span class="dim">capsule</span></span>'+
+    '<span class="steps mono dim">38 步</span></div>'+
+    '<div class="frame-body">'+
+      '<div class="bubble">帮我重构聊天区域右上角的胶囊区域，先给我出几个设计稿</div>'+
+      '<div class="msg">'+
+        "<p>我先读了 <code>StatusCapsule</code> 和 <code>ActivityPopover</code>：现状是一颗玻璃药丸，四段「图标 + 数字」并列——"+
+        "计划 ×2 │ 子代理 3 │ 任务 4/7 │ 书签 1，点击展开 384px 的活动浮层；运行中时药丸后面还有一层琥珀色呼吸光。</p>"+
+        '<div class="toolrow">'+ic("list",12)+"<b>Read</b>"+
+        '<span class="mono">components/chat/StatusCapsule.tsx</span><span class="tagok">'+ic("check",12)+"</span></div>"+
+        "<p>关键问题是<b>语义混排</b>：书签是用户手动收藏的导航锚点，子代理和任务是模型此刻的运行时状态，"+
+        "两者被摆成同等权重的四段，一颗胶囊既当监视器又当收藏夹。</p>"+
+        '<div class="toolrow">'+ic("list",12)+"<b>Read</b>"+
+        '<span class="mono">components/chat/ActivityPopover.tsx</span><span class="tagok">'+ic("check",12)+"</span></div>"+
+      "</div>"+
+    "</div>"+
+    '<div class="composer"><div class="ph">继续输入…</div>'+
+      '<div class="minipill"><span>'+ic("folder",11)+"附件</span><span>DeepSeek-V3.2</span>"+
+      "<span>中</span><span>计划模式</span>"+
+      '<span style="border-right:none"><span class="ringlet on" style="--p:38"></span>38%</span>'+
+      '<span class="go">'+ic("activity",11)+"</span></div></div>";
+}
+
+function makeFrame(capsule,opts){
+  opts = opts||{};
+  const cls = "frame"+(opts.mode==="rail"?" rail":"")+(opts.narrow?" narrow":"");
+  if (opts.mode==="dock") return '<div class="'+cls+'">'+capsule+frameBody()+"</div>";
+  if (opts.mode==="rail") return '<div class="'+cls+'">'+frameBody()+capsule+"</div>";
+  return '<div class="'+cls+'">'+frameBody()+
+    '<div class="floatwrap">'+capsule+"</div></div>";
+}
+
+/* 窄栏时药丸的让位规则(方案 A):计划/书签退到浮层 —— 见 buildFrame 里的正则剥离 */
+
+/* ======================= 每方案装配 ======================= */
+const NARROW_PX = 520;
+
+function renderVariant(v,s,narrow){
+  const slot = (n) => document.querySelector('[data-slot="'+n+'"]');
+  const frameSlot = slot("frame-"+v), statesSlot = slot("states-"+v), expSlot = slot("exp-"+v);
+  if (frameSlot) frameSlot.innerHTML = buildFrame(v,s,narrow);
+  if (statesSlot) statesSlot.innerHTML = buildStates(v,s,narrow);
+  if (expSlot) expSlot.innerHTML = buildExpanded(v,s,narrow);
+}
+
+function buildFrame(v,s,narrow){
+  if (v==="baseline"){
+    /* ④ 标记:压在正文上的那颗药丸正下方 */
+    return makeFrame(pillCurrent(s,true),{})
+      .replace('<div class="frame-top">','<i class="mk" style="top:38px;bottom:auto;right:190px">4</i><div class="frame-top">');
+  }
+  if (v==="A"){
+    let pill = pillA(s);
+    if (narrow){
+      /* 窄栏:藏掉计划与书签段(真实实现里由容器宽度驱动) */
+      pill = pill.replace(/<span class="cdiv strong"><\/span>/,"");
+      pill = pill.replace(/<span class="cseg quiet plan">[\s\S]*?<\/span><\/span><\/span>/,"");
+      pill = pill.replace(/<span class="cseg quiet nav">[\s\S]*?<\/span><\/span><\/span>/,"");
+    }
+    return makeFrame(pill,{});
+  }
+  if (v==="B") return makeFrame(dockBar(s,{narrow:narrow}),{mode:"dock"});
+  if (v==="C") return makeFrame(deck(s,narrow),{});
+  if (v==="D") return makeFrame(rail(s,{}),{mode:"rail"});
+  return "";
+}
+
+function stageFor(v,s,narrow,extra){
+  if (v==="baseline") return '<div class="stage">'+pillCurrent(s,false)+"</div>";
+  if (v==="A") return '<div class="stage"><span class="ghost">胶囊下面的正文（玻璃半透）</span>'+pillA(s)+"</div>";
+  if (v==="B") return '<div class="stage dockstage"><span class="ghost">下方是消息流</span>'+
+    dockBar(s,Object.assign({narrow:narrow},extra||{}))+"</div>";
+  if (v==="C") return '<div class="stage"><span class="ghost">胶囊下面的正文（玻璃半透）</span>'+deck(s,narrow)+"</div>";
+  if (v==="D") return '<div class="stage railstage"><span class="ghost">正文</span>'+rail(s,extra)+"</div>";
+  return "";
+}
+
+function buildStates(v,s,narrow){
+  const keys = ["calm","running","busy"];
+  const names = {calm:"安静",running:"运行中",busy:"多任务"};
+  const cards = keys.map(k=>{
+    const d = derive(k);
+    const cap = '<div class="cap"><b>'+names[k]+"</b>"+d.hint+"</div>";
+    let stage;
+    if (v==="B" && k==="busy") stage = stageFor(v,d,narrow,{collapsed:true})+
+      '<div class="cap" style="margin:7px 0 0">↑ 滚动后收起：整行归零，只在顶边留一条 3px 进度线</div>';
+    else if (v==="D" && k==="running") stage = stageFor(v,d,narrow,{label:true});
+    else stage = stageFor(v,d,narrow,{});
+    return '<div class="statecard">'+cap+stage+"</div>";
+  });
+  if (v==="A"){
+    cards.unshift('<div class="statecard"><div class="cap"><b>悬停任一区段</b>标签按 1fr↔0fr 网格展开，静止时仍紧凑</div>'+
+      '<div class="stage demohover">'+pillA(derive("running"))+"</div></div>");
+  }
+  return cards.join("");
+}
+
+function buildExpanded(v,s,narrow){
+  if (v==="baseline") return "";
+  if (v==="C"){
+    return '<div style="display:flex;gap:18px;flex-wrap:wrap;align-items:flex-start">'+
+      '<div><div class="cap" style="margin-bottom:6px">页签一 · 运行中</div>'+popDeck(s,"live")+"</div>"+
+      '<div><div class="cap" style="margin-bottom:6px">页签二 · 资料</div>'+popDeck(s,"lib")+"</div></div>";
+  }
+  if (v==="D"){
+    return '<div class="flygrid">'+
+      ["subagents","tasks","plans","bookmarks"].map(k=>railDemo(k,s)).join("")+"</div>";
+  }
+  if (v==="B"){
+    /* 台头在上一行,浮层从台头右端垂下 —— 演示锚点关系 */
+    return '<div class="anchorstage" style="padding:0">'+
+      '<div style="border-bottom:1px dashed rgb(var(--edge))">'+dockBar(s,{narrow:narrow})+"</div>"+
+      '<div style="display:flex;justify-content:flex-end;padding:12px 14px 16px">'+
+      '<div class="pop">'+popStackInner(s)+"</div></div></div>";
+  }
+  return popStack(s);
+}
+/* ======================= 方案 D 展开面板「活动台」 =======================
+   四种节点各一张,共用一个壳:头部(身份 + 实时摘要 + 在右栏打开) → 汇总条 →
+   筛选 chip → 分区正文 → 页脚动作。要点:
+   · 子代理 = 每条代理一条迷你时间轴(起止来自 st/dur,运行中的条顶到"现在"刻度),
+     并按 运行中 / 已结束 分区 —— 把方案 C 的"实时 vs 资料"拆分搬进面板内部;
+   · 任务 = 看板:conic 环 + 按状态着色的分段进度 + 按状态分组,保留优先级色条;
+   · 计划 = 索引:序号 + 标题 + 两行摘要 + 「本轮」标记;
+   · 书签 = 挂在竖线上(与左缘消息时间轴同一语言),失效项灰掉但仍保留。 */
+
+function fstat(v,l){ return "<span><b>"+v+"</b>"+(l?" "+l:"")+"</span>"; }
+const fsep = '<span class="sep"></span>';
+const PRI_LABEL = {high:"高",medium:"中",low:"低"};
+const STATUS_META_LITE = {
+  completed:'<span class="st-done">'+ic("check",11)+"</span>",
+  in_progress:'<span class="st-run">'+ic("loader",11,"spin")+"</span>",
+  pending:'<span class="st-idle">'+ic("circle",11)+"</span>",
+};
+function ftabs(items){
+  return items.map(it=>'<button class="ftab'+(it.cur?" cur":"")+'">'+it.label+
+    (it.n!=null?'<span class="cnt">'+it.n+"</span>":"")+"</button>").join("");
+}
+function fsec(title,n){ return '<div class="fsec-h">'+title+'<span class="r">'+n+"</span></div>"; }
+function flyShell(o){
+  return '<div class="fly"><span class="fly-notch"></span>'+
+    '<div class="fly-h">'+
+      '<span class="fly-ico '+o.acc+'">'+ic(o.ico,15)+"</span>"+
+      '<span class="fly-title"><b>'+o.title+"</b><span>"+o.sub+"</span></span>"+
+      '<span class="fly-acts">'+
+        '<button class="fbtn" title="在右栏打开">'+ic("sideRight",13)+"</button>"+
+        '<button class="fbtn" title="关闭">'+ic("x",13)+"</button>"+
+      "</span>"+
+    "</div>"+
+    '<div class="fly-stats">'+o.stats+"</div>"+
+    (o.tabs?'<div class="fly-tabs">'+o.tabs+"</div>":"")+
+    '<div class="fly-body">'+o.body+"</div>"+
+    '<div class="fly-f">'+o.foot+"</div></div>";
+}
+
+/** 子代理行:类型 + 状态 + 起止时钟 + 描述/结果/错误 + 指标 chips + 迷你时间轴 */
+function flyRowSub(a,span){
+  const run = a.status==="running";
+  const barCls = run ? "run" : a.status==="completed" ? "done" : "bad";
+  const l = (a.st/span)*100, w = Math.max(4,(a.dur/span)*100);
+  const chips = [];
+  if (a.tokens) chips.push('<span class="fm"><b>'+(a.tokens/1000).toFixed(1)+"k</b> tok</span>");
+  if (a.tools) chips.push('<span class="fm"><b>'+a.tools+"</b> tools</span>");
+  chips.push('<span class="fm"><b>'+a.dur+"s</b></span>");
+  if (a.last && run) chips.push('<span class="fm">'+a.last+"</span>");
+  return '<div class="frow">'+
+    '<span class="bar '+barCls+'"></span>'+
+    '<div class="frow-top">'+
+      (a.type?'<span class="ftype">'+a.type+"</span>":"")+
+      stLabel(a.status)+
+      '<span class="ftime">'+clockOf(a.st)+" → "+(run?"现在":clockOf(a.st+a.dur))+"</span>"+
+    "</div>"+
+    '<p class="fdesc">'+a.desc+"</p>"+
+    (a.error?'<p class="ferr">'+a.error+"</p>":"")+
+    (a.summary?'<p class="fsum">'+a.summary+"</p>":"")+
+    '<div class="fmetrics">'+chips.join("")+'<span class="fgo">查看轨迹 →</span></div>'+
+    '<span class="ftl"><i class="'+barCls+'" style="left:'+l.toFixed(2)+"%;width:"+w.toFixed(2)+
+      '%"></i><span class="now"></span></span>'+
+  "</div>";
+}
+
+function flySubagents(s){
+  const span = Math.max(60, ...s.subagents.map(a=>a.st+a.dur));
+  const stats = fstat(s.subagents.length,"个")+fsep+
+    fstat(s.running.length,"运行中")+fsep+
+    fstat((s.tokens/1000).toFixed(1)+"k","tok")+fsep+fstat(s.tools,"tools")+fsep+
+    fstat(Math.round(s.agentMs/1000)+"s","累计");
+  const fail = s.ended.filter(a=>a.status!=="completed").length;
+  const tabs = ftabs([
+    {label:"全部",n:s.subagents.length,cur:true},
+    {label:"运行中",n:s.running.length},
+    {label:"已完成",n:s.ended.length-fail},
+    {label:"失败",n:fail},
+  ]);
+  let body = "";
+  if (s.running.length) body += fsec("运行中",s.running.length)+s.running.map(a=>flyRowSub(a,span)).join("");
+  if (s.ended.length) body += fsec("已结束",s.ended.length)+s.ended.map(a=>flyRowSub(a,span)).join("");
+  return flyShell({
+    ico:"robot", acc:"a-amber", title:"子代理",
+    sub:s.running.length?s.running.length+" 个运行中 · "+s.ended.length+" 个已结束"
+                        :s.subagents.length+" 个 · 全部已结束",
+    stats, tabs, body,
+    foot:ic("activity",11)+"时间轴 "+clockOf(0)+" → 现在 "+clockOf(s.now)+
+      '<span class="sp"></span><kbd>Esc</kbd> 关闭',
+  });
+}
+
+function flyTasks(s){
+  const rest = s.todos.length - s.todoDone;
+  const seg = s.todos.map(t=>'<i class="'+(t.s==="completed"?"done":t.s==="in_progress"?"now":"")+'"></i>').join("");
+  const stats = '<span class="tk-dash">'+
+    '<span class="tk-ring" style="--p:'+s.pct+'"><b>'+s.pct+'%</b></span>'+
+    '<span class="tk-mid"><span class="top"><b>'+s.todoDone+" / "+s.todos.length+"</b> 已完成"+
+      '<span class="rest">剩余 '+rest+' 项</span></span>'+
+      '<span class="tk-seg">'+seg+"</span></span></span>";
+  const tabs = ftabs([
+    {label:"全部",n:s.todos.length,cur:true},
+    {label:"进行中",n:s.liveTodos.length},
+    {label:"待办",n:s.pendTodos.length},
+    {label:"已完成",n:s.todoDone},
+  ]);
+  const trow = (t) => '<div class="trow '+t.p+(t.s==="completed"?" done":"")+'">'+
+    STATUS_META_LITE[t.s]+'<span class="tx">'+t.c+"</span>"+
+    (t.s==="in_progress"?'<span class="tp">进行中</span>':t.p!=="low"?'<span class="tp">'+PRI_LABEL[t.p]+"</span>":"")+
+  "</div>";
+  let body = "";
+  if (s.liveTodos.length) body += fsec("进行中",s.liveTodos.length)+s.liveTodos.map(trow).join("");
+  if (s.pendTodos.length) body += fsec("待办",s.pendTodos.length)+s.pendTodos.map(trow).join("");
+  if (s.doneTodos.length) body += fsec("已完成",s.doneTodos.length)+s.doneTodos.map(trow).join("");
+  return flyShell({
+    ico:"list", acc:"a-accent", title:"任务",
+    sub:s.todoDone+"/"+s.todos.length+" 已完成 · 剩余 "+rest+" 项",
+    stats, tabs, body,
+    foot:ic("check",11)+"任务全部完成时节点自动收起"+
+      '<span class="sp"></span><kbd>Esc</kbd> 关闭',
+  });
+}
+
+function flyPlans(s){
+  const cur = s.plans[s.plans.length-1];
+  const stats = fstat(s.plans.length,"份")+fsep+"最新 "+cur.at+fsep+"1 份标记为本轮";
+  const tabs = ftabs([{label:"全部",n:s.plans.length,cur:true},{label:"本轮",n:1}]);
+  const body = s.plans.slice().reverse().map((p,i)=>{
+    const idx = s.plans.length - i;
+    const isCur = i===0;
+    return '<div class="plrow'+(isCur?" cur":"")+'">'+
+      '<span class="plnum">'+idx+"</span>"+
+      '<span class="plmain">'+
+        '<span class="pltitle">'+p.t+(isCur?'<span class="plcur">本轮</span>':"")+"</span>"+
+        '<p class="plex">'+p.ex+"</p>"+
+        '<span class="plmeta">'+p.at+"</span>"+
+      "</span>"+
+      '<span class="fgo">打开 →</span></div>';
+  }).join("");
+  return flyShell({
+    ico:"clipboard", acc:"a-info", title:"计划",
+    sub:s.plans.length+" 份 · 最新一份属于本轮",
+    stats, tabs, body,
+    foot:ic("clipboard",11)+"点击任一份在计划面板中打开"+
+      '<span class="sp"></span><kbd>Esc</kbd> 关闭',
+  });
+}
+
+function flyRowBook(b){
+  return '<div class="bkrow'+(b.stale?" stale":"")+'">'+
+    '<span class="bkdot'+(b.stale?" stale":"")+'"></span>'+
+    '<span class="bktext">'+b.t+"</span>"+
+    (b.stale?'<span class="fm">已失效</span>':'<span class="bkclock">'+b.at+"</span>")+
+    '<span class="bkacts">'+ic("pencil",11)+ic("x",11)+"</span></div>";
+}
+function flyBookmarks(s){
+  const today = s.bookmarks.filter(b=>!b.old), older = s.bookmarks.filter(b=>b.old);
+  const stats = fstat(s.bookmarks.length,"个")+fsep+fstat(today.length,"今天")+fsep+fstat(older.length,"更早")+
+    (s.staleCount?fsep+'<span class="warn">'+fstat(s.staleCount,"已失效")+"</span>":"");
+  const tabs = ftabs([
+    {label:"全部",n:s.bookmarks.length,cur:true},
+    {label:"今天",n:today.length},
+    {label:"更早",n:older.length},
+    {label:"已失效",n:s.staleCount},
+  ]);
+  const group = (label,list) => list.length
+    ? fsec(label,list.length)+'<div class="bkaxis">'+list.map(flyRowBook).join("")+"</div>"
+    : "";
+  const body = group("今天",today)+group("更早",older);
+  return flyShell({
+    ico:"bookmark", acc:"a-amber", title:"书签",
+    sub:s.bookmarks.length+" 个"+(s.staleCount?" · "+s.staleCount+" 个已失效":""),
+    stats, tabs, body,
+    foot:ic("bookmark",11)+"选中正文可添加；书签永不删除,失效只灰掉"+
+      '<span class="sp"></span><kbd>Esc</kbd> 关闭',
+  });
+}
+
+/** 节点 → 面板 */
+function flyPanel(kind,s){
+  if (kind==="subagents") return flySubagents(s);
+  if (kind==="tasks") return flyTasks(s);
+  if (kind==="plans") return flyPlans(s);
+  return flyBookmarks(s);
+}
+
+/* 右缘轨的节点顺序(与 rail() 里的渲染顺序一致) */
+const RAIL_ORDER = ["tasks","subagents","plans","bookmarks"];
+const RAIL_ICO = {tasks:"list",subagents:"robot",plans:"clipboard",bookmarks:"bookmark"};
+const NODE_PITCH = 33;   /* 26px 节点 + 7px 间距 */
+const RAIL_TOP = 34;     /* 演示里轨道相对舞台顶部的偏移 */
+const NOTCH_Y = 30;      /* 缺口相对面板顶部的偏移 */
+function railBadge(kind,s){
+  if (kind==="tasks") return s.todoDone+"/"+s.todos.length;
+  if (kind==="subagents") return s.running.length || s.subagents.length;
+  if (kind==="plans") return s.plans.length;
+  return s.bookmarks.length;
+}
+/** 一张"在上下文里"的演示:轨道在右、面板向左浮出、缺口对准被点的那颗节点 */
+function railDemo(kind,s){
+  const i = RAIL_ORDER.indexOf(kind);
+  const railHtml = '<div class="flyrail">'+RAIL_ORDER.map(k=>{
+    const active = k===kind;
+    const run = k==="subagents" && s.running.length>0;
+    return '<div class="rnode'+(active?" active":"")+(run?" run":"")+'">'+
+      ic(RAIL_ICO[k],13)+'<span class="badge">'+railBadge(k,s)+"</span></div>";
+  }).join("")+"</div>";
+  return '<div class="flystage">'+
+    '<div class="fly-anchor" style="margin-top:'+(RAIL_TOP + i*NODE_PITCH + 13 - NOTCH_Y)+'px">'+
+      flyPanel(kind,s)+"</div>"+railHtml+"</div>";
+}
+
+/* ======================= 状态与重绘 ======================= */
+const S = { state:"running", colw:620, theme:"light" };
+
+function render(){
+  document.documentElement.setAttribute("data-theme",S.theme);
+  document.documentElement.style.setProperty("--colw",S.colw+"px");
+  const narrow = S.colw < NARROW_PX;
+  const s = derive(S.state);
+  renderVariant("baseline",s,narrow);
+  renderVariant("A",s,narrow);
+  renderVariant("B",s,narrow);
+  renderVariant("C",s,narrow);
+  renderVariant("D",s,narrow);
+  document.querySelectorAll(".frame").forEach(f=>{ f.style.width = S.colw+"px"; });
+}
+
+/* ======================= 控制条接线 ======================= */
+function wireSeg(sel,attr,onPick){
+  document.querySelector(sel).addEventListener("click",(e)=>{
+    const b = e.target.closest("button"); if(!b) return;
+    document.querySelectorAll(sel+" .sbtn").forEach(x=>x.classList.remove("cur"));
+    b.classList.add("cur");
+    onPick(b.getAttribute(attr));
+  });
+}
+wireSeg("#segState","data-st",(v)=>{ S.state=v; render(); });
+wireSeg("#segTheme","data-th",(v)=>{ S.theme=v; render(); });
+document.getElementById("colw").addEventListener("input",(e)=>{
+  S.colw = Number(e.target.value);
+  document.getElementById("colwOut").textContent = S.colw+" px";
+  render();
+});
+
+/* #only=a 只留一个方案;#bare=1 去掉页头与控制条 */
+function applyHash(){
+  const h = location.hash;
+  const only = (h.match(/only=([a-d])/i)||[])[1];
+  document.querySelectorAll(".variant").forEach(sec=>{
+    const id = sec.id;
+    const keep = !only || id==="v"+only.toUpperCase();
+    sec.style.display = keep ? "" : "none";
+  });
+  const bare = /bare=1/.test(h);
+  document.getElementById("pagehead").style.display = bare ? "none" : "";
+  document.getElementById("ctrlbar").style.display = bare ? "none" : "";
+}
+window.addEventListener("hashchange",applyHash);
+applyHash();
+render();
+</script>
+</body>
+</html>

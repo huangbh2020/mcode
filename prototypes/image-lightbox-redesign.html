@@ -1,0 +1,192 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8" />
+<title>Mcode · 图片灯箱重设计(单条 docked 控制栏 · 闲置淡出)</title>
+<style>
+  /* Prototype harness only — a stand-in for the app's dark UI so the scrim /
+     glass can be judged against something. Not part of the shipped CSS. */
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    min-height: 100vh;
+    font: 500 13px/1.5 -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+    background: #101014;
+    color: #d4d4d8;
+    padding: 28px;
+  }
+  h1 { font-size: 15px; margin: 0 0 4px; color: #f4f4f5; }
+  p.lede { margin: 0 0 22px; color: #8b8b96; font-size: 12px; max-width: 900px; }
+  .grid { display: flex; gap: 22px; align-items: flex-start; flex-wrap: wrap; }
+  .frame { position: relative; border-radius: 10px; overflow: hidden; border: 1px solid #2b2b33; box-shadow: 0 24px 60px -30px #000; }
+  .caption { margin: 8px 2px 0; font-size: 11px; color: #8b8b96; }
+  .caption b { color: #e4e4e7; font-weight: 600; }
+
+  /* ── The fake app behind the lightbox (chat rows + composer) ───────────── */
+  .app { position: absolute; inset: 0; padding: 14px; display: flex; flex-direction: column; gap: 10px; background: #17171c; }
+  .app .row { height: 10px; border-radius: 5px; background: #26262e; }
+  .app .row.w70 { width: 70%; } .app .row.w45 { width: 45%; } .app .row.w88 { width: 88%; }
+  .app .card { margin-top: auto; height: 46px; border-radius: 10px; border: 1px solid #2f2f38; background: #1d1d23; }
+
+  /* ════════ Verbatim from apps/desktop/src/renderer/styles.css ════════ */
+  .lightbox-scrim {
+    background: radial-gradient(115% 85% at 50% 42%, rgba(0, 0, 0, 0.72), rgba(0, 0, 0, 0.93));
+    animation: lightbox-scrim-in 180ms ease-out backwards;
+  }
+  @keyframes lightbox-scrim-in { from { opacity: 0; } }
+
+  .lightbox-figure { animation: lightbox-figure-in 240ms cubic-bezier(0.22, 1, 0.36, 1) backwards; }
+  @keyframes lightbox-figure-in { from { opacity: 0; transform: scale(0.975); } }
+
+  .lightbox-bar {
+    background: rgba(24, 24, 27, 0.72);
+    backdrop-filter: blur(16px) saturate(160%);
+    -webkit-backdrop-filter: blur(16px) saturate(160%);
+    box-shadow: 0 12px 32px -10px rgba(0, 0, 0, 0.65), inset 0 0 0 1px rgba(255, 255, 255, 0.09);
+  }
+  .lightbox-chrome {
+    transition: opacity 220ms cubic-bezier(0.22, 1, 0.36, 1), transform 220ms cubic-bezier(0.22, 1, 0.36, 1);
+    animation: lightbox-chrome-in 260ms cubic-bezier(0.22, 1, 0.36, 1) backwards;
+  }
+  @keyframes lightbox-chrome-in { from { opacity: 0; transform: translateY(8px); } }
+  .lightbox-root[data-chrome="hidden"] .lightbox-chrome { opacity: 0; transform: translateY(6px); }
+  .lightbox-check { animation: lightbox-check-in 260ms cubic-bezier(0.34, 1.56, 0.64, 1); }
+  @keyframes lightbox-check-in { from { opacity: 0; transform: scale(0.6); } }
+  /* ════════════════════════════════════════════════════════════════════ */
+
+  /* Utility equivalents of the Tailwind classes used in image-preview.tsx
+     (the prototype has no Tailwind build; values are copied from it). */
+  .lightbox-root { position: absolute; inset: 0; display: flex; flex-direction: column; z-index: 5; }
+  .stage { flex: 1 1 0%; min-height: 0; display: flex; align-items: center; justify-content: center; padding: 24px 24px 8px; }
+  .figure { max-height: 100%; max-width: 100%; object-fit: contain; border-radius: 8px; box-shadow: 0 25px 50px -12px rgba(0,0,0,.85); }
+  .barwrap { position: relative; flex: 0 0 auto; display: flex; justify-content: center; padding: 12px 16px 20px; }
+  .barbox { display: flex; align-items: center; gap: 2px; border-radius: 16px; padding: 4px; }
+  .ibtn {
+    display: grid; place-items: center; width: 36px; height: 36px; border-radius: 12px;
+    border: 0; background: transparent; color: rgba(255,255,255,.8); cursor: default;
+  }
+  .ibtn:hover { background: rgba(255,255,255,.1); color: #fff; }
+  .ibtn.accent { color: #059669; }
+  .ibtn.dim { opacity: .3; }
+  .sep { width: 1px; height: 16px; margin: 0 4px; background: rgba(255,255,255,.1); }
+  .counter { padding: 0 6px; font-size: 12px; font-variant-numeric: tabular-nums; color: rgba(255,255,255,.75); }
+  svg { display: block; }
+</style>
+</head>
+<body>
+  <h1>图片灯箱重设计 · 单条 docked 控制栏 + 闲置淡出</h1>
+  <p class="lede">
+    旧版:复制 / 下载 / 关闭 / 左右滑动分散在画面四角,图标 20–24px,半透明但压在图上(顶栏还和 Windows 原生窗口按钮打架)。
+    新版:所有控件收进图下方一条玻璃栏(图像区与栏是 flex 兄弟,几何上不可能重叠),指针静止 2.6s 后整条栏淡出、光标一并隐藏,任何移动/按键唤回。
+  </p>
+  <div class="grid">
+    <div>
+      <div class="frame" style="width: 820px; height: 560px;">
+        <div class="app" aria-hidden="true">
+          <div class="row w45"></div><div class="row w88"></div><div class="row w70"></div><div class="row w88"></div>
+          <div class="row w45"></div><div class="card"></div>
+        </div>
+        <div class="lightbox-scrim" style="position:absolute; inset:0;"></div>
+        <div class="lightbox-root" data-chrome="shown">
+          <div class="stage">
+            <img class="figure" style="width:720px; height:450px;"
+              src="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='720' height='450'><rect width='720' height='450' fill='%23f8fafc'/><rect x='0' y='0' width='720' height='34' fill='%23e2e8f0'/><circle cx='18' cy='17' r='5' fill='%23ef4444'/><circle cx='36' cy='17' r='5' fill='%23f59e0b'/><circle cx='54' cy='17' r='5' fill='%2310b981'/><rect x='24' y='62' width='200' height='14' rx='7' fill='%230f172a'/><rect x='24' y='92' width='420' height='9' rx='4' fill='%23cbd5e1'/><rect x='24' y='110' width='360' height='9' rx='4' fill='%23cbd5e1'/><rect x='24' y='128' width='390' height='9' rx='4' fill='%23cbd5e1'/><rect x='24' y='168' width='300' height='180' rx='10' fill='%23e2e8f0'/><rect x='344' y='168' width='352' height='86' rx='10' fill='%23dbeafe'/><rect x='344' y='266' width='352' height='82' rx='10' fill='%23dcfce7'/></svg>" alt="" />
+          </div>
+          <div class="barwrap lightbox-chrome">
+            <div class="barbox lightbox-bar">
+              <button class="ibtn" title="复制图片"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 7m0 2.667a2.667 2.667 0 0 1 2.667 -2.667h8.666a2.667 2.667 0 0 1 2.667 2.667v8.666a2.667 2.667 0 0 1 -2.667 2.667h-8.666a2.667 2.667 0 0 1 -2.667 -2.667z"/><path d="M4.012 16.737a2.005 2.005 0 0 1 -1.012 -1.737v-10c0 -1.1 .9 -2 2 -2h10c.75 0 1.158 .385 1.5 1"/></svg></button>
+              <button class="ibtn" title="下载图片"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2 -2v-2"/><path d="M7 11l5 5l5 -5"/><path d="M12 4l0 12"/></svg></button>
+              <span class="sep"></span>
+              <button class="ibtn" title="上一张"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 6l-6 6l6 6"/></svg></button>
+              <span class="counter">2 / 5</span>
+              <button class="ibtn" title="下一张"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6l-6 6"/></svg></button>
+              <span class="sep"></span>
+              <button class="ibtn" title="关闭预览"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6l-12 12"/><path d="M6 6l12 12"/></svg></button>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="caption"><b>A · 指针活动</b>:图下方一条玻璃栏,复制/下载 │ 上一张 · 2 / 5 · 下一张 │ 关闭。图像区与栏是 flex 兄弟 —— 永不重叠,也没有任何控件落在图面上。</div>
+    </div>
+
+    <div>
+      <div class="frame" style="width: 460px; height: 560px;">
+        <div class="app" aria-hidden="true">
+          <div class="row w70"></div><div class="row w88"></div><div class="row w45"></div><div class="card"></div>
+        </div>
+        <div class="lightbox-scrim" style="position:absolute; inset:0;"></div>
+        <div class="lightbox-root" data-chrome="hidden">
+          <div class="stage">
+            <img class="figure" style="width:300px; height:450px;"
+              src="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='300' height='450'><rect width='300' height='450' fill='%23f8fafc'/><rect x='0' y='0' width='300' height='28' fill='%23e2e8f0'/><rect x='16' y='52' width='140' height='12' rx='6' fill='%230f172a'/><rect x='16' y='78' width='268' height='8' rx='4' fill='%23cbd5e1'/><rect x='16' y='94' width='240' height='8' rx='4' fill='%23cbd5e1'/><rect x='16' y='124' width='268' height='120' rx='10' fill='%23e2e8f0'/><rect x='16' y='258' width='268' height='70' rx='10' fill='%23dcfce7'/><rect x='16' y='342' width='268' height='70' rx='10' fill='%23dbeafe'/></svg>" alt="" />
+          </div>
+          <div class="barwrap lightbox-chrome">
+            <div class="barbox lightbox-bar">
+              <button class="ibtn" title="复制图片"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M7 7m0 2.667a2.667 2.667 0 0 1 2.667 -2.667h8.666a2.667 2.667 0 0 1 2.667 2.667v8.666a2.667 2.667 0 0 1 -2.667 2.667h-8.666a2.667 2.667 0 0 1 -2.667 -2.667z"/></svg></button>
+              <button class="ibtn" title="下载图片"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2 -2v-2"/><path d="M7 11l5 5l5 -5"/><path d="M12 4l0 12"/></svg></button>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="caption"><b>B · 指针静止 2.6s(闲置态)</b>:栏淡出、光标隐藏 —— 竖版截图整屏无遮挡,只剩画面本身。移动鼠标或按 ←/→ 立即唤回。</div>
+    </div>
+
+    <div>
+      <div class="frame" style="width: 460px; height: 560px;">
+        <div class="app" aria-hidden="true">
+          <div class="row w70"></div><div class="row w88"></div><div class="row w45"></div><div class="card"></div>
+        </div>
+        <div class="lightbox-scrim" style="position:absolute; inset:0;"></div>
+        <div class="lightbox-root" data-chrome="shown">
+          <div class="stage">
+            <img class="figure" style="width:300px; height:450px;"
+              src="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='300' height='450'><rect width='300' height='450' fill='%23f8fafc'/><rect x='0' y='0' width='300' height='28' fill='%23e2e8f0'/><rect x='16' y='52' width='140' height='12' rx='6' fill='%230f172a'/><rect x='16' y='78' width='268' height='8' rx='4' fill='%23cbd5e1'/><rect x='16' y='124' width='268' height='120' rx='10' fill='%23e2e8f0'/><rect x='16' y='258' width='268' height='70' rx='10' fill='%23dcfce7'/></svg>" alt="" />
+          </div>
+          <div class="barwrap lightbox-chrome">
+            <div class="barbox lightbox-bar">
+              <button class="ibtn accent" title="已复制到剪贴板"><svg class="lightbox-check" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l5 5l9 -9"/></svg></button>
+              <button class="ibtn" title="下载图片"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2 -2v-2"/><path d="M7 11l5 5l5 -5"/><path d="M12 4l0 12"/></svg></button>
+              <span class="sep"></span>
+              <button class="ibtn dim" title="上一张"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M15 6l-6 6l6 6"/></svg></button>
+              <span class="counter">1 / 3</span>
+              <button class="ibtn" title="下一张"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M9 6l6 6l-6 6"/></svg></button>
+              <span class="sep"></span>
+              <button class="ibtn" title="关闭预览"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6l-12 12"/><path d="M6 6l12 12"/></svg></button>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="caption"><b>C · 复制回执</b>:图标原地变成绿色对勾并弹一下(旧版只把 20px 图标染成绿色,容易被忽略);任何回执都不离开控制栏 —— 图面继续零遮挡;首页箭头按到端点自动变暗。</div>
+    </div>
+
+    <div>
+      <div class="frame" style="width: 400px; height: 560px;">
+        <div class="app" aria-hidden="true">
+          <div class="row w88"></div><div class="row w45"></div><div class="card"></div>
+        </div>
+        <div class="lightbox-scrim" style="position:absolute; inset:0;"></div>
+        <div class="lightbox-root" data-chrome="shown">
+          <div class="stage" style="padding: 24px 12px 8px;">
+            <img class="figure" style="width:250px; height:390px;"
+              src="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='250' height='390'><rect width='250' height='390' fill='%23f8fafc'/><rect x='0' y='0' width='250' height='26' fill='%23e2e8f0'/><rect x='14' y='48' width='120' height='11' rx='6' fill='%230f172a'/><rect x='14' y='72' width='222' height='7' rx='4' fill='%23cbd5e1'/><rect x='14' y='88' width='200' height='7' rx='4' fill='%23cbd5e1'/><rect x='14' y='116' width='222' height='100' rx='10' fill='%23e2e8f0'/><rect x='14' y='232' width='222' height='60' rx='10' fill='%23dcfce7'/><rect x='14' y='306' width='222' height='60' rx='10' fill='%23dbeafe'/></svg>" alt="" />
+          </div>
+          <div class="barwrap lightbox-chrome">
+            <div class="barbox lightbox-bar">
+              <button class="ibtn" title="复制图片"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M7 7m0 2.667a2.667 2.667 0 0 1 2.667 -2.667h8.666a2.667 2.667 0 0 1 2.667 2.667v8.666a2.667 2.667 0 0 1 -2.667 2.667h-8.666a2.667 2.667 0 0 1 -2.667 -2.667z"/></svg></button>
+              <button class="ibtn" title="下载图片"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2 -2v-2"/><path d="M7 11l5 5l5 -5"/><path d="M12 4l0 12"/></svg></button>
+              <span class="sep"></span>
+              <button class="ibtn dim" title="上一张"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M15 6l-6 6l6 6"/></svg></button>
+              <span class="counter">1 / 4</span>
+              <button class="ibtn" title="下一张"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M9 6l6 6l-6 6"/></svg></button>
+              <span class="sep"></span>
+              <button class="ibtn" title="关闭预览"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6l-12 12"/><path d="M6 6l12 12"/></svg></button>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="caption"><b>D · 最窄窗口(400px)</b>:六段全展开也放得下(栏宽 ≈ 280px),不换行、不溢出 —— 手机上完整控件仍然可点。</div>
+    </div>
+  </div>
+</body>
+</html>

@@ -2971,6 +2971,8 @@ function syncConfigFromSession(
   // Same idea for the session's worktree group: activating a thread bound to
   // an isolated checkout must reveal the group node it buckets under,
   // otherwise the newly-active row stays invisible inside a collapsed group.
+  // Groups are COLLAPSED by default, so this reveal is the "where am I" cue —
+  // it opens only the group the user just landed in, never the others.
   if (sess.worktreePath && !get().expandedWorktrees[normWorktreeKey(sess.worktreePath)]) {
     patch.expandedWorktrees = {
       ...get().expandedWorktrees,
@@ -5228,14 +5230,14 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
   // Worktree group nodes hold few sessions (one directory, few threads), so
   // unlike toggleProjectExpanded there is no pagination cache to reset — a
-  // pure expand-state flip. Groups render EXPANDED by default (absent key),
-  // so the flip is computed against `!== false`, not the raw falsy value:
-  // flipping an untouched (undefined) group must COLLAPSE it, not write true.
+  // pure expand-state flip. Groups render COLLAPSED by default (absent key),
+  // so the flip tests plain truthiness: flipping an untouched (undefined)
+  // group OPENS it, flipping an open one folds it back.
   toggleWorktreeExpanded: (worktreePath) =>
     set((s) => {
       const key = normWorktreeKey(worktreePath);
       return {
-        expandedWorktrees: { ...s.expandedWorktrees, [key]: !(s.expandedWorktrees[key] !== false) },
+        expandedWorktrees: { ...s.expandedWorktrees, [key]: !s.expandedWorktrees[key] },
       };
     }),
 
@@ -5383,9 +5385,10 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           activeProjectId: projectId,
           activeSessionId: session.id,
           expandedProjects: { ...s.expandedProjects, [projectId]: true },
-          // The new thread's group must be visible: groups render expanded by
-          // default, the explicit true is a harmless no-op (kept for parity
-          // with the local path below).
+          // The new thread's group must be visible: groups render collapsed by
+          // default, so this explicit true is what opens the group the freshly
+          // created thread landed in (a "+" on a folded worktree header must
+          // not spawn an invisible thread).
           expandedWorktrees: {
             ...s.expandedWorktrees,
             [normWorktreeKey(session.worktreePath)]: true,

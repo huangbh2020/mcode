@@ -62,7 +62,7 @@ import { TagPopover } from "./TagPopover.js";
 import { FileMentionPicker, type FileMentionPickerMode } from "./FileMentionPicker.js";
 import { EmptyThreadWelcome } from "./EmptyThreadWelcome.js";
 import { SlashCommandPicker } from "./SlashCommandPicker.js";
-import { StatusCapsule } from "./StatusCapsule.js";
+import { ActivityCluster } from "./ActivityCluster.js";
 import { MessageTimeline, type UserItemIndexMap } from "./MessageTimeline.js";
 import { SelectionToolbar, type SelectionToolbarState } from "./SelectionToolbar.js";
 import { BookmarkFly } from "./BookmarkFly.js";
@@ -734,9 +734,10 @@ function groupMessagesForRender(
       // 一次性且可预期。
       for (let k = 0; k < rows.length; k++) {
         const row = rows[k];
-        // tightTop only applies after the run's first row — that one keeps the
-        // turn-gap so consecutive turns stay visually separated.
-        const tight = k > 0;
+        // 卡内行间距只有一档（2026-09-11）：支架里的每一行——含首行——都是块
+        // 间距。台头就在首行正上方，"首行保留回合级间距以免两个回合粘连"的老
+        // 规则会在同一张卡里留下两种间隔（台头下 12px、其余行 8px）；回合之间
+        // 的分离由 .chat-turn 外层的 assistant 行间距负责，卡内不需要第二套节奏。
         if (k === 0) {
           items.push({ kind: "liveSpineStart", turnMeta: liveTurnMeta });
         }
@@ -749,7 +750,7 @@ function groupMessagesForRender(
             liveKey: row.key,
             isStreamingTail: false,
             ...(k === 0 ? { turnMeta: liveTurnMeta } : {}),
-            tightTop: tight,
+            tightTop: true,
           });
         } else {
           items.push({
@@ -759,7 +760,7 @@ function groupMessagesForRender(
             live: true,
             isStreamingTail: false,
             isTurnTail: false,
-            tightTop: tight,
+            tightTop: true,
           });
         }
         if (k === rows.length - 1) {
@@ -1414,8 +1415,8 @@ function ChatPaneForSession({
     return m;
   }, [messages]);
   // All plan blocks across this session's message history. Used by the
-  // StatusCapsule (count) and the ActivityPopover (title list). Frozen plan
-  // blocks survive turn.done, so this includes every approved plan in the
+  // activity rail (node badge + count) and the console (plan index). Frozen
+  // plan blocks survive turn.done, so this includes every approved plan in the
   // session - not just the current one.
   const planBlocks = useMemo(
     () =>
@@ -1424,10 +1425,15 @@ function ChatPaneForSession({
         .filter((b): b is Extract<Block, { kind: "plan" }> => b.kind === "plan"),
     [messages],
   );
-  // ── Message bookmarks (selection → "添加书签" → capsule + timeline) ──
+  // ── Message bookmarks (selection → "添加书签" → rail node + timeline) ──
   const bookmarks: SessionBookmark[] = useSessionStore((s) =>
     s.bookmarksBySession[sessionId] ?? EMPTY_BOOKMARKS,
   );
+  // Whether this session has anything for the activity cluster to show. The
+  // cluster owns the per-kind empty checks; ChatPane needs only this aggregate
+  // so it can skip mounting it at all in a session with no activity.
+  const hasActivity =
+    todos.length > 0 || subagents.length > 0 || planBlocks.length > 0 || bookmarks.length > 0;
   const addBookmark = useSessionStore((s) => s.addBookmark);
   const removeBookmark = useSessionStore((s) => s.removeBookmark);
   const renameBookmark = useSessionStore((s) => s.renameBookmark);
@@ -1448,10 +1454,12 @@ function ChatPaneForSession({
   // point; the target rect is read live (the capsule segment may be mounting
   // for the very first time as the optimistic count lands).
   const [bookmarkFlyFrom, setBookmarkFlyFrom] = useState<{ top: number; left: number } | null>(null);
-  // Message-stream container (selection-ownership check) and capsule wrapper
-  // (fly-animation target), both scoped to THIS pane instance.
+  // Message-stream container (selection-ownership check) and the activity
+  // rail's bookmark node (fly-animation target), both scoped to THIS pane
+  // instance. The fly lands on the bookmark NODE rather than the rail as a
+  // whole so the dot visibly arrives where the bookmark went.
   const streamAreaRef = useRef<HTMLDivElement>(null);
-  const capsuleWrapRef = useRef<HTMLDivElement>(null);
+  const bookmarkNodeRef = useRef<HTMLDivElement>(null);
   // Messages this thread's user has previously sent, oldest → newest, as
   // plain text. Drives the Up/Down history recall in the composer. Derived
   // from the message stream (the user message's `text` block holds exactly
@@ -2867,7 +2875,6 @@ function ChatPaneForSession({
   type SegmentRow = {
     key: string;
     node: React.ReactNode;
-    tight: boolean;
   };
 
   /** Wrap the live segment's rows in the `.chat-turn` root (the structural
@@ -2926,33 +2933,35 @@ function ChatPaneForSession({
         liveLedgerBlocks.push(...it.blocks);
         rows.push({
           key: `ops:${it.liveKey ?? it.anchorId}`,
-          tight: !!it.tightTop,
           node: (
             // No stat row here: the ledger HEAD already carries this turn's
             // summary (model · clock · duration · current op · step count).
             // Rendering it again as the body's first row duplicated the whole
             // line — the "两行汇总信息" bug.
-            <div>
-              <div>
-                {it.leading && it.leading.length > 0 && (
-                  <RenderErrorBoundary>
-                    <MessageBlocks
-                      blocks={it.leading}
-                      beforeMap={beforeMap}
-                      onOpenPlan={(p) => openPlanDrawer(sessionId, p)}
-                      projectPath={projectPath}
-                    />
-                  </RenderErrorBoundary>
-                )}
+            //
+            // 行间距归内容自己（2026-09-11）：动画壳 .chat-enter 不再带
+            // margin——否则壳和行内容各带一份，间距会随行形态变化（文本行被
+            // MessageRow 的 margin 吃掉、批次行只剩壳那一份）。批次行的外壳
+            // 没有自己的上边距，就在这里补上，与文本行同档（块间距）。
+            <div className="mt-[var(--chat-block-gap)]">
+              {it.leading && it.leading.length > 0 && (
                 <RenderErrorBoundary>
-                  <BatchToolGroup
-                    blocks={it.blocks}
-                    turnActive
-                    showTicker={false}
+                  <MessageBlocks
+                    blocks={it.leading}
+                    beforeMap={beforeMap}
+                    onOpenPlan={(p) => openPlanDrawer(sessionId, p)}
                     projectPath={projectPath}
                   />
                 </RenderErrorBoundary>
-              </div>
+              )}
+              <RenderErrorBoundary>
+                <BatchToolGroup
+                  blocks={it.blocks}
+                  turnActive
+                  showTicker={false}
+                  projectPath={projectPath}
+                />
+              </RenderErrorBoundary>
             </div>
           ),
         });
@@ -2963,13 +2972,14 @@ function ChatPaneForSession({
         liveLedgerBlocks.push(...it.msg.blocks);
         rows.push({
           key: `msg:${it.liveKey ?? it.msg.id}`,
-          tight: !!it.tightTop,
           node: (
             // 台账台头已承载本回合的汇总（模型 · 时钟 · 走时 · 实时操作），
             // 正文行不再渲染自己的 stat 行——否则同一回合出现两行回合栏。
+            // tightTop 恒真：卡内文本行也用块间距，与批次行同档（上边距由
+            // MessageRow 自己给，动画壳不再带 margin）。
             <MessageRow
               msg={it.msg}
-              tightTop={it.tightTop}
+              tightTop
               beforeMap={beforeMap}
               hideTurnStat
               projectPath={projectPath}
@@ -2984,8 +2994,10 @@ function ChatPaneForSession({
         {rows.map((row) => (
           <div
             key={row.key}
-            // 首行紧贴台头（间距由台账头/内边距给），其余行用块间距。
-            className={cn("chat-enter", row.tight && "mt-[var(--chat-block-gap)]")}
+            // 纯入场动画壳，不带任何布局属性：行间距由行内容自己给（文本行走
+            // MessageRow 的 tightTop，批次行走节点自己的 mt-[var(--chat-block-gap)]）。
+            // 这里再带一份 margin 会和内容那份叠加/抵消不定，间距随行形态漂移。
+            className="chat-enter"
           >
             {row.node}
           </div>
@@ -3243,12 +3255,15 @@ function ChatPaneForSession({
       );
       // 每个回合现在都渲染过程面板（无过程数据的回合只剩台头行），因此统一
       // 走生命线结构：卡片与回复挂同一根 .chat-turn 上（方案A 的识别骨架）。
+      // 外层的上边距用 assistant 行间距（不是块间距）：运行中的支架用的就是这
+      // 一档，完成时若换成块间距，卡片会在回合结束的瞬间往上跳 4px；它也保证
+      // 回合卡与前后其它 assistant 内容同节奏。卡内的行间距另算（块间距）。
       return (
         <div
           key={item.textMsgs[0]?.id ?? `turn-${item.turnMeta?.startedAt ?? ""}`}
           className="px-[var(--chat-gutter)]"
         >
-          <div className="mx-auto mt-[var(--chat-block-gap)] max-w-5xl">
+          <div className="mx-auto mt-[var(--chat-row-gap-assistant)] max-w-5xl">
             {/* 生命线竖脊：过程面板与最终回复挂同一根线上（方案A 的识别骨架）。
                 aria-hidden —— 纯装饰，状态语义由摘要行文本承载。 */}
             <div
@@ -3408,6 +3423,9 @@ function ChatPaneForSession({
               drawDistance={400}
               ListFooterComponent={listFooter}
               ListHeaderComponent={listHeader}
+              // The activity cluster is an overlay in the stream's top-right
+              // corner (see below), so the list keeps the full pane width and
+              // reserves nothing for it.
               contentContainerStyle={{ paddingTop: MESSAGE_LIST_TOP_PADDING }}
               // overscrollBehavior contain: a touch scroll starting at the
               // list's boundaries must not chain to the document (mobile
@@ -3430,30 +3448,29 @@ function ChatPaneForSession({
         </div>
       )}
 
-      {/* StatusCapsule - floating overlay pinned to the top-right. Sits
-          ABOVE the list (absolute) so it never takes layout space; only the
-          pill itself is clickable, the rest of the overlay passes pointer
-          events through to the scroll surface beneath. The popover drops
-          down from the pill inside this non-clipping wrapper. Renders when
-          there are todos, subagents, plan blocks, OR bookmarks in the
-          session history. The wrapper ref is the fly-to-capsule bookmark
-          animation's landing target. */}
-      {!empty && (todos.length > 0 || subagents.length > 0 || planBlocks.length > 0 || bookmarks.length > 0) && (
-        <div ref={capsuleWrapRef} className="pointer-events-none absolute right-8 top-2 z-30 flex justify-end">
-          <StatusCapsule
-            subagents={subagents}
-            todos={todos}
-            planCount={planBlocks.length}
-            planBlocks={planBlocks}
-            bookmarks={bookmarks}
-            isBookmarkStale={(b) => !msgToRenderIndex.has(b.messageId)}
-            onPickBookmark={(b) => jumpToMessage(b.messageId, b.excerpt)}
-            onPickSubagent={(agent) => openSubagentTranscript(sessionId, agent.taskId)}
-            onRemoveBookmark={(b) => void removeBookmark(sessionId, b.id)}
-            onRenameBookmark={(b, title) => void renameBookmark(sessionId, b.id, title)}
-            onPickPlan={(p) => openPlanDrawer(sessionId, p)}
-          />
-        </div>
+      {/* Activity cluster (方案 B「收放」) — a 30px progress button in the
+          stream's top-right corner that grows a text bar only when there is
+          something to say. It is an overlay (the list reserves no width for
+          it), so the bar can cover the tail of the first row while it is open;
+          that is the deliberate trade for being almost invisible when idle.
+          The console it opens drops down from it (see ActivityCluster). */}
+      {!empty && hasActivity && (
+        <ActivityCluster
+          subagents={subagents}
+          todos={todos}
+          planBlocks={planBlocks}
+          bookmarks={bookmarks}
+          // The session's pending AskUserQuestion (declared above) is the
+          // strongest "this needs you" signal the cluster can report.
+          waiting={!!pendingQuestion}
+          isBookmarkStale={(b) => !msgToRenderIndex.has(b.messageId)}
+          onPickBookmark={(b) => jumpToMessage(b.messageId, b.excerpt)}
+          onPickSubagent={(agent) => openSubagentTranscript(sessionId, agent.taskId)}
+          onRemoveBookmark={(b) => void removeBookmark(sessionId, b.id)}
+          onRenameBookmark={(b, title) => void renameBookmark(sessionId, b.id, title)}
+          onPickPlan={(p) => openPlanDrawer(sessionId, p)}
+          bookmarkNodeRef={bookmarkNodeRef}
+        />
       )}
 
       {/* Floating [copy | add bookmark] toolbar over the current text
@@ -3467,9 +3484,9 @@ function ChatPaneForSession({
         />
       )}
 
-      {/* One-shot fly-to-capsule bookmark dot (portals to body). */}
+      {/* One-shot fly-to-rail bookmark dot (portals to body). */}
       {bookmarkFlyFrom && (
-        <BookmarkFly from={bookmarkFlyFrom} targetRef={capsuleWrapRef} onDone={() => setBookmarkFlyFrom(null)} />
+        <BookmarkFly from={bookmarkFlyFrom} targetRef={bookmarkNodeRef} onDone={() => setBookmarkFlyFrom(null)} />
       )}
 
       {/* Jump-to-bottom button. Shows a new-activity count while a turn is

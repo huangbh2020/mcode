@@ -1,15 +1,16 @@
 /**
- * One-shot "fly to capsule" animation after adding a bookmark: a small
- * glowing dot travels from the selection to the status capsule, conveying
- * "the selection was collected up there". Mounts only for the ~400ms flight.
+ * One-shot "fly to activity" animation after adding a bookmark: a small glowing
+ * dot travels from the selection to the activity rail's bookmark node,
+ * conveying "the selection was collected over there". Mounts only for the
+ * ~400ms flight.
  *
- * The start point is a captured viewport snapshot; the target rect is read
- * live from `targetRef` at mount (the capsule segment may be mounting for
- * the very first time as the optimistic bookmark count lands, so the caller
- * renders this only after the capsule is guaranteed present — same commit).
+ * The start point is a captured viewport snapshot; the target rect is read live
+ * from `targetRef` at mount (the node may be mounting for the very first time as
+ * the optimistic bookmark lands, so the caller renders this only after the rail
+ * is guaranteed present — same commit).
  *
- * Reduced-motion users skip the flight entirely (the capsule's badge pop
- * alone conveys the change).
+ * Reduced-motion users skip the flight entirely (the node's badge pop alone
+ * conveys the change).
  */
 import { useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
@@ -26,7 +27,8 @@ export function BookmarkFly({
   onDone,
 }: {
   from: { top: number; left: number };
-  targetRef: React.RefObject<HTMLDivElement | null>;
+  /** The rail's bookmark node (any element — only its rect is read). */
+  targetRef: React.RefObject<HTMLElement | null>;
   onDone: () => void;
 }) {
   const dotRef = useRef<HTMLDivElement>(null);
