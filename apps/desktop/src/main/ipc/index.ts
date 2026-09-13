@@ -8,6 +8,7 @@ import { registerCustomModelHandlers } from "./customModel.js";
 import { registerPiModelsHandlers } from "./piModels.js";
 import { registerCodexModelsHandlers } from "./codexModels.js";
 import { registerThemeHandlers } from "./theme.js";
+import { registerFontHandlers } from "./fonts.js";
 import { registerFileHandlers } from "./files.js";
 import { registerRgHandlers } from "./rg.js";
 import { registerGitHandlers } from "./git.js";
@@ -61,6 +62,7 @@ export function registerIpcHandlers(): void {
   registerPiModelsHandlers(ipc);
   registerCodexModelsHandlers(ipc);
   registerThemeHandlers(ipc);
+  registerFontHandlers(ipc);
   registerFileHandlers(ipc);
   registerRgHandlers(ipc);
   registerGitHandlers(ipc);

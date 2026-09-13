@@ -8,14 +8,15 @@
  * behavior: Esc to close, click backdrop to close, focus trap.
  *
  * Chrome layout (redesigned): every control lives in ONE glass bar docked
- * *below* the image — copy · download │ prev · counter · next │ close. The bar
- * occupies its own reserved strip outside the image stage (a `flex-1` sibling
- * that shrink-wraps the picture), so controls can never land on top of the
- * image, and they fade away ~2.6s after the pointer goes idle (any move /
- * keypress brings them back) so a screenshot can be studied with zero chrome
- * over it. Nothing is anchored to the screen's top-right corner on purpose: on
- * Windows/Linux the native caption overlay (min/max/close) is drawn above the
- * webview there, so chrome placed in that corner collides with it.
+ * *below* the image — copy · download · show in folder │ prev · counter · next
+ * │ close. The bar occupies its own reserved strip outside the image stage (a
+ * `flex-1` sibling that shrink-wraps the picture), so controls can never land
+ * on top of the image, and they fade away ~2.6s after the pointer goes idle
+ * (any move / keypress brings them back) so a screenshot can be studied with
+ * zero chrome over it. Nothing is anchored to the screen's top-right corner on
+ * purpose: on Windows/Linux the native caption overlay (min/max/close) is
+ * drawn above the webview there, so chrome placed in that corner collides with
+ * it.
  *
  * When `gallery` is provided (the full image list this thumbnail is part of),
  * the lightbox gains prev/next stepping + a position counter, reachable both
@@ -27,6 +28,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Dialog } from "./dialog.js";
 import { cn } from "@renderer/lib/cn.js";
 import { api } from "@renderer/lib/api.js";
+import { isElectron } from "@renderer/lib/platform.js";
 import { useSuppressBrowserView } from "@renderer/hooks/useSuppressBrowserView.js";
 import { useI18n } from "@renderer/lib/i18n/index.js";
 import {
@@ -36,6 +38,7 @@ import {
   IconChevronRight,
   IconCopy,
   IconDownload,
+  IconFolderOpen,
   IconX,
 } from "@renderer/lib/icons.js";
 
@@ -159,9 +162,10 @@ export function ImageWithPreview({
   useEffect(() => {
     if (open) {
       setViewIdx(Math.max(0, Math.min(count - 1, index)));
-      // Fresh copy feedback each time the lightbox opens (stale ✓/toast from a
-      // previous session shouldn't leak into the next one).
+      // Fresh copy / reveal feedback each time the lightbox opens (a stale
+      // ✓/✗ from a previous session shouldn't leak into the next one).
       setCopyState("idle");
+      setRevealState("idle");
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
@@ -184,6 +188,23 @@ export function ImageWithPreview({
     setCopyState(res.ok ? "done" : "error");
     window.clearTimeout(copyResetTimer.current);
     copyResetTimer.current = window.setTimeout(() => setCopyState("idle"), res.ok ? 1600 : 2400);
+  }, [curSrc]);
+
+  /* ── Show-in-folder feedback. We hand main the bytes we're displaying (the
+   *    image block has no path); main reveals the file it saved for them, or
+   *    caches a copy under userData. Feedback is in place, like copy: the icon
+   *    becomes a check on success and turns red on failure. ── */
+  const [revealState, setRevealState] = useState<"idle" | "working" | "done" | "error">("idle");
+  const revealResetTimer = useRef<number | undefined>(undefined);
+  useEffect(() => () => window.clearTimeout(revealResetTimer.current), []);
+
+  const handleReveal = useCallback(async () => {
+    if (!curSrc.startsWith("data:image/")) return;
+    setRevealState("working");
+    const res = await api.shell.showImageInFolder({ dataUrl: curSrc });
+    setRevealState(res.ok ? "done" : "error");
+    window.clearTimeout(revealResetTimer.current);
+    revealResetTimer.current = window.setTimeout(() => setRevealState("idle"), res.ok ? 1600 : 2400);
   }, [curSrc]);
 
   /* ── Idle-fading chrome. The bar is on screen when the lightbox opens and
@@ -282,6 +303,13 @@ export function ImageWithPreview({
         ? t("layout.image.copyFailed")
         : t("layout.image.copy");
 
+  const revealLabel =
+    revealState === "done"
+      ? t("layout.image.revealed")
+      : revealState === "error"
+        ? t("layout.image.revealFailed")
+        : t("layout.image.reveal");
+
   return (
     <>
       <button
@@ -372,6 +400,24 @@ export function ImageWithPreview({
                 >
                   <IconDownload size={17} />
                 </LightboxButton>
+                {/* Desktop only: the phone/web shell has no OS file manager to
+                    open, so the segment is absent rather than dead. */}
+                {isElectron && (
+                  <LightboxButton
+                    label={revealLabel}
+                    onClick={() => void handleReveal()}
+                    disabled={revealState === "working" || !curSrc.startsWith("data:image/")}
+                    tone={
+                      revealState === "done" ? "accent" : revealState === "error" ? "danger" : "default"
+                    }
+                  >
+                    {revealState === "done" ? (
+                      <IconCheck size={17} className="lightbox-check" />
+                    ) : (
+                      <IconFolderOpen size={17} />
+                    )}
+                  </LightboxButton>
+                )}
                 {count > 1 && (
                   <>
                     <BarDivider />

@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>P1-3 · 深色牛皮纸整屏</title>
+<link rel="stylesheet" href="base.css">
+<style>
+  /* ── P1 第 3 张:深色牛皮纸整屏 ────────────────────────────────
+     整页走牛皮纸形态(深底 + 粉笔线 + 粉笔绿),和上一张的浅色
+     纸面形成「同一套语言、两种形态」的对照 —— 这是视觉线上最
+     直观的「不撞脸」证据。 */
+  body { height: 1440px; position: relative; }
+
+  .label { position: absolute; top: 66px; left: 0; width: 1080px; text-align: center; }
+  .label .t { font-size: 42px; font-weight: 700; letter-spacing: 4px; color: rgb(var(--accent)); }
+  .label .s {
+    margin-top: 12px; font-size: 26px; letter-spacing: 3px;
+    color: rgb(var(--content-subtle));
+  }
+  .label .rule { margin: 22px auto 0; width: 210px; height: 2px; background: rgb(var(--edge)); }
+
+  .sticker {
+    position: absolute;
+    left: 30px; top: 258px; width: 1020px;
+    transform: rotate(0.7deg);
+    background: rgb(var(--surface));
+    border: 2px solid rgb(var(--edge));
+    border-radius: var(--sk-r-lg);
+    box-shadow: 7px 9px 0 rgb(0 0 0 / 0.28);
+    overflow: hidden;
+    z-index: 2;
+  }
+  .sticker img { display: block; width: 1020px; }
+
+  .ring { position: absolute; left: 348px; top: 800px; z-index: 4; }
+
+  .note {
+    position: absolute; left: 0; top: 924px; width: 1080px;
+    display: flex; align-items: flex-start; justify-content: center; gap: 14px;
+    z-index: 5;
+  }
+  .note p { margin: 0; font-size: 40px; line-height: 1.32; letter-spacing: 1.5px; }
+  .note .acc { color: rgb(var(--accent)); font-weight: 700; }
+
+  .swatch {
+    position: absolute; left: 0; top: 1092px; width: 1080px;
+    display: flex; justify-content: center; gap: 54px; z-index: 5;
+  }
+  .sw { text-align: center; }
+  .sw .chip {
+    width: 92px; height: 62px; border-radius: var(--sk-r-sm);
+    border: 1.5px solid rgb(var(--edge));
+  }
+  .sw .nm {
+    margin-top: 11px; font-size: 23px; letter-spacing: 1px;
+    color: rgb(var(--content-subtle));
+  }
+  .sw .hex { font-family: var(--mono); font-size: 20px; letter-spacing: 0.5px; }
+
+  .foot {
+    position: absolute; left: 0; top: 1252px; width: 1080px;
+    text-align: center; font-size: 31px; line-height: 1.6;
+    color: rgb(var(--content-muted));
+  }
+  .sign {
+    position: absolute; left: 0; top: 1388px; width: 1080px;
+    text-align: center; font-size: 26px; letter-spacing: 2px;
+    color: rgb(var(--content-subtle)); z-index: 6;
+  }
+</style>
+</head>
+<body class="mode-kraft">
+
+  <div class="label">
+    <div class="t">牛 皮 纸 · 深 色</div>
+    <div class="s">夜里写代码的那一版</div>
+    <div class="rule"></div>
+  </div>
+
+  <div class="sticker">
+    <img src="img/home-dark.png" alt="">
+  </div>
+
+  <svg class="ring" width="640" height="76" viewBox="0 0 640 76">
+    <ellipse cx="320" cy="38" rx="306" ry="30"
+             fill="none" stroke="rgb(64 190 142)" stroke-width="4.5"
+             stroke-linecap="round" transform="rotate(-0.4 320 38)"/>
+  </svg>
+
+  <div class="note">
+    <svg width="42" height="56" viewBox="0 0 42 56" style="margin-top:6px">
+      <g fill="none" stroke="rgb(64 190 142)" stroke-width="4.6"
+         stroke-linecap="round" stroke-linejoin="round">
+        <path d="M 30 52 C 27 36, 22 22, 14 9"/>
+        <path d="M 4 24 C 8 18, 11 13, 14 8 C 20 13, 27 18, 33 21"/>
+      </g>
+    </svg>
+    <p>同一套形状语言<br>换成<span class="acc">暖深底 + 粉笔线</span></p>
+  </div>
+
+  <div class="swatch">
+    <div class="sw">
+      <div class="chip" style="background:#3B3126"></div>
+      <div class="nm">牛皮纸底</div><div class="nm hex">#3B3126</div>
+    </div>
+    <div class="sw">
+      <div class="chip" style="background:#F0E7D5"></div>
+      <div class="nm">粉笔白</div><div class="nm hex">#F0E7D5</div>
+    </div>
+    <div class="sw">
+      <div class="chip" style="background:#40BE8E"></div>
+      <div class="nm">粉笔绿</div><div class="nm hex">#40BE8E</div>
+    </div>
+  </div>
+
+  <div class="foot">
+    纸面 / 牛皮纸两套，不是两个皮肤<br>
+    是同一支笔画在不同纸上的结果
+  </div>
+
+  <div class="sign">黄同学｜一个人用 AI 做软件</div>
+  <div class="grain"></div>
+</body>
+</html>

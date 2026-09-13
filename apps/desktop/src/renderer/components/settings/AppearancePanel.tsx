@@ -1,11 +1,11 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { cn } from "@renderer/lib/cn.js";
 import { useTheme } from "@renderer/lib/theme.js";
 import { api } from "@renderer/lib/api.js";
 import { hexToTriplet, tripletToHex } from "@renderer/lib/colorUtils.js";
 import { useSessionStore, CHAT_FONT_SIZE_MIN, CHAT_FONT_SIZE_MAX, RIGHT_PANEL_FONT_SIZE_MIN, RIGHT_PANEL_FONT_SIZE_MAX } from "@renderer/stores/sessionStore.js";
 import { Button, Select } from "@renderer/components/ui/index.js";
-import { IconRefresh, IconSun, IconMoon, IconDeviceDesktop, IconSquare, IconBrush } from "@renderer/lib/icons.js";
+import { IconRefresh, IconSun, IconMoon, IconDeviceDesktop, IconSquare, IconBrush, IconChevronDown, IconTypography } from "@renderer/lib/icons.js";
 import { useI18n, type MessageId } from "@renderer/lib/i18n/index.js";
 import { editorThemePresetsForMode } from "@renderer/lib/editorThemes.js";
 import type { ThemeName, ThemeStyle } from "@contracts/theme";
@@ -14,6 +14,7 @@ import { PanelHeader } from "./PanelHeader.js";
 import { SettingsSection } from "./SettingsSection.js";
 import { SettingRow } from "./SettingRow.js";
 import { FontSizeStepper } from "./FontSizeStepper.js";
+import { FontPickerDialog } from "./FontPickerDialog.js";
 
 /**
  * Appearance settings — two grouped cards: 主题与颜色 + 字号.
@@ -148,6 +149,81 @@ function EditorSchemeSelect({ mode, id }: { mode: "dark" | "light"; id: string }
         </Select.Positioner>
       </Select.Portal>
     </Select.Root>
+  );
+}
+
+/** Custom UI font row: a trigger showing the current family (rendered in its
+ *  own face when set) that opens the FontPickerDialog, plus a reset button.
+ *  Applies live via the store; only affects the classic theme style (sketch
+ *  keeps its bundled handwriting face). A subtle hint appears when the
+ *  persisted family is no longer installed (document.fonts.check). */
+function UiFontRow() {
+  const { t } = useI18n();
+  const uiFontFamily = useSessionStore((s) => s.uiFontFamily);
+  const setUiFontFamily = useSessionStore((s) => s.setUiFontFamily);
+  const [pickerOpen, setPickerOpen] = useState(false);
+
+  // Availability is best-effort: system-installed fonts resolve without
+  // loading, so check() is a cheap synchronous probe. Re-evaluated when the
+  // picker closes (a pick may have changed the family).
+  const fontAvailable = useMemo(() => {
+    if (!uiFontFamily) return true;
+    try {
+      return document.fonts.check(`12px "${uiFontFamily}"`);
+    } catch {
+      return true;
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [uiFontFamily, pickerOpen]);
+
+  return (
+    <SettingRow
+      title={t("settings.appearance.uiFont")}
+      desc={t("settings.appearance.uiFontDesc")}
+      descExtra={
+        uiFontFamily && !fontAvailable ? (
+          <span className="text-[0.7143em] text-danger">
+            {t("settings.appearance.uiFontMissing")}
+          </span>
+        ) : undefined
+      }
+      htmlFor="setting-ui-font"
+    >
+      <div className="flex w-full items-center gap-1.5">
+        <Button
+          variant="outline"
+          size="md"
+          className="min-w-0 flex-1 justify-between font-normal"
+          onClick={() => setPickerOpen(true)}
+          title={uiFontFamily || t("settings.appearance.uiFontDefault")}
+        >
+          <span
+            className="truncate"
+            style={uiFontFamily ? { fontFamily: `"${uiFontFamily}", sans-serif` } : undefined}
+          >
+            {uiFontFamily || t("settings.appearance.uiFontDefault")}
+          </span>
+          <IconChevronDown size={13} className="shrink-0 opacity-60" />
+        </Button>
+        <Button
+          variant="ghost"
+          size="sm"
+          disabled={!uiFontFamily}
+          onClick={() => setUiFontFamily("")}
+          title={t("settings.appearance.uiFontResetTitle")}
+          aria-label={t("settings.appearance.uiFontResetTitle")}
+          className="gap-1 px-1.5"
+        >
+          <IconRefresh size={11} />
+        </Button>
+      </div>
+      <FontPickerDialog
+        open={pickerOpen}
+        onOpenChange={setPickerOpen}
+        current={uiFontFamily}
+        onPick={(family) => setUiFontFamily(family)}
+      />
+    </SettingRow>
   );
 }
 
@@ -451,6 +527,12 @@ export function AppearancePanel() {
             </Button>
           </div>
         </SettingRow>
+      </SettingsSection>
+
+      {/* ── 字体 ── */}
+      <SettingsSection title={t("settings.appearance.sectionFont")} icon={IconTypography}>
+        {/* ── Custom UI font (classic style only) ── */}
+        <UiFontRow />
       </SettingsSection>
 
       {/* ── 字号 ── */}

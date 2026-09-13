@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>封面 1b · 写代码的软件 被我做成了手账</title>
+<link rel="stylesheet" href="base.css">
+<style>
+  /* ── 封面 1b(P1 备选封面)──────────────────────────────────────
+     与 1a 刻意做成相反的构图:截图满幅压顶(截图即主角),
+     大字落在下方纸面。两张同题不同构,发出去前挑一张。 */
+  body { height: 1440px; position: relative; }
+
+  /* 截图满幅压顶:1080 宽 → 675 高,左右不留边 */
+  .bleed { position: absolute; top: 0; left: 0; width: 1080px; height: 675px; overflow: hidden; }
+  .bleed img { display: block; width: 1080px; }
+
+  /* 截图下缘:手绘波浪撕纸边 + 纸色渐隐,和下方纸面咬合 */
+  .bleed::after {
+    content: "";
+    position: absolute; left: 0; right: 0; bottom: 0; height: 150px;
+    background: linear-gradient(to bottom,
+      rgb(var(--surface) / 0) 0%, rgb(var(--surface) / 0.55) 45%,
+      rgb(var(--surface) / 0.94) 78%, rgb(var(--surface)) 100%);
+  }
+  .wave { position: absolute; top: 600px; left: 0; z-index: 3; }
+
+  /* ── 大字区(下方)────────────────────────────────────────────── */
+  .head {
+    position: absolute;
+    top: 750px; left: 0; width: 1080px;
+    padding: 0 96px;
+  }
+  .kicker {
+    font-size: 32px; letter-spacing: 5px;
+    color: rgb(var(--accent)); margin-bottom: 20px;
+  }
+  .big {
+    margin: 0;
+    font-size: 108px; line-height: 1.42; font-weight: 700; letter-spacing: 3px;
+  }
+  .big .l2 { margin-left: 62px; }
+  /* 「手账」用一枚手绘圈圈住 —— 本子上圈重点的做法。圈跟着字走,
+     所以做成 span 的绝对定位子元素,而不是画死的坐标。
+     z-index:0 把 span 变成层叠上下文,圈的 -1 才会落在字后面而不是
+     掉到 body 背景底下(踩过的坑:直接 -1 会被根背景盖掉)。 */
+  .big .acc {
+    position: relative; display: inline-block; z-index: 0;
+    color: rgb(var(--accent-strong));
+  }
+  .big .acc .ring {
+    position: absolute; left: -30px; top: -20px;
+    width: 300px; height: 210px; z-index: -1;
+  }
+
+  /* 手绘圈:圈住截图里最值得看的地方 */
+  .ring { position: absolute; z-index: 4; }
+
+  /* 底部批注 */
+  .note {
+    position: absolute;
+    top: 1250px; left: 0; width: 1080px;
+    display: flex; justify-content: center; gap: 16px;
+    z-index: 6;
+  }
+  .note p {
+    margin: 0; font-size: 33px; color: rgb(var(--content-muted)); letter-spacing: 1.5px;
+  }
+  /* 手绘波浪分隔线:和截图下缘那道是同一种笔触 */
+  .sig-rule {
+    position: absolute; top: 1352px; left: 0; width: 1080px;
+    text-align: center; z-index: 6;
+  }
+  .sign {
+    position: absolute; top: 1396px; left: 0; width: 1080px;
+    text-align: center; font-size: 27px; letter-spacing: 2px;
+    color: rgb(var(--content-subtle)); z-index: 6;
+  }
+</style>
+</head>
+<body>
+
+  <div class="bleed">
+    <img src="img/home-dark.png" alt="">
+  </div>
+
+  <!-- 手绘波浪:截图与纸面的交接处 -->
+  <svg class="wave" width="1080" height="40" viewBox="0 0 1080 40">
+    <path d="M 0 26 C 90 12, 170 34, 268 22 C 366 10, 452 33, 552 21
+             C 652 9, 738 32, 838 20 C 918 10, 1000 28, 1080 18"
+          fill="none" stroke="rgb(105 90 70)" stroke-width="4" stroke-linecap="round"/>
+  </svg>
+
+  <!-- 圈住输入框「让 AI 帮你做点什么…」:截图里的主角 -->
+  <svg class="ring" style="left:196px; top:520px;" width="700" height="86" viewBox="0 0 700 86">
+    <ellipse cx="350" cy="43" rx="336" ry="36"
+             fill="none" stroke="rgb(64 190 142)" stroke-width="5"
+             stroke-linecap="round" transform="rotate(-0.5 350 43)"/>
+  </svg>
+
+  <!-- 手绘波浪:截图下缘用;移到这里定义被上面 ::after 复用不合适,
+       所以直接在 .wave 里内联(见下方 path)。此处只留拖尾小箭头。 -->
+  <svg class="ring" style="left:700px; top:430px;" width="120" height="150" viewBox="0 0 120 150">
+    <path d="M 24 12 C 74 26, 96 62, 92 118"
+          fill="none" stroke="rgb(64 190 142)" stroke-width="4.5" stroke-linecap="round"/>
+    <path d="M 74 104 C 81 110, 87 114, 93 119 C 88 126, 84 133, 81 141"
+          fill="none" stroke="rgb(64 190 142)" stroke-width="4.5"
+          stroke-linecap="round" stroke-linejoin="round"/>
+  </svg>
+
+  <div class="head">
+    <div class="kicker">写 代 码 的 软 件</div>
+    <h1 class="big">
+      <div>被我做成了</div>
+      <div class="l2"><span class="acc">手账<svg class="ring" viewBox="0 0 300 210"><ellipse cx="150" cy="105" rx="140" ry="94" fill="none" stroke="rgb(8 140 105)" stroke-width="5.5" stroke-linecap="round" transform="rotate(-6 150 105)"/></svg></span></div>
+    </h1>
+  </div>
+
+  <div class="note"><p>纸面底 · 铅笔描边 · 手写字体</p></div>
+  <div class="sig-rule">
+    <svg width="300" height="12" viewBox="0 0 300 12">
+      <path d="M 2 7 C 50 3, 100 11, 150 6 C 200 1, 250 10, 298 5"
+            fill="none" stroke="rgb(199 189 168)" stroke-width="2.5" stroke-linecap="round"/>
+    </svg>
+  </div>
+  <div class="sign">黄同学｜一个人用 AI 做软件</div>
+  <div class="grain"></div>
+</body>
+</html>

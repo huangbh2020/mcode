@@ -8,6 +8,7 @@
  *   GET  /                      → mobile bundle (SPA, static)
  *   GET  /api/health            → { ok } (no auth; for connectivity checks)
  *   POST /api/pair/verify       → complete pairing (no auth; nonce + code)
+ *   GET  /api/auth/check        → is my remembered device token still valid?
  *   POST /api/rpc               → whitelisted RPC (Authorization: Bearer)
  *   GET  /api/events            → SSE event stream (Authorization: Bearer)
  *
@@ -31,6 +32,7 @@ import {
   MOBILE_ENABLED_SETTING_KEY,
   SSE_HEARTBEAT_INTERVAL_MS,
   PairingVerifyInputSchema,
+  type MobileAuthCheckResult,
   type MobileRpcRequest,
   type MobileRpcResponse,
   type PairingVerifyInput,
@@ -329,6 +331,33 @@ export async function startMobileServer(): Promise<MobileServerHandle> {
     if (path.startsWith("/api/")) {
       // Authorize first.
       const authPromise = authorize(req);
+      // Token validity probe. This is the mobile's "am I still paired?" question
+      // — it gates the verification-code form, so it must answer with 401 ONLY
+      // for a token the server actively rejects (revoked device / wiped DB).
+      // Anything else (including a thrown error) is a transport failure and the
+      // caller keeps its token: a phone that already paired must not be pushed
+      // back into pairing while the user is away from the PC.
+      if (path === "/api/auth/check" && req.method === "GET") {
+        authPromise
+          .then((device) => {
+            if (!device) {
+              sendJson(res, 401, { ok: false, error: "unauthorized" });
+              return;
+            }
+            const body: MobileAuthCheckResult = {
+              ok: true,
+              deviceId: device.deviceId,
+              name: device.name,
+              endpoint,
+            };
+            sendJson(res, 200, body);
+          })
+          .catch((err) => {
+            log.error(`mobile: auth/check failed: ${(err as Error).message}`);
+            sendJson(res, 500, { ok: false, error: "internal error" });
+          });
+        return;
+      }
       // SSE handler keeps the connection open, so handle it inline.
       if (path === "/api/events" && req.method === "GET") {
         authPromise.then((device) => {

@@ -40,6 +40,12 @@
         }
       }
       * { box-sizing: border-box; }
+      /* `${el}.hidden = true` must actually hide. The UA's `[hidden]` rule is
+         `display: none`, but an author rule with a display value wins over it —
+         and both `.form` and `.done` below set `display: flex`, so the attribute
+         would be a silent no-op (page shows both the code form and the status
+         block at once). Keep this rule above them. */
+      [hidden] { display: none !important; }
       html, body { height: 100%; }
       body {
         margin: 0;
@@ -149,7 +155,11 @@
           <p id="desc"></p>
         </div>
 
-        <form class="form" id="form" novalidate>
+        <!-- Starts hidden: a device that already holds a token must never see the
+             code form, not even for the moment before boot() decides (the code is
+             shown on the PC, which the user may be nowhere near). boot() reveals
+             it for a device with no remembered pairing, synchronously. -->
+        <form class="form" id="form" novalidate hidden>
           <label class="field">
             <span id="codeLabel">验证码</span>
             <input id="code" inputmode="numeric" autocomplete="one-time-code" autofocus maxlength="8" placeholder="••••••" />

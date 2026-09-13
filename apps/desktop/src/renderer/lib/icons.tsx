@@ -236,6 +236,8 @@ export {
   IconMoon,
   // Search toggles
   IconLetterCase,
+  // Appearance (font settings)
+  IconTypography,
   // Status-capsule icons
   IconHexagon,
   IconRobot,

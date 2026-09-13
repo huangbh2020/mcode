@@ -1,6 +1,6 @@
 import { useEffect } from "react";
 import { useSessionStore } from "@renderer/stores/sessionStore.js";
-import { applyThemeStyle } from "@renderer/lib/theme.js";
+import { applyThemeStyle, applyUiFontFamily } from "@renderer/lib/theme.js";
 import type { ChatDensity } from "@contracts/ipc";
 
 /**
@@ -109,6 +109,7 @@ export function useChatAppearance(): void {
   const userMessageColor = useSessionStore((s) => s.userMessageColor);
   const accentColor = useSessionStore((s) => s.accentColor);
   const chatDensity = useSessionStore((s) => s.chatDensity);
+  const uiFontFamily = useSessionStore((s) => s.uiFontFamily);
 
   useEffect(() => {
     applyChatFontSize(chatFontSize);
@@ -125,6 +126,13 @@ export function useChatAppearance(): void {
   useEffect(() => {
     applyChatDensity(chatDensity);
   }, [chatDensity]);
+
+  // Custom UI font → `--app-font` var on <html> (lib/theme.ts). The FOUC
+  // guard has already applied the localStorage-cached value before React
+  // mounted; this reconciles against the store (SQLite source of truth).
+  useEffect(() => {
+    applyUiFontFamily(uiFontFamily);
+  }, [uiFontFamily]);
 }
 
 /**

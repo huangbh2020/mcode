@@ -26,11 +26,13 @@ import { normWorktreeKey } from "@renderer/lib/worktree.js";
 import { translate } from "@renderer/lib/i18n/core.js";
 import { DEFAULT_GESTURE_SETTINGS } from "@renderer/lib/gestures.js";
 import { DEFAULT_EDITOR_THEME_CHOICE, parseEditorThemeChoice, type EditorThemeChoice, type EditorThemeId } from "@renderer/lib/editorThemes.js";
+import { sanitizeFontFamily } from "@renderer/lib/theme.js";
 import {
   DISPLAY_MODE_SETTING_KEY,
   TAB_BAR_MULTI_ROW_SETTING_KEY,
   LEFTBAR_MODE_SETTING_KEY,
   THEME_STYLE_SETTING_KEY,
+  UI_FONT_FAMILY_SETTING_KEY,
   UI_LOCALE_SETTING_KEY,
   DEFAULT_PROVIDER_ID,
   UI_CHAT_FONT_SIZE_SETTING_KEY,
@@ -684,6 +686,13 @@ export interface SessionState {
    *  `ui.themeStyle`; applied to <html> as a `.sketch` class next to `.dark`
    *  (lib/theme.ts applyThemeStyle via useThemeStyle in lib/appearance.ts). */
   themeStyle: ThemeStyle;
+  /** Custom UI font family ("" = stylesheet default system stack). Persisted
+   *  under `ui.uiFontFamily`; applied to <html> as the `--app-font` CSS var
+   *  (lib/theme.ts applyUiFontFamily via useChatAppearance). Only affects
+   *  the classic style — sketch overrides with the bundled handwriting face.
+   *  The value is a single family name; the composed CSS stack keeps the
+   *  system UI stack as fallback so an uninstalled font degrades gracefully. */
+  uiFontFamily: string;
   /** Which tab kind owns the center content area in `tabs` displayMode: the
    *  active session's chat ("chat") or the editor — file / plan tab
    *  ("editor"). Only read in `tabs` mode; `single` mode keeps the legacy
@@ -1024,6 +1033,15 @@ export interface SessionState {
    *  provider is codex-sdk, since codex's `capabilities.builtinModels` is
    *  empty (models come from user config, mirroring pi). */
   codexAvailableModels: BuiltinModelOption[];
+  /** Whether each composer config list has landed (initDeferred reloads run
+   *  concurrently). validateComposerSelection stays hands-off until ALL are
+   *  in — validating against a not-yet-loaded list reads "empty" as "the
+   *  model was deleted" and would wipe (and persist the wipe of) a
+   *  legitimate pick purely because another IPC won the race. */
+  providersLoaded: boolean;
+  customModelsLoaded: boolean;
+  piModelsLoaded: boolean;
+  codexModelsLoaded: boolean;
   /** Discovered skills for the composer `/` menu. Cached per active project
    *  (global ~/.claude/skills + the project's .claude/skills); refreshed on
    *  init and project switch. Empty list = no skills installed. */
@@ -1600,6 +1618,7 @@ export interface SessionState {
    *  fire-and-forget persistence; the `.sketch` class application reacts
    *  via useThemeStyle (lib/appearance.ts). */
   setThemeStyle: (style: ThemeStyle) => void;
+  setUiFontFamily: (family: string) => void;
   /** Set the stream sidebar's project scope filter. Persists under
    *  `ui.streamScope` so the selection survives remounts and relaunches. */
   setStreamScope: (scope: string | null) => void;
@@ -3162,6 +3181,15 @@ function validateComposerSelection(
   get: () => SessionState,
 ): void {
   const s = get();
+  // Boot race guard: the four config lists hydrate concurrently (initDeferred)
+  // and each completion validates. Until every list is in, an empty list means
+  // "not loaded yet", not "the pick was deleted" — validating early would wipe
+  // a legitimate choice and persist the wipe. Whichever reload lands LAST
+  // still runs the full validation against complete data, so skipping here
+  // loses nothing.
+  if (!s.providersLoaded || !s.customModelsLoaded || !s.piModelsLoaded || !s.codexModelsLoaded) {
+    return;
+  }
   const activeId = s.activeSessionId;
   if (activeId) {
     const bucket = s.messagesBySession[activeId];
@@ -4255,6 +4283,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   // UI theme style (orthogonal to light/dark). Default "classic"; init()
   // overwrites from the persisted ui.themeStyle preference.
   themeStyle: "classic",
+  // Custom UI font family ("" = stylesheet default). Persisted under
+  // ui.uiFontFamily; init() overwrites from the DB.
+  uiFontFamily: "",
   // Center focus for the unified tab bar (`tabs` displayMode). UI-only.
   centerTabFocus: "chat",
   // UI language. Persisted in `settings` table; init() overwrites from the
@@ -4366,6 +4397,10 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   providers: EMPTY_PROVIDERS,
   piAvailableModels: EMPTY_PI_MODELS,
   codexAvailableModels: EMPTY_CODEX_MODELS,
+  providersLoaded: false,
+  customModelsLoaded: false,
+  piModelsLoaded: false,
+  codexModelsLoaded: false,
   skills: EMPTY_SKILLS,
   effort: "high",
   todosBySession: {},
@@ -4460,6 +4495,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           TAB_BAR_MULTI_ROW_SETTING_KEY,
           LEFTBAR_MODE_SETTING_KEY,
           THEME_STYLE_SETTING_KEY,
+          UI_FONT_FAMILY_SETTING_KEY,
           UI_LOCALE_SETTING_KEY,
           UI_CHAT_DENSITY_SETTING_KEY,
           UI_PROJECT_VIEW_SETTING_KEY,
@@ -4544,6 +4580,19 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       if (value === "classic" || value === "sketch") set({ themeStyle: value });
     } catch (err) {
       console.error("apply(themeStyle) failed:", err);
+    }
+
+    // Custom UI font. Anything non-string (corrupt row) is ignored → the
+    // stylesheet default stands; a sanitize pass strips quotes/backslashes
+    // (the value is interpolated into a CSS font-family string at apply
+    // time) and caps the length. The FOUC guard in initFoucGuard already
+    // applied the localStorage-cached value before React mounted; this
+    // reconciles against the SQLite source of truth.
+    try {
+      const value = fp[UI_FONT_FAMILY_SETTING_KEY];
+      if (typeof value === "string") set({ uiFontFamily: sanitizeFontFamily(value) });
+    } catch (err) {
+      console.error("apply(uiFontFamily) failed:", err);
     }
 
     // Stream sidebar scope filter. "" = the unfiltered "全部项目" view
@@ -8252,6 +8301,17 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       .catch((err) => console.error("setting.set(themeStyle) failed:", err));
   },
 
+  setUiFontFamily: (family) => {
+    const clean = sanitizeFontFamily(family);
+    set({ uiFontFamily: clean });
+    // Fire-and-forget like setThemeStyle — a failed write keeps the
+    // in-session choice. The <html> `--app-font` var reacts via
+    // useChatAppearance (lib/appearance.ts), which also refreshes the
+    // localStorage cache the boot FOUC guard reads.
+    api.setting.set({ key: UI_FONT_FAMILY_SETTING_KEY, value: clean })
+      .catch((err) => console.error("setting.set(uiFontFamily) failed:", err));
+  },
+
   setStreamScope: (scope) => {
     // Dirty, not just a value swap: the cached pages were fetched under the
     // OLD scope — the view must refetch its first page so the list AND the
@@ -8891,7 +8951,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   reloadCustomModels: async () => {
     try {
       const { models } = await api.customModel.list();
-      set({ customModels: models });
+      set({ customModels: models, customModelsLoaded: true });
       // A persisted composer pick whose custom config was deleted falls back
       // to auto.
       validateComposerSelection(set, get);
@@ -9026,7 +9086,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   reloadProviders: async () => {
     try {
       const { providers } = await api.provider.list();
-      set({ providers });
+      set({ providers, providersLoaded: true });
       // A persisted composer pick for a provider that no longer exists falls
       // back to the default provider + auto.
       validateComposerSelection(set, get);
@@ -9043,7 +9103,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   reloadPiAvailableModels: async () => {
     try {
       const { models } = await api.piModels.listAvailable();
-      set({ piAvailableModels: models });
+      set({ piAvailableModels: models, piModelsLoaded: true });
       // A persisted composer pick whose pi model was deleted falls back
       // to auto.
       validateComposerSelection(set, get);
@@ -9063,7 +9123,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           supplier: p.name,
         })),
       );
-      set({ codexAvailableModels: models });
+      set({ codexAvailableModels: models, codexModelsLoaded: true });
       // A persisted composer pick whose codex model was deleted falls back
       // to auto.
       validateComposerSelection(set, get);

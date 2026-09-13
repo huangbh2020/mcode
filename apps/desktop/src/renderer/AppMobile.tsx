@@ -32,59 +32,115 @@ import { MobileFilesScreen } from "./components/mobile/MobileFilesScreen.js";
 import { MobileGitScreen } from "./components/mobile/MobileGitScreen.js";
 import { MobileViewerOverlay } from "./components/mobile/MobileViewerOverlay.js";
 import { useClaudeEvents } from "./hooks/useClaudeEvents.js";
-import { useSessionStore } from "./stores/sessionStore.js";
+import { useSessionStore, selectActiveEnvPath } from "./stores/sessionStore.js";
 import { useTheme } from "./lib/theme.js";
 import { useChatAppearance, useRightPanelAppearance, useThemeStyle } from "./lib/appearance.js";
 import { useI18n } from "./lib/i18n/index.js";
-import { isPaired, onAuthLost } from "./lib/webApi.js";
+import { worktreeDisplayName } from "./lib/worktree.js";
+import { isPaired, onAuthLost, clearAuth, checkStoredAuth } from "./lib/webApi.js";
 import {
   IconMenu2,
   IconSettings,
   IconFolder,
+  IconGitFork,
   SpinnerIcon,
 } from "./lib/icons.js";
 
+/** Boot gate state. "checking" is the window in which we ask the PC whether the
+ *  remembered device token is still good. */
+type AuthState = "checking" | "paired" | "unpaired";
+
+/** How long a boot probe may take before it earns a visible spinner (ms). */
+const SPLASH_DELAY_MS = 250;
+
+/** Drop the one-time `?nonce=` from the URL (keeping path + hash). The nonce was
+ *  consumed by pairing and expires in minutes, so it only ever made later
+ *  reloads/back-navigation re-enter the pairing route for no reason. */
+function stripNonceFromUrl(): void {
+  try {
+    if (new URLSearchParams(window.location.search).has("nonce")) {
+      window.history.replaceState(null, "", window.location.pathname + window.location.hash);
+    }
+  } catch {
+    // non-critical — ignore
+  }
+}
+
 export function AppMobile() {
-  const [paired, setPaired] = useState(() => {
-    // A fresh QR scan carries ?nonce — always go through pairing so a stale
-    // token (left over from a previous session, or invalidated when the PC
-    // restarted / removed the device) can't skip the gate and 401 on boot.
-    const hasNonce =
-      typeof window !== "undefined" &&
-      new URLSearchParams(window.location.search).has("nonce");
-    return isPaired() && !hasNonce;
-  });
+  // The device token in localStorage IS the remembered verification state. A
+  // token present → verify it (see below) instead of showing the pairing form;
+  // this covers every way the page gets re-entered (browser Back landing on the
+  // `?nonce=` URL, a restored tab, the app icon) — the code is displayed on the
+  // PC, so demanding it again strands a user who has walked away from the desk.
+  const [authState, setAuthState] = useState<AuthState>(() =>
+    isPaired() ? "checking" : "unpaired",
+  );
   // Theme / appearance hooks are pairing-independent (localStorage + media
   // queries on web), so they mount outside the gate.
   useTheme();
   useChatAppearance();
   useRightPanelAppearance();
   useThemeStyle();
+  const { t } = useI18n();
 
-  // A 401 anywhere (stale token reopened WITHOUT a nonce) clears auth via the
-  // web shim — fall back to the pairing screen so the user can re-pair instead
-  // of cascading "未配对" errors.
-  useEffect(() => onAuthLost(() => setPaired(false)), []);
-
-  // After a successful pairing, strip the nonce from the URL so a later reload
-  // uses the new token directly instead of re-triggering the pairing gate.
-  const handlePaired = useCallback(() => {
-    try {
-      if (new URLSearchParams(window.location.search).has("nonce")) {
-        window.history.replaceState(
-          null,
-          "",
-          window.location.pathname + window.location.hash,
-        );
+  // Confirm the stored token once per boot. Only an explicit 401 ("invalid")
+  // sends the user back to pairing; an unreachable PC keeps the token, because a
+  // Wi-Fi blip must never cost a pairing the user cannot restore from where
+  // they are.
+  useEffect(() => {
+    if (!isPaired()) return;
+    let cancelled = false;
+    void checkStoredAuth().then((state) => {
+      if (cancelled) return;
+      if (state === "invalid") {
+        clearAuth();
+        setAuthState("unpaired");
+        return;
       }
-    } catch {
-      // non-critical — ignore
-    }
-    setPaired(true);
+      stripNonceFromUrl();
+      setAuthState("paired");
+    });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
-  if (!paired) {
+  // Delay the "checking" spinner: on a LAN the probe answers in a few ms, and
+  // painting a spinner for one frame reads as a glitch. It only shows when the
+  // decision actually takes a while (PC asleep / off the network).
+  const [splashVisible, setSplashVisible] = useState(false);
+  useEffect(() => {
+    if (authState !== "checking") return;
+    const timer = window.setTimeout(() => setSplashVisible(true), SPLASH_DELAY_MS);
+    return () => window.clearTimeout(timer);
+  }, [authState]);
+
+  // A 401 from any later RPC clears auth via the web shim — fall back to the
+  // pairing screen so the user can re-pair instead of cascading "未配对" errors.
+  useEffect(() => onAuthLost(() => setAuthState("unpaired")), []);
+
+  // After a successful pairing, strip the nonce from the URL so a later reload
+  // uses the new token directly. While the form is still on screen the nonce
+  // stays put, so a rejected token can be re-paired without re-scanning the QR.
+  const handlePaired = useCallback(() => {
+    stripNonceFromUrl();
+    setAuthState("paired");
+  }, []);
+
+  if (authState === "unpaired") {
     return <PairingScreen onPaired={handlePaired} />;
+  }
+  if (authState === "checking") {
+    // Blank until the delayed splash kicks in — the page background is already
+    // painted, so a fast probe is a no-op visually.
+    return splashVisible ? (
+      <div className="flex h-full w-full flex-col items-center justify-center gap-3 bg-surface text-content">
+        <SpinnerIcon size={22} className="animate-spin text-accent" />
+        <p className="text-sm text-content-muted">{t("layout.pairRestoring")}</p>
+      </div>
+    ) : (
+      <div className="h-full w-full bg-surface" />
+    );
   }
   return <MobileShell />;
 }
@@ -113,6 +169,20 @@ function MobileShell() {
   // `projects` or null, never a fresh object.
   const activeProject = useSessionStore((s) =>
     s.activeProjectId ? s.projects.find((p) => p.id === s.activeProjectId) ?? null : null,
+  );
+  // The active session's isolated checkout, when it has one. Derived from
+  // selectActiveEnvPath — the SAME selector the file tree / Git screen / desktop
+  // IDE use — rather than re-reading session.worktreePath, so the badge cannot
+  // disagree with the tree the user is looking at: if the environment is not the
+  // project checkout, it is a worktree, and the bar says so.
+  const envPath = useSessionStore(selectActiveEnvPath);
+  const worktreeNames = useSessionStore((s) => s.worktreeNames);
+  const worktree = useMemo(
+    () =>
+      activeProject && envPath && envPath !== activeProject.path
+        ? { path: envPath, name: worktreeDisplayName(envPath, worktreeNames) }
+        : null,
+    [activeProject, envPath, worktreeNames],
   );
   const settingsOpen = useSessionStore((s) => s.settingsOpen);
   const setSettingsOpen = useSessionStore((s) => s.setSettingsOpen);
@@ -175,6 +245,21 @@ function MobileShell() {
             <span className="flex min-w-0 shrink items-center gap-1 px-1 text-xs text-content-subtle">
               <IconFolder size={13} className="shrink-0" />
               <span className="truncate">{activeProject.name}</span>
+            </span>
+          )}
+          {/* …and which CHECKOUT that thread runs in, when it is isolated. The
+              file tree / Git screen now follow the session's environment, so
+              the bar has to name it or the same project visibly shows two
+              different trees. Same identity as the drawer's worktree group
+              header (IconGitFork + accent tint + display name, raw path in the
+              tooltip). */}
+          {view === "chat" && activeSessionId && worktree && (
+            <span
+              title={worktree.path}
+              className="flex min-w-0 shrink items-center gap-1 px-1 text-xs text-content-subtle"
+            >
+              <IconGitFork size={13} className="shrink-0 text-accent/80" />
+              <span className="max-w-[7rem] truncate">{worktree.name}</span>
             </span>
           )}
         </div>

@@ -71,6 +71,7 @@ import { log } from "@main/lib/logger.js";
 import { broadcastSessionChanged, broadcastSessionDeleted } from "@main/lib/sessionSync.js";
 import { createOrReuseSession } from "@main/lib/sessionStart.js";
 import { CustomModelStore } from "@main/lib/secretStore.js";
+import { CodexModelsStore } from "@main/lib/codexModelsStore.js";
 import { listAvailablePiModels } from "@main/ipc/piModels.js";
 import { listSkillsForProject, readSkillForProject } from "@main/ipc/skills.js";
 import { readFileGuarded, readBinaryGuarded, listDirGuarded, searchFilesGuarded } from "@main/ipc/files.js";
@@ -107,8 +108,19 @@ const HANDLERS: Record<string, RpcHandler> = {
     // pagination); the active list paginates with a default page size of 5.
     const limit = input.limit ?? (archived ? undefined : 5);
     const offset = input.offset ?? 0;
-    const sessions = SessionRepo.listByProject(input.projectId, { limit, offset, archived });
-    const total = SessionRepo.countByProject(input.projectId, archived);
+    // `worktree` narrows both the page and the count — the count MUST mirror
+    // the list's filter or hasMore counts rows the list never returns. The
+    // store fetches the paginated LOCAL section (worktree:"exclude") and the
+    // full worktree section (worktree:"only") separately; dropping the filter
+    // mixed worktree rows into the local page and duplicated them in the
+    // "only" fetch.
+    const sessions = SessionRepo.listByProject(input.projectId, {
+      limit,
+      offset,
+      archived,
+      worktree: input.worktree,
+    });
+    const total = SessionRepo.countByProject(input.projectId, archived, input.worktree);
     const hasMore = limit !== undefined ? offset + sessions.length < total : false;
     return { sessions, hasMore, total };
   },
@@ -150,6 +162,14 @@ const HANDLERS: Record<string, RpcHandler> = {
     const models = await listAvailablePiModels();
     return { models };
   },
+
+  // The Codex model picker's surface (same public shape as the desktop IPC —
+  // hasApiKey flag only, never cleartext). Without it the phone's composer
+  // shows a Codex thread as "未配置"/选择模型 and the send guard blocks every
+  // turn. Save/delete/getApiKey stay desktop-only (secrets management).
+  "codexModels:list": async () => ({
+    providers: await CodexModelsStore.listPublic(),
+  }),
 
   "skills:list": (raw) => {
     const input = SkillsListSchema.parse(raw);

@@ -1,7 +1,7 @@
 /**
  * IPC handler for opening a path in the OS file manager.
  *
- * Two channels:
+ * Three channels:
  *  - `shell:openPath`           - open a project root folder itself. The path
  *    MUST be an exact match (after normalization) for a known, non-archived
  *    project root.
@@ -9,6 +9,11 @@
  *    project root, selecting it in Finder/Explorer. The path MUST resolve
  *    inside (or equal) a known, non-archived project root - the same
  *    containment rule the file handlers use.
+ *  - `shell:showImageInFolder`  - reveal a chat image (the one the user is
+ *    looking at in the lightbox). Takes the displayed *bytes*, never a path:
+ *    main resolves them to the artifact it saved earlier or to a deduped cache
+ *    copy (see `lib/imageArtifacts.ts`), so this surface cannot be pointed at
+ *    an arbitrary location at all.
  *
  * We never let the renderer open arbitrary locations - only paths under
  * directories the user has explicitly added as projects. A refused or failing
@@ -17,8 +22,15 @@
 import type { IpcMain } from "electron";
 import { shell } from "electron";
 import { resolve, sep } from "node:path";
-import { IPC, OpenPathSchema, ShowItemInFolderSchema, OpenFileSchema } from "@contracts/ipc";
+import {
+  IPC,
+  OpenPathSchema,
+  ShowItemInFolderSchema,
+  OpenFileSchema,
+  ShowImageInFolderSchema,
+} from "@contracts/ipc";
 import { ProjectRepo } from "@main/store/repositories.js";
+import { revealImageInFolder } from "@main/lib/imageArtifacts.js";
 import { log } from "@main/lib/logger.js";
 
 /** True if `abs` is inside `root` (or equals it), after normalizing both.
@@ -88,5 +100,14 @@ export function registerShellHandlers(ipcMain: IpcMain): void {
     if (err) {
       log.warn(`shell.openFile failed for "${input.path}": ${err}`);
     }
+  });
+
+  ipcMain.handle(IPC.SHELL_SHOW_IMAGE_IN_FOLDER, async (_evt, raw) => {
+    // No path containment check here on purpose: the renderer cannot name a
+    // path at all. It sends the bytes it is displaying, and main only ever
+    // reveals a file it wrote itself (the screenshot/image-generation
+    // artifact, or a cache copy of those same bytes).
+    const input = ShowImageInFolderSchema.parse(raw);
+    return revealImageInFolder(input.dataUrl);
   });
 }

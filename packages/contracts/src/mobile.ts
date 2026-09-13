@@ -89,6 +89,21 @@ export const PairingVerifyInputSchema = z.object({
   deviceName: z.string().min(1).max(64),
 });
 
+/** Response of `GET /api/auth/check` — a cheap "is the device token I remembered
+ *  still accepted?" probe. Both pairing entry points (the standalone pairing page
+ *  and the mobile shell) call it before showing the verification-code form: the
+ *  code is displayed on the PC, so a phone that already paired must never be
+ *  asked for a fresh one just because the page was re-entered (browser Back,
+ *  restored tab, a bookmarked `?nonce=` link) while the user is away from the
+ *  desk. A 401 is the only signal that re-pairing is genuinely needed. */
+export interface MobileAuthCheckResult {
+  ok: true;
+  deviceId: string;
+  name: string;
+  /** LAN endpoint base — lets the caller refresh a stale stored endpoint. */
+  endpoint: string;
+}
+
 /** A single RPC call from mobile → main. `method` names mirror the IPC channel
  *  names (`RpcMap` keys) for the whitelisted subset; `input` is the method's
  *  zod-validated payload. */

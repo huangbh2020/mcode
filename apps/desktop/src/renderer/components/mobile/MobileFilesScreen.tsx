@@ -12,8 +12,9 @@
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "@renderer/lib/api.js";
-import { useSessionStore } from "@renderer/stores/sessionStore.js";
+import { useSessionStore, selectActiveEnvPath } from "@renderer/stores/sessionStore.js";
 import { cn } from "@renderer/lib/cn.js";
+import { worktreeDisplayName } from "@renderer/lib/worktree.js";
 import type { FileTreeEntry } from "@contracts/ipc";
 import { FileViewerOverlay } from "./FileViewer.js";
 import { IconFolder, IconFolderOpen, IconFile, IconChevronRight, IconArrowUp, IconLoader2 } from "@renderer/lib/icons.js";
@@ -28,40 +29,63 @@ export function MobileFilesScreen() {
     () => projects.find((p) => p.id === activeProjectId) ?? null,
     [projects, activeProjectId],
   );
+  // The root this screen browses: the ACTIVE SESSION's environment — its own
+  // worktree checkout when it runs isolated, the project root otherwise. Same
+  // rule the desktop FilesPanel follows (selectActiveEnvPath); without it the
+  // phone browsed the main checkout while the session's agent worked in its
+  // worktree. `listDir` accepts a worktree root (pathGuard.isKnownWorkspaceRoot
+  // admits projects ∪ materialized worktree roots), so no main-side change.
+  const envPath = useSessionStore(selectActiveEnvPath);
+  const worktreeNames = useSessionStore((s) => s.worktreeNames);
 
-  // Breadcrumb stack of {name, path} segments, index 0 = project root.
+  // Breadcrumb stack of {name, path} segments, index 0 = environment root.
   const [stack, setStack] = useState<Array<{ name: string; path: string }>>([]);
   const [entries, setEntries] = useState<FileTreeEntry[] | null>(null);
   const [openFile, setOpenFile] = useState<{ name: string; path: string } | null>(null);
 
-  // Re-root the breadcrumb whenever the project changes.
+  // Re-root whenever the environment changes — a session switch inside one
+  // project moves the root between the project and that session's worktree, so
+  // this must key on the path, not on the project.
   useEffect(() => {
-    setStack(project ? [{ name: project.name, path: project.path }] : []);
+    setStack(envPath ? [{ name: "", path: envPath }] : []);
     setOpenFile(null);
-  }, [project]);
+  }, [envPath]);
+
+  // Label the root on every render instead of freezing it when the stack is
+  // built: `worktreeNames` hydrates asynchronously, and re-rooting on that
+  // would drop the user's breadcrumb position.
+  const rootLabel = useMemo(() => {
+    if (!envPath) return "";
+    if (!project || envPath === project.path) return project?.name ?? "";
+    return worktreeDisplayName(envPath, worktreeNames);
+  }, [envPath, project, worktreeNames]);
+  const shownStack = useMemo(
+    () => (stack.length === 0 || stack[0].name === rootLabel ? stack : [{ ...stack[0], name: rootLabel }, ...stack.slice(1)]),
+    [stack, rootLabel],
+  );
 
   const current = stack[stack.length - 1];
 
   const load = useCallback(async (dir: { name: string; path: string }) => {
-    if (!project) return;
+    if (!envPath) return;
     setEntries(null);
     try {
-      // listDir's `projectPath` MUST be the persisted project root (main
-      // cross-checks it against ProjectRepo); the folder to list goes in
-      // `dirPath`, relative to that root. Stripping the root prefix from the
-      // breadcrumb's absolute dir path yields that relative segment — same
-      // trick the desktop FileTree uses (loadAndCompact). Passing a subfolder
-      // as `projectPath` is rejected as an unknown root, so every level below
-      // the first rendered empty.
-      const root = project.path;
-      const dirPath = dir.path.slice(root.length).replace(/^[\\/]/, "");
-      const res = await api.file.listDir({ projectPath: root, dirPath });
+      // listDir's `projectPath` MUST be a known workspace root (project or
+      // session worktree; main cross-checks it against ProjectRepo +
+      // SessionRepo worktree roots); the folder to list goes in `dirPath`,
+      // relative to that root. Stripping the root prefix from the breadcrumb's
+      // absolute dir path yields that relative segment — same trick the
+      // desktop FileTree uses (loadAndCompact). Passing a subfolder as
+      // `projectPath` is rejected as an unknown root, so every level below the
+      // first rendered empty.
+      const dirPath = dir.path.slice(envPath.length).replace(/^[\\/]/, "");
+      const res = await api.file.listDir({ projectPath: envPath, dirPath });
       setEntries(res.entries);
     } catch (err) {
       console.warn("mobile files listDir failed:", err);
       setEntries([]);
     }
-  }, [project]);
+  }, [envPath]);
 
   useEffect(() => {
     if (current) void load(current);
@@ -81,7 +105,7 @@ export function MobileFilesScreen() {
     setOpenFile(null);
   };
 
-  if (!project) {
+  if (!envPath) {
     return (
       <ScreenShell title="文件">
         <div className="p-6 text-center text-xs text-content-subtle">请先选择一个项目</div>
@@ -103,7 +127,7 @@ export function MobileFilesScreen() {
             <IconArrowUp size={13} />
           </button>
         )}
-        {stack.map((seg, i) => (
+        {shownStack.map((seg, i) => (
           <span key={seg.path} className="flex shrink-0 items-center gap-0.5">
             {i > 0 && <IconChevronRight size={12} className="text-content-subtle" />}
             <button

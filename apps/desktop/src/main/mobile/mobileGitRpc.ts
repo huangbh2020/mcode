@@ -11,7 +11,7 @@
  * listBranches / checkout / generateCommitMessage. Dangerous ops (discard,
  * resolveConflicts) are intentionally NOT exposed to mobile.
  */
-import { resolve, relative } from "node:path";
+import { relative } from "node:path";
 import {
   GitDiscoverReposSchema,
   GitRepoPathSchema,
@@ -24,7 +24,6 @@ import {
   GitCheckoutSchema,
   type GitRepo,
 } from "@contracts/ipc";
-import { ProjectRepo } from "@main/store/repositories.js";
 import {
   loadSimpleGit,
   findContainingProject,
@@ -39,13 +38,21 @@ import {
 import { registerMobileRpcHandlers, type RpcHandler } from "./mobileRpc.js";
 import { broadcastGitChanged } from "@main/lib/sessionSync.js";
 import { log } from "@main/lib/logger.js";
+import { isKnownWorkspaceRoot } from "@main/lib/pathGuard.js";
 
 const REFUSE = "仓库路径不在任何已添加的项目内";
 
 const handlers: Record<string, RpcHandler> = {
   "git:discoverRepos": async (raw) => {
     const input = GitDiscoverReposSchema.parse(raw);
-    const known = ProjectRepo.listPaths().some((p) => resolve(p) === resolve(input.projectPath));
+    // Same boundary as the desktop handler: a known workspace root — a
+    // persisted project OR a session's materialized worktree. The worktree
+    // lives outside every project root by design, and the mobile Git screen
+    // scans the ACTIVE session's environment (selectActiveEnvPath), so a
+    // project-only check made every worktree session show an empty Git tab.
+    // (Repo-level handlers below already admit worktree paths through the
+    // shared findContainingProject wrapper.)
+    const known = isKnownWorkspaceRoot(input.projectPath);
     if (!known) return { repos: [] };
     try {
       const repoPaths = await findGitRepos(input.projectPath, MAX_SCAN_DEPTH);

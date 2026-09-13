@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>P1-4 · 局部特写</title>
+<link rel="stylesheet" href="base.css">
+<style>
+  /* ── P1 第 4 张:局部特写 ──────────────────────────────────────
+     整屏截图证明「整体长这样」,特写负责证明「细节是真的手绘的」:
+     手抖圆角、1.5px 墨线、实色偏移阴影、图标位移滤镜,逐条拆开给
+     人看。排版做成标本页:实物在上,三条批注用上指箭头回指卡片。 */
+  body { height: 1440px; position: relative; }
+
+  .label { position: absolute; top: 56px; left: 0; width: 1080px; text-align: center; }
+  .label .t { font-size: 44px; font-weight: 700; letter-spacing: 4px; }
+  .label .s {
+    margin-top: 14px; font-size: 27px; letter-spacing: 3px;
+    color: rgb(var(--content-subtle));
+  }
+  .label .rule { margin: 22px auto 0; width: 210px; height: 2px; background: rgb(var(--edge)); }
+
+  /* ── 分区标题:带手绘序号方框 ─────────────────────────────────── */
+  .sec { position: absolute; left: 92px; display: flex; align-items: center; gap: 16px; }
+  .sec .no {
+    width: 46px; height: 46px; flex: none;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 26px; font-weight: 700; color: rgb(var(--accent-strong));
+    border: 2px solid rgb(var(--accent) / 0.55);
+    border-radius: var(--sk-r-sm);
+  }
+  .sec .tx { font-size: 34px; font-weight: 700; letter-spacing: 2px; }
+
+  /* ── ① 输入框卡片:1:1 原尺寸展示(放大反而会糊)────────────── */
+  .composer {
+    position: absolute; left: 196px; top: 296px;
+    width: 688px; height: 137px;
+    transform: rotate(-0.35deg);
+  }
+  .composer img { display: block; width: 688px; }
+
+  /* ── 三条批注:上指箭头 + 一行说明 ───────────────────────────── */
+  .calrow {
+    position: absolute; left: 60px; top: 470px; width: 960px;
+    display: flex; justify-content: space-between;
+  }
+  .cal { width: 292px; text-align: center; }
+  .cal svg { display: block; margin: 0 auto 10px; }
+  .cal .txt { font-size: 28px; line-height: 1.45; color: rgb(var(--content-muted)); }
+  .cal .txt b { display: block; font-size: 30px; color: rgb(var(--accent-strong)); }
+
+  /* ── ② 侧栏卡片:裁掉下半截,只留图标列表 ────────────────────── */
+  .git {
+    position: absolute; left: 132px; top: 722px;
+    width: 214px; height: 380px;
+    transform: rotate(-1.4deg);
+    background: rgb(var(--surface));
+    border: 2px solid rgb(var(--edge));
+    border-radius: var(--sk-r-md);
+    box-shadow: 6px 7px 0 rgb(var(--content) / 0.09);
+    overflow: hidden;
+  }
+  .git img { display: block; width: 323px; margin: -20px 0 0 -56px; }
+  /* 下缘渐隐,暗示「还有更多」而不是被硬切 */
+  .git::after {
+    content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 70px;
+    background: linear-gradient(to bottom, rgb(var(--surface) / 0), rgb(var(--surface)));
+  }
+
+  /* 右侧要点列表 */
+  /* 三条要点按可用高度均分,而不是写死 margin —— 文案改动后不会
+     要么挤成一坨、要么在底部留一块空。 */
+  .pts {
+    position: absolute; left: 424px; top: 722px; width: 566px;
+    height: 529px;
+    display: flex; flex-direction: column; justify-content: space-between;
+  }
+  .pt { display: flex; gap: 16px; }
+  .pt .mark {
+    flex: none; margin-top: 12px; width: 18px; height: 18px;
+    border-radius: 60% 40% 55% 45% / 50% 55% 45% 50%;
+    background: rgb(var(--accent) / 0.85);
+  }
+  .pt .body { font-size: 31px; line-height: 1.5; }
+  .pt .body b { font-weight: 700; }
+  .pt .body span { color: rgb(var(--content-muted)); font-size: 27px; }
+
+  /* ── 底部 ────────────────────────────────────────────────────── */
+  .foot {
+    position: absolute; left: 0; top: 1272px; width: 1080px;
+    text-align: center; font-size: 33px; line-height: 1.55;
+  }
+  .foot .acc { color: rgb(var(--accent-strong)); font-weight: 700; }
+  .sign {
+    position: absolute; left: 0; top: 1392px; width: 1080px;
+    text-align: center; font-size: 26px; letter-spacing: 2px;
+    color: rgb(var(--content-subtle)); z-index: 6;
+  }
+</style>
+</head>
+<body>
+
+  <!-- 箭头本体一次定义,三处复用 -->
+  <svg width="0" height="0" style="position:absolute">
+    <defs>
+      <g id="uparrow">
+        <path d="M 13 46 C 12 34, 13 22, 13 6"
+              fill="none" stroke="rgb(8 140 105)" stroke-width="3.8" stroke-linecap="round"/>
+        <path d="M 4 16 C 7 12, 10 9, 13 5 C 16 9, 19 12, 22 15"
+              fill="none" stroke="rgb(8 140 105)" stroke-width="3.8"
+              stroke-linecap="round" stroke-linejoin="round"/>
+      </g>
+    </defs>
+  </svg>
+
+  <div class="label">
+    <div class="t">细 节 是 真 的 手 绘 的</div>
+    <div class="s">放大看，没有一条边是直的</div>
+    <div class="rule"></div>
+  </div>
+
+  <div class="sec" style="top:226px">
+    <div class="no">1</div><div class="tx">输入框卡片</div>
+  </div>
+
+  <div class="composer"><img src="img/composer.png" alt=""></div>
+
+  <div class="calrow">
+    <div class="cal">
+      <svg width="26" height="52" viewBox="0 0 26 46"><use href="#uparrow"/></svg>
+      <div class="txt"><b>手抖圆角</b>四角半径互不相同</div>
+    </div>
+    <div class="cal">
+      <svg width="26" height="52" viewBox="0 0 26 46"><use href="#uparrow"/></svg>
+      <div class="txt"><b>1.5px 墨线</b>铅笔灰描边，不是 1px</div>
+    </div>
+    <div class="cal">
+      <svg width="26" height="52" viewBox="0 0 26 46"><use href="#uparrow"/></svg>
+      <div class="txt"><b>实色偏移阴影</b>贴纸感，不是柔光</div>
+    </div>
+  </div>
+
+  <div class="sec" style="top:646px">
+    <div class="no">2</div><div class="tx">侧栏图标，也是手绘的</div>
+  </div>
+
+  <div class="git"><img src="img/gitcard.png" alt=""></div>
+
+  <div class="pts">
+    <div class="pt">
+      <div class="mark"></div>
+      <div class="body"><b>图标带位移滤镜</b><br>
+        <span>一个噪声滤镜推着线条走，同一枚图标每次重绘的抖动都不一样</span></div>
+    </div>
+    <div class="pt">
+      <div class="mark"></div>
+      <div class="body"><b>代码保持等宽</b><br>
+        <span>手写体只接管界面外壳，代码 / 终端 / diff 一律不动</span></div>
+    </div>
+    <div class="pt">
+      <div class="mark"></div>
+      <div class="body"><b>状态色自己配的</b><br>
+        <span>不用系统默认的蓝绿红，按纸面重新调过饱和度</span></div>
+    </div>
+  </div>
+
+  <div class="foot">
+    一个人做东西，最容易省掉的就是这种地方。<br>
+    但<span class="acc">丑的工具会让你不想用它</span>，这是真的。
+  </div>
+
+  <div class="sign">黄同学｜一个人用 AI 做软件</div>
+  <div class="grain"></div>
+</body>
+</html>

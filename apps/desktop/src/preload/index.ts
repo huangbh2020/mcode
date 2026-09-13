@@ -186,6 +186,16 @@ const api = {
       ipcRenderer.invoke(IPC.THEME_SET, input)) as RpcMap["theme.set"],
   },
 
+  /** Fonts for the UI font picker: installed family names enumerated by the
+   *  main process (Chromium's queryLocalFonts is unavailable in Electron). */
+  fonts: {
+    listSystemFamilies: ((input) =>
+      ipcRenderer.invoke(
+        IPC.FONTS_LIST_SYSTEM_FAMILIES,
+        input,
+      )) as RpcMap["fonts.listSystemFamilies"],
+  },
+
   /** App + runtime info (version, Electron/Node/Chromium, platform) for the
    *  About panel. Parameterless RPC. */
   app: {
@@ -219,6 +229,15 @@ const api = {
      *  unsupported-file pane. */
     openFile: ((input) =>
       ipcRenderer.invoke(IPC.SHELL_OPEN_FILE, input)) as RpcMap["shell.openFile"],
+    /** Reveal a chat image in the OS file manager, selecting the file. The
+     *  renderer passes the bytes it is displaying (image blocks carry no
+     *  path); main resolves them to the file it saved earlier, or to a cache
+     *  copy under userData. Used by the image lightbox's control bar. */
+    showImageInFolder: ((input) =>
+      ipcRenderer.invoke(
+        IPC.SHELL_SHOW_IMAGE_IN_FOLDER,
+        input,
+      )) as RpcMap["shell.showImageInFolder"],
   },
 
   /** Filesystem operations for the IDE right panel + diff rendering. Every

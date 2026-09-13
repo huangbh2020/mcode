@@ -514,10 +514,23 @@ body,
 #root {
   height: 100%;
   margin: 0;
-  font-family:
+  /* --app-font carries the user's custom UI font (settings ui.uiFontFamily,
+   * written by lib/theme.ts applyUiFontFamily as `"Picked", <this same
+   * stack>` so an uninstalled family degrades to the stock look). The
+   * fallback here IS the default stack — keep the two in sync. */
+  font-family: var(--app-font,
     -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, "PingFang SC",
-    "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;
+    "Microsoft YaHei UI", "Microsoft YaHei", sans-serif);
   -webkit-font-smoothing: antialiased;
+}
+
+/* Custom UI font (classic style only) follows into the `.font-sans` utility
+ * (Tailwind's default sans stack — a few inputs pin it explicitly). Gated on
+ * `data-user-font` so the rule is a strict no-op until the user actually
+ * picks a font; `:not(.sketch)` keeps sketch's own `.font-sans` mapping
+ * (handwriting stack) authoritative. Specificity (0,2,1) beats the utility. */
+html[data-user-font]:not(.sketch) .font-sans {
+  font-family: var(--app-font);
 }
 
 /* ───────────── Document scroll lock (fullscreen shell) ─────────────

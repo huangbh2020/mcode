@@ -32,6 +32,7 @@ import type { Locale, PickedImage } from "@contracts/ipc";
 import type { RuntimeEvent } from "@contracts/runtime";
 import type { ThemeState } from "./theme.js";
 import type {
+  MobileAuthCheckResult,
   MobileRpcResponse,
   PairingVerifyInput,
   PairingVerifyResult,
@@ -120,6 +121,38 @@ export function clearAuth(): void {
  *  all API calls are same-origin relative paths). */
 export function getPairEndpoint(): string | null {
   return readAuth().endpoint;
+}
+
+/** Probe the stored device token against the PC.
+ *
+ *  This is the gate that decides whether the code form may be skipped:
+ *  - `"ok"` — the PC accepted the token. Enter the app.
+ *  - `"invalid"` — the PC actively rejected it (revoked device, wiped DB), the
+ *    only case where re-pairing is genuinely required. Callers should clear the
+ *    token and fall back to the pairing screen.
+ *  - `"unreachable"` — network blip, timeout, or a 5xx. NOT an auth failure:
+ *    callers must keep the token and carry on. A phone away from the desk is
+ *    exactly when the user cannot read a new verification code off the PC, so a
+ *    flaky link must never cost them their pairing. */
+export async function checkStoredAuth(timeoutMs = 5000): Promise<"ok" | "invalid" | "unreachable"> {
+  const { token } = readAuth();
+  if (!token) return "invalid";
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), timeoutMs);
+  try {
+    const res = await fetch("/api/auth/check", {
+      headers: { Authorization: `Bearer ${token}` },
+      signal: ac.signal,
+    });
+    if (res.status === 401) return "invalid";
+    if (!res.ok) return "unreachable";
+    const body = (await res.json().catch(() => null)) as MobileAuthCheckResult | null;
+    return body?.ok ? "ok" : "unreachable";
+  } catch {
+    return "unreachable";
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /** Complete pairing: exchange the nonce + 6-digit code for a device token.
@@ -424,6 +457,15 @@ const piModels: Api["piModels"] = {
   getApiKey: () => webUnsupported("piModels.getApiKey"),
 };
 
+// Read-only like piModels: the phone only needs the picker's model list;
+// provider save/delete/getApiKey stay desktop-only (secrets management).
+const codexModels: Api["codexModels"] = {
+  list: () => rpc("codexModels:list"),
+  save: () => webUnsupported("codexModels.save"),
+  delete: () => webUnsupported("codexModels.delete"),
+  getApiKey: () => webUnsupported("codexModels.getApiKey"),
+};
+
 const skills: Api["skills"] = {
   list: (input) => rpc("skills:list", input),
   read: (input) => rpc("skills:read", input),
@@ -508,6 +550,7 @@ const shell: Api["shell"] = {
   openPath: () => Promise.resolve(),
   showItemInFolder: () => Promise.resolve(),
   openFile: () => Promise.resolve(),
+  showImageInFolder: () => Promise.resolve({ ok: false as const }),
 };
 
 const clipboardFile: Api["clipboardFile"] = {
@@ -559,6 +602,7 @@ export function createWebApi(): Api {
     provider,
     customModel,
     piModels,
+    codexModels,
     skills,
     file,
     git,

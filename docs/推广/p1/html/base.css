@@ -1,0 +1,113 @@
+/* ══════════════════════════════════════════════════════════════════════════
+   小红书推广图 · 共用基底
+   色值 / 形状配方直接取自 apps/desktop/src/renderer/styles.css 的
+   html.sketch 区块(纸面 #FCFAF3 / 牛皮纸 #3B3126 / 粉笔绿 #40BE8E),
+   保证成图和 App 里的截图是同一套手绘语言,不撞脸。
+   ═════════════════════════════════════════════════════════════════════════ */
+
+/* 手写体:与 App 捆绑的霞鹜文楷同源(webfont 切片版,300KB 级、渲染快) */
+@import url("lxgwwenkai-regular.css");
+@import url("lxgwwenkai-bold.css");
+
+:root {
+  /* ── 纸面(sketch × light) */
+  --surface: 252 250 243;       /* #fcfaf3 */
+  --surface-muted: 246 242 231; /* #f6f2e7 */
+  --surface-hover: 238 233 219; /* #eee9db */
+  --content: 58 52 44;          /* #3a342c 墨色 */
+  --content-muted: 109 100 86;  /* #6d6456 */
+  --content-subtle: 141 131 113;
+  --edge: 199 189 168;          /* #c7bda8 铅笔灰 */
+  --panel-edge: 214 205 186;
+  --accent: 8 140 105;          /* #088c69 墨绿 */
+  --accent-strong: 6 118 88;    /* #067658 */
+  --hl: 255 214 102;            /* 荧光笔黄(封面强调) */
+
+  /* ── 形状配方(与 styles.css 逐字一致) */
+  --sk-r-lg: 255px 18px 225px 18px / 18px 225px 18px 255px;
+  --sk-r-md: 95px 9px 85px 10px / 10px 80px 9px 95px;
+  --sk-r-sm: 30px 7px 26px 8px / 8px 24px 7px 30px;
+  --sk-sh: 3px 4px 0 rgb(var(--content) / 0.06);
+  --sk-sh-btn: 2px 2px 0 rgb(var(--content) / 0.16);
+  --sk-sh-pop: 5px 6px 0 rgb(var(--content) / 0.12);
+
+  --sk-font: "LXGW WenKai", "LXGW WenKai Lite", "Kaiti SC", "STKaiti", "KaiTi",
+    "DFKai-SB", -apple-system, "PingFang SC", sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+/* ── 牛皮纸(sketch × dark):深色形态 ───────────────────────────────── */
+.mode-kraft {
+  --surface: 59 49 38;          /* #3b3126 */
+  --surface-muted: 51 42 32;
+  --surface-hover: 70 59 46;
+  --content: 240 231 213;       /* #f0e7d5 粉笔白 */
+  --content-muted: 205 194 172;
+  --content-subtle: 172 160 137;
+  --edge: 105 90 70;
+  --panel-edge: 95 81 63;
+  --accent: 64 190 142;         /* #40be8e 粉笔绿 */
+  --accent-strong: 64 190 142;
+  --hl: 205 170 90;
+}
+
+* { box-sizing: border-box; }
+
+html, body { margin: 0; padding: 0; }
+
+body {
+  width: 1080px;
+  background: rgb(var(--surface));
+  color: rgb(var(--content));
+  font-family: var(--sk-font);
+  font-weight: 400;
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+}
+
+/* ── 纸纹:整页一层 feTurbulence 噪声(App 内同款 data-URI)────────────
+   独立的 .grain 层,避免用 body::after ——截图时 fixed 定位在无头模式
+   下按视口裁剪,fixed 层跨页会漏。 */
+.grain {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 90;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='280' height='280'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 0.42 0 0 0 0 0.38 0 0 0 0 0.30 0 0 0 0.05 0'/%3E%3C/filter%3E%3Crect width='280' height='280' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+.mode-kraft .grain { opacity: 0.55; }
+
+/* ── 手绘线:椭圆描边(SVG 画,带笔压感)──────────────────────────── */
+.sk-svg { position: absolute; pointer-events: none; overflow: visible; }
+.sk-svg path,
+.sk-svg ellipse,
+.sk-svg line,
+.sk-svg circle { fill: none; stroke-linecap: round; stroke-linejoin: round; }
+
+/* ── 手抖圆角工具类 ────────────────────────────────────────────────── */
+.r-lg { border-radius: var(--sk-r-lg); }
+.r-md { border-radius: var(--sk-r-md); }
+.r-sm { border-radius: var(--sk-r-sm); }
+
+/* 贴纸卡:纸面卡片 + 实色偏移阴影(木刻感) */
+.card {
+  background: rgb(var(--surface));
+  border: 1.5px solid rgb(var(--edge));
+  box-shadow: var(--sk-sh-pop);
+}
+
+/* 荧光笔扫过:一条倾斜的黄条压在字下面 */
+.hl {
+  background-image: linear-gradient(
+    to bottom,
+    transparent 62%,
+    rgb(var(--hl) / 0.62) 62%,
+    rgb(var(--hl) / 0.62) 94%,
+    transparent 94%
+  );
+}
+
+/* 强调色 */
+.acc { color: rgb(var(--accent)); }
+.mut { color: rgb(var(--content-muted)); }
+.sub { color: rgb(var(--content-subtle)); }

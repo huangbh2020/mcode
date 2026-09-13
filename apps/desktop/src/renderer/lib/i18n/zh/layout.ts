@@ -180,6 +180,7 @@ export const zh = {
   "layout.copyPairingLinkTitle": "复制配对链接，可在电脑浏览器中打开测试",
   "layout.copyLink": "复制链接",
   "layout.verifyCode": "验证码",
+  "layout.pairRestoring": "正在确认已配对的设备…",
   "layout.pairingExpired": "已过期，正在刷新…",
   "layout.pairingExpiresIn": "约 {time} 后过期",
   "layout.lanAddress": "局域网地址：",
@@ -211,5 +212,8 @@ export const zh = {
   "layout.image.copy": "复制图片",
   "layout.image.download": "下载图片",
   "layout.image.downloadName": "截图-{stamp}.png",
+  "layout.image.reveal": "在资源管理器中显示",
+  "layout.image.revealed": "已打开所在目录",
+  "layout.image.revealFailed": "无法打开所在目录",
   "layout.image.closePreview": "关闭预览",
 } as const;
