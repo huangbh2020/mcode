@@ -2,13 +2,13 @@
  * IPC handler for opening a path in the OS file manager.
  *
  * Three channels:
- *  - `shell:openPath`           - open a project root folder itself. The path
- *    MUST be an exact match (after normalization) for a known, non-archived
- *    project root.
+ *  - `shell:openPath`           - open a workspace root folder itself. The path
+ *    MUST be an exact match (after normalization) for a known project root or
+ *    a materialized session worktree root.
  *  - `shell:showItemInFolder`   - reveal a file or sub-directory inside a
- *    project root, selecting it in Finder/Explorer. The path MUST resolve
- *    inside (or equal) a known, non-archived project root - the same
- *    containment rule the file handlers use.
+ *    workspace root, selecting it in Finder/Explorer. The path MUST resolve
+ *    inside (or equal) a workspace root - the same containment rule the file
+ *    handlers use (`findContainingWorkspaceRoot`).
  *  - `shell:showImageInFolder`  - reveal a chat image (the one the user is
  *    looking at in the lightbox). Takes the displayed *bytes*, never a path:
  *    main resolves them to the artifact it saved earlier or to a deduped cache
@@ -16,12 +16,13 @@
  *    an arbitrary location at all.
  *
  * We never let the renderer open arbitrary locations - only paths under
- * directories the user has explicitly added as projects. A refused or failing
- * call logs and resolves (no throw into the renderer).
+ * workspace roots (projects ∪ session worktrees; a worktree checkout sits
+ * OUTSIDE every project root by design, yet its file tree / editor operate
+ * there). A refused or failing call logs and resolves (no throw into the
+ * renderer).
  */
 import type { IpcMain } from "electron";
 import { shell } from "electron";
-import { resolve, sep } from "node:path";
 import {
   IPC,
   OpenPathSchema,
@@ -29,32 +30,20 @@ import {
   OpenFileSchema,
   ShowImageInFolderSchema,
 } from "@contracts/ipc";
-import { ProjectRepo } from "@main/store/repositories.js";
+import {
+  isKnownWorkspaceRoot,
+  findContainingWorkspaceRoot,
+} from "@main/lib/pathGuard.js";
 import { revealImageInFolder } from "@main/lib/imageArtifacts.js";
 import { log } from "@main/lib/logger.js";
-
-/** True if `abs` is inside `root` (or equals it), after normalizing both.
- *  Mirrors the containment check in `files.ts` so both surfaces share one
- *  security rule. The separator-aware prefix check prevents "/foo/bar" from
- *  matching root "/foo/ba". */
-function pathWithin(root: string, abs: string): boolean {
-  const r = resolve(root);
-  const a = resolve(abs);
-  if (a === r) return true;
-  return a.startsWith(r + sep);
-}
 
 export function registerShellHandlers(ipcMain: IpcMain): void {
   ipcMain.handle(IPC.SHELL_OPEN_PATH, async (_evt, raw) => {
     const input = OpenPathSchema.parse(raw);
-    // Only allow opening a directory that is an exact match for a known
-    // project root. Normalized comparison handles trailing-separator / case
-    // differences between the folder picker and the persisted Project.path.
-    const known = ProjectRepo.list()
-      .filter((p) => !p.archived)
-      .some((p) => resolve(p.path) === resolve(input.path));
-    if (!known) {
-      log.warn(`shell.openPath refused (not a project root): ${input.path}`);
+    // Only allow opening a directory that is an exact match for a workspace
+    // root (project root or session worktree checkout).
+    if (!isKnownWorkspaceRoot(input.path)) {
+      log.warn(`shell.openPath refused (not a workspace root): ${input.path}`);
       return;
     }
     // openPath returns an error string on failure ("" on success).
@@ -66,14 +55,12 @@ export function registerShellHandlers(ipcMain: IpcMain): void {
 
   ipcMain.handle(IPC.SHELL_SHOW_ITEM_IN_FOLDER, async (_evt, raw) => {
     const input = ShowItemInFolderSchema.parse(raw);
-    // Accept any path that resolves inside a known, non-archived project root
-    // (or equals it). This lets the file-tree context menu reveal individual
-    // files/sub-dirs while still refusing anything outside a project.
-    const within = ProjectRepo.list()
-      .filter((p) => !p.archived)
-      .some((p) => pathWithin(p.path, input.path));
-    if (!within) {
-      log.warn(`shell.showItemInFolder refused (outside project root): ${input.path}`);
+    // Accept any path that resolves inside a workspace root (or equals it).
+    // This lets the file-tree context menu reveal individual files/sub-dirs —
+    // including worktree sessions, whose checkout lives outside every project
+    // root — while still refusing anything outside a workspace.
+    if (!findContainingWorkspaceRoot(input.path)) {
+      log.warn(`shell.showItemInFolder refused (outside workspace root): ${input.path}`);
       return;
     }
     // showItemInFolder opens the containing folder and selects the item. It
@@ -84,14 +71,11 @@ export function registerShellHandlers(ipcMain: IpcMain): void {
   ipcMain.handle(IPC.SHELL_OPEN_FILE, async (_evt, raw) => {
     const input = OpenFileSchema.parse(raw);
     // Same containment rule as showItemInFolder: the path must resolve inside
-    // a known, non-archived project root. This lets the editor's unsupported
-    // file pane open .docx/.pdf/etc. in the OS default app without letting
-    // the renderer open arbitrary locations.
-    const within = ProjectRepo.list()
-      .filter((p) => !p.archived)
-      .some((p) => pathWithin(p.path, input.path));
-    if (!within) {
-      log.warn(`shell.openFile refused (outside project root): ${input.path}`);
+    // a workspace root. This lets the editor's unsupported file pane open
+    // .docx/.pdf/etc. in the OS default app without letting the renderer open
+    // arbitrary locations.
+    if (!findContainingWorkspaceRoot(input.path)) {
+      log.warn(`shell.openFile refused (outside workspace root): ${input.path}`);
       return;
     }
     // openPath opens a file with its default application (or the folder in

@@ -301,6 +301,12 @@ pnpm build
 - **顶栏工作树徽标**:`MobileShell` 顶栏在项目 chip 右侧再加一个工作树 chip,身份与抽屉的 `WorktreeGroupHeader` 一致(`IconGitFork` + `text-accent/80` 图标 + `worktreeDisplayName` 名字,`title` 是原始工作树路径)。**判据取自同一个 `selectActiveEnvPath`**(`envPath !== activeProject.path` 即视为工作树),而不是另去查 `session.worktreePath`——否则徽标可能与文件树实际展示的根不一致(两个真相源)。与项目 chip 一样只在 `view === "chat"` 显示:files/git 视图各自已有上下文(面包屑根名就是同一个工作树名、Git 页有分支),不重复挤占窄屏标题栏。
 - **验证**:已提交冒烟 `scripts/worktree-env-smoke/run.sh`(18 断言)。它用 **git CLI 造真实 repo + 真实 linked worktree**(放在项目根之外,镜像 `<userData>/worktrees/<repo>/<branch>-n`),把真实 `pathGuard` + `ipc/files` 的 `listDirGuarded` 用 esbuild 打包(electron / repositories / logger 三个桩)后跑:工作树根被 `isKnownWorkspaceRoot` 接受、无关目录仍被拒、**列工作树列出的是工作树的文件而非主检出的**、`dirPath` 仍无法 `../` 逃逸、工作树内文件解析到工作树根、工作树是独立分支且其 `.git` 是**文件**(发现逻辑按名字匹配故仍能找到它)。渲染层接线(envPath → 两个 screen)由 typecheck 覆盖,未做真机浏览器端到端。
 
+### shell 三通道守卫对齐工作树(2026-09-14,修「工作树文件树右键『在资源管理器中显示』无反应」)
+
+- **问题**:`ipc/shell.ts` 写于工作树机制之前,三个通道的守卫只认**项目根**(`ProjectRepo.list()` + 局部 `pathWithin`,且不带大小写归一):`shell:showItemInFolder`(文件树右键「在资源管理器中显示」,文件夹/文件两个菜单同走)、`shell:openFile`(编辑器「不支持的文件」面板的「用系统应用打开」)、`shell:openPath`(精确匹配)。工作树检出在设计上位于所有项目根之外,于是工作树会话里右键 reveal 被守卫拒绝后**静默返回**(只有 main.log 一条 WARN),菜单看起来"点了没反应"。同轮排查确认菜单其余条目无恙:新建/重命名/删除/复制/粘贴/读取全走 `files.ts` 的工作树感知守卫,复制路径/加入聊天是渲染端本地操作,「在浏览器打开」走内置浏览器面板不经 shell。
+- **修复**:`shell.ts` 删掉局部 `pathWithin` 与 `ProjectRepo` 依赖,三通道全部改走 `pathGuard` 的现成函数——`openPath` 用 `isKnownWorkspaceRoot`(精确匹配,`samePath` 大小写归一),`showItemInFolder`/`openFile` 用 `findContainingWorkspaceRoot` !== null,与 `files.ts` 同一口径。**口径变化要知情**:旧代码过滤 `!p.archived`,新守卫与 `files.ts` 一致地**放行归档项目**下的路径(文件树本就能浏览归档项目,reveal 拒绝反而不一致);`showImageInFolder` 不动(收字节不收路径,内容寻址注册表,天然无路径攻击面)。
+- **验证**:已提交冒烟 `scripts/shell-reveal-smoke/run.sh`(11 断言):真实 `registerShellHandlers` esbuild 打包(electron/repositories/logger/imageArtifacts 四桩,electron 桩是**记录型 spy**),工作树内文件/工作树根本体/项目内文件三条 reveal 放行、无关目录与前缀孪生目录(`proj-twin` vs `proj`)拒绝、win/mac 大小写不匹配仍命中、`openPath`/`openFile` 同口径、image 字节透传。真机行为(资源管理器真的弹出)留待日常使用确认。
+
 ### 前端组件与图标
 
 #### 组件库
