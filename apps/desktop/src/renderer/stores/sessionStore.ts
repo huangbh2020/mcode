@@ -2456,6 +2456,33 @@ const STREAM_PAGE_SIZE = 10;
  *  "切了项目列表又跳回去" race). */
 let streamFetchSeq = 0;
 
+/** Bumped by every mutation that touches the stream aggregate's membership
+ *  or order (delete / archive / pin / rename / turn activity / remote echo).
+ *  loadStreamSessions captures it before its IPC and discards the response
+ *  when it changed mid-flight — otherwise a snapshot that predates the
+ *  mutation would wholesale-replace the cache and resurrect rows the
+ *  in-place patches below had already removed (the stream view "ghost row"
+ *  when deleting several sessions in quick succession). */
+let streamMutateSeq = 0;
+
+/** Remove a row from the stream aggregate; same array ref when absent so
+ *  set() patches stay no-op-cheap for untouched caches. */
+function removeFromStreamList(list: Session[], id: string): Session[] {
+  return list.some((x) => x.id === id) ? list.filter((x) => x.id !== id) : list;
+}
+
+/** Upsert a row into the stream aggregate in `session.listAll` shape
+ *  (updatedAt DESC). Merge-over-cached-row when present (keeps heavy
+ *  payloads), otherwise insert before the first strictly-older row. */
+function upsertStreamRow(list: Session[], session: Session): Session[] {
+  const idx = list.findIndex((x) => x.id === session.id);
+  if (idx !== -1) {
+    return list.map((x) => (x.id === session.id ? { ...x, ...session } : x));
+  }
+  const at = list.findIndex((x) => x.updatedAt < session.updatedAt);
+  return at === -1 ? [...list, session] : [...list.slice(0, at), session, ...list.slice(at)];
+}
+
 /** Per-project in-flight guard for loadWorktreeSessions — only the latest
  *  fetch for a project may apply, so a slow response can't clobber a newer
  *  one (expand → collapse → expand fires overlapping fetches). */
@@ -2581,6 +2608,15 @@ function applySessionPinnedState(s: SessionState, session: Session): Partial<Ses
   const patch: Partial<SessionState> = {};
   const projectId = session.projectId;
   const isPinned = !session.archived && session.pinnedAt != null;
+
+  // Stream aggregate mirrors the listAll shape (active + unpinned only): the
+  // toggled row leaves/enters it immediately — the dirty-flag refetch must
+  // not be the only mechanism, or a snapshot already in flight re-applies
+  // the pre-toggle list over this patch.
+  patch.streamSessions = isPinned || session.archived
+    ? removeFromStreamList(s.streamSessions, session.id)
+    : upsertStreamRow(s.streamSessions, session);
+  streamMutateSeq++;
 
   // Global pinned bucket — upsert or evict, kept sorted by pin recency.
   const withoutPinned = s.pinnedSessions.filter((x) => x.id !== session.id);
@@ -2778,10 +2814,21 @@ function dropSessionBuckets(s: SessionState, id: string) {
  *  the left-bar caches, in their parent's sideChatsByParent bucket. Pure:
  *  takes the current state, returns the patch. */
 function applySessionDeletedState(s: SessionState, id: string): Partial<SessionState> {
+  // Membership change — any first-page fetch in flight must not apply its
+  // (pre-delete) snapshot over this patch.
+  streamMutateSeq++;
   // Find which project + cache owns this session.
   let projectId: string | undefined;
   let inArchived = false;
   let inPinned = false;
+  // True when the deleted row lived ONLY in the stream aggregate (a page-2+
+  // session.listAll row, or any row whose project's per-project window was
+  // never loaded) — the patch below then removes it from `streamSessions`
+  // and shrinks the owning project's totals without touching per-project
+  // caches. Without this branch the function returned an empty patch for
+  // such rows: no streamDirty, no removal — the stream view kept rendering
+  // the deleted session until a view remount (the "ghost row" bug).
+  let inStream = false;
   // True when the deleted row sat in the cache's worktree SECTION — the
   // LOCAL total (which the worktree section never counts) must stay put.
   let deletedWasWorktree = false;
@@ -2806,6 +2853,17 @@ function applySessionDeletedState(s: SessionState, id: string): Partial<SessionS
     }
   }
   if (!projectId) {
+    const streamRow = s.streamSessions.find((sess) => sess.id === id);
+    if (streamRow) {
+      projectId = streamRow.projectId;
+      inStream = true;
+      deletedWasWorktree = !!streamRow.worktreePath;
+    }
+  }
+  // The aggregate may hold a duplicate of a row found in another cache too
+  // (page-1 rows live in both) — every return path below strips it.
+  const nextStream = removeFromStreamList(s.streamSessions, id);
+  if (!projectId) {
     // Not in the left-bar caches — check the ask-tab buckets. Side chats
     // (kind="side") hang off their parent under sideChatsByParent and are
     // invisible everywhere else. Hard-deleting one removes it from that
@@ -2814,21 +2872,29 @@ function applySessionDeletedState(s: SessionState, id: string): Partial<SessionS
     const parent = Object.keys(s.sideChatsByParent).find((key) =>
       s.sideChatsByParent[key]?.some((x) => x.id === id),
     );
-    if (!parent) return {};
+    if (!parent) {
+      return nextStream === s.streamSessions
+        ? {}
+        : { streamSessions: nextStream, streamDirty: true };
+    }
     const list = s.sideChatsByParent[parent] ?? [];
     return {
       sideChatsByParent: { ...s.sideChatsByParent, [parent]: list.filter((x) => x.id !== id) },
       ...dropSessionBuckets(s, id),
       ...(s.activeSideChatId === id ? { activeSideChatId: null } : {}),
+      ...(nextStream !== s.streamSessions ? { streamSessions: nextStream } : {}),
     };
   }
-  const prevList = inPinned
-    ? s.pinnedSessions
-    : (inArchived ? s.archivedSessionsByProject : s.sessionsByProject)[projectId] ?? [];
+  const prevList = inStream
+    ? s.streamSessions
+    : inPinned
+      ? s.pinnedSessions
+      : (inArchived ? s.archivedSessionsByProject : s.sessionsByProject)[projectId] ?? [];
   const nextList = prevList.filter((sess) => sess.id !== id);
   // For a pinned row the project's active window is untouched; all
   // total/hasMore math below must reference it rather than the pinned bucket.
-  const activeWindowLen = inPinned
+  // Same for a stream-only row: the window is whatever the project cache has.
+  const activeWindowLen = inPinned || inStream
     ? (s.sessionsByProject[projectId]?.length ?? 0)
     : nextList.length;
   const sessionsByProject = { ...s.sessionsByProject };
@@ -2840,7 +2906,7 @@ function applySessionDeletedState(s: SessionState, id: string): Partial<SessionS
   } else if (inArchived) {
     if (nextList.length > 0) archivedByProject[projectId] = nextList;
     else delete archivedByProject[projectId];
-  } else {
+  } else if (!inStream) {
     sessionsByProject[projectId] = nextList;
   }
   // Active-thread totals only move when an active (non-archived, non-pinned,
@@ -2881,6 +2947,7 @@ function applySessionDeletedState(s: SessionState, id: string): Partial<SessionS
       ...(inPinned ? { pinnedSessions: nextList } : {}),
       sessionsTotalByProject: { ...s.sessionsTotalByProject, [projectId]: totalActive },
       sessionsHasMoreByProject: { ...s.sessionsHasMoreByProject, [projectId]: hasMoreActive },
+      streamSessions: nextStream,
       ...dropped,
       ...(hadSideChats ? { sideChatsByParent } : {}),
       ...(activeSideChatId !== s.activeSideChatId ? { activeSideChatId } : {}),
@@ -2895,17 +2962,18 @@ function applySessionDeletedState(s: SessionState, id: string): Partial<SessionS
     nextActive = idx > 0 ? openTabs[idx - 1] : openTabs[0];
   }
   const isActiveProject = projectId === s.activeProjectId;
-  // For a pinned row the fallback candidate comes from the project's active
-  // window (unchanged by this delete), not from the pinned bucket.
+  // For a pinned (or stream-only) row the fallback candidate comes from the
+  // project's active window (unchanged by this delete), not from the bucket
+  // the row was removed from.
   const nextInProject = isActiveProject
-    ? (inPinned ? (s.sessionsByProject[projectId] ?? []) : nextList).find((sess) => !sess.archived)
+    ? (inPinned || inStream ? (s.sessionsByProject[projectId] ?? []) : nextList).find((sess) => !sess.archived)
     : null;
   // If the new active session is the fallback one, sync its config
   // into the global slots so the composer chips show the right
   // model/effort/permission.
   const finalActive = nextActive ?? nextInProject?.id ?? null;
   const sess = finalActive
-    ? findSession(sessionsByProject, archivedByProject, inPinned ? nextList : s.pinnedSessions, s.streamSessions, finalActive)
+    ? findSession(sessionsByProject, archivedByProject, inPinned ? nextList : s.pinnedSessions, nextStream, finalActive)
     : undefined;
   // Clear the new active session's unread badge - it's now visible.
   if (finalActive) delete dropped.unreadBySession[finalActive];
@@ -2915,11 +2983,15 @@ function applySessionDeletedState(s: SessionState, id: string): Partial<SessionS
     ...(inPinned ? { pinnedSessions: nextList } : {}),
     sessionsTotalByProject: { ...s.sessionsTotalByProject, [projectId]: totalActive },
     sessionsHasMoreByProject: { ...s.sessionsHasMoreByProject, [projectId]: hasMoreActive },
+    streamSessions: nextStream,
     ...dropped,
     ...(hadSideChats ? { sideChatsByParent } : {}),
     ...(activeSideChatId !== s.activeSideChatId ? { activeSideChatId } : {}),
     openTabs,
-    sessions: isActiveProject ? nextList : s.sessions,
+    // `sessions` aliases the ACTIVE PROJECT's list — never assign a bucket
+    // the row was removed from (stream aggregate / pinned) into it; those
+    // rows weren't part of the project window, which stays untouched.
+    sessions: isActiveProject && !inStream && !inPinned ? nextList : s.sessions,
     activeSessionId: finalActive,
     model: sess?.model ?? s.model,
     effort: sess?.effort ?? s.effort,
@@ -6091,6 +6163,17 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       const projectId = session.projectId;
       const isActiveProject = projectId === s.activeProjectId;
 
+      // Stream aggregate mirrors the listAll shape (active + unpinned rows
+      // only): archiving removes, restoring re-inserts at its updatedAt
+      // position — unless the restored row is (still) pinned, which listAll
+      // excludes. Without this the row ghosts in the stream view until the
+      // dirty-flag refetch lands (and resurrects when several mutations
+      // race one fetch).
+      const streamSessions = archived || session.pinnedAt != null
+        ? removeFromStreamList(s.streamSessions, id)
+        : upsertStreamRow(s.streamSessions, session);
+      streamMutateSeq++;
+
       // Pull the row out of whichever cache currently holds it and push the
       // server-fresh copy into the opposite cache. The global pinned bucket
       // participates too: archiving evicts the row from the pinned section
@@ -6159,6 +6242,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           sessionsHasMoreByProject: { ...s.sessionsHasMoreByProject, [projectId]: hasMoreActive },
           sessions: isActiveProject ? nextActive : s.sessions,
           openTabs,
+          streamSessions,
           streamDirty: true,
         };
       }
@@ -6171,7 +6255,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         nextActiveId = idx > 0 ? openTabs[idx - 1] : openTabs[0];
       }
       const sess = nextActiveId
-        ? findSession(sessionsByProject, archivedByProject, nextPinned, s.streamSessions, nextActiveId)
+        ? findSession(sessionsByProject, archivedByProject, nextPinned, streamSessions, nextActiveId)
         : undefined;
       // Clear the new active session's unread badge - it's now visible.
       const unreadBySession = { ...s.unreadBySession };
@@ -6190,6 +6274,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         permissionMode: sess?.permissionMode ?? s.permissionMode,
         customModelId: sess?.customModelId ?? s.customModelId,
         unreadBySession,
+        streamSessions,
         streamDirty: true,
       };
     });
@@ -6217,12 +6302,18 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         if (next) archivedSessionsByProject[projectId] = next;
       }
       const pinnedSessions = patchRow(s.pinnedSessions) ?? s.pinnedSessions;
+      // The stream aggregate holds the same row — merge the fresh copy over
+      // its (heavier) cached twin so the title updates without a refetch.
+      const streamSessions = s.streamSessions.some((x) => x.id === id)
+        ? s.streamSessions.map((x) => (x.id === id ? { ...x, ...session } : x))
+        : s.streamSessions;
+      streamMutateSeq++;
       // The `sessions` alias mirrors the active project's list; refresh it in
       // case the renamed session lives in the active project (title chip etc.).
       const sessions = s.activeProjectId === projectId
         ? (sessionsByProject[projectId] ?? s.sessions)
         : s.sessions;
-      return { sessionsByProject, archivedSessionsByProject, pinnedSessions, sessions, streamDirty: true };
+      return { sessionsByProject, archivedSessionsByProject, pinnedSessions, sessions, streamSessions, streamDirty: true };
     });
   },
 
@@ -7249,6 +7340,19 @@ export const useSessionStore = create<SessionState>((set, get) => ({
             touched = true;
           }
         }
+        // The stream aggregate gets the same surgery: archived/pinned rows
+        // leave immediately; a present row merges the slim entry over its
+        // cached twin. A row the aggregate DOESN'T hold stays the refetch's
+        // job — inserting it here could violate the CURRENT scope's query
+        // shape (wt:/projectIds filters), which only a fresh listAll knows.
+        const inStreamCache = s.streamSessions.some((x) => x.id === entry.id);
+        const nextStream =
+          entry.archived || entry.pinnedAt != null
+            ? removeFromStreamList(s.streamSessions, entry.id)
+            : inStreamCache
+              ? s.streamSessions.map((x) => (x.id === entry.id ? { ...x, ...entry } : x))
+              : s.streamSessions;
+        if (nextStream !== s.streamSessions) touched = true;
         if (!touched) return {};
         // Keep the derived `sessions` alias (active project's list) fresh.
         if (s.activeProjectId === entry.projectId && patch.sessionsByProject) {
@@ -7269,6 +7373,11 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         // Remote change reached the caches — the stream aggregate may be
         // stale too (ordering / title / pin / worktree fields).
         patch.streamDirty = true;
+        // Mirror the change into the aggregate so an in-flight first-page
+        // fetch (whose snapshot predates this echo) is discarded instead of
+        // applying stale membership over the live caches.
+        streamMutateSeq++;
+        patch.streamSessions = nextStream;
         return patch;
       });
       return;
@@ -8375,6 +8484,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     const s = get();
     if (!reset && s.streamSessions.length > 0 && !s.streamDirty) return;
     const seq = ++streamFetchSeq;
+    const mutateGen = streamMutateSeq;
     try {
       const res = await api.session.listAll({
         offset: 0,
@@ -8384,6 +8494,12 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       // Superseded by a newer fetch (scope flipped / re-dirty mid-flight):
       // the newer response owns the cache.
       if (seq !== streamFetchSeq) return;
+      // A membership mutation raced the fetch (e.g. the user deleted a
+      // second session while this snapshot was in flight): its in-place
+      // patch already fixed the cache — discarding is the only way to keep
+      // this PRE-mutation snapshot from resurrecting the row. The dirty
+      // flag survives, so the next flip (or view re-entry) refetches.
+      if (mutateGen !== streamMutateSeq) return;
       set({ streamSessions: res.sessions, streamHasMore: res.hasMore, streamTotal: res.total, streamDirty: false });
     } catch (err) {
       console.error("session.listAll failed:", err);

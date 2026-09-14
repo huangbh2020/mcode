@@ -478,7 +478,10 @@ function StreamSidebarBase() {
           }}
           onTogglePin={() => void setSessionPinned(s.id, s.pinnedAt == null)}
           onArchive={() => void archiveSession(s.id, true)}
-          onDelete={() => setConfirmDelete({ kind: "session", id: s.id, title: s.title })}
+          // Same two-step as the tree's SessionRow: the inline √ IS the
+          // confirmation — no extra dialog (the ConfirmDialog below is only
+          // for the archived shelf, mirroring the tree's bin).
+          onDelete={() => void deleteSession(s.id)}
           onContext={(x, y) => setCtxMenu({ session: s, x, y })}
           registerNode={registerNode}
         />
@@ -489,7 +492,7 @@ function StreamSidebarBase() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [projectById, projectColors, nowTick, activeSessionId, runningBySession, runningTurnStartedAt,
       pendingQuestionBySession, turnErrorBySession, unreadBySession, worktreeOf, localBranchOf,
-      openTab, startSession, setSessionPinned, archiveSession, registerNode],
+      openTab, startSession, setSessionPinned, archiveSession, deleteSession, registerNode],
   );
 
   const liveSessions = useMemo(
