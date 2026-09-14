@@ -71,7 +71,7 @@ files:
 # native helper ships as a real file.
 asarUnpack:
   - "**/*.{node,dll}"
-  - "**/sql.js/**"
+  - "**/node_modules/better-sqlite3/**"
   - "**/node_modules/node-pty/build/Release/**"
   - "**/node_modules/node-pty/prebuilds/**"
 

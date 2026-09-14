@@ -100,11 +100,13 @@ export default defineConfig({
       lib: { entry: "src/main/index.ts" },
       rollupOptions: {
         // contracts is a workspace source package — bundle it into main.
-        // sql.js (asm.js build) is externalized and required at runtime like
-        // electron/zod — its ~6MB asm.js file is too large to inline cleanly.
-        // node-pty is a native addon — must load from node_modules at runtime
-        // (never bundle the .node binary into the main chunk).
-        external: ["electron", "zod", "sql.js", /^sql\.js\//, "node-pty"],
+        // better-sqlite3 is a native addon — must load from node_modules at
+        // runtime (never bundle the .node binary into the main chunk). Its
+        // ABI must match ELECTRON, not the local Node: pnpm-workspace.yaml
+        // allows its build scripts and the postinstall hook in
+        // package.json swaps in the Electron prebuild after every install.
+        // node-pty is a native addon too — same runtime-loading rule.
+        external: ["electron", "zod", "better-sqlite3", "node-pty"],
       },
     },
     resolve: {

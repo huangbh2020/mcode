@@ -104,11 +104,11 @@ app.on("second-instance", () => {
 app.whenReady().then(async () => {
   logStartup("whenReady entered");
 
-  // Kick off DB init in the background (sql.js loads ~6MB asm.js + reads the
-  // file + migrates). We DON'T await it - the window is created next so the
-  // renderer starts loading immediately. IPC handlers await `awaitDb()`
-  // internally (see ipc/index.ts), so any request that arrives before the DB
-  // is ready simply queues instead of failing.
+  // Kick off DB init in the background (better-sqlite3 loads its native
+  // binding + opens the file + migrates). We DON'T await it - the window is
+  // created next so the renderer starts loading immediately. IPC handlers
+  // await `awaitDb()` internally (see ipc/index.ts), so any request that
+  // arrives before the DB is ready simply queues instead of failing.
   void initDb().then(() => {
     // Legacy cleanup: the browser password vault was removed; wipe any
     // credentials older builds persisted under this key (nothing reads it
@@ -158,7 +158,7 @@ app.whenReady().then(async () => {
   });
 
   // Create the window immediately - don't wait for DB init to finish. The
-  // renderer starts loading its JS/HMR while sql.js parses in parallel.
+  // renderer starts loading its JS/HMR while the DB opens in parallel.
   createMainWindow();
   logStartup("createMainWindow returned");
 

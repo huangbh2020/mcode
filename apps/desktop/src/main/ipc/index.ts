@@ -32,7 +32,7 @@ import { registerVoiceHandlers } from "./voice.js";
 /**
  * Wrap `ipcMain` so every `handle()` registration automatically awaits DB
  * readiness before invoking the handler. This decouples window creation from
- * DB init: the renderer may fire IPC before sql.js finishes loading, and those
+ * DB init: the renderer may fire IPC before the DB finishes opening, and those
  * calls simply queue on `awaitDb()` instead of hitting the "getDb() called
  * before initDb() resolved" throw. Once the DB is ready the promise is
  * already resolved, so the guard is a no-op for all subsequent calls.

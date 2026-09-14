@@ -11,7 +11,7 @@
  *  5. Thereafter the mobile sends `Authorization: Bearer <deviceToken>`, which
  *     the HTTP server validates via {@link validateToken}.
  *
- * Tokens are stored plaintext in the settings DB (sql.js, on-disk). This is the
+ * Tokens are stored plaintext in the settings DB (better-sqlite3, on-disk). This is the
  * same threat model as the existing API-key storage: the DB lives in the user's
  * own userData dir, and an attacker who can read it already owns the machine.
  * (safeStorage encryption for API keys protects against a different path —
