@@ -141,7 +141,7 @@ mcode/
 	            │   │   ├── index.ts      # 注册所有 handler
 	            │   │   ├── claude.ts     # 会话/turn/interrupt/approve/healthCheck/provider.list
 	            │   │   └── projects.ts   # 项目 CRUD
-	            │   └── store/            # SQLite 持久化(sql.js, repositories)
+	            │   └── store/            # SQLite 持久化(better-sqlite3, repositories)
             ├── preload/
             │   └── index.ts          # contextBridge 白名单 API
             └── renderer/             # 前端(React)
@@ -368,7 +368,7 @@ RuntimeManager.emit()
 |------|-----------|------|
 | P0 脚手架 | Electron / React / TS / Tailwind / Vite / Turbo / pnpm | ✅ 完成 |
 | P1 端到端 | Zustand / zod IPC | ✅ 完成 |
-| P2 会话持久化 | sql.js(纯 JS SQLite) | ✅ 完成 |
+| P2 会话持久化 | sql.js(纯 JS SQLite);2026-09-14 迁移至 better-sqlite3(sql.js 整库常驻内存 + 每次 persist 整库 export,主进程 RSS 随库体积线性膨胀,210MB 库实测 ~1.6GB) | ✅ 完成 |
 | P2.5 SDK 迁移 | @anthropic-ai/claude-agent-sdk / AgentProvider 抽象层 / ProviderRegistry / ApprovalBridge | ✅ 完成 |
 | P3 工具审批 | canUseTool 回调 → approval.request/approve IPC 桥(后端已通,前端审批 UI 待 P5 打磨) | ✅ 基础完成 |
 | P4 IDE 右栏 | xterm.js + node-pty / simple-git / Monaco | 🟡 文件/Git/终端已实现；Browser 待 P5 |
@@ -386,7 +386,7 @@ RuntimeManager.emit()
 - **配置文件**:`apps/desktop/electron-builder.yml`(不在 package.json 的 build 字段,独立 yml)。
 - **产物目录**:`apps/desktop/release/`(已 gitignore)。
 - **目标平台**:macOS(`dmg` + `zip`,arm64 + x64)、Windows(`nsis`,x64)。Linux 暂未覆盖。
-- **native 模块**:`node-pty`(.node)和 `sql.js`(asm.js blob)通过 `asarUnpack` 解包,确保运行时能从磁盘 `require()`。打包前需 `pnpm rebuild:native`(`electron-builder install-app-deps`)让 .node 匹配目标 Electron ABI。
+- **native 模块**:`node-pty`(.node)和 `better-sqlite3`(.node)通过 `asarUnpack` 解包,确保运行时能从磁盘 `require()`。打包前需 `pnpm rebuild:native`(`electron-builder install-app-deps`)让 .node 匹配目标 Electron ABI。开发环境每次 `pnpm install` 后由 postinstall 钩子 `scripts/ensure-better-sqlite3-electron-abi.mjs` 经 prebuild-install 换入 Electron ABI 预编译(install 只产出 Node ABI 二进制);验证入口 `npx electron apps/desktop/scripts/sqlite-migration-smoke/electron-abi-check.cjs`。
 - **图标**:`apps/desktop/build/{icon.icns,icon.ico,icon.png}`,由脚本生成(emerald 渐变 + "C" glyph),electron-builder 按平台自动选用。
 - **版本**:读 `apps/desktop/package.json` 的 `version`(起步 `0.1.0`)。
 - **暂未签名**:mac 包无 codesign(identity 留空,eon-builder 自动跳过),用户首次打开需右键 > 打开;Win 包无证书,SmartScreen 会提示。后续接入签名时在 yml 加 `mac.identity` / `win.certificateFile`。
