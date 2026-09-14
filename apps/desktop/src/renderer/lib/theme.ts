@@ -22,6 +22,57 @@ const THEME_TRANSITION_MS = 260;
  *  up yet), written by applyThemeStyle() on every change. */
 const THEME_STYLE_CACHE_KEY = "mcode-theme-style";
 
+/** localStorage key mirroring the last applied custom UI font. Same FOUC
+ *  pattern as THEME_STYLE_CACHE_KEY: initFoucGuard() reads it synchronously,
+ *  applyUiFontFamily() writes it on every change. */
+const UI_FONT_CACHE_KEY = "mcode-ui-font";
+
+/** The stylesheet default UI font stack — MUST stay in sync with the
+ *  `var(--app-font, …)` fallback in styles.css's base font rule. When the
+ *  user picks a font we write the picked family PREPENDED to this stack, so
+ *  an uninstalled family degrades to the stock look, never the raw browser
+ *  default. */
+export const UI_FONT_FALLBACK_STACK =
+  '-apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, "PingFang SC", "Microsoft YaHei UI", "Microsoft YaHei", sans-serif';
+
+/** Make a font family name safe to interpolate into a CSS font-family
+ *  string: strip quotes/backslashes, trim, cap length. Shared by the store
+ *  (hydration + persistence) and applyUiFontFamily. Returns "" for values
+ *  that are unsafe or empty. */
+export function sanitizeFontFamily(name: string): string {
+  const cleaned = name.replace(/["\\]/g, "").trim();
+  return cleaned.length > 0 && cleaned.length <= 64 ? cleaned : "";
+}
+
+/**
+ * Apply the custom UI font: write the picked family (composed with the
+ * default system stack as fallback) as the `--app-font` CSS variable on
+ * <html>. Pass "" to remove the override so the stylesheet default
+ * re-asserts. Only consumed by the classic style — sketch overrides the font
+ * with its own handwriting stack at a higher-specificity rule and never
+ * reads the var. Also mirrored into localStorage for the boot FOUC guard.
+ */
+export function applyUiFontFamily(family: string): void {
+  const clean = sanitizeFontFamily(family);
+  const root = document.documentElement;
+  if (!clean) {
+    root.style.removeProperty("--app-font");
+    root.removeAttribute("data-user-font");
+  } else {
+    root.style.setProperty("--app-font", `"${clean}", ${UI_FONT_FALLBACK_STACK}`);
+    // Gates the `.font-sans` override in styles.css: Tailwind's default sans
+    // utility only follows the user font when one is actually set, so the
+    // rule is a strict no-op for users on the default look.
+    root.setAttribute("data-user-font", "1");
+  }
+  try {
+    localStorage.setItem(UI_FONT_CACHE_KEY, clean);
+  } catch {
+    // Cache is best-effort only - a failed write just means the default
+    // stack on the first frame after restart before hydration re-applies.
+  }
+}
+
 export function applyThemeClass(effective: EffectiveTheme): void {
   const root = document.documentElement;
   const wasDark = root.classList.contains("dark");
@@ -66,6 +117,14 @@ export function initFoucGuard(): void {
     if (cached === "sketch" || cached === "classic") applyThemeStyle(cached);
   } catch {
     // localStorage unavailable (or disabled) - stay classic; hydration fixes.
+  }
+  // Custom UI font: same localStorage-mirror pattern (no OS media query to
+  // guess from). applyUiFontFamily sanitizes, so a stale/corrupt cache value
+  // degrades to the default stack; first-paint hydration reconciles.
+  try {
+    applyUiFontFamily(localStorage.getItem(UI_FONT_CACHE_KEY) ?? "");
+  } catch {
+    // localStorage unavailable - default stack; hydration fixes.
   }
 }
 

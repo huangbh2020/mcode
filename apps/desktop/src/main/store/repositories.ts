@@ -1,8 +1,8 @@
 /**
  * Repository functions over the three SQLite tables. Each function does the
  * camelCase (domain) ↔ snake_case (column) translation so callers stay in
- * domain types. Synchronous (sql.js queries are sync); writes trigger a coalesced
- * flush to disk via `persist()`.
+ * domain types. Synchronous (better-sqlite3 queries are sync); writes commit
+ * straight to the WAL, so the old sql.js-era `persist()` flush is a no-op.
  *
  * Replaces the P1 in-memory Maps (memoryStore.ts). The two call sites are
  * ipc/projects.ts and ipc/claude.ts.
@@ -19,10 +19,10 @@ import type { ContextSnapshot, SubagentSnapshot, TurnFileEntry, TurnUsageRecord 
 import { normPathKey } from "@main/lib/pathNorm.js";
 import { getDb, persist } from "./db.js";
 
-/* sql.js binds `?` params positionally as an array. Values must be
- * string | number | Uint8Array | null — booleans/undefined aren't accepted,
- * so we normalize values before binding. Nulls are passed through. */
-type BindValue = string | number | Uint8Array | null;
+/* better-sqlite3 binds `?` params positionally. Values must be
+ * string | number | bigint | Buffer | null — booleans/undefined aren't
+ * accepted, so we normalize values before binding. Nulls are passed through. */
+type BindValue = string | number | bigint | Buffer | null;
 function v(x: unknown): BindValue {
   if (x === undefined || x === null) return null;
   if (typeof x === "boolean") return x ? 1 : 0;
@@ -32,6 +32,13 @@ function v(x: unknown): BindValue {
 function safeJson(x: unknown): unknown {
   if (typeof x !== "string") return x;
   try { return JSON.parse(x); } catch { return x; }
+}
+
+/** One-shot write: `getDb().prepare(sql).run(...params)`. better-sqlite3 has
+ *  no `Database#run` (that shape was sql.js's), and nearly every write in
+ *  this file runs once — the shorthand keeps the call sites flat. */
+function run(sql: string, ...params: BindValue[]): void {
+  getDb().prepare(sql).run(...params);
 }
 
 /* ─────────────────────────────── Projects ─────────────────────────────── */
@@ -78,41 +85,34 @@ export const ProjectRepo = {
     // Append the new project at the end: MAX(sort_order)+1. COALESCE handles
     // the empty-table case (MAX returns NULL → -1 → next is 0). Computed here
     // (not passed in) so callers don't have to reason about ordering.
-    const nextOrderStmt = db.prepare(
-      "SELECT COALESCE(MAX(sort_order), -1) + 1 AS next FROM projects",
-    );
-    nextOrderStmt.step();
-    const nextOrder = (nextOrderStmt.getAsObject() as { next: number }).next;
-    nextOrderStmt.free();
-    db.run(
+    const nextOrder = (
+      db.prepare("SELECT COALESCE(MAX(sort_order), -1) + 1 AS next FROM projects").get() as unknown as {
+        next: number;
+      }
+    ).next;
+    run(
       "INSERT INTO projects (id, name, path, archived, `group`, sort_order, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-      [
-        v(p.id),
-        v(p.name),
-        v(p.path),
-        v(p.archived ? 1 : 0),
-        v(p.group ?? null),
-        v(nextOrder),
-        v(p.createdAt),
-        v(p.updatedAt),
-      ],
+      v(p.id),
+      v(p.name),
+      v(p.path),
+      v(p.archived ? 1 : 0),
+      v(p.group ?? null),
+      v(nextOrder),
+      v(p.createdAt),
+      v(p.updatedAt),
     );
     persist();
     rootPathsCache = null;
   },
 
   list(): Project[] {
-    const db = getDb();
     // Pinned projects float to the top (most recent pin first); unpinned rows
     // keep their drag order. `(pinned_at IS NULL)` yields 0/1 so pinned rows
     // (0) sort ahead — same trick as the sessions pinned_at ordering.
-    const stmt = db.prepare(
-      "SELECT * FROM projects ORDER BY (pinned_at IS NULL) ASC, pinned_at DESC, sort_order ASC, created_at ASC",
-    );
-    const out: Project[] = [];
-    while (stmt.step()) out.push(rowToProject(stmt.getAsObject() as unknown as ProjectRow));
-    stmt.free();
-    return out;
+    const rows = getDb()
+      .prepare("SELECT * FROM projects ORDER BY (pinned_at IS NULL) ASC, pinned_at DESC, sort_order ASC, created_at ASC")
+      .all() as unknown as ProjectRow[];
+    return rows.map(rowToProject);
   },
 
   /** Root paths of all persisted projects, served from an in-memory cache.
@@ -126,31 +126,28 @@ export const ProjectRepo = {
   },
 
   get(id: string): Project | undefined {
-    const db = getDb();
-    const stmt = db.prepare("SELECT * FROM projects WHERE id = ?");
-    stmt.bind([v(id)]);
-    const found = stmt.step();
-    const row = found ? (stmt.getAsObject() as unknown as ProjectRow) : undefined;
-    stmt.free();
-    return row ? rowToProject(row) : undefined;
+    const row = getDb().prepare("SELECT * FROM projects WHERE id = ?").get(v(id)) as
+      | unknown
+      | ProjectRow;
+    return row ? rowToProject(row as ProjectRow) : undefined;
   },
 
   /** Hard-delete a project. Child sessions + messages cascade-delete via the
    *  sessions.project_id / messages.session_id ON DELETE CASCADE constraints
    *  (PRAGMA foreign_keys = ON is set in initDb). */
   delete(id: string): void {
-    getDb().run("DELETE FROM projects WHERE id = ?", [v(id)]);
+    run("DELETE FROM projects WHERE id = ?", v(id));
     persist();
     rootPathsCache = null;
   },
 
   /** Set the archived (soft-delete) flag. */
   setArchived(id: string, archived: boolean): void {
-    getDb().run("UPDATE projects SET archived = ?, updated_at = ? WHERE id = ?", [
+    run("UPDATE projects SET archived = ?, updated_at = ? WHERE id = ?",
       v(archived ? 1 : 0),
       v(Date.now()),
       v(id),
-    ]);
+    );
     persist();
     rootPathsCache = null;
   },
@@ -158,22 +155,22 @@ export const ProjectRepo = {
   /** Assign a project to a group. Pass null to remove it from any group.
    *  `group` is a column name in SQLite so it must be backtick-quoted. */
   setGroup(id: string, group: string | null): void {
-    getDb().run("UPDATE projects SET `group` = ?, updated_at = ? WHERE id = ?", [
+    run("UPDATE projects SET `group` = ?, updated_at = ? WHERE id = ?",
       v(group ?? null),
       v(Date.now()),
       v(id),
-    ]);
+    );
     persist();
     rootPathsCache = null;
   },
 
   /** Rename a project (display-only; the path is never touched). */
   rename(id: string, name: string): void {
-    getDb().run("UPDATE projects SET name = ?, updated_at = ? WHERE id = ?", [
+    run("UPDATE projects SET name = ?, updated_at = ? WHERE id = ?",
       v(name),
       v(Date.now()),
       v(id),
-    ]);
+    );
     persist();
     rootPathsCache = null;
   },
@@ -184,10 +181,10 @@ export const ProjectRepo = {
    *  the project to its drag-order position, and `updated_at` is not bumped
    *  (pinning is metadata, not activity). */
   setPinned(id: string, pinned: boolean): void {
-    getDb().run("UPDATE projects SET pinned_at = ? WHERE id = ?", [
+    run("UPDATE projects SET pinned_at = ? WHERE id = ?",
       v(pinned ? Date.now() : null),
       v(id),
-    ]);
+    );
     persist();
     rootPathsCache = null;
   },
@@ -200,16 +197,15 @@ export const ProjectRepo = {
    *  MessageRepo.replaceAll transaction pattern. */
   reorder(orderedIds: string[]): void {
     const db = getDb();
-    db.run("BEGIN");
+    const stmt = db.prepare("UPDATE projects SET sort_order = ? WHERE id = ?");
+    db.exec("BEGIN");
     try {
-      const stmt = db.prepare("UPDATE projects SET sort_order = ? WHERE id = ?");
       for (let i = 0; i < orderedIds.length; i++) {
-        stmt.run([v(i), v(orderedIds[i])]);
+        stmt.run(v(i), v(orderedIds[i]));
       }
-      stmt.free();
-      db.run("COMMIT");
+      db.exec("COMMIT");
     } catch (err) {
-      db.run("ROLLBACK");
+      db.exec("ROLLBACK");
       throw err;
     }
     persist();
@@ -285,39 +281,37 @@ function rowToSession(r: SessionRow): Session {
 
 export const SessionRepo = {
   create(s: Session): void {
-    getDb().run(
+    run(
       `INSERT INTO sessions
        (id, project_id, provider_id, claude_session_id, kind, parent_session_id, title, status, model, effort, permission_mode, custom_model_id, archived, pinned_at, context_snapshot, todos, subagents, plan_draft, turn_files, usage_history, bookmarks, subagent_transcripts, env_mode, worktree_path, wt_style, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [
-        v(s.id),
-        v(s.projectId),
-        v(s.providerId),
-        v(s.claudeSessionId),
-        v(s.kind),
-        v(s.parentSessionId),
-        v(s.title),
-        v(s.status),
-        v(s.model),
-        v(s.effort),
-        v(s.permissionMode),
-        v(s.customModelId),
-        v(s.archived ? 1 : 0),
-        v(s.pinnedAt),
-        v(s.contextSnapshot ? JSON.stringify(s.contextSnapshot) : null),
-        v(s.todos ? JSON.stringify(s.todos) : null),
-        v(s.subagents ? JSON.stringify(s.subagents) : null),
-        v(s.planDraft ? JSON.stringify(s.planDraft) : null),
-        v(s.turnFiles ? JSON.stringify(s.turnFiles) : null),
-        v(s.usageHistory ? JSON.stringify(s.usageHistory) : null),
-        v(s.bookmarks ? JSON.stringify(s.bookmarks) : null),
-        v(s.subagentTranscripts ? JSON.stringify(s.subagentTranscripts) : null),
-        v(s.envMode ?? "local"),
-        v(s.worktreePath ?? null),
-        v(s.wtStyle ?? null),
-        v(s.createdAt),
-        v(s.updatedAt),
-      ],
+      v(s.id),
+      v(s.projectId),
+      v(s.providerId),
+      v(s.claudeSessionId),
+      v(s.kind),
+      v(s.parentSessionId),
+      v(s.title),
+      v(s.status),
+      v(s.model),
+      v(s.effort),
+      v(s.permissionMode),
+      v(s.customModelId),
+      v(s.archived ? 1 : 0),
+      v(s.pinnedAt),
+      v(s.contextSnapshot ? JSON.stringify(s.contextSnapshot) : null),
+      v(s.todos ? JSON.stringify(s.todos) : null),
+      v(s.subagents ? JSON.stringify(s.subagents) : null),
+      v(s.planDraft ? JSON.stringify(s.planDraft) : null),
+      v(s.turnFiles ? JSON.stringify(s.turnFiles) : null),
+      v(s.usageHistory ? JSON.stringify(s.usageHistory) : null),
+      v(s.bookmarks ? JSON.stringify(s.bookmarks) : null),
+      v(s.subagentTranscripts ? JSON.stringify(s.subagentTranscripts) : null),
+      v(s.envMode ?? "local"),
+      v(s.worktreePath ?? null),
+      v(s.wtStyle ?? null),
+      v(s.createdAt),
+      v(s.updatedAt),
     );
     persist();
   },
@@ -342,7 +336,6 @@ export const SessionRepo = {
     projectId: string,
     opts?: { limit?: number; offset?: number; archived?: boolean; worktree?: "exclude" | "only" },
   ): Session[] {
-    const db = getDb();
     // Side-chat sessions are managed by the right-panel ask tab keyed by
     // parent session — never by the left-bar project list (any mode).
     const where = ["project_id = ?", "kind = 'chat'"];
@@ -372,12 +365,8 @@ export const SessionRepo = {
         params.push(v(opts.offset));
       }
     }
-    const stmt = db.prepare(sql);
-    stmt.bind(params);
-    const out: Session[] = [];
-    while (stmt.step()) out.push(rowToSession(stmt.getAsObject() as unknown as SessionRow));
-    stmt.free();
-    return out;
+    const rows = getDb().prepare(sql).all(...params) as unknown as SessionRow[];
+    return rows.map(rowToSession);
   },
 
   /** Count sessions for a project, optionally filtered by archived flag and
@@ -391,7 +380,6 @@ export const SessionRepo = {
     archived?: boolean,
     worktree?: "exclude" | "only",
   ): number {
-    const db = getDb();
     const where = ["project_id = ?", "kind = 'chat'"];
     const params: BindValue[] = [v(projectId)];
     if (archived !== undefined) {
@@ -406,12 +394,10 @@ export const SessionRepo = {
     } else if (worktree === "only") {
       where.push("worktree_path IS NOT NULL");
     }
-    const stmt = db.prepare(`SELECT COUNT(*) AS n FROM sessions WHERE ${where.join(" AND ")}`);
-    stmt.bind(params);
-    stmt.step();
-    const n = (stmt.getAsObject() as { n: number }).n;
-    stmt.free();
-    return n;
+    const row = getDb()
+      .prepare(`SELECT COUNT(*) AS n FROM sessions WHERE ${where.join(" AND ")}`)
+      .get(...params) as unknown as { n: number };
+    return row.n;
   },
 
   /** All pinned non-archived sessions across every project, most recent pin
@@ -419,14 +405,10 @@ export const SessionRepo = {
    *  threads out of their project's list and shows them above the project
    *  tree (the renderer resolves each row's owning project name locally). */
   listPinned(): Session[] {
-    const db = getDb();
-    const stmt = db.prepare(
-      "SELECT * FROM sessions WHERE archived = 0 AND pinned_at IS NOT NULL AND kind = 'chat' ORDER BY pinned_at DESC",
-    );
-    const out: Session[] = [];
-    while (stmt.step()) out.push(rowToSession(stmt.getAsObject() as unknown as SessionRow));
-    stmt.free();
-    return out;
+    const rows = getDb()
+      .prepare("SELECT * FROM sessions WHERE archived = 0 AND pinned_at IS NOT NULL AND kind = 'chat' ORDER BY pinned_at DESC")
+      .all() as unknown as SessionRow[];
+    return rows.map(rowToSession);
   },
 
   /** Cross-project aggregate of non-archived chat sessions, newest-first —
@@ -448,7 +430,6 @@ export const SessionRepo = {
     projectIds?: string[];
     worktreeKey?: string;
   }): Session[] {
-    const db = getDb();
     if (opts?.projectIds && opts.projectIds.length === 0) return [];
     const where = ["archived = 0", "pinned_at IS NULL", "kind = 'chat'"];
     const params: BindValue[] = [];
@@ -467,15 +448,13 @@ export const SessionRepo = {
         params.push(v(opts.offset));
       }
     }
-    const stmt = db.prepare(sql);
-    stmt.bind(params);
+    const rows = getDb().prepare(sql).all(...params) as unknown as SessionRow[];
     const out: Session[] = [];
-    while (stmt.step()) {
-      const s = rowToSession(stmt.getAsObject() as unknown as SessionRow);
+    for (const row of rows) {
+      const s = rowToSession(row);
       if (wtKey !== undefined && (!s.worktreePath || normPathKey(s.worktreePath) !== wtKey)) continue;
       out.push(s);
     }
-    stmt.free();
     if (wtKey !== undefined) {
       const offset = opts?.offset ?? 0;
       return opts?.limit !== undefined ? out.slice(offset, offset + opts.limit) : out.slice(offset);
@@ -487,7 +466,6 @@ export const SessionRepo = {
    *  stream pagination. Takes the same scope filters so a scoped view's
    *  "show more" counts its own set. */
   countAll(opts?: { projectIds?: string[]; worktreeKey?: string }): number {
-    const db = getDb();
     if (opts?.projectIds && opts.projectIds.length === 0) return 0;
     const where = ["archived = 0", "pinned_at IS NULL", "kind = 'chat'"];
     const params: BindValue[] = [];
@@ -497,17 +475,16 @@ export const SessionRepo = {
     }
     const wtKey = opts?.worktreeKey;
     if (wtKey !== undefined) where.push("worktree_path IS NOT NULL");
-    const stmt = db.prepare(`SELECT * FROM sessions WHERE ${where.join(" AND ")}`);
-    stmt.bind(params);
+    const rows = getDb()
+      .prepare(`SELECT worktree_path FROM sessions WHERE ${where.join(" AND ")}`)
+      .all(...params) as unknown as Array<{ worktree_path: string | null }>;
     let n = 0;
-    while (stmt.step()) {
-      const row = stmt.getAsObject() as unknown as { worktree_path: string | null };
+    for (const row of rows) {
       if (wtKey !== undefined && (!row.worktree_path || normPathKey(row.worktree_path) !== wtKey)) {
         continue;
       }
       n++;
     }
-    stmt.free();
     return n;
   },
 
@@ -515,25 +492,21 @@ export const SessionRepo = {
    *  non-archived sessions across every project, newest first. Desktop-scale
    *  session counts make a full-table LIKE scan cheap; no FTS index needed. */
   searchByTitle(query: string, opts?: { limit?: number }): Session[] {
-    const db = getDb();
     const q = `%${query.trim()}%`;
-    const params: BindValue[] = [v(q)];
     const limit = opts?.limit ?? 30;
-    params.push(v(limit));
-    const sql = `SELECT * FROM sessions WHERE archived = 0 AND kind = 'chat' AND title LIKE ? ORDER BY updated_at DESC, created_at DESC LIMIT ?`;
-    const stmt = db.prepare(sql);
-    stmt.bind(params);
-    const out: Session[] = [];
-    while (stmt.step()) out.push(rowToSession(stmt.getAsObject() as unknown as SessionRow));
-    stmt.free();
-    return out;
+    const rows = getDb()
+      .prepare(
+        `SELECT * FROM sessions WHERE archived = 0 AND kind = 'chat' AND title LIKE ? ORDER BY updated_at DESC, created_at DESC LIMIT ?`,
+      )
+      .all(v(q), v(limit)) as unknown as SessionRow[];
+    return rows.map(rowToSession);
   },
 
   /** Cross-session bookmark search for the Ctrl+K palette: substring match
    *  over each bookmark's title (user rename) + excerpt (the selected text at
    *  add time). The bookmarks column is a small JSON array per session, so
    *  pull the non-null rows (most-recently-active first) and filter in
-   *  memory — sql.js LIKE over the raw JSON string would also match keys /
+   *  memory — SQL LIKE over the raw JSON string would also match keys /
    *  unrelated fields. */
   searchBookmarks(
     query: string,
@@ -542,22 +515,23 @@ export const SessionRepo = {
     const q = query.trim().toLowerCase();
     if (!q) return [];
     const limit = opts?.limit ?? 30;
-    const stmt = getDb().prepare(
-      "SELECT id, project_id, title, bookmarks FROM sessions WHERE archived = 0 AND kind = 'chat' AND bookmarks IS NOT NULL ORDER BY updated_at DESC",
-    );
+    const rows = getDb()
+      .prepare(
+        "SELECT id, project_id, title, bookmarks FROM sessions WHERE archived = 0 AND kind = 'chat' AND bookmarks IS NOT NULL ORDER BY updated_at DESC",
+      )
+      .all() as unknown as Array<{
+      id: string;
+      project_id: string;
+      title: string;
+      bookmarks: string;
+    }>;
     const out: Array<{
       bookmark: SessionBookmark;
       sessionId: string;
       sessionTitle: string;
       projectId: string;
     }> = [];
-    outer: while (stmt.step()) {
-      const row = stmt.getAsObject() as unknown as {
-        id: string;
-        project_id: string;
-        title: string;
-        bookmarks: string;
-      };
+    outer: for (const row of rows) {
       const list = safeJson(row.bookmarks);
       if (!Array.isArray(list)) continue;
       for (const raw of list) {
@@ -570,7 +544,6 @@ export const SessionRepo = {
         }
       }
     }
-    stmt.free();
     return out;
   },
 
@@ -579,25 +552,19 @@ export const SessionRepo = {
    *  applies the per-project thresholds on top; pinned sessions are excluded
    *  here because they are never auto-archived regardless of staleness. */
   listStale(cutoffMs: number): Session[] {
-    const db = getDb();
-    const stmt = db.prepare(
-      "SELECT * FROM sessions WHERE archived = 0 AND pinned_at IS NULL AND kind = 'chat' AND updated_at < ?",
-    );
-    stmt.bind([v(cutoffMs)]);
-    const out: Session[] = [];
-    while (stmt.step()) out.push(rowToSession(stmt.getAsObject() as unknown as SessionRow));
-    stmt.free();
-    return out;
+    const rows = getDb()
+      .prepare(
+        "SELECT * FROM sessions WHERE archived = 0 AND pinned_at IS NULL AND kind = 'chat' AND updated_at < ?",
+      )
+      .all(v(cutoffMs)) as unknown as SessionRow[];
+    return rows.map(rowToSession);
   },
 
   get(id: string): Session | undefined {
-    const db = getDb();
-    const stmt = db.prepare("SELECT * FROM sessions WHERE id = ?");
-    stmt.bind([v(id)]);
-    const found = stmt.step();
-    const row = found ? (stmt.getAsObject() as unknown as SessionRow) : undefined;
-    stmt.free();
-    return row ? rowToSession(row) : undefined;
+    const row = getDb().prepare("SELECT * FROM sessions WHERE id = ?").get(v(id)) as
+      | unknown
+      | SessionRow;
+    return row ? rowToSession(row as SessionRow) : undefined;
   },
 
   /** Newest still-fresh session of a project — the "new session" button
@@ -608,18 +575,15 @@ export const SessionRepo = {
    *  rows live in the left bar's global pinned section, not the project
    *  list, so "move it to the top" wouldn't apply to them). */
   findFreshByProject(projectId: string): Session | undefined {
-    const db = getDb();
-    const stmt = db.prepare(
-      `SELECT * FROM sessions
-       WHERE project_id = ? AND archived = 0 AND pinned_at IS NULL
-         AND kind = 'chat' AND status = 'idle' AND title = 'New session'
-       ORDER BY updated_at DESC, created_at DESC LIMIT 1`,
-    );
-    stmt.bind([v(projectId)]);
-    const found = stmt.step();
-    const row = found ? (stmt.getAsObject() as unknown as SessionRow) : undefined;
-    stmt.free();
-    return row ? rowToSession(row) : undefined;
+    const row = getDb()
+      .prepare(
+        `SELECT * FROM sessions
+         WHERE project_id = ? AND archived = 0 AND pinned_at IS NULL
+           AND kind = 'chat' AND status = 'idle' AND title = 'New session'
+         ORDER BY updated_at DESC, created_at DESC LIMIT 1`,
+      )
+      .get(v(projectId)) as unknown | SessionRow;
+    return row ? rowToSession(row as SessionRow) : undefined;
   },
 
   /** Newest still-fresh side chat of a parent — the ask tab's "new chat"
@@ -627,18 +591,15 @@ export const SessionRepo = {
    *  findFreshByProject: the "Quick ask" placeholder is rewritten by the
    *  first sent question, so a placeholder title means never used). */
   findFreshSideByParent(parentSessionId: string): Session | undefined {
-    const db = getDb();
-    const stmt = db.prepare(
-      `SELECT * FROM sessions
-       WHERE kind = 'side' AND parent_session_id = ?
-         AND status = 'idle' AND title = 'Quick ask'
-       ORDER BY updated_at DESC, created_at DESC LIMIT 1`,
-    );
-    stmt.bind([v(parentSessionId)]);
-    const found = stmt.step();
-    const row = found ? (stmt.getAsObject() as unknown as SessionRow) : undefined;
-    stmt.free();
-    return row ? rowToSession(row) : undefined;
+    const row = getDb()
+      .prepare(
+        `SELECT * FROM sessions
+         WHERE kind = 'side' AND parent_session_id = ?
+           AND status = 'idle' AND title = 'Quick ask'
+         ORDER BY updated_at DESC, created_at DESC LIMIT 1`,
+      )
+      .get(v(parentSessionId)) as unknown | SessionRow;
+    return row ? rowToSession(row as SessionRow) : undefined;
   },
 
   /** List a main session's side chats (kind='side', parent = the given id),
@@ -647,24 +608,19 @@ export const SessionRepo = {
    *  Q&A threads, so creation order is the natural reading order (updated_at
    *  would shuffle the list whenever an old thread's status flips). */
   listSideByParent(parentSessionId: string): Session[] {
-    const db = getDb();
-    const stmt = db.prepare(
-      "SELECT * FROM sessions WHERE kind = 'side' AND parent_session_id = ? ORDER BY created_at DESC",
-    );
-    stmt.bind([v(parentSessionId)]);
-    const out: Session[] = [];
-    while (stmt.step()) out.push(rowToSession(stmt.getAsObject() as unknown as SessionRow));
-    stmt.free();
-    return out;
+    const rows = getDb()
+      .prepare("SELECT * FROM sessions WHERE kind = 'side' AND parent_session_id = ? ORDER BY created_at DESC")
+      .all(v(parentSessionId)) as unknown as SessionRow[];
+    return rows.map(rowToSession);
   },
 
   /** Persist claude's own session id so future turns can --resume. */
   updateClaudeSessionId(id: string, claudeSessionId: string): void {
-    getDb().run("UPDATE sessions SET claude_session_id = ?, updated_at = ? WHERE id = ?", [
+    run("UPDATE sessions SET claude_session_id = ?, updated_at = ? WHERE id = ?",
       v(claudeSessionId),
       v(Date.now()),
       v(id),
-    ]);
+    );
     persist();
   },
 
@@ -672,11 +628,11 @@ export const SessionRepo = {
    *  Written BEFORE the turn is dispatched so a crash between creation and
    *  turn-start still leaves the session pointing at its worktree. */
   updateWorktreePath(id: string, worktreePath: string): void {
-    getDb().run("UPDATE sessions SET worktree_path = ?, updated_at = ? WHERE id = ?", [
+    run("UPDATE sessions SET worktree_path = ?, updated_at = ? WHERE id = ?",
       v(worktreePath),
       v(Date.now()),
       v(id),
-    ]);
+    );
     persist();
   },
 
@@ -687,9 +643,9 @@ export const SessionRepo = {
    *  create a NEW worktree instead of running in the project root the user
    *  was shown. History is kept. */
   clearWorktreePath(id: string): void {
-    getDb().run(
+    run(
       "UPDATE sessions SET worktree_path = NULL, env_mode = 'local' WHERE id = ?",
-      [v(id)],
+      v(id),
     );
     persist();
   },
@@ -698,15 +654,13 @@ export const SessionRepo = {
    *  feeds the worktree manager's orphan detection ("no session references
    *  this path anymore → safe to clean up"). */
   worktreeReferenceCounts(): Record<string, number> {
-    const stmt = getDb().prepare(
-      "SELECT worktree_path AS path, COUNT(*) AS n FROM sessions WHERE worktree_path IS NOT NULL GROUP BY worktree_path",
-    );
+    const rows = getDb()
+      .prepare(
+        "SELECT worktree_path AS path, COUNT(*) AS n FROM sessions WHERE worktree_path IS NOT NULL GROUP BY worktree_path",
+      )
+      .all() as unknown as Array<{ path: string; n: number }>;
     const out: Record<string, number> = {};
-    while (stmt.step()) {
-      const row = stmt.getAsObject() as unknown as { path: string; n: number };
-      out[row.path] = row.n;
-    }
-    stmt.free();
+    for (const row of rows) out[row.path] = row.n;
     return out;
   },
 
@@ -715,15 +669,13 @@ export const SessionRepo = {
    *  may operate inside their isolated checkout even though it sits outside
    *  every registered project. */
   listWorktreeRoots(): string[] {
-    const stmt = getDb().prepare(
-      "SELECT DISTINCT worktree_path FROM sessions WHERE worktree_path IS NOT NULL",
-    );
+    const rows = getDb()
+      .prepare("SELECT DISTINCT worktree_path FROM sessions WHERE worktree_path IS NOT NULL")
+      .all() as unknown as Array<{ worktree_path: string }>;
     const out: string[] = [];
-    while (stmt.step()) {
-      const row = stmt.getAsObject() as unknown as { worktree_path: string };
+    for (const row of rows) {
       if (row.worktree_path) out.push(row.worktree_path);
     }
-    stmt.free();
     return out;
   },
 
@@ -734,63 +686,64 @@ export const SessionRepo = {
    *  we stored at creation time. */
   listByWorktreePath(worktreePath: string): Session[] {
     const target = normPathKey(worktreePath);
-    const stmt = getDb().prepare("SELECT * FROM sessions WHERE worktree_path IS NOT NULL");
+    const rows = getDb()
+      .prepare("SELECT * FROM sessions WHERE worktree_path IS NOT NULL")
+      .all() as unknown as SessionRow[];
     const out: Session[] = [];
-    while (stmt.step()) {
-      const s = rowToSession(stmt.getAsObject() as unknown as SessionRow);
+    for (const row of rows) {
+      const s = rowToSession(row);
       if (s.worktreePath && normPathKey(s.worktreePath) === target) out.push(s);
     }
-    stmt.free();
     return out;
   },
 
   updateTitle(id: string, title: string): void {
-    getDb().run("UPDATE sessions SET title = ?, updated_at = ? WHERE id = ?", [v(title), v(Date.now()), v(id)]);
+    run("UPDATE sessions SET title = ?, updated_at = ? WHERE id = ?", v(title), v(Date.now()), v(id));
     persist();
   },
 
   updateStatus(id: string, status: Session["status"]): void {
-    getDb().run("UPDATE sessions SET status = ?, updated_at = ? WHERE id = ?", [v(status), v(Date.now()), v(id)]);
+    run("UPDATE sessions SET status = ?, updated_at = ? WHERE id = ?", v(status), v(Date.now()), v(id));
     persist();
   },
 
   /** Persist the latest context-usage snapshot for a session. */
   updateSnapshot(id: string, snapshot: unknown): void {
-    getDb().run("UPDATE sessions SET context_snapshot = ?, updated_at = ? WHERE id = ?", [
+    run("UPDATE sessions SET context_snapshot = ?, updated_at = ? WHERE id = ?",
       v(JSON.stringify(snapshot)),
       v(Date.now()),
       v(id),
-    ]);
+    );
     persist();
   },
 
   /** Persist the latest todo list (claude's TodoWrite) for a session. */
   updateTodos(id: string, todos: SessionTodoItem[]): void {
-    getDb().run("UPDATE sessions SET todos = ?, updated_at = ? WHERE id = ?", [
+    run("UPDATE sessions SET todos = ?, updated_at = ? WHERE id = ?",
       v(JSON.stringify(todos)),
       v(Date.now()),
       v(id),
-    ]);
+    );
     persist();
   },
 
   /** Persist the latest subagent roster for a session. */
   updateSubagents(id: string, agents: SubagentSnapshot[]): void {
-    getDb().run("UPDATE sessions SET subagents = ?, updated_at = ? WHERE id = ?", [
+    run("UPDATE sessions SET subagents = ?, updated_at = ? WHERE id = ?",
       v(JSON.stringify(agents)),
       v(Date.now()),
       v(id),
-    ]);
+    );
     persist();
   },
 
   /** Persist the latest plan-mode draft for a session. */
   updatePlanDraft(id: string, plan: SessionPlanDraft): void {
-    getDb().run("UPDATE sessions SET plan_draft = ?, updated_at = ? WHERE id = ?", [
+    run("UPDATE sessions SET plan_draft = ?, updated_at = ? WHERE id = ?",
       v(JSON.stringify(plan)),
       v(Date.now()),
       v(id),
-    ]);
+    );
     persist();
   },
 
@@ -798,22 +751,22 @@ export const SessionRepo = {
    *  card). Pass null to clear it (e.g. after a rewind) so the card doesn't
    *  reappear on session reopen. */
   updateTurnFiles(id: string, files: TurnFileEntry[] | null): void {
-    getDb().run("UPDATE sessions SET turn_files = ?, updated_at = ? WHERE id = ?", [
+    run("UPDATE sessions SET turn_files = ?, updated_at = ? WHERE id = ?",
       v(files ? JSON.stringify(files) : null),
       v(Date.now()),
       v(id),
-    ]);
+    );
     persist();
   },
 
   /** Persist the per-turn token/cost history. Appended at each turn-end so
    *  the context-stats history popover survives restart. */
   updateUsageHistory(id: string, history: TurnUsageRecord[]): void {
-    getDb().run("UPDATE sessions SET usage_history = ?, updated_at = ? WHERE id = ?", [
+    run("UPDATE sessions SET usage_history = ?, updated_at = ? WHERE id = ?",
       v(JSON.stringify(history)),
       v(Date.now()),
       v(id),
-    ]);
+    );
     persist();
   },
 
@@ -821,11 +774,11 @@ export const SessionRepo = {
    *  array on every add/remove — single-digit cardinality, no incremental
    *  protocol needed). Empty array = "has bookmarks column but none left". */
   updateBookmarks(id: string, bookmarks: SessionBookmark[]): void {
-    getDb().run("UPDATE sessions SET bookmarks = ?, updated_at = ? WHERE id = ?", [
+    run("UPDATE sessions SET bookmarks = ?, updated_at = ? WHERE id = ?",
       v(JSON.stringify(bookmarks)),
       v(Date.now()),
       v(id),
-    ]);
+    );
     persist();
   },
 
@@ -833,11 +786,11 @@ export const SessionRepo = {
    *  the adapter emits replace-semantics per-agent arrays, RuntimeManager
    *  keeps the merged map). Pass null to clear (new turn starting). */
   updateSubagentTranscripts(id: string, transcripts: Session["subagentTranscripts"]): void {
-    getDb().run("UPDATE sessions SET subagent_transcripts = ?, updated_at = ? WHERE id = ?", [
+    run("UPDATE sessions SET subagent_transcripts = ?, updated_at = ? WHERE id = ?",
       v(transcripts ? JSON.stringify(transcripts) : null),
       v(Date.now()),
       v(id),
-    ]);
+    );
     persist();
   },
 
@@ -851,22 +804,23 @@ export const SessionRepo = {
     customModelId: string | null;
     usageHistory: TurnUsageRecord[];
   }> {
-    const stmt = getDb().prepare(
-      "SELECT id, provider_id, custom_model_id, usage_history FROM sessions WHERE usage_history IS NOT NULL",
-    );
+    const rows = getDb()
+      .prepare(
+        "SELECT id, provider_id, custom_model_id, usage_history FROM sessions WHERE usage_history IS NOT NULL",
+      )
+      .all() as unknown as Array<{
+      id: string;
+      provider_id: string | null;
+      custom_model_id: string | null;
+      usage_history: string | null;
+    }>;
     const out: Array<{
       id: string;
       providerId: string;
       customModelId: string | null;
       usageHistory: TurnUsageRecord[];
     }> = [];
-    while (stmt.step()) {
-      const row = stmt.getAsObject() as unknown as {
-        id: string;
-        provider_id: string | null;
-        custom_model_id: string | null;
-        usage_history: string | null;
-      };
+    for (const row of rows) {
       const parsed = safeJson(row.usage_history);
       if (!Array.isArray(parsed)) continue;
       out.push({
@@ -876,17 +830,16 @@ export const SessionRepo = {
         usageHistory: parsed as TurnUsageRecord[],
       });
     }
-    stmt.free();
     return out;
   },
 
   /** Persist which custom-model config this session is bound to (null = built-in). */
   updateCustomModelId(id: string, customModelId: string | null): void {
-    getDb().run("UPDATE sessions SET custom_model_id = ?, updated_at = ? WHERE id = ?", [
+    run("UPDATE sessions SET custom_model_id = ?, updated_at = ? WHERE id = ?",
       v(customModelId),
       v(Date.now()),
       v(id),
-    ]);
+    );
     persist();
   },
 
@@ -897,21 +850,31 @@ export const SessionRepo = {
    *  a dangling pointer. */
   delete(id: string): void {
     const db = getDb();
-    db.run("UPDATE sessions SET parent_session_id = NULL, updated_at = ? WHERE parent_session_id = ?", [
+    run("UPDATE sessions SET parent_session_id = NULL, updated_at = ? WHERE parent_session_id = ?",
       v(Date.now()),
       v(id),
-    ]);
-    db.run("DELETE FROM sessions WHERE id = ?", [v(id)]);
+    );
+    run("DELETE FROM sessions WHERE id = ?", v(id));
     persist();
+  },
+
+  /** All session ids of a project (any kind/archived state) — the lookup list
+   *  for disposing every in-memory session runtime BEFORE a project
+   *  hard-delete's SQL cascade removes the rows. */
+  idsByProject(projectId: string): string[] {
+    const rows = getDb()
+      .prepare("SELECT id FROM sessions WHERE project_id = ?")
+      .all(v(projectId)) as unknown as Array<{ id: string }>;
+    return rows.map((r) => r.id);
   },
 
   /** Set the archived (soft-delete) flag. */
   setArchived(id: string, archived: boolean): void {
-    getDb().run("UPDATE sessions SET archived = ?, updated_at = ? WHERE id = ?", [
+    run("UPDATE sessions SET archived = ?, updated_at = ? WHERE id = ?",
       v(archived ? 1 : 0),
       v(Date.now()),
       v(id),
-    ]);
+    );
     persist();
   },
 
@@ -920,10 +883,10 @@ export const SessionRepo = {
    *  Does NOT bump `updated_at` — pinning is metadata, not activity, so it
    *  doesn't disturb the activity ordering of the unpinned group. */
   setPinned(id: string, pinned: boolean): void {
-    getDb().run("UPDATE sessions SET pinned_at = ? WHERE id = ?", [
+    run("UPDATE sessions SET pinned_at = ? WHERE id = ?",
       v(pinned ? Date.now() : null),
       v(id),
-    ]);
+    );
     persist();
   },
 
@@ -955,7 +918,7 @@ export const SessionRepo = {
     if (sets.length === 0) return;
     sets.push("updated_at = ?");
     vals.push(v(Date.now()), v(id));
-    getDb().run(`UPDATE sessions SET ${sets.join(", ")} WHERE id = ?`, vals);
+    run(`UPDATE sessions SET ${sets.join(", ")} WHERE id = ?`, ...vals);
     persist();
   },
 };
@@ -987,12 +950,8 @@ export const MessageRepo = {
    * for threads that haven't started yet) without pulling message bodies.
    */
   hasAny(sessionId: string): boolean {
-    const db = getDb();
-    const stmt = db.prepare("SELECT 1 FROM messages WHERE session_id = ? LIMIT 1");
-    stmt.bind([v(sessionId)]);
-    const found = stmt.step();
-    stmt.free();
-    return found;
+    const row = getDb().prepare("SELECT 1 FROM messages WHERE session_id = ? LIMIT 1").get(v(sessionId));
+    return row !== undefined;
   },
 
   /**
@@ -1003,19 +962,18 @@ export const MessageRepo = {
    */
   replaceAll(sessionId: string, messages: MessageRecord[]): void {
     const db = getDb();
-    db.run("BEGIN");
+    db.exec("BEGIN");
     try {
-      db.run("DELETE FROM messages WHERE session_id = ?", [v(sessionId)]);
+      run("DELETE FROM messages WHERE session_id = ?", v(sessionId));
       const stmt = db.prepare(
         "INSERT INTO messages (id, session_id, role, content, created_at) VALUES (?, ?, ?, ?, ?)",
       );
       for (const m of messages) {
-        stmt.run([v(m.id), v(m.sessionId), v(m.role), v(JSON.stringify(m.content)), v(m.createdAt)]);
+        stmt.run(v(m.id), v(m.sessionId), v(m.role), v(JSON.stringify(m.content)), v(m.createdAt));
       }
-      stmt.free();
-      db.run("COMMIT");
+      db.exec("COMMIT");
     } catch (err) {
-      db.run("ROLLBACK");
+      db.exec("ROLLBACK");
       throw err;
     }
     persist();
@@ -1044,41 +1002,41 @@ export const MessageRepo = {
     // Unpaginated path — keep the historical shape for callers that haven't
     // opted in (they get all rows and ignore `hasMore`).
     if (limit == null) {
-      const stmt = db.prepare("SELECT * FROM messages WHERE session_id = ? ORDER BY created_at ASC");
-      stmt.bind([v(sessionId)]);
-      const out: MessageRecord[] = [];
-      while (stmt.step()) out.push(rowToMessage(stmt.getAsObject() as unknown as MessageRow));
-      stmt.free();
-      return { messages: out, hasMore: false };
+      const rows = db
+        .prepare("SELECT * FROM messages WHERE session_id = ? ORDER BY created_at ASC")
+        .all(v(sessionId)) as unknown as MessageRow[];
+      return { messages: rows.map(rowToMessage), hasMore: false };
     }
 
     // Paginated path: fetch `limit + 1` rows descending from the cursor, so
-    // the extra row (if any) signals `hasMore`. Then reverse to ascending.
+    // the extra row (if any) signals `hasMore`. The extra is the OLDEST of
+    // the window — drop it and return the newest `limit` ascending. (This
+    // used to slice off rows[0] — the newest — which silently dropped one
+    // row at every page boundary and, on the first page, the newest row of
+    // the entire session; caught by the sqlite-migration smoke's paginated
+    // walk, 2026-09-14. The driver swap didn't introduce it: the original
+    // sql.js implementation had the same slice.)
     const fetchN = limit + 1;
-    const rows: MessageRecord[] = [];
+    let rows: MessageRow[];
     if (before == null || beforeId == null) {
-      const stmt = db.prepare(
-        "SELECT * FROM messages WHERE session_id = ? ORDER BY created_at DESC, id DESC LIMIT ?",
-      );
-      stmt.bind([v(sessionId), v(fetchN)]);
-      while (stmt.step()) rows.push(rowToMessage(stmt.getAsObject() as unknown as MessageRow));
-      stmt.free();
+      rows = db
+        .prepare("SELECT * FROM messages WHERE session_id = ? ORDER BY created_at DESC, id DESC LIMIT ?")
+        .all(v(sessionId), v(fetchN)) as unknown as MessageRow[];
     } else {
       // Tiebreaker: (created_at, id) so rows with identical createdAt still
       // page cleanly without skipping or duplicating.
-      const stmt = db.prepare(
-        `SELECT * FROM messages WHERE session_id = ?
-         AND (created_at < ? OR (created_at = ? AND id < ?))
-         ORDER BY created_at DESC, id DESC LIMIT ?`,
-      );
-      stmt.bind([v(sessionId), v(before), v(before), v(beforeId), v(fetchN)]);
-      while (stmt.step()) rows.push(rowToMessage(stmt.getAsObject() as unknown as MessageRow));
-      stmt.free();
+      rows = db
+        .prepare(
+          `SELECT * FROM messages WHERE session_id = ?
+           AND (created_at < ? OR (created_at = ? AND id < ?))
+           ORDER BY created_at DESC, id DESC LIMIT ?`,
+        )
+        .all(v(sessionId), v(before), v(before), v(beforeId), v(fetchN)) as unknown as MessageRow[];
     }
     const hasMore = rows.length === fetchN;
-    const page = hasMore ? rows.slice(1) : rows;
+    const page = hasMore ? rows.slice(0, limit) : rows;
     page.reverse();
-    return { messages: page, hasMore };
+    return { messages: page.map(rowToMessage), hasMore };
   },
 
   /** Incremental upsert: insert-or-update the given messages by primary key.
@@ -1093,7 +1051,7 @@ export const MessageRepo = {
   upsertMany(messages: MessageRecord[]): void {
     if (messages.length === 0) return;
     const db = getDb();
-    db.run("BEGIN");
+    db.exec("BEGIN");
     try {
       const stmt = db.prepare(
         `INSERT INTO messages (id, session_id, role, content, created_at) VALUES (?, ?, ?, ?, ?)
@@ -1104,12 +1062,11 @@ export const MessageRepo = {
            created_at = excluded.created_at`,
       );
       for (const m of messages) {
-        stmt.run([v(m.id), v(m.sessionId), v(m.role), v(JSON.stringify(m.content)), v(m.createdAt)]);
+        stmt.run(v(m.id), v(m.sessionId), v(m.role), v(JSON.stringify(m.content)), v(m.createdAt));
       }
-      stmt.free();
-      db.run("COMMIT");
+      db.exec("COMMIT");
     } catch (err) {
-      db.run("ROLLBACK");
+      db.exec("ROLLBACK");
       throw err;
     }
     persist();
@@ -1131,12 +1088,15 @@ export const MessageRepo = {
     messages: MessageRecord[],
   ): void {
     const db = getDb();
-    db.run("BEGIN");
+    db.exec("BEGIN");
     try {
-      db.run(
+      run(
         `DELETE FROM messages WHERE session_id = ?
          AND (created_at > ? OR (created_at = ? AND id >= ?))`,
-        [v(sessionId), v(cursor.createdAt), v(cursor.createdAt), v(cursor.id)],
+        v(sessionId),
+        v(cursor.createdAt),
+        v(cursor.createdAt),
+        v(cursor.id),
       );
       if (messages.length > 0) {
         const stmt = db.prepare(
@@ -1148,13 +1108,12 @@ export const MessageRepo = {
              created_at = excluded.created_at`,
         );
         for (const m of messages) {
-          stmt.run([v(m.id), v(m.sessionId), v(m.role), v(JSON.stringify(m.content)), v(m.createdAt)]);
+          stmt.run(v(m.id), v(m.sessionId), v(m.role), v(JSON.stringify(m.content)), v(m.createdAt));
         }
-        stmt.free();
       }
-      db.run("COMMIT");
+      db.exec("COMMIT");
     } catch (err) {
-      db.run("ROLLBACK");
+      db.exec("ROLLBACK");
       throw err;
     }
     persist();
@@ -1167,37 +1126,32 @@ export const MessageRepo = {
 
 export const SettingRepo = {
   get(key: string): string | null {
-    const db = getDb();
-    const stmt = db.prepare("SELECT value FROM settings WHERE key = ?");
-    stmt.bind([v(key)]);
-    const found = stmt.step();
-    const row = found ? (stmt.getAsObject() as { value: BindValue }) : undefined;
-    stmt.free();
+    const row = getDb().prepare("SELECT value FROM settings WHERE key = ?").get(v(key)) as
+      | { value: BindValue }
+      | undefined;
     return row ? String(row.value) : null;
   },
 
-  /** Read multiple keys in one pass. sql.js is synchronous so this is a single
-   *  tick — cheaper for the renderer than N parallel `setting.get` round-trips
-   *  (one IPC instead of N). Missing keys map to `null`. */
+  /** Read multiple keys in one pass. The driver is synchronous so this is a
+   *  single tick — cheaper for the renderer than N parallel `setting.get`
+   *  round-trips (one IPC instead of N). Missing keys map to `null`. */
   getMany(keys: string[]): Record<string, string | null> {
     const db = getDb();
     const out: Record<string, string | null> = {};
     const stmt = db.prepare("SELECT value FROM settings WHERE key = ?");
     for (const k of keys) {
-      stmt.bind([v(k)]);
-      const found = stmt.step();
-      out[k] = found ? String((stmt.getAsObject() as { value: BindValue }).value) : null;
-      stmt.reset();
+      const row = stmt.get(v(k)) as unknown as { value: BindValue } | undefined;
+      out[k] = row ? String(row.value) : null;
     }
-    stmt.free();
     return out;
   },
 
   /** Upsert a setting value. */
   set(key: string, value: string): void {
-    getDb().run(
+    run(
       "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-      [v(key), v(value)],
+      v(key),
+      v(value),
     );
     persist();
   },

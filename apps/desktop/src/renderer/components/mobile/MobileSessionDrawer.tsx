@@ -37,6 +37,7 @@ import { formatRelativeTime } from "@renderer/lib/time.js";
 import { useSessionStore } from "@renderer/stores/sessionStore.js";
 import { useI18n } from "@renderer/lib/i18n/index.js";
 import type { MessageId } from "@renderer/lib/i18n/core.js";
+import { normWorktreeKey, worktreeDisplayName } from "@renderer/lib/worktree.js";
 import { Input } from "@renderer/components/ui/index.js";
 import type { Project, Session } from "@contracts/session";
 import {
@@ -48,6 +49,7 @@ import {
   IconFolder,
   IconMessage,
   IconGitBranch,
+  IconGitFork,
   IconArchive,
   IconPin,
   IconPinnedFilled,
@@ -105,10 +107,13 @@ export function MobileSessionDrawer({
   const archivedSessionsByProject = useSessionStore((s) => s.archivedSessionsByProject);
   const pinnedSessions = useSessionStore((s) => s.pinnedSessions);
   const expandedProjects = useSessionStore((s) => s.expandedProjects);
+  const expandedWorktrees = useSessionStore((s) => s.expandedWorktrees);
+  const worktreeNames = useSessionStore((s) => s.worktreeNames);
   const runningBySession = useSessionStore((s) => s.runningBySession);
   const unreadBySession = useSessionStore((s) => s.unreadBySession);
 
   const toggleProjectExpanded = useSessionStore((s) => s.toggleProjectExpanded);
+  const toggleWorktreeExpanded = useSessionStore((s) => s.toggleWorktreeExpanded);
   const loadMoreSessions = useSessionStore((s) => s.loadMoreSessions);
   const startSession = useSessionStore((s) => s.startSession);
   const renameSession = useSessionStore((s) => s.renameSession);
@@ -196,8 +201,8 @@ export function MobileSessionDrawer({
   );
 
   const startNewSession = useCallback(
-    (projectId: string) => {
-      void startSession(projectId);
+    (projectId: string, worktreePath?: string) => {
+      void startSession(projectId, worktreePath ? { worktreePath } : undefined);
       onPickSession();
     },
     [startSession, onPickSession],
@@ -378,15 +383,27 @@ export function MobileSessionDrawer({
                 const sessions = sessionsByProject[p.id] ?? [];
                 // The cache is a two-section array (paginated LOCAL rows, then
                 // the full worktree section — see splitSessionSections). The
-                // stored total counts the LOCAL section only; the flat mobile
-                // list shows both, so the header/load-more counts add the
-                // loaded worktree rows back on.
+                // stored total counts the LOCAL section only; the header/load-
+                // more counts add the loaded worktree rows back on.
                 const localLoaded = sessions.filter((s) => !s.worktreePath).length;
                 const total =
                   (sessionsTotalByProject[p.id] ?? localLoaded) +
                   (sessions.length - localLoaded);
                 const hasMore = !!sessionsHasMoreByProject[p.id];
                 const expanded = !!expandedProjects[p.id];
+                // Same bucketing as the desktop tree's ProjectNode: sessions
+                // bound to one isolated checkout group under a collapsible
+                // directory node (Map insertion order = newest-active group
+                // first); local threads stay in the flat list below.
+                const buckets = new Map<string, { path: string; sessions: Session[] }>();
+                for (const s of sessions) {
+                  if (!s.worktreePath) continue;
+                  const key = normWorktreeKey(s.worktreePath);
+                  const bucket = buckets.get(key);
+                  if (bucket) bucket.sessions.push(s);
+                  else buckets.set(key, { path: s.worktreePath, sessions: [s] });
+                }
+                const worktreeGroups = Array.from(buckets.values());
                 return (
                   <section key={p.id} className="mb-1">
                     <ProjectHeader
@@ -402,7 +419,33 @@ export function MobileSessionDrawer({
                           <div className="px-3 py-2.5 text-sm text-content-subtle">暂无线程</div>
                         ) : (
                           <ul>
-                            {sessions.map((s) => renderSessionRow(s))}
+                            {/* Worktree groups FIRST (same shape as the
+                                desktop tree), then local threads. Groups start
+                                collapsed (absent expandedWorktrees key). */}
+                            {worktreeGroups.map((group) => {
+                              const key = normWorktreeKey(group.path);
+                              const groupExpanded = !!expandedWorktrees[key];
+                              return (
+                                <li key={key}>
+                                  <WorktreeGroupHeader
+                                    path={group.path}
+                                    displayName={worktreeDisplayName(group.path, worktreeNames)}
+                                    count={group.sessions.length}
+                                    expanded={groupExpanded}
+                                    onToggle={() => toggleWorktreeExpanded(group.path)}
+                                    onNewSession={() => startNewSession(p.id, group.path)}
+                                  />
+                                  {groupExpanded && (
+                                    <ul className="ml-3 border-l border-edge/60 pl-1">
+                                      {group.sessions.map((s) => renderSessionRow(s))}
+                                    </ul>
+                                  )}
+                                </li>
+                              );
+                            })}
+                            {sessions
+                              .filter((s) => !s.worktreePath)
+                              .map((s) => renderSessionRow(s))}
                             {hasMore && (
                               <li>
                                 <button
@@ -862,6 +905,61 @@ function SessionRow({
 function SessionRowIcon({ providerId }: { providerId: string }) {
   const { Icon, color } = getProviderIcon(providerId);
   return <Icon size={16} className={cn("shrink-0", color)} />;
+}
+
+/* ── Worktree group header — one collapsible directory node per isolated
+   checkout (same shape as the desktop tree's WorktreeGroupNode): tap toggles
+   expand, always-visible "+" starts a session bound to it (no hover on
+   touch). Members render nested underneath while expanded. ── */
+
+function WorktreeGroupHeader({
+  path,
+  displayName,
+  count,
+  expanded,
+  onToggle,
+  onNewSession,
+}: {
+  /** Raw worktree path — the title tooltip; the label is the (possibly
+   *  user-renamed) display name. */
+  path: string;
+  displayName: string;
+  count: number;
+  expanded: boolean;
+  onToggle: () => void;
+  onNewSession: () => void;
+}) {
+  const { t } = useI18n();
+  return (
+    <div className="flex items-stretch">
+      <button
+        type="button"
+        onClick={onToggle}
+        title={path}
+        className="flex min-h-[40px] min-w-0 flex-1 items-center gap-2 rounded-lg px-2 text-left active:bg-surface-hover"
+      >
+        <IconChevronRight
+          size={13}
+          className={cn("shrink-0 text-content-subtle transition-transform", expanded && "rotate-90")}
+        />
+        <IconGitFork size={14} className="shrink-0 text-accent/80" />
+        <span className="min-w-0 flex-1 truncate text-sm text-content-muted">{displayName}</span>
+        {count > 0 && (
+          <span className="shrink-0 rounded bg-surface-muted px-1 text-xs text-content-subtle">
+            {count}
+          </span>
+        )}
+      </button>
+      <button
+        type="button"
+        aria-label={t("layout.newSessionInWorktree")}
+        onClick={onNewSession}
+        className="flex w-11 shrink-0 items-center justify-center self-stretch rounded-lg text-content-subtle active:bg-surface-hover"
+      >
+        <IconPlus size={16} />
+      </button>
+    </div>
+  );
 }
 
 /* ── Project header — tap toggles expand, "+" starts a session in it. ── */

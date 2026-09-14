@@ -1,0 +1,21 @@
+<!doctype html><html><head><meta charset="utf-8"><title>b</title>
+<style>body{margin:0;background:#000}canvas{display:block;width:1440px}
+.g{position:absolute;inset:0;pointer-events:none}
+.g i{position:absolute;background:rgba(255,0,128,.6)}.g i.v{top:0;bottom:0;width:1px}.g i.h{left:0;right:0;height:1px}.g b{position:absolute;font:12px monospace;color:#f0f;background:#000c;padding:0 3px;z-index:9}
+.s{position:absolute;inset:0;background:#fff;mix-blend-mode:screen;pointer-events:none}</style></head><body>
+<div style="position:relative;display:inline-block">
+<canvas id="c" width="1440" height="900"></canvas><div class="s"><div class="g" id="g"></div></div></div>
+<script>
+const p=new URLSearchParams(location.search);
+const im=new Image(); im.onload=()=>{
+ const c=document.getElementById('c'),g=c.getContext('2d');
+ g.drawImage(im,0,0);
+ 
+ const g=document.getElementById('g'),W=1440,H=900;
+ for(let x=0;x<=W;x+=25){const e=document.createElement('i');e.className='v';e.style.left=x+'px';if(x%100)e.style.opacity=.4;g.appendChild(e);
+   if(x%100===0){const b=document.createElement('b');b.textContent=x;b.style.left=(x+2)+'px';b.style.top='2px';g.appendChild(b);}}
+ for(let y=0;y<=H;y+=25){const e=document.createElement('i');e.className='h';e.style.top=y+'px';if(y%100)e.style.opacity=.4;g.appendChild(e);
+   if(y%100===0){const b=document.createElement('b');b.textContent=y;b.style.left='2px';b.style.top=(y+2)+'px';g.appendChild(b);}}
+ document.title='B|'+im.naturalWidth+'x'+im.naturalHeight;
+}; im.src=p.get('src');
+</script></body></html>

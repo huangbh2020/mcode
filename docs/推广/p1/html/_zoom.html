@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>zoom</title>
+<style>
+  /* 放大镜:把成图的某一块按原始分辨率放大,用来核对文字/描边细节。
+     用法 _zoom.html#<file>@<x>,<y>,<w>,<h>,<zoom>
+     Read 工具会把大图缩到 1500px 显示,手写体的细笔画在缩放里会糊成
+     错误印象 —— 核对细节一律走这里。 */
+  html, body { margin: 0; padding: 0; background: #111; overflow: hidden; }
+  #wrap { position: relative; overflow: hidden; }
+  img { display: block; position: absolute; transform-origin: 0 0; image-rendering: auto; }
+</style>
+</head>
+<body>
+<div id="wrap"><img id="im" alt=""></div>
+<script>
+  const h = decodeURIComponent(location.hash.slice(1));
+  const m = h.match(/^(.*?)@(-?[\d.]+),(-?[\d.]+),([\d.]+),([\d.]+),([\d.]+)$/);
+  if (!m) { document.body.textContent = "bad hash"; }
+  else {
+    const [, src, x, y, w, hh, z] = m;
+    const zz = parseFloat(z);
+    const W = Math.round(w * zz), H = Math.round(hh * zz);
+    document.getElementById("wrap").style.width = W + "px";
+    document.getElementById("wrap").style.height = H + "px";
+    const im = document.getElementById("im");
+    im.onload = () => { document.title = "OK " + W + "x" + H; };
+    im.src = src;
+    im.style.width = (im.naturalWidth || 0) + "px";
+    im.style.transform = `translate(${-x * zz}px, ${-y * zz}px) scale(${zz})`;
+  }
+</script>
+</body>
+</html>

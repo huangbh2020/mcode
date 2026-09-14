@@ -1,9 +1,10 @@
-import { useState, useRef, useEffect, useMemo, memo, useCallback } from "react";
+import { useState, useRef, useEffect, useLayoutEffect, useMemo, memo, useCallback } from "react";
 import { cn } from "@renderer/lib/cn.js";
 import {
   IconPlayerStop,
   IconSend2,
   IconChevronDown,
+  IconChevronUp,
   IconArrowDown,
   IconAlertTriangle,
   IconSettings,
@@ -4062,6 +4063,16 @@ function ChatPaneForSession({
   );
 }
 
+/** Lines of a user prompt visible before the bubble collapses behind the
+ *  expand/collapse toggle. The clamp height itself is pure CSS
+ *  (calc(n × --chat-md-leading × --chat-font-size)), so this constant is
+ *  only documentation for the budget unless the CSS calc changes with it. */
+const USER_MSG_VISIBLE_LINES = 5;
+/** User messages the reader manually expanded, by id — module-level so the
+ *  choice survives LegendList cell remounts (scroll far away and back and
+ *  the expanded prompt stays expanded; everything else re-collapses). */
+const expandedUserMessages = new Set<string>();
+
 /** One row in the stream, with role styling. The "You"/"Claude" labels
  *  were removed per design - alignment (user right, assistant left) and
  *  bubble styling carry the role signal. A copy button sits BELOW the
@@ -4170,6 +4181,60 @@ const MessageRow = memo(function MessageRow({
   // rows NOT currently being edited (the editor replaces the row).
   const showEdit = isUser && canEdit && !isEditing;
 
+  // ── User prompt overflow (5-line default, click to expand/collapse) ──
+  // Long prompts clamp to a 5-line window with a bottom fade; clicking the
+  // bubble expands it, clicking again collapses it. Interactive children
+  // (file links, attachment/image buttons) and text-selection drags are
+  // exempt — see onBubbleClick.
+  const [userExpanded, setUserExpanded] = useState(() => isUser && expandedUserMessages.has(msg.id));
+  const [userOverflow, setUserOverflow] = useState(false);
+  const userContentRef = useRef<HTMLDivElement | null>(null);
+  useLayoutEffect(() => {
+    if (!isUser) return;
+    const el = userContentRef.current;
+    if (!el) return;
+    // Overflow = full content height vs the 5-line budget. scrollHeight is
+    // the content height regardless of the clamp, so the same comparison
+    // works collapsed AND expanded (a remount while expanded — module-set
+    // state — must still yield a verdict, or the collapse chip would never
+    // appear). Budget mirrors the CSS calc on the clamp below: the prose
+    // line-height comes from .chat-md (density-driven); `normal` on
+    // non-markdown content falls back to fontSize × 1.5. The ResizeObserver
+    // re-runs it when fonts/images/katex change the height after first
+    // paint. Same trick as the code-block collapse in MessageBlocks.
+    const measure = () => {
+      const cs = getComputedStyle(el.querySelector(".chat-md") ?? el);
+      const lh = parseFloat(cs.lineHeight) || parseFloat(cs.fontSize) * 1.5;
+      setUserOverflow(el.scrollHeight > lh * USER_MSG_VISIBLE_LINES + 1);
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [isUser]);
+  const toggleUserExpanded = useCallback(() => {
+    setUserExpanded((prev) => {
+      const next = !prev;
+      if (next) expandedUserMessages.add(msg.id);
+      else expandedUserMessages.delete(msg.id);
+      return next;
+    });
+  }, [msg.id]);
+  const onBubbleClick = useCallback(
+    (e: React.MouseEvent<HTMLDivElement>) => {
+      if (!userOverflow) return;
+      const target = e.target as HTMLElement | null;
+      // Interactive children keep their own behavior (file links open files,
+      // images open the lightbox); a selection drag ending on the bubble is
+      // not a toggle click.
+      if (target?.closest("a,button,input,textarea,select,[role='button']")) return;
+      const sel = window.getSelection();
+      if (sel && !sel.isCollapsed) return;
+      toggleUserExpanded();
+    },
+    [userOverflow, toggleUserExpanded],
+  );
+
   // ── Inline edit mode ──
   // When editing, the normal bubble is replaced by an editor with a textarea
   // prefilled with the original typed text (attachment blocks are preserved
@@ -4222,22 +4287,68 @@ const MessageRow = memo(function MessageRow({
           // near-black dark surface it isn't (see --user-bubble-alpha).
           // 方案A: directional corner radii (tight bottom-right corner points
           // at the sender) + the freshness-gated slide-in above.
+          // `relative` anchors the collapsed-state expand pill.
           title={isUser ? fmtFullDateTime(msg.createdAt) : undefined}
+          onClick={isUser && userOverflow ? onBubbleClick : undefined}
           className={
             isUser
-              ? "user-bubble-fill overflow-hidden rounded-[13px_13px_5px_13px] px-3 py-2 text-content [font-size:var(--chat-font-size)]" +
-                (freshBubble ? " chat-bubble-in" : "")
+              ? "relative user-bubble-fill overflow-hidden rounded-[13px_13px_5px_13px] px-3 py-2 text-content [font-size:var(--chat-font-size)]" +
+                (freshBubble ? " chat-bubble-in" : "") +
+                (userOverflow ? " cursor-pointer" : "")
               : "text-content [font-size:var(--chat-font-size)]"
           }
         >
-          <MessageBlocks blocks={renderBlocks} beforeMap={beforeMap} isStreamingTail={isStreamingTail} onOpenPlan={onOpenPlan} projectPath={projectPath} />
-          {/* Streaming caret at the bottom of the content while this message
-              is still receiving deltas — 方案A replaces the spinner glyph
-              with a blinking caret (the reply is being typed). */}
-          {isStreamingTail && (
-            <div className="mt-1 flex items-center gap-1.5">
-              <span className="chat-caret" aria-hidden />
-            </div>
+          {/* Collapse clamp: 5 lines of the density-driven prose leading.
+              The mask fades the cut instead of a hard edge (works over the
+              tinted bubble, unlike a surface-colored gradient). */}
+          <div
+            ref={isUser ? userContentRef : undefined}
+            className="relative"
+            style={
+              isUser && userOverflow && !userExpanded
+                ? {
+                    maxHeight: `calc(${USER_MSG_VISIBLE_LINES} * var(--chat-md-leading) * var(--chat-font-size))`,
+                    overflow: "hidden",
+                    WebkitMaskImage: "linear-gradient(to bottom, black calc(100% - 2.25em), transparent)",
+                    maskImage: "linear-gradient(to bottom, black calc(100% - 2.25em), transparent)",
+                  }
+                : undefined
+            }
+          >
+            <MessageBlocks blocks={renderBlocks} beforeMap={beforeMap} isStreamingTail={isStreamingTail} onOpenPlan={onOpenPlan} projectPath={projectPath} />
+            {/* Streaming caret at the bottom of the content while this message
+                is still receiving deltas — 方案A replaces the spinner glyph
+                with a blinking caret (the reply is being typed). */}
+            {isStreamingTail && (
+              <div className="mt-1 flex items-center gap-1.5">
+                <span className="chat-caret" aria-hidden />
+              </div>
+            )}
+          </div>
+          {/* Expand/collapse affordances — mirror the code-block collapse
+              pills in MessageBlocks so both fold surfaces read alike. */}
+          {isUser && userOverflow && (
+            userExpanded ? (
+              <div className="mt-1 flex justify-end">
+                <button
+                  type="button"
+                  onClick={toggleUserExpanded}
+                  className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-content-subtle transition-colors hover:bg-surface-hover/60 hover:text-content-muted [font-size:var(--chat-fs-xxs)]"
+                  title={t("chatStream.userMsg.collapse")}
+                >
+                  <IconChevronUp size={10} /> {t("chatStream.userMsg.collapse")}
+                </button>
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={toggleUserExpanded}
+                className="absolute bottom-1.5 left-1/2 inline-flex -translate-x-1/2 items-center gap-1 rounded-full border border-edge bg-surface px-2.5 py-0.5 text-content-muted shadow-sm transition-colors hover:bg-surface-hover hover:text-content [font-size:var(--chat-fs-xxs)]"
+                title={t("chatStream.userMsg.expand")}
+              >
+                <IconChevronDown size={12} /> {t("chatStream.userMsg.expand")}
+              </button>
+            )
           )}
         </div>
         {/* Action row BELOW the content bubble - outside its border.

@@ -33,6 +33,7 @@ import { app } from "electron";
 import { BrowserManager, type BrowserDownloadEntry } from "./BrowserManager.js";
 import { SNAPSHOT_DISPLAY_CAP } from "./snapshotScript.js";
 import { log } from "@main/lib/logger.js";
+import { registerImageArtifact } from "@main/lib/imageArtifacts.js";
 import { SettingRepo } from "@main/store/repositories.js";
 import {
   BROWSER_SCREENSHOT_DIR_SETTING_KEY,
@@ -140,6 +141,11 @@ export function saveScreenshotToDisk(
     const safeCallId = opts.toolCallId.replace(/[^\w.-]/g, "_");
     const filePath = join(turnDir, `${ts}-${safeCallId}.png`);
     writeFileSync(filePath, Buffer.from(data, "base64"));
+    // Remember these bytes → this file so the lightbox's "show in file
+    // manager" action lands on the real screenshot instead of a cache copy.
+    // Content-addressed, so it also covers the Claude path, where the image
+    // block's toolCallId is the SDK's tool_use id (not the one we were handed).
+    registerImageArtifact(data, filePath);
     log.info(`browser screenshot saved: ${filePath}`);
     return filePath;
   } catch (err) {

@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>probe</title>
+<style>html,body{margin:0;background:#111;color:#ddd;font:13px monospace}</style>
+</head>
+<body>
+<pre id="o">…</pre>
+<script>
+/* 结构探针:在源截图里找「贯穿整段的竖线 / 横线」,即手绘卡片/面板的边框。
+   用途 —— 在成图上画手绘圈时,要把圈对准真实的卡片,不能靠肉眼估。
+   参数(URL query):src, x0, x1, y0, y1, axis(v|h), th(阈值), ratio(占比)
+   输出:每条线的像素位置与平均颜色。 */
+const q = new URLSearchParams(location.search);
+const im = new Image();
+im.onload = () => {
+  const W = im.naturalWidth, H = im.naturalHeight;
+  const c = document.createElement('canvas');
+  c.width = W; c.height = H;
+  const g = c.getContext('2d');
+  g.drawImage(im, 0, 0);
+  const d = g.getImageData(0, 0, W, H).data;
+  const px = (x, y) => { const i = (y * W + x) * 4; return [d[i], d[i+1], d[i+2]]; };
+  const lum = (x, y) => { const p = px(x, y); return (p[0] + p[1] + p[2]) / 3; };
+
+  const x0 = +(q.get('x0') ?? 0), x1 = +(q.get('x1') ?? W);
+  const y0 = +(q.get('y0') ?? 0), y1 = +(q.get('y1') ?? H);
+  const axis = q.get('axis') ?? 'v';
+  const th = +(q.get('th') ?? 10);
+  const ratio = +(q.get('ratio') ?? 0.6);
+
+  const N = axis === 'v' ? (x1 - x0) : (y1 - y0);
+  const M = axis === 'v' ? (y1 - y0) : (x1 - x0);
+  const hits = [];
+  for (let i = 0; i < N; i++) {
+    // 沿扫描线取基准色(中位亮度),统计偏离超过阈值的比例
+    const vals = [];
+    for (let j = 0; j < M; j++) {
+      vals.push(axis === 'v' ? lum(x0 + i, y0 + j) : lum(x0 + j, y0 + i));
+    }
+    const sorted = [...vals].sort((a, b) => a - b);
+    const bg = sorted[M >> 1];
+    let n = 0, rs = 0, gs = 0, bs = 0;
+    for (let j = 0; j < M; j++) {
+      if (Math.abs(vals[j] - bg) > th) {
+        n++;
+        const p = axis === 'v' ? px(x0 + i, y0 + j) : px(x0 + j, y0 + i);
+        rs += p[0]; gs += p[1]; bs += p[2];
+      }
+    }
+    if (n / M > ratio) {
+      const hex = [rs, gs, bs].map(v => Math.round(v / n).toString(16).padStart(2, '0')).join('');
+      hits.push({ pos: (axis === 'v' ? x0 : y0) + i, hex });
+    }
+  }
+  // 相邻位置合并为一条线
+  const groups = [];
+  for (const h of hits) {
+    const last = groups[groups.length - 1];
+    if (last && h.pos - last.end <= 2) { last.end = h.pos; last.hex = h.hex; }
+    else groups.push({ start: h.pos, end: h.pos, hex: h.hex });
+  }
+  const txt = groups.map(g =>
+    (g.end - g.start >= 2 ? g.start + '..' + g.end : String(g.start)) + '/#' + g.hex
+  ).join('  ');
+  document.getElementById('o').textContent =
+    `${axis === 'v' ? 'x' : 'y'}-lines in ${W}x${H} ` +
+    `[${x0}..${x1} x ${y0}..${y1}] th=${th} ratio=${ratio}\n  ${txt || '(none)'}`;
+  document.title = 'PROBE_DONE';
+};
+im.onerror = () => { document.getElementById('o').textContent = 'LOAD FAIL: ' + q.get('src'); };
+im.src = q.get('src');
+</script>
+</body>
+</html>

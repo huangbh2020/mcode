@@ -1,0 +1,22 @@
+<!doctype html><html><head><meta charset="utf-8"><title>grid</title>
+<style>
+ body{margin:0;background:#000;}
+ .w{position:relative;display:inline-block;}
+ img{display:block;width:1440px;}
+ .g{position:absolute;inset:0;pointer-events:none;}
+ .g i{position:absolute;background:rgba(255,0,128,.55);}
+ .g i.v{top:0;bottom:0;width:1px;}
+ .g i.h{left:0;right:0;height:1px;}
+ .g b{position:absolute;font:11px monospace;color:#ff0080;background:#000a;padding:0 2px;}
+</style></head><body>
+<div class="w"><img src="" id="im"><div class="g" id="g"></div></div>
+<script>
+const params=new URLSearchParams(location.search);
+const src=params.get('src'); document.getElementById('im').src=src;
+const W=1440,H=900,g=document.getElementById('g');
+for(let x=0;x<=W;x+=50){const e=document.createElement('i');e.className='v';e.style.left=x+'px';if(x%200)e.style.opacity=.35;g.appendChild(e);
+  if(x%200===0){const b=document.createElement('b');b.textContent=x;b.style.left=(x+2)+'px';b.style.top='2px';g.appendChild(b);}}
+for(let y=0;y<=H;y+=50){const e=document.createElement('i');e.className='h';e.style.top=y+'px';if(y%200)e.style.opacity=.35;g.appendChild(e);
+  if(y%200===0){const b=document.createElement('b');b.textContent=y;b.style.left='2px';b.style.top=(y+2)+'px';g.appendChild(b);}}
+document.title='GRID '+W+'x'+H;
+</script></body></html>

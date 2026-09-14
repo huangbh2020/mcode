@@ -23,6 +23,7 @@
 import { AUTO_ARCHIVE_SETTING_KEY, parseAutoArchiveConfig } from "@contracts/ipc";
 import { SettingRepo, SessionRepo } from "@main/store/repositories.js";
 import { awaitDb } from "@main/store/db.js";
+import { runtimeManager } from "@main/claude/RuntimeManager.js";
 import { broadcastSessionChanged } from "@main/lib/sessionSync.js";
 import { log } from "@main/lib/logger.js";
 
@@ -60,6 +61,12 @@ export async function runAutoArchive(): Promise<number> {
     if (session.updatedAt >= Date.now() - days * DAY_MS) continue;
 
     SessionRepo.setArchived(session.id, true);
+    // Release the runtime along with the row (manual archive does the same):
+    // without it the auto-archived session's in-memory state — transcripts,
+    // usage history, last turn's file snapshot — would linger until delete.
+    // The candidates above are guaranteed idle, so dispose's interrupt is a
+    // no-op here.
+    runtimeManager.dispose(session.id);
     const row = SessionRepo.get(session.id);
     if (!row) continue; // deleted concurrently — nothing to broadcast
     broadcastSessionChanged(row);

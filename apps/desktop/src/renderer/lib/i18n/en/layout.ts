@@ -177,6 +177,7 @@ export const en = {
   "layout.copyPairingLinkTitle": "Copy the pairing link to test it in a desktop browser",
   "layout.copyLink": "Copy link",
   "layout.verifyCode": "Verification code",
+  "layout.pairRestoring": "Confirming the paired device…",
   "layout.pairingExpired": "Expired, refreshing…",
   "layout.pairingExpiresIn": "Expires in about {time}",
   "layout.lanAddress": "LAN address: ",
@@ -208,5 +209,8 @@ export const en = {
   "layout.image.copy": "Copy image",
   "layout.image.download": "Download image",
   "layout.image.downloadName": "screenshot-{stamp}.png",
+  "layout.image.reveal": "Show in file manager",
+  "layout.image.revealed": "Opened containing folder",
+  "layout.image.revealFailed": "Couldn't open the containing folder",
   "layout.image.closePreview": "Close preview",
 } as const;

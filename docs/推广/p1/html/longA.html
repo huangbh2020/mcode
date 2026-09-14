@@ -1,0 +1,211 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<!-- 不写 page-height:长图高度交给 render.sh 量 body,改文案后自动跟随 -->
+<title>长图 A · 一个人用 AI 从 0 做成一件事的 7 步</title>
+<link rel="stylesheet" href="base.css">
+<style>
+  /* ── 长图 A(P1 第 5 张 · 收藏钩子)────────────────────────────
+     计划书第五节:通用,不绑 Mcode —— 做软件的、做表的、写文档的都能
+     照着走。画布 1080 × N(这里是 1080 × 2500)。
+     排版语汇:一条手绘虚线书脊贯穿全图,7 个手抖圆圈序号挂在书脊上,
+     右边是卡片。整张读起来像「笔记本里撕下来的一页」。
+     布局走正常流(不是绝对定位),书脊用 repeat-y 贴片自动适配高度。 */
+  body { position: relative; padding: 78px 0 66px; }
+
+  .wrap { position: relative; padding: 0 96px; }
+
+  /* ── 页头 ────────────────────────────────────────────────────── */
+  .hd .kick {
+    display: inline-block; font-size: 26px; letter-spacing: 6px;
+    color: rgb(var(--accent-strong));
+    border-bottom: 2px solid rgb(var(--accent) / 0.4);
+    padding-bottom: 8px;
+  }
+  .hd h1 {
+    margin: 28px 0 0; font-size: 82px; line-height: 1.34;
+    font-weight: 700; letter-spacing: 2px;
+  }
+  .hd h1 .mark {
+    background-image: linear-gradient(to bottom,
+      transparent 62%, rgb(var(--hl) / 0.55) 62%,
+      rgb(var(--hl) / 0.55) 96%, transparent 96%);
+    padding: 0 4px 2px;
+  }
+  .hd .sub { margin-top: 26px; font-size: 32px; line-height: 1.62; color: rgb(var(--content-muted)); }
+
+  /* ── 步骤区 ──────────────────────────────────────────────────── */
+  .steps { position: relative; margin-top: 58px; }
+
+  /* 书脊:一枚手绘短划线贴片纵向平铺 —— 高度随内容自动延伸,
+     不必预先算好像素(这是从「绝对定位画死长度」改过来的原因)。 */
+  .steps::before {
+    content: "";
+    position: absolute;
+    left: 48px;                     /* 相对 .wrap,即画布上的 144px */
+    top: 26px; bottom: 26px;
+    width: 11px;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='11' height='26'%3E%3Cpath d='M 5.5 0.5 C 4.6 4, 6.2 8, 5.4 12.5' fill='none' stroke='%23b2a790' stroke-width='3.2' stroke-linecap='round'/%3E%3C/svg%3E");
+    background-repeat: repeat-y;
+    z-index: 0;
+  }
+
+  .step { position: relative; margin-bottom: 42px; }
+
+  /* 序号:手抖圆圈(方框底 + SVG 椭圆描边,压在书脊上) */
+  .step .no {
+    position: absolute; left: 0; top: 36px;
+    width: 104px; height: 104px; z-index: 3;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 46px; font-weight: 700; color: rgb(var(--accent-strong));
+    background: rgb(var(--surface));
+    border-radius: var(--sk-r-sm);
+  }
+  .step .no svg { position: absolute; inset: -9px; }
+
+  /* 卡片本体:交给正常流决定高度,内容多就长一点 */
+  .step .box {
+    margin-left: 148px;             /* 相对 .wrap,即画布上的 244px */
+    padding: 34px 42px 32px;
+    background: rgb(var(--surface));
+    border: 1.5px solid rgb(var(--edge));
+    border-radius: var(--sk-r-md);
+    box-shadow: var(--sk-sh-pop);
+  }
+  .step:nth-child(odd) .box { transform: rotate(-0.22deg); }
+  .step:nth-child(even) .box { transform: rotate(0.22deg); }
+
+  .step h3 { margin: 0 0 15px; font-size: 40px; line-height: 1.3; font-weight: 700; letter-spacing: 1px; }
+  .step p { margin: 0; font-size: 28px; line-height: 1.64; color: rgb(var(--content-muted)); }
+  .step p b { color: rgb(var(--content)); font-weight: 700; }
+
+  /* ── 页脚 ────────────────────────────────────────────────────── */
+  .ft { margin-top: 52px; }
+  .ft .warn { margin: 34px 0 30px; font-size: 31px; line-height: 1.62; }
+  .ft .warn .acc { color: rgb(var(--accent-strong)); font-weight: 700; }
+  .ft .cta {
+    display: inline-block; font-size: 40px; font-weight: 700; letter-spacing: 1px;
+    padding: 18px 34px;
+    border: 2px solid rgb(var(--accent) / 0.55);
+    border-radius: var(--sk-r-sm);
+    background: rgb(var(--accent) / 0.09);
+    color: rgb(var(--accent-strong));
+  }
+  .sign {
+    position: absolute; left: 0; bottom: 0; width: 1080px;
+    text-align: center; font-size: 26px; letter-spacing: 2px;
+    color: rgb(var(--content-subtle)); z-index: 6;
+  }
+</style>
+</head>
+<body>
+
+  <!-- 手绘圆圈:七个序号复用同一枚描边(抖动由滤镜给,尺寸完全一致) -->
+  <svg width="0" height="0" style="position:absolute">
+    <defs>
+      <filter id="wob">
+        <feTurbulence type="fractalNoise" baseFrequency="0.021 0.034"
+                      numOctaves="2" seed="11" result="n"/>
+        <feDisplacementMap in="SourceGraphic" in2="n" scale="3"
+                           xChannelSelector="R" yChannelSelector="G"/>
+      </filter>
+      <g id="ring">
+        <ellipse cx="60" cy="60" rx="52" ry="50" filter="url(#wob)"
+                 fill="none" stroke="rgb(8 140 105)" stroke-width="4.5"/>
+      </g>
+    </defs>
+  </svg>
+
+  <div class="wrap">
+    <div class="hd">
+      <div class="kick">我 的 做 法</div>
+      <h1>一个人用 AI<br><span class="mark">从 0 做成一件事</span>的 7 步</h1>
+      <div class="sub">不管你是做软件的，还是想用 AI 做点别的<br>这 7 步都能照着走</div>
+    </div>
+
+    <div class="steps">
+
+      <div class="step">
+        <div class="no">1<svg width="122" height="122" viewBox="0 0 120 120"><use href="#ring"/></svg></div>
+        <div class="box">
+          <h3>先写「做完长什么样」</h3>
+          <p>一句话描述成品形态和给谁用。<b>不写需求清单</b>——清单是给执行者的，
+             而你这时候还没想清楚要什么。</p>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="no">2<svg width="122" height="122" viewBox="0 0 120 120"><use href="#ring"/></svg></div>
+        <div class="box">
+          <h3>切成能独立验证的小块</h3>
+          <p>每块单独能跑通再往下走。<b>别一口气全铺开</b>——一次铺太多，
+             出错时你连是哪一块崩的都找不到。</p>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="no">3<svg width="122" height="122" viewBox="0 0 120 120"><use href="#ring"/></svg></div>
+        <div class="box">
+          <h3>先要方案，再动手</h3>
+          <p>让它先说打算怎么做，<b>你点头了再干</b>。这一步最容易被跳过，
+             也是最能省时间的一步——方案层改一句话，比做完再改便宜得多。</p>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="no">4<svg width="122" height="122" viewBox="0 0 120 120"><use href="#ring"/></svg></div>
+        <div class="box">
+          <h3>一块一验，不攒到最后</h3>
+          <p>每块做完立刻自己看一遍。<b>问题都是滚雪球来的</b>，
+             攒到最后一起验，等于让雪球滚到山脚才发现方向错了。</p>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="no">5<svg width="122" height="122" viewBox="0 0 120 120"><use href="#ring"/></svg></div>
+        <div class="box">
+          <h3>卡住就换描述方式</h3>
+          <p>说现象（「点了没反应」），<b>不说结论</b>（「这里坏了吧」）。
+             你给的结论会把它的排查方向带偏，现象不会。</p>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="no">6<svg width="122" height="122" viewBox="0 0 120 120"><use href="#ring"/></svg></div>
+        <div class="box">
+          <h3>定期让它通读全项目</h3>
+          <p>改到后面它会自己乱——前后不一致、重复实现、旧代码没清掉。
+             <b>定期拉回来看一眼</b>，比出问题再回头找便宜。</p>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="no">7<svg width="122" height="122" viewBox="0 0 120 120"><use href="#ring"/></svg></div>
+        <div class="box">
+          <h3>交付前自己从头走一遍</h3>
+          <p>把它做的每个功能当第一次用那样点一遍。<b>最后一个用户是你自己</b>，
+             不是 AI——它说「已完成」不等于真的能用。</p>
+        </div>
+      </div>
+
+    </div>
+
+    <div class="ft">
+      <svg width="888" height="12" viewBox="0 0 888 12">
+        <path d="M 2 7 C 150 2, 300 11, 450 6 C 600 1, 750 10, 886 5"
+              fill="none" stroke="rgb(199 189 168)" stroke-width="2.5" stroke-linecap="round"/>
+      </svg>
+      <div class="warn">
+        这 7 步里，最容易被跳过的是第 3 步。<br>
+        我在这上面<span class="acc">吃过最大的亏</span>——
+        它闷头做了两个小时，方向从一开始就是错的。
+      </div>
+      <div class="cta">先收藏，卡住的时候翻出来对一遍</div>
+    </div>
+  </div>
+
+  <div class="sign">黄同学｜一个人用 AI 做软件</div>
+  <div class="grain"></div>
+</body>
+</html>

@@ -1,33 +1,50 @@
 /**
- * SQLite persistence layer (sql.js / WASM-compiled-to-asm.js).
+ * SQLite persistence layer (better-sqlite3, native driver).
  *
- * Why sql.js instead of better-sqlite3? better-sqlite3 is a native addon and
- * its prebuilt binary didn't match Electron's ABI on this machine, with no
- * MSVC toolchain to rebuild it. sql.js is pure JavaScript (we use the asm.js
- * build so there's not even a .wasm to load), so it runs anywhere with zero
- * native compilation — clone and `pnpm dev` works for everyone.
+ * History: P1 used sql.js (SQLite compiled to asm.js) so `pnpm dev` worked on
+ * any machine with zero native compilation. sql.js is an in-memory database
+ * that flushes by exporting the WHOLE file (`db.export()`) on every write —
+ * which made the main process's RSS a linear function of database size: with
+ * a ~210MB history the export copies alone pushed main to ~1.6GB (memory
+ * analysis of 2026-09-14). This machine now has an MSVC toolchain, so the
+ * original "no way to compile native addons" constraint is gone and we run
+ * better-sqlite3: real SQLite accessing the file page-by-page, memory bounded
+ * by the page cache instead of the whole database.
  *
- * Trade-off: the database lives in memory and we flush it to a file on writes
- * (see `persist()`). For our workload (session/message rows, low write rate)
- * this is instant and the file is always consistent.
+ * The database FILE is unchanged — sql.js wrote standard SQLite format, so an
+ * existing claude-gui.db opens as-is. On the first start after this migration
+ * a one-time backup copy (`claude-gui.db.sqljs-era.bak`) is written before the
+ * new driver opens the file; delete it once you trust the new build.
+ *
+ * ABI: better-sqlite3 is a native addon and the binary under node_modules
+ * must match ELECTRON's ABI (NODE_MODULE_VERSION 130 for Electron 33), not
+ * plain Node's. `pnpm install` re-provisions a Node-ABI binary (its own
+ * postinstall builds for the running Node), so `pnpm-workspace.yaml` allows
+ * better-sqlite3's build scripts and our `scripts/ensure-better-sqlite3-electron-abi.mjs`
+ * postinstall (apps/desktop/package.json) swaps in the Electron prebuild after
+ * every install. Symptom when that step is skipped: main crashes at startup
+ * with "was compiled against a different Node.js version".
+ *
+ * Write model: every statement commits straight to the WAL (journal_mode=WAL,
+ * synchronous=NORMAL — durable across app crashes; a power cut may roll back
+ * the tail end, the standard trade-off for desktop apps). The old `persist()`
+ * export-and-write dance is gone, but the call stays as a no-op so the
+ * repository code reads the same as it always did.
  */
 import { app } from "electron";
-import initSqlJs, { type Database, type SqlJsStatic } from "sql.js/dist/sql-asm.js";
+import Database from "better-sqlite3";
 import { join } from "node:path";
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
+import { copyFileSync, existsSync } from "node:fs";
 import { log } from "@main/lib/logger.js";
 
-let SQL: SqlJsStatic | null = null;
-let db: Database | null = null;
+let db: Database.Database | null = null;
 let dbPath: string | null = null;
-/** True once persist() is already scheduled - collapses rapid writes into one flush. */
-let persistPending = false;
 
 /**
- * Resolves once `initDb()` has finished loading sql.js + opening the file +
- * migrating. IPC handlers `await` this before touching the DB so the window
- * can be created before DB init completes (startup decoupling). Null until
- * `initDb()` is first called; `awaitDb()` then returns a resolved promise.
+ * Resolves once `initDb()` has finished opening the file + migrating. IPC
+ * handlers `await` this before touching the DB so the window can be created
+ * before DB init completes (startup decoupling). Null until `initDb()` is
+ * first called; `awaitDb()` then returns a resolved promise.
  */
 let dbReadyPromise: Promise<void> | null = null;
 
@@ -38,45 +55,61 @@ export function awaitDb(): Promise<void> {
   return dbReadyPromise ?? Promise.resolve();
 }
 
+/** One-time safety net for the sql.js → better-sqlite3 migration: copy the
+ *  database file before the new driver opens it for the first time. The copy
+ *  doubles as the marker — once it exists this never runs again. Failures are
+ *  logged but not fatal: the backup guards against a buggy driver, not a
+ *  correctness requirement, and must not block startup. */
+function backupOnceBeforeMigration(path: string): void {
+  const backupPath = `${path}.sqljs-era.bak`;
+  if (existsSync(backupPath)) return;
+  try {
+    copyFileSync(path, backupPath);
+    log.info(`sqlite: one-time pre-migration backup written: ${backupPath}`);
+  } catch (err) {
+    log.warn(`sqlite: pre-migration backup failed (continuing): ${(err as Error).message}`);
+  }
+}
+
 /** Initialize (or reuse) the singleton database. Must be called after
- * `app.whenReady()` (uses `app.getPath`). Loads the existing file if present,
- * else creates empty.
+ * `app.whenReady()` (uses `app.getPath`). Opens the existing file if present,
+ * else creates empty. The work itself is synchronous; the Promise keeps the
+ * historical async contract (`awaitDb()` / `void initDb()` callers unchanged).
  *
  * Returns a Promise<Database> for callers that need the handle, but also
  * populates `dbReadyPromise` so IPC handlers can `await awaitDb()` without
  * holding the handle. Safe to fire-and-forget (`void initDb()`) to start DB
  * init in the background while the window loads. */
-export function initDb(): Promise<Database> {
+export function initDb(): Promise<Database.Database> {
   if (db) return Promise.resolve(db);
   if (dbReadyPromise) return dbReadyPromise.then(() => db!);
 
   dbReadyPromise = (async () => {
-    SQL = await initSqlJs();
     dbPath = join(app.getPath("userData"), "claude-gui.db");
-
-    if (existsSync(dbPath)) {
-      db = new SQL.Database(new Uint8Array(readFileSync(dbPath)));
-      log.info(`sqlite opened from existing file: ${dbPath}`);
-    } else {
-      db = new SQL.Database();
-      log.info(`sqlite created new database: ${dbPath}`);
-    }
-    db.run("PRAGMA foreign_keys = ON");
+    if (existsSync(dbPath)) backupOnceBeforeMigration(dbPath);
+    db = new Database(dbPath);
+    // WAL: writers append to -wal instead of rewriting the main file; on
+    // last-connection close SQLite checkpoints the WAL back in and removes
+    // the sidecar files, so the .db alone stays complete for backups/copying.
+    db.pragma("journal_mode = WAL");
+    db.pragma("synchronous = NORMAL");
+    db.pragma("foreign_keys = ON");
     migrate(db);
+    log.info(`sqlite opened (better-sqlite3, WAL): ${dbPath}`);
   })();
 
   return dbReadyPromise.then(() => db!);
 }
 
 /** Get the initialized connection. Throws if initDb() hasn't resolved yet. */
-export function getDb(): Database {
+export function getDb(): Database.Database {
   if (!db) throw new Error("getDb() called before initDb() resolved");
   return db;
 }
 
 /** Create tables if missing. Idempotent — safe on every startup. */
-function migrate(database: Database): void {
-  database.run(`
+function migrate(database: Database.Database): void {
+  database.exec(`
     CREATE TABLE IF NOT EXISTS projects (
       id          TEXT PRIMARY KEY,
       name        TEXT NOT NULL,
@@ -175,7 +208,7 @@ function migrate(database: Database): void {
   addColumnIfMissing(database, "projects", "sort_order", "INTEGER NOT NULL DEFAULT 0");
   // Pin timestamp for the left bar's pinned-projects section (NULL = not
   // pinned). Pinned projects leave the flat list / their group and render
-  // above the tree, most recent pin first; sort_order is untouched so
+  // above the tree, most recent pin first; sort_order is untouched so the
   // unpinning returns the project to its drag-order position. Mirrors
   // sessions.pinned_at above.
   addColumnIfMissing(database, "projects", "pinned_at", "INTEGER");
@@ -184,8 +217,20 @@ function migrate(database: Database): void {
   // single-column idx_messages_session above serves the same queries but
   // requires a sort; this index lets ORDER BY created_at LIMIT ? satisfy
   // cursor pagination without a filesort. Idempotent.
-  database.run(
+  database.exec(
     "CREATE INDEX IF NOT EXISTS idx_messages_session_created ON messages(session_id, created_at)",
+  );
+
+  // One-time legacy hygiene (2026-09-14 migration): sql.js never actually
+  // enforced `PRAGMA foreign_keys = ON`, so hard-deleting a session left its
+  // messages behind. This database held 358 such orphans — rows no UI path
+  // can ever reach (the parent chat is gone). better-sqlite3 enforces the FK,
+  // so new orphans can't form; this sweep removes the legacy garbage.
+  // Idempotent: a no-op on clean databases. (Orphan SESSIONS — project row
+  // deleted under the same hole — are deliberately KEPT: they may hold
+  // valuable history and were visible in the stream sidebar.)
+  database.exec(
+    "DELETE FROM messages WHERE session_id NOT IN (SELECT id FROM sessions)",
   );
 }
 
@@ -193,50 +238,30 @@ function migrate(database: Database): void {
  * NOT EXISTS, so we check pragma_table_info first. The column and table names
  * are double-quoted so SQLite keywords (e.g. `group`) work as identifiers —
  * without the quotes, `ADD COLUMN group TEXT` is a syntax error. */
-function addColumnIfMissing(database: Database, table: string, column: string, def: string): void {
-  const stmt = database.prepare(`SELECT name FROM pragma_table_info(?) WHERE name = ?`);
-  stmt.bind([table, column]);
-  const exists = stmt.step();
-  stmt.free();
-  if (!exists) {
-    database.run(`ALTER TABLE "${table}" ADD COLUMN "${column}" ${def}`);
+function addColumnIfMissing(database: Database.Database, table: string, column: string, def: string): void {
+  const found = database
+    .prepare("SELECT name FROM pragma_table_info(?) WHERE name = ?")
+    .all(table, column);
+  if (found.length === 0) {
+    database.exec(`ALTER TABLE "${table}" ADD COLUMN "${column}" ${def}`);
   }
 }
 
 /**
- * Flush the in-memory database to disk. Coalesced via the microtask queue so a
- * burst of writes (e.g. a replaceAll inside a transaction) hits the file once.
- * Call this after any write; readers don't need it.
+ * Historical no-op. The sql.js driver needed this flush (export the whole
+ * in-memory database to disk after writes); better-sqlite3 commits every
+ * statement straight to the WAL, so there is nothing left to flush. The call
+ * sites are kept untouched — they mark "a logical write batch ended here",
+ * which keeps the repository code stable across drivers.
  */
 export function persist(): void {
-  if (!db || !dbPath) return;
-  if (persistPending) return;
-  persistPending = true;
-  // Defer to the next microtask so multiple synchronous writes in one tick
-  // share a single export+write.
-  queueMicrotask(() => {
-    persistPending = false;
-    try {
-      const data = db!.export();
-      // Ensure the userData dir exists (it should, but be defensive).
-      const dir = join(dbPath!, "..");
-      if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-      writeFileSync(dbPath!, data);
-    } catch (err) {
-      log.error(`sqlite persist failed: ${(err as Error).message}`);
-    }
-  });
+  /* no-op */
 }
 
-/** Close the connection on shutdown. Persist first so nothing is lost. */
+/** Close the connection on shutdown. Closing the last connection checkpoints
+ * the WAL back into the main file and removes the -wal/-shm sidecars. */
 export function closeDb(): void {
   try {
-    if (persistPending) {
-      // Force an immediate flush rather than waiting for the queued microtask,
-      // which may not run before the process exits.
-      persistPending = false;
-      if (db && dbPath) writeFileSync(dbPath, db.export());
-    }
     db?.close();
   } catch {
     /* ignore — shutting down anyway */

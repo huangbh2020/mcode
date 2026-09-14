@@ -327,8 +327,14 @@ class RuntimeManager {
       turnCount: 0,
       subagentTokensByTask: new Map(),
       turnSubagentTokens: 0,
-      subagentTranscripts: new Map(),
-      lastSubagents: [],
+      // Rehydrate the session-scoped subagent state from the persisted row so
+      // sendTurn's cross-turn replay works after ANY rebind — app restart,
+      // dispose-on-archive → unarchive, etc. Without this, a fresh bind's
+      // empty map means the new turn's first adapter flush would REPLACE the
+      // renderer's/DB's accumulated roster away (the replay exists precisely
+      // to prevent that, so it must have data to replay).
+      subagentTranscripts: new Map(Object.entries(session.subagentTranscripts ?? {})),
+      lastSubagents: session.subagents ?? [],
     });
   }
 
@@ -622,6 +628,17 @@ class RuntimeManager {
     // for the lifetime of the app otherwise.
     dropFileSnapshot(sessionId);
     this.sessions.delete(sessionId);
+  }
+
+  /** Dispose every session runtime bound to a project. Called BEFORE a
+   *  project hard-delete: the SQL cascade removes the session rows, so this
+   *  is the last chance to look up which runtimes to release (otherwise each
+   *  cascaded session leaks its transcripts/usage history/snapshot exactly
+   *  like a never-disposed session). */
+  disposeProject(projectId: string): void {
+    for (const id of SessionRepo.idsByProject(projectId)) {
+      this.dispose(id);
+    }
   }
 
   /** Rewind a turn for a session: restore the given `files` to their

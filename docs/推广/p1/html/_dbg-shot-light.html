@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>P1-2 · 浅色纸面整屏</title>
+<link rel="stylesheet" href="base.css">
+<style>
+  /* ── P1 第 2 张:浅色纸面整屏 ──────────────────────────────────
+     裸截图上信息流会「像截图」;装进手绘框 + 一句手写批注 + 一个
+     指向箭头之后,它就变成「一页手账」,和其他笔记拉开距离。 */
+  body { height: 1440px; position: relative; }
+
+  .label {
+    position: absolute; top: 68px; left: 0; width: 1080px;
+    text-align: center;
+  }
+  .label .t { font-size: 42px; font-weight: 700; letter-spacing: 4px; }
+  .label .s {
+    margin-top: 12px; font-size: 26px; letter-spacing: 3px;
+    color: rgb(var(--content-subtle));
+  }
+  .label .rule {
+    margin: 22px auto 0; width: 210px; height: 2px;
+    background: rgb(var(--edge));
+  }
+
+  /* 截图贴纸:1080 画布上取 1020 宽,左右各露 30px 呼吸 */
+  .sticker {
+    position: absolute;
+    left: 30px; top: 258px; width: 1020px;
+    transform: rotate(-0.75deg);
+    background: rgb(var(--surface));
+    border: 2px solid rgb(var(--edge));
+    border-radius: var(--sk-r-lg);
+    box-shadow: 7px 9px 0 rgb(var(--content) / 0.09);
+    overflow: hidden;
+    z-index: 2;
+  }
+  .sticker img { display: block; width: 1020px; }
+
+  /* 圈出输入框:整屏里最该被看见的一处 */
+  .ring { position: absolute; left: 348px; top: 800px; z-index: 4; }
+
+  /* 批注:箭头 + 短句,放在截图右下方 */
+  .note {
+    position: absolute;
+    left: 0; top: 930px; width: 1080px;
+    display: flex; align-items: flex-start; justify-content: center; gap: 14px;
+    z-index: 5;
+  }
+  .note p {
+    margin: 0; font-size: 40px; line-height: 1.32; letter-spacing: 1.5px;
+  }
+  .note .acc { color: rgb(var(--accent-strong)); font-weight: 700; }
+
+  .foot {
+    position: absolute; left: 0; top: 1130px; width: 1080px;
+    text-align: center; font-size: 31px; line-height: 1.6;
+    color: rgb(var(--content-muted));
+  }
+  .sign {
+    position: absolute; left: 0; top: 1386px; width: 1080px;
+    text-align: center; font-size: 26px; letter-spacing: 2px;
+    color: rgb(var(--content-subtle)); z-index: 6;
+  }
+</style>
+<style>
+#dbg{position:absolute;inset:0;z-index:50;pointer-events:none}
+#dbg i{position:absolute;background:rgba(255,0,128,.55)}
+#dbg i.v{top:0;bottom:0;width:1px}#dbg i.h{left:0;right:0;height:1px}
+#dbg b{position:absolute;font:11px monospace;color:#f0f;background:#000c;padding:0 2px}
+</style></head>
+<body>
+
+  <div class="label">
+    <div class="t">纸 面 手 绘 · 浅 色</div>
+    <div class="s">我每天要在这里面待 8 个小时</div>
+    <div class="rule"></div>
+  </div>
+
+  <div class="sticker">
+    <img src="img/home.png" alt="">
+  </div>
+
+  <!-- 手绘椭圆圈住输入框 -->
+  <svg class="ring" width="640" height="76" viewBox="0 0 640 76">
+    <ellipse cx="320" cy="38" rx="306" ry="30"
+             fill="none" stroke="rgb(8 140 105)" stroke-width="4.5"
+             stroke-linecap="round" transform="rotate(-0.4 320 38)"/>
+  </svg>
+
+  <div class="note">
+    <svg width="42" height="56" viewBox="0 0 42 56" style="margin-top:6px">
+      <g fill="none" stroke="rgb(8 140 105)" stroke-width="4.6"
+         stroke-linecap="round" stroke-linejoin="round">
+        <path d="M 30 52 C 27 36, 22 22, 14 9"/>
+        <path d="M 4 24 C 8 18, 11 13, 14 8 C 20 13, 27 18, 33 21"/>
+      </g>
+    </svg>
+    <p>黑底绿字的终端<br>盯久了<span class="acc">真的不想打开</span></p>
+  </div>
+
+  <div class="foot">
+    换成暖纸底、铅笔描边、手写字体之后<br>
+    打开它的次数明显变多了
+  </div>
+
+  <div class="sign">黄同学｜一个人用 AI 做软件</div>
+  <div id="dbg"></div><div class="grain"></div>
+<script>
+const g=document.getElementById('dbg');
+for(let x=0;x<=1080;x+=25){const e=document.createElement('i');e.className='v';e.style.left=x+'px';if(x%100)e.style.opacity=.35;g.appendChild(e);
+ if(x%100===0){const b=document.createElement('b');b.textContent=x;b.style.left=(x+2)+'px';b.style.top='40px';g.appendChild(b);}}
+for(let y=0;y<=1440;y+=25){const e=document.createElement('i');e.className='h';e.style.top=y+'px';if(y%100)e.style.opacity=.35;g.appendChild(e);
+ if(y%100===0){const b=document.createElement('b');b.textContent=y;b.style.left='2px';b.style.top=(y+2)+'px';g.appendChild(b);}}
+</script>
+</body>
+</html>

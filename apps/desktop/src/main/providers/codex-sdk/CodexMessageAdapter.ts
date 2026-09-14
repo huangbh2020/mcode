@@ -38,6 +38,7 @@
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { ThinkTagSplitter, type ThinkSegment } from "@main/lib/thinkTagSplitter.js";
+import { registerImageArtifact } from "@main/lib/imageArtifacts.js";
 import type {
   RuntimeEvent,
   TurnDoneReason,
@@ -1029,7 +1030,11 @@ function appendSubagentBlock(blocks: SubagentTranscriptBlock[], item: ThreadItem
 /** imageGeneration item → inline image (base64 + mime). Prefers savedPath
  *  (exact bytes + true mime); falls back to the `result` string when it
  *  looks like base64 image data. Returns null when neither yields an image
- *  (the card then surfaces the status text as a failed result). */
+ *  (the card then surfaces the status text as a failed result).
+ *
+ *  A successful savedPath read is also registered as an image artifact (bytes
+ *  → path) so the lightbox's "show in file manager" action reveals codex's own
+ *  generated file rather than caching a copy under userData. */
 function resolveGeneratedImage(
   item: Extract<ThreadItem, { type: "imageGeneration" }>,
 ): { data: string; mimeType: "image/png" | "image/jpeg" | "image/webp" | "image/gif" } | null {
@@ -1037,7 +1042,9 @@ function resolveGeneratedImage(
     try {
       const data = readFileSync(item.savedPath);
       const ext = item.savedPath.slice(item.savedPath.lastIndexOf(".")).toLowerCase();
-      return { data: data.toString("base64"), mimeType: IMAGE_MIME_BY_EXT[ext] ?? "image/png" };
+      const base64 = data.toString("base64");
+      registerImageArtifact(base64, item.savedPath);
+      return { data: base64, mimeType: IMAGE_MIME_BY_EXT[ext] ?? "image/png" };
     } catch {
       // savedPath unreadable (deleted between generation and display) —
       // fall through to the result-string heuristic.

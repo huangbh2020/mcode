@@ -26,11 +26,13 @@ import { normWorktreeKey } from "@renderer/lib/worktree.js";
 import { translate } from "@renderer/lib/i18n/core.js";
 import { DEFAULT_GESTURE_SETTINGS } from "@renderer/lib/gestures.js";
 import { DEFAULT_EDITOR_THEME_CHOICE, parseEditorThemeChoice, type EditorThemeChoice, type EditorThemeId } from "@renderer/lib/editorThemes.js";
+import { sanitizeFontFamily } from "@renderer/lib/theme.js";
 import {
   DISPLAY_MODE_SETTING_KEY,
   TAB_BAR_MULTI_ROW_SETTING_KEY,
   LEFTBAR_MODE_SETTING_KEY,
   THEME_STYLE_SETTING_KEY,
+  UI_FONT_FAMILY_SETTING_KEY,
   UI_LOCALE_SETTING_KEY,
   DEFAULT_PROVIDER_ID,
   UI_CHAT_FONT_SIZE_SETTING_KEY,
@@ -684,6 +686,13 @@ export interface SessionState {
    *  `ui.themeStyle`; applied to <html> as a `.sketch` class next to `.dark`
    *  (lib/theme.ts applyThemeStyle via useThemeStyle in lib/appearance.ts). */
   themeStyle: ThemeStyle;
+  /** Custom UI font family ("" = stylesheet default system stack). Persisted
+   *  under `ui.uiFontFamily`; applied to <html> as the `--app-font` CSS var
+   *  (lib/theme.ts applyUiFontFamily via useChatAppearance). Only affects
+   *  the classic style — sketch overrides with the bundled handwriting face.
+   *  The value is a single family name; the composed CSS stack keeps the
+   *  system UI stack as fallback so an uninstalled font degrades gracefully. */
+  uiFontFamily: string;
   /** Which tab kind owns the center content area in `tabs` displayMode: the
    *  active session's chat ("chat") or the editor — file / plan tab
    *  ("editor"). Only read in `tabs` mode; `single` mode keeps the legacy
@@ -1024,6 +1033,15 @@ export interface SessionState {
    *  provider is codex-sdk, since codex's `capabilities.builtinModels` is
    *  empty (models come from user config, mirroring pi). */
   codexAvailableModels: BuiltinModelOption[];
+  /** Whether each composer config list has landed (initDeferred reloads run
+   *  concurrently). validateComposerSelection stays hands-off until ALL are
+   *  in — validating against a not-yet-loaded list reads "empty" as "the
+   *  model was deleted" and would wipe (and persist the wipe of) a
+   *  legitimate pick purely because another IPC won the race. */
+  providersLoaded: boolean;
+  customModelsLoaded: boolean;
+  piModelsLoaded: boolean;
+  codexModelsLoaded: boolean;
   /** Discovered skills for the composer `/` menu. Cached per active project
    *  (global ~/.claude/skills + the project's .claude/skills); refreshed on
    *  init and project switch. Empty list = no skills installed. */
@@ -1385,6 +1403,16 @@ export interface SessionState {
   /** Fetch the next page of older messages for a session and prepend them.
    *  No-op when nothing more is available or a fetch is already in flight. */
   loadOlderMessages: (sessionId: string) => Promise<void>;
+  /** Single-mode eviction: drop the session's heavy HISTORY buckets (loaded
+   *  messages incl. base64 image blocks, turn-files cards, subagent
+   *  transcripts, usage history, pagination state) after its pane left the
+   *  keep-alive grace window. Deliberately narrow — live-state fields
+   *  (running/unread/pending question/todos/capsule/composer draft/
+   *  bookmarks) stay, because the session row still exists and the left-bar
+   *  and activity UIs read them. Everything dropped here is re-fetched on
+   *  the next activation: selectSession/openTab gate on historyLoadedBySession
+   *  and the hydrate* helpers re-read the persisted row. */
+  pruneSessionHistory: (sessionId: string) => void;
   /** Remove a session from the tab strip. If it was the active tab,
    *  focus shifts to the previous one (or the next, if there is no
    *  previous); running turns are NOT cancelled — they keep streaming
@@ -1600,6 +1628,7 @@ export interface SessionState {
    *  fire-and-forget persistence; the `.sketch` class application reacts
    *  via useThemeStyle (lib/appearance.ts). */
   setThemeStyle: (style: ThemeStyle) => void;
+  setUiFontFamily: (family: string) => void;
   /** Set the stream sidebar's project scope filter. Persists under
    *  `ui.streamScope` so the selection survives remounts and relaunches. */
   setStreamScope: (scope: string | null) => void;
@@ -2427,6 +2456,33 @@ const STREAM_PAGE_SIZE = 10;
  *  "切了项目列表又跳回去" race). */
 let streamFetchSeq = 0;
 
+/** Bumped by every mutation that touches the stream aggregate's membership
+ *  or order (delete / archive / pin / rename / turn activity / remote echo).
+ *  loadStreamSessions captures it before its IPC and discards the response
+ *  when it changed mid-flight — otherwise a snapshot that predates the
+ *  mutation would wholesale-replace the cache and resurrect rows the
+ *  in-place patches below had already removed (the stream view "ghost row"
+ *  when deleting several sessions in quick succession). */
+let streamMutateSeq = 0;
+
+/** Remove a row from the stream aggregate; same array ref when absent so
+ *  set() patches stay no-op-cheap for untouched caches. */
+function removeFromStreamList(list: Session[], id: string): Session[] {
+  return list.some((x) => x.id === id) ? list.filter((x) => x.id !== id) : list;
+}
+
+/** Upsert a row into the stream aggregate in `session.listAll` shape
+ *  (updatedAt DESC). Merge-over-cached-row when present (keeps heavy
+ *  payloads), otherwise insert before the first strictly-older row. */
+function upsertStreamRow(list: Session[], session: Session): Session[] {
+  const idx = list.findIndex((x) => x.id === session.id);
+  if (idx !== -1) {
+    return list.map((x) => (x.id === session.id ? { ...x, ...session } : x));
+  }
+  const at = list.findIndex((x) => x.updatedAt < session.updatedAt);
+  return at === -1 ? [...list, session] : [...list.slice(0, at), session, ...list.slice(at)];
+}
+
 /** Per-project in-flight guard for loadWorktreeSessions — only the latest
  *  fetch for a project may apply, so a slow response can't clobber a newer
  *  one (expand → collapse → expand fires overlapping fetches). */
@@ -2552,6 +2608,15 @@ function applySessionPinnedState(s: SessionState, session: Session): Partial<Ses
   const patch: Partial<SessionState> = {};
   const projectId = session.projectId;
   const isPinned = !session.archived && session.pinnedAt != null;
+
+  // Stream aggregate mirrors the listAll shape (active + unpinned only): the
+  // toggled row leaves/enters it immediately — the dirty-flag refetch must
+  // not be the only mechanism, or a snapshot already in flight re-applies
+  // the pre-toggle list over this patch.
+  patch.streamSessions = isPinned || session.archived
+    ? removeFromStreamList(s.streamSessions, session.id)
+    : upsertStreamRow(s.streamSessions, session);
+  streamMutateSeq++;
 
   // Global pinned bucket — upsert or evict, kept sorted by pin recency.
   const withoutPinned = s.pinnedSessions.filter((x) => x.id !== session.id);
@@ -2749,10 +2814,21 @@ function dropSessionBuckets(s: SessionState, id: string) {
  *  the left-bar caches, in their parent's sideChatsByParent bucket. Pure:
  *  takes the current state, returns the patch. */
 function applySessionDeletedState(s: SessionState, id: string): Partial<SessionState> {
+  // Membership change — any first-page fetch in flight must not apply its
+  // (pre-delete) snapshot over this patch.
+  streamMutateSeq++;
   // Find which project + cache owns this session.
   let projectId: string | undefined;
   let inArchived = false;
   let inPinned = false;
+  // True when the deleted row lived ONLY in the stream aggregate (a page-2+
+  // session.listAll row, or any row whose project's per-project window was
+  // never loaded) — the patch below then removes it from `streamSessions`
+  // and shrinks the owning project's totals without touching per-project
+  // caches. Without this branch the function returned an empty patch for
+  // such rows: no streamDirty, no removal — the stream view kept rendering
+  // the deleted session until a view remount (the "ghost row" bug).
+  let inStream = false;
   // True when the deleted row sat in the cache's worktree SECTION — the
   // LOCAL total (which the worktree section never counts) must stay put.
   let deletedWasWorktree = false;
@@ -2777,6 +2853,17 @@ function applySessionDeletedState(s: SessionState, id: string): Partial<SessionS
     }
   }
   if (!projectId) {
+    const streamRow = s.streamSessions.find((sess) => sess.id === id);
+    if (streamRow) {
+      projectId = streamRow.projectId;
+      inStream = true;
+      deletedWasWorktree = !!streamRow.worktreePath;
+    }
+  }
+  // The aggregate may hold a duplicate of a row found in another cache too
+  // (page-1 rows live in both) — every return path below strips it.
+  const nextStream = removeFromStreamList(s.streamSessions, id);
+  if (!projectId) {
     // Not in the left-bar caches — check the ask-tab buckets. Side chats
     // (kind="side") hang off their parent under sideChatsByParent and are
     // invisible everywhere else. Hard-deleting one removes it from that
@@ -2785,21 +2872,29 @@ function applySessionDeletedState(s: SessionState, id: string): Partial<SessionS
     const parent = Object.keys(s.sideChatsByParent).find((key) =>
       s.sideChatsByParent[key]?.some((x) => x.id === id),
     );
-    if (!parent) return {};
+    if (!parent) {
+      return nextStream === s.streamSessions
+        ? {}
+        : { streamSessions: nextStream, streamDirty: true };
+    }
     const list = s.sideChatsByParent[parent] ?? [];
     return {
       sideChatsByParent: { ...s.sideChatsByParent, [parent]: list.filter((x) => x.id !== id) },
       ...dropSessionBuckets(s, id),
       ...(s.activeSideChatId === id ? { activeSideChatId: null } : {}),
+      ...(nextStream !== s.streamSessions ? { streamSessions: nextStream } : {}),
     };
   }
-  const prevList = inPinned
-    ? s.pinnedSessions
-    : (inArchived ? s.archivedSessionsByProject : s.sessionsByProject)[projectId] ?? [];
+  const prevList = inStream
+    ? s.streamSessions
+    : inPinned
+      ? s.pinnedSessions
+      : (inArchived ? s.archivedSessionsByProject : s.sessionsByProject)[projectId] ?? [];
   const nextList = prevList.filter((sess) => sess.id !== id);
   // For a pinned row the project's active window is untouched; all
   // total/hasMore math below must reference it rather than the pinned bucket.
-  const activeWindowLen = inPinned
+  // Same for a stream-only row: the window is whatever the project cache has.
+  const activeWindowLen = inPinned || inStream
     ? (s.sessionsByProject[projectId]?.length ?? 0)
     : nextList.length;
   const sessionsByProject = { ...s.sessionsByProject };
@@ -2811,7 +2906,7 @@ function applySessionDeletedState(s: SessionState, id: string): Partial<SessionS
   } else if (inArchived) {
     if (nextList.length > 0) archivedByProject[projectId] = nextList;
     else delete archivedByProject[projectId];
-  } else {
+  } else if (!inStream) {
     sessionsByProject[projectId] = nextList;
   }
   // Active-thread totals only move when an active (non-archived, non-pinned,
@@ -2852,6 +2947,7 @@ function applySessionDeletedState(s: SessionState, id: string): Partial<SessionS
       ...(inPinned ? { pinnedSessions: nextList } : {}),
       sessionsTotalByProject: { ...s.sessionsTotalByProject, [projectId]: totalActive },
       sessionsHasMoreByProject: { ...s.sessionsHasMoreByProject, [projectId]: hasMoreActive },
+      streamSessions: nextStream,
       ...dropped,
       ...(hadSideChats ? { sideChatsByParent } : {}),
       ...(activeSideChatId !== s.activeSideChatId ? { activeSideChatId } : {}),
@@ -2866,17 +2962,18 @@ function applySessionDeletedState(s: SessionState, id: string): Partial<SessionS
     nextActive = idx > 0 ? openTabs[idx - 1] : openTabs[0];
   }
   const isActiveProject = projectId === s.activeProjectId;
-  // For a pinned row the fallback candidate comes from the project's active
-  // window (unchanged by this delete), not from the pinned bucket.
+  // For a pinned (or stream-only) row the fallback candidate comes from the
+  // project's active window (unchanged by this delete), not from the bucket
+  // the row was removed from.
   const nextInProject = isActiveProject
-    ? (inPinned ? (s.sessionsByProject[projectId] ?? []) : nextList).find((sess) => !sess.archived)
+    ? (inPinned || inStream ? (s.sessionsByProject[projectId] ?? []) : nextList).find((sess) => !sess.archived)
     : null;
   // If the new active session is the fallback one, sync its config
   // into the global slots so the composer chips show the right
   // model/effort/permission.
   const finalActive = nextActive ?? nextInProject?.id ?? null;
   const sess = finalActive
-    ? findSession(sessionsByProject, archivedByProject, inPinned ? nextList : s.pinnedSessions, s.streamSessions, finalActive)
+    ? findSession(sessionsByProject, archivedByProject, inPinned ? nextList : s.pinnedSessions, nextStream, finalActive)
     : undefined;
   // Clear the new active session's unread badge - it's now visible.
   if (finalActive) delete dropped.unreadBySession[finalActive];
@@ -2886,11 +2983,15 @@ function applySessionDeletedState(s: SessionState, id: string): Partial<SessionS
     ...(inPinned ? { pinnedSessions: nextList } : {}),
     sessionsTotalByProject: { ...s.sessionsTotalByProject, [projectId]: totalActive },
     sessionsHasMoreByProject: { ...s.sessionsHasMoreByProject, [projectId]: hasMoreActive },
+    streamSessions: nextStream,
     ...dropped,
     ...(hadSideChats ? { sideChatsByParent } : {}),
     ...(activeSideChatId !== s.activeSideChatId ? { activeSideChatId } : {}),
     openTabs,
-    sessions: isActiveProject ? nextList : s.sessions,
+    // `sessions` aliases the ACTIVE PROJECT's list — never assign a bucket
+    // the row was removed from (stream aggregate / pinned) into it; those
+    // rows weren't part of the project window, which stays untouched.
+    sessions: isActiveProject && !inStream && !inPinned ? nextList : s.sessions,
     activeSessionId: finalActive,
     model: sess?.model ?? s.model,
     effort: sess?.effort ?? s.effort,
@@ -3162,6 +3263,15 @@ function validateComposerSelection(
   get: () => SessionState,
 ): void {
   const s = get();
+  // Boot race guard: the four config lists hydrate concurrently (initDeferred)
+  // and each completion validates. Until every list is in, an empty list means
+  // "not loaded yet", not "the pick was deleted" — validating early would wipe
+  // a legitimate choice and persist the wipe. Whichever reload lands LAST
+  // still runs the full validation against complete data, so skipping here
+  // loses nothing.
+  if (!s.providersLoaded || !s.customModelsLoaded || !s.piModelsLoaded || !s.codexModelsLoaded) {
+    return;
+  }
   const activeId = s.activeSessionId;
   if (activeId) {
     const bucket = s.messagesBySession[activeId];
@@ -4255,6 +4365,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   // UI theme style (orthogonal to light/dark). Default "classic"; init()
   // overwrites from the persisted ui.themeStyle preference.
   themeStyle: "classic",
+  // Custom UI font family ("" = stylesheet default). Persisted under
+  // ui.uiFontFamily; init() overwrites from the DB.
+  uiFontFamily: "",
   // Center focus for the unified tab bar (`tabs` displayMode). UI-only.
   centerTabFocus: "chat",
   // UI language. Persisted in `settings` table; init() overwrites from the
@@ -4366,6 +4479,10 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   providers: EMPTY_PROVIDERS,
   piAvailableModels: EMPTY_PI_MODELS,
   codexAvailableModels: EMPTY_CODEX_MODELS,
+  providersLoaded: false,
+  customModelsLoaded: false,
+  piModelsLoaded: false,
+  codexModelsLoaded: false,
   skills: EMPTY_SKILLS,
   effort: "high",
   todosBySession: {},
@@ -4460,6 +4577,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           TAB_BAR_MULTI_ROW_SETTING_KEY,
           LEFTBAR_MODE_SETTING_KEY,
           THEME_STYLE_SETTING_KEY,
+          UI_FONT_FAMILY_SETTING_KEY,
           UI_LOCALE_SETTING_KEY,
           UI_CHAT_DENSITY_SETTING_KEY,
           UI_PROJECT_VIEW_SETTING_KEY,
@@ -4544,6 +4662,19 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       if (value === "classic" || value === "sketch") set({ themeStyle: value });
     } catch (err) {
       console.error("apply(themeStyle) failed:", err);
+    }
+
+    // Custom UI font. Anything non-string (corrupt row) is ignored → the
+    // stylesheet default stands; a sanitize pass strips quotes/backslashes
+    // (the value is interpolated into a CSS font-family string at apply
+    // time) and caps the length. The FOUC guard in initFoucGuard already
+    // applied the localStorage-cached value before React mounted; this
+    // reconciles against the SQLite source of truth.
+    try {
+      const value = fp[UI_FONT_FAMILY_SETTING_KEY];
+      if (typeof value === "string") set({ uiFontFamily: sanitizeFontFamily(value) });
+    } catch (err) {
+      console.error("apply(uiFontFamily) failed:", err);
     }
 
     // Stream sidebar scope filter. "" = the unfiltered "全部项目" view
@@ -5840,6 +5971,40 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     });
   },
 
+  /** See the interface doc. Callers must NOT prune a session with a running
+   *  turn (its event stream and turn.done persistence read messagesBySession)
+   *  — the single-mode eviction driver in ChatColumn guards that. */
+  pruneSessionHistory: (sessionId) => {
+    set((s) => {
+      const messagesBySession = { ...s.messagesBySession };
+      delete messagesBySession[sessionId];
+      const hasMoreMessagesBySession = { ...s.hasMoreMessagesBySession };
+      delete hasMoreMessagesBySession[sessionId];
+      const loadingMessagesBySession = { ...s.loadingMessagesBySession };
+      delete loadingMessagesBySession[sessionId];
+      const loadingOlderBySession = { ...s.loadingOlderBySession };
+      delete loadingOlderBySession[sessionId];
+      const historyLoadedBySession = { ...s.historyLoadedBySession };
+      delete historyLoadedBySession[sessionId];
+      const turnFilesBySession = { ...s.turnFilesBySession };
+      delete turnFilesBySession[sessionId];
+      const usageHistoryBySession = { ...s.usageHistoryBySession };
+      delete usageHistoryBySession[sessionId];
+      const subagentTranscriptsBySession = { ...s.subagentTranscriptsBySession };
+      delete subagentTranscriptsBySession[sessionId];
+      return {
+        messagesBySession,
+        hasMoreMessagesBySession,
+        loadingMessagesBySession,
+        loadingOlderBySession,
+        historyLoadedBySession,
+        turnFilesBySession,
+        usageHistoryBySession,
+        subagentTranscriptsBySession,
+      };
+    });
+  },
+
   /** Move a tab within the strip. No-op for out-of-range / same index. */
   reorderTab: (from, to) =>
     set((s) => {
@@ -5998,6 +6163,17 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       const projectId = session.projectId;
       const isActiveProject = projectId === s.activeProjectId;
 
+      // Stream aggregate mirrors the listAll shape (active + unpinned rows
+      // only): archiving removes, restoring re-inserts at its updatedAt
+      // position — unless the restored row is (still) pinned, which listAll
+      // excludes. Without this the row ghosts in the stream view until the
+      // dirty-flag refetch lands (and resurrects when several mutations
+      // race one fetch).
+      const streamSessions = archived || session.pinnedAt != null
+        ? removeFromStreamList(s.streamSessions, id)
+        : upsertStreamRow(s.streamSessions, session);
+      streamMutateSeq++;
+
       // Pull the row out of whichever cache currently holds it and push the
       // server-fresh copy into the opposite cache. The global pinned bucket
       // participates too: archiving evicts the row from the pinned section
@@ -6066,6 +6242,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           sessionsHasMoreByProject: { ...s.sessionsHasMoreByProject, [projectId]: hasMoreActive },
           sessions: isActiveProject ? nextActive : s.sessions,
           openTabs,
+          streamSessions,
           streamDirty: true,
         };
       }
@@ -6078,7 +6255,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         nextActiveId = idx > 0 ? openTabs[idx - 1] : openTabs[0];
       }
       const sess = nextActiveId
-        ? findSession(sessionsByProject, archivedByProject, nextPinned, s.streamSessions, nextActiveId)
+        ? findSession(sessionsByProject, archivedByProject, nextPinned, streamSessions, nextActiveId)
         : undefined;
       // Clear the new active session's unread badge - it's now visible.
       const unreadBySession = { ...s.unreadBySession };
@@ -6097,6 +6274,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         permissionMode: sess?.permissionMode ?? s.permissionMode,
         customModelId: sess?.customModelId ?? s.customModelId,
         unreadBySession,
+        streamSessions,
         streamDirty: true,
       };
     });
@@ -6124,12 +6302,18 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         if (next) archivedSessionsByProject[projectId] = next;
       }
       const pinnedSessions = patchRow(s.pinnedSessions) ?? s.pinnedSessions;
+      // The stream aggregate holds the same row — merge the fresh copy over
+      // its (heavier) cached twin so the title updates without a refetch.
+      const streamSessions = s.streamSessions.some((x) => x.id === id)
+        ? s.streamSessions.map((x) => (x.id === id ? { ...x, ...session } : x))
+        : s.streamSessions;
+      streamMutateSeq++;
       // The `sessions` alias mirrors the active project's list; refresh it in
       // case the renamed session lives in the active project (title chip etc.).
       const sessions = s.activeProjectId === projectId
         ? (sessionsByProject[projectId] ?? s.sessions)
         : s.sessions;
-      return { sessionsByProject, archivedSessionsByProject, pinnedSessions, sessions, streamDirty: true };
+      return { sessionsByProject, archivedSessionsByProject, pinnedSessions, sessions, streamSessions, streamDirty: true };
     });
   },
 
@@ -7156,6 +7340,19 @@ export const useSessionStore = create<SessionState>((set, get) => ({
             touched = true;
           }
         }
+        // The stream aggregate gets the same surgery: archived/pinned rows
+        // leave immediately; a present row merges the slim entry over its
+        // cached twin. A row the aggregate DOESN'T hold stays the refetch's
+        // job — inserting it here could violate the CURRENT scope's query
+        // shape (wt:/projectIds filters), which only a fresh listAll knows.
+        const inStreamCache = s.streamSessions.some((x) => x.id === entry.id);
+        const nextStream =
+          entry.archived || entry.pinnedAt != null
+            ? removeFromStreamList(s.streamSessions, entry.id)
+            : inStreamCache
+              ? s.streamSessions.map((x) => (x.id === entry.id ? { ...x, ...entry } : x))
+              : s.streamSessions;
+        if (nextStream !== s.streamSessions) touched = true;
         if (!touched) return {};
         // Keep the derived `sessions` alias (active project's list) fresh.
         if (s.activeProjectId === entry.projectId && patch.sessionsByProject) {
@@ -7176,6 +7373,11 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         // Remote change reached the caches — the stream aggregate may be
         // stale too (ordering / title / pin / worktree fields).
         patch.streamDirty = true;
+        // Mirror the change into the aggregate so an in-flight first-page
+        // fetch (whose snapshot predates this echo) is discarded instead of
+        // applying stale membership over the live caches.
+        streamMutateSeq++;
+        patch.streamSessions = nextStream;
         return patch;
       });
       return;
@@ -8252,6 +8454,17 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       .catch((err) => console.error("setting.set(themeStyle) failed:", err));
   },
 
+  setUiFontFamily: (family) => {
+    const clean = sanitizeFontFamily(family);
+    set({ uiFontFamily: clean });
+    // Fire-and-forget like setThemeStyle — a failed write keeps the
+    // in-session choice. The <html> `--app-font` var reacts via
+    // useChatAppearance (lib/appearance.ts), which also refreshes the
+    // localStorage cache the boot FOUC guard reads.
+    api.setting.set({ key: UI_FONT_FAMILY_SETTING_KEY, value: clean })
+      .catch((err) => console.error("setting.set(uiFontFamily) failed:", err));
+  },
+
   setStreamScope: (scope) => {
     // Dirty, not just a value swap: the cached pages were fetched under the
     // OLD scope — the view must refetch its first page so the list AND the
@@ -8271,6 +8484,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     const s = get();
     if (!reset && s.streamSessions.length > 0 && !s.streamDirty) return;
     const seq = ++streamFetchSeq;
+    const mutateGen = streamMutateSeq;
     try {
       const res = await api.session.listAll({
         offset: 0,
@@ -8280,6 +8494,12 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       // Superseded by a newer fetch (scope flipped / re-dirty mid-flight):
       // the newer response owns the cache.
       if (seq !== streamFetchSeq) return;
+      // A membership mutation raced the fetch (e.g. the user deleted a
+      // second session while this snapshot was in flight): its in-place
+      // patch already fixed the cache — discarding is the only way to keep
+      // this PRE-mutation snapshot from resurrecting the row. The dirty
+      // flag survives, so the next flip (or view re-entry) refetches.
+      if (mutateGen !== streamMutateSeq) return;
       set({ streamSessions: res.sessions, streamHasMore: res.hasMore, streamTotal: res.total, streamDirty: false });
     } catch (err) {
       console.error("session.listAll failed:", err);
@@ -8891,7 +9111,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   reloadCustomModels: async () => {
     try {
       const { models } = await api.customModel.list();
-      set({ customModels: models });
+      set({ customModels: models, customModelsLoaded: true });
       // A persisted composer pick whose custom config was deleted falls back
       // to auto.
       validateComposerSelection(set, get);
@@ -9026,7 +9246,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   reloadProviders: async () => {
     try {
       const { providers } = await api.provider.list();
-      set({ providers });
+      set({ providers, providersLoaded: true });
       // A persisted composer pick for a provider that no longer exists falls
       // back to the default provider + auto.
       validateComposerSelection(set, get);
@@ -9043,7 +9263,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   reloadPiAvailableModels: async () => {
     try {
       const { models } = await api.piModels.listAvailable();
-      set({ piAvailableModels: models });
+      set({ piAvailableModels: models, piModelsLoaded: true });
       // A persisted composer pick whose pi model was deleted falls back
       // to auto.
       validateComposerSelection(set, get);
@@ -9063,7 +9283,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           supplier: p.name,
         })),
       );
-      set({ codexAvailableModels: models });
+      set({ codexAvailableModels: models, codexModelsLoaded: true });
       // A persisted composer pick whose codex model was deleted falls back
       // to auto.
       validateComposerSelection(set, get);

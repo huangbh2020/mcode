@@ -15,7 +15,7 @@
  */
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { api } from "@renderer/lib/api.js";
-import { useSessionStore } from "@renderer/stores/sessionStore.js";
+import { useSessionStore, selectActiveEnvPath } from "@renderer/stores/sessionStore.js";
 import { useToastStore } from "@renderer/stores/toastStore.js";
 import { cn } from "@renderer/lib/cn.js";
 import type { GitRepo, GitStatusResult, GitStatusCode, GitBranchInfo, GitBranchListResult } from "@contracts/ipc";
@@ -65,14 +65,15 @@ const STATUS_COLOR: Record<string, string> = {
 
 export function MobileGitScreen() {
   const { t } = useI18n();
-  const activeProjectId = useSessionStore((s) => s.activeProjectId);
-  const projects = useSessionStore((s) => s.projects);
   const commitGenModel = useSessionStore((s) => s.commitGenModel);
   const commitGenPrompt = useSessionStore((s) => s.commitGenPrompt);
-  const project = useMemo(
-    () => projects.find((p) => p.id === activeProjectId) ?? null,
-    [projects, activeProjectId],
-  );
+  // Repos are discovered under the ACTIVE SESSION's environment — its own
+  // worktree checkout for an isolated session, the project root otherwise
+  // (the rule the desktop GitPanel follows via selectActiveEnvPath). Without
+  // this the phone's Git tab showed the MAIN checkout's branch/status while
+  // the session worked in a worktree, and stage/commit/branch-switch from the
+  // phone landed on that main checkout.
+  const envPath = useSessionStore(selectActiveEnvPath);
 
   const [repos, setRepos] = useState<GitRepo[]>([]);
   const [repoPath, setRepoPath] = useState<string | null>(null);
@@ -106,15 +107,16 @@ export function MobileGitScreen() {
   // BranchSheet; the parent only refreshes after a successful switch.
   const [branchSheetOpen, setBranchSheetOpen] = useState(false);
 
-  // Discover repos when the project changes.
+  // Discover repos when the environment changes (session switch → the
+  // worktree's own checkout).
   const discover = useCallback(async () => {
-    if (!project) {
+    if (!envPath) {
       setReposLoading(false);
       return;
     }
     setReposLoading(true);
     try {
-      const res = await api.git.discoverRepos({ projectPath: project.path });
+      const res = await api.git.discoverRepos({ projectPath: envPath });
       setRepos(res.repos);
       if (res.repos.length > 0) setRepoPath(res.repos[0].path);
     } catch (err) {
@@ -122,7 +124,7 @@ export function MobileGitScreen() {
     } finally {
       setReposLoading(false);
     }
-  }, [project]);
+  }, [envPath]);
 
   useEffect(() => {
     setRepoPath(null);
@@ -316,7 +318,7 @@ export function MobileGitScreen() {
         </button>
       </div>
 
-      {!project ? (
+      {!envPath ? (
         <div className="p-6 text-center text-xs text-content-subtle">请先选择一个项目</div>
       ) : (
         <div className="flex min-h-0 flex-1 flex-col px-3 py-2">

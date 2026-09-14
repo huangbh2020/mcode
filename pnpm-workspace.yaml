@@ -10,6 +10,7 @@ packages:
 # 其 build scripts(prepare/postinstall)与运行时无关,设为 false 忽略。
 allowBuilds:
   '@google/genai': false
+  better-sqlite3: true
   cpu-features: true
   electron: true
   esbuild: true

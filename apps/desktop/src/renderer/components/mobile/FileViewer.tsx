@@ -14,6 +14,7 @@ import { api } from "@renderer/lib/api.js";
 import { Markdown } from "@renderer/components/chat/Markdown.js";
 import { useI18n } from "@renderer/lib/i18n/index.js";
 import { dirname } from "@renderer/lib/path.js";
+import { useScrollMemory } from "@renderer/lib/scrollMemory.js";
 import { IconArrowUp, IconCode, IconEye, IconLoader2, IconPhoto } from "@renderer/lib/icons.js";
 
 /** File extension → shiki language id for the fenced-code renderer. */
@@ -82,6 +83,15 @@ export function FileViewerContent({ name, path }: { name: string; path: string }
   const [sourceView, setSourceView] = useState(false);
   const ext = extOf(name);
   const isMd = MARKDOWN_EXT.has(ext);
+  // The overlay unmounts when the user taps 返回, so without a remembered
+  // offset tapping the same file again landed back at the top. Rendered
+  // preview and highlighted source are different renderings of the same file
+  // (and scroll by different amounts) — each keeps its own position, mirroring
+  // the desktop's preview/edit split. The image branch needs none: the image is
+  // scaled to fit, so its container cannot scroll.
+  const scrollRef = useScrollMemory(
+    `${isMd && !sourceView ? "mobile-md" : "mobile-source"}:${path}`,
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -144,7 +154,7 @@ export function FileViewerContent({ name, path }: { name: string; path: string }
   }
   return (
     <div className="relative min-h-0 flex-1">
-      <div className="absolute inset-0 overflow-auto px-3 py-2">
+      <div ref={scrollRef} className="absolute inset-0 overflow-auto px-3 py-2">
         <Markdown baseDir={dirname(path)}>{isMd && !sourceView ? content : markdown}</Markdown>
       </div>
       {isMd && (

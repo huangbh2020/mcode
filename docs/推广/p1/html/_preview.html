@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>P1 素材总览 · 缩略图拦截测试</title>
+<link rel="stylesheet" href="base.css">
+<style>
+  /* 两个用途:
+     ① 看整套素材放在一起是否像一个人的作品(风格是否统一);
+     ② 按信息流真实尺寸(360px 宽)检查封面能不能在 0.3 秒内被看懂。
+     这个文件不产出成图,只给自己看。 */
+  body { width: 1080px; padding: 40px 44px 56px; position: relative; }
+  h2 { margin: 0 0 10px; font-size: 32px; font-weight: 400; letter-spacing: 1px; }
+  h2 b { font-weight: 700; }
+  .hint { margin: 0 0 30px; font-size: 25px; color: rgb(var(--content-subtle)); }
+  .row { display: flex; gap: 26px; align-items: flex-start; margin-bottom: 34px; }
+  .slot { text-align: center; }
+  .slot img { display: block; border: 1.5px solid rgb(var(--edge)); }
+  .slot figcaption { margin-top: 12px; font-size: 23px; color: rgb(var(--content-muted)); }
+  .slot .tag {
+    display: inline-block; margin-top: 8px; padding: 3px 12px;
+    font-size: 20px; color: rgb(var(--accent-strong));
+    border: 1.5px solid rgb(var(--accent) / 0.45);
+    border-radius: var(--sk-r-sm);
+  }
+</style>
+</head>
+<body>
+  <h2>P1 素材总览 &nbsp;·&nbsp; <b>封面按信息流实尺寸 360px 看</b></h2>
+  <p class="hint">封面 1 与 1b 是同一题的两个构图,发出去前挑一张;其余按计划书的配图顺序排列。</p>
+
+  <div class="row">
+    <div class="slot">
+      <img src="../out/cover-1.png" width="360">
+      <figcaption>封面 1 · 360px</figcaption>
+      <div class="tag">大字压顶 + 贴纸</div>
+    </div>
+    <div class="slot">
+      <img src="../out/cover-1b.png" width="360">
+      <figcaption>封面 1b · 360px</figcaption>
+      <div class="tag">满幅截图 + 手绘圈</div>
+    </div>
+    <div class="slot">
+      <img src="../out/cover-1.png" width="200">
+      <figcaption>封面 1 · 200px</figcaption>
+    </div>
+    <div class="slot">
+      <img src="../out/cover-1b.png" width="200">
+      <figcaption>封面 1b · 200px</figcaption>
+    </div>
+  </div>
+
+  <div class="row">
+    <div class="slot"><img src="../out/shot-light.png" width="215"><figcaption>2 · 浅色纸面整屏</figcaption></div>
+    <div class="slot"><img src="../out/shot-dark.png" width="215"><figcaption>3 · 深色牛皮纸整屏</figcaption></div>
+    <div class="slot"><img src="../out/detail.png" width="215"><figcaption>4 · 局部特写</figcaption></div>
+    <div class="slot"><img src="../out/longA.png" width="215"><figcaption>5 · 长图 A(7 步)</figcaption></div>
+  </div>
+
+  <div class="grain"></div>
+</body>
+</html>

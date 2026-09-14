@@ -21,6 +21,7 @@ import {
 import type { Project } from "@contracts/session";
 import { uid } from "@main/utils.js";
 import { ProjectRepo, SessionRepo } from "@main/store/repositories.js";
+import { runtimeManager } from "@main/claude/RuntimeManager.js";
 import { broadcastSessionChanged, broadcastSessionDeleted } from "@main/lib/sessionSync.js";
 import { log } from "@main/lib/logger.js";
 
@@ -88,6 +89,10 @@ export function registerProjectHandlers(ipcMain: IpcMain): void {
   // Hard-delete a project (cascades to its sessions + messages via DB FKs).
   ipcMain.handle(IPC.PROJECT_DELETE, (_evt, raw) => {
     const input = DeleteProjectSchema.parse(raw);
+    // Release every session runtime BEFORE the SQL cascade removes the rows
+    // (disposeProject reads them to know what to dispose). Also interrupts a
+    // running turn instead of letting it stream into a deleted project.
+    runtimeManager.disposeProject(input.id);
     ProjectRepo.delete(input.id);
     log.info(`project deleted: ${input.id}`);
   });
@@ -145,6 +150,12 @@ export function registerProjectHandlers(ipcMain: IpcMain): void {
   // Hard-delete a session (cascades to its messages via DB FK).
   ipcMain.handle(IPC.SESSION_DELETE, (_evt, raw) => {
     const input = DeleteSessionSchema.parse(raw);
+    // Release the runtime (interrupt + approval/bridge/snapshot cleanup)
+    // BEFORE the row goes. Without this the runtime entry leaked for the
+    // app's lifetime, and a running turn kept streaming into the dead
+    // session, re-inserting orphaned message rows. bindSession re-binds from
+    // the fresh row on any future send, so this is safe at any point.
+    runtimeManager.dispose(input.id);
     SessionRepo.delete(input.id);
     // Keep connected mobile clients' session lists in sync.
     broadcastSessionDeleted(input.id);
@@ -155,6 +166,11 @@ export function registerProjectHandlers(ipcMain: IpcMain): void {
   ipcMain.handle(IPC.SESSION_ARCHIVE, (_evt, raw) => {
     const input = ArchiveSessionSchema.parse(raw);
     SessionRepo.setArchived(input.id, input.archived);
+    // Archiving puts the thread away: release its runtime too (same leak as
+    // delete). Restoring re-binds lazily — the next send calls bindSession
+    // with the fresh row, and bind rehydrates the persisted subagent state,
+    // so unarchive → reopen → send just works.
+    if (input.archived) runtimeManager.dispose(input.id);
     const session = SessionRepo.get(input.id);
     if (!session) throw new Error(`session not found after archive: ${input.id}`);
     broadcastSessionChanged(session);

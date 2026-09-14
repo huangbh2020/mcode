@@ -8,11 +8,14 @@
  *      for the same path are no-ops (the *original* content is what
  *      matters, not the latest).
  *   2. At turn end, `freeze()` returns the list of files for the renderer
- *      and marks the snapshot as "ready to rewind". The records stay
- *      in memory so `restore()` can still access them.
- *   3. If the user clicks "撤销本轮", `restore(cwd)` writes the originals
- *      back / unlinks newly created files, then the runtime calls
- *      `clear()` to release memory.
+ *      and marks the snapshot as "ready to rewind", then RELEASES the
+ *      in-memory file contents: the rewind path restores from the frozen
+ *      entries (rendered card / persisted turn_files), never from this map,
+ *      so keeping the texts would only pin an idle session's last-turn
+ *      files in memory forever.
+ *   3. What survives freeze are the PATHS (`hasPaths`) — the runtime uses
+ *      them to decide whether a rewind targeted the live snapshot before
+ *      calling `clear()`.
  *
  * Path safety: every path is `path.resolve(cwd, filePath)`-d before any
  * disk access and rejected if it escapes `cwd`. This prevents a hostile
@@ -91,15 +94,22 @@ export class FileSnapshot {
 
   /** Freeze and return the list of files for the renderer, enriched with
    *  per-file change tallies (`adds` / `dels`) and the pre-turn `before`
-   *  content. The records STAY in memory so a subsequent restore() can use
-   *  them — clear() is what actually frees them, and the runtime calls it
-   *  either after a successful restore or at the start of the next turn.
+   *  content. The contents are released before returning: everything the
+   *  rewind needs lives in the returned entries (which the renderer renders
+   *  and `turn.files` persists), and post-freeze consumers of this map are
+   *  keys-only (`hasPaths`) plus `clear()`. Without the release, an idle
+   *  session would pin the full text of its last turn's edited files until
+   *  the session was deleted.
+   *
+   *  Not re-entrant: freezing twice returns nothing — there is no second
+   *  turn end (adapters call this exactly once from flushFinal).
    *
    *  Async because we read each file's current on-disk content to diff
    *  against the snapshotted `before`. Read failures (deleted mid-turn,
    *  binary, permission) degrade gracefully to adds=dels=0 and before=""
    *  so a single bad file never blocks the whole turn-files event. */
   async freeze(): Promise<TurnFileEntry[]> {
+    if (this.frozen) return [];
     this.frozen = true;
     const out: TurnFileEntry[] = [];
     for (const [path, rec] of this.originals) {
@@ -131,36 +141,12 @@ export class FileSnapshot {
         before,
       });
     }
+    // Hand the contents to the GC: the entries above carry `before` to the
+    // renderer + DB, and post-freeze readers of this map need keys only.
+    for (const rec of this.originals.values()) {
+      rec.content = "";
+    }
     return out;
-  }
-
-  /** Restore all snapshotted files. Returns the paths that were
-   *  successfully restored. Failures are logged and excluded from
-   *  the return value so the renderer knows which ones actually
-   *  reverted.
-   *
-   *  Delegates to the module-level {@link restoreFiles} so the restore
-   *  logic has a single implementation shared with the DB-driven path
-   *  (used when a session is reopened and the in-memory snapshot is gone). */
-  async restore(cwd: string): Promise<string[]> {
-    // Process created-files first (unlink) so a parent that was also
-    // modified can be cleanly rewritten without the child blocking.
-    const all = [...this.originals.values()];
-    const created = all.filter((r) => !r.exists);
-    const modified = all.filter((r) => r.exists);
-    const ordered = [...created, ...modified].map((r) =>
-      // Reconstruct a TurnFileEntry from the in-memory record. `before`
-      // is only meaningful when the file existed; created files carry
-      // an empty string (restore unlinks rather than writes).
-      ({
-        filePath: r.absPath,
-        kind: r.exists ? ("modified" as const) : ("created" as const),
-        adds: 0,
-        dels: 0,
-        before: r.exists ? r.content : "",
-      }),
-    );
-    return restoreFiles(cwd, ordered);
   }
 
   /** Drop the restore records. Now only called after a successful LIVE

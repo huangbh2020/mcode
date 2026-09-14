@@ -124,6 +124,19 @@ export const THEME_STYLE_SETTING_KEY = "ui.themeStyle";
 export const ThemeStyleSchema = z.enum(["classic", "sketch"]);
 
 /**
+ * Setting key under which the custom UI font family is persisted (empty
+ * string = follow the stylesheet default stack). Only meaningful under the
+ * "classic" theme style — sketch always renders the bundled handwriting face
+ * (--sk-font). The value is a single font family name; the renderer composes
+ * it into a full CSS font-family stack with the system UI stack as fallback
+ * (see applyUiFontFamily in renderer lib/theme.ts), so a font uninstalled
+ * after the fact degrades gracefully instead of breaking the chrome. Rides
+ * the generic setting.get/set IPC like the other ui.* keys (first-paint
+ * getMany → sessionStore.uiFontFamily).
+ */
+export const UI_FONT_FAMILY_SETTING_KEY = "ui.uiFontFamily";
+
+/**
  * Setting key under which the auto-update flow state is persisted, so reopening
  * the About panel (or restarting the app mid-download) restores the progress /
  * "ready to install" banner instead of dropping the user back to idle.
@@ -1118,6 +1131,27 @@ export type ShowItemInFolderInput = z.infer<typeof ShowItemInFolderSchema>;
 export const OpenFileSchema = z.object({ path: z.string() });
 export type OpenFileInput = z.infer<typeof OpenFileSchema>;
 
+/** Reveal an image the user is viewing in the OS file manager, selecting the
+ *  file. The renderer sends the bytes it is displaying rather than a path
+ *  (image blocks carry only base64 — see `main/lib/imageArtifacts.ts`): main
+ *  hashes them and opens either the artifact it saved earlier (a browser
+ *  screenshot / codex generation, found by content) or a deduped cache copy
+ *  under `<userData>/images`. No renderer-supplied path is honored, so this
+ *  cannot open an arbitrary location. */
+export const ShowImageInFolderSchema = z.object({
+  /** Full `data:image/<mime>;base64,...` URL of the displayed image. */
+  dataUrl: z.string().regex(/^data:image\/[a-z0-9.+-]+;base64,/i).max(80_000_000),
+});
+export type ShowImageInFolderInput = z.infer<typeof ShowImageInFolderSchema>;
+
+export const ShowImageInFolderResultSchema = z.object({
+  ok: z.boolean(),
+  /** Absolute path of the revealed file (set when ok) — for logging, not display. */
+  path: z.string().optional(),
+  error: z.string().optional(),
+});
+export type ShowImageInFolderResult = z.infer<typeof ShowImageInFolderResultSchema>;
+
 /** List a project's sessions with optional pagination + archived filter.
  *  The left-bar tree loads the first `limit` (default 5) non-archived LOCAL
  *  threads and appends the next page on "load more"; the archived bin requests
@@ -1589,6 +1623,26 @@ export type GetCodexApiKeyInput = z.infer<typeof GetCodexApiKeySchema>;
 export const SetThemeSchema = z.object({ theme: ThemeNameSchema });
 export type SetThemeInput = z.infer<typeof SetThemeSchema>;
 export type GetThemeResult = { theme: ThemeName; effective: EffectiveTheme };
+
+/* ── Fonts (UI font picker) ── */
+
+/** Input for fonts.listSystemFamilies. Chromium's Local Font Access API
+ *  (navigator.queryLocalFonts) is NOT exposed by Electron (probed on 33:
+ *  the navigator member doesn't exist, blink feature flags don't help), so
+ *  the main process enumerates installed families per-platform instead
+ *  (macOS NSFontManager via osascript, Windows font registry, Linux
+ *  fontconfig) and caches the result briefly. */
+export const FontsListSystemFamiliesSchema = z.object({
+  /** Bypass the main-process cache — user just installed a font and reopened
+   *  the picker. */
+  refresh: z.boolean().optional(),
+});
+export type FontsListSystemFamiliesInput = z.infer<
+  typeof FontsListSystemFamiliesSchema
+>;
+/** Family names, sanitized (quotes/backslashes stripped, length-capped),
+ *  deduped and sorted with localeCompare. */
+export type FontsListSystemFamiliesResult = { families: string[] };
 
 /* ── App / runtime info (About panel) ── */
 
@@ -4058,6 +4112,10 @@ export interface RpcMap {
   // Theme / color scheme
   "theme.get": () => Promise<GetThemeResult>;
   "theme.set": (input: SetThemeInput) => Promise<GetThemeResult>;
+  // Fonts (UI font picker)
+  "fonts.listSystemFamilies": (
+    input: FontsListSystemFamiliesInput,
+  ) => Promise<FontsListSystemFamiliesResult>;
   // File read (on-demand diff rendering)
   "file.readFile": (input: FileReadInput) => Promise<{ content: string }>;
   /** Read a binary file as a base64 data URL (image preview). Same path guard. */
@@ -4227,6 +4285,10 @@ export interface RpcMap {
   /** Open a file with the OS's default associated application. Accepts any
    *  path that resolves inside a known project root (not just the root). */
   "shell.openFile": (input: OpenFileInput) => Promise<void>;
+  /** Reveal a chat image in the OS file manager. Takes the displayed bytes
+   *  (never a path); main resolves them to the file it saved, or to a cache
+   *  copy, and reveals that. */
+  "shell.showImageInFolder": (input: ShowImageInFolderInput) => Promise<ShowImageInFolderResult>;
   /** Native multi-file picker (project-external files allowed). Returns the
    *  selected absolute paths; empty array when the user cancels. */
   "dialog.pickFiles": (input: DialogPickFilesInput) => Promise<{ paths: string[] }>;
@@ -4513,6 +4575,8 @@ export const IPC = {
   // Theme / color scheme
   THEME_GET: "theme:get",
   THEME_SET: "theme:set",
+  // Fonts (UI font picker)
+  FONTS_LIST_SYSTEM_FAMILIES: "fonts:listSystemFamilies",
   // File read (on-demand diff rendering)
   FILE_READ: "file:readFile",
   // File read as base64 data URL (image preview)
@@ -4608,6 +4672,8 @@ export const IPC = {
   SHELL_SHOW_ITEM_IN_FOLDER: "shell:showItemInFolder",
   // Open a file inside a project root with the OS default application
   SHELL_OPEN_FILE: "shell:openFile",
+  // Reveal a chat image in the OS file manager (bytes in, resolved in main)
+  SHELL_SHOW_IMAGE_IN_FOLDER: "shell:showImageInFolder",
   // Native multi-file picker (project-external files allowed) for the composer
   DIALOG_PICK_FILES: "dialog:pickFiles",
   // Skill discovery for the composer `/` menu (scans ~/.claude/skills + project)

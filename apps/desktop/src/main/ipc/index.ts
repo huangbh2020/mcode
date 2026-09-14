@@ -8,6 +8,7 @@ import { registerCustomModelHandlers } from "./customModel.js";
 import { registerPiModelsHandlers } from "./piModels.js";
 import { registerCodexModelsHandlers } from "./codexModels.js";
 import { registerThemeHandlers } from "./theme.js";
+import { registerFontHandlers } from "./fonts.js";
 import { registerFileHandlers } from "./files.js";
 import { registerRgHandlers } from "./rg.js";
 import { registerGitHandlers } from "./git.js";
@@ -31,7 +32,7 @@ import { registerVoiceHandlers } from "./voice.js";
 /**
  * Wrap `ipcMain` so every `handle()` registration automatically awaits DB
  * readiness before invoking the handler. This decouples window creation from
- * DB init: the renderer may fire IPC before sql.js finishes loading, and those
+ * DB init: the renderer may fire IPC before the DB finishes opening, and those
  * calls simply queue on `awaitDb()` instead of hitting the "getDb() called
  * before initDb() resolved" throw. Once the DB is ready the promise is
  * already resolved, so the guard is a no-op for all subsequent calls.
@@ -61,6 +62,7 @@ export function registerIpcHandlers(): void {
   registerPiModelsHandlers(ipc);
   registerCodexModelsHandlers(ipc);
   registerThemeHandlers(ipc);
+  registerFontHandlers(ipc);
   registerFileHandlers(ipc);
   registerRgHandlers(ipc);
   registerGitHandlers(ipc);

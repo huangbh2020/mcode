@@ -7,7 +7,7 @@
 ![React](https://img.shields.io/badge/React-19-61DAFB?style=flat-square)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5-3178C6?style=flat-square)
 
-**Mcode** — *my* Code. 免费开源的 **Claude Code / 编程 Agent 桌面客户端**。
+**Mcode** — *my* Code. 免费开源的 **Claude Code / Codex / 编程 Agent 桌面客户端**。
 
 [English](README.md) | **简体中文**
 
@@ -15,22 +15,25 @@
 
 ### Mcode 是什么？
 
-**Mcode** 是一款免费开源的 **AI 编程助手桌面客户端**——一个基于 Agent SDK 构建的**三栏 IDE**，把 **Claude Code** 与 **Pi** 等 agent 平台放进一个完整的桌面应用。Mcode 依托官方的 [Claude Agent SDK](https://code.claude.com/docs/en/agent-sdk) 与 [Pi Coding Agent](https://pi.dev/)，**不重新实现 agent**，只提供完整的交互界面：会话管理、**实时流式渲染**、可视化**工具审批**、**计划模式**，以及文件树、Monaco 编辑器（30+ 语言）、**Git**、**终端**、**内置浏览器**、**语言服务器（LSP）**等全套 IDE 能力，并支持**手机端远程控制**。
+**Mcode** 是一款免费开源的 **AI 编程助手桌面客户端**——一个基于 Agent SDK 构建的**三栏 IDE**，把 **Claude Code**、**OpenAI Codex** 与 **Pi** 等 agent 平台放进一个完整的桌面应用。Mcode 依托官方的 [Claude Agent SDK](https://code.claude.com/docs/en/agent-sdk)、OpenAI Codex SDK 与 [Pi Coding Agent](https://pi.dev/)，**不重新实现 agent**，只提供完整的交互界面：会话管理、**实时流式渲染**、可视化**工具审批**、**计划模式**，以及文件树、Monaco 编辑器（30+ 语言）、**Git**、**终端**、**内置浏览器**、**语言服务器（LSP）**等全套 IDE 能力，并支持**手机端远程控制**。
 
-> **搜索关键词：** Claude Code 桌面版 · Claude 客户端 · 开源 AI IDE · AI 编程助手 · Agent SDK 桌面应用 · 工具审批 UI
+> **搜索关键词：** Claude Code 桌面版 · Codex 桌面客户端 · Claude 客户端 · 开源 AI IDE · AI 编程助手 · Agent SDK 桌面应用 · 工具审批 UI
 
 ![Mcode 首页 - AI 编程助手桌面客户端主界面](docs/images/首页.png)
 
 ### 核心亮点
 
-- 🎛 **多 Agent 支持** —— Claude 与 Pi 二合一，会话前自由切换
+- 🎛 **多 Agent 支持** —— Claude、Codex、Pi 三合一，会话前自由切换
 - ⚡ **实时流式输出** —— agent 的每一个 token 实时呈现
 - ✅ **工具审批界面** —— 允许 / 始终允许 / 拒绝，按会话维护待审批队列
 - 📋 **计划模式** —— 先只读调研、给出计划等你批准，再动手执行
+- 🧩 **插件与 MCP** —— 从插件市场安装 agent 插件（skills / 命令 / MCP server），投递给三个引擎
+- 🌿 **工作树会话** —— 在隔离的 git worktree 中并行开会话，一键合并回主检出
 - 🗂 **项目与多会话** —— 多项目管理、SQLite 持久化、随时续传
 - 🧰 **全套 IDE** —— Monaco 编辑器（30+ 语言）、diff 对比、多仓库 Git、多标签终端
-- 🌐 **内置浏览器** —— 元素拾取 + agent 自动驱动浏览器
+- 🌐 **内置浏览器** —— 元素拾取 + agent 自动驱动浏览器，登录状态跨重启保留
 - 🌍 **语言服务器（LSP）** —— TypeScript / Python / Go / Java 一键安装启用
+- 🎨 **手绘主题** —— 纸面 / 牛皮纸手绘风格，界面字体自定义
 - 📱 **手机端遥控** —— 手机上看会话、发消息、审批、撤销（局域网 / SSH 隧道）
 - 🆓 **MIT 开源** —— 永久免费，无追踪、无账号
 
@@ -38,26 +41,31 @@
 
 #### 🤖 多 Agent Provider
 
-- 内置 **Claude**（基于 `@anthropic-ai/claude-agent-sdk`）与 **Pi**（基于 `@earendil-works/pi-coding-agent`）两个 provider，会话首条消息前可在输入框选择。
-- 每个 provider 声明自己的能力，UI 自动适配：思考级别、权限模式、内置模型、自定义端点支持。
+- 内置三个 provider：**Claude**（基于 `@anthropic-ai/claude-agent-sdk`）、**OpenAI Codex**（基于 `@openai/codex` app-server）与 **Pi**（基于 `@earendil-works/pi-coding-agent`），会话首条消息前可在输入框选择。
+- 每个 provider 声明自己的能力，UI 自动适配：思考级别 / effort、权限模式、内置模型、自定义端点支持。
+- Codex provider 支持**第三方模型供应商**（OpenAI 协议 / Responses API 端点），可按模型覆盖上下文窗口（如 1M token 模型），并支持**图像生成**（对话内内联渲染）。
 - 按角色分配模型：普通对话、提交信息生成、合并冲突解决可分别使用不同的模型。
 
-![Mcode 支持 Claude 与 Pi 双 agent 后端](docs/images/支持claude和pi.png)
+![Mcode 会话前自由选择 agent provider](docs/images/支持claude和pi.png)
 
 #### 💬 实时对话与多会话
 
 - 通过所选 provider 的 SDK 驱动 agent loop，消息按 token 实时流式渲染；assistant 消息、思考过程、工具调用、工具结果、图片以**结构化卡片**展示。
 - 工具审批：允许 / 始终允许 / 拒绝，每个会话独立维护待审批队列。
 - 计划模式（Plan Mode）：agent 先只读调研、给出计划等你批准，再动手执行。
+- 活动台：运行回合中的子代理、后台任务、计划、书签集中一处查看。
 - 每轮文件快照 + 一键「撤销本轮」——精确回滚 agent 本轮改过的文件，历史轮次也能撤。
-- 输入框支持附加文件、粘贴图片、斜杠命令。
-- 会话持久化到 SQLite（基于 sql.js），支持后续续传（`--resume` 语义）；自动归档保持会话列表整洁。
+- 输入框支持附加文件、粘贴图片、斜杠命令与**语音输入**。
+- Markdown 回复中的本地文件链接与图片可直接点击打开。
+- 会话持久化到 SQLite（better-sqlite3），支持后续续传（`--resume` 语义）；自动归档保持会话列表整洁。
 
 ![Mcode 主面板 - AI 对话实时流式数据渲染](docs/images/主面板数据流显示.png)
 
 #### 🗂 左侧边栏：项目与会话管理
 
+- 左栏双模式：经典**项目树**，以及跨项目的收件箱式**会话流**（支持按项目 / 分组 / 工作树过滤）。
 - 多项目管理：分组、置顶、排序、归档；每个项目独立维护会话历史，支持搜索。
+- 🌿 **工作树会话**：在同一仓库的隔离 worktree 中开并行会话，互不干扰；一键合并回主检出（合并前自动提交未提交改动）。
 
 ![Mcode 左侧边栏 - 项目与会话管理](docs/images/左侧边栏功能.png)
 
@@ -66,6 +74,7 @@
 - 当前项目的文件树，带"agent 改动"标记（本轮新建 / 修改的文件一目了然）。
 - Monaco 编辑器：30+ 语言支持、脏标记、查找替换。
 - 三态文件视图：**编辑**（Monaco）、**Diff**（Monaco DiffEditor 并排对比）、**预览**（Markdown 语法高亮 + 数学公式、图片预览、二进制文件友好提示）。
+- 宽面板布局模式，分栏宽度可拖拽调整，适合重代码场景。
 - 右键菜单（在资源管理器中显示、复制路径、添加到聊天）+ 拖拽文件直接送入对话。
 
 <table>
@@ -78,8 +87,8 @@
 #### 🧰 Git 管理（多仓库）
 
 - 递归扫描自动发现一个项目里的**多个仓库**（monorepo、子模块、嵌套工程），每个仓库一张独立卡片。
-- 暂存 / 取消暂存 / 丢弃、Monaco 行级 diff、分支切换器、提交历史、每仓操作日志。
-- ✨ **AI 生成提交信息**：读取 diff 起草符合 conventional commit 风格的 message；**AI 解决合并冲突**：pull 冲突后提供引导式的"用 AI 解决"流程。
+- 暂存 / 取消暂存 / 丢弃、Monaco 行级 diff、分支切换器、本地分支删除、提交历史、每仓操作日志。
+- ✨ **AI 生成提交信息**：读取 diff 起草符合 conventional commit 风格的 message；**AI 解决合并冲突**：pull 冲突后提供会话式的"用 AI 解决"引导流程。
 
 ![Mcode 右侧边栏 - 多仓库 Git 管理界面](docs/images/右侧边栏-git管理.png)
 
@@ -92,12 +101,19 @@
 
 #### 🌐 右侧边栏：内置浏览器
 
-- 主窗口之上的多 tab 浏览器面板；关闭面板页面保持存活。
-- 设备尺寸模拟（桌面 / iPhone / Android），真实视口 + 触摸仿真。
+- 主窗口之上的多 tab 浏览器面板；关闭面板页面保持存活，登录状态跨应用重启保留。
+- 书签、历史、下载与隐私清理（清除 Cookie / 缓存 / 历史）。
+- 设备尺寸模拟（桌面 / iPhone / Android），真实视口 + 触摸仿真；弹窗与新窗口自动站内化为标签页。
 - 🎯 元素拾取：悬停高亮、点击选中，把元素的 HTML + 稳定选择器直接送入对话交给 agent。
-- agent 自己也能驱动浏览器（列出 / 导航 / 快照 / 点击 / 截图）完成网页端调试。
+- agent 自己也能驱动浏览器（导航 / 快照 / 点击 / 输入 / 截图，真实输入事件）完成网页端调试。
 
 ![Mcode 右侧边栏 - 内置浏览器面板](docs/images/右侧边栏-浏览器.png)
+
+#### 🧩 插件与 MCP
+
+- 从插件市场安装 agent 插件（git 仓库 / 本地目录 / zip 压缩包），也可添加自己的市场源；安装后默认**停用**，并弹出组件审查，确认后才可启用。
+- 一个插件可携带 skills、斜杠命令、子代理、MCP server 与 hooks，Mcode 会把它们投递给**三个引擎**，并在面板中展示每个组件对各 provider 的支持矩阵（hooks 在 v1 仅解析、不执行）。
+- **设置 → MCP** 可管理 MCP server：stdio / HTTP 服务器、按服务器启停，远程服务器支持 OAuth 登录。
 
 #### 🌍 语言服务器（LSP）
 
@@ -123,7 +139,7 @@
 
 ![Mcode 设置面板 - 常规设置](docs/images/设置面板-常规.png)
 
-**外观** —— 主题、密度、字体偏好。
+**外观** —— 主题、手绘风格（纸面浅色 / 牛皮纸深色）、界面字体、对话字号与密度。
 
 ![Mcode 设置面板 - 外观主题](docs/images/设置面板-外观.png)
 
@@ -159,14 +175,13 @@
 
 ![Mcode 设置 - 语言服务器 LSP 配置](docs/images/设置-语言服务器.png)
 
-**关于** —— 版本、许可证、仓库链接、手动检查更新。
-
-![Mcode 设置 - 关于与更新](docs/images/设置-关于.png)
+此外还有：**鼠标手势**（录制绑定到应用命令的拖拽手势）、**语音输入**、**MCP 服务器**、**插件**、**运行时**（管理 Mcode 按需下载的 agent 运行时）、**用量统计**、**关于**。
 
 #### 🔄 其他
 
+- **运行时按需下载** —— agent 运行时不再随安装包捆绑，Mcode 在首次使用时自动下载，安装包瘦身约 600MB/平台；可在**设置 → 运行时**管理。
 - 自动更新：通过 `electron-updater` 从 GitHub Releases 拉 `latest*.yml`；也可在**设置 → 关于**手动检查。
-- Provider 抽象层（`AgentProvider`）——目前内置 Claude 与 Pi，易于扩展其他 agent 平台。
+- Provider 抽象层（`AgentProvider`）——目前内置 Claude、Codex 与 Pi，易于扩展其他 agent 平台。
 
 ### 常见问题
 
@@ -177,10 +192,10 @@ A：免费。Mcode 采用 **MIT 开源协议**，可自由使用和修改。
 A：支持。已发布 macOS（Apple Silicon + Intel）与 Windows（x64）安装包，见下方[下载](#下载)。
 
 **Q：需要单独安装 Claude Code CLI 吗？**
-A：不需要。**Claude Agent SDK** 自带 `claude` 二进制，Pi SDK 也自行管理运行时，无需单独安装 CLI。
+A：不需要。Mcode 自行管理所有 agent 运行时——所选 provider（claude / codex / pi）的运行时会在首次使用时自动下载，可在**设置 → 运行时**中管理。
 
 **Q：可以用哪些模型？**
-A：Claude provider 使用你的 **Anthropic API key**；Pi provider 支持 **OpenAI 协议端点**，可以接入自有模型。
+A：Claude provider 使用你的 **Anthropic API key**。Pi 与 Codex provider 支持**自定义模型供应商**——在**设置 → 模型配置**中填写 OpenAI 协议 / Responses API 端点，可接入自有模型，包括第三方网关。
 
 **Q：手机能控制 Mcode 吗？**
 A：可以。局域网内扫码即可连接；也可以用自己的 VPS 建立 **SSH 反向隧道**，实现任何网络下的远程访问。
@@ -190,9 +205,10 @@ A：可以。局域网内扫码即可连接；也可以用自己的 VPS 建立 *
 - Node.js ≥ 22.13（pnpm 11 要求）
 - pnpm ≥ 9（`corepack enable && corepack prepare pnpm@latest --activate`）
 - **Claude provider**：Anthropic API key（`ANTHROPIC_API_KEY`）——Agent SDK 按 API key 计费，不能使用 Max/Pro 订阅。
+- **Codex provider**：在**设置 → 模型配置**中至少配置一个模型供应商（OpenAI 官方或任意 OpenAI 协议 / Responses API 端点）。在 GUI 中填写的 API key 使用 Electron `safeStorage` 加密存储。
 - **Pi provider**：通过**设置 → 模型配置**至少配置一个 provider/模型（等价于编辑 `~/.pi/agent/models.json`）。在 GUI 中填写的 API key 使用 Electron `safeStorage` 加密存储，无需设置环境变量。
 
-> **注意**：Claude Agent SDK 自带 `claude` 二进制，Pi SDK 也自行管理其运行时，均无需单独安装 CLI。
+> **注意**：无需手动安装任何 CLI——Mcode 会在首次使用时自动下载所需 agent 运行时（claude / codex / pi），因此 provider 首次使用需要联网。
 
 ### 快速开始
 
@@ -247,14 +263,14 @@ pnpm package
 | 壳层 | Electron 33、electron-vite、electron-builder 25 |
 | 前端 | React 19、Zustand 5、Tailwind CSS 3、@base-ui/react、@tabler/icons |
 | 编辑器/终端 | Monaco Editor、xterm.js + node-pty |
-| Agent | @anthropic-ai/claude-agent-sdk、@earendil-works/pi-coding-agent |
-| 持久化 | sql.js（纯 WASM 的 SQLite） |
+| Agent | @anthropic-ai/claude-agent-sdk、@openai/codex、@earendil-works/pi-coding-agent |
+| 持久化 | better-sqlite3（同步 SQLite） |
 | 契约 | zod（跨进程 IPC 校验） |
 | 工具链 | pnpm 11、Turbo、TypeScript 5（strict） |
 
 ### 许可证
 
-MIT。本项目不重新分发或内嵌任何 agent 二进制——各 SDK 自行管理其运行时（Claude Agent SDK 与 Pi coding-agent SDK 均如此）。
+MIT。本项目不重新分发或内嵌任何 agent 二进制——各 SDK 自行管理其运行时（Claude Agent SDK、OpenAI Codex 与 Pi coding-agent SDK 均如此）。
 
 ### 交流群
 
