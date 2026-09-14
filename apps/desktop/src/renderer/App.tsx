@@ -567,39 +567,73 @@ function SplitCenterPane({ wide }: { wide: boolean }) {
 
 /** The chat half: SessionTabs strip (in tabs mode) + the active ChatPane.
  *
- *  BOTH display modes keep every pane in the keep-alive bucket mounted and
- *  background the inactive ones via CSS (display:none). This keeps each
- *  pane's composer draft, scroll position, and Tiptap undo history alive
- *  across switches — switching is a visibility swap instead of re-mounting
- *  and re-measuring, so a left-bar click lands instantly. Events still
- *  stream into backgrounded panes (they read their own session bucket).
- *  Closing a tab removes its id from openTabs, letting React unmount it.
- *  Tabs mode shows the bucket in the SessionTabs strip; single mode has no
- *  strip, so the bucket self-prunes: only the active session plus the most
- *  recently TOUCHED ones stay mounted (see keepAliveOrder). */
+ *  Tabs mode keeps every OPEN tab's pane mounted, backgrounded via CSS
+ *  (display:none) — pane lifetime is the user's own tab strip, and closeTab
+ *  intentionally keeps the store buckets so re-opening shows the latest state.
+ *
+ *  Single mode mounts ONLY the active pane (单会话 = one live thread): the
+ *  previous pane unmounts on every switch, and the session that ages out of
+ *  the two-generation grace window (current + previous) gets its heavy store
+ *  buckets pruned via `pruneSessionHistory` — loaded messages (incl. base64
+ *  image blocks), turn-files cards, subagent transcripts, usage history. The
+ *  grace window keeps A↔B ping-pong refetch-free (the previous session's
+ *  store data survives; only the pane remounts), and anything older is fully
+ *  destroyed: the next activation re-fetches the first page because
+ *  selectSession/openTab gate on historyLoadedBySession. Sessions with a
+ *  running turn or a pending question are never pruned (their live event
+ *  stream, turn.done persistence, and the left-bar badge read those buckets)
+ *  — they're deferred and retried on the next switch. */
 
-/** LRU of recently-activated sessions for single mode's keep-alive window.
- *  Module-level so it survives ChatColumn re-mounts (mode switches). Tabs
- *  mode doesn't consult it — its bucket is the user's own tab strip. */
-const keepAliveOrder: string[] = [];
-const KEEP_ALIVE_MAX = 8;
+/** Buckets kept alive in single mode: [previous, current], most recent last.
+ *  Module-level so it survives ChatColumn re-mounts (mode switches). */
+const singleModeGrace: string[] = [];
+const SINGLE_MODE_GRACE = 2;
+/** Eviction candidates deferred because the session was still live (running
+ *  turn / pending question) at prune time. Retried on every switch. */
+const singleModePruneRetry: string[] = [];
+let lastChatColumnMode: "single" | "tabs" | null = null;
 
 function ChatColumn() {
   const displayMode = useSessionStore((s) => s.displayMode);
   const activeSessionId = useSessionStore((s) => s.activeSessionId);
   const openTabs = useSessionStore((s) => s.openTabs);
 
-  // Touch the LRU whenever the foreground session changes (single-mode
-  // window membership follows usage, not just open order).
+  // Single-mode memory policy driver (see the block comment above).
   useEffect(() => {
-    if (activeSessionId == null) return;
-    const i = keepAliveOrder.indexOf(activeSessionId);
-    if (i >= 0) keepAliveOrder.splice(i, 1);
-    keepAliveOrder.push(activeSessionId);
-    if (keepAliveOrder.length > KEEP_ALIVE_MAX * 2) {
-      keepAliveOrder.splice(0, keepAliveOrder.length - KEEP_ALIVE_MAX * 2);
+    if (displayMode !== "single") {
+      lastChatColumnMode = displayMode;
+      return;
     }
-  }, [activeSessionId]);
+    if (lastChatColumnMode !== "single") {
+      // Entering single mode: baseline the grace window at the incoming
+      // session — its pane is the one being mounted right now.
+      lastChatColumnMode = "single";
+      singleModeGrace.length = 0;
+      if (activeSessionId != null) singleModeGrace.push(activeSessionId);
+      return;
+    }
+    if (activeSessionId == null) return;
+    if (singleModeGrace[singleModeGrace.length - 1] === activeSessionId) return;
+    singleModeGrace.push(activeSessionId);
+    const candidates: string[] = [];
+    while (singleModeGrace.length > SINGLE_MODE_GRACE) {
+      candidates.push(singleModeGrace.shift()!);
+    }
+    candidates.push(...singleModePruneRetry.splice(0));
+    if (candidates.length === 0) return;
+    const s = useSessionStore.getState();
+    for (const id of candidates) {
+      if (id === activeSessionId || singleModeGrace.includes(id)) continue;
+      // Live threads keep their buckets: a running turn's events and its
+      // turn.done persistence read messagesBySession, and a pending question
+      // drives the left-bar/activity badge. Retry on the next switch.
+      if (s.runningBySession[id] || s.pendingQuestionBySession[id]) {
+        singleModePruneRetry.push(id);
+        continue;
+      }
+      s.pruneSessionHistory(id);
+    }
+  }, [activeSessionId, displayMode]);
 
   if (displayMode === "tabs") {
     return (
@@ -619,36 +653,21 @@ function ChatColumn() {
     );
   }
 
-  // single mode: same keep-alive structure, no tab strip. Without it the
-  // keyed remount (`key={activeSessionId}`) tore down and rebuilt the whole
-  // ChatPane on every left-bar switch — composer Tiptap re-init, full
-  // timeline re-parse — which read as a lag before the new session appeared.
-  //
-  // Mounted set = the active session (always — defends against a path that
-  // activates a session without adding it to openTabs; the tabs branch makes
-  // the same assumption the other way) + the most recently touched ones that
-  // are still in openTabs (the filter hands pane lifetime to openTabs'
-  // delete/archive cleanup, so panes of removed sessions unmount instead of
-  // lingering here). Sessions pushed out of the window unmount and re-mount
-  // cold on their next visit — same cost as the old keyed remount, so the
-  // window can only ever improve on the baseline.
+  // single mode: mount ONLY the active pane. The keyed div forces a full
+  // remount on switch — that IS the destruction the mode promises. What the
+  // user loses vs. the old 8-pane keep-alive is instant back-switching
+  // (Tiptap re-init + timeline re-parse on return); the composer draft and
+  // capsule state live in the store and survive, and the immediately
+  // previous session's data stays in memory (grace window) so returning to
+  // it doesn't even refetch.
   if (activeSessionId == null) {
     return <ChatPane sessionId={null} />;
   }
-  const keepAlive = keepAliveOrder
-    .slice(-KEEP_ALIVE_MAX)
-    .filter((sid) => sid !== activeSessionId && openTabs.includes(sid));
-  const panes = [activeSessionId, ...keepAlive];
   return (
     <div className="relative min-h-0 flex-1">
-      {panes.map((sid) => (
-        <div
-          key={sid}
-          className={`absolute inset-0 ${sid === activeSessionId ? "" : "hidden"}`}
-        >
-          <ChatPane sessionId={sid} isActive={sid === activeSessionId} />
-        </div>
-      ))}
+      <div key={activeSessionId} className="absolute inset-0">
+        <ChatPane sessionId={activeSessionId} isActive />
+      </div>
     </div>
   );
 }

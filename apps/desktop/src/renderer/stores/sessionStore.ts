@@ -1403,6 +1403,16 @@ export interface SessionState {
   /** Fetch the next page of older messages for a session and prepend them.
    *  No-op when nothing more is available or a fetch is already in flight. */
   loadOlderMessages: (sessionId: string) => Promise<void>;
+  /** Single-mode eviction: drop the session's heavy HISTORY buckets (loaded
+   *  messages incl. base64 image blocks, turn-files cards, subagent
+   *  transcripts, usage history, pagination state) after its pane left the
+   *  keep-alive grace window. Deliberately narrow — live-state fields
+   *  (running/unread/pending question/todos/capsule/composer draft/
+   *  bookmarks) stay, because the session row still exists and the left-bar
+   *  and activity UIs read them. Everything dropped here is re-fetched on
+   *  the next activation: selectSession/openTab gate on historyLoadedBySession
+   *  and the hydrate* helpers re-read the persisted row. */
+  pruneSessionHistory: (sessionId: string) => void;
   /** Remove a session from the tab strip. If it was the active tab,
    *  focus shifts to the previous one (or the next, if there is no
    *  previous); running turns are NOT cancelled — they keep streaming
@@ -5886,6 +5896,40 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         };
       }
       return { openTabs: nextTabs, activeSessionId: nextActive, centerTabFocus };
+    });
+  },
+
+  /** See the interface doc. Callers must NOT prune a session with a running
+   *  turn (its event stream and turn.done persistence read messagesBySession)
+   *  — the single-mode eviction driver in ChatColumn guards that. */
+  pruneSessionHistory: (sessionId) => {
+    set((s) => {
+      const messagesBySession = { ...s.messagesBySession };
+      delete messagesBySession[sessionId];
+      const hasMoreMessagesBySession = { ...s.hasMoreMessagesBySession };
+      delete hasMoreMessagesBySession[sessionId];
+      const loadingMessagesBySession = { ...s.loadingMessagesBySession };
+      delete loadingMessagesBySession[sessionId];
+      const loadingOlderBySession = { ...s.loadingOlderBySession };
+      delete loadingOlderBySession[sessionId];
+      const historyLoadedBySession = { ...s.historyLoadedBySession };
+      delete historyLoadedBySession[sessionId];
+      const turnFilesBySession = { ...s.turnFilesBySession };
+      delete turnFilesBySession[sessionId];
+      const usageHistoryBySession = { ...s.usageHistoryBySession };
+      delete usageHistoryBySession[sessionId];
+      const subagentTranscriptsBySession = { ...s.subagentTranscriptsBySession };
+      delete subagentTranscriptsBySession[sessionId];
+      return {
+        messagesBySession,
+        hasMoreMessagesBySession,
+        loadingMessagesBySession,
+        loadingOlderBySession,
+        historyLoadedBySession,
+        turnFilesBySession,
+        usageHistoryBySession,
+        subagentTranscriptsBySession,
+      };
     });
   },
 
