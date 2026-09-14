@@ -34,6 +34,7 @@ import "@renderer/lib/monacoSetup.js";
 import { useI18n } from "@renderer/lib/i18n/index.js";
 import type { MessageId } from "@renderer/lib/i18n/core.js";
 import { setLastCursor, type NavEntry } from "@renderer/lib/editorNav.js";
+import { useScrollMemory } from "@renderer/lib/scrollMemory.js";
 import { resolveShortcut, acceleratorToDisplayString } from "@renderer/lib/shortcuts.js";
 // Monaco model cache (keepCurrentModel ownership): hot tab switches reuse the
 // cached TextModel — tokenization, undo history and unsaved edits survive.
@@ -407,6 +408,11 @@ function EditorToolbar({
  *  is the primary: re-opening a file puts the user back where they left off. */
 const viewStateCache = new Map<string, editor.ICodeEditorViewState>();
 
+/** How long a mount-time view-state re-assert keeps trying (see EditPane's
+ *  armMountReassert): the fallback for widgets whose post-mount layout change
+ *  never arrives. Bounded so a later window resize can't jump the scroll. */
+const MOUNT_RESTORE_REASSERT_MS = 400;
+
 /** Per-file DIFF view states (scroll + cursor of BOTH panes), keyed by
  *  absolute file path. The diff pane reuses one anonymous model pair across
  *  file switches and the library resets scroll on every content swap / widget
@@ -513,6 +519,9 @@ function EditPane({ filePath, projectPath }: { filePath: string; projectPath: st
   // The freshness check is pointless right after a model was created from a
   // fresh read — skip it once for that path.
   const skipVerifyPathRef = useRef<string | null>(null);
+  // Cancel hook of a pending mount-time view-state re-assert (see
+  // armMountReassert) — dropped by a reveal or by the teardown.
+  const cancelMountReassertRef = useRef<(() => void) | null>(null);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // LSP document-sync version counter (incremented on each didChange).
   const lspVersionRef = useRef(1);
@@ -554,6 +563,8 @@ function EditPane({ filePath, projectPath }: { filePath: string; projectPath: st
     if (!reveal || reveal.filePath !== readyCtxRef.current?.path) return;
     const ed = editorRef.current;
     if (!ed) return;
+    // An explicit jump outranks the mount-time scroll restore.
+    cancelMountReassertRef.current?.();
     const doReveal = () => {
       ed.revealLineInCenter(reveal.line);
       ed.setPosition({ lineNumber: reveal.line, column: reveal.column });
@@ -576,6 +587,72 @@ function EditPane({ filePath, projectPath }: { filePath: string; projectPath: st
     });
     retryTimer = setTimeout(stopRetry, 1000);
     editorDisposablesRef.current.push({ dispose: stopRetry });
+  };
+
+  /** Re-apply a view state that was restored at MOUNT, once the editor has a
+   *  real layout.
+   *
+   *  A mount-time restore is applied to a widget the library has just created
+   *  while its container was still effectively un-laid-out (it is `display:
+   *  none` until `create()` returns, and Monaco's first layout then runs on a
+   *  0-height box). A restore clamped in that window — or a top-of-file
+   *  position stashed over the cache by the widget's own init/scroll events —
+   *  is exactly the corruption the diff pane already guards against (see
+   *  DiffPane's render-time snapshot): the file re-opens at the top instead of
+   *  where the user left it. Re-applying the state on the first real layout
+   *  change (plus one bounded timeout as a fallback) closes it here too.
+   *
+   *  Re-applying is idempotent — until the user scrolls, the cache holds what
+   *  is already on screen, so a restore that landed correctly costs nothing.
+   *  Any wheel / pointer / key input in the editor cancels the retries: a late
+   *  restore must never drag the view back out from under the user. */
+  const armMountReassert = (
+    ed: editor.IStandaloneCodeEditor,
+    path: string,
+    saved: editor.ICodeEditorViewState,
+  ) => {
+    cancelMountReassertRef.current?.();
+    const maybeDom = ed.getDomNode();
+    // Without the DOM node there is no way to tell a user scroll from our own,
+    // and a retry that can't be cancelled is worse than no retry at all.
+    if (!maybeDom) return;
+    // Re-bound as a non-nullable const so the hoisted helpers below can use it.
+    const dom: HTMLElement = maybeDom;
+    let layoutListener: { dispose(): void } | null = null;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    // Function declarations so the two can reference each other.
+    function stop() {
+      dom.removeEventListener("wheel", onIntent);
+      dom.removeEventListener("pointerdown", onIntent);
+      dom.removeEventListener("keydown", onIntent);
+      layoutListener?.dispose();
+      layoutListener = null;
+      if (timer) clearTimeout(timer);
+      timer = null;
+      if (cancelMountReassertRef.current === stop) cancelMountReassertRef.current = null;
+    }
+    function onIntent() {
+      stop();
+    }
+    const attempt = () => {
+      if (disposedRef.current) return stop();
+      // A file switch may land inside the retry window; a stale re-assert must
+      // not drag the file now on screen to the previous file's position.
+      if (readyCtxRef.current?.path !== path) return stop();
+      // Re-seed first: the widget may refuse to move (still unmeasured), and
+      // the repair must survive that so the next switch isn't top-of-file too.
+      viewStateCache.set(path, saved);
+      ed.restoreViewState(saved);
+    };
+    dom.addEventListener("wheel", onIntent, { passive: true });
+    dom.addEventListener("pointerdown", onIntent);
+    dom.addEventListener("keydown", onIntent);
+    layoutListener = ed.onDidLayoutChange(() => attempt());
+    timer = setTimeout(() => {
+      attempt();
+      stop();
+    }, MOUNT_RESTORE_REASSERT_MS);
+    cancelMountReassertRef.current = stop;
   };
 
   /** Swap the displayed model to `path` (a cache entry must exist — either a
@@ -806,10 +883,16 @@ function EditPane({ filePath, projectPath }: { filePath: string; projectPath: st
     // Restore the scroll position / cursor from a previous visit of this
     // file (stashed eagerly by the listeners below). A pending goto-def
     // reveal still wins — applyReveal() below runs after this and
-    // re-positions.
+    // re-positions. A restore that this brand-new widget clamps (its container
+    // has not been laid out yet) is re-applied by armMountReassert once the
+    // layout is real — otherwise a file re-opened after the editor column was
+    // remounted lands back at the top.
     if (mountPath) {
       const saved = viewStateCache.get(mountPath);
-      if (saved) editor_.restoreViewState(saved);
+      if (saved) {
+        editor_.restoreViewState(saved);
+        armMountReassert(editor_, mountPath, saved);
+      }
     }
 
     // Stash the view state eagerly on every scroll / selection change. Paths
@@ -863,6 +946,7 @@ function EditPane({ filePath, projectPath }: { filePath: string; projectPath: st
     return () => {
       if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
       if (changeDebounceRef.current) clearTimeout(changeDebounceRef.current);
+      cancelMountReassertRef.current?.();
       editorDisposablesRef.current.forEach((d) => d.dispose());
       editorDisposablesRef.current = [];
       const ctx = readyCtxRef.current;
@@ -1081,6 +1165,11 @@ function GotoActivityPill() {
 function MarkdownPreviewPane({ filePath, projectPath }: { filePath: string; projectPath: string }) {
   const { t } = useI18n();
   const [content, setContent] = useState<string | null>(null); // null = loading
+  // The preview pane is a plain scroll container that unmounts on every file
+  // switch (and re-mounts its body on every content read), so without this a
+  // long README the user had scrolled re-opened at the top. Monaco's own
+  // view-state cache doesn't cover this pane - it has no model.
+  const scrollRef = useScrollMemory(`ide-preview:${filePath}`);
   useEffect(() => {
     let cancelled = false;
     setContent(null);
@@ -1106,7 +1195,10 @@ function MarkdownPreviewPane({ filePath, projectPath }: { filePath: string; proj
     );
   }
   return (
-    <div className="h-full overflow-auto bg-surface px-6 py-4 [--chat-font-size:13px]">
+    <div
+      ref={scrollRef}
+      className="h-full overflow-auto bg-surface px-6 py-4 [--chat-font-size:13px]"
+    >
       <Markdown
         projectPath={projectPath}
         baseDir={dirname(filePath) || projectPath}
