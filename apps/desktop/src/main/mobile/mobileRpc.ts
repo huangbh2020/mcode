@@ -388,6 +388,10 @@ const HANDLERS: Record<string, RpcHandler> = {
   "session:archive": (raw) => {
     const input = ArchiveSessionSchema.parse(raw);
     SessionRepo.setArchived(input.id, input.archived);
+    // Archiving puts the thread away: release its runtime too (same leak as
+    // delete). Restoring re-binds lazily — the next send calls bindSession
+    // with the fresh row. Mirrors the desktop SESSION_ARCHIVE handler.
+    if (input.archived) runtimeManager.dispose(input.id);
     const session = SessionRepo.get(input.id);
     if (!session) throw new RpcError(`session not found after archive: ${input.id}`, 500);
     broadcastSessionChanged(session);
@@ -396,6 +400,9 @@ const HANDLERS: Record<string, RpcHandler> = {
 
   "session:delete": (raw) => {
     const input = DeleteSessionSchema.parse(raw);
+    // Release the runtime (interrupt + approval/bridge/snapshot cleanup)
+    // BEFORE the row goes — mirrors the desktop SESSION_DELETE handler.
+    runtimeManager.dispose(input.id);
     SessionRepo.delete(input.id);
     broadcastSessionDeleted(input.id);
     return { ok: true };
@@ -415,6 +422,9 @@ const HANDLERS: Record<string, RpcHandler> = {
 
   "project:delete": (raw) => {
     const input = DeleteProjectSchema.parse(raw);
+    // Release every session runtime BEFORE the SQL cascade removes the rows —
+    // mirrors the desktop PROJECT_DELETE handler.
+    runtimeManager.disposeProject(input.id);
     ProjectRepo.delete(input.id);
     return { ok: true };
   },

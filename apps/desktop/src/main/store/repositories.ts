@@ -858,6 +858,16 @@ export const SessionRepo = {
     persist();
   },
 
+  /** All session ids of a project (any kind/archived state) — the lookup list
+   *  for disposing every in-memory session runtime BEFORE a project
+   *  hard-delete's SQL cascade removes the rows. */
+  idsByProject(projectId: string): string[] {
+    const rows = getDb()
+      .prepare("SELECT id FROM sessions WHERE project_id = ?")
+      .all(v(projectId)) as unknown as Array<{ id: string }>;
+    return rows.map((r) => r.id);
+  },
+
   /** Set the archived (soft-delete) flag. */
   setArchived(id: string, archived: boolean): void {
     run("UPDATE sessions SET archived = ?, updated_at = ? WHERE id = ?",
