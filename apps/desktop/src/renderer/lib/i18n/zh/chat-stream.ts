@@ -8,6 +8,10 @@ export const zh = {
   "chatStream.timeline.noText": "(无文本内容)",
   "chatStream.timeline.attachmentLine": "[附件] {text}",
 
+  // ── MessageRow: user prompt overflow (5-line collapse) ──
+  "chatStream.userMsg.expand": "展开",
+  "chatStream.userMsg.collapse": "收起",
+
   // ── MessageBlocks: batch tool group ──
   "chatStream.opCount": "{n} 个操作",
 

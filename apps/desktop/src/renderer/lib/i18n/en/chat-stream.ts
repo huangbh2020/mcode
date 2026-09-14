@@ -5,6 +5,10 @@ export const en = {
   "chatStream.timeline.noText": "(no text)",
   "chatStream.timeline.attachmentLine": "[Attachment] {text}",
 
+  // ── MessageRow: user prompt overflow (5-line collapse) ──
+  "chatStream.userMsg.expand": "Expand",
+  "chatStream.userMsg.collapse": "Collapse",
+
   // ── MessageBlocks: batch tool group ──
   "chatStream.opCount": "{n} operations",
 

@@ -213,6 +213,20 @@ pnpm build
 - **护栏**:readSeq/flipSeq 双序号防快速切换下的过期异步(首读/校验);`disposedRef` 挡卸载后的异步回调改状态/翻转 displayedPath;spinner 只出现在「本次 EditPane 挂载后第一个文件且内容未就绪」。
 - **顺带修复**:脏文件(未保存编辑)跨切换/跨重挂载存活(模型常驻;此前只存 viewState,内容直接丢),undo 历史同样存活。**内存**:模型集合 = open tabs 集合,关 tab 即 dispose,天然有界。**diff/preview 模式**仍按需卸载 EditPane(DiffPane 自建匿名模型,既有 `keepCurrentOriginalModel/keepCurrentModifiedModel` 行为不变);返回 edit 时缓存命中秒开。方案 2(编辑器控件 keep-alive 池,连 setModel 都省、诊断标记跨切换常驻)如需再做,基础设施已全部就位。
 
+### 查看面滚动位置记忆(2026-09-14,修「打开过的文件再次打开回到顶部」)
+
+- **缺口**:滚动位置此前只有 Monaco 的**编辑面板**(EditPane 的 `viewStateCache`)和**差异面板**(`diffViewStateCache`)记得住。**预览类查看面一个都没记**——桌面 Markdown 预览(`MarkdownPreviewPane`,`.md` 首次打开默认进这个模式)和手机端文件查看器(`components/mobile/FileViewer.tsx`,`FileViewerOverlay` 与 `MobileViewerOverlay` 共用同一份 `FileViewerContent`)都是普通 `overflow-auto` 容器:文件切换或点「返回」时整块被 React 卸载,再次打开必然回顶部。
+- **共享实现 `lib/scrollMemory.ts` 的 `useScrollMemory(key)`**:模块级 `Map<string, number>`(会话级、不落盘,与 `viewStateCache` 同性质);key 由调用方加前缀区分查看面(`ide-preview:<path>` / `mobile-md:<path>` / `mobile-source:<path>`——Markdown 的「渲染预览」与「高亮源码」是同文件两种排布、滚动量不同,各记一份,对齐桌面 preview/edit 分离的语义)。返回**回调 ref**,在 layout effect(首帧前)写回 `scrollTop`,再在 120/400ms 重试两次:内容可能还在长(图片异步解码、Shiki 替换 raw 兜底),容器比保存位置矮时写入会被**钳制**,不重试就停在文件中段。落地(与保存值差 <1px,允许小数偏移)或**任何 wheel/pointerdown/touchstart** 立即停止重试——迟到的恢复绝不能把用户从自己滚到的位置拽回去。ref 回调里用「state 包一层对象」而不是直接存节点:文件切换后重新挂上的容器若元素身份相同,直接存节点会让 effect 不重跑、恢复静默失效。
+- **EditPane 挂载路径补同级护栏 `armMountReassert`**:库(`@monaco-editor/react`)在容器还 `display:none` 时就 `create()` 控件(它的 wrapper 组件 ready 前隐藏容器),Monaco 首次 layout 因此跑在 0 高度盒子上——挂载时的 `restoreViewState` 可能被钳制,控件自身的 init/scroll 事件还会把「文件顶部」写进缓存,**这正是差异面板早已修过的那类损坏**(`DiffPane` 的 render-time 快照,commit b831b59;EditPane 因为是常驻控件、切文件走 `path` 交换,一直没有拿到等价补偿)。补偿:挂载时恢复后,在**首次 layout change** 再应用一次(400ms 超时兜底),应用前先 `viewStateCache.set(path, saved)` **重播种**(控件仍不肯挪动时也把缓存修回来,否则下一次切换照样落顶部);wheel/pointerdown/keydown、`applyReveal`(显式跳转优先)、**已切换文件**(`readyCtxRef.current.path !== path`)、卸载任一发生即取消。重复应用是幂等的(用户没滚动前缓存就等于屏上内容),所以正常恢复不受影响。
+- **刻意没做**:图片预览(`ImagePreviewPane`)不记滚动——它的滚动只在 1:1 缩放(`natural`)下存在,而缩放状态本身不记,恢复位置无意义(适应窗口时不溢出,恢复被钳制为 0,无害);宽面板模式下编辑器宿主是 CSS 隐藏的,此时挂载的查看面容器高度为 0、恢复仍落顶部(点文件名时本来也看不见它,退出宽屏才可见)——与修复前行为一致,未额外处理。
+- **验证**:`tsc --noEmit` + `electron-vite build` 通过。**未做真机端到端**:当时用户的 dev 实例窗口处于最小化状态,驱动它会抢占屏幕并改动其会话数据,故这一轮的验证停在类型/构建层,行为回读仍靠人工使用确认。
+
+### 用户消息气泡 5 行折叠(2026-09-14)
+
+- **行为**:用户发送的消息超过 5 行时默认折叠——钳在 `calc(5 × --chat-md-leading × --chat-font-size)`(纯 CSS,跟随对话紧凑度设置),底部 mask 渐隐代替硬切(气泡是 `user-bubble-fill` 半透明着色,表面色渐变会与色调解离);点击气泡任意处展开,再点收起。展开态在气泡底部右侧一枚「收起」chip,折叠态在底缘中央一枚「展开」圆角 pill——两枚形态镜像 Markdown 代码块的既有折叠 pill(`chatStream.code.*`),两处折叠面读感一致。i18n 键 `chatStream.userMsg.expand/collapse`。
+- **实现**(全在 `ChatPane.tsx` 的 `MessageRow`,用户消息唯一渲染路径;3043 行附近的 `isUser` 只喂 `canEdit`):溢出判定 = `el.scrollHeight > 行高×5+1`,**折叠/展开两态通用**——`scrollHeight` 是完整内容高度、与钳制无关,展开态重挂载(下条)也能得出判定,否则「收起」chip 永不出现;行高读 `.chat-md` 的 computed line-height(密度驱动),无 markdown 内容时回退 `fontSize×1.5`。`ResizeObserver` 在字体/图片/KaTeX 改变高度后重测。展开集合 `expandedUserMessages`(模块级 `Set<msg.id>`,不落盘)熬过 LegendList 单元格重挂载——滚远再滚回,手动展开过的仍展开,其余回落折叠。
+- **点击守卫**(`onBubbleClick`):`closest("a,button,input,textarea,select,[role='button']")` 命中即放行——消息内的文件链接、附件卡、图片(缩略图整个包在 `<button>` 里开灯箱)保持自身行为;`window.getSelection()` 非折叠时放行——框选文本的拖拽收尾不算点击。溢出时气泡才挂 `cursor-pointer` 与 onClick,短消息零行为变化。编辑模式整行替换、与本机制无交集。
+
 ### 集成终端环境刷新(win32,2026-08-31)
 
 - **问题**:PTY 环境此前是主进程 `process.env` 的冻结快照,启动链路丢失、或 app 启动后才安装的工具(nvm/java/sdkman)在集成终端里不可见——典型症状 `nvm list` 报 `ERROR open \settings.txt`(nvm-windows 靠 `NVM_HOME` 定位,进程里缺这个变量)。系统 PowerShell 正常是因为它由 Explorer 用"当前注册表合并值"启动。POSIX 无此问题:`shellResolve` 用 `-l` login shell,每次建终端都重 source profile。
