@@ -7,7 +7,7 @@
 ![React](https://img.shields.io/badge/React-19-61DAFB?style=flat-square)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5-3178C6?style=flat-square)
 
-**Mcode** — *my* Code. A free, open-source **desktop client for Claude Code / coding agents**.
+**Mcode** — *my* Code. A free, open-source **desktop client for Claude Code / Codex / coding agents**.
 
 **English** | [简体中文](README.zh-CN.md)
 
@@ -15,22 +15,25 @@
 
 ### What is Mcode?
 
-Mcode is a **free, open-source desktop GUI for coding agents** — a three-pane IDE that turns **Claude Code** and other agent platforms into a full-featured desktop application. Built on the official **Claude Agent SDK** and the **Pi Coding Agent SDK**, Mcode does **not** reimplement the agent. It provides the complete interaction surface: session management, **real-time token-by-token streaming**, visual **tool-approval** prompts, **plan mode**, and all the **IDE** affordances you expect — file tree, Monaco editor with 30+ languages, **git**, **terminal**, **embedded browser**, and **LSP** language servers — plus a **mobile companion** for remote control from your phone.
+Mcode is a **free, open-source desktop GUI for coding agents** — a three-pane IDE that turns **Claude Code**, **OpenAI Codex**, and other agent platforms into a full-featured desktop application. Built on the official **Claude Agent SDK**, the **OpenAI Codex SDK**, and the **Pi Coding Agent SDK**, Mcode does **not** reimplement the agent. It provides the complete interaction surface: session management, **real-time token-by-token streaming**, visual **tool-approval** prompts, **plan mode**, and all the **IDE** affordances you expect — file tree, Monaco editor with 30+ languages, **git**, **terminal**, **embedded browser**, and **LSP** language servers — plus a **mobile companion** for remote control from your phone.
 
-> **Search keywords:** Claude Code GUI · Claude desktop app · open-source Claude client · AI coding agent IDE · Agent SDK desktop UI · tool approval UI
+> **Search keywords:** Claude Code GUI · Codex desktop client · Claude desktop app · open-source Claude client · AI coding agent IDE · Agent SDK desktop UI · tool approval UI
 
 ![Mcode home - Claude Code desktop client GUI](docs/images/首页.png)
 
 ### Key highlights
 
-- 🎛 **Multi-provider** — Claude and Pi in one app; pick the agent before each session starts
+- 🎛 **Multi-provider** — Claude, Codex, and Pi in one app; pick the agent before each session starts
 - ⚡ **Real-time streaming** — watch every token arrive as the agent works
 - ✅ **Tool approval UI** — allow / always-allow / deny with a per-session pending queue
 - 📋 **Plan mode** — the agent researches and presents a plan for your approval before executing
+- 🧩 **Plugins & MCP** — install agent plugins (skills / commands / MCP servers) from marketplaces, delivered to all three engines
+- 🌿 **Worktree sessions** — run parallel sessions on one repo in isolated git worktrees, merge back in one click
 - 🗂 **Projects & sessions** — multi-project management, SQLite persistence, resume anytime
 - 🧰 **Full IDE** — Monaco editor (30+ languages), diff view, multi-repo git, multi-tab terminal
-- 🌐 **Embedded browser** — element picking + agent-driven browser automation
+- 🌐 **Embedded browser** — element picking + agent-driven browser automation, login state persists across restarts
 - 🌍 **Language servers (LSP)** — TypeScript, Python, Go, Java — install and enable in one click
+- 🎨 **Hand-drawn themes** — sketch paper / kraft styles plus custom UI fonts
 - 📱 **Mobile remote control** — watch, chat, approve, and rewind from your phone (LAN or SSH tunnel)
 - 🆓 **MIT licensed** — free forever, no tracking, no account required
 
@@ -38,26 +41,31 @@ Mcode is a **free, open-source desktop GUI for coding agents** — a three-pane 
 
 #### 🤖 Multi-provider agents
 
-- Built-in **Claude** provider (`@anthropic-ai/claude-agent-sdk`) and **Pi** provider (`@earendil-works/pi-coding-agent`) — pick one in the composer before the first message of a session.
-- Each provider declares its own capabilities and the UI adapts automatically: thinking levels, permission modes, built-in models, custom endpoints.
+- Built-in providers: **Claude** (`@anthropic-ai/claude-agent-sdk`), **OpenAI Codex** (`@openai/codex` app-server), and **Pi** (`@earendil-works/pi-coding-agent`) — pick one in the composer before the first message of a session.
+- Each provider declares its own capabilities and the UI adapts automatically: thinking levels / effort, permission modes, built-in models, custom endpoints.
+- The Codex provider supports **third-party model providers** (OpenAI-compatible / Responses API endpoints) with per-model context-window overrides (e.g. 1M-token models), and **image generation** rendered inline in the conversation.
 - Per-role model assignment: normal chat, git commit-message generation, and merge-conflict resolution can each use a different model.
 
-![Mcode supports Claude and Pi agent providers](docs/images/支持claude和pi.png)
+![Mcode lets you pick the agent provider per session](docs/images/支持claude和pi.png)
 
 #### 💬 Real-time conversation & multi-session
 
 - Drives the agent loop through the chosen provider SDK; messages stream in live, token by token, rendered as structured cards (assistant text, thinking, tool calls, tool results, images).
 - Tool-use approvals: allow / always-allow / deny, with a per-session pending queue.
 - Plan mode: the agent researches first and presents a plan for your approval before executing.
+- Activity console: subagents, background tasks, plans, and bookmarks for the running turn, gathered in one place.
 - Per-turn file snapshots with one-click "rewind this turn" — restores the exact files the agent touched, on any historical turn.
-- Attach files, paste images, and use slash commands from the composer.
-- Sessions persist to SQLite (via sql.js) and can be resumed later (`--resume` semantics); auto-archiving keeps the session list clean.
+- Attach files, paste images, use slash commands, and dictate with **voice input** from the composer.
+- Clickable local file links & images inside Markdown replies open right in the editor / lightbox.
+- Sessions persist to SQLite (better-sqlite3) and can be resumed later (`--resume` semantics); auto-archiving keeps the session list clean.
 
 ![Mcode main pane - live streaming rendering of AI conversation](docs/images/主面板数据流显示.png)
 
 #### 🗂 Projects & sessions in the left sidebar
 
+- Two sidebar modes: the classic **project tree**, and an inbox-style **session stream** that lists sessions across projects with scope filters (project / group / worktree).
 - Multi-project management with grouping, pinning, reordering, archiving; per-project session history with search.
+- 🌿 **Git worktree sessions**: start a session in an isolated worktree of the same repo to run parallel threads without interference; merge the worktree back with one click (auto-commits uncommitted changes first).
 
 ![Mcode left sidebar - project and session management](docs/images/左侧边栏功能.png)
 
@@ -66,6 +74,7 @@ Mcode is a **free, open-source desktop GUI for coding agents** — a three-pane 
 - File tree of the current project with "agent-touched" markers (new / modified this turn).
 - Monaco editor with 30+ languages, dirty-state indicators, and find & replace.
 - Three file views: **Edit** (Monaco), **Diff** (Monaco DiffEditor side-by-side), **Preview** (Markdown with syntax highlighting & math, images, friendly binary fallback).
+- Wide-panel layout mode with a drag-adjustable split for code-heavy work.
 - Context menu (reveal in explorer, copy paths, add to chat) and drag-a-file-into-the-conversation.
 
 <table>
@@ -78,8 +87,8 @@ Mcode is a **free, open-source desktop GUI for coding agents** — a three-pane 
 #### 🧰 Git management (multi-repo)
 
 - Recursively discovers **multiple repos** inside one project (monorepos, submodules, nested checkouts) — one card per repo.
-- Stage / unstage / discard, line-level diffs in Monaco DiffEditor, branch switcher, history view, per-repo operation log.
-- ✨ **AI commit message**: reads the diff and drafts a conventional-commit style message; **AI merge-conflict resolution** offers a guided "resolve with AI" flow after a conflicted pull.
+- Stage / unstage / discard, line-level diffs in Monaco DiffEditor, branch switcher, local-branch deletion, history view, per-repo operation log.
+- ✨ **AI commit message**: reads the diff and drafts a conventional-commit style message; **AI merge-conflict resolution** offers a guided, conversation-style "resolve with AI" flow after a conflicted pull.
 
 ![Mcode right sidebar - multi-repo git management](docs/images/右侧边栏-git管理.png)
 
@@ -92,12 +101,19 @@ Mcode is a **free, open-source desktop GUI for coding agents** — a three-pane 
 
 #### 🌐 Embedded browser (right panel)
 
-- Multi-tab browser panel on top of the main window; closing the panel keeps pages alive.
-- Device presets (desktop / iPhone / Android) with real viewport & touch emulation.
+- Multi-tab browser panel on top of the main window; closing the panel keeps pages alive, and logins persist across app restarts.
+- Bookmarks, history, downloads, and privacy cleanup (clear cookies / cache / history).
+- Device presets (desktop / iPhone / Android) with real viewport & touch emulation; popups and new windows open as in-app tabs.
 - 🎯 Element picking: hover, click, and send the element's HTML + stable selector straight into the conversation for the agent to work on.
-- The agent itself can also drive the browser (list / navigate / snapshot / click / screenshot) through built-in tools.
+- The agent itself can also drive the browser (navigate / snapshot / click / type / screenshot, with real input events) through built-in tools.
 
 ![Mcode right sidebar - embedded browser panel](docs/images/右侧边栏-浏览器.png)
+
+#### 🧩 Plugins & MCP servers
+
+- Install agent plugins from a marketplace (git repo / local folder / zip) or browse marketplace catalogs; installs land **disabled**, with a component-review dialog before you enable anything.
+- One plugin can carry skills, slash commands, subagents, MCP servers, and hooks — Mcode delivers them to **all three engines** and shows a per-component support matrix (hooks are parsed but never executed in v1).
+- Manage **MCP servers** in Settings → MCP: stdio / HTTP servers, per-server enable, and OAuth login for remote servers.
 
 #### 🌍 Language servers (LSP)
 
@@ -123,7 +139,7 @@ Mcode is a **free, open-source desktop GUI for coding agents** — a three-pane 
 
 ![Mcode settings - general](docs/images/设置面板-常规.png)
 
-**Appearance** — theme, density, and font preferences.
+**Appearance** — theme, hand-drawn sketch style (paper light / kraft dark), UI font family, chat font size, and density.
 
 ![Mcode settings - appearance](docs/images/设置面板-外观.png)
 
@@ -159,14 +175,13 @@ Mcode is a **free, open-source desktop GUI for coding agents** — a three-pane 
 
 ![Mcode settings - language servers](docs/images/设置-语言服务器.png)
 
-**About** — version, license, repo links, and manual update check.
-
-![Mcode settings - about and updates](docs/images/设置-关于.png)
+Plus: **Mouse gestures** (record drag gestures bound to app commands), **Voice input**, **MCP servers**, **Plugins**, **Runtimes** (manage the agent runtimes Mcode downloads on demand), **Usage** (token usage statistics), and **About**.
 
 #### 🔄 Other
 
+- **On-demand runtimes** — agent runtimes are no longer bundled with the installer; Mcode downloads them automatically on first use, making installers ~600 MB smaller per platform. Manage them in **Settings → Runtimes**.
 - Auto-update via `electron-updater` (pulls `latest*.yml` from GitHub Releases); manual check in **Settings → About**.
-- Provider abstraction layer (`AgentProvider`) — Claude and Pi today, easy to extend to other agent platforms.
+- Provider abstraction layer (`AgentProvider`) — Claude, Codex, and Pi today, easy to extend to other agent platforms.
 
 ### FAQ
 
@@ -177,10 +192,10 @@ A: Yes — Mcode is open source under the **MIT license**, free to use and modif
 A: Yes. Pre-built installers are published for macOS (Apple Silicon + Intel) and Windows (x64). See [Download](#download) below.
 
 **Q: Do I need to install the Claude Code CLI separately?**
-A: No. The **Claude Agent SDK** bundles its own `claude` binary and the Pi SDK manages its own runtime — no separate CLI required.
+A: No. Mcode manages all agent runtimes itself — the runtime for your chosen provider (claude / codex / pi) is downloaded automatically on first use, and can be managed in **Settings → Runtimes**.
 
 **Q: Which models can I use?**
-A: The Claude provider uses your **Anthropic API key**; the Pi provider supports **OpenAI-compatible endpoints**, so you can bring your own models.
+A: The Claude provider uses your **Anthropic API key**. The Pi and Codex providers support **custom model providers** — OpenAI-compatible / Responses API endpoints configured in **Settings → Models** — so you can bring your own models, including third-party gateways.
 
 **Q: Can I control Mcode from my phone?**
 A: Yes — scan the QR code for LAN access, or connect through your own VPS via an **SSH reverse tunnel** for remote access from anywhere.
@@ -190,9 +205,10 @@ A: Yes — scan the QR code for LAN access, or connect through your own VPS via 
 - Node.js ≥ 22.13 (pnpm 11 requires it)
 - pnpm ≥ 9 (`corepack enable && corepack prepare pnpm@latest --activate`)
 - **Claude provider**: an Anthropic API key (`ANTHROPIC_API_KEY`) — the Agent SDK bills per API key, not via a Max/Pro subscription.
+- **Codex provider**: configure at least one model provider in **Settings → Models** (official OpenAI or any OpenAI-compatible / Responses API endpoint). API keys entered there are encrypted with Electron `safeStorage`.
 - **Pi provider**: configure at least one provider/model through **Settings → Models** (equivalent to editing `~/.pi/agent/models.json`). API keys entered there are encrypted with Electron `safeStorage`; no env vars required.
 
-> **Note:** The Claude Agent SDK bundles its own `claude` binary, and the Pi SDK manages its own runtime — you don't need to install any CLI separately.
+> **Note:** No CLI needs to be installed manually — Mcode downloads the required agent runtime (claude / codex / pi) automatically on first use, so the first use of a provider needs network access.
 
 ### Getting started
 
@@ -247,14 +263,14 @@ Pre-built binaries are published on [GitHub Releases](https://github.com/huangbh
 | Shell | Electron 33, electron-vite, electron-builder 25 |
 | Frontend | React 19, Zustand 5, Tailwind CSS 3, @base-ui/react, @tabler/icons |
 | Editor / Terminal | Monaco Editor, xterm.js + node-pty |
-| Agent | @anthropic-ai/claude-agent-sdk, @earendil-works/pi-coding-agent |
-| Persistence | sql.js (SQLite in pure WASM) |
+| Agent | @anthropic-ai/claude-agent-sdk, @openai/codex, @earendil-works/pi-coding-agent |
+| Persistence | better-sqlite3 (synchronous SQLite) |
 | Contracts | zod (cross-process IPC validation) |
 | Tooling | pnpm 11, Turbo, TypeScript 5 (strict) |
 
 ### License
 
-MIT. This project does not redistribute or bundle any agent binary — each SDK manages its own bundled runtime internally (Claude's Agent SDK and Pi's coding-agent SDK both manage their own).
+MIT. This project does not redistribute or bundle any agent binary — each SDK manages its own bundled runtime internally (Claude's Agent SDK, OpenAI's Codex, and Pi's coding-agent SDK all manage their own).
 
 ### Community
 
