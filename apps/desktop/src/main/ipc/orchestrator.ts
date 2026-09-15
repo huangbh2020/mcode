@@ -272,6 +272,9 @@ export function registerOrchestratorHandlers(ipcMain: IpcMain): void {
       },
       "desktop",
     );
+    log.info(
+      `orch.proposePlan: planner session ${side.id} created with customModelId=${side.customModelId ?? "null"} (coordinator customModelId=${coordinator.customModelId ?? "null"}, planner profile=${plannerProfile.id}/${plannerProfile.providerId}/${plannerProfile.model})`,
+    );
     const project = ProjectRepo.get(side.projectId);
     if (!project) throw new Error(`project not found: ${side.projectId}`);
     const surfaceDescription = describeSurface(surface);

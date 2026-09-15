@@ -519,6 +519,9 @@ class RuntimeManager {
     let modelForReq: string | undefined = session.model !== "default" ? session.model : undefined;
     if (session.customModelId) {
       const cfg = CustomModelStore.resolveApiConfig(session.customModelId, session.model);
+      log.info(
+        `sendTurn: session ${session.id} customModelId=${session.customModelId} model=${session.model} → resolveApiConfig ${cfg ? `ok protocol=${cfg.protocol} baseUrl=${cfg.baseUrl}` : "null (will fall back to default endpoint)"}`,
+      );
       if (!cfg) {
         log.warn(`sendTurn: custom model ${session.customModelId} not found, token undecryptable, or no model configured; falling back to default endpoint`);
       } else {
