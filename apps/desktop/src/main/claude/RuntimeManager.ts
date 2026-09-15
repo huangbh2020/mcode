@@ -619,6 +619,9 @@ class RuntimeManager {
     };
 
     const handle = await provider.startTurn(req, rt.ctx);
+    log.info(
+      `sendTurn: session ${session.id} dispatched with apiConfig=${apiConfig ? `protocol=${apiConfig.protocol} baseUrl=${apiConfig.baseUrl}` : "null (default Anthropic endpoint — will likely hit /login if no OAuth token)"} provider=${session.providerId} model=${session.model} req.model=${modelForReq ?? "default"} req.effort=${req.effort} req.orchestration=${!!req.orchestration}`,
+    );
     rt.handle = handle;
     // Remember the cwd for the rewind path (see rewindTurn below).
     rt.lastCwd = input.cwd;
