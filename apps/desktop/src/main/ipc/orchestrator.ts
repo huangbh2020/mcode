@@ -230,14 +230,21 @@ export function registerOrchestratorHandlers(ipcMain: IpcMain): void {
         error: `规划者模型 ${plannerProfile.providerId}/${plannerProfile.model} 不在系统当前可用列表中`,
       };
     }
-    // 规划者的 side session 借用协调者主会话的自定义端点(customModelId):
-    // builtin-planner / model="default" 走的是用户在「模型配置」里配置的
-    // 自定义端点,不在侧 session 上复制这个 id 就会落到官方 Claude 凭据
-    // → 触发 /login 错误;而用户根本没准备走官方凭据,只是借用 SDK
-    // 跑一次 planning。优先继承 = 协调者主会话当前生效的 customModelId;
-    // 协调者没选时兜底取「设置里第一个配置好的」customModel。
+    // 规划者的 side session 必须继承 customModelId —— 任何走 claude-sdk
+    // 厂商的 profile(无论 model 是 "default" 还是具体 id,如
+    // "GLM-5.3-Flash"/"deepseek-v4-pro" 等)都依赖 baseUrl+token 才能打通:
+    // 用户从来不该让 Mcode 走到官方 Claude OAuth 凭据,我们的目的就是走
+    // 他在「模型配置」里配的 Anthropic 兼容端点。
+    //
+    // 兜底顺序:
+    //  1) 协调者主会话当前生效的 customModelId(用户已在主 chat 选过)
+    //  2) 设置里第一个已配 model 的 customModel
+    //  3) 都没有:报"请去设置 → 模型配置 添加端点"
+    //
+    // 只对 claude-sdk 厂商应用此规则(其它厂商走自己的端点,不该被覆盖;
+    // 比如 pi-sdk 走 ~/.pi/agent/models.json,codex-sdk 走 config.toml)。
     let plannerCustomModelId: string | null = null;
-    if (plannerProfile.model === "default") {
+    if (plannerProfile.providerId === "claude-sdk") {
       if (coordinator.customModelId) {
         plannerCustomModelId = coordinator.customModelId;
       } else {
@@ -271,9 +278,6 @@ export function registerOrchestratorHandlers(ipcMain: IpcMain): void {
         permissionMode: "default",
       },
       "desktop",
-    );
-    log.info(
-      `orch.proposePlan: planner session ${side.id} created with customModelId=${side.customModelId ?? "null"} (coordinator customModelId=${coordinator.customModelId ?? "null"}, planner profile=${plannerProfile.id}/${plannerProfile.providerId}/${plannerProfile.model})`,
     );
     const project = ProjectRepo.get(side.projectId);
     if (!project) throw new Error(`project not found: ${side.projectId}`);

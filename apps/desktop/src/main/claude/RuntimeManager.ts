@@ -519,9 +519,6 @@ class RuntimeManager {
     let modelForReq: string | undefined = session.model !== "default" ? session.model : undefined;
     if (session.customModelId) {
       const cfg = CustomModelStore.resolveApiConfig(session.customModelId, session.model);
-      log.info(
-        `sendTurn: session ${session.id} customModelId=${session.customModelId} model=${session.model} → resolveApiConfig ${cfg ? `ok protocol=${cfg.protocol} baseUrl=${cfg.baseUrl}` : "null (will fall back to default endpoint)"}`,
-      );
       if (!cfg) {
         log.warn(`sendTurn: custom model ${session.customModelId} not found, token undecryptable, or no model configured; falling back to default endpoint`);
       } else {
@@ -619,9 +616,6 @@ class RuntimeManager {
     };
 
     const handle = await provider.startTurn(req, rt.ctx);
-    log.info(
-      `sendTurn: session ${session.id} dispatched with apiConfig=${apiConfig ? `protocol=${apiConfig.protocol} baseUrl=${apiConfig.baseUrl}` : "null (default Anthropic endpoint — will likely hit /login if no OAuth token)"} provider=${session.providerId} model=${session.model} req.model=${modelForReq ?? "default"} req.effort=${req.effort} req.orchestration=${!!req.orchestration}`,
-    );
     rt.handle = handle;
     // Remember the cwd for the rewind path (see rewindTurn below).
     rt.lastCwd = input.cwd;
