@@ -189,25 +189,45 @@ export function registerOrchestratorHandlers(ipcMain: IpcMain): void {
     const input = OrchProposePlanSchema.parse(raw);
     const coordinator = SessionRepo.get(input.sessionId);
     if (!coordinator) throw new Error(`session not found: ${input.sessionId}`);
-    const plannerProfile = ProfileStore.get("builtin-planner");
+    // Resolve planner profile: user-picked wins; fall back to builtin-planner.
+    // A picked profile that no longer exists (deleted between pick and
+    // invoke) silently degrades to builtin-planner rather than erroring
+    // — the user can re-pick on retry.
+    const surface = await buildAvailableModelSurface();
+    let plannerProfile = input.plannerProfileId
+      ? ProfileStore.get(input.plannerProfileId)
+      : undefined;
+    if (!plannerProfile) {
+      // User-picked but not found (deleted between pick and invoke) — fall
+      // back to builtin-planner silently; the wizard UI will show the error
+      // and let the user re-pick on retry.
+      if (input.plannerProfileId) {
+        log.warn(
+          `orch.proposePlan: plannerProfileId ${input.plannerProfileId} not found, falling back to builtin-planner`,
+        );
+      }
+      plannerProfile = ProfileStore.get("builtin-planner");
+    }
     if (!plannerProfile) {
       return { tasks: [], error: "内置规划者 agent 不存在,请重置 Agent 角色" };
     }
     // 规划者自己也要走白名单:profileId/model 必须在当前可用集合里,
     // 否则让它落 null 让协调者后续在 panel 里手动指定。
-    const surface = await buildAvailableModelSurface();
     const plannerSurface = surface.get(plannerProfile.providerId);
     const plannerModelOk = plannerSurface
       ? plannerProfile.model === "default" || plannerSurface.builtin.has(plannerProfile.model) || plannerSurface.custom.has(plannerProfile.model)
       : false;
     const plannerProviderOk = !!plannerSurface;
     if (!plannerProviderOk) {
-      return { tasks: [], error: `内置规划者厂商 ${plannerProfile.providerId} 在系统中不可用` };
+      return {
+        tasks: [],
+        error: `规划者厂商 ${plannerProfile.providerId} 在系统中不可用`,
+      };
     }
     if (!plannerModelOk) {
       return {
         tasks: [],
-        error: `内置规划者模型 ${plannerProfile.providerId}/${plannerProfile.model} 不在系统当前可用列表中`,
+        error: `规划者模型 ${plannerProfile.providerId}/${plannerProfile.model} 不在系统当前可用列表中`,
       };
     }
     const { session: side } = createOrReuseSession(

@@ -52,6 +52,8 @@ export const zh = {
   "orch.wizard.autoDecompose": "自动拆解",
   "orch.wizard.decomposing": "规划者拆解中…(最长 3 分钟)",
   "orch.wizard.decomposeFailed": "自动拆解失败,请手动填写任务",
+  "orch.wizard.planner": "规划者",
+  "orch.wizard.plannerHint": "用哪个 agent 跑自动拆解;每个会话独立记忆",
   "orch.wizard.tasks": "任务图",
   "orch.wizard.addTask": "添加任务",
   "orch.wizard.spec": "任务简报",

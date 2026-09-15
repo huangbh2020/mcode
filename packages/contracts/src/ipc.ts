@@ -3652,6 +3652,10 @@ export const OrchProposePlanSchema = z.object({
   goal: z.string().min(1),
   /** Optional extra instructions for the decomposition. */
   hint: z.string().optional(),
+  /** Optional planner profile id (any role works — high-cost planner
+   *  profile for thoroughness, cheap fast profile for quick drafts).
+   *  Falls back to "builtin-planner" server-side when absent or invalid. */
+  plannerProfileId: z.string().optional(),
 });
 export type OrchProposePlanInput = z.infer<typeof OrchProposePlanSchema>;
 

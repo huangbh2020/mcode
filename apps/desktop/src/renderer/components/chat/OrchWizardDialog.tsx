@@ -73,6 +73,9 @@ export function OrchWizardDialog() {
   const saveOrchTemplate = useSessionStore((s) => s.saveOrchTemplate);
   const loadOrchRuns = useSessionStore((s) => s.loadOrchRuns);
   const setRightPanelTab = useSessionStore((s) => s.setRightPanelTab);
+  const plannerBySession = useSessionStore((s) => s.orchPlannerBySession);
+  const setOrchPlanner = useSessionStore((s) => s.setOrchPlanner);
+  const activeSessionId = useSessionStore((s) => s.activeSessionId);
 
   const [goal, setGoal] = useState("");
   const [tasks, setTasks] = useState<DraftTask[]>([]);
@@ -121,7 +124,10 @@ export function OrchWizardDialog() {
     setDecomposing(true);
     setError("");
     try {
-      const proposal = await orchProposePlan(goal);
+      const proposal = await orchProposePlan(goal, {
+        plannerProfileId:
+          (activeSessionId && plannerBySession[activeSessionId]) || "builtin-planner",
+      });
       if (proposal && proposal.length > 0) {
         // Allocate t1..tN fresh ids first, then remap deps by position.
         const idMap = new Map<string, string>();
@@ -266,7 +272,7 @@ export function OrchWizardDialog() {
             </button>
           </div>
 
-          {/* 目标 + 自动拆解 */}
+          {/* 目标 + 自动拆解 + 规划者 + 模板 */}
           <div className="space-y-1.5">
             <div className="flex items-center gap-2">
               <label className="text-xs font-medium">{t("orch.wizard.goal")}</label>
@@ -280,6 +286,27 @@ export function OrchWizardDialog() {
                 <IconSparkles size={13} className="mr-1" />
                 {decomposing ? t("orch.wizard.decomposing") : t("orch.wizard.autoDecompose")}
               </Button>
+              <label
+                className="text-[0.686em] text-content-subtle"
+                title={t("orch.wizard.plannerHint")}
+              >
+                {t("orch.wizard.planner")}
+              </label>
+              <select
+                className={selectCls}
+                value={
+                  (activeSessionId && plannerBySession[activeSessionId]) || "builtin-planner"
+                }
+                onChange={(e) => {
+                  if (activeSessionId) setOrchPlanner(activeSessionId, e.target.value);
+                }}
+              >
+                {agents.map((a) => (
+                  <option key={a.id} value={a.id}>
+                    {a.icon} {a.name} · {a.providerId}/{a.model}
+                  </option>
+                ))}
+              </select>
               <select
                 className={selectCls}
                 defaultValue=""

@@ -51,6 +51,8 @@ export const en = {
   "orch.wizard.autoDecompose": "Auto-decompose",
   "orch.wizard.decomposing": "Planner is decomposing… (up to 3 min)",
   "orch.wizard.decomposeFailed": "Auto-decompose failed — fill tasks manually",
+  "orch.wizard.planner": "Planner",
+  "orch.wizard.plannerHint": "Which agent runs the auto-decompose; remembered per session",
   "orch.wizard.tasks": "Task graph",
   "orch.wizard.addTask": "Add task",
   "orch.wizard.spec": "Task brief",

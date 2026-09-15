@@ -1398,6 +1398,10 @@ export interface SessionState {
    *  "handoff" mode = full handoff; ≥2 (or "orchestrate" mode) opens the
    *  wizard prefilled. Cleared after the send resolves. */
   orchTargetsBySession: Record<string, Array<{ profileId: string; mode: "handoff" | "orchestrate" }>>;
+  /** Per-session planner profile id chosen in the orchestration wizard's
+   *  规划者 dropdown (overrides builtin-planner for orch.proposePlan).
+   *  Falls back to "builtin-planner" server-side when missing. */
+  orchPlannerBySession: Record<string, string>;
   /** Orchestrator event subscription state; true after `initDeferred`
    *  subscribes (guards against double-subscription). */
   _orchSubscribed: boolean;
@@ -2018,9 +2022,13 @@ export interface SessionState {
   /** Full handoff: create a plain new session with the briefing and send it. */
   orchHandoff: (briefing: string, profileId?: string, title?: string) => Promise<Session | null>;
   /** Wizard auto-decompose (model-driven goal → task proposal). */
-  orchProposePlan: (goal: string, hint?: string) => Promise<TaskSpecInput[] | null>;
+  orchProposePlan: (goal: string, opts?: { hint?: string; plannerProfileId?: string }) => Promise<TaskSpecInput[] | null>;
   /** Composer 编排开关 per session (coordinator toolset on next send). */
   setOrchCoordinator: (sessionId: string, on: boolean) => void;
+  /** Choose the planner profile the orchestration wizard uses for auto-
+   *  decompose (orch.proposePlan). Persists per-session so the user's
+   *  pick survives across wizard opens. */
+  setOrchPlanner: (sessionId: string, profileId: string) => void;
   /** @agent target chips per session. */
   addOrchTarget: (sessionId: string, profileId: string) => void;
   removeOrchTarget: (sessionId: string, profileId: string) => void;
@@ -2906,6 +2914,8 @@ function dropSessionBuckets(s: SessionState, id: string) {
   delete orchCoordinatorBySession[id];
   const orchTargetsBySession = { ...s.orchTargetsBySession };
   delete orchTargetsBySession[id];
+  const orchPlannerBySession = { ...s.orchPlannerBySession };
+  delete orchPlannerBySession[id];
   const orchRunsBySession = { ...s.orchRunsBySession };
   delete orchRunsBySession[id];
   const orchWorkersById = { ...s.orchWorkersById };
@@ -2943,6 +2953,7 @@ function dropSessionBuckets(s: SessionState, id: string) {
     sideChatSeedBySession,
     orchCoordinatorBySession,
     orchTargetsBySession,
+    orchPlannerBySession,
     orchRunsBySession,
     orchWorkersById,
     pendingApprovals,
@@ -4661,6 +4672,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   orchWorkersById: {},
   orchCoordinatorBySession: {},
   orchTargetsBySession: {},
+  orchPlannerBySession: {},
   orchWizard: { open: false, goal: "", profileIds: [], fromSessionId: null },
   _orchSubscribed: false,
   // IDE right-panel. Editor state is per-project (keyed by projectId);
@@ -10314,11 +10326,16 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     }
   },
 
-  orchProposePlan: async (goal, hint) => {
+  orchProposePlan: async (goal, opts) => {
     const sessionId = get().activeSessionId;
     if (!sessionId) return null;
     try {
-      const { tasks, error } = await api.orch.proposePlan({ sessionId, goal, hint });
+      const { tasks, error } = await api.orch.proposePlan({
+        sessionId,
+        goal,
+        hint: opts?.hint,
+        plannerProfileId: opts?.plannerProfileId,
+      });
       if (error) pushToastLite("error", error);
       return tasks.length > 0 ? tasks : null;
     } catch (err) {
@@ -10329,6 +10346,10 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
   setOrchCoordinator: (sessionId, on) => {
     set((s) => ({ orchCoordinatorBySession: { ...s.orchCoordinatorBySession, [sessionId]: on } }));
+  },
+
+  setOrchPlanner: (sessionId, profileId) => {
+    set((s) => ({ orchPlannerBySession: { ...s.orchPlannerBySession, [sessionId]: profileId } }));
   },
 
   addOrchTarget: (sessionId, profileId) => {
