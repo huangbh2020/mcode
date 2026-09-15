@@ -585,6 +585,8 @@ const on: Api["on"] = {
   notificationFocusSession: () => () => {},
   // Relay events are desktop-only (the phone doesn't manage SSH).
   relayEvent: () => () => {},
+  // Orchestration events are desktop-only (the phone has no DAG panel).
+  orchEvent: () => () => {},
   // Voice ASR is desktop-only; the web shell never emits results.
   voiceResult: () => () => {},
   voiceDownloadProgress: () => () => {},

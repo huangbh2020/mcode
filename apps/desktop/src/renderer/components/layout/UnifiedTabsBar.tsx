@@ -57,6 +57,7 @@ export function UnifiedTabsBar() {
   const sessionsByProject = useSessionStore((s) => s.sessionsByProject);
   const pinnedSessions = useSessionStore((s) => s.pinnedSessions);
   const streamSessions = useSessionStore((s) => s.streamSessions);
+  const orchWorkersById = useSessionStore((s) => s.orchWorkersById);
   const runningBySession = useSessionStore((s) => s.runningBySession);
   const unreadBySession = useSessionStore((s) => s.unreadBySession);
   const selectSession = useSessionStore((s) => s.selectSession);
@@ -273,7 +274,7 @@ export function UnifiedTabsBar() {
           >
             <SortableContext items={tabs} strategy={sortStrategy}>
               {tabs.map((id) => {
-                const sess = findSession(sessionsByProject, pinnedSessions, streamSessions, id);
+                const sess = findSession(sessionsByProject, pinnedSessions, streamSessions, id, orchWorkersById);
                 return (
                   <SortableSessionTab
                     key={id}
@@ -417,7 +418,7 @@ export function UnifiedTabsBar() {
           onToggleMultiRow={setTabBarMultiRow}
           items={[
             ...tabs.map((id) => {
-              const sess = findSession(sessionsByProject, pinnedSessions, streamSessions, id);
+              const sess = findSession(sessionsByProject, pinnedSessions, streamSessions, id, orchWorkersById);
               return {
                 key: id,
                 label: sess?.title ?? "(unknown)",

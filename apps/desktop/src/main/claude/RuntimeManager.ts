@@ -107,11 +107,23 @@ class RuntimeManager {
    *  renderer push + persistence). Used by the NotificationManager to decide
    *  whether an OS notification is warranted. Set via {@link setObserver}. */
   private observer: ((e: RuntimeEvent) => void) | null = null;
+  /** Additional always-on observers (orchestrator worker lifecycle mapping).
+   *  Unlike the single-slot {@link observer}, these survive independently —
+   *  the NotificationManager's setObserver must not evict the orchestrator. */
+  private observers = new Set<(e: RuntimeEvent) => void>();
 
   /** Register a global event observer. Only one at a time (the
    *  NotificationManager). Pass null to detach. */
   setObserver(fn: ((e: RuntimeEvent) => void) | null): void {
     this.observer = fn;
+  }
+
+  /** Register an additional broadcast observer; returns a detach function.
+   *  Observers are fired AFTER persistence, best-effort (exceptions are
+   *  swallowed so a broken observer can't kill a turn's event fan-out). */
+  addObserver(fn: (e: RuntimeEvent) => void): () => void {
+    this.observers.add(fn);
+    return () => this.observers.delete(fn);
   }
 
   /** Create or reuse the runtime state for a GUI session. Idempotent. */
@@ -286,6 +298,16 @@ class RuntimeManager {
       } catch (err) {
         log.error(`notification observer error: ${(err as Error).message}`);
       }
+      // Additional always-on observers (orchestrator). Same best-effort
+      // contract, isolated per-subscriber so one broken observer can't starve
+      // the rest.
+      for (const fn of this.observers) {
+        try {
+          fn(e);
+        } catch (err) {
+          log.error(`runtime observer error: ${(err as Error).message}`);
+        }
+      }
     };
 
     const onProviderSessionId = (id: string) => {
@@ -408,6 +430,9 @@ class RuntimeManager {
         blocks: unknown[];
         editedMessageId?: string;
       };
+      /** Orchestration coordinator flag: inject the in-process orchestration
+       *  MCP toolset for this turn (main session acts as run coordinator). */
+      orchestration?: boolean;
     },
   ): Promise<void> {
     const rt = this.sessions.get(session.id);
@@ -586,6 +611,8 @@ class RuntimeManager {
       initialTodos: session.todos ?? undefined,
       // Tag the turn for per-turn artifacts (browser screenshot dirs).
       turnNumber: rt.turnCount,
+      // Orchestration coordinator toolset (see sendTurn input docs).
+      orchestration: input.orchestration,
     };
 
     const handle = await provider.startTurn(req, rt.ctx);

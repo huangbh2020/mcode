@@ -49,6 +49,7 @@ export function SessionTabs() {
   const sessionsByProject = useSessionStore((s) => s.sessionsByProject);
   const pinnedSessions = useSessionStore((s) => s.pinnedSessions);
   const streamSessions = useSessionStore((s) => s.streamSessions);
+  const orchWorkersById = useSessionStore((s) => s.orchWorkersById);
   const runningBySession = useSessionStore((s) => s.runningBySession);
   const unreadBySession = useSessionStore((s) => s.unreadBySession);
   const selectSession = useSessionStore((s) => s.selectSession);
@@ -185,7 +186,7 @@ export function SessionTabs() {
               strategy={sortStrategy}
             >
               {tabs.map((id) => {
-                const sess = findSession(sessionsByProject, pinnedSessions, streamSessions, id);
+                const sess = findSession(sessionsByProject, pinnedSessions, streamSessions, id, orchWorkersById);
                 const isActive = id === activeId;
                 const running = !!runningBySession[id];
                 const unread = unreadBySession[id] ?? 0;
@@ -239,7 +240,7 @@ export function SessionTabs() {
           multiRow={multiRow}
           onToggleMultiRow={setTabBarMultiRow}
           items={tabs.map((id) => {
-            const sess = findSession(sessionsByProject, pinnedSessions, streamSessions, id);
+            const sess = findSession(sessionsByProject, pinnedSessions, streamSessions, id, orchWorkersById);
             return {
               key: id,
               label: sess?.title ?? "(unknown)",
@@ -426,7 +427,10 @@ export function SortableSessionTab({
  *  global pinned bucket (pinned rows leave their project's list) and the
  *  stream sidebar's cross-project aggregate (a `session.listAll` page-2+
  *  row exists ONLY there — without the fallback its tab renders
- *  "(unknown)"). Returns undefined if none has it (init race / unknown id).
+ *  "(unknown)"). The optional workersById map (orch-worker sub-sessions,
+ *  fetched on demand by the orchestration panel's "open worker" action) is
+ *  the final fallback — worker rows live in no list cache by design.
+ *  Returns undefined if none has it (init race / unknown id).
  *  Exported for the unified tab bar, which resolves session rows the same
  *  way. */
 export function findSession(
@@ -434,6 +438,7 @@ export function findSession(
   pinnedSessions: Session[],
   streamSessions: Session[],
   id: string,
+  workersById?: Record<string, Session>,
 ): Session | undefined {
   for (const list of Object.values(sessionsByProject)) {
     if (!list) continue;
@@ -442,5 +447,7 @@ export function findSession(
   }
   const pinnedHit = pinnedSessions.find((s) => s.id === id);
   if (pinnedHit) return pinnedHit;
-  return streamSessions.find((s) => s.id === id);
+  const streamHit = streamSessions.find((s) => s.id === id);
+  if (streamHit) return streamHit;
+  return workersById?.[id];
 }

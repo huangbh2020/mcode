@@ -7,12 +7,16 @@ import {
   IconMessages,
   IconArrowsMaximize,
   IconArrowsMinimize,
+  IconGitFork,
+  IconInbox,
 } from "@renderer/lib/icons.js";
 import { useSessionStore } from "@renderer/stores/sessionStore.js";
 import { resolveShortcut, acceleratorToDisplayString } from "@renderer/lib/shortcuts.js";
 import { FilesPanel } from "@renderer/components/ide/FilesPanel.js";
 import { GitPanel } from "@renderer/components/ide/GitPanel.js";
 import { TurnFlowPanel } from "@renderer/components/ide/TurnFlowPanel.js";
+import { OrchPanel } from "@renderer/components/ide/OrchPanel.js";
+import { InboxPanel } from "@renderer/components/ide/InboxPanel.js";
 import { BrowserPanel } from "@renderer/components/browser/BrowserPanel.js";
 import { SideChatPanel } from "@renderer/components/chat/SideChatPanel.js";
 import { useI18n } from "@renderer/lib/i18n/index.js";
@@ -106,6 +110,23 @@ export function RightPanel() {
         >
           <IconMessages size={16} className="shrink-0" />
         </RailButton>
+        {/* Orchestration DAG — runs scoped to the active (coordinator)
+            session: task graph, node controls, gates, worker reports. */}
+        <RailButton
+          active={tab === "orch"}
+          onClick={() => setTab("orch")}
+          title={t("layout.tabOrch")}
+        >
+          <IconGitFork size={16} className="shrink-0" />
+        </RailButton>
+        {/* Inbox — aggregated worker questions / approvals / open gates. */}
+        <RailButton
+          active={tab === "inbox"}
+          onClick={() => setTab("inbox")}
+          title={t("layout.tabInbox")}
+        >
+          <IconInbox size={16} className="shrink-0" />
+        </RailButton>
         {/* Wide-panel (3:7) mode - hide the left sidebar + center editor and
             split the workspace into this right panel (7/10) + the chat column
             (3/10). Toggled here, via the command palette / shortcut, or the
@@ -140,6 +161,8 @@ export function RightPanel() {
         {tab === "git" && <GitPanel />}
         {tab === "turns" && <TurnFlowPanel />}
         {tab === "sidechat" && <SideChatPanel />}
+        {tab === "orch" && <OrchPanel />}
+        {tab === "inbox" && <InboxPanel />}
         {tab === "browser" && <BrowserPanel mode="sidebar" />}
       </div>
     </div>

@@ -13,6 +13,21 @@ import type { CodexProviderPublic } from "./codexModel.js";
 import type { ThemeName, EffectiveTheme, ThemeChangedMessage } from "./theme.js";
 import type { PairingStartResult, PairedDevice } from "./mobile.js";
 import type { RelayStatus, RelayVpsConfig, RelayVpsConfigInput } from "./relay.js";
+import {
+  AgentProfileSchema,
+  TaskSpecInputSchema,
+  WorktreePolicySchema,
+  OrchestrationTemplateSchema,
+  OrchSettingsSchema,
+} from "./orchestration.js";
+import type {
+  AgentProfile,
+  OrchestrationRun,
+  OrchestrationTemplate,
+  OrchSettings,
+  TaskSpecInput,
+  OrchestratorEvent,
+} from "./orchestration.js";
 import type {
   PluginState,
   PluginMarketplaceState,
@@ -599,8 +614,18 @@ export const UI_RIGHT_PANEL_TAB_SETTING_KEY = "ui.rightPanelTab";
 
 /** zod schema + TS union for the right-panel tab preference. "sidechat" (the
  *  side-chat Q&A tab) is session-only like "browser": hydrate ignores a
- *  persisted value so the ask tab never auto-opens at startup. */
-export const RightPanelTabSchema = z.enum(["files", "git", "browser", "turns", "sidechat"]);
+ *  persisted value so the ask tab never auto-opens at startup. "orch" (the
+ *  orchestration DAG panel) and "inbox" (aggregated worker asks/gates) are
+ *  session-only for the same reason. */
+export const RightPanelTabSchema = z.enum([
+  "files",
+  "git",
+  "browser",
+  "turns",
+  "sidechat",
+  "orch",
+  "inbox",
+]);
 export type RightPanelTab = z.infer<typeof RightPanelTabSchema>;
 
 /**
@@ -833,14 +858,24 @@ export const StartSessionSchema = z.object({
   permissionMode: z.string().default("default"),
   /** Id of a custom-model config to bind to this session (omit/null = built-in). */
   customModelId: z.string().nullable().optional(),
-  /** Session role: "chat" (default, normal left-bar session) or "side"
-   *  (side-chat Q&A session owned by the right-panel ask tab). Side sessions
-   *  always create a fresh row — the createOrReuse fresh-row logic doesn't
-   *  apply to them. */
-  kind: z.enum(["chat", "side"]).default("chat"),
-  /** For kind="side": the main session this Q&A thread belongs to. Enables
-   *  traceability (one main session → many side chats). Ignored for chat. */
+  /** Session role: "chat" (default, normal left-bar session), "side"
+   *  (side-chat Q&A session owned by the right-panel ask tab), or
+   *  "orch-worker" (orchestration worker sub-session; always creates a fresh
+   *  row, invisible to every list — managed by the orchestrator). */
+  kind: z.enum(["chat", "side", "orch-worker"]).default("chat"),
+  /** For kind="side"/"orch-worker": the main session this subordinate thread
+   *  belongs to. Ignored for chat. */
   parentSessionId: z.string().optional(),
+  /** For kind="orch-worker": the structured dispatch context (completion
+   *  authority credential). Stored on the session row (orch_meta column). */
+  orchMeta: z
+    .object({
+      runId: z.string(),
+      taskId: z.string(),
+      dispatchId: z.string(),
+      coordinatorSessionId: z.string(),
+    })
+    .optional(),
   /** Working-environment intent for the new session. "worktree" records that
    *  the session's turns should run in an isolated checkout — the worktree
    *  itself is created when the FIRST turn is sent (intent-first,
@@ -922,6 +957,11 @@ export const SendTurnSchema = z.object({
       editedMessageId: z.string().optional(),
     })
     .optional(),
+  /** Per-turn coordinator flag: when true, the provider injects the in-process
+   *  orchestration MCP toolset (task/dispatch/gate/wait) so the MAIN session's
+   *  agent acts as the run coordinator (see docs/orchestration-plan.md §5B).
+   *  Purely per-turn — the session row itself is unchanged. */
+  orchestration: z.boolean().optional(),
 });
 export type SendTurnInput = z.infer<typeof SendTurnSchema>;
 
@@ -3533,6 +3573,97 @@ export interface VoiceDownloadProgressMessage {
   error?: string;
 }
 
+/* ── Agent orchestration (docs/orchestration-plan.md) ──
+ *  Supervised fan-out/pipeline runs over worker sub-sessions + handoff. */
+export const OrchAgentSaveSchema = z.object({ agent: AgentProfileSchema });
+export type OrchAgentSaveInput = z.infer<typeof OrchAgentSaveSchema>;
+
+export const OrchAgentDeleteSchema = z.object({ id: z.string() });
+export type OrchAgentDeleteInput = z.infer<typeof OrchAgentDeleteSchema>;
+
+export const OrchCreateRunSchema = z.object({
+  sessionId: z.string(),
+  title: z.string().optional(),
+  goal: z.string().min(1),
+  tasks: z.array(TaskSpecInputSchema).min(1),
+  budgetUsd: z.number().positive().nullable().optional(),
+  concurrency: z.number().int().positive().optional(),
+  worktreePolicy: WorktreePolicySchema.optional(),
+  templateId: z.string().nullable().optional(),
+  /** false = create in "planning" and wait for a follow-up start (wizard
+   *  confirm step already happened renderer-side; default true = start now). */
+  autoStart: z.boolean().optional(),
+});
+export type OrchCreateRunInput = z.infer<typeof OrchCreateRunSchema>;
+
+export const OrchListRunsSchema = z.object({ sessionId: z.string() });
+export type OrchListRunsInput = z.infer<typeof OrchListRunsSchema>;
+
+export const OrchRunControlSchema = z.object({
+  runId: z.string(),
+  action: z.enum(["pause", "resume", "cancel", "delete"]),
+});
+export type OrchRunControlInput = z.infer<typeof OrchRunControlSchema>;
+
+export const OrchTaskControlSchema = z.object({
+  runId: z.string(),
+  taskId: z.string(),
+  action: z.enum(["pause", "resume", "retry", "cancel", "rerun", "markCompleted"]),
+  /** rerun: change the assignee before re-dispatching (换模型重跑). */
+  profileId: z.string().nullable().optional(),
+});
+export type OrchTaskControlInput = z.infer<typeof OrchTaskControlSchema>;
+
+export const OrchResolveGateSchema = z.object({
+  runId: z.string(),
+  gateId: z.string(),
+  resolution: z.string().min(1),
+});
+export type OrchResolveGateInput = z.infer<typeof OrchResolveGateSchema>;
+
+export const OrchMergeTaskSchema = z.object({ runId: z.string(), taskId: z.string() });
+export type OrchMergeTaskInput = z.infer<typeof OrchMergeTaskSchema>;
+
+export const OrchHandoffSchema = z.object({
+  projectId: z.string(),
+  briefing: z.string().min(1),
+  /** Role template to aim the new session at (provider/model/effort/permission). */
+  profileId: z.string().optional(),
+  /** Session the handoff was triggered from (traceability, logging). */
+  fromSessionId: z.string().optional(),
+  title: z.string().optional(),
+});
+export type OrchHandoffInput = z.infer<typeof OrchHandoffSchema>;
+
+export const OrchWorkerSessionSchema = z.object({ sessionId: z.string() });
+export type OrchWorkerSessionInput = z.infer<typeof OrchWorkerSessionSchema>;
+
+export const OrchTemplateSaveSchema = z.object({ template: OrchestrationTemplateSchema });
+export type OrchTemplateSaveInput = z.infer<typeof OrchTemplateSaveSchema>;
+
+export const OrchTemplateDeleteSchema = z.object({ id: z.string() });
+export type OrchTemplateDeleteInput = z.infer<typeof OrchTemplateDeleteSchema>;
+
+/** Auto-decompose a goal into a task DAG proposal (model-driven wizard step).
+ *  Runs in a side session so the coordinator chat stays clean; returns a
+ *  best-effort proposal the user edits/confirms renderer-side. */
+export const OrchProposePlanSchema = z.object({
+  sessionId: z.string(),
+  goal: z.string().min(1),
+  /** Optional extra instructions for the decomposition. */
+  hint: z.string().optional(),
+});
+export type OrchProposePlanInput = z.infer<typeof OrchProposePlanSchema>;
+
+export const OrchSettingsSaveSchema = z.object({ settings: OrchSettingsSchema });
+export type OrchSettingsSaveInput = z.infer<typeof OrchSettingsSaveSchema>;
+
+/** Push payload for orchestration lifecycle updates (orchestrator:event). */
+export interface OrchestratorEventMessage {
+  channel: "orchestrator:event";
+  event: OrchestratorEvent;
+}
+
 export type MainToRendererMessage =
   | ClaudeEventMessage
   | SessionTitleUpdatedMessage
@@ -3549,7 +3680,8 @@ export type MainToRendererMessage =
   | RelayEventMessage
   | VoiceResultMessage
   | VoiceDownloadProgressMessage
-  | RuntimeEventMessage;
+  | RuntimeEventMessage
+  | OrchestratorEventMessage;
 
 /* ── Integrated terminal (xterm.js + node-pty) ──
  *  PTY processes live in main. Renderer only sees opaque terminalIds and
@@ -4486,6 +4618,38 @@ export interface RpcMap {
   "relay.disconnect": () => Promise<{ ok: true }>;
   /** Read the current relay status. */
   "relay.status": () => Promise<RelayStatus>;
+  // ── Agent orchestration ──
+  /** List agent role profiles (builtin + user). */
+  "orch.agentList": () => Promise<{ agents: AgentProfile[] }>;
+  /** Create/update an agent profile (upsert by id). */
+  "orch.agentSave": (input: OrchAgentSaveInput) => Promise<{ agents: AgentProfile[] }>;
+  /** Delete a user profile (builtin originals cannot be deleted). */
+  "orch.agentDelete": (input: OrchAgentDeleteInput) => Promise<{ agents: AgentProfile[] }>;
+  /** Orchestration settings (trigger mode / defaults). */
+  "orch.getSettings": () => Promise<{ settings: OrchSettings }>;
+  "orch.saveSettings": (input: OrchSettingsSaveInput) => Promise<{ settings: OrchSettings }>;
+  /** Create (and by default start) a supervised orchestration run. */
+  "orch.createRun": (input: OrchCreateRunInput) => Promise<{ run: OrchestrationRun }>;
+  /** Runs scoped to a coordinator session. */
+  "orch.listRuns": (input: OrchListRunsInput) => Promise<{ runs: OrchestrationRun[] }>;
+  /** Run-level pause/resume/cancel/delete. */
+  "orch.runControl": (input: OrchRunControlInput) => Promise<{ run: OrchestrationRun }>;
+  /** Node-level pause/resume/retry/cancel/rerun(换模型)/markCompleted. */
+  "orch.taskControl": (input: OrchTaskControlInput) => Promise<{ run: OrchestrationRun }>;
+  /** Resolve an open decision gate. */
+  "orch.resolveGate": (input: OrchResolveGateInput) => Promise<{ run: OrchestrationRun }>;
+  /** Merge a completed worktree node back into the main checkout. */
+  "orch.mergeTask": (input: OrchMergeTaskInput) => Promise<{ ok: boolean; error?: string }>;
+  /** Full handoff: create a plain new session with the briefing, no tracking. */
+  "orch.handoff": (input: OrchHandoffInput) => Promise<{ session: Session }>;
+  /** Fetch a worker sub-session row (for opening its transcript in a tab). */
+  "orch.workerSession": (input: OrchWorkerSessionInput) => Promise<{ session: Session | null }>;
+  /** List orchestration templates (builtin pipeline/competition + user). */
+  "orch.templatesList": () => Promise<{ templates: OrchestrationTemplate[] }>;
+  "orch.templateSave": (input: OrchTemplateSaveInput) => Promise<{ templates: OrchestrationTemplate[] }>;
+  "orch.templateDelete": (input: OrchTemplateDeleteInput) => Promise<{ templates: OrchestrationTemplate[] }>;
+  /** Model-driven goal → task-DAG proposal (wizard auto-decompose). */
+  "orch.proposePlan": (input: OrchProposePlanInput) => Promise<{ tasks: TaskSpecInput[]; error?: string }>;
 }
 
 /** The channel names used in invoke/handle and send/on. Keep these centralized
@@ -4748,6 +4912,26 @@ export const IPC = {
   RELAY_STATUS: "relay:status",
   // Relay push events (main → renderer).
   RELAY_EVENT: "relay:event",
+  // Agent orchestration (supervised runs + handoff) — invoke/handle (RPC).
+  ORCH_AGENT_LIST: "orch:agentList",
+  ORCH_AGENT_SAVE: "orch:agentSave",
+  ORCH_AGENT_DELETE: "orch:agentDelete",
+  ORCH_GET_SETTINGS: "orch:getSettings",
+  ORCH_SAVE_SETTINGS: "orch:saveSettings",
+  ORCH_CREATE_RUN: "orch:createRun",
+  ORCH_LIST_RUNS: "orch:listRuns",
+  ORCH_RUN_CONTROL: "orch:runControl",
+  ORCH_TASK_CONTROL: "orch:taskControl",
+  ORCH_RESOLVE_GATE: "orch:resolveGate",
+  ORCH_MERGE_TASK: "orch:mergeTask",
+  ORCH_HANDOFF: "orch:handoff",
+  ORCH_WORKER_SESSION: "orch:workerSession",
+  ORCH_TEMPLATES_LIST: "orch:templatesList",
+  ORCH_TEMPLATE_SAVE: "orch:templateSave",
+  ORCH_TEMPLATE_DELETE: "orch:templateDelete",
+  ORCH_PROPOSE_PLAN: "orch:proposePlan",
+  // Orchestration push events (main → renderer).
+  ORCH_EVENT: "orchestrator:event",
   // send/on (push events)
   CLAUDE_EVENT: "claude:event",
   SESSION_TITLE_UPDATED: "session:titleUpdated",

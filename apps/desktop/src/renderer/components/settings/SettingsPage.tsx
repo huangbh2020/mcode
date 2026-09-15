@@ -20,10 +20,12 @@ import {
   IconHandMove,
   IconPackage,
   IconPuzzle,
+  IconUsers,
   McpIcon,
   type TablerIconProps,
 } from "@renderer/lib/icons.js";
 import { CustomModelsPanel } from "./CustomModelsPanel.js";
+import { AgentsPanel } from "./AgentsPanel.js";
 import { RuntimesPanel } from "./RuntimesPanel.js";
 import { SkillsPanel } from "./SkillsPanel.js";
 import { McpPanel } from "./McpPanel.js";
@@ -57,7 +59,7 @@ import { AboutPanel } from "./AboutPanel.js";
  * Note: the legacy “Claude CLI 路径” panel was removed - the Agent SDK bundles
  * its own claude binary, so an externally-configured path is no longer used.
  */
-type SectionId = "general" | "runtimes" | "custom-models" | "skills" | "mcp" | "plugins" | "appearance" | "shortcuts" | "gestures" | "voice" | "notifications" | "git" | "terminal" | "browser" | "lsp-languages" | "usage" | "about";
+type SectionId = "general" | "runtimes" | "custom-models" | "agents" | "skills" | "mcp" | "plugins" | "appearance" | "shortcuts" | "gestures" | "voice" | "notifications" | "git" | "terminal" | "browser" | "lsp-languages" | "usage" | "about";
 
 interface NavItem {
   id: SectionId;
@@ -89,6 +91,7 @@ const NAV_GROUPS: NavGroup[] = [
     labelKey: "settings.navGroup.ai",
     items: [
       { id: "custom-models", labelKey: "settings.nav.customModels", icon: IconRobot },
+      { id: "agents", labelKey: "orch.agents.title", icon: IconUsers },
       { id: "runtimes", labelKey: "settings.nav.runtimes", icon: IconPackage },
       { id: "plugins", labelKey: "settings.nav.plugins", icon: IconPuzzle },
       { id: "skills", labelKey: "settings.nav.skills", icon: IconSparkles },
@@ -223,6 +226,7 @@ export function SettingsPage() {
           {active === "general" && <GeneralPanel />}
           {active === "appearance" && <AppearancePanel />}
           {active === "custom-models" && <CustomModelsPanel />}
+          {active === "agents" && <AgentsPanel />}
           {active === "shortcuts" && <ShortcutsPanel />}
           {active === "gestures" && <GesturesPanel />}
           {active === "voice" && <VoicePanel />}

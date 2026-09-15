@@ -128,6 +128,12 @@ export interface StartTurnRequest {
    *  ImageContent.mimeType. Empty/absent = text-only turn (the prompt string
    *  may still be empty for an image-only send). */
   images?: { data: string; mimeType: string }[];
+  /** Orchestration coordinator flag: when true, providers that support
+   *  in-process custom tools (Claude via createSdkMcpServer) inject the
+   *  orchestration toolset (task/dispatch/gate/wait) so the MAIN session's
+   *  agent acts as a run coordinator. Providers without the capability
+   *  ignore the flag (orchestration stays usable through the wizard UI). */
+  orchestration?: boolean;
 }
 
 /** Approval request passed from provider → host (for canUseTool-style callbacks). */

@@ -11,6 +11,7 @@ import { UnifiedTabsBar } from "./components/layout/UnifiedTabsBar.js";
 import { RightPanel } from "./components/layout/RightPanel.js";
 import { BottomTerminalBar } from "./components/layout/BottomTerminalBar.js";
 import { SettingsPage } from "./components/settings/SettingsPage.js";
+import { OrchWizardDialog } from "./components/chat/OrchWizardDialog.js";
 import { CommandPalette } from "./components/layout/CommandPalette.js";
 import { SearchDialog } from "./components/ide/SearchDialog.js";
 import { ModelConfigPrompt } from "./components/chat/ModelConfigPrompt.js";
@@ -371,6 +372,9 @@ export function App() {
       {/* Global voice-dictation indicator - floats top-center while any
           composer is listening. Renders null when idle. */}
       <VoiceListeningOverlay />
+      {/* Orchestration wizard (拆解→改派→确认→运行) — driven by the
+          sessionStore.orchWizard flag; renders nothing while closed. */}
+      <OrchWizardDialog />
     </div>
   );
 }

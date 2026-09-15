@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, useLayoutEffect, useMemo, memo, useCallback } from "react";
 import { cn } from "@renderer/lib/cn.js";
+import { Menu } from "@base-ui/react/menu";
 import {
   IconPlayerStop,
   IconSend2,
@@ -18,7 +19,11 @@ import {
   IconBolt,
   IconChevronRight,
   IconGripVertical,
+  IconGitFork,
+  IconExternalLink,
 } from "@renderer/lib/icons.js";
+import { useCursorAnchor } from "@renderer/hooks/useCursorAnchor.js";
+import { isElectron } from "@renderer/lib/platform.js";
 import { useSessionStore, EMPTY_MESSAGES, EMPTY_TODOS, EMPTY_SUBAGENTS, EMPTY_CHAT_QUEUE, EMPTY_ELEMENT_QUEUE, EMPTY_PROMPT_QUEUE, EMPTY_BOOKMARKS, EMPTY_USAGE, type Block, type ChatMessage, type TodoItem, type TurnMeta, type QueuedPrompt } from "@renderer/stores/sessionStore.js";
 import { useToastStore } from "@renderer/stores/toastStore.js";
 import { api } from "@renderer/lib/api.js";
@@ -61,6 +66,8 @@ import { ComposerEditor, type ComposerEditorHandle } from "./ComposerEditor.js";
 import { ContentTagChip } from "./ContentTagChip.js";
 import { TagPopover } from "./TagPopover.js";
 import { FileMentionPicker, type FileMentionPickerMode } from "./FileMentionPicker.js";
+import { AgentPicker } from "./AgentPicker.js";
+import { OrchComposerChips } from "./OrchComposerChips.js";
 import { EmptyThreadWelcome } from "./EmptyThreadWelcome.js";
 import { SlashCommandPicker } from "./SlashCommandPicker.js";
 import { ActivityCluster } from "./ActivityCluster.js";
@@ -1634,7 +1641,7 @@ function ChatPaneForSession({
   // "picker" drives a single floating list above the textarea. Only one of
   // mention/slash is active at a time. `triggerStart` is the index of the
   // leading @ or / so we can delete the whole token on pick / cancel.
-  type PickerKind = "mention" | "slash" | null;
+  type PickerKind = "mention" | "slash" | "agent" | null;
   const [pickerKind, setPickerKind] = useState<PickerKind>(null);
   const [pickerQuery, setPickerQuery] = useState("");
   const triggerStartRef = useRef<number | null>(null);
@@ -1990,6 +1997,22 @@ function ChatPaneForSession({
         const ch = v[i - 1];
         const triggerKind = TRIGGER_CHARS[ch];
         if (triggerKind) {
+          // `@@` (double at) → the AGENT picker (orchestration targets).
+          // The char before the @ must itself be an @ sitting at a valid
+          // boundary; the whole `@@query` token is then removed on pick.
+          if (triggerKind === "mention" && i >= 2 && v[i - 2] === "@") {
+            const atLineStart = i - 2 === 0 || /\s/.test(v[i - 3]);
+            if (atLineStart) {
+              if (pickerKind !== "agent") {
+                triggerStartRef.current = i - 2;
+                const rect = editorRef.current?.getRect();
+                if (rect) setPickerAnchor(rect);
+                setPickerKind("agent");
+              }
+              setPickerQuery(v.slice(i, caret));
+              return;
+            }
+          }
           const atLineStart = i - 1 === 0 || /\s/.test(v[i - 2]);
           if (!atLineStart) {
             if (pickerKind !== null) setPickerKind(null);
@@ -2203,6 +2226,17 @@ function ChatPaneForSession({
       clearTriggerToken();
     },
     [addFileTags, clearTriggerToken],
+  );
+
+  /** Agent picker confirm (@@query): drop the token, add the role to the
+   *  composer's @agent target cluster (chips above the composer; consumed by
+   *  sendPrompt's orchestration interception). */
+  const handleAgentPick = useCallback(
+    (agent: { id: string }) => {
+      if (sessionId) useSessionStore.getState().addOrchTarget(sessionId, agent.id);
+      clearTriggerToken();
+    },
+    [clearTriggerToken, sessionId],
   );
 
   /** Slash picker confirm: replace the `/query` trigger token in the editor
@@ -3350,12 +3384,41 @@ function ChatPaneForSession({
     return out;
   }, [renderItems, wrapLiveSpine]);
 
+  /** Message-level context menu (orchestration dispatch entry points):
+   *  派发并跟踪 opens the wizard prefilled with the message text; 移交
+   *  hands the text off to a fresh session. Event delegation off the stream
+   *  container — rows are memoized and stay untouched. */
+  const [msgCtx, setMsgCtx] = useState<{ text: string; x: number; y: number } | null>(null);
+  const msgCtxAnchor = useCursorAnchor(msgCtx);
+  const handleMessageContextMenu = useCallback(
+    (e: React.MouseEvent) => {
+      // Desktop-only entry (orchestration RPC absent on the web/mobile shim).
+      if (!isElectron) return;
+      const target = e.target as HTMLElement;
+      // Only plain message rows (not links / code blocks with their own menus
+      // / the composer). Selections are allowed through untouched.
+      const row = target.closest("[data-message-id]");
+      if (!row || !row.contains(target)) return;
+      const selection = window.getSelection();
+      if (selection && !selection.isCollapsed) return;
+      const id = row.getAttribute("data-message-id");
+      const msg = messages.find((m) => m.id === id);
+      if (!msg) return;
+      const text = blocksToText(msg.blocks).trim();
+      if (!text) return;
+      e.preventDefault();
+      setMsgCtx({ text, x: e.clientX, y: e.clientY });
+    },
+    [messages],
+  );
+
   return (
     <div className="relative flex h-full flex-col" data-chat-root>
       {/* Message stream area */}
       <div
         ref={streamAreaRef}
         onMouseUp={handleStreamMouseUp}
+        onContextMenu={handleMessageContextMenu}
         className={cn("relative flex min-h-0", empty ? "h-0" : "flex-1")}
       >
       {/* Left-edge timeline of user messages */}
@@ -3605,6 +3668,7 @@ function ChatPaneForSession({
           <div className="flex items-center gap-1 px-1 pb-1">
             <SessionDirectoryChip sessionId={sessionId} />
             <WorktreeModeChip sessionId={sessionId} />
+            <OrchComposerChips sessionId={sessionId} />
           </div>
           <div
             ref={composerCardRef}
@@ -4042,6 +4106,15 @@ function ChatPaneForSession({
             onPickCommand={handleBuiltInPick}
             onClose={() => setPickerKind(null)}
           />
+          {/* Inline @@-agent picker (orchestration targets). Selecting adds
+              the role to the composer's @agent target cluster. */}
+          <AgentPicker
+            open={pickerKind === "agent"}
+            query={pickerQuery}
+            anchorRect={pickerAnchor}
+            onPick={handleAgentPick}
+            onClose={() => setPickerKind(null)}
+          />
           {/* "Add context" picker opened from the bottom-left + button.
               Multi-select; same project file source as @-mention. */}
           <FileMentionPicker
@@ -4056,6 +4129,37 @@ function ChatPaneForSession({
             onPick={handleAttachPick}
             onClose={() => setAttachPickerOpen(false)}
           />
+          {/* Message context menu: orchestration dispatch entry points
+              (派发并跟踪 / 移交). See handleMessageContextMenu. */}
+          <Menu.Root open={!!msgCtx} onOpenChange={(o) => !o && setMsgCtx(null)}>
+            <Menu.Portal>
+              <Menu.Positioner anchor={msgCtxAnchor} side="bottom" align="start">
+                <Menu.Popup className="z-50 min-w-[190px] rounded-lg border border-edge bg-surface py-1 shadow-2xl">
+                  <Menu.Item
+                    onClick={() => {
+                      useSessionStore.getState().openOrchWizard({ goal: msgCtx?.text ?? "" });
+                      setMsgCtx(null);
+                    }}
+                    className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs outline-none select-none text-content-muted data-[highlighted]:bg-surface-muted data-[highlighted]:text-content"
+                  >
+                    <IconGitFork size={14} className="shrink-0" />
+                    {t("orch.menu.dispatchTrack")}
+                  </Menu.Item>
+                  <Menu.Item
+                    onClick={() => {
+                      const text = msgCtx?.text;
+                      setMsgCtx(null);
+                      if (text) void useSessionStore.getState().orchHandoff(text);
+                    }}
+                    className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs outline-none select-none text-content-muted data-[highlighted]:bg-surface-muted data-[highlighted]:text-content"
+                  >
+                    <IconExternalLink size={14} className="shrink-0" />
+                    {t("orch.menu.handoff")}
+                  </Menu.Item>
+                </Menu.Popup>
+              </Menu.Positioner>
+            </Menu.Portal>
+          </Menu.Root>
         </div>
       </div>
 

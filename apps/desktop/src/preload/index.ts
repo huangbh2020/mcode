@@ -547,6 +547,42 @@ const api = {
     status: (() => ipcRenderer.invoke(IPC.RELAY_STATUS)) as RpcMap["relay.status"],
   },
 
+  /** Agent orchestration (docs/orchestration-plan.md): role profiles, runs,
+   *  gates, handoff, templates, and the wizard's model-driven decomposition. */
+  orch: {
+    agentList: (() => ipcRenderer.invoke(IPC.ORCH_AGENT_LIST)) as RpcMap["orch.agentList"],
+    agentSave: ((input) =>
+      ipcRenderer.invoke(IPC.ORCH_AGENT_SAVE, input)) as RpcMap["orch.agentSave"],
+    agentDelete: ((input) =>
+      ipcRenderer.invoke(IPC.ORCH_AGENT_DELETE, input)) as RpcMap["orch.agentDelete"],
+    getSettings: (() => ipcRenderer.invoke(IPC.ORCH_GET_SETTINGS)) as RpcMap["orch.getSettings"],
+    saveSettings: ((input) =>
+      ipcRenderer.invoke(IPC.ORCH_SAVE_SETTINGS, input)) as RpcMap["orch.saveSettings"],
+    createRun: ((input) =>
+      ipcRenderer.invoke(IPC.ORCH_CREATE_RUN, input)) as RpcMap["orch.createRun"],
+    listRuns: ((input) =>
+      ipcRenderer.invoke(IPC.ORCH_LIST_RUNS, input)) as RpcMap["orch.listRuns"],
+    runControl: ((input) =>
+      ipcRenderer.invoke(IPC.ORCH_RUN_CONTROL, input)) as RpcMap["orch.runControl"],
+    taskControl: ((input) =>
+      ipcRenderer.invoke(IPC.ORCH_TASK_CONTROL, input)) as RpcMap["orch.taskControl"],
+    resolveGate: ((input) =>
+      ipcRenderer.invoke(IPC.ORCH_RESOLVE_GATE, input)) as RpcMap["orch.resolveGate"],
+    mergeTask: ((input) =>
+      ipcRenderer.invoke(IPC.ORCH_MERGE_TASK, input)) as RpcMap["orch.mergeTask"],
+    handoff: ((input) => ipcRenderer.invoke(IPC.ORCH_HANDOFF, input)) as RpcMap["orch.handoff"],
+    workerSession: ((input) =>
+      ipcRenderer.invoke(IPC.ORCH_WORKER_SESSION, input)) as RpcMap["orch.workerSession"],
+    templatesList: (() =>
+      ipcRenderer.invoke(IPC.ORCH_TEMPLATES_LIST)) as RpcMap["orch.templatesList"],
+    templateSave: ((input) =>
+      ipcRenderer.invoke(IPC.ORCH_TEMPLATE_SAVE, input)) as RpcMap["orch.templateSave"],
+    templateDelete: ((input) =>
+      ipcRenderer.invoke(IPC.ORCH_TEMPLATE_DELETE, input)) as RpcMap["orch.templateDelete"],
+    proposePlan: ((input) =>
+      ipcRenderer.invoke(IPC.ORCH_PROPOSE_PLAN, input)) as RpcMap["orch.proposePlan"],
+  },
+
   /** Agent runtimes (settings panel): the download-on-demand claude/codex/pi
    *  payloads. install() resolves when the whole pipeline finished; live
    *  progress arrives over `on.runtimesEvent`. */
@@ -617,6 +653,17 @@ const api = {
       ipcRenderer.on(IPC.CLAUDE_EVENT, listener);
       return () => {
         ipcRenderer.off(IPC.CLAUDE_EVENT, listener);
+      };
+    },
+    /** Orchestration push events: run snapshots, gate lifecycle, worker_done
+     *  payloads. Filter by `msg.event.kind` in the handler. */
+    orchEvent(handler: (msg: Extract<MainToRendererMessage, { channel: "orchestrator:event" }>) => void): () => void {
+      const listener = (_e: unknown, msg: MainToRendererMessage) => {
+        if (msg.channel === IPC.ORCH_EVENT) handler(msg);
+      };
+      ipcRenderer.on(IPC.ORCH_EVENT, listener);
+      return () => {
+        ipcRenderer.off(IPC.ORCH_EVENT, listener);
       };
     },
     /** Subscribe to session:titleUpdated push channel. Fired when the main

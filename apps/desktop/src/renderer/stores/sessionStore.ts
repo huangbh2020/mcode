@@ -15,6 +15,14 @@ import type {
   SessionListEntry,
 } from "@contracts/runtime";
 import type { TurnFileEntry } from "@renderer/lib/turnFiles.js";
+import type {
+  AgentProfile,
+  OrchestrationRun,
+  OrchestrationTemplate,
+  OrchSettings,
+  TaskSpecInput,
+  OrchestratorEvent,
+} from "@contracts/orchestration";
 import type { ContentTag } from "@renderer/lib/contentTag.js";
 import { isValidSnapshot } from "@renderer/lib/contextWindow.js";
 import { getLastCursor, type NavEntry } from "@renderer/lib/editorNav.js";
@@ -134,6 +142,27 @@ export interface BrowserTab {
 }
 import type { BuiltinModelOption, UserInputAnswers } from "@contracts/provider";
 import { useToastStore } from "@renderer/stores/toastStore.js";
+
+/** Toast push for orchestration flows (outside ingestEvent's session-gated
+ *  helper). Always shown — orchestration toasts concern runs, not a
+ *  particular chat the user may be looking at. */
+function pushToastLite(kind: "info" | "warning" | "error", title: string, body?: string): void {
+  useToastStore.getState().push({ kind, title, body });
+}
+
+/** Auto-trigger heuristic (P3, triggerMode ask/auto): strong parallel-intent
+ *  wording AND task bulk (≥2 list items or a substantial prompt). Kept
+ *  deliberately conservative — a false hit in "ask" mode is only a toast,
+ *  but "auto" hijacks the send into the wizard. */
+const ORCH_TRIGGER_RE =
+  /(并行|同时做|同时处理|同时进行|拆开.{0,8}(做|处理|给|跑)|分别.{0,6}(做|实现|处理|跑)|拆分任务|任务拆解|流水线|多个\s*agent|几个\s*agent|分给.{0,8}agent)/i;
+function looksOrchestratable(prompt: string): boolean {
+  const text = prompt.trim();
+  if (text.length < 8) return false;
+  if (!ORCH_TRIGGER_RE.test(text)) return false;
+  const bullets = (text.match(/^\s*(?:[-*•]|\d+[.、)])\s+/gm) ?? []).length;
+  return bullets >= 2 || text.length >= 20;
+}
 
 /** True for `.md` / `.markdown` files - used to default the editor into preview
  *  mode on first open. Kept here (not in lib/path) because it's a content-type
@@ -1346,6 +1375,44 @@ export interface SessionState {
    *  double-effect in dev firing init twice. */
   _initStarted: boolean;
 
+  /* ── Agent orchestration (docs/orchestration-plan.md) ── */
+  /** Role profiles (builtin + user), hydrated lazily by the settings panel /
+   *  wizard / composer picker. Not persisted renderer-side (main owns the
+   *  `orch.agents.v1` settings key). */
+  orchAgents: AgentProfile[];
+  /** Pipeline / competition / fan-out templates (main owns persistence). */
+  orchTemplates: OrchestrationTemplate[];
+  /** Orchestration prefs (trigger mode / defaults). null until loaded. */
+  orchSettings: OrchSettings | null;
+  /** Runs keyed by their COORDINATOR session id. Updated from `orch.event`
+   *  pushes (run.updated replaces by id) and initial `orch.listRuns` loads. */
+  orchRunsBySession: Record<string, OrchestrationRun[]>;
+  /** Worker sub-session rows fetched on demand (the DAG panel's "open worker"
+   *  action) — the final findSession fallback so worker tabs resolve titles
+   *  and config-sync. Keyed by worker session id. */
+  orchWorkersById: Record<string, Session>;
+  /** Composer 编排开关 per session: when on, the next sendPrompt turns this
+   *  session into a coordinator (per-turn `orchestration` flag → MCP tools). */
+  orchCoordinatorBySession: Record<string, boolean>;
+  /** @agent picker targets per session (composer chip cluster). 1 target in
+   *  "handoff" mode = full handoff; ≥2 (or "orchestrate" mode) opens the
+   *  wizard prefilled. Cleared after the send resolves. */
+  orchTargetsBySession: Record<string, Array<{ profileId: string; mode: "handoff" | "orchestrate" }>>;
+  /** Orchestrator event subscription state; true after `initDeferred`
+   *  subscribes (guards against double-subscription). */
+  _orchSubscribed: boolean;
+  /** The orchestration wizard dialog (拆解→改派→确认→运行). Opened by the
+   *  composer's 编排 button, the @@agent picker's orchestrate mode, the
+   *  message context menu's 派发并跟踪, or the auto-trigger heuristic
+   *  (triggerMode="auto"). The dialog component mounts at the app root and
+   *  reads this; `goal`/`profileIds` prefill its form. */
+  orchWizard: {
+    open: boolean;
+    goal: string;
+    profileIds: string[];
+    fromSessionId: string | null;
+  };
+
   // actions
   init: () => Promise<void>;
   /** Deferred (non-critical) hydration kicked off by `init()` after the
@@ -1775,6 +1842,8 @@ export interface SessionState {
    *  no-op silently when there is no active project. */
   reloadSkills: () => Promise<void>;
   dismissQuestion: () => void;
+  /** Session-targeted dismiss (Inbox → worker sessions' questions). */
+  dismissQuestionFor: (sessionId: string) => void;
   /** Submit answers to the head AskUserQuestion for the active session.
    *  Calls `claude:respondQuestion` which resolves the provider's pending
    *  user-input Deferred — the SAME turn then continues (the model receives
@@ -1913,6 +1982,56 @@ export interface SessionState {
   /* ── IDE right-panel actions ── */
   /** Switch the active right-panel tab. Persists to settings. */
   setRightPanelTab: (tab: RightPanelTab) => void;
+
+  /* ── Agent orchestration actions ── */
+  /** (Re)fetch role profiles into orchAgents. */
+  reloadOrchAgents: () => Promise<void>;
+  /** Upsert a role profile; refreshes orchAgents. */
+  saveOrchAgent: (agent: AgentProfile) => Promise<void>;
+  /** Delete a role profile (builtin originals resurrect on next load). */
+  deleteOrchAgent: (id: string) => Promise<void>;
+  /** (Re)fetch orchestration templates. */
+  reloadOrchTemplates: () => Promise<void>;
+  saveOrchTemplate: (template: OrchestrationTemplate) => Promise<void>;
+  deleteOrchTemplate: (id: string) => Promise<void>;
+  /** Load orchestration settings (trigger mode / defaults). */
+  loadOrchSettings: () => Promise<void>;
+  saveOrchSettings: (settings: OrchSettings) => Promise<void>;
+  /** (Re)fetch a coordinator session's runs into orchRunsBySession. */
+  loadOrchRuns: (sessionId: string) => Promise<void>;
+  /** Ingest an `orchestrator:event` push (run snapshots / gate lifecycle /
+   *  worker_done toasts). */
+  ingestOrchEvent: (event: OrchestratorEvent) => void;
+  /** Run-level control (pause/resume/cancel/delete). */
+  orchRunControl: (runId: string, action: "pause" | "resume" | "cancel" | "delete") => Promise<void>;
+  /** Node-level control (pause/resume/retry/cancel/rerun/markCompleted). */
+  orchTaskControl: (
+    runId: string,
+    taskId: string,
+    action: "pause" | "resume" | "retry" | "cancel" | "rerun" | "markCompleted",
+    profileId?: string | null,
+  ) => Promise<void>;
+  /** Resolve an open decision gate. */
+  orchResolveGate: (runId: string, gateId: string, resolution: string) => Promise<void>;
+  /** Merge a completed worktree node back into the main checkout. */
+  orchMergeTask: (runId: string, taskId: string) => Promise<string | null>;
+  /** Full handoff: create a plain new session with the briefing and send it. */
+  orchHandoff: (briefing: string, profileId?: string, title?: string) => Promise<Session | null>;
+  /** Wizard auto-decompose (model-driven goal → task proposal). */
+  orchProposePlan: (goal: string, hint?: string) => Promise<TaskSpecInput[] | null>;
+  /** Composer 编排开关 per session (coordinator toolset on next send). */
+  setOrchCoordinator: (sessionId: string, on: boolean) => void;
+  /** @agent target chips per session. */
+  addOrchTarget: (sessionId: string, profileId: string) => void;
+  removeOrchTarget: (sessionId: string, profileId: string) => void;
+  setOrchTargetMode: (sessionId: string, mode: "handoff" | "orchestrate") => void;
+  clearOrchTargets: (sessionId: string) => void;
+  /** Fetch a worker session row + open it as a center tab. */
+  openOrchWorker: (workerSessionId: string) => Promise<void>;
+  /** Open the orchestration wizard prefilled (goal / preset agent targets).
+   *  `fromSessionId` scopes the created run to that coordinator session. */
+  openOrchWizard: (seed?: { goal?: string; profileIds?: string[] }) => void;
+  closeOrchWizard: () => void;
 
   /* ── Side chat (right-panel ask tab) actions ── */
   /** Reveal the right panel and focus the sidechat tab (the ask-tab entry
@@ -2203,6 +2322,8 @@ const EMPTY_PROVIDERS: ProviderInfo[] = [];
 const EMPTY_PI_MODELS: BuiltinModelOption[] = [];
 const EMPTY_CODEX_MODELS: BuiltinModelOption[] = [];
 const EMPTY_SKILLS: SkillInfo[] = [];
+const EMPTY_ORCH_AGENTS: AgentProfile[] = [];
+const EMPTY_ORCH_TEMPLATES: OrchestrationTemplate[] = [];
 const EMPTY_SESSIONS: Session[] = [];
 export const EMPTY_SUBAGENTS: SubagentSnapshot[] = [];
 /** Stable empty usage-history reference (selector must return a stable array). */
@@ -2531,6 +2652,7 @@ function findSession(
   pinnedSessions: Session[],
   streamSessions: Session[],
   id: string,
+  workersById?: Record<string, Session>,
 ): Session | undefined {
   for (const list of Object.values(sessionsByProject)) {
     const hit = list?.find((s) => s.id === id);
@@ -2542,7 +2664,12 @@ function findSession(
     const hit = list?.find((s) => s.id === id);
     if (hit) return hit;
   }
-  return streamSessions.find((s) => s.id === id);
+  const streamHit = streamSessions.find((s) => s.id === id);
+  if (streamHit) return streamHit;
+  // Orch-worker sub-sessions (opened from the orchestration panel's worker
+  // detail) live in no list cache by design — their dedicated map is the
+  // final fallback so tabs/titles/config-sync resolve.
+  return workersById?.[id];
 }
 
 /** The per-project thread cache is a TWO-SECTION array: local threads first
@@ -2772,6 +2899,17 @@ function dropSessionBuckets(s: SessionState, id: string) {
   delete composerDraftBySession[id];
   const sideChatSeedBySession = { ...s.sideChatSeedBySession };
   delete sideChatSeedBySession[id];
+  // Orchestration per-session buckets (coordinator toggle, @agent targets,
+  // runs list view). Main keeps the runs themselves — the panel re-fetches on
+  // demand if the session somehow returns.
+  const orchCoordinatorBySession = { ...s.orchCoordinatorBySession };
+  delete orchCoordinatorBySession[id];
+  const orchTargetsBySession = { ...s.orchTargetsBySession };
+  delete orchTargetsBySession[id];
+  const orchRunsBySession = { ...s.orchRunsBySession };
+  delete orchRunsBySession[id];
+  const orchWorkersById = { ...s.orchWorkersById };
+  delete orchWorkersById[id];
   const pendingApprovals = s.pendingApprovals.filter((p) => p.sessionId !== id);
   return {
     messagesBySession,
@@ -2803,6 +2941,10 @@ function dropSessionBuckets(s: SessionState, id: string) {
     planApprovalDraftBySession,
     composerDraftBySession,
     sideChatSeedBySession,
+    orchCoordinatorBySession,
+    orchTargetsBySession,
+    orchRunsBySession,
+    orchWorkersById,
     pendingApprovals,
   };
 }
@@ -3040,7 +3182,7 @@ function syncConfigFromSession(
   get: () => SessionState,
   sessionId: string,
 ): void {
-  const sess = findSession(get().sessionsByProject, get().archivedSessionsByProject, get().pinnedSessions, get().streamSessions, sessionId);
+  const sess = findSession(get().sessionsByProject, get().archivedSessionsByProject, get().pinnedSessions, get().streamSessions, sessionId, get().orchWorkersById);
   if (!sess) return;
   // Keep activeProjectId in lockstep with the active session's owning project.
   // Without this, switching to a thread in project B while activeProjectId
@@ -3335,7 +3477,7 @@ function hydrateContextSnapshot(
   get: () => SessionState,
   sessionId: string,
 ): void {
-  const sess = findSession(get().sessionsByProject, get().archivedSessionsByProject, get().pinnedSessions, get().streamSessions, sessionId);
+  const sess = findSession(get().sessionsByProject, get().archivedSessionsByProject, get().pinnedSessions, get().streamSessions, sessionId, get().orchWorkersById);
   const snapshot = sess?.contextSnapshot;
   if (!snapshot || !isValidSnapshot(snapshot)) {
     // No usable snapshot on the row - leave any existing slot as-is so we
@@ -3386,7 +3528,7 @@ function hydrateCapsule(
   get: () => SessionState,
   sessionId: string,
 ): void {
-  const sess = findSession(get().sessionsByProject, get().archivedSessionsByProject, get().pinnedSessions, get().streamSessions, sessionId);
+  const sess = findSession(get().sessionsByProject, get().archivedSessionsByProject, get().pinnedSessions, get().streamSessions, sessionId, get().orchWorkersById);
   const todos = sess?.todos ?? null;
   const subagents = sess?.subagents ?? null;
   const planDraft = sess?.planDraft ?? null;
@@ -3478,7 +3620,7 @@ function hydrateTurnFiles(
   get: () => SessionState,
   sessionId: string,
 ): void {
-  const sess = findSession(get().sessionsByProject, get().archivedSessionsByProject, get().pinnedSessions, get().streamSessions, sessionId);
+  const sess = findSession(get().sessionsByProject, get().archivedSessionsByProject, get().pinnedSessions, get().streamSessions, sessionId, get().orchWorkersById);
   const turnFiles = sess?.turnFiles ?? null;
   set((s) => {
     const hasValue = !!(turnFiles && Array.isArray(turnFiles) && turnFiles.length > 0);
@@ -3508,7 +3650,7 @@ function hydrateBookmarks(
   get: () => SessionState,
   sessionId: string,
 ): void {
-  const sess = findSession(get().sessionsByProject, get().archivedSessionsByProject, get().pinnedSessions, get().streamSessions, sessionId);
+  const sess = findSession(get().sessionsByProject, get().archivedSessionsByProject, get().pinnedSessions, get().streamSessions, sessionId, get().orchWorkersById);
   const bookmarks = sess?.bookmarks ?? null;
   set((s) => {
     const hasValue = !!(bookmarks && Array.isArray(bookmarks) && bookmarks.length > 0);
@@ -3536,7 +3678,7 @@ function hydrateSubagentTranscripts(
   get: () => SessionState,
   sessionId: string,
 ): void {
-  const sess = findSession(get().sessionsByProject, get().archivedSessionsByProject, get().pinnedSessions, get().streamSessions, sessionId);
+  const sess = findSession(get().sessionsByProject, get().archivedSessionsByProject, get().pinnedSessions, get().streamSessions, sessionId, get().orchWorkersById);
   const transcripts = sess?.subagentTranscripts ?? null;
   set((s) => {
     // A running turn owns the transcripts — its event stream is fresher than
@@ -3594,7 +3736,7 @@ function hydrateUsageHistory(
   get: () => SessionState,
   sessionId: string,
 ): void {
-  const sess = findSession(get().sessionsByProject, get().archivedSessionsByProject, get().pinnedSessions, get().streamSessions, sessionId);
+  const sess = findSession(get().sessionsByProject, get().archivedSessionsByProject, get().pinnedSessions, get().streamSessions, sessionId, get().orchWorkersById);
   const history = sess?.usageHistory ?? null;
   set((s) => {
     const hasValue = !!(history && Array.isArray(history) && history.length > 0);
@@ -4509,6 +4651,18 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   sideChatSeedBySession: {},
   pendingSubagentView: null,
   pendingBookmarkJump: null,
+  // Agent orchestration (docs/orchestration-plan.md). Lists hydrate on
+  // demand (settings panel / wizard / composer picker); runs arrive via
+  // `orchestrator:event` pushes and initial listRuns loads.
+  orchAgents: EMPTY_ORCH_AGENTS,
+  orchTemplates: EMPTY_ORCH_TEMPLATES,
+  orchSettings: null,
+  orchRunsBySession: {},
+  orchWorkersById: {},
+  orchCoordinatorBySession: {},
+  orchTargetsBySession: {},
+  orchWizard: { open: false, goal: "", profileIds: [], fromSessionId: null },
+  _orchSubscribed: false,
   // IDE right-panel. Editor state is per-project (keyed by projectId);
   // init() hydrates from the settings table. rightPanelTab / ideEditorMode
   // are global user prefs.
@@ -4984,10 +5138,22 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       // dropdown greys out providers whose runtime isn't usable, so it needs
       // this at startup, not only when the settings panel mounts.
       void get().reloadRuntimes();
+      // Orchestration: settings + role profiles (wizard/composer pickers read
+      // them) and the app-lifetime `orchestrator:event` subscription (run
+      // snapshots / gate lifecycle / worker_done toasts). Guarded against
+      // double-subscription (init can be re-entered in dev StrictMode).
+      void get().loadOrchSettings();
+      void get().reloadOrchAgents();
+      if (!get()._orchSubscribed) {
+        set({ _orchSubscribed: true });
+        api.on.orchEvent((msg) => {
+          get().ingestOrchEvent(msg.event);
+        });
+      }
       // Track the language-server lifecycle per (workspace, language) so the
       // editor toolbar can show a loading indicator while a server starts
       // (Java's jdtls can take minutes to import a project) and a failure
-      // notice when it can't start. App-lifetime subscription — no teardown.
+      // notice when it couldn't start. App-lifetime subscription — no teardown.
       api.on.lspEvent((msg) => {
         if (msg.type !== "stateChanged") return;
         const p = msg.payload as LspStateChangedPayload;
@@ -6484,6 +6650,40 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       return false;
     }
 
+    // ── Orchestration interception (docs/orchestration-plan.md §6) ──
+    // Mode classification happens HERE, renderer-side, before the turn fires:
+    //  ① @agent targets present → handoff (single) or wizard (multi/orch
+    //     mode). The prompt becomes the briefing/goal; nothing is sent to the
+    //     current session. Return true so the composer clears.
+    //  ② No targets + auto-trigger heuristic hit → triggerMode "auto" opens
+    //     the wizard prefilled (nothing sent); "ask" only toasts a
+    //     suggestion and the send proceeds normally.
+    // Skipped for image-only turns (no text to hand off) and on the web/mobile
+    // shim (no api.orch surface).
+    const orchTargets = get().orchTargetsBySession[sessionId] ?? [];
+    if (prompt.trim() && isElectron) {
+      if (orchTargets.length > 0) {
+        const mode = orchTargets[0].mode;
+        const profileIds = orchTargets.map((x) => x.profileId);
+        get().clearOrchTargets(sessionId);
+        if (mode === "handoff" && profileIds.length === 1) {
+          void get().orchHandoff(prompt, profileIds[0]);
+        } else {
+          get().openOrchWizard({ goal: prompt, profileIds });
+        }
+        return true;
+      }
+      const triggerMode = get().orchSettings?.triggerMode ?? "ask";
+      if (triggerMode !== "off" && looksOrchestratable(prompt)) {
+        if (triggerMode === "auto") {
+          get().openOrchWizard({ goal: prompt });
+          return true;
+        }
+        pushToastLite("info", translate(get().locale, "orch.toast.suggest"));
+      }
+    }
+    // ── end orchestration interception ──
+
     // 1. immediately show the user's message. Attachments (pasted content
     //    promoted to cards in the composer) render as attachment blocks
     //    ABOVE the typed text, mirroring the composer's chip-above-editor
@@ -6607,6 +6807,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           // client (phone ⇄ PC) as a `user.message` event keyed by the id.
           // The local copy appended above makes the echo a no-op here.
           userMessage: { id: userMsg.id, createdAt: userMsg.createdAt, blocks: userMsg.blocks },
+          // Orchestration coordinator flag (composer 编排开关): injects the
+          // in-process orchestrator MCP toolset for this turn.
+          orchestration: !!get().orchCoordinatorBySession[sessionId],
         }));
       } catch (err) {
         // The IPC itself rejected (not a streamed `error` event). Without
@@ -9379,11 +9582,15 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   dismissQuestion: () => {
     const sessionId = get().activeSessionId;
     if (!sessionId) return;
+    get().dismissQuestionFor(sessionId);
+  },
+
+  /** Session-targeted dismiss (the Inbox dismisses WORKER sessions' questions
+   *  — those are never the active session). Same semantics as dismissQuestion:
+   *  resolves the provider's pending Deferred as dismissed so the worker turn
+   *  continues, then clears the card. */
+  dismissQuestionFor: (sessionId) => {
     const pending = get().pendingQuestionBySession[sessionId];
-    // Resolve the provider's pending Deferred as DISMISSED so the model's
-    // turn CONTINUES (it sees the question was skipped and decides what to
-    // do). The old behavior only cleared the local card, leaving the model
-    // blocked forever waiting for answers.
     if (pending) {
       const requestId = pending.requestId ?? `sentinel_${sessionId}_${Date.now()}`;
       void api.claude
@@ -9930,6 +10137,268 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     void api.setting.set({ key: UI_RIGHT_PANEL_TAB_SETTING_KEY, value: tab }).catch((err) => {
       console.error("setting.set(rightPanelTab) failed:", err);
     });
+  },
+
+  /* ── Agent orchestration actions ── */
+
+  reloadOrchAgents: async () => {
+    if (!isElectron) return;
+    try {
+      const { agents } = await api.orch.agentList();
+      set({ orchAgents: agents });
+    } catch (err) {
+      console.error("orch.agentList failed:", err);
+    }
+  },
+
+  saveOrchAgent: async (agent) => {
+    const { agents } = await api.orch.agentSave({ agent });
+    set({ orchAgents: agents });
+  },
+
+  deleteOrchAgent: async (id) => {
+    const { agents } = await api.orch.agentDelete({ id });
+    set({ orchAgents: agents });
+  },
+
+  reloadOrchTemplates: async () => {
+    if (!isElectron) return;
+    try {
+      const { templates } = await api.orch.templatesList();
+      set({ orchTemplates: templates });
+    } catch (err) {
+      console.error("orch.templatesList failed:", err);
+    }
+  },
+
+  saveOrchTemplate: async (template) => {
+    const { templates } = await api.orch.templateSave({ template });
+    set({ orchTemplates: templates });
+  },
+
+  deleteOrchTemplate: async (id) => {
+    const { templates } = await api.orch.templateDelete({ id });
+    set({ orchTemplates: templates });
+  },
+
+  loadOrchSettings: async () => {
+    if (!isElectron) return;
+    try {
+      const { settings } = await api.orch.getSettings();
+      set({ orchSettings: settings });
+    } catch (err) {
+      console.error("orch.getSettings failed:", err);
+    }
+  },
+
+  saveOrchSettings: async (settings) => {
+    const { settings: saved } = await api.orch.saveSettings({ settings });
+    set({ orchSettings: saved });
+  },
+
+  loadOrchRuns: async (sessionId) => {
+    if (!isElectron) return;
+    try {
+      const { runs } = await api.orch.listRuns({ sessionId });
+      set((s) => ({ orchRunsBySession: { ...s.orchRunsBySession, [sessionId]: runs } }));
+    } catch (err) {
+      console.error("orch.listRuns failed:", err);
+    }
+  },
+
+  ingestOrchEvent: (event) => {
+    switch (event.kind) {
+      case "run.updated": {
+        const run = event.run;
+        set((s) => {
+          const list = s.orchRunsBySession[run.parentSessionId] ?? [];
+          const idx = list.findIndex((r) => r.id === run.id);
+          const next = idx >= 0 ? list.map((r) => (r.id === run.id ? run : r)) : [run, ...list];
+          return { orchRunsBySession: { ...s.orchRunsBySession, [run.parentSessionId]: next } };
+        });
+        return;
+      }
+      case "worker_done": {
+        // Visible feedback for finished/failed workers (activity-region style
+        // toasts would need the run's locale — keep it fire-and-forget light).
+        const failed = event.payload.status === "failed";
+        pushToastLite(
+          failed ? "error" : "info",
+          failed ? translate(get().locale, "orch.toast.workerFailed", { id: event.payload.taskId })
+                 : translate(get().locale, "orch.toast.workerDone", { id: event.payload.taskId }),
+        );
+        return;
+      }
+      case "gate.created": {
+        pushToastLite("info", translate(get().locale, "orch.toast.gate"));
+        return;
+      }
+      case "gate.resolved":
+      case "suggest":
+        return;
+    }
+  },
+
+  orchRunControl: async (runId, action) => {
+    try {
+      const { run } = await api.orch.runControl({ runId, action });
+      if (run) {
+        set((s) => {
+          const list = s.orchRunsBySession[run.parentSessionId] ?? [];
+          const next = action === "delete" ? list.filter((r) => r.id !== runId) : list.map((r) => (r.id === runId ? run : r));
+          return { orchRunsBySession: { ...s.orchRunsBySession, [run.parentSessionId]: next } };
+        });
+      }
+    } catch (err) {
+      console.error("orch.runControl failed:", err);
+    }
+  },
+
+  orchTaskControl: async (runId, taskId, action, profileId) => {
+    try {
+      const { run } = await api.orch.taskControl({ runId, taskId, action, profileId });
+      if (run) {
+        set((s) => {
+          const list = s.orchRunsBySession[run.parentSessionId] ?? [];
+          const next = list.map((r) => (r.id === run.id ? run : r));
+          return { orchRunsBySession: { ...s.orchRunsBySession, [run.parentSessionId]: next } };
+        });
+      }
+    } catch (err) {
+      console.error("orch.taskControl failed:", err);
+    }
+  },
+
+  orchResolveGate: async (runId, gateId, resolution) => {
+    try {
+      const { run } = await api.orch.resolveGate({ runId, gateId, resolution });
+      if (run) {
+        set((s) => {
+          const list = s.orchRunsBySession[run.parentSessionId] ?? [];
+          const next = list.map((r) => (r.id === run.id ? run : r));
+          return { orchRunsBySession: { ...s.orchRunsBySession, [run.parentSessionId]: next } };
+        });
+      }
+    } catch (err) {
+      console.error("orch.resolveGate failed:", err);
+    }
+  },
+
+  orchMergeTask: async (runId, taskId) => {
+    try {
+      const res = await api.orch.mergeTask({ runId, taskId });
+      return res.ok ? null : (res.error ?? "merge failed");
+    } catch (err) {
+      return (err as Error).message;
+    }
+  },
+
+  orchHandoff: async (briefing, profileId, title) => {
+    const s = get();
+    const projectId = s.activeProjectId;
+    if (!projectId) return null;
+    try {
+      const { session } = await api.orch.handoff({
+        projectId,
+        briefing,
+        profileId,
+        fromSessionId: s.activeSessionId ?? undefined,
+        title,
+      });
+      pushToastLite("info", translate(get().locale, "orch.toast.handoff"));
+      return session;
+    } catch (err) {
+      console.error("orch.handoff failed:", err);
+      pushToastLite("error", (err as Error).message);
+      return null;
+    }
+  },
+
+  orchProposePlan: async (goal, hint) => {
+    const sessionId = get().activeSessionId;
+    if (!sessionId) return null;
+    try {
+      const { tasks, error } = await api.orch.proposePlan({ sessionId, goal, hint });
+      if (error) pushToastLite("error", error);
+      return tasks.length > 0 ? tasks : null;
+    } catch (err) {
+      console.error("orch.proposePlan failed:", err);
+      return null;
+    }
+  },
+
+  setOrchCoordinator: (sessionId, on) => {
+    set((s) => ({ orchCoordinatorBySession: { ...s.orchCoordinatorBySession, [sessionId]: on } }));
+  },
+
+  addOrchTarget: (sessionId, profileId) => {
+    set((s) => {
+      const cur = s.orchTargetsBySession[sessionId] ?? [];
+      if (cur.some((t) => t.profileId === profileId)) return {};
+      // ≥2 targets force orchestrate mode (multiple = explicit parallelism).
+      const mode: "handoff" | "orchestrate" = cur.length + 1 >= 2 ? "orchestrate" : (cur[0]?.mode ?? "handoff");
+      const next = [...cur.map((t) => ({ ...t, mode })), { profileId, mode }];
+      return { orchTargetsBySession: { ...s.orchTargetsBySession, [sessionId]: next } };
+    });
+  },
+
+  removeOrchTarget: (sessionId, profileId) => {
+    set((s) => {
+      const cur = s.orchTargetsBySession[sessionId] ?? [];
+      const next = cur.filter((t) => t.profileId !== profileId);
+      const patch: Record<string, { profileId: string; mode: "handoff" | "orchestrate" }[]> = {
+        [sessionId]: next,
+      };
+      return { orchTargetsBySession: { ...s.orchTargetsBySession, ...patch } };
+    });
+  },
+
+  setOrchTargetMode: (sessionId, mode) => {
+    set((s) => {
+      const cur = s.orchTargetsBySession[sessionId] ?? [];
+      return {
+        orchTargetsBySession: {
+          ...s.orchTargetsBySession,
+          [sessionId]: cur.map((t) => ({ ...t, mode })),
+        },
+      };
+    });
+  },
+
+  clearOrchTargets: (sessionId) => {
+    set((s) => {
+      if (!(sessionId in s.orchTargetsBySession)) return {};
+      const next = { ...s.orchTargetsBySession };
+      delete next[sessionId];
+      return { orchTargetsBySession: next };
+    });
+  },
+
+  openOrchWorker: async (workerSessionId) => {
+    try {
+      const { session } = await api.orch.workerSession({ sessionId: workerSessionId });
+      if (session) {
+        set((s) => ({ orchWorkersById: { ...s.orchWorkersById, [session.id]: session } }));
+      }
+      await get().openTab(workerSessionId);
+    } catch (err) {
+      console.error("orch.workerSession failed:", err);
+    }
+  },
+
+  openOrchWizard: (seed) => {
+    set((s) => ({
+      orchWizard: {
+        open: true,
+        goal: seed?.goal ?? "",
+        profileIds: seed?.profileIds ?? [],
+        fromSessionId: s.activeSessionId,
+      },
+    }));
+  },
+
+  closeOrchWizard: () => {
+    set((s) => ({ orchWizard: { ...s.orchWizard, open: false } }));
   },
 
   openSideChatPanel: () => {
