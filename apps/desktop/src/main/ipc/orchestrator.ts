@@ -24,6 +24,7 @@ import {
   OrchSettingsSaveSchema,
 } from "@contracts/ipc";
 import { TaskSpecInputSchema } from "@contracts/orchestration";
+import type { Session } from "@contracts/session";
 import { orchestrator } from "@main/orchestrator/OrchestratorService.js";
 import { ProfileStore } from "@main/orchestrator/profiles.js";
 import { TemplateStore } from "@main/orchestrator/templates.js";
@@ -35,6 +36,9 @@ import { resolveSessionCwd } from "@main/lib/sessionCwd.js";
 import { CustomModelStore } from "@main/lib/secretStore.js";
 import { PiModelsStore } from "@main/lib/piModelsStore.js";
 import { CodexModelsStore } from "@main/lib/codexModelsStore.js";
+import { buildCustomEnv, resolveActiveModel } from "@main/providers/claude-sdk/customEnv.js";
+import { resolveModelForGitOp } from "@main/ipc/git.js";
+import { resolveSdkBinaryPath } from "@main/providers/claude-sdk/sdkBinaryPath.js";
 import { log } from "@main/lib/logger.js";
 import { z } from "zod";
 
@@ -183,104 +187,36 @@ export function registerOrchestratorHandlers(ipcMain: IpcMain): void {
     return { templates: TemplateStore.delete(input.id) };
   });
 
-  /* ── 向导自动拆解:side 会话跑一次规划,解析 JSON 提案 ── */
+  /* ── 向导自动拆解:复用 generateCommitMessageForRepo 的模式直接 query() ──
+   *
+   * 之前用 createOrReuseSession + RuntimeManager.sendTurn 走 side session,
+   * 怎么 inherit customModelId 都拿不到,SDK 还是落官方凭据报 /login。
+   * 这里改用 git.ts 的 generateCommitMessageForRepo 模式:直接 query()
+   * + resolveModelForGitOp + buildCustomEnv,完全跳过 session 行。
+   * —— 这条路径 git 已经实测跑通了(用户用来 AI 生成 commit message),
+   * planner 与 commit 一样的"单轮 / 产纯文本"模式,直接复用。
+   */
   ipcMain.handle(IPC.ORCH_PROPOSE_PLAN, async (_evt, raw) => {
     await ready();
     const input = OrchProposePlanSchema.parse(raw);
     const coordinator = SessionRepo.get(input.sessionId);
     if (!coordinator) throw new Error(`session not found: ${input.sessionId}`);
-    // Resolve planner profile: user-picked wins; fall back to builtin-planner.
-    // A picked profile that no longer exists (deleted between pick and
-    // invoke) silently degrades to builtin-planner rather than erroring
-    // — the user can re-pick on retry.
+
+    // 解析自定义端点配置:沿协调者主会话的 customModelId 选 + 兜底取
+    // 任意已配 customModel。claude-sdk 必须有 customModelId,否则
+    // SDK 走官方 OAuth 凭据必然 /login —— 这正是用户之前遇到的失败模式。
+    // Pi/Codex 走自家端点配置,不带 customModelId 也能跑(但目前
+    // 协调者主会话默认是 claude-sdk,所以这里基本只走 anthropic/openai 协议)。
+    const plannerCustomModelId = pickPlannerCustomModelId(coordinator);
+    if (!plannerCustomModelId) {
+      return {
+        tasks: [],
+        error:
+          "自动拆解需要自定义端点:请先在「设置 → 模型配置」里添加一个 Anthropic 兼容端点(网关或 OpenAI 协议桥),再回到这里点自动拆解",
+      };
+    }
+
     const surface = await buildAvailableModelSurface();
-    let plannerProfile = input.plannerProfileId
-      ? ProfileStore.get(input.plannerProfileId)
-      : undefined;
-    if (!plannerProfile) {
-      // User-picked but not found (deleted between pick and invoke) — fall
-      // back to builtin-planner silently; the wizard UI will show the error
-      // and let the user re-pick on retry.
-      if (input.plannerProfileId) {
-        log.warn(
-          `orch.proposePlan: plannerProfileId ${input.plannerProfileId} not found, falling back to builtin-planner`,
-        );
-      }
-      plannerProfile = ProfileStore.get("builtin-planner");
-    }
-    if (!plannerProfile) {
-      return { tasks: [], error: "内置规划者 agent 不存在,请重置 Agent 角色" };
-    }
-    // 规划者自己也要走白名单:profileId/model 必须在当前可用集合里,
-    // 否则让它落 null 让协调者后续在 panel 里手动指定。
-    const plannerSurface = surface.get(plannerProfile.providerId);
-    const plannerModelOk = plannerSurface
-      ? plannerProfile.model === "default" || plannerSurface.builtin.has(plannerProfile.model) || plannerSurface.custom.has(plannerProfile.model)
-      : false;
-    const plannerProviderOk = !!plannerSurface;
-    if (!plannerProviderOk) {
-      return {
-        tasks: [],
-        error: `规划者厂商 ${plannerProfile.providerId} 在系统中不可用`,
-      };
-    }
-    if (!plannerModelOk) {
-      return {
-        tasks: [],
-        error: `规划者模型 ${plannerProfile.providerId}/${plannerProfile.model} 不在系统当前可用列表中`,
-      };
-    }
-    // 规划者的 side session 必须继承 customModelId —— 任何走 claude-sdk
-    // 厂商的 profile(无论 model 是 "default" 还是具体 id,如
-    // "GLM-5.3-Flash"/"deepseek-v4-pro" 等)都依赖 baseUrl+token 才能打通:
-    // 用户从来不该让 Mcode 走到官方 Claude OAuth 凭据,我们的目的就是走
-    // 他在「模型配置」里配的 Anthropic 兼容端点。
-    //
-    // 兜底顺序:
-    //  1) 协调者主会话当前生效的 customModelId(用户已在主 chat 选过)
-    //  2) 设置里第一个已配 model 的 customModel
-    //  3) 都没有:报"请去设置 → 模型配置 添加端点"
-    //
-    // 只对 claude-sdk 厂商应用此规则(其它厂商走自己的端点,不该被覆盖;
-    // 比如 pi-sdk 走 ~/.pi/agent/models.json,codex-sdk 走 config.toml)。
-    let plannerCustomModelId: string | null = null;
-    if (plannerProfile.providerId === "claude-sdk") {
-      if (coordinator.customModelId) {
-        plannerCustomModelId = coordinator.customModelId;
-      } else {
-        // 协调者主会话从未选过 customModelId(只有 AgentProfile model 列表
-        // 里有 customModel,但该 session 行 customModelId 仍为 null)。
-        // 兜底取任何配置好的 customModel,跳过 0 个 model 的空配置。
-        const fallback =
-          CustomModelStore.listPublic().find((c) => c.models.some((m) => m.id.trim())) ?? null;
-        if (fallback) plannerCustomModelId = fallback.id;
-      }
-      // 仍为 null 说明用户在「模型配置」里也没配任何端点 —— 让侧 session
-      // 走官方凭据,SDK 会因 /login 失败;我们把这条信息透传回 wizard 即可
-      // 提示「先去设置 → 模型配置 添加一个 Anthropic 兼容端点」。
-      if (!plannerCustomModelId) {
-        return {
-          tasks: [],
-          error:
-            "自动拆解需要自定义端点:请先在「设置 → 模型配置」里添加一个 Anthropic 兼容端点(网关或 OpenAI 协议桥),再回到这里点自动拆解",
-        };
-      }
-    }
-    const { session: side } = createOrReuseSession(
-      {
-        projectId: coordinator.projectId,
-        kind: "side",
-        parentSessionId: coordinator.id,
-        providerId: plannerProfile.providerId,
-        model: plannerProfile.model,
-        customModelId: plannerCustomModelId,
-        effort: plannerProfile.effort ?? "default",
-        permissionMode: "default",
-      },
-      "desktop",
-    );
-    const project = ProjectRepo.get(side.projectId);
-    if (!project) throw new Error(`project not found: ${side.projectId}`);
     const surfaceDescription = describeSurface(surface);
     const agentDescription = ProfileStore.list()
       .filter((p) => surface.has(p.providerId))
@@ -291,7 +227,7 @@ export function registerOrchestratorHandlers(ipcMain: IpcMain): void {
           })`,
       )
       .join("、");
-    const prompt = [
+    const userPrompt = [
       "把下面的总体目标拆解为编排任务图(最多 4 层依赖深度)。只输出 JSON,不要其他文字。",
       "格式:{\"tasks\":[{\"spec\":\"任务简报\",\"deps\":[\"t1\"],\"profileId\":\"agent id 或 null\",\"tags\":[\"coding\"],\"reviewOf\":null,\"variantGroup\":null}]}",
       "deps 引用前面任务的编号(t1、t2…按出现顺序);能并行的并行;写码任务尽量独立。",
@@ -304,55 +240,20 @@ export function registerOrchestratorHandlers(ipcMain: IpcMain): void {
     ]
       .filter(Boolean)
       .join("\n\n");
-    SessionRepo.updateStatus(side.id, "running");
-    const cwd = await resolveSessionCwd(side, project);
-    runtimeManager.bindSession(side);
-    await runtimeManager.sendTurn(side, { prompt, cwd });
-    // 等待规划回合结束(上限 3 分钟),再从最新 assistant 消息解析 JSON。
-    const finished = await waitForSessionIdle(side.id, 180_000);
-    if (!finished) {
-      runtimeManager.interrupt(side.id);
-      return { tasks: [], error: "规划超时" };
+
+    const result = await generateProposal({
+      customModelId: plannerCustomModelId,
+      userPrompt,
+    });
+    if (!result.ok) {
+      return { tasks: [], error: result.error };
     }
-    const text = latestAssistantText(side.id);
-    const parsed = parseProposal(text);
-    if (!parsed) return { tasks: [], error: "无法解析规划输出" };
-    // 服务端二次校验:每个 profileId 必须在系统里、其 providerId/model
-    // 必须在当前可用白名单里;任一不满足,profileId 重置为 null(模型
-    // 表随时可被用户清空定制,这里静默降级比报错安全)。
-    const filtered: typeof parsed.tasks = [];
-    const dropped: string[] = [];
-    for (const t of parsed.tasks) {
-      const pid = t.profileId ?? null;
-      if (!pid) {
-        filtered.push(t);
-        continue;
-      }
-      const agent = ProfileStore.get(pid);
-      if (!agent) {
-        dropped.push(`${pid} (agent 不存在)`);
-        filtered.push({ ...t, profileId: null });
-        continue;
-      }
-      const agentSurface = surface.get(agent.providerId);
-      if (!agentSurface) {
-        dropped.push(`${pid} (厂商 ${agent.providerId} 不可用)`);
-        filtered.push({ ...t, profileId: null });
-        continue;
-      }
-      const modelOk =
-        agent.model === "default" ||
-        agentSurface.builtin.has(agent.model) ||
-        agentSurface.custom.has(agent.model);
-      if (!modelOk) {
-        dropped.push(`${pid} (模型 ${agent.providerId}/${agent.model} 不可用)`);
-        filtered.push({ ...t, profileId: null });
-        continue;
-      }
-      filtered.push(t);
+    const parsed = parseProposal(result.text);
+    if (!parsed) {
+      return { tasks: [], error: "无法解析规划输出" };
     }
     // 补齐 id(按顺序 t1..tN,deps 引用顺序号)。
-    const tasks = filtered.map((t, i) =>
+    const tasks = parsed.tasks.map((t, i) =>
       TaskSpecInputSchema.parse({
         id: `t${i + 1}`,
         spec: t.spec,
@@ -363,11 +264,6 @@ export function registerOrchestratorHandlers(ipcMain: IpcMain): void {
         variantGroup: t.variantGroup ?? null,
       }),
     );
-    if (dropped.length > 0) {
-      log.warn(
-        `orch.proposePlan: planner 输出 ${dropped.length} 个不可用 profile,已置 null:${dropped.join("; ")}`,
-      );
-    }
     return { tasks };
   });
 }
@@ -469,37 +365,110 @@ function sessionIdToProject(sessionId: string): string {
   return session.projectId;
 }
 
-/** 轮询等会话回合一分钟内空闲(runtime 无 handle 且 DB 状态非 running)。
- *  简单但足够 —— 规划是一次性的 side 会话。 */
-async function waitForSessionIdle(sessionId: string, timeoutMs: number): Promise<boolean> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    const running = runtimeManager.runningSessionIds().includes(sessionId);
-    if (!running) return true;
-    await new Promise((r) => setTimeout(r, 500));
+/** 解析 planner 用的 customModelId:
+ *  - 协调者主会话当前生效的 customModelId(用户已在主 chat 选过)
+ *  - 兜底取设置里第一个已配 model 的 customModel(协调者从未选过)
+ *  - 都没有:返回 null,wizard 提示"请去设置 → 模型配置 添加端点"
+ *
+ * 不论用户选的 planner profile 是 builtin-planner 还是别的 claude-sdk
+ * profile,只要走 claude-sdk 都必须拿 customModelId —— 否则 SDK 走
+ * 官方 OAuth 凭据 → /login。Pi/Codex 走自家端点配置,理论上不用这条
+ * 兜底链;但目前协调者主会话默认是 claude-sdk,planner 也基本只走
+ * 这个,先不区分,拿到就传。 */
+function pickPlannerCustomModelId(coordinator: Session): string | null {
+  if (coordinator.customModelId) return coordinator.customModelId;
+  const fallback =
+    CustomModelStore.listPublic().find((c) => c.models.some((m) => m.id.trim())) ?? null;
+  return fallback?.id ?? null;
+}
+
+/** Planner 提示词:沿用 generateCommitMessageForRepo 的"硬系统约束 +
+ * 可变 user 偏好"分层(system 不可被 user 覆盖)。 */
+const PLANNER_SYSTEM_PROMPT = [
+  "你是一个任务规划专家。接收一个总体目标,产出结构化、可独立验收的子任务拆解(JSON)。",
+  "",
+  "硬输出约束:",
+  "1. 只输出 JSON 本身,不要任何前导语、问候、解释或代码围栏(``` ... ```)。",
+  "2. 字段:tasks 数组,每项 { spec, deps?, profileId, tags?, reviewOf?, variantGroup? }。",
+  "3. deps 引用前面任务的编号(t1/t2/...按出现顺序);能并行的并行。",
+  "4. profileId 必须是 user 消息列出的 agent id,或 null;绝不要自己造 agent id,也不要建议未列出的模型。",
+  "5. 任务图深度 ≤ 4(spec/约束/产物路径/验收标准,避免子任务间隐式耦合)。",
+].join("\n");
+
+/** 直接 query() 调一次 SDK,走 buildCustomEnv → 用户的 Anthropic 兼容端点,
+ * 不创建 side session、不依赖 session 行 customModelId。
+ * 模式与 generateCommitMessageForRepo 一致(同样单轮/产纯文本),
+ * 复用它的 resolveModelForGitOp + buildCustomEnv 路径。 */
+async function generateProposal(input: {
+  customModelId: string;
+  userPrompt: string;
+}): Promise<{ ok: true; text: string } | { ok: false; error: string }> {
+  const { query } = await import("@anthropic-ai/claude-agent-sdk");
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), 180_000); // 3 min
+  let releaseBridge: (() => void) | undefined;
+  try {
+    const resolved = await resolveModelForGitOp(input.customModelId, undefined);
+    if (!resolved.ok) return { ok: false, error: resolved.error };
+    releaseBridge = resolved.releaseBridge;
+    const cfg = resolved.config;
+    const env = buildCustomEnv(cfg);
+    const model = resolveActiveModel(cfg);
+    const binaryPath = resolveSdkBinaryPath();
+    const q = query({
+      prompt: input.userPrompt,
+      options: {
+        abortController: ac,
+        maxTurns: 1,
+        model,
+        env,
+        systemPrompt: PLANNER_SYSTEM_PROMPT,
+        settingSources: ["project", "local"],
+        includePartialMessages: false,
+        ...(binaryPath ? { pathToClaudeCodeExecutable: binaryPath } : {}),
+      },
+    });
+    let message = "";
+    for await (const m of q) {
+      if (m.type === "assistant") {
+        const content = (m as { message?: { content?: Array<{ type: string; text?: string }> } }).message?.content;
+        if (Array.isArray(content)) {
+          message = content
+            .filter((b) => b.type === "text" && b.text)
+            .map((b) => b.text!)
+            .join("\n");
+        }
+      }
+      if (m.type === "result") break;
+    }
+    clearTimeout(timer);
+    if (!message.trim()) {
+      return { ok: false, error: "模型未返回有效内容" };
+    }
+    // 剥模型套的代码围栏(与 commit message 行为一致)。
+    return {
+      ok: true,
+      text: message.trim().replace(/^```\w*\n?/, "").replace(/\n?```$/, "").trim(),
+    };
+  } catch (err) {
+    const msg = (err as Error).message || String(err);
+    log.warn(`orch.proposePlan: query failed: ${msg}`);
+    if (/401|unauthorized|invalid.*key/i.test(msg)) {
+      return { ok: false, error: "认证失败,请检查模型配置的 Token/Key" };
+    }
+    if (/503|no available channel/i.test(msg)) {
+      return { ok: false, error: "网关无此模型渠道,请检查模型名配置" };
+    }
+    return { ok: false, error: msg };
+  } finally {
+    clearTimeout(timer);
+    releaseBridge?.();
   }
-  return false;
 }
 
-function latestAssistantText(sessionId: string): string {
-  if (!SessionRepo.get(sessionId)) return "";
-  const msgs = MessageRepo.listBySession(sessionId, { limit: 10 });
-  const assistant = msgs.messages.find((m) => m.role === "assistant");
-  if (!assistant) return "";
-  const content = assistant.content;
-  if (typeof content === "string") return content;
-  if (!Array.isArray(content)) return "";
-  return content
-    .map((b) =>
-      b && typeof b === "object" && "kind" in b && (b as { kind: string }).kind === "text"
-        ? String((b as { text?: unknown }).text ?? "")
-        : "",
-    )
-    .join("\n")
-    .trim();
-}
-
-/** 宽松解析模型输出的提案 JSON(剥代码围栏 / 截取首个 { 到末个 })。 */
+/** 宽松解析模型输出的提案 JSON(剥代码围栏 / 截取首个 { 到末个 })。
+ *  返回 ProposalSchema(去重后);parse 失败返回 null,handler 透出
+ *  "无法解析规划输出"错误。 */
 function parseProposal(text: string): z.infer<typeof ProposalSchema> | null {
   if (!text) return null;
   const stripped = text.replace(/```(?:json)?/g, "");
