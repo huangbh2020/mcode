@@ -53,6 +53,13 @@ export function AgentsPanel() {
   const providers = useSessionStore((s) => s.providers);
   const templates = useSessionStore((s) => s.orchTemplates);
   const orchSettings = useSessionStore((s) => s.orchSettings);
+  // Model surface: builtin (provider capabilities) ∪ user-defined custom models
+  // (claude-sdk only — Pi/Codex models are loaded into pi/codexAvailableModels
+  // and counted as builtins for their providers). New templates / pasted
+  // profiles whose model id isn't on this list are dropped on save.
+  const customModels = useSessionStore((s) => s.customModels);
+  const piAvailableModels = useSessionStore((s) => s.piAvailableModels);
+  const codexAvailableModels = useSessionStore((s) => s.codexAvailableModels);
   const reloadOrchAgents = useSessionStore((s) => s.reloadOrchAgents);
   const saveOrchAgent = useSessionStore((s) => s.saveOrchAgent);
   const deleteOrchAgent = useSessionStore((s) => s.deleteOrchAgent);
@@ -73,12 +80,33 @@ export function AgentsPanel() {
 
   const provider = providers.find((p) => p.id === draft?.providerId);
   const modelOptions = useMemo(() => {
-    const builtins = provider?.capabilities.builtinModels ?? [];
+    if (!provider) return [];
+    const builtin = provider.capabilities.builtinModels ?? [];
+    if (provider.id === "pi-sdk") {
+      return piAvailableModels.map((m) => ({ value: m.id, label: m.label ?? m.id }));
+    }
+    if (provider.id === "codex-sdk") {
+      return codexAvailableModels.map((m) => ({ value: m.id, label: m.label ?? m.id }));
+    }
+    // Claude (and any other provider) = builtin aliases ∪ every custom-model
+    // endpoint's gateway ids. Each entry is prefixed with the config name
+    // when there are multiple configs so the user can tell them apart.
+    const customEntries = customModels.flatMap((cfg) =>
+      cfg.models
+        .filter((m) => m.id.trim())
+        .map((m) => ({
+          value: m.id,
+          label:
+            customModels.length > 1
+              ? `${cfg.name} · ${m.id}${m.supports1m ? " (1m)" : ""}`
+              : `${m.id}${m.supports1m ? " (1m)" : ""}`,
+        })),
+    );
     return [
-      { value: "default", label: t("orch.agents.model") + " · auto" },
-      ...builtins.map((m) => ({ value: m.id, label: m.label ?? m.id })),
+      ...builtin.map((m) => ({ value: m.id, label: m.label ?? m.id })),
+      ...customEntries,
     ];
-  }, [provider, t]);
+  }, [provider, customModels, piAvailableModels, codexAvailableModels]);
   const effortOptions = useMemo(() => {
     const levels = provider?.capabilities.thinkingLevels ?? [];
     return levels.length > 0
@@ -111,7 +139,6 @@ export function AgentsPanel() {
       permissionMode: "default",
       defaultWorktree: "none",
       tags: ["generic"],
-      costPerMtok: 0,
       builtin: false,
       createdAt: Date.now(),
       updatedAt: Date.now(),
@@ -119,10 +146,21 @@ export function AgentsPanel() {
     setError("");
   };
 
+  /** Validate the draft against the current model surface — a value not on
+   *  the list would route to a 404 at run time, so snap it back to "default"
+   *  before save (and surface a soft warning). */
+  const draftModelValid =
+    !draft ||
+    draft.model === "default" ||
+    modelOptions.some((o) => o.value === draft.model);
   const save = async () => {
     if (!draft) return;
     if (!draft.name.trim()) {
       setError(t("orch.agents.errName"));
+      return;
+    }
+    if (!draftModelValid) {
+      setError(t("orch.agents.errModel"));
       return;
     }
     setSaving(true);
@@ -265,7 +303,15 @@ export function AgentsPanel() {
                 />
               </SettingRow>
               <SettingRow title={t("orch.agents.model")}>
-                <FieldSelect value={draft.model} onChange={(v) => update("model", v)} options={modelOptions} />
+                <FieldSelect
+                  value={draftModelValid ? draft.model : "default"}
+                  onChange={(v) => update("model", v)}
+                  options={
+                    modelOptions.length > 0
+                      ? modelOptions
+                      : [{ value: "default", label: t("orch.agents.modelNone") }]
+                  }
+                />
               </SettingRow>
               <SettingRow title={t("orch.agents.effort")}>
                 <FieldSelect value={draft.effort} onChange={(v) => update("effort", v)} options={effortOptions} />
@@ -286,15 +332,6 @@ export function AgentsPanel() {
                     { value: "active", label: t("orch.agents.worktree.active") },
                     { value: "new", label: t("orch.agents.worktree.new") },
                   ]}
-                />
-              </SettingRow>
-              <SettingRow title={t("orch.agents.cost")}>
-                <Input
-                  type="number"
-                  min={0}
-                  step="0.5"
-                  value={draft.costPerMtok}
-                  onChange={(e) => update("costPerMtok", Number(e.target.value) || 0)}
                 />
               </SettingRow>
               <SettingRow title={t("orch.agents.tags")} layout="vertical">

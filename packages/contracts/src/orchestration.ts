@@ -49,8 +49,6 @@ export const AgentProfileSchema = z.object({
   permissionMode: z.string().default("default"),
   defaultWorktree: WorktreePreferenceSchema.default("none"),
   tags: z.array(AgentProfileTagSchema).default(["generic"]),
-  /** 每百万 token 成本（美元，展示用估算；0 = 未知）。 */
-  costPerMtok: z.number().nonnegative().default(0),
   /** 内置模板标记：内置模板可被用户覆盖，但不允许删除原始定义。 */
   builtin: z.boolean().default(false),
   createdAt: z.number().default(0),
@@ -202,7 +200,7 @@ export const OrchestrationRunSchema = z.object({
   gates: z.array(GateSchema).default([]),
   /** 预算上限（美元；null = 不设限）。 */
   budgetUsd: z.number().positive().nullable().default(null),
-  /** 累计已花费（按 profile.costPerMtok 估算）。 */
+  /** 累计已花费（按 provider/会话 token 估算）。 */
   spentUsd: z.number().nonnegative().default(0),
   concurrency: z.number().int().positive().default(4),
   worktreePolicy: WorktreePolicySchema.default("auto"),

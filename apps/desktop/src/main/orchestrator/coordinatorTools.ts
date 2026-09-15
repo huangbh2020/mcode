@@ -105,9 +105,9 @@ export async function buildOrchestratorMcpServerAsync(
         description: "列出可用的 agent 角色模板(id/名称/厂商/模型/能力标签/每百万 token 成本)。",
         inputSchema: {},
         handler: async () => {
-          const list = ProfileStore.list().map(
-            (p) => `${p.id} | ${p.name} | ${p.providerId}/${p.model} | tags=${p.tags.join(",")} | $${p.costPerMtok}/Mtok`,
-          );
+            const list = ProfileStore.list().map(
+              (p) => `${p.id} | ${p.name} | ${p.providerId}/${p.model} | tags=${p.tags.join(",")}`,
+            );
           return text(list.join("\n") || "(无可用角色)");
         },
       },

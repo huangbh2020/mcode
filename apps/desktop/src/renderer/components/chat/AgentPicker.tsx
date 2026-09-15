@@ -118,9 +118,6 @@ export function AgentPicker({ open, query, anchorRect, onPick, onClose }: AgentP
                 {agent.builtin ? ` · ${t("orch.agents.builtin")}` : ""}
               </span>
             </span>
-            {agent.costPerMtok > 0 && (
-              <span className="shrink-0 text-[10px] text-content-subtle">${agent.costPerMtok}/M</span>
-            )}
           </button>
         ))}
       </div>

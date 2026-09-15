@@ -35,7 +35,6 @@ function builtinProfiles(): AgentProfile[] {
       permissionMode: "default",
       defaultWorktree: "none",
       tags: ["planning"],
-      costPerMtok: 15,
     },
     {
       ...base,
@@ -52,7 +51,6 @@ function builtinProfiles(): AgentProfile[] {
       permissionMode: "default",
       defaultWorktree: "new",
       tags: ["coding"],
-      costPerMtok: 3,
     },
     {
       ...base,
@@ -69,7 +67,6 @@ function builtinProfiles(): AgentProfile[] {
       permissionMode: "default",
       defaultWorktree: "none",
       tags: ["writing"],
-      costPerMtok: 3,
     },
     {
       ...base,
@@ -86,7 +83,6 @@ function builtinProfiles(): AgentProfile[] {
       permissionMode: "default",
       defaultWorktree: "none",
       tags: ["image"],
-      costPerMtok: 0,
     },
     {
       ...base,
@@ -103,7 +99,6 @@ function builtinProfiles(): AgentProfile[] {
       permissionMode: "default",
       defaultWorktree: "none",
       tags: ["review"],
-      costPerMtok: 15,
     },
   ];
 }

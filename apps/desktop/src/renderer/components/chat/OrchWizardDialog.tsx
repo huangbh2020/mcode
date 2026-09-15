@@ -213,10 +213,11 @@ export function OrchWizardDialog() {
     }
   };
 
-  const estCost = tasks.reduce((sum, x) => {
-    const cost = agents.find((a) => a.id === x.profileId)?.costPerMtok ?? 0;
-    return sum + (Math.max(2000, x.spec.length * 2) / 1e6) * cost;
-  }, 0);
+  /** 粗估的总 token 量(每个任务按"≥2k + 字符×2"启发式)——纯展示用。 */
+  const estTokens = tasks.reduce(
+    (sum, x) => sum + Math.max(2000, x.spec.length * 2),
+    0,
+  );
 
   return (
     <Dialog.Root open={open} onOpenChange={(o) => !o && closeOrchWizard()}>
@@ -273,7 +274,7 @@ export function OrchWizardDialog() {
             <div className="flex items-center gap-2">
               <label className="text-xs font-medium">{t("orch.wizard.tasks")}</label>
               <span className="text-[0.686em] text-content-subtle">
-                {t("orch.wizard.est")} ≈ ${estCost.toFixed(3)}
+                {t("orch.wizard.est")} ≈ {estTokens.toLocaleString()} tokens
               </span>
               <Button
                 variant="outline"
