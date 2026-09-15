@@ -28,7 +28,30 @@ interface DraftTask {
 }
 
 let taskSeq = 0;
-const nextTaskId = () => `t${++taskSeq}`;
+const seedTaskSeq = (id: string): boolean => {
+  const m = /^t(\d+)$/.exec(id);
+  if (!m) return false;
+  const n = Number(m[1]);
+  if (n > taskSeq) taskSeq = n;
+  return true;
+};
+/** Lowest free `t<N>` not currently held by `existing` — so deleting t1 in
+ *  a {t1,t2,t3} list and adding a new task gives back t1, not t4.
+ *  Keeps the wizard's t1..tN visible labels contiguous across edits. */
+const nextFreshTaskId = (existing: Array<string | { id: string }>): string => {
+  for (const t of existing) {
+    if (typeof t === "string") seedTaskSeq(t);
+    else seedTaskSeq(t.id);
+  }
+  const used = new Set(
+    existing.map((t) => (typeof t === "string" ? t : t.id)),
+  );
+  for (let i = 1; i <= taskSeq + 1; i++) {
+    const candidate = `t${i}`;
+    if (!used.has(candidate)) return candidate;
+  }
+  return `t${taskSeq + 1}`;
+};
 
 const inputCls =
   "w-full rounded border border-edge bg-surface px-2 py-1.5 text-xs text-content placeholder:text-content-subtle outline-none focus:border-accent";
@@ -68,21 +91,24 @@ export function OrchWizardDialog() {
     setGoal(seedGoal);
     setConcurrency(orchSettings?.concurrency ?? 4);
     setBudget(orchSettings?.budgetUsd ? String(orchSettings.budgetUsd) : "");
-    // Seed: one task per preset target, or a single empty task.
+    // Seed: 连续 t1..tN 占位种子,基于"全局最大序号 taskSeq + 1"分配,
+    // 避免与既有 tasks 的 id 冲突(在重命名 / 上次残留时尤其重要)。
     if (seedProfiles.length > 0) {
-      setTasks(
-        seedProfiles.map((pid) => ({
-          id: nextTaskId(),
+      const seeded: DraftTask[] = [];
+      for (let i = 0; i < seedProfiles.length; i++) {
+        seeded.push({
+          id: nextFreshTaskId(seeded),
           spec: "",
-          profileId: pid,
+          profileId: seedProfiles[i],
           deps: [],
           reviewOf: null,
           variantGroup: seedProfiles.length > 1 ? "v1" : null,
           runner: "agent",
-        })),
-      );
+        });
+      }
+      setTasks(seeded);
     } else if (tasks.length === 0) {
-      setTasks([{ id: nextTaskId(), spec: "", profileId: null, deps: [], reviewOf: null, variantGroup: null, runner: "agent" }]);
+      setTasks([{ id: nextFreshTaskId([]), spec: "", profileId: null, deps: [], reviewOf: null, variantGroup: null, runner: "agent" }]);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
@@ -97,16 +123,21 @@ export function OrchWizardDialog() {
     try {
       const proposal = await orchProposePlan(goal);
       if (proposal && proposal.length > 0) {
-        // Model-proposed ids may collide with our draft ids — re-key to fresh
-        // local ids and remap deps by position.
+        // Allocate t1..tN fresh ids first, then remap deps by position.
         const idMap = new Map<string, string>();
-        const rekeyed = proposal.map((p) => {
-          const fresh = nextTaskId();
+        const freshIds: string[] = [];
+        for (let i = 0; i < proposal.length; i++) {
+          freshIds.push(nextFreshTaskId([...tasks, ...freshIds]));
+        }
+        const rekeyed: DraftTask[] = proposal.map((p, i) => {
+          const fresh = freshIds[i];
           idMap.set(p.id, fresh);
           return { ...p, id: fresh, deps: [] as string[], spec: p.spec.replace(/\{goal\}/g, goal) };
         });
         for (let i = 0; i < proposal.length; i++) {
-          rekeyed[i].deps = (proposal[i].deps ?? []).map((d) => idMap.get(d) ?? d).filter((d) => idMap.has(d));
+          rekeyed[i].deps = (proposal[i].deps ?? [])
+            .map((d) => idMap.get(d) ?? d)
+            .filter((d) => idMap.has(d));
         }
         setTasks(rekeyed);
       } else {
@@ -121,8 +152,12 @@ export function OrchWizardDialog() {
     const tpl = templates.find((x) => x.id === tplId);
     if (!tpl) return;
     const idMap = new Map<string, string>();
-    const rekeyed: DraftTask[] = tpl.tasks.map((p) => {
-      const fresh = nextTaskId();
+    const freshIds: string[] = [];
+    for (let i = 0; i < tpl.tasks.length; i++) {
+      freshIds.push(nextFreshTaskId([...tasks, ...freshIds]));
+    }
+    const rekeyed: DraftTask[] = tpl.tasks.map((p, i) => {
+      const fresh = freshIds[i];
       idMap.set(p.id, fresh);
       return {
         id: fresh,
@@ -283,7 +318,15 @@ export function OrchWizardDialog() {
                 onClick={() =>
                   setTasks((ts) => [
                     ...ts,
-                    { id: nextTaskId(), spec: "", profileId: null, deps: [], reviewOf: null, variantGroup: null, runner: "agent" },
+                    {
+                      id: nextFreshTaskId(ts),
+                      spec: "",
+                      profileId: null,
+                      deps: [],
+                      reviewOf: null,
+                      variantGroup: null,
+                      runner: "agent",
+                    },
                   ])
                 }
               >
