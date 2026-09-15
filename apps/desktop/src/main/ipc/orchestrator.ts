@@ -29,8 +29,12 @@ import { ProfileStore } from "@main/orchestrator/profiles.js";
 import { TemplateStore } from "@main/orchestrator/templates.js";
 import { SessionRepo, ProjectRepo, MessageRepo } from "@main/store/repositories.js";
 import { runtimeManager } from "@main/claude/RuntimeManager.js";
+import { providerRegistry } from "@main/providers/registry.js";
 import { createOrReuseSession } from "@main/lib/sessionStart.js";
 import { resolveSessionCwd } from "@main/lib/sessionCwd.js";
+import { CustomModelStore } from "@main/lib/secretStore.js";
+import { PiModelsStore } from "@main/lib/piModelsStore.js";
+import { CodexModelsStore } from "@main/lib/codexModelsStore.js";
 import { log } from "@main/lib/logger.js";
 import { z } from "zod";
 
@@ -181,29 +185,63 @@ export function registerOrchestratorHandlers(ipcMain: IpcMain): void {
 
   /* ── 向导自动拆解:side 会话跑一次规划,解析 JSON 提案 ── */
   ipcMain.handle(IPC.ORCH_PROPOSE_PLAN, async (_evt, raw) => {
+    await ready();
     const input = OrchProposePlanSchema.parse(raw);
     const coordinator = SessionRepo.get(input.sessionId);
     if (!coordinator) throw new Error(`session not found: ${input.sessionId}`);
     const plannerProfile = ProfileStore.get("builtin-planner");
+    if (!plannerProfile) {
+      return { tasks: [], error: "内置规划者 agent 不存在,请重置 Agent 角色" };
+    }
+    // 规划者自己也要走白名单:profileId/model 必须在当前可用集合里,
+    // 否则让它落 null 让协调者后续在 panel 里手动指定。
+    const surface = await buildAvailableModelSurface();
+    const plannerSurface = surface.get(plannerProfile.providerId);
+    const plannerModelOk = plannerSurface
+      ? plannerProfile.model === "default" || plannerSurface.builtin.has(plannerProfile.model) || plannerSurface.custom.has(plannerProfile.model)
+      : false;
+    const plannerProviderOk = !!plannerSurface;
+    if (!plannerProviderOk) {
+      return { tasks: [], error: `内置规划者厂商 ${plannerProfile.providerId} 在系统中不可用` };
+    }
+    if (!plannerModelOk) {
+      return {
+        tasks: [],
+        error: `内置规划者模型 ${plannerProfile.providerId}/${plannerProfile.model} 不在系统当前可用列表中`,
+      };
+    }
     const { session: side } = createOrReuseSession(
       {
         projectId: coordinator.projectId,
         kind: "side",
         parentSessionId: coordinator.id,
-        providerId: plannerProfile?.providerId,
-        model: plannerProfile?.model,
-        effort: plannerProfile?.effort ?? "default",
+        providerId: plannerProfile.providerId,
+        model: plannerProfile.model,
+        effort: plannerProfile.effort ?? "default",
         permissionMode: "default",
       },
       "desktop",
     );
     const project = ProjectRepo.get(side.projectId);
     if (!project) throw new Error(`project not found: ${side.projectId}`);
+    const surfaceDescription = describeSurface(surface);
+    const agentDescription = ProfileStore.list()
+      .filter((p) => surface.has(p.providerId))
+      .map(
+        (p) =>
+          `${p.id}(${p.tags.join("/") || "generic"},${p.providerId}/${p.model}${
+            p.builtin ? ",内置" : ""
+          })`,
+      )
+      .join("、");
     const prompt = [
       "把下面的总体目标拆解为编排任务图(最多 4 层依赖深度)。只输出 JSON,不要其他文字。",
       "格式:{\"tasks\":[{\"spec\":\"任务简报\",\"deps\":[\"t1\"],\"profileId\":\"agent id 或 null\",\"tags\":[\"coding\"],\"reviewOf\":null,\"variantGroup\":null}]}",
       "deps 引用前面任务的编号(t1、t2…按出现顺序);能并行的并行;写码任务尽量独立。",
-      `可选 agent:${ProfileStore.list().map((p) => `${p.id}(${p.tags.join("/")})`).join("、")}`,
+      `可用厂商(providerId):${[...surface.keys()].join("、")}`,
+      surfaceDescription,
+      `可选 agent:${agentDescription || "(系统中尚无 agent)"}`,
+      "硬约束:profileId 必须是上面列出的 agent id 之一,或 null;绝不要自己造 agent id,也不要建议未在上面模型表里出现的模型。",
       input.hint ? `补充要求:${input.hint}` : "",
       `【总体目标】\n${input.goal}`,
     ]
@@ -222,18 +260,150 @@ export function registerOrchestratorHandlers(ipcMain: IpcMain): void {
     const text = latestAssistantText(side.id);
     const parsed = parseProposal(text);
     if (!parsed) return { tasks: [], error: "无法解析规划输出" };
+    // 服务端二次校验:每个 profileId 必须在系统里、其 providerId/model
+    // 必须在当前可用白名单里;任一不满足,profileId 重置为 null(模型
+    // 表随时可被用户清空定制,这里静默降级比报错安全)。
+    const filtered: typeof parsed.tasks = [];
+    const dropped: string[] = [];
+    for (const t of parsed.tasks) {
+      const pid = t.profileId ?? null;
+      if (!pid) {
+        filtered.push(t);
+        continue;
+      }
+      const agent = ProfileStore.get(pid);
+      if (!agent) {
+        dropped.push(`${pid} (agent 不存在)`);
+        filtered.push({ ...t, profileId: null });
+        continue;
+      }
+      const agentSurface = surface.get(agent.providerId);
+      if (!agentSurface) {
+        dropped.push(`${pid} (厂商 ${agent.providerId} 不可用)`);
+        filtered.push({ ...t, profileId: null });
+        continue;
+      }
+      const modelOk =
+        agent.model === "default" ||
+        agentSurface.builtin.has(agent.model) ||
+        agentSurface.custom.has(agent.model);
+      if (!modelOk) {
+        dropped.push(`${pid} (模型 ${agent.providerId}/${agent.model} 不可用)`);
+        filtered.push({ ...t, profileId: null });
+        continue;
+      }
+      filtered.push(t);
+    }
     // 补齐 id(按顺序 t1..tN,deps 引用顺序号)。
-    const tasks = parsed.tasks.map((t, i) => TaskSpecInputSchema.parse({
-      id: `t${i + 1}`,
-      spec: t.spec,
-      deps: t.deps ?? [],
-      profileId: t.profileId ?? null,
-      tags: t.tags ?? [],
-      reviewOf: t.reviewOf ?? null,
-      variantGroup: t.variantGroup ?? null,
-    }));
+    const tasks = filtered.map((t, i) =>
+      TaskSpecInputSchema.parse({
+        id: `t${i + 1}`,
+        spec: t.spec,
+        deps: t.deps ?? [],
+        profileId: t.profileId ?? null,
+        tags: t.tags ?? [],
+        reviewOf: t.reviewOf ?? null,
+        variantGroup: t.variantGroup ?? null,
+      }),
+    );
+    if (dropped.length > 0) {
+      log.warn(
+        `orch.proposePlan: planner 输出 ${dropped.length} 个不可用 profile,已置 null:${dropped.join("; ")}`,
+      );
+    }
     return { tasks };
   });
+}
+
+/** 系统当前可用的厂商/模型白名单(单一权威来源,prompt 与解析后校验共用)。
+ *  - builtin = provider.capabilities.builtinModels + Pi/Codex 已水合的
+ *    可用模型清单(Pi/Codex 走 PiModelsStore/CodexModelsStore,Claude 走
+ *    providerRegistry 的 capabilities);
+ *  - custom = 用户在自定义模型面板里配置的网关模型 id(仅 claude)。 */
+async function buildAvailableModelSurface(): Promise<Map<
+  string,
+  { builtin: Set<string>; custom: Set<string>; builtinLabels: Map<string, string> }
+>> {
+  const surface = new Map<string, { builtin: Set<string>; custom: Set<string>; builtinLabels: Map<string, string> }>();
+  // Pi: 每条 PiProviderConfig 是 { id, models: [{id,label}] },user 视角
+  // 看到的是 "providerId/modelId" 的合成 id —— 把它拆回顶层 provider
+  // "pi-sdk",把合成 id 直接放进 builtin(与 hasSelectableModel 视图一致)。
+  try {
+    const pi = await PiModelsStore.listPublic();
+    const builtin = new Set<string>();
+    const labels = new Map<string, string>();
+    for (const [providerId, cfg] of Object.entries(pi)) {
+      for (const m of cfg.models ?? []) {
+        const compositeId = `${providerId}/${m.id}`;
+        builtin.add(compositeId);
+        labels.set(compositeId, m.name ?? compositeId);
+      }
+    }
+    surface.set("pi-sdk", { builtin, custom: new Set(), builtinLabels: labels });
+  } catch (err) {
+    log.warn(`surface: pi list failed: ${(err as Error).message}`);
+  }
+  // Codex: 顶层 provider 是 codex-sdk,模型 id 在 cfg.models[].id。
+  try {
+    const codex = await CodexModelsStore.listPublic();
+    const builtin = new Set<string>();
+    const labels = new Map<string, string>();
+    for (const cfg of codex) {
+      for (const m of cfg.models ?? []) {
+        builtin.add(m.id);
+        labels.set(m.id, m.label ?? m.id);
+      }
+    }
+    surface.set("codex-sdk", { builtin, custom: new Set(), builtinLabels: labels });
+  } catch (err) {
+    log.warn(`surface: codex list failed: ${(err as Error).message}`);
+  }
+  // Claude + 任何其他 provider: providerRegistry 给出 capabilities.builtinModels;
+  // 用户自定义配置 = CustomModelStore.listPublic() 里的 models[].id(各 cfg
+  // 平铺,多 cfg 时不再用合成 id —— AgentsPanel 同样做平铺)。
+  for (const p of providerRegistry.list()) {
+    const builtin = new Set<string>();
+    const labels = new Map<string, string>();
+    for (const m of p.capabilities.builtinModels ?? []) {
+      builtin.add(m.id);
+      labels.set(m.id, m.label ?? m.id);
+    }
+    surface.set(p.id, { builtin, custom: new Set(), builtinLabels: labels });
+  }
+  try {
+    const customs = CustomModelStore.listPublic();
+    const bucket = surface.get("claude-sdk");
+    if (bucket) {
+      for (const cfg of customs) {
+        for (const m of cfg.models ?? []) {
+          if (m.id.trim()) bucket.custom.add(m.id);
+        }
+      }
+    }
+  } catch (err) {
+    log.warn(`surface: custom list failed: ${(err as Error).message}`);
+  }
+  return surface;
+}
+
+/** 把白名单渲染成 prompt 一段(给规划者读)。"厂商 → 模型"分组。 */
+function describeSurface(
+  surface: Awaited<ReturnType<typeof buildAvailableModelSurface>>,
+): string {
+  const lines: string[] = ["可用模型(providerId → models):"];
+  for (const [pid, s] of surface) {
+    const builtinList = [...s.builtin].map((id) => s.builtinLabels?.get(id) ?? id);
+    const customList = [...s.custom];
+    const parts: string[] = [];
+    if (builtinList.length > 0) parts.push(`builtin: ${builtinList.join(", ") || "(空)"}`);
+    if (customList.length > 0) parts.push(`custom: ${customList.join(", ") || "(空)"}`);
+    if (parts.length === 0) {
+      lines.push(`  ${pid}: (当前没有可用模型,跳过此厂商)`);
+    } else {
+      lines.push(`  ${pid}: ${parts.join("; ")}`);
+    }
+  }
+  return lines.join("\n");
 }
 
 function sessionIdToProject(sessionId: string): string {
