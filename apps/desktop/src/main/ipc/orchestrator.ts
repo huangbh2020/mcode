@@ -230,6 +230,13 @@ export function registerOrchestratorHandlers(ipcMain: IpcMain): void {
         error: `规划者模型 ${plannerProfile.providerId}/${plannerProfile.model} 不在系统当前可用列表中`,
       };
     }
+    // 规划者的 side session 借用协调者主会话的自定义端点(customModelId):
+    // builtin-planner / model="default" 走的是用户在「模型配置」里配置的
+    // 自定义端点,不在侧 session 上复制这个 id 就会落到官方 Claude 凭据
+    // → 触发 /login 错误;而用户根本没准备走官方凭据,只是借用 SDK
+    // 跑一次 planning。强制继承 =「当前协调者会话来跑的实际模型」。
+    // provider/model 都是 session 行级别,行里 customModelId 独立于
+    // providerId 字段,创建时一起传是合法的(没自定义端点 = null)。
     const { session: side } = createOrReuseSession(
       {
         projectId: coordinator.projectId,
@@ -237,6 +244,7 @@ export function registerOrchestratorHandlers(ipcMain: IpcMain): void {
         parentSessionId: coordinator.id,
         providerId: plannerProfile.providerId,
         model: plannerProfile.model,
+        customModelId: plannerProfile.model === "default" ? coordinator.customModelId : null,
         effort: plannerProfile.effort ?? "default",
         permissionMode: "default",
       },

@@ -27,7 +27,14 @@ function builtinProfiles(): AgentProfile[] {
       icon: "🧭",
       color: "violet",
       providerId: "claude-sdk",
-      model: "opus",
+      // model="default" → 走用户在设置页"模型配置"中配置的自定义端点
+      // (anthropic-sdk 协议:baseUrl+authToken 来自该条目;openai 协议:
+      // 走进程内桥)。不再绑死到官方 claude 账号 —— 官方账号对未登录
+      // 设备会失败 /login,而用户自配的网关无需登录。
+      // 副效应:planner 的能力(可用工具、模型)受所选 customModelId 约束;
+      // planning 任务用 default 模型足矣,真正重型推理走 worker 节点
+      // 自己选的 profile。
+      model: "default",
       effort: "high",
       systemPrompt:
         "你是任务规划专家。接收一个总体目标,产出结构化、可独立验收的子任务拆解。每个子任务给出:目标、约束、产物路径、验收标准。避免子任务间的隐式耦合。",
