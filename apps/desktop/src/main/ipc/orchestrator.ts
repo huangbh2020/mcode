@@ -234,9 +234,31 @@ export function registerOrchestratorHandlers(ipcMain: IpcMain): void {
     // builtin-planner / model="default" 走的是用户在「模型配置」里配置的
     // 自定义端点,不在侧 session 上复制这个 id 就会落到官方 Claude 凭据
     // → 触发 /login 错误;而用户根本没准备走官方凭据,只是借用 SDK
-    // 跑一次 planning。强制继承 =「当前协调者会话来跑的实际模型」。
-    // provider/model 都是 session 行级别,行里 customModelId 独立于
-    // providerId 字段,创建时一起传是合法的(没自定义端点 = null)。
+    // 跑一次 planning。优先继承 = 协调者主会话当前生效的 customModelId;
+    // 协调者没选时兜底取「设置里第一个配置好的」customModel。
+    let plannerCustomModelId: string | null = null;
+    if (plannerProfile.model === "default") {
+      if (coordinator.customModelId) {
+        plannerCustomModelId = coordinator.customModelId;
+      } else {
+        // 协调者主会话从未选过 customModelId(只有 AgentProfile model 列表
+        // 里有 customModel,但该 session 行 customModelId 仍为 null)。
+        // 兜底取任何配置好的 customModel,跳过 0 个 model 的空配置。
+        const fallback =
+          CustomModelStore.listPublic().find((c) => c.models.some((m) => m.id.trim())) ?? null;
+        if (fallback) plannerCustomModelId = fallback.id;
+      }
+      // 仍为 null 说明用户在「模型配置」里也没配任何端点 —— 让侧 session
+      // 走官方凭据,SDK 会因 /login 失败;我们把这条信息透传回 wizard 即可
+      // 提示「先去设置 → 模型配置 添加一个 Anthropic 兼容端点」。
+      if (!plannerCustomModelId) {
+        return {
+          tasks: [],
+          error:
+            "自动拆解需要自定义端点:请先在「设置 → 模型配置」里添加一个 Anthropic 兼容端点(网关或 OpenAI 协议桥),再回到这里点自动拆解",
+        };
+      }
+    }
     const { session: side } = createOrReuseSession(
       {
         projectId: coordinator.projectId,
@@ -244,7 +266,7 @@ export function registerOrchestratorHandlers(ipcMain: IpcMain): void {
         parentSessionId: coordinator.id,
         providerId: plannerProfile.providerId,
         model: plannerProfile.model,
-        customModelId: plannerProfile.model === "default" ? coordinator.customModelId : null,
+        customModelId: plannerCustomModelId,
         effort: plannerProfile.effort ?? "default",
         permissionMode: "default",
       },
