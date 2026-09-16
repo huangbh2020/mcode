@@ -36,12 +36,13 @@ import type { Session } from "@contracts/session";
 import { IPC } from "@contracts/ipc";
 import { MessageRepo, ProjectRepo, SessionRepo, SettingRepo } from "@main/store/repositories.js";
 import { runtimeManager } from "@main/claude/RuntimeManager.js";
+import { resolveSessionCwd } from "@main/lib/sessionCwd.js";
 import { sendToRenderer } from "@main/window.js";
 import { log } from "@main/lib/logger.js";
 import { uid } from "@main/utils.js";
 import { mergeBackWorktree } from "@main/lib/worktreeOps.js";
 import { awaitDb } from "@main/store/db.js";
-import { activeCount, readyTasks, runSettled, validateTaskGraph, BREAKER_LIMIT, estimateTokens } from "./taskStore.js";
+import { activeCount, readyTasks, runSettled, validateTaskGraph, downstreamTasks, BREAKER_LIMIT, estimateTokens } from "./taskStore.js";
 import { dispatchAgentTask, dispatchTerminalTask } from "./dispatcher.js";
 import { notifyRunDeleted, notifyTaskTerminal, bindSnapshotProvider, disposeWaiters, waitForTasks } from "./waiter.js";
 import { ProfileStore, RoutingStats } from "./profiles.js";
@@ -171,12 +172,13 @@ class OrchestratorService {
       }
     }
     const now = Date.now();
+    const goal = input.goal.trim();
     const run = OrchestrationRunSchema.parse({
       id: `run_${uid()}`,
       parentSessionId: input.parentSessionId,
       projectId: input.projectId,
-      title: input.title?.trim() || input.goal.slice(0, 40) || "编排运行",
-      goal: input.goal,
+      title: input.title?.trim() || goal.slice(0, 40) || "编排运行",
+      goal,
       status: input.autoStart === false ? "planning" : "running",
       tasks: input.tasks.map((t) => ({
         ...t,
@@ -280,6 +282,8 @@ class OrchestratorService {
         if (!ref) return;
         const run = this.runs.get(ref.runId);
         if (!run) return;
+        // 无增量(与上次快照相同)不推送也不重算。
+        if (ref.lastTokens === e.snapshot.totalProcessedTokens && ref.lastCostUsd === (e.snapshot.costUsd ?? 0)) return;
         ref.lastTokens = e.snapshot.totalProcessedTokens;
         ref.lastCostUsd = e.snapshot.costUsd ?? 0;
         // 成本增量估算 + 预算检查(超限 → 暂停 + gate)。
@@ -294,6 +298,10 @@ class OrchestratorService {
           });
           run.spentUsd = Math.round((run.spentUsd + dCost) * 1e6) / 1e6;
           this.checkBudget(run);
+          // 运行中把用量增量实时推给渲染层 —— 画布节点与右栏「运行输出」
+          // 的 token/花费同源于此。只 emit 不 persist:运行中的用量落盘
+          // 收敛在收尾路径(finishDispatch/reconcile),丢一批无碍。
+          this.emit({ kind: "run.updated", run });
         }
         return;
       }
@@ -395,6 +403,12 @@ class OrchestratorService {
     }
     task.failureCount += 1;
     const entry = task.dispatches[task.dispatches.length - 1];
+    if (entry) {
+      // 失败也盖时间戳 —— 否则该派发没有 endedAt,节点计时(endedAt ?? now)
+      // 在重试等待期一直走表。
+      entry.endedAt = Date.now();
+      entry.outcome = "failed";
+    }
     if (entry) this.emit({
       kind: "worker_done",
       payload: {
@@ -512,6 +526,67 @@ class OrchestratorService {
     }
     run.status = run.tasks.some((t) => t.status === "failed" || t.status === "blocked") ? "failed" : "completed";
     log.info(`orch run ${run.id} ${run.status}`);
+    if (run.status === "completed") void this.scheduleSynthesis(run);
+  }
+
+  /* ── 结果整理:run 完成后向协调者会话发一轮汇总回合 ── */
+
+  /** 完成 → 协调者会话自动整理最终结果(画布流第⑤步)。协调者忙碌时延迟
+   *  一档重试一次;sendTurn 自身对忙碌会话是忽略语义,不会踩线程。 */
+  private async scheduleSynthesis(run: OrchestrationRun, retry = 0): Promise<void> {
+    if (run.synthesizedAt) return;
+    const coordinator = SessionRepo.get(run.parentSessionId);
+    if (!coordinator) return; // 协调者会话已删,run 随之收敛,无需整理
+    if (runtimeManager.runningSessionIds().includes(run.parentSessionId)) {
+      if (retry >= 1) {
+        log.warn(`orch run ${run.id}: synthesis skipped — coordinator busy`);
+        return;
+      }
+      setTimeout(() => void this.scheduleSynthesis(run, retry + 1), 60_000);
+      return;
+    }
+    run.synthesizedAt = Date.now();
+    // TaskNode 无独立标题字段 —— 展示标题取 spec 首行(与画布节点卡一致)。
+    const titleOf = (t: TaskNode) => t.spec.split("\n")[0].trim().slice(0, 40) || t.id;
+    const lines = run.tasks.map((t) => {
+      const summary = t.result?.summary?.trim() || "(无结果摘要)";
+      const files = [...(t.result?.filesModified ?? []), ...t.artifacts];
+      return [
+        `- ${t.id} ${titleOf(t)} [${t.status}]`,
+        `  结果:${summary}`,
+        files.length > 0 ? `  产物:${files.join("、")}` : "",
+      ]
+        .filter(Boolean)
+        .join("\n");
+    });
+    const prompt = [
+      "你所在的会话刚完成一次编排运行(run)的全部任务。请基于以下各任务产出,",
+      "面向用户整理一条最终结果汇总:做了什么、每个任务的关键产出、合并的产物/改动文件、结论与建议下一步。",
+      "用中文,条理化,不要复述任务编号以外的过程细节。",
+      "",
+      `【总体目标】${run.goal || run.title}`,
+      "",
+      "【各任务产出】",
+      ...lines,
+    ].join("\n");
+    try {
+      const project = ProjectRepo.get(run.projectId);
+      if (!project) throw new Error(`project not found: ${run.projectId}`);
+      SessionRepo.updateStatus(coordinator.id, "running");
+      const cwd = await resolveSessionCwd(coordinator, project);
+      runtimeManager.bindSession(coordinator);
+      // 不传 userMessage:聊天流里 run.completed 转场时已由渲染端追加
+      // 「结果整理」卡作为该回合的可见头部,这里的硬编码气泡会与之重复
+      // (且绕过 i18n)。prompt 本身仅供模型,不落 UI。
+      await runtimeManager.sendTurn(coordinator, {
+        prompt,
+        cwd,
+      });
+      this.touch(run);
+      log.info(`orch run ${run.id}: synthesis turn dispatched to coordinator ${coordinator.id}`);
+    } catch (err) {
+      log.warn(`orch run ${run.id}: synthesis failed — ${(err as Error).message}`);
+    }
   }
 
   private touch(run: OrchestrationRun): void {
@@ -522,10 +597,44 @@ class OrchestratorService {
 
   /* ── 控制面(IPC / 协调者工具共用) ── */
 
-  runControl(runId: string, action: "pause" | "resume" | "cancel" | "delete"): { run?: OrchestrationRun; error?: string } {
+  runControl(
+    runId: string,
+    action: "start" | "pause" | "resume" | "cancel" | "delete" | "restart",
+  ): { run?: OrchestrationRun; error?: string } {
     const run = this.runs.get(runId);
     if (!run) return { error: `run not found: ${runId}` };
     switch (action) {
+      case "start":
+        if (run.status === "planning") {
+          run.status = "running";
+          this.tick(run.id);
+        }
+        break;
+      case "restart": {
+        // 画布「重新运行」:清空全部运行态,直接再跑。
+        // 活跃 worker 在 completed/failed/canceled 收尾时已被打断/清理,
+        // 这里只需重置行内状态。
+        if (run.status !== "completed" && run.status !== "canceled" && run.status !== "failed") break;
+        for (const t of run.tasks) {
+          const entry = t.dispatches[t.dispatches.length - 1];
+          if (entry?.workerSessionId && (t.status === "running" || t.status === "dispatched")) {
+            runtimeManager.interrupt(entry.workerSessionId);
+            this.workers.delete(entry.workerSessionId);
+          }
+          t.status = "pending";
+          t.result = null;
+          t.failureCount = 0;
+          t.dispatches = [];
+          t.worktreePath = null;
+          t.reviewRound = 0;
+          t.artifacts = [];
+        }
+        run.gates = run.gates.filter((g) => g.status !== "open");
+        run.synthesizedAt = null; // 重跑完成后允许再触发一次结果整理
+        run.status = "running";
+        this.tick(run.id);
+        break;
+      }
       case "pause":
         if (run.status === "running") run.status = "paused";
         break;
@@ -603,15 +712,31 @@ class OrchestratorService {
         }
         break;
       case "retry":
-      case "rerun":
+      case "rerun": {
+        // 下游已开始(派发/运行/暂停/已产出)→ 上游重跑会撕裂依赖语义,
+        // 拒绝;下游尚待运行或已取消时才放行。
+        const startedDownstream = downstreamTasks(run.tasks, taskId).filter((t) =>
+          t.status !== "pending" && t.status !== "ready" && t.status !== "canceled",
+        );
+        if (startedDownstream.length > 0) {
+          return {
+            error: `下游任务已开始(${startedDownstream.map((x) => x.id).join("、")}),${taskId} 不能重跑;请先重跑/取消下游任务,或用画布右上角「重新运行」整体重置`,
+          };
+        }
         if (action === "rerun" && profileId !== undefined) {
           if (profileId !== null && !ProfileStore.get(profileId)) return { error: `agent not found: ${profileId}` };
           task.profileId = profileId;
         }
         task.status = "pending";
         task.failureCount = 0;
+        // 终态 run(取消/完成/失败)里重跑节点 =「重新开始」:run 复活为
+        // running,上游已完成依赖照常满足,ready 即派发。
+        if (run.status === "canceled" || run.status === "completed" || run.status === "failed") {
+          run.status = "running";
+        }
         this.tick(run.id);
         break;
+      }
       case "cancel":
         if (task.status === "running" || task.status === "dispatched") {
           const entry = task.dispatches[task.dispatches.length - 1];
@@ -632,6 +757,67 @@ class OrchestratorService {
     notifyTaskTerminal(run);
     this.checkRunCompletion(run);
     this.touch(run);
+    return { run };
+  }
+
+  /** 画布节点配置编辑(spec/deps/agent/模型/标题)。仅未派发的任务可改 ——
+   *  dispatched/running 的行内状态正在被调度器与观察者消费,改动会在
+   *  重跑时生效,这里直接拒绝以防线内撕裂。 */
+  updateTask(
+    runId: string,
+    taskId: string,
+    patch: {
+      spec?: string;
+      deps?: string[];
+      profileId?: string | null;
+      customModelId?: string | null;
+      providerId?: string | null;
+      model?: string | null;
+      effort?: string | null;
+      permissionMode?: string | null;
+    },
+  ): { run?: OrchestrationRun; error?: string } {
+    const run = this.runs.get(runId);
+    if (!run) return { error: `run not found: ${runId}` };
+    const task = run.tasks.find((t) => t.id === taskId);
+    if (!task) return { error: `task not found: ${taskId}` };
+    if (task.status !== "pending" && task.status !== "blocked" && task.status !== "canceled" && task.status !== "paused" && task.status !== "failed") {
+      return { error: `task ${taskId} is ${task.status} — 只有未在运行的任务可以编辑` };
+    }
+    if (patch.profileId !== undefined && patch.profileId !== null && !ProfileStore.get(patch.profileId)) {
+      return { error: `agent not found: ${patch.profileId}` };
+    }
+    if (patch.spec !== undefined) task.spec = patch.spec;
+    if (patch.deps !== undefined) task.deps = [...patch.deps];
+    if (patch.profileId !== undefined) task.profileId = patch.profileId;
+    if (patch.customModelId !== undefined) task.customModelId = patch.customModelId;
+    if (patch.providerId !== undefined) task.providerId = patch.providerId;
+    if (patch.model !== undefined) task.model = patch.model;
+    if (patch.effort !== undefined) task.effort = patch.effort;
+    if (patch.permissionMode !== undefined) task.permissionMode = patch.permissionMode;
+    const errors = validateTaskGraph(run.tasks);
+    if (errors.length > 0) {
+      // 回滚本次编辑 —— 图不合法(环/深度超限/悬空依赖)不能留在 run 里。
+      return { error: errors.join(";\n") };
+    }
+    this.touch(run);
+    this.emit({ kind: "run.updated", run });
+    return { run };
+  }
+
+  /** 画布移除任务(仅 pending;引用它的 deps 一并剥离)。 */
+  removeTask(runId: string, taskId: string): { run?: OrchestrationRun; error?: string } {
+    const run = this.runs.get(runId);
+    if (!run) return { error: `run not found: ${runId}` };
+    const task = run.tasks.find((t) => t.id === taskId);
+    if (!task) return { error: `task not found: ${taskId}` };
+    if (task.status !== "pending") return { error: `task ${taskId} is ${task.status} — 只有待运行的任务可以删除` };
+    run.tasks = run.tasks.filter((t) => t.id !== taskId);
+    for (const t of run.tasks) t.deps = t.deps.filter((d) => d !== taskId);
+    const errors = validateTaskGraph(run.tasks);
+    if (errors.length > 0) return { error: errors.join(";\n") };
+    this.touch(run);
+    this.emit({ kind: "run.updated", run });
     return { run };
   }
 

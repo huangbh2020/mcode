@@ -2,7 +2,7 @@
   "name": "@mcode/desktop",
   "version": "0.1.54",
   "private": true,
-  "description": "Mcode - Desktop GUI for Claude Code",
+  "description": "Mcode",
   "author": "huangbh",
   "license": "MIT",
   "type": "module",

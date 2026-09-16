@@ -122,6 +122,12 @@ export async function dispatchAgentTask(
   const project = ProjectRepo.get(run.projectId);
   if (!project) return { ok: false, dispatchId, error: `project not found: ${run.projectId}` };
 
+  // 「跟随会话默认」= 继承协调者会话的执行配置(厂商/模型/网关/级别)。
+  // 关键在 customModelId:不继承的话 claude-sdk worker 会落官方 OAuth 凭据
+  // 报 /login —— 第三方网关用户的唯一通道就是会话行上的 customModelId
+  // (主会话发消息正是靠它走 buildCustomEnv/桥,worker 必须同款)。
+  const coordinator = SessionRepo.get(run.parentSessionId);
+
   const wt = decideWorktree(run, task, profile);
   const ctx: DispatchContext = {
     runId: run.id,
@@ -136,10 +142,12 @@ export async function dispatchAgentTask(
       projectId: run.projectId,
       // 显式标题 → 永远建新行(防复用逻辑把 worker 塞进用户会话)。
       title: `${task.spec.slice(0, 30)}${task.spec.length > 30 ? "…" : ""}`.replace(/\s+/g, " "),
-      providerId: profile?.providerId,
-      model: profile?.model,
-      effort: profile?.effort ?? "default",
-      permissionMode: profile?.permissionMode ?? "default",
+      // 节点级覆盖(画布配置)→ agent 角色 → 协调者会话(「跟随会话默认」)。
+      providerId: task.providerId ?? profile?.providerId ?? coordinator?.providerId,
+      model: task.model ?? profile?.model ?? coordinator?.model,
+      effort: task.effort ?? profile?.effort ?? coordinator?.effort ?? "default",
+      permissionMode: task.permissionMode ?? profile?.permissionMode ?? coordinator?.permissionMode ?? "default",
+      customModelId: task.customModelId ?? coordinator?.customModelId ?? undefined,
       kind: "orch-worker",
       parentSessionId: run.parentSessionId,
       orchMeta: ctx,

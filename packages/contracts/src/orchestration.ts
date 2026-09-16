@@ -115,6 +115,16 @@ export const TaskNodeSchema = z.object({
   deps: z.array(z.string()).default([]),
   /** 承担者 AgentProfile id；runner=terminal 时可为空。 */
   profileId: z.string().nullable().default(null),
+  /** 节点级模型配置覆盖（CustomModelMeta id）；null = 跟随会话默认。 */
+  customModelId: z.string().nullable().default(null),
+  /** 节点级厂商覆盖（provider id，如 claude-sdk/pi-sdk）；null = 跟随。 */
+  providerId: z.string().nullable().default(null),
+  /** 节点级模型覆盖；null = 跟随。 */
+  model: z.string().nullable().default(null),
+  /** 节点级思考级别覆盖；null = 跟随默认。 */
+  effort: z.string().nullable().default(null),
+  /** 节点级权限模式覆盖；null = 跟随默认。 */
+  permissionMode: z.string().nullable().default(null),
   status: TaskStatusSchema.default("pending"),
   artifacts: z.array(z.string()).default([]),
   result: TaskResultSchema.nullable().default(null),
@@ -209,6 +219,8 @@ export const OrchestrationRunSchema = z.object({
   /** worker 心跳：sessionId → 最近一次活动时间戳。 */
   heartbeat: z.record(z.string(), z.number()).default({}),
   templateId: z.string().nullable().default(null),
+  /** 结果整理回合已派发的时间（一次性闩，防 checkRunCompletion 重入）。 */
+  synthesizedAt: z.number().nullable().default(null),
   createdAt: z.number(),
   updatedAt: z.number(),
 });
@@ -220,6 +232,12 @@ export const TaskSpecInputSchema = z.object({
   spec: z.string().min(1),
   deps: z.array(z.string()).default([]),
   profileId: z.string().nullable().default(null),
+  /** 节点级模型配置覆盖（CustomModelMeta id）；null = 跟随会话默认。 */
+  customModelId: z.string().nullable().default(null),
+  providerId: z.string().nullable().default(null),
+  model: z.string().nullable().default(null),
+  effort: z.string().nullable().default(null),
+  permissionMode: z.string().nullable().default(null),
   reviewOf: z.string().nullable().default(null),
   variantGroup: z.string().nullable().default(null),
   tags: z.array(z.string()).default([]),

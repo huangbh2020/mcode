@@ -1,17 +1,32 @@
 /**
- * 编排 DAG 面板(右栏「编排」tab)。
+ * 编排面板(右栏「编排」tab)—— 双视图。
  *
- * 展示当前会话(协调者)的 OrchestrationRun:任务图状态色标、节点级控制
- * (暂停/终止/重试/换模型重跑)、实时成本 vs 预算、决策门解决、worker 报告
- * (filesModified/reportPath/verdict)、worktree merge-back。数据全部来自
- * store 的 orchRunsBySession(main 的 run.updated 推送保持新鲜)。
+ * 总览:当前会话(协调者)的 OrchestrationRun 卡片列表(状态/成本/决策门/
+ *   任务清单),数据来自 store 的 orchRunsBySession(run.updated 推送保鲜)。
+ * 节点详情:画布点节点(store.orchNodeSelection)后进入 —— 「配置」页编辑
+ *   spec/agent/模型/依赖(pending 才可改),「运行输出」页看统计/产物/
+ *   worker 输出控制台(worker 会话消息桶:prefetch 水合 + 实时事件天然续流)。
  */
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { cn } from "@renderer/lib/cn.js";
 import { useI18n } from "@renderer/lib/i18n/index.js";
+import { api } from "@renderer/lib/api.js";
+import { MessageBlocks } from "@renderer/components/chat/MessageBlocks.js";
+import type { ChatMessage } from "@renderer/stores/sessionStore.js";
 import { useSessionStore } from "@renderer/stores/sessionStore.js";
-import type { Gate, OrchestrationRun, TaskNode } from "@contracts/orchestration";
-import { IconGitFork, IconPlayerPause, IconPlayerPlay, IconRefresh, IconX, IconCheck, IconExternalLink } from "@renderer/lib/icons.js";
+import type { AgentProfile, Gate, OrchestrationRun, TaskNode } from "@contracts/orchestration";
+import type { CustomModelPublic } from "@contracts/customModel";
+import {
+  IconArrowLeft,
+  IconCheck,
+  IconExternalLink,
+  IconGitFork,
+  IconPlayerPause,
+  IconPlayerPlay,
+  IconRefresh,
+  IconTrash,
+  IconX,
+} from "@renderer/lib/icons.js";
 
 const STATUS_DOT: Record<TaskNode["status"], string> = {
   pending: "bg-content-subtle/50",
@@ -35,57 +50,185 @@ const RUN_BADGE: Record<OrchestrationRun["status"], string> = {
   canceled: "text-content-subtle",
 };
 
+/** 执行者标签:节点级 厂商/模型 覆盖优先,回退 agent 角色名(画布流/@@ 目标)。 */
+function execLabelOf(
+  task: TaskNode,
+  customModels: CustomModelPublic[],
+  agents: AgentProfile[],
+): string {
+  if (task.providerId) {
+    if (task.customModelId) {
+      const cfg = customModels.find((c) => c.id === task.customModelId);
+      if (cfg) return task.model && task.model !== "default" ? `${cfg.name} · ${task.model}` : cfg.name;
+    }
+    if (task.model && task.model !== "default") return `${task.providerId} · ${task.model}`;
+    return task.providerId;
+  }
+  if (task.profileId) return agents.find((a) => a.id === task.profileId)?.name ?? task.profileId;
+  return "";
+}
+
+/** 节点展示标题 = spec 首行(与画布节点卡、结果整理同一口径)。 */
+function taskTitle(task: TaskNode): string {
+  return task.spec.split("\n")[0].trim() || task.id;
+}
+
 export function OrchPanel() {
   const { t } = useI18n();
   const sessionId = useSessionStore((s) => s.activeSessionId);
   const runs = useSessionStore((s) => (sessionId ? s.orchRunsBySession[sessionId] : undefined));
   const loadOrchRuns = useSessionStore((s) => s.loadOrchRuns);
-  const agents = useSessionStore((s) => s.orchAgents);
+  const selection = useSessionStore((s) => s.orchNodeSelection);
+  // 选中可能来自后台 keep-alive 画布/整理卡 —— 跨会话桶按 id 找 run,
+  // 不止看当前会话(找不到 = run 已被清理或 selection 过期 → 回落列表)。
+  const runsMap = useSessionStore((s) => s.orchRunsBySession);
+  const selectedRun = useMemo(() => {
+    if (!selection) return undefined;
+    for (const list of Object.values(runsMap)) {
+      const hit = list.find((r) => r.id === selection.runId);
+      if (hit) return hit;
+    }
+    return undefined;
+  }, [runsMap, selection]);
+  const selectedTask =
+    selectedRun && selection?.taskId
+      ? selectedRun.tasks.find((x) => x.id === selection.taskId)
+      : undefined;
 
   useEffect(() => {
     if (sessionId) void loadOrchRuns(sessionId);
   }, [sessionId, loadOrchRuns, runs === undefined]);
 
-  const agentName = (id: string | null) =>
-    id ? (agents.find((a) => a.id === id)?.name ?? id) : t("orch.wizard.agentNone");
+  // 三级视图:节点详情(taskId 非空)→ 运行总览(点画布空白/整理卡进入)
+  // → 会话级 runs 列表。切会话时 selection 指向别的会话的 run 也能命中
+  // (跨桶查找),不再静默回落。
+  if (selectedRun && selectedTask && selection?.taskId) {
+    return (
+      <NodeDetail
+        key={`${selectedRun.id}:${selectedTask.id}`}
+        run={selectedRun}
+        task={selectedTask}
+      />
+    );
+  }
+
+  if (selectedRun && selection && !selection.taskId) {
+    return <RunOverview key={selectedRun.id} run={selectedRun} />;
+  }
 
   if (!sessionId || !runs || runs.length === 0) {
-    return (
-      <EmptyState title={t("orch.panel.empty")} desc={t("orch.panel.emptyDesc")} />
-    );
+    return <EmptyState title={t("orch.panel.empty")} desc={t("orch.node.overviewEmpty")} />;
   }
 
   return (
     <div className="h-full overflow-y-auto px-3 py-3" style={{ fontSize: "var(--right-panel-font-size)" }}>
       <div className="space-y-4">
         {runs.map((run) => (
-          <RunCard key={run.id} run={run} agentName={agentName} />
+          <RunCard key={run.id} run={run} />
         ))}
       </div>
     </div>
   );
 }
 
-function RunCard({ run, agentName }: { run: OrchestrationRun; agentName: (id: string | null) => string }) {
+/* ═══════════════════ 运行总览(点画布空白 / 整理卡「查看运行详情」) ═══════════════════ */
+
+function RunOverview({ run }: { run: OrchestrationRun }) {
+  const { t } = useI18n();
+  const closeOrchSelection = useSessionStore((s) => s.closeOrchSelection);
+  const done = run.tasks.filter((x) => x.status === "completed").length;
+  // 耗时 = 最早派发 → 最晚收尾(跨任务并行的墙钟口径;未派发过 = —)。
+  let startedAt = Infinity;
+  let endedAt = 0;
+  for (const task of run.tasks) {
+    for (const d of task.dispatches) {
+      startedAt = Math.min(startedAt, d.injectedAt);
+      endedAt = Math.max(endedAt, d.endedAt ?? d.injectedAt);
+    }
+  }
+  const duration = Number.isFinite(startedAt)
+    ? endedAt - startedAt < 60_000
+      ? `${Math.max(1, Math.round((endedAt - startedAt) / 1000))}s`
+      : `${Math.floor((endedAt - startedAt) / 60_000)}m${Math.round(((endedAt - startedAt) % 60_000) / 1000)}s`
+    : null;
+
+  return (
+    <div className="h-full overflow-y-auto px-3 py-3" style={{ fontSize: "var(--right-panel-font-size)" }}>
+      {/* 头部:返回列表 + 总览标题 */}
+      <div className="mb-3 flex items-center gap-1.5">
+        <button
+          onClick={closeOrchSelection}
+          className="rounded p-1 text-content-subtle hover:bg-surface-hover hover:text-content"
+          title={t("orch.node.backToList")}
+        >
+          <IconArrowLeft size={14} />
+        </button>
+        <span className="min-w-0 flex-1 truncate font-medium">
+          {t("orch.node.overviewTitle")}
+        </span>
+      </div>
+
+      {/* 目标 */}
+      <div className="mb-3 rounded-md border border-edge bg-surface-muted/50 px-2.5 py-2 text-[0.7143em] leading-relaxed text-content-muted">
+        {run.goal || run.title}
+      </div>
+
+      {/* 统计格:进度 / 状态 / 花费 / 耗时 */}
+      <div className="mb-3 grid grid-cols-2 gap-1.5">
+        <Stat k={t("orch.node.statProgress")} v={`${done}/${run.tasks.length}`} />
+        <Stat k={t("orch.node.statStatus")} v={t(`orch.runstatus.${run.status}`)} />
+        <Stat k={t("orch.node.statElapsed")} v={duration ?? "—"} />
+      </div>
+
+      {/* 任务清单(点击行 → 节点详情) */}
+      <div className="mb-1 text-[0.686em] font-medium uppercase tracking-wide text-content-subtle">
+        {t("orch.node.taskList")}
+      </div>
+      <div className="space-y-1">
+        {run.tasks.map((task) => (
+          <TaskRow
+            key={task.id}
+            runId={run.id}
+            task={task}
+            hasOpenGate={run.gates.some((g) => g.status === "open" && g.taskId === task.id)}
+          />
+        ))}
+      </div>
+
+      {/* 派发规则 */}
+      <div className="mb-1 mt-3 text-[0.686em] font-medium uppercase tracking-wide text-content-subtle">
+        {t("orch.panel.rules")}
+      </div>
+      <div className="text-[0.686em] leading-relaxed text-content-subtle">
+        {t("orch.node.rules", { n: run.concurrency })}
+      </div>
+    </div>
+  );
+}
+
+function RunCard({ run }: { run: OrchestrationRun }) {
   const { t } = useI18n();
   const runControl = useSessionStore((s) => s.orchRunControl);
-  const [expanded, setExpanded] = useState<string | null>(null);
+  const selectOrchNode = useSessionStore((s) => s.selectOrchNode);
   const openGates = run.gates.filter((g) => g.status === "open");
 
   return (
     <div className="rounded-lg border border-edge bg-surface">
-      {/* 头部:标题 + 状态 + 成本 + run 级控制 */}
+      {/* 头部:标题(点击 → 运行总览)+ 状态 + 成本 + run 级控制 */}
       <div className="flex items-center gap-2 px-3 py-2">
-        <span className={cn("min-w-0 flex-1 truncate font-medium", RUN_BADGE[run.status])}>
+        <button
+          onClick={() => selectOrchNode(run.id, null)}
+          title={t("orch.node.overviewTitle")}
+          className={cn(
+            "min-w-0 flex-1 truncate text-left font-medium hover:underline",
+            RUN_BADGE[run.status],
+          )}
+        >
           {run.title}
-        </span>
+        </button>
         <span className="shrink-0 text-[0.7143em] text-content-subtle">{t(`orch.runstatus.${run.status}`)}</span>
       </div>
       <div className="flex items-center gap-2 px-3 pb-2 text-[0.7143em] text-content-subtle">
-        <span>
-          {t("orch.panel.cost")} ${run.spentUsd.toFixed(3)}
-          {run.budgetUsd != null ? ` / ${run.budgetUsd}` : ` · ${t("orch.panel.noBudget")}`}
-        </span>
         <span className="ml-auto flex gap-1">
           {run.status === "running" && (
             <IconBtn title={t("orch.panel.pause")} onClick={() => void runControl(run.id, "pause")}>
@@ -103,7 +246,7 @@ function RunCard({ run, agentName }: { run: OrchestrationRun; agentName: (id: st
             </IconBtn>
           )}
           <IconBtn title={t("orch.panel.deleteRun")} onClick={() => void runControl(run.id, "delete")}>
-            <IconRefresh size={13} />
+            <IconTrash size={13} />
           </IconBtn>
         </span>
       </div>
@@ -122,7 +265,7 @@ function RunCard({ run, agentName }: { run: OrchestrationRun; agentName: (id: st
         </div>
       )}
 
-      {/* 任务列表 */}
+      {/* 任务清单(点击行 → 节点详情) */}
       <div className="border-t border-edge px-3 py-2">
         <div className="space-y-1">
           {run.tasks.map((task) => (
@@ -130,9 +273,6 @@ function RunCard({ run, agentName }: { run: OrchestrationRun; agentName: (id: st
               key={task.id}
               runId={run.id}
               task={task}
-              agentName={agentName}
-              expanded={expanded === task.id}
-              onToggle={() => setExpanded((x) => (x === task.id ? null : task.id))}
               hasOpenGate={openGates.some((g) => g.taskId === task.id)}
             />
           ))}
@@ -174,147 +314,522 @@ function GateRow({ runId, gate, tasks }: { runId: string; gate: Gate; tasks: Tas
 function TaskRow({
   runId,
   task,
-  agentName,
-  expanded,
-  onToggle,
   hasOpenGate,
 }: {
   runId: string;
   task: TaskNode;
-  agentName: (id: string | null) => string;
-  expanded: boolean;
-  onToggle: () => void;
   hasOpenGate: boolean;
 }) {
   const { t } = useI18n();
+  const selectOrchNode = useSessionStore((s) => s.selectOrchNode);
+  const agents = useSessionStore((s) => s.orchAgents);
+  const customModels = useSessionStore((s) => s.customModels);
+
+  return (
+    <button
+      onClick={() => selectOrchNode(runId, task.id)}
+      className="flex w-full items-start gap-1.5 rounded-md px-1.5 py-1 text-left hover:bg-surface-hover"
+    >
+      <span className={cn("mt-[0.45em] h-1.5 w-1.5 shrink-0 rounded-full", STATUS_DOT[task.status])} />
+      <span className="min-w-0 flex-1">
+        <span className="flex items-center gap-1.5">
+          <span className="text-[0.7143em] font-medium">{task.id}</span>
+          {task.reviewOf && (
+            <span className="rounded bg-info/15 px-1 text-[0.686em] text-info">review→{task.reviewOf}</span>
+          )}
+          {task.variantGroup && (
+            <span className="rounded bg-violet-500/15 px-1 text-[0.686em] text-violet-500">{task.variantGroup}</span>
+          )}
+          {task.reviewRound > 0 && (
+            <span className="text-[0.686em] text-warning">{t("orch.panel.reviewRound", { n: task.reviewRound })}</span>
+          )}
+          {task.failureCount > 0 && (
+            <span className="text-[0.686em] text-danger">{t("orch.panel.failures", { n: task.failureCount })}</span>
+          )}
+          {hasOpenGate && <span className="text-[0.686em] text-warning">⏸ gate</span>}
+        </span>
+        <span className="mt-0.5 block truncate text-[0.7143em] text-content-muted">{taskTitle(task)}</span>
+      </span>
+      <span className="shrink-0 text-[0.686em] text-content-subtle">{execLabelOf(task, customModels, agents)}</span>
+      <span className={cn("shrink-0 text-[0.686em]", STATUS_DOT[task.status].replace("bg-", "text-"))}>
+        {t(`orch.status.${task.status}`)}
+      </span>
+    </button>
+  );
+}
+
+/* ═══════════════════ 节点详情 ═══════════════════ */
+
+function NodeDetail({ run, task }: { run: OrchestrationRun; task: TaskNode }) {
+  const { t } = useI18n();
+  const selectOrchNode = useSessionStore((s) => s.selectOrchNode);
   const taskControl = useSessionStore((s) => s.orchTaskControl);
-  const orchMergeTask = useSessionStore((s) => s.orchMergeTask);
+  // 详情页默认页签随生命周期:跑过 → 输出,待配置 → 配置。
+  const [tab, setTab] = useState<"config" | "output">(
+    task.status === "running" || task.status === "completed" ? "output" : "config",
+  );
+
+  return (
+    <div className="h-full overflow-y-auto px-3 py-3" style={{ fontSize: "var(--right-panel-font-size)" }}>
+      {/* 头部:返回 + 任务标识 + 状态 */}
+      <div className="mb-3 flex items-center gap-1.5">
+        <button
+          onClick={() => selectOrchNode(run.id, null)}
+          className="rounded p-1 text-content-subtle hover:bg-surface-hover hover:text-content"
+          title={t("orch.node.backToOverview")}
+        >
+          <IconArrowLeft size={14} />
+        </button>
+        <span className="min-w-0 flex-1 truncate font-medium">{`${task.id} · ${taskTitle(task)}`}</span>
+        <span className={cn("shrink-0 text-[0.7143em]", STATUS_DOT[task.status].replace("bg-", "text-"))}>
+          {t(`orch.status.${task.status}`)}
+        </span>
+      </div>
+
+      {/* 页签:配置 | 运行输出 */}
+      <div className="mb-3 flex gap-1 rounded-lg border border-edge bg-surface-muted p-0.5">
+        {(["config", "output"] as const).map((x) => (
+          <button
+            key={x}
+            onClick={() => setTab(x)}
+            className={cn(
+              "flex-1 rounded-md py-1 text-[0.7143em] transition-colors",
+              tab === x ? "bg-surface font-medium text-content shadow-sm" : "text-content-subtle hover:text-content",
+            )}
+          >
+            {t(x === "config" ? "orch.node.tabConfig" : "orch.node.tabOutput")}
+          </button>
+        ))}
+      </div>
+
+      {tab === "config" ? (
+        <TaskConfig run={run} task={task} />
+      ) : (
+        <TaskOutput run={run} task={task} />
+      )}
+
+      {/* 节点控制(两个页签共用,常驻底部)。重跑/重试可能被服务端拒绝
+          (下游已开始)—— 错误用 alert 浮出,不静默。 */}
+      <div className="mt-3 flex flex-wrap gap-1 border-t border-edge pt-2">
+        {(task.status === "failed" || task.status === "blocked" || task.status === "canceled") && (
+          <MiniBtn
+            onClick={() => void taskControl(run.id, task.id, "retry").then((e) => e && window.alert(e))}
+          >
+            <IconRefresh size={11} /> {t("orch.panel.retry")}
+          </MiniBtn>
+        )}
+        {(task.status === "completed" || task.status === "failed" || task.status === "canceled") && (
+          <MiniBtn
+            onClick={() => void taskControl(run.id, task.id, "rerun").then((e) => e && window.alert(e))}
+          >
+            <IconRefresh size={11} /> {t("orch.node.rerun")}
+          </MiniBtn>
+        )}
+        {task.status !== "completed" && task.status !== "canceled" && (
+          <MiniBtn onClick={() => void taskControl(run.id, task.id, "markCompleted")}>
+            <IconCheck size={11} /> {t("orch.panel.markDone")}
+          </MiniBtn>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** 配置页:agent / 模型配置 / 简报 / 依赖。仅未派发的任务可写 —— 运行中的
+ *  改动会被服务端拒绝,这里直接禁用输入并给出提示。 */
+function TaskConfig({ run, task }: { run: OrchestrationRun; task: TaskNode }) {
+  const { t } = useI18n();
+  const providers = useSessionStore((s) => s.providers);
+  const customModels = useSessionStore((s) => s.customModels);
+  const piAvailableModels = useSessionStore((s) => s.piAvailableModels);
+  const codexAvailableModels = useSessionStore((s) => s.codexAvailableModels);
   const openOrchWorker = useSessionStore((s) => s.openOrchWorker);
-  const [merging, setMerging] = useState(false);
+  // 失败/取消/阻塞/暂停/待运行都可改配置(改完用「重跑此任务」重新开始);
+  // dispatched/running/completed 不可改。
+  const editable =
+    task.status === "pending" ||
+    task.status === "blocked" ||
+    task.status === "canceled" ||
+    task.status === "paused" ||
+    task.status === "failed";
   const lastDispatch = task.dispatches[task.dispatches.length - 1];
 
+  const [spec, setSpec] = useState(task.spec);
+  const [providerId, setProviderId] = useState(task.providerId ?? "");
+  // claude 网关模型编码为 "cfgId|modelId";其余厂商为裸 model id;空 = 跟随默认。
+  const [modelSel, setModelSel] = useState(
+    task.customModelId ? `${task.customModelId}|${task.model ?? "default"}` : (task.model ?? ""),
+  );
+  const [effort, setEffort] = useState(task.effort ?? "");
+  const [permissionMode, setPermissionMode] = useState(task.permissionMode ?? "");
+  const [deps, setDeps] = useState<string[]>(task.deps);
+  const [saving, setSaving] = useState(false);
+  const [savedTick, setSavedTick] = useState(false);
+  const [error, setError] = useState("");
+
+  // 当前厂商的能力声明:模型表 / 思考级别 / 权限模式全部来自 provider 自描述。
+  const provider = providers.find((p) => p.id === providerId);
+  const thinkingLevels = provider?.capabilities.thinkingLevels ?? [];
+  const permissionModes = provider?.capabilities.permissionModes ?? [];
+  const modelOptions = useMemo(() => {
+    if (providerId === "claude-sdk") {
+      // claude = 用户配置的自定义端点展开(端点名 · 模型 id)。
+      return customModels.flatMap((c) =>
+        c.models
+          .filter((m) => m.id.trim())
+          .map((m) => ({ value: `${c.id}|${m.id}`, label: `${c.name} · ${m.id}` })),
+      );
+    }
+    if (providerId === "pi-sdk") {
+      return piAvailableModels.map((m) => ({ value: m.id, label: m.label }));
+    }
+    if (providerId === "codex-sdk") {
+      return codexAvailableModels.map((m) => ({ value: m.id, label: m.label }));
+    }
+    return [];
+  }, [providerId, customModels, piAvailableModels, codexAvailableModels]);
+
+  // 把选择解析回 {customModelId, model} 覆盖(claude 的 "|" 编码拆开)。
+  const parseModel = (sel: string): { customModelId: string | null; model: string | null } => {
+    if (providerId === "claude-sdk") {
+      if (sel.includes("|")) {
+        const [cfgId, model] = sel.split("|");
+        return { customModelId: cfgId || null, model: model || null };
+      }
+      return { customModelId: null, model: null };
+    }
+    return { customModelId: null, model: sel || null };
+  };
+  const taskModelSel = task.customModelId
+    ? `${task.customModelId}|${task.model ?? "default"}`
+    : (task.model ?? "");
+  const parsed = parseModel(modelSel);
+
+  const dirty =
+    spec !== task.spec ||
+    deps.join(",") !== task.deps.join(",") ||
+    (task.providerId ?? "") !== providerId ||
+    taskModelSel !== modelSel ||
+    (task.effort ?? "") !== effort ||
+    (task.permissionMode ?? "") !== permissionMode;
+
+  const save = async () => {
+    setSaving(true);
+    setError("");
+    try {
+      await api.orch.updateTask({
+        runId: run.id,
+        taskId: task.id,
+        ...(spec.trim() ? { spec: spec.trim() } : {}),
+        deps,
+        providerId: providerId || null,
+        customModelId: parsed.customModelId,
+        model: parsed.model,
+        effort: effort || null,
+        permissionMode: permissionMode || null,
+      });
+      setSavedTick(true);
+      setTimeout(() => setSavedTick(false), 1600);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const remove = async () => {
+    if (!window.confirm(t("orch.node.deleteConfirm"))) return;
+    try {
+      await api.orch.removeTask({ runId: run.id, taskId: task.id });
+      useSessionStore.getState().selectOrchNode(run.id, null);
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  };
+
   const merge = async () => {
-    setMerging(true);
-    const err = await orchMergeTask(runId, task.id);
-    setMerging(false);
+    const err = await useSessionStore.getState().orchMergeTask(run.id, task.id);
     if (err) window.alert(t("orch.panel.mergeFailed") + ": " + err);
   };
 
+  const selectCls =
+    "w-full rounded-md border border-edge bg-surface px-2 py-1 outline-none focus:border-accent disabled:opacity-60";
+
   return (
-    <div className="rounded-md px-1.5 py-1 hover:bg-surface-hover">
-      <button onClick={onToggle} className="flex w-full items-start gap-1.5 text-left">
-        <span className={cn("mt-[0.45em] h-1.5 w-1.5 shrink-0 rounded-full", STATUS_DOT[task.status])} />
-        <span className="min-w-0 flex-1">
-          <span className="flex items-center gap-1.5">
-            <span className="text-[0.7143em] font-medium">{task.id}</span>
-            {task.reviewOf && (
-              <span className="rounded bg-info/15 px-1 text-[0.686em] text-info">review→{task.reviewOf}</span>
-            )}
-            {task.variantGroup && (
-              <span className="rounded bg-violet-500/15 px-1 text-[0.686em] text-violet-500">{task.variantGroup}</span>
-            )}
-            {task.reviewRound > 0 && (
-              <span className="text-[0.686em] text-warning">{t("orch.panel.reviewRound", { n: task.reviewRound })}</span>
-            )}
-            {task.failureCount > 0 && (
-              <span className="text-[0.686em] text-danger">{t("orch.panel.failures", { n: task.failureCount })}</span>
-            )}
-            {hasOpenGate && <span className="text-[0.686em] text-warning">⏸ gate</span>}
-          </span>
-          <span className="mt-0.5 block truncate text-[0.7143em] text-content-muted">{task.spec}</span>
-        </span>
-        <span className="shrink-0 text-[0.686em] text-content-subtle">{agentName(task.profileId)}</span>
-        <span className={cn("shrink-0 text-[0.686em]", STATUS_DOT[task.status].replace("bg-", "text-"))}>
-          {t(`orch.status.${task.status}`)}
-        </span>
-      </button>
+    <div className="space-y-3">
+      <Field label={t("orch.node.provider")}>
+        <select
+          value={providerId}
+          disabled={!editable}
+          onChange={(e) => {
+            // 切厂商:模型/级别/权限跨厂商无意义,一并收拢。
+            setProviderId(e.target.value);
+            setModelSel("");
+            setEffort("");
+            setPermissionMode("");
+          }}
+          className={selectCls}
+        >
+          <option value="">{t("orch.node.modelNone")}</option>
+          {providers.map((pr) => (
+            <option key={pr.id} value={pr.id}>
+              {pr.displayName}
+            </option>
+          ))}
+        </select>
+      </Field>
 
-      {expanded && (
-        <div className="mt-1 space-y-1.5 pl-3 text-[0.7143em]">
-          {/* 节点控制 */}
-          <div className="flex flex-wrap gap-1">
-            {(task.status === "failed" || task.status === "blocked" || task.status === "canceled") && (
-              <MiniBtn onClick={() => void taskControl(runId, task.id, "retry")}>
-                <IconRefresh size={11} /> {t("orch.panel.retry")}
-              </MiniBtn>
-            )}
-            {(task.status === "dispatched" || task.status === "running") && (
-              <>
-                <MiniBtn onClick={() => void taskControl(runId, task.id, "pause")}>
-                  <IconPlayerPause size={11} /> {t("orch.panel.taskPause")}
-                </MiniBtn>
-                <MiniBtn onClick={() => void taskControl(runId, task.id, "cancel")}>
-                  <IconX size={11} /> {t("orch.panel.taskCancel")}
-                </MiniBtn>
-              </>
-            )}
-            {task.status === "paused" && (
-              <MiniBtn onClick={() => void taskControl(runId, task.id, "resume")}>
-                <IconPlayerPlay size={11} /> {t("orch.panel.taskResume")}
-              </MiniBtn>
-            )}
-            {(task.status === "completed" || task.status === "failed" || task.status === "canceled") && (
-              <MiniBtn onClick={() => void taskControl(runId, task.id, "rerun")}>
-                <IconRefresh size={11} /> {t("orch.panel.rerun")}
-              </MiniBtn>
-            )}
-            {task.status !== "completed" && task.status !== "canceled" && (
-              <MiniBtn onClick={() => void taskControl(runId, task.id, "markCompleted")}>
-                <IconCheck size={11} /> {t("orch.panel.markDone")}
-              </MiniBtn>
-            )}
-          </div>
+      <Field label={t("orch.node.model")}>
+        <select
+          value={modelSel}
+          disabled={!editable || !providerId}
+          onChange={(e) => setModelSel(e.target.value)}
+          className={selectCls}
+        >
+          <option value="">{providerId ? t("orch.node.followEmpty") : t("orch.node.modelNone")}</option>
+          {modelOptions.map((o) => (
+            <option key={o.value} value={o.value}>
+              {o.label}
+            </option>
+          ))}
+        </select>
+      </Field>
 
-          {/* worker 报告 */}
-          {task.result?.summary && (
-            <div className="rounded border border-edge bg-surface-muted/50 px-2 py-1.5">
-              <div className="mb-0.5 font-medium text-content-subtle">{t("orch.panel.workerReport")}</div>
-              <div className="max-h-40 overflow-y-auto whitespace-pre-wrap break-words text-content-muted">
-                {task.result.summary}
-              </div>
-              {task.result.verdict && (
-                <div
-                  className={cn(
-                    "mt-1 font-medium",
-                    task.result.verdict === "pass" ? "text-success" : "text-warning",
-                  )}
-                >
-                  {t(`orch.panel.verdict.${task.result.verdict}`)}
-                </div>
-              )}
-            </div>
-          )}
+      {thinkingLevels.length > 0 && (
+        <Field label={t("orch.node.effort")}>
+          <select value={effort} disabled={!editable} onChange={(e) => setEffort(e.target.value)} className={selectCls}>
+            <option value="">{t("orch.node.followEmpty")}</option>
+            {thinkingLevels.map((l) => (
+              <option key={l.value} value={l.value}>
+                {l.label ?? l.value}
+              </option>
+            ))}
+          </select>
+        </Field>
+      )}
 
-          {/* 文件改动 */}
-          {(task.result?.filesModified?.length ?? 0) > 0 && (
-            <div>
-              <div className="text-content-subtle">{t("orch.panel.files")}({task.result?.filesModified.length})</div>
-              <div className="max-h-28 overflow-y-auto font-mono text-[0.686em] text-content-muted">
-                {task.result?.filesModified.map((f) => (
-                  <div key={f} className="truncate">{f}</div>
-                ))}
-              </div>
-            </div>
-          )}
+      {permissionModes.length > 0 && (
+        <Field label={t("orch.node.permission")}>
+          <select
+            value={permissionMode}
+            disabled={!editable}
+            onChange={(e) => setPermissionMode(e.target.value)}
+            className={selectCls}
+          >
+            <option value="">{t("orch.node.followEmpty")}</option>
+            {permissionModes.map((m) => (
+              <option key={m.value} value={m.value}>
+                {m.label ?? m.value}
+              </option>
+            ))}
+          </select>
+        </Field>
+      )}
 
-          {/* worktree + worker 入口 */}
-          <div className="flex flex-wrap gap-1">
-            {lastDispatch?.workerSessionId && task.runner === "agent" && (
-              <MiniBtn onClick={() => void openOrchWorker(lastDispatch.workerSessionId!)}>
-                <IconExternalLink size={11} /> {t("orch.panel.openWorker")}
-              </MiniBtn>
-            )}
-            {task.worktreePath && task.status === "completed" && (
-              <MiniBtn disabled={merging} onClick={() => void merge()}>
-                <IconGitFork size={11} /> {merging ? t("orch.panel.merging") : t("orch.panel.merge")}
-              </MiniBtn>
-            )}
-          </div>
-          {task.worktreePath && (
-            <div className="truncate font-mono text-[0.686em] text-content-subtle">{task.worktreePath}</div>
-          )}
+      <Field label={t("orch.node.spec")}>
+        <textarea
+          value={spec}
+          disabled={!editable}
+          onChange={(e) => setSpec(e.target.value)}
+          rows={4}
+          className="w-full resize-y rounded-md border border-edge bg-surface px-2 py-1 leading-relaxed outline-none focus:border-accent disabled:opacity-60"
+        />
+      </Field>
+
+      <Field label={t("orch.node.deps")}>
+        <div className="flex flex-wrap gap-1">
+          {run.tasks.filter((x) => x.id !== task.id).map((x) => {
+            const on = deps.includes(x.id);
+            return (
+              <button
+                key={x.id}
+                disabled={!editable}
+                onClick={() => setDeps((d) => (on ? d.filter((v) => v !== x.id) : [...d, x.id]))}
+                className={cn(
+                  "rounded-full border px-2 py-0.5 font-mono text-[0.686em] disabled:opacity-60",
+                  on ? "border-accent bg-accent/10 text-accent" : "border-edge text-content-subtle hover:border-accent hover:text-accent",
+                )}
+              >
+                {x.id}
+              </button>
+            );
+          })}
+        </div>
+      </Field>
+
+      {!editable && <div className="text-[0.686em] text-content-subtle">{t("orch.node.lockedHint")}</div>}
+      {error && <div className="text-[0.686em] text-danger">{error}</div>}
+
+      <div className="flex flex-wrap gap-1">
+        {editable && (
+          <MiniBtn onClick={() => void save()} disabled={!dirty || saving}>
+            {savedTick ? <IconCheck size={11} /> : null}
+            {savedTick ? t("orch.node.saved") : t("orch.node.save")}
+          </MiniBtn>
+        )}
+        {lastDispatch?.workerSessionId && task.runner === "agent" && (
+          <MiniBtn onClick={() => void openOrchWorker(lastDispatch.workerSessionId!)}>
+            <IconExternalLink size={11} /> {t("orch.node.openWorker")}
+          </MiniBtn>
+        )}
+        {task.worktreePath && task.status === "completed" && (
+          <MiniBtn onClick={() => void merge()}>
+            <IconGitFork size={11} /> {t("orch.node.mergeBack")}
+          </MiniBtn>
+        )}
+        {task.status === "pending" && (
+          <MiniBtn onClick={() => void remove()} className="hover:border-danger hover:text-danger">
+            <IconTrash size={11} /> {t("orch.node.delete")}
+          </MiniBtn>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** 运行输出页:统计格 + 产物 + worker 输出控制台。 */
+function TaskOutput({ run, task }: { run: OrchestrationRun; task: TaskNode }) {
+  const { t } = useI18n();
+  const messagesBySession = useSessionStore((s) => s.messagesBySession);
+  const lastDispatch = task.dispatches[task.dispatches.length - 1];
+  const workerSessionId = task.runner === "agent" ? lastDispatch?.workerSessionId : undefined;
+
+  // 运行中秒级心跳:用时与画布节点同一口径(dispatches 时间戳),同步走表;
+  // 结束后无心跳、且用时取 endedAt —— 计时自然冻结。
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    if (task.status !== "running" && task.status !== "dispatched") return;
+    const iv = setInterval(() => setTick((x) => x + 1), 1000);
+    return () => clearInterval(iv);
+  }, [task.status]);
+
+  // worker 会话历史水合(一次性;实时事件由 ingestEvent 持续入桶)。
+  useEffect(() => {
+    if (!workerSessionId) return;
+    void useSessionStore.getState().prefetchSessionMessages(workerSessionId);
+  }, [workerSessionId]);
+
+  const workerMessages = workerSessionId ? messagesBySession[workerSessionId] : undefined;
+
+  const elapsed = (() => {
+    if (!lastDispatch) return null;
+    const end = task.status === "running" || task.status === "dispatched" ? Date.now() : lastDispatch.endedAt;
+    if (!end) return null;
+    const ms = end - lastDispatch.injectedAt;
+    return ms < 60_000 ? `${Math.max(1, Math.round(ms / 1000))}s` : `${Math.floor(ms / 60_000)}m${Math.round((ms % 60_000) / 1000)}s`;
+  })();
+  const tokens =
+    task.result?.usage != null ? (task.result.usage.inputTokens ?? 0) + (task.result.usage.outputTokens ?? 0) : null;
+  const files = [...(task.result?.filesModified ?? []), ...task.artifacts];
+
+  return (
+    <div className="space-y-3">
+      <div className="grid grid-cols-2 gap-1.5">
+        <Stat k={t("orch.node.statStatus")} v={t(`orch.status.${task.status}`)} />
+        <Stat k={t("orch.node.statElapsed")} v={elapsed ?? "—"} />
+        <Stat k={t("orch.node.statTokens")} v={tokens != null ? tokens.toLocaleString() : "—"} />
+      </div>
+
+      {task.runner === "terminal" && task.result?.exitCode != null && (
+        <div className="rounded-md border border-edge bg-surface-muted/50 px-2 py-1.5 text-[0.7143em] text-content-muted">
+          {t("orch.node.terminalResult", { code: task.result.exitCode })}
         </div>
       )}
+
+      <div>
+        <div className="mb-1 text-[0.686em] font-medium uppercase tracking-wide text-content-subtle">
+          {t("orch.node.artifacts")}
+        </div>
+        {files.length > 0 ? (
+          <div className="max-h-28 space-y-0.5 overflow-y-auto font-mono text-[0.686em] text-content-muted">
+            {files.map((f) => (
+              <div key={f} className="truncate">
+                {f}
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="text-[0.686em] text-content-subtle">{t("orch.node.artifactsEmpty")}</div>
+        )}
+      </div>
+
+      <div>
+        <div className="mb-1 text-[0.686em] font-medium uppercase tracking-wide text-content-subtle">
+          {t("orch.node.outputLog")}
+        </div>
+        <div className="max-h-[420px] overflow-hidden rounded-md border border-edge bg-surface">
+          {!lastDispatch ? (
+            <div className="px-3 py-4 text-[0.686em] text-content-subtle">{t("orch.node.outputEmpty")}</div>
+          ) : task.status === "canceled" && !workerMessages?.length ? (
+            <div className="px-3 py-4 text-[0.686em] text-content-subtle">{t("orch.node.outputCanceled")}</div>
+          ) : (
+            <WorkerTranscript
+              messages={workerMessages ?? []}
+              running={task.status === "running"}
+            />
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** worker 过程流:与子会话转录(SideChatPanel 的 SubagentView)同款 ——
+ *  MessageBlocks 纯展示渲染(流式文本/思考/工具卡片),运行中自动跟随
+ *  滚动到底部。worker 会话的 delta 经 ingestEvent 实时入桶,无需轮询。 */
+function WorkerTranscript({
+  messages,
+  running,
+}: {
+  messages: ChatMessage[];
+  running: boolean;
+}) {
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const blocks = useMemo(
+    () => messages.filter((m) => m.role === "assistant").flatMap((m) => m.blocks),
+    [messages],
+  );
+  // 运行中跟随尾部(与 SubagentView 同款意图):新块到达即滚到底。
+  useEffect(() => {
+    if (running) scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
+  }, [blocks, running]);
+
+  return (
+    <div ref={scrollRef} className="max-h-[420px] min-h-0 overflow-y-auto px-2.5 py-2">
+      {blocks.length === 0 ? (
+        <div className="flex items-center gap-2 px-2 py-4 text-[0.7143em] text-content-subtle">
+          {running && <span className="chat-caret" aria-hidden />}
+        </div>
+      ) : (
+        <>
+          <MessageBlocks blocks={blocks} />
+          {running && (
+            <div className="mt-1 flex items-center gap-1.5">
+              <span className="chat-caret" aria-hidden />
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+function Field({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <label className="block">
+      <div className="mb-1 text-[0.7143em] text-content-muted">{label}</div>
+      {children}
+    </label>
+  );
+}
+
+function Stat({ k, v }: { k: string; v: string }) {
+  return (
+    <div className="rounded-md border border-edge bg-surface-muted px-2 py-1.5">
+      <div className="text-[0.686em] text-content-subtle">{k}</div>
+      <div className="mt-0.5 font-medium" style={{ fontSize: "1em" }}>
+        {v}
+      </div>
     </div>
   );
 }
@@ -331,12 +846,25 @@ function IconBtn({ title, onClick, children }: { title: string; onClick: () => v
   );
 }
 
-function MiniBtn({ onClick, disabled, children }: { onClick: () => void; disabled?: boolean; children: React.ReactNode }) {
+function MiniBtn({
+  onClick,
+  disabled,
+  className,
+  children,
+}: {
+  onClick: () => void;
+  disabled?: boolean;
+  className?: string;
+  children: React.ReactNode;
+}) {
   return (
     <button
       onClick={onClick}
       disabled={disabled}
-      className="flex items-center gap-1 rounded border border-edge px-1.5 py-0.5 text-[0.686em] text-content-muted hover:border-accent hover:text-accent disabled:opacity-50"
+      className={cn(
+        "flex items-center gap-1 rounded border border-edge px-1.5 py-0.5 text-[0.686em] text-content-muted hover:border-accent hover:text-accent disabled:opacity-50",
+        className,
+      )}
     >
       {children}
     </button>

@@ -35,6 +35,8 @@ import { Markdown } from "./Markdown.js";
 import { DiffView } from "./DiffView.js";
 import { PlanStreamBlock } from "./PlanStreamBlock.js";
 import { TurnFilesCard } from "./TurnFilesCard.js";
+import { OrchCanvasBlock } from "./OrchCanvasBlock.js";
+import { OrchSynthBlock } from "./OrchSynthBlock.js";
 import { CurrentOpTicker } from "./CurrentOpTicker.js";
 import { ModelBadge } from "./ModelAvatar.js";
 import { fmtTokens } from "@renderer/lib/contextWindow.js";
@@ -1124,6 +1126,18 @@ const BlockView = memo(function BlockView({
           rewound={block.rewound}
         />
       );
+
+    case "orch-canvas":
+      // 编排画布(自动编排流):聊天流内的任务 DAG 卡片。块只锚定
+      // runId/goal,节点与运行状态由组件实时读 orchRunsBySession
+      // (run.updated 推送驱动);会话重开后从持久化消息原样恢复,run
+      // 超出本地保留上限时组件降级为归档卡。
+      return <OrchCanvasBlock canvasId={block.canvasId} runId={block.runId} goal={block.goal} />;
+
+    case "orch-synth":
+      // 结果整理卡(画布流第⑤步):run 完成时由 store 转场追加,汇总各
+      // 任务产出/产物/统计;main 侧的模型汇总回合紧随其后。
+      return <OrchSynthBlock synthId={block.synthId} runId={block.runId} goal={block.goal} />;
 
     case "compact-summary": {
       // Inline card shown after a context compaction (manual /compact or

@@ -3584,7 +3584,10 @@ export type OrchAgentDeleteInput = z.infer<typeof OrchAgentDeleteSchema>;
 export const OrchCreateRunSchema = z.object({
   sessionId: z.string(),
   title: z.string().optional(),
-  goal: z.string().min(1),
+  /** 总体目标,可空 —— 手写任务/模板路径下 goal 冗余;下游兜底:标题回退
+   *  「编排运行」、worker 简报回退「(未填写)」。模型驱动的 proposePlan
+   *  仍要求非空(那一步没有 goal 无从拆解)。 */
+  goal: z.string().default(""),
   tasks: z.array(TaskSpecInputSchema).min(1),
   budgetUsd: z.number().positive().nullable().optional(),
   concurrency: z.number().int().positive().optional(),
@@ -3599,9 +3602,14 @@ export type OrchCreateRunInput = z.infer<typeof OrchCreateRunSchema>;
 export const OrchListRunsSchema = z.object({ sessionId: z.string() });
 export type OrchListRunsInput = z.infer<typeof OrchListRunsSchema>;
 
+/** 画布块按 runId 拉单个 run(聊天流重开水合;跨会话键)。 */
+export const OrchGetRunSchema = z.object({ runId: z.string() });
+export type OrchGetRunInput = z.infer<typeof OrchGetRunSchema>;
+
 export const OrchRunControlSchema = z.object({
   runId: z.string(),
-  action: z.enum(["pause", "resume", "cancel", "delete"]),
+  /** start = planning→running；restart = completed/canceled→全部任务重置后重跑。 */
+  action: z.enum(["start", "pause", "resume", "cancel", "delete", "restart"]),
 });
 export type OrchRunControlInput = z.infer<typeof OrchRunControlSchema>;
 
@@ -3613,6 +3621,32 @@ export const OrchTaskControlSchema = z.object({
   profileId: z.string().nullable().optional(),
 });
 export type OrchTaskControlInput = z.infer<typeof OrchTaskControlSchema>;
+
+/** 画布节点配置编辑（仅 pending/blocked/canceled 任务可改）。 */
+export const OrchUpdateTaskSchema = z.object({
+  runId: z.string(),
+  taskId: z.string(),
+  spec: z.string().min(1).optional(),
+  deps: z.array(z.string()).optional(),
+  profileId: z.string().nullable().optional(),
+  customModelId: z.string().nullable().optional(),
+  providerId: z.string().nullable().optional(),
+  model: z.string().nullable().optional(),
+  effort: z.string().nullable().optional(),
+  permissionMode: z.string().nullable().optional(),
+});
+export type OrchUpdateTaskInput = z.infer<typeof OrchUpdateTaskSchema>;
+
+/** 画布「＋ 任务」：向既有 run 追加骨架任务。 */
+export const OrchAddTasksSchema = z.object({
+  runId: z.string(),
+  tasks: z.array(TaskSpecInputSchema).min(1),
+});
+export type OrchAddTasksInput = z.infer<typeof OrchAddTasksSchema>;
+
+/** 画布/面板删除任务（仅 pending；引用它的 deps 一并剥离）。 */
+export const OrchRemoveTaskSchema = z.object({ runId: z.string(), taskId: z.string() });
+export type OrchRemoveTaskInput = z.infer<typeof OrchRemoveTaskSchema>;
 
 export const OrchResolveGateSchema = z.object({
   runId: z.string(),
@@ -4636,10 +4670,18 @@ export interface RpcMap {
   "orch.createRun": (input: OrchCreateRunInput) => Promise<{ run: OrchestrationRun }>;
   /** Runs scoped to a coordinator session. */
   "orch.listRuns": (input: OrchListRunsInput) => Promise<{ runs: OrchestrationRun[] }>;
+  /** Fetch one run by id (orch-canvas hydration; null = archived/unknown). */
+  "orch.getRun": (input: OrchGetRunInput) => Promise<{ run: OrchestrationRun | null }>;
   /** Run-level pause/resume/cancel/delete. */
   "orch.runControl": (input: OrchRunControlInput) => Promise<{ run: OrchestrationRun }>;
   /** Node-level pause/resume/retry/cancel/rerun(换模型)/markCompleted. */
   "orch.taskControl": (input: OrchTaskControlInput) => Promise<{ run: OrchestrationRun }>;
+  /** Canvas node config edit (pending/blocked/canceled tasks only). */
+  "orch.updateTask": (input: OrchUpdateTaskInput) => Promise<{ run: OrchestrationRun }>;
+  /** Canvas 「＋ 任务」: append skeleton tasks to an existing run. */
+  "orch.addTasks": (input: OrchAddTasksInput) => Promise<{ run: OrchestrationRun }>;
+  /** Canvas/panel task removal (pending only; deps referencing it are cleaned). */
+  "orch.removeTask": (input: OrchRemoveTaskInput) => Promise<{ run: OrchestrationRun }>;
   /** Resolve an open decision gate. */
   "orch.resolveGate": (input: OrchResolveGateInput) => Promise<{ run: OrchestrationRun }>;
   /** Merge a completed worktree node back into the main checkout. */
@@ -4924,8 +4966,12 @@ export const IPC = {
   ORCH_SAVE_SETTINGS: "orch:saveSettings",
   ORCH_CREATE_RUN: "orch:createRun",
   ORCH_LIST_RUNS: "orch:listRuns",
+  ORCH_GET_RUN: "orch:getRun",
   ORCH_RUN_CONTROL: "orch:runControl",
   ORCH_TASK_CONTROL: "orch:taskControl",
+  ORCH_UPDATE_TASK: "orch:updateTask",
+  ORCH_ADD_TASKS: "orch:addTasks",
+  ORCH_REMOVE_TASK: "orch:removeTask",
   ORCH_RESOLVE_GATE: "orch:resolveGate",
   ORCH_MERGE_TASK: "orch:mergeTask",
   ORCH_HANDOFF: "orch:handoff",

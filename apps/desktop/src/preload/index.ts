@@ -562,10 +562,17 @@ const api = {
       ipcRenderer.invoke(IPC.ORCH_CREATE_RUN, input)) as RpcMap["orch.createRun"],
     listRuns: ((input) =>
       ipcRenderer.invoke(IPC.ORCH_LIST_RUNS, input)) as RpcMap["orch.listRuns"],
+    getRun: ((input) => ipcRenderer.invoke(IPC.ORCH_GET_RUN, input)) as RpcMap["orch.getRun"],
     runControl: ((input) =>
       ipcRenderer.invoke(IPC.ORCH_RUN_CONTROL, input)) as RpcMap["orch.runControl"],
     taskControl: ((input) =>
       ipcRenderer.invoke(IPC.ORCH_TASK_CONTROL, input)) as RpcMap["orch.taskControl"],
+    updateTask: ((input) =>
+      ipcRenderer.invoke(IPC.ORCH_UPDATE_TASK, input)) as RpcMap["orch.updateTask"],
+    addTasks: ((input) =>
+      ipcRenderer.invoke(IPC.ORCH_ADD_TASKS, input)) as RpcMap["orch.addTasks"],
+    removeTask: ((input) =>
+      ipcRenderer.invoke(IPC.ORCH_REMOVE_TASK, input)) as RpcMap["orch.removeTask"],
     resolveGate: ((input) =>
       ipcRenderer.invoke(IPC.ORCH_RESOLVE_GATE, input)) as RpcMap["orch.resolveGate"],
     mergeTask: ((input) =>

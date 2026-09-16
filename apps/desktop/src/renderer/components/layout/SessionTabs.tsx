@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState , useMemo } from "react";
 import {
   DndContext,
   PointerSensor,
@@ -19,7 +19,7 @@ import { CSS } from "@dnd-kit/utilities";
 import { cn } from "@renderer/lib/cn.js";
 import { IconX, SpinnerIcon } from "@renderer/lib/icons.js";
 import { getProviderIcon } from "@renderer/lib/providerIcon.js";
-import { useSessionStore } from "@renderer/stores/sessionStore.js";
+import { useSessionStore, orchRunningAnchors } from "@renderer/stores/sessionStore.js";
 import type { Session } from "@contracts/session";
 import { TabBarChevronButton, TabBarOverflowMenu } from "./TabBarChrome.js";
 
@@ -51,6 +51,9 @@ export function SessionTabs() {
   const streamSessions = useSessionStore((s) => s.streamSessions);
   const orchWorkersById = useSessionStore((s) => s.orchWorkersById);
   const runningBySession = useSessionStore((s) => s.runningBySession);
+  const orchRunsBySession = useSessionStore((s) => s.orchRunsBySession);
+  // 编排运行中 → 与普通回合运行同款 loading 指示(锚点 = 最早未结束派发)。
+  const orchAnchors = useMemo(() => orchRunningAnchors(orchRunsBySession), [orchRunsBySession]);
   const unreadBySession = useSessionStore((s) => s.unreadBySession);
   const selectSession = useSessionStore((s) => s.selectSession);
   const closeTab = useSessionStore((s) => s.closeTab);
@@ -188,7 +191,7 @@ export function SessionTabs() {
               {tabs.map((id) => {
                 const sess = findSession(sessionsByProject, pinnedSessions, streamSessions, id, orchWorkersById);
                 const isActive = id === activeId;
-                const running = !!runningBySession[id];
+                const running = !!runningBySession[id] || orchAnchors[id] != null;
                 const unread = unreadBySession[id] ?? 0;
                 return (
                   <SortableSessionTab
@@ -245,9 +248,10 @@ export function SessionTabs() {
               key: id,
               label: sess?.title ?? "(unknown)",
               active: id === activeId,
-              dotClass: runningBySession[id]
-                ? "bg-accent animate-pulse"
-                : "bg-content-subtle/50",
+              dotClass:
+                runningBySession[id] || orchAnchors[id] != null
+                  ? "bg-accent animate-pulse"
+                  : "bg-content-subtle/50",
             };
           })}
           onSelect={(id) => void selectSession(id)}

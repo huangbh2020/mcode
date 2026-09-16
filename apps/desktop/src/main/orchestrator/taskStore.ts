@@ -12,6 +12,31 @@ export const MAX_DAG_DEPTH = 4;
 /** 同任务连续失败熔断阈值。 */
 export const BREAKER_LIMIT = 3;
 
+/** task 的全部传递下游(直接 + 间接,沿 deps 反向边)。 */
+export function downstreamTasks(tasks: TaskNode[], taskId: string): TaskNode[] {
+  const byDep = new Map<string, string[]>();
+  for (const t of tasks) {
+    for (const d of t.deps) {
+      const list = byDep.get(d);
+      if (list) list.push(t.id);
+      else byDep.set(d, [t.id]);
+    }
+  }
+  const seen = new Set<string>();
+  const stack = [taskId];
+  while (stack.length > 0) {
+    const cur = stack.pop() as string;
+    for (const nxt of byDep.get(cur) ?? []) {
+      if (!seen.has(nxt)) {
+        seen.add(nxt);
+        stack.push(nxt);
+      }
+    }
+  }
+  return tasks.filter((t) => seen.has(t.id));
+}
+
+
 /** 终态集合:进入任一状态后不再被调度器触碰。 */
 const TERMINAL: ReadonlySet<TaskStatus> = new Set([
   "completed",

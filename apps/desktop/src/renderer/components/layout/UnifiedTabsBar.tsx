@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState , useMemo } from "react";
 import {
   DndContext,
   PointerSensor,
@@ -16,7 +16,7 @@ import {
 import { basename } from "@renderer/lib/path.js";
 import { cn } from "@renderer/lib/cn.js";
 import { IconClipboard, IconX } from "@renderer/lib/icons.js";
-import { useSessionStore } from "@renderer/stores/sessionStore.js";
+import { useSessionStore, orchRunningAnchors } from "@renderer/stores/sessionStore.js";
 import { TabBarChevronButton, TabBarOverflowMenu } from "./TabBarChrome.js";
 import { SortableSessionTab, findSession } from "./SessionTabs.js";
 import {
@@ -59,6 +59,8 @@ export function UnifiedTabsBar() {
   const streamSessions = useSessionStore((s) => s.streamSessions);
   const orchWorkersById = useSessionStore((s) => s.orchWorkersById);
   const runningBySession = useSessionStore((s) => s.runningBySession);
+  const orchRunsBySession = useSessionStore((s) => s.orchRunsBySession);
+  const orchAnchors = useMemo(() => orchRunningAnchors(orchRunsBySession), [orchRunsBySession]);
   const unreadBySession = useSessionStore((s) => s.unreadBySession);
   const selectSession = useSessionStore((s) => s.selectSession);
   const closeTab = useSessionStore((s) => s.closeTab);
@@ -281,7 +283,7 @@ export function UnifiedTabsBar() {
                     session={sess}
                     sessionId={id}
                     isActive={id === activeId && !editorFocused}
-                    running={!!runningBySession[id]}
+                    running={!!runningBySession[id] || orchAnchors[id] != null}
                     unreadCount={unreadBySession[id] ?? 0}
                     multiRow={multiRow}
                     registerNode={(node) => {
@@ -423,7 +425,7 @@ export function UnifiedTabsBar() {
                 key: id,
                 label: sess?.title ?? "(unknown)",
                 active: id === activeId && !editorFocused,
-                dotClass: runningBySession[id]
+                dotClass: runningBySession[id] || orchAnchors[id] != null
                   ? "bg-accent animate-pulse"
                   : "bg-content-subtle/50",
               };

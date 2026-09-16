@@ -12,8 +12,12 @@ import {
   OrchAgentDeleteSchema,
   OrchCreateRunSchema,
   OrchListRunsSchema,
+  OrchGetRunSchema,
   OrchRunControlSchema,
   OrchTaskControlSchema,
+  OrchUpdateTaskSchema,
+  OrchAddTasksSchema,
+  OrchRemoveTaskSchema,
   OrchResolveGateSchema,
   OrchMergeTaskSchema,
   OrchHandoffSchema,
@@ -50,6 +54,11 @@ const ProposalSchema = z.object({
         spec: z.string().min(1),
         deps: z.array(z.string()).optional(),
         profileId: z.string().nullable().optional(),
+        /** 节点级执行配置(全部可选;经 clampNodeExecConfig 白名单校验后落节点)。 */
+        providerId: z.string().nullable().optional(),
+        model: z.string().nullable().optional(),
+        effort: z.string().nullable().optional(),
+        permissionMode: z.string().nullable().optional(),
         tags: z.array(z.string()).optional(),
         reviewOf: z.string().nullable().optional(),
         variantGroup: z.string().nullable().optional(),
@@ -106,6 +115,11 @@ export function registerOrchestratorHandlers(ipcMain: IpcMain): void {
     await ready(); // 幂等;首帧早于启动钩子时兜底
     return { runs: orchestrator.listRuns(input.sessionId) };
   });
+  ipcMain.handle(IPC.ORCH_GET_RUN, async (_evt, raw) => {
+    await ready();
+    const input = OrchGetRunSchema.parse(raw);
+    return { run: orchestrator.getRun(input.runId) ?? null };
+  });
   ipcMain.handle(IPC.ORCH_RUN_CONTROL, async (_evt, raw) => {
     await ready();
     const input = OrchRunControlSchema.parse(raw);
@@ -117,6 +131,36 @@ export function registerOrchestratorHandlers(ipcMain: IpcMain): void {
     await ready();
     const input = OrchTaskControlSchema.parse(raw);
     const res = orchestrator.taskControl(input.runId, input.taskId, input.action, input.profileId);
+    if (res.error) throw new Error(res.error);
+    return { run: res.run ?? null };
+  });
+  ipcMain.handle(IPC.ORCH_UPDATE_TASK, async (_evt, raw) => {
+    await ready();
+    const input = OrchUpdateTaskSchema.parse(raw);
+    const res = orchestrator.updateTask(input.runId, input.taskId, {
+      spec: input.spec,
+      deps: input.deps,
+      profileId: input.profileId,
+      customModelId: input.customModelId,
+      providerId: input.providerId,
+      model: input.model,
+      effort: input.effort,
+      permissionMode: input.permissionMode,
+    });
+    if (res.error) throw new Error(res.error);
+    return { run: res.run ?? null };
+  });
+  ipcMain.handle(IPC.ORCH_ADD_TASKS, async (_evt, raw) => {
+    await ready();
+    const input = OrchAddTasksSchema.parse(raw);
+    const res = orchestrator.addTasks(input.runId, input.tasks);
+    if (res.error) throw new Error(res.error);
+    return { run: res.run ?? null };
+  });
+  ipcMain.handle(IPC.ORCH_REMOVE_TASK, async (_evt, raw) => {
+    await ready();
+    const input = OrchRemoveTaskSchema.parse(raw);
+    const res = orchestrator.removeTask(input.runId, input.taskId);
     if (res.error) throw new Error(res.error);
     return { run: res.run ?? null };
   });
@@ -136,14 +180,18 @@ export function registerOrchestratorHandlers(ipcMain: IpcMain): void {
   ipcMain.handle(IPC.ORCH_HANDOFF, async (_evt, raw) => {
     const input = OrchHandoffSchema.parse(raw);
     const profile = input.profileId ? ProfileStore.get(input.profileId) : undefined;
+    // 继承来源会话的执行配置 —— 与 worker 派发同款:customModelId 不带的话
+    // 第三方网关用户的新会话落官方 OAuth,首轮即 /login。
+    const from = input.fromSessionId ? SessionRepo.get(input.fromSessionId) : undefined;
     const { session } = createOrReuseSession(
       {
         projectId: input.projectId,
         title: input.title ?? `${input.briefing.slice(0, 36)}${input.briefing.length > 36 ? "…" : ""}`,
-        providerId: profile?.providerId,
-        model: profile?.model,
-        effort: profile?.effort ?? "default",
-        permissionMode: profile?.permissionMode ?? "default",
+        providerId: profile?.providerId ?? from?.providerId,
+        model: profile?.model ?? from?.model,
+        effort: profile?.effort ?? from?.effort ?? "default",
+        permissionMode: profile?.permissionMode ?? from?.permissionMode ?? "default",
+        customModelId: from?.customModelId ?? undefined,
         kind: "chat",
         // 移交不绑 worktree 意图 —— 需要时用户在那个会话里自己开。
       },
@@ -229,12 +277,16 @@ export function registerOrchestratorHandlers(ipcMain: IpcMain): void {
       .join("、");
     const userPrompt = [
       "把下面的总体目标拆解为编排任务图(最多 4 层依赖深度)。只输出 JSON,不要其他文字。",
-      "格式:{\"tasks\":[{\"spec\":\"任务简报\",\"deps\":[\"t1\"],\"profileId\":\"agent id 或 null\",\"tags\":[\"coding\"],\"reviewOf\":null,\"variantGroup\":null}]}",
+      "格式:{\"tasks\":[{\"spec\":\"任务简报\",\"deps\":[\"t1\"],\"profileId\":\"agent id 或 null\",\"providerId\":null,\"model\":null,\"effort\":null,\"permissionMode\":null,\"tags\":[\"coding\"],\"reviewOf\":null,\"variantGroup\":null}]}",
       "deps 引用前面任务的编号(t1、t2…按出现顺序);能并行的并行;写码任务尽量独立。",
       `可用厂商(providerId):${[...surface.keys()].join("、")}`,
       surfaceDescription,
       `可选 agent:${agentDescription || "(系统中尚无 agent)"}`,
       "硬约束:profileId 必须是上面列出的 agent id 之一,或 null;绝不要自己造 agent id,也不要建议未在上面模型表里出现的模型。",
+      "节点级执行配置(providerId/model/effort/permissionMode,均可省略;全部省略 = 跟随会话默认):",
+      "- 按任务轻重为每个节点挑选:重推理/架构类 effort 给高档,简单机械任务给低档;只在确需宽放文件编辑的节点给 permissionMode,拿不准就省略。",
+      "- 这几项只能取上面模型表与各厂商 effort/permissionMode 清单里的值,且 model/effort/permissionMode 必须与 providerId 在同一节点给出(providerId 缺省或不在线时它们会被忽略)。",
+      "- 已选 profileId 的节点一般不必再给节点级配置(profile 自带厂商/模型);仅当想让同一 profile 以不同模型或档位运行时才覆盖。",
       input.hint ? `补充要求:${input.hint}` : "",
       `【总体目标】\n${input.goal}`,
     ]
@@ -252,18 +304,24 @@ export function registerOrchestratorHandlers(ipcMain: IpcMain): void {
     if (!parsed) {
       return { tasks: [], error: "无法解析规划输出" };
     }
-    // 补齐 id(按顺序 t1..tN,deps 引用顺序号)。
-    const tasks = parsed.tasks.map((t, i) =>
-      TaskSpecInputSchema.parse({
+    // 补齐 id(按顺序 t1..tN,deps 引用顺序号);节点级执行配置经白名单钳制,
+    // 非法值一律回退「跟随会话默认」而不是让整份 plan 报废。
+    const tasks = parsed.tasks.map((t, i) => {
+      const exec = clampNodeExecConfig(t, surface, coordinator);
+      return TaskSpecInputSchema.parse({
         id: `t${i + 1}`,
         spec: t.spec,
         deps: t.deps ?? [],
         profileId: t.profileId ?? null,
+        providerId: exec.providerId,
+        model: exec.model,
+        effort: exec.effort,
+        permissionMode: exec.permissionMode,
         tags: t.tags ?? [],
         reviewOf: t.reviewOf ?? null,
         variantGroup: t.variantGroup ?? null,
-      }),
-    );
+      });
+    });
     return { tasks };
   });
 }
@@ -314,14 +372,20 @@ async function buildAvailableModelSurface(): Promise<Map<
   // Claude + 任何其他 provider: providerRegistry 给出 capabilities.builtinModels;
   // 用户自定义配置 = CustomModelStore.listPublic() 里的 models[].id(各 cfg
   // 平铺,多 cfg 时不再用合成 id —— AgentsPanel 同样做平铺)。
+  // registry 注册了全部三家(含 pi-sdk/codex-sdk),必须**并入**上面已水合
+  // 的桶而不是 set 覆盖 —— 覆盖会把 Pi/Codex 的真实模型清单打回各自的
+  // capabilities.builtinModels(两者都是空),planner 就看不到它们的模型了。
   for (const p of providerRegistry.list()) {
-    const builtin = new Set<string>();
-    const labels = new Map<string, string>();
+    const bucket = surface.get(p.id) ?? {
+      builtin: new Set<string>(),
+      custom: new Set<string>(),
+      builtinLabels: new Map<string, string>(),
+    };
     for (const m of p.capabilities.builtinModels ?? []) {
-      builtin.add(m.id);
-      labels.set(m.id, m.label ?? m.id);
+      bucket.builtin.add(m.id);
+      bucket.builtinLabels.set(m.id, m.label ?? m.id);
     }
-    surface.set(p.id, { builtin, custom: new Set(), builtinLabels: labels });
+    surface.set(p.id, bucket);
   }
   try {
     const customs = CustomModelStore.listPublic();
@@ -339,24 +403,98 @@ async function buildAvailableModelSurface(): Promise<Map<
   return surface;
 }
 
-/** 把白名单渲染成 prompt 一段(给规划者读)。"厂商 → 模型"分组。 */
+/** 把白名单渲染成 prompt 一段(给规划者读)。"厂商 → 模型"分组,附各厂商
+ *  声明的思考级别与权限模式(权限模式只列 AI 可指派的安全子集)。 */
 function describeSurface(
   surface: Awaited<ReturnType<typeof buildAvailableModelSurface>>,
 ): string {
   const lines: string[] = ["可用模型(providerId → models):"];
   for (const [pid, s] of surface) {
-    const builtinList = [...s.builtin].map((id) => s.builtinLabels?.get(id) ?? id);
+    // label ≠ id 时两者都给:label 给模型语义,id 是它必须写进 JSON 的值
+    // (Pi 的合成 id 形如 pi-remote/pi-large,只给 label 它就没法引用)。
+    const builtinList = [...s.builtin].map((id) => {
+      const label = s.builtinLabels?.get(id);
+      return label && label !== id ? `${label}(${id})` : id;
+    });
     const customList = [...s.custom];
-    const parts: string[] = [];
-    if (builtinList.length > 0) parts.push(`builtin: ${builtinList.join(", ") || "(空)"}`);
-    if (customList.length > 0) parts.push(`custom: ${customList.join(", ") || "(空)"}`);
-    if (parts.length === 0) {
+    if (builtinList.length === 0 && customList.length === 0) {
       lines.push(`  ${pid}: (当前没有可用模型,跳过此厂商)`);
-    } else {
-      lines.push(`  ${pid}: ${parts.join("; ")}`);
+      continue;
     }
+    const parts: string[] = [];
+    if (builtinList.length > 0) parts.push(`builtin: ${builtinList.join(", ")}`);
+    if (customList.length > 0) parts.push(`custom: ${customList.join(", ")}`);
+    const caps = providerRegistry.get(pid)?.capabilities;
+    const levels = caps?.thinkingLevels?.map((l) => l.value) ?? [];
+    if (levels.length > 0) parts.push(`effort 可选: ${levels.join("/")}`);
+    const modes = (caps?.permissionModes ?? [])
+      .filter((m) => !PLANNER_FORBIDDEN_PERMISSION_MODES.has(m.value))
+      .map((m) => m.value);
+    if (modes.length > 0) parts.push(`permissionMode 可选: ${modes.join("/")}`);
+    lines.push(`  ${pid}: ${parts.join("; ")}`);
   }
   return lines.join("\n");
+}
+
+/** AI 可给节点指派的权限模式黑名单(免审批类;值域以各 provider 声明为准,
+ *  这里只额外挡住危险项 —— bypassPermissions/claude·pi、full-access/codex,
+ *  dontAsk 是文件守卫侧的豁免档,同属免审批一并挡掉)。 */
+const PLANNER_FORBIDDEN_PERMISSION_MODES = new Set([
+  "bypassPermissions",
+  "dontAsk",
+  "full-access",
+]);
+
+/** 节点最终继承的模型面里,model 字段的合法值域。
+ *  - claude-sdk:协调者带 customModelId 时 worker 必然继承同一份网关配置,
+ *    官方别名落不进 resolveApiConfig(静默回第一个模型),所以只认该配置
+ *    内的模型 id;无网关(官方端点)才认 builtin 别名。
+ *  - 其余厂商:白名单即已水合的 builtin 桶(Pi 为 providerId/model 合成 id)。 */
+function plannerAllowedModels(
+  providerId: string,
+  coordinator: Session,
+  surface: Awaited<ReturnType<typeof buildAvailableModelSurface>>,
+): Set<string> {
+  if (providerId === "claude-sdk" && coordinator.customModelId) {
+    const cfg = CustomModelStore.listPublic().find((c) => c.id === coordinator.customModelId);
+    if (cfg) {
+      return new Set(cfg.models.map((m) => m.id).filter((id) => id.trim()));
+    }
+  }
+  const bucket = surface.get(providerId);
+  return new Set([...(bucket?.builtin ?? []), ...(bucket?.custom ?? [])]);
+}
+
+/** AI 提案节点级执行配置的白名单校验:任何不在合法值域内的字段一律钳成
+ *  null(跟随会话默认),绝不让整份 plan 报废 —— planner 可能是弱模型,
+ *  自报值只能信白名单。providerId 不在线时四项全弃;model/effort/
+ *  permissionMode 各自独立校验,一项无效只弃一项。 */
+function clampNodeExecConfig(
+  t: { providerId?: string | null; model?: string | null; effort?: string | null; permissionMode?: string | null },
+  surface: Awaited<ReturnType<typeof buildAvailableModelSurface>>,
+  coordinator: Session,
+): { providerId: string | null; model: string | null; effort: string | null; permissionMode: string | null } {
+  const none = { providerId: null, model: null, effort: null, permissionMode: null };
+  const pid = t.providerId?.trim() || null;
+  if (!pid || !surface.has(pid)) return none;
+  const caps = providerRegistry.get(pid)?.capabilities;
+
+  let model = t.model?.trim() || null;
+  if (model && !plannerAllowedModels(pid, coordinator, surface).has(model)) model = null;
+
+  let effort = t.effort?.trim() || null;
+  if (effort && !(caps?.thinkingLevels ?? []).some((l) => l.value === effort)) effort = null;
+
+  let permissionMode = t.permissionMode?.trim() || null;
+  if (
+    permissionMode &&
+    (PLANNER_FORBIDDEN_PERMISSION_MODES.has(permissionMode) ||
+      !(caps?.permissionModes ?? []).some((m) => m.value === permissionMode))
+  ) {
+    permissionMode = null;
+  }
+
+  return { providerId: pid, model, effort, permissionMode };
 }
 
 function sessionIdToProject(sessionId: string): string {
@@ -389,10 +527,11 @@ const PLANNER_SYSTEM_PROMPT = [
   "",
   "硬输出约束:",
   "1. 只输出 JSON 本身,不要任何前导语、问候、解释或代码围栏(``` ... ```)。",
-  "2. 字段:tasks 数组,每项 { spec, deps?, profileId, tags?, reviewOf?, variantGroup? }。",
+  "2. 字段:tasks 数组,每项 { spec, deps?, profileId?, providerId?, model?, effort?, permissionMode?, tags?, reviewOf?, variantGroup? }。",
   "3. deps 引用前面任务的编号(t1/t2/...按出现顺序);能并行的并行。",
   "4. profileId 必须是 user 消息列出的 agent id,或 null;绝不要自己造 agent id,也不要建议未列出的模型。",
   "5. 任务图深度 ≤ 4(spec/约束/产物路径/验收标准,避免子任务间隐式耦合)。",
+  "6. providerId/model/effort/permissionMode 只能取 user 消息列出的合法值;不确定就整项省略,省略 = 跟随会话默认。",
 ].join("\n");
 
 /** 直接 query() 调一次 SDK,走 buildCustomEnv → 用户的 Anthropic 兼容端点,

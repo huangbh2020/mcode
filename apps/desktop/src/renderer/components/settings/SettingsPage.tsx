@@ -91,7 +91,7 @@ const NAV_GROUPS: NavGroup[] = [
     labelKey: "settings.navGroup.ai",
     items: [
       { id: "custom-models", labelKey: "settings.nav.customModels", icon: IconRobot },
-      { id: "agents", labelKey: "orch.agents.title", icon: IconUsers },
+      { id: "agents", labelKey: "orch.agents.panelTitle", icon: IconUsers },
       { id: "runtimes", labelKey: "settings.nav.runtimes", icon: IconPackage },
       { id: "plugins", labelKey: "settings.nav.plugins", icon: IconPuzzle },
       { id: "skills", labelKey: "settings.nav.skills", icon: IconSparkles },

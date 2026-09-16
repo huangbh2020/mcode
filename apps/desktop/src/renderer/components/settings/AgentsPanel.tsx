@@ -1,5 +1,6 @@
 /**
- * Agent 角色管理面板(设置 → AI 能力 → Agent 角色)。
+ * 编排模板与设置面板(设置 → AI 能力 → 编排)。原 Agent 角色模块已随
+ * 画布化重构移除 —— 节点配置改为直接选 厂商/模型/权限/思考级别。
  *
  * 三段结构:
  *  ① 角色列表 + 编辑表单(仿 CustomModelsPanel 的 list|form 布局,但用
@@ -13,14 +14,11 @@ import { useEffect, useMemo, useState } from "react";
 import { cn } from "@renderer/lib/cn.js";
 import { useI18n } from "@renderer/lib/i18n/index.js";
 import { useSessionStore } from "@renderer/stores/sessionStore.js";
-import type { AgentProfile, AgentProfileTag, OrchestrationTemplate } from "@contracts/orchestration";
+import type { OrchestrationTemplate } from "@contracts/orchestration";
 import { PanelHeader } from "./PanelHeader.js";
 import { SettingsSection } from "./SettingsSection.js";
 import { SettingRow } from "./SettingRow.js";
-import { Button, ConfirmDialog, Input } from "@renderer/components/ui/index.js";
-
-const TAGS: AgentProfileTag[] = ["planning", "coding", "writing", "image", "review", "testing", "generic"];
-const COLORS = ["sky", "violet", "emerald", "amber", "pink", "rose", "cyan", "lime"] as const;
+import { Button, Input } from "@renderer/components/ui/index.js";
 
 const selectClass =
   "h-8 w-full rounded-md border border-edge bg-surface px-2 text-xs text-content outline-none focus:border-accent";
@@ -45,134 +43,22 @@ function FieldSelect({
   );
 }
 
-type Draft = AgentProfile;
-
 export function AgentsPanel() {
   const { t } = useI18n();
-  const agents = useSessionStore((s) => s.orchAgents);
-  const providers = useSessionStore((s) => s.providers);
   const templates = useSessionStore((s) => s.orchTemplates);
   const orchSettings = useSessionStore((s) => s.orchSettings);
   // Model surface: builtin (provider capabilities) ∪ user-defined custom models
   // (claude-sdk only — Pi/Codex models are loaded into pi/codexAvailableModels
   // and counted as builtins for their providers). New templates / pasted
   // profiles whose model id isn't on this list are dropped on save.
-  const customModels = useSessionStore((s) => s.customModels);
-  const piAvailableModels = useSessionStore((s) => s.piAvailableModels);
-  const codexAvailableModels = useSessionStore((s) => s.codexAvailableModels);
-  const reloadOrchAgents = useSessionStore((s) => s.reloadOrchAgents);
-  const saveOrchAgent = useSessionStore((s) => s.saveOrchAgent);
-  const deleteOrchAgent = useSessionStore((s) => s.deleteOrchAgent);
   const reloadOrchTemplates = useSessionStore((s) => s.reloadOrchTemplates);
   const saveOrchTemplate = useSessionStore((s) => s.saveOrchTemplate);
   const deleteOrchTemplate = useSessionStore((s) => s.deleteOrchTemplate);
   const saveOrchSettings = useSessionStore((s) => s.saveOrchSettings);
 
-  const [draft, setDraft] = useState<Draft | null>(null);
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState("");
-  const [pendingDelete, setPendingDelete] = useState<AgentProfile | null>(null);
-
   useEffect(() => {
-    void reloadOrchAgents();
     void reloadOrchTemplates();
-  }, [reloadOrchAgents, reloadOrchTemplates]);
-
-  const provider = providers.find((p) => p.id === draft?.providerId);
-  const modelOptions = useMemo(() => {
-    if (!provider) return [];
-    const builtin = provider.capabilities.builtinModels ?? [];
-    if (provider.id === "pi-sdk") {
-      return piAvailableModels.map((m) => ({ value: m.id, label: m.label ?? m.id }));
-    }
-    if (provider.id === "codex-sdk") {
-      return codexAvailableModels.map((m) => ({ value: m.id, label: m.label ?? m.id }));
-    }
-    // Claude (and any other provider) = builtin aliases ∪ every custom-model
-    // endpoint's gateway ids. Each entry is prefixed with the config name
-    // when there are multiple configs so the user can tell them apart.
-    const customEntries = customModels.flatMap((cfg) =>
-      cfg.models
-        .filter((m) => m.id.trim())
-        .map((m) => ({
-          value: m.id,
-          label:
-            customModels.length > 1
-              ? `${cfg.name} · ${m.id}${m.supports1m ? " (1m)" : ""}`
-              : `${m.id}${m.supports1m ? " (1m)" : ""}`,
-        })),
-    );
-    return [
-      ...builtin.map((m) => ({ value: m.id, label: m.label ?? m.id })),
-      ...customEntries,
-    ];
-  }, [provider, customModels, piAvailableModels, codexAvailableModels]);
-  const effortOptions = useMemo(() => {
-    const levels = provider?.capabilities.thinkingLevels ?? [];
-    return levels.length > 0
-      ? levels.map((l) => ({ value: l.value, label: l.label ?? l.value }))
-      : [{ value: "default", label: "default" }];
-  }, [provider]);
-  const permOptions = useMemo(() => {
-    const modes = provider?.capabilities.permissionModes ?? [];
-    return modes.length > 0
-      ? modes.map((m) => ({ value: m.value, label: m.label ?? m.value }))
-      : [{ value: "default", label: "default" }];
-  }, [provider]);
-
-  const update = <K extends keyof Draft>(key: K, v: Draft[K]) => {
-    setDraft((d) => (d ? { ...d, [key]: v } : d));
-    setError("");
-  };
-
-  const startNew = () => {
-    setDraft({
-      id: `agent_${Date.now().toString(36)}`,
-      name: "",
-      icon: "🤖",
-      color: "sky",
-      providerId: providers[0]?.id ?? "claude-sdk",
-      model: "default",
-      effort: "default",
-      systemPrompt: "",
-      allowedTools: [],
-      permissionMode: "default",
-      defaultWorktree: "none",
-      tags: ["generic"],
-      builtin: false,
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
-    });
-    setError("");
-  };
-
-  /** Validate the draft against the current model surface — a value not on
-   *  the list would route to a 404 at run time, so snap it back to "default"
-   *  before save (and surface a soft warning). */
-  const draftModelValid =
-    !draft ||
-    draft.model === "default" ||
-    modelOptions.some((o) => o.value === draft.model);
-  const save = async () => {
-    if (!draft) return;
-    if (!draft.name.trim()) {
-      setError(t("orch.agents.errName"));
-      return;
-    }
-    if (!draftModelValid) {
-      setError(t("orch.agents.errModel"));
-      return;
-    }
-    setSaving(true);
-    try {
-      await saveOrchAgent(draft);
-      setDraft(null);
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setSaving(false);
-    }
-  };
+  }, [reloadOrchTemplates]);
 
   const importTemplate = async () => {
     const input = document.createElement("input");
@@ -210,174 +96,8 @@ export function AgentsPanel() {
 
   return (
     <div className="mx-auto flex h-full w-full max-w-3xl min-h-0 flex-col">
-      <PanelHeader className="mb-3" title={t("orch.agents.title")} />
+      <PanelHeader className="mb-3" title={t("orch.agents.panelTitle")} />
       <div className="min-h-0 flex-1 space-y-5 overflow-y-auto pb-8">
-        {/* ── 角色列表 ── */}
-        <SettingsSection title={t("orch.agents.title")} desc={t("orch.agents.desc")}>
-          <div className="space-y-1 px-4 py-3">
-            {agents.length === 0 && (
-              <div className="py-2 text-xs text-content-subtle">{t("orch.agents.emptyList")}</div>
-            )}
-            {agents.map((a) => (
-              <div
-                key={a.id}
-                className={cn(
-                  "group flex items-center gap-2 rounded-md px-2 py-1.5 hover:bg-surface-hover",
-                  draft?.id === a.id && "bg-surface-hover",
-                )}
-              >
-                <span className="text-base leading-none">{a.icon || "🤖"}</span>
-                <span className="min-w-0 flex-1 truncate text-xs font-medium">{a.name}</span>
-                {a.builtin && (
-                  <span className="rounded bg-surface-muted px-1.5 py-0.5 text-[0.686em] text-content-subtle">
-                    {t("orch.agents.builtin")}
-                  </span>
-                )}
-                <span className="text-[0.686em] text-content-subtle">
-                  {a.providerId}/{a.model} · {a.tags.join("/")}
-                </span>
-                <Button variant="ghost" size="sm" onClick={() => setDraft({ ...a })}>
-                  {t("orch.agents.edit")}
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="text-danger"
-                  onClick={() => setPendingDelete(a)}
-                >
-                  {t("orch.agents.delete")}
-                </Button>
-              </div>
-            ))}
-            <Button variant="outline" size="sm" className="mt-2" onClick={startNew}>
-              + {t("orch.agents.new")}
-            </Button>
-          </div>
-
-          {/* ── 编辑表单 ── */}
-          {draft && (
-            <div className="space-y-3 border-t border-edge px-4 py-4">
-              <SettingRow title={t("orch.agents.name")}>
-                <Input
-                  value={draft.name}
-                  placeholder={t("orch.agents.namePh")}
-                  onChange={(e) => update("name", e.target.value)}
-                />
-              </SettingRow>
-              <SettingRow title={t("orch.agents.icon")}>
-                <Input value={draft.icon} onChange={(e) => update("icon", e.target.value)} />
-              </SettingRow>
-              <SettingRow title={t("orch.agents.color")} layout="vertical">
-                <div className="flex flex-wrap gap-1.5 pt-1">
-                  {COLORS.map((c) => (
-                    <button
-                      key={c}
-                      onClick={() => update("color", c)}
-                      className={cn(
-                        "h-5 w-5 rounded-full border-2",
-                        `bg-${c}-500/70`,
-                        draft.color === c ? "border-content" : "border-transparent",
-                      )}
-                      aria-label={c}
-                    />
-                  ))}
-                </div>
-              </SettingRow>
-              <SettingRow title={t("orch.agents.provider")}>
-                <FieldSelect
-                  value={draft.providerId}
-                  onChange={(v) =>
-                    setDraft((d) =>
-                      d
-                        ? {
-                            ...d,
-                            providerId: v,
-                            model: "default",
-                            effort: "default",
-                            permissionMode: "default",
-                          }
-                        : d,
-                    )
-                  }
-                  options={providers.map((p) => ({ value: p.id, label: p.displayName }))}
-                />
-              </SettingRow>
-              <SettingRow title={t("orch.agents.model")}>
-                <FieldSelect
-                  value={draftModelValid ? draft.model : "default"}
-                  onChange={(v) => update("model", v)}
-                  options={
-                    modelOptions.length > 0
-                      ? modelOptions
-                      : [{ value: "default", label: t("orch.agents.modelNone") }]
-                  }
-                />
-              </SettingRow>
-              <SettingRow title={t("orch.agents.effort")}>
-                <FieldSelect value={draft.effort} onChange={(v) => update("effort", v)} options={effortOptions} />
-              </SettingRow>
-              <SettingRow title={t("orch.agents.permission")}>
-                <FieldSelect
-                  value={draft.permissionMode}
-                  onChange={(v) => update("permissionMode", v)}
-                  options={permOptions}
-                />
-              </SettingRow>
-              <SettingRow title={t("orch.agents.worktree")}>
-                <FieldSelect
-                  value={draft.defaultWorktree}
-                  onChange={(v) => update("defaultWorktree", v as AgentProfile["defaultWorktree"])}
-                  options={[
-                    { value: "none", label: t("orch.agents.worktree.none") },
-                    { value: "active", label: t("orch.agents.worktree.active") },
-                    { value: "new", label: t("orch.agents.worktree.new") },
-                  ]}
-                />
-              </SettingRow>
-              <SettingRow title={t("orch.agents.tags")} layout="vertical">
-                <div className="flex flex-wrap gap-1.5 pt-1">
-                  {TAGS.map((tag) => {
-                    const on = draft.tags.includes(tag);
-                    return (
-                      <button
-                        key={tag}
-                        onClick={() =>
-                          update("tags", on ? draft.tags.filter((x) => x !== tag) : [...draft.tags, tag])
-                        }
-                        className={cn(
-                          "rounded-full border px-2 py-0.5 text-[0.686em]",
-                          on
-                            ? "border-accent bg-accent/15 text-accent"
-                            : "border-edge text-content-subtle hover:text-content",
-                        )}
-                      >
-                        {tag}
-                      </button>
-                    );
-                  })}
-                </div>
-              </SettingRow>
-              <SettingRow title={t("orch.agents.prompt")} layout="vertical">
-                <textarea
-                  className="min-h-[72px] w-full rounded-md border border-edge bg-surface px-2 py-1.5 text-xs outline-none focus:border-accent"
-                  value={draft.systemPrompt}
-                  placeholder={t("orch.agents.promptPh")}
-                  onChange={(e) => update("systemPrompt", e.target.value)}
-                />
-              </SettingRow>
-              {error && <div className="px-4 text-xs text-danger">{error}</div>}
-              <div className="flex justify-end gap-2 px-4">
-                <Button variant="ghost" size="sm" onClick={() => setDraft(null)}>
-                  {t("orch.wizard.cancel")}
-                </Button>
-                <Button size="sm" disabled={saving} onClick={() => void save()}>
-                  {t("orch.agents.save")}
-                </Button>
-              </div>
-            </div>
-          )}
-        </SettingsSection>
-
         {/* ── 模板 ── */}
         <SettingsSection title={t("orch.agents.templates")} desc={t("orch.agents.templatesDesc")}>
           <div className="space-y-1 px-4 py-3">
@@ -461,21 +181,6 @@ export function AgentsPanel() {
         </SettingsSection>
       </div>
 
-      <ConfirmDialog
-        open={!!pendingDelete}
-        title={t("orch.agents.delete")}
-        description={t("orch.agents.deleteConfirm")}
-        confirmText={t("orch.agents.delete")}
-        cancelText={t("orch.wizard.cancel")}
-        danger
-        onOpenChange={(open) => {
-          if (!open) setPendingDelete(null);
-        }}
-        onConfirm={() => {
-          if (pendingDelete) void deleteOrchAgent(pendingDelete.id);
-          setPendingDelete(null);
-        }}
-      />
     </div>
   );
 }
