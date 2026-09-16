@@ -37,6 +37,7 @@ export const en = {
   "orch.agents.tplImported": "Template imported",
   "orch.agents.tplImportFailed": "Failed to parse template file",
   // ── Settings ──
+  "orch.settings.title": "Orchestration",
   "orch.settings.triggerMode": "Auto orchestration trigger",
   "orch.settings.trigger.off": "Off",
   "orch.settings.trigger.ask": "Ask me (default)",
@@ -119,10 +120,6 @@ export const en = {
   "orch.menu.handoff": "Hand off to new session",
   "orch.menu.pickAgent": "Pick agent",
   // ── Composer ──
-  "orch.composer.orchestrate": "Orchestrate",
-  "orch.composer.coordinator": "Coordinator",
-  "orch.composer.coordinatorOn": "This session coordinates (has orchestration tools)",
-  "orch.composer.coordinatorOff": "When on, this session's agent can decompose and dispatch tasks",
   "orch.composer.pickAgent": "Pick @agent",
   "orch.composer.noAgents": "No roles yet — create them in Settings → Agent Roles",
   "orch.composer.mode.handoff": "Handoff",
@@ -137,6 +134,7 @@ export const en = {
   "orch.canvas.decomposing": "Decomposing into tasks — building the canvas…",
   "orch.canvas.decomposeFailed": "Auto-decompose failed: the planner returned no valid tasks. Try rephrasing or add tasks manually.",
   "orch.canvas.flowFailed": "Failed to create the orchestration run",
+  "orch.canvas.stopped": "Auto-decompose stopped (streamed model output is preserved above).",
   "orch.canvas.decomposed": "Decomposed into {n} tasks. Click a node to configure its agent / model / brief / dependencies on the right, then hit Run on the canvas.",
   "orch.canvas.status.planning": "Awaiting config · {n} tasks",
   "orch.canvas.status.running": "Running",
@@ -154,7 +152,7 @@ export const en = {
   "orch.canvas.addTask": "Task",
   "orch.canvas.stats": "{done}/{total} tasks · concurrency {concurrency} · budget {budget}",
   "orch.canvas.budgetNone": "none",
-  "orch.canvas.hint": "Click a node → configure / view output in the side panel · click empty space → overview",
+  "orch.canvas.hint": "Drag edges to adjust deps · click a node → configure / output in the side panel · click empty space → overview",
   "orch.canvas.legendPending": "Pending",
   "orch.canvas.legendRunning": "Running",
   "orch.canvas.legendDone": "Done",
@@ -212,6 +210,27 @@ export const en = {
   "orch.node.taskList": "Tasks (click for details)",
   "orch.node.rules": "Wave dispatch by deps · concurrency {n} · over-budget pauses with a decision gate",
   "orch.panel.rules": "Dispatch rules",
+
+  // ── Inline worker console on the canvas (live process output of running tasks) ──
+  "orch.console.title": "Live output",
+  "orch.console.waiting": "Waiting for worker output…",
+
+  // ── Canvas drag-to-rewire dependency edges ──
+  "orch.edge.hint": "Drag an edge's endpoints to rewire deps; drag onto a node port to create; drop on empty space to cancel",
+  "orch.edge.delete": "Delete dependency",
+  "orch.edge.dropSelf": "A task cannot depend on itself",
+  "orch.edge.dropLocked": "Task not editable (running/completed) — dependencies locked",
+  "orch.edge.dropCycle": "That connection would create a dependency cycle",
+  "orch.edge.dropDepth": "Dependency depth would exceed the {n}-layer limit",
+  "orch.edge.dropDup": "These two tasks already have this dependency",
+  "orch.edge.dropFailed": "Failed to update dependencies",
+  // Edge detail (right panel)
+  "orch.edge.panelTitle": "Dependency edge",
+  "orch.edge.upstreamLabel": "↑ Upstream: must finish before the downstream starts",
+  "orch.edge.downstreamLabel": "↓ Downstream: waits for the upstream",
+  "orch.edge.effect": "After deletion, {down} no longer waits for {up}; dispatch waves change accordingly.",
+  "orch.edge.deleteBtn": "Delete this edge",
+  "orch.canvas.addChild": "Add a child task under the selected node",
 
   // ── toast ──
   "orch.toast.workerDone": "Task {id} completed",

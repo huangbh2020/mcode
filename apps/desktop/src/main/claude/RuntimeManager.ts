@@ -430,9 +430,6 @@ class RuntimeManager {
         blocks: unknown[];
         editedMessageId?: string;
       };
-      /** Orchestration coordinator flag: inject the in-process orchestration
-       *  MCP toolset for this turn (main session acts as run coordinator). */
-      orchestration?: boolean;
     },
   ): Promise<void> {
     const rt = this.sessions.get(session.id);
@@ -611,8 +608,6 @@ class RuntimeManager {
       initialTodos: session.todos ?? undefined,
       // Tag the turn for per-turn artifacts (browser screenshot dirs).
       turnNumber: rt.turnCount,
-      // Orchestration coordinator toolset (see sendTurn input docs).
-      orchestration: input.orchestration,
     };
 
     const handle = await provider.startTurn(req, rt.ctx);

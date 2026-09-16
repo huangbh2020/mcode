@@ -14,6 +14,7 @@ import { api } from "@renderer/lib/api.js";
 import { MessageBlocks } from "@renderer/components/chat/MessageBlocks.js";
 import type { ChatMessage } from "@renderer/stores/sessionStore.js";
 import { useSessionStore } from "@renderer/stores/sessionStore.js";
+import { planEdgeDelete, taskEditable } from "@renderer/lib/orchGraph.js";
 import type { AgentProfile, Gate, OrchestrationRun, TaskNode } from "@contracts/orchestration";
 import type { CustomModelPublic } from "@contracts/customModel";
 import {
@@ -99,9 +100,9 @@ export function OrchPanel() {
     if (sessionId) void loadOrchRuns(sessionId);
   }, [sessionId, loadOrchRuns, runs === undefined]);
 
-  // 三级视图:节点详情(taskId 非空)→ 运行总览(点画布空白/整理卡进入)
-  // → 会话级 runs 列表。切会话时 selection 指向别的会话的 run 也能命中
-  // (跨桶查找),不再静默回落。
+  // 三级视图:节点详情(taskId 非空)→ 连线详情(edge 存在)→ 运行总览
+  // (点画布空白/整理卡进入)→ 会话级 runs 列表。切会话时 selection 指向
+  // 别的会话的 run 也能命中(跨桶查找),不再静默回落。
   if (selectedRun && selectedTask && selection?.taskId) {
     return (
       <NodeDetail
@@ -110,6 +111,22 @@ export function OrchPanel() {
         task={selectedTask}
       />
     );
+  }
+
+  // 连线详情:edge 指向的两端任一已不存在(被删/被重跑清空)→ 回落总览。
+  if (selectedRun && selection && !selection.taskId && selection.edge) {
+    const up = selectedRun.tasks.find((x) => x.id === selection.edge!.upstream);
+    const down = selectedRun.tasks.find((x) => x.id === selection.edge!.downstream);
+    if (up && down) {
+      return (
+        <EdgeDetail
+          key={`${selectedRun.id}:${up.id}->${down.id}`}
+          run={selectedRun}
+          upstream={up}
+          downstream={down}
+        />
+      );
+    }
   }
 
   if (selectedRun && selection && !selection.taskId) {
@@ -127,6 +144,116 @@ export function OrchPanel() {
           <RunCard key={run.id} run={run} />
         ))}
       </div>
+    </div>
+  );
+}
+
+/* ═══════════════════ 连线详情(点画布连线进入,可删除) ═══════════════════ */
+
+function EdgeDetail({ run, upstream, downstream }: { run: OrchestrationRun; upstream: TaskNode; downstream: TaskNode }) {
+  const { t } = useI18n();
+  const selectOrchNode = useSessionStore((s) => s.selectOrchNode);
+  const [error, setError] = useState("");
+  const [deleting, setDeleting] = useState(false);
+  // 依赖写在下游任务的 deps 里:删除 = 改下游任务 → 下游必须可编辑;
+  // 上游只被引用,已完成的上游不影响删除。
+  const editable = taskEditable(downstream);
+  const backToOverview = () => selectOrchNode(run.id, null);
+
+  const remove = async () => {
+    setDeleting(true);
+    setError("");
+    try {
+      const plan = planEdgeDelete(run.tasks, upstream.id, downstream.id);
+      for (const m of plan.mutations) {
+        await api.orch.updateTask({ runId: run.id, taskId: m.taskId, deps: m.deps });
+      }
+      // 连线已消失 → 回落运行总览。
+      backToOverview();
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setDeleting(false);
+    }
+  };
+
+  const statusChipCls = (s: TaskNode["status"]) =>
+    s === "completed" ? "text-accent" : s === "running" || s === "dispatched" ? "text-sky" : "text-content-subtle";
+
+  return (
+    <div className="h-full overflow-y-auto px-3 py-3" style={{ fontSize: "var(--right-panel-font-size)" }}>
+      {/* 头部:返回总览 + 标题 */}
+      <div className="mb-3 flex items-center gap-1.5">
+        <button
+          onClick={backToOverview}
+          className="rounded p-1 text-content-subtle hover:bg-surface-hover hover:text-content"
+          title={t("orch.node.overviewTitle")}
+        >
+          <IconArrowLeft size={14} />
+        </button>
+        <span className="min-w-0 flex-1 truncate font-medium">{t("orch.edge.panelTitle")}</span>
+      </div>
+
+      {/* 两端卡片:A → B */}
+      <div className="mb-3 space-y-1.5">
+        <button
+          className="w-full rounded-md border border-edge bg-surface-muted/50 px-2.5 py-2 text-left transition-colors hover:border-accent/50"
+          onClick={() => selectOrchNode(run.id, upstream.id)}
+        >
+          <div className="flex items-center gap-1.5">
+            <span className="font-mono text-[0.686em] font-bold text-content-muted">{upstream.id}</span>
+            <span className={cn("ml-auto text-[0.686em]", statusChipCls(upstream.status))}>
+              {t(`orch.status.${upstream.status}`)}
+            </span>
+          </div>
+          <div className="mt-0.5 truncate text-[0.7857em] font-medium" title={upstream.spec}>
+            {taskTitle(upstream)}
+          </div>
+        </button>
+        <div className="flex items-center gap-1.5 pl-3 text-[0.686em] text-content-subtle">
+          <span className="inline-block h-3 w-px bg-current" aria-hidden />
+          {t("orch.edge.upstreamLabel")}
+        </div>
+        <button
+          className="w-full rounded-md border border-edge bg-surface-muted/50 px-2.5 py-2 text-left transition-colors hover:border-accent/50"
+          onClick={() => selectOrchNode(run.id, downstream.id)}
+        >
+          <div className="flex items-center gap-1.5">
+            <span className="font-mono text-[0.686em] font-bold text-content-muted">{downstream.id}</span>
+            <span className={cn("ml-auto text-[0.686em]", statusChipCls(downstream.status))}>
+              {t(`orch.status.${downstream.status}`)}
+            </span>
+          </div>
+          <div className="mt-0.5 truncate text-[0.7857em] font-medium" title={downstream.spec}>
+            {taskTitle(downstream)}
+          </div>
+        </button>
+        <div className="pl-3 text-[0.686em] text-content-subtle">{t("orch.edge.downstreamLabel")}</div>
+      </div>
+
+      {/* 语义说明 */}
+      <div className="mb-3 rounded-md border border-edge bg-surface-muted/50 px-2.5 py-2 text-[0.7143em] leading-relaxed text-content-muted">
+        {t("orch.edge.effect", { up: upstream.id, down: downstream.id })}
+      </div>
+
+      {/* 删除 */}
+      <button
+        className={cn(
+          "w-full rounded-md border px-2.5 py-1.5 text-[0.7857em] font-medium transition-colors",
+          editable
+            ? "border-danger/50 text-danger hover:bg-danger/10 disabled:opacity-50"
+            : "cursor-not-allowed border-edge text-content-subtle",
+        )}
+        disabled={!editable || deleting}
+        onClick={() => void remove()}
+        title={editable ? undefined : t("orch.edge.dropLocked")}
+      >
+        {deleting ? "…" : t("orch.edge.deleteBtn")}
+      </button>
+      {!editable && (
+        <div className="mt-1.5 text-[0.686em] text-content-subtle">{t("orch.edge.dropLocked")}</div>
+      )}
+      {error && <div className="mt-1.5 text-[0.686em] text-danger">{error}</div>}
     </div>
   );
 }

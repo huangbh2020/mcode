@@ -35,6 +35,7 @@ if [[ -z "$ESBUILD" ]]; then ESBUILD="npx esbuild"; fi
   --alias:@main/providers/claude-sdk/customEnv.js=./scripts/orch-planner-clamp-smoke/stubs.ts \
   --alias:@main/providers/claude-sdk/sdkBinaryPath.js=./scripts/orch-planner-clamp-smoke/stubs.ts \
   --alias:@main/ipc/git.js=./scripts/orch-planner-clamp-smoke/stubs.ts \
+  --alias:@main/window.js=./scripts/orch-planner-clamp-smoke/stubs.ts \
   --alias:@main/lib/logger.js=./scripts/orch-planner-clamp-smoke/stubs.ts \
   --alias:@anthropic-ai/claude-agent-sdk=./scripts/orch-planner-clamp-smoke/stubs.ts \
   --outfile="$OUT/smoke.mjs" --log-level=error

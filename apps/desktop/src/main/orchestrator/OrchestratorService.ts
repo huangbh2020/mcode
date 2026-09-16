@@ -44,13 +44,12 @@ import { mergeBackWorktree } from "@main/lib/worktreeOps.js";
 import { awaitDb } from "@main/store/db.js";
 import { activeCount, readyTasks, runSettled, validateTaskGraph, downstreamTasks, BREAKER_LIMIT, estimateTokens } from "./taskStore.js";
 import { dispatchAgentTask, dispatchTerminalTask } from "./dispatcher.js";
-import { notifyRunDeleted, notifyTaskTerminal, bindSnapshotProvider, disposeWaiters, waitForTasks } from "./waiter.js";
+import { notifyRunDeleted, notifyTaskTerminal, bindSnapshotProvider, disposeWaiters } from "./waiter.js";
 import { ProfileStore, RoutingStats } from "./profiles.js";
 
 const RUNS_KEY = "orch.runs.v1";
 const SETTINGS_KEY = "orch.settings.v1";
 const MAX_PERSISTED_RUNS = 50;
-const WAIT_TIMEOUT_CAP_MS = 10 * 60_000;
 
 interface WorkerRef {
   runId: string;
@@ -369,7 +368,7 @@ class OrchestratorService {
       if (profileId) {
         for (const tag of task.tags.length > 0 ? task.tags : ["generic"]) RoutingStats.record(tag, profileId, true);
       }
-      // worker_done 推送(协调者工具的等待结果同源)。
+      // worker_done 推送(收件箱聚合同源)。
       this.emit({
         kind: "worker_done",
         payload: {
@@ -595,7 +594,7 @@ class OrchestratorService {
     this.emit({ kind: "run.updated", run });
   }
 
-  /* ── 控制面(IPC / 协调者工具共用) ── */
+  /* ── 控制面(IPC) ── */
 
   runControl(
     runId: string,
@@ -876,7 +875,7 @@ class OrchestratorService {
     return { ok: true };
   }
 
-  /* ── 协调者工具支撑(MCP 工具集调用) ── */
+  /* ── 控制面支撑(画布「＋ 任务」追加等) ── */
 
   /** 任务骨架附加到运行中的 run(协调者中途加任务)。 */
   addTasks(runId: string, tasks: TaskSpecInput[]): { run?: OrchestrationRun; error?: string } {
@@ -903,12 +902,6 @@ class OrchestratorService {
     this.touch(run);
     this.tick(run.id);
     return { run };
-  }
-
-  /** check-wait(事件驱动阻塞;超时=检查点)。 */
-  async waitTasks(runId: string, taskIds: string[], timeoutMs: number): Promise<TaskNode[] | null> {
-    const capped = Math.min(Math.max(1000, timeoutMs), WAIT_TIMEOUT_CAP_MS);
-    return waitForTasks(runId, taskIds, capped);
   }
 
   /* ── 断点续跑(boot reconcile) ── */

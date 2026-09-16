@@ -3,8 +3,7 @@
  *
  * ① 「自动编排」开关:开启后发送的想法走 画布编排流(拆解→聊天流内画布
  *    →节点配置→运行),不再进入本会话的模型回合;
- * ② 协调者开关:本会话下一轮注入编排 MCP 工具集(主 agent 当协调者);
- * ③ @@agent 目标簇:@@ 选择器挑中的角色 chips,含 移交/编排 模式切换
+ * ② @@agent 目标簇:@@ 选择器挑中的角色 chips,含 移交/编排 模式切换
  *    与逐个移除 —— 发送时由 sendPrompt 的编排拦截消费。
  */
 import { useState } from "react";
@@ -12,7 +11,7 @@ import { cn } from "@renderer/lib/cn.js";
 import { useI18n } from "@renderer/lib/i18n/index.js";
 import { useSessionStore } from "@renderer/stores/sessionStore.js";
 import { isElectron } from "@renderer/lib/platform.js";
-import { IconSparkles, IconX, IconUsers } from "@renderer/lib/icons.js";
+import { IconSparkles, IconX } from "@renderer/lib/icons.js";
 
 export function OrchComposerChips({ sessionId }: { sessionId: string }) {
   const { t } = useI18n();
@@ -25,8 +24,6 @@ export function OrchComposerChips({ sessionId }: { sessionId: string }) {
 function OrchComposerChipsInner({ sessionId, t }: { sessionId: string; t: ReturnType<typeof useI18n>["t"] }) {
   const auto = useSessionStore((s) => !!s.orchAutoBySession[sessionId]);
   const setOrchAuto = useSessionStore((s) => s.setOrchAuto);
-  const coordinator = useSessionStore((s) => !!s.orchCoordinatorBySession[sessionId]);
-  const setOrchCoordinator = useSessionStore((s) => s.setOrchCoordinator);
   const targets = useSessionStore((s) => s.orchTargetsBySession[sessionId] ?? EMPTY_TARGETS);
   const agents = useSessionStore((s) => s.orchAgents);
   const removeOrchTarget = useSessionStore((s) => s.removeOrchTarget);
@@ -65,22 +62,6 @@ function OrchComposerChipsInner({ sessionId, t }: { sessionId: string; t: Return
             )}
           />
         </span>
-      </button>
-
-      {/* 协调者开关 */}
-      <button
-        type="button"
-        onClick={() => setOrchCoordinator(sessionId, !coordinator)}
-        title={coordinator ? t("orch.composer.coordinatorOn") : t("orch.composer.coordinatorOff")}
-        className={cn(
-          "flex h-6 items-center gap-1 rounded-md border px-1.5 text-[11px] transition-colors",
-          coordinator
-            ? "border-accent bg-accent/15 text-accent"
-            : "border-edge text-content-muted hover:border-accent hover:text-accent",
-        )}
-      >
-        <IconUsers size={12} />
-        {coordinator ? t("orch.composer.coordinator") : t("orch.composer.orchestrate")}
       </button>
 
       {/* @@agent 目标簇 */}

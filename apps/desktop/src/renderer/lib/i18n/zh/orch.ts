@@ -38,6 +38,7 @@ export const zh = {
   "orch.agents.tplImported": "模板已导入",
   "orch.agents.tplImportFailed": "模板文件解析失败",
   // ── 编排设置 ──
+  "orch.settings.title": "编排",
   "orch.settings.triggerMode": "自动编排触发",
   "orch.settings.trigger.off": "关闭",
   "orch.settings.trigger.ask": "询问我(默认)",
@@ -120,10 +121,6 @@ export const zh = {
   "orch.menu.handoff": "移交给新会话",
   "orch.menu.pickAgent": "选择 agent",
   // ── Composer ──
-  "orch.composer.orchestrate": "编排",
-  "orch.composer.coordinator": "协调者",
-  "orch.composer.coordinatorOn": "本会话为协调者(带编排工具)",
-  "orch.composer.coordinatorOff": "开启后本会话的 agent 可拆解并派发任务",
   "orch.composer.pickAgent": "选择 @agent",
   "orch.composer.noAgents": "还没有角色,去设置 → Agent 角色 创建",
   "orch.composer.mode.handoff": "移交",
@@ -138,6 +135,7 @@ export const zh = {
   "orch.canvas.decomposing": "正在拆解任务,生成编排画布…",
   "orch.canvas.decomposeFailed": "自动拆解失败:规划者没有返回有效任务,请换个说法重试或手动添加任务。",
   "orch.canvas.flowFailed": "编排创建失败",
+  "orch.canvas.stopped": "已停止自动拆解(已流出的模型输出保留在上方)。",
   "orch.canvas.decomposed": "已拆解为 {n} 个任务。点击节点可在右侧配置 agent / 模型 / 简报 / 依赖,配置完成后点画布右上角「运行」开始执行。",
   "orch.canvas.status.planning": "待配置 · 已拆解 {n} 任务",
   "orch.canvas.status.running": "运行中",
@@ -155,7 +153,7 @@ export const zh = {
   "orch.canvas.addTask": "任务",
   "orch.canvas.stats": "{done}/{total} 任务 · 并发 {concurrency} · 预算 {budget}",
   "orch.canvas.budgetNone": "不限",
-  "orch.canvas.hint": "点击节点 → 右栏配置 / 查看输出 · 点空白处 → 运行总览",
+  "orch.canvas.hint": "拖动连线调整依赖 · 点击节点 → 右栏配置 / 查看输出 · 点空白处 → 运行总览",
   "orch.canvas.legendPending": "待运行",
   "orch.canvas.legendRunning": "运行中",
   "orch.canvas.legendDone": "完成",
@@ -213,6 +211,27 @@ export const zh = {
   "orch.node.taskList": "任务清单(点击查看详情)",
   "orch.node.rules": "按依赖波次派发 · 并发上限 {n} · 预算超限自动暂停并生成决策门",
   "orch.panel.rules": "派发规则",
+
+  // ── 画布内联 worker 控制台(运行中任务的实时过程输出)──
+  "orch.console.title": "实时输出",
+  "orch.console.waiting": "等待 worker 输出…",
+
+  // ── 画布拖线编辑依赖 ──
+  "orch.edge.hint": "拖动连线两端可调整依赖;拖到节点圆点可新建;拖离空白回弹",
+  "orch.edge.delete": "删除依赖",
+  "orch.edge.dropSelf": "不能依赖自身",
+  "orch.edge.dropLocked": "任务不可编辑(运行中/已完成),依赖已锁定",
+  "orch.edge.dropCycle": "这样连会形成依赖环",
+  "orch.edge.dropDepth": "依赖深度超过上限 {n} 层",
+  "orch.edge.dropDup": "两个任务之间已存在这条依赖",
+  "orch.edge.dropFailed": "依赖调整失败",
+  // 连线详情(右栏)
+  "orch.edge.panelTitle": "依赖连线",
+  "orch.edge.upstreamLabel": "↑ 上游:先完成才轮到下游",
+  "orch.edge.downstreamLabel": "↓ 下游:等待上游完成",
+  "orch.edge.effect": "删除后,{down} 将不再等待 {up} 完成,执行波次随之改变。",
+  "orch.edge.deleteBtn": "删除这条连线",
+  "orch.canvas.addChild": "在选中节点下新增下级任务",
 
   // ── toast ──
   "orch.toast.workerDone": "任务 {id} 完成",

@@ -1415,7 +1415,6 @@ export interface SessionState {
   orchWorkersById: Record<string, Session>;
   /** Composer 编排开关 per session: when on, the next sendPrompt turns this
    *  session into a coordinator (per-turn `orchestration` flag → MCP tools). */
-  orchCoordinatorBySession: Record<string, boolean>;
   /** @agent picker targets per session (composer chip cluster). 1 target in
    *  "handoff" mode = full handoff; ≥2 (or "orchestrate" mode) opens the
    *  wizard prefilled. Cleared after the send resolves. */
@@ -1432,11 +1431,19 @@ export interface SessionState {
    *  内存态,默认关(对齐协调者开关的记忆方式)。 */
   orchAutoBySession: Record<string, boolean>;
   /** 画布/面板当前选中(右栏 orch 页签):taskId 非空 = 节点详情,
-   *  taskId=null = 该 run 的运行总览(点画布空白进入)。null = 会话级
-   *  runs 列表(closeOrchSelection 退回)。 */
-  orchNodeSelection: { runId: string; taskId: string | null } | null;
+   *  taskId=null 且 edge 缺省 = 该 run 的运行总览(点画布空白进入),
+   *  taskId=null 且 edge 存在 = 依赖连线详情(点画布连线进入)。
+   *  null = 会话级 runs 列表(closeOrchSelection 退回)。 */
+  orchNodeSelection: {
+    runId: string;
+    taskId: string | null;
+    edge?: { upstream: string; downstream: string };
+  } | null;
   /** 拆解进行中 per session:发送钮禁用 + 占位指示。 */
   orchDecomposingBySession: Record<string, boolean>;
+  /** 用户在拆解期间点了停止(interrupt 里置位):编排流的 catch 据此渲染
+   *  中性的「已停止」卡片而不是「编排创建失败」错误卡;finally 清除。 */
+  orchStoppedBySession: Record<string, boolean>;
 
   // actions
   init: () => Promise<void>;
@@ -2045,7 +2052,6 @@ export interface SessionState {
   /** Wizard auto-decompose (model-driven goal → task proposal). */
   orchProposePlan: (goal: string, opts?: { hint?: string; plannerProfileId?: string }) => Promise<TaskSpecInput[] | null>;
   /** Composer 编排开关 per session (coordinator toolset on next send). */
-  setOrchCoordinator: (sessionId: string, on: boolean) => void;
   /** Choose the planner profile the orchestration wizard uses for auto-
    *  decompose (orch.proposePlan). Persists per-session so the user's
    *  pick survives across wizard opens. */
@@ -2060,8 +2066,11 @@ export interface SessionState {
   /** 自动编排开关 per session(开启后发送的想法走画布编排流)。 */
   setOrchAuto: (sessionId: string, on: boolean) => void;
   /** 选中画布节点/运行:taskId 非空 = 节点详情,taskId=null = 该 run 的
-   *  运行总览(点画布空白进入)。右栏 orch 页签随之聚焦。 */
+   *  运行总览(点画布空白进入)。右栏 orch 页签随之聚焦。选中节点会清掉
+   *  连线选中(两者互斥)。 */
   selectOrchNode: (runId: string, taskId: string | null) => void;
+  /** 选中画布依赖连线(点连线):右栏 orch 页签进入连线详情(可删除)。 */
+  selectOrchEdge: (runId: string, upstream: string, downstream: string) => void;
   /** 退出节点详情/运行总览,回到会话级 runs 列表。 */
   closeOrchSelection: () => void;
   /** 画布水合:run 不在内存(会话重开/被挤出 per-session 列表)时按 id 拉取
@@ -2973,8 +2982,6 @@ function dropSessionBuckets(s: SessionState, id: string) {
   // Orchestration per-session buckets (coordinator toggle, @agent targets,
   // runs list view). Main keeps the runs themselves — the panel re-fetches on
   // demand if the session somehow returns.
-  const orchCoordinatorBySession = { ...s.orchCoordinatorBySession };
-  delete orchCoordinatorBySession[id];
   const orchTargetsBySession = { ...s.orchTargetsBySession };
   delete orchTargetsBySession[id];
   const orchPlannerBySession = { ...s.orchPlannerBySession };
@@ -2983,6 +2990,8 @@ function dropSessionBuckets(s: SessionState, id: string) {
   delete orchRunsBySession[id];
   const orchWorkersById = { ...s.orchWorkersById };
   delete orchWorkersById[id];
+  const orchStoppedBySession = { ...s.orchStoppedBySession };
+  delete orchStoppedBySession[id];
   const pendingApprovals = s.pendingApprovals.filter((p) => p.sessionId !== id);
   return {
     messagesBySession,
@@ -3014,10 +3023,10 @@ function dropSessionBuckets(s: SessionState, id: string) {
     planApprovalDraftBySession,
     composerDraftBySession,
     sideChatSeedBySession,
-    orchCoordinatorBySession,
     orchTargetsBySession,
     orchPlannerBySession,
     orchRunsBySession,
+    orchStoppedBySession,
     orchWorkersById,
     pendingApprovals,
   };
@@ -4476,6 +4485,18 @@ function clearSessionDeltas(sessionId: string): void {
   }
 }
 
+/* ─── Orchestrator planner stream (自动拆解的过程流) ───
+ *
+ * planner 是 main 侧的一次无头 query()(无 session 行),增量经 orch:event
+ * 的 planner.delta 推来。渲染端把它们合并进「拆解中」占位气泡 —— 占位消息
+ * 只在内存(完成/失败时被同 id 消息原位替换),所以流式内容天然不落库。
+ * hostId 由 startOrchestrationFlow 登记,收尾注销;每个会话同时至多一场
+ * 拆解(orchDecomposingBySession 门控),map 键即 sessionId。 */
+const plannerHostIds = new Map<string, string>();
+/** 已收到过增量的会话:首个增量到达时摘掉占位气泡里的静态「拆解中…」
+ *  文本块,之后的段(deltaBuf 节流后)直接长在空消息上。 */
+const plannerStreaming = new Set<string>();
+
 /** Event types that append visible content to the transcript. While a session
  *  is interrupted these are ignored so the aborted turn's late events can't
  *  keep rendering text / tools / images after the Stop click. Status events
@@ -4733,12 +4754,12 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   orchSettings: null,
   orchRunsBySession: {},
   orchWorkersById: {},
-  orchCoordinatorBySession: {},
   orchTargetsBySession: {},
   orchPlannerBySession: {},
   orchAutoBySession: {},
   orchNodeSelection: null,
   orchDecomposingBySession: {},
+  orchStoppedBySession: {},
   _orchSubscribed: false,
   // IDE right-panel. Editor state is per-project (keyed by projectId);
   // init() hydrates from the settings table. rightPanelTab / ideEditorMode
@@ -6892,7 +6913,6 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           userMessage: { id: userMsg.id, createdAt: userMsg.createdAt, blocks: userMsg.blocks },
           // Orchestration coordinator flag (composer 编排开关): injects the
           // in-process orchestrator MCP toolset for this turn.
-          orchestration: !!get().orchCoordinatorBySession[sessionId],
         }));
       } catch (err) {
         // The IPC itself rejected (not a streamed `error` event). Without
@@ -7153,6 +7173,16 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     const sessionId = sessionIdArg ?? get().activeSessionId;
     if (!sessionId) return;
     await api.claude.interrupt({ sessionId });
+    // 编排拆解中的停止:拆解期间会话同样显示停止键(running 旗标),这里
+    // 必须真正中止 main 侧的 planner 无头 query —— 否则它会在后台继续跑,
+    // 撞上超时后把「已停止」的会话又替换成失败卡。置停止旗标供编排流的
+    // catch 区分「用户停止」与「真失败」(渲染中性卡而非错误卡)。
+    if (get().orchDecomposingBySession[sessionId]) {
+      set((s) => ({ orchStoppedBySession: { ...s.orchStoppedBySession, [sessionId]: true } }));
+      api.orch.abortPlan({ sessionId }).catch(() => {
+        /* web/mobile shim 无此通道;移动端不渲染编排入口,不会走到这里 */
+      });
+    }
     // Drop this session's buffered deltas: after abort, flushFinal may emit a
     // few straggler text.delta/thinking while the generator unwinds, but the
     // user asked to STOP — none of it should reach the page. Combined with
@@ -10347,6 +10377,34 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         pushToastLite("info", translate(get().locale, "orch.toast.gate"));
         return;
       }
+      case "planner.delta": {
+        // 合并进「拆解中」占位气泡(无 turnMeta,flushDeltas 的冻结守卫不拦;
+        // deltaBuf 自适应节流与普通回合流同款)。晚到的增量(收尾已替换成
+        // 画布/错误卡并注销 host)在此静默丢弃。
+        const hostId = plannerHostIds.get(event.sessionId);
+        if (!hostId || !event.text) return;
+        const list = get().messagesBySession[event.sessionId] ?? [];
+        if (!list.some((m) => m.id === hostId)) return;
+        if (!plannerStreaming.has(event.sessionId)) {
+          plannerStreaming.add(event.sessionId);
+          set((s) => ({
+            messagesBySession: {
+              ...s.messagesBySession,
+              [event.sessionId]: (s.messagesBySession[event.sessionId] ?? []).map((m) =>
+                m.id === hostId ? { ...m, blocks: [] } : m,
+              ),
+            },
+          }));
+        }
+        let entry = deltaBuf.get(`${event.sessionId}:${hostId}`);
+        if (!entry) {
+          entry = { sessionId: event.sessionId, messageId: hostId, segs: [] };
+          deltaBuf.set(`${event.sessionId}:${hostId}`, entry);
+        }
+        appendDelta(entry, event.seg, event.text);
+        scheduleDeltaFlush();
+        return;
+      }
       case "gate.resolved":
       case "suggest":
         return;
@@ -10448,10 +10506,6 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     }
   },
 
-  setOrchCoordinator: (sessionId, on) => {
-    set((s) => ({ orchCoordinatorBySession: { ...s.orchCoordinatorBySession, [sessionId]: on } }));
-  },
-
   setOrchPlanner: (sessionId, profileId) => {
     set((s) => ({ orchPlannerBySession: { ...s.orchPlannerBySession, [sessionId]: profileId } }));
   },
@@ -10519,10 +10573,20 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     // taskId=null 保留 runId —— 那是「该 run 的运行总览」(点画布空白),
     // 不是清空;完全退出用 closeOrchSelection。
     // 选中节点即打开右栏(面板收起时点节点要能立刻看到详情)。
+    // 节点与连线选中互斥:选节点清掉 edge 字段。
     set((s) => ({
       orchNodeSelection: { runId, taskId },
       ...(taskId ? { rightOpen: true } : {}),
     }));
+    get().setRightPanelTab("orch");
+  },
+
+  selectOrchEdge: (runId, upstream, downstream) => {
+    // 点连线:右栏进入连线详情(与节点详情同级,taskId 恒空 + edge 字段)。
+    set({
+      orchNodeSelection: { runId, taskId: null, edge: { upstream, downstream } },
+      rightOpen: true,
+    });
     get().setRightPanelTab("orch");
   },
 
@@ -10585,6 +10649,11 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     }
 
     // ② 占位「拆解中」(仅内存;完成/失败时被同 id 消息原位替换)。
+    //    消息头与普通回合同款(turnMeta → LiveLedgerHead/TurnPanel:模型 ·
+    //    运行状态 · 开始时间 · 用时)。编排流不走 RuntimeEvent 管线,没有
+    //    store 在首个 delta 打点,这里手工锚定:startedAt 取用户消息时刻,
+    //    model 取发送模型锚点(与 sendPrompt 同一 resolveSendModel 链)。
+    const modelAnchor = resolveSendModel(get())?.model;
     const hostId = `orch_host_${userMsg.id}`;
     const placeholder: ChatMessage = {
       id: hostId,
@@ -10592,6 +10661,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       role: "assistant",
       blocks: [{ kind: "text", text: translate(locale, "orch.canvas.decomposing") }],
       createdAt: Date.now(),
+      turnMeta: { startedAt: userMsg.createdAt, model: modelAnchor },
     };
     const appendPlaceholder = (s: SessionState) => ({
       messagesBySession: {
@@ -10599,8 +10669,22 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         [sessionId]: [...(s.messagesBySession[sessionId] ?? []), placeholder],
       },
       orchDecomposingBySession: { ...s.orchDecomposingBySession, [sessionId]: true },
+      // running 旗标:拆解期间会话按「运行中」呈现(流式台账 + 停止键 +
+      // 侧栏运行态),planner 流像普通回合一样平铺进台账体。结束时在
+      // finally 清旗标;用户中途点停止走 interrupt(),同样冻结 + 解锁。
+      runningBySession: { ...s.runningBySession, [sessionId]: true },
+      turnErrorBySession: { ...s.turnErrorBySession, [sessionId]: false },
+      ...(modelAnchor
+        ? {
+            runningTurnStartedAt: { ...s.runningTurnStartedAt, [sessionId]: userMsg.createdAt },
+            runningTurnModelBySession: { ...s.runningTurnModelBySession, [sessionId]: modelAnchor },
+          }
+        : {}),
     });
     set(appendPlaceholder);
+    // planner 过程流的落点(ingestOrchEvent 的 planner.delta 消费)。
+    plannerHostIds.set(sessionId, hostId);
+    plannerStreaming.delete(sessionId);
 
     const replaceHost = (msg: ChatMessage) => {
       set((s) => ({
@@ -10612,6 +10696,20 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       void api.session.upsertMessages({ sessionId, messages: toRecords(sessionId, [msg]) });
     };
 
+    /** 定格 planner 流:冲掉增量缓冲、注销落点(此后晚到增量直接丢弃,
+     *  两条 await 之间的 IPC 增量也无法再插进来),并快照已流出的思考/正文
+     *  块 —— 模型输出要像普通会话一样完整保留,画布只是追加在其后的特殊
+     *  控件。@agents 目标路径没有模型流,得空数组。同步执行,不可加 await。 */
+    const freezePlannerStream = (): Block[] => {
+      forceDeltaFlush();
+      plannerHostIds.delete(sessionId);
+      if (!plannerStreaming.has(sessionId)) return [];
+      return get().messagesBySession[sessionId]?.find((m) => m.id === hostId)?.blocks ?? [];
+    };
+
+    // planner 实际生效的模型(proposePlan 回传);声明在 try 外,失败路径
+    // 的收尾头部也能取到已解析值。
+    let resolvedPlannerModel: string | undefined;
     try {
       // ③ 拆解(@agents 目标模式跳过模型拆解,按目标造骨架)。
       let tasks: TaskSpecInput[];
@@ -10633,7 +10731,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           runner: "agent" as const,
         }));
       } else {
-        const { tasks: proposed, error } = await api.orch.proposePlan({
+        const { tasks: proposed, error, model: plannerModel } = await api.orch.proposePlan({
           sessionId,
           goal: prompt,
           plannerProfileId: get().orchPlannerBySession[sessionId],
@@ -10641,7 +10739,13 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         if (error) throw new Error(error);
         if (!proposed || proposed.length === 0) throw new Error(translate(locale, "orch.canvas.decomposeFailed"));
         tasks = proposed;
+        // 主进程回传 planner 实际生效的模型(可能与发送锚点不同:网关配置
+        // 的默认模型 ≠ composer 选中的模型),消息头随之校正。
+        resolvedPlannerModel = plannerModel;
       }
+      // ③' 定格模型输出 —— 必须在任何后续 await 之前快照,防止创建 run 的
+      //     往返期间 straggler 增量落在画布块之后。
+      const streamedBlocks = freezePlannerStream();
       // ④ 创建 run,停在 planning —— 等用户在画布上配置后手动运行。
       const { run } = await api.orch.createRun({
         sessionId,
@@ -10656,34 +10760,80 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         if (list.some((r) => r.id === run.id)) return {};
         return { orchRunsBySession: { ...s.orchRunsBySession, [sessionId]: [run, ...list] } };
       });
-      // ⑤ 画布块消息原位替换占位并落库;右栏打开该 run 的运行总览
-      //    (对齐原型的 spawnRun → openRunOverview)。
+      // ⑤ 原位替换占位并落库:模型输出(思考 + 正文)完整保留在前,画布
+      //    作为追加的特殊控件块,摘要说明跟在其后 —— 与普通会话的消息结构
+      //    一致;右栏打开该 run 的运行总览。turnMeta 收尾(endedAt 定格
+      //    「用时」,model 校正为 planner 实际模型)—— 头部翻成回执行。
       replaceHost({
         id: hostId,
         sessionId,
         role: "assistant",
         blocks: [
+          ...streamedBlocks,
           { kind: "orch-canvas", canvasId: `orch-${run.id}`, runId: run.id, goal: prompt },
           { kind: "text", text: translate(locale, "orch.canvas.decomposed", { n: run.tasks.length }) },
         ],
         createdAt: Date.now(),
+        turnMeta: {
+          startedAt: userMsg.createdAt,
+          model: resolvedPlannerModel ?? modelAnchor,
+          endedAt: Date.now(),
+        },
       });
       get().selectOrchNode(run.id, null);
     } catch (err) {
+      // 失败同样保留已流出的模型输出,说明追加在其后(不吞内容)。用户在
+      // 拆解期间点过停止 → 中性「已停止」卡,不渲染成失败。
+      const streamedBlocks = freezePlannerStream();
       const message = err instanceof Error ? err.message : String(err);
+      const stoppedByUser = !!get().orchStoppedBySession[sessionId];
       replaceHost({
         id: hostId,
         sessionId,
         role: "assistant",
-        blocks: [{ kind: "error", message: `${translate(locale, "orch.canvas.flowFailed")}\n${message}` }],
+        blocks: [
+          ...streamedBlocks,
+          stoppedByUser
+            ? { kind: "text", text: translate(locale, "orch.canvas.stopped") }
+            : { kind: "error", message: `${translate(locale, "orch.canvas.flowFailed")}\n${message}` },
+        ],
         createdAt: Date.now(),
+        turnMeta: {
+          startedAt: userMsg.createdAt,
+          model: resolvedPlannerModel ?? modelAnchor,
+          endedAt: Date.now(),
+        },
       });
     } finally {
+      // 注销 planner 流落点 + 清残留缓冲(晚到增量不再落到已替换的消息上)。
+      plannerHostIds.delete(sessionId);
+      plannerStreaming.delete(sessionId);
+      for (const [key, entry] of deltaBuf) {
+        if (entry.sessionId === sessionId && entry.messageId.startsWith("orch_host_")) deltaBuf.delete(key);
+      }
       set((s) => {
         const next = { ...s.orchDecomposingBySession };
         delete next[sessionId];
-        return { orchDecomposingBySession: next };
+        const stopped = { ...s.orchStoppedBySession };
+        delete stopped[sessionId];
+        // 拆解结束:释放 running 旗标与发送时刻锚点(镜像普通回合 turn.done
+        // 的清理;用户中途点停止时 interrupt() 已先清过,这里幂等)。
+        const runningBySession = { ...s.runningBySession, [sessionId]: false };
+        const runningTurnStartedAt = { ...s.runningTurnStartedAt };
+        delete runningTurnStartedAt[sessionId];
+        const runningTurnModelBySession = { ...s.runningTurnModelBySession };
+        delete runningTurnModelBySession[sessionId];
+        return {
+          orchDecomposingBySession: next,
+          orchStoppedBySession: stopped,
+          runningBySession,
+          runningTurnStartedAt,
+          runningTurnModelBySession,
+        };
       });
+      // 编排流不产生 turn.done,没有既有的排空触发点;队列里可能在拆解期间
+      // 攒了排队消息,这里补一次(内部自检空闲,非空闲时是 no-op)。
+      get().drainPromptQueueIfIdle(sessionId);
     }
   },
 

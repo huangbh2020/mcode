@@ -317,4 +317,7 @@ export type OrchestratorEvent =
   | { kind: "gate.created"; runId: string; gate: Gate }
   | { kind: "gate.resolved"; runId: string; gateId: string; resolution: string }
   | { kind: "worker_done"; payload: WorkerDonePayload }
-  | { kind: "suggest"; sessionId: string; reason: string };
+  | { kind: "suggest"; sessionId: string; reason: string }
+  /** 自动拆解(planner)的过程流:无头 query() 的 text/thinking 增量,
+   *  渲染端合并进「拆解中」占位气泡 —— 编排流的过程可观测性。 */
+  | { kind: "planner.delta"; sessionId: string; seg: "text" | "thinking"; text: string };

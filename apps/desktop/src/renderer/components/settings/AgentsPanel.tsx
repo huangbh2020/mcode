@@ -130,7 +130,7 @@ export function AgentsPanel() {
         </SettingsSection>
 
         {/* ── 编排设置 ── */}
-        <SettingsSection title={t("orch.composer.orchestrate")}>
+        <SettingsSection title={t("orch.settings.title")}>
           <SettingRow title={t("orch.settings.triggerMode")} desc={t("orch.settings.triggerHint")}>
             <FieldSelect
               value={orchSettings?.triggerMode ?? "ask"}

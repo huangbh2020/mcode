@@ -38,7 +38,6 @@ import { getOutputStyleSetting } from "@main/lib/outputStyleConfig.js";
 import { getEnabledPlugins, getPluginMcpServers } from "@main/plugins/pluginManager.js";
 import { resolveSubagentModelValue } from "@main/lib/subagentModel.js";
 import { normalizeBashCommand } from "@main/lib/msysPath.js";
-import { buildOrchestratorMcpServerAsync } from "@main/orchestrator/coordinatorTools.js";
 import {
   browserList,
   browserNavigate,
@@ -544,14 +543,6 @@ function isReadOnlyBrowserTool(toolName: string): boolean {
   return BROWSER_READONLY_SUFFIXES.has(toolName.slice(BROWSER_MCP_PREFIX.length));
 }
 
-/** The orchestration coordinator MCP server name — tools surface to canUseTool
- *  as `mcp__mcode-orchestrator__<name>`. All of them are control-plane ops
- *  (create runs / wait / read state / resolve gates the user already sees in
- *  the DAG panel), so they are auto-approved in every mode: the actual
- *  dangerous work happens in the WORKER sessions, each with its own
- *  permission mode and approval bridge. */
-const ORCH_MCP_PREFIX = "mcp__mcode-orchestrator__";
-
 /** Decide whether a tool should be auto-approved (skip the prompt) based on
  *  the session's CURRENT permission mode. This runs in canUseTool on every
  *  call, so a mid-turn mode flip applies to the next tool immediately.
@@ -563,8 +554,6 @@ function shouldAutoApprove(mode: PermissionMode | undefined, toolName: string): 
   if (mode === "bypassPermissions" || mode === "dontAsk") return true;
   // Read-only browser tools never need approval — they can't change anything.
   if (isReadOnlyBrowserTool(toolName)) return true;
-  // Orchestration coordinator tools are control-plane ops (see ORCH_MCP_PREFIX).
-  if (toolName.startsWith(ORCH_MCP_PREFIX)) return true;
   if (mode === "acceptEdits") return FILE_EDIT_TOOLS.has(toolName);
   return false;
 }
@@ -1208,24 +1197,6 @@ export class ClaudeAgentSdkProvider implements AgentProvider {
 
     if (!mcpState.browserDisabled) {
       options.mcpServers = { [BROWSER_MCP_SERVER]: browserServer };
-    }
-    // Orchestration coordinator toolset (composer 编排开关 → per-turn
-    // req.orchestration): in-process MCP server exposing task/dispatch/gate/
-    // wait ops so the MAIN session's model acts as a run coordinator
-    // (docs/orchestration-plan.md §5B). All tools auto-approve (control
-    // plane); workers carry their own permission modes.
-    if (req.orchestration) {
-      try {
-        const orchServer = await buildOrchestratorMcpServerAsync(
-          req.sessionId,
-          await loadCreateMcpServer(),
-        );
-        const servers = options.mcpServers ?? {};
-        servers["mcode-orchestrator"] = orchServer;
-        options.mcpServers = servers;
-      } catch (err) {
-        ctx.log.warn(`orchestration coordinator tools unavailable: ${(err as Error).message}`);
-      }
     }
     const projectMcpNames = Object.keys(projectMcpRecord);
     if (projectMcpNames.length > 0) {

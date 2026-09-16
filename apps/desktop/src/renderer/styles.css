@@ -2337,6 +2337,121 @@ html.sketch.dark body::after {
 }
 [data-chat-root] .oc-edges path.done { stroke: rgb(var(--accent) / 0.85); }
 @keyframes oc-dash { to { stroke-dashoffset: -11; } }
+
+/* ── 拖线编辑:热区 / 手柄 / 橡皮筋 / 端口 / 落点反馈 ──
+ * SVG 整体 pointer-events:none,热区路径单独 auto —— 细线(1.6px)拖不中,
+ * 命中靠 14px 透明描边。 */
+[data-chat-root] .oc-edge-hit {
+  pointer-events: auto;
+  cursor: grab;
+  stroke: transparent;
+  stroke-width: 14;
+}
+[data-chat-root] .oc-edge-hit.locked { cursor: not-allowed; }
+[data-chat-root] .oc-edge-g.hovered .oc-edge,
+[data-chat-root] .oc-edge:hover {
+  stroke: rgb(var(--accent));
+  stroke-width: 2;
+}
+/* 选中连线(点边 → 右栏连线详情):accent 常亮,hover 不再重复加粗。 */
+[data-chat-root] .oc-edge.selected {
+  stroke: rgb(var(--accent));
+  stroke-width: 2.2;
+}
+[data-chat-root] .oc-edge-g.hovered .oc-edge.selected { stroke-width: 2.2; }
+[data-chat-root] .oc-edge.locked { opacity: 0.5; }
+[data-chat-root] .oc-edge.ghost { opacity: 0.22; }
+/* 被拖边的残影不再吃指针(橡皮筋是唯一权威)。 */
+[data-chat-root] .oc-body[data-dragging] .oc-edge-hit { pointer-events: none; }
+[data-chat-root] .oc-body[data-dragging] { cursor: grabbing; }
+/* 端点手柄:悬停边时浮现。 */
+[data-chat-root] .oc-edge-handle {
+  fill: rgb(var(--surface));
+  stroke: rgb(var(--accent));
+  stroke-width: 1.6;
+  pointer-events: auto;
+  cursor: grab;
+  transition: r 0.12s;
+}
+[data-chat-root] .oc-edge-handle:hover { r: 6.5; }
+/* 线中点 ✕ 删除钮。 */
+[data-chat-root] .oc-edge-del {
+  pointer-events: auto;
+  cursor: pointer;
+}
+[data-chat-root] .oc-edge-del circle {
+  fill: rgb(var(--surface));
+  stroke: rgb(var(--edge));
+  stroke-width: 1;
+  transition: stroke-color 0.15s;
+}
+[data-chat-root] .oc-edge-del path {
+  stroke: rgb(var(--content-muted));
+  stroke-width: 1.5;
+  stroke-linecap: round;
+}
+[data-chat-root] .oc-edge-del:hover circle {
+  stroke: rgb(var(--danger, 239 68 68));
+}
+[data-chat-root] .oc-edge-del:hover path {
+  stroke: rgb(var(--danger, 239 68 68));
+}
+/* 橡皮筋:虚线跟随;吸附到合法目标变实感 accent,悬空/非法保持中性。 */
+[data-chat-root] .oc-edge-rubber {
+  fill: none;
+  stroke: rgb(var(--content-subtle) / 0.7);
+  stroke-width: 1.8;
+  stroke-dasharray: 5 4;
+  pointer-events: none;
+}
+[data-chat-root] .oc-edge-rubber.ok {
+  stroke: rgb(var(--accent));
+  stroke-dasharray: none;
+}
+/* 节点端口:右缘输出口 / 左缘输入口(悬停节点/边或拖拽中,且任务可编辑)。
+ * 8px 可见圆点 + ::after 扩展到 16px 的透明命中区,细目标点拖不中。 */
+[data-chat-root] .oc-port {
+  position: absolute;
+  top: 50%;
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  background: rgb(var(--surface));
+  border: 1.6px solid rgb(var(--content-subtle));
+  transform: translateY(-50%);
+  pointer-events: auto;
+  cursor: crosshair;
+  z-index: 2;
+}
+[data-chat-root] .oc-port::after {
+  content: "";
+  position: absolute;
+  inset: -4px;
+  border-radius: 50%;
+}
+[data-chat-root] .oc-port:hover {
+  border-color: rgb(var(--accent));
+  box-shadow: 0 0 0 3px rgb(var(--accent) / 0.25);
+}
+[data-chat-root] .oc-port-out { right: -5px; }
+[data-chat-root] .oc-port-in { left: -5px; }
+[data-chat-root] .oc-node.oc-drop-hover .oc-port { border-color: rgb(var(--accent)); }
+/* 落点反馈:合法 = accent 光圈;非法 = 压暗;拖动端自身 = 原样。 */
+[data-chat-root] .oc-node.oc-drop-ok {
+  box-shadow: 0 0 0 3px rgb(var(--accent) / 0.22);
+}
+[data-chat-root] .oc-node.oc-drop-hover.oc-drop-ok {
+  border-color: rgb(var(--accent));
+  box-shadow: 0 0 0 3px rgb(var(--accent) / 0.35);
+}
+[data-chat-root] .oc-node.oc-drop-dim {
+  opacity: 0.4;
+}
+/* 依赖变化后的节点重排滑动(仅非拖拽期;依赖变了层级就会变,滑过去
+ * 比瞬移更能表达"发生了什么")。 */
+[data-chat-root] .oc-node-anim {
+  transition: left 0.35s cubic-bezier(0.22, 1, 0.36, 1), top 0.35s cubic-bezier(0.22, 1, 0.36, 1),
+    border-color 0.2s, box-shadow 0.2s, opacity 0.15s;
+}
 [data-chat-root] .oc-node {
   position: absolute;
   border: 1.5px solid rgb(var(--edge));
@@ -2401,6 +2516,66 @@ html.sketch.dark body::after {
 }
 @keyframes oc-indet { 0% { transform: translateX(-100%); } 100% { transform: translateX(260%); } }
 [data-chat-root] .oc-node.done .oc-node-bar i { background: rgb(var(--accent)); }
+/* ── 画布内联 worker 控制台(运行中任务的实时过程输出)── */
+[data-chat-root] .oc-consoles {
+  border-top: 1px solid rgb(var(--panel-edge));
+  padding: 7px 10px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+[data-chat-root] .oc-consoles-label {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: rgb(var(--content-subtle));
+}
+[data-chat-root] .oc-console {
+  border: 1px solid rgb(var(--edge));
+  border-radius: 8px;
+  background: rgb(var(--surface-muted) / 0.45);
+  overflow: hidden;
+}
+[data-chat-root] .oc-console-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 5px 8px;
+  font-size: 11px;
+  color: rgb(var(--content-muted));
+  text-align: left;
+  transition: background-color 0.15s;
+}
+[data-chat-root] .oc-console-head:hover { background: rgb(var(--surface-hover, 0 0 0 / 0.04)); color: rgb(var(--content)); }
+[data-chat-root] .oc-console-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+  color: rgb(var(--content));
+}
+[data-chat-root] .oc-console-meta {
+  margin-left: auto;
+  flex: none;
+  font-variant-numeric: tabular-nums;
+  font-size: 10px;
+  color: rgb(var(--content-subtle));
+}
+[data-chat-root] .oc-console-dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: rgb(var(--content-subtle));
+  flex: none;
+}
+[data-chat-root] .oc-console-body {
+  max-height: 220px;
+  overflow-y: auto;
+  border-top: 1px dashed rgb(var(--edge));
+  padding: 4px 6px 6px;
+  font-size: calc(var(--chat-font-size, 14px) * 0.86);
+}
 [data-chat-root] .oc-foot {
   display: flex; align-items: center; gap: 10px;
   padding: 6px 10px;
@@ -2510,4 +2685,6 @@ html.sketch.dark body::after {
   [data-chat-root] .oc-edges path.flow { animation: none; }
   [data-chat-root] .oc-progress i { transition: none; }
   [data-chat-root] .oc-flash { animation: none; box-shadow: 0 0 0 3px rgb(var(--accent) / 0.3); }
+  [data-chat-root] .oc-node-anim { transition: none; }
+  [data-chat-root] .oc-edge-handle { transition: none; }
 }

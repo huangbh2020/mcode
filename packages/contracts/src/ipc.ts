@@ -952,16 +952,11 @@ export const SendTurnSchema = z.object({
        *  (editAndResendMessage). Carries the id of the message being
        *  replaced so every OTHER client can truncate its own store at that
        *  message before appending the re-sent bubble — keeping their in-memory
-       *  tail (and their turn.done persistence of it) consistent with the
-       *  originator's truncation. Absent for a normal first send. */
+      *  tail (and their turn.done persistence of it) consistent with the
+      *  originator's truncation. Absent for a normal first send. */
       editedMessageId: z.string().optional(),
     })
     .optional(),
-  /** Per-turn coordinator flag: when true, the provider injects the in-process
-   *  orchestration MCP toolset (task/dispatch/gate/wait) so the MAIN session's
-   *  agent acts as the run coordinator (see docs/orchestration-plan.md §5B).
-   *  Purely per-turn — the session row itself is unchanged. */
-  orchestration: z.boolean().optional(),
 });
 export type SendTurnInput = z.infer<typeof SendTurnSchema>;
 
@@ -3693,6 +3688,13 @@ export const OrchProposePlanSchema = z.object({
 });
 export type OrchProposePlanInput = z.infer<typeof OrchProposePlanSchema>;
 
+/** Abort the in-flight auto-decompose query for a session (composer 停止键在
+ *  拆解期间可见,必须能真正中止 planner 的无头 query,而不是只冻结 UI)。 */
+export const OrchAbortPlanSchema = z.object({
+  sessionId: z.string(),
+});
+export type OrchAbortPlanInput = z.infer<typeof OrchAbortPlanSchema>;
+
 export const OrchSettingsSaveSchema = z.object({ settings: OrchSettingsSchema });
 export type OrchSettingsSaveInput = z.infer<typeof OrchSettingsSaveSchema>;
 
@@ -4695,7 +4697,10 @@ export interface RpcMap {
   "orch.templateSave": (input: OrchTemplateSaveInput) => Promise<{ templates: OrchestrationTemplate[] }>;
   "orch.templateDelete": (input: OrchTemplateDeleteInput) => Promise<{ templates: OrchestrationTemplate[] }>;
   /** Model-driven goal → task-DAG proposal (wizard auto-decompose). */
-  "orch.proposePlan": (input: OrchProposePlanInput) => Promise<{ tasks: TaskSpecInput[]; error?: string }>;
+  "orch.proposePlan": (
+    input: OrchProposePlanInput,
+  ) => Promise<{ tasks: TaskSpecInput[]; /** planner 实际生效的模型 id(消息头「模型」栏目同源)。 */ model?: string; error?: string }>;
+  "orch.abortPlan": (input: OrchAbortPlanInput) => Promise<{ ok: boolean }>;
 }
 
 /** The channel names used in invoke/handle and send/on. Keep these centralized
@@ -4980,6 +4985,7 @@ export const IPC = {
   ORCH_TEMPLATE_SAVE: "orch:templateSave",
   ORCH_TEMPLATE_DELETE: "orch:templateDelete",
   ORCH_PROPOSE_PLAN: "orch:proposePlan",
+  ORCH_ABORT_PLAN: "orch:abortPlan",
   // Orchestration push events (main → renderer).
   ORCH_EVENT: "orchestrator:event",
   // send/on (push events)

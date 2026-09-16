@@ -19,11 +19,39 @@ export function resetCapturedPrompt(): void {
   lastQueryPrompt = "";
 }
 
-/** Stands in for @anthropic-ai/claude-agent-sdk's query(): single assistant
- *  message carrying the canned proposal JSON, then a result terminator. */
-export function query(_opts: unknown): AsyncIterable<unknown> {
-  lastQueryPrompt = (_opts as { prompt?: string })?.prompt ?? "";
+/** Captured sendToRenderer pushes (planner.delta assertions in main.ts). */
+export const pushedEvents: Array<{ channel: string; event: unknown }> = [];
+export function sendToRenderer(channel: string, msg: { channel: string; event: unknown }): void {
+  pushedEvents.push(msg);
+}
+
+export let lastQueryIncludePartial = false;
+export let lastQuerySystemPrompt = "";
+
+/** Stands in for @anthropic-ai/claude-agent-sdk's query(): optional
+ *  stream_event deltas (only when includePartialMessages is on — mirrors the
+ *  real SDK contract), then a canned assistant proposal + result terminator. */
+export function query(opts: unknown): AsyncIterable<unknown> {
+  lastQueryPrompt = (opts as { prompt?: string })?.prompt ?? "";
+  const options = (opts as { options?: { includePartialMessages?: boolean; systemPrompt?: string } })?.options ?? {};
+  // 真实契约:开关在 query({ prompt, options }) 的 options 里,不在顶层。
+  lastQueryIncludePartial = options.includePartialMessages === true;
+  lastQuerySystemPrompt = options.systemPrompt ?? "";
   return (async function* () {
+    if (lastQueryIncludePartial) {
+      yield {
+        type: "stream_event",
+        event: { type: "content_block_delta", index: 0, delta: { type: "thinking_delta", thinking: "思考中:" } },
+      };
+      yield {
+        type: "stream_event",
+        event: { type: "content_block_delta", index: 1, delta: { type: "text_delta", text: plannerReply.slice(0, 20) } },
+      };
+      yield {
+        type: "stream_event",
+        event: { type: "content_block_delta", index: 1, delta: { type: "text_delta", text: plannerReply.slice(20) } },
+      };
+    }
     yield {
       type: "assistant",
       message: { content: [{ type: "text", text: plannerReply }] },
@@ -52,6 +80,8 @@ export const ProfileStore = {
       builtin: true,
     },
   ],
+  get: (id: string) =>
+    ProfileStore.list().find((p) => p.id === id),
 };
 
 export const coordinatorSession = {
@@ -59,7 +89,9 @@ export const coordinatorSession = {
   projectId: "p1",
   kind: "chat",
   providerId: "claude-sdk",
-  model: "default",
+  // 真实形态:会话骑着 cfg1 网关,composer 选中的是配置内的一个具体模型
+  // (发送守卫保证不可能是 "default")—— 缺省补值链会把它填进空节点。
+  model: "deepseek-v4-pro",
   effort: "high",
   permissionMode: "default",
   customModelId: "cfg1",
@@ -74,8 +106,8 @@ export const resolveSessionCwd = async () => "/tmp/p1";
 
 export const CustomModelStore = {
   listPublic: () => [
-    { id: "cfg1", models: [{ id: "deepseek-v4-pro" }, { id: "glm-5" }] },
-    { id: "cfg2", models: [{ id: "other-gateway-model" }] },
+    { id: "cfg1", name: "主网关", models: [{ id: "deepseek-v4-pro" }, { id: "glm-5" }] },
+    { id: "cfg2", name: "备用网关", models: [{ id: "other-gateway-model" }] },
   ],
 };
 
