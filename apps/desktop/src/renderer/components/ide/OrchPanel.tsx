@@ -15,7 +15,7 @@ import { MessageBlocks } from "@renderer/components/chat/MessageBlocks.js";
 import type { ChatMessage } from "@renderer/stores/sessionStore.js";
 import { useSessionStore } from "@renderer/stores/sessionStore.js";
 import { planEdgeDelete, taskEditable } from "@renderer/lib/orchGraph.js";
-import type { AgentProfile, Gate, OrchestrationRun, TaskNode } from "@contracts/orchestration";
+import type { Gate, OrchestrationRun, TaskNode } from "@contracts/orchestration";
 import type { CustomModelPublic } from "@contracts/customModel";
 import {
   IconArrowLeft,
@@ -51,12 +51,8 @@ const RUN_BADGE: Record<OrchestrationRun["status"], string> = {
   canceled: "text-content-subtle",
 };
 
-/** 执行者标签:节点级 厂商/模型 覆盖优先,回退 agent 角色名(画布流/@@ 目标)。 */
-function execLabelOf(
-  task: TaskNode,
-  customModels: CustomModelPublic[],
-  agents: AgentProfile[],
-): string {
+/** 执行者标签:节点级 厂商/模型 覆盖(历史 run 可能仍带 profileId,仅显示原值)。 */
+function execLabelOf(task: TaskNode, customModels: CustomModelPublic[]): string {
   if (task.providerId) {
     if (task.customModelId) {
       const cfg = customModels.find((c) => c.id === task.customModelId);
@@ -65,7 +61,7 @@ function execLabelOf(
     if (task.model && task.model !== "default") return `${task.providerId} · ${task.model}`;
     return task.providerId;
   }
-  if (task.profileId) return agents.find((a) => a.id === task.profileId)?.name ?? task.profileId;
+  if (task.profileId) return task.profileId;
   return "";
 }
 
@@ -450,7 +446,6 @@ function TaskRow({
 }) {
   const { t } = useI18n();
   const selectOrchNode = useSessionStore((s) => s.selectOrchNode);
-  const agents = useSessionStore((s) => s.orchAgents);
   const customModels = useSessionStore((s) => s.customModels);
 
   return (
@@ -478,7 +473,7 @@ function TaskRow({
         </span>
         <span className="mt-0.5 block truncate text-[0.7143em] text-content-muted">{taskTitle(task)}</span>
       </span>
-      <span className="shrink-0 text-[0.686em] text-content-subtle">{execLabelOf(task, customModels, agents)}</span>
+      <span className="shrink-0 text-[0.686em] text-content-subtle">{execLabelOf(task, customModels)}</span>
       <span className={cn("shrink-0 text-[0.686em]", STATUS_DOT[task.status].replace("bg-", "text-"))}>
         {t(`orch.status.${task.status}`)}
       </span>

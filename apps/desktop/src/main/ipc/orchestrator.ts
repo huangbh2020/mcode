@@ -6,13 +6,11 @@
  * orchestrator/planTool.ts 的 orch_submit_plan 工具),不再有无头 RPC。
  *
  * 全部经 contracts 的 zod schema 校验(安全边界),业务收敛在
- * OrchestratorService / ProfileStore / TemplateStore 单例里。
+ * OrchestratorService 单例里。
  */
 import type { IpcMain } from "electron";
 import {
   IPC,
-  OrchAgentSaveSchema,
-  OrchAgentDeleteSchema,
   OrchCreateRunSchema,
   OrchListRunsSchema,
   OrchGetRunSchema,
@@ -25,13 +23,9 @@ import {
   OrchMergeTaskSchema,
   OrchHandoffSchema,
   OrchWorkerSessionSchema,
-  OrchTemplateSaveSchema,
-  OrchTemplateDeleteSchema,
   OrchSettingsSaveSchema,
 } from "@contracts/ipc";
 import { orchestrator } from "@main/orchestrator/OrchestratorService.js";
-import { ProfileStore } from "@main/orchestrator/profiles.js";
-import { TemplateStore } from "@main/orchestrator/templates.js";
 import { SessionRepo, ProjectRepo } from "@main/store/repositories.js";
 import { runtimeManager } from "@main/claude/RuntimeManager.js";
 import { createOrReuseSession } from "@main/lib/sessionStart.js";
@@ -44,17 +38,6 @@ export function registerOrchestratorHandlers(ipcMain: IpcMain): void {
    *  any state-mutating call — start() is idempotent and resolves instantly
    *  after the boot pass. */
   const ready = () => orchestrator.start();
-
-  /* ── 角色管理 ── */
-  ipcMain.handle(IPC.ORCH_AGENT_LIST, () => ({ agents: ProfileStore.list() }));
-  ipcMain.handle(IPC.ORCH_AGENT_SAVE, (_evt, raw) => {
-    const input = OrchAgentSaveSchema.parse(raw);
-    return { agents: ProfileStore.save(input.agent) };
-  });
-  ipcMain.handle(IPC.ORCH_AGENT_DELETE, (_evt, raw) => {
-    const input = OrchAgentDeleteSchema.parse(raw);
-    return { agents: ProfileStore.delete(input.id) };
-  });
 
   /* ── 设置 ── */
   ipcMain.handle(IPC.ORCH_GET_SETTINGS, () => ({ settings: orchestrator.getSettings() }));
@@ -76,7 +59,6 @@ export function registerOrchestratorHandlers(ipcMain: IpcMain): void {
       budgetUsd: input.budgetUsd ?? null,
       concurrency: input.concurrency,
       worktreePolicy: input.worktreePolicy,
-      templateId: input.templateId ?? null,
       autoStart: input.autoStart,
     });
     if ("error" in res) throw new Error(res.error);
@@ -102,7 +84,7 @@ export function registerOrchestratorHandlers(ipcMain: IpcMain): void {
   ipcMain.handle(IPC.ORCH_TASK_CONTROL, async (_evt, raw) => {
     await ready();
     const input = OrchTaskControlSchema.parse(raw);
-    const res = orchestrator.taskControl(input.runId, input.taskId, input.action, input.profileId);
+    const res = orchestrator.taskControl(input.runId, input.taskId, input.action);
     if (res.error) throw new Error(res.error);
     return { run: res.run ?? null };
   });
@@ -112,7 +94,6 @@ export function registerOrchestratorHandlers(ipcMain: IpcMain): void {
     const res = orchestrator.updateTask(input.runId, input.taskId, {
       spec: input.spec,
       deps: input.deps,
-      profileId: input.profileId,
       customModelId: input.customModelId,
       providerId: input.providerId,
       model: input.model,
@@ -151,7 +132,6 @@ export function registerOrchestratorHandlers(ipcMain: IpcMain): void {
   /* ── 完全移交(Handoff):普通新会话 + 简报,不建任务行、不追踪 ── */
   ipcMain.handle(IPC.ORCH_HANDOFF, async (_evt, raw) => {
     const input = OrchHandoffSchema.parse(raw);
-    const profile = input.profileId ? ProfileStore.get(input.profileId) : undefined;
     // 继承来源会话的执行配置 —— 与 worker 派发同款:customModelId 不带的话
     // 第三方网关用户的新会话落官方 OAuth,首轮即 /login。
     const from = input.fromSessionId ? SessionRepo.get(input.fromSessionId) : undefined;
@@ -159,10 +139,10 @@ export function registerOrchestratorHandlers(ipcMain: IpcMain): void {
       {
         projectId: input.projectId,
         title: input.title ?? `${input.briefing.slice(0, 36)}${input.briefing.length > 36 ? "…" : ""}`,
-        providerId: profile?.providerId ?? from?.providerId,
-        model: profile?.model ?? from?.model,
-        effort: profile?.effort ?? from?.effort ?? "default",
-        permissionMode: profile?.permissionMode ?? from?.permissionMode ?? "default",
+        providerId: from?.providerId,
+        model: from?.model,
+        effort: from?.effort ?? "default",
+        permissionMode: from?.permissionMode ?? "default",
         customModelId: from?.customModelId ?? undefined,
         kind: "chat",
         // 移交不绑 worktree 意图 —— 需要时用户在那个会话里自己开。
@@ -177,7 +157,6 @@ export function registerOrchestratorHandlers(ipcMain: IpcMain): void {
     runtimeManager.bindSession(session);
     await runtimeManager.sendTurn(session, {
       prompt: [
-        profile?.systemPrompt?.trim(),
         "【任务移交简报】",
         input.briefing,
         input.fromSessionId ? `(由会话 ${input.fromSessionId} 移交)` : "",
@@ -194,17 +173,6 @@ export function registerOrchestratorHandlers(ipcMain: IpcMain): void {
   ipcMain.handle(IPC.ORCH_WORKER_SESSION, (_evt, raw) => {
     const input = OrchWorkerSessionSchema.parse(raw);
     return { session: orchestrator.workerSession(input.sessionId) };
-  });
-
-  /* ── 模板 ── */
-  ipcMain.handle(IPC.ORCH_TEMPLATES_LIST, () => ({ templates: TemplateStore.list() }));
-  ipcMain.handle(IPC.ORCH_TEMPLATE_SAVE, (_evt, raw) => {
-    const input = OrchTemplateSaveSchema.parse(raw);
-    return { templates: TemplateStore.save(input.template) };
-  });
-  ipcMain.handle(IPC.ORCH_TEMPLATE_DELETE, (_evt, raw) => {
-    const input = OrchTemplateDeleteSchema.parse(raw);
-    return { templates: TemplateStore.delete(input.id) };
   });
 
   /* ── 自动拆解(原 orch.proposePlan / orch.abortPlan)已退役 ──

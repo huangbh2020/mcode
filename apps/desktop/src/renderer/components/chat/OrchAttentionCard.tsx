@@ -1,7 +1,7 @@
 /**
  * 编排待处理卡(主面板,composer 上方提示槽)。
  *
- * 把「等你处理」的编排事项从右栏收件箱提到主面板,与普通审批卡同位呈现:
+ * 把「等你处理」的编排事项聚到主面板,与普通审批卡同位呈现:
  *  ① 本会话 run 的 open 决策门(escalation/budget/review_pick)→ orchResolveGate;
  *  ② 本会话 run 派生的 worker 会话的 AskUserQuestion → submitQuestion(显式
  *     传 workerSessionId,从协调者视角回答无障碍);
@@ -10,7 +10,7 @@
  * 优先级:本会话自己的审批/提问(ApprovalPrompt / QuestionPrompt)永远占先
  * —— ChatPane 只在三者都不在场时才挂载本卡。卡片可收起为一条琥珀横幅;
  * 待处理数量增加时自动展开一次(收起状态不吞新事项的感知)。
- * 右栏收件箱保留,继续兜「其他会话」的待办。
+ * 跨会话的 worker 待办不在此聚合,到各 worker 会话自己的聊天面板处理。
  */
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useI18n } from "@renderer/lib/i18n/index.js";
@@ -40,7 +40,7 @@ export function OrchAttentionCard({ sessionId }: { sessionId: string }) {
     return out;
   }, [runs]);
 
-  // worker 会话集合:只收「本会话 run」派生的 worker(跨会话的仍归收件箱)。
+  // worker 会话集合:只收「本会话 run」派生的 worker(跨会话的不在此聚合)。
   const workerIds = useMemo(() => {
     const ids = new Set<string>();
     for (const run of runs ?? []) {

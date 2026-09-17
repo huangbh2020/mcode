@@ -547,14 +547,9 @@ const api = {
     status: (() => ipcRenderer.invoke(IPC.RELAY_STATUS)) as RpcMap["relay.status"],
   },
 
-  /** Agent orchestration (docs/orchestration-plan.md): role profiles, runs,
-   *  gates, handoff, templates, and the wizard's model-driven decomposition. */
+  /** Agent orchestration (docs/orchestration-plan.md): runs, gates, handoff
+   *  and settings. Decomposition runs in-session via orch_submit_plan. */
   orch: {
-    agentList: (() => ipcRenderer.invoke(IPC.ORCH_AGENT_LIST)) as RpcMap["orch.agentList"],
-    agentSave: ((input) =>
-      ipcRenderer.invoke(IPC.ORCH_AGENT_SAVE, input)) as RpcMap["orch.agentSave"],
-    agentDelete: ((input) =>
-      ipcRenderer.invoke(IPC.ORCH_AGENT_DELETE, input)) as RpcMap["orch.agentDelete"],
     getSettings: (() => ipcRenderer.invoke(IPC.ORCH_GET_SETTINGS)) as RpcMap["orch.getSettings"],
     saveSettings: ((input) =>
       ipcRenderer.invoke(IPC.ORCH_SAVE_SETTINGS, input)) as RpcMap["orch.saveSettings"],
@@ -580,12 +575,6 @@ const api = {
     handoff: ((input) => ipcRenderer.invoke(IPC.ORCH_HANDOFF, input)) as RpcMap["orch.handoff"],
     workerSession: ((input) =>
       ipcRenderer.invoke(IPC.ORCH_WORKER_SESSION, input)) as RpcMap["orch.workerSession"],
-    templatesList: (() =>
-      ipcRenderer.invoke(IPC.ORCH_TEMPLATES_LIST)) as RpcMap["orch.templatesList"],
-    templateSave: ((input) =>
-      ipcRenderer.invoke(IPC.ORCH_TEMPLATE_SAVE, input)) as RpcMap["orch.templateSave"],
-    templateDelete: ((input) =>
-      ipcRenderer.invoke(IPC.ORCH_TEMPLATE_DELETE, input)) as RpcMap["orch.templateDelete"],
   },
 
   /** Agent runtimes (settings panel): the download-on-demand claude/codex/pi

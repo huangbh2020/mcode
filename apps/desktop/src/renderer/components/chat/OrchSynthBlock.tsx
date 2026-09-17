@@ -31,7 +31,6 @@ function fmtDur(ms: number): string {
 export function OrchSynthBlock({ runId, goal }: { synthId: string; runId: string; goal: string }) {
   const { t } = useI18n();
   const runsMap = useSessionStore((s) => s.orchRunsBySession);
-  const agents = useSessionStore((s) => s.orchAgents);
   const customModels = useSessionStore((s) => s.customModels);
   const ensureOrchRun = useSessionStore((s) => s.ensureOrchRun);
   const selectOrchNode = useSessionStore((s) => s.selectOrchNode);
@@ -81,15 +80,13 @@ export function OrchSynthBlock({ runId, goal }: { synthId: string; runId: string
     new Set(run.tasks.flatMap((x) => [...(x.result?.filesModified ?? []), ...x.artifacts])),
   );
 
-  const profileOf = (task: TaskNode) => (task.profileId ? agents.find((a) => a.id === task.profileId) : undefined);
+  // 执行者标签:仅模型配置名(角色域已退役,历史 run 的 profileId 不再展示)。
   const modelLabelOf = (task: TaskNode): string | null => {
     if (task.customModelId) {
       const cfg = customModels.find((c) => c.id === task.customModelId);
       if (cfg) return cfg.name;
     }
-    const p = profileOf(task);
-    if (p) return p.model === "default" ? null : p.model;
-    return null;
+    return task.model && task.model !== "default" ? task.model : null;
   };
 
   const backToCanvas = () => {
@@ -113,7 +110,6 @@ export function OrchSynthBlock({ runId, goal }: { synthId: string; runId: string
           {[
             `${doneCount}/${run.tasks.length}`,
             duration ?? "",
-            `$${run.spentUsd.toFixed(2)}`,
             tokens > 0 ? `${tokens.toLocaleString()} tk` : "",
           ]
             .filter(Boolean)
@@ -129,7 +125,6 @@ export function OrchSynthBlock({ runId, goal }: { synthId: string; runId: string
           <div className="oc-synth-h">{t("orch.synth.tasks")}</div>
           <ul className="oc-synth-list">
             {run.tasks.map((task) => {
-              const p = profileOf(task);
               const m = modelLabelOf(task);
               return (
                 <li key={task.id}>
@@ -138,7 +133,7 @@ export function OrchSynthBlock({ runId, goal }: { synthId: string; runId: string
                       {task.id} {titleOf(task)}
                     </b>
                     <span className="oc-synth-task-meta">
-                      ({[p ? `${p.icon} ${p.name}` : null, m].filter(Boolean).join(" · ")})
+                      ({[m].filter(Boolean).join(" · ")})
                     </span>
                   </span>
                   <span className="oc-synth-task-result">

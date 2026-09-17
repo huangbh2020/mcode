@@ -19,7 +19,6 @@ import {
   IconBolt,
   IconChevronRight,
   IconGripVertical,
-  IconGitFork,
   IconExternalLink,
   IconSparkles,
 } from "@renderer/lib/icons.js";
@@ -68,7 +67,6 @@ import { ComposerEditor, type ComposerEditorHandle } from "./ComposerEditor.js";
 import { ContentTagChip } from "./ContentTagChip.js";
 import { TagPopover } from "./TagPopover.js";
 import { FileMentionPicker, type FileMentionPickerMode } from "./FileMentionPicker.js";
-import { AgentPicker } from "./AgentPicker.js";
 import { OrchComposerChips } from "./OrchComposerChips.js";
 import { EmptyThreadWelcome } from "./EmptyThreadWelcome.js";
 import { SlashCommandPicker } from "./SlashCommandPicker.js";
@@ -1673,7 +1671,7 @@ function ChatPaneForSession({
   // "picker" drives a single floating list above the textarea. Only one of
   // mention/slash is active at a time. `triggerStart` is the index of the
   // leading @ or / so we can delete the whole token on pick / cancel.
-  type PickerKind = "mention" | "slash" | "agent" | null;
+  type PickerKind = "mention" | "slash" | null;
   const [pickerKind, setPickerKind] = useState<PickerKind>(null);
   const [pickerQuery, setPickerQuery] = useState("");
   const triggerStartRef = useRef<number | null>(null);
@@ -2029,22 +2027,6 @@ function ChatPaneForSession({
         const ch = v[i - 1];
         const triggerKind = TRIGGER_CHARS[ch];
         if (triggerKind) {
-          // `@@` (double at) → the AGENT picker (orchestration targets).
-          // The char before the @ must itself be an @ sitting at a valid
-          // boundary; the whole `@@query` token is then removed on pick.
-          if (triggerKind === "mention" && i >= 2 && v[i - 2] === "@") {
-            const atLineStart = i - 2 === 0 || /\s/.test(v[i - 3]);
-            if (atLineStart) {
-              if (pickerKind !== "agent") {
-                triggerStartRef.current = i - 2;
-                const rect = editorRef.current?.getRect();
-                if (rect) setPickerAnchor(rect);
-                setPickerKind("agent");
-              }
-              setPickerQuery(v.slice(i, caret));
-              return;
-            }
-          }
           const atLineStart = i - 1 === 0 || /\s/.test(v[i - 2]);
           if (!atLineStart) {
             if (pickerKind !== null) setPickerKind(null);
@@ -2258,17 +2240,6 @@ function ChatPaneForSession({
       clearTriggerToken();
     },
     [addFileTags, clearTriggerToken],
-  );
-
-  /** Agent picker confirm (@@query): drop the token, add the role to the
-   *  composer's @agent target cluster (chips above the composer; consumed by
-   *  sendPrompt's orchestration interception). */
-  const handleAgentPick = useCallback(
-    (agent: { id: string }) => {
-      if (sessionId) useSessionStore.getState().addOrchTarget(sessionId, agent.id);
-      clearTriggerToken();
-    },
-    [clearTriggerToken, sessionId],
   );
 
   /** Slash picker confirm: replace the `/query` trigger token in the editor
@@ -4162,15 +4133,6 @@ function ChatPaneForSession({
             onPickCommand={handleBuiltInPick}
             onClose={() => setPickerKind(null)}
           />
-          {/* Inline @@-agent picker (orchestration targets). Selecting adds
-              the role to the composer's @agent target cluster. */}
-          <AgentPicker
-            open={pickerKind === "agent"}
-            query={pickerQuery}
-            anchorRect={pickerAnchor}
-            onPick={handleAgentPick}
-            onClose={() => setPickerKind(null)}
-          />
           {/* "Add context" picker opened from the bottom-left + button.
               Multi-select; same project file source as @-mention. */}
           <FileMentionPicker
@@ -4191,19 +4153,6 @@ function ChatPaneForSession({
             <Menu.Portal>
               <Menu.Positioner anchor={msgCtxAnchor} side="bottom" align="start">
                 <Menu.Popup className="z-50 min-w-[190px] rounded-lg border border-edge bg-surface py-1 shadow-2xl">
-                  <Menu.Item
-                    onClick={() => {
-                      const sid = useSessionStore.getState().activeSessionId;
-                      if (sid && msgCtx?.text) {
-                        void useSessionStore.getState().startOrchestrationFlow(sid, msgCtx.text);
-                      }
-                      setMsgCtx(null);
-                    }}
-                    className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs outline-none select-none text-content-muted data-[highlighted]:bg-surface-muted data-[highlighted]:text-content"
-                  >
-                    <IconGitFork size={14} className="shrink-0" />
-                    {t("orch.menu.dispatchTrack")}
-                  </Menu.Item>
                   <Menu.Item
                     onClick={() => {
                       const text = msgCtx?.text;

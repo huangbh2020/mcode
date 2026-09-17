@@ -49,13 +49,17 @@ export function SessionDirectoryChip({ sessionId }: { sessionId: string | null }
   const session = useSessionStore((s) => {
     if (!sessionId) return undefined;
     if (s.activeSessionId === sessionId) {
-      return s.sessions.find((x) => x.id === sessionId);
+      const hit = s.sessions.find((x) => x.id === sessionId);
+      if (hit) return hit;
     }
     for (const list of Object.values(s.sessionsByProject)) {
       const hit = list?.find((x) => x.id === sessionId);
       if (hit) return hit;
     }
-    return undefined;
+    return (
+      s.pinnedSessions.find((x) => x.id === sessionId) ??
+      s.streamSessions.find((x) => x.id === sessionId)
+    );
   });
 
   // New-session stage + local environment only — worktree-bound or
@@ -65,7 +69,12 @@ export function SessionDirectoryChip({ sessionId }: { sessionId: string | null }
   // list buckets) — its directory is bound to the parent, so no switcher.
   // (The old `!session ||` read the miss as "fresh" and rendered a switcher
   // whose rows were dead clicks inside the side-chat panel.)
-  const isFresh = session != null && session.title === "New session";
+  const sessionMessages = useSessionStore((s) => (sessionId ? s.messagesBySession[sessionId] : undefined));
+  const hasNoMessages = sessionMessages ? sessionMessages.length === 0 : true;
+  const isFresh =
+    session != null &&
+    session.kind !== "side" &&
+    (session.title === "New session" || hasNoMessages);
   const isLocal = session ? !session.worktreePath && session.envMode !== "worktree" : true;
   const candidates = projects.filter((p) => !p.archived);
   const current = session

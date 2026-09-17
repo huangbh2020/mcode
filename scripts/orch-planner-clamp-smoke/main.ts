@@ -36,7 +36,7 @@ function check(name: string, cond: boolean, detail?: unknown): void {
 // model ELECTION may land nodes on ANY configured config (cfg1/cfg2 pair).
 // Official aliases like "sonnet" must clamp to null.
 const tasks = [
-  { spec: "valid claude custom", providerId: "claude-sdk", model: "deepseek-v4-pro", effort: "high", permissionMode: "acceptEdits", profileId: "builtin-implementer", tags: ["coding"] },
+  { spec: "valid claude custom", providerId: "claude-sdk", model: "deepseek-v4-pro", effort: "high", permissionMode: "acceptEdits", tags: ["coding"] },
   { spec: "claude official alias on gateway", providerId: "claude-sdk", model: "sonnet", effort: "ultra", permissionMode: "bypassPermissions" },
   { spec: "unknown provider", providerId: "gemini-sdk", model: "pro", effort: "high", permissionMode: "default" },
   { spec: "effort without provider", effort: "high", permissionMode: "plan" },
@@ -89,8 +89,8 @@ check(
   t(0),
 );
 check(
-  "t1: profileId/tags pass through",
-  t(0).profileId === "builtin-implementer" && Array.isArray(t(0).tags) && (t(0).tags as string[])[0] === "coding",
+  "t1: tags pass through, profileId always null (agent-role domain retired)",
+  t(0).profileId === null && t(0).profileId === null && Array.isArray(t(0).tags) && (t(0).tags as string[])[0] === "coding",
   t(0),
 );
 check(

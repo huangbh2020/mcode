@@ -16,9 +16,7 @@ import type {
 } from "@contracts/runtime";
 import type { TurnFileEntry } from "@renderer/lib/turnFiles.js";
 import type {
-  AgentProfile,
   OrchestrationRun,
-  OrchestrationTemplate,
   OrchSettings,
   TaskSpecInput,
   OrchestratorEvent,
@@ -1398,12 +1396,6 @@ export interface SessionState {
   _initStarted: boolean;
 
   /* ── Agent orchestration (docs/orchestration-plan.md) ── */
-  /** Role profiles (builtin + user), hydrated lazily by the settings panel /
-   *  wizard / composer picker. Not persisted renderer-side (main owns the
-   *  `orch.agents.v1` settings key). */
-  orchAgents: AgentProfile[];
-  /** Pipeline / competition / fan-out templates (main owns persistence). */
-  orchTemplates: OrchestrationTemplate[];
   /** Orchestration prefs (trigger mode / defaults). null until loaded. */
   orchSettings: OrchSettings | null;
   /** Runs keyed by their COORDINATOR session id. Updated from `orch.event`
@@ -1413,10 +1405,6 @@ export interface SessionState {
    *  action) — the final findSession fallback so worker tabs resolve titles
    *  and config-sync. Keyed by worker session id. */
   orchWorkersById: Record<string, Session>;
-  /** @agent picker targets per session (composer chip cluster). 1 target in
-   *  "handoff" mode = full handoff; ≥2 (or "orchestrate" mode) opens the
-   *  wizard prefilled. Cleared after the send resolves. */
-  orchTargetsBySession: Record<string, Array<{ profileId: string; mode: "handoff" | "orchestrate" }>>;
   /** Orchestrator event subscription state; true after `initDeferred`
    *  subscribes (guards against double-subscription). */
   _orchSubscribed: boolean;
@@ -1864,7 +1852,8 @@ export interface SessionState {
    *  no-op silently when there is no active project. */
   reloadSkills: () => Promise<void>;
   dismissQuestion: () => void;
-  /** Session-targeted dismiss (Inbox → worker sessions' questions). */
+  /** Session-targeted dismiss (worker sessions' questions from elsewhere,
+   *  e.g. the orchestrator attention card). */
   dismissQuestionFor: (sessionId: string) => void;
   /** Submit answers to the head AskUserQuestion for the active session.
    *  Calls `claude:respondQuestion` which resolves the provider's pending
@@ -2006,16 +1995,6 @@ export interface SessionState {
   setRightPanelTab: (tab: RightPanelTab) => void;
 
   /* ── Agent orchestration actions ── */
-  /** (Re)fetch role profiles into orchAgents. */
-  reloadOrchAgents: () => Promise<void>;
-  /** Upsert a role profile; refreshes orchAgents. */
-  saveOrchAgent: (agent: AgentProfile) => Promise<void>;
-  /** Delete a role profile (builtin originals resurrect on next load). */
-  deleteOrchAgent: (id: string) => Promise<void>;
-  /** (Re)fetch orchestration templates. */
-  reloadOrchTemplates: () => Promise<void>;
-  saveOrchTemplate: (template: OrchestrationTemplate) => Promise<void>;
-  deleteOrchTemplate: (id: string) => Promise<void>;
   /** Load orchestration settings (trigger mode / defaults). */
   loadOrchSettings: () => Promise<void>;
   saveOrchSettings: (settings: OrchSettings) => Promise<void>;
@@ -2031,19 +2010,13 @@ export interface SessionState {
     runId: string,
     taskId: string,
     action: "pause" | "resume" | "retry" | "cancel" | "rerun" | "markCompleted",
-    profileId?: string | null,
   ) => Promise<string | null>;
   /** Resolve an open decision gate. */
   orchResolveGate: (runId: string, gateId: string, resolution: string) => Promise<void>;
   /** Merge a completed worktree node back into the main checkout. */
   orchMergeTask: (runId: string, taskId: string) => Promise<string | null>;
   /** Full handoff: create a plain new session with the briefing and send it. */
-  orchHandoff: (briefing: string, profileId?: string, title?: string) => Promise<Session | null>;
-  /** @agent target chips per session. */
-  addOrchTarget: (sessionId: string, profileId: string) => void;
-  removeOrchTarget: (sessionId: string, profileId: string) => void;
-  setOrchTargetMode: (sessionId: string, mode: "handoff" | "orchestrate") => void;
-  clearOrchTargets: (sessionId: string) => void;
+  orchHandoff: (briefing: string, title?: string) => Promise<Session | null>;
   /** Fetch a worker session row + open it as a center tab. */
   openOrchWorker: (workerSessionId: string) => Promise<void>;
   /** 自动编排开关 per session(开启后发送的想法在本会话内以规划者模式执行)。 */
@@ -2059,10 +2032,6 @@ export interface SessionState {
   /** 画布水合:run 不在内存(会话重开/被挤出 per-session 列表)时按 id 拉取
    *  并 upsert 进 orchRunsBySession;已存在则 no-op。web 壳静默失败。 */
   ensureOrchRun: (runId: string) => Promise<void>;
-  /** 编排画布流:追加用户消息 → 拆解(或按 targets 建骨架)→ createRun
-   *  (planning 态)→ 画布块消息落入聊天流。失败降级为错误说明消息。 */
-  startOrchestrationFlow: (sessionId: string, prompt: string, opts?: { profileIds?: string[] }) => Promise<void>;
-
   /* ── Side chat (right-panel ask tab) actions ── */
   /** Reveal the right panel and focus the sidechat tab (the ask-tab entry
    *  point behind the rail button / global shortcut). Does NOT create a
@@ -2358,8 +2327,6 @@ const EMPTY_PROVIDERS: ProviderInfo[] = [];
 const EMPTY_PI_MODELS: BuiltinModelOption[] = [];
 const EMPTY_CODEX_MODELS: BuiltinModelOption[] = [];
 const EMPTY_SKILLS: SkillInfo[] = [];
-const EMPTY_ORCH_AGENTS: AgentProfile[] = [];
-const EMPTY_ORCH_TEMPLATES: OrchestrationTemplate[] = [];
 const EMPTY_SESSIONS: Session[] = [];
 export const EMPTY_SUBAGENTS: SubagentSnapshot[] = [];
 /** Stable empty usage-history reference (selector must return a stable array). */
@@ -2965,8 +2932,6 @@ function dropSessionBuckets(s: SessionState, id: string) {
   // Orchestration per-session buckets (coordinator toggle, @agent targets,
   // runs list view). Main keeps the runs themselves — the panel re-fetches on
   // demand if the session somehow returns.
-  const orchTargetsBySession = { ...s.orchTargetsBySession };
-  delete orchTargetsBySession[id];
   const orchRunsBySession = { ...s.orchRunsBySession };
   delete orchRunsBySession[id];
   const orchWorkersById = { ...s.orchWorkersById };
@@ -3002,7 +2967,6 @@ function dropSessionBuckets(s: SessionState, id: string) {
     planApprovalDraftBySession,
     composerDraftBySession,
     sideChatSeedBySession,
-    orchTargetsBySession,
     orchRunsBySession,
     orchWorkersById,
     pendingApprovals,
@@ -4466,7 +4430,7 @@ function clearSessionDeltas(sessionId: string): void {
  * 自动拆解改为会话内回合(orchestration 标记 + orch_submit_plan 工具,
  * 见 main/orchestrator/planTool.ts):planner 的输出就是普通回合流,不再有
  * 无头 query 的旁路增量。任务图经 plan.proposed 事件落成画布块(见
- * ingestOrchEvent);@agents 目标模式的确定性骨架仍走 startOrchestrationFlow。 */
+ * ingestOrchEvent)。 */
 
 /** Event types that append visible content to the transcript. While a session
  *  is interrupted these are ignored so the aborted turn's late events can't
@@ -4720,12 +4684,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   // Agent orchestration (docs/orchestration-plan.md). Lists hydrate on
   // demand (settings panel / wizard / composer picker); runs arrive via
   // `orchestrator:event` pushes and initial listRuns loads.
-  orchAgents: EMPTY_ORCH_AGENTS,
-  orchTemplates: EMPTY_ORCH_TEMPLATES,
   orchSettings: null,
   orchRunsBySession: {},
   orchWorkersById: {},
-  orchTargetsBySession: {},
   orchAutoBySession: {},
   orchNodeSelection: null,
   _orchSubscribed: false,
@@ -5209,7 +5170,6 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       // snapshots / gate lifecycle / worker_done toasts). Guarded against
       // double-subscription (init can be re-entered in dev StrictMode).
       void get().loadOrchSettings();
-      void get().reloadOrchAgents();
       if (!get()._orchSubscribed) {
         set({ _orchSubscribed: true });
         api.on.orchEvent((msg) => {
@@ -5767,10 +5727,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           ? worktree.map((x) => (x.id === session.id ? { ...x, ...session } : x))
           : [session, ...worktree];
         const merged = [...local, ...nextWorktree];
-        const isactiveWt = projectId === s.activeProjectId;
         return {
           sessionsByProject: { ...s.sessionsByProject, [projectId]: merged },
-          sessions: isactiveWt ? merged : s.sessions,
+          sessions: merged,
           activeProjectId: projectId,
           activeSessionId: session.id,
           expandedProjects: { ...s.expandedProjects, [projectId]: true },
@@ -5822,7 +5781,6 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         ...s.sessionsByProject,
         [projectId]: upserted,
       };
-      const isactive = projectId === s.activeProjectId;
       const prevTotal = s.sessionsTotalByProject[projectId] ?? 0;
       const nextTotal = exists ? prevTotal : prevTotal + 1;
       return {
@@ -5841,7 +5799,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           ...s.sessionsHasMoreByProject,
           [projectId]: nextTotal > SESSION_PAGE_SIZE,
         },
-        sessions: isactive ? nextByProject[projectId] : s.sessions,
+        sessions: nextByProject[projectId],
         activeProjectId: projectId,
         activeSessionId: session.id,
         expandedProjects: { ...s.expandedProjects, [projectId]: true },
@@ -5984,6 +5942,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     hydrateUsageHistory(set, get, sessionId);
     hydrateBookmarks(set, get, sessionId);
     hydrateSubagentTranscripts(set, get, sessionId);
+    void get().loadOrchRuns(sessionId);
     set((s) => {
       // Clear the unread badge - the user is now looking at this session.
       // Activating a session also pulls the unified center bar back to the
@@ -6016,6 +5975,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     hydrateUsageHistory(set, get, sessionId);
     hydrateBookmarks(set, get, sessionId);
     hydrateSubagentTranscripts(set, get, sessionId);
+    void get().loadOrchRuns(sessionId);
     set((s) => {
       // Clear the unread badge - the user is now looking at this session.
       const unreadBySession = { ...s.unreadBySession };
@@ -6717,31 +6677,14 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     }
 
     // ── Orchestration interception (docs/orchestration-plan.md §6) ──
-    // Mode classification happens HERE, renderer-side, before the turn fires:
-    //  ① @agent targets present → handoff (single) or skeleton canvas
-    //     (multi/orch mode). The prompt becomes the briefing/goal; nothing is
-    //     sent to the current session. Return true so the composer clears.
-    //  ② 自动编排开关(或触发启发式 auto 档)→ 不再旁路拆解:本条消息照常
-    //     进入会话回合,仅打 orchestration 标记 —— main 为该回合注入规划者
-    //     提示与 orch_submit_plan 工具,模型在本会话内产出任务图(历史天然
-    //     携带,多轮调整不丢上下文)。
+    // 自动编排开关(或触发启发式 auto 档)→ 本条消息照常进入会话回合,仅打
+    // orchestration 标记 —— main 为该回合注入规划者提示与 orch_submit_plan
+    // 工具,模型在本会话内产出任务图(历史天然携带,多轮调整不丢上下文)。
+    // 原 @agent 目标簇(移交/骨架画布)已随 agent 角色域退役。
     // Skipped for image-only turns (no text to hand off) and on the web/mobile
     // shim (no api.orch surface).
-    const orchTargets = get().orchTargetsBySession[sessionId] ?? [];
     let orchPlanning = false;
     if (prompt.trim() && isElectron) {
-      if (orchTargets.length > 0) {
-        const mode = orchTargets[0].mode;
-        const profileIds = orchTargets.map((x) => x.profileId);
-        get().clearOrchTargets(sessionId);
-        if (mode === "handoff" && profileIds.length === 1) {
-          void get().orchHandoff(prompt, profileIds[0]);
-        } else {
-          // @agents 目标 → 确定性骨架画布(每个目标一个任务,planning 态等配置;不经模型)。
-          void get().startOrchestrationFlow(sessionId, prompt, { profileIds });
-        }
-        return true;
-      }
       // 自动编排开关:显式意图,优先于触发启发式。
       if (get().orchAutoBySession[sessionId]) {
         orchPlanning = true;
@@ -9665,8 +9608,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     get().dismissQuestionFor(sessionId);
   },
 
-  /** Session-targeted dismiss (the Inbox dismisses WORKER sessions' questions
-   *  — those are never the active session). Same semantics as dismissQuestion:
+  /** Session-targeted dismiss (the orchestrator attention card dismisses
+   *  WORKER sessions' questions — those are never the active session). Same
+   *  semantics as dismissQuestion:
    *  resolves the provider's pending Deferred as dismissed so the worker turn
    *  continues, then clears the card. */
   dismissQuestionFor: (sessionId) => {
@@ -10221,46 +10165,6 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
   /* ── Agent orchestration actions ── */
 
-  reloadOrchAgents: async () => {
-    if (!isElectron) return;
-    try {
-      const { agents } = await api.orch.agentList();
-      set({ orchAgents: agents });
-    } catch (err) {
-      console.error("orch.agentList failed:", err);
-    }
-  },
-
-  saveOrchAgent: async (agent) => {
-    const { agents } = await api.orch.agentSave({ agent });
-    set({ orchAgents: agents });
-  },
-
-  deleteOrchAgent: async (id) => {
-    const { agents } = await api.orch.agentDelete({ id });
-    set({ orchAgents: agents });
-  },
-
-  reloadOrchTemplates: async () => {
-    if (!isElectron) return;
-    try {
-      const { templates } = await api.orch.templatesList();
-      set({ orchTemplates: templates });
-    } catch (err) {
-      console.error("orch.templatesList failed:", err);
-    }
-  },
-
-  saveOrchTemplate: async (template) => {
-    const { templates } = await api.orch.templateSave({ template });
-    set({ orchTemplates: templates });
-  },
-
-  deleteOrchTemplate: async (id) => {
-    const { templates } = await api.orch.templateDelete({ id });
-    set({ orchTemplates: templates });
-  },
-
   loadOrchSettings: async () => {
     if (!isElectron) return;
     try {
@@ -10420,9 +10324,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     }
   },
 
-  orchTaskControl: async (runId, taskId, action, profileId) => {
+  orchTaskControl: async (runId, taskId, action) => {
     try {
-      const { run } = await api.orch.taskControl({ runId, taskId, action, profileId });
+      const { run } = await api.orch.taskControl({ runId, taskId, action });
       if (run) {
         set((s) => {
           const list = s.orchRunsBySession[run.parentSessionId] ?? [];
@@ -10461,7 +10365,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     }
   },
 
-  orchHandoff: async (briefing, profileId, title) => {
+  orchHandoff: async (briefing, title) => {
     const s = get();
     const projectId = s.activeProjectId;
     if (!projectId) return null;
@@ -10469,7 +10373,6 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       const { session } = await api.orch.handoff({
         projectId,
         briefing,
-        profileId,
         fromSessionId: s.activeSessionId ?? undefined,
         title,
       });
@@ -10480,49 +10383,6 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       pushToastLite("error", (err as Error).message);
       return null;
     }
-  },
-
-  addOrchTarget: (sessionId, profileId) => {
-    set((s) => {
-      const cur = s.orchTargetsBySession[sessionId] ?? [];
-      if (cur.some((t) => t.profileId === profileId)) return {};
-      // ≥2 targets force orchestrate mode (multiple = explicit parallelism).
-      const mode: "handoff" | "orchestrate" = cur.length + 1 >= 2 ? "orchestrate" : (cur[0]?.mode ?? "handoff");
-      const next = [...cur.map((t) => ({ ...t, mode })), { profileId, mode }];
-      return { orchTargetsBySession: { ...s.orchTargetsBySession, [sessionId]: next } };
-    });
-  },
-
-  removeOrchTarget: (sessionId, profileId) => {
-    set((s) => {
-      const cur = s.orchTargetsBySession[sessionId] ?? [];
-      const next = cur.filter((t) => t.profileId !== profileId);
-      const patch: Record<string, { profileId: string; mode: "handoff" | "orchestrate" }[]> = {
-        [sessionId]: next,
-      };
-      return { orchTargetsBySession: { ...s.orchTargetsBySession, ...patch } };
-    });
-  },
-
-  setOrchTargetMode: (sessionId, mode) => {
-    set((s) => {
-      const cur = s.orchTargetsBySession[sessionId] ?? [];
-      return {
-        orchTargetsBySession: {
-          ...s.orchTargetsBySession,
-          [sessionId]: cur.map((t) => ({ ...t, mode })),
-        },
-      };
-    });
-  },
-
-  clearOrchTargets: (sessionId) => {
-    set((s) => {
-      if (!(sessionId in s.orchTargetsBySession)) return {};
-      const next = { ...s.orchTargetsBySession };
-      delete next[sessionId];
-      return { orchTargetsBySession: next };
-    });
   },
 
   openOrchWorker: async (workerSessionId) => {
@@ -10579,101 +10439,6 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       });
     } catch (err) {
       console.error("orch.getRun failed:", err);
-    }
-  },
-
-  startOrchestrationFlow: async (sessionId, prompt, opts) => {
-    // 仅 @agents 多目标模式使用:按目标直接造骨架任务图(确定性,不经模型
-    // —— 目标即简报),建 paused run 并把画布块落进消息流。自动拆解已改为
-    // 会话内回合(sendPrompt 的 orchestration 标记 → main 注入规划者提示与
-    // orch_submit_plan 工具),不再经过这里。
-    if (!opts?.profileIds?.length) return;
-    const locale = get().locale;
-    // ① 用户消息立即入桶并落库 —— 编排拦截不走回合管线,没有 turn.done
-    //    兜底持久化,必须自己写(只写这一行)。
-    const userMsg: ChatMessage = {
-      id: `u_${Date.now()}`,
-      sessionId,
-      role: "user",
-      blocks: [{ kind: "text", text: prompt }],
-      createdAt: Date.now(),
-      orchTag: "targets",
-    };
-    set((s) => ({
-      messagesBySession: {
-        ...s.messagesBySession,
-        [sessionId]: [...(s.messagesBySession[sessionId] ?? []), userMsg],
-      },
-      streamDirty: true,
-    }));
-    void api.session.upsertMessages({ sessionId, messages: toRecords(sessionId, [userMsg]) });
-
-    // ⓪ 首条编排消息给会话自动起名 —— 与主会话首条消息的自动标题同规则
-    //    (ipc/claude.ts:标题仍是默认占位时,取首行前 40 字符 + 省略号)。
-    //    骨架流不产生模型回合,主进程的自动起名钩子永远不会触发,这里补位。
-    const sessionRow = findSession(
-      get().sessionsByProject,
-      get().archivedSessionsByProject,
-      get().pinnedSessions,
-      get().streamSessions,
-      sessionId,
-      get().orchWorkersById,
-    );
-    if (sessionRow && sessionRow.title === "New session") {
-      const flat = prompt.trim().replace(/\s+/g, " ");
-      if (flat) void get().renameSession(sessionId, flat.slice(0, 40) + (flat.length > 40 ? "…" : ""));
-    }
-
-    // ② 骨架任务图:每个目标一个任务(多目标同组竞争),无执行配置 ——
-    //    节点跟随会话默认,用户在画布上逐个配置后手动开跑。
-    const ids = opts.profileIds;
-    const tasks: TaskSpecInput[] = ids.map((profileId, i) => ({
-      id: `t${i + 1}`,
-      spec: prompt,
-      deps: [],
-      profileId,
-      customModelId: null,
-      providerId: null,
-      model: null,
-      effort: null,
-      permissionMode: null,
-      reviewOf: null,
-      variantGroup: ids.length > 1 ? "v1" : null,
-      tags: [],
-      runner: "agent" as const,
-    }));
-    try {
-      // ③ 创建 run,停在 planning —— 等用户在画布上配置后手动运行。
-      const { run } = await api.orch.createRun({
-        sessionId,
-        goal: prompt,
-        tasks,
-        autoStart: false,
-      });
-      // ④ 画布块落进消息流并落库(摘要说明跟在其后);右栏打开该 run 的
-      //    运行总览。run 首次进桶由 createRun 的 run.updated 推送完成(监听
-      //    已就绪),这里不再重复 upsert。
-      const canvasMsg: ChatMessage = {
-        id: `orch_canvas_${run.id}`,
-        sessionId,
-        role: "assistant",
-        blocks: [
-          { kind: "orch-canvas", canvasId: `orch-${run.id}`, runId: run.id, goal: prompt },
-          { kind: "text", text: translate(locale, "orch.canvas.decomposed", { n: run.tasks.length }) },
-        ],
-        createdAt: Date.now(),
-      };
-      set((s) => ({
-        messagesBySession: {
-          ...s.messagesBySession,
-          [sessionId]: [...(s.messagesBySession[sessionId] ?? []), canvasMsg],
-        },
-      }));
-      void api.session.upsertMessages({ sessionId, messages: toRecords(sessionId, [canvasMsg]) });
-      get().selectOrchNode(run.id, null);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      pushToastLite("error", `${translate(locale, "orch.canvas.flowFailed")}\n${message}`);
     }
   },
 

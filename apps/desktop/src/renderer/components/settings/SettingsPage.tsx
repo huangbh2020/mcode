@@ -20,7 +20,6 @@ import {
   IconHandMove,
   IconPackage,
   IconPuzzle,
-  IconUsers,
   McpIcon,
   type TablerIconProps,
 } from "@renderer/lib/icons.js";
@@ -91,7 +90,7 @@ const NAV_GROUPS: NavGroup[] = [
     labelKey: "settings.navGroup.ai",
     items: [
       { id: "custom-models", labelKey: "settings.nav.customModels", icon: IconRobot },
-      { id: "agents", labelKey: "orch.agents.panelTitle", icon: IconUsers },
+      { id: "agents", labelKey: "orch.settings.panelTitle", icon: IconSparkles },
       { id: "runtimes", labelKey: "settings.nav.runtimes", icon: IconPackage },
       { id: "plugins", labelKey: "settings.nav.plugins", icon: IconPuzzle },
       { id: "skills", labelKey: "settings.nav.skills", icon: IconSparkles },

@@ -11,8 +11,7 @@
  *     run → plan.proposed 推回渲染端挂画布。工具本身是纯数据提交,canUseTool
  *     全模式免审批;真正有风险的动作发生在 worker 会话,各自带自己的权限。
  *
- * 仅 Claude provider 接线(Pi 无 createSdkMcpServer 等价物;Pi 会话的编排
- * 仍可用 @agents 目标模式的确定性骨架,不经模型)。
+ * 仅 Claude provider 接线(Pi 无 createSdkMcpServer 等价物)。
  */
 import { z } from "zod";
 import type { McpSdkServerConfigWithInstance } from "@anthropic-ai/claude-agent-sdk";
@@ -23,7 +22,6 @@ import { IPC } from "@contracts/ipc";
 // 注意:对同目录兄弟模块走 @main 别名而非相对路径 —— 冒烟脚本(esbuild
 // alias 打桩)依赖这套说明符。
 import { orchestrator } from "@main/orchestrator/OrchestratorService.js";
-import { ProfileStore } from "@main/orchestrator/profiles.js";
 import { SessionRepo } from "@main/store/repositories.js";
 import { providerRegistry } from "@main/providers/registry.js";
 import { CustomModelStore } from "@main/lib/secretStore.js";
@@ -48,7 +46,6 @@ export function isOrchPlanTool(toolName: string): boolean {
 const OrchPlanTaskSchema = z.object({
   spec: z.string().min(1).describe("任务简报:目标、约束、产物路径、验收标准"),
   deps: z.array(z.string()).optional().describe("依赖的任务编号列表(t1、t2…按提交顺序)"),
-  profileId: z.string().nullable().optional().describe("承担者 agent id,或 null"),
   providerId: z.string().nullable().optional().describe("厂商 id(claude-sdk/pi-sdk/codex-sdk)"),
   model: z.string().nullable().optional().describe("模型 id"),
   customModelId: z.string().nullable().optional().describe("该模型所属的模型配置 id(仅 claude)"),
@@ -259,7 +256,6 @@ function clampNodeExecConfig(
     customModelId?: string | null;
     effort?: string | null;
     permissionMode?: string | null;
-    profileId?: string | null;
   },
   surface: Awaited<ReturnType<typeof buildAvailableModelSurface>>,
   coordinator: Session,
@@ -309,9 +305,8 @@ function clampNodeExecConfig(
     model = null;
   }
 
-  // 缺省档的厂商推断:节点 providerId → profile → 协调者会话。
-  const profile = t.profileId ? ProfileStore.get(t.profileId) : undefined;
-  const effProviderId = pid ?? profile?.providerId ?? coordinator.providerId ?? null;
+  // 缺省档的厂商推断:节点 providerId → 协调者会话。
+  const effProviderId = pid ?? coordinator.providerId ?? null;
   const effCaps = effProviderId ? providerRegistry.get(effProviderId)?.capabilities : undefined;
   const levels = effCaps?.thinkingLevels ?? [];
   const modes = effCaps?.permissionModes ?? [];
@@ -342,7 +337,6 @@ function clampNodeExecConfig(
     const allowed = plannerAllowedModels(effProviderId, coordinator, surface);
     if (!model) {
       const candidates = [
-        ...(profile?.providerId === effProviderId && profile.model ? [profile.model] : []),
         ...(coordinator.providerId === effProviderId && coordinator.model ? [coordinator.model] : []),
       ];
       model =
@@ -362,23 +356,14 @@ function clampNodeExecConfig(
 }
 
 /** 编排规划者的系统提示段(provider 在 orchestration 回合追加到 systemPrompt)。
- *  内容 = 角色与工具用法 + 可用模型面 + agent 清单 + 硬约束。原无头 planner
- *  的提示词资产在此回收;关键差别:模型在本会话内执行,看得见全部对话历史
- *  —— 用户的调整要求("简单一些")天然带着此前目标与上一轮任务图。 */
+ *  内容 = 角色与工具用法 + 可用模型面 + 硬约束。原无头 planner 的提示词资产
+ *  在此回收;关键差别:模型在本会话内执行,看得见全部对话历史 —— 用户的调整
+ *  要求("简单一些")天然带着此前目标与上一轮任务图。 */
 export async function buildOrchPlanNudge(sessionId: string): Promise<string> {
   const coordinator = SessionRepo.get(sessionId);
   if (!coordinator) return "";
   const surface = await buildAvailableModelSurface();
   const surfaceDescription = describeSurface(surface, coordinator);
-  const agentDescription = ProfileStore.list()
-    .filter((p) => surface.has(p.providerId))
-    .map(
-      (p) =>
-        `${p.id}(${p.tags.join("/") || "generic"},${p.providerId}/${p.model}${
-          p.builtin ? ",内置" : ""
-        })`,
-    )
-    .join("、");
   return [
     "【编排规划模式】",
     "本轮你担任 Mcode 的编排规划者:把用户提出的总体目标拆解为编排任务图,并调用 " +
@@ -388,17 +373,14 @@ export async function buildOrchPlanNudge(sessionId: string): Promise<string> {
     "- 若用户的消息是提问、闲聊或与拆解无关,正常回答,不要调用该工具。",
     "- 工具只调用一次;提交后用一句话总结拆解思路即结束,绝不亲自执行这些任务(它们由用户在画布上检查后另行派发)。",
     "",
-    "每个任务节点字段:spec(简报:目标/约束/产物路径/验收标准)、deps(依赖编号 t1…tN,能并行的并行,写码任务尽量独立)、profileId、providerId、model、customModelId、effort、permissionMode、tags、reviewOf、variantGroup。任务图深度 ≤ 4。",
+    "每个任务节点字段:spec(简报:目标/约束/产物路径/验收标准)、deps(依赖编号 t1…tN,能并行的并行,写码任务尽量独立)、providerId、model、customModelId、effort、permissionMode、tags、reviewOf、variantGroup。任务图深度 ≤ 4。",
     "",
     surfaceDescription,
-    `可选 agent:${agentDescription || "(系统中尚无 agent)"}`,
     "",
     "硬约束:",
-    "- profileId 只能是上面列出的 agent id 或 null,绝不要自己造 agent id。",
     "- providerId/model/effort/permissionMode 四项每个节点都必须给出明确值,绝不允许 null、省略或留空(claude 节点还必须给 customModelId 与 model 三元组配对);值只能逐字取自上面清单,编造的值会被整项作废。",
     "- 【模型选举】为每个节点选举最合适的 model:重推理/架构/写码给高档模型,轻量机械任务给轻量模型;不要把所有节点都丢给同一个模型。",
     "- effort 按任务轻重:重推理/架构/写码给高档(xhigh/max),轻量整理给 low/medium。permissionMode 建议该厂商的免审批档(claude/pi = bypassPermissions,codex = full-access);仅当某节点要收敛权限时才给 default/acceptEdits/read-only。",
-    "- 已选 profileId 的节点同样给出四项;仅当想让同一 profile 以不同模型或档位运行时才另选。",
   ].join("\n");
 }
 
@@ -441,7 +423,7 @@ export async function buildOrchPlanMcpServerAsync(
               id: `t${i + 1}`,
               spec: t.spec,
               deps: t.deps ?? [],
-              profileId: t.profileId ?? null,
+              profileId: null, // agent 角色域已退役;历史 run 的字段保留兼容
               providerId: exec.providerId,
               model: exec.model,
               customModelId: exec.customModelId,
@@ -452,11 +434,15 @@ export async function buildOrchPlanMcpServerAsync(
               variantGroup: t.variantGroup ?? null,
             });
           });
+          // 设置页「默认预算」在此接线:非 0 时自动拆解出的 run 自带预算闸
+          // (超限 pause + budget gate)—— 无人值守 worker 的节流手段。
+          const defaultBudget = orchestrator.getSettings().budgetUsd;
           const res = orchestrator.createRun({
             parentSessionId: sessionId,
             projectId: coordinator.projectId,
             goal,
             tasks,
+            budgetUsd: defaultBudget > 0 ? defaultBudget : null,
             autoStart: false, // planning 态:用户在画布上检查后手动开跑
           });
           if ("error" in res) {

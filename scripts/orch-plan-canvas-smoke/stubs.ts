@@ -9,8 +9,6 @@
  * 后推送).
  */
 
-/** createRun calls captured by scenario assertions. */
-let createRunCalls = 0;
 let runSeq = 0;
 
 export function makeRun(sessionId: string): Record<string, unknown> {
@@ -43,12 +41,8 @@ export const api = {
     interrupt: async () => {},
   },
   orch: {
-    // @agents 骨架流仍走 createRun RPC(会话内拆解的 run 由 main 的工具
-    // handler 创建,渲染端只消费 plan.proposed,不调它)。
-    createRun: async (input: { sessionId: string }) => {
-      createRunCalls++;
-      return { run: makeRun(input.sessionId) };
-    },
+    // 会话内拆解的 run 由 main 的工具 handler 创建,渲染端只消费
+    // plan.proposed,不调 createRun。
     listRuns: async () => ({ runs: [] }),
   },
   setting: {
@@ -56,9 +50,5 @@ export const api = {
     set: async () => ({}),
   },
 };
-
-export function createRunCallCount(): number {
-  return createRunCalls;
-}
 
 export const isElectron = true;

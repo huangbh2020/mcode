@@ -1,19 +1,17 @@
 /**
  * Headless smoke for the in-session decompose canvas wiring (renderer side).
  *
- * Two scenarios against the REAL sessionStore:
- *  ① plan.proposed reducer — main 的 orch_submit_plan handler 钳制建卡后推送
- *     {kind:"plan.proposed", run};canvas 块必须挂到当前回合最后一条
- *     assistant 消息(工具调用所在那条)上且幂等(重复事件不重复追加),
- *     run 进 orchRunsBySession。
- *  ② @agents 骨架流(startOrchestrationFlow + profileIds)— 用户消息带
- *     targets 徽标、createRun 建卡、画布消息落桶。
+ * Scenario against the REAL sessionStore:
+ *  plan.proposed reducer — main 的 orch_submit_plan handler 钳制建卡后推送
+ *  {kind:"plan.proposed", run};canvas 块必须挂到当前回合最后一条
+ *  assistant 消息(工具调用所在那条)上且幂等(重复事件不重复追加),
+ *  run 进 orchRunsBySession;无 assistant 消息可挂时兜底自建画布消息。
  *
  * Bundle with run.sh (esbuild; only @renderer/lib/api.js is aliased).
  */
 import { useSessionStore } from "@renderer/stores/sessionStore.js";
 import type { OrchestratorEvent } from "@contracts/orchestration";
-import { makeRun, createRunCallCount } from "./stubs.js";
+import { makeRun } from "./stubs.js";
 
 let failures = 0;
 function check(name: string, cond: boolean, detail?: unknown): void {
@@ -85,20 +83,6 @@ await sleep(0);
 const list2 = useSessionStore.getState().messagesBySession[SID2] ?? [];
 const synth = list2.find((m) => m.id.startsWith("orch_canvas_"));
 check("fallback synthesized a canvas-only message", !!synth && synth.blocks.some((b) => b.kind === "orch-canvas"), list2.map((m) => m.id));
-
-// ── 场景③:@agents 骨架流(startOrchestrationFlow + profileIds) ──
-const SID3 = "s3";
-useSessionStore.setState((s) => ({
-  messagesBySession: { ...s.messagesBySession, [SID3]: [] },
-  sessionsByProject: { ...s.sessionsByProject, p1: [] },
-}));
-await useSessionStore.getState().startOrchestrationFlow(SID3, "两个 agent 各写一版", { profileIds: ["agent-a", "agent-b"] });
-await sleep(0);
-const list3 = useSessionStore.getState().messagesBySession[SID3] ?? [];
-const userMsg = list3.find((m) => m.role === "user");
-check("skeleton flow appends the user message with targets tag", userMsg?.orchTag === "targets", userMsg);
-check("skeleton flow appends a canvas-only assistant message", list3.some((m) => m.role === "assistant" && m.id.startsWith("orch_canvas_")), list3.map((m) => m.id));
-check("skeleton flow created the run via RPC", createRunCallCount() === 1, createRunCallCount());
 
 if (failures > 0) {
   console.error(`\n${failures} assertion(s) failed`);

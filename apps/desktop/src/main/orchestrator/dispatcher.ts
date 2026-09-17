@@ -4,19 +4,18 @@
  * agent runner → 结构化子会话(kind='orch-worker',记 parentSessionId,
  *   orch_meta 列携带完成权威凭证),复用 Session 持久化/resume/usage/
  *   transcript —— 断点续跑近乎免费;跨 provider 由 providerRegistry 直接
- *   达成(profile.providerId)。worker 对编排协议零感知:完成由基础设施
+ *   达成。worker 对编排协议零感知:完成由基础设施
  *   从结构化事件(turn.done/turn.files/token-usage)推导,worker_done
  *   不是 prose 协议而是事件推导。
  * terminal runner → 子进程命令(逃生舱,兼容任意 agent CLI),输出落盘
  *   为报告,退出码即结论。
  */
-import type { AgentProfile, DispatchContext, OrchestrationRun, TaskNode } from "@contracts/orchestration";
+import type { DispatchContext, OrchestrationRun, TaskNode } from "@contracts/orchestration";
 import type { Session } from "@contracts/session";
 import { ProjectRepo, SessionRepo } from "@main/store/repositories.js";
 import { runtimeManager } from "@main/claude/RuntimeManager.js";
 import { createOrReuseSession } from "@main/lib/sessionStart.js";
 import { resolveSessionCwd } from "@main/lib/sessionCwd.js";
-import { ProfileStore } from "./profiles.js";
 import { decideWorktree } from "./worktreePlanner.js";
 import { estimateTokens } from "./taskStore.js";
 import { log } from "@main/lib/logger.js";
@@ -49,11 +48,10 @@ function contextBlock(ctx: DispatchContext): string {
 export function buildWorkerPrompt(
   run: OrchestrationRun,
   task: TaskNode,
-  profile: AgentProfile | undefined,
   upstreamArtifacts: string[],
 ): string {
   const sections: string[] = [];
-  sections.push(profile?.systemPrompt?.trim() || "你是 Mcode 编排系统的一个 worker agent。");
+  sections.push("你是 Mcode 编排系统的一个 worker agent。");
   sections.push(
     [
       "【总体目标】",
@@ -115,10 +113,6 @@ export async function dispatchAgentTask(
   task: TaskNode,
 ): Promise<DispatchOutcome> {
   const dispatchId = uid("disp_");
-  const profile = task.profileId ? ProfileStore.get(task.profileId) : undefined;
-  if (task.profileId && !profile) {
-    return { ok: false, dispatchId, error: `agent profile not found: ${task.profileId}` };
-  }
   const project = ProjectRepo.get(run.projectId);
   if (!project) return { ok: false, dispatchId, error: `project not found: ${run.projectId}` };
 
@@ -128,25 +122,25 @@ export async function dispatchAgentTask(
   // (主会话发消息正是靠它走 buildCustomEnv/桥,worker 必须同款)。
   const coordinator = SessionRepo.get(run.parentSessionId);
 
-  const wt = decideWorktree(run, task, profile);
+  const wt = decideWorktree(run, task);
   const ctx: DispatchContext = {
     runId: run.id,
     taskId: task.id,
     dispatchId,
     coordinatorSessionId: run.parentSessionId,
   };
-  const prompt = buildWorkerPrompt(run, task, profile, collectUpstreamArtifacts(run, task));
+  const prompt = buildWorkerPrompt(run, task, collectUpstreamArtifacts(run, task));
 
   const { session } = createOrReuseSession(
     {
       projectId: run.projectId,
       // 显式标题 → 永远建新行(防复用逻辑把 worker 塞进用户会话)。
       title: `${task.spec.slice(0, 30)}${task.spec.length > 30 ? "…" : ""}`.replace(/\s+/g, " "),
-      // 节点级覆盖(画布配置)→ agent 角色 → 协调者会话(「跟随会话默认」)。
-      providerId: task.providerId ?? profile?.providerId ?? coordinator?.providerId,
-      model: task.model ?? profile?.model ?? coordinator?.model,
-      effort: task.effort ?? profile?.effort ?? coordinator?.effort ?? "default",
-      permissionMode: task.permissionMode ?? profile?.permissionMode ?? coordinator?.permissionMode ?? "default",
+      // 节点级覆盖(画布配置)→ 协调者会话(「跟随会话默认」)。
+      providerId: task.providerId ?? coordinator?.providerId,
+      model: task.model ?? coordinator?.model,
+      effort: task.effort ?? coordinator?.effort ?? "default",
+      permissionMode: task.permissionMode ?? coordinator?.permissionMode ?? "default",
       customModelId: task.customModelId ?? coordinator?.customModelId ?? undefined,
       kind: "orch-worker",
       parentSessionId: run.parentSessionId,

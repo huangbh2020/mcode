@@ -40,6 +40,7 @@ export const log = { info: () => {}, warn: () => {} };
 export let lastCreateRun: Record<string, unknown> | null = null;
 export const orchestrator = {
   start: async () => {},
+  getSettings: () => ({ triggerMode: "ask", concurrency: 4, budgetUsd: 0 }),
   createRun(input: Record<string, unknown>): { run: Record<string, unknown> } | { error: string } {
     lastCreateRun = input;
     if (!Array.isArray(input.tasks) || input.tasks.length === 0) return { error: "no tasks" };
@@ -60,20 +61,6 @@ export const orchestrator = {
 export const runtimeManager = {};
 
 export const TemplateStore = { list: () => [] };
-
-export const ProfileStore = {
-  list: () => [
-    {
-      id: "builtin-implementer",
-      tags: ["coding"],
-      providerId: "claude-sdk",
-      model: "sonnet",
-      builtin: true,
-    },
-  ],
-  get: (id: string) =>
-    ProfileStore.list().find((p) => p.id === id),
-};
 
 export const coordinatorSession = {
   id: "s1",

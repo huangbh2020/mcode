@@ -88,7 +88,7 @@ export interface Session {
    *  the side-chat panel, keyed by their parent session. "orch-worker" = an
    *  orchestration worker sub-session (parentSessionId = coordinator); like
    *  side sessions it is invisible to every list and is managed only by the
-   *  orchestrator (DAG panel / inbox). */
+   *  orchestrator (DAG panel). */
   kind: "chat" | "side" | "orch-worker";
   /** For side/orch-worker sessions: the id of the main session this
    *  subordinate thread belongs to. Null for main sessions; set back to null

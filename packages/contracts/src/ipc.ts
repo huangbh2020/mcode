@@ -14,16 +14,12 @@ import type { ThemeName, EffectiveTheme, ThemeChangedMessage } from "./theme.js"
 import type { PairingStartResult, PairedDevice } from "./mobile.js";
 import type { RelayStatus, RelayVpsConfig, RelayVpsConfigInput } from "./relay.js";
 import {
-  AgentProfileSchema,
   TaskSpecInputSchema,
   WorktreePolicySchema,
-  OrchestrationTemplateSchema,
   OrchSettingsSchema,
 } from "./orchestration.js";
 import type {
-  AgentProfile,
   OrchestrationRun,
-  OrchestrationTemplate,
   OrchSettings,
   OrchestratorEvent,
 } from "./orchestration.js";
@@ -614,8 +610,9 @@ export const UI_RIGHT_PANEL_TAB_SETTING_KEY = "ui.rightPanelTab";
 /** zod schema + TS union for the right-panel tab preference. "sidechat" (the
  *  side-chat Q&A tab) is session-only like "browser": hydrate ignores a
  *  persisted value so the ask tab never auto-opens at startup. "orch" (the
- *  orchestration DAG panel) and "inbox" (aggregated worker asks/gates) are
- *  session-only for the same reason. */
+ *  orchestration DAG panel) is session-only for the same reason. (An "inbox"
+ *  tab used to aggregate worker asks/gates; it was removed — a persisted
+ *  "inbox" value is rejected by the schema and falls back to "files".) */
 export const RightPanelTabSchema = z.enum([
   "files",
   "git",
@@ -623,7 +620,6 @@ export const RightPanelTabSchema = z.enum([
   "turns",
   "sidechat",
   "orch",
-  "inbox",
 ]);
 export type RightPanelTab = z.infer<typeof RightPanelTabSchema>;
 
@@ -3574,12 +3570,6 @@ export interface VoiceDownloadProgressMessage {
 
 /* ── Agent orchestration (docs/orchestration-plan.md) ──
  *  Supervised fan-out/pipeline runs over worker sub-sessions + handoff. */
-export const OrchAgentSaveSchema = z.object({ agent: AgentProfileSchema });
-export type OrchAgentSaveInput = z.infer<typeof OrchAgentSaveSchema>;
-
-export const OrchAgentDeleteSchema = z.object({ id: z.string() });
-export type OrchAgentDeleteInput = z.infer<typeof OrchAgentDeleteSchema>;
-
 export const OrchCreateRunSchema = z.object({
   sessionId: z.string(),
   title: z.string().optional(),
@@ -3591,7 +3581,6 @@ export const OrchCreateRunSchema = z.object({
   budgetUsd: z.number().positive().nullable().optional(),
   concurrency: z.number().int().positive().optional(),
   worktreePolicy: WorktreePolicySchema.optional(),
-  templateId: z.string().nullable().optional(),
   /** false = create in "planning" and wait for a follow-up start (wizard
    *  confirm step already happened renderer-side; default true = start now). */
   autoStart: z.boolean().optional(),
@@ -3616,8 +3605,6 @@ export const OrchTaskControlSchema = z.object({
   runId: z.string(),
   taskId: z.string(),
   action: z.enum(["pause", "resume", "retry", "cancel", "rerun", "markCompleted"]),
-  /** rerun: change the assignee before re-dispatching (换模型重跑). */
-  profileId: z.string().nullable().optional(),
 });
 export type OrchTaskControlInput = z.infer<typeof OrchTaskControlSchema>;
 
@@ -3627,7 +3614,6 @@ export const OrchUpdateTaskSchema = z.object({
   taskId: z.string(),
   spec: z.string().min(1).optional(),
   deps: z.array(z.string()).optional(),
-  profileId: z.string().nullable().optional(),
   customModelId: z.string().nullable().optional(),
   providerId: z.string().nullable().optional(),
   model: z.string().nullable().optional(),
@@ -3660,8 +3646,6 @@ export type OrchMergeTaskInput = z.infer<typeof OrchMergeTaskSchema>;
 export const OrchHandoffSchema = z.object({
   projectId: z.string(),
   briefing: z.string().min(1),
-  /** Role template to aim the new session at (provider/model/effort/permission). */
-  profileId: z.string().optional(),
   /** Session the handoff was triggered from (traceability, logging). */
   fromSessionId: z.string().optional(),
   title: z.string().optional(),
@@ -3670,12 +3654,6 @@ export type OrchHandoffInput = z.infer<typeof OrchHandoffSchema>;
 
 export const OrchWorkerSessionSchema = z.object({ sessionId: z.string() });
 export type OrchWorkerSessionInput = z.infer<typeof OrchWorkerSessionSchema>;
-
-export const OrchTemplateSaveSchema = z.object({ template: OrchestrationTemplateSchema });
-export type OrchTemplateSaveInput = z.infer<typeof OrchTemplateSaveSchema>;
-
-export const OrchTemplateDeleteSchema = z.object({ id: z.string() });
-export type OrchTemplateDeleteInput = z.infer<typeof OrchTemplateDeleteSchema>;
 
 /** Auto-decompose a goal into a task DAG proposal (model-driven wizard step).
  *  Runs in a side session so the coordinator chat stays clean; returns a
@@ -4645,11 +4623,8 @@ export interface RpcMap {
   "relay.status": () => Promise<RelayStatus>;
   // ── Agent orchestration ──
   /** List agent role profiles (builtin + user). */
-  "orch.agentList": () => Promise<{ agents: AgentProfile[] }>;
   /** Create/update an agent profile (upsert by id). */
-  "orch.agentSave": (input: OrchAgentSaveInput) => Promise<{ agents: AgentProfile[] }>;
   /** Delete a user profile (builtin originals cannot be deleted). */
-  "orch.agentDelete": (input: OrchAgentDeleteInput) => Promise<{ agents: AgentProfile[] }>;
   /** Orchestration settings (trigger mode / defaults). */
   "orch.getSettings": () => Promise<{ settings: OrchSettings }>;
   "orch.saveSettings": (input: OrchSettingsSaveInput) => Promise<{ settings: OrchSettings }>;
@@ -4678,9 +4653,6 @@ export interface RpcMap {
   /** Fetch a worker sub-session row (for opening its transcript in a tab). */
   "orch.workerSession": (input: OrchWorkerSessionInput) => Promise<{ session: Session | null }>;
   /** List orchestration templates (builtin pipeline/competition + user). */
-  "orch.templatesList": () => Promise<{ templates: OrchestrationTemplate[] }>;
-  "orch.templateSave": (input: OrchTemplateSaveInput) => Promise<{ templates: OrchestrationTemplate[] }>;
-  "orch.templateDelete": (input: OrchTemplateDeleteInput) => Promise<{ templates: OrchestrationTemplate[] }>;
 }
 
 /** The channel names used in invoke/handle and send/on. Keep these centralized
@@ -4944,9 +4916,6 @@ export const IPC = {
   // Relay push events (main → renderer).
   RELAY_EVENT: "relay:event",
   // Agent orchestration (supervised runs + handoff) — invoke/handle (RPC).
-  ORCH_AGENT_LIST: "orch:agentList",
-  ORCH_AGENT_SAVE: "orch:agentSave",
-  ORCH_AGENT_DELETE: "orch:agentDelete",
   ORCH_GET_SETTINGS: "orch:getSettings",
   ORCH_SAVE_SETTINGS: "orch:saveSettings",
   ORCH_CREATE_RUN: "orch:createRun",
@@ -4961,9 +4930,6 @@ export const IPC = {
   ORCH_MERGE_TASK: "orch:mergeTask",
   ORCH_HANDOFF: "orch:handoff",
   ORCH_WORKER_SESSION: "orch:workerSession",
-  ORCH_TEMPLATES_LIST: "orch:templatesList",
-  ORCH_TEMPLATE_SAVE: "orch:templateSave",
-  ORCH_TEMPLATE_DELETE: "orch:templateDelete",
   // Orchestration push events (main → renderer).
   ORCH_EVENT: "orchestrator:event",
   // send/on (push events)

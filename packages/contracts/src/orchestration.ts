@@ -15,48 +15,6 @@
 import { z } from "zod";
 
 /* ------------------------------------------------------------------ */
-/* AgentProfile — 用户定义的"角色"模板                                 */
-/* ------------------------------------------------------------------ */
-
-export const AgentProfileTagSchema = z.enum([
-  "planning",
-  "coding",
-  "writing",
-  "image",
-  "review",
-  "testing",
-  "generic",
-]);
-export type AgentProfileTag = z.infer<typeof AgentProfileTagSchema>;
-
-export const WorktreePreferenceSchema = z.enum(["active", "new", "none"]);
-export type WorktreePreference = z.infer<typeof WorktreePreferenceSchema>;
-
-export const AgentProfileSchema = z.object({
-  id: z.string().min(1),
-  name: z.string().min(1),
-  /** 展示用 emoji/tabler 图标名（简单起见存 emoji 或空）。 */
-  icon: z.string().default("🤖"),
-  /** 主题色（tailwind 调色板名或 hex）。 */
-  color: z.string().default("sky"),
-  providerId: z.string().default("claude-sdk"),
-  model: z.string().default("default"),
-  effort: z.string().default("default"),
-  /** 角色指令：作为 worker 简报的 system 段注入。 */
-  systemPrompt: z.string().default(""),
-  /** 工具白名单（空 = 不限制；仅对支持的工具集生效的提示性约束）。 */
-  allowedTools: z.array(z.string()).default([]),
-  permissionMode: z.string().default("default"),
-  defaultWorktree: WorktreePreferenceSchema.default("none"),
-  tags: z.array(AgentProfileTagSchema).default(["generic"]),
-  /** 内置模板标记：内置模板可被用户覆盖，但不允许删除原始定义。 */
-  builtin: z.boolean().default(false),
-  createdAt: z.number().default(0),
-  updatedAt: z.number().default(0),
-});
-export type AgentProfile = z.infer<typeof AgentProfileSchema>;
-
-/* ------------------------------------------------------------------ */
 /* 任务图（TaskGraph）                                                 */
 /* ------------------------------------------------------------------ */
 
@@ -270,26 +228,6 @@ export interface WorkerDonePayload {
   reportPath?: string;
   usage?: { inputTokens: number; outputTokens: number; costUsd: number };
 }
-
-/* ------------------------------------------------------------------ */
-/* 编排模板（pipeline 保存复用 / 竞争 / fan-out）                       */
-/* ------------------------------------------------------------------ */
-
-export const OrchestrationTemplateSchema = z.object({
-  id: z.string().min(1),
-  name: z.string().min(1),
-  description: z.string().default(""),
-  builtin: z.boolean().default(false),
-  /** 任务占位：spec 中的 {goal} 会被替换为运行目标。 */
-  tasks: z.array(TaskSpecInputSchema).default([]),
-  /** 默认预算/并发等覆盖。 */
-  budgetUsd: z.number().positive().nullable().default(null),
-  concurrency: z.number().int().positive().default(4),
-  worktreePolicy: WorktreePolicySchema.default("auto"),
-  createdAt: z.number().default(0),
-  updatedAt: z.number().default(0),
-});
-export type OrchestrationTemplate = z.infer<typeof OrchestrationTemplateSchema>;
 
 /* ------------------------------------------------------------------ */
 /* 编排设置（触发档位等）                                              */

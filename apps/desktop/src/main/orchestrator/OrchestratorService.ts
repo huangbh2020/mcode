@@ -20,7 +20,6 @@
  *  - 所有权卫生:协调者会话删除时 run 一并收敛。
  */
 import type {
-  AgentProfile,
   Gate,
   OrchestrationRun,
   OrchSettings,
@@ -45,7 +44,6 @@ import { awaitDb } from "@main/store/db.js";
 import { readyTasks, runSettled, validateTaskGraph, downstreamTasks, BREAKER_LIMIT, estimateTokens } from "./taskStore.js";
 import { dispatchAgentTask, dispatchTerminalTask } from "./dispatcher.js";
 import { notifyRunDeleted, notifyTaskTerminal, bindSnapshotProvider, disposeWaiters } from "./waiter.js";
-import { ProfileStore, RoutingStats } from "./profiles.js";
 
 const RUNS_KEY = "orch.runs.v1";
 const SETTINGS_KEY = "orch.settings.v1";
@@ -165,11 +163,6 @@ class OrchestratorService {
     const errors = validateTaskGraph(input.tasks);
     if (errors.length > 0) return { error: errors.join(";\n") };
     if (!SessionRepo.get(input.parentSessionId)) return { error: `coordinator session not found: ${input.parentSessionId}` };
-    for (const t of input.tasks) {
-      if (t.runner === "agent" && t.profileId && !ProfileStore.get(t.profileId)) {
-        return { error: `任务 ${t.id} 的 agent 不存在:${t.profileId}` };
-      }
-    }
     const now = Date.now();
     const goal = input.goal.trim();
     const run = OrchestrationRunSchema.parse({
@@ -361,12 +354,7 @@ class OrchestratorService {
         usage: extra.usage ?? task.result?.usage,
       });
       task.artifacts = [...new Set([...task.artifacts, ...(extra.filesModified ?? [])])];
-      // 分配学习:tag 成功计数。
-      const profileId = task.profileId;
-      if (profileId) {
-        for (const tag of task.tags.length > 0 ? task.tags : ["generic"]) RoutingStats.record(tag, profileId, true);
-      }
-      // worker_done 推送(收件箱聚合同源)。
+      // worker_done 推送(前端待处理卡的审批/提问聚合同源)。
       this.emit({
         kind: "worker_done",
         payload: {
@@ -394,10 +382,6 @@ class OrchestratorService {
   /** 失败收敛:重试三档 —— 节点级自动重试 1 次 → 熔断 blocked +
    *  escalation gate(人工接管/换模型重跑由 gate 后的 taskControl 驱动)。 */
   private failTask(run: OrchestrationRun, task: TaskNode, reason: string): void {
-    const profileId = task.profileId;
-    if (profileId) {
-      for (const tag of task.tags.length > 0 ? task.tags : ["generic"]) RoutingStats.record(tag, profileId, false);
-    }
     task.failureCount += 1;
     const entry = task.dispatches[task.dispatches.length - 1];
     if (entry) {
@@ -687,7 +671,6 @@ class OrchestratorService {
     runId: string,
     taskId: string,
     action: "pause" | "resume" | "retry" | "cancel" | "rerun" | "markCompleted",
-    profileId?: string | null,
   ): { run?: OrchestrationRun; error?: string } {
     const run = this.runs.get(runId);
     if (!run) return { error: `run not found: ${runId}` };
@@ -719,10 +702,6 @@ class OrchestratorService {
           return {
             error: `下游任务已开始(${startedDownstream.map((x) => x.id).join("、")}),${taskId} 不能重跑;请先重跑/取消下游任务,或用画布右上角「重新运行」整体重置`,
           };
-        }
-        if (action === "rerun" && profileId !== undefined) {
-          if (profileId !== null && !ProfileStore.get(profileId)) return { error: `agent not found: ${profileId}` };
-          task.profileId = profileId;
         }
         task.status = "pending";
         task.failureCount = 0;
@@ -757,7 +736,7 @@ class OrchestratorService {
     return { run };
   }
 
-  /** 画布节点配置编辑(spec/deps/agent/模型/标题)。仅未派发的任务可改 ——
+  /** 画布节点配置编辑(spec/deps/模型/档位)。仅未派发的任务可改 ——
    *  dispatched/running 的行内状态正在被调度器与观察者消费,改动会在
    *  重跑时生效,这里直接拒绝以防线内撕裂。 */
   updateTask(
@@ -766,7 +745,6 @@ class OrchestratorService {
     patch: {
       spec?: string;
       deps?: string[];
-      profileId?: string | null;
       customModelId?: string | null;
       providerId?: string | null;
       model?: string | null;
@@ -781,12 +759,8 @@ class OrchestratorService {
     if (task.status !== "pending" && task.status !== "blocked" && task.status !== "canceled" && task.status !== "paused" && task.status !== "failed") {
       return { error: `task ${taskId} is ${task.status} — 只有未在运行的任务可以编辑` };
     }
-    if (patch.profileId !== undefined && patch.profileId !== null && !ProfileStore.get(patch.profileId)) {
-      return { error: `agent not found: ${patch.profileId}` };
-    }
     if (patch.spec !== undefined) task.spec = patch.spec;
     if (patch.deps !== undefined) task.deps = [...patch.deps];
-    if (patch.profileId !== undefined) task.profileId = patch.profileId;
     if (patch.customModelId !== undefined) task.customModelId = patch.customModelId;
     if (patch.providerId !== undefined) task.providerId = patch.providerId;
     if (patch.model !== undefined) task.model = patch.model;
@@ -1025,4 +999,3 @@ function parseVerdict(summary: string): "pass" | "fail" | "changes_requested" {
 }
 
 export const orchestrator = new OrchestratorService();
-export type { AgentProfile, RunStatus };

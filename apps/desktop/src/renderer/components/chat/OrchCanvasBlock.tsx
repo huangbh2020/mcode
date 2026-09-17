@@ -103,7 +103,6 @@ function edgePath(g: { x1: number; y1: number; x2: number; y2: number }): string
 export function OrchCanvasBlock({ runId, goal }: { canvasId: string; runId: string; goal: string }) {
   const { t } = useI18n();
   const runsMap = useSessionStore((s) => s.orchRunsBySession);
-  const agents = useSessionStore((s) => s.orchAgents);
   const customModels = useSessionStore((s) => s.customModels);
   const ensureOrchRun = useSessionStore((s) => s.ensureOrchRun);
   const selectOrchNode = useSessionStore((s) => s.selectOrchNode);
@@ -354,8 +353,8 @@ export function OrchCanvasBlock({ runId, goal }: { canvasId: string; runId: stri
   const doneCount = run.tasks.filter((x) => x.status === "completed").length;
   const taskById = (id: string) => run.tasks.find((x) => x.id === id);
 
-  const profileOf = (task: TaskNode) => (task.profileId ? agents.find((a) => a.id === task.profileId) : undefined);
-  // 节点执行者标签:厂商/模型覆盖优先,回退 agent 角色(@@ 目标),全空 = 未指派。
+  // 节点执行者标签:厂商/模型覆盖;全空 = 未指派。历史 run 可能仍带
+  // profileId(角色域已退役),无厂商/模型可显示时按未指派处理。
   const modelLabelOf = (task: TaskNode): string => {
     if (task.providerId) {
       if (task.customModelId) {
@@ -365,8 +364,6 @@ export function OrchCanvasBlock({ runId, goal }: { canvasId: string; runId: stri
       if (task.model && task.model !== "default") return `${task.providerId} · ${task.model}`;
       return task.providerId;
     }
-    const p = profileOf(task);
-    if (p) return `${p.providerId}/${p.model === "default" ? "跟随" : p.model}`;
     return t("orch.canvas.nodeUnassigned");
   };
 
@@ -684,7 +681,6 @@ export function OrchCanvasBlock({ runId, goal }: { canvasId: string; runId: stri
           {run.tasks.map((task) => {
             const a = layout.pos.get(task.id);
             if (!a) return null;
-            const p = profileOf(task);
             const elapsed = taskElapsed(task, now);
             const verdict = drag ? verdicts.get(task.id) : undefined;
             const isDragSelf = drag?.dragged === task.id && drag.dragged !== drag.fixed;
@@ -786,7 +782,7 @@ export function OrchCanvasBlock({ runId, goal }: { canvasId: string; runId: stri
                   {titleOf(task)}
                 </div>
                 <div className="oc-node-sub">
-                  <span className={cn(!task.providerId && !task.profileId && "oc-node-unassigned")}>
+                  <span className={cn(!task.providerId && !task.model && "oc-node-unassigned")}>
                     {modelLabelOf(task)}
                   </span>
                 </div>
