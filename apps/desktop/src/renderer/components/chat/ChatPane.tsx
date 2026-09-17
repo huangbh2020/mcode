@@ -804,6 +804,25 @@ function groupMessagesForRender(
       }
     }
 
+    // 编排流(自动拆解)回合的边界改锚:planner 的思考与 JSON 正文是过程数据,
+    // 编排画布/错误卡才是结果。编排回合没有任何工具调用,上面的「最后一个工具」
+    // 边界恒为 -1,planner 输出的整段任务 JSON 会被当成回复正文平铺在台账外。
+    // 检出编排流宿主消息(orch_host_ 前缀,store 的 startOrchestrationFlow 命名
+    // 且随消息持久化,重开后同样命中)时,把边界改锚在首个画布/错误块上——其
+    // 之前的全部块(含 JSON 文本)进面板折叠,之后的结果块保持可见。用户中途
+    // 停止的路径只有「已停止」文本卡,没有画布/错误块,不设边界(部分 JSON 与
+    // 停止卡保持可见,对齐中断语义)。
+    let orchSplitIdx = -1;
+    if (turnBlocks.some((tb) => tb.msg.id.startsWith("orch_host_"))) {
+      for (let j = 0; j < turnBlocks.length; j++) {
+        const kind = turnBlocks[j].block.kind;
+        if (kind === "orch-canvas" || kind === "error") {
+          orchSplitIdx = j;
+          break;
+        }
+      }
+    }
+
     let panelBlocks: Block[] = [];
     const textMsgs: ChatMessage[] = [];
 
@@ -819,8 +838,10 @@ function groupMessagesForRender(
       // landed — those never anchor the boundary but must not leak into the
       // reply, so re-route them here: a mid-answer thinking pause or a
       // trailing task-list update stays in the panel while the text around
-      // it remains visible.
-      if (j <= lastToolIdx || isProceduralBlock(block)) {
+      // it remains visible. Orchestration-flow turns (orchSplitIdx, see
+      // above) route everything before the canvas / error card here too —
+      // the planner's streamed JSON is process data, not the reply.
+      if (j <= lastToolIdx || isProceduralBlock(block) || (orchSplitIdx >= 0 && j < orchSplitIdx)) {
         panelBlocks.push(block);
       } else {
         // Reply surface: blocks after the last real tool, regrouped by source
@@ -2662,14 +2683,9 @@ function ChatPaneForSession({
     if (!text && tags.length === 0 && pendingImages.length === 0) return;
     // Don't allow sending while a turn (or a backgrounded subagent from a
     // prior turn) is still in flight — the stop button is the only valid
-    // action in that state. Same for an in-flight canvas decomposition:
-    // the orchestration flow is single-shot per session, and a swallowed
-    // send here would silently drop the typed text.
+    // action in that state. 自动编排拆解现在是会话内普通回合,running 旗标
+    // 已覆盖,不再有单独的 decomposing 门控。
     if (sessionBusy) return;
-    if (useSessionStore.getState().orchDecomposingBySession[sessionId]) {
-      useToastStore.getState().push({ kind: "info", title: t("orch.canvas.decomposing") });
-      return;
-    }
     // 编排运行中:本会话不能输入和发送(自动结果整理会写回本会话)。
     if (orchBlocking) {
       useToastStore.getState().push({ kind: "info", title: t("orch.canvas.inputLocked") });

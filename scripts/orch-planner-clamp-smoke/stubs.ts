@@ -1,6 +1,6 @@
 /**
- * Stubs for every runtime dependency of ipc/orchestrator.ts that the clamp
- * smoke must not pull in (electron, SQLite, SDK, provider SDKs). One module,
+ * Stubs for every runtime dependency of orchestrator/planTool.ts that the
+ * clamp smoke must not pull in (electron, SQLite, provider SDKs). One module,
  * aliased to many specifiers — see run.sh.
  *
  * The fake providerRegistry mirrors the real capabilities declarations
@@ -8,63 +8,54 @@
  * whitelist assertions exercise the same value sets production uses.
  */
 
-/* ── planner SDK reply (set per scenario by main.ts) ── */
+/* ── in-process MCP server stub (stands in for createSdkMcpServer) ── */
 
-let plannerReply = "{}";
-export function setPlannerReply(text: string): void {
-  plannerReply = text;
-}
-export let lastQueryPrompt = "";
-export function resetCapturedPrompt(): void {
-  lastQueryPrompt = "";
-}
-
-/** Captured sendToRenderer pushes (planner.delta assertions in main.ts). */
+/** Captured sendToRenderer pushes (plan.proposed assertions in main.ts). */
 export const pushedEvents: Array<{ channel: string; event: unknown }> = [];
 export function sendToRenderer(channel: string, msg: { channel: string; event: unknown }): void {
   pushedEvents.push(msg);
 }
 
-export let lastQueryIncludePartial = false;
-export let lastQuerySystemPrompt = "";
+export interface FakeMcpTool {
+  name: string;
+  handler: (args: Record<string, unknown>) => Promise<{ content: Array<{ type: string; text: string }> }>;
+}
+export interface FakeMcpServerConfig {
+  name: string;
+  tools: FakeMcpTool[];
+}
 
-/** Stands in for @anthropic-ai/claude-agent-sdk's query(): optional
- *  stream_event deltas (only when includePartialMessages is on — mirrors the
- *  real SDK contract), then a canned assistant proposal + result terminator. */
-export function query(opts: unknown): AsyncIterable<unknown> {
-  lastQueryPrompt = (opts as { prompt?: string })?.prompt ?? "";
-  const options = (opts as { options?: { includePartialMessages?: boolean; systemPrompt?: string } })?.options ?? {};
-  // 真实契约:开关在 query({ prompt, options }) 的 options 里,不在顶层。
-  lastQueryIncludePartial = options.includePartialMessages === true;
-  lastQuerySystemPrompt = options.systemPrompt ?? "";
-  return (async function* () {
-    if (lastQueryIncludePartial) {
-      yield {
-        type: "stream_event",
-        event: { type: "content_block_delta", index: 0, delta: { type: "thinking_delta", thinking: "思考中:" } },
-      };
-      yield {
-        type: "stream_event",
-        event: { type: "content_block_delta", index: 1, delta: { type: "text_delta", text: plannerReply.slice(0, 20) } },
-      };
-      yield {
-        type: "stream_event",
-        event: { type: "content_block_delta", index: 1, delta: { type: "text_delta", text: plannerReply.slice(20) } },
-      };
-    }
-    yield {
-      type: "assistant",
-      message: { content: [{ type: "text", text: plannerReply }] },
-    };
-    yield { type: "result", subtype: "success" };
-  })();
+/** Stands in for @anthropic-ai/claude-agent-sdk's createSdkMcpServer(): the
+ *  real constructor wraps the config into a server object; the smoke just
+ *  needs the tool list back so main.ts can invoke handlers directly. */
+export function createSdkMcpServer(config: { name: string; tools: FakeMcpTool[] }): FakeMcpServerConfig {
+  return config;
 }
 
 /* ── main-side singletons ── */
 
 export const log = { info: () => {}, warn: () => {} };
 
-export const orchestrator = { start: async () => {} };
+/** Captured createRun input (plan.proposed run assertions in main.ts). */
+export let lastCreateRun: Record<string, unknown> | null = null;
+export const orchestrator = {
+  start: async () => {},
+  createRun(input: Record<string, unknown>): { run: Record<string, unknown> } | { error: string } {
+    lastCreateRun = input;
+    if (!Array.isArray(input.tasks) || input.tasks.length === 0) return { error: "no tasks" };
+    return {
+      run: {
+        id: "run_smoke_1",
+        parentSessionId: input.parentSessionId,
+        projectId: input.projectId,
+        goal: input.goal,
+        title: String(input.goal ?? "").slice(0, 40),
+        status: input.autoStart === false ? "planning" : "running",
+        tasks: (input.tasks as Array<Record<string, unknown>>).map((t) => ({ ...t, status: "pending" })),
+      },
+    };
+  },
+};
 
 export const runtimeManager = {};
 
@@ -120,15 +111,6 @@ export const PiModelsStore = {
 export const CodexModelsStore = {
   listPublic: async () => [{ models: [{ id: "gpt-5.2-codex", label: "GPT Codex" }] }],
 };
-
-export const buildCustomEnv = () => ({});
-export const resolveActiveModel = () => "stub-model";
-export const resolveSdkBinaryPath = () => undefined;
-export const resolveModelForGitOp = async () => ({
-  ok: true as const,
-  config: { baseUrl: "http://stub", authToken: "stub" },
-  releaseBridge: () => {},
-});
 
 /* ── provider registry with production-shaped capabilities ── */
 

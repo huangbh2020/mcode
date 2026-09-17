@@ -430,6 +430,10 @@ class RuntimeManager {
         blocks: unknown[];
         editedMessageId?: string;
       };
+      /** 会话内编排拆解标记(composer 自动编排开关):透传到 StartTurnRequest,
+       *  provider 为该回合注入规划者提示 + orch_submit_plan 工具(见
+       *  orchestrator/planTool.ts)。支持该能力的 provider 之外忽略。 */
+      orchestration?: boolean;
     },
   ): Promise<void> {
     const rt = this.sessions.get(session.id);
@@ -608,6 +612,9 @@ class RuntimeManager {
       initialTodos: session.todos ?? undefined,
       // Tag the turn for per-turn artifacts (browser screenshot dirs).
       turnNumber: rt.turnCount,
+      // 会话内编排拆解(composer 自动编排开关)→ provider 注入规划者提示
+      // 与 orch_submit_plan 工具;不支持该能力的 provider 忽略。
+      orchestration: input.orchestration,
     };
 
     const handle = await provider.startTurn(req, rt.ctx);

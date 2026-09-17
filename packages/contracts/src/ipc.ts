@@ -25,7 +25,6 @@ import type {
   OrchestrationRun,
   OrchestrationTemplate,
   OrchSettings,
-  TaskSpecInput,
   OrchestratorEvent,
 } from "./orchestration.js";
 import type {
@@ -957,6 +956,11 @@ export const SendTurnSchema = z.object({
       editedMessageId: z.string().optional(),
     })
     .optional(),
+  /** 会话内编排拆解标记(composer 自动编排开关):该回合在本会话内正常
+   *  执行(历史/审批/停止全部复用普通回合),main 侧为它注入编排规划者
+   *  系统提示与 orch_submit_plan 结构化工具,模型产出任务图后由 main 钳制
+   *  建卡。普通回合不传 —— 不注入提示、不注册工具。 */
+  orchestration: z.boolean().optional(),
 });
 export type SendTurnInput = z.infer<typeof SendTurnSchema>;
 
@@ -3676,25 +3680,6 @@ export type OrchTemplateDeleteInput = z.infer<typeof OrchTemplateDeleteSchema>;
 /** Auto-decompose a goal into a task DAG proposal (model-driven wizard step).
  *  Runs in a side session so the coordinator chat stays clean; returns a
  *  best-effort proposal the user edits/confirms renderer-side. */
-export const OrchProposePlanSchema = z.object({
-  sessionId: z.string(),
-  goal: z.string().min(1),
-  /** Optional extra instructions for the decomposition. */
-  hint: z.string().optional(),
-  /** Optional planner profile id (any role works — high-cost planner
-   *  profile for thoroughness, cheap fast profile for quick drafts).
-   *  Falls back to "builtin-planner" server-side when absent or invalid. */
-  plannerProfileId: z.string().optional(),
-});
-export type OrchProposePlanInput = z.infer<typeof OrchProposePlanSchema>;
-
-/** Abort the in-flight auto-decompose query for a session (composer 停止键在
- *  拆解期间可见,必须能真正中止 planner 的无头 query,而不是只冻结 UI)。 */
-export const OrchAbortPlanSchema = z.object({
-  sessionId: z.string(),
-});
-export type OrchAbortPlanInput = z.infer<typeof OrchAbortPlanSchema>;
-
 export const OrchSettingsSaveSchema = z.object({ settings: OrchSettingsSchema });
 export type OrchSettingsSaveInput = z.infer<typeof OrchSettingsSaveSchema>;
 
@@ -4696,11 +4681,6 @@ export interface RpcMap {
   "orch.templatesList": () => Promise<{ templates: OrchestrationTemplate[] }>;
   "orch.templateSave": (input: OrchTemplateSaveInput) => Promise<{ templates: OrchestrationTemplate[] }>;
   "orch.templateDelete": (input: OrchTemplateDeleteInput) => Promise<{ templates: OrchestrationTemplate[] }>;
-  /** Model-driven goal → task-DAG proposal (wizard auto-decompose). */
-  "orch.proposePlan": (
-    input: OrchProposePlanInput,
-  ) => Promise<{ tasks: TaskSpecInput[]; /** planner 实际生效的模型 id(消息头「模型」栏目同源)。 */ model?: string; error?: string }>;
-  "orch.abortPlan": (input: OrchAbortPlanInput) => Promise<{ ok: boolean }>;
 }
 
 /** The channel names used in invoke/handle and send/on. Keep these centralized
@@ -4984,8 +4964,6 @@ export const IPC = {
   ORCH_TEMPLATES_LIST: "orch:templatesList",
   ORCH_TEMPLATE_SAVE: "orch:templateSave",
   ORCH_TEMPLATE_DELETE: "orch:templateDelete",
-  ORCH_PROPOSE_PLAN: "orch:proposePlan",
-  ORCH_ABORT_PLAN: "orch:abortPlan",
   // Orchestration push events (main → renderer).
   ORCH_EVENT: "orchestrator:event",
   // send/on (push events)

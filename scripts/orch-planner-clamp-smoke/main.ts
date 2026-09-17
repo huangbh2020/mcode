@@ -1,18 +1,25 @@
 /**
- * Headless smoke for the auto-decompose node-config pipeline (see run.sh).
+ * Headless smoke for the in-session auto-decompose pipeline (see run.sh).
  *
- * Drives the REAL ORCH_PROPOSE_PLAN handler end to end: model surface build
- * (pi/codex hydration + registry merge), planner prompt rendering, proposal
- * parsing, and the per-node whitelist clamp + 缺省补值链 (「必须要有值」:
+ * Drives the REAL orch_submit_plan tool handler (orchestrator/planTool.ts)
+ * end to end: model surface build (pi/codex hydration + registry merge), the
+ * planner nudge rendering, per-node whitelist clamp + 缺省补值链(「必须要有值」:
  * clamped/dropped fields refill from the node → profile → coordinator chain
  * of USER-CONFIGURED values; claude models re-attribute to their owning
- * gateway config). Every runtime dependency is aliased to stubs.ts; the fake
- * SDK query() replays a canned proposal that mixes legal and illegal
- * provider/model/effort/permissionMode values.
+ * gateway config), run creation (paused), and the plan.proposed push.
+ * Every runtime dependency is aliased to stubs.ts; the fake SDK
+ * createSdkMcpServer hands the tool list back so the handler is invoked
+ * directly — exactly what the model's tool call does in production.
  */
-import { registerOrchestratorHandlers } from "@main/ipc/orchestrator.js";
+import {
+  buildOrchPlanMcpServerAsync,
+  buildOrchPlanNudge,
+  ORCH_PLAN_TOOL_NAME,
+  ORCH_PLAN_TOOL_FULL,
+} from "@main/orchestrator/planTool.js";
 import { IPC } from "@contracts/ipc";
-import { setPlannerReply, lastQueryPrompt, lastQuerySystemPrompt, lastQueryIncludePartial, pushedEvents } from "./stubs.js";
+import { pushedEvents } from "./stubs.js";
+import { createSdkMcpServer } from "@anthropic-ai/claude-agent-sdk";
 
 let failures = 0;
 function check(name: string, cond: boolean, detail?: unknown): void {
@@ -24,43 +31,50 @@ function check(name: string, cond: boolean, detail?: unknown): void {
   }
 }
 
-const handlers = new Map<string, (evt: unknown, raw: unknown) => Promise<unknown>>();
-registerOrchestratorHandlers({
-  handle: (ch: string, fn: (evt: unknown, raw: unknown) => Promise<unknown>) => handlers.set(ch, fn),
-} as never);
-
 // Coordinator session carries customModelId "cfg1" (models: deepseek-v4-pro,
 // glm-5) — claude-sdk worker nodes inherit it by default, but the planner's
 // model ELECTION may land nodes on ANY configured config (cfg1/cfg2 pair).
 // Official aliases like "sonnet" must clamp to null.
-const proposal = {
-  tasks: [
-    { spec: "valid claude custom", providerId: "claude-sdk", model: "deepseek-v4-pro", effort: "high", permissionMode: "acceptEdits", profileId: "builtin-implementer", tags: ["coding"] },
-    { spec: "claude official alias on gateway", providerId: "claude-sdk", model: "sonnet", effort: "ultra", permissionMode: "bypassPermissions" },
-    { spec: "unknown provider", providerId: "gemini-sdk", model: "pro", effort: "high", permissionMode: "default" },
-    { spec: "effort without provider", effort: "high", permissionMode: "plan" },
-    { spec: "valid codex", providerId: "codex-sdk", model: "gpt-5.2-codex", effort: "ultra", permissionMode: "read-only" },
-    { spec: "codex full-access denied", providerId: "codex-sdk", effort: "high", permissionMode: "full-access", model: "nope-model" },
-    { spec: "valid pi composite model", providerId: "pi-sdk", model: "pi-remote/pi-large", effort: "off", permissionMode: "default" },
-    { spec: "lone provider override", providerId: "claude-sdk" },
-    // ── 模型选举(已配置模型中选) ──
-    { spec: "explicit pair on the OTHER config", providerId: "claude-sdk", customModelId: "cfg2", model: "other-gateway-model" },
-    { spec: "bogus cfg id falls back to model election", providerId: "claude-sdk", customModelId: "bogus", model: "glm-5" },
-    { spec: "valid cfg + bogus model keeps cfg", providerId: "claude-sdk", customModelId: "cfg1", model: "not-in-cfg" },
-    { spec: "model-only election finds its config", providerId: "claude-sdk", model: "glm-5" },
-    { spec: "non-claude node drops customModelId", providerId: "pi-sdk", customModelId: "cfg1", model: "pi-remote/pi-large" },
-  ],
-};
-setPlannerReply(JSON.stringify(proposal));
+const tasks = [
+  { spec: "valid claude custom", providerId: "claude-sdk", model: "deepseek-v4-pro", effort: "high", permissionMode: "acceptEdits", profileId: "builtin-implementer", tags: ["coding"] },
+  { spec: "claude official alias on gateway", providerId: "claude-sdk", model: "sonnet", effort: "ultra", permissionMode: "bypassPermissions" },
+  { spec: "unknown provider", providerId: "gemini-sdk", model: "pro", effort: "high", permissionMode: "default" },
+  { spec: "effort without provider", effort: "high", permissionMode: "plan" },
+  { spec: "valid codex", providerId: "codex-sdk", model: "gpt-5.2-codex", effort: "ultra", permissionMode: "read-only" },
+  { spec: "codex full-access denied", providerId: "codex-sdk", effort: "high", permissionMode: "full-access", model: "nope-model" },
+  { spec: "valid pi composite model", providerId: "pi-sdk", model: "pi-remote/pi-large", effort: "off", permissionMode: "default" },
+  { spec: "lone provider override", providerId: "claude-sdk" },
+  // ── 模型选举(已配置模型中选) ──
+  { spec: "explicit pair on the OTHER config", providerId: "claude-sdk", customModelId: "cfg2", model: "other-gateway-model" },
+  { spec: "bogus cfg id falls back to model election", providerId: "claude-sdk", customModelId: "bogus", model: "glm-5" },
+  { spec: "valid cfg + bogus model keeps cfg", providerId: "claude-sdk", customModelId: "cfg1", model: "not-in-cfg" },
+  { spec: "model-only election finds its config", providerId: "claude-sdk", model: "glm-5" },
+  { spec: "non-claude node drops customModelId", providerId: "pi-sdk", customModelId: "cfg1", model: "pi-remote/pi-large" },
+];
 
-const res = (await handlers.get(IPC.ORCH_PROPOSE_PLAN)(null, {
-  sessionId: "s1",
-  goal: "demo goal",
-})) as { tasks: Array<Record<string, unknown>>; error?: string };
+// ── MCP server 形状:服务名/工具名/alwaysLoad,handler 可直接调用。 ──
+const server = await buildOrchPlanMcpServerAsync("s1", createSdkMcpServer);
+check("server registered under the orchestrator name", server.name === "mcode-orchestrator", server.name);
+const tool = server.tools.find((x) => x.name === ORCH_PLAN_TOOL_NAME);
+check("submit tool present", !!tool, server.tools.map((x) => x.name));
 
-check("handler returns without error", !res.error, res.error);
+const receipt = await tool!.handler({ goal: "demo goal", tasks });
+const receiptText = receipt.content[0]?.text ?? "";
+check("receipt reports the submitted task count", receiptText.includes("共 13 个任务"), receiptText);
+
+// ── plan.proposed 推送:run 创建在 main 侧一次完成(planning 态)。 ──
+const proposed = pushedEvents
+  .map((p) => p.event as { kind?: string; sessionId?: string; run?: Record<string, unknown> })
+  .filter((e) => e.kind === "plan.proposed");
+check("exactly one plan.proposed pushed", proposed.length === 1, proposed.length);
+const run = proposed[0]?.run ?? {};
+check("plan.proposed carries the session id", proposed[0]?.sessionId === "s1", proposed[0]?.sessionId);
+check("run created paused (planning)", run.status === "planning", run.status);
+check("run goal is the submitted goal", run.goal === "demo goal", run.goal);
+
+const res = { tasks: (run.tasks as Array<Record<string, unknown>>) ?? [] };
+check("handler returns without error", receiptText.includes("已提交"), receiptText);
 check("all 13 tasks came back", res.tasks.length === 13, res.tasks.length);
-check("handler returns the planner's effective model", res.model === "stub-model", res.model);
 
 const t = (i: number) => res.tasks[i] ?? {};
 const ids = res.tasks.map((x) => x.id);
@@ -140,45 +154,23 @@ check(
   t(12),
 );
 
-// Prompt-side assertions: configured models listed PER CONFIG (with cfgId for
-// pair references), claude builtin aliases hidden while the session rides a
-// gateway, election duty stated, and the pi hydration survives the registry
-// merge. 「执行配置必填」规范:格式样例不再出现 null 占位,user/system 两层
-// 提示词都要求每个节点给出全部执行配置字段。
-const prompt = lastQueryPrompt;
-const claudeLine = prompt.split("\n").find((l) => l.trim().startsWith("claude-sdk:")) ?? "";
-check("prompt lists claude effort values", prompt.includes("effort 可选: default/low/medium/high/xhigh/max"), prompt);
-check("prompt lists codex modes incl. full-access (no longer forbidden)", prompt.includes("permissionMode 可选: read-only/default/full-access"), prompt);
-check("prompt keeps hydrated pi composite models (registry merge)", prompt.includes("pi-remote/pi-large"), prompt);
-check("claude line lists configured models per config with cfgId", claudeLine.includes("配置「主网关」(cfg1): deepseek-v4-pro, glm-5") && claudeLine.includes("配置「备用网关」(cfg2): other-gateway-model"), claudeLine);
-check("claude builtin aliases hidden while session rides a gateway", !claudeLine.includes("sonnet") && !claudeLine.includes("builtin:"), claudeLine);
-check("prompt states the election duty", prompt.includes("【模型选举】"), prompt);
-check("prompt mandates concrete node exec config (no null)", prompt.includes("【执行配置必填】") && prompt.includes("绝不允许写 null"), prompt);
-check("prompt restricts values to the configured lists", prompt.includes("只能逐字取自上面列出的清单"), prompt);
-check("prompt format sample carries concrete field placeholders", prompt.includes('"providerId":"<厂商 id>"') && prompt.includes('"customModelId":"<配置 id 或 null>"'), prompt.slice(0, 500));
-check("prompt keeps the claude triple-pairing rule", prompt.includes('"providerId":"claude-sdk","customModelId"'), prompt);
-check("system prompt mandates mandatory exec fields", lastQuerySystemPrompt.includes("都必须给出 providerId、model、effort、permissionMode 的明确值") && lastQuerySystemPrompt.includes("禁止 null、禁止省略、禁止自造"), lastQuerySystemPrompt);
-
-// ── planner 过程流(includePartialMessages → orch:event 的 planner.delta)──
-check("query ran with includePartialMessages on", lastQueryIncludePartial, lastQueryIncludePartial);
-const deltas = pushedEvents
-  .map((p) => p.event as { kind?: string; sessionId?: string; seg?: string; text?: string })
-  .filter((e) => e.kind === "planner.delta");
-check("3 planner deltas were pushed (1 thinking + 2 text)", deltas.length === 3, deltas.length);
+// ── 规划者 nudge(系统提示段):工具全名、按配置列出的模型面、选举职责、
+//    执行配置必填规范、会话上下文修订语义。 ──
+const nudge = await buildOrchPlanNudge("s1");
+check("nudge names the submit tool by full id", nudge.includes(ORCH_PLAN_TOOL_FULL), ORCH_PLAN_TOOL_FULL);
+check("nudge lists claude effort values", nudge.includes("effort 可选: default/low/medium/high/xhigh/max"), nudge);
+check("nudge lists codex modes incl. full-access (no longer forbidden)", nudge.includes("permissionMode 可选: read-only/default/full-access"), nudge);
+check("nudge keeps hydrated pi composite models (registry merge)", nudge.includes("pi-remote/pi-large"), nudge);
+check("nudge lists configured models per config with cfgId", nudge.includes("配置「主网关」(cfg1): deepseek-v4-pro, glm-5") && nudge.includes("配置「备用网关」(cfg2): other-gateway-model"), nudge);
+check("claude builtin aliases hidden while session rides a gateway", !nudge.includes("builtin: sonnet"), nudge);
+check("nudge states the election duty", nudge.includes("【模型选举】"), nudge);
+check("nudge mandates concrete node exec config (no null)", nudge.includes("绝不允许 null、省略或留空"), nudge);
+check("nudge restricts values to the configured lists", nudge.includes("逐字取自上面清单"), nudge);
+check("nudge instructs full-graph revision from session context", nudge.includes("修订后的【完整】任务图"), nudge);
+check("nudge forbids executing the tasks itself", nudge.includes("绝不亲自执行这些任务"), nudge);
+check("nudge keeps the planner out of Q&A turns", nudge.includes("不要调用该工具"), nudge);
 check(
-  "thinking delta carries sessionId + seg=thinking",
-  deltas[0]?.sessionId === "s1" && deltas[0]?.seg === "thinking" && deltas[0]?.text === "思考中:",
-  deltas[0],
-);
-check(
-  "text deltas concatenate to the full proposal text",
-  deltas[1]?.seg === "text" &&
-    deltas[2]?.seg === "text" &&
-    (deltas[1]?.text ?? "") + (deltas[2]?.text ?? "") === JSON.stringify(proposal),
-  [deltas[1]?.text, deltas[2]?.text],
-);
-check(
-  "all deltas ride the orchestrator:event channel",
+  "all pushes ride the orchestrator:event channel",
   pushedEvents.every((p) => p.channel === IPC.ORCH_EVENT),
   pushedEvents.map((p) => p.channel),
 );

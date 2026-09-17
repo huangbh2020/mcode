@@ -318,6 +318,8 @@ export type OrchestratorEvent =
   | { kind: "gate.resolved"; runId: string; gateId: string; resolution: string }
   | { kind: "worker_done"; payload: WorkerDonePayload }
   | { kind: "suggest"; sessionId: string; reason: string }
-  /** 自动拆解(planner)的过程流:无头 query() 的 text/thinking 增量,
-   *  渲染端合并进「拆解中」占位气泡 —— 编排流的过程可观测性。 */
-  | { kind: "planner.delta"; sessionId: string; seg: "text" | "thinking"; text: string };
+  /** 会话内拆解回合的产物:模型调 orch_submit_plan 工具提交任务图,main 侧
+   *  钳制后创建 paused run 并推此事件。渲染端把 run 进桶 + 画布块挂到当前
+   *  回合的尾随 assistant 消息上。run 冗余携带(run.updated 先到,但自带
+   *  免除对到达顺序的依赖)。 */
+  | { kind: "plan.proposed"; sessionId: string; run: OrchestrationRun };

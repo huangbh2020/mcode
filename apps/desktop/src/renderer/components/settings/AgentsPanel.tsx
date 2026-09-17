@@ -148,21 +148,7 @@ export function AgentsPanel() {
               ]}
             />
           </SettingRow>
-          <SettingRow title={t("orch.settings.concurrency")}>
-            <Input
-              type="number"
-              min={1}
-              max={16}
-              value={orchSettings?.concurrency ?? 4}
-              onChange={(e) =>
-                void saveOrchSettings({
-                  triggerMode: orchSettings?.triggerMode ?? "ask",
-                  concurrency: Math.max(1, Number(e.target.value) || 1),
-                  budgetUsd: orchSettings?.budgetUsd ?? 0,
-                })
-              }
-            />
-          </SettingRow>
+          {/* 并发上限已移除(调度器不限并发),只留触发档位与预算。 */}
           <SettingRow title={t("orch.settings.budget")}>
             <Input
               type="number"

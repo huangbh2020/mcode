@@ -1372,7 +1372,93 @@ function ToolCard({
       />
     );
   }
+  if (block.toolName === ORCH_PLAN_TOOL_FULL) {
+    return <OrchPlanToolCard block={block} defaultOpen={defaultOpen} live={liveTurn} />;
+  }
   return <GenericToolCard block={block} defaultOpen={defaultOpen} live={liveTurn} projectPath={projectPath} />;
+}
+
+/** 会话内编排拆解的提交工具全名 —— main 侧 orchestrator/planTool.ts 的
+ *  ORCH_PLAN_TOOL_FULL(`mcp__<server>__<tool>`),渲染层无法 import main
+ *  模块,这里镜像字面量;改名时两处必须同步。 */
+const ORCH_PLAN_TOOL_FULL = "mcp__mcode-orchestrator__orch_submit_plan";
+
+/** 编排规划工具卡:模型调 orch_submit_plan 提交任务图(会话内拆解回合)。
+ *  折叠态 = 一行「提交编排任务图 · 目标摘要 · N 个任务」,展开态 = 目标 +
+ *  逐任务简报列表。原始入参 JSON 不再整段平铺 —— 任务图是结构化数据,
+ *  画布才是它的可读形态,卡片只留过程痕迹。 */
+function OrchPlanToolCard({
+  block,
+  defaultOpen = false,
+  live,
+}: {
+  block: Extract<Block, { kind: "tool_use" }>;
+  defaultOpen?: boolean;
+  live?: boolean;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+  const { t } = useI18n();
+  const input = (block.input && typeof block.input === "object" ? block.input : {}) as {
+    goal?: unknown;
+    tasks?: unknown;
+  };
+  const goal = typeof input.goal === "string" ? input.goal : "";
+  const tasks = Array.isArray(input.tasks) ? (input.tasks as Record<string, unknown>[]) : [];
+  return (
+    <div className="[font-size:var(--chat-fs-sm)]">
+      <button
+        onClick={(e) => toggleHoldPosition(e, setOpen)}
+        className="flex w-full items-center gap-2 rounded-md py-1.5 text-left hover:bg-surface-muted/50"
+      >
+        <StatusIcon status={block.status} live={live} />
+        <ToolIcon name={block.toolName} className="text-content-subtle" />
+        <span className="shrink-0 font-medium text-content-muted">{t("orch.tool.submitTitle")}</span>
+        {goal && (
+          <span className="truncate text-content-subtle" title={goal}>
+            {goal}
+          </span>
+        )}
+        <span className="ml-auto flex shrink-0 items-center gap-1.5 [font-size:var(--chat-fs-xxs)]">
+          <span className="tabular-nums text-content-subtle">
+            {t("orch.tool.taskCount", { n: tasks.length })}
+          </span>
+          <Chevron open={open} />
+        </span>
+      </button>
+      {open && (
+        <div className="space-y-2 border-l border-edge py-2 pl-2">
+          {goal && (
+            <div>
+              <div className="mb-0.5 uppercase text-content-subtle [font-size:var(--chat-fs-xxs)]">{t("orch.tool.goal")}</div>
+              <div className="whitespace-pre-wrap text-content-muted">{goal}</div>
+            </div>
+          )}
+          {tasks.length > 0 && (
+            <div>
+              <div className="mb-0.5 uppercase text-content-subtle [font-size:var(--chat-fs-xxs)]">{t("orch.tool.taskList")}</div>
+              <div className="space-y-1">
+                {tasks.map((task, i) => (
+                  <div key={i} className="flex gap-1.5 text-content-muted">
+                    {/* main 侧钳制时才编 t1..tN,工具入参无 id —— 按提交顺序显示。 */}
+                    <span className="shrink-0 font-mono text-content-subtle">{`t${i + 1}`}</span>
+                    <span className="min-w-0 flex-1 break-words">{String(task.spec ?? "")}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          {block.result !== undefined && (
+            <div>
+              <div className="mb-0.5 uppercase text-content-subtle [font-size:var(--chat-fs-xxs)]">{t("chatStream.tool.result")}</div>
+              <pre className="max-h-40 overflow-auto rounded bg-surface-muted/60 p-2 text-content-muted [font-size:var(--chat-fs-xs)]">
+                {truncateResult(block.result)}
+              </pre>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
 }
 
 /** Edit tool card: line-level diff view. Inside an expanded TurnPanel it

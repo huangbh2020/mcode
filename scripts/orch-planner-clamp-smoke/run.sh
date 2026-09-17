@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# Headless smoke for the auto-decompose node-config pipeline:
-# model surface build (pi/codex hydration + registry merge), planner prompt
+# Headless smoke for the in-session auto-decompose pipeline:
+# model surface build (pi/codex hydration + registry merge), planner nudge
 # rendering, and the per-node provider/model/effort/permissionMode whitelist
-# clamp. The REAL ipc/orchestrator.ts handler is bundled with esbuild; every
+# clamp. The REAL orchestrator/planTool.ts tool handler is bundled with
+# esbuild; every
 # runtime dependency (electron / SQLite / provider SDKs / agent SDK) is
 # aliased to stubs.ts. No Electron, no DB, no network.
 set -euo pipefail
@@ -18,7 +19,7 @@ if [[ -z "$ESBUILD" ]]; then ESBUILD="npx esbuild"; fi
 
 "$ESBUILD" scripts/orch-planner-clamp-smoke/main.ts \
   --bundle --platform=node --format=esm \
-  --alias:@main/ipc/orchestrator.js=./apps/desktop/src/main/ipc/orchestrator.ts \
+  --alias:@main/orchestrator/planTool.js=./apps/desktop/src/main/orchestrator/planTool.ts \
   --alias:@contracts/ipc=./packages/contracts/src/ipc.ts \
   --alias:@contracts/orchestration=./packages/contracts/src/orchestration.ts \
   --alias:@main/orchestrator/OrchestratorService.js=./scripts/orch-planner-clamp-smoke/stubs.ts \

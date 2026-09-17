@@ -140,6 +140,9 @@ export function registerClaudeHandlers(ipcMain: IpcMain): void {
       images: input.images,
       // User-message echo payload from the renderer (cross-client bubble).
       userMessage: input.userMessage,
+      // 会话内编排拆解标记(composer 自动编排开关):该回合注入规划者提示
+      // 与 orch_submit_plan 工具(见 orchestrator/planTool.ts)。
+      orchestration: input.orchestration,
     });
     // Background auto-title generation: on the first user message, fire a
     // one-shot LLM call to produce a short Chinese title and overwrite the

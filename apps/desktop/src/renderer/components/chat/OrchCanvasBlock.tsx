@@ -495,12 +495,9 @@ export function OrchCanvasBlock({ runId, goal }: { canvasId: string; runId: stri
         </span>
         {statusChip()}
         <span className="oc-stats">
-          {t("orch.canvas.stats", {
-            done: doneCount,
-            total: run.tasks.length,
-            concurrency: run.concurrency,
-            budget: run.budgetUsd != null ? `$${run.budgetUsd.toFixed(2)}` : t("orch.canvas.budgetNone"),
-          })}
+          {/* 只留任务进度;并发/预算字样已随「不限并发」移除(调度器不再设
+              并发上限,run.concurrency 仅存于数据形态)。 */}
+          {t("orch.canvas.stats", { done: doneCount, total: run.tasks.length })}
         </span>
         <div className="oc-actions">
           {isElectron && (

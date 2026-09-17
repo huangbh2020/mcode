@@ -586,10 +586,6 @@ const api = {
       ipcRenderer.invoke(IPC.ORCH_TEMPLATE_SAVE, input)) as RpcMap["orch.templateSave"],
     templateDelete: ((input) =>
       ipcRenderer.invoke(IPC.ORCH_TEMPLATE_DELETE, input)) as RpcMap["orch.templateDelete"],
-    proposePlan: ((input) =>
-      ipcRenderer.invoke(IPC.ORCH_PROPOSE_PLAN, input)) as RpcMap["orch.proposePlan"],
-    abortPlan: ((input) =>
-      ipcRenderer.invoke(IPC.ORCH_ABORT_PLAN, input)) as RpcMap["orch.abortPlan"],
   },
 
   /** Agent runtimes (settings panel): the download-on-demand claude/codex/pi

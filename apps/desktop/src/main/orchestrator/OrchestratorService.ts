@@ -42,7 +42,7 @@ import { log } from "@main/lib/logger.js";
 import { uid } from "@main/utils.js";
 import { mergeBackWorktree } from "@main/lib/worktreeOps.js";
 import { awaitDb } from "@main/store/db.js";
-import { activeCount, readyTasks, runSettled, validateTaskGraph, downstreamTasks, BREAKER_LIMIT, estimateTokens } from "./taskStore.js";
+import { readyTasks, runSettled, validateTaskGraph, downstreamTasks, BREAKER_LIMIT, estimateTokens } from "./taskStore.js";
 import { dispatchAgentTask, dispatchTerminalTask } from "./dispatcher.js";
 import { notifyRunDeleted, notifyTaskTerminal, bindSnapshotProvider, disposeWaiters } from "./waiter.js";
 import { ProfileStore, RoutingStats } from "./profiles.js";
@@ -209,16 +209,14 @@ class OrchestratorService {
 
   /* ── 调度器 ── */
 
-  /** 波次派发:ready 任务按序填满并发槽。fire-and-forget —— 所有失败
-   *  路径都在 dispatchTask 内部收敛为任务失败,不会抛出。 */
+  /** 波次派发,不限并发:每一波 ready 任务全部派出(依赖关系本身就是波次
+   *  边界,上游完成 → 下一个 tick 自然放出下一波)。fire-and-forget —— 所有
+   *  失败路径都在 dispatchTask 内部收敛为任务失败,不会抛出。原并发槽上限
+   *  (run.concurrency)已按产品要求移除,该字段仅保留在数据形态里。 */
   private tick(runId: string): void {
     const run = this.runs.get(runId);
     if (!run || run.status !== "running") return;
-    let slots = run.concurrency - activeCount(run);
-    if (slots <= 0) return;
     for (const task of readyTasks(run)) {
-      if (slots <= 0) break;
-      slots--;
       // 状态先置 dispatched(防重入),失败路径会改回 failed。
       task.status = "dispatched";
       void this.dispatchTask(run, task);

@@ -44,7 +44,6 @@ export const zh = {
   "orch.settings.trigger.ask": "询问我(默认)",
   "orch.settings.trigger.auto": "自动",
   "orch.settings.triggerHint": "命中并行/拆解意图时:询问=仅提示;自动=直接打开编排向导。",
-  "orch.settings.concurrency": "默认并发上限",
   "orch.settings.budget": "默认预算上限($,0=不设限)",
   // ── 向导 ──
   // ── DAG 面板 ──
@@ -126,17 +125,19 @@ export const zh = {
   "orch.composer.mode.handoff": "移交",
   "orch.composer.mode.orchestrate": "编排",
   "orch.composer.auto": "自动编排",
-  "orch.composer.autoOn": "开启后,发送的想法将拆解为任务画布(不进入本会话模型回合)",
+  "orch.composer.autoOn": "开启后,发送的想法在本会话内拆解为任务画布(带完整会话上下文,可多轮调整)",
   "orch.composer.send": "发送",
   // ── 画布(自动编排流)──
   "orch.canvas.inputLocked": "编排运行中,本会话输入已暂停;运行结束后恢复",
   "orch.attend.banner": "编排待处理:{n} 项,点击处理",
   "orch.attend.collapse": "收起",
-  "orch.canvas.decomposing": "正在拆解任务,生成编排画布…",
-  "orch.canvas.decomposeFailed": "自动拆解失败:规划者没有返回有效任务,请换个说法重试或手动添加任务。",
   "orch.canvas.flowFailed": "编排创建失败",
-  "orch.canvas.stopped": "已停止自动拆解(已流出的模型输出保留在上方)。",
   "orch.canvas.decomposed": "已拆解为 {n} 个任务。点击节点可在右侧配置 agent / 模型 / 简报 / 依赖,配置完成后点画布右上角「运行」开始执行。",
+  // ── 编排规划工具卡(会话内拆解回合)──
+  "orch.tool.submitTitle": "提交编排任务图",
+  "orch.tool.taskCount": "{n} 个任务",
+  "orch.tool.goal": "目标",
+  "orch.tool.taskList": "任务列表",
   "orch.canvas.status.planning": "待配置 · 已拆解 {n} 任务",
   "orch.canvas.status.running": "运行中",
   "orch.canvas.status.paused": "已暂停",
@@ -151,8 +152,7 @@ export const zh = {
   "orch.canvas.stop": "停止",
   "orch.canvas.restart": "重新运行",
   "orch.canvas.addTask": "任务",
-  "orch.canvas.stats": "{done}/{total} 任务 · 并发 {concurrency} · 预算 {budget}",
-  "orch.canvas.budgetNone": "不限",
+  "orch.canvas.stats": "{done}/{total} 任务",
   "orch.canvas.hint": "拖动连线调整依赖 · 点击节点 → 右栏配置 / 查看输出 · 点空白处 → 运行总览",
   "orch.canvas.legendPending": "待运行",
   "orch.canvas.legendRunning": "运行中",
@@ -209,7 +209,7 @@ export const zh = {
   "orch.node.backToList": "返回运行列表",
   "orch.node.overviewEmpty": "本会话暂无编排运行。开启输入框旁的「自动编排」后发送想法即可开始。",
   "orch.node.taskList": "任务清单(点击查看详情)",
-  "orch.node.rules": "按依赖波次派发 · 并发上限 {n} · 预算超限自动暂停并生成决策门",
+  "orch.node.rules": "按依赖波次派发(不限并发)· 预算超限自动暂停并生成决策门",
   "orch.panel.rules": "派发规则",
 
   // ── 画布内联 worker 控制台(运行中任务的实时过程输出)──

@@ -327,7 +327,8 @@ function RunOverview({ run }: { run: OrchestrationRun }) {
         {t("orch.panel.rules")}
       </div>
       <div className="text-[0.686em] leading-relaxed text-content-subtle">
-        {t("orch.node.rules", { n: run.concurrency })}
+        {/* 不限并发后不再有上限参数可填。 */}
+        {t("orch.node.rules")}
       </div>
     </div>
   );

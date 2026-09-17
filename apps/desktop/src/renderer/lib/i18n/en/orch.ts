@@ -43,7 +43,6 @@ export const en = {
   "orch.settings.trigger.ask": "Ask me (default)",
   "orch.settings.trigger.auto": "Auto",
   "orch.settings.triggerHint": "On parallel/decompose intents: ask = toast only; auto = open the wizard directly.",
-  "orch.settings.concurrency": "Default concurrency limit",
   "orch.settings.budget": "Default budget cap ($, 0 = unlimited)",
   // ── Wizard ──
   // ── DAG panel ──
@@ -125,17 +124,19 @@ export const en = {
   "orch.composer.mode.handoff": "Handoff",
   "orch.composer.mode.orchestrate": "Orchestrate",
   "orch.composer.auto": "Auto-orchestrate",
-  "orch.composer.autoOn": "When on, sent ideas become a task canvas instead of a model turn in this session",
+  "orch.composer.autoOn": "When on, sent ideas are decomposed into a task canvas inside this session (full conversation context — iterate by replying)",
   "orch.composer.send": "Send",
   // ── Canvas (auto-orchestration flow) ──
   "orch.canvas.inputLocked": "Orchestration running — input in this session is paused until it finishes",
   "orch.attend.banner": "{n} orchestration item(s) awaiting you — click to handle",
   "orch.attend.collapse": "Collapse",
-  "orch.canvas.decomposing": "Decomposing into tasks — building the canvas…",
-  "orch.canvas.decomposeFailed": "Auto-decompose failed: the planner returned no valid tasks. Try rephrasing or add tasks manually.",
   "orch.canvas.flowFailed": "Failed to create the orchestration run",
-  "orch.canvas.stopped": "Auto-decompose stopped (streamed model output is preserved above).",
   "orch.canvas.decomposed": "Decomposed into {n} tasks. Click a node to configure its agent / model / brief / dependencies on the right, then hit Run on the canvas.",
+  // ── Orchestrator plan tool card (in-session decompose turn) ──
+  "orch.tool.submitTitle": "Submit task graph",
+  "orch.tool.taskCount": "{n} tasks",
+  "orch.tool.goal": "Goal",
+  "orch.tool.taskList": "Tasks",
   "orch.canvas.status.planning": "Awaiting config · {n} tasks",
   "orch.canvas.status.running": "Running",
   "orch.canvas.status.paused": "Paused",
@@ -150,8 +151,7 @@ export const en = {
   "orch.canvas.stop": "Stop",
   "orch.canvas.restart": "Restart",
   "orch.canvas.addTask": "Task",
-  "orch.canvas.stats": "{done}/{total} tasks · concurrency {concurrency} · budget {budget}",
-  "orch.canvas.budgetNone": "none",
+  "orch.canvas.stats": "{done}/{total} tasks",
   "orch.canvas.hint": "Drag edges to adjust deps · click a node → configure / output in the side panel · click empty space → overview",
   "orch.canvas.legendPending": "Pending",
   "orch.canvas.legendRunning": "Running",
@@ -208,7 +208,7 @@ export const en = {
   "orch.node.backToList": "Back to runs list",
   "orch.node.overviewEmpty": "No runs in this session yet. Turn on auto-orchestration next to the composer and send an idea to start.",
   "orch.node.taskList": "Tasks (click for details)",
-  "orch.node.rules": "Wave dispatch by deps · concurrency {n} · over-budget pauses with a decision gate",
+  "orch.node.rules": "Wave dispatch by deps (concurrency unbounded) · over-budget pauses with a decision gate",
   "orch.panel.rules": "Dispatch rules",
 
   // ── Inline worker console on the canvas (live process output of running tasks) ──
