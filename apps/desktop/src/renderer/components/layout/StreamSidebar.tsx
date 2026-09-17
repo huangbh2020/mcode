@@ -61,7 +61,7 @@ import { useTheme, applyThemeClass } from "@renderer/lib/theme.js";
 import { Button, ConfirmDialog } from "@renderer/components/ui/index.js";
 import { api } from "@renderer/lib/api.js";
 import { useCursorAnchor } from "@renderer/hooks/useCursorAnchor.js";
-import { useSessionStore } from "@renderer/stores/sessionStore.js";
+import { useSessionStore, orchRunningAnchors } from "@renderer/stores/sessionStore.js";
 import { WorktreeMergeBackDialog, WorktreeRemoveDialog } from "@renderer/components/chat/WorktreeMergeBack.js";
 import { ProjectManageMenuPopup, type ManageMenuState } from "./ProjectManageMenu.js";
 import { SidebarQuickActions } from "./SidebarQuickActions.js";
@@ -117,6 +117,9 @@ type StreamStatus =
 interface StreamStatusSignals {
   runningBySession: Record<string, boolean>;
   runningTurnStartedAt: Record<string, number>;
+  /** 编排运行中(画布流)的会话 → loading 起始锚点。与普通回合运行同款
+   *  "working" 展示(sky + 走字时长)。 */
+  orchRunningAt: Record<string, number>;
   pendingQuestionBySession: Record<string, unknown>;
   turnErrorBySession: Record<string, boolean>;
   unreadBySession: Record<string, number>;
@@ -125,6 +128,9 @@ interface StreamStatusSignals {
 function statusOf(s: Session, sig: StreamStatusSignals): StreamStatus {
   if (sig.runningBySession[s.id]) {
     return { kind: "working", startedAt: sig.runningTurnStartedAt[s.id] ?? Date.now() };
+  }
+  if (sig.orchRunningAt[s.id] != null) {
+    return { kind: "working", startedAt: sig.orchRunningAt[s.id] };
   }
   if (sig.pendingQuestionBySession[s.id] != null) return { kind: "input" };
   if (sig.turnErrorBySession[s.id]) return { kind: "failed" };
@@ -146,6 +152,8 @@ function StreamSidebarBase() {
   const archivedSessionsByProject = useSessionStore((s) => s.archivedSessionsByProject);
   const runningBySession = useSessionStore((s) => s.runningBySession);
   const runningTurnStartedAt = useSessionStore((s) => s.runningTurnStartedAt);
+  const orchRunsBySession = useSessionStore((s) => s.orchRunsBySession);
+  const orchRunningAt = useMemo(() => orchRunningAnchors(orchRunsBySession), [orchRunsBySession]);
   const pendingQuestionBySession = useSessionStore((s) => s.pendingQuestionBySession);
   const turnErrorBySession = useSessionStore((s) => s.turnErrorBySession);
   const unreadBySession = useSessionStore((s) => s.unreadBySession);
@@ -334,8 +342,8 @@ function StreamSidebarBase() {
   );
 
   // ── Live duration ticker: only ticks while something is running.
-  const anyRunning = streamSessions.some((s) => runningBySession[s.id]) ||
-    pinnedSessions.some((s) => runningBySession[s.id]);
+  const anyRunning = streamSessions.some((s) => runningBySession[s.id] || orchRunningAt[s.id] != null) ||
+    pinnedSessions.some((s) => runningBySession[s.id] || orchRunningAt[s.id] != null);
   const [nowTick, setNowTick] = useState(() => Date.now());
   useEffect(() => {
     if (!anyRunning) return;
@@ -346,6 +354,7 @@ function StreamSidebarBase() {
   const statusSignals: StreamStatusSignals = {
     runningBySession,
     runningTurnStartedAt,
+    orchRunningAt,
     pendingQuestionBySession,
     turnErrorBySession,
     unreadBySession,
@@ -491,8 +500,8 @@ function StreamSidebarBase() {
     // component subscribes to already, so the callback refreshes with them.
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [projectById, projectColors, nowTick, activeSessionId, runningBySession, runningTurnStartedAt,
-      pendingQuestionBySession, turnErrorBySession, unreadBySession, worktreeOf, localBranchOf,
-      openTab, startSession, setSessionPinned, archiveSession, deleteSession, registerNode],
+      orchRunningAt, pendingQuestionBySession, turnErrorBySession, unreadBySession, worktreeOf,
+      localBranchOf, openTab, startSession, setSessionPinned, archiveSession, deleteSession, registerNode],
   );
 
   const liveSessions = useMemo(

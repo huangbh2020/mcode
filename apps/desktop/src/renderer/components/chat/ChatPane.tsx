@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, useLayoutEffect, useMemo, memo, useCallback } from "react";
 import { cn } from "@renderer/lib/cn.js";
+import { Menu } from "@base-ui/react/menu";
 import {
   IconPlayerStop,
   IconSend2,
@@ -18,7 +19,11 @@ import {
   IconBolt,
   IconChevronRight,
   IconGripVertical,
+  IconExternalLink,
+  IconSparkles,
 } from "@renderer/lib/icons.js";
+import { useCursorAnchor } from "@renderer/hooks/useCursorAnchor.js";
+import { isElectron } from "@renderer/lib/platform.js";
 import { useSessionStore, EMPTY_MESSAGES, EMPTY_TODOS, EMPTY_SUBAGENTS, EMPTY_CHAT_QUEUE, EMPTY_ELEMENT_QUEUE, EMPTY_PROMPT_QUEUE, EMPTY_BOOKMARKS, EMPTY_USAGE, type Block, type ChatMessage, type TodoItem, type TurnMeta, type QueuedPrompt } from "@renderer/stores/sessionStore.js";
 import { useToastStore } from "@renderer/stores/toastStore.js";
 import { api } from "@renderer/lib/api.js";
@@ -56,11 +61,13 @@ import { ComposerToolbarToggle } from "./ComposerToolbarToggle.js";
 import { ProviderDropdown } from "./ProviderDropdown.js";
 import { QuestionPrompt } from "./QuestionPrompt.js";
 import { ApprovalPrompt } from "./ApprovalPrompt.js";
+import { OrchAttentionCard } from "./OrchAttentionCard.js";
 import { PlanApprovalPrompt } from "./PlanApprovalPrompt.js";
 import { ComposerEditor, type ComposerEditorHandle } from "./ComposerEditor.js";
 import { ContentTagChip } from "./ContentTagChip.js";
 import { TagPopover } from "./TagPopover.js";
 import { FileMentionPicker, type FileMentionPickerMode } from "./FileMentionPicker.js";
+import { OrchComposerChips } from "./OrchComposerChips.js";
 import { EmptyThreadWelcome } from "./EmptyThreadWelcome.js";
 import { SlashCommandPicker } from "./SlashCommandPicker.js";
 import { ActivityCluster } from "./ActivityCluster.js";
@@ -795,6 +802,25 @@ function groupMessagesForRender(
       }
     }
 
+    // 编排流(自动拆解)回合的边界改锚:planner 的思考与 JSON 正文是过程数据,
+    // 编排画布/错误卡才是结果。编排回合没有任何工具调用,上面的「最后一个工具」
+    // 边界恒为 -1,planner 输出的整段任务 JSON 会被当成回复正文平铺在台账外。
+    // 检出编排流宿主消息(orch_host_ 前缀,store 的 startOrchestrationFlow 命名
+    // 且随消息持久化,重开后同样命中)时,把边界改锚在首个画布/错误块上——其
+    // 之前的全部块(含 JSON 文本)进面板折叠,之后的结果块保持可见。用户中途
+    // 停止的路径只有「已停止」文本卡,没有画布/错误块,不设边界(部分 JSON 与
+    // 停止卡保持可见,对齐中断语义)。
+    let orchSplitIdx = -1;
+    if (turnBlocks.some((tb) => tb.msg.id.startsWith("orch_host_"))) {
+      for (let j = 0; j < turnBlocks.length; j++) {
+        const kind = turnBlocks[j].block.kind;
+        if (kind === "orch-canvas" || kind === "error") {
+          orchSplitIdx = j;
+          break;
+        }
+      }
+    }
+
     let panelBlocks: Block[] = [];
     const textMsgs: ChatMessage[] = [];
 
@@ -810,8 +836,10 @@ function groupMessagesForRender(
       // landed — those never anchor the boundary but must not leak into the
       // reply, so re-route them here: a mid-answer thinking pause or a
       // trailing task-list update stays in the panel while the text around
-      // it remains visible.
-      if (j <= lastToolIdx || isProceduralBlock(block)) {
+      // it remains visible. Orchestration-flow turns (orchSplitIdx, see
+      // above) route everything before the canvas / error card here too —
+      // the planner's streamed JSON is process data, not the reply.
+      if (j <= lastToolIdx || isProceduralBlock(block) || (orchSplitIdx >= 0 && j < orchSplitIdx)) {
         panelBlocks.push(block);
       } else {
         // Reply surface: blocks after the last real tool, regrouped by source
@@ -1284,6 +1312,15 @@ function ChatPaneForSession({
     (s) => (s.subagentsBySession[sessionId] ?? EMPTY_SUBAGENTS).some((a) => a.status === "running"),
   );
   const sessionBusy = isRunning || hasRunningSubagents;
+  // 编排阻塞:本会话有 running/paused 的 run(执行中或等决策门)→ 锁输入。
+  // planning(画布配置中)不锁;completed/failed/canceled 不锁。
+  const orchRunsHere = useSessionStore((s) => (sessionId ? s.orchRunsBySession[sessionId] : undefined));
+  const orchBlocking = useMemo(
+    () => (orchRunsHere ?? []).some((r) => r.status === "running" || r.status === "paused"),
+    [orchRunsHere],
+  );
+  // 会话"看起来在忙"的视觉口径 = 自身回合 ∪ 编排运行(sweep/spinner 生效)。
+  const visualBusy = sessionBusy || orchBlocking;
   // Live upstream-transport retry (the OpenAI bridge retrying a connect
   // timeout / reset — UpstreamIssueEvent). Only meaningful while a turn is
   // streaming: rendered beside the streaming spinner so a 10s+ stall reads
@@ -2617,8 +2654,14 @@ function ChatPaneForSession({
     if (!text && tags.length === 0 && pendingImages.length === 0) return;
     // Don't allow sending while a turn (or a backgrounded subagent from a
     // prior turn) is still in flight — the stop button is the only valid
-    // action in that state.
+    // action in that state. 自动编排拆解现在是会话内普通回合,running 旗标
+    // 已覆盖,不再有单独的 decomposing 门控。
     if (sessionBusy) return;
+    // 编排运行中:本会话不能输入和发送(自动结果整理会写回本会话)。
+    if (orchBlocking) {
+      useToastStore.getState().push({ kind: "info", title: t("orch.canvas.inputLocked") });
+      return;
+    }
     // Compose the final prompt: editor text (with `/name` inline) + each tag's
     // content as a delimited block (see composePromptWithTags). An image-only
     // send yields an empty prompt (the images ARE the prompt).
@@ -2669,6 +2712,11 @@ function ChatPaneForSession({
     if (!text && tags.length === 0 && pendingImages.length === 0) return;
     // Only meaningful while busy — when idle, Enter/click routes to handleSend.
     if (!sessionBusy) return;
+    // 编排运行中:队列也不收(与 handleSend 的锁一致)。
+    if (orchBlocking) {
+      useToastStore.getState().push({ kind: "info", title: t("orch.canvas.inputLocked") });
+      return;
+    }
     const prompt = composePromptWithTags(text, tags);
     if (!prompt && pendingImages.length === 0) return;
     // Downsize the images NOW (not at drain time) so the queue holds only
@@ -3290,7 +3338,7 @@ function ChatPaneForSession({
   // a stable element reference across renders that don't change the busy
   // state (avoids needless list re-renders).
   const listFooter = useMemo(() => {
-    if (isRunning || !hasRunningSubagents) return null;
+    if (isRunning || orchBlocking || !hasRunningSubagents) return null;
     return (
       <div className="px-[var(--chat-gutter)]">
         <div className="mx-auto max-w-5xl">
@@ -3300,7 +3348,7 @@ function ChatPaneForSession({
         </div>
       </div>
     );
-  }, [isRunning, hasRunningSubagents]);
+  }, [isRunning, orchBlocking, hasRunningSubagents]);
 
   // Older-messages loading indicator. Shown only when a paginated fetch is in
   // flight for this session. A thin row at the very top of the stream.
@@ -3350,12 +3398,41 @@ function ChatPaneForSession({
     return out;
   }, [renderItems, wrapLiveSpine]);
 
+  /** Message-level context menu (orchestration dispatch entry points):
+   *  派发并跟踪 opens the wizard prefilled with the message text; 移交
+   *  hands the text off to a fresh session. Event delegation off the stream
+   *  container — rows are memoized and stay untouched. */
+  const [msgCtx, setMsgCtx] = useState<{ text: string; x: number; y: number } | null>(null);
+  const msgCtxAnchor = useCursorAnchor(msgCtx);
+  const handleMessageContextMenu = useCallback(
+    (e: React.MouseEvent) => {
+      // Desktop-only entry (orchestration RPC absent on the web/mobile shim).
+      if (!isElectron) return;
+      const target = e.target as HTMLElement;
+      // Only plain message rows (not links / code blocks with their own menus
+      // / the composer). Selections are allowed through untouched.
+      const row = target.closest("[data-message-id]");
+      if (!row || !row.contains(target)) return;
+      const selection = window.getSelection();
+      if (selection && !selection.isCollapsed) return;
+      const id = row.getAttribute("data-message-id");
+      const msg = messages.find((m) => m.id === id);
+      if (!msg) return;
+      const text = blocksToText(msg.blocks).trim();
+      if (!text) return;
+      e.preventDefault();
+      setMsgCtx({ text, x: e.clientX, y: e.clientY });
+    },
+    [messages],
+  );
+
   return (
     <div className="relative flex h-full flex-col" data-chat-root>
       {/* Message stream area */}
       <div
         ref={streamAreaRef}
         onMouseUp={handleStreamMouseUp}
+        onContextMenu={handleMessageContextMenu}
         className={cn("relative flex min-h-0", empty ? "h-0" : "flex-1")}
       >
       {/* Left-edge timeline of user messages */}
@@ -3597,6 +3674,12 @@ function ChatPaneForSession({
               onDismiss={dismissQuestion}
             />
           )}
+          {/* 编排待处理卡(决策门 / worker 提问 / worker 审批)。优先级最低:
+              本会话自己的审批/提问在场时让位;与普通审批卡同位呈现,可收起
+              为琥珀横幅。 */}
+          {activeQuestion == null && !headApproval && !pendingPlanApproval && (
+            <OrchAttentionCard sessionId={sessionId} />
+          )}
           {/* Composer-top chips row — directory switcher (fresh LOCAL
               sessions only, hidden when there's <2 projects) then the
               working-environment picker. Both are quiet text triggers
@@ -3605,13 +3688,14 @@ function ChatPaneForSession({
           <div className="flex items-center gap-1 px-1 pb-1">
             <SessionDirectoryChip sessionId={sessionId} />
             <WorktreeModeChip sessionId={sessionId} />
+            <OrchComposerChips sessionId={sessionId} />
           </div>
           <div
             ref={composerCardRef}
             // composer-card: hooks for the 方案 B polish layers in styles.css —
             // a busy sweep bar along the top edge while a turn runs, and an
             // accent hairline that lights up on focus-within.
-            data-busy={sessionBusy ? "1" : "0"}
+            data-busy={visualBusy ? "1" : "0"}
             className={cn(
               "composer-card relative flex min-w-0 flex-col overflow-hidden rounded-2xl border border-edge-input bg-surface transition-all duration-200",
               "focus-within:border-accent focus-within:shadow-[0_0_0_3px_rgb(var(--accent)/0.12)]",
@@ -3880,13 +3964,15 @@ function ChatPaneForSession({
             <RenderErrorBoundary>
               <ComposerEditor
                 ref={editorRef}
-                editable={!textareaLocked}
+                editable={!textareaLocked && !orchBlocking}
                 placeholder={
                   textareaLocked
                     ? "Claude is working…"
-                    : sessionBusy
-                      ? t("chat.placeholderQueued")
-                      : t("chat.placeholderIdle")
+                    : orchBlocking
+                      ? t("orch.canvas.inputLocked")
+                      : sessionBusy
+                        ? t("chat.placeholderQueued")
+                        : t("chat.placeholderIdle")
                 }
                 onChange={handleChange}
                 onEnter={handleEnter}
@@ -3957,10 +4043,15 @@ function ChatPaneForSession({
                     collapsed tiers the label folds away through the same grid
                     shell mechanism, leaving the brand icon. */}
                 <ProviderDropdown compact={composerTier >= 1} />
-                {sessionBusy && !hasComposerContent ? (
+                {(sessionBusy || (orchBlocking && !hasComposerContent)) ? (
                   <button
-                    onClick={() => void interrupt()}
-                    title={t("chat.stopGenerating")}
+                    onClick={() => {
+                      if (sessionBusy) { void interrupt(); return; }
+                      // 编排运行中的停止 = 取消本会话所有执行中的 run。
+                      const active = (orchRunsHere ?? []).filter((r) => r.status === "running");
+                      for (const r of active) void useSessionStore.getState().orchRunControl(r.id, "cancel");
+                    }}
+                    title={t(sessionBusy ? "chat.stopGenerating" : "orch.canvas.stop")}
                     aria-label={t("chat.stopGenerating")}
                     className={cn(
                       "composer-stop inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-danger text-surface transition-all duration-150 ease-out",
@@ -4056,6 +4147,27 @@ function ChatPaneForSession({
             onPick={handleAttachPick}
             onClose={() => setAttachPickerOpen(false)}
           />
+          {/* Message context menu: orchestration dispatch entry points
+              (派发并跟踪 / 移交). See handleMessageContextMenu. */}
+          <Menu.Root open={!!msgCtx} onOpenChange={(o) => !o && setMsgCtx(null)}>
+            <Menu.Portal>
+              <Menu.Positioner anchor={msgCtxAnchor} side="bottom" align="start">
+                <Menu.Popup className="z-50 min-w-[190px] rounded-lg border border-edge bg-surface py-1 shadow-2xl">
+                  <Menu.Item
+                    onClick={() => {
+                      const text = msgCtx?.text;
+                      setMsgCtx(null);
+                      if (text) void useSessionStore.getState().orchHandoff(text);
+                    }}
+                    className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs outline-none select-none text-content-muted data-[highlighted]:bg-surface-muted data-[highlighted]:text-content"
+                  >
+                    <IconExternalLink size={14} className="shrink-0" />
+                    {t("orch.menu.handoff")}
+                  </Menu.Item>
+                </Menu.Popup>
+              </Menu.Positioner>
+            </Menu.Portal>
+          </Menu.Root>
         </div>
       </div>
 
@@ -4278,6 +4390,16 @@ const MessageRow = memo(function MessageRow({
             turn (the one carrying turnMeta), and not suppressed by a parent
             TurnPanel (hideTurnStat). Sits above the content. */}
         {!isUser && msg.turnMeta && !hideTurnStat && <TurnStatRow meta={msg.turnMeta} />}
+        {/* 编排入口徽标(自动编排开关 / @agents 派发)—— 标记这条想法
+            没有进入本会话的模型回合,而是走了画布编排流。 */}
+        {isUser && msg.orchTag && (
+          <div className="mb-1 flex justify-end">
+            <span className="inline-flex items-center gap-1 rounded-full border border-accent/40 bg-accent/10 px-2 py-0.5 text-[10.5px] text-accent">
+              <IconSparkles size={10} />
+              {t("orch.composer.auto")}
+            </span>
+          </div>
+        )}
         <div
           // User messages get a native tooltip showing the full send date-time
           // on hover (assistant messages have no createdAt tooltip - the

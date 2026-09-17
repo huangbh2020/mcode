@@ -56,13 +56,17 @@ export function WorktreeModeChip({
   const session = useSessionStore((s) => {
     if (!sessionId) return undefined;
     if (s.activeSessionId === sessionId) {
-      return s.sessions.find((x) => x.id === sessionId);
+      const hit = s.sessions.find((x) => x.id === sessionId);
+      if (hit) return hit;
     }
     for (const list of Object.values(s.sessionsByProject)) {
       const hit = list?.find((x) => x.id === sessionId);
       if (hit) return hit;
     }
-    return undefined;
+    return (
+      s.pinnedSessions.find((x) => x.id === sessionId) ??
+      s.streamSessions.find((x) => x.id === sessionId)
+    );
   });
 
   const materialized = !!session?.worktreePath;
@@ -78,10 +82,11 @@ export function WorktreeModeChip({
   // (`rootOnly`): the worktree can only materialize at the project root, so
   // a repo in a subdirectory must NOT light the picker up. Re-probed when
   // the project changes; failures read as "no repo" (picker hidden).
+  const targetProjectId = session?.projectId ?? activeProjectId;
   const [hasRepo, setHasRepo] = useState<boolean | null>(null);
   useEffect(() => {
     setHasRepo(null);
-    const projectPath = projects.find((p) => p.id === activeProjectId)?.path;
+    const projectPath = projects.find((p) => p.id === targetProjectId)?.path;
     if (!projectPath) return;
     let cancelled = false;
     api.git
@@ -95,7 +100,7 @@ export function WorktreeModeChip({
     return () => {
       cancelled = true;
     };
-  }, [activeProjectId, projects]);
+  }, [targetProjectId, projects]);
 
   // NOTE: every hook stays ABOVE the early return — a conditional return
   // before any hook would change the hook count between renders (probe
@@ -138,13 +143,16 @@ export function WorktreeModeChip({
   // hides it too, fresh or not: its isolation is already communicated by the
   // left-bar fork badge/group and the Titlebar Land button, so a permanent
   // badge above the composer is noise, not information.
-  // Freshness requires the ROW to exist. A missing row with a non-null
-  // sessionId is a side chat (side sessions live outside the main list
-  // buckets the selector scans) — NOT a new session: rendering the picker
-  // there would show environment options the side session can never use,
-  // and a pick would silently edit the GLOBAL new-session default instead
-  // of any session. Same rule SessionDirectoryChip applies.
-  const isFreshSession = session != null && session.title === "New session";
+  //
+  // Side chats never show the picker: they inherit the parent's environment.
+  // A fresh session is either a recognized empty session row (title === "New session"
+  // and no materialized worktree), or a session with no messages yet in messagesBySession.
+  const isSideChat = session?.kind === "side";
+  const sessionMessages = useSessionStore((s) => (sessionId ? s.messagesBySession[sessionId] : undefined));
+  const hasNoMessages = sessionMessages ? sessionMessages.length === 0 : true;
+  const isFreshSession =
+    !isSideChat &&
+    (session == null || session.title === "New session" || hasNoMessages);
   const showPicker = isFreshSession && !materialized;
 
   // No repo (or still probing) / not a new-session context → render nothing.

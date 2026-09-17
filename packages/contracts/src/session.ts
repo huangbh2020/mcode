@@ -85,11 +85,14 @@ export interface Session {
   /** Session role: "chat" = a normal session shown in the left-bar list;
    *  "side" = a side-chat Q&A session (right-panel ask tab). Side sessions
    *  are excluded from every list/search/reuse query and are managed only by
-   *  the side-chat panel, keyed by their parent session. */
-  kind: "chat" | "side";
-  /** For side sessions (kind="side"): the id of the main session this Q&A
-   *  thread was opened from, for traceability. Null for main sessions; set
-   *  back to null when the parent is deleted (the side chat itself is kept). */
+   *  the side-chat panel, keyed by their parent session. "orch-worker" = an
+   *  orchestration worker sub-session (parentSessionId = coordinator); like
+   *  side sessions it is invisible to every list and is managed only by the
+   *  orchestrator (DAG panel). */
+  kind: "chat" | "side" | "orch-worker";
+  /** For side/orch-worker sessions: the id of the main session this
+   *  subordinate thread belongs to. Null for main sessions; set back to null
+   *  when the parent is deleted (the subordinate itself is kept). */
   parentSessionId: string | null;
   title: string;
   status: SessionStatus;
@@ -154,6 +157,11 @@ export interface Session {
    *  reopen; cleared when a new turn starts (mirrors the roster cycle).
    *  Null for sessions that never ran subagents. JSON-serialized in the DB. */
   subagentTranscripts: Record<string, SubagentTranscriptBlock[]> | null;
+  /** Orchestration dispatch context (kind="orch-worker" only): the structured
+   *  completion-authority credential { runId, taskId, dispatchId,
+   *  coordinatorSessionId }. Structured (not prose) so stale/ghost reports
+   *  can be validated at the protocol layer. JSON-serialized in the DB. */
+  orchMeta?: import("./orchestration.js").DispatchContext | null;
   createdAt: number;
   updatedAt: number;
 }

@@ -15,6 +15,12 @@ import type {
   SessionListEntry,
 } from "@contracts/runtime";
 import type { TurnFileEntry } from "@renderer/lib/turnFiles.js";
+import type {
+  OrchestrationRun,
+  OrchSettings,
+  TaskSpecInput,
+  OrchestratorEvent,
+} from "@contracts/orchestration";
 import type { ContentTag } from "@renderer/lib/contentTag.js";
 import { isValidSnapshot } from "@renderer/lib/contextWindow.js";
 import { getLastCursor, type NavEntry } from "@renderer/lib/editorNav.js";
@@ -134,6 +140,27 @@ export interface BrowserTab {
 }
 import type { BuiltinModelOption, UserInputAnswers } from "@contracts/provider";
 import { useToastStore } from "@renderer/stores/toastStore.js";
+
+/** Toast push for orchestration flows (outside ingestEvent's session-gated
+ *  helper). Always shown — orchestration toasts concern runs, not a
+ *  particular chat the user may be looking at. */
+function pushToastLite(kind: "info" | "warning" | "error", title: string, body?: string): void {
+  useToastStore.getState().push({ kind, title, body });
+}
+
+/** Auto-trigger heuristic (P3, triggerMode ask/auto): strong parallel-intent
+ *  wording AND task bulk (≥2 list items or a substantial prompt). Kept
+ *  deliberately conservative — a false hit in "ask" mode is only a toast,
+ *  but "auto" hijacks the send into the wizard. */
+const ORCH_TRIGGER_RE =
+  /(并行|同时做|同时处理|同时进行|拆开.{0,8}(做|处理|给|跑)|分别.{0,6}(做|实现|处理|跑)|拆分任务|任务拆解|流水线|多个\s*agent|几个\s*agent|分给.{0,8}agent)/i;
+function looksOrchestratable(prompt: string): boolean {
+  const text = prompt.trim();
+  if (text.length < 8) return false;
+  if (!ORCH_TRIGGER_RE.test(text)) return false;
+  const bullets = (text.match(/^\s*(?:[-*•]|\d+[.、)])\s+/gm) ?? []).length;
+  return bullets >= 2 || text.length >= 20;
+}
 
 /** True for `.md` / `.markdown` files - used to default the editor into preview
  *  mode on first open. Kept here (not in lib/path) because it's a content-type
@@ -343,6 +370,25 @@ export type Block =
       /** Image MIME type — "image/png" for browser screenshots; the SendTurn
        *  allowlist (jpeg/png/gif/webp) for user-attached images. */
       mimeType: string;
+    }
+  | {
+      /** 编排画布:聊天流内的任务 DAG 卡片(自动编排流第②-④步的载体)。
+       *  块只锚定 run(节点/状态实时读 orchRunsBySession,run.updated 推送
+       *  已驱动);goal 冗余存一份,run 被持久化上限(50 条)挤出时降级为
+       *  「已归档」卡仍可读。 */
+      kind: "orch-canvas";
+      canvasId: string;
+      runId: string;
+      goal: string;
+    }
+  | {
+      /** 结果整理卡(画布流第⑤步):run 全部完成后自动追加的汇总消息。
+       *  与画布块同模式 —— 只锚定 run,各任务产出/产物/统计实时读
+       *  orchRunsBySession;main 侧的结果整理回合(模型汇总)紧随其后。 */
+      kind: "orch-synth";
+      synthId: string;
+      runId: string;
+      goal: string;
     };
 
 /** Turn-level timing metadata. Attached to the FIRST assistant message of
@@ -522,6 +568,9 @@ export interface ChatMessage {
   /** Present only on the first assistant message of a turn. Drives the
    *  per-turn "开始时间 · 工作时长" stat row above the answer. */
   turnMeta?: TurnMeta;
+  /** 编排入口标记(自动编排开关 / @agents 目标)——用户气泡右上角的
+   *  「✦ 自动编排」徽标。仅在 orchestration 拦截路径追加的用户消息上出现。 */
+  orchTag?: "auto" | "targets";
 }
 
 /** A single todo item from claude's TodoWrite tool. */
@@ -1346,6 +1395,34 @@ export interface SessionState {
    *  double-effect in dev firing init twice. */
   _initStarted: boolean;
 
+  /* ── Agent orchestration (docs/orchestration-plan.md) ── */
+  /** Orchestration prefs (trigger mode / defaults). null until loaded. */
+  orchSettings: OrchSettings | null;
+  /** Runs keyed by their COORDINATOR session id. Updated from `orch.event`
+   *  pushes (run.updated replaces by id) and initial `orch.listRuns` loads. */
+  orchRunsBySession: Record<string, OrchestrationRun[]>;
+  /** Worker sub-session rows fetched on demand (the DAG panel's "open worker"
+   *  action) — the final findSession fallback so worker tabs resolve titles
+   *  and config-sync. Keyed by worker session id. */
+  orchWorkersById: Record<string, Session>;
+  /** Orchestrator event subscription state; true after `initDeferred`
+   *  subscribes (guards against double-subscription). */
+  _orchSubscribed: boolean;
+  /** 自动编排开关 per session:开启时,发送的想法在本会话内以编排规划者
+   *  模式执行(orchestration 标记 → main 注入规划者提示与 orch_submit_plan
+   *  工具 → 会话内产出画布)。历史照常累积,多轮调整天然携带上下文。
+   *  内存态,默认关。 */
+  orchAutoBySession: Record<string, boolean>;
+  /** 画布/面板当前选中(右栏 orch 页签):taskId 非空 = 节点详情,
+   *  taskId=null 且 edge 缺省 = 该 run 的运行总览(点画布空白进入),
+   *  taskId=null 且 edge 存在 = 依赖连线详情(点画布连线进入)。
+   *  null = 会话级 runs 列表(closeOrchSelection 退回)。 */
+  orchNodeSelection: {
+    runId: string;
+    taskId: string | null;
+    edge?: { upstream: string; downstream: string };
+  } | null;
+
   // actions
   init: () => Promise<void>;
   /** Deferred (non-critical) hydration kicked off by `init()` after the
@@ -1775,6 +1852,9 @@ export interface SessionState {
    *  no-op silently when there is no active project. */
   reloadSkills: () => Promise<void>;
   dismissQuestion: () => void;
+  /** Session-targeted dismiss (worker sessions' questions from elsewhere,
+   *  e.g. the orchestrator attention card). */
+  dismissQuestionFor: (sessionId: string) => void;
   /** Submit answers to the head AskUserQuestion for the active session.
    *  Calls `claude:respondQuestion` which resolves the provider's pending
    *  user-input Deferred — the SAME turn then continues (the model receives
@@ -1914,6 +1994,44 @@ export interface SessionState {
   /** Switch the active right-panel tab. Persists to settings. */
   setRightPanelTab: (tab: RightPanelTab) => void;
 
+  /* ── Agent orchestration actions ── */
+  /** Load orchestration settings (trigger mode / defaults). */
+  loadOrchSettings: () => Promise<void>;
+  saveOrchSettings: (settings: OrchSettings) => Promise<void>;
+  /** (Re)fetch a coordinator session's runs into orchRunsBySession. */
+  loadOrchRuns: (sessionId: string) => Promise<void>;
+  /** Ingest an `orchestrator:event` push (run snapshots / gate lifecycle /
+   *  worker_done toasts). */
+  ingestOrchEvent: (event: OrchestratorEvent) => void;
+  /** Run-level control (pause/resume/cancel/delete). */
+  orchRunControl: (runId: string, action: "start" | "pause" | "resume" | "cancel" | "delete" | "restart") => Promise<void>;
+  /** Node-level control (pause/resume/retry/cancel/rerun/markCompleted). */
+  orchTaskControl: (
+    runId: string,
+    taskId: string,
+    action: "pause" | "resume" | "retry" | "cancel" | "rerun" | "markCompleted",
+  ) => Promise<string | null>;
+  /** Resolve an open decision gate. */
+  orchResolveGate: (runId: string, gateId: string, resolution: string) => Promise<void>;
+  /** Merge a completed worktree node back into the main checkout. */
+  orchMergeTask: (runId: string, taskId: string) => Promise<string | null>;
+  /** Full handoff: create a plain new session with the briefing and send it. */
+  orchHandoff: (briefing: string, title?: string) => Promise<Session | null>;
+  /** Fetch a worker session row + open it as a center tab. */
+  openOrchWorker: (workerSessionId: string) => Promise<void>;
+  /** 自动编排开关 per session(开启后发送的想法在本会话内以规划者模式执行)。 */
+  setOrchAuto: (sessionId: string, on: boolean) => void;
+  /** 选中画布节点/运行:taskId 非空 = 节点详情,taskId=null = 该 run 的
+   *  运行总览(点画布空白进入)。右栏 orch 页签随之聚焦。选中节点会清掉
+   *  连线选中(两者互斥)。 */
+  selectOrchNode: (runId: string, taskId: string | null) => void;
+  /** 选中画布依赖连线(点连线):右栏 orch 页签进入连线详情(可删除)。 */
+  selectOrchEdge: (runId: string, upstream: string, downstream: string) => void;
+  /** 退出节点详情/运行总览,回到会话级 runs 列表。 */
+  closeOrchSelection: () => void;
+  /** 画布水合:run 不在内存(会话重开/被挤出 per-session 列表)时按 id 拉取
+   *  并 upsert 进 orchRunsBySession;已存在则 no-op。web 壳静默失败。 */
+  ensureOrchRun: (runId: string) => Promise<void>;
   /* ── Side chat (right-panel ask tab) actions ── */
   /** Reveal the right panel and focus the sidechat tab (the ask-tab entry
    *  point behind the rail button / global shortcut). Does NOT create a
@@ -2093,7 +2211,10 @@ function toRecords(sessionId: string, messages: ChatMessage[]): MessageRecord[] 
       id: m.id,
       sessionId,
       role: m.role,
-      content: m.turnMeta ? { blocks, turnMeta: m.turnMeta } : blocks,
+      content:
+        m.turnMeta || m.orchTag
+          ? { blocks, ...(m.turnMeta ? { turnMeta: m.turnMeta } : {}), ...(m.orchTag ? { orchTag: m.orchTag } : {}) }
+          : blocks,
       createdAt: m.createdAt,
     };
   });
@@ -2151,15 +2272,17 @@ function fromRecords(records: MessageRecord[]): ChatMessage[] {
   const out: ChatMessage[] = [];
   for (const r of records) {
     // Legacy rows: content is the blocks array. New rows: content is
-    // { blocks, turnMeta? }. Degrade gracefully on unknown shapes.
+    // { blocks, turnMeta?, orchTag? }. Degrade gracefully on unknown shapes.
     let blocks: Block[] = [];
     let turnMeta: TurnMeta | undefined;
+    let orchTag: ChatMessage["orchTag"] | undefined;
     if (Array.isArray(r.content)) {
       blocks = r.content as Block[];
     } else if (r.content && typeof r.content === "object") {
-      const obj = r.content as { blocks?: Block[]; turnMeta?: TurnMeta };
+      const obj = r.content as { blocks?: Block[]; turnMeta?: TurnMeta; orchTag?: ChatMessage["orchTag"] };
       if (Array.isArray(obj.blocks)) blocks = obj.blocks;
       if (obj.turnMeta) turnMeta = obj.turnMeta;
+      if (obj.orchTag) orchTag = obj.orchTag;
     }
     let pruned = pruneUnchangedTurnFileBlocks(blocks);
     // Historical assistant rows may carry whitespace-only text blocks (blank
@@ -2181,6 +2304,7 @@ function fromRecords(records: MessageRecord[]): ChatMessage[] {
       blocks: pruned,
       createdAt: r.createdAt,
       ...(turnMeta ? { turnMeta } : {}),
+      ...(orchTag ? { orchTag } : {}),
     });
   }
   return out;
@@ -2525,12 +2649,40 @@ const MESSAGE_PAGE_SIZE = 200;
  *  aggregate because the stream view pages through `session.listAll`, so a
  *  page-2+ row exists ONLY there — without this fallback its tab renders
  *  "(unknown)" and config hydration silently no-ops. */
+/**
+ * 编排运行中的会话 → loading 起始锚点(该 run 最早一个未结束派发的
+ * injectedAt,尚未派发时兜底 run.updatedAt)。供左栏会话行 / tab 栏把
+ * 编排运行展示成与普通回合运行同款的 loading 指示 —— 纯读函数,消费方
+ * 以 orchRunsBySession 为依赖做 memo,run.updated 推送自然驱动刷新。
+ * 返回空对象 = 没有任何编排运行在执行。 */
+export function orchRunningAnchors(runsBySession: Record<string, OrchestrationRun[]>): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const [sid, runs] of Object.entries(runsBySession)) {
+    let earliest: number | null = null;
+    for (const r of runs) {
+      if (r.status !== "running") continue;
+      let found: number | null = null;
+      for (const t of r.tasks) {
+        for (const d of t.dispatches) {
+          if (d.endedAt) continue;
+          found = found === null ? d.injectedAt : Math.min(found, d.injectedAt);
+        }
+      }
+      if (found === null) found = r.updatedAt;
+      earliest = earliest === null ? found : Math.min(earliest, found);
+    }
+    if (earliest !== null) out[sid] = earliest;
+  }
+  return out;
+}
+
 function findSession(
   sessionsByProject: Record<string, Session[]>,
   archivedByProject: Record<string, Session[]>,
   pinnedSessions: Session[],
   streamSessions: Session[],
   id: string,
+  workersById?: Record<string, Session>,
 ): Session | undefined {
   for (const list of Object.values(sessionsByProject)) {
     const hit = list?.find((s) => s.id === id);
@@ -2542,7 +2694,12 @@ function findSession(
     const hit = list?.find((s) => s.id === id);
     if (hit) return hit;
   }
-  return streamSessions.find((s) => s.id === id);
+  const streamHit = streamSessions.find((s) => s.id === id);
+  if (streamHit) return streamHit;
+  // Orch-worker sub-sessions (opened from the orchestration panel's worker
+  // detail) live in no list cache by design — their dedicated map is the
+  // final fallback so tabs/titles/config-sync resolve.
+  return workersById?.[id];
 }
 
 /** The per-project thread cache is a TWO-SECTION array: local threads first
@@ -2772,6 +2929,13 @@ function dropSessionBuckets(s: SessionState, id: string) {
   delete composerDraftBySession[id];
   const sideChatSeedBySession = { ...s.sideChatSeedBySession };
   delete sideChatSeedBySession[id];
+  // Orchestration per-session buckets (coordinator toggle, @agent targets,
+  // runs list view). Main keeps the runs themselves — the panel re-fetches on
+  // demand if the session somehow returns.
+  const orchRunsBySession = { ...s.orchRunsBySession };
+  delete orchRunsBySession[id];
+  const orchWorkersById = { ...s.orchWorkersById };
+  delete orchWorkersById[id];
   const pendingApprovals = s.pendingApprovals.filter((p) => p.sessionId !== id);
   return {
     messagesBySession,
@@ -2803,6 +2967,8 @@ function dropSessionBuckets(s: SessionState, id: string) {
     planApprovalDraftBySession,
     composerDraftBySession,
     sideChatSeedBySession,
+    orchRunsBySession,
+    orchWorkersById,
     pendingApprovals,
   };
 }
@@ -3040,7 +3206,7 @@ function syncConfigFromSession(
   get: () => SessionState,
   sessionId: string,
 ): void {
-  const sess = findSession(get().sessionsByProject, get().archivedSessionsByProject, get().pinnedSessions, get().streamSessions, sessionId);
+  const sess = findSession(get().sessionsByProject, get().archivedSessionsByProject, get().pinnedSessions, get().streamSessions, sessionId, get().orchWorkersById);
   if (!sess) return;
   // Keep activeProjectId in lockstep with the active session's owning project.
   // Without this, switching to a thread in project B while activeProjectId
@@ -3335,7 +3501,7 @@ function hydrateContextSnapshot(
   get: () => SessionState,
   sessionId: string,
 ): void {
-  const sess = findSession(get().sessionsByProject, get().archivedSessionsByProject, get().pinnedSessions, get().streamSessions, sessionId);
+  const sess = findSession(get().sessionsByProject, get().archivedSessionsByProject, get().pinnedSessions, get().streamSessions, sessionId, get().orchWorkersById);
   const snapshot = sess?.contextSnapshot;
   if (!snapshot || !isValidSnapshot(snapshot)) {
     // No usable snapshot on the row - leave any existing slot as-is so we
@@ -3386,7 +3552,7 @@ function hydrateCapsule(
   get: () => SessionState,
   sessionId: string,
 ): void {
-  const sess = findSession(get().sessionsByProject, get().archivedSessionsByProject, get().pinnedSessions, get().streamSessions, sessionId);
+  const sess = findSession(get().sessionsByProject, get().archivedSessionsByProject, get().pinnedSessions, get().streamSessions, sessionId, get().orchWorkersById);
   const todos = sess?.todos ?? null;
   const subagents = sess?.subagents ?? null;
   const planDraft = sess?.planDraft ?? null;
@@ -3478,7 +3644,7 @@ function hydrateTurnFiles(
   get: () => SessionState,
   sessionId: string,
 ): void {
-  const sess = findSession(get().sessionsByProject, get().archivedSessionsByProject, get().pinnedSessions, get().streamSessions, sessionId);
+  const sess = findSession(get().sessionsByProject, get().archivedSessionsByProject, get().pinnedSessions, get().streamSessions, sessionId, get().orchWorkersById);
   const turnFiles = sess?.turnFiles ?? null;
   set((s) => {
     const hasValue = !!(turnFiles && Array.isArray(turnFiles) && turnFiles.length > 0);
@@ -3508,7 +3674,7 @@ function hydrateBookmarks(
   get: () => SessionState,
   sessionId: string,
 ): void {
-  const sess = findSession(get().sessionsByProject, get().archivedSessionsByProject, get().pinnedSessions, get().streamSessions, sessionId);
+  const sess = findSession(get().sessionsByProject, get().archivedSessionsByProject, get().pinnedSessions, get().streamSessions, sessionId, get().orchWorkersById);
   const bookmarks = sess?.bookmarks ?? null;
   set((s) => {
     const hasValue = !!(bookmarks && Array.isArray(bookmarks) && bookmarks.length > 0);
@@ -3536,7 +3702,7 @@ function hydrateSubagentTranscripts(
   get: () => SessionState,
   sessionId: string,
 ): void {
-  const sess = findSession(get().sessionsByProject, get().archivedSessionsByProject, get().pinnedSessions, get().streamSessions, sessionId);
+  const sess = findSession(get().sessionsByProject, get().archivedSessionsByProject, get().pinnedSessions, get().streamSessions, sessionId, get().orchWorkersById);
   const transcripts = sess?.subagentTranscripts ?? null;
   set((s) => {
     // A running turn owns the transcripts — its event stream is fresher than
@@ -3594,7 +3760,7 @@ function hydrateUsageHistory(
   get: () => SessionState,
   sessionId: string,
 ): void {
-  const sess = findSession(get().sessionsByProject, get().archivedSessionsByProject, get().pinnedSessions, get().streamSessions, sessionId);
+  const sess = findSession(get().sessionsByProject, get().archivedSessionsByProject, get().pinnedSessions, get().streamSessions, sessionId, get().orchWorkersById);
   const history = sess?.usageHistory ?? null;
   set((s) => {
     const hasValue = !!(history && Array.isArray(history) && history.length > 0);
@@ -4260,6 +4426,12 @@ function clearSessionDeltas(sessionId: string): void {
   }
 }
 
+/* ─── Orchestrator planner stream(已退役) ───
+ * 自动拆解改为会话内回合(orchestration 标记 + orch_submit_plan 工具,
+ * 见 main/orchestrator/planTool.ts):planner 的输出就是普通回合流,不再有
+ * 无头 query 的旁路增量。任务图经 plan.proposed 事件落成画布块(见
+ * ingestOrchEvent)。 */
+
 /** Event types that append visible content to the transcript. While a session
  *  is interrupted these are ignored so the aborted turn's late events can't
  *  keep rendering text / tools / images after the Stop click. Status events
@@ -4509,6 +4681,15 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   sideChatSeedBySession: {},
   pendingSubagentView: null,
   pendingBookmarkJump: null,
+  // Agent orchestration (docs/orchestration-plan.md). Lists hydrate on
+  // demand (settings panel / wizard / composer picker); runs arrive via
+  // `orchestrator:event` pushes and initial listRuns loads.
+  orchSettings: null,
+  orchRunsBySession: {},
+  orchWorkersById: {},
+  orchAutoBySession: {},
+  orchNodeSelection: null,
+  _orchSubscribed: false,
   // IDE right-panel. Editor state is per-project (keyed by projectId);
   // init() hydrates from the settings table. rightPanelTab / ideEditorMode
   // are global user prefs.
@@ -4984,10 +5165,21 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       // dropdown greys out providers whose runtime isn't usable, so it needs
       // this at startup, not only when the settings panel mounts.
       void get().reloadRuntimes();
+      // Orchestration: settings + role profiles (wizard/composer pickers read
+      // them) and the app-lifetime `orchestrator:event` subscription (run
+      // snapshots / gate lifecycle / worker_done toasts). Guarded against
+      // double-subscription (init can be re-entered in dev StrictMode).
+      void get().loadOrchSettings();
+      if (!get()._orchSubscribed) {
+        set({ _orchSubscribed: true });
+        api.on.orchEvent((msg) => {
+          get().ingestOrchEvent(msg.event);
+        });
+      }
       // Track the language-server lifecycle per (workspace, language) so the
       // editor toolbar can show a loading indicator while a server starts
       // (Java's jdtls can take minutes to import a project) and a failure
-      // notice when it can't start. App-lifetime subscription — no teardown.
+      // notice when it couldn't start. App-lifetime subscription — no teardown.
       api.on.lspEvent((msg) => {
         if (msg.type !== "stateChanged") return;
         const p = msg.payload as LspStateChangedPayload;
@@ -5535,10 +5727,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           ? worktree.map((x) => (x.id === session.id ? { ...x, ...session } : x))
           : [session, ...worktree];
         const merged = [...local, ...nextWorktree];
-        const isactiveWt = projectId === s.activeProjectId;
         return {
           sessionsByProject: { ...s.sessionsByProject, [projectId]: merged },
-          sessions: isactiveWt ? merged : s.sessions,
+          sessions: merged,
           activeProjectId: projectId,
           activeSessionId: session.id,
           expandedProjects: { ...s.expandedProjects, [projectId]: true },
@@ -5590,7 +5781,6 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         ...s.sessionsByProject,
         [projectId]: upserted,
       };
-      const isactive = projectId === s.activeProjectId;
       const prevTotal = s.sessionsTotalByProject[projectId] ?? 0;
       const nextTotal = exists ? prevTotal : prevTotal + 1;
       return {
@@ -5609,7 +5799,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           ...s.sessionsHasMoreByProject,
           [projectId]: nextTotal > SESSION_PAGE_SIZE,
         },
-        sessions: isactive ? nextByProject[projectId] : s.sessions,
+        sessions: nextByProject[projectId],
         activeProjectId: projectId,
         activeSessionId: session.id,
         expandedProjects: { ...s.expandedProjects, [projectId]: true },
@@ -5752,6 +5942,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     hydrateUsageHistory(set, get, sessionId);
     hydrateBookmarks(set, get, sessionId);
     hydrateSubagentTranscripts(set, get, sessionId);
+    void get().loadOrchRuns(sessionId);
     set((s) => {
       // Clear the unread badge - the user is now looking at this session.
       // Activating a session also pulls the unified center bar back to the
@@ -5784,6 +5975,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     hydrateUsageHistory(set, get, sessionId);
     hydrateBookmarks(set, get, sessionId);
     hydrateSubagentTranscripts(set, get, sessionId);
+    void get().loadOrchRuns(sessionId);
     set((s) => {
       // Clear the unread badge - the user is now looking at this session.
       const unreadBySession = { ...s.unreadBySession };
@@ -6484,6 +6676,31 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       return false;
     }
 
+    // ── Orchestration interception (docs/orchestration-plan.md §6) ──
+    // 自动编排开关(或触发启发式 auto 档)→ 本条消息照常进入会话回合,仅打
+    // orchestration 标记 —— main 为该回合注入规划者提示与 orch_submit_plan
+    // 工具,模型在本会话内产出任务图(历史天然携带,多轮调整不丢上下文)。
+    // 原 @agent 目标簇(移交/骨架画布)已随 agent 角色域退役。
+    // Skipped for image-only turns (no text to hand off) and on the web/mobile
+    // shim (no api.orch surface).
+    let orchPlanning = false;
+    if (prompt.trim() && isElectron) {
+      // 自动编排开关:显式意图,优先于触发启发式。
+      if (get().orchAutoBySession[sessionId]) {
+        orchPlanning = true;
+      } else {
+        const triggerMode = get().orchSettings?.triggerMode ?? "ask";
+        if (triggerMode !== "off" && looksOrchestratable(prompt)) {
+          if (triggerMode === "auto") {
+            orchPlanning = true;
+          } else {
+            pushToastLite("info", translate(get().locale, "orch.toast.suggest"));
+          }
+        }
+      }
+    }
+    // ── end orchestration interception ──
+
     // 1. immediately show the user's message. Attachments (pasted content
     //    promoted to cards in the composer) render as attachment blocks
     //    ABOVE the typed text, mirroring the composer's chip-above-editor
@@ -6534,6 +6751,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       role: "user",
       blocks,
       createdAt: Date.now(),
+      // 自动编排回合徽标:这轮以编排规划者模式运行(不再是"没进会话"的
+      // 旁路标记 —— 消息照常进入模型回合)。
+      ...(orchPlanning ? { orchTag: "auto" as const } : {}),
     };
     set((s) => ({
       messagesBySession: {
@@ -6607,6 +6827,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           // client (phone ⇄ PC) as a `user.message` event keyed by the id.
           // The local copy appended above makes the echo a no-op here.
           userMessage: { id: userMsg.id, createdAt: userMsg.createdAt, blocks: userMsg.blocks },
+          // 自动编排(会话内拆解):该回合在本会话内正常执行,main 侧注入
+          // 规划者系统提示与 orch_submit_plan 工具(orchestrator/planTool.ts)。
+          orchestration: orchPlanning || undefined,
         }));
       } catch (err) {
         // The IPC itself rejected (not a streamed `error` event). Without
@@ -6867,6 +7090,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     const sessionId = sessionIdArg ?? get().activeSessionId;
     if (!sessionId) return;
     await api.claude.interrupt({ sessionId });
+    // 编排拆解(会话内回合)的停止与普通回合完全同路:orch_submit_plan 的
+    // 在途工具调用随生成器中断一起终止,无需单独的旁路中止通道(原
+    // orch.abortPlan 已随无头 planner 退役)。
     // Drop this session's buffered deltas: after abort, flushFinal may emit a
     // few straggler text.delta/thinking while the generator unwinds, but the
     // user asked to STOP — none of it should reach the page. Combined with
@@ -9379,11 +9605,16 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   dismissQuestion: () => {
     const sessionId = get().activeSessionId;
     if (!sessionId) return;
+    get().dismissQuestionFor(sessionId);
+  },
+
+  /** Session-targeted dismiss (the orchestrator attention card dismisses
+   *  WORKER sessions' questions — those are never the active session). Same
+   *  semantics as dismissQuestion:
+   *  resolves the provider's pending Deferred as dismissed so the worker turn
+   *  continues, then clears the card. */
+  dismissQuestionFor: (sessionId) => {
     const pending = get().pendingQuestionBySession[sessionId];
-    // Resolve the provider's pending Deferred as DISMISSED so the model's
-    // turn CONTINUES (it sees the question was skipped and decides what to
-    // do). The old behavior only cleared the local card, leaving the model
-    // blocked forever waiting for answers.
     if (pending) {
       const requestId = pending.requestId ?? `sentinel_${sessionId}_${Date.now()}`;
       void api.claude
@@ -9930,6 +10161,285 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     void api.setting.set({ key: UI_RIGHT_PANEL_TAB_SETTING_KEY, value: tab }).catch((err) => {
       console.error("setting.set(rightPanelTab) failed:", err);
     });
+  },
+
+  /* ── Agent orchestration actions ── */
+
+  loadOrchSettings: async () => {
+    if (!isElectron) return;
+    try {
+      const { settings } = await api.orch.getSettings();
+      set({ orchSettings: settings });
+    } catch (err) {
+      console.error("orch.getSettings failed:", err);
+    }
+  },
+
+  saveOrchSettings: async (settings) => {
+    const { settings: saved } = await api.orch.saveSettings({ settings });
+    set({ orchSettings: saved });
+  },
+
+  loadOrchRuns: async (sessionId) => {
+    if (!isElectron) return;
+    try {
+      const { runs } = await api.orch.listRuns({ sessionId });
+      set((s) => ({ orchRunsBySession: { ...s.orchRunsBySession, [sessionId]: runs } }));
+    } catch (err) {
+      console.error("orch.listRuns failed:", err);
+    }
+  },
+
+  ingestOrchEvent: (event) => {
+    switch (event.kind) {
+      case "run.updated": {
+        const run = event.run;
+        const prev = get().orchRunsBySession[run.parentSessionId]?.find((r) => r.id === run.id);
+        set((s) => {
+          const list = s.orchRunsBySession[run.parentSessionId] ?? [];
+          const idx = list.findIndex((r) => r.id === run.id);
+          const next = idx >= 0 ? list.map((r) => (r.id === run.id ? run : r)) : [run, ...list];
+          return { orchRunsBySession: { ...s.orchRunsBySession, [run.parentSessionId]: next } };
+        });
+        // 画布流第⑤步:run 转入 completed(首次或 restart 后再完成)→
+        // 聊天流追加「结果整理」卡。转场判定(prev 不是 completed)保证
+        // 完成后的 touch 不重复出卡;restart 会重置 synthesizedAt,再次
+        // 完成时 updatedAt 已变 → 新卡新 id。
+        if (run.status === "completed" && prev?.status !== "completed") {
+          pushToastLite(
+            "info",
+            translate(get().locale, "orch.toast.runDone", {
+              n: run.tasks.filter((x) => x.status === "completed").length,
+              total: run.tasks.length,
+            }),
+          );
+          const synthMsg: ChatMessage = {
+            id: `orch_synth_${run.id}_${run.updatedAt}`,
+            sessionId: run.parentSessionId,
+            role: "assistant",
+            blocks: [{ kind: "orch-synth", synthId: `synth-${run.id}-${run.updatedAt}`, runId: run.id, goal: run.goal || run.title }],
+            createdAt: Date.now(),
+          };
+          set((s) => ({
+            messagesBySession: {
+              ...s.messagesBySession,
+              [run.parentSessionId]: [...(s.messagesBySession[run.parentSessionId] ?? []), synthMsg],
+            },
+          }));
+          void api.session.upsertMessages({
+            sessionId: run.parentSessionId,
+            messages: toRecords(run.parentSessionId, [synthMsg]),
+          });
+        }
+        return;
+      }
+      case "worker_done": {
+        // Visible feedback for finished/failed workers (activity-region style
+        // toasts would need the run's locale — keep it fire-and-forget light).
+        const failed = event.payload.status === "failed";
+        pushToastLite(
+          failed ? "error" : "info",
+          failed ? translate(get().locale, "orch.toast.workerFailed", { id: event.payload.taskId })
+                 : translate(get().locale, "orch.toast.workerDone", { id: event.payload.taskId }),
+        );
+        return;
+      }
+      case "gate.created": {
+        pushToastLite("info", translate(get().locale, "orch.toast.gate"));
+        return;
+      }
+      case "plan.proposed": {
+        // 会话内拆解回合的产物:模型调 orch_submit_plan 后 main 侧钳制并
+        // 创建了 paused run(事件自带 run,免除与 run.updated 的顺序依赖)。
+        // 这里把画布块挂到该回合当前最后一条 assistant 消息上(通常就是
+        // 承载工具调用的那条;模型的总结文本是后到的独立消息,自然落在画布
+        // 之后),幂等:同 run 的画布块已存在则跳过。普通回合管线负责消息
+        // 的 turn.done 持久化,画布块随消息一起落库。
+        const run = event.run;
+        const sid = run.parentSessionId;
+        set((s) => {
+          const list = s.messagesBySession[sid] ?? [];
+          // 幂等第一道:任何消息上已有同 run 的画布块(重复事件/多端回放,
+          // 且模型的总结消息可能已落地)→ 整体跳过,不按"最后一条"误挂。
+          if (list.some((m) => m.blocks.some((b) => b.kind === "orch-canvas" && b.runId === run.id))) {
+            return {};
+          }
+          const next = [...list];
+          let handled = false;
+          for (let i = next.length - 1; i >= 0; i--) {
+            const m = next[i];
+            if (m.role !== "assistant") continue;
+            next[i] = {
+              ...m,
+              blocks: [...m.blocks, { kind: "orch-canvas", canvasId: `orch-${run.id}`, runId: run.id, goal: run.goal || run.title }],
+            };
+            handled = true;
+            void api.session.upsertMessages({ sessionId: sid, messages: toRecords(sid, [next[i]]) });
+            break;
+          }
+          if (!handled) {
+            // 消息流里没有 assistant 消息可挂(异常时序)——自建一条画布消息兜底。
+            const synth: ChatMessage = {
+              id: `orch_canvas_${run.id}`,
+              sessionId: sid,
+              role: "assistant",
+              blocks: [{ kind: "orch-canvas", canvasId: `orch-${run.id}`, runId: run.id, goal: run.goal || run.title }],
+              createdAt: Date.now(),
+            };
+            next.push(synth);
+            void api.session.upsertMessages({ sessionId: sid, messages: toRecords(sid, [synth]) });
+          }
+          const runs = s.orchRunsBySession[sid] ?? [];
+          const runList = runs.some((r) => r.id === run.id) ? runs : [run, ...runs];
+          return {
+            messagesBySession: { ...s.messagesBySession, [sid]: next },
+            orchRunsBySession: { ...s.orchRunsBySession, [sid]: runList },
+          };
+        });
+        pushToastLite(
+          "info",
+          translate(get().locale, "orch.canvas.decomposed", { n: run.tasks.length }),
+        );
+        get().selectOrchNode(run.id, null);
+        return;
+      }
+      case "gate.resolved":
+      case "suggest":
+        return;
+    }
+  },
+
+  orchRunControl: async (runId, action) => {
+    try {
+      const { run } = await api.orch.runControl({ runId, action });
+      if (run) {
+        set((s) => {
+          const list = s.orchRunsBySession[run.parentSessionId] ?? [];
+          const next = action === "delete" ? list.filter((r) => r.id !== runId) : list.map((r) => (r.id === runId ? run : r));
+          return { orchRunsBySession: { ...s.orchRunsBySession, [run.parentSessionId]: next } };
+        });
+      }
+    } catch (err) {
+      console.error("orch.runControl failed:", err);
+    }
+  },
+
+  orchTaskControl: async (runId, taskId, action) => {
+    try {
+      const { run } = await api.orch.taskControl({ runId, taskId, action });
+      if (run) {
+        set((s) => {
+          const list = s.orchRunsBySession[run.parentSessionId] ?? [];
+          const next = list.map((r) => (r.id === run.id ? run : r));
+          return { orchRunsBySession: { ...s.orchRunsBySession, [run.parentSessionId]: next } };
+        });
+      }
+      return null;
+    } catch (err) {
+      console.error("orch.taskControl failed:", err);
+      return err instanceof Error ? err.message : String(err);
+    }
+  },
+
+  orchResolveGate: async (runId, gateId, resolution) => {
+    try {
+      const { run } = await api.orch.resolveGate({ runId, gateId, resolution });
+      if (run) {
+        set((s) => {
+          const list = s.orchRunsBySession[run.parentSessionId] ?? [];
+          const next = list.map((r) => (r.id === run.id ? run : r));
+          return { orchRunsBySession: { ...s.orchRunsBySession, [run.parentSessionId]: next } };
+        });
+      }
+    } catch (err) {
+      console.error("orch.resolveGate failed:", err);
+    }
+  },
+
+  orchMergeTask: async (runId, taskId) => {
+    try {
+      const res = await api.orch.mergeTask({ runId, taskId });
+      return res.ok ? null : (res.error ?? "merge failed");
+    } catch (err) {
+      return (err as Error).message;
+    }
+  },
+
+  orchHandoff: async (briefing, title) => {
+    const s = get();
+    const projectId = s.activeProjectId;
+    if (!projectId) return null;
+    try {
+      const { session } = await api.orch.handoff({
+        projectId,
+        briefing,
+        fromSessionId: s.activeSessionId ?? undefined,
+        title,
+      });
+      pushToastLite("info", translate(get().locale, "orch.toast.handoff"));
+      return session;
+    } catch (err) {
+      console.error("orch.handoff failed:", err);
+      pushToastLite("error", (err as Error).message);
+      return null;
+    }
+  },
+
+  openOrchWorker: async (workerSessionId) => {
+    try {
+      const { session } = await api.orch.workerSession({ sessionId: workerSessionId });
+      if (session) {
+        set((s) => ({ orchWorkersById: { ...s.orchWorkersById, [session.id]: session } }));
+      }
+      await get().openTab(workerSessionId);
+    } catch (err) {
+      console.error("orch.workerSession failed:", err);
+    }
+  },
+
+  setOrchAuto: (sessionId, on) => {
+    set((s) => ({ orchAutoBySession: { ...s.orchAutoBySession, [sessionId]: on } }));
+  },
+
+  selectOrchNode: (runId, taskId) => {
+    // taskId=null 保留 runId —— 那是「该 run 的运行总览」(点画布空白),
+    // 不是清空;完全退出用 closeOrchSelection。
+    // 选中节点即打开右栏(面板收起时点节点要能立刻看到详情)。
+    // 节点与连线选中互斥:选节点清掉 edge 字段。
+    set((s) => ({
+      orchNodeSelection: { runId, taskId },
+      ...(taskId ? { rightOpen: true } : {}),
+    }));
+    get().setRightPanelTab("orch");
+  },
+
+  selectOrchEdge: (runId, upstream, downstream) => {
+    // 点连线:右栏进入连线详情(与节点详情同级,taskId 恒空 + edge 字段)。
+    set({
+      orchNodeSelection: { runId, taskId: null, edge: { upstream, downstream } },
+      rightOpen: true,
+    });
+    get().setRightPanelTab("orch");
+  },
+
+  closeOrchSelection: () => {
+    set({ orchNodeSelection: null });
+  },
+
+  ensureOrchRun: async (runId) => {
+    const exists = Object.values(get().orchRunsBySession).some((list) => list.some((r) => r.id === runId));
+    if (exists) return;
+    try {
+      const { run } = await api.orch.getRun({ runId });
+      if (!run) return;
+      set((s) => {
+        const list = s.orchRunsBySession[run.parentSessionId] ?? [];
+        if (list.some((r) => r.id === runId)) return {};
+        return { orchRunsBySession: { ...s.orchRunsBySession, [run.parentSessionId]: [run, ...list] } };
+      });
+    } catch (err) {
+      console.error("orch.getRun failed:", err);
+    }
   },
 
   openSideChatPanel: () => {

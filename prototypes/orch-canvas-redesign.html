@@ -1,0 +1,1091 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>流程编排重构 · 画布式编排原型</title>
+<style>
+  /* =========================================================================
+   * 流程编排(Orchestration)重构 · 可点击交互原型
+   *
+   * 演示主链路(对应重构诉求的 5 步):
+   *  ① 新会话输入想法 → 勾选「自动编排」→ 发送
+   *  ② 模型拆解 → 聊天数据流内出现**画布卡片**,展示任务 DAG(A→B→C,兼容多并发)
+   *  ③ 画布上点节点 → 右侧面板配置该任务的 模型 / agent / 简报 / 依赖
+   *     → 点画布右上角「运行」开始执行 agent
+   *  ④ 运行中/运行后点节点 → 右侧面板「运行输出」看流式日志、产物、耗时、tokens
+   *  ⑤ 全部完成 → 会话内自动追加「最终结果整理」消息(汇总各任务产出)
+   *
+   * 布局结构 = 真实应用的三栏:左栏(会话) / 中栏(聊天+画布) / 右栏(节点详情)。
+   * 纯静态原型:数据是预置脚本,不接真实 IPC。
+   * ========================================================================= */
+  :root{
+    --surface:255 255 255;
+    --surface-muted:240 242 246;
+    --surface-hover:226 229 235;
+    --content:9 9 11;
+    --content-muted:63 63 70;
+    --content-subtle:113 113 122;
+    --edge:213 216 222;
+    --panel-edge:222 225 231;
+    --accent:5 150 105;
+    --accent-strong:4 120 87;
+    --accent-soft:5 150 105;
+    --danger:220 38 38;
+    --warning:180 83 9;
+    --info:124 58 237;
+    --sky:2 132 199;
+    --shadow-card:0 1px 2px rgb(9 9 11 / .06);
+    --shadow-pop:0 14px 40px -12px rgb(9 9 11 / .22), 0 2px 8px rgb(9 9 11 / .06);
+    --right-w:344px;
+  }
+  [data-theme="dark"]{
+    --surface:26 29 36;
+    --surface-muted:38 42 52;
+    --surface-hover:52 58 70;
+    --content:231 232 236;
+    --content-muted:188 191 198;
+    --content-subtle:140 145 156;
+    --edge:48 54 66;
+    --panel-edge:42 47 58;
+    --accent:16 185 129;
+    --accent-strong:16 185 129;
+    --accent-soft:16 185 129;
+    --danger:248 113 113;
+    --warning:251 191 36;
+    --info:167 139 250;
+    --sky:56 189 248;
+    --shadow-card:0 1px 2px rgb(0 0 0 / .3);
+    --shadow-pop:0 18px 48px -12px rgb(0 0 0 / .55), 0 2px 10px rgb(0 0 0 / .3);
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{
+    font-family:"Segoe UI","PingFang SC","Microsoft YaHei",system-ui,sans-serif;
+    font-size:13px;color:rgb(var(--content));background:rgb(var(--surface-muted));
+    overflow:hidden;
+  }
+  button{font:inherit;color:inherit;background:none;border:none;cursor:pointer}
+  select,textarea,input{font:inherit;color:rgb(var(--content))}
+  ::-webkit-scrollbar{width:10px;height:10px}
+  ::-webkit-scrollbar-thumb{background:rgb(var(--content-subtle)/.35);border-radius:6px;border:2.5px solid transparent;background-clip:content-box}
+  ::-webkit-scrollbar-track{background:transparent}
+
+  /* ── 标题栏 ─────────────────────────────────────────── */
+  .titlebar{
+    height:40px;display:flex;align-items:center;gap:10px;padding:0 12px;
+    background:rgb(var(--surface));border-bottom:1px solid rgb(var(--panel-edge));
+    -webkit-user-select:none;user-select:none;
+  }
+  .titlebar .dots{display:flex;gap:7px;margin-right:2px}
+  .titlebar .dots i{width:11px;height:11px;border-radius:50%;display:block}
+  .titlebar .dots i:nth-child(1){background:#ff5f57}.titlebar .dots i:nth-child(2){background:#febc2e}.titlebar .dots i:nth-child(3){background:#28c840}
+  .titlebar .name{font-size:12px;color:rgb(var(--content-muted))}
+  .titlebar .name b{color:rgb(var(--content));font-weight:600}
+  .titlebar .spacer{flex:1}
+  .tb-btn{
+    display:inline-flex;align-items:center;gap:5px;height:26px;padding:0 10px;border-radius:6px;
+    font-size:12px;color:rgb(var(--content-muted));border:1px solid rgb(var(--edge));
+  }
+  .tb-btn:hover{background:rgb(var(--surface-hover));color:rgb(var(--content))}
+
+  /* ── 三栏骨架 ───────────────────────────────────────── */
+  .app{display:flex;height:calc(100vh - 40px);min-width:1180px}
+  .sidebar{
+    width:212px;flex:none;background:rgb(var(--surface));border-right:1px solid rgb(var(--panel-edge));
+    display:flex;flex-direction:column;
+  }
+  .center{flex:1;min-width:0;display:flex;flex-direction:column;background:rgb(var(--surface))}
+  .rightpanel{
+    width:var(--right-w);flex:none;background:rgb(var(--surface));border-left:1px solid rgb(var(--panel-edge));
+    display:flex;flex-direction:column;transition:width .25s cubic-bezier(.22,1,.36,1);
+  }
+  .rightpanel.collapsed{width:0;overflow:hidden;border-left:none}
+
+  /* ── 左栏会话列表 ───────────────────────────────────── */
+  .sb-new{
+    margin:12px 10px 6px;height:32px;border-radius:8px;display:flex;align-items:center;justify-content:center;gap:6px;
+    background:rgb(var(--accent)/.14);color:rgb(var(--accent));font-weight:600;font-size:12.5px;
+    border:1px dashed rgb(var(--accent)/.5);
+  }
+  .sb-new:hover{background:rgb(var(--accent)/.22)}
+  .sb-group{padding:10px 14px 4px;font-size:10.5px;letter-spacing:.08em;color:rgb(var(--content-subtle))}
+  .sb-item{
+    margin:1px 8px;padding:7px 10px;border-radius:8px;display:flex;gap:8px;align-items:center;
+    color:rgb(var(--content-muted));font-size:12.5px;cursor:default;
+  }
+  .sb-item:hover{background:rgb(var(--surface-hover))}
+  .sb-item.active{background:rgb(var(--accent)/.14);color:rgb(var(--content))}
+  .sb-item .ico{flex:none;opacity:.85}
+  .sb-item .t{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .sb-item .badge{flex:none;font-size:10px;padding:1px 6px;border-radius:99px;background:rgb(var(--sky)/.18);color:rgb(var(--sky))}
+  .sb-foot{margin-top:auto;padding:10px 14px;border-top:1px solid rgb(var(--panel-edge));display:flex;gap:8px;align-items:center;color:rgb(var(--content-subtle));font-size:12px}
+  .avatar{width:24px;height:24px;border-radius:50%;background:linear-gradient(135deg,#34d399,#0ea5e9);flex:none}
+
+  /* ── 中栏:聊天 ─────────────────────────────────────── */
+  .help-banner{
+    margin:12px 16px 0;padding:9px 12px;border-radius:10px;font-size:12px;line-height:1.65;
+    background:rgb(var(--info)/.09);border:1px solid rgb(var(--info)/.3);color:rgb(var(--content-muted));
+    display:flex;gap:10px;align-items:flex-start;
+  }
+  .help-banner b{color:rgb(var(--content))}
+  .help-banner .x{margin-left:auto;flex:none;color:rgb(var(--content-subtle));padding:2px}
+  .help-banner .x:hover{color:rgb(var(--content))}
+  .chat-scroll{flex:1;overflow-y:auto;padding:16px 16px 10px;scroll-behavior:smooth}
+  .msg{margin:0 0 14px;display:flex;gap:10px}
+  .msg .m-ava{width:26px;height:26px;border-radius:8px;flex:none;display:flex;align-items:center;justify-content:center;font-size:12px}
+  .msg.user{flex-direction:row-reverse}
+  .msg.user .m-ava{background:rgb(var(--info)/.2);color:rgb(var(--info))}
+  .msg.assistant .m-ava{background:rgb(var(--accent)/.16);color:rgb(var(--accent))}
+  .bubble{
+    max-width:76%;padding:9px 12px;border-radius:12px;line-height:1.7;font-size:13px;
+    background:rgb(var(--surface-muted));border:1px solid rgb(var(--edge));
+  }
+  .msg.user .bubble{background:rgb(var(--info)/.12);border-color:rgb(var(--info)/.28);border-top-right-radius:4px}
+  .msg.assistant .bubble{border-top-left-radius:4px}
+  .chips{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
+  .chip{
+    display:inline-flex;align-items:center;gap:4px;font-size:11px;padding:2px 8px;border-radius:99px;
+    background:rgb(var(--accent)/.14);color:rgb(var(--accent));border:1px solid rgb(var(--accent)/.3);
+  }
+  .chip.muted{background:rgb(var(--surface-hover));color:rgb(var(--content-subtle));border-color:rgb(var(--edge))}
+
+  /* 思考/拆解中 块 */
+  .think{
+    max-width:76%;border-left:2px solid rgb(var(--content-subtle)/.4);padding:4px 0 4px 12px;
+    color:rgb(var(--content-subtle));font-size:12px;line-height:1.7;
+  }
+  .think .cursor{display:inline-block;width:7px;height:13px;background:rgb(var(--content-subtle));vertical-align:-2px;animation:blink 1s steps(1) infinite}
+  @keyframes blink{50%{opacity:0}}
+
+  /* ── 编排画布卡片(数据流内) ────────────────────────── */
+  .orch-msg{margin:0 0 16px}
+  .orch-canvas{
+    border:1px solid rgb(var(--panel-edge));border-radius:14px;background:rgb(var(--surface));
+    box-shadow:var(--shadow-card);overflow:hidden;
+  }
+  .oc-head{padding:10px 12px 8px;display:flex;align-items:center;gap:10px;border-bottom:1px solid rgb(var(--panel-edge))}
+  .oc-glyph{width:26px;height:26px;border-radius:8px;background:rgb(var(--accent)/.14);color:rgb(var(--accent));display:flex;align-items:center;justify-content:center;flex:none}
+  .oc-title{font-weight:600;font-size:13px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .oc-status{
+    flex:none;font-size:11px;padding:2px 9px;border-radius:99px;border:1px solid;
+    display:inline-flex;align-items:center;gap:5px;
+  }
+  .oc-status.planning{color:rgb(var(--warning));border-color:rgb(var(--warning)/.4);background:rgb(var(--warning)/.1)}
+  .oc-status.running{color:rgb(var(--sky));border-color:rgb(var(--sky)/.45);background:rgb(var(--sky)/.1)}
+  .oc-status.running .dot{width:6px;height:6px;border-radius:50%;background:rgb(var(--sky));animation:pulse 1s ease-in-out infinite}
+  .oc-status.paused{color:rgb(var(--warning));border-color:rgb(var(--warning)/.45);background:rgb(var(--warning)/.1)}
+  .oc-status.done{color:rgb(var(--accent));border-color:rgb(var(--accent)/.45);background:rgb(var(--accent)/.1)}
+  .oc-status.canceled{color:rgb(var(--content-subtle));border-color:rgb(var(--edge));background:rgb(var(--surface-muted))}
+  @keyframes pulse{50%{opacity:.25}}
+  .oc-stats{margin-left:auto;font-size:11.5px;color:rgb(var(--content-subtle));flex:none}
+  .oc-stats b{color:rgb(var(--content-muted));font-weight:600}
+  .oc-actions{display:flex;gap:6px;flex:none}
+  .oc-btn{
+    height:28px;padding:0 11px;border-radius:8px;font-size:12px;display:inline-flex;align-items:center;gap:5px;
+    border:1px solid rgb(var(--edge));color:rgb(var(--content-muted));
+  }
+  .oc-btn:hover{background:rgb(var(--surface-hover))}
+  .oc-btn.primary{
+    background:rgb(var(--accent));border-color:rgb(var(--accent));color:#fff;font-weight:600;
+    box-shadow:0 2px 10px -2px rgb(var(--accent)/.6);
+  }
+  .oc-btn.primary:hover{background:rgb(var(--accent-strong))}
+  .oc-btn.warn{color:rgb(var(--warning));border-color:rgb(var(--warning)/.45)}
+  .oc-btn.danger{color:rgb(var(--danger));border-color:rgb(var(--danger)/.45)}
+  .oc-progress{height:3px;background:rgb(var(--surface-muted));position:relative}
+  .oc-progress i{position:absolute;inset:0 auto 0 0;width:0;background:linear-gradient(90deg,rgb(var(--sky)),rgb(var(--accent)));transition:width .5s ease}
+
+  .oc-body{position:relative;height:316px;overflow:auto;background:
+    radial-gradient(rgb(var(--content-subtle)/.13) 1px,transparent 1px);
+    background-size:22px 22px}
+  .oc-inner{position:relative;min-width:100%;min-height:100%}
+  .oc-edges{position:absolute;inset:0;pointer-events:none}
+  .oc-edges path{fill:none;stroke:rgb(var(--content-subtle)/.5);stroke-width:1.6}
+  .oc-edges path.flow{stroke:rgb(var(--sky));stroke-dasharray:6 5;animation:dashmove 1s linear infinite}
+  .oc-edges path.done{stroke:rgb(var(--accent)/.85)}
+  @keyframes dashmove{to{stroke-dashoffset:-11}}
+
+  .node{
+    position:absolute;width:172px;border-radius:12px;padding:8px 10px 9px;cursor:pointer;
+    background:rgb(var(--surface));border:1.5px solid rgb(var(--edge));
+    box-shadow:var(--shadow-card);transition:border-color .2s,box-shadow .2s,transform .15s;
+  }
+  .node:hover{border-color:rgb(var(--content-subtle)/.6)}
+  .node.selected{border-color:rgb(var(--accent));box-shadow:0 0 0 3px rgb(var(--accent)/.18)}
+  .node.running{border-color:rgb(var(--sky));animation:nodeGlow 1.6s ease-in-out infinite}
+  @keyframes nodeGlow{50%{box-shadow:0 0 0 4px rgb(var(--sky)/.14)}}
+  .node.done{border-color:rgb(var(--accent)/.55)}
+  .node.canceled{opacity:.5}
+  .node-top{display:flex;align-items:center;gap:6px;font-size:10.5px;color:rgb(var(--content-subtle))}
+  .node-top .nid{font-family:Consolas,monospace;font-weight:700;color:rgb(var(--content-muted))}
+  .node-top .st{margin-left:auto;display:inline-flex;align-items:center;gap:4px}
+  .spin{width:10px;height:10px;border-radius:50%;border:1.5px solid rgb(var(--sky)/.3);border-top-color:rgb(var(--sky));animation:rot .8s linear infinite;flex:none}
+  @keyframes rot{to{transform:rotate(360deg)}}
+  .node-title{margin-top:3px;font-size:12.5px;font-weight:600;line-height:1.4}
+  .node-sub{margin-top:3px;font-size:10.5px;color:rgb(var(--content-subtle));display:flex;align-items:center;gap:4px;overflow:hidden;white-space:nowrap}
+  .node-sub .unassigned{color:rgb(var(--warning))}
+  .node-foot{margin-top:6px;display:flex;align-items:center;gap:6px;font-size:10px;color:rgb(var(--content-subtle))}
+  .node-bar{flex:1;height:3px;border-radius:2px;background:rgb(var(--surface-muted));overflow:hidden}
+  .node-bar i{display:block;height:100%;width:0;background:rgb(var(--sky));transition:width .4s}
+  .node.done .node-bar i{background:rgb(var(--accent))}
+  .add-node{
+    position:absolute;border:1.5px dashed rgb(var(--edge));border-radius:12px;color:rgb(var(--content-subtle));
+    display:flex;align-items:center;justify-content:center;gap:6px;font-size:12px;
+  }
+  .add-node:hover{border-color:rgb(var(--accent)/.6);color:rgb(var(--accent))}
+  .oc-foot{padding:7px 12px;border-top:1px solid rgb(var(--panel-edge));display:flex;align-items:center;gap:12px;font-size:11px;color:rgb(var(--content-subtle))}
+  .lg{display:inline-flex;align-items:center;gap:5px}
+  .lg i{width:9px;height:9px;border-radius:3px;display:block}
+  .oc-foot .hint{margin-left:auto}
+
+  /* ── Composer ──────────────────────────────────────── */
+  .composer{padding:10px 16px 14px}
+  .composer-card{
+    border:1px solid rgb(var(--edge));border-radius:14px;background:rgb(var(--surface-muted));
+    padding:10px 12px 8px;transition:border-color .2s;
+  }
+  .composer-card:focus-within{border-color:rgb(var(--accent)/.7)}
+  .composer-card textarea{
+    width:100%;background:transparent;border:none;outline:none;resize:none;height:44px;
+    font-size:13px;line-height:1.6;color:rgb(var(--content));
+  }
+  .composer-card textarea::placeholder{color:rgb(var(--content-subtle))}
+  .composer-row{display:flex;align-items:center;gap:8px;margin-top:8px}
+  .orch-toggle{
+    display:inline-flex;align-items:center;gap:7px;height:28px;padding:0 10px 0 7px;border-radius:99px;
+    border:1px solid rgb(var(--edge));font-size:12px;color:rgb(var(--content-muted));
+  }
+  .orch-toggle .sw{width:26px;height:15px;border-radius:99px;background:rgb(var(--content-subtle)/.4);position:relative;transition:background .2s;flex:none}
+  .orch-toggle .sw::after{content:"";position:absolute;top:2px;left:2px;width:11px;height:11px;border-radius:50%;background:#fff;transition:left .2s}
+  .orch-toggle.on{border-color:rgb(var(--accent)/.55);background:rgb(var(--accent)/.1);color:rgb(var(--accent))}
+  .orch-toggle.on .sw{background:rgb(var(--accent))}
+  .orch-toggle.on .sw::after{left:13px}
+  .composer-row .note{font-size:11px;color:rgb(var(--content-subtle))}
+  .send{
+    margin-left:auto;height:30px;padding:0 14px;border-radius:9px;display:inline-flex;align-items:center;gap:6px;
+    background:rgb(var(--accent));color:#fff;font-weight:600;font-size:12.5px;
+    box-shadow:0 2px 10px -2px rgb(var(--accent)/.6);
+  }
+  .send:disabled{opacity:.45;cursor:not-allowed;box-shadow:none}
+  .send:not(:disabled):hover{background:rgb(var(--accent-strong))}
+
+  /* ── 右栏面板 ──────────────────────────────────────── */
+  .rp-head{padding:12px 14px;border-bottom:1px solid rgb(var(--panel-edge));display:flex;align-items:center;gap:8px;min-height:49px}
+  .rp-head .t{font-weight:600;font-size:13px;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .rp-body{flex:1;overflow-y:auto;padding:12px 14px 16px}
+  .rp-empty{color:rgb(var(--content-subtle));font-size:12px;line-height:1.8;padding:8px 2px}
+  .rp-kicker{font-size:10.5px;letter-spacing:.07em;color:rgb(var(--content-subtle));margin:14px 0 7px;font-weight:600}
+  .rp-kicker:first-child{margin-top:0}
+  .tabs{display:flex;gap:4px;background:rgb(var(--surface-muted););border:1px solid rgb(var(--edge));padding:3px;border-radius:9px;margin-bottom:12px}
+  .tabs button{flex:1;height:26px;border-radius:6px;font-size:12px;color:rgb(var(--content-subtle))}
+  .tabs button.on{background:rgb(var(--surface));color:rgb(var(--content));font-weight:600;box-shadow:var(--shadow-card)}
+  .field{margin-bottom:11px}
+  .field label{display:block;font-size:11.5px;color:rgb(var(--content-muted));margin-bottom:5px}
+  .field select,.field textarea{
+    width:100%;border:1px solid rgb(var(--edge));border-radius:8px;background:rgb(var(--surface-muted));
+    padding:6px 8px;font-size:12.5px;outline:none;
+  }
+  .field select:focus,.field textarea:focus{border-color:rgb(var(--accent)/.7)}
+  .field textarea{min-height:72px;resize:vertical;line-height:1.6}
+  .dep-chips{display:flex;flex-wrap:wrap;gap:6px}
+  .dep-chips button{
+    font-size:11px;padding:3px 9px;border-radius:99px;border:1px solid rgb(var(--edge));color:rgb(var(--content-subtle));
+    font-family:Consolas,monospace;
+  }
+  .dep-chips button.on{border-color:rgb(var(--accent));color:rgb(var(--accent));background:rgb(var(--accent)/.1)}
+  .stat-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px}
+  .stat{border:1px solid rgb(var(--edge));border-radius:10px;padding:8px 10px;background:rgb(var(--surface-muted))}
+  .stat .k{font-size:10.5px;color:rgb(var(--content-subtle))}
+  .stat .v{margin-top:2px;font-size:13px;font-weight:600;font-variant-numeric:tabular-nums}
+  .console{
+    border:1px solid rgb(var(--edge));border-radius:10px;background:rgb(var(--surface-muted));
+    padding:9px 10px;font-family:Consolas,"Courier New",monospace;font-size:11px;line-height:1.75;
+    color:rgb(var(--content-muted));max-height:280px;overflow-y:auto;white-space:pre-wrap;word-break:break-all;
+  }
+  .console .ln-ok{color:rgb(var(--accent))}
+  .console .ln-warn{color:rgb(var(--warning))}
+  .console .cursor{display:inline-block;width:6px;height:11px;background:rgb(var(--content-subtle));vertical-align:-1px;animation:blink 1s steps(1) infinite}
+  .art-list{display:flex;flex-direction:column;gap:5px}
+  .art{
+    display:flex;align-items:center;gap:7px;font-size:11.5px;padding:6px 9px;border:1px solid rgb(var(--edge));
+    border-radius:8px;color:rgb(var(--content-muted));font-family:Consolas,monospace;
+  }
+  .art .sz{margin-left:auto;color:rgb(var(--content-subtle));font-size:10.5px}
+  .ov-row{
+    display:flex;align-items:center;gap:8px;padding:7px 9px;border:1px solid rgb(var(--edge));border-radius:9px;
+    margin-bottom:6px;cursor:pointer;background:rgb(var(--surface));
+  }
+  .ov-row:hover{border-color:rgb(var(--content-subtle)/.5)}
+  .ov-row .id{font-family:Consolas,monospace;font-size:11px;color:rgb(var(--content-subtle));width:22px}
+  .ov-row .t{flex:1;font-size:12px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .ov-row .s{font-size:10.5px;flex:none}
+  .st-pill{padding:1px 7px;border-radius:99px;font-size:10px;border:1px solid}
+  .st-pill.pending{color:rgb(var(--content-subtle));border-color:rgb(var(--edge))}
+  .st-pill.running{color:rgb(var(--sky));border-color:rgb(var(--sky)/.5);background:rgb(var(--sky)/.1)}
+  .st-pill.done{color:rgb(var(--accent));border-color:rgb(var(--accent)/.5);background:rgb(var(--accent)/.1)}
+  .st-pill.canceled{color:rgb(var(--content-subtle));border-color:rgb(var(--edge));background:rgb(var(--surface-muted))}
+
+  /* ── 结果整理消息 ──────────────────────────────────── */
+  .synth{max-width:88%;border:1px solid rgb(var(--accent)/.4);border-radius:14px;overflow:hidden;box-shadow:var(--shadow-card)}
+  .synth-head{padding:10px 14px;background:rgb(var(--accent)/.1);display:flex;align-items:center;gap:8px;font-weight:600;font-size:13px}
+  .synth-body{padding:12px 14px 14px;background:rgb(var(--surface))}
+  .synth-sec{opacity:0;transform:translateY(6px);transition:opacity .4s,transform .4s;margin-bottom:13px}
+  .synth-sec.show{opacity:1;transform:none}
+  .synth-sec h4{font-size:12px;color:rgb(var(--content-muted));margin-bottom:6px;display:flex;align-items:center;gap:6px}
+  .synth-sec ul{list-style:none}
+  .synth-sec li{font-size:12.5px;line-height:1.7;padding-left:16px;position:relative;color:rgb(var(--content-muted))}
+  .synth-sec li::before{content:"";position:absolute;left:2px;top:9px;width:5px;height:5px;border-radius:50%;background:rgb(var(--accent)/.7)}
+  .synth-sec li b{color:rgb(var(--content))}
+  .file-chips{display:flex;flex-wrap:wrap;gap:6px}
+  .file-chips span{font-family:Consolas,monospace;font-size:11px;padding:3px 8px;border-radius:7px;background:rgb(var(--surface-muted));border:1px solid rgb(var(--edge));color:rgb(var(--content-muted))}
+  .synth-foot{display:flex;gap:8px}
+  .synth-btn{
+    height:28px;padding:0 12px;border-radius:8px;font-size:12px;border:1px solid rgb(var(--edge));
+    display:inline-flex;align-items:center;gap:6px;color:rgb(var(--content-muted));
+  }
+  .synth-btn:hover{background:rgb(var(--surface-hover))}
+
+  /* ── Toast ─────────────────────────────────────────── */
+  .toasts{position:fixed;left:50%;bottom:86px;transform:translateX(-50%);display:flex;flex-direction:column;gap:8px;z-index:99;pointer-events:none}
+  .toast{
+    padding:8px 14px;border-radius:10px;font-size:12px;color:rgb(var(--content));
+    background:rgb(var(--surface));border:1px solid rgb(var(--edge));box-shadow:var(--shadow-pop);
+    animation:tin .25s cubic-bezier(.34,1.56,.64,1);
+  }
+  @keyframes tin{from{opacity:0;transform:translateY(8px) scale(.97)}}
+  .toast.out{opacity:0;transform:translateY(6px);transition:all .3s}
+
+  svg.ic{width:14px;height:14px;flex:none}
+</style>
+</head>
+<body data-theme="dark">
+
+<!-- ── 标题栏 ── -->
+<div class="titlebar">
+  <div class="dots"><i></i><i></i><i></i></div>
+  <span class="name"><b>Mcode</b> · 流程编排重构 · 交互原型</span>
+  <div class="spacer"></div>
+  <button class="tb-btn" id="themeBtn">◐ 明暗</button>
+  <button class="tb-btn" id="resetBtn">↺ 重置演示</button>
+</div>
+
+<div class="app">
+  <!-- ── 左栏 ── -->
+  <aside class="sidebar">
+    <button class="sb-new" onclick="toast('原型:新建会话入口,演示沿用当前会话')">＋ 新建会话</button>
+    <div class="sb-group">置顶</div>
+    <div class="sb-item active"><span class="ico">🧩</span><span class="t">电商后台模块化改造</span><span class="badge">编排</span></div>
+    <div class="sb-group">今天</div>
+    <div class="sb-item"><span class="ico">💬</span><span class="t">购物车结算逻辑抽离</span></div>
+    <div class="sb-item"><span class="ico">🐞</span><span class="t">修复 LSP 跳转失效</span></div>
+    <div class="sb-item"><span class="ico">💬</span><span class="t">周报生成脚本</span></div>
+    <div class="sb-foot"><div class="avatar"></div><span>huangbh · 本地</span></div>
+  </aside>
+
+  <!-- ── 中栏 ── -->
+  <main class="center">
+    <div class="help-banner" id="helpBanner">
+      <span>💡</span>
+      <div>
+        <b>演示路径:</b>① 下方输入框已预填想法,确认「自动编排」开启后点 <b>发送</b> → ② 模型拆解,聊天流内出现<b>编排画布</b> → ③ 点画布上的节点,在右侧面板配置<b>模型 / agent</b> → ④ 点画布右上角 <b>▶ 运行</b>,运行中随时点节点看<b>流式输出</b> → ⑤ 全部完成后会话自动追加<b>最终结果整理</b>。
+      </div>
+      <button class="x" onclick="document.getElementById('helpBanner').remove()">✕</button>
+    </div>
+
+    <div class="chat-scroll" id="chat">
+      <div class="msg user">
+        <div class="m-ava">你</div>
+        <div class="bubble">先看一下 src/services 目录,把购物车结算相关的逻辑整理个清单给我。</div>
+      </div>
+      <div class="msg assistant">
+        <div class="m-ava">✦</div>
+        <div class="bubble">已扫描 <b>src/services</b>:结算入口在 <code>checkout.ts</code>(386 行),优惠券核销逻辑散落在 <code>coupon.ts</code> 与 <code>order.ts</code> 两处,库存扣减在 <code>inventory.ts</code>。清单已生成:<b>docs/checkout-inventory.md</b>。需要我把结算流程抽成独立模块吗?</div>
+      </div>
+      <!-- 演示消息从这里追加 -->
+    </div>
+
+    <div class="composer">
+      <div class="composer-card">
+        <textarea id="composerInput" placeholder="输入你的想法…(Enter 发送 / Shift+Enter 换行)">把现有单体后台改造成多模块电商系统:用户/鉴权、订单/支付两个模块并行开发,完成后跑集成测试,最后出一份审查报告。</textarea>
+        <div class="composer-row">
+          <button class="orch-toggle on" id="orchSwitch">
+            <span class="sw"></span>
+            <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.9 5.8L20 10l-6.1 1.2L12 17l-1.9-5.8L4 10l6.1-1.2z"/></svg>
+            自动编排
+          </button>
+          <span class="note">开启后,发送的想法将交给规划者拆解为任务画布</span>
+          <button class="send" id="sendBtn">
+            发送
+            <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+          </button>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <!-- ── 右栏 ── -->
+  <aside class="rightpanel" id="rightPanel">
+    <div class="rp-head">
+      <span class="t" id="rpTitle">编排详情</span>
+      <button class="tb-btn" onclick="togglePanel(false)" title="收起面板">»</button>
+    </div>
+    <div class="rp-body" id="rpBody">
+      <div class="rp-empty">在画布上<b>点击任务节点</b>,这里会显示该任务的配置与运行输出。<br><br>运行开始后,右栏也会实时汇总整体进度。</div>
+    </div>
+  </aside>
+</div>
+
+<button class="tb-btn" id="expandPanelBtn" style="position:fixed;right:10px;top:52px;display:none;z-index:50" onclick="togglePanel(true)">« 详情</button>
+<div class="toasts" id="toasts"></div>
+
+<script>
+"use strict";
+/* ═══════════════════ 工具 ═══════════════════ */
+const $ = (sel, el=document) => el.querySelector(sel);
+const el = (tag, cls, html) => { const n=document.createElement(tag); if(cls) n.className=cls; if(html!=null) n.innerHTML=html; return n; };
+const esc = s => s.replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const fmtDur = ms => ms<1000 ? `${ms|0}ms` : ms<60000 ? `${(ms/1000).toFixed(1)}s` : `${Math.floor(ms/60000)}m${Math.round(ms%60000/1000)}s`;
+const fmtUsd = v => "$"+v.toFixed(2);
+
+function toast(text, ms=2600){
+  const t = el("div","toast",esc(text));
+  $("#toasts").appendChild(t);
+  setTimeout(()=>{ t.classList.add("out"); setTimeout(()=>t.remove(),320); }, ms);
+}
+function scrollChat(){ const c=$("#chat"); c.scrollTop = c.scrollHeight; }
+function togglePanel(open){
+  $("#rightPanel").classList.toggle("collapsed", !open);
+  $("#expandPanelBtn").style.display = open ? "none" : "block";
+}
+
+$("#themeBtn").onclick = () => {
+  const b=document.body;
+  b.dataset.theme = b.dataset.theme==="dark" ? "light" : "dark";
+};
+$("#resetBtn").onclick = () => location.reload();
+
+/* ═══════════════════ 静态字典 ═══════════════════ */
+const MODELS = ["跟随会话默认","GLM-4.7","Claude Sonnet 4.6","DeepSeek-V4","Qwen3-Max"];
+const AGENTS = [
+  {id:"builtin-planner",     name:"Planner · 规划",  emoji:"🧭"},
+  {id:"builtin-implementer", name:"Implementer · 实现", emoji:"🛠"},
+  {id:"builtin-tester",      name:"Tester · 测试",   emoji:"🧪"},
+  {id:"builtin-reviewer",    name:"Reviewer · 审查", emoji:"🔍"},
+];
+const agentOf = id => AGENTS.find(a=>a.id===id);
+const agentLabel = id => { const a=agentOf(id); return a ? `${a.emoji} ${a.name}` : ""; };
+
+const ST_TEXT = {pending:"待运行", running:"运行中", done:"完成", canceled:"已取消"};
+
+/* ═══════════════════ Composer(步骤①) ═══════════════════ */
+const orchSwitch = $("#orchSwitch");
+orchSwitch.onclick = () => {
+  orchSwitch.classList.toggle("on");
+  toast(orchSwitch.classList.contains("on") ? "已开启自动编排:发送后将自动拆解为任务画布" : "已关闭:消息按普通对话发送");
+};
+
+const input = $("#composerInput");
+input.addEventListener("keydown", e => {
+  if(e.key==="Enter" && !e.shiftKey){ e.preventDefault(); doSend(); }
+});
+$("#sendBtn").onclick = doSend;
+
+function doSend(){
+  const text = input.value.trim();
+  if(!text){ toast("先输入想法再发送"); return; }
+  if(activeRun && (activeRun.status==="running"||activeRun.status==="paused")){
+    toast("编排运行中:消息将进入队列,运行结束后统一处理(原型不演示队列)");
+    return;
+  }
+  const wantOrch = orchSwitch.classList.contains("on");
+  input.value="";
+  appendUserMessage(text, wantOrch);
+  if(wantOrch) startDecompose(text);
+  else {
+    appendAssistantBubble("已按普通对话处理(原型示意)。想要体验<b>画布式编排</b>,勾选输入框左下角的「自动编排」后重新发送即可。");
+  }
+}
+
+function appendUserMessage(text, orch){
+  const m = el("div","msg user");
+  m.appendChild(el("div","m-ava","你"));
+  const b = el("div","bubble",esc(text));
+  if(orch) b.appendChild(el("div","chips",`<span class="chip">✦ 自动编排</span>`));
+  m.appendChild(b);
+  $("#chat").appendChild(m); scrollChat();
+}
+function appendAssistantBubble(html){
+  const m = el("div","msg assistant");
+  m.appendChild(el("div","m-ava","✦"));
+  m.appendChild(el("div","bubble",html));
+  $("#chat").appendChild(m); scrollChat();
+  return m;
+}
+
+/* ═══════════════════ 步骤②:模型拆解动画 ═══════════════════ */
+let decomposing = false;
+function startDecompose(goal){
+  if(decomposing) return;
+  decomposing = true;
+  $("#sendBtn").disabled = true;
+
+  const m = el("div","msg assistant");
+  m.appendChild(el("div","m-ava","✦"));
+  const think = el("div","think");
+  m.appendChild(think);
+  $("#chat").appendChild(m); scrollChat();
+
+  const planText =
+    `收到目标:「${goal.slice(0,42)}${goal.length>42?"…":""}」。`+
+    `识别出两条可并行的开发线(用户/鉴权、订单/支付)与串行的验证收尾,`+
+    `按「规划 → 并行实现 → 集成测试 → 审查汇总」拆成 5 个任务,`+
+    `预算 $2.00、并发上限 3。正在生成任务画布…`;
+  let i=0;
+  const cur = el("span","cursor");
+  const timer = setInterval(()=>{
+    i = Math.min(planText.length, i+2);
+    think.innerHTML = esc(planText.slice(0,i)); think.appendChild(cur);
+    scrollChat();
+    if(i>=planText.length){
+      clearInterval(timer);
+      setTimeout(()=>{ m.remove(); spawnRun(goal); $("#sendBtn").disabled=false; decomposing=false; }, 420);
+    }
+  }, 26);
+}
+
+/* ═══════════════════ 画布运行实例 ═══════════════════ */
+let runSeq = 0;
+let activeRun = null;          // 右栏当前展示的 run
+let selected = null;           // {run, nodeId}
+
+function defaultTasks(goal){
+  return [
+    { id:"t1", title:"需求梳理与方案设计", agent:"builtin-planner", model:"GLM-4.7", deps:[],
+      spec:`围绕「${goal}」产出模块划分、接口契约与改动清单,写入 docs/plan.md。`,
+      dur:5200, tokens:2600,
+      logs:[
+        "读取现有目录结构与路由注册…",
+        "识别单体边界:auth / user / order / pay / inventory",
+        "产出模块划分:modules/{auth,order}",
+        "定义模块间契约:OrderService 接口草案",
+        "docs/plan.md 已写入(4.2 KB)",
+        "方案设计完成:2 条并行实现线 + 1 条验证线",
+      ],
+      artifacts:[["docs/plan.md","4.2 KB"]],
+      result:"模块划分与接口契约已定,拆出 2 条并行实现线。" },
+    { id:"t2", title:"模块 A:用户 / 鉴权", agent:"builtin-implementer", model:"Claude Sonnet 4.6", deps:["t1"],
+      spec:"按 docs/plan.md 实现 modules/auth:登录、会话、权限中间件,保持旧路由兼容。",
+      dur:8200, tokens:6800,
+      logs:[
+        "读取 docs/plan.md 契约…",
+        "创建 modules/auth/{login,session,guard}.ts",
+        "迁移旧 auth 路由 → 新模块(保持 302 兼容)",
+        "单元测试 7/7 通过",
+        "lint 通过,无循环依赖",
+      ],
+      artifacts:[["modules/auth/login.ts","3.1 KB"],["modules/auth/session.ts","2.4 KB"],["modules/auth/guard.ts","1.8 KB"]],
+      result:"auth 模块完成,路由兼容层就位,7 个单测全过。" },
+    { id:"t3", title:"模块 B:订单 / 支付", agent:"builtin-implementer", model:"DeepSeek-V4", deps:["t1"],
+      spec:"按 docs/plan.md 实现 modules/order:下单、支付回调、库存联动;对接 OrderService 契约。",
+      dur:9600, tokens:8400,
+      logs:[
+        "读取 docs/plan.md 契约…",
+        "创建 modules/order/{create,payment,stock}.ts",
+        "支付回调幂等键设计:outbox 表 + 去重",
+        "与 inventory 联动:预扣 → 确认/回滚",
+        "⚠ 依赖冲突:uuid 版本二义,已锁定 9.x",
+        "单元测试 11/12 通过(1 项跳过:外部网关 mock)",
+      ],
+      artifacts:[["modules/order/create.ts","4.6 KB"],["modules/order/payment.ts","3.8 KB"],["modules/order/stock.ts","2.2 KB"]],
+      result:"order 模块完成;幂等回调 + 库存联动落地,11/12 单测过。" },
+    { id:"t4", title:"集成测试与修复", agent:"builtin-tester", model:"跟随会话默认", deps:["t2","t3"],
+      spec:"对 modules/auth + modules/order 跑集成测试:下单→支付→库存核销全链路,失败即修复。",
+      dur:6800, tokens:5100,
+      logs:[
+        "起测试环境:临时 SQLite + 网关 mock…",
+        "链路用例:登录 → 下单 → 支付回调 → 库存核销",
+        "✗ 用例 3:并发下单库存超卖 → 复现",
+        "修复:stock.ts 预扣改原子 UPDATE … WHERE stock>0",
+        "回归:12/12 全部通过",
+      ],
+      artifacts:[["tests/integration/order-flow.spec.ts","5.3 KB"]],
+      result:"全链路集成测试 12/12 通过;修复 1 处并发超卖。" },
+    { id:"t5", title:"审查与结果汇总", agent:"builtin-reviewer", model:"GLM-4.7", deps:["t4"],
+      spec:"审查两条实现线的 diff 与测试产出,输出 pass / changes_requested 结论与改进建议。",
+      dur:5400, tokens:3900,
+      logs:[
+        "审查 diff:+1,284 / -322,涉及 11 文件",
+        "检查契约一致性:OrderService 双方对齐 ✓",
+        "安全审查:支付回调签名校验已覆盖 ✓",
+        "结论:pass(附 2 条非阻塞建议)",
+      ],
+      artifacts:[["docs/review-report.md","2.9 KB"]],
+      result:"审查通过(pass),遗留 2 条非阻塞建议。" },
+  ];
+}
+
+function spawnRun(goal){
+  runSeq++;
+  const run = {
+    id:`run_${String(runSeq).padStart(2,"0")}`,
+    goal, status:"planning",
+    concurrency:3, budget:2.0, spent:0, startedAt:0, endedAt:0,
+    tasks: defaultTasks(goal).map(t=>({...t, status:"pending", logIdx:0, got:0, t0:0, t1:0, liveLog:[]})),
+    timers:[], paused:false,
+  };
+  runs.push(run);
+  buildCanvasCard(run);
+  layoutRun(run);
+  openRunOverview(run);
+  appendAssistantBubble(
+    `已拆解为 <b>5 个任务</b>(画布见上):t1 规划 → <b>t2 ∥ t3 并行实现</b> → t4 集成测试 → t5 审查汇总。`+
+    `点击任意节点可在右侧配置<b>模型 / agent / 简报 / 依赖</b>;配置完成后点画布右上角 <b>▶ 运行</b>。`);
+  return run;
+}
+const runs = [];
+
+/* ── 画布卡片骨架 ── */
+function buildCanvasCard(run){
+  const wrap = el("div","orch-msg"); wrap.dataset.run = run.id;
+  wrap.innerHTML = `
+  <div class="orch-canvas">
+    <div class="oc-head">
+      <div class="oc-glyph">
+        <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="2.4"/><circle cx="18" cy="6" r="2.4"/><circle cx="12" cy="18" r="2.4"/><path d="M7.8 7.8L10.6 16M16.2 7.8L13.4 16M8.4 6h7.2"/></svg>
+      </div>
+      <span class="oc-title">${esc(run.goal.length>26 ? run.goal.slice(0,26)+"…" : run.goal)}</span>
+      <span class="oc-status planning" data-role="status">待配置 · 已拆解 ${run.tasks.length} 任务</span>
+      <span class="oc-stats" data-role="stats"></span>
+      <div class="oc-actions" data-role="actions">
+        <button class="oc-btn" data-act="add">＋ 任务</button>
+        <button class="oc-btn primary" data-act="run">
+          <svg class="ic" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.5v13l11-6.5z"/></svg> 运行
+        </button>
+      </div>
+    </div>
+    <div class="oc-progress"><i data-role="bar"></i></div>
+    <div class="oc-body"><div class="oc-inner">
+      <svg class="oc-edges" data-role="edges"></svg>
+      <div data-role="nodes"></div>
+    </div></div>
+    <div class="oc-foot">
+      <span class="lg"><i style="background:rgb(var(--edge))"></i>待运行</span>
+      <span class="lg"><i style="background:rgb(var(--sky))"></i>运行中</span>
+      <span class="lg"><i style="background:rgb(var(--accent))"></i>完成</span>
+      <span class="hint">点击节点 → 右栏配置 / 查看输出 · 点空白处 → 运行总览</span>
+    </div>
+  </div>`;
+  $("#chat").appendChild(wrap); scrollChat();
+  run.root = wrap;
+  wrap.querySelector('[data-act="run"]').onclick = () => onRunButton(run);
+  wrap.querySelector('[data-act="add"]').onclick = () => addTask(run);
+  wrap.querySelector(".oc-body").onclick = e => { if(e.target.classList.contains("oc-inner")) openRunOverview(run); };
+  renderStatus(run); renderStats(run);
+}
+
+const NODE_W=172, NODE_H=92, GAP_X=64, GAP_Y=16, PAD=28;
+function layoutRun(run){
+  const nodesBox = run.root.querySelector('[data-role="nodes"]');
+  nodesBox.innerHTML="";
+  // 分层:layer = 1 + max(dep.layer);同层纵向居中
+  const layerOf = new Map();
+  const layerOfNode = t => {
+    if(layerOf.has(t.id)) return layerOf.get(t.id);
+    const l = t.deps.length===0 ? 0 : 1 + Math.max(...t.deps.map(d=>layerOfNode(run.tasks.find(x=>x.id===d))));
+    layerOf.set(t.id,l); return l;
+  };
+  run.tasks.forEach(layerOfNode);
+  const maxLayer = Math.max(0,...run.tasks.map(t=>layerOf.get(t.id)));
+  const byLayer = [];
+  run.tasks.forEach(t=>{ (byLayer[layerOf.get(t.id)] ??= []).push(t); });
+
+  const bodyH = 316;
+  const contentW = PAD + (maxLayer+1)*(NODE_W+GAP_X) + 26;
+  const contentH = Math.max(bodyH, Math.max(...byLayer.map(c=>c.length))*(NODE_H+GAP_Y)+PAD+40);
+  const inner = run.root.querySelector(".oc-inner");
+  inner.style.width = contentW+"px"; inner.style.height = contentH+"px";
+
+  const pos = new Map();
+  byLayer.forEach((col,li)=>{
+    const totalH = col.length*NODE_H + (col.length-1)*GAP_Y;
+    const y0 = Math.max(PAD,(contentH-totalH)/2 - 12);
+    col.forEach((t,ri)=>{
+      const x = PAD + li*(NODE_W+GAP_X), y = y0 + ri*(NODE_H+GAP_Y);
+      pos.set(t.id,{x,y});
+      const n = el("div","node");
+      n.dataset.id=t.id; n.style.left=x+"px"; n.style.top=y+"px";
+      n.onclick = e => { e.stopPropagation(); selectNode(run,t.id); };
+      nodesBox.appendChild(n);
+    });
+    // 末层右侧「+ 任务」占位
+    if(li===maxLayer){
+      const a = el("button","add-node","＋ 任务");
+      a.style.left = (PAD+(maxLayer+1)*(NODE_W+GAP_X))+"px";
+      a.style.top = (y0 + (col.length-1)*(NODE_H+GAP_Y)/2)+"px";
+      a.style.width=NODE_W+"px"; a.style.height=NODE_H+"px";
+      a.onclick = e => { e.stopPropagation(); addTask(run); };
+      nodesBox.appendChild(a);
+    }
+  });
+  run.pos = pos;
+  run.tasks.forEach(t=>renderNode(run,t));
+  drawEdges(run);
+}
+
+function drawEdges(run){
+  const svg = run.root.querySelector('[data-role="edges"]');
+  const inner = run.root.querySelector(".oc-inner");
+  svg.setAttribute("width", inner.style.width); svg.setAttribute("height", inner.style.height);
+  let html = `<defs><marker id="arw-${run.id}" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L8 4L0 8z" fill="rgb(var(--content-subtle)/.6)"/></marker></defs>`;
+  for(const t of run.tasks){
+    for(const d of t.deps){
+      const a=run.pos.get(d), b=run.pos.get(t.id); if(!a||!b) continue;
+      const x1=a.x+NODE_W, y1=a.y+NODE_H/2, x2=b.x-3, y2=b.y+NODE_H/2;
+      const mx=(x1+x2)/2;
+      const edgeState = t.edgeState || "";
+      html += `<path data-dep="${d}" data-to="${t.id}" class="${edgeState}" marker-end="url(#arw-${run.id})" d="M${x1} ${y1} C ${mx} ${y1}, ${mx} ${y2}, ${x2} ${y2}"/>`;
+    }
+  }
+  svg.innerHTML = html;
+}
+
+/* ── 节点渲染 ── */
+function renderNode(run,t){
+  const n = run.root.querySelector(`.node[data-id="${t.id}"]`); if(!n) return;
+  n.classList.toggle("running", t.status==="running");
+  n.classList.toggle("done", t.status==="done");
+  n.classList.toggle("canceled", t.status==="canceled");
+  n.classList.toggle("selected", selected && selected.run===run && selected.nodeId===t.id);
+
+  const stIcon = t.status==="running" ? `<span class="spin"></span>`
+    : t.status==="done" ? `<svg class="ic" style="color:rgb(var(--accent))" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 12.5l5 5L20 6.5"/></svg>`
+    : t.status==="canceled" ? `<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg>`
+    : `<span style="width:8px;height:8px;border-radius:50%;background:rgb(var(--edge));display:inline-block"></span>`;
+  const elapsed = t.status==="running" ? fmtDur(Date.now()-t.t0) : t.status==="done" ? fmtDur(t.t1-t.t0) : ST_TEXT[t.status];
+  const prog = t.status==="done" ? 100 : t.status==="running" ? Math.min(96, t.logIdx/t.logs.length*100) : 0;
+  const agentBit = t.agent ? agentLabel(t.agent) : `<span class="unassigned">⚠ 未指派 agent</span>`;
+  n.innerHTML = `
+    <div class="node-top"><span class="nid">${t.id}</span><span class="st">${stIcon}<span>${elapsed}</span></span></div>
+    <div class="node-title">${esc(t.title)}</div>
+    <div class="node-sub">${agentBit} · ${esc(t.model)}</div>
+    <div class="node-foot">
+      <div class="node-bar"><i style="width:${prog}%"></i></div>
+      <span>${t.status==="done" ? t.tokens.toLocaleString()+" tk" : t.status==="running" ? t.got.toLocaleString()+" tk" : ""}</span>
+    </div>`;
+}
+
+function renderStatus(run){
+  const s = run.root.querySelector('[data-role="status"]'); if(!s) return;
+  const map = {
+    planning:{cls:"planning", html:`待配置 · 已拆解 ${run.tasks.length} 任务`},
+    running:{cls:"running", html:`<span class="dot"></span>运行中`},
+    paused:{cls:"running paused", html:`已暂停`},
+    done:{cls:"done", html:`✓ 已完成`},
+    canceled:{cls:"canceled", html:`已取消`},
+  };
+  const m = map[run.status];
+  s.className = "oc-status " + m.cls;
+  s.innerHTML = m.html;
+}
+function renderStats(run){
+  const done = run.tasks.filter(t=>t.status==="done").length;
+  const tk = run.tasks.reduce((a,t)=>a+t.got,0);
+  run.root.querySelector('[data-role="stats"]').innerHTML =
+    `${done}/${run.tasks.length} 任务 · 并发 ${run.concurrency} · 预算 ${fmtUsd(run.budget)} · <b>${fmtUsd(run.spent)}</b> · ${tk.toLocaleString()} tk`;
+  run.root.querySelector('[data-role="bar"]').style.width = (done/run.tasks.length*100)+"%";
+}
+
+/* ── 步骤③:运行按钮(右上角) ── */
+function onRunButton(run){
+  if(run.status==="planning"){
+    startRun(run);
+  } else if(run.status==="running"){
+    run.paused=true; run.status="paused"; renderStatus(run); setActions(run);
+    toast("编排已暂停:运行中的任务继续收尾,不再派发新任务");
+  } else if(run.status==="paused"){
+    run.paused=false; run.status="running"; renderStatus(run); setActions(run);
+    toast("编排已继续");
+  } else if(run.status==="done"||run.status==="canceled"){
+    // 重置全部任务后重跑
+    run.tasks.forEach(t=>{ t.status="pending"; t.logIdx=0; t.got=0; t.liveLog=[]; t.edgeState=""; });
+    run.spent=0; run.status="planning"; renderStatus(run); renderStats(run); setActions(run);
+    run.tasks.forEach(t=>renderNode(run,t)); drawEdges(run);
+    if(selected && selected.run===run) selectNode(run, selected.nodeId);
+    openRunOverview(run);
+    toast("已重置,再次点击「运行」重新执行");
+  }
+}
+function setActions(run){
+  const box = run.root.querySelector('[data-role="actions"]');
+  const runBtn = box.querySelector('[data-act="run"]');
+  if(run.status==="planning"){
+    runBtn.className="oc-btn primary"; runBtn.innerHTML=`<svg class="ic" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.5v13l11-6.5z"/></svg> 运行`;
+  } else if(run.status==="running"){
+    runBtn.className="oc-btn warn"; runBtn.innerHTML=`❚❚ 暂停`;
+    if(!box.querySelector('[data-act="stop"]')){
+      const stop=document.createElement("button");
+      stop.className="oc-btn danger"; stop.dataset.act="stop"; stop.textContent="■ 停止";
+      stop.onclick=()=>stopRun(run);
+      box.appendChild(stop);
+    }
+  } else if(run.status==="paused"){
+    runBtn.className="oc-btn primary"; runBtn.innerHTML=`▶ 继续`;
+  } else {
+    runBtn.className="oc-btn primary"; runBtn.innerHTML=`↻ 重新运行`;
+    box.querySelector('[data-act="stop"]')?.remove();
+  }
+}
+
+function startRun(run){
+  run.status="running"; run.startedAt=Date.now();
+  renderStatus(run); setActions(run); renderStats(run);
+  toast("编排已启动:按依赖关系波次派发,并发上限 "+run.concurrency);
+  openRunOverview(run);
+  run.scheduler = setInterval(()=>{
+    if(run.paused||run.status!=="running") return;
+    const active = run.tasks.filter(t=>t.status==="running").length;
+    for(const t of run.tasks){
+      if(active>=run.concurrency) break;
+      if(t.status!=="pending") continue;
+      const depsOk = t.deps.every(d=>run.tasks.find(x=>x.id===d)?.status==="done");
+      if(depsOk) startTask(run,t);
+    }
+  }, 260);
+  run.timers.push(run.scheduler);
+}
+function startTask(run,t){
+  t.status="running"; t.t0=Date.now(); t.logIdx=0;
+  t.deps.forEach(d=>{ const e=run.root.querySelector(`path[data-to="${t.id}"][data-dep="${d}"]`); if(e) e.setAttribute("class","flow"); });
+  renderNode(run,t); renderStats(run);
+  if(selected && selected.run===run && selected.nodeId===t.id) renderNodePanel(run,t);
+  const lineDelay = Math.max(360, t.dur/t.logs.length);
+  t.streamer = setInterval(()=>{
+    if(run.paused) return;                     // 暂停:流式输出同步冻结
+    if(t.logIdx < t.logs.length){
+      const line = t.logs[t.logIdx++];
+      t.liveLog.push(line);
+      t.got += 260 + Math.floor(Math.random()*380);
+      run.spent += t.got>0 ? 0.0009 : 0;
+      renderNode(run,t); renderStats(run);
+      if(selected && selected.run===run && selected.nodeId===t.id) appendConsoleLine(run,t,line);
+    }
+    if(t.logIdx >= t.logs.length){ finishTask(run,t); }
+  }, lineDelay);
+  run.timers.push(t.streamer);
+}
+function finishTask(run,t){
+  clearInterval(t.streamer);
+  t.status="done"; t.t1=Date.now(); t.tokens=t.tokens||t.got; t.got=t.tokens;
+  t.deps.forEach(d=>{ const e=run.root.querySelector(`path[data-to="${t.id}"][data-dep="${d}"]`); if(e) e.setAttribute("class","done"); });
+  renderNode(run,t); renderStats(run);
+  if(selected && selected.run===run && selected.nodeId===t.id) renderNodePanel(run,t);
+  if(run.tasks.every(x=>x.status==="done")) finishRun(run);
+}
+function stopRun(run){
+  run.timers.forEach(clearInterval); run.timers=[];
+  run.tasks.forEach(t=>{
+    if(t.status==="running"){ clearInterval(t.streamer); t.status="canceled"; }
+    else if(t.status==="pending"){ t.status="canceled"; }
+    renderNode(run,t);
+  });
+  run.status="canceled"; run.endedAt=Date.now();
+  renderStatus(run); setActions(run);
+  toast("编排已停止:未完成任务标记为「已取消」,可重新运行");
+  if(selected && selected.run===run && selected.nodeId) renderNodePanel(run, run.tasks.find(t=>t.id===selected.nodeId));
+  openRunOverview(run);
+}
+
+/* ═══════════════════ 步骤⑤:完成 → 结果整理 ═══════════════════ */
+function finishRun(run){
+  run.status="done"; run.endedAt=Date.now();
+  renderStatus(run); setActions(run);
+  run.timers.forEach(clearInterval); run.timers=[];
+  const dur = fmtDur(run.endedAt-run.startedAt);
+  toast(`编排完成:5/5 任务成功 · ${dur} · ${fmtUsd(run.spent)}`, 3600);
+
+  setTimeout(()=>{
+    const totalTk = run.tasks.reduce((a,t)=>a+t.tokens,0);
+    const files = run.tasks.flatMap(t=>t.artifacts.map(a=>a[0]));
+    const secs = run.tasks.map(t=>`
+      <li><b>${t.id} ${esc(t.title)}</b>(${agentOf(t.agent)?.emoji||""} ${esc(agentOf(t.agent)?.name||"")}·${esc(t.model)}):${esc(t.result)}</li>`).join("");
+    const msg = el("div","msg assistant"); msg.style.display="block";
+    msg.innerHTML = `
+      <div class="m-ava" style="margin-bottom:8px">✦</div>
+      <div class="synth">
+        <div class="synth-head">
+          <svg class="ic" style="color:rgb(var(--accent))" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.9 5.8L20 10l-6.1 1.2L12 17l-1.9-5.8L4 10l6.1-1.2z"/></svg>
+          编排完成 · 最终结果整理
+          <span class="chip" style="margin-left:auto">${run.id} · ${dur} · ${fmtUsd(run.spent)} · ${totalTk.toLocaleString()} tk</span>
+        </div>
+        <div class="synth-body">
+          <div class="synth-sec"><h4>🎯 目标</h4><ul><li>${esc(run.goal)}</li></ul></div>
+          <div class="synth-sec"><h4>📦 各任务产出</h4><ul>${secs}</ul></div>
+          <div class="synth-sec"><h4>🗂 合并产物 / 改动文件</h4><div class="file-chips">${files.map(f=>`<span>${esc(f)}</span>`).join("")}</div></div>
+          <div class="synth-sec"><h4>💡 结论与建议下一步</h4>
+            <ul>
+              <li>审查结论 <b>pass</b>:两条实现线契约对齐,支付回调签名校验覆盖完整。</li>
+              <li>遗留 2 条非阻塞建议:① <code>order/stock.ts</code> 的原子扣减建议补压测;② auth 兼容路由计划两个迭代后下线。</li>
+              <li>所有产物已写入工作区,可在会话中继续追问或让主会话接手收尾。</li>
+            </ul>
+          </div>
+          <div class="synth-sec synth-foot">
+            <button class="synth-btn" data-role="detail">📊 查看运行详情</button>
+            <button class="synth-btn" data-role="canvas">⬆ 回到画布</button>
+          </div>
+        </div>
+      </div>`;
+    $("#chat").appendChild(msg); scrollChat();
+    msg.querySelector('[data-role="detail"]').onclick = () => { togglePanel(true); openRunOverview(run); };
+    msg.querySelector('[data-role="canvas"]').onclick = () => {
+      run.root.scrollIntoView({behavior:"smooth", block:"center"});
+      const cv = run.root.querySelector(".orch-canvas");
+      cv.style.transition="box-shadow .4s"; cv.style.boxShadow="0 0 0 3px rgb(var(--accent)/.35)";
+      setTimeout(()=>cv.style.boxShadow="",900);
+    };
+    // 分段浮现
+    const secsEl = msg.querySelectorAll(".synth-sec");
+    secsEl.forEach((s,i)=>setTimeout(()=>{ s.classList.add("show"); scrollChat(); }, 260+i*420));
+  }, 700);
+}
+
+/* ═══════════════════ 右栏面板 ═══════════════════ */
+let panelTab = "config";
+function selectNode(run, nodeId){
+  selected = {run, nodeId};
+  run.tasks.forEach(t=>renderNode(run,t));
+  const t = run.tasks.find(x=>x.id===nodeId);
+  panelTab = (t.status==="running"||t.status==="done") ? "output" : "config";
+  renderNodePanel(run,t);
+}
+function renderNodePanel(run,t){
+  activeRun = run;
+  togglePanel(true);
+  $("#rpTitle").textContent = `${t.id} · ${t.title}`;
+  const body = $("#rpBody");
+  const stPill = `<span class="st-pill ${t.status}">${ST_TEXT[t.status]}</span>`;
+  body.innerHTML = `
+    <div class="tabs">
+      <button data-tab="config" class="${panelTab==="config"?"on":""}">⚙ 配置</button>
+      <button data-tab="output" class="${panelTab==="output"?"on":""}">▤ 运行输出</button>
+    </div>
+    <div data-pane="config" style="display:${panelTab==="config"?"block":"none"}">
+      <div class="field"><label>执行 agent(角色)</label>
+        <select data-f="agent">
+          <option value="">(未指派 · 跟随会话)</option>
+          ${AGENTS.map(a=>`<option value="${a.id}" ${t.agent===a.id?"selected":""}>${a.emoji} ${a.name}</option>`).join("")}
+        </select></div>
+      <div class="field"><label>模型</label>
+        <select data-f="model">${MODELS.map(m=>`<option ${t.model===m?"selected":""}>${m}</option>`).join("")}</select></div>
+      <div class="field"><label>任务简报(派发给 worker 的 prompt)</label>
+        <textarea data-f="spec">${esc(t.spec)}</textarea></div>
+      <div class="field"><label>依赖(上游完成后才派发)</label>
+        <div class="dep-chips">${run.tasks.filter(x=>x.id!==t.id).map(x=>
+          `<button data-dep="${x.id}" class="${t.deps.includes(x.id)?"on":""}">${x.id}</button>`).join("")}</div></div>
+      <div class="rp-kicker">提示</div>
+      <div class="rp-empty" style="padding:0">配置即时同步到画布节点;依赖变更会实时重排布局。运行中的任务改配置将在<b>重新运行</b>时生效。</div>
+    </div>
+    <div data-pane="output" style="display:${panelTab==="output"?"block":"none"}">
+      <div class="stat-grid">
+        <div class="stat"><div class="k">状态</div><div class="v">${stPill}</div></div>
+        <div class="stat"><div class="k">耗时</div><div class="v" data-role="p-el">${t.status==="running"?fmtDur(Date.now()-t.t0):t.status==="done"?fmtDur(t.t1-t.t0):"—"}</div></div>
+        <div class="stat"><div class="k">Tokens</div><div class="v" data-role="p-tk">${(t.status==="done"?t.tokens:t.got).toLocaleString()}</div></div>
+        <div class="stat"><div class="k">花费(估)</div><div class="v">${t.status==="pending"?"—":fmtUsd((t.status==="done"?t.tokens:t.got)*0.0000014)}</div></div>
+      </div>
+      <div class="rp-kicker">产物(artifacts)</div>
+      <div class="art-list">${t.artifacts.length
+        ? t.artifacts.map(([f,s])=>`<div class="art">📄 <span style="flex:1;overflow:hidden;text-overflow:ellipsis">${esc(f)}</span><span class="sz">${s}</span></div>`).join("")
+        : `<div class="rp-empty" style="padding:0">运行后产出会出现在这里</div>`}</div>
+      <div class="rp-kicker">输出日志</div>
+      <div class="console" data-role="console">${
+        t.liveLog.length ? t.liveLog.map(l=>consoleLine(l)).join("") + (t.status==="running"?`<span class="cursor"></span>`:"")
+        : (t.status==="pending"?"(尚未运行)":t.status==="canceled"?"(已取消,无输出)":`<span class="cursor"></span>`)
+      }</div>
+    </div>`;
+  // 交互绑定
+  body.querySelector('[data-f="agent"]').onchange = e => { t.agent = e.target.value||null; renderNode(run,t); toast(`${t.id} 已指派 ${t.agent?agentLabel(t.agent):"(未指派)"}`,1600); };
+  body.querySelector('[data-f="model"]').onchange = e => { t.model = e.target.value; renderNode(run,t); toast(`${t.id} 模型 → ${t.model}`,1600); };
+  body.querySelector('[data-f="spec"]').onchange = e => { t.spec = e.target.value; };
+  body.querySelectorAll("[data-dep]").forEach(b=>b.onclick = ()=>{
+    const d=b.dataset.dep;
+    if(t.deps.includes(d)) t.deps=t.deps.filter(x=>x!==d); else t.deps.push(d);
+    layoutRun(run); selectNode(run,t.id);
+  });
+  body.querySelectorAll(".tabs button").forEach(b=>b.onclick=()=>{
+    panelTab=b.dataset.tab;
+    body.querySelectorAll(".tabs button").forEach(x=>x.classList.toggle("on",x===b));
+    body.querySelector('[data-pane="config"]').style.display = panelTab==="config"?"block":"none";
+    body.querySelector('[data-pane="output"]').style.display = panelTab==="output"?"block":"none";
+  });
+}
+const consoleLine = l => {
+  const cls = l.startsWith("✗")||l.startsWith("⚠") ? "ln-warn" : l.startsWith("✓")||l.includes("通过")||l.includes("pass") ? "ln-ok" : "";
+  return `<div class="${cls}">${esc(l)}</div>`;
+};
+function appendConsoleLine(run,t,line){
+  if(!(selected && selected.run===run && selected.nodeId===t.id && panelTab==="output")) return;
+  const c = $("#rpBody").querySelector('[data-role="console"]'); if(!c) return;
+  c.querySelector(".cursor")?.remove();
+  c.insertAdjacentHTML("beforeend", consoleLine(line) + (t.status==="running"?`<span class="cursor"></span>`:""));
+  c.scrollTop = c.scrollHeight;
+  $("#rpBody").querySelector('[data-role="p-el"]').textContent = fmtDur(Date.now()-t.t0);
+  $("#rpBody").querySelector('[data-role="p-tk"]').textContent = t.got.toLocaleString();
+}
+/* 运行中右栏计时器:每 500ms 刷新选中节点的耗时 */
+setInterval(()=>{
+  if(!(selected && selected.run.status==="running")) return;
+  const t = selected.run.tasks.find(x=>x.id===selected.nodeId);
+  if(t && t.status==="running"){
+    const e=$("#rpBody").querySelector('[data-role="p-el"]'); if(e) e.textContent=fmtDur(Date.now()-t.t0);
+  }
+  if(selected.run.status==="running") renderStats(selected.run);
+},500);
+
+/* ── 运行总览(右栏默认 / 点画布空白) ── */
+function openRunOverview(run){
+  activeRun = run;
+  selected = null;
+  run.tasks.forEach(t=>renderNode(run,t));
+  togglePanel(true);
+  $("#rpTitle").textContent = `运行总览 · ${run.id}`;
+  const done = run.tasks.filter(t=>t.status==="done").length;
+  const running = run.tasks.filter(t=>t.status==="running").length;
+  const dur = run.startedAt ? fmtDur((run.endedAt||Date.now())-run.startedAt) : "—";
+  $("#rpBody").innerHTML = `
+    <div class="rp-empty" style="padding:0 0 10px">${esc(run.goal)}</div>
+    <div class="stat-grid">
+      <div class="stat"><div class="k">进度</div><div class="v">${done}/${run.tasks.length}</div></div>
+      <div class="stat"><div class="k">状态</div><div class="v">${run.status==="running"?"运行中":run.status==="paused"?"已暂停":run.status==="done"?"已完成":run.status==="canceled"?"已取消":"待配置"}</div></div>
+      <div class="stat"><div class="k">已花费</div><div class="v">${fmtUsd(run.spent)} / ${fmtUsd(run.budget)}</div></div>
+      <div class="stat"><div class="k">耗时</div><div class="v">${dur}</div></div>
+    </div>
+    <div class="rp-kicker">任务清单(点击查看详情)</div>
+    ${run.tasks.map(t=>`
+      <div class="ov-row" data-id="${t.id}">
+        <span class="id">${t.id}</span>
+        <span class="t">${t.status==="running"?'<span class="spin" style="display:inline-block;vertical-align:-1px;margin-right:5px"></span>':""}${esc(t.title)}</span>
+        <span class="s"><span class="st-pill ${t.status}">${t.status==="running"?"运行中":ST_TEXT[t.status]}</span></span>
+      </div>`).join("")}
+    <div class="rp-kicker">派发规则</div>
+    <div class="rp-empty" style="padding:0">按依赖波次派发 · 并发上限 ${run.concurrency} · 预算超限自动暂停并生成决策门</div>`;
+  $("#rpBody").querySelectorAll(".ov-row").forEach(r=>r.onclick=()=>selectNode(run,r.dataset.id));
+}
+
+/* ═══════════════════ 添加任务 ═══════════════════ */
+function addTask(run){
+  let maxN=0; run.tasks.forEach(t=>{ const m=/^t(\d+)$/.exec(t.id); if(m) maxN=Math.max(maxN,+m[1]); });
+  const t = { id:`t${maxN+1}`, title:"新任务", agent:null, model:"跟随会话默认", deps:[],
+    spec:"描述这个任务要做什么(将作为 worker 的任务简报)。",
+    dur:5000, tokens:3000,
+    logs:["开始执行…","处理中…","完成"],
+    artifacts:[], result:"(示例输出)任务完成。",
+    status:"pending", logIdx:0, got:0, t0:0, t1:0, liveLog:[] };
+  run.tasks.push(t);
+  if(run.status==="done"||run.status==="canceled"){ run.status="planning"; renderStatus(run); setActions(run); }
+  layoutRun(run);
+  selectNode(run,t.id);
+  toast(`已添加 ${t.id}:在右侧配置 agent/模型与依赖`,2200);
+}
+</script>
+</body>
+</html>

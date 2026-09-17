@@ -39,6 +39,12 @@ import { getEnabledPlugins, getPluginMcpServers } from "@main/plugins/pluginMana
 import { resolveSubagentModelValue } from "@main/lib/subagentModel.js";
 import { normalizeBashCommand } from "@main/lib/msysPath.js";
 import {
+  ORCH_PLAN_MCP_SERVER,
+  buildOrchPlanMcpServerAsync,
+  buildOrchPlanNudge,
+  isOrchPlanTool,
+} from "@main/orchestrator/planTool.js";
+import {
   browserList,
   browserNavigate,
   browserSnapshot,
@@ -550,6 +556,10 @@ function isReadOnlyBrowserTool(toolName: string): boolean {
  *  - acceptEdits                  → file-editing tools auto-approved
  *  - default / plan / auto        → prompt the user (return false) */
 function shouldAutoApprove(mode: PermissionMode | undefined, toolName: string): boolean {
+  // 编排规划工具是纯数据提交(结构化输出契约,handler 只钳制建卡不执行),
+  // 任何模式免审批 —— 必须排在 `if (!mode)` 之前:default 档传来的 mode 是
+  // undefined。真正有风险的动作发生在 worker 会话,各自带权限模式与审批桥。
+  if (isOrchPlanTool(toolName)) return true;
   if (!mode) return false;
   if (mode === "bypassPermissions" || mode === "dontAsk") return true;
   // Read-only browser tools never need approval — they can't change anything.
@@ -1135,6 +1145,18 @@ export class ClaudeAgentSdkProvider implements AgentProvider {
     // becomes the base on every platform, with our fragments appended on top.
     const appends: string[] = [];
     appends.push(CLAUDE_IDENTITY_PROMPT);
+    // (3) 会话内编排拆解(orchestration 标记):规划者指令(角色/工具用法/
+    //     可用模型面/硬约束)追加为系统提示段,orch_submit_plan 工具在下方
+    //     mcpServers 处挂载。构建需要读模型面(Pi/Codex 水合清单),失败只
+    //     降级为无提示 —— 工具缺失时模型自然按普通回合回答,不出错。
+    if (req.orchestration) {
+      try {
+        const planNudge = await buildOrchPlanNudge(req.sessionId);
+        if (planNudge) appends.push(planNudge);
+      } catch (err) {
+        ctx.log.warn(`orchestration planner nudge unavailable: ${(err as Error).message}`);
+      }
+    }
     if (process.platform === "win32") {
       appends.push(bashPathHintFor(detectBashEnv("claude")));
     }
@@ -1197,6 +1219,22 @@ export class ClaudeAgentSdkProvider implements AgentProvider {
 
     if (!mcpState.browserDisabled) {
       options.mcpServers = { [BROWSER_MCP_SERVER]: browserServer };
+    }
+    // 会话内编排拆解:挂 orch_submit_plan 工具(进程内 MCP,纯数据提交)。
+    // 模型提交后 main 侧钳制建卡,渲染端经 plan.proposed 事件挂画布 ——
+    // 见 orchestrator/planTool.ts。普通回合不挂,零上下文开销。
+    if (req.orchestration) {
+      try {
+        const orchServer = await buildOrchPlanMcpServerAsync(
+          req.sessionId,
+          await loadCreateMcpServer(),
+        );
+        const servers = options.mcpServers ?? {};
+        servers[ORCH_PLAN_MCP_SERVER] = orchServer;
+        options.mcpServers = servers;
+      } catch (err) {
+        ctx.log.warn(`orchestration plan tool unavailable: ${(err as Error).message}`);
+      }
     }
     const projectMcpNames = Object.keys(projectMcpRecord);
     if (projectMcpNames.length > 0) {

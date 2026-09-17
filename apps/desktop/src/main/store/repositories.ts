@@ -238,6 +238,7 @@ interface SessionRow {
   usage_history: string | null;
   bookmarks: string | null;
   subagent_transcripts: string | null;
+  orch_meta: string | null;
   env_mode: string;
   worktree_path: string | null;
   wt_style: string | null;
@@ -251,7 +252,7 @@ function rowToSession(r: SessionRow): Session {
     projectId: r.project_id,
     providerId: r.provider_id ?? "claude-sdk",
     claudeSessionId: r.claude_session_id,
-    kind: r.kind === "side" ? "side" : "chat",
+    kind: r.kind === "side" ? "side" : r.kind === "orch-worker" ? "orch-worker" : "chat",
     parentSessionId: r.parent_session_id ?? null,
     title: r.title,
     status: r.status as Session["status"],
@@ -271,6 +272,7 @@ function rowToSession(r: SessionRow): Session {
     subagentTranscripts: (r.subagent_transcripts
       ? safeJson(r.subagent_transcripts)
       : null) as Session["subagentTranscripts"],
+    orchMeta: (r.orch_meta ? safeJson(r.orch_meta) : null) as Session["orchMeta"],
     envMode: r.env_mode === "worktree" ? "worktree" : "local",
     worktreePath: r.worktree_path ?? null,
     wtStyle: r.wt_style === "branch" ? "branch" : r.wt_style === "detached" ? "detached" : null,
@@ -283,8 +285,8 @@ export const SessionRepo = {
   create(s: Session): void {
     run(
       `INSERT INTO sessions
-       (id, project_id, provider_id, claude_session_id, kind, parent_session_id, title, status, model, effort, permission_mode, custom_model_id, archived, pinned_at, context_snapshot, todos, subagents, plan_draft, turn_files, usage_history, bookmarks, subagent_transcripts, env_mode, worktree_path, wt_style, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (id, project_id, provider_id, claude_session_id, kind, parent_session_id, title, status, model, effort, permission_mode, custom_model_id, archived, pinned_at, context_snapshot, todos, subagents, plan_draft, turn_files, usage_history, bookmarks, subagent_transcripts, orch_meta, env_mode, worktree_path, wt_style, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       v(s.id),
       v(s.projectId),
       v(s.providerId),
@@ -307,6 +309,7 @@ export const SessionRepo = {
       v(s.usageHistory ? JSON.stringify(s.usageHistory) : null),
       v(s.bookmarks ? JSON.stringify(s.bookmarks) : null),
       v(s.subagentTranscripts ? JSON.stringify(s.subagentTranscripts) : null),
+      v(s.orchMeta ? JSON.stringify(s.orchMeta) : null),
       v(s.envMode ?? "local"),
       v(s.worktreePath ?? null),
       v(s.wtStyle ?? null),
@@ -612,6 +615,29 @@ export const SessionRepo = {
       .prepare("SELECT * FROM sessions WHERE kind = 'side' AND parent_session_id = ? ORDER BY created_at DESC")
       .all(v(parentSessionId)) as unknown as SessionRow[];
     return rows.map(rowToSession);
+  },
+
+  /** Orchestration worker sub-sessions of a coordinator session, newest
+   *  first. Like side chats, invisible to every list/search/reuse query —
+   *  only the orchestrator (DAG panel / reconcile) consumes this. */
+  listOrchWorkersByParent(parentSessionId: string): Session[] {
+    const rows = getDb()
+      .prepare(
+        "SELECT * FROM sessions WHERE kind = 'orch-worker' AND parent_session_id = ? ORDER BY created_at DESC",
+      )
+      .all(v(parentSessionId)) as unknown as SessionRow[];
+    return rows.map(rowToSession);
+  },
+
+  /** All orchestration workers of a run (by orch_meta.runId), across
+   *  coordinators. Used by the boot reconcile to rebuild worker maps. */
+  listOrchWorkersByRun(runId: string): Session[] {
+    const rows = getDb()
+      .prepare("SELECT * FROM sessions WHERE kind = 'orch-worker'")
+      .all() as unknown as SessionRow[];
+    return rows
+      .map(rowToSession)
+      .filter((s) => (s.orchMeta?.runId ?? null) === runId);
   },
 
   /** Persist claude's own session id so future turns can --resume. */

@@ -107,11 +107,23 @@ class RuntimeManager {
    *  renderer push + persistence). Used by the NotificationManager to decide
    *  whether an OS notification is warranted. Set via {@link setObserver}. */
   private observer: ((e: RuntimeEvent) => void) | null = null;
+  /** Additional always-on observers (orchestrator worker lifecycle mapping).
+   *  Unlike the single-slot {@link observer}, these survive independently —
+   *  the NotificationManager's setObserver must not evict the orchestrator. */
+  private observers = new Set<(e: RuntimeEvent) => void>();
 
   /** Register a global event observer. Only one at a time (the
    *  NotificationManager). Pass null to detach. */
   setObserver(fn: ((e: RuntimeEvent) => void) | null): void {
     this.observer = fn;
+  }
+
+  /** Register an additional broadcast observer; returns a detach function.
+   *  Observers are fired AFTER persistence, best-effort (exceptions are
+   *  swallowed so a broken observer can't kill a turn's event fan-out). */
+  addObserver(fn: (e: RuntimeEvent) => void): () => void {
+    this.observers.add(fn);
+    return () => this.observers.delete(fn);
   }
 
   /** Create or reuse the runtime state for a GUI session. Idempotent. */
@@ -286,6 +298,16 @@ class RuntimeManager {
       } catch (err) {
         log.error(`notification observer error: ${(err as Error).message}`);
       }
+      // Additional always-on observers (orchestrator). Same best-effort
+      // contract, isolated per-subscriber so one broken observer can't starve
+      // the rest.
+      for (const fn of this.observers) {
+        try {
+          fn(e);
+        } catch (err) {
+          log.error(`runtime observer error: ${(err as Error).message}`);
+        }
+      }
     };
 
     const onProviderSessionId = (id: string) => {
@@ -408,6 +430,10 @@ class RuntimeManager {
         blocks: unknown[];
         editedMessageId?: string;
       };
+      /** 会话内编排拆解标记(composer 自动编排开关):透传到 StartTurnRequest,
+       *  provider 为该回合注入规划者提示 + orch_submit_plan 工具(见
+       *  orchestrator/planTool.ts)。支持该能力的 provider 之外忽略。 */
+      orchestration?: boolean;
     },
   ): Promise<void> {
     const rt = this.sessions.get(session.id);
@@ -586,6 +612,9 @@ class RuntimeManager {
       initialTodos: session.todos ?? undefined,
       // Tag the turn for per-turn artifacts (browser screenshot dirs).
       turnNumber: rt.turnCount,
+      // 会话内编排拆解(composer 自动编排开关)→ provider 注入规划者提示
+      // 与 orch_submit_plan 工具;不支持该能力的 provider 忽略。
+      orchestration: input.orchestration,
     };
 
     const handle = await provider.startTurn(req, rt.ctx);

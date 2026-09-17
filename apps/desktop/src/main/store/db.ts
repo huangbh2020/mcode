@@ -198,6 +198,11 @@ function migrate(database: Database.Database): void {
   // 'detached' keeps the classic detached checkout. Stops mattering once the
   // worktree exists — the form is self-evident from the checkout.
   addColumnIfMissing(database, "sessions", "wt_style", "TEXT");
+  // Orchestration worker sub-sessions (kind='orch-worker'): the structured
+  // dispatch context (completion-authority credential — runId/taskId/
+  // dispatchId/coordinatorSessionId) as JSON. Structured (not prose) so ghost
+  // reports can be validated at the protocol layer.
+  addColumnIfMissing(database, "sessions", "orch_meta", "TEXT");
   addColumnIfMissing(database, "projects", "archived", "INTEGER NOT NULL DEFAULT 0");
   // Optional user-assigned group name for the left-bar "grouped" view. NULL
   // means the project is ungrouped; the renderer treats "" / undefined as null.

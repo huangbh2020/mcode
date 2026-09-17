@@ -125,6 +125,53 @@ export function createOrReuseSession(
     return { session, reused: false };
   }
 
+  // Orchestration worker sub-sessions: always a brand-new row (titled by the
+  // task, so the fresh-row reuse path can't apply anyway), invisible to every
+  // list — managed by the orchestrator. No session.changed broadcast: worker
+  // rows are not consumed by the left-bar/stream caches; the orchestrator's
+  // own run.updated events carry what the DAG panel needs.
+  if (input.kind === "orch-worker") {
+    const now = Date.now();
+    const session: Session = {
+      id: uid("sess_"),
+      projectId: input.projectId,
+      providerId: input.providerId ?? DEFAULT_PROVIDER_ID,
+      claudeSessionId: null,
+      kind: "orch-worker",
+      parentSessionId: input.parentSessionId ?? null,
+      title: input.title ?? "orch worker",
+      status: "idle",
+      model: input.model ?? "default",
+      effort: input.effort,
+      permissionMode: input.permissionMode,
+      customModelId: input.customModelId ?? null,
+      archived: false,
+      pinnedAt: null,
+      contextSnapshot: null,
+      todos: null,
+      subagents: null,
+      planDraft: null,
+      turnFiles: null,
+      usageHistory: null,
+      bookmarks: null,
+      subagentTranscripts: null,
+      orchMeta: input.orchMeta ?? null,
+      envMode: input.envMode ?? "local",
+      wtStyle: input.envMode === "worktree" ? (input.wtStyle ?? "detached") : null,
+      worktreePath: null,
+      createdAt: now,
+      updatedAt: now,
+    };
+    SessionRepo.create(session);
+    applyWorktreeBind(input, session.id);
+    const bound = SessionRepo.get(session.id) ?? session;
+    runtimeManager.bindSession(bound);
+    log.info(
+      `orch worker session started: ${bound.id} (parent ${input.parentSessionId ?? "?"}, project ${input.projectId})`,
+    );
+    return { session: bound, reused: false };
+  }
+
   // Coerced environment (non-repo projects can't carry worktree intent —
   // see coerceEnvMode); computed once for both write paths below.
   const envMode = coerceEnvMode(input);

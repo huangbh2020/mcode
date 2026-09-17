@@ -14,6 +14,7 @@ import { SettingRepo } from "@main/store/repositories.js";
 import { initUpdater } from "@main/updater.js";
 import { initAutoArchiver } from "@main/session/AutoArchiver.js";
 import { notificationManager } from "@main/notifications/NotificationManager.js";
+import { orchestrator } from "@main/orchestrator/OrchestratorService.js";
 import { is } from "@main/utils.js";
 import { preloadClaudeSdk } from "@main/providers/claude-sdk/ClaudeAgentSdkProvider.js";
 import { logStartup } from "@main/lib/startupTimer.js";
@@ -190,6 +191,13 @@ app.whenReady().then(async () => {
     }
   })();
 
+  // Start the orchestrator (load persisted runs, reconcile interrupted
+  // workers, attach the runtime event observer). Fire-and-forget — same
+  // DB-gated pattern as the NotificationManager above.
+  void orchestrator.start().catch((err) => {
+    log.error(`orchestrator failed to start: ${(err as Error).message}`);
+  });
+
   // Start the mobile companion HTTP server (LAN-facing). Fire-and-forget: it
   // awaits DB readiness internally to read its enabled/port settings, then
   // binds 0.0.0.0:<port>. If disabled (mobile.enabled=0) it resolves to an
@@ -256,6 +264,7 @@ app.on("before-quit", (event) => {
   BridgeRegistry.disposeAll();
   TerminalManager.disposeAll();
   lspManager.disposeAll();
+  orchestrator.disposeAll();
   BrowserManager.disposeAll();
   relayManager.disposeAll();
   stopMobileServer();

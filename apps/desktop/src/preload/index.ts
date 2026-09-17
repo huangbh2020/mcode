@@ -547,6 +547,36 @@ const api = {
     status: (() => ipcRenderer.invoke(IPC.RELAY_STATUS)) as RpcMap["relay.status"],
   },
 
+  /** Agent orchestration (docs/orchestration-plan.md): runs, gates, handoff
+   *  and settings. Decomposition runs in-session via orch_submit_plan. */
+  orch: {
+    getSettings: (() => ipcRenderer.invoke(IPC.ORCH_GET_SETTINGS)) as RpcMap["orch.getSettings"],
+    saveSettings: ((input) =>
+      ipcRenderer.invoke(IPC.ORCH_SAVE_SETTINGS, input)) as RpcMap["orch.saveSettings"],
+    createRun: ((input) =>
+      ipcRenderer.invoke(IPC.ORCH_CREATE_RUN, input)) as RpcMap["orch.createRun"],
+    listRuns: ((input) =>
+      ipcRenderer.invoke(IPC.ORCH_LIST_RUNS, input)) as RpcMap["orch.listRuns"],
+    getRun: ((input) => ipcRenderer.invoke(IPC.ORCH_GET_RUN, input)) as RpcMap["orch.getRun"],
+    runControl: ((input) =>
+      ipcRenderer.invoke(IPC.ORCH_RUN_CONTROL, input)) as RpcMap["orch.runControl"],
+    taskControl: ((input) =>
+      ipcRenderer.invoke(IPC.ORCH_TASK_CONTROL, input)) as RpcMap["orch.taskControl"],
+    updateTask: ((input) =>
+      ipcRenderer.invoke(IPC.ORCH_UPDATE_TASK, input)) as RpcMap["orch.updateTask"],
+    addTasks: ((input) =>
+      ipcRenderer.invoke(IPC.ORCH_ADD_TASKS, input)) as RpcMap["orch.addTasks"],
+    removeTask: ((input) =>
+      ipcRenderer.invoke(IPC.ORCH_REMOVE_TASK, input)) as RpcMap["orch.removeTask"],
+    resolveGate: ((input) =>
+      ipcRenderer.invoke(IPC.ORCH_RESOLVE_GATE, input)) as RpcMap["orch.resolveGate"],
+    mergeTask: ((input) =>
+      ipcRenderer.invoke(IPC.ORCH_MERGE_TASK, input)) as RpcMap["orch.mergeTask"],
+    handoff: ((input) => ipcRenderer.invoke(IPC.ORCH_HANDOFF, input)) as RpcMap["orch.handoff"],
+    workerSession: ((input) =>
+      ipcRenderer.invoke(IPC.ORCH_WORKER_SESSION, input)) as RpcMap["orch.workerSession"],
+  },
+
   /** Agent runtimes (settings panel): the download-on-demand claude/codex/pi
    *  payloads. install() resolves when the whole pipeline finished; live
    *  progress arrives over `on.runtimesEvent`. */
@@ -617,6 +647,17 @@ const api = {
       ipcRenderer.on(IPC.CLAUDE_EVENT, listener);
       return () => {
         ipcRenderer.off(IPC.CLAUDE_EVENT, listener);
+      };
+    },
+    /** Orchestration push events: run snapshots, gate lifecycle, worker_done
+     *  payloads. Filter by `msg.event.kind` in the handler. */
+    orchEvent(handler: (msg: Extract<MainToRendererMessage, { channel: "orchestrator:event" }>) => void): () => void {
+      const listener = (_e: unknown, msg: MainToRendererMessage) => {
+        if (msg.channel === IPC.ORCH_EVENT) handler(msg);
+      };
+      ipcRenderer.on(IPC.ORCH_EVENT, listener);
+      return () => {
+        ipcRenderer.off(IPC.ORCH_EVENT, listener);
       };
     },
     /** Subscribe to session:titleUpdated push channel. Fired when the main
