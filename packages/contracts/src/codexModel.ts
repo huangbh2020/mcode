@@ -23,12 +23,13 @@ export interface CodexModelOption {
   label?: string;
   /** Optional trailing hint in the picker (e.g. "1M"). */
   hint?: string;
-  /** Context window override for models the codex catalog doesn't know
-   *  (third-party endpoints). When set, the app-server process is spawned
-   *  with `-c model_context_window=<n>` — a PROCESS-LOCAL config override
-   *  (priority over config.toml), so concurrent sessions with different
-   *  windows never race on the shared config file. Omitted → codex's
-   *  fallback metadata. */
+  /** Context window for models the codex catalog doesn't know (third-party
+   *  endpoints). When set, the turn's app-server process is spawned with
+   *  `-c model_catalog_json=<path>` — the metadata Mcode materializes and the
+   *  only way to RAISE the window — plus `-c model_context_window=<n>`, which
+   *  codex applies as min(metadata, override) and can therefore only narrow.
+   *  Both are PROCESS-LOCAL, so concurrent sessions with different windows
+   *  never race on shared state. Omitted → codex's fallback metadata (272k). */
   contextWindow?: number;
 }
 
