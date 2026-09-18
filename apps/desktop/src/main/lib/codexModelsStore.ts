@@ -23,11 +23,15 @@
 import { homedir } from "node:os";
 import path from "node:path";
 import { promises as fs } from "node:fs";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { randomUUID } from "node:crypto";
 import type { CodexModelOption, CodexProviderConfig, CodexProviderPublic } from "@contracts/codexModel";
 import { SettingRepo } from "@main/store/repositories.js";
 import { encrypt, decrypt } from "@main/lib/secretStore.js";
 import { log } from "@main/lib/logger.js";
+
+const execFileAsync = promisify(execFile);
 
 const PROVIDERS_SETTING_KEY = "codexProviders";
 const KEYS_SETTING_KEY = "codexProviderKeys";
@@ -46,6 +50,15 @@ export function codexHomePath(): string {
 export function codexKeyEnvVar(providerId: string): string {
   const slug = providerId.replace(/[^a-zA-Z0-9]/g, "_").toUpperCase();
   return `MCODE_CODEX_KEY_${slug}`;
+}
+
+/** Model-catalog file materialized next to config.toml. Codex reads it via
+ *  `model_catalog_json`, which Mcode passes per turn as an absolute path. */
+const MODEL_CATALOG_FILENAME = "mcode-model-catalog.json";
+
+/** Absolute path of the materialized model catalog (see ensureModelCatalog). */
+export function codexModelCatalogPath(): string {
+  return path.join(codexHomePath(), MODEL_CATALOG_FILENAME);
 }
 
 function readProviders(): StoredProvider[] {
@@ -144,6 +157,28 @@ function mcpServerToml(name: string, raw: unknown): string | null {
   return lines.join("\n");
 }
 
+/** Write `content` to `file` unless it is already there. Skips the write
+ *  entirely when the content is unchanged (a running app-server may read the
+ *  file at any moment — every turn start materializes) and replaces atomically
+ *  (tmp in the same directory + rename) so a concurrent reader never sees a
+ *  truncated file. */
+async function writeIfChanged(file: string, content: string): Promise<void> {
+  try {
+    const prev = await fs.readFile(file, "utf-8");
+    if (prev === content) return;
+  } catch {
+    /* first write */
+  }
+  const tmp = path.join(path.dirname(file), `.${path.basename(file)}.${randomUUID()}.tmp`);
+  await fs.writeFile(tmp, content, "utf-8");
+  try {
+    await fs.rename(tmp, file);
+  } catch (err) {
+    await fs.rm(tmp, { force: true }).catch(() => {});
+    throw err;
+  }
+}
+
 /** Write <CODEX_HOME>/config.toml from current settings state. Skips the
  *  write entirely when the content is unchanged (a running app-server may
  *  read the file at any moment — every turn start materializes) and writes
@@ -239,24 +274,70 @@ async function materializeConfigToml(cwd?: string): Promise<void> {
 
   const dir = codexHomePath();
   await fs.mkdir(dir, { recursive: true });
-  const file = path.join(dir, "config.toml");
-  const content = lines.join("\n");
+  // Atomic replace (see writeIfChanged): a concurrent app-server reading
+  // config.toml never observes a half-written file.
+  await writeIfChanged(path.join(dir, "config.toml"), lines.join("\n"));
+}
+
+/* ── model catalog (third-party context windows) ── */
+
+/** One entry of codex's own catalog as rendered by `codex debug models`.
+ *  Kept as an opaque record on purpose: Mcode clones an existing entry rather
+ *  than restating codex's schema, so a codex upgrade adding a required field
+ *  can't turn our file into a parse error (a rejected catalog fails the
+ *  app-server start, i.e. every turn). */
+type CatalogEntry = Record<string, unknown> & { slug: string; priority?: number };
+
+/** `codex debug models` costs a full codex process start — cache per binary. */
+let catalogTemplateCache: { codexPath: string; entries: CatalogEntry[] } | null = null;
+/** Signature of the last catalog written, so per-turn materialization is a
+ *  no-op unless the configured models actually changed. */
+let catalogCache: { signature: string; path: string } | null = null;
+
+/** Read codex's own catalog to clone entry templates from (see
+ *  ensureModelCatalog). Best-effort: null when codex can't be queried. */
+async function readCatalogTemplate(codexPath: string): Promise<CatalogEntry[] | null> {
+  if (catalogTemplateCache?.codexPath === codexPath) return catalogTemplateCache.entries;
   try {
-    const prev = await fs.readFile(file, "utf-8");
-    if (prev === content) return;
-  } catch {
-    /* first write */
-  }
-  // Atomic replace: tmp file in the same directory + rename, so a concurrent
-  // app-server reading config.toml never observes a half-written file.
-  const tmp = path.join(dir, `.config.toml.${randomUUID()}.tmp`);
-  await fs.writeFile(tmp, content, "utf-8");
-  try {
-    await fs.rename(tmp, file);
+    const { stdout } = await execFileAsync(codexPath, ["debug", "models"], {
+      env: { ...process.env, CODEX_HOME: codexHomePath() },
+      maxBuffer: 64 * 1024 * 1024,
+      windowsHide: true,
+    });
+    const parsed: unknown = JSON.parse(stdout);
+    const raw = (parsed as { models?: unknown }).models;
+    const entries = Array.isArray(raw)
+      ? raw.filter(
+          (m): m is CatalogEntry =>
+            typeof m === "object" && m !== null && typeof (m as CatalogEntry).slug === "string",
+        )
+      : [];
+    if (entries.length === 0) return null;
+    catalogTemplateCache = { codexPath, entries };
+    return entries;
   } catch (err) {
-    await fs.rm(tmp, { force: true }).catch(() => {});
-    throw err;
+    log.warn(`codexModels: could not read codex's builtin model catalog: ${(err as Error).message}`);
+    return null;
   }
+}
+
+/** Configured models that declare an explicit context window, deduped by id
+ *  (two providers may expose the same model id — the first one wins). */
+function modelsWithContextWindow(
+  providers: StoredProvider[],
+): Array<{ id: string; label?: string; contextWindow: number }> {
+  const seen = new Set<string>();
+  const out: Array<{ id: string; label?: string; contextWindow: number }> = [];
+  for (const p of providers) {
+    for (const m of p.models ?? []) {
+      const id = m.id?.trim();
+      if (!id || seen.has(id)) continue;
+      if (typeof m.contextWindow !== "number" || m.contextWindow <= 0) continue;
+      seen.add(id);
+      out.push({ id, ...(m.label?.trim() ? { label: m.label.trim() } : {}), contextWindow: m.contextWindow });
+    }
+  }
+  return out.sort((a, b) => a.id.localeCompare(b.id));
 }
 
 export const CodexModelsStore = {
@@ -339,5 +420,73 @@ export const CodexModelsStore = {
    *  or a deleted CODEX_HOME). `cwd` enables project-scope MCP sync. */
   async ensureConfigMaterialized(cwd?: string): Promise<void> {
     await materializeConfigToml(cwd);
+  },
+
+  /** Materialize the model catalog for the configured third-party models and
+   *  return its absolute path (null when no model declares a context window,
+   *  or when the catalog could not be built — the turn then keeps today's
+   *  behaviour, codex's 272k fallback metadata).
+   *
+   *  WHY it exists: `-c model_context_window` is applied as `min(model
+   *  metadata, override)` — it can only NARROW a window. A model codex has no
+   *  metadata for resolves to its 272k fallback, so the override can never
+   *  raise it. Measured on codex 0.153.4 (the window a session actually
+   *  reports): unknown model + override 1000000 → 258400 (= 272k × 95%),
+   *  unknown model + override 100000 → 95000, builtin gpt-6-astra (872k
+   *  metadata) + override 1000000 → 828400. Declaring the window as catalog
+   *  metadata is the only way up; the effective window then is
+   *  context_window × effective_context_window_percent (95%).
+   *
+   *  The file content depends only on the configured models — never on the
+   *  session — and is written atomically, so it adds no shared-state race. */
+  async ensureModelCatalog(codexPath: string | null): Promise<string | null> {
+    const targets = modelsWithContextWindow(readProviders());
+    const file = codexModelCatalogPath();
+    if (targets.length === 0 || !codexPath) {
+      if (catalogCache) {
+        catalogCache = null;
+        await fs.rm(file, { force: true }).catch(() => {});
+      }
+      return null;
+    }
+    const signature = JSON.stringify(targets);
+    if (catalogCache?.signature === signature) {
+      try {
+        await fs.access(file);
+        return catalogCache.path;
+      } catch {
+        /* removed externally → rebuild below */
+      }
+    }
+    const entries = await readCatalogTemplate(codexPath);
+    if (!entries) return null;
+    // Clone codex's own default entry (lowest priority = the model codex picks
+    // when nothing is pinned) as the template: that keeps the entry
+    // schema-complete AND keeps codex's own instructions template.
+    // `base_instructions` is mandatory, and handing codex our own text there
+    // would replace the agent's system prompt (an empty string silences it).
+    const defaultEntry = entries.reduce(
+      (best, e) => ((e.priority ?? Number.MAX_SAFE_INTEGER) < (best.priority ?? Number.MAX_SAFE_INTEGER) ? e : best),
+      entries[0],
+    );
+    const custom: CatalogEntry[] = targets.map((t, i) => ({
+      ...structuredClone(defaultEntry),
+      slug: t.id,
+      display_name: t.label ?? t.id,
+      description: t.label ?? t.id,
+      context_window: t.contextWindow,
+      max_context_window: t.contextWindow,
+      visibility: "list",
+      // Park third-party entries behind codex's own models (priority decides
+      // the catalog default, see the clone note above); Mcode pins the model
+      // per turn regardless.
+      priority: 1000 + i,
+    }));
+    const customIds = new Set(custom.map((c) => c.slug));
+    const models = [...entries.filter((e) => !customIds.has(e.slug)), ...custom];
+    await writeIfChanged(file, `${JSON.stringify({ models }, null, 2)}\n`);
+    catalogCache = { signature, path: file };
+    log.info(`codexModels: materialized model catalog (${custom.length} model(s) with an explicit context window)`);
+    return file;
   },
 };
