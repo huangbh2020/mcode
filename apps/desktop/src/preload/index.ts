@@ -366,6 +366,8 @@ const api = {
       ipcRenderer.invoke(IPC.TERMINAL_KILL, input)) as RpcMap["terminal.kill"],
     list: ((input) =>
       ipcRenderer.invoke(IPC.TERMINAL_LIST, input)) as RpcMap["terminal.list"],
+    resolveShell: (() =>
+      ipcRenderer.invoke(IPC.TERMINAL_RESOLVE_SHELL)) as RpcMap["terminal.resolveShell"],
   },
 
   /** Embedded browser (WebContentsView in main ↔ browser panel in renderer).

@@ -96,3 +96,31 @@ export function resolveDefaultShell(override?: string | null): ResolvedShell {
   }
   return { file: "/bin/sh", args: [], label: "/bin/sh" };
 }
+
+/** Where the shell that WILL be spawned came from. */
+export type ShellSource = "setting" | "default";
+
+export interface EffectiveShell {
+  /** The shell a newly created terminal will actually spawn. */
+  shell: ResolvedShell;
+  /** "setting" when the user's configured value was honored, "default"
+   *  otherwise (empty setting, or a value that does not resolve). */
+  source: ShellSource;
+}
+
+/** Tell apart "the setting is in effect" from "the setting was ignored".
+ *
+ *  `resolveDefaultShell` falls back to the platform default SILENTLY (a
+ *  terminal must always open, and callers can't do anything about a missing
+ *  binary anyway) — which is also why a typo'd path only ever shows up as a
+ *  `terminal.shell override not found` warn line while the terminal happily
+ *  opens the default shell. This wrapper is what the settings panel asks
+ *  before/after saving, so the user is told the truth about their config
+ *  instead of assuming it was applied. */
+export function resolveEffectiveShell(setting?: string | null): EffectiveShell {
+  if (setting) {
+    const override = resolveOverride(setting);
+    if (override) return { shell: override, source: "setting" };
+  }
+  return { shell: resolveDefaultShell(null), source: "default" };
+}

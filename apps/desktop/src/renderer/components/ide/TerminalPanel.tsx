@@ -30,6 +30,8 @@ interface TermSession {
   seq: number;
   status: TerminalSessionStatus;
   detail?: string;
+  /** Executable the live PTY actually spawned (reported by TerminalView). */
+  shell?: string;
 }
 
 /** Stable empty array for the no-project read-only view (avoids a fresh `[]`
@@ -100,6 +102,24 @@ export function TerminalPanel({ active }: { active: boolean }) {
   // per-session bucketing convention documented in AGENTS.md).
   const pendingCommandBySession = useRef<Map<string, string>>(new Map());
   const [, forceRender] = useReducer((n: number) => n + 1, 0);
+
+  /** Shell a NEW terminal would spawn right now (main resolves it from the
+   *  `terminal.shell` setting, so this is the same value create() will use).
+   *  Refreshed whenever the panel becomes visible — i.e. right after the user
+   *  leaves Settings — so a tab still running the previous shell can be
+   *  flagged "restart to apply" instead of silently looking like the setting
+   *  had no effect. */
+  const [configuredShell, setConfiguredShell] = useState<string | null>(null);
+  useEffect(() => {
+    if (!active) return;
+    let cancelled = false;
+    void api.terminal.resolveShell().then((res) => {
+      if (!cancelled) setConfiguredShell(res.shell);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [active]);
 
   // Create a session in the given project's bucket (creating the bucket if
   // needed) and make it the active tab. Single choke point for every terminal
@@ -198,13 +218,13 @@ export function TerminalPanel({ active }: { active: boolean }) {
   );
 
   const updateStatus = useCallback(
-    (key: string, status: TerminalSessionStatus, detail?: string) => {
+    (key: string, status: TerminalSessionStatus, detail?: string, shell?: string) => {
       const path = keyToPathRef.current.get(key);
       if (!path) return;
       const st = termsRef.current.get(path);
       if (!st) return;
       st.sessions = st.sessions.map((s) =>
-        s.key === key ? { ...s, status, detail } : s,
+        s.key === key ? { ...s, status, detail, ...(shell ? { shell } : {}) } : s,
       );
       // Only re-render if the changed tab belongs to the visible project - a
       // hidden project's status dot isn't on screen, so a render would be
@@ -220,6 +240,13 @@ export function TerminalPanel({ active }: { active: boolean }) {
   // all guard on activeHandle themselves.
   const activeSession = sessions.find((s) => s.key === activeKey) ?? sessions[0] ?? null;
   const activeHandle = activeSession ? handlesRef.current.get(activeSession.key) : undefined;
+
+  /** This tab's PTY runs a shell other than the one a new terminal would get
+   *  now — i.e. `terminal.shell` changed after it was spawned. PTYs are
+   *  keep-alive by design (scrollback + long-running processes survive panel
+   *  toggles), so the switch needs a restart. */
+  const shellChangedSinceSpawn = (s: TermSession | null): boolean =>
+    Boolean(s && configuredShell && s.shell && s.shell !== configuredShell);
 
   // Run a saved quick-command: write the command to the active PTY so the
   // shell executes it immediately. Silently no-ops when no terminal is running
@@ -322,7 +349,14 @@ export function TerminalPanel({ active }: { active: boolean }) {
                       forceRender();
                     }
                   }}
-                  title={s.detail ? `${sessionTitle} - ${s.detail}` : sessionTitle}
+                  title={[
+                    sessionTitle,
+                    s.shell,
+                    shellChangedSinceSpawn(s) ? t("ide.term.restartToApply") : null,
+                    s.detail,
+                  ]
+                    .filter(Boolean)
+                    .join(" · ")}
                 >
                   <span
                     className={cn(
@@ -378,6 +412,11 @@ export function TerminalPanel({ active }: { active: boolean }) {
           >
             <IconPlayerStop size={13} />
           </IconBtn>
+          {shellChangedSinceSpawn(activeSession) && (
+            <span className="mr-1 whitespace-nowrap text-[0.7857em] text-warning">
+              {t("ide.term.restartToApply")}
+            </span>
+          )}
           <IconBtn
             title={t("ide.term.restart")}
             onClick={() => {
@@ -432,8 +471,8 @@ export function TerminalPanel({ active }: { active: boolean }) {
                 sessionKey={s.key}
                 projectPath={p}
                 active={active && isActive}
-                onStatusChange={(status, detail) => {
-                  updateStatus(s.key, status, detail);
+                onStatusChange={(status, detail, shell) => {
+                  updateStatus(s.key, status, detail, shell);
                   // Drain any command queued by runCommandInNewTerminal once the
                   // freshly spawned PTY is ready. Same newline normalization as
                   // runCommand (shell commits on "\r", not "\n").
