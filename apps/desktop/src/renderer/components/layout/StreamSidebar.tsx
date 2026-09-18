@@ -53,7 +53,7 @@ import {
 } from "@renderer/lib/icons.js";
 import { cn } from "@renderer/lib/cn.js";
 import { getProviderIcon } from "@renderer/lib/providerIcon.js";
-import { projectDisplayColor, projectInitial } from "@renderer/lib/projectAvatar.js";
+import { projectDisplayColor } from "@renderer/lib/projectAvatar.js";
 import { isMac } from "@renderer/lib/platform.js";
 import { formatRelativeTime, formatFullTime } from "@renderer/lib/time.js";
 import { normWorktreeKey, worktreeDisplayName } from "@renderer/lib/worktree.js";
@@ -66,6 +66,7 @@ import { WorktreeMergeBackDialog, WorktreeRemoveDialog } from "@renderer/compone
 import { ProjectManageMenuPopup, type ManageMenuState } from "./ProjectManageMenu.js";
 import { SidebarQuickActions } from "./SidebarQuickActions.js";
 import { ArchivedRow, HoverIconButton, RenameDialog, SessionContextMenu } from "./SidebarShared.js";
+import { ProjectAvatar } from "./ProjectAvatar.js";
 import { BrandLogo } from "./BrandLogo.js";
 import type { Project, Session } from "@contracts/session";
 import type { GitWorktreeInfo } from "@contracts/ipc";
@@ -655,13 +656,7 @@ function StreamSidebarBase() {
                         className={cn(menuItemClass, "group")}
                         onClick={() => setScope(p.id)}
                       >
-                        <span
-                          className="flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded text-[8px] font-bold text-white"
-                          style={{ backgroundColor: projectDisplayColor(p, projectColors) }}
-                          aria-hidden
-                        >
-                          {projectInitial(p.name)}
-                        </span>
+                        <ProjectAvatar name={p.name} color={projectDisplayColor(p, projectColors)} />
                         <span className="flex-1 truncate">{p.name}</span>
                         {scope === p.id && <IconCheck size={13} className="shrink-0 text-accent" />}
                         {manageButton(p)}
@@ -696,13 +691,7 @@ function StreamSidebarBase() {
                                 className={cn(menuItemClass, "group", "pl-7")}
                                 onClick={() => setScope(p.id)}
                               >
-                                <span
-                                  className="flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded text-[8px] font-bold text-white"
-                                  style={{ backgroundColor: projectDisplayColor(p, projectColors) }}
-                                  aria-hidden
-                                >
-                                  {projectInitial(p.name)}
-                                </span>
+                                <ProjectAvatar name={p.name} color={projectDisplayColor(p, projectColors)} />
                                 <span className="flex-1 truncate">{p.name}</span>
                                 {scope === p.id && <IconCheck size={13} className="shrink-0 text-accent" />}
                                 {manageButton(p)}
@@ -1066,13 +1055,7 @@ function StreamCard({
 
       {/* L1 — project identity + status (status yields to hover actions). */}
       <div className="flex h-4 min-w-0 items-center gap-1.5">
-        <span
-          className="flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded text-[8px] font-bold text-white"
-          style={{ backgroundColor: projectColor }}
-          aria-hidden
-        >
-          {projectInitial(projectName)}
-        </span>
+        <ProjectAvatar name={projectName} color={projectColor} />
         <span className="min-w-0 flex-1 truncate text-[10.5px] font-medium text-content-subtle">
           {projectName}
         </span>

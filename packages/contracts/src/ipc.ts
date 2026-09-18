@@ -597,20 +597,25 @@ export const UI_EDITOR_THEME_SETTING_KEY = "ui.editorTheme";
 
 /**
  * Setting key under which the active right-panel tab is persisted.
- * Value is one of "files" | "git" | "browser" | "turns". The right panel reads it
- * at boot and restores the last-used tab. "browser" re-enables the browser as an
- * embedded sidebar panel (mobile-first); on hydrate the store still falls back
- * to "files" so the browser doesn't auto-open at startup — the "browser" value
- * is only reached via an explicit user toggle during the session.
+ * Value is one of "files" | "git" | "orch" (the global rail tabs). The right
+ * panel reads it at boot and restores the last-used tab. The "turns" (turn
+ * flow), "sidechat" (sub-sessions) and "browser" (embedded sidebar browser)
+ * tabs are session-scoped: they are opened per session via the rail's "+"
+ * menu and never persisted here; a legacy persisted value is ignored at boot.
  * (Terminal used to live here as a tab but moved to the bottom bar; a persisted
  * "terminal" value is rejected by the schema and falls back to "files".)
  */
 export const UI_RIGHT_PANEL_TAB_SETTING_KEY = "ui.rightPanelTab";
 
-/** zod schema + TS union for the right-panel tab preference. "sidechat" (the
- *  side-chat Q&A tab) is session-only like "browser": hydrate ignores a
- *  persisted value so the ask tab never auto-opens at startup. "orch" (the
- *  orchestration DAG panel) is session-only for the same reason. (An "inbox"
+/** zod schema + TS union for the right-panel tab preference. The SESSION-
+ *  scoped tabs — "turns" (turn flow), "sidechat" (sub-sessions) and "browser"
+ *  (embedded sidebar browser) — are opened per session via the rail's "+"
+ *  menu (each session remembers its own open set + active tab); they are
+ *  never written to the persisted global tab anymore, the values stay in the
+ *  schema only so old persisted values still parse (hydrate then ignores
+ *  them, same as "browser"/"orch" always were). "orch" (the orchestration DAG
+ *  panel) remains a global tab, session-only in the boot sense: hydrate
+ *  ignores a persisted value so it never auto-opens at startup. (An "inbox"
  *  tab used to aggregate worker asks/gates; it was removed — a persisted
  *  "inbox" value is rejected by the schema and falls back to "files".) */
 export const RightPanelTabSchema = z.enum([
@@ -622,6 +627,11 @@ export const RightPanelTabSchema = z.enum([
   "orch",
 ]);
 export type RightPanelTab = z.infer<typeof RightPanelTabSchema>;
+/** The globally-switchable right-panel tabs (fixed rail icons whose active
+ *  state is a global user preference). The session-scoped "turns"/"sidechat"/
+ *  "browser" tabs are excluded — they live in per-session state, not in this
+ *  setting. */
+export type RightPanelGlobalTab = Exclude<RightPanelTab, "browser" | "turns" | "sidechat">;
 
 /**
  * Setting key under which the IDE file editor's open-file list is persisted.

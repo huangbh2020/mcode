@@ -111,11 +111,14 @@ export const en = {
   "layout.noOpenFiles": "No open files",
   "layout.tabFiles": "Files",
   "layout.tabTurns": "Turn Flow",
-  "layout.openBrowser": "Open browser",
+  "layout.tabBrowser": "Browser",
   "layout.closeSidebarBrowser": "Close sidebar browser",
 
   /* ── side chat (right-panel ask tab) ── */
   "layout.tabSideChat": "Sub-sessions",
+  "layout.rightPanelAddTab": "Add panel",
+  "layout.rightPanelCloseTab": "Close panel",
+  "layout.rightPanelSessionHint": "Panels follow the active session",
   "sideChat.open": "Open sub-sessions (won't interrupt the running session)",
   "sideChat.newChat": "New sub-session",
   "sideChat.parentPrefix": "Main session",

@@ -53,6 +53,8 @@ import { BrandLogo } from "./BrandLogo.js";
 import { SidebarQuickActions } from "./SidebarQuickActions.js";
 import { HoverIconButton, RenameDialog, SessionContextMenu, ArchivedRow } from "./SidebarShared.js";
 import { LeftBarModeSwitch } from "./StreamSidebar.js";
+import { ProjectAvatar } from "./ProjectAvatar.js";
+import { projectDisplayColor } from "@renderer/lib/projectAvatar.js";
 import { api } from "@renderer/lib/api.js";
 import { normWorktreeKey, worktreeDisplayName } from "@renderer/lib/worktree.js";
 import { WorktreeMergeBackDialog, WorktreeRemoveDialog } from "@renderer/components/chat/WorktreeMergeBack.js";
@@ -1263,6 +1265,9 @@ function ProjectNode(props: ProjectNodeProps) {
     sortableRef, sortableStyle, sortableListeners, sortableAttributes, isDragging,
   } = props;
   const loaded = sessions.length;
+  // Avatar color source: user-picked per-project color wins, else the
+  // name-hash default (same resolution as the stream sidebar's cards).
+  const projectColors = useSessionStore((s) => s.projectColors);
 
   // ── Worktree bucketing. Sessions bound to a materialized (or freshly
   // bound) isolated checkout group under ONE collapsible directory node per
@@ -1366,7 +1371,10 @@ function ProjectNode(props: ProjectNodeProps) {
           className="flex min-w-0 flex-1 items-center gap-1 text-left"
           title={project.path}
         >
-          <IconFolder size={14} className="shrink-0" />
+          <ProjectAvatar
+            name={project.name}
+            color={projectDisplayColor(project, projectColors)}
+          />
           <span className="truncate">{project.name}</span>
         </button>
 

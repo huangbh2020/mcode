@@ -19,9 +19,11 @@ import { CSS } from "@dnd-kit/utilities";
 import { cn } from "@renderer/lib/cn.js";
 import { IconX, SpinnerIcon } from "@renderer/lib/icons.js";
 import { getProviderIcon } from "@renderer/lib/providerIcon.js";
+import { projectDisplayColor } from "@renderer/lib/projectAvatar.js";
 import { useSessionStore, orchRunningAnchors } from "@renderer/stores/sessionStore.js";
 import type { Session } from "@contracts/session";
 import { TabBarChevronButton, TabBarOverflowMenu } from "./TabBarChrome.js";
+import { ProjectAvatar } from "./ProjectAvatar.js";
 
 /** Tab strip rendered along the top of the center pane in `tabs` display
  *  mode. Each open tab shows the session's title, a running indicator
@@ -299,6 +301,16 @@ export function SortableSessionTab({
 
   const title = session?.title ?? "(unknown)";
 
+  // Project identity for the tab: resolved from the store here (not passed
+  // down) so both hosts that render this component — SessionTabs and the
+  // unified tab bar — get the avatar without touching their prop plumbing.
+  // Unknown project (worker rows / init race) renders no avatar.
+  const projects = useSessionStore((s) => s.projects);
+  const projectColors = useSessionStore((s) => s.projectColors);
+  const project = session
+    ? projects.find((p) => p.id === session.projectId)
+    : undefined;
+
   // Merge the dnd-kit node ref with our registry ref.
   const setRefs = useCallback(
     (node: HTMLDivElement | null) => {
@@ -369,24 +381,25 @@ export function SortableSessionTab({
         isDragging && "shadow-lg",
       )}
     >
-      {/* Provider brand mark, fixed at the leading edge of the tab. */}
+      {/* Project identity leads the tab: the owning project's colored
+          initial, so tabs from different projects read apart at a glance
+          (same mark as the sidebars' project rows). */}
+      {project && (
+        <ProjectAvatar
+          name={project.name}
+          color={projectDisplayColor(project, projectColors)}
+        />
+      )}
+      {/* Provider brand mark follows the project identity. */}
       {(() => {
         const { Icon, color } = getProviderIcon(session?.providerId);
         return <Icon size={13} className={cn("shrink-0", color)} />;
       })()}
-      {/* Running indicator: spinner while a turn is in flight (matches the
-          app-wide loading-icon convention), static dot when idle. Lets the
-          user see at a glance which background tabs are still working. */}
-      {running ? (
+      {/* Running spinner — the only in-flight indicator on the tab. The old
+          idle dot is gone: with project + provider marks up front the chip
+          already has enough leading furniture. */}
+      {running && (
         <SpinnerIcon size={12} className="shrink-0 animate-spin text-accent" />
-      ) : (
-        <span
-          aria-hidden
-          className={cn(
-            "inline-block h-1.5 w-1.5 shrink-0 rounded-full",
-            isActive ? "bg-accent/70" : "bg-content-subtle/50",
-          )}
-        />
       )}
       {/* Title fills every free pixel of the chip (flex-1) — on inactive
           tabs the close button leaves the layout entirely until hover, so

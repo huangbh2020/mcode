@@ -114,11 +114,14 @@ export const zh = {
   "layout.noOpenFiles": "无打开的文件",
   "layout.tabFiles": "文件",
   "layout.tabTurns": "轮次流程",
-  "layout.openBrowser": "打开浏览器",
+  "layout.tabBrowser": "浏览器",
   "layout.closeSidebarBrowser": "关闭侧边栏浏览器",
 
   /* ── side chat (right-panel ask tab) ── */
   "layout.tabSideChat": "子会话",
+  "layout.rightPanelAddTab": "添加面板",
+  "layout.rightPanelCloseTab": "关闭面板",
+  "layout.rightPanelSessionHint": "面板跟随当前会话,各会话独立记忆",
   "sideChat.open": "打开子会话（不影响当前会话）",
   "sideChat.newChat": "新建子会话",
   "sideChat.parentPrefix": "主会话",

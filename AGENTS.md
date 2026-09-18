@@ -188,6 +188,14 @@ pnpm build
 - **`centerTabFocus` 焦点流转**(UI-only,不持久化;渲染端对 "editor" 做兜底——无 activeFile 且无激活计划 tab 时视同 "chat"):置 "chat" = `selectSession`/`openTab`/`startSession`/`enqueueChatFile`/`clearIdeActiveFile`(隐藏编辑器语义);置 "editor" = `openFileInIde`/`setIdeActiveFile`/`setPlanTabActive(true)`/`openPlanDrawer`(均 **gate 在 tabs 模式**,single 模式不写,保证切回 tabs 时落在聊天);`closeTab` 仅在被关的是**激活 tab** 时移动焦点(关后台会话 tab 不拉走编辑器),关最后一个会话 tab 时若有 activeFile 则落到编辑器;`closeFileInIde`/`closeFilesUnderDir`/`closeAllFilesInIde` 在"无剩余文件且无激活计划 tab"时回落 "chat";`closePlanDrawer` 有可回退文件则保持焦点,否则回 "chat"。Titlebar 的 `EditorColumnToggle` 在 tabs 模式按 `centerTabFocus` 判显隐。
 - 4 个全局 config 槽(model / effort / permissionMode / customModelId)保持不变——它们表达"前台 tab 的配置",`syncConfigFromSession` 在 `selectSession` / `openTab` / `closeTab` 切活动时自动同步,Composer 立即反映。
 
+### 右栏会话级 tab:轮次流程/子会话/浏览器跟会话走(2026-09-18)
+
+- **模型**:右栏 rail(`RightPanel.tsx` 顶部横向图标条)的 tab 分两层。**全局层**(files/git/orch):激活值是单值偏好 `rightPanelTab`(persist 到 `ui.rightPanelTab`,hydrate 只恢复 files/git;类型收窄为 contracts 的 `RightPanelGlobalTab` = `Exclude<RightPanelTab,"browser"|"turns"|"sidechat">`,编译期杜绝再有人把会话层三档写进全局)。**会话层**(turns=轮次流程 / sidechat=子会话 / browser=侧边栏浏览器):**不再固定在 rail**,由 rail 右端(ml-auto 簇,宽屏切换键左侧)的 **「+」菜单**(base-ui Menu)按需打开——点击行 = 打开并激活;已打开的行有对勾(当前显示)与悬浮 **×**(关闭)。打开后在该会话的 rail 上以普通图标出现(仅该会话可见);**可直接关闭**:点击**正在显示**的那个 tab = 关闭(toggle 语义,与旧浏览器 rail 键完全一致),悬停时图标切换为 × 明示可关;未显示的靠 + 菜单的 ×。面板实际显示 = `sessionTabs[activeSessionId].active ?? rightPanelTab`(会话级激活遮蔽全局值,关闭/切全局自动回落)。
+- **状态**:`sessionRightTabsBySession: Record<sessionId, { open: SessionRightPanelTabId[]; active: SessionRightPanelTabId | null }>`(store 导出 `SessionRightPanelTabId = "turns"|"sidechat"|"browser"`),**不持久化**(应用内跟会话切换走,重启清零);`active` 必属 `open`。动作 `openSessionRightTab(tab, sessionId?)/closeSessionRightTab(tab, sessionId?)`(省略 sessionId 取激活会话;无激活会话 no-op);`setRightPanelTab` 切全局档时**清掉当前会话的 active 但保留 open 集**(rail 图标还在,回来还能切)。删除会话经 `dropSessionBuckets` 清理(注意:`applySessionDeletedState` 对不在任何列表里的未知 id **提前返回**、不走桶清扫——冒烟里删桶断言必须先 seed 会话行)。
+- **浏览器特殊性**:进入会话层的只是**面板可见性**——tab 列表(`browserTabs`)/WebContentsView/overlay 全屏容器仍是全局共享,切走会话只是右栏不再显示它,浏览状态不丢。browserTabCount 徽标跟在会话级图标上(`RailButton` 加 `badgeCount` prop)。入口全部改道 `openSessionRightTab("browser")`:`openUrlInBrowser`、App.tsx 的 `agentOpened`(adopt 后拉起侧栏)、`BrowserPanel.handleReturnToSidebar`(overlay 回侧栏);**改道 `closeSessionRightTab("browser")`**:`handleCloseTab` 关掉最后一个标签(侧栏模式,面板回落全局档)、`handleSwitchMode` 侧栏→overlay(overlay 接管浏览器);命令 `layout.toggle-browser` 改为按会话级 active 判 toggle(开时顺带 `setRightOpen(true)`)。+ 菜单弹层压在浏览器 WebContentsView 上,照例走 `useSuppressBrowserView(addOpen, popupRef)`。
+- **入口改道(轮次/子会话)**:`openSubagentTranscript`(子代理转录,传**归属会话** id,非激活会话也能开)/`openSideChatPanel`(子会话面板 + 快捷键 `sidechat.open`)/命令 `view.right-panel.turns` 都改为 `openSessionRightTab`。
+- **验证**:`apps/desktop/scripts/session-store-smoke/run.sh` 第 [9] 组(真实 store 无头冒烟 44 断言):开/关/重激活、全局切换清激活保 open、跨会话切换回落、显式 sessionId 开在不活跃会话、browser 同机制、无激活会话 no-op、删除清桶。UI 端(菜单交互、rail 图标显隐、徽标)靠 typecheck + electron-vite build,行为留人工确认。词条:新增 `layout.tabBrowser`/`layout.rightPanelAddTab`/`rightPanelCloseTab`/`rightPanelSessionHint`;`layout.openBrowser` 已无引用、随本轮删除。
+
 ### 语言服务器 LSP(P4.5)
 - **可安装、可启停**:设置页"语言服务器"面板,每种语言(TS/JS、Python、Go、Java)一张卡片。安装走包管理器(`npm`/`pip`/`go`/`brew`),Java win/linux 走直接下载 tar.gz 解压到 `userData/lsp/java`。
 - **配置持久化**:`settings` 表 `lsp.servers` key(JSON 数组 `LspServerConfig[]`),每语言一个条目(`enabled` + 可选 `serverPath`/`args`)。
@@ -228,6 +236,14 @@ pnpm build
 - **行为**:用户发送的消息超过 5 行时默认折叠——钳在 `calc(5 × --chat-md-leading × --chat-font-size)`(纯 CSS,跟随对话紧凑度设置),底部 mask 渐隐代替硬切(气泡是 `user-bubble-fill` 半透明着色,表面色渐变会与色调解离);点击气泡任意处展开,再点收起。展开态在气泡底部右侧一枚「收起」chip,折叠态在底缘中央一枚「展开」圆角 pill——两枚形态镜像 Markdown 代码块的既有折叠 pill(`chatStream.code.*`),两处折叠面读感一致。i18n 键 `chatStream.userMsg.expand/collapse`。
 - **实现**(全在 `ChatPane.tsx` 的 `MessageRow`,用户消息唯一渲染路径;3043 行附近的 `isUser` 只喂 `canEdit`):溢出判定 = `el.scrollHeight > 行高×5+1`,**折叠/展开两态通用**——`scrollHeight` 是完整内容高度、与钳制无关,展开态重挂载(下条)也能得出判定,否则「收起」chip 永不出现;行高读 `.chat-md` 的 computed line-height(密度驱动),无 markdown 内容时回退 `fontSize×1.5`。`ResizeObserver` 在字体/图片/KaTeX 改变高度后重测。展开集合 `expandedUserMessages`(模块级 `Set<msg.id>`,不落盘)熬过 LegendList 单元格重挂载——滚远再滚回,手动展开过的仍展开,其余回落折叠。
 - **点击守卫**(`onBubbleClick`):`closest("a,button,input,textarea,select,[role='button']")` 命中即放行——消息内的文件链接、附件卡、图片(缩略图整个包在 `<button>` 里开灯箱)保持自身行为;`window.getSelection()` 非折叠时放行——框选文本的拖拽收尾不算点击。溢出时气泡才挂 `cursor-pointer` 与 onClick,短消息零行为变化。编辑模式整行替换、与本机制无交集。
+
+### 回合结束重新锚定到本轮提问(2026-09-18)
+
+- **行为**:模型输出完毕(本轮回合结束)后,若长回答把用户自己的提问顶出了视口上缘,消息流不再滑落回底部,而是**定位回本轮用户消息处**(顶部对齐 + 8px 余量,回答在下方可续读)——对齐左缘时间轴(MessageTimeline)上该条 dash 的所指;提问仍在屏内的短回合保持原有贴底滑落,零行为变化。
+- **挂载点**:完全寄生在既有的「回合完成折叠」链路——`TurnPanel` 的 `justCompleted` one-shot fold 调 `pauseBottomAnchor({suspendDataChange:true})`("full" 模式),其 settle 回调(原 `scrollToEnd` 处,`TURN_FOLD_MS+60`)即是决策点。`wasNearBottom||recomputeNearBottom()` 门槛保留(用户滚离阅读时绝不打扰);定位执行时经 `holdAnchorSuspension("full", TURN_FOLD_MS+700)` 延长锚挂起,防 turn-files 卡片落地触发 bottom snap 与定位滚动打架。
+- **四个抑制条件**(任一成立则维持贴底):① `sessionBusy`(队列连发的新回合已接管,不与跟随打架);② 非干净结束——`interruptedBySession`(中断停在模型停止处)/`turnErrorBySession`/`turnIncompleteBySession`(错误与截断的诊断卡片要在底部可见);③ 目标 id 已不在 `msgToRenderIndex`(消息被 compact 截断);④ 提问行仍可见(挂载行 `top >= scroller.top - 4`)。
+- **实现纪律**:新增的 `scrollToMessageTop`(顶部对齐版 jumpToMessage,同款「positionAtIndex 粗瞄→DOM 精调→drift 校正重试」,无 flash)与 `holdAnchorSuspension` **引用恒稳定**(`renderListItem` 的 memo 依赖 `pauseBottomAnchor`),一切易变值(`lastUserMessageId`/`msgToRenderIndex`/`sessionBusy`)经 `*Ref` 镜像读取,不进 useCallback deps。**没有新增组件状态、i18n 词条与持久化**。
+- **验证**:`tsc --noEmit` + `electron-vite build` 通过(build 需 `NODE_OPTIONS=--max-old-space-size=8192`,默认堆在本机 OOM——基线同样崩,与改动无关)。滚动行为留人工确认。
 
 ### 集成终端环境刷新(win32,2026-08-31)
 

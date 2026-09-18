@@ -1312,6 +1312,12 @@ function ChatPaneForSession({
     (s) => (s.subagentsBySession[sessionId] ?? EMPTY_SUBAGENTS).some((a) => a.status === "running"),
   );
   const sessionBusy = isRunning || hasRunningSubagents;
+  // Latest-value mirror for callbacks that must read busyness without
+  // re-creating on every flip (the turn-end focus settle timer reads this).
+  const sessionBusyRef = useRef(sessionBusy);
+  useEffect(() => {
+    sessionBusyRef.current = sessionBusy;
+  }, [sessionBusy]);
   // 编排阻塞:本会话有 running/paused 的 run(执行中或等决策门)→ 锁输入。
   // planning(画布配置中)不锁;completed/failed/canceled 不锁。
   const orchRunsHere = useSessionStore((s) => (sessionId ? s.orchRunsBySession[sessionId] : undefined));
@@ -1602,37 +1608,108 @@ function ChatPaneForSession({
   const [anchorSuspension, setAnchorSuspension] = useState<"layout" | "full" | null>(null);
   const pauseBottomAnchorTimer = useRef<number | null>(null);
   const settleScrollTimer = useRef<number | null>(null);
+  // Refs mirroring values the turn-end focus scroll reads from timers: the
+  // settle callback fires long after the render that scheduled it, and the
+  // callbacks must keep a stable identity (renderListItem memoizes on
+  // pauseBottomAnchor) so they can't close over per-render values.
+  const lastUserMessageIdRef = useRef<string | null>(null);
+  const msgToRenderIndexRef = useRef<Map<string, number>>(new Map());
+  /** (Re)arm the anchor-suspension window. Shared by pauseBottomAnchor and
+   *  the turn-end focus scroll, which needs a longer window than the fold so
+   *  its aim/retry passes finish before bottom-anchoring comes back. */
+  const holdAnchorSuspension = useCallback((mode: "layout" | "full", ms: number) => {
+    setAnchorSuspension(mode);
+    if (pauseBottomAnchorTimer.current != null) {
+      window.clearTimeout(pauseBottomAnchorTimer.current);
+    }
+    pauseBottomAnchorTimer.current = window.setTimeout(() => {
+      pauseBottomAnchorTimer.current = null;
+      setAnchorSuspension(null);
+    }, ms);
+  }, []);
+  /** Scroll the given message to the top of the viewport ("re-anchor to the
+   *  question"): the turn ended with the question pushed out above, so bring
+   *  it back and let the answer sit below. Same aim-then-locate scheme as
+   *  jumpToMessage but top-aligned and without the flash — this is an
+   *  automatic navigation, not a response to a click. */
+  const scrollToMessageTop = useCallback((messageId: string) => {
+    const ref = virtualListRef.current;
+    const root = streamAreaRef.current;
+    if (!ref || !root) return;
+    const index = msgToRenderIndexRef.current.get(messageId);
+    if (index === undefined) return;
+    const ALIGN_MARGIN = 8;
+
+    const alignMountedRow = (): boolean => {
+      const row = root.querySelector(`[data-message-id="${CSS.escape(messageId)}"]`);
+      const scroller = row ? findScrollParent(row, root) : null;
+      if (!row || !scroller) return false;
+      const delta = row.getBoundingClientRect().top - scroller.getBoundingClientRect().top;
+      if (Math.abs(delta) > 2) {
+        scroller.scrollTo({
+          top: Math.max(scroller.scrollTop + delta - ALIGN_MARGIN, 0),
+          behavior: "smooth",
+        });
+      }
+      return true;
+    };
+
+    let attempts = 0;
+    const locate = async (): Promise<void> => {
+      attempts += 1;
+      if (alignMountedRow()) return;
+      if (attempts >= 5) return;
+      // Row not mounted — re-aim with drift correction from any mounted
+      // message row (same pass as jumpToMessage's retry).
+      const state = ref.getState();
+      let aim = state.positionAtIndex(index);
+      const refEl = root.querySelector("[data-message-id]");
+      const refId = refEl?.getAttribute("data-message-id") ?? null;
+      const refIdx = refId ? msgToRenderIndexRef.current.get(refId) : undefined;
+      if (refEl instanceof HTMLElement && refIdx !== undefined) {
+        const refScroller = findScrollParent(refEl, root);
+        if (refScroller) {
+          const actual =
+            refScroller.scrollTop +
+            (refEl.getBoundingClientRect().top - refScroller.getBoundingClientRect().top);
+          const claimed = state.positionAtIndex(refIdx);
+          if (Number.isFinite(claimed)) aim += actual - claimed;
+        }
+      }
+      await ref.scrollToOffset({ offset: Math.max(aim - ALIGN_MARGIN, 0), animated: false });
+      window.setTimeout(() => void locate(), 120);
+    };
+
+    void (async () => {
+      const state = ref.getState();
+      await ref.scrollToOffset({
+        offset: Math.max(state.positionAtIndex(index) - ALIGN_MARGIN, 0),
+        animated: false,
+      });
+      await locate();
+    })();
+  }, []);
   const pauseBottomAnchor = useCallback(
     (opts?: { suspendDataChange?: boolean }) => {
       const mode: "layout" | "full" = opts?.suspendDataChange ? "full" : "layout";
-      setAnchorSuspension(mode);
-      if (pauseBottomAnchorTimer.current != null) {
-        window.clearTimeout(pauseBottomAnchorTimer.current);
-      }
       // Budgets derive from the fold's own duration (TURN_FOLD_MS) so the
       // suspension always outlives the animation: a shorter budget would
       // re-enable bottom anchoring mid-fold and snap scroll against a moving
       // height ("闪一下"). "full" also covers the turn-files / plan cards that
       // land just after turn.done.
-      pauseBottomAnchorTimer.current = window.setTimeout(
-        () => {
-          pauseBottomAnchorTimer.current = null;
-          setAnchorSuspension(null);
-        },
-        mode === "full" ? TURN_FOLD_MS + 180 : TURN_FOLD_MS + 60,
-      );
+      holdAnchorSuspension(mode, mode === "full" ? TURN_FOLD_MS + 180 : TURN_FOLD_MS + 60);
       if (mode === "full") {
-        // After the 200ms fold transition settles, glide back to the bottom
-        // IF the user was following along. While the process rows collapsed,
-        // the scroll container's native clamping usually kept the bottom
-        // pinned already; this covers estimate undershoot from the regroup
-        // and the turn-files card that lands just after turn.done. The
-        // near-bottom check is snapshotted at pause START (before any height
-        // changed) and OR-ed with the settle-time check: content changes
-        // inside the window (the fold shrinking, the turn-files card growing)
-        // distort the live distance-from-end, so the snapshot carries the
-        // user's true intent; the live check still catches users who were
-        // mid-list and remain mid-list.
+        // After the fold transition settles, glide back to the bottom IF the
+        // user was following along. While the process rows collapsed, the
+        // scroll container's native clamping usually kept the bottom pinned
+        // already; this covers estimate undershoot from the regroup and the
+        // turn-files card that lands just after turn.done. The near-bottom
+        // check is snapshotted at pause START (before any height changed) and
+        // OR-ed with the settle-time check: content changes inside the window
+        // (the fold shrinking, the turn-files card growing) distort the live
+        // distance-from-end, so the snapshot carries the user's true intent;
+        // the live check still catches users who were mid-list and remain
+        // mid-list.
         const wasNearBottom = recomputeNearBottom();
         if (settleScrollTimer.current != null) {
           window.clearTimeout(settleScrollTimer.current);
@@ -1641,13 +1718,44 @@ function ChatPaneForSession({
         // still shrinking fights the transition and reads as a hitch.
         settleScrollTimer.current = window.setTimeout(() => {
           settleScrollTimer.current = null;
-          if (wasNearBottom || recomputeNearBottom()) {
-            void virtualListRef.current?.scrollToEnd({ animated: true });
+          if (!(wasNearBottom || recomputeNearBottom())) return;
+          // Turn-end re-anchor: when a long answer pushed the user's own
+          // question out above the viewport, land back on it (aligned to the
+          // top, answer readable below) instead of the bottom. Skipped when a
+          // queued next turn already took over (don't fight live following),
+          // when the question is still on screen (short turns keep the old
+          // glide-to-bottom), and on non-clean finishes — an interrupt should
+          // stay where the model stopped, and error / turn.incomplete turns
+          // keep their diagnostic cards at the bottom in view.
+          const targetId = lastUserMessageIdRef.current;
+          const idx = targetId != null ? msgToRenderIndexRef.current.get(targetId) : undefined;
+          const endState = useSessionStore.getState();
+          const cleanFinish =
+            !endState.interruptedBySession[sessionId] &&
+            !endState.turnErrorBySession[sessionId] &&
+            !endState.turnIncompleteBySession[sessionId];
+          if (targetId != null && idx !== undefined && !sessionBusyRef.current && cleanFinish) {
+            const root = streamAreaRef.current;
+            const row = root?.querySelector(`[data-message-id="${CSS.escape(targetId)}"]`);
+            const scroller = row && root ? findScrollParent(row, root) : null;
+            const offscreen =
+              !row ||
+              !scroller ||
+              row.getBoundingClientRect().top < scroller.getBoundingClientRect().top - 4;
+            if (offscreen) {
+              // Cover the focus scroll's aim/retry passes with the
+              // suspension: a turn-files card landing mid-focus would
+              // otherwise trigger a bottom snap that fights the scroll.
+              holdAnchorSuspension("full", TURN_FOLD_MS + 700);
+              scrollToMessageTop(targetId);
+              return;
+            }
           }
+          void virtualListRef.current?.scrollToEnd({ animated: true });
         }, TURN_FOLD_MS + 60);
       }
     },
-    [recomputeNearBottom],
+    [recomputeNearBottom, holdAnchorSuspension, scrollToMessageTop, sessionId],
   );
   // Session switch / unmount mid-transition: drop pending timers so they
   // never fire against a stale list.
@@ -1741,6 +1849,11 @@ function ChatPaneForSession({
     }
     return m;
   }, [renderItems]);
+  // Mirror for the stable-identity scroll callbacks near the anchor-
+  // suspension block (they read positions long after the scheduling render).
+  useEffect(() => {
+    msgToRenderIndexRef.current = msgToRenderIndex;
+  }, [msgToRenderIndex]);
 
   /** Scroll to the message a bookmark/timeline dash points at and flash the
    *  row. Silently no-ops when the id no longer maps (a stale bookmark whose
@@ -2917,6 +3030,12 @@ function ChatPaneForSession({
     }
     return null;
   }, [messages]);
+  // Mirror for the turn-end focus scroll: at settle time the ref's current
+  // value is the finished turn's question (a queued next turn would have
+  // flipped sessionBusy, which suppresses the focus scroll).
+  useEffect(() => {
+    lastUserMessageIdRef.current = lastUserMessageId;
+  }, [lastUserMessageId]);
 
   /** One rendered row of the live segment — the element the list would have
    *  rendered for that item, with the per-row horizontal resolution stripped

@@ -1,4 +1,5 @@
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Menu } from "@base-ui/react/menu";
 import { cn } from "@renderer/lib/cn.js";
 import {
   IconFolder,
@@ -9,9 +10,13 @@ import {
   IconArrowsMaximize,
   IconArrowsMinimize,
   IconGitFork,
+  IconPlus,
+  IconX,
+  IconCheck,
 } from "@renderer/lib/icons.js";
-import { useSessionStore } from "@renderer/stores/sessionStore.js";
+import { useSessionStore, type SessionRightPanelTabId } from "@renderer/stores/sessionStore.js";
 import { resolveShortcut, acceleratorToDisplayString } from "@renderer/lib/shortcuts.js";
+import { useSuppressBrowserView } from "@renderer/hooks/useSuppressBrowserView.js";
 import { FilesPanel } from "@renderer/components/ide/FilesPanel.js";
 import { GitPanel } from "@renderer/components/ide/GitPanel.js";
 import { TurnFlowPanel } from "@renderer/components/ide/TurnFlowPanel.js";
@@ -21,32 +26,65 @@ import { SideChatPanel } from "@renderer/components/chat/SideChatPanel.js";
 import { useI18n } from "@renderer/lib/i18n/index.js";
 
 /** Right panel: a horizontal icon rail docked at the top + a main panel
- *  area (IDE-style). The rail is always visible and holds three icons:
- *    - Files   → shows FilesPanel in the main area
- *    - Git     → shows GitPanel in the main area
- *    - Browser → toggles an embedded browser panel in the main area
- *      (sidebar mode, desktop-sized pages by default). Clicking again closes
- *      it. The PC-fullscreen overlay is a separate container rendered at the
- *      App root; while that overlay is open the right panel isn't visible at
- *      all.
- *
- *  The active panel (files / git) is read from / written to the session store
- *  (persisted in the settings table), so it survives restarts. The browser tab
- *  is session-only (hydrate ignores a persisted "browser" value so the browser
- *  never auto-opens at boot). The browser icon shows a badge with the open-tab
- *  count. */
+ *  area (IDE-style). The rail's fixed icons are the GLOBAL tabs — files /
+ *  git / orch — whose active value is one app-wide preference (persisted).
+ *  The turn-flow, sub-session and embedded-browser panels are SESSION-scoped
+ *  and not fixed: the trailing "+" menu opens any of them for the ACTIVE
+ *  session; an opened one appears as a rail icon that exists for that
+ *  session only. Each session remembers its own open set + which of them is
+ *  showing (store's sessionRightTabsBySession), so they follow the session
+ *  across switches; while one is active it shadows the global tab. Closing —
+ *  by clicking the showing tab again (toggle, hover swaps the icon for an ×)
+ *  or via the "+" menu's × — falls back to the global tab. (The browser's
+ *  tab list / WebContentsViews are global shared state; only the panel's
+ *  visibility here is per-session. The PC-fullscreen browser overlay is a
+ *  separate container rendered at the App root.) */
+
+/** Module-level stable empty set — per-session selector fallback must not
+ *  return a fresh [] each render (Zustand infinite-loop guard). */
+const EMPTY_SESSION_TABS: SessionRightPanelTabId[] = [];
+
+const SESSION_TAB_META: ReadonlyArray<{
+  id: SessionRightPanelTabId;
+  labelKey: "layout.tabTurns" | "layout.tabSideChat" | "layout.tabBrowser";
+  /** Tooltip while the tab is showing (= the close affordance). */
+  closeTitleKey: "layout.rightPanelCloseTab" | "layout.closeSidebarBrowser";
+  Icon: typeof IconListDetails;
+  /** Command whose shortcut hint is appended to the tooltip (null = none). */
+  commandId: string | null;
+}> = [
+  { id: "turns", labelKey: "layout.tabTurns", closeTitleKey: "layout.rightPanelCloseTab", Icon: IconListDetails, commandId: null },
+  { id: "sidechat", labelKey: "layout.tabSideChat", closeTitleKey: "layout.rightPanelCloseTab", Icon: IconMessages, commandId: "sidechat.open" },
+  { id: "browser", labelKey: "layout.tabBrowser", closeTitleKey: "layout.closeSidebarBrowser", Icon: IconWorld, commandId: "layout.toggle-browser" },
+];
+
 export function RightPanel() {
   const { t } = useI18n();
-  const tab = useSessionStore((s) => s.rightPanelTab);
+  const sessionId = useSessionStore((s) => s.activeSessionId);
+  const globalTab = useSessionStore((s) => s.rightPanelTab);
+  // This session's session-scoped tabs (open set + which one is showing).
+  const sessionTabs = useSessionStore((s) => (sessionId ? s.sessionRightTabsBySession[sessionId] : undefined));
+  const openSessionTab = useSessionStore((s) => s.openSessionRightTab);
+  const closeSessionTab = useSessionStore((s) => s.closeSessionRightTab);
   const setTab = useSessionStore((s) => s.setRightPanelTab);
   const browserTabCount = useSessionStore((s) => s.browserTabCount);
   const widePanelOpen = useSessionStore((s) => s.widePanelOpen);
   const setWidePanelOpen = useSessionStore((s) => s.setWidePanelOpen);
-  const sessionId = useSessionStore((s) => s.activeSessionId);
   const orchRuns = useSessionStore((s) => (sessionId ? s.orchRunsBySession[sessionId] : undefined));
   const orchAuto = useSessionStore((s) => (sessionId ? !!s.orchAutoBySession[sessionId] : false));
   const messages = useSessionStore((s) => (sessionId ? s.messagesBySession[sessionId] : undefined));
   const loadOrchRuns = useSessionStore((s) => s.loadOrchRuns);
+
+  // "+" menu state — opens the session-scoped tabs. Its popup can overlap the
+  // embedded browser's WebContentsView, so suppress the view while open
+  // (geometry-aware; same pattern as the other renderer popups).
+  const [addOpen, setAddOpen] = useState(false);
+  const popupRef = useRef<HTMLDivElement>(null);
+  useSuppressBrowserView(addOpen, popupRef);
+
+  // Effective tab: an active session-scoped tab shadows the global one.
+  const tab = sessionTabs?.active ?? globalTab;
+  const openSessionTabs = sessionTabs?.open ?? EMPTY_SESSION_TABS;
 
   // 保证当前会话的编排运行记录已拉取
   useEffect(() => {
@@ -84,17 +122,12 @@ export function RightPanel() {
     return a ? ` (${acceleratorToDisplayString(a)})` : "";
   };
 
-  /** Toggle the embedded sidebar browser: open it if another tab is active,
-   *  or close it (fall back to files) if it's already showing. */
-  const toggleBrowser = () => {
-    setTab(tab === "browser" ? "files" : "browser");
-  };
-
   return (
     <div className="flex h-full flex-col">
       {/* Horizontal icon rail — always visible, docked at the panel's top
           edge. Each icon is a square button; the active one is marked with
-          the accent token. */}
+          the accent token. Fixed (global) tabs first, then this session's
+          opened session-scoped tabs, then the trailing "+" menu. */}
       <div className="flex h-9 shrink-0 flex-row items-center gap-1 border-b border-edge bg-surface px-1.5">
         <RailButton
           active={tab === "files"}
@@ -110,38 +143,6 @@ export function RightPanel() {
         >
           <IconGitBranch size={16} className="shrink-0" />
         </RailButton>
-        {/* Browser — toggles the embedded sidebar (mobile-first). */}
-        <div className="relative">
-          <RailButton
-            active={tab === "browser"}
-            onClick={toggleBrowser}
-            title={tab === "browser" ? t("layout.closeSidebarBrowser") : t("layout.openBrowser")}
-          >
-            <IconWorld size={16} className="shrink-0" />
-          </RailButton>
-          {browserTabCount > 0 && (
-            <span className="absolute -right-0.5 -top-0.5 flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-accent px-1 text-[9px] font-bold leading-none text-white">
-              {browserTabCount}
-            </span>
-          )}
-        </div>
-        {/* Turn flow — per-turn visualization of the model's work process
-            (prompt → actions → reply → token cost) from the message stream. */}
-        <RailButton
-          active={tab === "turns"}
-          onClick={() => setTab("turns")}
-          title={t("layout.tabTurns")}
-        >
-          <IconListDetails size={16} className="shrink-0" />
-        </RailButton>
-        {/* Side chat — quick Q&A beside the running main session. */}
-        <RailButton
-          active={tab === "sidechat"}
-          onClick={() => setTab("sidechat")}
-          title={t("layout.tabSideChat") + hintFor("sidechat.open")}
-        >
-          <IconMessages size={16} className="shrink-0" />
-        </RailButton>
         {/* Orchestration DAG — runs scoped to the active (coordinator)
             session: task graph, node controls, gates, worker reports.
             仅有编排的会话才展示该 tab */}
@@ -154,11 +155,112 @@ export function RightPanel() {
             <IconGitFork size={16} className="shrink-0" />
           </RailButton>
         )}
-        {/* Wide-panel (3:7) mode - hide the left sidebar + center editor and
-            split the workspace into this right panel (7/10) + the chat column
-            (3/10). Toggled here, via the command palette / shortcut, or the
-            titlebar back button. Pushed to the rail's far right with ml-auto. */}
+        {/* Session-scoped tabs (turn flow / sub-sessions / browser) — rendered
+            only for this session's opened set. Same toggle semantics: click a
+            non-showing tab to show it; click the showing one to CLOSE it
+            (panel falls back to the global tab). Hovering the showing tab
+            swaps its icon for an × so the close affordance is discoverable;
+            the "+" menu's × closes the ones that aren't showing. The browser
+            icon carries the open-tab-count badge. */}
+        {SESSION_TAB_META.filter((m) => openSessionTabs.includes(m.id)).map(({ id, labelKey, closeTitleKey, Icon, commandId }) => {
+          const showing = tab === id;
+          return (
+            <RailButton
+              key={id}
+              active={showing}
+              badgeCount={id === "browser" ? browserTabCount : undefined}
+              onClick={() => (showing ? closeSessionTab(id) : openSessionTab(id))}
+              title={
+                showing
+                  ? t(closeTitleKey)
+                  : t(labelKey) + (commandId ? hintFor(commandId) : "")
+              }
+            >
+              {showing ? (
+                <>
+                  <Icon size={16} className="shrink-0 group-hover:hidden" />
+                  <IconX size={16} className="hidden shrink-0 group-hover:block" />
+                </>
+              ) : (
+                <Icon size={16} className="shrink-0" />
+              )}
+            </RailButton>
+          );
+        })}
+        {/* Right end: the "+" menu that opens the session-scoped tabs, then
+            the wide-panel (3:7) toggle. Pushed to the rail's far right with
+            ml-auto. */}
         <div className="ml-auto flex items-center gap-1">
+          <Menu.Root open={addOpen} onOpenChange={setAddOpen}>
+            <Menu.Trigger
+              className={cn(
+                "flex h-7 w-7 items-center justify-center rounded-md outline-none transition-colors",
+                "text-content-muted hover:bg-surface-hover hover:text-content",
+                "data-[popup-open]:bg-surface-hover data-[popup-open]:text-content",
+              )}
+              title={t("layout.rightPanelAddTab")}
+              aria-label={t("layout.rightPanelAddTab")}
+            >
+              <IconPlus size={16} className="shrink-0" />
+            </Menu.Trigger>
+            <Menu.Portal>
+              <Menu.Positioner side="bottom" align="end" sideOffset={6}>
+                <Menu.Popup
+                  ref={popupRef}
+                  className={cn(
+                    "z-50 min-w-[210px] origin-top-right rounded-lg border border-edge bg-surface py-1 shadow-2xl",
+                    "data-[ending-style]:scale-95 data-[ending-style]:opacity-0",
+                    "data-[starting-style]:scale-95 data-[starting-style]:opacity-0",
+                    "transition-[transform,opacity] duration-100",
+                  )}
+                >
+                  {SESSION_TAB_META.map(({ id, labelKey, Icon, commandId }) => {
+                    const isOpen = openSessionTabs.includes(id);
+                    const active = tab === id;
+                    return (
+                      <Menu.Item
+                        key={id}
+                        onClick={() => openSessionTab(id)}
+                        className={cn(
+                          "group flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs outline-none select-none",
+                          "data-[highlighted]:bg-surface-muted",
+                          active ? "text-accent" : "text-content-muted",
+                        )}
+                        title={t(labelKey) + (commandId ? hintFor(commandId) : "")}
+                      >
+                        <Icon size={14} className="shrink-0" />
+                        <span className="min-w-0 flex-1 truncate">{t(labelKey)}</span>
+                        {active && <IconCheck size={13} className="shrink-0" />}
+                        {/* Close affordance for an opened tab. stopPropagation
+                            keeps base-ui from treating the × click as the
+                            row's activate action, so the menu stays open and
+                            both tabs can be managed in one pass. */}
+                        {isOpen && (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              closeSessionTab(id);
+                            }}
+                            className={cn(
+                              "-mr-1 flex h-4 w-4 shrink-0 items-center justify-center rounded text-content-subtle opacity-50 transition-opacity",
+                              "hover:bg-surface-hover hover:text-content group-hover:opacity-100",
+                            )}
+                            title={t("layout.rightPanelCloseTab")}
+                          >
+                            <IconX size={12} />
+                          </button>
+                        )}
+                      </Menu.Item>
+                    );
+                  })}
+                  <div className="px-3 pb-1 pt-0.5 text-[9px] text-content-subtle/60">
+                    {t("layout.rightPanelSessionHint")}
+                  </div>
+                </Menu.Popup>
+              </Menu.Positioner>
+            </Menu.Portal>
+          </Menu.Root>
           <div className="h-5 w-px bg-edge" />
           <RailButton
             active={widePanelOpen}
@@ -180,9 +282,10 @@ export function RightPanel() {
       </div>
 
       {/* Main panel area — must NOT scroll itself (children own height /
-          overflow). Renders the panel matching the active tab. The browser
-          sidebar (mobile-first) renders inline here; the PC-fullscreen overlay
-          is rendered at the App root and covers the whole workspace. */}
+          overflow). Renders the panel matching the effective tab (an active
+          session-scoped tab shadows the global one). The browser sidebar
+          (mobile-first) renders inline here; the PC-fullscreen overlay is
+          rendered at the App root and covers the whole workspace. */}
       <div className="relative min-h-0 flex-1 overflow-hidden">
         {tab === "files" && <FilesPanel />}
         {tab === "git" && <GitPanel />}
@@ -196,16 +299,19 @@ export function RightPanel() {
 }
 
 /** A square icon button in the panel's rail. Active state uses the accent
- *  token; idle state uses the muted content token with a hover surface. */
+ *  token; idle state uses the muted content token with a hover surface.
+ *  Optional badgeCount renders the open-tab-count pill (browser). */
 function RailButton({
   active,
   onClick,
   title,
+  badgeCount,
   children,
 }: {
   active: boolean;
   onClick: () => void;
   title: string;
+  badgeCount?: number;
   children: React.ReactNode;
 }) {
   return (
@@ -214,13 +320,18 @@ function RailButton({
       onClick={onClick}
       title={title}
       className={cn(
-        "flex h-7 w-7 items-center justify-center rounded-md transition-colors",
+        "group relative flex h-7 w-7 items-center justify-center rounded-md transition-colors",
         active
           ? "bg-accent/15 text-accent"
           : "text-content-muted hover:bg-surface-hover hover:text-content",
       )}
     >
       {children}
+      {badgeCount !== undefined && badgeCount > 0 && (
+        <span className="absolute -right-0.5 -top-0.5 flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-accent px-1 text-[9px] font-bold leading-none text-white">
+          {badgeCount}
+        </span>
+      )}
     </button>
   );
 }

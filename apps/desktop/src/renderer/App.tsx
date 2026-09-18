@@ -80,7 +80,9 @@ export function App() {
       const createdNew = st.adoptAgentBrowserTab(msg.browserId, p);
       if (!st.browserPanelOpen) {
         // Not in fullscreen — bring up the sidebar to show the agent browsing.
-        st.setRightPanelTab("browser");
+        // The sidebar browser is a session-scoped tab: open it on the ACTIVE
+        // session (the rail's "+" menu does the same).
+        st.openSessionRightTab("browser");
         st.setRightOpen(true);
       }
       // Only auto-open the device toolbar for a brand-new agent tab, so the

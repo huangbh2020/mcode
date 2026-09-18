@@ -95,7 +95,7 @@ import {
   type GitWorktreeInfo,
   type ProjectGroupsMeta,
   type ProjectGroupMeta,
-  type RightPanelTab,
+  type RightPanelGlobalTab,
   type IdeEditorMode,
   type GitDiffOpenMode,
   type FileViewMode,
@@ -114,6 +114,15 @@ import {
   type BrowserOrientation,
 } from "@contracts/ipc";
 import type { ThemeStyle } from "@contracts/theme";
+
+/** Session-scoped right-panel tabs. Unlike the global rail tabs (files/git/
+ *  orch — one active value for the whole app, persisted), these are opened
+ *  per session via the rail's "+" menu: every session remembers its own open
+ *  set + which of them is active, so they "follow the session" across
+ *  switches. The browser panel joins this layer too — only its VISIBILITY is
+ *  per-session; the tab list / WebContentsViews behind it stay global. NOT
+ *  persisted — resets on restart. */
+export type SessionRightPanelTabId = "turns" | "sidechat" | "browser";
 
 /** One browser tab, shared across the sidebar and overlay containers. `id` is
  *  renderer-local; `browserId` is the main-process view id. All
@@ -1259,10 +1268,21 @@ export interface SessionState {
    *  A few IDE prefs remain global (not per-project) because they express a
    *  user preference, not project state: rightPanelTab, ideEditorMode,
    *  ideFocusNonce. */
-  /** Active tab in the right panel. Persisted so reopening the app restores
-   *  the last-used inspector. Only "files" is implemented in P4; the other
-   *  three round-trip for forward-compat. */
-  rightPanelTab: RightPanelTab;
+  /** Active GLOBAL tab in the right panel (files/git/orch). Persisted
+   *  so reopening the app restores the last-used inspector. The session-scoped
+   *  "turns"/"sidechat"/"browser" tabs are NOT part of this value — they live
+   *  in sessionRightTabsBySession and shadow it while one of them is active. */
+  rightPanelTab: RightPanelGlobalTab;
+  /** Per-session open set + active tab of the session-scoped right-panel tabs
+   *  ("turns" / "sidechat" / "browser"). Outer key = sessionId. `open` is
+   *  insertion-ordered (rail icon order); `active` must be a member of `open`
+   *  (null = none of them is showing — the panel falls back to the global
+   *  rightPanelTab). NOT persisted: follows the session across switches
+   *  within the app lifetime, resets on restart. */
+  sessionRightTabsBySession: Record<
+    string,
+    { open: SessionRightPanelTabId[]; active: SessionRightPanelTabId | null }
+  >;
   /** Per-project terminal quick-commands. Outer key = projectId, value = that
    *  project's saved commands. Persisted as a JSON object (keyed by projectId)
    *  in the settings table; read/written by the terminal toolbar's commands
@@ -1991,8 +2011,17 @@ export interface SessionState {
   clearComposerDraft: (sessionId: string) => void;
 
   /* ── IDE right-panel actions ── */
-  /** Switch the active right-panel tab. Persists to settings. */
-  setRightPanelTab: (tab: RightPanelTab) => void;
+  /** Switch the active GLOBAL right-panel tab. Persists to settings, and
+   *  de-activates the active session's session-scoped tab (if any) so the
+   *  panel actually shows the requested global tab. */
+  setRightPanelTab: (tab: RightPanelGlobalTab) => void;
+  /** Open (or re-activate) a session-scoped right-panel tab ("turns" /
+   *  "sidechat" / "browser") for the given session (default: the active
+   *  one). Adds it to that session's open set and makes it the showing tab. */
+  openSessionRightTab: (tab: SessionRightPanelTabId, sessionId?: string) => void;
+  /** Close a session-scoped right-panel tab: removed from the open set; if it
+   *  was the active one the panel falls back to the global tab. */
+  closeSessionRightTab: (tab: SessionRightPanelTabId, sessionId?: string) => void;
 
   /* ── Agent orchestration actions ── */
   /** Load orchestration settings (trigger mode / defaults). */
@@ -2929,6 +2958,8 @@ function dropSessionBuckets(s: SessionState, id: string) {
   delete composerDraftBySession[id];
   const sideChatSeedBySession = { ...s.sideChatSeedBySession };
   delete sideChatSeedBySession[id];
+  const sessionRightTabsBySession = { ...s.sessionRightTabsBySession };
+  delete sessionRightTabsBySession[id];
   // Orchestration per-session buckets (coordinator toggle, @agent targets,
   // runs list view). Main keeps the runs themselves — the panel re-fetches on
   // demand if the session somehow returns.
@@ -2967,6 +2998,7 @@ function dropSessionBuckets(s: SessionState, id: string) {
     planApprovalDraftBySession,
     composerDraftBySession,
     sideChatSeedBySession,
+    sessionRightTabsBySession,
     orchRunsBySession,
     orchWorkersById,
     pendingApprovals,
@@ -4694,6 +4726,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   // init() hydrates from the settings table. rightPanelTab / ideEditorMode
   // are global user prefs.
   rightPanelTab: "files",
+  sessionRightTabsBySession: {},
   customCommandsByProject: {},
   ideOpenFilesByProject: {},
   ideActiveFileByProject: {},
@@ -5353,8 +5386,11 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       const titleGenEnabledRaw = ds[UI_TITLE_GEN_ENABLED_SETTING_KEY];
       const titleGenModelRaw = ds[UI_TITLE_GEN_MODEL_SETTING_KEY];
 
-      if (tabRaw === "files" || tabRaw === "git" || tabRaw === "turns")
-        set({ rightPanelTab: tabRaw });
+      // Only the global rail tabs restore at boot ("browser"/"orch" would
+      // auto-open their panels; "turns"/"sidechat" are session-scoped tabs
+      // opened per session via the rail's "+" menu — a persisted value from
+      // an older build is ignored the same way).
+      if (tabRaw === "files" || tabRaw === "git") set({ rightPanelTab: tabRaw });
       if (modeRaw === "tabs" || modeRaw === "replace") set({ ideEditorMode: modeRaw });
       if (diffModeRaw === "center" || diffModeRaw === "dialog") set({ gitDiffOpenMode: diffModeRaw });
       set({ commitGenModel: commitModelRaw || null });
@@ -8522,8 +8558,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     // Reveal the browser sidebar + stage the URL. BrowserPanel opens it in a
     // NEW tab: when tabs already exist it creates one for the URL; when none
     // exist (panel first opened) the first-tab effect loads it into the
-    // initial tab.
-    get().setRightPanelTab("browser");
+    // initial tab. The sidebar browser is a session-scoped tab — open it on
+    // the ACTIVE session (rail "+" menu does the same).
+    get().openSessionRightTab("browser");
     set({ rightOpen: true, pendingBrowserUrl: url });
   },
   adoptAgentBrowserTab: (browserId, info) => {
@@ -10157,9 +10194,45 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   /* ─────────────────── IDE right-panel actions ─────────────────── */
 
   setRightPanelTab: (tab) => {
-    set({ rightPanelTab: tab });
+    // Switching to a global tab de-activates the active session's session-
+    // scoped tab (if any) — the panel is global-state from here on. The open
+    // set is preserved: the session keeps its rail icons for later.
+    const sid = get().activeSessionId;
+    set((s) => {
+      const cur = sid ? s.sessionRightTabsBySession[sid] : undefined;
+      if (!sid || !cur || cur.active === null) return { rightPanelTab: tab };
+      return {
+        rightPanelTab: tab,
+        sessionRightTabsBySession: { ...s.sessionRightTabsBySession, [sid]: { ...cur, active: null } },
+      };
+    });
     void api.setting.set({ key: UI_RIGHT_PANEL_TAB_SETTING_KEY, value: tab }).catch((err) => {
       console.error("setting.set(rightPanelTab) failed:", err);
+    });
+  },
+
+  openSessionRightTab: (tab, sessionId) => {
+    const sid = sessionId ?? get().activeSessionId;
+    if (!sid) return;
+    set((s) => {
+      const cur = s.sessionRightTabsBySession[sid] ?? { open: [], active: null as SessionRightPanelTabId | null };
+      const open = cur.open.includes(tab) ? cur.open : [...cur.open, tab];
+      return { sessionRightTabsBySession: { ...s.sessionRightTabsBySession, [sid]: { open, active: tab } } };
+    });
+  },
+
+  closeSessionRightTab: (tab, sessionId) => {
+    const sid = sessionId ?? get().activeSessionId;
+    if (!sid) return;
+    set((s) => {
+      const cur = s.sessionRightTabsBySession[sid];
+      if (!cur || !cur.open.includes(tab)) return {};
+      return {
+        sessionRightTabsBySession: {
+          ...s.sessionRightTabsBySession,
+          [sid]: { open: cur.open.filter((x) => x !== tab), active: cur.active === tab ? null : cur.active },
+        },
+      };
     });
   },
 
@@ -10444,7 +10517,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
   openSideChatPanel: () => {
     set({ rightOpen: true });
-    get().setRightPanelTab("sidechat");
+    // sidechat is a session-scoped tab — open it for the active session
+    // (follows the session across switches).
+    get().openSessionRightTab("sidechat");
     // Refresh the current main session's list if we have one (cheap; keeps
     // titles/status fresh after restarts or background changes).
     const parent = get().activeSessionId;
@@ -10558,7 +10633,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
   openSubagentTranscript: (sessionId, taskId) => {
     set({ pendingSubagentView: { sessionId, taskId }, rightOpen: true });
-    get().setRightPanelTab("sidechat");
+    // sidechat is a session-scoped tab — open it on the OWNING session (not
+    // the global tab), so the transcript shows in that session's context.
+    get().openSessionRightTab("sidechat", sessionId);
   },
 
   clearPendingSubagentView: () => {
