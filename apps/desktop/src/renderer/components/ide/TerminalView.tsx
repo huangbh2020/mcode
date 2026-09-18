@@ -26,7 +26,10 @@ interface Props {
   projectPath: string;
   /** When false the host is hidden (right-tab keep-alive) — skip fit spam. */
   active: boolean;
-  onStatusChange?: (status: TerminalSessionStatus, detail?: string) => void;
+  /** `shell` is the executable the live PTY actually spawned (from the create
+   *  result) — the terminal panel shows it and uses it to spot a tab that is
+   *  still running the shell from before a settings change. */
+  onStatusChange?: (status: TerminalSessionStatus, detail?: string, shell?: string) => void;
   onReady?: (handle: TerminalViewHandle) => void;
   className?: string;
 }
@@ -151,9 +154,9 @@ export function TerminalView({
   // effect below keeps a live instance in sync on change.
   const rightPanelFontSize = useSessionStore((s) => s.rightPanelFontSize);
 
-  const setStatus = (s: TerminalSessionStatus, detail?: string) => {
+  const setStatus = (s: TerminalSessionStatus, detail?: string, shell?: string) => {
     statusRef.current = s;
-    onStatusChange?.(s, detail);
+    onStatusChange?.(s, detail, shell);
   };
 
   // Tracks whether the user has an active text selection in the terminal, so
@@ -468,7 +471,7 @@ export function TerminalView({
           return;
         }
         terminalIdRef.current = result.terminalId;
-        setStatus("running");
+        setStatus("running", undefined, result.shell);
         // Sync size once more after create (layout may have settled).
         try {
           fit.fit();

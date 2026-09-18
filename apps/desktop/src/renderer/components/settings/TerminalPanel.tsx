@@ -45,21 +45,49 @@ export function TerminalPanel() {
 
 /* ───────────────────────── Shell section ───────────────────────── */
 
+/** Post-save (and on-open)状态:主进程解析出来的实际 Shell,或配置解析失败。
+ *  `ok: false` 时 `shell` 是回退后的默认 Shell,`failedSetting` 是用户填坏的值。 */
+type ShellFeedback =
+  | { ok: true; shell: string; failedSetting?: undefined; defaultShell?: undefined }
+  | { ok: false; shell: string; failedSetting: string; defaultShell: string };
+
 function ShellSection() {
   const { t } = useI18n();
   const [shell, setShell] = useState("");
   const [loaded, setLoaded] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [saved, setSaved] = useState(false);
+  const [feedback, setFeedback] = useState<ShellFeedback | null>(null);
+
+  /** Ask main which shell a NEW terminal would actually spawn for the stored
+   *  setting. `terminal.create` falls back to the platform default SILENTLY
+   *  when the configured value doesn't resolve, so without this the panel
+   *  would report success for a typo'd path and the user would only ever see
+   *  "the default shell opened again" (the setting looks dead). */
+  const refreshFeedback = async (): Promise<void> => {
+    const res = await api.terminal.resolveShell();
+    setFeedback(
+      res.source === "setting"
+        ? { ok: true, shell: res.shell }
+        : {
+            ok: false,
+            shell: res.shell,
+            failedSetting: res.failedSetting ?? "",
+            defaultShell: res.defaultShell,
+          },
+    );
+  };
 
   // Load the current setting on mount (panel is freshly mounted per nav
   // switch, so reload its value each time it's shown).
   useEffect(() => {
-    setSaved(false);
+    setFeedback(null);
     void (async () => {
       const { value } = await api.setting.get({ key: TERMINAL_SHELL_SETTING_KEY });
       setShell(value ?? "");
       setLoaded(true);
+      // Surface a pre-existing misconfiguration as soon as the panel opens,
+      // not only after the next save.
+      if (value?.trim()) await refreshFeedback();
     })();
   }, []);
 
@@ -67,7 +95,7 @@ function ShellSection() {
     setSaving(true);
     try {
       await api.setting.set({ key: TERMINAL_SHELL_SETTING_KEY, value: shell.trim() });
-      setSaved(true);
+      await refreshFeedback();
     } finally {
       setSaving(false);
     }
@@ -90,7 +118,7 @@ function ShellSection() {
             value={shell}
             onChange={(e) => {
               setShell((e.target as HTMLInputElement).value);
-              setSaved(false);
+              setFeedback(null);
             }}
             placeholder={t("settings.terminal.shellPlaceholder")}
             spellCheck={false}
@@ -106,8 +134,15 @@ function ShellSection() {
             {saving ? t("settings.saving") : t("common.save")}
           </Button>
         </div>
-        {saved && (
-          <p className="mt-1 text-[0.7857em] text-accent">{t("settings.terminal.shellSaved")}</p>
+        {feedback && (
+          <p className={cn("mt-1 text-[0.7857em]", feedback.ok ? "text-accent" : "text-danger")}>
+            {feedback.ok
+              ? t("settings.terminal.shellSaved", { shell: feedback.shell })
+              : t("settings.terminal.shellNotFound", {
+                  value: feedback.failedSetting,
+                  fallback: feedback.defaultShell,
+                })}
+          </p>
         )}
       </SettingRow>
     </SettingsSection>

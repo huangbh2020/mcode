@@ -3818,6 +3818,22 @@ export const TerminalListSchema = z.object({
 });
 export type TerminalListInput = z.infer<typeof TerminalListSchema>;
 
+/** What a NEW terminal would spawn right now, resolved without spawning one.
+ *  Exists so the settings panel can show the truth about `terminal.shell`:
+ *  a configured path that does not resolve is otherwise swallowed by
+ *  `resolveDefaultShell`'s silent platform-default fallback. */
+export interface TerminalResolveShellResult {
+  /** Executable a new terminal would spawn (absolute path or command name). */
+  shell: string;
+  /** "setting" = the configured value was honored; "default" = the platform
+   *  smart default is in effect (empty setting, or it failed to resolve). */
+  source: "setting" | "default";
+  /** The configured value echoed back when it failed to resolve. */
+  failedSetting?: string;
+  /** Platform-default shell an empty/unresolvable setting falls back to. */
+  defaultShell: string;
+}
+
 /** Structured result for create — either success fields or ok:false + error. */
 export type TerminalCreateResult =
   | {
@@ -4349,6 +4365,10 @@ export interface RpcMap {
   "terminal.kill": (input: TerminalKillInput) => Promise<TerminalOpResult>;
   /** List live terminals, optionally filtered by project. */
   "terminal.list": (input: TerminalListInput) => Promise<{ terminals: TerminalInfo[] }>;
+  /** Resolve the configured shell (terminal.shell setting) WITHOUT spawning a
+   *  terminal — the settings panel uses it to report which shell a new
+   *  terminal will actually use, and to flag a setting that doesn't resolve. */
+  "terminal.resolveShell": () => Promise<TerminalResolveShellResult>;
   // Embedded browser (WebContentsView + DOM element picker)
   /** Create a browser view bound to a project root. Returns an opaque id. */
   "browser.create": (input: BrowserCreateInput) => Promise<BrowserCreateResult>;
@@ -4802,6 +4822,7 @@ export const IPC = {
   TERMINAL_RESIZE: "terminal:resize",
   TERMINAL_KILL: "terminal:kill",
   TERMINAL_LIST: "terminal:list",
+  TERMINAL_RESOLVE_SHELL: "terminal:resolveShell",
   // Embedded browser (WebContentsView + DOM element picker)
   BROWSER_CREATE: "browser:create",
   BROWSER_LOAD_URL: "browser:loadUrl",

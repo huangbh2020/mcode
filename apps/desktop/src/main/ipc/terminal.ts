@@ -21,6 +21,7 @@ import {
 import { isKnownWorkspaceRoot, pathWithin } from "@main/lib/pathGuard.js";
 import { SettingRepo } from "@main/store/repositories.js";
 import { TerminalManager } from "@main/terminal/TerminalManager.js";
+import { resolveDefaultShell, resolveEffectiveShell } from "@main/terminal/shellResolve.js";
 import { log } from "@main/lib/logger.js";
 
 export function registerTerminalHandlers(ipcMain: IpcMain): void {
@@ -98,5 +99,21 @@ export function registerTerminalHandlers(ipcMain: IpcMain): void {
       log.warn(`terminal.list failed: ${err instanceof Error ? err.message : String(err)}`);
       return { terminals: [] };
     }
+  });
+
+  // Settings feedback for `terminal.shell`: "which shell will a new terminal
+  // actually run?" — answered without spawning anything. The settings panel
+  // uses it to say which shell is in effect, and to shout when the configured
+  // path doesn't resolve (create() falls back to the platform default
+  // silently, so a typo would otherwise look like "the setting does nothing").
+  ipcMain.handle(IPC.TERMINAL_RESOLVE_SHELL, () => {
+    const setting = SettingRepo.get(TERMINAL_SHELL_SETTING_KEY);
+    const { shell, source } = resolveEffectiveShell(setting);
+    return {
+      shell: shell.label,
+      source,
+      ...(source === "default" && setting?.trim() ? { failedSetting: setting.trim() } : {}),
+      defaultShell: resolveDefaultShell(null).label,
+    };
   });
 }
