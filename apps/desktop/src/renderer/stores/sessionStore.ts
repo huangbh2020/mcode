@@ -1,5 +1,8 @@
 import { create } from "zustand";
 import type { Project, Session, MessageRecord, SessionTodoItem, SessionPlanDraft, SessionBookmark } from "@contracts/session";
+import type { Automation } from "@contracts/automation";
+import { describeSchedule } from "@renderer/components/automation/automationFormat.js";
+import type { AutomationSaveInput } from "@contracts/ipc";
 import type {
   RuntimeEvent,
   PermissionMode,
@@ -571,7 +574,9 @@ export interface ComposerDraft {
 export interface ChatMessage {
   id: string;
   sessionId: string;
-  role: "user" | "assistant";
+  /** "system" = 本地合成信息卡(定时任务回执等),渲染为中性样式,
+   *  不参与 user/assistant 的回合语义。 */
+  role: "user" | "assistant" | "system";
   blocks: Block[];
   createdAt: number;
   /** Present only on the first assistant message of a turn. Drives the
@@ -937,6 +942,9 @@ export interface SessionState {
   claudeInstalled: boolean | null;
   /** Settings modal visibility (opened from the LeftBar ⚙ footer and the CLI-missing CTA). */
   settingsOpen: boolean;
+  /** 自动化(定时任务)全屏页可见性:左栏 footer 入口打开,与设置页同款
+   *  覆盖层形态(主区内 absolute inset-0,工作区子树保持挂载)。 */
+  automationOpen: boolean;
   /** Initial settings section to land on when the modal opens. Callers that
    *  know which section the user wants (e.g. the composer's "管理模型…"
    *  entry → "custom-models" / "pi-models") pass it to setSettingsOpen; null
@@ -1425,6 +1433,15 @@ export interface SessionState {
    *  action) — the final findSession fallback so worker tabs resolve titles
    *  and config-sync. Keyed by worker session id. */
   orchWorkersById: Record<string, Session>;
+  /** 定时任务列表(scheduled tasks)。首个消费者懒加载;此后每次
+   *  `automation.event` 推送全量重拉(任务表小,整读整写最简单可靠)。 */
+  automations: Automation[];
+  /** true after the first successful `automation.list` (guards re-opens). */
+  automationsLoaded: boolean;
+  /** 右栏「定时任务」tab 当前选中的任务(automation id);null = 列表首个。 */
+  schedSelectedId: string | null;
+  /** 左栏发起者徽标点击后进入的过滤:只看该会话发起的任务。null = 全部。 */
+  schedFilterParent: string | null;
   /** Orchestrator event subscription state; true after `initDeferred`
    *  subscribes (guards against double-subscription). */
   _orchSubscribed: boolean;
@@ -2048,6 +2065,26 @@ export interface SessionState {
   orchHandoff: (briefing: string, title?: string) => Promise<Session | null>;
   /** Fetch a worker session row + open it as a center tab. */
   openOrchWorker: (workerSessionId: string) => Promise<void>;
+  /** 自动化(定时任务)页与任务动作。列表/运行历史都在 automation.event
+   *  推送驱动下整页刷新;openAutomationRun 把运行会话塞进 orchWorkersById
+   *  (「无列表会话」的 findSession 最终兜底,命名沿用历史)后 openTab。 */
+  openSchedPanel: (filterParent?: string | null) => void;
+  setSchedSelected: (automationId: string) => void;
+  setSchedFilterParent: (parentSessionId: string | null) => void;
+  loadAutomations: () => Promise<void>;
+  saveAutomation: (input: AutomationSaveInput) => Promise<Automation | null>;
+  deleteAutomation: (taskId: string) => Promise<void>;
+  setAutomationEnabled: (taskId: string, enabled: boolean) => Promise<void>;
+  runAutomationNow: (taskId: string) => Promise<Session | null>;
+  ingestAutomationEvent: (automationId: string | null) => void;
+  /** composer「定时任务」每会话草稿:配置后点发送即创建任务(而非普通回合)。 */
+  taskScheduleBySession: Record<string, Automation["schedule"] | null>;
+  setTaskSchedule: (sessionId: string, schedule: Automation["schedule"] | null) => void;
+  /** 定时配置弹层开合(/schedule 内置命令可远程拉起;ScheduleChip 驱动)。 */
+  taskScheduleEditorOpenBySession: Record<string, boolean>;
+  setTaskScheduleEditorOpen: (sessionId: string, open: boolean) => void;
+  createScheduledTask: (input: AutomationSaveInput) => Promise<Automation | null>;
+  getSessionById: (sessionId: string) => Session | undefined;
   /** 自动编排开关 per session(开启后发送的想法在本会话内以规划者模式执行)。 */
   setOrchAuto: (sessionId: string, on: boolean) => void;
   /** 选中画布节点/运行:taskId 非空 = 节点详情,taskId=null = 该 run 的
@@ -4639,6 +4676,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   isWindowFocused: true,
   claudeInstalled: null,
   settingsOpen: false,
+  automationOpen: false,
   settingsSection: null,
   modelConfigPromptOpen: false,
   modelGuardPulse: 0,
@@ -4719,6 +4757,12 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   orchSettings: null,
   orchRunsBySession: {},
   orchWorkersById: {},
+  automations: [],
+  automationsLoaded: false,
+  schedSelectedId: null,
+  schedFilterParent: null,
+  taskScheduleBySession: {},
+  taskScheduleEditorOpenBySession: {},
   orchAutoBySession: {},
   orchNodeSelection: null,
   _orchSubscribed: false,
@@ -5207,6 +5251,11 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         set({ _orchSubscribed: true });
         api.on.orchEvent((msg) => {
           get().ingestOrchEvent(msg.event);
+        });
+        // 自动化生命周期推送:任务行变化(运行开始/结束/状态翻转/清理)。
+        // 订阅本身极轻;未打开自动化页时 ingest 只多两次廉价 IPC(表小)。
+        api.on.automationEvent((msg) => {
+          get().ingestAutomationEvent(msg.automationId);
         });
       }
       // Track the language-server lifecycle per (workspace, language) so the
@@ -8465,6 +8514,144 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     // (download / select / remove in 语音输入) — re-check so the composer mic
     // appears/disappears without a restart.
     if (!open) void get().refreshVoiceModelStatus();
+  },
+
+  openSchedPanel: (filterParent) => {
+    if (!get().automationsLoaded) void get().loadAutomations();
+    set({ schedFilterParent: filterParent ?? null, rightOpen: true });
+    get().setRightPanelTab("sched");
+  },
+
+  setSchedSelected: (automationId) => set({ schedSelectedId: automationId }),
+
+  setSchedFilterParent: (parentSessionId) => set({ schedFilterParent: parentSessionId }),
+
+  loadAutomations: async () => {
+    try {
+      const { automations } = await api.automation.list();
+      set({ automations, automationsLoaded: true });
+    } catch (err) {
+      console.error("automation.list failed:", err);
+    }
+  },
+
+  saveAutomation: async (input) => {
+    try {
+      const { automation } = await api.automation.save(input);
+      set((s) => ({ automations: [automation, ...s.automations.filter((a) => a.id !== automation.id)] }));
+      return automation;
+    } catch (err) {
+      console.error("automation.save failed:", err);
+      pushToastLite("error", (err as Error).message);
+      return null;
+    }
+  },
+
+  deleteAutomation: async (taskId) => {
+    const task = get().automations.find((a) => a.id === taskId);
+    try {
+      await api.automation.remove({ id: taskId });
+      set((s) => {
+        // 任务会话已被 main 删除(archive+broadcast+hard delete);本地各缓存
+        // 用既有的删除手术清理,再摘掉任务行。
+        let next: Partial<SessionState> = {};
+        if (task?.taskSessionId) next = applySessionDeletedState(s, task.taskSessionId);
+        return {
+          ...next,
+          automations: s.automations.filter((a) => a.id !== taskId),
+          schedSelectedId: s.schedSelectedId === taskId ? null : s.schedSelectedId,
+        };
+      });
+    } catch (err) {
+      console.error("automation.delete failed:", err);
+      pushToastLite("error", (err as Error).message);
+    }
+  },
+
+  setAutomationEnabled: async (taskId, enabled) => {
+    // 乐观翻开关,失败回滚(开关在列表行内,等 RPC 回来太慢)。
+    const prev = get().automations;
+    set((s) => ({ automations: s.automations.map((a) => (a.id === taskId ? { ...a, enabled } : a)) }));
+    try {
+      const { automation } = await api.automation.setEnabled({ id: taskId, enabled });
+      set((s) => ({ automations: s.automations.map((a) => (a.id === taskId ? automation : a)) }));
+    } catch (err) {
+      set({ automations: prev });
+      pushToastLite("error", (err as Error).message);
+    }
+  },
+
+  runAutomationNow: async (taskId) => {
+    try {
+      const { session } = await api.automation.runNow({ id: taskId });
+      void get().loadAutomations();
+      return session;
+    } catch (err) {
+      console.error("automation.runNow failed:", err);
+      pushToastLite("error", (err as Error).message);
+      return null;
+    }
+  },
+
+  getSessionById: (sessionId) =>
+    findSession(
+      get().sessionsByProject,
+      get().archivedSessionsByProject,
+      get().pinnedSessions,
+      get().streamSessions,
+      sessionId,
+      get().orchWorkersById,
+    ),
+
+  ingestAutomationEvent: (automationId) => {
+    void get().loadAutomations();
+  },
+
+  setTaskSchedule: (sessionId, schedule) => {
+    set((s) => ({ taskScheduleBySession: { ...s.taskScheduleBySession, [sessionId]: schedule } }));
+  },
+
+  setTaskScheduleEditorOpen: (sessionId, open) => {
+    set((s) => ({
+      taskScheduleEditorOpenBySession: { ...s.taskScheduleEditorOpenBySession, [sessionId]: open },
+    }));
+  },
+
+  createScheduledTask: async (input) => {
+    try {
+      const { automation } = await api.automation.save(input);
+      set((s) => ({ automations: [automation, ...s.automations.filter((a) => a.id !== automation.id)] }));
+      // 回执卡片落在发起会话的消息流里(durable:system 消息 + 本地 append)。
+      const parent = input.parentSessionId;
+      if (parent) {
+        const receiptText = translate(get().locale, "automation.receiptCreated", {
+          title: automation.title,
+          desc: describeSchedule(automation.schedule),
+        });
+        const receipt: ChatMessage = {
+          id: `s_${Date.now()}`,
+          sessionId: parent,
+          role: "system",
+          blocks: [{ kind: "text", text: receiptText }],
+          createdAt: Date.now(),
+        };
+        set((s) => ({
+          messagesBySession: {
+            ...s.messagesBySession,
+            [parent]: [...(s.messagesBySession[parent] ?? []), receipt],
+          },
+        }));
+        void api.session.upsertMessages({ sessionId: parent, messages: toRecords(parent, [receipt]) });
+      }
+      // 打开右栏「定时任务」并选中新任务。
+      set({ schedSelectedId: automation.id, schedFilterParent: null, rightOpen: true });
+      get().setRightPanelTab("sched");
+      return automation;
+    } catch (err) {
+      console.error("automation.save failed:", err);
+      pushToastLite("error", (err as Error).message);
+      return null;
+    }
   },
 
   setModelConfigPromptOpen: (open) => set({ modelConfigPromptOpen: open }),

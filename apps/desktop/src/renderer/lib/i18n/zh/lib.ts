@@ -59,6 +59,7 @@ export const zh = {
   "lib.slash.init": "生成项目说明文件 AGENTS.md",
   "lib.slash.browser": "用应用内浏览器打开网页(导航/快照/点击/截图)",
   "lib.slash.sidechat": "打开子会话(不影响当前会话)",
+  "lib.slash.schedule": "创建定时任务：弹出触发规则配置，本次发送将创建定时任务会话",
 
   /* ── lib/imageResize.ts (send-time errors surfaced as toasts) ── */
   "lib.image.invalidData": "{name}: 不是有效的图片数据",

@@ -18,6 +18,8 @@ import {
   WorktreePolicySchema,
   OrchSettingsSchema,
 } from "./orchestration.js";
+import { AutomationScheduleSchema } from "./automation.js";
+import type { Automation, AutomationSchedule } from "./automation.js";
 import type {
   OrchestrationRun,
   OrchSettings,
@@ -625,6 +627,7 @@ export const RightPanelTabSchema = z.enum([
   "turns",
   "sidechat",
   "orch",
+  "sched",
 ]);
 export type RightPanelTab = z.infer<typeof RightPanelTabSchema>;
 /** The globally-switchable right-panel tabs (fixed rail icons whose active
@@ -864,10 +867,16 @@ export const StartSessionSchema = z.object({
   /** Id of a custom-model config to bind to this session (omit/null = built-in). */
   customModelId: z.string().nullable().optional(),
   /** Session role: "chat" (default, normal left-bar session), "side"
-   *  (side-chat Q&A session owned by the right-panel ask tab), or
+   *  (side-chat Q&A session owned by the right-panel ask tab),
    *  "orch-worker" (orchestration worker sub-session; always creates a fresh
-   *  row, invisible to every list — managed by the orchestrator). */
-  kind: z.enum(["chat", "side", "orch-worker"]).default("chat"),
+   *  row, invisible to every list — managed by the orchestrator), or
+   *  "automation" (one run of a scheduled automation task; always a fresh
+   *  row, invisible to every list — created by the automation scheduler). */
+  kind: z.enum(["chat", "side", "orch-worker", "automation"]).default("chat"),
+  /** For kind="automation": the owning automation task, denormalized onto
+   *  the session row (automation_id column) so the automation page can list
+   *  a task's runs with one indexed query. Ignored for other kinds. */
+  automationId: z.string().optional(),
   /** For kind="side"/"orch-worker": the main session this subordinate thread
    *  belongs to. Ignored for chat. */
   parentSessionId: z.string().optional(),
@@ -3677,6 +3686,60 @@ export interface OrchestratorEventMessage {
   event: OrchestratorEvent;
 }
 
+/* ── Automations (scheduled tasks) ──
+ * A task = prompt + execution config + a schedule rule. The main-process
+ * scheduler fires it: create a kind="automation" session, send the prompt,
+ * track status via runtime events, and prune old runs beyond keepRuns. */
+
+export const AutomationSaveSchema = z.object({
+  /** Absent = create a new task; present = update in place. */
+  id: z.string().optional(),
+  projectId: z.string(),
+  /** The session whose composer created this task (receipt lands there).
+   *  Stored on the task; drives the left bar's initiator badge. Create-only
+   *  (updates ignore it). */
+  parentSessionId: z.string().optional(),
+  title: z.string().min(1).max(120),
+  prompt: z.string().min(1).max(100_000),
+  /** "/"-menu skill names (see Automation.skillNames). */
+  skillNames: z.array(z.string().min(1)).max(50).default([]),
+  /** Absolute file paths attached as @path references (see Automation.filePaths). */
+  filePaths: z.array(z.string().min(1)).max(50).default([]),
+  providerId: z.string().optional(),
+  model: z.string().optional(),
+  customModelId: z.string().nullable().optional(),
+  effort: z.string().default("default"),
+  permissionMode: z.string().default("acceptEdits"),
+  schedule: AutomationScheduleSchema,
+  enabled: z.boolean().default(true),
+  keepRuns: z.number().int().min(1).max(200).default(20),
+});
+export type AutomationSaveInput = z.infer<typeof AutomationSaveSchema>;
+
+export const AutomationSetEnabledSchema = z.object({ id: z.string(), enabled: z.boolean() });
+export type AutomationSetEnabledInput = z.infer<typeof AutomationSetEnabledSchema>;
+
+/** Model-judged scheduled-task intent: the composer's send flow consults the
+ *  model when a send looks schedule-related; the structured verdict (is this
+ *  a task + the parsed trigger rule) feeds the approval dialog. Null =
+ *  model unavailable / unparsable — the UI falls back to manual config. */
+export const AutomationParseIntentSchema = z.object({ text: z.string().min(1).max(20_000) });
+export type AutomationParseIntentInput = z.infer<typeof AutomationParseIntentSchema>;
+export interface ScheduleIntentResult {
+  isTask: boolean;
+  reason: string;
+  schedule: AutomationSchedule;
+}
+
+/** Push payload for automation lifecycle updates (automation:event). Fired
+ *  whenever a task's row changes (run started/finished, status flip, prune)
+ *  so open automation pages refresh without polling. */
+export interface AutomationEventMessage {
+  channel: "automation:event";
+  /** The task whose state changed (null = list-level churn, e.g. create). */
+  automationId: string | null;
+}
+
 export type MainToRendererMessage =
   | ClaudeEventMessage
   | SessionTitleUpdatedMessage
@@ -3694,7 +3757,8 @@ export type MainToRendererMessage =
   | VoiceResultMessage
   | VoiceDownloadProgressMessage
   | RuntimeEventMessage
-  | OrchestratorEventMessage;
+  | OrchestratorEventMessage
+  | AutomationEventMessage;
 
 /* ── Integrated terminal (xterm.js + node-pty) ──
  *  PTY processes live in main. Renderer only sees opaque terminalIds and
@@ -4662,6 +4726,19 @@ export interface RpcMap {
   "orch.handoff": (input: OrchHandoffInput) => Promise<{ session: Session }>;
   /** Fetch a worker sub-session row (for opening its transcript in a tab). */
   "orch.workerSession": (input: OrchWorkerSessionInput) => Promise<{ session: Session | null }>;
+  // Automations (scheduled tasks)
+  "automation.list": () => Promise<{ automations: Automation[] }>;
+  "automation.save": (input: AutomationSaveInput) => Promise<{ automation: Automation }>;
+  /** Hard-delete a task AND all of its run sessions (messages cascade). */
+  "automation.delete": (input: { id: string }) => Promise<void>;
+  "automation.setEnabled": (input: AutomationSetEnabledInput) => Promise<{ automation: Automation }>;
+  /** Fire a task immediately without touching its schedule. Returns the new
+   *  run's session, or null when the task is already running (overlap guard). */
+  "automation.runNow": (input: { id: string }) => Promise<{ session: Session | null }>;
+  "automation.parseIntent": (
+    input: AutomationParseIntentInput,
+  ) => Promise<{ intent: ScheduleIntentResult | null }>;
+
   /** List orchestration templates (builtin pipeline/competition + user). */
 }
 
@@ -4940,8 +5017,17 @@ export const IPC = {
   ORCH_MERGE_TASK: "orch:mergeTask",
   ORCH_HANDOFF: "orch:handoff",
   ORCH_WORKER_SESSION: "orch:workerSession",
+  // Automations (scheduled tasks) — invoke/handle (RPC).
+  AUTOMATION_LIST: "automation:list",
+  AUTOMATION_SAVE: "automation:save",
+  AUTOMATION_DELETE: "automation:delete",
+  AUTOMATION_SET_ENABLED: "automation:setEnabled",
+  AUTOMATION_RUN_NOW: "automation:runNow",
+  AUTOMATION_PARSE_INTENT: "automation:parseIntent",
   // Orchestration push events (main → renderer).
   ORCH_EVENT: "orchestrator:event",
+  // Automation push events (main → renderer): a task row changed.
+  AUTOMATION_EVENT: "automation:event",
   // send/on (push events)
   CLAUDE_EVENT: "claude:event",
   SESSION_TITLE_UPDATED: "session:titleUpdated",

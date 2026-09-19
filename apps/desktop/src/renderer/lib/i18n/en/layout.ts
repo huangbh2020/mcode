@@ -18,6 +18,7 @@ export const en = {
   "layout.renameWorktreeDesc": "Set a display name for this worktree directory. Affects the left bar only — the directory on disk is untouched.",
   "layout.worktreeNamePlaceholder": "Worktree name",
   "layout.settings": "Settings",
+  "layout.automation": "Automations",
   "layout.nav.chat": "Chat",
   "layout.nav.files": "Files",
   "layout.nav.git": "Git",

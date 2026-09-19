@@ -577,6 +577,23 @@ const api = {
       ipcRenderer.invoke(IPC.ORCH_WORKER_SESSION, input)) as RpcMap["orch.workerSession"],
   },
 
+  /** Automations (scheduled tasks): CRUD + manual run + paged run history.
+   *  Lifecycle changes arrive over `on.automationEvent`; the page re-lists
+   *  on each push (the task table is small — no diff protocol). */
+  automation: {
+    list: (() => ipcRenderer.invoke(IPC.AUTOMATION_LIST)) as RpcMap["automation.list"],
+    save: ((input) =>
+      ipcRenderer.invoke(IPC.AUTOMATION_SAVE, input)) as RpcMap["automation.save"],
+    remove: ((input) =>
+      ipcRenderer.invoke(IPC.AUTOMATION_DELETE, input)) as RpcMap["automation.delete"],
+    setEnabled: ((input) =>
+      ipcRenderer.invoke(IPC.AUTOMATION_SET_ENABLED, input)) as RpcMap["automation.setEnabled"],
+    runNow: ((input) =>
+      ipcRenderer.invoke(IPC.AUTOMATION_RUN_NOW, input)) as RpcMap["automation.runNow"],
+    parseIntent: ((input) =>
+      ipcRenderer.invoke(IPC.AUTOMATION_PARSE_INTENT, input)) as RpcMap["automation.parseIntent"],
+  },
+
   /** Agent runtimes (settings panel): the download-on-demand claude/codex/pi
    *  payloads. install() resolves when the whole pipeline finished; live
    *  progress arrives over `on.runtimesEvent`. */
@@ -658,6 +675,17 @@ const api = {
       ipcRenderer.on(IPC.ORCH_EVENT, listener);
       return () => {
         ipcRenderer.off(IPC.ORCH_EVENT, listener);
+      };
+    },
+    /** Automation lifecycle pushes: a task row changed (run started/finished,
+     *  status flip, prune). `automationId` is null for list-level churn. */
+    automationEvent(handler: (msg: Extract<MainToRendererMessage, { channel: "automation:event" }>) => void): () => void {
+      const listener = (_e: unknown, msg: MainToRendererMessage) => {
+        if (msg.channel === IPC.AUTOMATION_EVENT) handler(msg);
+      };
+      ipcRenderer.on(IPC.AUTOMATION_EVENT, listener);
+      return () => {
+        ipcRenderer.off(IPC.AUTOMATION_EVENT, listener);
       };
     },
     /** Subscribe to session:titleUpdated push channel. Fired when the main

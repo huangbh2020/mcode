@@ -125,6 +125,7 @@ export function SidebarQuickActions({
           the button style mirrors 搜索/新建会话 so all three read as a matched
           group of workspace entry points. */}
       {showConnectPhone && <MobileConnectButton />}
-    </div>
+
+</div>
   );
 }

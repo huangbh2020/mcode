@@ -29,6 +29,10 @@ import { useToastStore } from "@renderer/stores/toastStore.js";
 import { api } from "@renderer/lib/api.js";
 import { findNormalizedTextRange, highlightRange } from "@renderer/lib/textFind.js";
 import { useI18n } from "@renderer/lib/i18n/index.js";
+import { looksLikeScheduledTaskIntent } from "@renderer/components/automation/automationFormat.js";
+import { ScheduleEditor } from "@renderer/components/automation/ScheduleEditor.js";
+import { Dialog, Button } from "@renderer/components/ui/index.js";
+import type { AutomationSchedule } from "@contracts/automation";
 import { useNow } from "@renderer/hooks/useNow.js";
 import { useComposerRowFit } from "@renderer/hooks/useComposerRowFit.js";
 import type { SubagentSnapshot } from "@contracts/runtime";
@@ -1140,6 +1144,7 @@ export const ChatPane = memo(
     sessionId,
     isActive = true,
     chipsMode = "auto",
+    hideComposer = false,
   }: {
     sessionId: string | null;
     /** Whether this pane is the foreground tab. Multi-mount layouts pass false
@@ -1149,6 +1154,11 @@ export const ChatPane = memo(
     isActive?: boolean;
     /** Chip-row display mode — see {@link ComposerChipsMode}. */
     chipsMode?: ComposerChipsMode;
+    /** View-only host (right-panel scheduled-task pane): hides the composer
+     *  card and its top chips row while keeping the in-flow approval /
+     *  question / plan prompts — those are decisions, not free input, and an
+     *  unattended task may legitimately wait on them. */
+    hideComposer?: boolean;
   }) {
     // `sessionId` is the prop — store lookups go through it directly, not
     // through `activeSessionId`. The store still tracks `activeSessionId`
@@ -1162,13 +1172,19 @@ export const ChatPane = memo(
       return <EmptyCenterPane />;
     }
     return (
-      <ChatPaneForSession sessionId={sessionId} isActive={isActive} chipsMode={chipsMode} />
+      <ChatPaneForSession
+        sessionId={sessionId}
+        isActive={isActive}
+        chipsMode={chipsMode}
+        hideComposer={hideComposer}
+      />
     );
   },
   (prev, next) =>
     prev.sessionId === next.sessionId &&
     prev.isActive === next.isActive &&
-    prev.chipsMode === next.chipsMode,
+    prev.chipsMode === next.chipsMode &&
+    prev.hideComposer === next.hideComposer,
 );
 
 /** Empty-state shown when there's no active session to render (no tabs
@@ -1275,10 +1291,12 @@ function ChatPaneForSession({
   sessionId,
   isActive,
   chipsMode = "auto",
+  hideComposer = false,
 }: {
   sessionId: string;
   isActive: boolean;
   chipsMode?: ComposerChipsMode;
+  hideComposer?: boolean;
 }) {
   const { t, locale } = useI18n();
   // Compactness tier of the composer's mini pill (see useComposerRowFit,
@@ -2405,6 +2423,15 @@ function ChatPaneForSession({
         void sendPrompt("/compact", undefined, undefined, undefined, undefined, undefined, sessionId);
         return;
       }
+      if (cmd.kind === "schedule") {
+        // 丢弃 /schedule 触发 token,拉起定时配置弹层 —— 用户在弹层里配好
+        // 规则后点发送,handleSend 的拦截路径创建任务会话。
+        setPickerKind(null);
+        clearTriggerToken();
+        triggerStartRef.current = null;
+        useSessionStore.getState().setTaskScheduleEditorOpen(sessionId, true);
+        return;
+      }
       if (cmd.kind === "sidechat") {
         // Drop the `/sidechat` trigger token and navigate away — the editor
         // stays empty (nothing was meant to be sent).
@@ -2755,6 +2782,104 @@ function ChatPaneForSession({
     return images;
   }, [pendingImages, t]);
 
+  // ── 定时任务意图审批(v2):chip 无配置时命中启发式 → 弹审批 ──
+  const [schedApproval, setSchedApproval] = useState<
+    { prompt: string; skillNames: string[]; text: string } | null
+  >(null);
+  const [intentSchedule, setIntentSchedule] = useState<AutomationSchedule>({
+    type: "daily",
+    time: "09:00",
+  });
+  // 模型判定:弹出审批时把原文发给模型(main 一次性 query),拿回
+  // {isTask, reason, schedule} 后预填规则 —— 是否创建始终由用户批准。
+  const [schedIntent, setSchedIntent] = useState<{
+    loading: boolean;
+    result: { isTask: boolean; reason: string; schedule: AutomationSchedule } | null;
+  }>({ loading: false, result: null });
+
+  useEffect(() => {
+    if (!schedApproval) {
+      setSchedIntent({ loading: false, result: null });
+      return;
+    }
+    let cancelled = false;
+    setSchedIntent({ loading: true, result: null });
+    void api.automation
+      .parseIntent({ text: schedApproval.text.slice(0, 8000) })
+      .then((r) => {
+        if (cancelled) return;
+        setSchedIntent({ loading: false, result: r.intent });
+        if (r.intent?.isTask) setIntentSchedule(r.intent.schedule);
+      })
+      .catch(() => {
+        if (!cancelled) setSchedIntent({ loading: false, result: null });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [schedApproval]);
+
+  const clearComposer = () => {
+    editorRef.current?.clear();
+    setValue("");
+    setTags([]);
+    setPendingImages([]);
+    setOpenTagId(null);
+    setAnchorRect(null);
+  };
+
+  const confirmSchedIntent = async () => {
+    if (!schedApproval) return;
+    const st = useSessionStore.getState();
+    const parent = st.getSessionById(sessionId);
+    setSchedApproval(null);
+    if (!parent) return;
+    const title = (schedApproval.text.split("\n")[0] || t("automation.formUntitled"))
+      .replace(/\s+/g, " ")
+      .slice(0, 30);
+    await st.createScheduledTask({
+      projectId: parent.projectId,
+      parentSessionId: sessionId,
+      title,
+      prompt: schedApproval.prompt,
+      skillNames: schedApproval.skillNames,
+      filePaths: tags
+        .filter((tg) => tg.kind === "file" && tg.filePath)
+        .map((tg) => tg.filePath as string),
+      providerId: st.providerId,
+      model: st.model,
+      customModelId: st.customModelId,
+      effort: st.effort,
+      permissionMode: st.permissionMode,
+      schedule: intentSchedule,
+      enabled: true,
+      keepRuns: 20,
+    });
+    clearComposer();
+  };
+
+  /** 审批里选「普通发送」:按原流程继续(images → attachments → sendPrompt)。 */
+  const dismissSchedAndSend = async () => {
+    if (!schedApproval) return;
+    const staged = schedApproval;
+    setSchedApproval(null);
+    const images = await preparePendingImages();
+    if (images === null) return;
+    const attachments = composeSendAttachments(tags);
+    const sent = await sendPrompt(
+      staged.prompt,
+      attachments.length > 0 ? attachments : undefined,
+      attachments.length > 0 ? staged.text : undefined,
+      staged.skillNames.length > 0 ? staged.skillNames : undefined,
+      images,
+      undefined,
+      sessionId,
+    );
+    if (!sent) return;
+    clearComposer();
+    setSendLaunching(true);
+  };
+
   const handleSend = async () => {
     // Serialize the editor: text has skill pills inlined as `/name` at their
     // positions; skillNames records which pills were embedded.
@@ -2780,6 +2905,52 @@ function ChatPaneForSession({
     // send yields an empty prompt (the images ARE the prompt).
     const prompt = composePromptWithTags(text, tags);
     if (!prompt && pendingImages.length === 0) return;
+    // ── 定时任务拦截(v2「任务即会话」)──
+    // chip 里配置了触发规则的发送 → 创建任务会话(当前会话留回执消息),
+    // 不进本会话的普通回合。文件 tag → @path 引用,技能 → skills allowlist。
+    const pendingSched = useSessionStore.getState().taskScheduleBySession[sessionId];
+    if (pendingSched) {
+      const st = useSessionStore.getState();
+      const parent = st.getSessionById(sessionId);
+      if (!parent) return;
+      const title = (text.split("\n")[0] || t("automation.formUntitled"))
+        .replace(/\s+/g, " ")
+        .slice(0, 30);
+      const automation = await st.createScheduledTask({
+        projectId: parent.projectId,
+        parentSessionId: sessionId,
+        title,
+        prompt,
+        skillNames,
+        filePaths: tags
+          .filter((tg) => tg.kind === "file" && tg.filePath)
+          .map((tg) => tg.filePath as string),
+        providerId: st.providerId,
+        model: st.model,
+        customModelId: st.customModelId,
+        effort: st.effort,
+        permissionMode: st.permissionMode,
+        schedule: pendingSched,
+        enabled: true,
+        keepRuns: 20,
+      });
+      if (automation) {
+        editorRef.current?.clear();
+        setValue("");
+        setTags([]);
+        setPendingImages([]);
+        setOpenTagId(null);
+        setAnchorRect(null);
+        st.setTaskSchedule(sessionId, null);
+      }
+      return;
+    }
+    // ── 定时意图识别 + 审批(无 chip 配置时)──
+    // 内容命中调度词表 → 弹审批:确认则进配置-创建流程,取消则普通发送。
+    if (looksLikeScheduledTaskIntent(text)) {
+      setSchedApproval({ prompt, skillNames, text });
+      return;
+    }
     // Normalize the staged images into the send allowlist (downscale / JPEG
     // re-encode when oversized). A failed image aborts the send and keeps the
     // composer intact — the toast explains which one and why.
@@ -3804,7 +3975,7 @@ function ChatPaneForSession({
               working-environment picker. Both are quiet text triggers
               OUTSIDE the composer card; each hides itself once the
               conversation starts. */}
-          <div className="flex items-center gap-1 px-1 pb-1">
+          <div className={cn("flex items-center gap-1 px-1 pb-1", hideComposer && "hidden")}>
             <SessionDirectoryChip sessionId={sessionId} />
             <WorktreeModeChip sessionId={sessionId} />
             <OrchComposerChips sessionId={sessionId} />
@@ -3825,6 +3996,9 @@ function ChatPaneForSession({
               // in the flow. `hidden` (display:none) keeps the component mounted
               // so state (draft, tags, Tiptap history) survives the hide/show.
               hasPendingPrompt && "hidden",
+              // View-only hosts (right-panel scheduled-task pane) hide the
+              // whole input box; same mounted-but-display-none semantics.
+              hideComposer && "hidden",
             )}
             onDragOver={(e) => {
               // Only react to OUR file drag (custom MIME). External drags
@@ -4252,6 +4426,45 @@ function ChatPaneForSession({
             onPickCommand={handleBuiltInPick}
             onClose={() => setPickerKind(null)}
           />
+          {/* 定时任务意图审批:识别命中 → 配规则后创建,或普通发送。 */}
+          <Dialog.Root open={schedApproval !== null} onOpenChange={(o) => { if (!o) setSchedApproval(null); }}>
+            <Dialog.Portal>
+              <Dialog.Backdrop />
+              <Dialog.Popup className="w-[400px] max-w-[92vw] p-4">
+                <Dialog.Title>{t("automation.intentTitle")}</Dialog.Title>
+                {schedIntent.loading ? (
+                  <Dialog.Description>{t("automation.intentAnalyzing")}</Dialog.Description>
+                ) : schedIntent.result ? (
+                  <Dialog.Description>
+                    {schedIntent.result.isTask
+                      ? `${t("automation.intentModelSaid")}${schedIntent.result.reason}`
+                      : t("automation.intentNotTask")}
+                  </Dialog.Description>
+                ) : (
+                  <Dialog.Description>{t("automation.intentBody")}</Dialog.Description>
+                )}
+                {!schedIntent.loading && (
+                  <div className="mt-3 rounded-xl border border-edge bg-surface p-3">
+                    <ScheduleEditor schedule={intentSchedule} onChange={setIntentSchedule} />
+                  </div>
+                )}
+                <div className="mt-4 flex justify-end gap-2">
+                  <Button variant="ghost" size="sm" onClick={() => void dismissSchedAndSend()}>
+                    {t("automation.intentNormal")}
+                  </Button>
+                  <Button
+                    variant="primary"
+                    size="sm"
+                    disabled={schedIntent.loading}
+                    onClick={() => void confirmSchedIntent()}
+                  >
+                    {t("automation.intentConfirm")}
+                  </Button>
+                </div>
+                <Dialog.Close />
+              </Dialog.Popup>
+            </Dialog.Portal>
+          </Dialog.Root>
           {/* "Add context" picker opened from the bottom-left + button.
               Multi-select; same project file source as @-mention. */}
           <FileMentionPicker

@@ -46,6 +46,7 @@ import {
   IconPin,
   IconPinnedFilled,
   IconPlus,
+  IconClock,
   IconSettings,
   IconSun,
   IconTrash,
@@ -53,6 +54,7 @@ import {
 } from "@renderer/lib/icons.js";
 import { cn } from "@renderer/lib/cn.js";
 import { getProviderIcon } from "@renderer/lib/providerIcon.js";
+import { describeSchedule } from "@renderer/components/automation/automationFormat.js";
 import { projectDisplayColor } from "@renderer/lib/projectAvatar.js";
 import { isMac } from "@renderer/lib/platform.js";
 import { formatRelativeTime, formatFullTime } from "@renderer/lib/time.js";
@@ -505,12 +507,16 @@ function StreamSidebarBase() {
       localBranchOf, openTab, startSession, setSessionPinned, archiveSession, deleteSession, registerNode],
   );
 
+  // Scheduled-task sessions (kind="automation") render only in the right
+  // panel's「定时任务」tab — the stream never lists them (the initiator
+  // badge on the parent row is the stream's only task surface).
+  const isChat = (s: { kind: string }): boolean => s.kind !== "automation";
   const liveSessions = useMemo(
-    () => streamSessions.filter(scopeMatches),
+    () => streamSessions.filter((s) => isChat(s) && scopeMatches(s)),
     [streamSessions, scopeMatches],
   );
   const pinnedList = useMemo(
-    () => pinnedSessions.filter(scopeMatches),
+    () => pinnedSessions.filter((s) => isChat(s) && scopeMatches(s)),
     [pinnedSessions, scopeMatches],
   );
 
@@ -992,6 +998,16 @@ function StreamCard({
   // next to the title instead of orphaning an empty row.
   const hasMetaLine = session.worktreePath != null || localBranch != null;
 
+  // 定时任务(v2):任务会话时钟 + 发起者徽标。automations 用渲染期快照 ——
+  // automation.event 会驱动列表重渲染,徽标计数随之更新(行本身已有订阅链)。
+  const automations = useSessionStore.getState().automations;
+  const openSchedPanel = useSessionStore.getState().openSchedPanel;
+  const isTask = session.kind === "automation";
+  const ownTask = isTask ? automations.find((a) => a.taskSessionId === session.id) : undefined;
+  const parentTaskCount = !isTask
+    ? automations.filter((a) => a.parentSessionId === session.id).length
+    : 0;
+
   const statusLabel = (() => {
     if (status.kind === "working") {
       return (
@@ -1134,7 +1150,24 @@ function StreamCard({
           orphan at the right edge of an empty L3 — moves up here, trailing
           the title. */}
       <div className="flex min-w-0 items-center gap-1.5 [font-size:var(--right-panel-font-size)]">
+        {session.kind === "automation" && (
+          <IconClock size={12} className="shrink-0 text-accent" aria-label={t("layout.automation")} />
+        )}
         <span className="min-w-0 flex-1 truncate">{session.title}</span>
+        {parentTaskCount > 0 && (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              openSchedPanel(session.id);
+            }}
+            className="flex shrink-0 items-center gap-0.5 rounded border border-accent/55 px-1 text-[9.5px] font-bold leading-[1.5] text-accent hover:bg-accent/10"
+            title={t("automation.parentBadge", { n: parentTaskCount })}
+          >
+            <IconClock size={9} />
+            {parentTaskCount}
+          </button>
+        )}
         {!hasMetaLine && (
           <span className="flex shrink-0 items-center" title={providerLabel || undefined}>
             <ProviderIcon size={12} className={cn("shrink-0", providerColor)} />

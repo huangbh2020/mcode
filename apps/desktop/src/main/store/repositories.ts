@@ -15,6 +15,8 @@ import type {
   SessionPlanDraft,
   SessionBookmark,
 } from "@contracts/session";
+import type { Automation, AutomationSchedule } from "@contracts/automation";
+import { RUN_HEADER_PREFIX } from "@contracts/automation";
 import type { ContextSnapshot, SubagentSnapshot, TurnFileEntry, TurnUsageRecord } from "@contracts/runtime";
 import { normPathKey } from "@main/lib/pathNorm.js";
 import { getDb, persist } from "./db.js";
@@ -242,6 +244,7 @@ interface SessionRow {
   env_mode: string;
   worktree_path: string | null;
   wt_style: string | null;
+  automation_id: string | null;
   created_at: number;
   updated_at: number;
 }
@@ -252,8 +255,18 @@ function rowToSession(r: SessionRow): Session {
     projectId: r.project_id,
     providerId: r.provider_id ?? "claude-sdk",
     claudeSessionId: r.claude_session_id,
-    kind: r.kind === "side" ? "side" : r.kind === "orch-worker" ? "orch-worker" : "chat",
+    // kind is a TEXT column without a CHECK constraint; any value outside
+    // the known set normalizes to "chat" so legacy/garbage rows can never
+    // leak into the (chat-only) lists via a novel kind string.
+    kind: r.kind === "side"
+      ? "side"
+      : r.kind === "orch-worker"
+        ? "orch-worker"
+        : r.kind === "automation"
+          ? "automation"
+          : "chat",
     parentSessionId: r.parent_session_id ?? null,
+    automationId: r.automation_id ?? null,
     title: r.title,
     status: r.status as Session["status"],
     model: r.model,
@@ -285,8 +298,8 @@ export const SessionRepo = {
   create(s: Session): void {
     run(
       `INSERT INTO sessions
-       (id, project_id, provider_id, claude_session_id, kind, parent_session_id, title, status, model, effort, permission_mode, custom_model_id, archived, pinned_at, context_snapshot, todos, subagents, plan_draft, turn_files, usage_history, bookmarks, subagent_transcripts, orch_meta, env_mode, worktree_path, wt_style, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (id, project_id, provider_id, claude_session_id, kind, parent_session_id, title, status, model, effort, permission_mode, custom_model_id, archived, pinned_at, context_snapshot, todos, subagents, plan_draft, turn_files, usage_history, bookmarks, subagent_transcripts, orch_meta, env_mode, worktree_path, wt_style, automation_id, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       v(s.id),
       v(s.projectId),
       v(s.providerId),
@@ -313,6 +326,7 @@ export const SessionRepo = {
       v(s.envMode ?? "local"),
       v(s.worktreePath ?? null),
       v(s.wtStyle ?? null),
+      v(s.automationId ?? null),
       v(s.createdAt),
       v(s.updatedAt),
     );
@@ -341,7 +355,7 @@ export const SessionRepo = {
   ): Session[] {
     // Side-chat sessions are managed by the right-panel ask tab keyed by
     // parent session — never by the left-bar project list (any mode).
-    const where = ["project_id = ?", "kind = 'chat'"];
+    const where = ["project_id = ?", "kind IN ('chat', 'automation')"];
     const params: BindValue[] = [v(projectId)];
     if (opts?.archived !== undefined) {
       where.push("archived = ?");
@@ -383,7 +397,7 @@ export const SessionRepo = {
     archived?: boolean,
     worktree?: "exclude" | "only",
   ): number {
-    const where = ["project_id = ?", "kind = 'chat'"];
+    const where = ["project_id = ?", "kind IN ('chat', 'automation')"];
     const params: BindValue[] = [v(projectId)];
     if (archived !== undefined) {
       where.push("archived = ?");
@@ -409,7 +423,7 @@ export const SessionRepo = {
    *  tree (the renderer resolves each row's owning project name locally). */
   listPinned(): Session[] {
     const rows = getDb()
-      .prepare("SELECT * FROM sessions WHERE archived = 0 AND pinned_at IS NOT NULL AND kind = 'chat' ORDER BY pinned_at DESC")
+      .prepare("SELECT * FROM sessions WHERE archived = 0 AND pinned_at IS NOT NULL AND kind IN ('chat', 'automation') ORDER BY pinned_at DESC")
       .all() as unknown as SessionRow[];
     return rows.map(rowToSession);
   },
@@ -434,7 +448,7 @@ export const SessionRepo = {
     worktreeKey?: string;
   }): Session[] {
     if (opts?.projectIds && opts.projectIds.length === 0) return [];
-    const where = ["archived = 0", "pinned_at IS NULL", "kind = 'chat'"];
+    const where = ["archived = 0", "pinned_at IS NULL", "kind IN ('chat', 'automation')"];
     const params: BindValue[] = [];
     if (opts?.projectIds) {
       where.push(`project_id IN (${opts.projectIds.map(() => "?").join(", ")})`);
@@ -470,7 +484,7 @@ export const SessionRepo = {
    *  "show more" counts its own set. */
   countAll(opts?: { projectIds?: string[]; worktreeKey?: string }): number {
     if (opts?.projectIds && opts.projectIds.length === 0) return 0;
-    const where = ["archived = 0", "pinned_at IS NULL", "kind = 'chat'"];
+    const where = ["archived = 0", "pinned_at IS NULL", "kind IN ('chat', 'automation')"];
     const params: BindValue[] = [];
     if (opts?.projectIds) {
       where.push(`project_id IN (${opts.projectIds.map(() => "?").join(", ")})`);
@@ -499,7 +513,7 @@ export const SessionRepo = {
     const limit = opts?.limit ?? 30;
     const rows = getDb()
       .prepare(
-        `SELECT * FROM sessions WHERE archived = 0 AND kind = 'chat' AND title LIKE ? ORDER BY updated_at DESC, created_at DESC LIMIT ?`,
+        `SELECT * FROM sessions WHERE archived = 0 AND kind IN ('chat', 'automation') AND title LIKE ? ORDER BY updated_at DESC, created_at DESC LIMIT ?`,
       )
       .all(v(q), v(limit)) as unknown as SessionRow[];
     return rows.map(rowToSession);
@@ -520,7 +534,7 @@ export const SessionRepo = {
     const limit = opts?.limit ?? 30;
     const rows = getDb()
       .prepare(
-        "SELECT id, project_id, title, bookmarks FROM sessions WHERE archived = 0 AND kind = 'chat' AND bookmarks IS NOT NULL ORDER BY updated_at DESC",
+        "SELECT id, project_id, title, bookmarks FROM sessions WHERE archived = 0 AND kind IN ('chat', 'automation') AND bookmarks IS NOT NULL ORDER BY updated_at DESC",
       )
       .all() as unknown as Array<{
       id: string;
@@ -638,6 +652,53 @@ export const SessionRepo = {
     return rows
       .map(rowToSession)
       .filter((s) => (s.orchMeta?.runId ?? null) === runId);
+  },
+
+  /** One automation task's run sessions (kind='automation'), newest first.
+   *  Invisible to every list/search query by kind — this paged accessor is
+   *  the automation page's run history. `offset` beyond the total returns
+   *  an empty page. */
+  listByAutomation(
+    automationId: string,
+    opts?: { limit?: number; offset?: number },
+  ): { sessions: Session[]; hasMore: boolean } {
+    const limit = opts?.limit ?? 50;
+    const offset = opts?.offset ?? 0;
+    const rows = getDb()
+      .prepare(
+        "SELECT * FROM sessions WHERE kind = 'automation' AND automation_id = ? ORDER BY created_at DESC, rowid DESC LIMIT ? OFFSET ?",
+      )
+      .all(v(automationId), v(limit + 1), v(offset)) as unknown as SessionRow[];
+    const hasMore = rows.length > limit;
+    return { sessions: rows.slice(0, limit).map(rowToSession), hasMore };
+  },
+
+  /** Total run count for one task (the history header's "已运行 N 次"). */
+  countByAutomation(automationId: string): number {
+    const row = getDb()
+      .prepare("SELECT COUNT(*) AS n FROM sessions WHERE kind = 'automation' AND automation_id = ?")
+      .get(v(automationId)) as unknown as { n: number };
+    return row?.n ?? 0;
+  },
+
+  /** Run sessions of a task beyond the newest `keep` — the retention
+   *  sweeper's eviction candidates (the caller disposes runtimes + deletes;
+   *  in-flight rows are filtered there where status is fresh). */
+  listExpiredAutomationRuns(automationId: string, keep: number): Session[] {
+    const rows = getDb()
+      .prepare(
+        "SELECT * FROM sessions WHERE kind = 'automation' AND automation_id = ? ORDER BY created_at DESC, rowid DESC LIMIT -1 OFFSET ?",
+      )
+      .all(v(automationId), v(keep)) as unknown as SessionRow[];
+    return rows.map(rowToSession);
+  },
+
+  /** Every run session id of a task (deleting a task deletes its runs). */
+  idsByAutomation(automationId: string): string[] {
+    const rows = getDb()
+      .prepare("SELECT id FROM sessions WHERE kind = 'automation' AND automation_id = ?")
+      .all(v(automationId)) as unknown as Array<{ id: string }>;
+    return rows.map((r) => r.id);
   },
 
   /** Persist claude's own session id so future turns can --resume. */
@@ -1144,6 +1205,47 @@ export const MessageRepo = {
     }
     persist();
   },
+  /**
+   * Automation turn retention (v2「任务即会话」): a task session accumulates
+   * one TURN per scheduled fire; when the turn count exceeds `keepTurns`,
+   * delete everything BEFORE the first kept turn's user message. A "turn" is
+   * anchored by its user-role message (each fire sends exactly one), so the
+   * cutoff is that anchor's created_at — all earlier rows (user + assistant +
+   * tool traffic) go in one statement. No-op while within budget.
+   */
+  trimTurns(sessionId: string, keepTurns: number): number {
+    if (keepTurns < 1) return 0;
+    const anchors = getDb()
+      .prepare(
+        "SELECT created_at FROM messages WHERE session_id = ? AND role = 'user' ORDER BY created_at ASC, rowid ASC",
+      )
+      .all(v(sessionId)) as unknown as Array<{ created_at: number }>;
+    if (anchors.length <= keepTurns) return 0;
+    const cutoff = anchors[anchors.length - keepTurns].created_at;
+    const info = getDb()
+      .prepare("DELETE FROM messages WHERE session_id = ? AND created_at < ?")
+      .run(v(sessionId), v(cutoff));
+    persist();
+    return info.changes;
+  },
+
+  /**
+   * created_at of every user message carrying the scheduler's dated run
+   * header (RUN_HEADER_PREFIX) — one per automated fire. Backfills a task's
+   * run ledger for rows created before the ledger existed; the filter is a
+   * plain substring match on the persisted JSON (text blocks keep Chinese
+   * literals unescaped, so no JSON-aware parse is needed).
+   */
+  listRunAnchors(sessionId: string): number[] {
+    const rows = getDb()
+      .prepare(
+        "SELECT content, created_at FROM messages WHERE session_id = ? AND role = 'user' ORDER BY created_at ASC, rowid ASC",
+      )
+      .all(v(sessionId)) as unknown as Array<{ content: string; created_at: number }>;
+    return rows
+      .filter((r) => typeof r.content === "string" && r.content.includes(RUN_HEADER_PREFIX))
+      .map((r) => r.created_at);
+  },
 };
 
 /* ─────────────────────────────── Settings ──────────────────────────────── */
@@ -1180,5 +1282,169 @@ export const SettingRepo = {
       v(value),
     );
     persist();
+  },
+};
+
+/* ─────────────────────────────── Automations ────────────────────────────── */
+/* Scheduled tasks (prompt + execution config + trigger rule) and their run
+ * history. Run sessions live in the sessions table (kind='automation' +
+ * automation_id) — see SessionRepo.listByAutomation — so the page's history
+ * rows are first-class sessions the user can open in the normal chat UI. */
+
+interface AutomationRow {
+  id: string;
+  project_id: string;
+  title: string;
+  task_session_id: string | null;
+  parent_session_id: string | null;
+  prompt: string;
+  skill_names: string | null;
+  file_paths: string | null;
+  provider_id: string;
+  model: string;
+  custom_model_id: string | null;
+  effort: string;
+  permission_mode: string;
+  schedule: string;
+  enabled: number;
+  keep_runs: number;
+  last_run_at: number | null;
+  next_run_at: number | null;
+  last_status: string | null;
+  last_session_id: string | null;
+  run_log: string | null;
+  created_at: number;
+  updated_at: number;
+}
+
+function rowToAutomation(r: AutomationRow): Automation {
+  return {
+    id: r.id,
+    projectId: r.project_id,
+    title: r.title,
+    taskSessionId: r.task_session_id ?? "",
+    parentSessionId: r.parent_session_id ?? null,
+    prompt: r.prompt,
+    skillNames: (r.skill_names ? safeJson(r.skill_names) : null) as string[],
+    filePaths: (r.file_paths ? safeJson(r.file_paths) : null) as string[],
+    providerId: r.provider_id ?? "claude-sdk",
+    model: r.model ?? "default",
+    customModelId: r.custom_model_id ?? null,
+    effort: r.effort ?? "default",
+    permissionMode: r.permission_mode ?? "acceptEdits",
+    schedule: (r.schedule ? safeJson(r.schedule) : null) as AutomationSchedule,
+    enabled: !!r.enabled,
+    keepRuns: r.keep_runs ?? 20,
+    lastRunAt: r.last_run_at ?? null,
+    nextRunAt: r.next_run_at ?? null,
+    lastStatus: (r.last_status ?? null) as Automation["lastStatus"],
+    runLog: (r.run_log ? safeJson(r.run_log) : null) as Automation["runLog"],
+    lastSessionId: r.last_session_id ?? null,
+    createdAt: r.created_at,
+    updatedAt: r.updated_at,
+  };
+}
+
+export const AutomationRepo = {
+  get(id: string): Automation | null {
+    const row = getDb().prepare("SELECT * FROM automations WHERE id = ?").get(v(id)) as
+      | AutomationRow
+      | undefined;
+    return row ? rowToAutomation(row) : null;
+  },
+
+  /** All tasks, newest-created first. The list is small (dozens), so the
+   *  page re-reads it whole on every automation:event instead of diffing. */
+  list(): Automation[] {
+    const rows = getDb()
+      .prepare("SELECT * FROM automations ORDER BY created_at DESC, rowid DESC")
+      .all() as unknown as AutomationRow[];
+    return rows.map(rowToAutomation);
+  },
+
+  create(a: Automation): void {
+    run(
+      `INSERT INTO automations
+       (id, project_id, title, task_session_id, parent_session_id, prompt, skill_names, file_paths, provider_id, model, custom_model_id, effort, permission_mode, schedule, enabled, keep_runs, last_run_at, next_run_at, last_status, run_log, last_session_id, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      v(a.id),
+      v(a.projectId),
+      v(a.title),
+      v(a.taskSessionId),
+      v(a.parentSessionId),
+      v(a.prompt),
+      v(JSON.stringify(a.skillNames ?? [])),
+      v(JSON.stringify(a.filePaths ?? [])),
+      v(a.providerId),
+      v(a.model),
+      v(a.customModelId),
+      v(a.effort),
+      v(a.permissionMode),
+      v(JSON.stringify(a.schedule)),
+      v(a.enabled ? 1 : 0),
+      v(a.keepRuns),
+      v(a.lastRunAt),
+      v(a.nextRunAt),
+      v(a.lastStatus),
+      v(JSON.stringify(a.runLog ?? [])),
+      v(a.lastSessionId),
+      v(a.createdAt),
+      v(a.updatedAt),
+    );
+    persist();
+  },
+
+  /** In-place patch. Only the provided keys are written (undefined = keep);
+   *  `updated_at` always bumps. Returns the fresh row (null = deleted). */
+  update(id: string, patch: Partial<Omit<Automation, "id">>): Automation | null {
+    const cols: string[] = ["updated_at"];
+    const params: BindValue[] = [v(Date.now())];
+    const set = (col: string, val: unknown, json = false): void => {
+      cols.push(col);
+      params.push(v(json ? JSON.stringify(val) : val));
+    };
+    if (patch.projectId !== undefined) set("project_id", patch.projectId);
+    if (patch.title !== undefined) set("title", patch.title);
+    if (patch.prompt !== undefined) set("prompt", patch.prompt);
+    if (patch.skillNames !== undefined) set("skill_names", patch.skillNames, true);
+    if (patch.filePaths !== undefined) set("file_paths", patch.filePaths, true);
+    if (patch.providerId !== undefined) set("provider_id", patch.providerId);
+    if (patch.model !== undefined) set("model", patch.model);
+    if (patch.customModelId !== undefined) set("custom_model_id", patch.customModelId);
+    if (patch.effort !== undefined) set("effort", patch.effort);
+    if (patch.permissionMode !== undefined) set("permission_mode", patch.permissionMode);
+    if (patch.schedule !== undefined) set("schedule", patch.schedule, true);
+    if (patch.enabled !== undefined) set("enabled", patch.enabled ? 1 : 0);
+    if (patch.keepRuns !== undefined) set("keep_runs", patch.keepRuns);
+    if (patch.lastRunAt !== undefined) set("last_run_at", patch.lastRunAt);
+    if (patch.nextRunAt !== undefined) set("next_run_at", patch.nextRunAt);
+    if (patch.lastStatus !== undefined) set("last_status", patch.lastStatus);
+    // runLog is scheduler-owned: the ipc save path never passes it, so this
+    // whitelist branch only fires from the scheduler's ledger updates.
+    if (patch.runLog !== undefined) set("run_log", patch.runLog, true);
+    if (patch.lastSessionId !== undefined) set("last_session_id", patch.lastSessionId);
+    params.push(v(id));
+    run(`UPDATE automations SET ${cols.map((c) => `${c} = ?`).join(", ")} WHERE id = ?`, ...params);
+    persist();
+    return AutomationRepo.get(id);
+  },
+
+  /** Hard-delete the task row. Its RUN SESSIONS are NOT deleted here — the
+   *  caller (ipc/automation.ts) disposes their runtimes first and deletes
+   *  them via SessionRepo so messages cascade and in-memory state releases. */
+  delete(id: string): void {
+    run("DELETE FROM automations WHERE id = ?", v(id));
+    persist();
+  },
+
+  /** Enabled tasks whose precomputed next_run_at has passed — the
+   *  scheduler's tick query, driven by idx_automations_next_run. */
+  listDue(now: number): Automation[] {
+    const rows = getDb()
+      .prepare(
+        "SELECT * FROM automations WHERE enabled = 1 AND next_run_at IS NOT NULL AND next_run_at <= ? ORDER BY next_run_at ASC",
+      )
+      .all(v(now)) as unknown as AutomationRow[];
+    return rows.map(rowToAutomation);
   },
 };

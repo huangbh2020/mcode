@@ -21,6 +21,7 @@ export const zh = {
   "layout.renameWorktreeDesc": "为该工作树目录设置一个显示名称，仅影响左侧栏展示，不会改动磁盘上的目录。",
   "layout.worktreeNamePlaceholder": "工作树名称",
   "layout.settings": "设置",
+  "layout.automation": "自动化",
   "layout.nav.chat": "会话",
   "layout.nav.files": "文件",
   "layout.nav.git": "Git",

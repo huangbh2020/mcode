@@ -4,6 +4,7 @@
  */
 export const zh = {
   "common.cancel": "取消",
+  "common.listSeparator": "、",
   "common.confirm": "确定",
   "common.close": "关闭",
   "common.delete": "删除",

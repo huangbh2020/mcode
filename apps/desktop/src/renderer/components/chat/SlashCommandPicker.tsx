@@ -38,6 +38,10 @@ export interface SlashCommandPickerProps {
   anchorRect: DOMRect | null;
   /** True while a turn is running - disables the `compact` command. */
   busy: boolean;
+  /** Render the built-in 命令 tab (compact/init/browser/sidechat). Those are
+   *  chat-composer behaviors; hosts without them (the automation task
+   *  editor) pass false to list skills only. Default true. */
+  showBuiltIns?: boolean;
   onPickSkill: (skill: SkillInfo) => void;
   onPickCommand: (cmd: BuiltInCommand) => void;
   onClose: () => void;
@@ -49,6 +53,7 @@ export function SlashCommandPicker({
   skills,
   anchorRect,
   busy,
+  showBuiltIns = true,
   onPickSkill,
   onPickCommand,
   onClose,
@@ -61,8 +66,13 @@ export function SlashCommandPicker({
   // *interactive* list so it can't be arrow-selected or clicked, but keep it
   // counted in the tab badge so the user sees it exists.
   const activeBuiltinCmds = useMemo(
-    () => (busy ? builtinCmds.filter((c) => c.kind !== "compact") : builtinCmds),
-    [builtinCmds, busy],
+    () =>
+      !showBuiltIns
+        ? []
+        : busy
+          ? builtinCmds.filter((c) => c.kind !== "compact")
+          : builtinCmds,
+    [builtinCmds, busy, showBuiltIns],
   );
 
   const [activeTab, setActiveTab] = useState<TabKind>("skill");
@@ -193,13 +203,15 @@ export function SlashCommandPicker({
           label="Skill"
           count={skillCmds.length}
         />
-        <TabButton
-          active={activeTab === "command"}
-          onClick={() => setActiveTab("command")}
-          icon={<IconCommand size={12} className="shrink-0 opacity-70" />}
-          label={t("chat.slash.tabCommands")}
-          count={builtinCmds.length}
-        />
+        {showBuiltIns && (
+          <TabButton
+            active={activeTab === "command"}
+            onClick={() => setActiveTab("command")}
+            icon={<IconCommand size={12} className="shrink-0 opacity-70" />}
+            label={t("chat.slash.tabCommands")}
+            count={builtinCmds.length}
+          />
+        )}
       </div>
 
       <div ref={listRef} className="min-h-0 flex-1 overflow-y-auto p-1">

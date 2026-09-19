@@ -9,6 +9,7 @@ import {
   IconMessages,
   IconArrowsMaximize,
   IconArrowsMinimize,
+  IconClock,
   IconGitFork,
   IconPlus,
   IconX,
@@ -21,6 +22,7 @@ import { FilesPanel } from "@renderer/components/ide/FilesPanel.js";
 import { GitPanel } from "@renderer/components/ide/GitPanel.js";
 import { TurnFlowPanel } from "@renderer/components/ide/TurnFlowPanel.js";
 import { OrchPanel } from "@renderer/components/ide/OrchPanel.js";
+import { SchedPanel } from "@renderer/components/automation/SchedPanel.js";
 import { BrowserPanel } from "@renderer/components/browser/BrowserPanel.js";
 import { SideChatPanel } from "@renderer/components/chat/SideChatPanel.js";
 import { useI18n } from "@renderer/lib/i18n/index.js";
@@ -142,6 +144,15 @@ export function RightPanel() {
           title="Git" /* brand name */
         >
           <IconGitBranch size={16} className="shrink-0" />
+        </RailButton>
+        {/* 定时任务(v2):任务切换器 + 正在运行的实时输出 + 回合历史。
+            全局 tab —— 跨会话汇总所有任务,点按 toggle 显隐。 */}
+        <RailButton
+          active={tab === "sched"}
+          onClick={() => setTab("sched")}
+          title={t("layout.automation")}
+        >
+          <IconClock size={16} className="shrink-0" />
         </RailButton>
         {/* Orchestration DAG — runs scoped to the active (coordinator)
             session: task graph, node controls, gates, worker reports.
@@ -292,6 +303,7 @@ export function RightPanel() {
         {tab === "turns" && <TurnFlowPanel />}
         {tab === "sidechat" && <SideChatPanel />}
         {tab === "orch" && hasOrchestration && <OrchPanel />}
+        {tab === "sched" && <SchedPanel />}
         {tab === "browser" && <BrowserPanel mode="sidebar" />}
       </div>
     </div>

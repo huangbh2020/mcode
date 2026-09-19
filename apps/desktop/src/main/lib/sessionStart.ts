@@ -172,6 +172,60 @@ export function createOrReuseSession(
     return { session: bound, reused: false };
   }
 
+  // Automation TASK sessions (kind="automation", v2「任务即会话」): ONE row
+  // per task, created by the automation IPC when the user configures a
+  // schedule in the composer and hits send. VISIBLE in the left bar (clock
+  // icon) — so unlike the pre-v2 run sessions, this branch DOES broadcast
+  // session.changed (the visible-list caches must learn about the row). Every
+  // scheduled fire appends one TURN to this same session; parentSessionId is
+  // the initiator session (drives the left bar's initiator badge).
+  if (input.kind === "automation") {
+    const now = Date.now();
+    const session: Session = {
+      id: uid("sess_"),
+      projectId: input.projectId,
+      providerId: input.providerId ?? DEFAULT_PROVIDER_ID,
+      claudeSessionId: null,
+      kind: "automation",
+      parentSessionId: null,
+      title: input.title ?? "Automation run",
+      status: "idle",
+      model: input.model ?? "default",
+      effort: input.effort,
+      permissionMode: input.permissionMode,
+      customModelId: input.customModelId ?? null,
+      archived: false,
+      pinnedAt: null,
+      contextSnapshot: null,
+      todos: null,
+      subagents: null,
+      planDraft: null,
+      turnFiles: null,
+      usageHistory: null,
+      bookmarks: null,
+      subagentTranscripts: null,
+      automationId: input.automationId ?? null,
+      // One-phase environments: automation runs always execute in the project
+      // root (local) — worktree isolation for unattended runs is a future
+      // per-task option, deliberately not exposed in v1.
+      envMode: "local",
+      wtStyle: null,
+      worktreePath: null,
+      createdAt: now,
+      updatedAt: now,
+    };
+    SessionRepo.create(session);
+    const bound = SessionRepo.get(session.id) ?? session;
+    runtimeManager.bindSession(bound);
+    // v2: the task session is a first-class visible row — broadcast like a
+    // normal chat session so desktop + mobile lists pick it up.
+    broadcastSessionChanged(bound);
+    log.info(
+      `automation task session started: ${bound.id} (task ${input.automationId ?? "?"}, project ${input.projectId})`,
+    );
+    return { session: bound, reused: false };
+  }
+
   // Coerced environment (non-repo projects can't carry worktree intent —
   // see coerceEnvMode); computed once for both write paths below.
   const envMode = coerceEnvMode(input);
