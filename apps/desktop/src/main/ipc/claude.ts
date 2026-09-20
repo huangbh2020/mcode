@@ -279,6 +279,7 @@ export function registerClaudeHandlers(ipcMain: IpcMain): void {
       input.sessionId,
       input.files,
       input.targetFiles,
+      input.latest ?? false,
     );
     return { restored };
   });

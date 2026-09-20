@@ -82,8 +82,10 @@ export function TurnFilesCard({
     if (rewinding || rewound) return;
     setRewinding(true);
     try {
-      // targetFiles is ALWAYS passed — the event handler matches the card
-      // by path-set and marks it `rewound: true` in place (the card stays
+      // targetFiles is ALWAYS passed. The store pins THIS card at click
+      // time (message id resolved from its own block) so the turn.rewound
+      // handler marks exactly this card `rewound: true` in place — other
+      // turns that touched the same file are left alone (the card stays
       // in the stream as a trace that this turn was rolled back), whether
       // this is the latest turn or a historical one. Confirmation is now
       // handled by the ConfirmDialog before this runs.

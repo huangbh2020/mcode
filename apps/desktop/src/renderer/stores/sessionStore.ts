@@ -356,8 +356,9 @@ export type Block =
        *  the stream (the conversation record is preserved — mirroring SDK
        *  checkpoint semantics where file rollback never rolls back the
        *  conversation), but renders as a dimmed, non-interactive "已撤销"
-       *  state. Set by the `turn.rewound` handler when `targetFiles`
-       *  matches this card's paths. */
+       *  state. Set by the `turn.rewound` handler on the card the user
+       *  actually rewound (pinned via `pendingRewind` at click time; the
+       *  path-set scan is only the cross-client fallback). */
       rewound?: boolean;
     }
   | {
@@ -1972,9 +1973,12 @@ export interface SessionState {
    *  to console and leave state untouched so the user can retry.
    *
    *  `targetFiles` (the requested path set) is forwarded to main so the
-   *  `turn.rewound` event carries it; the handler then marks the matching
-   *  card `rewound: true` in place — for both latest-turn and historical
-   *  rewinds. The card is never removed, so the stream keeps a trace. */
+   *  `turn.rewound` event carries it. Before the IPC call the action pins
+   *  the clicked card (`pendingRewind` — message id + isLatestTurn
+   *  resolved from its own block), so the handler marks EXACTLY that card
+   *  `rewound: true` in place, for both latest-turn and historical
+   *  rewinds; other turns that touched the same file stay untouched. The
+   *  card is never removed, so the stream keeps a trace. */
   rewindTurn: (files: TurnFileEntry[], targetFiles: string[]) => Promise<void>;
 
   /** Reveal a file in the IDE right panel's file tree: switches the panel to
@@ -4302,6 +4306,60 @@ function demotePreviousLatestTurnFiles(messages: ChatMessage[]): ChatMessage[] {
     };
   });
   return changed ? next : messages;
+}
+
+/** The rewind card the user just clicked, pinned at click time by the
+ *  `rewindTurn` action. Path-set equality alone cannot identify a
+ *  `turn-files` card — rounds 1/2/3 may all have touched the same file, and
+ *  the legacy scan marked EVERY matching card `rewound` when the user
+ *  rewound only one (rewind round 3 of "write → edit → edit hello.py" used
+ *  to also dim rounds 1/2). The `turn.rewound` handler consumes the marker
+ *  (same session only) and falls back to the legacy path-set scan when it
+ *  is absent (rewind started by another client) or stale (its message no
+ *  longer holds a matching block). */
+let pendingRewind: { sessionId: string; messageId: string } | null = null;
+
+/** Locate the message holding the turn-files block the user is rewinding.
+ *  Pass 1 matches by REFERENCE: the card's `files` prop IS the store
+ *  block's array (React forwards it unchanged), so identity pins the
+ *  message exactly. Pass 2 falls back to deep equality for any block
+ *  rebuilt between render and click — entries include the `before`
+ *  content, which differs between turns except in the pathological case
+ *  of byte-identical pre-turn content AND identical change shape (there
+ *  the last match wins as the least-surprising tiebreak). Never matches
+ *  already-rewound blocks: the clicked card's button is hidden then. */
+function findRewindTargetBlock(
+  messages: ChatMessage[],
+  files: TurnFileEntry[],
+): { messageId: string; isLatestTurn: boolean } | null {
+  const deepEqualFiles = (a: TurnFileEntry[], b: TurnFileEntry[]) =>
+    a.length === b.length &&
+    a.every((ea, i) => {
+      const eb = b[i];
+      return (
+        eb !== undefined &&
+        ea.filePath === eb.filePath &&
+        ea.kind === eb.kind &&
+        ea.adds === eb.adds &&
+        ea.dels === eb.dels &&
+        ea.before === eb.before
+      );
+    });
+  for (const m of messages) {
+    for (const b of m.blocks) {
+      if (b.kind === "turn-files" && !b.rewound && b.files === files) {
+        return { messageId: m.id, isLatestTurn: !!b.isLatestTurn };
+      }
+    }
+  }
+  for (const m of messages) {
+    for (const b of m.blocks) {
+      if (b.kind === "turn-files" && !b.rewound && deepEqualFiles(b.files, files)) {
+        return { messageId: m.id, isLatestTurn: !!b.isLatestTurn };
+      }
+    }
+  }
+  return null;
 }
 
 /** Called from turn.done: finalize the just-closed turn's turn-files block.
@@ -8089,47 +8147,62 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       return;
     }
     if (e.type === "turn.rewound") {
-      // Unified rewind handling: mark the matching `turn-files` card
+      // Unified rewind handling: mark the rewound `turn-files` card
       // `rewound: true` IN PLACE and NEVER remove it — the card stays in
       // the stream as a visible trace that this turn was rolled back
       // (mirroring SDK checkpoint semantics: file rollback never rolls
-      // back the conversation). The card matches by path-set equality
-      // against `e.targetFiles` (the requested paths, before failures).
+      // back the conversation).
       //
-      // The only difference between a latest-turn and a historical rewind
-      // is the latest-turn BUCKET (turnFilesBySession): when the marked
-      // card is the live one (isLatestTurn), the bucket is cleared so
-      // downstream consumers (file-tree dots, diff sources) stop treating
-      // those files as "this turn's changes". Historical cards leave the
-      // bucket alone — it belongs to a different, later turn.
+      // Card identity: the initiating client pins the exact clicked card
+      // via `pendingRewind` (message id resolved at click time) — path-set
+      // equality alone is ambiguous when several turns touched the same
+      // file (rewinding round 3 of "write → edit → edit hello.py" used to
+      // also dim rounds 1/2). No marker (rewind from another client) or a
+      // stale one falls back to the legacy path-set scan.
+      //
+      // The latest-turn BUCKET (turnFilesBySession) is cleared only when
+      // the marked card is the live one (isLatestTurn); historical cards
+      // leave the bucket alone — it belongs to a different, later turn.
+      const marker = pendingRewind && pendingRewind.sessionId === sid ? pendingRewind : null;
+      if (marker) pendingRewind = null;
       let rewoundLatest = false;
       const rewoundChanged: ChatMessage[] = [];
       set((s) => {
         const list = s.messagesBySession[sid] ?? EMPTY_MESSAGES;
         const targetSet = new Set(e.targetFiles);
-        let changed = false;
-        const next = list.map((m) => {
-          let touched = false;
-          const blocks = m.blocks.map((b) => {
-            if (
-              b.kind === "turn-files" &&
-              !b.rewound &&
-              b.files.length === targetSet.size &&
-              b.files.every((f) => targetSet.has(f.filePath))
-            ) {
+        // Marks matching block(s) and returns the new list, or null when
+        // nothing changed. `onlyMessageId` scopes the scan to one message
+        // (the pinned card). `rewoundLatest`/`rewoundChanged` are mutated
+        // in place — `set` runs its updater synchronously.
+        const mark = (messages: ChatMessage[], onlyMessageId?: string): ChatMessage[] | null => {
+          let changed = false;
+          const next = messages.map((m) => {
+            if (onlyMessageId !== undefined && m.id !== onlyMessageId) return m;
+            let touched = false;
+            const blocks = m.blocks.map((b) => {
+              if (
+                b.kind !== "turn-files" ||
+                b.rewound ||
+                b.files.length !== targetSet.size ||
+                !b.files.every((f) => targetSet.has(f.filePath))
+              ) {
+                return b;
+              }
               touched = true;
               if (b.isLatestTurn) rewoundLatest = true;
               return { ...b, rewound: true };
-            }
-            return b;
+            });
+            if (!touched) return m;
+            changed = true;
+            const updated = { ...m, blocks };
+            rewoundChanged.push(updated);
+            return updated;
           });
-          if (!touched) return m;
-          changed = true;
-          const updated = { ...m, blocks };
-          rewoundChanged.push(updated);
-          return updated;
-        });
-        if (!changed) return s;
+          return changed ? next : null;
+        };
+        const scoped = marker ? mark(list, marker.messageId) : null;
+        const next = scoped ?? mark(list);
+        if (!next) return s;
         // If the rewound card was the live one, also clear the latest-turn
         // bucket (its files are back on disk — no longer "this turn's").
         return rewoundLatest
@@ -10332,14 +10405,31 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       // Nothing to rewind — defensive (UI shouldn't allow the click).
       return;
     }
+    // Pin the clicked card NOW: its message id drives the turn.rewound
+    // handler's precise marking (path sets can't — several turns may have
+    // touched the same file), and `isLatestTurn` tells main whether the
+    // live snapshot / persisted turn_files column may be cleared. The
+    // marker is set BEFORE the IPC call — main pushes the event before the
+    // invoke response arrives, so the handler may run first.
+    const target = findRewindTargetBlock(
+      get().messagesBySession[sessionId] ?? EMPTY_MESSAGES,
+      files,
+    );
+    pendingRewind = target ? { sessionId, messageId: target.messageId } : null;
     try {
-      await api.claude.rewindTurn({ sessionId, files, targetFiles });
+      await api.claude.rewindTurn({
+        sessionId,
+        files,
+        targetFiles,
+        latest: target?.isLatestTurn ?? false,
+      });
       // Don't optimistically clear turnFiles — wait for the `turn.rewound`
       // event from main so the UI only updates when files are actually
       // back on disk. If the IPC call returns successfully but main fails
       // partway through restore, the (smaller) restored list still
       // arrives via the event and we clear from there.
     } catch (err) {
+      pendingRewind = null;
       console.error("claude.rewindTurn failed:", err);
     }
   },

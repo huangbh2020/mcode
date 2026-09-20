@@ -1049,7 +1049,15 @@ export type RespondPlanApprovalInput = z.infer<typeof RespondPlanApprovalSchema>
  * `targetFiles`: the requested path set, forwarded onto the
  * `turn.rewound` event so the renderer can locate the exact card to
  * mark `rewound: true`. Always present — the card is never removed,
- * only marked, for both latest-turn and historical rewinds. */
+ * only marked, for both latest-turn and historical rewinds.
+ *
+ * `latest`: whether the clicked card is the session's LATEST turn
+ * (the renderer knows this from the block's `isLatestTurn` flag).
+ * Path sets alone cannot identify a turn — rounds 1/2/3 may all have
+ * touched the same file — so main gates its live-state cleanup on this
+ * flag: only a latest-turn rewind clears the in-memory FileSnapshot and
+ * the persisted latest-turn `turn_files` column. Omitted = historical
+ * (older clients / mobile callers). */
 export const RewindTurnSchema = z.object({
   sessionId: z.string(),
   files: z.array(
@@ -1062,6 +1070,7 @@ export const RewindTurnSchema = z.object({
     }),
   ),
   targetFiles: z.array(z.string()),
+  latest: z.boolean().optional(),
 });
 export type RewindTurnInput = z.infer<typeof RewindTurnSchema>;
 

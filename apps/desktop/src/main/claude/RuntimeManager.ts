@@ -270,26 +270,12 @@ class RuntimeManager {
         } catch (err) {
           log.error(`failed to persist turn files: ${(err as Error).message}`);
         }
-      } else if (e.type === "turn.rewound") {
-        // A rewind voids the rewound turn's edits. Clear the persisted
-        // latest-turn snapshot ONLY when the rewound card IS the latest
-        // turn (its path set matches the persisted turn_files) — otherwise
-        // (historical rewind) the latest turn's data must stay intact, or
-        // it would vanish from a session reopen after a historical rewind.
-        try {
-          const persisted = SessionRepo.get(session.id)?.turnFiles ?? null;
-          const matchesLatest =
-            persisted !== null &&
-            persisted.length === e.targetFiles.length &&
-            new Set(e.targetFiles).size === e.targetFiles.length &&
-            persisted.every((f) => e.targetFiles.includes(f.filePath));
-          if (matchesLatest) {
-            SessionRepo.updateTurnFiles(session.id, null);
-          }
-        } catch (err) {
-          log.error(`failed to clear turn files after rewind: ${(err as Error).message}`);
-        }
       }
+      // NOTE: `turn.rewound` is NOT handled here — it is a host action
+      // (RuntimeManager.rewindTurn), not a provider event; it never flows
+      // through this emit pipeline. Its persistence (clearing the
+      // latest-turn turn_files column) lives in rewindTurn itself, gated
+      // on the renderer-declared `latest` flag.
       // Notify the global observer (NotificationManager) after the renderer
       // push + persistence. Fire-and-forget; errors in the observer must not
       // disrupt the event stream.
@@ -685,8 +671,21 @@ class RuntimeManager {
    *  the renderer can locate the exact card and mark it `rewound: true`
    *  in place — for BOTH latest-turn and historical rewinds. The card is
    *  never removed: it stays in the stream as a visible trace that the
-   *  user rolled this turn back. */
-  async rewindTurn(sessionId: string, files: TurnFileEntry[], targetFiles: string[]): Promise<string[]> {
+   *  user rolled this turn back.
+   *
+   *  `latest` (declared by the renderer from the clicked card's
+   *  `isLatestTurn` flag) gates the live-state cleanup. Path sets alone
+   *  cannot identify a turn — rounds 1/2/3 may all have touched the same
+   *  file — so only a latest-turn rewind clears the in-memory snapshot
+   *  and the persisted latest-turn `turn_files` column; a historical
+   *  rewind of round 1 must leave round 3's live state (snapshot +
+   *  column) intact. */
+  async rewindTurn(
+    sessionId: string,
+    files: TurnFileEntry[],
+    targetFiles: string[],
+    latest = false,
+  ): Promise<string[]> {
     const rt = this.sessions.get(sessionId);
     // Resolve the cwd: prefer the live runtime's lastCwd (set on the first
     // sendTurn). When that's missing - the common case for the "会话重开后
@@ -708,16 +707,30 @@ class RuntimeManager {
     }
     const restored = await restoreFiles(cwd, files);
     // After a successful restore, drop the in-memory snapshot ONLY when
-    // the rewind targeted exactly its contents (i.e. the latest live
-    // turn). `hasPaths` is the authoritative check: the live snapshot
-    // holds exactly the LATEST turn's files, so a path-set match means
-    // this was the live rewind; anything else is a historical/DB-driven
-    // rewind and the snapshot must be left untouched (the next sendTurn
-    // clears it anyway). When `rt` is absent (reopened session) the
-    // snapshot is empty, so hasPaths can't match.
+    // this was a latest-turn rewind (renderer-declared `latest`, with the
+    // snapshot's own path set as a cross-client staleness guard). The
+    // snapshot holds exactly the LATEST turn's files, so a historical
+    // rewind — even of a turn whose paths coincide — must leave it alone
+    // (the next sendTurn clears it anyway). When `rt` is absent (reopened
+    // session) the snapshot is empty, so hasPaths can't match.
     const snapshot = getFileSnapshot(sessionId);
-    if (rt && restored.length > 0 && snapshot.hasPaths(files.map((f) => f.filePath))) {
+    if (rt && latest && restored.length > 0 && snapshot.hasPaths(files.map((f) => f.filePath))) {
       snapshot.clear();
+    }
+    if (latest) {
+      // The rewound card IS the latest turn → also clear the persisted
+      // latest-turn column (written by the emit pipeline on every
+      // `turn.files`), or a session reopen would resurrect the
+      // `turnFilesBySession` bucket (file-tree dots, diff sources) for
+      // files that are no longer on disk. Historical rewinds keep the
+      // column — it belongs to a later, still-live turn. Works for the
+      // reopened-session path too (no rt required — the column lives in
+      // the DB, not in memory).
+      try {
+        SessionRepo.updateTurnFiles(sessionId, null);
+      } catch (err) {
+        log.error(`failed to clear turn files after rewind: ${(err as Error).message}`);
+      }
     }
     // Notify the renderer (and any other listeners) so the UI can mark
     // the matching "本轮文件" card as rewound. `targetFiles` (the
