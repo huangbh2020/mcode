@@ -137,7 +137,7 @@ export function RightPanel() {
           edge. Each icon is a square button; the active one is marked with
           the accent token. Fixed (global) tabs first, then this session's
           opened session-scoped tabs, then the trailing "+" menu. */}
-      <div className="flex h-9 shrink-0 flex-row items-center gap-1 border-b border-edge bg-surface px-1.5">
+      <div className="flex h-9 shrink-0 flex-row items-center gap-1 border-b border-edge-panel bg-surface px-1.5">
         <RailButton
           active={tab === "files"}
           onClick={() => setTab("files")}

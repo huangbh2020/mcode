@@ -184,7 +184,7 @@ export function PlanViewer({
   return (
     <div className="flex h-full min-h-0 flex-col">
       {/* Header - sticky title bar with edit / save / close actions. */}
-      <div className="flex shrink-0 items-center gap-1.5 border-b border-edge px-3 py-2">
+      <div className="flex h-9 shrink-0 items-center gap-1.5 border-b border-edge-panel px-3">
         <IconClipboard size={15} className="shrink-0 text-content-subtle" />
         <span className="text-xs font-semibold text-content">{t("chat.planViewer.title")}</span>
         {isApprovalPending && (

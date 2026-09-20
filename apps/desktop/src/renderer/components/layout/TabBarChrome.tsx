@@ -31,7 +31,7 @@ export function TabBarChevronButton({ dir, onClick, title }: ChevronButtonProps)
       onClick={onClick}
       title={title}
       aria-label={title}
-      className="mb-0.5 flex h-6 w-5 shrink-0 items-center justify-center rounded text-content-subtle transition-colors hover:bg-surface-muted hover:text-content"
+      className="flex h-6 w-5 shrink-0 items-center justify-center rounded text-content-subtle transition-colors hover:bg-surface-muted hover:text-content"
     >
       <Icon size={14} />
     </button>
@@ -81,7 +81,7 @@ export function TabBarOverflowMenu({
   return (
     <Menu.Root>
       <Menu.Trigger
-        className="mb-0.5 flex h-6 w-5 shrink-0 items-center justify-center rounded text-content-subtle transition-colors hover:bg-surface-muted hover:text-content"
+        className="flex h-6 w-5 shrink-0 items-center justify-center rounded text-content-subtle transition-colors hover:bg-surface-muted hover:text-content"
         title="Show all tabs"
         aria-label="Show all tabs"
       >

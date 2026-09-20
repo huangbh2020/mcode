@@ -252,7 +252,12 @@ export function OpenTabsBar() {
   const sortStrategy = multiRow ? rectSortingStrategy : horizontalListSortingStrategy;
 
   return (
-    <div className="flex shrink-0 items-center gap-0.5 border-b border-edge bg-surface/40 px-2 py-1.5">
+    <div
+      className={cn(
+        "flex shrink-0 items-center gap-0.5 border-b border-edge-panel bg-surface/40 px-2",
+        multiRow ? "min-h-9 py-1.5" : "h-9",
+      )}
+    >
       {/* Left chevron — only when there's content scrolled off the left edge. */}
       {canScrollLeft && (
         <TabBarChevronButton

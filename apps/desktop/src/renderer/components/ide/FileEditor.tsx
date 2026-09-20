@@ -261,7 +261,7 @@ function EditorToolbar({
       ? filePath.slice(projectPath.length).replace(/^[/\\]/, "")
       : filePath;
   return (
-    <div className="flex shrink-0 items-center gap-2 border-b border-edge bg-surface-muted/40 px-2.5 py-1">
+    <div className="flex h-9 shrink-0 items-center gap-2 border-b border-edge-panel bg-surface-muted/40 px-2.5">
       {/* Back/forward (navigation history) — disabled when the stacks are
           empty. Mirrors the Alt+←/→ global shortcuts. */}
       <div className="flex items-center gap-0.5">

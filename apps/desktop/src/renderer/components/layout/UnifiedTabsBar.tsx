@@ -243,7 +243,12 @@ export function UnifiedTabsBar() {
   const sortStrategy = multiRow ? rectSortingStrategy : horizontalListSortingStrategy;
 
   return (
-    <div className="flex shrink-0 items-center gap-0.5 border-b border-edge-panel bg-surface/40 px-2 py-1.5">
+    <div
+      className={cn(
+        "flex shrink-0 items-center gap-0.5 border-b border-edge-panel bg-surface/40 px-2",
+        multiRow ? "min-h-9 py-1.5" : "h-9",
+      )}
+    >
       {/* Left chevron — only when there's content scrolled off the left edge. */}
       {canScrollLeft && (
         <TabBarChevronButton
@@ -266,7 +271,7 @@ export function UnifiedTabsBar() {
               ? // Wrapped rows, capped at ~3 rows — beyond that the track
                 // scrolls vertically.
                 "max-h-[82px] flex-wrap content-start items-start overflow-y-auto"
-              : "items-end overflow-x-auto",
+              : "items-center overflow-x-auto",
           )}
         >
           <DndContext
