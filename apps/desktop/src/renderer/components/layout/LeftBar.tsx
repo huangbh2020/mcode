@@ -28,6 +28,7 @@ import {
   IconArchive,
   IconTrash,
   IconLoader2,
+  IconClock,
   IconSettings,
   IconCheck,
   IconX,
@@ -51,8 +52,11 @@ import { getProviderIcon } from "@renderer/lib/providerIcon.js";
 import { Button, ConfirmDialog, Dialog, Input } from "@renderer/components/ui/index.js";
 import { BrandLogo } from "./BrandLogo.js";
 import { SidebarQuickActions } from "./SidebarQuickActions.js";
+import { describeSchedule, taskNextLine } from "@renderer/components/automation/automationFormat.js";
 import { HoverIconButton, RenameDialog, SessionContextMenu, ArchivedRow } from "./SidebarShared.js";
 import { LeftBarModeSwitch } from "./StreamSidebar.js";
+import { ProjectAvatar } from "./ProjectAvatar.js";
+import { projectDisplayColor } from "@renderer/lib/projectAvatar.js";
 import { api } from "@renderer/lib/api.js";
 import { normWorktreeKey, worktreeDisplayName } from "@renderer/lib/worktree.js";
 import { WorktreeMergeBackDialog, WorktreeRemoveDialog } from "@renderer/components/chat/WorktreeMergeBack.js";
@@ -116,6 +120,12 @@ function LeftBarBase({
   const worktreeNames = useSessionStore((s) => s.worktreeNames);
   const archivedViewOpen = useSessionStore((s) => s.archivedViewOpen);
   const pinnedSessions = useSessionStore((s) => s.pinnedSessions);
+  // Scheduled-task sessions (kind="automation") render only in the right
+  // panel's「定时任务」tab — every left-bar row list filters them out.
+  const pinnedChatSessions = useMemo(
+    () => pinnedSessions.filter((s) => s.kind !== "automation"),
+    [pinnedSessions],
+  );
 
   const addProject = useSessionStore((s) => s.addProjectFromFolder);
   const toggleProjectExpanded = useSessionStore((s) => s.toggleProjectExpanded);
@@ -387,7 +397,10 @@ function LeftBarBase({
   // Archived sessions grouped by their (still-active) parent project, in
   // the same project order as the tree above. Empty groups are skipped.
   const archivedGroups = activeProjects
-    .map((p) => ({ project: p, sessions: archivedSessionsByProject[p.id] ?? [] }))
+    .map((p) => ({
+      project: p,
+      sessions: (archivedSessionsByProject[p.id] ?? []).filter((s) => s.kind !== "automation"),
+    }))
     .filter((g) => g.sessions.length > 0);
   const archivedCount = archivedProjects.length + archivedGroups.reduce((n, g) => n + g.sessions.length, 0);
 
@@ -537,7 +550,10 @@ function LeftBarBase({
       const node = (
         <ProjectNode
           project={p}
-          sessions={sessionsByProject[p.id] ?? []}
+          // Scheduled-task sessions (kind="automation") never render here —
+          // they live in the right panel's「定时任务」tab; the initiator
+          // badge below is the left bar's only task surface.
+          sessions={(sessionsByProject[p.id] ?? []).filter((s) => s.kind !== "automation")}
           hasMore={!!sessionsHasMoreByProject[p.id]}
           total={sessionsTotalByProject[p.id] ?? 0}
           expanded={!!expandedProjects[p.id]}
@@ -781,11 +797,11 @@ function LeftBarBase({
                 )}
               />
               <IconPin size={12} className="shrink-0 text-accent/70" />
-              {t("layout.pinnedSection", { n: pinnedSessions.length })}
+              {t("layout.pinnedSection", { n: pinnedChatSessions.length })}
             </button>
             {pinnedOpen && (
               <ul className="mt-1 space-y-0.5">
-                {pinnedSessions.map((s) => (
+                {pinnedChatSessions.map((s) => (
                   <SessionRow
                     key={s.id}
                     session={s}
@@ -1263,6 +1279,9 @@ function ProjectNode(props: ProjectNodeProps) {
     sortableRef, sortableStyle, sortableListeners, sortableAttributes, isDragging,
   } = props;
   const loaded = sessions.length;
+  // Avatar color source: user-picked per-project color wins, else the
+  // name-hash default (same resolution as the stream sidebar's cards).
+  const projectColors = useSessionStore((s) => s.projectColors);
 
   // ── Worktree bucketing. Sessions bound to a materialized (or freshly
   // bound) isolated checkout group under ONE collapsible directory node per
@@ -1366,7 +1385,10 @@ function ProjectNode(props: ProjectNodeProps) {
           className="flex min-w-0 flex-1 items-center gap-1 text-left"
           title={project.path}
         >
-          <IconFolder size={14} className="shrink-0" />
+          <ProjectAvatar
+            name={project.name}
+            color={projectDisplayColor(project, projectColors)}
+          />
           <span className="truncate">{project.name}</span>
         </button>
 
@@ -1484,6 +1506,14 @@ function SessionRow({
 }) {
   const { t } = useI18n();
   const [pendingConfirm, setPendingConfirm] = useState<null | "archive" | "delete">(null);
+  // 定时任务(v2):任务会话的图标态/发起者计数/调度摘要。每行一个轻订阅。
+  const automations = useSessionStore((s) => s.automations);
+  const openSchedPanel = useSessionStore((s) => s.openSchedPanel);
+  const isTask = session.kind === "automation";
+  const ownTask = isTask ? automations.find((a) => a.taskSessionId === session.id) : undefined;
+  const parentTaskCount = !isTask
+    ? automations.filter((a) => a.parentSessionId === session.id && !a.deletedAt).length
+    : undefined;
   const isPinned = session.pinnedAt != null;
   // Whether the pointer is over this row. We swap the right-aligned payload
   // between the relative-time label (default) and the archive/delete action
@@ -1530,7 +1560,7 @@ function SessionRow({
           ? "bg-surface-hover text-content shadow-sm ring-1 ring-inset ring-accent/35"
           : "text-content-muted hover:bg-surface-hover/60",
       )}
-      title={`${session.title}\n${formatFullTime(session.updatedAt)}`}
+      title={`${session.title}${ownTask ? `\n${describeSchedule(ownTask.schedule)}${taskNextLine(ownTask) ? ` · ${taskNextLine(ownTask)}` : ""}` : ""}\n${formatFullTime(session.updatedAt)}`}
     >
       {/* Pinned marker — always-visible badge at the very LEFT edge (before
           the provider icon) so a pinned thread reads as pinned at a glance,
@@ -1543,9 +1573,41 @@ function SessionRow({
         />
       )}
 
-      <SessionRowIcon providerId={session.providerId} className="shrink-0" />
+      {/* 定时任务会话:accent 实心时钟替代 provider 图标(停用=灰)。 */}
+      {session.kind === "automation" ? (
+        <IconClock
+          size={12}
+          className="shrink-0 text-accent"
+          aria-label={t("layout.automation")}
+        />
+      ) : (
+        <SessionRowIcon providerId={session.providerId} className="shrink-0" />
+      )}
 
       <span className="min-w-0 flex-1 truncate">{session.title}</span>
+
+      {/* 发起者徽标:该会话发起过 N 个定时任务;点击直达右栏 tab(过滤)。 */}
+      {parentTaskCount === undefined ? null : parentTaskCount > 0 && (
+        <span
+          role="button"
+          tabIndex={0}
+          onClick={(e) => {
+            e.stopPropagation();
+            openSchedPanel(session.id);
+          }}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.stopPropagation();
+              openSchedPanel(session.id);
+            }
+          }}
+          className="flex shrink-0 items-center gap-0.5 rounded border border-accent/55 px-1 text-[9.5px] font-bold leading-[1.5] text-accent hover:bg-accent/10"
+          title={t("automation.parentBadge", { n: parentTaskCount })}
+        >
+          <IconClock size={9} />
+          {parentTaskCount}
+        </span>
+      )}
 
       {/* Worktree marker — this thread runs in an isolated detached checkout
           (parallel task). Small accent fork next to the title; full path via

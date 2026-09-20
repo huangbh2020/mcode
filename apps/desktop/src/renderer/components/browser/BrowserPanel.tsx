@@ -94,7 +94,11 @@ export function BrowserPanel({ mode }: BrowserPanelProps) {
   // Layout / mode state from the store.
   const open = useSessionStore((s) => s.browserPanelOpen);
   const setOpen = useSessionStore((s) => s.setBrowserPanelOpen);
-  const setRightPanelTab = useSessionStore((s) => s.setRightPanelTab);
+  // The sidebar browser is a SESSION-scoped right-panel tab (opened per
+  // session via the rail's "+" menu): mode flows open/close it on the active
+  // session instead of touching the global tab.
+  const openSessionBrowserTab = useSessionStore((s) => s.openSessionRightTab);
+  const closeSessionBrowserTab = useSessionStore((s) => s.closeSessionRightTab);
   const setRightOpen = useSessionStore((s) => s.setRightOpen);
   const activeProjectId = useSessionStore((s) => s.activeProjectId);
   const projects = useSessionStore((s) => s.projects);
@@ -907,8 +911,8 @@ export function BrowserPanel({ mode }: BrowserPanelProps) {
   const handleReturnToSidebar = useCallback(() => {
     setOpen(false);
     setRightOpen(true);
-    setRightPanelTab("browser");
-  }, [setOpen, setRightOpen, setRightPanelTab]);
+    openSessionBrowserTab("browser");
+  }, [setOpen, setRightOpen, openSessionBrowserTab]);
 
   /** Flush all staged elements to the composer (overlay mode only) and return
    *  to the main workspace. This is the commit action for the staging bar:
@@ -1190,7 +1194,9 @@ export function BrowserPanel({ mode }: BrowserPanelProps) {
         if (mode === "overlay") {
           setOpen(false);
         } else {
-          setRightPanelTab("files");
+          // Close the session's browser tab — the right panel falls back to
+          // the global tab and this session's rail icon disappears.
+          closeSessionBrowserTab("browser");
         }
         return;
       }
@@ -1206,7 +1212,7 @@ export function BrowserPanel({ mode }: BrowserPanelProps) {
         showActiveView();
       }
     },
-    [mode, setTabs, setActiveTabId, setOpen, setRightPanelTab, showActiveView],
+    [mode, setTabs, setActiveTabId, setOpen, closeSessionBrowserTab, showActiveView],
   );
 
   /** New tab button: create a fresh tab and focus it. */
@@ -1227,14 +1233,16 @@ export function BrowserPanel({ mode }: BrowserPanelProps) {
   const handleSwitchMode = useCallback(() => {
     if (mode === "sidebar") {
       // Sidebar → overlay: drop the sidebar tab + open the fullscreen overlay.
-      setRightPanelTab("files");
+      // Closing the session browser tab makes the right panel fall back to
+      // the global tab while the overlay owns the browser.
+      closeSessionBrowserTab("browser");
       setOpen(true);
     } else {
       // Overlay → sidebar: restore the browser into the right sidebar (this
       // also closes the overlay and reopens the right panel).
       handleReturnToSidebar();
     }
-  }, [mode, handleReturnToSidebar, setRightPanelTab, setOpen]);
+  }, [mode, handleReturnToSidebar, closeSessionBrowserTab, setOpen]);
 
   // Sync the shared tab count to the store so the rail/Titlebar badges work.
   // (Only one container is active at a time, so no double-counting.)

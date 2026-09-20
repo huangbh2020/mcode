@@ -88,12 +88,20 @@ export interface Session {
    *  the side-chat panel, keyed by their parent session. "orch-worker" = an
    *  orchestration worker sub-session (parentSessionId = coordinator); like
    *  side sessions it is invisible to every list and is managed only by the
-   *  orchestrator (DAG panel). */
-  kind: "chat" | "side" | "orch-worker";
+   *  orchestrator (DAG panel). "automation" = one run of a scheduled
+   *  automation task (parentSessionId = null; the owning task is referenced
+   *  by automationId) — created directly by the automation scheduler in
+   *  main, invisible to every list/search query, surfaced only inside the
+   *  automation page's run history. */
+  kind: "chat" | "side" | "orch-worker" | "automation";
   /** For side/orch-worker sessions: the id of the main session this
    *  subordinate thread belongs to. Null for main sessions; set back to null
    *  when the parent is deleted (the subordinate itself is kept). */
   parentSessionId: string | null;
+  /** Owning automation task (kind="automation" only). Null elsewhere. Kept
+   *  denormalized on the session row so the automation page can list a
+   *  task's runs with one indexed query. */
+  automationId?: string | null;
   title: string;
   status: SessionStatus;
   /** Model alias or full name ("default" = let claude pick). → --model. */

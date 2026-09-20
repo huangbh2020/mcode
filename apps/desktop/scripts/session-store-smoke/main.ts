@@ -1,20 +1,35 @@
 /**
- * Headless smoke for the renderer session store's `session.changed` reducer —
- * specifically the TWO-SECTION routing of the per-project thread cache
- * (local list / worktree-bound list, see splitSessionSections).
+ * Headless smoke for the renderer session store — two areas:
  *
- * Regression anchor: removing a git worktree degenerates every referencing
- * session back to local (main's `removeWorktree` PATCHes worktreePath=NULL and
- * broadcasts one `session.changed` per row). The reducer used to materialize
- * the degraded row at the head of the local section while leaving the stale
- * worktree-bound copy in place — the same id twice in one cache array. The
- * left bar buckets its tree by `session.worktreePath`, so the ghost row kept
- * the removed worktree's group on screen ("删除工作树后工作树还在").
+ * 1. The `session.changed` reducer's TWO-SECTION routing of the per-project
+ *    thread cache (local list / worktree-bound list, see splitSessionSections).
+ *
+ *    Regression anchor: removing a git worktree degenerates every referencing
+ *    session back to local (main's `removeWorktree` PATCHes worktreePath=NULL
+ *    and broadcasts one `session.changed` per row). The reducer used to
+ *    materialize the degraded row at the head of the local section while
+ *    leaving the stale worktree-bound copy in place — the same id twice in
+ *    one cache array. The left bar buckets its tree by `session.worktreePath`,
+ *    so the ghost row kept the removed worktree's group on screen
+ *    ("删除工作树后工作树还在").
+ *
+ * 2. The session-scoped right-panel tabs (turns / sidechat / browser):
+ *    per-session open/active state (sessionRightTabsBySession), global-tab
+ *    switches de-activating but preserving the open set, entry points that
+ *    target a non-active session, and deletion cleanup via dropSessionBuckets.
+ *
+ * 3. The rewind trace: `turn.rewound` must mark EXACTLY the clicked
+ *    `turn-files` card. Rounds "write → edit → edit hello.py" all carry the
+ *    same path set, and the legacy path-set scan marked every matching card
+ *    `rewound` when the user rewound only one — the rewindTurn action now
+ *    pins the clicked card (message id) and the handler scopes to it.
  *
  * Run: scripts/session-store-smoke/run.sh
  */
 import "./prelude.js";
 import { useSessionStore } from "@renderer/stores/sessionStore.js";
+import type { Block, ChatMessage } from "@renderer/stores/sessionStore.js";
+import type { TurnFileEntry } from "@renderer/lib/turnFiles.js";
 import { normWorktreeKey } from "@renderer/lib/worktree.js";
 import type { ContextSnapshot, Session } from "@contracts/session";
 import type { SessionListEntry } from "@contracts/runtime";
@@ -225,6 +240,182 @@ console.log("\n[8] unloaded project");
   ingest(toListEntry(mkSession("other", { projectId: "p2", worktreePath: WT_OLD })));
   check("no cache bucket materialized for p2", useSessionStore.getState().sessionsByProject["p2"] === undefined);
   check("p1 untouched", cache().length === 1);
+}
+
+// ── 9. Session-scoped right-panel tabs (turns / sidechat) ─────────────────
+// The right panel's turn-flow and sub-session panels are opened PER SESSION
+// via the rail's "+" menu — every session remembers its own open set + which
+// of them is active (sessionRightTabsBySession), and a global tab switch
+// de-activates (but keeps open) the session's tabs.
+console.log("\n[9] session-scoped right-panel tabs follow the session");
+{
+  const tabsOf = (id: string) => useSessionStore.getState().sessionRightTabsBySession[id];
+  const eq = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
+
+  // sA lives in the project cache so the session.deleted reducer at the end
+  // of this section actually reaches dropSessionBuckets (unknown ids early-
+  // return before the bucket sweep).
+  seed([mkSession("sA")], { total: 1 });
+  useSessionStore.setState({
+    activeSessionId: "sA",
+    rightPanelTab: "files",
+    sessionRightTabsBySession: {},
+    pendingSubagentView: null,
+    rightOpen: false,
+  });
+
+  useSessionStore.getState().openSessionRightTab("turns");
+  check("first open creates the bucket and activates it", eq(tabsOf("sA"), { open: ["turns"], active: "turns" }), tabsOf("sA"));
+
+  useSessionStore.getState().openSessionRightTab("sidechat");
+  const both = tabsOf("sA");
+  check("second open appends without duplicating", both.open.length === 2 && both.open[0] === "turns" && both.open[1] === "sidechat", both);
+  check("second open becomes the showing tab", both.active === "sidechat");
+
+  useSessionStore.getState().closeSessionRightTab("turns");
+  check("close removes from the open set and keeps the other active", eq(tabsOf("sA"), { open: ["sidechat"], active: "sidechat" }), tabsOf("sA"));
+
+  useSessionStore.getState().setRightPanelTab("git");
+  check("global switch lands in rightPanelTab", useSessionStore.getState().rightPanelTab === "git");
+  check("global switch de-activates the session tab, open set preserved", eq(tabsOf("sA"), { open: ["sidechat"], active: null }), tabsOf("sA"));
+
+  useSessionStore.getState().openSessionRightTab("turns");
+  check("a de-activated tab can be re-activated", eq(tabsOf("sA"), { open: ["sidechat", "turns"], active: "turns" }), tabsOf("sA"));
+
+  // Switch to a session that never opened one — the panel resolves to the
+  // global tab and sA's state must stay untouched.
+  useSessionStore.setState({ activeSessionId: "sB" });
+  check("fresh session has no session tabs", tabsOf("sB") === undefined);
+
+  // Entry point that targets a NON-active session explicitly (subagent
+  // transcript click from another context): the tab must open on the OWNING
+  // session, not whatever is active right now.
+  useSessionStore.getState().openSubagentTranscript("sB", "task-1");
+  check("openSubagentTranscript opens sidechat on the owning session", eq(tabsOf("sB"), { open: ["sidechat"], active: "sidechat" }), tabsOf("sB"));
+  check("transcript view request is pending for that session", useSessionStore.getState().pendingSubagentView?.sessionId === "sB");
+  check("owning session's open didn't touch sA's active tab", tabsOf("sA")?.active === "turns");
+
+  useSessionStore.getState().closeSessionRightTab("sidechat", "sB");
+  check("explicit-session close empties that session only", eq(tabsOf("sB"), { open: [], active: null }) && tabsOf("sA")?.active === "turns");
+
+  // The sidebar browser joins the session layer — same open/close mechanics
+  // (its tab list / WebContentsViews stay global; only the panel's visibility
+  // is per-session).
+  useSessionStore.getState().openSessionRightTab("browser", "sB");
+  check("browser opens as a session tab", eq(tabsOf("sB"), { open: ["browser"], active: "browser" }), tabsOf("sB"));
+  useSessionStore.setState({ activeSessionId: "sB" });
+  useSessionStore.getState().setRightPanelTab("git");
+  check("global switch de-activates the browser tab, open preserved", eq(tabsOf("sB"), { open: ["browser"], active: null }), tabsOf("sB"));
+  useSessionStore.getState().openSessionRightTab("browser");
+  check("browser re-activates like the other session tabs", eq(tabsOf("sB"), { open: ["browser"], active: "browser" }), tabsOf("sB"));
+
+  // No active session — a stray open call is a no-op, no ghost bucket.
+  useSessionStore.setState({ activeSessionId: null });
+  useSessionStore.getState().openSessionRightTab("turns");
+  check("open without an active session is a no-op", !("null" in useSessionStore.getState().sessionRightTabsBySession) && Object.keys(useSessionStore.getState().sessionRightTabsBySession).length === 2, Object.keys(useSessionStore.getState().sessionRightTabsBySession));
+
+  // Hard-deleting a session drops its tab state (shared dropSessionBuckets).
+  useSessionStore.getState().ingestEvent({ type: "session.deleted", sessionId: "sA" });
+  check("deleting the session drops its tab state", tabsOf("sA") === undefined && tabsOf("sB") !== undefined);
+}
+
+// ── 10. Rewind marks EXACTLY the clicked card (same-file multi-turn) ──────
+console.log("\n[10] rewind marks only the clicked card");
+{
+  const HELLO = "D:\\proj\\hello.py";
+  const entry = (before: string, kind: "created" | "modified"): TurnFileEntry => ({
+    filePath: HELLO,
+    kind,
+    adds: 1,
+    dels: 0,
+    before,
+  });
+  // write → edit → edit: three turns, ONE path. The `before` contents differ
+  // per turn — that's the discriminator the precise marker relies on; the
+  // path SET is identical across all three cards (the old bug).
+  const files1 = [entry("", "created")];
+  const files2 = [entry("print('hello')", "modified")];
+  const files3 = [entry("print('hello')\nprint('thanks')", "modified")];
+  const card = (files: TurnFileEntry[], isLatestTurn: boolean): Block => ({
+    kind: "turn-files",
+    filesId: "current",
+    files,
+    isLatestTurn,
+  });
+  const msgs: ChatMessage[] = [
+    { id: "m1", sessionId: "rw1", role: "assistant", blocks: [card(files1, false)], createdAt: 1 },
+    { id: "m2", sessionId: "rw1", role: "assistant", blocks: [card(files2, false)], createdAt: 2 },
+    { id: "m3", sessionId: "rw1", role: "assistant", blocks: [card(files3, true)], createdAt: 3 },
+  ];
+  useSessionStore.setState({
+    activeSessionId: "rw1",
+    messagesBySession: { ...useSessionStore.getState().messagesBySession, rw1: msgs },
+    turnFilesBySession: { ...useSessionStore.getState().turnFilesBySession, rw1: files3 },
+  });
+  const rewoundFlags = () =>
+    (useSessionStore.getState().messagesBySession["rw1"] ?? []).map((m) =>
+      m.blocks.map((b) => (b.kind === "turn-files" ? b.rewound === true : null)),
+    );
+
+  // Rewind round 3 (the latest card): ONLY m3 dims; the live bucket clears.
+  await useSessionStore.getState().rewindTurn(files3, [HELLO]);
+  useSessionStore.getState().ingestEvent({
+    type: "turn.rewound",
+    sessionId: "rw1",
+    files: [HELLO],
+    targetFiles: [HELLO],
+  });
+  check("latest-turn rewind marks only the clicked card", JSON.stringify(rewoundFlags()) === JSON.stringify([[false], [false], [true]]), rewoundFlags());
+  check("latest-turn rewind clears the live bucket", (useSessionStore.getState().turnFilesBySession["rw1"] ?? []).length === 0);
+
+  // Rewind round 2 (historical): ONLY m2 dims; the live bucket must SURVIVE
+  // (it belongs to round 3, which was not rewound here).
+  useSessionStore.setState({
+    turnFilesBySession: { ...useSessionStore.getState().turnFilesBySession, rw1: files3 },
+  });
+  await useSessionStore.getState().rewindTurn(files2, [HELLO]);
+  useSessionStore.getState().ingestEvent({
+    type: "turn.rewound",
+    sessionId: "rw1",
+    files: [HELLO],
+    targetFiles: [HELLO],
+  });
+  check("historical rewind marks only the clicked card", JSON.stringify(rewoundFlags()) === JSON.stringify([[false], [true], [true]]), rewoundFlags());
+  check("historical rewind keeps the live bucket", useSessionStore.getState().turnFilesBySession["rw1"] === files3);
+
+  // No marker (rewind started by another client): the legacy path-set scan
+  // takes over and marks every not-yet-rewound matching card.
+  useSessionStore.getState().ingestEvent({
+    type: "turn.rewound",
+    sessionId: "rw1",
+    files: [HELLO],
+    targetFiles: [HELLO],
+  });
+  check("markerless event falls back to the path-set scan", JSON.stringify(rewoundFlags()) === JSON.stringify([[true], [true], [true]]), rewoundFlags());
+
+  // A rewind of another session must not touch rw1's cards (no marker for
+  // rw1 is in flight, and none may be consumed by a foreign event).
+  useSessionStore.setState({
+    activeSessionId: "rw2",
+    messagesBySession: {
+      ...useSessionStore.getState().messagesBySession,
+      rw2: [
+        { id: "n1", sessionId: "rw2", role: "assistant", blocks: [card(files1, true)], createdAt: 1 },
+      ],
+    },
+  });
+  await useSessionStore.getState().rewindTurn(files1, [HELLO]);
+  useSessionStore.getState().ingestEvent({
+    type: "turn.rewound",
+    sessionId: "rw2",
+    files: [HELLO],
+    targetFiles: [HELLO],
+  });
+  check("other-session rewind stays scoped to its own session", JSON.stringify(rewoundFlags()) === JSON.stringify([[true], [true], [true]]), rewoundFlags());
+  check(
+    "other session's own card is marked via its marker",
+    (useSessionStore.getState().messagesBySession["rw2"] ?? [])[0]?.blocks.some((b) => b.kind === "turn-files" && b.rewound === true) === true,
+  );
 }
 
 console.log(`\n${checks - failures}/${checks} checks passed`);

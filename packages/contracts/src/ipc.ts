@@ -18,6 +18,8 @@ import {
   WorktreePolicySchema,
   OrchSettingsSchema,
 } from "./orchestration.js";
+import { AutomationScheduleSchema } from "./automation.js";
+import type { Automation, AutomationSchedule } from "./automation.js";
 import type {
   OrchestrationRun,
   OrchSettings,
@@ -217,6 +219,17 @@ export type LeftBarMode = z.infer<typeof LeftBarModeSchema>;
  * re-render immediately when it flips — no restart needed.
  */
 export const UI_LOCALE_SETTING_KEY = "ui.locale";
+
+/**
+ * Setting key under which the CONFIRMED 定时任务提案 cards are persisted (JSON
+ * array of proposal fingerprints — FNV-1a hex of the card's raw JSON).
+ *
+ * Confirming a proposal card must be durable INDEPENDENT of the task row:
+ * the card renders from message content, so after a restart its「已创建」
+ * state can only come from this ledger. Deleting the scheduled task must NOT
+ * re-open the proposal — the decision, once made, is what's persisted here.
+ */
+export const AUTOMATION_CONFIRMED_PROPOSALS_SETTING_KEY = "automation.confirmedProposals";
 
 /** zod schema + TS union for the UI language preference. */
 export const LocaleSchema = z.enum(["zh", "en"]);
@@ -597,20 +610,25 @@ export const UI_EDITOR_THEME_SETTING_KEY = "ui.editorTheme";
 
 /**
  * Setting key under which the active right-panel tab is persisted.
- * Value is one of "files" | "git" | "browser" | "turns". The right panel reads it
- * at boot and restores the last-used tab. "browser" re-enables the browser as an
- * embedded sidebar panel (mobile-first); on hydrate the store still falls back
- * to "files" so the browser doesn't auto-open at startup — the "browser" value
- * is only reached via an explicit user toggle during the session.
+ * Value is one of "files" | "git" | "orch" (the global rail tabs). The right
+ * panel reads it at boot and restores the last-used tab. The "turns" (turn
+ * flow), "sidechat" (sub-sessions) and "browser" (embedded sidebar browser)
+ * tabs are session-scoped: they are opened per session via the rail's "+"
+ * menu and never persisted here; a legacy persisted value is ignored at boot.
  * (Terminal used to live here as a tab but moved to the bottom bar; a persisted
  * "terminal" value is rejected by the schema and falls back to "files".)
  */
 export const UI_RIGHT_PANEL_TAB_SETTING_KEY = "ui.rightPanelTab";
 
-/** zod schema + TS union for the right-panel tab preference. "sidechat" (the
- *  side-chat Q&A tab) is session-only like "browser": hydrate ignores a
- *  persisted value so the ask tab never auto-opens at startup. "orch" (the
- *  orchestration DAG panel) is session-only for the same reason. (An "inbox"
+/** zod schema + TS union for the right-panel tab preference. The SESSION-
+ *  scoped tabs — "turns" (turn flow), "sidechat" (sub-sessions) and "browser"
+ *  (embedded sidebar browser) — are opened per session via the rail's "+"
+ *  menu (each session remembers its own open set + active tab); they are
+ *  never written to the persisted global tab anymore, the values stay in the
+ *  schema only so old persisted values still parse (hydrate then ignores
+ *  them, same as "browser"/"orch" always were). "orch" (the orchestration DAG
+ *  panel) remains a global tab, session-only in the boot sense: hydrate
+ *  ignores a persisted value so it never auto-opens at startup. (An "inbox"
  *  tab used to aggregate worker asks/gates; it was removed — a persisted
  *  "inbox" value is rejected by the schema and falls back to "files".) */
 export const RightPanelTabSchema = z.enum([
@@ -620,8 +638,14 @@ export const RightPanelTabSchema = z.enum([
   "turns",
   "sidechat",
   "orch",
+  "sched",
 ]);
 export type RightPanelTab = z.infer<typeof RightPanelTabSchema>;
+/** The globally-switchable right-panel tabs (fixed rail icons whose active
+ *  state is a global user preference). The session-scoped "turns"/"sidechat"/
+ *  "browser" tabs are excluded — they live in per-session state, not in this
+ *  setting. */
+export type RightPanelGlobalTab = Exclude<RightPanelTab, "browser" | "turns" | "sidechat">;
 
 /**
  * Setting key under which the IDE file editor's open-file list is persisted.
@@ -854,10 +878,16 @@ export const StartSessionSchema = z.object({
   /** Id of a custom-model config to bind to this session (omit/null = built-in). */
   customModelId: z.string().nullable().optional(),
   /** Session role: "chat" (default, normal left-bar session), "side"
-   *  (side-chat Q&A session owned by the right-panel ask tab), or
+   *  (side-chat Q&A session owned by the right-panel ask tab),
    *  "orch-worker" (orchestration worker sub-session; always creates a fresh
-   *  row, invisible to every list — managed by the orchestrator). */
-  kind: z.enum(["chat", "side", "orch-worker"]).default("chat"),
+   *  row, invisible to every list — managed by the orchestrator), or
+   *  "automation" (one run of a scheduled automation task; always a fresh
+   *  row, invisible to every list — created by the automation scheduler). */
+  kind: z.enum(["chat", "side", "orch-worker", "automation"]).default("chat"),
+  /** For kind="automation": the owning automation task, denormalized onto
+   *  the session row (automation_id column) so the automation page can list
+   *  a task's runs with one indexed query. Ignored for other kinds. */
+  automationId: z.string().optional(),
   /** For kind="side"/"orch-worker": the main session this subordinate thread
    *  belongs to. Ignored for chat. */
   parentSessionId: z.string().optional(),
@@ -1019,7 +1049,15 @@ export type RespondPlanApprovalInput = z.infer<typeof RespondPlanApprovalSchema>
  * `targetFiles`: the requested path set, forwarded onto the
  * `turn.rewound` event so the renderer can locate the exact card to
  * mark `rewound: true`. Always present — the card is never removed,
- * only marked, for both latest-turn and historical rewinds. */
+ * only marked, for both latest-turn and historical rewinds.
+ *
+ * `latest`: whether the clicked card is the session's LATEST turn
+ * (the renderer knows this from the block's `isLatestTurn` flag).
+ * Path sets alone cannot identify a turn — rounds 1/2/3 may all have
+ * touched the same file — so main gates its live-state cleanup on this
+ * flag: only a latest-turn rewind clears the in-memory FileSnapshot and
+ * the persisted latest-turn `turn_files` column. Omitted = historical
+ * (older clients / mobile callers). */
 export const RewindTurnSchema = z.object({
   sessionId: z.string(),
   files: z.array(
@@ -1032,6 +1070,7 @@ export const RewindTurnSchema = z.object({
     }),
   ),
   targetFiles: z.array(z.string()),
+  latest: z.boolean().optional(),
 });
 export type RewindTurnInput = z.infer<typeof RewindTurnSchema>;
 
@@ -3667,6 +3706,69 @@ export interface OrchestratorEventMessage {
   event: OrchestratorEvent;
 }
 
+/* ── Automations (scheduled tasks) ──
+ * A task = prompt + execution config + a schedule rule. The main-process
+ * scheduler fires it: create a kind="automation" session, send the prompt,
+ * track status via runtime events, and prune old runs beyond keepRuns. */
+
+export const AutomationSaveSchema = z.object({
+  /** Absent = create a new task; present = update in place. */
+  id: z.string().optional(),
+  projectId: z.string(),
+  /** The session whose composer created this task (receipt lands there).
+   *  Stored on the task; drives the left bar's initiator badge. Create-only
+   *  (updates ignore it). */
+  parentSessionId: z.string().optional(),
+  title: z.string().min(1).max(120),
+  prompt: z.string().min(1).max(100_000),
+  /** "/"-menu skill names (see Automation.skillNames). */
+  skillNames: z.array(z.string().min(1)).max(50).default([]),
+  /** Absolute file paths attached as @path references (see Automation.filePaths). */
+  filePaths: z.array(z.string().min(1)).max(50).default([]),
+  providerId: z.string().optional(),
+  model: z.string().optional(),
+  customModelId: z.string().nullable().optional(),
+  effort: z.string().default("default"),
+  permissionMode: z.string().default("acceptEdits"),
+  schedule: AutomationScheduleSchema,
+  enabled: z.boolean().default(true),
+  keepRuns: z.number().int().min(1).max(200).default(20),
+});
+export type AutomationSaveInput = z.infer<typeof AutomationSaveSchema>;
+
+export const AutomationSetEnabledSchema = z.object({ id: z.string(), enabled: z.boolean() });
+export type AutomationSetEnabledInput = z.infer<typeof AutomationSetEnabledSchema>;
+
+export const AutomationDeleteSchema = z.object({
+  id: z.string(),
+  permanent: z.boolean().optional(),
+});
+export type AutomationDeleteInput = z.infer<typeof AutomationDeleteSchema>;
+
+export const AutomationRestoreSchema = z.object({ id: z.string() });
+export type AutomationRestoreInput = z.infer<typeof AutomationRestoreSchema>;
+
+/** Model-judged scheduled-task intent: the composer's send flow consults the
+ *  model when a send looks schedule-related; the structured verdict (is this
+ *  a task + the parsed trigger rule) feeds the approval dialog. Null =
+ *  model unavailable / unparsable — the UI falls back to manual config. */
+export const AutomationParseIntentSchema = z.object({ text: z.string().min(1).max(20_000) });
+export type AutomationParseIntentInput = z.infer<typeof AutomationParseIntentSchema>;
+export interface ScheduleIntentResult {
+  isTask: boolean;
+  reason: string;
+  schedule: AutomationSchedule;
+}
+
+/** Push payload for automation lifecycle updates (automation:event). Fired
+ *  whenever a task's row changes (run started/finished, status flip, prune)
+ *  so open automation pages refresh without polling. */
+export interface AutomationEventMessage {
+  channel: "automation:event";
+  /** The task whose state changed (null = list-level churn, e.g. create). */
+  automationId: string | null;
+}
+
 export type MainToRendererMessage =
   | ClaudeEventMessage
   | SessionTitleUpdatedMessage
@@ -3684,7 +3786,8 @@ export type MainToRendererMessage =
   | VoiceResultMessage
   | VoiceDownloadProgressMessage
   | RuntimeEventMessage
-  | OrchestratorEventMessage;
+  | OrchestratorEventMessage
+  | AutomationEventMessage;
 
 /* ── Integrated terminal (xterm.js + node-pty) ──
  *  PTY processes live in main. Renderer only sees opaque terminalIds and
@@ -4652,6 +4755,21 @@ export interface RpcMap {
   "orch.handoff": (input: OrchHandoffInput) => Promise<{ session: Session }>;
   /** Fetch a worker sub-session row (for opening its transcript in a tab). */
   "orch.workerSession": (input: OrchWorkerSessionInput) => Promise<{ session: Session | null }>;
+  // Automations (scheduled tasks)
+  "automation.list": () => Promise<{ automations: Automation[] }>;
+  "automation.save": (input: AutomationSaveInput) => Promise<{ automation: Automation }>;
+  /** Soft-delete or hard-delete a task. */
+  "automation.delete": (input: AutomationDeleteInput) => Promise<{ permanent: boolean; automation?: Automation }>;
+  /** Restore a soft-deleted task. */
+  "automation.restore": (input: AutomationRestoreInput) => Promise<{ automation: Automation }>;
+  "automation.setEnabled": (input: AutomationSetEnabledInput) => Promise<{ automation: Automation }>;
+  /** Fire a task immediately without touching its schedule. Returns the new
+   *  run's session, or null when the task is already running (overlap guard). */
+  "automation.runNow": (input: { id: string }) => Promise<{ session: Session | null }>;
+  "automation.parseIntent": (
+    input: AutomationParseIntentInput,
+  ) => Promise<{ intent: ScheduleIntentResult | null }>;
+
   /** List orchestration templates (builtin pipeline/competition + user). */
 }
 
@@ -4930,8 +5048,18 @@ export const IPC = {
   ORCH_MERGE_TASK: "orch:mergeTask",
   ORCH_HANDOFF: "orch:handoff",
   ORCH_WORKER_SESSION: "orch:workerSession",
+  // Automations (scheduled tasks) — invoke/handle (RPC).
+  AUTOMATION_LIST: "automation:list",
+  AUTOMATION_SAVE: "automation:save",
+  AUTOMATION_DELETE: "automation:delete",
+  AUTOMATION_RESTORE: "automation:restore",
+  AUTOMATION_SET_ENABLED: "automation:setEnabled",
+  AUTOMATION_RUN_NOW: "automation:runNow",
+  AUTOMATION_PARSE_INTENT: "automation:parseIntent",
   // Orchestration push events (main → renderer).
   ORCH_EVENT: "orchestrator:event",
+  // Automation push events (main → renderer): a task row changed.
+  AUTOMATION_EVENT: "automation:event",
   // send/on (push events)
   CLAUDE_EVENT: "claude:event",
   SESSION_TITLE_UPDATED: "session:titleUpdated",

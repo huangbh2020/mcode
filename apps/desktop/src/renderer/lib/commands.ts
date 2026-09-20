@@ -315,7 +315,9 @@ const STATIC_COMMANDS: StaticCommandDef[] = [
     keywords: ["turns", "flow", "timeline", "usage", "轮次", "流程", "时间线", "右栏"],
     icon: IconListDetails,
     perform: (s) => {
-      s.setRightPanelTab("turns");
+      // turns is a session-scoped tab — open it for the active session (the
+      // rail's "+" menu does the same).
+      s.openSessionRightTab("turns");
       s.setRightOpen(true);
     },
   },
@@ -393,11 +395,19 @@ const STATIC_COMMANDS: StaticCommandDef[] = [
     icon: IconWorld,
     defaultAccelerator: DEFAULT_SHORTCUTS["layout.toggle-browser"],
     perform: (s) => {
-      // Toggle the embedded sidebar browser (mobile-first). Mirrors the rail
-      // icon: open it if another tab is active, or close it (fall back to
-      // files) if it's already showing. The PC-fullscreen overlay is reached
-      // from inside the sidebar via its own "展开为 PC 全屏" button.
-      s.setRightPanelTab(s.rightPanelTab === "browser" ? "files" : "browser");
+      // Toggle the SESSION-scoped browser tab for the active session
+      // (mirrors the rail icon: show it if it isn't showing, close it —
+      // falling back to the global tab — if it is). The PC-fullscreen
+      // overlay is reached from inside the sidebar via its own
+      // "展开为 PC 全屏" button.
+      const showing =
+        (s.activeSessionId ? s.sessionRightTabsBySession[s.activeSessionId]?.active : null) === "browser";
+      if (showing) {
+        s.closeSessionRightTab("browser");
+      } else {
+        s.openSessionRightTab("browser");
+        s.setRightOpen(true);
+      }
     },
   },
   {

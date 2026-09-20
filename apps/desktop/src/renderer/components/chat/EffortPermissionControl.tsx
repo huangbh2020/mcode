@@ -249,10 +249,20 @@ function LevelBars({ count, activeIndex }: { count: number; activeIndex: number 
 /** Thinking-level block picker. */
 export function EffortChip({
   layout = "pill",
+  controller,
 }: {
   /** Presentation: pill segment ("pill") vs settings row ("row"). */
   layout?: "pill" | "row";
-}) {
+  /** Controlled override (定时任务编辑弹窗): bind to a LOCAL draft instead of
+   *  the global composer slots — same grid popover, values round-trip
+   *  through `onChange`; options still come from the given provider's
+   *  capabilities. */
+  controller?: {
+    providerId: string;
+    value: string;
+    onChange: (v: string) => void;
+  };
+} = {}) {
   const stacked = layout === "row";
   // Stacked rows cascade to the RIGHT; phone-class viewports have no room
   // for panel + popover side by side, so they open upward instead. Chip mode
@@ -265,11 +275,17 @@ export function EffortChip({
   const [open, setOpen] = useState(false);
   const popupRef = useRef<HTMLDivElement>(null);
   useSuppressBrowserView(open, popupRef);
-  const effort = useSessionStore((s) => s.effort);
-  const setEffort = useSessionStore((s) => s.setEffort);
-  const providerId = useSessionStore((s) => s.providerId);
+  const storeEffort = useSessionStore((s) => s.effort);
+  const storeSetEffort = useSessionStore((s) => s.setEffort);
+  const storeProviderId = useSessionStore((s) => s.providerId);
   const providers = useSessionStore((s) => s.providers);
 
+  const effort = controller ? controller.value : storeEffort;
+  const setEffort = (v: string): void => {
+    if (controller) controller.onChange(v);
+    else storeSetEffort(v);
+  };
+  const providerId = controller ? controller.providerId : storeProviderId;
   const provider = providers.find((p) => p.id === providerId);
   const levels = provider?.capabilities.thinkingLevels;
 
@@ -368,23 +384,39 @@ export function EffortChip({
 /** Permission-mode block picker. */
 export function PermissionChip({
   layout = "pill",
+  controller,
 }: {
   /** Presentation: pill segment ("pill") vs settings row ("row"). */
   layout?: "pill" | "row";
-}) {
+  /** Controlled override (定时任务编辑弹窗): bind to a LOCAL draft. `modes`
+   *  optionally narrows the option list (the editor filters out `plan` —
+   *  unattended runs must not land in plan mode). */
+  controller?: {
+    providerId: string;
+    value: string;
+    onChange: (v: string) => void;
+    modes?: PermissionModeOption[];
+  };
+} = {}) {
   const stacked = layout === "row";
   const cascade = stacked && !useNarrowViewport();
   const { t } = useI18n();
   const [open, setOpen] = useState(false);
   const popupRef = useRef<HTMLDivElement>(null);
   useSuppressBrowserView(open, popupRef);
-  const permissionMode = useSessionStore((s) => s.permissionMode);
-  const setPermissionMode = useSessionStore((s) => s.setPermissionMode);
-  const providerId = useSessionStore((s) => s.providerId);
+  const storePermissionMode = useSessionStore((s) => s.permissionMode);
+  const storeSetPermissionMode = useSessionStore((s) => s.setPermissionMode);
+  const storeProviderId = useSessionStore((s) => s.providerId);
   const providers = useSessionStore((s) => s.providers);
 
+  const permissionMode = controller ? controller.value : storePermissionMode;
+  const setPermissionMode = (v: string): void => {
+    if (controller) controller.onChange(v);
+    else storeSetPermissionMode(v);
+  };
+  const providerId = controller ? controller.providerId : storeProviderId;
   const provider = providers.find((p) => p.id === providerId);
-  const modes = provider?.capabilities.permissionModes;
+  const modes = controller?.modes ?? provider?.capabilities.permissionModes;
 
   // Provider declares no permission modes → hide the chip.
   if (!modes || modes.length === 0) return null;

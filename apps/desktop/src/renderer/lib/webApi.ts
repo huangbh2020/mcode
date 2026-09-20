@@ -587,6 +587,8 @@ const on: Api["on"] = {
   relayEvent: () => () => {},
   // Orchestration events are desktop-only (the phone has no DAG panel).
   orchEvent: () => () => {},
+  // Automation events are desktop-only (the phone has no automation page).
+  automationEvent: () => () => {},
   // Voice ASR is desktop-only; the web shell never emits results.
   voiceResult: () => () => {},
   voiceDownloadProgress: () => () => {},

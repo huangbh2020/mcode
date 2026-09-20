@@ -1,0 +1,759 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>自动化 v2 · 任务即会话（composer 发起 + 右栏运行）设计原型</title>
+<style>
+  /* =========================================================================
+   * 自动化(定时任务) v2 · 交互设计原型 —— 重构方向:「任务即会话」
+   *
+   * 与 v1(全屏自动化页,已实现于当前代码)的根本差异:
+   *   v1: 独立入口 → 全屏表单页建任务 → 运行记录锁在页面里
+   *   v2: 像发消息一样建任务 → 任务=会话 → 运行在右栏 tab 里看
+   *
+   * 新流程:
+   *   ① 项目处像平常一样「新建会话」
+   *   ② 会话输入框「自动编排」右侧新增「定时任务」按钮
+   *   ③ 点它弹出定时配置弹层(六种类型 + 下次运行实时预览)
+   *   ④ 配好点发送 → 创建一个「定时任务会话」;当前会话留下回执卡片
+   *   ⑤ 到点自动运行:输出进右栏「定时任务」tab(可关闭),不占主聊天区
+   *
+   * 设计细节(标注 ①-⑥,详见右下「设计说明」):
+   *   - 左栏图标体系:任务会话=实心时钟;发起任务的主会话=描边时钟徽标(计数)
+   *   - 任务=会话:每次触发=该会话里的一个回合;历史=回合列表
+   *   - 右栏 tab:任务切换器 + 正在运行的实时输出 + 历史(可关闭)
+   *   - 调度引擎(v1 的 30s tick / computeNextRun / 错过跳过 / 重叠保护 /
+   *     保留策略)全部复用,本弹层里的「下次运行」就是同一函数实时算出
+   * ========================================================================= */
+
+  :root{
+    --surface:255 255 255;
+    --surface-muted:240 242 246;
+    --surface-hover:226 229 235;
+    --content:9 9 11;
+    --content-muted:63 63 70;
+    --content-subtle:113 113 122;
+    --edge:213 216 222;
+    --panel-edge:222 225 231;
+    --input-edge:202 205 212;
+    --accent:5 150 105;
+    --accent-strong:4 120 87;
+    --danger:220 38 38;
+    --warning:180 83 9;
+    --success:4 120 87;
+    --shadow-card:0 1px 2px rgb(9 9 11 / .05);
+    --shadow-pop:0 14px 40px -12px rgb(9 9 11 / .22), 0 2px 8px rgb(9 9 11 / .06);
+  }
+  [data-theme="dark"]{
+    --surface:26 29 36;
+    --surface-muted:44 49 60;
+    --surface-hover:58 64 78;
+    --content:231 232 236;
+    --content-muted:188 191 198;
+    --content-subtle:158 162 171;
+    --edge:45 51 64;
+    --panel-edge:40 46 58;
+    --input-edge:95 99 110;
+    --accent:16 185 129;
+    --accent-strong:16 185 129;
+    --danger:248 113 113;
+    --warning:251 191 36;
+    --success:16 185 129;
+    --shadow-card:0 1px 2px rgb(0 0 0 / .3);
+    --shadow-pop:0 16px 44px rgb(0 0 0 / .55), 0 2px 10px rgb(0 0 0 / .35);
+  }
+  :root{ --ease-out:cubic-bezier(.22,1,.36,1); }
+
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{
+    margin:0;background:rgb(var(--surface-muted));color:rgb(var(--content));
+    font-family:-apple-system,"SF Pro Text","Segoe UI","PingFang SC","Microsoft YaHei",system-ui,sans-serif;
+    font-size:13.5px;line-height:1.55;-webkit-font-smoothing:antialiased;
+  }
+  button{font:inherit;color:inherit;background:none;border:none;cursor:pointer;padding:0}
+  input,select{font:inherit;color:rgb(var(--content));background:rgb(var(--surface));border:1px solid rgb(var(--input-edge));border-radius:8px;padding:5px 9px;outline:none}
+  input:focus,select:focus{border-color:rgb(var(--accent))}
+  ::placeholder{color:rgb(var(--content-subtle))}
+
+  .app{display:flex;height:100vh;overflow:hidden}
+
+  /* ── 原型标注 ── */
+  .anno{
+    position:absolute;z-index:70;display:inline-flex;align-items:center;gap:6px;
+    padding:3px 9px;border-radius:999px;font-size:11px;pointer-events:none;white-space:nowrap;
+    color:rgb(var(--accent));background:rgb(var(--surface));
+    border:1px dashed rgb(var(--accent)/ .7);box-shadow:var(--shadow-card);
+  }
+  .tag{
+    display:inline-flex;align-items:center;justify-content:center;
+    width:15px;height:15px;border-radius:50%;flex:none;
+    background:rgb(var(--accent));color:rgb(var(--surface));font-size:10px;font-weight:700;
+  }
+
+  /* ══ 左栏 ══ */
+  .sidebar{
+    width:268px;flex:none;display:flex;flex-direction:column;
+    background:rgb(var(--surface));border-right:1px solid rgb(var(--panel-edge));
+  }
+  .sb-head{padding:14px 14px 8px;font-size:12px;color:rgb(var(--content-subtle));letter-spacing:.04em}
+  .sb-scroll{flex:1;overflow-y:auto;padding:0 8px}
+  .sb-sec{padding:8px 8px 4px;font-size:11px;font-weight:700;color:rgb(var(--content-subtle))}
+  .sess{
+    display:flex;flex-direction:column;gap:2px;padding:7px 9px;border-radius:10px;
+    border:1px solid transparent;cursor:pointer;position:relative;
+  }
+  .sess:hover{background:rgb(var(--surface-hover))}
+  .sess.on{background:rgb(var(--accent)/ .09);border-color:rgb(var(--accent)/ .35)}
+  .sess .r1{display:flex;align-items:center;gap:7px;min-width:0}
+  .sess .name{font-weight:600;font-size:13px;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .sess .r2{display:flex;align-items:center;gap:6px;font-size:11px;color:rgb(var(--content-muted));padding-left:21px}
+  .sess.dim{opacity:.45}
+  .ic{display:inline-flex;flex:none;color:rgb(var(--content-subtle))}
+  .ic.clock-on{color:rgb(var(--accent))}
+  .dot{width:7px;height:7px;border-radius:50%;flex:none}
+  .dot.run{background:#0369a1;animation:pulse 1.6s ease-in-out infinite}
+  .dot.ok{background:rgb(var(--success))}
+  [data-theme="dark"] .dot.run{background:#38bdf8}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+  .next{color:rgb(var(--accent)/ .9)}
+  /* 主会话的「发起了定时任务」徽标:描边时钟 + 计数 */
+  .parent-badge{
+    display:inline-flex;align-items:center;gap:2px;flex:none;
+    border:1px solid rgb(var(--accent)/ .55);color:rgb(var(--accent));
+    border-radius:6px;padding:0 4px;font-size:10px;font-weight:700;line-height:1.6;
+    cursor:pointer;
+  }
+  .sb-foot{border-top:1px solid rgb(var(--edge));padding:8px;display:flex;flex-direction:column;gap:2px}
+  .sb-btn{display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:8px;color:rgb(var(--content-muted));font-size:12.5px;width:100%;text-align:left}
+  .sb-btn:hover{background:rgb(var(--surface-hover));color:rgb(var(--content))}
+
+  /* ══ 主区 ══ */
+  .main{flex:1;min-width:0;display:flex;flex-direction:column;position:relative}
+  .topbar{
+    height:42px;flex:none;display:flex;align-items:center;gap:10px;
+    padding:0 14px;border-bottom:1px solid rgb(var(--panel-edge));background:rgb(var(--surface));
+  }
+  .topbar .title{font-size:13px;font-weight:600}
+  .tb-btn{display:inline-flex;align-items:center;gap:5px;padding:4px 9px;border-radius:7px;font-size:12px;color:rgb(var(--content-muted))}
+  .tb-btn:hover{background:rgb(var(--surface-hover));color:rgb(var(--content))}
+  .tb-btn.on{color:rgb(var(--accent));background:rgb(var(--accent)/ .1)}
+  .spacer{flex:1}
+
+  .body{flex:1;min-height:0;display:flex}
+
+  /* ── 中央聊天 ── */
+  .center{flex:1;min-width:0;display:flex;flex-direction:column;background:rgb(var(--surface-muted))}
+  .chat{flex:1;overflow-y:auto;padding:22px 0 10px}
+  .chat-col{max-width:640px;margin:0 auto;display:flex;flex-direction:column;gap:12px;padding:0 22px}
+  .msg{border-radius:12px;padding:9px 13px;font-size:13px;line-height:1.65;max-width:86%}
+  .msg.user{align-self:flex-end;background:rgb(var(--accent)/ .13);border:1px solid rgb(var(--accent)/ .28)}
+  .msg.ai{align-self:flex-start;background:rgb(var(--surface));border:1px solid rgb(var(--panel-edge))}
+  .msg .who{font-size:10.5px;color:rgb(var(--content-subtle));margin-bottom:3px;font-weight:700;letter-spacing:.03em}
+  /* 任务回执卡片(④) */
+  .task-receipt{
+    align-self:center;display:flex;align-items:center;gap:10px;max-width:92%;
+    border:1px solid rgb(var(--accent)/ .4);background:rgb(var(--accent)/ .07);
+    border-radius:12px;padding:9px 13px;font-size:12.5px;
+  }
+  .task-receipt .ic{color:rgb(var(--accent))}
+  .task-receipt b{color:rgb(var(--accent))}
+  .task-receipt .sub{font-size:11px;color:rgb(var(--content-muted));margin-top:1px}
+  .task-receipt .go{margin-left:auto;flex:none;color:rgb(var(--accent));font-weight:600;padding:3px 8px;border-radius:7px}
+  .task-receipt .go:hover{background:rgb(var(--accent)/ .12)}
+
+  /* ── Composer ── */
+  .composer-wrap{flex:none;padding:0 18px 14px;position:relative}
+  .composer{
+    max-width:680px;margin:0 auto;position:relative;
+    border:1px solid rgb(var(--edge));border-radius:14px;background:rgb(var(--surface));
+    transition:border-color .15s var(--ease-out);
+  }
+  .composer:focus-within{border-color:rgb(var(--accent)/ .55)}
+  .composer textarea{
+    display:block;width:100%;border:none;background:transparent;resize:none;
+    padding:11px 14px 2px;font:inherit;font-size:13px;line-height:1.6;color:rgb(var(--content));outline:none;
+  }
+  .pill-row{display:flex;align-items:center;flex-wrap:wrap;gap:2px;padding:4px 8px 8px}
+  .seg{display:inline-flex;align-items:center;gap:5px;padding:4px 9px;border-radius:8px;font-size:11.5px;color:rgb(var(--content-muted))}
+  .seg .lab{font-weight:600;color:rgb(var(--content));white-space:nowrap}
+  .seg .ic{color:rgb(var(--content-subtle))}
+  .seg:hover{background:rgb(var(--surface-hover))}
+  .psep{width:1px;height:16px;background:rgb(var(--edge));margin:0 4px}
+  /* ② 定时任务按钮(自动编排右侧) */
+  .sched-btn{
+    display:inline-flex;align-items:center;gap:5px;padding:4px 9px;border-radius:8px;
+    font-size:11.5px;color:rgb(var(--content-muted));border:1px dashed rgb(var(--input-edge));
+  }
+  .sched-btn:hover{color:rgb(var(--accent));border-color:rgb(var(--accent)/ .6)}
+  .sched-btn.on{
+    color:rgb(var(--accent));border-style:solid;border-color:rgb(var(--accent));
+    background:rgb(var(--accent)/ .12);font-weight:600;
+  }
+  /* 自动编排 chip(对照:新按钮在它右侧) */
+  .orch-chip{
+    display:inline-flex;align-items:center;gap:5px;padding:4px 9px;border-radius:8px;
+    font-size:11.5px;color:rgb(var(--content-muted));border:1px solid transparent;
+  }
+  .orch-chip:hover{background:rgb(var(--surface-hover));color:rgb(var(--content))}
+  .orch-chip.on{color:rgb(var(--info,167 139 250));}
+  /* ③ 定时配置弹层 */
+  .sched-pop{
+    position:absolute;bottom:calc(100% + 8px);left:0;z-index:65;width:330px;
+    background:rgb(var(--surface));border:1px solid rgb(var(--panel-edge));
+    border-radius:14px;box-shadow:var(--shadow-pop);padding:13px 14px;
+    animation:popIn .14s var(--ease-out);
+  }
+  @keyframes popIn{from{opacity:0;transform:translateY(6px) scale(.98)}to{opacity:1;transform:none}}
+  .sched-pop h4{margin:0 0 9px;font-size:12.5px;display:flex;align-items:center;gap:6px}
+  .seg6{display:flex;flex-wrap:wrap;gap:2px;background:rgb(var(--surface-muted));border:1px solid rgb(var(--edge));border-radius:9px;padding:2px}
+  .seg6 button{padding:4px 9px;border-radius:7px;font-size:11.5px;font-weight:600;color:rgb(var(--content-muted))}
+  .seg6 button.on{background:rgb(var(--surface));color:rgb(var(--accent));box-shadow:var(--shadow-card)}
+  .sch-line{display:flex;align-items:center;gap:7px;flex-wrap:wrap;margin-top:9px;font-size:12px;color:rgb(var(--content-muted))}
+  .chips{display:flex;gap:5px;flex-wrap:wrap}
+  .chip{padding:3px 10px;border-radius:999px;font-size:11.5px;border:1px solid rgb(var(--input-edge));color:rgb(var(--content-muted))}
+  .chip:hover{border-color:rgb(var(--accent)/ .6);color:rgb(var(--content))}
+  .chip.on{background:rgb(var(--accent)/ .14);border-color:rgb(var(--accent));color:rgb(var(--accent));font-weight:600}
+  .next-bar{
+    display:flex;align-items:center;gap:7px;margin-top:10px;
+    background:rgb(var(--accent)/ .08);border:1px solid rgb(var(--accent)/ .3);
+    border-radius:9px;padding:7px 10px;font-size:11.5px;
+  }
+  .next-bar .v{color:rgb(var(--accent));font-weight:700}
+  .send-note{margin-top:8px;font-size:11px;color:rgb(var(--content-subtle));display:flex;gap:5px;align-items:flex-start;line-height:1.5}
+
+  /* ── 右栏(⑥ 定时任务 tab) ── */
+  .rightpanel{
+    width:340px;flex:none;display:flex;flex-direction:column;
+    background:rgb(var(--surface));border-left:1px solid rgb(var(--panel-edge));
+  }
+  .rp-rail{display:flex;align-items:center;gap:2px;padding:6px 8px;border-bottom:1px solid rgb(var(--panel-edge))}
+  .rp-tab{display:inline-flex;align-items:center;gap:5px;padding:4px 9px;border-radius:8px;font-size:12px;color:rgb(var(--content-muted))}
+  .rp-tab:hover{background:rgb(var(--surface-hover));color:rgb(var(--content))}
+  .rp-tab.on{color:rgb(var(--accent));background:rgb(var(--accent)/ .1);font-weight:600}
+  .rp-close{margin-left:auto;color:rgb(var(--content-subtle));padding:3px;border-radius:6px}
+  .rp-close:hover{background:rgb(var(--surface-hover));color:rgb(var(--content))}
+  .rp-body{flex:1;min-height:0;display:flex;flex-direction:column}
+  /* 任务切换器 */
+  .task-switch{border-bottom:1px solid rgb(var(--edge));padding:6px 8px;display:flex;flex-direction:column;gap:2px;max-height:172px;overflow-y:auto}
+  .ts-row{display:flex;flex-direction:column;gap:1px;padding:6px 8px;border-radius:9px;cursor:pointer}
+  .ts-row:hover{background:rgb(var(--surface-hover))}
+  .ts-row.on{background:rgb(var(--accent)/ .08)}
+  .ts-r1{display:flex;align-items:center;gap:7px;min-width:0}
+  .ts-name{font-size:12.5px;font-weight:600;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .ts-sub{font-size:10.5px;color:rgb(var(--content-subtle));padding-left:20px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .badge{display:inline-flex;align-items:center;gap:4px;padding:1px 7px;border-radius:999px;font-size:10.5px;font-weight:600}
+  .badge.run{color:#0369a1;background:#38bdf8/ .12;color:#0369a1}
+  [data-theme="dark"] .badge.run{color:#38bdf8;background:rgb(56 189 248 / .12)}
+  .badge.ok{color:rgb(var(--success));background:rgb(var(--success)/ .12)}
+  .badge.warn{color:rgb(var(--warning));background:rgb(var(--warning)/ .14)}
+  /* 实时输出 */
+  .live-head{display:flex;align-items:center;gap:8px;padding:9px 12px 7px}
+  .live-head .t{font-size:12px;font-weight:700;flex:1;display:flex;align-items:center;gap:6px}
+  .live-head .dur{font-size:10.5px;color:rgb(var(--content-subtle))}
+  .live{flex:1;min-height:0;overflow-y:auto;padding:2px 12px 10px;display:flex;flex-direction:column;gap:8px}
+  .toolcard{display:flex;align-items:center;gap:7px;border:1px solid rgb(var(--edge));border-radius:9px;background:rgb(var(--surface));padding:6px 10px;font-size:11.5px;color:rgb(var(--content-muted));width:fit-content;max-width:100%}
+  .toolcard code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:11px;color:rgb(var(--content))}
+  .live-text{font-size:12px;line-height:1.65;color:rgb(var(--content))}
+  .caret{display:inline-block;width:7px;height:13px;background:rgb(var(--accent));vertical-align:-2px;animation:blink 1s steps(2) infinite}
+  @keyframes blink{50%{opacity:0}}
+  /* 历史 */
+  .hist{border-top:1px solid rgb(var(--edge));flex:none;max-height:178px;overflow-y:auto}
+  .hist-head{padding:7px 12px 3px;font-size:11px;font-weight:700;color:rgb(var(--content-subtle))}
+  .h-row{display:flex;align-items:center;gap:8px;padding:5px 12px;font-size:11.5px}
+  .h-row + .h-row{border-top:1px solid rgb(var(--edge))}
+  .h-row .when{color:rgb(var(--content-muted))}
+  .h-row .go{margin-left:auto;color:rgb(var(--accent));padding:1px 7px;border-radius:6px;font-size:11px}
+  .h-row .go:hover{background:rgb(var(--accent)/ .12)}
+  .rp-foot{border-top:1px solid rgb(var(--edge));padding:6px 10px;display:flex;gap:6px}
+  .mini{padding:3px 10px;border-radius:7px;font-size:11px;font-weight:600;border:1px solid rgb(var(--input-edge));color:rgb(var(--content-muted))}
+  .mini:hover{color:rgb(var(--content));background:rgb(var(--surface-hover))}
+  .mini.warn{color:rgb(var(--warning));border-color:rgb(var(--warning)/ .5)}
+
+  /* ── 设计说明抽屉 ── */
+  .fab{position:fixed;right:384px;bottom:16px;z-index:90;width:32px;height:32px;border-radius:50%;background:rgb(var(--surface));border:1px solid rgb(var(--edge));color:rgb(var(--content-muted));font-size:13px;font-weight:700;box-shadow:var(--shadow-pop)}
+  .fab:hover{color:rgb(var(--accent));border-color:rgb(var(--accent)/ .6)}
+  .drawer{position:fixed;right:384px;bottom:56px;z-index:90;width:380px;max-height:70vh;overflow-y:auto;background:rgb(var(--surface));border:1px solid rgb(var(--panel-edge));border-radius:14px;box-shadow:var(--shadow-pop);padding:14px 16px;display:none}
+  .drawer.open{display:block}
+  .drawer h3{margin:0 0 8px;font-size:13px}
+  .drawer dl{margin:0;display:flex;flex-direction:column;gap:8px}
+  .drawer dt{font-size:12px;font-weight:700;color:rgb(var(--accent))}
+  .drawer dd{margin:1px 0 0;font-size:11.8px;color:rgb(var(--content-muted));line-height:1.55}
+
+  ::-webkit-scrollbar{width:9px;height:9px}
+  ::-webkit-scrollbar-thumb{background:rgb(var(--content-subtle)/ .35);border-radius:5px;border:2px solid transparent;background-clip:content-box}
+  @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+</style>
+</head>
+<body>
+
+<div class="app">
+
+  <!-- ══ ① 左栏:图标体系(④) ══ -->
+  <aside class="sidebar">
+    <div class="sb-head">Mcode · cc-gui</div>
+    <div class="anno" style="left:200px;top:64px;z-index:80"><span class="tag">④</span> 左栏图标体系</div>
+    <div class="sb-scroll">
+      <div class="sb-sec">会话</div>
+
+      <!-- 发起定时任务的主会话:描边时钟徽标 + 计数 -->
+      <div class="sess" title="这个会话发起过 2 个定时任务">
+        <div class="r1">
+          <span class="ic"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8z"/></svg></span>
+          <span class="name">重构 sessionStore</span>
+          <span class="parent-badge" id="parentBadge" title="此会话发起的定时任务(点击在右栏查看)">
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+            2
+          </span>
+        </div>
+        <div class="r2"><span>已完成 · 3 小时前</span></div>
+      </div>
+
+      <!-- 任务会话:实心时钟 + 运行中脉冲 -->
+      <div class="sess" data-task="t2">
+        <div class="r1">
+          <span class="ic clock-on"><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" stroke="none"><circle cx="12" cy="12" r="9" opacity=".18"/><path d="M12 7v5l3 2" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"/><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/></svg></span>
+          <span class="name">依赖巡检</span>
+          <span class="badge run"><span class="dot run"></span>运行中</span>
+        </div>
+        <div class="r2"><span>每 15 分钟</span><span class="next">· 下次 6 分钟后</span></div>
+      </div>
+
+      <!-- 任务会话:空闲(到点未到) -->
+      <div class="sess" data-task="t1">
+        <div class="r1">
+          <span class="ic clock-on"><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" stroke="none"><circle cx="12" cy="12" r="9" opacity=".18"/><path d="M12 7v5l3 2" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"/><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/></svg></span>
+          <span class="name">每日晨报</span>
+          <span class="badge ok">成功</span>
+        </div>
+        <div class="r2"><span>每天 09:00</span><span class="next">· 下次 1 小时后</span></div>
+      </div>
+
+      <!-- 普通会话(无图标) -->
+      <div class="sess dim">
+        <div class="r1">
+          <span class="ic"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8z"/></svg></span>
+          <span class="name">修复登录页闪烁</span>
+        </div>
+        <div class="r2"><span>昨天</span></div>
+      </div>
+      <div class="sess dim">
+        <div class="r1">
+          <span class="ic"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8z"/></svg></span>
+          <span class="name">文档站点改版</span>
+        </div>
+        <div class="r2"><span>3 天前</span></div>
+      </div>
+    </div>
+    <div class="sb-foot">
+      <button class="sb-btn"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>新建会话</button>
+      <button class="sb-btn"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>搜索</button>
+      <button class="sb-btn"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="2" width="14" height="20" rx="3"/><path d="M12 18h.01"/></svg>连接手机</button>
+    </div>
+  </aside>
+
+  <!-- ══ 主区 ══ -->
+  <main class="main">
+    <!-- 工具栏:右栏/终端开关在位(③) -->
+    <div class="topbar">
+      <span class="title">重构 sessionStore</span>
+      <span class="spacer"></span>
+      <button class="tb-btn" title="打开底部终端">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 17l6-5-6-5"/><path d="M12 19h8"/></svg>
+        终端
+      </button>
+      <button class="tb-btn on" id="rpToggle" title="右侧栏(定时任务 tab 已打开)">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M15 4v16"/></svg>
+        右侧栏
+      </button>
+      <button class="tb-btn" id="themeBtn">浅色</button>
+    </div>
+
+    <div class="body">
+      <!-- ── 中央聊天:发起流程(③④) ── -->
+      <div class="center">
+        <div class="anno" style="right:356px;top:10px;z-index:80"><span class="tag">③</span> 发送 → 创建任务会话 + 回执卡片</div>
+        <div class="chat">
+          <div class="chat-col">
+            <div class="msg user"><div class="who">你</div>重构 sessionStore 的会话桶,拆掉 messagesBySession 里的双槽结构,保持水合兼容。</div>
+            <div class="msg ai"><div class="who">ASSISTANT</div>好的,我先梳理现有 bucket 的读写点,再按“读写分离 + 单向归一”的方向拆。</div>
+            <!-- 任务回执卡片 -->
+            <div class="task-receipt">
+              <span class="ic"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg></span>
+              <div>
+                已创建定时任务 <b>「每日晨报」</b> · 每天 09:00
+                <div class="sub">下次运行 09-20 09:00 · 每次运行 = 该会话一个回合 · 右栏可看实时输出</div>
+              </div>
+              <button class="go" onclick="openRightPanel()">查看 →</button>
+            </div>
+            <div class="msg user"><div class="who">你</div>顺便把依赖巡检也挂上,每 15 分钟检查一次 package.json 的安全更新。</div>
+            <div class="msg ai"><div class="who">ASSISTANT</div>已创建任务会话「依赖巡检」(每 15 分钟)。两任务的运行输出都在右栏「定时任务」里。</div>
+          </div>
+        </div>
+
+        <!-- Composer:② 定时任务按钮(自动编排右侧)+ 弹层 -->
+        <div class="composer-wrap">
+          <div class="anno" style="left:24px;top:-9px;z-index:80"><span class="tag">②</span> 自动编排右侧 = 定时任务按钮(已配置态)</div>
+          <div class="composer">
+            <textarea rows="2">汇总 docs/ 目录最近 24 小时的变更,生成简报写入 docs/daily/。</textarea>
+            <div class="pill-row">
+              <!-- 自动编排(既有,对照位) -->
+              <button class="orch-chip">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="5" r="2.5"/><circle cx="5" cy="19" r="2.5"/><circle cx="19" cy="19" r="2.5"/><path d="M12 7.5v4M12 11.5L6.8 17M12 11.5l5.2 5.5"/></svg>
+                自动编排
+              </button>
+              <!-- 定时任务按钮(新增):on = 已配置态,带摘要 -->
+              <button class="sched-btn on" id="schedBtn">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+                <span id="schedBtnLab">每天 09:00</span>
+              </button>
+              <span class="psep"></span>
+              <span class="seg"><span class="ic"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/></svg></span><span class="lab">Claude</span></span>
+              <span class="psep"></span>
+              <span class="seg"><span class="ic"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/></svg></span><span class="lab">GLM-4.7</span></span>
+              <span class="psep"></span>
+              <span class="seg"><span class="ic"><svg width="12" height="12" viewBox="0 0 14 13" fill="currentColor"><rect x="1" y="9.6" width="3" height="3.4" rx="1"/><rect x="5" y="6.2" width="3" height="6.8" rx="1"/><rect x="9" y="2.8" width="3" height="10.2" rx="1" opacity=".25"/></svg></span><span class="lab">中</span></span>
+              <span class="psep"></span>
+              <span class="seg" style="color:rgb(var(--accent))"><span class="ic" style="color:rgb(var(--accent))"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg></span><span class="lab" style="color:rgb(var(--accent))">接受编辑</span></span>
+            </div>
+
+            <!-- 定时配置弹层(点「定时任务」按钮开/关) -->
+            <div class="sched-pop" id="schedPop">
+              <h4><span class="ic clock-on"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg></span>定时任务 · 触发规则</h4>
+              <div class="seg6" id="seg6">
+                <button data-t="once">一次性</button>
+                <button data-t="interval">间隔</button>
+                <button data-t="daily" class="on">每天</button>
+                <button data-t="weekly">每周</button>
+                <button data-t="monthly">每月</button>
+                <button data-t="cron">Cron</button>
+              </div>
+              <div class="sch-line" id="schLine"><!-- JS --></div>
+              <div class="next-bar">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="rgb(var(--accent))" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+                <span>下次运行:</span><span class="v" id="nextVal">—</span>
+              </div>
+              <div class="send-note">
+                <span class="tag" style="width:14px;height:14px;font-size:9.5px">④</span>
+                <span>点<b>发送</b>即创建任务会话(当前会话只留一张回执卡片)。到点自动运行,输出在右栏「定时任务」。</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── ⑤ 右栏:定时任务 tab(可关闭) ── -->
+      <aside class="rightpanel" id="rightPanel">
+        <div class="rp-rail">
+          <button class="rp-tab"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg>文件</button>
+          <button class="rp-tab"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M13 6h3a2 2 0 0 1 2 2v7M11 18H8a2 2 0 0 1-2-2V9"/></svg>Git</button>
+          <button class="rp-tab on" style="position:relative">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+            定时任务
+          </button>
+          <button class="rp-close" title="关闭 tab(可从工具栏/回执卡片再次打开)" onclick="closeRightPanel()">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M18 6L6 18M6 6l12 12"/></svg>
+          </button>
+        </div>
+        <div class="anno" style="right:20px;top:52px;z-index:80"><span class="tag">⑤</span> 右栏「定时任务」tab · 可关闭</div>
+
+        <div class="rp-body">
+          <!-- 任务切换器 -->
+          <div class="task-switch" id="taskSwitch"><!-- JS --></div>
+          <!-- 正在运行的实时输出 -->
+          <div class="live-head">
+            <span class="t">
+              <span class="dot run"></span>
+              <span id="liveTitle">正在运行</span>
+            </span>
+            <span class="dur" id="liveDur">已运行 40 秒</span>
+            <button class="mini" style="margin-left:8px" onclick="alert('跳到该任务会话的主视图(同一份转录)')">打开会话</button>
+          </div>
+          <div class="live" id="liveEl"><!-- JS --></div>
+          <!-- 历史(每次触发 = 一个回合) -->
+          <div class="hist">
+            <div class="hist-head">运行历史(每次触发 = 一个回合)</div>
+            <div id="histEl"><!-- JS --></div>
+          </div>
+          <div class="rp-foot">
+            <button class="mini" id="pauseBtn">暂停任务</button>
+            <button class="mini" onclick="alert('打开定时配置弹层(复用 composer 的编辑器,改完即时生效)')">编辑定时</button>
+            <button class="mini">立即运行</button>
+            <button class="mini warn" style="margin-left:auto">删除</button>
+          </div>
+        </div>
+      </aside>
+    </div>
+  </main>
+</div>
+
+<button class="fab" id="fabBtn" title="设计说明">?</button>
+<div class="drawer" id="drawer">
+  <h3>设计要点(v2 · 任务即会话)</h3>
+  <dl>
+    <dt>发起:composer 内完成</dt>
+    <dd>「自动编排」右侧新增「定时任务」按钮 → 弹层配置触发规则 → 配好后点「发送」:创建一个任务会话,当前会话只留一张回执卡片。不再有独立的全屏自动化页。</dd>
+    <dt>任务 = 会话</dt>
+    <dd>一个任务一个会话;每次触发 = 该会话里的一个回合(转录累积,上下文可延续)。「历史」= 回合列表,点「查看」跳到对应回合。</dd>
+    <dt>运行在右栏</dt>
+    <dd>到点运行时输出进右栏「定时任务」tab(可关闭):任务切换器 + 正在运行的实时输出 + 历史。主聊天区不被运行占据;tab 可再次从工具栏/回执卡片打开。</dd>
+    <dt>左栏图标体系</dt>
+    <dd>任务会话 = 实心时钟(accent 色,停用变灰)+ 调度摘要与下次运行时间;发起任务的主会话 = 描边时钟徽标 + 任务计数,点徽标直达右栏 tab 并过滤到该会话发起的任务。</dd>
+    <dt>管理动作</dt>
+    <dd>tab 底部:暂停/恢复、编辑定时(复用同一弹层)、立即运行、删除(连回合历史)。左栏任务行右键同款菜单。</dd>
+    <dt>调度引擎不变</dt>
+    <dd>30s tick 扫描、computeNextRun(编辑器预览与调度同函数)、错过跳过、重叠保护、保留策略(改为按回合数裁剪)、审批 OS 通知,全部沿用已实现的引擎;重构的是「创建入口 + 展示面」。</dd>
+  </dl>
+</div>
+
+<script>
+"use strict";
+/* ── 小工具 ── */
+const $ = (s, el = document) => el.querySelector(s);
+const $$ = (s, el = document) => [...el.querySelectorAll(s)];
+
+/* ── 主题(?theme=light 直达) ── */
+if (new URLSearchParams(location.search).get("theme") === "light") {
+  document.documentElement.dataset.theme = "light";
+  document.addEventListener("DOMContentLoaded", () => { const b = $("#themeBtn"); if (b) b.textContent = "深色"; });
+}
+$("#themeBtn").onclick = (e) => {
+  const r = document.documentElement;
+  const dark = r.dataset.theme === "dark";
+  r.dataset.theme = dark ? "light" : "dark";
+  e.currentTarget.textContent = dark ? "深色" : "浅色";
+};
+
+/* ── 设计说明 ── */
+$("#fabBtn").onclick = () => $("#drawer").classList.toggle("open");
+
+/* ── 右栏开/关(可关闭 tab;工具栏按钮联动) ── */
+function openRightPanel() {
+  $("#rightPanel").style.display = "flex";
+  $("#rpToggle").classList.add("on");
+}
+function closeRightPanel() {
+  $("#rightPanel").style.display = "none";
+  $("#rpToggle").classList.remove("on");
+}
+$("#rpToggle").onclick = () => {
+  const open = $("#rightPanel").style.display !== "none";
+  open ? closeRightPanel() : openRightPanel();
+};
+
+/* ── 定时配置弹层 ── */
+const NOW = Date.now();
+let sched = { type: "daily", time: "09:00" };
+const pop = $("#schedPop");
+$("#schedBtn").onclick = () => { pop.style.display = pop.style.display === "none" ? "block" : "none"; };
+pop.style.display = "block";
+
+const WD = ["日", "一", "二", "三", "四", "五", "六"];
+function pad2(n) { return String(n).padStart(2, "0"); }
+function fmtClock(t) { const d = new Date(t); return (d.getMonth() + 1) + "月" + d.getDate() + "日 " + pad2(d.getHours()) + ":" + pad2(d.getMinutes()); }
+function rel(t) {
+  const diff = Math.abs(Date.now() - t);
+  if (diff < 3600e3) return Math.max(1, Math.round(diff / 60e3)) + " 分钟后";
+  if (diff < 86400e3) return Math.round(diff / 3600e3) + " 小时后";
+  return Math.round(diff / 86400e3) + " 天后";
+}
+
+/* cron-lite(与 v2 实现/contracts 同源的精简版,仅供预览) */
+function parseField(f, min, max) {
+  const out = new Set();
+  for (const part of f.split(",")) {
+    let step = 1, range = part;
+    const si = part.indexOf("/");
+    if (si >= 0) { range = part.slice(0, si); step = Number(part.slice(si + 1)); if (!Number.isInteger(step) || step < 1) return null; }
+    let lo = min, hi = max;
+    if (range !== "*" && range !== "") {
+      const ri = range.indexOf("-"); let a, b;
+      if (ri >= 0) { a = Number(range.slice(0, ri)); b = Number(range.slice(ri + 1)); } else { a = b = Number(range); }
+      if (!Number.isInteger(a) || !Number.isInteger(b)) return null;
+      if (max === 6) { a %= 7; b %= 7; }
+      if (a < min || b > max || a > b) return null;
+      lo = a; hi = b;
+    } else if (si >= 0) { lo = min; }
+    for (let n = lo; ; n += step) { out.add(max === 6 ? n % 7 : n); if (n + step > hi) break; }
+  }
+  return out;
+}
+function computeNextRun(sc, from) {
+  from = from || new Date();
+  if (sc.type === "once") return sc.at > from.getTime() ? sc.at : null;
+  if (sc.type === "interval") return from.getTime() + sc.everyMinutes * 60e3;
+  const hm = (s) => { const p = s.split(":").map(Number); return p; };
+  if (sc.type === "daily") {
+    let d = new Date(from); d.setHours(hm(sc.time)[0], hm(sc.time)[1], 0, 0);
+    if (d <= from) d = new Date(from.getTime() + 864e5), d.setHours(hm(sc.time)[0], hm(sc.time)[1], 0, 0);
+    return d.getTime();
+  }
+  if (sc.type === "weekly") {
+    for (let i = 0; i < 8; i++) {
+      const d = new Date(from.getTime() + i * 864e5); d.setHours(hm(sc.time)[0], hm(sc.time)[1], 0, 0);
+      if (d > from && sc.weekdays.includes(d.getDay())) return d.getTime();
+    }
+    return null;
+  }
+  if (sc.type === "monthly") {
+    const c = new Date(from);
+    for (let i = 0; i < 13; i++) {
+      const y = c.getFullYear(), mo = c.getMonth() + i;
+      const dim = new Date(y, mo + 1, 0).getDate();
+      if (sc.day > dim) continue;
+      const d = new Date(y, mo, sc.day, hm(sc.time)[0], hm(sc.time)[1]);
+      if (d > from) return d.getTime();
+    }
+    return null;
+  }
+  if (sc.type === "cron") {
+    const fs = sc.expr.trim().split(/\s+/);
+    if (fs.length !== 5) return null;
+    const mins = parseField(fs[0], 0, 59), hrs = parseField(fs[1], 0, 23),
+      doms = parseField(fs[2], 1, 31), mons = parseField(fs[3], 1, 12), dows = parseField(fs[4], 0, 7);
+    if (!mins || !hrs || !doms || !mons || !dows) return null;
+    const domStar = fs[2] === "*", dowStar = fs[4] === "*";
+    const d = new Date(from.getTime() + 6e4); d.setSeconds(0, 0);
+    const lim = new Date(from.getTime() + 366 * 864e5);
+    while (d <= lim) {
+      if (mons.has(d.getMonth() + 1)) {
+        const dayOk = (domStar && dowStar) ? true
+          : domStar ? dows.has(d.getDay())
+          : dowStar ? doms.has(d.getDate())
+          : (doms.has(d.getDate()) || dows.has(d.getDay()));
+        if (dayOk && hrs.has(d.getHours()) && mins.has(d.getMinutes())) return d.getTime();
+      }
+      d.setMinutes(d.getMinutes() + 1);
+    }
+    return null;
+  }
+  return null;
+}
+function describe(sc) {
+  switch (sc.type) {
+    case "once": return "一次性 · " + fmtClock(sc.at);
+    case "interval": return sc.everyMinutes % 60 === 0 && sc.everyMinutes >= 60 ? "每 " + (sc.everyMinutes / 60) + " 小时" : "每 " + sc.everyMinutes + " 分钟";
+    case "daily": return "每天 " + sc.time;
+    case "weekly": return "每周" + [...sc.weekdays].sort().map((w) => WD[w]).join("、") + " " + sc.time;
+    case "monthly": return "每月 " + sc.day + " 日 " + sc.time;
+    case "cron": return "Cron · " + sc.expr;
+  }
+  return "";
+}
+const DEFAULTS = {
+  once: () => ({ type: "once", at: NOW + 864e5 }),
+  interval: () => ({ type: "interval", everyMinutes: 30 }),
+  daily: () => ({ type: "daily", time: "09:00" }),
+  weekly: () => ({ type: "weekly", weekdays: [1, 5], time: "18:00" }),
+  monthly: () => ({ type: "monthly", day: 1, time: "09:00" }),
+  cron: () => ({ type: "cron", expr: "0 9 * * 1-5" }),
+};
+function renderSch() {
+  $$("#seg6 button").forEach((b) => b.classList.toggle("on", b.dataset.t === sched.type));
+  const line = $("#schLine");
+  if (sched.type === "once") {
+    line.innerHTML = '<span>运行时间</span><input type="date" style="width:130px"><input type="time" style="width:96px">';
+  } else if (sched.type === "interval") {
+    line.innerHTML = '<span>每</span><input class="num" type="number" min="1" value="' + sched.everyMinutes + '" style="width:64px;text-align:center"><span>分钟</span>' +
+      [5, 15, 30, 60].map((m) => '<button class="chip' + (sched.everyMinutes === m ? " on" : "") + '" data-m="' + m + '">' + (m === 60 ? "每小时" : m + " 分") + "</button>").join("");
+    $$("#schLine .chip").forEach((c) => c.onclick = () => { sched.everyMinutes = Number(c.dataset.m); renderSch(); });
+    $("#schLine .num").onchange = (e) => { sched.everyMinutes = Math.max(1, Number(e.target.value) || 1); renderSch(); };
+  } else if (sched.type === "weekly") {
+    line.innerHTML = WD.map((w, i) => '<button class="chip' + (sched.weekdays.includes(i) ? " on" : "") + '" data-w="' + i + '">周' + w + "</button>").join("") +
+      '<input type="time" value="' + sched.time + '" style="width:96px">';
+    $$("#schLine .chip").forEach((c) => c.onclick = () => {
+      const w = Number(c.dataset.w);
+      const arr = new Set(sched.weekdays); arr.has(w) ? arr.delete(w) : arr.add(w);
+      if (!arr.size) arr.add(1);
+      sched.weekdays = [...arr].sort(); renderSch();
+    });
+    $("#schLine input").onchange = (e) => { sched.time = e.target.value || "09:00"; renderSch(); };
+  } else if (sched.type === "monthly") {
+    line.innerHTML = '<span>每月</span><input type="number" min="1" max="31" value="' + sched.day + '" style="width:60px;text-align:center"><span>日</span><input type="time" value="' + sched.time + '" style="width:96px"><span class="sch-note" style="font-size:10.5px;color:rgb(var(--content-subtle))">小月无该日则跳过</span>';
+    $("#schLine input[type=number]").onchange = (e) => { sched.day = Math.min(31, Math.max(1, Number(e.target.value) || 1)); renderSch(); };
+    $("#schLine input[type=time]").onchange = (e) => { sched.time = e.target.value || "09:00"; renderSch(); };
+  } else if (sched.type === "cron") {
+    line.innerHTML = '<input value="' + sched.expr + '" spellcheck="false" style="width:170px;font-family:ui-monospace,Menlo,monospace;font-size:11.5px"><span style="font-size:10.5px;color:rgb(var(--content-subtle))">分 时 日 月 周</span>';
+    $("#schLine input").onchange = (e) => { sched.expr = e.target.value; renderSch(); };
+  } else if (sched.type === "daily") {
+    line.innerHTML = '<span>每天</span><input type="time" value="' + sched.time + '" style="width:96px">';
+    $("#schLine input").onchange = (e) => { sched.time = e.target.value || "09:00"; renderSch(); };
+  }
+  const next = computeNextRun(sched);
+  $("#nextVal").textContent = next ? fmtClock(next) + "(" + rel(next) + ")" : "—";
+  $("#schedBtnLab").textContent = describe(sched);
+}
+$("#seg6").addEventListener("click", (e) => {
+  const b = e.target.closest("button"); if (!b) return;
+  sched = DEFAULTS[b.dataset.t]();
+  renderSch();
+});
+renderSch();
+
+/* ── 右栏:任务切换 + 实时输出 + 历史 ── */
+const TASKS = [
+  {
+    id: "t2", name: "依赖巡检", desc: "每 15 分钟", status: "run", from: "重构 sessionStore",
+    live: [
+      '<div class="toolcard"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg>Read <code>package.json</code></div>',
+      '<div class="toolcard"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 9.9-1"/></svg>Bash <code>npm audit --json</code></div>',
+      '<div class="live-text">共 3 个直接依赖有可用更新,其中 1 个为高危(<code>semver</code>)。正在升级并生成报告… <span class="caret"></span></div>',
+    ],
+    runs: [
+      { st: "run", label: "运行中", when: "刚刚 · #41" },
+      { st: "ok", label: "成功", when: "15 分钟前 · #40 · 2 分 10 秒" },
+      { st: "ok", label: "成功", when: "31 分钟前 · #39 · 1 分 58 秒" },
+      { st: "warn", label: "失败", when: "47 分钟前 · #38 · 0 分 41 秒" },
+    ],
+  },
+  {
+    id: "t1", name: "每日晨报", desc: "每天 09:00", status: "ok", from: "重构 sessionStore",
+    live: [
+      '<div class="live-text" style="color:rgb(var(--content-subtle))">当前没有正在运行的触发。下次 09-20 09:00。</div>',
+      '<div class="toolcard"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg>Read <code>docs/daily/09-19.md</code></div>',
+    ],
+    runs: [
+      { st: "ok", label: "成功", when: "今天 09:00 · #13 · 3 分 02 秒" },
+      { st: "ok", label: "成功", when: "昨天 09:00 · #12 · 2 分 44 秒" },
+      { st: "warn", label: "失败", when: "09-17 · #11 · 1 分 02 秒" },
+    ],
+  },
+];
+let curTask = "t2";
+function renderTasks() {
+  const el = $("#taskSwitch");
+  el.innerHTML = "";
+  for (const t of TASKS) {
+    const row = document.createElement("div");
+    row.className = "ts-row" + (t.id === curTask ? " on" : "");
+    row.innerHTML =
+      '<div class="ts-r1"><span class="ic clock-on"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg></span><span class="ts-name"></span>' +
+      (t.status === "run" ? '<span class="badge run"><span class="dot run"></span>运行中</span>' : '<span class="badge ok">成功</span>') + '</div>' +
+      '<span class="ts-sub"></span>';
+    $(".ts-name", row).textContent = t.name;
+    $(".ts-sub", row).textContent = t.desc + " · 发起于「" + t.from + "」";
+    row.onclick = () => { curTask = t.id; renderTasks(); };
+    el.appendChild(row);
+  }
+  const t = TASKS.find((x) => x.id === curTask);
+  $("#liveTitle").textContent = t.status === "run" ? "正在运行 · " + t.name : t.name + " · 空闲";
+  $("#liveDur").textContent = t.status === "run" ? "已运行 40 秒" : t.desc;
+  $("#liveEl").innerHTML = t.live.join("");
+  const hist = $("#histEl");
+  hist.innerHTML = "";
+  for (const r of t.runs) {
+    const row = document.createElement("div");
+    row.className = "h-row";
+    const dotCls = r.st === "run" ? "dot run" : r.st === "ok" ? "dot ok" : "dot";
+    const dotStyle = r.st === "warn" ? ' style="background:rgb(var(--warning))"' : "";
+    row.innerHTML = '<span class="dot ' + dotCls.replace("dot ", "") + '"' + dotStyle + "></span><span>" + r.label + '</span><span class="when"></span><button class="go">查看 →</button>';
+    $(".when", row).textContent = r.when;
+    $(".go", row).onclick = () => alert("跳到该任务会话中对应回合的位置(同一份转录)");
+    hist.appendChild(row);
+  }
+}
+renderTasks();
+</script>
+</body>
+</html>

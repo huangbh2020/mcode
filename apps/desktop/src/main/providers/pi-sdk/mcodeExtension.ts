@@ -60,7 +60,7 @@ import {
   formatAnswersForModel,
   ASK_NATIVE_TOOL_PROMPT,
 } from "@main/lib/askQuestion.js";
-import { PI_IDENTITY_PROMPT, joinPromptSections } from "@main/lib/systemPrompt.js";
+import { PI_IDENTITY_PROMPT, SCHEDULED_TASK_PROPOSAL_NUDGE, joinPromptSections } from "@main/lib/systemPrompt.js";
 import {
   browserList,
   browserNavigate,
@@ -1030,6 +1030,7 @@ function registerSystemPromptInjector(
       const base = event.systemPrompt ?? "";
       const injected = joinPromptSections(
         PI_IDENTITY_PROMPT,
+        SCHEDULED_TASK_PROPOSAL_NUDGE,
         ASK_NATIVE_TOOL_PROMPT,
         PLAN_MODE_PROMPT,
         // Advertise the browser tools only when they are actually registered

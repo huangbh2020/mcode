@@ -24,7 +24,7 @@ import {
 } from "@renderer/lib/icons.js";
 import { useCursorAnchor } from "@renderer/hooks/useCursorAnchor.js";
 import { isElectron } from "@renderer/lib/platform.js";
-import { useSessionStore, EMPTY_MESSAGES, EMPTY_TODOS, EMPTY_SUBAGENTS, EMPTY_CHAT_QUEUE, EMPTY_ELEMENT_QUEUE, EMPTY_PROMPT_QUEUE, EMPTY_BOOKMARKS, EMPTY_USAGE, type Block, type ChatMessage, type TodoItem, type TurnMeta, type QueuedPrompt } from "@renderer/stores/sessionStore.js";
+import { useSessionStore, resolveTurnModel, EMPTY_MESSAGES, EMPTY_TODOS, EMPTY_SUBAGENTS, EMPTY_CHAT_QUEUE, EMPTY_ELEMENT_QUEUE, EMPTY_PROMPT_QUEUE, EMPTY_BOOKMARKS, EMPTY_USAGE, type Block, type ChatMessage, type TodoItem, type TurnMeta, type QueuedPrompt } from "@renderer/stores/sessionStore.js";
 import { useToastStore } from "@renderer/stores/toastStore.js";
 import { api } from "@renderer/lib/api.js";
 import { findNormalizedTextRange, highlightRange } from "@renderer/lib/textFind.js";
@@ -1140,6 +1140,8 @@ export const ChatPane = memo(
     sessionId,
     isActive = true,
     chipsMode = "auto",
+    hideComposer = false,
+    targetMessageId = null,
   }: {
     sessionId: string | null;
     /** Whether this pane is the foreground tab. Multi-mount layouts pass false
@@ -1149,6 +1151,13 @@ export const ChatPane = memo(
     isActive?: boolean;
     /** Chip-row display mode — see {@link ComposerChipsMode}. */
     chipsMode?: ComposerChipsMode;
+    /** View-only host (right-panel scheduled-task pane): hides the composer
+     *  card and its top chips row while keeping the in-flow approval /
+     *  question / plan prompts — those are decisions, not free input, and an
+     *  unattended task may legitimately wait on them. */
+    hideComposer?: boolean;
+    /** Target message ID to scroll and align to on mount or change. */
+    targetMessageId?: string | null;
   }) {
     // `sessionId` is the prop — store lookups go through it directly, not
     // through `activeSessionId`. The store still tracks `activeSessionId`
@@ -1162,13 +1171,21 @@ export const ChatPane = memo(
       return <EmptyCenterPane />;
     }
     return (
-      <ChatPaneForSession sessionId={sessionId} isActive={isActive} chipsMode={chipsMode} />
+      <ChatPaneForSession
+        sessionId={sessionId}
+        isActive={isActive}
+        chipsMode={chipsMode}
+        hideComposer={hideComposer}
+        targetMessageId={targetMessageId}
+      />
     );
   },
   (prev, next) =>
     prev.sessionId === next.sessionId &&
     prev.isActive === next.isActive &&
-    prev.chipsMode === next.chipsMode,
+    prev.chipsMode === next.chipsMode &&
+    prev.hideComposer === next.hideComposer &&
+    prev.targetMessageId === next.targetMessageId,
 );
 
 /** Empty-state shown when there's no active session to render (no tabs
@@ -1275,10 +1292,14 @@ function ChatPaneForSession({
   sessionId,
   isActive,
   chipsMode = "auto",
+  hideComposer = false,
+  targetMessageId = null,
 }: {
   sessionId: string;
   isActive: boolean;
   chipsMode?: ComposerChipsMode;
+  hideComposer?: boolean;
+  targetMessageId?: string | null;
 }) {
   const { t, locale } = useI18n();
   // Compactness tier of the composer's mini pill (see useComposerRowFit,
@@ -1297,6 +1318,13 @@ function ChatPaneForSession({
   const messages = useSessionStore((s) =>
     s.messagesBySession[sessionId] ?? EMPTY_MESSAGES,
   );
+  const schedHintVisible = useSessionStore((s) => !!s.schedHintVisibleBySession[sessionId]);
+  const isAutomationSession = useSessionStore((s) => {
+    if (s.automations.some((a) => a.taskSessionId === sessionId)) return true;
+    const sess = s.getSessionById(sessionId);
+    return sess?.kind === "automation" || sess?.automationId != null;
+  });
+  const sessionModel = useSessionStore((s) => resolveTurnModel(s, sessionId));
   // Older-message pagination state for this session.
   const hasMoreMessages = useSessionStore((s) => !!s.hasMoreMessagesBySession[sessionId]);
   const loadingOlder = useSessionStore((s) => !!s.loadingOlderBySession[sessionId]);
@@ -1312,6 +1340,12 @@ function ChatPaneForSession({
     (s) => (s.subagentsBySession[sessionId] ?? EMPTY_SUBAGENTS).some((a) => a.status === "running"),
   );
   const sessionBusy = isRunning || hasRunningSubagents;
+  // Latest-value mirror for callbacks that must read busyness without
+  // re-creating on every flip (the turn-end focus settle timer reads this).
+  const sessionBusyRef = useRef(sessionBusy);
+  useEffect(() => {
+    sessionBusyRef.current = sessionBusy;
+  }, [sessionBusy]);
   // 编排阻塞:本会话有 running/paused 的 run(执行中或等决策门)→ 锁输入。
   // planning(画布配置中)不锁;completed/failed/canceled 不锁。
   const orchRunsHere = useSessionStore((s) => (sessionId ? s.orchRunsBySession[sessionId] : undefined));
@@ -1602,37 +1636,108 @@ function ChatPaneForSession({
   const [anchorSuspension, setAnchorSuspension] = useState<"layout" | "full" | null>(null);
   const pauseBottomAnchorTimer = useRef<number | null>(null);
   const settleScrollTimer = useRef<number | null>(null);
+  // Refs mirroring values the turn-end focus scroll reads from timers: the
+  // settle callback fires long after the render that scheduled it, and the
+  // callbacks must keep a stable identity (renderListItem memoizes on
+  // pauseBottomAnchor) so they can't close over per-render values.
+  const lastUserMessageIdRef = useRef<string | null>(null);
+  const msgToRenderIndexRef = useRef<Map<string, number>>(new Map());
+  /** (Re)arm the anchor-suspension window. Shared by pauseBottomAnchor and
+   *  the turn-end focus scroll, which needs a longer window than the fold so
+   *  its aim/retry passes finish before bottom-anchoring comes back. */
+  const holdAnchorSuspension = useCallback((mode: "layout" | "full", ms: number) => {
+    setAnchorSuspension(mode);
+    if (pauseBottomAnchorTimer.current != null) {
+      window.clearTimeout(pauseBottomAnchorTimer.current);
+    }
+    pauseBottomAnchorTimer.current = window.setTimeout(() => {
+      pauseBottomAnchorTimer.current = null;
+      setAnchorSuspension(null);
+    }, ms);
+  }, []);
+  /** Scroll the given message to the top of the viewport ("re-anchor to the
+   *  question"): the turn ended with the question pushed out above, so bring
+   *  it back and let the answer sit below. Same aim-then-locate scheme as
+   *  jumpToMessage but top-aligned and without the flash — this is an
+   *  automatic navigation, not a response to a click. */
+  const scrollToMessageTop = useCallback((messageId: string) => {
+    const ref = virtualListRef.current;
+    const root = streamAreaRef.current;
+    if (!ref || !root) return;
+    const index = msgToRenderIndexRef.current.get(messageId);
+    if (index === undefined) return;
+    const ALIGN_MARGIN = 8;
+
+    const alignMountedRow = (): boolean => {
+      const row = root.querySelector(`[data-message-id="${CSS.escape(messageId)}"]`);
+      const scroller = row ? findScrollParent(row, root) : null;
+      if (!row || !scroller) return false;
+      const delta = row.getBoundingClientRect().top - scroller.getBoundingClientRect().top;
+      if (Math.abs(delta) > 2) {
+        scroller.scrollTo({
+          top: Math.max(scroller.scrollTop + delta - ALIGN_MARGIN, 0),
+          behavior: "smooth",
+        });
+      }
+      return true;
+    };
+
+    let attempts = 0;
+    const locate = async (): Promise<void> => {
+      attempts += 1;
+      if (alignMountedRow()) return;
+      if (attempts >= 5) return;
+      // Row not mounted — re-aim with drift correction from any mounted
+      // message row (same pass as jumpToMessage's retry).
+      const state = ref.getState();
+      let aim = state.positionAtIndex(index);
+      const refEl = root.querySelector("[data-message-id]");
+      const refId = refEl?.getAttribute("data-message-id") ?? null;
+      const refIdx = refId ? msgToRenderIndexRef.current.get(refId) : undefined;
+      if (refEl instanceof HTMLElement && refIdx !== undefined) {
+        const refScroller = findScrollParent(refEl, root);
+        if (refScroller) {
+          const actual =
+            refScroller.scrollTop +
+            (refEl.getBoundingClientRect().top - refScroller.getBoundingClientRect().top);
+          const claimed = state.positionAtIndex(refIdx);
+          if (Number.isFinite(claimed)) aim += actual - claimed;
+        }
+      }
+      await ref.scrollToOffset({ offset: Math.max(aim - ALIGN_MARGIN, 0), animated: false });
+      window.setTimeout(() => void locate(), 120);
+    };
+
+    void (async () => {
+      const state = ref.getState();
+      await ref.scrollToOffset({
+        offset: Math.max(state.positionAtIndex(index) - ALIGN_MARGIN, 0),
+        animated: false,
+      });
+      await locate();
+    })();
+  }, []);
   const pauseBottomAnchor = useCallback(
     (opts?: { suspendDataChange?: boolean }) => {
       const mode: "layout" | "full" = opts?.suspendDataChange ? "full" : "layout";
-      setAnchorSuspension(mode);
-      if (pauseBottomAnchorTimer.current != null) {
-        window.clearTimeout(pauseBottomAnchorTimer.current);
-      }
       // Budgets derive from the fold's own duration (TURN_FOLD_MS) so the
       // suspension always outlives the animation: a shorter budget would
       // re-enable bottom anchoring mid-fold and snap scroll against a moving
       // height ("闪一下"). "full" also covers the turn-files / plan cards that
       // land just after turn.done.
-      pauseBottomAnchorTimer.current = window.setTimeout(
-        () => {
-          pauseBottomAnchorTimer.current = null;
-          setAnchorSuspension(null);
-        },
-        mode === "full" ? TURN_FOLD_MS + 180 : TURN_FOLD_MS + 60,
-      );
+      holdAnchorSuspension(mode, mode === "full" ? TURN_FOLD_MS + 180 : TURN_FOLD_MS + 60);
       if (mode === "full") {
-        // After the 200ms fold transition settles, glide back to the bottom
-        // IF the user was following along. While the process rows collapsed,
-        // the scroll container's native clamping usually kept the bottom
-        // pinned already; this covers estimate undershoot from the regroup
-        // and the turn-files card that lands just after turn.done. The
-        // near-bottom check is snapshotted at pause START (before any height
-        // changed) and OR-ed with the settle-time check: content changes
-        // inside the window (the fold shrinking, the turn-files card growing)
-        // distort the live distance-from-end, so the snapshot carries the
-        // user's true intent; the live check still catches users who were
-        // mid-list and remain mid-list.
+        // After the fold transition settles, glide back to the bottom IF the
+        // user was following along. While the process rows collapsed, the
+        // scroll container's native clamping usually kept the bottom pinned
+        // already; this covers estimate undershoot from the regroup and the
+        // turn-files card that lands just after turn.done. The near-bottom
+        // check is snapshotted at pause START (before any height changed) and
+        // OR-ed with the settle-time check: content changes inside the window
+        // (the fold shrinking, the turn-files card growing) distort the live
+        // distance-from-end, so the snapshot carries the user's true intent;
+        // the live check still catches users who were mid-list and remain
+        // mid-list.
         const wasNearBottom = recomputeNearBottom();
         if (settleScrollTimer.current != null) {
           window.clearTimeout(settleScrollTimer.current);
@@ -1641,13 +1746,44 @@ function ChatPaneForSession({
         // still shrinking fights the transition and reads as a hitch.
         settleScrollTimer.current = window.setTimeout(() => {
           settleScrollTimer.current = null;
-          if (wasNearBottom || recomputeNearBottom()) {
-            void virtualListRef.current?.scrollToEnd({ animated: true });
+          if (!(wasNearBottom || recomputeNearBottom())) return;
+          // Turn-end re-anchor: when a long answer pushed the user's own
+          // question out above the viewport, land back on it (aligned to the
+          // top, answer readable below) instead of the bottom. Skipped when a
+          // queued next turn already took over (don't fight live following),
+          // when the question is still on screen (short turns keep the old
+          // glide-to-bottom), and on non-clean finishes — an interrupt should
+          // stay where the model stopped, and error / turn.incomplete turns
+          // keep their diagnostic cards at the bottom in view.
+          const targetId = lastUserMessageIdRef.current;
+          const idx = targetId != null ? msgToRenderIndexRef.current.get(targetId) : undefined;
+          const endState = useSessionStore.getState();
+          const cleanFinish =
+            !endState.interruptedBySession[sessionId] &&
+            !endState.turnErrorBySession[sessionId] &&
+            !endState.turnIncompleteBySession[sessionId];
+          if (targetId != null && idx !== undefined && !sessionBusyRef.current && cleanFinish) {
+            const root = streamAreaRef.current;
+            const row = root?.querySelector(`[data-message-id="${CSS.escape(targetId)}"]`);
+            const scroller = row && root ? findScrollParent(row, root) : null;
+            const offscreen =
+              !row ||
+              !scroller ||
+              row.getBoundingClientRect().top < scroller.getBoundingClientRect().top - 4;
+            if (offscreen) {
+              // Cover the focus scroll's aim/retry passes with the
+              // suspension: a turn-files card landing mid-focus would
+              // otherwise trigger a bottom snap that fights the scroll.
+              holdAnchorSuspension("full", TURN_FOLD_MS + 700);
+              scrollToMessageTop(targetId);
+              return;
+            }
           }
+          void virtualListRef.current?.scrollToEnd({ animated: true });
         }, TURN_FOLD_MS + 60);
       }
     },
-    [recomputeNearBottom],
+    [recomputeNearBottom, holdAnchorSuspension, scrollToMessageTop, sessionId],
   );
   // Session switch / unmount mid-transition: drop pending timers so they
   // never fire against a stale list.
@@ -1741,6 +1877,11 @@ function ChatPaneForSession({
     }
     return m;
   }, [renderItems]);
+  // Mirror for the stable-identity scroll callbacks near the anchor-
+  // suspension block (they read positions long after the scheduling render).
+  useEffect(() => {
+    msgToRenderIndexRef.current = msgToRenderIndex;
+  }, [msgToRenderIndex]);
 
   /** Scroll to the message a bookmark/timeline dash points at and flash the
    *  row. Silently no-ops when the id no longer maps (a stale bookmark whose
@@ -2066,6 +2207,9 @@ function ChatPaneForSession({
    *  `@file` doesn't pop the picker open mid-recall. */
   const handleChange = (text: string) => {
     setValue(text);
+    if (useSessionStore.getState().schedHintVisibleBySession[sessionId]) {
+      useSessionStore.getState().hideSchedPromptHint(sessionId);
+    }
     if (recallFillRef.current) {
       recallFillRef.current = false;
       setPickerKind(null);
@@ -2290,6 +2434,29 @@ function ChatPaneForSession({
         if (sessionBusy) return;
         clearTriggerToken();
         void sendPrompt("/compact", undefined, undefined, undefined, undefined, undefined, sessionId);
+        return;
+      }
+      if (cmd.kind === "schedule") {
+        // 与 init 命令保持一致: 将 /schedule 替换为原子 command pill (胶囊药丸样式)
+        if (isAutomationSession) {
+          setPickerKind(null);
+          clearTriggerToken();
+          triggerStartRef.current = null;
+          return;
+        }
+        const start = triggerStartRef.current;
+        if (start === null || !editorRef.current) {
+          setPickerKind(null);
+          return;
+        }
+        const caret = editorRef.current.getCaretOffset();
+        if (caret < 0) {
+          setPickerKind(null);
+          return;
+        }
+        editorRef.current.insertCommandPill(cmd.name, start, caret);
+        setPickerKind(null);
+        triggerStartRef.current = null;
         return;
       }
       if (cmd.kind === "sidechat") {
@@ -2642,6 +2809,7 @@ function ChatPaneForSession({
     return images;
   }, [pendingImages, t]);
 
+
   const handleSend = async () => {
     // Serialize the editor: text has skill pills inlined as `/name` at their
     // positions; skillNames records which pills were embedded.
@@ -2667,6 +2835,46 @@ function ChatPaneForSession({
     // send yields an empty prompt (the images ARE the prompt).
     const prompt = composePromptWithTags(text, tags);
     if (!prompt && pendingImages.length === 0) return;
+    // ── 定时任务拦截(v2「任务即会话」)──
+    // chip 里配置了触发规则的发送 → 创建任务会话(当前会话留回执消息),
+    // 不进本会话的普通回合。文件 tag → @path 引用,技能 → skills allowlist。
+    const pendingSched = useSessionStore.getState().taskScheduleBySession[sessionId];
+    if (pendingSched) {
+      const st = useSessionStore.getState();
+      const parent = st.getSessionById(sessionId);
+      if (!parent) return;
+      const title =
+        (text.trim().slice(0, 40) + (text.trim().length > 40 ? "…" : "")) ||
+        t("automation.formUntitled");
+      const automation = await st.createScheduledTask({
+        projectId: parent.projectId,
+        parentSessionId: sessionId,
+        title,
+        prompt,
+        skillNames,
+        filePaths: tags
+          .filter((tg) => tg.kind === "file" && tg.filePath)
+          .map((tg) => tg.filePath as string),
+        providerId: st.providerId,
+        model: st.model,
+        customModelId: st.customModelId,
+        effort: st.effort,
+        permissionMode: st.permissionMode,
+        schedule: pendingSched,
+        enabled: true,
+        keepRuns: 20,
+      });
+      if (automation) {
+        editorRef.current?.clear();
+        setValue("");
+        setTags([]);
+        setPendingImages([]);
+        setOpenTagId(null);
+        setAnchorRect(null);
+        st.setTaskSchedule(sessionId, null);
+      }
+      return;
+    }
     // Normalize the staged images into the send allowlist (downscale / JPEG
     // re-encode when oversized). A failed image aborts the send and keeps the
     // composer intact — the toast explains which one and why.
@@ -2679,10 +2887,17 @@ function ChatPaneForSession({
     // stream. A blocked send (e.g. the "尚未配置模型" dialog raised inside
     // sendPrompt) must leave the typed text + tags intact so nothing is lost
     // while the user goes to configure a model.
+    let promptToSend = prompt;
+    let displayTextToSend: string | undefined = attachments.length > 0 ? text : undefined;
+    if (/^\/schedule\b/i.test(text)) {
+      const scheduleBody = prompt.replace(/^\/schedule\s*/i, "");
+      promptToSend = `请为我创建或调整以下定时任务（/schedule）：\n${scheduleBody}`;
+      displayTextToSend = text;
+    }
     const sent = await sendPrompt(
-      prompt,
+      promptToSend,
       attachments.length > 0 ? attachments : undefined,
-      attachments.length > 0 ? text : undefined,
+      displayTextToSend,
       skillNames.length > 0 ? skillNames : undefined,
       images,
       undefined,
@@ -2724,9 +2939,16 @@ function ChatPaneForSession({
     const images = await preparePendingImages();
     if (images === null) return;
     const attachments = composeSendAttachments(tags);
+    let enqueuePromptText = prompt;
+    let enqueueDisplayText = text;
+    if (/^\/schedule\b/i.test(text)) {
+      const scheduleBody = prompt.replace(/^\/schedule\s*/i, "");
+      enqueuePromptText = `请为我创建或调整以下定时任务（/schedule）：\n${scheduleBody}`;
+      enqueueDisplayText = text;
+    }
     enqueuePrompt(sessionId, {
-      prompt,
-      displayText: text,
+      prompt: enqueuePromptText,
+      displayText: enqueueDisplayText,
       attachments: attachments.length > 0 ? attachments : undefined,
       skillNames: skillNames.length > 0 ? skillNames : undefined,
       images: images ?? undefined,
@@ -2847,9 +3069,9 @@ function ChatPaneForSession({
     );
   };
 
-  // On opening a session, jump to the bottom so the latest exchange is in view
+  // On opening a session, jump to the bottom (or target message) so the desired exchange is in view
   // (the keyed remount above starts the list scrolled to the top). This fires
-  // once per mount: it waits for messages to load, then scrolls and latches
+  // once per mount (or when targetMessageId changes): it waits for messages to load, then scrolls and latches
   // `initialScrollDoneRef` so subsequent streaming appends don't yank the view
   // back down if the user has scrolled up to read history.
   //
@@ -2857,7 +3079,22 @@ function ChatPaneForSession({
   // scroll until it becomes the active (visible) pane, otherwise the rAF runs
   // against a display:none list and the scroll is lost (or wrong).
   useEffect(() => {
-    if (empty || !isActive || initialScrollDoneRef.current) return;
+    if (empty || !isActive) return;
+    if (targetMessageId) {
+      let raf1 = 0;
+      let raf2 = 0;
+      raf1 = requestAnimationFrame(() => {
+        raf2 = requestAnimationFrame(() => {
+          scrollToMessageTop(targetMessageId);
+          initialScrollDoneRef.current = true;
+        });
+      });
+      return () => {
+        cancelAnimationFrame(raf1);
+        cancelAnimationFrame(raf2);
+      };
+    }
+    if (initialScrollDoneRef.current) return;
     // LegendList measures item heights asynchronously on first layout, so a
     // single rAF may run before the list has real scroll length. Two rAFs give
     // it a layout pass + a settle pass; scrollToEnd is a no-op if the list
@@ -2874,7 +3111,7 @@ function ChatPaneForSession({
       cancelAnimationFrame(raf1);
       cancelAnimationFrame(raf2);
     };
-  }, [empty, isActive]);
+  }, [empty, isActive, targetMessageId, scrollToMessageTop]);
 
   // When this session's running turn completes (isRunning flips true → false),
   // bring the list back to the very bottom so the finished reply — and any
@@ -2917,6 +3154,12 @@ function ChatPaneForSession({
     }
     return null;
   }, [messages]);
+  // Mirror for the turn-end focus scroll: at settle time the ref's current
+  // value is the finished turn's question (a queued next turn would have
+  // flipped sessionBusy, which suppresses the focus scroll).
+  useEffect(() => {
+    lastUserMessageIdRef.current = lastUserMessageId;
+  }, [lastUserMessageId]);
 
   /** One rendered row of the live segment — the element the list would have
    *  rendered for that item, with the per-row horizontal resolution stripped
@@ -3071,7 +3314,14 @@ function ChatPaneForSession({
             表示仍在写入；回合结束后由 TurnPanel 接手同一形态，只把台头翻成回执。 */}
         <div className="chat-turn mx-auto mt-[var(--chat-row-gap-assistant)] max-w-5xl">
           <div className="chat-ledger" data-phase="running" data-open="true">
-            <LiveLedgerHead turnMeta={turnMeta} blocks={liveLedgerBlocks} />
+            <LiveLedgerHead
+              turnMeta={
+                turnMeta?.model
+                  ? turnMeta
+                  : { ...turnMeta, startedAt: turnMeta?.startedAt ?? Date.now(), model: sessionModel ?? undefined }
+              }
+              blocks={liveLedgerBlocks}
+            />
             <div className="chat-ledger-body">{inner}</div>
             <span className="chat-ledger-scan" aria-hidden="true" />
           </div>
@@ -3243,7 +3493,13 @@ function ChatPaneForSession({
               blocks={item.panelBlocks}
               beforeMap={beforeMap}
               turnActive={turnActive}
-              turnMeta={item.turnMeta}
+              turnMeta={
+                item.turnMeta?.model
+                  ? item.turnMeta
+                  : item.turnMeta
+                    ? { ...item.turnMeta, model: sessionModel ?? undefined }
+                    : (sessionModel ? { startedAt: Date.now(), model: sessionModel } : undefined)
+              }
               stats={turnStats}
               onOpenPlan={onOpenPlan}
               onToggleCollapse={pauseBottomAnchor}
@@ -3685,7 +3941,7 @@ function ChatPaneForSession({
               working-environment picker. Both are quiet text triggers
               OUTSIDE the composer card; each hides itself once the
               conversation starts. */}
-          <div className="flex items-center gap-1 px-1 pb-1">
+          <div className={cn("flex items-center gap-1 px-1 pb-1", hideComposer && "hidden")}>
             <SessionDirectoryChip sessionId={sessionId} />
             <WorktreeModeChip sessionId={sessionId} />
             <OrchComposerChips sessionId={sessionId} />
@@ -3706,6 +3962,9 @@ function ChatPaneForSession({
               // in the flow. `hidden` (display:none) keeps the component mounted
               // so state (draft, tags, Tiptap history) survives the hide/show.
               hasPendingPrompt && "hidden",
+              // View-only hosts (right-panel scheduled-task pane) hide the
+              // whole input box; same mounted-but-display-none semantics.
+              hideComposer && "hidden",
             )}
             onDragOver={(e) => {
               // Only react to OUR file drag (custom MIME). External drags
@@ -3970,9 +4229,11 @@ function ChatPaneForSession({
                     ? "Claude is working…"
                     : orchBlocking
                       ? t("orch.canvas.inputLocked")
-                      : sessionBusy
-                        ? t("chat.placeholderQueued")
-                        : t("chat.placeholderIdle")
+                      : schedHintVisible
+                        ? t("automation.composerSchedHint")
+                        : sessionBusy
+                          ? t("chat.placeholderQueued")
+                          : t("chat.placeholderIdle")
                 }
                 onChange={handleChange}
                 onEnter={handleEnter}

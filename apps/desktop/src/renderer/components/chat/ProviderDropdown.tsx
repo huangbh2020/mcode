@@ -45,7 +45,24 @@ function runtimeAgentFor(providerId: string): RuntimeAgentId | null {
  * while the session is fixed): the full name was one of the widest items
  * squeezing the narrow composer, and the tooltip keeps it legible.
  */
-export function ProviderDropdown({ compact = false }: { compact?: boolean }) {
+export function ProviderDropdown({
+  compact = false,
+  segment = false,
+  controller,
+}: {
+  compact?: boolean;
+  /** Render the trigger as a composer-minipill segment (定时任务编辑弹窗's
+   *  SDK slot inside the pill) instead of the standalone provider chip. */
+  segment?: boolean;
+  /** Controlled override: bind to a LOCAL draft instead of the global
+   *  composer slots — same provider menu (availability grey-out included),
+   *  the pick routes through `onChange`. Never renders the locked read-only
+   *  chip: the editor's SDK is always choosable. */
+  controller?: {
+    providerId: string;
+    onChange: (providerId: string) => void;
+  };
+} = {}) {
   const { t } = useI18n();
   // While the menu is open the embedded browser view is suppressed — but only
   // when the portaled popup actually reaches the browser's rect (the ref lets
@@ -53,14 +70,20 @@ export function ProviderDropdown({ compact = false }: { compact?: boolean }) {
   const [open, setOpen] = useState(false);
   const popupRef = useRef<HTMLDivElement>(null);
   useSuppressBrowserView(open, popupRef);
-  const providerId = useSessionStore((s) => s.providerId);
+  const storeProviderId = useSessionStore((s) => s.providerId);
+  const providerId = controller ? controller.providerId : storeProviderId;
   const providers = useSessionStore((s) => s.providers);
-  const setProvider = useSessionStore((s) => s.setProvider);
+  const storeSetProvider = useSessionStore((s) => s.setProvider);
+  const setProvider = (pid: string): void => {
+    if (controller) controller.onChange(pid);
+    else storeSetProvider(pid);
+  };
   const runtimes = useSessionStore((s) => s.runtimes);
   const reloadRuntimes = useSessionStore((s) => s.reloadRuntimes);
   const setSettingsOpen = useSessionStore((s) => s.setSettingsOpen);
   const activeSessionId = useSessionStore((s) => s.activeSessionId);
-  // The active thread has messages → its provider is locked.
+  // The active thread has messages → its provider is locked. (Controlled
+  // mode skips the lock: the editor's SDK is always choosable.)
   const hasMessages = useSessionStore((s) => {
     if (!activeSessionId) return false;
     const bucket = s.messagesBySession[activeSessionId];
@@ -87,7 +110,7 @@ export function ProviderDropdown({ compact = false }: { compact?: boolean }) {
   // Locked (session has messages): the provider is fixed at creation. Render
   // a read-only chip (icon + name + lock) — visible for context, but with no
   // dropdown to change it.
-  if (hasMessages) {
+  if (!controller && hasMessages) {
     return (
       <span
         className={cn(
@@ -106,7 +129,20 @@ export function ProviderDropdown({ compact = false }: { compact?: boolean }) {
     );
   }
 
-  const chip = (
+  const chip = segment ? (
+    // Pill-segment presentation (定时任务编辑弹窗): same minipill-seg hook as
+    // the model/effort/permission segments so the pill reads as one control.
+    <button
+      type="button"
+      className="composer-minipill-seg"
+      title={t("chat.provider.selectTitle")}
+    >
+      <activeIcon.Icon size={13} className={cn("shrink-0", activeIcon.color)} />
+      <span className="composer-lblwrap">
+        <span className="max-w-[110px] truncate">{active?.displayName ?? providerId}</span>
+      </span>
+    </button>
+  ) : (
     <button
       type="button"
       className={cn(
@@ -139,7 +175,7 @@ export function ProviderDropdown({ compact = false }: { compact?: boolean }) {
     >
       <Menu.Trigger render={chip} />
       <Menu.Portal>
-        <Menu.Positioner side="top" align="start">
+        <Menu.Positioner side={segment ? "top" : "top"} align="start">
           <Menu.Popup
             ref={popupRef}
             className={cn(

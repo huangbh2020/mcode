@@ -29,6 +29,7 @@ import { fileHrefToPath, isAbsolutePath, isLocalFileHref } from "@renderer/lib/f
 import { resolveRelativePath } from "@renderer/lib/path.js";
 import { api } from "@renderer/lib/api.js";
 import { FileLink } from "./FileLink.js";
+import { ScheduledTaskApprovalCard } from "./ScheduledTaskApprovalCard.js";
 
 // ── Lazy highlighter singleton ────────────────────────────────────────
 // Initialised on first encounter of a fenced code block; kept alive for the
@@ -391,6 +392,135 @@ function urlTransform(url: string): string {
 const CodeContext = createContext(false);
 const useInCode = () => useContext(CodeContext);
 
+// Fenced code block: highlighted via shiki with copy button + lang label.
+// Falls back to plain code when highlighting fails (unknown language etc.).
+function ShikiCodeBlock({
+  className,
+  rawCode,
+  childProps,
+}: {
+  className: string;
+  rawCode: string;
+  childProps?: { className?: string; children?: unknown };
+}) {
+  const lang = resolveLang(extractLanguage(className));
+
+  // Lazy-init highlighter on first encounter of a fenced block.
+  const [ready, setReady] = useState(!!highlighterInstance);
+  useMemo(() => {
+    if (!highlighterInstance) {
+      ensureHighlighter().then(() => setReady(true));
+    }
+  }, []);
+
+  const html = useMemo(() => {
+    if (!rawCode) return null;
+
+    // Theme is part of the cache key so a theme switch (light↔dark, or a
+    // theme-name change) invalidates stale HTML and re-highlights instead
+    // of serving the wrong palette.
+    const theme = currentTheme();
+    const key = codeCacheKey(rawCode, lang, theme);
+    // Cache hit?
+    const cached = getCodeHtml(key);
+    if (cached) return { __html: cached, key };
+
+    // Highlighter ready?
+    if (highlighterInstance) {
+      // Helper: attempt highlighting with a given language, returning null
+      // on any error instead of throwing.
+      const tryHighlight = (tryLang: string): string | null => {
+        try {
+          return highlighterInstance!.codeToHtml(rawCode, {
+            lang: tryLang,
+            theme,
+            transformers: [transformerNotationDiff()],
+          });
+        } catch {
+          return null; // Language not found or other error — caller handles.
+        }
+      };
+
+      // First attempt: requested language.
+      let highlighted = tryHighlight(lang);
+      // Fallback: "text" (always available, plain monospace).
+      if (!highlighted && lang !== "text") {
+        highlighted = tryHighlight("text");
+      }
+      if (highlighted) {
+        setCodeHtml(key, highlighted);
+        return { __html: highlighted, key };
+      }
+      // Both attempts failed — cache a safe placeholder.
+      setCodeHtml(key, `<pre class="shiki fallback"><code>${escapeHtml(rawCode)}</code></pre>`);
+    }
+
+    return null; // Not ready yet or highlight failed — show raw text.
+  }, [rawCode, lang, ready]);
+
+  // Long code blocks are collapsed to a max-height preview with a 展开
+  // overlay; clicking it (or the 收起 header button once expanded) toggles
+  // full height. `clippable` is re-measured only while collapsed, so
+  // streaming growth stays accurate and an expanded block's unbounded
+  // scrollHeight never accidentally un-clips it.
+  const { t } = useI18n();
+  const [expanded, setExpanded] = useState(false);
+  const [clippable, setClippable] = useState(false);
+  const bodyRef = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const el = bodyRef.current;
+    if (!el || expanded) return;
+    setClippable(el.scrollHeight > el.clientHeight + 1);
+  }, [rawCode, lang, ready, html, expanded]);
+
+  return (
+    <pre className="my-[var(--chat-md-gap-md)] overflow-hidden rounded-lg border border-edge/60 bg-surface-muted/60">
+      <div className="flex items-center justify-between gap-2 border-b border-edge/60 bg-surface-muted/40 px-2 py-0.5 text-content-subtle [font-size:var(--chat-fs-xxs)]">
+        <span className="truncate font-mono">{lang}</span>
+        <span className="flex shrink-0 items-center gap-1">
+          {clippable && expanded && (
+            <button
+              onClick={() => setExpanded(false)}
+              className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 transition-colors hover:bg-surface-hover/60 hover:text-content-muted"
+              title={t("chatStream.code.collapse")}
+            >
+              <IconChevronUp size={10} /> {t("chatStream.code.collapse")}
+            </button>
+          )}
+          <CopyButton text={rawCode.replace(/\n$/, "")} />
+        </span>
+      </div>
+      <div className="relative">
+        <div
+          ref={bodyRef}
+          className="overflow-auto"
+          style={{ maxHeight: expanded ? undefined : CODE_COLLAPSE_MAX_PX }}
+        >
+          {html ? (
+            <div className="px-3 py-2 [font-size:var(--chat-fs-xs)]" dangerouslySetInnerHTML={html} />
+          ) : (
+            <code className="block px-3 py-2 font-mono leading-relaxed text-content [font-size:var(--chat-fs-xs)]">
+              {childProps?.children as React.ReactNode}
+            </code>
+          )}
+        </div>
+        {clippable && !expanded && (
+          <>
+            <div className="pointer-events-none absolute inset-x-0 bottom-0 h-12 bg-gradient-to-t from-surface-muted/90 to-transparent" />
+            <button
+              onClick={() => setExpanded(true)}
+              className="absolute bottom-1.5 left-1/2 inline-flex -translate-x-1/2 items-center gap-1 rounded-full border border-edge bg-surface px-2.5 py-0.5 text-content-muted shadow-sm transition-colors hover:bg-surface-hover hover:text-content"
+              title={t("chatStream.code.expand")}
+            >
+              <IconChevronDown size={12} /> {t("chatStream.code.expand")}
+            </button>
+          </>
+        )}
+      </div>
+    </pre>
+  );
+}
+
 /**
  * Build the react-markdown component overrides. Skill/command highlighting
  * is NOT done here — it's handled by the `rehypeSkillInline` rehype plugin
@@ -412,129 +542,18 @@ function buildComponents(): Components {
     return <code className="font-mono"><CodeContext.Provider value={true}>{children}</CodeContext.Provider></code>;
   },
 
-  // Fenced code block: highlighted via shiki with copy button + lang label.
-  // Falls back to plain code when highlighting fails (unknown language etc.).
+  // Fenced code block: highlighted via shiki with copy button + lang label,
+  // or custom-rendered for special interactive formats (e.g. scheduled_task_proposal).
   pre({ children }) {
     const child = Array.isArray(children) ? children[0] : children;
     const childProps = (child as { props?: { className?: string; children?: unknown } })?.props;
     const className = childProps?.className ?? "";
     const rawCode = extractText(childProps?.children);
-    const lang = resolveLang(extractLanguage(className));
-
-    // Lazy-init highlighter on first encounter of a fenced block.
-    const [ready, setReady] = useState(!!highlighterInstance);
-    useMemo(() => {
-      if (!highlighterInstance) {
-        ensureHighlighter().then(() => setReady(true));
-      }
-    }, []);
-
-    const html = useMemo(() => {
-      if (!rawCode) return null;
-
-      // Theme is part of the cache key so a theme switch (light↔dark, or a
-      // theme-name change) invalidates stale HTML and re-highlights instead
-      // of serving the wrong palette.
-      const theme = currentTheme();
-      const key = codeCacheKey(rawCode, lang, theme);
-      // Cache hit?
-      const cached = getCodeHtml(key);
-      if (cached) return { __html: cached, key };
-
-      // Highlighter ready?
-      if (highlighterInstance) {
-        // Helper: attempt highlighting with a given language, returning null
-        // on any error instead of throwing.
-        const tryHighlight = (tryLang: string): string | null => {
-          try {
-            return highlighterInstance!.codeToHtml(rawCode, {
-              lang: tryLang,
-              theme,
-              transformers: [transformerNotationDiff()],
-            });
-          } catch {
-            return null; // Language not found or other error — caller handles.
-          }
-        };
-
-        // First attempt: requested language.
-        let highlighted = tryHighlight(lang);
-        // Fallback: "text" (always available, plain monospace).
-        if (!highlighted && lang !== "text") {
-          highlighted = tryHighlight("text");
-        }
-        if (highlighted) {
-          setCodeHtml(key, highlighted);
-          return { __html: highlighted, key };
-        }
-        // Both attempts failed — cache a safe placeholder.
-        setCodeHtml(key, `<pre class="shiki fallback"><code>${escapeHtml(rawCode)}</code></pre>`);
-      }
-
-      return null; // Not ready yet or highlight failed — show raw text.
-    }, [rawCode, lang, ready]);
-
-    // Long code blocks are collapsed to a max-height preview with a 展开
-    // overlay; clicking it (or the 收起 header button once expanded) toggles
-    // full height. `clippable` is re-measured only while collapsed, so
-    // streaming growth stays accurate and an expanded block's unbounded
-    // scrollHeight never accidentally un-clips it.
-    const { t } = useI18n();
-    const [expanded, setExpanded] = useState(false);
-    const [clippable, setClippable] = useState(false);
-    const bodyRef = useRef<HTMLDivElement>(null);
-    useLayoutEffect(() => {
-      const el = bodyRef.current;
-      if (!el || expanded) return;
-      setClippable(el.scrollHeight > el.clientHeight + 1);
-    }, [rawCode, lang, ready, html, expanded]);
-
-    return (
-      <pre className="my-[var(--chat-md-gap-md)] overflow-hidden rounded-lg border border-edge/60 bg-surface-muted/60">
-        <div className="flex items-center justify-between gap-2 border-b border-edge/60 bg-surface-muted/40 px-2 py-0.5 text-content-subtle [font-size:var(--chat-fs-xxs)]">
-          <span className="truncate font-mono">{lang}</span>
-          <span className="flex shrink-0 items-center gap-1">
-            {clippable && expanded && (
-              <button
-                onClick={() => setExpanded(false)}
-                className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 transition-colors hover:bg-surface-hover/60 hover:text-content-muted"
-                title={t("chatStream.code.collapse")}
-              >
-                <IconChevronUp size={10} /> {t("chatStream.code.collapse")}
-              </button>
-            )}
-            <CopyButton text={rawCode.replace(/\n$/, "")} />
-          </span>
-        </div>
-        <div className="relative">
-          <div
-            ref={bodyRef}
-            className="overflow-auto"
-            style={{ maxHeight: expanded ? undefined : CODE_COLLAPSE_MAX_PX }}
-          >
-            {html ? (
-              <div className="px-3 py-2 [font-size:var(--chat-fs-xs)]" dangerouslySetInnerHTML={html} />
-            ) : (
-              <code className="block px-3 py-2 font-mono leading-relaxed text-content [font-size:var(--chat-fs-xs)]">
-                {childProps?.children as React.ReactNode}
-              </code>
-            )}
-          </div>
-          {clippable && !expanded && (
-            <>
-              <div className="pointer-events-none absolute inset-x-0 bottom-0 h-12 bg-gradient-to-t from-surface-muted/90 to-transparent" />
-              <button
-                onClick={() => setExpanded(true)}
-                className="absolute bottom-1.5 left-1/2 inline-flex -translate-x-1/2 items-center gap-1 rounded-full border border-edge bg-surface px-2.5 py-0.5 text-content-muted shadow-sm transition-colors hover:bg-surface-hover hover:text-content"
-                title={t("chatStream.code.expand")}
-              >
-                <IconChevronDown size={12} /> {t("chatStream.code.expand")}
-              </button>
-            </>
-          )}
-        </div>
-      </pre>
-    );
+    const rawLang = extractLanguage(className);
+    if (rawLang === "scheduled_task_proposal") {
+      return <ScheduledTaskApprovalCard rawJson={rawCode} />;
+    }
+    return <ShikiCodeBlock className={className} rawCode={rawCode} childProps={childProps} />;
   },
 
   a({ children, href }) {

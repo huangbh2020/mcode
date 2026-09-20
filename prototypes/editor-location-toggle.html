@@ -1,0 +1,770 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Mcode · 文件显示位置开关(替换「隐藏/显示编辑器」)原型</title>
+<style>
+/* ══════════════════════════════════════════════════════════════
+   文件显示位置开关 · 可点击原型
+   ──────────────────────────────────────────────────────────────
+   演示需求:
+   ① 顶部栏新开关,替换原「隐藏/显示编辑器」按钮 —— 语义变为
+      「打开的文件显示在哪里」(开关靠标题栏最右)
+   ② 状态 A(默认,现状):文件 tab 在中间
+        · tabs 模式 = 统一 tab 栏,与会话 tab 并排、竖线隔开
+        · single 模式 = 右侧编辑列(自带 OpenTabsBar)
+      点文件 tab,中间切换为编辑器
+   ③ 状态 B(新):文件显示在右栏「文件」tab,与文件树同一个
+      菜单内,面板拆两列:文件树 │ 打开的文件(tab 列表 + 编辑器)
+      中间恒为聊天(single 模式下编辑列消失,聊天占满)
+      右栏若停在 Git/编排,打开文件时自动切回「文件」tab
+   ④ 计划改为在右栏以新 tab 打开(rail 新增「计划」),
+      不再出现中间伪 tab / 抽屉
+   ⑤ 两态共用同一份已打开文件数据,切换开关时无损迁移
+   ⑥ 菜单栏(rail)贴窗口最右缘
+   ══════════════════════════════════════════════════════════════ */
+:root{
+  --surface:#1a1d24;--surface-muted:#2c313c;--surface-hover:#3a404e;
+  --content:#e7e8ec;--content-muted:#bcbfc6;--content-subtle:#9ea2ab;
+  --edge:#2d3340;--edge-strong:#3a4150;--accent:#10b981;--danger:#f87171;
+  --sky:#38bdf8;--amber:#fbbf24;--indigo:#818cf8;--violet:#a78bfa;
+  --page-bg:#111318;--ghost:#14171d;--chat-bg:#15181f;--titlebar:#171a21;
+  --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+}
+body.light{
+  --surface:#fff;--surface-muted:#f4f4f5;--surface-hover:#e4e4e7;
+  --content:#09090b;--content-muted:#3f3f46;--content-subtle:#71717a;
+  --edge:#e4e4e7;--edge-strong:#d4d4d8;--accent:#059669;--danger:#dc2626;
+  --sky:#0284c7;--amber:#b45309;--indigo:#4f46e5;--violet:#7c3aed;
+  --page-bg:#eceef1;--ghost:#f6f7f9;--chat-bg:#f8f9fb;--titlebar:#f2f3f6;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{
+  font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Segoe UI","Microsoft YaHei",sans-serif;
+  background:var(--page-bg);color:var(--content);overflow:hidden;font-size:13px;
+  display:flex;flex-direction:column;
+}
+.ic{width:14px;height:14px;flex:none;stroke:currentColor;fill:none;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+.ic.s{width:12px;height:12px}.ic.xs{width:10px;height:10px}.ic.l{width:16px;height:16px}
+.mono{font-family:var(--mono)}
+button{font:inherit;color:inherit;background:none;border:none;cursor:pointer}
+
+/* ── 标题栏(控件全部靠最右) ────────────────────────────── */
+#titlebar{
+  flex:none;height:40px;display:flex;align-items:center;gap:10px;padding:0 12px;
+  background:var(--titlebar);border-bottom:1px solid var(--edge);
+  -webkit-user-select:none;user-select:none;
+}
+.traffic{display:flex;gap:6px;margin-right:2px}
+.traffic i{width:11px;height:11px;border-radius:50%}
+.traffic i:nth-child(1){background:#ff5f57}.traffic i:nth-child(2){background:#febc2e}.traffic i:nth-child(3){background:#28c840}
+.brand{font-size:12.5px;font-weight:700;letter-spacing:-.2px}
+.brand small{font-weight:500;color:var(--content-subtle);margin-left:7px;font-size:11px}
+
+.seg{display:flex;border:1px solid var(--edge);border-radius:8px;background:var(--surface);padding:2px;gap:2px}
+.seg button{
+  display:flex;align-items:center;gap:5px;padding:3px 10px;border-radius:6px;
+  font-size:11.5px;color:var(--content-subtle);white-space:nowrap;
+}
+.seg button:hover{color:var(--content-muted)}
+.seg button.on{background:var(--surface-hover);color:var(--content);font-weight:600}
+.tb-spacer{flex:1}
+
+/* ★ 新开关(替换原「隐藏/显示编辑器」,标题栏最右) */
+#locToggle{display:flex;align-items:center;gap:8px}
+#locToggle .loc-lbl{font-size:10.5px;font-weight:750;letter-spacing:.6px;color:var(--content-subtle)}
+#locToggle .seg button.loc-center.on{color:var(--sky)}
+#locToggle .seg button.loc-right.on{color:var(--accent)}
+.tb-btn{width:30px;height:30px;border-radius:8px;display:flex;align-items:center;justify-content:center;color:var(--content-subtle);border:1px solid transparent}
+.tb-btn:hover{background:var(--surface-muted);color:var(--content)}
+
+/* ── 主体三栏 ───────────────────────────────────────────── */
+#app{flex:1;min-height:0;display:flex}
+
+/* 左栏(示意) */
+#leftbar{width:196px;flex:none;background:var(--surface);border-right:1px solid var(--edge);padding:8px 0;display:flex;flex-direction:column}
+#leftbar .lbl{font-size:9.5px;font-weight:750;letter-spacing:.7px;color:var(--content-subtle);padding:6px 14px 4px}
+#leftbar .sc{display:flex;align-items:center;gap:8px;padding:6px 10px;margin:0 6px;border-radius:8px;font-size:12px;color:var(--content-muted);cursor:default}
+#leftbar .sc:hover{background:var(--surface-muted)}
+#leftbar .sc.on{background:var(--surface-hover);color:var(--content)}
+#leftbar .av{width:17px;height:17px;border-radius:5px;flex:none;display:flex;align-items:center;justify-content:center;font-size:8.5px;font-weight:800;color:#fff}
+#leftbar .sc .t{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#leftbar .st{flex:none;width:6px;height:6px;border-radius:50%;background:var(--content-subtle)}
+#leftbar .st.run{background:var(--sky)}
+#leftbar .st.ok{background:var(--accent)}
+
+/* ── 中栏 ───────────────────────────────────────────────── */
+#center{flex:1;min-width:0;display:flex;flex-direction:column;background:var(--page-bg)}
+
+/* 统一 tab 条:仅 tabs 模式显示 */
+#tabsBar{
+  flex:none;height:34px;display:flex;align-items:stretch;gap:0;padding:0 8px;
+  background:var(--surface);border-bottom:1px solid var(--edge);overflow-x:auto;overflow-y:hidden;
+}
+#tabsBar::-webkit-scrollbar{height:0}
+body[data-mode="single"] #tabsBar{display:none}
+.tab{
+  display:flex;align-items:center;gap:6px;padding:0 10px;margin:4px 0;flex:none;
+  font-size:11.5px;color:var(--content-subtle);border-radius:7px;cursor:pointer;
+  max-width:200px;white-space:nowrap;position:relative;
+}
+.tab:hover{background:var(--surface-muted);color:var(--content-muted)}
+.tab.on{background:var(--surface-hover);color:var(--content);font-weight:600}
+.tab .x{display:none;width:14px;height:14px;border-radius:4px;align-items:center;justify-content:center;color:var(--content-subtle);flex:none}
+.tab .x:hover{background:var(--surface-hover);color:var(--content)}
+.tab.on .x,.tab:hover .x{display:flex}
+.tab .t{overflow:hidden;text-overflow:ellipsis}
+.tab.sess .dot{width:6px;height:6px;border-radius:50%;flex:none;background:var(--content-subtle)}
+.tab.sess .dot.run{background:var(--sky)}
+/* ★ 竖线:会话组与文件组分隔(仅状态 A 的 tabs 模式出现) */
+#tabsBar .group-sep{flex:none;width:1px;background:var(--edge-strong);margin:7px 7px}
+.group-ico{flex:none;display:flex;align-items:center;gap:4px;color:var(--content-subtle);font-size:10px;font-weight:700;letter-spacing:.5px;padding:0 2px}
+.ed-tabs .group-ico{padding:0 6px 0 4px}
+
+#centerBody{flex:1;min-height:0;display:flex}
+body[data-mode="tabs"] #centerBody{flex-direction:column}
+body[data-mode="single"] #centerBody{flex-direction:row}
+
+/* 聊天列 */
+#chatCol{flex:1;min-width:0;min-height:0;display:flex;flex-direction:column;background:var(--chat-bg)}
+/* tabs 模式:焦点 editor 时聊天让位;状态 B 恒聊天 */
+body[data-mode="tabs"][data-focus="editor"] #chatCol{display:none}
+/* single 模式:状态 B 编辑列消失,聊天占满 */
+body[data-mode="single"][data-loc="right"] #editorCol{display:none}
+body[data-mode="tabs"] #editorCol{flex:1}
+body[data-mode="single"] #editorCol{flex:none;width:44%;border-left:1px solid var(--edge)}
+
+/* 编辑器面(tabs 模式=中央整幅;single 模式=右侧列;状态 B 时整体隐藏) */
+#editorCol{min-width:0;min-height:0;display:flex;flex-direction:column;background:var(--ghost)}
+body[data-loc="right"] #editorCol{display:none}
+.ed-tabs{flex:none;display:flex;align-items:center;gap:2px;padding:4px 6px;background:var(--surface);border-bottom:1px solid var(--edge);overflow-x:auto}
+.ed-tabs::-webkit-scrollbar{height:0}
+.ed-head{flex:none;display:flex;align-items:center;gap:6px;padding:6px 12px;border-bottom:1px solid var(--edge);
+  font-size:10.5px;color:var(--content-subtle);font-family:var(--mono)}
+.ed-head .fn{color:var(--content-muted);font-weight:600}
+.ed-code{flex:1;min-height:0;overflow:auto;padding:10px 0}
+.ed-code::-webkit-scrollbar{width:10px;height:10px}
+.ed-code::-webkit-scrollbar-thumb{background:var(--surface-hover);border-radius:5px;border:3px solid var(--ghost)}
+.cl{display:flex;font-family:var(--mono);font-size:11.5px;line-height:1.75}
+.cl .ln{flex:none;width:38px;text-align:right;padding-right:12px;color:var(--content-subtle);opacity:.55;user-select:none}
+.cl .cd{flex:1;padding-right:16px;white-space:pre;color:var(--content-muted)}
+.cd .k{color:var(--violet)}.cd .s{color:var(--accent)}.cd .c{color:var(--content-subtle)}.cd .f{color:var(--sky)}
+.ed-empty{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;color:var(--content-subtle);font-size:12px}
+.ed-empty .ic{width:22px;height:22px;opacity:.5}
+
+/* 聊天内容(示意) */
+.msgs{flex:1;min-height:0;overflow-y:auto;padding:16px 18px;display:flex;flex-direction:column;gap:14px}
+.msgs::-webkit-scrollbar{width:10px}
+.msgs::-webkit-scrollbar-thumb{background:var(--surface-hover);border-radius:5px;border:3px solid var(--chat-bg)}
+.msg{font-size:12.5px;line-height:1.75;color:var(--content-muted);max-width:78%}
+.msg.user{align-self:flex-end;background:color-mix(in srgb,var(--sky) 14%,transparent);
+  border:1px solid color-mix(in srgb,var(--sky) 26%,transparent);color:var(--content);
+  padding:8px 12px;border-radius:12px 12px 3px 12px}
+.msg .who{font-size:10px;font-weight:750;letter-spacing:.5px;color:var(--content-subtle);margin-bottom:3px}
+.fchips{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+.fchip{display:flex;align-items:center;gap:5px;padding:4px 9px;border-radius:7px;font-size:11px;
+  font-family:var(--mono);color:var(--sky);background:color-mix(in srgb,var(--sky) 10%,transparent);
+  border:1px solid color-mix(in srgb,var(--sky) 28%,transparent);cursor:pointer}
+.fchip:hover{background:color-mix(in srgb,var(--sky) 20%,transparent)}
+
+/* 计划卡片(点「查看计划」→ 右栏计划 tab) */
+.plan-card{margin-top:8px;border:1px solid var(--edge-strong);border-radius:11px;background:var(--surface);overflow:hidden;max-width:460px}
+.plan-card .pc-head{display:flex;align-items:center;gap:8px;padding:9px 12px;border-bottom:1px solid var(--edge)}
+.plan-card .pc-head .ti{flex:1;font-size:12px;font-weight:650;color:var(--content)}
+.plan-card .pc-head .badge{font-size:9.5px;font-weight:750;letter-spacing:.5px;padding:2px 7px;border-radius:6px;
+  background:color-mix(in srgb,var(--indigo) 16%,transparent);color:var(--indigo)}
+.plan-card ul{list-style:none;padding:8px 12px;display:flex;flex-direction:column;gap:5px}
+.plan-card li{display:flex;gap:7px;font-size:11.5px;color:var(--content-muted)}
+.plan-card li .ic{margin-top:3px;color:var(--indigo)}
+.plan-card .pc-foot{display:flex;gap:8px;padding:9px 12px;border-top:1px solid var(--edge)}
+.btn{display:flex;align-items:center;gap:5px;padding:5px 12px;border-radius:8px;font-size:11.5px;font-weight:600;
+  border:1px solid var(--edge-strong);color:var(--content-muted);background:var(--surface-muted)}
+.btn:hover{color:var(--content)}
+.btn.primary{background:color-mix(in srgb,var(--indigo) 20%,transparent);border-color:color-mix(in srgb,var(--indigo) 45%,transparent);color:var(--indigo)}
+.btn.primary:hover{background:color-mix(in srgb,var(--indigo) 30%,transparent)}
+
+/* composer(示意) */
+.composer{flex:none;margin:0 14px 12px;border:1px solid var(--edge-strong);border-radius:12px;background:var(--surface);
+  display:flex;align-items:center;gap:8px;padding:9px 12px;color:var(--content-subtle);font-size:12px}
+.composer .send{margin-left:auto;width:26px;height:26px;border-radius:8px;display:flex;align-items:center;justify-content:center;
+  background:color-mix(in srgb,var(--accent) 18%,transparent);color:var(--accent)}
+
+/* ── 右栏(菜单栏 rail 贴窗口最右缘) ────────────────────── */
+#rightpanel{width:520px;flex:none;min-width:0;display:flex;background:var(--surface)}
+#rightBody{flex:1;min-width:0;display:flex;flex-direction:column}
+#rail{width:42px;flex:none;display:flex;flex-direction:column;align-items:center;gap:3px;padding:8px 0;border-left:1px solid var(--edge)}
+.rail-btn{width:30px;height:30px;border-radius:8px;display:flex;align-items:center;justify-content:center;color:var(--content-subtle);position:relative}
+.rail-btn:hover{background:var(--surface-muted);color:var(--content)}
+.rail-btn.on{background:var(--surface-hover);color:var(--content)}
+.rail-btn.on.files{color:var(--sky)}.rail-btn.on.git{color:var(--amber)}
+.rail-btn.on.orch{color:var(--violet)}.rail-btn.on.plan{color:var(--indigo)}
+.rail-btn.dim{opacity:.32;cursor:default}
+.rail-btn.dim:hover{background:none;color:var(--content-subtle)}
+.rail-btn .bdg{position:absolute;top:1px;right:1px;min-width:13px;height:13px;padding:0 3px;border-radius:7px;
+  background:var(--sky);color:#fff;font-size:8.5px;font-weight:800;display:flex;align-items:center;justify-content:center}
+.rail-sep{width:20px;height:1px;background:var(--edge);margin:4px 0;flex:none}
+.rt{flex:1;min-height:0;display:none;flex-direction:column}
+.rt.on{display:flex}
+.rt-head{flex:none;display:flex;align-items:center;gap:8px;padding:9px 12px;border-bottom:1px solid var(--edge);font-size:11px;font-weight:700;color:var(--content-muted)}
+.rt-head .ic{color:var(--content-subtle)}
+.rt-head .hint{margin-left:auto;font-weight:500;font-size:10.5px;color:var(--content-subtle)}
+
+/* ★ 文件 tab:状态 A 单列(树);状态 B 与文件树同一个菜单内拆两列 */
+#filesWrap{flex:1;min-height:0;display:grid;grid-template-columns:1fr}
+body[data-loc="right"] #filesWrap{grid-template-columns:45% 55%}
+.tree-col{min-width:0;min-height:0;overflow-y:auto;padding:6px 4px;border-right:1px solid var(--edge)}
+body[data-loc="center"] .tree-col{border-right:none}
+.tree-col::-webkit-scrollbar{width:9px}
+.tree-col::-webkit-scrollbar-thumb{background:var(--surface-hover);border-radius:5px;border:3px solid var(--surface)}
+.tnode{display:flex;align-items:center;gap:6px;padding:3.5px 8px;margin:0 3px;border-radius:6px;font-size:11.5px;color:var(--content-muted);cursor:pointer;white-space:nowrap}
+.tnode:hover{background:var(--surface-muted)}
+.tnode.file.on{background:color-mix(in srgb,var(--sky) 14%,transparent);color:var(--sky)}
+.tnode .nm{overflow:hidden;text-overflow:ellipsis}
+.tnode.folder{color:var(--content);font-weight:600}
+.tnode .tw{flex:none;display:flex;color:var(--content-subtle)}
+.kids{margin-left:13px;border-left:1px solid var(--edge);padding-left:2px}
+.kids.hide{display:none}
+
+/* 状态 B:打开文件列(同一「文件」tab 内的第二列) */
+.open-col{min-width:0;min-height:0;display:none;flex-direction:column;background:var(--ghost)}
+body[data-loc="right"] .open-col{display:flex}
+
+/* Git / 编排(示意) */
+.gitlist,.orchlist{flex:1;overflow-y:auto;padding:8px}
+.grow{display:flex;align-items:center;gap:7px;padding:5px 8px;border-radius:7px;font-size:11.5px;color:var(--content-muted);font-family:var(--mono)}
+.grow:hover{background:var(--surface-muted)}
+.grow .badge{font-size:9px;font-weight:800;width:16px;height:16px;border-radius:5px;display:flex;align-items:center;justify-content:center;flex:none}
+.grow .badge.m{background:color-mix(in srgb,var(--amber) 18%,transparent);color:var(--amber)}
+.grow .badge.a{background:color-mix(in srgb,var(--accent) 18%,transparent);color:var(--accent)}
+.ocard{border:1px solid var(--edge);border-radius:10px;padding:9px 11px;margin-bottom:8px;background:var(--ghost)}
+.ocard .ot{display:flex;align-items:center;gap:7px;font-size:11.5px;font-weight:650;color:var(--content)}
+.ocard .os{font-size:10px;margin-top:4px;color:var(--content-subtle)}
+.ocard .pill{margin-left:auto;font-size:9.5px;font-weight:750;padding:2px 8px;border-radius:6px}
+.ocard .pill.run{background:color-mix(in srgb,var(--sky) 15%,transparent);color:var(--sky)}
+.ocard .pill.ok{background:color-mix(in srgb,var(--accent) 15%,transparent);color:var(--accent)}
+.ocard .pill.wait{background:color-mix(in srgb,var(--amber) 15%,transparent);color:var(--amber)}
+
+/* 计划 tab(右栏新 tab 形态) */
+.plan-body{flex:1;overflow-y:auto;padding:12px}
+.plan-body::-webkit-scrollbar{width:9px}
+.plan-body::-webkit-scrollbar-thumb{background:var(--surface-hover);border-radius:5px;border:3px solid var(--surface)}
+.plan-title{font-size:13.5px;font-weight:700;display:flex;align-items:center;gap:8px}
+.plan-title .badge{font-size:9.5px;font-weight:750;letter-spacing:.5px;padding:2px 7px;border-radius:6px;
+  background:color-mix(in srgb,var(--indigo) 16%,transparent);color:var(--indigo)}
+.plan-meta{font-size:10.5px;color:var(--content-subtle);margin:5px 0 12px}
+.plan-steps{border:1px solid var(--edge);border-radius:11px;overflow:hidden}
+.pstep{display:flex;gap:9px;padding:9px 12px;border-bottom:1px solid var(--edge);font-size:11.5px;color:var(--content-muted);align-items:flex-start}
+.pstep:last-child{border-bottom:none}
+.pstep .cb{flex:none;width:14px;height:14px;border-radius:4px;border:1.5px solid var(--edge-strong);margin-top:2px}
+.pstep.done .cb{background:var(--accent);border-color:var(--accent);position:relative}
+.pstep.done .cb::after{content:"";position:absolute;inset:2.5px 3px;border-left:2px solid #fff;border-bottom:2px solid #fff;transform:rotate(-45deg) scale(.9)}
+.pstep.done{color:var(--content-subtle);text-decoration:line-through;text-decoration-color:var(--edge-strong)}
+.pstep .st-tag{margin-left:auto;flex:none;font-size:9px;font-weight:800;letter-spacing:.4px;padding:2px 6px;border-radius:5px}
+.pstep .st-tag.run{background:color-mix(in srgb,var(--sky) 15%,transparent);color:var(--sky)}
+.pstep .st-tag.todo{background:var(--surface-muted);color:var(--content-subtle)}
+.plan-foot{display:flex;gap:8px;margin-top:12px}
+
+/* ── 悬浮指引 + toast ───────────────────────────────────── */
+#guide{position:fixed;right:14px;bottom:14px;width:305px;z-index:50;border:1px solid var(--edge-strong);border-radius:13px;
+  background:color-mix(in srgb,var(--surface) 92%,transparent);backdrop-filter:blur(8px);
+  box-shadow:0 16px 44px rgba(0,0,0,.4);padding:12px 14px;font-size:11.5px;line-height:1.7;color:var(--content-muted)}
+body.light #guide{box-shadow:0 14px 36px rgba(0,0,0,.16)}
+#guide h3{font-size:12px;font-weight:750;color:var(--content);display:flex;align-items:center;gap:6px;margin-bottom:7px}
+#guide ol{padding-left:17px;display:flex;flex-direction:column;gap:4px}
+#guide b{color:var(--sky);font-weight:650}
+#guide .gx{position:absolute;top:8px;right:8px;width:20px;height:20px;border-radius:6px;display:flex;align-items:center;justify-content:center;color:var(--content-subtle)}
+#guide .gx:hover{background:var(--surface-muted);color:var(--content)}
+#toast{position:fixed;left:50%;bottom:26px;transform:translateX(-50%) translateY(16px);z-index:60;
+  background:var(--surface);border:1px solid var(--edge-strong);color:var(--content);
+  padding:8px 16px;border-radius:10px;font-size:12px;box-shadow:0 10px 30px rgba(0,0,0,.4);
+  opacity:0;pointer-events:none;transition:opacity .22s,transform .22s;display:flex;align-items:center;gap:7px}
+#toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+#toast .ic{color:var(--accent)}
+</style>
+</head>
+<body data-mode="tabs" data-loc="center" data-focus="chat">
+
+<!-- ═══ 标题栏:控件全部靠最右;★ 「文件位置」开关替换原「隐藏/显示编辑器」 ═══ -->
+<div id="titlebar">
+  <div class="traffic"><i></i><i></i><i></i></div>
+  <div class="brand">Mcode<small>文件显示位置 · 原型</small></div>
+  <div class="tb-spacer"></div>
+  <div class="seg" id="modeSeg">
+    <button data-action="set-mode" data-mode="tabs" class="on">Tabs 模式</button>
+    <button data-action="set-mode" data-mode="single">Single 模式</button>
+  </div>
+  <button class="tb-btn" data-action="toggle-theme" title="明暗切换"></button>
+  <div id="locToggle">
+    <span class="loc-lbl">文件位置</span>
+    <div class="seg">
+      <button data-action="set-loc" data-loc="center" class="on loc-center" title="打开的文件与中间栏 tab 显示在一起(现状)">
+        中间栏
+      </button>
+      <button data-action="set-loc" data-loc="right" class="loc-right" title="打开的文件显示到右栏「文件」tab,与文件树同一菜单内拆两列:文件树│打开的文件">
+        右栏
+      </button>
+    </div>
+  </div>
+</div>
+
+<div id="app">
+  <!-- ═══ 左栏(示意,与本需求无关) ═══ -->
+  <aside id="leftbar">
+    <div class="lbl">会话 · my-claude-gui</div>
+    <div class="sc on"><div class="av" style="background:#0ea5e9">Mc</div><div class="t">右栏 Tab 体系重构</div><div class="st ok"></div></div>
+    <div class="sc"><div class="av" style="background:#10b981">流</div><div class="t">修复流式截断</div><div class="st run"></div></div>
+    <div class="sc"><div class="av" style="background:#f59e0b">L</div><div class="t">LSP 跳转反馈</div><div class="st"></div></div>
+    <div class="lbl">会话 · t3code</div>
+    <div class="sc"><div class="av" style="background:#8b5cf6">T3</div><div class="t">侧栏聚合缓存</div><div class="st"></div></div>
+  </aside>
+
+  <!-- ═══ 中栏 ═══ -->
+  <main id="center">
+    <div id="tabsBar"></div>
+    <div id="centerBody">
+      <div id="chatCol">
+        <div class="msgs">
+          <div class="msg"><div class="who">CLAUDE</div>
+            我梳理了右栏的结构:rail 分全局层(files/git/orch)与会话层(turns/sidechat/browser)。计划建议跟会话走,作为会话层的新 tab 打开。
+            <div class="plan-card">
+              <div class="pc-head">
+                <span class="badge">计划</span><div class="ti">重建右栏 Tab 体系</div>
+              </div>
+              <ul>
+                <li><svg class="ic xs" viewBox="0 0 24 24"><path d="M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2"/><rect x="9" y="3" width="6" height="4" rx="2"/></svg>rail 增加「计划」tab,跟会话走</li>
+                <li><svg class="ic xs" viewBox="0 0 24 24"><path d="M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2"/><rect x="9" y="3" width="6" height="4" rx="2"/></svg>计划入口全部改道右栏呈现</li>
+                <li><svg class="ic xs" viewBox="0 0 24 24"><path d="M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2"/><rect x="9" y="3" width="6" height="4" rx="2"/></svg>移除中间计划伪 tab 与抽屉</li>
+              </ul>
+              <div class="pc-foot">
+                <button class="btn primary" data-action="view-plan">
+                  <svg class="ic xs" viewBox="0 0 24 24"><path d="M2 12h4l3-8 4 16 3-8h4"/></svg>查看计划
+                </button>
+                <button class="btn">稍后</button>
+              </div>
+            </div>
+          </div>
+          <div class="msg user">帮我把 ipc.ts 里的 schema 和 preload 白名单对一下,顺便看看 App.tsx 的挂载点</div>
+          <div class="msg"><div class="who">CLAUDE</div>
+            对过了,有两处差异:<code class="mono" style="font-size:11px;color:var(--amber)">session.listAll</code> 已在 contracts 定义,但 preload 白名单漏注册;App.tsx 的 CenterPane 分支可以复用。
+            <div class="fchips">
+              <span class="fchip" data-action="open-file" data-path="packages/contracts/src/ipc.ts">
+                <svg class="ic xs" viewBox="0 0 24 24"><path d="M14 3v4a1 1 0 0 0 1 1h4"/><path d="M5 8V5a2 2 0 0 1 2-2h7l5 5v11a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2z"/></svg>
+                packages/contracts/src/ipc.ts
+              </span>
+              <span class="fchip" data-action="open-file" data-path="apps/desktop/src/renderer/App.tsx">
+                <svg class="ic xs" viewBox="0 0 24 24"><path d="M14 3v4a1 1 0 0 0 1 1h4"/><path d="M5 8V5a2 2 0 0 1 2-2h7l5 5v11a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2z"/></svg>
+                apps/desktop/src/renderer/App.tsx
+              </span>
+            </div>
+          </div>
+          <div class="msg"><div class="who">CLAUDE</div>文件链接可以直接点开 —— 试试在不同「文件位置」下点它们,落点会不一样。</div>
+        </div>
+        <div class="composer">
+          <svg class="ic" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
+          <span>回复会话…</span>
+          <span class="send"><svg class="ic s" viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></svg></span>
+        </div>
+      </div>
+
+      <!-- 编辑器面:tabs=中央整幅 / single=右侧列(状态 B 隐藏) -->
+      <div id="editorCol">
+        <div class="ed-tabs" id="edTabsHost"></div>
+        <div class="ed-head" id="edHeadHost"></div>
+        <div class="ed-code" id="edCodeHost"></div>
+        <div class="ed-empty" id="edEmpty" style="display:none">
+          <svg class="ic" viewBox="0 0 24 24"><path d="M14 3v4a1 1 0 0 0 1 1h4"/><path d="M5 8V5a2 2 0 0 1 2-2h7l5 5v11a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2z"/></svg>
+          <span>点聊天中的文件链接或右侧树打开文件</span>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <!-- ═══ 右栏(内容区 + 最右缘菜单栏 rail) ═══ -->
+  <aside id="rightpanel">
+    <div id="rightBody">
+      <!-- ★ 文件 tab:状态 A 单列树 / 状态 B 与文件树同一菜单内拆两列 -->
+      <section class="rt on" data-rt="files">
+        <div class="rt-head">
+          <svg class="ic" viewBox="0 0 24 24"><path d="M3 9a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+          文件
+          <span class="hint" id="filesHint"></span>
+        </div>
+        <div id="filesWrap">
+          <div class="tree-col" id="treeHost"></div>
+          <div class="open-col">
+            <div class="ed-tabs" id="rpTabsHost"></div>
+            <div class="ed-head" id="rpHeadHost"></div>
+            <div class="ed-code" id="rpCodeHost"></div>
+            <div class="ed-empty" id="rpEmpty" style="display:none">
+              <svg class="ic" viewBox="0 0 24 24"><path d="M14 3v4a1 1 0 0 0 1 1h4"/><path d="M5 8V5a2 2 0 0 1 2-2h7l5 5v11a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2z"/></svg>
+              <span style="max-width:180px;text-align:center;line-height:1.7">从左侧文件树或<br>聊天中的文件链接打开</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="rt" data-rt="git">
+        <div class="rt-head">
+          <svg class="ic" viewBox="0 0 24 24"><circle cx="6" cy="6" r="2.4"/><circle cx="6" cy="18" r="2.4"/><circle cx="18" cy="8" r="2.4"/><path d="M6 8.4v7.2M18 10.4c0 3-2.5 4.6-6 4.9"/></svg>
+          更改 <span class="hint">main · my-claude-gui</span>
+        </div>
+        <div class="gitlist">
+          <div class="grow"><span class="badge m">M</span>apps/desktop/src/renderer/App.tsx</div>
+          <div class="grow"><span class="badge m">M</span>apps/desktop/src/renderer/stores/sessionStore.ts</div>
+          <div class="grow"><span class="badge m">M</span>packages/contracts/src/ipc.ts</div>
+          <div class="grow"><span class="badge a">A</span>apps/desktop/src/renderer/components/layout/RightPanel.tsx</div>
+          <div class="grow"><span class="badge m">M</span>apps/desktop/src/renderer/lib/i18n/zh/layout.ts</div>
+        </div>
+      </section>
+
+      <section class="rt" data-rt="orch">
+        <div class="rt-head">
+          <svg class="ic" viewBox="0 0 24 24"><rect x="3" y="4" width="7" height="6" rx="1.5"/><rect x="14" y="4" width="7" height="6" rx="1.5"/><rect x="8.5" y="15" width="7" height="6" rx="1.5"/><path d="M6.5 10v2.2a1.8 1.8 0 0 0 1.8 1.8h7.4a1.8 1.8 0 0 0 1.8-1.8V10M12 14v1"/></svg>
+          编排 <span class="hint">1 运行 · 1 完成 · 1 等待</span>
+        </div>
+        <div class="orchlist">
+          <div class="ocard"><div class="ot">梳理 preload 白名单<span class="pill run">运行中</span></div><div class="os">worker-1 · 已运行 2m14s</div></div>
+          <div class="ocard"><div class="ot">比对 contracts schema<span class="pill ok">已完成</span></div><div class="os">worker-2 · 1m02s · 3 处差异</div></div>
+          <div class="ocard"><div class="ot">生成迁移清单<span class="pill wait">等待</span></div><div class="os">依赖 worker-2 结果</div></div>
+        </div>
+      </section>
+
+      <!-- ★ 计划:右栏新 tab 形态 -->
+      <section class="rt" data-rt="plan">
+        <div class="rt-head">
+          <svg class="ic" viewBox="0 0 24 24"><path d="M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2"/><rect x="9" y="3" width="6" height="4" rx="2"/><path d="M9 14l2 2 4-4"/></svg>
+          计划 <span class="hint">跟随会话 · 右栏新 tab</span>
+        </div>
+        <div class="plan-body">
+          <div class="plan-title">重建右栏 Tab 体系<span class="badge">待批准</span></div>
+          <div class="plan-meta">4 个步骤 · 预计改动 9 个文件</div>
+          <div class="plan-steps">
+            <div class="pstep done"><span class="cb"></span><span>rail 增加「计划」tab,跟会话走(会话层状态,不持久化)</span></div>
+            <div class="pstep done"><span class="cb"></span><span>计划入口(计划卡/审批提示/命令)全部改道右栏呈现</span></div>
+            <div class="pstep"><span class="cb"></span><span>移除中间计划伪 tab 与抽屉,焦点流转规则同步收窄<span class="st-tag run">进行中</span></span></div>
+            <div class="pstep"><span class="cb"></span><span>历史会话水合兼容旧计划块<span class="st-tag todo">待办</span></span></div>
+          </div>
+          <div class="plan-foot">
+            <button class="btn primary" data-action="plan-approve">批准计划</button>
+            <button class="btn">继续编辑</button>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <!-- ★ 菜单栏(rail)贴窗口最右缘 -->
+    <div id="rail">
+      <button class="rail-btn files on" data-action="right-tab" data-rt="files" title="文件">
+        <svg class="ic l" viewBox="0 0 24 24"><path d="M3 9a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+        <span class="bdg" id="filesBadge" style="display:none"></span>
+      </button>
+      <button class="rail-btn git" data-action="right-tab" data-rt="git" title="Git">
+        <svg class="ic l" viewBox="0 0 24 24"><circle cx="6" cy="6" r="2.4"/><circle cx="6" cy="18" r="2.4"/><circle cx="18" cy="8" r="2.4"/><path d="M6 8.4v7.2M18 10.4c0 3-2.5 4.6-6 4.9"/></svg>
+      </button>
+      <button class="rail-btn orch" data-action="right-tab" data-rt="orch" title="编排">
+        <svg class="ic l" viewBox="0 0 24 24"><rect x="3" y="4" width="7" height="6" rx="1.5"/><rect x="14" y="4" width="7" height="6" rx="1.5"/><rect x="8.5" y="15" width="7" height="6" rx="1.5"/><path d="M6.5 10v2.2a1.8 1.8 0 0 0 1.8 1.8h7.4a1.8 1.8 0 0 0 1.8-1.8V10M12 14v1"/></svg>
+      </button>
+      <div class="rail-sep"></div>
+      <!-- ★ 计划:右栏新 tab -->
+      <button class="rail-btn plan" data-action="right-tab" data-rt="plan" title="计划(新:以右栏 tab 打开)">
+        <svg class="ic l" viewBox="0 0 24 24"><path d="M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2"/><rect x="9" y="3" width="6" height="4" rx="2"/><path d="M9 14l2 2 4-4"/></svg>
+      </button>
+      <div class="rail-sep"></div>
+      <button class="rail-btn dim" title="轮次流程(示意,与本需求无关)"><svg class="ic l" viewBox="0 0 24 24"><path d="M6 4v16"/><circle cx="6" cy="6" r="1.6"/><circle cx="6" cy="18" r="1.6"/><path d="M6 8h8l4 4-4 4H6"/></svg></button>
+      <button class="rail-btn dim" title="子会话(示意,与本需求无关)"><svg class="ic l" viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.2"/><path d="M4 20c0-2.8 2.2-5 5-5s5 2.2 5 5"/><circle cx="17.5" cy="9.5" r="2.2"/><path d="M15.5 15.4c.6-.2 1.3-.4 2-.4 2.5 0 4.5 1.8 4.5 4"/></svg></button>
+      <button class="rail-btn dim" title="浏览器(示意,与本需求无关)"><svg class="ic l" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3.6 9h16.8M3.6 15h16.8M12 3a15 15 0 0 1 0 18M12 3a15 15 0 0 0 0 18"/></svg></button>
+    </div>
+  </aside>
+</div>
+
+<!-- 悬浮指引 -->
+<div id="guide">
+  <button class="gx" data-action="dismiss-guide"><svg class="ic xs" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+  <h3><svg class="ic s" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 8v.01M12 11v5"/></svg>原型指引</h3>
+  <ol>
+    <li>标题栏<b>最右</b>的 <b>「文件位置」开关</b>替换了原「隐藏/显示编辑器」按钮,可在 <b>中间栏 / 右栏</b> 间切换</li>
+    <li>右栏<b>菜单栏贴窗口最右缘</b>;标题栏可切 <b>Tabs / Single</b> 模式,两种模式行为一致</li>
+    <li><b>中间栏</b>态:点聊天里的文件链接 → 文件进中间 tab(tabs 模式与会话 tab 并排、竖线隔开)</li>
+    <li><b>右栏</b>态:打开的文件与文件树在<b>同一个「文件」tab</b> 内,拆两列(树│打开的文件);先把右栏切到 Git,再点文件链接 → <b>自动跳回文件 tab</b></li>
+    <li>点计划卡的<b>「查看计划」</b> → 计划以<b>右栏新 tab</b> 打开(不再有中间伪 tab)</li>
+    <li>切换开关时,已打开文件<b>无损迁移</b>,不关闭</li>
+  </ol>
+</div>
+
+<div id="toast"><svg class="ic s" viewBox="0 0 24 24"><path d="M5 12l5 5L20 7"/></svg><span id="toastText"></span></div>
+
+<script>
+"use strict";
+/* ═══ 数据 ═══ */
+const FILES = {
+  "packages/contracts/src/ipc.ts": [
+    "export const OpenFileInIdeSchema = z.object({",
+    "  path: z.string().min(1),",
+    "  viewMode: z.enum([\"preview\", \"edit\"]).optional(),",
+    "  line: z.number().int().positive().optional(),",
+    "});",
+    "",
+    "export const IPC = {",
+    "  FILE_OPEN_IN_IDE: \"file:openInIde\",",
+    "  SESSION_LIST_ALL: \"session:listAll\",",
+    "  // preload 白名单漏了 SESSION_LIST_ALL ← 差异 ②",
+    "} as const;"
+  ],
+  "apps/desktop/src/renderer/App.tsx": [
+    "export function App() {",
+    "  const displayMode = useSessionStore((s) => s.displayMode);",
+    "  const editorLocation = useSessionStore((s) => s.editorLocation);",
+    "",
+    "  return (",
+    "    <ThreePaneLayout",
+    "      left={<LeftBar />}",
+    "      center={<CenterPane wide={editorLocation === \"right\"} />}",
+    "      right={<RightPanel />}",
+    "    />",
+    "  );",
+    "}"
+  ],
+  "apps/desktop/src/main/ipc/claude.ts": [
+    "ipcMain.handle(IPC.FILE_OPEN_IN_IDE, (e, raw) => {",
+    "  const req = OpenFileInIdeSchema.parse(raw);",
+    "  assertKnownPath(req.path);",
+    "  sendToRenderer(IPC.FILE_OPENED, { path: req.path });",
+    "  return { ok: true };",
+    "});"
+  ],
+  "apps/desktop/src/renderer/stores/sessionStore.ts": [
+    "export const useSessionStore = create((set) => ({",
+    "  openTabs: [],",
+    "  // 文件位置:center(默认)| right",
+    "  editorLocation: \"center\",",
+    "  setEditorLocation: (loc) =>",
+    "    set({ editorLocation: loc, /* 两态共用 openTabs */ }),",
+    "}));"
+  ]
+};
+const TREE = [
+  { folder: "apps/desktop", kids: [
+    { folder: "src", kids: [
+      { folder: "main", kids: [
+        { file: "ipc/claude.ts", path: "apps/desktop/src/main/ipc/claude.ts" },
+      ]},
+      { folder: "renderer", kids: [
+        { file: "App.tsx", path: "apps/desktop/src/renderer/App.tsx" },
+        { file: "stores/sessionStore.ts", path: "apps/desktop/src/renderer/stores/sessionStore.ts" },
+      ]},
+    ]},
+  ]},
+  { folder: "packages/contracts", kids: [
+    { file: "src/ipc.ts", path: "packages/contracts/src/ipc.ts" },
+  ]},
+  { file: "README.md", path: "README.md" },
+];
+const README = [
+  "# Mcode",
+  "",
+  "基于 Claude Agent SDK 的桌面端 GUI。",
+  "",
+  "## 开发",
+  "",
+    "```bash",
+  "pnpm dev",
+    "```",
+];
+
+/* ═══ 状态(两态共用 openFiles / activeFile —— 需求⑤) ═══ */
+const S = {
+  mode: "tabs",            // tabs | single
+  loc: "center",           // center | right
+  focus: "chat",           // tabs 模式:chat | editor
+  openFiles: [],           // 有序 path 列表
+  activeFile: null,
+  rightTab: "files",       // files | git | orch | plan
+  folders: {},             // 折叠态
+  sessions: ["右栏 Tab 体系重构", "修复流式截断"],
+  activeSession: 0,
+};
+
+/* ═══ 工具 ═══ */
+const $ = (id) => document.getElementById(id);
+const esc = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+function hi(lines) {
+  return lines.map((raw) => {
+    let l = esc(raw);
+    l = l.replace(/(&quot;[^&]*?&quot;)/g, '<span class="s">$1</span>');
+    l = l.replace(/(\/\/.*$)/g, '<span class="c">$1</span>');
+    l = l.replace(/^(\s*)(#{1,3} .*)$/, '$1<span class="k">$2</span>');
+    l = l.replace(/\b(export|const|return|function|import|from|await|async|new|if|else|as)\b/g, '<span class="k">$1</span>');
+    l = l.replace(/\b(z|ipcMain|create|useSessionStore)\b/g, '<span class="f">$1</span>');
+    return l;
+  });
+}
+const codeOf = (p) => p === "README.md" ? README : (FILES[p] || ["// (示意内容)"]);
+let toastTimer = null;
+function toast(text) {
+  $("toastText").textContent = text;
+  $("toast").classList.add("show");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => $("toast").classList.remove("show"), 2300);
+}
+const fileIcon = '<svg class="ic xs" viewBox="0 0 24 24"><path d="M14 3v4a1 1 0 0 0 1 1h4"/><path d="M5 8V5a2 2 0 0 1 2-2h7l5 5v11a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2z"/></svg>';
+const xIcon = '<svg class="ic xs" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>';
+const chev = (open) => '<svg class="ic xs" viewBox="0 0 24 24" style="transform:rotate(' + (open ? 0 : -90) + 'deg)"><path d="M6 9l6 6 6-6"/></svg>';
+const baseName = (p) => p.split("/").pop();
+
+/* ═══ 行为 ═══ */
+function openFile(path, viaAuto) {
+  if (!S.openFiles.includes(path)) S.openFiles.push(path);
+  S.activeFile = path;
+  if (S.loc === "right") {
+    if (S.rightTab !== "files") {           // 需求③:自动切回「文件」tab
+      S.rightTab = "files";
+      toast("已自动切回「文件」tab · " + baseName(path) + (viaAuto ? "(来自聊天链接)" : ""));
+    }
+  } else if (S.mode === "tabs") {
+    S.focus = "editor";
+  }
+  render();
+}
+function closeFile(path) {
+  const i = S.openFiles.indexOf(path);
+  if (i >= 0) S.openFiles.splice(i, 1);
+  if (S.activeFile === path) {
+    S.activeFile = S.openFiles[Math.min(i, S.openFiles.length - 1)] || null;
+    if (!S.activeFile && S.mode === "tabs" && S.loc === "center") S.focus = "chat";
+  }
+  render();
+}
+function setLoc(loc) {
+  if (S.loc === loc) return;
+  S.loc = loc;
+  if (loc === "right") {
+    S.focus = "chat";
+    if (S.openFiles.length) {
+      if (S.rightTab !== "files") S.rightTab = "files";
+      toast("已打开的 " + S.openFiles.length + " 个文件迁移到右栏(不关闭)");
+    }
+  } else {
+    if (S.activeFile && S.mode === "tabs") S.focus = "editor";
+  }
+  render();
+}
+function setMode(mode) {
+  S.mode = mode;
+  if (mode === "single" && S.focus === "editor" && !S.activeFile) S.focus = "chat";
+  render();
+}
+
+/* ═══ 渲染 ═══ */
+function fileTabsHtml() {
+  if (!S.openFiles.length) return "";
+  return S.openFiles.map((p) =>
+    '<div class="tab file' + (S.activeFile === p ? " on" : "") + '" data-action="focus-file" data-path="' + p + '" title="' + p + '">' +
+      fileIcon + '<span class="t">' + baseName(p) + '</span>' +
+      '<span class="x" data-action="close-file" data-path="' + p + '" title="关闭">' + xIcon + '</span>' +
+    '</div>'
+  ).join("");
+}
+function editorHeadHtml(p) {
+  if (!p) return "";
+  const dir = p.slice(0, p.lastIndexOf("/")) || ".";
+  return '<span>' + esc(dir) + '/</span><span class="fn">' + esc(baseName(p)) + '</span>' +
+    '<span style="margin-left:auto;font-family:inherit">' + (S.loc === "right" ? "右栏 · 文件 tab" : "中间栏") + '</span>';
+}
+function editorCodeHtml(p) {
+  const lines = hi(codeOf(p));
+  return lines.map((l, i) => '<div class="cl"><span class="ln">' + (i + 1) + '</span><span class="cd">' + (l || " ") + "</span></div>").join("");
+}
+function treeHtml(nodes, depth) {
+  return nodes.map((n) => {
+    if (n.folder) {
+      const key = n.folder;
+      const open = !S.folders[key];
+      return '<div class="tnode folder" data-action="toggle-folder" data-key="' + key + '">' +
+        '<span class="tw">' + chev(open) + "</span>" + n.folder + "</div>" +
+        '<div class="kids' + (open ? "" : " hide") + '">' + treeHtml(n.kids, depth + 1) + "</div>";
+    }
+    const on = S.activeFile === n.path;
+    return '<div class="tnode file' + (on ? " on" : "") + '" data-action="open-file" data-path="' + n.path + '" title="' + n.path + '">' +
+      fileIcon + '<span class="nm">' + n.file + "</span></div>";
+  }).join("");
+}
+function tabsBarHtml() {
+  const sess = S.sessions.map((t, i) =>
+    '<div class="tab sess' + (S.activeSession === i ? " on" : "") + '" data-action="focus-session" data-i="' + i + '">' +
+      '<span class="dot' + (i === 1 ? " run" : "") + '"></span><span class="t">' + t + "</span></div>"
+  ).join("");
+  // ★ 状态 A(tabs 模式):文件 tab 与会话 tab 并排,竖线分隔;状态 B:中间栏只剩会话
+  const files = S.loc === "center" && S.openFiles.length
+    ? '<div class="group-sep"></div><span class="group-ico">' + fileIcon + "文件</span>" + fileTabsHtml()
+    : "";
+  return sess + files;
+}
+function render() {
+  document.body.dataset.mode = S.mode;
+  document.body.dataset.loc = S.loc;
+  document.body.dataset.focus = S.loc === "right" ? "chat" : S.focus;
+
+  // 标题栏
+  document.querySelectorAll("#modeSeg button").forEach((b) => b.classList.toggle("on", b.dataset.mode === S.mode));
+  document.querySelectorAll("#locToggle button").forEach((b) => b.classList.toggle("on", b.dataset.loc === S.loc));
+
+  // tabs 条(tabs 模式)
+  $("tabsBar").innerHTML = tabsBarHtml();
+
+  // 中栏编辑器(single 模式的文件 tab 条 + 面包屑/代码;tabs 模式无 tab 条)
+  const showCenterEditor = S.loc === "center" && S.activeFile && (S.mode === "single" || S.focus === "editor");
+  $("edTabsHost").innerHTML = S.mode === "single" && S.loc === "center" ? fileTabsHtml() : "";
+  $("edHeadHost").innerHTML = showCenterEditor || (S.mode === "single" && S.loc === "center" && S.openFiles.length) ? editorHeadHtml(S.activeFile) : "";
+  $("edCodeHost").innerHTML = showCenterEditor ? editorCodeHtml(S.activeFile) : "";
+  $("edEmpty").style.display = showCenterEditor || (S.mode === "single" && S.loc === "center" && S.openFiles.length) ? "none" : "flex";
+
+  // 右栏 rail
+  document.querySelectorAll(".rail-btn[data-rt]").forEach((b) => b.classList.toggle("on", b.dataset.rt === S.rightTab));
+  const bdg = $("filesBadge");
+  if (S.loc === "right" && S.openFiles.length) { bdg.style.display = "flex"; bdg.textContent = S.openFiles.length; }
+  else bdg.style.display = "none";
+
+  // 右栏 sections
+  document.querySelectorAll(".rt").forEach((sec) => sec.classList.toggle("on", sec.dataset.rt === S.rightTab));
+  $("filesHint").textContent = S.loc === "right"
+    ? "树 │ 打开的文件(" + S.openFiles.length + ")· 同一 tab"
+    : "文件在中间栏显示";
+
+  // 右栏文件面板(打开的文件与文件树同一个 tab 内)
+  $("treeHost").innerHTML = treeHtml(TREE, 0);
+  const rpShow = S.loc === "right" && S.activeFile;
+  $("rpTabsHost").innerHTML = S.loc === "right"
+    ? '<span class="group-ico">' + fileIcon + "打开的文件</span>" + fileTabsHtml()
+    : "";
+  $("rpHeadHost").innerHTML = rpShow ? editorHeadHtml(S.activeFile) : "";
+  $("rpCodeHost").innerHTML = rpShow ? editorCodeHtml(S.activeFile) : "";
+  $("rpEmpty").style.display = rpShow ? "none" : "flex";
+}
+
+/* ═══ 事件(委托) ═══ */
+document.addEventListener("click", (e) => {
+  const el = e.target.closest("[data-action]");
+  if (!el) return;
+  const a = el.dataset.action;
+  if (a === "set-mode") setMode(el.dataset.mode);
+  else if (a === "set-loc") setLoc(el.dataset.loc);
+  else if (a === "open-file") openFile(el.dataset.path, el.classList.contains("fchip"));
+  else if (a === "focus-file") { S.activeFile = el.dataset.path; if (S.loc === "center" && S.mode === "tabs") S.focus = "editor"; render(); }
+  else if (a === "close-file") { e.stopPropagation(); closeFile(el.dataset.path); }
+  else if (a === "focus-session") { S.activeSession = +el.dataset.i; S.focus = "chat"; render(); }
+  else if (a === "right-tab") { S.rightTab = el.dataset.rt; render(); }
+  else if (a === "toggle-folder") { const k = el.dataset.key; S.folders[k] = !S.folders[k]; render(); }
+  else if (a === "view-plan") {
+    S.rightTab = "plan"; render();
+    toast("计划已在右栏以新 tab 打开(不再有中间伪 tab)");
+  }
+  else if (a === "plan-approve") { el.textContent = "已批准(示意)"; toast("批准后 SDK 自行恢复工具集(示意)"); }
+  else if (a === "toggle-theme") { document.body.classList.toggle("light"); render(); }
+  else if (a === "dismiss-guide") $("guide").style.display = "none";
+});
+render();
+</script>
+</body>
+</html>

@@ -56,6 +56,7 @@ export const en = {
   "lib.slash.init": "Generate the project guide file AGENTS.md",
   "lib.slash.browser": "Open a page in the built-in browser (navigate/snapshot/click/screenshot)",
   "lib.slash.sidechat": "Open sub-sessions (won't interrupt this session)",
+  "lib.slash.schedule": "Create a scheduled task: configure a trigger rule; this send creates a task session",
 
   /* ── lib/imageResize.ts (send-time errors surfaced as toasts) ── */
   "lib.image.invalidData": "{name}: not valid image data",

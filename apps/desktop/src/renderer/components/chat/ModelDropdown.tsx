@@ -54,10 +54,20 @@ function hostOf(url: string): string {
 
 export function ModelDropdown({
   layout = "pill",
+  controller,
 }: {
   /** Presentation: pill segment ("pill") vs settings row ("row"). */
   layout?: "pill" | "row";
-}) {
+  /** Controlled override (定时任务编辑弹窗): bind the picker to a LOCAL draft
+   *  instead of the global composer slots — same menu, same surface, values
+   *  round-trip through `onPick` (customModelId, modelId). */
+  controller?: {
+    providerId: string;
+    model: string;
+    customModelId: string | null;
+    onPick: (customModelId: string | null, modelId: string) => void;
+  };
+} = {}) {
   const stacked = layout === "row";
   // Stacked rows cascade their menu to the RIGHT of the list; on a
   // phone-class viewport there is no horizontal room for panel + menu side
@@ -71,16 +81,29 @@ export function ModelDropdown({
   // up (it's a portal too). Declared after `hint` state below — hoisted hook
   // order is stable because both states precede it on every render.
   const [open, setOpen] = useState(false);
-  const model = useSessionStore((s) => s.model);
-  const customModelId = useSessionStore((s) => s.customModelId);
+  const storeModel = useSessionStore((s) => s.model);
+  const storeCustomModelId = useSessionStore((s) => s.customModelId);
   const customModels = useSessionStore((s) => s.customModels);
-  const setCustomModel = useSessionStore((s) => s.setCustomModel);
-  const setModel = useSessionStore((s) => s.setModel);
+  const storeSetCustomModel = useSessionStore((s) => s.setCustomModel);
+  const storeSetModel = useSessionStore((s) => s.setModel);
   const setSettingsOpen = useSessionStore((s) => s.setSettingsOpen);
-  const providerId = useSessionStore((s) => s.providerId);
+  const storeProviderId = useSessionStore((s) => s.providerId);
   const providers = useSessionStore((s) => s.providers);
   const piAvailableModels = useSessionStore((s) => s.piAvailableModels);
   const codexAvailableModels = useSessionStore((s) => s.codexAvailableModels);
+  // Controlled override wins over the global slots; the pick callbacks route
+  // back through onPick instead of mutating the session config.
+  const model = controller ? controller.model : storeModel;
+  const customModelId = controller ? controller.customModelId : storeCustomModelId;
+  const providerId = controller ? controller.providerId : storeProviderId;
+  const setCustomModel = (cfgId: string | null, modelId: string): void => {
+    if (controller) controller.onPick(cfgId, modelId);
+    else storeSetCustomModel(cfgId, modelId);
+  };
+  const setModel = (modelId: string): void => {
+    if (controller) controller.onPick(null, modelId);
+    else storeSetModel(modelId);
+  };
 
   const provider = providers.find((p) => p.id === providerId);
   const isPi = provider?.id === "pi-sdk";
@@ -173,7 +196,10 @@ export function ModelDropdown({
   // monotonic counter, so a repeat blocked send re-triggers the nudge even
   // though the value only ever grows. The chip and the guard read the same
   // model surface, so a pulse always coincides with `unselected`.
-  const modelGuardPulse = useSessionStore((s) => s.modelGuardPulse);
+  // (Controlled mode — the task editor — never nudges: an unrelated chat
+  // send's guard must not shake the dialog's chip.)
+  const storeGuardPulse = useSessionStore((s) => s.modelGuardPulse);
+  const modelGuardPulse = controller ? 0 : storeGuardPulse;
   const triggerRef = useRef<HTMLButtonElement | null>(null);
   const [nudge, setNudge] = useState(false);
   const [hint, setHint] = useState<{ x: number; y: number } | null>(null);
@@ -586,8 +612,10 @@ export function ModelDropdown({
 
             {/* Manage-models entry — shown for providers that own a model
                 configuration surface (claude + pi). Both now live on the
-                unified "custom-models" settings page. */}
-            {manageTarget && (
+                unified "custom-models" settings page. (Hidden in controlled
+                mode — a settings detour out of the task editor dialog reads
+                as a dead end.) */}
+            {manageTarget && !controller && (
               <>
                 <div className="my-1 border-t border-edge" />
                 <Menu.Item

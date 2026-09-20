@@ -18,7 +18,7 @@ import { WorktreeMergeToolbarButton } from "@renderer/components/chat/WorktreeMe
 import { resolveShortcut, acceleratorToDisplayString } from "@renderer/lib/shortcuts.js";
 import { useI18n } from "@renderer/lib/i18n/index.js";
 
-type Mode = "workspace" | "settings";
+type Mode = "workspace" | "settings" | "sched";
 
 interface Props {
   mode: Mode;
@@ -32,7 +32,7 @@ interface Props {
   onToggleLeft?: () => void;
   onToggleRight?: () => void;
   onToggleBottomTerminal?: () => void;
-  /** Settings mode: returns to the workspace view. */
+  /** Fullscreen-overlay modes: returns to the workspace view. */
   onBack?: () => void;
 }
 
@@ -71,6 +71,10 @@ export function Titlebar({
 }: Props) {
   const { t } = useI18n();
   const isSettings = mode === "settings";
+  // 定时任务查看页 shares the settings-mode chrome (back button + page title,
+  // side toggles suppressed) — only the heading text differs.
+  const isSchedPage = mode === "sched";
+  const isOverlayPage = isSettings || isSchedPage;
   // The browser overlay toggle now lives in the right-panel rail, but the
   // overlay still forces the side panels closed and hides their toggles when
   // open. Read its state straight from the store; the "返回工作台" button
@@ -83,12 +87,12 @@ export function Titlebar({
   // / terminal / editor toggles are hidden.
   const widePanelOpen = useSessionStore((s) => s.widePanelOpen);
   const setWidePanelOpen = useSessionStore((s) => s.setWidePanelOpen);
-  const isBrowserMode = (!!browserPanelOpen || widePanelOpen) && !isSettings;
+  const isBrowserMode = (!!browserPanelOpen || widePanelOpen) && !isOverlayPage;
   // The fullscreen browser overlay covers the whole workspace, so its side-panel
   // / terminal toggles hide while it's open. Wide-panel mode keeps them: the
   // terminal bar still renders below the split and the right-panel toggle
   // shows/hides the wide mode's right column.
-  const isBrowserOverlay = !!browserPanelOpen && !isSettings;
+  const isBrowserOverlay = !!browserPanelOpen && !isOverlayPage;
 
   // Subscribe once to the shortcut overrides so every toggle button's tooltip
   // shows the *effective* chord (override ?? default). Re-resolved per render
@@ -114,12 +118,12 @@ export function Titlebar({
           // macOS traffic lights sit at the window's top-left. They overlay
           // the full-height sidebar while it's visible (LeftBar's header
           // reserves the room). Whenever the sidebar is NOT visible — closed,
-          // or hidden because settings goes fullscreen — this bar starts at
-          // x=0 and must reserve the space itself.
-          isMac && !(leftOpen && !isSettings) && "pl-[78px]",
+          // or hidden because a fullscreen page (settings / 定时任务) covers
+          // the row — this bar starts at x=0 and must reserve the space itself.
+          isMac && !(leftOpen && !isOverlayPage) && "pl-[78px]",
         )}
       >
-        {isSettings ? (
+        {isOverlayPage ? (
           <>
             <button
               onClick={onBack}
@@ -133,7 +137,9 @@ export function Titlebar({
               <IconArrowLeft size={16} className="shrink-0" />
               {t("layout.backToWorkspace")}
             </button>
-            <h2 className="px-1.5 text-sm font-semibold text-content">{t("layout.settings")}</h2>
+            <h2 className="px-1.5 text-sm font-semibold text-content">
+              {isSchedPage ? t("layout.schedTasks") : t("layout.settings")}
+            </h2>
           </>
         ) : (
           <>

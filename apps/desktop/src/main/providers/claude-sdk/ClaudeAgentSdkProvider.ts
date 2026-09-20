@@ -22,7 +22,7 @@ import { SdkMessageAdapter, parseQuestions } from "./SdkMessageAdapter.js";
 import { buildCustomEnv, MCODE_CONFIG_DIR, resolveActiveModel } from "./customEnv.js";
 import type { ClaudeContextWindowTag } from "./claudeTokenUsage.js";
 import { ASK_SYSTEM_PROMPT } from "@main/lib/askQuestion.js";
-import { CLAUDE_IDENTITY_PROMPT, CLAUDE_PLAN_MODE_NUDGE, joinPromptSections } from "@main/lib/systemPrompt.js";
+import { CLAUDE_IDENTITY_PROMPT, CLAUDE_PLAN_MODE_NUDGE, SCHEDULED_TASK_PROPOSAL_NUDGE, joinPromptSections } from "@main/lib/systemPrompt.js";
 import { bashPathHintFor, detectBashEnv } from "@main/lib/bashEnv.js";
 import { getFileSnapshot } from "@main/lib/fileSnapshotRegistry.js";
 import {
@@ -135,7 +135,18 @@ function buildPromptInput(
     | { type: "image"; source: { type: "base64"; media_type: ImageMediaType; data: string } }
   )[] = [];
   // Image-only turns send no text block (the images still reach the model).
-  if (req.prompt.trim()) content.push({ type: "text", text: req.prompt });
+  if (req.prompt.trim()) {
+    let text = req.prompt;
+    // Claude CLI interprets leading slash in prompt as an internal CLI command.
+    // Unrecognized slash commands (like /schedule) are treated as CLI commands,
+    // resulting in immediate exit with 0 tokens and no model output.
+    // Rewrite leading /schedule to an explicit natural language instruction so it reaches the model safely.
+    if (/^\/schedule\b/i.test(text.trim())) {
+      const body = text.trim().replace(/^\/schedule\s*/i, "");
+      text = `请为我创建或调整以下定时任务（/schedule）：\n${body}`;
+    }
+    content.push({ type: "text", text });
+  }
   for (const img of req.images ?? []) {
     content.push({
       type: "image",
@@ -1145,6 +1156,7 @@ export class ClaudeAgentSdkProvider implements AgentProvider {
     // becomes the base on every platform, with our fragments appended on top.
     const appends: string[] = [];
     appends.push(CLAUDE_IDENTITY_PROMPT);
+    appends.push(SCHEDULED_TASK_PROPOSAL_NUDGE);
     // (3) 会话内编排拆解(orchestration 标记):规划者指令(角色/工具用法/
     //     可用模型面/硬约束)追加为系统提示段,orch_submit_plan 工具在下方
     //     mcpServers 处挂载。构建需要读模型面(Pi/Codex 水合清单),失败只

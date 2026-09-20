@@ -1,6 +1,7 @@
 /** English mirror of `zh/common.ts`. */
 export const en = {
   "common.cancel": "Cancel",
+  "common.listSeparator": ", ",
   "common.confirm": "OK",
   "common.close": "Close",
   "common.delete": "Delete",

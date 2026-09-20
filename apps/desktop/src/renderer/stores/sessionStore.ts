@@ -1,5 +1,8 @@
 import { create } from "zustand";
 import type { Project, Session, MessageRecord, SessionTodoItem, SessionPlanDraft, SessionBookmark } from "@contracts/session";
+import type { Automation } from "@contracts/automation";
+import { describeSchedule } from "@renderer/components/automation/automationFormat.js";
+import type { AutomationSaveInput } from "@contracts/ipc";
 import type {
   RuntimeEvent,
   PermissionMode,
@@ -76,6 +79,7 @@ import {
   UI_CHAT_DENSITY_SETTING_KEY,
   UI_EDITOR_THEME_SETTING_KEY,
   AUTO_ARCHIVE_SETTING_KEY,
+  AUTOMATION_CONFIRMED_PROPOSALS_SETTING_KEY,
   DEFAULT_AUTO_ARCHIVE_CONFIG,
   parseAutoArchiveConfig,
   SESSION_WORKTREE_DEFAULT_SETTING_KEY,
@@ -95,7 +99,7 @@ import {
   type GitWorktreeInfo,
   type ProjectGroupsMeta,
   type ProjectGroupMeta,
-  type RightPanelTab,
+  type RightPanelGlobalTab,
   type IdeEditorMode,
   type GitDiffOpenMode,
   type FileViewMode,
@@ -114,6 +118,15 @@ import {
   type BrowserOrientation,
 } from "@contracts/ipc";
 import type { ThemeStyle } from "@contracts/theme";
+
+/** Session-scoped right-panel tabs. Unlike the global rail tabs (files/git/
+ *  orch — one active value for the whole app, persisted), these are opened
+ *  per session via the rail's "+" menu: every session remembers its own open
+ *  set + which of them is active, so they "follow the session" across
+ *  switches. The browser panel joins this layer too — only its VISIBILITY is
+ *  per-session; the tab list / WebContentsViews behind it stay global. NOT
+ *  persisted — resets on restart. */
+export type SessionRightPanelTabId = "turns" | "sidechat" | "browser" | "sched";
 
 /** One browser tab, shared across the sidebar and overlay containers. `id` is
  *  renderer-local; `browserId` is the main-process view id. All
@@ -343,8 +356,9 @@ export type Block =
        *  the stream (the conversation record is preserved — mirroring SDK
        *  checkpoint semantics where file rollback never rolls back the
        *  conversation), but renders as a dimmed, non-interactive "已撤销"
-       *  state. Set by the `turn.rewound` handler when `targetFiles`
-       *  matches this card's paths. */
+       *  state. Set by the `turn.rewound` handler on the card the user
+       *  actually rewound (pinned via `pendingRewind` at click time; the
+       *  path-set scan is only the cross-client fallback). */
       rewound?: boolean;
     }
   | {
@@ -562,7 +576,9 @@ export interface ComposerDraft {
 export interface ChatMessage {
   id: string;
   sessionId: string;
-  role: "user" | "assistant";
+  /** "system" = 本地合成信息卡(定时任务回执等),渲染为中性样式,
+   *  不参与 user/assistant 的回合语义。 */
+  role: "user" | "assistant" | "system";
   blocks: Block[];
   createdAt: number;
   /** Present only on the first assistant message of a turn. Drives the
@@ -928,6 +944,10 @@ export interface SessionState {
   claudeInstalled: boolean | null;
   /** Settings modal visibility (opened from the LeftBar ⚙ footer and the CLI-missing CTA). */
   settingsOpen: boolean;
+  /** 定时任务查看页(只读)可见性:左栏快捷区「定时任务」入口打开,与设置页
+   *  同款覆盖层形态(主区内 absolute inset-0,工作区子树保持挂载)。与
+   *  settingsOpen 互斥(后开者关闭先开者)。 */
+  schedPageOpen: boolean;
   /** Initial settings section to land on when the modal opens. Callers that
    *  know which section the user wants (e.g. the composer's "管理模型…"
    *  entry → "custom-models" / "pi-models") pass it to setSettingsOpen; null
@@ -1259,10 +1279,21 @@ export interface SessionState {
    *  A few IDE prefs remain global (not per-project) because they express a
    *  user preference, not project state: rightPanelTab, ideEditorMode,
    *  ideFocusNonce. */
-  /** Active tab in the right panel. Persisted so reopening the app restores
-   *  the last-used inspector. Only "files" is implemented in P4; the other
-   *  three round-trip for forward-compat. */
-  rightPanelTab: RightPanelTab;
+  /** Active GLOBAL tab in the right panel (files/git/orch). Persisted
+   *  so reopening the app restores the last-used inspector. The session-scoped
+   *  "turns"/"sidechat"/"browser" tabs are NOT part of this value — they live
+   *  in sessionRightTabsBySession and shadow it while one of them is active. */
+  rightPanelTab: RightPanelGlobalTab;
+  /** Per-session open set + active tab of the session-scoped right-panel tabs
+   *  ("turns" / "sidechat" / "browser"). Outer key = sessionId. `open` is
+   *  insertion-ordered (rail icon order); `active` must be a member of `open`
+   *  (null = none of them is showing — the panel falls back to the global
+   *  rightPanelTab). NOT persisted: follows the session across switches
+   *  within the app lifetime, resets on restart. */
+  sessionRightTabsBySession: Record<
+    string,
+    { open: SessionRightPanelTabId[]; active: SessionRightPanelTabId | null }
+  >;
   /** Per-project terminal quick-commands. Outer key = projectId, value = that
    *  project's saved commands. Persisted as a JSON object (keyed by projectId)
    *  in the settings table; read/written by the terminal toolbar's commands
@@ -1405,6 +1436,22 @@ export interface SessionState {
    *  action) — the final findSession fallback so worker tabs resolve titles
    *  and config-sync. Keyed by worker session id. */
   orchWorkersById: Record<string, Session>;
+  /** 定时任务列表(scheduled tasks)。首个消费者懒加载;此后每次
+   *  `automation.event` 推送全量重拉(任务表小,整读整写最简单可靠)。 */
+  automations: Automation[];
+  /** true after the first successful `automation.list` (guards re-opens). */
+  automationsLoaded: boolean;
+  /** Fingerprint (FNV-1a hex of the card's raw JSON) of every 定时任务提案
+   *  card the user has CONFIRMED. Persisted in the settings table so the
+   *  card's「已创建」state survives restarts and is INDEPENDENT of the task
+   *  row's existence — deleting the task never re-opens the proposal. */
+  confirmedProposalFps: string[];
+  /** true after the first confirmed-proposals load (guards re-fetch). */
+  confirmedProposalFpsLoaded: boolean;
+  /** 右栏「定时任务」tab 当前选中的任务(automation id);null = 列表首个。 */
+  schedSelectedId: string | null;
+  /** 左栏发起者徽标点击后进入的过滤:只看该会话发起的任务。null = 全部。 */
+  schedFilterParent: string | null;
   /** Orchestrator event subscription state; true after `initDeferred`
    *  subscribes (guards against double-subscription). */
   _orchSubscribed: boolean;
@@ -1609,6 +1656,9 @@ export interface SessionState {
    *  is looking at it now). */
   setWindowFocused: (focused: boolean) => void;
   setSettingsOpen: (open: boolean, section?: string) => void;
+  /** Toggle the read-only 定时任务 viewer page. Opening it closes the settings
+   *  page (mutual exclusion) and lazily loads the automations table. */
+  setSchedPageOpen: (open: boolean) => void;
   /** Toggle the "尚未配置模型" dialog open/closed (send-time guard). */
   setModelConfigPromptOpen: (open: boolean) => void;
   /** Toggle the Cmd/Ctrl+K command palette open/closed. */
@@ -1923,9 +1973,12 @@ export interface SessionState {
    *  to console and leave state untouched so the user can retry.
    *
    *  `targetFiles` (the requested path set) is forwarded to main so the
-   *  `turn.rewound` event carries it; the handler then marks the matching
-   *  card `rewound: true` in place — for both latest-turn and historical
-   *  rewinds. The card is never removed, so the stream keeps a trace. */
+   *  `turn.rewound` event carries it. Before the IPC call the action pins
+   *  the clicked card (`pendingRewind` — message id + isLatestTurn
+   *  resolved from its own block), so the handler marks EXACTLY that card
+   *  `rewound: true` in place, for both latest-turn and historical
+   *  rewinds; other turns that touched the same file stay untouched. The
+   *  card is never removed, so the stream keeps a trace. */
   rewindTurn: (files: TurnFileEntry[], targetFiles: string[]) => Promise<void>;
 
   /** Reveal a file in the IDE right panel's file tree: switches the panel to
@@ -1991,8 +2044,17 @@ export interface SessionState {
   clearComposerDraft: (sessionId: string) => void;
 
   /* ── IDE right-panel actions ── */
-  /** Switch the active right-panel tab. Persists to settings. */
-  setRightPanelTab: (tab: RightPanelTab) => void;
+  /** Switch the active GLOBAL right-panel tab. Persists to settings, and
+   *  de-activates the active session's session-scoped tab (if any) so the
+   *  panel actually shows the requested global tab. */
+  setRightPanelTab: (tab: RightPanelGlobalTab) => void;
+  /** Open (or re-activate) a session-scoped right-panel tab ("turns" /
+   *  "sidechat" / "browser") for the given session (default: the active
+   *  one). Adds it to that session's open set and makes it the showing tab. */
+  openSessionRightTab: (tab: SessionRightPanelTabId, sessionId?: string) => void;
+  /** Close a session-scoped right-panel tab: removed from the open set; if it
+   *  was the active one the panel falls back to the global tab. */
+  closeSessionRightTab: (tab: SessionRightPanelTabId, sessionId?: string) => void;
 
   /* ── Agent orchestration actions ── */
   /** Load orchestration settings (trigger mode / defaults). */
@@ -2019,6 +2081,37 @@ export interface SessionState {
   orchHandoff: (briefing: string, title?: string) => Promise<Session | null>;
   /** Fetch a worker session row + open it as a center tab. */
   openOrchWorker: (workerSessionId: string) => Promise<void>;
+  /** 自动化(定时任务)页与任务动作。列表/运行历史都在 automation.event
+   *  推送驱动下整页刷新;openAutomationRun 把运行会话塞进 orchWorkersById
+   *  (「无列表会话」的 findSession 最终兜底,命名沿用历史)后 openTab。 */
+  openSchedPanel: (filterParent?: string | null) => void;
+  setSchedSelected: (automationId: string) => void;
+  setSchedFilterParent: (parentSessionId: string | null) => void;
+  loadAutomations: () => Promise<void>;
+  /** Load the confirmed-proposal fingerprint ledger (settings table) once per
+   *  app run; cards call this on mount. */
+  loadConfirmedProposals: () => Promise<void>;
+  /** Record a proposal confirmation durably (optimistic append + settings
+   *  write). */
+  confirmProposal: (fp: string) => Promise<void>;
+  saveAutomation: (input: AutomationSaveInput) => Promise<Automation | null>;
+  deleteAutomation: (taskId: string, permanent?: boolean) => Promise<void>;
+  restoreAutomation: (taskId: string) => Promise<void>;
+  setAutomationEnabled: (taskId: string, enabled: boolean) => Promise<void>;
+  runAutomationNow: (taskId: string) => Promise<Session | null>;
+  ingestAutomationEvent: (automationId: string | null) => void;
+  /** composer「定时任务」每会话草稿:配置后点发送即创建任务(而非普通回合)。 */
+  taskScheduleBySession: Record<string, Automation["schedule"] | null>;
+  setTaskSchedule: (sessionId: string, schedule: Automation["schedule"] | null) => void;
+  /** 定时配置弹层开合(/schedule 内置命令可远程拉起;ScheduleChip 驱动)。 */
+  taskScheduleEditorOpenBySession: Record<string, boolean>;
+  setTaskScheduleEditorOpen: (sessionId: string, open: boolean) => void;
+  /** 定时任务创建方式提示(显示在输入框 placeholder,弹层打开期间生效,输入即隐藏) */
+  schedHintVisibleBySession: Record<string, boolean>;
+  showSchedPromptHint: (sessionId: string) => void;
+  hideSchedPromptHint: (sessionId: string) => void;
+  createScheduledTask: (input: AutomationSaveInput) => Promise<Automation | null>;
+  getSessionById: (sessionId: string) => Session | undefined;
   /** 自动编排开关 per session(开启后发送的想法在本会话内以规划者模式执行)。 */
   setOrchAuto: (sessionId: string, on: boolean) => void;
   /** 选中画布节点/运行:taskId 非空 = 节点详情,taskId=null = 该 run 的
@@ -2929,6 +3022,8 @@ function dropSessionBuckets(s: SessionState, id: string) {
   delete composerDraftBySession[id];
   const sideChatSeedBySession = { ...s.sideChatSeedBySession };
   delete sideChatSeedBySession[id];
+  const sessionRightTabsBySession = { ...s.sessionRightTabsBySession };
+  delete sessionRightTabsBySession[id];
   // Orchestration per-session buckets (coordinator toggle, @agent targets,
   // runs list view). Main keeps the runs themselves — the panel re-fetches on
   // demand if the session somehow returns.
@@ -2967,6 +3062,7 @@ function dropSessionBuckets(s: SessionState, id: string) {
     planApprovalDraftBySession,
     composerDraftBySession,
     sideChatSeedBySession,
+    sessionRightTabsBySession,
     orchRunsBySession,
     orchWorkersById,
     pendingApprovals,
@@ -3347,6 +3443,35 @@ function raiseModelGuard(): void {
   } else {
     useSessionStore.setState({ modelConfigPromptOpen: true });
   }
+}
+
+/** Resolve the turn's active/producing model:
+ *  1. Uses runningTurnModelBySession[sid] if set and non-default.
+ *  2. Looks up the session row (via findSession) for its configured model.
+ *  3. If it's an automation task session, checks the automation task's configured model.
+ *  4. If bound to a customModelId, checks the first model of that custom endpoint.
+ *  5. Falls back to any non-empty string or undefined. */
+export function resolveTurnModel(s: SessionState, sid: string): string | undefined {
+  const running = s.runningTurnModelBySession[sid];
+  if (running && running !== "default") return running;
+  const sess = findSession(
+    s.sessionsByProject,
+    s.archivedSessionsByProject,
+    s.pinnedSessions,
+    s.streamSessions,
+    sid,
+    s.orchWorkersById,
+  );
+  if (sess?.model && sess.model !== "default") return sess.model;
+  const auto = s.automations.find((a) => a.taskSessionId === sid);
+  if (auto?.model && auto.model !== "default") return auto.model;
+  const customId = sess?.customModelId ?? auto?.customModelId;
+  if (customId) {
+    const cfg = s.customModels.find((c) => c.id === customId);
+    const m = cfg?.models.find((item) => item.id.trim())?.id;
+    if (m) return m;
+  }
+  return running ?? sess?.model ?? auto?.model ?? undefined;
 }
 
 /** Snapshot of the composer's per-provider remembered config — the value
@@ -4180,6 +4305,60 @@ function demotePreviousLatestTurnFiles(messages: ChatMessage[]): ChatMessage[] {
   return changed ? next : messages;
 }
 
+/** The rewind card the user just clicked, pinned at click time by the
+ *  `rewindTurn` action. Path-set equality alone cannot identify a
+ *  `turn-files` card — rounds 1/2/3 may all have touched the same file, and
+ *  the legacy scan marked EVERY matching card `rewound` when the user
+ *  rewound only one (rewind round 3 of "write → edit → edit hello.py" used
+ *  to also dim rounds 1/2). The `turn.rewound` handler consumes the marker
+ *  (same session only) and falls back to the legacy path-set scan when it
+ *  is absent (rewind started by another client) or stale (its message no
+ *  longer holds a matching block). */
+let pendingRewind: { sessionId: string; messageId: string } | null = null;
+
+/** Locate the message holding the turn-files block the user is rewinding.
+ *  Pass 1 matches by REFERENCE: the card's `files` prop IS the store
+ *  block's array (React forwards it unchanged), so identity pins the
+ *  message exactly. Pass 2 falls back to deep equality for any block
+ *  rebuilt between render and click — entries include the `before`
+ *  content, which differs between turns except in the pathological case
+ *  of byte-identical pre-turn content AND identical change shape (there
+ *  the last match wins as the least-surprising tiebreak). Never matches
+ *  already-rewound blocks: the clicked card's button is hidden then. */
+function findRewindTargetBlock(
+  messages: ChatMessage[],
+  files: TurnFileEntry[],
+): { messageId: string; isLatestTurn: boolean } | null {
+  const deepEqualFiles = (a: TurnFileEntry[], b: TurnFileEntry[]) =>
+    a.length === b.length &&
+    a.every((ea, i) => {
+      const eb = b[i];
+      return (
+        eb !== undefined &&
+        ea.filePath === eb.filePath &&
+        ea.kind === eb.kind &&
+        ea.adds === eb.adds &&
+        ea.dels === eb.dels &&
+        ea.before === eb.before
+      );
+    });
+  for (const m of messages) {
+    for (const b of m.blocks) {
+      if (b.kind === "turn-files" && !b.rewound && b.files === files) {
+        return { messageId: m.id, isLatestTurn: !!b.isLatestTurn };
+      }
+    }
+  }
+  for (const m of messages) {
+    for (const b of m.blocks) {
+      if (b.kind === "turn-files" && !b.rewound && deepEqualFiles(b.files, files)) {
+        return { messageId: m.id, isLatestTurn: !!b.isLatestTurn };
+      }
+    }
+  }
+  return null;
+}
+
 /** Called from turn.done: finalize the just-closed turn's turn-files block.
  *  The block is already attached (turn.files arrived just before turn.done);
  *  here we only need to ensure it's marked isLatestTurn=true (it IS the latest
@@ -4356,7 +4535,7 @@ function flushDeltas(): void {
               ? {
                   turnMeta: {
                     startedAt,
-                    model: useSessionStore.getState().runningTurnModelBySession[sid],
+                    model: resolveTurnModel(useSessionStore.getState(), sid),
                   },
                 }
               : {}),
@@ -4607,6 +4786,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   isWindowFocused: true,
   claudeInstalled: null,
   settingsOpen: false,
+  schedPageOpen: false,
   settingsSection: null,
   modelConfigPromptOpen: false,
   modelGuardPulse: 0,
@@ -4687,6 +4867,15 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   orchSettings: null,
   orchRunsBySession: {},
   orchWorkersById: {},
+  automations: [],
+  automationsLoaded: false,
+  confirmedProposalFps: [],
+  confirmedProposalFpsLoaded: false,
+  schedSelectedId: null,
+  schedFilterParent: null,
+  taskScheduleBySession: {},
+  taskScheduleEditorOpenBySession: {},
+  schedHintVisibleBySession: {},
   orchAutoBySession: {},
   orchNodeSelection: null,
   _orchSubscribed: false,
@@ -4694,6 +4883,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   // init() hydrates from the settings table. rightPanelTab / ideEditorMode
   // are global user prefs.
   rightPanelTab: "files",
+  sessionRightTabsBySession: {},
   customCommandsByProject: {},
   ideOpenFilesByProject: {},
   ideActiveFileByProject: {},
@@ -5175,6 +5365,11 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         api.on.orchEvent((msg) => {
           get().ingestOrchEvent(msg.event);
         });
+        // 自动化生命周期推送:任务行变化(运行开始/结束/状态翻转/清理)。
+        // 订阅本身极轻;未打开自动化页时 ingest 只多两次廉价 IPC(表小)。
+        api.on.automationEvent((msg) => {
+          get().ingestAutomationEvent(msg.automationId);
+        });
       }
       // Track the language-server lifecycle per (workspace, language) so the
       // editor toolbar can show a loading indicator while a server starts
@@ -5353,8 +5548,11 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       const titleGenEnabledRaw = ds[UI_TITLE_GEN_ENABLED_SETTING_KEY];
       const titleGenModelRaw = ds[UI_TITLE_GEN_MODEL_SETTING_KEY];
 
-      if (tabRaw === "files" || tabRaw === "git" || tabRaw === "turns")
-        set({ rightPanelTab: tabRaw });
+      // Only the global rail tabs restore at boot ("browser"/"orch" would
+      // auto-open their panels; "turns"/"sidechat" are session-scoped tabs
+      // opened per session via the rail's "+" menu — a persisted value from
+      // an older build is ignored the same way).
+      if (tabRaw === "files" || tabRaw === "git") set({ rightPanelTab: tabRaw });
       if (modeRaw === "tabs" || modeRaw === "replace") set({ ideEditorMode: modeRaw });
       if (diffModeRaw === "center" || diffModeRaw === "dialog") set({ gitDiffOpenMode: diffModeRaw });
       set({ commitGenModel: commitModelRaw || null });
@@ -7339,12 +7537,21 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           id: e.messageId,
           sessionId: sid,
           role: "user",
-          // Trusted payload from our own renderer/mobile peer, same as the
-          // persisted message content trusted by fromRecords on reload.
           blocks: e.blocks as Block[],
           createdAt: e.createdAt,
         };
-        return { messagesBySession: { ...s.messagesBySession, [sid]: [...base, msg] } };
+        const resolvedModel = resolveTurnModel(s, sid);
+        const nextRunningModel = resolvedModel && !s.runningTurnModelBySession[sid]
+          ? { ...s.runningTurnModelBySession, [sid]: resolvedModel }
+          : s.runningTurnModelBySession;
+        const nextRunningStartedAt = !s.runningTurnStartedAt[sid]
+          ? { ...s.runningTurnStartedAt, [sid]: e.createdAt }
+          : s.runningTurnStartedAt;
+        return {
+          runningTurnModelBySession: nextRunningModel,
+          runningTurnStartedAt: nextRunningStartedAt,
+          messagesBySession: { ...s.messagesBySession, [sid]: [...base, msg] },
+        };
       });
       return;
     }
@@ -7663,7 +7870,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           e.phase,
           hasApproval,
           s.runningTurnStartedAt[sid] ?? Date.now(),
-          s.runningTurnModelBySession[sid],
+          resolveTurnModel(s, sid),
         );
         return {
           planBySession: {
@@ -7843,7 +8050,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           "ready",
           true,
           s.runningTurnStartedAt[sid] ?? Date.now(),
-          s.runningTurnModelBySession[sid],
+          resolveTurnModel(s, sid),
         );
         return {
           pendingPlanApprovalBySession: {
@@ -7920,7 +8127,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         // seamlessly - same pattern as tool.use / text.delta. Falls back to
         // now if the anchor is missing (resumed/legacy turn).
         const startedAt = s.runningTurnStartedAt[sid] ?? Date.now();
-        const next = appendCompactSummaryBlock(list, block, startedAt, s.runningTurnModelBySession[sid]);
+        const next = appendCompactSummaryBlock(list, block, startedAt, resolveTurnModel(s, sid));
         return next === list
           ? s
           : { messagesBySession: { ...s.messagesBySession, [sid]: next } };
@@ -7937,47 +8144,62 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       return;
     }
     if (e.type === "turn.rewound") {
-      // Unified rewind handling: mark the matching `turn-files` card
+      // Unified rewind handling: mark the rewound `turn-files` card
       // `rewound: true` IN PLACE and NEVER remove it — the card stays in
       // the stream as a visible trace that this turn was rolled back
       // (mirroring SDK checkpoint semantics: file rollback never rolls
-      // back the conversation). The card matches by path-set equality
-      // against `e.targetFiles` (the requested paths, before failures).
+      // back the conversation).
       //
-      // The only difference between a latest-turn and a historical rewind
-      // is the latest-turn BUCKET (turnFilesBySession): when the marked
-      // card is the live one (isLatestTurn), the bucket is cleared so
-      // downstream consumers (file-tree dots, diff sources) stop treating
-      // those files as "this turn's changes". Historical cards leave the
-      // bucket alone — it belongs to a different, later turn.
+      // Card identity: the initiating client pins the exact clicked card
+      // via `pendingRewind` (message id resolved at click time) — path-set
+      // equality alone is ambiguous when several turns touched the same
+      // file (rewinding round 3 of "write → edit → edit hello.py" used to
+      // also dim rounds 1/2). No marker (rewind from another client) or a
+      // stale one falls back to the legacy path-set scan.
+      //
+      // The latest-turn BUCKET (turnFilesBySession) is cleared only when
+      // the marked card is the live one (isLatestTurn); historical cards
+      // leave the bucket alone — it belongs to a different, later turn.
+      const marker = pendingRewind && pendingRewind.sessionId === sid ? pendingRewind : null;
+      if (marker) pendingRewind = null;
       let rewoundLatest = false;
       const rewoundChanged: ChatMessage[] = [];
       set((s) => {
         const list = s.messagesBySession[sid] ?? EMPTY_MESSAGES;
         const targetSet = new Set(e.targetFiles);
-        let changed = false;
-        const next = list.map((m) => {
-          let touched = false;
-          const blocks = m.blocks.map((b) => {
-            if (
-              b.kind === "turn-files" &&
-              !b.rewound &&
-              b.files.length === targetSet.size &&
-              b.files.every((f) => targetSet.has(f.filePath))
-            ) {
+        // Marks matching block(s) and returns the new list, or null when
+        // nothing changed. `onlyMessageId` scopes the scan to one message
+        // (the pinned card). `rewoundLatest`/`rewoundChanged` are mutated
+        // in place — `set` runs its updater synchronously.
+        const mark = (messages: ChatMessage[], onlyMessageId?: string): ChatMessage[] | null => {
+          let changed = false;
+          const next = messages.map((m) => {
+            if (onlyMessageId !== undefined && m.id !== onlyMessageId) return m;
+            let touched = false;
+            const blocks = m.blocks.map((b) => {
+              if (
+                b.kind !== "turn-files" ||
+                b.rewound ||
+                b.files.length !== targetSet.size ||
+                !b.files.every((f) => targetSet.has(f.filePath))
+              ) {
+                return b;
+              }
               touched = true;
               if (b.isLatestTurn) rewoundLatest = true;
               return { ...b, rewound: true };
-            }
-            return b;
+            });
+            if (!touched) return m;
+            changed = true;
+            const updated = { ...m, blocks };
+            rewoundChanged.push(updated);
+            return updated;
           });
-          if (!touched) return m;
-          changed = true;
-          const updated = { ...m, blocks };
-          rewoundChanged.push(updated);
-          return updated;
-        });
-        if (!changed) return s;
+          return changed ? next : null;
+        };
+        const scoped = marker ? mark(list, marker.messageId) : null;
+        const next = scoped ?? mark(list);
+        if (!next) return s;
         // If the rewound card was the live one, also clear the latest-turn
         // bucket (its files are back on disk — no longer "this turn's").
         return rewoundLatest
@@ -8076,7 +8298,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
               blocks: [],
               createdAt: Date.now(),
               ...(isNewTurn
-                ? { turnMeta: { startedAt, model: s.runningTurnModelBySession[sid] } }
+                ? { turnMeta: { startedAt, model: resolveTurnModel(s, sid) } }
                 : {}),
             };
             next = [...next, lastAssistant];
@@ -8424,11 +8646,235 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   },
 
   setSettingsOpen: (open, section) => {
-    set(open ? { settingsOpen: true, settingsSection: section ?? null } : { settingsOpen: false, settingsSection: null });
+    set(open
+      ? { settingsOpen: true, settingsSection: section ?? null, schedPageOpen: false }
+      : { settingsOpen: false, settingsSection: null });
     // Closing the settings dialog may have changed the voice model setup
     // (download / select / remove in 语音输入) — re-check so the composer mic
     // appears/disappears without a restart.
     if (!open) void get().refreshVoiceModelStatus();
+  },
+
+  setSchedPageOpen: (open) => {
+    // Mutually exclusive with the settings page — both are full-bleed overlays
+    // on the same panel row; whichever opens second would visually stack over
+    // the other with no way to reach the one underneath.
+    set(open ? { schedPageOpen: true, settingsOpen: false, settingsSection: null } : { schedPageOpen: false });
+    if (open && !get().automationsLoaded) void get().loadAutomations();
+  },
+
+  openSchedPanel: (filterParent) => {
+    if (!get().automationsLoaded) void get().loadAutomations();
+    set({ schedFilterParent: filterParent ?? null, rightOpen: true });
+    const sid = get().activeSessionId;
+    if (sid) {
+      get().openSessionRightTab("sched", sid);
+    } else {
+      get().setRightPanelTab("sched");
+    }
+  },
+
+  setSchedSelected: (automationId) => set({ schedSelectedId: automationId }),
+
+  setSchedFilterParent: (parentSessionId) => set({ schedFilterParent: parentSessionId }),
+
+  loadAutomations: async () => {
+    try {
+      const { automations } = await api.automation.list();
+      set({ automations, automationsLoaded: true });
+    } catch (err) {
+      console.error("automation.list failed:", err);
+    }
+  },
+
+  loadConfirmedProposals: async () => {
+    if (get().confirmedProposalFpsLoaded) return;
+    try {
+      const res = await api.setting.get({ key: AUTOMATION_CONFIRMED_PROPOSALS_SETTING_KEY });
+      let list: string[] = [];
+      if (res.value) {
+        const parsed: unknown = JSON.parse(res.value);
+        if (Array.isArray(parsed)) {
+          list = parsed.filter((x): x is string => typeof x === "string");
+        }
+      }
+      set({ confirmedProposalFps: list, confirmedProposalFpsLoaded: true });
+    } catch (err) {
+      console.error("setting.get(confirmedProposals) failed:", err);
+      // Mark loaded anyway — a broken ledger must not turn every card into a
+      // refetch loop.
+      set({ confirmedProposalFpsLoaded: true });
+    }
+  },
+
+  confirmProposal: async (fp) => {
+    const prev = get().confirmedProposalFps;
+    if (prev.includes(fp)) return;
+    const next = [...prev, fp];
+    // Optimistic: the card flips immediately; the settings write is
+    // fire-and-forget (a failed write costs the confirmation on next boot,
+    // same trade-off as the other cosmetic settings).
+    set({ confirmedProposalFps: next });
+    try {
+      await api.setting.set({
+        key: AUTOMATION_CONFIRMED_PROPOSALS_SETTING_KEY,
+        value: JSON.stringify(next),
+      });
+    } catch (err) {
+      console.error("setting.set(confirmedProposals) failed:", err);
+    }
+  },
+
+  saveAutomation: async (input) => {
+    try {
+      const { automation } = await api.automation.save(input);
+      set((s) => ({ automations: [automation, ...s.automations.filter((a) => a.id !== automation.id)] }));
+      return automation;
+    } catch (err) {
+      console.error("automation.save failed:", err);
+      pushToastLite("error", (err as Error).message);
+      return null;
+    }
+  },
+
+  deleteAutomation: async (taskId, permanent) => {
+    const task = get().automations.find((a) => a.id === taskId);
+    try {
+      const res = await api.automation.remove({ id: taskId, permanent });
+      if (res?.permanent) {
+        set((s) => {
+          // 任务会话已被 main 删除(archive+broadcast+hard delete);本地各缓存
+          // 用既有的删除手术清理,再摘掉任务行。
+          let next: Partial<SessionState> = {};
+          if (task?.taskSessionId) next = applySessionDeletedState(s, task.taskSessionId);
+          return {
+            ...next,
+            automations: s.automations.filter((a) => a.id !== taskId),
+            schedSelectedId: s.schedSelectedId === taskId ? null : s.schedSelectedId,
+          };
+        });
+      } else if (res?.automation) {
+        set((s) => ({
+          automations: s.automations.map((a) => (a.id === taskId ? res.automation! : a)),
+        }));
+      }
+    } catch (err) {
+      console.error("automation.delete failed:", err);
+      pushToastLite("error", (err as Error).message);
+    }
+  },
+
+  restoreAutomation: async (taskId) => {
+    try {
+      const { automation } = await api.automation.restore({ id: taskId });
+      set((s) => ({
+        automations: s.automations.map((a) => (a.id === taskId ? automation : a)),
+      }));
+    } catch (err) {
+      console.error("automation.restore failed:", err);
+      pushToastLite("error", (err as Error).message);
+    }
+  },
+
+  setAutomationEnabled: async (taskId, enabled) => {
+    // 乐观翻开关,失败回滚(开关在列表行内,等 RPC 回来太慢)。
+    const prev = get().automations;
+    set((s) => ({ automations: s.automations.map((a) => (a.id === taskId ? { ...a, enabled } : a)) }));
+    try {
+      const { automation } = await api.automation.setEnabled({ id: taskId, enabled });
+      set((s) => ({ automations: s.automations.map((a) => (a.id === taskId ? automation : a)) }));
+    } catch (err) {
+      set({ automations: prev });
+      pushToastLite("error", (err as Error).message);
+    }
+  },
+
+  runAutomationNow: async (taskId) => {
+    try {
+      const { session } = await api.automation.runNow({ id: taskId });
+      void get().loadAutomations();
+      return session;
+    } catch (err) {
+      console.error("automation.runNow failed:", err);
+      pushToastLite("error", (err as Error).message);
+      return null;
+    }
+  },
+
+  getSessionById: (sessionId) =>
+    findSession(
+      get().sessionsByProject,
+      get().archivedSessionsByProject,
+      get().pinnedSessions,
+      get().streamSessions,
+      sessionId,
+      get().orchWorkersById,
+    ),
+
+  ingestAutomationEvent: (automationId) => {
+    void get().loadAutomations();
+  },
+
+  setTaskSchedule: (sessionId, schedule) => {
+    set((s) => ({ taskScheduleBySession: { ...s.taskScheduleBySession, [sessionId]: schedule } }));
+  },
+
+  setTaskScheduleEditorOpen: (sessionId, open) => {
+    set((s) => ({
+      taskScheduleEditorOpenBySession: { ...s.taskScheduleEditorOpenBySession, [sessionId]: open },
+    }));
+  },
+
+  showSchedPromptHint: (sessionId) => {
+    set((s) => ({
+      schedHintVisibleBySession: { ...s.schedHintVisibleBySession, [sessionId]: true },
+    }));
+  },
+
+  hideSchedPromptHint: (sessionId) => {
+    set((s) => {
+      if (!s.schedHintVisibleBySession[sessionId]) return s;
+      return {
+        schedHintVisibleBySession: { ...s.schedHintVisibleBySession, [sessionId]: false },
+      };
+    });
+  },
+
+  createScheduledTask: async (input) => {
+    try {
+      const { automation } = await api.automation.save(input);
+      set((s) => ({ automations: [automation, ...s.automations.filter((a) => a.id !== automation.id)] }));
+      // 回执卡片落在发起会话的消息流里(durable:system 消息 + 本地 append)。
+      const parent = input.parentSessionId;
+      if (parent) {
+        const receiptText = translate(get().locale, "automation.receiptCreated", {
+          title: automation.title,
+          desc: describeSchedule(automation.schedule),
+        });
+        const receipt: ChatMessage = {
+          id: `s_${Date.now()}`,
+          sessionId: parent,
+          role: "system",
+          blocks: [{ kind: "text", text: receiptText }],
+          createdAt: Date.now(),
+        };
+        set((s) => ({
+          messagesBySession: {
+            ...s.messagesBySession,
+            [parent]: [...(s.messagesBySession[parent] ?? []), receipt],
+          },
+        }));
+        void api.session.upsertMessages({ sessionId: parent, messages: toRecords(parent, [receipt]) });
+      }
+      // 打开右栏「定时任务」并选中新任务。
+      set({ schedSelectedId: automation.id, schedFilterParent: null, rightOpen: true });
+      get().setRightPanelTab("sched");
+      return automation;
+    } catch (err) {
+      console.error("automation.save failed:", err);
+      pushToastLite("error", (err as Error).message);
+      return null;
+    }
   },
 
   setModelConfigPromptOpen: (open) => set({ modelConfigPromptOpen: open }),
@@ -8522,8 +8968,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     // Reveal the browser sidebar + stage the URL. BrowserPanel opens it in a
     // NEW tab: when tabs already exist it creates one for the URL; when none
     // exist (panel first opened) the first-tab effect loads it into the
-    // initial tab.
-    get().setRightPanelTab("browser");
+    // initial tab. The sidebar browser is a session-scoped tab — open it on
+    // the ACTIVE session (rail "+" menu does the same).
+    get().openSessionRightTab("browser");
     set({ rightOpen: true, pendingBrowserUrl: url });
   },
   adoptAgentBrowserTab: (browserId, info) => {
@@ -9724,7 +10171,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           "ready",
           false,
           s.runningTurnStartedAt[sessionId] ?? Date.now(),
-          s.runningTurnModelBySession[sessionId],
+          resolveTurnModel(s, sessionId),
         );
         // Clear the staged editor draft now that the decision is submitted -
         // the draft only mattered while the approval was pending.
@@ -9758,7 +10205,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     // Capture the turn anchor BEFORE interrupt() wipes it, so the badge-flip
     // below lands on the same live plan block the sheet was showing.
     const anchor = s0.runningTurnStartedAt[sessionId] ?? Date.now();
-    const modelAnchor = s0.runningTurnModelBySession[sessionId];
+    const modelAnchor = resolveTurnModel(s0, sessionId);
 
     // End the blocked turn WITHOUT answering the ExitPlanMode dialog: the
     // abort means no request.resolved will ever arrive, so clear the local
@@ -9938,14 +10385,31 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       // Nothing to rewind — defensive (UI shouldn't allow the click).
       return;
     }
+    // Pin the clicked card NOW: its message id drives the turn.rewound
+    // handler's precise marking (path sets can't — several turns may have
+    // touched the same file), and `isLatestTurn` tells main whether the
+    // live snapshot / persisted turn_files column may be cleared. The
+    // marker is set BEFORE the IPC call — main pushes the event before the
+    // invoke response arrives, so the handler may run first.
+    const target = findRewindTargetBlock(
+      get().messagesBySession[sessionId] ?? EMPTY_MESSAGES,
+      files,
+    );
+    pendingRewind = target ? { sessionId, messageId: target.messageId } : null;
     try {
-      await api.claude.rewindTurn({ sessionId, files, targetFiles });
+      await api.claude.rewindTurn({
+        sessionId,
+        files,
+        targetFiles,
+        latest: target?.isLatestTurn ?? false,
+      });
       // Don't optimistically clear turnFiles — wait for the `turn.rewound`
       // event from main so the UI only updates when files are actually
       // back on disk. If the IPC call returns successfully but main fails
       // partway through restore, the (smaller) restored list still
       // arrives via the event and we clear from there.
     } catch (err) {
+      pendingRewind = null;
       console.error("claude.rewindTurn failed:", err);
     }
   },
@@ -10157,9 +10621,48 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   /* ─────────────────── IDE right-panel actions ─────────────────── */
 
   setRightPanelTab: (tab) => {
-    set({ rightPanelTab: tab });
+    // Switching to a global tab de-activates the active session's session-
+    // scoped tab (if any) — the panel is global-state from here on. The open
+    // set is preserved: the session keeps its rail icons for later.
+    const sid = get().activeSessionId;
+    set((s) => {
+      const cur = sid ? s.sessionRightTabsBySession[sid] : undefined;
+      if (!sid || !cur || cur.active === null) return { rightPanelTab: tab };
+      return {
+        rightPanelTab: tab,
+        sessionRightTabsBySession: { ...s.sessionRightTabsBySession, [sid]: { ...cur, active: null } },
+      };
+    });
     void api.setting.set({ key: UI_RIGHT_PANEL_TAB_SETTING_KEY, value: tab }).catch((err) => {
       console.error("setting.set(rightPanelTab) failed:", err);
+    });
+  },
+
+  openSessionRightTab: (tab, sessionId) => {
+    const sid = sessionId ?? get().activeSessionId;
+    if (!sid) return;
+    set((s) => {
+      const cur = s.sessionRightTabsBySession[sid] ?? { open: [], active: null as SessionRightPanelTabId | null };
+      const open = cur.open.includes(tab) ? cur.open : [...cur.open, tab];
+      return { sessionRightTabsBySession: { ...s.sessionRightTabsBySession, [sid]: { open, active: tab } } };
+    });
+  },
+
+  closeSessionRightTab: (tab, sessionId) => {
+    const sid = sessionId ?? get().activeSessionId;
+    if (!sid) return;
+    if (get().rightPanelTab === (tab as unknown as string)) {
+      get().setRightPanelTab("files");
+    }
+    set((s) => {
+      const cur = s.sessionRightTabsBySession[sid];
+      if (!cur || !cur.open.includes(tab)) return {};
+      return {
+        sessionRightTabsBySession: {
+          ...s.sessionRightTabsBySession,
+          [sid]: { open: cur.open.filter((x) => x !== tab), active: cur.active === tab ? null : cur.active },
+        },
+      };
     });
   },
 
@@ -10444,7 +10947,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
   openSideChatPanel: () => {
     set({ rightOpen: true });
-    get().setRightPanelTab("sidechat");
+    // sidechat is a session-scoped tab — open it for the active session
+    // (follows the session across switches).
+    get().openSessionRightTab("sidechat");
     // Refresh the current main session's list if we have one (cheap; keeps
     // titles/status fresh after restarts or background changes).
     const parent = get().activeSessionId;
@@ -10558,7 +11063,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
   openSubagentTranscript: (sessionId, taskId) => {
     set({ pendingSubagentView: { sessionId, taskId }, rightOpen: true });
-    get().setRightPanelTab("sidechat");
+    // sidechat is a session-scoped tab — open it on the OWNING session (not
+    // the global tab), so the transcript shows in that session's context.
+    get().openSessionRightTab("sidechat", sessionId);
   },
 
   clearPendingSubagentView: () => {

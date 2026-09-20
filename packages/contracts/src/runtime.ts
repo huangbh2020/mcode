@@ -360,9 +360,12 @@ export interface TurnFilesEvent {
  *  checkpoint semantics where file rollback never rolls back the
  *  conversation itself).
  *
- *  The renderer uses `targetFiles` to locate the card (path-set match),
- *  and clears the latest-turn bucket (`turnFilesBySession`) only when
- *  the matched card is the live one. */
+ *  The initiating client locates the exact card via its in-flight rewind
+ *  marker (the message id resolved at click time — path sets alone are
+ *  ambiguous when several turns touched the same file) and falls back to
+ *  a `targetFiles` path-set scan only when no marker exists (a rewind
+ *  started by another client). It clears the latest-turn bucket
+ *  (`turnFilesBySession`) only when the marked card is the live one. */
 export interface TurnRewoundEvent {
   type: "turn.rewound";
   sessionId: string;

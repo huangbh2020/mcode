@@ -150,6 +150,28 @@ function migrate(database: Database.Database): void {
       key   TEXT PRIMARY KEY,
       value TEXT NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS automations (
+      id              TEXT PRIMARY KEY,
+      project_id      TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      title           TEXT NOT NULL,
+      prompt          TEXT NOT NULL,
+      provider_id     TEXT NOT NULL DEFAULT 'claude-sdk',
+      model           TEXT NOT NULL DEFAULT 'default',
+      custom_model_id TEXT,
+      effort          TEXT NOT NULL DEFAULT 'default',
+      permission_mode TEXT NOT NULL DEFAULT 'acceptEdits',
+      schedule        TEXT NOT NULL,
+      enabled         INTEGER NOT NULL DEFAULT 1,
+      keep_runs       INTEGER NOT NULL DEFAULT 20,
+      last_run_at     INTEGER,
+      next_run_at     INTEGER,
+      last_status     TEXT,
+      last_session_id TEXT,
+      created_at      INTEGER NOT NULL,
+      updated_at      INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_automations_next_run ON automations(next_run_at);
   `);
   // Backward-compatible column adds for dbs created before these columns
   // existed (CREATE TABLE IF NOT EXISTS won't alter an existing table).
@@ -203,6 +225,26 @@ function migrate(database: Database.Database): void {
   // dispatchId/coordinatorSessionId) as JSON. Structured (not prose) so ghost
   // reports can be validated at the protocol layer.
   addColumnIfMissing(database, "sessions", "orch_meta", "TEXT");
+  // Automation run sessions (kind='automation'): the owning scheduled task.
+  // Denormalized onto the session row so the automation page can list a
+  // task's runs with one indexed query (idx_sessions_automation below).
+  addColumnIfMissing(database, "sessions", "automation_id", "TEXT");
+  // Automation task attachments: "/"-menu skill names + attached absolute file
+  // paths, both JSON string arrays. Skills ride the turn's SDK skills
+  // allowlist; file paths become "@path" prompt lines at fire time (current
+  // content is read by the agent at RUN time — never snapshotted at save).
+  addColumnIfMissing(database, "automations", "skill_names", "TEXT NOT NULL DEFAULT '[]'");
+  // v2「任务即会话」:the task's OWN visible session (every fire appends a
+  // turn to it) + the initiator session whose composer created the task.
+  addColumnIfMissing(database, "automations", "task_session_id", "TEXT");
+  addColumnIfMissing(database, "automations", "parent_session_id", "TEXT");
+  addColumnIfMissing(database, "automations", "file_paths", "TEXT NOT NULL DEFAULT '[]'");
+  // Per-task run ledger (AutomationRunEntry[], newest last): one entry per
+  // fire, appended by the scheduler and updated in place as the run settles.
+  // Scheduler-owned — the automation.save path never writes it.
+  addColumnIfMissing(database, "automations", "run_log", "TEXT NOT NULL DEFAULT '[]'");
+  // Soft delete marker for scheduled tasks (ms epoch timestamp, NULL when active).
+  addColumnIfMissing(database, "automations", "deleted_at", "INTEGER");
   addColumnIfMissing(database, "projects", "archived", "INTEGER NOT NULL DEFAULT 0");
   // Optional user-assigned group name for the left-bar "grouped" view. NULL
   // means the project is ungrouped; the renderer treats "" / undefined as null.
@@ -224,6 +266,13 @@ function migrate(database: Database.Database): void {
   // cursor pagination without a filesort. Idempotent.
   database.exec(
     "CREATE INDEX IF NOT EXISTS idx_messages_session_created ON messages(session_id, created_at)",
+  );
+
+  // Run-history listing for the automation page (kind='automation' rows of
+  // one task, newest first). (automation_id, created_at) lets the paged
+  // query ORDER BY created_at LIMIT ? run without a filesort.
+  database.exec(
+    "CREATE INDEX IF NOT EXISTS idx_sessions_automation ON sessions(automation_id, created_at)",
   );
 
   // One-time legacy hygiene (2026-09-14 migration): sql.js never actually

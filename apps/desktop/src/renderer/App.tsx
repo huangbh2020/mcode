@@ -11,6 +11,7 @@ import { UnifiedTabsBar } from "./components/layout/UnifiedTabsBar.js";
 import { RightPanel } from "./components/layout/RightPanel.js";
 import { BottomTerminalBar } from "./components/layout/BottomTerminalBar.js";
 import { SettingsPage } from "./components/settings/SettingsPage.js";
+import { SchedPage } from "./components/automation/SchedPage.js";
 import { CommandPalette } from "./components/layout/CommandPalette.js";
 import { SearchDialog } from "./components/ide/SearchDialog.js";
 import { ModelConfigPrompt } from "./components/chat/ModelConfigPrompt.js";
@@ -80,7 +81,9 @@ export function App() {
       const createdNew = st.adoptAgentBrowserTab(msg.browserId, p);
       if (!st.browserPanelOpen) {
         // Not in fullscreen — bring up the sidebar to show the agent browsing.
-        st.setRightPanelTab("browser");
+        // The sidebar browser is a session-scoped tab: open it on the ACTIVE
+        // session (the rail's "+" menu does the same).
+        st.openSessionRightTab("browser");
         st.setRightOpen(true);
       }
       // Only auto-open the device toolbar for a brand-new agent tab, so the
@@ -123,6 +126,11 @@ export function App() {
    *  a sibling view (not a modal) sharing the same titlebar + pane shell. */
   const settingsOpen = useSessionStore((s) => s.settingsOpen);
   const setSettingsOpen = useSessionStore((s) => s.setSettingsOpen);
+
+  /** 定时任务只读查看页 — same full-bleed overlay form as the settings page
+   *  (mutually exclusive with it; see setSchedPageOpen). */
+  const schedPageOpen = useSessionStore((s) => s.schedPageOpen);
+  const setSchedPageOpen = useSessionStore((s) => s.setSchedPageOpen);
 
   /** Left / right sidebar + bottom terminal visibility. Lifted from local
    *  useState into the store so the command palette (and any other consumer)
@@ -243,7 +251,7 @@ export function App() {
           // min-content) propped the aside open no matter how small
           // leftWidthPct got.
           "flex h-full min-w-0 shrink-0 flex-col rounded-tl-3xl bg-surface-muted",
-          (!leftOpen || settingsOpen) && "hidden",
+          (!leftOpen || settingsOpen || schedPageOpen) && "hidden",
         )}
         style={{ flexGrow: 0, flexBasis: `${leftWidthPct}%` }}
       >
@@ -254,7 +262,7 @@ export function App() {
           {leftBarMode === "stream" ? <StreamSidebar /> : <LeftBar />}
         </div>
       </aside>
-      {leftOpen && !settingsOpen && (
+      {leftOpen && !settingsOpen && !schedPageOpen && (
         <Divider
           orientation="vertical"
           hideLine
@@ -288,11 +296,11 @@ export function App() {
           left sidebar stays visible alongside it).
         */}
         <Titlebar
-          mode={settingsOpen ? "settings" : "workspace"}
+          mode={settingsOpen ? "settings" : schedPageOpen ? "sched" : "workspace"}
           leftOpen={leftOpen}
-          rightOpen={settingsOpen ? false : rightOpen}
-          bottomTerminalOpen={settingsOpen ? false : bottomTerminalOpen}
-          onBack={() => setSettingsOpen(false)}
+          rightOpen={settingsOpen || schedPageOpen ? false : rightOpen}
+          bottomTerminalOpen={settingsOpen || schedPageOpen ? false : bottomTerminalOpen}
+          onBack={() => (settingsOpen ? setSettingsOpen(false) : setSchedPageOpen(false))}
           onToggleLeft={() => setLeftOpen(!leftOpen)}
           onToggleRight={() => setRightOpen(!rightOpen)}
           onToggleBottomTerminal={() => setBottomTerminalOpen(!bottomTerminalOpen)}
@@ -357,6 +365,16 @@ export function App() {
           {settingsOpen && (
             <div className="settings-root absolute inset-0 z-30 flex bg-surface-muted">
               <SettingsPage />
+            </div>
+          )}
+          {/* 定时任务查看页(只读) — same full-bleed overlay form as the
+              settings overlay above: covers the whole panel row (the left
+              aside is CSS-hidden while it's open), workspace stays mounted
+              underneath. Exclusivity with settings is enforced in the store
+              actions, so at most one of the two overlays is ever mounted. */}
+          {schedPageOpen && (
+            <div className="absolute inset-0 z-30 flex bg-surface-muted">
+              <SchedPage />
             </div>
           )}
         </div>
