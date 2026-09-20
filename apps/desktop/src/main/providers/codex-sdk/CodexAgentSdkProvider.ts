@@ -268,13 +268,18 @@ export class CodexAgentSdkProvider implements AgentProvider {
     const mode = normalizeCodexMode(req.permissionMode);
     const { sandbox, approvalPolicy } = codexModeToPolicy(mode);
 
-    // Per-model context-window override (third-party models the codex catalog
-    // doesn't know). Passed as a PROCESS-LOCAL `-c` CLI override — priority
-    // over config.toml and scoped to this turn's app-server process, so
-    // concurrent sessions with different windows never race on the shared
-    // config file (verified: config/read reflects the flag value).
+    // Per-model context window (third-party models the codex catalog doesn't
+    // know). TWO process-local pieces are needed — both scoped to this turn's
+    // app-server process, so concurrent sessions with different windows never
+    // race on shared state:
+    //   1. `-c model_context_window=<n>`: a CAP codex applies as
+    //      min(model metadata, override);
+    //   2. `-c model_catalog_json=<abs path>`: the METADATA itself — without
+    //      it the model resolves to codex's 272k fallback and the cap can only
+    //      narrow it (measurements in CodexModelsStore.ensureModelCatalog).
     const selectedModel = providers.find((p) => p.id === providerId)?.models.find((m) => m.id === modelId);
     const contextWindow = selectedModel?.contextWindow;
+    const modelCatalogPath = contextWindow ? await CodexModelsStore.ensureModelCatalog(codexPath) : null;
 
     /* ── 4. Spawn app-server (env carries CODEX_HOME + provider keys) ── */
     const env = await buildCodexEnv(ctx);
@@ -325,6 +330,7 @@ export class CodexAgentSdkProvider implements AgentProvider {
         "-c",
         `model_provider=${providerId}`,
         ...(contextWindow ? ["-c", `model_context_window=${contextWindow}`] : []),
+        ...(modelCatalogPath ? ["-c", `model_catalog_json=${modelCatalogPath}`] : []),
       ],
       log: ctx.log,
       onExit: (code, signal) => {
@@ -344,7 +350,9 @@ export class CodexAgentSdkProvider implements AgentProvider {
     });
     clientRef = client;
     if (contextWindow) {
-      ctx.log.info(`codex: model "${providerId}/${modelId}" context window override: ${contextWindow}`);
+      ctx.log.info(
+        `codex: model "${providerId}/${modelId}" context window ${contextWindow} (catalog metadata: ${modelCatalogPath ? "yes" : "no"})`,
+      );
     }
 
     // Plan-mode state — in-process boolean (synchronous; ctx.getPermissionMode
