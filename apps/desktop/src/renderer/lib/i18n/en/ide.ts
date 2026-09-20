@@ -266,6 +266,7 @@ export const en = {
   "ide.term.clearScreen": "Clear screen",
   "ide.term.killProcess": "Kill process",
   "ide.term.restart": "Restart",
+  "ide.term.restartToApply": "Shell setting changed - restart to apply",
   "ide.term.startFailed": "Failed to start",
   "ide.term.exited": "Exited",
   "ide.term.killed": "Terminated",

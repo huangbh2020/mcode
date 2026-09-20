@@ -268,6 +268,7 @@ export const zh = {
   "ide.term.clearScreen": "清屏",
   "ide.term.killProcess": "终止进程",
   "ide.term.restart": "重开",
+  "ide.term.restartToApply": "Shell 配置已改,点「重开」生效",
   "ide.term.startFailed": "启动失败",
   "ide.term.exited": "已退出",
   "ide.term.killed": "已终止",
