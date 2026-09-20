@@ -21,18 +21,15 @@ import {
   IconGripVertical,
   IconExternalLink,
   IconSparkles,
+  IconClock,
 } from "@renderer/lib/icons.js";
 import { useCursorAnchor } from "@renderer/hooks/useCursorAnchor.js";
 import { isElectron } from "@renderer/lib/platform.js";
-import { useSessionStore, EMPTY_MESSAGES, EMPTY_TODOS, EMPTY_SUBAGENTS, EMPTY_CHAT_QUEUE, EMPTY_ELEMENT_QUEUE, EMPTY_PROMPT_QUEUE, EMPTY_BOOKMARKS, EMPTY_USAGE, type Block, type ChatMessage, type TodoItem, type TurnMeta, type QueuedPrompt } from "@renderer/stores/sessionStore.js";
+import { useSessionStore, resolveTurnModel, EMPTY_MESSAGES, EMPTY_TODOS, EMPTY_SUBAGENTS, EMPTY_CHAT_QUEUE, EMPTY_ELEMENT_QUEUE, EMPTY_PROMPT_QUEUE, EMPTY_BOOKMARKS, EMPTY_USAGE, type Block, type ChatMessage, type TodoItem, type TurnMeta, type QueuedPrompt } from "@renderer/stores/sessionStore.js";
 import { useToastStore } from "@renderer/stores/toastStore.js";
 import { api } from "@renderer/lib/api.js";
 import { findNormalizedTextRange, highlightRange } from "@renderer/lib/textFind.js";
 import { useI18n } from "@renderer/lib/i18n/index.js";
-import { looksLikeScheduledTaskIntent } from "@renderer/components/automation/automationFormat.js";
-import { ScheduleEditor } from "@renderer/components/automation/ScheduleEditor.js";
-import { Dialog, Button } from "@renderer/components/ui/index.js";
-import type { AutomationSchedule } from "@contracts/automation";
 import { useNow } from "@renderer/hooks/useNow.js";
 import { useComposerRowFit } from "@renderer/hooks/useComposerRowFit.js";
 import type { SubagentSnapshot } from "@contracts/runtime";
@@ -1145,6 +1142,7 @@ export const ChatPane = memo(
     isActive = true,
     chipsMode = "auto",
     hideComposer = false,
+    targetMessageId = null,
   }: {
     sessionId: string | null;
     /** Whether this pane is the foreground tab. Multi-mount layouts pass false
@@ -1159,6 +1157,8 @@ export const ChatPane = memo(
      *  question / plan prompts — those are decisions, not free input, and an
      *  unattended task may legitimately wait on them. */
     hideComposer?: boolean;
+    /** Target message ID to scroll and align to on mount or change. */
+    targetMessageId?: string | null;
   }) {
     // `sessionId` is the prop — store lookups go through it directly, not
     // through `activeSessionId`. The store still tracks `activeSessionId`
@@ -1177,6 +1177,7 @@ export const ChatPane = memo(
         isActive={isActive}
         chipsMode={chipsMode}
         hideComposer={hideComposer}
+        targetMessageId={targetMessageId}
       />
     );
   },
@@ -1184,7 +1185,8 @@ export const ChatPane = memo(
     prev.sessionId === next.sessionId &&
     prev.isActive === next.isActive &&
     prev.chipsMode === next.chipsMode &&
-    prev.hideComposer === next.hideComposer,
+    prev.hideComposer === next.hideComposer &&
+    prev.targetMessageId === next.targetMessageId,
 );
 
 /** Empty-state shown when there's no active session to render (no tabs
@@ -1292,11 +1294,13 @@ function ChatPaneForSession({
   isActive,
   chipsMode = "auto",
   hideComposer = false,
+  targetMessageId = null,
 }: {
   sessionId: string;
   isActive: boolean;
   chipsMode?: ComposerChipsMode;
   hideComposer?: boolean;
+  targetMessageId?: string | null;
 }) {
   const { t, locale } = useI18n();
   // Compactness tier of the composer's mini pill (see useComposerRowFit,
@@ -1315,6 +1319,13 @@ function ChatPaneForSession({
   const messages = useSessionStore((s) =>
     s.messagesBySession[sessionId] ?? EMPTY_MESSAGES,
   );
+  const schedHintVisible = useSessionStore((s) => !!s.schedHintVisibleBySession[sessionId]);
+  const isAutomationSession = useSessionStore((s) => {
+    if (s.automations.some((a) => a.taskSessionId === sessionId)) return true;
+    const sess = s.getSessionById(sessionId);
+    return sess?.kind === "automation" || sess?.automationId != null;
+  });
+  const sessionModel = useSessionStore((s) => resolveTurnModel(s, sessionId));
   // Older-message pagination state for this session.
   const hasMoreMessages = useSessionStore((s) => !!s.hasMoreMessagesBySession[sessionId]);
   const loadingOlder = useSessionStore((s) => !!s.loadingOlderBySession[sessionId]);
@@ -2197,6 +2208,9 @@ function ChatPaneForSession({
    *  `@file` doesn't pop the picker open mid-recall. */
   const handleChange = (text: string) => {
     setValue(text);
+    if (useSessionStore.getState().schedHintVisibleBySession[sessionId]) {
+      useSessionStore.getState().hideSchedPromptHint(sessionId);
+    }
     if (recallFillRef.current) {
       recallFillRef.current = false;
       setPickerKind(null);
@@ -2424,12 +2438,29 @@ function ChatPaneForSession({
         return;
       }
       if (cmd.kind === "schedule") {
-        // 丢弃 /schedule 触发 token,拉起定时配置弹层 —— 用户在弹层里配好
-        // 规则后点发送,handleSend 的拦截路径创建任务会话。
+        // 与 init 命令保持一致: 将 /schedule 替换为原子 command pill (胶囊药丸样式)
+        if (isAutomationSession) {
+          setPickerKind(null);
+          clearTriggerToken();
+          triggerStartRef.current = null;
+          return;
+        }
+        const start = triggerStartRef.current;
+        if (start === null || !editorRef.current) {
+          setPickerKind(null);
+          return;
+        }
+        const caret = editorRef.current.getCaretOffset();
+        if (caret < 0) {
+          setPickerKind(null);
+          return;
+        }
+        editorRef.current.insertCommandPill(cmd.name, start, caret);
         setPickerKind(null);
-        clearTriggerToken();
         triggerStartRef.current = null;
-        useSessionStore.getState().setTaskScheduleEditorOpen(sessionId, true);
+        requestAnimationFrame(() => {
+          useSessionStore.getState().showSchedPromptHint(sessionId);
+        });
         return;
       }
       if (cmd.kind === "sidechat") {
@@ -2782,103 +2813,6 @@ function ChatPaneForSession({
     return images;
   }, [pendingImages, t]);
 
-  // ── 定时任务意图审批(v2):chip 无配置时命中启发式 → 弹审批 ──
-  const [schedApproval, setSchedApproval] = useState<
-    { prompt: string; skillNames: string[]; text: string } | null
-  >(null);
-  const [intentSchedule, setIntentSchedule] = useState<AutomationSchedule>({
-    type: "daily",
-    time: "09:00",
-  });
-  // 模型判定:弹出审批时把原文发给模型(main 一次性 query),拿回
-  // {isTask, reason, schedule} 后预填规则 —— 是否创建始终由用户批准。
-  const [schedIntent, setSchedIntent] = useState<{
-    loading: boolean;
-    result: { isTask: boolean; reason: string; schedule: AutomationSchedule } | null;
-  }>({ loading: false, result: null });
-
-  useEffect(() => {
-    if (!schedApproval) {
-      setSchedIntent({ loading: false, result: null });
-      return;
-    }
-    let cancelled = false;
-    setSchedIntent({ loading: true, result: null });
-    void api.automation
-      .parseIntent({ text: schedApproval.text.slice(0, 8000) })
-      .then((r) => {
-        if (cancelled) return;
-        setSchedIntent({ loading: false, result: r.intent });
-        if (r.intent?.isTask) setIntentSchedule(r.intent.schedule);
-      })
-      .catch(() => {
-        if (!cancelled) setSchedIntent({ loading: false, result: null });
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [schedApproval]);
-
-  const clearComposer = () => {
-    editorRef.current?.clear();
-    setValue("");
-    setTags([]);
-    setPendingImages([]);
-    setOpenTagId(null);
-    setAnchorRect(null);
-  };
-
-  const confirmSchedIntent = async () => {
-    if (!schedApproval) return;
-    const st = useSessionStore.getState();
-    const parent = st.getSessionById(sessionId);
-    setSchedApproval(null);
-    if (!parent) return;
-    const title = (schedApproval.text.split("\n")[0] || t("automation.formUntitled"))
-      .replace(/\s+/g, " ")
-      .slice(0, 30);
-    await st.createScheduledTask({
-      projectId: parent.projectId,
-      parentSessionId: sessionId,
-      title,
-      prompt: schedApproval.prompt,
-      skillNames: schedApproval.skillNames,
-      filePaths: tags
-        .filter((tg) => tg.kind === "file" && tg.filePath)
-        .map((tg) => tg.filePath as string),
-      providerId: st.providerId,
-      model: st.model,
-      customModelId: st.customModelId,
-      effort: st.effort,
-      permissionMode: st.permissionMode,
-      schedule: intentSchedule,
-      enabled: true,
-      keepRuns: 20,
-    });
-    clearComposer();
-  };
-
-  /** 审批里选「普通发送」:按原流程继续(images → attachments → sendPrompt)。 */
-  const dismissSchedAndSend = async () => {
-    if (!schedApproval) return;
-    const staged = schedApproval;
-    setSchedApproval(null);
-    const images = await preparePendingImages();
-    if (images === null) return;
-    const attachments = composeSendAttachments(tags);
-    const sent = await sendPrompt(
-      staged.prompt,
-      attachments.length > 0 ? attachments : undefined,
-      attachments.length > 0 ? staged.text : undefined,
-      staged.skillNames.length > 0 ? staged.skillNames : undefined,
-      images,
-      undefined,
-      sessionId,
-    );
-    if (!sent) return;
-    clearComposer();
-    setSendLaunching(true);
-  };
 
   const handleSend = async () => {
     // Serialize the editor: text has skill pills inlined as `/name` at their
@@ -2913,9 +2847,9 @@ function ChatPaneForSession({
       const st = useSessionStore.getState();
       const parent = st.getSessionById(sessionId);
       if (!parent) return;
-      const title = (text.split("\n")[0] || t("automation.formUntitled"))
-        .replace(/\s+/g, " ")
-        .slice(0, 30);
+      const title =
+        (text.trim().slice(0, 40) + (text.trim().length > 40 ? "…" : "")) ||
+        t("automation.formUntitled");
       const automation = await st.createScheduledTask({
         projectId: parent.projectId,
         parentSessionId: sessionId,
@@ -2945,12 +2879,6 @@ function ChatPaneForSession({
       }
       return;
     }
-    // ── 定时意图识别 + 审批(无 chip 配置时)──
-    // 内容命中调度词表 → 弹审批:确认则进配置-创建流程,取消则普通发送。
-    if (looksLikeScheduledTaskIntent(text)) {
-      setSchedApproval({ prompt, skillNames, text });
-      return;
-    }
     // Normalize the staged images into the send allowlist (downscale / JPEG
     // re-encode when oversized). A failed image aborts the send and keeps the
     // composer intact — the toast explains which one and why.
@@ -2963,10 +2891,17 @@ function ChatPaneForSession({
     // stream. A blocked send (e.g. the "尚未配置模型" dialog raised inside
     // sendPrompt) must leave the typed text + tags intact so nothing is lost
     // while the user goes to configure a model.
+    let promptToSend = prompt;
+    let displayTextToSend: string | undefined = attachments.length > 0 ? text : undefined;
+    if (/^\/schedule\b/i.test(text)) {
+      const scheduleBody = prompt.replace(/^\/schedule\s*/i, "");
+      promptToSend = `请为我创建或调整以下定时任务（/schedule）：\n${scheduleBody}`;
+      displayTextToSend = text;
+    }
     const sent = await sendPrompt(
-      prompt,
+      promptToSend,
       attachments.length > 0 ? attachments : undefined,
-      attachments.length > 0 ? text : undefined,
+      displayTextToSend,
       skillNames.length > 0 ? skillNames : undefined,
       images,
       undefined,
@@ -3008,9 +2943,16 @@ function ChatPaneForSession({
     const images = await preparePendingImages();
     if (images === null) return;
     const attachments = composeSendAttachments(tags);
+    let enqueuePromptText = prompt;
+    let enqueueDisplayText = text;
+    if (/^\/schedule\b/i.test(text)) {
+      const scheduleBody = prompt.replace(/^\/schedule\s*/i, "");
+      enqueuePromptText = `请为我创建或调整以下定时任务（/schedule）：\n${scheduleBody}`;
+      enqueueDisplayText = text;
+    }
     enqueuePrompt(sessionId, {
-      prompt,
-      displayText: text,
+      prompt: enqueuePromptText,
+      displayText: enqueueDisplayText,
       attachments: attachments.length > 0 ? attachments : undefined,
       skillNames: skillNames.length > 0 ? skillNames : undefined,
       images: images ?? undefined,
@@ -3131,9 +3073,9 @@ function ChatPaneForSession({
     );
   };
 
-  // On opening a session, jump to the bottom so the latest exchange is in view
+  // On opening a session, jump to the bottom (or target message) so the desired exchange is in view
   // (the keyed remount above starts the list scrolled to the top). This fires
-  // once per mount: it waits for messages to load, then scrolls and latches
+  // once per mount (or when targetMessageId changes): it waits for messages to load, then scrolls and latches
   // `initialScrollDoneRef` so subsequent streaming appends don't yank the view
   // back down if the user has scrolled up to read history.
   //
@@ -3141,7 +3083,22 @@ function ChatPaneForSession({
   // scroll until it becomes the active (visible) pane, otherwise the rAF runs
   // against a display:none list and the scroll is lost (or wrong).
   useEffect(() => {
-    if (empty || !isActive || initialScrollDoneRef.current) return;
+    if (empty || !isActive) return;
+    if (targetMessageId) {
+      let raf1 = 0;
+      let raf2 = 0;
+      raf1 = requestAnimationFrame(() => {
+        raf2 = requestAnimationFrame(() => {
+          scrollToMessageTop(targetMessageId);
+          initialScrollDoneRef.current = true;
+        });
+      });
+      return () => {
+        cancelAnimationFrame(raf1);
+        cancelAnimationFrame(raf2);
+      };
+    }
+    if (initialScrollDoneRef.current) return;
     // LegendList measures item heights asynchronously on first layout, so a
     // single rAF may run before the list has real scroll length. Two rAFs give
     // it a layout pass + a settle pass; scrollToEnd is a no-op if the list
@@ -3158,7 +3115,7 @@ function ChatPaneForSession({
       cancelAnimationFrame(raf1);
       cancelAnimationFrame(raf2);
     };
-  }, [empty, isActive]);
+  }, [empty, isActive, targetMessageId, scrollToMessageTop]);
 
   // When this session's running turn completes (isRunning flips true → false),
   // bring the list back to the very bottom so the finished reply — and any
@@ -3361,7 +3318,14 @@ function ChatPaneForSession({
             表示仍在写入；回合结束后由 TurnPanel 接手同一形态，只把台头翻成回执。 */}
         <div className="chat-turn mx-auto mt-[var(--chat-row-gap-assistant)] max-w-5xl">
           <div className="chat-ledger" data-phase="running" data-open="true">
-            <LiveLedgerHead turnMeta={turnMeta} blocks={liveLedgerBlocks} />
+            <LiveLedgerHead
+              turnMeta={
+                turnMeta?.model
+                  ? turnMeta
+                  : { ...turnMeta, startedAt: turnMeta?.startedAt ?? Date.now(), model: sessionModel ?? undefined }
+              }
+              blocks={liveLedgerBlocks}
+            />
             <div className="chat-ledger-body">{inner}</div>
             <span className="chat-ledger-scan" aria-hidden="true" />
           </div>
@@ -3533,7 +3497,13 @@ function ChatPaneForSession({
               blocks={item.panelBlocks}
               beforeMap={beforeMap}
               turnActive={turnActive}
-              turnMeta={item.turnMeta}
+              turnMeta={
+                item.turnMeta?.model
+                  ? item.turnMeta
+                  : item.turnMeta
+                    ? { ...item.turnMeta, model: sessionModel ?? undefined }
+                    : (sessionModel ? { startedAt: Date.now(), model: sessionModel } : undefined)
+              }
               stats={turnStats}
               onOpenPlan={onOpenPlan}
               onToggleCollapse={pauseBottomAnchor}
@@ -3980,6 +3950,18 @@ function ChatPaneForSession({
             <WorktreeModeChip sessionId={sessionId} />
             <OrchComposerChips sessionId={sessionId} />
           </div>
+          {schedHintVisible && !hasPendingPrompt && !hideComposer && !isAutomationSession && (
+            <div className="pointer-events-none relative z-30 h-0 w-full">
+              <div
+                role="status"
+                aria-live="polite"
+                className="absolute -top-3 left-3 flex items-center gap-1.5 rounded-full border border-accent/40 bg-surface/95 px-2.5 py-1 text-xs font-medium text-accent shadow-lg backdrop-blur-md animate-in fade-in slide-in-from-bottom-1 duration-200"
+              >
+                <IconClock size={12} className="shrink-0 text-accent" />
+                <span>{t("automation.toastEnterPromptHint")}</span>
+              </div>
+            </div>
+          )}
           <div
             ref={composerCardRef}
             // composer-card: hooks for the 方案 B polish layers in styles.css —
@@ -4426,45 +4408,6 @@ function ChatPaneForSession({
             onPickCommand={handleBuiltInPick}
             onClose={() => setPickerKind(null)}
           />
-          {/* 定时任务意图审批:识别命中 → 配规则后创建,或普通发送。 */}
-          <Dialog.Root open={schedApproval !== null} onOpenChange={(o) => { if (!o) setSchedApproval(null); }}>
-            <Dialog.Portal>
-              <Dialog.Backdrop />
-              <Dialog.Popup className="w-[400px] max-w-[92vw] p-4">
-                <Dialog.Title>{t("automation.intentTitle")}</Dialog.Title>
-                {schedIntent.loading ? (
-                  <Dialog.Description>{t("automation.intentAnalyzing")}</Dialog.Description>
-                ) : schedIntent.result ? (
-                  <Dialog.Description>
-                    {schedIntent.result.isTask
-                      ? `${t("automation.intentModelSaid")}${schedIntent.result.reason}`
-                      : t("automation.intentNotTask")}
-                  </Dialog.Description>
-                ) : (
-                  <Dialog.Description>{t("automation.intentBody")}</Dialog.Description>
-                )}
-                {!schedIntent.loading && (
-                  <div className="mt-3 rounded-xl border border-edge bg-surface p-3">
-                    <ScheduleEditor schedule={intentSchedule} onChange={setIntentSchedule} />
-                  </div>
-                )}
-                <div className="mt-4 flex justify-end gap-2">
-                  <Button variant="ghost" size="sm" onClick={() => void dismissSchedAndSend()}>
-                    {t("automation.intentNormal")}
-                  </Button>
-                  <Button
-                    variant="primary"
-                    size="sm"
-                    disabled={schedIntent.loading}
-                    onClick={() => void confirmSchedIntent()}
-                  >
-                    {t("automation.intentConfirm")}
-                  </Button>
-                </div>
-                <Dialog.Close />
-              </Dialog.Popup>
-            </Dialog.Portal>
-          </Dialog.Root>
           {/* "Add context" picker opened from the bottom-left + button.
               Multi-select; same project file source as @-mention. */}
           <FileMentionPicker

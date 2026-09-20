@@ -247,7 +247,7 @@ export function AutomationEditor({
     try {
       const title =
         draft.title.trim() ||
-        (draft.prompt.trim().split("\n")[0] ?? "").trim().slice(0, 40) ||
+        (draft.prompt.trim().slice(0, 40) + (draft.prompt.trim().length > 40 ? "…" : "")) ||
         t("automation.formUntitled");
       const input: AutomationSaveInput = {
         ...(task ? { id: task.id } : {}),

@@ -61,7 +61,7 @@ import {
 } from "@main/lib/codexModelsStore.js";
 import { getOrSetFileSnapshot } from "@main/lib/fileSnapshotRegistry.js";
 import { getMcpManagement } from "@main/lib/mcpConfig.js";
-import { CODEX_IDENTITY_PROMPT, joinPromptSections } from "@main/lib/systemPrompt.js";
+import { CODEX_IDENTITY_PROMPT, SCHEDULED_TASK_PROPOSAL_NUDGE, joinPromptSections } from "@main/lib/systemPrompt.js";
 import { ASK_NATIVE_TOOL_PROMPT } from "@main/lib/askQuestion.js";
 import {
   parseQuestions,
@@ -621,6 +621,7 @@ async function ensureCodexHomeIdentity(): Promise<void> {
   await fs.mkdir(dir, { recursive: true });
   const content = `${joinPromptSections(
     CODEX_IDENTITY_PROMPT,
+    SCHEDULED_TASK_PROPOSAL_NUDGE,
     ASK_NATIVE_TOOL_PROMPT,
     PLAN_MODE_PROMPT,
     browserToolsUsagePrompt(),

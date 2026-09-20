@@ -1512,7 +1512,7 @@ function SessionRow({
   const isTask = session.kind === "automation";
   const ownTask = isTask ? automations.find((a) => a.taskSessionId === session.id) : undefined;
   const parentTaskCount = !isTask
-    ? automations.filter((a) => a.parentSessionId === session.id).length
+    ? automations.filter((a) => a.parentSessionId === session.id && !a.deletedAt).length
     : undefined;
   const isPinned = session.pinnedAt != null;
   // Whether the pointer is over this row. We swap the right-aligned payload

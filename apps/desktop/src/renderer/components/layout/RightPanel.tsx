@@ -48,7 +48,7 @@ const EMPTY_SESSION_TABS: SessionRightPanelTabId[] = [];
 
 const SESSION_TAB_META: ReadonlyArray<{
   id: SessionRightPanelTabId;
-  labelKey: "layout.tabTurns" | "layout.tabSideChat" | "layout.tabBrowser";
+  labelKey: "layout.tabTurns" | "layout.tabSideChat" | "layout.tabBrowser" | "layout.automation";
   /** Tooltip while the tab is showing (= the close affordance). */
   closeTitleKey: "layout.rightPanelCloseTab" | "layout.closeSidebarBrowser";
   Icon: typeof IconListDetails;
@@ -58,6 +58,7 @@ const SESSION_TAB_META: ReadonlyArray<{
   { id: "turns", labelKey: "layout.tabTurns", closeTitleKey: "layout.rightPanelCloseTab", Icon: IconListDetails, commandId: null },
   { id: "sidechat", labelKey: "layout.tabSideChat", closeTitleKey: "layout.rightPanelCloseTab", Icon: IconMessages, commandId: "sidechat.open" },
   { id: "browser", labelKey: "layout.tabBrowser", closeTitleKey: "layout.closeSidebarBrowser", Icon: IconWorld, commandId: "layout.toggle-browser" },
+  { id: "sched", labelKey: "layout.automation", closeTitleKey: "layout.rightPanelCloseTab", Icon: IconClock, commandId: null },
 ];
 
 export function RightPanel() {
@@ -87,6 +88,12 @@ export function RightPanel() {
   // Effective tab: an active session-scoped tab shadows the global one.
   const tab = sessionTabs?.active ?? globalTab;
   const openSessionTabs = sessionTabs?.open ?? EMPTY_SESSION_TABS;
+  const effectiveOpenTabs = useMemo(() => {
+    if (tab === "sched" && !openSessionTabs.includes("sched")) {
+      return [...openSessionTabs, "sched" as const];
+    }
+    return openSessionTabs;
+  }, [openSessionTabs, tab]);
 
   // 保证当前会话的编排运行记录已拉取
   useEffect(() => {
@@ -145,15 +152,6 @@ export function RightPanel() {
         >
           <IconGitBranch size={16} className="shrink-0" />
         </RailButton>
-        {/* 定时任务(v2):任务切换器 + 正在运行的实时输出 + 回合历史。
-            全局 tab —— 跨会话汇总所有任务,点按 toggle 显隐。 */}
-        <RailButton
-          active={tab === "sched"}
-          onClick={() => setTab("sched")}
-          title={t("layout.automation")}
-        >
-          <IconClock size={16} className="shrink-0" />
-        </RailButton>
         {/* Orchestration DAG — runs scoped to the active (coordinator)
             session: task graph, node controls, gates, worker reports.
             仅有编排的会话才展示该 tab */}
@@ -166,21 +164,28 @@ export function RightPanel() {
             <IconGitFork size={16} className="shrink-0" />
           </RailButton>
         )}
-        {/* Session-scoped tabs (turn flow / sub-sessions / browser) — rendered
-            only for this session's opened set. Same toggle semantics: click a
+        {/* Session-scoped tabs (turn flow / sub-sessions / browser / automation) — rendered
+            only for opened set. Same toggle semantics: click a
             non-showing tab to show it; click the showing one to CLOSE it
             (panel falls back to the global tab). Hovering the showing tab
             swaps its icon for an × so the close affordance is discoverable;
             the "+" menu's × closes the ones that aren't showing. The browser
             icon carries the open-tab-count badge. */}
-        {SESSION_TAB_META.filter((m) => openSessionTabs.includes(m.id)).map(({ id, labelKey, closeTitleKey, Icon, commandId }) => {
+        {SESSION_TAB_META.filter((m) => effectiveOpenTabs.includes(m.id)).map(({ id, labelKey, closeTitleKey, Icon, commandId }) => {
           const showing = tab === id;
           return (
             <RailButton
               key={id}
               active={showing}
               badgeCount={id === "browser" ? browserTabCount : undefined}
-              onClick={() => (showing ? closeSessionTab(id) : openSessionTab(id))}
+              onClick={() => {
+                if (showing) {
+                  closeSessionTab(id);
+                  if (globalTab === id) setTab("files");
+                } else {
+                  openSessionTab(id);
+                }
+              }}
               title={
                 showing
                   ? t(closeTitleKey)
@@ -226,7 +231,7 @@ export function RightPanel() {
                   )}
                 >
                   {SESSION_TAB_META.map(({ id, labelKey, Icon, commandId }) => {
-                    const isOpen = openSessionTabs.includes(id);
+                    const isOpen = effectiveOpenTabs.includes(id);
                     const active = tab === id;
                     return (
                       <Menu.Item
@@ -252,6 +257,7 @@ export function RightPanel() {
                             onClick={(e) => {
                               e.stopPropagation();
                               closeSessionTab(id);
+                              if (globalTab === id) setTab("files");
                             }}
                             className={cn(
                               "-mr-1 flex h-4 w-4 shrink-0 items-center justify-center rounded text-content-subtle opacity-50 transition-opacity",

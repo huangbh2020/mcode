@@ -1005,7 +1005,7 @@ function StreamCard({
   const isTask = session.kind === "automation";
   const ownTask = isTask ? automations.find((a) => a.taskSessionId === session.id) : undefined;
   const parentTaskCount = !isTask
-    ? automations.filter((a) => a.parentSessionId === session.id).length
+    ? automations.filter((a) => a.parentSessionId === session.id && !a.deletedAt).length
     : 0;
 
   const statusLabel = (() => {

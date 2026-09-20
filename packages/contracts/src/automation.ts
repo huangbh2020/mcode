@@ -129,6 +129,9 @@ export interface Automation {
   runLog: AutomationRunEntry[];
   /** Session of the most recent run (the task page's "view" shortcut). */
   lastSessionId: string | null;
+  /** Soft-delete marker (ms epoch). Null when active; populated when moved
+   *  to the trash. Soft-deleted tasks auto-disable and hide from active lists. */
+  deletedAt: number | null;
   createdAt: number;
   updatedAt: number;
 }

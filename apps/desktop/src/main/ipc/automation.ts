@@ -10,6 +10,8 @@ import {
   AutomationSaveSchema,
   AutomationSetEnabledSchema,
   AutomationParseIntentSchema,
+  AutomationDeleteSchema,
+  AutomationRestoreSchema,
 } from "@contracts/ipc";
 import { computeNextRun } from "@contracts/automation";
 import type { AutomationSchedule } from "@contracts/automation";
@@ -21,6 +23,7 @@ import { fireTask, registerTaskSession } from "@main/automation/AutomationSchedu
 import { parseScheduleIntent } from "@main/automation/intentParser.js";
 import { sendToRenderer } from "@main/window.js";
 import { broadcastSessionChanged, broadcastSessionDeleted } from "@main/lib/sessionSync.js";
+import { generateSessionTitle } from "@main/ipc/titleGen.js";
 import { log } from "@main/lib/logger.js";
 import type { IpcMain } from "electron";
 
@@ -79,11 +82,24 @@ export function registerAutomationHandlers(ipcMain: IpcMain): void {
     // from the automation row; without this every run would use the default
     // credential discovery and fail "Not logged in" for custom-endpoint
     // setups.
+    // 按照普通会话的命名规则推导初始标题：
+    // 用户未显式提供自定义标题时，优先根据 prompt 前 40 字符截断命名；若无 prompt 则使用 "New session"
+    const trimmedCustomTitle = input.title?.trim();
+    const promptFallback = input.prompt?.trim()
+      ? input.prompt.trim().slice(0, 40) + (input.prompt.trim().length > 40 ? "…" : "")
+      : "";
+    const isAutoDerived =
+      !trimmedCustomTitle ||
+      trimmedCustomTitle === promptFallback ||
+      trimmedCustomTitle === "未命名任务" ||
+      trimmedCustomTitle === "Untitled task";
+    const initialTitle = (!isAutoDerived && trimmedCustomTitle) ? trimmedCustomTitle : (promptFallback || "New session");
+
     const id = uid("auto_");
     const { session } = createOrReuseSession(
       {
         projectId: input.projectId,
-        title: input.title,
+        title: initialTitle,
         kind: "automation",
         automationId: id,
         parentSessionId: input.parentSessionId,
@@ -98,7 +114,7 @@ export function registerAutomationHandlers(ipcMain: IpcMain): void {
     AutomationRepo.create({
       id,
       projectId: input.projectId,
-      title: input.title,
+      title: initialTitle,
       taskSessionId: session.id,
       parentSessionId: input.parentSessionId ?? null,
       prompt: input.prompt,
@@ -117,6 +133,7 @@ export function registerAutomationHandlers(ipcMain: IpcMain): void {
       lastStatus: null,
       runLog: [],
       lastSessionId: session.id,
+      deletedAt: null,
       createdAt: now,
       updatedAt: now,
     });
@@ -124,26 +141,55 @@ export function registerAutomationHandlers(ipcMain: IpcMain): void {
     const created = AutomationRepo.get(id)!;
     notify(null);
     log.info(`automation created: ${id} (${created.title}) -> session ${session.id}`);
+
+    // 若属于自动派生标题，且有有效 prompt，按照普通会话机制在后台异步生成智能标题
+    if (isAutoDerived && input.prompt?.trim()) {
+      void generateSessionTitle(session, input.prompt).catch((err) =>
+        log.warn(`title generation failed for automation ${id}: ${(err as Error).message}`),
+      );
+    }
+
     return { automation: created };
   });
 
   ipcMain.handle(IPC.AUTOMATION_DELETE, (_evt, raw) => {
-    const { id } = raw as { id: string };
-    const task = AutomationRepo.get(id);
-    // v2: the task session IS the task's transcript — delete it too. Archive
-    // + broadcast FIRST so desktop/mobile active lists drop the row cleanly,
-    // then hard-delete (messages cascade) and finally the registry row.
-    if (task?.taskSessionId) {
-      runtimeManager.dispose(task.taskSessionId);
-      SessionRepo.setArchived(task.taskSessionId, true);
-      const row = SessionRepo.get(task.taskSessionId);
-      if (row) broadcastSessionChanged(row);
-      SessionRepo.delete(task.taskSessionId);
-      broadcastSessionDeleted(task.taskSessionId);
+    const input = AutomationDeleteSchema.parse(raw);
+    const task = AutomationRepo.get(input.id);
+    if (!task) return { permanent: false };
+
+    // v2: 如果该任务已经打上已删除标识，或者显式指定了 permanent: true，执行彻底硬删除
+    const isPermanent = !!input.permanent || task.deletedAt != null;
+    if (isPermanent) {
+      if (task.taskSessionId) {
+        runtimeManager.dispose(task.taskSessionId);
+        SessionRepo.setArchived(task.taskSessionId, true);
+        const row = SessionRepo.get(task.taskSessionId);
+        if (row) broadcastSessionChanged(row);
+        SessionRepo.delete(task.taskSessionId);
+        broadcastSessionDeleted(task.taskSessionId);
+      }
+      AutomationRepo.delete(input.id);
+      notify(null);
+      log.info(`automation hard-deleted: ${input.id} (task session and history removed)`);
+      return { permanent: true };
     }
-    AutomationRepo.delete(id);
-    notify(null);
-    log.info(`automation deleted: ${id} (task session removed)`);
+
+    // 否则执行软删除：打标记，停用任务，保留实例会话与记录
+    const updated = AutomationRepo.softDelete(input.id);
+    notify(input.id);
+    log.info(`automation soft-deleted: ${input.id} (${task.title})`);
+    return { permanent: false, automation: updated ?? undefined };
+  });
+
+  ipcMain.handle(IPC.AUTOMATION_RESTORE, (_evt, raw) => {
+    const input = AutomationRestoreSchema.parse(raw);
+    const current = AutomationRepo.get(input.id);
+    if (!current) throw new Error(`automation not found: ${input.id}`);
+    const next = nextRunAtFor(true, current.schedule);
+    const updated = AutomationRepo.restore(input.id, next);
+    notify(input.id);
+    log.info(`automation restored: ${input.id} (${current.title})`);
+    return { automation: updated! };
   });
 
   ipcMain.handle(IPC.AUTOMATION_SET_ENABLED, (_evt, raw) => {

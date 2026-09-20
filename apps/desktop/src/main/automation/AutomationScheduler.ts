@@ -35,6 +35,7 @@ import { runtimeManager } from "@main/claude/RuntimeManager.js";
 import { resolveSessionCwd } from "@main/lib/sessionCwd.js";
 import { sendToRenderer } from "@main/window.js";
 import { log } from "@main/lib/logger.js";
+import { uid } from "@main/utils.js";
 
 /** Tick cadence. Sub-minute schedules fire within 30s of their mark —
  *  precise enough for agent runs that take minutes themselves. */
@@ -117,7 +118,7 @@ function reconcileOnBoot(): void {
       }
     }
     backfillRunLog(t);
-    if (!t.enabled) continue;
+    if (t.deletedAt != null || !t.enabled) continue;
     const next = computeNextRun(t.schedule, new Date());
     if (next === null) {
       // A once-task whose moment passed while we were closed — auto-disable
@@ -233,12 +234,36 @@ export async function fireTask(
     const cwd = await resolveSessionCwd(sess, project);
     const fresh = SessionRepo.get(sess.id) ?? sess;
     runtimeManager.bindSession(fresh);
+
+    // 持久化定时任务输出给模型的内容作为 User 消息，对齐普通会话
+    const runPrompt = composeRunPrompt(t, now);
+    const userMsgId = uid("msg_");
+    const userBlocks = [{ kind: "text", text: runPrompt }];
+    try {
+      MessageRepo.upsertMany([
+        {
+          id: userMsgId,
+          sessionId: sess.id,
+          role: "user",
+          content: userBlocks,
+          createdAt: now,
+        },
+      ]);
+    } catch (err) {
+      log.warn(`automation: failed to persist user message for ${t.id}: ${(err as Error).message}`);
+    }
+
     await runtimeManager.sendTurn(fresh, {
-      prompt: composeRunPrompt(t, now),
+      prompt: runPrompt,
       cwd,
       // "/"-menu skills ride the SDK skills allowlist — stream-json input
       // never re-parses the "/name" literals left in the prompt text.
       ...(t.skillNames.length > 0 ? { skills: t.skillNames } : {}),
+      userMessage: {
+        id: userMsgId,
+        createdAt: now,
+        blocks: userBlocks,
+      },
     });
     log.info(`automation fired: task ${t.id} -> turn in ${sess.id}`);
     return sess;

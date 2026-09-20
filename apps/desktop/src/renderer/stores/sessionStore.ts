@@ -125,7 +125,7 @@ import type { ThemeStyle } from "@contracts/theme";
  *  switches. The browser panel joins this layer too — only its VISIBILITY is
  *  per-session; the tab list / WebContentsViews behind it stay global. NOT
  *  persisted — resets on restart. */
-export type SessionRightPanelTabId = "turns" | "sidechat" | "browser";
+export type SessionRightPanelTabId = "turns" | "sidechat" | "browser" | "sched";
 
 /** One browser tab, shared across the sidebar and overlay containers. `id` is
  *  renderer-local; `browserId` is the main-process view id. All
@@ -2073,7 +2073,8 @@ export interface SessionState {
   setSchedFilterParent: (parentSessionId: string | null) => void;
   loadAutomations: () => Promise<void>;
   saveAutomation: (input: AutomationSaveInput) => Promise<Automation | null>;
-  deleteAutomation: (taskId: string) => Promise<void>;
+  deleteAutomation: (taskId: string, permanent?: boolean) => Promise<void>;
+  restoreAutomation: (taskId: string) => Promise<void>;
   setAutomationEnabled: (taskId: string, enabled: boolean) => Promise<void>;
   runAutomationNow: (taskId: string) => Promise<Session | null>;
   ingestAutomationEvent: (automationId: string | null) => void;
@@ -2083,6 +2084,10 @@ export interface SessionState {
   /** 定时配置弹层开合(/schedule 内置命令可远程拉起;ScheduleChip 驱动)。 */
   taskScheduleEditorOpenBySession: Record<string, boolean>;
   setTaskScheduleEditorOpen: (sessionId: string, open: boolean) => void;
+  /** 定时任务输入提示悬浮气泡状态与控制 */
+  schedHintVisibleBySession: Record<string, boolean>;
+  showSchedPromptHint: (sessionId: string) => void;
+  hideSchedPromptHint: (sessionId: string) => void;
   createScheduledTask: (input: AutomationSaveInput) => Promise<Automation | null>;
   getSessionById: (sessionId: string) => Session | undefined;
   /** 自动编排开关 per session(开启后发送的想法在本会话内以规划者模式执行)。 */
@@ -2402,6 +2407,9 @@ export const EMPTY_BOOKMARKS: SessionBookmark[] = [];
 /** Stable cleared-plan reference — used both as the initial state and as
  *  the "not in plan mode" placeholder returned by selectors. */
 export const EMPTY_PLAN: PlanDraft = { plan: "", phase: "cleared" };
+
+const schedHintTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const SCHED_HINT_DECAY_MS = 3500;
 
 /* ─── upstream-issue hint decay ──────────────────────────────────────
  * The bridge's retry statuses are transient by nature, but the happy-path
@@ -3418,6 +3426,35 @@ function raiseModelGuard(): void {
   }
 }
 
+/** Resolve the turn's active/producing model:
+ *  1. Uses runningTurnModelBySession[sid] if set and non-default.
+ *  2. Looks up the session row (via findSession) for its configured model.
+ *  3. If it's an automation task session, checks the automation task's configured model.
+ *  4. If bound to a customModelId, checks the first model of that custom endpoint.
+ *  5. Falls back to any non-empty string or undefined. */
+export function resolveTurnModel(s: SessionState, sid: string): string | undefined {
+  const running = s.runningTurnModelBySession[sid];
+  if (running && running !== "default") return running;
+  const sess = findSession(
+    s.sessionsByProject,
+    s.archivedSessionsByProject,
+    s.pinnedSessions,
+    s.streamSessions,
+    sid,
+    s.orchWorkersById,
+  );
+  if (sess?.model && sess.model !== "default") return sess.model;
+  const auto = s.automations.find((a) => a.taskSessionId === sid);
+  if (auto?.model && auto.model !== "default") return auto.model;
+  const customId = sess?.customModelId ?? auto?.customModelId;
+  if (customId) {
+    const cfg = s.customModels.find((c) => c.id === customId);
+    const m = cfg?.models.find((item) => item.id.trim())?.id;
+    if (m) return m;
+  }
+  return running ?? sess?.model ?? auto?.model ?? undefined;
+}
+
 /** Snapshot of the composer's per-provider remembered config — the value
  *  shape of `lastModelByProvider`. Every writer (setModel / setCustomModel /
  *  setEffort / setPermissionMode / setProvider's outgoing stash) records the
@@ -4425,7 +4462,7 @@ function flushDeltas(): void {
               ? {
                   turnMeta: {
                     startedAt,
-                    model: useSessionStore.getState().runningTurnModelBySession[sid],
+                    model: resolveTurnModel(useSessionStore.getState(), sid),
                   },
                 }
               : {}),
@@ -4763,6 +4800,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   schedFilterParent: null,
   taskScheduleBySession: {},
   taskScheduleEditorOpenBySession: {},
+  schedHintVisibleBySession: {},
   orchAutoBySession: {},
   orchNodeSelection: null,
   _orchSubscribed: false,
@@ -7424,12 +7462,21 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           id: e.messageId,
           sessionId: sid,
           role: "user",
-          // Trusted payload from our own renderer/mobile peer, same as the
-          // persisted message content trusted by fromRecords on reload.
           blocks: e.blocks as Block[],
           createdAt: e.createdAt,
         };
-        return { messagesBySession: { ...s.messagesBySession, [sid]: [...base, msg] } };
+        const resolvedModel = resolveTurnModel(s, sid);
+        const nextRunningModel = resolvedModel && !s.runningTurnModelBySession[sid]
+          ? { ...s.runningTurnModelBySession, [sid]: resolvedModel }
+          : s.runningTurnModelBySession;
+        const nextRunningStartedAt = !s.runningTurnStartedAt[sid]
+          ? { ...s.runningTurnStartedAt, [sid]: e.createdAt }
+          : s.runningTurnStartedAt;
+        return {
+          runningTurnModelBySession: nextRunningModel,
+          runningTurnStartedAt: nextRunningStartedAt,
+          messagesBySession: { ...s.messagesBySession, [sid]: [...base, msg] },
+        };
       });
       return;
     }
@@ -7748,7 +7795,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           e.phase,
           hasApproval,
           s.runningTurnStartedAt[sid] ?? Date.now(),
-          s.runningTurnModelBySession[sid],
+          resolveTurnModel(s, sid),
         );
         return {
           planBySession: {
@@ -7928,7 +7975,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           "ready",
           true,
           s.runningTurnStartedAt[sid] ?? Date.now(),
-          s.runningTurnModelBySession[sid],
+          resolveTurnModel(s, sid),
         );
         return {
           pendingPlanApprovalBySession: {
@@ -8005,7 +8052,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         // seamlessly - same pattern as tool.use / text.delta. Falls back to
         // now if the anchor is missing (resumed/legacy turn).
         const startedAt = s.runningTurnStartedAt[sid] ?? Date.now();
-        const next = appendCompactSummaryBlock(list, block, startedAt, s.runningTurnModelBySession[sid]);
+        const next = appendCompactSummaryBlock(list, block, startedAt, resolveTurnModel(s, sid));
         return next === list
           ? s
           : { messagesBySession: { ...s.messagesBySession, [sid]: next } };
@@ -8161,7 +8208,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
               blocks: [],
               createdAt: Date.now(),
               ...(isNewTurn
-                ? { turnMeta: { startedAt, model: s.runningTurnModelBySession[sid] } }
+                ? { turnMeta: { startedAt, model: resolveTurnModel(s, sid) } }
                 : {}),
             };
             next = [...next, lastAssistant];
@@ -8519,7 +8566,12 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   openSchedPanel: (filterParent) => {
     if (!get().automationsLoaded) void get().loadAutomations();
     set({ schedFilterParent: filterParent ?? null, rightOpen: true });
-    get().setRightPanelTab("sched");
+    const sid = get().activeSessionId;
+    if (sid) {
+      get().openSessionRightTab("sched", sid);
+    } else {
+      get().setRightPanelTab("sched");
+    }
   },
 
   setSchedSelected: (automationId) => set({ schedSelectedId: automationId }),
@@ -8547,23 +8599,41 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     }
   },
 
-  deleteAutomation: async (taskId) => {
+  deleteAutomation: async (taskId, permanent) => {
     const task = get().automations.find((a) => a.id === taskId);
     try {
-      await api.automation.remove({ id: taskId });
-      set((s) => {
-        // 任务会话已被 main 删除(archive+broadcast+hard delete);本地各缓存
-        // 用既有的删除手术清理,再摘掉任务行。
-        let next: Partial<SessionState> = {};
-        if (task?.taskSessionId) next = applySessionDeletedState(s, task.taskSessionId);
-        return {
-          ...next,
-          automations: s.automations.filter((a) => a.id !== taskId),
-          schedSelectedId: s.schedSelectedId === taskId ? null : s.schedSelectedId,
-        };
-      });
+      const res = await api.automation.remove({ id: taskId, permanent });
+      if (res?.permanent) {
+        set((s) => {
+          // 任务会话已被 main 删除(archive+broadcast+hard delete);本地各缓存
+          // 用既有的删除手术清理,再摘掉任务行。
+          let next: Partial<SessionState> = {};
+          if (task?.taskSessionId) next = applySessionDeletedState(s, task.taskSessionId);
+          return {
+            ...next,
+            automations: s.automations.filter((a) => a.id !== taskId),
+            schedSelectedId: s.schedSelectedId === taskId ? null : s.schedSelectedId,
+          };
+        });
+      } else if (res?.automation) {
+        set((s) => ({
+          automations: s.automations.map((a) => (a.id === taskId ? res.automation! : a)),
+        }));
+      }
     } catch (err) {
       console.error("automation.delete failed:", err);
+      pushToastLite("error", (err as Error).message);
+    }
+  },
+
+  restoreAutomation: async (taskId) => {
+    try {
+      const { automation } = await api.automation.restore({ id: taskId });
+      set((s) => ({
+        automations: s.automations.map((a) => (a.id === taskId ? automation : a)),
+      }));
+    } catch (err) {
+      console.error("automation.restore failed:", err);
       pushToastLite("error", (err as Error).message);
     }
   },
@@ -8615,6 +8685,38 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     set((s) => ({
       taskScheduleEditorOpenBySession: { ...s.taskScheduleEditorOpenBySession, [sessionId]: open },
     }));
+  },
+
+  showSchedPromptHint: (sessionId) => {
+    const existing = schedHintTimers.get(sessionId);
+    if (existing) clearTimeout(existing);
+    set((s) => ({
+      schedHintVisibleBySession: { ...s.schedHintVisibleBySession, [sessionId]: true },
+    }));
+    const timer = setTimeout(() => {
+      schedHintTimers.delete(sessionId);
+      set((s) => {
+        if (!s.schedHintVisibleBySession[sessionId]) return s;
+        return {
+          schedHintVisibleBySession: { ...s.schedHintVisibleBySession, [sessionId]: false },
+        };
+      });
+    }, SCHED_HINT_DECAY_MS);
+    schedHintTimers.set(sessionId, timer);
+  },
+
+  hideSchedPromptHint: (sessionId) => {
+    const existing = schedHintTimers.get(sessionId);
+    if (existing) {
+      clearTimeout(existing);
+      schedHintTimers.delete(sessionId);
+    }
+    set((s) => {
+      if (!s.schedHintVisibleBySession[sessionId]) return s;
+      return {
+        schedHintVisibleBySession: { ...s.schedHintVisibleBySession, [sessionId]: false },
+      };
+    });
   },
 
   createScheduledTask: async (input) => {
@@ -9948,7 +10050,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           "ready",
           false,
           s.runningTurnStartedAt[sessionId] ?? Date.now(),
-          s.runningTurnModelBySession[sessionId],
+          resolveTurnModel(s, sessionId),
         );
         // Clear the staged editor draft now that the decision is submitted -
         // the draft only mattered while the approval was pending.
@@ -9982,7 +10084,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     // Capture the turn anchor BEFORE interrupt() wipes it, so the badge-flip
     // below lands on the same live plan block the sheet was showing.
     const anchor = s0.runningTurnStartedAt[sessionId] ?? Date.now();
-    const modelAnchor = s0.runningTurnModelBySession[sessionId];
+    const modelAnchor = resolveTurnModel(s0, sessionId);
 
     // End the blocked turn WITHOUT answering the ExitPlanMode dialog: the
     // abort means no request.resolved will ever arrive, so clear the local
@@ -10411,6 +10513,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   closeSessionRightTab: (tab, sessionId) => {
     const sid = sessionId ?? get().activeSessionId;
     if (!sid) return;
+    if (get().rightPanelTab === (tab as unknown as string)) {
+      get().setRightPanelTab("files");
+    }
     set((s) => {
       const cur = s.sessionRightTabsBySession[sid];
       if (!cur || !cur.open.includes(tab)) return {};

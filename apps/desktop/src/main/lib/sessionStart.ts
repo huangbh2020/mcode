@@ -188,7 +188,7 @@ export function createOrReuseSession(
       claudeSessionId: null,
       kind: "automation",
       parentSessionId: null,
-      title: input.title ?? "Automation run",
+      title: input.title ?? "New session",
       status: "idle",
       model: input.model ?? "default",
       effort: input.effort,

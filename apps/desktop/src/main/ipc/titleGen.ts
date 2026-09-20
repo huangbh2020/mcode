@@ -28,7 +28,7 @@ import {
   UI_TITLE_GEN_MODEL_SETTING_KEY,
 } from "@contracts/ipc";
 import type { Session } from "@contracts/session";
-import { SessionRepo, SettingRepo } from "@main/store/repositories.js";
+import { AutomationRepo, SessionRepo, SettingRepo } from "@main/store/repositories.js";
 import { sendToRenderer } from "@main/window.js";
 import { broadcastSessionChanged } from "@main/lib/sessionSync.js";
 import { resolveModelForGitOp } from "@main/ipc/git.js";
@@ -213,6 +213,17 @@ export async function generateSessionTitle(
     });
     const updated = SessionRepo.get(session.id);
     if (updated && updated.kind !== "side") broadcastSessionChanged(updated);
+
+    // 若该会话属于定时任务，联动同步定时任务的标题并通知前端刷新
+    if (session.automationId) {
+      AutomationRepo.update(session.automationId, { title });
+      sendToRenderer(IPC.AUTOMATION_EVENT, {
+        channel: IPC.AUTOMATION_EVENT,
+        automationId: session.automationId,
+      });
+      log.info(`titleGen: synced title for automation ${session.automationId}: "${title}"`);
+    }
+
     log.info(`titleGen: generated title for ${session.id}: "${title}"`);
     return title;
   } catch (err) {

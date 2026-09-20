@@ -69,18 +69,38 @@ function OrchComposerChipsInner({ sessionId, t }: { sessionId: string; t: Return
  * (当前会话留回执),不进普通回合。 */
 function ScheduleChip({ sessionId }: { sessionId: string }) {
   const { t } = useI18n();
+  // 若当前打开的是定时任务执行/关联的子会话，不显示定时任务按钮
+  const isAutomationSession = useSessionStore((s) => {
+    if (s.automations.some((a) => a.taskSessionId === sessionId)) return true;
+    const sess = s.getSessionById(sessionId);
+    return sess?.kind === "automation" || sess?.automationId != null;
+  });
+  if (isAutomationSession) return null;
+
   // 开合状态在 store(/schedule 内置命令、回执卡片都可远程拉起弹层)。
   const open = useSessionStore((s) => !!s.taskScheduleEditorOpenBySession[sessionId]);
   const setOpen = (v: boolean) => setTaskScheduleEditorOpen(sessionId, v);
   const setTaskScheduleEditorOpen = useSessionStore((s) => s.setTaskScheduleEditorOpen);
+  const showSchedPromptHint = useSessionStore((s) => s.showSchedPromptHint);
+  const hideSchedPromptHint = useSessionStore((s) => s.hideSchedPromptHint);
   const schedule = useSessionStore((s) => s.taskScheduleBySession[sessionId] ?? null);
   const setTaskSchedule = useSessionStore((s) => s.setTaskSchedule);
+
+  const handleToggle = () => {
+    const nextOpen = !open;
+    setOpen(nextOpen);
+    if (nextOpen) {
+      showSchedPromptHint(sessionId);
+    } else {
+      hideSchedPromptHint(sessionId);
+    }
+  };
 
   return (
     <div className="relative">
       <button
         type="button"
-        onClick={() => setOpen(!open)}
+        onClick={handleToggle}
         title={schedule ? describeSchedule(schedule) : t("automation.sectionScheduleDesc")}
         className={cn(
           "flex h-6 items-center gap-1.5 rounded-md border px-1.5 text-[11px] transition-colors",

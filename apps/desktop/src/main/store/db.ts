@@ -243,6 +243,8 @@ function migrate(database: Database.Database): void {
   // fire, appended by the scheduler and updated in place as the run settles.
   // Scheduler-owned — the automation.save path never writes it.
   addColumnIfMissing(database, "automations", "run_log", "TEXT NOT NULL DEFAULT '[]'");
+  // Soft delete marker for scheduled tasks (ms epoch timestamp, NULL when active).
+  addColumnIfMissing(database, "automations", "deleted_at", "INTEGER");
   addColumnIfMissing(database, "projects", "archived", "INTEGER NOT NULL DEFAULT 0");
   // Optional user-assigned group name for the left-bar "grouped" view. NULL
   // means the project is ungrouped; the renderer treats "" / undefined as null.

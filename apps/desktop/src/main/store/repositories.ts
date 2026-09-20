@@ -1313,6 +1313,7 @@ interface AutomationRow {
   last_status: string | null;
   last_session_id: string | null;
   run_log: string | null;
+  deleted_at: number | null;
   created_at: number;
   updated_at: number;
 }
@@ -1340,6 +1341,7 @@ function rowToAutomation(r: AutomationRow): Automation {
     lastStatus: (r.last_status ?? null) as Automation["lastStatus"],
     runLog: (r.run_log ? safeJson(r.run_log) : null) as Automation["runLog"],
     lastSessionId: r.last_session_id ?? null,
+    deletedAt: r.deleted_at ?? null,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
   };
@@ -1365,8 +1367,8 @@ export const AutomationRepo = {
   create(a: Automation): void {
     run(
       `INSERT INTO automations
-       (id, project_id, title, task_session_id, parent_session_id, prompt, skill_names, file_paths, provider_id, model, custom_model_id, effort, permission_mode, schedule, enabled, keep_runs, last_run_at, next_run_at, last_status, run_log, last_session_id, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (id, project_id, title, task_session_id, parent_session_id, prompt, skill_names, file_paths, provider_id, model, custom_model_id, effort, permission_mode, schedule, enabled, keep_runs, last_run_at, next_run_at, last_status, run_log, last_session_id, deleted_at, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       v(a.id),
       v(a.projectId),
       v(a.title),
@@ -1388,6 +1390,7 @@ export const AutomationRepo = {
       v(a.lastStatus),
       v(JSON.stringify(a.runLog ?? [])),
       v(a.lastSessionId),
+      v(a.deletedAt ?? null),
       v(a.createdAt),
       v(a.updatedAt),
     );
@@ -1423,10 +1426,27 @@ export const AutomationRepo = {
     // whitelist branch only fires from the scheduler's ledger updates.
     if (patch.runLog !== undefined) set("run_log", patch.runLog, true);
     if (patch.lastSessionId !== undefined) set("last_session_id", patch.lastSessionId);
+    if (patch.deletedAt !== undefined) set("deleted_at", patch.deletedAt);
     params.push(v(id));
     run(`UPDATE automations SET ${cols.map((c) => `${c} = ?`).join(", ")} WHERE id = ?`, ...params);
     persist();
     return AutomationRepo.get(id);
+  },
+
+  softDelete(id: string): Automation | null {
+    return this.update(id, {
+      deletedAt: Date.now(),
+      enabled: false,
+      nextRunAt: null,
+    });
+  },
+
+  restore(id: string, nextRunAt: number | null): Automation | null {
+    return this.update(id, {
+      deletedAt: null,
+      enabled: true,
+      nextRunAt,
+    });
   },
 
   /** Hard-delete the task row. Its RUN SESSIONS are NOT deleted here — the
@@ -1442,7 +1462,7 @@ export const AutomationRepo = {
   listDue(now: number): Automation[] {
     const rows = getDb()
       .prepare(
-        "SELECT * FROM automations WHERE enabled = 1 AND next_run_at IS NOT NULL AND next_run_at <= ? ORDER BY next_run_at ASC",
+        "SELECT * FROM automations WHERE enabled = 1 AND deleted_at IS NULL AND next_run_at IS NOT NULL AND next_run_at <= ? ORDER BY next_run_at ASC",
       )
       .all(v(now)) as unknown as AutomationRow[];
     return rows.map(rowToAutomation);

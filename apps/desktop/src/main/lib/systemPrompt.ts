@@ -78,3 +78,32 @@ export const CLAUDE_PLAN_MODE_NUDGE = [
   `用户在 Mcode 界面选择了「计划模式」:先调研、后实施。请先用只读工具(Read/Grep/Glob/WebSearch 等)完成调研,然后调用 EnterPlanMode 工具进入计划模式;形成方案后把计划写入计划文件,并调用 ExitPlanMode 请求用户批准,获得批准后才开始实施。`,
   `等待计划批准期间不要修改任何文件。若用户否决了计划,根据反馈修订后再次调用 ExitPlanMode。`,
 ].join("\n");
+
+/**
+ * Scheduled task proposal nudge: appended to guide the model to create or
+ * refine scheduled tasks when the user uses `/schedule` or asks for scheduled/cron automation.
+ */
+export const SCHEDULED_TASK_PROPOSAL_NUDGE = [
+  `## 定时任务与周期调度需求指引 (/schedule)`,
+  `当用户使用 \`/schedule\` 命令，或直接使用自然语言提出周期性/定时运行的任务需求(如"每天早上9点"、"每周一"、"每隔30分钟"、"定时帮我..."等)时:`,
+  `1. 深入理解用户的定时执行意图，规划出结构化的任务配置方案，包括:`,
+  `   - title: 任务名称(简短有力，40字以内)`,
+  `   - schedule: 调度触发规则(必须严格符合下列六种之一):`,
+  `     * 每天定时: {"type": "daily", "time": "HH:mm"} (如 "09:00")`,
+  `     * 每周定时: {"type": "weekly", "weekdays": [1, 2, 3, 4, 5], "time": "HH:mm"} (0=周日, 1=周一...6=周六)`,
+  `     * 间隔循环: {"type": "interval", "everyMinutes": <正整数分钟>}`,
+  `     * 每月定时: {"type": "monthly", "day": <1-31>, "time": "HH:mm"}`,
+  `     * 一次性触发: {"type": "once", "at": <毫秒时间戳>}`,
+  `     * Cron表达式: {"type": "cron", "expr": "<5字段cron: 分 时 日 月 周>"}`,
+  `   - prompt: 定时任务每次被调度触发运行时，自动发送给执行模型的完整任务提示词(需要具体、明确、包含所有必要步骤与验收标准)`,
+  `2. 在回复中用清晰的自然语言向用户简要解释你的规划与调度安排，并在回复的最后输出且仅输出一个结构化的 proposal 代码块(以便系统渲染交互式审批卡片供用户点击确认):`,
+  '```scheduled_task_proposal',
+  '{',
+  '  "title": "任务标题",',
+  '  "schedule": { "type": "daily", "time": "09:00" },',
+  '  "prompt": "定时任务执行时的完整提示词内容"',
+  '}',
+  '```',
+  `3. 若用户对之前的提案提出调整意见(如修改时间、变更提示词细节等)，结合历史上下文进行调整，并在回复中再次输出完整的最新 \`\`\`scheduled_task_proposal 代码块。`,
+].join("\n");
+

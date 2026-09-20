@@ -3719,6 +3719,15 @@ export type AutomationSaveInput = z.infer<typeof AutomationSaveSchema>;
 export const AutomationSetEnabledSchema = z.object({ id: z.string(), enabled: z.boolean() });
 export type AutomationSetEnabledInput = z.infer<typeof AutomationSetEnabledSchema>;
 
+export const AutomationDeleteSchema = z.object({
+  id: z.string(),
+  permanent: z.boolean().optional(),
+});
+export type AutomationDeleteInput = z.infer<typeof AutomationDeleteSchema>;
+
+export const AutomationRestoreSchema = z.object({ id: z.string() });
+export type AutomationRestoreInput = z.infer<typeof AutomationRestoreSchema>;
+
 /** Model-judged scheduled-task intent: the composer's send flow consults the
  *  model when a send looks schedule-related; the structured verdict (is this
  *  a task + the parsed trigger rule) feeds the approval dialog. Null =
@@ -4729,8 +4738,10 @@ export interface RpcMap {
   // Automations (scheduled tasks)
   "automation.list": () => Promise<{ automations: Automation[] }>;
   "automation.save": (input: AutomationSaveInput) => Promise<{ automation: Automation }>;
-  /** Hard-delete a task AND all of its run sessions (messages cascade). */
-  "automation.delete": (input: { id: string }) => Promise<void>;
+  /** Soft-delete or hard-delete a task. */
+  "automation.delete": (input: AutomationDeleteInput) => Promise<{ permanent: boolean; automation?: Automation }>;
+  /** Restore a soft-deleted task. */
+  "automation.restore": (input: AutomationRestoreInput) => Promise<{ automation: Automation }>;
   "automation.setEnabled": (input: AutomationSetEnabledInput) => Promise<{ automation: Automation }>;
   /** Fire a task immediately without touching its schedule. Returns the new
    *  run's session, or null when the task is already running (overlap guard). */
@@ -5021,6 +5032,7 @@ export const IPC = {
   AUTOMATION_LIST: "automation:list",
   AUTOMATION_SAVE: "automation:save",
   AUTOMATION_DELETE: "automation:delete",
+  AUTOMATION_RESTORE: "automation:restore",
   AUTOMATION_SET_ENABLED: "automation:setEnabled",
   AUTOMATION_RUN_NOW: "automation:runNow",
   AUTOMATION_PARSE_INTENT: "automation:parseIntent",

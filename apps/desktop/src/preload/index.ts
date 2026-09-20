@@ -586,6 +586,8 @@ const api = {
       ipcRenderer.invoke(IPC.AUTOMATION_SAVE, input)) as RpcMap["automation.save"],
     remove: ((input) =>
       ipcRenderer.invoke(IPC.AUTOMATION_DELETE, input)) as RpcMap["automation.delete"],
+    restore: ((input) =>
+      ipcRenderer.invoke(IPC.AUTOMATION_RESTORE, input)) as RpcMap["automation.restore"],
     setEnabled: ((input) =>
       ipcRenderer.invoke(IPC.AUTOMATION_SET_ENABLED, input)) as RpcMap["automation.setEnabled"],
     runNow: ((input) =>
