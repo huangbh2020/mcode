@@ -41,7 +41,7 @@ export const en = {
   "automation.sectionContentDesc": "Write the task like a chat message, then pick the SDK, model, thinking level and permission right below — same interaction as the chat composer.",
   "automation.promptPlaceholder": "e.g. Check package.json for security updates and list them; upgrade any critical ones and explain the changes in the report.",
   "automation.composerBtn": "Schedule",
-  "automation.toastEnterPromptHint": "Please enter the task description to be executed by the scheduled task in the input box",
+  "automation.composerSchedHint": "Two other ways to create a scheduled task: /schedule or natural language",
   "automation.intentTitle": "This looks like a scheduled task",
   "automation.intentAnalyzing": "Asking the model whether this is a scheduled task…",
   "automation.intentModelSaid": "Model verdict: ",

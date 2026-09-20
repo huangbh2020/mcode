@@ -96,6 +96,11 @@ function ScheduleChip({ sessionId }: { sessionId: string }) {
     }
   };
 
+  const closePopover = () => {
+    setOpen(false);
+    hideSchedPromptHint(sessionId);
+  };
+
   return (
     <div className="relative">
       <button
@@ -134,7 +139,7 @@ function ScheduleChip({ sessionId }: { sessionId: string }) {
         <>
           <div
             className="fixed inset-0 z-[60]"
-            onClick={() => setOpen(false)}
+            onClick={closePopover}
             onMouseDown={(e) => e.preventDefault()}
           />
           <div className="absolute bottom-full left-0 z-[65] mb-1.5 w-[330px] rounded-xl border border-panel-edge bg-surface p-3 shadow-2xl">

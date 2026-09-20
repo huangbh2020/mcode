@@ -2106,7 +2106,7 @@ export interface SessionState {
   /** 定时配置弹层开合(/schedule 内置命令可远程拉起;ScheduleChip 驱动)。 */
   taskScheduleEditorOpenBySession: Record<string, boolean>;
   setTaskScheduleEditorOpen: (sessionId: string, open: boolean) => void;
-  /** 定时任务输入提示悬浮气泡状态与控制 */
+  /** 定时任务创建方式提示(显示在输入框 placeholder,弹层打开期间生效,输入即隐藏) */
   schedHintVisibleBySession: Record<string, boolean>;
   showSchedPromptHint: (sessionId: string) => void;
   hideSchedPromptHint: (sessionId: string) => void;
@@ -2429,9 +2429,6 @@ export const EMPTY_BOOKMARKS: SessionBookmark[] = [];
 /** Stable cleared-plan reference — used both as the initial state and as
  *  the "not in plan mode" placeholder returned by selectors. */
 export const EMPTY_PLAN: PlanDraft = { plan: "", phase: "cleared" };
-
-const schedHintTimers = new Map<string, ReturnType<typeof setTimeout>>();
-const SCHED_HINT_DECAY_MS = 3500;
 
 /* ─── upstream-issue hint decay ──────────────────────────────────────
  * The bridge's retry statuses are transient by nature, but the happy-path
@@ -8829,29 +8826,12 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   },
 
   showSchedPromptHint: (sessionId) => {
-    const existing = schedHintTimers.get(sessionId);
-    if (existing) clearTimeout(existing);
     set((s) => ({
       schedHintVisibleBySession: { ...s.schedHintVisibleBySession, [sessionId]: true },
     }));
-    const timer = setTimeout(() => {
-      schedHintTimers.delete(sessionId);
-      set((s) => {
-        if (!s.schedHintVisibleBySession[sessionId]) return s;
-        return {
-          schedHintVisibleBySession: { ...s.schedHintVisibleBySession, [sessionId]: false },
-        };
-      });
-    }, SCHED_HINT_DECAY_MS);
-    schedHintTimers.set(sessionId, timer);
   },
 
   hideSchedPromptHint: (sessionId) => {
-    const existing = schedHintTimers.get(sessionId);
-    if (existing) {
-      clearTimeout(existing);
-      schedHintTimers.delete(sessionId);
-    }
     set((s) => {
       if (!s.schedHintVisibleBySession[sessionId]) return s;
       return {

@@ -21,7 +21,6 @@ import {
   IconGripVertical,
   IconExternalLink,
   IconSparkles,
-  IconClock,
 } from "@renderer/lib/icons.js";
 import { useCursorAnchor } from "@renderer/hooks/useCursorAnchor.js";
 import { isElectron } from "@renderer/lib/platform.js";
@@ -2458,9 +2457,6 @@ function ChatPaneForSession({
         editorRef.current.insertCommandPill(cmd.name, start, caret);
         setPickerKind(null);
         triggerStartRef.current = null;
-        requestAnimationFrame(() => {
-          useSessionStore.getState().showSchedPromptHint(sessionId);
-        });
         return;
       }
       if (cmd.kind === "sidechat") {
@@ -3950,18 +3946,6 @@ function ChatPaneForSession({
             <WorktreeModeChip sessionId={sessionId} />
             <OrchComposerChips sessionId={sessionId} />
           </div>
-          {schedHintVisible && !hasPendingPrompt && !hideComposer && !isAutomationSession && (
-            <div className="pointer-events-none relative z-30 h-0 w-full">
-              <div
-                role="status"
-                aria-live="polite"
-                className="absolute -top-3 left-3 flex items-center gap-1.5 rounded-full border border-accent/40 bg-surface/95 px-2.5 py-1 text-xs font-medium text-accent shadow-lg backdrop-blur-md animate-in fade-in slide-in-from-bottom-1 duration-200"
-              >
-                <IconClock size={12} className="shrink-0 text-accent" />
-                <span>{t("automation.toastEnterPromptHint")}</span>
-              </div>
-            </div>
-          )}
           <div
             ref={composerCardRef}
             // composer-card: hooks for the 方案 B polish layers in styles.css —
@@ -4245,9 +4229,11 @@ function ChatPaneForSession({
                     ? "Claude is working…"
                     : orchBlocking
                       ? t("orch.canvas.inputLocked")
-                      : sessionBusy
-                        ? t("chat.placeholderQueued")
-                        : t("chat.placeholderIdle")
+                      : schedHintVisible
+                        ? t("automation.composerSchedHint")
+                        : sessionBusy
+                          ? t("chat.placeholderQueued")
+                          : t("chat.placeholderIdle")
                 }
                 onChange={handleChange}
                 onEnter={handleEnter}

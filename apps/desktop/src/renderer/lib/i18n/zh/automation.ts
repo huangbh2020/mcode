@@ -41,7 +41,7 @@ export const zh = {
   "automation.sectionContentDesc": "像平时发消息一样写下任务;输入框下方一次选好这次任务用的 SDK、模型、思考级别与权限 —— 与聊天输入框同款交互。",
   "automation.promptPlaceholder": "例如:检查 package.json 的依赖是否有可用的安全更新,列出清单;若有高危项,直接升级并在报告中说明改动。",
   "automation.composerBtn": "定时任务",
-  "automation.toastEnterPromptHint": "在输入框中输入需要定时任务执行的任务描述",
+  "automation.composerSchedHint": "另外两种创建定时任务的方式，/schedule或者自然语言",
   "automation.intentTitle": "看起来你想创建定时任务",
   "automation.intentAnalyzing": "正在让模型判断是否为定时任务…",
   "automation.intentModelSaid": "模型判断:",
