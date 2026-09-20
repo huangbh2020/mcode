@@ -109,6 +109,15 @@ export function looksLikeScheduledTaskIntent(text: string): boolean {
   return INTENT_RE_ZH.test(text) || INTENT_RE_EN.test(text);
 }
 
+/** In-flight = the scheduler's "重叠保护" states (running | waiting-approval):
+ *  the turn is live, a new fire is blocked. Soft-deleted rows never count —
+ *  they're out of the schedule even if their last run is somehow still
+ *  settling. Consumers: the sidebar entry's running-count badge, SchedPanel. */
+export function isInFlightAutomation(task: Automation): boolean {
+  if (task.deletedAt != null) return false;
+  return task.lastStatus === "running" || task.lastStatus === "waiting-approval";
+}
+
 /** Urgency-first ordering for the task list: in-flight / blocked first, then
  *  failures, then enabled tasks by soonest next fire, disabled last. The
  *  tasks the user must look at float to the top without any grouping UI. */

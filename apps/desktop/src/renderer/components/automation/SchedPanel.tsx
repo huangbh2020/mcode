@@ -17,14 +17,18 @@ import { useI18n } from "@renderer/lib/i18n/index.js";
 import { formatDuration } from "@renderer/components/chat/activityShared.js";
 import { ConfirmDialog } from "@renderer/components/ui/index.js";
 import { ChatPane } from "@renderer/components/chat/ChatPane.js";
+import { AutomationEditor } from "./AutomationEditor.js";
 import {
   IconClock,
   IconArrowLeft,
+  IconFolder,
   IconTrash,
   IconRefresh,
   IconPlayerPlay,
   IconPlayerPause,
+  IconPencil,
   IconMessages,
+  IconPlus,
   IconX,
 } from "@renderer/lib/icons.js";
 import { cn } from "@renderer/lib/cn.js";
@@ -41,8 +45,30 @@ const EMPTY_RUNS: AutomationRunEntry[] = [];
 const EMPTY_MESSAGES: ChatMessage[] = [];
 const RUN_HISTORY_PAGE = 10;
 
-export function SchedPanel() {
+export function SchedPanel({
+  variant = "panel",
+  onNewTaskSession,
+  openSessionInWorkspace,
+}: {
+  /** Host shape: "panel" = the right-panel session tab (session-scoped task
+   *  list + 新建); "page" = the fullscreen 定时任务 viewer opened from the
+   *  sidebar (ALL tasks, same row toolkit, no create). Everything else —
+   *  task rows, editors, confirm dialogs, run instances — is identical
+   *  between the two; there is exactly one implementation. */
+  variant?: "panel" | "page";
+  /** Page variant only: the header「新建」then starts a BLANK chat session
+   *  and hands over to the workspace (the v2 flow composes and schedules the
+   *  task from that session's composer) instead of opening the editor here.
+   *  Omitting it keeps the page without a 新建 button. */
+  onNewTaskSession?: () => void;
+  /** Override for the instance-detail「在会话中打开」action. Default opens the
+   *  task session as a workspace tab and stays put (right-panel tab); the
+   *  fullscreen page passes a drill-out that also closes itself, otherwise
+   *  the opened tab would sit invisibly behind the overlay. */
+  openSessionInWorkspace?: (sessionId: string) => void;
+} = {}) {
   const { t } = useI18n();
+  const page = variant === "page";
   const automations = useSessionStore((s) => s.automations);
   const selectedId = useSessionStore((s) => s.schedSelectedId);
   const filterParent = useSessionStore((s) => s.schedFilterParent);
@@ -55,11 +81,18 @@ export function SchedPanel() {
   const runAutomationNow = useSessionStore((s) => s.runAutomationNow);
   const prefetchSessionMessages = useSessionStore((s) => s.prefetchSessionMessages);
   const openTab = useSessionStore((s) => s.openTab);
+  /* Project attribution: the list (and the global viewer page especially)
+   * mixes tasks from several projects — each row carries a folder+name tag. */
+  const projects = useSessionStore((s) => s.projects);
+  const projectNameById = useMemo(
+    () => new Map(projects.map((p) => [p.id, p.name])),
+    [projects],
+  );
 
   /* Tab for left task list: active vs deleted */
   const [listTab, setListTab] = useState<"active" | "deleted">("active");
 
-  /* Scope handling */
+  /* Scope handling ("page" = the fullscreen global viewer: no session filter) */
   const baseScope = useMemo(() => {
     const st = useSessionStore.getState();
     const active = activeSessionId ? st.getSessionById(activeSessionId) : undefined;
@@ -67,8 +100,8 @@ export function SchedPanel() {
     if (active.kind === "automation") return active.parentSessionId ?? active.id;
     return active.id;
   }, [activeSessionId]);
-  const scope = filterParent ?? baseScope;
-  const viewingOther = filterParent != null && filterParent !== baseScope;
+  const scope = page ? null : (filterParent ?? baseScope);
+  const viewingOther = !page && filterParent != null && filterParent !== baseScope;
   const scopeTitle = useSessionStore((s) =>
     scope ? (s.getSessionById(scope)?.title ?? null) : null,
   );
@@ -131,6 +164,15 @@ export function SchedPanel() {
   const [softDeleteTarget, setSoftDeleteTarget] = useState<Automation | null>(null);
   const [permDeleteTarget, setPermDeleteTarget] = useState<Automation | null>(null);
 
+  /* Editor dialog: closed | editing `task` | creating (task = null). Holds a
+   * SNAPSHOT of the row from click time — scheduler refreshes replace the
+   * `automations` array (fresh objects), and a live binding would re-init the
+   * editor draft mid-edit; the id is all the save channel needs. */
+  const [editorState, setEditorState] = useState<{ open: boolean; task: Automation | null }>({
+    open: false,
+    task: null,
+  });
+
   /* Active running run entry (if any) */
   const isRunning =
     selected?.lastStatus === "running" || selected?.lastStatus === "waiting-approval";
@@ -164,9 +206,29 @@ export function SchedPanel() {
             <span className="text-xs font-bold uppercase tracking-wider text-content">
               {t("automation.taskListTitle")}
             </span>
-            <span className="text-[10px] text-content-subtle">
-              {activeTasks.length} / {scopedAll.length}
-            </span>
+            {!page || onNewTaskSession ? (
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (page && onNewTaskSession) onNewTaskSession();
+                    else setEditorState({ open: true, task: null });
+                  }}
+                  className="flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[10.5px] font-semibold text-accent transition-colors hover:bg-accent/10"
+                  title={page ? t("automation.newTaskSessionTitle") : t("automation.newTask")}
+                >
+                  <IconPlus size={11} />
+                  {t("automation.newTask")}
+                </button>
+                <span className="text-[10px] text-content-subtle">
+                  {activeTasks.length} / {scopedAll.length}
+                </span>
+              </div>
+            ) : (
+              <span className="text-[10px] text-content-subtle">
+                {activeTasks.length} / {scopedAll.length}
+              </span>
+            )}
           </div>
           {/* Segmented Control: Active vs Deleted */}
           <div className="flex rounded-md bg-surface-muted p-0.5 text-[11px] font-medium">
@@ -260,25 +322,46 @@ export function SchedPanel() {
                   </span>
                 </div>
 
-                <div className="flex items-center justify-between text-[10.5px] text-content-subtle">
-                  <span className="truncate">
-                    {isDeleted
-                      ? t("automation.deletedAt", { time: fmtClock(task.deletedAt ?? 0) })
-                      : describeSchedule(task.schedule)}
-                  </span>
-                  {!isDeleted && task.runLog.length > 0 && (
-                    <span className="shrink-0 font-mono">
-                      {t("automation.runCount", { n: task.runLog.length })}
-                    </span>
-                  )}
-                </div>
+                {(() => {
+                  const projectName = projectNameById.get(task.projectId) ?? null;
+                  const showCount = !isDeleted && task.runLog.length > 0;
+                  return (
+                    <>
+                      {/* Attribution line: owning project (+ run count). The
+                          global viewer page mixes projects, so every row
+                          carries its own folder+name tag. */}
+                      {(projectName || showCount) && (
+                        <div className="flex items-center gap-1 text-[10.5px] text-content-subtle">
+                          {projectName && (
+                            <>
+                              <IconFolder size={10} className="shrink-0 text-content-subtle" />
+                              <span className="min-w-0 truncate" title={projectName}>
+                                {projectName}
+                              </span>
+                            </>
+                          )}
+                          {showCount && (
+                            <span className="ml-auto shrink-0 font-mono">
+                              {t("automation.runCount", { n: task.runLog.length })}
+                            </span>
+                          )}
+                        </div>
+                      )}
+                      <div className="truncate text-[10.5px] text-content-subtle">
+                        {isDeleted
+                          ? t("automation.deletedAt", { time: fmtClock(task.deletedAt ?? 0) })
+                          : describeSchedule(task.schedule)}
+                      </div>
+                    </>
+                  );
+                })()}
 
-                {/* Quick actions bar inside row */}
+                {/* Quick actions bar inside row (pause / run / edit / delete) */}
                 <div
                   className="mt-1 flex items-center justify-end gap-1 pt-1 border-t border-edge/40"
                   onClick={(e) => e.stopPropagation()}
                 >
-                  {!isDeleted ? (
+                    {!isDeleted ? (
                     <>
                       <button
                         type="button"
@@ -311,6 +394,17 @@ export function SchedPanel() {
                       >
                         <IconPlayerPlay size={10} />
                         {t("automation.runNow")}
+                      </button>
+                      {/* Edit entry sits next to delete (explicit click — row
+                          click only selects). Shows wherever ops show. */}
+                      <button
+                        type="button"
+                        onClick={() => setEditorState({ open: true, task })}
+                        title={t("automation.edit")}
+                        className="flex h-5 items-center gap-1 rounded px-1.5 text-[10px] font-medium text-content-muted hover:bg-surface-hover hover:text-content"
+                      >
+                        <IconPencil size={10} />
+                        {t("automation.edit")}
                       </button>
                       <button
                         type="button"
@@ -365,25 +459,65 @@ export function SchedPanel() {
             messages={messages}
             onBack={() => setViewedRunAt(null)}
             onOpenSession={() => {
-              if (selected.taskSessionId) void openTab(selected.taskSessionId);
+              if (!selected.taskSessionId) return;
+              if (openSessionInWorkspace) openSessionInWorkspace(selected.taskSessionId);
+              else void openTab(selected.taskSessionId);
             }}
           />
         ) : (
-          /* View Mode 1: Task Overview & Instance History List */
-          <TaskOverviewAndInstanceList
-            task={selected}
-            runLog={runLog}
-            runsShown={runsShown}
-            runsHidden={runsHidden}
-            activeRunEntry={activeRunEntry}
-            onSelectRun={(firedAt) => setViewedRunAt(firedAt)}
-            onLoadMore={() => setRunsVisible((v) => v + RUN_HISTORY_PAGE)}
-            onDelete={() => setSoftDeleteTarget(selected)}
-            onRestore={() => void restoreAutomation(selected.id)}
-            onPermDelete={() => setPermDeleteTarget(selected)}
-          />
+          <>
+            {/* Right-rail header — SAME box (p-2 / pb-1.5 / segmented strip)
+                as the left rail's header, so both columns' first cards start
+                at exactly the same y (tops and bottom edges align). */}
+            <div className="flex shrink-0 flex-col border-b border-edge p-2">
+              <div className="flex items-center justify-between pb-1.5">
+                <span className="text-xs font-bold uppercase tracking-wider text-content">
+                  {t("automation.overviewTitle")}
+                </span>
+                <span
+                  className={cn(
+                    "rounded-full px-2 py-0.5 text-[10.5px] font-semibold",
+                    statusMeta(selected.lastStatus).badgeClass,
+                  )}
+                >
+                  {statusMeta(selected.lastStatus).label}
+                </span>
+              </div>
+              {/* Segmented-look strip (same height as the left tabs) showing
+                  the task's identity line */}
+              <div className="flex rounded-md bg-surface-muted p-0.5 text-[11px] font-medium">
+                <div className="min-w-0 flex-1 truncate rounded bg-surface py-1 text-center shadow-sm">
+                  <span className="font-semibold text-content">{selected.title}</span>
+                </div>
+              </div>
+            </div>
+            {/* View Mode 1: Task Overview & Instance History List (read-only
+                overview — operations live on the task rows, one place each) */}
+            <TaskOverviewAndInstanceList
+              task={selected}
+              projectName={projectNameById.get(selected.projectId) ?? null}
+              runLog={runLog}
+              runsShown={runsShown}
+              runsHidden={runsHidden}
+              activeRunEntry={activeRunEntry}
+              onSelectRun={(firedAt) => setViewedRunAt(firedAt)}
+              onLoadMore={() => setRunsVisible((v) => v + RUN_HISTORY_PAGE)}
+            />
+          </>
         )}
       </div>
+
+      {/* Create / edit dialog — shared by both hosts. The row edit button
+          opens edit mode; 新建 (panel tab only) opens create mode and the
+          fresh row gets selected on save. Clicking a task row itself only
+          selects. */}
+      <AutomationEditor
+        open={editorState.open}
+        task={editorState.task}
+        scopeSessionId={scope}
+        onClose={() => setEditorState((s) => ({ ...s, open: false }))}
+        onSaved={(saved) => setSchedSelected(saved.id)}
+      />
 
       {/* Soft Delete Confirm Dialog */}
       <ConfirmDialog
@@ -425,126 +559,45 @@ export function SchedPanel() {
 
 function TaskOverviewAndInstanceList({
   task,
+  projectName,
   runLog,
   runsShown,
   runsHidden,
   activeRunEntry,
   onSelectRun,
   onLoadMore,
-  onDelete,
-  onRestore,
-  onPermDelete,
 }: {
   task: Automation;
+  /** Owning project display name (null when the row vanished from the
+   *  projects list — renders no attribution chip). */
+  projectName: string | null;
   runLog: AutomationRunEntry[];
   runsShown: AutomationRunEntry[];
   runsHidden: number;
   activeRunEntry: AutomationRunEntry | null;
   onSelectRun: (firedAt: number) => void;
   onLoadMore: () => void;
-  onDelete: () => void;
-  onRestore: () => void;
-  onPermDelete: () => void;
 }) {
   const { t } = useI18n();
-  const setAutomationEnabled = useSessionStore((s) => s.setAutomationEnabled);
-  const runAutomationNow = useSessionStore((s) => s.runAutomationNow);
-  const meta = statusMeta(task.lastStatus);
-  const isDeleted = task.deletedAt != null;
 
   return (
-    <div className="flex h-full min-h-0 flex-1 flex-col overflow-y-auto p-4 space-y-4">
-      {/* Task Overview Card */}
-      <div className="rounded-xl border border-edge bg-surface p-3.5 shadow-xs">
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0 flex-1">
-            <div className="flex items-center gap-2">
-              <IconClock
-                size={16}
-                className={cn(
-                  "shrink-0",
-                  isDeleted ? "text-content-subtle" : task.enabled ? "text-accent" : "text-content-subtle",
-                )}
-              />
-              <h2
-                className={cn(
-                  "truncate text-sm font-bold text-content",
-                  isDeleted && "line-through opacity-80",
-                )}
-              >
-                {task.title}
-              </h2>
-              <span
-                className={cn(
-                  "rounded-full px-2 py-0.5 text-[10.5px] font-semibold",
-                  meta.badgeClass,
-                )}
-              >
-                {meta.label}
-              </span>
-            </div>
-
-            <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-content-muted">
-              <span>{describeSchedule(task.schedule)}</span>
-              {!isDeleted && taskNextLine(task) && <span>· {taskNextLine(task)}</span>}
-              {task.model && <span>· {task.model}</span>}
-              {runLog.length > 0 && (
-                <span>· {t("automation.runCount", { n: runLog.length })}</span>
-              )}
-            </div>
-          </div>
-
-          {/* Action buttons */}
-          <div className="flex shrink-0 items-center gap-1.5">
-            {!isDeleted ? (
-              <>
-                <button
-                  type="button"
-                  onClick={() => void setAutomationEnabled(task.id, !task.enabled)}
-                  className={cn(
-                    "rounded-md border px-2.5 py-1 text-xs font-semibold transition-colors",
-                    task.enabled
-                      ? "border-warning/40 text-warning hover:bg-warning/10"
-                      : "border-accent/40 text-accent hover:bg-accent/10",
-                  )}
-                >
-                  {task.enabled ? t("automation.pause") : t("automation.resume")}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void runAutomationNow(task.id)}
-                  className="rounded-md border border-input-edge bg-surface px-2.5 py-1 text-xs font-semibold text-content hover:bg-surface-hover"
-                >
-                  {t("automation.runNow")}
-                </button>
-                <button
-                  type="button"
-                  onClick={onDelete}
-                  title={t("automation.delete")}
-                  className="rounded-md border border-danger/30 px-2 py-1 text-xs font-semibold text-danger hover:bg-danger/10"
-                >
-                  {t("automation.delete")}
-                </button>
-              </>
-            ) : (
-              <>
-                <button
-                  type="button"
-                  onClick={onRestore}
-                  className="rounded-md border border-accent/40 bg-accent/10 px-2.5 py-1 text-xs font-semibold text-accent hover:bg-accent/20"
-                >
-                  {t("automation.restore")}
-                </button>
-                <button
-                  type="button"
-                  onClick={onPermDelete}
-                  className="rounded-md border border-danger/40 bg-danger/10 px-2.5 py-1 text-xs font-semibold text-danger hover:bg-danger/20"
-                >
-                  {t("automation.permanentDelete")}
-                </button>
-              </>
-            )}
-          </div>
+    <div className="flex h-full min-h-0 flex-1 flex-col px-4 pt-1.5 pb-1.5">
+      {/* Task Overview Card — fixed top block (identity lives in the right
+          rail header above; this card carries the details) */}
+      <div className="shrink-0 rounded-xl border border-edge bg-surface p-3.5 shadow-xs">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-content-muted">
+          {projectName && (
+            <span className="flex min-w-0 items-center gap-1" title={projectName}>
+              <IconFolder size={12} className="shrink-0" />
+              <span className="truncate">{projectName}</span>
+            </span>
+          )}
+          <span>{describeSchedule(task.schedule)}</span>
+          {taskNextLine(task) && <span>· {taskNextLine(task)}</span>}
+          {task.model && <span>· {task.model}</span>}
+          {runLog.length > 0 && (
+            <span>· {t("automation.runCount", { n: runLog.length })}</span>
+          )}
         </div>
 
         {/* Prompt preview */}
@@ -555,9 +608,11 @@ function TaskOverviewAndInstanceList({
         )}
       </div>
 
-      {/* Instances Section */}
-      <div className="flex min-h-0 flex-1 flex-col rounded-xl border border-edge bg-surface p-3.5 shadow-xs">
-        <div className="flex items-center justify-between pb-2 border-b border-edge">
+      {/* Instances Section — fills the remaining height with its OWN scroll
+          (same fixed-top + scrolling-body silhouette as the left rail, so
+          both columns read as equal-height panels) */}
+      <div className="mt-4 flex min-h-0 flex-1 flex-col rounded-xl border border-edge bg-surface p-3.5 shadow-xs">
+        <div className="flex shrink-0 items-center justify-between pb-2 border-b border-edge">
           <span className="text-xs font-bold uppercase tracking-wider text-content">
             {t("automation.instancesTitle")}
           </span>
@@ -566,7 +621,7 @@ function TaskOverviewAndInstanceList({
           </span>
         </div>
 
-        <div className="mt-2.5 flex-1 space-y-2 overflow-y-auto">
+        <div className="mt-2.5 min-h-0 flex-1 space-y-2 overflow-y-auto">
           {/* Live running instance banner if in flight */}
           {activeRunEntry && (
             <div

@@ -48,7 +48,7 @@ const EMPTY_SESSION_TABS: SessionRightPanelTabId[] = [];
 
 const SESSION_TAB_META: ReadonlyArray<{
   id: SessionRightPanelTabId;
-  labelKey: "layout.tabTurns" | "layout.tabSideChat" | "layout.tabBrowser" | "layout.automation";
+  labelKey: "layout.tabTurns" | "layout.tabSideChat" | "layout.tabBrowser" | "layout.schedTasks";
   /** Tooltip while the tab is showing (= the close affordance). */
   closeTitleKey: "layout.rightPanelCloseTab" | "layout.closeSidebarBrowser";
   Icon: typeof IconListDetails;
@@ -58,7 +58,7 @@ const SESSION_TAB_META: ReadonlyArray<{
   { id: "turns", labelKey: "layout.tabTurns", closeTitleKey: "layout.rightPanelCloseTab", Icon: IconListDetails, commandId: null },
   { id: "sidechat", labelKey: "layout.tabSideChat", closeTitleKey: "layout.rightPanelCloseTab", Icon: IconMessages, commandId: "sidechat.open" },
   { id: "browser", labelKey: "layout.tabBrowser", closeTitleKey: "layout.closeSidebarBrowser", Icon: IconWorld, commandId: "layout.toggle-browser" },
-  { id: "sched", labelKey: "layout.automation", closeTitleKey: "layout.rightPanelCloseTab", Icon: IconClock, commandId: null },
+  { id: "sched", labelKey: "layout.schedTasks", closeTitleKey: "layout.rightPanelCloseTab", Icon: IconClock, commandId: null },
 ];
 
 export function RightPanel() {

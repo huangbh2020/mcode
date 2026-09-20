@@ -1,4 +1,4 @@
-import { memo, useMemo, useState } from "react";
+import { memo, useEffect, useMemo, useState } from "react";
 import { cn } from "@renderer/lib/cn.js";
 import { useI18n } from "@renderer/lib/i18n/index.js";
 import { useSessionStore } from "@renderer/stores/sessionStore.js";
@@ -63,6 +63,19 @@ function extractProposal(raw: string): TaskProposalData | null {
   }
 }
 
+/** FNV-1a 32-bit fingerprint of the proposal JSON — the durable key under
+ *  which the confirmation decision is persisted (settings ledger). The card
+ *  renders from message content, so the same message always yields the same
+ *  fingerprint, across restarts and rehydration. */
+function proposalFingerprint(raw: string): string {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < raw.length; i++) {
+    h ^= raw.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return (h >>> 0).toString(16).padStart(8, "0");
+}
+
 export const ScheduledTaskApprovalCard = memo(function ScheduledTaskApprovalCard({
   rawJson,
   className,
@@ -71,9 +84,38 @@ export const ScheduledTaskApprovalCard = memo(function ScheduledTaskApprovalCard
   const proposal = useMemo(() => extractProposal(rawJson), [rawJson]);
   const [expandedPrompt, setExpandedPrompt] = useState(false);
   const [copiedPrompt, setCopiedPrompt] = useState(false);
-  const [createdTaskId, setCreatedTaskId] = useState<string | null>(null);
-  const [createdSessionId, setCreatedSessionId] = useState<string | null>(null);
+  /** Click-time feedback only — the durable「已创建」state is the persisted
+   *  confirmation LEDGER below (survives restarts; deleting the task never
+   *  re-opens the proposal). */
+  const [justCreatedTaskId, setJustCreatedTaskId] = useState<string | null>(null);
   const [isCreating, setIsCreating] = useState(false);
+
+  const fingerprint = useMemo(() => proposalFingerprint(rawJson.trim()), [rawJson]);
+  const confirmedProposalFps = useSessionStore((s) => s.confirmedProposalFps);
+  const confirmedProposalFpsLoaded = useSessionStore((s) => s.confirmedProposalFpsLoaded);
+  const loadConfirmedProposals = useSessionStore((s) => s.loadConfirmedProposals);
+  const confirmProposal = useSessionStore((s) => s.confirmProposal);
+  useEffect(() => {
+    void loadConfirmedProposals();
+  }, [loadConfirmedProposals]);
+
+  /* Secondary signal: a LIVE task row with the proposal's exact
+   * title+prompt fingerprint (createScheduledTask stores both verbatim).
+   * Marks the card confirmed even if the ledger entry is missing (e.g.
+   * confirmed before the ledger existed). */
+  const automations = useSessionStore((s) => s.automations);
+  const matchedTask = useMemo(() => {
+    if (!proposal) return null;
+    return (
+      automations.find(
+        (a) => a.deletedAt == null && a.title === proposal.title && a.prompt === proposal.prompt,
+      ) ?? null
+    );
+  }, [automations, proposal]);
+
+  const persistedConfirmed = confirmedProposalFps.includes(fingerprint);
+  const confirmed = justCreatedTaskId != null || persistedConfirmed || matchedTask != null;
+  const createdTaskId = justCreatedTaskId ?? matchedTask?.id ?? null;
 
   // 下次预计运行时间预览
   const nextRunPreview = useMemo(() => {
@@ -138,8 +180,10 @@ export const ScheduledTaskApprovalCard = memo(function ScheduledTaskApprovalCard
       });
 
       if (created) {
-        setCreatedTaskId(created.id);
-        setCreatedSessionId(created.taskSessionId);
+        setJustCreatedTaskId(created.id);
+        // Durable confirmation: the ledger entry (not the task row) is what
+        // keeps this card 「已创建」 across restarts and task deletion.
+        void confirmProposal(fingerprint);
         useToastStore.getState().push({
           kind: "info",
           title: t("automation.card.approved"),
@@ -157,15 +201,22 @@ export const ScheduledTaskApprovalCard = memo(function ScheduledTaskApprovalCard
   };
 
   const handleGoToTaskSession = () => {
-    if (!createdSessionId) return;
-    void useSessionStore.getState().selectSession(createdSessionId);
+    if (!createdTaskId) return;
+    const st = useSessionStore.getState();
+    // Open the right-panel 定时任务 tab aimed at the task: select the row so
+    // the panel's overview + run instances land on it, and scope the panel
+    // to the task's owning session (its parent) so the row is in scope even
+    // if the card is clicked from a different session later.
+    const parent = st.automations.find((a) => a.id === createdTaskId)?.parentSessionId ?? null;
+    st.setSchedSelected(createdTaskId);
+    st.openSchedPanel(parent);
   };
 
   return (
     <div
       className={cn(
         "my-3 w-full max-w-2xl rounded-2xl border p-4 shadow-sm transition-all",
-        createdTaskId
+        confirmed
           ? "border-emerald-500/30 bg-emerald-500/5 dark:bg-emerald-500/10"
           : "border-accent/30 bg-surface dark:bg-surface-elevated/70",
         className,
@@ -177,10 +228,10 @@ export const ScheduledTaskApprovalCard = memo(function ScheduledTaskApprovalCard
           <div
             className={cn(
               "flex h-8 w-8 shrink-0 items-center justify-center rounded-lg",
-              createdTaskId ? "bg-emerald-500/15 text-emerald-500" : "bg-accent/15 text-accent",
+              confirmed ? "bg-emerald-500/15 text-emerald-500" : "bg-accent/15 text-accent",
             )}
           >
-            {createdTaskId ? <IconCheck size={18} /> : <IconClock size={18} />}
+            {confirmed ? <IconCheck size={18} /> : <IconClock size={18} />}
           </div>
           <div className="min-w-0">
             <div className="flex items-center gap-2">
@@ -190,12 +241,12 @@ export const ScheduledTaskApprovalCard = memo(function ScheduledTaskApprovalCard
               <span
                 className={cn(
                   "rounded-full px-2 py-0.5 text-[10px] font-medium leading-none",
-                  createdTaskId
+                  confirmed
                     ? "bg-emerald-500/20 text-emerald-600 dark:text-emerald-400"
                     : "bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-amber-500/30",
                 )}
               >
-                {createdTaskId ? t("automation.card.approved") : t("automation.card.pendingApproval")}
+                {confirmed ? t("automation.card.approved") : t("automation.card.pendingApproval")}
               </span>
             </div>
             <h4 className="truncate text-sm font-medium text-content mt-0.5">{proposal.title}</h4>
@@ -284,7 +335,7 @@ export const ScheduledTaskApprovalCard = memo(function ScheduledTaskApprovalCard
       {/* 底部操作与提示 */}
       <div className="mt-4 pt-3 border-t border-edge/50 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <p className="text-[11px] text-content-subtle leading-normal">
-          {createdTaskId ? (
+          {confirmed ? (
             <span className="text-emerald-600 dark:text-emerald-400 font-medium">
               ✓ 任务已创建并在后台准时待命运行
             </span>
@@ -294,17 +345,7 @@ export const ScheduledTaskApprovalCard = memo(function ScheduledTaskApprovalCard
         </p>
 
         <div className="flex items-center gap-2 shrink-0">
-          {createdTaskId ? (
-            <Button
-              variant="secondary"
-              size="sm"
-              className="gap-1 text-xs"
-              onClick={handleGoToTaskSession}
-            >
-              <span>{t("automation.card.viewTaskSession")}</span>
-              <IconArrowRight size={14} />
-            </Button>
-          ) : (
+          {!confirmed ? (
             <Button
               variant="primary"
               size="sm"
@@ -315,7 +356,17 @@ export const ScheduledTaskApprovalCard = memo(function ScheduledTaskApprovalCard
               <IconCheck size={14} />
               <span>{isCreating ? t("automation.card.creating") : t("automation.card.confirmCreate")}</span>
             </Button>
-          )}
+          ) : createdTaskId ? (
+            <Button
+              variant="secondary"
+              size="sm"
+              className="gap-1 text-xs"
+              onClick={handleGoToTaskSession}
+            >
+              <span>{t("automation.card.viewTaskSession")}</span>
+              <IconArrowRight size={14} />
+            </Button>
+          ) : null}
         </div>
       </div>
     </div>

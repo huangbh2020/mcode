@@ -19,6 +19,7 @@ export const en = {
   "layout.worktreeNamePlaceholder": "Worktree name",
   "layout.settings": "Settings",
   "layout.automation": "Automations",
+  "layout.schedTasks": "Scheduled Tasks",
   "layout.nav.chat": "Chat",
   "layout.nav.files": "Files",
   "layout.nav.git": "Git",

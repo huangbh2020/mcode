@@ -272,6 +272,10 @@ export async function fireTask(
     log.warn(`automation dispatch failed (${task.id}): ${message}`);
     AutomationRepo.update(task.id, { lastStatus: "failed" });
     settleRun(task.id, "failed");
+    // The session may already be flipped to "running" (the flip happens
+    // before cwd resolution / sendTurn) — release the overlap guard or every
+    // later trigger would skip forever.
+    if (task.taskSessionId) SessionRepo.updateStatus(task.taskSessionId, "errored");
     notifyRenderer(task.id);
     return null;
   } finally {
@@ -292,7 +296,14 @@ function composeRunPrompt(t: Automation, now: number): string {
 }
 
 /** Runtime-event observer: track the watched task session's lifecycle into
- *  the task's lastStatus. Non-automation sessions cost one Map lookup. */
+ *  the task's lastStatus. Non-automation sessions cost one Map lookup.
+ *
+ *  The SESSION row's status is written here too (approving / done / errored):
+ *  fireTask flips it to "running" at dispatch and the overlap guard reads it
+ *  back — without these terminal writes the row would stay "running" forever
+ *  and every later trigger would be skipped as "still in flight" (nothing in
+ *  the chat path ever resets it either; only automation re-fires expose
+ *  that). */
 function onRuntimeEvent(e: RuntimeEvent): void {
   const sessionId = (e as { sessionId?: string }).sessionId;
   if (!sessionId) return;
@@ -306,6 +317,7 @@ function onRuntimeEvent(e: RuntimeEvent): void {
   ) {
     // Blocked on the user. The OS notification already went out through the
     // NotificationManager (window unfocused); the task badge follows along.
+    SessionRepo.updateStatus(sessionId, "approving");
     if (AutomationRepo.get(automationId)?.lastStatus !== "waiting-approval") {
       AutomationRepo.update(automationId, { lastStatus: "waiting-approval" });
       notifyRenderer(automationId);
@@ -315,6 +327,7 @@ function onRuntimeEvent(e: RuntimeEvent): void {
   }
 
   if (e.type === "error") {
+    SessionRepo.updateStatus(sessionId, "errored");
     AutomationRepo.update(automationId, { lastStatus: "failed" });
     settleRun(automationId, "failed");
     notifyRenderer(automationId);
@@ -326,6 +339,7 @@ function onRuntimeEvent(e: RuntimeEvent): void {
     // (background subagents may still be running) — not terminal.
     if (e.reason === "tool_use") return;
     const ok = e.reason === "end_turn" || e.reason === "max_tokens";
+    SessionRepo.updateStatus(sessionId, ok ? "done" : "errored");
     AutomationRepo.update(automationId, { lastStatus: ok ? "success" : "failed" });
     settleRun(automationId, ok ? "success" : "failed");
     notifyRenderer(automationId);

@@ -79,6 +79,7 @@ import {
   UI_CHAT_DENSITY_SETTING_KEY,
   UI_EDITOR_THEME_SETTING_KEY,
   AUTO_ARCHIVE_SETTING_KEY,
+  AUTOMATION_CONFIRMED_PROPOSALS_SETTING_KEY,
   DEFAULT_AUTO_ARCHIVE_CONFIG,
   parseAutoArchiveConfig,
   SESSION_WORKTREE_DEFAULT_SETTING_KEY,
@@ -942,9 +943,10 @@ export interface SessionState {
   claudeInstalled: boolean | null;
   /** Settings modal visibility (opened from the LeftBar ⚙ footer and the CLI-missing CTA). */
   settingsOpen: boolean;
-  /** 自动化(定时任务)全屏页可见性:左栏 footer 入口打开,与设置页同款
-   *  覆盖层形态(主区内 absolute inset-0,工作区子树保持挂载)。 */
-  automationOpen: boolean;
+  /** 定时任务查看页(只读)可见性:左栏快捷区「定时任务」入口打开,与设置页
+   *  同款覆盖层形态(主区内 absolute inset-0,工作区子树保持挂载)。与
+   *  settingsOpen 互斥(后开者关闭先开者)。 */
+  schedPageOpen: boolean;
   /** Initial settings section to land on when the modal opens. Callers that
    *  know which section the user wants (e.g. the composer's "管理模型…"
    *  entry → "custom-models" / "pi-models") pass it to setSettingsOpen; null
@@ -1438,6 +1440,13 @@ export interface SessionState {
   automations: Automation[];
   /** true after the first successful `automation.list` (guards re-opens). */
   automationsLoaded: boolean;
+  /** Fingerprint (FNV-1a hex of the card's raw JSON) of every 定时任务提案
+   *  card the user has CONFIRMED. Persisted in the settings table so the
+   *  card's「已创建」state survives restarts and is INDEPENDENT of the task
+   *  row's existence — deleting the task never re-opens the proposal. */
+  confirmedProposalFps: string[];
+  /** true after the first confirmed-proposals load (guards re-fetch). */
+  confirmedProposalFpsLoaded: boolean;
   /** 右栏「定时任务」tab 当前选中的任务(automation id);null = 列表首个。 */
   schedSelectedId: string | null;
   /** 左栏发起者徽标点击后进入的过滤:只看该会话发起的任务。null = 全部。 */
@@ -1646,6 +1655,9 @@ export interface SessionState {
    *  is looking at it now). */
   setWindowFocused: (focused: boolean) => void;
   setSettingsOpen: (open: boolean, section?: string) => void;
+  /** Toggle the read-only 定时任务 viewer page. Opening it closes the settings
+   *  page (mutual exclusion) and lazily loads the automations table. */
+  setSchedPageOpen: (open: boolean) => void;
   /** Toggle the "尚未配置模型" dialog open/closed (send-time guard). */
   setModelConfigPromptOpen: (open: boolean) => void;
   /** Toggle the Cmd/Ctrl+K command palette open/closed. */
@@ -2072,6 +2084,12 @@ export interface SessionState {
   setSchedSelected: (automationId: string) => void;
   setSchedFilterParent: (parentSessionId: string | null) => void;
   loadAutomations: () => Promise<void>;
+  /** Load the confirmed-proposal fingerprint ledger (settings table) once per
+   *  app run; cards call this on mount. */
+  loadConfirmedProposals: () => Promise<void>;
+  /** Record a proposal confirmation durably (optimistic append + settings
+   *  write). */
+  confirmProposal: (fp: string) => Promise<void>;
   saveAutomation: (input: AutomationSaveInput) => Promise<Automation | null>;
   deleteAutomation: (taskId: string, permanent?: boolean) => Promise<void>;
   restoreAutomation: (taskId: string) => Promise<void>;
@@ -4713,7 +4731,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   isWindowFocused: true,
   claudeInstalled: null,
   settingsOpen: false,
-  automationOpen: false,
+  schedPageOpen: false,
   settingsSection: null,
   modelConfigPromptOpen: false,
   modelGuardPulse: 0,
@@ -4796,6 +4814,8 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   orchWorkersById: {},
   automations: [],
   automationsLoaded: false,
+  confirmedProposalFps: [],
+  confirmedProposalFpsLoaded: false,
   schedSelectedId: null,
   schedFilterParent: null,
   taskScheduleBySession: {},
@@ -8556,11 +8576,21 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   },
 
   setSettingsOpen: (open, section) => {
-    set(open ? { settingsOpen: true, settingsSection: section ?? null } : { settingsOpen: false, settingsSection: null });
+    set(open
+      ? { settingsOpen: true, settingsSection: section ?? null, schedPageOpen: false }
+      : { settingsOpen: false, settingsSection: null });
     // Closing the settings dialog may have changed the voice model setup
     // (download / select / remove in 语音输入) — re-check so the composer mic
     // appears/disappears without a restart.
     if (!open) void get().refreshVoiceModelStatus();
+  },
+
+  setSchedPageOpen: (open) => {
+    // Mutually exclusive with the settings page — both are full-bleed overlays
+    // on the same panel row; whichever opens second would visually stack over
+    // the other with no way to reach the one underneath.
+    set(open ? { schedPageOpen: true, settingsOpen: false, settingsSection: null } : { schedPageOpen: false });
+    if (open && !get().automationsLoaded) void get().loadAutomations();
   },
 
   openSchedPanel: (filterParent) => {
@@ -8584,6 +8614,44 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       set({ automations, automationsLoaded: true });
     } catch (err) {
       console.error("automation.list failed:", err);
+    }
+  },
+
+  loadConfirmedProposals: async () => {
+    if (get().confirmedProposalFpsLoaded) return;
+    try {
+      const res = await api.setting.get({ key: AUTOMATION_CONFIRMED_PROPOSALS_SETTING_KEY });
+      let list: string[] = [];
+      if (res.value) {
+        const parsed: unknown = JSON.parse(res.value);
+        if (Array.isArray(parsed)) {
+          list = parsed.filter((x): x is string => typeof x === "string");
+        }
+      }
+      set({ confirmedProposalFps: list, confirmedProposalFpsLoaded: true });
+    } catch (err) {
+      console.error("setting.get(confirmedProposals) failed:", err);
+      // Mark loaded anyway — a broken ledger must not turn every card into a
+      // refetch loop.
+      set({ confirmedProposalFpsLoaded: true });
+    }
+  },
+
+  confirmProposal: async (fp) => {
+    const prev = get().confirmedProposalFps;
+    if (prev.includes(fp)) return;
+    const next = [...prev, fp];
+    // Optimistic: the card flips immediately; the settings write is
+    // fire-and-forget (a failed write costs the confirmation on next boot,
+    // same trade-off as the other cosmetic settings).
+    set({ confirmedProposalFps: next });
+    try {
+      await api.setting.set({
+        key: AUTOMATION_CONFIRMED_PROPOSALS_SETTING_KEY,
+        value: JSON.stringify(next),
+      });
+    } catch (err) {
+      console.error("setting.set(confirmedProposals) failed:", err);
     }
   },
 

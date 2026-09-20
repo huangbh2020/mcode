@@ -220,6 +220,17 @@ export type LeftBarMode = z.infer<typeof LeftBarModeSchema>;
  */
 export const UI_LOCALE_SETTING_KEY = "ui.locale";
 
+/**
+ * Setting key under which the CONFIRMED 定时任务提案 cards are persisted (JSON
+ * array of proposal fingerprints — FNV-1a hex of the card's raw JSON).
+ *
+ * Confirming a proposal card must be durable INDEPENDENT of the task row:
+ * the card renders from message content, so after a restart its「已创建」
+ * state can only come from this ledger. Deleting the scheduled task must NOT
+ * re-open the proposal — the decision, once made, is what's persisted here.
+ */
+export const AUTOMATION_CONFIRMED_PROPOSALS_SETTING_KEY = "automation.confirmedProposals";
+
 /** zod schema + TS union for the UI language preference. */
 export const LocaleSchema = z.enum(["zh", "en"]);
 export type Locale = z.infer<typeof LocaleSchema>;

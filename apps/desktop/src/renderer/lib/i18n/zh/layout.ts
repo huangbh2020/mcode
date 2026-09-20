@@ -22,6 +22,7 @@ export const zh = {
   "layout.worktreeNamePlaceholder": "工作树名称",
   "layout.settings": "设置",
   "layout.automation": "自动化",
+  "layout.schedTasks": "定时任务",
   "layout.nav.chat": "会话",
   "layout.nav.files": "文件",
   "layout.nav.git": "Git",

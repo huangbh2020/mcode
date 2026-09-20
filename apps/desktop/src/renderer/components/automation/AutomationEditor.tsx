@@ -1,35 +1,40 @@
 /**
  * AutomationEditor — create/edit dialog for scheduled tasks, launched from
- * the right panel's sched tab (header「新建」/ footer「编辑」). Saves through
+ * the right panel's sched tab (header「新建」/ row click「编辑」). Saves through
  * the same automation.save channel as the composer flow (id present =
  * update in place; main recomputes nextRunAt) minus the composer-only
  * receipt message. Form fields mirror the task's definition: title, prompt,
  * skills (SDK allowlist), file references, execution config (controlled
  * four-slot — never the global composer slots), trigger rule (ScheduleEditor
  * with its live next-run preview) and retention.
+ *
+ * Edit policy (2026-09-20): editing opens up ONLY the schedule rule, the
+ * execution four-slot (SDK / model / effort / permission) and the task
+ * content (title + prompt). Skills, file references and retention are part
+ * of the task's identity — they render read-only (no chips add/remove, no
+ * input) and the save payload echoes the ORIGINAL row's values for them, so
+ * a stale draft can never rewrite what it must not touch.
  */
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Automation, AutomationSchedule } from "@contracts/automation";
-import type { AutomationSaveInput, ProviderInfo } from "@contracts/ipc";
-import type { BuiltinModelOption } from "@contracts/provider";
-import type { CustomModelPublic } from "@contracts/customModel";
+import type { AutomationSaveInput } from "@contracts/ipc";
 import { useSessionStore } from "@renderer/stores/sessionStore.js";
 import { useI18n } from "@renderer/lib/i18n/index.js";
-import { translate, type MessageId } from "@renderer/lib/i18n/core.js";
 import { Dialog } from "@renderer/components/ui/dialog.js";
 import { Input } from "@renderer/components/ui/input.js";
-import { Select } from "@renderer/components/ui/select.js";
-import { IconPlus, IconX } from "@renderer/lib/icons.js";
+import { IconClock, IconPlus, IconSend2, IconX } from "@renderer/lib/icons.js";
 import { cn } from "@renderer/lib/cn.js";
+import { ComposerEditor, type ComposerEditorHandle } from "@renderer/components/chat/ComposerEditor.js";
+import {
+  EffortChip,
+  PermissionChip,
+} from "@renderer/components/chat/EffortPermissionControl.js";
+import { ModelDropdown } from "@renderer/components/chat/ModelDropdown.js";
+import { ProviderDropdown } from "@renderer/components/chat/ProviderDropdown.js";
 import { ScheduleEditor } from "./ScheduleEditor.js";
+import { describeSchedule } from "./automationFormat.js";
 import { SlashCommandPicker } from "@renderer/components/chat/SlashCommandPicker.js";
 import { FileMentionPicker } from "@renderer/components/chat/FileMentionPicker.js";
-
-interface ModelOption {
-  id: string;
-  label: string;
-  customModelId: string | null;
-}
 
 interface EditorDraft {
   title: string;
@@ -59,42 +64,6 @@ const DEFAULT_DRAFT: EditorDraft = {
   keepRuns: 20,
 };
 
-/** Dictionary-backed effort labels; unknown capability values fall back to
- *  the provider's own label. */
-const EFFORT_DICT_VALUES = ["default", "low", "medium", "high"];
-
-/** Model surface for one provider, mirroring ModelDropdown's selectable set
- *  minus its guard machinery: built-ins + custom-endpoint entries (pi/codex
- *  carry dynamic model tables instead). "default" always first. */
-function modelOptionsFor(
-  provider: ProviderInfo | undefined,
-  customModels: CustomModelPublic[],
-  piModels: BuiltinModelOption[],
-  codexModels: BuiltinModelOption[],
-  defaultLabel: string,
-): ModelOption[] {
-  const out: ModelOption[] = [{ id: "default", label: defaultLabel, customModelId: null }];
-  if (provider?.id === "pi-sdk") {
-    for (const m of piModels) out.push({ id: m.id, label: m.label || m.id, customModelId: null });
-    return out;
-  }
-  if (provider?.id === "codex-sdk") {
-    for (const m of codexModels) out.push({ id: m.id, label: m.label || m.id, customModelId: null });
-    return out;
-  }
-  for (const b of provider?.capabilities.builtinModels ?? []) {
-    if (b.id === "default") continue;
-    out.push({ id: b.id, label: b.label, customModelId: null });
-  }
-  for (const cfg of customModels) {
-    for (const m of cfg.models) {
-      if (!m.id.trim()) continue;
-      out.push({ id: m.id, label: `${cfg.name} · ${m.id}`, customModelId: cfg.id });
-    }
-  }
-  return out;
-}
-
 export function AutomationEditor({
   open,
   task,
@@ -113,11 +82,8 @@ export function AutomationEditor({
    *  the active session; an automation-kind scope resolves to its parent. */
   scopeSessionId?: string | null;
 }) {
-  const { t, locale } = useI18n();
+  const { t } = useI18n();
   const providers = useSessionStore((s) => s.providers);
-  const customModels = useSessionStore((s) => s.customModels);
-  const piModels = useSessionStore((s) => s.piAvailableModels);
-  const codexModels = useSessionStore((s) => s.codexAvailableModels);
   const projects = useSessionStore((s) => s.projects);
   const skills = useSessionStore((s) => s.skills);
   const saveAutomation = useSessionStore((s) => s.saveAutomation);
@@ -125,6 +91,15 @@ export function AutomationEditor({
   const [draft, setDraft] = useState<EditorDraft>(DEFAULT_DRAFT);
   const [saving, setSaving] = useState(false);
   const [showError, setShowError] = useState(false);
+  /* Schedule panel collapse — mirrors the chat composer's ScheduleChip: the
+   * rule lives behind a chip above the card; the panel starts open on create
+   * (the user must pick a rule) and collapsed on edit. Reset per open. */
+  const [schedOpen, setSchedOpen] = useState(false);
+
+  /** Edit mode gates the mutable surface: only schedule + exec four-slot +
+   *  content (title/prompt) stay editable; skills / files / retention are
+   *  locked (read-only display, original values echoed on save). */
+  const editing = task != null;
 
   /* Owner (project + initiator) is derived once per dialog open, not
    * editable: the project decides where runs execute, the initiator only
@@ -172,9 +147,29 @@ export function AutomationEditor({
 
   /* Fresh draft per open / per edited task (scheduler pushes replace the
    * automations array, so identity-on-open is the right re-init signal). */
+  const editorRef = useRef<ComposerEditorHandle>(null);
+  useEffect(() => {
+    if (!open) return;
+    // The chat composer is an imperative Tiptap host that starts empty —
+    // seed the task's prompt after each open (retry once in case the editor
+    // instance isn't up yet on the same tick).
+    const seed = task?.prompt ?? "";
+    if (!seed) return;
+    const apply = (): boolean => {
+      if (!editorRef.current) return false;
+      editorRef.current.setText(seed);
+      return true;
+    };
+    if (!apply()) {
+      const timer = window.setTimeout(() => apply(), 50);
+      return () => window.clearTimeout(timer);
+    }
+  }, [open, task]);
+
   useEffect(() => {
     if (!open) return;
     setShowError(false);
+    setSchedOpen(!task);
     setDraft(
       task
         ? {
@@ -194,20 +189,12 @@ export function AutomationEditor({
     );
   }, [open, task, owner]);
 
-  const provider = providers.find((p) => p.id === draft.providerId);
-  const modelOptions = useMemo(
-    () =>
-      modelOptionsFor(provider, customModels, piModels, codexModels, t("automation.modelDefault")),
-    [provider, customModels, piModels, codexModels, t],
-  );
-  const effortOptions = provider?.capabilities.thinkingLevels ?? [];
-  const permOptions = (provider?.capabilities.permissionModes ?? []).filter(
+  const draftProvider = providers.find((p) => p.id === draft.providerId);
+  const draftPermModes = (draftProvider?.capabilities.permissionModes ?? []).filter(
     (m) => m.value !== "plan",
   );
-  const effortLabel = (v: string): string | null =>
-    EFFORT_DICT_VALUES.includes(v)
-      ? translate(locale, `automation.effort.${v}` as MessageId)
-      : null;
+  const hasEffort = (draftProvider?.capabilities.thinkingLevels?.length ?? 0) > 0;
+  const hasPerm = draftPermModes.length > 0;
 
   const switchProvider = (nextId: string): void => {
     const next = providers.find((p) => p.id === nextId);
@@ -255,8 +242,11 @@ export function AutomationEditor({
         ...(owner.parentSessionId && !task ? { parentSessionId: owner.parentSessionId } : {}),
         title,
         prompt: draft.prompt.trim(),
-        skillNames: draft.skillNames,
-        filePaths: draft.filePaths,
+        // Locked fields in edit mode: echo the ORIGINAL row's values (the UI
+        // already renders them read-only; this guards against any stale-draft
+        // drift ever rewriting what the edit policy forbids).
+        skillNames: task ? task.skillNames : draft.skillNames,
+        filePaths: task ? task.filePaths : draft.filePaths,
         providerId: draft.providerId,
         model: draft.model,
         customModelId: draft.customModelId,
@@ -266,7 +256,7 @@ export function AutomationEditor({
         // Editing never flips the switch — enable/disable is a dedicated
         // footer action, not a side effect of editing.
         enabled: task ? task.enabled : true,
-        keepRuns: draft.keepRuns,
+        keepRuns: task ? task.keepRuns : draft.keepRuns,
       };
       const saved = await saveAutomation(input);
       if (saved) {
@@ -279,10 +269,20 @@ export function AutomationEditor({
   };
 
   const fieldLabel = "text-[11px] font-semibold text-content-muted";
-  const optionBtn =
-    "max-w-[220px] shrink-0 items-center gap-1 rounded-md border border-input-edge bg-surface px-2 py-1 text-[11px] text-content hover:border-accent";
   const chipBtn =
     "flex items-center gap-0.5 rounded-full border border-dashed border-input-edge px-2 py-0.5 text-[10.5px] text-content-subtle hover:border-accent hover:text-accent";
+  /** Section label; locked sections carry the「创建后不可修改」hint in edit
+   *  mode so the read-only chips don't read as a rendering bug. */
+  const sectionLabel = (key: "automation.fieldSkills" | "automation.fieldFiles" | "automation.fieldKeep") => (
+    <span className={fieldLabel}>
+      {t(key)}
+      {editing && (
+        <span className="ml-1 font-normal text-content-subtle">
+          · {t("automation.editLocked")}
+        </span>
+      )}
+    </span>
+  );
 
   return (
     <Dialog.Root
@@ -293,13 +293,19 @@ export function AutomationEditor({
     >
       <Dialog.Portal>
         <Dialog.Backdrop />
-        <Dialog.Popup className="flex max-h-[86vh] w-[400px] flex-col">
+        <Dialog.Popup className="flex max-h-[86vh] w-[520px] flex-col">
           <Dialog.Title className="px-4 pb-1 pt-3.5">
             {task ? t("automation.editorEditTitle") : t("automation.editorCreateTitle")}
           </Dialog.Title>
           <Dialog.Close />
 
-          <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-4 pb-3">
+          {/* data-chat-root brings the [data-chat-root]-scoped composer styles
+              (composer-card / minipill / action-row polish) into the dialog —
+              the same scope ChatPane's root declares. */}
+          <div
+            data-chat-root
+            className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-4 pb-3"
+          >
             {/* owner line */}
             <div className="rounded-lg border border-edge bg-surface-muted px-2.5 py-1.5 text-[11px] text-content-muted">
               {ownerOk ? (
@@ -313,7 +319,7 @@ export function AutomationEditor({
               )}
             </div>
 
-            {/* title + prompt */}
+            {/* title */}
             <label className="flex flex-col gap-1">
               <span className={fieldLabel}>{t("automation.fieldName")}</span>
               <Input
@@ -323,36 +329,36 @@ export function AutomationEditor({
                 className="w-full"
               />
             </label>
-            <label className="flex flex-col gap-1">
-              <span className={fieldLabel}>{t("automation.sectionContent")}</span>
-              <textarea
-                value={draft.prompt}
-                onChange={(e) => setDraft((d) => ({ ...d, prompt: e.target.value }))}
-                placeholder={t("automation.promptPlaceholder")}
-                rows={4}
-                className={cn(
-                  "w-full resize-y rounded-md border border-input-edge bg-surface px-2.5 py-1.5 text-xs text-content",
-                  "placeholder:text-content-subtle focus:border-accent focus:outline-none",
-                  showError && !promptOk && "border-danger",
-                )}
-              />
-              {showError && !promptOk && (
-                <span className="text-[10.5px] text-danger">
-                  {t("automation.editorPromptRequired")}
-                </span>
-              )}
-            </label>
 
-            {/* skills chips */}
-            <div className="flex flex-col gap-1">
-              <span className={fieldLabel}>{t("automation.fieldSkills")}</span>
-              <div className="flex flex-wrap items-center gap-1">
-                {draft.skillNames.map((name) => (
-                  <span
-                    key={name}
-                    className="flex items-center gap-1 rounded-full border border-edge bg-surface-muted px-2 py-0.5 text-[10.5px] text-content-muted"
-                  >
-                    /{name}
+            {/* Chips row (chat-composer layout): the schedule chip + skill /
+                file chips park ABOVE the input card — same px-1 pb-1 spacing
+                as the chat composer's chip strip. Edit mode: no add/remove
+                (locked fields render as plain chips). */}
+            <div className="flex flex-wrap items-center gap-1 px-1 pb-1">
+              <button
+                type="button"
+                onClick={() => setSchedOpen((o) => !o)}
+                title={describeSchedule(draft.schedule)}
+                className={cn(
+                  "flex h-6 items-center gap-1.5 rounded-md border border-dashed px-1.5 text-[11px] transition-colors",
+                  schedOpen
+                    ? "border-accent text-accent"
+                    : "border-edge text-content-muted hover:border-accent hover:text-accent",
+                )}
+              >
+                <IconClock size={12} />
+                <span className="max-w-[110px] truncate">
+                  {describeSchedule(draft.schedule)}
+                </span>
+              </button>
+
+              {draft.skillNames.map((name) => (
+                <span
+                  key={name}
+                  className="flex items-center gap-1 rounded-full border border-edge bg-surface-muted px-2 py-0.5 text-[10.5px] text-content-muted"
+                >
+                  /{name}
+                  {!editing && (
                     <button
                       type="button"
                       onClick={() =>
@@ -365,8 +371,10 @@ export function AutomationEditor({
                     >
                       <IconX size={9} />
                     </button>
-                  </span>
-                ))}
+                  )}
+                </span>
+              ))}
+              {!editing && (
                 <button
                   ref={skillAnchorRef}
                   type="button"
@@ -375,19 +383,15 @@ export function AutomationEditor({
                 >
                   <IconPlus size={10} />
                 </button>
-              </div>
-            </div>
+              )}
 
-            {/* file chips */}
-            <div className="flex flex-col gap-1">
-              <span className={fieldLabel}>{t("automation.fieldFiles")}</span>
-              <div className="flex flex-wrap items-center gap-1">
-                {draft.filePaths.map((p) => (
-                  <span
-                    key={p}
-                    className="flex max-w-[220px] items-center gap-1 rounded-full border border-edge bg-surface-muted px-2 py-0.5 text-[10.5px] text-content-muted"
-                  >
-                    <span className="truncate">@{p}</span>
+              {draft.filePaths.map((p) => (
+                <span
+                  key={p}
+                  className="flex max-w-[220px] items-center gap-1 rounded-full border border-edge bg-surface-muted px-2 py-0.5 text-[10.5px] text-content-muted"
+                >
+                  <span className="truncate">@{p}</span>
+                  {!editing && (
                     <button
                       type="button"
                       onClick={() =>
@@ -397,8 +401,10 @@ export function AutomationEditor({
                     >
                       <IconX size={9} />
                     </button>
-                  </span>
-                ))}
+                  )}
+                </span>
+              ))}
+              {!editing && (
                 <button
                   ref={fileAnchorRef}
                   type="button"
@@ -407,198 +413,154 @@ export function AutomationEditor({
                 >
                   <IconPlus size={10} />
                 </button>
-              </div>
+              )}
             </div>
 
-            {/* execution config — controlled four-slot */}
-            <div className="flex flex-col gap-1">
-              <span className={fieldLabel}>{t("automation.sectionBasics")}</span>
-              <div className="flex flex-wrap gap-1.5">
-                <Select.Root
-                  value={draft.providerId}
-                  onValueChange={(v) => switchProvider(String(v))}
-                >
-                  <Select.Trigger className={optionBtn}>
-                    <Select.Value>
-                      {(val: string) => (
-                        <span className="truncate">
-                          {providers.find((p) => p.id === val)?.displayName ?? val}
-                        </span>
-                      )}
-                    </Select.Value>
-                  </Select.Trigger>
-                  <Select.Portal>
-                    <Select.Positioner>
-                      <Select.Popup>
-                        <Select.List>
-                          {providers.map((p) => (
-                            <Select.Item key={p.id} value={p.id}>
-                              <Select.ItemText>{p.displayName}</Select.ItemText>
-                            </Select.Item>
-                          ))}
-                        </Select.List>
-                      </Select.Popup>
-                    </Select.Positioner>
-                  </Select.Portal>
-                </Select.Root>
-
-                <Select.Root
-                  value={modelOptions.some((m) => m.id === draft.model) ? draft.model : "default"}
-                  onValueChange={(v) => {
-                    const hit =
-                      modelOptions.find((m) => m.id === String(v)) ?? modelOptions[0] ?? null;
-                    if (hit)
-                      setDraft((d) => ({ ...d, model: hit.id, customModelId: hit.customModelId }));
-                  }}
-                >
-                  <Select.Trigger className={optionBtn}>
-                    <Select.Value>
-                      {(val: string) => (
-                        <span className="truncate">
-                          {modelOptions.find((m) => m.id === val)?.label ?? val}
-                        </span>
-                      )}
-                    </Select.Value>
-                  </Select.Trigger>
-                  <Select.Portal>
-                    <Select.Positioner>
-                      <Select.Popup>
-                        <Select.List>
-                          {modelOptions.map((m) => (
-                            <Select.Item
-                              key={`${m.customModelId ?? "-"}:${m.id}`}
-                              value={m.id}
-                            >
-                              <Select.ItemText>{m.label}</Select.ItemText>
-                            </Select.Item>
-                          ))}
-                        </Select.List>
-                      </Select.Popup>
-                    </Select.Positioner>
-                  </Select.Portal>
-                </Select.Root>
-
-                {effortOptions.length > 0 && (
-                  <Select.Root
-                    value={
-                      effortOptions.some((e) => e.value === draft.effort)
-                        ? draft.effort
-                        : (effortOptions[0]?.value ?? "default")
-                    }
-                    onValueChange={(v) => setDraft((d) => ({ ...d, effort: String(v) }))}
-                  >
-                    <Select.Trigger className={optionBtn}>
-                      <Select.Value>
-                        {(val: string) => (
-                          <span className="truncate">
-                            {effortLabel(val) ?? (effortOptions.find((e) => e.value === val)?.label ?? val)}
-                          </span>
-                        )}
-                      </Select.Value>
-                    </Select.Trigger>
-                    <Select.Portal>
-                      <Select.Positioner>
-                        <Select.Popup>
-                          <Select.List>
-                            {effortOptions.map((e) => (
-                              <Select.Item key={e.value} value={e.value}>
-                                <Select.ItemText>
-                                  {effortLabel(e.value) ?? e.label}
-                                </Select.ItemText>
-                              </Select.Item>
-                            ))}
-                          </Select.List>
-                        </Select.Popup>
-                      </Select.Positioner>
-                    </Select.Portal>
-                  </Select.Root>
-                )}
-
-                {permOptions.length > 0 && (
-                  <Select.Root
-                    value={
-                      permOptions.some((m) => m.value === draft.permissionMode)
-                        ? draft.permissionMode
-                        : "acceptEdits"
-                    }
-                    onValueChange={(v) => setDraft((d) => ({ ...d, permissionMode: String(v) }))}
-                  >
-                    <Select.Trigger className={optionBtn}>
-                      <Select.Value>
-                        {(val: string) => (
-                          <span className="truncate">
-                            {val === "default"
-                              ? t("automation.perm.default")
-                              : val === "acceptEdits"
-                                ? t("automation.perm.acceptEdits")
-                                : val === "bypassPermissions"
-                                  ? t("automation.perm.bypassPermissions")
-                                  : (permOptions.find((m) => m.value === val)?.label ?? val)}
-                          </span>
-                        )}
-                      </Select.Value>
-                    </Select.Trigger>
-                    <Select.Portal>
-                      <Select.Positioner>
-                        <Select.Popup>
-                          <Select.List>
-                            {permOptions.map((m) => (
-                              <Select.Item key={m.value} value={m.value}>
-                                <Select.ItemText>
-                                  {m.value === "default"
-                                    ? t("automation.perm.default")
-                                    : m.value === "acceptEdits"
-                                      ? t("automation.perm.acceptEdits")
-                                      : m.value === "bypassPermissions"
-                                        ? t("automation.perm.bypassPermissions")
-                                        : m.label}
-                                </Select.ItemText>
-                              </Select.Item>
-                            ))}
-                          </Select.List>
-                        </Select.Popup>
-                      </Select.Positioner>
-                    </Select.Portal>
-                  </Select.Root>
-                )}
-              </div>
-            </div>
-
-            {/* trigger rule */}
-            <div className="flex flex-col gap-1.5">
-              <span className={fieldLabel}>{t("automation.sectionSchedule")}</span>
-              <ScheduleEditor
-                schedule={draft.schedule}
-                onChange={(schedule) => setDraft((d) => ({ ...d, schedule }))}
-              />
-            </div>
-
-            {/* retention */}
-            <div className="flex flex-col gap-1">
-              <span className={fieldLabel}>{t("automation.fieldKeep")}</span>
-              <div className="flex items-center gap-1.5">
-                <Input
-                  type="number"
-                  min={1}
-                  max={200}
-                  value={draft.keepRuns}
-                  onChange={(e) => {
-                    const n = Number.parseInt(e.target.value, 10);
-                    setDraft((d) => ({
-                      ...d,
-                      keepRuns: Number.isFinite(n) ? Math.min(200, Math.max(1, n)) : d.keepRuns,
-                    }));
-                  }}
-                  className="w-16"
+            {/* Trigger-rule panel — collapsed behind the schedule chip above */}
+            {schedOpen && (
+              <div className="rounded-lg border border-edge bg-surface-muted/40 p-2">
+                <ScheduleEditor
+                  schedule={draft.schedule}
+                  onChange={(schedule) => setDraft((d) => ({ ...d, schedule }))}
                 />
-                <span className="text-[11px] text-content-subtle">
-                  {t("automation.fieldKeepUnit")}
+              </div>
+            )}
+
+            {/* Composer card — a faithful copy of the chat composer's input
+                box: same composer-card / composer-action-row / minipill
+                class hooks, so every polish layer in styles.css applies via
+                the data-chat-root scope on the dialog body. Stripped of the
+                chat extras (no queue, no voice mic, no provider lock chip,
+                no context ring, no orch toggle); the send button saves. */}
+            <div
+              className={cn(
+                "composer-card relative flex min-w-0 flex-col overflow-hidden rounded-2xl border border-edge-input bg-surface transition-all duration-200",
+                "focus-within:border-accent focus-within:shadow-[0_0_0_3px_rgb(var(--accent)/0.12)]",
+                showError && !promptOk && "border-danger",
+              )}
+            >
+              <ComposerEditor
+                ref={editorRef}
+                editable
+                placeholder={t("automation.promptPlaceholder")}
+                onChange={(text) => setDraft((d) => ({ ...d, prompt: text }))}
+                onEnter={() => void save()}
+                className="px-3 pt-2.5 text-sm leading-relaxed text-content"
+              />
+              {showError && !promptOk && (
+                <span className="px-3 pb-1 text-[10.5px] text-danger">
+                  {t("automation.editorPromptRequired")}
                 </span>
+              )}
+              <div className="composer-action-row flex flex-wrap items-center justify-between gap-2 px-2.5 pb-2 pt-1.5">
+                <div className="composer-chips flex min-w-0 flex-1 items-center gap-1">
+                  <div className="composer-minipill" data-compact="0">
+                    {/* SDK segment — the chat provider picker bound to the draft */}
+                    <ProviderDropdown
+                      segment
+                      controller={{
+                        providerId: draft.providerId,
+                        onChange: (pid) => switchProvider(pid),
+                      }}
+                    />
+
+                    <span className="composer-minipill-mid" aria-hidden="true" />
+
+                    {/* model segment — the chat model menu bound to the draft */}
+                    <ModelDropdown
+                      controller={{
+                        providerId: draft.providerId,
+                        model: draft.model,
+                        customModelId: draft.customModelId,
+                        onPick: (customModelId, modelId) =>
+                          setDraft((d) => ({ ...d, customModelId, model: modelId })),
+                      }}
+                    />
+
+                    {hasEffort && (
+                      <>
+                        <span className="composer-minipill-mid" aria-hidden="true" />
+                        {/* effort segment — the chat level grid bound to the draft */}
+                        <EffortChip
+                          controller={{
+                            providerId: draft.providerId,
+                            value: draft.effort,
+                            onChange: (v) => setDraft((d) => ({ ...d, effort: v })),
+                          }}
+                        />
+                      </>
+                    )}
+
+                    {hasPerm && (
+                      <>
+                        <span className="composer-minipill-mid" aria-hidden="true" />
+                        {/* permission segment — chat's mode grid; `plan` is
+                            filtered out (unattended runs must not land in
+                            plan mode) */}
+                        <PermissionChip
+                          controller={{
+                            providerId: draft.providerId,
+                            value: draft.permissionMode,
+                            onChange: (v) => setDraft((d) => ({ ...d, permissionMode: v })),
+                            modes: draftPermModes,
+                          }}
+                        />
+                      </>
+                    )}
+                  </div>
+                </div>
+                {/* Right cluster — chat composer's send slot, repurposed as
+                    the save action (Enter in the editor saves too). */}
+                <div className="flex shrink-0 items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={() => void save()}
+                    disabled={saving || !promptOk}
+                    title={t("automation.save")}
+                    aria-label={t("automation.save")}
+                    data-ready={promptOk && !saving ? "1" : "0"}
+                    className="composer-send inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-accent text-surface shadow-sm transition-all duration-150 ease-out hover:scale-110 hover:brightness-110 hover:shadow-md hover:shadow-accent/20 active:scale-95 active:brightness-95 disabled:scale-100 disabled:cursor-not-allowed disabled:bg-surface-hover disabled:text-content-subtle disabled:shadow-none disabled:hover:scale-100"
+                  >
+                    <IconSend2 size={16} />
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {/* retention — read-only text in edit mode */}
+            <div className="flex flex-col gap-1">
+              {sectionLabel("automation.fieldKeep")}
+              <div className="flex items-center gap-1.5">
+                {editing ? (
+                  <span className="text-[11px] text-content-muted">
+                    {task?.keepRuns} {t("automation.fieldKeepUnit")}
+                  </span>
+                ) : (
+                  <>
+                    <Input
+                      type="number"
+                      min={1}
+                      max={200}
+                      value={draft.keepRuns}
+                      onChange={(e) => {
+                        const n = Number.parseInt(e.target.value, 10);
+                        setDraft((d) => ({
+                          ...d,
+                          keepRuns: Number.isFinite(n) ? Math.min(200, Math.max(1, n)) : d.keepRuns,
+                        }));
+                      }}
+                      className="w-16"
+                    />
+                    <span className="text-[11px] text-content-subtle">
+                      {t("automation.fieldKeepUnit")}
+                    </span>
+                  </>
+                )}
               </div>
             </div>
           </div>
 
-          {/* footer */}
+          {/* footer — cancel only: save lives in the composer's send slot */}
           <div className="flex shrink-0 items-center justify-end gap-2 border-t border-edge px-4 py-2.5">
             <button
               type="button"
@@ -606,17 +568,6 @@ export function AutomationEditor({
               className="rounded-md border border-input-edge px-3 py-1 text-[11.5px] font-semibold text-content-muted hover:bg-surface-hover hover:text-content"
             >
               {t("common.cancel")}
-            </button>
-            <button
-              type="button"
-              onClick={() => void save()}
-              disabled={saving || (!promptOk && showError)}
-              className={cn(
-                "rounded-md bg-accent px-3 py-1 text-[11.5px] font-semibold text-accent-contrast hover:brightness-110",
-                "disabled:cursor-not-allowed disabled:opacity-50",
-              )}
-            >
-              {t("automation.save")}
             </button>
           </div>
         </Dialog.Popup>
