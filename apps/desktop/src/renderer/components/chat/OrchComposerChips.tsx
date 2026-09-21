@@ -108,14 +108,19 @@ function ScheduleChip({ sessionId }: { sessionId: string }) {
         onClick={handleToggle}
         title={schedule ? describeSchedule(schedule) : t("automation.sectionScheduleDesc")}
         className={cn(
-          "flex h-6 items-center gap-1.5 rounded-md border px-1.5 text-[11px] transition-colors",
+          "flex h-6 items-center gap-1.5 rounded-md border px-2 text-[11px] transition-all shadow-2xs",
           schedule
-            ? "border-accent bg-accent/15 font-semibold text-accent"
-            : "border-dashed border-edge text-content-muted hover:border-accent hover:text-accent",
-          open && "border-accent text-accent",
+            ? "border-accent/40 bg-accent/10 font-medium text-accent hover:bg-accent/15 dark:bg-accent/15 dark:border-accent/50"
+            : open
+              ? "border-edge-hover bg-surface-muted/80 text-content shadow-xs"
+              : "border-edge/60 bg-surface-muted/30 text-content-muted hover:border-edge-hover hover:bg-surface-muted/60 hover:text-content",
         )}
       >
-        <IconClock size={12} />
+        {schedule ? (
+          <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-accent animate-pulse" />
+        ) : (
+          <IconClock size={12} className="shrink-0" />
+        )}
         <span className="max-w-[110px] truncate">
           {schedule ? describeSchedule(schedule) : t("automation.composerBtn")}
         </span>
@@ -128,10 +133,10 @@ function ScheduleChip({ sessionId }: { sessionId: string }) {
               setTaskSchedule(sessionId, null);
             }}
             onMouseDown={(e) => e.preventDefault()}
-            className="-mr-0.5 rounded-full p-0.5 hover:bg-accent/20"
+            className="-mr-1 rounded-full p-0.5 text-accent/70 hover:bg-accent/20 hover:text-accent transition-colors"
             title={t("common.cancel")}
           >
-            <IconX size={9} />
+            <IconX size={10} />
           </span>
         )}
       </button>
@@ -142,16 +147,28 @@ function ScheduleChip({ sessionId }: { sessionId: string }) {
             onClick={closePopover}
             onMouseDown={(e) => e.preventDefault()}
           />
-          <div className="absolute bottom-full left-0 z-[65] mb-1.5 w-[330px] rounded-xl border border-panel-edge bg-surface p-3 shadow-2xl">
-            <div className="mb-2 flex items-center gap-1.5 text-[12px] font-bold">
-              <IconClock size={12} className="text-accent" />
-              {t("automation.composerBtn")} · {t("automation.sectionSchedule")}
+          <div className="absolute bottom-full left-0 z-[65] mb-2 w-[370px] rounded-2xl border border-edge/70 bg-surface/95 p-3.5 shadow-2xl backdrop-blur-xl dark:bg-surface/90 dark:border-edge/80 dark:shadow-[0_20px_50px_rgba(0,0,0,0.6)] animate-in fade-in zoom-in-95 duration-150">
+            <div className="mb-2.5 flex items-center justify-between">
+              <div className="flex items-center gap-1.5 text-xs font-semibold text-content">
+                <div className="flex h-5 w-5 items-center justify-center rounded-md border border-edge/40 bg-accent/10 text-accent dark:bg-accent/15">
+                  <IconClock size={12} />
+                </div>
+                <span>{t("automation.composerBtn")} · {t("automation.sectionSchedule")}</span>
+              </div>
+              <button
+                type="button"
+                onClick={closePopover}
+                className="rounded-full p-1 text-content-subtle hover:bg-surface-muted hover:text-content transition-colors"
+                title={t("common.close")}
+              >
+                <IconX size={12} />
+              </button>
             </div>
             <ScheduleEditor
               schedule={schedule ?? { type: "daily", time: "09:00" }}
               onChange={(next) => setTaskSchedule(sessionId, next)}
             />
-            <div className="mt-2 text-[10.5px] leading-relaxed text-content-subtle">
+            <div className="mt-2.5 rounded-lg border border-edge/40 bg-surface-muted/40 dark:bg-surface-muted/20 px-2.5 py-1.5 text-[10.5px] leading-relaxed text-content-subtle">
               {t("automation.sched.composerHint")}
             </div>
           </div>

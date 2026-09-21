@@ -475,24 +475,27 @@ function Chevron({ open, className }: { open: boolean; className?: string }) {
  *
  *  Single images never reach here — `groupBlocks` renders a lone image via the
  *  normal BlockView image case. This component only assembles runs of 2+. */
-/** A run of consecutive attachment blocks (paste/file/quote cards) renders as
- *  ONE wrapping chip row — visual parity with the composer's chips strip
- *  (flex flex-wrap gap-1.5). Each card keeps its own TagPopover / IDE-open
- *  interaction; only the layout changed from one full row per chip. */
+/** A run of consecutive attachment blocks (paste/file/quote cards).
+ *  - 1 item: renders as a standalone clean card.
+ *  - 2+ items: collapses into an Apple-inspired stacked card deck (AttachmentStackDeck),
+ *    which expands into a macOS-style drawer sheet list (方案 B). */
 function AttachmentRow({ blocks }: { blocks: Extract<Block, { kind: "attachment" }>[] }) {
-  return (
-    <div className="flex flex-wrap gap-1.5">
-      {blocks.map((b, i) => (
-        <AttachmentCard
-          key={i}
-          preview={b.preview}
-          content={b.content}
-          attachmentKind={b.attachmentKind}
-          filePath={b.filePath}
-        />
-      ))}
-    </div>
-  );
+  if (blocks.length <= 1) {
+    return (
+      <div className="flex flex-wrap gap-1.5">
+        {blocks.map((b, i) => (
+          <AttachmentCard
+            key={i}
+            preview={b.preview}
+            content={b.content}
+            attachmentKind={b.attachmentKind}
+            filePath={b.filePath}
+          />
+        ))}
+      </div>
+    );
+  }
+  return <AttachmentStackDeck blocks={blocks} />;
 }
 
 function ImageGallery({ blocks }: { blocks: Extract<Block, { kind: "image" }>[] }) {
@@ -1365,26 +1368,26 @@ function AttachmentCard({
                 : t("chatStream.attachment.viewContent")
         }
         className={cn(
-          "inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-[11px] transition-colors",
+          "inline-flex items-center gap-1.5 rounded-lg border px-2 py-0.5 text-[11px] transition-all",
           open
-            ? "border-accent bg-accent/20 text-accent"
-            : "border-accent/40 bg-accent/10 text-accent hover:border-accent/70 hover:bg-accent/20",
+            ? "border-accent/60 bg-accent/10 text-content ring-1 ring-accent/30 shadow-xs"
+            : "border-edge/70 bg-surface-muted/70 text-content hover:bg-surface-hover/80 hover:border-edge shadow-2xs",
         )}
       >
         {isFile ? (
           isImage ? (
-            <IconPhoto size={12} className="opacity-80" />
+            <IconPhoto size={12} className="shrink-0 text-violet-500 opacity-90" />
           ) : (
-            <IconFile size={12} className="opacity-80" />
+            <IconFile size={12} className="shrink-0 text-blue-500 opacity-90" />
           )
         ) : (
-          <IconClipboard size={12} className="opacity-80" />
+          <IconClipboard size={12} className="shrink-0 text-emerald-500 opacity-90" />
         )}
-        <span className="max-w-[220px] truncate">{preview}</span>
+        <span className="max-w-[220px] truncate font-medium text-content">{preview}</span>
         {(!isFile || isImage) && (
           <IconChevronDown
             size={11}
-            className={cn("shrink-0 opacity-70 transition-transform", !open && "-rotate-90")}
+            className={cn("shrink-0 text-content-muted transition-transform", !open && "-rotate-90")}
           />
         )}
       </button>
@@ -1400,6 +1403,230 @@ function AttachmentCard({
           <TagPopover tag={tag} anchorRect={anchorRect} onClose={closePopover} />,
           document.body,
         )}
+    </div>
+  );
+}
+
+/** A single full-width row inside the expanded AttachmentStackDeck drawer list (方案 B).
+ *  Clicking opens the file in the IDE (with viewable validation) or triggers
+ *  a TagPopover, with rich file-type and action cues. */
+function AttachmentDrawerItem({ block }: { block: Extract<Block, { kind: "attachment" }> }) {
+  const [open, setOpen] = useState(false);
+  const [anchorRect, setAnchorRect] = useState<DOMRect | null>(null);
+  const rowRef = useRef<HTMLDivElement>(null);
+  const { t } = useI18n();
+  const isFile = block.attachmentKind === "file";
+  const isImage = isFile && !!block.filePath && isImageFilePath(block.filePath);
+
+  const refuseExternal = () => {
+    useToastStore.getState().push({
+      kind: "info",
+      title: t("chatStream.attachment.externalTitle"),
+      body: t("chatStream.attachment.externalBody"),
+    });
+  };
+
+  const handleClick = () => {
+    if (isFile && block.filePath && !isImage) {
+      void api.file.isViewable({ filePath: block.filePath }).then((res) => {
+        if (res.viewable) useSessionStore.getState().openFileInIde(block.filePath!);
+        else refuseExternal();
+      });
+      return;
+    }
+    if (open) {
+      setOpen(false);
+      setAnchorRect(null);
+      return;
+    }
+    if (isFile && block.filePath) {
+      void api.file.isViewable({ filePath: block.filePath }).then((res) => {
+        if (!res.viewable) {
+          refuseExternal();
+          return;
+        }
+        const el = rowRef.current;
+        setAnchorRect(el ? el.getBoundingClientRect() : null);
+        setOpen(true);
+      });
+      return;
+    }
+    const el = rowRef.current;
+    setAnchorRect(el ? el.getBoundingClientRect() : null);
+    setOpen(true);
+  };
+
+  const tag: ContentTag = {
+    id: "attachment",
+    kind: block.attachmentKind === "file" ? "file" : "paste",
+    preview: block.preview,
+    content: block.content,
+    filePath: block.filePath,
+  };
+
+  const typeLabel = isFile
+    ? isImage
+      ? t("chatStream.attachment.typeImage")
+      : t("chatStream.attachment.typeCode")
+    : t("chatStream.attachment.typePaste");
+
+  return (
+    <div ref={rowRef} className="relative">
+      <div
+        onClick={handleClick}
+        title={
+          isFile && !isImage
+            ? (block.filePath ?? block.preview)
+            : open
+              ? isImage
+                ? t("chatStream.attachment.collapseImage")
+                : t("chatStream.attachment.collapseContent")
+              : isImage
+                ? t("chatStream.attachment.viewImage")
+                : t("chatStream.attachment.viewContent")
+        }
+        className={cn(
+          "group flex items-center justify-between gap-2.5 rounded-lg px-2.5 py-1.5 text-[11px] transition-colors cursor-pointer border",
+          open
+            ? "border-accent/50 bg-accent/10 shadow-2xs"
+            : "border-transparent bg-surface-muted/50 hover:bg-surface-hover/80 hover:border-edge/60",
+        )}
+      >
+        {/* Left: Icon with soft color background + title & type */}
+        <div className="flex min-w-0 items-center gap-2">
+          <div
+            className={cn(
+              "flex h-5 w-5 shrink-0 items-center justify-center rounded-md text-[11px]",
+              isFile
+                ? isImage
+                  ? "bg-violet-500/10 text-violet-500"
+                  : "bg-blue-500/10 text-blue-500"
+                : "bg-emerald-500/10 text-emerald-500",
+            )}
+          >
+            {isFile ? (
+              isImage ? (
+                <IconPhoto size={12} />
+              ) : (
+                <IconFile size={12} />
+              )
+            ) : (
+              <IconClipboard size={12} />
+            )}
+          </div>
+          <span className="truncate font-medium text-content">{block.preview}</span>
+          <span className="shrink-0 rounded bg-surface/80 px-1 py-0.2 text-[10px] text-content-subtle border border-edge/40">
+            {typeLabel}
+          </span>
+        </div>
+
+        {/* Right: action indicator */}
+        <div className="flex shrink-0 items-center gap-1 text-content-subtle group-hover:text-content-muted">
+          {isFile && !isImage ? (
+            <span className="text-[10px] opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-0.5">
+              <span>{t("chatStream.attachment.openInIde")}</span>
+              <IconChevronRight size={11} />
+            </span>
+          ) : (
+            <IconChevronDown
+              size={11}
+              className={cn("transition-transform", !open && "-rotate-90")}
+            />
+          )}
+        </div>
+      </div>
+
+      {open &&
+        anchorRect &&
+        createPortal(
+          <TagPopover tag={tag} anchorRect={anchorRect} onClose={() => { setOpen(false); setAnchorRect(null); }} />,
+          document.body,
+        )}
+    </div>
+  );
+}
+
+/** Apple-inspired stacked cards deck with macOS Sheet List expansion (方案 B).
+ *  - Collapsed: tight physical card stack with subtle shadows, count badge,
+ *    and spring hover peek.
+ *  - Expanded: smooth drawer list showing each attachment in a dedicated row. */
+function AttachmentStackDeck({ blocks }: { blocks: Extract<Block, { kind: "attachment" }>[] }) {
+  const [expanded, setExpanded] = useState(false);
+  const { t } = useI18n();
+  const count = blocks.length;
+  const first = blocks[0];
+  const isFirstFile = first.attachmentKind === "file";
+  const isFirstImage = isFirstFile && !!first.filePath && isImageFilePath(first.filePath);
+
+  if (!expanded) {
+    return (
+      <div className="py-0.5">
+        <div
+          onClick={() => setExpanded(true)}
+          title={t("chatStream.attachment.expandTooltip", { n: count })}
+          className="group relative inline-flex cursor-pointer select-none items-center"
+        >
+          {/* Layer 2: bottom deck layer (shown when 3+ cards) */}
+          {count >= 3 && (
+            <div
+              className="pointer-events-none absolute inset-0 rounded-lg border border-edge/50 bg-surface-muted/80 shadow-2xs transition-transform duration-200 translate-y-[6px] scale-[0.93] opacity-40 group-hover:translate-y-[7px] group-hover:scale-[0.94] group-hover:opacity-60"
+            />
+          )}
+
+          {/* Layer 1: middle deck layer (shown when 2+ cards) */}
+          <div
+            className="pointer-events-none absolute inset-0 rounded-lg border border-edge/60 bg-surface-muted/90 shadow-2xs transition-transform duration-200 translate-y-[3px] scale-[0.96] opacity-70 group-hover:translate-y-[3.5px] group-hover:scale-[0.97] group-hover:opacity-85"
+          />
+
+          {/* Top card: interactive header */}
+          <div className="relative z-10 inline-flex items-center gap-1.5 rounded-lg border border-edge/80 bg-surface px-2.5 py-1 text-[11px] shadow-2xs transition-all group-hover:border-edge group-hover:bg-surface-hover/60">
+            {isFirstFile ? (
+              isFirstImage ? (
+                <IconPhoto size={12} className="shrink-0 text-violet-500 opacity-90" />
+              ) : (
+                <IconFile size={12} className="shrink-0 text-blue-500 opacity-90" />
+              )
+            ) : (
+              <IconClipboard size={12} className="shrink-0 text-emerald-500 opacity-90" />
+            )}
+            <span className="max-w-[200px] truncate font-medium text-content">{first.preview}</span>
+            <div className="mx-0.5 h-3 w-[1px] bg-edge/70" />
+            {/* Apple-style pill count badge */}
+            <span className="inline-flex items-center gap-0.5 rounded-full bg-accent/15 px-1.5 py-0.2 text-[10px] font-medium text-accent transition-transform group-hover:scale-105">
+              <span>+{count - 1}</span>
+              <IconChevronDown size={10} className="shrink-0 -rotate-90 opacity-70 transition-transform group-hover:translate-x-0.5" />
+            </span>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Expanded macOS Sheet List (方案 B)
+  return (
+    <div className="w-full max-w-lg rounded-xl border border-edge/80 bg-surface/95 backdrop-blur-md p-2 shadow-sm space-y-1 my-1 transition-all">
+      {/* Header bar */}
+      <div className="flex items-center justify-between px-1.5 py-1 border-b border-edge/50 text-[11px]">
+        <div className="flex items-center gap-1.5 font-medium text-content">
+          <IconStack2 size={13} className="shrink-0 text-accent" />
+          <span>{t("chatStream.attachment.stackSummary", { n: count })}</span>
+        </div>
+        <button
+          type="button"
+          onClick={() => setExpanded(false)}
+          className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[11px] text-content-muted hover:text-content hover:bg-surface-hover transition-colors"
+        >
+          <span>{t("chatStream.attachment.collapse")}</span>
+          <IconChevronDown size={11} className="rotate-180 opacity-70" />
+        </button>
+      </div>
+
+      {/* List items */}
+      <div className="flex flex-col gap-0.5 max-h-72 overflow-y-auto pr-0.5">
+        {blocks.map((b, i) => (
+          <AttachmentDrawerItem key={i} block={b} />
+        ))}
+      </div>
     </div>
   );
 }

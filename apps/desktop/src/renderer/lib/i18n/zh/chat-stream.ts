@@ -59,6 +59,13 @@ export const zh = {
   "chatStream.attachment.collapseContent": "收起内容",
   "chatStream.attachment.externalTitle": "无法查看外部文件",
   "chatStream.attachment.externalBody": "该文件不在任何项目或工作树内,应用无法读取其内容。",
+  "chatStream.attachment.stackSummary": "包含 {n} 项附件内容",
+  "chatStream.attachment.collapse": "收起",
+  "chatStream.attachment.expandTooltip": "点击展开全部 {n} 项附件",
+  "chatStream.attachment.openInIde": "在编辑器中打开",
+  "chatStream.attachment.typeCode": "文件",
+  "chatStream.attachment.typePaste": "剪贴板片段",
+  "chatStream.attachment.typeImage": "图片",
 
   // ── Markdown ──
   "chatStream.copyCode": "复制代码",

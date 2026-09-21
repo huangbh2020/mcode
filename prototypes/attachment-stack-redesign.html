@@ -1,0 +1,549 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>附件卡配色优化 + 苹果式堆叠 · 设计稿</title>
+<style>
+  /* ══════════ 主题令牌(取自 apps/desktop/src/renderer/styles.css 实值) ══════════ */
+  .proto {
+    --accent: 5 150 105;        /* emerald-600 亮色主题品牌色 */
+    --accent-strong: 4 120 87;  /* emerald-700 亮色小号强调文本 */
+    --chat-font-size: 14px;
+    --chat-fs-sm: calc(var(--chat-font-size) * 0.9286);
+    --chat-fs-xs: calc(var(--chat-font-size) * 0.8571);
+    --chat-fs-xxs: calc(var(--chat-font-size) * 0.7857);
+    --chat-block-gap: 8px;
+    --chat-ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+    --chat-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+    --user-bubble: 5 150 105;
+    --user-bubble-alpha: 0.15;
+  }
+  .proto[data-theme="light"] {
+    --surface: 255 255 255;
+    --surface-muted: 240 242 246;
+    --surface-hover: 226 229 235;
+    --content: 9 9 11;
+    --content-muted: 63 63 70;
+    --content-subtle: 113 113 122;
+    --edge: 213 216 222;
+    --page-bg: 246 247 249;
+  }
+  .proto[data-theme="dark"] {
+    --surface: 26 29 36;
+    --surface-muted: 44 49 60;
+    --surface-hover: 58 64 78;
+    --content: 231 232 236;
+    --content-muted: 188 191 198;
+    --content-subtle: 158 162 171;
+    --edge: 45 51 64;
+    --accent: 16 185 129;       /* emerald-500 */
+    --accent-strong: 16 185 129;
+    --user-bubble: 16 185 129;
+    --user-bubble-alpha: 0.25;
+    --page-bg: 17 19 24;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  .proto {
+    font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+    background: rgb(var(--page-bg));
+    color: rgb(var(--content));
+    min-height: 100vh;
+    padding: 32px 24px 80px;
+    transition: background-color .25s, color .25s;
+  }
+  .wrap { max-width: 1060px; margin: 0 auto; }
+
+  h1 { font-size: 22px; font-weight: 650; letter-spacing: -.01em; }
+  .sub { margin-top: 6px; font-size: 13px; color: rgb(var(--content-muted)); line-height: 1.6; }
+  .toolbar { display: flex; align-items: center; gap: 10px; margin: 18px 0 8px; }
+  .toggle {
+    border: 1px solid rgb(var(--edge)); background: rgb(var(--surface));
+    color: rgb(var(--content-muted)); border-radius: 999px; padding: 5px 14px;
+    font-size: 12px; cursor: pointer; transition: all .2s;
+  }
+  .toggle:hover { border-color: rgb(var(--accent) / .5); color: rgb(var(--content)); }
+
+  section { margin-top: 40px; }
+  .sec-title { display: flex; align-items: baseline; gap: 10px; font-size: 16px; font-weight: 650; }
+  .sec-tag {
+    font-size: 11px; font-weight: 500; color: rgb(var(--accent-strong));
+    background: rgb(var(--accent) / .1); border: 1px solid rgb(var(--accent) / .3);
+    padding: 1px 8px; border-radius: 999px;
+  }
+  .sec-desc { margin-top: 8px; font-size: 13px; color: rgb(var(--content-muted)); line-height: 1.7; max-width: 78ch; }
+  .sec-desc b { color: rgb(var(--content)); font-weight: 600; }
+
+  .board {
+    margin-top: 16px; border: 1px solid rgb(var(--edge)); border-radius: 14px;
+    background: rgb(var(--surface)); padding: 20px;
+    display: flex; flex-direction: column; gap: 20px;
+  }
+  .row-label { font-size: 11px; color: rgb(var(--content-subtle)); margin-bottom: 8px; letter-spacing: .02em; }
+
+  /* ══════════ 附件 chip 基础形状(与线上 AttachmentCard 同尺寸) ══════════ */
+  .chip {
+    display: inline-flex; align-items: center; gap: 5px;
+    border-radius: 6px; padding: 3px 7px;
+    font-size: 11px; line-height: 1.45; white-space: nowrap;
+    transition: border-color .18s, background-color .18s, color .18s, box-shadow .18s;
+    cursor: pointer; user-select: none;
+  }
+  .chip svg { flex-shrink: 0; }
+  .chip .nm { max-width: 15rem; overflow: hidden; text-overflow: ellipsis; }
+
+  /* 现状:全部吃品牌强调色 */
+  .chip.cur  { border: 1px solid rgb(var(--accent) / .4); background: rgb(var(--accent) / .1); color: rgb(var(--accent)); }
+  .chip.cur:hover { border-color: rgb(var(--accent) / .7); background: rgb(var(--accent) / .2); }
+
+  /* 方案 A:中性纸面 —— 白(表面)卡 + 灰边 + 中性文字,图标最淡;选中态才回强调色 */
+  .chip.na {
+    border: 1px solid rgb(var(--edge)); background: rgb(var(--surface));
+    color: rgb(var(--content-muted)); box-shadow: 0 1px 2px rgb(0 0 0 / .05);
+  }
+  .chip.na svg { color: rgb(var(--content-subtle)); }
+  .chip.na:hover { border-color: rgb(var(--content-subtle)); color: rgb(var(--content)); }
+  .chip.na.open {
+    border-color: rgb(var(--accent) / .7); color: rgb(var(--accent-strong));
+    background: rgb(var(--accent) / .08);
+    box-shadow: 0 0 0 3px rgb(var(--accent) / .12);
+  }
+  .chip.na.open svg { color: rgb(var(--accent-strong)); }
+
+  /* 方案 B:静音强调 —— 保留一丝品牌底色,但文字回归中性 */
+  .chip.nb {
+    border: 1px solid rgb(var(--accent) / .25); background: rgb(var(--accent) / .08);
+    color: rgb(var(--content-muted));
+  }
+  .chip.nb svg { color: rgb(var(--accent) / .8); }
+  .chip.nb:hover { border-color: rgb(var(--accent) / .5); color: rgb(var(--content)); }
+  .chip.nb.open {
+    border-color: rgb(var(--accent) / .7); color: rgb(var(--accent-strong));
+    background: rgb(var(--accent) / .15);
+    box-shadow: 0 0 0 3px rgb(var(--accent) / .12);
+  }
+
+  /* ══════════ 气泡环境(右对齐用户气泡) ══════════ */
+  .chatline { display: flex; justify-content: flex-end; }
+  .bubble {
+    max-width: 78%;
+    background: rgb(var(--user-bubble) / var(--user-bubble-alpha));
+    border-radius: 13px 13px 5px 13px;
+    padding: 8px 12px; font-size: var(--chat-font-size); line-height: 1.6;
+  }
+  .plain-well {
+    background: rgb(var(--surface-muted)); border-radius: 13px;
+    padding: 8px 12px;
+  }
+  .media { margin-bottom: var(--chat-block-gap); }
+  .media:last-child { margin-bottom: 0; }
+  .chiprow { display: flex; flex-wrap: wrap; gap: 6px; align-items: flex-start; }
+
+  /* ══════════ 堆叠(收起态)══════════
+     结构 = 顶卡(真 chip)+ 1-2 层"卡背"伪影 + 计数徽标。
+     与实现方案一致:收起态只渲染顶卡 + 装饰层,其余卡片进展开行。 */
+  .stack { position: relative; display: inline-block; cursor: pointer; }
+  .stack .top { position: relative; z-index: 3; }
+  .stack .ghost {
+    position: absolute; left: 0; top: 0; z-index: 1; pointer-events: none;
+    transition: transform .3s var(--chat-ease-out), opacity .25s;
+  }
+  /* 徽标:顶卡右上角骑缝 */
+  .stack .badge {
+    position: absolute; z-index: 4; top: -7px; right: -7px;
+    min-width: 17px; height: 17px; padding: 0 5px; border-radius: 999px;
+    background: rgb(var(--content-muted)); color: rgb(var(--surface));
+    font-size: 10px; font-weight: 600; line-height: 17px; text-align: center;
+    box-shadow: 0 0 0 2px rgb(var(--surface));
+  }
+  .stack:hover { transform: translateY(-1px); }
+  .stack { transition: transform .2s var(--chat-ease-out); }
+
+  /* V1 垂直堆叠(Wallet 式:下层卡从底缘露出) */
+  .stack.v1 .ghost { width: 100%; }
+  .stack.v1 .ghost.g1 { transform: translateY(4px) scale(.965); opacity: .55; }
+  .stack.v1 .ghost.g2 { transform: translateY(8px) scale(.93); opacity: .3; }
+  .stack.v1 { padding-bottom: 9px; }
+  /* V2 微扇(两侧各转一点,相册堆感) */
+  .stack.v2 .ghost { width: 100%; transform-origin: 50% 100%; }
+  .stack.v2 .ghost.g1 { transform: translateY(3px) rotate(-2.5deg); opacity: .5; }
+  .stack.v2 .ghost.g2 { transform: translateY(4px) rotate(2.5deg); opacity: .3; }
+  .stack.v2 { padding: 0 6px 6px; }
+  /* V3 右下层叠(macOS 桌面堆栈式) */
+  .stack.v3 .ghost { width: 100%; }
+  .stack.v3 .ghost.g1 { transform: translate(5px, 4px) scale(.97); opacity: .5; }
+  .stack.v3 .ghost.g2 { transform: translate(10px, 8px) scale(.94); opacity: .28; }
+  .stack.v3 { padding: 0 11px 10px 0; }
+
+  /* ghost 的卡面配色跟随方案 A(中性纸面) */
+  .ghost {
+    border: 1px solid rgb(var(--edge)); border-radius: 6px; height: 22px;
+    background: rgb(var(--surface));
+  }
+
+  /* ══════════ 展开态(高度过渡 + chips 逐个弹入,镜像 composer-tag-in)══════════ */
+  .folder { display: grid; grid-template-rows: 0fr; transition: grid-template-rows .32s var(--chat-ease-out); }
+  .folder > div { overflow: hidden; }
+  .folder.open { grid-template-rows: 1fr; }
+  .folder .chiprow { padding-top: 0; opacity: 0; transition: opacity .2s; }
+  .folder.open .chiprow { padding-top: 2px; opacity: 1; }
+  .folder.open .chip { animation: chip-in .38s var(--chat-spring) backwards; }
+  .folder.open .chip:nth-child(2) { animation-delay: .04s; }
+  .folder.open .chip:nth-child(3) { animation-delay: .08s; }
+  .folder.open .chip:nth-child(4) { animation-delay: .12s; }
+  .folder.open .chip:nth-child(5) { animation-delay: .16s; }
+  @keyframes chip-in {
+    from { opacity: 0; transform: translateY(6px) scale(.92); }
+    to   { opacity: 1; transform: none; }
+  }
+  .collapse-pill {
+    align-self: center;
+    display: inline-flex; align-items: center; gap: 3px;
+    border: 1px solid rgb(var(--edge)); border-radius: 999px;
+    background: rgb(var(--surface)); color: rgb(var(--content-muted));
+    font-size: var(--chat-fs-xxs); padding: 1px 8px; cursor: pointer;
+  }
+  .collapse-pill:hover { background: rgb(var(--surface-hover)); color: rgb(var(--content)); }
+
+  .specimen { display: flex; flex-direction: column; gap: 10px; }
+  .swatch-note { font-size: 12px; color: rgb(var(--content-subtle)); line-height: 1.6; margin-top: 4px; }
+  .swatch-note b { color: rgb(var(--content)); }
+  .demo-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; }
+  .demo-cell { border: 1px solid rgb(var(--edge)); border-radius: 12px; padding: 14px; }
+  .hint { margin-top: 10px; font-size: 11px; color: rgb(var(--content-subtle)); }
+  ul.rules { margin: 12px 0 0 18px; font-size: 13px; color: rgb(var(--content-muted)); line-height: 1.9; }
+  ul.rules b { color: rgb(var(--content)); }
+  .reco {
+    margin-top: 14px; border-left: 3px solid rgb(var(--accent)); border-radius: 6px;
+    background: rgb(var(--accent) / .07); padding: 10px 14px; font-size: 13px; line-height: 1.7;
+    color: rgb(var(--content-muted));
+  }
+  .reco b { color: rgb(var(--content)); }
+</style>
+</head>
+<body>
+<div class="proto" id="proto" data-theme="light">
+  <div class="wrap">
+    <h1>附件卡 · 配色优化 + 苹果式堆叠</h1>
+    <p class="sub">
+      范围:用户消息流中的附件卡(文件 / 粘贴 / 引用,即 <code>AttachmentCard</code>,含上一轮的合并 chip 行)。
+      目标:① 文字不再直接使用品牌强调色;② 多卡时收拢为可点击展开的堆叠(iOS Wallet / 通知堆叠质感)。
+      主题令牌取自 styles.css 实值,右上角可切换明暗主题预览。
+    </p>
+    <div class="toolbar">
+      <button class="toggle" onclick="toggleTheme()">切换明暗主题</button>
+      <span style="font-size:12px;color:rgb(var(--content-subtle))">堆叠卡片均可点击体验展开 / 收起</span>
+    </div>
+
+    <!-- ═══════════ 一、配色 ═══════════ -->
+    <section>
+      <div class="sec-title">一、卡片配色 <span class="sec-tag">2 个候选</span></div>
+      <p class="sec-desc">
+        现状:边框、底色、文字、图标四层全部吃强调色,信息未选中也在"高喊"。iOS Messages 的做法是
+        <b>气泡上的附件 = 中性纸面小卡</b>:白底、灰边、中性文字,只有选中 / 打开态才回到品牌色 —— 与气泡的品牌色底形成
+        "彩色信纸 + 白卡片"的层次。以下两个候选都把<b>文字降为中性</b>,区别在图标与底色保留多少品牌气息。
+      </p>
+      <div class="board">
+        <div class="specimen">
+          <div class="row-label">现状(对照)</div>
+          <div class="chatline"><div class="bubble"><div class="chiprow">
+            <span class="chip cur">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"/></svg>
+              <span class="nm">福利系统与报销对接工作汇报.docx</span>
+            </span>
+            <span class="chip cur">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M14 2v6h6"/></svg>
+              <span class="nm">兑换券日志.txt</span>
+            </span>
+          </div></div></div>
+          <div class="swatch-note">四层强调色 —— 未交互也在强调,气泡内多个卡时尤其吵。</div>
+        </div>
+
+        <div class="specimen">
+          <div class="row-label">方案 A · 中性纸面(推荐)</div>
+          <div class="chatline"><div class="bubble"><div class="chiprow">
+            <span class="chip na">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M14 2v6h6"/></svg>
+              <span class="nm">报销查询列表报表.txt</span>
+            </span>
+            <span class="chip na">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"/></svg>
+              <span class="nm">截图 2026-09-21.png</span>
+            </span>
+            <span class="chip na open">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M14 2v6h6"/></svg>
+              <span class="nm">福利系统与报销对接工作汇报.docx(打开态)</span>
+            </span>
+          </div></div></div>
+          <div class="swatch-note"><b>白卡 + 灰边 + 中性文字(zinc-700)</b>,图标最淡一档(zinc-500);白卡浮在品牌色气泡上,层次与 iOS Messages 一致。
+          打开态(右侧)保留强调色描边 + 柔光,作为唯一的"激活"信号。hover 只提亮文字与边框,不加品牌色。</div>
+        </div>
+
+        <div class="specimen">
+          <div class="row-label">方案 B · 静音强调</div>
+          <div class="chatline"><div class="bubble"><div class="chiprow">
+            <span class="chip nb">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M14 2v6h6"/></svg>
+              <span class="nm">报销查询列表报表.txt</span>
+            </span>
+            <span class="chip nb">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"/></svg>
+              <span class="nm">截图 2026-09-21.png</span>
+            </span>
+          </div></div></div>
+          <div class="swatch-note">底色保留 8% 品牌色、图标保留 80% 品牌色,仅文字回归中性。比 A 多一点"可点"暗示,但气泡品牌底 + 品牌 tint 卡仍偏彩。</div>
+        </div>
+
+        <div class="specimen">
+          <div class="row-label">同一组卡在非气泡环境(输入框 chips 条 / 右栏面板,灰底井)</div>
+          <div class="plain-well"><div class="chiprow">
+            <span class="chip na">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M14 2v6h6"/></svg>
+              <span class="nm">报销查询列表报表.txt</span>
+            </span>
+            <span class="chip cur">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M14 2v6h6"/></svg>
+              <span class="nm">现状对照</span>
+            </span>
+          </div></div>
+          <div class="swatch-note">方案 A 的白卡在灰底井上同样成立(输入框 chips 条即此环境);若采纳,composer 的 ContentTagChip 应同步换色,两侧才一致。</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ═══════════ 二、堆叠 ═══════════ -->
+    <section>
+      <div class="sec-title">二、多卡堆叠 · 点击展开 <span class="sec-tag">3 个形态 × 可交互</span></div>
+      <p class="sec-desc">
+        ≥2 张卡时收拢为一叠:<b>顶卡 = 第一张附件(真实可交互卡)</b>,身后 1-2 层卡背伪影,右上角骑缝计数徽标。
+        点击堆叠展开为现有 chip 条(逐卡弹入),行尾「收起」回到堆叠。收起态只渲染顶卡 + 装饰层,
+        不渲染真实卡 —— 与实现方案一致,展开行省掉堆叠里已有的那张。
+      </p>
+      <div class="board">
+        <div class="demo-grid">
+          <div class="demo-cell">
+            <div class="row-label">V1 · 垂直堆叠(Wallet 卡包式,推荐)</div>
+            <div class="chatline"><div class="bubble">
+              <div class="media">
+                <div class="stack v1" onclick="expand(this)" title="点击展开 3 个附件">
+                  <span class="ghost g2"></span>
+                  <span class="ghost g1"></span>
+                  <span class="chip na top">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M14 2v6h6"/></svg>
+                    <span class="nm">福利系统与报销对接工作汇报.docx</span>
+                  </span>
+                  <span class="badge">3</span>
+                </div>
+                <div class="folder" data-folder>
+                  <div><div class="chiprow" data-chips>
+                    <span class="chip na">
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M14 2v6h6"/></svg>
+                      <span class="nm">福利系统与报销对接工作汇报.docx</span>
+                    </span>
+                    <span class="chip na">
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M14 2v6h6"/></svg>
+                      <span class="nm">报销查询列表报表.txt</span>
+                    </span>
+                    <span class="chip na">
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M14 2v6h6"/></svg>
+                      <span class="nm">兑换券日志.txt</span>
+                    </span>
+                    <button class="collapse-pill" onclick="collapse(this)">
+                      <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M18 15l-6-6-6 6"/></svg>
+                      收起
+                    </button>
+                  </div></div>
+                </div>
+              </div>
+              <div>帮我把这三份材料里的报销口径差异整理成一张表</div>
+            </div></div>
+            <div class="hint">下层卡从底缘水平露出,无旋转 —— 最稳重,与手绘主题也不打架;顶卡文件名过长时截断,徽标始终可见。</div>
+          </div>
+
+          <div class="demo-cell">
+            <div class="row-label">V2 · 微扇形(相册堆感,更活泼)</div>
+            <div class="chatline"><div class="bubble">
+              <div class="media">
+                <div class="stack v2" onclick="expand(this)" title="点击展开 3 个附件">
+                  <span class="ghost g2"></span>
+                  <span class="ghost g1"></span>
+                  <span class="chip na top">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M14 2v6h6"/></svg>
+                    <span class="nm">福利系统与报销对接工作汇报.docx</span>
+                  </span>
+                  <span class="badge">3</span>
+                </div>
+                <div class="folder" data-folder>
+                  <div><div class="chiprow" data-chips>
+                    <span class="chip na">
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M14 2v6h6"/></svg>
+                      <span class="nm">福利系统与报销对接工作汇报.docx</span>
+                    </span>
+                    <span class="chip na">
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M14 2v6h6"/></svg>
+                      <span class="nm">报销查询列表报表.txt</span>
+                    </span>
+                    <span class="chip na">
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M14 2v6h6"/></svg>
+                      <span class="nm">兑换券日志.txt</span>
+                    </span>
+                    <button class="collapse-pill" onclick="collapse(this)">
+                      <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M18 15l-6-6-6 6"/></svg>
+                      收起
+                    </button>
+                  </div></div>
+                </div>
+              </div>
+              <div>帮我把这三份材料里的报销口径差异整理成一张表</div>
+            </div></div>
+            <div class="hint">身后两层左右各转 ±2.5°。生动,但与「手绘纸面」主题的笔直线条气质稍有出入。</div>
+          </div>
+
+          <div class="demo-cell">
+            <div class="row-label">V3 · 右下层叠(macOS 桌面堆栈式)</div>
+            <div class="chatline"><div class="bubble">
+              <div class="media">
+                <div class="stack v3" onclick="expand(this)" title="点击展开 3 个附件">
+                  <span class="ghost g2"></span>
+                  <span class="ghost g1"></span>
+                  <span class="chip na top">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M14 2v6h6"/></svg>
+                    <span class="nm">福利系统与报销对接工作汇报.docx</span>
+                  </span>
+                  <span class="badge">3</span>
+                </div>
+                <div class="folder" data-folder>
+                  <div><div class="chiprow" data-chips>
+                    <span class="chip na">
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M14 2v6h6"/></svg>
+                      <span class="nm">福利系统与报销对接工作汇报.docx</span>
+                    </span>
+                    <span class="chip na">
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M14 2v6h6"/></svg>
+                      <span class="nm">报销查询列表报表.txt</span>
+                    </span>
+                    <span class="chip na">
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M14 2v6h6"/></svg>
+                      <span class="nm">兑换券日志.txt</span>
+                    </span>
+                    <button class="collapse-pill" onclick="collapse(this)">
+                      <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M18 15l-6-6-6 6"/></svg>
+                      收起
+                    </button>
+                  </div></div>
+                </div>
+              </div>
+              <div>帮我把这三份材料里的报销口径差异整理成一张表</div>
+            </div></div>
+            <div class="hint">卡背朝右下错位,方向感指向"还有更多"。右对齐气泡里向外生长,但占位最宽。</div>
+          </div>
+        </div>
+
+        <div class="specimen">
+          <div class="row-label">状态矩阵:单卡不堆叠 · 两卡即堆叠 · 五卡展开后换行</div>
+          <div class="chatline"><div class="bubble">
+            <div class="media"><div class="chiprow">
+              <span class="chip na">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M14 2v6h6"/></svg>
+                <span class="nm">兑换券日志.txt</span>
+              </span>
+            </div></div>
+            <div>单卡:维持现状,永远不堆叠。</div>
+          </div></div>
+          <div class="chatline" style="margin-top:12px"><div class="bubble">
+            <div class="media">
+              <div class="stack v1" onclick="expand(this)" title="点击展开 2 个附件" style="max-width:100%">
+                <span class="ghost g1"></span>
+                <span class="chip na top">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M14 2v6h6"/></svg>
+                  <span class="nm">兑换券日志.txt</span>
+                </span>
+                <span class="badge">2</span>
+              </div>
+              <div class="folder" data-folder>
+                <div><div class="chiprow">
+                  <span class="chip na">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M14 2v6h6"/></svg>
+                    <span class="nm">兑换券日志.txt</span>
+                  </span>
+                  <span class="chip na">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M14 2v6h6"/></svg>
+                    <span class="nm">报销查询列表报表.txt</span>
+                  </span>
+                  <button class="collapse-pill" onclick="collapse(this)">
+                    <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M18 15l-6-6-6 6"/></svg>
+                    收起
+                  </button>
+                </div></div>
+              </div>
+            </div>
+            <div>两卡:一叠两层,徽标 ×2。</div>
+          </div></div>
+          <div class="chatline" style="margin-top:12px"><div class="bubble">
+            <div class="media">
+              <div class="folder open">
+                <div><div class="chiprow">
+                  <span class="chip na"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M14 2v6h6"/></svg><span class="nm">福利系统与报销对接工作汇报.docx</span></span>
+                  <span class="chip na"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M14 2v6h6"/></svg><span class="nm">报销查询列表报表.txt</span></span>
+                  <span class="chip na"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M14 2v6h6"/></svg><span class="nm">兑换券日志.txt</span></span>
+                  <span class="chip na"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M14 2v6h6"/></svg><span class="nm">数据字典.xlsx</span></span>
+                  <span class="chip na"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"/></svg><span class="nm">截图 2026-09-21.png</span></span>
+                  <button class="collapse-pill" onclick="collapse(this)">
+                    <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M18 15l-6-6-6 6"/></svg>
+                    收起
+                  </button>
+                </div></div>
+              </div>
+            </div>
+            <div>五卡展开:自动换行,与输入框 chips 条同构。</div>
+          </div></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ═══════════ 三、交互细则 ═══════════ -->
+    <section>
+      <div class="sec-title">三、交互与实现细则</div>
+      <div class="board">
+        <ul class="rules">
+          <li><b>堆叠阈值:≥2 张卡</b>。单卡保持普通 chip;堆叠只影响消息流附件行,输入框 composer 的 chips 条不堆叠(那里是"待编辑"语义,需要全部可见可删)。</li>
+          <li><b>点击堆叠 = 展开</b>(命中区含徽标);展开后行尾「收起」pill 收回(镜像代码块折叠 pill,两个折叠面读感一致)。<b>顶卡不拦截点击</b> —— 收起态点顶卡是展开,不是打开文件,避免误触开 IDE。</li>
+          <li><b>展开动画</b>:高度 grid-rows 0fr→1fr 过渡 + chips 逐个弹入(composer-tag-in 同款 spring,每张 +40ms 阶梯);收起反向。<code>prefers-reduced-motion</code> 降级为直切。</li>
+          <li><b>历史持久:不持久化展开态</b>——重开会话默认收起(堆叠即"摘要",展开是临时查阅)。与 5 行折叠的模块级展开集合同思路,可选做成 Set。</li>
+          <li><b>与折叠预算的关系</b>:堆叠在媒体组内(上一轮的媒体豁免),高度恒为一枚 chip + 8px 卡背,永远不会触发 5 行折叠;展开态同理。</li>
+          <li><b>外部文件不可查看的 toast、图片卡预览、文件卡直开 IDE</b> 等既有交互全部保留 —— 堆叠只是容器形态,不碰单卡交互。</li>
+          <li><b>选中态 = 打开中的卡</b>保留强调色描边 + 柔光(方案 A 内唯一品牌色时刻);徽标配色中性(zinc-500 底白字),不参与品牌色。</li>
+          <li><b>暗色主题</b>:同样的令牌替换(卡面 --surface、边 --edge、文字 --content-muted),右上角切换可直接预览。</li>
+        </ul>
+        <div class="reco">
+          <b>推荐组合:配色 A(中性纸面)+ 形态 V1(垂直堆叠)。</b>
+          理由:白卡浮在品牌气泡上是 iOS Messages 验证过的层次模型,品牌色退到"只出现在激活态";V1 无旋转、最稳重,与既有手绘主题和代码块折叠 pill 的克制气质一致。
+          若想要更活泼,可选 B + V2。确认后我再落到 <code>AttachmentCard / AttachmentRow / MessageRow 媒体组</code> 的实现。
+        </div>
+      </div>
+    </section>
+  </div>
+</div>
+
+<script>
+  function toggleTheme() {
+    const root = document.getElementById("proto");
+    root.dataset.theme = root.dataset.theme === "light" ? "dark" : "light";
+  }
+  /* 点击堆叠 → 展开行打开,堆叠本体淡出 */
+  function expand(stack) {
+    const media = stack.closest(".media");
+    const folder = media.querySelector("[data-folder]") || media.querySelector(".folder");
+    folder.classList.add("open");
+    stack.style.display = "none";
+  }
+  /* 「收起」→ 行收回,堆叠回来 */
+  function collapse(btn) {
+    btn.closest(".folder").classList.remove("open");
+    const media = btn.closest(".media");
+    media.querySelector(".stack").style.display = "";
+  }
+</script>
+</body>
+</html>

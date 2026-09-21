@@ -132,6 +132,8 @@ export const en = {
   /* ── form: header actions ── */
   "automation.formUntitled": "Untitled task",
   "automation.runNow": "Run now",
+  "automation.stopRun": "Stop run",
+  "automation.stopRunSuccess": "Task run stopped",
   "automation.save": "Save",
   "automation.saved": "Saved ✓",
   "automation.delete": "Delete",

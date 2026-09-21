@@ -217,5 +217,7 @@ export const en = {
   "layout.image.reveal": "Show in file manager",
   "layout.image.revealed": "Opened containing folder",
   "layout.image.revealFailed": "Couldn't open the containing folder",
+  "layout.image.fitWidth": "Fit width (scroll)",
+  "layout.image.fitScreen": "Fit to window",
   "layout.image.closePreview": "Close preview",
 } as const;

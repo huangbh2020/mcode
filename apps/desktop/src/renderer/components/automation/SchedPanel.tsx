@@ -26,6 +26,7 @@ import {
   IconRefresh,
   IconPlayerPlay,
   IconPlayerPause,
+  IconPlayerStop,
   IconPencil,
   IconMessages,
   IconPlus,
@@ -81,6 +82,7 @@ export function SchedPanel({
   const deleteAutomation = useSessionStore((s) => s.deleteAutomation);
   const restoreAutomation = useSessionStore((s) => s.restoreAutomation);
   const runAutomationNow = useSessionStore((s) => s.runAutomationNow);
+  const stopAutomationRun = useSessionStore((s) => s.stopAutomationRun);
   const prefetchSessionMessages = useSessionStore((s) => s.prefetchSessionMessages);
   const openTab = useSessionStore((s) => s.openTab);
   /* Project attribution: the list (and the global viewer page especially)
@@ -203,9 +205,9 @@ export function SchedPanel({
         )}
 
         {/* Header & Tabs */}
-        <div className="flex h-[72px] shrink-0 flex-col justify-between border-b border-edge p-2">
+        <div className="flex h-[72px] shrink-0 flex-col justify-between border-b border-edge/60 bg-surface px-3 py-2.5">
           <div className="flex items-center justify-between">
-            <span className="text-xs font-bold uppercase tracking-wider text-content">
+            <span className="text-xs font-bold text-content tracking-tight">
               {t("automation.taskListTitle")}
             </span>
             {!page || onNewTaskSession ? (
@@ -216,24 +218,24 @@ export function SchedPanel({
                     if (page && onNewTaskSession) onNewTaskSession();
                     else setEditorState({ open: true, task: null });
                   }}
-                  className="flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[10.5px] font-semibold text-accent transition-colors hover:bg-accent/10"
+                  className="flex h-5.5 items-center gap-1 rounded-md border border-accent/30 bg-accent/10 px-2 text-[11px] font-medium text-accent transition-all hover:bg-accent/20 shadow-2xs"
                   title={page ? t("automation.newTaskSessionTitle") : t("automation.newTask")}
                 >
                   <IconPlus size={11} />
-                  {t("automation.newTask")}
+                  <span>{t("automation.newTask")}</span>
                 </button>
-                <span className="text-[10px] text-content-subtle">
+                <span className="rounded-md border border-edge/40 bg-surface-muted/60 px-1.5 py-0.5 text-[10px] font-medium text-content-subtle">
                   {activeTasks.length} / {scopedAll.length}
                 </span>
               </div>
             ) : (
-              <span className="text-[10px] text-content-subtle">
+              <span className="rounded-md border border-edge/40 bg-surface-muted/60 px-1.5 py-0.5 text-[10px] font-medium text-content-subtle">
                 {activeTasks.length} / {scopedAll.length}
               </span>
             )}
           </div>
-          {/* Segmented Control: Active vs Deleted */}
-          <div className="flex rounded-md bg-surface-muted p-0.5 text-[11px] font-medium">
+          {/* Segmented Control: Active vs Deleted (Apple Inset Slider) */}
+          <div className="grid grid-cols-2 gap-0.5 rounded-xl border border-edge/40 bg-surface-muted/60 dark:bg-surface-muted/30 p-0.5 text-[11px]">
             <button
               type="button"
               onClick={() => {
@@ -241,10 +243,10 @@ export function SchedPanel({
                 if (activeTasks[0]) setSchedSelected(activeTasks[0].id);
               }}
               className={cn(
-                "flex-1 rounded py-1 text-center transition-colors",
+                "rounded-[9px] py-1 text-center font-medium transition-all select-none",
                 listTab === "active"
-                  ? "bg-surface font-semibold text-content shadow-sm"
-                  : "text-content-muted hover:text-content",
+                  ? "bg-surface text-content shadow-xs border border-edge/60 dark:bg-surface-hover dark:border-white/10 dark:text-white"
+                  : "text-content-muted hover:text-content hover:bg-surface-muted/40",
               )}
             >
               {t("automation.tabActive")} ({activeTasks.length})
@@ -256,10 +258,10 @@ export function SchedPanel({
                 if (deletedTasks[0]) setSchedSelected(deletedTasks[0].id);
               }}
               className={cn(
-                "flex-1 rounded py-1 text-center transition-colors",
+                "rounded-[9px] py-1 text-center font-medium transition-all select-none",
                 listTab === "deleted"
-                  ? "bg-surface font-semibold text-content shadow-sm"
-                  : "text-content-muted hover:text-content",
+                  ? "bg-surface text-content shadow-xs border border-edge/60 dark:bg-surface-hover dark:border-white/10 dark:text-white"
+                  : "text-content-muted hover:text-content hover:bg-surface-muted/40",
               )}
             >
               {t("automation.tabDeleted")} ({deletedTasks.length})
@@ -287,27 +289,33 @@ export function SchedPanel({
                 key={task.id}
                 onClick={() => setSchedSelected(task.id)}
                 className={cn(
-                  "group relative flex cursor-pointer flex-col gap-1 rounded-lg border p-2 transition-all text-left",
+                  "group relative flex cursor-pointer flex-col gap-1.5 rounded-xl border p-2.5 transition-all text-left",
                   isSelected
-                    ? "border-accent/40 bg-accent/10 shadow-xs"
-                    : "border-transparent bg-surface-muted/30 hover:border-edge hover:bg-surface-hover",
+                    ? "border-edge/70 bg-surface shadow-apple-card dark:bg-surface-hover/80 dark:border-white/10"
+                    : "border-transparent bg-surface-muted/30 hover:border-edge/50 hover:bg-surface-hover/50",
                 )}
               >
-                <div className="flex items-center gap-1.5">
-                  <IconClock
-                    size={13}
+                {/* 选中态左侧微指示条 */}
+                {isSelected && (
+                  <div className="absolute left-0 top-2.5 bottom-2.5 w-[3px] rounded-r-full bg-accent" />
+                )}
+
+                <div className="flex items-center gap-2 pl-0.5">
+                  <div
                     className={cn(
-                      "shrink-0",
+                      "flex h-5 w-5 shrink-0 items-center justify-center rounded-md border text-xs shadow-2xs",
                       isDeleted
-                        ? "text-content-subtle"
+                        ? "border-edge/40 bg-surface-muted text-content-subtle"
                         : task.enabled
-                          ? "text-accent"
-                          : "text-content-subtle",
+                          ? "border-accent/30 bg-accent/10 text-accent dark:bg-accent/15"
+                          : "border-edge/40 bg-surface-muted text-content-subtle",
                     )}
-                  />
+                  >
+                    <IconClock size={11} />
+                  </div>
                   <span
                     className={cn(
-                      "min-w-0 flex-1 truncate text-xs font-semibold",
+                      "min-w-0 flex-1 truncate text-xs font-semibold text-content",
                       isDeleted && "text-content-muted line-through opacity-80",
                     )}
                     title={task.title}
@@ -316,7 +324,7 @@ export function SchedPanel({
                   </span>
                   <span
                     className={cn(
-                      "shrink-0 rounded-full px-1.5 text-[9.5px] font-semibold",
+                      "shrink-0 rounded-full px-1.5 py-0.5 text-[9.5px] font-semibold",
                       meta.badgeClass,
                     )}
                   >
@@ -328,22 +336,19 @@ export function SchedPanel({
                   const projectName = projectNameById.get(task.projectId) ?? null;
                   const showCount = !isDeleted && task.runLog.length > 0;
                   return (
-                    <>
-                      {/* Attribution line: owning project (+ run count). The
-                          global viewer page mixes projects, so every row
-                          carries its own folder+name tag. */}
+                    <div className="space-y-0.5 pl-0.5 text-[11px] text-content-muted">
                       {(projectName || showCount) && (
-                        <div className="flex items-center gap-1 text-[10.5px] text-content-subtle">
+                        <div className="flex items-center justify-between gap-1">
                           {projectName && (
-                            <>
-                              <IconFolder size={10} className="shrink-0 text-content-subtle" />
-                              <span className="min-w-0 truncate" title={projectName}>
+                            <div className="flex items-center gap-1 min-w-0 text-content-subtle">
+                              <IconFolder size={10} className="shrink-0" />
+                              <span className="truncate" title={projectName}>
                                 {projectName}
                               </span>
-                            </>
+                            </div>
                           )}
                           {showCount && (
-                            <span className="ml-auto shrink-0 font-mono">
+                            <span className="ml-auto shrink-0 font-mono text-[10px] text-content-subtle">
                               {t("automation.runCount", { n: task.runLog.length })}
                             </span>
                           )}
@@ -354,67 +359,76 @@ export function SchedPanel({
                           ? t("automation.deletedAt", { time: fmtClock(task.deletedAt ?? 0) })
                           : describeSchedule(task.schedule)}
                       </div>
-                    </>
+                    </div>
                   );
                 })()}
 
                 {/* Quick actions bar inside row (pause / run / edit / delete) */}
                 <div
-                  className="mt-1 flex items-center justify-end gap-1 pt-1 border-t border-edge/40"
+                  className="mt-1 flex items-center justify-end gap-1 pt-1.5 border-t border-edge/30"
                   onClick={(e) => e.stopPropagation()}
                 >
-                    {!isDeleted ? (
+                  {!isDeleted ? (
                     <>
                       <button
                         type="button"
                         onClick={() => void setAutomationEnabled(task.id, !task.enabled)}
                         title={task.enabled ? t("automation.pause") : t("automation.resume")}
                         className={cn(
-                          "flex h-5 items-center gap-1 rounded px-1.5 text-[10px] font-medium transition-colors",
+                          "flex h-5.5 items-center gap-1 rounded-md px-1.5 text-[10px] font-medium transition-all shadow-2xs border",
                           task.enabled
-                            ? "text-warning hover:bg-warning/15"
-                            : "text-accent hover:bg-accent/15",
+                            ? "border-warning/30 bg-warning/10 text-warning hover:bg-warning/20"
+                            : "border-accent/30 bg-accent/10 text-accent hover:bg-accent/20",
                         )}
                       >
                         {task.enabled ? (
                           <>
-                            <IconPlayerPause size={10} />
-                            {t("automation.pause")}
+                            <IconPlayerPause size={9} />
+                            <span>{t("automation.pause")}</span>
                           </>
                         ) : (
                           <>
-                            <IconPlayerPlay size={10} />
-                            {t("automation.resume")}
+                            <IconPlayerPlay size={9} />
+                            <span>{t("automation.resume")}</span>
                           </>
                         )}
                       </button>
-                      <button
-                        type="button"
-                        onClick={() => void runAutomationNow(task.id)}
-                        title={t("automation.runNow")}
-                        className="flex h-5 items-center gap-1 rounded px-1.5 text-[10px] font-medium text-content-muted hover:bg-surface-hover hover:text-content"
-                      >
-                        <IconPlayerPlay size={10} />
-                        {t("automation.runNow")}
-                      </button>
-                      {/* Edit entry sits next to delete (explicit click — row
-                          click only selects). Shows wherever ops show. */}
+                      {task.lastStatus === "running" || task.lastStatus === "waiting-approval" ? (
+                        <button
+                          type="button"
+                          onClick={() => void stopAutomationRun(task.id)}
+                          title={t("automation.stopRun")}
+                          className="flex h-5.5 items-center gap-1 rounded-md border border-danger/30 bg-danger/10 px-1.5 text-[10px] font-medium text-danger hover:bg-danger/20 transition-all shadow-2xs"
+                        >
+                          <IconPlayerStop size={9} />
+                          <span>{t("automation.stopRun")}</span>
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => void runAutomationNow(task.id)}
+                          title={t("automation.runNow")}
+                          className="flex h-5.5 items-center gap-1 rounded-md border border-edge/60 bg-surface dark:bg-surface-muted/40 px-1.5 text-[10px] font-medium text-content-muted hover:bg-surface-hover hover:text-content transition-all shadow-2xs"
+                        >
+                          <IconPlayerPlay size={9} className="text-accent" />
+                          <span>{t("automation.runNow")}</span>
+                        </button>
+                      )}
                       <button
                         type="button"
                         onClick={() => setEditorState({ open: true, task })}
                         title={t("automation.edit")}
-                        className="flex h-5 items-center gap-1 rounded px-1.5 text-[10px] font-medium text-content-muted hover:bg-surface-hover hover:text-content"
+                        className="flex h-5.5 w-5.5 items-center justify-center rounded-md border border-edge/60 bg-surface dark:bg-surface-muted/40 text-content-subtle hover:text-content hover:bg-surface-hover transition-all shadow-2xs"
                       >
                         <IconPencil size={10} />
-                        {t("automation.edit")}
                       </button>
                       <button
                         type="button"
                         onClick={() => setSoftDeleteTarget(task)}
                         title={t("automation.delete")}
-                        className="flex h-5 w-5 items-center justify-center rounded text-content-subtle hover:bg-danger/15 hover:text-danger"
+                        className="flex h-5.5 w-5.5 items-center justify-center rounded-md border border-edge/60 bg-surface dark:bg-surface-muted/40 text-content-subtle hover:text-danger hover:border-danger/30 hover:bg-danger/10 transition-all shadow-2xs"
                       >
-                        <IconTrash size={11} />
+                        <IconTrash size={10} />
                       </button>
                     </>
                   ) : (
@@ -423,19 +437,19 @@ export function SchedPanel({
                         type="button"
                         onClick={() => void restoreAutomation(task.id)}
                         title={t("automation.restore")}
-                        className="flex h-5 items-center gap-1 rounded px-1.5 text-[10px] font-medium text-accent hover:bg-accent/15"
+                        className="flex h-5.5 items-center gap-1 rounded-md border border-accent/30 bg-accent/10 px-1.5 text-[10px] font-medium text-accent hover:bg-accent/20 transition-all shadow-2xs"
                       >
-                        <IconRefresh size={10} />
-                        {t("automation.restore")}
+                        <IconRefresh size={9} />
+                        <span>{t("automation.restore")}</span>
                       </button>
                       <button
                         type="button"
                         onClick={() => setPermDeleteTarget(task)}
                         title={t("automation.permanentDelete")}
-                        className="flex h-5 items-center gap-1 rounded px-1.5 text-[10px] font-medium text-danger hover:bg-danger/15"
+                        className="flex h-5.5 items-center gap-1 rounded-md border border-danger/30 bg-danger/10 px-1.5 text-[10px] font-medium text-danger hover:bg-danger/20 transition-all shadow-2xs"
                       >
-                        <IconTrash size={10} />
-                        {t("automation.permanentDelete")}
+                        <IconTrash size={9} />
+                        <span>{t("automation.permanentDelete")}</span>
                       </button>
                     </>
                   )}
@@ -472,21 +486,22 @@ export function SchedPanel({
         ) : (
           <>
             {/* ── Right-rail Header: Task Detail & Action Toolbar (h-[72px] strictly aligned with left rail) ── */}
-            <div className="flex h-[72px] shrink-0 flex-col justify-between border-b border-edge bg-surface px-4 py-2">
+            <div className="flex h-[72px] shrink-0 flex-col justify-between border-b border-edge/60 bg-surface px-4 py-2.5">
               {/* Row 1: Title + Status Badge & Action Toolbar */}
-              <div className="flex items-center justify-between gap-2 min-h-0">
-                <div className="flex min-w-0 flex-1 items-center gap-1.5">
-                  <IconClock
-                    size={16}
+              <div className="flex items-center justify-between gap-3 min-h-0">
+                <div className="flex min-w-0 flex-1 items-center gap-2">
+                  <div
                     className={cn(
-                      "shrink-0",
+                      "flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border text-sm shadow-2xs",
                       selected.deletedAt
-                        ? "text-content-subtle"
+                        ? "border-edge/40 bg-surface-muted text-content-subtle"
                         : selected.enabled
-                          ? "text-accent"
-                          : "text-content-subtle",
+                          ? "border-accent/30 bg-accent/10 text-accent dark:bg-accent/15"
+                          : "border-edge/40 bg-surface-muted text-content-subtle",
                     )}
-                  />
+                  >
+                    <IconClock size={15} />
+                  </div>
                   <h2
                     className={cn(
                       "truncate text-sm font-semibold text-content",
@@ -498,7 +513,7 @@ export function SchedPanel({
                   </h2>
                   <span
                     className={cn(
-                      "shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-semibold flex items-center gap-1",
+                      "shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold flex items-center gap-1",
                       statusMeta(selected.lastStatus).badgeClass,
                     )}
                   >
@@ -509,8 +524,8 @@ export function SchedPanel({
                   </span>
                 </div>
 
-                {/* Actions */}
-                <div className="flex shrink-0 items-center gap-1">
+                {/* Actions Toolbar (Apple HIG Buttons) */}
+                <div className="flex shrink-0 items-center gap-1.5">
                   {!selected.deletedAt ? (
                     <>
                       <button
@@ -518,7 +533,7 @@ export function SchedPanel({
                         onClick={() => void setAutomationEnabled(selected.id, !selected.enabled)}
                         title={selected.enabled ? t("automation.pause") : t("automation.resume")}
                         className={cn(
-                          "flex h-6 items-center gap-1 rounded px-1.5 text-[11px] font-medium transition-colors border",
+                          "flex h-7 items-center gap-1.5 rounded-lg px-2.5 text-xs font-medium transition-all border shadow-2xs",
                           selected.enabled
                             ? "border-warning/30 bg-warning/10 text-warning hover:bg-warning/20"
                             : "border-accent/30 bg-accent/10 text-accent hover:bg-accent/20",
@@ -537,21 +552,33 @@ export function SchedPanel({
                         )}
                       </button>
 
-                      <button
-                        type="button"
-                        onClick={() => void runAutomationNow(selected.id)}
-                        title={t("automation.runNow")}
-                        className="flex h-6 items-center gap-1 rounded border border-edge bg-surface-muted/60 px-1.5 text-[11px] font-medium text-content hover:bg-surface-hover hover:border-edge/80 transition-colors"
-                      >
-                        <IconPlayerPlay size={11} className="text-accent" />
-                        <span className="hidden sm:inline">{t("automation.runNow")}</span>
-                      </button>
+                      {isRunning ? (
+                        <button
+                          type="button"
+                          onClick={() => void stopAutomationRun(selected.id)}
+                          title={t("automation.stopRun")}
+                          className="flex h-7 items-center gap-1.5 rounded-lg border border-danger/30 bg-danger/10 px-2.5 text-xs font-medium text-danger hover:bg-danger/20 transition-all shadow-2xs"
+                        >
+                          <IconPlayerStop size={11} />
+                          <span className="hidden sm:inline">{t("automation.stopRun")}</span>
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => void runAutomationNow(selected.id)}
+                          title={t("automation.runNow")}
+                          className="flex h-7 items-center gap-1.5 rounded-lg border border-edge/70 bg-surface px-2.5 text-xs font-medium text-content hover:bg-surface-hover hover:border-edge transition-all shadow-2xs"
+                        >
+                          <IconPlayerPlay size={11} className="text-accent" />
+                          <span className="hidden sm:inline">{t("automation.runNow")}</span>
+                        </button>
+                      )}
 
                       <button
                         type="button"
                         onClick={() => setEditorState({ open: true, task: selected })}
                         title={t("automation.edit")}
-                        className="flex h-6 items-center gap-1 rounded border border-edge bg-surface-muted/60 px-1.5 text-[11px] font-medium text-content-muted hover:text-content hover:bg-surface-hover transition-colors"
+                        className="flex h-7 items-center gap-1.5 rounded-lg border border-edge/70 bg-surface px-2.5 text-xs font-medium text-content-muted hover:text-content hover:bg-surface-hover transition-all shadow-2xs"
                       >
                         <IconPencil size={11} />
                         <span className="hidden sm:inline">{t("automation.edit")}</span>
@@ -561,7 +588,7 @@ export function SchedPanel({
                         type="button"
                         onClick={() => setSoftDeleteTarget(selected)}
                         title={t("automation.delete")}
-                        className="flex h-6 w-6 items-center justify-center rounded border border-edge bg-surface-muted/60 text-content-subtle hover:text-danger hover:border-danger/40 hover:bg-danger/10 transition-colors"
+                        className="flex h-7 w-7 items-center justify-center rounded-lg border border-edge/70 bg-surface text-content-subtle hover:text-danger hover:border-danger/30 hover:bg-danger/10 transition-all shadow-2xs"
                       >
                         <IconTrash size={12} />
                       </button>
@@ -572,58 +599,71 @@ export function SchedPanel({
                         type="button"
                         onClick={() => void restoreAutomation(selected.id)}
                         title={t("automation.restore")}
-                        className="flex h-6 items-center gap-1 rounded border border-accent/30 bg-accent/10 px-2 text-[11px] font-medium text-accent hover:bg-accent/20 transition-colors"
+                        className="flex h-7 items-center gap-1.5 rounded-lg border border-accent/30 bg-accent/10 px-2.5 text-xs font-medium text-accent hover:bg-accent/20 transition-all shadow-2xs"
                       >
                         <IconRefresh size={11} />
-                        {t("automation.restore")}
+                        <span>{t("automation.restore")}</span>
                       </button>
 
                       <button
                         type="button"
                         onClick={() => setPermDeleteTarget(selected)}
                         title={t("automation.permanentDelete")}
-                        className="flex h-6 items-center gap-1 rounded border border-danger/30 bg-danger/10 px-2 text-[11px] font-medium text-danger hover:bg-danger/20 transition-colors"
+                        className="flex h-7 items-center gap-1.5 rounded-lg border border-danger/30 bg-danger/10 px-2.5 text-xs font-medium text-danger hover:bg-danger/20 transition-all shadow-2xs"
                       >
                         <IconTrash size={11} />
-                        {t("automation.permanentDelete")}
+                        <span>{t("automation.permanentDelete")}</span>
                       </button>
                     </>
                   )}
                 </div>
               </div>
 
-              {/* Row 2: Metadata Strip */}
-              <div className="flex items-center gap-x-2.5 text-[11px] text-content-muted leading-tight truncate">
+              {/* Row 2: Metadata Strip (Inspector style) */}
+              <div className="flex items-center gap-x-2 text-[11px] text-content-muted leading-tight truncate">
                 {(() => {
                   const projectName = projectNameById.get(selected.projectId) ?? null;
                   return (
                     <>
                       {projectName && (
-                        <span className="inline-flex items-center gap-1 shrink-0" title={projectName}>
-                          <IconFolder size={11} className="shrink-0 text-content-subtle" />
+                        <span className="inline-flex items-center gap-1 shrink-0 text-content-subtle" title={projectName}>
+                          <IconFolder size={11} className="shrink-0" />
                           <span className="max-w-[130px] truncate">{projectName}</span>
                         </span>
                       )}
+                      {projectName && <span className="text-edge/60">·</span>}
                       <span className="inline-flex items-center gap-1 font-medium text-content shrink-0">
                         {describeSchedule(selected.schedule)}
                       </span>
                       {taskNextLine(selected) && (
-                        <span className="text-content-subtle shrink-0">· {taskNextLine(selected)}</span>
+                        <>
+                          <span className="text-edge/60">·</span>
+                          <span className="text-content-subtle shrink-0">{taskNextLine(selected)}</span>
+                        </>
                       )}
                       {selected.model && (
-                        <span className="rounded bg-surface-muted px-1.5 py-0.2 text-[10px] font-mono text-content-subtle shrink-0">
-                          {selected.model}
-                        </span>
+                        <>
+                          <span className="text-edge/60">·</span>
+                          <span className="rounded-md border border-edge/40 bg-surface-muted/60 px-1.5 py-0.2 text-[10px] font-mono text-content-muted shrink-0">
+                            {selected.model}
+                          </span>
+                        </>
                       )}
                       {runLog.length > 0 && (
-                        <span className="text-content-subtle shrink-0">
-                          · {t("automation.runCount", { n: runLog.length })}
-                        </span>
+                        <>
+                          <span className="text-edge/60">·</span>
+                          <span className="text-content-subtle shrink-0">
+                            {t("automation.runCount", { n: runLog.length })}
+                          </span>
+                        </>
                       )}
                       {selected.deletedAt && (
-                        <span className="text-danger/80 shrink-0">
-                          · {t("automation.deletedAt", { time: fmtClock(selected.deletedAt) })}
-                        </span>
+                        <>
+                          <span className="text-edge/60">·</span>
+                          <span className="text-danger/80 shrink-0">
+                            {t("automation.deletedAt", { time: fmtClock(selected.deletedAt) })}
+                          </span>
+                        </>
                       )}
                     </>
                   );
@@ -707,16 +747,16 @@ function TaskPromptCard({ prompt }: { prompt: string }) {
   };
 
   return (
-    <div className="shrink-0 rounded-xl border border-edge bg-surface p-3.5 shadow-2xs">
-      <div className="flex items-center justify-between pb-2 border-b border-edge/60">
-        <span className="text-xs font-semibold uppercase tracking-wider text-content-muted">
+    <div className="shrink-0 rounded-2xl border border-edge/70 bg-surface p-4 shadow-apple-card">
+      <div className="flex items-center justify-between pb-2.5 border-b border-edge/40">
+        <span className="text-xs font-semibold text-content tracking-tight">
           {t("automation.card.taskPrompt")}
         </span>
         <button
           type="button"
           onClick={handleCopy}
           title={copied ? t("common.copied") : t("common.copy")}
-          className="flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] text-content-muted hover:bg-surface-hover hover:text-content transition-colors"
+          className="flex h-6 items-center gap-1.5 rounded-lg border border-edge/60 bg-surface-muted/40 px-2.5 text-xs font-medium text-content-muted hover:bg-surface-hover hover:text-content transition-all shadow-2xs"
         >
           {copied ? (
             <>
@@ -731,7 +771,7 @@ function TaskPromptCard({ prompt }: { prompt: string }) {
           )}
         </button>
       </div>
-      <div className="mt-2.5 max-h-36 overflow-y-auto rounded-lg bg-surface-muted/30 border border-edge/40 p-2.5 text-xs leading-relaxed text-content select-text whitespace-pre-wrap font-mono sm:font-sans">
+      <div className="mt-2.5 max-h-36 overflow-y-auto rounded-xl bg-surface-muted/40 dark:bg-surface-muted/20 border border-edge/50 p-3 text-xs leading-relaxed text-content select-text whitespace-pre-wrap font-mono">
         {prompt}
       </div>
     </div>
@@ -756,18 +796,17 @@ function TaskOverviewAndInstanceList({
   onLoadMore: () => void;
 }) {
   const { t } = useI18n();
+  const stopAutomationRun = useSessionStore((s) => s.stopAutomationRun);
 
   return (
-    <div className="flex h-full min-h-0 flex-1 flex-col gap-2.5 p-2 sm:p-2.5 overflow-hidden">
+    <div className="flex h-full min-h-0 flex-1 flex-col gap-3 p-3 overflow-hidden">
       {/* Task Prompt Card (if prompt present) */}
       {task.prompt && <TaskPromptCard prompt={task.prompt} />}
 
-      {/* Instances Section — fills the remaining height with its OWN scroll
-          (same fixed-top + scrolling-body silhouette as the left rail, so
-          both columns read as equal-height panels) */}
-      <div className="flex min-h-0 flex-1 flex-col rounded-xl border border-edge bg-surface p-3.5 shadow-2xs">
-        <div className="flex shrink-0 items-center justify-between pb-2.5 border-b border-edge">
-          <span className="text-xs font-bold uppercase tracking-wider text-content">
+      {/* Instances Section */}
+      <div className="flex min-h-0 flex-1 flex-col rounded-2xl border border-edge/70 bg-surface p-4 shadow-apple-card">
+        <div className="flex shrink-0 items-center justify-between pb-3 border-b border-edge/40">
+          <span className="text-xs font-semibold text-content tracking-tight">
             {t("automation.instancesTitle")}
           </span>
           <span className="text-xs font-mono text-content-subtle">
@@ -775,28 +814,43 @@ function TaskOverviewAndInstanceList({
           </span>
         </div>
 
-        <div className="mt-2.5 min-h-0 flex-1 space-y-2 overflow-y-auto">
+        <div className="mt-2.5 min-h-0 flex-1 space-y-1.5 overflow-y-auto pr-0.5">
           {/* Live running instance banner if in flight */}
           {activeRunEntry && (
             <div
               onClick={() => onSelectRun(activeRunEntry.firedAt)}
-              className="flex cursor-pointer items-center justify-between rounded-lg border border-[#0284c7]/40 bg-[#0284c7]/10 p-2.5 transition-all hover:bg-[#0284c7]/15"
+              className="flex cursor-pointer items-center justify-between rounded-xl border border-[#0284c7]/30 bg-[#0284c7]/10 p-3 shadow-2xs transition-all hover:bg-[#0284c7]/15"
             >
-              <div className="flex items-center gap-2">
-                <span className="size-2 rounded-full bg-[#0284c7] animate-pulse" />
-                <span className="text-xs font-semibold text-[#0369a1] dark:text-[#38bdf8]">
+              <div className="flex items-center gap-2 min-w-0">
+                <span className="size-2 rounded-full bg-[#0284c7] animate-pulse shrink-0" />
+                <span className="text-xs font-semibold text-[#0369a1] dark:text-[#38bdf8] truncate">
                   {t("automation.instanceRunning")} (#{runLog.length})
                 </span>
-                <span className="text-[11px] text-content-muted">
+                <span className="text-[11px] text-content-muted shrink-0">
                   {fmtClock(activeRunEntry.firedAt)}
                 </span>
               </div>
-              <button
-                type="button"
-                className="flex items-center gap-1 rounded bg-accent px-2.5 py-1 text-[11px] font-semibold text-white shadow-xs hover:bg-accent/90 transition-colors"
-              >
-                {t("automation.instanceViewOutput")} →
-              </button>
+              <div className="flex items-center gap-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    void stopAutomationRun(task.id);
+                  }}
+                  title={t("automation.stopRun")}
+                  className="flex h-6.5 items-center gap-1 rounded-lg border border-danger/30 bg-danger/10 px-2.5 text-xs font-medium text-danger hover:bg-danger/20 transition-all shadow-2xs"
+                >
+                  <IconPlayerStop size={11} />
+                  <span>{t("automation.stopRun")}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onSelectRun(activeRunEntry.firedAt)}
+                  className="flex h-6.5 items-center gap-1 rounded-lg bg-accent px-3 text-xs font-medium text-white shadow-2xs hover:bg-accent/90 transition-colors"
+                >
+                  {t("automation.instanceViewOutput")} →
+                </button>
+              </div>
             </div>
           )}
 
@@ -817,10 +871,10 @@ function TaskOverviewAndInstanceList({
                     key={`${entry.firedAt}:${i}`}
                     type="button"
                     onClick={() => onSelectRun(entry.firedAt)}
-                    className="group flex w-full items-center justify-between rounded-lg border border-transparent px-2.5 py-2 text-left transition-colors hover:border-edge hover:bg-surface-hover"
+                    className="group flex w-full items-center justify-between rounded-xl border border-transparent px-3 py-2 text-left transition-all hover:border-edge/50 hover:bg-surface-muted/50"
                   >
                     <div className="flex items-center gap-2.5 min-w-0">
-                      <span className="w-8 shrink-0 font-mono text-xs font-semibold text-content-subtle">
+                      <span className="w-7 shrink-0 font-mono text-xs font-medium text-content-subtle">
                         #{number}
                       </span>
                       <span
@@ -829,7 +883,7 @@ function TaskOverviewAndInstanceList({
                           isEntryRunning ? "animate-pulse bg-[#0284c7]" : entryMeta.dotClass,
                         )}
                       />
-                      <span className="text-xs text-content font-medium">
+                      <span className="text-xs font-semibold text-content">
                         {fmtClock(entry.firedAt)}
                       </span>
                       {entry.durationMs !== undefined && (
@@ -838,7 +892,7 @@ function TaskOverviewAndInstanceList({
                         </span>
                       )}
                       {entry.manual && (
-                        <span className="rounded bg-surface-muted px-1.5 py-0.5 text-[9.5px] text-content-muted">
+                        <span className="rounded-md border border-edge/40 bg-surface-muted/60 px-1.5 py-0.5 text-[9.5px] text-content-muted">
                           {t("automation.runs.trigger.manual")}
                         </span>
                       )}
@@ -847,7 +901,7 @@ function TaskOverviewAndInstanceList({
                     <div className="flex items-center gap-2 shrink-0">
                       <span
                         className={cn(
-                          "rounded-full px-2 py-0.5 text-[10px] font-semibold",
+                          "rounded-full px-2 py-0.5 text-[10px] font-medium",
                           entryMeta.badgeClass,
                         )}
                       >
@@ -865,7 +919,7 @@ function TaskOverviewAndInstanceList({
                 <button
                   type="button"
                   onClick={onLoadMore}
-                  className="mt-2 w-full rounded-md border border-edge py-1.5 text-center text-xs font-medium text-content-muted hover:bg-surface-hover hover:text-content transition-colors"
+                  className="mt-2 w-full rounded-xl border border-edge/70 bg-surface-muted/30 py-2 text-center text-xs font-medium text-content-muted hover:bg-surface-hover hover:text-content transition-all shadow-2xs"
                 >
                   {t("layout.loadMore")} ({runsHidden})
                 </button>
@@ -900,6 +954,7 @@ function InstanceOutputDetailView({
   onOpenSession: () => void;
 }) {
   const { t } = useI18n();
+  const stopAutomationRun = useSessionStore((s) => s.stopAutomationRun);
 
   /* Find run ledger entry */
   const runLog = task.runLog ?? EMPTY_RUNS;
@@ -952,17 +1007,31 @@ function InstanceOutputDetailView({
           </div>
         </div>
 
-        {task.taskSessionId && (
-          <button
-            type="button"
-            onClick={onOpenSession}
-            title={t("automation.openInSession")}
-            className="flex h-6 items-center gap-1 rounded px-1.5 text-xs text-content-muted transition-colors hover:bg-surface-hover hover:text-content"
-          >
-            <IconMessages size={13} />
-            <span className="hidden sm:inline">{t("automation.openInSession")}</span>
-          </button>
-        )}
+        <div className="flex items-center gap-1.5 shrink-0">
+          {isRunning && (
+            <button
+              type="button"
+              onClick={() => void stopAutomationRun(task.id)}
+              title={t("automation.stopRun")}
+              className="flex h-6 items-center gap-1 rounded-md border border-danger/30 bg-danger/10 px-2 text-xs font-medium text-danger hover:bg-danger/20 transition-all shadow-2xs"
+            >
+              <IconPlayerStop size={11} />
+              <span className="hidden sm:inline">{t("automation.stopRun")}</span>
+            </button>
+          )}
+
+          {task.taskSessionId && (
+            <button
+              type="button"
+              onClick={onOpenSession}
+              title={t("automation.openInSession")}
+              className="flex h-6 items-center gap-1 rounded px-1.5 text-xs text-content-muted transition-colors hover:bg-surface-hover hover:text-content"
+            >
+              <IconMessages size={13} />
+              <span className="hidden sm:inline">{t("automation.openInSession")}</span>
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Main chat view — 完整的真实会话排版(含定时发送的 User 气泡及 Assistant 思考/工具/回复) */}

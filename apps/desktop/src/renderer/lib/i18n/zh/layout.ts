@@ -220,5 +220,7 @@ export const zh = {
   "layout.image.reveal": "在资源管理器中显示",
   "layout.image.revealed": "已打开所在目录",
   "layout.image.revealFailed": "无法打开所在目录",
+  "layout.image.fitWidth": "适合宽度 (上下滚动)",
+  "layout.image.fitScreen": "适应窗口",
   "layout.image.closePreview": "关闭预览",
 } as const;

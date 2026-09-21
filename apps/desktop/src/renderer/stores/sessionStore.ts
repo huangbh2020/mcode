@@ -2099,6 +2099,7 @@ export interface SessionState {
   restoreAutomation: (taskId: string) => Promise<void>;
   setAutomationEnabled: (taskId: string, enabled: boolean) => Promise<void>;
   runAutomationNow: (taskId: string) => Promise<Session | null>;
+  stopAutomationRun: (taskId: string) => Promise<void>;
   ingestAutomationEvent: (automationId: string | null) => void;
   /** composer「定时任务」每会话草稿:配置后点发送即创建任务(而非普通回合)。 */
   taskScheduleBySession: Record<string, Automation["schedule"] | null>;
@@ -8798,6 +8799,26 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       console.error("automation.runNow failed:", err);
       pushToastLite("error", (err as Error).message);
       return null;
+    }
+  },
+
+  stopAutomationRun: async (taskId) => {
+    try {
+      const task = get().automations.find((a) => a.id === taskId);
+      const sessionId = task?.taskSessionId;
+      if (sessionId) {
+        await get().interrupt(sessionId);
+      }
+      set((s) => ({
+        automations: s.automations.map((a) =>
+          a.id === taskId ? { ...a, lastStatus: "failed" as const } : a,
+        ),
+      }));
+      void get().loadAutomations();
+      pushToastLite("info", translate(get().locale, "automation.stopRunSuccess"));
+    } catch (err) {
+      console.error("automation.stopRun failed:", err);
+      pushToastLite("error", (err as Error).message);
     }
   },
 

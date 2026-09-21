@@ -253,9 +253,11 @@ export function OpenTabsBar() {
 
   return (
     <div
+      role="tablist"
+      aria-label="Open file tabs"
       className={cn(
-        "flex shrink-0 items-center gap-0.5 border-b border-edge-panel bg-surface/40 px-2",
-        multiRow ? "min-h-9 py-1.5" : "h-9",
+        "flex shrink-0 items-center gap-1 border-b border-edge/60 bg-surface-muted/40 dark:bg-surface/50 backdrop-blur-md px-1.5",
+        multiRow ? "min-h-8 py-0.5" : "h-8",
       )}
     >
       {/* Left chevron — only when there's content scrolled off the left edge. */}
@@ -276,12 +278,12 @@ export function OpenTabsBar() {
           onScroll={recomputeScrollState}
           onWheel={onWheel}
           className={cn(
-            "no-scrollbar flex gap-0.5",
+            "no-scrollbar flex items-center gap-1 py-0.5",
             multiRow
               ? // Wrapped rows, capped at ~3 rows — beyond that the track
                 // scrolls vertically.
                 "max-h-[82px] flex-wrap content-start items-start overflow-y-auto"
-              : "items-center overflow-x-auto",
+              : "overflow-x-auto",
           )}
         >
           <DndContext
@@ -538,20 +540,13 @@ export function SortableFileTab({
       aria-selected={isActive}
       title={path}
       className={cn(
-        // Editor file tabs share the same chip style as session tabs
-        // (rounded-md + resting bg); in the unified strip a vertical divider
-        // separates the two groups.
-        "group flex max-w-[160px] cursor-pointer select-none items-center gap-1.5 rounded-md px-2.5 py-1 text-[11px] transition-colors",
-        // Multi-row: flex-1 (basis 0 + grow) lets tabs stretch between the
-        // shared 170px min floor and the max cap above — line-breaking uses
-        // the floor, so tabs share one line whenever they can fit shrunk,
-        // instead of wrapping at their natural (basename) width. Single-row:
-        // fixed natural-width chips inside the horizontally scrolling strip.
+        // Apple-style Compact Integrated Card File Tab (方案 1)
+        "group flex h-[27px] max-w-[160px] cursor-pointer select-none items-center gap-1.5 rounded-md px-2.5 text-[11px] transition-all duration-150",
         multiRow ? "min-w-[170px] flex-1" : "min-w-0 shrink-0",
         isActive
-          ? "bg-accent/15 text-content ring-1 ring-inset ring-accent/40 dark:text-accent"
-          : "bg-surface-muted/60 text-content-muted hover:bg-surface-hover/70 hover:text-content",
-        isDragging && "shadow-lg",
+          ? "bg-surface text-content font-medium shadow-xs border border-edge/60 dark:bg-surface-hover dark:border-white/10 dark:shadow-[0_1px_3px_rgba(0,0,0,0.35)]"
+          : "text-content-muted hover:text-content hover:bg-surface-hover/50 border border-transparent",
+        isDragging && "shadow-lg opacity-80 z-20",
       )}
     >
       {/* File-type icon + file name. The icon is shrink-0 so it survives
@@ -576,7 +571,7 @@ export function SortableFileTab({
           onClick={handleClose}
           onPointerDown={(e) => e.stopPropagation()}
           className={cn(
-            "ml-0.5 h-4 w-4 shrink-0 items-center justify-center rounded text-content-subtle hover:bg-surface-hover hover:text-content",
+            "ml-0.5 h-4 w-4 shrink-0 items-center justify-center rounded text-content-subtle transition-colors hover:bg-black/10 dark:hover:bg-white/15 hover:text-content",
             isActive ? "inline-flex" : "hidden group-hover:inline-flex",
           )}
           title={t("common.close")}

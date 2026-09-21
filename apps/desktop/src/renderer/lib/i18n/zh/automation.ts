@@ -132,6 +132,8 @@ export const zh = {
   /* ── 表单:头部动作 ── */
   "automation.formUntitled": "未命名任务",
   "automation.runNow": "立即运行",
+  "automation.stopRun": "停止运行",
+  "automation.stopRunSuccess": "定时任务实例已停止",
   "automation.save": "保存",
   "automation.saved": "已保存 ✓",
   "automation.delete": "删除",

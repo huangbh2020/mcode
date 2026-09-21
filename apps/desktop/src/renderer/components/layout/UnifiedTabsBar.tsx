@@ -244,9 +244,11 @@ export function UnifiedTabsBar() {
 
   return (
     <div
+      role="tablist"
+      aria-label="Unified navigation and editor tabs"
       className={cn(
-        "flex shrink-0 items-center gap-0.5 border-b border-edge-panel bg-surface/40 px-2",
-        multiRow ? "min-h-9 py-1.5" : "h-9",
+        "flex shrink-0 items-center gap-1 border-b border-edge/60 bg-surface-muted/40 dark:bg-surface/50 backdrop-blur-md px-1.5",
+        multiRow ? "min-h-8 py-0.5" : "h-8",
       )}
     >
       {/* Left chevron — only when there's content scrolled off the left edge. */}
@@ -266,12 +268,12 @@ export function UnifiedTabsBar() {
           onScroll={recomputeScrollState}
           onWheel={onWheel}
           className={cn(
-            "no-scrollbar flex gap-0.5",
+            "no-scrollbar flex items-center gap-1 py-0.5",
             multiRow
               ? // Wrapped rows, capped at ~3 rows — beyond that the track
                 // scrolls vertically.
                 "max-h-[82px] flex-wrap content-start items-start overflow-y-auto"
-              : "items-center overflow-x-auto",
+              : "overflow-x-auto",
           )}
         >
           <DndContext
@@ -304,11 +306,9 @@ export function UnifiedTabsBar() {
 
             {/* Group divider: session tabs on the left, editor tabs (files +
                 the plan pseudo-tab) on the right. Only rendered when both
-                groups have content. content-subtle (not bg-edge) so the line
-                reads clearly against the bar in both themes; self-center
-                against the strip's items-end alignment. */}
+                groups have content. */}
             {tabs.length > 0 && (openFiles.length > 0 || hasPlanTab) && (
-              <div aria-hidden className="mx-1.5 h-4 w-px shrink-0 self-center bg-content-subtle/50" />
+              <div aria-hidden className="mx-1 h-3.5 w-px shrink-0 self-center bg-edge/70" />
             )}
 
             <SortableContext items={openFiles} strategy={sortStrategy}>
@@ -360,17 +360,16 @@ export function UnifiedTabsBar() {
                 }
               }}
               className={cn(
-                // Matches the file-tab chip look — the plan view is an
-                // editor-kind tab in the post-divider group.
-                "group flex max-w-[160px] cursor-pointer select-none items-center gap-1.5 rounded-md px-2.5 py-1 text-[11px] transition-colors",
+                // Apple-style Compact Integrated Card Plan Tab (方案 1)
+                "group flex h-[27px] max-w-[160px] cursor-pointer select-none items-center gap-1.5 rounded-md px-2.5 text-[11px] transition-all duration-150",
                 // Same flexible/natural split as the file tabs above.
                 multiRow ? "min-w-[170px] flex-1" : "min-w-0 shrink-0",
                 planTabActive && editorFocused
-                  ? "bg-accent/15 text-content ring-1 ring-inset ring-accent/40 dark:text-accent"
-                  : "bg-surface-muted/60 text-content-muted hover:bg-surface-hover/70 hover:text-content",
+                  ? "bg-surface text-content font-medium shadow-xs border border-edge/60 dark:bg-surface-hover dark:border-white/10 dark:shadow-[0_1px_3px_rgba(0,0,0,0.35)]"
+                  : "text-content-muted hover:text-content hover:bg-surface-hover/50 border border-transparent",
               )}
             >
-              <IconClipboard size={12} className="shrink-0 text-accent" />
+              <IconClipboard size={12} className="shrink-0 text-emerald-500" />
               <span className="min-w-0 flex-1 truncate">{t("ide.editor.planTab")}</span>
               {/* Close button leaves the layout on inactive tabs (title fills
                   the chip); appears on hover, always visible while active. */}
@@ -383,7 +382,7 @@ export function UnifiedTabsBar() {
                 }}
                 onPointerDown={(e) => e.stopPropagation()}
                 className={cn(
-                  "ml-0.5 h-4 w-4 shrink-0 items-center justify-center rounded text-content-subtle hover:bg-surface-hover hover:text-content",
+                  "ml-0.5 h-4 w-4 shrink-0 items-center justify-center rounded text-content-subtle transition-colors hover:bg-black/10 dark:hover:bg-white/15 hover:text-content",
                   planTabActive && editorFocused
                     ? "inline-flex"
                     : "hidden group-hover:inline-flex",

@@ -14,6 +14,9 @@ import {
   IconCheck,
   IconLoader2,
   IconPaperclip,
+  IconFile,
+  IconPhoto,
+  IconClipboard,
   IconX,
   IconPencil,
   IconBolt,
@@ -5013,32 +5016,42 @@ function UserMessageEditor({
   const canSubmit = text.trim().length > 0;
 
   return (
-    <div className="user-bubble-fill rounded-lg border border-accent/40 px-3 py-2 [font-size:var(--chat-font-size)]">
+    <div className="user-bubble-fill rounded-lg border border-edge/80 focus-within:border-accent/60 focus-within:ring-1 focus-within:ring-accent/30 px-3 py-2 [font-size:var(--chat-font-size)] transition-all">
       {/* Attachment chips — REMOVABLE in edit mode (hover × drops the card
           from the resent turn). Same wrapping strip as the sent bubble. */}
       {atts.length > 0 && (
         <div className="mb-2 flex flex-wrap gap-1.5">
-          {atts.map((att) => (
-            <span
-              key={att.id}
-              className="inline-flex items-center gap-1 rounded-md border border-accent/40 bg-accent/10 py-0.5 pl-1.5 pr-1 text-[11px] text-accent"
-              title={att.block.filePath ?? att.block.preview}
-            >
-              {att.block.attachmentKind === "file" ? (
-                <IconPaperclip size={12} className="opacity-80" />
-              ) : null}
-              <span className="max-w-[12rem] truncate">{att.block.preview}</span>
-              <button
-                type="button"
-                onClick={() => setAtts((prev) => prev.filter((p) => p.id !== att.id))}
-                aria-label={t("chat.removeAttachmentName", { name: att.block.preview })}
-                title={t("chat.removeAttachmentName", { name: att.block.preview })}
-                className="inline-flex h-4 w-4 items-center justify-center rounded-full text-accent opacity-60 transition-colors hover:bg-accent/20 hover:opacity-100"
+          {atts.map((att) => {
+            const isFile = att.block.attachmentKind === "file";
+            const isImage = isFile && !!att.block.filePath && isImageFilePath(att.block.filePath);
+            return (
+              <span
+                key={att.id}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-edge/70 bg-surface-muted/70 py-0.5 pl-2 pr-1 text-[11px] text-content shadow-2xs transition-all hover:bg-surface-hover/80 hover:border-edge"
+                title={att.block.filePath ?? att.block.preview}
               >
-                <IconX size={10} />
-              </button>
-            </span>
-          ))}
+                {isFile ? (
+                  isImage ? (
+                    <IconPhoto size={12} className="shrink-0 text-violet-500 opacity-90" />
+                  ) : (
+                    <IconFile size={12} className="shrink-0 text-blue-500 opacity-90" />
+                  )
+                ) : (
+                  <IconClipboard size={12} className="shrink-0 text-emerald-500 opacity-90" />
+                )}
+                <span className="max-w-[14rem] truncate font-medium text-content">{att.block.preview}</span>
+                <button
+                  type="button"
+                  onClick={() => setAtts((prev) => prev.filter((p) => p.id !== att.id))}
+                  aria-label={t("chat.removeAttachmentName", { name: att.block.preview })}
+                  title={t("chat.removeAttachmentName", { name: att.block.preview })}
+                  className="inline-flex h-4 w-4 items-center justify-center rounded text-content-muted transition-colors hover:bg-surface-hover hover:text-content"
+                >
+                  <IconX size={10} />
+                </button>
+              </span>
+            );
+          })}
         </div>
       )}
       {/* Image thumbnails - same visual treatment as the composer's pending
