@@ -13,6 +13,7 @@ import type {
   PlanUpdateEvent,
   SubagentSnapshot,
   SubagentTranscriptBlock,
+  BashTaskSnapshot,
   ContextSnapshot,
   TurnUsageRecord,
   SessionListEntry,
@@ -1154,6 +1155,12 @@ export interface SessionState {
    *  data rebuilt each turn; cleared when a new turn starts (mirroring the
    *  roster's rebuild cycle). */
   subagentTranscriptsBySession: Record<string, Record<string, SubagentTranscriptBlock[]>>;
+  /** Per-session roster of the agent's tracked bash commands (REPLACE
+   *  semantics from `bash-tasks.update`) — the model-started processes
+   *  (dev servers, long scripts) the activity console's「运行命令」node
+   *  lists with per-task stop controls. NOT persisted: the CLI and every
+   *  command it spawned die with the app, so a restart starts empty. */
+  bashTasksBySession: Record<string, BashTaskSnapshot[]>;
   /** Per-session context-window snapshot (from `token-usage.updated` events).
    *  The adapter already did all the math (usedTokens / maxTokens / pct /
    *  warning), so the renderer only stores + renders. Keyed by sessionId so
@@ -1649,6 +1656,11 @@ export interface SessionState {
     images?: PromptImage[],
   ) => Promise<void>;
   interrupt: (sessionId?: string) => Promise<void>;
+  /** Stop ONE running agent command (bash task) without aborting the turn —
+   *  backed by the SDK's `stop_task` control request. The roster update
+   *  arrives via the bash-tasks.update event stream; on failure surfaces a
+   *  toast (e.g. the turn already finished, so nothing can stop the task). */
+  stopBashTask: (sessionId: string, taskId: string) => Promise<void>;
   ingestEvent: (e: RuntimeEvent) => void;
   /** Update the window-focus flag. Called from useClaudeEvents on Electron
    *  `window:focusChanged` + `document.visibilitychange`. When the window
@@ -2423,6 +2435,8 @@ const EMPTY_CODEX_MODELS: BuiltinModelOption[] = [];
 const EMPTY_SKILLS: SkillInfo[] = [];
 const EMPTY_SESSIONS: Session[] = [];
 export const EMPTY_SUBAGENTS: SubagentSnapshot[] = [];
+/** Stable empty bash-task roster (selector must return a stable array). */
+export const EMPTY_BASH_TASKS: BashTaskSnapshot[] = [];
 /** Stable empty usage-history reference (selector must return a stable array). */
 export const EMPTY_USAGE: TurnUsageRecord[] = [];
 /** Stable empty bookmark-list reference (selector-stability rule). */
@@ -2997,6 +3011,8 @@ function dropSessionBuckets(s: SessionState, id: string) {
   delete subagentsBySession[id];
   const subagentTranscriptsBySession = { ...s.subagentTranscriptsBySession };
   delete subagentTranscriptsBySession[id];
+  const bashTasksBySession = { ...s.bashTasksBySession };
+  delete bashTasksBySession[id];
   const pendingQuestionBySession = { ...s.pendingQuestionBySession };
   delete pendingQuestionBySession[id];
   const turnFilesBySession = { ...s.turnFilesBySession };
@@ -3050,6 +3066,7 @@ function dropSessionBuckets(s: SessionState, id: string) {
     planBySession,
     subagentsBySession,
     subagentTranscriptsBySession,
+    bashTasksBySession,
     pendingQuestionBySession,
     turnFilesBySession,
     bookmarksBySession,
@@ -4845,6 +4862,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   planApprovalDraftBySession: {},
   subagentsBySession: {},
   subagentTranscriptsBySession: {},
+  bashTasksBySession: {},
   contextSnapshotBySession: {},
   usageHistoryBySession: {},
   pendingQuestionBySession: {},
@@ -7327,6 +7345,19 @@ export const useSessionStore = create<SessionState>((set, get) => ({
             ),
           }
         : s.subagentsBySession;
+      // Same demotion for the bash-task roster: without
+      // perTaskStopAffordance declared, the CLI's interrupt kills background
+      // tasks too (fail-closed rule), so a still-"running" command row must
+      // not linger after the user's stop.
+      const curBash = s.bashTasksBySession[sessionId] ?? [];
+      const bashTasksBySession = curBash.some((t) => t.status === "running")
+        ? {
+            ...s.bashTasksBySession,
+            [sessionId]: curBash.map((t) =>
+              t.status === "running" ? { ...t, status: "killed" as const, endedAt: Date.now() } : t,
+            ),
+          }
+        : s.bashTasksBySession;
       const list = s.messagesBySession[sessionId];
       // Freeze the aborted turn's "开始·用时" row NOW instead of waiting for
       // the late turn.done{interrupted} (which lands seconds later while the
@@ -7344,11 +7375,23 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         runningTurnStartedAt,
         interruptedBySession: { ...s.interruptedBySession, [sessionId]: true },
         subagentsBySession,
+        bashTasksBySession,
         ...(frozen ? { messagesBySession: { ...s.messagesBySession, [sessionId]: frozen } } : {}),
       };
     });
     // User stopped the turn — drop any live upstream-retry hint with it.
     clearUpstreamIssue(set, sessionId);
+  },
+
+  stopBashTask: async (sessionId, taskId) => {
+    try {
+      await api.claude.stopTask({ sessionId, taskId });
+      // No optimistic roster update: the CLI emits task_updated / the level
+      // signal flips right after the stop lands, and the REPLACE event is
+      // the authoritative source. Keep the button armed until then.
+    } catch (err) {
+      pushToastLite("warning", translate(get().locale, "chatStream.bashTask.stopFailed"), err instanceof Error ? err.message : String(err));
+    }
   },
 
   ingestEvent: (e) => {
@@ -7969,6 +8012,20 @@ export const useSessionStore = create<SessionState>((set, get) => ({
             [sid]: { ...(inner ?? {}), [e.parentToolUseId]: e.blocks },
           },
         };
+      });
+      return;
+    }
+    // bash-tasks.update: REPLACE semantics — swap the full roster of the
+    // agent's tracked bash commands. Same late-interrupt guard as
+    // subagent.update: after a manual stop, a straggler event must not
+    // resurrect a `running` entry the user's stop intent already killed.
+    if (e.type === "bash-tasks.update") {
+      set((s) => {
+        const tasks = s.interruptedBySession[sid]
+          ? e.tasks.map((t) => (t.status === "running" ? { ...t, status: "killed" as const } : t))
+          : e.tasks;
+        if (s.bashTasksBySession[sid] === tasks) return {};
+        return { bashTasksBySession: { ...s.bashTasksBySession, [sid]: tasks } };
       });
       return;
     }

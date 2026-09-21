@@ -18,7 +18,7 @@
  * bottom nav).
  */
 import { createPortal } from "react-dom";
-import type { SubagentSnapshot } from "@contracts/runtime";
+import type { SubagentSnapshot, BashTaskSnapshot } from "@contracts/runtime";
 import type { SessionBookmark } from "@contracts/session";
 import type { TodoItem } from "@renderer/stores/sessionStore.js";
 import { useI18n } from "@renderer/lib/i18n/index.js";
@@ -32,12 +32,14 @@ export function ActivitySheet({
   todos,
   planBlocks,
   bookmarks,
+  bashTasks,
   isBookmarkStale,
   tabs,
   onTabChange,
   onClose,
   onPickPlan,
   onRemoveBookmark,
+  onStopBashTask,
 }: {
   node: ActivityNodeKey;
   /** Switch kind — the node strip inside the console calls this. */
@@ -48,6 +50,10 @@ export function ActivitySheet({
   /** Omit/empty to hide the bookmarks tab. The phone shell has no virtual-list
    *  jump plumbing, so entries are list/delete only (no pick/jump callback). */
   bookmarks?: SessionBookmark[];
+  /** Agent-started bash commands (the「运行命令」node); stop rides the same
+   *  mobile RPC channel as interrupt. */
+  bashTasks?: BashTaskSnapshot[];
+  onStopBashTask?: (task: BashTaskSnapshot) => void;
   isBookmarkStale?: (b: SessionBookmark) => boolean;
   tabs: ActivityTabs;
   onTabChange: (node: ActivityNodeKey, tab: string) => void;
@@ -89,6 +95,8 @@ export function ActivitySheet({
             todos={todos}
             planBlocks={planBlocks}
             bookmarks={bookmarks ?? []}
+            bashTasks={bashTasks}
+            onStopBashTask={onStopBashTask}
             isBookmarkStale={isBookmarkStale}
             tabs={tabs}
             onTabChange={onTabChange}

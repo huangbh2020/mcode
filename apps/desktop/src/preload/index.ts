@@ -18,6 +18,8 @@ const api = {
       ipcRenderer.invoke(IPC.CLAUDE_SEND_TURN, input)) as RpcMap["claude.sendTurn"],
     interrupt: ((input) =>
       ipcRenderer.invoke(IPC.CLAUDE_INTERRUPT, input)) as RpcMap["claude.interrupt"],
+    stopTask: ((input) =>
+      ipcRenderer.invoke(IPC.CLAUDE_STOP_TASK, input)) as RpcMap["claude.stopTask"],
     approve: ((input) =>
       ipcRenderer.invoke(IPC.CLAUDE_APPROVE, input)) as RpcMap["claude.approve"],
     respondQuestion: ((input) =>

@@ -5,6 +5,7 @@ import {
   ListSideChatsSchema,
   SendTurnSchema,
   InterruptSchema,
+  StopTaskSchema,
   ApproveSchema,
   RespondQuestionSchema,
   RespondPlanApprovalSchema,
@@ -175,6 +176,18 @@ export function registerClaudeHandlers(ipcMain: IpcMain): void {
     const input = InterruptSchema.parse(raw);
     runtimeManager.interrupt(input.sessionId);
     SessionRepo.updateStatus(input.sessionId, "interrupted");
+  });
+
+  // ── Stop ONE running CLI task (a long-running bash command the agent
+  //    started, listed in the bash-tasks roster) without aborting the turn.
+  //    Backed by the SDK's `stop_task` control request; the roster update
+  //    arrives via the bash-tasks.update event stream. ──
+  ipcMain.handle(IPC.CLAUDE_STOP_TASK, async (_evt, raw) => {
+    const input = StopTaskSchema.parse(raw);
+    const stopped = await runtimeManager.stopTask(input.sessionId, input.taskId);
+    if (!stopped) {
+      throw new Error("没有正在运行的回合可承载该停止请求(no live turn for this session)");
+    }
   });
 
   ipcMain.handle(IPC.CLAUDE_APPROVE, async (_evt, raw) => {

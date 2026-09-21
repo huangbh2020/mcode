@@ -9,11 +9,11 @@
  * views over a shared model.
  */
 import { useCallback, useState } from "react";
-import type { SubagentSnapshot } from "@contracts/runtime";
+import type { SubagentSnapshot, BashTaskSnapshot } from "@contracts/runtime";
 import type { Block, TodoItem } from "@renderer/stores/sessionStore.js";
 import type { SessionBookmark } from "@contracts/session";
 import type { MessageId } from "@renderer/lib/i18n/index.js";
-import { IconBookmark, IconClipboard, IconListDetails, PiRobot } from "@renderer/lib/icons.js";
+import { IconBookmark, IconClipboard, IconListDetails, IconTerminal2, PiRobot } from "@renderer/lib/icons.js";
 import type { ComponentType } from "react";
 
 /** A `kind: "plan"` block - the frozen per-turn plan in the message stream. */
@@ -25,14 +25,18 @@ export type Translate = (key: MessageId, params?: Record<string, string | number
 
 /* ── Rail geometry ──────────────────────────────────────────────────── */
 
-/** The four node kinds, in the rail's top-to-bottom order. Tasks lead
+/** The five node kinds, in the rail's top-to-bottom order. Tasks lead
  *  (progress is what people glance at); bookmarks sit last because they are
  *  an archive rather than live state. Nodes whose source is empty are omitted
- *  entirely, so the rail only ever shows what the session actually has. */
-export type ActivityNodeKey = "tasks" | "subagents" | "plans" | "bookmarks";
+ *  entirely, so the rail only ever shows what the session actually has.
+ *  `commands` are the bash commands the agent started and the CLI tracks as
+ *  tasks (dev servers, long scripts) — live processes the user may need to
+ *  stop, hence they sit right beside the subagents. */
+export type ActivityNodeKey = "tasks" | "subagents" | "commands" | "plans" | "bookmarks";
 export const RAIL_NODE_ORDER: readonly ActivityNodeKey[] = [
   "tasks",
   "subagents",
+  "commands",
   "plans",
   "bookmarks",
 ];
@@ -61,6 +65,11 @@ export const NODE_META: Record<
     labelKey: "chatStream.activity.node.subagents",
     icoCls: "bg-warning/15 text-warning",
   },
+  commands: {
+    ico: IconTerminal2,
+    labelKey: "chatStream.activity.node.commands",
+    icoCls: "bg-accent/15 text-accent-strong",
+  },
   plans: {
     ico: IconClipboard,
     labelKey: "chatStream.activity.node.plans",
@@ -76,15 +85,20 @@ export const NODE_META: Record<
 
 
 /** Which kind the cluster's core opens: whatever is most urgent/perishable.
- *  Running subagents first (they change second to second), then the task
- *  board, then plans, then bookmarks. Same rule for the corner cluster's core
- *  and for the sheet's initial tab. */
+ *  A RUNNING command outranks everything — it is a live process consuming
+ *  resources that only the user can stop; then running subagents (they
+ *  change second to second), then the task board, then plans, then
+ *  bookmarks. Same rule for the corner cluster's core and for the sheet's
+ *  initial tab. A settled-only command roster (everything completed/failed)
+ *  does NOT outrank — it's history, not live state. */
 export function primaryKind(
   subagents: readonly SubagentSnapshot[],
   todos: readonly TodoItem[],
   planBlocks: readonly PlanBlock[],
   bookmarks: readonly SessionBookmark[],
+  bashTasks: readonly BashTaskSnapshot[] = [],
 ): ActivityNodeKey {
+  if (bashTasks.some((c) => c.status === "running")) return "commands";
   if (subagents.length > 0) return "subagents";
   if (todos.length > 0) return "tasks";
   if (planBlocks.length > 0) return "plans";
@@ -115,6 +129,19 @@ export function fmtUsage(snap: SubagentSnapshot): string {
   if (typeof snap.durationMs === "number") parts.push(`${Math.round(snap.durationMs / 1000)}s`);
   return parts.join(" · ");
 }
+
+/** Status tints per bash-command lifecycle state (the「运行命令」node's
+ *  rows). Mirrors SUBAGENT_STATUS_META's contract: display labels are
+ *  `labelKey`s resolved via t() at render time. */
+export const BASH_TASK_STATUS_META: Record<
+  BashTaskSnapshot["status"],
+  { labelKey: MessageId; cls: string }
+> = {
+  running: { labelKey: "chatStream.bashTask.statusRunning", cls: "text-accent" },
+  completed: { labelKey: "chatStream.bashTask.statusCompleted", cls: "text-accent" },
+  failed: { labelKey: "chatStream.bashTask.statusFailed", cls: "text-danger" },
+  killed: { labelKey: "chatStream.bashTask.statusKilled", cls: "text-danger" },
+};
 
 /* ── Plan titles ────────────────────────────────────────────────────── */
 
@@ -256,6 +283,7 @@ export function useActivityTabs(): {
   const [tabs, setTabs] = useState<ActivityTabs>(() => ({
     tasks: "all",
     subagents: "all",
+    commands: "all",
     plans: "all",
     bookmarks: "all",
   }));

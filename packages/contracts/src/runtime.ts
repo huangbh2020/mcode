@@ -506,6 +506,51 @@ export interface SubagentSnapshot {
 }
 
 /**
+ * A bash command the agent started that the CLI tracks as a task
+ * (`task_started` with `task_type: "local_bash"` — every Bash-tool command,
+ * foreground or backgrounded). The adapter mirrors these into a separate
+ * roster (they are deliberately NOT subagents — see the adapter's
+ * NON_AGENT_TASK_TYPES) and flushes it as a `bash-tasks.update` event so the
+ * activity console can show the model-started commands/services and offer a
+ * per-task stop control (SDK `stop_task` control request).
+ */
+export interface BashTaskSnapshot {
+  /** SDK task id — the token the host's `stopTask` control request takes. */
+  taskId: string;
+  /** Originating Bash tool_use id, for correlation with the chat stream. */
+  toolUseId?: string;
+  /** The command line (SDK task description). */
+  description: string;
+  /** Lifecycle status. `running` is the steady state until one of the
+   *  completion signals lands (task_updated / tool_result / the
+   *  background-tasks level set dropping the id). */
+  status: "running" | "completed" | "failed" | "killed";
+  /** True when the CLI backgrounded the command (is_backgrounded on
+   *  task_started or a later task_updated patch). Backgrounded commands are
+   *  governed by the `background_tasks_changed` level signal: leaving the
+   *  live set means they settled. */
+  isBackgrounded?: boolean;
+  /** Host-side wall-clock start (stamped at the task_started edge). */
+  startedAt?: number;
+  /** Wall-clock end (task_updated.end_time or the local settle stamp). */
+  endedAt?: number;
+  /** Error text (task_updated.patch.error), if status=failed. */
+  error?: string;
+}
+
+/**
+ * Consolidated roster of the agent's tracked bash commands. REPLACE
+ * semantics — the host swaps its list for `tasks`. Process-lifetime data,
+ * never persisted: the CLI (and with it every command it spawned) dies with
+ * the app, so a restart starts from an empty roster.
+ */
+export interface BashTasksEvent {
+  type: "bash-tasks.update";
+  sessionId: string;
+  tasks: BashTaskSnapshot[];
+}
+
+/**
  * Consolidated subagent roster update. Always carries the full current
  * roster — the host should replace, not merge. Empty array means "no
  * subagents active or recently completed".
@@ -748,6 +793,7 @@ export type RuntimeEvent =
   | PlanUpdateEvent
   | SubagentUpdateEvent
   | SubagentTranscriptEvent
+  | BashTasksEvent
   | ContextUsageEvent
   | ErrorEvent
   | TurnDoneEvent

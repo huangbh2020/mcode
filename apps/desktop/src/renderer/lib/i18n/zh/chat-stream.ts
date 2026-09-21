@@ -114,6 +114,7 @@ export const zh = {
   // 收放聚簇（方案 B）——圆钮 + 按紧急度伸出的文字横条
   "chatStream.activity.cluster.aria": "活动",
   "chatStream.activity.cluster.running": "{n} 个子代理运行中",
+  "chatStream.activity.cluster.commands": "{n} 个命令运行中",
   "chatStream.activity.cluster.failed": "{n} 个子代理失败",
   "chatStream.activity.cluster.waiting": "等待你的回答",
   "chatStream.activity.cluster.tasks": "任务 {done}/{total}",
@@ -123,6 +124,7 @@ export const zh = {
   // 节点名（活动台台头 / 节点页签）
   "chatStream.activity.node.tasks": "任务",
   "chatStream.activity.node.subagents": "子代理",
+  "chatStream.activity.node.commands": "运行命令",
   "chatStream.activity.node.plans": "计划",
   "chatStream.activity.node.bookmarks": "书签",
   // 分组标题与筛选 chip
@@ -169,6 +171,21 @@ export const zh = {
   "chatStream.subagent.statusCompleted": "已完成",
   "chatStream.subagent.statusFailed": "失败",
   "chatStream.subagent.statusKilled": "已终止",
+
+  // ── Agent-started bash commands（活动区「运行命令」节点）──
+  "chatStream.bashTask.statusRunning": "运行中",
+  "chatStream.bashTask.statusCompleted": "已完成",
+  "chatStream.bashTask.statusFailed": "失败",
+  "chatStream.bashTask.statusKilled": "已停止",
+  "chatStream.bashTask.backgrounded": "后台",
+  "chatStream.bashTask.noCommand": "(未知命令)",
+  "chatStream.bashTask.stop": "停止",
+  "chatStream.bashTask.stopTitle": "停止该命令（不影响回合继续）",
+  "chatStream.bashTask.stopFailed": "停止命令失败",
+  "chatStream.bashTask.subRunning": "{running} 个运行中 · 共 {total} 条",
+  "chatStream.bashTask.subIdle": "共 {n} 条 · 全部已结束",
+  "chatStream.bashTask.unitCommands": "条",
+  "chatStream.bashTask.footer": "模型通过 Bash 工具启动的命令（服务、脚本等）；关闭应用时会一并结束",
 
   // ── Message bookmarks (selection toolbar / capsule / timeline) ──
   "chatStream.bookmark.add": "添加书签",

@@ -32,7 +32,7 @@ import { useEffect, useRef, useState, type RefObject } from "react";
 import { cn } from "@renderer/lib/cn.js";
 import { useI18n } from "@renderer/lib/i18n/index.js";
 import { isElectron } from "@renderer/lib/platform.js";
-import type { SubagentSnapshot } from "@contracts/runtime";
+import type { SubagentSnapshot, BashTaskSnapshot } from "@contracts/runtime";
 import type { SessionBookmark } from "@contracts/session";
 import type { TodoItem } from "@renderer/stores/sessionStore.js";
 import { ActivitySheet } from "@renderer/components/mobile/ActivitySheet.js";
@@ -49,6 +49,7 @@ export function ActivityCluster({
   todos,
   planBlocks,
   bookmarks,
+  bashTasks,
   /** The turn is paused on an unanswered question (AskUserQuestion pending) —
    *  the strongest "this needs you" signal the app has. */
   waiting,
@@ -58,6 +59,9 @@ export function ActivityCluster({
   onRenameBookmark,
   onPickSubagent,
   onPickPlan,
+  /** Stop ONE running agent command (long script / dev server) — wired to
+   *  the SDK stop_task control request. */
+  onStopBashTask,
   /** Landing target for the "fly to activity" bookmark animation. The cluster
    *  has no per-kind nodes, so the dot lands on the cluster itself. */
   bookmarkNodeRef,
@@ -66,6 +70,7 @@ export function ActivityCluster({
   todos: TodoItem[];
   planBlocks: PlanBlock[];
   bookmarks: SessionBookmark[];
+  bashTasks?: BashTaskSnapshot[];
   waiting?: boolean;
   isBookmarkStale?: (b: SessionBookmark) => boolean;
   onPickBookmark?: (b: SessionBookmark) => void;
@@ -73,6 +78,7 @@ export function ActivityCluster({
   onRenameBookmark?: (b: SessionBookmark, title: string) => void;
   onPickSubagent?: (agent: SubagentSnapshot) => void;
   onPickPlan: (plan: string) => void;
+  onStopBashTask?: (task: BashTaskSnapshot) => void;
   bookmarkNodeRef?: RefObject<HTMLDivElement | null>;
 }) {
   const { t } = useI18n();
@@ -110,21 +116,23 @@ export function ActivityCluster({
     };
   }, [openKind, sheetNode]);
 
+  const commands = bashTasks ?? [];
   const hasAny =
-    subagents.length > 0 || todos.length > 0 || planBlocks.length > 0 || bookmarks.length > 0;
+    subagents.length > 0 || todos.length > 0 || planBlocks.length > 0 || bookmarks.length > 0 || commands.length > 0;
   if (!hasAny) return null;
 
   const running = subagents.filter((a) => a.status === "running");
   const failed = subagents.filter((a) => a.status === "failed");
+  const runningCommands = commands.filter((c) => c.status === "running");
   const done = todos.filter((x) => x.status === "completed").length;
   const pct = todos.length > 0 ? Math.round((done / todos.length) * 100) : 0;
-  const primary = primaryKind(subagents, todos, planBlocks, bookmarks);
+  const primary = primaryKind(subagents, todos, planBlocks, bookmarks, commands);
 
   // Attention outranks activity: a pending question or a failed subagent is the
   // reason the bar exists at all. A failed agent while others still run keeps
   // the running copy (per the design doc's rule) — the console lists it.
   const attn = !!waiting || (running.length === 0 && failed.length > 0);
-  const expanded = running.length > 0 || attn;
+  const expanded = running.length > 0 || runningCommands.length > 0 || attn;
   const attnText = waiting
     ? t("chatStream.activity.cluster.waiting")
     : t("chatStream.activity.cluster.failed", { n: failed.length });
@@ -184,11 +192,20 @@ export function ActivityCluster({
       <div className={cn("activity-cluster-bar", expanded && "open")}>
         {attn ? (
           <span className="whitespace-nowrap text-[11px] font-semibold text-warning">{attnText}</span>
-        ) : running.length > 0 ? (
-          <span className="whitespace-nowrap text-[11px] font-semibold text-content-muted">
-            {t("chatStream.activity.cluster.running", { n: running.length })}
-          </span>
-        ) : null}
+        ) : (
+          <>
+            {runningCommands.length > 0 && (
+              <span className="whitespace-nowrap text-[11px] font-semibold text-content-muted">
+                {t("chatStream.activity.cluster.commands", { n: runningCommands.length })}
+              </span>
+            )}
+            {running.length > 0 && (
+              <span className="whitespace-nowrap text-[11px] font-semibold text-content-muted">
+                {t("chatStream.activity.cluster.running", { n: running.length })}
+              </span>
+            )}
+          </>
+        )}
 
         {!attn && todos.length > 0 && (
           <>
@@ -233,6 +250,8 @@ export function ActivityCluster({
             todos={todos}
             planBlocks={planBlocks}
             bookmarks={bookmarks}
+            bashTasks={commands}
+            onStopBashTask={onStopBashTask}
             isBookmarkStale={isBookmarkStale}
             tabs={tabs}
             onTabChange={setTab}
@@ -270,7 +289,7 @@ export function ActivityCluster({
           />
           <ActivityConsole
             node={openKind}
-            // Node tabs keep all four kinds reachable: the cluster's core only
+            // Node tabs keep all kinds reachable: the cluster's core only
             // opens the primary one, and the bar exposes plans.
             nodeTabs
             onPickNode={setOpenKind}
@@ -278,6 +297,8 @@ export function ActivityCluster({
             todos={todos}
             planBlocks={planBlocks}
             bookmarks={bookmarks}
+            bashTasks={commands}
+            onStopBashTask={onStopBashTask}
             isBookmarkStale={isBookmarkStale}
             tabs={tabs}
             onTabChange={setTab}

@@ -993,6 +993,16 @@ export type SendTurnInput = z.infer<typeof SendTurnSchema>;
 export const InterruptSchema = z.object({ sessionId: z.string() });
 export type InterruptInput = z.infer<typeof InterruptSchema>;
 
+/* Stop ONE running CLI task (a long-running bash command the agent started,
+ * tracked in the bash-tasks roster) without aborting the whole turn. The
+ * taskId comes from BashTaskSnapshot.taskId. Rejects when the session has no
+ * live turn (the CLI process is gone — there is nothing left to stop). */
+export const StopTaskSchema = z.object({
+  sessionId: z.string(),
+  taskId: z.string(),
+});
+export type StopTaskInput = z.infer<typeof StopTaskSchema>;
+
 export const ApproveSchema = z.object({
   sessionId: z.string(),
   requestId: z.string(),
@@ -4250,6 +4260,10 @@ export interface RpcMap {
   /** Returns the (possibly retitled) session so the renderer can refresh. */
   "claude.sendTurn": (input: SendTurnInput) => Promise<{ session: Session }>;
   "claude.interrupt": (input: InterruptInput) => Promise<void>;
+  /** Stop one running CLI task (see BashTaskSnapshot) without aborting the
+   *  turn. Resolves once the stop_task control request was delivered; the
+   *  roster update arrives via the bash-tasks.update event stream. */
+  "claude.stopTask": (input: StopTaskInput) => Promise<void>;
   "claude.approve": (input: ApproveInput) => Promise<void>;
   /** Submit the user's answers to a pending AskUserQuestion. */
   "claude.respondQuestion": (input: RespondQuestionInput) => Promise<void>;
@@ -4814,6 +4828,7 @@ export const IPC = {
   CLAUDE_LIST_SIDE_CHATS: "claude:listSideChats",
   CLAUDE_SEND_TURN: "claude:sendTurn",
   CLAUDE_INTERRUPT: "claude:interrupt",
+  CLAUDE_STOP_TASK: "claude:stopTask",
   CLAUDE_APPROVE: "claude:approve",
   CLAUDE_RESPOND_QUESTION: "claude:respondQuestion",
   CLAUDE_RESPOND_PLAN_APPROVAL: "claude:respondPlanApproval",

@@ -21,6 +21,7 @@ import { preloadClaudeSdk } from "@main/providers/claude-sdk/ClaudeAgentSdkProvi
 import { logStartup } from "@main/lib/startupTimer.js";
 import { log } from "@main/lib/logger.js";
 import { setManagedRuntimeRoot } from "@main/runtimes/managedRuntimeRoots.js";
+import { killDescendants } from "@main/lib/procTree.js";
 import { join } from "node:path";
 
 // App identity for OS-level surfaces (desktop notifications, taskbar grouping,
@@ -261,7 +262,22 @@ app.on("before-quit", (event) => {
   if (!sessionCookiesFlushed) {
     event.preventDefault();
     const timeout = new Promise<void>((r) => setTimeout(r, 3000).unref());
-    void Promise.race([BrowserManager.saveCookieVault(), timeout]).finally(() => {
+    // Reap the whole descendant tree of the main process alongside the
+    // cookie flush (both run inside this 3s window). The claude CLI the SDK
+    // spawns is a direct child, and the commands the model started through
+    // the Bash tool (python scripts, dev servers) are grandchildren —
+    // without this they survive the app as orphans and the user has to kill
+    // them from the task manager. Best-effort; see lib/procTree.ts. The
+    // Promise.all means quit waits for BOTH the flush and the reap (or the
+    // 3s timeout, whichever comes first) — racing them individually would
+    // let a fast reap cut the cookie flush short.
+    const preQuit = Promise.all([
+      BrowserManager.saveCookieVault().catch(() => {}),
+      killDescendants(process.pid).then((r) => {
+        if (r.terminated.length > 0) log.info(`quit: reaped ${r.terminated.length} descendant process(es)`);
+      }),
+    ]);
+    void Promise.race([preQuit, timeout]).finally(() => {
       sessionCookiesFlushed = true;
       app.quit();
     });

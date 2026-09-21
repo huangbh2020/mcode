@@ -111,6 +111,7 @@ export const en = {
   // Collapsing cluster (方案 B) — round button + urgency-grown text bar
   "chatStream.activity.cluster.aria": "Activity",
   "chatStream.activity.cluster.running": "{n} subagents running",
+  "chatStream.activity.cluster.commands": "{n} commands running",
   "chatStream.activity.cluster.failed": "{n} subagents failed",
   "chatStream.activity.cluster.waiting": "Waiting for your answer",
   "chatStream.activity.cluster.tasks": "Tasks {done}/{total}",
@@ -120,6 +121,7 @@ export const en = {
   // Node names (console header / node tab strip)
   "chatStream.activity.node.tasks": "Tasks",
   "chatStream.activity.node.subagents": "Subagents",
+  "chatStream.activity.node.commands": "Commands",
   "chatStream.activity.node.plans": "Plans",
   "chatStream.activity.node.bookmarks": "Bookmarks",
   // Group headers and filter chips
@@ -166,6 +168,21 @@ export const en = {
   "chatStream.subagent.statusCompleted": "Completed",
   "chatStream.subagent.statusFailed": "Failed",
   "chatStream.subagent.statusKilled": "Terminated",
+
+  // ── Agent-started bash commands (activity「Commands」node) ──
+  "chatStream.bashTask.statusRunning": "Running",
+  "chatStream.bashTask.statusCompleted": "Completed",
+  "chatStream.bashTask.statusFailed": "Failed",
+  "chatStream.bashTask.statusKilled": "Stopped",
+  "chatStream.bashTask.backgrounded": "BG",
+  "chatStream.bashTask.noCommand": "(unknown command)",
+  "chatStream.bashTask.stop": "Stop",
+  "chatStream.bashTask.stopTitle": "Stop this command (the turn continues)",
+  "chatStream.bashTask.stopFailed": "Failed to stop command",
+  "chatStream.bashTask.subRunning": "{running} running · {total} total",
+  "chatStream.bashTask.subIdle": "{n} · all settled",
+  "chatStream.bashTask.unitCommands": "total",
+  "chatStream.bashTask.footer": "Commands the agent started via the Bash tool (services, scripts); they are killed when the app quits",
 
   // ── Message bookmarks (selection toolbar / capsule / timeline) ──
   "chatStream.bookmark.add": "Add bookmark",

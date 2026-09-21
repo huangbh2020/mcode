@@ -25,6 +25,7 @@ import {
   StartSessionSchema,
   SendTurnSchema,
   InterruptSchema,
+  StopTaskSchema,
   ApproveSchema,
   RespondQuestionSchema,
   RespondPlanApprovalSchema,
@@ -291,6 +292,15 @@ const HANDLERS: Record<string, RpcHandler> = {
     const input = InterruptSchema.parse(raw);
     runtimeManager.interrupt(input.sessionId);
     SessionRepo.updateStatus(input.sessionId, "interrupted");
+    return { ok: true };
+  },
+
+  // Stop ONE running CLI task (long-running agent command) without aborting
+  // the turn — mirrors the desktop claude:stopTask IPC handler.
+  "claude:stopTask": async (raw) => {
+    const input = StopTaskSchema.parse(raw);
+    const stopped = await runtimeManager.stopTask(input.sessionId, input.taskId);
+    if (!stopped) throw new Error("no live turn for this session");
     return { ok: true };
   },
 

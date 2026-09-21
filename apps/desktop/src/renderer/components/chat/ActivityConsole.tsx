@@ -44,13 +44,16 @@ import {
   IconListDetails,
   IconLoader2,
   IconPencil,
+  IconPlayerStop,
+  IconTerminal2,
   IconX,
   PiRobot,
 } from "@renderer/lib/icons.js";
-import type { SubagentSnapshot } from "@contracts/runtime";
+import type { SubagentSnapshot, BashTaskSnapshot } from "@contracts/runtime";
 import type { SessionBookmark } from "@contracts/session";
 import type { TodoItem } from "@renderer/stores/sessionStore.js";
 import {
+  BASH_TASK_STATUS_META,
   NODE_META,
   RAIL_NODE_ORDER,
   SUBAGENT_STATUS_META,
@@ -466,6 +469,127 @@ function PlansBody({
   );
 }
 
+/* ── Body: commands (agent-started bash tasks) ──────────────────────── */
+
+const BASH_TASK_STATUS_ICON: Record<BashTaskSnapshot["status"], ComponentType<TablerIconProps>> = {
+  running: IconTerminal2,
+  completed: IconCheck,
+  failed: IconX,
+  killed: IconX,
+};
+
+function BashTaskRow({
+  task,
+  now,
+  t,
+  onStop,
+}: {
+  task: BashTaskSnapshot;
+  now: number;
+  t: Translate;
+  onStop?: (task: BashTaskSnapshot) => void;
+}) {
+  const meta = BASH_TASK_STATUS_META[task.status];
+  const StatusIcon = BASH_TASK_STATUS_ICON[task.status];
+  const running = task.status === "running";
+  const start = task.startedAt ?? now;
+  const end = running ? now : (task.endedAt ?? now);
+  return (
+    <li className="group border-b border-edge/35 py-2 pl-3.5 pr-3 last:border-b-0">
+      <div className="flex items-center gap-1.5">
+        <span className={cn("flex items-center gap-1 text-[10px] font-semibold", meta.cls)}>
+          {running && <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-accent" />}
+          <StatusIcon size={11} />
+          {t(meta.labelKey)}
+        </span>
+        {task.isBackgrounded && (
+          <span className="rounded bg-info/20 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wide text-info">
+            {t("chatStream.bashTask.backgrounded")}
+          </span>
+        )}
+        <span className="ml-auto shrink-0 text-[9.5px] tabular-nums text-content-subtle">
+          {formatClock(start)} → {running ? t("chatStream.activity.now") : formatClock(end)}
+        </span>
+      </div>
+      <p
+        className="mt-1 truncate font-mono text-[11px] text-content"
+        title={task.description}
+      >
+        {task.description || t("chatStream.bashTask.noCommand")}
+      </p>
+      {task.error ? <p className="mt-0.5 truncate text-[10px] text-danger" title={task.error}>{task.error}</p> : null}
+      <div className="mt-1 flex items-center gap-1">
+        <span className="rounded bg-surface-muted px-1.5 py-0.5 text-[9px] font-medium tabular-nums text-content-subtle">
+          {formatDuration(end - start)}
+        </span>
+        {running && onStop && (
+          <button
+            type="button"
+            onClick={() => onStop(task)}
+            title={t("chatStream.bashTask.stopTitle")}
+            className="ml-auto flex items-center gap-1 rounded-full border border-danger/40 bg-danger/10 px-2 py-0.5 text-[10px] font-semibold text-danger transition-colors hover:bg-danger/20"
+          >
+            <IconPlayerStop size={10} />
+            {t("chatStream.bashTask.stop")}
+          </button>
+        )}
+      </div>
+    </li>
+  );
+}
+
+function CommandsBody({
+  tasks,
+  tab,
+  now,
+  t,
+  onStop,
+}: {
+  tasks: BashTaskSnapshot[];
+  tab: string;
+  now: number;
+  t: Translate;
+  onStop?: (task: BashTaskSnapshot) => void;
+}) {
+  const running = tasks.filter((c) => c.status === "running");
+  const settled = tasks.filter((c) => c.status !== "running");
+  const completed = settled.filter((c) => c.status === "completed");
+  const failed = settled.filter((c) => c.status === "failed" || c.status === "killed");
+
+  const groups: { key: string; label: string; list: BashTaskSnapshot[] }[] =
+    tab === "running"
+      ? [{ key: "running", label: t("chatStream.activity.groupRunning"), list: running }]
+      : tab === "completed"
+        ? [{ key: "completed", label: t("chatStream.activity.groupCompleted"), list: completed }]
+        : tab === "failed"
+          ? [{ key: "failed", label: t("chatStream.activity.groupFailed"), list: failed }]
+          : [
+              { key: "running", label: t("chatStream.activity.groupRunning"), list: running },
+              { key: "settled", label: t("chatStream.activity.groupSettled"), list: settled },
+            ];
+
+  const visible = groups.filter((g) => g.list.length > 0);
+  if (visible.length === 0) {
+    return <EmptyGroup t={t} />;
+  }
+  // Newest first inside each group — the most recent command is the one the
+  // user is most likely watching.
+  return (
+    <div>
+      {visible.map((g) => (
+        <div key={g.key}>
+          <GroupHead label={g.label} n={g.list.length} />
+          <ul>
+            {[...g.list].reverse().map((c) => (
+              <BashTaskRow key={c.taskId} task={c} now={now} t={t} onStop={onStop} />
+            ))}
+          </ul>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 /* ── Body: bookmarks ────────────────────────────────────────────────── */
 
 function BookmarkRow({
@@ -674,6 +798,9 @@ export interface ActivityConsoleProps {
   todos: TodoItem[];
   planBlocks: PlanBlock[];
   bookmarks: SessionBookmark[];
+  /** Bash commands the agent started (the「运行命令」node). Optional so
+   *  older callers degrade to an empty roster. */
+  bashTasks?: BashTaskSnapshot[];
   isBookmarkStale?: (b: SessionBookmark) => boolean;
   /** Active filter tab per node + setter (owned by the rail so it survives
    *  open/close cycles). */
@@ -682,6 +809,8 @@ export interface ActivityConsoleProps {
   onClose: () => void;
   onPickPlan: (plan: string) => void;
   onPickSubagent?: (agent: SubagentSnapshot) => void;
+  /** Stop ONE running agent command (SDK stop_task; desktop + mobile). */
+  onStopBashTask?: (task: BashTaskSnapshot) => void;
   onPickBookmark?: (b: SessionBookmark) => void;
   onRemoveBookmark?: (b: SessionBookmark) => void;
   onRenameBookmark?: (b: SessionBookmark, title: string) => void;
@@ -700,12 +829,14 @@ export function ActivityConsole({
   todos,
   planBlocks,
   bookmarks,
+  bashTasks,
   isBookmarkStale,
   tabs,
   onTabChange,
   onClose,
   onPickPlan,
   onPickSubagent,
+  onStopBashTask,
   onPickBookmark,
   onRemoveBookmark,
   onRenameBookmark,
@@ -719,11 +850,13 @@ export function ActivityConsole({
   const Ico = meta.ico;
   const stale = isBookmarkStale ?? (() => false);
   const tab = tabs[node] ?? "all";
+  const commands = bashTasks ?? [];
 
   const runningAgents = subagents.filter((a) => a.status === "running");
   const settledAgents = subagents.filter((a) => a.status !== "running");
   const doneTodos = todos.filter((x) => x.status === "completed");
   const todoPct = todos.length > 0 ? Math.round((doneTodos.length / todos.length) * 100) : 0;
+  const runningCommands = commands.filter((c) => c.status === "running");
   const bmGroups = bookmarkGroups(bookmarks, now, stale);
   const bmCount = (key: "today" | "earlier" | "stale") => bmGroups.find((g) => g.key === key)?.list.length ?? 0;
 
@@ -818,6 +951,35 @@ export function ActivityConsole({
       { key: "completed", label: t("chatStream.activity.groupCompleted"), n: doneTodos.length },
     ];
     footer = t("chatStream.activity.tasksFooter");
+  } else if (node === "commands") {
+    const failed = commands.filter((c) => c.status === "failed" || c.status === "killed").length;
+    subtitle = runningCommands.length
+      ? t("chatStream.bashTask.subRunning", { running: runningCommands.length, total: commands.length })
+      : t("chatStream.bashTask.subIdle", { n: commands.length });
+    stats = (
+      <>
+        <Stat value={commands.length} label={t("chatStream.bashTask.unitCommands")} />
+        <Sep />
+        <Stat value={runningCommands.length} label={t("chatStream.activity.labelRunning")} />
+        <Sep />
+        <Stat value={commands.length - failed} label={t("chatStream.activity.groupCompleted")} />
+        {failed > 0 && (
+          <>
+            <Sep />
+            <span className="text-danger">
+              <Stat value={failed} label={t("chatStream.activity.groupFailed")} />
+            </span>
+          </>
+        )}
+      </>
+    );
+    filters = [
+      { key: "all", label: t("chatStream.activity.tabAll"), n: commands.length },
+      { key: "running", label: t("chatStream.activity.groupRunning"), n: runningCommands.length },
+      { key: "completed", label: t("chatStream.activity.groupCompleted"), n: commands.length - failed },
+      { key: "failed", label: t("chatStream.activity.groupFailed"), n: failed },
+    ];
+    footer = t("chatStream.bashTask.footer");
   } else if (node === "plans") {
     subtitle = t("chatStream.activity.plansSubtitle", { n: planBlocks.length });
     stats = (
@@ -873,6 +1035,8 @@ export function ActivityConsole({
       <SubagentsBody agents={subagents} tab={tab} now={now} t={t} onPick={onPickSubagent} />
     ) : node === "tasks" ? (
       <TasksBody todos={todos} tab={tab} t={t} />
+    ) : node === "commands" ? (
+      <CommandsBody tasks={commands} tab={tab} now={now} t={t} onStop={onStopBashTask} />
     ) : node === "plans" ? (
       <PlansBody planBlocks={planBlocks} tab={tab} t={t} onPickPlan={onPickPlan} />
     ) : (
@@ -899,7 +1063,7 @@ export function ActivityConsole({
           panel needs its own way to move between kinds. */}
       {nodeTabs && onPickNode && (
         <div className="flex shrink-0 gap-1 overflow-x-auto border-b border-edge/60 px-2 py-2">
-          {RAIL_NODE_ORDER.filter((k) => k === node || hasNodeData(k, subagents, todos, planBlocks, bookmarks)).map((k) => {
+          {RAIL_NODE_ORDER.filter((k) => k === node || hasNodeData(k, subagents, todos, planBlocks, bookmarks, commands)).map((k) => {
             const m = NODE_META[k];
             const K = m.ico;
             const active = k === node;
@@ -997,9 +1161,11 @@ export function hasNodeData(
   todos: TodoItem[],
   planBlocks: PlanBlock[],
   bookmarks: SessionBookmark[],
+  bashTasks: BashTaskSnapshot[] = [],
 ): boolean {
   if (node === "subagents") return subagents.length > 0;
   if (node === "tasks") return todos.length > 0;
+  if (node === "commands") return bashTasks.length > 0;
   if (node === "plans") return planBlocks.length > 0;
   return bookmarks.length > 0;
 }
