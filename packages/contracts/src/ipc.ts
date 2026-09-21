@@ -1858,6 +1858,16 @@ export const FileReadBinarySchema = z.object({
 });
 export type FileReadBinaryInput = z.infer<typeof FileReadBinarySchema>;
 
+/** Whether main's read guards would admit this path (project root ∪
+ *  materialized session worktree). Pure in-memory check — NO disk access.
+ *  Drives the message attachment card: workspace-outside file cards refuse
+ *  click-to-view instead of opening an unreadable editor tab or a failed
+ *  image popover. */
+export const FileIsViewableSchema = z.object({
+  filePath: z.string(),
+});
+export type FileIsViewableInput = z.infer<typeof FileIsViewableSchema>;
+
 /** Open the OS file dialog for image selection and return the files as base64.
  *  Main reads the files itself (the renderer can't read arbitrary paths under
  *  contextIsolation). A user-driven dialog is explicit consent, so no
@@ -4374,6 +4384,9 @@ export interface RpcMap {
   "file.readFile": (input: FileReadInput) => Promise<{ content: string }>;
   /** Read a binary file as a base64 data URL (image preview). Same path guard. */
   "file.readBinary": (input: FileReadBinaryInput) => Promise<{ dataUrl: string }>;
+  /** Pure containment check (no disk access): is the path inside a known
+   *  project root or session worktree — i.e. would the read guards admit it? */
+  "file.isViewable": (input: FileIsViewableInput) => Promise<{ viewable: boolean }>;
   /** OS dialog image picker → base64 images (composer 图片 button). */
   "file.pickImages": (input: PickImagesInput) => Promise<{ images: PickedImage[]; skipped: string[] }>;
   /** Persist a clipboard-pasted external file to a temp path (composer paste). */
@@ -4886,6 +4899,8 @@ export const IPC = {
   FILE_READ: "file:readFile",
   // File read as base64 data URL (image preview)
   FILE_READ_BINARY: "file:readBinary",
+  // Path containment check (project/worktree membership, no disk access)
+  FILE_IS_VIEWABLE: "file:isViewable",
   // OS dialog image picker → base64 images (composer 图片 button)
   FILE_PICK_IMAGES: "file:pickImages",
   // Clipboard-pasted external file → temp path (composer paste)

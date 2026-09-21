@@ -40,6 +40,7 @@ import {
   type ContentTag,
   appendUniqueFileTags,
   composePromptWithTags,
+  isImageFilePath,
   makeContentTag,
   makeFileTag,
   makeElementTag,
@@ -2704,6 +2705,34 @@ function ChatPaneForSession({
     }
   }, [stageImageFile, t]);
 
+  /** External file drop (dragged from the OS shell / another app into the
+   *  composer). Images stage inline as base64 — same as OS paste — because
+   *  both the chip preview and the send path consume bytes; the readBinary
+   *  IPC the file-chip popover uses refuses paths outside known project
+   *  roots, and an externally dropped image's original location usually is.
+   *  Non-image files with a resolvable path become file-reference chips
+   *  pointing at the ORIGINAL path (zero byte copying). Path-less files
+   *  (web page drags, virtual items) fall into the paste pipeline. */
+  const handleExternalDrop = useCallback(
+    (files: File[]) => {
+      const byPath: string[] = [];
+      const pathless: File[] = [];
+      for (const file of files) {
+        const path = api.file.getPathForFile(file);
+        if (!path) {
+          pathless.push(file);
+        } else if (isImageFilePath(path)) {
+          stageImageFile(file);
+        } else {
+          byPath.push(path);
+        }
+      }
+      if (byPath.length > 0) setTags((prev) => appendUniqueFileTags(prev, byPath));
+      if (pathless.length > 0) handlePasteFiles(pathless);
+    },
+    [handlePasteFiles, stageImageFile],
+  );
+
   // Scroll callback from LegendList: update the timeline's active dash and
   // jump-to-bottom button state.
   //
@@ -3022,30 +3051,31 @@ function ChatPaneForSession({
   };
 
   /** Submit an inline-edited user message. Reconstructs the full prompt from
-   *  the edited text + the original message's attachment blocks (preserved
-   *  as-is) + the images the user kept in the editor, then calls
-   *  editAndResendMessage which truncates the session history at the edited
-   *  message and resends. */
-  const handleEditSubmit = async (msg: ChatMessage, newText: string, images: PromptImage[]) => {
+   *  the edited text + the attachment blocks the user KEPT in the editor
+   *  (hover × in edit mode drops a card) + the images the user kept, then
+   *  calls editAndResendMessage which truncates the session history at the
+   *  edited message and resends. */
+  const handleEditSubmit = async (
+    msg: ChatMessage,
+    newText: string,
+    images: PromptImage[],
+    attBlocks: Extract<Block, { kind: "attachment" }>[],
+  ) => {
     const text = newText.trim();
     if (!text) return;
     setEditingMessageId(null);
-    // Reconstruct attachment tags from the original message's attachment
-    // blocks so composePromptWithTags can re-inline them into the prompt.
-    const attachmentBlocks = msg.blocks.filter((b) => b.kind === "attachment");
-    const tags: ContentTag[] = attachmentBlocks.map((b, i) => {
-      const ab = b as Extract<Block, { kind: "attachment" }>;
-      return {
-        id: `edit-tag-${i}`,
-        // "quote" (side-chat reference) re-inlines as a paste block — only
-        // the composer's ContentTag has no quote kind; the persisted record
-        // keeps it for display.
-        kind: ab.attachmentKind === "file" ? "file" : "paste",
-        preview: ab.preview,
-        content: ab.content,
-        filePath: ab.filePath,
-      };
-    });
+    // Re-inline the surviving attachment blocks so composePromptWithTags can
+    // fold them back into the prompt.
+    const tags: ContentTag[] = attBlocks.map((ab, i) => ({
+      id: `edit-tag-${i}`,
+      // "quote" (side-chat reference) re-inlines as a paste block — only
+      // the composer's ContentTag has no quote kind; the persisted record
+      // keeps it for display.
+      kind: ab.attachmentKind === "file" ? "file" : "paste",
+      preview: ab.preview,
+      content: ab.content,
+      filePath: ab.filePath,
+    }));
     const prompt = composePromptWithTags(text, tags);
     const attachments = tags.map((t) => ({
       preview: t.preview,
@@ -3967,9 +3997,11 @@ function ChatPaneForSession({
               hideComposer && "hidden",
             )}
             onDragOver={(e) => {
-              // Only react to OUR file drag (custom MIME). External drags
-              // (text, images, files from outside the app) are ignored.
-              if (e.dataTransfer.types.includes(FILE_DRAG_MIME)) {
+              // React to OUR file drag (custom MIME) and to external OS file
+              // drags ("Files" — Explorer/Finder/desktop). Text-only web drags
+              // are left alone so the editor keeps its normal drop behavior.
+              const types = e.dataTransfer.types;
+              if (types.includes(FILE_DRAG_MIME) || types.includes("Files")) {
                 e.preventDefault();
                 e.dataTransfer.dropEffect = "copy";
                 if (!dragOver) setDragOver(true);
@@ -3985,10 +4017,22 @@ function ChatPaneForSession({
             }}
             onDrop={(e) => {
               const path = e.dataTransfer.getData(FILE_DRAG_MIME);
-              if (!path) return;
+              if (path) {
+                e.preventDefault();
+                setDragOver(false);
+                setTags((prev) => [...prev, makeFileTag(path)]);
+                return;
+              }
+              // External drop: files dragged in from outside the app.
+              // Explorer-style drags resolve to a real path → file chip at
+              // the original location; path-less Files (web page drags) go
+              // through the paste pipeline. Text-only drags fall through to
+              // the editor's own drop handling.
+              const files = Array.from(e.dataTransfer.files);
+              if (files.length === 0) return;
               e.preventDefault();
               setDragOver(false);
-              setTags((prev) => [...prev, makeFileTag(path)]);
+              handleExternalDrop(files);
             }}
           >
             {queue.length > 0 && (
@@ -4441,6 +4485,9 @@ function ChatPaneForSession({
  *  (calc(n × --chat-md-leading × --chat-font-size)), so this constant is
  *  only documentation for the budget unless the CSS calc changes with it. */
 const USER_MSG_VISIBLE_LINES = 5;
+/** Shared empty block list for the user-message media/prose partition — a
+ *  fresh `[]` per render would bust MessageBlocks' memo on assistant rows. */
+const EMPTY_BLOCK_LIST: Block[] = [];
 /** User messages the reader manually expanded, by id — module-level so the
  *  choice survives LegendList cell remounts (scroll far away and back and
  *  the expanded prompt stays expanded; everything else re-collapses). */
@@ -4486,7 +4533,12 @@ const MessageRow = memo(function MessageRow({
   /** Whether THIS row is currently in inline-edit mode. */
   isEditing?: boolean;
   onStartEdit?: (msg: ChatMessage) => void;
-  onSubmitEdit?: (msg: ChatMessage, newText: string, images: PromptImage[]) => void;
+  onSubmitEdit?: (
+    msg: ChatMessage,
+    newText: string,
+    images: PromptImage[],
+    attachments: Extract<Block, { kind: "attachment" }>[],
+  ) => void;
   onCancelEdit?: () => void;
   /** Called when the user clicks an inline plan block - opens the plan in
    *  the editor column via openPlanDrawer. */
@@ -4535,6 +4587,27 @@ const MessageRow = memo(function MessageRow({
     });
     return changed ? next : msg.blocks;
   }, [msg.blocks, isUser]);
+  // Media blocks — paste/file/quote cards AND inline image thumbnails — are
+  // carved out of the 5-line fold: they always render in full above the prose,
+  // outside the clamp. A cropped/masked card or thumbnail is unreadable, and
+  // a single image row already consumes the whole line budget, so counting
+  // them collapsed every image-bearing prompt regardless of text length.
+  // User messages are [attachment…, image…, text] (store block order), so the
+  // media container naturally keeps its above-prose position.
+  const userMediaBlocks = useMemo(
+    () =>
+      isUser
+        ? renderBlocks.filter((b) => b.kind === "attachment" || b.kind === "image")
+        : EMPTY_BLOCK_LIST,
+    [renderBlocks, isUser],
+  );
+  const userProseBlocks = useMemo(
+    () =>
+      isUser
+        ? renderBlocks.filter((b) => b.kind !== "attachment" && b.kind !== "image")
+        : EMPTY_BLOCK_LIST,
+    [renderBlocks, isUser],
+  );
   // Only show the copy button on messages with real text content - i.e. the
   // model's substantive answer to the user. A single turn often produces
   // several assistant messages (pure thinking, pure tool_use, then the text
@@ -4566,8 +4639,10 @@ const MessageRow = memo(function MessageRow({
     if (!isUser) return;
     const el = userContentRef.current;
     if (!el) return;
-    // Overflow = full content height vs the 5-line budget. scrollHeight is
-    // the content height regardless of the clamp, so the same comparison
+    // Overflow = PROSE-container height vs the 5-line budget — media blocks
+    // (paste/file cards, image thumbnails) render above this element, outside
+    // the clamp, so only genuinely long text folds. scrollHeight is the
+    // content height regardless of the clamp, so the same comparison
     // works collapsed AND expanded (a remount while expanded — module-set
     // state — must still yield a verdict, or the collapse chip would never
     // appear). Budget mirrors the CSS calc on the clamp below: the prose
@@ -4618,7 +4693,7 @@ const MessageRow = memo(function MessageRow({
         <div className="max-w-[85%] w-full">
           <UserMessageEditor
             msg={msg}
-            onSubmit={(newText, images) => onSubmitEdit?.(msg, newText, images)}
+            onSubmit={(newText, images, atts) => onSubmitEdit?.(msg, newText, images, atts)}
             onCancel={() => onCancelEdit?.()}
           />
         </div>
@@ -4681,33 +4756,56 @@ const MessageRow = memo(function MessageRow({
               : "text-content [font-size:var(--chat-font-size)]"
           }
         >
-          {/* Collapse clamp: 5 lines of the density-driven prose leading.
-              The mask fades the cut instead of a hard edge (works over the
-              tinted bubble, unlike a surface-colored gradient). */}
-          <div
-            ref={isUser ? userContentRef : undefined}
-            className="relative"
-            style={
-              isUser && userOverflow && !userExpanded
-                ? {
-                    maxHeight: `calc(${USER_MSG_VISIBLE_LINES} * var(--chat-md-leading) * var(--chat-font-size))`,
-                    overflow: "hidden",
-                    WebkitMaskImage: "linear-gradient(to bottom, black calc(100% - 2.25em), transparent)",
-                    maskImage: "linear-gradient(to bottom, black calc(100% - 2.25em), transparent)",
+          {/* Collapse clamp — PROSE ONLY. Media blocks (paste/file/quote
+              cards, image thumbnails) render above in full: a masked card
+              or thumbnail is unreadable, and their height would eat the
+              5-line text budget. The mask fades the cut instead of a hard
+              edge (works over the tinted bubble, unlike a surface-colored
+              gradient). Assistant rows keep the single unwrapped container. */}
+          {isUser ? (
+            <>
+              {userMediaBlocks.length > 0 && (
+                <div
+                  className={cn(
+                    "relative",
+                    userProseBlocks.length > 0 && "mb-[var(--chat-block-gap)]",
+                  )}
+                >
+                  <MessageBlocks blocks={userMediaBlocks} beforeMap={beforeMap} isStreamingTail={isStreamingTail} onOpenPlan={onOpenPlan} projectPath={projectPath} />
+                </div>
+              )}
+              {userProseBlocks.length > 0 && (
+                <div
+                  ref={userContentRef}
+                  className="relative"
+                  style={
+                    userOverflow && !userExpanded
+                      ? {
+                          maxHeight: `calc(${USER_MSG_VISIBLE_LINES} * var(--chat-md-leading) * var(--chat-font-size))`,
+                          overflow: "hidden",
+                          WebkitMaskImage: "linear-gradient(to bottom, black calc(100% - 2.25em), transparent)",
+                          maskImage: "linear-gradient(to bottom, black calc(100% - 2.25em), transparent)",
+                        }
+                      : undefined
                   }
-                : undefined
-            }
-          >
-            <MessageBlocks blocks={renderBlocks} beforeMap={beforeMap} isStreamingTail={isStreamingTail} onOpenPlan={onOpenPlan} projectPath={projectPath} />
-            {/* Streaming caret at the bottom of the content while this message
-                is still receiving deltas — 方案A replaces the spinner glyph
-                with a blinking caret (the reply is being typed). */}
-            {isStreamingTail && (
-              <div className="mt-1 flex items-center gap-1.5">
-                <span className="chat-caret" aria-hidden />
-              </div>
-            )}
-          </div>
+                >
+                  <MessageBlocks blocks={userProseBlocks} beforeMap={beforeMap} isStreamingTail={isStreamingTail} onOpenPlan={onOpenPlan} projectPath={projectPath} />
+                </div>
+              )}
+            </>
+          ) : (
+            <div className="relative">
+              <MessageBlocks blocks={renderBlocks} beforeMap={beforeMap} isStreamingTail={isStreamingTail} onOpenPlan={onOpenPlan} projectPath={projectPath} />
+              {/* Streaming caret at the bottom of the content while this message
+                  is still receiving deltas — 方案A replaces the spinner glyph
+                  with a blinking caret (the reply is being typed). */}
+              {isStreamingTail && (
+                <div className="mt-1 flex items-center gap-1.5">
+                  <span className="chat-caret" aria-hidden />
+                </div>
+              )}
+            </div>
+          )}
           {/* Expand/collapse affordances — mirror the code-block collapse
               pills in MessageBlocks so both fold surfaces read alike. */}
           {isUser && userOverflow && (
@@ -4851,14 +4949,25 @@ function UserMessageEditor({
   onCancel,
 }: {
   msg: ChatMessage;
-  onSubmit: (newText: string, images: PromptImage[]) => void;
+  onSubmit: (
+    newText: string,
+    images: PromptImage[],
+    attachments: Extract<Block, { kind: "attachment" }>[],
+  ) => void;
   onCancel: () => void;
 }) {
   const { t } = useI18n();
   const initialText = useMemo(() => userMessageText(msg.blocks), [msg.blocks]);
   const [text, setText] = useState(initialText);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const attachmentBlocks = msg.blocks.filter((b) => b.kind === "attachment");
+  // Local editable copy of the message's attachment cards — the surviving
+  // list is re-sent on submit (hover × removes a card; an emptied list drops
+  // the attachments from the resent turn). Ids give the chips stable keys.
+  const [atts, setAtts] = useState<{ id: string; block: Extract<Block, { kind: "attachment" }> }[]>(() =>
+    msg.blocks
+      .filter((b): b is Extract<Block, { kind: "attachment" }> => b.kind === "attachment")
+      .map((b, i) => ({ id: `edit-att-${msg.id}-${i}`, block: b })),
+  );
   // Local editable copy of the message's image blocks — the surviving list is
   // re-sent verbatim on submit (an emptied list drops the images from the
   // resent turn). Ids exist only to give the thumbnails stable React keys.
@@ -4894,7 +5003,7 @@ function UserMessageEditor({
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       const trimmed = text.trim();
-      if (trimmed) onSubmit(trimmed, toPromptImages(images));
+      if (trimmed) onSubmit(trimmed, toPromptImages(images), atts.map((a) => a.block));
     } else if (e.key === "Escape") {
       e.preventDefault();
       onCancel();
@@ -4905,26 +5014,31 @@ function UserMessageEditor({
 
   return (
     <div className="user-bubble-fill rounded-lg border border-accent/40 px-3 py-2 [font-size:var(--chat-font-size)]">
-      {/* Attachment chips (read-only) - mirror the composer's chip-above-textarea
-          layout. Only shown if the original message had attachments. These are
-          non-interactive previews (the attachments are preserved as-is on
-          resend); editing only touches the text portion. */}
-      {attachmentBlocks.length > 0 && (
+      {/* Attachment chips — REMOVABLE in edit mode (hover × drops the card
+          from the resent turn). Same wrapping strip as the sent bubble. */}
+      {atts.length > 0 && (
         <div className="mb-2 flex flex-wrap gap-1.5">
-          {attachmentBlocks.map((b, i) =>
-            b.kind === "attachment" ? (
-              <span
-                key={i}
-                className="inline-flex items-center gap-1 rounded-md border border-accent/40 bg-accent/10 px-1.5 py-0.5 text-[11px] text-accent"
-                title={b.filePath ?? b.preview}
+          {atts.map((att) => (
+            <span
+              key={att.id}
+              className="inline-flex items-center gap-1 rounded-md border border-accent/40 bg-accent/10 py-0.5 pl-1.5 pr-1 text-[11px] text-accent"
+              title={att.block.filePath ?? att.block.preview}
+            >
+              {att.block.attachmentKind === "file" ? (
+                <IconPaperclip size={12} className="opacity-80" />
+              ) : null}
+              <span className="max-w-[12rem] truncate">{att.block.preview}</span>
+              <button
+                type="button"
+                onClick={() => setAtts((prev) => prev.filter((p) => p.id !== att.id))}
+                aria-label={t("chat.removeAttachmentName", { name: att.block.preview })}
+                title={t("chat.removeAttachmentName", { name: att.block.preview })}
+                className="inline-flex h-4 w-4 items-center justify-center rounded-full text-accent opacity-60 transition-colors hover:bg-accent/20 hover:opacity-100"
               >
-                {b.attachmentKind === "file" ? (
-                  <IconPaperclip size={12} className="opacity-80" />
-                ) : null}
-                <span className="max-w-[12rem] truncate">{b.preview}</span>
-              </span>
-            ) : null,
-          )}
+                <IconX size={10} />
+              </button>
+            </span>
+          ))}
         </div>
       )}
       {/* Image thumbnails - same visual treatment as the composer's pending
@@ -4973,7 +5087,7 @@ function UserMessageEditor({
         </button>
         <button
           type="button"
-          onClick={() => canSubmit && onSubmit(text.trim(), toPromptImages(images))}
+          onClick={() => canSubmit && onSubmit(text.trim(), toPromptImages(images), atts.map((a) => a.block))}
           disabled={!canSubmit}
           className={cn(
             "inline-flex items-center gap-1 rounded px-2 py-1 text-[11px] transition-colors",

@@ -478,6 +478,8 @@ const skills: Api["skills"] = {
 const file: Api["file"] = {
   readFile: (input) => rpc("file:readFile", input),
   readBinary: (input) => rpc("file:readBinary", input),
+  // Attachment-card view gating is a desktop main-process containment check.
+  isViewable: () => webUnsupported("file.isViewable"),
   pickImages: () => pickImagesWeb(),
   listDir: (input) => rpc("file:listDir", input),
   search: (input) => rpc("file:search", input),
@@ -487,6 +489,9 @@ const file: Api["file"] = {
   delete: () => webUnsupported("file.delete"),
   rename: () => webUnsupported("file.rename"),
   copy: () => webUnsupported("file.copy"),
+  // Browsers never expose real paths for dragged files (always ""), so the
+  // composer's external-drop handler falls back to its paste pipeline.
+  getPathForFile: () => "",
 };
 
 const git: Api["git"] = {

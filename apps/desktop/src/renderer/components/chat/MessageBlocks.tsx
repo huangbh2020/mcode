@@ -30,6 +30,8 @@ import {
 } from "@renderer/lib/icons.js";
 import { useNow } from "@renderer/hooks/useNow.js";
 import { useSessionStore } from "@renderer/stores/sessionStore.js";
+import { useToastStore } from "@renderer/stores/toastStore.js";
+import { api } from "@renderer/lib/api.js";
 import type { Block, TurnMeta } from "@renderer/stores/sessionStore.js";
 import { Markdown } from "./Markdown.js";
 import { DiffView } from "./DiffView.js";
@@ -167,6 +169,10 @@ const MessageBlocks = memo(function MessageBlocks({
           <RenderErrorBoundary key={segKeys[i]}>
             <ImageGallery blocks={seg.blocks} />
           </RenderErrorBoundary>
+        ) : seg.kind === "attachments" ? (
+          <RenderErrorBoundary key={segKeys[i]}>
+            <AttachmentRow blocks={seg.blocks} />
+          </RenderErrorBoundary>
         ) : (
           <RenderErrorBoundary key={segKeys[i]}>
             <BatchToolGroup blocks={seg.blocks} beforeMap={beforeMap} turnActive={isStreamingTail} projectPath={projectPath} />
@@ -186,7 +192,8 @@ export type ProceduralBlock = ThinkingBlock | ToolUseBlock;
 type Segment =
   | { kind: "single"; block: Block; defaultOpen?: boolean }
   | { kind: "batch"; blocks: ProceduralBlock[] }
-  | { kind: "gallery"; blocks: Extract<Block, { kind: "image" }>[] };
+  | { kind: "gallery"; blocks: Extract<Block, { kind: "image" }>[] }
+  | { kind: "attachments"; blocks: Extract<Block, { kind: "attachment" }>[] };
 
 /** Stable list keys for a segment list. The segment's HEAD block identifies
  *  it — tool calls by their unique toolCallId, everything else by kind — with
@@ -279,6 +286,7 @@ function groupBlocks(blocks: Block[]): Segment[] {
   const out: Segment[] = [];
   let run: ProceduralBlock[] = [];
   let images: Extract<Block, { kind: "image" }>[] = [];
+  let atts: Extract<Block, { kind: "attachment" }>[] = [];
   const flushTools = () => {
     if (run.length > 0) {
       out.push({ kind: "batch", blocks: run });
@@ -297,23 +305,41 @@ function groupBlocks(blocks: Block[]): Segment[] {
       images = [];
     }
   };
+  const flushAttachments = () => {
+    // Consecutive attachment cards (paste/file/quote) coalesce into one
+    // wrapping chip row — one-segment-per-card stacked a full-width row per
+    // chip and a multi-attachment prompt grew into a tall chip tower.
+    if (atts.length > 0) {
+      out.push({ kind: "attachments", blocks: atts });
+      atts = [];
+    }
+  };
   for (const b of blocks) {
     if (b.kind === "image") {
       // Images don't break a tool batch, but a tool breaks an image run.
       flushTools();
       images.push(b);
+    } else if (b.kind === "attachment") {
+      // Attachment cards are standalone user content: they break the tool
+      // batch and the image run, and any other block breaks the card run.
+      flushTools();
+      flushImages();
+      atts.push(b);
     } else if (isFoldableBlock(b)) {
+      flushAttachments();
       flushImages();
       run.push(b);
     } else {
       // Standalone tools / text / error / other blocks break both runs.
       flushTools();
       flushImages();
+      flushAttachments();
       out.push({ kind: "single", block: b, defaultOpen: false });
     }
   }
   flushTools();
   flushImages();
+  flushAttachments();
   return out;
 }
 
@@ -449,6 +475,26 @@ function Chevron({ open, className }: { open: boolean; className?: string }) {
  *
  *  Single images never reach here — `groupBlocks` renders a lone image via the
  *  normal BlockView image case. This component only assembles runs of 2+. */
+/** A run of consecutive attachment blocks (paste/file/quote cards) renders as
+ *  ONE wrapping chip row — visual parity with the composer's chips strip
+ *  (flex flex-wrap gap-1.5). Each card keeps its own TagPopover / IDE-open
+ *  interaction; only the layout changed from one full row per chip. */
+function AttachmentRow({ blocks }: { blocks: Extract<Block, { kind: "attachment" }>[] }) {
+  return (
+    <div className="flex flex-wrap gap-1.5">
+      {blocks.map((b, i) => (
+        <AttachmentCard
+          key={i}
+          preview={b.preview}
+          content={b.content}
+          attachmentKind={b.attachmentKind}
+          filePath={b.filePath}
+        />
+      ))}
+    </div>
+  );
+}
+
 function ImageGallery({ blocks }: { blocks: Extract<Block, { kind: "image" }>[] }) {
   const [idx, setIdx] = useState(0);
   const { t } = useI18n();
@@ -932,6 +978,10 @@ export function TurnPanel({
                   <RenderErrorBoundary key={segKeys[i]}>
                     <ImageGallery blocks={seg.blocks} />
                   </RenderErrorBoundary>
+                ) : seg.kind === "attachments" ? (
+                  <RenderErrorBoundary key={segKeys[i]}>
+                    <AttachmentRow blocks={seg.blocks} />
+                  </RenderErrorBoundary>
                 ) : (
                   <RenderErrorBoundary key={segKeys[i]}>
                     <BatchToolGroup
@@ -1241,14 +1291,42 @@ function AttachmentCard({
   // image file cards open the TagPopover — images render an in-popover
   // preview (loaded via api.file.readBinary), same UX as the composer chip;
   // legacy path-less file cards fall back to the popover too.
+  // Workspace-outside paths (external drops) are unreadable by main's read
+  // guards — the IDE would open an empty tab and the popover a failed image.
+  // Ask main (pure containment check, projects ∪ worktrees) and refuse with
+  // a toast instead of a broken view.
+  const refuseExternal = () => {
+    useToastStore.getState().push({
+      kind: "info",
+      title: t("chatStream.attachment.externalTitle"),
+      body: t("chatStream.attachment.externalBody"),
+    });
+  };
+
   const handleClick = () => {
     if (isFile && filePath && !isImage) {
-      useSessionStore.getState().openFileInIde(filePath);
+      void api.file.isViewable({ filePath }).then((res) => {
+        if (res.viewable) useSessionStore.getState().openFileInIde(filePath);
+        else refuseExternal();
+      });
       return;
     }
     if (open) {
       setOpen(false);
       setAnchorRect(null);
+      return;
+    }
+    if (isFile && filePath) {
+      // Image file cards preview from disk via readBinary — same guard.
+      void api.file.isViewable({ filePath }).then((res) => {
+        if (!res.viewable) {
+          refuseExternal();
+          return;
+        }
+        const el = btnRef.current;
+        setAnchorRect(el ? el.getBoundingClientRect() : null);
+        setOpen(true);
+      });
       return;
     }
     const el = btnRef.current;

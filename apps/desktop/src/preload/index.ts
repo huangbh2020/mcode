@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from "electron";
+import { contextBridge, ipcRenderer, webUtils } from "electron";
 import { IPC } from "@contracts/ipc";
 import type { RpcMap } from "@contracts/ipc";
 import type { MainToRendererMessage } from "@contracts/ipc";
@@ -249,6 +249,9 @@ const api = {
     /** Read a binary file as a base64 data URL (image preview). */
     readBinary: ((input) =>
       ipcRenderer.invoke(IPC.FILE_READ_BINARY, input)) as RpcMap["file.readBinary"],
+    /** Path containment check (no disk access): attachment card click-to-view. */
+    isViewable: ((input) =>
+      ipcRenderer.invoke(IPC.FILE_IS_VIEWABLE, input)) as RpcMap["file.isViewable"],
     /** OS dialog image picker → base64 images (composer 图片 button). */
     pickImages: ((input) =>
       ipcRenderer.invoke(IPC.FILE_PICK_IMAGES, input)) as RpcMap["file.pickImages"],
@@ -276,6 +279,18 @@ const api = {
     /** Copy a file into a directory (auto-renames on name clash). Returns ok. */
     copy: ((input) =>
       ipcRenderer.invoke(IPC.FILE_COPY, input)) as RpcMap["file.copy"],
+    /** Resolve a File from an OS drag-and-drop to its absolute filesystem
+     *  path (composer external drop). Electron 32 removed File.path; only
+     *  the preload can touch webUtils (the sandboxed renderer cannot
+     *  require("electron")). "" when the drag has no file backing (web page
+     *  drags / virtual items) — callers fall back to the paste pipeline. */
+    getPathForFile: (file: File): string => {
+      try {
+        return webUtils.getPathForFile(file);
+      } catch {
+        return "";
+      }
+    },
   },
 
   /** ripgrep availability + one-click install (search dialog banner). */

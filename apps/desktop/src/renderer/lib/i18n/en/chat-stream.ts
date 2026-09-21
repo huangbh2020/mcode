@@ -54,6 +54,8 @@ export const en = {
   "chatStream.attachment.viewContent": "View content",
   "chatStream.attachment.collapseImage": "Collapse image",
   "chatStream.attachment.collapseContent": "Collapse content",
+  "chatStream.attachment.externalTitle": "Can't view external file",
+  "chatStream.attachment.externalBody": "This file is outside every project and worktree, so the app can't read it.",
 
   // ── Markdown ──
   "chatStream.copyCode": "Copy code",

@@ -18,6 +18,7 @@ export const en = {
   "chat.toast.imageNotSent": "Image not sent",
   "chat.imageN": "Image {n}",
   "chat.removeImageName": "Remove image {name}",
+  "chat.removeAttachmentName": "Remove attachment {name}",
   "chat.removeImageN": "Remove image {n}",
 
   // ── composer actions / placeholders ──

@@ -30,6 +30,7 @@ import {
   IPC,
   FileReadSchema,
   FileReadBinarySchema,
+  FileIsViewableSchema,
   FileListDirSchema,
   FileSearchSchema,
   FileWriteSchema,
@@ -658,6 +659,13 @@ export function registerFileHandlers(ipcMain: IpcMain): void {
   ipcMain.handle(IPC.FILE_READ_BINARY, async (_evt, raw) => {
     const input = FileReadBinarySchema.parse(raw);
     return readBinaryGuarded(input.filePath);
+  });
+
+  /* ── file:isViewable — containment check (no disk access): would the read
+     guards admit this path? Drives the attachment card's click-to-view. ── */
+  ipcMain.handle(IPC.FILE_IS_VIEWABLE, async (_evt, raw) => {
+    const input = FileIsViewableSchema.parse(raw);
+    return { viewable: findContainingWorkspaceRoot(input.filePath) !== null };
   });
 
   /* ── file:listDir — one-level directory listing for the file tree ── */
