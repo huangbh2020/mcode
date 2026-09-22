@@ -1,0 +1,731 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mcode · 右上角胶囊 4 大前沿创意设计展台</title>
+<style>
+  /* =========================================================================
+   * Mcode Activity Capsule - 4 Bold Creative Design Directions
+   * 
+   * 方向 1: Dynamic Orb · 灵动智子光核 (Apple Intelligence / Siri 霓虹流体)
+   * 方向 2: Split Double-Island · 双岛磁吸微核 (iPhone 灵动岛双星分合形态)
+   * 方向 3: Mechanical Tourbillon · 赛博机械陀飞轮 (Apple Watch Ultra 精密仪表)
+   * 方向 4: Spatial Glass Pebble · 空间悬浮透镜水滴 (VisionOS 空间零边框玻璃)
+   * ========================================================================= */
+
+  :root {
+    --sans: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "PingFang SC", system-ui, sans-serif;
+    --mono: "SF Mono", ui-monospace, Menlo, Monaco, Consolas, monospace;
+
+    /* Light Theme */
+    --bg-page: #f2f3f7;
+    --bg-card: #ffffff;
+    --bg-card-glass: rgba(255, 255, 255, 0.85);
+    --border-subtle: rgba(0, 0, 0, 0.08);
+    --text-main: #1d1d1f;
+    --text-sub: #6e6e73;
+    --text-muted: #86868b;
+    --accent-blue: #0071e3;
+    --accent-green: #34c759;
+    --accent-purple: #af52de;
+    --accent-amber: #ff9500;
+  }
+
+  html[data-theme="dark"] {
+    --bg-page: #0c0d10;
+    --bg-card: #16181d;
+    --bg-card-glass: rgba(26, 29, 36, 0.82);
+    --border-subtle: rgba(255, 255, 255, 0.1);
+    --text-main: #f5f5f7;
+    --text-sub: #a1a1a6;
+    --text-muted: #6e6e73;
+    --accent-blue: #2997ff;
+    --accent-green: #30d158;
+    --accent-purple: #bf5af2;
+    --accent-amber: #ffd60a;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: var(--sans);
+    background-color: var(--bg-page);
+    color: var(--text-main);
+    -webkit-font-smoothing: antialiased;
+    padding-bottom: 60px;
+  }
+
+  /* 顶部导航 */
+  header.top-nav {
+    position: sticky;
+    top: 0;
+    z-index: 100;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 32px;
+    background: var(--bg-card-glass);
+    backdrop-filter: blur(24px);
+    -webkit-backdrop-filter: blur(24px);
+    border-bottom: 1px solid var(--border-subtle);
+  }
+
+  .brand-group {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .brand-title {
+    font-size: 16px;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+  }
+  .brand-tag {
+    background: linear-gradient(135deg, var(--accent-purple), var(--accent-blue));
+    color: #fff;
+    padding: 2px 8px;
+    border-radius: 999px;
+    font-size: 10.5px;
+    font-weight: 700;
+  }
+
+  .state-switch-bar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    background: rgba(128, 128, 128, 0.1);
+    padding: 3px;
+    border-radius: 12px;
+  }
+  .state-btn {
+    border: none;
+    background: transparent;
+    color: var(--text-sub);
+    padding: 6px 14px;
+    border-radius: 8px;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s cubic-bezier(0.32, 0.72, 0, 1);
+  }
+  .state-btn.active {
+    background: var(--bg-card);
+    color: var(--text-main);
+    box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+  }
+
+  .theme-btn {
+    border: 1px solid var(--border-subtle);
+    background: transparent;
+    color: var(--text-main);
+    padding: 6px 14px;
+    border-radius: 999px;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+
+  /* 方案展示网格 */
+  .container {
+    max-width: 1300px;
+    margin: 36px auto 0;
+    padding: 0 28px;
+    display: flex;
+    flex-direction: column;
+    gap: 40px;
+  }
+
+  .section-intro {
+    background: var(--bg-card);
+    border: 1px solid var(--border-subtle);
+    border-radius: 20px;
+    padding: 24px 30px;
+  }
+  .section-intro h1 {
+    margin: 0 0 8px;
+    font-size: 20px;
+    font-weight: 700;
+  }
+  .section-intro p {
+    margin: 0;
+    color: var(--text-sub);
+    font-size: 13.5px;
+    line-height: 1.6;
+  }
+
+  .cards-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 28px;
+  }
+
+  @media (max-width: 960px) {
+    .cards-grid {
+      grid-template-columns: 1fr;
+    }
+  }
+
+  .showcase-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border-subtle);
+    border-radius: 24px;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    box-shadow: 0 8px 24px -12px rgba(0,0,0,0.1);
+    transition: transform 0.25s ease;
+  }
+  .showcase-card:hover {
+    transform: translateY(-2px);
+  }
+
+  .card-header {
+    padding: 20px 24px;
+    border-bottom: 1px solid var(--border-subtle);
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+  }
+  .card-title-group h3 {
+    margin: 0 0 4px;
+    font-size: 16px;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .card-pill-tag {
+    font-size: 11px;
+    padding: 2px 7px;
+    border-radius: 6px;
+    font-weight: 600;
+  }
+  .card-title-group p {
+    margin: 0;
+    font-size: 12px;
+    color: var(--text-sub);
+    line-height: 1.5;
+  }
+
+  /* 模拟聊天窗口舞台区 */
+  .chat-stage {
+    position: relative;
+    background: rgba(128, 128, 128, 0.05);
+    min-height: 240px;
+    padding: 20px 24px;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    overflow: visible;
+  }
+
+  .mock-chat-bubble {
+    background: var(--bg-card);
+    border: 1px solid var(--border-subtle);
+    padding: 12px 16px;
+    border-radius: 14px;
+    font-size: 12.5px;
+    color: var(--text-sub);
+    max-width: 65%;
+  }
+
+  /* 胶囊挂载点容器 */
+  .capsule-slot {
+    position: absolute;
+    top: 18px;
+    right: 24px;
+    z-index: 10;
+  }
+
+  /* =========================================================================
+   * 方向 1: 【Dynamic Orb · 灵动智子光核】 (Apple Intelligence 霓虹流体)
+   * ========================================================================= */
+  .orb-capsule {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    gap: 9px;
+    height: 36px;
+    padding: 2px 14px 2px 6px;
+    border-radius: 999px;
+    background: var(--bg-card);
+    cursor: pointer;
+    user-select: none;
+    transition: all 0.3s cubic-bezier(0.32, 0.72, 0, 1);
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.06);
+  }
+
+  /* 极光流体边框 */
+  .orb-capsule::before {
+    content: '';
+    position: absolute;
+    inset: -1.5px;
+    border-radius: 999px;
+    background: linear-gradient(115deg, #0071e3, #af52de, #ff2d55, #34c759, #0071e3);
+    background-size: 300% 300%;
+    animation: orbGlowFlow 6s linear infinite;
+    z-index: -1;
+    opacity: 0.65;
+    filter: blur(1.5px);
+  }
+  .orb-capsule:hover::before {
+    opacity: 0.95;
+    filter: blur(3px);
+  }
+
+  @keyframes orbGlowFlow {
+    0% { background-position: 0% 50%; }
+    50% { background-position: 100% 50%; }
+    100% { background-position: 0% 50%; }
+  }
+
+  .orb-sphere {
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    background: radial-gradient(circle at 35% 35%, #93c5fd, #6366f1 45%, #ec4899 75%, #3b82f6);
+    box-shadow: inset -2px -2px 5px rgba(0,0,0,0.35), 0 0 10px rgba(99, 102, 241, 0.5);
+    animation: orbSpherePulse 3s ease-in-out infinite alternate;
+    display: grid;
+    place-items: center;
+    color: white;
+  }
+  @keyframes orbSpherePulse {
+    0% { transform: scale(0.92); filter: hue-rotate(0deg); }
+    100% { transform: scale(1.08); filter: hue-rotate(45deg); }
+  }
+
+  .orb-text-main {
+    font-size: 12.5px;
+    font-weight: 700;
+    color: var(--text-main);
+    letter-spacing: -0.01em;
+  }
+  .orb-text-sub {
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--text-sub);
+  }
+
+  /* =========================================================================
+   * 方向 2: 【Split Double-Island · 灵动双岛磁吸微核】 (iPhone 灵动岛多任务)
+   * ========================================================================= */
+  .double-island-wrap {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    cursor: pointer;
+    user-select: none;
+    transition: gap 0.35s cubic-bezier(0.34, 1.4, 0.64, 1);
+  }
+  .double-island-wrap:hover {
+    gap: 11px; /* 磁吸拉伸感 */
+  }
+
+  /* 主岛（左岛） */
+  .island-main {
+    height: 34px;
+    padding: 0 12px;
+    border-radius: 999px;
+    background: #000000;
+    color: #ffffff;
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.25);
+    transition: all 0.3s cubic-bezier(0.32, 0.72, 0, 1);
+  }
+  /* 伴随卫星岛（右岛） */
+  .island-satellite {
+    width: 34px;
+    height: 34px;
+    border-radius: 50%;
+    background: #000000;
+    color: #ffffff;
+    display: grid;
+    place-items: center;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.25);
+    transition: all 0.3s cubic-bezier(0.32, 0.72, 0, 1);
+  }
+
+  /* 灵动微波形动效 */
+  .soundwave {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    height: 12px;
+  }
+  .soundwave span {
+    width: 2.5px;
+    border-radius: 1px;
+    background: var(--accent-green);
+    animation: waveBars 1.2s ease-in-out infinite alternate;
+  }
+  .soundwave span:nth-child(2) { animation-delay: 0.25s; height: 12px; }
+  .soundwave span:nth-child(1) { animation-delay: 0.1s; height: 6px; }
+  .soundwave span:nth-child(3) { animation-delay: 0.4s; height: 8px; }
+
+  @keyframes waveBars {
+    0% { transform: scaleY(0.4); }
+    100% { transform: scaleY(1.2); }
+  }
+
+  /* =========================================================================
+   * 方向 3: 【Mechanical Tourbillon · 极客机械陀飞轮】 (Watch Ultra 精密仪表)
+   * ========================================================================= */
+  .tourbillon-capsule {
+    display: inline-flex;
+    align-items: center;
+    height: 36px;
+    padding: 3px 12px 3px 5px;
+    border-radius: 999px;
+    background: rgba(30, 34, 42, 0.95);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    box-shadow: 0 4px 16px rgba(0,0,0,0.35), inset 0 1px 0 rgba(255,255,255,0.2);
+    cursor: pointer;
+    user-select: none;
+    gap: 9px;
+  }
+
+  /* 陀飞轮机械视窗 */
+  .tourbillon-dial {
+    width: 26px;
+    height: 26px;
+    border-radius: 50%;
+    border: 1.5px dashed var(--accent-amber);
+    display: grid;
+    place-items: center;
+    animation: tourbillonSpin 10s linear infinite;
+    position: relative;
+    background: radial-gradient(circle, rgba(255,149,0,0.2) 0%, transparent 70%);
+  }
+  @keyframes tourbillonSpin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+  }
+  .tourbillon-gear {
+    width: 14px;
+    height: 14px;
+    color: var(--accent-amber);
+  }
+
+  .tourbillon-data {
+    display: flex;
+    flex-direction: column;
+    line-height: 1.1;
+  }
+  .tourbillon-val {
+    font-family: var(--mono);
+    font-size: 11.5px;
+    font-weight: 700;
+    color: #ffffff;
+    letter-spacing: -0.02em;
+  }
+  .tourbillon-lbl {
+    font-size: 9px;
+    font-weight: 600;
+    color: var(--accent-amber);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+
+  /* 机械 LED 指示计 */
+  .mechanical-meter {
+    display: flex;
+    gap: 2.5px;
+  }
+  .meter-bar {
+    width: 3px;
+    height: 14px;
+    border-radius: 1px;
+    background: rgba(255, 255, 255, 0.15);
+  }
+  .meter-bar.active {
+    background: var(--accent-green);
+    box-shadow: 0 0 6px var(--accent-green);
+  }
+
+  /* =========================================================================
+   * 方向 4: 【Spatial Glass Pebble · 液态空间水滴透镜】 (VisionOS 零边框玻璃)
+   * ========================================================================= */
+  .spatial-capsule {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    height: 34px;
+    padding: 0 14px 0 10px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.12);
+    backdrop-filter: blur(36px) saturate(220%);
+    -webkit-backdrop-filter: blur(36px) saturate(220%);
+    /* 无边框，全靠空间内外菲涅尔折射反光 */
+    border: none;
+    box-shadow: 
+      inset 0 1px 1px 0 rgba(255, 255, 255, 0.6),
+      inset 0 -1px 1px 0 rgba(0, 0, 0, 0.1),
+      0 12px 28px -6px rgba(0, 0, 0, 0.18);
+    cursor: pointer;
+    user-select: none;
+    transition: all 0.3s cubic-bezier(0.32, 0.72, 0, 1);
+  }
+  .spatial-capsule:hover {
+    transform: scale(1.04);
+    box-shadow: 
+      inset 0 1px 2px 0 rgba(255, 255, 255, 0.8),
+      0 16px 36px -8px rgba(0, 0, 0, 0.25);
+  }
+
+  .spatial-crystal-dot {
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    background: radial-gradient(circle at 30% 30%, #ffffff, var(--accent-blue));
+    box-shadow: 0 0 10px var(--accent-blue);
+  }
+
+  .spatial-text {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-main);
+    text-shadow: 0 1px 2px rgba(0,0,0,0.15);
+  }
+
+</style>
+</head>
+<body>
+
+<header class="top-nav">
+  <div class="brand-group">
+    <span class="brand-title">Mcode 活动胶囊前沿创意走廊</span>
+    <span class="brand-tag">4 大胆方案</span>
+  </div>
+
+  <div class="state-switch-bar">
+    <button class="state-btn active" onclick="switchMode('ambient')">默认安静态 (就绪/待办)</button>
+    <button class="state-btn" onclick="switchMode('running')">运行中 (子代理/命令)</button>
+    <button class="state-btn" onclick="switchMode('heavy')">重度并发 (服务+命令+代理)</button>
+  </div>
+
+  <button class="theme-btn" onclick="toggleTheme()">切换主题</button>
+</header>
+
+<div class="container">
+
+  <div class="section-intro">
+    <h1>请挑选你最心仪的大胆创意方向</h1>
+    <p>
+      我们打破传统“调试状态栏”的平淡思维，结合前沿的 Apple Intelligence 极光流体、iPhone 灵动岛双星磁吸、Apple Watch Ultra 机械精密仪表与 VisionOS 空间透镜水滴，打造了 4 种截然不同风格的活动胶囊原型。请在上方切换状态，感受每个方案在不同状态下的表现！
+    </p>
+  </div>
+
+  <div class="cards-grid">
+
+    <!-- 方案 1 -->
+    <div class="showcase-card">
+      <div class="card-header">
+        <div class="card-title-group">
+          <h3>
+            方向一：灵动智子光核
+            <span class="card-pill-tag" style="background:rgba(175,82,222,0.15); color:var(--accent-purple);">Siri 霓虹流体</span>
+          </h3>
+          <p>Apple Intelligence 呼吸彩光流体，数字悬浮在微光极光之中，富有生命的 AI 感</p>
+        </div>
+      </div>
+
+      <div class="chat-stage">
+        <div class="mock-chat-bubble">已为你开始执行构建流程与代码安全审计...</div>
+
+        <!-- 方案 1 胶囊 -->
+        <div class="capsule-slot">
+          <div id="capsuleOrb" class="orb-capsule">
+            <div class="orb-sphere">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6"><circle cx="12" cy="12" r="3"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2"/></svg>
+            </div>
+            <div style="display:flex; align-items:baseline; gap:5px;">
+              <span class="orb-text-main" id="orbMainText">5/5 已完成</span>
+              <span class="orb-text-sub" id="orbSubText">2 计划</span>
+            </div>
+          </div>
+        </div>
+
+        <div style="font-size:11px; color:var(--text-muted);">方向 1：绚丽、温润、现代流光感</div>
+      </div>
+    </div>
+
+    <!-- 方案 2 -->
+    <div class="showcase-card">
+      <div class="card-header">
+        <div class="card-title-group">
+          <h3>
+            方向二：灵动双岛磁吸微核
+            <span class="card-pill-tag" style="background:rgba(52,199,89,0.15); color:var(--accent-green);">灵动岛双星形态</span>
+          </h3>
+          <p>iPhone 灵动岛经典的分离与磁吸！多任务时自动分离为双岛，安静态自动吸合成饱满胶囊</p>
+        </div>
+      </div>
+
+      <div class="chat-stage">
+        <div class="mock-chat-bubble">本地服务端口与测试命令正在并发跑动...</div>
+
+        <!-- 方案 2 胶囊 -->
+        <div class="capsule-slot">
+          <div id="capsuleIsland" class="double-island-wrap">
+            <div class="island-main" id="islandMain">
+              <div class="soundwave">
+                <span></span><span></span><span></span>
+              </div>
+              <span style="font-size:12px; font-weight:700; font-family:var(--mono);">:3000 监听</span>
+            </div>
+            <div class="island-satellite" id="islandSatellite">
+              <span style="font-size:11px; font-weight:700; font-family:var(--mono);">80%</span>
+            </div>
+          </div>
+        </div>
+
+        <div style="font-size:11px; color:var(--text-muted);">方向 2：互动性强、极致灵动、空间利用率高</div>
+      </div>
+    </div>
+
+    <!-- 方案 3 -->
+    <div class="showcase-card">
+      <div class="card-header">
+        <div class="card-title-group">
+          <h3>
+            方向三：极客机械陀飞轮
+            <span class="card-pill-tag" style="background:rgba(255,149,0,0.15); color:var(--accent-amber);">Watch Ultra 赛博透视</span>
+          </h3>
+          <p>机械钟表视窗 + 陀飞轮齿轮旋转 + 航天刻度 LED 计，极客与工程师的极致精密美学</p>
+        </div>
+      </div>
+
+      <div class="chat-stage">
+        <div class="mock-chat-bubble">系统正在执行自动化流水线任务编排...</div>
+
+        <!-- 方案 3 胶囊 -->
+        <div class="capsule-slot">
+          <div class="tourbillon-capsule">
+            <div class="tourbillon-dial">
+              <svg class="tourbillon-gear" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg>
+            </div>
+            <div class="tourbillon-data">
+              <span class="tourbillon-val" id="tourbillonVal">CORE · 100%</span>
+              <span class="tourbillon-lbl" id="tourbillonLbl">TASK SETTLED</span>
+            </div>
+            <div class="mechanical-meter">
+              <div class="meter-bar active"></div>
+              <div class="meter-bar active"></div>
+              <div class="meter-bar active"></div>
+              <div class="meter-bar"></div>
+            </div>
+          </div>
+        </div>
+
+        <div style="font-size:11px; color:var(--text-muted);">方向 3：硬核工程师仪器质感、精密可信</div>
+      </div>
+    </div>
+
+    <!-- 方案 4 -->
+    <div class="showcase-card">
+      <div class="card-header">
+        <div class="card-title-group">
+          <h3>
+            方向四：空间液态水滴透镜
+            <span class="card-pill-tag" style="background:rgba(0,113,227,0.15); color:var(--accent-blue);">VisionOS 零边框</span>
+          </h3>
+          <p>零物理边框！完全靠空间菲涅尔高光与折射晶体悬浮，给正文留出最大视野，空灵通透</p>
+        </div>
+      </div>
+
+      <div class="chat-stage">
+        <div class="mock-chat-bubble">正文上方零压迫，透明晶莹的水滴空间悬浮...</div>
+
+        <!-- 方案 4 胶囊 -->
+        <div class="capsule-slot">
+          <div class="spatial-capsule">
+            <div class="spatial-crystal-dot"></div>
+            <span class="spatial-text" id="spatialText">5/5 就绪 · 2 计划</span>
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="opacity:0.6;"><polyline points="6 9 12 15 18 9"/></svg>
+          </div>
+        </div>
+
+        <div style="font-size:11px; color:var(--text-muted);">方向 4：极度纯净、空间计算通透感、视觉零负担</div>
+      </div>
+    </div>
+
+  </div>
+
+</div>
+
+<script>
+  let currentMode = 'ambient';
+
+  function switchMode(mode) {
+    currentMode = mode;
+    document.querySelectorAll('.state-btn').forEach(b => b.classList.remove('active'));
+    event.target.classList.add('active');
+
+    // 动态调整 4 个胶囊的数据呈现
+    const orbMain = document.getElementById('orbMainText');
+    const orbSub = document.getElementById('orbSubText');
+    const islandMain = document.getElementById('islandMain');
+    const islandSatellite = document.getElementById('islandSatellite');
+    const tourbillonVal = document.getElementById('tourbillonVal');
+    const tourbillonLbl = document.getElementById('tourbillonLbl');
+    const spatialText = document.getElementById('spatialText');
+
+    if (mode === 'ambient') {
+      orbMain.innerText = '5/5 已完成';
+      orbSub.innerText = '2 计划';
+
+      islandMain.innerHTML = `
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="var(--accent-green)" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>
+        <span style="font-size:12px; font-weight:700;">全部就绪</span>
+      `;
+      islandSatellite.style.display = 'none'; // 磁吸合为一个岛
+
+      tourbillonVal.innerText = 'CORE · 100%';
+      tourbillonLbl.innerText = 'ALL SETTLED';
+
+      spatialText.innerText = '5/5 就绪 · 2 计划';
+    } else if (mode === 'running') {
+      orbMain.innerText = '1 代理运行中';
+      orbSub.innerText = 'Task-01';
+
+      islandMain.innerHTML = `
+        <div class="soundwave"><span></span><span></span><span></span></div>
+        <span style="font-size:12px; font-weight:700; font-family:var(--mono);">代码审计中</span>
+      `;
+      islandSatellite.style.display = 'grid';
+      islandSatellite.innerHTML = `<span style="font-size:11px; font-weight:700; font-family:var(--mono);">60%</span>`;
+
+      tourbillonVal.innerText = 'AGENT · BUSY';
+      tourbillonLbl.innerText = '1 SUBAGENT';
+
+      spatialText.innerText = '⚡ 1 代理执行中 · 60%';
+    } else if (mode === 'heavy') {
+      orbMain.innerText = '2 服务 · 1 命令';
+      orbSub.innerText = '1 代理';
+
+      islandMain.innerHTML = `
+        <div class="soundwave"><span></span><span></span><span></span></div>
+        <span style="font-size:12px; font-weight:700; font-family:var(--mono);">:3000 + :8080</span>
+      `;
+      islandSatellite.style.display = 'grid';
+      islandSatellite.innerHTML = `<span style="font-size:11px; font-weight:700; color:var(--accent-amber); font-family:var(--mono);">3核</span>`;
+
+      tourbillonVal.innerText = 'SYS · 3 ACTIVE';
+      tourbillonLbl.innerText = 'HEAVY MULTI';
+
+      spatialText.innerText = '🟢 2 服务 · 1 命令 · 1 代理';
+    }
+  }
+
+  function toggleTheme() {
+    const html = document.documentElement;
+    const isDark = html.getAttribute('data-theme') === 'dark';
+    html.setAttribute('data-theme', isDark ? 'light' : 'dark');
+  }
+</script>
+</body>
+</html>

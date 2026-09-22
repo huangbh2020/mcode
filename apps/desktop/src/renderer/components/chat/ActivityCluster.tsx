@@ -36,6 +36,7 @@ import type { SubagentSnapshot, BashTaskSnapshot, ServiceSnapshot } from "@contr
 import type { SessionBookmark } from "@contracts/session";
 import type { TodoItem } from "@renderer/stores/sessionStore.js";
 import { ActivitySheet } from "@renderer/components/mobile/ActivitySheet.js";
+import { IconBookmark, IconCheck, IconChevronDown, IconClipboard } from "@renderer/lib/icons.js";
 import { ActivityConsole, hasNodeData } from "./ActivityConsole.js";
 import {
   primaryKind,
@@ -43,6 +44,8 @@ import {
   type ActivityNodeKey,
   type PlanBlock,
 } from "./activityShared.js";
+import type { Automation } from "@contracts/automation";
+import { isInFlightAutomation } from "@renderer/components/automation/automationFormat.js";
 
 export function ActivityCluster({
   subagents,
@@ -51,8 +54,7 @@ export function ActivityCluster({
   bookmarks,
   bashTasks,
   services,
-  /** The turn is paused on an unanswered question (AskUserQuestion pending) —
-   *  the strongest "this needs you" signal the app has. */
+  automations = [],
   waiting,
   isBookmarkStale,
   onPickBookmark,
@@ -60,15 +62,11 @@ export function ActivityCluster({
   onRenameBookmark,
   onPickSubagent,
   onPickPlan,
-  /** Stop ONE running agent command (long script / dev server) — wired to
-   *  the SDK stop_task control request. */
   onStopBashTask,
-  /** Kill the process tree behind ONE discovered service (port-scan roster). */
   onStopService,
-  /** Open a service's http://localhost:<port> in the in-app browser. */
   onOpenService,
-  /** Landing target for the "fly to activity" bookmark animation. The cluster
-   *  has no per-kind nodes, so the dot lands on the cluster itself. */
+  onOpenSchedPanel,
+  onNewSched,
   bookmarkNodeRef,
 }: {
   subagents: SubagentSnapshot[];
@@ -77,6 +75,7 @@ export function ActivityCluster({
   bookmarks: SessionBookmark[];
   bashTasks?: BashTaskSnapshot[];
   services?: ServiceSnapshot[];
+  automations?: Automation[];
   waiting?: boolean;
   isBookmarkStale?: (b: SessionBookmark) => boolean;
   onPickBookmark?: (b: SessionBookmark) => void;
@@ -87,6 +86,8 @@ export function ActivityCluster({
   onStopBashTask?: (task: BashTaskSnapshot) => void;
   onStopService?: (service: ServiceSnapshot) => void;
   onOpenService?: (service: ServiceSnapshot) => void;
+  onOpenSchedPanel?: () => void;
+  onNewSched?: () => void;
   bookmarkNodeRef?: RefObject<HTMLDivElement | null>;
 }) {
   const { t } = useI18n();
@@ -126,8 +127,15 @@ export function ActivityCluster({
 
   const commands = bashTasks ?? [];
   const serviceList = services ?? [];
+  const inFlightSched = automations.filter(isInFlightAutomation);
   const hasAny =
-    subagents.length > 0 || todos.length > 0 || planBlocks.length > 0 || bookmarks.length > 0 || commands.length > 0 || serviceList.length > 0;
+    subagents.length > 0 ||
+    todos.length > 0 ||
+    planBlocks.length > 0 ||
+    bookmarks.length > 0 ||
+    commands.length > 0 ||
+    serviceList.length > 0 ||
+    automations.length > 0;
   if (!hasAny) return null;
 
   const running = subagents.filter((a) => a.status === "running");
@@ -141,7 +149,7 @@ export function ActivityCluster({
   // reason the bar exists at all. A failed agent while others still run keeps
   // the running copy (per the design doc's rule) — the console lists it.
   const attn = !!waiting || (running.length === 0 && failed.length > 0);
-  const expanded = running.length > 0 || runningCommands.length > 0 || serviceList.length > 0 || attn;
+  const expanded = running.length > 0 || runningCommands.length > 0 || serviceList.length > 0 || inFlightSched.length > 0 || attn;
   const attnText = waiting
     ? t("chatStream.activity.cluster.waiting")
     : t("chatStream.activity.cluster.failed", { n: failed.length });
@@ -151,104 +159,275 @@ export function ActivityCluster({
     else setSheetNode((prev) => (prev === kind ? null : kind));
   };
 
+  const isAllSettled = running.length === 0 && runningCommands.length === 0 && serviceList.length === 0 && inFlightSched.length === 0 && !attn;
+  const hasLiveRunning = running.length > 0 || runningCommands.length > 0 || serviceList.length > 0 || inFlightSched.length > 0 || attn;
+  const hasSatelliteData = todos.length > 0 || planBlocks.length > 0;
+  const isSplit = hasLiveRunning && hasSatelliteData;
+
   const cluster = (
     <div
       ref={bookmarkNodeRef}
       className={cn(
-        "pointer-events-auto relative inline-flex h-[30px] items-center overflow-hidden rounded-full",
-        "border backdrop-blur-[14px] transition-[border-color,background-color,box-shadow] duration-[250ms] ease-[cubic-bezier(0.22,1,0.36,1)]",
-        "shadow-[0_1px_2px_rgb(9_9_11/0.05),0_8px_22px_-12px_rgb(9_9_11/0.28)]",
-        attn ? "border-warning/60 bg-warning/10" : "border-edge/85 bg-surface/75",
+        "group pointer-events-auto relative inline-flex items-center gap-1.5 transition-all duration-300 ease-[cubic-bezier(0.34,1.4,0.64,1)]",
+        isSplit && "hover:gap-2.5",
       )}
     >
-      {/* The button stays the head of the bar: the ring reports task progress
-          even when collapsed, so "almost nothing" still carries one number. */}
-      <button
-        type="button"
+      {/* ── 主岛 (Main Island) ── */}
+      <div
         onClick={() => openConsole(primary)}
+        role="button"
+        tabIndex={0}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            openConsole(primary);
+          }
+        }}
         aria-haspopup="dialog"
         aria-expanded={isElectron ? !!openKind : !!sheetNode}
         aria-label={t("chatStream.activity.cluster.aria")}
         className={cn(
-          "relative grid h-[30px] w-[30px] shrink-0 place-items-center transition-colors",
+          "relative inline-flex h-[34px] cursor-pointer select-none items-center gap-2 rounded-full px-3 py-1",
+          "border backdrop-blur-2xl transition-all duration-300 ease-[cubic-bezier(0.34,1.3,0.64,1)]",
+          "shadow-[0_4px_16px_rgba(0,0,0,0.22),inset_0_1px_0_rgba(255,255,255,0.2)]",
+          "hover:scale-[1.02] active:scale-[0.98]",
           attn
-            ? "text-warning"
-            : running.length > 0
-              ? "text-accent-strong"
-              : "text-content-muted hover:text-content",
+            ? "border-warning/60 bg-warning/20 text-warning shadow-[0_0_16px_rgb(var(--warning)/0.35)]"
+            : "border-black/[0.08] bg-[#000000]/90 text-white dark:border-white/[0.14] dark:bg-[#000000]/95",
         )}
       >
-        <span
-          aria-hidden
-          className="absolute inset-[3px] rounded-full"
-          style={{
-            background: `conic-gradient(${
-              attn ? "rgb(var(--warning))" : "rgb(var(--accent))"
-            } ${pct}%, rgb(var(--edge)) 0)`,
-            mask: "radial-gradient(farthest-side, transparent calc(100% - 2px), #000 0)",
-            WebkitMask: "radial-gradient(farthest-side, transparent calc(100% - 2px), #000 0)",
-          }}
-        />
-        <span aria-hidden className="relative z-[1] inline-flex h-[11px] items-center">
-          <span className="h-[3px] w-[3px] rounded-[1px] bg-current opacity-60" />
-          <span className="ml-[2px] h-[3px] w-[3px] rounded-[1px] bg-current opacity-60" />
-          <span className="ml-[2px] h-[3px] w-[3px] rounded-[1px] bg-current opacity-60" />
-        </span>
-      </button>
-
-      {/* The bar: max-width 0 → 280px. Its own width is the only thing that
-          moves, so the cluster's right edge never leaves the corner. */}
-      <div className={cn("activity-cluster-bar", expanded && "open")}>
+        {/* 1. Attention State */}
         {attn ? (
-          <span className="whitespace-nowrap text-[11px] font-semibold text-warning">{attnText}</span>
+          <div className="flex items-center gap-2">
+            <span className="apple-live-dot bg-warning" />
+            <span className="whitespace-nowrap text-[12px] font-bold text-warning">{attnText}</span>
+            <IconChevronDown
+              size={11}
+              strokeWidth={2.4}
+              className="text-warning/80 transition-transform duration-200 group-hover:translate-y-0.5"
+            />
+          </div>
+        ) : isSplit ? (
+          /* 2. Split State: Main Island focuses on live running core */
+          <div className="flex items-center gap-2">
+            {serviceList.length > 0 ? (
+              <div className="flex items-center gap-1.5">
+                <span className="dynamic-island-wave text-success">
+                  <span />
+                  <span />
+                  <span />
+                </span>
+                <span className="font-mono text-[11.5px] font-bold text-success">
+                  :{serviceList[0]?.port ?? 3000}
+                </span>
+                {serviceList.length > 1 && (
+                  <span className="text-[11px] font-medium text-white/70">
+                    +{serviceList.length - 1}
+                  </span>
+                )}
+              </div>
+            ) : runningCommands.length > 0 ? (
+              <div className="flex items-center gap-1.5">
+                <span className="apple-live-dot bg-accent" />
+                <span className="whitespace-nowrap text-[11.5px] font-bold text-white">
+                  {t("chatStream.activity.deck.shortCommands", { n: runningCommands.length })}
+                </span>
+              </div>
+            ) : running.length > 0 ? (
+              <div className="flex items-center gap-1.5">
+                <span className="apple-live-dot bg-warning" />
+                <span className="whitespace-nowrap text-[11.5px] font-bold text-warning">
+                  {t("chatStream.activity.deck.shortAgents", { n: running.length })}
+                </span>
+              </div>
+            ) : (
+              <div className="flex items-center gap-1.5">
+                <span className="apple-live-dot bg-sky-400" />
+                <span className="whitespace-nowrap text-[11.5px] font-bold text-sky-400">
+                  {t("chatStream.activity.cluster.schedRunning")}
+                </span>
+              </div>
+            )}
+
+            {/* Additional mini badge if multiple distinct live types */}
+            {serviceList.length > 0 && runningCommands.length > 0 && (
+              <>
+                <span aria-hidden className="h-2.5 w-px bg-white/20" />
+                <span className="text-[11px] font-semibold text-white/80">
+                  {t("chatStream.activity.deck.shortCommands", { n: runningCommands.length })}
+                </span>
+              </>
+            )}
+
+            <IconChevronDown
+              size={11}
+              strokeWidth={2.4}
+              className="text-white/60 transition-transform duration-200 group-hover:translate-y-0.5 group-hover:text-white"
+            />
+          </div>
+        ) : !isAllSettled ? (
+          /* 3. Single Merged Island with Live tasks */
+          <div className="flex items-center gap-2">
+            <span className="apple-live-dot bg-accent" />
+            <span className="text-[12px] font-bold text-white">
+              {todos.length > 0 ? `${done}/${todos.length}` : t("chatStream.activity.node.tasks")}
+            </span>
+            <IconChevronDown
+              size={11}
+              strokeWidth={2.4}
+              className="text-white/60 transition-transform duration-200 group-hover:translate-y-0.5 group-hover:text-white"
+            />
+          </div>
         ) : (
-          <>
-            {serviceList.length > 0 && (
-              <span className="whitespace-nowrap text-[11px] font-semibold text-success">
-                {t("chatStream.activity.cluster.services", { n: serviceList.length })}
+          /* 4. Ambient / All Settled State (Single Merged Pebble Island) */
+          <div className="flex items-center gap-2 text-white">
+            {/* Emblem Icon Dock */}
+            {todos.length > 0 && pct === 100 ? (
+              <span className="grid h-[20px] w-[20px] shrink-0 place-items-center rounded-full bg-emerald-500/20 text-emerald-400 shadow-sm">
+                <IconCheck size={12} strokeWidth={2.8} />
+              </span>
+            ) : todos.length > 0 ? (
+              <span className="relative grid h-[20px] w-[20px] shrink-0 place-items-center">
+                <svg className="-rotate-90" width="18" height="18">
+                  <circle
+                    cx="9"
+                    cy="9"
+                    r="6.5"
+                    stroke="currentColor"
+                    strokeWidth="2.2"
+                    fill="none"
+                    className="text-white/20"
+                  />
+                  <circle
+                    cx="9"
+                    cy="9"
+                    r="6.5"
+                    stroke="currentColor"
+                    strokeWidth="2.2"
+                    fill="none"
+                    className="text-emerald-400"
+                    strokeDasharray="40.84"
+                    strokeDashoffset={`${40.84 * (1 - pct / 100)}`}
+                    strokeLinecap="round"
+                  />
+                </svg>
+              </span>
+            ) : planBlocks.length > 0 ? (
+              <span className="grid h-[20px] w-[20px] shrink-0 place-items-center rounded-full bg-indigo-500/20 text-indigo-300 shadow-sm">
+                <IconClipboard size={11} strokeWidth={2.2} />
+              </span>
+            ) : bookmarks.length > 0 ? (
+              <span className="grid h-[20px] w-[20px] shrink-0 place-items-center rounded-full bg-amber-500/20 text-amber-300 shadow-sm">
+                <IconBookmark size={11} strokeWidth={2.2} />
+              </span>
+            ) : (
+              <span className="grid h-[20px] w-[20px] shrink-0 place-items-center rounded-full bg-white/10 text-white/80 shadow-sm">
+                <IconCheck size={11} strokeWidth={2.4} />
               </span>
             )}
-            {runningCommands.length > 0 && (
-              <span className="whitespace-nowrap text-[11px] font-semibold text-content-muted">
-                {t("chatStream.activity.cluster.commands", { n: runningCommands.length })}
-              </span>
-            )}
-            {running.length > 0 && (
-              <span className="whitespace-nowrap text-[11px] font-semibold text-content-muted">
-                {t("chatStream.activity.cluster.running", { n: running.length })}
-              </span>
-            )}
-          </>
-        )}
 
-        {!attn && todos.length > 0 && (
-          <>
-            <span aria-hidden className="h-3 w-px shrink-0 bg-edge" />
-            <span className="whitespace-nowrap text-[11px] tabular-nums text-content-subtle">
-              {t("chatStream.activity.cluster.tasks", { done, total: todos.length })}
-            </span>
-            <span aria-hidden className="activity-cluster-miniprog">
-              <i style={{ width: `${pct}%` }} />
-            </span>
-          </>
-        )}
+            {/* Typography */}
+            {todos.length > 0 ? (
+              <div className="flex items-center gap-1.5 leading-none">
+                <span className="font-mono text-[12px] font-bold tabular-nums tracking-tight text-white">
+                  {done}/{todos.length}
+                </span>
+                <span className="text-[11px] font-medium text-white/70">
+                  {pct === 100 ? t("chatStream.activity.groupCompleted") : t("chatStream.activity.node.tasks")}
+                </span>
+              </div>
+            ) : planBlocks.length > 0 ? (
+              <span className="text-[11.5px] font-semibold tracking-tight text-white">
+                {t("chatStream.activity.deck.shortPlans", { n: planBlocks.length })}
+              </span>
+            ) : bookmarks.length > 0 ? (
+              <span className="text-[11.5px] font-semibold tracking-tight text-white">
+                {t("chatStream.activity.deck.shortBookmarks", { n: bookmarks.length })}
+              </span>
+            ) : (
+              <span className="text-[11.5px] font-semibold tracking-tight text-white">
+                {t("chatStream.activity.deck.allSettled")}
+              </span>
+            )}
 
-        <span aria-hidden className="h-3 w-px shrink-0 bg-edge" />
-        <button
-          type="button"
-          onClick={() => openConsole("plans")}
-          title={t("chatStream.activity.cluster.openPlans")}
-          className="whitespace-nowrap text-[11px] tabular-nums text-content-subtle transition-colors hover:text-content"
-        >
-          {planBlocks.length > 0
-            ? t("chatStream.activity.cluster.plans", { n: planBlocks.length })
-            : t("chatStream.activity.cluster.noPlans")}
-        </button>
+            {/* Secondary plans tag alongside settled todos */}
+            {todos.length > 0 && planBlocks.length > 0 && (
+              <>
+                <span aria-hidden className="h-1 w-1 rounded-full bg-white/30" />
+                <span className="text-[11px] font-medium text-white/70">
+                  {t("chatStream.activity.deck.shortPlans", { n: planBlocks.length })}
+                </span>
+              </>
+            )}
+
+            <IconChevronDown
+              size={11}
+              strokeWidth={2.4}
+              className="text-white/60 transition-all duration-200 group-hover:translate-y-0.5 group-hover:text-white"
+            />
+          </div>
+        )}
       </div>
+
+      {/* ── 伴随卫星岛 (Satellite Island) ──
+          Only renders when split: displays task progress or secondary stats */}
+      {isSplit && (
+        <div
+          onClick={() => openConsole(todos.length > 0 ? "tasks" : "plans")}
+          role="button"
+          tabIndex={0}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              openConsole(todos.length > 0 ? "tasks" : "plans");
+            }
+          }}
+          title={
+            todos.length > 0
+              ? `${done}/${todos.length} (${pct}%)`
+              : t("chatStream.activity.deck.shortPlans", { n: planBlocks.length })
+          }
+          className={cn(
+            "relative grid h-[34px] w-[34px] cursor-pointer select-none place-items-center rounded-full",
+            "border border-black/[0.08] bg-[#000000]/90 text-white dark:border-white/[0.14] dark:bg-[#000000]/95",
+            "shadow-[0_4px_16px_rgba(0,0,0,0.22),inset_0_1px_0_rgba(255,255,255,0.2)]",
+            "backdrop-blur-2xl transition-all duration-300 ease-[cubic-bezier(0.34,1.3,0.64,1)]",
+            "hover:scale-[1.08] active:scale-[0.95]",
+          )}
+        >
+          {todos.length > 0 ? (
+            <svg className="-rotate-90" width="18" height="18">
+              <circle
+                cx="9"
+                cy="9"
+                r="6.5"
+                stroke="currentColor"
+                strokeWidth="2.2"
+                fill="none"
+                className="text-white/20"
+              />
+              <circle
+                cx="9"
+                cy="9"
+                r="6.5"
+                stroke="currentColor"
+                strokeWidth="2.2"
+                fill="none"
+                className="text-accent"
+                strokeDasharray="40.84"
+                strokeDashoffset={`${40.84 * (1 - pct / 100)}`}
+                strokeLinecap="round"
+              />
+            </svg>
+          ) : (
+            <IconClipboard size={12} className="text-white/80" />
+          )}
+        </div>
+      )}
     </div>
   );
 
-  // Mobile / web shell: a 380px panel does not fit a phone, so the same console
+  // Mobile / web shell: a 390px panel does not fit a phone, so the same console
   // opens in the existing bottom sheet instead.
   if (!isElectron) {
     return (
@@ -281,32 +460,20 @@ export function ActivityCluster({
   }
 
   return (
-    // The console is nested in this corner box on purpose: its containing block
-    // is then a box this file owns, so `right-0` lines its right edge up with
-    // the cluster's and nothing above can re-anchor it.
     <div ref={rootRef} className="pointer-events-none absolute right-5 top-2 z-30 flex items-center">
       {cluster}
       {openKind && (
         <div
           ref={panelRef}
           className={cn(
-            "pointer-events-auto absolute right-0 top-[38px] z-40 flex max-h-[70dvh] w-[380px]",
-            "max-w-[calc(100vw-64px)] flex-col overflow-hidden rounded-2xl border border-edge bg-surface/95",
-            "backdrop-blur-xl shadow-[inset_0_1px_0_rgb(255_255_255/0.08),0_24px_48px_-12px_rgb(0_0_0/0.35)]",
-            "animate-[capsule-pop-in_180ms_cubic-bezier(0.2,0.8,0.3,1)]",
+            "pointer-events-auto absolute right-0 top-[42px] z-40 flex max-h-[78dvh] w-[390px]",
+            "max-w-[calc(100vw-40px)] flex-col overflow-hidden rounded-[26px] border border-white/[0.14] bg-[#0c0d12]/94",
+            "backdrop-blur-3xl text-white shadow-[0_28px_64px_-12px_rgba(0,0,0,0.7),inset_0_1px_0_rgba(255,255,255,0.18)]",
+            "animate-[capsule-pop-in_240ms_cubic-bezier(0.34,1.3,0.64,1)]",
           )}
         >
-          {/* Notch on the TOP edge, pointing up at the cluster. Fixed offset
-              from the right: the cluster's right edge is pinned here too, so
-              the notch always sits under it (no measurement). */}
-          <span
-            aria-hidden
-            className="absolute -top-[5px] right-[34px] h-2.5 w-2.5 rotate-45 border-l border-t border-edge bg-surface"
-          />
           <ActivityConsole
             node={openKind}
-            // Node tabs keep all kinds reachable: the cluster's core only
-            // opens the primary one, and the bar exposes plans.
             nodeTabs
             onPickNode={setOpenKind}
             subagents={subagents}
@@ -318,6 +485,9 @@ export function ActivityCluster({
             services={serviceList}
             onStopService={onStopService}
             onOpenService={onOpenService}
+            automations={automations}
+            onOpenSchedPanel={onOpenSchedPanel}
+            onNewSched={onNewSched}
             isBookmarkStale={isBookmarkStale}
             tabs={tabs}
             onTabChange={setTab}

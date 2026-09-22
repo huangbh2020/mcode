@@ -75,6 +75,7 @@ import { OrchComposerChips } from "./OrchComposerChips.js";
 import { EmptyThreadWelcome } from "./EmptyThreadWelcome.js";
 import { SlashCommandPicker } from "./SlashCommandPicker.js";
 import { ActivityCluster } from "./ActivityCluster.js";
+import { isInFlightAutomation } from "@renderer/components/automation/automationFormat.js";
 import { MessageTimeline, type UserItemIndexMap } from "./MessageTimeline.js";
 import { SelectionToolbar, type SelectionToolbarState } from "./SelectionToolbar.js";
 import { BookmarkFly } from "./BookmarkFly.js";
@@ -1518,11 +1519,31 @@ function ChatPaneForSession({
   );
   const stopService = useSessionStore((s) => s.stopService);
   const openUrlInBrowser = useSessionStore((s) => s.openUrlInBrowser);
+  const automations = useSessionStore((s) => s.automations);
+  const automationsLoaded = useSessionStore((s) => s.automationsLoaded);
+  const loadAutomations = useSessionStore((s) => s.loadAutomations);
+  const openSchedPanel = useSessionStore((s) => s.openSchedPanel);
+  const setTaskScheduleEditorOpen = useSessionStore((s) => s.setTaskScheduleEditorOpen);
+
+  useEffect(() => {
+    if (!automationsLoaded) void loadAutomations();
+  }, [automationsLoaded, loadAutomations]);
+
+  const hasSessionSched = automations.some((a) => a.parentSessionId === sessionId);
+  const hasInFlightSched = automations.some(isInFlightAutomation);
+
   // Whether this session has anything for the activity cluster to show. The
   // cluster owns the per-kind empty checks; ChatPane needs only this aggregate
   // so it can skip mounting it at all in a session with no activity.
   const hasActivity =
-    todos.length > 0 || subagents.length > 0 || planBlocks.length > 0 || bookmarks.length > 0 || bashTasks.length > 0 || services.length > 0;
+    todos.length > 0 ||
+    subagents.length > 0 ||
+    planBlocks.length > 0 ||
+    bookmarks.length > 0 ||
+    bashTasks.length > 0 ||
+    services.length > 0 ||
+    hasSessionSched ||
+    hasInFlightSched;
   const addBookmark = useSessionStore((s) => s.addBookmark);
   const removeBookmark = useSessionStore((s) => s.removeBookmark);
   const renameBookmark = useSessionStore((s) => s.renameBookmark);
@@ -3845,6 +3866,9 @@ function ChatPaneForSession({
           services={services}
           onStopService={(service) => void stopService(sessionId, service)}
           onOpenService={(service) => openUrlInBrowser(`http://localhost:${service.port}`)}
+          automations={automations}
+          onOpenSchedPanel={() => openSchedPanel(sessionId)}
+          onNewSched={() => setTaskScheduleEditorOpen(sessionId, true)}
           // The session's pending AskUserQuestion (declared above) is the
           // strongest "this needs you" signal the cluster can report.
           waiting={!!pendingQuestion}

@@ -1,0 +1,1054 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mcode · 苹果风格右上角活动胶囊与多任务控制中心设计稿</title>
+<style>
+  /* =========================================================================
+   * Mcode - 苹果风格右上角活动胶囊与控制中心 (Apple HIG Dynamic Island & Control Deck)
+   * 
+   * 核心重构哲学：
+   * 1. 动静分离：把「运行时高频瞬态（服务/命令/子代理/等待回答）」与「沉淀资产（待办/计划/书签）」剥离；
+   * 2. 收缩态（Dynamic Island）：采用分段微岛（Segmented Pill），以高辨识度 SF 符号 + 动态光晕代替生硬的长文字拼串；
+   * 3. 展开态（Control Deck）：借鉴 macOS Tahoe 控制中心与 iOS 实时活动（Live Activities），将扁平 6 Tab
+   *    重构为模块化卡片（Widget），高频操作（打开本地端口、停止命令）直接露出，一键直达。
+   * ========================================================================= */
+
+  :root {
+    --sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "PingFang SC", "Segoe UI", system-ui, sans-serif;
+    --mono: "SF Mono", ui-monospace, Menlo, Monaco, Consolas, monospace;
+
+    /* Apple Light Mode Palette */
+    --bg-canvas: #f5f5f7;
+    --bg-window: rgba(255, 255, 255, 0.82);
+    --bg-glass: rgba(255, 255, 255, 0.65);
+    --bg-card: rgba(255, 255, 255, 0.72);
+    --bg-card-hover: rgba(255, 255, 255, 0.95);
+    --bg-card-subtle: rgba(0, 0, 0, 0.03);
+    
+    --border-glass: rgba(0, 0, 0, 0.08);
+    --border-card: rgba(0, 0, 0, 0.06);
+    --border-highlight: rgba(255, 255, 255, 0.8);
+
+    --text-primary: #1d1d1f;
+    --text-secondary: #86868b;
+    --text-tertiary: #a1a1a6;
+
+    --apple-blue: #0071e3;
+    --apple-blue-bg: rgba(0, 113, 227, 0.1);
+    --apple-green: #34c759;
+    --apple-green-bg: rgba(52, 199, 89, 0.12);
+    --apple-amber: #ff9500;
+    --apple-amber-bg: rgba(255, 149, 0, 0.12);
+    --apple-red: #ff3b30;
+    --apple-red-bg: rgba(255, 59, 48, 0.1);
+    --apple-purple: #af52de;
+    --apple-purple-bg: rgba(175, 82, 222, 0.12);
+
+    --shadow-pill: 0 4px 12px rgba(0, 0, 0, 0.08), 0 1px 2px rgba(0, 0, 0, 0.04);
+    --shadow-popover: 0 20px 48px -8px rgba(0, 0, 0, 0.18), 0 8px 24px -4px rgba(0, 0, 0, 0.08), 0 0 0 1px rgba(0, 0, 0, 0.04);
+
+    --ease-spring: cubic-bezier(0.32, 0.72, 0, 1);
+    --ease-bounce: cubic-bezier(0.34, 1.4, 0.64, 1);
+  }
+
+  html[data-theme="dark"] {
+    --bg-canvas: #0d0e11;
+    --bg-window: rgba(26, 29, 36, 0.85);
+    --bg-glass: rgba(36, 39, 48, 0.75);
+    --bg-card: rgba(46, 50, 62, 0.6);
+    --bg-card-hover: rgba(56, 61, 75, 0.85);
+    --bg-card-subtle: rgba(255, 255, 255, 0.04);
+
+    --border-glass: rgba(255, 255, 255, 0.12);
+    --border-card: rgba(255, 255, 255, 0.08);
+    --border-highlight: rgba(255, 255, 255, 0.15);
+
+    --text-primary: #f5f5f7;
+    --text-secondary: #98989d;
+    --text-tertiary: #636366;
+
+    --apple-blue: #2997ff;
+    --apple-blue-bg: rgba(41, 151, 255, 0.18);
+    --apple-green: #30d158;
+    --apple-green-bg: rgba(48, 209, 88, 0.18);
+    --apple-amber: #ffd60a;
+    --apple-amber-bg: rgba(255, 214, 10, 0.18);
+    --apple-red: #ff453a;
+    --apple-red-bg: rgba(255, 69, 58, 0.18);
+    --apple-purple: #bf5af2;
+    --apple-purple-bg: rgba(191, 90, 242, 0.18);
+
+    --shadow-pill: 0 6px 16px rgba(0, 0, 0, 0.4), 0 2px 4px rgba(0, 0, 0, 0.2);
+    --shadow-popover: 0 28px 64px -12px rgba(0, 0, 0, 0.7), 0 12px 32px -4px rgba(0, 0, 0, 0.4), 0 0 0 1px rgba(255, 255, 255, 0.08);
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: var(--sans);
+    background-color: var(--bg-canvas);
+    color: var(--text-primary);
+    -webkit-font-smoothing: antialiased;
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  /* 顶部导航与控制面板工具条 */
+  header.toolbar {
+    position: sticky;
+    top: 0;
+    z-index: 100;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 28px;
+    background: var(--bg-window);
+    backdrop-filter: blur(24px) saturate(180%);
+    -webkit-backdrop-filter: blur(24px) saturate(180%);
+    border-bottom: 1px solid var(--border-glass);
+  }
+
+  .logo-title {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 15px;
+    font-weight: 600;
+  }
+  .logo-badge {
+    background: linear-gradient(135deg, var(--apple-blue), var(--apple-purple));
+    color: #fff;
+    padding: 2px 8px;
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+  }
+
+  .scenario-pills {
+    display: flex;
+    align-items: center;
+    background: var(--bg-card-subtle);
+    border: 1px solid var(--border-card);
+    padding: 3px;
+    border-radius: 12px;
+    gap: 4px;
+  }
+  .scenario-btn {
+    border: none;
+    background: transparent;
+    color: var(--text-secondary);
+    padding: 6px 12px;
+    border-radius: 8px;
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s var(--ease-spring);
+  }
+  .scenario-btn.active {
+    background: var(--bg-window);
+    color: var(--text-primary);
+    box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+    font-weight: 600;
+  }
+
+  .theme-toggle-btn {
+    background: transparent;
+    border: 1px solid var(--border-card);
+    color: var(--text-primary);
+    padding: 6px 14px;
+    border-radius: 999px;
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    transition: background 0.2s;
+  }
+  .theme-toggle-btn:hover {
+    background: var(--bg-card-hover);
+  }
+
+  /* 主演示视口：拟真的聊天主界面 */
+  .workspace {
+    max-width: 1100px;
+    margin: 36px auto;
+    padding: 0 24px;
+    display: flex;
+    flex-direction: column;
+    gap: 28px;
+  }
+
+  .design-intro {
+    background: var(--bg-window);
+    border: 1px solid var(--border-glass);
+    border-radius: 20px;
+    padding: 22px 28px;
+    backdrop-filter: blur(20px);
+  }
+  .design-intro h2 {
+    margin: 0 0 8px;
+    font-size: 18px;
+    font-weight: 600;
+  }
+  .design-intro p {
+    margin: 0;
+    color: var(--text-secondary);
+    font-size: 13.5px;
+    line-height: 1.6;
+  }
+
+  .chat-mockup-frame {
+    position: relative;
+    background: var(--bg-window);
+    border: 1px solid var(--border-glass);
+    border-radius: 24px;
+    min-height: 640px;
+    box-shadow: var(--shadow-popover);
+    backdrop-filter: blur(32px) saturate(180%);
+    -webkit-backdrop-filter: blur(32px) saturate(180%);
+    overflow: visible;
+  }
+
+  .chat-header {
+    height: 54px;
+    border-bottom: 1px solid var(--border-glass);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 24px;
+    position: relative;
+  }
+
+  .chat-title-group {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .traffic-lights {
+    display: flex;
+    gap: 7px;
+  }
+  .traffic-light {
+    width: 11px;
+    height: 11px;
+    border-radius: 50%;
+  }
+  .light-red { background: #ff5f56; }
+  .light-yellow { background: #ffbd2e; }
+  .light-green { background: #27c93f; }
+
+  .chat-session-name {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-primary);
+  }
+
+  /* 模拟聊天内容流 */
+  .chat-scroll {
+    padding: 30px 40px;
+    display: flex;
+    flex-direction: column;
+    gap: 24px;
+  }
+
+  .msg-bubble {
+    max-width: 680px;
+    font-size: 14px;
+    line-height: 1.65;
+  }
+  .msg-user {
+    align-self: flex-end;
+    background: var(--apple-blue);
+    color: #ffffff;
+    padding: 10px 18px;
+    border-radius: 18px 18px 4px 18px;
+  }
+  .msg-assistant {
+    align-self: flex-start;
+    color: var(--text-primary);
+    background: var(--bg-card-subtle);
+    border: 1px solid var(--border-card);
+    padding: 16px 20px;
+    border-radius: 18px 18px 18px 4px;
+  }
+
+  /* =========================================================================
+   * ★★★ 核心设计：苹果风格灵动微岛 (Apple Dynamic Island Pill) ★★★
+   * ========================================================================= */
+  .capsule-anchor {
+    position: absolute;
+    top: 10px;
+    right: 20px;
+    z-index: 50;
+  }
+
+  .apple-capsule {
+    display: inline-flex;
+    align-items: center;
+    height: 34px;
+    padding: 3px 5px 3px 6px;
+    border-radius: 999px;
+    background: var(--bg-glass);
+    backdrop-filter: blur(28px) saturate(200%);
+    -webkit-backdrop-filter: blur(28px) saturate(200%);
+    border: 1px solid var(--border-glass);
+    box-shadow: var(--shadow-pill), inset 0 1px 0 var(--border-highlight);
+    cursor: pointer;
+    user-select: none;
+    transition: all 0.35s var(--ease-spring);
+    gap: 6px;
+  }
+
+  .apple-capsule:hover {
+    transform: translateY(-1px) scale(1.015);
+    background: var(--bg-card-hover);
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.12), inset 0 1px 0 var(--border-highlight);
+  }
+
+  .apple-capsule:active {
+    transform: scale(0.98);
+  }
+
+  /* 灵动分段结构 */
+  .capsule-lead {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 0 4px 0 2px;
+  }
+
+  /* 呼吸光晕微指示器 */
+  .live-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    position: relative;
+  }
+  .live-dot::after {
+    content: '';
+    position: absolute;
+    inset: -3px;
+    border-radius: 50%;
+    background: inherit;
+    opacity: 0.45;
+    animation: livePulse 2s infinite var(--ease-spring);
+  }
+
+  @keyframes livePulse {
+    0% { transform: scale(0.9); opacity: 0.6; }
+    50% { transform: scale(1.6); opacity: 0; }
+    100% { transform: scale(0.9); opacity: 0.6; }
+  }
+
+  .dot-green { background: var(--apple-green); }
+  .dot-amber { background: var(--apple-amber); }
+  .dot-blue { background: var(--apple-blue); }
+  .dot-purple { background: var(--apple-purple); }
+
+  /* 环形进度微缩图标 */
+  .mini-ring-wrap {
+    width: 18px;
+    height: 18px;
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .mini-ring-wrap svg {
+    transform: rotate(-90deg);
+  }
+
+  .capsule-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 11.5px;
+    font-weight: 600;
+    color: var(--text-primary);
+    letter-spacing: -0.01em;
+  }
+
+  .capsule-divider {
+    width: 1px;
+    height: 13px;
+    background: var(--border-glass);
+  }
+
+  .capsule-subtag {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--text-secondary);
+    padding: 2px 6px;
+    border-radius: 6px;
+    background: var(--bg-card-subtle);
+  }
+
+  .capsule-attention {
+    background: var(--apple-amber-bg) !important;
+    border-color: rgba(255, 149, 0, 0.4) !important;
+  }
+
+  .capsule-attention .capsule-badge {
+    color: var(--apple-amber);
+    font-weight: 700;
+  }
+
+  /* =========================================================================
+   * ★★★ 核心设计：苹果风格模块化控制中心 (Apple Control Deck) ★★★
+   * ========================================================================= */
+  .apple-deck {
+    position: absolute;
+    top: 48px;
+    right: 0;
+    width: 390px;
+    max-width: calc(100vw - 40px);
+    background: var(--bg-glass);
+    backdrop-filter: blur(40px) saturate(210%);
+    -webkit-backdrop-filter: blur(40px) saturate(210%);
+    border: 1px solid var(--border-glass);
+    border-radius: 24px;
+    box-shadow: var(--shadow-popover), inset 0 1px 0 var(--border-highlight);
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    z-index: 60;
+    opacity: 0;
+    transform: translateY(-8px) scale(0.96);
+    pointer-events: none;
+    transition: all 0.28s var(--ease-spring);
+    max-height: 80vh;
+    overflow-y: auto;
+  }
+
+  .apple-deck.open {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+    pointer-events: auto;
+  }
+
+  /* Deck 顶部微型标题栏 */
+  .deck-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 2px 4px 6px;
+  }
+  .deck-header-title {
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--text-primary);
+    display: flex;
+    align-items: center;
+    gap: 7px;
+  }
+  .deck-header-hint {
+    font-size: 11px;
+    color: var(--text-tertiary);
+  }
+
+  /* 模块化卡片 (Widget) */
+  .deck-widget {
+    background: var(--bg-card);
+    border: 1px solid var(--border-card);
+    border-radius: 16px;
+    padding: 12px 14px;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
+    transition: background 0.2s;
+  }
+  .deck-widget:hover {
+    background: var(--bg-card-hover);
+  }
+
+  .widget-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 8px;
+  }
+  .widget-title {
+    font-size: 11.5px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--text-secondary);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .widget-status-tag {
+    font-size: 11px;
+    font-weight: 600;
+    padding: 1px 7px;
+    border-radius: 999px;
+  }
+  .status-tag-green {
+    background: var(--apple-green-bg);
+    color: var(--apple-green);
+  }
+  .status-tag-amber {
+    background: var(--apple-amber-bg);
+    color: var(--apple-amber);
+  }
+  .status-tag-blue {
+    background: var(--apple-blue-bg);
+    color: var(--apple-blue);
+  }
+
+  /* 实时服务列表条目 */
+  .live-item-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 7px 0;
+  }
+  .live-item-row + .live-item-row {
+    border-top: 1px solid var(--border-card);
+  }
+  .live-item-info {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+  }
+  .live-item-icon {
+    width: 28px;
+    height: 28px;
+    border-radius: 8px;
+    background: var(--bg-card-subtle);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-primary);
+  }
+  .live-item-meta {
+    display: flex;
+    flex-direction: column;
+  }
+  .live-item-name {
+    font-size: 12.5px;
+    font-weight: 600;
+    color: var(--text-primary);
+  }
+  .live-item-sub {
+    font-size: 11px;
+    color: var(--text-secondary);
+    font-family: var(--mono);
+  }
+
+  /* 苹果风格快捷动作按钮 */
+  .apple-btn-group {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .apple-btn {
+    border: none;
+    background: var(--bg-card-subtle);
+    color: var(--text-primary);
+    padding: 5px 10px;
+    border-radius: 8px;
+    font-size: 11.5px;
+    font-weight: 600;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    transition: all 0.15s var(--ease-spring);
+  }
+  .apple-btn:hover {
+    background: var(--apple-blue-bg);
+    color: var(--apple-blue);
+  }
+  .apple-btn-danger:hover {
+    background: var(--apple-red-bg);
+    color: var(--apple-red);
+  }
+
+  /* 任务待办分段进度 */
+  .todo-progress-bar {
+    height: 6px;
+    border-radius: 999px;
+    background: var(--bg-card-subtle);
+    overflow: hidden;
+    margin: 8px 0 10px;
+  }
+  .todo-progress-fill {
+    height: 100%;
+    border-radius: 999px;
+    background: linear-gradient(90deg, var(--apple-blue), var(--apple-green));
+    transition: width 0.4s var(--ease-spring);
+  }
+
+  .todo-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    padding: 4px 0;
+    color: var(--text-primary);
+  }
+  .todo-check {
+    width: 15px;
+    height: 15px;
+    border-radius: 4px;
+    border: 1.5px solid var(--text-tertiary);
+    display: grid;
+    place-items: center;
+  }
+  .todo-check.done {
+    background: var(--apple-green);
+    border-color: var(--apple-green);
+    color: white;
+  }
+  .todo-check.doing {
+    border-color: var(--apple-blue);
+    border-style: dashed;
+  }
+  .todo-text.done {
+    text-decoration: line-through;
+    color: var(--text-secondary);
+  }
+
+  /* 静态资产折叠列表（Plans & Bookmarks） */
+  .asset-disclosure {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 10px;
+    background: var(--bg-card-subtle);
+    border-radius: 10px;
+    cursor: pointer;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-primary);
+  }
+  .asset-disclosure:hover {
+    background: var(--bg-card-hover);
+  }
+  .asset-count {
+    font-size: 11px;
+    color: var(--text-secondary);
+    background: var(--bg-window);
+    padding: 1px 6px;
+    border-radius: 6px;
+  }
+
+  /* 控制中心底部微文字 */
+  .deck-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 4px 6px 0;
+    font-size: 10.5px;
+    color: var(--text-tertiary);
+  }
+</style>
+</head>
+<body>
+
+<header class="toolbar">
+  <div class="logo-title">
+    <span>Mcode 活动胶囊新设计稿</span>
+    <span class="logo-badge">Apple HIG</span>
+  </div>
+
+  <!-- 场景切换器 -->
+  <div class="scenario-pills">
+    <button class="scenario-btn active" onclick="switchScenario('heavy')">重度多并发 (服务+命令+子代理)</button>
+    <button class="scenario-btn" onclick="switchScenario('subagent')">单子代理进行中</button>
+    <button class="scenario-btn" onclick="switchScenario('attention')">等待用户回答 (中断态)</button>
+    <button class="scenario-btn" onclick="switchScenario('quiet')">安静态 (仅计划与待办)</button>
+  </div>
+
+  <button class="theme-toggle-btn" onclick="toggleTheme()">
+    <span id="themeLabel">深色模式</span>
+  </button>
+</header>
+
+<div class="workspace">
+
+  <div class="design-intro">
+    <h2>设计稿演示说明：为什么这符合苹果设计语言？</h2>
+    <p>
+      1. <b>收缩态（动态分段微岛）</b>：彻底告别「一长串文字挤在一起」的调试栏风格。采用 SF 符号 + 呼吸灯 + 关键高阶状态，多任务时自动聚类，保持胶囊的高级克制；<br>
+      2. <b>展开态（控制中心卡片化）</b>：彻底告别「6个Tab来回切换」。将最紧急的运行中服务/进程提炼为直接可操作的卡片（如直接点击在应用内浏览器打开端口、一键终止），进度与历史折叠在下方，主次分明；<br>
+      3. <b>点击右上角胶囊</b>：可以真实体验苹果风格的弹性弹窗展开与收起！
+    </p>
+  </div>
+
+  <!-- 模拟桌面端三栏的主聊天区 -->
+  <div class="chat-mockup-frame">
+    <div class="chat-header">
+      <div class="chat-title-group">
+        <div class="traffic-lights">
+          <div class="traffic-light light-red"></div>
+          <div class="traffic-light light-yellow"></div>
+          <div class="traffic-light light-green"></div>
+        </div>
+        <span class="chat-session-name">feat(auth): 重构 OAuth 登录链路与本地开发服务</span>
+      </div>
+
+      <!-- ★★★ 右上角胶囊挂载点 ★★★ -->
+      <div class="capsule-anchor">
+        <!-- 胶囊本身 -->
+        <div id="capsuleElement" class="apple-capsule" onclick="toggleDeck()">
+          <!-- 动态渲染胶囊内容 -->
+        </div>
+
+        <!-- 展开后的苹果风格控制中心 -->
+        <div id="deckElement" class="apple-deck">
+          <!-- 动态渲染卡片内容 -->
+        </div>
+      </div>
+    </div>
+
+    <!-- 模拟正文 -->
+    <div class="chat-scroll">
+      <div class="msg-bubble msg-user">
+        请帮我启动本地用户服务和后台监听，并用一个子代理跑单元测试，同时生成一份迁移计划。
+      </div>
+
+      <div class="msg-bubble msg-assistant">
+        好的，我已经为你执行了以下操作：
+        <ol style="margin: 8px 0 0; padding-left: 20px;">
+          <li>探测到本地已在 <code>:3000</code> 启动前端服务，<code>:8080</code> 启动鉴权后端；</li>
+          <li>启动了一个后台文件监听命令：<code>npm run watch</code>；</li>
+          <li>派发了 1 个并发子代理正在运行端到端测试；</li>
+          <li>生成了待办任务清单，请查看右上角活动中心。</li>
+        </ol>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+  // 场景数据定义
+  const SCENARIOS = {
+    heavy: {
+      capsuleHtml: `
+        <div class="capsule-lead">
+          <div class="live-dot dot-green"></div>
+          <span class="capsule-badge">2 服务</span>
+        </div>
+        <div class="capsule-divider"></div>
+        <div class="capsule-lead">
+          <div class="live-dot dot-blue"></div>
+          <span class="capsule-badge">1 命令</span>
+        </div>
+        <div class="capsule-divider"></div>
+        <div class="capsule-subtag">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg>
+          <span>1 代理</span>
+        </div>
+        <div class="capsule-divider"></div>
+        <div class="mini-ring-wrap" title="任务完成度 60%">
+          <svg width="18" height="18">
+            <circle cx="9" cy="9" r="7" stroke="var(--border-glass)" stroke-width="2.5" fill="none"/>
+            <circle cx="9" cy="9" r="7" stroke="var(--apple-blue)" stroke-width="2.5" fill="none"
+              stroke-dasharray="44" stroke-dashoffset="17.6"/>
+          </svg>
+        </div>
+      `,
+      isAttention: false,
+      deckHtml: `
+        <div class="deck-header">
+          <div class="deck-header-title">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="3" y="3" width="18" height="18" rx="4"/><path d="M3 9h18M9 21V9"/></svg>
+            <span>会话活动与控制中心</span>
+          </div>
+          <span class="deck-header-hint">ESC 退出</span>
+        </div>
+
+        <!-- 实时服务卡片 -->
+        <div class="deck-widget">
+          <div class="widget-head">
+            <span class="widget-title">
+              <span class="live-dot dot-green"></span>
+              实时服务 (Live Services)
+            </span>
+            <span class="widget-status-tag status-tag-green">2 运行中</span>
+          </div>
+
+          <div class="live-item-row">
+            <div class="live-item-info">
+              <div class="live-item-icon">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
+              </div>
+              <div class="live-item-meta">
+                <span class="live-item-name">Vite Dev Server</span>
+                <span class="live-item-sub">http://localhost:3000</span>
+              </div>
+            </div>
+            <div class="apple-btn-group">
+              <button class="apple-btn" onclick="alert('在应用内内置浏览器打开 :3000')">
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+                打开
+              </button>
+              <button class="apple-btn apple-btn-danger" title="终止服务">
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
+              </button>
+            </div>
+          </div>
+
+          <div class="live-item-row">
+            <div class="live-item-info">
+              <div class="live-item-icon">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 17h16M4 12h16M4 7h16"/></svg>
+              </div>
+              <div class="live-item-meta">
+                <span class="live-item-name">Auth Backend</span>
+                <span class="live-item-sub">http://localhost:8080</span>
+              </div>
+            </div>
+            <div class="apple-btn-group">
+              <button class="apple-btn">打开</button>
+              <button class="apple-btn apple-btn-danger">
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- 后台命令与子代理卡片 -->
+        <div class="deck-widget">
+          <div class="widget-head">
+            <span class="widget-title">
+              <span class="live-dot dot-blue"></span>
+              后台进程与子代理
+            </span>
+            <span class="widget-status-tag status-tag-blue">2 个活跃</span>
+          </div>
+
+          <div class="live-item-row">
+            <div class="live-item-info">
+              <div class="live-item-icon">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
+              </div>
+              <div class="live-item-meta">
+                <span class="live-item-name">npm run watch</span>
+                <span class="live-item-sub">后台监听 · 持续 48s</span>
+              </div>
+            </div>
+            <button class="apple-btn apple-btn-danger">停止</button>
+          </div>
+
+          <div class="live-item-row">
+            <div class="live-item-info">
+              <div class="live-item-icon">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="10" rx="2"/><circle cx="12" cy="5" r="2"/><path d="M12 7v4"/></svg>
+              </div>
+              <div class="live-item-meta">
+                <span class="live-item-name">测试执行代理 (Task-01)</span>
+                <span class="live-item-sub">运行中 · 1.4k tokens · 6 工具</span>
+              </div>
+            </div>
+            <span class="capsule-subtag" style="color:var(--apple-blue)">进行中</span>
+          </div>
+        </div>
+
+        <!-- 任务推进小组件 -->
+        <div class="deck-widget">
+          <div class="widget-head">
+            <span class="widget-title">待办任务进度</span>
+            <span class="live-item-sub">3 / 5 已完成 (60%)</span>
+          </div>
+          <div class="todo-progress-bar">
+            <div class="todo-progress-fill" style="width: 60%"></div>
+          </div>
+          <div class="todo-row">
+            <span class="todo-check done">✓</span>
+            <span class="todo-text done">验证 OAuth 回调网关</span>
+          </div>
+          <div class="todo-row">
+            <span class="todo-check done">✓</span>
+            <span class="todo-text done">更新环境变量配置文件</span>
+          </div>
+          <div class="todo-row">
+            <span class="todo-check doing">●</span>
+            <span class="todo-text">执行自动化集成测试</span>
+          </div>
+        </div>
+
+        <!-- 资产抽屉 (折叠计划与书签) -->
+        <div class="asset-disclosure">
+          <span>📜 会话计划历史</span>
+          <span class="asset-count">2 份计划</span>
+        </div>
+        <div class="asset-disclosure">
+          <span>🔖 会话书签</span>
+          <span class="asset-count">1 个标记</span>
+        </div>
+
+        <div class="deck-footer">
+          <span>Mcode Control Deck</span>
+          <span>Apple Interface Guidelines</span>
+        </div>
+      `
+    },
+    subagent: {
+      capsuleHtml: `
+        <div class="capsule-lead">
+          <div class="live-dot dot-blue"></div>
+          <span class="capsule-badge">代码审查子代理</span>
+        </div>
+        <div class="capsule-divider"></div>
+        <span class="capsule-subtag">2.1k tokens</span>
+      `,
+      isAttention: false,
+      deckHtml: `
+        <div class="deck-header">
+          <div class="deck-header-title">子代理运行中</div>
+          <span class="deck-header-hint">ESC 退出</span>
+        </div>
+        <div class="deck-widget">
+          <div class="widget-head">
+            <span class="widget-title"><span class="live-dot dot-blue"></span> 代码审查子代理 (Task-02)</span>
+            <span class="widget-status-tag status-tag-blue">执行中</span>
+          </div>
+          <div class="live-item-meta" style="margin: 8px 0;">
+            <span class="live-item-sub">正在检查 src/auth/jwt.ts 安全规则...</span>
+            <span class="live-item-sub" style="margin-top: 4px;">耗时 12s · 4 次工具调用 · 2.1k tokens</span>
+          </div>
+          <button class="apple-btn apple-btn-danger" style="width:100%; justify-content:center; margin-top: 6px;">终止子代理</button>
+        </div>
+      `
+    },
+    attention: {
+      capsuleHtml: `
+        <div class="capsule-lead">
+          <div class="live-dot dot-amber"></div>
+          <span class="capsule-badge">等待你的回答</span>
+        </div>
+        <div class="capsule-divider"></div>
+        <span class="capsule-subtag">需确认</span>
+      `,
+      isAttention: true,
+      deckHtml: `
+        <div class="deck-header">
+          <div class="deck-header-title" style="color:var(--apple-amber)">⚠️ 需人工介入</div>
+          <span class="deck-header-hint">ESC 退出</span>
+        </div>
+        <div class="deck-widget" style="border-color: rgba(255,149,0,0.3)">
+          <div class="widget-head">
+            <span class="widget-title" style="color:var(--apple-amber)">模型发起确认提问</span>
+            <span class="widget-status-tag status-tag-amber">阻塞中</span>
+          </div>
+          <p style="font-size:12.5px; margin: 8px 0; line-height: 1.5;">
+            “检测到生产环境配置文件中包含未加密的密钥，是否需要替换为环境变量注入？”
+          </p>
+          <div class="apple-btn-group" style="margin-top: 10px;">
+            <button class="apple-btn" style="background:var(--apple-amber-bg); color:var(--apple-amber); flex:1; justify-content:center;">立即查看并回答</button>
+          </div>
+        </div>
+      `
+    },
+    quiet: {
+      capsuleHtml: `
+        <div style="display:flex; align-items:center; gap:8px;">
+          <div style="width:20px; height:20px; border-radius:50%; background:var(--apple-green-bg); color:var(--apple-green); display:grid; place-items:center;">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6"><polyline points="20 6 9 17 4 12"/></svg>
+          </div>
+          <div style="display:flex; align-items:baseline; gap:5px;">
+            <span style="font-size:12px; font-weight:700; color:var(--text-primary); font-family:var(--mono);">5/5</span>
+            <span style="font-size:11px; font-weight:500; color:var(--text-secondary);">已完成</span>
+          </div>
+          <span style="width:1px; height:12px; background:var(--border-glass);"></span>
+          <span style="font-size:11px; font-weight:500; color:var(--text-secondary);">2 计划</span>
+          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" style="color:var(--text-tertiary); margin-left:1px;"><polyline points="6 9 12 15 18 9"/></svg>
+        </div>
+      `,
+      isAttention: false,
+      deckHtml: `
+        <div class="deck-header">
+          <div class="deck-header-title">会话已就绪</div>
+          <span class="deck-header-hint">ESC 退出</span>
+        </div>
+        <div class="deck-widget">
+          <div class="widget-head">
+            <span class="widget-title">会话资产</span>
+          </div>
+          <div class="asset-disclosure">
+            <span>📜 查看迁移计划 (#01)</span>
+            <span class="asset-count">已归档</span>
+          </div>
+          <div class="asset-disclosure" style="margin-top:6px;">
+            <span>🔖 查看书签位置</span>
+            <span class="asset-count">第 14 轮</span>
+          </div>
+        </div>
+      `
+    }
+  };
+
+  let currentScenario = 'heavy';
+  let isDeckOpen = false;
+
+  function render() {
+    const data = SCENARIOS[currentScenario];
+    const cap = document.getElementById('capsuleElement');
+    const deck = document.getElementById('deckElement');
+
+    cap.innerHTML = data.capsuleHtml;
+    deck.innerHTML = data.deckHtml;
+
+    if (data.isAttention) {
+      cap.classList.add('capsule-attention');
+    } else {
+      cap.classList.remove('capsule-attention');
+    }
+  }
+
+  function switchScenario(key) {
+    currentScenario = key;
+    document.querySelectorAll('.scenario-btn').forEach(b => b.classList.remove('active'));
+    event.target.classList.add('active');
+    render();
+  }
+
+  function toggleDeck() {
+    isDeckOpen = !isDeckOpen;
+    const deck = document.getElementById('deckElement');
+    if (isDeckOpen) {
+      deck.classList.add('open');
+    } else {
+      deck.classList.remove('open');
+    }
+  }
+
+  // 点击外部关闭
+  document.addEventListener('pointerdown', (e) => {
+    const cap = document.getElementById('capsuleElement');
+    const deck = document.getElementById('deckElement');
+    if (isDeckOpen && !cap.contains(e.target) && !deck.contains(e.target)) {
+      isDeckOpen = false;
+      deck.classList.remove('open');
+    }
+  });
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && isDeckOpen) {
+      isDeckOpen = false;
+      document.getElementById('deckElement').classList.remove('open');
+    }
+  });
+
+  function toggleTheme() {
+    const html = document.documentElement;
+    const isDark = html.getAttribute('data-theme') === 'dark';
+    html.setAttribute('data-theme', isDark ? 'light' : 'dark');
+    document.getElementById('themeLabel').innerText = isDark ? '浅色模式' : '深色模式';
+  }
+
+  // 初始渲染
+  render();
+</script>
+</body>
+</html>
