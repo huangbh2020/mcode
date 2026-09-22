@@ -241,6 +241,16 @@ export const en = {
   "ide.git.opLog": "Operations ({n})",
   "ide.git.clearLog": "Clear log",
 
+  /* ── git diff stage ── */
+  "ide.git.noDiffSelected": "No diff selected",
+  "ide.git.noDiffSelectedHint": "Click any changed or staged file in the repository list on the right to preview diff here",
+  "ide.git.splitView": "Side-by-side",
+  "ide.git.unifiedView": "Unified",
+  "ide.git.closeDiff": "Close diff preview",
+  "ide.git.stageFile": "Stage changes",
+  "ide.git.unstageFile": "Unstage changes",
+  "ide.git.openInMainEditor": "Open in main editor",
+
   /* ── git history ── */
   "ide.git.loadHistoryFailed": "Failed to load commit history",
   "ide.git.loadCommitFailed": "Can't load this commit",

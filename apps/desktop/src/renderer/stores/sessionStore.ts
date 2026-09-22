@@ -639,6 +639,14 @@ export interface GitDiffDialogTab {
   staged?: boolean;
 }
 
+export type SelectedGitDiffTarget = {
+  repoPath: string;
+  repoName: string;
+  filePath: string;
+  staged: boolean;
+  status: string;
+};
+
 /** Composer working-environment choice (the chip above the textarea). The
  *  two worktree forms differ ONLY in what materialization creates — a
  *  detached checkout ("wt-detached", experimental verification) or a
@@ -1043,6 +1051,7 @@ export interface SessionState {
    *  counter returns to zero. A counter (not a boolean) composes correctly
    *  when multiple overlays are open at once. NOT persisted. */
   browserViewSuppressed: number;
+
   /* ── Draggable pane sizes ──
    *  Persisted as one JSON blob (UI_PANE_WIDTHS_SETTING_KEY) and re-clamped
    *  on hydrate. Updated live during drag (synchronous set); the DB write is
@@ -1060,6 +1069,12 @@ export interface SessionState {
   isRightPreviewExpanded: boolean;
   /** File preview column share (%) in FilesPanel dual-column mode. */
   fileTreeSplitPct: number;
+  /** Diff preview column share (%) in GitPanel dual-column mode. */
+  gitDiffSplitPct: number;
+  /** Currently selected file for diff preview in GitPanel. */
+  selectedGitDiffFile: SelectedGitDiffTarget | null;
+  /** Monotonic counter bumped whenever git status changes to notify listeners. */
+  gitStatusNonce: number;
   /** Bottom terminal bar height in px (when expanded). */
   bottomTerminalHeight: number;
 
@@ -1784,12 +1799,17 @@ export interface SessionState {
   adjustEditorWidthPct: (deltaPx: number) => void;
   /** Apply an incremental delta (in percentage points) to the file-preview split share. */
   adjustFileTreeSplitPct: (deltaPct: number) => void;
+  /** Apply an incremental delta (in percentage points) to the git-diff split share. */
+  adjustGitDiffSplitPct: (deltaPct: number) => void;
   /** Reset a pane width to its default (double-click on the divider). */
   resetLeftWidthPct: () => void;
   resetRightWidth: () => void;
   resetBottomTerminalHeight: () => void;
   resetEditorWidthPct: () => void;
   resetFileTreeSplitPct: () => void;
+  resetGitDiffSplitPct: () => void;
+  setSelectedGitDiffFile: (target: SelectedGitDiffTarget | null) => void;
+  bumpGitStatusNonce: () => void;
 
   /** Update the center-pane display mode. Persists to the `settings`
    *  table so the choice survives restart. */
@@ -2681,6 +2701,14 @@ export const FILE_TREE_SPLIT_PCT_DEFAULT = (700 / 950) * 100;
 export function clampFileTreeSplitPct(pct: number): number {
   if (!Number.isFinite(pct)) return FILE_TREE_SPLIT_PCT_DEFAULT;
   return Math.min(FILE_TREE_SPLIT_PCT_MAX, Math.max(FILE_TREE_SPLIT_PCT_MIN, pct));
+}
+
+export const GIT_DIFF_SPLIT_PCT_MIN = 20;
+export const GIT_DIFF_SPLIT_PCT_MAX = 80;
+export const GIT_DIFF_SPLIT_PCT_DEFAULT = 60;
+export function clampGitDiffSplitPct(pct: number): number {
+  if (!Number.isFinite(pct)) return GIT_DIFF_SPLIT_PCT_DEFAULT;
+  return Math.min(GIT_DIFF_SPLIT_PCT_MAX, Math.max(GIT_DIFF_SPLIT_PCT_MIN, pct));
 }
 
 
@@ -4725,6 +4753,7 @@ function schedulePaneWidthPersist(get: () => SessionState): void {
           editor: s.editorWidthPct,
           previewRight: s.previewRightWidth,
           fileTreeSplitPct: s.fileTreeSplitPct,
+          gitDiffSplitPct: s.gitDiffSplitPct,
         }),
 
       });
@@ -4907,6 +4936,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   previewRightWidth: 950,
   isRightPreviewExpanded: false,
   fileTreeSplitPct: FILE_TREE_SPLIT_PCT_DEFAULT,
+  gitDiffSplitPct: GIT_DIFF_SPLIT_PCT_DEFAULT,
+  selectedGitDiffFile: null,
+  gitStatusNonce: 0,
   bottomTerminalHeight: 280,
   editorWidthPct: 50,
 
@@ -5608,6 +5640,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           editor: number;
           previewRight: number;
           fileTreeSplitPct: number;
+          gitDiffSplitPct: number;
         }>;
 
         const patch: Partial<SessionState> = {};
@@ -5638,6 +5671,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           }
           if (Number.isFinite(parsed.fileTreeSplitPct)) {
             patch.fileTreeSplitPct = clampFileTreeSplitPct(parsed.fileTreeSplitPct!);
+          }
+          if (Number.isFinite(parsed.gitDiffSplitPct)) {
+            patch.gitDiffSplitPct = clampGitDiffSplitPct(parsed.gitDiffSplitPct!);
           }
           if (Object.keys(patch).length > 0) set(patch);
 
@@ -9294,6 +9330,21 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   resetFileTreeSplitPct: () => {
     set({ fileTreeSplitPct: FILE_TREE_SPLIT_PCT_DEFAULT });
     schedulePaneWidthPersist(get);
+  },
+  adjustGitDiffSplitPct: (deltaPct: number) => {
+    const next = clampGitDiffSplitPct(get().gitDiffSplitPct + deltaPct);
+    set({ gitDiffSplitPct: next });
+    schedulePaneWidthPersist(get);
+  },
+  resetGitDiffSplitPct: () => {
+    set({ gitDiffSplitPct: GIT_DIFF_SPLIT_PCT_DEFAULT });
+    schedulePaneWidthPersist(get);
+  },
+  setSelectedGitDiffFile: (target) => {
+    set({ selectedGitDiffFile: target });
+  },
+  bumpGitStatusNonce: () => {
+    set((s) => ({ gitStatusNonce: s.gitStatusNonce + 1 }));
   },
 
   adjustWidePanelPct: (deltaPx) => {

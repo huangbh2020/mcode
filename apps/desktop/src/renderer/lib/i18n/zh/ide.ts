@@ -243,6 +243,16 @@ export const zh = {
   "ide.git.opLog": "操作日志 ({n})",
   "ide.git.clearLog": "清空日志",
 
+  /* ── git diff stage ── */
+  "ide.git.noDiffSelected": "未选择差异文件",
+  "ide.git.noDiffSelectedHint": "在右侧仓库列表中点击任意已更改或已暂存的文件，即可在此查看实时对比",
+  "ide.git.splitView": "并排对比",
+  "ide.git.unifiedView": "单栏合并",
+  "ide.git.closeDiff": "关闭差异预览",
+  "ide.git.stageFile": "暂存更改",
+  "ide.git.unstageFile": "取消暂存",
+  "ide.git.openInMainEditor": "在主编辑器中打开",
+
   /* ── git history ── */
   "ide.git.loadHistoryFailed": "加载提交历史失败",
   "ide.git.loadCommitFailed": "无法加载该提交",
