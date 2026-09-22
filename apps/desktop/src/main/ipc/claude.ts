@@ -6,6 +6,7 @@ import {
   SendTurnSchema,
   InterruptSchema,
   StopTaskSchema,
+  StopServiceSchema,
   ApproveSchema,
   RespondQuestionSchema,
   RespondPlanApprovalSchema,
@@ -28,6 +29,7 @@ import type {
 import type { UserInputAnswers } from "@contracts/provider";
 import { SessionRepo, ProjectRepo, MessageRepo, SettingRepo } from "@main/store/repositories.js";
 import { runtimeManager } from "@main/claude/RuntimeManager.js";
+import { serviceScanner } from "@main/lib/serviceScanner.js";
 import { providerRegistry } from "@main/providers/registry.js";
 import { updateTitleBarOverlay } from "@main/window.js";
 import { log } from "@main/lib/logger.js";
@@ -188,6 +190,16 @@ export function registerClaudeHandlers(ipcMain: IpcMain): void {
     if (!stopped) {
       throw new Error("没有正在运行的回合可承载该停止请求(no live turn for this session)");
     }
+  });
+
+  // ── Kill the process tree behind ONE discovered agent-started service
+  //    (listening socket under the session's CLI subtree — see the service
+  //    scanner). No live turn required: the scanner tracks the socket, and
+  //    orphans can outlive the CLI anyway. The roster refresh rides the
+  //    scanner's immediate post-kill re-scan. ──
+  ipcMain.handle(IPC.CLAUDE_STOP_SERVICE, async (_evt, raw) => {
+    const input = StopServiceSchema.parse(raw);
+    await serviceScanner.stopService(input.sessionId, input.pid, input.port);
   });
 
   ipcMain.handle(IPC.CLAUDE_APPROVE, async (_evt, raw) => {

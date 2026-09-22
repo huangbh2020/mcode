@@ -115,6 +115,7 @@ export const zh = {
   "chatStream.activity.cluster.aria": "活动",
   "chatStream.activity.cluster.running": "{n} 个子代理运行中",
   "chatStream.activity.cluster.commands": "{n} 个命令运行中",
+  "chatStream.activity.cluster.services": "{n} 个服务运行中",
   "chatStream.activity.cluster.failed": "{n} 个子代理失败",
   "chatStream.activity.cluster.waiting": "等待你的回答",
   "chatStream.activity.cluster.tasks": "任务 {done}/{total}",
@@ -125,6 +126,7 @@ export const zh = {
   "chatStream.activity.node.tasks": "任务",
   "chatStream.activity.node.subagents": "子代理",
   "chatStream.activity.node.commands": "运行命令",
+  "chatStream.activity.node.services": "服务",
   "chatStream.activity.node.plans": "计划",
   "chatStream.activity.node.bookmarks": "书签",
   // 分组标题与筛选 chip
@@ -186,6 +188,18 @@ export const zh = {
   "chatStream.bashTask.subIdle": "共 {n} 条 · 全部已结束",
   "chatStream.bashTask.unitCommands": "条",
   "chatStream.bashTask.footer": "模型通过 Bash 工具启动的命令（服务、脚本等）；关闭应用时会一并结束",
+
+  // ── Agent-started services（活动区「服务」节点，端口扫描发现）──
+  "chatStream.service.statusRunning": "运行中",
+  "chatStream.service.stop": "停止",
+  "chatStream.service.stopTitle": "停止端口 {port} 上的服务进程（连同其子进程）",
+  "chatStream.service.stopFailed": "停止服务失败",
+  "chatStream.service.open": "打开",
+  "chatStream.service.openTitle": "在应用内浏览器打开 http://localhost:{port}",
+  "chatStream.service.subRunning": "{n} 个服务在监听",
+  "chatStream.service.unitServices": "个",
+  "chatStream.service.unitPorts": "端口",
+  "chatStream.service.footer": "模型启动的、正在监听端口的服务；停止会连同其子进程一并结束",
 
   // ── Message bookmarks (selection toolbar / capsule / timeline) ──
   "chatStream.bookmark.add": "添加书签",

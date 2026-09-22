@@ -15,7 +15,7 @@
  * own quit path anyway), but far too blunt for per-session teardown.
  */
 import { execFile } from "node:child_process";
-import { log } from "./logger.js";
+import { log } from "@main/lib/logger.js";
 
 function execFileText(file: string, args: string[], timeoutMs: number): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -146,6 +146,58 @@ export async function killDescendants(rootPid: number, graceMs = 400): Promise<K
     return { terminated };
   } catch (err) {
     log.warn(`procTree: descendant reap failed: ${err instanceof Error ? err.message : String(err)}`);
+    return { terminated };
+  }
+}
+
+/**
+ * Terminate a process AND every descendant of it (the root itself is killed
+ * too — unlike {@link killDescendants}, which spares its root for the
+ * app-quit path). Used by the service scanner's stop control: the target is
+ * a dev server the model started, and its whole subtree (wrapper shells,
+ * workers, esbuild/vite children) belongs to the service. Never rejects —
+ * the caller treats a missed pid as "already gone", which the next scan
+ * confirms.
+ */
+export async function killProcessTree(rootPid: number, graceMs = 400): Promise<KillTreeResult> {
+  const terminated: number[] = [];
+  try {
+    if (process.platform === "win32") {
+      // One taskkill covers root + subtree (/T walks children itself).
+      try {
+        await execFileText("taskkill", ["/PID", String(rootPid), "/T", "/F"], 10_000);
+        terminated.push(rootPid);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        if (!/exit code 128|not found|找不到|no such/i.test(msg)) {
+          log.warn(`procTree: taskkill tree ${rootPid} failed: ${msg}`);
+        }
+      }
+      return { terminated };
+    }
+
+    const pids = [...(await descendantsPosix(rootPid)), rootPid];
+    log.info(`procTree: SIGTERM process tree of pid ${rootPid} (${pids.length} process(es))`);
+    for (const pid of pids) {
+      if (signal(pid, "SIGTERM")) terminated.push(pid);
+    }
+    if (graceMs > 0) {
+      await new Promise((r) => setTimeout(r, graceMs));
+      let killed = 0;
+      for (const pid of terminated) {
+        try {
+          process.kill(pid, 0);
+          process.kill(pid, "SIGKILL");
+          killed += 1;
+        } catch {
+          /* already exited */
+        }
+      }
+      if (killed > 0) log.info(`procTree: SIGKILLed ${killed} lingering process(es) in tree ${rootPid}`);
+    }
+    return { terminated };
+  } catch (err) {
+    log.warn(`procTree: tree reap failed: ${err instanceof Error ? err.message : String(err)}`);
     return { terminated };
   }
 }

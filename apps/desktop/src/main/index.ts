@@ -16,6 +16,7 @@ import { initAutoArchiver } from "@main/session/AutoArchiver.js";
 import { notificationManager } from "@main/notifications/NotificationManager.js";
 import { orchestrator } from "@main/orchestrator/OrchestratorService.js";
 import { initAutomationScheduler, disposeAutomationScheduler } from "@main/automation/AutomationScheduler.js";
+import { initServiceScanner, disposeServiceScanner } from "@main/lib/serviceScanner.js";
 import { is } from "@main/utils.js";
 import { preloadClaudeSdk } from "@main/providers/claude-sdk/ClaudeAgentSdkProvider.js";
 import { logStartup } from "@main/lib/startupTimer.js";
@@ -205,6 +206,12 @@ app.whenReady().then(async () => {
   // same DB-gated pattern as the orchestrator above.
   initAutomationScheduler();
 
+  // Start the agent-service scanner (ground-truth port scan for services the
+  // model started — dev servers etc.). Its 5s tick self-gates: it only runs
+  // platform snapshots while a claude CLI process is alive, a turn is running
+  // or a tracked service still listens, so idle cost is zero.
+  initServiceScanner();
+
   // Start the mobile companion HTTP server (LAN-facing). Fire-and-forget: it
   // awaits DB readiness internally to read its enabled/port settings, then
   // binds 0.0.0.0:<port>. If disabled (mobile.enabled=0) it resolves to an
@@ -288,6 +295,7 @@ app.on("before-quit", (event) => {
   lspManager.disposeAll();
   orchestrator.disposeAll();
   disposeAutomationScheduler();
+  disposeServiceScanner();
   BrowserManager.disposeAll();
   relayManager.disposeAll();
   stopMobileServer();

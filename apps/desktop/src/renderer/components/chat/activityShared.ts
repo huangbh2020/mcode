@@ -9,11 +9,11 @@
  * views over a shared model.
  */
 import { useCallback, useState } from "react";
-import type { SubagentSnapshot, BashTaskSnapshot } from "@contracts/runtime";
+import type { SubagentSnapshot, BashTaskSnapshot, ServiceSnapshot } from "@contracts/runtime";
 import type { Block, TodoItem } from "@renderer/stores/sessionStore.js";
 import type { SessionBookmark } from "@contracts/session";
 import type { MessageId } from "@renderer/lib/i18n/index.js";
-import { IconBookmark, IconClipboard, IconListDetails, IconTerminal2, PiRobot } from "@renderer/lib/icons.js";
+import { IconBookmark, IconClipboard, IconListDetails, IconServer, IconTerminal2, PiRobot } from "@renderer/lib/icons.js";
 import type { ComponentType } from "react";
 
 /** A `kind: "plan"` block - the frozen per-turn plan in the message stream. */
@@ -25,18 +25,22 @@ export type Translate = (key: MessageId, params?: Record<string, string | number
 
 /* ── Rail geometry ──────────────────────────────────────────────────── */
 
-/** The five node kinds, in the rail's top-to-bottom order. Tasks lead
- *  (progress is what people glance at); bookmarks sit last because they are
- *  an archive rather than live state. Nodes whose source is empty are omitted
+/** The node kinds, in the rail's top-to-bottom order. Tasks lead
+ *  (progress is what people glance at); bookmarks sit last because they are an
+ *  archive rather than live state. Nodes whose source is empty are omitted
  *  entirely, so the rail only ever shows what the session actually has.
  *  `commands` are the bash commands the agent started and the CLI tracks as
  *  tasks (dev servers, long scripts) — live processes the user may need to
- *  stop, hence they sit right beside the subagents. */
-export type ActivityNodeKey = "tasks" | "subagents" | "commands" | "plans" | "bookmarks";
+ *  stop, hence they sit right beside the subagents. `services` are the
+ *  listening sockets the host's port scan discovered under the session's CLI
+ *  subtree — the ground-truth companion of the commands roster (it sees
+ *  nohup'd orphans the CLI ledger misses, and knows the port). */
+export type ActivityNodeKey = "tasks" | "subagents" | "commands" | "services" | "plans" | "bookmarks";
 export const RAIL_NODE_ORDER: readonly ActivityNodeKey[] = [
   "tasks",
   "subagents",
   "commands",
+  "services",
   "plans",
   "bookmarks",
 ];
@@ -70,6 +74,11 @@ export const NODE_META: Record<
     labelKey: "chatStream.activity.node.commands",
     icoCls: "bg-accent/15 text-accent-strong",
   },
+  services: {
+    ico: IconServer,
+    labelKey: "chatStream.activity.node.services",
+    icoCls: "bg-success/15 text-success",
+  },
   plans: {
     ico: IconClipboard,
     labelKey: "chatStream.activity.node.plans",
@@ -85,19 +94,23 @@ export const NODE_META: Record<
 
 
 /** Which kind the cluster's core opens: whatever is most urgent/perishable.
- *  A RUNNING command outranks everything — it is a live process consuming
- *  resources that only the user can stop; then running subagents (they
- *  change second to second), then the task board, then plans, then
- *  bookmarks. Same rule for the corner cluster's core and for the sheet's
- *  initial tab. A settled-only command roster (everything completed/failed)
- *  does NOT outrank — it's history, not live state. */
+ *  A RUNNING service outranks everything — a listening socket is a live
+ *  process the user may need to reach or stop, and it is the only roster that
+ *  is pure live state (entries never settle; they just disappear); then a
+ *  RUNNING command (a live process only the user can stop), then running
+ *  subagents (they change second to second), then the task board, then plans,
+ *  then bookmarks. Same rule for the corner cluster's core and for the
+ *  sheet's initial tab. A settled-only command roster (everything
+ *  completed/failed) does NOT outrank — it's history, not live state. */
 export function primaryKind(
   subagents: readonly SubagentSnapshot[],
   todos: readonly TodoItem[],
   planBlocks: readonly PlanBlock[],
   bookmarks: readonly SessionBookmark[],
   bashTasks: readonly BashTaskSnapshot[] = [],
+  services: readonly ServiceSnapshot[] = [],
 ): ActivityNodeKey {
+  if (services.length > 0) return "services";
   if (bashTasks.some((c) => c.status === "running")) return "commands";
   if (subagents.length > 0) return "subagents";
   if (todos.length > 0) return "tasks";
@@ -284,6 +297,7 @@ export function useActivityTabs(): {
     tasks: "all",
     subagents: "all",
     commands: "all",
+    services: "all",
     plans: "all",
     bookmarks: "all",
   }));

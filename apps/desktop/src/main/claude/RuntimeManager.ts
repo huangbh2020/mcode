@@ -373,6 +373,18 @@ class RuntimeManager {
     return ids;
   }
 
+  /** Reverse lookup for the service scanner: the GUI session id owning the
+   *  given provider (claude CLI) session id. The scanner parses
+   *  `--resume=<cliSid>` off the CLI process's command line and needs the
+   *  GUI side of that mapping; `providerSessionId` is kept current by
+   *  onProviderSessionId, so this always reflects the newest CLI session. */
+  findSessionIdByProviderId(providerSessionId: string): string | null {
+    for (const [id, rt] of this.sessions) {
+      if (rt.providerSessionId === providerSessionId) return id;
+    }
+    return null;
+  }
+
   /** Append the deferred per-turn usage-history record (stashed by the
    *  turn.done handler in `pendingTurnEnd`) using the latest context
    *  snapshot. No-op when nothing is pending; skips silently when no

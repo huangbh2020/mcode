@@ -18,7 +18,7 @@
  * bottom nav).
  */
 import { createPortal } from "react-dom";
-import type { SubagentSnapshot, BashTaskSnapshot } from "@contracts/runtime";
+import type { SubagentSnapshot, BashTaskSnapshot, ServiceSnapshot } from "@contracts/runtime";
 import type { SessionBookmark } from "@contracts/session";
 import type { TodoItem } from "@renderer/stores/sessionStore.js";
 import { useI18n } from "@renderer/lib/i18n/index.js";
@@ -40,6 +40,8 @@ export function ActivitySheet({
   onPickPlan,
   onRemoveBookmark,
   onStopBashTask,
+  services,
+  onStopService,
 }: {
   node: ActivityNodeKey;
   /** Switch kind — the node strip inside the console calls this. */
@@ -54,6 +56,11 @@ export function ActivitySheet({
    *  mobile RPC channel as interrupt. */
   bashTasks?: BashTaskSnapshot[];
   onStopBashTask?: (task: BashTaskSnapshot) => void;
+  /** Discovered agent-started services (the「服务」node); stop rides the same
+   *  mobile RPC channel as stopTask. No "open in browser" here — the phone
+   *  shell has no in-app browser. */
+  services?: ServiceSnapshot[];
+  onStopService?: (service: ServiceSnapshot) => void;
   isBookmarkStale?: (b: SessionBookmark) => boolean;
   tabs: ActivityTabs;
   onTabChange: (node: ActivityNodeKey, tab: string) => void;
@@ -97,6 +104,8 @@ export function ActivitySheet({
             bookmarks={bookmarks ?? []}
             bashTasks={bashTasks}
             onStopBashTask={onStopBashTask}
+            services={services}
+            onStopService={onStopService}
             isBookmarkStale={isBookmarkStale}
             tabs={tabs}
             onTabChange={onTabChange}

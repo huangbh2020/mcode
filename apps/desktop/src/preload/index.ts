@@ -20,6 +20,8 @@ const api = {
       ipcRenderer.invoke(IPC.CLAUDE_INTERRUPT, input)) as RpcMap["claude.interrupt"],
     stopTask: ((input) =>
       ipcRenderer.invoke(IPC.CLAUDE_STOP_TASK, input)) as RpcMap["claude.stopTask"],
+    stopService: ((input) =>
+      ipcRenderer.invoke(IPC.CLAUDE_STOP_SERVICE, input)) as RpcMap["claude.stopService"],
     approve: ((input) =>
       ipcRenderer.invoke(IPC.CLAUDE_APPROVE, input)) as RpcMap["claude.approve"],
     respondQuestion: ((input) =>

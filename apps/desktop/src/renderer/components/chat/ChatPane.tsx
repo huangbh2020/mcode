@@ -27,7 +27,7 @@ import {
 } from "@renderer/lib/icons.js";
 import { useCursorAnchor } from "@renderer/hooks/useCursorAnchor.js";
 import { isElectron } from "@renderer/lib/platform.js";
-import { useSessionStore, resolveTurnModel, EMPTY_MESSAGES, EMPTY_TODOS, EMPTY_SUBAGENTS, EMPTY_CHAT_QUEUE, EMPTY_ELEMENT_QUEUE, EMPTY_PROMPT_QUEUE, EMPTY_BOOKMARKS, EMPTY_USAGE, EMPTY_BASH_TASKS, type Block, type ChatMessage, type TodoItem, type TurnMeta, type QueuedPrompt } from "@renderer/stores/sessionStore.js";
+import { useSessionStore, resolveTurnModel, EMPTY_MESSAGES, EMPTY_TODOS, EMPTY_SUBAGENTS, EMPTY_CHAT_QUEUE, EMPTY_ELEMENT_QUEUE, EMPTY_PROMPT_QUEUE, EMPTY_BOOKMARKS, EMPTY_USAGE, EMPTY_BASH_TASKS, EMPTY_SERVICES, type Block, type ChatMessage, type TodoItem, type TurnMeta, type QueuedPrompt } from "@renderer/stores/sessionStore.js";
 import { useToastStore } from "@renderer/stores/toastStore.js";
 import { api } from "@renderer/lib/api.js";
 import { findNormalizedTextRange, highlightRange } from "@renderer/lib/textFind.js";
@@ -1511,11 +1511,18 @@ function ChatPaneForSession({
     (s) => s.bashTasksBySession[sessionId] ?? EMPTY_BASH_TASKS,
   );
   const stopBashTask = useSessionStore((s) => s.stopBashTask);
+  // Services the agent started this session, discovered by the main-process
+  // port scan — the activity cluster's「服务」node, with open/stop controls.
+  const services = useSessionStore(
+    (s) => s.servicesBySession[sessionId] ?? EMPTY_SERVICES,
+  );
+  const stopService = useSessionStore((s) => s.stopService);
+  const openUrlInBrowser = useSessionStore((s) => s.openUrlInBrowser);
   // Whether this session has anything for the activity cluster to show. The
   // cluster owns the per-kind empty checks; ChatPane needs only this aggregate
   // so it can skip mounting it at all in a session with no activity.
   const hasActivity =
-    todos.length > 0 || subagents.length > 0 || planBlocks.length > 0 || bookmarks.length > 0 || bashTasks.length > 0;
+    todos.length > 0 || subagents.length > 0 || planBlocks.length > 0 || bookmarks.length > 0 || bashTasks.length > 0 || services.length > 0;
   const addBookmark = useSessionStore((s) => s.addBookmark);
   const removeBookmark = useSessionStore((s) => s.removeBookmark);
   const renameBookmark = useSessionStore((s) => s.renameBookmark);
@@ -3835,6 +3842,9 @@ function ChatPaneForSession({
           bookmarks={bookmarks}
           bashTasks={bashTasks}
           onStopBashTask={(task) => void stopBashTask(sessionId, task.taskId)}
+          services={services}
+          onStopService={(service) => void stopService(sessionId, service)}
+          onOpenService={(service) => openUrlInBrowser(`http://localhost:${service.port}`)}
           // The session's pending AskUserQuestion (declared above) is the
           // strongest "this needs you" signal the cluster can report.
           waiting={!!pendingQuestion}

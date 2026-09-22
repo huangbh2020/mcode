@@ -14,6 +14,7 @@ import type {
   SubagentSnapshot,
   SubagentTranscriptBlock,
   BashTaskSnapshot,
+  ServiceSnapshot,
   ContextSnapshot,
   TurnUsageRecord,
   SessionListEntry,
@@ -1161,6 +1162,13 @@ export interface SessionState {
    *  lists with per-task stop controls. NOT persisted: the CLI and every
    *  command it spawned die with the app, so a restart starts empty. */
   bashTasksBySession: Record<string, BashTaskSnapshot[]>;
+  /** Per-session roster of discovered agent-started services (REPLACE
+   *  semantics from `services.update` — the main-process service scanner's
+   *  ground-truth port scan: listening sockets under the session's CLI
+   *  subtree, nohup orphans included). The activity console's「服务」node
+   *  lists them with port/open/stop controls. NOT persisted — entries live
+   *  exactly as long as the socket does. */
+  servicesBySession: Record<string, ServiceSnapshot[]>;
   /** Per-session context-window snapshot (from `token-usage.updated` events).
    *  The adapter already did all the math (usedTokens / maxTokens / pct /
    *  warning), so the renderer only stores + renders. Keyed by sessionId so
@@ -1661,6 +1669,11 @@ export interface SessionState {
    *  arrives via the bash-tasks.update event stream; on failure surfaces a
    *  toast (e.g. the turn already finished, so nothing can stop the task). */
   stopBashTask: (sessionId: string, taskId: string) => Promise<void>;
+  /** Kill the process tree behind ONE discovered agent-started service —
+   *  backed by the service scanner's `killProcessTree`. The roster update
+   *  arrives via the scanner's immediate post-kill re-scan (services.update);
+   *  on failure surfaces a toast (e.g. the socket already closed). */
+  stopService: (sessionId: string, service: ServiceSnapshot) => Promise<void>;
   ingestEvent: (e: RuntimeEvent) => void;
   /** Update the window-focus flag. Called from useClaudeEvents on Electron
    *  `window:focusChanged` + `document.visibilitychange`. When the window
@@ -2437,6 +2450,8 @@ const EMPTY_SESSIONS: Session[] = [];
 export const EMPTY_SUBAGENTS: SubagentSnapshot[] = [];
 /** Stable empty bash-task roster (selector must return a stable array). */
 export const EMPTY_BASH_TASKS: BashTaskSnapshot[] = [];
+/** Stable empty service roster (selector must return a stable array). */
+export const EMPTY_SERVICES: ServiceSnapshot[] = [];
 /** Stable empty usage-history reference (selector must return a stable array). */
 export const EMPTY_USAGE: TurnUsageRecord[] = [];
 /** Stable empty bookmark-list reference (selector-stability rule). */
@@ -3013,6 +3028,8 @@ function dropSessionBuckets(s: SessionState, id: string) {
   delete subagentTranscriptsBySession[id];
   const bashTasksBySession = { ...s.bashTasksBySession };
   delete bashTasksBySession[id];
+  const servicesBySession = { ...s.servicesBySession };
+  delete servicesBySession[id];
   const pendingQuestionBySession = { ...s.pendingQuestionBySession };
   delete pendingQuestionBySession[id];
   const turnFilesBySession = { ...s.turnFilesBySession };
@@ -3067,6 +3084,7 @@ function dropSessionBuckets(s: SessionState, id: string) {
     subagentsBySession,
     subagentTranscriptsBySession,
     bashTasksBySession,
+    servicesBySession,
     pendingQuestionBySession,
     turnFilesBySession,
     bookmarksBySession,
@@ -4863,6 +4881,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   subagentsBySession: {},
   subagentTranscriptsBySession: {},
   bashTasksBySession: {},
+  servicesBySession: {},
   contextSnapshotBySession: {},
   usageHistoryBySession: {},
   pendingQuestionBySession: {},
@@ -7394,6 +7413,16 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     }
   },
 
+  stopService: async (sessionId, service) => {
+    try {
+      await api.claude.stopService({ sessionId, pid: service.pid, port: service.port });
+      // No optimistic roster update: the scanner re-scans right after the
+      // kill and its services.update REPLACE is the authoritative source.
+    } catch (err) {
+      pushToastLite("warning", translate(get().locale, "chatStream.service.stopFailed"), err instanceof Error ? err.message : String(err));
+    }
+  },
+
   ingestEvent: (e) => {
     const sid = e.sessionId;
 
@@ -8026,6 +8055,22 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           : e.tasks;
         if (s.bashTasksBySession[sid] === tasks) return {};
         return { bashTasksBySession: { ...s.bashTasksBySession, [sid]: tasks } };
+      });
+      return;
+    }
+    // services.update: REPLACE semantics — swap the full roster of the
+    // service scanner's ground-truth discoveries. The scanner re-emits an
+    // unchanged list every pass (self-heal for reloaded buckets), so the
+    // reducer dedupes by content signature to keep subscribers from
+    // re-rendering on every 5s heartbeat.
+    if (e.type === "services.update") {
+      set((s) => {
+        const cur = s.servicesBySession[sid];
+        if (cur && cur.length === e.services.length) {
+          const same = cur.every((c, i) => c.key === e.services[i]?.key && c.pid === e.services[i]?.pid);
+          if (same) return {};
+        }
+        return { servicesBySession: { ...s.servicesBySession, [sid]: e.services } };
       });
       return;
     }

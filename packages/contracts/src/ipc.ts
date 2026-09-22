@@ -1003,6 +1003,18 @@ export const StopTaskSchema = z.object({
 });
 export type StopTaskInput = z.infer<typeof StopTaskSchema>;
 
+/* Stop ONE discovered agent-started service (a listening TCP socket under the
+ * session's claude-CLI process subtree, tracked in the services roster) by
+ * killing the owning process tree. The pid/port come from ServiceSnapshot.
+ * Unlike stopTask this does NOT need a live turn — the scanner tracks the
+ * socket directly, and orphans outlive the CLI anyway. */
+export const StopServiceSchema = z.object({
+  sessionId: z.string(),
+  pid: z.number().int().positive(),
+  port: z.number().int().positive(),
+});
+export type StopServiceInput = z.infer<typeof StopServiceSchema>;
+
 export const ApproveSchema = z.object({
   sessionId: z.string(),
   requestId: z.string(),
@@ -4264,6 +4276,10 @@ export interface RpcMap {
    *  turn. Resolves once the stop_task control request was delivered; the
    *  roster update arrives via the bash-tasks.update event stream. */
   "claude.stopTask": (input: StopTaskInput) => Promise<void>;
+  /** Kill the process tree owning one discovered service (see
+   *  ServiceSnapshot). The services roster refreshes on the scanner's next
+   *  pass (it also runs an immediate post-kill re-scan). */
+  "claude.stopService": (input: StopServiceInput) => Promise<void>;
   "claude.approve": (input: ApproveInput) => Promise<void>;
   /** Submit the user's answers to a pending AskUserQuestion. */
   "claude.respondQuestion": (input: RespondQuestionInput) => Promise<void>;
@@ -4829,6 +4845,7 @@ export const IPC = {
   CLAUDE_SEND_TURN: "claude:sendTurn",
   CLAUDE_INTERRUPT: "claude:interrupt",
   CLAUDE_STOP_TASK: "claude:stopTask",
+  CLAUDE_STOP_SERVICE: "claude:stopService",
   CLAUDE_APPROVE: "claude:approve",
   CLAUDE_RESPOND_QUESTION: "claude:respondQuestion",
   CLAUDE_RESPOND_PLAN_APPROVAL: "claude:respondPlanApproval",

@@ -33,6 +33,7 @@ import type {
 } from "@contracts/runtime";
 import type { ProviderContext } from "@contracts/provider";
 import { FileSnapshot, FILE_MUTATING_TOOLS, getToolFilePath, normalizeToolFilePath } from "@main/lib/fileSnapshot.js";
+import { noteBashToolStart, noteBashToolEnd } from "@main/lib/serviceScanner.js";
 import type {
   SDKMessage,
   SDKSystemMessage,
@@ -398,6 +399,11 @@ interface AdapterState {
    *  mid-tool-flow when the stream closed — third-party gateways returning
    *  an empty final completion). */
   resultedToolUseIds: Set<string>;
+  /** Bash tool_use ids still awaiting their tool_result — the open windows
+   *  of the service scanner's bash-window attribution. Result-less ids are
+   *  dropped at flushFinal (the command died with the stream; nothing bound
+   *  in it is claimed). */
+  openBashToolUseIds: Set<string>;
   /** True once any assistant text block arrived this turn. A success-ending
    *  turn with no text at all is the other half of the empty-response
    *  failure mode the turn-incomplete check covers. */
@@ -536,6 +542,7 @@ export class SdkMessageAdapter {
       lastResultSubtype: null,
       toolUseNames: new Map(),
       resultedToolUseIds: new Set(),
+      openBashToolUseIds: new Set(),
       textEmitted: false,
       lastAssistantText: "",
       lastAssistantHadToolUse: false,
@@ -659,6 +666,16 @@ export class SdkMessageAdapter {
    * Async because freeze() now reads each file's post-turn on-disk content
    * to compute the +N -M tallies and carry the pre-turn `before` payload. */
   async flushFinal(finalReason?: TurnDoneEvent["reason"]): Promise<void> {
+    // Close any Bash attribution windows that never saw their tool_result
+    // (the stream died mid-command). The diff-at-close still claims sockets
+    // bound during the window; for aborted turns the CLI killed the tools,
+    // so the diff finds nothing new. Without this a stale window's baseline
+    // would leak into the next turn's first Bash call (fresh adapter, but
+    // the scanner's windows are per-session and outlive this instance).
+    if (this.state.openBashToolUseIds.size > 0) {
+      this.state.openBashToolUseIds.clear();
+      void noteBashToolEnd(this.sessionId).catch(() => {});
+    }
     // Freeze and emit the snapshot list regardless of whether result
     // arrived. After freeze(), the snapshot is "frozen" — late
     // tool_use events for this adapter instance (shouldn't happen,
@@ -1464,6 +1481,17 @@ export class SdkMessageAdapter {
         if (b.name === "EnterPlanMode" || b.name === "ExitPlanMode" || b.name === "AskUserQuestion") {
           this.state.interactionToolSeen = true;
         }
+        // Open the service scanner's attribution window for this Bash call.
+        // Any listening socket that appears before the tool_result is the
+        // model's service even when it detached from its shell (Start-Process
+        // / nohup leave the listener with a dead ppid — ancestry can't see
+        // it). The id is remembered so the matching tool_result closes the
+        // window; fire-and-forget, a slow/failed snapshot must never gate
+        // the stream.
+        if (b.name === "Bash") {
+          this.state.openBashToolUseIds.add(b.id);
+          void noteBashToolStart(this.sessionId).catch(() => {});
+        }
         // A tool_use block is renderable assistant content — once emitted, the
         // provider's transport-retry wrapper must not retry (would orphan it).
         this.state.contentStarted = true;
@@ -1706,6 +1734,11 @@ export class SdkMessageAdapter {
     for (const b of blocks) {
       if (b.type === "tool_result" && b.tool_use_id) {
         this.state.resultedToolUseIds.add(b.tool_use_id);
+        // Close the service scanner's attribution window if this result
+        // belongs to a Bash call — see the tool_use side for why.
+        if (this.state.openBashToolUseIds.delete(b.tool_use_id)) {
+          void noteBashToolEnd(this.sessionId).catch(() => {});
+        }
         // The Bash tool_result is the reliable completion signal for
         // FOREGROUND commands (the CLI doesn't reliably emit a closing
         // task_updated for them). Backgrounded commands return a

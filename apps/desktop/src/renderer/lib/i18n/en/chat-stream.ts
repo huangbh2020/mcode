@@ -112,6 +112,7 @@ export const en = {
   "chatStream.activity.cluster.aria": "Activity",
   "chatStream.activity.cluster.running": "{n} subagents running",
   "chatStream.activity.cluster.commands": "{n} commands running",
+  "chatStream.activity.cluster.services": "{n} services running",
   "chatStream.activity.cluster.failed": "{n} subagents failed",
   "chatStream.activity.cluster.waiting": "Waiting for your answer",
   "chatStream.activity.cluster.tasks": "Tasks {done}/{total}",
@@ -122,6 +123,7 @@ export const en = {
   "chatStream.activity.node.tasks": "Tasks",
   "chatStream.activity.node.subagents": "Subagents",
   "chatStream.activity.node.commands": "Commands",
+  "chatStream.activity.node.services": "Services",
   "chatStream.activity.node.plans": "Plans",
   "chatStream.activity.node.bookmarks": "Bookmarks",
   // Group headers and filter chips
@@ -183,6 +185,18 @@ export const en = {
   "chatStream.bashTask.subIdle": "{n} · all settled",
   "chatStream.bashTask.unitCommands": "total",
   "chatStream.bashTask.footer": "Commands the agent started via the Bash tool (services, scripts); they are killed when the app quits",
+
+  // ── Agent-started services (activity「Services」node, port-scan discovered) ──
+  "chatStream.service.statusRunning": "Running",
+  "chatStream.service.stop": "Stop",
+  "chatStream.service.stopTitle": "Stop the service listening on port {port} (its whole process tree)",
+  "chatStream.service.stopFailed": "Failed to stop service",
+  "chatStream.service.open": "Open",
+  "chatStream.service.openTitle": "Open http://localhost:{port} in the in-app browser",
+  "chatStream.service.subRunning": "{n} services listening",
+  "chatStream.service.unitServices": "total",
+  "chatStream.service.unitPorts": "ports",
+  "chatStream.service.footer": "Services the agent started that are listening on a port; stopping kills their whole process tree",
 
   // ── Message bookmarks (selection toolbar / capsule / timeline) ──
   "chatStream.bookmark.add": "Add bookmark",

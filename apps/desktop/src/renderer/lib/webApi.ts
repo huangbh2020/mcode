@@ -403,6 +403,7 @@ const claude: Api["claude"] = {
   sendTurn: (input) => rpc("claude:sendTurn", input),
   interrupt: (input) => rpc("claude:interrupt", input),
   stopTask: (input) => rpc("claude:stopTask", input),
+  stopService: (input) => rpc("claude:stopService", input),
   approve: (input) => rpc("claude:approve", input),
   respondQuestion: (input) => rpc("claude:respondQuestion", input),
   respondPlanApproval: (input) => rpc("claude:respondPlanApproval", input),

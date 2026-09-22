@@ -40,16 +40,18 @@ import {
   IconCheck,
   IconCircle,
   IconClipboard,
+  IconExternalLink,
   IconLayoutSidebarRightExpand,
   IconListDetails,
   IconLoader2,
   IconPencil,
   IconPlayerStop,
+  IconServer,
   IconTerminal2,
   IconX,
   PiRobot,
 } from "@renderer/lib/icons.js";
-import type { SubagentSnapshot, BashTaskSnapshot } from "@contracts/runtime";
+import type { SubagentSnapshot, BashTaskSnapshot, ServiceSnapshot } from "@contracts/runtime";
 import type { SessionBookmark } from "@contracts/session";
 import type { TodoItem } from "@renderer/stores/sessionStore.js";
 import {
@@ -590,6 +592,105 @@ function CommandsBody({
   );
 }
 
+/* ── Body: services (discovered listening sockets) ──────────────────── */
+
+function ServiceRow({
+  service,
+  now,
+  t,
+  onStop,
+  onOpen,
+}: {
+  service: ServiceSnapshot;
+  now: number;
+  t: Translate;
+  onStop?: (service: ServiceSnapshot) => void;
+  onOpen?: (service: ServiceSnapshot) => void;
+}) {
+  // Every roster entry IS a live listener (dead sockets leave the roster, not
+  // settle in it), so the status is always "running" — the pulse dot + ticker
+  // carry the liveness.
+  return (
+    <li className="group border-b border-edge/35 py-2 pl-3.5 pr-3 last:border-b-0">
+      <div className="flex items-center gap-1.5">
+        <span className="flex items-center gap-1 text-[10px] font-semibold text-success">
+          <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-success" />
+          <IconServer size={11} />
+          {t("chatStream.service.statusRunning")}
+        </span>
+        <span className="rounded bg-success/15 px-1.5 py-0.5 font-mono text-[9.5px] font-semibold tabular-nums text-success">
+          :{service.port}
+        </span>
+        <span className="ml-auto shrink-0 text-[9.5px] tabular-nums text-content-subtle">
+          {formatClock(service.startedAt)} → {t("chatStream.activity.now")}
+        </span>
+      </div>
+      <p
+        className="mt-1 truncate font-mono text-[11px] text-content"
+        title={service.commandLine ?? service.name}
+      >
+        {service.commandLine || service.name}
+      </p>
+      <div className="mt-1 flex items-center gap-1">
+        <span className="rounded bg-surface-muted px-1.5 py-0.5 text-[9px] font-medium tabular-nums text-content-subtle">
+          {formatDuration(now - service.startedAt)}
+        </span>
+        {onOpen && (
+          <button
+            type="button"
+            onClick={() => onOpen(service)}
+            title={t("chatStream.service.openTitle", { port: service.port })}
+            className="flex items-center gap-1 rounded-full border border-edge bg-surface-muted/60 px-2 py-0.5 text-[10px] font-semibold text-content-muted transition-colors hover:bg-surface-hover hover:text-content"
+          >
+            <IconExternalLink size={10} />
+            {t("chatStream.service.open")}
+          </button>
+        )}
+        {onStop && (
+          <button
+            type="button"
+            onClick={() => onStop(service)}
+            title={t("chatStream.service.stopTitle", { port: service.port })}
+            className="ml-auto flex items-center gap-1 rounded-full border border-danger/40 bg-danger/10 px-2 py-0.5 text-[10px] font-semibold text-danger transition-colors hover:bg-danger/20"
+          >
+            <IconPlayerStop size={10} />
+            {t("chatStream.service.stop")}
+          </button>
+        )}
+      </div>
+    </li>
+  );
+}
+
+function ServicesBody({
+  services,
+  now,
+  t,
+  onStop,
+  onOpen,
+}: {
+  services: ServiceSnapshot[];
+  now: number;
+  t: Translate;
+  onStop?: (service: ServiceSnapshot) => void;
+  onOpen?: (service: ServiceSnapshot) => void;
+}) {
+  if (services.length === 0) {
+    return <EmptyGroup t={t} />;
+  }
+  // Newest first — the most recently started server is the likeliest target.
+  return (
+    <div>
+      <GroupHead label={t("chatStream.activity.groupRunning")} n={services.length} />
+      <ul>
+        {[...services].reverse().map((s) => (
+          <ServiceRow key={s.key} service={s} now={now} t={t} onStop={onStop} onOpen={onOpen} />
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 /* ── Body: bookmarks ────────────────────────────────────────────────── */
 
 function BookmarkRow({
@@ -801,6 +902,10 @@ export interface ActivityConsoleProps {
   /** Bash commands the agent started (the「运行命令」node). Optional so
    *  older callers degrade to an empty roster. */
   bashTasks?: BashTaskSnapshot[];
+  /** Services the agent started, discovered by the host's port scan (the
+   *  「服务」node). Optional — callers without scanner wiring degrade to an
+   *  empty roster. */
+  services?: ServiceSnapshot[];
   isBookmarkStale?: (b: SessionBookmark) => boolean;
   /** Active filter tab per node + setter (owned by the rail so it survives
    *  open/close cycles). */
@@ -811,6 +916,10 @@ export interface ActivityConsoleProps {
   onPickSubagent?: (agent: SubagentSnapshot) => void;
   /** Stop ONE running agent command (SDK stop_task; desktop + mobile). */
   onStopBashTask?: (task: BashTaskSnapshot) => void;
+  /** Kill the process tree behind ONE discovered service (desktop + mobile). */
+  onStopService?: (service: ServiceSnapshot) => void;
+  /** Open a service's http://localhost:<port> in the in-app browser. */
+  onOpenService?: (service: ServiceSnapshot) => void;
   onPickBookmark?: (b: SessionBookmark) => void;
   onRemoveBookmark?: (b: SessionBookmark) => void;
   onRenameBookmark?: (b: SessionBookmark, title: string) => void;
@@ -830,6 +939,7 @@ export function ActivityConsole({
   planBlocks,
   bookmarks,
   bashTasks,
+  services,
   isBookmarkStale,
   tabs,
   onTabChange,
@@ -837,6 +947,8 @@ export function ActivityConsole({
   onPickPlan,
   onPickSubagent,
   onStopBashTask,
+  onStopService,
+  onOpenService,
   onPickBookmark,
   onRemoveBookmark,
   onRenameBookmark,
@@ -851,6 +963,7 @@ export function ActivityConsole({
   const stale = isBookmarkStale ?? (() => false);
   const tab = tabs[node] ?? "all";
   const commands = bashTasks ?? [];
+  const serviceList = services ?? [];
 
   const runningAgents = subagents.filter((a) => a.status === "running");
   const settledAgents = subagents.filter((a) => a.status !== "running");
@@ -980,6 +1093,22 @@ export function ActivityConsole({
       { key: "failed", label: t("chatStream.activity.groupFailed"), n: failed },
     ];
     footer = t("chatStream.bashTask.footer");
+  } else if (node === "services") {
+    subtitle = t("chatStream.service.subRunning", { n: serviceList.length });
+    stats = (
+      <>
+        <Stat value={serviceList.length} label={t("chatStream.service.unitServices")} />
+        <Sep />
+        <Stat
+          value={serviceList.map((s) => s.port).join(" ") || "—"}
+          label={t("chatStream.service.unitPorts")}
+        />
+        <Sep />
+        <Stat value={serviceList.length} label={t("chatStream.activity.labelRunning")} />
+      </>
+    );
+    filters = [{ key: "all", label: t("chatStream.activity.tabAll"), n: serviceList.length }];
+    footer = t("chatStream.service.footer");
   } else if (node === "plans") {
     subtitle = t("chatStream.activity.plansSubtitle", { n: planBlocks.length });
     stats = (
@@ -1037,6 +1166,8 @@ export function ActivityConsole({
       <TasksBody todos={todos} tab={tab} t={t} />
     ) : node === "commands" ? (
       <CommandsBody tasks={commands} tab={tab} now={now} t={t} onStop={onStopBashTask} />
+    ) : node === "services" ? (
+      <ServicesBody services={serviceList} now={now} t={t} onStop={onStopService} onOpen={onOpenService} />
     ) : node === "plans" ? (
       <PlansBody planBlocks={planBlocks} tab={tab} t={t} onPickPlan={onPickPlan} />
     ) : (
@@ -1063,7 +1194,7 @@ export function ActivityConsole({
           panel needs its own way to move between kinds. */}
       {nodeTabs && onPickNode && (
         <div className="flex shrink-0 gap-1 overflow-x-auto border-b border-edge/60 px-2 py-2">
-          {RAIL_NODE_ORDER.filter((k) => k === node || hasNodeData(k, subagents, todos, planBlocks, bookmarks, commands)).map((k) => {
+          {RAIL_NODE_ORDER.filter((k) => k === node || hasNodeData(k, subagents, todos, planBlocks, bookmarks, commands, serviceList)).map((k) => {
             const m = NODE_META[k];
             const K = m.ico;
             const active = k === node;
@@ -1162,10 +1293,12 @@ export function hasNodeData(
   planBlocks: PlanBlock[],
   bookmarks: SessionBookmark[],
   bashTasks: BashTaskSnapshot[] = [],
+  services: ServiceSnapshot[] = [],
 ): boolean {
   if (node === "subagents") return subagents.length > 0;
   if (node === "tasks") return todos.length > 0;
   if (node === "commands") return bashTasks.length > 0;
+  if (node === "services") return services.length > 0;
   if (node === "plans") return planBlocks.length > 0;
   return bookmarks.length > 0;
 }

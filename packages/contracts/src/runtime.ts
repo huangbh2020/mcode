@@ -551,6 +551,40 @@ export interface BashTasksEvent {
 }
 
 /**
+ * A TCP service the agent started, discovered by the host's ground-truth
+ * port scan (a LISTENING socket owned by a process inside the session's
+ * claude-CLI process subtree — see main/lib/serviceScanner.ts). Unlike the
+ * CLI's bash-task bookkeeping this survives every roster quirk (nohup'd
+ * orphans, cross-turn roster shrink, mis-marked completion races), because
+ * it observes the listening socket itself rather than the CLI's ledger.
+ */
+export interface ServiceSnapshot {
+  /** Stable id — `${pid}:${port}`. */
+  key: string;
+  /** Listening TCP port. */
+  port: number;
+  /** Owning process id — the kill target for `stopService`. */
+  pid: number;
+  /** Process name (node / python / …). */
+  name: string;
+  /** Truncated command line of the owning process, when available. */
+  commandLine?: string;
+  /** Wall clock of the scanner's first sighting (approximate start). */
+  startedAt: number;
+}
+
+/**
+ * Consolidated roster of the session's discovered services. REPLACE
+ * semantics — the host swaps its list for `services`. Process-lifetime data,
+ * never persisted: entries live exactly as long as the socket does.
+ */
+export interface ServicesEvent {
+  type: "services.update";
+  sessionId: string;
+  services: ServiceSnapshot[];
+}
+
+/**
  * Consolidated subagent roster update. Always carries the full current
  * roster — the host should replace, not merge. Empty array means "no
  * subagents active or recently completed".
@@ -794,6 +828,7 @@ export type RuntimeEvent =
   | SubagentUpdateEvent
   | SubagentTranscriptEvent
   | BashTasksEvent
+  | ServicesEvent
   | ContextUsageEvent
   | ErrorEvent
   | TurnDoneEvent
