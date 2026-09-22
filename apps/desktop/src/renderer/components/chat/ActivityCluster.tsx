@@ -187,13 +187,15 @@ export function ActivityCluster({
         aria-expanded={isElectron ? !!openKind : !!sheetNode}
         aria-label={t("chatStream.activity.cluster.aria")}
         className={cn(
-          "relative inline-flex h-[34px] cursor-pointer select-none items-center gap-2 rounded-full px-3 py-1",
-          "border backdrop-blur-2xl transition-all duration-300 ease-[cubic-bezier(0.34,1.3,0.64,1)]",
-          "shadow-[0_4px_16px_rgba(0,0,0,0.22),inset_0_1px_0_rgba(255,255,255,0.2)]",
+          "relative inline-flex h-[36px] cursor-pointer select-none items-center gap-2.5 rounded-full px-3.5 py-1",
+          "border backdrop-blur-2xl transition-all duration-200 ease-[cubic-bezier(0.34,1.3,0.64,1)]",
           "hover:scale-[1.02] active:scale-[0.98]",
           attn
             ? "border-warning/60 bg-warning/20 text-warning shadow-[0_0_16px_rgb(var(--warning)/0.35)]"
-            : "border-black/[0.08] bg-[#000000]/90 text-white dark:border-white/[0.14] dark:bg-[#000000]/95",
+            : cn(
+                "border-slate-300 bg-white text-slate-900 shadow-[0_4px_14px_rgba(0,0,0,0.08)] hover:border-slate-400 hover:shadow-[0_6px_20px_rgba(0,0,0,0.12)]",
+                "dark:border-white/[0.14] dark:bg-[#090a0f]/95 dark:text-white dark:shadow-[0_4px_16px_rgba(0,0,0,0.3)] dark:hover:border-white/25",
+              ),
         )}
       >
         {/* 1. Attention State */}
@@ -212,16 +214,16 @@ export function ActivityCluster({
           <div className="flex items-center gap-2">
             {serviceList.length > 0 ? (
               <div className="flex items-center gap-1.5">
-                <span className="dynamic-island-wave text-success">
+                <span className="dynamic-island-wave text-emerald-600 dark:text-emerald-400">
                   <span />
                   <span />
                   <span />
                 </span>
-                <span className="font-mono text-[11.5px] font-bold text-success">
+                <span className="font-mono text-[11.5px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded dark:border-emerald-500/30 dark:bg-emerald-500/20 dark:text-emerald-300">
                   :{serviceList[0]?.port ?? 3000}
                 </span>
                 {serviceList.length > 1 && (
-                  <span className="text-[11px] font-medium text-white/70">
+                  <span className="text-[11px] font-medium text-slate-500 dark:text-white/70">
                     +{serviceList.length - 1}
                   </span>
                 )}
@@ -229,7 +231,7 @@ export function ActivityCluster({
             ) : runningCommands.length > 0 ? (
               <div className="flex items-center gap-1.5">
                 <span className="apple-live-dot bg-accent" />
-                <span className="whitespace-nowrap text-[11.5px] font-bold text-white">
+                <span className="whitespace-nowrap text-[11.5px] font-bold text-slate-900 dark:text-white">
                   {t("chatStream.activity.deck.shortCommands", { n: runningCommands.length })}
                 </span>
               </div>
@@ -243,7 +245,7 @@ export function ActivityCluster({
             ) : (
               <div className="flex items-center gap-1.5">
                 <span className="apple-live-dot bg-sky-400" />
-                <span className="whitespace-nowrap text-[11.5px] font-bold text-sky-400">
+                <span className="whitespace-nowrap text-[11.5px] font-bold text-sky-500 dark:text-sky-400">
                   {t("chatStream.activity.cluster.schedRunning")}
                 </span>
               </div>
@@ -252,8 +254,8 @@ export function ActivityCluster({
             {/* Additional mini badge if multiple distinct live types */}
             {serviceList.length > 0 && runningCommands.length > 0 && (
               <>
-                <span aria-hidden className="h-2.5 w-px bg-white/20" />
-                <span className="text-[11px] font-semibold text-white/80">
+                <span aria-hidden className="h-2.5 w-px bg-slate-300 dark:bg-white/20" />
+                <span className="text-[11px] font-semibold text-slate-700 dark:text-white/80">
                   {t("chatStream.activity.deck.shortCommands", { n: runningCommands.length })}
                 </span>
               </>
@@ -262,28 +264,28 @@ export function ActivityCluster({
             <IconChevronDown
               size={11}
               strokeWidth={2.4}
-              className="text-white/60 transition-transform duration-200 group-hover:translate-y-0.5 group-hover:text-white"
+              className="text-slate-400 group-hover:text-slate-800 dark:text-white/60 dark:group-hover:text-white transition-transform duration-200 group-hover:translate-y-0.5"
             />
           </div>
         ) : !isAllSettled ? (
           /* 3. Single Merged Island with Live tasks */
           <div className="flex items-center gap-2">
             <span className="apple-live-dot bg-accent" />
-            <span className="text-[12px] font-bold text-white">
+            <span className="text-[12px] font-bold text-slate-900 dark:text-white">
               {todos.length > 0 ? `${done}/${todos.length}` : t("chatStream.activity.node.tasks")}
             </span>
             <IconChevronDown
               size={11}
               strokeWidth={2.4}
-              className="text-white/60 transition-transform duration-200 group-hover:translate-y-0.5 group-hover:text-white"
+              className="text-slate-400 group-hover:text-slate-800 dark:text-white/60 dark:group-hover:text-white transition-transform duration-200 group-hover:translate-y-0.5"
             />
           </div>
         ) : (
           /* 4. Ambient / All Settled State (Single Merged Pebble Island) */
-          <div className="flex items-center gap-2 text-white">
+          <div className="flex items-center gap-2 text-slate-900 dark:text-white">
             {/* Emblem Icon Dock */}
             {todos.length > 0 && pct === 100 ? (
-              <span className="grid h-[20px] w-[20px] shrink-0 place-items-center rounded-full bg-emerald-500/20 text-emerald-400 shadow-sm">
+              <span className="grid h-[20px] w-[20px] shrink-0 place-items-center rounded-full bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 shadow-sm">
                 <IconCheck size={12} strokeWidth={2.8} />
               </span>
             ) : todos.length > 0 ? (
@@ -296,7 +298,7 @@ export function ActivityCluster({
                     stroke="currentColor"
                     strokeWidth="2.2"
                     fill="none"
-                    className="text-white/20"
+                    className="text-slate-200 dark:text-white/20"
                   />
                   <circle
                     cx="9"
@@ -305,7 +307,7 @@ export function ActivityCluster({
                     stroke="currentColor"
                     strokeWidth="2.2"
                     fill="none"
-                    className="text-emerald-400"
+                    className="text-emerald-600 dark:text-emerald-400"
                     strokeDasharray="40.84"
                     strokeDashoffset={`${40.84 * (1 - pct / 100)}`}
                     strokeLinecap="round"
@@ -313,15 +315,15 @@ export function ActivityCluster({
                 </svg>
               </span>
             ) : planBlocks.length > 0 ? (
-              <span className="grid h-[20px] w-[20px] shrink-0 place-items-center rounded-full bg-indigo-500/20 text-indigo-300 shadow-sm">
+              <span className="grid h-[20px] w-[20px] shrink-0 place-items-center rounded-full bg-indigo-500/20 text-indigo-600 dark:text-indigo-300 shadow-sm">
                 <IconClipboard size={11} strokeWidth={2.2} />
               </span>
             ) : bookmarks.length > 0 ? (
-              <span className="grid h-[20px] w-[20px] shrink-0 place-items-center rounded-full bg-amber-500/20 text-amber-300 shadow-sm">
+              <span className="grid h-[20px] w-[20px] shrink-0 place-items-center rounded-full bg-amber-500/20 text-amber-600 dark:text-amber-300 shadow-sm">
                 <IconBookmark size={11} strokeWidth={2.2} />
               </span>
             ) : (
-              <span className="grid h-[20px] w-[20px] shrink-0 place-items-center rounded-full bg-white/10 text-white/80 shadow-sm">
+              <span className="grid h-[20px] w-[20px] shrink-0 place-items-center rounded-full bg-slate-100 text-slate-700 dark:bg-white/10 dark:text-white/80 shadow-sm">
                 <IconCheck size={11} strokeWidth={2.4} />
               </span>
             )}
@@ -329,23 +331,23 @@ export function ActivityCluster({
             {/* Typography */}
             {todos.length > 0 ? (
               <div className="flex items-center gap-1.5 leading-none">
-                <span className="font-mono text-[12px] font-bold tabular-nums tracking-tight text-white">
+                <span className="font-mono text-[12px] font-bold tabular-nums tracking-tight text-slate-900 dark:text-white">
                   {done}/{todos.length}
                 </span>
-                <span className="text-[11px] font-medium text-white/70">
+                <span className="text-[11px] font-medium text-slate-500 dark:text-white/70">
                   {pct === 100 ? t("chatStream.activity.groupCompleted") : t("chatStream.activity.node.tasks")}
                 </span>
               </div>
             ) : planBlocks.length > 0 ? (
-              <span className="text-[11.5px] font-semibold tracking-tight text-white">
+              <span className="text-[11.5px] font-semibold tracking-tight text-slate-900 dark:text-white">
                 {t("chatStream.activity.deck.shortPlans", { n: planBlocks.length })}
               </span>
             ) : bookmarks.length > 0 ? (
-              <span className="text-[11.5px] font-semibold tracking-tight text-white">
+              <span className="text-[11.5px] font-semibold tracking-tight text-slate-900 dark:text-white">
                 {t("chatStream.activity.deck.shortBookmarks", { n: bookmarks.length })}
               </span>
             ) : (
-              <span className="text-[11.5px] font-semibold tracking-tight text-white">
+              <span className="text-[11.5px] font-semibold tracking-tight text-slate-900 dark:text-white">
                 {t("chatStream.activity.deck.allSettled")}
               </span>
             )}
@@ -353,8 +355,8 @@ export function ActivityCluster({
             {/* Secondary plans tag alongside settled todos */}
             {todos.length > 0 && planBlocks.length > 0 && (
               <>
-                <span aria-hidden className="h-1 w-1 rounded-full bg-white/30" />
-                <span className="text-[11px] font-medium text-white/70">
+                <span aria-hidden className="h-1 w-1 rounded-full bg-slate-300 dark:bg-white/30" />
+                <span className="text-[11px] font-medium text-slate-500 dark:text-white/70">
                   {t("chatStream.activity.deck.shortPlans", { n: planBlocks.length })}
                 </span>
               </>
@@ -363,7 +365,7 @@ export function ActivityCluster({
             <IconChevronDown
               size={11}
               strokeWidth={2.4}
-              className="text-white/60 transition-all duration-200 group-hover:translate-y-0.5 group-hover:text-white"
+              className="text-slate-400 group-hover:text-slate-800 dark:text-white/60 dark:group-hover:text-white transition-all duration-200 group-hover:translate-y-0.5"
             />
           </div>
         )}
@@ -388,11 +390,10 @@ export function ActivityCluster({
               : t("chatStream.activity.deck.shortPlans", { n: planBlocks.length })
           }
           className={cn(
-            "relative grid h-[34px] w-[34px] cursor-pointer select-none place-items-center rounded-full",
-            "border border-black/[0.08] bg-[#000000]/90 text-white dark:border-white/[0.14] dark:bg-[#000000]/95",
-            "shadow-[0_4px_16px_rgba(0,0,0,0.22),inset_0_1px_0_rgba(255,255,255,0.2)]",
-            "backdrop-blur-2xl transition-all duration-300 ease-[cubic-bezier(0.34,1.3,0.64,1)]",
-            "hover:scale-[1.08] active:scale-[0.95]",
+            "relative grid h-[36px] w-[36px] cursor-pointer select-none place-items-center rounded-full",
+            "border backdrop-blur-2xl transition-all duration-200 ease-[cubic-bezier(0.34,1.3,0.64,1)]",
+            "border-slate-300 bg-white text-slate-900 shadow-[0_4px_14px_rgba(0,0,0,0.08)] hover:border-slate-400 hover:shadow-[0_6px_20px_rgba(0,0,0,0.12)] hover:scale-[1.08] active:scale-[0.95]",
+            "dark:border-white/[0.14] dark:bg-[#090a0f]/95 dark:text-white dark:shadow-[0_4px_16px_rgba(0,0,0,0.3)] dark:hover:border-white/25",
           )}
         >
           {todos.length > 0 ? (
@@ -404,7 +405,7 @@ export function ActivityCluster({
                 stroke="currentColor"
                 strokeWidth="2.2"
                 fill="none"
-                className="text-white/20"
+                className="text-slate-200 dark:text-white/20"
               />
               <circle
                 cx="9"
@@ -420,7 +421,7 @@ export function ActivityCluster({
               />
             </svg>
           ) : (
-            <IconClipboard size={12} className="text-white/80" />
+            <IconClipboard size={12} className="text-slate-700 dark:text-white/80" />
           )}
         </div>
       )}
@@ -466,9 +467,10 @@ export function ActivityCluster({
         <div
           ref={panelRef}
           className={cn(
-            "pointer-events-auto absolute right-0 top-[42px] z-40 flex max-h-[78dvh] w-[390px]",
-            "max-w-[calc(100vw-40px)] flex-col overflow-hidden rounded-[26px] border border-white/[0.14] bg-[#0c0d12]/94",
-            "backdrop-blur-3xl text-white shadow-[0_28px_64px_-12px_rgba(0,0,0,0.7),inset_0_1px_0_rgba(255,255,255,0.18)]",
+            "pointer-events-auto absolute right-0 top-[42px] z-40 flex max-h-[78dvh] w-[420px]",
+            "max-w-[calc(100vw-40px)] flex-col overflow-hidden rounded-[26px] border backdrop-blur-3xl transition-all",
+            "border-slate-300 bg-white text-slate-900 shadow-[0_20px_50px_rgba(15,23,42,0.14)]",
+            "dark:border-white/[0.14] dark:bg-[#0c0d12]/95 dark:text-white dark:shadow-[0_28px_70px_-15px_rgba(0,0,0,0.8),inset_0_1px_0_rgba(255,255,255,0.18)]",
             "animate-[capsule-pop-in_240ms_cubic-bezier(0.34,1.3,0.64,1)]",
           )}
         >

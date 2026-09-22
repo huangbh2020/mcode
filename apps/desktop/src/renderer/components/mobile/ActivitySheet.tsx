@@ -78,7 +78,7 @@ export function ActivitySheet({
         className="absolute inset-0 bg-black/40"
         onClick={onClose}
       />
-      <div className="absolute inset-x-0 bottom-0 flex max-h-[85dvh] flex-col rounded-t-2xl border-t border-edge bg-surface text-content shadow-2xl">
+      <div className="absolute inset-x-0 bottom-0 flex max-h-[85dvh] flex-col rounded-t-3xl border-t border-slate-300 bg-white/95 text-slate-900 shadow-2xl backdrop-blur-2xl dark:border-white/[0.14] dark:bg-[#0c0d12]/95 dark:text-white">
         {/* Grabber handle — visual affordance for the sheet, matching the
             bottom-sheet idiom; dismissal is via scrim/back. */}
         <div className="flex shrink-0 justify-center pb-1 pt-2">
@@ -88,7 +88,7 @@ export function ActivitySheet({
             aria-label={t("chatStream.activity.close")}
             className="grid h-4 w-full place-items-center"
           >
-            <span className="h-1 w-8 rounded-full bg-edge" />
+            <span className="h-1 w-8 rounded-full bg-slate-300 dark:bg-white/20" />
           </button>
         </div>
         {/* The console brings its own header/stats/tabs/body/footer; its body is
