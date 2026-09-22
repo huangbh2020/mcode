@@ -69,6 +69,7 @@ export function useMouseGestures(): void {
     let points: GesturePoint[] = [];
     let prevCursor = "";
     let suppressMenuUntil = 0;
+    let startTarget: Element | null = null;
 
     /** Live badge content for a (partial) stroke: arrows + the bound
      *  command's label once it matches. Labels are cached per stroke —
@@ -83,6 +84,20 @@ export function useMouseGestures(): void {
       const arrows = sequenceToArrows(seq);
       const id = findMatchingGesture(seq, effective);
       if (!id) return { text: arrows, matched: false };
+
+      // In files panel, closing gesture targets the active file, not the session
+      const inFilesPanel = !!startTarget?.closest?.('[data-files-panel="true"]');
+      if (inFilesPanel && (id === "session.close" || id === "tab.close")) {
+        const state = useSessionStore.getState();
+        const pid = state.activeProjectId;
+        const file = pid ? state.ideActiveFileByProject[pid] ?? null : null;
+        const locale = state.locale;
+        const label = file
+          ? translate(locale, "lib.commands.closeFocusedFile")
+          : translate(locale, "common.close");
+        return { text: `${arrows} · ${label}`, matched: !!file };
+      }
+
       let label = labelCache.get(id);
       if (label === undefined) {
         const state = useSessionStore.getState();
@@ -117,21 +132,28 @@ export function useMouseGestures(): void {
 
     /** Tear the stroke down and report what happened. Restores the cursor,
      *  fades the trail, and (off-mac) opens the menu-suppression window. */
-    const endStroke = (): { wasActive: boolean; wasCancelled: boolean; stroke: GesturePoint[] } => {
+    const endStroke = (): {
+      wasActive: boolean;
+      wasCancelled: boolean;
+      stroke: GesturePoint[];
+      startElement: Element | null;
+    } => {
       const wasActive = active;
       const wasCancelled = cancelled;
       const stroke = points;
+      const startElement = startTarget;
       removeTransient();
       armed = false;
       active = false;
       cancelled = false;
       points = [];
+      startTarget = null;
       if (wasActive) {
         document.body.style.cursor = prevCursor;
         fadeGestureTrail();
         if (!isMac) suppressMenuUntil = Date.now() + SUPPRESS_MENU_WINDOW_MS;
       }
-      return { wasActive, wasCancelled, stroke };
+      return { wasActive, wasCancelled, stroke, startElement };
     };
 
     const onPointerUp = (e: PointerEvent) => {
@@ -150,7 +172,7 @@ export function useMouseGestures(): void {
           { x: e.clientX, y: e.clientY, matched: b.matched },
         );
       }
-      const { wasActive, wasCancelled } = endStroke();
+      const { wasActive, wasCancelled, startElement } = endStroke();
 
       if (!wasActive) {
         // Plain press, no drag. On macOS the real contextmenu was suppressed
@@ -176,6 +198,21 @@ export function useMouseGestures(): void {
       const commandId = findMatchingGesture(seq, effective);
       if (!commandId) return; // unmatched stroke: silent no-op
       const state = useSessionStore.getState();
+
+      // In files panel, closing gesture targets the active file, NEVER the chat session
+      const inFilesPanel = !!(
+        startElement?.closest?.('[data-files-panel="true"]') ||
+        (target && target.closest?.('[data-files-panel="true"]'))
+      );
+      if (inFilesPanel && (commandId === "session.close" || commandId === "tab.close")) {
+        const pid = state.activeProjectId;
+        const file = pid ? state.ideActiveFileByProject[pid] ?? null : null;
+        if (file) {
+          state.closeFileInIde(file);
+        }
+        return;
+      }
+
       const cmd = collectCommands(state).find((c) => c.id === commandId);
       if (cmd) void cmd.perform(state);
     };
@@ -224,6 +261,7 @@ export function useMouseGestures(): void {
       active = false;
       cancelled = false;
       points = [{ x: e.clientX, y: e.clientY }];
+      startTarget = target;
       suppressMenuUntil = 0;
       labelCache.clear();
       attachTransient();
@@ -266,6 +304,7 @@ export function useMouseGestures(): void {
       active = false;
       cancelled = false;
       points = [];
+      startTarget = null;
     };
     // Re-subscribes when the user edits gesture settings; detached entirely
     // while disabled.

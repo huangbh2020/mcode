@@ -186,6 +186,14 @@ export const DisplayModeSchema = z.enum(["single", "tabs"]);
 export type DisplayMode = z.infer<typeof DisplayModeSchema>;
 
 /**
+ * In `tabs` displayMode, controls whether file previews open in the center
+ * unified tab bar (default) or in the right sidebar's dual-column preview.
+ */
+export const TABS_FILE_PREVIEW_PLACEMENT_SETTING_KEY = "ui.tabsFilePreviewPlacement";
+export const TabsFilePreviewPlacementSchema = z.enum(["center", "sidebar"]);
+export type TabsFilePreviewPlacement = z.infer<typeof TabsFilePreviewPlacementSchema>;
+
+/**
  * Tab-bar layout preference: when "true", the center tab strips (unified
  * bar in `tabs` displayMode, plus the session strip / editor file strip in
  * `single` mode) wrap their tabs onto multiple rows instead of scrolling
@@ -634,6 +642,7 @@ export const UI_RIGHT_PANEL_TAB_SETTING_KEY = "ui.rightPanelTab";
 export const RightPanelTabSchema = z.enum([
   "files",
   "git",
+  "terminal",
   "browser",
   "turns",
   "sidechat",

@@ -15,7 +15,7 @@ import {
 } from "@dnd-kit/sortable";
 import { basename } from "@renderer/lib/path.js";
 import { cn } from "@renderer/lib/cn.js";
-import { IconClipboard, IconX } from "@renderer/lib/icons.js";
+import { IconClipboard, IconX, IconLayoutSidebarRight } from "@renderer/lib/icons.js";
 import { useSessionStore, orchRunningAnchors } from "@renderer/stores/sessionStore.js";
 import { TabBarChevronButton, TabBarOverflowMenu } from "./TabBarChrome.js";
 import { SortableSessionTab, findSession } from "./SessionTabs.js";
@@ -71,10 +71,14 @@ export function UnifiedTabsBar() {
   const setTabBarMultiRow = useSessionStore((s) => s.setTabBarMultiRow);
 
   // ── File tabs (scoped to the active project) ──
+  const tabsFilePreviewPlacement = useSessionStore((s) => s.tabsFilePreviewPlacement);
+  const toggleTabsFilePreviewPlacement = useSessionStore((s) => s.toggleTabsFilePreviewPlacement);
   const pid = useSessionStore((s) => s.activeProjectId);
-  const openFiles = useSessionStore((s) =>
-    pid ? s.ideOpenFilesByProject[pid] ?? EMPTY_OPEN_FILES : EMPTY_OPEN_FILES,
-  );
+  const openFiles = useSessionStore((s) => {
+    if (s.tabsFilePreviewPlacement === "sidebar") return EMPTY_OPEN_FILES;
+    const p = s.activeProjectId;
+    return p ? s.ideOpenFilesByProject[p] ?? EMPTY_OPEN_FILES : EMPTY_OPEN_FILES;
+  });
   const activeFile = useSessionStore((s) =>
     pid ? s.ideActiveFileByProject[pid] ?? null : null,
   );
@@ -103,7 +107,9 @@ export function UnifiedTabsBar() {
   // (an active file or an active plan tab) — matches UnifiedTabbedPane's
   // visibility gate so the bar's active highlighting never disagrees with
   // what's on screen.
-  const editorFocused = centerTabFocus === "editor" && (!!activeFile || planTabActive);
+  const editorFocused =
+    centerTabFocus === "editor" &&
+    ((!!activeFile && tabsFilePreviewPlacement !== "sidebar") || planTabActive);
 
   // Right-click context menu state for file tabs (lifted to the bar level,
   // same pattern as OpenTabsBar).
@@ -413,6 +419,28 @@ export function UnifiedTabsBar() {
           title={t("ide.editor.scrollTabsRight")}
         />
       )}
+
+      {/* Placement toggle: switch between center tabs and sidebar preview */}
+      <button
+        type="button"
+        onClick={toggleTabsFilePreviewPlacement}
+        title={
+          tabsFilePreviewPlacement === "center"
+            ? t("ide.files.placementCenterHint")
+            : t("ide.files.placementSidebarHint")
+        }
+        aria-label={
+          tabsFilePreviewPlacement === "center"
+            ? t("ide.files.placementCenterHint")
+            : t("ide.files.placementSidebarHint")
+        }
+        className={cn(
+          "mr-1 flex h-7 w-7 shrink-0 items-center justify-center rounded text-content-subtle transition-colors hover:bg-black/5 dark:hover:bg-white/10 hover:text-content",
+          tabsFilePreviewPlacement === "sidebar" && "bg-accent/15 text-accent hover:bg-accent/20",
+        )}
+      >
+        <IconLayoutSidebarRight size={14} />
+      </button>
 
       {/* Overflow menu — lists every tab (sessions first, then files, then
           the plan tab) for quick jumping. Shown when the strip overflows,

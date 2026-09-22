@@ -3,12 +3,28 @@ import Editor, { DiffEditor, useMonaco } from "@monaco-editor/react";
 import type { editor } from "monaco-editor";
 import { api } from "@renderer/lib/api.js";
 import { cn } from "@renderer/lib/cn.js";
-import { dirname, extname } from "@renderer/lib/path.js";
+import { dirname, extname, relativePath } from "@renderer/lib/path.js";
 import { useSessionStore, selectActiveEnvPath } from "@renderer/stores/sessionStore.js";
 import { useToastStore } from "@renderer/stores/toastStore.js";
 import type { TurnFileEntry } from "@renderer/lib/turnFiles.js";
 import { ideDirtyTracker } from "./OpenTabsBar.js";
-import { IconEye, IconEdit, IconLoader2, IconAlertTriangle, IconSquare, IconColumns3, IconPhotoOff, IconArrowLeft, IconArrowRight } from "@renderer/lib/icons.js";
+import {
+  IconEye,
+  IconEdit,
+  IconLoader2,
+  IconAlertTriangle,
+  IconSquare,
+  IconColumns3,
+  IconPhotoOff,
+  IconArrowLeft,
+  IconArrowRight,
+  IconDots,
+  IconCopy,
+  IconX,
+  IconLayoutColumns,
+  IconLayoutSidebarRight,
+} from "@renderer/lib/icons.js";
+import { Menu } from "@base-ui/react/menu";
 import { FileTypeIcon } from "@renderer/lib/fileIcon.js";
 import { Markdown } from "../chat/Markdown.js";
 // LSP provider bridge: registers definition/references/hover providers, syncs
@@ -340,60 +356,170 @@ function EditorToolbar({
             {t("ide.editor.lspFailed", { name: LSP_LANGUAGE_DISPLAY[lspLanguageId] })}
           </button>
         )}
-        {canDiff && mode !== "preview" && (
-          <button
-            type="button"
-            onClick={onToggleMode}
-            className={cn(
-              "flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] transition-colors",
-              "text-content-muted hover:bg-surface-hover hover:text-content",
-            )}
-            title={mode === "edit" ? t("ide.editor.switchToDiff") : t("ide.editor.switchToEditView")}
-          >
-            {mode === "edit" ? <IconEye size={12} /> : <IconEdit size={12} />}
-            {mode === "edit" ? "Diff" : "Edit"}
-          </button>
-        )}
-        {/* Preview/Edit toggle - for files that default to a read-only preview
-            pane (Markdown rendered, image displayed, or an unsupported-type
-            notice). In preview mode the button switches to the source editor;
-            in edit/diff mode it switches to the rendered preview. For binary
-            files (image/unsupported) "Edit" shows raw content as Monaco sees
-            it (garbled for non-utf-8) - kept as an escape hatch, not the norm. */}
-        {hasPreviewToggle && (
-          <button
-            type="button"
-            onClick={onTogglePreview}
-            className={cn(
-              "flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] transition-colors",
-              "text-content-muted hover:bg-surface-hover hover:text-content",
-            )}
-            title={mode === "preview" ? t("ide.editor.switchToSource") : t("ide.editor.switchToPreview")}
-          >
-            {mode === "preview" ? <IconEdit size={12} /> : <IconEye size={12} />}
-            {mode === "preview" ? "Edit" : "Preview"}
-          </button>
-        )}
-        {/* Editor open-mode toggle: tabs (multi-file) ↔ replace (single-file).
-            Always visible so the user can switch back to tabs even when the
-            OpenTabsBar is hidden (replace mode). */}
-        <button
-          type="button"
-          onClick={onToggleEditorMode}
-          className={cn(
-            "flex items-center justify-center rounded px-1 py-0.5 transition-colors",
-            "text-content-subtle hover:bg-surface-hover hover:text-content",
-          )}
-          title={
-            editorMode === "tabs"
-              ? t("ide.editor.modeTabsHint")
-              : t("ide.editor.modeReplaceHint")
-          }
-        >
-          {editorMode === "tabs" ? <IconColumns3 size={13} /> : <IconSquare size={13} />}
-        </button>
+        <EditorActionsMenu
+          filePath={filePath}
+          projectPath={projectPath}
+          mode={mode}
+          canDiff={canDiff}
+          onToggleMode={onToggleMode}
+          hasPreviewToggle={hasPreviewToggle}
+          onTogglePreview={onTogglePreview}
+          editorMode={editorMode}
+          onToggleEditorMode={onToggleEditorMode}
+        />
       </div>
     </div>
+  );
+}
+
+function EditorActionsMenu({
+  filePath,
+  projectPath,
+  mode,
+  canDiff,
+  onToggleMode,
+  hasPreviewToggle,
+  onTogglePreview,
+  editorMode,
+  onToggleEditorMode,
+}: {
+  filePath: string;
+  projectPath: string;
+  mode: "edit" | "diff" | "preview";
+  canDiff: boolean;
+  onToggleMode: () => void;
+  hasPreviewToggle: boolean;
+  onTogglePreview: () => void;
+  editorMode: "tabs" | "replace";
+  onToggleEditorMode: () => void;
+}) {
+  const { t } = useI18n();
+  const displayMode = useSessionStore((s) => s.displayMode);
+  const tabsFilePreviewPlacement = useSessionStore((s) => s.tabsFilePreviewPlacement);
+  const toggleTabsFilePreviewPlacement = useSessionStore((s) => s.toggleTabsFilePreviewPlacement);
+  const closeFileInIde = useSessionStore((s) => s.closeFileInIde);
+
+  const copyRelPath = () => {
+    const rel = relativePath(projectPath, filePath);
+    void navigator.clipboard.writeText(rel);
+    useToastStore.getState().push({
+      kind: "info",
+      title: t("common.copied"),
+    });
+  };
+
+  const copyAbsPath = () => {
+    void navigator.clipboard.writeText(filePath);
+    useToastStore.getState().push({
+      kind: "info",
+      title: t("common.copied"),
+    });
+  };
+
+  const handleClose = () => {
+    closeFileInIde(filePath);
+  };
+
+  return (
+    <Menu.Root>
+      <Menu.Trigger
+        className="flex h-6 w-6 items-center justify-center rounded text-content-subtle transition-colors hover:bg-surface-hover hover:text-content"
+        title={t("ide.editor.moreActions")}
+        aria-label={t("ide.editor.moreActions")}
+      >
+        <IconDots size={14} />
+      </Menu.Trigger>
+      <Menu.Portal>
+        <Menu.Positioner side="bottom" align="end" sideOffset={4}>
+          <Menu.Popup
+            className={cn(
+              "z-50 min-w-[190px] origin-top-right rounded-md border border-edge bg-surface py-1 shadow-2xl",
+              "data-[ending-style]:scale-95 data-[ending-style]:opacity-0",
+              "data-[starting-style]:scale-95 data-[starting-style]:opacity-0",
+              "transition-[transform,opacity] duration-100",
+            )}
+          >
+            {canDiff && mode !== "preview" && (
+              <Menu.Item
+                onClick={onToggleMode}
+                className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-content-muted outline-none select-none hover:bg-surface-muted hover:text-content data-[highlighted]:bg-surface-muted data-[highlighted]:text-content"
+              >
+                {mode === "edit" ? <IconEye size={13} /> : <IconEdit size={13} />}
+                <span>{mode === "edit" ? t("ide.editor.switchToDiff") : t("ide.editor.switchToEditView")}</span>
+              </Menu.Item>
+            )}
+
+            {hasPreviewToggle && (
+              <Menu.Item
+                onClick={onTogglePreview}
+                className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-content-muted outline-none select-none hover:bg-surface-muted hover:text-content data-[highlighted]:bg-surface-muted data-[highlighted]:text-content"
+              >
+                {mode === "preview" ? <IconEdit size={13} /> : <IconEye size={13} />}
+                <span>{mode === "preview" ? t("ide.editor.switchToSource") : t("ide.editor.switchToPreview")}</span>
+              </Menu.Item>
+            )}
+
+            <Menu.Item
+              onClick={onToggleEditorMode}
+              className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-content-muted outline-none select-none hover:bg-surface-muted hover:text-content data-[highlighted]:bg-surface-muted data-[highlighted]:text-content"
+            >
+              {editorMode === "tabs" ? <IconSquare size={13} /> : <IconColumns3 size={13} />}
+              <span>
+                {editorMode === "tabs"
+                  ? t("ide.editor.switchToReplaceMode")
+                  : t("ide.editor.switchToTabsMode")}
+              </span>
+            </Menu.Item>
+
+            {displayMode === "tabs" && (
+              <Menu.Item
+                onClick={toggleTabsFilePreviewPlacement}
+                className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-content-muted outline-none select-none hover:bg-surface-muted hover:text-content data-[highlighted]:bg-surface-muted data-[highlighted]:text-content"
+              >
+                {tabsFilePreviewPlacement === "sidebar" ? (
+                  <IconLayoutColumns size={13} />
+                ) : (
+                  <IconLayoutSidebarRight size={13} />
+                )}
+                <span>
+                  {tabsFilePreviewPlacement === "sidebar"
+                    ? t("ide.files.placementCenterAction")
+                    : t("ide.files.placementSidebarAction")}
+                </span>
+              </Menu.Item>
+            )}
+
+            <Menu.Separator className="my-1 h-px bg-edge" />
+
+            <Menu.Item
+              onClick={copyRelPath}
+              className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-content-muted outline-none select-none hover:bg-surface-muted hover:text-content data-[highlighted]:bg-surface-muted data-[highlighted]:text-content"
+            >
+              <IconCopy size={13} />
+              <span>{t("ide.tree.copyRelPath")}</span>
+            </Menu.Item>
+
+            <Menu.Item
+              onClick={copyAbsPath}
+              className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-content-muted outline-none select-none hover:bg-surface-muted hover:text-content data-[highlighted]:bg-surface-muted data-[highlighted]:text-content"
+            >
+              <IconCopy size={13} />
+              <span>{t("ide.tree.copyAbsPath")}</span>
+            </Menu.Item>
+
+            <Menu.Separator className="my-1 h-px bg-edge" />
+
+            <Menu.Item
+              onClick={handleClose}
+              className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-danger outline-none select-none hover:bg-danger/10 data-[highlighted]:bg-danger/10"
+            >
+              <IconX size={13} />
+              <span>{t("common.close")}</span>
+            </Menu.Item>
+          </Menu.Popup>
+        </Menu.Positioner>
+      </Menu.Portal>
+    </Menu.Root>
   );
 }
 

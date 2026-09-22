@@ -191,6 +191,8 @@ export {
   // Layout / window
   IconLayoutSidebarLeftExpand,
   IconLayoutSidebarRightExpand,
+  IconLayoutSidebarRight,
+  IconLayoutColumns,
   IconColumns3,
   IconMaximize,
   IconMinimize,

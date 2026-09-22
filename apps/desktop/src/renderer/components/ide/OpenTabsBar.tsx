@@ -75,7 +75,8 @@ const MENU_ITEM_CLASS =
  * FileEditor reports dirty changes through a lightweight event the bar
  * subscribes to — see `ideDirtyTracker`.
  */
-export function OpenTabsBar() {
+export function OpenTabsBar({ trailing }: { trailing?: React.ReactNode } = {}) {
+
   const { t } = useI18n();
   // Open files are scoped to the active project — switching projects swaps
   // the tab bar to that project's open files.
@@ -435,7 +436,10 @@ export function OpenTabsBar() {
         />
       )}
 
+      {trailing}
+
       {/* Right-click context menu for file tabs. Controlled + cursor-anchored
+
           (Pattern B from LeftBar) so it opens exactly at the cursor position,
           and doesn't conflict with dnd-kit listeners on the tab. */}
       <FileTabContextMenu
