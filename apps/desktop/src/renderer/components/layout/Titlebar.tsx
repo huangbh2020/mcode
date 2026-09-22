@@ -5,7 +5,6 @@ import {
   IconArrowLeft,
   IconLayoutSidebarLeftExpand,
   IconLayoutSidebarRightExpand,
-  IconTerminal2,
   IconCode,
   IconFolder,
   IconGitFork,
@@ -27,11 +26,8 @@ interface Props {
   leftOpen: boolean;
   /** Right sidebar visibility (workspace mode only). */
   rightOpen: boolean;
-  /** Bottom terminal bar visibility (workspace mode only). */
-  bottomTerminalOpen: boolean;
   onToggleLeft?: () => void;
   onToggleRight?: () => void;
-  onToggleBottomTerminal?: () => void;
   /** Fullscreen-overlay modes: returns to the workspace view. */
   onBack?: () => void;
 }
@@ -63,10 +59,8 @@ export function Titlebar({
   mode,
   leftOpen,
   rightOpen,
-  bottomTerminalOpen,
   onToggleLeft,
   onToggleRight,
-  onToggleBottomTerminal,
   onBack,
 }: Props) {
   const { t } = useI18n();
@@ -214,23 +208,7 @@ export function Titlebar({
                 component returns null). Hidden while the browser overlay is
                 open, same as the panel toggles (kept during wide mode). */}
             {!isBrowserOverlay && <WorktreeMergeToolbarButton />}
-            {/* Bottom terminal toggle - hidden while the browser overlay is
-                open, same as the side-panel toggles (kept during wide mode). */}
-            {!isBrowserOverlay && (
-              <button
-                onClick={onToggleBottomTerminal}
-                className={cn(
-                  "flex items-center justify-center rounded p-1.5 transition-colors",
-                  bottomTerminalOpen
-                    ? "bg-surface-hover text-accent"
-                    : "text-content-muted hover:bg-surface-hover hover:text-content",
-                )}
-                title={(bottomTerminalOpen ? t("layout.hideTerminal") : t("layout.showTerminal")) + hintFor("layout.toggle-bottom-terminal")}
-                style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
-              >
-                <IconTerminal2 size={18} className="shrink-0" />
-              </button>
-            )}
+
             {/* Right-panel toggle - hidden while the browser overlay is open
                 (the browser forces the right panel closed and manages its own
                 restore on exit). During wide mode it stays: it hides/shows the

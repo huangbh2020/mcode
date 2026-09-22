@@ -9,7 +9,6 @@ import { ChatPane } from "./components/chat/ChatPane.js";
 import { SessionTabs } from "./components/layout/SessionTabs.js";
 import { UnifiedTabsBar } from "./components/layout/UnifiedTabsBar.js";
 import { RightPanel } from "./components/layout/RightPanel.js";
-import { BottomTerminalBar } from "./components/layout/BottomTerminalBar.js";
 import { SettingsPage } from "./components/settings/SettingsPage.js";
 import { SchedPage } from "./components/automation/SchedPage.js";
 import { CommandPalette } from "./components/layout/CommandPalette.js";
@@ -141,8 +140,8 @@ export function App() {
   const setLeftOpen = useSessionStore((s) => s.setLeftOpen);
   const rightOpen = useSessionStore((s) => s.rightOpen);
   const setRightOpen = useSessionStore((s) => s.setRightOpen);
-  const bottomTerminalOpen = useSessionStore((s) => s.bottomTerminalOpen);
-  const setBottomTerminalOpen = useSessionStore((s) => s.setBottomTerminalOpen);
+  const rightPanelTab = useSessionStore((s) => s.rightPanelTab);
+  const setRightPanelTab = useSessionStore((s) => s.setRightPanelTab);
   const widePanelOpen = useSessionStore((s) => s.widePanelOpen);
   // Wide-panel (3:7) split share + its resize/reset actions. The wide mode
   // reuses the layout's right aside (percentage width) instead of mounting a
@@ -299,11 +298,9 @@ export function App() {
           mode={settingsOpen ? "settings" : schedPageOpen ? "sched" : "workspace"}
           leftOpen={leftOpen}
           rightOpen={settingsOpen || schedPageOpen ? false : rightOpen}
-          bottomTerminalOpen={settingsOpen || schedPageOpen ? false : bottomTerminalOpen}
           onBack={() => (settingsOpen ? setSettingsOpen(false) : setSchedPageOpen(false))}
           onToggleLeft={() => setLeftOpen(!leftOpen)}
           onToggleRight={() => setRightOpen(!rightOpen)}
-          onToggleBottomTerminal={() => setBottomTerminalOpen(!bottomTerminalOpen)}
         />
         {/* Main panel row — bg-surface-muted as the contrasting track so the
             center pane's rounded left-edge corners (in ThreePaneLayout)
@@ -329,15 +326,10 @@ export function App() {
             right={<RightPanel />}
             leftOpen={false}
             rightOpen={rightOpen}
-            bottomTerminal={<BottomTerminalBar active={bottomTerminalOpen} />}
-            bottomTerminalOpen={bottomTerminalOpen}
             rightWidth={rightWidth}
             rightWidthPct={widePanelOpen ? widePanelPct : undefined}
-            bottomTerminalHeight={bottomTerminalHeight}
             onResizeRight={widePanelOpen ? handleWidePanelResize : adjustRightWidth}
-            onResizeBottomTerminal={adjustBottomTerminalHeight}
             onResetRight={widePanelOpen ? resetWidePanelPct : resetRightWidth}
-            onResetBottomTerminal={resetBottomTerminalHeight}
           />
           {/* Git diff dialog (the "dialog" open-mode). Portaled to <body>;
               renders nothing when closed or empty. Mounted at the workspace
@@ -442,11 +434,13 @@ function UnifiedTabbedPane({ wide }: { wide: boolean }) {
     (s) => (activeSessionId ? s.planTabActiveBySession[activeSessionId] ?? false : false),
   );
   const centerTabFocus = useSessionStore((s) => s.centerTabFocus);
+  const tabsFilePreviewPlacement = useSessionStore((s) => s.tabsFilePreviewPlacement);
   // The editor owns the content area only while focused AND it has content.
-  // The content check makes a stale "editor" focus (e.g. the last file was
-  // closed by a path that didn't recompute the flag) fall back to the chat
-  // instead of showing an empty editor.
-  const showEditor = centerTabFocus === "editor" && (!!activeFile || planTabActive);
+  // In `tabs` displayMode with `sidebar` placement, file preview lives in the
+  // right sidebar's dual-column preview, so the center pane keeps the chat view.
+  const showEditor =
+    centerTabFocus === "editor" &&
+    ((!!activeFile && tabsFilePreviewPlacement !== "sidebar") || planTabActive);
   // Wide mode: only a FILE editor stays mounted (hidden keep-alive). A plan
   // tab's surface is owned by the WidePlanDialog overlay — keeping a second
   // hidden PlanViewer here would double the markdown/Monaco work on every
@@ -515,14 +509,12 @@ function SplitCenterPane({ wide }: { wide: boolean }) {
     (s) => (activeSessionId ? s.planTabActiveBySession[activeSessionId] ?? false : false),
   );
 
-  // The editor column is visible when EITHER a file is active OR the plan tab
-  // is active. (The plan tab's mere existence in the bar doesn't force the
-  // editor visible - only when it's the active tab.) Wide mode keeps a FILE
-  // editor mounted but `hidden` (keep-alive, same trick as the chat panes) so
-  // exiting wide restores it without a Monaco rebuild; a plan tab's surface
-  // is owned by the WidePlanDialog overlay, so no second hidden PlanViewer.
-  const editorMounted = (!!activeFile || planTabActive) && !(wide && !activeFile);
-  const editorVisible = editorMounted && !wide;
+  // In `single` displayMode, normal file previews are rendered in the right panel's
+  // dual-column FilesPanel instead of splitting the center pane. The center pane only
+  // splits for the plan tab (PlanViewer) when active.
+  const editorMounted = planTabActive && !wide;
+  const editorVisible = editorMounted;
+
 
   // Draggable chat|editor split. The editor column's share is a persisted
   // percentage; the chat column gets the remainder. The Divider reports a px
@@ -551,9 +543,10 @@ function SplitCenterPane({ wide }: { wide: boolean }) {
           two columns split the center pane proportionally. When no file is
           open and no plan is viewed it takes the full width (flex-1). */}
       <div
-        className="flex min-w-0 flex-col"
+        className="flex min-w-[450px] flex-col"
         style={editorVisible ? { flexGrow: 0, flexBasis: `${100 - editorWidthPct}%` } : { flexGrow: 1, flexBasis: "0%" }}
       >
+
         <ChatColumn />
       </div>
       {/* Divider between chat and editor - only while the editor column is

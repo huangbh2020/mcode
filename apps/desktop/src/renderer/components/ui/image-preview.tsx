@@ -33,6 +33,7 @@ import { useSuppressBrowserView } from "@renderer/hooks/useSuppressBrowserView.j
 import { useI18n } from "@renderer/lib/i18n/index.js";
 import {
   IconArrowsMaximize,
+  IconArrowsMinimize,
   IconCheck,
   IconChevronLeft,
   IconChevronRight,
@@ -173,6 +174,38 @@ export function ImageWithPreview({
   const curIdx = Math.max(0, Math.min(count - 1, viewIdx));
   const curSrc = gallerySrcs[curIdx] ?? src;
   const curAlt = count > 1 ? `${alt} ${curIdx + 1}/${count}` : alt;
+
+  // Zoom mode: "fit" (entire image scaled to viewport) vs "scroll" (width-fit, natural height, vertically scrollable).
+  const [zoomMode, setZoomMode] = useState<"fit" | "scroll">("fit");
+  const stageRef = useRef<HTMLDivElement | null>(null);
+
+  // Reset scroll position on image swap or re-opening.
+  useEffect(() => {
+    if (stageRef.current) {
+      stageRef.current.scrollTop = 0;
+    }
+  }, [curSrc, open]);
+
+  // When image loads, detect aspect ratio: tall images default to "scroll" mode so user can read immediately.
+  const handleImageLoad = useCallback((e: React.SyntheticEvent<HTMLImageElement>) => {
+    const img = e.currentTarget;
+    const { naturalWidth, naturalHeight } = img;
+    const tall = naturalHeight > naturalWidth * 1.15;
+    setZoomMode(tall ? "scroll" : "fit");
+  }, []);
+
+  const toggleZoomMode = useCallback(() => {
+    setZoomMode((prev) => (prev === "fit" ? "scroll" : "fit"));
+  }, []);
+
+  const handleStageClick = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+    if (
+      e.target === e.currentTarget ||
+      (e.target as HTMLElement).getAttribute("data-stage-click") === "true"
+    ) {
+      setOpen(false);
+    }
+  }, []);
 
   /* ── Copy-to-clipboard feedback. Images are `data:image/...` URLs (the only
    *    kind this component receives from the message stream); the copy button
@@ -364,13 +397,36 @@ export function ImageWithPreview({
           >
             {/* Visually-hidden title for a11y (Dialog expects a Title). */}
             <Dialog.Title className="sr-only">{curAlt || t("layout.image.previewTitle")}</Dialog.Title>
-            <div className="pointer-events-none flex min-h-0 flex-1 items-center justify-center px-6 pb-2 pt-6">
-              <img
-                src={curSrc}
-                alt={curAlt}
-                draggable={false}
-                className="lightbox-figure pointer-events-auto block max-h-full max-w-full rounded-lg object-contain shadow-2xl"
-              />
+            <div
+              ref={stageRef}
+              onClick={handleStageClick}
+              data-stage-click="true"
+              onWheel={wakeChrome}
+              className="lightbox-stage pointer-events-auto relative min-h-0 flex-1 w-full overflow-y-auto overflow-x-hidden select-none"
+            >
+              <div
+                data-stage-click="true"
+                className="flex min-h-full min-w-full flex-col items-center px-6 pb-8 pt-6"
+              >
+                <img
+                  key={curSrc}
+                  src={curSrc}
+                  alt={curAlt}
+                  draggable={false}
+                  onLoad={handleImageLoad}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    toggleZoomMode();
+                  }}
+                  title={zoomMode === "fit" ? t("layout.image.fitWidth") : t("layout.image.fitScreen")}
+                  className={cn(
+                    "lightbox-figure pointer-events-auto block rounded-lg shadow-2xl transition-[max-height,max-width,width] duration-150 my-auto",
+                    zoomMode === "fit"
+                      ? "max-h-full max-w-full object-contain cursor-zoom-in"
+                      : "w-auto max-w-full h-auto cursor-zoom-out",
+                  )}
+                />
+              </div>
             </div>
             {/* Docked control bar — the only chrome in the lightbox. */}
             {/* The strip is sized to the bar alone: copy feedback is delivered
@@ -418,6 +474,16 @@ export function ImageWithPreview({
                     )}
                   </LightboxButton>
                 )}
+                <LightboxButton
+                  label={zoomMode === "fit" ? t("layout.image.fitWidth") : t("layout.image.fitScreen")}
+                  onClick={toggleZoomMode}
+                >
+                  {zoomMode === "fit" ? (
+                    <IconArrowsMaximize size={17} />
+                  ) : (
+                    <IconArrowsMinimize size={17} />
+                  )}
+                </LightboxButton>
                 {count > 1 && (
                   <>
                     <BarDivider />

@@ -115,6 +115,7 @@ export const zh = {
   "layout.hideEditor": "隐藏编辑器",
   "layout.noOpenFiles": "无打开的文件",
   "layout.tabFiles": "文件",
+  "layout.tabTerminal": "终端",
   "layout.tabTurns": "轮次流程",
   "layout.tabBrowser": "浏览器",
   "layout.closeSidebarBrowser": "关闭侧边栏浏览器",
@@ -220,5 +221,7 @@ export const zh = {
   "layout.image.reveal": "在资源管理器中显示",
   "layout.image.revealed": "已打开所在目录",
   "layout.image.revealFailed": "无法打开所在目录",
+  "layout.image.fitWidth": "适合宽度 (上下滚动)",
+  "layout.image.fitScreen": "适应窗口",
   "layout.image.closePreview": "关闭预览",
 } as const;

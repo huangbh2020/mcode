@@ -9,11 +9,11 @@
  * views over a shared model.
  */
 import { useCallback, useState } from "react";
-import type { SubagentSnapshot } from "@contracts/runtime";
+import type { SubagentSnapshot, BashTaskSnapshot, ServiceSnapshot } from "@contracts/runtime";
 import type { Block, TodoItem } from "@renderer/stores/sessionStore.js";
 import type { SessionBookmark } from "@contracts/session";
 import type { MessageId } from "@renderer/lib/i18n/index.js";
-import { IconBookmark, IconClipboard, IconListDetails, PiRobot } from "@renderer/lib/icons.js";
+import { IconBookmark, IconClipboard, IconClock, IconLayoutGrid, IconListDetails, IconServer, IconTerminal2, PiRobot } from "@renderer/lib/icons.js";
 import type { ComponentType } from "react";
 
 /** A `kind: "plan"` block - the frozen per-turn plan in the message stream. */
@@ -25,14 +25,14 @@ export type Translate = (key: MessageId, params?: Record<string, string | number
 
 /* ── Rail geometry ──────────────────────────────────────────────────── */
 
-/** The four node kinds, in the rail's top-to-bottom order. Tasks lead
- *  (progress is what people glance at); bookmarks sit last because they are
- *  an archive rather than live state. Nodes whose source is empty are omitted
- *  entirely, so the rail only ever shows what the session actually has. */
-export type ActivityNodeKey = "tasks" | "subagents" | "plans" | "bookmarks";
+export type ActivityNodeKey = "overview" | "services" | "commands" | "subagents" | "tasks" | "sched" | "plans" | "bookmarks";
 export const RAIL_NODE_ORDER: readonly ActivityNodeKey[] = [
-  "tasks",
+  "overview",
+  "services",
+  "commands",
   "subagents",
+  "tasks",
+  "sched",
   "plans",
   "bookmarks",
 ];
@@ -43,14 +43,16 @@ export const RAIL_NODE_ORDER: readonly ActivityNodeKey[] = [
 export const NODE_META: Record<
   ActivityNodeKey,
   {
-    /** Deliberately NOT TablerIconProps: the subagent node uses react-icons'
-     *  Phosphor robot, whose props type is not assignable to Tabler's (their
-     *  `stroke` widths differ). Only `size` and `className` are ever passed. */
     ico: ComponentType<{ size?: number | string; className?: string }>;
     labelKey: MessageId;
     icoCls: string;
   }
 > = {
+  overview: {
+    ico: IconLayoutGrid,
+    labelKey: "chatStream.activity.node.overview",
+    icoCls: "bg-accent/20 text-accent",
+  },
   tasks: {
     ico: IconListDetails,
     labelKey: "chatStream.activity.node.tasks",
@@ -60,6 +62,21 @@ export const NODE_META: Record<
     ico: PiRobot,
     labelKey: "chatStream.activity.node.subagents",
     icoCls: "bg-warning/15 text-warning",
+  },
+  commands: {
+    ico: IconTerminal2,
+    labelKey: "chatStream.activity.node.commands",
+    icoCls: "bg-accent/15 text-accent-strong",
+  },
+  services: {
+    ico: IconServer,
+    labelKey: "chatStream.activity.node.services",
+    icoCls: "bg-success/15 text-success",
+  },
+  sched: {
+    ico: IconClock,
+    labelKey: "chatStream.activity.node.sched",
+    icoCls: "bg-sky-500/15 text-sky-400",
   },
   plans: {
     ico: IconClipboard,
@@ -76,19 +93,23 @@ export const NODE_META: Record<
 
 
 /** Which kind the cluster's core opens: whatever is most urgent/perishable.
- *  Running subagents first (they change second to second), then the task
- *  board, then plans, then bookmarks. Same rule for the corner cluster's core
- *  and for the sheet's initial tab. */
+ *  A RUNNING service outranks everything — a listening socket is a live
+ *  process the user may need to reach or stop, and it is the only roster that
+ *  is pure live state (entries never settle; they just disappear); then a
+ *  RUNNING command (a live process only the user can stop), then running
+ *  subagents (they change second to second), then the task board, then plans,
+ *  then bookmarks. Same rule for the corner cluster's core and for the
+ *  sheet's initial tab. A settled-only command roster (everything
+ *  completed/failed) does NOT outrank — it's history, not live state. */
 export function primaryKind(
-  subagents: readonly SubagentSnapshot[],
-  todos: readonly TodoItem[],
-  planBlocks: readonly PlanBlock[],
-  bookmarks: readonly SessionBookmark[],
+  _subagents?: readonly SubagentSnapshot[],
+  _todos?: readonly TodoItem[],
+  _planBlocks?: readonly PlanBlock[],
+  _bookmarks?: readonly SessionBookmark[],
+  _bashTasks?: readonly BashTaskSnapshot[],
+  _services?: readonly ServiceSnapshot[],
 ): ActivityNodeKey {
-  if (subagents.length > 0) return "subagents";
-  if (todos.length > 0) return "tasks";
-  if (planBlocks.length > 0) return "plans";
-  return "bookmarks";
+  return "overview";
 }
 
 /* ── Subagent metadata ──────────────────────────────────────────────── */
@@ -115,6 +136,19 @@ export function fmtUsage(snap: SubagentSnapshot): string {
   if (typeof snap.durationMs === "number") parts.push(`${Math.round(snap.durationMs / 1000)}s`);
   return parts.join(" · ");
 }
+
+/** Status tints per bash-command lifecycle state (the「运行命令」node's
+ *  rows). Mirrors SUBAGENT_STATUS_META's contract: display labels are
+ *  `labelKey`s resolved via t() at render time. */
+export const BASH_TASK_STATUS_META: Record<
+  BashTaskSnapshot["status"],
+  { labelKey: MessageId; cls: string }
+> = {
+  running: { labelKey: "chatStream.bashTask.statusRunning", cls: "text-accent" },
+  completed: { labelKey: "chatStream.bashTask.statusCompleted", cls: "text-accent" },
+  failed: { labelKey: "chatStream.bashTask.statusFailed", cls: "text-danger" },
+  killed: { labelKey: "chatStream.bashTask.statusKilled", cls: "text-danger" },
+};
 
 /* ── Plan titles ────────────────────────────────────────────────────── */
 
@@ -254,8 +288,12 @@ export function useActivityTabs(): {
   setTab: (node: ActivityNodeKey, tab: string) => void;
 } {
   const [tabs, setTabs] = useState<ActivityTabs>(() => ({
+    overview: "all",
     tasks: "all",
+    sched: "all",
     subagents: "all",
+    commands: "all",
+    services: "all",
     plans: "all",
     bookmarks: "all",
   }));

@@ -53,6 +53,7 @@ export {
   IconArrowsMaximize,
   IconArrowsMinimize,
   IconMenu2,
+  IconLayoutGrid,
   IconDots,
   IconDotsVertical,
   // Status / feedback
@@ -190,6 +191,8 @@ export {
   // Layout / window
   IconLayoutSidebarLeftExpand,
   IconLayoutSidebarRightExpand,
+  IconLayoutSidebarRight,
+  IconLayoutColumns,
   IconColumns3,
   IconMaximize,
   IconMinimize,

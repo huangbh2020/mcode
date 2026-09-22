@@ -155,9 +155,11 @@ export function SessionTabs() {
 
   return (
     <div
+      role="tablist"
+      aria-label="Session tabs"
       className={cn(
-        "flex shrink-0 items-center gap-0.5 border-b border-edge-panel bg-surface/40 px-2",
-        multiRow ? "min-h-9 py-1.5" : "h-9",
+        "flex shrink-0 items-center gap-1 border-b border-edge/60 bg-surface-muted/40 dark:bg-surface/50 backdrop-blur-md px-1.5",
+        multiRow ? "min-h-8 py-0.5" : "h-8",
       )}
     >
       {/* Left chevron — only when there's content scrolled off the left edge. */}
@@ -178,12 +180,12 @@ export function SessionTabs() {
           onScroll={recomputeScrollState}
           onWheel={onWheel}
           className={cn(
-            "no-scrollbar flex gap-0.5",
+            "no-scrollbar flex items-center gap-1 py-0.5",
             multiRow
               ? // Wrapped rows, capped at ~3 rows — beyond that the track
                 // scrolls vertically.
                 "max-h-[82px] flex-wrap content-start items-start overflow-y-auto"
-              : "items-center overflow-x-auto",
+              : "overflow-x-auto",
           )}
         >
           <DndContext
@@ -370,20 +372,13 @@ export function SortableSessionTab({
       aria-selected={isActive}
       title={title}
       className={cn(
-        // Uniform chip style shared with editor file tabs (rounded-md +
-        // resting bg). In the unified tab strip the two kinds are told
-        // apart by the vertical divider between the groups, not by shape.
-        "group flex max-w-[200px] cursor-pointer select-none items-center gap-1.5 rounded-md px-2.5 py-1 text-[11px] transition-colors",
-        // Multi-row: flex-1 (basis 0 + grow) lets tabs stretch between the
-        // shared 170px min floor and the max cap above — line-breaking uses
-        // the floor, so tabs share one line whenever they can fit shrunk,
-        // instead of wrapping at their natural (title) width. Single-row:
-        // fixed natural-width chips inside the horizontally scrolling strip.
+        // Apple-style Compact Integrated Card Tab (方案 1)
+        "group flex h-[27px] max-w-[200px] cursor-pointer select-none items-center gap-1.5 rounded-md px-2.5 text-[11px] transition-all duration-150",
         multiRow ? "min-w-[170px] flex-1" : "min-w-0 shrink-0",
         isActive
-          ? "bg-accent/15 text-content ring-1 ring-inset ring-accent/40 dark:text-accent"
-          : "bg-surface-muted/60 text-content-muted hover:bg-surface-hover/70 hover:text-content",
-        isDragging && "shadow-lg",
+          ? "bg-surface text-content font-medium shadow-xs border border-edge/60 dark:bg-surface-hover dark:border-white/10 dark:shadow-[0_1px_3px_rgba(0,0,0,0.35)]"
+          : "text-content-muted hover:text-content hover:bg-surface-hover/50 border border-transparent",
+        isDragging && "shadow-lg opacity-80 z-20",
       )}
     >
       {/* Project identity leads the tab: the owning project's colored
@@ -435,7 +430,7 @@ export function SortableSessionTab({
         onClick={handleClose}
         onPointerDown={(e) => e.stopPropagation()}
         className={cn(
-          "ml-0.5 h-4 w-4 shrink-0 items-center justify-center rounded text-content-subtle hover:bg-surface-hover hover:text-content",
+          "ml-0.5 h-4 w-4 shrink-0 items-center justify-center rounded text-content-subtle transition-colors hover:bg-black/10 dark:hover:bg-white/15 hover:text-content",
           isActive ? "inline-flex" : "hidden group-hover:inline-flex",
         )}
       >

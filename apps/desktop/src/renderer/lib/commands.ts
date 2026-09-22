@@ -204,6 +204,17 @@ const STATIC_COMMANDS: StaticCommandDef[] = [
           return;
         }
       }
+      // If focus is currently inside the files panel, close the active file
+      const focusInFiles =
+        typeof document !== "undefined" &&
+        !!document.activeElement?.closest?.('[data-files-panel="true"]');
+      if (focusInFiles && s.activeProjectId) {
+        const file = s.ideActiveFileByProject[s.activeProjectId];
+        if (file) {
+          s.closeFileInIde(file);
+          return;
+        }
+      }
       if (s.activeSessionId) s.closeTab(s.activeSessionId);
     },
     available: (s) =>
@@ -380,11 +391,18 @@ const STATIC_COMMANDS: StaticCommandDef[] = [
     id: "layout.toggle-bottom-terminal",
     labelKey: "lib.commands.toggleTerminal",
     group: "布局",
-    keywords: ["terminal", "bottom", "toggle", "终端", "底部"],
+    keywords: ["terminal", "sidebar", "toggle", "终端", "侧边栏"],
     icon: IconTerminal2,
     defaultAccelerator: DEFAULT_SHORTCUTS["layout.toggle-bottom-terminal"],
     perform: (s) => {
-      s.setBottomTerminalOpen(!s.bottomTerminalOpen);
+      if (!s.rightOpen) {
+        s.setRightOpen(true);
+        s.setRightPanelTab("terminal");
+      } else if (s.rightPanelTab === "terminal") {
+        s.setRightOpen(false);
+      } else {
+        s.setRightPanelTab("terminal");
+      }
     },
   },
   {

@@ -7,7 +7,7 @@
  */
 import { sendToRenderer } from "@main/window.js";
 import { IPC } from "@contracts/ipc";
-import type { RuntimeEvent, PermissionMode, ContextSnapshot, TurnUsageRecord, TurnFileEntry, UserMessageEvent, UpstreamIssueEvent, SubagentTranscriptBlock, SubagentSnapshot } from "@contracts/runtime";
+import type { RuntimeEvent, PermissionMode, ContextSnapshot, TurnUsageRecord, TurnFileEntry, UserMessageEvent, UpstreamIssueEvent, SubagentTranscriptBlock, SubagentSnapshot, BashTaskSnapshot } from "@contracts/runtime";
 import type { Session } from "@contracts/session";
 import type { ProviderContext, TurnHandle, StartTurnRequest, UserInputAnswers, PlanApprovalDecision } from "@contracts/provider";
 import { providerRegistry } from "@main/providers/registry.js";
@@ -64,6 +64,13 @@ interface SessionRuntime {
    *  turn's adapter starts with EMPTY state, so without this carry-over its
    *  first roster flush would REPLACE the renderer's/DB's history away. */
   lastSubagents: SubagentSnapshot[];
+  /** Latest bash-task roster (REPLACE snapshots from `bash-tasks.update`).
+   *  Same carry-over rationale as lastSubagents: a backgrounded command can
+   *  outlive its spawning turn's adapter (the settle gate keeps the CLI
+   *  alive for it), so the next turn replays this list until the fresh
+   *  adapter's first event replaces it. Process-lifetime only — NOT
+   *  persisted (the CLI dies with the app, taking its commands with it). */
+  lastBashTasks: BashTaskSnapshot[];
   /** Subagent token growth observed since the last usage-history record
    *  settled (i.e. during the current turn). Copied into the record as
    *  `subagentTokens` and reset by settlePendingTurnEnd. */
@@ -255,6 +262,11 @@ class RuntimeManager {
             log.error(`failed to persist subagent transcripts: ${(err as Error).message}`);
           }
         }
+      } else if (e.type === "bash-tasks.update") {
+        // Carry the bash-task roster across turns (mirror of lastSubagents;
+        // NOT persisted — the roster dies with the CLI process).
+        const rt = this.sessions.get(session.id);
+        if (rt) rt.lastBashTasks = e.tasks;
       } else if (e.type === "plan.update") {
         try {
           SessionRepo.updatePlanDraft(session.id, { plan: e.plan, phase: e.phase });
@@ -343,6 +355,9 @@ class RuntimeManager {
       // to prevent that, so it must have data to replay).
       subagentTranscripts: new Map(Object.entries(session.subagentTranscripts ?? {})),
       lastSubagents: session.subagents ?? [],
+      // Bash tasks are process-lifetime only (nothing persisted on the row —
+      // the CLI dies with the app), so a fresh bind always starts empty.
+      lastBashTasks: [],
     });
   }
 
@@ -356,6 +371,18 @@ class RuntimeManager {
       if (rt.handle?.isRunning()) ids.push(id);
     }
     return ids;
+  }
+
+  /** Reverse lookup for the service scanner: the GUI session id owning the
+   *  given provider (claude CLI) session id. The scanner parses
+   *  `--resume=<cliSid>` off the CLI process's command line and needs the
+   *  GUI side of that mapping; `providerSessionId` is kept current by
+   *  onProviderSessionId, so this always reflects the newest CLI session. */
+  findSessionIdByProviderId(providerSessionId: string): string | null {
+    for (const [id, rt] of this.sessions) {
+      if (rt.providerSessionId === providerSessionId) return id;
+    }
+    return null;
   }
 
   /** Append the deferred per-turn usage-history record (stashed by the
@@ -477,6 +504,16 @@ class RuntimeManager {
         type: "subagent.update",
         sessionId: session.id,
         agents: rt.lastSubagents,
+      });
+    }
+    // Same cross-turn replay for the bash-task roster: a backgrounded command
+    // that outlived the previous turn's adapter must stay visible until the
+    // fresh adapter's own events replace the list.
+    if (rt.lastBashTasks.length > 0) {
+      rt.ctx.emit({
+        type: "bash-tasks.update",
+        sessionId: session.id,
+        tasks: rt.lastBashTasks,
       });
     }
     for (const [parentToolUseId, blocks] of rt.subagentTranscripts) {
@@ -618,6 +655,21 @@ class RuntimeManager {
     const rt = this.sessions.get(sessionId);
     if (!rt?.handle) return;
     rt.handle.interrupt();
+  }
+
+  /** Stop ONE running CLI task (a long-running bash command the agent
+   *  started) without aborting the turn — routes to the provider's
+   *  TurnHandle.stopTask (SDK `stop_task` control request). Returns false
+   *  when there is nothing that can stop the task (no live turn, or the
+   *  provider has no task-level control); throws the provider's error
+   *  otherwise (e.g. unknown task id, turn just finished). */
+  async stopTask(sessionId: string, taskId: string): Promise<boolean> {
+    const rt = this.sessions.get(sessionId);
+    if (!rt?.handle?.isRunning()) return false;
+    const stop = rt.handle.stopTask;
+    if (!stop) return false;
+    await stop.call(rt.handle, taskId);
+    return true;
   }
 
   dispose(sessionId: string): void {

@@ -16,11 +16,13 @@ import { initAutoArchiver } from "@main/session/AutoArchiver.js";
 import { notificationManager } from "@main/notifications/NotificationManager.js";
 import { orchestrator } from "@main/orchestrator/OrchestratorService.js";
 import { initAutomationScheduler, disposeAutomationScheduler } from "@main/automation/AutomationScheduler.js";
+import { initServiceScanner, disposeServiceScanner } from "@main/lib/serviceScanner.js";
 import { is } from "@main/utils.js";
 import { preloadClaudeSdk } from "@main/providers/claude-sdk/ClaudeAgentSdkProvider.js";
 import { logStartup } from "@main/lib/startupTimer.js";
 import { log } from "@main/lib/logger.js";
 import { setManagedRuntimeRoot } from "@main/runtimes/managedRuntimeRoots.js";
+import { killDescendants } from "@main/lib/procTree.js";
 import { join } from "node:path";
 
 // App identity for OS-level surfaces (desktop notifications, taskbar grouping,
@@ -204,6 +206,12 @@ app.whenReady().then(async () => {
   // same DB-gated pattern as the orchestrator above.
   initAutomationScheduler();
 
+  // Start the agent-service scanner (ground-truth port scan for services the
+  // model started — dev servers etc.). Its 5s tick self-gates: it only runs
+  // platform snapshots while a claude CLI process is alive, a turn is running
+  // or a tracked service still listens, so idle cost is zero.
+  initServiceScanner();
+
   // Start the mobile companion HTTP server (LAN-facing). Fire-and-forget: it
   // awaits DB readiness internally to read its enabled/port settings, then
   // binds 0.0.0.0:<port>. If disabled (mobile.enabled=0) it resolves to an
@@ -261,7 +269,22 @@ app.on("before-quit", (event) => {
   if (!sessionCookiesFlushed) {
     event.preventDefault();
     const timeout = new Promise<void>((r) => setTimeout(r, 3000).unref());
-    void Promise.race([BrowserManager.saveCookieVault(), timeout]).finally(() => {
+    // Reap the whole descendant tree of the main process alongside the
+    // cookie flush (both run inside this 3s window). The claude CLI the SDK
+    // spawns is a direct child, and the commands the model started through
+    // the Bash tool (python scripts, dev servers) are grandchildren —
+    // without this they survive the app as orphans and the user has to kill
+    // them from the task manager. Best-effort; see lib/procTree.ts. The
+    // Promise.all means quit waits for BOTH the flush and the reap (or the
+    // 3s timeout, whichever comes first) — racing them individually would
+    // let a fast reap cut the cookie flush short.
+    const preQuit = Promise.all([
+      BrowserManager.saveCookieVault().catch(() => {}),
+      killDescendants(process.pid).then((r) => {
+        if (r.terminated.length > 0) log.info(`quit: reaped ${r.terminated.length} descendant process(es)`);
+      }),
+    ]);
+    void Promise.race([preQuit, timeout]).finally(() => {
       sessionCookiesFlushed = true;
       app.quit();
     });
@@ -272,6 +295,7 @@ app.on("before-quit", (event) => {
   lspManager.disposeAll();
   orchestrator.disposeAll();
   disposeAutomationScheduler();
+  disposeServiceScanner();
   BrowserManager.disposeAll();
   relayManager.disposeAll();
   stopMobileServer();

@@ -39,8 +39,8 @@ export const ContentTagChip = forwardRef<
         // promotion, file drop, @-mention pick) — see styles.css.
         "composer-tag-in inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-[11px] transition-colors",
         open
-          ? "border-accent bg-accent/20 text-accent"
-          : "border-accent/40 bg-accent/10 text-accent hover:border-accent/70 hover:bg-accent/20",
+          ? "border-accent/60 bg-accent/10 text-content ring-1 ring-accent/30 shadow-xs"
+          : "border-edge/70 bg-surface-muted/70 text-content hover:bg-surface-hover/80 hover:border-edge shadow-2xs",
       )}
     >
       <button
@@ -53,27 +53,27 @@ export const ContentTagChip = forwardRef<
               ? (open ? t("chat.tag.hidePreview") : t("chat.tag.viewElement"))
               : open ? t("chat.tag.hidePreview") : t("chat.tag.viewContent")
         }
-        className="flex items-center gap-1"
+        className="flex items-center gap-1.5"
       >
         {isFile ? (
           isImageFile(tag) ? (
-            <IconPhoto size={12} className="opacity-80" />
+            <IconPhoto size={12} className="shrink-0 text-violet-500 opacity-90" />
           ) : (
-            <IconFile size={12} className="opacity-80" />
+            <IconFile size={12} className="shrink-0 text-blue-500 opacity-90" />
           )
         ) : isElement ? (
-          <IconCode size={12} className="opacity-80" />
+          <IconCode size={12} className="shrink-0 text-amber-500 opacity-90" />
         ) : (
-          <IconClipboard size={12} className="opacity-80" />
+          <IconClipboard size={12} className="shrink-0 text-emerald-500 opacity-90" />
         )}
-        <span className="max-w-[160px] truncate font-normal">{tag.preview}</span>
+        <span className="max-w-[160px] truncate font-normal text-content">{tag.preview}</span>
       </button>
       <button
         type="button"
         onClick={onRemove}
         title={t("chat.tag.removeTitle")}
         aria-label={t("chat.tag.removeTitle")}
-        className="ml-0.5 flex h-4 w-4 items-center justify-center rounded text-accent/70 transition-colors hover:bg-accent/30 hover:text-accent"
+        className="ml-0.5 flex h-4 w-4 items-center justify-center rounded text-content-muted transition-colors hover:bg-surface-hover hover:text-content"
       >
         <IconX size={11} />
       </button>

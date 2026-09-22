@@ -1356,6 +1356,11 @@ export class ClaudeAgentSdkProvider implements AgentProvider {
     adapter.setSettleGate(gate.release);
 
     let finished = false;
+    // The query the stopTask control request routes to. The transport-retry
+    // loop below replaces the query object; keeping a live reference lets
+    // the TurnHandle's stopTask always reach the CLI process that owns the
+    // task, including after a retry.
+    let liveQuery = q;
     const done = (async () => {
       // Transport-level retry loop. The SDK already retries API-level
       // transient errors (429 / overloaded / 5xx) internally — surfaced via
@@ -1419,6 +1424,7 @@ export class ClaudeAgentSdkProvider implements AgentProvider {
                 setTimeout(() => retryGate?.release(), PROMPT_SETTLE_FALLBACK_MS),
               );
               activeQuery = (await loadQuery())({ prompt: buildPromptInput(req, retryGate, ac.signal), options });
+              liveQuery = activeQuery;
               activeAdapter = new SdkMessageAdapter(
                 ctx,
                 req.sessionId,
@@ -1467,6 +1473,21 @@ export class ClaudeAgentSdkProvider implements AgentProvider {
       done,
       interrupt: () => ac.abort(),
       isRunning: () => !finished && !ac.signal.aborted,
+      // Per-task stop (SDK `stop_task` control request): kills ONE running
+      // CLI task — a long-running bash command the agent started — without
+      // aborting the turn. The command's tool_result comes back to the model
+      // as a stop, and the turn continues. Only valid while this turn's CLI
+      // process is alive (the settle gate holds stdin open precisely so
+      // backgrounded work outlives the stream). NOTE we deliberately do NOT
+      // declare `perTaskStopAffordance` — without the declaration an
+      // interrupt kills background tasks too (the CLI's fail-closed rule),
+      // which keeps Mcode's stop button meaning "stop everything".
+      stopTask: async (taskId: string) => {
+        if (finished) {
+          throw new Error("回合已结束,无法停止任务(turn already finished)");
+        }
+        await liveQuery.stopTask(taskId);
+      },
     };
   }
 

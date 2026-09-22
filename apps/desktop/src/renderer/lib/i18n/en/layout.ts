@@ -112,6 +112,7 @@ export const en = {
   "layout.hideEditor": "Hide editor",
   "layout.noOpenFiles": "No open files",
   "layout.tabFiles": "Files",
+  "layout.tabTerminal": "Terminal",
   "layout.tabTurns": "Turn Flow",
   "layout.tabBrowser": "Browser",
   "layout.closeSidebarBrowser": "Close sidebar browser",
@@ -217,5 +218,7 @@ export const en = {
   "layout.image.reveal": "Show in file manager",
   "layout.image.revealed": "Opened containing folder",
   "layout.image.revealFailed": "Couldn't open the containing folder",
+  "layout.image.fitWidth": "Fit width (scroll)",
+  "layout.image.fitScreen": "Fit to window",
   "layout.image.closePreview": "Close preview",
 } as const;

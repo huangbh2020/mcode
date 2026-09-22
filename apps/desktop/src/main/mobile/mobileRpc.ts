@@ -25,6 +25,8 @@ import {
   StartSessionSchema,
   SendTurnSchema,
   InterruptSchema,
+  StopTaskSchema,
+  StopServiceSchema,
   ApproveSchema,
   RespondQuestionSchema,
   RespondPlanApprovalSchema,
@@ -67,6 +69,7 @@ import type { PairedDevice, MobileRpcRequest } from "@contracts/mobile";
 import { SessionRepo, ProjectRepo, MessageRepo, SettingRepo } from "@main/store/repositories.js";
 import { providerRegistry } from "@main/providers/registry.js";
 import { runtimeManager } from "@main/claude/RuntimeManager.js";
+import { serviceScanner } from "@main/lib/serviceScanner.js";
 import { log } from "@main/lib/logger.js";
 import { broadcastSessionChanged, broadcastSessionDeleted } from "@main/lib/sessionSync.js";
 import { createOrReuseSession } from "@main/lib/sessionStart.js";
@@ -291,6 +294,23 @@ const HANDLERS: Record<string, RpcHandler> = {
     const input = InterruptSchema.parse(raw);
     runtimeManager.interrupt(input.sessionId);
     SessionRepo.updateStatus(input.sessionId, "interrupted");
+    return { ok: true };
+  },
+
+  // Stop ONE running CLI task (long-running agent command) without aborting
+  // the turn — mirrors the desktop claude:stopTask IPC handler.
+  "claude:stopTask": async (raw) => {
+    const input = StopTaskSchema.parse(raw);
+    const stopped = await runtimeManager.stopTask(input.sessionId, input.taskId);
+    if (!stopped) throw new Error("no live turn for this session");
+    return { ok: true };
+  },
+
+  // Kill the process tree behind ONE discovered agent-started service —
+  // mirrors the desktop claude:stopService IPC handler.
+  "claude:stopService": async (raw) => {
+    const input = StopServiceSchema.parse(raw);
+    await serviceScanner.stopService(input.sessionId, input.pid, input.port);
     return { ok: true };
   },
 

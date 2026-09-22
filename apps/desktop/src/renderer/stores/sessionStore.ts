@@ -13,6 +13,8 @@ import type {
   PlanUpdateEvent,
   SubagentSnapshot,
   SubagentTranscriptBlock,
+  BashTaskSnapshot,
+  ServiceSnapshot,
   ContextSnapshot,
   TurnUsageRecord,
   SessionListEntry,
@@ -38,6 +40,7 @@ import { DEFAULT_EDITOR_THEME_CHOICE, parseEditorThemeChoice, type EditorThemeCh
 import { sanitizeFontFamily } from "@renderer/lib/theme.js";
 import {
   DISPLAY_MODE_SETTING_KEY,
+  TABS_FILE_PREVIEW_PLACEMENT_SETTING_KEY,
   TAB_BAR_MULTI_ROW_SETTING_KEY,
   LEFTBAR_MODE_SETTING_KEY,
   THEME_STYLE_SETTING_KEY,
@@ -89,6 +92,7 @@ import {
   GestureSettingsSchema,
   type AutoArchiveConfig,
   type DisplayMode,
+  type TabsFilePreviewPlacement,
   type LeftBarMode,
   type Locale,
   type VoiceEngine,
@@ -263,10 +267,15 @@ function currentNavEntryFor(get: () => SessionState): NavEntry | null {
  *  and toast again, or they'd be silently missed. */
 function isSessionChatOnScreen(
   sid: string,
-  s: Pick<SessionState, "activeSessionId" | "displayMode" | "centerTabFocus" | "widePanelOpen">,
+  s: Pick<SessionState, "activeSessionId" | "displayMode" | "tabsFilePreviewPlacement" | "centerTabFocus" | "widePanelOpen">,
 ): boolean {
   if (sid !== s.activeSessionId) return false;
-  return !(s.displayMode === "tabs" && s.centerTabFocus === "editor" && !s.widePanelOpen);
+  return !(
+    s.displayMode === "tabs" &&
+    s.tabsFilePreviewPlacement !== "sidebar" &&
+    s.centerTabFocus === "editor" &&
+    !s.widePanelOpen
+  );
 }
 
 /** True when `sid` belongs to a loaded side chat (any parent's bucket in
@@ -630,6 +639,14 @@ export interface GitDiffDialogTab {
   staged?: boolean;
 }
 
+export type SelectedGitDiffTarget = {
+  repoPath: string;
+  repoName: string;
+  filePath: string;
+  staged: boolean;
+  status: string;
+};
+
 /** Composer working-environment choice (the chip above the textarea). The
  *  two worktree forms differ ONLY in what materialization creates — a
  *  detached checkout ("wt-detached", experimental verification) or a
@@ -736,6 +753,12 @@ export interface SessionState {
   openTabs: string[];
   /** How the center pane renders. Persisted in the `settings` table. */
   displayMode: DisplayMode;
+  /** In `tabs` displayMode: whether file previews open in the center unified
+   *  tab bar ("center", default) or in the right sidebar's dual-column preview ("sidebar").
+   *  Persisted in the `settings` table under `ui.tabsFilePreviewPlacement`. */
+  tabsFilePreviewPlacement: TabsFilePreviewPlacement;
+  setTabsFilePreviewPlacement: (placement: TabsFilePreviewPlacement) => void;
+  toggleTabsFilePreviewPlacement: () => void;
   /** Whether the tab strips wrap their tabs onto multiple rows instead of
    *  scrolling one horizontal row (toggled from the bars' "⋯" overflow
    *  menu). Persisted under `ui.tabBarMultiRow`. */
@@ -1028,6 +1051,7 @@ export interface SessionState {
    *  counter returns to zero. A counter (not a boolean) composes correctly
    *  when multiple overlays are open at once. NOT persisted. */
   browserViewSuppressed: number;
+
   /* ── Draggable pane sizes ──
    *  Persisted as one JSON blob (UI_PANE_WIDTHS_SETTING_KEY) and re-clamped
    *  on hydrate. Updated live during drag (synchronous set); the DB write is
@@ -1037,8 +1061,23 @@ export interface SessionState {
   leftWidthPct: number;
   /** Right IDE panel width in px. */
   rightWidth: number;
+  /** Normal right panel width in px when not in expanded preview mode. */
+  normalRightWidth: number;
+  /** Preview right panel width in px when in expanded preview mode. */
+  previewRightWidth: number;
+  /** True when right panel is automatically expanded for single-mode file preview. */
+  isRightPreviewExpanded: boolean;
+  /** File preview column share (%) in FilesPanel dual-column mode. */
+  fileTreeSplitPct: number;
+  /** Diff preview column share (%) in GitPanel dual-column mode. */
+  gitDiffSplitPct: number;
+  /** Currently selected file for diff preview in GitPanel. */
+  selectedGitDiffFile: SelectedGitDiffTarget | null;
+  /** Monotonic counter bumped whenever git status changes to notify listeners. */
+  gitStatusNonce: number;
   /** Bottom terminal bar height in px (when expanded). */
   bottomTerminalHeight: number;
+
   /** Editor-column share of the center pane, as a percentage 0–100. The chat
    *  column gets the remainder. Only meaningful when a file is open. */
   editorWidthPct: number;
@@ -1154,6 +1193,19 @@ export interface SessionState {
    *  data rebuilt each turn; cleared when a new turn starts (mirroring the
    *  roster's rebuild cycle). */
   subagentTranscriptsBySession: Record<string, Record<string, SubagentTranscriptBlock[]>>;
+  /** Per-session roster of the agent's tracked bash commands (REPLACE
+   *  semantics from `bash-tasks.update`) — the model-started processes
+   *  (dev servers, long scripts) the activity console's「运行命令」node
+   *  lists with per-task stop controls. NOT persisted: the CLI and every
+   *  command it spawned die with the app, so a restart starts empty. */
+  bashTasksBySession: Record<string, BashTaskSnapshot[]>;
+  /** Per-session roster of discovered agent-started services (REPLACE
+   *  semantics from `services.update` — the main-process service scanner's
+   *  ground-truth port scan: listening sockets under the session's CLI
+   *  subtree, nohup orphans included). The activity console's「服务」node
+   *  lists them with port/open/stop controls. NOT persisted — entries live
+   *  exactly as long as the socket does. */
+  servicesBySession: Record<string, ServiceSnapshot[]>;
   /** Per-session context-window snapshot (from `token-usage.updated` events).
    *  The adapter already did all the math (usedTokens / maxTokens / pct /
    *  warning), so the renderer only stores + renders. Keyed by sessionId so
@@ -1649,6 +1701,16 @@ export interface SessionState {
     images?: PromptImage[],
   ) => Promise<void>;
   interrupt: (sessionId?: string) => Promise<void>;
+  /** Stop ONE running agent command (bash task) without aborting the turn —
+   *  backed by the SDK's `stop_task` control request. The roster update
+   *  arrives via the bash-tasks.update event stream; on failure surfaces a
+   *  toast (e.g. the turn already finished, so nothing can stop the task). */
+  stopBashTask: (sessionId: string, taskId: string) => Promise<void>;
+  /** Kill the process tree behind ONE discovered agent-started service —
+   *  backed by the service scanner's `killProcessTree`. The roster update
+   *  arrives via the scanner's immediate post-kill re-scan (services.update);
+   *  on failure surfaces a toast (e.g. the socket already closed). */
+  stopService: (sessionId: string, service: ServiceSnapshot) => Promise<void>;
   ingestEvent: (e: RuntimeEvent) => void;
   /** Update the window-focus flag. Called from useClaudeEvents on Electron
    *  `window:focusChanged` + `document.visibilitychange`. When the window
@@ -1735,11 +1797,20 @@ export interface SessionState {
   /** Apply an incremental delta to the editor-column percentage. The delta
    *  is in px; the caller converts to pct via the container width. */
   adjustEditorWidthPct: (deltaPx: number) => void;
+  /** Apply an incremental delta (in percentage points) to the file-preview split share. */
+  adjustFileTreeSplitPct: (deltaPct: number) => void;
+  /** Apply an incremental delta (in percentage points) to the git-diff split share. */
+  adjustGitDiffSplitPct: (deltaPct: number) => void;
   /** Reset a pane width to its default (double-click on the divider). */
   resetLeftWidthPct: () => void;
   resetRightWidth: () => void;
   resetBottomTerminalHeight: () => void;
   resetEditorWidthPct: () => void;
+  resetFileTreeSplitPct: () => void;
+  resetGitDiffSplitPct: () => void;
+  setSelectedGitDiffFile: (target: SelectedGitDiffTarget | null) => void;
+  bumpGitStatusNonce: () => void;
+
   /** Update the center-pane display mode. Persists to the `settings`
    *  table so the choice survives restart. */
   setDisplayMode: (mode: DisplayMode) => Promise<void>;
@@ -2099,6 +2170,7 @@ export interface SessionState {
   restoreAutomation: (taskId: string) => Promise<void>;
   setAutomationEnabled: (taskId: string, enabled: boolean) => Promise<void>;
   runAutomationNow: (taskId: string) => Promise<Session | null>;
+  stopAutomationRun: (taskId: string) => Promise<void>;
   ingestAutomationEvent: (automationId: string | null) => void;
   /** composer「定时任务」每会话草稿:配置后点发送即创建任务(而非普通回合)。 */
   taskScheduleBySession: Record<string, Automation["schedule"] | null>;
@@ -2422,6 +2494,10 @@ const EMPTY_CODEX_MODELS: BuiltinModelOption[] = [];
 const EMPTY_SKILLS: SkillInfo[] = [];
 const EMPTY_SESSIONS: Session[] = [];
 export const EMPTY_SUBAGENTS: SubagentSnapshot[] = [];
+/** Stable empty bash-task roster (selector must return a stable array). */
+export const EMPTY_BASH_TASKS: BashTaskSnapshot[] = [];
+/** Stable empty service roster (selector must return a stable array). */
+export const EMPTY_SERVICES: ServiceSnapshot[] = [];
 /** Stable empty usage-history reference (selector must return a stable array). */
 export const EMPTY_USAGE: TurnUsageRecord[] = [];
 /** Stable empty bookmark-list reference (selector-stability rule). */
@@ -2574,6 +2650,8 @@ export const BOTTOM_TERMINAL_HEIGHT_MIN = 80;
 export const BOTTOM_TERMINAL_HEIGHT_MAX = 600;
 export const EDITOR_WIDTH_PCT_MIN = 20;
 export const EDITOR_WIDTH_PCT_MAX = 80;
+/** Minimum width for the center chat panel in pixels. */
+export const CENTER_CHAT_WIDTH_MIN = 450;
 
 /** Clamp helper for the four persisted pane sizes. Falls back to defaults on
  *  any non-finite value so the layout never breaks. */
@@ -2591,13 +2669,20 @@ export function clampLeftWidthPct(pct: number): number {
   );
 }
 export function clampRightWidth(px: number, availablePx?: number): number {
-  if (!Number.isFinite(px)) return 360;
+  if (!Number.isFinite(px)) return 250;
   const max =
     availablePx != null && availablePx > 0
-      ? Math.max(RIGHT_WIDTH_MIN, Math.round(availablePx * RIGHT_SHARE_MAX))
+      ? Math.max(
+          RIGHT_WIDTH_MIN,
+          Math.min(
+            Math.round(availablePx * RIGHT_SHARE_MAX),
+            Math.max(RIGHT_WIDTH_MIN, availablePx - CENTER_CHAT_WIDTH_MIN),
+          ),
+        )
       : RIGHT_WIDTH_ABS_MAX;
   return Math.min(max, Math.max(RIGHT_WIDTH_MIN, Math.round(px)));
 }
+
 export function clampBottomTerminalHeight(px: number): number {
   if (!Number.isFinite(px)) return 280;
   return Math.min(
@@ -2610,6 +2695,23 @@ export function clampEditorWidthPct(pct: number): number {
   if (!Number.isFinite(pct)) return 50;
   return Math.min(EDITOR_WIDTH_PCT_MAX, Math.max(EDITOR_WIDTH_PCT_MIN, pct));
 }
+export const FILE_TREE_SPLIT_PCT_MIN = 20;
+export const FILE_TREE_SPLIT_PCT_MAX = 85;
+export const FILE_TREE_SPLIT_PCT_DEFAULT = (700 / 950) * 100;
+export function clampFileTreeSplitPct(pct: number): number {
+  if (!Number.isFinite(pct)) return FILE_TREE_SPLIT_PCT_DEFAULT;
+  return Math.min(FILE_TREE_SPLIT_PCT_MAX, Math.max(FILE_TREE_SPLIT_PCT_MIN, pct));
+}
+
+export const GIT_DIFF_SPLIT_PCT_MIN = 20;
+export const GIT_DIFF_SPLIT_PCT_MAX = 80;
+export const GIT_DIFF_SPLIT_PCT_DEFAULT = 60;
+export function clampGitDiffSplitPct(pct: number): number {
+  if (!Number.isFinite(pct)) return GIT_DIFF_SPLIT_PCT_DEFAULT;
+  return Math.min(GIT_DIFF_SPLIT_PCT_MAX, Math.max(GIT_DIFF_SPLIT_PCT_MIN, pct));
+}
+
+
 /** Width the center|right pair shares: the window minus the left sidebar's
  *  percentage share (the sidebar is hidden in wide-panel mode, where this
  *  pair spans the full window). Feeds the right panel's 2:8 drag cap. */
@@ -2996,6 +3098,10 @@ function dropSessionBuckets(s: SessionState, id: string) {
   delete subagentsBySession[id];
   const subagentTranscriptsBySession = { ...s.subagentTranscriptsBySession };
   delete subagentTranscriptsBySession[id];
+  const bashTasksBySession = { ...s.bashTasksBySession };
+  delete bashTasksBySession[id];
+  const servicesBySession = { ...s.servicesBySession };
+  delete servicesBySession[id];
   const pendingQuestionBySession = { ...s.pendingQuestionBySession };
   delete pendingQuestionBySession[id];
   const turnFilesBySession = { ...s.turnFilesBySession };
@@ -3049,6 +3155,8 @@ function dropSessionBuckets(s: SessionState, id: string) {
     planBySession,
     subagentsBySession,
     subagentTranscriptsBySession,
+    bashTasksBySession,
+    servicesBySession,
     pendingQuestionBySession,
     turnFilesBySession,
     bookmarksBySession,
@@ -4640,10 +4748,14 @@ function schedulePaneWidthPersist(get: () => SessionState): void {
         key: UI_PANE_WIDTHS_SETTING_KEY,
         value: JSON.stringify({
           leftPct: s.leftWidthPct,
-          right: s.rightWidth,
+          right: s.isRightPreviewExpanded ? s.normalRightWidth : s.rightWidth,
           bottomTerminal: s.bottomTerminalHeight,
           editor: s.editorWidthPct,
+          previewRight: s.previewRightWidth,
+          fileTreeSplitPct: s.fileTreeSplitPct,
+          gitDiffSplitPct: s.gitDiffSplitPct,
         }),
+
       });
     } catch (err) {
       console.error("setting.set(paneWidths) failed:", err);
@@ -4706,6 +4818,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   // `tabs` (unified tab bar) — new users land on the tabbed center pane;
   // anyone who explicitly picked a mode keeps their stored choice.
   displayMode: "tabs",
+  tabsFilePreviewPlacement: "center",
   // Tab strips wrap onto multiple rows instead of horizontal scrolling.
   // Persisted under `ui.tabBarMultiRow`; init() overwrites from the DB.
   // Default false = the classic single scrolling row.
@@ -4818,9 +4931,18 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   // init() hydrates + clamps. These defaults match the original hardcoded
   // widths so the first-run layout is unchanged.
   leftWidthPct: LEFT_WIDTH_PCT_DEFAULT,
-  rightWidth: 360,
+  rightWidth: 250,
+  normalRightWidth: 250,
+  previewRightWidth: 950,
+  isRightPreviewExpanded: false,
+  fileTreeSplitPct: FILE_TREE_SPLIT_PCT_DEFAULT,
+  gitDiffSplitPct: GIT_DIFF_SPLIT_PCT_DEFAULT,
+  selectedGitDiffFile: null,
+  gitStatusNonce: 0,
   bottomTerminalHeight: 280,
   editorWidthPct: 50,
+
+
   permissionMode: "default",
     envChoice: "local",
   providerId: DEFAULT_PROVIDER_ID,
@@ -4844,6 +4966,8 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   planApprovalDraftBySession: {},
   subagentsBySession: {},
   subagentTranscriptsBySession: {},
+  bashTasksBySession: {},
+  servicesBySession: {},
   contextSnapshotBySession: {},
   usageHistoryBySession: {},
   pendingQuestionBySession: {},
@@ -4945,6 +5069,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       .getMany({
         keys: [
           DISPLAY_MODE_SETTING_KEY,
+          TABS_FILE_PREVIEW_PLACEMENT_SETTING_KEY,
           TAB_BAR_MULTI_ROW_SETTING_KEY,
           LEFTBAR_MODE_SETTING_KEY,
           THEME_STYLE_SETTING_KEY,
@@ -5006,6 +5131,14 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       if (value === "single" || value === "tabs") set({ displayMode: value });
     } catch (err) {
       console.error("apply(displayMode) failed:", err);
+    }
+
+    // In tabs displayMode: file preview placement ("center" | "sidebar")
+    try {
+      const value = fp[TABS_FILE_PREVIEW_PLACEMENT_SETTING_KEY];
+      if (value === "center" || value === "sidebar") set({ tabsFilePreviewPlacement: value });
+    } catch (err) {
+      console.error("apply(tabsFilePreviewPlacement) failed:", err);
     }
 
     // Multi-row tab wrapping — must land before the bars' first render so
@@ -5501,8 +5634,15 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       const paneRaw = ds[UI_PANE_WIDTHS_SETTING_KEY];
       if (paneRaw) {
         const parsed = JSON.parse(paneRaw) as Partial<{
-          leftPct: number; right: number; bottomTerminal: number; editor: number;
+          leftPct: number;
+          right: number;
+          bottomTerminal: number;
+          editor: number;
+          previewRight: number;
+          fileTreeSplitPct: number;
+          gitDiffSplitPct: number;
         }>;
+
         const patch: Partial<SessionState> = {};
         if (parsed && typeof parsed === "object") {
           // Only `leftPct` is read — the legacy `left` (px) field from the old
@@ -5524,7 +5664,19 @@ export const useSessionStore = create<SessionState>((set, get) => ({
             patch.bottomTerminalHeight = clampBottomTerminalHeight(parsed.bottomTerminal!);
           }
           if (Number.isFinite(parsed.editor)) patch.editorWidthPct = clampEditorWidthPct(parsed.editor!);
+          if (patch.rightWidth != null) patch.normalRightWidth = patch.rightWidth;
+          if (Number.isFinite(parsed.previewRight)) {
+            const leftPct = Number.isFinite(parsed.leftPct) ? parsed.leftPct! : get().leftWidthPct;
+            patch.previewRightWidth = clampRightWidth(parsed.previewRight!, centerRightRowWidth(get().leftOpen, leftPct));
+          }
+          if (Number.isFinite(parsed.fileTreeSplitPct)) {
+            patch.fileTreeSplitPct = clampFileTreeSplitPct(parsed.fileTreeSplitPct!);
+          }
+          if (Number.isFinite(parsed.gitDiffSplitPct)) {
+            patch.gitDiffSplitPct = clampGitDiffSplitPct(parsed.gitDiffSplitPct!);
+          }
           if (Object.keys(patch).length > 0) set(patch);
+
         }
       }
     } catch (err) {
@@ -7326,6 +7478,19 @@ export const useSessionStore = create<SessionState>((set, get) => ({
             ),
           }
         : s.subagentsBySession;
+      // Same demotion for the bash-task roster: without
+      // perTaskStopAffordance declared, the CLI's interrupt kills background
+      // tasks too (fail-closed rule), so a still-"running" command row must
+      // not linger after the user's stop.
+      const curBash = s.bashTasksBySession[sessionId] ?? [];
+      const bashTasksBySession = curBash.some((t) => t.status === "running")
+        ? {
+            ...s.bashTasksBySession,
+            [sessionId]: curBash.map((t) =>
+              t.status === "running" ? { ...t, status: "killed" as const, endedAt: Date.now() } : t,
+            ),
+          }
+        : s.bashTasksBySession;
       const list = s.messagesBySession[sessionId];
       // Freeze the aborted turn's "开始·用时" row NOW instead of waiting for
       // the late turn.done{interrupted} (which lands seconds later while the
@@ -7343,11 +7508,33 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         runningTurnStartedAt,
         interruptedBySession: { ...s.interruptedBySession, [sessionId]: true },
         subagentsBySession,
+        bashTasksBySession,
         ...(frozen ? { messagesBySession: { ...s.messagesBySession, [sessionId]: frozen } } : {}),
       };
     });
     // User stopped the turn — drop any live upstream-retry hint with it.
     clearUpstreamIssue(set, sessionId);
+  },
+
+  stopBashTask: async (sessionId, taskId) => {
+    try {
+      await api.claude.stopTask({ sessionId, taskId });
+      // No optimistic roster update: the CLI emits task_updated / the level
+      // signal flips right after the stop lands, and the REPLACE event is
+      // the authoritative source. Keep the button armed until then.
+    } catch (err) {
+      pushToastLite("warning", translate(get().locale, "chatStream.bashTask.stopFailed"), err instanceof Error ? err.message : String(err));
+    }
+  },
+
+  stopService: async (sessionId, service) => {
+    try {
+      await api.claude.stopService({ sessionId, pid: service.pid, port: service.port });
+      // No optimistic roster update: the scanner re-scans right after the
+      // kill and its services.update REPLACE is the authoritative source.
+    } catch (err) {
+      pushToastLite("warning", translate(get().locale, "chatStream.service.stopFailed"), err instanceof Error ? err.message : String(err));
+    }
   },
 
   ingestEvent: (e) => {
@@ -7968,6 +8155,36 @@ export const useSessionStore = create<SessionState>((set, get) => ({
             [sid]: { ...(inner ?? {}), [e.parentToolUseId]: e.blocks },
           },
         };
+      });
+      return;
+    }
+    // bash-tasks.update: REPLACE semantics — swap the full roster of the
+    // agent's tracked bash commands. Same late-interrupt guard as
+    // subagent.update: after a manual stop, a straggler event must not
+    // resurrect a `running` entry the user's stop intent already killed.
+    if (e.type === "bash-tasks.update") {
+      set((s) => {
+        const tasks = s.interruptedBySession[sid]
+          ? e.tasks.map((t) => (t.status === "running" ? { ...t, status: "killed" as const } : t))
+          : e.tasks;
+        if (s.bashTasksBySession[sid] === tasks) return {};
+        return { bashTasksBySession: { ...s.bashTasksBySession, [sid]: tasks } };
+      });
+      return;
+    }
+    // services.update: REPLACE semantics — swap the full roster of the
+    // service scanner's ground-truth discoveries. The scanner re-emits an
+    // unchanged list every pass (self-heal for reloaded buckets), so the
+    // reducer dedupes by content signature to keep subscribers from
+    // re-rendering on every 5s heartbeat.
+    if (e.type === "services.update") {
+      set((s) => {
+        const cur = s.servicesBySession[sid];
+        if (cur && cur.length === e.services.length) {
+          const same = cur.every((c, i) => c.key === e.services[i]?.key && c.pid === e.services[i]?.pid);
+          if (same) return {};
+        }
+        return { servicesBySession: { ...s.servicesBySession, [sid]: e.services } };
       });
       return;
     }
@@ -8801,6 +9018,26 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     }
   },
 
+  stopAutomationRun: async (taskId) => {
+    try {
+      const task = get().automations.find((a) => a.id === taskId);
+      const sessionId = task?.taskSessionId;
+      if (sessionId) {
+        await get().interrupt(sessionId);
+      }
+      set((s) => ({
+        automations: s.automations.map((a) =>
+          a.id === taskId ? { ...a, lastStatus: "failed" as const } : a,
+        ),
+      }));
+      void get().loadAutomations();
+      pushToastLite("info", translate(get().locale, "automation.stopRunSuccess"));
+    } catch (err) {
+      console.error("automation.stopRun failed:", err);
+      pushToastLite("error", (err as Error).message);
+    }
+  },
+
   getSessionById: (sessionId) =>
     findSession(
       get().sessionsByProject,
@@ -9037,7 +9274,11 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       s.rightWidth - deltaPx,
       centerRightRowWidth(s.leftOpen, s.leftWidthPct),
     );
-    set({ rightWidth: next });
+    if (s.isRightPreviewExpanded) {
+      set({ rightWidth: next, previewRightWidth: next });
+    } else {
+      set({ rightWidth: next, normalRightWidth: next });
+    }
     schedulePaneWidthPersist(get);
   },
   adjustBottomTerminalHeight: (deltaPx) => {
@@ -9059,14 +9300,25 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     set({ editorWidthPct: next });
     schedulePaneWidthPersist(get);
   },
+  adjustFileTreeSplitPct: (deltaPct: number) => {
+    const next = clampFileTreeSplitPct(get().fileTreeSplitPct + deltaPct);
+    set({ fileTreeSplitPct: next });
+    schedulePaneWidthPersist(get);
+  },
   resetLeftWidthPct: () => {
     set({ leftWidthPct: LEFT_WIDTH_PCT_DEFAULT });
     schedulePaneWidthPersist(get);
   },
   resetRightWidth: () => {
-    set({ rightWidth: 360 });
+    const s = get();
+    if (s.isRightPreviewExpanded) {
+      set({ rightWidth: 950, previewRightWidth: 950 });
+    } else {
+      set({ rightWidth: 250, normalRightWidth: 250 });
+    }
     schedulePaneWidthPersist(get);
   },
+
   resetBottomTerminalHeight: () => {
     set({ bottomTerminalHeight: 280 });
     schedulePaneWidthPersist(get);
@@ -9075,6 +9327,26 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     set({ editorWidthPct: 50 });
     schedulePaneWidthPersist(get);
   },
+  resetFileTreeSplitPct: () => {
+    set({ fileTreeSplitPct: FILE_TREE_SPLIT_PCT_DEFAULT });
+    schedulePaneWidthPersist(get);
+  },
+  adjustGitDiffSplitPct: (deltaPct: number) => {
+    const next = clampGitDiffSplitPct(get().gitDiffSplitPct + deltaPct);
+    set({ gitDiffSplitPct: next });
+    schedulePaneWidthPersist(get);
+  },
+  resetGitDiffSplitPct: () => {
+    set({ gitDiffSplitPct: GIT_DIFF_SPLIT_PCT_DEFAULT });
+    schedulePaneWidthPersist(get);
+  },
+  setSelectedGitDiffFile: (target) => {
+    set({ selectedGitDiffFile: target });
+  },
+  bumpGitStatusNonce: () => {
+    set((s) => ({ gitStatusNonce: s.gitStatusNonce + 1 }));
+  },
+
   adjustWidePanelPct: (deltaPx) => {
     // Divider sits LEFT of the right panel in the wide-panel split, so a drag
     // right (delta>0) shrinks the right pane — same sign flip as the editor
@@ -9096,6 +9368,52 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     } catch (err) {
       console.error("setting.set(displayMode) failed:", err);
     }
+  },
+
+  setTabsFilePreviewPlacement: (placement) => {
+    set((s) => {
+      const pid = s.activeProjectId;
+      const activeFile = pid ? s.ideActiveFileByProject[pid] ?? null : null;
+      if (placement === "sidebar") {
+        return {
+          tabsFilePreviewPlacement: "sidebar",
+          ...(activeFile
+            ? {
+                rightOpen: true,
+                rightPanelTab: "files" as const,
+                normalRightWidth: s.isRightPreviewExpanded ? s.normalRightWidth : s.rightWidth,
+                rightWidth: clampRightWidth(
+                  Math.max(s.previewRightWidth, 950),
+                  centerRightRowWidth(s.leftOpen, s.leftWidthPct),
+                ),
+                isRightPreviewExpanded: true,
+                centerTabFocus: "chat" as const,
+              }
+            : {}),
+        };
+      } else {
+        return {
+          tabsFilePreviewPlacement: "center",
+          ...(activeFile && s.isRightPreviewExpanded
+            ? {
+                rightWidth: s.normalRightWidth,
+                isRightPreviewExpanded: false,
+                centerTabFocus: "editor" as const,
+              }
+            : activeFile
+              ? { centerTabFocus: "editor" as const }
+              : {}),
+        };
+      }
+    });
+    api.setting
+      .set({ key: TABS_FILE_PREVIEW_PLACEMENT_SETTING_KEY, value: placement })
+      .catch((err) => console.error("setting.set(tabsFilePreviewPlacement) failed:", err));
+  },
+
+  toggleTabsFilePreviewPlacement: () => {
+    const next = get().tabsFilePreviewPlacement === "sidebar" ? "center" : "sidebar";
+    get().setTabsFilePreviewPlacement(next);
   },
 
   setTabBarMultiRow: (on) => {
@@ -11195,10 +11513,28 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       // noise and cost, so diff opens leave the panel untouched.
       ...(opts?.diff ? {} : { ideFocusNonce: s.ideFocusNonce + 1 }),
       // Unified center bar (tabs displayMode): opening a file focuses the
-      // editor so it gets the full center width. Gated on tabs mode — the
-      // split layout in single mode ignores the flag, and keeping single
-      // mode out of it makes a later mode switch land on the chat.
-      ...(s.displayMode === "tabs" ? { centerTabFocus: "editor" as const } : {}),
+      // editor so it gets the full center width UNLESS user configured
+      // sidebar preview placement.
+      ...(s.displayMode === "tabs" && s.tabsFilePreviewPlacement === "center"
+        ? { centerTabFocus: "editor" as const }
+        : {}),
+      // Sidebar preview: file opens inside FilesPanel dual-column preview;
+      // automatically widen the right sidebar and switch to files tab.
+      // Active in `single` displayMode OR in `tabs` displayMode with `sidebar` placement.
+      ...(s.displayMode === "single" ||
+      (s.displayMode === "tabs" && s.tabsFilePreviewPlacement === "sidebar")
+        ? {
+            rightOpen: true,
+            rightPanelTab: "files" as const,
+            normalRightWidth: s.isRightPreviewExpanded ? s.normalRightWidth : s.rightWidth,
+            rightWidth: clampRightWidth(
+              Math.max(s.previewRightWidth, 950),
+              centerRightRowWidth(s.leftOpen, s.leftWidthPct),
+            ),
+            isRightPreviewExpanded: true,
+          }
+        : {}),
+
       // If a line was requested (goto-definition), stash a reveal target +
       // bump the nonce so the EditPane scrolls to it once mounted/active.
       ...(opts?.line != null
@@ -11324,8 +11660,15 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         ideFileViewModeByProject: { ...s.ideFileViewModeByProject, [pid]: viewMode },
         ideDiffBeforeByProject: { ...s.ideDiffBeforeByProject, [pid]: diffBefore },
         centerTabFocus: active == null && !planActive ? ("chat" as const) : s.centerTabFocus,
+        ...(active == null && s.isRightPreviewExpanded
+          ? {
+              rightWidth: s.normalRightWidth,
+              isRightPreviewExpanded: false,
+            }
+          : {}),
       };
     });
+
     persistIdeBuckets(get);
   },
 
@@ -11531,8 +11874,10 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     }
     set((s) => ({
       ideActiveFileByProject: { ...s.ideActiveFileByProject, [pid]: filePath },
-      // Clicking a file tab (unified bar) focuses the editor view.
-      ...(s.displayMode === "tabs" ? { centerTabFocus: "editor" as const } : {}),
+      // Clicking a file tab (unified bar) focuses the editor view in center placement mode.
+      ...(s.displayMode === "tabs" && s.tabsFilePreviewPlacement === "center"
+        ? { centerTabFocus: "editor" as const }
+        : {}),
     }));
     persistIdeBuckets(get);
   },
@@ -11546,7 +11891,14 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       // click overrides it right after by activating the plan tab). In tabs
       // displayMode this pulls the center back to the chat view.
       centerTabFocus: "chat",
+      ...(s.isRightPreviewExpanded
+        ? {
+            rightWidth: s.normalRightWidth,
+            isRightPreviewExpanded: false,
+          }
+        : {}),
     }));
+
     persistIdeBuckets(get);
   },
 

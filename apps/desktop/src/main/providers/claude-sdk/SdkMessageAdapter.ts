@@ -27,10 +27,13 @@ import type {
   SubagentSnapshot,
   SubagentTranscriptBlock,
   SubagentTranscriptEvent,
+  BashTasksEvent,
+  BashTaskSnapshot,
   UpstreamIssueEvent,
 } from "@contracts/runtime";
 import type { ProviderContext } from "@contracts/provider";
 import { FileSnapshot, FILE_MUTATING_TOOLS, getToolFilePath, normalizeToolFilePath } from "@main/lib/fileSnapshot.js";
+import { noteBashToolStart, noteBashToolEnd } from "@main/lib/serviceScanner.js";
 import type {
   SDKMessage,
   SDKSystemMessage,
@@ -60,6 +63,11 @@ interface TaskStartedEnvelope {
   /** SDK flag: when true the parent agent does not block on this task and it
    *  may continue running after the parent turn's stream ends. */
   is_backgrounded?: boolean;
+  /** CLI housekeeping flags — ambient / skip_transcript bash tasks are not
+   *  user work (auto-started watchers etc.) and stay out of the bash-task
+   *  roster. See SDKTaskStartedMessage docs. */
+  ambient?: boolean;
+  skip_transcript?: boolean;
 }
 
 interface TaskProgressEnvelope {
@@ -86,6 +94,22 @@ interface TaskUpdatedEnvelope {
     error?: string;
     is_backgrounded?: boolean;
   };
+}
+
+/** Envelope for the SDK's `task_notification` system message — the terminal
+ *  bookend for (background) tasks: arrives when a backgrounded task settles
+ *  on its own, or right after the host's `stop_task` control request
+ *  (status "stopped"). Without handling it, a user-stopped command would
+ *  stay "running" in the bash-task roster. */
+interface TaskNotificationEnvelope {
+  type: "system";
+  subtype: "task_notification";
+  task_id: string;
+  tool_use_id?: string;
+  status: "completed" | "failed" | "stopped";
+  summary?: string;
+  usage?: { duration_ms?: number };
+  ambient?: boolean;
 }
 
 /** Envelope for the SDK's `api_retry` system message — emitted when an API
@@ -326,6 +350,16 @@ interface AdapterState {
    *  the ids here, the progress handler's synthesis branch would re-add
    *  them to the roster. */
   ignoredTaskIds: Set<string>;
+  /** Live roster of the agent's tracked bash commands (task_started with
+   *  task_type "local_bash"), flushed as `bash-tasks.update` events so the
+   *  activity console can show the model-started commands/services and offer
+   *  a per-task stop control. Kept SEPARATE from the subagent roster on
+   *  purpose — the capsule is a subagent surface; commands get their own
+   *  node. Completion comes from four signals, in reliability order:
+   *  task_updated patches, the Bash tool_result (the CLI doesn't reliably
+   *  emit a closing task_updated for foreground commands), and the
+   *  background_tasks_changed level set dropping a backgrounded id. */
+  bashTasks: Map<string, BashTaskSnapshot>;
   /** Whether the model is currently in plan mode. Set true on EnterPlanMode,
    *  false on the matching ExitPlanMode or when a `mode.change` to default
    *  arrives (covers rejection / interruption). Drives `plan.update` emit. */
@@ -365,6 +399,11 @@ interface AdapterState {
    *  mid-tool-flow when the stream closed — third-party gateways returning
    *  an empty final completion). */
   resultedToolUseIds: Set<string>;
+  /** Bash tool_use ids still awaiting their tool_result — the open windows
+   *  of the service scanner's bash-window attribution. Result-less ids are
+   *  dropped at flushFinal (the command died with the stream; nothing bound
+   *  in it is claimed). */
+  openBashToolUseIds: Set<string>;
   /** True once any assistant text block arrived this turn. A success-ending
    *  turn with no text at all is the other half of the empty-response
    *  failure mode the turn-incomplete check covers. */
@@ -494,6 +533,7 @@ export class SdkMessageAdapter {
       subagentTranscripts: new Map(),
       subagentPendingTools: new Map(),
       ignoredTaskIds: new Set(),
+      bashTasks: new Map(),
       inPlanMode: false,
       pendingContextUsage: null,
       assistantMessageCount: 0,
@@ -502,6 +542,7 @@ export class SdkMessageAdapter {
       lastResultSubtype: null,
       toolUseNames: new Map(),
       resultedToolUseIds: new Set(),
+      openBashToolUseIds: new Set(),
       textEmitted: false,
       lastAssistantText: "",
       lastAssistantHadToolUse: false,
@@ -580,6 +621,8 @@ export class SdkMessageAdapter {
         this.handleTaskProgress(sys as unknown as TaskProgressEnvelope);
       } else if (subtype === "task_updated") {
         this.handleTaskUpdated(sys as unknown as TaskUpdatedEnvelope);
+      } else if (subtype === "task_notification") {
+        this.handleTaskNotification(sys as unknown as TaskNotificationEnvelope);
       } else if (subtype === "compact_boundary") {
         this.handleCompactBoundary(sys as unknown as {
           subtype: "compact_boundary";
@@ -593,7 +636,7 @@ export class SdkMessageAdapter {
       } else if (subtype === "background_tasks_changed") {
         this.handleBackgroundTasksChanged(sys as unknown as {
           subtype: "background_tasks_changed";
-          tasks: { task_id: string; task_type: string; description: string }[];
+          tasks: { task_id: string; task_type: string; description: string; ambient?: boolean }[];
         });
       } else if (subtype === "api_retry") {
         this.handleApiRetry(sys as unknown as ApiRetryEnvelope);
@@ -623,6 +666,16 @@ export class SdkMessageAdapter {
    * Async because freeze() now reads each file's post-turn on-disk content
    * to compute the +N -M tallies and carry the pre-turn `before` payload. */
   async flushFinal(finalReason?: TurnDoneEvent["reason"]): Promise<void> {
+    // Close any Bash attribution windows that never saw their tool_result
+    // (the stream died mid-command). The diff-at-close still claims sockets
+    // bound during the window; for aborted turns the CLI killed the tools,
+    // so the diff finds nothing new. Without this a stale window's baseline
+    // would leak into the next turn's first Bash call (fresh adapter, but
+    // the scanner's windows are per-session and outlive this instance).
+    if (this.state.openBashToolUseIds.size > 0) {
+      this.state.openBashToolUseIds.clear();
+      void noteBashToolEnd(this.sessionId).catch(() => {});
+    }
     // Freeze and emit the snapshot list regardless of whether result
     // arrived. After freeze(), the snapshot is "frozen" — late
     // tool_use events for this adapter instance (shouldn't happen,
@@ -678,6 +731,28 @@ export class SdkMessageAdapter {
       }
     }
     if (subagentsChanged) this.flushSubagents();
+    // Same safety net for the bash-task roster: a foreground command whose
+    // stream died before its tool_result (interrupt / transport break) must
+    // not sit on "running" forever. An aborted turn killed it (the CLI tears
+    // down its tools on interrupt — and without perTaskStopAffordance
+    // declared, its fail-closed rule kills BACKGROUND tasks too, mirroring
+    // the subagent handling above). A normally-ended turn's blocking command
+    // must have finished, and any still-"running" BACKGROUND entry only
+    // survives here when the settle fallback released the hold (the CLI
+    // process is exiting with the stream, taking the command with it) —
+    // killed is the honest verdict in both cases.
+    let bashTasksChanged = false;
+    for (const [id, t] of this.state.bashTasks) {
+      if (t.status === "running") {
+        this.state.bashTasks.set(id, {
+          ...t,
+          status: aborted || t.isBackgrounded ? "killed" : "completed",
+          endedAt: t.endedAt ?? Date.now(),
+        });
+        bashTasksChanged = true;
+      }
+    }
+    if (bashTasksChanged) this.flushBashTasks();
     // Flag gateway-truncated turns BEFORE turn.done so the renderer can
     // replace its "回合完成" toast with an accurate "任务提前中断" warning.
     this.maybeEmitTurnIncomplete();
@@ -847,6 +922,23 @@ export class SdkMessageAdapter {
     // stuck on "running" until turn end. Remember the id so the follow-up
     // task_progress doesn't re-synthesize an entry either.
     if (NON_AGENT_TASK_TYPES.has(m.task_type ?? "")) {
+      // Bash commands get their OWN visibility track (the "运行命令" node):
+      // they are the model-started processes (dev servers, long scripts)
+      // the user needs to see running and be able to stop. Ambient /
+      // housekeeping tasks (auto-started watchers) are skipped — they'd be
+      // permanent noise in the roster.
+      if (m.task_type === "local_bash" && !m.ambient && !m.skip_transcript) {
+        const existing = this.state.bashTasks.get(m.task_id);
+        this.state.bashTasks.set(m.task_id, {
+          taskId: m.task_id,
+          toolUseId: m.tool_use_id,
+          description: m.description || existing?.description || "",
+          status: "running",
+          isBackgrounded: m.is_backgrounded ?? existing?.isBackgrounded,
+          startedAt: existing?.startedAt ?? Date.now(),
+        });
+        this.flushBashTasks();
+      }
       this.state.ignoredTaskIds.add(m.task_id);
       return;
     }
@@ -916,6 +1008,36 @@ export class SdkMessageAdapter {
   }
 
   private handleTaskUpdated(m: TaskUpdatedEnvelope): void {
+    // Bash-command tasks settle through their own roster (the CLI does send
+    // task_updated edges for some local_bash lifecycles — e.g. a backgrounded
+    // task completing after the parent stream, or a stop_task landing).
+    const bashTask = this.state.bashTasks.get(m.task_id);
+    if (bashTask) {
+      const patch = m.patch ?? {};
+      let status = bashTask.status;
+      if (patch.status === "completed") status = "completed";
+      else if (patch.status === "failed") status = "failed";
+      // "stopped" isn't in the SDK's task_updated union but the stop_task
+      // flow documents it on the task_notification path — accept it
+      // defensively via a widened compare.
+      else if (patch.status === "killed" || (patch.status as string) === "stopped") status = "killed";
+      else if (patch.status === "running" || patch.status === "pending" || patch.status === "paused") {
+        status = "running";
+      }
+      this.state.bashTasks.set(m.task_id, {
+        ...bashTask,
+        status,
+        description: patch.description || bashTask.description,
+        endedAt:
+          status !== "running"
+            ? (typeof patch.end_time === "number" ? patch.end_time : bashTask.endedAt ?? Date.now())
+            : undefined,
+        error: patch.error ?? bashTask.error,
+        isBackgrounded: patch.is_backgrounded ?? bashTask.isBackgrounded,
+      });
+      this.flushBashTasks();
+      return;
+    }
     const cur = this.state.subagents.get(m.task_id);
     if (!cur) return; // orphan update — ignore
     const patch = m.patch ?? {};
@@ -946,13 +1068,76 @@ export class SdkMessageAdapter {
    *  still counts as "work in progress" and holds the composer locked. */
   private handleBackgroundTasksChanged(m: {
     subtype: "background_tasks_changed";
-    tasks: { task_id: string; task_type: string; description: string }[];
+    tasks: { task_id: string; task_type: string; description: string; ambient?: boolean }[];
   }): void {
     this.state.backgroundTaskIds = new Set((m.tasks ?? []).map((t) => t.task_id));
     this.state.lastAgentActivityAt = Date.now();
+    this.reconcileBashTasksFromLevel(m.tasks ?? []);
     // The level signal may be the last edge we see when the final background
     // task completes after the result message — recheck the settle gate.
     this.maybeSettle();
+  }
+
+  /** Terminal bookend for background tasks — including the stop the HOST
+   *  requested (status "stopped" right after a stop_task control request).
+   *  Updates the bash-task roster; ignored for anything else (the subagent
+   *  roster is already driven by its own task_started/task_updated edges,
+   *  and a notification for an unknown id is a harmless orphan). */
+  private handleTaskNotification(m: TaskNotificationEnvelope): void {
+    const cur = this.state.bashTasks.get(m.task_id);
+    if (!cur || cur.status !== "running") return;
+    this.state.bashTasks.set(m.task_id, {
+      ...cur,
+      status: m.status === "stopped" ? "killed" : m.status === "failed" ? "failed" : "completed",
+      endedAt: Date.now(),
+    });
+    this.flushBashTasks();
+  }
+
+  /** Fold the background-tasks LEVEL signal into the bash-task roster. For
+   *  backgrounded commands this is the authoritative lifecycle: membership in
+   *  the payload means still running, dropping out means settled (the SDK
+   *  documents the set changes on start, completion and kill). Foreground
+   *  entries never appear in the level set, so only entries we've marked
+   *  isBackgrounded are retired by absence. */
+  private reconcileBashTasksFromLevel(
+    tasks: { task_id: string; task_type: string; description: string; ambient?: boolean }[],
+  ): void {
+    let changed = false;
+    const levelBash = new Set<string>();
+    for (const t of tasks) {
+      if (t.task_type !== "local_bash" || t.ambient) continue;
+      levelBash.add(t.task_id);
+      const existing = this.state.bashTasks.get(t.task_id);
+      if (!existing) {
+        // A backgrounded command whose task_started edge we never saw (e.g.
+        // resumed into an already-running task) — synthesize from the level
+        // payload, which carries the description.
+        this.state.bashTasks.set(t.task_id, {
+          taskId: t.task_id,
+          description: t.description || "",
+          status: "running",
+          isBackgrounded: true,
+          startedAt: Date.now(),
+        });
+        changed = true;
+      } else if (!existing.isBackgrounded || existing.status !== "running" || (t.description && t.description !== existing.description)) {
+        this.state.bashTasks.set(t.task_id, {
+          ...existing,
+          description: t.description || existing.description,
+          status: existing.status === "running" ? "running" : existing.status,
+          isBackgrounded: true,
+        });
+        changed = true;
+      }
+    }
+    for (const [id, entry] of this.state.bashTasks) {
+      if (entry.isBackgrounded && entry.status === "running" && !levelBash.has(id)) {
+        this.state.bashTasks.set(id, { ...entry, status: "completed", endedAt: entry.endedAt ?? Date.now() });
+        changed = true;
+      }
+    }
+    if (changed) this.flushBashTasks();
   }
 
   /** `api_retry`: the SDK's built-in API-level retry loop kicked in after a
@@ -1015,6 +1200,17 @@ export class SdkMessageAdapter {
     // task-notification resume flow, so any prior result is intermediate.
     this.state.lastAgentActivityAt = Date.now();
     this.maybeSettle();
+  }
+
+  /** Emit the current bash-task roster as a single `bash-tasks.update` event.
+   *  REPLACE semantics, mirroring flushSubagents — the renderer swaps its
+   *  list, no client-side merge. */
+  private flushBashTasks(): void {
+    this.ctx.emit({
+      type: "bash-tasks.update",
+      sessionId: this.sessionId,
+      tasks: Array.from(this.state.bashTasks.values()),
+    } satisfies BashTasksEvent);
   }
 
   /** Look up a subagent snapshot by its originating Task tool_use id.
@@ -1285,6 +1481,17 @@ export class SdkMessageAdapter {
         if (b.name === "EnterPlanMode" || b.name === "ExitPlanMode" || b.name === "AskUserQuestion") {
           this.state.interactionToolSeen = true;
         }
+        // Open the service scanner's attribution window for this Bash call.
+        // Any listening socket that appears before the tool_result is the
+        // model's service even when it detached from its shell (Start-Process
+        // / nohup leave the listener with a dead ppid — ancestry can't see
+        // it). The id is remembered so the matching tool_result closes the
+        // window; fire-and-forget, a slow/failed snapshot must never gate
+        // the stream.
+        if (b.name === "Bash") {
+          this.state.openBashToolUseIds.add(b.id);
+          void noteBashToolStart(this.sessionId).catch(() => {});
+        }
         // A tool_use block is renderable assistant content — once emitted, the
         // provider's transport-retry wrapper must not retry (would orphan it).
         this.state.contentStarted = true;
@@ -1527,6 +1734,20 @@ export class SdkMessageAdapter {
     for (const b of blocks) {
       if (b.type === "tool_result" && b.tool_use_id) {
         this.state.resultedToolUseIds.add(b.tool_use_id);
+        // Close the service scanner's attribution window if this result
+        // belongs to a Bash call — see the tool_use side for why.
+        if (this.state.openBashToolUseIds.delete(b.tool_use_id)) {
+          void noteBashToolEnd(this.sessionId).catch(() => {});
+        }
+        // The Bash tool_result is the reliable completion signal for
+        // FOREGROUND commands (the CLI doesn't reliably emit a closing
+        // task_updated for them). Backgrounded commands return a
+        // placeholder tool_result immediately while the process keeps
+        // running — their lifecycle is owned by the level signal, so skip
+        // them here (isBackgrounded may still be false if the
+        // backgrounding patch raced past us; the level reconcile corrects
+        // a mis-marked entry on its next payload).
+        this.settleBashTaskByToolResult(b.tool_use_id, !!b.is_error);
         this.ctx.emit({
           type: "tool.result",
           sessionId: this.sessionId,
@@ -1535,6 +1756,21 @@ export class SdkMessageAdapter {
           content: b.content,
         } satisfies ToolResultEvent);
       }
+    }
+  }
+
+  /** Mark the bash-task entry whose Bash tool_use just returned as settled.
+   *  No-op for ids that don't map to a tracked running command. */
+  private settleBashTaskByToolResult(toolUseId: string, isError: boolean): void {
+    for (const [id, entry] of this.state.bashTasks) {
+      if (entry.toolUseId !== toolUseId || entry.status !== "running" || entry.isBackgrounded) continue;
+      this.state.bashTasks.set(id, {
+        ...entry,
+        status: isError ? "failed" : "completed",
+        endedAt: Date.now(),
+      });
+      this.flushBashTasks();
+      return;
     }
   }
 

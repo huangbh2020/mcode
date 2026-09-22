@@ -1,6 +1,7 @@
-import { type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { cn } from "@renderer/lib/cn.js";
 import { Divider } from "./Divider.js";
+
 
 interface Props {
   left: ReactNode;
@@ -67,6 +68,8 @@ export function ThreePaneLayout({
   onResetRight,
   onResetBottomTerminal,
 }: Props) {
+  const [isDraggingRight, setIsDraggingRight] = useState(false);
+
   return (
     <>
       {/* Left sidebar — only used by the settings page since the workspace
@@ -101,7 +104,8 @@ export function ThreePaneLayout({
          behind the arc. Non-scrolling overflow-hidden is xterm-safe (see the
          note on the right sidebar).
          Stacks the center content above an optional bottom terminal bar. */}
-      <main className="relative z-10 flex min-w-0 flex-1 flex-col overflow-hidden rounded-tl-3xl rounded-bl-3xl border-t border-edge-panel bg-surface">
+      <main className="relative z-10 flex min-w-[450px] flex-1 flex-col overflow-hidden rounded-tl-3xl rounded-bl-3xl border-t border-edge-panel bg-surface">
+
         <div className="min-h-0 flex-1 overflow-hidden">{center}</div>
         {/* Bottom terminal bar — keep-alive: always rendered, height collapses
             to 0 when closed so PTYs/scrollback survive. overflow-hidden clips
@@ -134,6 +138,8 @@ export function ThreePaneLayout({
           orientation="vertical"
           onResize={onResizeRight}
           onDoubleClick={onResetRight}
+          onDragStart={() => setIsDraggingRight(true)}
+          onDragEnd={() => setIsDraggingRight(false)}
         />
       )}
       {/* Right sidebar — square corners (no arcs; the seam with the center
@@ -143,7 +149,10 @@ export function ThreePaneLayout({
          internally, and xterm FitAddon breaks under a scrolling ancestor. */}
       {rightOpen && (
         <aside
-          className="flex h-full shrink-0 flex-col overflow-hidden border-t border-edge-panel bg-surface"
+          className={cn(
+            "flex h-full shrink-0 flex-col overflow-hidden border-t border-edge-panel bg-surface",
+            !isDraggingRight && "transition-[width] duration-200 ease-out",
+          )}
           style={{ width: rightWidthPct !== undefined ? `${rightWidthPct}%` : rightWidth }}
         >
           <div className="min-h-0 flex-1 overflow-hidden border-l border-edge-panel/60">{right}</div>
@@ -152,3 +161,4 @@ export function ThreePaneLayout({
     </>
   );
 }
+

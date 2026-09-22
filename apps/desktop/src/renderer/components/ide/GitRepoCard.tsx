@@ -178,6 +178,15 @@ export function GitRepoCard({ repo }: { repo: GitRepo }) {
     if (turnFiles !== prev.files) void refresh();
   }, [activeSessionId, turnFiles, refresh]);
 
+  const gitStatusNonce = useSessionStore((s) => s.gitStatusNonce);
+  const prevGitStatusNonceRef = useRef(gitStatusNonce);
+  useEffect(() => {
+    if (prevGitStatusNonceRef.current !== gitStatusNonce) {
+      prevGitStatusNonceRef.current = gitStatusNonce;
+      void refresh();
+    }
+  }, [gitStatusNonce, refresh]);
+
   /** Prepend a log entry (newest first) and cap to MAX_LOG_ENTRIES. */
   const prependLog = useCallback(
     (entry: Omit<GitOpLogEntry, "id" | "timestamp">) => {
@@ -825,6 +834,7 @@ export function GitRepoCard({ repo }: { repo: GitRepo }) {
                   labelKey="ide.git.staged"
                   files={staged}
                   repoPath={repo.path}
+                  repoName={repo.name}
                   staged
                   onBulkAction={handleUnstageAll}
                   bulkActionLabel={t("ide.git.unstageAll")}
@@ -841,6 +851,7 @@ export function GitRepoCard({ repo }: { repo: GitRepo }) {
                     labelKey="ide.git.changes"
                     files={unstaged}
                     repoPath={repo.path}
+                    repoName={repo.name}
                     onBulkAction={handleStageAll}
                     bulkActionLabel={t("ide.git.stageAll")}
                     busy={busy !== null}
@@ -1608,6 +1619,7 @@ function FileGroup({
   labelKey,
   files,
   repoPath,
+  repoName,
   staged,
   onBulkAction,
   bulkActionLabel,
@@ -1621,6 +1633,7 @@ function FileGroup({
   labelKey: MessageId;
   files: GitFileStatus[];
   repoPath: string;
+  repoName?: string;
   staged?: boolean;
   onBulkAction: () => void;
   bulkActionLabel: string;
@@ -1677,6 +1690,7 @@ function FileGroup({
               key={f.path}
               file={f}
               repoPath={repoPath}
+              repoName={repoName}
               staged={staged}
               onDiscard={onDiscard}
               onSingleStage={onSingleStage}
@@ -1695,6 +1709,7 @@ function FileGroup({
 function FileRow({
   file,
   repoPath,
+  repoName,
   staged,
   onDiscard,
   onSingleStage,
@@ -1703,6 +1718,7 @@ function FileRow({
 }: {
   file: GitFileStatus;
   repoPath: string;
+  repoName?: string;
   staged?: boolean;
   onDiscard?: (paths: string[]) => void;
   onSingleStage?: (filePath: string) => void;
@@ -1711,13 +1727,17 @@ function FileRow({
 }) {
   const { t } = useI18n();
   const openFileInIde = useSessionStore((s) => s.openFileInIde);
-  const setGitDiffPair = useSessionStore((s) => s.setGitDiffPair);
-  const gitDiffOpenMode = useSessionStore((s) => s.gitDiffOpenMode);
-  const openGitDiffDialogTab = useSessionStore((s) => s.openGitDiffDialogTab);
+  const selectedGitDiffFile = useSessionStore((s) => s.selectedGitDiffFile);
+  const setSelectedGitDiffFile = useSessionStore((s) => s.setSelectedGitDiffFile);
   const [diffTally, setDiffTally] = useState<{ adds: number; dels: number } | null>(null);
 
   const absPath = joinPath(repoPath, file.path);
   const code = staged ? file.index : file.workingTree;
+
+  const isSelected =
+    selectedGitDiffFile?.repoPath === repoPath &&
+    selectedGitDiffFile?.filePath === file.path &&
+    selectedGitDiffFile?.staged === !!staged;
 
   // Async-load the +/- tally for this file. For staged files we diff against
   // HEAD (what will be committed); for unstaged we diff the working tree.
@@ -1741,70 +1761,29 @@ function FileRow({
     };
   }, [repoPath, file.path, code, staged]);
 
-  // Click → open in center editor with diff. Fetches the appropriate diff
-  // (staged vs HEAD for staged files, working tree for unstaged), stashes
-  // the diff pair, and opens the file in diff mode.
-  const handleClick = async () => {
-    // Wide-panel (3:7) mode has no center editor column — a center-mode open
-    // would be invisible, so the floating dialog takes it there as well.
-    if (gitDiffOpenMode === "dialog" || useSessionStore.getState().widePanelOpen) {
-      // Dialog open-mode: compact patch-scoped diff — both sides are
-      // reconstructed from the patch (changed regions ± context). Staged
-      // diffs always supply `after` from the patch (index blob); unstaged
-      // may omit it so DiffPane reads the live working tree from disk.
-      let before = "";
-      let after: string | undefined;
-      try {
-        const { patch } = await api.git.diff({ repoPath, filePath: file.path, staged: !!staged });
-        if (patch) {
-          const parsed = parsePatchToBeforeAfter(patch);
-          before = parsed.before;
-          after = parsed.after;
-        }
-      } catch {
-        // fall through with empty before
-      }
-      openGitDiffDialogTab({
-        id: `${absPath}::${staged ? "staged" : "work"}`,
-        filePath: absPath,
-        before,
-        after: staged ? (after ?? "") : after,
-        title: basename(file.path),
-        repoPath,
-        source: "working",
-        staged: !!staged,
-      });
-      return;
-    }
-    // Center open-mode: full-file diff. The old side comes from the git
-    // object database — index snapshot for unstaged, HEAD for staged — never
-    // from a patch reconstruction, which only covers changed regions and
-    // would paint the rest of the file as additions. The new side is the
-    // live working tree (DiffPane reads it from disk when `after` is
-    // omitted); a staged file pins both sides to blobs so the view shows
-    // exactly what staging changed, independent of later working-tree edits.
-    try {
-      if (staged) {
-        const [head, index] = await Promise.all([
-          api.git.fileBlob({ repoPath, filePath: file.path, side: "HEAD" }),
-          api.git.fileBlob({ repoPath, filePath: file.path, side: "index" }),
-        ]);
-        setGitDiffPair(absPath, { before: head.content, after: index.content });
-      } else {
-        const { content } = await api.git.fileBlob({ repoPath, filePath: file.path, side: "index" });
-        setGitDiffPair(absPath, { before: content });
-      }
-    } catch {
-      // fall through — without a stashed pair FileEditor opens in edit mode
-    }
-    openFileInIde(absPath, { diff: true });
+  // Click → preview diff in left stage
+  const handleClick = () => {
+    setSelectedGitDiffFile({
+      repoPath,
+      repoName: repoName || basename(repoPath),
+      filePath: file.path,
+      staged: !!staged,
+      status: code,
+    });
   };
 
   return (
     <ContextMenu.Root>
-        <ContextMenu.Trigger
+      <ContextMenu.Trigger
         render={
-          <div className="group relative flex items-center gap-1.5 rounded px-1 py-0.5 hover:bg-surface-hover/40" />
+          <div
+            className={cn(
+              "group relative flex items-center gap-1.5 rounded px-1.5 py-0.5 transition-colors",
+              isSelected
+                ? "bg-accent/15 text-accent border border-accent/30 font-medium"
+                : "hover:bg-surface-hover/40 text-content-muted border border-transparent",
+            )}
+          />
         }
       >
         <button
@@ -1814,7 +1793,14 @@ function FileRow({
           title={absPath}
         >
           <StatusCodeIcon code={code} />
-          <span className="truncate font-mono [font-size:var(--right-panel-font-size)] text-content-muted">{basename(file.path)}</span>
+          <span
+            className={cn(
+              "truncate font-mono [font-size:var(--right-panel-font-size)]",
+              isSelected ? "text-accent font-medium" : "text-content-muted",
+            )}
+          >
+            {basename(file.path)}
+          </span>
         </button>
         {/* +/- tally badge — hidden on hover so the action buttons have room. */}
         {diffTally && (diffTally.adds > 0 || diffTally.dels > 0) && (
@@ -1876,6 +1862,13 @@ function FileRow({
             >
               <IconEye size={12} />
               {t("ide.git.viewDiff")}
+            </ContextMenu.Item>
+            <ContextMenu.Item
+              onClick={() => openFileInIde(absPath, { diff: true })}
+              className="flex w-full items-center gap-2 px-3 py-1.5 text-left [font-size:var(--right-panel-font-size)] text-content-muted outline-none select-none data-[highlighted]:bg-surface-muted"
+            >
+              <IconEye size={12} />
+              {t("ide.git.openInMainEditor")}
             </ContextMenu.Item>
             <ContextMenu.Item
               onClick={() => openFileInIde(absPath)}

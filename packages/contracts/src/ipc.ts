@@ -186,6 +186,14 @@ export const DisplayModeSchema = z.enum(["single", "tabs"]);
 export type DisplayMode = z.infer<typeof DisplayModeSchema>;
 
 /**
+ * In `tabs` displayMode, controls whether file previews open in the center
+ * unified tab bar (default) or in the right sidebar's dual-column preview.
+ */
+export const TABS_FILE_PREVIEW_PLACEMENT_SETTING_KEY = "ui.tabsFilePreviewPlacement";
+export const TabsFilePreviewPlacementSchema = z.enum(["center", "sidebar"]);
+export type TabsFilePreviewPlacement = z.infer<typeof TabsFilePreviewPlacementSchema>;
+
+/**
  * Tab-bar layout preference: when "true", the center tab strips (unified
  * bar in `tabs` displayMode, plus the session strip / editor file strip in
  * `single` mode) wrap their tabs onto multiple rows instead of scrolling
@@ -634,6 +642,7 @@ export const UI_RIGHT_PANEL_TAB_SETTING_KEY = "ui.rightPanelTab";
 export const RightPanelTabSchema = z.enum([
   "files",
   "git",
+  "terminal",
   "browser",
   "turns",
   "sidechat",
@@ -992,6 +1001,28 @@ export type SendTurnInput = z.infer<typeof SendTurnSchema>;
 
 export const InterruptSchema = z.object({ sessionId: z.string() });
 export type InterruptInput = z.infer<typeof InterruptSchema>;
+
+/* Stop ONE running CLI task (a long-running bash command the agent started,
+ * tracked in the bash-tasks roster) without aborting the whole turn. The
+ * taskId comes from BashTaskSnapshot.taskId. Rejects when the session has no
+ * live turn (the CLI process is gone — there is nothing left to stop). */
+export const StopTaskSchema = z.object({
+  sessionId: z.string(),
+  taskId: z.string(),
+});
+export type StopTaskInput = z.infer<typeof StopTaskSchema>;
+
+/* Stop ONE discovered agent-started service (a listening TCP socket under the
+ * session's claude-CLI process subtree, tracked in the services roster) by
+ * killing the owning process tree. The pid/port come from ServiceSnapshot.
+ * Unlike stopTask this does NOT need a live turn — the scanner tracks the
+ * socket directly, and orphans outlive the CLI anyway. */
+export const StopServiceSchema = z.object({
+  sessionId: z.string(),
+  pid: z.number().int().positive(),
+  port: z.number().int().positive(),
+});
+export type StopServiceInput = z.infer<typeof StopServiceSchema>;
 
 export const ApproveSchema = z.object({
   sessionId: z.string(),
@@ -1857,6 +1888,16 @@ export const FileReadBinarySchema = z.object({
   filePath: z.string(),
 });
 export type FileReadBinaryInput = z.infer<typeof FileReadBinarySchema>;
+
+/** Whether main's read guards would admit this path (project root ∪
+ *  materialized session worktree). Pure in-memory check — NO disk access.
+ *  Drives the message attachment card: workspace-outside file cards refuse
+ *  click-to-view instead of opening an unreadable editor tab or a failed
+ *  image popover. */
+export const FileIsViewableSchema = z.object({
+  filePath: z.string(),
+});
+export type FileIsViewableInput = z.infer<typeof FileIsViewableSchema>;
 
 /** Open the OS file dialog for image selection and return the files as base64.
  *  Main reads the files itself (the renderer can't read arbitrary paths under
@@ -4240,6 +4281,14 @@ export interface RpcMap {
   /** Returns the (possibly retitled) session so the renderer can refresh. */
   "claude.sendTurn": (input: SendTurnInput) => Promise<{ session: Session }>;
   "claude.interrupt": (input: InterruptInput) => Promise<void>;
+  /** Stop one running CLI task (see BashTaskSnapshot) without aborting the
+   *  turn. Resolves once the stop_task control request was delivered; the
+   *  roster update arrives via the bash-tasks.update event stream. */
+  "claude.stopTask": (input: StopTaskInput) => Promise<void>;
+  /** Kill the process tree owning one discovered service (see
+   *  ServiceSnapshot). The services roster refreshes on the scanner's next
+   *  pass (it also runs an immediate post-kill re-scan). */
+  "claude.stopService": (input: StopServiceInput) => Promise<void>;
   "claude.approve": (input: ApproveInput) => Promise<void>;
   /** Submit the user's answers to a pending AskUserQuestion. */
   "claude.respondQuestion": (input: RespondQuestionInput) => Promise<void>;
@@ -4374,6 +4423,9 @@ export interface RpcMap {
   "file.readFile": (input: FileReadInput) => Promise<{ content: string }>;
   /** Read a binary file as a base64 data URL (image preview). Same path guard. */
   "file.readBinary": (input: FileReadBinaryInput) => Promise<{ dataUrl: string }>;
+  /** Pure containment check (no disk access): is the path inside a known
+   *  project root or session worktree — i.e. would the read guards admit it? */
+  "file.isViewable": (input: FileIsViewableInput) => Promise<{ viewable: boolean }>;
   /** OS dialog image picker → base64 images (composer 图片 button). */
   "file.pickImages": (input: PickImagesInput) => Promise<{ images: PickedImage[]; skipped: string[] }>;
   /** Persist a clipboard-pasted external file to a temp path (composer paste). */
@@ -4801,6 +4853,8 @@ export const IPC = {
   CLAUDE_LIST_SIDE_CHATS: "claude:listSideChats",
   CLAUDE_SEND_TURN: "claude:sendTurn",
   CLAUDE_INTERRUPT: "claude:interrupt",
+  CLAUDE_STOP_TASK: "claude:stopTask",
+  CLAUDE_STOP_SERVICE: "claude:stopService",
   CLAUDE_APPROVE: "claude:approve",
   CLAUDE_RESPOND_QUESTION: "claude:respondQuestion",
   CLAUDE_RESPOND_PLAN_APPROVAL: "claude:respondPlanApproval",
@@ -4886,6 +4940,8 @@ export const IPC = {
   FILE_READ: "file:readFile",
   // File read as base64 data URL (image preview)
   FILE_READ_BINARY: "file:readBinary",
+  // Path containment check (project/worktree membership, no disk access)
+  FILE_IS_VIEWABLE: "file:isViewable",
   // OS dialog image picker → base64 images (composer 图片 button)
   FILE_PICK_IMAGES: "file:pickImages",
   // Clipboard-pasted external file → temp path (composer paste)

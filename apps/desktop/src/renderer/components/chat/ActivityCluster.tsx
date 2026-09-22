@@ -32,10 +32,11 @@ import { useEffect, useRef, useState, type RefObject } from "react";
 import { cn } from "@renderer/lib/cn.js";
 import { useI18n } from "@renderer/lib/i18n/index.js";
 import { isElectron } from "@renderer/lib/platform.js";
-import type { SubagentSnapshot } from "@contracts/runtime";
+import type { SubagentSnapshot, BashTaskSnapshot, ServiceSnapshot } from "@contracts/runtime";
 import type { SessionBookmark } from "@contracts/session";
 import type { TodoItem } from "@renderer/stores/sessionStore.js";
 import { ActivitySheet } from "@renderer/components/mobile/ActivitySheet.js";
+import { IconBookmark, IconCheck, IconChevronDown, IconClipboard } from "@renderer/lib/icons.js";
 import { ActivityConsole, hasNodeData } from "./ActivityConsole.js";
 import {
   primaryKind,
@@ -43,14 +44,17 @@ import {
   type ActivityNodeKey,
   type PlanBlock,
 } from "./activityShared.js";
+import type { Automation } from "@contracts/automation";
+import { isInFlightAutomation } from "@renderer/components/automation/automationFormat.js";
 
 export function ActivityCluster({
   subagents,
   todos,
   planBlocks,
   bookmarks,
-  /** The turn is paused on an unanswered question (AskUserQuestion pending) —
-   *  the strongest "this needs you" signal the app has. */
+  bashTasks,
+  services,
+  automations = [],
   waiting,
   isBookmarkStale,
   onPickBookmark,
@@ -58,14 +62,20 @@ export function ActivityCluster({
   onRenameBookmark,
   onPickSubagent,
   onPickPlan,
-  /** Landing target for the "fly to activity" bookmark animation. The cluster
-   *  has no per-kind nodes, so the dot lands on the cluster itself. */
+  onStopBashTask,
+  onStopService,
+  onOpenService,
+  onOpenSchedPanel,
+  onNewSched,
   bookmarkNodeRef,
 }: {
   subagents: SubagentSnapshot[];
   todos: TodoItem[];
   planBlocks: PlanBlock[];
   bookmarks: SessionBookmark[];
+  bashTasks?: BashTaskSnapshot[];
+  services?: ServiceSnapshot[];
+  automations?: Automation[];
   waiting?: boolean;
   isBookmarkStale?: (b: SessionBookmark) => boolean;
   onPickBookmark?: (b: SessionBookmark) => void;
@@ -73,6 +83,11 @@ export function ActivityCluster({
   onRenameBookmark?: (b: SessionBookmark, title: string) => void;
   onPickSubagent?: (agent: SubagentSnapshot) => void;
   onPickPlan: (plan: string) => void;
+  onStopBashTask?: (task: BashTaskSnapshot) => void;
+  onStopService?: (service: ServiceSnapshot) => void;
+  onOpenService?: (service: ServiceSnapshot) => void;
+  onOpenSchedPanel?: () => void;
+  onNewSched?: () => void;
   bookmarkNodeRef?: RefObject<HTMLDivElement | null>;
 }) {
   const { t } = useI18n();
@@ -110,21 +125,31 @@ export function ActivityCluster({
     };
   }, [openKind, sheetNode]);
 
+  const commands = bashTasks ?? [];
+  const serviceList = services ?? [];
+  const inFlightSched = automations.filter(isInFlightAutomation);
   const hasAny =
-    subagents.length > 0 || todos.length > 0 || planBlocks.length > 0 || bookmarks.length > 0;
+    subagents.length > 0 ||
+    todos.length > 0 ||
+    planBlocks.length > 0 ||
+    bookmarks.length > 0 ||
+    commands.length > 0 ||
+    serviceList.length > 0 ||
+    automations.length > 0;
   if (!hasAny) return null;
 
   const running = subagents.filter((a) => a.status === "running");
   const failed = subagents.filter((a) => a.status === "failed");
+  const runningCommands = commands.filter((c) => c.status === "running");
   const done = todos.filter((x) => x.status === "completed").length;
   const pct = todos.length > 0 ? Math.round((done / todos.length) * 100) : 0;
-  const primary = primaryKind(subagents, todos, planBlocks, bookmarks);
+  const primary = primaryKind(subagents, todos, planBlocks, bookmarks, commands, serviceList);
 
   // Attention outranks activity: a pending question or a failed subagent is the
   // reason the bar exists at all. A failed agent while others still run keeps
   // the running copy (per the design doc's rule) — the console lists it.
   const attn = !!waiting || (running.length === 0 && failed.length > 0);
-  const expanded = running.length > 0 || attn;
+  const expanded = running.length > 0 || runningCommands.length > 0 || serviceList.length > 0 || inFlightSched.length > 0 || attn;
   const attnText = waiting
     ? t("chatStream.activity.cluster.waiting")
     : t("chatStream.activity.cluster.failed", { n: failed.length });
@@ -134,90 +159,276 @@ export function ActivityCluster({
     else setSheetNode((prev) => (prev === kind ? null : kind));
   };
 
+  const isAllSettled = running.length === 0 && runningCommands.length === 0 && serviceList.length === 0 && inFlightSched.length === 0 && !attn;
+  const hasLiveRunning = running.length > 0 || runningCommands.length > 0 || serviceList.length > 0 || inFlightSched.length > 0 || attn;
+  const hasSatelliteData = todos.length > 0 || planBlocks.length > 0;
+  const isSplit = hasLiveRunning && hasSatelliteData;
+
   const cluster = (
     <div
       ref={bookmarkNodeRef}
       className={cn(
-        "pointer-events-auto relative inline-flex h-[30px] items-center overflow-hidden rounded-full",
-        "border backdrop-blur-[14px] transition-[border-color,background-color,box-shadow] duration-[250ms] ease-[cubic-bezier(0.22,1,0.36,1)]",
-        "shadow-[0_1px_2px_rgb(9_9_11/0.05),0_8px_22px_-12px_rgb(9_9_11/0.28)]",
-        attn ? "border-warning/60 bg-warning/10" : "border-edge/85 bg-surface/75",
+        "group pointer-events-auto relative inline-flex items-center gap-1.5 transition-all duration-300 ease-[cubic-bezier(0.34,1.4,0.64,1)]",
+        isSplit && "hover:gap-2.5",
       )}
     >
-      {/* The button stays the head of the bar: the ring reports task progress
-          even when collapsed, so "almost nothing" still carries one number. */}
-      <button
-        type="button"
+      {/* ── 主岛 (Main Island) ── */}
+      <div
         onClick={() => openConsole(primary)}
+        role="button"
+        tabIndex={0}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            openConsole(primary);
+          }
+        }}
         aria-haspopup="dialog"
         aria-expanded={isElectron ? !!openKind : !!sheetNode}
         aria-label={t("chatStream.activity.cluster.aria")}
         className={cn(
-          "relative grid h-[30px] w-[30px] shrink-0 place-items-center transition-colors",
+          "relative inline-flex h-[36px] cursor-pointer select-none items-center gap-2.5 rounded-full px-3.5 py-1",
+          "border backdrop-blur-2xl transition-all duration-200 ease-[cubic-bezier(0.34,1.3,0.64,1)]",
+          "hover:scale-[1.02] active:scale-[0.98]",
           attn
-            ? "text-warning"
-            : running.length > 0
-              ? "text-accent-strong"
-              : "text-content-muted hover:text-content",
+            ? "border-warning/60 bg-warning/20 text-warning shadow-[0_0_16px_rgb(var(--warning)/0.35)]"
+            : cn(
+                "border-slate-300 bg-white text-slate-900 shadow-[0_4px_14px_rgba(0,0,0,0.08)] hover:border-slate-400 hover:shadow-[0_6px_20px_rgba(0,0,0,0.12)]",
+                "dark:border-white/[0.14] dark:bg-[#090a0f]/95 dark:text-white dark:shadow-[0_4px_16px_rgba(0,0,0,0.3)] dark:hover:border-white/25",
+              ),
         )}
       >
-        <span
-          aria-hidden
-          className="absolute inset-[3px] rounded-full"
-          style={{
-            background: `conic-gradient(${
-              attn ? "rgb(var(--warning))" : "rgb(var(--accent))"
-            } ${pct}%, rgb(var(--edge)) 0)`,
-            mask: "radial-gradient(farthest-side, transparent calc(100% - 2px), #000 0)",
-            WebkitMask: "radial-gradient(farthest-side, transparent calc(100% - 2px), #000 0)",
-          }}
-        />
-        <span aria-hidden className="relative z-[1] inline-flex h-[11px] items-center">
-          <span className="h-[3px] w-[3px] rounded-[1px] bg-current opacity-60" />
-          <span className="ml-[2px] h-[3px] w-[3px] rounded-[1px] bg-current opacity-60" />
-          <span className="ml-[2px] h-[3px] w-[3px] rounded-[1px] bg-current opacity-60" />
-        </span>
-      </button>
-
-      {/* The bar: max-width 0 → 280px. Its own width is the only thing that
-          moves, so the cluster's right edge never leaves the corner. */}
-      <div className={cn("activity-cluster-bar", expanded && "open")}>
+        {/* 1. Attention State */}
         {attn ? (
-          <span className="whitespace-nowrap text-[11px] font-semibold text-warning">{attnText}</span>
-        ) : running.length > 0 ? (
-          <span className="whitespace-nowrap text-[11px] font-semibold text-content-muted">
-            {t("chatStream.activity.cluster.running", { n: running.length })}
-          </span>
-        ) : null}
+          <div className="flex items-center gap-2">
+            <span className="apple-live-dot bg-warning" />
+            <span className="whitespace-nowrap text-[12px] font-bold text-warning">{attnText}</span>
+            <IconChevronDown
+              size={11}
+              strokeWidth={2.4}
+              className="text-warning/80 transition-transform duration-200 group-hover:translate-y-0.5"
+            />
+          </div>
+        ) : isSplit ? (
+          /* 2. Split State: Main Island focuses on live running core */
+          <div className="flex items-center gap-2">
+            {serviceList.length > 0 ? (
+              <div className="flex items-center gap-1.5">
+                <span className="dynamic-island-wave text-emerald-600 dark:text-emerald-400">
+                  <span />
+                  <span />
+                  <span />
+                </span>
+                <span className="font-mono text-[11.5px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded dark:border-emerald-500/30 dark:bg-emerald-500/20 dark:text-emerald-300">
+                  :{serviceList[0]?.port ?? 3000}
+                </span>
+                {serviceList.length > 1 && (
+                  <span className="text-[11px] font-medium text-slate-500 dark:text-white/70">
+                    +{serviceList.length - 1}
+                  </span>
+                )}
+              </div>
+            ) : runningCommands.length > 0 ? (
+              <div className="flex items-center gap-1.5">
+                <span className="apple-live-dot bg-accent" />
+                <span className="whitespace-nowrap text-[11.5px] font-bold text-slate-900 dark:text-white">
+                  {t("chatStream.activity.deck.shortCommands", { n: runningCommands.length })}
+                </span>
+              </div>
+            ) : running.length > 0 ? (
+              <div className="flex items-center gap-1.5">
+                <span className="apple-live-dot bg-warning" />
+                <span className="whitespace-nowrap text-[11.5px] font-bold text-warning">
+                  {t("chatStream.activity.deck.shortAgents", { n: running.length })}
+                </span>
+              </div>
+            ) : (
+              <div className="flex items-center gap-1.5">
+                <span className="apple-live-dot bg-sky-400" />
+                <span className="whitespace-nowrap text-[11.5px] font-bold text-sky-500 dark:text-sky-400">
+                  {t("chatStream.activity.cluster.schedRunning")}
+                </span>
+              </div>
+            )}
 
-        {!attn && todos.length > 0 && (
-          <>
-            <span aria-hidden className="h-3 w-px shrink-0 bg-edge" />
-            <span className="whitespace-nowrap text-[11px] tabular-nums text-content-subtle">
-              {t("chatStream.activity.cluster.tasks", { done, total: todos.length })}
+            {/* Additional mini badge if multiple distinct live types */}
+            {serviceList.length > 0 && runningCommands.length > 0 && (
+              <>
+                <span aria-hidden className="h-2.5 w-px bg-slate-300 dark:bg-white/20" />
+                <span className="text-[11px] font-semibold text-slate-700 dark:text-white/80">
+                  {t("chatStream.activity.deck.shortCommands", { n: runningCommands.length })}
+                </span>
+              </>
+            )}
+
+            <IconChevronDown
+              size={11}
+              strokeWidth={2.4}
+              className="text-slate-400 group-hover:text-slate-800 dark:text-white/60 dark:group-hover:text-white transition-transform duration-200 group-hover:translate-y-0.5"
+            />
+          </div>
+        ) : !isAllSettled ? (
+          /* 3. Single Merged Island with Live tasks */
+          <div className="flex items-center gap-2">
+            <span className="apple-live-dot bg-accent" />
+            <span className="text-[12px] font-bold text-slate-900 dark:text-white">
+              {todos.length > 0 ? `${done}/${todos.length}` : t("chatStream.activity.node.tasks")}
             </span>
-            <span aria-hidden className="activity-cluster-miniprog">
-              <i style={{ width: `${pct}%` }} />
-            </span>
-          </>
+            <IconChevronDown
+              size={11}
+              strokeWidth={2.4}
+              className="text-slate-400 group-hover:text-slate-800 dark:text-white/60 dark:group-hover:text-white transition-transform duration-200 group-hover:translate-y-0.5"
+            />
+          </div>
+        ) : (
+          /* 4. Ambient / All Settled State (Single Merged Pebble Island) */
+          <div className="flex items-center gap-2 text-slate-900 dark:text-white">
+            {/* Emblem Icon Dock */}
+            {todos.length > 0 && pct === 100 ? (
+              <span className="grid h-[20px] w-[20px] shrink-0 place-items-center rounded-full bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 shadow-sm">
+                <IconCheck size={12} strokeWidth={2.8} />
+              </span>
+            ) : todos.length > 0 ? (
+              <span className="relative grid h-[20px] w-[20px] shrink-0 place-items-center">
+                <svg className="-rotate-90" width="18" height="18">
+                  <circle
+                    cx="9"
+                    cy="9"
+                    r="6.5"
+                    stroke="currentColor"
+                    strokeWidth="2.2"
+                    fill="none"
+                    className="text-slate-200 dark:text-white/20"
+                  />
+                  <circle
+                    cx="9"
+                    cy="9"
+                    r="6.5"
+                    stroke="currentColor"
+                    strokeWidth="2.2"
+                    fill="none"
+                    className="text-emerald-600 dark:text-emerald-400"
+                    strokeDasharray="40.84"
+                    strokeDashoffset={`${40.84 * (1 - pct / 100)}`}
+                    strokeLinecap="round"
+                  />
+                </svg>
+              </span>
+            ) : planBlocks.length > 0 ? (
+              <span className="grid h-[20px] w-[20px] shrink-0 place-items-center rounded-full bg-indigo-500/20 text-indigo-600 dark:text-indigo-300 shadow-sm">
+                <IconClipboard size={11} strokeWidth={2.2} />
+              </span>
+            ) : bookmarks.length > 0 ? (
+              <span className="grid h-[20px] w-[20px] shrink-0 place-items-center rounded-full bg-amber-500/20 text-amber-600 dark:text-amber-300 shadow-sm">
+                <IconBookmark size={11} strokeWidth={2.2} />
+              </span>
+            ) : (
+              <span className="grid h-[20px] w-[20px] shrink-0 place-items-center rounded-full bg-slate-100 text-slate-700 dark:bg-white/10 dark:text-white/80 shadow-sm">
+                <IconCheck size={11} strokeWidth={2.4} />
+              </span>
+            )}
+
+            {/* Typography */}
+            {todos.length > 0 ? (
+              <div className="flex items-center gap-1.5 leading-none">
+                <span className="font-mono text-[12px] font-bold tabular-nums tracking-tight text-slate-900 dark:text-white">
+                  {done}/{todos.length}
+                </span>
+                <span className="text-[11px] font-medium text-slate-500 dark:text-white/70">
+                  {pct === 100 ? t("chatStream.activity.groupCompleted") : t("chatStream.activity.node.tasks")}
+                </span>
+              </div>
+            ) : planBlocks.length > 0 ? (
+              <span className="text-[11.5px] font-semibold tracking-tight text-slate-900 dark:text-white">
+                {t("chatStream.activity.deck.shortPlans", { n: planBlocks.length })}
+              </span>
+            ) : bookmarks.length > 0 ? (
+              <span className="text-[11.5px] font-semibold tracking-tight text-slate-900 dark:text-white">
+                {t("chatStream.activity.deck.shortBookmarks", { n: bookmarks.length })}
+              </span>
+            ) : (
+              <span className="text-[11.5px] font-semibold tracking-tight text-slate-900 dark:text-white">
+                {t("chatStream.activity.deck.allSettled")}
+              </span>
+            )}
+
+            {/* Secondary plans tag alongside settled todos */}
+            {todos.length > 0 && planBlocks.length > 0 && (
+              <>
+                <span aria-hidden className="h-1 w-1 rounded-full bg-slate-300 dark:bg-white/30" />
+                <span className="text-[11px] font-medium text-slate-500 dark:text-white/70">
+                  {t("chatStream.activity.deck.shortPlans", { n: planBlocks.length })}
+                </span>
+              </>
+            )}
+
+            <IconChevronDown
+              size={11}
+              strokeWidth={2.4}
+              className="text-slate-400 group-hover:text-slate-800 dark:text-white/60 dark:group-hover:text-white transition-all duration-200 group-hover:translate-y-0.5"
+            />
+          </div>
         )}
-
-        <span aria-hidden className="h-3 w-px shrink-0 bg-edge" />
-        <button
-          type="button"
-          onClick={() => openConsole("plans")}
-          title={t("chatStream.activity.cluster.openPlans")}
-          className="whitespace-nowrap text-[11px] tabular-nums text-content-subtle transition-colors hover:text-content"
-        >
-          {planBlocks.length > 0
-            ? t("chatStream.activity.cluster.plans", { n: planBlocks.length })
-            : t("chatStream.activity.cluster.noPlans")}
-        </button>
       </div>
+
+      {/* ── 伴随卫星岛 (Satellite Island) ──
+          Only renders when split: displays task progress or secondary stats */}
+      {isSplit && (
+        <div
+          onClick={() => openConsole(todos.length > 0 ? "tasks" : "plans")}
+          role="button"
+          tabIndex={0}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              openConsole(todos.length > 0 ? "tasks" : "plans");
+            }
+          }}
+          title={
+            todos.length > 0
+              ? `${done}/${todos.length} (${pct}%)`
+              : t("chatStream.activity.deck.shortPlans", { n: planBlocks.length })
+          }
+          className={cn(
+            "relative grid h-[36px] w-[36px] cursor-pointer select-none place-items-center rounded-full",
+            "border backdrop-blur-2xl transition-all duration-200 ease-[cubic-bezier(0.34,1.3,0.64,1)]",
+            "border-slate-300 bg-white text-slate-900 shadow-[0_4px_14px_rgba(0,0,0,0.08)] hover:border-slate-400 hover:shadow-[0_6px_20px_rgba(0,0,0,0.12)] hover:scale-[1.08] active:scale-[0.95]",
+            "dark:border-white/[0.14] dark:bg-[#090a0f]/95 dark:text-white dark:shadow-[0_4px_16px_rgba(0,0,0,0.3)] dark:hover:border-white/25",
+          )}
+        >
+          {todos.length > 0 ? (
+            <svg className="-rotate-90" width="18" height="18">
+              <circle
+                cx="9"
+                cy="9"
+                r="6.5"
+                stroke="currentColor"
+                strokeWidth="2.2"
+                fill="none"
+                className="text-slate-200 dark:text-white/20"
+              />
+              <circle
+                cx="9"
+                cy="9"
+                r="6.5"
+                stroke="currentColor"
+                strokeWidth="2.2"
+                fill="none"
+                className="text-accent"
+                strokeDasharray="40.84"
+                strokeDashoffset={`${40.84 * (1 - pct / 100)}`}
+                strokeLinecap="round"
+              />
+            </svg>
+          ) : (
+            <IconClipboard size={12} className="text-slate-700 dark:text-white/80" />
+          )}
+        </div>
+      )}
     </div>
   );
 
-  // Mobile / web shell: a 380px panel does not fit a phone, so the same console
+  // Mobile / web shell: a 390px panel does not fit a phone, so the same console
   // opens in the existing bottom sheet instead.
   if (!isElectron) {
     return (
@@ -233,6 +444,10 @@ export function ActivityCluster({
             todos={todos}
             planBlocks={planBlocks}
             bookmarks={bookmarks}
+            bashTasks={commands}
+            onStopBashTask={onStopBashTask}
+            services={serviceList}
+            onStopService={onStopService}
             isBookmarkStale={isBookmarkStale}
             tabs={tabs}
             onTabChange={setTab}
@@ -246,38 +461,35 @@ export function ActivityCluster({
   }
 
   return (
-    // The console is nested in this corner box on purpose: its containing block
-    // is then a box this file owns, so `right-0` lines its right edge up with
-    // the cluster's and nothing above can re-anchor it.
     <div ref={rootRef} className="pointer-events-none absolute right-5 top-2 z-30 flex items-center">
       {cluster}
       {openKind && (
         <div
           ref={panelRef}
           className={cn(
-            "pointer-events-auto absolute right-0 top-[38px] z-40 flex max-h-[70dvh] w-[380px]",
-            "max-w-[calc(100vw-64px)] flex-col overflow-hidden rounded-2xl border border-edge bg-surface/95",
-            "backdrop-blur-xl shadow-[inset_0_1px_0_rgb(255_255_255/0.08),0_24px_48px_-12px_rgb(0_0_0/0.35)]",
-            "animate-[capsule-pop-in_180ms_cubic-bezier(0.2,0.8,0.3,1)]",
+            "pointer-events-auto absolute right-0 top-[42px] z-40 flex max-h-[78dvh] w-[420px]",
+            "max-w-[calc(100vw-40px)] flex-col overflow-hidden rounded-[26px] border backdrop-blur-3xl transition-all",
+            "border-slate-300 bg-white text-slate-900 shadow-[0_20px_50px_rgba(15,23,42,0.14)]",
+            "dark:border-white/[0.14] dark:bg-[#0c0d12]/95 dark:text-white dark:shadow-[0_28px_70px_-15px_rgba(0,0,0,0.8),inset_0_1px_0_rgba(255,255,255,0.18)]",
+            "animate-[capsule-pop-in_240ms_cubic-bezier(0.34,1.3,0.64,1)]",
           )}
         >
-          {/* Notch on the TOP edge, pointing up at the cluster. Fixed offset
-              from the right: the cluster's right edge is pinned here too, so
-              the notch always sits under it (no measurement). */}
-          <span
-            aria-hidden
-            className="absolute -top-[5px] right-[34px] h-2.5 w-2.5 rotate-45 border-l border-t border-edge bg-surface"
-          />
           <ActivityConsole
             node={openKind}
-            // Node tabs keep all four kinds reachable: the cluster's core only
-            // opens the primary one, and the bar exposes plans.
             nodeTabs
             onPickNode={setOpenKind}
             subagents={subagents}
             todos={todos}
             planBlocks={planBlocks}
             bookmarks={bookmarks}
+            bashTasks={commands}
+            onStopBashTask={onStopBashTask}
+            services={serviceList}
+            onStopService={onStopService}
+            onOpenService={onOpenService}
+            automations={automations}
+            onOpenSchedPanel={onOpenSchedPanel}
+            onNewSched={onNewSched}
             isBookmarkStale={isBookmarkStale}
             tabs={tabs}
             onTabChange={setTab}

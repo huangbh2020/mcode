@@ -24,6 +24,7 @@ export const zh = {
   "chat.toast.imageNotSent": "图片未发送",
   "chat.imageN": "图片 {n}",
   "chat.removeImageName": "移除图片 {name}",
+  "chat.removeAttachmentName": "移除附件 {name}",
   "chat.removeImageN": "移除图片 {n}",
 
   // ── composer actions / placeholders ──

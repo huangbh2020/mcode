@@ -18,7 +18,7 @@
  * bottom nav).
  */
 import { createPortal } from "react-dom";
-import type { SubagentSnapshot } from "@contracts/runtime";
+import type { SubagentSnapshot, BashTaskSnapshot, ServiceSnapshot } from "@contracts/runtime";
 import type { SessionBookmark } from "@contracts/session";
 import type { TodoItem } from "@renderer/stores/sessionStore.js";
 import { useI18n } from "@renderer/lib/i18n/index.js";
@@ -32,12 +32,16 @@ export function ActivitySheet({
   todos,
   planBlocks,
   bookmarks,
+  bashTasks,
   isBookmarkStale,
   tabs,
   onTabChange,
   onClose,
   onPickPlan,
   onRemoveBookmark,
+  onStopBashTask,
+  services,
+  onStopService,
 }: {
   node: ActivityNodeKey;
   /** Switch kind — the node strip inside the console calls this. */
@@ -48,6 +52,15 @@ export function ActivitySheet({
   /** Omit/empty to hide the bookmarks tab. The phone shell has no virtual-list
    *  jump plumbing, so entries are list/delete only (no pick/jump callback). */
   bookmarks?: SessionBookmark[];
+  /** Agent-started bash commands (the「运行命令」node); stop rides the same
+   *  mobile RPC channel as interrupt. */
+  bashTasks?: BashTaskSnapshot[];
+  onStopBashTask?: (task: BashTaskSnapshot) => void;
+  /** Discovered agent-started services (the「服务」node); stop rides the same
+   *  mobile RPC channel as stopTask. No "open in browser" here — the phone
+   *  shell has no in-app browser. */
+  services?: ServiceSnapshot[];
+  onStopService?: (service: ServiceSnapshot) => void;
   isBookmarkStale?: (b: SessionBookmark) => boolean;
   tabs: ActivityTabs;
   onTabChange: (node: ActivityNodeKey, tab: string) => void;
@@ -65,7 +78,7 @@ export function ActivitySheet({
         className="absolute inset-0 bg-black/40"
         onClick={onClose}
       />
-      <div className="absolute inset-x-0 bottom-0 flex max-h-[85dvh] flex-col rounded-t-2xl border-t border-edge bg-surface text-content shadow-2xl">
+      <div className="absolute inset-x-0 bottom-0 flex max-h-[85dvh] flex-col rounded-t-3xl border-t border-slate-300 bg-white/95 text-slate-900 shadow-2xl backdrop-blur-2xl dark:border-white/[0.14] dark:bg-[#0c0d12]/95 dark:text-white">
         {/* Grabber handle — visual affordance for the sheet, matching the
             bottom-sheet idiom; dismissal is via scrim/back. */}
         <div className="flex shrink-0 justify-center pb-1 pt-2">
@@ -75,7 +88,7 @@ export function ActivitySheet({
             aria-label={t("chatStream.activity.close")}
             className="grid h-4 w-full place-items-center"
           >
-            <span className="h-1 w-8 rounded-full bg-edge" />
+            <span className="h-1 w-8 rounded-full bg-slate-300 dark:bg-white/20" />
           </button>
         </div>
         {/* The console brings its own header/stats/tabs/body/footer; its body is
@@ -89,6 +102,10 @@ export function ActivitySheet({
             todos={todos}
             planBlocks={planBlocks}
             bookmarks={bookmarks ?? []}
+            bashTasks={bashTasks}
+            onStopBashTask={onStopBashTask}
+            services={services}
+            onStopService={onStopService}
             isBookmarkStale={isBookmarkStale}
             tabs={tabs}
             onTabChange={onTabChange}

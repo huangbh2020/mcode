@@ -14,12 +14,14 @@ import {
   IconPlus,
   IconX,
   IconCheck,
+  IconTerminal2,
 } from "@renderer/lib/icons.js";
 import { useSessionStore, type SessionRightPanelTabId } from "@renderer/stores/sessionStore.js";
 import { resolveShortcut, acceleratorToDisplayString } from "@renderer/lib/shortcuts.js";
 import { useSuppressBrowserView } from "@renderer/hooks/useSuppressBrowserView.js";
 import { FilesPanel } from "@renderer/components/ide/FilesPanel.js";
 import { GitPanel } from "@renderer/components/ide/GitPanel.js";
+import { TerminalPanel } from "@renderer/components/ide/TerminalPanel.js";
 import { TurnFlowPanel } from "@renderer/components/ide/TurnFlowPanel.js";
 import { OrchPanel } from "@renderer/components/ide/OrchPanel.js";
 import { SchedPanel } from "@renderer/components/automation/SchedPanel.js";
@@ -64,6 +66,7 @@ const SESSION_TAB_META: ReadonlyArray<{
 export function RightPanel() {
   const { t } = useI18n();
   const sessionId = useSessionStore((s) => s.activeSessionId);
+  const rightOpen = useSessionStore((s) => s.rightOpen);
   const globalTab = useSessionStore((s) => s.rightPanelTab);
   // This session's session-scoped tabs (open set + which one is showing).
   const sessionTabs = useSessionStore((s) => (sessionId ? s.sessionRightTabsBySession[sessionId] : undefined));
@@ -151,6 +154,13 @@ export function RightPanel() {
           title="Git" /* brand name */
         >
           <IconGitBranch size={16} className="shrink-0" />
+        </RailButton>
+        <RailButton
+          active={tab === "terminal"}
+          onClick={() => setTab("terminal")}
+          title={t("layout.tabTerminal")}
+        >
+          <IconTerminal2 size={16} className="shrink-0" />
         </RailButton>
         {/* Orchestration DAG — runs scoped to the active (coordinator)
             session: task graph, node controls, gates, worker reports.
@@ -306,6 +316,9 @@ export function RightPanel() {
       <div className="relative min-h-0 flex-1 overflow-hidden">
         {tab === "files" && <FilesPanel />}
         {tab === "git" && <GitPanel />}
+        <div className={cn("h-full w-full", tab === "terminal" ? "" : "hidden")}>
+          <TerminalPanel active={tab === "terminal" && rightOpen} />
+        </div>
         {tab === "turns" && <TurnFlowPanel />}
         {tab === "sidechat" && <SideChatPanel />}
         {tab === "orch" && hasOrchestration && <OrchPanel />}

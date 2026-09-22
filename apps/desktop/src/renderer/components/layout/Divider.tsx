@@ -45,6 +45,9 @@ export interface DividerProps {
   onResize: (deltaPx: number) => void;
   /** Optional double-click handler (e.g. reset to default width). */
   onDoubleClick?: () => void;
+  /** Optional callbacks when dragging starts or ends. */
+  onDragStart?: () => void;
+  onDragEnd?: () => void;
   /** Kept for API compatibility but a no-op (the visible 1px line is centered
    *  in the symmetric hit area, so there is nowhere to align within). */
   lineAlign?: "start" | "center" | "end";
@@ -60,9 +63,12 @@ export function Divider({
   orientation,
   onResize,
   onDoubleClick,
+  onDragStart,
+  onDragEnd,
   hideLine = false,
   className,
 }: DividerProps) {
+
   const dragging = useRef(false);
 
   const isVertical = orientation === "vertical";
@@ -74,6 +80,7 @@ export function Divider({
       e.preventDefault();
       let prev = isVertical ? e.clientX : e.clientY;
       dragging.current = true;
+      onDragStart?.();
 
       // Lock the whole document while dragging: fixed cursor, no text
       // selection, no iframe pointer capture issues. Removed on mouseup.
@@ -91,6 +98,7 @@ export function Divider({
       };
       const onUp = () => {
         dragging.current = false;
+        onDragEnd?.();
         document.body.style.cursor = prevCursor;
         document.body.style.userSelect = prevSelect;
         document.removeEventListener("mousemove", onMove);
@@ -99,8 +107,9 @@ export function Divider({
       document.addEventListener("mousemove", onMove);
       document.addEventListener("mouseup", onUp);
     },
-    [isVertical, onResize],
+    [isVertical, onResize, onDragStart, onDragEnd],
   );
+
 
   // Two-layer structure:
   //  - Outer slot: still occupies a 1px layout gutter (w-px / h-px) so it

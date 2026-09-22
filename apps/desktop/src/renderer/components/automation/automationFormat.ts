@@ -56,16 +56,16 @@ export function statusMeta(status: AutomationRunStatus | null): {
       return {
         label: t("automation.status.running"),
         dotClass: "bg-[#0369a1] dark:bg-[#38bdf8]",
-        badgeClass: "text-[#0369a1] dark:text-[#38bdf8] bg-[#38bdf8]/10",
+        badgeClass: "text-[#0369a1] dark:text-[#38bdf8] bg-[#38bdf8]/10 border border-[#38bdf8]/20",
       };
     case "waiting-approval":
-      return { label: t("automation.status.waiting"), dotClass: "bg-warning", badgeClass: "text-warning bg-warning/10" };
+      return { label: t("automation.status.waiting"), dotClass: "bg-warning", badgeClass: "text-warning bg-warning/10 border border-warning/20" };
     case "success":
-      return { label: t("automation.status.success"), dotClass: "bg-success", badgeClass: "text-success bg-success/10" };
+      return { label: t("automation.status.success"), dotClass: "bg-success", badgeClass: "text-success bg-success/10 border border-success/20" };
     case "failed":
-      return { label: t("automation.status.failed"), dotClass: "bg-danger", badgeClass: "text-danger bg-danger/10" };
+      return { label: t("automation.status.failed"), dotClass: "bg-danger", badgeClass: "text-danger bg-danger/10 border border-danger/20" };
     default:
-      return { label: t("automation.status.idle"), dotClass: "bg-content-subtle/60", badgeClass: "text-content-subtle bg-surface-hover" };
+      return { label: t("automation.status.idle"), dotClass: "bg-content-subtle/60", badgeClass: "text-content-subtle bg-surface-muted/60 border border-edge/40" };
   }
 }
 

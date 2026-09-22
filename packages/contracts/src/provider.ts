@@ -277,6 +277,13 @@ export interface TurnHandle {
   interrupt(): void;
   /** Whether the turn is still active. */
   isRunning(): boolean;
+  /** Stop ONE running CLI task (e.g. a long-running bash command the agent
+   *  started) without aborting the whole turn — backed by the SDK's
+   *  `stop_task` control request. Optional capability: providers without
+   *  task-level control omit it and the UI hides per-task stop controls.
+   *  Rejects when the turn already finished (the CLI process is gone, so
+   *  there is nothing left to stop). */
+  stopTask?(taskId: string): Promise<void>;
 }
 
 /** Every AI backend implements this interface. */
