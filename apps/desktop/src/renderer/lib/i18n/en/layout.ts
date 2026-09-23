@@ -112,6 +112,7 @@ export const en = {
   "layout.hideEditor": "Hide editor",
   "layout.noOpenFiles": "No open files",
   "layout.tabFiles": "Files",
+  "layout.tabGithub": "GitHub PRs/issues",
   "layout.tabTerminal": "Terminal",
   "layout.tabTurns": "Turn Flow",
   "layout.tabBrowser": "Browser",

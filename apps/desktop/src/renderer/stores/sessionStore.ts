@@ -5704,7 +5704,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       // auto-open their panels; "turns"/"sidechat" are session-scoped tabs
       // opened per session via the rail's "+" menu — a persisted value from
       // an older build is ignored the same way).
-      if (tabRaw === "files" || tabRaw === "git") set({ rightPanelTab: tabRaw });
+      if (tabRaw === "files" || tabRaw === "git" || tabRaw === "github") set({ rightPanelTab: tabRaw });
       if (modeRaw === "tabs" || modeRaw === "replace") set({ ideEditorMode: modeRaw });
       if (diffModeRaw === "center" || diffModeRaw === "dialog") set({ gitDiffOpenMode: diffModeRaw });
       set({ commitGenModel: commitModelRaw || null });

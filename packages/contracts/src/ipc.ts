@@ -21,6 +21,40 @@ import {
 import { AutomationScheduleSchema } from "./automation.js";
 import type { Automation, AutomationSchedule } from "./automation.js";
 import type {
+  GitHubContextResult,
+  GitHubIssueDetail,
+  GitHubIssueSummary,
+  GitHubPullDetail,
+  GitHubPullSummary,
+  GitHubCommentEntry,
+  GitHubRepoCandidate,
+  GitHubRepoInfo,
+} from "./github.js";
+
+// Re-export the GitHub contracts so consumers can import from "@contracts/ipc"
+// (mirrors the relay.ts pattern).
+export type {
+  GitHubCommentEntry,
+  GitHubContextResult,
+  GitHubIssueDetail,
+  GitHubIssueSummary,
+  GitHubLabelRef,
+  GitHubLinkedIssue,
+  GitHubLinkedPull,
+  GitHubPullDetail,
+  GitHubPullFileEntry,
+  GitHubPullState,
+  GitHubPullSummary,
+  GitHubRepoCandidate,
+  GitHubRepoInfo,
+  GitHubTokenStatus,
+  GitHubUserRef,
+} from "./github.js";
+export {
+  GITHUB_MANUAL_REPOS_SETTING_KEY,
+  GITHUB_TOKEN_SETTING_KEY,
+} from "./github.js";
+import type {
   OrchestrationRun,
   OrchSettings,
   OrchestratorEvent,
@@ -648,6 +682,7 @@ export const RightPanelTabSchema = z.enum([
   "sidechat",
   "orch",
   "sched",
+  "github",
 ]);
 export type RightPanelTab = z.infer<typeof RightPanelTabSchema>;
 /** The globally-switchable right-panel tabs (fixed rail icons whose active
@@ -2280,6 +2315,19 @@ export const GitRepoPathSchema = z.object({
   repoPath: z.string(),
 });
 export type GitRepoPathInput = z.infer<typeof GitRepoPathSchema>;
+
+/** Push local commits to the upstream remote. With `setUpstream` + `branch`,
+ *  pushes as `--set-upstream origin <branch>` — the create-PR flow uses this
+ *  for branches that have never been pushed (plain `git push` fails with "no
+ *  upstream" there). */
+export const GitPushSchema = GitRepoPathSchema.extend({
+  setUpstream: z.boolean().optional(),
+  branch: z
+    .string()
+    .regex(/^[A-Za-z0-9._/\-]+$/, "invalid branch name")
+    .optional(),
+});
+export type GitPushInput = z.infer<typeof GitPushSchema>;
 
 /** Stage (git add) specific files. `filePaths` are relative to the repo root. */
 export const GitStageSchema = z.object({
@@ -4266,6 +4314,89 @@ export const BrowserAuthRespondSchema = z.object({
 });
 export type BrowserAuthRespondInput = z.infer<typeof BrowserAuthRespondSchema>;
 
+/* ── GitHub integration (PR / issue panel) ──
+ * The main process wraps the GitHub REST API v3 (token from the encrypted
+ * settings entry, falling back to the `gh` CLI's stored credentials) and
+ * normalizes responses into the shapes in contracts/github.ts. Owner/repo
+ * always travel explicitly: the renderer resolves them from the project's
+ * git remotes (`github:getContext`) or the user's manual entries, so main
+ * stays stateless. */
+
+export const GithubSlugSchema = z.object({
+  owner: z.string().min(1).max(100),
+  repo: z.string().min(1).max(100),
+});
+export type GithubSlugInput = z.infer<typeof GithubSlugSchema>;
+
+/** Boot payload: project path whose git remotes are scanned for github.com. */
+export const GithubGetContextSchema = z.object({ projectPath: z.string().min(1) });
+export type GithubGetContextInput = z.infer<typeof GithubGetContextSchema>;
+
+export const GithubGetPullSchema = GithubSlugSchema.extend({
+  number: z.number().int().min(1).max(1_000_000),
+});
+export type GithubGetPullInput = z.infer<typeof GithubGetPullSchema>;
+
+export const GithubListIssuesSchema = GithubSlugSchema.extend({
+  /** "all" includes closed ones (default "open"). */
+  state: z.enum(["open", "closed", "all"]).default("open"),
+});
+export type GithubListIssuesInput = z.infer<typeof GithubListIssuesSchema>;
+
+export const GithubMergePullSchema = GithubSlugSchema.extend({
+  number: z.number().int().min(1),
+  method: z.enum(["merge", "squash", "rebase"]).default("merge"),
+  /** Ask GitHub to delete the head branch after a successful merge. */
+  deleteBranch: z.boolean().default(false),
+  /** Custom commit title/body (squash/rebase only; null = GitHub default). */
+  commitTitle: z.string().max(600).nullable().optional(),
+  commitMessage: z.string().max(10_000).nullable().optional(),
+});
+export type GithubMergePullInput = z.infer<typeof GithubMergePullSchema>;
+
+/** Comments on a PR and on an issue share one endpoint — `number` is the
+ *  issue/PR number either way. */
+export const GithubCreateCommentSchema = GithubSlugSchema.extend({
+  number: z.number().int().min(1),
+  body: z.string().min(1).max(20_000),
+});
+export type GithubCreateCommentInput = z.infer<typeof GithubCreateCommentSchema>;
+
+export const GithubSetIssueStateSchema = GithubSlugSchema.extend({
+  number: z.number().int().min(1),
+  state: z.enum(["open", "closed"]),
+});
+export type GithubSetIssueStateInput = z.infer<typeof GithubSetIssueStateSchema>;
+
+export const GithubCreateIssueSchema = GithubSlugSchema.extend({
+  title: z.string().min(1).max(600),
+  body: z.string().max(100_000).default(""),
+});
+export type GithubCreateIssueInput = z.infer<typeof GithubCreateIssueSchema>;
+
+export const GithubCreatePullSchema = GithubSlugSchema.extend({
+  title: z.string().min(1).max(600),
+  head: z.string().min(1).max(300),
+  base: z.string().min(1).max(300),
+  body: z.string().max(100_000).default(""),
+  draft: z.boolean().default(false),
+});
+export type GithubCreatePullInput = z.infer<typeof GithubCreatePullSchema>;
+
+export const GithubSetTokenSchema = z.object({
+  /** Empty string clears the stored token (fall back to gh CLI). */
+  token: z.string().max(300),
+});
+export type GithubSetTokenInput = z.infer<typeof GithubSetTokenSchema>;
+
+/** Shared failure shape for mutating calls — handled like the git ops so a
+ *  GitHub-side error never throws into the renderer. */
+export const GithubOpResultSchema = z.object({
+  ok: z.boolean(),
+  error: z.string().optional(),
+});
+export type GithubOpResult = z.infer<typeof GithubOpResultSchema>;
+
 /* ──────────────────────────  RPC method map  ───────────────────────────────── */
 
 /** Revoke a paired mobile device. Input to `mobile.revokeDevice`. */
@@ -4412,6 +4543,35 @@ export interface RpcMap {
   /** Settings UI eye-icon only — same security carve-out as
    *  customModel.getToken / piModels.getApiKey. */
   "codexModels.getApiKey": (input: GetCodexApiKeyInput) => Promise<{ apiKey: string | null }>;
+  // GitHub integration (PR / issue panel)
+  /** Token status + github.com repos discoverable under a project path. */
+  "github.getContext": (input: GithubGetContextInput) => Promise<{ context: GitHubContextResult }>;
+  /** Repo facts: default branch + whether the token may push. */
+  "github.getRepo": (input: GithubSlugInput) => Promise<{ repo: GitHubRepoInfo }>;
+  /** Open (or all) pull requests, newest-updated first. */
+  "github.listPulls": (input: GithubSlugInput) => Promise<{ pulls: GitHubPullSummary[] }>;
+  /** Issues (PRs filtered out — the REST issues list returns both). */
+  "github.listIssues": (input: GithubListIssuesInput) => Promise<{ issues: GitHubIssueSummary[] }>;
+  /** Full PR detail: body, comments, changed files, linked issues. */
+  "github.getPull": (input: GithubGetPullInput) => Promise<{ pull: GitHubPullDetail }>;
+  /** Full issue detail: body, comments, cross-referenced PRs. */
+  "github.getIssue": (input: GithubGetPullInput) => Promise<{ issue: GitHubIssueDetail }>;
+  /** Merge a PR (merge / squash / rebase, optional head-branch deletion). */
+  "github.mergePull": (input: GithubMergePullInput) => Promise<GithubOpResult>;
+  /** Comment on a PR or issue (same endpoint). */
+  "github.createComment": (input: GithubCreateCommentInput) => Promise<{ comment: GitHubCommentEntry }>;
+  /** Open/close an issue or PR. */
+  "github.setIssueState": (input: GithubSetIssueStateInput) => Promise<GithubOpResult>;
+  /** Create an issue; returns its number. */
+  "github.createIssue": (input: GithubCreateIssueInput) => Promise<GithubOpResult & { number: number | null }>;
+  /** Create a PR; returns its number (null on failure). */
+  "github.createPull": (input: GithubCreatePullInput) => Promise<GithubOpResult & { number: number | null; htmlUrl: string | null }>;
+  /** Branch names + default branch for the create-PR base picker. */
+  "github.listBranches": (input: GithubSlugInput) => Promise<{ branches: string[]; defaultBranch: string }>;
+  /** Store (or clear with "") the GitHub token, encrypted at rest. */
+  "github.setToken": (input: GithubSetTokenInput) => Promise<void>;
+  /** Validate the current token chain (settings → gh CLI); returns the login. */
+  "github.verifyToken": () => Promise<{ ok: boolean; login: string | null; source: "settings" | "gh" | "none"; error: string | null }>;
   // Theme / color scheme
   "theme.get": () => Promise<GetThemeResult>;
   "theme.set": (input: SetThemeInput) => Promise<GetThemeResult>;
@@ -4462,8 +4622,10 @@ export interface RpcMap {
   "git.unstage": (input: GitUnstageInput) => Promise<GitOpResult>;
   /** Commit staged changes with a message. */
   "git.commit": (input: GitCommitInput) => Promise<GitOpResult>;
-  /** Push local commits to the upstream remote. */
-  "git.push": (input: GitRepoPathInput) => Promise<GitOpResult>;
+  /** Push local commits to the upstream remote. With `setUpstream` + `branch`,
+   *  pushes the named branch as `--set-upstream origin <branch>` (first push
+   *  of a new branch — see GitPushSchema). */
+  "git.push": (input: GitPushInput) => Promise<GitOpResult>;
   /** Pull remote changes into the current branch. */
   "git.pull": (input: GitRepoPathInput) => Promise<GitOpResult>;
   /** Get the unstaged diff patch for a single file. */
@@ -4990,6 +5152,22 @@ export const IPC = {
   GIT_WORKTREE_STATUS: "git:worktreeStatus",
   GIT_WORKTREE_MERGE_BACK: "git:worktreeMergeBack",
   GIT_WORKTREE_REMOVE: "git:worktreeRemove",
+  // GitHub PR / issue management (right-panel GitHub tab). All RPC — no push
+  // channel; the panel refreshes on demand.
+  GITHUB_GET_CONTEXT: "github:getContext",
+  GITHUB_GET_REPO: "github:getRepo",
+  GITHUB_LIST_PULLS: "github:listPulls",
+  GITHUB_LIST_ISSUES: "github:listIssues",
+  GITHUB_GET_PULL: "github:getPull",
+  GITHUB_GET_ISSUE: "github:getIssue",
+  GITHUB_MERGE_PULL: "github:mergePull",
+  GITHUB_CREATE_COMMENT: "github:createComment",
+  GITHUB_SET_ISSUE_STATE: "github:setIssueState",
+  GITHUB_CREATE_ISSUE: "github:createIssue",
+  GITHUB_CREATE_PULL: "github:createPull",
+  GITHUB_LIST_BRANCHES: "github:listBranches",
+  GITHUB_SET_TOKEN: "github:setToken",
+  GITHUB_VERIFY_TOKEN: "github:verifyToken",
   // Integrated terminal (P4 IDE right panel)
   TERMINAL_CREATE: "terminal:create",
   TERMINAL_WRITE: "terminal:write",

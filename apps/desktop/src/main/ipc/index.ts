@@ -12,6 +12,7 @@ import { registerFontHandlers } from "./fonts.js";
 import { registerFileHandlers } from "./files.js";
 import { registerRgHandlers } from "./rg.js";
 import { registerGitHandlers } from "./git.js";
+import { registerGithubHandlers } from "./github.js";
 import { registerTerminalHandlers } from "./terminal.js";
 import { registerAppHandlers } from "./app.js";
 import { registerShellHandlers } from "./shell.js";
@@ -68,6 +69,7 @@ export function registerIpcHandlers(): void {
   registerFileHandlers(ipc);
   registerRgHandlers(ipc);
   registerGitHandlers(ipc);
+  registerGithubHandlers(ipc);
   registerTerminalHandlers(ipc);
   registerAppHandlers(ipc);
   registerShellHandlers(ipc);

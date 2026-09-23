@@ -15,6 +15,7 @@ import {
   IconX,
   IconCheck,
   IconTerminal2,
+  IconBrandGithub,
 } from "@renderer/lib/icons.js";
 import { useSessionStore, type SessionRightPanelTabId } from "@renderer/stores/sessionStore.js";
 import { resolveShortcut, acceleratorToDisplayString } from "@renderer/lib/shortcuts.js";
@@ -24,6 +25,7 @@ import { GitPanel } from "@renderer/components/ide/GitPanel.js";
 import { TerminalPanel } from "@renderer/components/ide/TerminalPanel.js";
 import { TurnFlowPanel } from "@renderer/components/ide/TurnFlowPanel.js";
 import { OrchPanel } from "@renderer/components/ide/OrchPanel.js";
+import { GitHubPanel } from "@renderer/components/github/GitHubPanel.js";
 import { SchedPanel } from "@renderer/components/automation/SchedPanel.js";
 import { BrowserPanel } from "@renderer/components/browser/BrowserPanel.js";
 import { SideChatPanel } from "@renderer/components/chat/SideChatPanel.js";
@@ -154,6 +156,13 @@ export function RightPanel() {
           title="Git" /* brand name */
         >
           <IconGitBranch size={16} className="shrink-0" />
+        </RailButton>
+        <RailButton
+          active={tab === "github"}
+          onClick={() => setTab("github")}
+          title={t("layout.tabGithub")}
+        >
+          <IconBrandGithub size={16} className="shrink-0" />
         </RailButton>
         <RailButton
           active={tab === "terminal"}
@@ -316,6 +325,7 @@ export function RightPanel() {
       <div className="relative min-h-0 flex-1 overflow-hidden">
         {tab === "files" && <FilesPanel />}
         {tab === "git" && <GitPanel />}
+        {tab === "github" && <GitHubPanel />}
         <div className={cn("h-full w-full", tab === "terminal" ? "" : "hidden")}>
           <TerminalPanel active={tab === "terminal" && rightOpen} />
         </div>

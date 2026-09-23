@@ -153,6 +153,8 @@ export {
   IconGitCommit,
   IconGitMerge,
   IconGitFork,
+  IconGitPullRequest,
+  IconBrandGithub,
   IconArrowsSplit,
   IconFileSymlink,
   IconSparkles,

@@ -24,6 +24,7 @@ import {
   GitStageSchema,
   GitUnstageSchema,
   GitCommitSchema,
+  GitPushSchema,
   GitDiffSchema,
   GitFileBlobSchema,
   GitDiscardSchema,
@@ -705,13 +706,19 @@ export function registerGitHandlers(ipcMain: IpcMain): void {
 
   /* ── git:push — push to upstream ── */
   ipcMain.handle(IPC.GIT_PUSH, async (_evt, raw) => {
-    const input = GitRepoPathSchema.parse(raw);
+    const input = GitPushSchema.parse(raw);
     if (!findContainingProject(input.repoPath)) {
       return { ok: false, error: "仓库路径不在任何已添加的项目内" };
     }
     try {
       const git = (await loadSimpleGit())(input.repoPath);
-      await git.push();
+      if (input.setUpstream && input.branch) {
+        // First push of a new branch: plain `git push` fails with "no
+        // upstream" — the create-PR flow needs the branch on the remote first.
+        await git.push(["--set-upstream", "origin", input.branch]);
+      } else {
+        await git.push();
+      }
       log.info(`git.push succeeded in ${input.repoPath}`);
       broadcastGitChanged(input.repoPath);
       return { ok: true };
