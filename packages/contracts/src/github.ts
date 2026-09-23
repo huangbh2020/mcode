@@ -180,3 +180,27 @@ export interface GitHubContextResult {
   token: GitHubTokenStatus;
   repos: GitHubRepoCandidate[];
 }
+
+/** Initial payload returned when initiating OAuth 2.0 Device Flow. */
+export interface GitHubDeviceCodeInit {
+  deviceCode: string;
+  userCode: string;
+  verificationUri: string;
+  expiresIn: number;
+  interval: number;
+}
+
+/** Status values returned when polling GitHub OAuth Device Flow access token. */
+export type GitHubDevicePollStatus = "pending" | "slow_down" | "ok" | "expired" | "denied" | "error";
+
+/** Result of a single poll attempt for OAuth Device Flow. */
+export interface GitHubDevicePollResult {
+  status: GitHubDevicePollStatus;
+  /** Present on status === "ok". */
+  login?: string;
+  /** Present on status === "slow_down" if GitHub requested a larger interval. */
+  interval?: number;
+  /** Error message on failure. */
+  error?: string;
+}
+

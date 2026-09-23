@@ -24,6 +24,7 @@ import {
   GithubCreateIssueSchema,
   GithubCreatePullSchema,
   GithubSetTokenSchema,
+  GithubPollDeviceFlowSchema,
 } from "@contracts/ipc";
 import type { GitHubRepoCandidate } from "@contracts/ipc";
 import {
@@ -41,6 +42,8 @@ import {
   setIssueState,
   storeGithubToken,
   verifyGithubToken,
+  startGithubDeviceFlow,
+  pollGithubDeviceFlow,
   GitHubError,
 } from "@main/github/GitHubClient.js";
 import { findGitRepos, loadSimpleGit } from "./git.js";
@@ -243,5 +246,26 @@ export function registerGithubHandlers(ipcMain: IpcMain): void {
   ipcMain.handle(IPC.GITHUB_VERIFY_TOKEN, async () => {
     const res = await verifyGithubToken();
     return { ok: res.ok, login: res.login, source: res.source, error: res.error };
+  });
+
+  /* ── github:startDeviceFlow — initiate OAuth 2.0 Device Flow ── */
+  ipcMain.handle(IPC.GITHUB_START_DEVICE_FLOW, async () => {
+    try {
+      return await startGithubDeviceFlow();
+    } catch (err) {
+      log.warn(`github.startDeviceFlow failed: ${errorText(err)}`);
+      throw err;
+    }
+  });
+
+  /* ── github:pollDeviceFlow — poll token endpoint for Device Flow ── */
+  ipcMain.handle(IPC.GITHUB_POLL_DEVICE_FLOW, async (_evt, raw) => {
+    const { deviceCode } = GithubPollDeviceFlowSchema.parse(raw);
+    try {
+      return await pollGithubDeviceFlow(deviceCode);
+    } catch (err) {
+      log.warn(`github.pollDeviceFlow failed: ${errorText(err)}`);
+      return { status: "error", error: errorText(err) };
+    }
   });
 }

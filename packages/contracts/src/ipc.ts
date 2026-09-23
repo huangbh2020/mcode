@@ -22,6 +22,9 @@ import { AutomationScheduleSchema } from "./automation.js";
 import type { Automation, AutomationSchedule } from "./automation.js";
 import type {
   GitHubContextResult,
+  GitHubDeviceCodeInit,
+  GitHubDevicePollResult,
+  GitHubDevicePollStatus,
   GitHubIssueDetail,
   GitHubIssueSummary,
   GitHubPullDetail,
@@ -36,6 +39,9 @@ import type {
 export type {
   GitHubCommentEntry,
   GitHubContextResult,
+  GitHubDeviceCodeInit,
+  GitHubDevicePollResult,
+  GitHubDevicePollStatus,
   GitHubIssueDetail,
   GitHubIssueSummary,
   GitHubLabelRef,
@@ -4400,6 +4406,11 @@ export const GithubSetTokenSchema = z.object({
 });
 export type GithubSetTokenInput = z.infer<typeof GithubSetTokenSchema>;
 
+export const GithubPollDeviceFlowSchema = z.object({
+  deviceCode: z.string().min(1),
+});
+export type GithubPollDeviceFlowInput = z.infer<typeof GithubPollDeviceFlowSchema>;
+
 /** Shared failure shape for mutating calls — handled like the git ops so a
  *  GitHub-side error never throws into the renderer. */
 export const GithubOpResultSchema = z.object({
@@ -4583,6 +4594,10 @@ export interface RpcMap {
   "github.setToken": (input: GithubSetTokenInput) => Promise<void>;
   /** Validate the current token chain (settings → gh CLI); returns the login. */
   "github.verifyToken": () => Promise<{ ok: boolean; login: string | null; source: "settings" | "gh" | "none"; error: string | null }>;
+  /** Initiate GitHub OAuth 2.0 Device Flow (opens browser and returns verification codes). */
+  "github.startDeviceFlow": () => Promise<GitHubDeviceCodeInit>;
+  /** Poll access token for GitHub OAuth 2.0 Device Flow. */
+  "github.pollDeviceFlow": (input: GithubPollDeviceFlowInput) => Promise<GitHubDevicePollResult>;
   // Theme / color scheme
   "theme.get": () => Promise<GetThemeResult>;
   "theme.set": (input: SetThemeInput) => Promise<GetThemeResult>;
@@ -5179,6 +5194,8 @@ export const IPC = {
   GITHUB_LIST_BRANCHES: "github:listBranches",
   GITHUB_SET_TOKEN: "github:setToken",
   GITHUB_VERIFY_TOKEN: "github:verifyToken",
+  GITHUB_START_DEVICE_FLOW: "github:startDeviceFlow",
+  GITHUB_POLL_DEVICE_FLOW: "github:pollDeviceFlow",
   // Integrated terminal (P4 IDE right panel)
   TERMINAL_CREATE: "terminal:create",
   TERMINAL_WRITE: "terminal:write",

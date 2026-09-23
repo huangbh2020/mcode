@@ -503,6 +503,10 @@ const api = {
       ipcRenderer.invoke(IPC.GITHUB_SET_TOKEN, input)) as RpcMap["github.setToken"],
     verifyToken: (() =>
       ipcRenderer.invoke(IPC.GITHUB_VERIFY_TOKEN)) as RpcMap["github.verifyToken"],
+    startDeviceFlow: (() =>
+      ipcRenderer.invoke(IPC.GITHUB_START_DEVICE_FLOW)) as RpcMap["github.startDeviceFlow"],
+    pollDeviceFlow: ((input) =>
+      ipcRenderer.invoke(IPC.GITHUB_POLL_DEVICE_FLOW, input)) as RpcMap["github.pollDeviceFlow"],
   },
 
   // ── Main-only helpers ──

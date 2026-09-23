@@ -12,12 +12,15 @@
  * token is cached for 60s so a burst of panel calls doesn't re-exec gh.
  */
 import { execFile } from "node:child_process";
+import { shell } from "electron";
 import { SettingRepo } from "@main/store/repositories.js";
 import { decrypt, encrypt } from "@main/lib/secretStore.js";
 import { log } from "@main/lib/logger.js";
 import {
   GITHUB_TOKEN_SETTING_KEY,
   type GitHubCommentEntry,
+  type GitHubDeviceCodeInit,
+  type GitHubDevicePollResult,
   type GitHubIssueDetail,
   type GitHubIssueSummary,
   type GitHubLabelRef,
@@ -33,6 +36,10 @@ import {
 } from "@contracts/ipc";
 
 const API_BASE = "https://api.github.com";
+const GITHUB_HOST_BASE = "https://github.com";
+/** Official GitHub CLI OAuth client ID (supports Device Flow without client secret). */
+const GH_DEVICE_CLIENT_ID = "178c6fc778ccc68e1d6a";
+const GH_DEVICE_SCOPES = "repo,read:org,gist";
 const TOKEN_CACHE_TTL_MS = 60_000;
 /** `gh auth token` is a local exec — should be instant; don't hang the panel. */
 const GH_CLI_TIMEOUT_MS = 5_000;
@@ -119,6 +126,113 @@ export async function verifyGithubToken(): Promise<GitHubTokenStatus & { ok: boo
     const msg = err instanceof GitHubError ? `HTTP ${err.status}: ${err.message}` : (err as Error).message;
     return { configured: false, source, login: null, ok: false, error: msg };
   }
+}
+
+/** Initiate GitHub OAuth 2.0 Device Flow (RFC 8628).
+ *  Requests a verification code from GitHub and opens the user's default browser. */
+export async function startGithubDeviceFlow(): Promise<GitHubDeviceCodeInit> {
+  const params = new URLSearchParams({
+    client_id: GH_DEVICE_CLIENT_ID,
+    scope: GH_DEVICE_SCOPES,
+  });
+  const res = await fetch(`${GITHUB_HOST_BASE}/login/device/code`, {
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/x-www-form-urlencoded",
+      "User-Agent": "Mcode-Desktop",
+    },
+    body: params.toString(),
+    signal: AbortSignal.timeout(15_000),
+  });
+  if (!res.ok) {
+    throw new Error(`Failed to initiate GitHub Device Flow: HTTP ${res.status}`);
+  }
+  const data = (await res.json()) as {
+    device_code: string;
+    user_code: string;
+    verification_uri: string;
+    expires_in: number;
+    interval: number;
+    error?: string;
+    error_description?: string;
+  };
+  if (data.error || !data.device_code) {
+    throw new Error(data.error_description ?? data.error ?? "Failed to initiate GitHub Device Flow");
+  }
+
+  // Attempt to open the verification uri in the user's browser automatically
+  try {
+    void shell.openExternal(data.verification_uri);
+  } catch (err) {
+    log.warn(`github device flow: failed to open browser automatically: ${(err as Error).message}`);
+  }
+
+  return {
+    deviceCode: data.device_code,
+    userCode: data.user_code,
+    verificationUri: data.verification_uri,
+    expiresIn: data.expires_in ?? 900,
+    interval: data.interval ?? 5,
+  };
+}
+
+/** Poll GitHub token endpoint once for OAuth 2.0 Device Flow.
+ *  If authorized, saves the token and returns { status: "ok", login }. */
+export async function pollGithubDeviceFlow(deviceCode: string): Promise<GitHubDevicePollResult> {
+  const params = new URLSearchParams({
+    client_id: GH_DEVICE_CLIENT_ID,
+    device_code: deviceCode,
+    grant_type: "urn:ietf:params:oauth:grant-type:device_code",
+  });
+  const res = await fetch(`${GITHUB_HOST_BASE}/login/oauth/access_token`, {
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/x-www-form-urlencoded",
+      "User-Agent": "Mcode-Desktop",
+    },
+    body: params.toString(),
+    signal: AbortSignal.timeout(15_000),
+  });
+  if (!res.ok) {
+    return { status: "error", error: `HTTP ${res.status}` };
+  }
+  const data = (await res.json()) as {
+    access_token?: string;
+    token_type?: string;
+    scope?: string;
+    error?: string;
+    error_description?: string;
+    interval?: number;
+  };
+
+  if (data.error) {
+    if (data.error === "authorization_pending") {
+      return { status: "pending" };
+    }
+    if (data.error === "slow_down") {
+      return { status: "slow_down", interval: data.interval };
+    }
+    if (data.error === "expired_token") {
+      return { status: "expired", error: data.error_description ?? data.error };
+    }
+    if (data.error === "access_denied") {
+      return { status: "denied", error: data.error_description ?? data.error };
+    }
+    return { status: "error", error: data.error_description ?? data.error };
+  }
+
+  if (data.access_token) {
+    await storeGithubToken(data.access_token);
+    const verify = await verifyGithubToken();
+    return {
+      status: "ok",
+      login: verify.login ?? undefined,
+    };
+  }
+
+  return { status: "error", error: "Unexpected response from GitHub" };
 }
 
 /* ── Core request ── */

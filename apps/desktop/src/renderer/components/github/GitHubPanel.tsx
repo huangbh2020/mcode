@@ -19,10 +19,13 @@ import {
   IconAlertTriangle,
   IconCircleCheck,
   IconLink,
+  IconCopy,
+  IconCheck,
 } from "@renderer/lib/icons.js";
 import { Markdown } from "@renderer/components/chat/Markdown.js";
 import type {
   GitHubContextResult,
+  GitHubDeviceCodeInit,
   GitHubIssueDetail,
   GitHubIssueSummary,
   GitHubPullDetail,
@@ -261,7 +264,12 @@ export function GitHubPanel() {
     );
   }
   if (context && !context.token.configured) {
-    return <NoTokenEmpty onOpenSettings={() => setSettingsOpen(true, "github")} />;
+    return (
+      <NoTokenEmpty
+        onOpenSettings={() => setSettingsOpen(true, "github")}
+        onLoginSuccess={() => void loadContext()}
+      />
+    );
   }
 
   return (
@@ -493,20 +501,234 @@ function PanelEmpty({ icon, title, hint, children }: { icon: React.ReactNode; ti
   );
 }
 
-function NoTokenEmpty({ onOpenSettings }: { onOpenSettings: () => void }) {
+function NoTokenEmpty({
+  onOpenSettings,
+  onLoginSuccess,
+}: {
+  onOpenSettings: () => void;
+  onLoginSuccess: () => void;
+}) {
   const { t } = useI18n();
+  const toast = useToastStore((s) => s.push);
+  const [stage, setStage] = useState<"idle" | "starting" | "authorizing" | "error">("idle");
+  const [deviceInfo, setDeviceInfo] = useState<GitHubDeviceCodeInit | null>(null);
+  const [copied, setCopied] = useState(false);
+  const [errorMessage, setErrorMessage] = useState("");
+
+  const startLogin = async () => {
+    setStage("starting");
+    setErrorMessage("");
+    try {
+      const init = await api.github.startDeviceFlow();
+      setDeviceInfo(init);
+      setStage("authorizing");
+      try {
+        await navigator.clipboard.writeText(init.userCode);
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2500);
+      } catch {
+        // clipboard write might fail under some security policies
+      }
+    } catch (err) {
+      setErrorMessage((err as Error).message);
+      setStage("error");
+    }
+  };
+
+  const copyCode = async () => {
+    if (!deviceInfo) return;
+    try {
+      await navigator.clipboard.writeText(deviceInfo.userCode);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      // ignore
+    }
+  };
+
+  const openBrowser = () => {
+    if (deviceInfo?.verificationUri) {
+      window.open(deviceInfo.verificationUri, "_blank", "noopener,noreferrer");
+    }
+  };
+
+  const cancelLogin = () => {
+    setStage("idle");
+    setDeviceInfo(null);
+  };
+
+  // Poll while in authorizing state
+  useEffect(() => {
+    if (stage !== "authorizing" || !deviceInfo) return;
+
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let cancelled = false;
+    let pollInterval = (deviceInfo.interval || 5) * 1000;
+
+    const runPoll = async () => {
+      if (cancelled) return;
+      try {
+        const res = await api.github.pollDeviceFlow({ deviceCode: deviceInfo.deviceCode });
+        if (cancelled) return;
+
+        if (res.status === "ok") {
+          toast({
+            kind: "info",
+            title: t("github.loginSuccess", { login: res.login ?? "" }),
+          });
+          onLoginSuccess();
+          return;
+        }
+
+        if (res.status === "slow_down") {
+          pollInterval = res.interval ? res.interval * 1000 : pollInterval + 5000;
+          timer = setTimeout(runPoll, pollInterval);
+          return;
+        }
+
+        if (res.status === "pending") {
+          timer = setTimeout(runPoll, pollInterval);
+          return;
+        }
+
+        if (res.status === "expired") {
+          setErrorMessage(t("github.loginExpired"));
+          setStage("error");
+          return;
+        }
+
+        if (res.status === "denied") {
+          setErrorMessage(t("github.loginDenied"));
+          setStage("error");
+          return;
+        }
+
+        setErrorMessage(res.error ? t("github.loginFailed", { error: res.error }) : t("github.loadFailed"));
+        setStage("error");
+      } catch (err) {
+        if (cancelled) return;
+        setErrorMessage((err as Error).message);
+        setStage("error");
+      }
+    };
+
+    timer = setTimeout(runPoll, pollInterval);
+
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [stage, deviceInfo, onLoginSuccess, t, toast]);
+
+  if (stage === "starting") {
+    return (
+      <div className="flex h-full flex-col items-center justify-center gap-2.5 p-6 text-center">
+        <IconLoader2 size={22} className="animate-spin text-accent" />
+        <p className="text-content-muted [font-size:var(--right-panel-font-size)]">{t("github.loginStarting")}</p>
+      </div>
+    );
+  }
+
+  if (stage === "authorizing" && deviceInfo) {
+    return (
+      <div className="flex h-full flex-col items-center justify-center gap-3 p-6 text-center">
+        <IconBrandGithub size={24} className="text-content" />
+        <div className="space-y-1">
+          <p className="font-medium text-content [font-size:var(--right-panel-font-size)]">{t("github.deviceCodeTitle")}</p>
+          <p className="text-content-subtle [font-size:var(--rp-fs-xxs)]">{t("github.deviceCodeHint")}</p>
+        </div>
+
+        <button
+          type="button"
+          onClick={() => void copyCode()}
+          title={t("github.copyCode")}
+          className="group relative flex items-center justify-center gap-2.5 rounded-lg border border-edge bg-surface-hover/60 px-4 py-2 transition-colors hover:border-accent hover:bg-surface-hover"
+        >
+          <span className="font-mono text-xl font-bold tracking-widest text-content">{deviceInfo.userCode}</span>
+          {copied ? (
+            <IconCheck size={16} className="text-success" />
+          ) : (
+            <IconCopy size={16} className="text-content-subtle group-hover:text-accent" />
+          )}
+        </button>
+        {copied && (
+          <span className="text-success [font-size:var(--rp-fs-xxs)]">{t("github.copied")}</span>
+        )}
+
+        <div className="flex items-center gap-1.5 text-content-subtle [font-size:var(--rp-fs-xxs)]">
+          <IconLoader2 size={12} className="animate-spin text-accent" />
+          <span>{t("github.waitingForAuth")}</span>
+        </div>
+
+        <div className="mt-1 flex items-center gap-2">
+          <button
+            type="button"
+            onClick={openBrowser}
+            className="flex items-center gap-1 rounded bg-surface-hover px-2.5 py-1 text-content-muted [font-size:var(--right-panel-font-size)] hover:text-content"
+          >
+            <IconExternalLink size={12} />
+            {t("github.openBrowserAgain")}
+          </button>
+          <button
+            type="button"
+            onClick={cancelLogin}
+            className="rounded px-2.5 py-1 text-content-subtle [font-size:var(--right-panel-font-size)] hover:bg-surface-hover hover:text-content"
+          >
+            {t("github.cancelLogin")}
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (stage === "error") {
+    return (
+      <div className="flex h-full flex-col items-center justify-center gap-2.5 p-6 text-center">
+        <IconAlertTriangle size={24} className="text-warning" />
+        <p className="font-medium text-content [font-size:var(--right-panel-font-size)]">{t("github.loadFailed")}</p>
+        <p className="max-w-xs text-danger [font-size:var(--rp-fs-xxs)]">{errorMessage}</p>
+        <div className="mt-1 flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => void startLogin()}
+            className="rounded bg-accent/15 px-3 py-1 text-accent [font-size:var(--right-panel-font-size)] hover:bg-accent/25"
+          >
+            {t("github.retry")}
+          </button>
+          <button
+            type="button"
+            onClick={() => setStage("idle")}
+            className="rounded px-2.5 py-1 text-content-subtle [font-size:var(--right-panel-font-size)] hover:bg-surface-hover hover:text-content"
+          >
+            {t("github.cancelLogin")}
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div className="flex h-full flex-col items-center justify-center gap-2 p-6 text-center">
-      <IconBrandGithub size={20} className="text-content-subtle" />
-      <p className="text-content-muted [font-size:var(--right-panel-font-size)]">{t("github.noToken")}</p>
-      <p className="text-content-subtle [font-size:var(--right-panel-font-size)]">{t("github.noTokenHint")}</p>
-      <button
-        type="button"
-        onClick={onOpenSettings}
-        className="mt-1 rounded bg-accent/15 px-3 py-1 text-accent [font-size:var(--right-panel-font-size)] hover:bg-accent/25"
-      >
-        {t("github.openSettings")}
-      </button>
+    <div className="flex h-full flex-col items-center justify-center gap-2.5 p-6 text-center">
+      <IconBrandGithub size={24} className="text-content-subtle" />
+      <p className="font-medium text-content-muted [font-size:var(--right-panel-font-size)]">{t("github.noToken")}</p>
+      <p className="max-w-xs text-content-subtle [font-size:var(--right-panel-font-size)]">{t("github.noTokenHint")}</p>
+      <div className="mt-2 flex flex-col items-center gap-2">
+        <button
+          type="button"
+          onClick={() => void startLogin()}
+          className="flex items-center gap-1.5 rounded-md bg-accent px-3.5 py-1.5 font-medium text-white shadow-sm transition-opacity hover:opacity-90 [font-size:var(--right-panel-font-size)]"
+        >
+          <IconBrandGithub size={14} />
+          {t("github.loginWithBrowser")}
+        </button>
+        <button
+          type="button"
+          onClick={onOpenSettings}
+          className="text-content-subtle underline-offset-4 hover:text-content-muted hover:underline [font-size:var(--rp-fs-xxs)]"
+        >
+          {t("github.orManualToken")}
+        </button>
+      </div>
     </div>
   );
 }
