@@ -76,7 +76,16 @@ function buildTheme(dark: boolean): ITheme {
     blue: "#2563eb",
     magenta: "#7c3aed",
     cyan: "#0891b2",
-    white: "#e4e4e7",
+    // `white` / `brightWhite` are ANSI 37 / 97. On a white background they must
+    // be *dark* desaturated greys, not the zinc-200/near-white they used to be:
+    // at #e4e4e7 / #fafafa they sat at 1.27:1 / 1.04:1 against #ffffff — white
+    // on white. That is not cosmetic. PSReadLine paints the argument text of the
+    // command you are typing with 37, and its history prediction (the greyed-out
+    // completion ghost) with 97 + dim, which xterm renders as
+    // `multiplyOpacity(fg, .5)` — i.e. rgba(250,250,250,.5) on white, ~1.02:1,
+    // completely invisible. That is why predictive history completion looked
+    // "missing" in the light theme: the shell was emitting it the whole time.
+    white: "#52525b", // zinc-600
     brightBlack: "#71717a",
     brightRed: "#ef4444",
     brightGreen: "#10b981",
@@ -84,7 +93,7 @@ function buildTheme(dark: boolean): ITheme {
     brightBlue: "#3b82f6",
     brightMagenta: "#8b5cf6",
     brightCyan: "#06b6d4",
-    brightWhite: "#fafafa",
+    brightWhite: "#3f3f46", // zinc-700
   };
 }
 
