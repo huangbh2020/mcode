@@ -5,8 +5,13 @@
  *
  * 剩余:编排设置(自动触发档位)。
  */
+import { useEffect, useState } from "react";
+import { api } from "@renderer/lib/api.js";
+import { cn } from "@renderer/lib/cn.js";
+import { AGENT_CUSTOM_PROMPT_SETTING_KEY } from "@contracts/ipc";
 import { useI18n } from "@renderer/lib/i18n/index.js";
 import { useSessionStore } from "@renderer/stores/sessionStore.js";
+import { Button } from "@renderer/components/ui/index.js";
 import { PanelHeader } from "./PanelHeader.js";
 import { SettingsSection } from "./SettingsSection.js";
 import { SettingRow } from "./SettingRow.js";
@@ -63,8 +68,94 @@ export function AgentsPanel() {
             />
           </SettingRow>
         </SettingsSection>
+
+        {/* ── 自定义提示词 ── */}
+        <CustomPromptSection />
       </div>
 
     </div>
+  );
+}
+
+/** Custom agent prompt: a free-form textarea appended after every built-in
+ *  system-prompt section in all three providers (Claude/Pi/Codex). Persisted
+ *  under AGENT_CUSTOM_PROMPT_SETTING_KEY via the generic setting IPC; the main
+ *  side reads it per-turn (providers), so it applies from the NEXT turn. This
+ *  is the supported way to add standing instructions — hand-editing Codex's
+ *  AGENTS.md is clobbered by the provider's per-turn rewrite. */
+function CustomPromptSection() {
+  const { t } = useI18n();
+  const [text, setText] = useState("");
+  const [loaded, setLoaded] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [feedback, setFeedback] = useState<"saved" | "error" | null>(null);
+
+  // Panel is freshly mounted per nav switch — reload the stored value each
+  // time it's shown (same pattern as TerminalPanel's ShellSection).
+  useEffect(() => {
+    setFeedback(null);
+    void (async () => {
+      const { value } = await api.setting.get({ key: AGENT_CUSTOM_PROMPT_SETTING_KEY });
+      setText(value ?? "");
+      setLoaded(true);
+    })();
+  }, []);
+
+  const save = async () => {
+    setSaving(true);
+    try {
+      await api.setting.set({ key: AGENT_CUSTOM_PROMPT_SETTING_KEY, value: text });
+      setFeedback("saved");
+    } catch {
+      setFeedback("error");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <SettingsSection
+      title={t("settings.agents.customPromptSection")}
+      desc={t("settings.agents.customPromptDesc")}
+    >
+      <SettingRow
+        layout="vertical"
+        title={t("settings.agents.customPromptLabel")}
+        desc={t("settings.agents.customPromptHint")}
+        htmlFor="setting-agent-custom-prompt"
+      >
+        <textarea
+          id="setting-agent-custom-prompt"
+          value={text}
+          onChange={(e) => {
+            setText(e.target.value);
+            setFeedback(null);
+          }}
+          placeholder={t("settings.agents.customPromptPlaceholder")}
+          spellCheck={false}
+          disabled={!loaded}
+          maxLength={100_000}
+          rows={8}
+          className="w-full resize-y rounded-md border border-edge bg-surface px-3 py-2 font-mono text-xs leading-relaxed text-content outline-none focus:border-accent disabled:opacity-50"
+        />
+        <div className="mt-2 flex items-center gap-3">
+          <Button variant="primary" size="sm" onClick={() => void save()} disabled={saving || !loaded}>
+            {saving ? t("settings.saving") : t("common.save")}
+          </Button>
+          {feedback && (
+            <p
+              className={cn(
+                "text-[0.7857em]",
+                feedback === "saved" ? "text-accent" : "text-danger",
+              )}
+            >
+              {feedback === "saved"
+                ? t("settings.agents.customPromptSaved")
+                : t("settings.agents.customPromptSaveFailed")}
+            </p>
+          )}
+        </div>
+      </SettingRow>
+    </SettingsSection>
   );
 }

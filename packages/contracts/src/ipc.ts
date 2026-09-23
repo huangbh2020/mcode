@@ -2864,6 +2864,20 @@ export type SkillsImportInput = z.infer<typeof SkillsImportSchema>;
  */
 export const AGENT_OUTPUT_STYLE_SETTING_KEY = "agent.outputStyle";
 
+/**
+ * Setting key under which the user's custom agent prompt is persisted (设置 →
+ * AI 能力 → 编排). Value = free-form prompt text, appended AFTER every built-in
+ * prompt fragment in all three providers (Claude `systemPrompt.append`, Pi
+ * `before_agent_start`, Codex `CODEX_HOME/AGENTS.md`).
+ *
+ * This exists because the Codex provider rewrites its AGENTS.md on every turn
+ * (ensureCodexHomeIdentity), so hand-edits there are clobbered. Keeping the
+ * user text in the settings table — and joining it last — means it survives and
+ * is honored by the model. Empty/whitespace-only = never configured → nothing
+ * injected. Changes apply on the NEXT turn (same contract as the MCP panel).
+ */
+export const AGENT_CUSTOM_PROMPT_SETTING_KEY = "agent.customPrompt";
+
 /** Which source a listed output style comes from. */
 export type OutputStyleSource = "builtin" | "user";
 

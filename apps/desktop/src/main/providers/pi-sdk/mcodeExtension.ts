@@ -184,6 +184,10 @@ export interface CreateMcodeExtensionOptions {
    *  Claude provider's options.mcpServers injection); read per-turn by the
    *  provider, so flipping it lands on the next message. */
   browserToolsEnabled: boolean;
+  /** User's custom agent prompt (settings → 编排), appended after every
+   *  built-in system-prompt section. Read per-turn by the provider (the
+   *  extension is rebuilt each turn), null when unset/blank. */
+  customPrompt: string | null;
 }
 
 /**
@@ -197,7 +201,7 @@ export interface CreateMcodeExtensionOptions {
  * useful for debugging whether the extension loaded.
  */
 export function createMcodeExtension(opts: CreateMcodeExtensionOptions): InlineExtension {
-  const { ctx, cwd, strict, sessionId, projectPath, turnNumber, browserToolsEnabled } = opts;
+  const { ctx, cwd, strict, sessionId, projectPath, turnNumber, browserToolsEnabled, customPrompt } = opts;
 
   // ── Plan mode state (per-turn, in-process) ──────────────────────────
   // Tracked here rather than via ctx.getPermissionMode() because the latter
@@ -223,7 +227,7 @@ export function createMcodeExtension(opts: CreateMcodeExtensionOptions): InlineE
         registerBrowserTools(pi, { ctx, sessionId, projectPath, turnNumber });
       }
       registerPlanModeTools(pi, { ctx, sessionId, planMode });
-      registerSystemPromptInjector(pi, { browserToolsEnabled });
+      registerSystemPromptInjector(pi, { browserToolsEnabled, customPrompt });
     },
   };
 }
@@ -1022,7 +1026,7 @@ const PLAN_MODE_PROMPT = [
  */
 function registerSystemPromptInjector(
   pi: ExtensionAPI,
-  deps: { browserToolsEnabled: boolean },
+  deps: { browserToolsEnabled: boolean; customPrompt: string | null },
 ): void {
   pi.on(
     "before_agent_start",
@@ -1037,6 +1041,9 @@ function registerSystemPromptInjector(
         // (MCP panel's built-in switch) — otherwise the model would call
         // tools that don't exist.
         ...(deps.browserToolsEnabled ? [browserToolsUsagePrompt()] : []),
+        // User's custom prompt last (settings → 编排) — null/blank injects
+        // nothing (joinPromptSections filters empties).
+        ...(deps.customPrompt ? [deps.customPrompt] : []),
       );
       const next = base ? `${base}\n\n${injected}` : injected;
       return { systemPrompt: next };

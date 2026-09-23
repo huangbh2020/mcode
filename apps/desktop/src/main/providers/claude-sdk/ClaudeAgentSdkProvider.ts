@@ -35,6 +35,7 @@ import { resolveGitBash } from "@main/lib/binaryResolve.js";
 import { samePath } from "@main/lib/pathGuard.js";
 import { getMcpManagement, readProjectMcpServers } from "@main/lib/mcpConfig.js";
 import { getOutputStyleSetting } from "@main/lib/outputStyleConfig.js";
+import { getCustomPromptSetting } from "@main/lib/customPrompt.js";
 import { getEnabledPlugins, getPluginMcpServers } from "@main/plugins/pluginManager.js";
 import { resolveSubagentModelValue } from "@main/lib/subagentModel.js";
 import { normalizeBashCommand } from "@main/lib/msysPath.js";
@@ -1216,7 +1217,7 @@ export class ClaudeAgentSdkProvider implements AgentProvider {
     // plugin-MCP merge (which accepts a precomputed set to avoid a second
     // directory scan).
     const enabledPluginsPromise = getEnabledPlugins();
-    const [mcpState, browserServer, projectMcpRecord, outputStyle, enabledPlugins, pluginMcp] =
+    const [mcpState, browserServer, projectMcpRecord, outputStyle, customPrompt, enabledPlugins, pluginMcp] =
       await Promise.all([
         getMcpManagement(),
         // Pure constructor after the (cached) SDK import — building it
@@ -1225,6 +1226,7 @@ export class ClaudeAgentSdkProvider implements AgentProvider {
         buildBrowserMcpServer(req.cwd, ctx, req.sessionId, req.turnNumber),
         readProjectMcpServers(req.cwd),
         getOutputStyleSetting(),
+        getCustomPromptSetting(),
         enabledPluginsPromise,
         enabledPluginsPromise.then((plugins) => getPluginMcpServers(plugins)),
       ]);
@@ -1275,6 +1277,18 @@ export class ClaudeAgentSdkProvider implements AgentProvider {
         ...(typeof options.settings === "object" ? options.settings : {}),
         outputStyle,
       };
+    }
+
+    // User's custom prompt (settings → 编排): appended as the LAST section so
+    // it reads as the highest-priority user instruction, after every built-in
+    // fragment. The appends array + systemPrompt assignment above run before
+    // the parallel read batch, so merge onto options.systemPrompt here rather
+    // than pushing onto `appends`. Read is batched with the other settings.
+    if (customPrompt) {
+      const sp = options.systemPrompt;
+      if (sp && typeof sp === "object" && sp.type === "preset") {
+        sp.append = joinPromptSections(sp.append ?? "", customPrompt);
+      }
     }
 
     // --- Plugins (settings → Plugins; docs/plugin-feasibility.md v1) ---

@@ -44,6 +44,7 @@ import { getFileSnapshot } from "@main/lib/fileSnapshotRegistry.js";
 import { resolveGitBash } from "@main/lib/binaryResolve.js";
 import { getEnabledPluginSkillRoots } from "@main/plugins/pluginManager.js";
 import { getMcpManagement } from "@main/lib/mcpConfig.js";
+import { getCustomPromptSetting } from "@main/lib/customPrompt.js";
 
 /** Pi's permission modes, shown in the composer dropdown. Pi has no native
  *  permission system — the inline extension's `tool_call` handler interprets
@@ -240,8 +241,11 @@ export class PiAgentSdkProvider implements AgentProvider {
     // Browser tools honor the MCP panel's built-in server switch (same gate
     // as the Claude provider's options.mcpServers injection) — read per-turn,
     // so flipping it lands on the next message.
-    const mcpManagement = await getMcpManagement();
-    const mcodeExtension = createMcodeExtension({ ctx, cwd: req.cwd, strict, sessionId: req.sessionId, projectPath: req.cwd, turnNumber: req.turnNumber, browserToolsEnabled: !mcpManagement.browserDisabled });
+    const [mcpManagement, customPrompt] = await Promise.all([
+      getMcpManagement(),
+      getCustomPromptSetting(),
+    ]);
+    const mcodeExtension = createMcodeExtension({ ctx, cwd: req.cwd, strict, sessionId: req.sessionId, projectPath: req.cwd, turnNumber: req.turnNumber, browserToolsEnabled: !mcpManagement.browserDisabled, customPrompt });
 
     // Bridge Mcode's skill roots + `/name` trigger into Pi's skill model, and
     // inject the inline extension via the loader's `extensionFactories`. Pi's

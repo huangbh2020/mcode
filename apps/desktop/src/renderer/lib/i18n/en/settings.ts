@@ -781,6 +781,15 @@ export const en = {
   "settings.terminal.commandLabel": "Command",
   "settings.terminal.commandPlaceholder": "e.g. npm run dev",
 
+  // ── AgentsPanel (custom prompt) ──
+  "settings.agents.customPromptSection": "Custom prompt",
+  "settings.agents.customPromptDesc": "Appended after the system prompt of every agent (Claude / Pi / Codex). Leave empty to inject nothing.",
+  "settings.agents.customPromptLabel": "Prompt text",
+  "settings.agents.customPromptPlaceholder": "e.g. Always reply in English; run pnpm typecheck before committing…",
+  "settings.agents.customPromptHint": "Applies from the next turn. Do not put secrets here.",
+  "settings.agents.customPromptSaved": "Saved — applies from the next turn.",
+  "settings.agents.customPromptSaveFailed": "Save failed. Please retry.",
+
   // ── TitleGenPanel ──
   "settings.titleGen.sectionTitle": "Thread title generation",
   "settings.titleGen.sectionDesc": "When on, a background model call generates a short title on a session's first user message, replacing the default placeholder. If generation fails, the placeholder stays.",
