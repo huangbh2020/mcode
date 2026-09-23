@@ -780,6 +780,15 @@ export const zh = {
   "settings.terminal.commandLabel": "命令",
   "settings.terminal.commandPlaceholder": "例如:npm run dev",
 
+  // ── AgentsPanel(自定义提示词) ──
+  "settings.agents.customPromptSection": "自定义提示词",
+  "settings.agents.customPromptDesc": "追加到所有 Agent(Claude / Pi / Codex)系统提示词的最后。留空则不注入。",
+  "settings.agents.customPromptLabel": "提示词内容",
+  "settings.agents.customPromptPlaceholder": "例如:始终用简体中文回复;提交前先运行 pnpm typecheck……",
+  "settings.agents.customPromptHint": "每个新回合生效。请勿在此写入机密信息。",
+  "settings.agents.customPromptSaved": "已保存,将在下一回合生效。",
+  "settings.agents.customPromptSaveFailed": "保存失败,请重试。",
+
   // ── TitleGenPanel ──
   "settings.titleGen.sectionTitle": "会话标题生成",
   "settings.titleGen.sectionDesc": "开启后,在用户发送第一条消息时后台自动调用模型生成简短标题,并覆盖默认标题。生成失败时保留默认占位标题。",
