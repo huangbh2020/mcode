@@ -362,6 +362,8 @@ export const zh = {
   "settings.git.diffSectionDesc": "点击 Git 面板中的修改文件时,差异查看器的打开位置。弹框模式支持同时打开多个标签。",
   "settings.git.diffMode": "打开方式",
   "settings.git.diffModeDesc": "主编辑区:在中间面板查看差异(现有行为)。弹窗编辑器:以独立浮窗打开,可同时查看多个文件差异。",
+  "settings.git.diffLineNumbers": "显示差异行号",
+  "settings.git.diffLineNumbersDesc": "在代码差异对比中显示行号列，关闭可节省横向空间（默认关闭）。",
   "settings.git.openCenter": "主编辑区",
   "settings.git.openDialog": "弹窗编辑器(可多标签)",
   "settings.git.commitSection": "提交信息生成",
@@ -756,7 +758,13 @@ export const zh = {
 
   // ── TerminalPanel ──
   "settings.terminal.title": "终端",
-  "settings.terminal.desc": "配置终端使用的 Shell 与按项目保存的常用快捷命令。",
+  "settings.terminal.desc": "配置终端使用的 Shell、显示位置与按项目保存的常用快捷命令。",
+  "settings.terminal.positionSection": "终端显示位置",
+  "settings.terminal.positionSectionDesc": "选择终端在工作台中的停靠位置。可在右侧边栏与底部面板之间自由切换。",
+  "settings.terminal.positionRight": "右侧边栏（默认）",
+  "settings.terminal.positionRightDesc": "在右侧边栏中竖直显示，适合配合宽屏模式与代码并排查看。",
+  "settings.terminal.positionBottom": "底部面板",
+  "settings.terminal.positionBottomDesc": "在中央面板下方水平显示，适合查看长命令行与宽输出日志。",
   "settings.terminal.shellSection": "终端 Shell",
   "settings.terminal.shellSectionDesc": "指定终端使用的 Shell 可执行文件。留空则使用系统默认(Windows:pwsh → powershell → bash → cmd;macOS/Linux:$SHELL → bash → zsh → sh)。仅对新建终端生效。",
   "settings.terminal.shellPath": "Shell 路径",

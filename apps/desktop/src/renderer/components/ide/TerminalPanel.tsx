@@ -9,6 +9,9 @@ import {
   IconRefresh,
   IconPlayerStop,
   IconEraser,
+  IconLayoutBottombar,
+  IconLayoutSidebarRight,
+  IconChevronDown,
 } from "@renderer/lib/icons.js";
 import {
   TerminalView,
@@ -79,11 +82,13 @@ export function TerminalPanel({ active }: { active: boolean }) {
   const { t } = useI18n();
   const activeProjectId = useSessionStore((s) => s.activeProjectId);
   const projects = useSessionStore((s) => s.projects);
+  const terminalPosition = useSessionStore((s) => s.terminalPosition);
+  const setTerminalPosition = useSessionStore((s) => s.setTerminalPosition);
+  const setBottomTerminalOpen = useSessionStore((s) => s.setBottomTerminalOpen);
 
-  // Follows the active session's environment — a worktree session's
-  // terminals open IN the isolated checkout (its own bucket, separate from
-  // the project-root terminals).
-  const projectPath = useSessionStore(selectActiveEnvPath);
+  // Terminals are scoped to the active project's root path so all sessions
+  // within the same project share the exact same terminal tabs and running PTYs.
+  const projectPath = projects.find((p) => p.id === activeProjectId)?.path ?? null;
 
   // Terminal state is keyed by project path and kept in refs (NOT React state).
   // The reason: when the user switches projects we must NOT unmount the other
@@ -428,6 +433,25 @@ export function TerminalPanel({ active }: { active: boolean }) {
           >
             <IconRefresh size={13} />
           </IconBtn>
+          <div className="mx-0.5 h-3 w-px bg-edge" />
+          <IconBtn
+            title={terminalPosition === "right" ? t("ide.term.moveToBottom") : t("ide.term.moveToRight")}
+            onClick={() => setTerminalPosition(terminalPosition === "right" ? "bottom" : "right")}
+          >
+            {terminalPosition === "right" ? (
+              <IconLayoutBottombar size={13} />
+            ) : (
+              <IconLayoutSidebarRight size={13} />
+            )}
+          </IconBtn>
+          {terminalPosition === "bottom" && (
+            <IconBtn
+              title={t("ide.term.collapseBottom")}
+              onClick={() => setBottomTerminalOpen(false)}
+            >
+              <IconChevronDown size={13} />
+            </IconBtn>
+          )}
         </div>
       </div>
 

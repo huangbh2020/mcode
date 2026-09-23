@@ -1480,6 +1480,7 @@ export function DiffPane({
   after?: string;
 }) {
   const { t } = useI18n();
+  const diffShowLineNumbers = useSessionStore((s) => s.diffShowLineNumbers);
   const [modified, setModified] = useState<string | null>(after ?? null);
   const theme = useMonacoTheme();
   const language = languageForExt(extname(filePath));
@@ -1739,8 +1740,9 @@ export function DiffPane({
           // Slim gutters: no breakpoint glyph column, tighter line-number width.
           glyphMargin: false,
           folding: false,
-          lineDecorationsWidth: 8,
-          lineNumbersMinChars: 3,
+          lineNumbers: diffShowLineNumbers ? "on" : "off",
+          lineDecorationsWidth: diffShowLineNumbers ? 8 : 0,
+          lineNumbersMinChars: diffShowLineNumbers ? 3 : 1,
           scrollbar: { verticalScrollbarSize: 8, horizontalScrollbarSize: 8 },
         }}
       />

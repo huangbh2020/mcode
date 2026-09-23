@@ -8,6 +8,7 @@ import {
   IconCode,
   IconFolder,
   IconGitFork,
+  IconTerminal2,
 } from "@renderer/lib/icons.js";
 import { getProviderIcon } from "@renderer/lib/providerIcon.js";
 import { useSessionStore } from "@renderer/stores/sessionStore.js";
@@ -87,6 +88,9 @@ export function Titlebar({
   // terminal bar still renders below the split and the right-panel toggle
   // shows/hides the wide mode's right column.
   const isBrowserOverlay = !!browserPanelOpen && !isOverlayPage;
+  const terminalPosition = useSessionStore((s) => s.terminalPosition);
+  const bottomTerminalOpen = useSessionStore((s) => s.bottomTerminalOpen);
+  const setBottomTerminalOpen = useSessionStore((s) => s.setBottomTerminalOpen);
 
   // Subscribe once to the shortcut overrides so every toggle button's tooltip
   // shows the *effective* chord (override ?? default). Re-resolved per render
@@ -208,6 +212,26 @@ export function Titlebar({
                 component returns null). Hidden while the browser overlay is
                 open, same as the panel toggles (kept during wide mode). */}
             {!isBrowserOverlay && <WorktreeMergeToolbarButton />}
+
+            {/* Bottom terminal toggle - shown only when terminal is docked at bottom */}
+            {terminalPosition === "bottom" && !isBrowserOverlay && (
+              <button
+                onClick={() => setBottomTerminalOpen(!bottomTerminalOpen)}
+                className={cn(
+                  "flex items-center justify-center rounded p-1.5 transition-colors",
+                  bottomTerminalOpen
+                    ? "bg-surface-hover text-accent"
+                    : "text-content-muted hover:bg-surface-hover hover:text-content",
+                )}
+                title={
+                  (bottomTerminalOpen ? t("layout.hideTerminal") : t("layout.showTerminal")) +
+                  hintFor("layout.toggle-bottom-terminal")
+                }
+                style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
+              >
+                <IconTerminal2 size={16} className="shrink-0" />
+              </button>
+            )}
 
             {/* Right-panel toggle - hidden while the browser overlay is open
                 (the browser forces the right panel closed and manages its own

@@ -37,9 +37,79 @@ export function TerminalPanel() {
   return (
     <section className="mx-auto w-full max-w-3xl space-y-4">
       <PanelHeader title={t("settings.terminal.title")} />
+      <PositionSection />
       <ShellSection />
       <CommandsSection />
     </section>
+  );
+}
+
+/* ───────────────────────── Position section ───────────────────────── */
+
+function PositionSection() {
+  const { t } = useI18n();
+  const terminalPosition = useSessionStore((s) => s.terminalPosition);
+  const setTerminalPosition = useSessionStore((s) => s.setTerminalPosition);
+
+  return (
+    <SettingsSection
+      title={t("settings.terminal.positionSection")}
+      desc={t("settings.terminal.positionSectionDesc")}
+    >
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <button
+          type="button"
+          onClick={() => setTerminalPosition("right")}
+          className={cn(
+            "flex flex-col items-start gap-1.5 rounded-xl border p-3.5 text-left transition-all",
+            terminalPosition === "right"
+              ? "border-accent bg-accent/5 ring-1 ring-accent"
+              : "border-edge bg-surface-muted/30 hover:border-edge-hover hover:bg-surface-muted/60",
+          )}
+        >
+          <div className="flex w-full items-center justify-between">
+            <span className="text-xs font-semibold text-content">
+              {t("settings.terminal.positionRight")}
+            </span>
+            <div
+              className={cn(
+                "h-2 w-2 rounded-full",
+                terminalPosition === "right" ? "bg-accent" : "bg-transparent",
+              )}
+            />
+          </div>
+          <span className="text-[11px] leading-relaxed text-content-subtle">
+            {t("settings.terminal.positionRightDesc")}
+          </span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setTerminalPosition("bottom")}
+          className={cn(
+            "flex flex-col items-start gap-1.5 rounded-xl border p-3.5 text-left transition-all",
+            terminalPosition === "bottom"
+              ? "border-accent bg-accent/5 ring-1 ring-accent"
+              : "border-edge bg-surface-muted/30 hover:border-edge-hover hover:bg-surface-muted/60",
+          )}
+        >
+          <div className="flex w-full items-center justify-between">
+            <span className="text-xs font-semibold text-content">
+              {t("settings.terminal.positionBottom")}
+            </span>
+            <div
+              className={cn(
+                "h-2 w-2 rounded-full",
+                terminalPosition === "bottom" ? "bg-accent" : "bg-transparent",
+              )}
+            />
+          </div>
+          <span className="text-[11px] leading-relaxed text-content-subtle">
+            {t("settings.terminal.positionBottomDesc")}
+          </span>
+        </button>
+      </div>
+    </SettingsSection>
   );
 }
 

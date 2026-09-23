@@ -43,10 +43,11 @@ export function GitPanel() {
     adjustGitDiffSplitPct((deltaPx / w) * 100);
   };
 
-  // Follows the active session's environment — a materialized worktree
-  // session gets the worktree's OWN repo in this panel (its commits, its
-  // status); local sessions see the project's repos as before.
-  const projectPath = useSessionStore(selectActiveEnvPath);
+  const activeProjectId = useSessionStore((s) => s.activeProjectId);
+  const projects = useSessionStore((s) => s.projects);
+  // Git repositories are scoped to the active project's root path so all sessions
+  // within the same project share the exact same repository state.
+  const projectPath = projects.find((p) => p.id === activeProjectId)?.path ?? null;
 
   const [repos, setRepos] = useState<GitRepo[]>([]);
   const [loading, setLoading] = useState(true);

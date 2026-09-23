@@ -395,13 +395,17 @@ const STATIC_COMMANDS: StaticCommandDef[] = [
     icon: IconTerminal2,
     defaultAccelerator: DEFAULT_SHORTCUTS["layout.toggle-bottom-terminal"],
     perform: (s) => {
-      if (!s.rightOpen) {
-        s.setRightOpen(true);
-        s.setRightPanelTab("terminal");
-      } else if (s.rightPanelTab === "terminal") {
-        s.setRightOpen(false);
+      if (s.terminalPosition === "bottom") {
+        s.setBottomTerminalOpen(!s.bottomTerminalOpen);
       } else {
-        s.setRightPanelTab("terminal");
+        if (!s.rightOpen) {
+          s.setRightOpen(true);
+          s.setRightPanelTab("terminal");
+        } else if (s.rightPanelTab === "terminal") {
+          s.setRightOpen(false);
+        } else {
+          s.setRightPanelTab("terminal");
+        }
       }
     },
   },

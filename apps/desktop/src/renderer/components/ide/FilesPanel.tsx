@@ -1,5 +1,5 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
-import { EMPTY_TURN_FILES, useSessionStore, selectActiveEnvPath } from "@renderer/stores/sessionStore.js";
+import { EMPTY_TURN_FILES, useSessionStore } from "@renderer/stores/sessionStore.js";
 import type { TurnFileEntry } from "@renderer/lib/turnFiles.js";
 import { FileTree } from "./FileTree.js";
 import { cn } from "@renderer/lib/cn.js";
@@ -78,8 +78,10 @@ export function FilesPanel() {
     return projects.find((p) => p.id === activeProjectId) ?? null;
   }, [activeProjectId, projects]);
 
-  const envPath = useSessionStore(selectActiveEnvPath);
-  const projectPath = envPath ?? activeProject?.path ?? null;
+  // Scoped to the active project's root path so all sessions in the same
+  // project view the exact same directory tree.
+  const envPath = activeProject?.path ?? null;
+  const projectPath = envPath;
   const projectName = activeProject?.name ?? null;
 
   const containerRef = useRef<HTMLDivElement>(null);

@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 import { useSessionStore } from "@renderer/stores/sessionStore.js";
 import { cn } from "@renderer/lib/cn.js";
-import { Select } from "@renderer/components/ui/index.js";
+import { Select, Switch } from "@renderer/components/ui/index.js";
 import { IconCode, IconSquare, IconCircleOff, IconRobot } from "@renderer/lib/icons.js";
 import { useI18n, type MessageId } from "@renderer/lib/i18n/index.js";
 import { PanelHeader } from "./PanelHeader.js";
@@ -53,9 +53,11 @@ export function GitPanel() {
   const setConflictResolveModel = useSessionStore((s) => s.setConflictResolveModel);
   const customModels = useSessionStore((s) => s.customModels);
 
-  // ── Git diff open mode ──
+  // ── Git diff open mode & line numbers ──
   const gitDiffOpenMode = useSessionStore((s) => s.gitDiffOpenMode);
   const setGitDiffOpenMode = useSessionStore((s) => s.setGitDiffOpenMode);
+  const diffShowLineNumbers = useSessionStore((s) => s.diffShowLineNumbers);
+  const setDiffShowLineNumbers = useSessionStore((s) => s.setDiffShowLineNumbers);
 
   // Build a flat list of selectable models: one entry per (config, model).
   // Each entry's value is `"configId:modelId"`, label is `"供应商名 → 模型id"`.
@@ -122,6 +124,18 @@ export function GitPanel() {
               </Select.Positioner>
             </Select.Portal>
           </Select.Root>
+        </SettingRow>
+        <SettingRow
+          title={t("settings.git.diffLineNumbers")}
+          desc={t("settings.git.diffLineNumbersDesc")}
+          htmlFor="setting-gitdiff-linenumbers"
+        >
+          <Switch
+            id="setting-gitdiff-linenumbers"
+            checked={diffShowLineNumbers}
+            onCheckedChange={setDiffShowLineNumbers}
+            label={diffShowLineNumbers ? t("settings.on") : t("settings.off")}
+          />
         </SettingRow>
       </SettingsSection>
 

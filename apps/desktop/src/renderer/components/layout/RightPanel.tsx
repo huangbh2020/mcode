@@ -52,16 +52,15 @@ const EMPTY_SESSION_TABS: SessionRightPanelTabId[] = [];
 
 const SESSION_TAB_META: ReadonlyArray<{
   id: SessionRightPanelTabId;
-  labelKey: "layout.tabTurns" | "layout.tabSideChat" | "layout.tabBrowser" | "layout.schedTasks";
+  labelKey: "layout.tabTurns" | "layout.tabSideChat" | "layout.schedTasks";
   /** Tooltip while the tab is showing (= the close affordance). */
-  closeTitleKey: "layout.rightPanelCloseTab" | "layout.closeSidebarBrowser";
+  closeTitleKey: "layout.rightPanelCloseTab";
   Icon: typeof IconListDetails;
   /** Command whose shortcut hint is appended to the tooltip (null = none). */
   commandId: string | null;
 }> = [
   { id: "turns", labelKey: "layout.tabTurns", closeTitleKey: "layout.rightPanelCloseTab", Icon: IconListDetails, commandId: null },
   { id: "sidechat", labelKey: "layout.tabSideChat", closeTitleKey: "layout.rightPanelCloseTab", Icon: IconMessages, commandId: "sidechat.open" },
-  { id: "browser", labelKey: "layout.tabBrowser", closeTitleKey: "layout.closeSidebarBrowser", Icon: IconWorld, commandId: "layout.toggle-browser" },
   { id: "sched", labelKey: "layout.schedTasks", closeTitleKey: "layout.rightPanelCloseTab", Icon: IconClock, commandId: null },
 ];
 
@@ -76,6 +75,9 @@ export function RightPanel() {
   const closeSessionTab = useSessionStore((s) => s.closeSessionRightTab);
   const setTab = useSessionStore((s) => s.setRightPanelTab);
   const browserTabCount = useSessionStore((s) => s.browserTabCount);
+  const terminalPosition = useSessionStore((s) => s.terminalPosition);
+  const bottomTerminalOpen = useSessionStore((s) => s.bottomTerminalOpen);
+  const setBottomTerminalOpen = useSessionStore((s) => s.setBottomTerminalOpen);
   const widePanelOpen = useSessionStore((s) => s.widePanelOpen);
   const setWidePanelOpen = useSessionStore((s) => s.setWidePanelOpen);
   const orchRuns = useSessionStore((s) => (sessionId ? s.orchRunsBySession[sessionId] : undefined));
@@ -164,12 +166,22 @@ export function RightPanel() {
         >
           <IconBrandGithub size={16} className="shrink-0" />
         </RailButton>
+        {terminalPosition !== "bottom" && (
+          <RailButton
+            active={tab === "terminal"}
+            onClick={() => setTab("terminal")}
+            title={t("layout.tabTerminal")}
+          >
+            <IconTerminal2 size={16} className="shrink-0" />
+          </RailButton>
+        )}
         <RailButton
-          active={tab === "terminal"}
-          onClick={() => setTab("terminal")}
-          title={t("layout.tabTerminal")}
+          active={tab === "browser"}
+          onClick={() => setTab("browser")}
+          badgeCount={browserTabCount}
+          title={t("layout.tabBrowser") + hintFor("layout.toggle-browser")}
         >
-          <IconTerminal2 size={16} className="shrink-0" />
+          <IconWorld size={16} className="shrink-0" />
         </RailButton>
         {/* Orchestration DAG — runs scoped to the active (coordinator)
             session: task graph, node controls, gates, worker reports.
@@ -326,14 +338,18 @@ export function RightPanel() {
         {tab === "files" && <FilesPanel />}
         {tab === "git" && <GitPanel />}
         {tab === "github" && <GitHubPanel />}
-        <div className={cn("h-full w-full", tab === "terminal" ? "" : "hidden")}>
-          <TerminalPanel active={tab === "terminal" && rightOpen} />
-        </div>
+        {terminalPosition === "right" && (
+          <div className={cn("h-full w-full", tab === "terminal" ? "" : "hidden")}>
+            <TerminalPanel active={tab === "terminal" && rightOpen} />
+          </div>
+        )}
         {tab === "turns" && <TurnFlowPanel />}
         {tab === "sidechat" && <SideChatPanel />}
         {tab === "orch" && hasOrchestration && <OrchPanel />}
         {tab === "sched" && <SchedPanel />}
-        {tab === "browser" && <BrowserPanel mode="sidebar" />}
+        <div className={cn("h-full w-full", tab === "browser" ? "" : "hidden")}>
+          <BrowserPanel mode="sidebar" />
+        </div>
       </div>
     </div>
   );

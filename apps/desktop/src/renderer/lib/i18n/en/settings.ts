@@ -359,6 +359,8 @@ export const en = {
   "settings.git.diffSectionDesc": "Where the diff viewer opens when you click a modified file in the Git panel. Dialog mode supports multiple tabs at once.",
   "settings.git.diffMode": "Open in",
   "settings.git.diffModeDesc": "Main editor: view the diff in the center pane (existing behavior). Dialog editor: open in a floating window, multiple files at once.",
+  "settings.git.diffLineNumbers": "Show diff line numbers",
+  "settings.git.diffLineNumbersDesc": "Display line number columns in diff views. Disabling saves horizontal space (default off).",
   "settings.git.openCenter": "Main editor",
   "settings.git.openDialog": "Dialog editor (multi-tab)",
   "settings.git.commitSection": "Commit message generation",
@@ -757,7 +759,13 @@ export const en = {
 
   // ── TerminalPanel ──
   "settings.terminal.title": "Terminal",
-  "settings.terminal.desc": "Configure the terminal shell and per-project quick commands.",
+  "settings.terminal.desc": "Configure the terminal shell, display position and per-project quick commands.",
+  "settings.terminal.positionSection": "Terminal Position",
+  "settings.terminal.positionSectionDesc": "Choose where the terminal docks in the workspace. Switch freely between the right sidebar and the bottom panel.",
+  "settings.terminal.positionRight": "Right Sidebar (Default)",
+  "settings.terminal.positionRightDesc": "Display vertically in the right sidebar, ideal for side-by-side viewing with wide mode.",
+  "settings.terminal.positionBottom": "Bottom Panel",
+  "settings.terminal.positionBottomDesc": "Display horizontally below the center pane, ideal for long commands and wide log outputs.",
   "settings.terminal.shellSection": "Terminal shell",
   "settings.terminal.shellSectionDesc": "The shell executable terminals use. Empty = system default (Windows: pwsh → powershell → bash → cmd; macOS/Linux: $SHELL → bash → zsh → sh). Applies to new terminals only.",
   "settings.terminal.shellPath": "Shell path",

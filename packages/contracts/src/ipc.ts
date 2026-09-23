@@ -689,7 +689,7 @@ export type RightPanelTab = z.infer<typeof RightPanelTabSchema>;
  *  state is a global user preference). The session-scoped "turns"/"sidechat"/
  *  "browser" tabs are excluded — they live in per-session state, not in this
  *  setting. */
-export type RightPanelGlobalTab = Exclude<RightPanelTab, "browser" | "turns" | "sidechat">;
+export type RightPanelGlobalTab = Exclude<RightPanelTab, "turns" | "sidechat">;
 
 /**
  * Setting key under which the IDE file editor's open-file list is persisted.
@@ -878,6 +878,13 @@ export type IdeEditorMode = z.infer<typeof IdeEditorModeSchema>;
  * Persisted as one of the two literals; restored at boot.
  */
 export const UI_GIT_DIFF_OPEN_MODE_SETTING_KEY = "ui.gitDiffOpenMode";
+
+/**
+ * Setting key for showing or hiding line numbers in diff views (DiffView, DiffPane, GitDiffPreviewPane).
+ *  - "true": show line numbers
+ *  - "false" (default): hide line numbers to save horizontal space
+ */
+export const UI_DIFF_SHOW_LINE_NUMBERS_SETTING_KEY = "ui.diffShowLineNumbers";
 
 /** zod schema + TS union for the git-diff open-mode preference. */
 export const GitDiffOpenModeSchema = z.enum(["center", "dialog"]);
@@ -3883,9 +3890,13 @@ export type MainToRendererMessage =
  *  streams data over push channels. Every create is scoped to a known
  *  project root (cwd must resolve inside that root). */
 
-/** Setting key for the user-preferred shell executable (absolute path or
- *  bare command name). Empty/absent → platform smart default. */
 export const TERMINAL_SHELL_SETTING_KEY = "terminal.shell";
+
+/** Display position for the terminal panel: "right" (default) or "bottom". */
+export type TerminalPosition = "right" | "bottom";
+
+/** Setting key for the user-preferred terminal dock position ("right" | "bottom"). */
+export const TERMINAL_POSITION_SETTING_KEY = "terminal.position";
 
 /** Setting key for the directory where agent browser screenshots are saved.
  *  Empty/absent → the system Pictures directory. Screenshots are organized as

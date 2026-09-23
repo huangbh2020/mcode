@@ -194,6 +194,7 @@ export {
   IconLayoutSidebarLeftExpand,
   IconLayoutSidebarRightExpand,
   IconLayoutSidebarRight,
+  IconLayoutBottombar,
   IconLayoutColumns,
   IconColumns3,
   IconMaximize,

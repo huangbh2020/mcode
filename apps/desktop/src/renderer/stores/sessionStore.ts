@@ -62,6 +62,7 @@ import {
   UI_IDE_EXPANDED_DIRS_SETTING_KEY,
   UI_IDE_EDITOR_MODE_SETTING_KEY,
   UI_GIT_DIFF_OPEN_MODE_SETTING_KEY,
+  UI_DIFF_SHOW_LINE_NUMBERS_SETTING_KEY,
   UI_COMMIT_GEN_MODEL_SETTING_KEY,
   UI_COMMIT_GEN_PROMPT_SETTING_KEY,
   UI_CONFLICT_RESOLVE_MODEL_SETTING_KEY,
@@ -88,6 +89,8 @@ import {
   SESSION_WORKTREE_DEFAULT_SETTING_KEY,
   WORKTREE_NAMES_SETTING_KEY,
   PROJECT_COLORS_SETTING_KEY,
+  TERMINAL_POSITION_SETTING_KEY,
+  type TerminalPosition,
   ShortcutBindingsSchema,
   GestureSettingsSchema,
   type AutoArchiveConfig,
@@ -1006,6 +1009,8 @@ export interface SessionState {
    *  persisted. The bar stays mounted (keep-alive) regardless; this only
    *  controls whether it's expanded. */
   bottomTerminalOpen: boolean;
+  /** Terminal dock position: "right" (default) or "bottom". Persisted in settings. */
+  terminalPosition: TerminalPosition;
   /** Browser panel visibility. When true the BrowserPanel overlay mounts over
    *  the workspace and the embedded WebContentsView is shown; false hides both.
    *  NOT persisted (pure in-memory, like the other layout flags). */
@@ -1038,8 +1043,10 @@ export interface SessionState {
    *  (PC fullscreen) containers. Each owns a main-process WebContentsView by
    *  browserId; the view pool survives container swaps. NOT persisted. */
   browserTabs: BrowserTab[];
-  /** The currently active browser tab id (shared across containers). */
   browserActiveTabId: string | null;
+  /** Browser tabs keyed by projectId so each project retains its own tabs. */
+  browserTabsByProject: Record<string, BrowserTab[]>;
+  browserActiveTabIdByProject: Record<string, string | null>;
   /** A URL staged by an external entry (e.g. file-tree "open in browser") to
    *  be loaded into the browser panel when no tab exists yet. BrowserPanel's
    *  first-tab effect consumes and clears it. NOT persisted. */
@@ -1373,6 +1380,9 @@ export interface SessionState {
    *   - "dialog": a floating modal dialog with multiple diff tabs.
    *  Persisted in the settings table. Global (not per-project). */
   gitDiffOpenMode: GitDiffOpenMode;
+  /** Whether line numbers are shown in diff views (DiffView, DiffPane, GitDiffPreviewPane).
+   *  Defaults to false. Persisted in settings table under UI_DIFF_SHOW_LINE_NUMBERS_SETTING_KEY. */
+  diffShowLineNumbers: boolean;
   /** Diff tabs currently open in the Git diff dialog (the "dialog" open-mode).
    *  Ephemeral (NOT persisted) - restarting clears them. Dedup by file path. */
   gitDiffDialogTabs: GitDiffDialogTab[];
@@ -2126,6 +2136,8 @@ export interface SessionState {
   /** Close a session-scoped right-panel tab: removed from the open set; if it
    *  was the active one the panel falls back to the global tab. */
   closeSessionRightTab: (tab: SessionRightPanelTabId, sessionId?: string) => void;
+  /** Set the terminal dock position ("right" | "bottom"). Persists to settings. */
+  setTerminalPosition: (position: TerminalPosition) => void;
 
   /* ── Agent orchestration actions ── */
   /** Load orchestration settings (trigger mode / defaults). */
@@ -2309,6 +2321,8 @@ export interface SessionState {
   setIdeEditorMode: (mode: IdeEditorMode) => void;
   /** Set the git-diff open-mode (center vs dialog). Persists to settings. */
   setGitDiffOpenMode: (mode: GitDiffOpenMode) => void;
+  /** Set whether line numbers are shown in diff views. Persists to settings. */
+  setDiffShowLineNumbers: (show: boolean) => void;
   /** Open (or refresh) a diff tab in the Git diff dialog. Dedups by file path
    *  (re-clicking the same file refreshes its before/after and activates it),
    *  then opens the dialog. Ephemeral (not persisted). */
@@ -4913,6 +4927,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   leftOpen: true,
   rightOpen: false,
   bottomTerminalOpen: false,
+  terminalPosition: "right",
   // Browser panel overlay - closed by default. NOT persisted.
   browserPanelOpen: false,
   // Wide-panel (3:7) mode - off by default; transient like browserPanelOpen.
@@ -4925,6 +4940,8 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   browserDeviceToolbarOpen: false,
   browserTabs: [],
   browserActiveTabId: null,
+  browserTabsByProject: {},
+  browserActiveTabIdByProject: {},
   pendingBrowserUrl: null,
   browserViewSuppressed: 0,
   // Draggable pane sizes. Persisted as one JSON blob (UI_PANE_WIDTHS_SETTING_KEY);
@@ -5014,6 +5031,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   ideFileViewModeByProject: {},
   ideEditorMode: "tabs",
   gitDiffOpenMode: "center",
+  diffShowLineNumbers: false,
   gitDiffDialogTabs: [],
   gitDiffDialogActiveId: null,
   gitDiffDialogOpen: false,
@@ -5546,6 +5564,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           UI_IDE_EXPANDED_DIRS_SETTING_KEY,
           UI_IDE_EDITOR_MODE_SETTING_KEY,
           UI_GIT_DIFF_OPEN_MODE_SETTING_KEY,
+          UI_DIFF_SHOW_LINE_NUMBERS_SETTING_KEY,
           UI_COMMIT_GEN_MODEL_SETTING_KEY,
           UI_COMMIT_GEN_PROMPT_SETTING_KEY,
           UI_CUSTOM_COMMANDS_BY_PROJECT_SETTING_KEY,
@@ -5561,6 +5580,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           UI_VOICE_MODEL_DIR_SETTING_KEY,
           AUTO_ARCHIVE_SETTING_KEY,
           UI_GESTURES_SETTING_KEY,
+          TERMINAL_POSITION_SETTING_KEY,
         ],
       })
       .catch((err) => {
@@ -5705,8 +5725,19 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       // opened per session via the rail's "+" menu — a persisted value from
       // an older build is ignored the same way).
       if (tabRaw === "files" || tabRaw === "git" || tabRaw === "github") set({ rightPanelTab: tabRaw });
+      const termPosRaw = ds[TERMINAL_POSITION_SETTING_KEY];
+      if (termPosRaw === "bottom" || termPosRaw === "right") {
+        set({ terminalPosition: termPosRaw });
+        if (termPosRaw === "bottom" && get().rightPanelTab === "terminal") {
+          set({ rightPanelTab: "files" });
+        }
+      }
       if (modeRaw === "tabs" || modeRaw === "replace") set({ ideEditorMode: modeRaw });
       if (diffModeRaw === "center" || diffModeRaw === "dialog") set({ gitDiffOpenMode: diffModeRaw });
+      const diffLineNumbersRaw = ds[UI_DIFF_SHOW_LINE_NUMBERS_SETTING_KEY];
+      if (diffLineNumbersRaw != null) {
+        set({ diffShowLineNumbers: diffLineNumbersRaw === "true" });
+      }
       set({ commitGenModel: commitModelRaw || null });
       if (commitPromptRaw) set({ commitGenPrompt: commitPromptRaw });
       set({ conflictResolveModel: conflictModelRaw || null });
@@ -5855,6 +5886,16 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     const next =
       sessions.find((s) => !s.archived) ??
       get().pinnedSessions.find((s) => s.projectId === projectId && !s.archived);
+
+    // Hide active browser view from previous project to prevent view leakage
+    const currentTab = get().browserTabs.find((t) => t.id === get().browserActiveTabId);
+    if (currentTab) {
+      void api.browser.hide({ browserId: currentTab.browserId });
+    }
+    const nextBrowserTabs = get().browserTabsByProject[projectId] ?? [];
+    const nextBrowserActiveTabId =
+      get().browserActiveTabIdByProject[projectId] ?? (nextBrowserTabs[0]?.id ?? null);
+
     set((s) => ({
       activeProjectId: projectId,
       sessions,
@@ -5864,6 +5905,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       // a project, so we don't carry them across. The new project lands on
       // its own first session.
       openTabs: next ? [next.id] : [],
+      browserTabs: nextBrowserTabs,
+      browserActiveTabId: nextBrowserActiveTabId,
+      browserTabCount: nextBrowserTabs.length,
     }));
     // Catch up the worktree section for the newly selected project (see
     // toggleProjectExpanded — incremental echoes in between, refetch here).
@@ -9192,48 +9236,80 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   setBrowserDeviceToolbarOpen: (open) => set({ browserDeviceToolbarOpen: open }),
   suppressBrowserView: (suppressed) =>
     set((s) => ({ browserViewSuppressed: Math.max(0, s.browserViewSuppressed + (suppressed ? 1 : -1)) })),
-  setBrowserTabs: (tabs) => set({ browserTabs: tabs }),
-  setBrowserActiveTabId: (id) => set({ browserActiveTabId: id }),
-  addBrowserTab: (tab) => set((s) => ({ browserTabs: [...s.browserTabs, tab] })),
+  setBrowserTabs: (tabs) =>
+    set((s) => {
+      const pid = s.activeProjectId;
+      return {
+        browserTabs: tabs,
+        browserTabsByProject: pid ? { ...s.browserTabsByProject, [pid]: tabs } : s.browserTabsByProject,
+      };
+    }),
+  setBrowserActiveTabId: (id) =>
+    set((s) => {
+      const pid = s.activeProjectId;
+      return {
+        browserActiveTabId: id,
+        browserActiveTabIdByProject: pid ? { ...s.browserActiveTabIdByProject, [pid]: id } : s.browserActiveTabIdByProject,
+      };
+    }),
+  addBrowserTab: (tab) =>
+    set((s) => {
+      const pid = s.activeProjectId;
+      const next = [...s.browserTabs, tab];
+      return {
+        browserTabs: next,
+        browserTabsByProject: pid ? { ...s.browserTabsByProject, [pid]: next } : s.browserTabsByProject,
+      };
+    }),
   removeBrowserTab: (id) =>
-    set((s) => ({ browserTabs: s.browserTabs.filter((t) => t.id !== id) })),
+    set((s) => {
+      const pid = s.activeProjectId;
+      const next = s.browserTabs.filter((t) => t.id !== id);
+      return {
+        browserTabs: next,
+        browserTabsByProject: pid ? { ...s.browserTabsByProject, [pid]: next } : s.browserTabsByProject,
+      };
+    }),
   patchBrowserTab: (browserId, patch) =>
-    set((s) => ({
-      browserTabs: s.browserTabs.map((t) => (t.browserId === browserId ? { ...t, ...patch } : t)),
-    })),
+    set((s) => {
+      const pid = s.activeProjectId;
+      const next = s.browserTabs.map((t) => (t.browserId === browserId ? { ...t, ...patch } : t));
+      return {
+        browserTabs: next,
+        browserTabsByProject: pid ? { ...s.browserTabsByProject, [pid]: next } : s.browserTabsByProject,
+      };
+    }),
   openUrlInBrowser: (url) => {
-    // Reveal the browser sidebar + stage the URL. BrowserPanel opens it in a
-    // NEW tab: when tabs already exist it creates one for the URL; when none
-    // exist (panel first opened) the first-tab effect loads it into the
-    // initial tab. The sidebar browser is a session-scoped tab — open it on
-    // the ACTIVE session (rail "+" menu does the same).
-    get().openSessionRightTab("browser");
+    // Reveal the browser tab + stage the URL.
+    get().setRightPanelTab("browser");
     set({ rightOpen: true, pendingBrowserUrl: url });
   },
   adoptAgentBrowserTab: (browserId, info) => {
     const s = get();
+    const pid = s.activeProjectId;
     const existing = s.browserTabs.find((t) => t.browserId === browserId);
     if (existing) {
-      // Already adopted — refresh url/title ONLY and activate it. We must NOT
-      // overwrite device/orientation/customWidth/customHeight: the user may have
-      // manually selected a device preset or custom size, and an agent
-      // navigation (which defaults device to "desktop") must never clobber that
-      // selection. Chromium device emulation also persists across navigations,
-      // so the main process keeps the user's emulation without re-applying.
       if (info.url || info.title) {
+        const next = s.browserTabs.map((t) =>
+          t.browserId === browserId
+            ? {
+                ...t,
+                ...(typeof info.url === "string" ? { url: info.url } : {}),
+                ...(typeof info.title === "string" ? { title: info.title } : {}),
+              }
+            : t,
+        );
         set({
-          browserTabs: s.browserTabs.map((t) =>
-            t.browserId === browserId
-              ? {
-                  ...t,
-                  ...(typeof info.url === "string" ? { url: info.url } : {}),
-                  ...(typeof info.title === "string" ? { title: info.title } : {}),
-                }
-              : t,
-          ),
+          browserTabs: next,
+          browserTabsByProject: pid ? { ...s.browserTabsByProject, [pid]: next } : s.browserTabsByProject,
         });
       }
-      if (s.browserActiveTabId !== existing.id) set({ browserActiveTabId: existing.id });
+      if (s.browserActiveTabId !== existing.id) {
+        set({
+          browserActiveTabId: existing.id,
+          browserActiveTabIdByProject: pid ? { ...s.browserActiveTabIdByProject, [pid]: existing.id } : s.browserActiveTabIdByProject,
+        });
+      }
       return false;
     }
     // Register a new tab for the agent-created view. device comes from the
@@ -9250,7 +9326,13 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       device: info.device ?? "desktop",
       orientation: info.orientation,
     };
-    set({ browserTabs: [...s.browserTabs, tab], browserActiveTabId: tab.id });
+    const next = [...s.browserTabs, tab];
+    set({
+      browserTabs: next,
+      browserActiveTabId: tab.id,
+      browserTabsByProject: pid ? { ...s.browserTabsByProject, [pid]: next } : s.browserTabsByProject,
+      browserActiveTabIdByProject: pid ? { ...s.browserActiveTabIdByProject, [pid]: tab.id } : s.browserActiveTabIdByProject,
+    });
     return true;
   },
 
@@ -10984,6 +11066,22 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     });
   },
 
+  setTerminalPosition: (position) => {
+    set({ terminalPosition: position });
+    void api.setting.set({ key: TERMINAL_POSITION_SETTING_KEY, value: position }).catch((err) => {
+      console.error("setting.set(terminalPosition) failed:", err);
+    });
+    if (position === "bottom") {
+      set({ bottomTerminalOpen: true });
+      if (get().rightPanelTab === "terminal") {
+        get().setRightPanelTab("files");
+      }
+    } else {
+      set({ bottomTerminalOpen: false, rightOpen: true });
+      get().setRightPanelTab("terminal");
+    }
+  },
+
   /* ── Agent orchestration actions ── */
 
   loadOrchSettings: async () => {
@@ -11967,6 +12065,13 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     void api.setting
       .set({ key: UI_GIT_DIFF_OPEN_MODE_SETTING_KEY, value: mode })
       .catch((err) => console.error("setting.set(gitDiffOpenMode) failed:", err));
+  },
+
+  setDiffShowLineNumbers: (show) => {
+    set({ diffShowLineNumbers: show });
+    void api.setting
+      .set({ key: UI_DIFF_SHOW_LINE_NUMBERS_SETTING_KEY, value: String(show) })
+      .catch((err) => console.error("setting.set(diffShowLineNumbers) failed:", err));
   },
 
   openGitDiffDialogTab: (tab) => {
