@@ -25,7 +25,9 @@ import type {
   GitHubDeviceCodeInit,
   GitHubDevicePollResult,
   GitHubDevicePollStatus,
+  GitHubGenerateIssueResult,
   GitHubIssueDetail,
+  GitHubIssueKind,
   GitHubIssueSummary,
   GitHubPullDetail,
   GitHubPullSummary,
@@ -42,7 +44,9 @@ export type {
   GitHubDeviceCodeInit,
   GitHubDevicePollResult,
   GitHubDevicePollStatus,
+  GitHubGenerateIssueResult,
   GitHubIssueDetail,
+  GitHubIssueKind,
   GitHubIssueSummary,
   GitHubLabelRef,
   GitHubLinkedIssue,
@@ -3455,6 +3459,10 @@ export interface RuntimeAgentState {
   /** Version installed under userData/runtimes, or null when absent. Note:
    *  a runtime can be USABLE without being installed here (see `source`). */
   installedVersion: string | null;
+  /** Second-newest managed version (the rollback target), or null when fewer
+   *  than two versions are on disk. Bare semver (codex platform suffix
+   *  stripped) — display only; rollback deletes the newest dir. */
+  previousVersion: string | null;
   /** Where the runtime is currently loaded from (see RuntimeAgentSource). */
   source: RuntimeAgentSource | null;
   /** Version of the copy the provider actually loads (= installedVersion
@@ -3485,7 +3493,7 @@ export interface RuntimeAgentState {
 /** `runtimes:event` payload — coarse phase + fraction for one agent. */
 export interface RuntimeProgressPayload {
   agent: RuntimeAgentId;
-  phase: "downloading" | "extracting" | "done" | "error";
+  phase: "downloading" | "extracting" | "verifying" | "done" | "error";
   /** 0..1 during "downloading"; -1 when Content-Length is unknown. */
   progress: number;
   /** Populated when phase === "error". */
@@ -3497,12 +3505,51 @@ export interface RuntimeEventMessage {
   payload: RuntimeProgressPayload;
 }
 
+/** Verdict of one manual "check for updates" pass for a single agent.
+ *  Purely advisory — the install-time gates re-verify everything that can be
+ *  checked locally; the compat list is the only thing unique to the check. */
+export type RuntimeCheckVerdict =
+  | "up-to-date" // activeVersion is the registry latest
+  | "ok" // update available AND listed in Mcode's compat list (regression-tested)
+  | "untested" // update available but unlisted / list stale / registry unreachable
+  | "blocked" // update available but listed as known-broken in the compat list
+  | "not-installed"; // no usable runtime — panel offers the install flow instead
+
+export interface RuntimeCheckResult {
+  agent: RuntimeAgentId;
+  /** Version the provider currently loads (null = nothing usable). */
+  activeVersion: string | null;
+  /** Registry latest at check time (null when both registries failed). */
+  latestVersion: string | null;
+  verdict: RuntimeCheckVerdict;
+  /** Machine-readable reason codes (registry-unreachable / compat-broken /
+   *  compat-list-stale / listed-tested) for UI hints and logs. */
+  reasons: string[];
+  /** True when the compat list couldn't be fetched/validated — the verdict
+   *  degrades to "untested" at most, never blocks the version comparison. */
+  compatListStale: boolean;
+  checkedAt: string;
+}
+
 // -- RPC input schemas --
 
 export const RuntimesListSchema = z.object({});
 export type RuntimesListInput = z.infer<typeof RuntimesListSchema>;
 
-export const RuntimesInstallSchema = z.object({ agent: RuntimeAgentSchema });
+/** Install (or update / reinstall) a runtime. Without `version` this installs
+ *  the version pinned in the app's package.json (the historical behavior —
+ *  "align with this build"). With `version` (bare semver) it installs THAT
+ *  upstream version — the "update to latest" path. `force` skips the
+ *  install-time compatibility gates (never the sha512 check) for untested /
+ *  blocked targets; forced installs are recorded in install.json. */
+export const RuntimesInstallSchema = z.object({
+  agent: RuntimeAgentSchema,
+  version: z
+    .string()
+    .regex(/^\d+\.\d+\.\d+(-[\w.+-]+)?$/, "bare semver expected")
+    .optional(),
+  force: z.boolean().optional(),
+});
 export type RuntimesInstallInput = z.infer<typeof RuntimesInstallSchema>;
 
 /** Install from a user-picked LOCAL PATH. Escape hatch when the registry path
@@ -3518,8 +3565,25 @@ export const RuntimesInstallLocalSchema = z.object({
 });
 export type RuntimesInstallLocalInput = z.infer<typeof RuntimesInstallLocalSchema>;
 
-export const RuntimesRemoveSchema = z.object({ agent: RuntimeAgentSchema });
+/** Remove a runtime. Without `version` the whole agent dir goes (historical
+ *  behavior); with `version` only that version dir is deleted (the pressure
+ *  valve for the keep-previous-version rollback policy). */
+export const RuntimesRemoveSchema = z.object({
+  agent: RuntimeAgentSchema,
+  version: z.string().min(1).optional(),
+});
 export type RuntimesRemoveInput = z.infer<typeof RuntimesRemoveSchema>;
+
+/** Manual "check for updates" for all three agents — takes no input by
+ *  design: it's a user click, always fresh (bypasses the list TTL cache),
+ *  and never runs on a schedule. */
+export const RuntimesCheckSchema = z.object({});
+export type RuntimesCheckInput = z.infer<typeof RuntimesCheckSchema>;
+
+/** Roll back one runtime by deleting its NEWEST managed version dir; the
+ *  resolvers then fall back to the previous one. */
+export const RuntimesRollbackSchema = z.object({ agent: RuntimeAgentSchema });
+export type RuntimesRollbackInput = z.infer<typeof RuntimesRollbackSchema>;
 
 export interface ClaudeEventMessage {
   channel: "claude:event";
@@ -4411,6 +4475,17 @@ export const GithubPollDeviceFlowSchema = z.object({
 });
 export type GithubPollDeviceFlowInput = z.infer<typeof GithubPollDeviceFlowSchema>;
 
+export const GithubGenerateIssueSchema = z.object({
+  projectPath: z.string().optional(),
+  owner: z.string().min(1),
+  repo: z.string().min(1),
+  prompt: z.string().min(1).max(2000),
+  kind: z.enum(["bug", "feature", "general"]).default("general"),
+  customModelId: z.string().nullable().optional(),
+  customModelRole: z.string().optional(),
+});
+export type GithubGenerateIssueInput = z.infer<typeof GithubGenerateIssueSchema>;
+
 /** Shared failure shape for mutating calls — handled like the git ops so a
  *  GitHub-side error never throws into the renderer. */
 export const GithubOpResultSchema = z.object({
@@ -4598,6 +4673,8 @@ export interface RpcMap {
   "github.startDeviceFlow": () => Promise<GitHubDeviceCodeInit>;
   /** Poll access token for GitHub OAuth 2.0 Device Flow. */
   "github.pollDeviceFlow": (input: GithubPollDeviceFlowInput) => Promise<GitHubDevicePollResult>;
+  /** Generate issue title and body using AI based on prompt and project context. */
+  "github.generateIssue": (input: GithubGenerateIssueInput) => Promise<GitHubGenerateIssueResult>;
   // Theme / color scheme
   "theme.get": () => Promise<GetThemeResult>;
   "theme.set": (input: SetThemeInput) => Promise<GetThemeResult>;
@@ -4893,8 +4970,13 @@ export interface RpcMap {
    *  from the registry on each call (best-effort, null when offline). */
   "runtimes.list": () => Promise<{ runtimes: RuntimeAgentState[] }>;
   /** Download + install (or update/reinstall) a runtime into
-   *  userData/runtimes. Resolves when the install fully finished. */
-  "runtimes.install": (input: RuntimesInstallInput) => Promise<{ ok: boolean; error?: string }>;
+   *  userData/runtimes. Resolves when the install fully finished. With
+   *  `version` installs that upstream version; `force` skips the compat
+   *  gates (never integrity checks). `gateBlocked` marks a compat-gate
+   *  rejection the UI may offer to force past. */
+  "runtimes.install": (
+    input: RuntimesInstallInput,
+  ) => Promise<{ ok: boolean; error?: string; version?: string; gateBlocked?: boolean }>;
   /** Install a runtime from a user-picked local path (install directory,
    *  binary, or .tgz). The version is taken from the package.json when
    *  available, else the expected version. */
@@ -4902,8 +4984,19 @@ export interface RpcMap {
     input: RuntimesInstallLocalInput,
   ) => Promise<{ ok: boolean; error?: string; version?: string }>;
   /** Delete an installed runtime from disk. Rejected while any turn is
-   *  running. */
+   *  running. With `version` removes only that version dir. */
   "runtimes.remove": (input: RuntimesRemoveInput) => Promise<{ ok: boolean; error?: string }>;
+  /** Manual "check for updates": compare each agent's active version against
+   *  the registry latest + Mcode's compat list. User-clicked only — never
+   *  scheduled; bypasses the list TTL cache. */
+  "runtimes.checkUpdates": (
+    input: RuntimesCheckInput,
+  ) => Promise<{ results: RuntimeCheckResult[] }>;
+  /** Roll back a runtime to its previous managed version by deleting the
+   *  newest one. Rejected while any turn is running. */
+  "runtimes.rollback": (
+    input: RuntimesRollbackInput,
+  ) => Promise<{ ok: boolean; rolledBackTo?: string; error?: string }>;
   // ── Plugins (settings panel; docs/plugin-feasibility.md v1) ──
   /** List installed plugins (manifest + component summaries + enable state).
    *  Enabled plugins are delivered to providers at the next turn start. */
@@ -5196,6 +5289,7 @@ export const IPC = {
   GITHUB_VERIFY_TOKEN: "github:verifyToken",
   GITHUB_START_DEVICE_FLOW: "github:startDeviceFlow",
   GITHUB_POLL_DEVICE_FLOW: "github:pollDeviceFlow",
+  GITHUB_GENERATE_ISSUE: "github:generateIssue",
   // Integrated terminal (P4 IDE right panel)
   TERMINAL_CREATE: "terminal:create",
   TERMINAL_WRITE: "terminal:write",
@@ -5286,6 +5380,8 @@ export const IPC = {
   RUNTIMES_INSTALL: "runtimes:install",
   RUNTIMES_INSTALL_LOCAL: "runtimes:installLocal",
   RUNTIMES_REMOVE: "runtimes:remove",
+  RUNTIMES_CHECK_UPDATES: "runtimes:checkUpdates",
+  RUNTIMES_ROLLBACK: "runtimes:rollback",
   RUNTIMES_EVENT: "runtimes:event",
   // Plugins (settings panel): list/install (local/git/marketplace)/enable/
   // remove + marketplace management. No push channel — every RPC resolves

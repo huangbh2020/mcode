@@ -31,6 +31,7 @@ export {
   IconDownload,
   IconUpload,
   IconRefresh,
+  IconArrowBackUp,
   IconEraser,
   IconShare,
   IconSend,

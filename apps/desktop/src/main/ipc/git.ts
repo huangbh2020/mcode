@@ -16,6 +16,7 @@
 import type { IpcMain } from "electron";
 import { readdir, readFile, stat, writeFile } from "node:fs/promises";
 import { join, relative, resolve, sep } from "node:path";
+import { loadClaudeSdk } from "@main/providers/claude-sdk/sdkLoader.js";
 import type simpleGitFn from "simple-git";
 import {
   IPC,
@@ -380,7 +381,7 @@ export async function generateCommitMessageForRepo(input: {
 
     // 3. Resolve the model config. OpenAI-protocol configs get their bridge
     //    activated here too (see resolveModelForGitOp).
-    const { query } = await import("@anthropic-ai/claude-agent-sdk");
+    const { query } = await loadClaudeSdk();
     const ac = new AbortController();
     if (input.requestId) activeCommitGenerations.set(input.requestId, ac);
     const timer = setTimeout(() => ac.abort(), 60000); // 60s timeout

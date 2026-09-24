@@ -75,6 +75,10 @@ export const zh = {
   "github.stateChangeFailed": "操作失败",
   "github.linkedPulls": "关联 PR",
   "github.createFixPr": "创建修复 PR",
+  "github.aiReviewAndMerge": "AI 审查并合并",
+  "github.aiReviewOnly": "AI 审查改动",
+  "github.aiReviewStarting": "正在启动 AI 审查会话…",
+  "github.aiReviewStarted": "已开启 PR #{n} 的 AI 审查会话",
 
   /* ── comments ── */
   "github.commentPlaceholder": "输入评论…（支持 Markdown）",
@@ -105,6 +109,15 @@ export const zh = {
   "github.confirmCreate": "创建",
   "github.pushFailed": "分支推送失败",
   "github.noLocalRepo": "手动添加的仓库不支持本地分支操作",
+  "github.aiGenerateIssue": "AI 智能编写",
+  "github.aiPromptPlaceholder": "简要描述问题或需求（例如：暗黑模式下边框对比度过低，或期望增加快捷键）",
+  "github.issueKindBug": "Bug 报告",
+  "github.issueKindFeature": "功能需求",
+  "github.issueKindGeneral": "通用改进",
+  "github.generateBtn": "AI 生成内容",
+  "github.generating": "正在生成…",
+  "github.generateFailed": "生成失败：{error}",
+  "github.aiGeneratedApplied": "已根据 AI 生成更新标题与正文",
 
   /* ── settings panel ── */
   "github.settingsTitle": "GitHub 集成",

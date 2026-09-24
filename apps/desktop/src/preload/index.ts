@@ -507,6 +507,8 @@ const api = {
       ipcRenderer.invoke(IPC.GITHUB_START_DEVICE_FLOW)) as RpcMap["github.startDeviceFlow"],
     pollDeviceFlow: ((input) =>
       ipcRenderer.invoke(IPC.GITHUB_POLL_DEVICE_FLOW, input)) as RpcMap["github.pollDeviceFlow"],
+    generateIssue: ((input) =>
+      ipcRenderer.invoke(IPC.GITHUB_GENERATE_ISSUE, input)) as RpcMap["github.generateIssue"],
   },
 
   // ── Main-only helpers ──
@@ -658,7 +660,10 @@ const api = {
 
   /** Agent runtimes (settings panel): the download-on-demand claude/codex/pi
    *  payloads. install() resolves when the whole pipeline finished; live
-   *  progress arrives over `on.runtimesEvent`. */
+   *  progress arrives over `on.runtimesEvent`. checkUpdates is the manual
+   *  "check for updates" click (registry latest + compat list verdicts);
+   *  rollback deletes the newest managed version to fall back to the
+   *  previous one. */
   runtimes: {
     list: (() => ipcRenderer.invoke(IPC.RUNTIMES_LIST)) as RpcMap["runtimes.list"],
     install: ((input) =>
@@ -667,6 +672,13 @@ const api = {
       ipcRenderer.invoke(IPC.RUNTIMES_INSTALL_LOCAL, input)) as RpcMap["runtimes.installLocal"],
     remove: ((input) =>
       ipcRenderer.invoke(IPC.RUNTIMES_REMOVE, input)) as RpcMap["runtimes.remove"],
+    checkUpdates: ((input) =>
+      ipcRenderer.invoke(
+        IPC.RUNTIMES_CHECK_UPDATES,
+        input,
+      )) as RpcMap["runtimes.checkUpdates"],
+    rollback: ((input) =>
+      ipcRenderer.invoke(IPC.RUNTIMES_ROLLBACK, input)) as RpcMap["runtimes.rollback"],
   },
 
   /** Plugins (settings panel): install/enable/remove over ~/.mcode/plugins +

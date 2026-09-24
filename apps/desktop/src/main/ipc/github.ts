@@ -25,7 +25,9 @@ import {
   GithubCreatePullSchema,
   GithubSetTokenSchema,
   GithubPollDeviceFlowSchema,
+  GithubGenerateIssueSchema,
 } from "@contracts/ipc";
+import { generateIssueContent } from "@main/github/issueGen.js";
 import type { GitHubRepoCandidate } from "@contracts/ipc";
 import {
   createComment,
@@ -266,6 +268,17 @@ export function registerGithubHandlers(ipcMain: IpcMain): void {
     } catch (err) {
       log.warn(`github.pollDeviceFlow failed: ${errorText(err)}`);
       return { status: "error", error: errorText(err) };
+    }
+  });
+
+  /* ── github:generateIssue — AI generate issue title & body ── */
+  ipcMain.handle(IPC.GITHUB_GENERATE_ISSUE, async (_evt, raw) => {
+    const input = GithubGenerateIssueSchema.parse(raw);
+    try {
+      return await generateIssueContent(input);
+    } catch (err) {
+      log.warn(`github.generateIssue failed: ${errorText(err)}`);
+      throw err;
     }
   });
 }

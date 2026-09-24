@@ -54,12 +54,25 @@ export function polyfillWorkerThreads(): void {
  * imports inside the tree resolve via normal node_modules walking-up from
  * that dir.
  *
+ * Versions are tried newest-first, and one whose module graph can't even be
+ * IMPORTED steps down to the next version instead of killing pi outright.
+ * This is the load-side twin of rollbackRuntime's "resolvers pick the newest
+ * surviving dir" rule: keep-2 retention leaves the previous version on disk,
+ * and a version that fails at import time fails for THIS app build
+ * deterministically (e.g. pi 0.87.x statically imports `globSync` from
+ * `node:fs` — Node ≥ 22.14 only, while Electron 33's main-process Node is
+ * 20.x, so the ESM link step rejects the whole graph). Whole version dirs are
+ * self-contained, so running the runner-up has no cross-version pairing
+ * hazard (unlike claude, where wrapper and binary must stay on one train).
+ *
  * Returns null when no managed install exists (caller falls back to the bare
- * specifier, which works in dev).
+ * specifier, which works in dev); throws only when versions exist but every
+ * one of them failed to import.
  */
 async function importManagedPiSdk(): Promise<typeof import("@earendil-works/pi-coding-agent") | null> {
   const root = getManagedRuntimeRoot();
   if (!root) return null;
+  const failures: string[] = [];
   for (const version of listManagedVersions("pi")) {
     const pkgDir = join(root, "pi", version, "node_modules", "@earendil-works", "pi-coding-agent");
     const pkgJsonPath = join(pkgDir, "package.json");
@@ -78,7 +91,18 @@ async function importManagedPiSdk(): Promise<typeof import("@earendil-works/pi-c
     }
     const entryPath = join(pkgDir, entryRel);
     if (!existsSync(entryPath)) continue;
-    return await import(pathToFileURL(entryPath).href);
+    try {
+      return await import(pathToFileURL(entryPath).href);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      failures.push(`v${version}: ${msg}`);
+      log.warn(
+        `pi: managed runtime v${version} failed to import, stepping down the version ladder: ${msg}`,
+      );
+    }
+  }
+  if (failures.length > 0) {
+    throw new Error(`no loadable managed pi version — ${failures.join(" | ")}`);
   }
   return null;
 }

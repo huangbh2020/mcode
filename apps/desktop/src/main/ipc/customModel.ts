@@ -23,6 +23,7 @@ import { CustomModelStore } from "@main/lib/secretStore.js";
 import { buildCustomEnv, resolveActiveModel } from "@main/providers/claude-sdk/customEnv.js";
 import { BridgeRegistry } from "@main/providers/bridge/bridgeRegistry.js";
 import { resolveSdkBinaryPath } from "@main/providers/claude-sdk/sdkBinaryPath.js";
+import { loadClaudeSdk } from "@main/providers/claude-sdk/sdkLoader.js";
 import { log } from "@main/lib/logger.js";
 
 /** Probe timeout — a healthy endpoint should answer the init handshake within
@@ -127,7 +128,7 @@ async function probeEndpoint(
   detail?: string;
   error?: string;
 }> {
-  const { query } = await import("@anthropic-ai/claude-agent-sdk");
+  const { query } = await loadClaudeSdk();
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), TEST_TIMEOUT_MS);
 

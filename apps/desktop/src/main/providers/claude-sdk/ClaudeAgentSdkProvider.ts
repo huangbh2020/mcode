@@ -31,6 +31,7 @@ import {
   normalizeToolFilePath,
 } from "@main/lib/fileSnapshot.js";
 import { resolveSdkBinaryPath } from "./sdkBinaryPath.js";
+import { loadClaudeSdk } from "./sdkLoader.js";
 import { resolveGitBash } from "@main/lib/binaryResolve.js";
 import { samePath } from "@main/lib/pathGuard.js";
 import { getMcpManagement, readProjectMcpServers } from "@main/lib/mcpConfig.js";
@@ -71,11 +72,12 @@ import {
 // stay out of the main-process startup path. The SDK is only needed once the
 // user sends their first message or a health check runs - both happen well
 // after the window is visible. Mirrors the node-pty lazy-load pattern in
-// TerminalManager.ts.
+// TerminalManager.ts. Goes through sdkLoader so a managed runtime install's
+// version-paired wrapper is honored (see sdkLoader.ts).
 let queryFn: typeof import("@anthropic-ai/claude-agent-sdk").query | null = null;
 async function loadQuery(): Promise<typeof import("@anthropic-ai/claude-agent-sdk").query> {
   if (!queryFn) {
-    const sdk = await import("@anthropic-ai/claude-agent-sdk");
+    const sdk = await loadClaudeSdk();
     queryFn = sdk.query;
   }
   return queryFn;
@@ -172,7 +174,7 @@ async function loadCreateMcpServer(): Promise<
   typeof import("@anthropic-ai/claude-agent-sdk").createSdkMcpServer
 > {
   if (!createMcpServerFn) {
-    const sdk = await import("@anthropic-ai/claude-agent-sdk");
+    const sdk = await loadClaudeSdk();
     createMcpServerFn = sdk.createSdkMcpServer;
   }
   return createMcpServerFn;

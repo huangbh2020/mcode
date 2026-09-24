@@ -76,6 +76,10 @@ export const en = {
   "github.stateChangeFailed": "Action failed",
   "github.linkedPulls": "Linked PRs",
   "github.createFixPr": "Create fix PR",
+  "github.aiReviewAndMerge": "AI Review & Merge",
+  "github.aiReviewOnly": "AI Review Changes",
+  "github.aiReviewStarting": "Starting AI review session…",
+  "github.aiReviewStarted": "Started AI review session for PR #{n}",
 
   /* ── comments ── */
   "github.commentPlaceholder": "Write a comment… (Markdown supported)",
@@ -106,6 +110,15 @@ export const en = {
   "github.confirmCreate": "Create",
   "github.pushFailed": "Branch push failed",
   "github.noLocalRepo": "Local branch operations are unavailable for manually added repositories",
+  "github.aiGenerateIssue": "AI Assistant",
+  "github.aiPromptPlaceholder": "Describe the bug or feature briefly (e.g., border contrast too low in dark mode)...",
+  "github.issueKindBug": "Bug Report",
+  "github.issueKindFeature": "Feature Request",
+  "github.issueKindGeneral": "General",
+  "github.generateBtn": "Generate Content",
+  "github.generating": "Generating…",
+  "github.generateFailed": "Generation failed: {error}",
+  "github.aiGeneratedApplied": "Applied AI-generated title and description",
 
   /* ── settings panel ── */
   "github.settingsTitle": "GitHub integration",

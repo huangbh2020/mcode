@@ -21,12 +21,14 @@ import {
   IconLink,
   IconCopy,
   IconCheck,
+  IconMessageChatbot,
 } from "@renderer/lib/icons.js";
 import { Markdown } from "@renderer/components/chat/Markdown.js";
 import type {
   GitHubContextResult,
   GitHubDeviceCodeInit,
   GitHubIssueDetail,
+  GitHubIssueKind,
   GitHubIssueSummary,
   GitHubPullDetail,
   GitHubPullSummary,
@@ -476,6 +478,7 @@ export function GitHubPanel() {
         <CreateIssueDialog
           owner={selected.owner}
           repo={selected.repo}
+          projectPath={selected.repoPath ?? projectPath}
           onClose={() => setCreateIssueOpen(false)}
           onCreated={(n) => {
             setCreateIssueOpen(false);
@@ -927,6 +930,50 @@ function CommentBox({ owner, repo, number, onPosted }: { owner: string; repo: st
   );
 }
 
+function buildPrReviewPrompt(pull: GitHubPullDetail, slug: string): string {
+  const filesList =
+    pull.files.length > 0
+      ? pull.files
+          .slice(0, 50)
+          .map((f) => `- \`${f.filename}\` (+${f.additions} / -${f.deletions})`)
+          .join("\n") + (pull.files.length > 50 ? `\n- ...以及另外 ${pull.files.length - 50} 个文件` : "")
+      : "(暂无文件变更统计)";
+
+  const linkedIssuesList =
+    pull.linkedIssues.length > 0
+      ? pull.linkedIssues.map((i) => `- #${i.number} ${i.title} (${i.state})`).join("\n")
+      : "";
+
+  return [
+    `请对 GitHub PR #${pull.number} 进行深入的代码审查与合并评估：`,
+    "",
+    `### PR 基本信息`,
+    `- **仓库**: ${slug}`,
+    `- **PR 标题**: ${pull.title}`,
+    `- **分支**: \`${pull.headRef}\` → \`${pull.baseRef}\``,
+    `- **状态**: ${pull.state}`,
+    `- **PR 链接**: ${pull.htmlUrl}`,
+    pull.body.trim() ? `- **PR 描述**:\n${pull.body.trim()}` : "",
+    linkedIssuesList ? `- **关联 Issue**:\n${linkedIssuesList}` : "",
+    "",
+    `### 变更文件列表 (${pull.files.length} 个文件)`,
+    filesList,
+    "",
+    `### 审查指南与要求`,
+    `1. 请利用你的代码阅读与搜索工具（如 ReadFile、Grep、Git 相关工具），仔细检查上述核心变更文件的具体实现；`,
+    `2. 评估代码实现的正确性、潜在 Bug、边界条件、安全性隐患与性能表现；`,
+    `3. 检查代码改动是否与 PR 标题和描述相符，是否有意外的多余改动；`,
+    `4. 输出一份清晰的结构化审查报告：`,
+    `   - 📝 **改动概述**：简要说明核心变动与意图`,
+    `   - 🔍 **代码质量与潜在隐患**：指出发现的问题（若无显著问题请明确说明）`,
+    `   - 💡 **优化与改进建议**：可提供具体代码建议`,
+    `   - 🏁 **审批结论**：明确给出【建议合并】、【建议修改】或【需人工重点复核】`,
+    `5. 若结论为【建议合并】，请告知适合的合并方式（Squash / Merge / Rebase），并提示用户可在右侧面板直接点击合并（纯远程 GitHub API 合并，不影响本地工作区）。`,
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
 function PullDetailView({ pull, slug, onBack, onRefresh, onOpenUrl }: {
   pull: GitHubPullDetail;
   slug: string;
@@ -936,6 +983,8 @@ function PullDetailView({ pull, slug, onBack, onRefresh, onOpenUrl }: {
 }) {
   const { t } = useI18n();
   const toast = useToastStore((s) => s.push);
+  const projectId = useSessionStore((s) => s.activeProjectId);
+  const [aiReviewing, setAiReviewing] = useState(false);
   const [owner, repo] = slug.split("/");
   const [method, setMethod] = useState<"merge" | "squash" | "rebase">("squash");
   const [deleteBranch, setDeleteBranch] = useState(false);
@@ -945,6 +994,36 @@ function PullDetailView({ pull, slug, onBack, onRefresh, onOpenUrl }: {
 
   const canMerge = pull.state === "open" || pull.state === "draft";
   const blockedKey = canMerge ? mergeableStateKey(pull.mergeableState) : null;
+
+  const handleStartAiReview = async () => {
+    if (!projectId) {
+      toast({ kind: "warning", title: t("github.noProject") });
+      return;
+    }
+    setAiReviewing(true);
+    try {
+      const store = useSessionStore.getState();
+      await store.startSession(projectId, { envMode: "local" });
+      const sessionId = useSessionStore.getState().activeSessionId;
+      if (!sessionId) {
+        throw new Error("Failed to initialize session");
+      }
+      const prompt = buildPrReviewPrompt(pull, slug);
+      await store.sendPrompt(prompt, undefined, undefined, undefined, undefined, undefined, sessionId);
+      toast({
+        kind: "info",
+        title: t("github.aiReviewStarted", { n: pull.number }),
+      });
+    } catch (err) {
+      toast({
+        kind: "error",
+        title: t("github.loadFailed"),
+        body: (err as Error).message,
+      });
+    } finally {
+      setAiReviewing(false);
+    }
+  };
 
   const doMerge = async () => {
     setBusy(true);
@@ -1037,6 +1116,23 @@ function PullDetailView({ pull, slug, onBack, onRefresh, onOpenUrl }: {
           </div>
         </div>
       )}
+
+      {/* AI Review & Merge section */}
+      <div className="border-b border-edge px-3 py-2">
+        <button
+          type="button"
+          onClick={() => void handleStartAiReview()}
+          disabled={aiReviewing}
+          className="flex w-full items-center justify-center gap-1.5 rounded-md border border-accent/30 bg-accent/10 px-3 py-1.5 text-xs font-medium text-accent transition-colors hover:bg-accent/20 disabled:opacity-50"
+        >
+          {aiReviewing ? (
+            <IconLoader2 size={13} className="animate-spin" />
+          ) : (
+            <IconMessageChatbot size={14} />
+          )}
+          <span>{canMerge ? t("github.aiReviewAndMerge") : t("github.aiReviewOnly")}</span>
+        </button>
+      </div>
 
       {/* merge + state controls */}
       {canMerge && (
@@ -1388,17 +1484,48 @@ function CreatePullDialog({ candidate, prefillFixNumber, onClose, onCreated }: {
   );
 }
 
-function CreateIssueDialog({ owner, repo, onClose, onCreated }: {
+function CreateIssueDialog({ owner, repo, projectPath, onClose, onCreated }: {
   owner: string;
   repo: string;
+  projectPath?: string | null;
   onClose: () => void;
   onCreated: (number: number) => void;
 }) {
   const { t } = useI18n();
+  const toast = useToastStore((s) => s.push);
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // ── AI generation state ──
+  const [aiPrompt, setAiPrompt] = useState("");
+  const [aiKind, setAiKind] = useState<GitHubIssueKind>("general");
+  const [aiGenerating, setAiGenerating] = useState(false);
+  const [aiError, setAiError] = useState<string | null>(null);
+
+  const handleGenerate = async () => {
+    if (!aiPrompt.trim() || aiGenerating) return;
+    setAiGenerating(true);
+    setAiError(null);
+    try {
+      const res = await api.github.generateIssue({
+        owner,
+        repo,
+        prompt: aiPrompt.trim(),
+        kind: aiKind,
+        projectPath: projectPath ?? undefined,
+      });
+      if (res.title) setTitle(res.title);
+      if (res.body) setBody(res.body);
+      toast({ kind: "info", title: t("github.aiGeneratedApplied") });
+    } catch (err) {
+      setAiError((err as Error).message);
+    } finally {
+      setAiGenerating(false);
+    }
+  };
+
   const submit = async () => {
     if (!title.trim() || busy) return;
     setBusy(true);
@@ -1413,18 +1540,102 @@ function CreateIssueDialog({ owner, repo, onClose, onCreated }: {
       setBusy(false);
     }
   };
+
   return (
     <DialogShell title={t("github.createIssueTitle")} onClose={onClose}>
-      <div className="space-y-2">
-        <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder={t("github.issueTitlePlaceholder")} className={FIELD_CLS} autoFocus />
-        <textarea value={body} onChange={(e) => setBody(e.target.value)} placeholder={t("github.prBodyPlaceholder")} rows={4} className={cn(FIELD_CLS, "resize-y")} />
-        {error && <p className="text-danger [font-size:var(--rp-fs-xxs)]">{error}</p>}
+      <div className="space-y-3">
+        {/* ── AI Assistant Box ── */}
+        <div className="rounded-lg border border-edge/80 bg-surface-elevated/40 p-2.5">
+          <div className="mb-2 flex items-center justify-between">
+            <span className="flex items-center gap-1.5 font-medium text-content [font-size:var(--rp-fs-xxs)]">
+              <IconMessageChatbot size={13} className="text-accent" />
+              {t("github.aiGenerateIssue")}
+            </span>
+            <div className="flex items-center gap-1">
+              {(["general", "bug", "feature"] as const).map((kind) => {
+                const label =
+                  kind === "bug"
+                    ? t("github.issueKindBug")
+                    : kind === "feature"
+                      ? t("github.issueKindFeature")
+                      : t("github.issueKindGeneral");
+                const isSelected = aiKind === kind;
+                return (
+                  <button
+                    key={kind}
+                    type="button"
+                    onClick={() => setAiKind(kind)}
+                    className={cn(
+                      "rounded px-1.5 py-0.5 [font-size:var(--rp-fs-xxs)] transition-colors",
+                      isSelected
+                        ? "bg-accent font-medium text-white"
+                        : "text-content-muted hover:bg-surface-hover hover:text-content",
+                    )}
+                  >
+                    {label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+          <div className="flex gap-1.5">
+            <input
+              value={aiPrompt}
+              onChange={(e) => setAiPrompt(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  void handleGenerate();
+                }
+              }}
+              placeholder={t("github.aiPromptPlaceholder")}
+              className={cn(FIELD_CLS, "flex-1 text-[11px]")}
+              disabled={aiGenerating}
+            />
+            <button
+              type="button"
+              onClick={() => void handleGenerate()}
+              disabled={!aiPrompt.trim() || aiGenerating}
+              className="flex shrink-0 items-center gap-1 rounded bg-accent/90 px-2 py-1 text-[11px] font-medium text-white hover:bg-accent disabled:opacity-40"
+            >
+              {aiGenerating ? <IconLoader2 size={11} className="animate-spin" /> : <IconMessageChatbot size={11} />}
+              {aiGenerating ? t("github.generating") : t("github.generateBtn")}
+            </button>
+          </div>
+          {aiError && (
+            <p className="mt-1 text-danger [font-size:var(--rp-fs-xxs)]">{t("github.generateFailed", { error: aiError })}</p>
+          )}
+        </div>
+
+        {/* ── Issue Content Fields ── */}
+        <div className="space-y-2">
+          <input
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            placeholder={t("github.issueTitlePlaceholder")}
+            className={FIELD_CLS}
+            autoFocus
+          />
+          <textarea
+            value={body}
+            onChange={(e) => setBody(e.target.value)}
+            placeholder={t("github.prBodyPlaceholder")}
+            rows={7}
+            className={cn(FIELD_CLS, "resize-y font-mono text-[11px] leading-relaxed")}
+          />
+          {error && <p className="text-danger [font-size:var(--rp-fs-xxs)]">{error}</p>}
+        </div>
       </div>
       <div className="mt-3 flex justify-end gap-2">
         <button type="button" onClick={onClose} className="rounded px-2.5 py-1 text-[11px] text-content-muted hover:bg-surface-hover">
           {t("github.cancel")}
         </button>
-        <button type="button" onClick={() => void submit()} disabled={!title.trim() || busy} className="flex items-center gap-1 rounded bg-accent px-2.5 py-1 text-[11px] font-medium text-white hover:opacity-90 disabled:opacity-40">
+        <button
+          type="button"
+          onClick={() => void submit()}
+          disabled={!title.trim() || busy}
+          className="flex items-center gap-1 rounded bg-accent px-2.5 py-1 text-[11px] font-medium text-white hover:opacity-90 disabled:opacity-40"
+        >
           {busy ? <IconLoader2 size={11} className="animate-spin" /> : null}
           {t("github.confirmCreate")}
         </button>
