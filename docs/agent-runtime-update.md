@@ -201,7 +201,7 @@ updateAvailable =
      active-broken 隐藏「仍要安装」并出「展开详情使用回退」引导)
 ```
 
-> **2026-09-24 实测补记(pi 0.87.1 事件)**:机械闸门(G1/G2/G3)测不出「新版本依赖了本机 Node 没有的 API」这类**链接期破坏**——pi 0.87.x 从 `node:fs` 静态导入 `globSync`(Node ≥ 22.14),Electron 33 主进程 Node 20.x 整个 SDK 加载失败,模型下拉/回合全灭且 `listAvailable` 把错误吞成空数组,黄灯确认形同虚设。防线两层:① 兼容名单登记 `pi.broken["0.87.1"]`(人工结论回填的教科书场景);② `piSdkLoader` 改**逐版本回退梯子**——newest-first 逐个 import,失败打 WARN 退回下一版本目录(keep-2 留下的次新版本即兜底;整版本目录自包含,无 claude 的 wrapper↔binary 配对约束),全部失败才抛聚合错误。
+> **2026-09-24 实测补记(pi 0.87.1 事件)**:机械闸门(G1/G2/G3)测不出「新版本依赖了本机 Node 没有的 API」这类**链接期破坏**——pi 0.87.x 从 `node:fs` 静态导入 `globSync`(Node ≥ 22.14),Electron 33 主进程 Node 20.x 整个 SDK 加载失败,模型下拉/回合全灭且 `listAvailable` 把错误吞成空数组,黄灯确认形同虚设。防线两层:① 兼容名单登记 `pi.broken["0.87.1"]`(人工结论回填的教科书场景);② `piSdkLoader` 改**逐版本回退梯子**——newest-first 逐个 import,失败打 WARN 退回下一版本目录(keep-2 留下的次新版本即兜底;整版本目录自包含,无 claude 的 wrapper↔binary 配对约束),全部失败才抛聚合错误。**同日解除**:应用升级 Electron 37(内置 Node 22.21.1)后 0.87.1 原生可加载,已从 broken 名单移出;兼容名单的「版本 × 本机 Node API」类条目与 app 打包的 Electron 大版本强相关,升 Electron 后记得复核 broken 列表。
 
 `compareVersions` 复用 `managedRuntimeRoots.ts:36`(注意 codex 的 latest 来自 wrapper 包,本身是裸 semver,无需归一化;已安装目录名的平台后缀归一化已有 `normalizeInstalledVersion`)。
 

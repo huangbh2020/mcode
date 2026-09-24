@@ -10,8 +10,6 @@
   },
   "pi": {
     "tested": ["0.83.0"],
-    "broken": {
-      "0.87.1": "imports globSync from node:fs (Node >= 22.14); Electron 33 main runs Node 20 — SDK fails to load"
-    }
+    "broken": {}
   }
 }

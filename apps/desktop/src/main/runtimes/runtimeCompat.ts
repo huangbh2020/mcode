@@ -46,17 +46,12 @@ export const BASELINE_COMPAT_LIST: CompatList = {
   schema: 1,
   claude: { tested: ["0.3.258"], broken: {} },
   codex: { tested: ["0.153.4"], broken: {} },
-  pi: {
-    tested: ["0.83.0"],
-    broken: {
-      // 2026-09-24 实测:静态 `import { globSync } from "node:fs"` 在
-      // Electron 33 主进程(Node 20.x,无该导出)的 ESM 链接期整体失败,
-      // pi SDK 完全不可加载(模型下拉为空、回合无法启动)。0.83.0 用 npm
-      // 包 `glob`,不受影响。
-      "0.87.1":
-        "imports globSync from node:fs (Node >= 22.14); Electron 33 main runs Node 20 — SDK fails to load",
-    },
-  },
+  // pi 0.87.1 was marked broken on 2026-09-24 (`globSync` from node:fs needs
+  // Node >= 22.14; the then-current Electron 33 main ran Node 20) and
+  // un-marked the same day after the app moved to Electron 37 (Node 22.21),
+  // where the SDK imports cleanly — verified by loading the real managed
+  // 0.87.1 install under Electron's own runtime.
+  pi: { tested: ["0.83.0"], broken: {} },
 };
 
 /** Where the remote override is fetched from — a fallback CHAIN, first
