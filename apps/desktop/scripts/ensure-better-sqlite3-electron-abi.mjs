@@ -34,20 +34,21 @@ const here = dirname(fileURLToPath(import.meta.url));
 // Resolve through apps/desktop/node_modules (this script lives in its scripts/).
 const pkgDir = dirname(require.resolve("better-sqlite3/package.json"));
 
-// Marker: skip when the Electron-ABI binary is already in place. The marker
-// lives NEXT TO the binary, so the next `pnpm install` (which re-provisions
-// the Node binary via better-sqlite3's own postinstall) removes it and this
-// hook re-runs.
-const markerPath = join(pkgDir, "build", "Release", ".electron-abi");
-if (existsSync(markerPath)) {
-  process.exit(0);
-}
-
 let electronVersion;
 try {
   electronVersion = JSON.parse(readFileSync(require.resolve("electron/package.json"), "utf8")).version;
 } catch {
   console.warn("[ensure-better-sqlite3-abi] electron not installed — skipping (dev-only state?)");
+  process.exit(0);
+}
+
+// Marker: skip when the Electron-ABI binary ALREADY matches the installed
+// Electron version. The marker records the electron version it provisioned
+// for, so an Electron upgrade (better-sqlite3 itself unchanged → pnpm never
+// rebuilds it → stale marker + stale ABI-130 binary) is detected here and
+// re-provisioned instead of crashing at app startup with NODE_MODULE_VERSION.
+const markerPath = join(pkgDir, "build", "Release", ".electron-abi");
+if (existsSync(markerPath) && readFileSync(markerPath, "utf8").trim() === electronVersion) {
   process.exit(0);
 }
 
