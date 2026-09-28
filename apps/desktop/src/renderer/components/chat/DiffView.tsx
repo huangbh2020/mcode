@@ -1,5 +1,6 @@
 import { cn } from "@renderer/lib/cn.js";
 import { useI18n } from "@renderer/lib/i18n/index.js";
+import { useSessionStore } from "@renderer/stores/sessionStore.js";
 import type { lineDiff } from "@renderer/lib/lineDiff.js";
 
 /**
@@ -16,14 +17,20 @@ import type { lineDiff } from "@renderer/lib/lineDiff.js";
 export function DiffView({
   diff,
   scrollClassName = "max-h-80",
+  showLineNumbers: showLineNumbersProp,
 }: {
   diff: ReturnType<typeof lineDiff>;
   /** Class controlling the scroll container's height. Overridable so
    *  full-screen consumers (the mobile viewer overlay) can fill the screen;
    *  defaults to the inline card height. */
   scrollClassName?: string;
+  /** Explicit override for showing line numbers. Defaults to `sessionStore.diffShowLineNumbers`. */
+  showLineNumbers?: boolean;
 }) {
   const { t } = useI18n();
+  const storeShowLineNumbers = useSessionStore((s) => s.diffShowLineNumbers);
+  const showLineNumbers = showLineNumbersProp ?? storeShowLineNumbers;
+
   if (diff.length === 0) {
     return (
       <div className="rounded bg-surface-muted/60 p-2 text-content-subtle [font-size:var(--chat-fs-xs)]">
@@ -54,12 +61,16 @@ export function DiffView({
             : "text-content-muted";
         return (
           <div key={i} className={cn("flex items-start whitespace-pre", opBg)}>
-            <span className="w-10 shrink-0 select-none border-r border-edge/40 px-1.5 text-right text-content-subtle">
-              {d.oldNo ?? ""}
-            </span>
-            <span className="w-10 shrink-0 select-none border-r border-edge/40 px-1.5 text-right text-content-subtle">
-              {d.newNo ?? ""}
-            </span>
+            {showLineNumbers && (
+              <>
+                <span className="w-10 shrink-0 select-none border-r border-edge/40 px-1.5 text-right text-content-subtle">
+                  {d.oldNo ?? ""}
+                </span>
+                <span className="w-10 shrink-0 select-none border-r border-edge/40 px-1.5 text-right text-content-subtle">
+                  {d.newNo ?? ""}
+                </span>
+              </>
+            )}
             <span className="w-3 shrink-0 select-none pl-1 text-content-subtle">
               {d.op === "delete" ? "−" : d.op === "insert" ? "+" : " "}
             </span>

@@ -11,6 +11,7 @@ import {
   IconSparkles,
   IconBell,
   IconBrandGit,
+  IconBrandGithub,
   IconTerminal2,
   IconWorld,
   IconCode,
@@ -34,6 +35,7 @@ import { ShortcutsPanel } from "./ShortcutsPanel.js";
 import { GesturesPanel } from "./GesturesPanel.js";
 import { GeneralPanel } from "./GeneralPanel.js";
 import { GitPanel } from "./GitPanel.js";
+import { GitHubSettingsPanel } from "./GitHubSettingsPanel.js";
 import { TerminalPanel } from "./TerminalPanel.js";
 import { BrowserPanel } from "./BrowserPanel.js";
 import { LspLanguagesPanel } from "./LspLanguagesPanel.js";
@@ -58,7 +60,7 @@ import { AboutPanel } from "./AboutPanel.js";
  * Note: the legacy “Claude CLI 路径” panel was removed - the Agent SDK bundles
  * its own claude binary, so an externally-configured path is no longer used.
  */
-type SectionId = "general" | "runtimes" | "custom-models" | "agents" | "skills" | "mcp" | "plugins" | "appearance" | "shortcuts" | "gestures" | "voice" | "notifications" | "git" | "terminal" | "browser" | "lsp-languages" | "usage" | "about";
+type SectionId = "general" | "runtimes" | "custom-models" | "agents" | "skills" | "mcp" | "plugins" | "appearance" | "shortcuts" | "gestures" | "voice" | "notifications" | "git" | "github" | "terminal" | "browser" | "lsp-languages" | "usage" | "about";
 
 interface NavItem {
   id: SectionId;
@@ -110,6 +112,7 @@ const NAV_GROUPS: NavGroup[] = [
     labelKey: "settings.navGroup.workbench",
     items: [
       { id: "git", labelKey: "settings.nav.git", icon: IconBrandGit },
+      { id: "github", labelKey: "github.tabName", icon: IconBrandGithub },
       { id: "terminal", labelKey: "settings.nav.terminal", icon: IconTerminal2 },
       { id: "browser", labelKey: "settings.nav.browser", icon: IconWorld },
       { id: "lsp-languages", labelKey: "settings.nav.lsp", icon: IconCode },
@@ -235,6 +238,7 @@ export function SettingsPage() {
           {active === "plugins" && <PluginsPanel />}
           {active === "notifications" && <NotificationsPanel />}
           {active === "git" && <GitPanel />}
+          {active === "github" && <GitHubSettingsPanel />}
           {active === "terminal" && <TerminalPanel />}
           {active === "browser" && <BrowserPanel />}
           {active === "lsp-languages" && <LspLanguagesPanel />}

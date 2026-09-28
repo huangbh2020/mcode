@@ -248,6 +248,9 @@ export const zh = {
   "ide.git.noDiffSelectedHint": "在右侧仓库列表中点击任意已更改或已暂存的文件，即可在此查看实时对比",
   "ide.git.splitView": "并排对比",
   "ide.git.unifiedView": "单栏合并",
+  "ide.git.lineNumbers": "行号",
+  "ide.git.showLineNumbers": "显示行号",
+  "ide.git.hideLineNumbers": "隐藏行号",
   "ide.git.closeDiff": "关闭差异预览",
   "ide.git.stageFile": "暂存更改",
   "ide.git.unstageFile": "取消暂存",
@@ -309,6 +312,9 @@ export const zh = {
   "ide.term.namePlaceholder": "例如:启动开发服务器",
   "ide.term.commandLabel": "命令",
   "ide.term.commandPlaceholder": "例如:npm run dev",
+  "ide.term.moveToBottom": "移至底部面板",
+  "ide.term.moveToRight": "移至右侧边栏",
+  "ide.term.collapseBottom": "收起底部终端",
 
   /* ── turn flow panel (right-panel "turns" tab) ── */
   "ide.turns.title": "轮次流程",

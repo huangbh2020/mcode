@@ -470,6 +470,47 @@ const api = {
       ipcRenderer.invoke(IPC.LSP_REQUEST, input)) as RpcMap["lsp.request"],
   },
 
+  /** GitHub PR / issue management panel. owner/repo travel explicitly from
+   *  the renderer (resolved there from project remotes via getContext); main
+   *  stays stateless over the REST API. Mutating calls return
+   *  `{ ok, error? }` instead of throwing. */
+  github: {
+    getContext: ((input) =>
+      ipcRenderer.invoke(IPC.GITHUB_GET_CONTEXT, input)) as RpcMap["github.getContext"],
+    getRepo: ((input) =>
+      ipcRenderer.invoke(IPC.GITHUB_GET_REPO, input)) as RpcMap["github.getRepo"],
+    listPulls: ((input) =>
+      ipcRenderer.invoke(IPC.GITHUB_LIST_PULLS, input)) as RpcMap["github.listPulls"],
+    listIssues: ((input) =>
+      ipcRenderer.invoke(IPC.GITHUB_LIST_ISSUES, input)) as RpcMap["github.listIssues"],
+    getPull: ((input) =>
+      ipcRenderer.invoke(IPC.GITHUB_GET_PULL, input)) as RpcMap["github.getPull"],
+    getIssue: ((input) =>
+      ipcRenderer.invoke(IPC.GITHUB_GET_ISSUE, input)) as RpcMap["github.getIssue"],
+    mergePull: ((input) =>
+      ipcRenderer.invoke(IPC.GITHUB_MERGE_PULL, input)) as RpcMap["github.mergePull"],
+    createComment: ((input) =>
+      ipcRenderer.invoke(IPC.GITHUB_CREATE_COMMENT, input)) as RpcMap["github.createComment"],
+    setIssueState: ((input) =>
+      ipcRenderer.invoke(IPC.GITHUB_SET_ISSUE_STATE, input)) as RpcMap["github.setIssueState"],
+    createIssue: ((input) =>
+      ipcRenderer.invoke(IPC.GITHUB_CREATE_ISSUE, input)) as RpcMap["github.createIssue"],
+    createPull: ((input) =>
+      ipcRenderer.invoke(IPC.GITHUB_CREATE_PULL, input)) as RpcMap["github.createPull"],
+    listBranches: ((input) =>
+      ipcRenderer.invoke(IPC.GITHUB_LIST_BRANCHES, input)) as RpcMap["github.listBranches"],
+    setToken: ((input) =>
+      ipcRenderer.invoke(IPC.GITHUB_SET_TOKEN, input)) as RpcMap["github.setToken"],
+    verifyToken: (() =>
+      ipcRenderer.invoke(IPC.GITHUB_VERIFY_TOKEN)) as RpcMap["github.verifyToken"],
+    startDeviceFlow: (() =>
+      ipcRenderer.invoke(IPC.GITHUB_START_DEVICE_FLOW)) as RpcMap["github.startDeviceFlow"],
+    pollDeviceFlow: ((input) =>
+      ipcRenderer.invoke(IPC.GITHUB_POLL_DEVICE_FLOW, input)) as RpcMap["github.pollDeviceFlow"],
+    generateIssue: ((input) =>
+      ipcRenderer.invoke(IPC.GITHUB_GENERATE_ISSUE, input)) as RpcMap["github.generateIssue"],
+  },
+
   // ── Main-only helpers ──
   /** Open a native folder picker; returns the chosen path or null. */
   pickFolder: (): Promise<{ path: string | null }> =>
@@ -619,7 +660,10 @@ const api = {
 
   /** Agent runtimes (settings panel): the download-on-demand claude/codex/pi
    *  payloads. install() resolves when the whole pipeline finished; live
-   *  progress arrives over `on.runtimesEvent`. */
+   *  progress arrives over `on.runtimesEvent`. checkUpdates is the manual
+   *  "check for updates" click (registry latest + compat list verdicts);
+   *  rollback deletes the newest managed version to fall back to the
+   *  previous one. */
   runtimes: {
     list: (() => ipcRenderer.invoke(IPC.RUNTIMES_LIST)) as RpcMap["runtimes.list"],
     install: ((input) =>
@@ -628,6 +672,13 @@ const api = {
       ipcRenderer.invoke(IPC.RUNTIMES_INSTALL_LOCAL, input)) as RpcMap["runtimes.installLocal"],
     remove: ((input) =>
       ipcRenderer.invoke(IPC.RUNTIMES_REMOVE, input)) as RpcMap["runtimes.remove"],
+    checkUpdates: ((input) =>
+      ipcRenderer.invoke(
+        IPC.RUNTIMES_CHECK_UPDATES,
+        input,
+      )) as RpcMap["runtimes.checkUpdates"],
+    rollback: ((input) =>
+      ipcRenderer.invoke(IPC.RUNTIMES_ROLLBACK, input)) as RpcMap["runtimes.rollback"],
   },
 
   /** Plugins (settings panel): install/enable/remove over ~/.mcode/plugins +

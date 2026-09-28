@@ -43,6 +43,9 @@ import {
   TABS_FILE_PREVIEW_PLACEMENT_SETTING_KEY,
   TAB_BAR_MULTI_ROW_SETTING_KEY,
   LEFTBAR_MODE_SETTING_KEY,
+  LEFTBAR_EXPANDED_PROJECTS_SETTING_KEY,
+  LEFTBAR_EXPANDED_WORKTREES_SETTING_KEY,
+  LEFTBAR_ARCHIVED_OPEN_SETTING_KEY,
   THEME_STYLE_SETTING_KEY,
   UI_FONT_FAMILY_SETTING_KEY,
   UI_LOCALE_SETTING_KEY,
@@ -62,6 +65,7 @@ import {
   UI_IDE_EXPANDED_DIRS_SETTING_KEY,
   UI_IDE_EDITOR_MODE_SETTING_KEY,
   UI_GIT_DIFF_OPEN_MODE_SETTING_KEY,
+  UI_DIFF_SHOW_LINE_NUMBERS_SETTING_KEY,
   UI_COMMIT_GEN_MODEL_SETTING_KEY,
   UI_COMMIT_GEN_PROMPT_SETTING_KEY,
   UI_CONFLICT_RESOLVE_MODEL_SETTING_KEY,
@@ -88,6 +92,8 @@ import {
   SESSION_WORKTREE_DEFAULT_SETTING_KEY,
   WORKTREE_NAMES_SETTING_KEY,
   PROJECT_COLORS_SETTING_KEY,
+  TERMINAL_POSITION_SETTING_KEY,
+  type TerminalPosition,
   ShortcutBindingsSchema,
   GestureSettingsSchema,
   type AutoArchiveConfig,
@@ -721,15 +727,18 @@ export interface SessionState {
   /** Sessions of the active project (derived view; components may read either). */
   sessions: Session[];
   activeSessionId: string | null;
-  /** Which projects are expanded in the tree (UI-only, not persisted). */
+  /** Which projects are expanded in the tree. Explicit user toggles persist
+   *  under `leftbar.expandedProjects`; absent key = collapsed, and the
+   *  landing / active-session auto-expansions below stay transient. */
   expandedProjects: Record<string, boolean>;
   /** Per-project left-bar VIEW: false (default) = local threads only,
    *  true = worktree groups. Flipped by the project row's fork toggle;
    *  auto-flipped (to true) when a worktree thread activates so the active
    *  row is always visible. UI-only, not persisted. */
   worktreeViewByProject: Record<string, boolean>;
-  /** Which worktree group nodes are expanded in the tree (UI-only, keyed by
-   *  normalized worktree path; not persisted). */
+  /** Which worktree group nodes are expanded in the tree (keyed by
+   *  normalized worktree path; absent key = collapsed). Explicit toggles
+   *  persist under `leftbar.expandedWorktrees`. */
   expandedWorktrees: Record<string, boolean>;
   /** Left-bar display names for worktree directories (normalized path →
    *  name). Persisted in the `settings` table; cosmetic only — missing
@@ -739,7 +748,9 @@ export interface SessionState {
    *  `project.colors`; cosmetic only — missing entries fall back to the
    *  deterministic name-hash color (lib/projectAvatar.ts). */
   projectColors: Record<string, string>;
-  /** Whether the "archived" section at the bottom of the tree is expanded. */
+  /** Whether the "archived" section at the bottom of the tree is expanded.
+   *  Shared with the stream view's shelf and persisted under
+   *  `leftbar.archivedOpen` ("true"/"false"). */
   archivedViewOpen: boolean;
 
   /* ── tab state (center pane) ──
@@ -1006,6 +1017,8 @@ export interface SessionState {
    *  persisted. The bar stays mounted (keep-alive) regardless; this only
    *  controls whether it's expanded. */
   bottomTerminalOpen: boolean;
+  /** Terminal dock position: "right" (default) or "bottom". Persisted in settings. */
+  terminalPosition: TerminalPosition;
   /** Browser panel visibility. When true the BrowserPanel overlay mounts over
    *  the workspace and the embedded WebContentsView is shown; false hides both.
    *  NOT persisted (pure in-memory, like the other layout flags). */
@@ -1038,8 +1051,10 @@ export interface SessionState {
    *  (PC fullscreen) containers. Each owns a main-process WebContentsView by
    *  browserId; the view pool survives container swaps. NOT persisted. */
   browserTabs: BrowserTab[];
-  /** The currently active browser tab id (shared across containers). */
   browserActiveTabId: string | null;
+  /** Browser tabs keyed by projectId so each project retains its own tabs. */
+  browserTabsByProject: Record<string, BrowserTab[]>;
+  browserActiveTabIdByProject: Record<string, string | null>;
   /** A URL staged by an external entry (e.g. file-tree "open in browser") to
    *  be loaded into the browser panel when no tab exists yet. BrowserPanel's
    *  first-tab effect consumes and clears it. NOT persisted. */
@@ -1373,6 +1388,9 @@ export interface SessionState {
    *   - "dialog": a floating modal dialog with multiple diff tabs.
    *  Persisted in the settings table. Global (not per-project). */
   gitDiffOpenMode: GitDiffOpenMode;
+  /** Whether line numbers are shown in diff views (DiffView, DiffPane, GitDiffPreviewPane).
+   *  Defaults to false. Persisted in settings table under UI_DIFF_SHOW_LINE_NUMBERS_SETTING_KEY. */
+  diffShowLineNumbers: boolean;
   /** Diff tabs currently open in the Git diff dialog (the "dialog" open-mode).
    *  Ephemeral (NOT persisted) - restarting clears them. Dedup by file path. */
   gitDiffDialogTabs: GitDiffDialogTab[];
@@ -1553,7 +1571,7 @@ export interface SessionState {
    *  between. No-op when the project's cache isn't loaded (init brings both
    *  sections together). */
   loadWorktreeSessions: (projectId: string) => Promise<void>;
-  startSession: (projectId?: string, overrides?: { providerId?: string; model?: string; customModelId?: string | null; worktreePath?: string; /** Force the working-environment intent (bypasses the composer's env chip — e.g. a conflict-resolution session must stay in the real checkout). */ envMode?: "local" | "worktree" }) => Promise<void>;
+  startSession: (projectId?: string, overrides?: { providerId?: string; model?: string; customModelId?: string | null; worktreePath?: string; /** Force the working-environment intent (bypasses the composer's env chip — e.g. a conflict-resolution session must stay in the real checkout). */ envMode?: "local" | "worktree"; /** Explicit row title — bypasses auto-naming AND the fresh-"New session" row reuse (an explicitly titled session always creates a new row). */ title?: string; /** Initial permission mode for the session row — bypasses the composer slot (e.g. an AI-fix session starts in plan mode). */ permissionMode?: string }) => Promise<void>;
   /** Move a FRESH local session to a different project (the directory
    *  switcher in the new-session composer panel). Main-side guards reject
    *  anything that already started (messages / materialized worktree / bad
@@ -2126,6 +2144,8 @@ export interface SessionState {
   /** Close a session-scoped right-panel tab: removed from the open set; if it
    *  was the active one the panel falls back to the global tab. */
   closeSessionRightTab: (tab: SessionRightPanelTabId, sessionId?: string) => void;
+  /** Set the terminal dock position ("right" | "bottom"). Persists to settings. */
+  setTerminalPosition: (position: TerminalPosition) => void;
 
   /* ── Agent orchestration actions ── */
   /** Load orchestration settings (trigger mode / defaults). */
@@ -2309,6 +2329,8 @@ export interface SessionState {
   setIdeEditorMode: (mode: IdeEditorMode) => void;
   /** Set the git-diff open-mode (center vs dialog). Persists to settings. */
   setGitDiffOpenMode: (mode: GitDiffOpenMode) => void;
+  /** Set whether line numbers are shown in diff views. Persists to settings. */
+  setDiffShowLineNumbers: (show: boolean) => void;
   /** Open (or refresh) a diff tab in the Git diff dialog. Dedups by file path
    *  (re-clicking the same file refreshes its before/after and activates it),
    *  then opens the dialog. Ephemeral (not persisted). */
@@ -2583,6 +2605,72 @@ function persistIdeBuckets(get: () => SessionState): void {
     }
     ideBucketsLastWritten = next;
   }, IDE_BUCKETS_PERSIST_DEBOUNCE_MS);
+}
+
+/** Parse a persisted leftbar expansion map ("leftbar.expandedProjects" /
+ *  "leftbar.expandedWorktrees" values). Returns null for an absent or
+ *  malformed blob — the caller then keeps the node-type defaults — and
+ *  silently drops non-boolean entries so a hand-edited row can't poison the
+ *  whole map. Exported for the headless store smoke. */
+export function parseExpandedFlagMap(value: string | null | undefined): Record<string, boolean> | null {
+  if (!value) return null;
+  try {
+    const parsed: unknown = JSON.parse(value);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+    const out: Record<string, boolean> = {};
+    for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
+      if (typeof v === "boolean") out[k] = v;
+    }
+    return out;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Persist the left-bar tree's expand/collapse state (issue #13) — same
+ * shape as persistIdeBuckets above: trailing debounce (a burst of toggles,
+ * or the reveal effect force-expanding ancestors, coalesces into one write)
+ * and a per-key diff against the last written value. Only the three USER
+ * actions call this; the auto-expand patches (landing project, session
+ * activation) stay transient — on boot the landing/activation chain
+ * re-applies them on top of whatever was persisted.
+ */
+const LEFTBAR_EXPANSION_PERSIST_DEBOUNCE_MS = 400;
+let leftbarExpansionPersistTimer: ReturnType<typeof setTimeout> | null = null;
+let leftbarExpansionLastWritten: {
+  projects: string;
+  worktrees: string;
+  archivedOpen: string;
+} | null = null;
+function persistLeftbarExpansion(get: () => SessionState): void {
+  if (leftbarExpansionPersistTimer) clearTimeout(leftbarExpansionPersistTimer);
+  leftbarExpansionPersistTimer = setTimeout(() => {
+    leftbarExpansionPersistTimer = null;
+    const s = get();
+    const next = {
+      projects: JSON.stringify(s.expandedProjects),
+      worktrees: JSON.stringify(s.expandedWorktrees),
+      archivedOpen: s.archivedViewOpen ? "true" : "false",
+    };
+    const last = leftbarExpansionLastWritten;
+    if (last?.projects !== next.projects) {
+      void api.setting
+        .set({ key: LEFTBAR_EXPANDED_PROJECTS_SETTING_KEY, value: next.projects })
+        .catch((err) => console.error("setting.set(leftbar.expandedProjects) failed:", err));
+    }
+    if (last?.worktrees !== next.worktrees) {
+      void api.setting
+        .set({ key: LEFTBAR_EXPANDED_WORKTREES_SETTING_KEY, value: next.worktrees })
+        .catch((err) => console.error("setting.set(leftbar.expandedWorktrees) failed:", err));
+    }
+    if (last?.archivedOpen !== next.archivedOpen) {
+      void api.setting
+        .set({ key: LEFTBAR_ARCHIVED_OPEN_SETTING_KEY, value: next.archivedOpen })
+        .catch((err) => console.error("setting.set(leftbar.archivedOpen) failed:", err));
+    }
+    leftbarExpansionLastWritten = next;
+  }, LEFTBAR_EXPANSION_PERSIST_DEBOUNCE_MS);
 }
 
 /** Min/max chat content font size (px). The slider in Settings uses the
@@ -4913,6 +5001,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   leftOpen: true,
   rightOpen: false,
   bottomTerminalOpen: false,
+  terminalPosition: "right",
   // Browser panel overlay - closed by default. NOT persisted.
   browserPanelOpen: false,
   // Wide-panel (3:7) mode - off by default; transient like browserPanelOpen.
@@ -4925,6 +5014,8 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   browserDeviceToolbarOpen: false,
   browserTabs: [],
   browserActiveTabId: null,
+  browserTabsByProject: {},
+  browserActiveTabIdByProject: {},
   pendingBrowserUrl: null,
   browserViewSuppressed: 0,
   // Draggable pane sizes. Persisted as one JSON blob (UI_PANE_WIDTHS_SETTING_KEY);
@@ -5014,6 +5105,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   ideFileViewModeByProject: {},
   ideEditorMode: "tabs",
   gitDiffOpenMode: "center",
+  diffShowLineNumbers: false,
   gitDiffDialogTabs: [],
   gitDiffDialogActiveId: null,
   gitDiffDialogOpen: false,
@@ -5085,6 +5177,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           SESSION_WORKTREE_DEFAULT_SETTING_KEY,
           WORKTREE_NAMES_SETTING_KEY,
           PROJECT_COLORS_SETTING_KEY,
+          LEFTBAR_EXPANDED_PROJECTS_SETTING_KEY,
+          LEFTBAR_EXPANDED_WORKTREES_SETTING_KEY,
+          LEFTBAR_ARCHIVED_OPEN_SETTING_KEY,
         ],
       })
       .catch((err) => {
@@ -5122,6 +5217,29 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       if (value) set({ projectColors: JSON.parse(value) as Record<string, string> });
     } catch (err) {
       console.error("apply(projectColors) failed:", err);
+    }
+
+    // Left-bar tree expansion state (issue #13): restore the exact
+    // expand/collapse view the user left behind. A malformed blob (or
+    // non-boolean entries) just falls back to the node-type defaults. The
+    // landing-project auto-expand below merges on top of this.
+    try {
+      const map = parseExpandedFlagMap(fp[LEFTBAR_EXPANDED_PROJECTS_SETTING_KEY]);
+      if (map) set({ expandedProjects: map });
+    } catch (err) {
+      console.error("apply(leftbar.expandedProjects) failed:", err);
+    }
+    try {
+      const map = parseExpandedFlagMap(fp[LEFTBAR_EXPANDED_WORKTREES_SETTING_KEY]);
+      if (map) set({ expandedWorktrees: map });
+    } catch (err) {
+      console.error("apply(leftbar.expandedWorktrees) failed:", err);
+    }
+    try {
+      const value = fp[LEFTBAR_ARCHIVED_OPEN_SETTING_KEY];
+      if (value === "true" || value === "false") set({ archivedViewOpen: value === "true" });
+    } catch (err) {
+      console.error("apply(leftbar.archivedOpen) failed:", err);
     }
 
     // displayMode determines single vs tabs layout - needed before first render
@@ -5427,8 +5545,10 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       pinnedSessions: pinnedRes.status === "fulfilled" ? pinnedRes.value.sessions : [],
       sessions: byProject[landingProject.id] ?? [],
       activeProjectId: landingProject.id,
-      // Auto-expand the active project so its threads are visible on load.
-      expandedProjects: { [landingProject.id]: true },
+      // Auto-expand the active project so its threads are visible on load —
+      // merged on top of the hydrated expansion map above, not replacing it
+      // (the hydration block ran earlier in this function).
+      expandedProjects: { ...get().expandedProjects, [landingProject.id]: true },
       // Seed the tab list with the landing session (if any). In `single`
       // mode this is informational; in `tabs` mode it shows the initial
       // open tab. Either way the user starts with a coherent state.
@@ -5546,6 +5666,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           UI_IDE_EXPANDED_DIRS_SETTING_KEY,
           UI_IDE_EDITOR_MODE_SETTING_KEY,
           UI_GIT_DIFF_OPEN_MODE_SETTING_KEY,
+          UI_DIFF_SHOW_LINE_NUMBERS_SETTING_KEY,
           UI_COMMIT_GEN_MODEL_SETTING_KEY,
           UI_COMMIT_GEN_PROMPT_SETTING_KEY,
           UI_CUSTOM_COMMANDS_BY_PROJECT_SETTING_KEY,
@@ -5561,6 +5682,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           UI_VOICE_MODEL_DIR_SETTING_KEY,
           AUTO_ARCHIVE_SETTING_KEY,
           UI_GESTURES_SETTING_KEY,
+          TERMINAL_POSITION_SETTING_KEY,
         ],
       })
       .catch((err) => {
@@ -5704,9 +5826,20 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       // auto-open their panels; "turns"/"sidechat" are session-scoped tabs
       // opened per session via the rail's "+" menu — a persisted value from
       // an older build is ignored the same way).
-      if (tabRaw === "files" || tabRaw === "git") set({ rightPanelTab: tabRaw });
+      if (tabRaw === "files" || tabRaw === "git" || tabRaw === "github") set({ rightPanelTab: tabRaw });
+      const termPosRaw = ds[TERMINAL_POSITION_SETTING_KEY];
+      if (termPosRaw === "bottom" || termPosRaw === "right") {
+        set({ terminalPosition: termPosRaw });
+        if (termPosRaw === "bottom" && get().rightPanelTab === "terminal") {
+          set({ rightPanelTab: "files" });
+        }
+      }
       if (modeRaw === "tabs" || modeRaw === "replace") set({ ideEditorMode: modeRaw });
       if (diffModeRaw === "center" || diffModeRaw === "dialog") set({ gitDiffOpenMode: diffModeRaw });
+      const diffLineNumbersRaw = ds[UI_DIFF_SHOW_LINE_NUMBERS_SETTING_KEY];
+      if (diffLineNumbersRaw != null) {
+        set({ diffShowLineNumbers: diffLineNumbersRaw === "true" });
+      }
       set({ commitGenModel: commitModelRaw || null });
       if (commitPromptRaw) set({ commitGenPrompt: commitPromptRaw });
       set({ conflictResolveModel: conflictModelRaw || null });
@@ -5855,6 +5988,16 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     const next =
       sessions.find((s) => !s.archived) ??
       get().pinnedSessions.find((s) => s.projectId === projectId && !s.archived);
+
+    // Hide active browser view from previous project to prevent view leakage
+    const currentTab = get().browserTabs.find((t) => t.id === get().browserActiveTabId);
+    if (currentTab) {
+      void api.browser.hide({ browserId: currentTab.browserId });
+    }
+    const nextBrowserTabs = get().browserTabsByProject[projectId] ?? [];
+    const nextBrowserActiveTabId =
+      get().browserActiveTabIdByProject[projectId] ?? (nextBrowserTabs[0]?.id ?? null);
+
     set((s) => ({
       activeProjectId: projectId,
       sessions,
@@ -5864,6 +6007,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       // a project, so we don't carry them across. The new project lands on
       // its own first session.
       openTabs: next ? [next.id] : [],
+      browserTabs: nextBrowserTabs,
+      browserActiveTabId: nextBrowserActiveTabId,
+      browserTabCount: nextBrowserTabs.length,
     }));
     // Catch up the worktree section for the newly selected project (see
     // toggleProjectExpanded — incremental echoes in between, refetch here).
@@ -5925,6 +6071,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     // maintain it incrementally in between, and this is the cheap catch-up
     // that also re-syncs its updated_at order after local mutations.
     if (!wasExpanded) void get().loadWorktreeSessions(projectId);
+    persistLeftbarExpansion(get);
   },
 
   // Worktree group nodes hold few sessions (one directory, few threads), so
@@ -5932,13 +6079,15 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   // pure expand-state flip. Groups render COLLAPSED by default (absent key),
   // so the flip tests plain truthiness: flipping an untouched (undefined)
   // group OPENS it, flipping an open one folds it back.
-  toggleWorktreeExpanded: (worktreePath) =>
+  toggleWorktreeExpanded: (worktreePath) => {
     set((s) => {
       const key = normWorktreeKey(worktreePath);
       return {
         expandedWorktrees: { ...s.expandedWorktrees, [key]: !s.expandedWorktrees[key] },
       };
-    }),
+    });
+    persistLeftbarExpansion(get);
+  },
 
   setProjectWorktreeView: (projectId, on) =>
     set((s) => {
@@ -5963,7 +6112,10 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     }
   },
 
-  setArchivedViewOpen: (open) => set({ archivedViewOpen: open }),
+  setArchivedViewOpen: (open) => {
+    set({ archivedViewOpen: open });
+    persistLeftbarExpansion(get);
+  },
 
   /** Fetch the next page of active LOCAL sessions for a project and append
    *  to the cached list's local section (the worktree section parked after
@@ -6042,7 +6194,8 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       providerId: overrides?.providerId ?? get().providerId,
       model: model !== "default" ? model : undefined,
       effort: get().effort,
-      permissionMode: get().permissionMode,
+      title: overrides?.title,
+      permissionMode: overrides?.permissionMode ?? get().permissionMode,
       // Working-environment intent from the composer chip — materialized on
       // the first turn (see sendTurn's resolveSessionCwd), never here. An
       // explicit worktreePath (LeftBar "在此工作树中新建会话") BINDS the new
@@ -9192,48 +9345,80 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   setBrowserDeviceToolbarOpen: (open) => set({ browserDeviceToolbarOpen: open }),
   suppressBrowserView: (suppressed) =>
     set((s) => ({ browserViewSuppressed: Math.max(0, s.browserViewSuppressed + (suppressed ? 1 : -1)) })),
-  setBrowserTabs: (tabs) => set({ browserTabs: tabs }),
-  setBrowserActiveTabId: (id) => set({ browserActiveTabId: id }),
-  addBrowserTab: (tab) => set((s) => ({ browserTabs: [...s.browserTabs, tab] })),
+  setBrowserTabs: (tabs) =>
+    set((s) => {
+      const pid = s.activeProjectId;
+      return {
+        browserTabs: tabs,
+        browserTabsByProject: pid ? { ...s.browserTabsByProject, [pid]: tabs } : s.browserTabsByProject,
+      };
+    }),
+  setBrowserActiveTabId: (id) =>
+    set((s) => {
+      const pid = s.activeProjectId;
+      return {
+        browserActiveTabId: id,
+        browserActiveTabIdByProject: pid ? { ...s.browserActiveTabIdByProject, [pid]: id } : s.browserActiveTabIdByProject,
+      };
+    }),
+  addBrowserTab: (tab) =>
+    set((s) => {
+      const pid = s.activeProjectId;
+      const next = [...s.browserTabs, tab];
+      return {
+        browserTabs: next,
+        browserTabsByProject: pid ? { ...s.browserTabsByProject, [pid]: next } : s.browserTabsByProject,
+      };
+    }),
   removeBrowserTab: (id) =>
-    set((s) => ({ browserTabs: s.browserTabs.filter((t) => t.id !== id) })),
+    set((s) => {
+      const pid = s.activeProjectId;
+      const next = s.browserTabs.filter((t) => t.id !== id);
+      return {
+        browserTabs: next,
+        browserTabsByProject: pid ? { ...s.browserTabsByProject, [pid]: next } : s.browserTabsByProject,
+      };
+    }),
   patchBrowserTab: (browserId, patch) =>
-    set((s) => ({
-      browserTabs: s.browserTabs.map((t) => (t.browserId === browserId ? { ...t, ...patch } : t)),
-    })),
+    set((s) => {
+      const pid = s.activeProjectId;
+      const next = s.browserTabs.map((t) => (t.browserId === browserId ? { ...t, ...patch } : t));
+      return {
+        browserTabs: next,
+        browserTabsByProject: pid ? { ...s.browserTabsByProject, [pid]: next } : s.browserTabsByProject,
+      };
+    }),
   openUrlInBrowser: (url) => {
-    // Reveal the browser sidebar + stage the URL. BrowserPanel opens it in a
-    // NEW tab: when tabs already exist it creates one for the URL; when none
-    // exist (panel first opened) the first-tab effect loads it into the
-    // initial tab. The sidebar browser is a session-scoped tab — open it on
-    // the ACTIVE session (rail "+" menu does the same).
-    get().openSessionRightTab("browser");
+    // Reveal the browser tab + stage the URL.
+    get().setRightPanelTab("browser");
     set({ rightOpen: true, pendingBrowserUrl: url });
   },
   adoptAgentBrowserTab: (browserId, info) => {
     const s = get();
+    const pid = s.activeProjectId;
     const existing = s.browserTabs.find((t) => t.browserId === browserId);
     if (existing) {
-      // Already adopted — refresh url/title ONLY and activate it. We must NOT
-      // overwrite device/orientation/customWidth/customHeight: the user may have
-      // manually selected a device preset or custom size, and an agent
-      // navigation (which defaults device to "desktop") must never clobber that
-      // selection. Chromium device emulation also persists across navigations,
-      // so the main process keeps the user's emulation without re-applying.
       if (info.url || info.title) {
+        const next = s.browserTabs.map((t) =>
+          t.browserId === browserId
+            ? {
+                ...t,
+                ...(typeof info.url === "string" ? { url: info.url } : {}),
+                ...(typeof info.title === "string" ? { title: info.title } : {}),
+              }
+            : t,
+        );
         set({
-          browserTabs: s.browserTabs.map((t) =>
-            t.browserId === browserId
-              ? {
-                  ...t,
-                  ...(typeof info.url === "string" ? { url: info.url } : {}),
-                  ...(typeof info.title === "string" ? { title: info.title } : {}),
-                }
-              : t,
-          ),
+          browserTabs: next,
+          browserTabsByProject: pid ? { ...s.browserTabsByProject, [pid]: next } : s.browserTabsByProject,
         });
       }
-      if (s.browserActiveTabId !== existing.id) set({ browserActiveTabId: existing.id });
+      if (s.browserActiveTabId !== existing.id) {
+        set({
+          browserActiveTabId: existing.id,
+          browserActiveTabIdByProject: pid ? { ...s.browserActiveTabIdByProject, [pid]: existing.id } : s.browserActiveTabIdByProject,
+        });
+      }
       return false;
     }
     // Register a new tab for the agent-created view. device comes from the
@@ -9250,7 +9435,13 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       device: info.device ?? "desktop",
       orientation: info.orientation,
     };
-    set({ browserTabs: [...s.browserTabs, tab], browserActiveTabId: tab.id });
+    const next = [...s.browserTabs, tab];
+    set({
+      browserTabs: next,
+      browserActiveTabId: tab.id,
+      browserTabsByProject: pid ? { ...s.browserTabsByProject, [pid]: next } : s.browserTabsByProject,
+      browserActiveTabIdByProject: pid ? { ...s.browserActiveTabIdByProject, [pid]: tab.id } : s.browserActiveTabIdByProject,
+    });
     return true;
   },
 
@@ -10984,6 +11175,22 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     });
   },
 
+  setTerminalPosition: (position) => {
+    set({ terminalPosition: position });
+    void api.setting.set({ key: TERMINAL_POSITION_SETTING_KEY, value: position }).catch((err) => {
+      console.error("setting.set(terminalPosition) failed:", err);
+    });
+    if (position === "bottom") {
+      set({ bottomTerminalOpen: true });
+      if (get().rightPanelTab === "terminal") {
+        get().setRightPanelTab("files");
+      }
+    } else {
+      set({ bottomTerminalOpen: false, rightOpen: true });
+      get().setRightPanelTab("terminal");
+    }
+  },
+
   /* ── Agent orchestration actions ── */
 
   loadOrchSettings: async () => {
@@ -11967,6 +12174,13 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     void api.setting
       .set({ key: UI_GIT_DIFF_OPEN_MODE_SETTING_KEY, value: mode })
       .catch((err) => console.error("setting.set(gitDiffOpenMode) failed:", err));
+  },
+
+  setDiffShowLineNumbers: (show) => {
+    set({ diffShowLineNumbers: show });
+    void api.setting
+      .set({ key: UI_DIFF_SHOW_LINE_NUMBERS_SETTING_KEY, value: String(show) })
+      .catch((err) => console.error("setting.set(diffShowLineNumbers) failed:", err));
   },
 
   openGitDiffDialogTab: (tab) => {

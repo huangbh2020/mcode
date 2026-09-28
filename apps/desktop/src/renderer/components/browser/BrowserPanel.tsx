@@ -208,7 +208,10 @@ export function BrowserPanel({ mode }: BrowserPanelProps) {
    *  clickable is to hide the view (hide() parks it offscreen, the session
    *  survives and re-shows on return). */
   const settingsOpen = useSessionStore((s) => s.settingsOpen);
-  const isActive = settingsOpen ? false : mode === "overlay" ? open : !open;
+  const rightOpen = useSessionStore((s) => s.rightOpen);
+  const rightPanelTab = useSessionStore((s) => s.rightPanelTab);
+  const isSidebarVisible = !open && rightOpen && rightPanelTab === "browser";
+  const isActive = settingsOpen ? false : mode === "overlay" ? open : isSidebarVisible;
 
   const activeTab = tabs.find((t) => t.id === activeTabId) ?? null;
 

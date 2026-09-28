@@ -24,10 +24,16 @@
  *    `rewound` when the user rewound only one — the rewindTurn action now
  *    pins the clicked card (message id) and the handler scopes to it.
  *
+ * 4. Leftbar expansion persistence (issue #13): the user-facing expand/
+ *    collapse actions coalesce through the debounced diff writer into
+ *    `leftbar.expanded*` settings rows, and the hydration-side parser
+ *    tolerates malformed blobs.
+ *
  * Run: scripts/session-store-smoke/run.sh
  */
 import "./prelude.js";
-import { useSessionStore } from "@renderer/stores/sessionStore.js";
+import { smokeSettings, smokeSettingWrites } from "./prelude.js";
+import { useSessionStore, parseExpandedFlagMap } from "@renderer/stores/sessionStore.js";
 import type { Block, ChatMessage } from "@renderer/stores/sessionStore.js";
 import type { TurnFileEntry } from "@renderer/lib/turnFiles.js";
 import { normWorktreeKey } from "@renderer/lib/worktree.js";
@@ -415,6 +421,91 @@ console.log("\n[10] rewind marks only the clicked card");
   check(
     "other session's own card is marked via its marker",
     (useSessionStore.getState().messagesBySession["rw2"] ?? [])[0]?.blocks.some((b) => b.kind === "turn-files" && b.rewound === true) === true,
+  );
+}
+
+console.log("\n[11] leftbar expansion persistence (issue #13)");
+{
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+  // Fresh project/worktree ids: the earlier groups seeded sessionsByProject
+  // for "p1", and toggleProjectExpanded's expand path fire-and-forgets
+  // loadWorktreeSessions — an unseen project id exits that fetch at its
+  // cache-not-loaded guard instead of touching the stubbed API response.
+  const P = "p-expand";
+  const WT = "D:\\proj\\.worktrees\\wt-persist";
+  const wtKey = normWorktreeKey(WT);
+
+  const st = useSessionStore.getState();
+  // Neuter the expand-path worktree refetch: against the deep api stub its
+  // response is undefined and it would die as an unhandled rejection once a
+  // cache entry exists (the collapse toggle materializes one). Persistence
+  // under test here does not depend on that refetch.
+  useSessionStore.setState({ loadWorktreeSessions: async () => {} });
+  check(
+    "expansion defaults are untouched before any toggle",
+    JSON.stringify(st.expandedProjects) === "{}" &&
+      JSON.stringify(st.expandedWorktrees) === "{}" &&
+      st.archivedViewOpen === false,
+  );
+
+  // A synchronous burst of toggles must coalesce into ONE debounced write
+  // per changed key, carrying the final value.
+  const writesBefore = smokeSettingWrites.count;
+  st.toggleProjectExpanded(P);
+  st.toggleProjectExpanded(P); // collapse right back — must coalesce away
+  st.toggleProjectExpanded(P); // expand again — final value true
+  st.toggleWorktreeExpanded(WT);
+  st.setArchivedViewOpen(true);
+  check(
+    "nothing is written before the persist debounce flushes",
+    smokeSettingWrites.count === writesBefore,
+    smokeSettingWrites.count - writesBefore,
+  );
+  await sleep(500);
+  check(
+    "expandedProjects persisted with the coalesced final value",
+    smokeSettings.get("leftbar.expandedProjects") === JSON.stringify({ [P]: true }),
+    smokeSettings.get("leftbar.expandedProjects"),
+  );
+  check(
+    "expandedWorktrees persisted under the normalized key",
+    smokeSettings.get("leftbar.expandedWorktrees") === JSON.stringify({ [wtKey]: true }),
+    smokeSettings.get("leftbar.expandedWorktrees"),
+  );
+  check(
+    "archivedOpen persisted as the \"true\" string",
+    smokeSettings.get("leftbar.archivedOpen") === "true",
+    smokeSettings.get("leftbar.archivedOpen"),
+  );
+  check(
+    "the burst coalesced to exactly one write per key",
+    smokeSettingWrites.count - writesBefore === 3,
+    smokeSettingWrites.count - writesBefore,
+  );
+
+  // Per-key diff: flipping only the shelf must rewrite just that one key.
+  const writesBefore2 = smokeSettingWrites.count;
+  useSessionStore.getState().setArchivedViewOpen(false);
+  await sleep(500);
+  check(
+    "unchanged maps are diff-skipped on the next flush",
+    smokeSettingWrites.count - writesBefore2 === 1 && smokeSettings.get("leftbar.archivedOpen") === "false",
+    smokeSettingWrites.count - writesBefore2,
+  );
+
+  // Hydration-side parse guard: a malformed or foreign-typed blob must fall
+  // back to the node-type defaults instead of poisoning the maps.
+  check("parse: absent value → null", parseExpandedFlagMap(null) === null);
+  check("parse: malformed JSON → null", parseExpandedFlagMap("{oops") === null);
+  check("parse: non-object JSON → null", parseExpandedFlagMap("[true]") === null);
+  check(
+    "parse: non-boolean entries are dropped",
+    JSON.stringify(parseExpandedFlagMap('{"a":true,"b":"yes","c":false}')) === '{"a":true,"c":false}',
+    parseExpandedFlagMap('{"a":true,"b":"yes","c":false}'),
+  );
+  check(
+    "parse: a valid map survives the round-trip",
+    JSON.stringify(parseExpandedFlagMap(JSON.stringify({ [wtKey]: true }))) === JSON.stringify({ [wtKey]: true }),
   );
 }
 

@@ -49,6 +49,8 @@ export function GitDiffPreviewPane() {
   const { t } = useI18n();
   const selected = useSessionStore((s) => s.selectedGitDiffFile);
   const setSelected = useSessionStore((s) => s.setSelectedGitDiffFile);
+  const diffShowLineNumbers = useSessionStore((s) => s.diffShowLineNumbers);
+  const setDiffShowLineNumbers = useSessionStore((s) => s.setDiffShowLineNumbers);
 
   const [splitMode, setSplitMode] = useState<boolean>(true);
   const [loading, setLoading] = useState(false);
@@ -277,6 +279,21 @@ export function GitDiffPreviewPane() {
             </button>
           </div>
 
+          {/* Line numbers toggle */}
+          <button
+            type="button"
+            onClick={() => setDiffShowLineNumbers(!diffShowLineNumbers)}
+            className={cn(
+              "flex items-center gap-1 rounded border px-1.5 py-0.5 text-[10px] transition-colors",
+              diffShowLineNumbers
+                ? "border-accent/40 bg-accent/15 text-accent font-medium"
+                : "border-edge bg-surface text-content-muted hover:text-content",
+            )}
+            title={diffShowLineNumbers ? t("ide.git.hideLineNumbers") : t("ide.git.showLineNumbers")}
+          >
+            <span>{t("ide.git.lineNumbers")}</span>
+          </button>
+
           <div className="h-3.5 w-px bg-edge mx-0.5" />
 
           {/* Staged: Unstage action */}
@@ -351,7 +368,9 @@ export function GitDiffPreviewPane() {
               scrollBeyondLastLine: false,
               automaticLayout: true,
               glyphMargin: false,
-              lineNumbersMinChars: 3,
+              lineNumbers: diffShowLineNumbers ? "on" : "off",
+              lineDecorationsWidth: diffShowLineNumbers ? 8 : 0,
+              lineNumbersMinChars: diffShowLineNumbers ? 3 : 1,
             }}
           />
         )}

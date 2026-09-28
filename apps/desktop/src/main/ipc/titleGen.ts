@@ -34,6 +34,7 @@ import { broadcastSessionChanged } from "@main/lib/sessionSync.js";
 import { resolveModelForGitOp } from "@main/ipc/git.js";
 import { buildCustomEnv, resolveActiveModel } from "@main/providers/claude-sdk/customEnv.js";
 import { resolveSdkBinaryPath } from "@main/providers/claude-sdk/sdkBinaryPath.js";
+import { loadClaudeSdk } from "@main/providers/claude-sdk/sdkLoader.js";
 import { log } from "@main/lib/logger.js";
 
 /** Fixed system prompt - never overridden. Guarantees a clean short title. */
@@ -123,7 +124,7 @@ export async function generateSessionTitle(
   }
   if (!customModelId) return null;
 
-  const { query } = await import("@anthropic-ai/claude-agent-sdk");
+  const { query } = await loadClaudeSdk();
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), 60000); // 60s timeout
 

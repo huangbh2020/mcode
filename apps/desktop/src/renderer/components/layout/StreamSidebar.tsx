@@ -164,6 +164,10 @@ function StreamSidebarBase() {
   const worktreeNames = useSessionStore((s) => s.worktreeNames);
   const projectColors = useSessionStore((s) => s.projectColors);
   const gitChangeVersionByRepo = useSessionStore((s) => s.gitChangeVersionByRepo);
+  // The archive shelf shares the tree view's store field (one data source,
+  // persisted under "leftbar.archivedOpen") instead of local component state
+  // — a leftBarMode switch must not reset it.
+  const archivedViewOpen = useSessionStore((s) => s.archivedViewOpen);
 
   const loadStreamSessions = useSessionStore((s) => s.loadStreamSessions);
   const loadMoreStreamSessions = useSessionStore((s) => s.loadMoreStreamSessions);
@@ -176,6 +180,7 @@ function StreamSidebarBase() {
   const renameSession = useSessionStore((s) => s.renameSession);
   const renameWorktree = useSessionStore((s) => s.renameWorktree);
   const archiveProject = useSessionStore((s) => s.archiveProject);
+  const setArchivedViewOpen = useSessionStore((s) => s.setArchivedViewOpen);
   const deleteProject = useSessionStore((s) => s.deleteProject);
   const addProject = useSessionStore((s) => s.addProjectFromFolder);
   const setProjectGroup = useSessionStore((s) => s.setProjectGroup);
@@ -372,7 +377,6 @@ function StreamSidebarBase() {
     return out.sort((a, b) => b.updatedAt - a.updatedAt);
   }, [archivedSessionsByProject]);
   const archivedCount = archivedProjects.length + archivedList.length;
-  const [archiveOpen, setArchiveOpen] = useState(false);
 
   // ── Dialogs / menus (same wiring as the tree view).
   const [ctxMenu, setCtxMenu] = useState<{ session: Session; x: number; y: number } | null>(null);
@@ -440,7 +444,7 @@ function StreamSidebarBase() {
       if (tryScroll()) return;
       const st = useSessionStore.getState();
       if (st.archivedSessionsByProject && Object.values(st.archivedSessionsByProject).some((l) => l.some((x) => x.id === id))) {
-        setArchiveOpen(true);
+        setArchivedViewOpen(true);
         await new Promise((r) => requestAnimationFrame(() => r(null)));
         await new Promise((r) => requestAnimationFrame(() => r(null)));
         tryScroll();
@@ -757,7 +761,7 @@ function StreamSidebarBase() {
         {archivedCount > 0 && (
           <div className="mt-2">
             <button
-              onClick={() => setArchiveOpen(!archiveOpen)}
+              onClick={() => setArchivedViewOpen(!archivedViewOpen)}
               className="mb-1 mt-2 flex w-full items-center gap-2 px-1.5 text-left"
             >
               <span className="[font-size:var(--rp-fs-sm)] font-medium text-content-subtle/70">
@@ -768,11 +772,11 @@ function StreamSidebarBase() {
                 size={12}
                 className={cn(
                   "shrink-0 text-content-subtle/70 transition-transform",
-                  archiveOpen && "rotate-90",
+                  archivedViewOpen && "rotate-90",
                 )}
               />
             </button>
-            {archiveOpen && (
+            {archivedViewOpen && (
               <ul className="space-y-0.5">
                 {archivedProjects.map((p) => (
                   <ArchivedRow

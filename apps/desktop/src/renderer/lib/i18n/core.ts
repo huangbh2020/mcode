@@ -10,6 +10,7 @@ import { zh as zhSettings } from "./zh/settings.js";
 import { zh as zhStore } from "./zh/store.js";
 import { zh as zhOrch } from "./zh/orch.js";
 import { zh as zhAutomation } from "./zh/automation.js";
+import { zh as zhGithub } from "./zh/github.js";
 import { en as enCommon } from "./en/common.js";
 import { en as enLayout } from "./en/layout.js";
 import { en as enLib } from "./en/lib.js";
@@ -21,6 +22,7 @@ import { en as enSettings } from "./en/settings.js";
 import { en as enStore } from "./en/store.js";
 import { en as enOrch } from "./en/orch.js";
 import { en as enAutomation } from "./en/automation.js";
+import { en as enGithub } from "./en/github.js";
 
 /**
  * Flat message catalogs, merged per locale. The zh catalog is the source of
@@ -44,6 +46,7 @@ const zh = {
   ...zhStore,
   ...zhOrch,
   ...zhAutomation,
+  ...zhGithub,
 };
 
 export type MessageId = keyof typeof zh;
@@ -60,6 +63,7 @@ const en: Record<MessageId, string> = {
   ...enStore,
   ...enOrch,
   ...enAutomation,
+  ...enGithub,
 };
 
 /**

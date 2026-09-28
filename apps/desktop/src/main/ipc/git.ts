@@ -16,6 +16,7 @@
 import type { IpcMain } from "electron";
 import { readdir, readFile, stat, writeFile } from "node:fs/promises";
 import { join, relative, resolve, sep } from "node:path";
+import { loadClaudeSdk } from "@main/providers/claude-sdk/sdkLoader.js";
 import type simpleGitFn from "simple-git";
 import {
   IPC,
@@ -24,6 +25,7 @@ import {
   GitStageSchema,
   GitUnstageSchema,
   GitCommitSchema,
+  GitPushSchema,
   GitDiffSchema,
   GitFileBlobSchema,
   GitDiscardSchema,
@@ -379,7 +381,7 @@ export async function generateCommitMessageForRepo(input: {
 
     // 3. Resolve the model config. OpenAI-protocol configs get their bridge
     //    activated here too (see resolveModelForGitOp).
-    const { query } = await import("@anthropic-ai/claude-agent-sdk");
+    const { query } = await loadClaudeSdk();
     const ac = new AbortController();
     if (input.requestId) activeCommitGenerations.set(input.requestId, ac);
     const timer = setTimeout(() => ac.abort(), 60000); // 60s timeout
@@ -705,13 +707,19 @@ export function registerGitHandlers(ipcMain: IpcMain): void {
 
   /* ── git:push — push to upstream ── */
   ipcMain.handle(IPC.GIT_PUSH, async (_evt, raw) => {
-    const input = GitRepoPathSchema.parse(raw);
+    const input = GitPushSchema.parse(raw);
     if (!findContainingProject(input.repoPath)) {
       return { ok: false, error: "仓库路径不在任何已添加的项目内" };
     }
     try {
       const git = (await loadSimpleGit())(input.repoPath);
-      await git.push();
+      if (input.setUpstream && input.branch) {
+        // First push of a new branch: plain `git push` fails with "no
+        // upstream" — the create-PR flow needs the branch on the remote first.
+        await git.push(["--set-upstream", "origin", input.branch]);
+      } else {
+        await git.push();
+      }
       log.info(`git.push succeeded in ${input.repoPath}`);
       broadcastGitChanged(input.repoPath);
       return { ok: true };

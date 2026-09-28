@@ -115,6 +115,7 @@ export const zh = {
   "layout.hideEditor": "隐藏编辑器",
   "layout.noOpenFiles": "无打开的文件",
   "layout.tabFiles": "文件",
+  "layout.tabGithub": "GitHub PR/议题",
   "layout.tabTerminal": "终端",
   "layout.tabTurns": "轮次流程",
   "layout.tabBrowser": "浏览器",

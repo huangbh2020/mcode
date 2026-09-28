@@ -246,6 +246,9 @@ export const en = {
   "ide.git.noDiffSelectedHint": "Click any changed or staged file in the repository list on the right to preview diff here",
   "ide.git.splitView": "Side-by-side",
   "ide.git.unifiedView": "Unified",
+  "ide.git.lineNumbers": "Line numbers",
+  "ide.git.showLineNumbers": "Show line numbers",
+  "ide.git.hideLineNumbers": "Hide line numbers",
   "ide.git.closeDiff": "Close diff preview",
   "ide.git.stageFile": "Stage changes",
   "ide.git.unstageFile": "Unstage changes",
@@ -307,6 +310,9 @@ export const en = {
   "ide.term.namePlaceholder": "e.g. Start dev server",
   "ide.term.commandLabel": "Command",
   "ide.term.commandPlaceholder": "e.g. npm run dev",
+  "ide.term.moveToBottom": "Move to bottom panel",
+  "ide.term.moveToRight": "Move to right sidebar",
+  "ide.term.collapseBottom": "Collapse bottom terminal",
 
   /* ── turn flow panel (right-panel "turns" tab) ── */
   "ide.turns.title": "Turn Flow",

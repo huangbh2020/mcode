@@ -146,11 +146,14 @@ export function ThreePaneLayout({
          pane stays a straight edge). Uses bg-surface (same as center pane) so
          it reads as a continuation of the chat area; the border-l below is
          the divider. overflow-hidden (not overflow-y-auto): Files/Git scroll
-         internally, and xterm FitAddon breaks under a scrolling ancestor. */}
-      {rightOpen && (
+         internally, and xterm FitAddon breaks under a scrolling ancestor.
+         Kept mounted via CSS `hidden` when closed so stateful children like
+         TerminalPanel (PTYs and scrollback) survive toggling the sidebar. */}
+      {right && (
         <aside
           className={cn(
             "flex h-full shrink-0 flex-col overflow-hidden border-t border-edge-panel bg-surface",
+            !rightOpen && "hidden",
             !isDraggingRight && "transition-[width] duration-200 ease-out",
           )}
           style={{ width: rightWidthPct !== undefined ? `${rightWidthPct}%` : rightWidth }}

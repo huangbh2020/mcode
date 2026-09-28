@@ -20,6 +20,7 @@ import { SettingRepo } from "@main/store/repositories.js";
 import { resolveModelForGitOp } from "@main/ipc/git.js";
 import { buildCustomEnv, resolveActiveModel } from "@main/providers/claude-sdk/customEnv.js";
 import { resolveSdkBinaryPath } from "@main/providers/claude-sdk/sdkBinaryPath.js";
+import { loadClaudeSdk } from "@main/providers/claude-sdk/sdkLoader.js";
 import { log } from "@main/lib/logger.js";
 
 export interface ScheduleIntent {
@@ -101,7 +102,7 @@ export async function parseScheduleIntent(text: string): Promise<ScheduleIntent 
     }
   }
 
-  const { query } = await import("@anthropic-ai/claude-agent-sdk");
+  const { query } = await loadClaudeSdk();
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), TIMEOUT_MS);
 

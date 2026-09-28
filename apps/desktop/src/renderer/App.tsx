@@ -9,6 +9,7 @@ import { ChatPane } from "./components/chat/ChatPane.js";
 import { SessionTabs } from "./components/layout/SessionTabs.js";
 import { UnifiedTabsBar } from "./components/layout/UnifiedTabsBar.js";
 import { RightPanel } from "./components/layout/RightPanel.js";
+import { BottomTerminalBar } from "./components/layout/BottomTerminalBar.js";
 import { SettingsPage } from "./components/settings/SettingsPage.js";
 import { SchedPage } from "./components/automation/SchedPage.js";
 import { CommandPalette } from "./components/layout/CommandPalette.js";
@@ -155,6 +156,8 @@ export function App() {
   const leftWidthPct = useSessionStore((s) => s.leftWidthPct);
   const rightWidth = useSessionStore((s) => s.rightWidth);
   const bottomTerminalHeight = useSessionStore((s) => s.bottomTerminalHeight);
+  const bottomTerminalOpen = useSessionStore((s) => s.bottomTerminalOpen);
+  const terminalPosition = useSessionStore((s) => s.terminalPosition);
   const adjustLeftWidthPct = useSessionStore((s) => s.adjustLeftWidthPct);
   const adjustRightWidth = useSessionStore((s) => s.adjustRightWidth);
   const adjustBottomTerminalHeight = useSessionStore((s) => s.adjustBottomTerminalHeight);
@@ -328,6 +331,15 @@ export function App() {
             rightOpen={rightOpen}
             rightWidth={rightWidth}
             rightWidthPct={widePanelOpen ? widePanelPct : undefined}
+            bottomTerminal={
+              terminalPosition === "bottom" ? (
+                <BottomTerminalBar active={bottomTerminalOpen} />
+              ) : undefined
+            }
+            bottomTerminalOpen={terminalPosition === "bottom" && bottomTerminalOpen}
+            bottomTerminalHeight={bottomTerminalHeight}
+            onResizeBottomTerminal={adjustBottomTerminalHeight}
+            onResetBottomTerminal={resetBottomTerminalHeight}
             onResizeRight={widePanelOpen ? handleWidePanelResize : adjustRightWidth}
             onResetRight={widePanelOpen ? resetWidePanelPct : resetRightWidth}
           />

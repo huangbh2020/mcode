@@ -1,0 +1,15 @@
+{
+  "schema": 1,
+  "claude": {
+    "tested": ["0.3.258"],
+    "broken": {}
+  },
+  "codex": {
+    "tested": ["0.153.4"],
+    "broken": {}
+  },
+  "pi": {
+    "tested": ["0.83.0"],
+    "broken": {}
+  }
+}
