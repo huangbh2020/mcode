@@ -80,14 +80,6 @@ const THINKING_MODE_KEYS: readonly [CustomModelThinkingMode, MessageId][] = [
   ["none", "settings.customModels.thinkingModeNone"],
 ];
 
-/** labelKey lookup for a mode value (used for the "auto (inferred: …)" trigger
- *  text as well). */
-const THINKING_MODE_LABEL_KEYS: Record<CustomModelThinkingMode, MessageId> = {
-  reasoning_effort: "settings.customModels.thinkingModeEffort",
-  enable_thinking: "settings.customModels.thinkingModeToggle",
-  none: "settings.customModels.thinkingModeNone",
-};
-
 const AUTH_MODE_OPTIONS: { value: AuthMode; label: string; icon: ReactNode }[] = [
   { value: "auth_token", label: "Bearer", icon: <IconKey size={14} className="text-content-muted" /> },  { value: "api_key", label: "x-api-key", icon: <IconHash size={14} className="text-content-muted" /> },
 ];
@@ -220,18 +212,15 @@ type TestState =
  *  be ambiguous as a Select value). */
 const SUBAGENT_FOLLOW_MAIN = "__subagent_follow_main__";
 
-/** Draft value for a model row's thinking-mode Select. "auto" = no explicit
- *  declaration — the effective shape is inferred from baseUrl + model id at
- *  render/request time (@contracts/customModel's inferModelThinking). */
-type ThinkingModeDraft = "auto" | CustomModelThinkingMode;
-
 interface ClaudeModelFormState {
   /** Gateway-side model id, e.g. "deepseek-v4-pro". */
   id: string;
   supports1m: boolean;
-  /** How thinking is controlled on this model (OpenAI-protocol endpoints).
-   *  See CustomModelEntry.thinking in @contracts/customModel. */
-  thinkingMode: ThinkingModeDraft;
+  /** How thinking is controlled on this model (OpenAI-protocol endpoints) —
+   *  always an EXPLICIT mode: the form offers no "auto" choice; legacy rows
+   *  that were never declared open with their current inference materialized
+   *  as the initial selection. See CustomModelEntry.thinking. */
+  thinkingMode: CustomModelThinkingMode;
   /** Default level for `reasoning_effort` mode (informational — the composer
    *  starts every model at "default"). */
   thinkingDefault: string;
@@ -282,7 +271,9 @@ interface ClaudeFormState {
 }
 
 function emptyClaudeModel(): ClaudeModelFormState {
-  return { id: "", supports1m: false, thinkingMode: "auto", thinkingDefault: "medium" };
+  // New rows default to "none" (send nothing) — the conservative explicit
+  // choice; the user switches it to the endpoint's actual dialect if needed.
+  return { id: "", supports1m: false, thinkingMode: "none", thinkingDefault: "medium" };
 }
 
 function emptyClaudeForm(): ClaudeFormState {
@@ -311,7 +302,10 @@ function claudeFormFromConfig(m: CustomModelPublic): ClaudeFormState {
     models: m.models.map((e) => ({
       id: e.id,
       supports1m: Boolean(e.supports1m),
-      thinkingMode: e.thinking?.mode ?? "auto",
+      // Undeclared legacy rows surface their CURRENT inference as the initial
+      // selection — saving materializes it into an explicit declaration, so
+      // the visible value is always what will be sent.
+      thinkingMode: e.thinking?.mode ?? inferModelThinking(m.baseUrl, e.id).mode,
       thinkingDefault: e.thinking?.defaultLevel ?? "medium",
     })),
     subagentModel: m.subagentModel ?? "",
@@ -680,22 +674,19 @@ export function CustomModelsPanel() {
       if (!id || seen.has(id)) continue;
       seen.add(id);
       const base = m.supports1m ? { id, supports1m: true } : { id };
-      // Persist an explicit thinking declaration only when the user moved off
-      // "auto" — an absent field keeps resolving through the provider
-      // heuristics, which also upgrades transparently as the table grows.
-      models.push(
-        m.thinkingMode === "auto"
-          ? base
-          : {
-              ...base,
-              thinking: {
-                mode: m.thinkingMode,
-                ...(m.thinkingMode === "reasoning_effort" && m.thinkingDefault
-                  ? { defaultLevel: m.thinkingDefault }
-                  : {}),
-              },
-            },
-      );
+      // The mode is always explicit — the form has no "auto" choice, so every
+      // saved row carries a declaration the bridge/UI can rely on verbatim.
+      // (Rows saved before this field existed still lack one; the runtime
+      // keeps inferring for them until the next edit materializes it.)
+      models.push({
+        ...base,
+        thinking: {
+          mode: m.thinkingMode,
+          ...(m.thinkingMode === "reasoning_effort" && m.thinkingDefault
+            ? { defaultLevel: m.thinkingDefault }
+            : {}),
+        },
+      });
     }
     if (!claudeForm.name.trim() || !claudeForm.baseUrl.trim()) {
       setError(t("settings.customModels.errNameBaseUrl"));
@@ -1395,9 +1386,9 @@ function ClaudeProviderForm({
                 </div>
                 {/* Thinking control (OpenAI-protocol endpoints only). The
                     bridge can only deliver a level the endpoint's dialect
-                    reads, so the row declares the shape; "auto" follows the
-                    provider heuristics and shows what they'd resolve to right
-                    now (baseUrl + the typed id, live). */}
+                    reads, so the row declares the shape explicitly; legacy
+                    rows that were never declared open with their current
+                    inference as the initial selection. */}
                 {isOpenAi && (
                   <div className="flex flex-wrap items-center gap-1.5 border-t border-edge px-1.5 py-1">
                     <span className="text-[0.6428em] text-content-subtle">
@@ -1405,37 +1396,19 @@ function ClaudeProviderForm({
                     </span>
                     <Select.Root
                       value={m.thinkingMode}
-                      onValueChange={(v) => updateModel(idx, { thinkingMode: v as ThinkingModeDraft })}
+                      onValueChange={(v) => updateModel(idx, { thinkingMode: v as CustomModelThinkingMode })}
                     >
                       <Select.Trigger className="min-w-0 flex-1 text-[0.7143em]">
                         <Select.Value>
-                          {(val: string | null) => (
-                            <span className={cn(val === "auto" && "text-content-muted")}>
-                              {val === "auto"
-                                ? t("settings.customModels.thinkingAuto", {
-                                    mode: t(
-                                      THINKING_MODE_LABEL_KEYS[
-                                        inferModelThinking(form.baseUrl, m.id).mode
-                                      ],
-                                    ),
-                                  })
-                                : t(THINKING_MODE_LABEL_KEYS[val as CustomModelThinkingMode])}
-                            </span>
-                          )}
+                          {(val: string | null) => {
+                            const labelKey = THINKING_MODE_KEYS.find(
+                              ([value]) => value === (val ?? "none"),
+                            )?.[1];
+                            return <span>{labelKey ? t(labelKey) : (val ?? "none")}</span>;
+                          }}
                         </Select.Value>
                       </Select.Trigger>
                       <Select.Portal><Select.Positioner><Select.Popup><Select.List>
-                        <Select.Item value="auto">
-                          <Select.ItemText>
-                            {t("settings.customModels.thinkingAuto", {
-                              mode: t(
-                                THINKING_MODE_LABEL_KEYS[
-                                  inferModelThinking(form.baseUrl, m.id).mode
-                                ],
-                              ),
-                            })}
-                          </Select.ItemText>
-                        </Select.Item>
                         {THINKING_MODE_KEYS.map(([value, labelKey]) => (
                           <Select.Item key={value} value={value}>
                             <Select.ItemText>{t(labelKey)}</Select.ItemText>

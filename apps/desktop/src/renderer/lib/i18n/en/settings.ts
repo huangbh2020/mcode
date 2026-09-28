@@ -301,7 +301,6 @@ export const en = {
   "settings.customModels.testWithModel": "Test the connection with this model",
   "settings.customModels.supports1mLabel": "Declare 1M context",
   "settings.customModels.thinkingLabel": "Thinking",
-  "settings.customModels.thinkingAuto": "Auto (inferred by provider: {mode} — editable)",
   "settings.customModels.thinkingModeEffort": "Level control (reasoning_effort)",
   "settings.customModels.thinkingModeToggle": "On/off control (enable_thinking)",
   "settings.customModels.thinkingModeNone": "No thinking control",

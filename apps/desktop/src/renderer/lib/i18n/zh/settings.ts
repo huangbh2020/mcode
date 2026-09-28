@@ -304,7 +304,6 @@ export const zh = {
   "settings.customModels.testWithModel": "用该模型测试连接",
   "settings.customModels.supports1mLabel": "声明 1M 上下文",
   "settings.customModels.thinkingLabel": "思考",
-  "settings.customModels.thinkingAuto": "自动(按提供商推断:{mode},可手动修改)",
   "settings.customModels.thinkingModeEffort": "档位控制(reasoning_effort)",
   "settings.customModels.thinkingModeToggle": "开/关控制(enable_thinking)",
   "settings.customModels.thinkingModeNone": "不支持思考",
