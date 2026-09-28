@@ -324,7 +324,13 @@ async function handleMessages(
   if (effort && effort !== "default") {
     const entry = upstream.models?.find((m) => m.id === strip1MSuffix(body.model));
     applyThinkingControl(openaiReq, resolveModelThinking(entry, upstream.baseUrl), effort);
-    if (openaiReq.reasoning_effort === undefined && openaiReq.enable_thinking === undefined) {
+    if (openaiReq.reasoning_effort !== undefined || openaiReq.enable_thinking !== undefined) {
+      // Positive confirmation that the level reached the wire — without this
+      // anchor, "no dropped-warning" is indistinguishable from "nothing sent".
+      log.info(
+        `bridge: thinking effort ${JSON.stringify(effort)} → ${openaiReq.reasoning_effort !== undefined ? `reasoning_effort=${openaiReq.reasoning_effort}` : `enable_thinking=${openaiReq.enable_thinking}`} (model ${JSON.stringify(body.model)})`,
+      );
+    } else {
       // A level WAS picked but the model doesn't accept it — observability so
       // "I selected High and nothing happened" is attributable from main.log.
       log.info(
