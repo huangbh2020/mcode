@@ -272,6 +272,13 @@ export type LeftBarMode = z.infer<typeof LeftBarModeSchema>;
  *    absent-key-means-collapsed semantics as the in-memory map it mirrors.
  *  - `leftbar.archivedOpen`: "true"/"false" — the archived shelf, shared by
  *    the tree view's bin and the stream view's shelf (one data source).
+ *  - `leftbar.collapsedGroups`: groupName → collapsed. Mirrored from the
+ *    grouped view's group headers — INVERTED default vs. the maps above:
+ *    absent key = expanded (groups render open until folded), so only the
+ *    collapsed ones ever appear in the blob.
+ *  - `leftbar.pinnedSessionsOpen` / `leftbar.pinnedProjectsOpen`:
+ *    "true"/"false" — the pinned-sessions and pinned-projects section
+ *    headers (both default open).
  *
  * Only EXPLICIT user toggles are written back; auto-expansions stay
  * transient (re-applied by the landing/activation chain on boot).
@@ -279,6 +286,9 @@ export type LeftBarMode = z.infer<typeof LeftBarModeSchema>;
 export const LEFTBAR_EXPANDED_PROJECTS_SETTING_KEY = "leftbar.expandedProjects";
 export const LEFTBAR_EXPANDED_WORKTREES_SETTING_KEY = "leftbar.expandedWorktrees";
 export const LEFTBAR_ARCHIVED_OPEN_SETTING_KEY = "leftbar.archivedOpen";
+export const LEFTBAR_COLLAPSED_GROUPS_SETTING_KEY = "leftbar.collapsedGroups";
+export const LEFTBAR_PINNED_SESSIONS_OPEN_SETTING_KEY = "leftbar.pinnedSessionsOpen";
+export const LEFTBAR_PINNED_PROJECTS_OPEN_SETTING_KEY = "leftbar.pinnedProjectsOpen";
 
 /**
  * UI language preference:
@@ -1671,6 +1681,16 @@ export type FocusSessionInput = z.infer<typeof FocusSessionSchema>;
 const CustomModelEntrySchema = z.object({
   id: z.string().min(1),
   supports1m: z.boolean().optional(),
+  /** Thinking-control declaration (OpenAI-protocol configs only). Shape only
+   *  — the value set is small and the renderer form is a Select, so the enum
+   *  here is the real validation. Absent on all legacy records = inferred. */
+  thinking: z
+    .object({
+      mode: z.enum(["reasoning_effort", "enable_thinking", "none"]),
+      levels: z.array(z.string()).optional(),
+      defaultLevel: z.string().optional(),
+    })
+    .optional(),
 });
 
 const AuthModeSchema = z.enum(["auth_token", "api_key"]);

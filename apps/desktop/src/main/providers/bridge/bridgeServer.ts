@@ -21,14 +21,17 @@
  */
 import { createServer, type Server, type IncomingMessage, type ServerResponse } from "node:http";
 import { randomBytes } from "node:crypto";
+import { resolveModelThinking } from "@contracts/customModel";
 import { log } from "@main/lib/logger.js";
 import {
   hasHeader,
+  MCODE_EFFORT_HEADER,
   requiresSessionHeader,
   resolveUpstreamHeaders,
   SESSION_HEADER,
 } from "@main/providers/upstreamHeaders.js";
-import { anthropicToOpenAI } from "./requestTranslator.js";
+import { strip1MSuffix } from "@main/providers/claude-sdk/customEnv.js";
+import { anthropicToOpenAI, applyThinkingControl } from "./requestTranslator.js";
 import { OpenAiToAnthropicSse } from "./responseTranslator.js";
 import type {
   AnthropicRequest,
@@ -308,6 +311,33 @@ async function handleMessages(
   }
 
   const openaiReq: OpenAIRequest = anthropicToOpenAI(body);
+
+  // Thinking control: the session's effort level rides Mcode's internal header
+  // (the body can't carry it across this protocol — see requestTranslator's
+  // header note). Dispatch per the selected model's declaration so only the
+  // field the endpoint's dialect reads is emitted; an undeclared/none model or
+  // a "default" effort sends nothing, which is exactly the pre-thinking
+  // behavior. No header at all (probe / title / commit-message helpers, which
+  // never pick a level) also sends nothing.
+  const effortRaw = req.headers[MCODE_EFFORT_HEADER];
+  const effort = Array.isArray(effortRaw) ? effortRaw[0] : effortRaw;
+  if (effort && effort !== "default") {
+    const entry = upstream.models?.find((m) => m.id === strip1MSuffix(body.model));
+    applyThinkingControl(openaiReq, resolveModelThinking(entry, upstream.baseUrl), effort);
+    if (openaiReq.reasoning_effort !== undefined || openaiReq.enable_thinking !== undefined) {
+      // Positive confirmation that the level reached the wire — without this
+      // anchor, "no dropped-warning" is indistinguishable from "nothing sent".
+      log.info(
+        `bridge: thinking effort ${JSON.stringify(effort)} → ${openaiReq.reasoning_effort !== undefined ? `reasoning_effort=${openaiReq.reasoning_effort}` : `enable_thinking=${openaiReq.enable_thinking}`} (model ${JSON.stringify(body.model)})`,
+      );
+    } else {
+      // A level WAS picked but the model doesn't accept it — observability so
+      // "I selected High and nothing happened" is attributable from main.log.
+      log.info(
+        `bridge: thinking effort ${JSON.stringify(effort)} not applicable to model ${JSON.stringify(body.model)} (mode=${resolveModelThinking(entry, upstream.baseUrl).mode}); dropped`,
+      );
+    }
+  }
   // Observability for image turns: count the image_url parts we forward so a
   // gateway that silently drops them (non-vision model behind an OpenAI-
   // protocol endpoint) is diagnosable from main.log — the app-side chain is

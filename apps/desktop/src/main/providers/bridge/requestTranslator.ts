@@ -33,8 +33,19 @@
  *    role's `supports1m` flag (highest-priority input), not the echo.
  * 7. **Dropped fields**: `thinking` (no OpenAI equivalent), `cache_control`
  *    (OpenAI caches automatically). These are intentionally NOT forwarded.
+ *    Thinking CONTROL, however, is a different matter — the binary's effort
+ *    level arrives on the internal `x-mcode-effort` request header (it cannot
+ *    go through the body: the binary would render it as an Anthropic
+ *    `thinking` budget this protocol can't carry) and is translated by
+ *    {@link applyThinkingControl} into whichever field the model's endpoint
+ *    actually reads (`reasoning_effort` / `enable_thinking`), per the model's
+ *    thinking declaration.
  */
 import { strip1MSuffix } from "@main/providers/claude-sdk/customEnv.js";
+import {
+  reasoningEffortLevels,
+  type CustomModelThinking,
+} from "@contracts/customModel";
 import type {
   AnthropicContentBlock,
   AnthropicMessage,
@@ -215,4 +226,42 @@ export function anthropicToOpenAI(req: AnthropicRequest): OpenAIRequest {
   if (req.tools && req.tools.length > 0) out.tools = translateTools(req.tools);
   if (req.tool_choice) out.tool_choice = translateToolChoice(req.tool_choice);
   return out;
+}
+
+/** Apply the model's thinking control to an already-translated OpenAI request,
+ *  in place. `effort` is the raw `x-mcode-effort` header value ("default" or
+ *  absent = the session didn't pick a level → send nothing, exactly the
+ *  pre-thinking bridge behavior). Pure — the caller owns the request object.
+ *
+ *  Dispatch is by the model's DECLARED mode (`@contracts/customModel`), so a
+ *  field is only ever emitted when the endpoint's own dialect reads it:
+ *
+ *  - `reasoning_effort` — value must be one of the declared levels (default
+ *    set: minimal/low/medium/high); anything else is dropped rather than sent,
+ *    so a stale persisted level can't produce a 400.
+ *  - `enable_thinking` — "off" → false, "on" → true, anything else → nothing.
+ *  - `none` — never sends anything (thinking is not controllable on this
+ *    model's OpenAI wire).
+ */
+export function applyThinkingControl(
+  req: OpenAIRequest,
+  thinking: CustomModelThinking | undefined,
+  effort: string | undefined,
+): void {
+  if (!effort || effort === "default" || !thinking) return;
+  switch (thinking.mode) {
+    case "reasoning_effort": {
+      if (reasoningEffortLevels(thinking).includes(effort)) {
+        req.reasoning_effort = effort;
+      }
+      return;
+    }
+    case "enable_thinking": {
+      if (effort === "off") req.enable_thinking = false;
+      else if (effort === "on") req.enable_thinking = true;
+      return;
+    }
+    case "none":
+      return;
+  }
 }

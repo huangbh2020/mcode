@@ -8,12 +8,14 @@ import {
   IconShieldCheck,
   IconShieldHalfFilled,
   IconShieldLock,
+  IconLock,
   IconChevronRight,
 } from "@renderer/lib/icons.js";
 import { useI18n, type MessageId } from "@renderer/lib/i18n/index.js";
 import { useSessionStore } from "@renderer/stores/sessionStore.js";
 import { useSuppressBrowserView } from "@renderer/hooks/useSuppressBrowserView.js";
 import { useNarrowViewport } from "@renderer/hooks/useNarrowViewport.js";
+import { resolveEffortLevels } from "@renderer/lib/thinkingLevels.js";
 import type { PermissionModeOption, ThinkingLevelOption } from "@contracts/provider";
 
 /**
@@ -52,6 +54,7 @@ import type { PermissionModeOption, ThinkingLevelOption } from "@contracts/provi
 const EFFORT_HINT_KEYS: Record<string, MessageId> = {
   default: "chat.effort.hintDefault",
   off: "chat.effort.hintOff",
+  on: "chat.effort.hintOn",
   minimal: "chat.effort.hintMinimal",
   low: "chat.effort.hintLow",
   medium: "chat.effort.hintMedium",
@@ -72,6 +75,7 @@ const EFFORT_HINT_KEYS: Record<string, MessageId> = {
 const EFFORT_TILE_KEYS: Record<string, MessageId> = {
   default: "chat.effort.tileDefault",
   off: "chat.effort.tileOff",
+  on: "chat.effort.tileOn",
   minimal: "chat.effort.tileMinimal",
   low: "chat.effort.tileLow",
   medium: "chat.effort.tileMedium",
@@ -93,6 +97,7 @@ const PERMISSION_HINT_KEYS: Record<string, MessageId> = {
   default: "chat.permission.hintDefault",
   acceptEdits: "chat.permission.hintAcceptEdits",
   plan: "chat.permission.hintPlan",
+  isolated: "chat.permission.hintIsolated",
   bypassPermissions: "chat.permission.hintBypass",
   "codex-sdk:read-only": "chat.permission.hintCodexReadOnly",
   "codex-sdk:default": "chat.permission.hintCodexDefault",
@@ -104,6 +109,7 @@ const PERMISSION_TILE_KEYS: Record<string, MessageId> = {
   plan: "chat.permission.tilePlan",
   default: "chat.permission.tileDefault",
   acceptEdits: "chat.permission.tileAcceptEdits",
+  isolated: "chat.permission.tileIsolated",
   bypassPermissions: "chat.permission.tileBypass",
   "codex-sdk:read-only": "chat.permission.tileCodexReadOnly",
   "codex-sdk:default": "chat.permission.tileCodexDefault",
@@ -116,6 +122,7 @@ const FALLBACK_LABEL: Record<string, string> = {
   default: "Default",
   acceptEdits: "Edit Auto",
   plan: "Plan",
+  isolated: "Isolated",
   bypassPermissions: "Bypass",
   dontAsk: "DontAsk",
   auto: "Auto",
@@ -126,6 +133,7 @@ const FALLBACK_LABEL: Record<string, string> = {
 const RISK_RANK: Record<string, number> = {
   plan: 0,
   "read-only": 0,
+  isolated: 0,
   default: 1,
   acceptEdits: 2,
   bypassPermissions: 3,
@@ -140,6 +148,7 @@ const ICON_BY_NAME: Record<string, React.ComponentType<{ size?: number }>> = {
   shieldCheck: IconShieldCheck,
   shieldHalf: IconShieldHalfFilled,
   shieldLock: IconShieldLock,
+  lock: IconLock,
 };
 
 /** Resolve a permission mode's icon name to a rendered icon node. Falls back
@@ -255,12 +264,16 @@ export function EffortChip({
   layout?: "pill" | "row";
   /** Controlled override (定时任务编辑弹窗): bind to a LOCAL draft instead of
    *  the global composer slots — same grid popover, values round-trip
-   *  through `onChange`; options still come from the given provider's
-   *  capabilities. */
+   *  through `onChange`; options come from the given provider's capabilities
+   *  (filtered by the model binding when the draft carries one). */
   controller?: {
     providerId: string;
     value: string;
     onChange: (v: string) => void;
+    /** Draft's model binding — when set (even null = built-in model), the
+     *  level list is resolved for THAT binding instead of the global slots. */
+    customModelId?: string | null;
+    model?: string;
   };
 } = {}) {
   const stacked = layout === "row";
@@ -279,6 +292,9 @@ export function EffortChip({
   const storeSetEffort = useSessionStore((s) => s.setEffort);
   const storeProviderId = useSessionStore((s) => s.providerId);
   const providers = useSessionStore((s) => s.providers);
+  const storeCustomModelId = useSessionStore((s) => s.customModelId);
+  const storeModel = useSessionStore((s) => s.model);
+  const customModels = useSessionStore((s) => s.customModels);
 
   const effort = controller ? controller.value : storeEffort;
   const setEffort = (v: string): void => {
@@ -287,9 +303,22 @@ export function EffortChip({
   };
   const providerId = controller ? controller.providerId : storeProviderId;
   const provider = providers.find((p) => p.id === providerId);
-  const levels = provider?.capabilities.thinkingLevels;
+  const customModelId = controller && controller.customModelId !== undefined
+    ? controller.customModelId
+    : storeCustomModelId;
+  const model = controller && controller.model !== undefined ? controller.model : storeModel;
+  // Levels come from the provider's declaration, filtered by the model's
+  // thinking declaration on OpenAI-protocol custom endpoints (see
+  // resolveEffortLevels). Empty/undefined → hide the chip.
+  const levels = resolveEffortLevels({
+    providerLevels: provider?.capabilities.thinkingLevels,
+    customModels,
+    customModelId,
+    model,
+  });
 
-  // Provider declares no thinking levels → hide the chip.
+  // Provider declares no thinking levels (or the model's thinking is not
+  // controllable) → hide the chip.
   if (!levels || levels.length === 0) return null;
 
   const activeLevel = levels.find((l) => l.value === effort);

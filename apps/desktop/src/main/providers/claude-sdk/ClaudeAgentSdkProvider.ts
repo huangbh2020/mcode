@@ -17,6 +17,7 @@ import type {
   ProviderCapabilities,
   UserInputAnswers,
 } from "@contracts/provider";
+import { effortLevelValuesForModel } from "@contracts/customModel";
 import type { AskUserQuestionItem, PermissionMode } from "@contracts/runtime";
 import { SdkMessageAdapter, parseQuestions } from "./SdkMessageAdapter.js";
 import { buildCustomEnv, MCODE_CONFIG_DIR, resolveActiveModel } from "./customEnv.js";
@@ -27,9 +28,13 @@ import { bashPathHintFor, detectBashEnv } from "@main/lib/bashEnv.js";
 import { getFileSnapshot } from "@main/lib/fileSnapshotRegistry.js";
 import {
   FILE_MUTATING_TOOLS,
+  FILE_READING_TOOLS,
   getToolFilePath,
+  getToolReadPath,
   normalizeToolFilePath,
 } from "@main/lib/fileSnapshot.js";
+import { guardBashCommand } from "@main/lib/bashWriteGuard.js";
+import { guardReadPath } from "@main/lib/readGuard.js";
 import { resolveSdkBinaryPath } from "./sdkBinaryPath.js";
 import { loadClaudeSdk } from "./sdkLoader.js";
 import { resolveGitBash } from "@main/lib/binaryResolve.js";
@@ -566,8 +571,11 @@ function isReadOnlyBrowserTool(toolName: string): boolean {
  *  the session's CURRENT permission mode. This runs in canUseTool on every
  *  call, so a mid-turn mode flip applies to the next tool immediately.
  *  - bypassPermissions / dontAsk → everything auto-approved
- *  - acceptEdits                  → file-editing tools auto-approved
- *  - default / plan / auto        → prompt the user (return false) */
+ *  - acceptEdits / isolated      → file-editing tools auto-approved (isolated
+ *                                  is acceptEdits INSIDE the project; the
+ *                                  out-of-project boundary is denied earlier
+ *                                  in canUseTool, before this gate runs)
+ *  - default / plan / auto       → prompt the user (return false) */
 function shouldAutoApprove(mode: PermissionMode | undefined, toolName: string): boolean {
   // 编排规划工具是纯数据提交(结构化输出契约,handler 只钳制建卡不执行),
   // 任何模式免审批 —— 必须排在 `if (!mode)` 之前:default 档传来的 mode 是
@@ -577,7 +585,7 @@ function shouldAutoApprove(mode: PermissionMode | undefined, toolName: string): 
   if (mode === "bypassPermissions" || mode === "dontAsk") return true;
   // Read-only browser tools never need approval — they can't change anything.
   if (isReadOnlyBrowserTool(toolName)) return true;
-  if (mode === "acceptEdits") return FILE_EDIT_TOOLS.has(toolName);
+  if (mode === "acceptEdits" || mode === "isolated") return FILE_EDIT_TOOLS.has(toolName);
   return false;
 }
 
@@ -666,6 +674,13 @@ export class ClaudeAgentSdkProvider implements AgentProvider {
       { value: "default", label: "Default", icon: "shield", hint: "标准行为,工具按规则触发审批" },
       { value: "acceptEdits", label: "Edit Auto", icon: "shieldCheck", color: "text-warning", hint: "工作目录内的文件编辑自动放行" },
       { value: "plan", label: "Plan", icon: "shieldHalf", color: "text-info", hint: "只读探索,所有写操作都需审批" },
+      // Project isolation: acceptEdits-like auto-approve INSIDE the project,
+      // hard boundary at the project root — out-of-project reads/writes and
+      // bash write-targets are denied host-side (see the canUseTool guards).
+      // NOT a sandbox: bash commands have plenty of non-file ways to reach
+      // the outside world (network etc.); the guard fences the filesystem
+      // mistakes, not adversarial escapes.
+      { value: "isolated", label: "Isolated", icon: "lock", color: "text-success", hint: "项目隔离:读写与文件操作仅限当前项目目录" },
       { value: "bypassPermissions", label: "Bypass", icon: "shieldLock", color: "text-danger", hint: "跳过所有权限检查(慎用)" },
     ],
     builtinModels: [
@@ -699,6 +714,29 @@ export class ClaudeAgentSdkProvider implements AgentProvider {
     // sendTurn, which shouldn't happen but we don't want a crash).
     const snapshot = getFileSnapshot(req.sessionId);
 
+    // OpenAI-protocol bridge turn: the effort level must NOT go through the
+    // binary — the binary would render it as an Anthropic `thinking` budget,
+    // which the OpenAI-protocol endpoint can't read (and many reject). Instead
+    // it rides Mcode's internal request header to the local bridge, which
+    // translates it into the endpoint's native field (`reasoning_effort` /
+    // `enable_thinking`) per the selected model's thinking declaration. The
+    // level is also gated against that declaration, so a stale persisted value
+    // (the model row was re-declared since) is dropped rather than sent.
+    const isOpenAiBridge = req.apiConfig?.protocol === "openai";
+    const bridgeCfg = isOpenAiBridge ? req.apiConfig : undefined;
+    let bridgeThinkingEffort: string | undefined;
+    if (bridgeCfg && req.effort && req.effort !== "default") {
+      const entry =
+        bridgeCfg.models.find((m) => m.id === bridgeCfg.selectedModel) ?? bridgeCfg.models[0];
+      if (effortLevelValuesForModel(entry, bridgeCfg.baseUrl).includes(req.effort)) {
+        bridgeThinkingEffort = req.effort;
+      } else {
+        ctx.log.warn(
+          `thinking effort ${JSON.stringify(req.effort)} not valid for model ${JSON.stringify(bridgeCfg.selectedModel)} on ${bridgeCfg.baseUrl}; dropping`,
+        );
+      }
+    }
+
     const options: Options = {
       abortController: ac,
       cwd: req.cwd,
@@ -710,12 +748,26 @@ export class ClaudeAgentSdkProvider implements AgentProvider {
       // only the five named levels reach the wire, validated by the UI's
       // capabilities.thinkingLevels list.
       // See https://platform.claude.com/docs/en/build-with-claude/effort
-      effort: req.effort && req.effort !== "default" ? (req.effort as Options["effort"]) : undefined,
+      // EXCEPT on OpenAI-protocol bridge turns, where the level takes the
+      // internal-header path instead (see isOpenAiBridge above) — passing it
+      // here would make the binary emit an Anthropic `thinking` budget.
+      effort:
+        !isOpenAiBridge && req.effort && req.effort !== "default"
+          ? (req.effort as Options["effort"])
+          : undefined,
       // Permission mode: the contract is an open string; the SDK's type is a
-      // narrow union. The UI only offers claude's 4 modes for this provider
-      // (declared in capabilities.permissionModes), so the cast is safe. The
-      // UI "plan" mode is translated to "default" (see isUiPlanMode above).
-      permissionMode: (isUiPlanMode ? "default" : req.permissionMode) as Options["permissionMode"],
+      // narrow union. The UI only offers claude's declared modes for this
+      // provider (see capabilities.permissionModes), so the cast is safe. The
+      // UI "plan" mode is translated to "default" (see isUiPlanMode above);
+      // the UI "isolated" mode (project isolation) runs the CLI under
+      // acceptEdits — the boundary itself is enforced host-side in canUseTool
+      // (reads confined, writes/bash write-targets denied outside cwd), which
+      // the SDK-level mode knows nothing about.
+      permissionMode: (isUiPlanMode
+        ? "default"
+        : req.permissionMode === "isolated"
+          ? "acceptEdits"
+          : req.permissionMode) as Options["permissionMode"],
       resume: req.resumeProviderSessionId ?? undefined,
       includePartialMessages: true,
       // Forward the subagents' full conversation (text/thinking included, not
@@ -791,7 +843,12 @@ export class ClaudeAgentSdkProvider implements AgentProvider {
       // gateway request headers, and CLAUDE_CONFIG_DIR on top of process.env.
       // The session id names the gateway's session header (gateways that
       // require one want a stable id per conversation, not per request).
-      options.env = buildCustomEnv(req.apiConfig, { sessionId: req.sessionId });
+      // On OpenAI-protocol configs the thinking level rides the internal
+      // effort header (validated above against the model's declaration).
+      options.env = buildCustomEnv(req.apiConfig, {
+        sessionId: req.sessionId,
+        thinkingEffort: bridgeThinkingEffort,
+      });
     } else {
       // Standard Anthropic endpoint: still redirect the config root so Mcode
       // manages its own skills/settings, but no auth/model overrides needed.
@@ -1002,6 +1059,27 @@ export class ClaudeAgentSdkProvider implements AgentProvider {
         }
       }
 
+      // --- Project-isolation read guard ("isolated" mode only) ---
+      // Reads are confined to the project when the user picked the isolated
+      // mode. In-project reads never reach here (the CLI auto-allows file
+      // access inside the working directory); out-of-project access falls
+      // through the CLI's rules to a permission prompt, which is exactly when
+      // canUseTool fires — so this deterministically catches ../ escapes and
+      // absolute paths outside cwd. Reads in every other mode stay free
+      // (reading docs/config elsewhere is often legitimate).
+      if (ctx.getPermissionMode?.() === "isolated" && FILE_READING_TOOLS.has(toolName)) {
+        const raw = getToolReadPath(toolName, input);
+        if (raw) {
+          const denial = guardReadPath(req.cwd, raw);
+          if (denial) {
+            ctx.log.info(
+              `denied out-of-project read ${toolName}: ${raw} (cwd=${req.cwd}, isolated mode)`,
+            );
+            return { behavior: "deny", message: denial };
+          }
+        }
+      }
+
       // --- Bash command path-dialect normalization ---
       // The model emits Git Bash `/d/...` and WSL `/mnt/d/...` paths inside
       // bash commands. Only Git Bash understands `/d/...` (MSYS conversion);
@@ -1018,6 +1096,21 @@ export class ClaudeAgentSdkProvider implements AgentProvider {
           const normalized = normalizeBashCommand(raw);
           if (normalized !== raw) {
             effectiveInput = { ...input, command: normalized };
+          }
+          // --- Bash write-target guard (same shared module as the Pi side) ---
+          // Block shell redirections whose target resolves outside the project
+          // (the same strict/not-bypass policy as the file-write guard above,
+          // and running BEFORE the always-allowed / mode gates so the project
+          // boundary wins over a per-tool grant). NOT a sandbox — see
+          // bashWriteGuard.ts for the deliberately-recognized forms.
+          const bashMode = ctx.getPermissionMode?.();
+          const bashStrict = bashMode !== "bypassPermissions" && bashMode !== "dontAsk";
+          const denial = guardBashCommand(req.cwd, normalized, bashStrict);
+          if (denial) {
+            ctx.log.info(
+              `denied out-of-project bash write target: ${normalized.slice(0, 120)} (cwd=${req.cwd})`,
+            );
+            return { behavior: "deny", message: denial };
           }
         }
       }

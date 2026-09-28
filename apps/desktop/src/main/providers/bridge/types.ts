@@ -12,6 +12,8 @@
  * emitted on the Anthropic side of the response.
  */
 
+import type { CustomModelEntry } from "@contracts/customModel";
+
 /* ───────────────────────── Anthropic (what the bridge RECEIVES) ───────────────────────── */
 
 /** A text block — the simplest content element, in either messages or system. */
@@ -141,6 +143,13 @@ export interface OpenAIRequest {
   stop?: string[];
   tools?: OpenAITool[];
   tool_choice?: string | { type: "function"; function: { name: string } };
+  /** Reasoning-effort control (OpenAI o-series style). Only set when the
+   *  model's thinking declaration says the endpoint reads it — see
+   *  `applyThinkingControl` in requestTranslator.ts. */
+  reasoning_effort?: string;
+  /** Thinking on/off toggle (Qwen / DashScope OpenAI-compatible style). Same
+   *  gating as `reasoning_effort`. */
+  enable_thinking?: boolean;
 }
 
 /** A streaming delta's tool_call fragment. `index` identifies which tool_call
@@ -221,9 +230,11 @@ export type AnthropicSseEvent =
   | { type: "message_stop" };
 
 /** The upstream endpoint the bridge forwards to. Extracted from an ApiConfig —
- *  only the fields the bridge needs; everything else (model list, selected
- *  model, non-essential-traffic flags) is for the Claude binary's env, not
- *  the bridge. */
+ *  only the fields the bridge needs; everything else (selected model,
+ *  non-essential-traffic flags) is for the Claude binary's env, not the
+ *  bridge. The MODEL LIST comes along too: its per-model `thinking`
+ *  declarations drive the request-side thinking translation (see
+ *  `applyThinkingControl`). */
 export interface UpstreamConfig {
   baseUrl: string;
   authToken: string;
@@ -232,4 +243,6 @@ export interface UpstreamConfig {
   /** Extra headers to send upstream (the config's `customHeaders`). Merged by
    *  `upstreamHeaders()` so both delivery paths send one header set. */
   customHeaders?: Record<string, string>;
+  /** The config's model list — for the per-model thinking declarations. */
+  models?: CustomModelEntry[];
 }

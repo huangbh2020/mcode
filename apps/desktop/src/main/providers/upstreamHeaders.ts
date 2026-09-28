@@ -30,6 +30,27 @@ import { isValidHeaderName, isValidHeaderValue } from "@contracts/customModel";
  *  without it: `400 {"type":"MissingSessionID"}`. */
 export const SESSION_HEADER = "x-opencode-session";
 
+/** Mcode-internal header that carries the session's thinking-effort level from
+ *  the provider to the OpenAI-protocol bridge. On `openai` configs the effort
+ *  is deliberately NOT passed to the claude binary (the binary would render it
+ *  as an Anthropic `thinking` budget the endpoint can't read); instead it rides
+ *  `ANTHROPIC_CUSTOM_HEADERS` — which the binary attaches to every API request,
+ *  including the ones addressed to the local bridge — and the bridge translates
+ *  it into the upstream's native field (`reasoning_effort` /
+ *  `enable_thinking`). Never forwarded to the real gateway: the bridge builds
+ *  its outbound header set from scratch (whitelist), so this stays
+ *  localhost-only. */
+export const MCODE_EFFORT_HEADER = "x-mcode-effort";
+
+/** Values safe to carry on {@link MCODE_EFFORT_HEADER}. The header value comes
+ *  from our own env, but gate it anyway — a mangled env value must not become
+ *  a malformed upstream field. */
+const EFFORT_HEADER_VALUE_RE = /^[A-Za-z0-9_-]{1,32}$/;
+
+export function isValidEffortHeaderValue(v: string | undefined): v is string {
+  return typeof v === "string" && EFFORT_HEADER_VALUE_RE.test(v);
+}
+
 /** True when the endpoint is known to demand {@link SESSION_HEADER}. Matched on
  *  the host only (the gateway may be mounted at any path, e.g.
  *  `https://opencode.ai/zen/go/v1`). An unparseable baseUrl is treated as

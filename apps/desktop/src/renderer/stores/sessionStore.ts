@@ -31,6 +31,7 @@ import { isValidSnapshot } from "@renderer/lib/contextWindow.js";
 import { getLastCursor, type NavEntry } from "@renderer/lib/editorNav.js";
 import { disposeModel, getDisplayedPath } from "@renderer/lib/editorModelCache.js";
 import type { CustomModelPublic } from "@contracts/customModel";
+import { resolveEffortLevels } from "@renderer/lib/thinkingLevels.js";
 import { api } from "@renderer/lib/api.js";
 import { isElectron } from "@renderer/lib/platform.js";
 import { normWorktreeKey } from "@renderer/lib/worktree.js";
@@ -46,6 +47,9 @@ import {
   LEFTBAR_EXPANDED_PROJECTS_SETTING_KEY,
   LEFTBAR_EXPANDED_WORKTREES_SETTING_KEY,
   LEFTBAR_ARCHIVED_OPEN_SETTING_KEY,
+  LEFTBAR_COLLAPSED_GROUPS_SETTING_KEY,
+  LEFTBAR_PINNED_SESSIONS_OPEN_SETTING_KEY,
+  LEFTBAR_PINNED_PROJECTS_OPEN_SETTING_KEY,
   THEME_STYLE_SETTING_KEY,
   UI_FONT_FAMILY_SETTING_KEY,
   UI_LOCALE_SETTING_KEY,
@@ -752,6 +756,17 @@ export interface SessionState {
    *  Shared with the stream view's shelf and persisted under
    *  `leftbar.archivedOpen` ("true"/"false"). */
   archivedViewOpen: boolean;
+  /** Which group headers in the "grouped" project view are COLLAPSED
+   *  (groupName → collapsed). Inverted default vs. `expandedProjects`:
+   *  absent key = expanded, so the persisted blob only ever names the
+   *  folded groups (`leftbar.collapsedGroups`). */
+  collapsedGroups: Record<string, boolean>;
+  /** Whether the pinned-projects section (top of the tree) is expanded.
+   *  Default open; persisted under `leftbar.pinnedProjectsOpen`. */
+  pinnedProjectsOpen: boolean;
+  /** Whether the pinned-sessions section (below pinned projects) is
+   *  expanded. Default open; persisted under `leftbar.pinnedSessionsOpen`. */
+  pinnedSessionsOpen: boolean;
 
   /* ── tab state (center pane) ──
    *  `openTabs` is the ordered list of sessionIds the user has open in the
@@ -1560,6 +1575,15 @@ export interface SessionState {
    *  directory. Optimistic local patch + fire-and-forget settings write. */
   renameWorktree: (worktreePath: string, name: string) => Promise<void>;
   setArchivedViewOpen: (open: boolean) => void;
+  /** Flip a group header's collapsed state in the "grouped" project view
+   *  (absent key = expanded; the flip tests plain truthiness like
+   *  `toggleWorktreeExpanded`). Explicit toggles persist. */
+  toggleGroupCollapsed: (groupName: string) => void;
+  /** Explicit open/close of the pinned-sessions / pinned-projects sections
+   *  (the reveal effect force-opening them routes through here too — the
+   *  section visibly opens, so persisting what's on screen is correct). */
+  setPinnedSessionsOpen: (open: boolean) => void;
+  setPinnedProjectsOpen: (open: boolean) => void;
   /** Fetch the next page of active sessions for a project and append it to
    *  `sessionsByProject[projectId]`. No-op when there are no more to load. */
   loadMoreSessions: (projectId: string) => Promise<void>;
@@ -2642,6 +2666,9 @@ let leftbarExpansionLastWritten: {
   projects: string;
   worktrees: string;
   archivedOpen: string;
+  groups: string;
+  pinnedSessionsOpen: string;
+  pinnedProjectsOpen: string;
 } | null = null;
 function persistLeftbarExpansion(get: () => SessionState): void {
   if (leftbarExpansionPersistTimer) clearTimeout(leftbarExpansionPersistTimer);
@@ -2652,6 +2679,9 @@ function persistLeftbarExpansion(get: () => SessionState): void {
       projects: JSON.stringify(s.expandedProjects),
       worktrees: JSON.stringify(s.expandedWorktrees),
       archivedOpen: s.archivedViewOpen ? "true" : "false",
+      groups: JSON.stringify(s.collapsedGroups),
+      pinnedSessionsOpen: s.pinnedSessionsOpen ? "true" : "false",
+      pinnedProjectsOpen: s.pinnedProjectsOpen ? "true" : "false",
     };
     const last = leftbarExpansionLastWritten;
     if (last?.projects !== next.projects) {
@@ -2668,6 +2698,21 @@ function persistLeftbarExpansion(get: () => SessionState): void {
       void api.setting
         .set({ key: LEFTBAR_ARCHIVED_OPEN_SETTING_KEY, value: next.archivedOpen })
         .catch((err) => console.error("setting.set(leftbar.archivedOpen) failed:", err));
+    }
+    if (last?.groups !== next.groups) {
+      void api.setting
+        .set({ key: LEFTBAR_COLLAPSED_GROUPS_SETTING_KEY, value: next.groups })
+        .catch((err) => console.error("setting.set(leftbar.collapsedGroups) failed:", err));
+    }
+    if (last?.pinnedSessionsOpen !== next.pinnedSessionsOpen) {
+      void api.setting
+        .set({ key: LEFTBAR_PINNED_SESSIONS_OPEN_SETTING_KEY, value: next.pinnedSessionsOpen })
+        .catch((err) => console.error("setting.set(leftbar.pinnedSessionsOpen) failed:", err));
+    }
+    if (last?.pinnedProjectsOpen !== next.pinnedProjectsOpen) {
+      void api.setting
+        .set({ key: LEFTBAR_PINNED_PROJECTS_OPEN_SETTING_KEY, value: next.pinnedProjectsOpen })
+        .catch((err) => console.error("setting.set(leftbar.pinnedProjectsOpen) failed:", err));
     }
     leftbarExpansionLastWritten = next;
   }, LEFTBAR_EXPANSION_PERSIST_DEBOUNCE_MS);
@@ -3468,13 +3513,32 @@ function applySessionDeletedState(s: SessionState, id: string): Partial<SessionS
  *  to "default" (the neutral slot every provider declares for both lists);
  *  values valid for both providers pass through untouched. Callers apply this
  *  on every provider switch (setProvider) and on re-syncs that can surface a
- *  stale persisted value (syncConfigFromSession, reloadProviders). */
+ *  stale persisted value (syncConfigFromSession, reloadProviders, model
+ *  switches — the level list is additionally MODEL-scoped on OpenAI-protocol
+ *  custom endpoints). */
 function coerceSlotsForProvider(
-  s: Pick<SessionState, "providers" | "effort" | "permissionMode">,
+  s: Pick<
+    SessionState,
+    "providers" | "effort" | "permissionMode" | "customModels" | "customModelId" | "model"
+  >,
   providerId: string,
+  /** The model binding the coercion is FOR. Pass the incoming binding when it
+   *  differs from the store slots (syncConfigFromSession coerces a session's
+   *  persisted effort BEFORE applying that session's model patch; setProvider
+   *  coerces the restored binding). Omit to use the store's current slots. */
+  binding?: { customModelId: string | null; model: string },
 ): { effort: SessionState["effort"]; permissionMode: SessionState["permissionMode"] } {
   const provider = s.providers.find((p) => p.id === providerId);
-  const levels = provider?.capabilities.thinkingLevels;
+  // Same resolution the effort chip renders with: provider-declared levels,
+  // filtered by the selected model's thinking declaration on OpenAI-protocol
+  // custom endpoints. A model whose thinking isn't controllable (empty list)
+  // snaps any non-default effort back to "default".
+  const levels = resolveEffortLevels({
+    providerLevels: provider?.capabilities.thinkingLevels,
+    customModels: s.customModels,
+    customModelId: binding?.customModelId ?? s.customModelId,
+    model: binding?.model ?? s.model,
+  });
   const modes = provider?.capabilities.permissionModes;
   return {
     effort:
@@ -3510,8 +3574,14 @@ function syncConfigFromSession(
   // effort / permissionMode are provider-namespaced (see coerceSlotsForProvider):
   // a row persisted before a provider switch — or before this coercion existed —
   // can carry a value its own provider doesn't declare; snap it to "default"
-  // here so the composer never renders a raw foreign id.
-  const coerced = coerceSlotsForProvider(get(), sess.providerId);
+  // here so the composer never renders a raw foreign id. The coercion is scoped
+  // to the SESSION's model binding (not the current slots — the patch below
+  // hasn't applied yet), so an OpenAI-protocol model whose thinking levels
+  // don't include the persisted effort is corrected against the right list.
+  const coerced = coerceSlotsForProvider(get(), sess.providerId, {
+    customModelId: sess.customModelId,
+    model: sess.model,
+  });
   const patch: Partial<SessionState> = {
     providerId: sess.providerId,
     model: sess.model,
@@ -4898,6 +4968,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   worktreeNames: {},
   projectColors: {},
   archivedViewOpen: false,
+  collapsedGroups: {},
+  pinnedProjectsOpen: true,
+  pinnedSessionsOpen: true,
   // openTabs is filled by `init` (lands on the first non-archived session,
   // if any) and by `startSession`. Defaulting to [] here means there's no
   // phantom active tab before hydration completes.
@@ -5180,6 +5253,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           LEFTBAR_EXPANDED_PROJECTS_SETTING_KEY,
           LEFTBAR_EXPANDED_WORKTREES_SETTING_KEY,
           LEFTBAR_ARCHIVED_OPEN_SETTING_KEY,
+          LEFTBAR_COLLAPSED_GROUPS_SETTING_KEY,
+          LEFTBAR_PINNED_SESSIONS_OPEN_SETTING_KEY,
+          LEFTBAR_PINNED_PROJECTS_OPEN_SETTING_KEY,
         ],
       })
       .catch((err) => {
@@ -5240,6 +5316,24 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       if (value === "true" || value === "false") set({ archivedViewOpen: value === "true" });
     } catch (err) {
       console.error("apply(leftbar.archivedOpen) failed:", err);
+    }
+    try {
+      const map = parseExpandedFlagMap(fp[LEFTBAR_COLLAPSED_GROUPS_SETTING_KEY]);
+      if (map) set({ collapsedGroups: map });
+    } catch (err) {
+      console.error("apply(leftbar.collapsedGroups) failed:", err);
+    }
+    try {
+      const value = fp[LEFTBAR_PINNED_SESSIONS_OPEN_SETTING_KEY];
+      if (value === "true" || value === "false") set({ pinnedSessionsOpen: value === "true" });
+    } catch (err) {
+      console.error("apply(leftbar.pinnedSessionsOpen) failed:", err);
+    }
+    try {
+      const value = fp[LEFTBAR_PINNED_PROJECTS_OPEN_SETTING_KEY];
+      if (value === "true" || value === "false") set({ pinnedProjectsOpen: value === "true" });
+    } catch (err) {
+      console.error("apply(leftbar.pinnedProjectsOpen) failed:", err);
     }
 
     // displayMode determines single vs tabs layout - needed before first render
@@ -6114,6 +6208,28 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
   setArchivedViewOpen: (open) => {
     set({ archivedViewOpen: open });
+    persistLeftbarExpansion(get);
+  },
+
+  // Group headers (grouped project view) default OPEN, so this map stores
+  // the collapsed ones — the flip mirrors toggleWorktreeExpanded's plain
+  // truthiness test: flipping an untouched (undefined) group folds it.
+  toggleGroupCollapsed: (groupName) => {
+    set((s) => {
+      return {
+        collapsedGroups: { ...s.collapsedGroups, [groupName]: !s.collapsedGroups[groupName] },
+      };
+    });
+    persistLeftbarExpansion(get);
+  },
+
+  setPinnedSessionsOpen: (open) => {
+    set({ pinnedSessionsOpen: open });
+    persistLeftbarExpansion(get);
+  },
+
+  setPinnedProjectsOpen: (open) => {
+    set({ pinnedProjectsOpen: open });
     persistLeftbarExpansion(get);
   },
 
@@ -10212,15 +10328,29 @@ export const useSessionStore = create<SessionState>((set, get) => ({
    *  optimistic-local / fire-and-forget pattern. */
   setModel: (model) => {
     const sessionId = get().activeSessionId;
-    set((s) => ({
-      model,
-      lastModelByProvider: {
-        ...s.lastModelByProvider,
-        [s.providerId]: { ...rememberedEntryOf(s), model },
-      },
-    }));
+    set((s) => {
+      // Switching models can invalidate the effort slot on OpenAI-protocol
+      // custom endpoints (the level list is model-scoped) — coerce with the
+      // INCOMING binding so the chip never shows (nor sends) a level the new
+      // model doesn't accept. See coerceSlotsForProvider.
+      const coerced = coerceSlotsForProvider(s, s.providerId, {
+        customModelId: s.customModelId,
+        model,
+      });
+      return {
+        model,
+        ...coerced,
+        lastModelByProvider: {
+          ...s.lastModelByProvider,
+          [s.providerId]: { ...rememberedEntryOf(s), model, effort: coerced.effort },
+        },
+      };
+    });
     if (sessionId) {
-      void api.session.updateSettings({ sessionId, model }).catch((err) => {
+      // effort rides along so a coerced slot (invalid for the new model) is
+      // corrected in the session row too, not just the view.
+      const { effort } = get();
+      void api.session.updateSettings({ sessionId, model, effort }).catch((err) => {
         console.error("updateSettings(model) failed:", err);
       });
     }
@@ -10267,22 +10397,36 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         const first = cfg?.models.find((m) => m.id.trim())?.id ?? "default";
         nextModel = first;
       }
+      // Model-scoped thinking levels (OpenAI-protocol endpoints): a level
+      // picked for the previous model may not exist on the new one — coerce
+      // against the INCOMING binding. See coerceSlotsForProvider.
+      const coerced = coerceSlotsForProvider(s, s.providerId, {
+        customModelId: id,
+        model: nextModel,
+      });
       return {
         customModelId: id,
         model: nextModel,
+        ...coerced,
         lastModelByProvider: {
           ...s.lastModelByProvider,
-          [s.providerId]: { ...rememberedEntryOf(s), model: nextModel, customModelId: id },
+          [s.providerId]: {
+            ...rememberedEntryOf(s),
+            model: nextModel,
+            customModelId: id,
+            effort: coerced.effort,
+          },
         },
       };
     });
     // Persist the new binding + model to the session row. We compute the
     // resolved model from the same logic as above (re-read post-set to be
-    // sure) and send both fields in one patch.
+    // sure) and send both fields in one patch. effort rides along so a
+    // coerced slot (invalid for the new model) is corrected in the row too.
     const sessionId = get().activeSessionId;
     if (sessionId) {
-      const { model, customModelId } = get();
-      void api.session.updateSettings({ sessionId, model, customModelId }).catch((err) => {
+      const { model, customModelId, effort } = get();
+      void api.session.updateSettings({ sessionId, model, customModelId, effort }).catch((err) => {
         console.error("updateSettings(customModel) failed:", err);
       });
     }
@@ -10297,6 +10441,21 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       // A persisted composer pick whose custom config was deleted falls back
       // to auto.
       validateComposerSelection(set, get);
+      // Model-level thinking declarations may have just changed (settings
+      // edits): snap an effort slot the active binding no longer offers, so
+      // the chip re-renders with the new level set immediately instead of the
+      // stale value being dropped at the provider on the next turn.
+      const s = get();
+      const coerced = coerceSlotsForProvider(s, s.providerId);
+      if (coerced.effort !== s.effort || coerced.permissionMode !== s.permissionMode) {
+        set(coerced);
+        const sid = s.activeSessionId;
+        if (sid && coerced.effort !== s.effort) {
+          void api.session.updateSettings({ sessionId: sid, effort: coerced.effort }).catch((err) => {
+            console.error("updateSettings(effort coerce) failed:", err);
+          });
+        }
+      }
     } catch (err) {
       console.error("reloadCustomModels failed:", err);
     }
@@ -10337,14 +10496,19 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       // remembered slots — falling back to the current values when it has
       // none (values valid for both providers pass through) — then coerce
       // against the target's declared options so a stale remembered value
-      // snaps to "default" instead of rendering as a raw foreign id.
+      // snaps to "default" instead of rendering as a raw foreign id. Scoped
+      // to the RESTORED model binding (see coerceSlotsForProvider).
       const coerced = coerceSlotsForProvider(
         {
           providers: s.providers,
+          customModels: s.customModels,
+          customModelId: s.customModelId,
+          model: s.model,
           effort: remembered?.effort ?? s.effort,
           permissionMode: remembered?.permissionMode ?? s.permissionMode,
         },
         id,
+        restored,
       );
       set({ providerId: id, ...restored, ...coerced, lastModelByProvider: nextMap });
     } else {

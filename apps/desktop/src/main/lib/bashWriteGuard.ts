@@ -1,13 +1,14 @@
 /**
- * Bash write-target guard for the Pi provider.
+ * Bash write-target guard, shared by the Pi and Claude providers.
  *
- * The Pi SDK's built-in `bash` tool is unguarded — the model can create or
+ * The agent's `bash` tool is otherwise unguarded — the model can create or
  * overwrite files anywhere via shell redirections (`>`, `>>`, `tee`, `dd of=`,
- * `sed -i`, …), bypassing the in-project path guard that wraps `write`/`edit`
- * (see `createGuardedFileTools` in `PiAgentSdkProvider.ts`). This module
- * extracts the write targets from a command string so the wrapped bash tool can
- * reject ones that resolve outside the project working directory, the same way
- * `guardToolPath` does for the file tools.
+ * `sed -i`, …), bypassing the in-project path guard that covers the
+ * Write/Edit tools (see `FILE_MUTATING_TOOLS` in `fileSnapshot.ts`). This
+ * module extracts the write targets from a command string so the bash guard
+ * (Pi: the extension's tool_call handler; Claude: the canUseTool Bash branch)
+ * can reject ones that resolve outside the project working directory, the
+ * same way the file-tool guard does.
  *
  * ## Scope — deliberately NOT a sandbox
  *
@@ -16,9 +17,7 @@
  * determined model can still escape with forms we don't recognize (`cp`/`mv`
  * target arguments, heredocs, pipes into `cat >`, `install`, etc.). The goal is
  * to block the *unintentional* "create a helper script in /tmp" pattern, not to
- * defeat adversarial input — that is the same incompleteness the Claude
- * provider's bash side accepts (it guards Write/Edit/MultiEdit/NotebookEdit via
- * canUseTool but leaves bash unguarded there too).
+ * defeat adversarial input.
  *
  * Paths containing `$` or backticks are skipped (we can't expand them
  * statically, and rejecting them would block legitimate in-project writes via a
@@ -206,8 +205,14 @@ function hasDynamicExpansion(p: string): boolean {
  *  modify real files on disk. `/dev/null` discards output (the canonical
  *  `command > /dev/null 2>&1` idiom); `/dev/stdout`, `/dev/stderr`, and
  *  `/dev/fd/N` redirect to existing file descriptors. Whitelisting these
- *  avoids false positives on ubiquitous output-suppression patterns. Checked
- *  against the normalized absolute path so `/dev/./null` etc. are covered. */
+ *  avoids false positives on ubiquitous output-suppression patterns.
+ *
+ *  Checked against BOTH the raw token and the normalized absolute path: on
+ *  Windows `resolve(cwd, "/dev/null")` yields `<drive>:\dev\null`, so the
+ *  POSIX-form set would never match the normalized form there and the guard
+ *  wrongly denied `> /dev/null` (a Git-Bash-legal target — MSYS maps it to
+ *  the null device). The raw check covers that; the normalized check still
+ *  covers `/dev/./null`-style variants on POSIX. */
 const SAFE_DEVICE_FILES = new Set([
   "/dev/null",
   "/dev/stdin",
@@ -266,6 +271,7 @@ export function guardBashCommand(
   const targets = extractBashWriteTargets(command);
   for (const raw of targets) {
     if (hasDynamicExpansion(raw)) continue; // can't expand — allow
+    if (SAFE_DEVICE_FILES.has(raw)) continue; // device file (raw POSIX form) — safe
     const norm = normalizeToolFilePath(cwd, expandTilde(raw));
     if (!norm) continue; // unresolvable — allow (matches guardToolPath behavior)
     if (SAFE_DEVICE_FILES.has(norm.absPath)) continue; // device file — safe, no real write

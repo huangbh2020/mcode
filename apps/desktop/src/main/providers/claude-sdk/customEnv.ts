@@ -83,6 +83,8 @@ import { homedir } from "node:os";
 import path from "node:path";
 import {
   formatCustomHeaderLines,
+  isValidEffortHeaderValue,
+  MCODE_EFFORT_HEADER,
   parseCustomHeaderLines,
   resolveUpstreamHeaders,
 } from "@main/providers/upstreamHeaders.js";
@@ -148,10 +150,15 @@ export function resolveActiveModel(cfg: ApiConfig): string | undefined {
  *   gateway's required session header — see the `ANTHROPIC_CUSTOM_HEADERS`
  *   block below. Callers without a session (probe / title / commit-message
  *   helpers) may omit it and get a stable per-process id instead.
+ * @param opts.thinkingEffort Thinking level for the turn, on `openai`-protocol
+ *   configs ONLY (see {@link MCODE_EFFORT_HEADER}). It rides
+ *   ANTHROPIC_CUSTOM_HEADERS to the local bridge, which translates it into the
+ *   endpoint's native field. Ignored entirely on `anthropic` configs — there
+ *   the level goes through the SDK's own effort option instead.
  */
 export function buildCustomEnv(
   cfg: ApiConfig,
-  opts?: { sessionId?: string },
+  opts?: { sessionId?: string; thinkingEffort?: string },
 ): NonNullable<Options["env"]> {
   const env: NonNullable<Options["env"]> = { ...process.env };
 
@@ -257,6 +264,20 @@ export function buildCustomEnv(
     if (Object.keys(upstreamHeaders).length > 0) {
       env.ANTHROPIC_CUSTOM_HEADERS = formatCustomHeaderLines(upstreamHeaders);
     }
+  } else if (cfg.protocol === "openai" && isValidEffortHeaderValue(opts?.thinkingEffort)) {
+    // OpenAI-protocol bridge path: the thinking level can't go through the
+    // binary (it would be rendered as an Anthropic `thinking` budget the
+    // OpenAI-protocol endpoint can't read), so it rides our internal header
+    // instead. The binary attaches ANTHROPIC_CUSTOM_HEADERS to every API
+    // request — including the ones addressed to the local bridge — and the
+    // bridge translates the header into `reasoning_effort` /
+    // `enable_thinking` per the model's declaration. Merged over any inherited
+    // OS-level value for the same reason as the anthropic branch above; the
+    // bridge never forwards this header to the real gateway.
+    env.ANTHROPIC_CUSTOM_HEADERS = formatCustomHeaderLines({
+      ...parseCustomHeaderLines(env.ANTHROPIC_CUSTOM_HEADERS),
+      [MCODE_EFFORT_HEADER]: opts.thinkingEffort,
+    });
   }
 
   // Always redirect the claude binary's user-level config root to Mcode's
