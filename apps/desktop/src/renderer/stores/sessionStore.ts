@@ -31,6 +31,7 @@ import { isValidSnapshot } from "@renderer/lib/contextWindow.js";
 import { getLastCursor, type NavEntry } from "@renderer/lib/editorNav.js";
 import { disposeModel, getDisplayedPath } from "@renderer/lib/editorModelCache.js";
 import type { CustomModelPublic } from "@contracts/customModel";
+import { resolveEffortLevels } from "@renderer/lib/thinkingLevels.js";
 import { api } from "@renderer/lib/api.js";
 import { isElectron } from "@renderer/lib/platform.js";
 import { normWorktreeKey } from "@renderer/lib/worktree.js";
@@ -3468,13 +3469,32 @@ function applySessionDeletedState(s: SessionState, id: string): Partial<SessionS
  *  to "default" (the neutral slot every provider declares for both lists);
  *  values valid for both providers pass through untouched. Callers apply this
  *  on every provider switch (setProvider) and on re-syncs that can surface a
- *  stale persisted value (syncConfigFromSession, reloadProviders). */
+ *  stale persisted value (syncConfigFromSession, reloadProviders, model
+ *  switches — the level list is additionally MODEL-scoped on OpenAI-protocol
+ *  custom endpoints). */
 function coerceSlotsForProvider(
-  s: Pick<SessionState, "providers" | "effort" | "permissionMode">,
+  s: Pick<
+    SessionState,
+    "providers" | "effort" | "permissionMode" | "customModels" | "customModelId" | "model"
+  >,
   providerId: string,
+  /** The model binding the coercion is FOR. Pass the incoming binding when it
+   *  differs from the store slots (syncConfigFromSession coerces a session's
+   *  persisted effort BEFORE applying that session's model patch; setProvider
+   *  coerces the restored binding). Omit to use the store's current slots. */
+  binding?: { customModelId: string | null; model: string },
 ): { effort: SessionState["effort"]; permissionMode: SessionState["permissionMode"] } {
   const provider = s.providers.find((p) => p.id === providerId);
-  const levels = provider?.capabilities.thinkingLevels;
+  // Same resolution the effort chip renders with: provider-declared levels,
+  // filtered by the selected model's thinking declaration on OpenAI-protocol
+  // custom endpoints. A model whose thinking isn't controllable (empty list)
+  // snaps any non-default effort back to "default".
+  const levels = resolveEffortLevels({
+    providerLevels: provider?.capabilities.thinkingLevels,
+    customModels: s.customModels,
+    customModelId: binding?.customModelId ?? s.customModelId,
+    model: binding?.model ?? s.model,
+  });
   const modes = provider?.capabilities.permissionModes;
   return {
     effort:
@@ -3510,8 +3530,14 @@ function syncConfigFromSession(
   // effort / permissionMode are provider-namespaced (see coerceSlotsForProvider):
   // a row persisted before a provider switch — or before this coercion existed —
   // can carry a value its own provider doesn't declare; snap it to "default"
-  // here so the composer never renders a raw foreign id.
-  const coerced = coerceSlotsForProvider(get(), sess.providerId);
+  // here so the composer never renders a raw foreign id. The coercion is scoped
+  // to the SESSION's model binding (not the current slots — the patch below
+  // hasn't applied yet), so an OpenAI-protocol model whose thinking levels
+  // don't include the persisted effort is corrected against the right list.
+  const coerced = coerceSlotsForProvider(get(), sess.providerId, {
+    customModelId: sess.customModelId,
+    model: sess.model,
+  });
   const patch: Partial<SessionState> = {
     providerId: sess.providerId,
     model: sess.model,
@@ -10212,15 +10238,29 @@ export const useSessionStore = create<SessionState>((set, get) => ({
    *  optimistic-local / fire-and-forget pattern. */
   setModel: (model) => {
     const sessionId = get().activeSessionId;
-    set((s) => ({
-      model,
-      lastModelByProvider: {
-        ...s.lastModelByProvider,
-        [s.providerId]: { ...rememberedEntryOf(s), model },
-      },
-    }));
+    set((s) => {
+      // Switching models can invalidate the effort slot on OpenAI-protocol
+      // custom endpoints (the level list is model-scoped) — coerce with the
+      // INCOMING binding so the chip never shows (nor sends) a level the new
+      // model doesn't accept. See coerceSlotsForProvider.
+      const coerced = coerceSlotsForProvider(s, s.providerId, {
+        customModelId: s.customModelId,
+        model,
+      });
+      return {
+        model,
+        ...coerced,
+        lastModelByProvider: {
+          ...s.lastModelByProvider,
+          [s.providerId]: { ...rememberedEntryOf(s), model, effort: coerced.effort },
+        },
+      };
+    });
     if (sessionId) {
-      void api.session.updateSettings({ sessionId, model }).catch((err) => {
+      // effort rides along so a coerced slot (invalid for the new model) is
+      // corrected in the session row too, not just the view.
+      const { effort } = get();
+      void api.session.updateSettings({ sessionId, model, effort }).catch((err) => {
         console.error("updateSettings(model) failed:", err);
       });
     }
@@ -10267,22 +10307,36 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         const first = cfg?.models.find((m) => m.id.trim())?.id ?? "default";
         nextModel = first;
       }
+      // Model-scoped thinking levels (OpenAI-protocol endpoints): a level
+      // picked for the previous model may not exist on the new one — coerce
+      // against the INCOMING binding. See coerceSlotsForProvider.
+      const coerced = coerceSlotsForProvider(s, s.providerId, {
+        customModelId: id,
+        model: nextModel,
+      });
       return {
         customModelId: id,
         model: nextModel,
+        ...coerced,
         lastModelByProvider: {
           ...s.lastModelByProvider,
-          [s.providerId]: { ...rememberedEntryOf(s), model: nextModel, customModelId: id },
+          [s.providerId]: {
+            ...rememberedEntryOf(s),
+            model: nextModel,
+            customModelId: id,
+            effort: coerced.effort,
+          },
         },
       };
     });
     // Persist the new binding + model to the session row. We compute the
     // resolved model from the same logic as above (re-read post-set to be
-    // sure) and send both fields in one patch.
+    // sure) and send both fields in one patch. effort rides along so a
+    // coerced slot (invalid for the new model) is corrected in the row too.
     const sessionId = get().activeSessionId;
     if (sessionId) {
-      const { model, customModelId } = get();
-      void api.session.updateSettings({ sessionId, model, customModelId }).catch((err) => {
+      const { model, customModelId, effort } = get();
+      void api.session.updateSettings({ sessionId, model, customModelId, effort }).catch((err) => {
         console.error("updateSettings(customModel) failed:", err);
       });
     }
@@ -10337,14 +10391,19 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       // remembered slots — falling back to the current values when it has
       // none (values valid for both providers pass through) — then coerce
       // against the target's declared options so a stale remembered value
-      // snaps to "default" instead of rendering as a raw foreign id.
+      // snaps to "default" instead of rendering as a raw foreign id. Scoped
+      // to the RESTORED model binding (see coerceSlotsForProvider).
       const coerced = coerceSlotsForProvider(
         {
           providers: s.providers,
+          customModels: s.customModels,
+          customModelId: s.customModelId,
+          model: s.model,
           effort: remembered?.effort ?? s.effort,
           permissionMode: remembered?.permissionMode ?? s.permissionMode,
         },
         id,
+        restored,
       );
       set({ providerId: id, ...restored, ...coerced, lastModelByProvider: nextMap });
     } else {

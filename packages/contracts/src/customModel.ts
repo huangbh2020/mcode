@@ -106,6 +106,41 @@ export function isValidHeaderValue(value: string): boolean {
   return !/[\r\n]/.test(value) && value.length <= MAX_CUSTOM_HEADER_VALUE_LEN;
 }
 
+/** How thinking / reasoning is controlled on an OpenAI-protocol endpoint.
+ *  Providers diverge on the wire field: OpenAI's o-series reads
+ *  `reasoning_effort: minimal|low|medium|high`, Qwen's OpenAI-compatible
+ *  endpoints read the `enable_thinking` boolean, and many models (DeepSeek R1,
+ *  GLM's chat-completions wire, Kimi) expose no control field at all — sending
+ *  one yields a 400 or silently does nothing. This descriptor lets each model
+ *  row declare which shape it speaks so the UI only offers real levels and the
+ *  bridge only sends fields the endpoint understands. */
+export type CustomModelThinkingMode = "reasoning_effort" | "enable_thinking" | "none";
+
+/** Per-model thinking control declaration. Only consumed on `openai`-protocol
+ *  configs (the bridge translates it into the upstream field); an
+ *  `anthropic`-protocol endpoint takes Anthropic's native `thinking` parameter
+ *  straight from the binary, so its level list stays the provider's. */
+export interface CustomModelThinking {
+  mode: CustomModelThinkingMode;
+  /** Selectable levels for `reasoning_effort`. Defaults to
+   *  {@link REASONING_EFFORT_LEVELS} when absent. */
+  levels?: string[];
+  /** The level highlighted as the sensible default for `reasoning_effort`
+   *  (informational for the UI; the composer slot starts at "default"). */
+  defaultLevel?: string;
+}
+
+/** The level set offered for `reasoning_effort` models when the declaration
+ *  doesn't narrow it — OpenAI's own four-step surface, verbatim. */
+export const REASONING_EFFORT_LEVELS = ["minimal", "low", "medium", "high"] as const;
+
+/** Resolve a level list: declared levels win, else the default four. Exposed
+ *  so the settings form's preview, the composer's chip and the bridge's
+ *  request-side check all gate on the exact same set. */
+export function reasoningEffortLevels(t?: CustomModelThinking): readonly string[] {
+  return t?.levels && t.levels.length > 0 ? t.levels : REASONING_EFFORT_LEVELS;
+}
+
 /** One selectable model on a custom endpoint. Mirrors the Pi side's flat
  *  per-provider model list: just the gateway-side model id plus a 1M-context
  *  declaration — no display name, no per-tier role. */
@@ -118,6 +153,11 @@ export interface CustomModelEntry {
    *  ANTHROPIC_MODEL carries the `[1m]` suffix (the DeepSeek-style gateway
    *  convention). */
   supports1m?: boolean;
+  /** Thinking-control declaration (OpenAI-protocol configs only). Absent =
+   *  infer from the endpoint host / model id via {@link inferModelThinking}.
+   *  Explicitly setting `mode: "none"` hides the thinking chip entirely for
+   *  this model. */
+  thinking?: CustomModelThinking;
 }
 
 /** Fully-resolved config passed to the provider at turn time (main-process
@@ -254,4 +294,81 @@ export interface TestCustomModelResult {
   detail?: string;
   /** Error message on failure (auth / network / timeout / bad model). */
   error?: string;
+}
+
+/* ─────────────────── Thinking-mode heuristics (per-provider defaults) ─────────────────── */
+
+/** A narrow provider-keyword table: (baseUrl host or model id substring) →
+ *  thinking shape. Deliberately conservative — a wrong "supports effort"
+ *  guess sends a field the endpoint rejects (400), while a wrong "none"
+ *  merely hides a chip the user can re-enable in the settings form. */
+const THINKING_KEYWORD_TABLE: readonly { re: RegExp; thinking: CustomModelThinking }[] = [
+  // Qwen's OpenAI-compatible endpoints (DashScope / one-api mirrors) read the
+  // `enable_thinking` boolean on chat completions.
+  { re: /qwen|dashscope|aliyuncs/i, thinking: { mode: "enable_thinking" } },
+  // OpenAI's own reasoning models & OpenRouter take `reasoning_effort`.
+  { re: /(^|\b)(o[134])(-|\b)|gpt-5|openai\.com|openrouter/i, thinking: { mode: "reasoning_effort" } },
+  // Models whose thinking is on by default with no accepted control field on
+  // the OpenAI wire (R1 always reasons; GLM/Kimi expose control only on their
+  // Anthropic-protocol endpoints, which don't go through this table).
+  { re: /deepseek|glm|zhipu|bigmodel|kimi|moonshot/i, thinking: { mode: "none" } },
+];
+
+/** Extract a URL's host part without the DOM `URL` global (this package has
+ *  no lib dependency; a plain regex keeps it usable from any bundler target).
+ *  Returns the lowercased input when it doesn't look like a URL — keyword
+ *  matching on the raw string is the least-wrong fallback there. */
+function hostOf(baseUrl: string): string {
+  const m = /^[a-z][a-z0-9+.-]*:\/\/([^/?#]+)/i.exec(baseUrl.trim());
+  return (m ? m[1] : baseUrl).toLowerCase();
+}
+
+/** Infer a model's thinking-control shape from the endpoint baseUrl + model
+ *  id when the user hasn't declared one. Unknown providers resolve to
+ *  `{ mode: "none" }` — the safe default that sends nothing (see the table
+ *  note). LIVES HERE so the settings form's "auto (inferred: …)" preview and
+ *  the bridge's request-side translation can never drift apart.
+ *
+ *  Host matching runs on the URL's HOST part only (mirrors
+ *  `requiresSessionHeader` in providers/upstreamHeaders.ts) — a path segment
+ *  like `https://evil.com/openai.com/v1` can't masquerade as the provider. */
+export function inferModelThinking(baseUrl: string, modelId: string): CustomModelThinking {
+  const haystack = `${hostOf(baseUrl)}\n${modelId}`;
+  for (const row of THINKING_KEYWORD_TABLE) {
+    if (row.re.test(haystack)) return row.thinking;
+  }
+  return { mode: "none" };
+}
+
+/** Effective thinking declaration for a model row: an explicit `thinking`
+ *  wins; otherwise fall back to the provider heuristics. This is the single
+ *  resolution point every consumer (settings preview, composer chip, bridge)
+ *  must go through. */
+export function resolveModelThinking(
+  entry: CustomModelEntry | undefined,
+  baseUrl: string,
+): CustomModelThinking {
+  if (entry?.thinking?.mode) return entry.thinking;
+  return inferModelThinking(baseUrl, entry?.id ?? "");
+}
+
+/** The selectable effort-level VALUES for a model row, with the universal
+ *  "default" sentinel (don't send anything) first. The composer chip builds
+ *  its option list from this, and the provider gates the outgoing level on it,
+ *  so a persisted level is always judged by the same set the UI offered.
+ *  Empty array = thinking not controllable on this model (hide the chip, send
+ *  no field). */
+export function effortLevelValuesForModel(
+  entry: CustomModelEntry | undefined,
+  baseUrl: string,
+): string[] {
+  const t = resolveModelThinking(entry, baseUrl);
+  switch (t.mode) {
+    case "reasoning_effort":
+      return ["default", ...reasoningEffortLevels(t)];
+    case "enable_thinking":
+      return ["default", "off", "on"];
+    case "none":
+      return [];
+  }
 }

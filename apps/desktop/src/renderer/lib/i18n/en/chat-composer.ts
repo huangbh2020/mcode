@@ -171,6 +171,7 @@ export const en = {
   "chat.effort.section": "Thinking level",
   "chat.effort.hintDefault": "Let {provider} decide",
   "chat.effort.hintOff": "Thinking off",
+  "chat.effort.hintOn": "Thinking on",
   "chat.effort.hintMinimal": "Barely any thinking",
   "chat.effort.hintLow": "Fastest, least thinking",
   "chat.effort.hintMedium": "Balanced",
@@ -189,6 +190,7 @@ export const en = {
   // ── effort block-picker tile captions:short phrases inside the tile; full text stays in hint* ──
   "chat.effort.tileDefault": "Model picks",
   "chat.effort.tileOff": "Off",
+  "chat.effort.tileOn": "On",
   "chat.effort.tileMinimal": "Minimal",
   "chat.effort.tileLow": "Fastest",
   "chat.effort.tileMedium": "Balanced",

@@ -17,6 +17,7 @@ import type {
   ProviderCapabilities,
   UserInputAnswers,
 } from "@contracts/provider";
+import { effortLevelValuesForModel } from "@contracts/customModel";
 import type { AskUserQuestionItem, PermissionMode } from "@contracts/runtime";
 import { SdkMessageAdapter, parseQuestions } from "./SdkMessageAdapter.js";
 import { buildCustomEnv, MCODE_CONFIG_DIR, resolveActiveModel } from "./customEnv.js";
@@ -699,6 +700,29 @@ export class ClaudeAgentSdkProvider implements AgentProvider {
     // sendTurn, which shouldn't happen but we don't want a crash).
     const snapshot = getFileSnapshot(req.sessionId);
 
+    // OpenAI-protocol bridge turn: the effort level must NOT go through the
+    // binary — the binary would render it as an Anthropic `thinking` budget,
+    // which the OpenAI-protocol endpoint can't read (and many reject). Instead
+    // it rides Mcode's internal request header to the local bridge, which
+    // translates it into the endpoint's native field (`reasoning_effort` /
+    // `enable_thinking`) per the selected model's thinking declaration. The
+    // level is also gated against that declaration, so a stale persisted value
+    // (the model row was re-declared since) is dropped rather than sent.
+    const isOpenAiBridge = req.apiConfig?.protocol === "openai";
+    const bridgeCfg = isOpenAiBridge ? req.apiConfig : undefined;
+    let bridgeThinkingEffort: string | undefined;
+    if (bridgeCfg && req.effort && req.effort !== "default") {
+      const entry =
+        bridgeCfg.models.find((m) => m.id === bridgeCfg.selectedModel) ?? bridgeCfg.models[0];
+      if (effortLevelValuesForModel(entry, bridgeCfg.baseUrl).includes(req.effort)) {
+        bridgeThinkingEffort = req.effort;
+      } else {
+        ctx.log.warn(
+          `thinking effort ${JSON.stringify(req.effort)} not valid for model ${JSON.stringify(bridgeCfg.selectedModel)} on ${bridgeCfg.baseUrl}; dropping`,
+        );
+      }
+    }
+
     const options: Options = {
       abortController: ac,
       cwd: req.cwd,
@@ -710,7 +734,13 @@ export class ClaudeAgentSdkProvider implements AgentProvider {
       // only the five named levels reach the wire, validated by the UI's
       // capabilities.thinkingLevels list.
       // See https://platform.claude.com/docs/en/build-with-claude/effort
-      effort: req.effort && req.effort !== "default" ? (req.effort as Options["effort"]) : undefined,
+      // EXCEPT on OpenAI-protocol bridge turns, where the level takes the
+      // internal-header path instead (see isOpenAiBridge above) — passing it
+      // here would make the binary emit an Anthropic `thinking` budget.
+      effort:
+        !isOpenAiBridge && req.effort && req.effort !== "default"
+          ? (req.effort as Options["effort"])
+          : undefined,
       // Permission mode: the contract is an open string; the SDK's type is a
       // narrow union. The UI only offers claude's 4 modes for this provider
       // (declared in capabilities.permissionModes), so the cast is safe. The
@@ -791,7 +821,12 @@ export class ClaudeAgentSdkProvider implements AgentProvider {
       // gateway request headers, and CLAUDE_CONFIG_DIR on top of process.env.
       // The session id names the gateway's session header (gateways that
       // require one want a stable id per conversation, not per request).
-      options.env = buildCustomEnv(req.apiConfig, { sessionId: req.sessionId });
+      // On OpenAI-protocol configs the thinking level rides the internal
+      // effort header (validated above against the model's declaration).
+      options.env = buildCustomEnv(req.apiConfig, {
+        sessionId: req.sessionId,
+        thinkingEffort: bridgeThinkingEffort,
+      });
     } else {
       // Standard Anthropic endpoint: still redirect the config root so Mcode
       // manages its own skills/settings, but no auth/model overrides needed.

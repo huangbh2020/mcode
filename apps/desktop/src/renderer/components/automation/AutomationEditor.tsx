@@ -31,6 +31,7 @@ import {
 } from "@renderer/components/chat/EffortPermissionControl.js";
 import { ModelDropdown } from "@renderer/components/chat/ModelDropdown.js";
 import { ProviderDropdown } from "@renderer/components/chat/ProviderDropdown.js";
+import { resolveEffortLevels } from "@renderer/lib/thinkingLevels.js";
 import { ScheduleEditor } from "./ScheduleEditor.js";
 import { describeSchedule } from "./automationFormat.js";
 import { SlashCommandPicker } from "@renderer/components/chat/SlashCommandPicker.js";
@@ -86,6 +87,7 @@ export function AutomationEditor({
   const providers = useSessionStore((s) => s.providers);
   const projects = useSessionStore((s) => s.projects);
   const skills = useSessionStore((s) => s.skills);
+  const customModels = useSessionStore((s) => s.customModels);
   const saveAutomation = useSessionStore((s) => s.saveAutomation);
 
   const [draft, setDraft] = useState<EditorDraft>(DEFAULT_DRAFT);
@@ -193,7 +195,16 @@ export function AutomationEditor({
   const draftPermModes = (draftProvider?.capabilities.permissionModes ?? []).filter(
     (m) => m.value !== "plan",
   );
-  const hasEffort = (draftProvider?.capabilities.thinkingLevels?.length ?? 0) > 0;
+  // Effort levels are model-scoped on OpenAI-protocol custom endpoints — the
+  // same resolution the composer chip uses, so this editor's chip shows (and
+  // saves) only levels the bound model actually accepts.
+  const draftEffortLevels = resolveEffortLevels({
+    providerLevels: draftProvider?.capabilities.thinkingLevels,
+    customModels,
+    customModelId: draft.customModelId,
+    model: draft.model,
+  });
+  const hasEffort = (draftEffortLevels?.length ?? 0) > 0;
   const hasPerm = draftPermModes.length > 0;
 
   const switchProvider = (nextId: string): void => {
@@ -473,7 +484,25 @@ export function AutomationEditor({
                         model: draft.model,
                         customModelId: draft.customModelId,
                         onPick: (customModelId, modelId) =>
-                          setDraft((d) => ({ ...d, customModelId, model: modelId })),
+                          setDraft((d) => {
+                            // Model-scoped thinking levels: a level picked for
+                            // the previous model may not exist on the new one.
+                            const levels = resolveEffortLevels({
+                              providerLevels: draftProvider?.capabilities.thinkingLevels,
+                              customModels,
+                              customModelId,
+                              model: modelId,
+                            });
+                            return {
+                              ...d,
+                              customModelId,
+                              model: modelId,
+                              effort:
+                                levels && levels.length > 0 && !levels.some((l) => l.value === d.effort)
+                                  ? "default"
+                                  : d.effort,
+                            };
+                          }),
                       }}
                     />
 
@@ -486,6 +515,8 @@ export function AutomationEditor({
                             providerId: draft.providerId,
                             value: draft.effort,
                             onChange: (v) => setDraft((d) => ({ ...d, effort: v })),
+                            customModelId: draft.customModelId,
+                            model: draft.model,
                           }}
                         />
                       </>

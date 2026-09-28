@@ -1671,6 +1671,16 @@ export type FocusSessionInput = z.infer<typeof FocusSessionSchema>;
 const CustomModelEntrySchema = z.object({
   id: z.string().min(1),
   supports1m: z.boolean().optional(),
+  /** Thinking-control declaration (OpenAI-protocol configs only). Shape only
+   *  — the value set is small and the renderer form is a Select, so the enum
+   *  here is the real validation. Absent on all legacy records = inferred. */
+  thinking: z
+    .object({
+      mode: z.enum(["reasoning_effort", "enable_thinking", "none"]),
+      levels: z.array(z.string()).optional(),
+      defaultLevel: z.string().optional(),
+    })
+    .optional(),
 });
 
 const AuthModeSchema = z.enum(["auth_token", "api_key"]);

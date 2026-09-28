@@ -40,6 +40,10 @@ function fingerprint(cfg: ApiConfig): string {
     // edit that doesn't rebuild would keep sending the OLD set for the rest of
     // the bridge's life (it outlives the turn that created it).
     customHeaders: cfg.customHeaders ?? null,
+    // Same story for the per-model thinking declarations: the server consults
+    // them on every request to decide which thinking field (if any) to emit,
+    // so a stale server would keep translating with the old declarations.
+    thinking: cfg.models.map((m) => [m.id, m.thinking ?? null]),
   });
 }
 

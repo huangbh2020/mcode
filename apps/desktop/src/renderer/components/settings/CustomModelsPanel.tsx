@@ -26,10 +26,11 @@ import { SiClaude, OpenAIBrandIcon, SiGoogle } from "@renderer/lib/icons.js";
 import type {
   CustomModelPublic,
   CustomModelEntry,
+  CustomModelThinkingMode,
   AuthMode,
   Protocol,
 } from "@contracts/customModel";
-import { isValidHeaderName, isValidHeaderValue } from "@contracts/customModel";
+import { inferModelThinking, isValidHeaderName, isValidHeaderValue, REASONING_EFFORT_LEVELS } from "@contracts/customModel";
 import { PanelHeader } from "./PanelHeader.js";
 import {
   PI_KNOWN_APIS,
@@ -71,9 +72,24 @@ import type { CodexProviderPublic } from "@contracts/codexModel";
 // Static Select option catalogs carrying a per-option icon, so every dropdown
 // in this panel shows a visual cue alongside the label (and in the trigger).
 
+/** Thinking-mode Select options for a model row (label keys — i18n at render
+ *  time, per the module convention for static option catalogs). */
+const THINKING_MODE_KEYS: readonly [CustomModelThinkingMode, MessageId][] = [
+  ["reasoning_effort", "settings.customModels.thinkingModeEffort"],
+  ["enable_thinking", "settings.customModels.thinkingModeToggle"],
+  ["none", "settings.customModels.thinkingModeNone"],
+];
+
+/** labelKey lookup for a mode value (used for the "auto (inferred: …)" trigger
+ *  text as well). */
+const THINKING_MODE_LABEL_KEYS: Record<CustomModelThinkingMode, MessageId> = {
+  reasoning_effort: "settings.customModels.thinkingModeEffort",
+  enable_thinking: "settings.customModels.thinkingModeToggle",
+  none: "settings.customModels.thinkingModeNone",
+};
+
 const AUTH_MODE_OPTIONS: { value: AuthMode; label: string; icon: ReactNode }[] = [
-  { value: "auth_token", label: "Bearer", icon: <IconKey size={14} className="text-content-muted" /> },
-  { value: "api_key", label: "x-api-key", icon: <IconHash size={14} className="text-content-muted" /> },
+  { value: "auth_token", label: "Bearer", icon: <IconKey size={14} className="text-content-muted" /> },  { value: "api_key", label: "x-api-key", icon: <IconHash size={14} className="text-content-muted" /> },
 ];
 
 const PROTOCOL_OPTIONS: { value: Protocol; labelKey: MessageId; icon: ReactNode }[] = [
@@ -204,10 +220,21 @@ type TestState =
  *  be ambiguous as a Select value). */
 const SUBAGENT_FOLLOW_MAIN = "__subagent_follow_main__";
 
+/** Draft value for a model row's thinking-mode Select. "auto" = no explicit
+ *  declaration — the effective shape is inferred from baseUrl + model id at
+ *  render/request time (@contracts/customModel's inferModelThinking). */
+type ThinkingModeDraft = "auto" | CustomModelThinkingMode;
+
 interface ClaudeModelFormState {
   /** Gateway-side model id, e.g. "deepseek-v4-pro". */
   id: string;
   supports1m: boolean;
+  /** How thinking is controlled on this model (OpenAI-protocol endpoints).
+   *  See CustomModelEntry.thinking in @contracts/customModel. */
+  thinkingMode: ThinkingModeDraft;
+  /** Default level for `reasoning_effort` mode (informational — the composer
+   *  starts every model at "default"). */
+  thinkingDefault: string;
 }
 
 /** One editable row of the custom-headers list. Held as rows rather than a
@@ -255,7 +282,7 @@ interface ClaudeFormState {
 }
 
 function emptyClaudeModel(): ClaudeModelFormState {
-  return { id: "", supports1m: false };
+  return { id: "", supports1m: false, thinkingMode: "auto", thinkingDefault: "medium" };
 }
 
 function emptyClaudeForm(): ClaudeFormState {
@@ -281,7 +308,12 @@ function claudeFormFromConfig(m: CustomModelPublic): ClaudeFormState {
     authMode: m.authMode,
     protocol: m.protocol,
     authToken: "",
-    models: m.models.map((e) => ({ id: e.id, supports1m: Boolean(e.supports1m) })),
+    models: m.models.map((e) => ({
+      id: e.id,
+      supports1m: Boolean(e.supports1m),
+      thinkingMode: e.thinking?.mode ?? "auto",
+      thinkingDefault: e.thinking?.defaultLevel ?? "medium",
+    })),
     subagentModel: m.subagentModel ?? "",
     disableNonEssentialTraffic: m.disableNonEssentialTraffic ?? true,
     timeoutMs: m.timeoutMs ? String(m.timeoutMs) : "",
@@ -647,7 +679,23 @@ export function CustomModelsPanel() {
       const id = m.id.trim();
       if (!id || seen.has(id)) continue;
       seen.add(id);
-      models.push(m.supports1m ? { id, supports1m: true } : { id });
+      const base = m.supports1m ? { id, supports1m: true } : { id };
+      // Persist an explicit thinking declaration only when the user moved off
+      // "auto" — an absent field keeps resolving through the provider
+      // heuristics, which also upgrades transparently as the table grows.
+      models.push(
+        m.thinkingMode === "auto"
+          ? base
+          : {
+              ...base,
+              thinking: {
+                mode: m.thinkingMode,
+                ...(m.thinkingMode === "reasoning_effort" && m.thinkingDefault
+                  ? { defaultLevel: m.thinkingDefault }
+                  : {}),
+              },
+            },
+      );
     }
     if (!claudeForm.name.trim() || !claudeForm.baseUrl.trim()) {
       setError(t("settings.customModels.errNameBaseUrl"));
@@ -1320,32 +1368,100 @@ function ClaudeProviderForm({
           {form.models.map((m, idx) => {
             const testingThis = test.status === "testing" && test.idx === idx;
             return (
-              <div
-                key={idx}
-                className="grid grid-cols-[1fr_auto_auto_auto] items-center gap-1.5 rounded border border-edge bg-surface/40 px-1.5 py-1"
-              >
-                <Input
-                  value={m.id}
-                  onChange={(e) => updateModel(idx, { id: e.target.value })}
-                  placeholder={t("settings.customModels.modelIdPlaceholder")}
-                  spellCheck={false}
-                />
-                <label className="flex items-center gap-1 justify-self-center" title={t("settings.customModels.supports1mLabel")}>
-                  <Switch checked={m.supports1m} onCheckedChange={(v) => updateModel(idx, { supports1m: v })} label={t("settings.customModels.supports1mLabel")} />
-                  <span className="text-[0.6428em] text-content-muted">1M</span>
-                </label>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  onClick={() => onTest(idx)}
-                  disabled={test.status === "testing"}
-                  title={t("settings.customModels.testWithModel")}
-                >
-                  {testingThis ? <IconLoader2 size={12} className="animate-spin" /> : <IconPlugConnected size={12} />}
-                </Button>
-                <Button variant="ghost" size="icon" onClick={() => removeModel(idx)} title={t("settings.customModels.deleteModel")}>
-                  <IconTrash size={12} />
-                </Button>
+              <div key={idx} className="rounded border border-edge bg-surface/40">
+                <div className="grid grid-cols-[1fr_auto_auto_auto] items-center gap-1.5 px-1.5 py-1">
+                  <Input
+                    value={m.id}
+                    onChange={(e) => updateModel(idx, { id: e.target.value })}
+                    placeholder={t("settings.customModels.modelIdPlaceholder")}
+                    spellCheck={false}
+                  />
+                  <label className="flex items-center gap-1 justify-self-center" title={t("settings.customModels.supports1mLabel")}>
+                    <Switch checked={m.supports1m} onCheckedChange={(v) => updateModel(idx, { supports1m: v })} label={t("settings.customModels.supports1mLabel")} />
+                    <span className="text-[0.6428em] text-content-muted">1M</span>
+                  </label>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={() => onTest(idx)}
+                    disabled={test.status === "testing"}
+                    title={t("settings.customModels.testWithModel")}
+                  >
+                    {testingThis ? <IconLoader2 size={12} className="animate-spin" /> : <IconPlugConnected size={12} />}
+                  </Button>
+                  <Button variant="ghost" size="icon" onClick={() => removeModel(idx)} title={t("settings.customModels.deleteModel")}>
+                    <IconTrash size={12} />
+                  </Button>
+                </div>
+                {/* Thinking control (OpenAI-protocol endpoints only). The
+                    bridge can only deliver a level the endpoint's dialect
+                    reads, so the row declares the shape; "auto" follows the
+                    provider heuristics and shows what they'd resolve to right
+                    now (baseUrl + the typed id, live). */}
+                {isOpenAi && (
+                  <div className="flex flex-wrap items-center gap-1.5 border-t border-edge px-1.5 py-1">
+                    <span className="text-[0.6428em] text-content-subtle">
+                      {t("settings.customModels.thinkingLabel")}
+                    </span>
+                    <Select.Root
+                      value={m.thinkingMode}
+                      onValueChange={(v) => updateModel(idx, { thinkingMode: v as ThinkingModeDraft })}
+                    >
+                      <Select.Trigger className="min-w-0 flex-1 text-[0.7143em]">
+                        <Select.Value>
+                          {(val: string | null) => (
+                            <span className={cn(val === "auto" && "text-content-muted")}>
+                              {val === "auto"
+                                ? t("settings.customModels.thinkingAuto", {
+                                    mode: t(
+                                      THINKING_MODE_LABEL_KEYS[
+                                        inferModelThinking(form.baseUrl, m.id).mode
+                                      ],
+                                    ),
+                                  })
+                                : t(THINKING_MODE_LABEL_KEYS[val as CustomModelThinkingMode])}
+                            </span>
+                          )}
+                        </Select.Value>
+                      </Select.Trigger>
+                      <Select.Portal><Select.Positioner><Select.Popup><Select.List>
+                        <Select.Item value="auto">
+                          <Select.ItemText>
+                            {t("settings.customModels.thinkingAuto", {
+                              mode: t(
+                                THINKING_MODE_LABEL_KEYS[
+                                  inferModelThinking(form.baseUrl, m.id).mode
+                                ],
+                              ),
+                            })}
+                          </Select.ItemText>
+                        </Select.Item>
+                        {THINKING_MODE_KEYS.map(([value, labelKey]) => (
+                          <Select.Item key={value} value={value}>
+                            <Select.ItemText>{t(labelKey)}</Select.ItemText>
+                          </Select.Item>
+                        ))}
+                      </Select.List></Select.Popup></Select.Positioner></Select.Portal>
+                    </Select.Root>
+                    {m.thinkingMode === "reasoning_effort" && (
+                      <Select.Root
+                        value={m.thinkingDefault}
+                        onValueChange={(v) => updateModel(idx, { thinkingDefault: v as string })}
+                      >
+                        <Select.Trigger className="w-[7.5em] text-[0.7143em]" title={t("settings.customModels.thinkingDefaultTitle")}>
+                          <Select.Value />
+                        </Select.Trigger>
+                        <Select.Portal><Select.Positioner><Select.Popup><Select.List>
+                          {REASONING_EFFORT_LEVELS.map((lv) => (
+                            <Select.Item key={lv} value={lv}>
+                              <Select.ItemText>{lv}</Select.ItemText>
+                            </Select.Item>
+                          ))}
+                        </Select.List></Select.Popup></Select.Positioner></Select.Portal>
+                      </Select.Root>
+                    )}
+                  </div>
+                )}
               </div>
             );
           })}

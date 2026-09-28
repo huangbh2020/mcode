@@ -17,6 +17,7 @@ import { useSessionStore } from "@renderer/stores/sessionStore.js";
 import { planEdgeDelete, taskEditable } from "@renderer/lib/orchGraph.js";
 import type { Gate, OrchestrationRun, TaskNode } from "@contracts/orchestration";
 import type { CustomModelPublic } from "@contracts/customModel";
+import { resolveEffortLevels } from "@renderer/lib/thinkingLevels.js";
 import {
   IconArrowLeft,
   IconCheck,
@@ -592,7 +593,6 @@ function TaskConfig({ run, task }: { run: OrchestrationRun; task: TaskNode }) {
 
   // 当前厂商的能力声明:模型表 / 思考级别 / 权限模式全部来自 provider 自描述。
   const provider = providers.find((p) => p.id === providerId);
-  const thinkingLevels = provider?.capabilities.thinkingLevels ?? [];
   const permissionModes = provider?.capabilities.permissionModes ?? [];
   const modelOptions = useMemo(() => {
     if (providerId === "claude-sdk") {
@@ -623,6 +623,18 @@ function TaskConfig({ run, task }: { run: OrchestrationRun; task: TaskNode }) {
     }
     return { customModelId: null, model: sel || null };
   };
+
+  // 思考级别:provider 声明,再按选中模型过滤 —— OpenAI 协议端点的模型有
+  // 自己的思考能力声明(reasoning_effort 档位 / enable_thinking 开关 / 不支持),
+  // 不支持的挡位不渲染。空列表 = 隐藏下拉。
+  const parsedBinding = parseModel(modelSel);
+  const thinkingLevels =
+    resolveEffortLevels({
+      providerLevels: provider?.capabilities.thinkingLevels,
+      customModels,
+      customModelId: parsedBinding.customModelId,
+      model: parsedBinding.model ?? "default",
+    }) ?? [];
   const taskModelSel = task.customModelId
     ? `${task.customModelId}|${task.model ?? "default"}`
     : (task.model ?? "");

@@ -177,6 +177,7 @@ export const zh = {
   "chat.effort.section": "思考级别",
   "chat.effort.hintDefault": "让 {provider} 自选",
   "chat.effort.hintOff": "关闭思考",
+  "chat.effort.hintOn": "开启思考",
   "chat.effort.hintMinimal": "极少思考",
   "chat.effort.hintLow": "最快,少思考",
   "chat.effort.hintMedium": "平衡",
@@ -195,6 +196,7 @@ export const zh = {
   // ── effort block-picker tile captions:2–4 字短语放在档位块内;完整说明仍走 hint* ──
   "chat.effort.tileDefault": "模型自选",
   "chat.effort.tileOff": "关闭",
+  "chat.effort.tileOn": "开启",
   "chat.effort.tileMinimal": "极少推理",
   "chat.effort.tileLow": "最快",
   "chat.effort.tileMedium": "平衡",
