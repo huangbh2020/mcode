@@ -61,6 +61,7 @@ import {
 } from "@main/lib/codexModelsStore.js";
 import { getOrSetFileSnapshot } from "@main/lib/fileSnapshotRegistry.js";
 import { getMcpManagement } from "@main/lib/mcpConfig.js";
+import { getCustomPromptSetting } from "@main/lib/customPrompt.js";
 import { CODEX_IDENTITY_PROMPT, SCHEDULED_TASK_PROPOSAL_NUDGE, joinPromptSections } from "@main/lib/systemPrompt.js";
 import { ASK_NATIVE_TOOL_PROMPT } from "@main/lib/askQuestion.js";
 import {
@@ -627,6 +628,10 @@ function skillRootsFor(cwd: string): string[] {
 async function ensureCodexHomeIdentity(): Promise<void> {
   const dir = codexHomePath();
   await fs.mkdir(dir, { recursive: true });
+  // User's custom prompt (settings → 编排) goes last, after every built-in
+  // section. Read per-turn from the settings table — NOT hand-edited into this
+  // file, which we own and rewrite on drift. Blank/absent injects nothing.
+  const customPrompt = await getCustomPromptSetting();
   const content = `${joinPromptSections(
     CODEX_IDENTITY_PROMPT,
     SCHEDULED_TASK_PROPOSAL_NUDGE,
@@ -634,6 +639,7 @@ async function ensureCodexHomeIdentity(): Promise<void> {
     PLAN_MODE_PROMPT,
     browserToolsUsagePrompt(),
     process.platform === "win32" ? WIN32_PATH_HINT : "",
+    customPrompt ?? "",
   )}\n`;
   const file = path.join(dir, "AGENTS.md");
   try {
