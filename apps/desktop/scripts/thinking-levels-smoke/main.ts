@@ -21,11 +21,13 @@ import {
   effortLevelValuesForModel,
   reasoningEffortLevels,
   type CustomModelEntry,
+  type CustomModelThinkingMode,
   type ApiConfig,
 } from "@contracts/customModel";
 import { SaveCustomModelSchema } from "@contracts/ipc";
 import { applyThinkingControl } from "@main/providers/bridge/requestTranslator.js";
 import type { OpenAIRequest } from "@main/providers/bridge/types.js";
+import { BridgeRegistry } from "@main/providers/bridge/bridgeRegistry.js";
 import { buildCustomEnv } from "@main/providers/claude-sdk/customEnv.js";
 import { MCODE_EFFORT_HEADER } from "@main/providers/upstreamHeaders.js";
 import { resolveEffortLevels } from "@renderer/lib/thinkingLevels.js";
@@ -231,6 +233,42 @@ check("ui: inferred enable_thinking model", eq(qwenLevels?.map((l) => l.value), 
 check("ui: on/off labels", qwenLevels?.[1]?.label === "Off" && qwenLevels?.[2]?.label === "On");
 const r1Levels = resolveEffortLevels({ providerLevels, customModels, customModelId: "cfg-openai", model: "deepseek-r1" });
 check("ui: inferred none model hides the chip", eq(r1Levels, []));
+
+/* ── BridgeRegistry.ensureCurrent: in-place rebuild on config drift ──
+ * The scenario from the 2026-09-28 log: a session reuses a bridge across
+ * turns while the user edits the model's thinking declaration — the reused
+ * server must pick the change up (rebuild), and the old server must be gone. */
+const regCfg = (mode: CustomModelThinkingMode): ApiConfig => ({
+  baseUrl: "https://gw.example.com/v1",
+  authToken: "sk-x",
+  authMode: "auth_token",
+  protocol: "openai",
+  selectedModel: "m",
+  models: [{ id: "m", thinking: { mode } }],
+  disableNonEssentialTraffic: true,
+});
+
+const h1 = await BridgeRegistry.acquire("smoke-reg", regCfg("reasoning_effort"));
+const h2 = await BridgeRegistry.ensureCurrent("smoke-reg", regCfg("reasoning_effort"));
+check("registry: no drift → same handle", h2 === h1);
+const h3 = await BridgeRegistry.ensureCurrent("smoke-reg", regCfg("enable_thinking"));
+check("registry: drift → rebuilt handle + new port", h3 !== null && h3 !== h1 && h3.localUrl !== h1.localUrl);
+let oldGone = false;
+try {
+  await fetch(h1.localUrl);
+} catch {
+  oldGone = true;
+}
+check("registry: old server closed after rebuild", oldGone);
+let newAlive = false;
+try {
+  const res = await fetch(h3 ? h3.localUrl : "http://127.0.0.1:1");
+  newAlive = res.status === 404; // GET → the bridge's 404 branch (alive, just not /v1/messages)
+} catch {
+  newAlive = false;
+}
+check("registry: rebuilt server listening", newAlive);
+BridgeRegistry.release("smoke-reg");
 
 console.log(`thinking-levels smoke: ${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);

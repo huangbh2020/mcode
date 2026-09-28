@@ -17,6 +17,7 @@ import { ApprovalBridge } from "./ApprovalBridge.js";
 import { getFileSnapshot, dropFileSnapshot } from "@main/lib/fileSnapshotRegistry.js";
 import { restoreFiles } from "@main/lib/fileSnapshot.js";
 import { BridgeRegistry } from "@main/providers/bridge/bridgeRegistry.js";
+import type { BridgeHandle } from "@main/providers/bridge/bridgeServer.js";
 import { mobileEventBus } from "@main/mobile/MobileEventBus.js";
 import { broadcastRuntimeEvent } from "@main/lib/sessionSync.js";
 import { invalidateUsageStats } from "@main/lib/usageStats.js";
@@ -553,6 +554,23 @@ class RuntimeManager {
         // Anthropic-compatible endpoint on localhost. The bridge is shared
         // across sessions via the registry (keyed by config id, ref-counted).
         if (cfg.protocol === "openai") {
+          // Surface transient upstream-transport retries (connect timeout /
+          // reset / refused) to this session's UI. Without it, a 10s+ retry
+          // loop mid-turn looks like an unexplained hang — the final failure
+          // does reach the user (502 → API-error card), but the WAITING
+          // doesn't. kind:"ok" after a successful retry clears the hint.
+          const subscribeBridgeStatus = (handle: BridgeHandle): (() => void) =>
+            handle.onStatus((s) => {
+              rt.ctx.emit({
+                type: "upstream.issue",
+                sessionId: session.id,
+                kind: s.kind,
+                cause: s.cause,
+                attempt: s.attempt,
+                attempts: s.attempts,
+              } satisfies UpstreamIssueEvent);
+            });
+
           // Release any bridge we're holding for a DIFFERENT config (the user
           // may have switched custom models mid-session), then acquire for the
           // current one. We hold exactly one bridge per session; same-config
@@ -569,21 +587,23 @@ class RuntimeManager {
             const handle = await BridgeRegistry.acquire(session.customModelId, cfg);
             rt.bridgeConfigId = session.customModelId;
             rt.bridgeHandle = { localUrl: handle.localUrl };
-            // Surface transient upstream-transport retries (connect timeout /
-            // reset / refused) to this session's UI. Without it, a 10s+ retry
-            // loop mid-turn looks like an unexplained hang — the final failure
-            // does reach the user (502 → API-error card), but the WAITING
-            // doesn't. kind:"ok" after a successful retry clears the hint.
-            rt.bridgeStatusUnsubscribe = handle.onStatus((s) => {
-              rt.ctx.emit({
-                type: "upstream.issue",
-                sessionId: session.id,
-                kind: s.kind,
-                cause: s.cause,
-                attempt: s.attempt,
-                attempts: s.attempts,
-              } satisfies UpstreamIssueEvent);
-            });
+            rt.bridgeStatusUnsubscribe = subscribeBridgeStatus(handle);
+          } else {
+            // Same config as last turn — but its CONTENT may have been edited
+            // in the settings (thinking declaration, token, headers) while
+            // this session kept the bridge. Re-validate and rebuild in place
+            // on drift; without this the server keeps translating with the
+            // closure it was built with (observed 2026-09-28: an edited
+            // thinking declaration made the provider validate the effort
+            // against the NEW declaration while the bridge rejected it with
+            // the OLD one — "thinking effort ... not applicable ... dropped").
+            const handle = await BridgeRegistry.ensureCurrent(rt.bridgeConfigId, cfg);
+            if (handle && rt.bridgeHandle && handle.localUrl !== rt.bridgeHandle.localUrl) {
+              // Rebuilt on a new port: refresh the cached url + subscription.
+              rt.bridgeStatusUnsubscribe?.();
+              rt.bridgeHandle = { localUrl: handle.localUrl };
+              rt.bridgeStatusUnsubscribe = subscribeBridgeStatus(handle);
+            }
           }
           // rt.bridgeHandle is now guaranteed set (we just ensured it above);
           // bind to a local so TS keeps it narrowed through the rewrite below.

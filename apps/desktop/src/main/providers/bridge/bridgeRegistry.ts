@@ -74,6 +74,36 @@ class BridgeRegistryImpl {
     return handle;
   }
 
+  /** Re-validate a bridge an existing holder already counted (acquire/release
+   *  paired) against the CURRENT config — call this every turn while reusing
+   *  a session's bridge. Rebuilds the server in place on fingerprint drift
+   *  (same entry, refCount preserved) and returns the live handle — which may
+   *  be a NEW server on a NEW port after a rebuild, so callers holding a
+   *  cached localUrl must refresh it. Returns the existing handle unchanged
+   *  when nothing drifted, and null when no entry exists (caller should
+   *  {@link acquire} normally).
+   *
+   *  Why this exists: the drift check in {@link acquire} only runs on a NEW
+   *  acquire, but RuntimeManager skips re-acquiring once a session holds a
+   *  config's bridge — so an edit made while sessions keep using the endpoint
+   *  (thinking declaration, token, headers) would never reach the running
+   *  server. Observed 2026-09-28: after a thinking-declaration edit the
+   *  provider validated the effort against the NEW declaration while the
+   *  bridge still translated with the OLD one and dropped the level as "not
+   *  applicable". Re-acquiring here instead would leak ref counts, which is
+   *  why this method deliberately doesn't touch them. */
+  async ensureCurrent(customModelId: string, upstream: ApiConfig): Promise<BridgeHandle | null> {
+    const entry = this.entries.get(customModelId);
+    if (!entry) return null;
+    const fp = fingerprint(upstream);
+    if (entry.fingerprint === fp) return entry.handle;
+    log.info(`bridge: config ${customModelId} changed under live sessions, rebuilding server`);
+    entry.handle.close();
+    const handle = await startBridge(upstream);
+    this.entries.set(customModelId, { handle, fingerprint: fp, refCount: entry.refCount });
+    return handle;
+  }
+
   /** Release a previously-acquired bridge. Decrements the ref count; closes the
    *  server only when the last holder releases. Safe to call without a prior
    *  acquire (no-op). */

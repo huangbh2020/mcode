@@ -10351,6 +10351,21 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       // A persisted composer pick whose custom config was deleted falls back
       // to auto.
       validateComposerSelection(set, get);
+      // Model-level thinking declarations may have just changed (settings
+      // edits): snap an effort slot the active binding no longer offers, so
+      // the chip re-renders with the new level set immediately instead of the
+      // stale value being dropped at the provider on the next turn.
+      const s = get();
+      const coerced = coerceSlotsForProvider(s, s.providerId);
+      if (coerced.effort !== s.effort || coerced.permissionMode !== s.permissionMode) {
+        set(coerced);
+        const sid = s.activeSessionId;
+        if (sid && coerced.effort !== s.effort) {
+          void api.session.updateSettings({ sessionId: sid, effort: coerced.effort }).catch((err) => {
+            console.error("updateSettings(effort coerce) failed:", err);
+          });
+        }
+      }
     } catch (err) {
       console.error("reloadCustomModels failed:", err);
     }
