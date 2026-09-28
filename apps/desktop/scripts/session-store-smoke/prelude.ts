@@ -22,8 +22,39 @@ function deepApiStub(): unknown {
 
 const localStorageMap = new Map<string, string>();
 
+/**
+ * Real settings backend over a Map — the persistence smoke (main.ts group
+ * [11]) asserts actual reads/writes against it. `setting` is the only api
+ * namespace with behavior; everything else stays the deep async-noop stub,
+ * so no existing group observes a difference (they never call setting).
+ */
+export const smokeSettings = new Map<string, string>();
+export const smokeSettingWrites = { count: 0 };
+const settingApi = {
+  get: async ({ key }: { key: string }) => ({ value: smokeSettings.get(key) ?? null }),
+  getMany: async ({ keys }: { keys: string[] }) => {
+    const out: Record<string, string | null> = {};
+    for (const k of keys) out[k] = smokeSettings.get(k) ?? null;
+    return out;
+  },
+  set: async ({ key, value }: { key: string; value: string }) => {
+    smokeSettings.set(key, String(value));
+    smokeSettingWrites.count++;
+  },
+};
+
 const globalWindow = {
-  api: deepApiStub(),
+  api: new Proxy(
+    {},
+    {
+      get: (_target, prop) => {
+        if (prop === "then") return undefined;
+        if (prop === "setting") return settingApi;
+        if (prop === "constructor") return Object;
+        return deepApiStub();
+      },
+    },
+  ),
   mcodeElectron: true,
 };
 

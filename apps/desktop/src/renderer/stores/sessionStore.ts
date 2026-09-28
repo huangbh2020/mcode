@@ -43,6 +43,9 @@ import {
   TABS_FILE_PREVIEW_PLACEMENT_SETTING_KEY,
   TAB_BAR_MULTI_ROW_SETTING_KEY,
   LEFTBAR_MODE_SETTING_KEY,
+  LEFTBAR_EXPANDED_PROJECTS_SETTING_KEY,
+  LEFTBAR_EXPANDED_WORKTREES_SETTING_KEY,
+  LEFTBAR_ARCHIVED_OPEN_SETTING_KEY,
   THEME_STYLE_SETTING_KEY,
   UI_FONT_FAMILY_SETTING_KEY,
   UI_LOCALE_SETTING_KEY,
@@ -724,15 +727,18 @@ export interface SessionState {
   /** Sessions of the active project (derived view; components may read either). */
   sessions: Session[];
   activeSessionId: string | null;
-  /** Which projects are expanded in the tree (UI-only, not persisted). */
+  /** Which projects are expanded in the tree. Explicit user toggles persist
+   *  under `leftbar.expandedProjects`; absent key = collapsed, and the
+   *  landing / active-session auto-expansions below stay transient. */
   expandedProjects: Record<string, boolean>;
   /** Per-project left-bar VIEW: false (default) = local threads only,
    *  true = worktree groups. Flipped by the project row's fork toggle;
    *  auto-flipped (to true) when a worktree thread activates so the active
    *  row is always visible. UI-only, not persisted. */
   worktreeViewByProject: Record<string, boolean>;
-  /** Which worktree group nodes are expanded in the tree (UI-only, keyed by
-   *  normalized worktree path; not persisted). */
+  /** Which worktree group nodes are expanded in the tree (keyed by
+   *  normalized worktree path; absent key = collapsed). Explicit toggles
+   *  persist under `leftbar.expandedWorktrees`. */
   expandedWorktrees: Record<string, boolean>;
   /** Left-bar display names for worktree directories (normalized path →
    *  name). Persisted in the `settings` table; cosmetic only — missing
@@ -742,7 +748,9 @@ export interface SessionState {
    *  `project.colors`; cosmetic only — missing entries fall back to the
    *  deterministic name-hash color (lib/projectAvatar.ts). */
   projectColors: Record<string, string>;
-  /** Whether the "archived" section at the bottom of the tree is expanded. */
+  /** Whether the "archived" section at the bottom of the tree is expanded.
+   *  Shared with the stream view's shelf and persisted under
+   *  `leftbar.archivedOpen` ("true"/"false"). */
   archivedViewOpen: boolean;
 
   /* ── tab state (center pane) ──
@@ -2597,6 +2605,72 @@ function persistIdeBuckets(get: () => SessionState): void {
     }
     ideBucketsLastWritten = next;
   }, IDE_BUCKETS_PERSIST_DEBOUNCE_MS);
+}
+
+/** Parse a persisted leftbar expansion map ("leftbar.expandedProjects" /
+ *  "leftbar.expandedWorktrees" values). Returns null for an absent or
+ *  malformed blob — the caller then keeps the node-type defaults — and
+ *  silently drops non-boolean entries so a hand-edited row can't poison the
+ *  whole map. Exported for the headless store smoke. */
+export function parseExpandedFlagMap(value: string | null | undefined): Record<string, boolean> | null {
+  if (!value) return null;
+  try {
+    const parsed: unknown = JSON.parse(value);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+    const out: Record<string, boolean> = {};
+    for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
+      if (typeof v === "boolean") out[k] = v;
+    }
+    return out;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Persist the left-bar tree's expand/collapse state (issue #13) — same
+ * shape as persistIdeBuckets above: trailing debounce (a burst of toggles,
+ * or the reveal effect force-expanding ancestors, coalesces into one write)
+ * and a per-key diff against the last written value. Only the three USER
+ * actions call this; the auto-expand patches (landing project, session
+ * activation) stay transient — on boot the landing/activation chain
+ * re-applies them on top of whatever was persisted.
+ */
+const LEFTBAR_EXPANSION_PERSIST_DEBOUNCE_MS = 400;
+let leftbarExpansionPersistTimer: ReturnType<typeof setTimeout> | null = null;
+let leftbarExpansionLastWritten: {
+  projects: string;
+  worktrees: string;
+  archivedOpen: string;
+} | null = null;
+function persistLeftbarExpansion(get: () => SessionState): void {
+  if (leftbarExpansionPersistTimer) clearTimeout(leftbarExpansionPersistTimer);
+  leftbarExpansionPersistTimer = setTimeout(() => {
+    leftbarExpansionPersistTimer = null;
+    const s = get();
+    const next = {
+      projects: JSON.stringify(s.expandedProjects),
+      worktrees: JSON.stringify(s.expandedWorktrees),
+      archivedOpen: s.archivedViewOpen ? "true" : "false",
+    };
+    const last = leftbarExpansionLastWritten;
+    if (last?.projects !== next.projects) {
+      void api.setting
+        .set({ key: LEFTBAR_EXPANDED_PROJECTS_SETTING_KEY, value: next.projects })
+        .catch((err) => console.error("setting.set(leftbar.expandedProjects) failed:", err));
+    }
+    if (last?.worktrees !== next.worktrees) {
+      void api.setting
+        .set({ key: LEFTBAR_EXPANDED_WORKTREES_SETTING_KEY, value: next.worktrees })
+        .catch((err) => console.error("setting.set(leftbar.expandedWorktrees) failed:", err));
+    }
+    if (last?.archivedOpen !== next.archivedOpen) {
+      void api.setting
+        .set({ key: LEFTBAR_ARCHIVED_OPEN_SETTING_KEY, value: next.archivedOpen })
+        .catch((err) => console.error("setting.set(leftbar.archivedOpen) failed:", err));
+    }
+    leftbarExpansionLastWritten = next;
+  }, LEFTBAR_EXPANSION_PERSIST_DEBOUNCE_MS);
 }
 
 /** Min/max chat content font size (px). The slider in Settings uses the
@@ -5103,6 +5177,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           SESSION_WORKTREE_DEFAULT_SETTING_KEY,
           WORKTREE_NAMES_SETTING_KEY,
           PROJECT_COLORS_SETTING_KEY,
+          LEFTBAR_EXPANDED_PROJECTS_SETTING_KEY,
+          LEFTBAR_EXPANDED_WORKTREES_SETTING_KEY,
+          LEFTBAR_ARCHIVED_OPEN_SETTING_KEY,
         ],
       })
       .catch((err) => {
@@ -5140,6 +5217,29 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       if (value) set({ projectColors: JSON.parse(value) as Record<string, string> });
     } catch (err) {
       console.error("apply(projectColors) failed:", err);
+    }
+
+    // Left-bar tree expansion state (issue #13): restore the exact
+    // expand/collapse view the user left behind. A malformed blob (or
+    // non-boolean entries) just falls back to the node-type defaults. The
+    // landing-project auto-expand below merges on top of this.
+    try {
+      const map = parseExpandedFlagMap(fp[LEFTBAR_EXPANDED_PROJECTS_SETTING_KEY]);
+      if (map) set({ expandedProjects: map });
+    } catch (err) {
+      console.error("apply(leftbar.expandedProjects) failed:", err);
+    }
+    try {
+      const map = parseExpandedFlagMap(fp[LEFTBAR_EXPANDED_WORKTREES_SETTING_KEY]);
+      if (map) set({ expandedWorktrees: map });
+    } catch (err) {
+      console.error("apply(leftbar.expandedWorktrees) failed:", err);
+    }
+    try {
+      const value = fp[LEFTBAR_ARCHIVED_OPEN_SETTING_KEY];
+      if (value === "true" || value === "false") set({ archivedViewOpen: value === "true" });
+    } catch (err) {
+      console.error("apply(leftbar.archivedOpen) failed:", err);
     }
 
     // displayMode determines single vs tabs layout - needed before first render
@@ -5445,8 +5545,10 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       pinnedSessions: pinnedRes.status === "fulfilled" ? pinnedRes.value.sessions : [],
       sessions: byProject[landingProject.id] ?? [],
       activeProjectId: landingProject.id,
-      // Auto-expand the active project so its threads are visible on load.
-      expandedProjects: { [landingProject.id]: true },
+      // Auto-expand the active project so its threads are visible on load —
+      // merged on top of the hydrated expansion map above, not replacing it
+      // (the hydration block ran earlier in this function).
+      expandedProjects: { ...get().expandedProjects, [landingProject.id]: true },
       // Seed the tab list with the landing session (if any). In `single`
       // mode this is informational; in `tabs` mode it shows the initial
       // open tab. Either way the user starts with a coherent state.
@@ -5969,6 +6071,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     // maintain it incrementally in between, and this is the cheap catch-up
     // that also re-syncs its updated_at order after local mutations.
     if (!wasExpanded) void get().loadWorktreeSessions(projectId);
+    persistLeftbarExpansion(get);
   },
 
   // Worktree group nodes hold few sessions (one directory, few threads), so
@@ -5976,13 +6079,15 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   // pure expand-state flip. Groups render COLLAPSED by default (absent key),
   // so the flip tests plain truthiness: flipping an untouched (undefined)
   // group OPENS it, flipping an open one folds it back.
-  toggleWorktreeExpanded: (worktreePath) =>
+  toggleWorktreeExpanded: (worktreePath) => {
     set((s) => {
       const key = normWorktreeKey(worktreePath);
       return {
         expandedWorktrees: { ...s.expandedWorktrees, [key]: !s.expandedWorktrees[key] },
       };
-    }),
+    });
+    persistLeftbarExpansion(get);
+  },
 
   setProjectWorktreeView: (projectId, on) =>
     set((s) => {
@@ -6007,7 +6112,10 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     }
   },
 
-  setArchivedViewOpen: (open) => set({ archivedViewOpen: open }),
+  setArchivedViewOpen: (open) => {
+    set({ archivedViewOpen: open });
+    persistLeftbarExpansion(get);
+  },
 
   /** Fetch the next page of active LOCAL sessions for a project and append
    *  to the cached list's local section (the worktree section parked after

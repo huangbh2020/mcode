@@ -261,6 +261,26 @@ export const LeftBarModeSchema = z.enum(["tree", "stream"]);
 export type LeftBarMode = z.infer<typeof LeftBarModeSchema>;
 
 /**
+ * Setting keys persisting the left-bar tree's expand/collapse state (JSON
+ * `Record<string, boolean>` maps + one boolean flag) so a restart restores
+ * the exact view the user left behind:
+ *
+ *  - `leftbar.expandedProjects`: projectId → expanded. Absent key = the
+ *    node-type default (collapsed until opened; the landing / active
+ *    session's project still auto-expands transiently on boot).
+ *  - `leftbar.expandedWorktrees`: normWorktreeKey(path) → expanded. Same
+ *    absent-key-means-collapsed semantics as the in-memory map it mirrors.
+ *  - `leftbar.archivedOpen`: "true"/"false" — the archived shelf, shared by
+ *    the tree view's bin and the stream view's shelf (one data source).
+ *
+ * Only EXPLICIT user toggles are written back; auto-expansions stay
+ * transient (re-applied by the landing/activation chain on boot).
+ */
+export const LEFTBAR_EXPANDED_PROJECTS_SETTING_KEY = "leftbar.expandedProjects";
+export const LEFTBAR_EXPANDED_WORKTREES_SETTING_KEY = "leftbar.expandedWorktrees";
+export const LEFTBAR_ARCHIVED_OPEN_SETTING_KEY = "leftbar.archivedOpen";
+
+/**
  * UI language preference:
  *  - "zh" (default): Simplified Chinese — the project's original UI language.
  *  - "en": English.
