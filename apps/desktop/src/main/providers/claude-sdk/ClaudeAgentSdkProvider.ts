@@ -28,9 +28,13 @@ import { bashPathHintFor, detectBashEnv } from "@main/lib/bashEnv.js";
 import { getFileSnapshot } from "@main/lib/fileSnapshotRegistry.js";
 import {
   FILE_MUTATING_TOOLS,
+  FILE_READING_TOOLS,
   getToolFilePath,
+  getToolReadPath,
   normalizeToolFilePath,
 } from "@main/lib/fileSnapshot.js";
+import { guardBashCommand } from "@main/lib/bashWriteGuard.js";
+import { guardReadPath } from "@main/lib/readGuard.js";
 import { resolveSdkBinaryPath } from "./sdkBinaryPath.js";
 import { loadClaudeSdk } from "./sdkLoader.js";
 import { resolveGitBash } from "@main/lib/binaryResolve.js";
@@ -567,8 +571,11 @@ function isReadOnlyBrowserTool(toolName: string): boolean {
  *  the session's CURRENT permission mode. This runs in canUseTool on every
  *  call, so a mid-turn mode flip applies to the next tool immediately.
  *  - bypassPermissions / dontAsk → everything auto-approved
- *  - acceptEdits                  → file-editing tools auto-approved
- *  - default / plan / auto        → prompt the user (return false) */
+ *  - acceptEdits / isolated      → file-editing tools auto-approved (isolated
+ *                                  is acceptEdits INSIDE the project; the
+ *                                  out-of-project boundary is denied earlier
+ *                                  in canUseTool, before this gate runs)
+ *  - default / plan / auto       → prompt the user (return false) */
 function shouldAutoApprove(mode: PermissionMode | undefined, toolName: string): boolean {
   // 编排规划工具是纯数据提交(结构化输出契约,handler 只钳制建卡不执行),
   // 任何模式免审批 —— 必须排在 `if (!mode)` 之前:default 档传来的 mode 是
@@ -578,7 +585,7 @@ function shouldAutoApprove(mode: PermissionMode | undefined, toolName: string): 
   if (mode === "bypassPermissions" || mode === "dontAsk") return true;
   // Read-only browser tools never need approval — they can't change anything.
   if (isReadOnlyBrowserTool(toolName)) return true;
-  if (mode === "acceptEdits") return FILE_EDIT_TOOLS.has(toolName);
+  if (mode === "acceptEdits" || mode === "isolated") return FILE_EDIT_TOOLS.has(toolName);
   return false;
 }
 
@@ -667,6 +674,13 @@ export class ClaudeAgentSdkProvider implements AgentProvider {
       { value: "default", label: "Default", icon: "shield", hint: "标准行为,工具按规则触发审批" },
       { value: "acceptEdits", label: "Edit Auto", icon: "shieldCheck", color: "text-warning", hint: "工作目录内的文件编辑自动放行" },
       { value: "plan", label: "Plan", icon: "shieldHalf", color: "text-info", hint: "只读探索,所有写操作都需审批" },
+      // Project isolation: acceptEdits-like auto-approve INSIDE the project,
+      // hard boundary at the project root — out-of-project reads/writes and
+      // bash write-targets are denied host-side (see the canUseTool guards).
+      // NOT a sandbox: bash commands have plenty of non-file ways to reach
+      // the outside world (network etc.); the guard fences the filesystem
+      // mistakes, not adversarial escapes.
+      { value: "isolated", label: "Isolated", icon: "lock", color: "text-success", hint: "项目隔离:读写与文件操作仅限当前项目目录" },
       { value: "bypassPermissions", label: "Bypass", icon: "shieldLock", color: "text-danger", hint: "跳过所有权限检查(慎用)" },
     ],
     builtinModels: [
@@ -742,10 +756,18 @@ export class ClaudeAgentSdkProvider implements AgentProvider {
           ? (req.effort as Options["effort"])
           : undefined,
       // Permission mode: the contract is an open string; the SDK's type is a
-      // narrow union. The UI only offers claude's 4 modes for this provider
-      // (declared in capabilities.permissionModes), so the cast is safe. The
-      // UI "plan" mode is translated to "default" (see isUiPlanMode above).
-      permissionMode: (isUiPlanMode ? "default" : req.permissionMode) as Options["permissionMode"],
+      // narrow union. The UI only offers claude's declared modes for this
+      // provider (see capabilities.permissionModes), so the cast is safe. The
+      // UI "plan" mode is translated to "default" (see isUiPlanMode above);
+      // the UI "isolated" mode (project isolation) runs the CLI under
+      // acceptEdits — the boundary itself is enforced host-side in canUseTool
+      // (reads confined, writes/bash write-targets denied outside cwd), which
+      // the SDK-level mode knows nothing about.
+      permissionMode: (isUiPlanMode
+        ? "default"
+        : req.permissionMode === "isolated"
+          ? "acceptEdits"
+          : req.permissionMode) as Options["permissionMode"],
       resume: req.resumeProviderSessionId ?? undefined,
       includePartialMessages: true,
       // Forward the subagents' full conversation (text/thinking included, not
@@ -1037,6 +1059,27 @@ export class ClaudeAgentSdkProvider implements AgentProvider {
         }
       }
 
+      // --- Project-isolation read guard ("isolated" mode only) ---
+      // Reads are confined to the project when the user picked the isolated
+      // mode. In-project reads never reach here (the CLI auto-allows file
+      // access inside the working directory); out-of-project access falls
+      // through the CLI's rules to a permission prompt, which is exactly when
+      // canUseTool fires — so this deterministically catches ../ escapes and
+      // absolute paths outside cwd. Reads in every other mode stay free
+      // (reading docs/config elsewhere is often legitimate).
+      if (ctx.getPermissionMode?.() === "isolated" && FILE_READING_TOOLS.has(toolName)) {
+        const raw = getToolReadPath(toolName, input);
+        if (raw) {
+          const denial = guardReadPath(req.cwd, raw);
+          if (denial) {
+            ctx.log.info(
+              `denied out-of-project read ${toolName}: ${raw} (cwd=${req.cwd}, isolated mode)`,
+            );
+            return { behavior: "deny", message: denial };
+          }
+        }
+      }
+
       // --- Bash command path-dialect normalization ---
       // The model emits Git Bash `/d/...` and WSL `/mnt/d/...` paths inside
       // bash commands. Only Git Bash understands `/d/...` (MSYS conversion);
@@ -1053,6 +1096,21 @@ export class ClaudeAgentSdkProvider implements AgentProvider {
           const normalized = normalizeBashCommand(raw);
           if (normalized !== raw) {
             effectiveInput = { ...input, command: normalized };
+          }
+          // --- Bash write-target guard (same shared module as the Pi side) ---
+          // Block shell redirections whose target resolves outside the project
+          // (the same strict/not-bypass policy as the file-write guard above,
+          // and running BEFORE the always-allowed / mode gates so the project
+          // boundary wins over a per-tool grant). NOT a sandbox — see
+          // bashWriteGuard.ts for the deliberately-recognized forms.
+          const bashMode = ctx.getPermissionMode?.();
+          const bashStrict = bashMode !== "bypassPermissions" && bashMode !== "dontAsk";
+          const denial = guardBashCommand(req.cwd, normalized, bashStrict);
+          if (denial) {
+            ctx.log.info(
+              `denied out-of-project bash write target: ${normalized.slice(0, 120)} (cwd=${req.cwd})`,
+            );
+            return { behavior: "deny", message: denial };
           }
         }
       }

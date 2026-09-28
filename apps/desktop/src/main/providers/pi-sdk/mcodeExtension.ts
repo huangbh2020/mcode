@@ -54,7 +54,8 @@ import type { PermissionMode } from "@contracts/runtime";
 import { normalizeToolFilePath } from "@main/lib/fileSnapshot.js";
 import { getFileSnapshot } from "@main/lib/fileSnapshotRegistry.js";
 import { normalizeBashCommand } from "@main/lib/msysPath.js";
-import { guardBashCommand, expandTilde } from "./bashWriteGuard.js";
+import { guardBashCommand, expandTilde } from "@main/lib/bashWriteGuard.js";
+import { guardReadPath } from "@main/lib/readGuard.js";
 import {
   parseQuestions,
   formatAnswersForModel,
@@ -122,6 +123,31 @@ export function guardToolPath(
 /** Pi's read-only built-in tools — auto-approved in every mode (including plan). */
 const PI_READONLY_TOOLS = new Set(["read", "grep", "find", "ls"]);
 
+/**
+ * Decide whether a Pi tool should be auto-approved (skip the prompt) based on
+ * the session's CURRENT permission mode. Mirrors the Claude provider's
+ * `shouldAutoApprove`, but uses Pi's lowercase tool names
+ * (`write`/`edit` not `Write`/`Edit`).
+ *
+ *   - bypassPermissions / dontAsk → everything auto-approved
+ *   - acceptEdits / isolated      → file-editing tools auto-approved (isolated
+ *                                   is acceptEdits INSIDE the project; reads
+ *                                   and writes outside cwd are denied by the
+ *                                   tool_call guards before this runs)
+ *   - plan                         → read-only tools auto-approved, writes prompt
+ *   - default / auto               → prompt the user (return false)
+ */
+function shouldAutoApproveForPi(mode: PermissionMode | undefined, toolName: string): boolean {
+  if (!mode) return false;
+  // Read-only tools never need approval — they can't change anything.
+  if (PI_READONLY_TOOLS.has(toolName)) return true;
+  if (mode === "bypassPermissions" || mode === "dontAsk") return true;
+  if (mode === "acceptEdits" || mode === "isolated") {
+    return toolName === "write" || toolName === "edit";
+  }
+  return false;
+}
+
 /** Mcode browser tools that are purely read-only (they can't mutate the page,
  *  navigate, or submit) — auto-approved in every mode, never routed through the
  *  approval prompt. scroll/wait/find are pure reading aids; save_pdf writes
@@ -141,26 +167,6 @@ const MCODE_BROWSER_READONLY = new Set([
   "browser_downloads",
 ]);
 
-/**
- * Decide whether a Pi tool should be auto-approved (skip the prompt) based on
- * the session's CURRENT permission mode. Mirrors the Claude provider's
- * `shouldAutoApprove`, but uses Pi's lowercase tool names
- * (`write`/`edit` not `Write`/`Edit`).
- *
- *   - bypassPermissions / dontAsk → everything auto-approved
- *   - acceptEdits                  → file-editing tools auto-approved
- *   - plan                         → read-only tools auto-approved, writes prompt
- *   - default / auto               → prompt the user (return false)
- */
-function shouldAutoApproveForPi(mode: PermissionMode | undefined, toolName: string): boolean {
-  if (!mode) return false;
-  // Read-only tools never need approval — they can't change anything.
-  if (PI_READONLY_TOOLS.has(toolName)) return true;
-  if (mode === "bypassPermissions" || mode === "dontAsk") return true;
-  if (mode === "acceptEdits") return toolName === "write" || toolName === "edit";
-  return false;
-}
-
 export interface CreateMcodeExtensionOptions {
   /** The host provider context — carries the IPC bridges for approval /
    *  user-input / permission-mode / always-allow checks. */
@@ -170,6 +176,10 @@ export interface CreateMcodeExtensionOptions {
   /** Strict in-project policy: deny writes outside cwd. False in
    *  bypassPermissions/dontAsk (user opted out of all checks). */
   strict: boolean;
+  /** Project isolation ("isolated" mode): additionally confine READS to the
+   *  project (read/grep/find/ls with an out-of-cwd path are blocked). Snap-
+   *  shotted per-turn from the UI mode, same as `strict`. */
+  isolated: boolean;
   /** The Mcode session id — needed for all emit() calls (plan.update /
    * mode.change / plan.approval_request events carry it). */
   sessionId: string;
@@ -197,7 +207,7 @@ export interface CreateMcodeExtensionOptions {
  * useful for debugging whether the extension loaded.
  */
 export function createMcodeExtension(opts: CreateMcodeExtensionOptions): InlineExtension {
-  const { ctx, cwd, strict, sessionId, projectPath, turnNumber, browserToolsEnabled } = opts;
+  const { ctx, cwd, strict, isolated, sessionId, projectPath, turnNumber, browserToolsEnabled } = opts;
 
   // ── Plan mode state (per-turn, in-process) ──────────────────────────
   // Tracked here rather than via ctx.getPermissionMode() because the latter
@@ -214,7 +224,7 @@ export function createMcodeExtension(opts: CreateMcodeExtensionOptions): InlineE
   return {
     name: "mcode",
     factory: (pi: ExtensionAPI) => {
-      registerToolCallGuard(pi, { ctx, cwd, strict, sessionId, planMode });
+      registerToolCallGuard(pi, { ctx, cwd, strict, isolated, sessionId, planMode });
       registerAskUserQuestionTool(pi, ctx);
       // Browser tools + their usage prompt ride the same switch: when the
       // built-in server is disabled in the MCP panel, the model must neither
@@ -249,11 +259,12 @@ function registerToolCallGuard(
     ctx: ProviderContext;
     cwd: string;
     strict: boolean;
+    isolated: boolean;
     sessionId: string;
     planMode: { active: boolean };
   },
 ): void {
-  const { ctx, cwd, strict, sessionId, planMode } = deps;
+  const { ctx, cwd, strict, isolated, sessionId, planMode } = deps;
 
   pi.on("tool_call", async (event: ToolCallEvent): Promise<ToolCallEventResult | void> => {
     const { toolName } = event;
@@ -279,6 +290,24 @@ function registerToolCallGuard(
         // right after this handler resolves: we want `before` to be the
         // pre-write content, not a racing partial read.
         await getFileSnapshot(sessionId).recordPre(cwd, checked.path);
+      }
+    }
+
+    // ①.5 Project-isolation read guard ("isolated" mode). Pi's tool_call
+    //     handler runs before EVERY tool execution (reads included — they only
+    //     auto-approve later at step ⑤), so this fires deterministically,
+    //     unlike the Claude side where it depends on the CLI letting
+    //     out-of-cwd reads fall through to the host. Pi's read tools carry
+    //     their target in the `path` field; grep/find/ls default to cwd when
+    //     it's absent (inside the project — nothing to guard). The decision +
+    //     message live in the shared guardReadPath (same source as Claude).
+    if (isolated && PI_READONLY_TOOLS.has(toolName)) {
+      const raw = (event.input as PathToolParams | null | undefined)?.path;
+      if (typeof raw === "string" && raw.length > 0) {
+        const denial = guardReadPath(cwd, raw);
+        if (denial) {
+          return { block: true, reason: denial };
+        }
       }
     }
 

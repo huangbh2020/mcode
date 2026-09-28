@@ -247,6 +247,32 @@ export function getToolFilePath(toolName: string, input: unknown): string {
   return typeof raw === "string" ? raw : "";
 }
 
+/** Read-only file tools whose path argument is confined to the project working
+ *  directory under the "isolated" permission mode (project isolation). Unlike
+ *  the write guard — which denies out-of-project targets in EVERY mode except
+ *  bypassPermissions/dontAsk — read confinement is opt-in: reading elsewhere
+ *  (docs, config, a sibling repo) is often legitimate, so it is only denied
+ *  when the user explicitly picked the isolated mode. Used by the Claude
+ *  provider's canUseTool guard; Pi's extension maps its lowercase
+ *  `read`/`grep`/`find`/`ls` tool names onto the same containment check. */
+export const FILE_READING_TOOLS: ReadonlySet<string> = new Set([
+  "Read",
+  "Glob",
+  "Grep",
+  "LS",
+]);
+
+/** Extract the target path from a read-only file tool's input. Returns ""
+ *  when the input is missing/malformed or the tool didn't specify a path
+ *  (Glob/Grep/LS default to cwd — inside the project, nothing to guard).
+ *  Read names its field `file_path`; the others use `path`. */
+export function getToolReadPath(toolName: string, input: unknown): string {
+  if (!input || typeof input !== "object") return "";
+  const obj = input as Record<string, unknown>;
+  const raw = toolName === "Read" ? obj.file_path : obj.path;
+  return typeof raw === "string" ? raw : "";
+}
+
 /** Normalize a file path coming out of a file-mutating tool input:
  *  fix the WSL/MSYS-path footguns and classify it relative to the project
  *  root.

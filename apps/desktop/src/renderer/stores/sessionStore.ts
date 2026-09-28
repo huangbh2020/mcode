@@ -47,6 +47,9 @@ import {
   LEFTBAR_EXPANDED_PROJECTS_SETTING_KEY,
   LEFTBAR_EXPANDED_WORKTREES_SETTING_KEY,
   LEFTBAR_ARCHIVED_OPEN_SETTING_KEY,
+  LEFTBAR_COLLAPSED_GROUPS_SETTING_KEY,
+  LEFTBAR_PINNED_SESSIONS_OPEN_SETTING_KEY,
+  LEFTBAR_PINNED_PROJECTS_OPEN_SETTING_KEY,
   THEME_STYLE_SETTING_KEY,
   UI_FONT_FAMILY_SETTING_KEY,
   UI_LOCALE_SETTING_KEY,
@@ -753,6 +756,17 @@ export interface SessionState {
    *  Shared with the stream view's shelf and persisted under
    *  `leftbar.archivedOpen` ("true"/"false"). */
   archivedViewOpen: boolean;
+  /** Which group headers in the "grouped" project view are COLLAPSED
+   *  (groupName → collapsed). Inverted default vs. `expandedProjects`:
+   *  absent key = expanded, so the persisted blob only ever names the
+   *  folded groups (`leftbar.collapsedGroups`). */
+  collapsedGroups: Record<string, boolean>;
+  /** Whether the pinned-projects section (top of the tree) is expanded.
+   *  Default open; persisted under `leftbar.pinnedProjectsOpen`. */
+  pinnedProjectsOpen: boolean;
+  /** Whether the pinned-sessions section (below pinned projects) is
+   *  expanded. Default open; persisted under `leftbar.pinnedSessionsOpen`. */
+  pinnedSessionsOpen: boolean;
 
   /* ── tab state (center pane) ──
    *  `openTabs` is the ordered list of sessionIds the user has open in the
@@ -1561,6 +1575,15 @@ export interface SessionState {
    *  directory. Optimistic local patch + fire-and-forget settings write. */
   renameWorktree: (worktreePath: string, name: string) => Promise<void>;
   setArchivedViewOpen: (open: boolean) => void;
+  /** Flip a group header's collapsed state in the "grouped" project view
+   *  (absent key = expanded; the flip tests plain truthiness like
+   *  `toggleWorktreeExpanded`). Explicit toggles persist. */
+  toggleGroupCollapsed: (groupName: string) => void;
+  /** Explicit open/close of the pinned-sessions / pinned-projects sections
+   *  (the reveal effect force-opening them routes through here too — the
+   *  section visibly opens, so persisting what's on screen is correct). */
+  setPinnedSessionsOpen: (open: boolean) => void;
+  setPinnedProjectsOpen: (open: boolean) => void;
   /** Fetch the next page of active sessions for a project and append it to
    *  `sessionsByProject[projectId]`. No-op when there are no more to load. */
   loadMoreSessions: (projectId: string) => Promise<void>;
@@ -2643,6 +2666,9 @@ let leftbarExpansionLastWritten: {
   projects: string;
   worktrees: string;
   archivedOpen: string;
+  groups: string;
+  pinnedSessionsOpen: string;
+  pinnedProjectsOpen: string;
 } | null = null;
 function persistLeftbarExpansion(get: () => SessionState): void {
   if (leftbarExpansionPersistTimer) clearTimeout(leftbarExpansionPersistTimer);
@@ -2653,6 +2679,9 @@ function persistLeftbarExpansion(get: () => SessionState): void {
       projects: JSON.stringify(s.expandedProjects),
       worktrees: JSON.stringify(s.expandedWorktrees),
       archivedOpen: s.archivedViewOpen ? "true" : "false",
+      groups: JSON.stringify(s.collapsedGroups),
+      pinnedSessionsOpen: s.pinnedSessionsOpen ? "true" : "false",
+      pinnedProjectsOpen: s.pinnedProjectsOpen ? "true" : "false",
     };
     const last = leftbarExpansionLastWritten;
     if (last?.projects !== next.projects) {
@@ -2669,6 +2698,21 @@ function persistLeftbarExpansion(get: () => SessionState): void {
       void api.setting
         .set({ key: LEFTBAR_ARCHIVED_OPEN_SETTING_KEY, value: next.archivedOpen })
         .catch((err) => console.error("setting.set(leftbar.archivedOpen) failed:", err));
+    }
+    if (last?.groups !== next.groups) {
+      void api.setting
+        .set({ key: LEFTBAR_COLLAPSED_GROUPS_SETTING_KEY, value: next.groups })
+        .catch((err) => console.error("setting.set(leftbar.collapsedGroups) failed:", err));
+    }
+    if (last?.pinnedSessionsOpen !== next.pinnedSessionsOpen) {
+      void api.setting
+        .set({ key: LEFTBAR_PINNED_SESSIONS_OPEN_SETTING_KEY, value: next.pinnedSessionsOpen })
+        .catch((err) => console.error("setting.set(leftbar.pinnedSessionsOpen) failed:", err));
+    }
+    if (last?.pinnedProjectsOpen !== next.pinnedProjectsOpen) {
+      void api.setting
+        .set({ key: LEFTBAR_PINNED_PROJECTS_OPEN_SETTING_KEY, value: next.pinnedProjectsOpen })
+        .catch((err) => console.error("setting.set(leftbar.pinnedProjectsOpen) failed:", err));
     }
     leftbarExpansionLastWritten = next;
   }, LEFTBAR_EXPANSION_PERSIST_DEBOUNCE_MS);
@@ -4924,6 +4968,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   worktreeNames: {},
   projectColors: {},
   archivedViewOpen: false,
+  collapsedGroups: {},
+  pinnedProjectsOpen: true,
+  pinnedSessionsOpen: true,
   // openTabs is filled by `init` (lands on the first non-archived session,
   // if any) and by `startSession`. Defaulting to [] here means there's no
   // phantom active tab before hydration completes.
@@ -5206,6 +5253,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           LEFTBAR_EXPANDED_PROJECTS_SETTING_KEY,
           LEFTBAR_EXPANDED_WORKTREES_SETTING_KEY,
           LEFTBAR_ARCHIVED_OPEN_SETTING_KEY,
+          LEFTBAR_COLLAPSED_GROUPS_SETTING_KEY,
+          LEFTBAR_PINNED_SESSIONS_OPEN_SETTING_KEY,
+          LEFTBAR_PINNED_PROJECTS_OPEN_SETTING_KEY,
         ],
       })
       .catch((err) => {
@@ -5266,6 +5316,24 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       if (value === "true" || value === "false") set({ archivedViewOpen: value === "true" });
     } catch (err) {
       console.error("apply(leftbar.archivedOpen) failed:", err);
+    }
+    try {
+      const map = parseExpandedFlagMap(fp[LEFTBAR_COLLAPSED_GROUPS_SETTING_KEY]);
+      if (map) set({ collapsedGroups: map });
+    } catch (err) {
+      console.error("apply(leftbar.collapsedGroups) failed:", err);
+    }
+    try {
+      const value = fp[LEFTBAR_PINNED_SESSIONS_OPEN_SETTING_KEY];
+      if (value === "true" || value === "false") set({ pinnedSessionsOpen: value === "true" });
+    } catch (err) {
+      console.error("apply(leftbar.pinnedSessionsOpen) failed:", err);
+    }
+    try {
+      const value = fp[LEFTBAR_PINNED_PROJECTS_OPEN_SETTING_KEY];
+      if (value === "true" || value === "false") set({ pinnedProjectsOpen: value === "true" });
+    } catch (err) {
+      console.error("apply(leftbar.pinnedProjectsOpen) failed:", err);
     }
 
     // displayMode determines single vs tabs layout - needed before first render
@@ -6140,6 +6208,28 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
   setArchivedViewOpen: (open) => {
     set({ archivedViewOpen: open });
+    persistLeftbarExpansion(get);
+  },
+
+  // Group headers (grouped project view) default OPEN, so this map stores
+  // the collapsed ones — the flip mirrors toggleWorktreeExpanded's plain
+  // truthiness test: flipping an untouched (undefined) group folds it.
+  toggleGroupCollapsed: (groupName) => {
+    set((s) => {
+      return {
+        collapsedGroups: { ...s.collapsedGroups, [groupName]: !s.collapsedGroups[groupName] },
+      };
+    });
+    persistLeftbarExpansion(get);
+  },
+
+  setPinnedSessionsOpen: (open) => {
+    set({ pinnedSessionsOpen: open });
+    persistLeftbarExpansion(get);
+  },
+
+  setPinnedProjectsOpen: (open) => {
+    set({ pinnedProjectsOpen: open });
     persistLeftbarExpansion(get);
   },
 

@@ -55,6 +55,10 @@ const PI_PERMISSION_MODES = [
   { value: "default", label: "Default", icon: "shield", hint: "标准行为,工具按规则触发审批" },
   { value: "acceptEdits", label: "Edit Auto", icon: "shieldCheck", color: "text-warning", hint: "工作目录内的文件编辑自动放行" },
   { value: "plan", label: "Plan", icon: "shieldHalf", color: "text-info", hint: "只读探索,所有写操作都需审批" },
+  // Project isolation — same semantics as the Claude provider's entry: file
+  // edits auto-approved INSIDE the project, reads + writes + bash write-targets
+  // denied outside it (enforced by the extension's tool_call guards).
+  { value: "isolated", label: "Isolated", icon: "lock", color: "text-success", hint: "项目隔离:读写与文件操作仅限当前项目目录" },
   { value: "bypassPermissions", label: "Bypass", icon: "shieldLock", color: "text-danger", hint: "跳过所有权限检查(慎用)" },
 ];
 
@@ -131,6 +135,12 @@ export class PiAgentSdkProvider implements AgentProvider {
     // paths are normalized in every mode. Enforced by the extension's
     // tool_call handler (see mcodeExtension.ts).
     const strict = !(req.permissionMode === "bypassPermissions" || req.permissionMode === "dontAsk");
+    // Project isolation ("isolated" mode): reads confined to cwd as well —
+    // enforced by the extension's tool_call read guard. Snapshotted per-turn
+    // like `strict` for the same reason (UI mode flips land through an async
+    // IPC round-trip that can't be trusted to arrive before the next
+    // tool_call handler runs; one-turn lag matches the write guard).
+    const isolated = req.permissionMode === "isolated";
 
     // Build a ModelRuntime that injects all configured API keys. Pi's
     // setRuntimeApiKey stores the key at the top of the auth priority chain
@@ -241,7 +251,7 @@ export class PiAgentSdkProvider implements AgentProvider {
     // as the Claude provider's options.mcpServers injection) — read per-turn,
     // so flipping it lands on the next message.
     const mcpManagement = await getMcpManagement();
-    const mcodeExtension = createMcodeExtension({ ctx, cwd: req.cwd, strict, sessionId: req.sessionId, projectPath: req.cwd, turnNumber: req.turnNumber, browserToolsEnabled: !mcpManagement.browserDisabled });
+    const mcodeExtension = createMcodeExtension({ ctx, cwd: req.cwd, strict, isolated, sessionId: req.sessionId, projectPath: req.cwd, turnNumber: req.turnNumber, browserToolsEnabled: !mcpManagement.browserDisabled });
 
     // Bridge Mcode's skill roots + `/name` trigger into Pi's skill model, and
     // inject the inline extension via the loader's `extensionFactories`. Pi's

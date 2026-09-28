@@ -8,6 +8,7 @@ import {
   IconShieldCheck,
   IconShieldHalfFilled,
   IconShieldLock,
+  IconLock,
   IconChevronRight,
 } from "@renderer/lib/icons.js";
 import { useI18n, type MessageId } from "@renderer/lib/i18n/index.js";
@@ -96,6 +97,7 @@ const PERMISSION_HINT_KEYS: Record<string, MessageId> = {
   default: "chat.permission.hintDefault",
   acceptEdits: "chat.permission.hintAcceptEdits",
   plan: "chat.permission.hintPlan",
+  isolated: "chat.permission.hintIsolated",
   bypassPermissions: "chat.permission.hintBypass",
   "codex-sdk:read-only": "chat.permission.hintCodexReadOnly",
   "codex-sdk:default": "chat.permission.hintCodexDefault",
@@ -107,6 +109,7 @@ const PERMISSION_TILE_KEYS: Record<string, MessageId> = {
   plan: "chat.permission.tilePlan",
   default: "chat.permission.tileDefault",
   acceptEdits: "chat.permission.tileAcceptEdits",
+  isolated: "chat.permission.tileIsolated",
   bypassPermissions: "chat.permission.tileBypass",
   "codex-sdk:read-only": "chat.permission.tileCodexReadOnly",
   "codex-sdk:default": "chat.permission.tileCodexDefault",
@@ -119,6 +122,7 @@ const FALLBACK_LABEL: Record<string, string> = {
   default: "Default",
   acceptEdits: "Edit Auto",
   plan: "Plan",
+  isolated: "Isolated",
   bypassPermissions: "Bypass",
   dontAsk: "DontAsk",
   auto: "Auto",
@@ -129,6 +133,7 @@ const FALLBACK_LABEL: Record<string, string> = {
 const RISK_RANK: Record<string, number> = {
   plan: 0,
   "read-only": 0,
+  isolated: 0,
   default: 1,
   acceptEdits: 2,
   bypassPermissions: 3,
@@ -143,6 +148,7 @@ const ICON_BY_NAME: Record<string, React.ComponentType<{ size?: number }>> = {
   shieldCheck: IconShieldCheck,
   shieldHalf: IconShieldHalfFilled,
   shieldLock: IconShieldLock,
+  lock: IconLock,
 };
 
 /** Resolve a permission mode's icon name to a rendered icon node. Falls back

@@ -232,8 +232,7 @@ function LeftBarBase({
     if (tryScroll()) return;
 
     // The active row isn't mounted yet. Reasons: its GROUP is collapsed
-    // (grouped view — group collapse is LeftBar-local state the store can't
-    // touch), its project row is collapsed (syncConfigFromSession expands it
+    // (grouped view — store-backed expand state), its project row is collapsed (syncConfigFromSession expands it
     // on activation, but the user can collapse it again afterwards), or it's
     // beyond the loaded page slice. Find its project, reveal the ancestors,
     // then keep loading pages until the row appears or there's no more.
@@ -275,7 +274,7 @@ function LeftBarBase({
       const proj = st.projects.find((p) => p.id === projectId);
       if (st.projectView === "grouped" && proj?.group) {
         const groupName = proj.group;
-        setCollapsedGroups((g) => (g[groupName] ? { ...g, [groupName]: false } : g));
+        if (st.collapsedGroups[groupName]) st.toggleGroupCollapsed(groupName);
       }
       if (proj?.pinnedAt != null) {
         setPinnedProjectsOpen(true);
@@ -360,8 +359,9 @@ function LeftBarBase({
   // `projectCtxMenu` is the right-click menu on a project row; the submenu of
   // existing groups + "新建分组" + "移出分组" lives inside it. `groupDialog`
   // drives the small dialog for creating a new group (or renaming one — both
-  // flows share the same input UI, distinguished by `mode`). `collapsedGroups`
-  // is in-memory expand state for the group headers, mirroring
+  // flows share the same input UI, distinguished by `mode`). Group-header
+  // expand state (`collapsedGroups` + `toggleGroupCollapsed`) lives in the
+  // store and persists under `leftbar.collapsedGroups`, mirroring
   // `expandedProjects` for project rows.
   const [projectCtxMenu, setProjectCtxMenu] = useState<
     | { project: Project; x: number; y: number }
@@ -372,12 +372,16 @@ function LeftBarBase({
     | { mode: "rename"; groupName: string }
     | null
   >(null);
-  const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
-  // Expand state for the global pinned section (in-memory, defaults open so
-  // the feature is discoverable; mirrors the archived bin's local toggle).
-  const [pinnedOpen, setPinnedOpen] = useState(true);
-  // Same pattern for the pinned-PROJECTS section above the project tree.
-  const [pinnedProjectsOpen, setPinnedProjectsOpen] = useState(true);
+  const collapsedGroups = useSessionStore((s) => s.collapsedGroups);
+  const toggleGroupCollapsed = useSessionStore((s) => s.toggleGroupCollapsed);
+  // Expand state for the global pinned sections (store-backed and persisted —
+  // `leftbar.pinnedSessionsOpen` / `leftbar.pinnedProjectsOpen`; defaults
+  // open so the feature is discoverable).
+  const pinnedOpen = useSessionStore((s) => s.pinnedSessionsOpen);
+  const setPinnedOpen = useSessionStore((s) => s.setPinnedSessionsOpen);
+  // Same for the pinned-PROJECTS section above the project tree.
+  const pinnedProjectsOpen = useSessionStore((s) => s.pinnedProjectsOpen);
+  const setPinnedProjectsOpen = useSessionStore((s) => s.setPinnedProjectsOpen);
 
   // Split into active vs archived. Active projects show in the tree;
   // archived projects (whole-project archive) show as their own rows in
@@ -846,9 +850,7 @@ function LeftBarBase({
                       projects={projs}
                       groupColor={groupMeta[groupName]?.color ?? null}
                       collapsed={!!collapsedGroups[groupName]}
-                      onToggle={() =>
-                        setCollapsedGroups((s) => ({ ...s, [groupName]: !s[groupName] }))
-                      }
+                      onToggle={() => toggleGroupCollapsed(groupName)}
                       onRenameGroup={() =>
                         setGroupDialog({ mode: "rename", groupName })
                       }

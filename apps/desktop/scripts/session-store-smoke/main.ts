@@ -445,7 +445,10 @@ console.log("\n[11] leftbar expansion persistence (issue #13)");
     "expansion defaults are untouched before any toggle",
     JSON.stringify(st.expandedProjects) === "{}" &&
       JSON.stringify(st.expandedWorktrees) === "{}" &&
-      st.archivedViewOpen === false,
+      st.archivedViewOpen === false &&
+      JSON.stringify(st.collapsedGroups) === "{}" &&
+      st.pinnedSessionsOpen === true &&
+      st.pinnedProjectsOpen === true,
   );
 
   // A synchronous burst of toggles must coalesce into ONE debounced write
@@ -456,6 +459,9 @@ console.log("\n[11] leftbar expansion persistence (issue #13)");
   st.toggleProjectExpanded(P); // expand again — final value true
   st.toggleWorktreeExpanded(WT);
   st.setArchivedViewOpen(true);
+  st.toggleGroupCollapsed("G"); // fold (absent key flips to true = collapsed)
+  st.setPinnedSessionsOpen(false);
+  st.setPinnedProjectsOpen(false);
   check(
     "nothing is written before the persist debounce flushes",
     smokeSettingWrites.count === writesBefore,
@@ -478,8 +484,19 @@ console.log("\n[11] leftbar expansion persistence (issue #13)");
     smokeSettings.get("leftbar.archivedOpen"),
   );
   check(
+    "collapsedGroups persisted naming only the folded group",
+    smokeSettings.get("leftbar.collapsedGroups") === JSON.stringify({ G: true }),
+    smokeSettings.get("leftbar.collapsedGroups"),
+  );
+  check(
+    "pinned section flags persisted as the \"false\" string",
+    smokeSettings.get("leftbar.pinnedSessionsOpen") === "false" &&
+      smokeSettings.get("leftbar.pinnedProjectsOpen") === "false",
+    smokeSettings.get("leftbar.pinnedSessionsOpen"),
+  );
+  check(
     "the burst coalesced to exactly one write per key",
-    smokeSettingWrites.count - writesBefore === 3,
+    smokeSettingWrites.count - writesBefore === 6,
     smokeSettingWrites.count - writesBefore,
   );
 
@@ -491,6 +508,19 @@ console.log("\n[11] leftbar expansion persistence (issue #13)");
     "unchanged maps are diff-skipped on the next flush",
     smokeSettingWrites.count - writesBefore2 === 1 && smokeSettings.get("leftbar.archivedOpen") === "false",
     smokeSettingWrites.count - writesBefore2,
+  );
+
+  // Same per-key diff for the group map: unfolding one group rewrites only
+  // the collapsedGroups key (group headers default open, so the map keeps a
+  // false entry rather than dropping the key — same as expandedProjects).
+  const writesBefore3 = smokeSettingWrites.count;
+  useSessionStore.getState().toggleGroupCollapsed("G");
+  await sleep(500);
+  check(
+    "group unfold rewrote only the collapsedGroups key",
+    smokeSettingWrites.count - writesBefore3 === 1 &&
+      smokeSettings.get("leftbar.collapsedGroups") === JSON.stringify({ G: false }),
+    smokeSettingWrites.count - writesBefore3,
   );
 
   // Hydration-side parse guard: a malformed or foreign-typed blob must fall
