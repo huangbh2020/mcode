@@ -99,6 +99,8 @@ export function GitHubPanel() {
   /** Issue number pre-linked into the create-PR dialog ("创建修复 PR" from
    *  an issue's detail — starts the body with Fixes #N). */
   const [fixIssueNumber, setFixIssueNumber] = useState<number | null>(null);
+  /** AI-fix kickoff in flight (session creation + first turn send). */
+  const [issueFixing, setIssueFixing] = useState(false);
 
   // ── manual repo input ──
   const [manualInput, setManualInput] = useState<string | null>(null);
@@ -235,6 +237,45 @@ export function GitHubPanel() {
     void openDetail(detail.kind, detail.data.number);
     void refreshLists();
   }, [detail, openDetail, refreshLists]);
+
+  /** "AI 解决此议题": open a NEW plan-mode session bound to the project that
+   *  owns the repo, then send it a kickoff turn describing the issue. The
+   *  agent reads the code read-only, posts a fix plan on the plan-approval
+   *  card, and implements it after the user approves — mirroring the PR
+   *  AI-review flow (startSession → sendPrompt). */
+  const handleAiFixIssue = useCallback(
+    async (issue: GitHubIssueDetail) => {
+      if (!projectId || !selected?.repoPath) return;
+      toast({ kind: "info", title: t("github.aiFixStarting") });
+      setIssueFixing(true);
+      try {
+        const store = useSessionStore.getState();
+        const title = `修复 Issue #${issue.number}: ${issue.title}`.slice(0, 80);
+        await store.startSession(projectId, {
+          envMode: "local",
+          title,
+          permissionMode: "plan",
+        });
+        const sessionId = useSessionStore.getState().activeSessionId;
+        if (!sessionId) {
+          throw new Error("Failed to initialize session");
+        }
+        const prompt = buildIssueFixPrompt(issue, selected.slug, selected.repoPath);
+        // false = the store's send-time guard fired (e.g. no model configured
+        // — it raises its own guiding toast); skip the success toast so the
+        // user isn't told a turn started when it didn't.
+        const sent = await store.sendPrompt(prompt, undefined, undefined, undefined, undefined, undefined, sessionId);
+        if (sent) {
+          toast({ kind: "info", title: t("github.aiFixStarted", { n: issue.number }) });
+        }
+      } catch (err) {
+        toast({ kind: "error", title: t("github.loadFailed"), body: (err as Error).message });
+      } finally {
+        setIssueFixing(false);
+      }
+    },
+    [projectId, selected, toast, t],
+  );
 
   const addManualRepo = useCallback(async () => {
     if (manualInput === null || !projectId) return;
@@ -422,6 +463,10 @@ export function GitHubPanel() {
                     setFixIssueNumber(detail.data.number);
                     setCreatePullOpen(true);
                   }}
+                  onAiFix={() => void handleAiFixIssue(detail.data)}
+                  aiFixing={issueFixing}
+                  aiFixDisabled={!selected?.repoPath}
+                  aiFixDisabledTitle={selected?.repoPath ? undefined : t("github.noLocalRepo")}
                 />
               )
             ) : listsLoading && (tab === "prs" ? pulls.length === 0 : issues.length === 0) ? (
@@ -974,6 +1019,55 @@ function buildPrReviewPrompt(pull: GitHubPullDetail, slug: string): string {
     .join("\n");
 }
 
+/** Prompt payload caps — a huge issue thread must not blow up the kickoff
+ *  turn (the agent re-reads anything it needs from the live repo itself). */
+const ISSUE_FIX_BODY_CHAR_LIMIT = 4000;
+const ISSUE_FIX_COMMENT_COUNT_LIMIT = 20;
+const ISSUE_FIX_COMMENT_CHAR_LIMIT = 1500;
+
+function truncateForPrompt(text: string, limit: number): string {
+  const trimmed = text.trim();
+  return trimmed.length > limit ? `${trimmed.slice(0, limit)}\n…(内容过长，已截断)` : trimmed;
+}
+
+function buildIssueFixPrompt(issue: GitHubIssueDetail, slug: string, repoPath: string): string {
+  const labels = issue.labels.map((l) => l.name).join("、");
+  const comments =
+    issue.comments.length > 0
+      ? issue.comments
+          .slice(-ISSUE_FIX_COMMENT_COUNT_LIMIT)
+          .map((c) => `- **${c.author.login}**（${c.createdAt.slice(0, 10)}）：\n${truncateForPrompt(c.body, ISSUE_FIX_COMMENT_CHAR_LIMIT)}`)
+          .join("\n")
+      : "(暂无评论)";
+
+  return [
+    `请修复 GitHub 仓库 ${slug} 的 Issue #${issue.number}。该仓库的本地检出位于 \`${repoPath}\`，请在该目录内工作。`,
+    "",
+    `### Issue 基本信息`,
+    `- **标题**: ${issue.title}`,
+    `- **编号**: #${issue.number}（${issue.state === "open" ? "开放" : "已关闭"}）`,
+    `- **作者**: ${issue.author.login}`,
+    labels ? `- **标签**: ${labels}` : "",
+    `- **链接**: ${issue.htmlUrl}`,
+    `- **创建时间**: ${issue.createdAt.slice(0, 10)}`,
+    "",
+    `### Issue 正文`,
+    issue.body.trim() ? truncateForPrompt(issue.body, ISSUE_FIX_BODY_CHAR_LIMIT) : "(无正文)",
+    "",
+    `### 评论区（最近 ${Math.min(issue.comments.length, ISSUE_FIX_COMMENT_COUNT_LIMIT)} 条）`,
+    comments,
+    "",
+    `### 修复要求`,
+    `1. 先只读调研：用代码阅读与搜索工具定位问题根因，理解相关实现；随后给出一份修复计划（改动点、影响面、验证方式），等待用户在计划卡片上批准——批准之前不要修改任何文件。`,
+    `2. 修复遵循最小改动原则，贴合仓库既有风格；不要顺手重构与本次修复无关的代码。`,
+    `3. 若项目有 lint / test / build 脚本，运行与本次改动相关的验证并确保通过。`,
+    `4. 修复完成并验证后：创建并切换到新分支 \`fix/issue-${issue.number}\`（可在其后追加简短英文后缀），把本次修复 commit 到该分支；**不要执行 git push**。若开始时工作区已有未提交改动，先停下来询问用户如何处理，不得自行 stash、丢弃或覆盖。`,
+    `5. 最后输出总结：根因分析、改动文件清单、验证结果、剩余风险与建议。`,
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
 function PullDetailView({ pull, slug, onBack, onRefresh, onOpenUrl }: {
   pull: GitHubPullDetail;
   slug: string;
@@ -1197,7 +1291,7 @@ function PullDetailView({ pull, slug, onBack, onRefresh, onOpenUrl }: {
   );
 }
 
-function IssueDetailView({ issue, owner, repo, onBack, onRefresh, onOpenUrl, onOpenPull, onCreateFixPr }: {
+function IssueDetailView({ issue, owner, repo, onBack, onRefresh, onOpenUrl, onOpenPull, onCreateFixPr, onAiFix, aiFixing, aiFixDisabled, aiFixDisabledTitle }: {
   issue: GitHubIssueDetail;
   owner: string;
   repo: string;
@@ -1206,6 +1300,10 @@ function IssueDetailView({ issue, owner, repo, onBack, onRefresh, onOpenUrl, onO
   onOpenUrl: (url: string) => void;
   onOpenPull: (number: number) => void;
   onCreateFixPr: () => void;
+  onAiFix: () => void;
+  aiFixing: boolean;
+  aiFixDisabled: boolean;
+  aiFixDisabledTitle: string | undefined;
 }) {
   const { t } = useI18n();
   return (
@@ -1246,6 +1344,24 @@ function IssueDetailView({ issue, owner, repo, onBack, onRefresh, onOpenUrl, onO
         )}
         <button type="button" onClick={onCreateFixPr} className="mt-1.5 flex items-center gap-1 rounded px-1.5 py-0.5 text-accent [font-size:var(--rp-fs-xxs)] hover:bg-accent/10">
           <IconPlus size={11} /> {t("github.createFixPr")}
+        </button>
+      </div>
+
+      {/* AI fix session (plan-mode kickoff) */}
+      <div className="border-b border-edge px-3 py-2">
+        <button
+          type="button"
+          onClick={onAiFix}
+          disabled={aiFixDisabled || aiFixing}
+          title={aiFixDisabledTitle}
+          className="flex w-full items-center justify-center gap-1.5 rounded-md border border-accent/30 bg-accent/10 px-3 py-1.5 text-xs font-medium text-accent transition-colors hover:bg-accent/20 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {aiFixing ? (
+            <IconLoader2 size={13} className="animate-spin" />
+          ) : (
+            <IconMessageChatbot size={14} />
+          )}
+          <span>{t("github.aiFixIssue")}</span>
         </button>
       </div>
 

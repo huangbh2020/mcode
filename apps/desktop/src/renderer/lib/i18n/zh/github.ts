@@ -79,6 +79,9 @@ export const zh = {
   "github.aiReviewOnly": "AI 审查改动",
   "github.aiReviewStarting": "正在启动 AI 审查会话…",
   "github.aiReviewStarted": "已开启 PR #{n} 的 AI 审查会话",
+  "github.aiFixIssue": "AI 解决此议题",
+  "github.aiFixStarting": "正在启动 AI 修复会话…",
+  "github.aiFixStarted": "已开启 Issue #{n} 的 AI 修复会话",
 
   /* ── comments ── */
   "github.commentPlaceholder": "输入评论…（支持 Markdown）",

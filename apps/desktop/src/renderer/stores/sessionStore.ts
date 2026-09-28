@@ -1563,7 +1563,7 @@ export interface SessionState {
    *  between. No-op when the project's cache isn't loaded (init brings both
    *  sections together). */
   loadWorktreeSessions: (projectId: string) => Promise<void>;
-  startSession: (projectId?: string, overrides?: { providerId?: string; model?: string; customModelId?: string | null; worktreePath?: string; /** Force the working-environment intent (bypasses the composer's env chip — e.g. a conflict-resolution session must stay in the real checkout). */ envMode?: "local" | "worktree" }) => Promise<void>;
+  startSession: (projectId?: string, overrides?: { providerId?: string; model?: string; customModelId?: string | null; worktreePath?: string; /** Force the working-environment intent (bypasses the composer's env chip — e.g. a conflict-resolution session must stay in the real checkout). */ envMode?: "local" | "worktree"; /** Explicit row title — bypasses auto-naming AND the fresh-"New session" row reuse (an explicitly titled session always creates a new row). */ title?: string; /** Initial permission mode for the session row — bypasses the composer slot (e.g. an AI-fix session starts in plan mode). */ permissionMode?: string }) => Promise<void>;
   /** Move a FRESH local session to a different project (the directory
    *  switcher in the new-session composer panel). Main-side guards reject
    *  anything that already started (messages / materialized worktree / bad
@@ -6086,7 +6086,8 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       providerId: overrides?.providerId ?? get().providerId,
       model: model !== "default" ? model : undefined,
       effort: get().effort,
-      permissionMode: get().permissionMode,
+      title: overrides?.title,
+      permissionMode: overrides?.permissionMode ?? get().permissionMode,
       // Working-environment intent from the composer chip — materialized on
       // the first turn (see sendTurn's resolveSessionCwd), never here. An
       // explicit worktreePath (LeftBar "在此工作树中新建会话") BINDS the new

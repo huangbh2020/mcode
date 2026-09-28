@@ -80,6 +80,9 @@ export const en = {
   "github.aiReviewOnly": "AI Review Changes",
   "github.aiReviewStarting": "Starting AI review session…",
   "github.aiReviewStarted": "Started AI review session for PR #{n}",
+  "github.aiFixIssue": "Fix with AI",
+  "github.aiFixStarting": "Starting AI fix session…",
+  "github.aiFixStarted": "Started AI fix session for Issue #{n}",
 
   /* ── comments ── */
   "github.commentPlaceholder": "Write a comment… (Markdown supported)",
