@@ -60,6 +60,7 @@ import {
   UI_USER_MSG_COLOR_SETTING_KEY,
   UI_ACCENT_COLOR_SETTING_KEY,
   UI_RIGHT_PANEL_TAB_SETTING_KEY,
+  UI_SETTINGS_SECTION_SETTING_KEY,
   UI_VOICE_LANG_SETTING_KEY,
   UI_VOICE_ENGINE_SETTING_KEY,
   UI_VOICE_MIC_PERMISSION_SETTING_KEY,
@@ -1000,8 +1001,15 @@ export interface SessionState {
   /** Initial settings section to land on when the modal opens. Callers that
    *  know which section the user wants (e.g. the composer's "管理模型…"
    *  entry → "custom-models" / "pi-models") pass it to setSettingsOpen; null
-   *  means "use the default section". Cleared on close. */
+   *  means "use the persisted last-viewed section". Cleared on close. */
   settingsSection: string | null;
+  /** Last settings section the user viewed (set by SettingsPage whenever the
+   *  active section changes, deep-linked or clicked). Persisted to
+   *  ui.settingsSection so the next plain open of the settings modal lands
+   *  where the user left off. Kept as a raw string — SettingsPage validates
+   *  it against its nav table (stale ids from older builds fall back to the
+   *  first nav item). */
+  settingsLastSection: string | null;
   /** "尚未配置模型" dialog visibility. Opened by sendPrompt / editAndResendMessage
    *  when the active provider has no configured model to send with (model is
    *  auto/"default" and nothing is configured). NOT persisted. */
@@ -1760,6 +1768,10 @@ export interface SessionState {
    *  is looking at it now). */
   setWindowFocused: (focused: boolean) => void;
   setSettingsOpen: (open: boolean, section?: string) => void;
+  /** Remember the settings page's active section (persisted to the settings
+   *  table). Called by SettingsPage on section switches and on deep-linked
+   *  opens, so a plain re-open restores the last-viewed section. */
+  setSettingsLastSection: (section: string) => void;
   /** Toggle the read-only 定时任务 viewer page. Opening it closes the settings
    *  page (mutual exclusion) and lazily loads the automations table. */
   setSchedPageOpen: (open: boolean) => void;
@@ -5062,6 +5074,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   settingsOpen: false,
   schedPageOpen: false,
   settingsSection: null,
+  // Hydrated from the settings table (ui.settingsSection) in the deferred
+  // getMany pass; null until then / when never visited.
+  settingsLastSection: null,
   modelConfigPromptOpen: false,
   modelGuardPulse: 0,
   commandPaletteOpen: false,
@@ -5755,6 +5770,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           UI_SHORTCUTS_SETTING_KEY,
           UI_PANE_WIDTHS_SETTING_KEY,
           UI_RIGHT_PANEL_TAB_SETTING_KEY,
+          UI_SETTINGS_SECTION_SETTING_KEY,
           UI_IDE_OPEN_FILES_SETTING_KEY,
           UI_IDE_ACTIVE_FILE_SETTING_KEY,
           UI_IDE_EXPANDED_DIRS_SETTING_KEY,
@@ -5898,6 +5914,12 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     } catch (err) {
       console.error("apply(paneWidths) failed:", err);
     }
+
+    // Settings modal: restore the last-viewed section. Kept as a raw string —
+    // SettingsPage validates it against its nav table when the modal opens
+    // (unknown ids from an older build fall back to the first nav item).
+    const settingsSectionRaw = ds[UI_SETTINGS_SECTION_SETTING_KEY];
+    if (settingsSectionRaw) set({ settingsLastSection: settingsSectionRaw });
 
     // IDE right-panel prefs (active tab, open files, active file, expanded tree
     // dirs, editor mode, diff mode, commit-gen model/prompt, custom commands,
@@ -9139,6 +9161,16 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     // (download / select / remove in 语音输入) — re-check so the composer mic
     // appears/disappears without a restart.
     if (!open) void get().refreshVoiceModelStatus();
+  },
+
+  setSettingsLastSection: (section) => {
+    // Same-value early return keeps the modal's mount effect free: opening
+    // settings without navigating writes nothing.
+    if (get().settingsLastSection === section) return;
+    set({ settingsLastSection: section });
+    void api.setting.set({ key: UI_SETTINGS_SECTION_SETTING_KEY, value: section }).catch((err) => {
+      console.error("setting.set(settingsLastSection) failed:", err);
+    });
   },
 
   setSchedPageOpen: (open) => {

@@ -702,6 +702,18 @@ export const UI_EDITOR_THEME_SETTING_KEY = "ui.editorTheme";
  */
 export const UI_RIGHT_PANEL_TAB_SETTING_KEY = "ui.rightPanelTab";
 
+/**
+ * Setting key under which the settings page's last-viewed section is
+ * persisted, so a plain re-open of the settings modal lands where the user
+ * left off. Value is one of the SettingsPage nav ids ("general",
+ * "custom-models", …). The ids are renderer-local (defined by the settings
+ * nav table), so hydration keeps the raw string and the page validates it
+ * against its nav table before use — an unknown/stale id from an older
+ * build falls back to the first nav item. Explicit deep links
+ * (setSettingsOpen(true, id)) still win for that open and update the value.
+ */
+export const UI_SETTINGS_SECTION_SETTING_KEY = "ui.settingsSection";
+
 /** zod schema + TS union for the right-panel tab preference. The SESSION-
  *  scoped tabs — "turns" (turn flow), "sidechat" (sub-sessions) and "browser"
  *  (embedded sidebar browser) — are opened per session via the rail's "+"

@@ -270,6 +270,10 @@ pnpm build
 - **刻意没做**:图片预览(`ImagePreviewPane`)不记滚动——它的滚动只在 1:1 缩放(`natural`)下存在,而缩放状态本身不记,恢复位置无意义(适应窗口时不溢出,恢复被钳制为 0,无害);宽面板模式下编辑器宿主是 CSS 隐藏的,此时挂载的查看面容器高度为 0、恢复仍落顶部(点文件名时本来也看不见它,退出宽屏才可见)——与修复前行为一致,未额外处理。
 - **验证**:`tsc --noEmit` + `electron-vite build` 通过。**未做真机端到端**:当时用户的 dev 实例窗口处于最小化状态,驱动它会抢占屏幕并改动其会话数据,故这一轮的验证停在类型/构建层,行为回读仍靠人工使用确认。
 
+### 设置页分区记忆(2026-09-29,「再次打开设置回到上次退出的分区」)
+
+- **机制**:设置页上次浏览的分区 id 存 settings 表 `ui.settingsSection`(`UI_SETTINGS_SECTION_SETTING_KEY`,contracts)——与 `ui.rightPanelTab`/`ui.displayMode` 同款三件套:store 字段 `settingsLastSection`(init 的 deferred getMany 水合,存原始字符串)+ `setSettingsLastSection` 动作(同值早退,fire-and-forget setting.set)。SettingsPage 每次打开按 **深链 `settingsSection`(`setSettingsOpen(true, id)` 的显式请求,如 composer 的「管理模型…」)> 持久化 `settingsLastSection` > 首项 "general"** 的回退链取初始分区,并在 `active` 变化的 effect 里写入(深链打开也更新持久值=用户最后看到的分区)。分区 id 是 renderer 本地概念(`SectionId` 定义在 SettingsPage.tsx),校验在页面初始化器做(`NAV_ITEMS.some`)——未来下掉面板后历史持久化的陈旧 id 自动回落首项,store 不需要校验。移动端 `MobileSettingsSheet` 无分区概念,天然不受影响。
+
 ### 用户消息气泡 5 行折叠(2026-09-14)
 
 - **行为**:用户发送的消息超过 5 行时默认折叠——钳在 `calc(5 × --chat-md-leading × --chat-font-size)`(纯 CSS,跟随对话紧凑度设置),底部 mask 渐隐代替硬切(气泡是 `user-bubble-fill` 半透明着色,表面色渐变会与色调解离);点击气泡任意处展开,再点收起。展开态在气泡底部右侧一枚「收起」chip,折叠态在底缘中央一枚「展开」圆角 pill——两枚形态镜像 Markdown 代码块的既有折叠 pill(`chatStream.code.*`),两处折叠面读感一致。i18n 键 `chatStream.userMsg.expand/collapse`。
