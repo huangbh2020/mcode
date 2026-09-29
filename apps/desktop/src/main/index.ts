@@ -11,7 +11,7 @@ import { startMobileServer, stopMobileServer } from "@main/mobile/MobileHttpServ
 import { relayManager } from "@main/relay/RelayManager.js";
 import { RELAY_AUTO_START_SETTING_KEY } from "@contracts/relay";
 import { SettingRepo } from "@main/store/repositories.js";
-import { initUpdater } from "@main/updater.js";
+import { initUpdater, isQuittingForUpdate } from "@main/updater.js";
 import { initAutoArchiver } from "@main/session/AutoArchiver.js";
 import { notificationManager } from "@main/notifications/NotificationManager.js";
 import { orchestrator } from "@main/orchestrator/OrchestratorService.js";
@@ -278,12 +278,19 @@ app.on("before-quit", (event) => {
     // Promise.all means quit waits for BOTH the flush and the reap (or the
     // 3s timeout, whichever comes first) — racing them individually would
     // let a fast reap cut the cookie flush short.
-    const preQuit = Promise.all([
-      BrowserManager.saveCookieVault().catch(() => {}),
-      killDescendants(process.pid).then((r) => {
-        if (r.terminated.length > 0) log.info(`quit: reaped ${r.terminated.length} descendant process(es)`);
-      }),
-    ]);
+    // Reaping is skipped when quitting to install an update: electron-updater
+    // spawns the installer as a DIRECT child of this process before quitting,
+    // and killDescendants would taskkill it before it could apply the update
+    // (2026-09-29: the installer wizard flashed and died; update never
+    // applied, five attempts in a row). The installer outlives our exit on
+    // its own, so orphaned model-started commands during an update restart
+    // are the accepted trade-off (pre-2026-09-21 behavior).
+    const reap = isQuittingForUpdate()
+      ? Promise.resolve()
+      : killDescendants(process.pid).then((r) => {
+          if (r.terminated.length > 0) log.info(`quit: reaped ${r.terminated.length} descendant process(es)`);
+        });
+    const preQuit = Promise.all([BrowserManager.saveCookieVault().catch(() => {}), reap]);
     void Promise.race([preQuit, timeout]).finally(() => {
       sessionCookiesFlushed = true;
       app.quit();
