@@ -223,8 +223,19 @@ export function UpdateNotification() {
               </Button>
             ) : (
               <>
-                <Button variant="ghost" size="sm" onClick={dismiss}>
-                  {t("settings.update.remindLater")}
+                {/* Manual-download fallback next to "restart & install": the
+                    card body tells the user to grab the installer from the
+                    releases page if the in-app install fails, so the path
+                    must be one click away. Not dismissed on open — the user
+                    may still choose "restart & install" after a look. */}
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => window.open(RELEASES_URL, "_blank", "noopener,noreferrer")}
+                  className="gap-1.5"
+                >
+                  <IconExternalLink size={14} />
+                  {t("settings.update.goToDownload")}
                 </Button>
                 <Button variant="primary" size="sm" onClick={() => void onQuitAndInstall()} className="gap-1.5">
                   <IconRocket size={14} />

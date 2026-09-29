@@ -51,8 +51,8 @@ export const en = {
   "ide.editor.navForward": "Go forward",
   "ide.editor.switchToDiff": "Switch to diff view",
   "ide.editor.switchToEditView": "Switch to edit view",
-  "ide.editor.switchToSource": "Switch to source editing",
-  "ide.editor.switchToPreview": "Switch to preview",
+  "ide.editor.previewMode": "Preview",
+  "ide.editor.editMode": "Edit",
 
   /* ── file viewer (mobile read-only viewer) ── */
   "ide.viewer.mdPreview": "Preview",

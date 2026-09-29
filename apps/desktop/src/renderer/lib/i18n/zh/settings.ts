@@ -148,14 +148,14 @@ export const zh = {
 
   // ── UpdateNotification (global bottom-right update notice card) ──
   "settings.update.availableTitle": "发现新版本 v{version}",
-  "settings.update.availableBodyWin": "下载完成后可重启安装,退出应用时也会自动安装。",
+  "settings.update.availableBodyWin": "下载完成后可重启安装,退出应用时也会自动安装;若安装失败,请前往发布页手动下载安装。",
   "settings.update.availableBodyManual": "当前安装包暂不支持应用内自动更新,请前往发布页下载最新版本。",
   "settings.update.downloadNow": "立即下载",
   "settings.update.remindLater": "稍后提醒",
   "settings.update.goToDownload": "前往下载",
   "settings.update.downloadingTitle": "正在下载 v{version}",
   "settings.update.downloadedTitle": "v{version} 已就绪",
-  "settings.update.downloadedBody": "重启应用后完成安装;稍后重启将在退出时自动安装。",
+  "settings.update.downloadedBody": "重启应用后完成安装(退出时也会自动安装);若安装失败,请前往发布页手动下载安装。",
 
   // ── AppearancePanel (+ FontSizeStepper) ──
   "settings.appearance.title": "外观",

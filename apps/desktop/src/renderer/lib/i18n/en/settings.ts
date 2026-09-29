@@ -145,14 +145,14 @@ export const en = {
 
   // ── UpdateNotification (global bottom-right update notice card) ──
   "settings.update.availableTitle": "New version v{version} available",
-  "settings.update.availableBodyWin": "Restart to install once downloaded, or it installs automatically when you quit the app.",
+  "settings.update.availableBodyWin": "Restart to install once downloaded, or it installs automatically when you quit the app. If the install fails, download the installer from the releases page.",
   "settings.update.availableBodyManual": "In-app auto-update isn't supported by this build. Please download the latest version from the releases page.",
   "settings.update.downloadNow": "Download now",
   "settings.update.remindLater": "Remind me later",
   "settings.update.goToDownload": "Go to downloads",
   "settings.update.downloadingTitle": "Downloading v{version}",
   "settings.update.downloadedTitle": "v{version} ready to install",
-  "settings.update.downloadedBody": "Restart the app to finish installing; if you skip it for now, it installs automatically on quit.",
+  "settings.update.downloadedBody": "Restart the app to finish installing (it also installs automatically on quit). If the install fails, download the installer from the releases page.",
 
   // ── AppearancePanel (+ FontSizeStepper) ──
   "settings.appearance.title": "Appearance",

@@ -53,8 +53,8 @@ export const zh = {
   "ide.editor.navForward": "前往下一处",
   "ide.editor.switchToDiff": "切换到差异视图",
   "ide.editor.switchToEditView": "切换到编辑视图",
-  "ide.editor.switchToSource": "切换到源码编辑",
-  "ide.editor.switchToPreview": "切换到预览",
+  "ide.editor.previewMode": "预览",
+  "ide.editor.editMode": "编辑",
 
   /* ── file viewer (mobile read-only viewer) ── */
   "ide.viewer.mdPreview": "预览",
