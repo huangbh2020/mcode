@@ -92,6 +92,17 @@ let downloadingVersion: string | null = null;
  *  user to a manual download instead. */
 let manualInstallRequiredCache: boolean | undefined;
 
+/** True once quitAndInstall has handed control to the installer. electron-updater
+ *  spawns the installer (NSIS on Windows) as a DIRECT child of this process and
+ *  only then quits — the before-quit reaper (killDescendants) would force-kill
+ *  it mid-flight, so it reads this flag to skip reaping for this quit. */
+let quittingForUpdateInstall = false;
+
+/** Whether the app is quitting in order to install a downloaded update. */
+export function isQuittingForUpdate(): boolean {
+  return quittingForUpdateInstall;
+}
+
 /** Detect whether the running macOS app is ad-hoc signed (TeamIdentifier not
  *  set), in which case Squirrel.Mac can't reliably auto-install updates and
  *  we must fall back to guiding the user to a manual download.
@@ -312,8 +323,13 @@ export async function quitAndInstall(): Promise<void> {
     // The install will swap the binary and restart; clear the persisted state
     // so the next launch (running the new version) doesn't show a stale banner.
     clearPersistedUpdateState();
+    // Set BEFORE the call: quitAndInstall spawns the installer synchronously
+    // (a direct child of this process) and only then schedules app.quit(), so
+    // the before-quit reaper must already see this flag when it runs.
+    quittingForUpdateInstall = true;
     autoUpdater.quitAndInstall();
   } catch (err) {
+    quittingForUpdateInstall = false;
     log.error(`updater: quitAndInstall failed ${err instanceof Error ? err.message : String(err)}`);
   }
 }
