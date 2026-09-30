@@ -2802,8 +2802,11 @@ export interface GitWorktreeRemoveResult {
 /** Where a composer skill was discovered. "plugin" = contributed by an
  *  ENABLED plugin (read-only inventory: the composer menu lists it and the
  *  SDK loads it per-turn, but it has no user-editable file root — the skills
- *  read/save/delete handlers reject this source). */
-export type SkillSource = "global" | "project" | "plugin";
+ *  read/save/delete handlers reject this source). "agent" = the project's
+ *  platform-neutral `<project>/.agent/skills/` drop-in directory (scanned
+ *  like "project" and fully editable, but surfaced with its own badge so
+ *  agent-convention skills are distinguishable from `.claude/skills` ones). */
+export type SkillSource = "global" | "project" | "agent" | "plugin";
 
 /** One registered AI backend surfaced to the renderer via `provider.list`.
  *  The capabilities descriptor drives which composer chips / dropdown entries
@@ -2861,8 +2864,9 @@ export const SkillsReadSchema = z.object({
    *  the caller's identity when source is "project"; the skill itself is
    *  resolved by `source` + `name`. */
   projectPath: z.string().optional(),
-  /** Which skills root to read from: user-global or the active project. */
-  source: z.enum(["global", "project"]),
+  /** Which skills root to read from: user-global, the active project's
+   *  `.claude/skills`, or its `.agent/skills` drop-in root. */
+  source: z.enum(["global", "project", "agent"]),
   /** Skill name (= directory name under <root>/.claude/skills/). */
   name: z.string().regex(SKILL_NAME_RE, "invalid skill name"),
 });
@@ -2877,7 +2881,7 @@ export type SkillsReadInput = z.infer<typeof SkillsReadSchema>;
  *  "no projects yet" state). */
 export const SkillsSaveSchema = z.object({
   projectPath: z.string().optional(),
-  source: z.enum(["global", "project"]),
+  source: z.enum(["global", "project", "agent"]),
   name: z.string().regex(SKILL_NAME_RE, "invalid skill name"),
   /** Full SKILL.md text (frontmatter + body). Written verbatim. */
   content: z.string(),
@@ -2891,7 +2895,7 @@ export type SkillsSaveInput = z.infer<typeof SkillsSaveSchema>;
  *  only required for `source: "project"`. */
 export const SkillsDeleteSchema = z.object({
   projectPath: z.string().optional(),
-  source: z.enum(["global", "project"]),
+  source: z.enum(["global", "project", "agent"]),
   name: z.string().regex(SKILL_NAME_RE, "invalid skill name"),
 });
 export type SkillsDeleteInput = z.infer<typeof SkillsDeleteSchema>;

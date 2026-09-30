@@ -60,6 +60,7 @@ import {
   codexKeyEnvVar,
 } from "@main/lib/codexModelsStore.js";
 import { getOrSetFileSnapshot } from "@main/lib/fileSnapshotRegistry.js";
+import { agentSkillsRoot } from "@main/lib/agentSkills.js";
 import { getMcpManagement } from "@main/lib/mcpConfig.js";
 import { getCustomPromptSetting } from "@main/lib/customPrompt.js";
 import { CODEX_IDENTITY_PROMPT, SCHEDULED_TASK_PROPOSAL_NUDGE, joinPromptSections } from "@main/lib/systemPrompt.js";
@@ -610,10 +611,15 @@ async function buildCodexEnv(ctx: ProviderContext): Promise<Record<string, strin
 }
 
 /** Mcode skill roots made visible to codex: the global manager root plus
- *  the project's .claude/skills (same pair the Claude provider exposes via
- *  Options.skills discovery). Only existing dirs are sent. */
+ *  the project's .claude/skills and the platform-neutral .agent/skills
+ *  drop-in root (same set the Claude provider exposes). Only existing dirs
+ *  are sent. */
 function skillRootsFor(cwd: string): string[] {
-  const roots = [path.join(homedir(), ".mcode", "skills"), path.join(cwd, ".claude", "skills")];
+  const roots = [
+    path.join(homedir(), ".mcode", "skills"),
+    path.join(cwd, ".claude", "skills"),
+    agentSkillsRoot(cwd),
+  ];
   return roots.filter((r) => {
     try {
       return statSync(r).isDirectory();

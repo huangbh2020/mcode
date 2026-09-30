@@ -290,6 +290,13 @@ pnpm build
 - **实现纪律**:新增的 `scrollToMessageTop`(顶部对齐版 jumpToMessage,同款「positionAtIndex 粗瞄→DOM 精调→drift 校正重试」,无 flash)与 `holdAnchorSuspension` **引用恒稳定**(`renderListItem` 的 memo 依赖 `pauseBottomAnchor`),一切易变值(`lastUserMessageId`/`msgToRenderIndex`/`sessionBusy`)经 `*Ref` 镜像读取,不进 useCallback deps。**没有新增组件状态、i18n 词条与持久化**。
 - **验证**:`tsc --noEmit` + `electron-vite build` 通过(build 需 `NODE_OPTIONS=--max-old-space-size=8192`,默认堆在本机 OOM——基线同样崩,与改动无关)。滚动行为留人工确认。
 
+### 运行中过程默认收拢(2026-09-30)
+- **动机**:大任务每个 think→act 周期在流里落两行(「思考 …」行 + 「N 个操作 Bash ×1」卡),几十个周期就是一面元信息墙——用户实际只关心叙述/回复正文与当前在干什么,过程明细按需展开即可。与完成态 TurnPanel「回合结束自动折叠成回执头」对齐:**运行中同样默认只留摘要 + 正文**。
+- **行为**:`LiveLedgerHead`(ChatPane.tsx,运行台账台头)从 div 改为 **button 开关**(右侧 Chevron,hover 同回执头),点击在「全量流 / 收拢」间切换;`wrapLiveSpine` 同时构建两套行集——`rows`(展开态,与改动前逐字节同形)与 `compactRows`(收拢态),`inner` 按 pane 级状态 `liveProcessOpen` 二选一。**收拢规则**(`isProcessCollapsibleBlock`):thinking 行与普通工具卡(Bash/Read/Write/Glob/Grep/Web/MCP/Skill/元工具)隐藏;`PROCESS_COLLAPSE_VISIBLE_TOOLS`(`Task`/`AskUserQuestion`/`EnterPlanMode`/`ExitPlanMode`,大小写都收)与一切展示块(text/plan/turn-files/error/attachment/image)恒可见——决策点与内容永不隐藏。opsGroup 的 leading 展示块(被卡吸收的叙述行)收拢时单独成行(key 加 `:lead` 后缀);含混合块的消息按块拆分出仅展示块的紧凑行(**key 不变**,React 按 key 复用,已挂载行不重挂);纯过程消息整行缺席。台头本就汇总模型/走时/实时操作 ticker/「N 步」,收拢态不丢「在干什么」;`liveLedgerBlocks` 照旧收集全部块,「N 步」与 ticker 不受收拢影响。
+- **状态与生命周期**:`liveProcessOpen` 是 ChatPane **pane 级 useState**(tabs 模式 pane 常驻保活;单槽模式切会话重挂载 → 回默认收拢,正是期望语义);`isRunning` false→true 边沿(每个新回合)重置回收拢——与完成态面板的默认折叠同哲学。切换时先 `pauseBottomAnchor()` 挂起贴底跟随再翻转(展开高度剧变,防 snap,与 TurnPanel 手动折叠同款)。回合结束仍走既有 TurnPanel justCompleted 折叠链路,零改动。`data-open` 从恒 "true" 改为绑状态:收拢态台头下不发分隔发丝线,与完成态折叠面板同形。
+- **历史取舍注记**:2026-09-11 曾按用户要求把思考行从折叠态拉平为独立行(「推理段是读的,不是扫的」);本条把**默认面**收回摘要,展开后仍见 2026-09-11 的行形态——两个诉求由开关共存。
+- **验证**:`tsc --noEmit` 通过。收拢/展开交互与流式跟随留人工确认。
+
 ### 集成终端环境刷新(win32,2026-08-31)
 
 - **问题**:PTY 环境此前是主进程 `process.env` 的冻结快照,启动链路丢失、或 app 启动后才安装的工具(nvm/java/sdkman)在集成终端里不可见——典型症状 `nvm list` 报 `ERROR open \settings.txt`(nvm-windows 靠 `NVM_HOME` 定位,进程里缺这个变量)。系统 PowerShell 正常是因为它由 Explorer 用"当前注册表合并值"启动。POSIX 无此问题:`shellResolve` 用 `-l` login shell,每次建终端都重 source profile。
@@ -374,8 +381,9 @@ pnpm build
 ### 移动端壳:去底部标签栏 + 抽屉头部视图切换器(2026-09-14)
 
 - **底部标签栏已删除**(小屏寸土寸金,把可视范围还给会话面板):视图切换收进 MobileSessionDrawer **头部分段控件(会话/文件/Git)**(`MobileView` 类型,`onPickView`),顶栏标题镜像当前视图(files/git 显视图名,chat 显项目 chip + 工作树 chip,见 09-13 节)保证「我在哪」可见。设置 = 顶栏右上入口 → `MobileSettingsSheet`(极简设置壳,非 SettingsPage)。
-- **`ui.displayMode` 与桌面共享同一 settings key**:默认 `"single"` 隐藏 tab strip(抽屉就是会话切换器);`"tabs"` 在 keyed 激活 pane 上方显示共享 `SessionTabs` 条。**与桌面不同:手机背景 pane 恒不挂载**(省内存;桌面 tabs 模式是 hidden 保活)——手机上切会话本来就是重挂载语义,与同日桌面 single 模式的「真·单槽」(见「中间面板 Tab 模式」节)方向一致。
+- **恒为单槽(2026-09-30)**:`ui.displayMode`(与桌面共享的 settings key)在手机壳**被刻意忽略**——AppMobile 不再按 `"tabs"` 渲染共享 `SessionTabs` 条,抽屉是唯一会话切换器;MobileSettingsSheet 的显示模式切换器已删(顺带消除"手机翻转桌面布局"的共享偏好串扰;桌面 GeneralPanel 的切换器不动)。背景 pane 本就恒不挂载(省内存),与桌面 single 模式「真·单槽」方向一致。
 - **配对门在先**:未配对先渲染 PairingScreen,**配对通过后才订阅事件流与水合 store**(SSE 需要有效凭据;闸门三态见「移动端配对记忆」节)。
+- **分享链接直进(2026-09-30)**:MobileSettingsSheet「连接」区的「复制访问链接」(`webApi.ts` 的 `buildShareUrl`)产出 `origin/#token=<deviceToken>`——token 走 **hash** 而非 query(fragment 不出浏览器,不会落进服务端日志/proxy)。其他设备(手机或电脑,浏览器打开即手机壳)点开链接:AppMobile 启动闸门先探测后采纳(`adoptTokenFromUrl`:`/api/auth/check` 带 Bearer 探测,200 才 `writeAuth` 落 localStorage 并剥 hash=**直进应用**;401 剥 hash 落配对屏,网络不可达**保留 hash** 让刷新重试)。启动闸门为小型状态机:本地 token 探测失败(401)时若 URL 带分享 token 会继续尝试采纳;探测通过时 nonce 与 hash 一并剥离;`pairWithCode` 成功后也剥 hash(新 token 取代分享 token)。**链接即凭据**:等同把设备 token 发出去,持有者无需验证码直接进入——设置页 hint 明示"像保管密码一样保管",不要在不可信渠道传播。复制用 `lib/clipboard.ts` 的 `copyText`(带非安全上下文的 execCommand 降级,LAN 明文 HTTP 下可用)。
 
 ### SSH 中继远程访问(relay,移动端出网直达桌面)
 
@@ -461,7 +469,18 @@ pnpm build
 
 ---
 
+### 项目级 `.agent/skills` 技能目录(2026-09-29)
+
+- **是什么**:平台中立的项目级技能投递目录 `<项目>/.agent/skills/<name>/SKILL.md`——与 `<项目>/.claude/skills` 并列的第四个技能来源,自动扫描进 composer `/` 菜单与 SkillsPanel,无需安装/注册。`SkillSource` 新增 `"agent"`(契约 `ipc.ts`),`skills.read/save/delete` 的 `z.enum(["global","project","agent"])` 同步扩展——agent 来源**完全可编辑**(SettingsPanel 新建表单三 scope:项目/.agent/全局)。
+- **优先级与命名**:扫描顺序 global → project → agent,同名时 **agent 覆盖 project 覆盖 global**(插件仍最低);列表排序 项目 → .agent → 全局。**agent 来源的技能名 = 目录名**(`scanSkillsRoot` 的 `nameFromDir: true`)——实测 CLI 2.1.258 把 plugin 采纳的技能注册为 `.agent:<dirName>`,**frontmatter `name` 不参与**;列表名必须与之一致,否则允许列表限定永远匹配不上。project/global 来源仍优先 frontmatter name(原生发现路径的既有行为)。
+- **Claude 侧投递通路(核心难点,已实测验证)**:CLI 只原生发现 `<cwd>/.claude/skills`,`Options.skills` 只是名字白名单——`.agent` 走 **local-plugin 注入**:`resolveAgentSkillInjection(cwd)`(`main/lib/agentSkills.ts`,provider 与 IPC 层共用的单一事实源)在 `.agent/skills` 非空时把 `<cwd>/.agent` 追加进 `options.plugins`(`{type:"local", skipMcpDiscovery:true}`,与启用插件同通道);**裸目录无需 `.claude-plugin/plugin.json`**,技能即以 `.agent:<dirName>` 注册(隔离 CONFIG_DIR + 断网端点冒烟三场景实证:裸 `.agent` → `.agent:foo-agent`;带 manifest → 用 manifest 名)。**允许列表限定**:composer 选中名单里命中 `.agent/skills/<name>` 的名字由 provider 改写成 `.agent:<name>` 再进 `Options.skills`(SDK 文档:plugin 限定技能按 `plugin:skill` 匹配);`.claude/skills`/全局名保持裸形式。无边角写盘、无 symlink、零复制。
+- **hooks 安全闸**:`.agent` 被当作 plugin 采纳后,其 `hooks/hooks.json` 会被 CLI 原生执行——违反「Mcode 不跑未审查 hooks」硬原则,故 `resolveAgentSkillInjection` 探测该文件并与启用插件的 `hasHooks` 一同 gate `disableAllHooks: true`(Mcode 侧永不执行;`.agent/hooks/` 不是受支持的扩展点,放 hooks 只会被整体禁用)。
+- **Pi/Codex**:两行改动——`piSkillBridge.mcodeSkillRoots` 与 Codex `skillRootsFor` 各追加 `agentSkillsRoot(cwd)`(裸技能根、目录名即技能名,天然无命名空间问题)。worktree 会话以 cwd 为基准,`.agent` 跟随检出隔离(与 `.claude/skills` 既有行为一致;`skills:list` 按 projectPath 扫描的轻微不一致是既有问题,未扩大范围)。
+- **UI**:`SkillInfo.source === "agent"` 徽标(SkillsPanel 行/编辑头/删除确认共用 `SOURCE_LABEL_KEY` + `sourceBadgeCls`,SlashCommandPicker 角标单独分支),词条 `settings.skills.sourceAgent` / `chat.slash.agent`(zh/en 均为「.agent」);SkillsPanel 新建表单 scope 三选,`.agent` scope 与项目 scope 同受「无项目禁用」门控。mobile RPC 复用 `listSkillsForProject` 自动受益;刷新时机沿用「项目切换/插件启停时重扫」,无 watcher。
+- **冒烟**:`scripts/agent-skills-smoke/run.sh`(16 断言;esbuild alias 桩掉 repositories/logger/pluginManager,repositories stub 从 `setSmokeProjects` 读夹具):injection 探测(缺失/空/文件与点前缀跳过/hooks 检测)、列表(agent 覆盖同名 project、目录名命名、project 仍用 frontmatter 名、排序)、read(source:"agent" + 未知项目守卫)。断言只认 `zzsmoke*` 前缀,dev 机真实 `~/.mcode/skills` 不参与匹配。
+
 ### 插件系统 v1(2026-09-09,规划文档 `docs/plugin-feasibility.md`)
+
 
 - **架构**:插件装进 Mcode 自己的缓存 `~/.mcode/plugins/<name>/<version>/`(**单版本模型**:重装同/异版本都会 prune 旧目录),marketplace 克隆在 `~/.mcode/plugins/marketplaces/<name>/`,启用集合持久化 settings 表(`plugins.enabled`,JSON string[];`plugins.marketplaces`;`plugins.mcpDisabled` 为插件 MCP 的 per-server 禁用 denylist)。契约在 `packages/contracts/src/plugin.ts`(ipc.ts re-export),main 侧 `main/plugins/`:pluginManifest(清单三格式探测 `.claude-plugin`/`.zcode-plugin`/`.codex-plugin` + 组件摘要)+ pluginManager(生命周期 + provider 投递查询);IPC `plugins.*` 十通道(list/installLocal/installGit/installMarketplace/setEnabled/remove + marketplace 四个),handler 在 `ipc/plugins.ts`。
 - **安全模型(安装时审查前移)**:安装**默认落地未启用**——renderer 拿到返回的 `PluginState`(含组件摘要)弹审查对话框,「启用」是显式点击;含 hooks 的插件启用前再弹一层 ConfirmDialog 明示「hooks 当前不执行」。**hooks v1 只解析展示、永不执行**:Claude 侧有插件启用的回合设 `options.settings.disableAllHooks: true` 拦住 CLI 引擎原生执行(v1.5 换逐条审查后移除该行),Codex/Pi 本无 hook 通道。面板/审查弹窗/行展开共用 `ComponentDetails` 呈现 skills/commands/agents(name+description)、MCP(kind+command/url 明文)、hooks(event+matcher+command 琥珀警示)——「明示而非静默」是硬原则。

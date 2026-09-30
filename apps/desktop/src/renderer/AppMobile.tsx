@@ -15,14 +15,13 @@
  *    segmented control (会话/文件/Git) is the view switcher, and the top bar
  *    title mirrors the current view so "where am I" stays visible.
  *  - Settings is the minimal MobileSettingsSheet instead of SettingsPage.
- *  - displayMode (single/tabs, a desktop-shared pref) gates the tab strip:
- *    the default "single" hides it (the drawer is the session switcher);
- *    "tabs" shows the shared SessionTabs strip above the keyed active pane
- *    (unlike the desktop, background panes stay unmounted to save memory).
+ *  - The shell is always single-slot (2026-09-30): no SessionTabs strip, the
+ *    drawer is the only session switcher. The desktop-shared `ui.displayMode`
+ *    pref is deliberately ignored here — a phone must never grow a tab strip
+ *    (or flip the desktop's layout from the phone settings).
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { ChatPane } from "./components/chat/ChatPane.js";
-import { SessionTabs } from "./components/layout/SessionTabs.js";
 import { ModelConfigPrompt } from "./components/chat/ModelConfigPrompt.js";
 import { Toaster } from "./components/layout/Toaster.js";
 import { PairingScreen } from "./components/mobile/PairingScreen.js";
@@ -37,7 +36,15 @@ import { useTheme } from "./lib/theme.js";
 import { useChatAppearance, useRightPanelAppearance, useThemeStyle } from "./lib/appearance.js";
 import { useI18n } from "./lib/i18n/index.js";
 import { worktreeDisplayName } from "./lib/worktree.js";
-import { isPaired, onAuthLost, clearAuth, checkStoredAuth } from "./lib/webApi.js";
+import {
+  isPaired,
+  onAuthLost,
+  clearAuth,
+  checkStoredAuth,
+  hasShareTokenInUrl,
+  adoptTokenFromUrl,
+  stripShareTokenFromUrl,
+} from "./lib/webApi.js";
 import {
   IconMenu2,
   IconSettings,
@@ -72,8 +79,10 @@ export function AppMobile() {
   // this covers every way the page gets re-entered (browser Back landing on the
   // `?nonce=` URL, a restored tab, the app icon) — the code is displayed on the
   // PC, so demanding it again strands a user who has walked away from the desk.
+  // A share link (`#token=…`, from another paired device's "copy link") counts
+  // as a token candidate too: boot gates on "checking" while it is adopted.
   const [authState, setAuthState] = useState<AuthState>(() =>
-    isPaired() ? "checking" : "unpaired",
+    isPaired() || hasShareTokenInUrl() ? "checking" : "unpaired",
   );
   // Theme / appearance hooks are pairing-independent (localStorage + media
   // queries on web), so they mount outside the gate.
@@ -83,23 +92,35 @@ export function AppMobile() {
   useThemeStyle();
   const { t } = useI18n();
 
-  // Confirm the stored token once per boot. Only an explicit 401 ("invalid")
-  // sends the user back to pairing; an unreachable PC keeps the token, because a
-  // Wi-Fi blip must never cost a pairing the user cannot restore from where
-  // they are.
+  // Boot credential resolution, once:
+  //  - stored token → probe it. Only an explicit 401 ("invalid") sends the
+  //    user back to pairing; an unreachable PC keeps the token, because a
+  //    Wi-Fi blip must never cost a pairing the user cannot restore from
+  //    where they are.
+  //  - no stored token (or the stored one was just rejected) but `#token=…`
+  //    in the URL (a shared link opened on this device) → adopt it after the
+  //    same server-side probe. Adoption entering the app directly is the
+  //    whole point of the share link.
   useEffect(() => {
-    if (!isPaired()) return;
     let cancelled = false;
-    void checkStoredAuth().then((state) => {
-      if (cancelled) return;
-      if (state === "invalid") {
+    const finish = (paired: boolean) => {
+      if (!cancelled) setAuthState(paired ? "paired" : "unpaired");
+    };
+    void (async () => {
+      if (isPaired()) {
+        const state = await checkStoredAuth();
+        if (cancelled) return;
+        if (state !== "invalid") {
+          stripNonceFromUrl();
+          stripShareTokenFromUrl();
+          finish(true);
+          return;
+        }
         clearAuth();
-        setAuthState("unpaired");
-        return;
+        // Fall through — the share link may carry a fresher token.
       }
-      stripNonceFromUrl();
-      setAuthState("paired");
-    });
+      finish(await adoptTokenFromUrl());
+    })();
     return () => {
       cancelled = true;
     };
@@ -157,7 +178,6 @@ function MobileShell() {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [view, setView] = useState<MobileView>("chat");
   const activeSessionId = useSessionStore((s) => s.activeSessionId);
-  const displayMode = useSessionStore((s) => s.displayMode);
   const running = useSessionStore((s) =>
     s.activeSessionId ? s.runningBySession[s.activeSessionId] : false,
   );
@@ -288,16 +308,12 @@ function MobileShell() {
           }}
         />
 
-        {/* Chat column: tab strip (only in `tabs` displayMode — the default
-            "single" hides it; the drawer is the session switcher) + the
-            active pane. ChatPane renders the empty state when no session is
-            open. */}
+        {/* Chat column: the active pane only (single-slot — the drawer is the
+            session switcher; the desktop-shared tabs pref is ignored here).
+            ChatPane renders the empty state when no session is open. */}
         {view === "chat" ? (
-          <div className="flex min-w-0 flex-1 flex-col">
-            {displayMode === "tabs" && <SessionTabs />}
-            <div className="min-h-0 flex-1">
-              <ChatPane key={activeSessionId ?? "empty"} sessionId={activeSessionId} />
-            </div>
+          <div className="min-h-0 flex-1">
+            <ChatPane key={activeSessionId ?? "empty"} sessionId={activeSessionId} />
           </div>
         ) : view === "files" ? (
           <MobileFilesScreen />

@@ -123,6 +123,86 @@ export function getPairEndpoint(): string | null {
   return readAuth().endpoint;
 }
 
+/* ────────────── share links (`#token=…`) ────────────── */
+
+/** Read the device token from the URL hash (`#token=…`) — the share-link
+ *  form produced by {@link buildShareUrl}. Deliberately the fragment, not a
+ *  query param: the fragment never leaves the browser, so the token cannot
+ *  land in server logs / proxies along the way. */
+function readShareToken(): string | null {
+  try {
+    const raw = window.location.hash.replace(/^#/, "");
+    if (!raw) return null;
+    const value = new URLSearchParams(raw).get("token");
+    return value || null;
+  } catch {
+    return null;
+  }
+}
+
+/** Drop the `#token=…` fragment (path + query stay). */
+export function stripShareTokenFromUrl(): void {
+  try {
+    if (window.location.hash) {
+      window.history.replaceState(null, "", window.location.pathname + window.location.search);
+    }
+  } catch {
+    // non-critical — ignore
+  }
+}
+
+/** True when the URL carries a share-link token — the shell's boot gate uses
+ *  this to hold the splash screen while the token is being adopted. */
+export function hasShareTokenInUrl(): boolean {
+  return !!readShareToken();
+}
+
+/** Try to enter the app via a share link's token instead of pairing: probe
+ *  the PC first (`/api/auth/check`), and only a token the server still
+ *  accepts gets stored — a revoked shared link must fall through to the
+ *  pairing screen, not loop on dead credentials. Resolves true when the
+ *  token was adopted (caller enters the app directly). On an unreachable PC
+ *  the fragment is kept, so a reload retries the adoption for free. */
+export async function adoptTokenFromUrl(timeoutMs = 8000): Promise<boolean> {
+  const token = readShareToken();
+  if (!token) return false;
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), timeoutMs);
+  try {
+    const res = await fetch("/api/auth/check", {
+      headers: { Authorization: `Bearer ${token}` },
+      signal: ac.signal,
+    });
+    if (res.status === 401) {
+      // Dead token (device revoked / DB wiped) — strip so reloads don't
+      // retry a link that can never work again.
+      stripShareTokenFromUrl();
+      return false;
+    }
+    if (!res.ok) return false; // transport failure — keep the fragment
+    const body = (await res.json().catch(() => null)) as MobileAuthCheckResult | null;
+    if (!body?.ok) return false;
+    writeAuth(token, body.endpoint);
+    stripShareTokenFromUrl();
+    return true;
+  } catch {
+    return false; // network / timeout — keep the fragment for a retry
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** Build the share link for the current pairing: app origin plus the device
+ *  token in the fragment. Opening it on another device adopts the token (see
+ *  {@link adoptTokenFromUrl}) and enters the app without the pairing code —
+ *  the link is a credential, treat it like a password. Null when this
+ *  browser has no stored token (i.e. not paired). */
+export function buildShareUrl(): string | null {
+  const { token } = readAuth();
+  if (!token) return null;
+  return `${window.location.origin}/#token=${encodeURIComponent(token)}`;
+}
+
 /** Probe the stored device token against the PC.
  *
  *  This is the gate that decides whether the code form may be skipped:
@@ -172,6 +252,9 @@ export async function pairWithCode(input: PairingVerifyInput): Promise<PairingVe
   }
   const result = (await res.json()) as PairingVerifyResult;
   writeAuth(result.deviceToken, result.endpoint);
+  // The fresh token supersedes any share-link token still sitting in the
+  // address bar (link failed to adopt → user paired by code instead).
+  stripShareTokenFromUrl();
   return result;
 }
 

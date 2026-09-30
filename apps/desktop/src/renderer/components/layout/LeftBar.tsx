@@ -61,7 +61,7 @@ import { api } from "@renderer/lib/api.js";
 import { normWorktreeKey, worktreeDisplayName } from "@renderer/lib/worktree.js";
 import { WorktreeMergeBackDialog, WorktreeRemoveDialog } from "@renderer/components/chat/WorktreeMergeBack.js";
 import { hexToTriplet, tripletToHex } from "@renderer/lib/colorUtils.js";
-import { formatRelativeTime, formatFullTime } from "@renderer/lib/time.js";
+import { formatFullTime } from "@renderer/lib/time.js";
 import { useSessionStore } from "@renderer/stores/sessionStore.js";
 import { useCursorAnchor } from "@renderer/hooks/useCursorAnchor.js";
 import type { Project, Session } from "@contracts/session";
@@ -1517,18 +1517,14 @@ function SessionRow({
     ? automations.filter((a) => a.parentSessionId === session.id && !a.deletedAt).length
     : undefined;
   const isPinned = session.pinnedAt != null;
-  // Whether the pointer is over this row. We swap the right-aligned payload
-  // between the relative-time label (default) and the archive/delete action
-  // buttons (on hover), so the time can hug the right edge without the
-  // always-reserved action buttons leaving a gap.
+  // Whether the pointer is over this row. The right edge is empty by default
+  // (the title gets the full width) and swaps to the archive/delete action
+  // buttons on hover.
   const [hovered, setHovered] = useState(false);
   const idle = pendingConfirm === null && !isRunning;
   const hasUnread = unreadCount > 0;
-  // When there are unread events, suppress the time label so the badge can
-  // hug the right edge - the badge is more actionable information than the
-  // timestamp. On hover the action buttons take precedence (so the user can
-  // archive/delete without the badge getting in the way).
-  const showTime = idle && !hovered && !hasUnread;
+  // On hover the action buttons take precedence over the unread badge (so the
+  // user can archive/delete without the badge getting in the way).
   const showActions = idle && hovered;
   const showUnreadBadge = idle && !hovered && hasUnread;
 
@@ -1617,19 +1613,6 @@ function SessionRow({
       {session.worktreePath && !hideWorktreeBadge && (
         <span className="flex shrink-0 text-accent/80" title={t("chat.worktree.active")}>
           <IconGitFork size={11} />
-        </span>
-      )}
-
-      {/* Relative time of the last activity (updatedAt), docked to the right
-          edge. The row swaps between two right-aligned payloads: the time
-          label by default, and the archive/delete action buttons on hover.
-          While an inline confirm is pending or a turn is running, neither the
-          time nor the normal actions show (the confirm buttons / spinner take
-          their place). The full timestamp stays available via the hover
-          tooltip on the <li>. */}
-      {showTime && (
-        <span className="shrink-0 text-content-subtle/70 [font-size:var(--rp-fs-sm)]">
-          {formatRelativeTime(session.updatedAt)}
         </span>
       )}
 

@@ -1201,6 +1201,11 @@ export interface SessionState {
   /** Per-session plan-mode draft (empty = not in plan mode). Drives the
    *  Plan section of the activity capsule. */
   planBySession: Record<string, PlanDraft>;
+  /** Per-session permission mode remembered prior to the model entering plan
+   *  mode self-initiated (via EnterPlanMode). Restored when exiting plan mode
+   *  via ExitPlanMode approval. Cleared if the user manually overrides the
+   *  mode in the composer while in plan mode. */
+  prePlanPermissionModeBySession: Record<string, PermissionMode>;
   /** Per-session plan text selected for viewing in the editor column as a
    *  plan tab. null = no plan tab open. Set when the user clicks a plan title
    *  in the activity popover or a plan card in the message stream; cleared on
@@ -3239,6 +3244,8 @@ function dropSessionBuckets(s: SessionState, id: string) {
   delete todosBySession[id];
   const planBySession = { ...s.planBySession };
   delete planBySession[id];
+  const prePlanPermissionModeBySession = { ...s.prePlanPermissionModeBySession };
+  delete prePlanPermissionModeBySession[id];
   const subagentsBySession = { ...s.subagentsBySession };
   delete subagentsBySession[id];
   const subagentTranscriptsBySession = { ...s.subagentTranscriptsBySession };
@@ -3298,6 +3305,7 @@ function dropSessionBuckets(s: SessionState, id: string) {
     unreadBySession,
     todosBySession,
     planBySession,
+    prePlanPermissionModeBySession,
     subagentsBySession,
     subagentTranscriptsBySession,
     bashTasksBySession,
@@ -5140,6 +5148,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   effort: "high",
   todosBySession: {},
   planBySession: {},
+  prePlanPermissionModeBySession: {},
   planDrawerPlanBySession: {},
   planTabActiveBySession: {},
   planApprovalDraftBySession: {},
@@ -8364,17 +8373,93 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     }
     // mode.change: the model (or host) flipped the session's effective
     // permission mode mid-turn (e.g. EnterPlanMode / ExitPlanMode after
-    // approval). Sync the composer chip for the ACTIVE session so it
-    // reflects runtime reality instead of the stale startup mode. Only the
-    // active session's chip is updated — other tabs keep their own config.
-    // Persist fire-and-forget so a resumed turn starts in the right mode.
+    // approval).
+    //
+    // Plan-mode memory requirement:
+    // When the model self-initiates plan mode (source: "model", mode: "plan"),
+    // remember the session's prior permission mode in `prePlanPermissionModeBySession`.
+    // When the model subsequently exits plan mode (source: "model", mode !== "plan",
+    // typically emitted as "default" by SDK providers on ExitPlanMode), restore that
+    // remembered mode instead of blindly adopting "default".
     if (e.type === "mode.change") {
-      if (sid === get().activeSessionId) {
-        set({ permissionMode: e.mode });
-        void api.session.updateSettings({ sessionId: sid, permissionMode: e.mode }).catch((err) => {
-          console.error("updateSettings(mode.change) failed:", err);
+      const state = get();
+      const isActive = sid === state.activeSessionId;
+      const currentMode = isActive
+        ? state.permissionMode
+        : (findSession(
+            state.sessionsByProject,
+            state.archivedSessionsByProject,
+            state.pinnedSessions,
+            state.streamSessions,
+            sid,
+            state.orchWorkersById,
+          )?.permissionMode ?? "default");
+
+      let targetMode = e.mode;
+
+      if (e.source === "model" && e.mode === "plan") {
+        // Model self-initiated plan mode: if the session wasn't already in plan
+        // mode and we don't have a remembered mode yet, capture the prior mode.
+        if (currentMode !== "plan" && !state.prePlanPermissionModeBySession[sid]) {
+          set((s) => ({
+            prePlanPermissionModeBySession: {
+              ...s.prePlanPermissionModeBySession,
+              [sid]: currentMode,
+            },
+          }));
+        }
+      } else if (e.source === "model" && e.mode !== "plan") {
+        // Model exited plan mode (ExitPlanMode approved/completed): restore
+        // the remembered mode if available, then clear the memory.
+        const savedMode = state.prePlanPermissionModeBySession[sid];
+        if (savedMode) {
+          targetMode = savedMode;
+        }
+        set((s) => {
+          if (!s.prePlanPermissionModeBySession[sid]) return s;
+          const { [sid]: _drop, ...rest } = s.prePlanPermissionModeBySession;
+          return { prePlanPermissionModeBySession: rest };
         });
       }
+
+      if (isActive) {
+        set({ permissionMode: targetMode });
+      }
+
+      // Sync the row in the session caches so switching tabs sees the fresh mode
+      set((s) => {
+        const patchSession = (list?: Session[]) =>
+          list?.map((x) => (x.id === sid ? { ...x, permissionMode: targetMode } : x));
+        const inPinned = s.pinnedSessions.some((x) => x.id === sid);
+        if (inPinned) {
+          return { pinnedSessions: patchSession(s.pinnedSessions) ?? s.pinnedSessions };
+        }
+        for (const [pid, list] of Object.entries(s.sessionsByProject)) {
+          if (list.some((x) => x.id === sid)) {
+            return {
+              sessionsByProject: {
+                ...s.sessionsByProject,
+                [pid]: patchSession(list) ?? list,
+              },
+            };
+          }
+        }
+        for (const [pid, list] of Object.entries(s.archivedSessionsByProject)) {
+          if (list.some((x) => x.id === sid)) {
+            return {
+              archivedSessionsByProject: {
+                ...s.archivedSessionsByProject,
+                [pid]: patchSession(list) ?? list,
+              },
+            };
+          }
+        }
+        return s;
+      });
+
+      void api.session.updateSettings({ sessionId: sid, permissionMode: targetMode }).catch((err) => {
+        console.error("updateSettings(mode.change) failed:", err);
+      });
       return;
     }
     // upstream.issue — transient transport trouble on the session's model
@@ -10297,15 +10382,24 @@ export const useSessionStore = create<SessionState>((set, get) => ({
    *  (or app restart) will re-hydrate from the row. */
   setPermissionMode: (mode) => {
     const sessionId = get().activeSessionId;
-    set((s) => ({
-      permissionMode: mode,
-      // Refresh the per-provider memory so the pick survives a provider
-      // switch (setProvider restores it) and an app restart.
-      lastModelByProvider: {
-        ...s.lastModelByProvider,
-        [s.providerId]: { ...rememberedEntryOf(s), permissionMode: mode },
-      },
-    }));
+    set((s) => {
+      const nextPrePlan = sessionId && s.prePlanPermissionModeBySession[sessionId]
+        ? { ...s.prePlanPermissionModeBySession }
+        : s.prePlanPermissionModeBySession;
+      if (sessionId && nextPrePlan[sessionId]) {
+        delete nextPrePlan[sessionId];
+      }
+      return {
+        permissionMode: mode,
+        prePlanPermissionModeBySession: nextPrePlan,
+        // Refresh the per-provider memory so the pick survives a provider
+        // switch (setProvider restores it) and an app restart.
+        lastModelByProvider: {
+          ...s.lastModelByProvider,
+          [s.providerId]: { ...rememberedEntryOf(s), permissionMode: mode },
+        },
+      };
+    });
     if (sessionId) {
       void api.session.updateSettings({ sessionId, permissionMode: mode }).catch((err) => {
         console.error("updateSettings(permissionMode) failed:", err);
@@ -10920,11 +11014,13 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     set((s) => {
       const { [sessionId]: _drop, ...rest } = s.pendingPlanApprovalBySession;
       const { [sessionId]: _dropDraft, ...restDrafts } = s.planApprovalDraftBySession;
+      const { [sessionId]: _dropPrePlan, ...restPrePlan } = s.prePlanPermissionModeBySession;
       const list = s.messagesBySession[sessionId] ?? EMPTY_MESSAGES;
       const next = upsertLivePlanBlock(list, planText, "ready", false, anchor, modelAnchor);
       return {
         pendingPlanApprovalBySession: rest,
         planApprovalDraftBySession: restDrafts,
+        prePlanPermissionModeBySession: restPrePlan,
         messagesBySession: next === list
           ? s.messagesBySession
           : { ...s.messagesBySession, [sessionId]: next },

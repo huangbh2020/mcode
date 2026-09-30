@@ -51,7 +51,7 @@ import {
   FILE_DRAG_MIME,
 } from "@renderer/lib/contentTag.js";
 import type { SkillInfo, BuiltInCommand } from "@renderer/lib/slashCommands.js";
-import { MessageBlocks, TurnPanel, BatchToolGroup, isFoldableBlock, TURN_FOLD_MS, type ProceduralBlock, type BeforeContentMap, type ToolUseBlock } from "./MessageBlocks.js";
+import { MessageBlocks, TurnPanel, BatchToolGroup, Chevron, isFoldableBlock, TURN_FOLD_MS, type ProceduralBlock, type BeforeContentMap, type ToolUseBlock } from "./MessageBlocks.js";
 import { CurrentOpTicker } from "./CurrentOpTicker.js";
 import { ModelBadge } from "./ModelAvatar.js";
 import { turnTokenUsage, CUMULATIVE_USAGE_PROVIDER_IDS } from "@renderer/lib/turnTokens.js";
@@ -285,12 +285,26 @@ function TurnStatRow({
 
 
 /** 运行台账的台头（运行中态）。与 TurnPanel 的回执头同一行槽位：
- *  [模型徽标] ● 运行中 时钟 · 走时 · 实时操作 ……………………… N 步
+ *  [模型徽标] ● 运行中 时钟 · 走时 · 实时操作 ……………………… N 步 ▸
+ *
+ *  整行是一个开关按钮（2026-09-30）：运行中过程明细默认收拢，正文只留展示
+ *  内容（叙述/回复/计划/问询卡），点击台头展开全量流——与完成态 TurnPanel
+ *  「点击回执头展开明细」同一交互语言，右侧箭头共用 Chevron。
  *
  *  必须是有 hook 的组件：走时用全应用共享的 useNow（1s 一跳），实时操作是一个
  *  自带滚动动画的 CurrentOpTicker。渲染它的地方（wrapLiveSpine）是普通函数，
  *  拼的是 JSX 而不是定义组件，所以这里能正常挂 hook。 */
-function LiveLedgerHead({ turnMeta, blocks }: { turnMeta?: TurnMeta; blocks: Block[] }) {
+function LiveLedgerHead({
+  turnMeta,
+  blocks,
+  open,
+  onToggle,
+}: {
+  turnMeta?: TurnMeta;
+  blocks: Block[];
+  open: boolean;
+  onToggle: () => void;
+}) {
   const { t } = useI18n();
   const now = useNow();
   const startedAt = turnMeta?.startedAt ?? now;
@@ -299,20 +313,31 @@ function LiveLedgerHead({ turnMeta, blocks }: { turnMeta?: TurnMeta; blocks: Blo
   const stepCount = blocks.filter((b) => b.kind === "tool_use").length;
 
   return (
-    <div className="chat-ledger-head">
+    <button
+      type="button"
+      className="chat-ledger-head"
+      onClick={onToggle}
+      aria-expanded={open}
+    >
       <ModelBadge model={turnMeta?.model} />
       <span className="chat-ledger-dot" aria-hidden />
       <span className="chat-ledger-live">{t("chatStream.ledgerRunning")}</span>
-      <span className="tabular-nums">{fmtClock(startedAt)}</span>
-      <span className="opacity-60">·</span>
-      <span className="tabular-nums">{fmtDuration(duration)}</span>
+      {/* 时钟/走时复用回执头的降级槽位（styles.css 的 @container 规则：窄处先收
+          时钟、最后收走时），shrink-0 保证两档之间不被 flex 压到换行——「运行中」
+          与「29m 37s」曾在此被逐字竖排挤压。弹性由可截断的 ticker 独自吸收。 */}
+      <span className="chat-ledger-clock shrink-0">
+        <span className="tabular-nums">{fmtClock(startedAt)}</span>
+        <span className="opacity-60">·</span>
+      </span>
+      <span className="chat-ledger-duration shrink-0 tabular-nums">{fmtDuration(duration)}</span>
       <CurrentOpTicker op={runningTool} turnActive />
       {stepCount > 0 && (
         <span className="ml-auto shrink-0 tabular-nums opacity-70">
           {t("chatStream.stepCount", { n: stepCount })}
         </span>
       )}
-    </div>
+      <Chevron open={open} className={stepCount > 0 ? undefined : "ml-auto"} />
+    </button>
   );
 }
 
@@ -361,6 +386,27 @@ const META_TOOL_NAMES = new Set(["TaskUpdate", "TaskCreate", "TodoWrite"]);
 
 function isMetaToolBlock(b: Block): boolean {
   return b.kind === "tool_use" && META_TOOL_NAMES.has(b.toolName);
+}
+
+/** 运行中过程收拢（2026-09-30）时仍单独可见的工具卡：交互决策点（问询、
+ *  计划审批）与子代理派发。其余工具卡（Read/Write/Bash/Glob/Grep/Web/MCP/
+ *  Skill/元工具）与思考行在收拢态隐藏——台头的实时操作 ticker 与「N 步」
+ *  仍实时反映它们，点击台头展开全量流。 */
+const PROCESS_COLLAPSE_VISIBLE_TOOLS = new Set([
+  "Task", "task",
+  "AskUserQuestion",
+  "EnterPlanMode",
+  "ExitPlanMode",
+]);
+
+/** Whether a block hides when the live turn's process surface is collapsed:
+ *  thinking rows and ordinary tool cards. Display blocks (text / plan /
+ *  turn-files / error / attachments…) and the interactive tools above always
+ *  stay visible — they are content or decisions, not process noise. */
+function isProcessCollapsibleBlock(b: Block): boolean {
+  if (b.kind === "thinking") return true;
+  if (b.kind === "tool_use") return !PROCESS_COLLAPSE_VISIBLE_TOOLS.has(b.toolName);
+  return false;
 }
 
 /** Render item after turn-level grouping. A `turnGroup` bundles a whole
@@ -3228,6 +3274,17 @@ function ChatPaneForSession({
     lastUserMessageIdRef.current = lastUserMessageId;
   }, [lastUserMessageId]);
 
+  /** 运行中台账的过程明细开关（2026-09-30）：大任务每个 think→act 周期落
+   *  两行（思考 + N 个操作），几十个周期就是一面元信息墙。默认收拢——台头
+   *  本就汇总模型/走时/实时操作/步数，正文只留展示内容；点击台头展开全量流。
+   *  每个新回合（isRunning false→true 边沿）重置回收拢态，与完成态 TurnPanel
+   *  的默认折叠同哲学。pane 级状态即可：tabs 模式 pane 常驻保活，单槽模式
+   *  切会话重挂载 → 回到默认收拢，正是期望语义。 */
+  const [liveProcessOpen, setLiveProcessOpen] = useState(true);
+  useEffect(() => {
+    if (isRunning) setLiveProcessOpen(true);
+  }, [isRunning]);
+
   /** One rendered row of the live segment — the element the list would have
    *  rendered for that item, with the per-row horizontal resolution stripped
    *  (the outer `px-[var(--chat-gutter)]` moves to the wrapper instead). */
@@ -3263,6 +3320,11 @@ function ChatPaneForSession({
     const tailInsideSegment = lastRenderableIdx > start && lastRenderableIdx < end;
 
     const rows: SegmentRow[] = [];
+    // 收拢态行集（liveProcessOpen=false 时 inner 改画这份）：过程行（ops 卡、
+    // 纯思考行）整体缺席，行内的展示内容（ops 卡的 leading 叙述、消息里的
+    // 展示块子集）单独成行。与 rows 同序，key 稳定——切换展开/收拢时 React
+    // 按 key 复用，已挂载的展示行不重挂。
+    const compactRows: SegmentRow[] = [];
     // 台头要用：回合起点（走时基准）、当前执行中的工具（实时操作）、步数。
     // The head reads the WHOLE spine — not just the folded runs: since
     // thinking / Read / Write / Edit render as their own rows (2026-09-11),
@@ -3324,33 +3386,76 @@ function ChatPaneForSession({
             </div>
           ),
         });
+        // 收拢态：ops 卡整卡隐藏；被它吸收的 leading 展示块（叙述行）仍可见，
+        // 单独成行（同一 MessageBlocks 渲染，只是没有卡）。
+        if (it.leading && it.leading.length > 0) {
+          compactRows.push({
+            key: `ops:${it.liveKey ?? it.anchorId}:lead`,
+            node: (
+              <div className="mt-[var(--chat-block-gap)]">
+                <RenderErrorBoundary>
+                  <MessageBlocks
+                    blocks={it.leading}
+                    beforeMap={beforeMap}
+                    onOpenPlan={(p) => openPlanDrawer(sessionId, p)}
+                    projectPath={projectPath}
+                  />
+                </RenderErrorBoundary>
+              </div>
+            ),
+          });
+        }
       } else if (it.kind === "single") {
         // 兜底：哨兵没带元数据时取正文首行消息自带的（同一回合的 opener），
         // 保证台头的模型徽标与走时基准永远正确。
         if (!turnMeta && it.msg.turnMeta) turnMeta = it.msg.turnMeta;
         liveLedgerBlocks.push(...it.msg.blocks);
-        rows.push({
-          key: `msg:${it.liveKey ?? it.msg.id}`,
-          node: (
-            // 台账台头已承载本回合的汇总（模型 · 时钟 · 走时 · 实时操作），
-            // 正文行不再渲染自己的 stat 行——否则同一回合出现两行回合栏。
-            // tightTop 恒真：卡内文本行也用块间距，与批次行同档（上边距由
-            // MessageRow 自己给，动画壳不再带 margin）。
-            <MessageRow
-              msg={it.msg}
-              tightTop
-              beforeMap={beforeMap}
-              hideTurnStat
-              projectPath={projectPath}
-            />
-          ),
-        });
+        const rowKey = `msg:${it.liveKey ?? it.msg.id}`;
+        const rowNode = (
+          // 台账台头已承载本回合的汇总（模型 · 时钟 · 走时 · 实时操作），
+          // 正文行不再渲染自己的 stat 行——否则同一回合出现两行回合栏。
+          // tightTop 恒真：卡内文本行也用块间距，与批次行同档（上边距由
+          // MessageRow 自己给，动画壳不再带 margin）。
+          <MessageRow
+            msg={it.msg}
+            tightTop
+            beforeMap={beforeMap}
+            hideTurnStat
+            projectPath={projectPath}
+          />
+        );
+        rows.push({ key: rowKey, node: rowNode });
+        // 收拢态：思考行与普通工具卡隐藏，展示块（叙述/回复/计划/改动文件/
+        // 问询与计划审批/子代理派发）单独成行。无过程块的消息直接复用展开态
+        // 行（同一 node，不重挂）；全过程块的消息整行缺席。
+        if (!liveProcessOpen) {
+          const kept = it.msg.blocks.filter((b) => !isProcessCollapsibleBlock(b));
+          if (kept.length === it.msg.blocks.length) {
+            compactRows.push({ key: rowKey, node: rowNode });
+          } else if (kept.length > 0) {
+            compactRows.push({
+              key: rowKey,
+              node: (
+                <MessageRow
+                  msg={{ ...it.msg, blocks: kept }}
+                  tightTop
+                  beforeMap={beforeMap}
+                  hideTurnStat
+                  projectPath={projectPath}
+                />
+              ),
+            });
+          }
+        }
       }
     }
 
+    // 展开态画全量流（rows）；收拢态画 compactRows（过程行隐藏、展示内容保留）。
+    const visibleRows = liveProcessOpen ? rows : compactRows;
+
     const inner = (
       <>
-        {rows.map((row) => (
+        {visibleRows.map((row) => (
           <div
             key={row.key}
             // 纯入场动画壳，不带任何布局属性：行间距由行内容自己给（文本行走
@@ -3378,9 +3483,11 @@ function ChatPaneForSession({
     return (
       <div key={`${keyPrefix}:live-spine`} className="px-[var(--chat-gutter)]">
         {/* 运行中的过程面与完成态共用同一张台账卡：台头在数步子、底部扫描光带
-            表示仍在写入；回合结束后由 TurnPanel 接手同一形态，只把台头翻成回执。 */}
+            表示仍在写入；回合结束后由 TurnPanel 接手同一形态，只把台头翻成回执。
+            台头整行是过程明细的展开开关（2026-09-30）——收拢态 data-open=false，
+            台头下不发分隔发丝线，与完成态折叠面板同形。 */}
         <div className="chat-turn mx-auto mt-[var(--chat-row-gap-assistant)] max-w-5xl">
-          <div className="chat-ledger" data-phase="running" data-open="true">
+          <div className="chat-ledger" data-phase="running" data-open={liveProcessOpen ? "true" : "false"}>
             <LiveLedgerHead
               turnMeta={
                 turnMeta?.model
@@ -3388,6 +3495,12 @@ function ChatPaneForSession({
                   : { ...turnMeta, startedAt: turnMeta?.startedAt ?? Date.now(), model: sessionModel ?? undefined }
               }
               blocks={liveLedgerBlocks}
+              open={liveProcessOpen}
+              onToggle={() => {
+                // 展开高度剧变，先挂起贴底跟随再翻转（与 TurnPanel 手动折叠同款）。
+                pauseBottomAnchor();
+                setLiveProcessOpen((v) => !v);
+              }}
             />
             <div className="chat-ledger-body">{inner}</div>
             <span className="chat-ledger-scan" aria-hidden="true" />

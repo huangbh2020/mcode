@@ -735,6 +735,7 @@ export const zh = {
   "settings.skills.desc4": " 即可调用。",
   "settings.skills.noProjects": "暂无项目 — 仅可管理全局 skill",
   "settings.skills.sourceProject": "项目",
+  "settings.skills.sourceAgent": ".agent",
   "settings.skills.sourceGlobal": "全局",
   "settings.skills.noDesc": "(无描述)",
   "settings.skills.newSkill": "新建 Skill",
@@ -780,7 +781,10 @@ export const zh = {
   "settings.skills.fieldScope": "作用域 (Scope)",
   "settings.skills.scopeProjectDisabled": "暂无项目,无法创建项目 skill",
   "settings.skills.scopeProjectHint": "存放到所选项目的 .claude/skills,仅该项目可用",
+  "settings.skills.scopeAgentHint": "存放到项目的 .agent/skills(平台中立的项目级技能目录),Claude/Pi/Codex 均可发现",
   "settings.skills.scopeGlobalHint": "存放到 ~/.mcode/skills,所有项目可用",
+  "settings.skills.newSkillAgentIntro1": "填写名称、描述和正文,保存时会自动生成标准 frontmatter。新建 skill 存放到当前项目的 ",
+  "settings.skills.newSkillAgentIntro2": "(平台中立目录,Claude/Pi/Codex 均可发现)。之后可在编辑模式补充 ",
   "settings.skills.newSkillGlobalIntro1": "填写名称、描述和正文,保存时会自动生成标准 frontmatter。全局 skill 存放到 ",
   "settings.skills.newSkillGlobalIntro2": ",所有项目可用。之后可在编辑模式补充 ",
 
@@ -891,6 +895,8 @@ export const zh = {
   "settings.usage.empty": "暂无用量数据,完成一轮对话后此处会出现统计。",
 
   // ── mobile settings sheet (MobileSettingsSheet) ──
-  "settings.mobile.displayModeHint":
-    "Tab 模式下,聊天区顶部会显示会话标签条,用于在已打开的会话间切换;该偏好与电脑端共享。",
+  "settings.mobile.copyLink": "复制访问链接",
+  "settings.mobile.copyLinkDone": "已复制",
+  "settings.mobile.shareLinkHint":
+    "链接内含访问凭据:发送给其他设备,在浏览器打开即可直接进入移动端,无需配对验证码;请像保管密码一样保管它。",
 } as const;

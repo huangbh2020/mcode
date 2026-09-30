@@ -736,6 +736,7 @@ export const en = {
   "settings.skills.desc4": " in the composer to invoke one.",
   "settings.skills.noProjects": "No projects yet — only global skills can be managed",
   "settings.skills.sourceProject": "Project",
+  "settings.skills.sourceAgent": ".agent",
   "settings.skills.sourceGlobal": "Global",
   "settings.skills.noDesc": "(no description)",
   "settings.skills.newSkill": "New skill",
@@ -781,7 +782,10 @@ export const en = {
   "settings.skills.fieldScope": "Scope",
   "settings.skills.scopeProjectDisabled": "No projects yet — project skills unavailable",
   "settings.skills.scopeProjectHint": "Stored in the selected project's .claude/skills; available to that project only",
+  "settings.skills.scopeAgentHint": "Stored in the project's .agent/skills (the platform-neutral project skills dir); discovered by Claude/Pi/Codex alike",
   "settings.skills.scopeGlobalHint": "Stored in ~/.mcode/skills; available to every project",
+  "settings.skills.newSkillAgentIntro1": "Fill in the name, description and body; a standard frontmatter is generated on save. New skills are stored in the current project's ",
+  "settings.skills.newSkillAgentIntro2": " (the platform-neutral dir every provider — Claude/Pi/Codex — discovers). Later you can add advanced fields such as ",
   "settings.skills.newSkillGlobalIntro1": "Fill in the name, description and body; a standard frontmatter is generated on save. Global skills are stored in ",
   "settings.skills.newSkillGlobalIntro2": " and are available to every project. Later you can add advanced fields such as ",
 
@@ -892,6 +896,8 @@ export const en = {
   "settings.usage.empty": "No usage yet — stats appear here after your first completed turn.",
 
   // ── mobile settings sheet (MobileSettingsSheet) ──
-  "settings.mobile.displayModeHint":
-    "In tabs mode, a session tab strip appears above the chat for switching between open threads. This preference is shared with the desktop.",
+  "settings.mobile.copyLink": "Copy access link",
+  "settings.mobile.copyLinkDone": "Copied",
+  "settings.mobile.shareLinkHint":
+    "The link embeds your access credentials — open it on another device to enter the mobile web app directly, no pairing code needed. Treat it like a password.",
 } as const;

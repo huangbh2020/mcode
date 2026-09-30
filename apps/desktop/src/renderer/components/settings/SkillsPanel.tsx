@@ -47,6 +47,7 @@ import { cn } from "@renderer/lib/cn.js";
 import { useSessionStore } from "@renderer/stores/sessionStore.js";
 import { api } from "@renderer/lib/api.js";
 import { useI18n } from "@renderer/lib/i18n/index.js";
+import type { MessageId } from "@renderer/lib/i18n/core.js";
 import { Button, ConfirmDialog, Dialog, Select } from "@renderer/components/ui/index.js";
 import { PanelHeader } from "./PanelHeader.js";
 import {
@@ -99,6 +100,23 @@ function emptyNewForm(scope: EditableSkillSource): NewForm {
 /** Selection key for a SkillInfo — stable identity across reloads. */
 function skillKey(s: { source: SkillSource; name: string }): string {
   return `${s.source}:${s.name}`;
+}
+
+/** Source badge label per skill source — module-level map so the three render
+ *  sites (list row, editor header, delete confirm) stay in agreement. */
+const SOURCE_LABEL_KEY: Record<SkillSource, MessageId> = {
+  project: "settings.skills.sourceProject",
+  agent: "settings.skills.sourceAgent",
+  global: "settings.skills.sourceGlobal",
+  plugin: "settings.skills.sourceGlobal",
+};
+
+/** Badge tint for a source chip — project-scoped sources (project + agent)
+ *  read as "local to this project" (accent); global stays neutral. */
+function sourceBadgeCls(source: SkillSource): string {
+  return source === "global" || source === "plugin"
+    ? "bg-surface-hover text-content-subtle"
+    : "bg-accent/12 text-accent";
 }
 
 export function SkillsPanel() {
@@ -423,12 +441,10 @@ export function SkillsPanel() {
                     <span
                       className={cn(
                         "shrink-0 rounded px-1 text-[9px] leading-tight",
-                        s.source === "project"
-                          ? "bg-accent/12 text-accent"
-                          : "bg-surface-hover text-content-subtle",
+                        sourceBadgeCls(s.source),
                       )}
                     >
-                      {s.source === "project" ? t("settings.skills.sourceProject") : t("settings.skills.sourceGlobal")}
+                      {t(SOURCE_LABEL_KEY[s.source])}
                     </span>
                   </div>
                   <div className="flex items-center gap-1.5">
@@ -516,7 +532,7 @@ export function SkillsPanel() {
         description={
           <>
             {t("settings.skills.deleteDescPre")}
-            {pendingDelete?.source === "project" ? t("settings.skills.sourceProject") : t("settings.skills.sourceGlobal")}
+            {pendingDelete ? t(SOURCE_LABEL_KEY[pendingDelete.source]) : ""}
             {t("settings.skills.deleteDescMid")}
             {pendingDelete?.name}
             {t("settings.skills.deleteDescPost")}
@@ -582,14 +598,9 @@ function SkillSourceEditor({
           <IconSparkles size={14} className="text-content-muted" />
           <span className="text-[0.8571em] font-medium text-content">/{skill.name}</span>
           <span
-            className={cn(
-              "rounded px-1 text-[9px]",
-              skill.source === "project"
-                ? "bg-accent/12 text-accent"
-                : "bg-surface-hover text-content-subtle",
-            )}
+            className={cn("rounded px-1 text-[9px]", sourceBadgeCls(skill.source))}
           >
-            {skill.source === "project" ? t("settings.skills.sourceProject") : t("settings.skills.sourceGlobal")}
+            {t(SOURCE_LABEL_KEY[skill.source])}
           </span>
         </div>
         <span className="text-[0.7143em] text-content-subtle">{t("settings.skills.rawSource")}</span>
@@ -658,6 +669,7 @@ function NewSkillForm({
   const { t } = useI18n();
   const scopes: Array<{ value: EditableSkillSource; label: string; disabled?: boolean }> = [
     { value: "project", label: t("settings.skills.sourceProject"), disabled: !canUseProject },
+    { value: "agent", label: t("settings.skills.sourceAgent"), disabled: !canUseProject },
     { value: "global", label: t("settings.skills.sourceGlobal") },
   ];
   return (
@@ -672,6 +684,14 @@ function NewSkillForm({
             {t("settings.skills.newSkillIntro1")}
             <code className="rounded bg-surface-muted px-0.5">.claude/skills</code>
             {t("settings.skills.newSkillIntro2")}
+            <code className="rounded bg-surface-muted px-0.5">allowed-tools</code>
+            {t("settings.skills.newSkillIntro3")}
+          </>
+        ) : form.scope === "agent" ? (
+          <>
+            {t("settings.skills.newSkillAgentIntro1")}
+            <code className="rounded bg-surface-muted px-0.5">.agent/skills</code>
+            {t("settings.skills.newSkillAgentIntro2")}
             <code className="rounded bg-surface-muted px-0.5">allowed-tools</code>
             {t("settings.skills.newSkillIntro3")}
           </>
@@ -703,7 +723,9 @@ function NewSkillForm({
                     ? t("settings.skills.scopeProjectDisabled")
                     : s.value === "project"
                       ? t("settings.skills.scopeProjectHint")
-                      : t("settings.skills.scopeGlobalHint")
+                      : s.value === "agent"
+                        ? t("settings.skills.scopeAgentHint")
+                        : t("settings.skills.scopeGlobalHint")
                 }
                 className={cn(
                   "flex-1 rounded border px-2 py-1 text-[0.7857em] transition-colors",

@@ -248,6 +248,7 @@ export const zh = {
   "chat.slash.noDescription": "(无描述)",
   "chat.slash.builtin": "内置",
   "chat.slash.project": "项目",
+  "chat.slash.agent": ".agent",
   "chat.slash.global": "全局",
   "chat.slash.plugin": "插件",
   "chat.kbd.navigate": "导航",
