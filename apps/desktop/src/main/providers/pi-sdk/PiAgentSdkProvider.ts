@@ -39,7 +39,8 @@ import { PiModelsStore } from "@main/lib/piModelsStore.js";
 import { loadPiSdk } from "./piSdkLoader.js";
 import { buildPiTokenSnapshot } from "./piTokenUsage.js";
 import { buildPiSkillLoader, rewriteSkillPrefix, createMntNormalizingReadTool } from "./piSkillBridge.js";
-import { createMcodeExtension } from "./mcodeExtension.js";
+import { buildPiMcpExtension, collectPiMcpConfig } from "./piMcpBridge.js";
+import { createMcodeExtension, buildHeadlessExtensionUi } from "./mcodeExtension.js";
 import { getFileSnapshot } from "@main/lib/fileSnapshotRegistry.js";
 import { resolveGitBash } from "@main/lib/binaryResolve.js";
 import { getEnabledPluginSkillRoots } from "@main/plugins/pluginManager.js";
@@ -73,7 +74,11 @@ export class PiAgentSdkProvider implements AgentProvider {
     supportsApproval: true,
     supportsResume: true, // SessionManager.continueRecent / open
     supportsStreaming: true, // subscribe() event stream
-    supportsMcp: false, // Pi uses extensions, not MCP servers
+    // MCP servers from Mcode's config (~/.mcode/.claude.json + enabled
+    // project .mcp.json) ride the SDK's built-in MCP extension via
+    // piMcpBridge — tools register as mcp__<server>__<tool> and run through
+    // the same tool_call guard/approval pipeline as built-ins.
+    supportsMcp: true,
     // The inline extension registers a native AskUserQuestion tool via
     // pi.registerTool; its execute bridges to ctx.requestUserInput. See
     // mcodeExtension.ts.
@@ -251,11 +256,47 @@ export class PiAgentSdkProvider implements AgentProvider {
     // Browser tools honor the MCP panel's built-in server switch (same gate
     // as the Claude provider's options.mcpServers injection) — read per-turn,
     // so flipping it lands on the next message.
-    const [mcpManagement, customPrompt] = await Promise.all([
+    const [mcpManagement, customPrompt, piMcpConfig] = await Promise.all([
       getMcpManagement(),
       getCustomPromptSetting(),
+      // Mcode's MCP servers (user + enabled project ones) for the SDK's MCP
+      // extension — collected off the critical path's serial reads, same
+      // batch as the Claude provider's per-turn reads. Zero servers is the
+      // common case: the extension still loads, it just connects nothing.
+      collectPiMcpConfig(req.cwd),
     ]);
-    const mcodeExtension = createMcodeExtension({ ctx, cwd: req.cwd, strict, isolated, sessionId: req.sessionId, projectPath: req.cwd, turnNumber: req.turnNumber, browserToolsEnabled: !mcpManagement.browserDisabled, customPrompt });
+    const mcpFactory = buildPiMcpExtension(sdk.createMcpExtension, piMcpConfig);
+    const skillAllowNames = req.skills && req.skills.length > 0 ? req.skills : undefined;
+    const mcodeExtension = createMcodeExtension({
+      ctx,
+      cwd: req.cwd,
+      strict,
+      isolated,
+      sessionId: req.sessionId,
+      projectPath: req.cwd,
+      turnNumber: req.turnNumber,
+      browserToolsEnabled: !mcpManagement.browserDisabled,
+      customPrompt,
+      // In-process subagents: child sessions reuse this turn's model runtime
+      // and model, get their own loader (mcp + their own guard extension)
+      // built here, and die with the turn's abort signal.
+      allowSubagents: true,
+      modelRuntime,
+      ...(resolvedModel ? { model: resolvedModel } : {}),
+      thinkingLevel: req.effort && req.effort !== "default" ? (req.effort as "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max") : undefined,
+      abortSignal: ac.signal,
+      skillLoaderFactory: async (childExtension) =>
+        buildPiSkillLoader({
+          sdk,
+          cwd: req.cwd,
+          allowNames: skillAllowNames,
+          extraSkillPaths: await getEnabledPluginSkillRoots(),
+          extensionFactories: [mcpFactory, childExtension],
+        }),
+    });
+    if (piMcpConfig.errors.length > 0) {
+      for (const e of piMcpConfig.errors) ctx.log.warn(`pi mcp: ${e}`);
+    }
 
     // Bridge Mcode's skill roots + `/name` trigger into Pi's skill model, and
     // inject the inline extension via the loader's `extensionFactories`. Pi's
@@ -268,11 +309,14 @@ export class PiAgentSdkProvider implements AgentProvider {
     const skillLoader = await buildPiSkillLoader({
       sdk,
       cwd: req.cwd,
-      allowNames: req.skills && req.skills.length > 0 ? req.skills : undefined,
+      allowNames: skillAllowNames,
       // Skills of ENABLED plugins (settings → Plugins) ride the same
       // additionalSkillPaths channel; Pi has no plugin concept of its own.
       extraSkillPaths: await getEnabledPluginSkillRoots(),
-      extensionFactories: [mcodeExtension],
+      // MCP extension first (connects servers + registers mcp__* tools),
+      // mcode second (approval guard covers BOTH — tool_call fires for all
+      // tools regardless of which extension registered them).
+      extensionFactories: [mcpFactory, mcodeExtension],
     });
 
     // customTools override built-ins by name in AgentSession's definition
@@ -321,6 +365,19 @@ export class PiAgentSdkProvider implements AgentProvider {
       // loader also carries the Windows path system-prompt hint (win32 only).
       resourceLoader: skillLoader,
       ...(resolvedModel ? { model: resolvedModel } : {}),
+    });
+
+    // Dispatch session_start — pi only fires it from session.bindExtensions(),
+    // which is the CLI mode hosts' (print/interactive/rpc) job; an SDK
+    // embedder must do it itself. Without this the built-in MCP extension
+    // never loads its config or connects servers (extension FACTORIES run at
+    // getExtensions(), but everything session-scoped waits for
+    // session_start). The mcode extension itself only uses tool_call /
+    // before_agent_start / registerTool, which is why it worked without this.
+    await session.bindExtensions({
+      mode: "print",
+      uiContext: buildHeadlessExtensionUi((message) => ctx.log.info(`pi ext-ui: ${message}`)),
+      onError: (err) => ctx.log.warn(`pi extension error (${err.extensionPath}): ${String(err.error)}`),
     });
 
     // User-attached images vs. the model's declared input capabilities.

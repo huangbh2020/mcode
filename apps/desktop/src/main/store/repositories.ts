@@ -711,6 +711,14 @@ export const SessionRepo = {
     persist();
   },
 
+  /** Touch a session's updated_at (list ordering) without changing anything
+   *  else. Used by the Pi session importer after appending imported message
+   *  tails, so a session that grew in the terminal floats back up the list. */
+  touch(id: string): void {
+    run("UPDATE sessions SET updated_at = ? WHERE id = ?", v(Date.now()), v(id));
+    persist();
+  },
+
   /** Backfill the materialized worktree path (first-turn materialization).
    *  Written BEFORE the turn is dispatched so a crash between creation and
    *  turn-start still leaves the session pointing at its worktree. */
@@ -1156,6 +1164,16 @@ export const MessageRepo = {
       db.exec("ROLLBACK");
       throw err;
     }
+    persist();
+  },
+
+  /** Delete rows whose id starts with the given prefix, scoped to one
+   *  session. Used by the Pi session importer's rebuild path: rows derived
+   *  from a terminal Pi session file carry deterministic `piimp-` ids, so a
+   *  re-import replaces exactly those — rows persisted by the renderer for
+   *  turns Mcode itself ran (uuid ids) are never touched. */
+  deleteByIdPrefix(sessionId: string, prefix: string): void {
+    run("DELETE FROM messages WHERE session_id = ? AND id LIKE ?", v(sessionId), v(`${prefix}%`));
     persist();
   },
 

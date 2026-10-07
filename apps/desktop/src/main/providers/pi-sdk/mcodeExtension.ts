@@ -44,6 +44,9 @@ import { Type } from "typebox";
 import type {
   InlineExtension,
   ExtensionAPI,
+  ExtensionUIContext,
+  CreateAgentSessionOptions,
+  ModelRuntime,
   ToolCallEvent,
   ToolCallEventResult,
   BeforeAgentStartEvent,
@@ -62,6 +65,12 @@ import {
   ASK_NATIVE_TOOL_PROMPT,
 } from "@main/lib/askQuestion.js";
 import { PI_IDENTITY_PROMPT, SCHEDULED_TASK_PROPOSAL_NUDGE, joinPromptSections } from "@main/lib/systemPrompt.js";
+import {
+  SubagentCoordinator,
+  type SubagentTaskSpec,
+  type SpawnChild,
+} from "./piSubagentRunner.js";
+import { loadPiSdk } from "./piSdkLoader.js";
 import {
   browserList,
   browserNavigate,
@@ -167,6 +176,35 @@ const MCODE_BROWSER_READONLY = new Set([
   "browser_downloads",
 ]);
 
+/**
+ * A no-op `ExtensionUIContext` for the headless embedding. pi dispatches
+ * `session_start` (which starts MCP server connections) only from
+ * `session.bindExtensions()` — the CLI mode hosts' job, which an SDK embedder
+ * must do itself. Extensions that touch `ctx.ui` (e.g. the built-in MCP
+ * extension reporting connection problems) need SOMETHING there: interactive
+ * dialogs resolve to "dismissed" and every TUI-only affordance no-ops; a
+ * `notify` rides the main-process log instead of a status bar. A Proxy backs
+ * members added upstream later — any unknown UI affordance no-ops rather
+ * than crashing the session_start dispatch.
+ */
+export function buildHeadlessExtensionUi(log: (message: string) => void): ExtensionUIContext {
+  const base = {
+    select: async () => undefined,
+    confirm: async () => false,
+    input: async () => undefined,
+    notify: (message: string, type?: "info" | "warning" | "error") => {
+      log(`[${type ?? "info"}] ${message}`);
+    },
+    onTerminalInput: () => () => {},
+  };
+  return new Proxy(base, {
+    get(target, prop) {
+      if (prop in target) return target[prop as keyof typeof target];
+      return () => {};
+    },
+  }) as unknown as ExtensionUIContext;
+}
+
 export interface CreateMcodeExtensionOptions {
   /** The host provider context — carries the IPC bridges for approval /
    *  user-input / permission-mode / always-allow checks. */
@@ -198,6 +236,25 @@ export interface CreateMcodeExtensionOptions {
    *  built-in system-prompt section. Read per-turn by the provider (the
    *  extension is rebuilt each turn), null when unset/blank. */
   customPrompt: string | null;
+  /** Enable the `task` tool (in-process subagents via piSubagentRunner).
+   *  Child sessions get their own extension instance with this FALSE —
+   *  delegation is one level deep, like Claude's Task tool. */
+  allowSubagents?: boolean;
+  /** The turn's model/auth runtime — child sessions reuse it so the user's
+   *  configured API keys and model resolution apply unchanged. */
+  modelRuntime?: ModelRuntime;
+  /** The turn's resolved model (pi `Model` object). */
+  model?: CreateAgentSessionOptions["model"];
+  /** The turn's thinking level, forwarded to child sessions. */
+  thinkingLevel?: CreateAgentSessionOptions["thinkingLevel"];
+  /** Builds a resource loader for a CHILD session: its own mcode extension
+   *  instance (guards/approval wired to the same host) plus the MCP factory,
+   *  sharing the parent turn's skill allowlist. Built by the provider, which
+   *  owns loader policy. */
+  skillLoaderFactory?: (childExtension: InlineExtension) => Promise<CreateAgentSessionOptions["resourceLoader"]>;
+  /** The turn's abort signal — aborting it kills every running subagent
+   *  (wired by the provider's interrupt()/done() paths). */
+  abortSignal?: AbortSignal;
 }
 
 /**
@@ -225,21 +282,24 @@ export function createMcodeExtension(opts: CreateMcodeExtensionOptions): InlineE
   // Claude's semantics (plan mode is a turn-internal state).
   const planMode = { active: false };
 
-  return {
-    name: "mcode",
-    factory: (pi: ExtensionAPI) => {
-      registerToolCallGuard(pi, { ctx, cwd, strict, isolated, sessionId, planMode });
-      registerAskUserQuestionTool(pi, ctx);
-      // Browser tools + their usage prompt ride the same switch: when the
-      // built-in server is disabled in the MCP panel, the model must neither
-      // see the tools nor the prompt section advertising them.
-      if (browserToolsEnabled) {
-        registerBrowserTools(pi, { ctx, sessionId, projectPath, turnNumber });
-      }
-      registerPlanModeTools(pi, { ctx, sessionId, planMode });
-      registerSystemPromptInjector(pi, { browserToolsEnabled, customPrompt });
-    },
-  };
+    return {
+      name: "mcode",
+      factory: (pi: ExtensionAPI) => {
+        registerToolCallGuard(pi, { ctx, cwd, strict, isolated, sessionId, planMode });
+        registerAskUserQuestionTool(pi, ctx);
+        // Browser tools + their usage prompt ride the same switch: when the
+        // built-in server is disabled in the MCP panel, the model must neither
+        // see the tools nor the prompt section advertising them.
+        if (browserToolsEnabled) {
+          registerBrowserTools(pi, { ctx, sessionId, projectPath, turnNumber });
+        }
+        registerPlanModeTools(pi, { ctx, sessionId, planMode });
+        if (opts.allowSubagents) {
+          registerSubagentTool(pi, opts);
+        }
+        registerSystemPromptInjector(pi, { browserToolsEnabled, customPrompt });
+      },
+    };
 }
 
 /**
@@ -340,10 +400,16 @@ function registerToolCallGuard(
       }
     }
 
-    // ③ Plan tools + AskUserQuestion — their own execute() handles the IPC
-    //    bridging; never route through the approval prompt or the plan-mode
-    //    read-only gate.
-    if (toolName === "EnterPlanMode" || toolName === "ExitPlanMode" || toolName === "AskUserQuestion") {
+    // ③ Plan tools + AskUserQuestion + task — their own execute() handles the
+    //    IPC bridging / delegation; never route through the approval prompt
+    //    or the plan-mode read-only gate. (A subagent's OWN tools still hit
+    //    the child extension's guard, so delegation adds no bypass.)
+    if (
+      toolName === "EnterPlanMode" ||
+      toolName === "ExitPlanMode" ||
+      toolName === "AskUserQuestion" ||
+      toolName === "task"
+    ) {
       return;
     }
     //    Read-only browser tools (list/snapshot/screenshot) can't mutate the
@@ -1078,4 +1144,191 @@ function registerSystemPromptInjector(
       return { systemPrompt: next };
     },
   );
+}
+
+/**
+ * Register the `task` tool — Mcode's Pi analogue of Claude's Task tool.
+ *
+ * Each delegated task runs in an IN-PROCESS child `AgentSession` (isolated
+ * `SessionManager.inMemory` context, the parent turn's ModelRuntime/model so
+ * the user's configured keys and model apply, its own mcode extension
+ * instance so approvals, path guards, file snapshots and AskUserQuestion all
+ * work, and its own skill+MCP resource loader built through the injected
+ * {@link CreateMcodeExtensionOptions.skillLoaderFactory}). This mirrors what
+ * pi's official subagent example extension does with spawned CLI processes,
+ * but stays inside our process: no CLI binary dependency, events reach the
+ * host directly, and the child's file writes land in the PARENT session's
+ * FileSnapshot (recordPre uses the parent session id) so they show up on the
+ * 「本轮修改」 card and are rewritable.
+ *
+ * Input accepts a single task (`description` + `prompt`) or a parallel batch
+ * (`tasks[]`, capped) — pi's agent loop executes tool calls sequentially, so
+ * parallelism is expressed in the input shape (same as the official example).
+ */
+function registerSubagentTool(pi: ExtensionAPI, opts: CreateMcodeExtensionOptions): void {
+  const { ctx, cwd, strict, isolated, sessionId, projectPath, turnNumber, browserToolsEnabled, customPrompt } = opts;
+
+  const spawnChild: SpawnChild = async (spec, callbacks, signal) => {
+    if (!opts.modelRuntime) {
+      throw new Error("子代理不可用:当前回合没有可复用的模型运行时");
+    }
+    const sdk = await loadPiSdk();
+    // Child extension: same guards/approval wired to the SAME host bridge,
+    // but delegation disabled (one level deep) and abort wired to THIS
+    // child's signal. recordPre uses the parent sessionId → the parent's
+    // FileSnapshot covers subagent writes (rewind parity with Claude).
+    const childExtension = createMcodeExtension({
+      ctx,
+      cwd,
+      strict,
+      isolated,
+      sessionId,
+      projectPath,
+      turnNumber,
+      browserToolsEnabled,
+      customPrompt,
+      allowSubagents: false,
+      abortSignal: signal,
+    });
+    const loader = await opts.skillLoaderFactory?.(childExtension);
+    const { session } = await sdk.createAgentSession({
+      cwd,
+      sessionManager: sdk.SessionManager.inMemory(cwd),
+      modelRuntime: opts.modelRuntime,
+      ...(opts.model ? { model: opts.model } : {}),
+      ...(opts.thinkingLevel ? { thinkingLevel: opts.thinkingLevel } : {}),
+      ...(loader ? { resourceLoader: loader } : {}),
+    });
+
+    // pi-event → semantic callback mapping. Message-level granularity: text
+    // and thinking are read off the FINALIZED message (message_end), matching
+    // the coordinator's replace-trailing-block accumulation.
+    let finalText = "";
+    let lastAssistant: { stopReason?: string; errorMessage?: string } | undefined;
+    const unsubscribe = session.subscribe((event) => {
+      if (event.type === "message_end") {
+        const m = event.message as { role?: string; content?: unknown[]; stopReason?: string; errorMessage?: string } | undefined;
+        if (!m || m.role !== "assistant") return;
+        lastAssistant = m;
+        const parts = Array.isArray(m.content) ? m.content : [];
+        const text = parts
+          .map((p) => (p as { type?: string; text?: string }).type === "text" ? (p as { text?: string }).text ?? "" : "")
+          .join("");
+        if (text) callbacks.onText(text);
+        const thinking = parts
+          .map((p) => (p as { type?: string; thinking?: string }).type === "thinking" ? (p as { thinking?: string }).thinking ?? "" : "")
+          .join("");
+        if (thinking) callbacks.onThinking(thinking);
+        return;
+      }
+      if (event.type === "tool_execution_start") {
+        callbacks.onToolStart(event.toolCallId, event.toolName, event.args);
+        return;
+      }
+      if (event.type === "tool_execution_end") {
+        callbacks.onToolEnd(event.toolCallId, event.result, event.isError);
+      }
+    });
+
+    try {
+      await session.prompt(spec.prompt);
+      let totalTokens = 0;
+      try {
+        const stats = session.getSessionStats();
+        totalTokens = (stats as { tokens?: { total?: number } }).tokens?.total ?? 0;
+      } catch {
+        // session torn down mid-dispose — no stats this run
+      }
+      const failed = lastAssistant?.stopReason === "error" || signal.aborted;
+      if (signal.aborted) {
+        return { status: "killed", finalText, totalTokens, error: "subagent aborted" };
+      }
+      return {
+        status: failed ? "failed" : "completed",
+        finalText,
+        totalTokens,
+        ...(failed ? { error: lastAssistant?.errorMessage ?? "模型调用失败" } : {}),
+      };
+    } catch (err) {
+      if (signal.aborted) {
+        return { status: "killed", finalText: "", totalTokens: 0, error: "subagent aborted" };
+      }
+      return { status: "failed", finalText: "", totalTokens: 0, error: (err as Error).message };
+    } finally {
+      unsubscribe();
+      try {
+        session.dispose();
+      } catch {
+        // already disposed via abort — ignore
+      }
+    }
+  };
+
+  const coordinator = new SubagentCoordinator({
+    ctx,
+    sessionId,
+    spawnChild,
+    // The turn's signal — provider interrupt()/done() aborts it, cascading
+    // into every running child. No-op when absent (extension options are
+    // optional for embedding tests).
+    abortSignal: opts.abortSignal ?? new AbortController().signal,
+  });
+
+  pi.registerTool({
+    name: "task",
+    label: "Task",
+    description:
+      "委派独立子任务给子代理执行(每个子代理有隔离的上下文窗口,可用全部工具)。" +
+      "传入 description + prompt 派发单个任务,或传入 tasks 数组并行派发多个任务(上限 8)。" +
+      "适用于:并行的独立调研、大范围代码检索、可独立完成的子步骤。" +
+      "任务描述要自包含——子代理看不到本对话的上下文,只看到你给的 prompt。" +
+      "调用后会等待所有任务完成并返回各任务的最终输出。",
+    promptSnippet: "task: 委派子代理执行独立子任务(隔离上下文,支持并行)",
+    parameters: Type.Object({
+      description: Type.Optional(
+        Type.String({ description: "单个任务模式的简短描述(用于进度显示)" }),
+      ),
+      prompt: Type.Optional(
+        Type.String({ description: "单个任务模式:交给子代理的完整任务指令" }),
+      ),
+      tasks: Type.Optional(
+        Type.Array(
+          Type.Object({
+            description: Type.String({ description: "任务简短描述" }),
+            prompt: Type.String({ description: "完整任务指令(自包含,子代理看不到对话历史)" }),
+          }),
+          { description: "并行模式:多个任务同时派发(上限 8,并发 4)" },
+        ),
+      ),
+    }),
+    async execute(toolCallId, params, signal) {
+      const p = params as {
+        description?: string;
+        prompt?: string;
+        tasks?: SubagentTaskSpec[];
+      };
+      const specs: SubagentTaskSpec[] =
+        p.tasks && p.tasks.length > 0
+          ? p.tasks
+          : p.prompt
+            ? [{ description: p.description ?? p.prompt.slice(0, 80), prompt: p.prompt }]
+            : [];
+      if (specs.length === 0) {
+        throw new Error("task 工具需要 prompt(单任务)或 tasks(并行)参数");
+      }
+      // Tool-level abort (the agent loop cancelling this call) also kills the
+      // batch. Rare cross-call coupling: the coordinator is per-turn, so an
+      // aborted call takes down a concurrently-running sibling batch too —
+      // acceptable, both are being torn down anyway on turn abort.
+      if (signal) {
+        signal.addEventListener("abort", () => coordinator.abortAll("tool call aborted"), { once: true });
+      }
+      const r = await coordinator.run(toolCallId, specs);
+      return {
+        content: [{ type: "text", text: r.text || "(子代理无输出)" }],
+        details: {},
+        ...(r.isError ? { isError: true } : {}),
+      };
+    },
+  });
 }

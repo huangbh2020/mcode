@@ -17,6 +17,7 @@ import { notificationManager } from "@main/notifications/NotificationManager.js"
 import { orchestrator } from "@main/orchestrator/OrchestratorService.js";
 import { initAutomationScheduler, disposeAutomationScheduler } from "@main/automation/AutomationScheduler.js";
 import { initServiceScanner, disposeServiceScanner } from "@main/lib/serviceScanner.js";
+import { initPiSessionImport } from "@main/lib/piSessionImport.js";
 import { is } from "@main/utils.js";
 import { preloadClaudeSdk } from "@main/providers/claude-sdk/ClaudeAgentSdkProvider.js";
 import { logStartup } from "@main/lib/startupTimer.js";
@@ -211,6 +212,12 @@ app.whenReady().then(async () => {
   // platform snapshots while a claude CLI process is alive, a turn is running
   // or a tracked service still listens, so idle cost is zero.
   initServiceScanner();
+
+  // Import terminal Pi sessions (~/.pi/agent/sessions) as regular chat
+  // sessions so a task started with Pi in the terminal is continuable here.
+  // Fire-and-forget: the observer attaches immediately; the first scan waits
+  // for DB readiness internally.
+  initPiSessionImport();
 
   // Start the mobile companion HTTP server (LAN-facing). Fire-and-forget: it
   // awaits DB readiness internally to read its enabled/port settings, then

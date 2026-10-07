@@ -106,7 +106,16 @@ export default defineConfig({
         // allows its build scripts and the postinstall hook in
         // package.json swaps in the Electron prebuild after every install.
         // node-pty is a native addon too — same runtime-loading rule.
-        external: ["electron", "zod", "better-sqlite3", "node-pty"],
+        //
+        // pi is a devDependency whose ~27MB closure ships via the on-demand
+        // managed runtime (build/pack-pi-runtime.cjs → runtimeInstaller.ts),
+        // NOT in the installer — so it must stay external here. Every pi
+        // import in src/main is `import type` (erased); the only runtime
+        // entry is piSdkLoader's dynamic import(): the managed file-URL path
+        // first, the bare specifier as the dev-node_modules fallback. Keeping
+        // it external also avoids bundling jiti's pre-bundled chunks, which
+        // esbuild can't transpile (Unterminated string literal, pi 1.0.2).
+        external: ["electron", "zod", "better-sqlite3", "node-pty", "@earendil-works/pi-coding-agent"],
       },
     },
     resolve: {

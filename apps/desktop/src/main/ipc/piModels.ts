@@ -17,11 +17,13 @@ import {
   SavePiProviderSchema,
   DeletePiProviderSchema,
   GetPiApiKeySchema,
+  PiScanSessionsSchema,
 } from "@contracts/ipc";
 import type { BuiltinModelOption } from "@contracts/provider";
 import { PI_1M_CONTEXT_WINDOW } from "@contracts/piModel";
 import type { PiProviderConfig } from "@contracts/piModel";
 import { PiModelsStore } from "@main/lib/piModelsStore.js";
+import { scanPiSessions } from "@main/lib/piSessionImport.js";
 import { loadPiSdk } from "@main/providers/pi-sdk/piSdkLoader.js";
 import { log } from "@main/lib/logger.js";
 
@@ -112,5 +114,13 @@ export function registerPiModelsHandlers(ipcMain: IpcMain): void {
 
   ipcMain.handle(IPC.PI_MODELS_LIST_AVAILABLE, async () => {
     return { models: await listAvailablePiModels() };
+  });
+
+  // Manual "scan Pi terminal sessions" trigger (project context menu). Runs
+  // inline so the toast can report real numbers; the files are small and the
+  // scan is sync, so no spinner is needed.
+  ipcMain.handle(IPC.PI_SCAN_SESSIONS, (_evt, raw) => {
+    const input = PiScanSessionsSchema.parse(raw);
+    return scanPiSessions(input.projectId);
   });
 }

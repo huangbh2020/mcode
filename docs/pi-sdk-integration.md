@@ -84,6 +84,16 @@ providerRegistry.register(new PiAgentSdkProvider());
 5. **事件流**: `session.subscribe((e) => adapter.dispatch(e))`
 6. **驱动**: `session.prompt(req.prompt)` resolve 即 turn 结束
 7. **中断**: `session.abort()`;错误分支发 `error` + `turn.done(reason:"error")`
+8. **bindExtensions 必须自调(1.0.2)**: `createAgentSession` 不派发
+   `session_start` —— 它只由 `session.bindExtensions()` 派发,而那是 CLI
+   模式宿主(print/interactive/rpc)的职责。扩展工厂在 `getExtensions()` 阶段
+   就执行(`pi.registerTool`/`pi.on` 先于首个 turn 绑定),但一切**会话域**行为
+   (内建 MCP 扩展的配置读取与 server 连接、资源发现)等的是 `session_start`。
+   嵌入方在 createAgentSession 之后调
+   `await session.bindExtensions({ mode: "print", uiContext: <headless 桩>,
+   onError })`(mcodeExtension 的 `buildHeadlessExtensionUi` 提供该桩)。
+   缺了它 MCP 永远不连接;mcode 扩展不受影响(只依赖 tool_call /
+   before_agent_start / registerTool —— 0.83 时代没调它也全功能的原因)
 
 ### 3.3 事件映射
 
@@ -98,15 +108,29 @@ providerRegistry.register(new PiAgentSdkProvider());
 | `compaction_end` | `compact.result` (preTokens=0,MVP 占位) |
 | 错误 | `error` + `turn.done` |
 
-### 3.4 已知限制(MVP)
+### 3.4 能力现状(2026-10-04 起,pi-coding-agent 1.0.2)
 
-- **无工具审批**: `supportsApproval: false`,工具直接执行。后续可用 Pi 的
-  `defineTool` 包装内置工具,在 `execute` 里调 `ctx.requestApproval()` 桥接
-- **无 token usage**: Pi 事件不含 usage 字段,MVP 不发 `token-usage.updated`,
-  ContextRing 不显示。后续从 `turn_end` 的 toolResults / `agent.state` 提取
-- **无 AskUserQuestion**: 后续可用自定义工具实现
-- **无子代理快照**: Pi 的 extensions 机制与 claude Task 工具不同,`subagent.update`
-  MVP 不发
+- **工具审批**: mcodeExtension 的 `tool_call` handler 即 Pi 版 canUseTool,对**所有**工具生效
+  (含 MCP 工具 `mcp__<server>__<tool>` 与 task 子代理注册的工具)
+- **Token usage**: `agent_end` 时经 `getContextUsage()`/`getSessionStats()` 发快照,
+  ContextRing 与 Claude 侧同语义
+- **AskUserQuestion**: mcodeExtension 注册的原生工具,execute 桥接 `ctx.requestUserInput`
+- **MCP**(2026-10-04 接入): 经 SDK 内建 MCP 扩展(`createMcpExtension`)注入 Mcode 的
+  server 配置 —— 用户级 `~/.mcode/.claude.json` 的 `mcpServers` + 项目 `.mcp.json` 的
+  **显式允许名单**(Mcode 语义,替代 pi 自己的 mcp.json 扫描,`loadConfig` 覆盖项实现);
+  暴露策略恒 `direct`(对齐 Claude 侧 `options.mcpServers` 注入);SSE 传输 pi 1.0.2 不支持,
+  降级为 errors 条目;OAuth 走 pi 自己的 agentDir 凭据(Mcode 无登录 UI,建议 headers 鉴权)。
+  **嵌入方必须自调 `session.bindExtensions({mode:"print", ...})`** —— pi 只在 CLI 模式宿主里
+  派发 `session_start`,不调它 MCP 永远不连接(`piMcpBridge.ts` + provider 的 bindExtensions
+  调用 + headless `ExtensionUIContext` 桩,冒烟 `scripts/pi-mcp-smoke/run.sh`)
+- **子代理**(2026-10-04 接入): mcodeExtension 注册 `task` 工具(单任务 `description`+`prompt`
+  或并行 `tasks[]`,上限 8/并发 4/单任务超时 10 分钟),`piSubagentRunner.ts` 进程内调度
+  子 `AgentSession`(隔离 `SessionManager.inMemory`,复用父回合 ModelRuntime/模型,子扩展
+  实例带全套守卫/审批,`recordPre` 落父会话快照 → 子代理写入可 rewind);进度经
+  `subagent.update`/`subagent.transcript` REPLACE 事件驱动渲染端既有胶囊/转录 UI,
+  RuntimeManager 的跨轮回放 provider 中立自动生效。已知差距:子代理 token 不并入父回合
+  usage 快照(ContextRing 少算);无 `isBackgrounded`(子代理恒阻塞父回合)。
+  冒烟 `scripts/pi-subagent-smoke/run.sh`(stub spawnChild,无模型可跑)
 
 ## 4. 模型设置适配
 

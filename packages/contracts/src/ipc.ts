@@ -1777,6 +1777,15 @@ export type DeletePiProviderInput = z.infer<typeof DeletePiProviderSchema>;
 export const GetPiApiKeySchema = z.object({ name: z.string().min(1) });
 export type GetPiApiKeyInput = z.infer<typeof GetPiApiKeySchema>;
 
+/** Scan ~/.pi/agent/sessions for terminal Pi sessions belonging to known
+ *  projects and import the new ones as regular chat sessions (messages
+ *  included, resume-capable via the pi session file path). `projectId`
+ *  narrows the scan to one project; omit for all. */
+export const PiScanSessionsSchema = z.object({
+  projectId: z.string().min(1).optional(),
+});
+export type PiScanSessionsInput = z.infer<typeof PiScanSessionsSchema>;
+
 /* ── Codex model providers (third-party Responses-API endpoints driving the
       Codex harness; materialized into <CODEX_HOME>/config.toml) ── */
 
@@ -4686,6 +4695,13 @@ export interface RpcMap {
    *  returns getAvailable() projected into BuiltinModelOption[] shape for
    *  the composer's model picker. */
   "piModels.listAvailable": () => Promise<{ models: BuiltinModelOption[] }>;
+  /** Scan ~/.pi/agent/sessions and import terminal Pi sessions that belong to
+   *  known projects (new sessions + message tails grown since the last scan).
+   *  Imported sessions are regular chat rows (provider pi-sdk) and resume the
+   *  original pi session file on the next turn. Desktop-only affordance. */
+  "piSessions.scan": (
+    input: PiScanSessionsInput,
+  ) => Promise<{ imported: number; updated: number }>;
   // Codex model providers (visual editor for <CODEX_HOME>/config.toml's
   // [model_providers]; keys live in the encrypted settings map)
   "codexModels.list": () => Promise<{ providers: CodexProviderPublic[] }>;
@@ -5261,6 +5277,8 @@ export const IPC = {
   PI_MODELS_DELETE: "piModels:delete",
   PI_MODELS_GET_API_KEY: "piModels:getApiKey",
   PI_MODELS_LIST_AVAILABLE: "piModels:listAvailable",
+  // Terminal Pi session import (~/.pi/agent/sessions → chat sessions)
+  PI_SCAN_SESSIONS: "pi:scanSessions",
   // Codex model providers (materialized into <CODEX_HOME>/config.toml)
   CODEX_MODELS_LIST: "codexModels:list",
   CODEX_MODELS_SAVE: "codexModels:save",

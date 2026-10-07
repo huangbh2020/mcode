@@ -168,6 +168,12 @@ const api = {
       ipcRenderer.invoke(IPC.PI_MODELS_GET_API_KEY, input)) as RpcMap["piModels.getApiKey"],
   },
 
+  /** Terminal Pi session import (~/.pi/agent/sessions → chat sessions). */
+  piSessions: {
+    scan: ((input) =>
+      ipcRenderer.invoke(IPC.PI_SCAN_SESSIONS, input)) as RpcMap["piSessions.scan"],
+  },
+
   /** Codex model providers — third-party Responses-API endpoints driving the
    *  Codex harness (materialized into <CODEX_HOME>/config.toml). Cleartext
    *  keys stay in the encrypted settings map; getApiKey is the settings-UI

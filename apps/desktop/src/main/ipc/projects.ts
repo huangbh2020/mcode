@@ -23,6 +23,7 @@ import { uid } from "@main/utils.js";
 import { ProjectRepo, SessionRepo } from "@main/store/repositories.js";
 import { runtimeManager } from "@main/claude/RuntimeManager.js";
 import { broadcastSessionChanged, broadcastSessionDeleted } from "@main/lib/sessionSync.js";
+import { scheduleScan } from "@main/lib/piSessionImport.js";
 import { log } from "@main/lib/logger.js";
 
 export function registerProjectHandlers(ipcMain: IpcMain): void {
@@ -69,6 +70,10 @@ export function registerProjectHandlers(ipcMain: IpcMain): void {
     });
     const total = SessionRepo.countByProject(input.projectId, archived, input.worktree);
     const hasMore = limit !== undefined ? offset + sessions.length < total : false;
+    // Piggyback: every project list load re-checks ~/.pi/agent/sessions for
+    // new (or grown) terminal Pi sessions. Fire-and-forget, internally
+    // debounced — the served reply never waits on it.
+    scheduleScan(input.projectId);
     return { sessions, hasMore, total };
   });
 
@@ -237,6 +242,8 @@ export function registerProjectHandlers(ipcMain: IpcMain): void {
     const sessions = SessionRepo.listAll({ limit, offset, ...scope });
     const total = SessionRepo.countAll(scope);
     const hasMore = offset + sessions.length < total;
+    // Same piggyback as PROJECT_SESSIONS (stream sidebar loads).
+    scheduleScan();
     return { sessions, hasMore, total };
   });
 }

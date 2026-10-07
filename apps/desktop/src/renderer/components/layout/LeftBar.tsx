@@ -45,10 +45,12 @@ import {
   IconMoon,
   IconFocus,
   IconLayoutSidebarLeftExpand,
+  IconTerminal,
 } from "@renderer/lib/icons.js";
 import { useTheme, applyThemeClass } from "@renderer/lib/theme.js";
 import { isMac } from "@renderer/lib/platform.js";
 import { getProviderIcon } from "@renderer/lib/providerIcon.js";
+import { useToastStore } from "@renderer/stores/toastStore.js";
 import { Button, ConfirmDialog, Dialog, Input } from "@renderer/components/ui/index.js";
 import { BrandLogo } from "./BrandLogo.js";
 import { SidebarQuickActions } from "./SidebarQuickActions.js";
@@ -1133,6 +1135,30 @@ function LeftBarBase({
           void api.shell.openPath({ path: p.path });
           setProjectCtxMenu(null);
         }}
+        onScanPiSessions={(p) => {
+          setProjectCtxMenu(null);
+          void (async () => {
+            try {
+              const res = await api.piSessions.scan({ projectId: p.id });
+              const toast = useToastStore.getState().push;
+              if (res.imported > 0) {
+                toast({
+                  kind: "info",
+                  title: t("layout.piScanDone", { n: res.imported }),
+                  body: res.updated > 0 ? t("layout.piScanUpdated", { n: res.updated }) : undefined,
+                });
+              } else {
+                toast({ kind: "info", title: t("layout.piScanNone") });
+              }
+            } catch (err) {
+              useToastStore.getState().push({
+                kind: "error",
+                title: t("layout.piScanFailed"),
+                body: err instanceof Error ? err.message : String(err),
+              });
+            }
+          })();
+        }}
       />
 
       {/* Rename dialog (shared by the session / project / worktree menus). */}
@@ -2180,11 +2206,13 @@ interface ProjectContextMenuProps {
   onCreateGroup: (projectId: string) => void;
   onRemoveFromGroup: (projectId: string) => void;
   onOpenFolder: (project: Project) => void;
+  onScanPiSessions: (project: Project) => void;
 }
 
 function ProjectContextMenu({
   ctxMenu, knownGroups, onClose,
   onTogglePin, onRename, onMoveToGroup, onCreateGroup, onRemoveFromGroup, onOpenFolder,
+  onScanPiSessions,
 }: ProjectContextMenuProps) {
   const { t } = useI18n();
   const anchor = useCursorAnchor(ctxMenu);
@@ -2273,6 +2301,14 @@ function ProjectContextMenu({
             >
               <IconFolder size={14} className="shrink-0" />
               {t("layout.openInFileManager")}
+            </Menu.Item>
+            <Menu.Separator className="my-1 h-px bg-edge" />
+            <Menu.Item
+              onClick={() => project && onScanPiSessions(project)}
+              className={itemClass}
+            >
+              <IconTerminal size={14} className="shrink-0" />
+              {t("layout.piScanSessions")}
             </Menu.Item>
           </Menu.Popup>
         </Menu.Positioner>
