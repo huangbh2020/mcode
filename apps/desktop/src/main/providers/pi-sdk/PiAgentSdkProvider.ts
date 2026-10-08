@@ -41,6 +41,7 @@ import { buildPiTokenSnapshot } from "./piTokenUsage.js";
 import { buildPiSkillLoader, rewriteSkillPrefix, createMntNormalizingReadTool } from "./piSkillBridge.js";
 import { buildPiMcpExtension, collectPiMcpConfig } from "./piMcpBridge.js";
 import { createMcodeExtension, buildHeadlessExtensionUi } from "./mcodeExtension.js";
+import { createPiBashTracker } from "./piBashTracker.js";
 import { getFileSnapshot } from "@main/lib/fileSnapshotRegistry.js";
 import { resolveGitBash } from "@main/lib/binaryResolve.js";
 import { getEnabledPluginSkillRoots } from "@main/plugins/pluginManager.js";
@@ -350,21 +351,43 @@ export class PiAgentSdkProvider implements AgentProvider {
     // normalizer rewrites the remaining `/mnt/d/...` to `D:/...`. Only applied
     // when resolveGitBash() finds one — otherwise the SDK default stands.
     const gitBash = process.platform === "win32" ? resolveGitBash() : null;
+    // Shell resolution parity with the session's own default toolset —
+    // agent-session.js builds the built-in bash with the pi settings'
+    // shellPath + shellCommandPrefix, so the override below reads the same
+    // two values. win32 keeps the git-bash steering on top (comment above);
+    // on other platforms the override reproduces the default exactly, adding
+    // only the tracker wrapper.
+    let settingsShellPath: string | undefined;
+    let settingsCommandPrefix: string | undefined;
+    try {
+      const settings = sdk.SettingsManager.create(req.cwd);
+      settingsShellPath = settings.getShellPath();
+      settingsCommandPrefix = settings.getShellCommandPrefix();
+    } catch {
+      // Unreadable pi settings → fall back to the SDK's own resolution.
+    }
+    const bashShellPath = process.platform === "win32" ? (gitBash ?? settingsShellPath) : settingsShellPath;
+
+    // Bash-task tracker: wraps the local bash operations so every command the
+    // model runs mirrors into the「运行命令」panel (same bash-tasks.update
+    // channel the Claude adapter uses) with LIVE output and a per-command
+    // stop. See piBashTracker.ts for the design.
+    const bashTracker = createPiBashTracker(req.sessionId, (e) => ctx.emit(e));
+    const bashOperations = bashTracker.wrapOperations(
+      sdk.createLocalBashOperations(bashShellPath ? { shellPath: bashShellPath } : {}),
+    );
     // Widened to `any` like `createMntNormalizingReadTool` — the SDK's concrete
     // renderCall is contravariant in its args, so it doesn't structurally
     // satisfy the fully-generic ToolDefinition. The bash def keeps its own
     // schema (validated args unchanged); only the array slot is widened.
-    const customTools: import("@earendil-works/pi-coding-agent").ToolDefinition<any, any, any>[] =
-      process.platform === "win32"
-        ? [
-            createMntNormalizingReadTool(sdk, req.cwd),
-            ...(gitBash
-              ? [
-                  sdk.createBashToolDefinition(req.cwd, { shellPath: gitBash }) as import("@earendil-works/pi-coding-agent").ToolDefinition<any, any, any>,
-                ]
-              : []),
-          ]
-        : [];
+    const customTools: import("@earendil-works/pi-coding-agent").ToolDefinition<any, any, any>[] = [
+      ...(process.platform === "win32" ? [createMntNormalizingReadTool(sdk, req.cwd)] : []),
+      sdk.createBashToolDefinition(req.cwd, {
+        ...(bashShellPath ? { shellPath: bashShellPath } : {}),
+        ...(settingsCommandPrefix ? { commandPrefix: settingsCommandPrefix } : {}),
+        operations: bashOperations,
+      }) as import("@earendil-works/pi-coding-agent").ToolDefinition<any, any, any>,
+    ];
 
     const { session } = await sdk.createAgentSession({
       cwd: req.cwd,
@@ -522,6 +545,9 @@ export class PiAgentSdkProvider implements AgentProvider {
       } finally {
         unsubscribe();
         session.dispose();
+        // Settle any bash task the session teardown orphaned (turn ended with
+        // an exec still in flight) and flush the roster once more.
+        bashTracker.dispose();
         finished = true;
       }
     })();
@@ -537,6 +563,14 @@ export class PiAgentSdkProvider implements AgentProvider {
         }
       },
       isRunning: () => !finished && !ac.signal.aborted,
+      // Per-command stop (「运行命令」panel): abort one tracked bash exec
+      // without interrupting the turn — the agent loop continues with the
+      // aborted command's error result, mirroring Claude's stop_task.
+      stopTask: async (taskId: string) => {
+        if (!bashTracker.stopTask(taskId)) {
+          throw new Error(`pi: unknown or settled bash task ${taskId}`);
+        }
+      },
     };
   }
 

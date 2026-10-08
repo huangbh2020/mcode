@@ -39,6 +39,7 @@ import type { TablerIconProps } from "@renderer/lib/icons.js";
 import {
   IconBookmark,
   IconCheck,
+  IconChevronDown,
   IconCircle,
   IconClipboard,
   IconClock,
@@ -497,6 +498,7 @@ function BashTaskRow({
   t: Translate;
   onStop?: (task: BashTaskSnapshot) => void;
 }) {
+  const [showOutput, setShowOutput] = useState(false);
   const meta = BASH_TASK_STATUS_META[task.status];
   const StatusIcon = BASH_TASK_STATUS_ICON[task.status];
   const running = task.status === "running";
@@ -530,6 +532,22 @@ function BashTaskRow({
         <span className="rounded-md bg-slate-100 px-1.5 py-0.5 text-[9.5px] font-medium tabular-nums text-slate-600 dark:bg-white/10 dark:text-white/60">
           {formatDuration(end - start)}
         </span>
+        {task.output && (
+          <button
+            type="button"
+            onClick={() => setShowOutput((v) => !v)}
+            title={t("chatStream.bashTask.outputTitle")}
+            className={cn(
+              "flex items-center gap-1 rounded-lg border px-2 py-0.5 text-[10.5px] font-semibold transition-all active:scale-95",
+              showOutput
+                ? "border-accent/30 bg-accent/10 text-accent"
+                : "border-slate-300 bg-white text-slate-800 hover:bg-slate-50 dark:border-white/15 dark:bg-white/10 dark:text-white/90 dark:hover:bg-white/20",
+            )}
+          >
+            <IconChevronDown size={10} className={cn("transition-transform", showOutput && "rotate-180")} />
+            {t("chatStream.bashTask.output")}
+          </button>
+        )}
         {running && onStop && (
           <button
             type="button"
@@ -542,6 +560,18 @@ function BashTaskRow({
           </button>
         )}
       </div>
+      {task.output && showOutput && (
+        <div className="mt-1.5">
+          {task.outputTruncated && (
+            <p className="mb-1 text-[9.5px] font-medium text-slate-500 dark:text-white/50">
+              {t("chatStream.bashTask.outputTruncated")}
+            </p>
+          )}
+          <pre className="max-h-56 overflow-auto rounded-lg border border-slate-200 bg-slate-50 p-2 font-mono text-[10px] leading-relaxed break-all whitespace-pre-wrap text-slate-700 dark:border-white/[0.08] dark:bg-black/30 dark:text-white/80">
+            {task.output}
+          </pre>
+        </div>
+      )}
     </li>
   );
 }

@@ -536,6 +536,15 @@ export interface BashTaskSnapshot {
   endedAt?: number;
   /** Error text (task_updated.patch.error), if status=failed. */
   error?: string;
+  /** Accumulated stdout+stderr the CLI spooled for the task, read from
+   *  `task_notification.output_file` at settle/stop time (tail-capped and
+   *  ANSI-stripped — see main/lib/taskOutputFile.ts). The live stream is not
+   *  observable by the host (stream-json has no per-bash output events), so
+   *  this is the first — and for backgrounded commands the only — place the
+   *  output becomes visible to the user. */
+  output?: string;
+  /** True when `output` is only the tail of a longer file. */
+  outputTruncated?: boolean;
 }
 
 /**
