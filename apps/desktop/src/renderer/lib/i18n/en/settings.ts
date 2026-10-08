@@ -501,6 +501,12 @@ export const en = {
   "settings.runtimes.field.upstream": "Upstream latest",
   "settings.runtimes.forceInstallHint": "Force-install the unadapted upstream version (skips compat gates, at your own risk)",
 
+  // ── RuntimeUpdatePrompt (startup "runtime update available" corner card) ──
+  "settings.runtimes.updatePromptTitle": "Agent updates available",
+  "settings.runtimes.updatePromptDesc": "Mcode has been updated, but the following runtimes are still on older versions. Updating them to the versions this build is paired with is recommended:",
+  "settings.runtimes.updateNow": "Update now",
+  "settings.runtimes.updateLater": "Remind me later",
+
   // ── McpPanel ──
   "settings.mcp.title": "MCP servers",
   "settings.mcp.desc1": "Manage MCP (Model Context Protocol) servers. Changes apply from the ",

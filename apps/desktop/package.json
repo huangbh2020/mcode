@@ -67,7 +67,7 @@
   },
   "devDependencies": {
     "@earendil-works/pi-coding-agent": "1.0.2",
-    "@openai/codex": "0.153.4",
+    "@openai/codex": "0.162.0",
     "@types/better-sqlite3": "^9.6.0",
     "@types/node": "^22.10.0",
     "@types/qrcode": "^1.5.6",

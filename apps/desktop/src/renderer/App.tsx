@@ -15,6 +15,7 @@ import { SchedPage } from "./components/automation/SchedPage.js";
 import { CommandPalette } from "./components/layout/CommandPalette.js";
 import { SearchDialog } from "./components/ide/SearchDialog.js";
 import { ModelConfigPrompt } from "./components/chat/ModelConfigPrompt.js";
+import { RuntimeUpdatePrompt } from "./components/settings/RuntimeUpdatePrompt.js";
 import { BrowserPanel } from "./components/browser/BrowserPanel.js";
 import { Toaster } from "./components/layout/Toaster.js";
 import { UpdateNotification } from "./components/layout/UpdateNotification.js";
@@ -383,11 +384,15 @@ export function App() {
           )}
         </div>
       </div>
-      {/* Global bottom-right corner: update notification card + toast stack
-          share one fixed column so they stack vertically and never overlap.
-          Both render null when they have nothing to show. */}
+      {/* Global bottom-right corner: update notification card + runtime
+          reminder card + toast stack share one fixed column so they stack
+          vertically and never overlap. All render null when they have
+          nothing to show. */}
       <div className="pointer-events-none fixed bottom-4 right-4 z-[9999] flex flex-col items-end gap-2">
         <UpdateNotification />
+        {/* Non-blocking runtime-update reminder: surfaced once per launch by
+            reloadRuntimes when an installed runtime lags this build's pin. */}
+        <RuntimeUpdatePrompt />
         <Toaster />
       </div>
       {/* Global voice-dictation indicator - floats top-center while any

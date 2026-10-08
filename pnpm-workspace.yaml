@@ -19,7 +19,7 @@ allowBuilds:
   ssh2: true
 
 minimumReleaseAgeExclude:
-  - '@openai/codex@0.153.4-darwin-arm64 || 0.153.4-darwin-x64 || 0.153.4-linux-arm64 || 0.153.4-linux-x64 || 0.153.4-win32-arm64 || 0.153.4-win32-x64 || 0.153.4'
+  - '@openai/codex@0.162.0-darwin-arm64 || 0.162.0-darwin-x64 || 0.162.0-linux-arm64 || 0.162.0-linux-x64 || 0.162.0-win32-arm64 || 0.162.0-win32-x64 || 0.162.0'
   - '@earendil-works/chord@1.0.2'
   - '@earendil-works/pi-agent-core@1.0.2'
   - '@earendil-works/pi-ai@1.0.2'

@@ -504,6 +504,12 @@ export const zh = {
   "settings.runtimes.field.upstream": "上游最新",
   "settings.runtimes.forceInstallHint": "强制安装未适配的上游版本(跳过兼容闸门,风险自担)",
 
+  // ── RuntimeUpdatePrompt(启动时的"运行时可更新"右下角提醒卡片)──
+  "settings.runtimes.updatePromptTitle": "Agent 有可用更新",
+  "settings.runtimes.updatePromptDesc": "Mcode 已升级,以下运行时仍是旧版本,建议更新到与当前应用适配的版本后再继续使用:",
+  "settings.runtimes.updateNow": "立即更新",
+  "settings.runtimes.updateLater": "稍后提醒",
+
   // ── McpPanel ──
   "settings.mcp.title": "MCP 服务器",
   "settings.mcp.desc1": "管理 MCP(Model Context Protocol)server。改动自",

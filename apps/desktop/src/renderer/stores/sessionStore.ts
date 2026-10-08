@@ -176,6 +176,13 @@ function pushToastLite(kind: "info" | "warning" | "error", title: string, body?:
   useToastStore.getState().push({ kind, title, body });
 }
 
+/** Per-launch latch for the runtime-update reminder (see reloadRuntimes):
+ *  the prompt must fire once at startup hydration, not again on every
+ *  re-list (install done/error events and ProviderDropdown both re-run
+ *  reloadRuntimes). Dismissing the dialog means "not again until the next
+ *  app launch". */
+let runtimeUpdatePromptShown = false;
+
 /** Auto-trigger heuristic (P3, triggerMode ask/auto): strong parallel-intent
  *  wording AND task bulk (≥2 list items or a substantial prompt). Kept
  *  deliberately conservative — a false hit in "ask" mode is only a toast,
@@ -1522,6 +1529,12 @@ export interface SessionState {
    *  persisted. Install progress merges in from `runtimes:event` pushes. */
   runtimes: RuntimeAgentState[];
 
+  /** Software-update-style reminder: opened ONCE per app launch by
+   *  `reloadRuntimes` when any agent's active runtime lags this build's
+   *  expected version (the app itself updated; the managed copy under
+   *  userData/runtimes is stale). See RuntimeUpdatePrompt. */
+  runtimeUpdatePromptOpen: boolean;
+
   /** Language-server lifecycle phase per `${workspacePath}::${language}`,
    *  driven by `lsp:event` stateChanged pushes (see LspStateChangedPayload).
    *  The editor toolbar reads it to show a loading pill while a server starts
@@ -2031,6 +2044,8 @@ export interface SessionState {
   /** Re-fetch the agent runtime states (claude/codex/pi) from main. Called
    *  when the settings panel mounts and after install/remove finishes. */
   reloadRuntimes: () => Promise<void>;
+  /** Open/close the runtime-update reminder dialog (RuntimeUpdatePrompt). */
+  setRuntimeUpdatePromptOpen: (open: boolean) => void;
   /** Merge one `runtimes:event` progress payload into `runtimes` (in-flight
    *  progress / done / error) without a full re-list. No-op when the panel
    *  hasn't loaded yet. */
@@ -5342,6 +5357,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   navForwardByProject: {},
   lspLanguages: [] as LspLanguageState[],
   runtimes: [] as RuntimeAgentState[],
+  runtimeUpdatePromptOpen: false,
   lspPhasesByWorkspace: {} as Record<string, { phase: "starting" | "running" | "stopped" | "importing"; error?: string; detail?: string }>,
 
   /** True once `init()` has started, to guard against React StrictMode's
@@ -10956,10 +10972,25 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     try {
       const { runtimes } = await api.runtimes.list();
       set({ runtimes });
+      // Software-update-style reminder: after the APP itself updated, the
+      // managed runtime typically lags its pin. One prompt per launch (see
+      // `runtimeUpdatePromptShown` at module level); while the settings page
+      // is open the runtimes panel already shows the update affordance, so
+      // don't stack a modal on top of it.
+      if (
+        !runtimeUpdatePromptShown &&
+        !get().settingsOpen &&
+        runtimes.some((rt) => rt.updateAvailable && !rt.installing)
+      ) {
+        runtimeUpdatePromptShown = true;
+        set({ runtimeUpdatePromptOpen: true });
+      }
     } catch (err) {
       console.error("reloadRuntimes failed:", err);
     }
   },
+
+  setRuntimeUpdatePromptOpen: (open) => set({ runtimeUpdatePromptOpen: open }),
 
   applyRuntimeProgress: (payload) => {
     const { runtimes } = get();

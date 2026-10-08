@@ -730,6 +730,29 @@ async function handleServerRequest(
     return answerNativeUserInput(p, deps);
   }
 
+  // ── Sandbox escalation request (new in 0.159+; the model asks to widen
+  //  sandbox permissions, e.g. network access under workspace-write). The
+  //  response schema REQUIRES a GrantedPermissionProfile — the old `{}`
+  //  fallback would be an invalid response. Mcode declines by granting
+  //  nothing (0.153 parity: escalation didn't exist, sandboxed commands
+  //  simply failed); surfacing this in the approval card is future work.
+  if (method === "item/permissions/requestApproval") {
+    deps.ctx.log.warn(
+      `codex: declined sandbox permission escalation${typeof p.reason === "string" ? `: ${p.reason}` : ""}`,
+    );
+    return { permissions: { fileSystem: null, network: null } };
+  }
+
+  // ── MCP server elicitation (MCP server asks the user for input mid-tool-
+  //  call). Response REQUIRES `action` — decline is the safe default; Mcode
+  //  has no elicitation form UI yet.
+  if (method === "mcpServer/elicitation/request") {
+    deps.ctx.log.warn(
+      `codex: declined MCP elicitation from server "${typeof p.serverName === "string" ? p.serverName : "?"}"`,
+    );
+    return { action: "decline" };
+  }
+
   // ── Dynamic tool invocations (our registered host tools) ──
   if (method === "item/tool/call") {
     return invokeDynamicTool(p, deps);
