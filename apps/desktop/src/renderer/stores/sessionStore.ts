@@ -970,6 +970,14 @@ export interface SessionState {
    *  renders it beside the streaming spinner so a 10s+ mid-turn stall is
    *  explained instead of looking like a hang. NOT persisted — live feedback. */
   upstreamIssueBySession: Record<string, { cause: string; attempt: number; attempts: number }>;
+  /** Per-session LIVE generation rate (estimated tokens/s over the current
+   *  streaming burst — see the accumulator near deltaBuf). Written by
+   *  flushDeltas while deltas flow; cleared on turn.done / error / interrupt
+   *  / session delete. Consumers hide the readout when the snapshot is stale
+   *  (lastDeltaAt older than the burst-gap threshold) so the number only
+   *  appears while text is actively streaming. NOT persisted — live feedback
+   *  only; the turn-end receipt keeps the authoritative token count. */
+  streamRateBySession: Record<string, StreamRateSnapshot>;
   /** Per-session unread event counter. Incremented in `ingestEvent` whenever a
    *  noteworthy event (turn done, error, blocking approval/question, background
    *  subagent completion) arrives for a session that is NOT the active session.
@@ -3232,6 +3240,9 @@ function dropSessionBuckets(s: SessionState, id: string) {
   delete interruptedBySession[id];
   const upstreamIssueBySession = { ...s.upstreamIssueBySession };
   delete upstreamIssueBySession[id];
+  const streamRateBySession = { ...s.streamRateBySession };
+  delete streamRateBySession[id];
+  clearStreamRate(id);
   // Also drop the hint's decay timer (module-level side effect — idempotent).
   const issueTimer = upstreamIssueDecayTimers.get(id);
   if (issueTimer) {
@@ -3302,6 +3313,7 @@ function dropSessionBuckets(s: SessionState, id: string) {
     turnErrorBySession,
     interruptedBySession,
     upstreamIssueBySession,
+    streamRateBySession,
     unreadBySession,
     todosBySession,
     planBySession,
@@ -4711,6 +4723,83 @@ function appendDelta(entry: DeltaEntry, k: "text" | "thinking", text: string): v
 
 const deltaBuf = new Map<string, DeltaEntry>();
 
+/* ─── Live generation-rate tracking (tokens/s estimate) ───
+ *
+ * The API never reports token counts while a message streams (Anthropic's
+ * `message_delta` carries usage only at message END), so the live "12.5 tok/s"
+ * readout is estimated in the renderer from the text/thinking deltas
+ * themselves. Works identically for every provider — they all emit these two
+ * events. Thinking counts: it is model output just like prose.
+ *
+ * Per-session accumulator, segmented into "bursts" by delta gaps: a pause
+ * longer than STREAM_GAP_RESET_MS (tool execution between two API calls, or a
+ * mid-message stall) starts a fresh window, so the rate reflects what is being
+ * generated RIGHT NOW instead of being diluted by tool time. The snapshot is
+ * written to the store inside flushDeltas (riding the existing rAF batch —
+ * no extra setState cadence) and hidden by consumers once the last delta is
+ * more than STREAM_GAP_RESET_MS old (freshness check against the shared useNow
+ * clock), so a frozen number never lingers beside a long-running tool. */
+export interface StreamRateSnapshot {
+  /** Estimated tokens/second over the current burst window. */
+  tokensPerSec: number;
+  /** Wall-clock ms of the last delta — drives the freshness check. */
+  lastDeltaAt: number;
+}
+
+const STREAM_GAP_RESET_MS = 2000;
+const STREAM_RATE_MIN_WINDOW_MS = 800;
+const STREAM_RATE_MIN_TOKENS = 12;
+/** Exported for the rate chip's freshness check: a snapshot whose last delta
+ *  is older than this is hidden (the stream paused — tool running / waiting),
+ *  mirroring the accumulator's own burst-gap reset. */
+export const STREAM_RATE_STALE_MS = STREAM_GAP_RESET_MS;
+
+/** Rough token estimate for a delta chunk. Claude-family tokenizers average
+ *  ~4 chars/token for Latin scripts; CJK ideographs land at ~1 token/char.
+ *  A display-only approximation — the receipt's per-turn token count remains
+ *  the authoritative figure. */
+function estimateStreamTokens(text: string): number {
+  let cjk = 0;
+  for (let i = 0; i < text.length; i++) {
+    const c = text.charCodeAt(i);
+    if ((c >= 0x2e80 && c <= 0x9fff) || (c >= 0xf900 && c <= 0xfaff) || (c >= 0xff00 && c <= 0xffef)) cjk++;
+  }
+  return cjk + (text.length - cjk) / 4;
+}
+
+type StreamRateAcc = { tokens: number; firstDeltaAt: number; lastDeltaAt: number };
+const streamRateAcc = new Map<string, StreamRateAcc>();
+
+/** Feed one delta into the session's rate accumulator (called per event —
+ *  pure math, no setState; the store read happens at flush time). */
+function noteStreamDelta(sessionId: string, text: string): void {
+  const now = Date.now();
+  const cur = streamRateAcc.get(sessionId);
+  if (!cur || now - cur.lastDeltaAt > STREAM_GAP_RESET_MS) {
+    streamRateAcc.set(sessionId, { tokens: estimateStreamTokens(text), firstDeltaAt: now, lastDeltaAt: now });
+    return;
+  }
+  cur.tokens += estimateStreamTokens(text);
+  cur.lastDeltaAt = now;
+}
+
+/** Compute the displayable rate snapshot for a session, or null while the
+ *  window is too short / token count too small to be meaningful (a one-line
+ *  narration burst would otherwise jitter wildly). */
+function streamRateSnapshot(sessionId: string): StreamRateSnapshot | null {
+  const a = streamRateAcc.get(sessionId);
+  if (!a) return null;
+  const windowMs = a.lastDeltaAt - a.firstDeltaAt;
+  if (windowMs < STREAM_RATE_MIN_WINDOW_MS || a.tokens < STREAM_RATE_MIN_TOKENS) return null;
+  return { tokensPerSec: a.tokens / (windowMs / 1000), lastDeltaAt: a.lastDeltaAt };
+}
+
+/** Drop a session's rate accumulator (turn end / error / session delete) —
+ *  the module-side companion to removing the store bucket entry. */
+function clearStreamRate(sessionId: string): void {
+  streamRateAcc.delete(sessionId);
+}
+
 let flushScheduled = false;
 
 /* ─── Adaptive throttling ───
@@ -4868,7 +4957,20 @@ function flushDeltas(): void {
     // Return a minimal diff — we mutated messagesBySession directly inside the
     // setState callback (Zustand accepts this pattern because setState runs
     // synchronously and can detect the mutation via its proxy).
-    return { messagesBySession: { ...s.messagesBySession } };
+    // The stream-rate snapshot rides the same flush: sessions that received
+    // deltas in this window get their (possibly null — below display
+    // threshold) rate recomputed; others keep their previous value.
+    let streamRateBySession = s.streamRateBySession;
+    for (const sid of bySession.keys()) {
+      if (streamRateBySession === s.streamRateBySession) streamRateBySession = { ...s.streamRateBySession };
+      const snap = streamRateSnapshot(sid);
+      if (snap) streamRateBySession[sid] = snap;
+      else delete streamRateBySession[sid];
+    }
+    return {
+      messagesBySession: { ...s.messagesBySession },
+      ...(streamRateBySession !== s.streamRateBySession ? { streamRateBySession } : {}),
+    };
   });
 }
 
@@ -4969,6 +5071,20 @@ export function selectActiveEnvPath(s: {
     if (sess?.worktreePath) return sess.worktreePath;
   }
   return s.projects.find((p) => p.id === pid)?.path ?? null;
+}
+
+/** Whether the git panel's "changes" sub-tab uses the two-column layout
+ *  (left live-diff stage + right repo list). Mirrors FilesPanel's split
+ *  layout: single display mode (the right pane is always the preview stage)
+ *  or tabs mode with the file preview placed in the sidebar — in both the
+ *  right pane runs wide. In tabs mode with "center" preview placement files
+ *  open in the center tabs and the right pane tends to be resized narrow,
+ *  so the git panel falls back to the classic single-column card list. */
+export function selectGitPanelSplitLayout(s: {
+  displayMode: DisplayMode;
+  tabsFilePreviewPlacement: TabsFilePreviewPlacement;
+}): boolean {
+  return s.displayMode === "single" || s.tabsFilePreviewPlacement === "sidebar";
 }
 
 export const useSessionStore = create<SessionState>((set, get) => ({
@@ -5076,6 +5192,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   interruptedBySession: {},
   turnIncompleteBySession: {},
   upstreamIssueBySession: {},
+  streamRateBySession: {},
   unreadBySession: {},
   isWindowFocused: true,
   claudeInstalled: null,
@@ -5918,6 +6035,27 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           }
           if (Object.keys(patch).length > 0) set(patch);
 
+        }
+
+        // tabs mode + sidebar preview placement: the right pane IS the
+        // preview stage, but the width snapshot above stores the COLLAPSED
+        // width (see schedulePaneWidthPersist) and the expanded flag is
+        // never hydrated — re-expand to preview width so a restart doesn't
+        // squeeze the dual-column FilesPanel into a 250px strip. Mirrors
+        // what setTabsFilePreviewPlacement("sidebar") does on click.
+        if (
+          get().displayMode === "tabs" &&
+          get().tabsFilePreviewPlacement === "sidebar" &&
+          !get().isRightPreviewExpanded
+        ) {
+          const s = get();
+          set({
+            rightWidth: clampRightWidth(
+              Math.max(s.previewRightWidth, 950),
+              centerRightRowWidth(s.leftOpen, s.leftWidthPct),
+            ),
+            isRightPreviewExpanded: true,
+          });
         }
       }
     } catch (err) {
@@ -8827,6 +8965,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           } else {
             deltaBuf.set(key, { sessionId: sid, messageId: e.messageId, segs: [{ k: "text", text: e.text }] });
           }
+          noteStreamDelta(sid, e.text);
           scheduleDeltaFlush();
           // Don't add to `next` — flushDeltas mutates the store directly.
           break;
@@ -8839,6 +8978,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           } else {
             deltaBuf.set(key, { sessionId: sid, messageId: e.messageId, segs: [{ k: "thinking", text: e.text }] });
           }
+          noteStreamDelta(sid, e.text);
           scheduleDeltaFlush();
           break;
         }
@@ -9016,11 +9156,19 @@ export const useSessionStore = create<SessionState>((set, get) => ({
               // flat array - filter down to the affected one.
               pendingApprovals: s.pendingApprovals.filter((p) => p.sessionId !== sid),
               turnFilesBySession: { ...s.turnFilesBySession, [sid]: [] },
+              // Turn errored out — stop the live rate readout with it.
+              streamRateBySession: (() => {
+                if (!s.streamRateBySession[sid]) return s.streamRateBySession;
+                const m = { ...s.streamRateBySession };
+                delete m[sid];
+                return m;
+              })(),
             };
           });
           // Turn over — any live upstream-retry hint is stale (a later retry
           // re-arms it for the next turn).
           clearUpstreamIssue(set, sid);
+          clearStreamRate(sid);
           break;
         }
         case "turn.done": {
@@ -9166,6 +9314,16 @@ export const useSessionStore = create<SessionState>((set, get) => ({
             }
             return {
               runningBySession: { ...s.runningBySession, [sid]: false },
+              // Turn closed — the live generation-rate readout is done (the
+              // receipt's real token count takes over below). Clear both the
+              // bucket and the accumulator so a quick follow-up turn starts a
+              // fresh burst window instead of inheriting this one's tokens.
+              streamRateBySession: (() => {
+                if (!s.streamRateBySession[sid]) return s.streamRateBySession;
+                const m = { ...s.streamRateBySession };
+                delete m[sid];
+                return m;
+              })(),
               // Turn closed - drop the send-time anchor so the synthesized
               // pendingTurn row stops rendering (it keys off isRunning, but
               // clearing this is belt-and-suspenders and keeps the slice tidy
@@ -9196,8 +9354,10 @@ export const useSessionStore = create<SessionState>((set, get) => ({
             };
           });
           // Turn closed — drop any live upstream-retry hint (the channel may
-          // still flap next turn, which re-arms it).
+          // still flap next turn, which re-arms it). Also reset the rate
+          // accumulator (module-side companion to the bucket cleanup above).
           clearUpstreamIssue(set, sid);
+          clearStreamRate(sid);
           break;
         }
         default:
@@ -9801,32 +9961,33 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       if (placement === "sidebar") {
         return {
           tabsFilePreviewPlacement: "sidebar",
-          ...(activeFile
-            ? {
-                rightOpen: true,
-                rightPanelTab: "files" as const,
-                normalRightWidth: s.isRightPreviewExpanded ? s.normalRightWidth : s.rightWidth,
-                rightWidth: clampRightWidth(
-                  Math.max(s.previewRightWidth, 950),
-                  centerRightRowWidth(s.leftOpen, s.leftWidthPct),
-                ),
-                isRightPreviewExpanded: true,
-                centerTabFocus: "chat" as const,
-              }
-            : {}),
+          // The sidebar placement IS the preview stage: open the right pane
+          // on the files tab at preview width on EVERY switch — even before
+          // any file is active — so the dual-column layout has room from the
+          // first click instead of a squeezed 250px strip.
+          rightOpen: true,
+          rightPanelTab: "files" as const,
+          normalRightWidth: s.isRightPreviewExpanded ? s.normalRightWidth : s.rightWidth,
+          rightWidth: clampRightWidth(
+            Math.max(s.previewRightWidth, 950),
+            centerRightRowWidth(s.leftOpen, s.leftWidthPct),
+          ),
+          isRightPreviewExpanded: true,
+          ...(activeFile ? { centerTabFocus: "chat" as const } : {}),
         };
       } else {
         return {
           tabsFilePreviewPlacement: "center",
-          ...(activeFile && s.isRightPreviewExpanded
+          // Files open in the center now: the right pane no longer hosts the
+          // preview stage, so shrink it back to its regular width — also
+          // when no file happens to be active (e.g. all were closed).
+          ...(s.isRightPreviewExpanded
             ? {
                 rightWidth: s.normalRightWidth,
                 isRightPreviewExpanded: false,
-                centerTabFocus: "editor" as const,
               }
-            : activeFile
-              ? { centerTabFocus: "editor" as const }
-              : {}),
+            : {}),
+          ...(activeFile ? { centerTabFocus: "editor" as const } : {}),
         };
       }
     });

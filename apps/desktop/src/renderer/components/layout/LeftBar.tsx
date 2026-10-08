@@ -46,6 +46,7 @@ import {
   IconFocus,
   IconLayoutSidebarLeftExpand,
   IconTerminal,
+  IconListCheck,
 } from "@renderer/lib/icons.js";
 import { useTheme, applyThemeClass } from "@renderer/lib/theme.js";
 import { isMac } from "@renderer/lib/platform.js";
@@ -357,6 +358,98 @@ function LeftBarBase({
     | null
   >(null);
 
+  // ── Bulk session management (批量管理). Entered from the project context
+  // menu; while active, session rows swap their hover actions for checkboxes
+  // (running sessions are locked out), the project header gets a select-all
+  // box, and the footer shows the action bar. Transient by design — selection
+  // lives only as long as the mode; nothing persists.
+  const [bulkMode, setBulkMode] = useState(false);
+  const [bulkSelected, setBulkSelected] = useState<Set<string>>(() => new Set());
+  const [bulkConfirmOpen, setBulkConfirmOpen] = useState(false);
+
+  const toggleBulkSession = useCallback((id: string) => {
+    setBulkSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
+
+  /** Select-all for one project. Paginated projects load every remaining
+   * page first (the store merges + flips hasMore synchronously per await), so
+   * the box always means ALL of the project's sessions, not the visible
+   * window. Toggling off only deselects that project's rows. */
+  const toggleBulkProject = useCallback(async (projectId: string) => {
+    let guard = 0;
+    while (useSessionStore.getState().sessionsHasMoreByProject[projectId] && guard < 200) {
+      await useSessionStore.getState().loadMoreSessions(projectId);
+      guard++;
+    }
+    const ids = (useSessionStore.getState().sessionsByProject[projectId] ?? [])
+      .filter((s) => s.kind !== "automation")
+      .map((s) => s.id);
+    setBulkSelected((prev) => {
+      const next = new Set(prev);
+      const allIn = ids.length > 0 && ids.every((id) => next.has(id));
+      if (allIn) ids.forEach((id) => next.delete(id));
+      else ids.forEach((id) => next.add(id));
+      return next;
+    });
+  }, []);
+
+  /** Footer "全选": every loaded session across ALL projects (paginated
+   * projects load out first, same as the per-project box). Running sessions
+   * are excluded — they're not deletable in this mode. */
+  const bulkSelectAll = useCallback(async () => {
+    for (const p of useSessionStore.getState().projects) {
+      if (p.archived) continue;
+      let guard = 0;
+      while (useSessionStore.getState().sessionsHasMoreByProject[p.id] && guard < 200) {
+        await useSessionStore.getState().loadMoreSessions(p.id);
+        guard++;
+      }
+    }
+    const st = useSessionStore.getState();
+    const ids = st.projects
+      .filter((p) => !p.archived)
+      .flatMap((p) => (st.sessionsByProject[p.id] ?? []).filter((s) => s.kind !== "automation" && !st.runningBySession[s.id]))
+      .map((s) => s.id);
+    // Already all-in → the same click clears (a toggle, mirroring the
+    // per-project box).
+    setBulkSelected((prev) => (prev.size >= ids.length && ids.every((id) => prev.has(id)) ? new Set() : new Set(ids)));
+  }, []);
+
+  const exitBulkMode = useCallback(() => {
+    setBulkMode(false);
+    setBulkSelected(new Set());
+    setBulkConfirmOpen(false);
+  }, []);
+
+  /** Confirmed bulk delete — sequential awaits: each deleteSession runs the
+   * full single-delete state surgery (runtime dispose happens main-side,
+   * stream-cache patch, mobile echo), and serializing keeps the immutable
+   * updates from interleaving. Exits the mode + toasts the count after. */
+  const bulkDeleteSelected = useCallback(async () => {
+    const ids = [...bulkSelected];
+    setBulkConfirmOpen(false);
+    let deleted = 0;
+    for (const id of ids) {
+      try {
+        await deleteSession(id);
+        deleted++;
+      } catch {
+        // Keep going — one stuck row (e.g. deleted from another client
+        // mid-batch) must not abort the rest. The toast reports the real
+        // count.
+      }
+    }
+    exitBulkMode();
+    if (deleted > 0) {
+      useToastStore.getState().push({ kind: "info", title: t("layout.bulkDeleted", { n: deleted }) });
+    }
+  }, [bulkSelected, deleteSession, exitBulkMode, t]);
+
   // ── Project grouping state (left-bar "grouped" view).
   // `projectCtxMenu` is the right-click menu on a project row; the submenu of
   // existing groups + "新建分组" + "移出分组" lives inside it. `groupDialog`
@@ -580,6 +673,10 @@ function LeftBarBase({
           onDeleteSession={(s) => void deleteSession(s.id)}
           onTogglePinSession={(s) => void setSessionPinned(s.id, !s.pinnedAt)}
           onNewWorktreeHere={(s) => void startSession(s.projectId, { worktreePath: s.worktreePath ?? undefined })}
+          bulkMode={bulkMode}
+          bulkSelected={bulkSelected}
+          onToggleBulkSession={toggleBulkSession}
+          onToggleBulkProject={(projectId) => void toggleBulkProject(projectId)}
           worktreeNames={worktreeNames}
           expandedWorktrees={expandedWorktrees}
           onToggleWorktree={(path) => toggleWorktreeExpanded(path)}
@@ -602,7 +699,7 @@ function LeftBarBase({
       sessionsByProject, sessionsHasMoreByProject, sessionsTotalByProject,
       expandedProjects, expandedWorktrees, worktreeNames,
       activeProjectId, activeSessionId, activeSessionProjectId,
-      runningBySession,
+      runningBySession, bulkMode, bulkSelected, toggleBulkSession, toggleBulkProject,
       toggleProjectExpanded, toggleWorktreeExpanded, startSession, loadMoreSessions, openTab,
       archiveSession, deleteSession, setSessionPinned, registerNode,
     ],
@@ -825,6 +922,9 @@ function LeftBarBase({
                     }
                     registerNode={registerNode}
                     onContext={(x, y) => setCtxMenu({ session: s, x, y })}
+                    bulkMode={bulkMode}
+                    bulkChecked={bulkSelected.has(s.id)}
+                    onBulkToggle={() => toggleBulkSession(s.id)}
                   />
                 ))}
               </ul>
@@ -952,12 +1052,42 @@ function LeftBarBase({
         </div>
       )}
 
+      {/* Bulk-management action bar — replaces the settings footer while the
+          mode is on, so the destructive action can't scroll out of view.
+          「已选 N | 全选 | 删除 | 退出」per the bulk-management spec. Delete
+          is disabled with nothing selected. */}
+      {bulkMode && (
+        <div className="mt-2 flex shrink-0 items-center gap-1 rounded-md border border-edge bg-surface-muted/40 px-2 py-1.5 [font-size:var(--right-panel-font-size)]">
+          <span className="min-w-0 flex-1 truncate text-content-muted" title={t("layout.bulkSelectedCount", { n: bulkSelected.size })}>
+            {t("layout.bulkSelectedCount", { n: bulkSelected.size })}
+          </span>
+          <Button variant="ghost" size="sm" onClick={() => void bulkSelectAll()}>
+            {t("layout.bulkSelectAll")}
+          </Button>
+          <Button variant="outline" size="sm" onClick={exitBulkMode}>
+            {t("layout.bulkExit")}
+          </Button>
+          <Button
+            variant="primary"
+            size="sm"
+            disabled={bulkSelected.size === 0}
+            className="bg-danger hover:bg-danger/90"
+            onClick={() => setBulkConfirmOpen(true)}
+          >
+            <IconTrash size={12} />
+            {t("common.delete")}
+          </Button>
+        </div>
+      )}
+
       {/* Settings + locate + theme quick-toggle — entry moved here from the
           (removed) TopBar header. Docked to the bottom of the left rail so
           it's always reachable regardless of how far the project list
           scrolls. The two compact square buttons right of 设置: locate
           (scroll the project tree to the active session, centering it) and
-          theme (sun while dark → light, moon while light → dark). */}
+          theme (sun while dark → light, moon while light → dark). Hidden in
+          bulk mode — the action bar above takes the slot. */}
+      {!bulkMode && (
       <div className="mt-2 flex shrink-0 items-center gap-1 border-t border-edge pt-1.5">
         <button
           onClick={() => setSettingsOpen(true)}
@@ -1008,6 +1138,7 @@ function LeftBarBase({
           </button>
         )}
       </div>
+      )}
 
       {/* Right-click context menu for session rows. Rendered once at the bar
           level and positioned at the cursor via a virtual anchor. */}
@@ -1135,6 +1266,10 @@ function LeftBarBase({
           void api.shell.openPath({ path: p.path });
           setProjectCtxMenu(null);
         }}
+        onBulkManage={() => {
+          setProjectCtxMenu(null);
+          setBulkMode(true);
+        }}
         onScanPiSessions={(p) => {
           setProjectCtxMenu(null);
           void (async () => {
@@ -1223,6 +1358,19 @@ function LeftBarBase({
           }
         }}
       />
+
+      {/* Bulk-delete confirmation — the count is the whole point (one glance
+          must answer "how much am I about to lose"). Running sessions were
+          already excluded at selection time; the note says so. */}
+      <ConfirmDialog
+        open={bulkConfirmOpen}
+        danger
+        title={t("layout.bulkDeleteTitle")}
+        description={t("layout.bulkDeleteDesc", { n: bulkSelected.size })}
+        confirmText={t("common.delete")}
+        onOpenChange={(open) => { if (!open) setBulkConfirmOpen(false); }}
+        onConfirm={() => { void bulkDeleteSelected(); }}
+      />
     </div>
   );
 }
@@ -1280,6 +1428,15 @@ interface ProjectNodeProps {
   onContextSession: (session: Session, x: number, y: number) => void;
   /** Open the right-click context menu for this project row. */
   onContextProject: (x: number, y: number) => void;
+  /** Bulk-management mode (see LeftBarBase): checkboxes replace hover
+   *  actions on session rows, and the project header shows a select-all box. */
+  bulkMode: boolean;
+  /** Currently checked session ids (shared across projects). */
+  bulkSelected: Set<string>;
+  /** Toggle one session's checkbox. */
+  onToggleBulkSession: (sessionId: string) => void;
+  /** Toggle the project-level select-all (loads remaining pages first). */
+  onToggleBulkProject: (projectId: string) => void;
   /** dnd-kit sortable injection: ref for the root <li>, applied by the
    *  SortableProjectNode wrapper so this row participates in drag-to-reorder.
    *  Undefined when rendered outside a SortableContext. */
@@ -1301,6 +1458,7 @@ function ProjectNode(props: ProjectNodeProps) {
     runningBySession, unreadBySession,
     onToggleExpand, onNewSession, onLoadMore, onSelectSession,
     onDelete, onArchiveSession, onDeleteSession, onTogglePinSession,
+    bulkMode, bulkSelected, onToggleBulkSession, onToggleBulkProject,
     onNewWorktreeHere, worktreeNames, expandedWorktrees,
     onToggleWorktree, onNewSessionInWorktree, onRemoveWorktree, onMergeWorktree, onContextWorktree,
     registerNode, onContextSession, onContextProject,
@@ -1358,6 +1516,9 @@ function ProjectNode(props: ProjectNodeProps) {
       hideWorktreeBadge={inWorktreeGroup}
       registerNode={registerNode}
       onContext={(x, y) => onContextSession(s, x, y)}
+      bulkMode={bulkMode}
+      bulkChecked={bulkSelected.has(s.id)}
+      onBulkToggle={() => onToggleBulkSession(s.id)}
     />
   );
 
@@ -1420,22 +1581,60 @@ function ProjectNode(props: ProjectNodeProps) {
           <span className="truncate">{project.name}</span>
         </button>
 
-        {/* New session in this project */}
-        <button
-          onClick={onNewSession}
-          className={cn(
-            "flex shrink-0 items-center rounded px-1 text-content-subtle opacity-0 transition-colors",
-            "hover:text-accent group-hover:opacity-100",
-          )}
-          title={t("layout.newSessionHere")}
-        >
-          <IconPlus size={12} />
-        </button>
+        {/* Right edge: the "+" new-session button, swapped for the project
+            select-all box while bulk mode is on. The box is tri-state-aware
+            visually: checked = every (deletable) row in, a dash = partial. */}
+        {bulkMode ? (
+          (() => {
+            const deletable = sessions.filter((s) => s.kind !== "automation" && !runningBySession[s.id]);
+            const checked = deletable.length > 0 && deletable.every((s) => bulkSelected.has(s.id));
+            const partial = !checked && sessions.some((s) => bulkSelected.has(s.id));
+            return (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onToggleBulkProject(project.id);
+                }}
+                disabled={deletable.length === 0}
+                className={cn(
+                  "flex h-4 w-4 shrink-0 items-center justify-center rounded border transition-colors",
+                  checked || partial
+                    ? "border-accent bg-accent text-white"
+                    : "border-edge bg-surface hover:border-accent/60",
+                  deletable.length === 0 && "cursor-not-allowed opacity-40",
+                )}
+                title={t("layout.bulkSelectProject", { name: project.name })}
+              >
+                {checked ? (
+                  <IconCheck size={11} />
+                ) : partial ? (
+                  <span className="h-[2px] w-2 rounded-full bg-white" />
+                ) : null}
+              </button>
+            );
+          })()
+        ) : (
+          /* New session in this project */
+          <button
+            onClick={onNewSession}
+            className={cn(
+              "flex shrink-0 items-center rounded px-1 text-content-subtle opacity-0 transition-colors",
+              "hover:text-accent group-hover:opacity-100",
+            )}
+            title={t("layout.newSessionHere")}
+          >
+            <IconPlus size={12} />
+          </button>
+        )}
 
-        {/* Delete — inline on hover (projects cannot be archived, only removed). */}
-        <HoverIconButton onClick={onDelete} title={t("common.delete")} danger>
-          <IconTrash size={13} />
-        </HoverIconButton>
+        {/* Delete — inline on hover (projects cannot be archived, only
+            removed). Hidden in bulk mode: per-project deletion is exactly
+            what bulk mode replaces. */}
+        {!bulkMode && (
+          <HoverIconButton onClick={onDelete} title={t("common.delete")} danger>
+            <IconTrash size={13} />
+          </HoverIconButton>
+        )}
       </div>
 
       {expanded && (
@@ -1508,6 +1707,7 @@ function SessionRowIcon({ providerId, className }: { providerId: string; classNa
 
 function SessionRow({
   session, active, isRunning, unreadCount, onSelect, onTogglePin, onArchive, onDelete, onNewWorktreeSession, hideWorktreeBadge, registerNode, onContext,
+  bulkMode, bulkChecked, onBulkToggle,
 }: {
   session: Session;
   active: boolean;
@@ -1531,6 +1731,13 @@ function SessionRow({
   hideWorktreeBadge?: boolean;
   registerNode: (id: string, el: HTMLLIElement | null) => void;
   onContext: (x: number, y: number) => void;
+  /** Bulk-management mode: the row click toggles the checkbox instead of
+   *  opening the session, and hover actions are suppressed. */
+  bulkMode: boolean;
+  /** Whether this row's checkbox is on. */
+  bulkChecked: boolean;
+  /** Checkbox toggle (row click routes here in bulk mode). */
+  onBulkToggle: () => void;
 }) {
   const { t } = useI18n();
   const [pendingConfirm, setPendingConfirm] = useState<null | "archive" | "delete">(null);
@@ -1547,14 +1754,23 @@ function SessionRow({
   // (the title gets the full width) and swaps to the archive/delete action
   // buttons on hover.
   const [hovered, setHovered] = useState(false);
+  // Bulk mode: a running session is locked out (must be stopped first —
+  // deleting mid-turn would fight the runtime's own teardown). Rendered
+  // dimmed with a hint instead of hidden: the user should see WHY it's
+  // excluded, not wonder where the row went.
+  const bulkLocked = bulkMode && isRunning;
   const idle = pendingConfirm === null && !isRunning;
   const hasUnread = unreadCount > 0;
   // On hover the action buttons take precedence over the unread badge (so the
   // user can archive/delete without the badge getting in the way).
-  const showActions = idle && hovered;
+  const showActions = idle && hovered && !bulkMode;
   const showUnreadBadge = idle && !hovered && hasUnread;
 
   const handleRowClick = () => {
+    if (bulkMode) {
+      if (!bulkLocked) onBulkToggle();
+      return;
+    }
     setPendingConfirm(null);
     onSelect();
   };
@@ -1565,36 +1781,68 @@ function SessionRow({
       onClick={handleRowClick}
       onMouseEnter={() => {
         setHovered(true);
-        // Warm the message bucket on hover — by the time the click lands
-        // the history fetch is usually done (or in flight), so the center
-        // pane swaps in with content instead of a skeleton frame.
-        void useSessionStore.getState().prefetchSessionMessages(session.id);
+        if (!bulkMode) {
+          // Warm the message bucket on hover — by the time the click lands
+          // the history fetch is usually done (or in flight), so the center
+          // pane swaps in with content instead of a skeleton frame.
+          void useSessionStore.getState().prefetchSessionMessages(session.id);
+        }
       }}
       onMouseLeave={() => setHovered(false)}
       onContextMenu={(e) => {
         // Suppress the menu while an inline confirm is mid-flight, otherwise
         // right-clicking the confirm buttons would lose the pending state.
-        if (pendingConfirm) return;
+        if (pendingConfirm || bulkMode) return;
         e.preventDefault();
         onContext(e.clientX, e.clientY);
       }}
       className={cn(
         "group flex cursor-pointer items-center gap-1 rounded-md px-1 py-1 [font-size:var(--right-panel-font-size)]",
-        active
-          ? "bg-surface-hover text-content shadow-sm ring-1 ring-inset ring-accent/35"
-          : "text-content-muted hover:bg-surface-hover/60",
+        bulkMode && bulkLocked && "cursor-not-allowed opacity-45",
+        bulkMode && bulkChecked
+          ? "bg-accent/10 text-content ring-1 ring-inset ring-accent/40"
+          : active
+            ? "bg-surface-hover text-content shadow-sm ring-1 ring-inset ring-accent/35"
+            : "text-content-muted hover:bg-surface-hover/60",
       )}
-      title={`${session.title}${ownTask ? `\n${describeSchedule(ownTask.schedule)}${taskNextLine(ownTask) ? ` · ${taskNextLine(ownTask)}` : ""}` : ""}\n${formatFullTime(session.updatedAt)}`}
+      title={
+        bulkLocked
+          ? t("layout.bulkRunningHint")
+          : `${session.title}${ownTask ? `\n${describeSchedule(ownTask.schedule)}${taskNextLine(ownTask) ? ` · ${taskNextLine(ownTask)}` : ""}` : ""}\n${formatFullTime(session.updatedAt)}`
+      }
     >
-      {/* Pinned marker — always-visible badge at the very LEFT edge (before
-          the provider icon) so a pinned thread reads as pinned at a glance,
-          independent of the hover actions / unread badge on the right edge. */}
-      {isPinned && (
-        <IconPinnedFilled
-          size={12}
-          className="shrink-0 text-accent/80"
-          aria-label={t("layout.pinned")}
-        />
+      {/* Bulk checkbox — replaces the pinned marker's slot while the mode is
+          on; running sessions render it disabled. */}
+      {bulkMode ? (
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            if (!bulkLocked) onBulkToggle();
+          }}
+          disabled={bulkLocked}
+          aria-checked={bulkChecked}
+          role="checkbox"
+          className={cn(
+            "flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded border transition-colors",
+            bulkLocked && "cursor-not-allowed opacity-40",
+            bulkChecked
+              ? "border-accent bg-accent text-white"
+              : "border-edge bg-surface hover:border-accent/60",
+          )}
+        >
+          {bulkChecked && <IconCheck size={10} />}
+        </button>
+      ) : (
+        /* Pinned marker — always-visible badge at the very LEFT edge (before
+            the provider icon) so a pinned thread reads as pinned at a glance,
+            independent of the hover actions / unread badge on the right edge. */
+        isPinned && (
+          <IconPinnedFilled
+            size={12}
+            className="shrink-0 text-accent/80"
+            aria-label={t("layout.pinned")}
+          />
+        )
       )}
 
       {/* 定时任务会话:accent 实心时钟替代 provider 图标(停用=灰)。 */}
@@ -2190,12 +2438,14 @@ interface ProjectContextMenuProps {
   onRemoveFromGroup: (projectId: string) => void;
   onOpenFolder: (project: Project) => void;
   onScanPiSessions: (project: Project) => void;
+  /** Enter the bulk-management mode (checkboxes + action bar). */
+  onBulkManage: () => void;
 }
 
 function ProjectContextMenu({
   ctxMenu, knownGroups, onClose,
   onTogglePin, onRename, onMoveToGroup, onCreateGroup, onRemoveFromGroup, onOpenFolder,
-  onScanPiSessions,
+  onScanPiSessions, onBulkManage,
 }: ProjectContextMenuProps) {
   const { t } = useI18n();
   const anchor = useCursorAnchor(ctxMenu);
@@ -2292,6 +2542,10 @@ function ProjectContextMenu({
             >
               <IconTerminal size={14} className="shrink-0" />
               {t("layout.piScanSessions")}
+            </Menu.Item>
+            <Menu.Item onClick={onBulkManage} className={itemClass}>
+              <IconListCheck size={14} className="shrink-0" />
+              {t("layout.bulkManage")}
             </Menu.Item>
           </Menu.Popup>
         </Menu.Positioner>

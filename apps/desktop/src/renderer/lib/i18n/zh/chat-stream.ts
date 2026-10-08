@@ -25,6 +25,10 @@ export const zh = {
   "chatStream.tokensUsed": "{n} tokens",
   "chatStream.filesChangedShort": "{n} 文件",
 
+  // ── 流式生成速率（运行中台头的实时读数，估算值）──
+  "chatStream.streamRate": "{n} tok/s",
+  "chatStream.streamRateHint": "按流式输出估算的生成速度（近似值，含思考）",
+
   // ── RenderErrorBoundary: per-segment render-failure fallback ──
   "chatStream.renderError": "此内容渲染出错，已跳过（其余内容不受影响）",
 
@@ -135,6 +139,10 @@ export const zh = {
   "chatStream.activity.deck.shortAgents": "{n} 代理",
   "chatStream.activity.deck.shortPlans": "{n} 计划",
   "chatStream.activity.deck.shortBookmarks": "{n} 书签",
+  "chatStream.activity.deck.shortSideChats": "{n} 子会话",
+  "chatStream.activity.deck.activeCount": "{n} 活跃",
+  "chatStream.activity.deck.plansHistory": "计划历史",
+  "chatStream.activity.deck.bookmarksWidget": "高亮书签",
   "chatStream.activity.deck.viewFull": "查看完整明细",
   "chatStream.activity.deck.sched": "定时任务",
   "chatStream.activity.deck.schedSubtitle": "{total} 个排期 · {running} 个执行中",
@@ -154,6 +162,7 @@ export const zh = {
   "chatStream.activity.node.plans": "计划",
   "chatStream.activity.node.bookmarks": "书签",
   "chatStream.activity.node.sched": "定时",
+  "chatStream.activity.node.sidechats": "子会话",
   // 分组标题与筛选 chip
   "chatStream.activity.groupRunning": "运行中",
   "chatStream.activity.groupSettled": "已结束",
@@ -173,6 +182,12 @@ export const zh = {
   "chatStream.activity.subagentsFooter": "条形为该代理的真实起止，运行中的延伸到「现在」",
   "chatStream.activity.noDescription": "(无描述)",
   "chatStream.activity.viewSubagent": "查看子代理详情",
+  // 子会话面板
+  "chatStream.activity.sidechatsSubRunning": "{running} 个进行中 · 共 {n} 个",
+  "chatStream.activity.sidechatsSubIdle": "共 {n} 个",
+  "chatStream.activity.sidechatsUnit": "个",
+  "chatStream.activity.sidechatsFooter": "点击在右侧「问答」面板打开对应子会话",
+  "chatStream.activity.openSideChat": "打开子会话",
   // 任务面板
   "chatStream.activity.tasksSubtitle": "{done}/{total} 已完成 · 剩余 {rest} 项",
   "chatStream.activity.tasksDoneSuffix": "已完成",

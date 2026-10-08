@@ -25,6 +25,12 @@ export const SessionRepo = {
     const s = sessions.get(id);
     if (s) s.title = title;
   },
+  updateSettings(id: string, patch: Partial<Pick<Session, "model" | "effort" | "permissionMode" | "providerId">>): void {
+    const s = sessions.get(id);
+    if (!s) return;
+    Object.assign(s, patch);
+    s.updatedAt = Date.now();
+  },
   touch(id: string): void {
     const s = sessions.get(id);
     if (s) s.updatedAt = Date.now();
@@ -39,6 +45,14 @@ export const MessageRepo = {
     for (const [id, m] of messages) {
       if (m.sessionId === sessionId && id.startsWith(prefix)) messages.delete(id);
     }
+  },
+  listBySession(sessionId: string): { messages: MessageRecord[]; hasMore: boolean } {
+    const out: MessageRecord[] = [];
+    for (const m of messages.values()) {
+      if (m.sessionId === sessionId) out.push(m);
+    }
+    out.sort((a, b) => a.createdAt - b.createdAt || (a.id < b.id ? -1 : 1));
+    return { messages: out, hasMore: false };
   },
 };
 

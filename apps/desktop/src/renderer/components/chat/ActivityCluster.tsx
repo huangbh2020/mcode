@@ -33,10 +33,10 @@ import { cn } from "@renderer/lib/cn.js";
 import { useI18n } from "@renderer/lib/i18n/index.js";
 import { isElectron } from "@renderer/lib/platform.js";
 import type { SubagentSnapshot, BashTaskSnapshot, ServiceSnapshot } from "@contracts/runtime";
-import type { SessionBookmark } from "@contracts/session";
+import type { Session, SessionBookmark } from "@contracts/session";
 import type { TodoItem } from "@renderer/stores/sessionStore.js";
 import { ActivitySheet } from "@renderer/components/mobile/ActivitySheet.js";
-import { IconBookmark, IconCheck, IconChevronDown, IconClipboard } from "@renderer/lib/icons.js";
+import { IconBookmark, IconCheck, IconChevronDown, IconClipboard, IconMessages, PiRobot } from "@renderer/lib/icons.js";
 import { ActivityConsole, hasNodeData } from "./ActivityConsole.js";
 import {
   primaryKind,
@@ -54,6 +54,9 @@ export function ActivityCluster({
   bookmarks,
   bashTasks,
   services,
+  sideChats,
+  sideChatRunningIds,
+  onOpenSideChat,
   automations = [],
   waiting,
   isBookmarkStale,
@@ -75,6 +78,12 @@ export function ActivityCluster({
   bookmarks: SessionBookmark[];
   bashTasks?: BashTaskSnapshot[];
   services?: ServiceSnapshot[];
+  /** Quick-ask threads parented to this session — their mere presence keeps
+   *  the cluster visible (any activity type must surface the icon). */
+  sideChats?: Session[];
+  /** Ids of side chats with a live turn. */
+  sideChatRunningIds?: ReadonlySet<string>;
+  onOpenSideChat?: (s: Session) => void;
   automations?: Automation[];
   waiting?: boolean;
   isBookmarkStale?: (b: SessionBookmark) => boolean;
@@ -127,6 +136,7 @@ export function ActivityCluster({
 
   const commands = bashTasks ?? [];
   const serviceList = services ?? [];
+  const sideChatList = sideChats ?? [];
   const inFlightSched = automations.filter(isInFlightAutomation);
   const hasAny =
     subagents.length > 0 ||
@@ -135,12 +145,14 @@ export function ActivityCluster({
     bookmarks.length > 0 ||
     commands.length > 0 ||
     serviceList.length > 0 ||
+    sideChatList.length > 0 ||
     automations.length > 0;
   if (!hasAny) return null;
 
   const running = subagents.filter((a) => a.status === "running");
   const failed = subagents.filter((a) => a.status === "failed");
   const runningCommands = commands.filter((c) => c.status === "running");
+  const runningSideChats = sideChatList.filter((s) => sideChatRunningIds?.has(s.id));
   const done = todos.filter((x) => x.status === "completed").length;
   const pct = todos.length > 0 ? Math.round((done / todos.length) * 100) : 0;
   const primary = primaryKind(subagents, todos, planBlocks, bookmarks, commands, serviceList);
@@ -149,7 +161,6 @@ export function ActivityCluster({
   // reason the bar exists at all. A failed agent while others still run keeps
   // the running copy (per the design doc's rule) — the console lists it.
   const attn = !!waiting || (running.length === 0 && failed.length > 0);
-  const expanded = running.length > 0 || runningCommands.length > 0 || serviceList.length > 0 || inFlightSched.length > 0 || attn;
   const attnText = waiting
     ? t("chatStream.activity.cluster.waiting")
     : t("chatStream.activity.cluster.failed", { n: failed.length });
@@ -159,8 +170,16 @@ export function ActivityCluster({
     else setSheetNode((prev) => (prev === kind ? null : kind));
   };
 
-  const isAllSettled = running.length === 0 && runningCommands.length === 0 && serviceList.length === 0 && inFlightSched.length === 0 && !attn;
-  const hasLiveRunning = running.length > 0 || runningCommands.length > 0 || serviceList.length > 0 || inFlightSched.length > 0 || attn;
+  // hasLiveRunning deliberately includes attn so a pending question with
+  // satellite data still grows the satellite island (the attention branch owns
+  // the main island's copy either way).
+  const hasLiveRunning =
+    running.length > 0 ||
+    runningCommands.length > 0 ||
+    serviceList.length > 0 ||
+    inFlightSched.length > 0 ||
+    runningSideChats.length > 0 ||
+    attn;
   const hasSatelliteData = todos.length > 0 || planBlocks.length > 0;
   const isSplit = hasLiveRunning && hasSatelliteData;
 
@@ -209,8 +228,11 @@ export function ActivityCluster({
               className="text-warning/80 transition-transform duration-200 group-hover:translate-y-0.5"
             />
           </div>
-        ) : isSplit ? (
-          /* 2. Split State: Main Island focuses on live running core */
+        ) : hasLiveRunning ? (
+          /* 2. Live core — the SAME per-type copy whether or not a satellite
+             island trails (todos/plans). Previously the no-satellite case
+             collapsed every live type into a generic "任务" label, which is
+             why Task-tool agents read as invisible while they ran. */
           <div className="flex items-center gap-2">
             {serviceList.length > 0 ? (
               <div className="flex items-center gap-1.5">
@@ -242,6 +264,13 @@ export function ActivityCluster({
                   {t("chatStream.activity.deck.shortAgents", { n: running.length })}
                 </span>
               </div>
+            ) : runningSideChats.length > 0 ? (
+              <div className="flex items-center gap-1.5">
+                <span className="apple-live-dot bg-indigo-500 dark:bg-indigo-400" />
+                <span className="whitespace-nowrap text-[11.5px] font-bold text-indigo-600 dark:text-indigo-300">
+                  {t("chatStream.activity.deck.shortSideChats", { n: runningSideChats.length })}
+                </span>
+              </div>
             ) : (
               <div className="flex items-center gap-1.5">
                 <span className="apple-live-dot bg-sky-400" />
@@ -267,21 +296,11 @@ export function ActivityCluster({
               className="text-slate-400 group-hover:text-slate-800 dark:text-white/60 dark:group-hover:text-white transition-transform duration-200 group-hover:translate-y-0.5"
             />
           </div>
-        ) : !isAllSettled ? (
-          /* 3. Single Merged Island with Live tasks */
-          <div className="flex items-center gap-2">
-            <span className="apple-live-dot bg-accent" />
-            <span className="text-[12px] font-bold text-slate-900 dark:text-white">
-              {todos.length > 0 ? `${done}/${todos.length}` : t("chatStream.activity.node.tasks")}
-            </span>
-            <IconChevronDown
-              size={11}
-              strokeWidth={2.4}
-              className="text-slate-400 group-hover:text-slate-800 dark:text-white/60 dark:group-hover:text-white transition-transform duration-200 group-hover:translate-y-0.5"
-            />
-          </div>
         ) : (
-          /* 4. Ambient / All Settled State (Single Merged Pebble Island) */
+          /* 4. Ambient / All Settled State (Single Merged Pebble Island).
+             Pecking order: todos → subagents → side chats → plans →
+             bookmarks — every roster the console tracks can be the reason
+             the pebble says something other than "全部已就绪". */
           <div className="flex items-center gap-2 text-slate-900 dark:text-white">
             {/* Emblem Icon Dock */}
             {todos.length > 0 && pct === 100 ? (
@@ -314,6 +333,14 @@ export function ActivityCluster({
                   />
                 </svg>
               </span>
+            ) : subagents.length > 0 ? (
+              <span className="grid h-[20px] w-[20px] shrink-0 place-items-center rounded-full bg-warning/15 text-warning shadow-sm">
+                <PiRobot size={11} />
+              </span>
+            ) : sideChatList.length > 0 ? (
+              <span className="grid h-[20px] w-[20px] shrink-0 place-items-center rounded-full bg-indigo-500/15 text-indigo-600 dark:text-indigo-300 shadow-sm">
+                <IconMessages size={11} strokeWidth={2.2} />
+              </span>
             ) : planBlocks.length > 0 ? (
               <span className="grid h-[20px] w-[20px] shrink-0 place-items-center rounded-full bg-indigo-500/20 text-indigo-600 dark:text-indigo-300 shadow-sm">
                 <IconClipboard size={11} strokeWidth={2.2} />
@@ -338,6 +365,14 @@ export function ActivityCluster({
                   {pct === 100 ? t("chatStream.activity.groupCompleted") : t("chatStream.activity.node.tasks")}
                 </span>
               </div>
+            ) : subagents.length > 0 ? (
+              <span className="whitespace-nowrap text-[11.5px] font-semibold tracking-tight text-slate-900 dark:text-white">
+                {t("chatStream.activity.deck.shortAgents", { n: subagents.length })}
+              </span>
+            ) : sideChatList.length > 0 ? (
+              <span className="whitespace-nowrap text-[11.5px] font-semibold tracking-tight text-slate-900 dark:text-white">
+                {t("chatStream.activity.deck.shortSideChats", { n: sideChatList.length })}
+              </span>
             ) : planBlocks.length > 0 ? (
               <span className="text-[11.5px] font-semibold tracking-tight text-slate-900 dark:text-white">
                 {t("chatStream.activity.deck.shortPlans", { n: planBlocks.length })}
@@ -352,15 +387,21 @@ export function ActivityCluster({
               </span>
             )}
 
-            {/* Secondary plans tag alongside settled todos */}
-            {todos.length > 0 && planBlocks.length > 0 && (
-              <>
-                <span aria-hidden className="h-1 w-1 rounded-full bg-slate-300 dark:bg-white/30" />
-                <span className="text-[11px] font-medium text-slate-500 dark:text-white/70">
-                  {t("chatStream.activity.deck.shortPlans", { n: planBlocks.length })}
-                </span>
-              </>
-            )}
+            {/* Secondary tag alongside settled todos — plans, then agents,
+                then side chats (first non-empty wins). */}
+            {todos.length > 0 &&
+              (planBlocks.length > 0 || subagents.length > 0 || sideChatList.length > 0) && (
+                <>
+                  <span aria-hidden className="h-1 w-1 rounded-full bg-slate-300 dark:bg-white/30" />
+                  <span className="whitespace-nowrap text-[11px] font-medium text-slate-500 dark:text-white/70">
+                    {planBlocks.length > 0
+                      ? t("chatStream.activity.deck.shortPlans", { n: planBlocks.length })
+                      : subagents.length > 0
+                        ? t("chatStream.activity.deck.shortAgents", { n: subagents.length })
+                        : t("chatStream.activity.deck.shortSideChats", { n: sideChatList.length })}
+                  </span>
+                </>
+              )}
 
             <IconChevronDown
               size={11}
@@ -448,6 +489,8 @@ export function ActivityCluster({
             onStopBashTask={onStopBashTask}
             services={serviceList}
             onStopService={onStopService}
+            sideChats={sideChatList}
+            sideChatRunningIds={sideChatRunningIds}
             isBookmarkStale={isBookmarkStale}
             tabs={tabs}
             onTabChange={setTab}
@@ -487,6 +530,9 @@ export function ActivityCluster({
             services={serviceList}
             onStopService={onStopService}
             onOpenService={onOpenService}
+            sideChats={sideChatList}
+            sideChatRunningIds={sideChatRunningIds}
+            onOpenSideChat={onOpenSideChat}
             automations={automations}
             onOpenSchedPanel={onOpenSchedPanel}
             onNewSched={onNewSched}

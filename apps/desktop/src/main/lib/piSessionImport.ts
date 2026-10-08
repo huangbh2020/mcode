@@ -86,10 +86,16 @@ interface PiEntry {
     toolCallId?: string;
     isError?: boolean;
     details?: unknown;
+    /** Assistant messages record the model that produced them. */
+    provider?: string;
+    model?: string;
   };
   name?: string;
   tokensBefore?: number;
   estimatedTokensAfter?: number;
+  /** model_change entries carry the switch target. */
+  provider?: string;
+  modelId?: string;
 }
 
 /** Minimal structural mirror of the renderer's Block union — just the kinds
@@ -113,12 +119,24 @@ type ImportBlock =
 
 /** Per-file import state (settings key `pi.sessionImports`). `entryCount` is
  *  the raw JSONL line count already accounted for — the boundary between
- *  "imported / renderer-persisted" history and new terminal growth. */
+ *  "imported / renderer-persisted" history and new terminal growth. `v` is
+ *  the {@link IMPORT_VERSION} the entry was last written at; entries without
+ *  it predate the versioning and get a one-time re-import on the next scan. */
 interface RegistryFileEntry {
   sessionId: string;
   entryCount: number;
   sizeBytes: number;
+  v?: number;
 }
+
+/** Registry shape version — bump when the import output changes in a way
+ *  existing rows must be RE-IMPORTED to pick up. v2 (2026-10-08): turnMeta
+ *  wrapper on each turn's opener assistant row (drives the renderer's turn
+ *  header + process collapse) and the picker-shaped model slot on the session
+ *  row. Only sessions with `piimp-` rows re-import; native Mcode-created pi
+ *  sessions (renderer-persisted rows) must not — re-importing their terminal
+ *  entries would duplicate the transcript. */
+const IMPORT_VERSION = 2;
 
 interface PiImportRegistry {
   files: Record<string, RegistryFileEntry>;
@@ -245,6 +263,38 @@ function firstTextOfUserMessage(content: unknown): string | null {
   return null;
 }
 
+/** The model this session last ran on, as a picker-shaped "provider/modelId"
+ * id. Pi has no default model — the composer's send guard (resolveSendModel)
+ * blocks a pi session whose model slot is "default", so an imported row MUST
+ * carry the model the terminal actually used or the session is view-only.
+ * Prefers the last assistant message's recorded provider/model (what truly
+ * produced replies); falls back to the last model_change entry (a switch with
+ * no reply after it). Null when the file records neither. */
+function lastModelOf(entries: PiEntry[]): string | null {
+  let fromAssistant: string | null = null;
+  let fromChange: string | null = null;
+  for (const entry of entries) {
+    if (entry.type === "model_change") {
+      if (typeof entry.provider === "string" && typeof entry.modelId === "string" && entry.provider.trim() && entry.modelId.trim()) {
+        fromChange = `${entry.provider.trim()}/${entry.modelId.trim()}`;
+      }
+      continue;
+    }
+    if (entry.type !== "message") continue;
+    const msg = entry.message;
+    if (
+      msg?.role === "assistant" &&
+      typeof msg.provider === "string" &&
+      typeof msg.model === "string" &&
+      msg.provider.trim() &&
+      msg.model.trim()
+    ) {
+      fromAssistant = `${msg.provider.trim()}/${msg.model.trim()}`;
+    }
+  }
+  return fromAssistant ?? fromChange;
+}
+
 interface ConvertResult {
   records: MessageRecord[];
   /** session_info display name if one appeared (last wins). */
@@ -288,10 +338,51 @@ function convertEntries(
   const unresolved: string[] = [];
   let seq = 0;
 
+  // Turn grouping — mirrors what the live store does for native sessions.
+  // The renderer folds a turn's process blocks into a collapsed TurnPanel
+  // with a model/time/duration/steps header, keyed on the OPENER assistant
+  // message carrying `turnMeta { startedAt, endedAt, model }` (ChatPane's
+  // groupMessagesForRender: `isOpener = !!m.turnMeta`). Without it every
+  // assistant row renders as a standalone expanded card — the "imported
+  // sessions don't collapse" bug. A user message starts a turn; the FIRST
+  // assistant record after it carries the meta (startedAt = its own ts —
+  // native semantics are "first assistant block arrival", the user bubble
+  // isn't part of the duration), endedAt = the turn's last assistant ts,
+  // model = the last assistant message's recorded "provider/modelId".
+  let openTurn: { recordIdx: number; startedAt: number; lastAt: number; model: string | null } | null = null;
+
+  const closeTurn = (): void => {
+    if (!openTurn) return;
+    const rec = records[openTurn.recordIdx];
+    if (rec) {
+      rec.content = {
+        blocks: rec.content,
+        turnMeta: {
+          startedAt: openTurn.startedAt,
+          endedAt: openTurn.lastAt,
+          ...(openTurn.model ? { model: openTurn.model } : {}),
+        },
+      };
+    }
+    openTurn = null;
+  };
+
   const pushRecord = (role: MessageRecord["role"], blocks: ImportBlock[], createdAt: number, entry: PiEntry): void => {
     const id = entry.id ? `${MESSAGE_ID_PREFIX}${piSessionId}-${entry.id}` : `${MESSAGE_ID_PREFIX}${piSessionId}-#${seq}`;
     seq++;
     records.push({ id, sessionId: `${SESSION_ID_PREFIX}${piSessionId}`, role, content: blocks, createdAt });
+    if (role !== "assistant") return;
+    const m = entry.message;
+    const model =
+      typeof m?.provider === "string" && typeof m?.model === "string" && m.provider.trim() && m.model.trim()
+        ? `${m.provider.trim()}/${m.model.trim()}`
+        : null;
+    if (!openTurn) {
+      openTurn = { recordIdx: records.length - 1, startedAt: createdAt, lastAt: createdAt, model };
+    } else {
+      openTurn.lastAt = createdAt;
+      if (model) openTurn.model = model;
+    }
   };
 
   for (const entry of entries) {
@@ -336,6 +427,8 @@ function convertEntries(
       }
       if (blocks.length === 0) continue;
       if (!firstUserText) firstUserText = firstTextOfUserMessage(content);
+      // A user message starts a new turn — seal the previous one's meta.
+      closeTurn();
       pushRecord("user", blocks, createdAt, entry);
       continue;
     }
@@ -413,6 +506,8 @@ function convertEntries(
     }
   }
 
+  // Seal the trailing turn (assistant records with no following user message).
+  closeTurn();
   for (const id of pending.keys()) unresolved.push(id);
   return { records, infoName, firstUserText, unresolvedToolCalls: unresolved };
 }
@@ -432,7 +527,7 @@ function deriveTitle(infoName: string | null, firstUserText: string | null, head
 }
 
 /** Build the plain chat session row for a pi session file. */
-function buildSessionRow(guiSessionId: string, projectId: string, filePath: string, title: string, createdAt: number, modifiedAt: number): Session {
+function buildSessionRow(guiSessionId: string, projectId: string, filePath: string, title: string, createdAt: number, modifiedAt: number, model: string): Session {
   return {
     id: guiSessionId,
     projectId,
@@ -445,7 +540,9 @@ function buildSessionRow(guiSessionId: string, projectId: string, filePath: stri
     parentSessionId: null,
     title,
     status: "idle",
-    model: "default",
+    // The picker-shaped model id the terminal ran on ("provider/modelId") —
+    // "default" would trip the pi send guard and make the session view-only.
+    model,
     effort: "default",
     permissionMode: "default",
     customModelId: null,
@@ -496,7 +593,7 @@ function syncSessionFile(
     // baseline for — i.e. Mcode CREATED this session (or a previous DB lost
     // the registry). Baseline at the current file state without importing:
     // the renderer already persisted every display row those turns produced.
-    reg.files[filePath] = { sessionId: guiSessionId, entryCount: entries.length, sizeBytes: stat.size };
+    reg.files[filePath] = { sessionId: guiSessionId, entryCount: entries.length, sizeBytes: stat.size, v: IMPORT_VERSION };
     return "baseline";
   }
 
@@ -520,10 +617,13 @@ function syncSessionFile(
     const converted = convertEntries(piSessionId, bodyEntries);
     if (converted.records.length === 0) return "unchanged";
     const title = deriveTitle(converted.infoName, converted.firstUserText, createdAt);
-    const row = buildSessionRow(guiSessionId, projectId, filePath, title, createdAt, stat.mtimeMs);
+    const row = buildSessionRow(
+      guiSessionId, projectId, filePath, title, createdAt, stat.mtimeMs,
+      lastModelOf(bodyEntries) ?? "default",
+    );
     SessionRepo.create(row);
     MessageRepo.upsertMany(converted.records);
-    reg.files[filePath] = { sessionId: guiSessionId, entryCount: entries.length, sizeBytes: stat.size };
+    reg.files[filePath] = { sessionId: guiSessionId, entryCount: entries.length, sizeBytes: stat.size, v: IMPORT_VERSION };
     broadcastSessionChanged(row);
     log.info(
       `pi import: imported session ${piSessionId} (${converted.records.length} messages) from ${filePath}`,
@@ -531,16 +631,57 @@ function syncSessionFile(
     return "imported";
   }
 
-  // Known session. Shrink (Pi rewrote the file: migration/branch) → rebuild
+  // Known session.
+  const prev = known;
+
+  // One-time migration: a registry entry written by an older import shape
+  // (no {@link IMPORT_VERSION} stamp) gets its `piimp-` rows re-imported so
+  // they pick up the current output (v2: turnMeta wrapper → the renderer's
+  // turn header + process collapse). Native Mcode-created pi sessions have
+  // no `piimp-` rows — they only get the stamp, since re-importing their
+  // terminal entries would duplicate the renderer-persisted transcript.
+  // Silent (no import/update count): the toast reports NEW sessions, not
+  // re-shapes; the log line is the audit trail.
+  if (prev.v !== IMPORT_VERSION) {
+    const hasImportedRows = MessageRepo.listBySession(guiSessionId).messages.some((m) =>
+      m.id.startsWith(MESSAGE_ID_PREFIX),
+    );
+    if (hasImportedRows) {
+      const converted = convertEntries(piSessionId, bodyEntries);
+      MessageRepo.deleteByIdPrefix(guiSessionId, MESSAGE_ID_PREFIX);
+      MessageRepo.upsertMany(converted.records);
+      if (converted.infoName) SessionRepo.updateTitle(guiSessionId, converted.infoName);
+      log.info(
+        `pi import: re-imported ${piSessionId} (${converted.records.length} messages) at the current import shape (v${IMPORT_VERSION})`,
+      );
+    }
+    reg.files[filePath] = { sessionId: guiSessionId, entryCount: entries.length, sizeBytes: stat.size, v: IMPORT_VERSION };
+    return "baseline";
+  }
+
+  // Self-heal rows imported before the model slot was populated (or whose
+  // file recorded no model then): a pi row sitting on "default" can never
+  // send — the composer's guard demands an explicit model. One-time per row:
+  // after the patch lands the check is a no-op string compare.
+  if (existing.model === "default") {
+    const model = lastModelOf(bodyEntries);
+    if (model) {
+      SessionRepo.updateSettings(guiSessionId, { model });
+      const healed = SessionRepo.get(guiSessionId);
+      if (healed) broadcastSessionChanged(healed);
+      log.info(`pi import: healed model slot for ${piSessionId} → ${model}`);
+    }
+  }
+
+  // Shrink (Pi rewrote the file: migration/branch) → rebuild
   // the imported rows from scratch; renderer-persisted rows survive (they
   // belong to turns that really ran).
-  const prev = known;
   if (stat.size < prev.sizeBytes || entries.length < prev.entryCount) {
     const converted = convertEntries(piSessionId, bodyEntries);
     MessageRepo.deleteByIdPrefix(guiSessionId, MESSAGE_ID_PREFIX);
     MessageRepo.upsertMany(converted.records);
     if (converted.infoName) SessionRepo.updateTitle(guiSessionId, converted.infoName);
-    reg.files[filePath] = { sessionId: guiSessionId, entryCount: entries.length, sizeBytes: stat.size };
+    reg.files[filePath] = { sessionId: guiSessionId, entryCount: entries.length, sizeBytes: stat.size, v: IMPORT_VERSION };
     log.info(
       `pi import: rebuilt session ${piSessionId} (${converted.records.length} messages) after file rewrite: ${filePath}`,
     );
@@ -561,7 +702,7 @@ function syncSessionFile(
         );
       }
     }
-    reg.files[filePath] = { sessionId: guiSessionId, entryCount: entries.length, sizeBytes: stat.size };
+    reg.files[filePath] = { sessionId: guiSessionId, entryCount: entries.length, sizeBytes: stat.size, v: IMPORT_VERSION };
     return converted.records.length > 0 ? "updated" : "baseline";
   }
 
@@ -694,7 +835,11 @@ function bumpBaseline(guiSessionId: string): void {
   const reg = loadRegistry();
   const prev = reg.files[filePath];
   if (prev && prev.entryCount >= entries.length && prev.sizeBytes >= stat.size) return;
-  reg.files[filePath] = { sessionId: guiSessionId, entryCount: entries.length, sizeBytes: stat.size };
+  // v stamped: everything up to here was persisted by the live renderer
+  // (whose rows already carry the current shape) — a version-less write
+  // would make the next scan treat the session as a stale import and
+  // "migrate" it back over the renderer's rows.
+  reg.files[filePath] = { sessionId: guiSessionId, entryCount: entries.length, sizeBytes: stat.size, v: IMPORT_VERSION };
   saveRegistry(reg);
 }
 

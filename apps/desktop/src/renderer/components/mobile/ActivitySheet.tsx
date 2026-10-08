@@ -19,7 +19,7 @@
  */
 import { createPortal } from "react-dom";
 import type { SubagentSnapshot, BashTaskSnapshot, ServiceSnapshot } from "@contracts/runtime";
-import type { SessionBookmark } from "@contracts/session";
+import type { Session, SessionBookmark } from "@contracts/session";
 import type { TodoItem } from "@renderer/stores/sessionStore.js";
 import { useI18n } from "@renderer/lib/i18n/index.js";
 import { ActivityConsole } from "@renderer/components/chat/ActivityConsole.js";
@@ -42,6 +42,8 @@ export function ActivitySheet({
   onStopBashTask,
   services,
   onStopService,
+  sideChats,
+  sideChatRunningIds,
 }: {
   node: ActivityNodeKey;
   /** Switch kind — the node strip inside the console calls this. */
@@ -61,6 +63,11 @@ export function ActivitySheet({
    *  shell has no in-app browser. */
   services?: ServiceSnapshot[];
   onStopService?: (service: ServiceSnapshot) => void;
+  /** Quick-ask threads parented to this session (the「子会话」node). List-only
+   *  on the phone shell — there is no right panel to open them in. */
+  sideChats?: Session[];
+  /** Ids of side chats with a live turn (drives the running dot). */
+  sideChatRunningIds?: ReadonlySet<string>;
   isBookmarkStale?: (b: SessionBookmark) => boolean;
   tabs: ActivityTabs;
   onTabChange: (node: ActivityNodeKey, tab: string) => void;
@@ -106,6 +113,8 @@ export function ActivitySheet({
             onStopBashTask={onStopBashTask}
             services={services}
             onStopService={onStopService}
+            sideChats={sideChats}
+            sideChatRunningIds={sideChatRunningIds}
             isBookmarkStale={isBookmarkStale}
             tabs={tabs}
             onTabChange={onTabChange}

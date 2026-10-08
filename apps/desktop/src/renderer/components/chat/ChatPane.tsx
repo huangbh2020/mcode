@@ -27,7 +27,7 @@ import {
 } from "@renderer/lib/icons.js";
 import { useCursorAnchor } from "@renderer/hooks/useCursorAnchor.js";
 import { isElectron } from "@renderer/lib/platform.js";
-import { useSessionStore, resolveTurnModel, EMPTY_MESSAGES, EMPTY_TODOS, EMPTY_SUBAGENTS, EMPTY_CHAT_QUEUE, EMPTY_ELEMENT_QUEUE, EMPTY_PROMPT_QUEUE, EMPTY_BOOKMARKS, EMPTY_USAGE, EMPTY_BASH_TASKS, EMPTY_SERVICES, type Block, type ChatMessage, type TodoItem, type TurnMeta, type QueuedPrompt } from "@renderer/stores/sessionStore.js";
+import { useSessionStore, resolveTurnModel, EMPTY_MESSAGES, EMPTY_TODOS, EMPTY_SUBAGENTS, EMPTY_CHAT_QUEUE, EMPTY_ELEMENT_QUEUE, EMPTY_PROMPT_QUEUE, EMPTY_BOOKMARKS, EMPTY_USAGE, EMPTY_BASH_TASKS, EMPTY_SERVICES, STREAM_RATE_STALE_MS, type Block, type ChatMessage, type TodoItem, type TurnMeta, type QueuedPrompt, type StreamRateSnapshot } from "@renderer/stores/sessionStore.js";
 import { useToastStore } from "@renderer/stores/toastStore.js";
 import { api } from "@renderer/lib/api.js";
 import { findNormalizedTextRange, highlightRange } from "@renderer/lib/textFind.js";
@@ -35,7 +35,7 @@ import { useI18n } from "@renderer/lib/i18n/index.js";
 import { useNow } from "@renderer/hooks/useNow.js";
 import { useComposerRowFit } from "@renderer/hooks/useComposerRowFit.js";
 import type { SubagentSnapshot } from "@contracts/runtime";
-import type { SessionBookmark } from "@contracts/session";
+import type { Session, SessionBookmark } from "@contracts/session";
 import type { FileSearchEntry } from "@contracts/ipc";
 import { prepareImageForSend } from "@renderer/lib/imageResize.js";
 import type { PromptImage } from "@renderer/stores/sessionStore.js";
@@ -97,6 +97,10 @@ import { LegendList, type LegendListRef } from "@legendapp/list/react";
 /** 第一条消息与顶部(标签条 / 标题栏)之间的留白。作为滚动内容的顶部
  *  padding,停在顶部时可见,向下滚动后随内容滚走。 */
 const MESSAGE_LIST_TOP_PADDING = 10;
+
+/** Stable empty roster for the side-chats selector (per the store rule:
+ * selectors must return stable references or subscriptions loop). */
+const EMPTY_SIDE_SESSIONS: Session[] = [];
 
 /** Picker trigger chars → picker kind. CJK soft keyboards often emit
  *  full-width variants (／ U+FF0F, ＠ U+FF20) for the slash/at keys, so
@@ -211,6 +215,35 @@ function fmtDuration(ms: number): string {
   const h = Math.floor(m / 60);
   const mm = m % 60;
   return `${h}h ${String(mm).padStart(2, "0")}m`;
+}
+
+/** Live generation-rate readout ("45.2 tok/s") pinned to the RIGHT end of
+ *  the composer-top chips row (the 自动编排 / 定时任务 bar). Estimated
+ *  renderer-side from text/thinking deltas (the API only reports real token
+ *  counts at message END — see the accumulator in sessionStore); thinking
+ *  counts as output. Renders nothing while the snapshot is stale (no delta
+ *  for >2s: a tool is running or the model is waiting) or when no burst is
+ *  measurable yet, so the number only appears while text actively streams —
+ *  ml-auto keeps the slot at the row's right edge without disturbing the
+ *  left-side chips when it pops in/out. Ticks against the app-wide useNow
+ *  clock for the freshness check. */
+function StreamRateChip({ rate }: { rate: StreamRateSnapshot | null }) {
+  const { t } = useI18n();
+  // Hook order: useNow must run before the conditional return.
+  const now = useNow();
+  if (!rate || now - rate.lastDeltaAt > STREAM_RATE_STALE_MS) return null;
+  const v = rate.tokensPerSec;
+  return (
+    <span
+      // --chat-fs-xs: the chat meta-line tier (same as the turn stat rows) —
+      // tracks the Settings → 字号 choice instead of a hardcoded px, so the
+      // readout scales with the rest of the chat chrome.
+      className="ml-auto shrink-0 [font-size:var(--chat-fs-xs)] tabular-nums text-content-subtle"
+      title={t("chatStream.streamRateHint")}
+    >
+      {t("chatStream.streamRate", { n: v >= 100 ? String(Math.round(v)) : v.toFixed(1) })}
+    </span>
+  );
 }
 
 /** Per-turn stat row shown ABOVE the first assistant message of a turn:
@@ -1453,6 +1486,13 @@ function ChatPaneForSession({
   const usageHistory = useSessionStore(
     (s) => s.usageHistoryBySession[sessionId] ?? EMPTY_USAGE,
   );
+  // Live generation rate (estimated tokens/s) for the composer chips row's
+  // right end. Rides the same flush cadence as the streamed content (written
+  // by flushDeltas), so subscribing here adds no extra render pressure; the
+  // chip hides it unless fresh deltas are flowing.
+  const streamRate: StreamRateSnapshot | null = useSessionStore(
+    (s) => s.streamRateBySession[sessionId] ?? null,
+  );
   // Provider of this session — decides whether the records' token counters are
   // per-turn (Claude/Codex) or session-cumulative (Pi). See turnTokens.ts.
   const sessionProviderId = useSessionStore((s) => {
@@ -1570,6 +1610,33 @@ function ChatPaneForSession({
   const loadAutomations = useSessionStore((s) => s.loadAutomations);
   const openSchedPanel = useSessionStore((s) => s.openSchedPanel);
   const setTaskScheduleEditorOpen = useSessionStore((s) => s.setTaskScheduleEditorOpen);
+  // Side chats parented to THIS session — the capsule's「子会话」node. The
+  // bucket normally fills when the right panel's ask tab mounts, but the
+  // capsule must reflect them without that, so this pane hydrates on mount
+  // too (cheap, idempotent, races benignly with the panel's own refresh).
+  const hydrateSideChats = useSessionStore((s) => s.hydrateSideChats);
+  const sideChats = useSessionStore(
+    (s) => s.sideChatsByParent[sessionId] ?? EMPTY_SIDE_SESSIONS,
+  );
+  // Primitive "which side chats have a live turn" signature — a string keeps
+  // the subscription stable (a fresh Set per store write would loop), the Set
+  // is then derived in a memo.
+  const sideChatRunningKey = useSessionStore((s) =>
+    (s.sideChatsByParent[sessionId] ?? EMPTY_SIDE_SESSIONS)
+      .map((x) => (s.runningBySession[x.id] ? "1" : "0"))
+      .join(""),
+  );
+  const sideChatRunningIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (let i = 0; i < sideChats.length && i < sideChatRunningKey.length; i++) {
+      if (sideChatRunningKey[i] === "1") ids.add(sideChats[i].id);
+    }
+    return ids;
+  }, [sideChats, sideChatRunningKey]);
+
+  useEffect(() => {
+    void hydrateSideChats(sessionId);
+  }, [sessionId, hydrateSideChats]);
 
   useEffect(() => {
     if (!automationsLoaded) void loadAutomations();
@@ -1588,6 +1655,7 @@ function ChatPaneForSession({
     bookmarks.length > 0 ||
     bashTasks.length > 0 ||
     services.length > 0 ||
+    sideChats.length > 0 ||
     hasSessionSched ||
     hasInFlightSched;
   const addBookmark = useSessionStore((s) => s.addBookmark);
@@ -3979,6 +4047,18 @@ function ChatPaneForSession({
           services={services}
           onStopService={(service) => void stopService(sessionId, service)}
           onOpenService={(service) => openUrlInBrowser(`http://localhost:${service.port}`)}
+          sideChats={sideChats}
+          sideChatRunningIds={sideChatRunningIds}
+          // The side panel lists the ACTIVE session's side chats — if this
+          // pane is a background tab, activate it first so the panel's bucket
+          // and the clicked row line up (imperative reads keep this pane free
+          // of activeSessionId subscriptions, per its design note).
+          onOpenSideChat={(sc) => {
+            const st = useSessionStore.getState();
+            if (st.activeSessionId !== sessionId) void st.openTab(sessionId);
+            st.openSideChatPanel();
+            void st.selectSideChat(sc.id);
+          }}
           automations={automations}
           onOpenSchedPanel={() => openSchedPanel(sessionId)}
           onNewSched={() => setTaskScheduleEditorOpen(sessionId, true)}
@@ -4128,11 +4208,13 @@ function ChatPaneForSession({
               sessions only, hidden when there's <2 projects) then the
               working-environment picker. Both are quiet text triggers
               OUTSIDE the composer card; each hides itself once the
-              conversation starts. */}
+              conversation starts. Far RIGHT: the live generation-rate
+              readout (estimated tokens/s while text actively streams). */}
           <div className={cn("flex items-center gap-1 px-1 pb-1", hideComposer && "hidden")}>
             <SessionDirectoryChip sessionId={sessionId} />
             <WorktreeModeChip sessionId={sessionId} />
             <OrchComposerChips sessionId={sessionId} />
+            <StreamRateChip rate={streamRate} />
           </div>
           <div
             ref={composerCardRef}

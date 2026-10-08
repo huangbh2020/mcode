@@ -13,7 +13,7 @@ import type { SubagentSnapshot, BashTaskSnapshot, ServiceSnapshot } from "@contr
 import type { Block, TodoItem } from "@renderer/stores/sessionStore.js";
 import type { SessionBookmark } from "@contracts/session";
 import type { MessageId } from "@renderer/lib/i18n/index.js";
-import { IconBookmark, IconClipboard, IconClock, IconLayoutGrid, IconListDetails, IconServer, IconTerminal2, PiRobot } from "@renderer/lib/icons.js";
+import { IconBookmark, IconClipboard, IconClock, IconLayoutGrid, IconListDetails, IconMessages, IconServer, IconTerminal2, PiRobot } from "@renderer/lib/icons.js";
 import type { ComponentType } from "react";
 
 /** A `kind: "plan"` block - the frozen per-turn plan in the message stream. */
@@ -25,12 +25,13 @@ export type Translate = (key: MessageId, params?: Record<string, string | number
 
 /* ── Rail geometry ──────────────────────────────────────────────────── */
 
-export type ActivityNodeKey = "overview" | "services" | "commands" | "subagents" | "tasks" | "sched" | "plans" | "bookmarks";
+export type ActivityNodeKey = "overview" | "services" | "commands" | "subagents" | "sidechats" | "tasks" | "sched" | "plans" | "bookmarks";
 export const RAIL_NODE_ORDER: readonly ActivityNodeKey[] = [
   "overview",
   "services",
   "commands",
   "subagents",
+  "sidechats",
   "tasks",
   "sched",
   "plans",
@@ -62,6 +63,11 @@ export const NODE_META: Record<
     ico: PiRobot,
     labelKey: "chatStream.activity.node.subagents",
     icoCls: "bg-warning/15 text-warning",
+  },
+  sidechats: {
+    ico: IconMessages,
+    labelKey: "chatStream.activity.node.sidechats",
+    icoCls: "bg-indigo-500/15 text-indigo-600 dark:text-indigo-300",
   },
   commands: {
     ico: IconTerminal2,
@@ -292,6 +298,7 @@ export function useActivityTabs(): {
     tasks: "all",
     sched: "all",
     subagents: "all",
+    sidechats: "all",
     commands: "all",
     services: "all",
     plans: "all",

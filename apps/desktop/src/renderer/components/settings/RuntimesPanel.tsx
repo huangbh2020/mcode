@@ -441,6 +441,24 @@ function RuntimeRow({
               {formatBytes(state.diskBytes)}
             </DetailRow>
           )}
+          {check?.verdict === "untested" && check.latestVersion && (
+            <DetailRow label={t("settings.runtimes.field.upstream")}>
+              <span className="font-mono">v{check.latestVersion}</span>
+              <button
+                type="button"
+                disabled={installing}
+                onClick={() => {
+                  const v = check.latestVersion;
+                  if (v && confirm(t("settings.runtimes.untestedConfirm", { v }))) void doInstallVersion(v, true);
+                }}
+                className="ml-2 flex shrink-0 items-center gap-0.5 rounded px-1 py-0.5 text-[0.92em] text-content-subtle hover:bg-surface-hover hover:text-danger disabled:opacity-50"
+                title={t("settings.runtimes.forceInstallHint")}
+              >
+                <IconAlertTriangle size={11} />
+                {t("settings.runtimes.forceInstall", { v: check.latestVersion })}
+              </button>
+            </DetailRow>
+          )}
           {activePath !== null && (
             <DetailRow label={t("settings.runtimes.field.path")}>
               <span className="block min-w-0 flex-1 truncate font-mono text-content-muted" title={activePath}>
@@ -545,15 +563,14 @@ function CheckVerdictBanner({
           ? t("settings.runtimes.verdict.registryMissing")
           : t("settings.runtimes.verdict.registryError");
       } else {
+        // Informational only — NO update button. A runtime version only
+        // benefits the user after THIS app build has been adapted to it
+        // (new-SDK features need bridge code; drift can break existing
+        // chains). The author greenlights a version by adding it to the
+        // compat list, flipping this banner to the "ok" verdict with a real
+        // button. Force-installing stays available as the tucked-away
+        // escape hatch in the expanded details.
         text = t("settings.runtimes.verdict.untested", { v });
-        action = {
-          label: t("settings.runtimes.updateTo", { v }),
-          // First attempt runs the main-side compat gates; only a gate
-          // rejection offers the force retry below.
-          onClick: () => {
-            if (confirm(t("settings.runtimes.untestedConfirm", { v }))) onUpdate(v, false);
-          },
-        };
       }
       break;
     case "blocked": {

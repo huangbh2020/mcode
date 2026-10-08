@@ -265,7 +265,20 @@ export class PiAgentSdkProvider implements AgentProvider {
       // common case: the extension still loads, it just connects nothing.
       collectPiMcpConfig(req.cwd),
     ]);
-    const mcpFactory = buildPiMcpExtension(sdk.createMcpExtension, piMcpConfig);
+    // Managed runtimes older than 1.0.2 (0.8x installs predating the SDK
+    // bump) don't export createMcpExtension — the loader still serves them
+    // when they import cleanly. Degrade to an MCP-less turn instead of
+    // dying with "createExtension is not a function"; the user upgrades the
+    // runtime in Settings → Agent to get MCP back.
+    const mcpSupported = typeof sdk.createMcpExtension === "function";
+    const mcpFactory = mcpSupported
+      ? buildPiMcpExtension(sdk.createMcpExtension, piMcpConfig)
+      : null;
+    if (!mcpSupported) {
+      ctx.log.warn(
+        "pi: runtime has no MCP extension API (pre-1.0.2 install?) — MCP servers disabled for this turn; upgrade the Pi runtime in Settings → Agent",
+      );
+    }
     const skillAllowNames = req.skills && req.skills.length > 0 ? req.skills : undefined;
     const mcodeExtension = createMcodeExtension({
       ctx,
@@ -291,7 +304,7 @@ export class PiAgentSdkProvider implements AgentProvider {
           cwd: req.cwd,
           allowNames: skillAllowNames,
           extraSkillPaths: await getEnabledPluginSkillRoots(),
-          extensionFactories: [mcpFactory, childExtension],
+          extensionFactories: [...(mcpFactory ? [mcpFactory] : []), childExtension],
         }),
     });
     if (piMcpConfig.errors.length > 0) {
@@ -316,7 +329,7 @@ export class PiAgentSdkProvider implements AgentProvider {
       // MCP extension first (connects servers + registers mcp__* tools),
       // mcode second (approval guard covers BOTH — tool_call fires for all
       // tools regardless of which extension registered them).
-      extensionFactories: [mcpFactory, mcodeExtension],
+      extensionFactories: [...(mcpFactory ? [mcpFactory] : []), mcodeExtension],
     });
 
     // customTools override built-ins by name in AgentSession's definition

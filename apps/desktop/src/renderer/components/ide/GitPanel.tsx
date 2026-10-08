@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { api } from "@renderer/lib/api.js";
 import { cn } from "@renderer/lib/cn.js";
-import { useSessionStore, selectActiveEnvPath } from "@renderer/stores/sessionStore.js";
+import { useSessionStore, selectGitPanelSplitLayout } from "@renderer/stores/sessionStore.js";
 import type { GitRepo } from "@contracts/ipc";
 import { GitRepoCard } from "./GitRepoCard.js";
 import { GitHistoryView } from "./GitHistoryView.js";
@@ -34,6 +34,7 @@ export function GitPanel() {
   const adjustGitDiffSplitPct = useSessionStore((s) => s.adjustGitDiffSplitPct);
   const resetGitDiffSplitPct = useSessionStore((s) => s.resetGitDiffSplitPct);
   const containerRef = useRef<HTMLDivElement>(null);
+  const isSplitLayout = useSessionStore(selectGitPanelSplitLayout);
 
   const handleSplitResize = (deltaPx: number) => {
     const el = containerRef.current;
@@ -147,34 +148,47 @@ export function GitPanel() {
       </div>
 
       {subTab === "changes" ? (
-        <div ref={containerRef} className="flex min-h-0 flex-1 w-full overflow-hidden">
-          {/* Left column: Live Diff Stage */}
-          <div
-            className="flex min-h-0 min-w-0 flex-col overflow-hidden bg-surface"
-            style={{ flexGrow: 0, flexBasis: `${gitDiffSplitPct}%` }}
-          >
-            <GitDiffPreviewPane />
+        isSplitLayout ? (
+          <div ref={containerRef} className="flex min-h-0 flex-1 w-full overflow-hidden">
+            {/* Left column: Live Diff Stage */}
+            <div
+              className="flex min-h-0 min-w-0 flex-col overflow-hidden bg-surface"
+              style={{ flexGrow: 0, flexBasis: `${gitDiffSplitPct}%` }}
+            >
+              <GitDiffPreviewPane />
+            </div>
+
+            {/* Draggable Divider */}
+            <Divider
+              orientation="vertical"
+              onResize={handleSplitResize}
+              onDoubleClick={resetGitDiffSplitPct}
+            />
+
+            {/* Right column: Multiple Repos List */}
+            <div
+              className="flex min-h-0 min-w-0 flex-col overflow-y-auto border-l border-edge bg-surface p-2"
+              style={{ flexGrow: 0, flexBasis: `${100 - gitDiffSplitPct}%` }}
+            >
+              <div className="space-y-2">
+                {repos.map((repo) => (
+                  <GitRepoCard key={repo.path} repo={repo} />
+                ))}
+              </div>
+            </div>
           </div>
-
-          {/* Draggable Divider */}
-          <Divider
-            orientation="vertical"
-            onResize={handleSplitResize}
-            onDoubleClick={resetGitDiffSplitPct}
-          />
-
-          {/* Right column: Multiple Repos List */}
-          <div
-            className="flex min-h-0 min-w-0 flex-col overflow-y-auto border-l border-edge bg-surface p-2"
-            style={{ flexGrow: 0, flexBasis: `${100 - gitDiffSplitPct}%` }}
-          >
+        ) : (
+          /* Compact single-column fallback: center preview placement keeps the
+           * right pane narrow, so skip the inline diff stage and stack the repo
+           * cards full-width (clicking a file opens the diff externally). */
+          <div className="min-h-0 flex-1 overflow-y-auto p-2">
             <div className="space-y-2">
               {repos.map((repo) => (
                 <GitRepoCard key={repo.path} repo={repo} />
               ))}
             </div>
           </div>
-        </div>
+        )
       ) : subTab === "worktrees" ? (
         <div className="flex min-h-0 flex-1 flex-col">
           <WorktreeManagerPanel repos={repos} />

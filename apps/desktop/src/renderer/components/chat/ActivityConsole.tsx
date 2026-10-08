@@ -34,6 +34,7 @@ import { useState, type ComponentType, type ReactNode } from "react";
 import { cn } from "@renderer/lib/cn.js";
 import { useI18n } from "@renderer/lib/i18n/index.js";
 import { useNow } from "@renderer/hooks/useNow.js";
+import { formatRelativeTime } from "@renderer/lib/time.js";
 import type { TablerIconProps } from "@renderer/lib/icons.js";
 import {
   IconBookmark,
@@ -45,6 +46,7 @@ import {
   IconLayoutSidebarRightExpand,
   IconListDetails,
   IconLoader2,
+  IconMessages,
   IconPencil,
   IconPlayerStop,
   IconPlus,
@@ -54,7 +56,7 @@ import {
   PiRobot,
 } from "@renderer/lib/icons.js";
 import type { SubagentSnapshot, BashTaskSnapshot, ServiceSnapshot } from "@contracts/runtime";
-import type { SessionBookmark } from "@contracts/session";
+import type { Session, SessionBookmark } from "@contracts/session";
 import type { Automation } from "@contracts/automation";
 import { describeSchedule, isInFlightAutomation, formatUntil, sortAutomations } from "@renderer/components/automation/automationFormat.js";
 import type { TodoItem } from "@renderer/stores/sessionStore.js";
@@ -894,6 +896,93 @@ function EmptyGroup({ t }: { t: Translate }) {
   );
 }
 
+/* ── Body: side chats (quick-ask threads parented to this session) ──── */
+
+/** Resolve a side chat's display title — the DB sentinel "Quick ask" (never
+ *  used) must not reach the UI (same rule as SideChatPanel's displayTitle). */
+function sideChatTitle(session: Session, t: Translate): string {
+  return session.title === "Quick ask" ? t("sideChat.titlePlaceholder") : session.title;
+}
+
+function SideChatRow({
+  session,
+  running,
+  t,
+  onOpen,
+}: {
+  session: Session;
+  running: boolean;
+  t: Translate;
+  onOpen?: (s: Session) => void;
+}) {
+  const title = sideChatTitle(session, t);
+  return (
+    <li className="border-b border-slate-200 last:border-b-0 dark:border-white/[0.08]">
+      <button
+        type="button"
+        onClick={onOpen ? () => onOpen(session) : undefined}
+        title={onOpen ? t("chatStream.activity.openSideChat") : undefined}
+        className={cn(
+          "group flex w-full items-center gap-2 px-3 py-2 text-left transition-colors",
+          onOpen && "cursor-pointer hover:bg-slate-100/70 dark:hover:bg-white/[0.04]",
+        )}
+      >
+        <span
+          aria-hidden
+          className={cn(
+            "h-1.5 w-1.5 shrink-0 rounded-full",
+            running ? "animate-pulse bg-indigo-500 dark:bg-indigo-400" : "bg-slate-300 dark:bg-white/30",
+          )}
+        />
+        <span className="min-w-0 flex-1 truncate text-[11.5px] font-medium text-slate-900 dark:text-white/90" title={title}>
+          {title}
+        </span>
+        {running && (
+          <span className="shrink-0 text-[10px] font-semibold text-indigo-600 dark:text-indigo-300">
+            {t("chatStream.activity.groupRunning")}
+          </span>
+        )}
+        <span className="shrink-0 text-[10px] tabular-nums text-slate-500 dark:text-white/50">
+          {formatRelativeTime(session.createdAt)}
+        </span>
+        {onOpen && (
+          <span className="shrink-0 text-[10px] font-semibold text-accent opacity-0 transition-opacity group-hover:opacity-100">
+            {t("chatStream.activity.openSideChat")}
+          </span>
+        )}
+      </button>
+    </li>
+  );
+}
+
+function SideChatsBody({
+  sideChats,
+  runningIds,
+  t,
+  onOpen,
+}: {
+  sideChats: Session[];
+  runningIds?: ReadonlySet<string>;
+  t: Translate;
+  onOpen?: (s: Session) => void;
+}) {
+  if (sideChats.length === 0) {
+    return <EmptyGroup t={t} />;
+  }
+  // The bucket is created_at DESC (listSideByParent's order) — newest first is
+  // the arrival order, and the newest quick-ask is the likeliest target.
+  return (
+    <div>
+      <GroupHead label={t("chatStream.activity.node.sidechats")} n={sideChats.length} />
+      <ul>
+        {sideChats.map((sc) => (
+          <SideChatRow key={sc.id} session={sc} running={!!runningIds?.has(sc.id)} t={t} onOpen={onOpen} />
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 /* ── Body: Overview (Dynamic Island Expanded Control Deck) ──────────── */
 
 function OverviewBody({
@@ -903,6 +992,8 @@ function OverviewBody({
   bookmarks,
   bashTasks,
   services,
+  sideChats,
+  sideChatRunningIds,
   now,
   t,
   onStopBashTask,
@@ -912,6 +1003,7 @@ function OverviewBody({
   onPickPlan,
   onPickBookmark,
   onPickNode,
+  onOpenSideChat,
   automations = [],
   onOpenSchedPanel,
   onNewSched,
@@ -922,6 +1014,8 @@ function OverviewBody({
   bookmarks: SessionBookmark[];
   bashTasks: BashTaskSnapshot[];
   services: ServiceSnapshot[];
+  sideChats: Session[];
+  sideChatRunningIds?: ReadonlySet<string>;
   now: number;
   t: Translate;
   automations?: Automation[];
@@ -932,6 +1026,7 @@ function OverviewBody({
   onPickPlan?: (plan: string) => void;
   onPickBookmark?: (b: SessionBookmark) => void;
   onPickNode?: (node: ActivityNodeKey) => void;
+  onOpenSideChat?: (s: Session) => void;
   onOpenSchedPanel?: () => void;
   onNewSched?: () => void;
 }) {
@@ -940,7 +1035,9 @@ function OverviewBody({
   const doneTodos = todos.filter((x) => x.status === "completed").length;
   const pct = todos.length > 0 ? Math.round((doneTodos / todos.length) * 100) : 0;
   const inFlightSched = automations.filter(isInFlightAutomation);
-  const hasLive = services.length > 0 || runningCommands.length > 0 || runningAgents.length > 0 || inFlightSched.length > 0;
+  const runningSideChats = sideChats.filter((s) => sideChatRunningIds?.has(s.id));
+  const hasLive =
+    services.length > 0 || runningCommands.length > 0 || runningAgents.length > 0 || inFlightSched.length > 0 || runningSideChats.length > 0;
 
   return (
     <div className="flex flex-col gap-3 p-3">
@@ -1009,7 +1106,7 @@ function OverviewBody({
               {t("chatStream.activity.deck.commandsAndAgents")}
             </span>
             <span className="rounded-full bg-slate-200/80 border border-slate-300 px-2 py-0.5 text-[9.5px] font-bold text-slate-800 dark:bg-accent/20 dark:border-transparent dark:text-accent">
-              {runningCommands.length + runningAgents.length} 活跃
+              {t("chatStream.activity.deck.activeCount", { n: runningCommands.length + runningAgents.length })}
             </span>
           </div>
           <div className="divide-y divide-slate-200/60 dark:divide-white/[0.06]">
@@ -1047,11 +1144,13 @@ function OverviewBody({
                     {a.description}
                   </div>
                   <div className="flex items-center gap-1.5 text-[9.5px] text-slate-500 dark:text-white/50">
-                    <span className="text-amber-600 dark:text-warning font-bold">运行中</span>
+                    <span className="font-bold text-amber-600 dark:text-warning">
+                      {t(SUBAGENT_STATUS_META.running.labelKey)}
+                    </span>
                     {a.lastToolName && <span>· {a.lastToolName}</span>}
                   </div>
                 </div>
-                <span className="text-[10px] font-bold text-indigo-600 dark:text-white/40">详情 →</span>
+                <span className="text-[10px] font-bold text-indigo-600 dark:text-white/40">{t("chatStream.activity.viewSubagent")} →</span>
               </div>
             ))}
           </div>
@@ -1119,6 +1218,126 @@ function OverviewBody({
               className="mt-2 text-[10px] font-bold text-accent hover:underline block"
             >
               {t("chatStream.activity.deck.viewFull")} (+{todos.length - 3}) →
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* 3.5 Subagents Widget — the FULL roster. The live widget above only
+          lists RUNNING agents; settled Task-tool children used to be invisible
+          everywhere in the overview, which read as "the task never ran". */}
+      {subagents.length > 0 && (
+        <div className="rounded-2xl border border-slate-200 bg-slate-50/70 p-3 shadow-sm dark:border-white/10 dark:bg-white/[0.04]">
+          <div className="flex items-center justify-between pb-2 border-b border-slate-200 dark:border-white/[0.08]">
+            <span className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-slate-900 dark:text-warning">
+              <PiRobot size={12} />
+              {t("chatStream.activity.node.subagents")}
+            </span>
+            <span className="rounded-full bg-slate-200/80 border border-slate-300 px-2 py-0.5 text-[9.5px] font-bold text-slate-800 dark:bg-warning/15 dark:border-transparent dark:text-warning">
+              {runningAgents.length > 0
+                ? t("chatStream.activity.subagentsSubRunning", { running: runningAgents.length, ended: subagents.length - runningAgents.length })
+                : t("chatStream.activity.subagentsSubIdle", { n: subagents.length })}
+            </span>
+          </div>
+          <div className="divide-y divide-slate-200/60 dark:divide-white/[0.06]">
+            {[...subagents]
+              .sort((a, b) => (a.status === "running" ? 0 : 1) - (b.status === "running" ? 0 : 1))
+              .slice(0, 4)
+              .map((a) => {
+                const meta = SUBAGENT_STATUS_META[a.status];
+                return (
+                  <div
+                    key={a.taskId}
+                    onClick={onPickSubagent ? () => onPickSubagent(a) : undefined}
+                    className={cn(
+                      "flex items-center justify-between py-2 transition-colors",
+                      onPickSubagent && "cursor-pointer hover:bg-slate-100/80 dark:hover:bg-white/[0.03]",
+                    )}
+                  >
+                    <div className="min-w-0 flex-1 pr-2">
+                      <div className="truncate text-[11px] font-bold text-slate-900 dark:text-white" title={a.description}>
+                        {a.description || t("chatStream.activity.noDescription")}
+                      </div>
+                      <div className="flex items-center gap-1.5 text-[9.5px] text-slate-500 dark:text-white/50">
+                        {a.status === "running" && <span className="apple-live-dot bg-warning" />}
+                        <span className={cn("font-bold", meta.cls)}>{t(meta.labelKey)}</span>
+                        {a.subagentType && <span>· {a.subagentType}</span>}
+                        {typeof a.durationMs === "number" && <span>· {formatDuration(a.durationMs)}</span>}
+                      </div>
+                    </div>
+                    <span className="text-[10px] font-bold text-slate-400 dark:text-white/40">→</span>
+                  </div>
+                );
+              })}
+          </div>
+          {subagents.length > 4 && onPickNode && (
+            <button
+              type="button"
+              onClick={() => onPickNode("subagents")}
+              className="mt-2 block text-[10px] font-bold text-accent hover:underline"
+            >
+              {t("chatStream.activity.deck.viewFull")} (+{subagents.length - 4}) →
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* 3.6 Side Chats Widget — quick-ask threads parented to this session.
+          They live in the right panel's ask tab, so without this row the
+          capsule had no way to say they exist. */}
+      {sideChats.length > 0 && (
+        <div className="rounded-2xl border border-slate-200 bg-slate-50/70 p-3 shadow-sm dark:border-white/10 dark:bg-white/[0.04]">
+          <div className="flex items-center justify-between pb-2 border-b border-slate-200 dark:border-white/[0.08]">
+            <span className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-indigo-600 dark:text-indigo-300">
+              <IconMessages size={12} />
+              {t("chatStream.activity.node.sidechats")}
+            </span>
+            <span className="rounded-full bg-slate-200/80 border border-slate-300 px-2 py-0.5 text-[9.5px] font-bold text-slate-800 dark:bg-indigo-500/15 dark:border-transparent dark:text-indigo-300">
+              {runningSideChats.length > 0
+                ? t("chatStream.activity.deck.activeCount", { n: runningSideChats.length })
+                : `${sideChats.length} ${t("chatStream.activity.unitAgents")}`}
+            </span>
+          </div>
+          <div className="divide-y divide-slate-200/60 dark:divide-white/[0.06]">
+            {sideChats.slice(0, 3).map((sc) => (
+              <div
+                key={sc.id}
+                onClick={onOpenSideChat ? () => onOpenSideChat(sc) : undefined}
+                className={cn(
+                  "flex items-center justify-between py-2 transition-colors",
+                  onOpenSideChat && "cursor-pointer hover:bg-slate-100/80 dark:hover:bg-white/[0.03]",
+                )}
+              >
+                <div className="flex min-w-0 flex-1 items-center gap-1.5 pr-2">
+                  <span
+                    aria-hidden
+                    className={cn(
+                      "h-1.5 w-1.5 shrink-0 rounded-full",
+                      sideChatRunningIds?.has(sc.id)
+                        ? "animate-pulse bg-indigo-500 dark:bg-indigo-400"
+                        : "bg-slate-300 dark:bg-white/30",
+                    )}
+                  />
+                  <span
+                    className="truncate text-[11px] font-bold text-slate-900 dark:text-white"
+                    title={sideChatTitle(sc, t)}
+                  >
+                    {sideChatTitle(sc, t)}
+                  </span>
+                </div>
+                <span className="shrink-0 text-[9.5px] tabular-nums text-slate-500 dark:text-white/50">
+                  {formatRelativeTime(sc.createdAt)}
+                </span>
+              </div>
+            ))}
+          </div>
+          {sideChats.length > 3 && onPickNode && (
+            <button
+              type="button"
+              onClick={() => onPickNode("sidechats")}
+              className="mt-2 block text-[10px] font-bold text-accent hover:underline"
+            >
+              {t("chatStream.activity.deck.viewFull")} (+{sideChats.length - 3}) →
             </button>
           )}
         </div>
@@ -1224,10 +1443,10 @@ function OverviewBody({
               >
                 <div className="flex items-center gap-2">
                   <IconClipboard size={12} className="text-indigo-600 dark:text-info" />
-                  <span className="text-[11.5px] font-bold text-slate-900 dark:text-white">会话计划历史</span>
+                  <span className="text-[11.5px] font-bold text-slate-900 dark:text-white">{t("chatStream.activity.deck.plansHistory")}</span>
                 </div>
                 <span className="rounded bg-slate-100 border border-slate-200 px-1.5 py-0.5 text-[10px] font-bold text-slate-700 dark:bg-white/10 dark:border-transparent dark:text-white/80">
-                  {planBlocks.length} 份
+                  {planBlocks.length} {t("chatStream.activity.unitPlans")}
                 </span>
               </div>
             )}
@@ -1238,10 +1457,10 @@ function OverviewBody({
               >
                 <div className="flex items-center gap-2">
                   <IconBookmark size={12} className="text-amber-600 dark:text-warning" />
-                  <span className="text-[11.5px] font-bold text-slate-900 dark:text-white">高亮书签</span>
+                  <span className="text-[11.5px] font-bold text-slate-900 dark:text-white">{t("chatStream.activity.deck.bookmarksWidget")}</span>
                 </div>
                 <span className="rounded bg-slate-100 border border-slate-200 px-1.5 py-0.5 text-[10px] font-bold text-slate-700 dark:bg-white/10 dark:border-transparent dark:text-white/80">
-                  {bookmarks.length} 条
+                  {bookmarks.length} {t("chatStream.activity.unitBookmarks")}
                 </span>
               </div>
             )}
@@ -1250,11 +1469,17 @@ function OverviewBody({
       )}
 
       {/* 6. All Settled Empty State */}
-      {!hasLive && todos.length === 0 && planBlocks.length === 0 && bookmarks.length === 0 && automations.length === 0 && (
-        <div className="py-8 text-center text-slate-500 dark:text-white/50 text-[11.5px] font-medium">
-          {t("chatStream.activity.deck.allSettled")}
-        </div>
-      )}
+      {!hasLive &&
+        todos.length === 0 &&
+        planBlocks.length === 0 &&
+        bookmarks.length === 0 &&
+        automations.length === 0 &&
+        subagents.length === 0 &&
+        sideChats.length === 0 && (
+          <div className="py-8 text-center text-slate-500 dark:text-white/50 text-[11.5px] font-medium">
+            {t("chatStream.activity.deck.allSettled")}
+          </div>
+        )}
     </div>
   );
 }
@@ -1378,6 +1603,13 @@ export interface ActivityConsoleProps {
    *  「服务」node). Optional — callers without scanner wiring degrade to an
    *  empty roster. */
   services?: ServiceSnapshot[];
+  /** Quick-ask threads parented to this session (the「子会话」node). They
+   *  open in the right panel's ask tab via `onOpenSideChat`. */
+  sideChats?: Session[];
+  /** Ids of side chats with a live turn (drives the running dot + counts). */
+  sideChatRunningIds?: ReadonlySet<string>;
+  /** Open one side chat (desktop: reveals the right panel's ask tab). */
+  onOpenSideChat?: (s: Session) => void;
   isBookmarkStale?: (b: SessionBookmark) => boolean;
   /** Active filter tab per node + setter (owned by the rail so it survives
    *  open/close cycles). */
@@ -1415,6 +1647,9 @@ export function ActivityConsole({
   bookmarks,
   bashTasks,
   services,
+  sideChats,
+  sideChatRunningIds,
+  onOpenSideChat,
   automations = [],
   isBookmarkStale,
   tabs,
@@ -1442,6 +1677,8 @@ export function ActivityConsole({
   const tab = tabs[node] ?? "all";
   const commands = bashTasks ?? [];
   const serviceList = services ?? [];
+  const sideChatList = sideChats ?? [];
+  const runningSideChats = sideChatList.filter((s) => sideChatRunningIds?.has(s.id));
 
   const runningAgents = subagents.filter((a) => a.status === "running");
   const settledAgents = subagents.filter((a) => a.status !== "running");
@@ -1461,7 +1698,8 @@ export function ActivityConsole({
 
   if (node === "overview") {
     const inFlightSched = automations.filter(isInFlightAutomation);
-    const liveCount = runningAgents.length + runningCommands.length + serviceList.length + inFlightSched.length;
+    const liveCount =
+      runningAgents.length + runningCommands.length + serviceList.length + inFlightSched.length + runningSideChats.length;
     subtitle = liveCount > 0
       ? t("chatStream.activity.deck.title")
       : t("chatStream.activity.deck.allSettled");
@@ -1469,9 +1707,16 @@ export function ActivityConsole({
       <>
         <Stat value={serviceList.length} label={t("chatStream.service.unitServices")} />
         <Sep />
-        <Stat value={runningAgents.length + runningCommands.length + inFlightSched.length} label={t("chatStream.activity.labelRunning")} />
+        <Stat
+          value={runningAgents.length + runningCommands.length + inFlightSched.length + runningSideChats.length}
+          label={t("chatStream.activity.labelRunning")}
+        />
+        <Sep />
+        <Stat value={subagents.length} label={t("chatStream.activity.node.subagents")} />
         <Sep />
         <Stat value={`${todoPct}%`} label={t("chatStream.activity.node.tasks")} />
+        <Sep />
+        <Stat value={sideChatList.length} label={t("chatStream.activity.node.sidechats")} />
         <Sep />
         <Stat value={automations.length} label={t("chatStream.activity.node.sched")} />
       </>
@@ -1509,6 +1754,28 @@ export function ActivityConsole({
     const target = runningAgents[0] ?? subagents[0];
     if (onPickSubagent && target) {
       rightAction = { label: t("chatStream.activity.viewSubagent"), run: () => onPickSubagent(target) };
+    }
+  } else if (node === "sidechats") {
+    subtitle = runningSideChats.length
+      ? t("chatStream.activity.sidechatsSubRunning", { running: runningSideChats.length, n: sideChatList.length })
+      : t("chatStream.activity.sidechatsSubIdle", { n: sideChatList.length });
+    stats = (
+      <>
+        <Stat value={sideChatList.length} label={t("chatStream.activity.sidechatsUnit")} />
+        <Sep />
+        <Stat value={runningSideChats.length} label={t("chatStream.activity.labelRunning")} />
+        <Sep />
+        <Stat value={formatRelativeTime(sideChatList[0]?.createdAt ?? now)} label={t("chatStream.activity.latestChip")} />
+      </>
+    );
+    filters = [
+      { key: "all", label: t("chatStream.activity.tabAll"), n: sideChatList.length },
+      { key: "running", label: t("chatStream.activity.groupRunning"), n: runningSideChats.length },
+    ];
+    footer = t("chatStream.activity.sidechatsFooter");
+    const latest = sideChatList[0];
+    if (onOpenSideChat && latest) {
+      rightAction = { label: t("chatStream.activity.openSideChat"), run: () => onOpenSideChat(latest) };
     }
   } else if (node === "tasks") {
     subtitle = t("chatStream.activity.tasksSubtitle", {
@@ -1687,6 +1954,8 @@ export function ActivityConsole({
         bashTasks={commands}
         bookmarks={bookmarks}
         planBlocks={planBlocks}
+        sideChats={sideChatList}
+        sideChatRunningIds={sideChatRunningIds}
         automations={automations}
         onOpenSchedPanel={onOpenSchedPanel}
         onNewSched={onNewSched}
@@ -1699,9 +1968,12 @@ export function ActivityConsole({
         onPickSubagent={onPickSubagent}
         onPickPlan={onPickPlan}
         onPickBookmark={onPickBookmark}
+        onOpenSideChat={onOpenSideChat}
       />
     ) : node === "subagents" ? (
       <SubagentsBody agents={subagents} tab={tab} now={now} t={t} onPick={onPickSubagent} />
+    ) : node === "sidechats" ? (
+      <SideChatsBody sideChats={sideChatList} runningIds={sideChatRunningIds} t={t} onOpen={onOpenSideChat} />
     ) : node === "tasks" ? (
       <TasksBody todos={todos} tab={tab} t={t} />
     ) : node === "commands" ? (
@@ -1744,7 +2016,7 @@ export function ActivityConsole({
             {RAIL_NODE_ORDER.filter(
               (k) =>
                 k === node ||
-                hasNodeData(k, subagents, todos, planBlocks, bookmarks, commands, serviceList),
+                hasNodeData(k, subagents, todos, planBlocks, bookmarks, commands, serviceList, automations, sideChatList),
             ).map((k) => {
               const m = NODE_META[k];
               const K = m.ico;
@@ -1849,9 +2121,11 @@ export function hasNodeData(
   bashTasks: BashTaskSnapshot[] = [],
   services: ServiceSnapshot[] = [],
   automations: Automation[] = [],
+  sideChats: Session[] = [],
 ): boolean {
   if (node === "overview") return true;
   if (node === "subagents") return subagents.length > 0;
+  if (node === "sidechats") return sideChats.length > 0;
   if (node === "tasks") return todos.length > 0;
   if (node === "commands") return bashTasks.length > 0;
   if (node === "services") return services.length > 0;
