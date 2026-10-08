@@ -542,6 +542,13 @@ const piModels: Api["piModels"] = {
   getApiKey: () => webUnsupported("piModels.getApiKey"),
 };
 
+// Terminal Pi session import is a desktop-only affordance (the phone has no
+// project context menu to trigger it from; imported sessions reach the phone
+// through the normal session sync).
+const piSessions: Api["piSessions"] = {
+  scan: () => webUnsupported("piSessions.scan"),
+};
+
 // Read-only like piModels: the phone only needs the picker's model list;
 // provider save/delete/getApiKey stay desktop-only (secrets management).
 const codexModels: Api["codexModels"] = {
@@ -696,6 +703,7 @@ export function createWebApi(): Api {
     provider,
     customModel,
     piModels,
+    piSessions,
     codexModels,
     skills,
     file,

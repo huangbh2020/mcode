@@ -168,7 +168,7 @@ updateAvailable =
     "broken": { "0.3.240": "permission prompts fail with Stream closed" }
   },
   "codex": { "tested": ["0.153.4"], "broken": {} },
-  "pi":    { "tested": ["0.83.0"],  "broken": {} }
+  "pi":    { "tested": ["0.83.0", "1.0.2"],  "broken": {} }
 }
 ```
 

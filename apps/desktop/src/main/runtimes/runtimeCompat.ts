@@ -51,7 +51,12 @@ export const BASELINE_COMPAT_LIST: CompatList = {
   // un-marked the same day after the app moved to Electron 37 (Node 22.21),
   // where the SDK imports cleanly — verified by loading the real managed
   // 0.87.1 install under Electron's own runtime.
-  pi: { tested: ["0.83.0"], broken: {} },
+  // pi 1.0.2 tested on 2026-10-04: devDep bumped from 0.83.0, typecheck clean
+  // against the 1.0.2 surface (event stream / extension API / SessionManager
+  // / ModelRuntime all shape-compatible), on-disk session JSONL unchanged
+  // (version 3 === CURRENT_SESSION_VERSION), and 0.83-era session files open
+  // cleanly under 1.0.2.
+  pi: { tested: ["0.83.0", "1.0.2"], broken: {} },
 };
 
 /** Where the remote override is fetched from — a fallback CHAIN, first

@@ -20,6 +20,14 @@ allowBuilds:
 
 minimumReleaseAgeExclude:
   - '@openai/codex@0.153.4-darwin-arm64 || 0.153.4-darwin-x64 || 0.153.4-linux-arm64 || 0.153.4-linux-x64 || 0.153.4-win32-arm64 || 0.153.4-win32-x64 || 0.153.4'
+  - '@earendil-works/chord@1.0.2'
+  - '@earendil-works/pi-agent-core@1.0.2'
+  - '@earendil-works/pi-ai@1.0.2'
+  - '@earendil-works/pi-codemode@1.0.2'
+  - '@earendil-works/pi-coding-agent@1.0.2'
+  - '@earendil-works/pi-mcp@1.0.2'
+  - '@earendil-works/pi-telemetry@1.0.2'
+  - '@earendil-works/pi-tui@1.0.2'
 
 # pnpm 11 moved settings from package.json's `pnpm` field into this file.
 # Override app-builder-lib to ^25.1.0: electron-builder@25.1.0's CLI requires

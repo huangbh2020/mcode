@@ -95,7 +95,7 @@ import {
 const FALLBACK_VERSIONS: Record<RuntimeAgentId, string> = {
   claude: "0.3.258",
   codex: "0.153.4",
-  pi: "0.83.0",
+  pi: "1.0.2",
 };
 
 /** The claude JS wrapper package — installed PAIRED with the platform
