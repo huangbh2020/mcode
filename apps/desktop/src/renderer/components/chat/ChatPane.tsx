@@ -2281,12 +2281,18 @@ function ChatPaneForSession({
    *  Closing the picker happens when the token is broken (space / delete /
    *  caret leaves).
    *
+   *  `allowOpen` gates OPENING (not maintaining/closing): deletion keystrokes
+   *  pass false so shrinking the text toward an already-typed `@` token (e.g.
+   *  backspacing "hello @file world" down past "world") only ever keeps an
+   *  open picker in sync or closes it — it never pops one open. Typing the
+   *  trigger char itself (or any insertion) passes true, unchanged.
+   *
    *  IMPORTANT: skill/command pills serialize as `/name` in the plain-text
    *  representation, so their leading `/` would be mistaken for a freshly-typed
    *  slash trigger. We fetch the pill text ranges from the editor and skip over
    *  them while backtracking - a pill's `/` is never a trigger. */
   const recomputePicker = useCallback(
-    (v: string, caret: number) => {
+    (v: string, caret: number, allowOpen = true) => {
       // Locked only when a bottom prompt (approval / question) owns the input
       // area — matching textareaLocked. While a turn is merely RUNNING the
       // picker stays available: the composer accepts typed-ahead prompts, and
@@ -2333,6 +2339,9 @@ function ChatPaneForSession({
           }
           const kind = triggerKind;
           if (pickerKind !== kind) {
+            // A deletion pass may keep an already-open picker in sync (query
+            // updates below) but must not open a fresh one.
+            if (!allowOpen) return;
             triggerStartRef.current = i - 1;
             const rect = editorRef.current?.getRect();
             if (rect) setPickerAnchor(rect);
@@ -2350,14 +2359,17 @@ function ChatPaneForSession({
   );
 
   /** Content-change handler from the rich-text editor. The editor reports its
-   *  plain-text-with-skills representation; we keep a mirror in `value` (for
-   *  empty-state checks + enqueue) and re-run trigger detection. A change that
-   *  is NOT our own history-recall fill means the user typed/edited — exit
-   *  recall mode so Up/Down return to caret navigation, and re-run trigger
-   *  detection. Recall fills (applyHistory) are not user edits: they stay in
-   *  recall mode and skip trigger detection so a recalled `/command` or
-   *  `@file` doesn't pop the picker open mid-recall. */
-  const handleChange = (text: string) => {
+   *  plain-text-with-skills representation plus the transaction's net size
+   *  delta; we keep a mirror in `value` (for empty-state checks + enqueue) and
+   *  re-run trigger detection. A net deletion (backspace / cut) may maintain
+   *  or close the inline picker but never opens one — otherwise deleting text
+   *  after an existing `@` token pops the mention picker the moment the caret
+   *  backs into it. A change that is NOT our own history-recall fill means the
+   *  user typed/edited — exit recall mode so Up/Down return to caret
+   *  navigation, and re-run trigger detection. Recall fills (applyHistory) are
+   *  not user edits: they stay in recall mode and skip trigger detection so a
+   *  recalled `/command` or `@file` doesn't pop the picker open mid-recall. */
+  const handleChange = (text: string, textDelta: number) => {
     setValue(text);
     if (useSessionStore.getState().schedHintVisibleBySession[sessionId]) {
       useSessionStore.getState().hideSchedPromptHint(sessionId);
@@ -2370,7 +2382,7 @@ function ChatPaneForSession({
     setRecallActive(false);
     setHistoryIndex(-1);
     const caret = editorRef.current?.getCaretOffset() ?? -1;
-    if (caret >= 0) recomputePicker(text, caret);
+    if (caret >= 0) recomputePicker(text, caret, textDelta >= 0);
   };
 
   /** Fill the editor with the history message at `idx`, entering recall mode.

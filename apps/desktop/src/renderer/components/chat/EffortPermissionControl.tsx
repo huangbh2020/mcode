@@ -295,6 +295,7 @@ export function EffortChip({
   const storeCustomModelId = useSessionStore((s) => s.customModelId);
   const storeModel = useSessionStore((s) => s.model);
   const customModels = useSessionStore((s) => s.customModels);
+  const piModelMaps = useSessionStore((s) => s.piModelMaps);
 
   const effort = controller ? controller.value : storeEffort;
   const setEffort = (v: string): void => {
@@ -308,13 +309,16 @@ export function EffortChip({
     : storeCustomModelId;
   const model = controller && controller.model !== undefined ? controller.model : storeModel;
   // Levels come from the provider's declaration, filtered by the model's
-  // thinking declaration on OpenAI-protocol custom endpoints (see
-  // resolveEffortLevels). Empty/undefined → hide the chip.
+  // thinking declaration on OpenAI-protocol custom endpoints and by the pi
+  // model's settings-panel mapping (see resolveEffortLevels). Empty/undefined
+  // → hide the chip.
   const levels = resolveEffortLevels({
     providerLevels: provider?.capabilities.thinkingLevels,
     customModels,
     customModelId,
     model,
+    providerId,
+    piModelMaps,
   });
 
   // Provider declares no thinking levels (or the model's thinking is not

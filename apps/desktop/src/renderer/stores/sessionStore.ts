@@ -31,7 +31,8 @@ import { isValidSnapshot } from "@renderer/lib/contextWindow.js";
 import { getLastCursor, type NavEntry } from "@renderer/lib/editorNav.js";
 import { disposeModel, getDisplayedPath } from "@renderer/lib/editorModelCache.js";
 import type { CustomModelPublic } from "@contracts/customModel";
-import { resolveEffortLevels } from "@renderer/lib/thinkingLevels.js";
+import type { PiThinkingLevelMap } from "@contracts/piModel";
+import { resolveEffortLevels, coerceEffortValue } from "@renderer/lib/thinkingLevels.js";
 import { api } from "@renderer/lib/api.js";
 import { isElectron } from "@renderer/lib/platform.js";
 import { normWorktreeKey } from "@renderer/lib/worktree.js";
@@ -1188,6 +1189,12 @@ export interface SessionState {
    *  ModelDropdown when the active provider is pi-sdk, since pi's
    *  `capabilities.builtinModels` is empty (models are dynamic). */
   piAvailableModels: BuiltinModelOption[];
+  /** Per-model thinkingLevelMap from ~/.pi/agent/models.json, keyed by
+   *  `<provider>/<modelId>` (the pi session.model shape). Populated by
+   *  `reloadPiAvailableModels` — the effort chip / coercion filter a model's
+   *  不支持 levels out of the composer's ladder (see resolveEffortLevels).
+   *  Absent ref = no filter (builtin catalog / legacy rows show all levels). */
+  piModelMaps: Record<string, PiThinkingLevelMap>;
   /** Codex models the user can pick (configured third-party providers from
    *  the settings panel, projected to "providerId/modelId"). Populated by
    *  `reloadCodexAvailableModels` — used by ModelDropdown when the active
@@ -2022,8 +2029,9 @@ export interface SessionState {
   reloadProviders: () => Promise<void>;
   /** Re-fetch the list of models the pi SDK can authenticate with the
    *  currently-configured keys. Populates `piAvailableModels` (read by
-   *  ModelDropdown when the active provider is pi-sdk). Called on init and
-   *  after any PiModelsPanel save/delete. */
+   *  ModelDropdown when the active provider is pi-sdk) and `piModelMaps`
+   *  (per-model thinkingLevelMap — the effort chip's 不支持-level filter).
+   *  Called on init and after any PiModelsPanel save/delete. */
   reloadPiAvailableModels: () => Promise<void>;
   reloadCodexAvailableModels: () => Promise<void>;
   setModel: (model: string) => void;
@@ -2576,6 +2584,9 @@ const EMPTY_CUSTOM_MODELS: CustomModelPublic[] = [];
 const EMPTY_LAST_MODEL_BY_PROVIDER: Record<string, { model: string; customModelId: string | null }> = {};
 const EMPTY_PROVIDERS: ProviderInfo[] = [];
 const EMPTY_PI_MODELS: BuiltinModelOption[] = [];
+/** Module-level stable ref — Zustand selectors must not return fresh literals
+ *  (infinite re-render; see the EMPTY_* family). */
+const EMPTY_PI_MODEL_MAPS: Record<string, PiThinkingLevelMap> = {};
 const EMPTY_CODEX_MODELS: BuiltinModelOption[] = [];
 const EMPTY_SKILLS: SkillInfo[] = [];
 const EMPTY_SESSIONS: Session[] = [];
@@ -3557,7 +3568,8 @@ function applySessionDeletedState(s: SessionState, id: string): Partial<SessionS
  *  modes, pi's "off" is not a claude level — so a value left over from the
  *  outgoing provider renders as a raw id in the chip and gets sent to an SDK
  *  that can't interpret it. Values the target provider doesn't declare snap
- *  to "default" (the neutral slot every provider declares for both lists);
+ *  to its neutral slot ("default" when declared — Claude/Codex; "medium" for
+ *  pi, whose list is the SDK's raw off..max ladder — see coerceEffortValue);
  *  values valid for both providers pass through untouched. Callers apply this
  *  on every provider switch (setProvider) and on re-syncs that can surface a
  *  stale persisted value (syncConfigFromSession, reloadProviders, model
@@ -3566,7 +3578,13 @@ function applySessionDeletedState(s: SessionState, id: string): Partial<SessionS
 function coerceSlotsForProvider(
   s: Pick<
     SessionState,
-    "providers" | "effort" | "permissionMode" | "customModels" | "customModelId" | "model"
+    | "providers"
+    | "effort"
+    | "permissionMode"
+    | "customModels"
+    | "customModelId"
+    | "model"
+    | "piModelMaps"
   >,
   providerId: string,
   /** The model binding the coercion is FOR. Pass the incoming binding when it
@@ -3578,20 +3596,23 @@ function coerceSlotsForProvider(
   const provider = s.providers.find((p) => p.id === providerId);
   // Same resolution the effort chip renders with: provider-declared levels,
   // filtered by the selected model's thinking declaration on OpenAI-protocol
-  // custom endpoints. A model whose thinking isn't controllable (empty list)
-  // snaps any non-default effort back to "default".
+  // custom endpoints and by the pi model's settings-panel mapping (null =
+  // 不支持 → hidden). A model whose thinking isn't controllable (empty list)
+  // snaps any non-default effort back to the neutral slot.
   const levels = resolveEffortLevels({
     providerLevels: provider?.capabilities.thinkingLevels,
     customModels: s.customModels,
     customModelId: binding?.customModelId ?? s.customModelId,
     model: binding?.model ?? s.model,
+    providerId,
+    piModelMaps: s.piModelMaps,
   });
   const modes = provider?.capabilities.permissionModes;
   return {
-    effort:
-      levels && levels.length > 0 && !levels.some((l) => l.value === s.effort)
-        ? "default"
-        : s.effort,
+    // Snap target: the provider's neutral slot when declared ("default" —
+    // Claude/Codex), else the SDK's own default level ("medium" — Pi declares
+    // the raw off..max ladder with no Auto; see coerceEffortValue).
+    effort: coerceEffortValue(s.effort, levels),
     permissionMode:
       modes && modes.length > 0 && !modes.some((m) => m.value === s.permissionMode)
         ? "default"
@@ -3620,13 +3641,17 @@ function syncConfigFromSession(
   const prevPid = get().activeProjectId;
   // effort / permissionMode are provider-namespaced (see coerceSlotsForProvider):
   // a row persisted before a provider switch — or before this coercion existed —
-  // can carry a value its own provider doesn't declare; snap it to "default"
-  // here so the composer never renders a raw foreign id. The coercion is scoped
-  // to the SESSION's model binding (not the current slots — the patch below
-  // hasn't applied yet), so an OpenAI-protocol model whose thinking levels
-  // don't include the persisted effort is corrected against the right list.
+  // can carry a value its own provider doesn't declare; snap it here so the
+  // composer never renders a raw foreign id. The coercion is scoped to the
+  // SESSION's model binding (not the current slots — the patch below hasn't
+  // applied yet), so an OpenAI-protocol model whose thinking levels don't
+  // include the persisted effort is corrected against the right list.
+  // customModelId is sanitized the same way: a row can carry a Claude custom
+  // binding under providerId pi/codex (stale slots once persisted it) and the
+  // effort chip would resolve Claude's ladder for this session.
+  const bindingCustomModelId = sanitizeBinding(get(), sess.providerId, sess.customModelId);
   const coerced = coerceSlotsForProvider(get(), sess.providerId, {
-    customModelId: sess.customModelId,
+    customModelId: bindingCustomModelId,
     model: sess.model,
   });
   const patch: Partial<SessionState> = {
@@ -3634,7 +3659,7 @@ function syncConfigFromSession(
     model: sess.model,
     effort: coerced.effort,
     permissionMode: coerced.permissionMode,
-    customModelId: sess.customModelId,
+    customModelId: bindingCustomModelId,
     activeProjectId: sess.projectId,
   };
   // The `sessions` field is a derived view of the ACTIVE project's session
@@ -3837,10 +3862,12 @@ function isValidRememberedModel(
   const provider = s.providers.find((p) => p.id === providerId);
   if (!provider) return false;
   if (provider.id === "pi-sdk") {
-    return s.piAvailableModels.some((m) => m.id === entry.model);
+    // A binding under pi is stale by definition (pi picks never set one) —
+    // reject so the restore falls back to a clean "default".
+    return !entry.customModelId && s.piAvailableModels.some((m) => m.id === entry.model);
   }
   if (provider.id === "codex-sdk") {
-    return s.codexAvailableModels.some((m) => m.id === entry.model);
+    return !entry.customModelId && s.codexAvailableModels.some((m) => m.id === entry.model);
   }
   if (provider.id === "claude-sdk") {
     const cfg = s.customModels.find((m) => m.id === entry.customModelId);
@@ -3853,6 +3880,22 @@ function isValidRememberedModel(
   return (provider.capabilities.builtinModels ?? []).some((b) => b.id === entry.model);
 }
 
+/** `customModelId` is a Claude-only concept (custom endpoints are the only
+ *  `supportsCustomEndpoint`). Pi/Codex pick plain model refs, and not every
+ *  writer clears the slot (pi picks ride `setModel`, which leaves it alone),
+ *  so a binding left over from a Claude custom pick must be stripped wherever
+ *  it would re-enter the slots. resolveSendModel already forces null at send
+ *  time — the VIEW slots must agree too, or the effort chip resolves Claude's
+ *  model-scoped ladder for a pi session. */
+function sanitizeBinding(
+  s: Pick<SessionState, "providers">,
+  providerId: string,
+  customModelId: string | null,
+): string | null {
+  const provider = s.providers.find((p) => p.id === providerId);
+  return provider?.capabilities.supportsCustomEndpoint ? customModelId : null;
+}
+
 /**
  * Drop a stale persisted composer choice back to auto. Runs after the model
  * lists reload (providers / custom endpoints / pi models): if the persisted
@@ -3861,8 +3904,7 @@ function isValidRememberedModel(
  * + "default" (auto) — and the reset is persisted so it doesn't reapply a
  * stale choice on the next launch. Sessions that already have messages are
  * skipped: their config is row-authoritative and re-synced on select.
- */
-function validateComposerSelection(
+ */function validateComposerSelection(
   set: (partial: Partial<SessionState> | ((s: SessionState) => Partial<SessionState>)) => void,
   get: () => SessionState,
 ): void {
@@ -5271,6 +5313,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   customModels: EMPTY_CUSTOM_MODELS,
   providers: EMPTY_PROVIDERS,
   piAvailableModels: EMPTY_PI_MODELS,
+  piModelMaps: EMPTY_PI_MODEL_MAPS,
   codexAvailableModels: EMPTY_CODEX_MODELS,
   providersLoaded: false,
   customModelsLoaded: false,
@@ -10636,16 +10679,22 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       // custom endpoints (the level list is model-scoped) — coerce with the
       // INCOMING binding so the chip never shows (nor sends) a level the new
       // model doesn't accept. See coerceSlotsForProvider.
+      // Pi/Codex have no custom-config concept — their picks ride THIS action
+      // (ModelDropdown's builtin branches), so a customModelId left over from
+      // a Claude custom pick is stripped here; otherwise the effort chip keeps
+      // resolving Claude's ladder for a pi session.
+      const customModelId = sanitizeBinding(s, s.providerId, s.customModelId);
       const coerced = coerceSlotsForProvider(s, s.providerId, {
-        customModelId: s.customModelId,
+        customModelId,
         model,
       });
       return {
         model,
+        customModelId,
         ...coerced,
         lastModelByProvider: {
           ...s.lastModelByProvider,
-          [s.providerId]: { ...rememberedEntryOf(s), model, effort: coerced.effort },
+          [s.providerId]: { ...rememberedEntryOf(s), model, customModelId, effort: coerced.effort },
         },
       };
     });
@@ -10794,6 +10843,11 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         isValidRememberedModel(s, id, remembered) && remembered.model !== "default"
           ? { model: remembered.model, customModelId: remembered.customModelId }
           : { model: "default", customModelId: null };
+      // A remembered pi/codex entry can carry a customModelId left over from a
+      // Claude custom pick (the validator only checks the model) — strip it
+      // before it re-enters the slots and hijacks the effort chip's level
+      // resolution.
+      restored = { ...restored, customModelId: sanitizeBinding(s, id, restored.customModelId) };
       // effort / permissionMode are provider-namespaced too (claude's
       // acceptEdits is not a codex mode). Restore the target provider's
       // remembered slots — falling back to the current values when it has
@@ -10809,13 +10863,14 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           model: s.model,
           effort: remembered?.effort ?? s.effort,
           permissionMode: remembered?.permissionMode ?? s.permissionMode,
+          piModelMaps: s.piModelMaps,
         },
         id,
         restored,
       );
       set({ providerId: id, ...restored, ...coerced, lastModelByProvider: nextMap });
     } else {
-      restored = { model: get().model, customModelId: get().customModelId };
+      restored = { model: get().model, customModelId: sanitizeBinding(get(), id, get().customModelId) };
       set({ providerId: id });
     }
     // Remember the pick as the next-session default (restored at boot).
@@ -10912,7 +10967,23 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   reloadPiAvailableModels: async () => {
     try {
       const { models } = await api.piModels.listAvailable();
-      set({ piAvailableModels: models, piModelsLoaded: true });
+      // Per-model thinking maps for the effort-chip filter (resolveEffortLevels
+      // hides levels the model maps to null). Separate try: the list RPC is
+      // webUnsupported (web keeps the rpc-backed listAvailable), and a read
+      // failure must not take the picker list down with it — no maps just
+      // means the full level ladder shows.
+      let piModelMaps: Record<string, PiThinkingLevelMap> = {};
+      try {
+        const { providers } = await api.piModels.list();
+        for (const [name, cfg] of Object.entries(providers)) {
+          for (const m of cfg.models ?? []) {
+            if (m.thinkingLevelMap) piModelMaps[`${name}/${m.id}`] = m.thinkingLevelMap;
+          }
+        }
+      } catch {
+        piModelMaps = {};
+      }
+      set({ piAvailableModels: models, piModelMaps, piModelsLoaded: true });
       // A persisted composer pick whose pi model was deleted falls back
       // to auto.
       validateComposerSelection(set, get);

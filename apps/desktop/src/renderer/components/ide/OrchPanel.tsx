@@ -565,6 +565,7 @@ function TaskConfig({ run, task }: { run: OrchestrationRun; task: TaskNode }) {
   const { t } = useI18n();
   const providers = useSessionStore((s) => s.providers);
   const customModels = useSessionStore((s) => s.customModels);
+  const piModelMaps = useSessionStore((s) => s.piModelMaps);
   const piAvailableModels = useSessionStore((s) => s.piAvailableModels);
   const codexAvailableModels = useSessionStore((s) => s.codexAvailableModels);
   const openOrchWorker = useSessionStore((s) => s.openOrchWorker);
@@ -626,7 +627,8 @@ function TaskConfig({ run, task }: { run: OrchestrationRun; task: TaskNode }) {
 
   // 思考级别:provider 声明,再按选中模型过滤 —— OpenAI 协议端点的模型有
   // 自己的思考能力声明(reasoning_effort 档位 / enable_thinking 开关 / 不支持),
-  // 不支持的挡位不渲染。空列表 = 隐藏下拉。
+  // Pi 模型按设置面板的 thinkingLevelMap 隐藏「不支持」档;不支持的挡位不渲染。
+  // 空列表 = 隐藏下拉。
   const parsedBinding = parseModel(modelSel);
   const thinkingLevels =
     resolveEffortLevels({
@@ -634,6 +636,8 @@ function TaskConfig({ run, task }: { run: OrchestrationRun; task: TaskNode }) {
       customModels,
       customModelId: parsedBinding.customModelId,
       model: parsedBinding.model ?? "default",
+      providerId,
+      piModelMaps,
     }) ?? [];
   const taskModelSel = task.customModelId
     ? `${task.customModelId}|${task.model ?? "default"}`

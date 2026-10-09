@@ -30,7 +30,7 @@ import type { OpenAIRequest } from "@main/providers/bridge/types.js";
 import { BridgeRegistry } from "@main/providers/bridge/bridgeRegistry.js";
 import { buildCustomEnv } from "@main/providers/claude-sdk/customEnv.js";
 import { MCODE_EFFORT_HEADER } from "@main/providers/upstreamHeaders.js";
-import { resolveEffortLevels } from "@renderer/lib/thinkingLevels.js";
+import { resolveEffortLevels, coerceEffortValue } from "@renderer/lib/thinkingLevels.js";
 import type { ThinkingLevelOption } from "@contracts/provider";
 
 let passed = 0;
@@ -233,6 +233,76 @@ check("ui: inferred enable_thinking model", eq(qwenLevels?.map((l) => l.value), 
 check("ui: on/off labels", qwenLevels?.[1]?.label === "Off" && qwenLevels?.[2]?.label === "On");
 const r1Levels = resolveEffortLevels({ providerLevels, customModels, customModelId: "cfg-openai", model: "deepseek-r1" });
 check("ui: inferred none model hides the chip", eq(r1Levels, []));
+
+/* ── coerceEffortValue: snap targets per provider list shape ──
+ * Pi mirrors the SDK's raw off..max ladder with no neutral slot — a legacy
+ * "default" slot must land on the SDK's DEFAULT_THINKING_LEVEL ("medium"),
+ * never "off" (which disables thinking rather than deferring). Providers
+ * that declare "default" (Claude/Codex) keep snapping there. */
+const PI_LEVELS: ThinkingLevelOption[] = [
+  { value: "off", label: "Off" },
+  { value: "minimal", label: "Minimal" },
+  { value: "low", label: "Low" },
+  { value: "medium", label: "Med" },
+  { value: "high", label: "High" },
+  { value: "xhigh", label: "XHigh" },
+  { value: "max", label: "Max" },
+];
+const CLAUDE_LEVELS: ThinkingLevelOption[] = [
+  { value: "default", label: "Auto" },
+  { value: "low", label: "Low" },
+  { value: "medium", label: "Med" },
+  { value: "high", label: "High" },
+];
+check("coerce: valid value passes through", coerceEffortValue("high", PI_LEVELS) === "high");
+check("coerce: pi legacy default → medium (SDK DEFAULT_THINKING_LEVEL)", coerceEffortValue("default", PI_LEVELS) === "medium");
+check("coerce: claude default slot stays default", coerceEffortValue("default", CLAUDE_LEVELS) === "default");
+check("coerce: claude leftovers snap to its neutral slot", coerceEffortValue("xhigh", CLAUDE_LEVELS) === "default");
+check("coerce: value valid on both providers passes through", coerceEffortValue("low", PI_LEVELS) === "low");
+check("coerce: absent/empty list → untouched", coerceEffortValue("default", undefined) === "default" && coerceEffortValue("default", []) === "default");
+check("coerce: list without default/medium keeps the raw value", coerceEffortValue("default", [{ value: "off", label: "Off" }]) === "default");
+
+/* ── resolveEffortLevels: pi model-map filter (settings-panel alignment) ──
+ * The mapping editor's contract: 默认/映射值 keep the level, null (不支持)
+ * hides it. Filters only fire for pi-sdk refs found in the maps; unknown
+ * models, missing maps and non-pi providers show the full ladder. */
+const piMaps = {
+  "浩联云/MiniMax-M3.1-Flash-Preview": { off: null },
+  "浩联云/mapped": { xhigh: "max", low: null },
+  "浩联云/all-null": { off: null, minimal: null, low: null, medium: null, high: null, xhigh: null, max: null },
+};
+const piResolved = (
+  model: string,
+  opts?: { providerId?: string; omitMaps?: boolean },
+): string[] | undefined =>
+  resolveEffortLevels({
+    providerLevels: PI_LEVELS,
+    customModels: [],
+    customModelId: null,
+    model,
+    providerId: opts?.providerId ?? "pi-sdk",
+    ...(opts?.omitMaps ? {} : { piModelMaps: piMaps }),
+  })?.map((l) => l.value);
+check("pi filter: null-mapped level hidden", eq(piResolved("浩联云/MiniMax-M3.1-Flash-Preview"), ["minimal", "low", "medium", "high", "xhigh", "max"]));
+check("pi filter: string-mapped level kept (value not shown)", eq(piResolved("浩联云/mapped"), ["off", "minimal", "medium", "high", "xhigh", "max"]));
+check("pi filter: unknown model ref → full ladder", eq(piResolved("anthropic/claude-x"), PI_LEVELS.map((l) => l.value)));
+check("pi filter: maps omitted → full ladder", eq(piResolved("浩联云/MiniMax-M3.1-Flash-Preview", { omitMaps: true }), PI_LEVELS.map((l) => l.value)));
+check("pi filter: non-pi provider ignores the maps", eq(piResolved("浩联云/MiniMax-M3.1-Flash-Preview", { providerId: "claude-sdk" }), PI_LEVELS.map((l) => l.value)));
+check("pi filter: all-null map → empty list (chip hides)", eq(piResolved("浩联云/all-null"), []));
+check(
+  "pi filter: stale claude customModelId does not hijack the pi branch",
+  eq(
+    resolveEffortLevels({
+      providerLevels: PI_LEVELS,
+      customModels,
+      customModelId: "cfg-openai",
+      model: "浩联云/MiniMax-M3.1-Flash-Preview",
+      providerId: "pi-sdk",
+      piModelMaps: piMaps,
+    })?.map((l) => l.value),
+    ["minimal", "low", "medium", "high", "xhigh", "max"],
+  ),
+);
 
 /* ── BridgeRegistry.ensureCurrent: in-place rebuild on config drift ──
  * The scenario from the 2026-09-28 log: a session reuses a bridge across

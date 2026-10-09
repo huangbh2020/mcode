@@ -85,8 +85,12 @@ export class PiAgentSdkProvider implements AgentProvider {
     // mcodeExtension.ts.
     supportsAskUserQuestion: true,
     // Declarative descriptors — the renderer's dynamic dropdowns read these.
+    // Mirrors the Pi SDK's THINKING_LEVEL_OPTIONS exactly (off..max, seven
+    // levels) — no "Auto/default" slot: when no level is passed the SDK falls
+    // back to DEFAULT_THINKING_LEVEL ("medium"), so the concrete "medium"
+    // entry IS the neutral choice, and composer coercion snaps legacy
+    // "default" slots onto it (see coerceEffortValue in the renderer).
     thinkingLevels: [
-      { value: "default", label: "Auto", hint: "让 Pi 自选" },
       { value: "off", label: "Off", hint: "关闭思考" },
       { value: "minimal", label: "Minimal", hint: "极少思考" },
       { value: "low", label: "Low", hint: "快速" },
