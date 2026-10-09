@@ -253,7 +253,7 @@ export function App() {
           // session title, which contributes its full text width to
           // min-content) propped the aside open no matter how small
           // leftWidthPct got.
-          "flex h-full min-w-0 shrink-0 flex-col rounded-tl-3xl bg-surface-muted",
+          "flex h-full min-w-0 shrink-0 flex-col rounded-tl-2xl bg-surface-muted",
           (!leftOpen || settingsOpen || schedPageOpen) && "hidden",
         )}
         style={{ flexGrow: 0, flexBasis: `${leftWidthPct}%` }}

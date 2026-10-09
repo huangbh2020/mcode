@@ -373,7 +373,7 @@ export function SortableSessionTab({
       title={title}
       className={cn(
         // Apple-style Compact Integrated Card Tab (方案 1)
-        "group flex h-[27px] max-w-[200px] cursor-pointer select-none items-center gap-1.5 rounded-md px-2.5 text-[11px] transition-all duration-150",
+        "group flex h-[27px] max-w-[200px] cursor-pointer select-none items-center gap-1.5 rounded-lg px-2.5 text-[11px] transition-all duration-150",
         multiRow ? "min-w-[170px] flex-1" : "min-w-0 shrink-0",
         isActive
           ? "bg-surface text-content font-medium shadow-xs border border-edge/60 dark:bg-surface-hover dark:border-white/10 dark:shadow-[0_1px_3px_rgba(0,0,0,0.35)]"
