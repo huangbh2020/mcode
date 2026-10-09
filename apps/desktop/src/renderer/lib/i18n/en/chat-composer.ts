@@ -242,6 +242,7 @@ export const en = {
   "chat.slash.noDescription": "(no description)",
   "chat.slash.builtin": "Built-in",
   "chat.slash.project": "Project",
+  "chat.slash.agent": ".agent",
   "chat.slash.global": "Global",
   "chat.slash.plugin": "Plugin",
   "chat.kbd.navigate": "navigate",

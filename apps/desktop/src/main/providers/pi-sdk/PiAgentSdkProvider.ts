@@ -41,6 +41,7 @@ import { buildPiTokenSnapshot } from "./piTokenUsage.js";
 import { buildPiSkillLoader, rewriteSkillPrefix, createMntNormalizingReadTool } from "./piSkillBridge.js";
 import { buildPiMcpExtension, collectPiMcpConfig } from "./piMcpBridge.js";
 import { createMcodeExtension, buildHeadlessExtensionUi } from "./mcodeExtension.js";
+import { createPiBashTracker } from "./piBashTracker.js";
 import { getFileSnapshot } from "@main/lib/fileSnapshotRegistry.js";
 import { resolveGitBash } from "@main/lib/binaryResolve.js";
 import { getEnabledPluginSkillRoots } from "@main/plugins/pluginManager.js";
@@ -84,8 +85,12 @@ export class PiAgentSdkProvider implements AgentProvider {
     // mcodeExtension.ts.
     supportsAskUserQuestion: true,
     // Declarative descriptors — the renderer's dynamic dropdowns read these.
+    // Mirrors the Pi SDK's THINKING_LEVEL_OPTIONS exactly (off..max, seven
+    // levels) — no "Auto/default" slot: when no level is passed the SDK falls
+    // back to DEFAULT_THINKING_LEVEL ("medium"), so the concrete "medium"
+    // entry IS the neutral choice, and composer coercion snaps legacy
+    // "default" slots onto it (see coerceEffortValue in the renderer).
     thinkingLevels: [
-      { value: "default", label: "Auto", hint: "让 Pi 自选" },
       { value: "off", label: "Off", hint: "关闭思考" },
       { value: "minimal", label: "Minimal", hint: "极少思考" },
       { value: "low", label: "Low", hint: "快速" },
@@ -265,7 +270,20 @@ export class PiAgentSdkProvider implements AgentProvider {
       // common case: the extension still loads, it just connects nothing.
       collectPiMcpConfig(req.cwd),
     ]);
-    const mcpFactory = buildPiMcpExtension(sdk.createMcpExtension, piMcpConfig);
+    // Managed runtimes older than 1.0.2 (0.8x installs predating the SDK
+    // bump) don't export createMcpExtension — the loader still serves them
+    // when they import cleanly. Degrade to an MCP-less turn instead of
+    // dying with "createExtension is not a function"; the user upgrades the
+    // runtime in Settings → Agent to get MCP back.
+    const mcpSupported = typeof sdk.createMcpExtension === "function";
+    const mcpFactory = mcpSupported
+      ? buildPiMcpExtension(sdk.createMcpExtension, piMcpConfig)
+      : null;
+    if (!mcpSupported) {
+      ctx.log.warn(
+        "pi: runtime has no MCP extension API (pre-1.0.2 install?) — MCP servers disabled for this turn; upgrade the Pi runtime in Settings → Agent",
+      );
+    }
     const skillAllowNames = req.skills && req.skills.length > 0 ? req.skills : undefined;
     const mcodeExtension = createMcodeExtension({
       ctx,
@@ -291,7 +309,7 @@ export class PiAgentSdkProvider implements AgentProvider {
           cwd: req.cwd,
           allowNames: skillAllowNames,
           extraSkillPaths: await getEnabledPluginSkillRoots(),
-          extensionFactories: [mcpFactory, childExtension],
+          extensionFactories: [...(mcpFactory ? [mcpFactory] : []), childExtension],
         }),
     });
     if (piMcpConfig.errors.length > 0) {
@@ -316,7 +334,7 @@ export class PiAgentSdkProvider implements AgentProvider {
       // MCP extension first (connects servers + registers mcp__* tools),
       // mcode second (approval guard covers BOTH — tool_call fires for all
       // tools regardless of which extension registered them).
-      extensionFactories: [mcpFactory, mcodeExtension],
+      extensionFactories: [...(mcpFactory ? [mcpFactory] : []), mcodeExtension],
     });
 
     // customTools override built-ins by name in AgentSession's definition
@@ -337,21 +355,43 @@ export class PiAgentSdkProvider implements AgentProvider {
     // normalizer rewrites the remaining `/mnt/d/...` to `D:/...`. Only applied
     // when resolveGitBash() finds one — otherwise the SDK default stands.
     const gitBash = process.platform === "win32" ? resolveGitBash() : null;
+    // Shell resolution parity with the session's own default toolset —
+    // agent-session.js builds the built-in bash with the pi settings'
+    // shellPath + shellCommandPrefix, so the override below reads the same
+    // two values. win32 keeps the git-bash steering on top (comment above);
+    // on other platforms the override reproduces the default exactly, adding
+    // only the tracker wrapper.
+    let settingsShellPath: string | undefined;
+    let settingsCommandPrefix: string | undefined;
+    try {
+      const settings = sdk.SettingsManager.create(req.cwd);
+      settingsShellPath = settings.getShellPath();
+      settingsCommandPrefix = settings.getShellCommandPrefix();
+    } catch {
+      // Unreadable pi settings → fall back to the SDK's own resolution.
+    }
+    const bashShellPath = process.platform === "win32" ? (gitBash ?? settingsShellPath) : settingsShellPath;
+
+    // Bash-task tracker: wraps the local bash operations so every command the
+    // model runs mirrors into the「运行命令」panel (same bash-tasks.update
+    // channel the Claude adapter uses) with LIVE output and a per-command
+    // stop. See piBashTracker.ts for the design.
+    const bashTracker = createPiBashTracker(req.sessionId, (e) => ctx.emit(e));
+    const bashOperations = bashTracker.wrapOperations(
+      sdk.createLocalBashOperations(bashShellPath ? { shellPath: bashShellPath } : {}),
+    );
     // Widened to `any` like `createMntNormalizingReadTool` — the SDK's concrete
     // renderCall is contravariant in its args, so it doesn't structurally
     // satisfy the fully-generic ToolDefinition. The bash def keeps its own
     // schema (validated args unchanged); only the array slot is widened.
-    const customTools: import("@earendil-works/pi-coding-agent").ToolDefinition<any, any, any>[] =
-      process.platform === "win32"
-        ? [
-            createMntNormalizingReadTool(sdk, req.cwd),
-            ...(gitBash
-              ? [
-                  sdk.createBashToolDefinition(req.cwd, { shellPath: gitBash }) as import("@earendil-works/pi-coding-agent").ToolDefinition<any, any, any>,
-                ]
-              : []),
-          ]
-        : [];
+    const customTools: import("@earendil-works/pi-coding-agent").ToolDefinition<any, any, any>[] = [
+      ...(process.platform === "win32" ? [createMntNormalizingReadTool(sdk, req.cwd)] : []),
+      sdk.createBashToolDefinition(req.cwd, {
+        ...(bashShellPath ? { shellPath: bashShellPath } : {}),
+        ...(settingsCommandPrefix ? { commandPrefix: settingsCommandPrefix } : {}),
+        operations: bashOperations,
+      }) as import("@earendil-works/pi-coding-agent").ToolDefinition<any, any, any>,
+    ];
 
     const { session } = await sdk.createAgentSession({
       cwd: req.cwd,
@@ -509,6 +549,9 @@ export class PiAgentSdkProvider implements AgentProvider {
       } finally {
         unsubscribe();
         session.dispose();
+        // Settle any bash task the session teardown orphaned (turn ended with
+        // an exec still in flight) and flush the roster once more.
+        bashTracker.dispose();
         finished = true;
       }
     })();
@@ -524,6 +567,14 @@ export class PiAgentSdkProvider implements AgentProvider {
         }
       },
       isRunning: () => !finished && !ac.signal.aborted,
+      // Per-command stop (「运行命令」panel): abort one tracked bash exec
+      // without interrupting the turn — the agent loop continues with the
+      // aborted command's error result, mirroring Claude's stop_task.
+      stopTask: async (taskId: string) => {
+        if (!bashTracker.stopTask(taskId)) {
+          throw new Error(`pi: unknown or settled bash task ${taskId}`);
+        }
+      },
     };
   }
 

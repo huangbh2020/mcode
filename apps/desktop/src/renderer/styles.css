@@ -920,6 +920,11 @@ button.chat-ledger-head:hover {
 .chat-ledger-live {
   font-weight: 600;
   color: rgb(var(--accent-strong));
+  /* 状态词（"运行中"）永不收缩/换行：CJK 逐字可断，flex 挤压时会变成一字一行。
+   * flex:none 对运行台账头的直接子项（无 flex-wrap）防挤压；对回执头里
+   * flex-wrap 容器内的同款标签则是整体换行而非压扁。 */
+  white-space: nowrap;
+  flex: none;
 }
 
 /* 底部扫描光带：运行中表示"还在继续"，结清后收掉。光带固定在台账宽度内，

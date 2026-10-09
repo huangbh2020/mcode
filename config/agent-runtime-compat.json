@@ -9,7 +9,10 @@
     "broken": {}
   },
   "pi": {
-    "tested": ["0.83.0", "1.0.2"],
-    "broken": {}
+    "tested": ["1.0.2"],
+    "broken": {
+      "0.83.0": "缺少 createMcpExtension API(1.0.2 新增),Pi 回合的 MCP 装配会失败,请升级 Pi runtime",
+      "0.87.1": "缺少 createMcpExtension API(1.0.2 新增),Pi 回合的 MCP 装配会失败,请升级 Pi runtime"
+    }
   }
 }

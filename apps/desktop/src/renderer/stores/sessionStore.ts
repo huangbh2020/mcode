@@ -31,7 +31,8 @@ import { isValidSnapshot } from "@renderer/lib/contextWindow.js";
 import { getLastCursor, type NavEntry } from "@renderer/lib/editorNav.js";
 import { disposeModel, getDisplayedPath } from "@renderer/lib/editorModelCache.js";
 import type { CustomModelPublic } from "@contracts/customModel";
-import { resolveEffortLevels } from "@renderer/lib/thinkingLevels.js";
+import type { PiThinkingLevelMap } from "@contracts/piModel";
+import { resolveEffortLevels, coerceEffortValue } from "@renderer/lib/thinkingLevels.js";
 import { api } from "@renderer/lib/api.js";
 import { isElectron } from "@renderer/lib/platform.js";
 import { normWorktreeKey } from "@renderer/lib/worktree.js";
@@ -60,6 +61,7 @@ import {
   UI_USER_MSG_COLOR_SETTING_KEY,
   UI_ACCENT_COLOR_SETTING_KEY,
   UI_RIGHT_PANEL_TAB_SETTING_KEY,
+  UI_SETTINGS_SECTION_SETTING_KEY,
   UI_VOICE_LANG_SETTING_KEY,
   UI_VOICE_ENGINE_SETTING_KEY,
   UI_VOICE_MIC_PERMISSION_SETTING_KEY,
@@ -174,6 +176,13 @@ import { useToastStore } from "@renderer/stores/toastStore.js";
 function pushToastLite(kind: "info" | "warning" | "error", title: string, body?: string): void {
   useToastStore.getState().push({ kind, title, body });
 }
+
+/** Per-launch latch for the runtime-update reminder (see reloadRuntimes):
+ *  the prompt must fire once at startup hydration, not again on every
+ *  re-list (install done/error events and ProviderDropdown both re-run
+ *  reloadRuntimes). Dismissing the dialog means "not again until the next
+ *  app launch". */
+let runtimeUpdatePromptShown = false;
 
 /** Auto-trigger heuristic (P3, triggerMode ask/auto): strong parallel-intent
  *  wording AND task bulk (≥2 list items or a substantial prompt). Kept
@@ -969,6 +978,14 @@ export interface SessionState {
    *  renders it beside the streaming spinner so a 10s+ mid-turn stall is
    *  explained instead of looking like a hang. NOT persisted — live feedback. */
   upstreamIssueBySession: Record<string, { cause: string; attempt: number; attempts: number }>;
+  /** Per-session LIVE generation rate (estimated tokens/s over the current
+   *  streaming burst — see the accumulator near deltaBuf). Written by
+   *  flushDeltas while deltas flow; cleared on turn.done / error / interrupt
+   *  / session delete. Consumers hide the readout when the snapshot is stale
+   *  (lastDeltaAt older than the burst-gap threshold) so the number only
+   *  appears while text is actively streaming. NOT persisted — live feedback
+   *  only; the turn-end receipt keeps the authoritative token count. */
+  streamRateBySession: Record<string, StreamRateSnapshot>;
   /** Per-session unread event counter. Incremented in `ingestEvent` whenever a
    *  noteworthy event (turn done, error, blocking approval/question, background
    *  subagent completion) arrives for a session that is NOT the active session.
@@ -1000,8 +1017,15 @@ export interface SessionState {
   /** Initial settings section to land on when the modal opens. Callers that
    *  know which section the user wants (e.g. the composer's "管理模型…"
    *  entry → "custom-models" / "pi-models") pass it to setSettingsOpen; null
-   *  means "use the default section". Cleared on close. */
+   *  means "use the persisted last-viewed section". Cleared on close. */
   settingsSection: string | null;
+  /** Last settings section the user viewed (set by SettingsPage whenever the
+   *  active section changes, deep-linked or clicked). Persisted to
+   *  ui.settingsSection so the next plain open of the settings modal lands
+   *  where the user left off. Kept as a raw string — SettingsPage validates
+   *  it against its nav table (stale ids from older builds fall back to the
+   *  first nav item). */
+  settingsLastSection: string | null;
   /** "尚未配置模型" dialog visibility. Opened by sendPrompt / editAndResendMessage
    *  when the active provider has no configured model to send with (model is
    *  auto/"default" and nothing is configured). NOT persisted. */
@@ -1165,6 +1189,12 @@ export interface SessionState {
    *  ModelDropdown when the active provider is pi-sdk, since pi's
    *  `capabilities.builtinModels` is empty (models are dynamic). */
   piAvailableModels: BuiltinModelOption[];
+  /** Per-model thinkingLevelMap from ~/.pi/agent/models.json, keyed by
+   *  `<provider>/<modelId>` (the pi session.model shape). Populated by
+   *  `reloadPiAvailableModels` — the effort chip / coercion filter a model's
+   *  不支持 levels out of the composer's ladder (see resolveEffortLevels).
+   *  Absent ref = no filter (builtin catalog / legacy rows show all levels). */
+  piModelMaps: Record<string, PiThinkingLevelMap>;
   /** Codex models the user can pick (configured third-party providers from
    *  the settings panel, projected to "providerId/modelId"). Populated by
    *  `reloadCodexAvailableModels` — used by ModelDropdown when the active
@@ -1193,6 +1223,11 @@ export interface SessionState {
   /** Per-session plan-mode draft (empty = not in plan mode). Drives the
    *  Plan section of the activity capsule. */
   planBySession: Record<string, PlanDraft>;
+  /** Per-session permission mode remembered prior to the model entering plan
+   *  mode self-initiated (via EnterPlanMode). Restored when exiting plan mode
+   *  via ExitPlanMode approval. Cleared if the user manually overrides the
+   *  mode in the composer while in plan mode. */
+  prePlanPermissionModeBySession: Record<string, PermissionMode>;
   /** Per-session plan text selected for viewing in the editor column as a
    *  plan tab. null = no plan tab open. Set when the user clicks a plan title
    *  in the activity popover or a plan card in the message stream; cleared on
@@ -1501,6 +1536,12 @@ export interface SessionState {
    *  persisted. Install progress merges in from `runtimes:event` pushes. */
   runtimes: RuntimeAgentState[];
 
+  /** Software-update-style reminder: opened ONCE per app launch by
+   *  `reloadRuntimes` when any agent's active runtime lags this build's
+   *  expected version (the app itself updated; the managed copy under
+   *  userData/runtimes is stale). See RuntimeUpdatePrompt. */
+  runtimeUpdatePromptOpen: boolean;
+
   /** Language-server lifecycle phase per `${workspacePath}::${language}`,
    *  driven by `lsp:event` stateChanged pushes (see LspStateChangedPayload).
    *  The editor toolbar reads it to show a loading pill while a server starts
@@ -1760,6 +1801,10 @@ export interface SessionState {
    *  is looking at it now). */
   setWindowFocused: (focused: boolean) => void;
   setSettingsOpen: (open: boolean, section?: string) => void;
+  /** Remember the settings page's active section (persisted to the settings
+   *  table). Called by SettingsPage on section switches and on deep-linked
+   *  opens, so a plain re-open restores the last-viewed section. */
+  setSettingsLastSection: (section: string) => void;
   /** Toggle the read-only 定时任务 viewer page. Opening it closes the settings
    *  page (mutual exclusion) and lazily loads the automations table. */
   setSchedPageOpen: (open: boolean) => void;
@@ -1984,8 +2029,9 @@ export interface SessionState {
   reloadProviders: () => Promise<void>;
   /** Re-fetch the list of models the pi SDK can authenticate with the
    *  currently-configured keys. Populates `piAvailableModels` (read by
-   *  ModelDropdown when the active provider is pi-sdk). Called on init and
-   *  after any PiModelsPanel save/delete. */
+   *  ModelDropdown when the active provider is pi-sdk) and `piModelMaps`
+   *  (per-model thinkingLevelMap — the effort chip's 不支持-level filter).
+   *  Called on init and after any PiModelsPanel save/delete. */
   reloadPiAvailableModels: () => Promise<void>;
   reloadCodexAvailableModels: () => Promise<void>;
   setModel: (model: string) => void;
@@ -2006,6 +2052,8 @@ export interface SessionState {
   /** Re-fetch the agent runtime states (claude/codex/pi) from main. Called
    *  when the settings panel mounts and after install/remove finishes. */
   reloadRuntimes: () => Promise<void>;
+  /** Open/close the runtime-update reminder dialog (RuntimeUpdatePrompt). */
+  setRuntimeUpdatePromptOpen: (open: boolean) => void;
   /** Merge one `runtimes:event` progress payload into `runtimes` (in-flight
    *  progress / done / error) without a full re-list. No-op when the panel
    *  hasn't loaded yet. */
@@ -2536,6 +2584,9 @@ const EMPTY_CUSTOM_MODELS: CustomModelPublic[] = [];
 const EMPTY_LAST_MODEL_BY_PROVIDER: Record<string, { model: string; customModelId: string | null }> = {};
 const EMPTY_PROVIDERS: ProviderInfo[] = [];
 const EMPTY_PI_MODELS: BuiltinModelOption[] = [];
+/** Module-level stable ref — Zustand selectors must not return fresh literals
+ *  (infinite re-render; see the EMPTY_* family). */
+const EMPTY_PI_MODEL_MAPS: Record<string, PiThinkingLevelMap> = {};
 const EMPTY_CODEX_MODELS: BuiltinModelOption[] = [];
 const EMPTY_SKILLS: SkillInfo[] = [];
 const EMPTY_SESSIONS: Session[] = [];
@@ -3215,6 +3266,9 @@ function dropSessionBuckets(s: SessionState, id: string) {
   delete interruptedBySession[id];
   const upstreamIssueBySession = { ...s.upstreamIssueBySession };
   delete upstreamIssueBySession[id];
+  const streamRateBySession = { ...s.streamRateBySession };
+  delete streamRateBySession[id];
+  clearStreamRate(id);
   // Also drop the hint's decay timer (module-level side effect — idempotent).
   const issueTimer = upstreamIssueDecayTimers.get(id);
   if (issueTimer) {
@@ -3227,6 +3281,8 @@ function dropSessionBuckets(s: SessionState, id: string) {
   delete todosBySession[id];
   const planBySession = { ...s.planBySession };
   delete planBySession[id];
+  const prePlanPermissionModeBySession = { ...s.prePlanPermissionModeBySession };
+  delete prePlanPermissionModeBySession[id];
   const subagentsBySession = { ...s.subagentsBySession };
   delete subagentsBySession[id];
   const subagentTranscriptsBySession = { ...s.subagentTranscriptsBySession };
@@ -3283,9 +3339,11 @@ function dropSessionBuckets(s: SessionState, id: string) {
     turnErrorBySession,
     interruptedBySession,
     upstreamIssueBySession,
+    streamRateBySession,
     unreadBySession,
     todosBySession,
     planBySession,
+    prePlanPermissionModeBySession,
     subagentsBySession,
     subagentTranscriptsBySession,
     bashTasksBySession,
@@ -3510,7 +3568,8 @@ function applySessionDeletedState(s: SessionState, id: string): Partial<SessionS
  *  modes, pi's "off" is not a claude level — so a value left over from the
  *  outgoing provider renders as a raw id in the chip and gets sent to an SDK
  *  that can't interpret it. Values the target provider doesn't declare snap
- *  to "default" (the neutral slot every provider declares for both lists);
+ *  to its neutral slot ("default" when declared — Claude/Codex; "medium" for
+ *  pi, whose list is the SDK's raw off..max ladder — see coerceEffortValue);
  *  values valid for both providers pass through untouched. Callers apply this
  *  on every provider switch (setProvider) and on re-syncs that can surface a
  *  stale persisted value (syncConfigFromSession, reloadProviders, model
@@ -3519,7 +3578,13 @@ function applySessionDeletedState(s: SessionState, id: string): Partial<SessionS
 function coerceSlotsForProvider(
   s: Pick<
     SessionState,
-    "providers" | "effort" | "permissionMode" | "customModels" | "customModelId" | "model"
+    | "providers"
+    | "effort"
+    | "permissionMode"
+    | "customModels"
+    | "customModelId"
+    | "model"
+    | "piModelMaps"
   >,
   providerId: string,
   /** The model binding the coercion is FOR. Pass the incoming binding when it
@@ -3531,20 +3596,23 @@ function coerceSlotsForProvider(
   const provider = s.providers.find((p) => p.id === providerId);
   // Same resolution the effort chip renders with: provider-declared levels,
   // filtered by the selected model's thinking declaration on OpenAI-protocol
-  // custom endpoints. A model whose thinking isn't controllable (empty list)
-  // snaps any non-default effort back to "default".
+  // custom endpoints and by the pi model's settings-panel mapping (null =
+  // 不支持 → hidden). A model whose thinking isn't controllable (empty list)
+  // snaps any non-default effort back to the neutral slot.
   const levels = resolveEffortLevels({
     providerLevels: provider?.capabilities.thinkingLevels,
     customModels: s.customModels,
     customModelId: binding?.customModelId ?? s.customModelId,
     model: binding?.model ?? s.model,
+    providerId,
+    piModelMaps: s.piModelMaps,
   });
   const modes = provider?.capabilities.permissionModes;
   return {
-    effort:
-      levels && levels.length > 0 && !levels.some((l) => l.value === s.effort)
-        ? "default"
-        : s.effort,
+    // Snap target: the provider's neutral slot when declared ("default" —
+    // Claude/Codex), else the SDK's own default level ("medium" — Pi declares
+    // the raw off..max ladder with no Auto; see coerceEffortValue).
+    effort: coerceEffortValue(s.effort, levels),
     permissionMode:
       modes && modes.length > 0 && !modes.some((m) => m.value === s.permissionMode)
         ? "default"
@@ -3573,13 +3641,17 @@ function syncConfigFromSession(
   const prevPid = get().activeProjectId;
   // effort / permissionMode are provider-namespaced (see coerceSlotsForProvider):
   // a row persisted before a provider switch — or before this coercion existed —
-  // can carry a value its own provider doesn't declare; snap it to "default"
-  // here so the composer never renders a raw foreign id. The coercion is scoped
-  // to the SESSION's model binding (not the current slots — the patch below
-  // hasn't applied yet), so an OpenAI-protocol model whose thinking levels
-  // don't include the persisted effort is corrected against the right list.
+  // can carry a value its own provider doesn't declare; snap it here so the
+  // composer never renders a raw foreign id. The coercion is scoped to the
+  // SESSION's model binding (not the current slots — the patch below hasn't
+  // applied yet), so an OpenAI-protocol model whose thinking levels don't
+  // include the persisted effort is corrected against the right list.
+  // customModelId is sanitized the same way: a row can carry a Claude custom
+  // binding under providerId pi/codex (stale slots once persisted it) and the
+  // effort chip would resolve Claude's ladder for this session.
+  const bindingCustomModelId = sanitizeBinding(get(), sess.providerId, sess.customModelId);
   const coerced = coerceSlotsForProvider(get(), sess.providerId, {
-    customModelId: sess.customModelId,
+    customModelId: bindingCustomModelId,
     model: sess.model,
   });
   const patch: Partial<SessionState> = {
@@ -3587,7 +3659,7 @@ function syncConfigFromSession(
     model: sess.model,
     effort: coerced.effort,
     permissionMode: coerced.permissionMode,
-    customModelId: sess.customModelId,
+    customModelId: bindingCustomModelId,
     activeProjectId: sess.projectId,
   };
   // The `sessions` field is a derived view of the ACTIVE project's session
@@ -3790,10 +3862,12 @@ function isValidRememberedModel(
   const provider = s.providers.find((p) => p.id === providerId);
   if (!provider) return false;
   if (provider.id === "pi-sdk") {
-    return s.piAvailableModels.some((m) => m.id === entry.model);
+    // A binding under pi is stale by definition (pi picks never set one) —
+    // reject so the restore falls back to a clean "default".
+    return !entry.customModelId && s.piAvailableModels.some((m) => m.id === entry.model);
   }
   if (provider.id === "codex-sdk") {
-    return s.codexAvailableModels.some((m) => m.id === entry.model);
+    return !entry.customModelId && s.codexAvailableModels.some((m) => m.id === entry.model);
   }
   if (provider.id === "claude-sdk") {
     const cfg = s.customModels.find((m) => m.id === entry.customModelId);
@@ -3806,6 +3880,22 @@ function isValidRememberedModel(
   return (provider.capabilities.builtinModels ?? []).some((b) => b.id === entry.model);
 }
 
+/** `customModelId` is a Claude-only concept (custom endpoints are the only
+ *  `supportsCustomEndpoint`). Pi/Codex pick plain model refs, and not every
+ *  writer clears the slot (pi picks ride `setModel`, which leaves it alone),
+ *  so a binding left over from a Claude custom pick must be stripped wherever
+ *  it would re-enter the slots. resolveSendModel already forces null at send
+ *  time — the VIEW slots must agree too, or the effort chip resolves Claude's
+ *  model-scoped ladder for a pi session. */
+function sanitizeBinding(
+  s: Pick<SessionState, "providers">,
+  providerId: string,
+  customModelId: string | null,
+): string | null {
+  const provider = s.providers.find((p) => p.id === providerId);
+  return provider?.capabilities.supportsCustomEndpoint ? customModelId : null;
+}
+
 /**
  * Drop a stale persisted composer choice back to auto. Runs after the model
  * lists reload (providers / custom endpoints / pi models): if the persisted
@@ -3814,8 +3904,7 @@ function isValidRememberedModel(
  * + "default" (auto) — and the reset is persisted so it doesn't reapply a
  * stale choice on the next launch. Sessions that already have messages are
  * skipped: their config is row-authoritative and re-synced on select.
- */
-function validateComposerSelection(
+ */function validateComposerSelection(
   set: (partial: Partial<SessionState> | ((s: SessionState) => Partial<SessionState>)) => void,
   get: () => SessionState,
 ): void {
@@ -4691,6 +4780,83 @@ function appendDelta(entry: DeltaEntry, k: "text" | "thinking", text: string): v
 
 const deltaBuf = new Map<string, DeltaEntry>();
 
+/* ─── Live generation-rate tracking (tokens/s estimate) ───
+ *
+ * The API never reports token counts while a message streams (Anthropic's
+ * `message_delta` carries usage only at message END), so the live "12.5 tok/s"
+ * readout is estimated in the renderer from the text/thinking deltas
+ * themselves. Works identically for every provider — they all emit these two
+ * events. Thinking counts: it is model output just like prose.
+ *
+ * Per-session accumulator, segmented into "bursts" by delta gaps: a pause
+ * longer than STREAM_GAP_RESET_MS (tool execution between two API calls, or a
+ * mid-message stall) starts a fresh window, so the rate reflects what is being
+ * generated RIGHT NOW instead of being diluted by tool time. The snapshot is
+ * written to the store inside flushDeltas (riding the existing rAF batch —
+ * no extra setState cadence) and hidden by consumers once the last delta is
+ * more than STREAM_GAP_RESET_MS old (freshness check against the shared useNow
+ * clock), so a frozen number never lingers beside a long-running tool. */
+export interface StreamRateSnapshot {
+  /** Estimated tokens/second over the current burst window. */
+  tokensPerSec: number;
+  /** Wall-clock ms of the last delta — drives the freshness check. */
+  lastDeltaAt: number;
+}
+
+const STREAM_GAP_RESET_MS = 2000;
+const STREAM_RATE_MIN_WINDOW_MS = 800;
+const STREAM_RATE_MIN_TOKENS = 12;
+/** Exported for the rate chip's freshness check: a snapshot whose last delta
+ *  is older than this is hidden (the stream paused — tool running / waiting),
+ *  mirroring the accumulator's own burst-gap reset. */
+export const STREAM_RATE_STALE_MS = STREAM_GAP_RESET_MS;
+
+/** Rough token estimate for a delta chunk. Claude-family tokenizers average
+ *  ~4 chars/token for Latin scripts; CJK ideographs land at ~1 token/char.
+ *  A display-only approximation — the receipt's per-turn token count remains
+ *  the authoritative figure. */
+function estimateStreamTokens(text: string): number {
+  let cjk = 0;
+  for (let i = 0; i < text.length; i++) {
+    const c = text.charCodeAt(i);
+    if ((c >= 0x2e80 && c <= 0x9fff) || (c >= 0xf900 && c <= 0xfaff) || (c >= 0xff00 && c <= 0xffef)) cjk++;
+  }
+  return cjk + (text.length - cjk) / 4;
+}
+
+type StreamRateAcc = { tokens: number; firstDeltaAt: number; lastDeltaAt: number };
+const streamRateAcc = new Map<string, StreamRateAcc>();
+
+/** Feed one delta into the session's rate accumulator (called per event —
+ *  pure math, no setState; the store read happens at flush time). */
+function noteStreamDelta(sessionId: string, text: string): void {
+  const now = Date.now();
+  const cur = streamRateAcc.get(sessionId);
+  if (!cur || now - cur.lastDeltaAt > STREAM_GAP_RESET_MS) {
+    streamRateAcc.set(sessionId, { tokens: estimateStreamTokens(text), firstDeltaAt: now, lastDeltaAt: now });
+    return;
+  }
+  cur.tokens += estimateStreamTokens(text);
+  cur.lastDeltaAt = now;
+}
+
+/** Compute the displayable rate snapshot for a session, or null while the
+ *  window is too short / token count too small to be meaningful (a one-line
+ *  narration burst would otherwise jitter wildly). */
+function streamRateSnapshot(sessionId: string): StreamRateSnapshot | null {
+  const a = streamRateAcc.get(sessionId);
+  if (!a) return null;
+  const windowMs = a.lastDeltaAt - a.firstDeltaAt;
+  if (windowMs < STREAM_RATE_MIN_WINDOW_MS || a.tokens < STREAM_RATE_MIN_TOKENS) return null;
+  return { tokensPerSec: a.tokens / (windowMs / 1000), lastDeltaAt: a.lastDeltaAt };
+}
+
+/** Drop a session's rate accumulator (turn end / error / session delete) —
+ *  the module-side companion to removing the store bucket entry. */
+function clearStreamRate(sessionId: string): void {
+  streamRateAcc.delete(sessionId);
+}
+
 let flushScheduled = false;
 
 /* ─── Adaptive throttling ───
@@ -4848,7 +5014,20 @@ function flushDeltas(): void {
     // Return a minimal diff — we mutated messagesBySession directly inside the
     // setState callback (Zustand accepts this pattern because setState runs
     // synchronously and can detect the mutation via its proxy).
-    return { messagesBySession: { ...s.messagesBySession } };
+    // The stream-rate snapshot rides the same flush: sessions that received
+    // deltas in this window get their (possibly null — below display
+    // threshold) rate recomputed; others keep their previous value.
+    let streamRateBySession = s.streamRateBySession;
+    for (const sid of bySession.keys()) {
+      if (streamRateBySession === s.streamRateBySession) streamRateBySession = { ...s.streamRateBySession };
+      const snap = streamRateSnapshot(sid);
+      if (snap) streamRateBySession[sid] = snap;
+      else delete streamRateBySession[sid];
+    }
+    return {
+      messagesBySession: { ...s.messagesBySession },
+      ...(streamRateBySession !== s.streamRateBySession ? { streamRateBySession } : {}),
+    };
   });
 }
 
@@ -4949,6 +5128,20 @@ export function selectActiveEnvPath(s: {
     if (sess?.worktreePath) return sess.worktreePath;
   }
   return s.projects.find((p) => p.id === pid)?.path ?? null;
+}
+
+/** Whether the git panel's "changes" sub-tab uses the two-column layout
+ *  (left live-diff stage + right repo list). Mirrors FilesPanel's split
+ *  layout: single display mode (the right pane is always the preview stage)
+ *  or tabs mode with the file preview placed in the sidebar — in both the
+ *  right pane runs wide. In tabs mode with "center" preview placement files
+ *  open in the center tabs and the right pane tends to be resized narrow,
+ *  so the git panel falls back to the classic single-column card list. */
+export function selectGitPanelSplitLayout(s: {
+  displayMode: DisplayMode;
+  tabsFilePreviewPlacement: TabsFilePreviewPlacement;
+}): boolean {
+  return s.displayMode === "single" || s.tabsFilePreviewPlacement === "sidebar";
 }
 
 export const useSessionStore = create<SessionState>((set, get) => ({
@@ -5056,12 +5249,16 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   interruptedBySession: {},
   turnIncompleteBySession: {},
   upstreamIssueBySession: {},
+  streamRateBySession: {},
   unreadBySession: {},
   isWindowFocused: true,
   claudeInstalled: null,
   settingsOpen: false,
   schedPageOpen: false,
   settingsSection: null,
+  // Hydrated from the settings table (ui.settingsSection) in the deferred
+  // getMany pass; null until then / when never visited.
+  settingsLastSection: null,
   modelConfigPromptOpen: false,
   modelGuardPulse: 0,
   commandPaletteOpen: false,
@@ -5116,6 +5313,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   customModels: EMPTY_CUSTOM_MODELS,
   providers: EMPTY_PROVIDERS,
   piAvailableModels: EMPTY_PI_MODELS,
+  piModelMaps: EMPTY_PI_MODEL_MAPS,
   codexAvailableModels: EMPTY_CODEX_MODELS,
   providersLoaded: false,
   customModelsLoaded: false,
@@ -5125,6 +5323,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   effort: "high",
   todosBySession: {},
   planBySession: {},
+  prePlanPermissionModeBySession: {},
   planDrawerPlanBySession: {},
   planTabActiveBySession: {},
   planApprovalDraftBySession: {},
@@ -5201,6 +5400,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   navForwardByProject: {},
   lspLanguages: [] as LspLanguageState[],
   runtimes: [] as RuntimeAgentState[],
+  runtimeUpdatePromptOpen: false,
   lspPhasesByWorkspace: {} as Record<string, { phase: "starting" | "running" | "stopped" | "importing"; error?: string; detail?: string }>,
 
   /** True once `init()` has started, to guard against React StrictMode's
@@ -5755,6 +5955,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           UI_SHORTCUTS_SETTING_KEY,
           UI_PANE_WIDTHS_SETTING_KEY,
           UI_RIGHT_PANEL_TAB_SETTING_KEY,
+          UI_SETTINGS_SECTION_SETTING_KEY,
           UI_IDE_OPEN_FILES_SETTING_KEY,
           UI_IDE_ACTIVE_FILE_SETTING_KEY,
           UI_IDE_EXPANDED_DIRS_SETTING_KEY,
@@ -5894,10 +6095,37 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           if (Object.keys(patch).length > 0) set(patch);
 
         }
+
+        // tabs mode + sidebar preview placement: the right pane IS the
+        // preview stage, but the width snapshot above stores the COLLAPSED
+        // width (see schedulePaneWidthPersist) and the expanded flag is
+        // never hydrated — re-expand to preview width so a restart doesn't
+        // squeeze the dual-column FilesPanel into a 250px strip. Mirrors
+        // what setTabsFilePreviewPlacement("sidebar") does on click.
+        if (
+          get().displayMode === "tabs" &&
+          get().tabsFilePreviewPlacement === "sidebar" &&
+          !get().isRightPreviewExpanded
+        ) {
+          const s = get();
+          set({
+            rightWidth: clampRightWidth(
+              Math.max(s.previewRightWidth, 950),
+              centerRightRowWidth(s.leftOpen, s.leftWidthPct),
+            ),
+            isRightPreviewExpanded: true,
+          });
+        }
       }
     } catch (err) {
       console.error("apply(paneWidths) failed:", err);
     }
+
+    // Settings modal: restore the last-viewed section. Kept as a raw string —
+    // SettingsPage validates it against its nav table when the modal opens
+    // (unknown ids from an older build fall back to the first nav item).
+    const settingsSectionRaw = ds[UI_SETTINGS_SECTION_SETTING_KEY];
+    if (settingsSectionRaw) set({ settingsLastSection: settingsSectionRaw });
 
     // IDE right-panel prefs (active tab, open files, active file, expanded tree
     // dirs, editor mode, diff mode, commit-gen model/prompt, custom commands,
@@ -8342,17 +8570,93 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     }
     // mode.change: the model (or host) flipped the session's effective
     // permission mode mid-turn (e.g. EnterPlanMode / ExitPlanMode after
-    // approval). Sync the composer chip for the ACTIVE session so it
-    // reflects runtime reality instead of the stale startup mode. Only the
-    // active session's chip is updated — other tabs keep their own config.
-    // Persist fire-and-forget so a resumed turn starts in the right mode.
+    // approval).
+    //
+    // Plan-mode memory requirement:
+    // When the model self-initiates plan mode (source: "model", mode: "plan"),
+    // remember the session's prior permission mode in `prePlanPermissionModeBySession`.
+    // When the model subsequently exits plan mode (source: "model", mode !== "plan",
+    // typically emitted as "default" by SDK providers on ExitPlanMode), restore that
+    // remembered mode instead of blindly adopting "default".
     if (e.type === "mode.change") {
-      if (sid === get().activeSessionId) {
-        set({ permissionMode: e.mode });
-        void api.session.updateSettings({ sessionId: sid, permissionMode: e.mode }).catch((err) => {
-          console.error("updateSettings(mode.change) failed:", err);
+      const state = get();
+      const isActive = sid === state.activeSessionId;
+      const currentMode = isActive
+        ? state.permissionMode
+        : (findSession(
+            state.sessionsByProject,
+            state.archivedSessionsByProject,
+            state.pinnedSessions,
+            state.streamSessions,
+            sid,
+            state.orchWorkersById,
+          )?.permissionMode ?? "default");
+
+      let targetMode = e.mode;
+
+      if (e.source === "model" && e.mode === "plan") {
+        // Model self-initiated plan mode: if the session wasn't already in plan
+        // mode and we don't have a remembered mode yet, capture the prior mode.
+        if (currentMode !== "plan" && !state.prePlanPermissionModeBySession[sid]) {
+          set((s) => ({
+            prePlanPermissionModeBySession: {
+              ...s.prePlanPermissionModeBySession,
+              [sid]: currentMode,
+            },
+          }));
+        }
+      } else if (e.source === "model" && e.mode !== "plan") {
+        // Model exited plan mode (ExitPlanMode approved/completed): restore
+        // the remembered mode if available, then clear the memory.
+        const savedMode = state.prePlanPermissionModeBySession[sid];
+        if (savedMode) {
+          targetMode = savedMode;
+        }
+        set((s) => {
+          if (!s.prePlanPermissionModeBySession[sid]) return s;
+          const { [sid]: _drop, ...rest } = s.prePlanPermissionModeBySession;
+          return { prePlanPermissionModeBySession: rest };
         });
       }
+
+      if (isActive) {
+        set({ permissionMode: targetMode });
+      }
+
+      // Sync the row in the session caches so switching tabs sees the fresh mode
+      set((s) => {
+        const patchSession = (list?: Session[]) =>
+          list?.map((x) => (x.id === sid ? { ...x, permissionMode: targetMode } : x));
+        const inPinned = s.pinnedSessions.some((x) => x.id === sid);
+        if (inPinned) {
+          return { pinnedSessions: patchSession(s.pinnedSessions) ?? s.pinnedSessions };
+        }
+        for (const [pid, list] of Object.entries(s.sessionsByProject)) {
+          if (list.some((x) => x.id === sid)) {
+            return {
+              sessionsByProject: {
+                ...s.sessionsByProject,
+                [pid]: patchSession(list) ?? list,
+              },
+            };
+          }
+        }
+        for (const [pid, list] of Object.entries(s.archivedSessionsByProject)) {
+          if (list.some((x) => x.id === sid)) {
+            return {
+              archivedSessionsByProject: {
+                ...s.archivedSessionsByProject,
+                [pid]: patchSession(list) ?? list,
+              },
+            };
+          }
+        }
+        return s;
+      });
+
+      void api.session.updateSettings({ sessionId: sid, permissionMode: targetMode }).catch((err) => {
+        console.error("updateSettings(mode.change) failed:", err);
+      });
       return;
     }
     // upstream.issue — transient transport trouble on the session's model
@@ -8720,6 +9024,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           } else {
             deltaBuf.set(key, { sessionId: sid, messageId: e.messageId, segs: [{ k: "text", text: e.text }] });
           }
+          noteStreamDelta(sid, e.text);
           scheduleDeltaFlush();
           // Don't add to `next` — flushDeltas mutates the store directly.
           break;
@@ -8732,6 +9037,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           } else {
             deltaBuf.set(key, { sessionId: sid, messageId: e.messageId, segs: [{ k: "thinking", text: e.text }] });
           }
+          noteStreamDelta(sid, e.text);
           scheduleDeltaFlush();
           break;
         }
@@ -8909,11 +9215,19 @@ export const useSessionStore = create<SessionState>((set, get) => ({
               // flat array - filter down to the affected one.
               pendingApprovals: s.pendingApprovals.filter((p) => p.sessionId !== sid),
               turnFilesBySession: { ...s.turnFilesBySession, [sid]: [] },
+              // Turn errored out — stop the live rate readout with it.
+              streamRateBySession: (() => {
+                if (!s.streamRateBySession[sid]) return s.streamRateBySession;
+                const m = { ...s.streamRateBySession };
+                delete m[sid];
+                return m;
+              })(),
             };
           });
           // Turn over — any live upstream-retry hint is stale (a later retry
           // re-arms it for the next turn).
           clearUpstreamIssue(set, sid);
+          clearStreamRate(sid);
           break;
         }
         case "turn.done": {
@@ -9059,6 +9373,16 @@ export const useSessionStore = create<SessionState>((set, get) => ({
             }
             return {
               runningBySession: { ...s.runningBySession, [sid]: false },
+              // Turn closed — the live generation-rate readout is done (the
+              // receipt's real token count takes over below). Clear both the
+              // bucket and the accumulator so a quick follow-up turn starts a
+              // fresh burst window instead of inheriting this one's tokens.
+              streamRateBySession: (() => {
+                if (!s.streamRateBySession[sid]) return s.streamRateBySession;
+                const m = { ...s.streamRateBySession };
+                delete m[sid];
+                return m;
+              })(),
               // Turn closed - drop the send-time anchor so the synthesized
               // pendingTurn row stops rendering (it keys off isRunning, but
               // clearing this is belt-and-suspenders and keeps the slice tidy
@@ -9089,8 +9413,10 @@ export const useSessionStore = create<SessionState>((set, get) => ({
             };
           });
           // Turn closed — drop any live upstream-retry hint (the channel may
-          // still flap next turn, which re-arms it).
+          // still flap next turn, which re-arms it). Also reset the rate
+          // accumulator (module-side companion to the bucket cleanup above).
           clearUpstreamIssue(set, sid);
+          clearStreamRate(sid);
           break;
         }
         default:
@@ -9139,6 +9465,16 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     // (download / select / remove in 语音输入) — re-check so the composer mic
     // appears/disappears without a restart.
     if (!open) void get().refreshVoiceModelStatus();
+  },
+
+  setSettingsLastSection: (section) => {
+    // Same-value early return keeps the modal's mount effect free: opening
+    // settings without navigating writes nothing.
+    if (get().settingsLastSection === section) return;
+    set({ settingsLastSection: section });
+    void api.setting.set({ key: UI_SETTINGS_SECTION_SETTING_KEY, value: section }).catch((err) => {
+      console.error("setting.set(settingsLastSection) failed:", err);
+    });
   },
 
   setSchedPageOpen: (open) => {
@@ -9684,32 +10020,33 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       if (placement === "sidebar") {
         return {
           tabsFilePreviewPlacement: "sidebar",
-          ...(activeFile
-            ? {
-                rightOpen: true,
-                rightPanelTab: "files" as const,
-                normalRightWidth: s.isRightPreviewExpanded ? s.normalRightWidth : s.rightWidth,
-                rightWidth: clampRightWidth(
-                  Math.max(s.previewRightWidth, 950),
-                  centerRightRowWidth(s.leftOpen, s.leftWidthPct),
-                ),
-                isRightPreviewExpanded: true,
-                centerTabFocus: "chat" as const,
-              }
-            : {}),
+          // The sidebar placement IS the preview stage: open the right pane
+          // on the files tab at preview width on EVERY switch — even before
+          // any file is active — so the dual-column layout has room from the
+          // first click instead of a squeezed 250px strip.
+          rightOpen: true,
+          rightPanelTab: "files" as const,
+          normalRightWidth: s.isRightPreviewExpanded ? s.normalRightWidth : s.rightWidth,
+          rightWidth: clampRightWidth(
+            Math.max(s.previewRightWidth, 950),
+            centerRightRowWidth(s.leftOpen, s.leftWidthPct),
+          ),
+          isRightPreviewExpanded: true,
+          ...(activeFile ? { centerTabFocus: "chat" as const } : {}),
         };
       } else {
         return {
           tabsFilePreviewPlacement: "center",
-          ...(activeFile && s.isRightPreviewExpanded
+          // Files open in the center now: the right pane no longer hosts the
+          // preview stage, so shrink it back to its regular width — also
+          // when no file happens to be active (e.g. all were closed).
+          ...(s.isRightPreviewExpanded
             ? {
                 rightWidth: s.normalRightWidth,
                 isRightPreviewExpanded: false,
-                centerTabFocus: "editor" as const,
               }
-            : activeFile
-              ? { centerTabFocus: "editor" as const }
-              : {}),
+            : {}),
+          ...(activeFile ? { centerTabFocus: "editor" as const } : {}),
         };
       }
     });
@@ -10265,15 +10602,24 @@ export const useSessionStore = create<SessionState>((set, get) => ({
    *  (or app restart) will re-hydrate from the row. */
   setPermissionMode: (mode) => {
     const sessionId = get().activeSessionId;
-    set((s) => ({
-      permissionMode: mode,
-      // Refresh the per-provider memory so the pick survives a provider
-      // switch (setProvider restores it) and an app restart.
-      lastModelByProvider: {
-        ...s.lastModelByProvider,
-        [s.providerId]: { ...rememberedEntryOf(s), permissionMode: mode },
-      },
-    }));
+    set((s) => {
+      const nextPrePlan = sessionId && s.prePlanPermissionModeBySession[sessionId]
+        ? { ...s.prePlanPermissionModeBySession }
+        : s.prePlanPermissionModeBySession;
+      if (sessionId && nextPrePlan[sessionId]) {
+        delete nextPrePlan[sessionId];
+      }
+      return {
+        permissionMode: mode,
+        prePlanPermissionModeBySession: nextPrePlan,
+        // Refresh the per-provider memory so the pick survives a provider
+        // switch (setProvider restores it) and an app restart.
+        lastModelByProvider: {
+          ...s.lastModelByProvider,
+          [s.providerId]: { ...rememberedEntryOf(s), permissionMode: mode },
+        },
+      };
+    });
     if (sessionId) {
       void api.session.updateSettings({ sessionId, permissionMode: mode }).catch((err) => {
         console.error("updateSettings(permissionMode) failed:", err);
@@ -10333,16 +10679,22 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       // custom endpoints (the level list is model-scoped) — coerce with the
       // INCOMING binding so the chip never shows (nor sends) a level the new
       // model doesn't accept. See coerceSlotsForProvider.
+      // Pi/Codex have no custom-config concept — their picks ride THIS action
+      // (ModelDropdown's builtin branches), so a customModelId left over from
+      // a Claude custom pick is stripped here; otherwise the effort chip keeps
+      // resolving Claude's ladder for a pi session.
+      const customModelId = sanitizeBinding(s, s.providerId, s.customModelId);
       const coerced = coerceSlotsForProvider(s, s.providerId, {
-        customModelId: s.customModelId,
+        customModelId,
         model,
       });
       return {
         model,
+        customModelId,
         ...coerced,
         lastModelByProvider: {
           ...s.lastModelByProvider,
-          [s.providerId]: { ...rememberedEntryOf(s), model, effort: coerced.effort },
+          [s.providerId]: { ...rememberedEntryOf(s), model, customModelId, effort: coerced.effort },
         },
       };
     });
@@ -10491,6 +10843,11 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         isValidRememberedModel(s, id, remembered) && remembered.model !== "default"
           ? { model: remembered.model, customModelId: remembered.customModelId }
           : { model: "default", customModelId: null };
+      // A remembered pi/codex entry can carry a customModelId left over from a
+      // Claude custom pick (the validator only checks the model) — strip it
+      // before it re-enters the slots and hijacks the effort chip's level
+      // resolution.
+      restored = { ...restored, customModelId: sanitizeBinding(s, id, restored.customModelId) };
       // effort / permissionMode are provider-namespaced too (claude's
       // acceptEdits is not a codex mode). Restore the target provider's
       // remembered slots — falling back to the current values when it has
@@ -10506,13 +10863,14 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           model: s.model,
           effort: remembered?.effort ?? s.effort,
           permissionMode: remembered?.permissionMode ?? s.permissionMode,
+          piModelMaps: s.piModelMaps,
         },
         id,
         restored,
       );
       set({ providerId: id, ...restored, ...coerced, lastModelByProvider: nextMap });
     } else {
-      restored = { model: get().model, customModelId: get().customModelId };
+      restored = { model: get().model, customModelId: sanitizeBinding(get(), id, get().customModelId) };
       set({ providerId: id });
     }
     // Remember the pick as the next-session default (restored at boot).
@@ -10609,7 +10967,23 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   reloadPiAvailableModels: async () => {
     try {
       const { models } = await api.piModels.listAvailable();
-      set({ piAvailableModels: models, piModelsLoaded: true });
+      // Per-model thinking maps for the effort-chip filter (resolveEffortLevels
+      // hides levels the model maps to null). Separate try: the list RPC is
+      // webUnsupported (web keeps the rpc-backed listAvailable), and a read
+      // failure must not take the picker list down with it — no maps just
+      // means the full level ladder shows.
+      let piModelMaps: Record<string, PiThinkingLevelMap> = {};
+      try {
+        const { providers } = await api.piModels.list();
+        for (const [name, cfg] of Object.entries(providers)) {
+          for (const m of cfg.models ?? []) {
+            if (m.thinkingLevelMap) piModelMaps[`${name}/${m.id}`] = m.thinkingLevelMap;
+          }
+        }
+      } catch {
+        piModelMaps = {};
+      }
+      set({ piAvailableModels: models, piModelMaps, piModelsLoaded: true });
       // A persisted composer pick whose pi model was deleted falls back
       // to auto.
       validateComposerSelection(set, get);
@@ -10669,10 +11043,25 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     try {
       const { runtimes } = await api.runtimes.list();
       set({ runtimes });
+      // Software-update-style reminder: after the APP itself updated, the
+      // managed runtime typically lags its pin. One prompt per launch (see
+      // `runtimeUpdatePromptShown` at module level); while the settings page
+      // is open the runtimes panel already shows the update affordance, so
+      // don't stack a modal on top of it.
+      if (
+        !runtimeUpdatePromptShown &&
+        !get().settingsOpen &&
+        runtimes.some((rt) => rt.updateAvailable && !rt.installing)
+      ) {
+        runtimeUpdatePromptShown = true;
+        set({ runtimeUpdatePromptOpen: true });
+      }
     } catch (err) {
       console.error("reloadRuntimes failed:", err);
     }
   },
+
+  setRuntimeUpdatePromptOpen: (open) => set({ runtimeUpdatePromptOpen: open }),
 
   applyRuntimeProgress: (payload) => {
     const { runtimes } = get();
@@ -10888,11 +11277,13 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     set((s) => {
       const { [sessionId]: _drop, ...rest } = s.pendingPlanApprovalBySession;
       const { [sessionId]: _dropDraft, ...restDrafts } = s.planApprovalDraftBySession;
+      const { [sessionId]: _dropPrePlan, ...restPrePlan } = s.prePlanPermissionModeBySession;
       const list = s.messagesBySession[sessionId] ?? EMPTY_MESSAGES;
       const next = upsertLivePlanBlock(list, planText, "ready", false, anchor, modelAnchor);
       return {
         pendingPlanApprovalBySession: rest,
         planApprovalDraftBySession: restDrafts,
+        prePlanPermissionModeBySession: restPrePlan,
         messagesBySession: next === list
           ? s.messagesBySession
           : { ...s.messagesBySession, [sessionId]: next },

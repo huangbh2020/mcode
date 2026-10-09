@@ -122,8 +122,12 @@ interface ComposerEditorProps {
   placeholder: string;
   /** Whether the editor accepts input (false = read-only / locked). */
   editable: boolean;
-  /** Called on every content change with the current plain-text-with-skills. */
-  onChange: (text: string) => void;
+  /** Called on every content change with the current plain-text-with-skills.
+   *  `textDelta` is the document size change of the transaction that produced
+   *  it: negative = net deletion, >= 0 = neutral/insertion. The parent uses
+   *  this to keep deletion keystrokes (Backspace shrinking the text toward an
+   *  existing `@`/`/` token) from re-opening the inline pickers. */
+  onChange: (text: string, textDelta: number) => void;
   /** Called when the user presses Enter without Shift (the parent decides
    *  send vs enqueue based on session state). Shift+Enter inserts a newline
    *  and is NOT reported. */
@@ -341,9 +345,16 @@ export const ComposerEditor = forwardRef<
       // unfocused).
       syncEmptyClass(editor);
     },
-    onUpdate: ({ editor }) => {
+    onUpdate: ({ editor, transaction }) => {
       syncEmptyClass(editor);
-      onChangeRef.current(textWithSkills(editor));
+      // Net document-size delta of THIS transaction (before = pre-transaction
+      // doc). Negative means the edit shrank the text (deletion keystrokes,
+      // cut, etc.) — the parent's picker trigger detection treats those as
+      // close/maintain-only, never as a fresh `@`/`/` trigger.
+      onChangeRef.current(
+        textWithSkills(editor),
+        transaction.doc.content.size - transaction.before.content.size,
+      );
     },
   });
 

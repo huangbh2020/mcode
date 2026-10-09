@@ -15,8 +15,11 @@
  *   - ModelDefinition: id (required) / name? / api? / baseUrl? / reasoning? /
  *     thinkingLevelMap? / input? / cost? / contextWindow? (default 128000) /
  *     maxTokens? (default 16384) / headers? / compat?
- *   - thinkingLevelMap keys: off / minimal / low / medium / high / xhigh
- *     (NO "max" key — `"xhigh": "max"` uses "max" as a VALUE string).
+ *   - thinkingLevelMap keys: off / minimal / low / medium / high / xhigh / max
+ *     (all seven of the SDK's ThinkingLevel values — verified against the
+ *     1.0.2 model-config schema; "max" is a valid KEY as well as a common
+ *     VALUE, e.g. `"xhigh": "max"` maps the xhigh slot onto the wire value
+ *     "max").
  *     Value tri-state: omitted=use provider default, string=concrete value,
  *     null=not supported.
  *   - apiKey supports `$ENV_VAR` interpolation (e.g. "$DEEPSEEK_API_KEY") —
@@ -32,7 +35,10 @@ export const PI_KNOWN_APIS = [
 ] as const;
 export type PiKnownApi = (typeof PI_KNOWN_APIS)[number];
 
-/** thinkingLevelMap keys — NO "max" key (max is a value, not a key). */
+/** thinkingLevelMap keys — all seven ThinkingLevel values the SDK accepts
+ *  (`THINKING_LEVEL_OPTIONS` in pi-coding-agent's defaults.js). "max" is a
+ *  valid KEY as well as a common VALUE (`"xhigh": "max"` remaps the xhigh
+ *  slot onto the wire value "max"). */
 export const PI_THINKING_KEYS = [
   "off",
   "minimal",
@@ -40,6 +46,7 @@ export const PI_THINKING_KEYS = [
   "medium",
   "high",
   "xhigh",
+  "max",
 ] as const;
 export type PiThinkingKey = (typeof PI_THINKING_KEYS)[number];
 

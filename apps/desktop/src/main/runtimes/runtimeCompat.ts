@@ -56,7 +56,18 @@ export const BASELINE_COMPAT_LIST: CompatList = {
   // / ModelRuntime all shape-compatible), on-disk session JSONL unchanged
   // (version 3 === CURRENT_SESSION_VERSION), and 0.83-era session files open
   // cleanly under 1.0.2.
-  pi: { tested: ["0.83.0", "1.0.2"], broken: {} },
+  // 0.83.0 / 0.87.1 re-marked broken on 2026-10-08: the app build since the
+  // 1.0.2 bump wires MCP via `sdk.createMcpExtension`, which pre-1.0.2
+  // runtimes don't export — a stale managed install fails every Pi turn at
+  // MCP assembly. The provider now degrades MCP-lessly, but the versions stay
+  // red so the settings page steers users to the upgrade.
+  pi: {
+    tested: ["1.0.2"],
+    broken: {
+      "0.83.0": "缺少 createMcpExtension API(1.0.2 新增),Pi 回合的 MCP 装配会失败,请升级 Pi runtime",
+      "0.87.1": "缺少 createMcpExtension API(1.0.2 新增),Pi 回合的 MCP 装配会失败,请升级 Pi runtime",
+    },
+  },
 };
 
 /** Where the remote override is fetched from — a fallback CHAIN, first

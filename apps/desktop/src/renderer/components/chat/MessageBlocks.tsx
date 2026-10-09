@@ -240,26 +240,35 @@ function segmentKeys(segments: Segment[]): string[] {
  *  toolName strings, so the set carries BOTH casings plus Pi-only tools
  *  (find = Pi's glob, ls = Pi-only) — this keeps grouping working without
  *  forcing every call site to normalize. See pi sdk core/tools/*.js. */
-const BATCH_TOOL_NAMES = new Set([
-  // Claude (capitalized)
-  "Glob", "Grep",
-  "Bash", "PowerShell",
-  "TodoWrite", "TaskCreate", "TaskUpdate",
-  "WebSearch", "WebFetch",
-  // Skill / slash-command invocations (lowercase alias for safety)
-  "Skill", "SlashCommand", "skill",
-  // Pi (lowercase) — find is Pi's glob, ls is Pi-only
-  "find", "grep", "bash", "ls",
+/** File-mutation operations that display diffs or created content - must remain
+ *  standalone cards so the user sees the file path and code changes without expanding. */
+const WRITE_EDIT_TOOL_NAMES = new Set([
+  // Claude
+  "Write", "Edit", "MultiEdit", "NotebookEdit",
+  // Pi (lowercase)
+  "write", "edit", "multiedit", "notebookedit",
 ]);
-/** A block that folds into a batch group: batch tool calls (see
- *  {@link BATCH_TOOL_NAMES}) and any MCP tool (`mcp__*` prefix). Thinking is
- *  NOT foldable any more (2026-09-11, user call) — a reasoning segment is
- *  content the user reads, so it gets its own card like Read/Write/Edit do.
- *  Exported for ChatPane's live-turn cross-message run partitioning (the
- *  streaming layout merges foldable blocks across assistant messages into one
- *  card). */
+
+/** Interactive/meta/planning tools that require standalone visibility and user focus. */
+const STANDALONE_INTERACTIVE_TOOL_NAMES = new Set([
+  "Task", "task",
+  "AskUserQuestion",
+  "EnterPlanMode", "ExitPlanMode",
+]);
+
+/** A block that folds into a batch group capsule:
+ *  - Thinking blocks: always fold into the capsule;
+ *  - Tool calls: all tools EXCEPT write/edit and interactive/planning tools fold into the capsule
+ *    (including Read, Glob, Grep, Bash, PowerShell, web tools, task-list bookkeeping, MCP tools, etc.);
+ *  - Narrative prose (text), plan cards (plan), and other non-procedural cards remain standalone. */
 export function isFoldableBlock(b: Block): b is ProceduralBlock {
-  return b.kind === "tool_use" && (BATCH_TOOL_NAMES.has(b.toolName) || b.toolName.startsWith("mcp__"));
+  if (b.kind === "thinking") return true;
+  if (b.kind === "tool_use") {
+    if (WRITE_EDIT_TOOL_NAMES.has(b.toolName)) return false;
+    if (STANDALONE_INTERACTIVE_TOOL_NAMES.has(b.toolName)) return false;
+    return true;
+  }
+  return false;
 }
 /** Narrow a fold-run member to its tool-call half (thinking has no status/
  *  result machinery — the group header only reads those off tool calls). */
@@ -271,17 +280,14 @@ function isToolBlock(b: ProceduralBlock): b is ToolUseBlock {
  *
  *  Grouping rule (by "is this worth independent vertical space?"):
  *   - FOLDABLE blocks (batch tools — Glob/Grep/Bash/task-list/web/skills, plus
- *     MCP calls; see isFoldableBlock) accumulate into a `batch` run — a burst
- *     of N greps + MCP calls folds into ONE group card, not N standalone rows.
+ *     MCP calls and thinking; see isFoldableBlock) accumulate into a `batch` run —
+ *     consecutive reasoning & mechanical tools fold into ONE compact action capsule.
  *   - Task (subagent), AskUserQuestion, EnterPlanMode/ExitPlanMode -> always
  *     standalone: they break the fold run and emit as their own segment.
  *   - text / error / other display blocks -> standalone and break the run too
  *     (a narration line splits the surrounding calls into two groups).
- *
- *  Thinking, Read and the file-mutation tools are standalone too (2026-09-11,
- *  user call): thinking folded for a while ("the same low signal as the calls
- *  it narrates"), but a reasoning segment is read, not skimmed — same call as
- *  the file operations, whose cards carry the path and the change. */
+ *   - Read and the file-mutation tools (Write/Edit/MultiEdit) remain standalone:
+ *     their cards carry the file path and diff which are high-value signals. */
 function groupBlocks(blocks: Block[]): Segment[] {
   const out: Segment[] = [];
   let run: ProceduralBlock[] = [];
@@ -295,8 +301,6 @@ function groupBlocks(blocks: Block[]): Segment[] {
   };
   const flushImages = () => {
     if (images.length > 0) {
-      // A single image renders standalone (so BlockView's image case handles
-      // it); 2+ consecutive images become a swipeable gallery.
       if (images.length === 1) {
         out.push({ kind: "single", block: images[0], defaultOpen: false });
       } else {
@@ -306,9 +310,6 @@ function groupBlocks(blocks: Block[]): Segment[] {
     }
   };
   const flushAttachments = () => {
-    // Consecutive attachment cards (paste/file/quote) coalesce into one
-    // wrapping chip row — one-segment-per-card stacked a full-width row per
-    // chip and a multi-attachment prompt grew into a tall chip tower.
     if (atts.length > 0) {
       out.push({ kind: "attachments", blocks: atts });
       atts = [];
@@ -316,12 +317,9 @@ function groupBlocks(blocks: Block[]): Segment[] {
   };
   for (const b of blocks) {
     if (b.kind === "image") {
-      // Images don't break a tool batch, but a tool breaks an image run.
       flushTools();
       images.push(b);
     } else if (b.kind === "attachment") {
-      // Attachment cards are standalone user content: they break the tool
-      // batch and the image run, and any other block breaks the card run.
       flushTools();
       flushImages();
       atts.push(b);
@@ -330,7 +328,6 @@ function groupBlocks(blocks: Block[]): Segment[] {
       flushImages();
       run.push(b);
     } else {
-      // Standalone tools / text / error / other blocks break both runs.
       flushTools();
       flushImages();
       flushAttachments();
@@ -343,15 +340,10 @@ function groupBlocks(blocks: Block[]): Segment[] {
   return out;
 }
 
-/** A collapsible card for a run of consecutive FOLDABLE blocks (batch tools —
- *  Glob/Grep/Bash/task-list/web/skills — plus MCP calls) INSIDE an expanded
- *  TurnPanel. One summary line when collapsed (block tally + live ticker),
- *  each child folded underneath when expanded. Only low-signal process blocks
- *  land here; Task (subagent), AskUserQuestion, thinking and the file
- *  operations are pulled out by groupBlocks as their own standalone rows - so
- *  this group never hides a high-signal action. Exported for ChatPane's
- *  live-turn rendering: the streaming layout emits cross-message fold runs as
- *  standalone list items (see groupMessagesForRender's opsGroup kind). */
+/** A compact action capsule (方案 A: 叙述锚定胶囊) for a run of consecutive
+ *  FOLDABLE blocks (thinking + batch tools — Glob/Grep/Bash/task-list/web/skills/MCP).
+ *  Renders as a ~28px lightweight capsule when collapsed, showing block tally,
+ *  breakdown badges and a live current-operation ticker without cluttering the chat. */
 export function BatchToolGroup({
   blocks,
   beforeMap,
@@ -372,6 +364,7 @@ export function BatchToolGroup({
   showTicker?: boolean;
   projectPath?: string | null;
 }) {
+  // 胶囊自身默认收起，用户不点击时保持单行紧凑状态（如图所示）
   const [open, setOpen] = useState(false);
   const { t } = useI18n();
 
@@ -382,9 +375,7 @@ export function BatchToolGroup({
       ? "error"
       : "done";
 
-  // The newest tool currently executing inside this group (drives the header
-  // ticker). Reverse scan picks the most recent running tool; thinking blocks
-  // never participate (they have no execution status).
+  // The newest tool currently executing inside this group (drives the header ticker).
   const runningTool = useMemo(() => {
     for (let i = toolBlocks.length - 1; i >= 0; i--) {
       if (toolBlocks[i].status === "running") return toolBlocks[i];
@@ -393,57 +384,136 @@ export function BatchToolGroup({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [blocks]);
 
-  // Block tally in first-appearance order. Thinking segments count under the
-  // localized "思考" label so the tally reads as one uniform list.
+  // Find the actively executing operation to display prominently on the header
+  const activeOp = useMemo(() => {
+    // 1. Look for a running tool
+    for (let i = blocks.length - 1; i >= 0; i--) {
+      const b = blocks[i];
+      if (b.kind === "tool_use" && b.status === "running") {
+        return {
+          kind: "tool" as const,
+          name: b.toolName,
+          detail: toolSummary(b.toolName, b.input),
+          status: "running" as const,
+        };
+      }
+    }
+    // 2. If the last block is thinking and turn is active, model is actively thinking
+    const last = blocks[blocks.length - 1];
+    if (last?.kind === "thinking" && turnActive) {
+      return {
+        kind: "thinking" as const,
+        name: t("chatStream.thinking"),
+        detail: summarize(last.text),
+        status: "running" as const,
+      };
+    }
+    // 3. Fallback to latest executed block in the batch
+    if (last) {
+      if (last.kind === "thinking") {
+        return {
+          kind: "thinking" as const,
+          name: t("chatStream.thinking"),
+          detail: summarize(last.text),
+          status: "done" as const,
+        };
+      }
+      return {
+        kind: "tool" as const,
+        name: last.toolName,
+        detail: toolSummary(last.toolName, last.input),
+        status: last.status,
+      };
+    }
+    return null;
+  }, [blocks, turnActive, t]);
+
+  // Single-thinking specialization: when the batch consists solely of one thinking segment
+  const firstBlock = blocks[0];
+  const isSingleThinking = blocks.length === 1 && firstBlock?.kind === "thinking";
+
+  // Block tally in first-appearance order
   const counts = new Map<string, number>();
   for (const b of blocks) {
     const name = b.kind === "thinking" ? t("chatStream.thinking") : b.toolName;
     counts.set(name, (counts.get(name) ?? 0) + 1);
   }
-  const breakdown = [...counts.entries()].map(([n, c]) => `${n} ×${c}`).join(" · ");
+  const countsBreakdown = isSingleThinking
+    ? ""
+    : [...counts.entries()].map(([n, c]) => `${n} ×${c}`).join(" · ");
 
-  const label = t("chatStream.opCount", { n: blocks.length });
+  const label = isSingleThinking
+    ? t("chatStream.thinking")
+    : t("chatStream.opCount", { n: blocks.length });
+
+  const isLiveRunning = turnActive && activeOp?.status === "running";
 
   return (
-    <div className="[font-size:var(--chat-fs-sm)]">
+    <div className="my-0.5 [font-size:var(--chat-fs-sm)]">
       <button
         onClick={(e) => toggleHoldPosition(e, setOpen)}
-        className="flex w-full items-center gap-2 rounded-md py-1.5 text-left hover:bg-surface-muted/40"
+        className="flex w-full items-center gap-2 rounded-md py-1 text-left text-content-muted hover:bg-surface-muted/40 hover:text-content transition-colors select-none group"
       >
-        {/* 操作集合: a stack of layers reads as "a set of folded operations",
-            clearer than the toolbox wrench for the N-ops batch header. */}
-        <IconStack2 size={13} className="shrink-0 text-content-subtle" />
-        {/* shrink-0 + whitespace-nowrap: the count label is the row's anchor
-            and must never wrap or shrink — under squeeze the breakdown (and
-            the ticker) give way instead. Same pattern as the Collapsible
-            thinking header. */}
-        <span className="shrink-0 whitespace-nowrap font-medium text-content-muted">{label}</span>
-        {/* min-w-0 lets truncate actually bite: a flex item defaults to
-            min-width:auto, which would push the row wide instead of
-            ellipsizing the (potentially very long, mcp__-heavy) tally. */}
-        {breakdown && <span className="min-w-0 truncate text-content-subtle">{breakdown}</span>}
-        {/* Live current-operation ticker - only while the turn is streaming.
-            Sits right of the tool tally and rolls up like a slot machine as
-            the agent moves between commands. Rendered inside the <button>
-            (CurrentOpTicker emits only phrasing content). */}
-        {turnActive && showTicker && <CurrentOpTicker op={runningTool} turnActive={turnActive} />}
-        {/* Error marker on the right - success needs no glyph, only failures
-            surface so the user can spot the broken call without expanding. */}
-        {aggregateStatus === "error" && <StatusIcon status="error" />}
-        <Chevron open={open} className="ml-auto" />
+        {/* Leading icon: pulse on running, alert on error, bulb for single thinking, stack for idle */}
+        {isLiveRunning ? (
+          <span className="shrink-0 h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
+        ) : aggregateStatus === "error" ? (
+          <IconAlertTriangle size={13} className="shrink-0 text-danger" />
+        ) : isSingleThinking ? (
+          <IconBulb size={13} className="shrink-0 text-amber-500/80" />
+        ) : (
+          <IconStack2 size={13} className="shrink-0 text-content-subtle" />
+        )}
+
+        {/* 1. If actively executing, prominently show which tool/thinking is running right now */}
+        {isLiveRunning && activeOp ? (
+          <span className="flex items-center gap-1.5 min-w-0 truncate">
+            <span className="shrink-0 font-medium text-emerald-600 dark:text-emerald-400 font-mono text-xs">
+              {activeOp.name}
+            </span>
+            {activeOp.detail && (
+              <span className="min-w-0 truncate font-mono text-[11px] text-content">
+                {activeOp.detail}
+              </span>
+            )}
+          </span>
+        ) : (
+          /* 2. Normal / completed state: show total count label and last operation hint */
+          <span className="flex items-center gap-1.5 min-w-0 truncate">
+            <span className="shrink-0 whitespace-nowrap font-medium text-content">{label}</span>
+            {isSingleThinking && firstBlock?.kind === "thinking" ? (
+              <span className="min-w-0 truncate text-content-subtle text-[11px]">
+                {summarize(firstBlock.text)}
+              </span>
+            ) : activeOp?.detail ? (
+              <span className="min-w-0 truncate font-mono text-[11px] text-content-subtle">
+                {activeOp.name}: {activeOp.detail}
+              </span>
+            ) : null}
+          </span>
+        )}
+
+        {/* Live current-operation ticker (if present and runningTool is available) */}
+        {!isLiveRunning && turnActive && showTicker && runningTool && (
+          <CurrentOpTicker op={runningTool} turnActive={turnActive} />
+        )}
+
+        {/* Right side aligned: compact counts breakdown badge + chevron */}
+        <div className="ml-auto flex items-center gap-2 shrink-0">
+          {countsBreakdown && (
+            <span className="px-2 py-0.5 rounded-md bg-surface-muted/60 border border-edge/40 text-[10px] text-content-subtle font-mono">
+              {countsBreakdown}
+            </span>
+          )}
+          <Chevron open={open} className="text-content-subtle opacity-70 group-hover:opacity-100" />
+        </div>
       </button>
+
       {open && (
-        // Cap height so a large batch (20 reads) doesn't stretch the stream;
-        // the list scrolls internally instead. The left border marks this as
-        // an expanded group body, visually nested under its header.
-        <div className="max-h-80 space-y-1.5 overflow-y-auto border-l border-edge py-1 pl-2">
-          {/* Tool calls key by their unique toolCallId (thinking has no id —
-              the run only appends, so the index is stable for it). Each child
-              gets its own boundary: one broken block must not take down the
-              group (or, absent boundaries, the whole tree). */}
+        <div className="mt-1 max-h-72 space-y-1.5 overflow-y-auto border-l border-edge py-1 pl-2">
           {blocks.map((b, i) => (
             <RenderErrorBoundary key={b.kind === "tool_use" ? `tu:${b.toolCallId}` : `th:${i}`}>
-              <BlockView block={b} beforeMap={beforeMap} liveTurn={turnActive} projectPath={projectPath} />
+              <BlockView block={b} beforeMap={beforeMap} liveTurn={turnActive} projectPath={projectPath} defaultOpen={false} />
             </RenderErrorBoundary>
           ))}
         </div>
@@ -454,8 +524,10 @@ export function BatchToolGroup({
 
 /** Render a collapsible chevron icon (▾ when open, ▸ when closed). An optional
  *  className is merged in (e.g. "ml-auto" to pin the arrow to the row's right
- *  edge when a ticker sits between the tally and the chevron). */
-function Chevron({ open, className }: { open: boolean; className?: string }) {
+ *  edge when a ticker sits between the tally and the chevron). Exported for
+ *  ChatPane's live ledger head — the running turn's toggle shares the affordance
+ *  with the completed TurnPanel's receipt head. */
+export function Chevron({ open, className }: { open: boolean; className?: string }) {
   return (
     <IconChevronDown
       size={12}
@@ -1807,12 +1879,12 @@ function EditToolCard({
         className="flex w-full items-center gap-2 rounded-md py-1.5 text-left hover:bg-surface-muted/50"
       >
         <StatusIcon status={status} live={live} />
-        <ToolIcon name="Edit" className="text-content-subtle" />
-        <span className="font-medium text-content-muted">Edit</span>
-        <span className="truncate font-mono text-content-subtle" title={filePath}>
+        <ToolIcon name="Edit" className="shrink-0 text-content-subtle" />
+        <span className="shrink-0 font-medium text-content-muted">Edit</span>
+        <span className="min-w-0 flex-1 truncate font-mono text-content-subtle" title={filePath}>
           {filePath}
         </span>
-        <span className="ml-auto flex items-center gap-1.5 [font-size:var(--chat-fs-xxs)]">
+        <span className="ml-auto flex shrink-0 items-center gap-1.5 whitespace-nowrap [font-size:var(--chat-fs-xxs)]">
           {adds > 0 && <span className="text-success">+{adds}</span>}
           {dels > 0 && <span className="text-danger">−{dels}</span>}
           <Chevron open={open} />
@@ -1891,15 +1963,15 @@ function WriteToolCard({
         className="flex w-full items-center gap-2 rounded-md py-1.5 text-left hover:bg-surface-muted/50"
       >
         <StatusIcon status={status} live={live} />
-        <ToolIcon name="Write" className="text-content-subtle" />
-        <span className="font-medium text-content-muted">Write</span>
-        <span className="truncate font-mono text-content-subtle" title={filePath}>
+        <ToolIcon name="Write" className="shrink-0 text-content-subtle" />
+        <span className="shrink-0 font-medium text-content-muted">Write</span>
+        <span className="min-w-0 flex-1 truncate font-mono text-content-subtle" title={filePath}>
           {filePath}
         </span>
-        <span className="ml-auto flex items-center gap-1.5 [font-size:var(--chat-fs-xxs)]">
+        <span className="ml-auto flex shrink-0 items-center gap-1.5 whitespace-nowrap [font-size:var(--chat-fs-xxs)]">
           {diff && adds > 0 && <span className="text-success">+{adds}</span>}
           {diff && dels > 0 && <span className="text-danger">−{dels}</span>}
-          {!diff && <span className="text-content-subtle">{t("chatStream.lineCount", { n: lineCount })}</span>}
+          {!diff && <span className="shrink-0 whitespace-nowrap text-content-subtle">{t("chatStream.lineCount", { n: lineCount })}</span>}
           <Chevron open={open} />
         </span>
       </button>
@@ -1977,16 +2049,16 @@ function GenericToolCard({
         className="flex w-full items-center gap-2 rounded-md py-1.5 text-left hover:bg-surface-muted/50"
       >
         <StatusIcon status={block.status} live={live} />
-        <ToolIcon name={block.toolName} className="text-content-subtle" />
-        <span className="font-medium text-content-muted">{block.toolName}</span>
+        <ToolIcon name={block.toolName} className="shrink-0 text-content-subtle" />
+        <span className="shrink-0 font-medium text-content-muted">{block.toolName}</span>
         {summaryToolPath ? (
-          <span className="truncate font-mono text-content-subtle">
+          <span className="min-w-0 flex-1 truncate font-mono text-content-subtle">
             <FileLink token={summaryToolPath} projectPath={projectPath} />
           </span>
         ) : (
-          <span className="truncate text-content-subtle">{toolSummary(block.toolName, block.input)}</span>
+          <span className="min-w-0 flex-1 truncate text-content-subtle">{toolSummary(block.toolName, block.input)}</span>
         )}
-        <Chevron open={open} />
+        <Chevron open={open} className="ml-auto shrink-0" />
       </button>
       {approvalBroken && (
         // Amber (not red): the turn's context is intact and the model usually

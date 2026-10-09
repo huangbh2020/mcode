@@ -27,7 +27,7 @@ import {
 } from "@renderer/lib/icons.js";
 import { useCursorAnchor } from "@renderer/hooks/useCursorAnchor.js";
 import { isElectron } from "@renderer/lib/platform.js";
-import { useSessionStore, resolveTurnModel, EMPTY_MESSAGES, EMPTY_TODOS, EMPTY_SUBAGENTS, EMPTY_CHAT_QUEUE, EMPTY_ELEMENT_QUEUE, EMPTY_PROMPT_QUEUE, EMPTY_BOOKMARKS, EMPTY_USAGE, EMPTY_BASH_TASKS, EMPTY_SERVICES, type Block, type ChatMessage, type TodoItem, type TurnMeta, type QueuedPrompt } from "@renderer/stores/sessionStore.js";
+import { useSessionStore, resolveTurnModel, EMPTY_MESSAGES, EMPTY_TODOS, EMPTY_SUBAGENTS, EMPTY_CHAT_QUEUE, EMPTY_ELEMENT_QUEUE, EMPTY_PROMPT_QUEUE, EMPTY_BOOKMARKS, EMPTY_USAGE, EMPTY_BASH_TASKS, EMPTY_SERVICES, STREAM_RATE_STALE_MS, type Block, type ChatMessage, type TodoItem, type TurnMeta, type QueuedPrompt, type StreamRateSnapshot } from "@renderer/stores/sessionStore.js";
 import { useToastStore } from "@renderer/stores/toastStore.js";
 import { api } from "@renderer/lib/api.js";
 import { findNormalizedTextRange, highlightRange } from "@renderer/lib/textFind.js";
@@ -35,7 +35,7 @@ import { useI18n } from "@renderer/lib/i18n/index.js";
 import { useNow } from "@renderer/hooks/useNow.js";
 import { useComposerRowFit } from "@renderer/hooks/useComposerRowFit.js";
 import type { SubagentSnapshot } from "@contracts/runtime";
-import type { SessionBookmark } from "@contracts/session";
+import type { Session, SessionBookmark } from "@contracts/session";
 import type { FileSearchEntry } from "@contracts/ipc";
 import { prepareImageForSend } from "@renderer/lib/imageResize.js";
 import type { PromptImage } from "@renderer/stores/sessionStore.js";
@@ -51,7 +51,7 @@ import {
   FILE_DRAG_MIME,
 } from "@renderer/lib/contentTag.js";
 import type { SkillInfo, BuiltInCommand } from "@renderer/lib/slashCommands.js";
-import { MessageBlocks, TurnPanel, BatchToolGroup, isFoldableBlock, TURN_FOLD_MS, type ProceduralBlock, type BeforeContentMap, type ToolUseBlock } from "./MessageBlocks.js";
+import { MessageBlocks, TurnPanel, BatchToolGroup, Chevron, isFoldableBlock, TURN_FOLD_MS, type ProceduralBlock, type BeforeContentMap, type ToolUseBlock } from "./MessageBlocks.js";
 import { CurrentOpTicker } from "./CurrentOpTicker.js";
 import { ModelBadge } from "./ModelAvatar.js";
 import { turnTokenUsage, CUMULATIVE_USAGE_PROVIDER_IDS } from "@renderer/lib/turnTokens.js";
@@ -97,6 +97,10 @@ import { LegendList, type LegendListRef } from "@legendapp/list/react";
 /** 第一条消息与顶部(标签条 / 标题栏)之间的留白。作为滚动内容的顶部
  *  padding,停在顶部时可见,向下滚动后随内容滚走。 */
 const MESSAGE_LIST_TOP_PADDING = 10;
+
+/** Stable empty roster for the side-chats selector (per the store rule:
+ * selectors must return stable references or subscriptions loop). */
+const EMPTY_SIDE_SESSIONS: Session[] = [];
 
 /** Picker trigger chars → picker kind. CJK soft keyboards often emit
  *  full-width variants (／ U+FF0F, ＠ U+FF20) for the slash/at keys, so
@@ -213,6 +217,35 @@ function fmtDuration(ms: number): string {
   return `${h}h ${String(mm).padStart(2, "0")}m`;
 }
 
+/** Live generation-rate readout ("45.2 tok/s") pinned to the RIGHT end of
+ *  the composer-top chips row (the 自动编排 / 定时任务 bar). Estimated
+ *  renderer-side from text/thinking deltas (the API only reports real token
+ *  counts at message END — see the accumulator in sessionStore); thinking
+ *  counts as output. Renders nothing while the snapshot is stale (no delta
+ *  for >2s: a tool is running or the model is waiting) or when no burst is
+ *  measurable yet, so the number only appears while text actively streams —
+ *  ml-auto keeps the slot at the row's right edge without disturbing the
+ *  left-side chips when it pops in/out. Ticks against the app-wide useNow
+ *  clock for the freshness check. */
+function StreamRateChip({ rate }: { rate: StreamRateSnapshot | null }) {
+  const { t } = useI18n();
+  // Hook order: useNow must run before the conditional return.
+  const now = useNow();
+  if (!rate || now - rate.lastDeltaAt > STREAM_RATE_STALE_MS) return null;
+  const v = rate.tokensPerSec;
+  return (
+    <span
+      // --chat-fs-xs: the chat meta-line tier (same as the turn stat rows) —
+      // tracks the Settings → 字号 choice instead of a hardcoded px, so the
+      // readout scales with the rest of the chat chrome.
+      className="ml-auto shrink-0 [font-size:var(--chat-fs-xs)] tabular-nums text-content-subtle"
+      title={t("chatStream.streamRateHint")}
+    >
+      {t("chatStream.streamRate", { n: v >= 100 ? String(Math.round(v)) : v.toFixed(1) })}
+    </span>
+  );
+}
+
 /** Per-turn stat row shown ABOVE the first assistant message of a turn:
  *  "14:32:05 · 12.3s". While the turn is still streaming
  *  (turnMeta.endedAt undefined) the duration ticks live; once the turn ends it
@@ -285,12 +318,26 @@ function TurnStatRow({
 
 
 /** 运行台账的台头（运行中态）。与 TurnPanel 的回执头同一行槽位：
- *  [模型徽标] ● 运行中 时钟 · 走时 · 实时操作 ……………………… N 步
+ *  [模型徽标] ● 运行中 时钟 · 走时 · 实时操作 ……………………… N 步 ▸
+ *
+ *  整行是一个开关按钮（2026-09-30）：运行中过程明细默认收拢，正文只留展示
+ *  内容（叙述/回复/计划/问询卡），点击台头展开全量流——与完成态 TurnPanel
+ *  「点击回执头展开明细」同一交互语言，右侧箭头共用 Chevron。
  *
  *  必须是有 hook 的组件：走时用全应用共享的 useNow（1s 一跳），实时操作是一个
  *  自带滚动动画的 CurrentOpTicker。渲染它的地方（wrapLiveSpine）是普通函数，
  *  拼的是 JSX 而不是定义组件，所以这里能正常挂 hook。 */
-function LiveLedgerHead({ turnMeta, blocks }: { turnMeta?: TurnMeta; blocks: Block[] }) {
+function LiveLedgerHead({
+  turnMeta,
+  blocks,
+  open,
+  onToggle,
+}: {
+  turnMeta?: TurnMeta;
+  blocks: Block[];
+  open: boolean;
+  onToggle: () => void;
+}) {
   const { t } = useI18n();
   const now = useNow();
   const startedAt = turnMeta?.startedAt ?? now;
@@ -299,20 +346,31 @@ function LiveLedgerHead({ turnMeta, blocks }: { turnMeta?: TurnMeta; blocks: Blo
   const stepCount = blocks.filter((b) => b.kind === "tool_use").length;
 
   return (
-    <div className="chat-ledger-head">
+    <button
+      type="button"
+      className="chat-ledger-head"
+      onClick={onToggle}
+      aria-expanded={open}
+    >
       <ModelBadge model={turnMeta?.model} />
       <span className="chat-ledger-dot" aria-hidden />
       <span className="chat-ledger-live">{t("chatStream.ledgerRunning")}</span>
-      <span className="tabular-nums">{fmtClock(startedAt)}</span>
-      <span className="opacity-60">·</span>
-      <span className="tabular-nums">{fmtDuration(duration)}</span>
+      {/* 时钟/走时复用回执头的降级槽位（styles.css 的 @container 规则：窄处先收
+          时钟、最后收走时），shrink-0 保证两档之间不被 flex 压到换行——「运行中」
+          与「29m 37s」曾在此被逐字竖排挤压。弹性由可截断的 ticker 独自吸收。 */}
+      <span className="chat-ledger-clock shrink-0">
+        <span className="tabular-nums">{fmtClock(startedAt)}</span>
+        <span className="opacity-60">·</span>
+      </span>
+      <span className="chat-ledger-duration shrink-0 tabular-nums">{fmtDuration(duration)}</span>
       <CurrentOpTicker op={runningTool} turnActive />
       {stepCount > 0 && (
         <span className="ml-auto shrink-0 tabular-nums opacity-70">
           {t("chatStream.stepCount", { n: stepCount })}
         </span>
       )}
-    </div>
+      <Chevron open={open} className={stepCount > 0 ? undefined : "ml-auto"} />
+    </button>
   );
 }
 
@@ -361,6 +419,27 @@ const META_TOOL_NAMES = new Set(["TaskUpdate", "TaskCreate", "TodoWrite"]);
 
 function isMetaToolBlock(b: Block): boolean {
   return b.kind === "tool_use" && META_TOOL_NAMES.has(b.toolName);
+}
+
+/** 运行中过程收拢（2026-09-30）时仍单独可见的工具卡：交互决策点（问询、
+ *  计划审批）与子代理派发。其余工具卡（Read/Write/Bash/Glob/Grep/Web/MCP/
+ *  Skill/元工具）与思考行在收拢态隐藏——台头的实时操作 ticker 与「N 步」
+ *  仍实时反映它们，点击台头展开全量流。 */
+const PROCESS_COLLAPSE_VISIBLE_TOOLS = new Set([
+  "Task", "task",
+  "AskUserQuestion",
+  "EnterPlanMode",
+  "ExitPlanMode",
+]);
+
+/** Whether a block hides when the live turn's process surface is collapsed:
+ *  thinking rows and ordinary tool cards. Display blocks (text / plan /
+ *  turn-files / error / attachments…) and the interactive tools above always
+ *  stay visible — they are content or decisions, not process noise. */
+function isProcessCollapsibleBlock(b: Block): boolean {
+  if (b.kind === "thinking") return true;
+  if (b.kind === "tool_use") return !PROCESS_COLLAPSE_VISIBLE_TOOLS.has(b.toolName);
+  return false;
 }
 
 /** Render item after turn-level grouping. A `turnGroup` bundles a whole
@@ -1407,6 +1486,13 @@ function ChatPaneForSession({
   const usageHistory = useSessionStore(
     (s) => s.usageHistoryBySession[sessionId] ?? EMPTY_USAGE,
   );
+  // Live generation rate (estimated tokens/s) for the composer chips row's
+  // right end. Rides the same flush cadence as the streamed content (written
+  // by flushDeltas), so subscribing here adds no extra render pressure; the
+  // chip hides it unless fresh deltas are flowing.
+  const streamRate: StreamRateSnapshot | null = useSessionStore(
+    (s) => s.streamRateBySession[sessionId] ?? null,
+  );
   // Provider of this session — decides whether the records' token counters are
   // per-turn (Claude/Codex) or session-cumulative (Pi). See turnTokens.ts.
   const sessionProviderId = useSessionStore((s) => {
@@ -1524,6 +1610,33 @@ function ChatPaneForSession({
   const loadAutomations = useSessionStore((s) => s.loadAutomations);
   const openSchedPanel = useSessionStore((s) => s.openSchedPanel);
   const setTaskScheduleEditorOpen = useSessionStore((s) => s.setTaskScheduleEditorOpen);
+  // Side chats parented to THIS session — the capsule's「子会话」node. The
+  // bucket normally fills when the right panel's ask tab mounts, but the
+  // capsule must reflect them without that, so this pane hydrates on mount
+  // too (cheap, idempotent, races benignly with the panel's own refresh).
+  const hydrateSideChats = useSessionStore((s) => s.hydrateSideChats);
+  const sideChats = useSessionStore(
+    (s) => s.sideChatsByParent[sessionId] ?? EMPTY_SIDE_SESSIONS,
+  );
+  // Primitive "which side chats have a live turn" signature — a string keeps
+  // the subscription stable (a fresh Set per store write would loop), the Set
+  // is then derived in a memo.
+  const sideChatRunningKey = useSessionStore((s) =>
+    (s.sideChatsByParent[sessionId] ?? EMPTY_SIDE_SESSIONS)
+      .map((x) => (s.runningBySession[x.id] ? "1" : "0"))
+      .join(""),
+  );
+  const sideChatRunningIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (let i = 0; i < sideChats.length && i < sideChatRunningKey.length; i++) {
+      if (sideChatRunningKey[i] === "1") ids.add(sideChats[i].id);
+    }
+    return ids;
+  }, [sideChats, sideChatRunningKey]);
+
+  useEffect(() => {
+    void hydrateSideChats(sessionId);
+  }, [sessionId, hydrateSideChats]);
 
   useEffect(() => {
     if (!automationsLoaded) void loadAutomations();
@@ -1542,6 +1655,7 @@ function ChatPaneForSession({
     bookmarks.length > 0 ||
     bashTasks.length > 0 ||
     services.length > 0 ||
+    sideChats.length > 0 ||
     hasSessionSched ||
     hasInFlightSched;
   const addBookmark = useSessionStore((s) => s.addBookmark);
@@ -2167,12 +2281,18 @@ function ChatPaneForSession({
    *  Closing the picker happens when the token is broken (space / delete /
    *  caret leaves).
    *
+   *  `allowOpen` gates OPENING (not maintaining/closing): deletion keystrokes
+   *  pass false so shrinking the text toward an already-typed `@` token (e.g.
+   *  backspacing "hello @file world" down past "world") only ever keeps an
+   *  open picker in sync or closes it — it never pops one open. Typing the
+   *  trigger char itself (or any insertion) passes true, unchanged.
+   *
    *  IMPORTANT: skill/command pills serialize as `/name` in the plain-text
    *  representation, so their leading `/` would be mistaken for a freshly-typed
    *  slash trigger. We fetch the pill text ranges from the editor and skip over
    *  them while backtracking - a pill's `/` is never a trigger. */
   const recomputePicker = useCallback(
-    (v: string, caret: number) => {
+    (v: string, caret: number, allowOpen = true) => {
       // Locked only when a bottom prompt (approval / question) owns the input
       // area — matching textareaLocked. While a turn is merely RUNNING the
       // picker stays available: the composer accepts typed-ahead prompts, and
@@ -2219,6 +2339,9 @@ function ChatPaneForSession({
           }
           const kind = triggerKind;
           if (pickerKind !== kind) {
+            // A deletion pass may keep an already-open picker in sync (query
+            // updates below) but must not open a fresh one.
+            if (!allowOpen) return;
             triggerStartRef.current = i - 1;
             const rect = editorRef.current?.getRect();
             if (rect) setPickerAnchor(rect);
@@ -2236,14 +2359,17 @@ function ChatPaneForSession({
   );
 
   /** Content-change handler from the rich-text editor. The editor reports its
-   *  plain-text-with-skills representation; we keep a mirror in `value` (for
-   *  empty-state checks + enqueue) and re-run trigger detection. A change that
-   *  is NOT our own history-recall fill means the user typed/edited — exit
-   *  recall mode so Up/Down return to caret navigation, and re-run trigger
-   *  detection. Recall fills (applyHistory) are not user edits: they stay in
-   *  recall mode and skip trigger detection so a recalled `/command` or
-   *  `@file` doesn't pop the picker open mid-recall. */
-  const handleChange = (text: string) => {
+   *  plain-text-with-skills representation plus the transaction's net size
+   *  delta; we keep a mirror in `value` (for empty-state checks + enqueue) and
+   *  re-run trigger detection. A net deletion (backspace / cut) may maintain
+   *  or close the inline picker but never opens one — otherwise deleting text
+   *  after an existing `@` token pops the mention picker the moment the caret
+   *  backs into it. A change that is NOT our own history-recall fill means the
+   *  user typed/edited — exit recall mode so Up/Down return to caret
+   *  navigation, and re-run trigger detection. Recall fills (applyHistory) are
+   *  not user edits: they stay in recall mode and skip trigger detection so a
+   *  recalled `/command` or `@file` doesn't pop the picker open mid-recall. */
+  const handleChange = (text: string, textDelta: number) => {
     setValue(text);
     if (useSessionStore.getState().schedHintVisibleBySession[sessionId]) {
       useSessionStore.getState().hideSchedPromptHint(sessionId);
@@ -2256,7 +2382,7 @@ function ChatPaneForSession({
     setRecallActive(false);
     setHistoryIndex(-1);
     const caret = editorRef.current?.getCaretOffset() ?? -1;
-    if (caret >= 0) recomputePicker(text, caret);
+    if (caret >= 0) recomputePicker(text, caret, textDelta >= 0);
   };
 
   /** Fill the editor with the history message at `idx`, entering recall mode.
@@ -3228,6 +3354,17 @@ function ChatPaneForSession({
     lastUserMessageIdRef.current = lastUserMessageId;
   }, [lastUserMessageId]);
 
+  /** 运行中台账的过程明细开关（2026-09-30）：大任务每个 think→act 周期落
+   *  两行（思考 + N 个操作），几十个周期就是一面元信息墙。默认收拢——台头
+   *  本就汇总模型/走时/实时操作/步数，正文只留展示内容；点击台头展开全量流。
+   *  每个新回合（isRunning false→true 边沿）重置回收拢态，与完成态 TurnPanel
+   *  的默认折叠同哲学。pane 级状态即可：tabs 模式 pane 常驻保活，单槽模式
+   *  切会话重挂载 → 回到默认收拢，正是期望语义。 */
+  const [liveProcessOpen, setLiveProcessOpen] = useState(true);
+  useEffect(() => {
+    if (isRunning) setLiveProcessOpen(true);
+  }, [isRunning]);
+
   /** One rendered row of the live segment — the element the list would have
    *  rendered for that item, with the per-row horizontal resolution stripped
    *  (the outer `px-[var(--chat-gutter)]` moves to the wrapper instead). */
@@ -3263,6 +3400,11 @@ function ChatPaneForSession({
     const tailInsideSegment = lastRenderableIdx > start && lastRenderableIdx < end;
 
     const rows: SegmentRow[] = [];
+    // 收拢态行集（liveProcessOpen=false 时 inner 改画这份）：过程行（ops 卡、
+    // 纯思考行）整体缺席，行内的展示内容（ops 卡的 leading 叙述、消息里的
+    // 展示块子集）单独成行。与 rows 同序，key 稳定——切换展开/收拢时 React
+    // 按 key 复用，已挂载的展示行不重挂。
+    const compactRows: SegmentRow[] = [];
     // 台头要用：回合起点（走时基准）、当前执行中的工具（实时操作）、步数。
     // The head reads the WHOLE spine — not just the folded runs: since
     // thinking / Read / Write / Edit render as their own rows (2026-09-11),
@@ -3324,33 +3466,76 @@ function ChatPaneForSession({
             </div>
           ),
         });
+        // 收拢态：ops 卡整卡隐藏；被它吸收的 leading 展示块（叙述行）仍可见，
+        // 单独成行（同一 MessageBlocks 渲染，只是没有卡）。
+        if (it.leading && it.leading.length > 0) {
+          compactRows.push({
+            key: `ops:${it.liveKey ?? it.anchorId}:lead`,
+            node: (
+              <div className="mt-[var(--chat-block-gap)]">
+                <RenderErrorBoundary>
+                  <MessageBlocks
+                    blocks={it.leading}
+                    beforeMap={beforeMap}
+                    onOpenPlan={(p) => openPlanDrawer(sessionId, p)}
+                    projectPath={projectPath}
+                  />
+                </RenderErrorBoundary>
+              </div>
+            ),
+          });
+        }
       } else if (it.kind === "single") {
         // 兜底：哨兵没带元数据时取正文首行消息自带的（同一回合的 opener），
         // 保证台头的模型徽标与走时基准永远正确。
         if (!turnMeta && it.msg.turnMeta) turnMeta = it.msg.turnMeta;
         liveLedgerBlocks.push(...it.msg.blocks);
-        rows.push({
-          key: `msg:${it.liveKey ?? it.msg.id}`,
-          node: (
-            // 台账台头已承载本回合的汇总（模型 · 时钟 · 走时 · 实时操作），
-            // 正文行不再渲染自己的 stat 行——否则同一回合出现两行回合栏。
-            // tightTop 恒真：卡内文本行也用块间距，与批次行同档（上边距由
-            // MessageRow 自己给，动画壳不再带 margin）。
-            <MessageRow
-              msg={it.msg}
-              tightTop
-              beforeMap={beforeMap}
-              hideTurnStat
-              projectPath={projectPath}
-            />
-          ),
-        });
+        const rowKey = `msg:${it.liveKey ?? it.msg.id}`;
+        const rowNode = (
+          // 台账台头已承载本回合的汇总（模型 · 时钟 · 走时 · 实时操作），
+          // 正文行不再渲染自己的 stat 行——否则同一回合出现两行回合栏。
+          // tightTop 恒真：卡内文本行也用块间距，与批次行同档（上边距由
+          // MessageRow 自己给，动画壳不再带 margin）。
+          <MessageRow
+            msg={it.msg}
+            tightTop
+            beforeMap={beforeMap}
+            hideTurnStat
+            projectPath={projectPath}
+          />
+        );
+        rows.push({ key: rowKey, node: rowNode });
+        // 收拢态：思考行与普通工具卡隐藏，展示块（叙述/回复/计划/改动文件/
+        // 问询与计划审批/子代理派发）单独成行。无过程块的消息直接复用展开态
+        // 行（同一 node，不重挂）；全过程块的消息整行缺席。
+        if (!liveProcessOpen) {
+          const kept = it.msg.blocks.filter((b) => !isProcessCollapsibleBlock(b));
+          if (kept.length === it.msg.blocks.length) {
+            compactRows.push({ key: rowKey, node: rowNode });
+          } else if (kept.length > 0) {
+            compactRows.push({
+              key: rowKey,
+              node: (
+                <MessageRow
+                  msg={{ ...it.msg, blocks: kept }}
+                  tightTop
+                  beforeMap={beforeMap}
+                  hideTurnStat
+                  projectPath={projectPath}
+                />
+              ),
+            });
+          }
+        }
       }
     }
 
+    // 展开态画全量流（rows）；收拢态画 compactRows（过程行隐藏、展示内容保留）。
+    const visibleRows = liveProcessOpen ? rows : compactRows;
+
     const inner = (
       <>
-        {rows.map((row) => (
+        {visibleRows.map((row) => (
           <div
             key={row.key}
             // 纯入场动画壳，不带任何布局属性：行间距由行内容自己给（文本行走
@@ -3378,9 +3563,11 @@ function ChatPaneForSession({
     return (
       <div key={`${keyPrefix}:live-spine`} className="px-[var(--chat-gutter)]">
         {/* 运行中的过程面与完成态共用同一张台账卡：台头在数步子、底部扫描光带
-            表示仍在写入；回合结束后由 TurnPanel 接手同一形态，只把台头翻成回执。 */}
+            表示仍在写入；回合结束后由 TurnPanel 接手同一形态，只把台头翻成回执。
+            台头整行是过程明细的展开开关（2026-09-30）——收拢态 data-open=false，
+            台头下不发分隔发丝线，与完成态折叠面板同形。 */}
         <div className="chat-turn mx-auto mt-[var(--chat-row-gap-assistant)] max-w-5xl">
-          <div className="chat-ledger" data-phase="running" data-open="true">
+          <div className="chat-ledger" data-phase="running" data-open={liveProcessOpen ? "true" : "false"}>
             <LiveLedgerHead
               turnMeta={
                 turnMeta?.model
@@ -3388,6 +3575,12 @@ function ChatPaneForSession({
                   : { ...turnMeta, startedAt: turnMeta?.startedAt ?? Date.now(), model: sessionModel ?? undefined }
               }
               blocks={liveLedgerBlocks}
+              open={liveProcessOpen}
+              onToggle={() => {
+                // 展开高度剧变，先挂起贴底跟随再翻转（与 TurnPanel 手动折叠同款）。
+                pauseBottomAnchor();
+                setLiveProcessOpen((v) => !v);
+              }}
             />
             <div className="chat-ledger-body">{inner}</div>
             <span className="chat-ledger-scan" aria-hidden="true" />
@@ -3866,6 +4059,18 @@ function ChatPaneForSession({
           services={services}
           onStopService={(service) => void stopService(sessionId, service)}
           onOpenService={(service) => openUrlInBrowser(`http://localhost:${service.port}`)}
+          sideChats={sideChats}
+          sideChatRunningIds={sideChatRunningIds}
+          // The side panel lists the ACTIVE session's side chats — if this
+          // pane is a background tab, activate it first so the panel's bucket
+          // and the clicked row line up (imperative reads keep this pane free
+          // of activeSessionId subscriptions, per its design note).
+          onOpenSideChat={(sc) => {
+            const st = useSessionStore.getState();
+            if (st.activeSessionId !== sessionId) void st.openTab(sessionId);
+            st.openSideChatPanel();
+            void st.selectSideChat(sc.id);
+          }}
           automations={automations}
           onOpenSchedPanel={() => openSchedPanel(sessionId)}
           onNewSched={() => setTaskScheduleEditorOpen(sessionId, true)}
@@ -4015,11 +4220,13 @@ function ChatPaneForSession({
               sessions only, hidden when there's <2 projects) then the
               working-environment picker. Both are quiet text triggers
               OUTSIDE the composer card; each hides itself once the
-              conversation starts. */}
+              conversation starts. Far RIGHT: the live generation-rate
+              readout (estimated tokens/s while text actively streams). */}
           <div className={cn("flex items-center gap-1 px-1 pb-1", hideComposer && "hidden")}>
             <SessionDirectoryChip sessionId={sessionId} />
             <WorktreeModeChip sessionId={sessionId} />
             <OrchComposerChips sessionId={sessionId} />
+            <StreamRateChip rate={streamRate} />
           </div>
           <div
             ref={composerCardRef}

@@ -356,8 +356,9 @@ function emptyPiModel(): PiModelFormState {
       medium: "default",
       high: "default",
       xhigh: "default",
+      max: "default",
     },
-    thinkingValue: { off: "", minimal: "", low: "", medium: "", high: "", xhigh: "" },
+    thinkingValue: { off: "", minimal: "", low: "", medium: "", high: "", xhigh: "", max: "" },
   };
 }
 

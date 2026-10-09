@@ -38,6 +38,7 @@ import {
 import type { SkillInfo, SkillSource, ExternalSkillInfo, SkillTool } from "@contracts/ipc";
 import { ProjectRepo } from "@main/store/repositories.js";
 import { log } from "@main/lib/logger.js";
+import { agentSkillsRoot } from "@main/lib/agentSkills.js";
 import { getEnabledPluginSkillRoots } from "@main/plugins/pluginManager.js";
 
 /** Case-insensitive, normalized equality for project-root matching — same
@@ -67,7 +68,8 @@ function findKnownProject(projectPath: string) {
 
 /** Resolve the skills root directory for a given source. Global skills live
  *  under ~/.mcode/skills (Mcode's own CLAUDE_CONFIG_DIR); project skills under
- *  <project>/.claude/skills. Returns the absolute root path.
+ *  <project>/.claude/skills; agent skills under the platform-neutral
+ *  <project>/.agent/skills drop-in root. Returns the absolute root path.
  *
  *  The global root moved from ~/.claude/skills to ~/.mcode/skills because
  *  CLAUDE_CONFIG_DIR is now always set to ~/.mcode - the SDK's bundled binary
@@ -77,6 +79,9 @@ function findKnownProject(projectPath: string) {
 function resolveSkillRoot(source: SkillSource, projectPath: string): string {
   if (source === "global") {
     return path.join(homedir(), ".mcode", "skills");
+  }
+  if (source === "agent") {
+    return agentSkillsRoot(projectPath);
   }
   return path.join(projectPath, ".claude", "skills");
 }
@@ -161,8 +166,19 @@ function parseSkillFrontmatter(md: string): {
  * metadata, with the directory name as the `name` fallback. Symlinks are
  * followed (realpath). Any IO error is caught and skipped — this function
  * never throws.
+ *
+ * `nameFromDir` forces the DIRECTORY name as the skill name (frontmatter
+ * `name` ignored). Required for the "agent" source: the CLI registers
+ * plugin-adopted skills by directory name (verified against 2.1.258 —
+ * `.agent:<dirName>`), so the listed name must be the dir name or the
+ * allowlist qualification can't match.
  */
-async function scanSkillsRoot(rootDir: string, source: SkillSource, into: Map<string, SkillInfo>): Promise<void> {
+async function scanSkillsRoot(
+  rootDir: string,
+  source: SkillSource,
+  into: Map<string, SkillInfo>,
+  opts?: { nameFromDir?: boolean },
+): Promise<void> {
   const root = await safeRealPath(rootDir);
   if (!root) return;
   let entries: import("node:fs").Dirent[];
@@ -195,9 +211,9 @@ async function scanSkillsRoot(rootDir: string, source: SkillSource, into: Map<st
 
     const md = await readTextHead(path.join(real, "SKILL.md"));
     const fm = md ? parseSkillFrontmatter(md) : {};
-    const name = fm.name?.trim() || entry.name;
-    // Dedupe by name: project-scoped entries are scanned AFTER global ones,
-    // so a project skill naturally overrides a same-named global skill.
+    // Dedupe by name: later-scoped roots are scanned after earlier ones, so a
+    // project/agent skill naturally overrides a same-named global skill.
+    const name = (opts?.nameFromDir ? undefined : fm.name?.trim()) || entry.name;
     into.set(name, {
       name,
       description: fm.description?.trim() ?? "",
@@ -411,10 +427,15 @@ export async function listSkillsForProject(projectPath: string | undefined): Pro
 
   const byName = new Map<string, SkillInfo>();
   try {
-    // Global first, then project — so project entries override.
+    // Global → project → agent, so a later root overrides a same-named
+    // earlier entry (agent is the dedicated drop-in convention and wins over
+    // the generic `.claude/skills` mirror).
     await scanSkillsRoot(resolveSkillRoot("global", ""), "global", byName);
     if (project) {
       await scanSkillsRoot(resolveSkillRoot("project", project.path), "project", byName);
+      await scanSkillsRoot(resolveSkillRoot("agent", project.path), "agent", byName, {
+        nameFromDir: true,
+      });
     }
   } catch (err) {
     // Should be unreachable (scanSkillsRoot never throws), but be defensive:
@@ -437,10 +458,11 @@ export async function listSkillsForProject(projectPath: string | undefined): Pro
   } catch (err) {
     log.warn(`plugin skills scan failed: ${(err as Error).message}`);
   }
-  // Stable ordering: project-first then global, alphabetical within each,
-  // so the menu doesn't reshuffle between renders.
+  // Stable ordering: project → agent → global, alphabetical within each
+  // source, so the menu doesn't reshuffle between renders.
+  const sourceRank: Record<SkillSource, number> = { project: 0, agent: 1, global: 2, plugin: 3 };
   return [...byName.values()].sort((a, b) => {
-    if (a.source !== b.source) return a.source === "project" ? -1 : 1;
+    if (a.source !== b.source) return sourceRank[a.source] - sourceRank[b.source];
     return a.name.localeCompare(b.name);
   });
 }
@@ -485,7 +507,9 @@ function resolveSkillRootForRequest(
   if (!projectPath) return null;
   const project = findKnownProject(projectPath);
   if (!project) return null;
-  return resolveSkillRoot("project", project.path);
+  // "project" (`.claude/skills`) and "agent" (`.agent/skills`) are both
+  // project-rooted, editable sources — same guard, different root.
+  return resolveSkillRoot(source, project.path);
 }
 
 export function registerSkillsHandlers(ipcMain: IpcMain): void {

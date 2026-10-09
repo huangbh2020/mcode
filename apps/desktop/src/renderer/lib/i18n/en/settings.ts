@@ -145,14 +145,14 @@ export const en = {
 
   // ── UpdateNotification (global bottom-right update notice card) ──
   "settings.update.availableTitle": "New version v{version} available",
-  "settings.update.availableBodyWin": "Restart to install once downloaded, or it installs automatically when you quit the app.",
+  "settings.update.availableBodyWin": "Restart to install once downloaded, or it installs automatically when you quit the app. If the install fails, download the installer from the releases page.",
   "settings.update.availableBodyManual": "In-app auto-update isn't supported by this build. Please download the latest version from the releases page.",
   "settings.update.downloadNow": "Download now",
   "settings.update.remindLater": "Remind me later",
   "settings.update.goToDownload": "Go to downloads",
   "settings.update.downloadingTitle": "Downloading v{version}",
   "settings.update.downloadedTitle": "v{version} ready to install",
-  "settings.update.downloadedBody": "Restart the app to finish installing; if you skip it for now, it installs automatically on quit.",
+  "settings.update.downloadedBody": "Restart the app to finish installing (it also installs automatically on quit). If the install fails, download the installer from the releases page.",
 
   // ── AppearancePanel (+ FontSizeStepper) ──
   "settings.appearance.title": "Appearance",
@@ -482,7 +482,7 @@ export const en = {
   "settings.runtimes.compatStale": "Compat list unavailable — judging by the built-in list (may lag behind)",
   "settings.runtimes.verdict.upToDate": "Up to date (v{v})",
   "settings.runtimes.verdict.ok": "Update to v{v} available (tested by Mcode)",
-  "settings.runtimes.verdict.untested": "Update to v{v} available (not regression-tested by Mcode)",
+  "settings.runtimes.verdict.untested": "Upstream released v{v}, not yet adapted by Mcode — updating enables no new features and may break existing chains; once adapted and verified, upgrading will be offered here",
   "settings.runtimes.verdict.blocked": "v{v} is known to be incompatible: {reason}",
   "settings.runtimes.verdict.activeBrokenHint": "The installed version IS this one — expand the details and use Rollback to recover",
   "settings.runtimes.verdict.notInstalled": "Not installed yet — install first to check for updates",
@@ -491,13 +491,21 @@ export const en = {
   "settings.runtimes.updateTo": "Update to v{v}",
   "settings.runtimes.forceInstall": "Install v{v} anyway",
   "settings.runtimes.gateBlockedHint": "Compat gates rejected this version (reason in the error above). You can force-install, at your own risk.",
-  "settings.runtimes.untestedConfirm": "v{v} has not been regression-tested by Mcode; approvals/asks may misbehave after updating.\n\nInstall-time compat gates (protocol markers / launch probe) run automatically — a failure aborts and keeps the current version. Continue?",
+  "settings.runtimes.untestedConfirm": "v{v} has not been adapted or regression-tested by Mcode; force-installing skips the compat gates: no new features become available, and existing chains (approvals/asks/plan mode) may break.\n\nThis escape hatch exists for upstream hotfix scenarios only. Force-install anyway?",
   "settings.runtimes.blockedConfirm": "v{v} is marked known-broken in Mcode's compat list: {reason}\n\nForce-installing may break permission approvals, plan mode and similar chains. Install anyway?",
   "settings.runtimes.rollbackTo": "Roll back to v{v}",
   "settings.runtimes.rollbackConfirm": "Roll {name} back to v{v}? The newer version will be deleted from disk.",
   "settings.runtimes.rolledBack": "Rolled back to v{v}",
   "settings.runtimes.restartRequired": "Pi is loaded in-process — restart the app for the new version to take effect",
   "settings.runtimes.field.previousVersion": "Previous version",
+  "settings.runtimes.field.upstream": "Upstream latest",
+  "settings.runtimes.forceInstallHint": "Force-install the unadapted upstream version (skips compat gates, at your own risk)",
+
+  // ── RuntimeUpdatePrompt (startup "runtime update available" corner card) ──
+  "settings.runtimes.updatePromptTitle": "Agent updates available",
+  "settings.runtimes.updatePromptDesc": "Mcode has been updated, but the following runtimes are still on older versions. Updating them to the versions this build is paired with is recommended:",
+  "settings.runtimes.updateNow": "Update now",
+  "settings.runtimes.updateLater": "Remind me later",
 
   // ── McpPanel ──
   "settings.mcp.title": "MCP servers",
@@ -736,6 +744,7 @@ export const en = {
   "settings.skills.desc4": " in the composer to invoke one.",
   "settings.skills.noProjects": "No projects yet — only global skills can be managed",
   "settings.skills.sourceProject": "Project",
+  "settings.skills.sourceAgent": ".agent",
   "settings.skills.sourceGlobal": "Global",
   "settings.skills.noDesc": "(no description)",
   "settings.skills.newSkill": "New skill",
@@ -781,7 +790,10 @@ export const en = {
   "settings.skills.fieldScope": "Scope",
   "settings.skills.scopeProjectDisabled": "No projects yet — project skills unavailable",
   "settings.skills.scopeProjectHint": "Stored in the selected project's .claude/skills; available to that project only",
+  "settings.skills.scopeAgentHint": "Stored in the project's .agent/skills (the platform-neutral project skills dir); discovered by Claude/Pi/Codex alike",
   "settings.skills.scopeGlobalHint": "Stored in ~/.mcode/skills; available to every project",
+  "settings.skills.newSkillAgentIntro1": "Fill in the name, description and body; a standard frontmatter is generated on save. New skills are stored in the current project's ",
+  "settings.skills.newSkillAgentIntro2": " (the platform-neutral dir every provider — Claude/Pi/Codex — discovers). Later you can add advanced fields such as ",
   "settings.skills.newSkillGlobalIntro1": "Fill in the name, description and body; a standard frontmatter is generated on save. Global skills are stored in ",
   "settings.skills.newSkillGlobalIntro2": " and are available to every project. Later you can add advanced fields such as ",
 
@@ -892,6 +904,8 @@ export const en = {
   "settings.usage.empty": "No usage yet — stats appear here after your first completed turn.",
 
   // ── mobile settings sheet (MobileSettingsSheet) ──
-  "settings.mobile.displayModeHint":
-    "In tabs mode, a session tab strip appears above the chat for switching between open threads. This preference is shared with the desktop.",
+  "settings.mobile.copyLink": "Copy access link",
+  "settings.mobile.copyLinkDone": "Copied",
+  "settings.mobile.shareLinkHint":
+    "The link embeds your access credentials — open it on another device to enter the mobile web app directly, no pairing code needed. Treat it like a password.",
 } as const;

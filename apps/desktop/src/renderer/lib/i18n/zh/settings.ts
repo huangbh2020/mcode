@@ -148,14 +148,14 @@ export const zh = {
 
   // ── UpdateNotification (global bottom-right update notice card) ──
   "settings.update.availableTitle": "发现新版本 v{version}",
-  "settings.update.availableBodyWin": "下载完成后可重启安装,退出应用时也会自动安装。",
+  "settings.update.availableBodyWin": "下载完成后可重启安装,退出应用时也会自动安装;若安装失败,请前往发布页手动下载安装。",
   "settings.update.availableBodyManual": "当前安装包暂不支持应用内自动更新,请前往发布页下载最新版本。",
   "settings.update.downloadNow": "立即下载",
   "settings.update.remindLater": "稍后提醒",
   "settings.update.goToDownload": "前往下载",
   "settings.update.downloadingTitle": "正在下载 v{version}",
   "settings.update.downloadedTitle": "v{version} 已就绪",
-  "settings.update.downloadedBody": "重启应用后完成安装;稍后重启将在退出时自动安装。",
+  "settings.update.downloadedBody": "重启应用后完成安装(退出时也会自动安装);若安装失败,请前往发布页手动下载安装。",
 
   // ── AppearancePanel (+ FontSizeStepper) ──
   "settings.appearance.title": "外观",
@@ -485,7 +485,7 @@ export const zh = {
   "settings.runtimes.compatStale": "兼容名单未能从远端获取,以内置名单判定(可能滞后)",
   "settings.runtimes.verdict.upToDate": "已是最新(v{v})",
   "settings.runtimes.verdict.ok": "可更新至 v{v}(已适配)",
-  "settings.runtimes.verdict.untested": "可更新至 v{v}(未经 Mcode 回归测试)",
+  "settings.runtimes.verdict.untested": "上游已发布 v{v},Mcode 尚未适配验证——升级不会启用新功能,且可能破坏现有链路;适配验证通过后会在此提示升级",
   "settings.runtimes.verdict.blocked": "v{v} 已知不兼容:{reason}",
   "settings.runtimes.verdict.notInstalled": "尚未安装,安装后才能检查更新",
   "settings.runtimes.verdict.activeBrokenHint": "当前安装的正是该版本,请展开详情使用「回退」恢复",
@@ -494,13 +494,21 @@ export const zh = {
   "settings.runtimes.updateTo": "更新至 v{v}",
   "settings.runtimes.forceInstall": "仍要安装 v{v}",
   "settings.runtimes.gateBlockedHint": "兼容闸门未通过(原因见上方错误)。可强制安装,风险自担。",
-  "settings.runtimes.untestedConfirm": "v{v} 未经 Mcode 回归测试,更新后可能出现审批、提问等功能异常。\n\n安装时会自动执行兼容闸门检查(协议标记 / 启动探测),失败会中止并保留当前版本。仍要继续吗?",
+  "settings.runtimes.untestedConfirm": "v{v} 未经 Mcode 适配与回归测试,强制安装将跳过兼容闸门:新功能不会因此可用,权限审批、提问、计划模式等现有链路可能失效。\n\n该入口仅供上游热修复等特殊场景自救,确定强制安装吗?",
   "settings.runtimes.blockedConfirm": "v{v} 在 Mcode 兼容名单中标记为已知不兼容:{reason}\n\n强制安装可能导致权限审批、计划模式等链路失效。确定仍要安装吗?",
   "settings.runtimes.rollbackTo": "回退到 v{v}",
   "settings.runtimes.rollbackConfirm": "确定将 {name} 回退到 v{v}?当前新版本将从磁盘删除。",
   "settings.runtimes.rolledBack": "已回退到 v{v}",
   "settings.runtimes.restartRequired": "Pi 以进程内模块加载,需重启应用后新版本才生效",
   "settings.runtimes.field.previousVersion": "上一版本",
+  "settings.runtimes.field.upstream": "上游最新",
+  "settings.runtimes.forceInstallHint": "强制安装未适配的上游版本(跳过兼容闸门,风险自担)",
+
+  // ── RuntimeUpdatePrompt(启动时的"运行时可更新"右下角提醒卡片)──
+  "settings.runtimes.updatePromptTitle": "Agent 有可用更新",
+  "settings.runtimes.updatePromptDesc": "Mcode 已升级,以下运行时仍是旧版本,建议更新到与当前应用适配的版本后再继续使用:",
+  "settings.runtimes.updateNow": "立即更新",
+  "settings.runtimes.updateLater": "稍后提醒",
 
   // ── McpPanel ──
   "settings.mcp.title": "MCP 服务器",
@@ -735,6 +743,7 @@ export const zh = {
   "settings.skills.desc4": " 即可调用。",
   "settings.skills.noProjects": "暂无项目 — 仅可管理全局 skill",
   "settings.skills.sourceProject": "项目",
+  "settings.skills.sourceAgent": ".agent",
   "settings.skills.sourceGlobal": "全局",
   "settings.skills.noDesc": "(无描述)",
   "settings.skills.newSkill": "新建 Skill",
@@ -780,7 +789,10 @@ export const zh = {
   "settings.skills.fieldScope": "作用域 (Scope)",
   "settings.skills.scopeProjectDisabled": "暂无项目,无法创建项目 skill",
   "settings.skills.scopeProjectHint": "存放到所选项目的 .claude/skills,仅该项目可用",
+  "settings.skills.scopeAgentHint": "存放到项目的 .agent/skills(平台中立的项目级技能目录),Claude/Pi/Codex 均可发现",
   "settings.skills.scopeGlobalHint": "存放到 ~/.mcode/skills,所有项目可用",
+  "settings.skills.newSkillAgentIntro1": "填写名称、描述和正文,保存时会自动生成标准 frontmatter。新建 skill 存放到当前项目的 ",
+  "settings.skills.newSkillAgentIntro2": "(平台中立目录,Claude/Pi/Codex 均可发现)。之后可在编辑模式补充 ",
   "settings.skills.newSkillGlobalIntro1": "填写名称、描述和正文,保存时会自动生成标准 frontmatter。全局 skill 存放到 ",
   "settings.skills.newSkillGlobalIntro2": ",所有项目可用。之后可在编辑模式补充 ",
 
@@ -891,6 +903,8 @@ export const zh = {
   "settings.usage.empty": "暂无用量数据,完成一轮对话后此处会出现统计。",
 
   // ── mobile settings sheet (MobileSettingsSheet) ──
-  "settings.mobile.displayModeHint":
-    "Tab 模式下,聊天区顶部会显示会话标签条,用于在已打开的会话间切换;该偏好与电脑端共享。",
+  "settings.mobile.copyLink": "复制访问链接",
+  "settings.mobile.copyLinkDone": "已复制",
+  "settings.mobile.shareLinkHint":
+    "链接内含访问凭据:发送给其他设备,在浏览器打开即可直接进入移动端,无需配对验证码;请像保管密码一样保管它。",
 } as const;

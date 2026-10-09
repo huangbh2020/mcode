@@ -7,7 +7,7 @@ import { joinPath, basename } from "@renderer/lib/path.js";
 import { formatRelativeTime, formatFullTime } from "@renderer/lib/time.js";
 import { browserUuid } from "@renderer/lib/uuid.js";
 import type { GitRepo, GitStatusResult, GitFileStatus, GitBranchInfo, GitBranchListResult, GitMergePreviewResult } from "@contracts/ipc";
-import { EMPTY_TURN_FILES, useSessionStore } from "@renderer/stores/sessionStore.js";
+import { EMPTY_TURN_FILES, useSessionStore, selectGitPanelSplitLayout } from "@renderer/stores/sessionStore.js";
 import type { TurnFileEntry } from "@renderer/lib/turnFiles.js";
 import { lineDiff, diffSummary } from "@renderer/lib/lineDiff.js";
 import { Button, Dialog } from "@renderer/components/ui/index.js";
@@ -83,7 +83,10 @@ let logIdSeq = 0;
  *   更改 (unstaged) group   - [全部放弃] [全部暂存]
  *   操作日志 (operation log) - collapsible, recent N ops with full errors
  *
- * Clicking a file opens it in the CENTER editor's diff view (not inline).
+ * Clicking a file previews its diff: in the split two-column layout the left
+ * live-diff stage shows it inline; in the compact single-column layout (tabs
+ * mode with center preview placement) it opens the CENTER editor diff — or
+ * the floating diff dialog per the diff open-mode setting.
  * Right-clicking a file shows a context menu (view source / discard changes).
  * Each file row shows a +/- diff tally badge (loaded async).
  *
@@ -1729,12 +1732,19 @@ function FileRow({
   const openFileInIde = useSessionStore((s) => s.openFileInIde);
   const selectedGitDiffFile = useSessionStore((s) => s.selectedGitDiffFile);
   const setSelectedGitDiffFile = useSessionStore((s) => s.setSelectedGitDiffFile);
+  const setGitDiffPair = useSessionStore((s) => s.setGitDiffPair);
+  const gitDiffOpenMode = useSessionStore((s) => s.gitDiffOpenMode);
+  const openGitDiffDialogTab = useSessionStore((s) => s.openGitDiffDialogTab);
+  const splitPreview = useSessionStore(selectGitPanelSplitLayout);
   const [diffTally, setDiffTally] = useState<{ adds: number; dels: number } | null>(null);
 
   const absPath = joinPath(repoPath, file.path);
   const code = staged ? file.index : file.workingTree;
 
+  // Selection highlight only applies to the split layout's inline stage —
+  // the compact layout has no left pane, so a stale selection stays silent.
   const isSelected =
+    splitPreview &&
     selectedGitDiffFile?.repoPath === repoPath &&
     selectedGitDiffFile?.filePath === file.path &&
     selectedGitDiffFile?.staged === !!staged;
@@ -1761,15 +1771,73 @@ function FileRow({
     };
   }, [repoPath, file.path, code, staged]);
 
-  // Click → preview diff in left stage
-  const handleClick = () => {
-    setSelectedGitDiffFile({
-      repoPath,
-      repoName: repoName || basename(repoPath),
-      filePath: file.path,
-      staged: !!staged,
-      status: code,
-    });
+  // Click → preview the diff where the current layout can show it. Split
+  // layout selects the file for the left inline stage; the compact layout
+  // (tabs mode + center preview placement) opens the CENTER editor diff —
+  // or the floating dialog when the user's diff open-mode asks for it
+  // (wide-panel mode has no center editor column, so it takes the dialog).
+  const handleClick = async () => {
+    if (splitPreview) {
+      setSelectedGitDiffFile({
+        repoPath,
+        repoName: repoName || basename(repoPath),
+        filePath: file.path,
+        staged: !!staged,
+        status: code,
+      });
+      return;
+    }
+    if (gitDiffOpenMode === "dialog" || useSessionStore.getState().widePanelOpen) {
+      // Dialog open-mode: compact patch-scoped diff — both sides are
+      // reconstructed from the patch (changed regions ± context). Staged
+      // diffs always supply `after` from the patch (index blob); unstaged
+      // may omit it so DiffPane reads the live working tree from disk.
+      let before = "";
+      let after: string | undefined;
+      try {
+        const { patch } = await api.git.diff({ repoPath, filePath: file.path, staged: !!staged });
+        if (patch) {
+          const parsed = parsePatchToBeforeAfter(patch);
+          before = parsed.before;
+          after = parsed.after;
+        }
+      } catch {
+        // fall through with empty before
+      }
+      openGitDiffDialogTab({
+        id: `${absPath}::${staged ? "staged" : "work"}`,
+        filePath: absPath,
+        before,
+        after: staged ? (after ?? "") : after,
+        title: basename(file.path),
+        repoPath,
+        source: "working",
+        staged: !!staged,
+      });
+      return;
+    }
+    // Center open-mode: full-file diff. The old side comes from the git
+    // object database — index snapshot for unstaged, HEAD for staged — never
+    // from a patch reconstruction, which only covers changed regions and
+    // would paint the rest of the file as additions. The new side is the
+    // live working tree (DiffPane reads it from disk when `after` is
+    // omitted); a staged file pins both sides to blobs so the view shows
+    // exactly what staging changed, independent of later working-tree edits.
+    try {
+      if (staged) {
+        const [head, index] = await Promise.all([
+          api.git.fileBlob({ repoPath, filePath: file.path, side: "HEAD" }),
+          api.git.fileBlob({ repoPath, filePath: file.path, side: "index" }),
+        ]);
+        setGitDiffPair(absPath, { before: head.content, after: index.content });
+      } else {
+        const { content } = await api.git.fileBlob({ repoPath, filePath: file.path, side: "index" });
+        setGitDiffPair(absPath, { before: content });
+      }
+    } catch {
+      // fall through — without a stashed pair FileEditor opens in edit mode
+    }
+    openFileInIde(absPath, { diff: true });
   };
 
   return (
@@ -1863,13 +1931,17 @@ function FileRow({
               <IconEye size={12} />
               {t("ide.git.viewDiff")}
             </ContextMenu.Item>
-            <ContextMenu.Item
-              onClick={() => openFileInIde(absPath, { diff: true })}
-              className="flex w-full items-center gap-2 px-3 py-1.5 text-left [font-size:var(--right-panel-font-size)] text-content-muted outline-none select-none data-[highlighted]:bg-surface-muted"
-            >
-              <IconEye size={12} />
-              {t("ide.git.openInMainEditor")}
-            </ContextMenu.Item>
+            {/* Only meaningful in the split layout, where the click previews
+             * inline — the compact layout's viewDiff already opens externally. */}
+            {splitPreview && (
+              <ContextMenu.Item
+                onClick={() => openFileInIde(absPath, { diff: true })}
+                className="flex w-full items-center gap-2 px-3 py-1.5 text-left [font-size:var(--right-panel-font-size)] text-content-muted outline-none select-none data-[highlighted]:bg-surface-muted"
+              >
+                <IconEye size={12} />
+                {t("ide.git.openInMainEditor")}
+              </ContextMenu.Item>
+            )}
             <ContextMenu.Item
               onClick={() => openFileInIde(absPath)}
               className="flex w-full items-center gap-2 px-3 py-1.5 text-left [font-size:var(--right-panel-font-size)] text-content-muted outline-none select-none data-[highlighted]:bg-surface-muted"

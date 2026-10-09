@@ -143,9 +143,7 @@ export function FileEditor({
         isMarkdown={markdown}
         isImage={image}
         isUnsupported={unsupported}
-        onTogglePreview={() =>
-          setViewMode(filePath, effectiveMode === "preview" ? "edit" : "preview")
-        }
+        onSelectViewMode={(m) => setViewMode(filePath, m)}
         editorMode={editorMode}
         onToggleEditorMode={() => setEditorMode(editorMode === "tabs" ? "replace" : "tabs")}
       />
@@ -182,7 +180,7 @@ function EditorToolbar({
   isMarkdown,
   isImage,
   isUnsupported,
-  onTogglePreview,
+  onSelectViewMode,
   editorMode,
   onToggleEditorMode,
 }: {
@@ -194,7 +192,7 @@ function EditorToolbar({
   isMarkdown: boolean;
   isImage: boolean;
   isUnsupported: boolean;
-  onTogglePreview: () => void;
+  onSelectViewMode: (mode: "edit" | "preview") => void;
   editorMode: "tabs" | "replace";
   onToggleEditorMode: () => void;
 }) {
@@ -356,14 +354,28 @@ function EditorToolbar({
             {t("ide.editor.lspFailed", { name: LSP_LANGUAGE_DISPLAY[lspLanguageId] })}
           </button>
         )}
+        {/* Preview/source toggle for files that open in a read-only preview
+            (markdown/image/unsupported) — always visible so the mode is one
+            click away instead of buried in the overflow menu. Shows the TARGET
+            mode: eye while editing (click → preview), pencil while previewing
+            (click → source). */}
+        {hasPreviewToggle && (
+          <button
+            type="button"
+            onClick={() => onSelectViewMode(mode === "preview" ? "edit" : "preview")}
+            aria-label={mode === "preview" ? t("ide.editor.editMode") : t("ide.editor.previewMode")}
+            title={mode === "preview" ? t("ide.editor.editMode") : t("ide.editor.previewMode")}
+            className="flex items-center justify-center rounded p-0.5 text-content-subtle transition-colors hover:bg-surface-hover hover:text-content"
+          >
+            {mode === "preview" ? <IconEdit size={14} /> : <IconEye size={14} />}
+          </button>
+        )}
         <EditorActionsMenu
           filePath={filePath}
           projectPath={projectPath}
           mode={mode}
           canDiff={canDiff}
           onToggleMode={onToggleMode}
-          hasPreviewToggle={hasPreviewToggle}
-          onTogglePreview={onTogglePreview}
           editorMode={editorMode}
           onToggleEditorMode={onToggleEditorMode}
         />
@@ -378,8 +390,6 @@ function EditorActionsMenu({
   mode,
   canDiff,
   onToggleMode,
-  hasPreviewToggle,
-  onTogglePreview,
   editorMode,
   onToggleEditorMode,
 }: {
@@ -388,8 +398,6 @@ function EditorActionsMenu({
   mode: "edit" | "diff" | "preview";
   canDiff: boolean;
   onToggleMode: () => void;
-  hasPreviewToggle: boolean;
-  onTogglePreview: () => void;
   editorMode: "tabs" | "replace";
   onToggleEditorMode: () => void;
 }) {
@@ -446,16 +454,6 @@ function EditorActionsMenu({
               >
                 {mode === "edit" ? <IconEye size={13} /> : <IconEdit size={13} />}
                 <span>{mode === "edit" ? t("ide.editor.switchToDiff") : t("ide.editor.switchToEditView")}</span>
-              </Menu.Item>
-            )}
-
-            {hasPreviewToggle && (
-              <Menu.Item
-                onClick={onTogglePreview}
-                className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-content-muted outline-none select-none hover:bg-surface-muted hover:text-content data-[highlighted]:bg-surface-muted data-[highlighted]:text-content"
-              >
-                {mode === "preview" ? <IconEdit size={13} /> : <IconEye size={13} />}
-                <span>{mode === "preview" ? t("ide.editor.switchToSource") : t("ide.editor.switchToPreview")}</span>
               </Menu.Item>
             )}
 

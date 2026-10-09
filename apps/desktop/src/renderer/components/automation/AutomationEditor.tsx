@@ -31,7 +31,7 @@ import {
 } from "@renderer/components/chat/EffortPermissionControl.js";
 import { ModelDropdown } from "@renderer/components/chat/ModelDropdown.js";
 import { ProviderDropdown } from "@renderer/components/chat/ProviderDropdown.js";
-import { resolveEffortLevels } from "@renderer/lib/thinkingLevels.js";
+import { resolveEffortLevels, coerceEffortValue } from "@renderer/lib/thinkingLevels.js";
 import { ScheduleEditor } from "./ScheduleEditor.js";
 import { describeSchedule } from "./automationFormat.js";
 import { SlashCommandPicker } from "@renderer/components/chat/SlashCommandPicker.js";
@@ -88,6 +88,7 @@ export function AutomationEditor({
   const projects = useSessionStore((s) => s.projects);
   const skills = useSessionStore((s) => s.skills);
   const customModels = useSessionStore((s) => s.customModels);
+  const piModelMaps = useSessionStore((s) => s.piModelMaps);
   const saveAutomation = useSessionStore((s) => s.saveAutomation);
 
   const [draft, setDraft] = useState<EditorDraft>(DEFAULT_DRAFT);
@@ -172,37 +173,48 @@ export function AutomationEditor({
     if (!open) return;
     setShowError(false);
     setSchedOpen(!task);
-    setDraft(
-      task
-        ? {
-            title: task.title,
-            prompt: task.prompt,
-            skillNames: [...task.skillNames],
-            filePaths: [...task.filePaths],
-            providerId: task.providerId,
-            model: task.model,
-            customModelId: task.customModelId,
-            effort: task.effort,
-            permissionMode: task.permissionMode,
-            schedule: task.schedule,
-            keepRuns: task.keepRuns,
-          }
-        : { ...DEFAULT_DRAFT, ...(owner.exec ?? {}) },
+    const init = task
+      ? {
+          title: task.title,
+          prompt: task.prompt,
+          skillNames: [...task.skillNames],
+          filePaths: [...task.filePaths],
+          providerId: task.providerId,
+          model: task.model,
+          customModelId: task.customModelId,
+          effort: task.effort,
+          permissionMode: task.permissionMode,
+          schedule: task.schedule,
+          keepRuns: task.keepRuns,
+        }
+      : { ...DEFAULT_DRAFT, ...(owner.exec ?? {}) };
+    // Persisted drafts may carry a neutral slot the provider no longer
+    // declares (pi dropped its Auto entry — legacy rows say "default") —
+    // snap before first render so the chip never shows a raw out-of-list id.
+    init.effort = coerceEffortValue(
+      init.effort,
+      useSessionStore
+        .getState()
+        .providers.find((p) => p.id === init.providerId)?.capabilities.thinkingLevels,
     );
+    setDraft(init);
   }, [open, task, owner]);
 
   const draftProvider = providers.find((p) => p.id === draft.providerId);
   const draftPermModes = (draftProvider?.capabilities.permissionModes ?? []).filter(
     (m) => m.value !== "plan",
   );
-  // Effort levels are model-scoped on OpenAI-protocol custom endpoints — the
-  // same resolution the composer chip uses, so this editor's chip shows (and
-  // saves) only levels the bound model actually accepts.
+  // Effort levels are model-scoped on OpenAI-protocol custom endpoints and
+  // filtered by the pi model's settings-panel mapping — the same resolution
+  // the composer chip uses, so this editor's chip shows (and saves) only
+  // levels the bound model actually accepts.
   const draftEffortLevels = resolveEffortLevels({
     providerLevels: draftProvider?.capabilities.thinkingLevels,
     customModels,
     customModelId: draft.customModelId,
     model: draft.model,
+    providerId: draft.providerId,
+    piModelMaps,
   });
   const hasEffort = (draftEffortLevels?.length ?? 0) > 0;
   const hasPerm = draftPermModes.length > 0;
@@ -216,9 +228,10 @@ export function AutomationEditor({
       providerId: nextId,
       model: "default",
       customModelId: null,
-      effort: efforts.some((e) => e.value === d.effort)
-        ? d.effort
-        : (efforts[0]?.value ?? "default"),
+      // Snap target is the provider's neutral slot ("default" when declared),
+      // else the SDK's own default level — efforts[0] would be pi's "off",
+      // silently disabling thinking for unattended runs.
+      effort: coerceEffortValue(d.effort, efforts),
       permissionMode: perms.some((m) => m.value === d.permissionMode)
         ? d.permissionMode
         : "acceptEdits",
@@ -492,15 +505,14 @@ export function AutomationEditor({
                               customModels,
                               customModelId,
                               model: modelId,
+                              providerId: d.providerId,
+                              piModelMaps,
                             });
                             return {
                               ...d,
                               customModelId,
                               model: modelId,
-                              effort:
-                                levels && levels.length > 0 && !levels.some((l) => l.value === d.effort)
-                                  ? "default"
-                                  : d.effort,
+                              effort: coerceEffortValue(d.effort, levels),
                             };
                           }),
                       }}

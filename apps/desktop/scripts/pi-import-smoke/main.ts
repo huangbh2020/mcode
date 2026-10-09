@@ -138,7 +138,7 @@ writeJsonl(S1_PATH, [
   },
   {
     type: "message", id: "e0000007", parentId: "e0000006", timestamp: "2026-08-15T10:05:10.000Z",
-    message: { role: "assistant", content: [{ type: "text", text: "配对逻辑在 PairingManager。" }], timestamp: 1786788310000, usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } }, stopReason: "stop" },
+    message: { role: "assistant", content: [{ type: "text", text: "配对逻辑在 PairingManager。" }], timestamp: 1786788310000, provider: "ds", model: "deepseek-v4-flash", usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } }, stopReason: "stop" },
   },
   { type: "compaction", id: "e0000008", parentId: "e0000007", timestamp: "2026-08-15T10:06:00.000Z", summary: "摘要", firstKeptEntryId: "e0000003", tokensBefore: 12345, details: null, usage: undefined },
   { type: "session_info", id: "e0000009", parentId: "e0000008", timestamp: "2026-08-15T10:06:01.000Z", name: "移动端配对调研" },
@@ -164,6 +164,17 @@ writeJsonl(SFX_PATH, [
   header(SID_SFX, PROJECT_A_SFX),
   { type: "message", id: "h0000001", parentId: null, timestamp: T0, message: { role: "user", content: [{ type: "text", text: "sfx" }], timestamp: 0 } },
 ]);
+// model_change-only session — no assistant records its model, so the picker
+// id must fall back to the last model_change entry.
+const SID_MC = "55555555-0000-0000-0000-000000000000";
+const MC_PATH = path.join(DIR_A, `mc_${SID_MC}.jsonl`);
+writeJsonl(MC_PATH, [
+  header(SID_MC, PROJECT_A),
+  { type: "model_change", id: "k0000001", parentId: null, timestamp: T0, provider: "glm", modelId: "glm-5" },
+  { type: "model_change", id: "k0000002", parentId: "k0000001", timestamp: T0, provider: "glm", modelId: "glm-5.5" },
+  { type: "message", id: "k0000003", parentId: "k0000002", timestamp: "2026-08-15T10:10:00.000Z", message: { role: "user", content: [{ type: "text", text: "只切了模型还没回复" }], timestamp: 0 } },
+  { type: "message", id: "k0000004", parentId: "k0000003", timestamp: "2026-08-15T10:10:05.000Z", message: { role: "assistant", content: [{ type: "text", text: "好的" }], timestamp: 0, provider: "glm", model: "glm-5.5", usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } }, stopReason: "stop" } },
+]);
 
 /* ── projects + init ── */
 
@@ -181,7 +192,7 @@ projects.push(
 /* ── 1+2. fresh import ── */
 
 const first = scanPiSessions();
-check("fresh scan imports 3 (s1 + subdir + sfx)", first.imported === 3);
+check("fresh scan imports 4 (s1 + subdir + sfx + mc)", first.imported === 4);
 check("fresh scan updates 0", first.updated === 0);
 
 const row1 = sessions.get(`piimp-${SID1}`);
@@ -191,9 +202,19 @@ check("row1 kind chat", row1?.kind === "chat");
 check("row1 status idle", row1?.status === "idle");
 check("row1 title from session_info", row1?.title === "移动端配对调研");
 check("row1 claudeSessionId = file path (resume handle)", row1?.claudeSessionId === S1_PATH);
+check("row1 model from last assistant (picker shape)", row1?.model === "ds/deepseek-v4-flash");
 check("row1 permissionMode default", row1?.permissionMode === "default");
 check("row1 effort default", row1?.effort === "default");
 check("row1 customModelId null", row1?.customModelId === null);
+check("model_change-only session falls back to last change", sessions.get(`piimp-${SID_MC}`)?.model === "glm/glm-5.5");
+check("session with no model info keeps default", sessions.get(`piimp-${SID4}`)?.model === "default");
+{
+  const mcRecs = recordsOf(`piimp-${SID_MC}`);
+  const mcOpener = mcRecs.find((m) => m.id === `piimp-${SID_MC}-k0000004`)?.content as {
+    blocks?: unknown[]; turnMeta?: { model?: string };
+  };
+  check("mc turn opener meta model", Array.isArray(mcOpener?.blocks) && mcOpener.turnMeta?.model === "glm/glm-5.5");
+}
 
 const recs1 = recordsOf(`piimp-${SID1}`);
 // user(e3) + assistant(e4) + assistant(e7) + compaction(e8); session_info skipped.
@@ -203,9 +224,17 @@ check("s1 record 0 is user", recs1[0]?.role === "user");
 const userBlocks = recs1[0]?.content as Array<{ kind: string; text?: string }>;
 check("user block is text", userBlocks.length === 1 && userBlocks[0].kind === "text" && userBlocks[0].text === "帮我看看移动端配对实现");
 
-const a1 = recs1[1]?.content as Array<{
-  kind: string; text?: string; toolCallId?: string; status?: string; result?: { content?: unknown[] } | unknown;
-}>;
+// The turn OPENER (first assistant record) carries turnMeta so the renderer
+// folds the turn into a collapsed TurnPanel with the model/time header.
+const a1wrap = recs1[1]?.content as {
+  blocks: Array<{ kind: string; text?: string; toolCallId?: string; status?: string; result?: { content?: unknown[] } | unknown }>;
+  turnMeta?: { startedAt: number; endedAt: number; model?: string };
+};
+check("assistant 1 carries turnMeta wrapper", !!a1wrap && Array.isArray(a1wrap.blocks) && !!a1wrap.turnMeta);
+check("turnMeta startedAt = first assistant ts", a1wrap.turnMeta?.startedAt === Date.parse("2026-08-15T10:04:47.000Z"));
+check("turnMeta endedAt = last assistant-row ts (compaction)", a1wrap.turnMeta?.endedAt === Date.parse("2026-08-15T10:06:00.000Z"));
+check("turnMeta model = last assistant's provider/model", a1wrap.turnMeta?.model === "ds/deepseek-v4-flash");
+const a1 = a1wrap.blocks;
 // thinking + text + tool_use(aaa) + tool_use(bbb) + image (the error result's
 // image rides as a sibling block — same shape the live tool.result reducer
 // produces).
@@ -219,7 +248,7 @@ check(
 );
 check("assistant 1 tool_use read error", a1[3]?.kind === "tool_use" && a1[3].toolCallId === "call_bbb" && a1[3].status === "error");
 // Image from the error result rides as a sibling image block AFTER the tool_use.
-const a1After = (recs1[1]?.content as unknown[]).slice(4) as Array<{ kind: string; data?: string; toolCallId?: string }>;
+const a1After = (a1 as unknown[]).slice(4) as Array<{ kind: string; data?: string; toolCallId?: string }>;
 check("image block after tool_use", a1After.length === 1 && a1After[0].kind === "image" && a1After[0].data === "QUJD" && a1After[0].toolCallId === "call_bbb");
 
 check("assistant 2 text only", recs1[2]?.role === "assistant" && (recs1[2].content as Array<{ kind: string }>)[0]?.kind === "text");
@@ -236,14 +265,14 @@ check("header-only file skipped", ![...sessions.values()].some((s) => s.id.inclu
 const rowSfx = sessions.get(`piimp-${SID_SFX}`);
 check("prefix-boundary cwd matches exact project", rowSfx?.projectId === "proj_a_sfx");
 
-check("fresh import broadcasts each new session", broadcasted.length === 3);
+check("fresh import broadcasts each new session", broadcasted.length === 4);
 check("registry persisted", !!settings.get("pi.sessionImports"));
 
 /* ── 3. idempotent re-scan ── */
 
 const again = scanPiSessions();
 check("re-scan is a no-op", again.imported === 0 && again.updated === 0);
-check("no duplicate rows", sessions.size === 3);
+check("no duplicate rows", sessions.size === 4);
 
 /* ── 4. terminal delta growth ── */
 
@@ -261,8 +290,26 @@ check("delta appended 2 records", recs1b.length === recs1.length + 2);
 check("delta ids unique (no dup)", new Set(recs1b.map((m) => m.id)).size === recs1b.length);
 const a3 = recs1b.find((m) => m.id === `piimp-${SID1}-e0000011`);
 check("delta assistant record exists", !!a3);
-const a3blocks = a3?.content as Array<{ kind: string; toolCallId?: string; status?: string }>;
+// e11 opens the delta turn (user e10 preceded it) → wrapped with fresh meta.
+const a3wrap = a3?.content as { blocks: Array<{ kind: string; toolCallId?: string; status?: string }>; turnMeta?: { startedAt: number; endedAt: number; model?: string } };
+check("delta opener carries fresh turnMeta", Array.isArray(a3wrap.blocks) && !!a3wrap.turnMeta && a3wrap.turnMeta.startedAt === a3wrap.turnMeta.endedAt);
+check("delta turn has no model (fixture entry lacks one)", a3wrap.turnMeta?.model === undefined);
+const a3blocks = a3wrap.blocks;
 check("delta toolResult folded into tool_use", a3blocks.some((b) => b.kind === "tool_use" && b.toolCallId === "call_ccc" && b.status === "done"));
+
+/* ── 4b. self-heal: a default-model row learns its model from file growth ── */
+
+// S4 was imported with no model info (row model "default" — the pre-fix
+// shape of every imported session). Terminal growth that DOES carry a model
+// must patch the row, or the composer's pi send guard keeps blocking it.
+appendJsonl(S4_PATH, [
+  { type: "message", id: "g0000003", parentId: "g0000002", timestamp: "2026-08-15T12:30:00.000Z", message: { role: "user", content: [{ type: "text", text: "补一条带模型的回复" }], timestamp: 0 } },
+  { type: "message", id: "g0000004", parentId: "g0000003", timestamp: "2026-08-15T12:30:05.000Z", message: { role: "assistant", content: [{ type: "text", text: "done" }], timestamp: 0, provider: "kimi", model: "kimi-k2", usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } }, stopReason: "stop" } },
+]);
+const healScan = scanPiSessions();
+check("self-heal scan still reports the delta update", healScan.updated === 1);
+check("default-model row healed to picker-shaped model", sessions.get(`piimp-${SID4}`)?.model === "kimi/kimi-k2");
+check("self-heal is one-shot (model already patched)", sessions.get(`piimp-${SID4}`)?.model === "kimi/kimi-k2");
 
 /* ── 5. Mcode-turn bump (anti-duplication core) ── */
 
@@ -312,6 +359,36 @@ const recs1c = recordsOf(`piimp-${SID1}`);
 check("rebuild replaced the imported rows", recs1c.length === 2);
 check("rebuild kept the session row", sessions.get(`piimp-${SID1}`)?.claudeSessionId === S1_PATH);
 check("rebuild ids are the new ones", recs1c.every((m) => m.id.startsWith(`piimp-${SID1}-r00000`)));
+
+/* ── 7b. one-time migration of pre-v2 import shapes ── */
+
+// Simulate a session imported by the pre-turnMeta build: a registry entry
+// without the version stamp and plain-blocks message rows. The next scan
+// must silently re-import it (wrapper + meta present, NO duplicates) and
+// stamp the version so it never re-runs. Uses S1 (whose rebuilt transcript
+// has an assistant opener) — a user-only session legitimately has no meta.
+const reg0 = JSON.parse(settings.get("pi.sessionImports")!) as { files: Record<string, { v?: number }> };
+// A pre-v2 entry EXISTS but lacks the stamp — deleting the whole entry would
+// misread the file as a native Mcode-created session (baseline, no import).
+delete reg0.files[S1_PATH].v;
+settings.set("pi.sessionImports", JSON.stringify(reg0));
+for (const [id, m] of [...messages]) {
+  if (m.sessionId === `piimp-${SID1}` && !Array.isArray(m.content)) {
+    messages.set(id, { ...m, content: (m.content as { blocks: unknown[] }).blocks });
+  }
+}
+const migScan = scanPiSessions();
+check("migration scan stays silent in counts", migScan.imported === 0 && migScan.updated === 0);
+const migRecs = recordsOf(`piimp-${SID1}`);
+check("migration re-imported without duplicates", migRecs.length === 2);
+const migOpener = migRecs.find((m) => m.id === `piimp-${SID1}-r0000002`)?.content as {
+  blocks?: unknown[]; turnMeta?: { startedAt: number; endedAt: number };
+};
+check("migrated opener carries the turnMeta wrapper", Array.isArray(migOpener?.blocks) && !!migOpener.turnMeta);
+const reg1 = JSON.parse(settings.get("pi.sessionImports")!) as { files: Record<string, { v?: number }> };
+check("migration stamps the registry version", reg1.files[S1_PATH]?.v === 2);
+const migAgain = scanPiSessions();
+check("post-migration scan is a no-op", migAgain.imported === 0 && migAgain.updated === 0);
 
 /* ── 8. same-millisecond ordering ── */
 

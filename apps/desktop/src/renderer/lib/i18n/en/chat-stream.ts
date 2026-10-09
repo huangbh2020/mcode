@@ -22,6 +22,10 @@ export const en = {
   "chatStream.tokensUsed": "{n} tokens",
   "chatStream.filesChangedShort": "{n} files",
 
+  // ── Live streaming generation rate (running headers, estimated) ──
+  "chatStream.streamRate": "{n} tok/s",
+  "chatStream.streamRateHint": "Estimated generation rate from streamed output (approximation, thinking included)",
+
   // ── RenderErrorBoundary: per-segment render-failure fallback ──
   "chatStream.renderError": "This item failed to render and was skipped (everything else is unaffected)",
 
@@ -132,6 +136,10 @@ export const en = {
   "chatStream.activity.deck.shortAgents": "{n} agents",
   "chatStream.activity.deck.shortPlans": "{n} plans",
   "chatStream.activity.deck.shortBookmarks": "{n} bookmarks",
+  "chatStream.activity.deck.shortSideChats": "{n} side chats",
+  "chatStream.activity.deck.activeCount": "{n} active",
+  "chatStream.activity.deck.plansHistory": "Plan history",
+  "chatStream.activity.deck.bookmarksWidget": "Bookmarks",
   "chatStream.activity.deck.viewFull": "View Full Details",
   "chatStream.activity.deck.sched": "Scheduled Tasks",
   "chatStream.activity.deck.schedSubtitle": "{total} scheduled · {running} in progress",
@@ -151,6 +159,7 @@ export const en = {
   "chatStream.activity.node.plans": "Plans",
   "chatStream.activity.node.bookmarks": "Bookmarks",
   "chatStream.activity.node.sched": "Scheduled",
+  "chatStream.activity.node.sidechats": "Side chats",
   // Group headers and filter chips
   "chatStream.activity.groupRunning": "Running",
   "chatStream.activity.groupSettled": "Settled",
@@ -170,6 +179,12 @@ export const en = {
   "chatStream.activity.subagentsFooter": "Bars are each agent's real span; running ones reach “now”",
   "chatStream.activity.noDescription": "(no description)",
   "chatStream.activity.viewSubagent": "View subagent transcript",
+  // Side chats panel
+  "chatStream.activity.sidechatsSubRunning": "{running} active · {n} total",
+  "chatStream.activity.sidechatsSubIdle": "{n} total",
+  "chatStream.activity.sidechatsUnit": "total",
+  "chatStream.activity.sidechatsFooter": "Click a side chat to open it in the right panel's ask tab",
+  "chatStream.activity.openSideChat": "Open side chat",
   // Tasks panel
   "chatStream.activity.tasksSubtitle": "{done}/{total} done · {rest} left",
   "chatStream.activity.tasksDoneSuffix": "done",
@@ -206,6 +221,9 @@ export const en = {
   "chatStream.bashTask.stop": "Stop",
   "chatStream.bashTask.stopTitle": "Stop this command (the turn continues)",
   "chatStream.bashTask.stopFailed": "Failed to stop command",
+  "chatStream.bashTask.output": "Output",
+  "chatStream.bashTask.outputTitle": "Toggle command output",
+  "chatStream.bashTask.outputTruncated": "Output truncated — showing the tail",
   "chatStream.bashTask.subRunning": "{running} running · {total} total",
   "chatStream.bashTask.subIdle": "{n} · all settled",
   "chatStream.bashTask.unitCommands": "total",

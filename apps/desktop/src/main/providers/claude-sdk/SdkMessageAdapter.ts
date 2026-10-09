@@ -33,6 +33,8 @@ import type {
 } from "@contracts/runtime";
 import type { ProviderContext } from "@contracts/provider";
 import { FileSnapshot, FILE_MUTATING_TOOLS, getToolFilePath, normalizeToolFilePath } from "@main/lib/fileSnapshot.js";
+import { log } from "@main/lib/logger.js";
+import { readTaskOutputTail } from "@main/lib/taskOutputFile.js";
 import { noteBashToolStart, noteBashToolEnd } from "@main/lib/serviceScanner.js";
 import type {
   SDKMessage,
@@ -107,6 +109,10 @@ interface TaskNotificationEnvelope {
   task_id: string;
   tool_use_id?: string;
   status: "completed" | "failed" | "stopped";
+  /** Path to the file the CLI spooled the task's accumulated output to —
+   *  the only host-visible handle on what a backgrounded command printed
+   *  (the live stream never crosses the stream-json boundary). */
+  output_file?: string;
   summary?: string;
   usage?: { duration_ms?: number };
   ambient?: boolean;
@@ -1082,16 +1088,51 @@ export class SdkMessageAdapter {
    *  requested (status "stopped" right after a stop_task control request).
    *  Updates the bash-task roster; ignored for anything else (the subagent
    *  roster is already driven by its own task_started/task_updated edges,
-   *  and a notification for an unknown id is a harmless orphan). */
+   *  and a notification for an unknown id is a harmless orphan). The
+   *  notification also carries `output_file` — the CLI's spool of everything
+   *  the command printed — which is attached to the roster entry
+   *  asynchronously (fire-and-forget; the roster flush below already carries
+   *  the status flip, a second flush lands the output moments later). */
   private handleTaskNotification(m: TaskNotificationEnvelope): void {
     const cur = this.state.bashTasks.get(m.task_id);
-    if (!cur || cur.status !== "running") return;
+    if (!cur) return;
     this.state.bashTasks.set(m.task_id, {
       ...cur,
-      status: m.status === "stopped" ? "killed" : m.status === "failed" ? "failed" : "completed",
-      endedAt: Date.now(),
+      status:
+        cur.status === "running"
+          ? m.status === "stopped"
+            ? "killed"
+            : m.status === "failed"
+              ? "failed"
+              : "completed"
+          : cur.status,
+      endedAt: cur.endedAt ?? Date.now(),
     });
     this.flushBashTasks();
+    if (m.output_file) void this.attachTaskOutput(m.task_id, m.output_file);
+  }
+
+  /** Read the CLI's output spool for a settled task and attach it to the
+   *  roster entry (a second `bash-tasks.update` flush). Fire-and-forget like
+   *  emitTurnEndSnapshot: never blocks the event stream, and a late flush is
+   *  harmless even after the turn ended — the emit envelope outlives the
+   *  adapter. Skip-when-still-running guards the (theoretical) case of a
+   *  notification racing an out-of-band roster replace. */
+  private async attachTaskOutput(taskId: string, outputFile: string): Promise<void> {
+    try {
+      const { output, truncated } = await readTaskOutputTail(outputFile);
+      if (!output) return;
+      const cur = this.state.bashTasks.get(taskId);
+      if (!cur || cur.status === "running") return;
+      this.state.bashTasks.set(taskId, {
+        ...cur,
+        output,
+        outputTruncated: truncated || undefined,
+      });
+      this.flushBashTasks();
+    } catch (err) {
+      log.warn(`task output attach failed (${taskId}): ${err instanceof Error ? err.message : String(err)}`);
+    }
   }
 
   /** Fold the background-tasks LEVEL signal into the bash-task roster. For

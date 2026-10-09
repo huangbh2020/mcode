@@ -137,16 +137,25 @@ export function SettingsPage() {
   // renders it on `settingsOpen`), so this useState reads the requested
   // section once per open. Callers pass a section via setSettingsOpen(true, id)
   // — e.g. the composer's "管理模型…" entry targets "custom-models" / "pi-models".
-  // A plain gear click (no section) lands on the first nav item ("常规") — the
-  // default must NOT be "custom-models", or every plain open would jump to
-  // the model-config tab.
+  // A plain gear click (no section) restores the last-viewed section
+  // (settingsLastSection, persisted in the settings table); first-ever open
+  // lands on the first nav item ("常规").
   const settingsSection = useSessionStore((s) => s.settingsSection);
+  const settingsLastSection = useSessionStore((s) => s.settingsLastSection);
+  const setSettingsLastSection = useSessionStore((s) => s.setSettingsLastSection);
   const [active, setActive] = useState<SectionId>(
     () =>
-      (settingsSection && NAV_ITEMS.some((n) => n.id === settingsSection)
-        ? settingsSection
-        : NAV_ITEMS[0].id) as SectionId,
+      ([settingsSection, settingsLastSection].find(
+        (id): id is SectionId => !!id && NAV_ITEMS.some((n) => n.id === id),
+      ) ?? NAV_ITEMS[0].id),
   );
+
+  // Remember the section the user lands on (clicked nav item or deep link) so
+  // the next plain open returns to it. The store action early-returns on
+  // same-value, so a no-navigation open writes nothing.
+  useEffect(() => {
+    setSettingsLastSection(active);
+  }, [active, setSettingsLastSection]);
 
   // Esc returns to the workspace (preserves the modal's keyboard shortcut).
   useEffect(() => {

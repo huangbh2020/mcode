@@ -25,6 +25,7 @@ import type { ClaudeContextWindowTag } from "./claudeTokenUsage.js";
 import { ASK_SYSTEM_PROMPT } from "@main/lib/askQuestion.js";
 import { CLAUDE_IDENTITY_PROMPT, CLAUDE_PLAN_MODE_NUDGE, SCHEDULED_TASK_PROPOSAL_NUDGE, joinPromptSections } from "@main/lib/systemPrompt.js";
 import { bashPathHintFor, detectBashEnv } from "@main/lib/bashEnv.js";
+import { resolveAgentSkillInjection } from "@main/lib/agentSkills.js";
 import { getFileSnapshot } from "@main/lib/fileSnapshotRegistry.js";
 import {
   FILE_MUTATING_TOOLS,
@@ -653,6 +654,11 @@ function abortableSleep(ms: number, signal: AbortSignal): Promise<void> {
  * Now imported from the shared @main/lib/askQuestion module (single source of
  * truth, shared with the Pi provider's before_agent_start extension). */
 
+/** Project-level `.agent/skills` drop-in root (the skills.list "agent"
+ *  source — see lib/agentSkills.ts): the CLI adopts the dir as a local
+ *  plugin, skills register as `.agent:<dirName>`, and picked names that
+ *  resolve there are qualified in the allowlist below. */
+
 export class ClaudeAgentSdkProvider implements AgentProvider {
   readonly id = "claude-sdk";
   readonly displayName = "Claude";
@@ -738,6 +744,11 @@ export class ClaudeAgentSdkProvider implements AgentProvider {
       }
     }
 
+    // Project-level `.agent/skills` (see resolveAgentSkillInjection): one
+    // readdir per turn, consumed twice — the skills allowlist qualification
+    // below and the plugin injection further down.
+    const agentSkills = await resolveAgentSkillInjection(req.cwd);
+
     const options: Options = {
       abortController: ac,
       cwd: req.cwd,
@@ -787,7 +798,16 @@ export class ClaudeAgentSdkProvider implements AgentProvider {
       // tool on their own. With no picks, fall back to 'all' so the model can
       // still self-discover/autoloader skills. Do NOT also add 'Skill' to
       // allowedTools. See sdk.d.ts Options.skills.
-      skills: req.skills && req.skills.length > 0 ? req.skills : "all",
+      //
+      // `.agent/skills` skills reach the CLI through the plugin loader, which
+      // registers them under the `.agent:<dirName>` namespace — a picked name
+      // that resolves there must be qualified or the allowlist entry matches
+      // nothing. Names from `.claude/skills` / global stay bare (native
+      // discovery).
+      skills:
+        req.skills && req.skills.length > 0
+          ? req.skills.map((n) => (agentSkills?.names.has(n) ? `.agent:${n}` : n))
+          : "all",
       // SDK #359: On Windows there is a timing/buffering race in the stdio
       // control-stream transport that causes "Tool permission request failed:
       // AbortError: Tool permission stream closed before response received"
@@ -1396,13 +1416,23 @@ export class ClaudeAgentSdkProvider implements AgentProvider {
     //  2. disableAllHooks — v1 runs NO plugin hooks. Hooks would otherwise
     //     be executed natively by the CLI engine; they are parsed + shown in
     //     the panel, never run (per-hook review is the v1.5 plan).
-    if (enabledPlugins.length > 0) {
-      options.plugins = enabledPlugins.map((p) => ({
-        type: "local" as const,
-        path: p.rootDir,
-        skipMcpDiscovery: true,
-      }));
-      if (enabledPlugins.some((p) => p.hasHooks)) {
+    //
+    // The project's `.agent` dir (when it carries skills) rides the same
+    // loader — see resolveAgentSkillInjection. Its hook presence gates
+    // disableAllHooks together with the enabled plugins' own hooks.
+    const agentPlugin = agentSkills
+      ? [{ type: "local" as const, path: agentSkills.dir, skipMcpDiscovery: true }]
+      : [];
+    if (enabledPlugins.length > 0 || agentPlugin.length > 0) {
+      options.plugins = [
+        ...enabledPlugins.map((p) => ({
+          type: "local" as const,
+          path: p.rootDir,
+          skipMcpDiscovery: true,
+        })),
+        ...agentPlugin,
+      ];
+      if (enabledPlugins.some((p) => p.hasHooks) || agentSkills?.hasHooks) {
         options.settings = {
           ...(typeof options.settings === "object" ? options.settings : {}),
           disableAllHooks: true,
