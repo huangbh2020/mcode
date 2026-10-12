@@ -59,6 +59,7 @@ import {
   UI_CHAT_FONT_SIZE_SETTING_KEY,
   UI_RIGHT_PANEL_FONT_SIZE_SETTING_KEY,
   UI_PASTE_TAG_THRESHOLD_CHARS_SETTING_KEY,
+  PASTE_PLAIN_TEXT_SETTING_KEY,
   UI_USER_MSG_COLOR_SETTING_KEY,
   UI_ACCENT_COLOR_SETTING_KEY,
   UI_RIGHT_PANEL_TAB_SETTING_KEY,
@@ -868,6 +869,11 @@ export interface SessionState {
    *  `shouldPromoteToTag` in contentTag.ts via the composer's
    *  shouldPromotePaste prop. */
   pasteTagThresholdChars: number;
+  /** Whether pastes are always inserted inline as plain text (issue #23).
+   *  When true the paste-to-card promotion — and the threshold above — is
+   *  bypassed entirely. Persisted as `ui.pastePlainText` in the `settings`
+   *  table. */
+  pastePlainText: boolean;
   /** Default speech-recognition language tag (e.g. "zh-CN" | "en-US"). */
   voiceLang: string;
   /** Preferred ASR engine ("zipformer" streaming | "parakeet" offline). Falls
@@ -1915,6 +1921,10 @@ export interface SessionState {
    * transcript (issue #22). Instant local flip + fire-and-forget
    * persistence (same pattern as setTabBarMultiRow). */
   setInlineFileMention: (on: boolean) => void;
+  /** Toggle "pastes insert as plain text" — bypasses the paste-to-card
+   *  promotion entirely (issue #23). Instant local flip + fire-and-forget
+   *  persistence (same pattern as setTabBarMultiRow). */
+  setPastePlainText: (on: boolean) => void;
   /** Switch the left-bar view between the project tree and the session
    *  stream. Instant local flip + fire-and-forget persistence (same
    *  pattern as setDisplayMode). */
@@ -5227,6 +5237,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   // Persisted in `settings` table; init() overwrites from the DB. Default
   // 200 mirrors the previous hardcoded TAG_THRESHOLD_CHARS in contentTag.ts.
   pasteTagThresholdChars: 200,
+  // Persisted in `settings` table; init() overwrites from the DB. Default
+  // false keeps the existing paste-to-card behavior (issue #23 opt-in).
+  pastePlainText: false,
   // Default voice input: Chinese, streaming zipformer. Dictation itself is
   // click-to-toggle — there is no capture mode to persist.
   voiceLang: "zh-CN",
@@ -5450,6 +5463,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           TABS_FILE_PREVIEW_PLACEMENT_SETTING_KEY,
           TAB_BAR_MULTI_ROW_SETTING_KEY,
           INLINE_FILE_MENTION_SETTING_KEY,
+          PASTE_PLAIN_TEXT_SETTING_KEY,
           LEFTBAR_MODE_SETTING_KEY,
           THEME_STYLE_SETTING_KEY,
           UI_FONT_FAMILY_SETTING_KEY,
@@ -5583,6 +5597,14 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       if (value === "true") set({ inlineFileMention: true });
     } catch (err) {
       console.error("apply(inlineFileMention) failed:", err);
+    }
+
+    // Plain-text paste (issue #23) — same one-way flip as above.
+    try {
+      const value = fp[PASTE_PLAIN_TEXT_SETTING_KEY];
+      if (value === "true") set({ pastePlainText: true });
+    } catch (err) {
+      console.error("apply(pastePlainText) failed:", err);
     }
 
     // leftBarMode determines which sidebar component mounts on frame one.
@@ -10095,6 +10117,13 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     // Fire-and-forget — a failed write keeps the in-session choice.
     api.setting.set({ key: INLINE_FILE_MENTION_SETTING_KEY, value: on ? "true" : "false" })
       .catch((err) => console.error("setting.set(inlineFileMention) failed:", err));
+  },
+
+  setPastePlainText: (on) => {
+    set({ pastePlainText: on });
+    // Fire-and-forget — a failed write keeps the in-session choice.
+    api.setting.set({ key: PASTE_PLAIN_TEXT_SETTING_KEY, value: on ? "true" : "false" })
+      .catch((err) => console.error("setting.set(pastePlainText) failed:", err));
   },
 
   setLeftBarMode: async (mode) => {

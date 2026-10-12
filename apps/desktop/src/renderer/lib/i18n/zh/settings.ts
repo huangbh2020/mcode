@@ -85,6 +85,11 @@ export const zh = {
   "settings.general.pasteThreshold": "长文本折叠阈值",
   "settings.general.pasteThresholdDesc":
     "在输入框粘贴超过此字符数的内容时,会折叠为输入框上方的卡片而非直接插入正文({min}–{max})。",
+  "settings.general.pastePlainText": "粘贴内容以纯文本插入",
+  "settings.general.pastePlainTextDesc":
+    "开启后,粘贴的内容不再折叠为输入框上方的引用卡片,而是始终以纯文本直接插入光标位置(忽略上方的折叠阈值)。",
+  "settings.general.pastePlainTextOn": "已开启",
+  "settings.general.pastePlainTextOff": "已关闭",
   "settings.general.inlineFileMention": "@ 引用文件内联显示",
   "settings.general.inlineFileMentionDesc":
     "在输入框 @ 引用文件时,在正文原位置保留 @文件名 轻量标记,消息中不再于顶部堆叠引用卡(未命中正文的引用仍显示卡片)。",

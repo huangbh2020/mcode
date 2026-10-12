@@ -69,6 +69,10 @@ export function GeneralPanel() {
   const pasteTagThresholdChars = useSessionStore((s) => s.pasteTagThresholdChars);
   const setPasteTagThresholdChars = useSessionStore((s) => s.setPasteTagThresholdChars);
 
+  // ── Paste as plain text (issue #23) ──
+  const pastePlainText = useSessionStore((s) => s.pastePlainText);
+  const setPastePlainText = useSessionStore((s) => s.setPastePlainText);
+
   // ── Inline @-mention markers (issue #22) ──
   const inlineFileMention = useSessionStore((s) => s.inlineFileMention);
   const setInlineFileMention = useSessionStore((s) => s.setInlineFileMention);
@@ -260,6 +264,19 @@ export function GeneralPanel() {
             value={pasteTagThresholdChars}
             onChange={(e) => void setPasteTagThresholdChars(Number(e.target.value))}
             className="w-full"
+          />
+        </SettingRow>
+
+        {/* ── Paste as plain text (issue #23) ── */}
+        <SettingRow
+          title={t("settings.general.pastePlainText")}
+          desc={t("settings.general.pastePlainTextDesc")}
+        >
+          <Switch
+            id="setting-paste-plain-text"
+            checked={pastePlainText}
+            onCheckedChange={(v) => setPastePlainText(v)}
+            label={pastePlainText ? t("settings.general.pastePlainTextOn") : t("settings.general.pastePlainTextOff")}
           />
         </SettingRow>
 

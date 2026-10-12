@@ -575,6 +575,15 @@ export const UI_RIGHT_PANEL_FONT_SIZE_SETTING_KEY = "ui.rightPanelFontSize";
 export const UI_PASTE_TAG_THRESHOLD_CHARS_SETTING_KEY = "ui.pasteTagThresholdChars";
 
 /**
+ * Setting key under which the "paste as plain text" preference is persisted
+ * (issue #23). Value is "true"/"false" (default false). When true, pastes are
+ * always inserted inline as plain text at the caret — the paste-to-card
+ * promotion (and its threshold above) is bypassed entirely. Same hydration
+ * pattern as `ui.inlineFileMention`.
+ */
+export const PASTE_PLAIN_TEXT_SETTING_KEY = "ui.pastePlainText";
+
+/**
  * Setting key under which the default speech-recognition language is
  * persisted. Value is a BCP-47-ish tag like "zh-CN" or "en-US" (used to pick
  * the ASR model / decoder language). Hydrated into sessionStore.voiceLang.

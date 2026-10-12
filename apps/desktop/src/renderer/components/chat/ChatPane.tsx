@@ -2744,8 +2744,11 @@ function ChatPaneForSession({
 
   // Paste-to-card threshold (user-configurable). When a paste exceeds this
   // many chars (or spans > 3 lines), it's promoted to a chip instead of
-  // inserted inline. Driven by the "常规 → 粘贴卡片阈值" setting.
+  // inserted inline. Driven by the "常规 → 粘贴卡片阈值" setting. The
+  // plain-text-paste preference (issue #23) bypasses the promotion entirely —
+  // every paste inserts inline, threshold notwithstanding.
   const pasteTagThresholdChars = useSessionStore((s) => s.pasteTagThresholdChars);
+  const pastePlainText = useSessionStore((s) => s.pastePlainText);
 
   /** Promote a bulky paste to a content-tag chip. Forwarded to the editor,
    *  which calls this instead of inserting long/multi-line text inline. */
@@ -4571,7 +4574,7 @@ function ChatPaneForSession({
                 onHistoryDown={handleHistoryDown}
                 historyNavEnabled={recallEnabled}
                 onPromotePaste={handlePromotePaste}
-                shouldPromotePaste={(text) => shouldPromoteToTag(text, pasteTagThresholdChars)}
+                shouldPromotePaste={(text) => !pastePlainText && shouldPromoteToTag(text, pasteTagThresholdChars)}
                 onPasteFiles={handlePasteFiles}
                 className={cn(
                   "px-3 pt-2.5 text-sm leading-relaxed text-content",
