@@ -1463,6 +1463,7 @@ function ChatPaneForSession({
   const sendPrompt = useSessionStore((s) => s.sendPrompt);
   const openSideChatPanel = useSessionStore((s) => s.openSideChatPanel);
   const interrupt = useSessionStore((s) => s.interrupt);
+  const inlineFileMention = useSessionStore((s) => s.inlineFileMention);
   const editAndResendMessage = useSessionStore((s) => s.editAndResendMessage);
   const claudeInstalled = useSessionStore((s) => s.claudeInstalled);
   const setSettingsOpen = useSessionStore((s) => s.setSettingsOpen);
@@ -2494,6 +2495,30 @@ function ChatPaneForSession({
     requestAnimationFrame(() => editorRef.current?.setCaretOffset(start));
   }, []);
 
+  /** Replace the trigger token with `replacement` in place — same
+   *  bookkeeping as `clearTriggerToken`, but the caret lands after the
+   *  inserted text. Used by the @-mention picker when the inline-marker
+   *  setting is on (issue #22): the `@<basename>` token stays in the prose
+   *  at the position where the user referenced the file. */
+  const replaceTriggerToken = useCallback((replacement: string) => {
+    const start = triggerStartRef.current;
+    if (start === null || !editorRef.current) {
+      setPickerKind(null);
+      return;
+    }
+    const caret = editorRef.current.getCaretOffset();
+    if (caret < 0) {
+      setPickerKind(null);
+      return;
+    }
+    editorRef.current.deleteTextRange(start, caret);
+    editorRef.current.insertText(replacement);
+    setValue((v) => v.slice(0, start) + replacement + v.slice(caret));
+    setPickerKind(null);
+    triggerStartRef.current = null;
+    requestAnimationFrame(() => editorRef.current?.setCaretOffset(start + replacement.length));
+  }, []);
+
   /** Add files (from mention or attach picker) as file tags. */
   const addFileTags = useCallback(
     (files: FileSearchEntry[]) => {
@@ -2541,13 +2566,22 @@ function ChatPaneForSession({
     setTags((prev) => [...prev, ...els.map(makeElementTag)]);
   }, [chatElementQueue, drainChatElementQueue, sessionId]);
 
-  /** Mention picker confirm: drop the @token, add a file tag, refocus. */
+  /** Mention picker confirm: drop the @token, add a file tag, refocus. With
+   *  the inline-marker setting on (issue #22), the token is replaced by
+   *  `@<basename>` markers instead of deleted, so the prose keeps a
+   *  lightweight reference at the original position (the full `@path` still
+   *  reaches the model via the prompt tail, and the file tag chip stays for
+   *  removal/full-path visibility). */
   const handleMentionPick = useCallback(
     (files: FileSearchEntry[]) => {
       addFileTags(files);
-      clearTriggerToken();
+      if (inlineFileMention) {
+        replaceTriggerToken(files.map((f) => `@${f.name} `).join(""));
+      } else {
+        clearTriggerToken();
+      }
     },
-    [addFileTags, clearTriggerToken],
+    [addFileTags, clearTriggerToken, replaceTriggerToken, inlineFileMention],
   );
 
   /** Slash picker confirm: replace the `/query` trigger token in the editor
@@ -4740,6 +4774,28 @@ const USER_MSG_VISIBLE_LINES = 5;
 /** Shared empty block list for the user-message media/prose partition — a
  *  fresh `[]` per render would bust MessageBlocks' memo on assistant rows. */
 const EMPTY_BLOCK_LIST: Block[] = [];
+/** Basename of a file path (handles / and \ separators). Mirrors the
+ *  derivation in contentTag's makeFileTag preview, but WITHOUT the preview
+ *  truncation — inline @-mention markers (issue #22) always carry the full
+ *  file name, so the match must too. */
+function fileBaseName(filePath: string): string {
+  const segs = filePath.split(/[/\\]/);
+  return segs[segs.length - 1] || filePath;
+}
+/** Test whether the prose contains the `@<name>` marker for a file. Uses the
+ *  SAME boundary rule as Markdown's rehypeFileInline plugin (whole-name match
+ *  with a trailing-character lookahead), so a card is only hidden from the
+ *  stacked row when the pill that replaces it will actually render. */
+function proseHasFileMarker(prose: string, name: string): boolean {
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`@${escaped}(?![A-Za-z0-9_-])`).test(prose);
+}
+/** Stable empty shape for the inline @-mention computation (issue #22) —
+ *  same stable-reference discipline as EMPTY_BLOCK_LIST. */
+const EMPTY_INLINED_FILE_MENTIONS: {
+  blocks: Block[];
+  files: { name: string; filePath: string }[];
+} = { blocks: [], files: [] };
 /** User messages the reader manually expanded, by id — module-level so the
  *  choice survives LegendList cell remounts (scroll far away and back and
  *  the expanded prompt stays expanded; everything else re-collapses). */
@@ -4839,19 +4895,51 @@ const MessageRow = memo(function MessageRow({
     });
     return changed ? next : msg.blocks;
   }, [msg.blocks, isUser]);
+  // Inline @-mention markers (issue #22): file cards whose `@<basename>`
+  // marker is literally present in the prose are considered "already
+  // inlined" — they leave the stacked media row, and the Markdown layer
+  // renders their marker as an inline pill (hover shows the full path).
+  // Cards whose marker is absent (messages sent before the setting existed,
+  // or a manually deleted marker) keep the classic top card, so a reference
+  // never silently disappears from the transcript.
+  const inlineFileMention = useSessionStore((s) => s.inlineFileMention);
+  const inlinedFileMentions = useMemo(() => {
+    if (!isUser || !inlineFileMention) return EMPTY_INLINED_FILE_MENTIONS;
+    let prose = "";
+    for (const b of renderBlocks) {
+      if (b.kind === "text") prose += b.text + "\n";
+    }
+    if (!prose) return EMPTY_INLINED_FILE_MENTIONS;
+    const blocks: Block[] = [];
+    const files: { name: string; filePath: string }[] = [];
+    for (const b of renderBlocks) {
+      if (b.kind !== "attachment" || b.attachmentKind !== "file" || !b.filePath) continue;
+      const name = fileBaseName(b.filePath);
+      if (name && proseHasFileMarker(prose, name)) {
+        blocks.push(b);
+        files.push({ name, filePath: b.filePath });
+      }
+    }
+    return blocks.length > 0 ? { blocks, files } : EMPTY_INLINED_FILE_MENTIONS;
+  }, [renderBlocks, isUser, inlineFileMention]);
   // Media blocks — paste/file/quote cards AND inline image thumbnails — are
   // carved out of the 5-line fold: they always render in full above the prose,
   // outside the clamp. A cropped/masked card or thumbnail is unreadable, and
   // a single image row already consumes the whole line budget, so counting
   // them collapsed every image-bearing prompt regardless of text length.
   // User messages are [attachment…, image…, text] (store block order), so the
-  // media container naturally keeps its above-prose position.
+  // media container naturally keeps its above-prose position. File cards
+  // already inlined as prose markers (above) are carved out here.
   const userMediaBlocks = useMemo(
     () =>
       isUser
-        ? renderBlocks.filter((b) => b.kind === "attachment" || b.kind === "image")
+        ? renderBlocks.filter(
+            (b) =>
+              (b.kind === "attachment" || b.kind === "image") &&
+              !inlinedFileMentions.blocks.includes(b),
+          )
         : EMPTY_BLOCK_LIST,
-    [renderBlocks, isUser],
+    [renderBlocks, isUser, inlinedFileMentions],
   );
   const userProseBlocks = useMemo(
     () =>
@@ -5041,7 +5129,7 @@ const MessageRow = memo(function MessageRow({
                       : undefined
                   }
                 >
-                  <MessageBlocks blocks={userProseBlocks} beforeMap={beforeMap} isStreamingTail={isStreamingTail} onOpenPlan={onOpenPlan} projectPath={projectPath} />
+                  <MessageBlocks blocks={userProseBlocks} beforeMap={beforeMap} isStreamingTail={isStreamingTail} onOpenPlan={onOpenPlan} projectPath={projectPath} inlineFiles={inlinedFileMentions.files} />
                 </div>
               )}
             </>

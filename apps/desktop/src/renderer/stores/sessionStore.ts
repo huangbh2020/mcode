@@ -44,6 +44,7 @@ import {
   DISPLAY_MODE_SETTING_KEY,
   TABS_FILE_PREVIEW_PLACEMENT_SETTING_KEY,
   TAB_BAR_MULTI_ROW_SETTING_KEY,
+  INLINE_FILE_MENTION_SETTING_KEY,
   LEFTBAR_MODE_SETTING_KEY,
   LEFTBAR_EXPANDED_PROJECTS_SETTING_KEY,
   LEFTBAR_EXPANDED_WORKTREES_SETTING_KEY,
@@ -798,6 +799,11 @@ export interface SessionState {
    *  scrolling one horizontal row (toggled from the bars' "⋯" overflow
    *  menu). Persisted under `ui.tabBarMultiRow`. */
   tabBarMultiRow: boolean;
+  /** Whether picking a file via the composer's @-mention keeps a lightweight
+   *  `@<basename>` marker inline in the message body (issue #22) instead of
+   *  only stacking the file cards above the prose. Persisted under
+   *  `ui.inlineFileMention`. */
+  inlineFileMention: boolean;
   /** Which left-bar view is mounted: the classic project tree ("tree",
    *  default) or the session-first flat stream ("stream", T3-style cards
    *  with a project scope filter). Persisted; the two views are pure
@@ -1905,6 +1911,10 @@ export interface SessionState {
    *  local flip + fire-and-forget persistence (same pattern as
    *  setDisplayMode). */
   setTabBarMultiRow: (on: boolean) => void;
+  /** Toggle inline `@<basename>` file-mention markers in the composer and
+   * transcript (issue #22). Instant local flip + fire-and-forget
+   * persistence (same pattern as setTabBarMultiRow). */
+  setInlineFileMention: (on: boolean) => void;
   /** Switch the left-bar view between the project tree and the session
    *  stream. Instant local flip + fire-and-forget persistence (same
    *  pattern as setDisplayMode). */
@@ -5177,6 +5187,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   // Persisted under `ui.tabBarMultiRow`; init() overwrites from the DB.
   // Default false = the classic single scrolling row.
   tabBarMultiRow: false,
+  // Inline `@<basename>` file-mention markers (issue #22). Default false =
+  // the classic stacked file cards above the prose.
+  inlineFileMention: false,
   // Left-bar view: classic project tree is the default; init() overwrites
   // from the persisted ui.leftBarMode preference.
   leftBarMode: "tree",
@@ -5436,6 +5449,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           DISPLAY_MODE_SETTING_KEY,
           TABS_FILE_PREVIEW_PLACEMENT_SETTING_KEY,
           TAB_BAR_MULTI_ROW_SETTING_KEY,
+          INLINE_FILE_MENTION_SETTING_KEY,
           LEFTBAR_MODE_SETTING_KEY,
           THEME_STYLE_SETTING_KEY,
           UI_FONT_FAMILY_SETTING_KEY,
@@ -5560,6 +5574,15 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       if (value === "true") set({ tabBarMultiRow: true });
     } catch (err) {
       console.error("apply(tabBarMultiRow) failed:", err);
+    }
+
+    // Inline @-mention markers (issue #22) — only ever flips ON here; a
+    // stored "false" keeps the default above.
+    try {
+      const value = fp[INLINE_FILE_MENTION_SETTING_KEY];
+      if (value === "true") set({ inlineFileMention: true });
+    } catch (err) {
+      console.error("apply(inlineFileMention) failed:", err);
     }
 
     // leftBarMode determines which sidebar component mounts on frame one.
@@ -10065,6 +10088,13 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     // Fire-and-forget — a failed write keeps the in-session choice.
     api.setting.set({ key: TAB_BAR_MULTI_ROW_SETTING_KEY, value: on ? "true" : "false" })
       .catch((err) => console.error("setting.set(tabBarMultiRow) failed:", err));
+  },
+
+  setInlineFileMention: (on) => {
+    set({ inlineFileMention: on });
+    // Fire-and-forget — a failed write keeps the in-session choice.
+    api.setting.set({ key: INLINE_FILE_MENTION_SETTING_KEY, value: on ? "true" : "false" })
+      .catch((err) => console.error("setting.set(inlineFileMention) failed:", err));
   },
 
   setLeftBarMode: async (mode) => {

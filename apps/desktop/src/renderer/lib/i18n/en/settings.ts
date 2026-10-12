@@ -82,6 +82,11 @@ export const en = {
   "settings.general.pasteThreshold": "Long-paste folding threshold",
   "settings.general.pasteThresholdDesc":
     "Pasting more than this many characters into the composer folds the content into a card above the input instead of inserting it inline ({min}–{max}).",
+  "settings.general.inlineFileMention": "Inline @-file mentions",
+  "settings.general.inlineFileMentionDesc":
+    "Keep a lightweight @filename marker at its original spot in the text when @-mentioning files, instead of stacking the reference cards at the top of the message (references not found in the text still show their cards).",
+  "settings.general.inlineFileMentionOn": "On",
+  "settings.general.inlineFileMentionOff": "Off",
   "settings.general.sectionArchive": "Session auto-archive",
   "settings.general.archiveEnabled": "Auto-archive inactive sessions",
   "settings.general.archiveEnabledDesc":

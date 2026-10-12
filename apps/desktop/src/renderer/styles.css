@@ -1929,6 +1929,27 @@ button.chat-ledger-head:hover {
   opacity: 0.8;
 }
 
+/* Inline @-file mention pills in the message stream (issue #22), rendered
+   by the Markdown preprocessor like the skill pill above. A lightweight
+   accent-colored marker — no fill/border — so the `@filename` reference
+   reads as part of the prose while the hover title carries the full path.
+   Keep visually in the same family as the skill pill (accent text, 0.85em,
+   nowrap) so inline annotations stay consistent. */
+.file-pill-inline {
+  display: inline-flex;
+  align-items: center;
+  vertical-align: baseline;
+  font-size: 0.85em;
+  font-weight: 600;
+  color: rgb(var(--accent));
+  white-space: nowrap;
+  transition: opacity 0.15s;
+}
+
+.file-pill-inline:hover {
+  opacity: 0.7;
+}
+
 /* ───────────── Mobile focus-zoom guard ─────────────
  * iOS Safari auto-zooms the page to ~2x when an <input>/<textarea>/
  * contenteditable whose computed font-size is under 16px gains focus — the

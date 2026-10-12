@@ -135,6 +135,7 @@ const MessageBlocks = memo(function MessageBlocks({
   isStreamingTail,
   onOpenPlan,
   projectPath,
+  inlineFiles,
 }: {
   blocks: Block[];
   /** Pre-turn file contents for Write-tool diffing. Forwarded down to any
@@ -154,6 +155,10 @@ const MessageBlocks = memo(function MessageBlocks({
    *  cards. Session-scoped (the owning project of this message's session), so
    *  backgrounded tabs resolve correctly. */
   projectPath?: string | null;
+  /** Files referenced inline via @-mention markers in this message's prose
+   *  (issue #22); forwarded to text blocks so Markdown renders `@<name>`
+   *  occurrences as pills. */
+  inlineFiles?: ReadonlyArray<{ name: string; filePath: string }>;
 }) {
   if (blocks.length === 0) return null;
   const segments = groupBlocks(blocks);
@@ -163,7 +168,7 @@ const MessageBlocks = memo(function MessageBlocks({
       {segments.map((seg, i) =>
         seg.kind === "single" ? (
           <RenderErrorBoundary key={segKeys[i]}>
-            <BlockView block={seg.block} defaultOpen={seg.defaultOpen} beforeMap={beforeMap} isStreamingTail={isStreamingTail} onOpenPlan={onOpenPlan} projectPath={projectPath} />
+            <BlockView block={seg.block} defaultOpen={seg.defaultOpen} beforeMap={beforeMap} isStreamingTail={isStreamingTail} onOpenPlan={onOpenPlan} projectPath={projectPath} inlineFiles={inlineFiles} />
           </RenderErrorBoundary>
         ) : seg.kind === "gallery" ? (
           <RenderErrorBoundary key={segKeys[i]}>
@@ -1088,6 +1093,7 @@ const BlockView = memo(function BlockView({
   liveTurn,
   onOpenPlan,
   projectPath,
+  inlineFiles,
 }: {
   block: Block;
   defaultOpen?: boolean;
@@ -1106,6 +1112,10 @@ const BlockView = memo(function BlockView({
   onOpenPlan?: (plan: string) => void;
   /** Project root for resolving file paths in text blocks and tool cards. */
   projectPath?: string | null;
+  /** Files referenced inline via @-mention markers in this message's prose
+   *  (issue #22). The text branch passes them to Markdown so `@<name>`
+   *  occurrences render as pills titled with the full path. */
+  inlineFiles?: ReadonlyArray<{ name: string; filePath: string }>;
 }) {
   // Known skill/command names — used to highlight /name references in text
   // blocks regardless of whether they were inserted as pills (block.skillNames)
@@ -1153,7 +1163,7 @@ const BlockView = memo(function BlockView({
       // ("rendered more hooks than previous render").
       if (!block.text.trim()) return null;
       return (
-        <Markdown projectPath={projectPath} skillNames={skillNames}>
+        <Markdown projectPath={projectPath} skillNames={skillNames} inlineFiles={inlineFiles}>
           {deferredText}
         </Markdown>
       );

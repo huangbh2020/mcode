@@ -69,6 +69,10 @@ export function GeneralPanel() {
   const pasteTagThresholdChars = useSessionStore((s) => s.pasteTagThresholdChars);
   const setPasteTagThresholdChars = useSessionStore((s) => s.setPasteTagThresholdChars);
 
+  // ── Inline @-mention markers (issue #22) ──
+  const inlineFileMention = useSessionStore((s) => s.inlineFileMention);
+  const setInlineFileMention = useSessionStore((s) => s.setInlineFileMention);
+
   // ── Session auto-archive rules ──
   const autoArchiveConfig = useSessionStore((s) => s.autoArchiveConfig);
   const setAutoArchiveConfig = useSessionStore((s) => s.setAutoArchiveConfig);
@@ -256,6 +260,19 @@ export function GeneralPanel() {
             value={pasteTagThresholdChars}
             onChange={(e) => void setPasteTagThresholdChars(Number(e.target.value))}
             className="w-full"
+          />
+        </SettingRow>
+
+        {/* ── Inline @-mention markers (issue #22) ── */}
+        <SettingRow
+          title={t("settings.general.inlineFileMention")}
+          desc={t("settings.general.inlineFileMentionDesc")}
+        >
+          <Switch
+            id="setting-inline-file-mention"
+            checked={inlineFileMention}
+            onCheckedChange={(v) => setInlineFileMention(v)}
+            label={inlineFileMention ? t("settings.general.inlineFileMentionOn") : t("settings.general.inlineFileMentionOff")}
           />
         </SettingRow>
       </SettingsSection>

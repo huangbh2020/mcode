@@ -248,6 +248,17 @@ export type TabsFilePreviewPlacement = z.infer<typeof TabsFilePreviewPlacementSc
 export const TAB_BAR_MULTI_ROW_SETTING_KEY = "ui.tabBarMultiRow";
 
 /**
+ * When "true", picking a file from the composer's @-mention picker keeps a
+ * lightweight `@<basename>` token in the message body at the original
+ * position (instead of deleting the trigger token), and the transcript
+ * renders that token as an inline pill while hiding the stacked file card
+ * at the top of the bubble (issue #22). The full `@path` reference still
+ * goes to the model via the prompt tail; only the presentation changes.
+ * Same hydration pattern as `ui.tabBarMultiRow`.
+ */
+export const INLINE_FILE_MENTION_SETTING_KEY = "ui.inlineFileMention";
+
+/**
  * Left-bar view preference:
  *  - "tree" (default): the classic project → session tree.
  *  - "stream": the session-first flat list (T3-style cards with a project
