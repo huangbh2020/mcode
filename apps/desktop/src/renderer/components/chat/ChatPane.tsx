@@ -67,7 +67,7 @@ import { QuestionPrompt } from "./QuestionPrompt.js";
 import { ApprovalPrompt } from "./ApprovalPrompt.js";
 import { OrchAttentionCard } from "./OrchAttentionCard.js";
 import { PlanApprovalPrompt } from "./PlanApprovalPrompt.js";
-import { ComposerEditor, type ComposerEditorHandle } from "./ComposerEditor.js";
+import { ComposerEditor, type ComposerEditorHandle, type FilePillEntry } from "./ComposerEditor.js";
 import { ContentTagChip } from "./ContentTagChip.js";
 import { TagPopover } from "./TagPopover.js";
 import { FileMentionPicker, type FileMentionPickerMode } from "./FileMentionPicker.js";
@@ -2359,6 +2359,43 @@ function ChatPaneForSession({
     [textareaLocked, pickerKind],
   );
 
+  // ── File pill ↔ file tag sync (inline @-mention mode) ──
+  // With the inline setting on, a referenced file lives in the editor as an
+  // atomic `@<basename>` pill while `tags` (the send-path source of truth for
+  // the `@path` prompt lines and attachment cards) stays the data model. Two
+  // directions keep them in lockstep:
+  //  * pill → tag (prune, called from handleChange): a pill deleted in the
+  //    editor (Backspace removes it whole) removes the matching file tag, so
+  //    the ENTIRE reference goes — visible text and attachment together.
+  //  * tag → pill (the effect after the draft-persistence block): every file
+  //    tag without a pill gets one — converted in place from a plain
+  //    `@name` marker for restored drafts / queued-prompt edits, appended at
+  //    the end for chip-era references (setting toggled on mid-draft, file
+  //    drops, tree context-menu drains). Without this, hiding the chip row
+  //    in inline mode would make chip-only references invisible AND
+  //    unremovable.
+  // The ref holds the pill-path set seen at the last observation; only paths
+  // that DISAPPEARED prune their tags, so setting-off chips (never pillated)
+  // are never touched by the prune.
+  const filePillPathsRef = useRef<Set<string>>(new Set());
+
+  const pruneFileTagsFromPills = useCallback(() => {
+    const paths = new Set(editorRef.current?.getFilePillPaths() ?? []);
+    const prev = filePillPathsRef.current;
+    if (prev.size === 0 && paths.size === 0) return;
+    const removed = [...prev].filter((p) => !paths.has(p));
+    filePillPathsRef.current = paths;
+    if (removed.length === 0) return;
+    setTags((t) => {
+      const next = t.filter(
+        (tg) => !(tg.kind === "file" && tg.filePath && removed.includes(tg.filePath)),
+      );
+      // Keep the previous array reference when nothing actually changed so
+      // downstream effects keyed on `tags` don't re-run needlessly.
+      return next.length === t.length ? t : next;
+    });
+  }, []);
+
   /** Content-change handler from the rich-text editor. The editor reports its
    *  plain-text-with-skills representation plus the transaction's net size
    *  delta; we keep a mirror in `value` (for empty-state checks + enqueue) and
@@ -2371,6 +2408,9 @@ function ChatPaneForSession({
    *  not user edits: they stay in recall mode and skip trigger detection so a
    *  recalled `/command` or `@file` doesn't pop the picker open mid-recall. */
   const handleChange = (text: string, textDelta: number) => {
+    // Mirror pill deletions into the tag list BEFORE any early return below —
+    // a recall fill re-enters here too and must not skip the prune.
+    pruneFileTagsFromPills();
     setValue(text);
     if (useSessionStore.getState().schedHintVisibleBySession[sessionId]) {
       useSessionStore.getState().hideSchedPromptHint(sessionId);
@@ -2446,6 +2486,15 @@ function ChatPaneForSession({
    *  starting a new turn. */
   const hasComposerContent = value.trim() !== "" || tags.length > 0 || pendingImages.length > 0;
 
+  // Inline @-mention mode: file references render as pills INSIDE the editor,
+  // so file chips leave the tag row (paste/element tags keep their cards —
+  // they have no inline representation). `tags` itself is untouched: it stays
+  // the send-path source of truth (`@path` lines + attachment cards).
+  const visibleTags = useMemo(
+    () => (inlineFileMention ? tags.filter((tg) => tg.kind !== "file") : tags),
+    [tags, inlineFileMention],
+  );
+
   // ── Composer draft persistence ──
   // The store's composerDraftBySession holds each thread's unsent input so it
   // survives this pane unmounting (single-mode thread switch, tab close).
@@ -2476,6 +2525,46 @@ function ChatPaneForSession({
     });
   }, [value, tags, sessionId]);
 
+  // Tag → pill direction of the file-pill sync (see the block above). Runs
+  // after the draft-restore effect by declaration order, so a restored
+  // draft's plain `@name` markers are pillified in the same commit. The
+  // prune baseline is refreshed even when the setting is off — pills from an
+  // inline-on era can still sit in the doc, and deleting them must still
+  // prune their tags.
+  useEffect(() => {
+    const editor = editorRef.current;
+    if (!editor) return;
+    const pillPaths = new Set(editor.getFilePillPaths());
+    filePillPathsRef.current = pillPaths;
+    if (!inlineFileMention) return;
+    // Pills without a tag RESTORE the tag (undo after a Backspace brought
+    // the pill back; without this the send would silently drop the `@path`
+    // line while the visible pill claims the file is referenced). Gated to
+    // inline mode: with the setting off, a chip's × deliberately removes the
+    // tag while its pill-era text may still sit in the doc — resurrecting
+    // the card would fight that explicit removal.
+    const orphanPills = [...pillPaths].filter(
+      (p) => !tags.some((tg) => tg.kind === "file" && tg.filePath === p),
+    );
+    if (orphanPills.length > 0) {
+      // appendUniqueFileTags dedupes against `prev`, so this adds exactly the
+      // orphan paths; the effect re-runs once on the new tags array, finds no
+      // orphans, and stops.
+      setTags((prev) => appendUniqueFileTags(prev, orphanPills));
+    }
+    const missing: FilePillEntry[] = [];
+    for (const tg of tags) {
+      if (tg.kind === "file" && tg.filePath && !pillPaths.has(tg.filePath)) {
+        missing.push({ path: tg.filePath, label: fileBaseName(tg.filePath) });
+      }
+    }
+    if (missing.length === 0) return;
+    editor.convertFileMarkersToPills(missing);
+    // Converters/appenders above dispatch transactions (→ onChange →
+    // handleChange refreshes `value`); no state is set here, so this effect
+    // only re-runs when `tags` or the setting actually change.
+  }, [tags, inlineFileMention]);
+
   /** Remove the trigger token (`@query` or `/query`) from the editor. */
   const clearTriggerToken = useCallback(() => {
     const start = triggerStartRef.current;
@@ -2493,30 +2582,6 @@ function ChatPaneForSession({
     setPickerKind(null);
     triggerStartRef.current = null;
     requestAnimationFrame(() => editorRef.current?.setCaretOffset(start));
-  }, []);
-
-  /** Replace the trigger token with `replacement` in place — same
-   *  bookkeeping as `clearTriggerToken`, but the caret lands after the
-   *  inserted text. Used by the @-mention picker when the inline-marker
-   *  setting is on (issue #22): the `@<basename>` token stays in the prose
-   *  at the position where the user referenced the file. */
-  const replaceTriggerToken = useCallback((replacement: string) => {
-    const start = triggerStartRef.current;
-    if (start === null || !editorRef.current) {
-      setPickerKind(null);
-      return;
-    }
-    const caret = editorRef.current.getCaretOffset();
-    if (caret < 0) {
-      setPickerKind(null);
-      return;
-    }
-    editorRef.current.deleteTextRange(start, caret);
-    editorRef.current.insertText(replacement);
-    setValue((v) => v.slice(0, start) + replacement + v.slice(caret));
-    setPickerKind(null);
-    triggerStartRef.current = null;
-    requestAnimationFrame(() => editorRef.current?.setCaretOffset(start + replacement.length));
   }, []);
 
   /** Add files (from mention or attach picker) as file tags. */
@@ -2567,21 +2632,43 @@ function ChatPaneForSession({
   }, [chatElementQueue, drainChatElementQueue, sessionId]);
 
   /** Mention picker confirm: drop the @token, add a file tag, refocus. With
-   *  the inline-marker setting on (issue #22), the token is replaced by
-   *  `@<basename>` markers instead of deleted, so the prose keeps a
-   *  lightweight reference at the original position (the full `@path` still
-   *  reaches the model via the prompt tail, and the file tag chip stays for
-   *  removal/full-path visibility). */
+   *  the inline-mention setting on (issue #22 follow-up), the token is
+   *  replaced by an ATOMIC file pill (`@<basename>`, hover = full path) that
+   *  lives inline where the user typed the reference — no top-left card, and
+   *  a single Backspace removes the whole reference (pill + file tag, via
+   *  the prune in handleChange). The full `@path` still reaches the model
+   *  via the prompt tail at send. */
   const handleMentionPick = useCallback(
     (files: FileSearchEntry[]) => {
       addFileTags(files);
       if (inlineFileMention) {
-        replaceTriggerToken(files.map((f) => `@${f.name} `).join(""));
+        const editor = editorRef.current;
+        const start = triggerStartRef.current;
+        const caret = editor?.getCaretOffset() ?? -1;
+        if (editor && start !== null && caret >= 0) {
+          editor.insertFilePills(
+            files.map((f) => ({ path: f.path, label: f.name })),
+            start,
+            caret,
+          );
+        } else {
+          // Degenerate trigger state (no editor / lost caret) — still keep
+          // the reference visible: append the pill at the end.
+          editor?.appendFilePills(files.map((f) => ({ path: f.path, label: f.name })));
+        }
+        if (editor) {
+          // Refresh the mirrored text so empty-state / enqueue stay in sync.
+          // The insert above already fired onChange; this reads the final
+          // state (NEVER append markers manually — that would double them).
+          setValue(editor.getTextWithSkills());
+        }
+        setPickerKind(null);
+        triggerStartRef.current = null;
       } else {
         clearTriggerToken();
       }
     },
-    [addFileTags, clearTriggerToken, replaceTriggerToken, inlineFileMention],
+    [addFileTags, clearTriggerToken, inlineFileMention],
   );
 
   /** Slash picker confirm: replace the `/query` trigger token in the editor
@@ -2736,10 +2823,18 @@ function ChatPaneForSession({
   const handleAttachPick = useCallback(
     (files: FileSearchEntry[]) => {
       addFileTags(files);
+      // Inline mode: the file chip is hidden from the tag row, so the
+      // reference must appear in the editor itself — append a pill at the end
+      // (no caret steal; the existing rAF focus below restores the editor).
+      if (inlineFileMention) {
+        editorRef.current?.appendFilePills(
+          files.map((f) => ({ path: f.path, label: f.name })),
+        );
+      }
       setAttachPickerOpen(false);
       requestAnimationFrame(() => editorRef.current?.focus());
     },
-    [addFileTags],
+    [addFileTags, inlineFileMention],
   );
 
   // Paste-to-card threshold (user-configurable). When a paste exceeds this
@@ -4227,8 +4322,8 @@ function ChatPaneForSession({
               queueTotal={
                 pendingApprovals.filter((p) => p.sessionId === sessionId).length
               }
-              onDecide={(granted, always) =>
-                void decideApproval(headApproval.requestId, granted, always)
+              onDecide={(granted, scope) =>
+                void decideApproval(headApproval.requestId, granted, scope)
               }
             />
           )}
@@ -4494,9 +4589,9 @@ function ChatPaneForSession({
                 </div>
               </div>
             )}
-            {tags.length > 0 && (
+            {visibleTags.length > 0 && (
               <div className="flex flex-wrap gap-1 px-2 pt-2">
-                {tags.map((tag) => (
+                {visibleTags.map((tag) => (
                   <ContentTagChip
                     key={tag.id}
                     ref={(el) => {
@@ -4578,7 +4673,7 @@ function ChatPaneForSession({
                 onPasteFiles={handlePasteFiles}
                 className={cn(
                   "px-3 pt-2.5 text-sm leading-relaxed text-content",
-                  (tags.length > 0 || pendingImages.length > 0) && "pt-1.5",
+                  (visibleTags.length > 0 || pendingImages.length > 0) && "pt-1.5",
                 )}
               />
             </RenderErrorBoundary>

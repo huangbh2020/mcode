@@ -33,6 +33,15 @@ import {
  * The header shows "n / total" only when total > 1 so a single approval
  * stays visually quiet.
  *
+ * Allow scope (issue: repeated-approval fatigue in multi-turn tasks): the
+ * footer's "允许范围" select upgrades a one-shot allow into an always-allow
+ * grant — "session" records the tool in this session's in-memory set (dies
+ * with the app), "global" records it into the PERSISTED allowlist so every
+ * session, across restarts, auto-allows the tool (plan mode still prompts;
+ * host-side project-boundary guards still run first). The select is a
+ * native element; the Esc-deny shortcut ignores keys targeting it so
+ * closing its dropdown doesn't accidentally deny the approval.
+ *
  * Keyboard: Enter allows the head, Esc denies. The "允许" button auto-focuses
  * on mount so Enter works without an extra click. This is one-shot — when
  * the queue shifts, this card unmounts and the next one auto-focuses its
@@ -53,12 +62,14 @@ export function ApprovalPrompt({
   queuePosition: number;
   /** Total cards in the queue; 1 means "no queue" (chip stays quiet). */
   queueTotal: number;
-  /** granted=true → allow (with `always` if checked); granted=false → deny. */
-  onDecide: (granted: boolean, always?: boolean) => void;
+  /** granted=true → allow; `scope` (when granted) upgrades to an
+   *  always-allow grant — "session" (this session) or "global" (persisted,
+   *  every session). undefined = one-shot allow. */
+  onDecide: (granted: boolean, scope?: "session" | "global") => void;
 }) {
   const { t } = useI18n();
   const [open, setOpen] = useState(false);
-  const [always, setAlways] = useState(false);
+  const [scope, setScope] = useState<"once" | "session" | "global">("once");
   const allowRef = useRef<HTMLButtonElement>(null);
   const cardRef = useRef<HTMLDivElement>(null);
 
@@ -75,10 +86,12 @@ export function ApprovalPrompt({
   }, [toolName, queuePosition]);
 
   // Local keyboard: Esc denies, Enter allows (the focused button already
-  // handles Enter natively, so this is just the Esc shortcut).
+  // handles Enter natively, so this is just the Esc shortcut). Keys aimed at
+  // the scope <select> pass through — Esc closes its native dropdown first.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
+        if (e.target instanceof HTMLElement && e.target.tagName === "SELECT") return;
         e.preventDefault();
         e.stopPropagation();
         onDecide(false);
@@ -89,7 +102,7 @@ export function ApprovalPrompt({
   }, [onDecide]);
 
   const decide = (granted: boolean) => {
-    onDecide(granted, granted ? always : undefined);
+    onDecide(granted, granted && scope !== "once" ? scope : undefined);
   };
 
   // Rendered in-flow above the composer (see ChatPane). `mb-2` lifts the card
@@ -159,17 +172,25 @@ export function ApprovalPrompt({
         </div>
       )}
 
-      {/* Footer: always-allow checkbox + buttons. Stays on a single row at
-          the bottom of the card. */}
+      {/* Footer: allow-scope select + buttons. Stays on a single row at
+          the bottom of the card. The select's value decides whether 允许
+          is a one-shot grant or an always-allow (session / global). */}
       <div className="flex items-center justify-between gap-2 border-t border-edge pt-2.5">
-        <label className="flex cursor-pointer items-center gap-1.5 text-[11px] text-content-muted">
-          <input
-            type="checkbox"
-            checked={always}
-            onChange={(e) => setAlways(e.target.checked)}
-            className="h-3 w-3 cursor-pointer accent-warning"
-          />
-          {t("chat.approval.alwaysAllow", { tool: toolName })}
+        <label className="flex min-w-0 items-center gap-1.5 text-[11px] text-content-muted">
+          <span className="shrink-0">{t("chat.approval.scopeLabel")}</span>
+          <select
+            value={scope}
+            onChange={(e) => setScope(e.target.value as typeof scope)}
+            className={cn(
+              "max-w-[13rem] cursor-pointer truncate rounded-md border border-edge bg-surface px-1.5 py-0.5",
+              "text-[11px] text-content focus:outline-none focus-visible:ring-2 focus-visible:ring-warning/50",
+              scope !== "once" && "border-warning/60 bg-warning/10 text-warning",
+            )}
+          >
+            <option value="once">{t("chat.approval.scopeOnce")}</option>
+            <option value="session">{t("chat.approval.scopeSession")}</option>
+            <option value="global">{t("chat.approval.scopeGlobal")}</option>
+          </select>
         </label>
         <div className="flex items-center gap-1.5">
           <Button

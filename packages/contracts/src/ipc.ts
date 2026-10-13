@@ -1143,8 +1143,33 @@ export const ApproveSchema = z.object({
   requestId: z.string(),
   granted: z.boolean(),
   always: z.boolean().optional(),
+  /* Scope of an "always allow" grant (only meaningful together with
+   * granted+always). "session" (default, pre-existing behavior) records the
+   * tool into the session's in-memory always-allowed set; "global"
+   * additionally records it into the persisted global allowlist so every
+   * session (this one included, across restarts) auto-allows the tool —
+   * except in plan mode, where nothing is auto-allowed. */
+  alwaysScope: z.enum(["session", "global"]).optional(),
 });
 export type ApproveInput = z.infer<typeof ApproveSchema>;
+
+/* Setting key under which the global "always allow" tool list is persisted
+ * (issue #24-style repeated-approval fatigue). Value is a JSON array of tool
+ * names (e.g. ["Bash","WebSearch"]), read/written by the ApprovalBridge in
+ * main. Tools listed here are auto-approved in every permission mode EXCEPT
+ * plan mode (plan = review-everything by definition). Host-side hard
+ * boundaries still run first: out-of-project writes / bash write targets /
+ * isolated-mode out-of-project reads are denied regardless of this list. */
+export const GLOBAL_ALLOWED_TOOLS_SETTING_KEY = "approval.globalAllowedTools";
+
+/* Replace the persisted global always-allow tool list (whole-list semantics —
+ * the settings editor is the single writer; approval-card "global" grants
+ * add one entry on top of the current list). Duplicates are dropped; the
+ * resulting order is normalized to sorted on write. */
+export const SaveGlobalAllowedToolsSchema = z.object({
+  tools: z.array(z.string().min(1).max(120)).max(64),
+});
+export type SaveGlobalAllowedToolsInput = z.infer<typeof SaveGlobalAllowedToolsSchema>;
 
 /* Answer to an AskUserQuestion. `requestId` matches the question.ask event.
  * Each value is one question's answer: option label (string), labels
@@ -2832,9 +2857,10 @@ export interface GitWorktreeRemoveResult {
  *  ENABLED plugin (read-only inventory: the composer menu lists it and the
  *  SDK loads it per-turn, but it has no user-editable file root — the skills
  *  read/save/delete handlers reject this source). "agent" = the project's
- *  platform-neutral `<project>/.agent/skills/` drop-in directory (scanned
- *  like "project" and fully editable, but surfaced with its own badge so
- *  agent-convention skills are distinguishable from `.claude/skills` ones). */
+ *  platform-neutral drop-in directories `<project>/.agent/skills/` +
+ *  `<project>/.agents/skills/` (scanned like "project" and fully editable,
+ *  but surfaced with its own badge so agent-convention skills are
+ *  distinguishable from `.claude/skills` ones). */
 export type SkillSource = "global" | "project" | "agent" | "plugin";
 
 /** One registered AI backend surfaced to the renderer via `provider.list`.
@@ -2894,7 +2920,8 @@ export const SkillsReadSchema = z.object({
    *  resolved by `source` + `name`. */
   projectPath: z.string().optional(),
   /** Which skills root to read from: user-global, the active project's
-   *  `.claude/skills`, or its `.agent/skills` drop-in root. */
+   *  `.claude/skills`, or its platform-neutral drop-in roots (`.agent/skills`
+   *  + `.agents/skills`). */
   source: z.enum(["global", "project", "agent"]),
   /** Skill name (= directory name under <root>/.claude/skills/). */
   name: z.string().regex(SKILL_NAME_RE, "invalid skill name"),
@@ -4617,6 +4644,10 @@ export interface RpcMap {
    *  pass (it also runs an immediate post-kill re-scan). */
   "claude.stopService": (input: StopServiceInput) => Promise<void>;
   "claude.approve": (input: ApproveInput) => Promise<void>;
+  /** Read the persisted global always-allow tool list (sorted). */
+  "claude.listGlobalAllowedTools": () => Promise<{ tools: string[] }>;
+  /** Replace the persisted global always-allow tool list (whole-list). */
+  "claude.saveGlobalAllowedTools": (input: SaveGlobalAllowedToolsInput) => Promise<void>;
   /** Submit the user's answers to a pending AskUserQuestion. */
   "claude.respondQuestion": (input: RespondQuestionInput) => Promise<void>;
   /** Submit the user's approve/reject decision on a pending ExitPlanMode plan. */
@@ -5243,6 +5274,8 @@ export const IPC = {
   CLAUDE_STOP_TASK: "claude:stopTask",
   CLAUDE_STOP_SERVICE: "claude:stopService",
   CLAUDE_APPROVE: "claude:approve",
+  CLAUDE_LIST_GLOBAL_ALLOWED_TOOLS: "claude:listGlobalAllowedTools",
+  CLAUDE_SAVE_GLOBAL_ALLOWED_TOOLS: "claude:saveGlobalAllowedTools",
   CLAUDE_RESPOND_QUESTION: "claude:respondQuestion",
   CLAUDE_RESPOND_PLAN_APPROVAL: "claude:respondPlanApproval",
   CLAUDE_REWIND_TURN: "claude:rewindTurn",

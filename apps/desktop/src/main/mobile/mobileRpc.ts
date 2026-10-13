@@ -489,6 +489,7 @@ const HANDLERS: Record<string, RpcHandler> = {
       input.granted,
       input.granted ? undefined : "Denied by user",
       input.always,
+      input.alwaysScope,
     );
     if (!resolved) throw new RpcError(`no pending approval for ${input.requestId}`, 409);
     return { ok: true };

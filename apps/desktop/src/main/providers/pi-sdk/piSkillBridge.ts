@@ -41,7 +41,7 @@
 import { homedir } from "node:os";
 import path from "node:path";
 import { bashPathHintFor, detectBashEnv } from "@main/lib/bashEnv.js";
-import { agentSkillsRoot } from "@main/lib/agentSkills.js";
+import { agentSkillsRoots } from "@main/lib/agentSkills.js";
 import { msysToWindowsPath } from "@main/lib/msysPath.js";
 
 /** Suffix-free access to the Pi SDK module type (the provider already loads it
@@ -56,12 +56,13 @@ export type PiResourceLoader = import("@earendil-works/pi-coding-agent").Default
  *  here (rather than importing from the IPC module) so the provider layer stays
  *  decoupled from IPC handler internals — and because these are plain path
  *  computations with no IPC dependency. Includes the project's platform-neutral
- *  `.agent/skills` drop-in root so project-scoped agent skills work under Pi. */
+ *  drop-in roots (`.agents/skills` + `.agent/skills`, see agentSkillsRoots) so
+ *  project-scoped agent skills work under Pi. */
 function mcodeSkillRoots(cwd: string): string[] {
   return [
     path.join(homedir(), ".mcode", "skills"),
     path.join(cwd, ".claude", "skills"),
-    agentSkillsRoot(cwd),
+    ...agentSkillsRoots(cwd),
   ];
 }
 

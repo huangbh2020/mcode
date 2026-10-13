@@ -488,6 +488,10 @@ const claude: Api["claude"] = {
   stopTask: (input) => rpc("claude:stopTask", input),
   stopService: (input) => rpc("claude:stopService", input),
   approve: (input) => rpc("claude:approve", input),
+  // Global always-allow editor is desktop-only (settings panel); the phone
+  // still participates in GLOBAL grants through approve's alwaysScope above.
+  listGlobalAllowedTools: () => webUnsupported("claude.listGlobalAllowedTools"),
+  saveGlobalAllowedTools: () => webUnsupported("claude.saveGlobalAllowedTools"),
   respondQuestion: (input) => rpc("claude:respondQuestion", input),
   respondPlanApproval: (input) => rpc("claude:respondPlanApproval", input),
   rewindTurn: (input) => rpc("claude:rewindTurn", input),

@@ -19,9 +19,14 @@
  * `editorRef.insertSkill(skill)`, which replaces the `/query` token with the
  * pill node + a trailing space.
  *
- * `@` mentions and long-paste promotion stay as chip-above-editor tags in the
- * parent — unchanged from the textarea era. This component only owns the text
- * + skill pills.
+ * `@file` references with the inline-mention setting on (issue #22 follow-up)
+ * become the same kind of atomic node (`name: "fileMention"`, rendered as
+ * `@<basename>`): the pill lives inline where the user typed the reference,
+ * serializes back to the same `@basename` marker text, and a single Backspace
+ * removes the whole reference (the parent mirrors the removal into its
+ * file-tag state, so the attachment disappears with the pill). Long pastes
+ * stay as chip-above-editor tags in the parent — this component only owns the
+ * text + the two pill node types.
  *
  * ## Serialization
  *
@@ -52,10 +57,21 @@ function syncEmptyClass(ed: Editor): void {
 
 /** Result of serializing the editor's document for sending. */
 export interface ComposerSerialization {
-  /** Plain text with skill pills inlined as `/name` at their positions. */
+  /** Plain text with skill pills inlined as `/name` and file pills as
+   *  `@<basename>` at their positions. */
   text: string;
   /** Names of the skills embedded in the document, in document order. */
   skillNames: string[];
+}
+
+/** One inline file reference for the file-mention pill. `path` is the
+ *  absolute file path (stored as the node id and shown on hover), `label`
+ *  is the display basename (what the serialized `@<basename>` marker
+ *  carries — must be the FULL basename, matching the stream-side
+ *  marker-matching rule). */
+export interface FilePillEntry {
+  path: string;
+  label: string;
 }
 
 /** Imperative handle the parent uses to drive the editor. */
@@ -93,6 +109,24 @@ export interface ComposerEditorHandle {
    *  used for built-in commands so they show up as inline color blocks in the
    *  composer instead of being executed immediately or replacing all text. */
   insertCommandPill: (name: string, start: number, end: number) => void;
+  /** Insert atomic file-mention pills (`@<basename>`, hover shows the full
+   *  path) replacing the plain-text range [start, end) — typically the
+   *  `@query` trigger token — then park the caret after the last pill. */
+  insertFilePills: (files: FilePillEntry[], start: number, end: number) => void;
+  /** Append atomic file-mention pills at the end of the document WITHOUT
+   *  stealing focus or moving the caret — used by drop / attach flows where
+   *  the user may be typing elsewhere (or nowhere) in the editor. */
+  appendFilePills: (files: FilePillEntry[]) => void;
+  /** Convert plain `@<basename>` markers in the text into file pills IN PLACE
+   *  (first whole-name match per file, same boundary rule as the stream-side
+   *  matcher); files with no marker are appended at the end. Used when a
+   *  draft / queued prompt is restored: the persisted text carries markers,
+   *  and the live composer shows them as atomic references again. */
+  convertFileMarkersToPills: (files: FilePillEntry[]) => void;
+  /** Absolute paths (node ids) of the file-mention pills currently in the
+   *  document, in document order. The parent diffs this against its file-tag
+   *  state to mirror pill deletions (Backspace removes the whole reference). */
+  getFilePillPaths: () => string[];
   /** Delete the text in the plain-text range [start, end), then place the
    *  caret at `start`. Used to remove a `/query` or `@query` trigger token. */
   deleteTextRange: (start: number, end: number) => void;
@@ -111,9 +145,10 @@ export interface ComposerEditorHandle {
   /** Focus the editor and collapse the caret to the given plain-text offset. */
   setCaretOffset: (offset: number) => void;
   /** Returns the [start, end) plain-text intervals occupied by skill/command
-   *  pills. The caller uses this to skip pill text (which serializes as
-   *  `/name`) when scanning for a trigger `/`, so a pill's leading slash is
-   *  never mistaken for a freshly-typed slash trigger. */
+   *  and file-mention pills. The caller uses this to skip pill text (which
+   *  serializes as `/name` / `@name`) when scanning for a trigger `/` or `@`,
+   *  so a pill's leading trigger char is never mistaken for a freshly-typed
+   *  trigger. */
   getPillRanges: () => Array<[number, number]>;
 }
 
@@ -224,6 +259,62 @@ const SkillPill = Mention.extend({
   },
 });
 
+/**
+ * Atomic Mention node for inline `@file` references (inline-mention setting,
+ * issue #22 follow-up). Same construction as SkillPill — own node name
+ * ("fileMention"), `atom: true` so a single Backspace removes the whole
+ * reference, `deleteTriggerWithBackspace` so no stray `@` survives.
+ *
+ * - attrs: `id` = absolute path, `label` = display basename.
+ * - `renderText` emits `@<basename>`, so serialization keeps the EXACT marker
+ *   text the stream-side inline renderer (Markdown.tsx) matches — a message
+ *   sent from a pill composer inlines its file references unchanged.
+ * - renderHTML adds `title` (full path) for hover, mirroring the stream-side
+ *   pill; parseHTML keys on `span[data-type="fileMention"]` and reads
+ *   data-id/data-label, so composer drafts round-trip pills via getHTML/setHTML.
+ */
+const FilePill = Mention.extend({
+  name: "fileMention",
+  renderHTML({ node, HTMLAttributes }) {
+    const label = node.attrs.label ?? node.attrs.id ?? "";
+    const baseClass = (this.options.HTMLAttributes as { class?: string }).class ?? "";
+    const extraClass = (HTMLAttributes as { class?: string }).class ?? "";
+    const className = [baseClass, extraClass].filter(Boolean).join(" ");
+    return [
+      "span",
+      {
+        "data-type": "fileMention",
+        ...HTMLAttributes,
+        ...(className ? { class: className } : {}),
+        title: node.attrs.id ?? undefined,
+      },
+      `@${label}`,
+    ];
+  },
+}).configure({
+  // No-op suggestion, same rationale as SkillPill — the parent's
+  // FileMentionPicker owns trigger detection and the popup UI.
+  suggestion: {
+    char: "@",
+    render: () => ({
+      onStart: () => {},
+      onUpdate: () => {},
+      onExit: () => {},
+    }),
+  },
+  deleteTriggerWithBackspace: true,
+  renderText: ({ node }) => `@${node.attrs.label ?? node.attrs.id ?? ""}`,
+  HTMLAttributes: {
+    // Same lightweight accent-text family as the skill pill (and the
+    // stream-side `.file-pill-inline`) — no glyph, the `@` in the label
+    // already marks it as a file reference.
+    class: cn(
+      "file-pill inline-flex items-center align-baseline transition-opacity",
+      "text-[0.85em] font-semibold text-accent hover:opacity-70",
+    ),
+  },
+});
+
 export const ComposerEditor = forwardRef<
   ComposerEditorHandle,
   ComposerEditorProps
@@ -271,6 +362,7 @@ export const ComposerEditor = forwardRef<
         // just accept defaults here.
       }),
       SkillPill,
+      FilePill,
     ],
     content: "",
     editable,
@@ -372,8 +464,17 @@ export const ComposerEditor = forwardRef<
     editor.view.dom.setAttribute("aria-label", placeholder);
   }, [editor, placeholder]);
 
+  /** Serialized text of an atomic pill node: `/name` for skills/commands,
+   *  `@name` for file mentions. Mirrors each node's `renderText` so every
+   *  offset-mapping helper below agrees with `getTextWithSkills`. */
+  function pillText(node: { type: { name: string }; attrs: Record<string, unknown> }): string {
+    const label = (node.attrs.label as string | null) ?? (node.attrs.id as string | null) ?? "";
+    return node.type.name === "fileMention" ? `@${label}` : `/${label}`;
+  }
+
   /** Plain-text representation of the doc: text nodes verbatim, skill nodes as
-   *  `/name`. Walks the doc so node order is preserved relative to text. */
+   *  `/name`, file-mention nodes as `@name`. Walks the doc so node order is
+   *  preserved relative to text. */
   function textWithSkills(ed: typeof editor): string {
     if (!ed) return "";
     const { doc } = ed.state;
@@ -381,8 +482,8 @@ export const ComposerEditor = forwardRef<
     doc.descendants((node) => {
       if (node.isText) {
         out += node.text ?? "";
-      } else if (node.type.name === "skill") {
-        out += `/${node.attrs.label ?? node.attrs.id ?? ""}`;
+      } else if (node.type.name === "skill" || node.type.name === "fileMention") {
+        out += pillText(node);
         return false; // don't descend into the pill
       } else if (node.type.name === "hardBreak") {
         // Shift+Enter (and multi-line pastes — ProseMirror converts the
@@ -414,9 +515,9 @@ export const ComposerEditor = forwardRef<
           return false;
         }
         offset += node.text?.length ?? 0;
-      } else if (node.type.name === "skill") {
-        // A pill contributes `/name` chars.
-        offset += `/${node.attrs.label ?? node.attrs.id ?? ""}`.length;
+      } else if (node.type.name === "skill" || node.type.name === "fileMention") {
+        // A pill contributes its full serialized text (`/name` / `@name`).
+        offset += pillText(node).length;
         return false;
       } else if (node.type.name === "hardBreak") {
         // Mirrors textWithSkills: a hard break serializes as "\n".
@@ -445,8 +546,8 @@ export const ComposerEditor = forwardRef<
           return false;
         }
         acc += len;
-      } else if (node.type.name === "skill") {
-        const len = `/${node.attrs.label ?? node.attrs.id ?? ""}`.length;
+      } else if (node.type.name === "skill" || node.type.name === "fileMention") {
+        const len = pillText(node).length;
         if (acc + len >= offset) {
           // Snap to the pill's end — pills are atomic.
           pos = p + node.nodeSize;
@@ -500,6 +601,118 @@ export const ComposerEditor = forwardRef<
     });
   }
 
+  /** ProseMirror content for a run of file pills, each followed by a trailing
+   *  space so the user can keep typing after the last one (same shape as
+   *  insertPillAt's skill insertion). */
+  function filePillContent(files: FilePillEntry[]) {
+    return files.flatMap((f) => [
+      {
+        type: "fileMention",
+        attrs: {
+          id: f.path,
+          label: f.label,
+          mentionSuggestionChar: "@",
+        } satisfies MentionNodeAttrs,
+      },
+      { type: "text", text: " " },
+    ]);
+  }
+
+  /** Insert file pills replacing the plain-text range [start, end) — the
+   *  `@query` trigger token. Focuses the editor and parks the caret after the
+   *  last pill's trailing space (2 PM positions per pill: node + space). */
+  function insertFilePillsAt(
+    ed: NonNullable<typeof editor>,
+    files: FilePillEntry[],
+    start: number,
+    end: number,
+  ) {
+    const from = textOffsetToPos(ed, start);
+    const to = textOffsetToPos(ed, end);
+    ed.chain()
+      .focus()
+      .deleteRange({ from, to })
+      .insertContentAt(from, filePillContent(files))
+      .run();
+    requestAnimationFrame(() => {
+      if (!ed.isDestroyed) {
+        ed.commands.focus();
+        ed.commands.setTextSelection(from + files.length * 2);
+      }
+    });
+  }
+
+  /** Append file pills at the end of the document without stealing focus or
+   *  moving the caret — used by drop / attach / queue-drain flows where the
+   *  user may be typing elsewhere (or nothing at all). `updateSelection:false`
+   *  is what keeps the caret put: insertContentAt otherwise jumps the
+   *  selection to the end of the inserted content. */
+  function appendFilePillsAt(ed: NonNullable<typeof editor>, files: FilePillEntry[]) {
+    if (files.length === 0) return;
+    // textOffsetToPos(0) on an EMPTY doc resolves to position 0 ("before the
+    // paragraph"), which is not a valid inline insert spot — appending to an
+    // empty doc inserts at doc.content.size (the paragraph's end) instead.
+    const at = ed.isEmpty
+      ? ed.state.doc.content.size
+      : textOffsetToPos(ed, textWithSkills(ed).length);
+    ed.chain()
+      .insertContentAt(at, filePillContent(files), { updateSelection: false })
+      .run();
+  }
+
+  /** Convert plain `@<basename>` markers into file pills in place. The match
+   *  uses the SAME whole-name boundary rule as the stream-side inline renderer
+   *  (Markdown.tsx: `@name(?![A-Za-z0-9_-])`) so a converted pill occupies
+   *  exactly the text the marker occupied. Replacements run right-to-left —
+   *  earlier offsets stay valid because a pill serializes to the same-length
+   *  `@name` text, but computing fresh positions per replacement is the
+   *  robust way. Files with no marker in the text are appended at the end. */
+  function convertFileMarkersToPillsImpl(
+    ed: NonNullable<typeof editor>,
+    files: FilePillEntry[],
+  ) {
+    if (files.length === 0) return;
+    const text = textWithSkills(ed);
+    type Found = { file: FilePillEntry; start: number; end: number };
+    const found: Found[] = [];
+    const missing: FilePillEntry[] = [];
+    for (const file of files) {
+      if (!file.label) {
+        missing.push(file);
+        continue;
+      }
+      const escaped = file.label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const m = new RegExp(`@${escaped}(?![A-Za-z0-9_-])`).exec(text);
+      if (m) found.push({ file, start: m.index, end: m.index + m[0].length });
+      else missing.push(file);
+    }
+    found.sort((a, b) => b.start - a.start);
+    for (const { file, start, end } of found) {
+      const from = textOffsetToPos(ed, start);
+      const to = textOffsetToPos(ed, end);
+      // updateSelection:false — conversions run during draft/queue restores;
+      // each default-true insert would drag the caret to that marker (the
+      // LEFTMOST one wins, since replacements run right-to-left), so the
+      // restored caret would end up mid-text instead of at the end.
+      ed.chain()
+        .deleteRange({ from, to })
+        .insertContentAt(
+          from,
+          {
+            type: "fileMention",
+            attrs: {
+              id: file.path,
+              label: file.label,
+              mentionSuggestionChar: "@",
+            } satisfies MentionNodeAttrs,
+          },
+          { updateSelection: false },
+        )
+        .run();
+    }
+    if (missing.length > 0) appendFilePillsAt(ed, missing);
+  }
+
   useImperativeHandle(
     ref,
     (): ComposerEditorHandle => ({
@@ -530,6 +743,28 @@ export const ComposerEditor = forwardRef<
       insertCommandPill: (name, start, end) => {
         if (!editor) return;
         insertPillAt(editor, name, start, end);
+      },
+      insertFilePills: (files, start, end) => {
+        if (!editor || files.length === 0) return;
+        insertFilePillsAt(editor, files, start, end);
+      },
+      appendFilePills: (files) => {
+        if (!editor) return;
+        appendFilePillsAt(editor, files);
+      },
+      convertFileMarkersToPills: (files) => {
+        if (!editor) return;
+        convertFileMarkersToPillsImpl(editor, files);
+      },
+      getFilePillPaths: () => {
+        if (!editor) return [];
+        const paths: string[] = [];
+        editor.state.doc.descendants((node) => {
+          if (node.type.name === "fileMention" && node.attrs.id) {
+            paths.push(node.attrs.id as string);
+          }
+        });
+        return paths;
       },
       deleteTextRange: (start, end) => {
         if (!editor) return;
@@ -580,8 +815,8 @@ export const ComposerEditor = forwardRef<
         editor.state.doc.descendants((node) => {
           if (node.isText) {
             offset += node.text?.length ?? 0;
-          } else if (node.type.name === "skill") {
-            const len = `/${node.attrs.label ?? node.attrs.id ?? ""}`.length;
+          } else if (node.type.name === "skill" || node.type.name === "fileMention") {
+            const len = pillText(node).length;
             ranges.push([offset, offset + len]);
             offset += len;
             return false; // don't descend into the pill

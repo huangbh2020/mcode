@@ -824,12 +824,32 @@ class RuntimeManager {
 
   /** Resolve an approval request from the renderer. On success, broadcast the
    *  cross-client `request.resolved` sync event so every OTHER client closes
-   *  its copy of the approval dialog (the Deferred resolves exactly once). */
-  resolveApproval(requestId: string, allow: boolean, reason?: string, always?: boolean): boolean {
-    const sessionId = approvalBridge.resolveApproval(requestId, { allow, reason }, always);
+   *  its copy of the approval dialog (the Deferred resolves exactly once).
+   *  `always` + `alwaysScope` record the grant: session-scoped (in-memory,
+   *  this session) or global (persisted, every session — see ApprovalBridge). */
+  resolveApproval(
+    requestId: string,
+    allow: boolean,
+    reason?: string,
+    always?: boolean,
+    alwaysScope?: "session" | "global",
+  ): boolean {
+    const sessionId = approvalBridge.resolveApproval(requestId, { allow, reason }, always, alwaysScope);
     if (!sessionId) return false;
     this.notifyRequestResolved(sessionId, requestId, "approval");
     return true;
+  }
+
+  /** Read the persisted global always-allow tool list (settings editor). */
+  getGlobalAllowedTools(): string[] {
+    return approvalBridge.getGlobalAllowedTools();
+  }
+
+  /** Replace the persisted global always-allow tool list (settings editor).
+   *  Applies immediately to every session — canUseTool consults the set on
+   *  each tool call. */
+  setGlobalAllowedTools(tools: string[]): void {
+    approvalBridge.setGlobalAllowedTools(tools);
   }
 
   /** Update a session's permission mode mid-turn. The bridge records it and

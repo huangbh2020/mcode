@@ -13,6 +13,7 @@ import { PanelHeader } from "./PanelHeader.js";
 import { SettingsSection } from "./SettingsSection.js";
 import { TitleGenPanel } from "./TitleGenPanel.js";
 import { OutputStylePanel } from "./OutputStylePanel.js";
+import { ToolApprovalPanel } from "./ToolApprovalPanel.js";
 
 /**
  * "常规" (General) settings panel.
@@ -22,6 +23,7 @@ import { OutputStylePanel } from "./OutputStylePanel.js";
  *  - 基础 (SettingsSection): 界面语言 + 中间面板显示模式 + 对话紧凑度 + 长文本折叠阈值
  *    (语言与显示合并为一组——单行小节不值得独占一张卡)
  *  - 会话自动归档 (SettingsSection): 开关 + 默认不活跃天数 + 按项目覆盖
+ *  - 工具自动允许 (ToolApprovalPanel, renders its own SettingsSection)
  *  - 会话标题生成 (TitleGenPanel, renders its own SettingsSection)
  *  - 输出风格 (OutputStylePanel, renders its own SettingsSection)
  *
@@ -413,6 +415,9 @@ export function GeneralPanel() {
           </SettingRow>
         )}
       </SettingsSection>
+
+      {/* ── 工具自动允许(全局 always-allow 名单,self-contained section) ── */}
+      <ToolApprovalPanel />
 
       {/* ── 会话标题生成 (self-contained section) ── */}
       <TitleGenPanel />

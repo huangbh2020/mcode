@@ -2102,8 +2102,14 @@ export interface SessionState {
   /** Approve or deny the head of the approval queue. Called by the
    *  composer overlay; resolves the matching canUseTool on the main side
    *  and shifts the head off. If the queue has more items, the next one
-   *  auto-promotes. */
-  decideApproval: (requestId: string, granted: boolean, always?: boolean) => Promise<void>;
+   *  auto-promotes. `scope` upgrades an approval into an always-allow
+   *  grant — "session" (in-memory, this session) or "global" (persisted
+   *  allowlist, every session across restarts). */
+  decideApproval: (
+    requestId: string,
+    granted: boolean,
+    scope?: "session" | "global",
+  ) => Promise<void>;
   /** Submit the user's approve/reject decision on a pending ExitPlanMode
    *  plan. Resolves the provider's pending plan-approval Deferred via
    *  `claude:respondPlanApproval` so the SAME turn continues — approve →
@@ -5197,9 +5203,10 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   // Persisted under `ui.tabBarMultiRow`; init() overwrites from the DB.
   // Default false = the classic single scrolling row.
   tabBarMultiRow: false,
-  // Inline `@<basename>` file-mention markers (issue #22). Default false =
-  // the classic stacked file cards above the prose.
-  inlineFileMention: false,
+  // Inline `@<basename>` file-mention pills (issue #22). Default true =
+  // references live inline in the composer (atomic pill, one Backspace
+  // removes the whole reference); init() overwrites from the DB.
+  inlineFileMention: true,
   // Left-bar view: classic project tree is the default; init() overwrites
   // from the persisted ui.leftBarMode preference.
   leftBarMode: "tree",
@@ -5238,8 +5245,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   // 200 mirrors the previous hardcoded TAG_THRESHOLD_CHARS in contentTag.ts.
   pasteTagThresholdChars: 200,
   // Persisted in `settings` table; init() overwrites from the DB. Default
-  // false keeps the existing paste-to-card behavior (issue #23 opt-in).
-  pastePlainText: false,
+  // true — pastes insert inline as plain text; the paste-to-card promotion
+  // (and the threshold above) applies only when the user opts back out.
+  pastePlainText: true,
   // Default voice input: Chinese, streaming zipformer. Dictation itself is
   // click-to-toggle — there is no capture mode to persist.
   voiceLang: "zh-CN",
@@ -5590,19 +5598,20 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       console.error("apply(tabBarMultiRow) failed:", err);
     }
 
-    // Inline @-mention markers (issue #22) — only ever flips ON here; a
-    // stored "false" keeps the default above.
+    // Inline @-mention pills (issue #22) — default ON; a stored "false" (the
+    // user explicitly opted out) flips it back off.
     try {
       const value = fp[INLINE_FILE_MENTION_SETTING_KEY];
-      if (value === "true") set({ inlineFileMention: true });
+      if (value === "false") set({ inlineFileMention: false });
     } catch (err) {
       console.error("apply(inlineFileMention) failed:", err);
     }
 
-    // Plain-text paste (issue #23) — same one-way flip as above.
+    // Plain-text paste (issue #23) — default ON; a stored "false" (the user
+    // explicitly opted out) restores the paste-to-card behavior.
     try {
       const value = fp[PASTE_PLAIN_TEXT_SETTING_KEY];
-      if (value === "true") set({ pastePlainText: true });
+      if (value === "false") set({ pastePlainText: false });
     } catch (err) {
       console.error("apply(pastePlainText) failed:", err);
     }
@@ -11232,7 +11241,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
    *  matching canUseTool on the main side. Only on a successful resolve do
    *  we shift the head off — a failed IPC leaves the card in place so the
    *  user can retry instead of thinking they approved something they didn't. */
-  decideApproval: async (requestId, granted, always) => {
+  decideApproval: async (requestId, granted, scope) => {
     // Find the head matching this id (defensive — UI always passes head[0]).
     const head = get().pendingApprovals.find((p) => p.requestId === requestId);
     if (!head) return;
@@ -11241,7 +11250,13 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     // session than the one whose approval is being answered.
     const sessionId = head.sessionId;
     try {
-      await api.claude.approve({ sessionId, requestId, granted, always });
+      await api.claude.approve({
+        sessionId,
+        requestId,
+        granted,
+        always: granted && !!scope,
+        alwaysScope: scope,
+      });
     } catch (err) {
       // Don't shift on failure; surface the error to the console so the
       // user/dev can see it without a modal interrupting the queue flow.
