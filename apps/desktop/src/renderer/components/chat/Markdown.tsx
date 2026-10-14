@@ -30,6 +30,8 @@ import { resolveRelativePath } from "@renderer/lib/path.js";
 import { api } from "@renderer/lib/api.js";
 import { FileLink } from "./FileLink.js";
 import { ScheduledTaskApprovalCard } from "./ScheduledTaskApprovalCard.js";
+import { MermaidBlock } from "./MermaidBlock.js";
+import { ImageWithPreview } from "@renderer/components/ui/image-preview.js";
 
 // ── Lazy highlighter singleton ────────────────────────────────────────
 // Initialised on first encounter of a fenced code block; kept alive for the
@@ -267,6 +269,98 @@ function rehypeSkillInline(skillRe: RegExp) {
   };
 }
 
+// ── Rehype plugin: inline @-file mention pills (issue #22) ────────────
+//
+// Same hast-level strategy as the skill pill above: user messages whose
+// composer pick kept a lightweight `@<basename>` marker render that marker
+// as a styled span (hover title = full path). The name→path map comes from
+// the message's inlined file attachments, so only markers that actually
+// reference a file of THIS message get pillified — a stray `@foo` in
+// hand-typed prose stays plain text.
+
+/** Split a text value by `@<name>` file markers, producing text nodes and
+ *  styled span elements. Returns [] when nothing matched. */
+function transformTextByFileMentions(
+  value: string,
+  fileRe: RegExp,
+  titleByMarker: Map<string, string>,
+): HastNode[] {
+  fileRe.lastIndex = 0;
+  const nodes: HastNode[] = [];
+  let last = 0;
+  let m: RegExpExecArray | null;
+  while ((m = fileRe.exec(value)) !== null) {
+    const start = m.index;
+    const marker = m[0];
+    const title = titleByMarker.get(marker);
+    if (title === undefined) continue; // defensive — regex only matches known names
+    if (start > last) {
+      nodes.push({ type: "text", value: value.slice(last, start) });
+    }
+    nodes.push({
+      type: "element",
+      tagName: "span",
+      properties: { className: ["file-pill-inline"], title },
+      children: [{ type: "text", value: marker }],
+    });
+    last = start + marker.length;
+  }
+  if (nodes.length === 0) return [];
+  if (last < value.length) {
+    nodes.push({ type: "text", value: value.slice(last) });
+  }
+  return nodes;
+}
+
+/** Recursive walk mirroring walkAndTransform, but for file-mention pills
+ *  (the per-match title map makes a shared walker awkward). */
+function walkAndTransformFileMentions(
+  children: HastNode[],
+  fileRe: RegExp,
+  titleByMarker: Map<string, string>,
+  inCode: boolean,
+): HastNode[] {
+  const out: HastNode[] = [];
+  for (const child of children) {
+    if (child.type === "text" && !inCode && child.value && child.value.includes("@")) {
+      const transformed = transformTextByFileMentions(child.value, fileRe, titleByMarker);
+      if (transformed.length > 0) {
+        out.push(...transformed);
+      } else {
+        out.push(child);
+      }
+    } else if (child.type === "element" && child.children) {
+      out.push({
+        ...child,
+        children: walkAndTransformFileMentions(
+          child.children,
+          fileRe,
+          titleByMarker,
+          inCode || isCodeElement(child),
+        ),
+      });
+    } else if (child.children) {
+      out.push({ ...child, children: walkAndTransformFileMentions(child.children, fileRe, titleByMarker, inCode) });
+    } else {
+      out.push(child);
+    }
+  }
+  return out;
+}
+
+/** Create a rehype plugin that pillifies inline `@<name>` file-mention
+ *  markers. Closes over the regex + title map, recreated when the set of
+ *  inlined files changes. */
+function rehypeFileInline(fileRe: RegExp, titleByMarker: Map<string, string>) {
+  return function fileInlinePlugin() {
+    return function transformer(tree: HastNode) {
+      if (tree.children) {
+        tree.children = walkAndTransformFileMentions(tree.children, fileRe, titleByMarker, false);
+      }
+    };
+  };
+}
+
 // ── react-markdown component overrides ────────────────────────────────
 
 /**
@@ -361,11 +455,14 @@ function MarkdownLocalImage({
     );
   }
   return (
-    <img
-      src={dataUrl}
-      alt={alt}
-      className="my-[var(--chat-md-gap-xs)] max-h-[420px] max-w-full rounded border border-edge/60 align-middle"
-    />
+    <span className="my-[var(--chat-md-gap-xs)] inline-block align-middle">
+      <ImageWithPreview
+        src={dataUrl}
+        alt={alt}
+        maxThumbnailHeight={420}
+        maxThumbnailWidth={720}
+      />
+    </span>
   );
 }
 
@@ -553,6 +650,9 @@ function buildComponents(): Components {
     if (rawLang === "scheduled_task_proposal") {
       return <ScheduledTaskApprovalCard rawJson={rawCode} />;
     }
+    if (rawLang === "mermaid") {
+      return <MermaidBlock rawCode={rawCode} className={className} />;
+    }
     return <ShikiCodeBlock className={className} rawCode={rawCode} childProps={childProps} />;
   },
 
@@ -616,7 +716,17 @@ function buildComponents(): Components {
         </span>
       );
     }
-    return <img src={src} alt={alt ?? ""} />;
+    if (!src) return null;
+    return (
+      <span className="my-[var(--chat-md-gap-xs)] inline-block align-middle">
+        <ImageWithPreview
+          src={src}
+          alt={alt ?? ""}
+          maxThumbnailHeight={420}
+          maxThumbnailWidth={720}
+        />
+      </span>
+    );
   },
   ul({ children }) {
     return <ul className="my-[var(--chat-md-gap-sm)] list-disc space-y-[var(--chat-md-gap-xs)] pl-5 text-content-muted marker:text-content-subtle">{children}</ul>;
@@ -677,6 +787,7 @@ export const Markdown = memo(function Markdown({
   children,
   projectPath,
   skillNames,
+  inlineFiles,
   baseDir,
 }: {
   children: string;
@@ -688,6 +799,12 @@ export const Markdown = memo(function Markdown({
    *  `/name` in this text. Passed to the `rehypeSkillInline` plugin which
    *  transforms matching text nodes at the hast level. */
   skillNames?: ReadonlyArray<string>;
+  /** Files referenced inline via `@<name>` markers in this text (issue #22).
+   *  Matching markers render as pills titled with the file's full path;
+   *  names are matched whole (with a boundary lookahead), so e-mail-style
+   *  `user@host` text is left alone unless `host` is literally one of these
+   *  file names. */
+  inlineFiles?: ReadonlyArray<{ name: string; filePath: string }>;
   /** Absolute directory that relative local paths in links/images resolve
    *  against (the previewed .md file's directory). When set, local images
    *  render INLINE (loaded via file.readBinary) and relative links open the
@@ -703,13 +820,30 @@ export const Markdown = memo(function Markdown({
       .sort((a, b) => b.length - a.length);
     return new RegExp(`/(${escaped.join("|")})(?![A-Za-z0-9_-])`, "g");
   }, [skillNames]);
+  // Same construction for `@<fileName>` markers (issue #22), plus the
+  // marker→full-path title map the pill hover shows. The match includes the
+  // leading `@` so the map keys are the literal markers found in the text.
+  const fileMention = useMemo(() => {
+    if (!inlineFiles || inlineFiles.length === 0) return null;
+    const escaped = inlineFiles
+      .map((f) => f.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+      .sort((a, b) => b.length - a.length);
+    const re = new RegExp(`@(${escaped.join("|")})(?![A-Za-z0-9_-])`, "g");
+    const titleByMarker = new Map<string, string>();
+    for (const f of inlineFiles) titleByMarker.set(`@${f.name}`, f.filePath);
+    return { re, titleByMarker };
+  }, [inlineFiles]);
   const components = useMemo(() => buildComponents(), []);
-  // rehype-katex is always active; the skill-inline plugin is added only when
-  // we have known skill names to highlight. Recreated when `skillRe` changes
-  // (i.e. when the skills list updates), so react-markdown re-parses.
+  // rehype-katex is always active; the skill-inline and file-mention plugins
+  // are added only when there is something to highlight. Recreated when the
+  // underlying regex/map changes, so react-markdown re-parses.
   const rehypePlugins = useMemo(
-    () => (skillRe ? [rehypeKatex, rehypeSkillInline(skillRe)] : [rehypeKatex]),
-    [skillRe],
+    () => [
+      rehypeKatex,
+      ...(skillRe ? [rehypeSkillInline(skillRe)] : []),
+      ...(fileMention ? [rehypeFileInline(fileMention.re, fileMention.titleByMarker)] : []),
+    ],
+    [skillRe, fileMention],
   );
   // Block margins + line-height here are density-driven (--chat-md-gap-* /
   // --chat-md-leading, see the chat-density section in styles.css) so the

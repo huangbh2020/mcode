@@ -1712,30 +1712,6 @@ button.chat-ledger-head:hover {
   0% { box-shadow: 0 0 0 0 rgb(var(--accent) / 0.45); }
   100% { box-shadow: 0 0 0 12px rgb(var(--accent) / 0); }
 }
-/* Stop: a conic-progress ring spins around the button while generation
- * runs — masked to a 2.5px annulus so it reads as a halo, not a disc. */
-[data-chat-root] .composer-stop {
-  position: relative;
-}
-[data-chat-root] .composer-stop::before {
-  content: "";
-  position: absolute;
-  inset: -4px;
-  border-radius: 16px;
-  pointer-events: none;
-  background: conic-gradient(
-    from 0deg,
-    rgb(var(--accent) / 0) 0 62%,
-    rgb(var(--accent) / 0.9) 86%,
-    rgb(var(--accent) / 0) 100%
-  );
-  -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 2.5px), #000 calc(100% - 2.5px));
-  mask: radial-gradient(farthest-side, transparent calc(100% - 2.5px), #000 calc(100% - 2.5px));
-  animation: composer-spin 1.35s linear infinite;
-}
-@keyframes composer-spin {
-  to { transform: rotate(360deg); }
-}
 
 /* ── Entrance animations (tags / queued prompts) ──────────────────────── */
 @keyframes composer-tag-in {
@@ -1764,8 +1740,7 @@ button.chat-ledger-head:hover {
   [data-chat-root] .composer-minipill-seg {
     transition: none;
   }
-  [data-chat-root] .composer-card[data-busy="1"]::before,
-  [data-chat-root] .composer-stop::before {
+  [data-chat-root] .composer-card[data-busy="1"]::before {
     animation: none;
   }
   [data-chat-root] .composer-send-launch,
@@ -1927,6 +1902,27 @@ button.chat-ledger-head:hover {
 .skill-pill-inline-glyph {
   font-size: 0.8em;
   opacity: 0.8;
+}
+
+/* Inline @-file mention pills in the message stream (issue #22), rendered
+   by the Markdown preprocessor like the skill pill above. A lightweight
+   accent-colored marker — no fill/border — so the `@filename` reference
+   reads as part of the prose while the hover title carries the full path.
+   Keep visually in the same family as the skill pill (accent text, 0.85em,
+   nowrap) so inline annotations stay consistent. */
+.file-pill-inline {
+  display: inline-flex;
+  align-items: center;
+  vertical-align: baseline;
+  font-size: 0.85em;
+  font-weight: 600;
+  color: rgb(var(--accent));
+  white-space: nowrap;
+  transition: opacity 0.15s;
+}
+
+.file-pill-inline:hover {
+  opacity: 0.7;
 }
 
 /* ───────────── Mobile focus-zoom guard ─────────────

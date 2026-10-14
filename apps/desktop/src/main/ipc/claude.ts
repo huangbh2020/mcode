@@ -8,6 +8,7 @@ import {
   StopTaskSchema,
   StopServiceSchema,
   ApproveSchema,
+  SaveGlobalAllowedToolsSchema,
   RespondQuestionSchema,
   RespondPlanApprovalSchema,
   RewindTurnSchema,
@@ -209,10 +210,24 @@ export function registerClaudeHandlers(ipcMain: IpcMain): void {
       input.granted,
       input.granted ? undefined : "Denied by user",
       input.always,
+      input.alwaysScope,
     );
     if (!resolved) {
       log.warn(`approval: no pending request for id ${input.requestId}`);
     }
+  });
+
+  // ── Global always-allow tool list (settings editor「通用 → 工具自动允许」).
+  //    Whole-list read/replace against the persisted allowlist; the
+  //    ApprovalBridge is the single writer so approval-card "global" grants
+  //    and manual edits can't clobber each other's in-memory state. ──
+  ipcMain.handle(IPC.CLAUDE_LIST_GLOBAL_ALLOWED_TOOLS, async () => {
+    return { tools: runtimeManager.getGlobalAllowedTools() };
+  });
+
+  ipcMain.handle(IPC.CLAUDE_SAVE_GLOBAL_ALLOWED_TOOLS, async (_evt, raw) => {
+    const input = SaveGlobalAllowedToolsSchema.parse(raw);
+    runtimeManager.setGlobalAllowedTools(input.tools);
   });
 
   // ── AskUserQuestion answer: resolve the provider's pending user-input

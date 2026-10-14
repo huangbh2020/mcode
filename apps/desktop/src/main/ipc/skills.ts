@@ -38,7 +38,7 @@ import {
 import type { SkillInfo, SkillSource, ExternalSkillInfo, SkillTool } from "@contracts/ipc";
 import { ProjectRepo } from "@main/store/repositories.js";
 import { log } from "@main/lib/logger.js";
-import { agentSkillsRoot } from "@main/lib/agentSkills.js";
+import { agentSkillEditRoot, agentSkillsRoot, agentSkillsRoots } from "@main/lib/agentSkills.js";
 import { getEnabledPluginSkillRoots } from "@main/plugins/pluginManager.js";
 
 /** Case-insensitive, normalized equality for project-root matching — same
@@ -69,7 +69,9 @@ function findKnownProject(projectPath: string) {
 /** Resolve the skills root directory for a given source. Global skills live
  *  under ~/.mcode/skills (Mcode's own CLAUDE_CONFIG_DIR); project skills under
  *  <project>/.claude/skills; agent skills under the platform-neutral
- *  <project>/.agent/skills drop-in root. Returns the absolute root path.
+ *  <project>/.agent/skills drop-in root (the canonical create target —
+ *  discovery covers `.agents/skills` too, see agentSkillsRoots). Returns the
+ *  absolute root path.
  *
  *  The global root moved from ~/.claude/skills to ~/.mcode/skills because
  *  CLAUDE_CONFIG_DIR is now always set to ~/.mcode - the SDK's bundled binary
@@ -429,13 +431,16 @@ export async function listSkillsForProject(projectPath: string | undefined): Pro
   try {
     // Global → project → agent, so a later root overrides a same-named
     // earlier entry (agent is the dedicated drop-in convention and wins over
-    // the generic `.claude/skills` mirror).
+    // the generic `.claude/skills` mirror). The two drop-in roots scan in
+    // REVERSE priority order (scanSkillsRoot's later-set-wins semantics):
+    // scanning `.agent` first and `.agents` last makes the plural — the
+    // cross-tool convention — win a same-name collision.
     await scanSkillsRoot(resolveSkillRoot("global", ""), "global", byName);
     if (project) {
       await scanSkillsRoot(resolveSkillRoot("project", project.path), "project", byName);
-      await scanSkillsRoot(resolveSkillRoot("agent", project.path), "agent", byName, {
-        nameFromDir: true,
-      });
+      for (const root of [...agentSkillsRoots(project.path)].reverse()) {
+        await scanSkillsRoot(root, "agent", byName, { nameFromDir: true });
+      }
     }
   } catch (err) {
     // Should be unreachable (scanSkillsRoot never throws), but be defensive:
@@ -476,7 +481,7 @@ export async function readSkillForProject(
   source: SkillSource,
   name: string,
 ): Promise<string> {
-  const root = resolveSkillRootForRequest(source, projectPath);
+  const root = await resolveSkillRootForRequest(source, projectPath, name);
   if (!root) return "";
   const skillDir = path.join(root, name);
   // Containment guard: the resolved skill dir must stay inside the root.
@@ -492,11 +497,17 @@ export async function readSkillForProject(
 /** Resolve the skills root for a read/save/delete request, or null when the
  *  request is invalid: project-scoped ops need a persisted Project root,
  *  global ops never look at projectPath. Centralizes the source-dependent
- *  project guard the three mutation/read handlers share. */
-function resolveSkillRootForRequest(
+ *  project guard the three mutation/read handlers share.
+ *
+ *  `name` only matters for the "agent" source: the skill is looked up across
+ *  both drop-in roots (`.agents` wins) so an existing skill is edited in
+ *  place; names that exist nowhere resolve to the canonical create target
+ *  (see agentSkillEditRoot). */
+async function resolveSkillRootForRequest(
   source: SkillSource,
   projectPath: string | undefined,
-): string | null {
+  name?: string,
+): Promise<string | null> {
   // Plugin skills are read-only inventory contributed by enabled plugins —
   // listed in the composer menu, but there is no user-editable file root
   // (the files live under the plugin's install dir and vanish on uninstall).
@@ -507,8 +518,12 @@ function resolveSkillRootForRequest(
   if (!projectPath) return null;
   const project = findKnownProject(projectPath);
   if (!project) return null;
-  // "project" (`.claude/skills`) and "agent" (`.agent/skills`) are both
-  // project-rooted, editable sources — same guard, different root.
+  // "project" (`.claude/skills`) and "agent" (`.agent/skills` + `.agents/
+  // skills`) are both project-rooted, editable sources — same guard,
+  // different root.
+  if (source === "agent") {
+    return name ? await agentSkillEditRoot(project.path, name) : agentSkillsRoot(project.path);
+  }
   return resolveSkillRoot(source, project.path);
 }
 
@@ -529,7 +544,7 @@ export function registerSkillsHandlers(ipcMain: IpcMain): void {
   // ── Create or overwrite a skill's SKILL.md ──
   ipcMain.handle(IPC.SKILLS_SAVE, async (_evt, raw) => {
     const input = SkillsSaveSchema.parse(raw);
-    const root = resolveSkillRootForRequest(input.source, input.projectPath);
+    const root = await resolveSkillRootForRequest(input.source, input.projectPath, input.name);
     if (!root) return { ok: false, error: "未知的项目路径" };
     const skillDir = path.join(root, input.name);
     if (!pathWithin(root, skillDir)) {
@@ -561,7 +576,7 @@ export function registerSkillsHandlers(ipcMain: IpcMain): void {
   // ── Delete a skill directory ──
   ipcMain.handle(IPC.SKILLS_DELETE, async (_evt, raw) => {
     const input = SkillsDeleteSchema.parse(raw);
-    const root = resolveSkillRootForRequest(input.source, input.projectPath);
+    const root = await resolveSkillRootForRequest(input.source, input.projectPath, input.name);
     if (!root) return { ok: false, error: "未知的项目路径" };
     const skillDir = path.join(root, input.name);
     if (!pathWithin(root, skillDir)) {

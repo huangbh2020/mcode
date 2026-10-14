@@ -94,7 +94,7 @@ export function ThreePaneLayout({
         />
       )}
 
-      {/* Center pane — 3xl arcs on the LEFT edge only (top-left at the
+      {/* Center pane — 2xl arcs on the LEFT edge only (top-left at the
          toolbar/sidebar junction, bottom-left at the track below): the muted
          frame shows through both notches against the pane's bg-surface, so
          the arcs read cleanly. overflow-hidden clips the CONTENT to the same
@@ -104,7 +104,7 @@ export function ThreePaneLayout({
          behind the arc. Non-scrolling overflow-hidden is xterm-safe (see the
          note on the right sidebar).
          Stacks the center content above an optional bottom terminal bar. */}
-      <main className="relative z-10 flex min-w-[450px] flex-1 flex-col overflow-hidden rounded-tl-3xl rounded-bl-3xl border-t border-edge-panel bg-surface">
+      <main className="relative z-10 flex min-w-[450px] flex-1 flex-col overflow-hidden rounded-tl-2xl rounded-bl-2xl border-t border-edge-panel bg-surface">
 
         <div className="min-h-0 flex-1 overflow-hidden">{center}</div>
         {/* Bottom terminal bar — keep-alive: always rendered, height collapses

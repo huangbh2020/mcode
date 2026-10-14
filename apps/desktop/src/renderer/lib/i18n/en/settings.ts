@@ -82,6 +82,16 @@ export const en = {
   "settings.general.pasteThreshold": "Long-paste folding threshold",
   "settings.general.pasteThresholdDesc":
     "Pasting more than this many characters into the composer folds the content into a card above the input instead of inserting it inline ({min}–{max}).",
+  "settings.general.pastePlainText": "Paste as plain text",
+  "settings.general.pastePlainTextDesc":
+    "Pasted content is inserted as plain text at the caret instead of being folded into a reference card above the input (the folding threshold above is ignored while this is on).",
+  "settings.general.pastePlainTextOn": "On",
+  "settings.general.pastePlainTextOff": "Off",
+  "settings.general.inlineFileMention": "Inline @-file mentions",
+  "settings.general.inlineFileMentionDesc":
+    "When @-mentioning files, the reference appears as one atomic unit inline in the input box (hover shows the full path; a single Backspace removes the whole reference) instead of a file card above the input. Sent messages keep the reference inline in the text (references not found in the text still show their cards).",
+  "settings.general.inlineFileMentionOn": "On",
+  "settings.general.inlineFileMentionOff": "Off",
   "settings.general.sectionArchive": "Session auto-archive",
   "settings.general.archiveEnabled": "Auto-archive inactive sessions",
   "settings.general.archiveEnabledDesc":
@@ -98,6 +108,22 @@ export const en = {
   "settings.general.archivePickProject": "Pick a project…",
   "settings.general.archiveRemoveOverrideTitle": "Remove override",
   "settings.general.archiveRemoveOverrideAria": "Remove archive override for {name}",
+
+  // ── Tool auto-allow (global always-allow list) ──
+  "settings.toolApproval.title": "Tool auto-allow",
+  "settings.toolApproval.desc":
+    "Tools on this list are auto-approved in every session — no repeated approval prompts (plan mode excepted; survives restarts).",
+  "settings.toolApproval.rowTitle": "Auto-allowed tools",
+  "settings.toolApproval.rowDesc":
+    "When the same tool (e.g. Bash) keeps asking mid-task, choosing \"Always allow\" as the allow scope on the approval card also writes into this list.",
+  "settings.toolApproval.loading": "Loading…",
+  "settings.toolApproval.empty": "No auto-allowed tools yet",
+  "settings.toolApproval.placeholder": "Tool name, e.g. Bash",
+  "settings.toolApproval.add": "Add",
+  "settings.toolApproval.removeTitle": "Remove this tool",
+  "settings.toolApproval.removeAria": "Remove auto-allowed tool {tool}",
+  "settings.toolApproval.hint":
+    "Safety boundaries are unaffected: out-of-project writes, out-of-project reads, and out-of-project bash write targets are still denied; plan mode still approves every write.",
 
   // ── shared across settings panels ──
   "settings.on": "On",
@@ -790,7 +816,7 @@ export const en = {
   "settings.skills.fieldScope": "Scope",
   "settings.skills.scopeProjectDisabled": "No projects yet — project skills unavailable",
   "settings.skills.scopeProjectHint": "Stored in the selected project's .claude/skills; available to that project only",
-  "settings.skills.scopeAgentHint": "Stored in the project's .agent/skills (the platform-neutral project skills dir); discovered by Claude/Pi/Codex alike",
+  "settings.skills.scopeAgentHint": "Stored in the project's .agent/skills (the platform-neutral project skills dir); discovered by Claude/Pi/Codex alike. An existing .agents/skills dir is recognized too",
   "settings.skills.scopeGlobalHint": "Stored in ~/.mcode/skills; available to every project",
   "settings.skills.newSkillAgentIntro1": "Fill in the name, description and body; a standard frontmatter is generated on save. New skills are stored in the current project's ",
   "settings.skills.newSkillAgentIntro2": " (the platform-neutral dir every provider — Claude/Pi/Codex — discovers). Later you can add advanced fields such as ",

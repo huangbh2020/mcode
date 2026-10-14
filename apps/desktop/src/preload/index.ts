@@ -24,6 +24,13 @@ const api = {
       ipcRenderer.invoke(IPC.CLAUDE_STOP_SERVICE, input)) as RpcMap["claude.stopService"],
     approve: ((input) =>
       ipcRenderer.invoke(IPC.CLAUDE_APPROVE, input)) as RpcMap["claude.approve"],
+    listGlobalAllowedTools: (() =>
+      ipcRenderer.invoke(IPC.CLAUDE_LIST_GLOBAL_ALLOWED_TOOLS)) as RpcMap["claude.listGlobalAllowedTools"],
+    saveGlobalAllowedTools: ((input) =>
+      ipcRenderer.invoke(
+        IPC.CLAUDE_SAVE_GLOBAL_ALLOWED_TOOLS,
+        input,
+      )) as RpcMap["claude.saveGlobalAllowedTools"],
     respondQuestion: ((input) =>
       ipcRenderer.invoke(IPC.CLAUDE_RESPOND_QUESTION, input)) as RpcMap["claude.respondQuestion"],
     respondPlanApproval: ((input) =>

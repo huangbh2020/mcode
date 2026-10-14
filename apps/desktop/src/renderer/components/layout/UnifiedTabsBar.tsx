@@ -367,7 +367,7 @@ export function UnifiedTabsBar() {
               }}
               className={cn(
                 // Apple-style Compact Integrated Card Plan Tab (方案 1)
-                "group flex h-[27px] max-w-[160px] cursor-pointer select-none items-center gap-1.5 rounded-md px-2.5 text-[11px] transition-all duration-150",
+                "group flex h-[27px] max-w-[160px] cursor-pointer select-none items-center gap-1.5 rounded-lg px-2.5 text-[11px] transition-all duration-150",
                 // Same flexible/natural split as the file tabs above.
                 multiRow ? "min-w-[170px] flex-1" : "min-w-0 shrink-0",
                 planTabActive && editorFocused

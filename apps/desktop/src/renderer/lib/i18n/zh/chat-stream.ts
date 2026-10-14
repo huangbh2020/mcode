@@ -279,4 +279,11 @@ export const zh = {
   "chatStream.welcome.title": "开始新的会话",
   "chatStream.welcome.withProject": "在「{name}」中开始新的会话",
   "chatStream.welcome.todayUsage": "今天对话 {turns} 轮 · 消耗 {tokens} token",
+
+  // ── Mermaid 流程图渲染 ──
+  "chatStream.mermaid.chart": "图表",
+  "chatStream.mermaid.code": "源码",
+  "chatStream.mermaid.renderError": "图表语法解析失败",
+  "chatStream.mermaid.fullscreen": "全屏查看",
+  "chatStream.mermaid.clickToView": "点击全屏查看图表",
 } as const;

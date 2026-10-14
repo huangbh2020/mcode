@@ -128,7 +128,7 @@ export function useVoiceInput(options: UseVoiceInputOptions = {}): UseVoiceInput
     // 4 bytes/sample and the schema validates them with one instanceof check
     // (the old Array.from(pending) path cost a number[] allocation + a
     // per-element zod parse on every chunk, ~12×/s).
-    void api.voice.feed({ sessionId, pcm: pending }).catch((err) => {
+    void api.voice.feed({ sessionId, pcm: pending as unknown as Float32Array<ArrayBuffer> }).catch((err) => {
       console.warn("[voice] feed failed:", err);
     });
   }, []);

@@ -276,4 +276,11 @@ export const en = {
   "chatStream.welcome.title": "Start a new chat",
   "chatStream.welcome.withProject": "Start a new chat in {name}",
   "chatStream.welcome.todayUsage": "{turns} turns today · {tokens} tokens used",
+
+  // ── Mermaid 流程图渲染 ──
+  "chatStream.mermaid.chart": "Chart",
+  "chatStream.mermaid.code": "Source",
+  "chatStream.mermaid.renderError": "Failed to parse diagram syntax",
+  "chatStream.mermaid.fullscreen": "View full diagram",
+  "chatStream.mermaid.clickToView": "Click to view full diagram",
 } as const;

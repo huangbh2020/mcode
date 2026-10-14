@@ -44,6 +44,7 @@ import {
   DISPLAY_MODE_SETTING_KEY,
   TABS_FILE_PREVIEW_PLACEMENT_SETTING_KEY,
   TAB_BAR_MULTI_ROW_SETTING_KEY,
+  INLINE_FILE_MENTION_SETTING_KEY,
   LEFTBAR_MODE_SETTING_KEY,
   LEFTBAR_EXPANDED_PROJECTS_SETTING_KEY,
   LEFTBAR_EXPANDED_WORKTREES_SETTING_KEY,
@@ -58,6 +59,7 @@ import {
   UI_CHAT_FONT_SIZE_SETTING_KEY,
   UI_RIGHT_PANEL_FONT_SIZE_SETTING_KEY,
   UI_PASTE_TAG_THRESHOLD_CHARS_SETTING_KEY,
+  PASTE_PLAIN_TEXT_SETTING_KEY,
   UI_USER_MSG_COLOR_SETTING_KEY,
   UI_ACCENT_COLOR_SETTING_KEY,
   UI_RIGHT_PANEL_TAB_SETTING_KEY,
@@ -798,6 +800,11 @@ export interface SessionState {
    *  scrolling one horizontal row (toggled from the bars' "⋯" overflow
    *  menu). Persisted under `ui.tabBarMultiRow`. */
   tabBarMultiRow: boolean;
+  /** Whether picking a file via the composer's @-mention keeps a lightweight
+   *  `@<basename>` marker inline in the message body (issue #22) instead of
+   *  only stacking the file cards above the prose. Persisted under
+   *  `ui.inlineFileMention`. */
+  inlineFileMention: boolean;
   /** Which left-bar view is mounted: the classic project tree ("tree",
    *  default) or the session-first flat stream ("stream", T3-style cards
    *  with a project scope filter). Persisted; the two views are pure
@@ -862,6 +869,11 @@ export interface SessionState {
    *  `shouldPromoteToTag` in contentTag.ts via the composer's
    *  shouldPromotePaste prop. */
   pasteTagThresholdChars: number;
+  /** Whether pastes are always inserted inline as plain text (issue #23).
+   *  When true the paste-to-card promotion — and the threshold above — is
+   *  bypassed entirely. Persisted as `ui.pastePlainText` in the `settings`
+   *  table. */
+  pastePlainText: boolean;
   /** Default speech-recognition language tag (e.g. "zh-CN" | "en-US"). */
   voiceLang: string;
   /** Preferred ASR engine ("zipformer" streaming | "parakeet" offline). Falls
@@ -1905,6 +1917,14 @@ export interface SessionState {
    *  local flip + fire-and-forget persistence (same pattern as
    *  setDisplayMode). */
   setTabBarMultiRow: (on: boolean) => void;
+  /** Toggle inline `@<basename>` file-mention markers in the composer and
+   * transcript (issue #22). Instant local flip + fire-and-forget
+   * persistence (same pattern as setTabBarMultiRow). */
+  setInlineFileMention: (on: boolean) => void;
+  /** Toggle "pastes insert as plain text" — bypasses the paste-to-card
+   *  promotion entirely (issue #23). Instant local flip + fire-and-forget
+   *  persistence (same pattern as setTabBarMultiRow). */
+  setPastePlainText: (on: boolean) => void;
   /** Switch the left-bar view between the project tree and the session
    *  stream. Instant local flip + fire-and-forget persistence (same
    *  pattern as setDisplayMode). */
@@ -2082,8 +2102,14 @@ export interface SessionState {
   /** Approve or deny the head of the approval queue. Called by the
    *  composer overlay; resolves the matching canUseTool on the main side
    *  and shifts the head off. If the queue has more items, the next one
-   *  auto-promotes. */
-  decideApproval: (requestId: string, granted: boolean, always?: boolean) => Promise<void>;
+   *  auto-promotes. `scope` upgrades an approval into an always-allow
+   *  grant — "session" (in-memory, this session) or "global" (persisted
+   *  allowlist, every session across restarts). */
+  decideApproval: (
+    requestId: string,
+    granted: boolean,
+    scope?: "session" | "global",
+  ) => Promise<void>;
   /** Submit the user's approve/reject decision on a pending ExitPlanMode
    *  plan. Resolves the provider's pending plan-approval Deferred via
    *  `claude:respondPlanApproval` so the SAME turn continues — approve →
@@ -5177,6 +5203,10 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   // Persisted under `ui.tabBarMultiRow`; init() overwrites from the DB.
   // Default false = the classic single scrolling row.
   tabBarMultiRow: false,
+  // Inline `@<basename>` file-mention pills (issue #22). Default true =
+  // references live inline in the composer (atomic pill, one Backspace
+  // removes the whole reference); init() overwrites from the DB.
+  inlineFileMention: true,
   // Left-bar view: classic project tree is the default; init() overwrites
   // from the persisted ui.leftBarMode preference.
   leftBarMode: "tree",
@@ -5214,6 +5244,10 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   // Persisted in `settings` table; init() overwrites from the DB. Default
   // 200 mirrors the previous hardcoded TAG_THRESHOLD_CHARS in contentTag.ts.
   pasteTagThresholdChars: 200,
+  // Persisted in `settings` table; init() overwrites from the DB. Default
+  // true — pastes insert inline as plain text; the paste-to-card promotion
+  // (and the threshold above) applies only when the user opts back out.
+  pastePlainText: true,
   // Default voice input: Chinese, streaming zipformer. Dictation itself is
   // click-to-toggle — there is no capture mode to persist.
   voiceLang: "zh-CN",
@@ -5436,6 +5470,8 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           DISPLAY_MODE_SETTING_KEY,
           TABS_FILE_PREVIEW_PLACEMENT_SETTING_KEY,
           TAB_BAR_MULTI_ROW_SETTING_KEY,
+          INLINE_FILE_MENTION_SETTING_KEY,
+          PASTE_PLAIN_TEXT_SETTING_KEY,
           LEFTBAR_MODE_SETTING_KEY,
           THEME_STYLE_SETTING_KEY,
           UI_FONT_FAMILY_SETTING_KEY,
@@ -5560,6 +5596,24 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       if (value === "true") set({ tabBarMultiRow: true });
     } catch (err) {
       console.error("apply(tabBarMultiRow) failed:", err);
+    }
+
+    // Inline @-mention pills (issue #22) — default ON; a stored "false" (the
+    // user explicitly opted out) flips it back off.
+    try {
+      const value = fp[INLINE_FILE_MENTION_SETTING_KEY];
+      if (value === "false") set({ inlineFileMention: false });
+    } catch (err) {
+      console.error("apply(inlineFileMention) failed:", err);
+    }
+
+    // Plain-text paste (issue #23) — default ON; a stored "false" (the user
+    // explicitly opted out) restores the paste-to-card behavior.
+    try {
+      const value = fp[PASTE_PLAIN_TEXT_SETTING_KEY];
+      if (value === "false") set({ pastePlainText: false });
+    } catch (err) {
+      console.error("apply(pastePlainText) failed:", err);
     }
 
     // leftBarMode determines which sidebar component mounts on frame one.
@@ -10067,6 +10121,20 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       .catch((err) => console.error("setting.set(tabBarMultiRow) failed:", err));
   },
 
+  setInlineFileMention: (on) => {
+    set({ inlineFileMention: on });
+    // Fire-and-forget — a failed write keeps the in-session choice.
+    api.setting.set({ key: INLINE_FILE_MENTION_SETTING_KEY, value: on ? "true" : "false" })
+      .catch((err) => console.error("setting.set(inlineFileMention) failed:", err));
+  },
+
+  setPastePlainText: (on) => {
+    set({ pastePlainText: on });
+    // Fire-and-forget — a failed write keeps the in-session choice.
+    api.setting.set({ key: PASTE_PLAIN_TEXT_SETTING_KEY, value: on ? "true" : "false" })
+      .catch((err) => console.error("setting.set(pastePlainText) failed:", err));
+  },
+
   setLeftBarMode: async (mode) => {
     set({ leftBarMode: mode });
     // Entering the stream with a warm-but-dirty cache should show fresh
@@ -11173,7 +11241,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
    *  matching canUseTool on the main side. Only on a successful resolve do
    *  we shift the head off — a failed IPC leaves the card in place so the
    *  user can retry instead of thinking they approved something they didn't. */
-  decideApproval: async (requestId, granted, always) => {
+  decideApproval: async (requestId, granted, scope) => {
     // Find the head matching this id (defensive — UI always passes head[0]).
     const head = get().pendingApprovals.find((p) => p.requestId === requestId);
     if (!head) return;
@@ -11182,7 +11250,13 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     // session than the one whose approval is being answered.
     const sessionId = head.sessionId;
     try {
-      await api.claude.approve({ sessionId, requestId, granted, always });
+      await api.claude.approve({
+        sessionId,
+        requestId,
+        granted,
+        always: granted && !!scope,
+        alwaysScope: scope,
+      });
     } catch (err) {
       // Don't shift on failure; surface the error to the console so the
       // user/dev can see it without a modal interrupting the queue flow.

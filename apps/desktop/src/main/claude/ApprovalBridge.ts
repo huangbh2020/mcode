@@ -16,6 +16,12 @@ import type {
   PlanApprovalRequest,
   PlanApprovalDecision,
 } from "@contracts/provider";
+import { GLOBAL_ALLOWED_TOOLS_SETTING_KEY } from "@contracts/ipc";
+import { log } from "@main/lib/logger.js";
+import { SettingRepo } from "@main/store/repositories.js";
+
+/** Where an "always allow" grant lives. */
+export type AlwaysAllowScope = "session" | "global";
 
 interface PendingApproval {
   resolve: (v: ProviderApprovalDecision) => void;
@@ -52,6 +58,14 @@ export class ApprovalBridge {
    *  once-with-always doesn't prompt again in the same session. Cleared on
    *  dispose. */
   private alwaysAllowedTools = new Map<string, Set<string>>();
+  /** Persisted global "always allow" list (settings key
+   *  GLOBAL_ALLOWED_TOOLS_SETTING_KEY). Grants recorded here survive app
+   *  restarts and apply to EVERY session in every permission mode except
+   *  plan mode (plan = review-everything by definition). Lazily hydrated on
+   *  first use — the bridge is constructed at module scope, long before the
+   *  DB is ready. */
+  private globalAllowedTools = new Set<string>();
+  private globalAllowedToolsLoaded = false;
   /** Per-session current permission mode. canUseTool reads this on EVERY
    *  tool call so a mode change mid-turn (e.g. user flips to
    *  acceptEdits while a turn is running) takes effect immediately for
@@ -82,11 +96,18 @@ export class ApprovalBridge {
   }
 
   /** Resolve an approval request (called by ipc/claude.ts CLAUDE_APPROVE handler).
-   *  When the user granted with `always: true`, the tool name is recorded in
-   *  the session's always-allowed set so subsequent calls skip the prompt.
-   *  Returns the owning session's id on success, null when no such request is
-   *  pending (already resolved by another client). */
-  resolveApproval(requestId: string, decision: ProviderApprovalDecision, always?: boolean): string | null {
+   *  When the user granted with `always: true`, the tool name is recorded —
+   *  into the session's in-memory always-allowed set for `scope: "session"`
+   *  (default, pre-existing behavior), or into the PERSISTED global allowlist
+   *  for `scope: "global"` (every session, across restarts). Subsequent calls
+   *  skip the prompt either way. Returns the owning session's id on success,
+   *  null when no such request is pending (already resolved by another client). */
+  resolveApproval(
+    requestId: string,
+    decision: ProviderApprovalDecision,
+    always?: boolean,
+    scope?: AlwaysAllowScope,
+  ): string | null {
     const p = this.pendingApprovals.get(requestId);
     if (!p) return null;
     // Surface the "always allow" intent on the decision itself so providers
@@ -95,21 +116,96 @@ export class ApprovalBridge {
     p.resolve(decision.allow && always ? { ...decision, persist: true } : decision);
     this.pendingApprovals.delete(requestId);
     // Record "always allow" so canUseTool auto-approves this tool next time.
+    // A GLOBAL grant deliberately does NOT also land in the session set: the
+    // global set already covers this session in every non-plan mode, and the
+    // session set is exempt from the plan-mode gate — recording it there would
+    // let a global grant made while in plan mode keep auto-allowing the tool
+    // in that plan session, defeating the exemption.
     if (decision.allow && always) {
-      let set = this.alwaysAllowedTools.get(p.sessionId);
-      if (!set) {
-        set = new Set();
-        this.alwaysAllowedTools.set(p.sessionId, set);
+      if (scope === "global") {
+        this.ensureGlobalAllowedToolsLoaded();
+        if (!this.globalAllowedTools.has(p.toolName)) {
+          this.globalAllowedTools.add(p.toolName);
+          this.persistGlobalAllowedTools();
+        }
+      } else {
+        let set = this.alwaysAllowedTools.get(p.sessionId);
+        if (!set) {
+          set = new Set();
+          this.alwaysAllowedTools.set(p.sessionId, set);
+        }
+        set.add(p.toolName);
       }
-      set.add(p.toolName);
     }
     return p.sessionId;
   }
 
   /** Has the user granted this tool with "always allow" for this session?
-   *  canUseTool checks this before prompting the renderer. */
+   *  canUseTool checks this before prompting the renderer. Two sources:
+   *  the session-scoped in-memory set, and the persisted GLOBAL allowlist —
+   *  the global one is skipped while the session runs in plan mode (plan
+   *  mode reviews everything by definition), while the session grant keeps
+   *  its pre-existing apply-everywhere semantics. */
   isAlwaysAllowed(sessionId: string, toolName: string): boolean {
-    return this.alwaysAllowedTools.get(sessionId)?.has(toolName) ?? false;
+    if (this.alwaysAllowedTools.get(sessionId)?.has(toolName)) return true;
+    if (!this.globalAllowedTools.has(toolName)) return false;
+    return this.permissionModes.get(sessionId) !== "plan";
+  }
+
+  /** Current persisted global always-allow list (sorted). Loads from the
+   *  settings table on first call. */
+  getGlobalAllowedTools(): string[] {
+    this.ensureGlobalAllowedToolsLoaded();
+    return [...this.globalAllowedTools].sort();
+  }
+
+  /** Replace the persisted global always-allow list (settings editor is the
+   *  whole-list writer; approval-card "global" grants add one entry on top).
+   *  Takes effect immediately for every session — even mid-turn, because
+   *  canUseTool consults this set on every tool call. */
+  setGlobalAllowedTools(tools: string[]): void {
+    this.globalAllowedTools = new Set(tools);
+    this.globalAllowedToolsLoaded = true;
+    this.persistGlobalAllowedTools();
+  }
+
+  /** Hydrate the global allowlist from the settings table. Idempotent; any
+   *  read/parse failure degrades to an empty list (never throws into the
+   *  approval path) and stays unloaded=false so a later call can retry once
+   *  the DB is actually available. */
+  private ensureGlobalAllowedToolsLoaded(): void {
+    if (this.globalAllowedToolsLoaded) return;
+    try {
+      const raw = SettingRepo.get(GLOBAL_ALLOWED_TOOLS_SETTING_KEY);
+      if (raw) {
+        const parsed: unknown = JSON.parse(raw);
+        if (Array.isArray(parsed)) {
+          this.globalAllowedTools = new Set(
+            parsed.filter((t): t is string => typeof t === "string" && t.length > 0),
+          );
+        }
+      }
+      this.globalAllowedToolsLoaded = true;
+    } catch (err) {
+      // getDb() throws before initDb() resolves — retry on the next consult
+      // (turns can't run that early, so in practice the first consult always
+      // happens with the DB ready).
+      log.warn(`approval: failed to load global allowed tools: ${(err as Error).message}`);
+    }
+  }
+
+  /** Best-effort persist of the global allowlist. A failed write keeps the
+   *  in-memory grant alive for this run (same policy as the renderer's
+   *  fire-and-forget setting writes). */
+  private persistGlobalAllowedTools(): void {
+    try {
+      SettingRepo.set(
+        GLOBAL_ALLOWED_TOOLS_SETTING_KEY,
+        JSON.stringify([...this.globalAllowedTools].sort()),
+      );
+    } catch (err) {
+      log.error(`approval: failed to persist global allowed tools: ${(err as Error).message}`);
+    }
   }
 
   /** Set the session's current permission mode. canUseTool reads this on

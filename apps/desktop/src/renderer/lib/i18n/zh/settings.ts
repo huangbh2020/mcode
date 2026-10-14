@@ -85,6 +85,16 @@ export const zh = {
   "settings.general.pasteThreshold": "长文本折叠阈值",
   "settings.general.pasteThresholdDesc":
     "在输入框粘贴超过此字符数的内容时,会折叠为输入框上方的卡片而非直接插入正文({min}–{max})。",
+  "settings.general.pastePlainText": "粘贴内容以纯文本插入",
+  "settings.general.pastePlainTextDesc":
+    "开启后,粘贴的内容不再折叠为输入框上方的引用卡片,而是始终以纯文本直接插入光标位置(忽略上方的折叠阈值)。",
+  "settings.general.pastePlainTextOn": "已开启",
+  "settings.general.pastePlainTextOff": "已关闭",
+  "settings.general.inlineFileMention": "@ 引用文件内联显示",
+  "settings.general.inlineFileMentionDesc":
+    "在输入框 @ 引用文件时,引用以输入框内的整体标记显示(悬停可见完整路径,退格一次即整条删除),不再于输入框上方显示文件卡片;发出的消息同样在正文原位置内联显示(未命中正文的引用仍显示卡片)。",
+  "settings.general.inlineFileMentionOn": "已开启",
+  "settings.general.inlineFileMentionOff": "已关闭",
   "settings.general.sectionArchive": "会话自动归档",
   "settings.general.archiveEnabled": "自动归档不活跃会话",
   "settings.general.archiveEnabledDesc":
@@ -101,6 +111,22 @@ export const zh = {
   "settings.general.archivePickProject": "选择项目…",
   "settings.general.archiveRemoveOverrideTitle": "移除覆盖",
   "settings.general.archiveRemoveOverrideAria": "移除 {name} 的归档覆盖",
+
+  // ── 工具自动允许(全局 always-allow 名单) ──
+  "settings.toolApproval.title": "工具自动允许",
+  "settings.toolApproval.desc":
+    "名单中的工具在所有会话自动放行,不再逐轮弹审批(计划模式除外;重启后仍生效)。",
+  "settings.toolApproval.rowTitle": "自动允许的工具",
+  "settings.toolApproval.rowDesc":
+    "多轮任务里反复确认同一工具(如 Bash)时,在审批卡把「允许范围」选为「始终允许」也会写入此名单。",
+  "settings.toolApproval.loading": "读取中…",
+  "settings.toolApproval.empty": "暂无自动允许的工具",
+  "settings.toolApproval.placeholder": "输入工具名,如 Bash",
+  "settings.toolApproval.add": "添加",
+  "settings.toolApproval.removeTitle": "移除该工具",
+  "settings.toolApproval.removeAria": "移除自动允许的工具 {tool}",
+  "settings.toolApproval.hint":
+    "安全边界不受影响:项目外的写入、越界读取与越界 bash 写入目标仍会被拒绝;计划模式下所有写操作仍需审批。",
 
   // ── shared across settings panels ──
   "settings.on": "已开启",
@@ -789,7 +815,7 @@ export const zh = {
   "settings.skills.fieldScope": "作用域 (Scope)",
   "settings.skills.scopeProjectDisabled": "暂无项目,无法创建项目 skill",
   "settings.skills.scopeProjectHint": "存放到所选项目的 .claude/skills,仅该项目可用",
-  "settings.skills.scopeAgentHint": "存放到项目的 .agent/skills(平台中立的项目级技能目录),Claude/Pi/Codex 均可发现",
+  "settings.skills.scopeAgentHint": "存放到项目的 .agent/skills(平台中立的项目级技能目录,Claude/Pi/Codex 均可发现);项目里已有的 .agents/skills 目录同样会被识别",
   "settings.skills.scopeGlobalHint": "存放到 ~/.mcode/skills,所有项目可用",
   "settings.skills.newSkillAgentIntro1": "填写名称、描述和正文,保存时会自动生成标准 frontmatter。新建 skill 存放到当前项目的 ",
   "settings.skills.newSkillAgentIntro2": "(平台中立目录,Claude/Pi/Codex 均可发现)。之后可在编辑模式补充 ",
