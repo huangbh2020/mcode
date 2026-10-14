@@ -30,6 +30,8 @@ import { resolveRelativePath } from "@renderer/lib/path.js";
 import { api } from "@renderer/lib/api.js";
 import { FileLink } from "./FileLink.js";
 import { ScheduledTaskApprovalCard } from "./ScheduledTaskApprovalCard.js";
+import { MermaidBlock } from "./MermaidBlock.js";
+import { ImageWithPreview } from "@renderer/components/ui/image-preview.js";
 
 // ── Lazy highlighter singleton ────────────────────────────────────────
 // Initialised on first encounter of a fenced code block; kept alive for the
@@ -453,11 +455,14 @@ function MarkdownLocalImage({
     );
   }
   return (
-    <img
-      src={dataUrl}
-      alt={alt}
-      className="my-[var(--chat-md-gap-xs)] max-h-[420px] max-w-full rounded border border-edge/60 align-middle"
-    />
+    <span className="my-[var(--chat-md-gap-xs)] inline-block align-middle">
+      <ImageWithPreview
+        src={dataUrl}
+        alt={alt}
+        maxThumbnailHeight={420}
+        maxThumbnailWidth={720}
+      />
+    </span>
   );
 }
 
@@ -645,6 +650,9 @@ function buildComponents(): Components {
     if (rawLang === "scheduled_task_proposal") {
       return <ScheduledTaskApprovalCard rawJson={rawCode} />;
     }
+    if (rawLang === "mermaid") {
+      return <MermaidBlock rawCode={rawCode} className={className} />;
+    }
     return <ShikiCodeBlock className={className} rawCode={rawCode} childProps={childProps} />;
   },
 
@@ -708,7 +716,17 @@ function buildComponents(): Components {
         </span>
       );
     }
-    return <img src={src} alt={alt ?? ""} />;
+    if (!src) return null;
+    return (
+      <span className="my-[var(--chat-md-gap-xs)] inline-block align-middle">
+        <ImageWithPreview
+          src={src}
+          alt={alt ?? ""}
+          maxThumbnailHeight={420}
+          maxThumbnailWidth={720}
+        />
+      </span>
+    );
   },
   ul({ children }) {
     return <ul className="my-[var(--chat-md-gap-sm)] list-disc space-y-[var(--chat-md-gap-xs)] pl-5 text-content-muted marker:text-content-subtle">{children}</ul>;

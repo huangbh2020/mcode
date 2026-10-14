@@ -3294,6 +3294,7 @@ function ChatPaneForSession({
    *  constraint as editAndResendMessage. */
   const handleEditQueuedPrompt = (item: QueuedPrompt) => {
     editorRef.current?.setText(item.displayText);
+    setValue(item.displayText);
     if (item.attachments && item.attachments.length > 0) {
       const restored: ContentTag[] = item.attachments.map((a, i) => ({
         id: `reedit-${item.id}-${i}`,
@@ -4732,7 +4733,7 @@ function ChatPaneForSession({
                     collapsed tiers the label folds away through the same grid
                     shell mechanism, leaving the brand icon. */}
                 <ProviderDropdown compact={composerTier >= 1} />
-                {(sessionBusy || (orchBlocking && !hasComposerContent)) ? (
+                {(visualBusy && !hasComposerContent) ? (
                   <button
                     onClick={() => {
                       if (sessionBusy) { void interrupt(); return; }

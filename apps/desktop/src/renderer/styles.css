@@ -1712,30 +1712,6 @@ button.chat-ledger-head:hover {
   0% { box-shadow: 0 0 0 0 rgb(var(--accent) / 0.45); }
   100% { box-shadow: 0 0 0 12px rgb(var(--accent) / 0); }
 }
-/* Stop: a conic-progress ring spins around the button while generation
- * runs — masked to a 2.5px annulus so it reads as a halo, not a disc. */
-[data-chat-root] .composer-stop {
-  position: relative;
-}
-[data-chat-root] .composer-stop::before {
-  content: "";
-  position: absolute;
-  inset: -4px;
-  border-radius: 16px;
-  pointer-events: none;
-  background: conic-gradient(
-    from 0deg,
-    rgb(var(--accent) / 0) 0 62%,
-    rgb(var(--accent) / 0.9) 86%,
-    rgb(var(--accent) / 0) 100%
-  );
-  -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 2.5px), #000 calc(100% - 2.5px));
-  mask: radial-gradient(farthest-side, transparent calc(100% - 2.5px), #000 calc(100% - 2.5px));
-  animation: composer-spin 1.35s linear infinite;
-}
-@keyframes composer-spin {
-  to { transform: rotate(360deg); }
-}
 
 /* ── Entrance animations (tags / queued prompts) ──────────────────────── */
 @keyframes composer-tag-in {
@@ -1764,8 +1740,7 @@ button.chat-ledger-head:hover {
   [data-chat-root] .composer-minipill-seg {
     transition: none;
   }
-  [data-chat-root] .composer-card[data-busy="1"]::before,
-  [data-chat-root] .composer-stop::before {
+  [data-chat-root] .composer-card[data-busy="1"]::before {
     animation: none;
   }
   [data-chat-root] .composer-send-launch,
