@@ -47,6 +47,10 @@ export const en = {
   "chatStream.image.userImage": "User image",
   "chatStream.imageRenderedAbove": "[image rendered above]",
 
+  // ── MessageBlocks: inline video (script-generated media) ──
+  "chatStream.video.unplayable": "Can't play",
+  "chatStream.video.openInEditor": "Open in editor",
+
   // ── MessageBlocks: image gallery ──
   "chatStream.gallery.screenshotAlt": "Screenshot {n}/{total}",
   "chatStream.gallery.prev": "Previous",

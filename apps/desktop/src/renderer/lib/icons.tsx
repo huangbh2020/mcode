@@ -70,6 +70,7 @@ export {
   IconActivity,
   // Media / content
   IconPlayerPlay,
+  IconVideo,
   IconPlayerStop,
   IconPlayerPause,
   IconPlayerSkipForward,

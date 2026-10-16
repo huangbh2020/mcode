@@ -78,6 +78,10 @@ export const zh = {
   "ide.editor.imageLoadFailedDesc": "无法预览此图片文件,可能已损坏或格式不受支持",
   "ide.editor.imageFitHint": "点击适应窗口",
   "ide.editor.imageNaturalHint": "点击查看原始尺寸",
+  "ide.editor.readingVideo": "加载视频…",
+  "ide.editor.videoUnsupported": "无法播放此视频",
+  "ide.editor.videoUnsupportedDesc":
+    "内置播放器不支持该视频的容器或编码格式,可以用系统播放器打开它",
   "ide.editor.unknownExt": "未知",
   "ide.editor.cannotPreview": "无法预览 {ext} 文件",
   "ide.editor.unsupportedDesc":

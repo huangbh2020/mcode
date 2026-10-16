@@ -23,7 +23,9 @@ import {
   IconX,
   IconLayoutColumns,
   IconLayoutSidebarRight,
+  IconVideo,
 } from "@renderer/lib/icons.js";
+import { appResourceUrl } from "@renderer/lib/appResource.js";
 import { Menu } from "@base-ui/react/menu";
 import { FileTypeIcon } from "@renderer/lib/fileIcon.js";
 import { Markdown } from "../chat/Markdown.js";
@@ -130,6 +132,7 @@ export function FileEditor({
 
   const markdown = isMarkdown(filePath);
   const image = isImage(filePath);
+  const video = isVideo(filePath);
   const unsupported = isUnsupported(filePath);
 
   return (
@@ -142,6 +145,7 @@ export function FileEditor({
         onToggleMode={() => setViewMode(filePath, effectiveMode === "edit" ? "diff" : "edit")}
         isMarkdown={markdown}
         isImage={image}
+        isVideo={video}
         isUnsupported={unsupported}
         onSelectViewMode={(m) => setViewMode(filePath, m)}
         editorMode={editorMode}
@@ -153,6 +157,8 @@ export function FileEditor({
         ) : effectiveMode === "preview" ? (
           image ? (
             <ImagePreviewPane filePath={filePath} />
+          ) : video ? (
+            <VideoPreviewPane filePath={filePath} />
           ) : unsupported ? (
             <UnsupportedPane filePath={filePath} />
           ) : (
@@ -179,6 +185,7 @@ function EditorToolbar({
   onToggleMode,
   isMarkdown,
   isImage,
+  isVideo,
   isUnsupported,
   onSelectViewMode,
   editorMode,
@@ -191,6 +198,7 @@ function EditorToolbar({
   onToggleMode: () => void;
   isMarkdown: boolean;
   isImage: boolean;
+  isVideo: boolean;
   isUnsupported: boolean;
   onSelectViewMode: (mode: "edit" | "preview") => void;
   editorMode: "tabs" | "replace";
@@ -261,9 +269,10 @@ function EditorToolbar({
   const navBackTitle = withChord("editor.nav-back", t("ide.editor.navBack"));
   const navForwardTitle = withChord("editor.nav-forward", t("ide.editor.navForward"));
   // Files that default to a read-only preview pane (markdown rendered, image
-  // displayed, or an unsupported-type notice). These get a Preview/Edit toggle
-  // so the user can still drop into the raw Monaco editor if they want.
-  const hasPreviewToggle = isMarkdown || isImage || isUnsupported;
+  // displayed, video played, or an unsupported-type notice). These get a
+  // Preview/Edit toggle so the user can still drop into the raw Monaco
+  // editor if they want.
+  const hasPreviewToggle = isMarkdown || isImage || isVideo || isUnsupported;
   // Show the path relative to the project root when possible (cleaner in the
   // narrow toolbar); fall back to the full path. Case-insensitive on Windows/
   // macOS so a lowercased drive letter from LSP (`d:\foo`) still matches a
@@ -1419,6 +1428,69 @@ function ImagePreviewPane({ filePath }: { filePath: string }) {
   );
 }
 
+/* ───────────────────────── Video preview pane ───────────────────────── */
+
+/** `<video>` player for local video files (tutorial-rendered MP4s etc.).
+ *  Streams via the guarded `app-resource://` protocol — NOT a base64 data
+ *  URL like images: videos are far too large to hold in the renderer, and
+ *  the protocol's Range support is what makes the scrubber seekable.
+ *  Chromium only decodes what it supports (MP4/H.264, WebM, Ogg; many AVI/
+ *  MKV/MOV codec variants fail), so an unplayable file falls back to a
+ *  notice with an "open in system player" escape hatch.
+ *
+ *  No dirty tracking - videos are read-only. */
+function VideoPreviewPane({ filePath }: { filePath: string }) {
+  const { t } = useI18n();
+  const [state, setState] = useState<"loading" | "ready" | "error">("loading");
+
+  useEffect(() => {
+    setState("loading");
+  }, [filePath]);
+
+  if (state === "error") {
+    return (
+      <div className="flex h-full flex-col items-center justify-center gap-3 p-8 text-center">
+        <div className="flex h-16 w-16 items-center justify-center rounded-full bg-surface-muted text-content-subtle">
+          <IconVideo size={28} />
+        </div>
+        <div className="space-y-1">
+          <p className="text-[13px] font-medium text-content">{t("ide.editor.videoUnsupported")}</p>
+          <p className="max-w-[360px] text-[11px] leading-relaxed text-content-subtle">
+            {t("ide.editor.videoUnsupportedDesc")}
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={() => void api.shell.openFile({ path: filePath })}
+          className="flex items-center gap-1.5 rounded-md border border-edge bg-surface px-3 py-1.5 text-[12px] text-content-muted transition-colors hover:bg-surface-hover hover:text-content"
+          title={t("ide.editor.openInSystemHint")}
+        >
+          {t("ide.editor.openInSystem")}
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="relative flex h-full items-center justify-center overflow-auto bg-surface p-6">
+      <video
+        controls
+        preload="metadata"
+        src={appResourceUrl(filePath)}
+        onLoadedMetadata={() => setState("ready")}
+        onError={() => setState("error")}
+        className="max-h-full max-w-full rounded-md shadow-lg"
+      />
+      {state === "loading" && (
+        <div className="absolute inset-0 flex items-center justify-center gap-1.5 bg-surface/80 text-[11px] text-content-subtle">
+          <IconLoader2 size={12} className="animate-spin" />
+          {t("ide.editor.readingVideo")}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /* ───────────────────────── Unsupported-file pane ───────────────────────── */
 
 /** Friendly "can't preview" pane for binary file types the editor can't handle
@@ -1820,9 +1892,9 @@ function isMarkdown(filePath: string): boolean {
   return ext === ".md" || ext === ".markdown";
 }
 
-/** True for image files the editor can preview via the `app-resource://`
- *  protocol (binary files served from the main process). SVG is text but also
- *  renders as an image, so it's included. */
+/** True for image files the editor previews as a data-URL `<img>` (loaded via
+ *  `file:readBinary`; works under the production CSP's `img-src 'self' data:`).
+ *  SVG is text but also renders as an image, so it's included. */
 function isImage(filePath: string): boolean {
   switch (extname(filePath)) {
     case ".png":
@@ -1842,10 +1914,31 @@ function isImage(filePath: string): boolean {
   }
 }
 
+/** True for video files the editor plays via the guarded `app-resource://`
+ *  streaming protocol. Container/codec coverage follows Chromium's decoder
+ *  set — MP4/WebM play everywhere; AVI/MKV/MOV depend on the codecs inside,
+ *  and failures surface as the pane's "open in system player" fallback
+ *  rather than a crash. Mirrors `isVideoPath` in sessionStore.ts (first-open
+ *  preview default) — keep the lists in sync. */
+function isVideo(filePath: string): boolean {
+  switch (extname(filePath)) {
+    case ".mp4":
+    case ".m4v":
+    case ".webm":
+    case ".mov":
+    case ".mkv":
+    case ".ogv":
+    case ".avi":
+      return true;
+    default:
+      return false;
+  }
+}
+
 /** True for binary file types the editor can neither edit (Monaco is text-only)
  *  nor meaningfully preview (no built-in renderer). These get a friendly
  *  "can't preview" pane instead of garbled Monaco content. Covers Office docs,
- *  archives, binaries, audio/video, and databases. */
+ *  archives, binaries, audio, and databases. */
 function isUnsupported(filePath: string): boolean {
   switch (extname(filePath)) {
     // Office documents
@@ -1877,12 +1970,8 @@ function isUnsupported(filePath: string): boolean {
     case ".class":
     case ".jar":
     case ".wasm":
-    // Audio / video
+    // Audio (video containers are handled by isVideo above)
     case ".mp3":
-    case ".mp4":
-    case ".webm":
-    case ".avi":
-    case ".mov":
     case ".ogg":
     case ".flac":
     case ".wav":

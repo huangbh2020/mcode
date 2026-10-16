@@ -76,6 +76,10 @@ export const en = {
   "ide.editor.imageLoadFailedDesc": "This image can't be previewed. It may be corrupted or in an unsupported format",
   "ide.editor.imageFitHint": "Click to fit to window",
   "ide.editor.imageNaturalHint": "Click to view original size",
+  "ide.editor.readingVideo": "Loading video…",
+  "ide.editor.videoUnsupported": "Can't play this video",
+  "ide.editor.videoUnsupportedDesc":
+    "The built-in player doesn't support this video's container or codec. Open it with your system player instead",
   "ide.editor.unknownExt": "Unknown",
   "ide.editor.cannotPreview": "Can't preview {ext} files",
   "ide.editor.unsupportedDesc":

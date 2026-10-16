@@ -7,7 +7,8 @@
  * case-insensitive so a lowercased drive letter from Monaco/LSP (`d:\foo`)
  * still matches a project stored with an uppercase letter (`D:\foo`).
  */
-import { resolve, sep } from "node:path";
+import { app } from "electron";
+import { join, resolve, sep } from "node:path";
 import { platform } from "node:os";
 import { ProjectRepo, SessionRepo } from "@main/store/repositories.js";
 
@@ -72,4 +73,14 @@ export function findContainingWorkspaceRoot(absPath: string): string | null {
   if (project) return project;
   const wt = SessionRepo.listWorktreeRoots().find((r) => pathWithin(r, absPath));
   return wt ?? null;
+}
+
+/** True if `abs` lives under the app-owned paste-temp dir (temp/mcode-pastes,
+ *  written by the `clipboard:saveFile` handler). Files there were created by
+ *  THIS app from user pastes (images/files copied into the composer), so
+ *  reads are allowed even though the dir sits outside every project root.
+ *  Shared by the file-read IPC handlers and the `app-resource://` protocol. */
+export function isPasteTempPath(abs: string): boolean {
+  const dir = join(app.getPath("temp"), "mcode-pastes");
+  return resolve(abs).startsWith(resolve(dir) + sep);
 }

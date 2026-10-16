@@ -18,6 +18,7 @@ import { orchestrator } from "@main/orchestrator/OrchestratorService.js";
 import { initAutomationScheduler, disposeAutomationScheduler } from "@main/automation/AutomationScheduler.js";
 import { initServiceScanner, disposeServiceScanner } from "@main/lib/serviceScanner.js";
 import { initPiSessionImport } from "@main/lib/piSessionImport.js";
+import { registerAppResourceScheme, initAppResourceProtocol } from "@main/lib/appResourceProtocol.js";
 import { is } from "@main/utils.js";
 import { preloadClaudeSdk } from "@main/providers/claude-sdk/ClaudeAgentSdkProvider.js";
 import { logStartup } from "@main/lib/startupTimer.js";
@@ -106,6 +107,12 @@ app.on("second-instance", () => {
   }
 });
 
+// Privileged custom scheme for streaming local media (IDE video preview).
+// registerSchemesAsPrivileged ONLY works before app ready — the media
+// pipeline honors `stream` (seekable <video>) solely for schemes privileged
+// at session-creation time. The request handler is installed in whenReady.
+registerAppResourceScheme();
+
 app.whenReady().then(async () => {
   logStartup("whenReady entered");
 
@@ -131,12 +138,16 @@ app.whenReady().then(async () => {
         responseHeaders: {
           ...details.responseHeaders,
             "Content-Security-Policy": [
-            "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:",
+            "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; media-src 'self' app-resource:; font-src 'self' data:",
           ],
         },
       });
     });
   }
+
+  // Guarded streaming file protocol (app-resource://) for renderer media —
+  // the IDE's video preview loads via this instead of base64 data URLs.
+  initAppResourceProtocol();
 
   // Apply the persisted theme preference. Fire-and-forget: initTheme() awaits
   // DB readiness internally, so the first frame uses the OS-default theme and

@@ -29,10 +29,12 @@ import type {
   SubagentTranscriptEvent,
   BashTasksEvent,
   BashTaskSnapshot,
+  ToolMediaEvent,
   UpstreamIssueEvent,
 } from "@contracts/runtime";
 import type { ProviderContext } from "@contracts/provider";
 import { FileSnapshot, FILE_MUTATING_TOOLS, getToolFilePath, normalizeToolFilePath } from "@main/lib/fileSnapshot.js";
+import { snapshotVideoFiles, type MediaFileStamp } from "@main/lib/mediaDiff.js";
 import { log } from "@main/lib/logger.js";
 import { readTaskOutputTail } from "@main/lib/taskOutputFile.js";
 import { noteBashToolStart, noteBashToolEnd } from "@main/lib/serviceScanner.js";
@@ -410,6 +412,16 @@ interface AdapterState {
    *  dropped at flushFinal (the command died with the stream; nothing bound
    *  in it is claimed). */
   openBashToolUseIds: Set<string>;
+  /** Bash tool_use id → cwd video-inventory snapshot promise taken at the
+   *  tool_use edge (mediaDiff). Diffed at the command's completion edge
+   *  (foreground tool_result or background task_notification); new files
+   *  become tool.media events. Emits are remembered in bashVideoEmitted so
+   *  both completion edges can't double-report the same window. Cleared in
+   *  flushFinal. */
+  bashVideoBaselines: Map<string, Promise<Map<string, MediaFileStamp>>>;
+  /** Bash tool_use ids whose video diff already ran (dedup across the
+   *  foreground tool_result and background task_notification edges). */
+  bashVideoEmitted: Set<string>;
   /** True once any assistant text block arrived this turn. A success-ending
    *  turn with no text at all is the other half of the empty-response
    *  failure mode the turn-incomplete check covers. */
@@ -549,6 +561,8 @@ export class SdkMessageAdapter {
       toolUseNames: new Map(),
       resultedToolUseIds: new Set(),
       openBashToolUseIds: new Set(),
+      bashVideoBaselines: new Map(),
+      bashVideoEmitted: new Set(),
       textEmitted: false,
       lastAssistantText: "",
       lastAssistantHadToolUse: false,
@@ -682,6 +696,12 @@ export class SdkMessageAdapter {
       this.state.openBashToolUseIds.clear();
       void noteBashToolEnd(this.sessionId).catch(() => {});
     }
+    // Drop unconsumed video-diff baselines: a window that never completed
+    // (stream died mid-command) must not leak its snapshot into a later
+    // window's comparison (fresh adapter per turn, but free the memory and
+    // make the intent explicit).
+    this.state.bashVideoBaselines.clear();
+    this.state.bashVideoEmitted.clear();
     // Freeze and emit the snapshot list regardless of whether result
     // arrived. After freeze(), the snapshot is "frozen" — late
     // tool_use events for this adapter instance (shouldn't happen,
@@ -1110,6 +1130,11 @@ export class SdkMessageAdapter {
     });
     this.flushBashTasks();
     if (m.output_file) void this.attachTaskOutput(m.task_id, m.output_file);
+    // Backgrounded render scripts settle HERE (their tool_result was a
+    // placeholder) — run the inline-media diff for the owning window.
+    if (cur.toolUseId && m.status !== "stopped") {
+      void this.emitBashWindowVideos(cur.toolUseId).catch(() => {});
+    }
   }
 
   /** Read the CLI's output spool for a settled task and attach it to the
@@ -1532,6 +1557,10 @@ export class SdkMessageAdapter {
         if (b.name === "Bash") {
           this.state.openBashToolUseIds.add(b.id);
           void noteBashToolStart(this.sessionId).catch(() => {});
+          // Video-inventory baseline for the inline-media diff — see
+          // emitBashWindowVideos. The promise is stored (not awaited) so a
+          // slow rg walk never delays the tool dispatch.
+          this.state.bashVideoBaselines.set(b.id, snapshotVideoFiles(this.cwd));
         }
         // A tool_use block is renderable assistant content — once emitted, the
         // provider's transport-retry wrapper must not retry (would orphan it).
@@ -1779,6 +1808,17 @@ export class SdkMessageAdapter {
         // belongs to a Bash call — see the tool_use side for why.
         if (this.state.openBashToolUseIds.delete(b.tool_use_id)) {
           void noteBashToolEnd(this.sessionId).catch(() => {});
+          // Foreground commands are done writing at their tool_result — run
+          // the inline-media diff now. Backgrounded commands got only a
+          // placeholder result (the render is still running); their diff
+          // runs at task_notification. The isBackgrounded flag can lag the
+          // placeholder in a race — then we simply diff too early and find
+          // nothing new yet; task_notification's dedup set decides who owns
+          // the window from here on.
+          const bg = [...this.state.bashTasks.values()].some(
+            (t) => t.toolUseId === b.tool_use_id && t.isBackgrounded,
+          );
+          if (!bg) void this.emitBashWindowVideos(b.tool_use_id).catch(() => {});
         }
         // The Bash tool_result is the reliable completion signal for
         // FOREGROUND commands (the CLI doesn't reliably emit a closing
@@ -1813,6 +1853,40 @@ export class SdkMessageAdapter {
       this.flushBashTasks();
       return;
     }
+  }
+
+  /** Diff the cwd's video inventory across a finished Bash window and emit
+   *  the new files as a `tool.media` event (inline `<video>` blocks next to
+   *  the tool card — the script-generated twin of browser screenshots).
+   *  Deduped per tool_use so the foreground tool_result and the background
+   *  task_notification edges can't double-report. A file counts as produced
+   *  when it's NEW or its (mtime, size) stamp changed — render scripts
+   *  overwrite stable output paths (every run rewrites C1.mp4), so a pure
+   *  path-presence diff only fires on a filename's first-ever creation.
+   *  snapshotVideoFiles never rejects (an unlistable/empty project yields an
+   *  empty map), so the diff degrades to "nothing new" rather than throwing.
+   *  Fire-and-forget at both call sites — never gates the event stream. */
+  private async emitBashWindowVideos(toolUseId: string): Promise<void> {
+    const baseline = this.state.bashVideoBaselines.get(toolUseId);
+    if (!baseline || this.state.bashVideoEmitted.has(toolUseId)) return;
+    this.state.bashVideoEmitted.add(toolUseId);
+    const [before, after] = await Promise.all([baseline, snapshotVideoFiles(this.cwd)]);
+    const fresh = [...after.entries()]
+      .filter(([path, stamp]) => {
+        const was = before.get(path);
+        return was === undefined || was.mtimeMs !== stamp.mtimeMs || was.size !== stamp.size;
+      })
+      .map(([path]) => path);
+    if (fresh.length === 0) return;
+    log.info(
+      `tool.media: ${fresh.length} video file(s) produced in bash window ${toolUseId}: ${fresh.join(", ")}`,
+    );
+    this.ctx.emit({
+      type: "tool.media",
+      sessionId: this.sessionId,
+      toolCallId: toolUseId,
+      filePaths: fresh,
+    } satisfies ToolMediaEvent);
   }
 
   /** Fold a forwarded subagent assistant message into its transcript:

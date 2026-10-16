@@ -997,6 +997,33 @@ function groupMessagesForRender(
       textMsgs.push(...swept);
     }
 
+    // Same rescue for inline video blocks (script-generated media from
+    // `tool.media`): they attach right after their Bash tool_use — deep
+    // inside the process surface — but they are user-facing RESULTS (the
+    // rendered clip the user is waiting for). Extract from panelBlocks and
+    // sweep textMsgs identically to the images above; re-emitted as one
+    // trailing message after the screenshot gallery.
+    const panelVideos: Block[] = [];
+    if (panelBlocks.some((b) => b.kind === "video")) {
+      panelVideos.push(...panelBlocks.filter((b) => b.kind === "video"));
+      panelBlocks = panelBlocks.filter((b) => b.kind !== "video");
+    }
+    if (textMsgs.some((m) => m.blocks.some((b) => b.kind === "video"))) {
+      const swept: ChatMessage[] = [];
+      for (const m of textMsgs) {
+        const vids = m.blocks.filter((b) => b.kind === "video");
+        if (vids.length > 0) {
+          panelVideos.push(...vids);
+          const rest = m.blocks.filter((b) => b.kind !== "video");
+          if (rest.length > 0) swept.push({ ...m, blocks: rest });
+        } else {
+          swept.push(m);
+        }
+      }
+      textMsgs.length = 0;
+      textMsgs.push(...swept);
+    }
+
     // Per-turn footer cards (plan + turn-files) must ALWAYS render at the very
     // end of the visible reply: the plan card above, the "本轮修改了 N 个文件"
     // card below it. The store attaches them to whatever assistant message was
@@ -1075,6 +1102,25 @@ function groupMessagesForRender(
               sessionId: "",
               role: "assistant",
               blocks: panelImages,
+              createdAt: Date.now(),
+            },
+      );
+    }
+
+    // Inline videos follow the screenshots: reply text → footer cards →
+    // screenshots → videos. Each video block renders as its own InlineVideoCard
+    // (groupBlocks' "single" path); a video-only turn gets the synthesized
+    // carrier, same as the gallery above.
+    if (panelVideos.length > 0) {
+      const tail = textMsgs.length > 0 ? textMsgs[textMsgs.length - 1] : null;
+      textMsgs.push(
+        tail
+          ? { ...tail, id: `videos_tail_${tail.id}`, turnMeta: undefined, blocks: panelVideos }
+          : {
+              id: `videos_tail_${turnMeta?.startedAt ?? Date.now()}`,
+              sessionId: "",
+              role: "assistant",
+              blocks: panelVideos,
               createdAt: Date.now(),
             },
       );

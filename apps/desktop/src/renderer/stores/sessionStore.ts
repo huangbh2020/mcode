@@ -208,10 +208,10 @@ function isMarkdownPath(filePath: string): boolean {
   return lower.endsWith(".md") || lower.endsWith(".markdown");
 }
 
-/** True for image files the editor previews via the `app-resource://` protocol.
- *  Mirrors `isImage()` in FileEditor.tsx - kept here so `openFileInIde` can
- *  default images into preview mode without importing the component. SVG is
- *  text but renders as an image, so it's included. */
+/** True for image files the editor previews as a data-URL `<img>` (via
+ *  `file:readBinary`). Mirrors `isImage()` in FileEditor.tsx - kept here so
+ *  `openFileInIde` can default images into preview mode without importing
+ *  the component. SVG is text but renders as an image, so it's included. */
 function isImagePath(filePath: string): boolean {
   const lower = filePath.toLowerCase();
   return [
@@ -220,8 +220,18 @@ function isImagePath(filePath: string): boolean {
   ].some((ext) => lower.endsWith(ext));
 }
 
+/** True for video files the editor plays via the guarded `app-resource://`
+ *  streaming protocol. Mirrors `isVideo()` in FileEditor.tsx — keep the
+ *  extension lists in sync. */
+function isVideoPath(filePath: string): boolean {
+  const lower = filePath.toLowerCase();
+  return [
+    ".mp4", ".m4v", ".webm", ".mov", ".mkv", ".ogv", ".avi",
+  ].some((ext) => lower.endsWith(ext));
+}
+
 /** True for binary file types the editor can neither edit nor preview (Office
- *  docs, archives, binaries, audio/video, fonts, PDF). Mirrors `isUnsupported()`
+ *  docs, archives, binaries, audio, fonts, PDF). Mirrors `isUnsupported()`
  *  in FileEditor.tsx. These default to preview mode so the user sees the
  *  "can't preview" notice instead of garbled Monaco content. */
 function isUnsupportedPath(filePath: string): boolean {
@@ -231,7 +241,7 @@ function isUnsupportedPath(filePath: string): boolean {
     ".odt", ".ods", ".odp",
     ".zip", ".gz", ".tar", ".tgz", ".rar", ".7z", ".bz2", ".xz",
     ".exe", ".dll", ".so", ".dylib", ".bin", ".class", ".jar", ".wasm",
-    ".mp3", ".mp4", ".webm", ".avi", ".mov", ".ogg", ".flac", ".wav", ".m4a",
+    ".mp3", ".ogg", ".flac", ".wav", ".m4a",
     ".db", ".sqlite", ".sqlite3",
     ".woff", ".woff2", ".ttf", ".otf", ".eot",
     ".pdf",
@@ -414,6 +424,18 @@ export type Block =
       /** Image MIME type — "image/png" for browser screenshots; the SendTurn
        *  allowlist (jpeg/png/gif/webp) for user-attached images. */
       mimeType: string;
+    }
+  | {
+      /** Inline video player for a media file a Bash window produced on
+       *  disk (render/tutorial scripts — `tool.media` events). The script-
+       *  generated twin of the screenshot image block: sits right after the
+       *  owning Bash tool_use card. Streams via the guarded app-resource://
+       *  protocol by absolute path — bytes are never inlined. */
+      kind: "video";
+      /** The Bash tool_use whose window created the file. */
+      toolCallId: string;
+      /** Absolute path of the video file. */
+      filePath: string;
     }
   | {
       /** 编排画布:聊天流内的任务 DAG 卡片(自动编排流第②-④步的载体)。
@@ -5093,6 +5115,7 @@ const CONTENT_FROZEN_EVENTS = new Set<RuntimeEvent["type"]>([
   "tool.use",
   "tool.result",
   "browser.image",
+  "tool.media",
 ]);
 
 /* ─── Pane-width persistence (debounced) ───
@@ -9207,6 +9230,32 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           });
           break;
         }
+        case "tool.media": {
+          // Script-generated media: the Claude adapter diffed the cwd's
+          // video inventory across a Bash window and found new files.
+          // Attach an inline <video> block right after that Bash tool_use
+          // card — the same placement rule as browser.image above. The
+          // event may arrive AFTER the turn's final text (long renders
+          // settle late via task_notification), so the search runs over
+          // every message, not just the last one.
+          next = next.map((m) => {
+            const tuIdx = m.blocks.findIndex((b) => b.kind === "tool_use" && b.toolCallId === e.toolCallId);
+            if (tuIdx < 0) return m;
+            const existing = new Set(
+              m.blocks.filter((b) => b.kind === "video").map((b) => (b as Extract<Block, { kind: "video" }>).filePath),
+            );
+            const fresh = e.filePaths.filter((p) => !existing.has(p));
+            if (fresh.length === 0) return m;
+            const blocks = [...m.blocks];
+            blocks.splice(
+              tuIdx + 1,
+              0,
+              ...fresh.map((filePath) => ({ kind: "video" as const, toolCallId: e.toolCallId, filePath })),
+            );
+            return { ...m, blocks };
+          });
+          break;
+        }
         case "turn.incomplete": {
           // Gateway-truncated turn (empty final response). The adapter emits
           // this immediately BEFORE turn.done — append the warning card and
@@ -12320,13 +12369,14 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     else if (opts?.line != null) viewMode[canonicalPath] = "edit";
     // Files that render as a read-only preview default to "preview" on FIRST
     // open (no prior view-mode for this file): Markdown (rendered), images
-    // (<img> via app-resource://), and unsupported binary types (Office docs,
-    // archives, etc. - shown as a "can't preview" notice). Re-opening respects
-    // the user's earlier choice (e.g. they switched to "edit") since the entry
-    // already exists. A diff request above takes precedence over this default.
+    // (data-URL `<img>`), videos (`<video>` via app-resource://), and
+    // unsupported binary types (Office docs, archives, etc. - shown as a
+    // "can't preview" notice). Re-opening respects the user's earlier choice
+    // (e.g. they switched to "edit") since the entry already exists. A diff
+    // request above takes precedence over this default.
     else if (
       !(canonicalPath in prevViewMode) &&
-      (isMarkdownPath(canonicalPath) || isImagePath(canonicalPath) || isUnsupportedPath(canonicalPath))
+      (isMarkdownPath(canonicalPath) || isImagePath(canonicalPath) || isVideoPath(canonicalPath) || isUnsupportedPath(canonicalPath))
     ) {
       viewMode[canonicalPath] = "preview";
     }

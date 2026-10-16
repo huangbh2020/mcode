@@ -27,6 +27,7 @@ import {
   IconWorldSearch,
   IconHelpCircle,
   IconStack2,
+  IconVideo,
 } from "@renderer/lib/icons.js";
 import { useNow } from "@renderer/hooks/useNow.js";
 import { useSessionStore } from "@renderer/stores/sessionStore.js";
@@ -49,6 +50,7 @@ import { ImageWithPreview } from "@renderer/components/ui/index.js";
 import { TagPopover } from "./TagPopover.js";
 import { isImageFilePath, type ContentTag } from "@renderer/lib/contentTag.js";
 import { BUILT_IN_COMMANDS } from "@renderer/lib/slashCommands.js";
+import { appResourceUrl } from "@renderer/lib/appResource.js";
 
 /** Map of absolute file path → its pre-turn content. Built from the
  *  `turn.files` event payload so the Write tool card can diff the new
@@ -1325,9 +1327,66 @@ const BlockView = memo(function BlockView({
           maxThumbnailHeight={200}
         />
       );
+
+    case "video":
+      // A media file a Bash window produced on disk (render/tutorial
+      // scripts). Inline `<video>` next to the owning tool card — the
+      // script-generated twin of the screenshot image above. Streams via
+      // the guarded app-resource:// protocol (see InlineVideoCard).
+      return <InlineVideoCard filePath={block.filePath} />;
   }
 });
 export { BlockView };
+
+/** Inline player card for script-generated video files. Compact by design —
+ *  the chat stream is not a theater; the IDE's editor pane (open in editor)
+ *  is the full-size viewer. Streams via app-resource:// so even a
+ *  several-hundred-MB render preview starts immediately and the scrubber
+ *  seeks (Range support); the file's bytes never enter the renderer.
+ *  Degrades to a filename row with an open-in-editor escape hatch when the
+ *  protocol can't serve the file (missing/unplayable/mobile shell). */
+function InlineVideoCard({ filePath }: { filePath: string }) {
+  const { t } = useI18n();
+  const [failed, setFailed] = useState(false);
+  const name = filePath.split(/[\\/]/).pop() ?? filePath;
+  const openInIde = useSessionStore((s) => s.openFileInIde);
+  if (failed) {
+    return (
+      <div className="my-1 flex w-fit max-w-full items-center gap-1.5 rounded-lg border border-edge/70 bg-surface-muted/70 px-2.5 py-1.5 [font-size:var(--chat-fs-sm)]">
+        <IconVideo size={13} className="shrink-0 text-content-subtle" />
+        <span className="truncate font-medium text-content-muted" title={filePath}>
+          {name}
+        </span>
+        <span className="shrink-0 text-[10px] text-content-subtle">{t("chatStream.video.unplayable")}</span>
+      </div>
+    );
+  }
+  return (
+    <div className="my-1 w-fit max-w-full overflow-hidden rounded-lg border border-edge/70 bg-surface-muted/50">
+      <video
+        controls
+        preload="metadata"
+        src={appResourceUrl(filePath)}
+        onError={() => setFailed(true)}
+        className="block max-h-[280px] max-w-full w-auto"
+      />
+      <div className="flex items-center gap-1.5 border-t border-edge/50 px-2 py-1">
+        <IconVideo size={11} className="shrink-0 text-content-subtle" />
+        <span className="truncate text-[10px] text-content-subtle" title={filePath}>
+          {name}
+        </span>
+        <button
+          type="button"
+          onClick={() => openInIde(filePath)}
+          className="ml-auto shrink-0 text-[10px] text-content-subtle transition-colors hover:text-content"
+          title={filePath}
+        >
+          {t("chatStream.video.openInEditor")}
+        </button>
+      </div>
+    </div>
+  );
+}
 
 /** A pasted-content or file-reference attachment shown as a chip-like card in
  *  the message stream. Mirrors the composer's ContentTagChip visual language
