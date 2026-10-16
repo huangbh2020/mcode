@@ -52,6 +52,7 @@ import {
 } from "@renderer/lib/contentTag.js";
 import type { SkillInfo, BuiltInCommand } from "@renderer/lib/slashCommands.js";
 import { MessageBlocks, TurnPanel, BatchToolGroup, Chevron, isFoldableBlock, TURN_FOLD_MS, type ProceduralBlock, type BeforeContentMap, type ToolUseBlock } from "./MessageBlocks.js";
+import type { MediaBlock } from "./mediaGallery.js";
 import { CurrentOpTicker } from "./CurrentOpTicker.js";
 import { ModelBadge } from "./ModelAvatar.js";
 import { turnTokenUsage, CUMULATIVE_USAGE_PROVIDER_IDS } from "@renderer/lib/turnTokens.js";
@@ -965,56 +966,31 @@ function groupMessagesForRender(
       panelBlocks = panelBlocks.filter((b) => b.kind !== "turn-files");
     }
 
-    // Pull ALL screenshot image blocks out of the PROCESS surface too. Images
-    // are user-facing RESULTS, not process: they're attached right after their
-    // tool_use (which sits inside the panel), so the slice above would fold
-    // them behind the collapsed TurnPanel and the user would never see the
-    // screenshots. Extract every image (from both panelBlocks and the reply
-    // textMsgs, in case one landed after the last tool) into a single
-    // gallery, re-emitted as one trailing message — the render layer's
-    // groupBlocks merges consecutive image blocks into a swipeable gallery.
-    const panelImages: Extract<Block, { kind: "image" }>[] = [];
-    if (panelBlocks.some((b) => b.kind === "image")) {
-      panelImages.push(...(panelBlocks.filter((b) => b.kind === "image") as Extract<Block, { kind: "image" }>[]));
-      panelBlocks = panelBlocks.filter((b) => b.kind !== "image");
+    // Pull ALL media blocks (screenshots + script-generated videos) out of
+    // the PROCESS surface. Media is a user-facing RESULT, not process: these
+    // blocks attach right after their tool_use (which sits inside the panel),
+    // so the slice above would fold them behind the collapsed TurnPanel and
+    // the user would never see them. Extract every image/video (from both
+    // panelBlocks and the reply textMsgs, in case one landed after the last
+    // tool) in TIMELINE ORDER into one list, re-emitted as a single trailing
+    // message — the render layer's groupBlocks merges the consecutive media
+    // blocks into one wrap row of uniform tiles with a shared lightbox.
+    const panelMedia: Block[] = [];
+    const isMediaBlock = (b: Block): b is MediaBlock => b.kind === "image" || b.kind === "video";
+    if (panelBlocks.some(isMediaBlock)) {
+      panelMedia.push(...panelBlocks.filter(isMediaBlock));
+      panelBlocks = panelBlocks.filter((b) => !isMediaBlock(b));
     }
-    // Images that landed after the last tool (rare, but possible when a
-    // screenshot is the very last action) sit in textMsgs; sweep them out of
-    // their host message and into the gallery.
-    if (textMsgs.some((m) => m.blocks.some((b) => b.kind === "image"))) {
+    // Media that landed after the last tool (rare, but possible when a
+    // capture/render is the very last action) sits in textMsgs; sweep it out
+    // of its host message and into the same trailing list.
+    if (textMsgs.some((m) => m.blocks.some(isMediaBlock))) {
       const swept: ChatMessage[] = [];
       for (const m of textMsgs) {
-        const imgs = m.blocks.filter((b) => b.kind === "image") as Extract<Block, { kind: "image" }>[];
-        if (imgs.length > 0) {
-          panelImages.push(...imgs);
-          const rest = m.blocks.filter((b) => b.kind !== "image");
-          if (rest.length > 0) swept.push({ ...m, blocks: rest });
-        } else {
-          swept.push(m);
-        }
-      }
-      textMsgs.length = 0;
-      textMsgs.push(...swept);
-    }
-
-    // Same rescue for inline video blocks (script-generated media from
-    // `tool.media`): they attach right after their Bash tool_use — deep
-    // inside the process surface — but they are user-facing RESULTS (the
-    // rendered clip the user is waiting for). Extract from panelBlocks and
-    // sweep textMsgs identically to the images above; re-emitted as one
-    // trailing message after the screenshot gallery.
-    const panelVideos: Block[] = [];
-    if (panelBlocks.some((b) => b.kind === "video")) {
-      panelVideos.push(...panelBlocks.filter((b) => b.kind === "video"));
-      panelBlocks = panelBlocks.filter((b) => b.kind !== "video");
-    }
-    if (textMsgs.some((m) => m.blocks.some((b) => b.kind === "video"))) {
-      const swept: ChatMessage[] = [];
-      for (const m of textMsgs) {
-        const vids = m.blocks.filter((b) => b.kind === "video");
-        if (vids.length > 0) {
-          panelVideos.push(...vids);
-          const rest = m.blocks.filter((b) => b.kind !== "video");
+        const media = m.blocks.filter(isMediaBlock);
+        if (media.length > 0) {
+          panelMedia.push(...media);
+          const rest = m.blocks.filter((b) => !isMediaBlock(b));
           if (rest.length > 0) swept.push({ ...m, blocks: rest });
         } else {
           swept.push(m);
@@ -1087,40 +1063,22 @@ function groupMessagesForRender(
       }
     }
 
-    // Re-emit the turn's screenshots as ONE trailing gallery message (the
-    // render layer's groupBlocks merges the consecutive image blocks into a
-    // swipeable ImageGallery). Appended AFTER the footer cards so the visible
-    // order is: reply text → plan/files cards → screenshots. A screenshot-only
-    // turn (no reply text) still gets its gallery via the synthesized carrier.
-    if (panelImages.length > 0) {
+    // Re-emit the turn's media (screenshots + videos, timeline order) as ONE
+    // trailing message — the render layer's groupBlocks merges the consecutive
+    // media blocks into a single wrap row of uniform tiles with a shared
+    // lightbox. Appended AFTER the footer cards so the visible order is:
+    // reply text → plan/files cards → media. A media-only turn (no reply
+    // text) still gets its row via the synthesized carrier.
+    if (panelMedia.length > 0) {
       const tail = textMsgs.length > 0 ? textMsgs[textMsgs.length - 1] : null;
       textMsgs.push(
         tail
-          ? { ...tail, id: `images_tail_${tail.id}`, turnMeta: undefined, blocks: panelImages }
+          ? { ...tail, id: `media_tail_${tail.id}`, turnMeta: undefined, blocks: panelMedia }
           : {
-              id: `images_tail_${turnMeta?.startedAt ?? Date.now()}`,
+              id: `media_tail_${turnMeta?.startedAt ?? Date.now()}`,
               sessionId: "",
               role: "assistant",
-              blocks: panelImages,
-              createdAt: Date.now(),
-            },
-      );
-    }
-
-    // Inline videos follow the screenshots: reply text → footer cards →
-    // screenshots → videos. Each video block renders as its own InlineVideoCard
-    // (groupBlocks' "single" path); a video-only turn gets the synthesized
-    // carrier, same as the gallery above.
-    if (panelVideos.length > 0) {
-      const tail = textMsgs.length > 0 ? textMsgs[textMsgs.length - 1] : null;
-      textMsgs.push(
-        tail
-          ? { ...tail, id: `videos_tail_${tail.id}`, turnMeta: undefined, blocks: panelVideos }
-          : {
-              id: `videos_tail_${turnMeta?.startedAt ?? Date.now()}`,
-              sessionId: "",
-              role: "assistant",
-              blocks: panelVideos,
+              blocks: panelMedia,
               createdAt: Date.now(),
             },
       );

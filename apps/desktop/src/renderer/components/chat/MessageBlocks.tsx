@@ -4,7 +4,6 @@ import { cn } from "@renderer/lib/cn.js";
 import { useI18n, translate, type MessageId } from "@renderer/lib/i18n/index.js";
 import {
   IconChevronDown,
-  IconChevronLeft,
   IconChevronRight,
   IconX,
   IconAlertTriangle,
@@ -27,7 +26,6 @@ import {
   IconWorldSearch,
   IconHelpCircle,
   IconStack2,
-  IconVideo,
 } from "@renderer/lib/icons.js";
 import { useNow } from "@renderer/hooks/useNow.js";
 import { useSessionStore } from "@renderer/stores/sessionStore.js";
@@ -46,11 +44,10 @@ import { fmtTokens } from "@renderer/lib/contextWindow.js";
 import { RenderErrorBoundary } from "./RenderErrorBoundary.js";
 import { lineDiff, diffSummary } from "@renderer/lib/lineDiff.js";
 import { FileLink } from "./FileLink.js";
-import { ImageWithPreview } from "@renderer/components/ui/index.js";
+import { MediaGallery, type MediaBlock } from "./mediaGallery.js";
 import { TagPopover } from "./TagPopover.js";
 import { isImageFilePath, type ContentTag } from "@renderer/lib/contentTag.js";
 import { BUILT_IN_COMMANDS } from "@renderer/lib/slashCommands.js";
-import { appResourceUrl } from "@renderer/lib/appResource.js";
 
 /** Map of absolute file path → its pre-turn content. Built from the
  *  `turn.files` event payload so the Write tool card can diff the new
@@ -172,9 +169,9 @@ const MessageBlocks = memo(function MessageBlocks({
           <RenderErrorBoundary key={segKeys[i]}>
             <BlockView block={seg.block} defaultOpen={seg.defaultOpen} beforeMap={beforeMap} isStreamingTail={isStreamingTail} onOpenPlan={onOpenPlan} projectPath={projectPath} inlineFiles={inlineFiles} />
           </RenderErrorBoundary>
-        ) : seg.kind === "gallery" ? (
+        ) : seg.kind === "media" ? (
           <RenderErrorBoundary key={segKeys[i]}>
-            <ImageGallery blocks={seg.blocks} />
+            <MediaGallery blocks={seg.blocks} />
           </RenderErrorBoundary>
         ) : seg.kind === "attachments" ? (
           <RenderErrorBoundary key={segKeys[i]}>
@@ -199,7 +196,7 @@ export type ProceduralBlock = ThinkingBlock | ToolUseBlock;
 type Segment =
   | { kind: "single"; block: Block; defaultOpen?: boolean }
   | { kind: "batch"; blocks: ProceduralBlock[] }
-  | { kind: "gallery"; blocks: Extract<Block, { kind: "image" }>[] }
+  | { kind: "media"; blocks: MediaBlock[] }
   | { kind: "attachments"; blocks: Extract<Block, { kind: "attachment" }>[] };
 
 /** Stable list keys for a segment list. The segment's HEAD block identifies
@@ -298,7 +295,7 @@ function isToolBlock(b: ProceduralBlock): b is ToolUseBlock {
 function groupBlocks(blocks: Block[]): Segment[] {
   const out: Segment[] = [];
   let run: ProceduralBlock[] = [];
-  let images: Extract<Block, { kind: "image" }>[] = [];
+  let media: MediaBlock[] = [];
   let atts: Extract<Block, { kind: "attachment" }>[] = [];
   const flushTools = () => {
     if (run.length > 0) {
@@ -306,14 +303,10 @@ function groupBlocks(blocks: Block[]): Segment[] {
       run = [];
     }
   };
-  const flushImages = () => {
-    if (images.length > 0) {
-      if (images.length === 1) {
-        out.push({ kind: "single", block: images[0], defaultOpen: false });
-      } else {
-        out.push({ kind: "gallery", blocks: images });
-      }
-      images = [];
+  const flushMedia = () => {
+    if (media.length > 0) {
+      out.push({ kind: "media", blocks: media });
+      media = [];
     }
   };
   const flushAttachments = () => {
@@ -323,26 +316,29 @@ function groupBlocks(blocks: Block[]): Segment[] {
     }
   };
   for (const b of blocks) {
-    if (b.kind === "image") {
+    if (b.kind === "image" || b.kind === "video") {
+      // Media blocks (screenshots / script-generated videos) share one
+      // tile-row segment — a mixed run renders as one wrap row of uniform
+      // tiles with a shared lightbox.
       flushTools();
-      images.push(b);
+      media.push(b);
     } else if (b.kind === "attachment") {
       flushTools();
-      flushImages();
+      flushMedia();
       atts.push(b);
     } else if (isFoldableBlock(b)) {
       flushAttachments();
-      flushImages();
+      flushMedia();
       run.push(b);
     } else {
       flushTools();
-      flushImages();
+      flushMedia();
       flushAttachments();
       out.push({ kind: "single", block: b, defaultOpen: false });
     }
   }
   flushTools();
-  flushImages();
+  flushMedia();
   flushAttachments();
   return out;
 }
@@ -547,13 +543,7 @@ export function Chevron({ open, className }: { open: boolean; className?: string
   );
 }
 
-/** A swipeable gallery for 2+ consecutive screenshot image blocks (e.g. the
- *  model captured several pages in one turn). Shows one thumbnail at a time
- *  with ◀ ▶ arrows + a position counter (2/5). Clicking the thumbnail opens
- *  the fullscreen ImageWithPreview lightbox for the current image.
- *
- *  Single images never reach here — `groupBlocks` renders a lone image via the
- *  normal BlockView image case. This component only assembles runs of 2+. */
+
 /** A run of consecutive attachment blocks (paste/file/quote cards).
  *  - 1 item: renders as a standalone clean card.
  *  - 2+ items: collapses into an Apple-inspired stacked card deck (AttachmentStackDeck),
@@ -575,79 +565,6 @@ function AttachmentRow({ blocks }: { blocks: Extract<Block, { kind: "attachment"
     );
   }
   return <AttachmentStackDeck blocks={blocks} />;
-}
-
-function ImageGallery({ blocks }: { blocks: Extract<Block, { kind: "image" }>[] }) {
-  const [idx, setIdx] = useState(0);
-  const { t } = useI18n();
-  const count = blocks.length;
-  const cur = blocks[Math.min(idx, count - 1)];
-  const go = (delta: number) => setIdx((i) => Math.max(0, Math.min(count - 1, i + delta)));
-  // All images of this gallery as data URLs — passed to the lightbox so it can
-  // navigate prev/next inside the fullscreen preview too.
-  const allSrcs = blocks.map((b) => `data:${b.mimeType};base64,${b.data}`);
-  return (
-    <div className="my-1 flex flex-col items-start gap-1">
-      <div className="relative">
-        <ImageWithPreview
-          src={`data:${cur.mimeType};base64,${cur.data}`}
-          alt={t("chatStream.gallery.screenshotAlt", { n: Math.min(idx, count - 1) + 1, total: count })}
-          gallery={allSrcs}
-          index={idx}
-          onNavigate={setIdx}
-          // Keep the thumbnail ceiling in sync with the single-image case in
-          // BlockView so a screenshot renders at the same size whether it shows
-          // up alone or inside this gallery. fixedFrame locks the card to a
-          // constant size so switching images doesn't resize it around each one.
-          maxThumbnailWidth={300}
-          maxThumbnailHeight={200}
-          fixedFrame
-        />
-        {count > 1 && (
-          <>
-            <button
-              type="button"
-              onClick={() => go(-1)}
-              disabled={idx <= 0}
-              title={t("chatStream.gallery.prev")}
-              className="absolute left-1 top-1/2 -translate-y-1/2 rounded-full bg-black/55 p-1.5 text-white/90 backdrop-blur-sm transition-colors enabled:hover:bg-black/80 enabled:hover:text-white disabled:opacity-30"
-            >
-              <IconChevronLeft size={18} />
-            </button>
-            <button
-              type="button"
-              onClick={() => go(1)}
-              disabled={idx >= count - 1}
-              title={t("chatStream.gallery.next")}
-              className="absolute right-1 top-1/2 -translate-y-1/2 rounded-full bg-black/55 p-1.5 text-white/90 backdrop-blur-sm transition-colors enabled:hover:bg-black/80 enabled:hover:text-white disabled:opacity-30"
-            >
-              <IconChevronRight size={18} />
-            </button>
-          </>
-        )}
-      </div>
-      {count > 1 && (
-        <div className="flex items-center justify-center gap-1 text-[11px] text-content-subtle">
-          <span>{Math.min(idx, count - 1) + 1} / {count}</span>
-          {/* Dot indicators for quick jump. */}
-          <span className="ml-1.5 flex items-center gap-1">
-            {blocks.map((_, i) => (
-              <button
-                key={i}
-                type="button"
-                onClick={() => setIdx(i)}
-                title={t("chatStream.gallery.imageN", { n: i + 1 })}
-                className={cn(
-                  "h-1.5 rounded-full transition-all",
-                  i === idx ? "w-3 bg-accent" : "w-1.5 bg-content-subtle/40 hover:bg-content-subtle/70",
-                )}
-              />
-            ))}
-          </span>
-        </div>
-      )}
-    </div>
-  );
 }
 
 /** Status icon for tool calls. Error → red X (the only state that always
@@ -1056,9 +973,9 @@ export function TurnPanel({
                       projectPath={projectPath}
                     />
                   </RenderErrorBoundary>
-                ) : seg.kind === "gallery" ? (
+                ) : seg.kind === "media" ? (
                   <RenderErrorBoundary key={segKeys[i]}>
-                    <ImageGallery blocks={seg.blocks} />
+                    <MediaGallery blocks={seg.blocks} />
                   </RenderErrorBoundary>
                 ) : seg.kind === "attachments" ? (
                   <RenderErrorBoundary key={segKeys[i]}>
@@ -1307,86 +1224,18 @@ const BlockView = memo(function BlockView({
     }
 
     case "image":
-      // An image block: either an agent-captured screenshot (browser_screenshot,
-      // tied to its tool_use card) or a user-attached image (standalone on the
-      // user message). Rendered inline as a compact thumbnail; click opens a
-      // fullscreen lightbox (Dialog-based) for full-size inspection.
-      //
-      // The wrapper button defaults to `w-fit`, so the card shrinks to the
-      // image's rendered size — no `w-full` here, otherwise a tall mobile
-      // screenshot (constrained by maxThumbnailHeight) renders as a tiny sliver
-      // floating inside a wide 420px card, leaving a large empty area. We also
-      // raise the thumbnail ceiling so portrait screenshots stay legible
-      // without dominating the stream.
-      return (
-        <ImageWithPreview
-          src={`data:${block.mimeType};base64,${block.data}`}
-          alt={block.toolCallId ? t("chatStream.image.browserScreenshot") : t("chatStream.image.userImage")}
-          className="my-1"
-          maxThumbnailWidth={300}
-          maxThumbnailHeight={200}
-        />
-      );
-
     case "video":
-      // A media file a Bash window produced on disk (render/tutorial
-      // scripts). Inline `<video>` next to the owning tool card — the
-      // script-generated twin of the screenshot image above. Streams via
-      // the guarded app-resource:// protocol (see InlineVideoCard).
-      return <InlineVideoCard filePath={block.filePath} />;
+      // Media blocks: either an agent-captured screenshot (browser_screenshot,
+      // tied to its tool_use card) or a user-attached image (standalone on the
+      // user message); or a media file a Bash window produced on disk
+      // (render/tutorial scripts — the script-generated twin of the
+      // screenshot). All render through the SAME unified tile + lightbox
+      // (MediaGallery with a single-item run) so a lone image/video shows at
+      // exactly the same tile size and interaction as media inside a run.
+      return <MediaGallery blocks={[block]} />;
   }
 });
 export { BlockView };
-
-/** Inline player card for script-generated video files. Compact by design —
- *  the chat stream is not a theater; the IDE's editor pane (open in editor)
- *  is the full-size viewer. Streams via app-resource:// so even a
- *  several-hundred-MB render preview starts immediately and the scrubber
- *  seeks (Range support); the file's bytes never enter the renderer.
- *  Degrades to a filename row with an open-in-editor escape hatch when the
- *  protocol can't serve the file (missing/unplayable/mobile shell). */
-function InlineVideoCard({ filePath }: { filePath: string }) {
-  const { t } = useI18n();
-  const [failed, setFailed] = useState(false);
-  const name = filePath.split(/[\\/]/).pop() ?? filePath;
-  const openInIde = useSessionStore((s) => s.openFileInIde);
-  if (failed) {
-    return (
-      <div className="my-1 flex w-fit max-w-full items-center gap-1.5 rounded-lg border border-edge/70 bg-surface-muted/70 px-2.5 py-1.5 [font-size:var(--chat-fs-sm)]">
-        <IconVideo size={13} className="shrink-0 text-content-subtle" />
-        <span className="truncate font-medium text-content-muted" title={filePath}>
-          {name}
-        </span>
-        <span className="shrink-0 text-[10px] text-content-subtle">{t("chatStream.video.unplayable")}</span>
-      </div>
-    );
-  }
-  return (
-    <div className="my-1 w-fit max-w-full overflow-hidden rounded-lg border border-edge/70 bg-surface-muted/50">
-      <video
-        controls
-        preload="metadata"
-        src={appResourceUrl(filePath)}
-        onError={() => setFailed(true)}
-        className="block max-h-[280px] max-w-full w-auto"
-      />
-      <div className="flex items-center gap-1.5 border-t border-edge/50 px-2 py-1">
-        <IconVideo size={11} className="shrink-0 text-content-subtle" />
-        <span className="truncate text-[10px] text-content-subtle" title={filePath}>
-          {name}
-        </span>
-        <button
-          type="button"
-          onClick={() => openInIde(filePath)}
-          className="ml-auto shrink-0 text-[10px] text-content-subtle transition-colors hover:text-content"
-          title={filePath}
-        >
-          {t("chatStream.video.openInEditor")}
-        </button>
-      </div>
-    </div>
-  );
-}
 
 /** A pasted-content or file-reference attachment shown as a chip-like card in
  *  the message stream. Mirrors the composer's ContentTagChip visual language

@@ -48,6 +48,8 @@ export const en = {
   "chatStream.imageRenderedAbove": "[image rendered above]",
 
   // ── MessageBlocks: inline video (script-generated media) ──
+  "chatStream.media.tabVideos": "Videos",
+  "chatStream.media.tabImages": "Images",
   "chatStream.video.unplayable": "Can't play",
   "chatStream.video.openInEditor": "Open in editor",
 

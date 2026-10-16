@@ -51,6 +51,8 @@ export const zh = {
   "chatStream.imageRenderedAbove": "[图片已在上方显示]",
 
   // ── MessageBlocks: inline video (script-generated media) ──
+  "chatStream.media.tabVideos": "视频",
+  "chatStream.media.tabImages": "图片",
   "chatStream.video.unplayable": "无法播放",
   "chatStream.video.openInEditor": "在编辑器中打开",
 

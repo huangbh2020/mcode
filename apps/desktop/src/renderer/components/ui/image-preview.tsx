@@ -21,8 +21,8 @@
  * When `gallery` is provided (the full image list this thumbnail is part of),
  * the lightbox gains prev/next stepping + a position counter, reachable both
  * from the bar and from the ←/→ keys. Navigation is pushed up via `onNavigate`
- * so the caller (e.g. ImageGallery) can keep its own index in sync; `index` is
- * the current position, used to initialize the lightbox view.
+ * so the caller can keep its own index in sync; `index` is the current
+ * position, used to initialize the lightbox view.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Dialog } from "./dialog.js";
@@ -124,8 +124,8 @@ export interface ImageWithPreviewProps {
   maxThumbnailWidth?: number;
   /** When true, render the thumbnail inside a fixed frame of
    *  maxThumbnailWidth × maxThumbnailHeight (image is object-contain'd inside).
-   *  Used by ImageGallery: switching between differently-sized screenshots then
-   *  keeps the card a stable size instead of resizing around each image. */
+   *  Switching between differently-sized screenshots then keeps the card a
+   *  stable size instead of resizing around each image. */
   fixedFrame?: boolean;
   /** Full image list this thumbnail belongs to. When provided (length > 1),
    *  the lightbox gains prev/next navigation + a position counter. */
