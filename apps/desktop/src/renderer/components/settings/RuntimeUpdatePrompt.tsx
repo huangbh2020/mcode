@@ -38,6 +38,24 @@ const AGENT_LABELS: Record<RuntimeAgentId, string> = {
   pi: "Pi",
 };
 
+function isStrictUpgrade(active: string | null | undefined, target: string): boolean {
+  if (!active) return true;
+  const pa = active.replace(/^v/i, "").split(".");
+  const pb = target.replace(/^v/i, "").split(".");
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const na = Number(pa[i] ?? "");
+    const nb = Number(pb[i] ?? "");
+    if (Number.isFinite(na) && Number.isFinite(nb)) {
+      if (na !== nb) return na < nb;
+    } else {
+      const sa = pa[i] ?? "";
+      const sb = pb[i] ?? "";
+      if (sa !== sb) return sa < sb;
+    }
+  }
+  return false;
+}
+
 export function RuntimeUpdatePrompt() {
   const { t } = useI18n();
   const open = useSessionStore((s) => s.runtimeUpdatePromptOpen);
@@ -48,7 +66,13 @@ export function RuntimeUpdatePrompt() {
   // hazard AGENTS.md's Zustand rules call out).
   const runtimes = useSessionStore((s) => s.runtimes);
   const outdated = useMemo(
-    () => runtimes.filter((rt) => rt.updateAvailable && !rt.installing),
+    () =>
+      runtimes.filter(
+        (rt) =>
+          rt.updateAvailable &&
+          !rt.installing &&
+          isStrictUpgrade(rt.activeVersion, rt.expectedVersion),
+      ),
     [runtimes],
   );
 
@@ -61,7 +85,12 @@ export function RuntimeUpdatePrompt() {
     // render and confirm.
     const agents = useSessionStore
       .getState()
-      .runtimes.filter((rt) => rt.updateAvailable && !rt.installing);
+      .runtimes.filter(
+        (rt) =>
+          rt.updateAvailable &&
+          !rt.installing &&
+          isStrictUpgrade(rt.activeVersion, rt.expectedVersion),
+      );
     if (agents.length === 0) return;
     setOpen(false);
     void (async () => {

@@ -1,9 +1,16 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Terminal } from "@xterm/xterm";
+import type { ILinkProvider } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
+import { SerializeAddon } from "@xterm/addon-serialize";
+import { WebglAddon } from "@xterm/addon-webgl";
+import { WebLinksAddon } from "@xterm/addon-web-links";
 import "@xterm/xterm/css/xterm.css";
 import { api } from "@renderer/lib/api.js";
 import { cn } from "@renderer/lib/cn.js";
+import { extractDropPayload, terminalDropInsertText } from "@renderer/lib/terminalDrop.js";
+import { createFileLinkProvider } from "@renderer/lib/terminalFileLinks.js";
+import { createBusyDetector, type BusyDetector } from "@renderer/lib/terminalBusy.js";
 import { useSessionStore } from "@renderer/stores/sessionStore.js";
 import { useI18n } from "@renderer/lib/i18n/index.js";
 import type { ITheme } from "@xterm/xterm";
@@ -18,12 +25,54 @@ export interface TerminalViewHandle {
   kill: () => void;
   getTerminalId: () => string | null;
   getStatus: () => TerminalSessionStatus;
+  /** Serialize the current buffer INCLUDING scrollback (escape-preserving).
+   *  Terminal sessions persist this via terminal.saveHistory so a restart
+   *  can restore the view — see initialContent for the restore side. */
+  serialize: () => string;
+  /** Live terminal geometry (cols/rows) for snapshot callers — persisted
+   *  alongside the content so a restart can replay size-faithfully. */
+  getDimensions: () => { cols: number; rows: number } | null;
 }
 
 interface Props {
   /** Opaque UI session id (stable across PTY restarts). */
   sessionKey: string;
   projectPath: string;
+  /** Optional working directory for the PTY (defaults to projectPath). */
+  cwd?: string;
+  /** Optional command injected into the shell after its first output chunk
+   *  (main-side timing). Terminal sessions use it to auto-launch claude. */
+  initCommand?: string;
+  /** Pre-restored buffer content (a previous serialize() snapshot) written
+   *  into the fresh terminal ONCE at creation, before any PTY output. The
+   *  restored text is frozen history — a new PTY appends below it. */
+  initialContent?: string;
+  /** Capture geometry of `initialContent` — the serialize output carries
+   *  wrap points + absolute cursor rows, so the replay MUST happen at the
+   *  size it was captured at (the addon's documented contract); the deferred
+   *  fit() afterwards reflows to the pane's real size. Absent (legacy
+   *  snapshots) → the Terminal's default geometry, best-effort. */
+  initialCols?: number;
+  initialRows?: number;
+  /** Dim separator line written after the restored block (localized by the
+   *  terminal-session host) — marks the frozen-history / live-session
+   *  boundary so the new shell/CLI UI always reads as starting BELOW it. */
+  restoreSeparator?: string;
+  /** File-tree drops insert as `@path` references (terminal sessions match
+   *  the GUI composer's file-tag form; claude's input resolves absolute
+   *  @-mentions). Default (bottom IDE terminal) inserts the bare path —
+   *  there `@` would be a shell literal. Plain-text drops insert verbatim
+   *  in both modes. */
+  mentionFilesOnDrop?: boolean;
+  /** Click-to-open file paths: when set (project root), paths printed in
+   *  the output become links that open in the IDE editor (line/column
+   *  suffixes honored). Also enables http(s) link clicking. */
+  projectPathForLinks?: string;
+  /** "Model processing" signal — true after the user submits (Enter) until
+   *  the CLI's output stream goes quiet (see lib/terminalBusy.ts). The
+   *  terminal-session host maps it onto the shared running-spinner state;
+   *  absent = nobody listens. */
+  onBusyChange?: (busy: boolean) => void;
   /** When false the host is hidden (right-tab keep-alive) — skip fit spam. */
   active: boolean;
   /** `shell` is the executable the live PTY actually spawned (from the create
@@ -136,6 +185,15 @@ function useIsDark(): boolean {
 export function TerminalView({
   sessionKey,
   projectPath,
+  cwd,
+  initCommand,
+  initialContent,
+  initialCols,
+  initialRows,
+  restoreSeparator,
+  mentionFilesOnDrop,
+  projectPathForLinks,
+  onBusyChange,
   active,
   onStatusChange,
   onReady,
@@ -144,6 +202,8 @@ export function TerminalView({
   const hostRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
+  const serializeRef = useRef<SerializeAddon | null>(null);
+  const busyRef = useRef<BusyDetector | null>(null);
   const terminalIdRef = useRef<string | null>(null);
   const statusRef = useRef<TerminalSessionStatus>("starting");
   const disposedRef = useRef(false);
@@ -162,6 +222,7 @@ export function TerminalView({
   // here so the Terminal constructor picks up the user's preference and the
   // effect below keeps a live instance in sync on change.
   const rightPanelFontSize = useSessionStore((s) => s.rightPanelFontSize);
+  const openFileInIde = useSessionStore((s) => s.openFileInIde);
 
   const setStatus = (s: TerminalSessionStatus, detail?: string, shell?: string) => {
     statusRef.current = s;
@@ -291,17 +352,110 @@ export function TerminalView({
       fontSize: rightPanelFontSize,
       // Bundled JetBrains Mono Variable heads the stack (same face as the
       // rest of the app's `font-mono` surfaces - see tailwind.config.js) so
-      // the terminal matches code blocks/diffs; OS monospace is the fallback.
+      // the terminal matches code blocks/diffs. Cascadia Mono follows it:
+      // JetBrains Mono lacks the Block Elements / decorative glyphs TUIs
+      // draw their banners with (▐▛██▀ ✽ ✻ …), and browser font-fallback
+      // advances at a different width than the terminal's strict cell grid,
+      // which showed as misaligned banner art. Cascadia (ships with
+      // Windows/Windows Terminal) carries the full set and only receives
+      // the glyphs JetBrains Mono is missing.
       fontFamily:
-        '"JetBrains Mono Variable", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace',
+        '"JetBrains Mono Variable", "Cascadia Mono", "Cascadia Code", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace',
       lineHeight: 1.2,
       scrollback: 5000,
       theme: buildTheme(document.documentElement.classList.contains("dark")),
       allowProposedApi: false,
+      // Restore geometry — see the props doc: replaying a snapshot at the
+      // wrong width wraps lines differently than capture, which shifts the
+      // snapshot's absolute cursor rows into earlier content (the restored
+      // input line then overlaps the transcript). Size-faithful first, fit
+      // (reflow) after.
+      ...(initialCols && initialRows
+        ? { cols: initialCols, rows: initialRows }
+        : {}),
     });
     const fit = new FitAddon();
+    const serialize = new SerializeAddon();
     term.loadAddon(fit);
+    term.loadAddon(serialize);
     term.open(host);
+    // WebGL renderer: crisper glyphs and much better throughput for
+    // spinner-heavy TUI redraws than the DOM renderer, with more robust
+    // fallback-glyph handling. Strictly best-effort — headless/GPU-less
+    // contexts throw here, and a mid-session GPU context loss falls back to
+    // the DOM renderer by disposing the addon (xterm's documented degrade
+    // path), so both failures are silent by design.
+    let webgl: WebglAddon | null = null;
+    try {
+      webgl = new WebglAddon();
+      webgl.onContextLoss(() => {
+        webgl?.dispose();
+        webgl = null;
+      });
+      term.loadAddon(webgl);
+    } catch {
+      webgl = null;
+    }
+
+    // Clickable output: http(s) links (WebLinksAddon), plus file paths —
+    // resolved against the project root via the main-side RPC (the renderer
+    // cannot stat), opened in the IDE editor honoring :line:column
+    // suffixes. The path provider's contract is sync but existence is async:
+    // a module-level cache is pre-warmed on each scan (fire-and-forget), so
+    // the first hover may miss and the NEXT pointer move sees the link —
+    // xterm re-queries the line on every pointer move, making this
+    // imperceptible. Actuation always re-resolves, so a click never no-ops.
+    term.loadAddon(new WebLinksAddon());
+    if (projectPathForLinks) {
+      const root = projectPathForLinks;
+      const pathCache = new Map<string, { path: string; line?: number; column?: number }>();
+      const inflight = new Map<string, Promise<string | null>>();
+      const resolvePath = async (path: string): Promise<string | null> => {
+        // Dedupe concurrent lookups of the same candidate (a compiler error
+        // block repeats the same path dozens of times).
+        let p = inflight.get(path);
+        if (!p) {
+          p = api.terminal.resolvePath({ projectPath: root, path }).then((r) => r.path);
+          inflight.set(path, p);
+          if (inflight.size > 200) {
+            const first = inflight.keys().next().value;
+            if (first) inflight.delete(first);
+          }
+        }
+        return p;
+      };
+      const provider: ILinkProvider = createFileLinkProvider(
+        term,
+        (target) => {
+          void resolvePath(target.path).then((abs) => {
+            if (abs) pathCache.set(target.path, { path: abs, line: target.line, column: target.column });
+          });
+          return pathCache.has(target.path);
+        },
+        (target) => {
+          void resolvePath(target.path).then((abs) => {
+            if (abs) openFileInIde(abs, { line: target.line, column: target.column });
+          });
+        },
+      );
+      term.registerLinkProvider(provider);
+    }
+    // Restored history (terminal sessions): replay the previous snapshot
+    // into the fresh buffer BEFORE any PTY output lands, at the capture
+    // geometry (constructor cols/rows above), then seal the block with a
+    // dim separator + fresh line — the new shell/CLI UI always starts
+    // BELOW the frozen history instead of overlapping it.
+    if (initialContent) {
+      try {
+        term.write(initialContent);
+        if (restoreSeparator) {
+          term.write(`\r\n\x1b[90m──── ${restoreSeparator} ────\x1b[0m`);
+        }
+        term.write("\r\n");
+      } catch {
+        /* a malformed snapshot must not break the terminal */
+      }
+    }
     // Defer first fit until layout has real size.
     requestAnimationFrame(() => {
       try {
@@ -313,8 +467,20 @@ export function TerminalView({
 
     termRef.current = term;
     fitRef.current = fit;
+    serializeRef.current = serialize;
+
+    // "Model processing" detector: arms on Enter, sustains on output, ends
+    // on quiet (see lib/terminalBusy.ts). Lives per sessionKey; the spawn
+    // effect's data subscription feeds it via the ref.
+    busyRef.current = onBusyChange ? createBusyDetector(onBusyChange) : null;
+    let busyTimer = 0;
+    if (busyRef.current) {
+      busyTimer = window.setInterval(() => busyRef.current?.tick(Date.now()), 500);
+    }
 
     const dataDisp = term.onData((data) => {
+      // User submission arms the busy detector (Enter only).
+      busyRef.current?.userInput(data, Date.now());
       const id = terminalIdRef.current;
       if (!id || statusRef.current !== "running") return;
       if (writingRef.current) return;
@@ -369,6 +535,20 @@ export function TerminalView({
       },
       getTerminalId: () => terminalIdRef.current,
       getStatus: () => statusRef.current,
+      serialize: () => {
+        try {
+          // No options = full scrollback + cursor (the addon's default).
+          return serializeRef.current?.serialize() ?? "";
+        } catch {
+          return "";
+        }
+      },
+      getDimensions: () => {
+        const term = termRef.current;
+        return term && term.cols > 1 && term.rows > 1
+          ? { cols: term.cols, rows: term.rows }
+          : null;
+      },
     };
     onReady?.(handle);
 
@@ -376,6 +556,9 @@ export function TerminalView({
       disposedRef.current = true;
       dataDisp.dispose();
       selDisp.dispose();
+      if (busyTimer) window.clearInterval(busyTimer);
+      busyRef.current?.reset();
+      busyRef.current = null;
       const id = terminalIdRef.current;
       terminalIdRef.current = null;
       if (id) {
@@ -393,6 +576,7 @@ export function TerminalView({
       }
       termRef.current = null;
       fitRef.current = null;
+      serializeRef.current = null;
     };
     // sessionKey identity — remount only when the UI session is new.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -433,11 +617,13 @@ export function TerminalView({
     const unsubData = api.on.terminalData((msg) => {
       if (cancelled || disposedRef.current) return;
       if (msg.terminalId !== terminalIdRef.current) return;
+      busyRef.current?.output(msg.data, Date.now());
       term.write(msg.data);
     });
     const unsubExit = api.on.terminalExit((msg) => {
       if (cancelled || disposedRef.current) return;
       if (msg.terminalId !== terminalIdRef.current) return;
+      busyRef.current?.reset();
       terminalIdRef.current = null;
       const code = msg.exitCode;
       setStatus(
@@ -467,6 +653,8 @@ export function TerminalView({
         const rows = Math.max(term.rows || 24, 2);
         const result = await api.terminal.create({
           projectPath,
+          ...(cwd ? { cwd } : {}),
+          ...(initCommand ? { initCommand } : {}),
           cols,
           rows,
         });
@@ -575,6 +763,27 @@ export function TerminalView({
       // Exempt from mouse gestures: the terminal's right-click IS its
       // copy/paste interaction and must never be swallowed by a stroke.
       data-gesture-exclude=""
+      // Drop target: file-tree drags (and plain text) type straight into the
+      // PTY — claude's input box in terminal sessions, the shell prompt in
+      // the IDE terminal. preventDefault on dragover is what makes the drop
+      // legal at all.
+      onDragOver={(e) => {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = "copy";
+      }}
+      onDrop={(e) => {
+        e.preventDefault();
+        const payload = extractDropPayload(e.dataTransfer);
+        if (!payload) return;
+        const insert =
+          payload.kind === "file"
+            ? terminalDropInsertText([payload.value], mentionFilesOnDrop === true)
+            : `${payload.value} `;
+        const id = terminalIdRef.current;
+        if (!id || statusRef.current !== "running" || !insert) return;
+        void api.terminal.write({ terminalId: id, data: insert }).catch(() => {});
+        termRef.current?.focus();
+      }}
       // xterm needs a non-zero box; parent supplies flex-1 min-h-0.
       style={{ padding: "4px 6px 6px" }}
     />

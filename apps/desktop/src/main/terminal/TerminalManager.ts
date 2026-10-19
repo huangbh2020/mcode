@@ -28,6 +28,12 @@ export interface CreateTerminalOpts {
   shell?: string;
   /** Settings-level shell override (used when per-create shell is absent). */
   shellSetting?: string | null;
+  /** Command line typed into the shell once it has booted (terminal
+   *  sessions auto-launch `claude` this way). Injection waits for the FIRST
+   *  output chunk — the shell's first paint proves it is reading stdin —
+   *  plus a short settle delay for profile/prompt loading on Windows
+   *  PowerShell, whose config load can outpace prompt rendering. */
+  initCommand?: string;
 }
 
 export interface CreateTerminalSuccess {
@@ -99,6 +105,12 @@ function ensureSpawnHelperExecutable(): void {
     // its own (typed) error from loadNativeModule instead.
   }
 }
+
+/** Settle delay between the shell's first output chunk and the init-command
+ *  injection (see CreateTerminalOpts.initCommand). Long enough for
+ *  PowerShell profile/prompt paint on cold start, short enough to feel
+ *  instant. */
+const INIT_COMMAND_SETTLE_MS = 300;
 
 class TerminalManagerImpl {
   private readonly terminals = new Map<string, LiveTerminal>();
@@ -176,7 +188,28 @@ class TerminalManagerImpl {
     const live: LiveTerminal = { id, pty, info };
     this.terminals.set(id, live);
 
+    let initInjected = false;
     pty.onData((data) => {
+      // One-shot init command (terminal sessions): the first output chunk
+      // means the shell has booted and is reading stdin. A fixed settle
+      // delay after it absorbs PowerShell profile load + prompt paint;
+      // writing earlier risks the command landing before readline is up and
+      // being swallowed. Guarded by the terminals-map check below like the
+      // forwarding path, so a kill between spawn and injection is a no-op.
+      if (opts.initCommand && !initInjected) {
+        initInjected = true;
+        setTimeout(() => {
+          if (!this.terminals.has(id)) return;
+          try {
+            live.pty.write(`${opts.initCommand}\r`);
+            log.info(`terminal init command injected: ${id}`);
+          } catch (err) {
+            log.warn(
+              `terminal init command failed: ${id} ${err instanceof Error ? err.message : String(err)}`,
+            );
+          }
+        }, INIT_COMMAND_SETTLE_MS);
+      }
       // Drop if already removed (race with kill/exit).
       if (!this.terminals.has(id)) return;
       sendToRenderer(IPC.TERMINAL_DATA, {

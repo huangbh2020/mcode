@@ -733,6 +733,11 @@ export function scanPiSessions(projectId?: string): ScanOutcome {
   if (projects.length === 0) return outcome;
 
   const reg = loadRegistry();
+  // Terminal-session pi conversations (kind="terminal", providerId
+  // "pi-sdk", claudeSessionId = the pi session uuid) are owned by their
+  // terminal row — importing them as chat rows would duplicate every
+  // conversation in both surfaces. Skip files the terminal rows reference.
+  const terminalOwnedPiIds = new Set(SessionRepo.listTerminalClaudeSessionIds("pi-sdk"));
   let changed = false;
 
   let dirNames: string[] = [];
@@ -764,6 +769,7 @@ export function scanPiSessions(projectId?: string): ScanOutcome {
         continue;
       }
       if (header.type !== "session" || !header.cwd) continue;
+      if (header.id && terminalOwnedPiIds.has(header.id)) continue;
       const projectIdMatch = matchProject(header.cwd, projects);
       if (!projectIdMatch) continue;
       try {

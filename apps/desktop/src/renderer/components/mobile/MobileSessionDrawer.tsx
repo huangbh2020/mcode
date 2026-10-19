@@ -105,6 +105,8 @@ export function MobileSessionDrawer({
   const sessionsHasMoreByProject = useSessionStore((s) => s.sessionsHasMoreByProject);
   const sessionsTotalByProject = useSessionStore((s) => s.sessionsTotalByProject);
   const archivedSessionsByProject = useSessionStore((s) => s.archivedSessionsByProject);
+  const archivedHasMoreByProject = useSessionStore((s) => s.archivedHasMoreByProject);
+  const loadingArchivedByProject = useSessionStore((s) => s.loadingArchivedByProject);
   const pinnedSessions = useSessionStore((s) => s.pinnedSessions);
   const expandedProjects = useSessionStore((s) => s.expandedProjects);
   const expandedWorktrees = useSessionStore((s) => s.expandedWorktrees);
@@ -115,6 +117,7 @@ export function MobileSessionDrawer({
   const toggleProjectExpanded = useSessionStore((s) => s.toggleProjectExpanded);
   const toggleWorktreeExpanded = useSessionStore((s) => s.toggleWorktreeExpanded);
   const loadMoreSessions = useSessionStore((s) => s.loadMoreSessions);
+  const loadMoreArchivedSessions = useSessionStore((s) => s.loadMoreArchivedSessions);
   const startSession = useSessionStore((s) => s.startSession);
   const renameSession = useSessionStore((s) => s.renameSession);
   const setSessionPinned = useSessionStore((s) => s.setSessionPinned);
@@ -172,7 +175,9 @@ export function MobileSessionDrawer({
     const t = setTimeout(() => {
       void api.session
         .search({ query: q, limit: 30 })
-        .then((r) => setResults(r.sessions))
+        // Terminal sessions are desktop-only surfaces (no PTY on the phone
+        // shell) — the shared search RPC now returns them, drop here.
+        .then((r) => setResults(r.sessions.filter((s) => s.kind !== "terminal")))
         .catch(() => setResults([]))
         .finally(() => setSearching(false));
     }, 250);
@@ -380,7 +385,9 @@ export function MobileSessionDrawer({
                 </section>
               )}
               {activeProjects.map((p) => {
-                const sessions = sessionsByProject[p.id] ?? [];
+                // Terminal sessions are desktop-only (no PTY on the phone
+                // shell) — filter them from the drawer's list + counts.
+                const sessions = (sessionsByProject[p.id] ?? []).filter((s) => s.kind !== "terminal");
                 // The cache is a two-section array (paginated LOCAL rows, then
                 // the full worktree section — see splitSessionSections). The
                 // stored total counts the LOCAL section only; the header/load-
@@ -512,6 +519,24 @@ export function MobileSessionDrawer({
                                 }
                               />
                             ))}
+                            {/* The archived bin paginates over the network
+                                (unlike the desktop IPC full load) — surface
+                                the remaining pages on demand. */}
+                            {archivedHasMoreByProject[project.id] && (
+                              <li>
+                                <button
+                                  type="button"
+                                  disabled={loadingArchivedByProject[project.id]}
+                                  onClick={() => void loadMoreArchivedSessions(project.id)}
+                                  className="flex min-h-[44px] w-full items-center gap-2 rounded-lg px-3 text-left text-sm text-content-subtle active:bg-surface-hover disabled:opacity-60"
+                                >
+                                  {loadingArchivedByProject[project.id] && (
+                                    <IconLoader2 size={13} className="animate-spin" />
+                                  )}
+                                  {t("layout.loadMore")}
+                                </button>
+                              </li>
+                            )}
                           </ul>
                         </div>
                       ))}

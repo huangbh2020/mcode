@@ -44,3 +44,7 @@ export const api: unknown = new Proxy(
     get: (_t, ns: string) => nsProxy(ns),
   },
 );
+
+/** Desktop semantics — the store's transport-sensitive paths (slim-row
+ *  detail fetch, shrunken message pages) must stay dormant in this smoke. */
+export const isWebTransport = false;

@@ -17,4 +17,12 @@ import { createWebApi } from "./webApi.js";
 
 export const api: Api = window.api ?? createWebApi();
 
+/** True when the renderer runs on the phone (HTTP shim) rather than the
+ *  desktop preload bridge. Transport-sensitive code paths key off this —
+ *  e.g. list RPCs return slimmed session rows over HTTP, so the store
+ *  re-fetches full rows on demand (session:get), and message pages shrink
+ *  to keep first-open fast on an off-LAN network. Evaluated at module load,
+ *  same as `api` — the transport never changes mid-session. */
+export const isWebTransport: boolean = !window.api;
+
 export type { StartSessionInput, SendTurnInput } from "@contracts/ipc";

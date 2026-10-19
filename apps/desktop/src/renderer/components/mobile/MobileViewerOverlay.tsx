@@ -8,7 +8,7 @@
  * Driven by `mobileViewer` in the session store; only the AppMobile shell
  * renders this component, so the desktop is unaffected.
  */
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { api } from "@renderer/lib/api.js";
 import { useSessionStore } from "@renderer/stores/sessionStore.js";
 import { basename } from "@renderer/lib/path.js";
@@ -21,6 +21,15 @@ import { IconArrowUp, IconLoader2 } from "@renderer/lib/icons.js";
 export function MobileViewerOverlay() {
   const target = useSessionStore((s) => s.mobileViewer);
   const close = useSessionStore((s) => s.closeMobileViewer);
+  const openMobileViewer = useSessionStore((s) => s.openMobileViewer);
+  // Gallery stepping re-points the viewer target through the store so the
+  // header title follows the stepped file. useCallback keeps the identity
+  // stable (the viewer's gallery effect keys on the callback).
+  const navigateFile = useCallback(
+    (entry: { name: string; path: string }) =>
+      openMobileViewer({ kind: "file", name: entry.name, path: entry.path }),
+    [openMobileViewer],
+  );
   if (!target) return null;
 
   const title =
@@ -53,7 +62,9 @@ export function MobileViewerOverlay() {
         <span className="w-12" />
       </div>
 
-      {target.kind === "file" && <FileViewerContent name={target.name} path={target.path} />}
+      {target.kind === "file" && (
+        <FileViewerContent name={target.name} path={target.path} onNavigate={navigateFile} />
+      )}
       {target.kind === "diff" && <DiffContent path={target.path} before={target.before} />}
       {target.kind === "plan" && (
         <div className="min-h-0 flex-1 overflow-auto px-3 py-2">

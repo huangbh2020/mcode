@@ -249,6 +249,7 @@ export const en = {
 
   // ── Message bookmarks (selection toolbar / capsule / timeline) ──
   "chatStream.bookmark.add": "Add bookmark",
+  "chatStream.bookmark.addToChat": "Add to current chat",
   "chatStream.bookmark.askSideChat": "Send to sub-session",
   "chatStream.bookmark.copied": "Copied",
   "chatStream.bookmark.capsuleTitle": "Bookmarks ({n})",

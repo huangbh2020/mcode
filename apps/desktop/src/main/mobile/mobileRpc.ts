@@ -34,6 +34,7 @@ import {
   ProjectSessionsSchema,
   SessionSearchSchema,
   BookmarkSearchSchema,
+  SessionGetSchema,
   SessionMessagesSchema,
   SaveMessagesSchema,
   UpsertMessagesSchema,
@@ -67,6 +68,7 @@ import type {
 } from "@contracts/ipc";
 import type { PairedDevice, MobileRpcRequest } from "@contracts/mobile";
 import { SessionRepo, ProjectRepo, MessageRepo, SettingRepo } from "@main/store/repositories.js";
+import { toSlimSession } from "@main/lib/sessionSync.js";
 import { providerRegistry } from "@main/providers/registry.js";
 import { runtimeManager } from "@main/claude/RuntimeManager.js";
 import { serviceScanner } from "@main/lib/serviceScanner.js";
@@ -100,6 +102,12 @@ export class RpcError extends Error {
   }
 }
 
+/** Default page size for the mobile archived bin (project:sessions with
+ * archived:true). The desktop handler lists the archived bin unpaginated —
+ * that is fine over IPC, but a full archived page crossing a slow network
+ * is exactly the boot-latency this split exists to avoid. */
+const MOBILE_ARCHIVED_PAGE_SIZE = 30;
+
 const HANDLERS: Record<string, RpcHandler> = {
   // ── Reads ───────────────────────────────────────────────────────────────
   "project:list": () => ({ projects: ProjectRepo.list() }),
@@ -107,9 +115,15 @@ const HANDLERS: Record<string, RpcHandler> = {
   "project:sessions": (raw) => {
     const input = ProjectSessionsSchema.parse(raw);
     const archived = input.archived;
-    // Mirrors the desktop handler: the archived bin lists everything (no
-    // pagination); the active list paginates with a default page size of 5.
-    const limit = input.limit ?? (archived ? undefined : 5);
+    // Diverges from the desktop handler on TWO axes, both about wire size —
+    // this response crosses the network (often an off-LAN tunnel), while the
+    // desktop IPC hop is free:
+    //  1. Rows are SLIMMED (toSlimSession): heavy per-session payloads
+    //     (turnFiles.before can hold whole file contents) never ride a list
+    //     page; the phone re-fetches the full row via session:get on open.
+    //  2. The archived bin paginates too (default 30) instead of listing
+    //     everything — the renderer's archived drawer loads more on demand.
+    const limit = input.limit ?? (archived ? MOBILE_ARCHIVED_PAGE_SIZE : 5);
     const offset = input.offset ?? 0;
     // `worktree` narrows both the page and the count — the count MUST mirror
     // the list's filter or hasMore counts rows the list never returns. The
@@ -122,7 +136,7 @@ const HANDLERS: Record<string, RpcHandler> = {
       offset,
       archived,
       worktree: input.worktree,
-    });
+    }).map(toSlimSession);
     const total = SessionRepo.countByProject(input.projectId, archived, input.worktree);
     const hasMore = limit !== undefined ? offset + sessions.length < total : false;
     return { sessions, hasMore, total };
@@ -130,7 +144,10 @@ const HANDLERS: Record<string, RpcHandler> = {
 
   "session:search": (raw) => {
     const input = SessionSearchSchema.parse(raw);
-    const sessions = SessionRepo.searchByTitle(input.query, { limit: input.limit });
+    // Slimmed like project:sessions — search results are list rows.
+    const sessions = SessionRepo.searchByTitle(input.query, { limit: input.limit }).map(
+      toSlimSession,
+    );
     return { sessions };
   },
 
@@ -138,6 +155,13 @@ const HANDLERS: Record<string, RpcHandler> = {
     const input = BookmarkSearchSchema.parse(raw);
     const results = SessionRepo.searchBookmarks(input.query, { limit: input.limit });
     return { results };
+  },
+
+  "session:get": (raw) => {
+    const input = SessionGetSchema.parse(raw);
+    // NOT slimmed — this is the on-demand detail fetch that pairs with the
+    // slimmed list endpoints (see project:sessions above).
+    return { session: SessionRepo.get(input.sessionId) ?? null };
   },
 
   "session:messages": (raw) => {
@@ -403,7 +427,7 @@ const HANDLERS: Record<string, RpcHandler> = {
     return { session };
   },
 
-  "session:listPinned": () => ({ sessions: SessionRepo.listPinned() }),
+  "session:listPinned": () => ({ sessions: SessionRepo.listPinned().map(toSlimSession) }),
 
   "session:archive": (raw) => {
     const input = ArchiveSessionSchema.parse(raw);

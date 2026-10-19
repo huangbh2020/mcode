@@ -36,6 +36,11 @@ import { buildCustomEnv, resolveActiveModel } from "@main/providers/claude-sdk/c
 import { resolveSdkBinaryPath } from "@main/providers/claude-sdk/sdkBinaryPath.js";
 import { loadClaudeSdk } from "@main/providers/claude-sdk/sdkLoader.js";
 import { log } from "@main/lib/logger.js";
+import {
+  TERMINAL_TITLE_SYSTEM_PROMPT,
+  buildTerminalTitlePrompt,
+  isDefaultTerminalTitle,
+} from "@main/lib/terminalTitle.js";
 
 /** Fixed system prompt - never overridden. Guarantees a clean short title. */
 const TITLE_GEN_SYSTEM_PROMPT = [
@@ -102,10 +107,41 @@ export async function generateSessionTitle(
   session: Session,
   firstPrompt: string,
 ): Promise<string | null> {
+  if (!firstPrompt.trim()) return null;
+  return runTitleQuery(session, buildTitleGenPrompt(firstPrompt), TITLE_GEN_SYSTEM_PROMPT);
+}
+
+/**
+ * Terminal-session variant (kind="terminal"): the "input" is a stripped head
+ * excerpt of the PTY scrollback (see lib/terminalTitle.ts) instead of a chat
+ * prompt. Extra gate: only rows still carrying a default title are renamed —
+ * a manual rename or a previous generation is permanent, and that guarantee
+ * lives HERE (main side) so it survives restarts, not in the renderer.
+ */
+export async function generateTerminalSessionTitle(
+  session: Session,
+  transcript: string,
+): Promise<string | null> {
+  if (!isDefaultTerminalTitle(session.title)) return null;
+  if (!transcript.trim()) return null;
+  return runTitleQuery(
+    session,
+    buildTerminalTitlePrompt(transcript),
+    TERMINAL_TITLE_SYSTEM_PROMPT,
+  );
+}
+
+/** Shared one-shot title query: setting gate, model resolution, fenced
+ *  prompt execution, cleanup, persist + notify. Both public wrappers feed
+ *  it a pre-fenced user prompt and a fixed system prompt. */
+async function runTitleQuery(
+  session: Session,
+  userPrompt: string,
+  systemPrompt: string,
+): Promise<string | null> {
   // 1. Feature gate. Default off — absent/unknown value means "do nothing".
   const enabled = SettingRepo.get(UI_TITLE_GEN_ENABLED_SETTING_KEY);
   if (enabled !== "on") return null;
-  if (!firstPrompt.trim()) return null;
 
   // 2. Resolve the model config. There is no default model — generation only
   //    runs when an explicit "configId:modelId" was picked in settings;
@@ -151,8 +187,8 @@ export async function generateSessionTitle(
 
     const q = query({
       // Fenced shell — never the raw user input (slash-command + injection
-      // safety, see buildTitleGenPrompt).
-      prompt: buildTitleGenPrompt(firstPrompt),
+      // safety, see buildTitleGenPrompt / buildTerminalTitlePrompt).
+      prompt: userPrompt,
       options: {
         abortController: ac,
         maxTurns: 1,
@@ -163,7 +199,7 @@ export async function generateSessionTitle(
         // can drive file/bash/network actions during title generation.
         tools: [],
         // Fixed system prompt guarantees a clean, short title.
-        systemPrompt: TITLE_GEN_SYSTEM_PROMPT,
+        systemPrompt,
         settingSources: ["project", "local"],
         includePartialMessages: false,
         ...(binaryPath ? { pathToClaudeCodeExecutable: binaryPath } : {}),

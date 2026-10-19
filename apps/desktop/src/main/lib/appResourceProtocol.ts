@@ -35,8 +35,10 @@ const APP_RESOURCE_HOST = "f";
 
 /** Content-Types served by the protocol. Unknown extensions fall back to a
  *  generic octet-stream — Chromium's media pipeline sniffs containers
- *  anyway; the header mainly keeps non-media consumers honest. */
-const CONTENT_TYPES: Record<string, string> = {
+ *  anyway; the header mainly keeps non-media consumers honest. Shared with
+ *  the mobile server's `/api/media` route (same media, one HTTP transport
+ *  for the phone, this protocol for the desktop window). */
+export const MEDIA_CONTENT_TYPES: Record<string, string> = {
   ".mp4": "video/mp4",
   ".m4v": "video/mp4",
   ".webm": "video/webm",
@@ -45,6 +47,7 @@ const CONTENT_TYPES: Record<string, string> = {
   ".ogv": "video/ogg",
   ".avi": "video/x-msvideo",
 };
+const CONTENT_TYPES = MEDIA_CONTENT_TYPES;
 
 /** Register the scheme's privileges — MUST run before app ready: the media
  *  pipeline only honors `stream` (streaming + seekable media) on schemes

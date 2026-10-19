@@ -264,7 +264,9 @@ function rowToSession(r: SessionRow): Session {
         ? "orch-worker"
         : r.kind === "automation"
           ? "automation"
-          : "chat",
+          : r.kind === "terminal"
+            ? "terminal"
+            : "chat",
     parentSessionId: r.parent_session_id ?? null,
     automationId: r.automation_id ?? null,
     title: r.title,
@@ -355,7 +357,7 @@ export const SessionRepo = {
   ): Session[] {
     // Side-chat sessions are managed by the right-panel ask tab keyed by
     // parent session — never by the left-bar project list (any mode).
-    const where = ["project_id = ?", "kind IN ('chat', 'automation')"];
+    const where = ["project_id = ?", "kind IN ('chat', 'automation', 'terminal')"];
     const params: BindValue[] = [v(projectId)];
     if (opts?.archived !== undefined) {
       where.push("archived = ?");
@@ -397,7 +399,7 @@ export const SessionRepo = {
     archived?: boolean,
     worktree?: "exclude" | "only",
   ): number {
-    const where = ["project_id = ?", "kind IN ('chat', 'automation')"];
+    const where = ["project_id = ?", "kind IN ('chat', 'automation', 'terminal')"];
     const params: BindValue[] = [v(projectId)];
     if (archived !== undefined) {
       where.push("archived = ?");
@@ -423,7 +425,7 @@ export const SessionRepo = {
    *  tree (the renderer resolves each row's owning project name locally). */
   listPinned(): Session[] {
     const rows = getDb()
-      .prepare("SELECT * FROM sessions WHERE archived = 0 AND pinned_at IS NOT NULL AND kind IN ('chat', 'automation') ORDER BY pinned_at DESC")
+      .prepare("SELECT * FROM sessions WHERE archived = 0 AND pinned_at IS NOT NULL AND kind IN ('chat', 'automation', 'terminal') ORDER BY pinned_at DESC")
       .all() as unknown as SessionRow[];
     return rows.map(rowToSession);
   },
@@ -448,7 +450,7 @@ export const SessionRepo = {
     worktreeKey?: string;
   }): Session[] {
     if (opts?.projectIds && opts.projectIds.length === 0) return [];
-    const where = ["archived = 0", "pinned_at IS NULL", "kind IN ('chat', 'automation')"];
+    const where = ["archived = 0", "pinned_at IS NULL", "kind IN ('chat', 'automation', 'terminal')"];
     const params: BindValue[] = [];
     if (opts?.projectIds) {
       where.push(`project_id IN (${opts.projectIds.map(() => "?").join(", ")})`);
@@ -484,7 +486,7 @@ export const SessionRepo = {
    *  "show more" counts its own set. */
   countAll(opts?: { projectIds?: string[]; worktreeKey?: string }): number {
     if (opts?.projectIds && opts.projectIds.length === 0) return 0;
-    const where = ["archived = 0", "pinned_at IS NULL", "kind IN ('chat', 'automation')"];
+    const where = ["archived = 0", "pinned_at IS NULL", "kind IN ('chat', 'automation', 'terminal')"];
     const params: BindValue[] = [];
     if (opts?.projectIds) {
       where.push(`project_id IN (${opts.projectIds.map(() => "?").join(", ")})`);
@@ -513,7 +515,7 @@ export const SessionRepo = {
     const limit = opts?.limit ?? 30;
     const rows = getDb()
       .prepare(
-        `SELECT * FROM sessions WHERE archived = 0 AND kind IN ('chat', 'automation') AND title LIKE ? ORDER BY updated_at DESC, created_at DESC LIMIT ?`,
+        `SELECT * FROM sessions WHERE archived = 0 AND kind IN ('chat', 'automation', 'terminal') AND title LIKE ? ORDER BY updated_at DESC, created_at DESC LIMIT ?`,
       )
       .all(v(q), v(limit)) as unknown as SessionRow[];
     return rows.map(rowToSession);
@@ -534,7 +536,7 @@ export const SessionRepo = {
     const limit = opts?.limit ?? 30;
     const rows = getDb()
       .prepare(
-        "SELECT id, project_id, title, bookmarks FROM sessions WHERE archived = 0 AND kind IN ('chat', 'automation') AND bookmarks IS NOT NULL ORDER BY updated_at DESC",
+        "SELECT id, project_id, title, bookmarks FROM sessions WHERE archived = 0 AND kind IN ('chat', 'automation', 'terminal') AND bookmarks IS NOT NULL ORDER BY updated_at DESC",
       )
       .all() as unknown as Array<{
       id: string;
@@ -709,6 +711,27 @@ export const SessionRepo = {
       v(id),
     );
     persist();
+  },
+
+  /** claude_session_ids already referenced by TERMINAL session rows — the
+   *  resume-reconcilers' "don't adopt a file another session claims" set.
+   *  `providerId` narrows to one CLI's terminals (e.g. the Pi session
+   *  importer skips files owned by pi terminal rows). */
+  listTerminalClaudeSessionIds(providerId?: string): string[] {
+    const rows = (
+      providerId
+        ? getDb()
+            .prepare(
+              "SELECT claude_session_id FROM sessions WHERE kind = 'terminal' AND claude_session_id IS NOT NULL AND provider_id = ?",
+            )
+            .all(v(providerId))
+        : getDb()
+            .prepare(
+              "SELECT claude_session_id FROM sessions WHERE kind = 'terminal' AND claude_session_id IS NOT NULL",
+            )
+            .all()
+    ) as unknown as Array<{ claude_session_id: string }>;
+    return rows.map((r) => r.claude_session_id);
   },
 
   /** Touch a session's updated_at (list ordering) without changing anything

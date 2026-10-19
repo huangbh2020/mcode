@@ -39,6 +39,30 @@ export function toSessionListEntry(s: Session): SessionListEntry {
   return entry;
 }
 
+/** A full {@link Session} SHAPE with the heavy per-session payloads nulled.
+ * Used by the mobile RPC list endpoints (project:sessions / listPinned /
+ * search): those responses cross the network — often an off-LAN tunnel with
+ * a few Mbps — and a fat row can be hundreds of KB (`turnFiles.before` holds
+ * whole file contents, `subagentTranscripts` full transcripts). Nulling keeps
+ * the `Session` structural type (all heavy fields are nullable) so the
+ * renderer's buckets accept the rows unchanged; the phone re-fetches the
+ * full row via `session:get` when a session is actually opened. Mirrors
+ * `materializeSessionEntry` on the renderer side (broadcast-created rows
+ * have been slim-shaped since forever — this extends that to list loads). */
+export function toSlimSession(s: Session): Session {
+  return {
+    ...toSessionListEntry(s),
+    contextSnapshot: null,
+    todos: null,
+    subagents: null,
+    planDraft: null,
+    usageHistory: null,
+    turnFiles: null,
+    bookmarks: null,
+    subagentTranscripts: null,
+  };
+}
+
 /** Fan a generic out-of-turn RuntimeEvent out to every client — the desktop
  *  renderer over `claude:event` and every paired phone over the SSE bus.
  *  Out-of-turn here means events NOT flowing through a session runtime's own

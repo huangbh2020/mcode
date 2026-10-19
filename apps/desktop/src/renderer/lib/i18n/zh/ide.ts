@@ -78,6 +78,8 @@ export const zh = {
   "ide.editor.imageLoadFailedDesc": "无法预览此图片文件,可能已损坏或格式不受支持",
   "ide.editor.imageFitHint": "点击适应窗口",
   "ide.editor.imageNaturalHint": "点击查看原始尺寸",
+  "ide.editor.imagePrev": "上一张图片 (←)",
+  "ide.editor.imageNext": "下一张图片 (→)",
   "ide.editor.readingVideo": "加载视频…",
   "ide.editor.videoUnsupported": "无法播放此视频",
   "ide.editor.videoUnsupportedDesc":
@@ -363,4 +365,16 @@ export const zh = {
   "ide.turns.usageTotal": "共 {n} tokens",
   "ide.turns.cacheHit": "缓存命中 {n}%",
   "ide.turns.noUsage": "无用量记录",
+
+  /* ── 终端会话(kind="terminal":本机 Claude CLI 的 PTY 标签页)── */
+  "ide.termSession.cliBadge": "CLI {version}",
+  "ide.termSession.cliMissing": "未检测到 claude CLI",
+  "ide.termSession.cliMissingHint": "未在 PATH 找到 claude 命令。可先安装 Claude Code CLI 后重启本会话;终端内仍可手动运行其他命令。",
+  "ide.termSession.restored": "已恢复上次历史,正在重启 CLI…",
+  "ide.termSession.historySeparator": "以上为恢复的历史,以下为新会话",
+  "ide.termSession.restart": "重启终端",
+  "ide.termSession.clear": "清屏",
+  "ide.termSession.statusStarting": "启动中",
+  "ide.termSession.statusRunning": "运行中",
+  "ide.termSession.statusExited": "已退出",
 } as const;

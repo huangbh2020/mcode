@@ -93,6 +93,8 @@ const api = {
       ipcRenderer.invoke(IPC.SESSION_LIST_PINNED)) as RpcMap["session.listPinned"],
     listAll: ((input) =>
       ipcRenderer.invoke(IPC.SESSION_LIST_ALL, input)) as RpcMap["session.listAll"],
+    get: ((input) =>
+      ipcRenderer.invoke(IPC.SESSION_GET, input)) as RpcMap["session.get"],
   },
   setting: {
     get: ((input) =>
@@ -400,6 +402,25 @@ const api = {
       ipcRenderer.invoke(IPC.TERMINAL_LIST, input)) as RpcMap["terminal.list"],
     resolveShell: (() =>
       ipcRenderer.invoke(IPC.TERMINAL_RESOLVE_SHELL)) as RpcMap["terminal.resolveShell"],
+    cliProbe: (() =>
+      ipcRenderer.invoke(IPC.TERMINAL_CLI_PROBE)) as RpcMap["terminal.cliProbe"],
+    /** Terminal-CLI management (设置 → Agent → 终端会话类型). */
+    cliList: (() =>
+      ipcRenderer.invoke(IPC.TERMINAL_CLI_LIST)) as RpcMap["terminal.cliList"],
+    cliCheckUpdates: (() =>
+      ipcRenderer.invoke(IPC.TERMINAL_CLI_CHECK_UPDATES)) as RpcMap["terminal.cliCheckUpdates"],
+    cliInstall: ((input) =>
+      ipcRenderer.invoke(IPC.TERMINAL_CLI_INSTALL, input)) as RpcMap["terminal.cliInstall"],
+    cliUninstall: ((input) =>
+      ipcRenderer.invoke(IPC.TERMINAL_CLI_UNINSTALL, input)) as RpcMap["terminal.cliUninstall"],
+    saveHistory: ((input) =>
+      ipcRenderer.invoke(IPC.TERMINAL_HISTORY_SAVE, input)) as RpcMap["terminal.saveHistory"],
+    loadHistory: ((input) =>
+      ipcRenderer.invoke(IPC.TERMINAL_HISTORY_LOAD, input)) as RpcMap["terminal.loadHistory"],
+    suggestTitle: ((input) =>
+      ipcRenderer.invoke(IPC.TERMINAL_SUGGEST_TITLE, input)) as RpcMap["terminal.suggestTitle"],
+    resolvePath: ((input) =>
+      ipcRenderer.invoke(IPC.TERMINAL_RESOLVE_PATH, input)) as RpcMap["terminal.resolvePath"],
   },
 
   /** Embedded browser (WebContentsView in main ↔ browser panel in renderer).

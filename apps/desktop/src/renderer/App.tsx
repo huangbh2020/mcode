@@ -6,6 +6,7 @@ import { Titlebar } from "./components/layout/Titlebar.js";
 import { LeftBar } from "./components/layout/LeftBar.js";
 import { StreamSidebar } from "./components/layout/StreamSidebar.js";
 import { ChatPane } from "./components/chat/ChatPane.js";
+import { TerminalSessionPane } from "./components/chat/TerminalSessionPane.js";
 import { SessionTabs } from "./components/layout/SessionTabs.js";
 import { UnifiedTabsBar } from "./components/layout/UnifiedTabsBar.js";
 import { RightPanel } from "./components/layout/RightPanel.js";
@@ -24,7 +25,7 @@ import { useClaudeEvents } from "./hooks/useClaudeEvents.js";
 import { useGlobalShortcuts } from "./hooks/useGlobalShortcuts.js";
 import { useMouseGestures } from "./hooks/useMouseGestures.js";
 import { useSuppressBrowserView } from "./hooks/useSuppressBrowserView.js";
-import { useSessionStore } from "./stores/sessionStore.js";
+import { useSessionStore, selectSessionKind } from "./stores/sessionStore.js";
 import type { BrowserDevicePreset } from "@contracts/ipc";
 import { api } from "./lib/api.js";
 import { useTheme } from "./lib/theme.js";
@@ -253,7 +254,7 @@ export function App() {
           // session title, which contributes its full text width to
           // min-content) propped the aside open no matter how small
           // leftWidthPct got.
-          "flex h-full min-w-0 shrink-0 flex-col rounded-tl-2xl bg-surface-muted",
+          "flex h-full min-w-0 shrink flex-col rounded-tl-2xl bg-surface-muted",
           (!leftOpen || settingsOpen || schedPageOpen) && "hidden",
         )}
         style={{ flexGrow: 0, flexBasis: `${leftWidthPct}%` }}
@@ -282,7 +283,7 @@ export function App() {
         and the main panel below (center chat/editor pane + right IDE panel,
         plus the bottom terminal inside the center main).
       */}
-      <div className="flex min-w-0 flex-1 flex-col">
+      <div className="flex min-w-[800px] flex-1 flex-col">
         {/*
           Workspace shell is ALWAYS mounted — the settings view renders as an
           overlay on top of it, not as a mutually-exclusive sibling. This is
@@ -423,6 +424,18 @@ function CenterPane({ wide }: { wide: boolean }) {
   return <SplitCenterPane wide={wide} />;
 }
 
+/** Per-tab surface router: a kind="terminal" session renders the PTY pane
+ *  (user's own Claude CLI in TTY mode) instead of ChatPane. Keep-alive
+ *  semantics are identical — the pane mounts once per tab and hides via CSS,
+ *  so the terminal (and its PTY) survive focus flips. */
+function SessionSurface({ sessionId, isActive }: { sessionId: string; isActive: boolean }) {
+  const kind = useSessionStore((s) => selectSessionKind(s, sessionId));
+  if (kind === "terminal") {
+    return <TerminalSessionPane sessionId={sessionId} isActive={isActive} />;
+  }
+  return <ChatPane sessionId={sessionId} isActive={isActive} />;
+}
+
 /** `tabs` displayMode: ONE tab bar (UnifiedTabsBar) mixing session tabs and
  *  file tabs, with the active tab's content filling the whole center width.
  *  The chat|editor split is gone — that's the point (maximum reading space
@@ -478,7 +491,7 @@ function UnifiedTabbedPane({ wide }: { wide: boolean }) {
               sid === activeSessionId && !editorVisible ? "" : "hidden",
             )}
           >
-            <ChatPane sessionId={sid} isActive={sid === activeSessionId && !editorVisible} />
+            <SessionSurface sessionId={sid} isActive={sid === activeSessionId && !editorVisible} />
           </div>
         ))}
         {editorMounted && (
@@ -560,7 +573,7 @@ function SplitCenterPane({ wide }: { wide: boolean }) {
           two columns split the center pane proportionally. When no file is
           open and no plan is viewed it takes the full width (flex-1). */}
       <div
-        className="flex min-w-[450px] flex-col"
+        className="flex min-w-[800px] shrink-0 flex-col"
         style={editorVisible ? { flexGrow: 0, flexBasis: `${100 - editorWidthPct}%` } : { flexGrow: 1, flexBasis: "0%" }}
       >
 
@@ -673,7 +686,7 @@ function ChatColumn() {
               key={sid}
               className={`absolute inset-0 ${sid === activeSessionId ? "" : "hidden"}`}
             >
-              <ChatPane sessionId={sid} isActive={sid === activeSessionId} />
+              <SessionSurface sessionId={sid} isActive={sid === activeSessionId} />
             </div>
           ))}
         </div>
@@ -694,7 +707,7 @@ function ChatColumn() {
   return (
     <div className="relative min-h-0 flex-1">
       <div key={activeSessionId} className="absolute inset-0">
-        <ChatPane sessionId={activeSessionId} isActive />
+        <SessionSurface sessionId={activeSessionId} isActive />
       </div>
     </div>
   );

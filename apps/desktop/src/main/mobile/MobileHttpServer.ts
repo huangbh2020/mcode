@@ -11,6 +11,9 @@
  *   GET  /api/auth/check        → is my remembered device token still valid?
  *   POST /api/rpc               → whitelisted RPC (Authorization: Bearer)
  *   GET  /api/events            → SSE event stream (Authorization: Bearer)
+ *   GET  /api/media             → guarded media stream, Range-capable
+ *                                 (?path=<abs file>&token=… — query auth
+ *                                 because <video> cannot set headers)
  *
  * ## Lifecycle
  * Started from index.ts on `app.whenReady` (after DB init), stopped on
@@ -24,6 +27,9 @@
  */
 import { createServer, type Server, type IncomingMessage, type ServerResponse } from "node:http";
 import { app } from "electron";
+import { createReadStream } from "node:fs";
+import { stat } from "node:fs/promises";
+import { extname } from "node:path";
 import { awaitDb, getDb } from "@main/store/db.js";
 import { SettingRepo } from "@main/store/repositories.js";
 import {
@@ -40,11 +46,14 @@ import {
 } from "@contracts/mobile";
 import { pairingManager, detectLanIp } from "./PairingManager.js";
 import { mobileEventBus } from "./MobileEventBus.js";
+import { encodeJsonBody } from "./httpJson.js";
 import { runtimeManager } from "@main/claude/RuntimeManager.js";
 import { dispatchMobileRpc, RpcError, type DeviceContext } from "./mobileRpc.js";
 import { registerMobileGitRpc } from "./mobileGitRpc.js";
 import { serveMobileAsset } from "./serveMobileStatic.js";
 import { log } from "@main/lib/logger.js";
+import { findContainingWorkspaceRoot, isPasteTempPath } from "@main/lib/pathGuard.js";
+import { MEDIA_CONTENT_TYPES } from "@main/lib/appResourceProtocol.js";
 
 /** Read the configured port from settings (post-DB). Falls back to default. */
 async function resolvePort(): Promise<number> {
@@ -136,27 +145,122 @@ async function authorize(req: IncomingMessage): Promise<PairedDevice | null> {
   return pairingManager.validateToken(token);
 }
 
-function sendJson(res: ServerResponse, status: number, body: unknown): void {
+/** Send a JSON response, gzipping when the client advertises support and the
+ * body is big enough to be worth it (see httpJson.ts — the mobile bundle's
+ * biggest payloads are chat-history pages, which compress 5–10x). Fire-and-
+ * forget: no caller depends on the write completing. */
+function sendJson(req: IncomingMessage, res: ServerResponse, status: number, body: unknown): void {
   const json = JSON.stringify(body);
-  res.writeHead(status, {
-    "Content-Type": "application/json; charset=utf-8",
+  void encodeJsonBody(req.headers["accept-encoding"], json).then(
+    ({ body: payload, contentEncoding }) => {
+      if (res.writableEnded || res.destroyed) return;
+      const headers: Record<string, string> = {
+        "Content-Type": "application/json; charset=utf-8",
+        "Cache-Control": "no-store",
+      };
+      if (contentEncoding) {
+        headers["Content-Encoding"] = contentEncoding;
+        // Same body, different encodings per client — caches must key on it.
+        headers["Vary"] = "Accept-Encoding";
+      }
+      res.writeHead(status, headers);
+      res.end(payload);
+    },
+  );
+}
+
+/** Stream one local media file to the phone (`GET /api/media?path=…`).
+ *
+ *  Same security fence as every file-reading surface: the absolute path must
+ *  resolve inside a known workspace root (projects ∪ session worktrees) or
+ *  the paste-temp dir, else 403. Range requests are answered manually with
+ *  206 partial content — that's what makes `<video>` scrubbing seekable on
+ *  a several-hundred-MB render; a malformed/out-of-range Range gets 416.
+ *  Byte piping is a plain Node stream → ServerResponse (the phone's HTTP
+ *  transport counterpart of the desktop's `app-resource://` handler). */
+async function handleMediaRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const refuse = (status: number, message: string): void => {
+    log.warn(`mobile /api/media refused (${status}) — ${message}`);
+    if (!res.headersSent) {
+      res.writeHead(status, { "Content-Type": "text/plain; charset=utf-8" });
+    }
+    res.end(message);
+  };
+
+  const filePath = new URL(req.url ?? "/", "http://local").searchParams.get("path") ?? "";
+  if (!filePath) {
+    refuse(400, "missing path");
+    return;
+  }
+  const root = findContainingWorkspaceRoot(filePath);
+  if (!root && !isPasteTempPath(filePath)) {
+    refuse(403, `path outside any workspace root: ${filePath}`);
+    return;
+  }
+
+  let size: number;
+  try {
+    size = (await stat(filePath)).size;
+  } catch (err) {
+    refuse(404, `stat failed for ${filePath}: ${(err as Error).message}`);
+    return;
+  }
+
+  const headers: Record<string, string> = {
+    "Content-Type": MEDIA_CONTENT_TYPES[extname(filePath).toLowerCase()] ?? "application/octet-stream",
+    "Accept-Ranges": "bytes",
     "Cache-Control": "no-store",
+  };
+
+  const rangeHeader = req.headers.range;
+  const range = rangeHeader ? /^bytes=(\d*)-(\d*)$/.exec(rangeHeader.trim()) : null;
+  if (range) {
+    const start = range[1] ? Number(range[1]) : 0;
+    const end = range[2] ? Math.min(Number(range[2]), size - 1) : size - 1;
+    if (Number.isNaN(start) || start > end || start >= size) {
+      res.writeHead(416, { "Content-Range": `bytes */${size}` });
+      res.end();
+      return;
+    }
+    res.writeHead(206, {
+      ...headers,
+      "Content-Range": `bytes ${start}-${end}/${size}`,
+      "Content-Length": String(end - start + 1),
+    });
+    const stream = createReadStream(filePath, { start, end });
+    stream.on("error", (err) => {
+      log.warn(`mobile /api/media: range stream failed for ${filePath}: ${(err as Error).message}`);
+      res.destroy();
+    });
+    stream.pipe(res);
+    return;
+  }
+
+  res.writeHead(200, { ...headers, "Content-Length": String(size) });
+  const stream = createReadStream(filePath);
+  stream.on("error", (err) => {
+    log.warn(`mobile /api/media: stream failed for ${filePath}: ${(err as Error).message}`);
+    res.destroy();
   });
-  res.end(json);
+  stream.pipe(res);
 }
 
 /** Send a `MobileRpcResponse` envelope, mapping thrown errors to statuses. */
-function sendRpcResult(res: ServerResponse, promise: Promise<unknown>): void {
+function sendRpcResult(
+  req: IncomingMessage,
+  res: ServerResponse,
+  promise: Promise<unknown>,
+): void {
   promise
-    .then((result) => sendJson(res, 200, { ok: true, result } satisfies MobileRpcResponse))
+    .then((result) => sendJson(req, res, 200, { ok: true, result } satisfies MobileRpcResponse))
     .catch((err: unknown) => {
       if (err instanceof RpcError) {
-        sendJson(res, err.status, { ok: false, error: err.message, status: err.status } satisfies MobileRpcResponse);
+        sendJson(req, res, err.status, { ok: false, error: err.message, status: err.status } satisfies MobileRpcResponse);
       } else if (err instanceof Error) {
         // zod errors bubble up here too — treat as bad request for safety.
-        sendJson(res, 400, { ok: false, error: err.message, status: 400 } satisfies MobileRpcResponse);
+        sendJson(req, res, 400, { ok: false, error: err.message, status: 400 } satisfies MobileRpcResponse);
       } else {
-        sendJson(res, 500, { ok: false, error: "internal error", status: 500 } satisfies MobileRpcResponse);
+        sendJson(req, res, 500, { ok: false, error: "internal error", status: 500 } satisfies MobileRpcResponse);
       }
     });
 }
@@ -216,15 +320,15 @@ async function handlePairVerify(req: IncomingMessage, res: ServerResponse, endpo
   try {
     body = PairingVerifyInputSchema.parse(await readJsonBody(req)) as PairingVerifyInput;
   } catch (err) {
-    sendJson(res, 400, { error: `无效的配对请求: ${(err as Error).message}` });
+    sendJson(req, res, 400, { error: `无效的配对请求: ${(err as Error).message}` });
     return;
   }
   const outcome = await pairingManager.verify(body, endpoint);
   if (!outcome.ok) {
-    sendJson(res, 401, { error: outcome.reason });
+    sendJson(req, res, 401, { error: outcome.reason });
     return;
   }
-  sendJson(res, 200, outcome.result);
+  sendJson(req, res, 200, outcome.result);
 }
 
 /** POST /api/rpc — dispatch a whitelisted RPC. Auth required. */
@@ -233,11 +337,11 @@ async function handleRpc(req: IncomingMessage, res: ServerResponse, device: Pair
   try {
     body = (await readJsonBody(req)) as MobileRpcRequest;
   } catch (err) {
-    sendJson(res, 400, { ok: false, error: `invalid body: ${(err as Error).message}`, status: 400 });
+    sendJson(req, res, 400, { ok: false, error: `invalid body: ${(err as Error).message}`, status: 400 });
     return;
   }
   if (!body || typeof body.method !== "string") {
-    sendJson(res, 400, { ok: false, error: "missing method", status: 400 });
+    sendJson(req, res, 400, { ok: false, error: "missing method", status: 400 });
     return;
   }
   const ctx: DeviceContext = { device };
@@ -263,7 +367,7 @@ async function handleRpc(req: IncomingMessage, res: ServerResponse, device: Pair
       throw err;
     },
   );
-  sendRpcResult(res, traced);
+  sendRpcResult(req, res, traced);
 }
 
 /** Start the mobile server. Resolves with a handle (running:false if disabled
@@ -316,13 +420,13 @@ export async function startMobileServer(): Promise<MobileServerHandle> {
 
     // ── Unauthenticated routes ──────────────────────────────────────────
     if (path === "/api/health") {
-      sendJson(res, 200, { ok: true, endpoint, dbReady: !!getDb() });
+      sendJson(req, res, 200, { ok: true, endpoint, dbReady: !!getDb() });
       return;
     }
     if (path === "/api/pair/verify" && req.method === "POST") {
       handlePairVerify(req, res, endpoint).catch((err) => {
         log.error(`mobile: pair/verify failed: ${(err as Error).message}`);
-        sendJson(res, 500, { error: "internal error" });
+        sendJson(req, res, 500, { error: "internal error" });
       });
       return;
     }
@@ -341,7 +445,7 @@ export async function startMobileServer(): Promise<MobileServerHandle> {
         authPromise
           .then((device) => {
             if (!device) {
-              sendJson(res, 401, { ok: false, error: "unauthorized" });
+              sendJson(req, res, 401, { ok: false, error: "unauthorized" });
               return;
             }
             const body: MobileAuthCheckResult = {
@@ -350,11 +454,11 @@ export async function startMobileServer(): Promise<MobileServerHandle> {
               name: device.name,
               endpoint,
             };
-            sendJson(res, 200, body);
+            sendJson(req, res, 200, body);
           })
           .catch((err) => {
             log.error(`mobile: auth/check failed: ${(err as Error).message}`);
-            sendJson(res, 500, { ok: false, error: "internal error" });
+            sendJson(req, res, 500, { ok: false, error: "internal error" });
           });
         return;
       }
@@ -362,7 +466,7 @@ export async function startMobileServer(): Promise<MobileServerHandle> {
       if (path === "/api/events" && req.method === "GET") {
         authPromise.then((device) => {
           if (!device) {
-            sendJson(res, 401, { error: "unauthorized" });
+            sendJson(req, res, 401, { error: "unauthorized" });
             return;
           }
           handleEvents(req, res);
@@ -373,19 +477,38 @@ export async function startMobileServer(): Promise<MobileServerHandle> {
         authPromise
           .then((device) => {
             if (!device) {
-              sendJson(res, 401, { ok: false, error: "unauthorized", status: 401 });
+              sendJson(req, res, 401, { ok: false, error: "unauthorized", status: 401 });
               return;
             }
             return handleRpc(req, res, device);
           })
           .catch((err) => {
             log.error(`mobile: rpc failed: ${(err as Error).message}`);
-            sendJson(res, 500, { ok: false, error: "internal error", status: 500 });
+            sendJson(req, res, 500, { ok: false, error: "internal error", status: 500 });
+          });
+        return;
+      }
+      // Media streaming for the phone's inline video players (chat media
+      // cards). `<video>` cannot set an Authorization header, so auth rides
+      // the ?token= query param — the same channel EventSource already uses.
+      if (path === "/api/media" && req.method === "GET") {
+        authPromise
+          .then((device) => {
+            if (!device) {
+              sendJson(req, res, 401, { ok: false, error: "unauthorized" });
+              return;
+            }
+            return handleMediaRequest(req, res);
+          })
+          .catch((err) => {
+            log.error(`mobile: media failed: ${(err as Error).message}`);
+            if (!res.headersSent) sendJson(req, res, 500, { ok: false, error: "internal error" });
+            else res.destroy();
           });
         return;
       }
       // Unknown /api route.
-      sendJson(res, 404, { error: "not found" });
+      sendJson(req, res, 404, { error: "not found" });
       return;
     }
 

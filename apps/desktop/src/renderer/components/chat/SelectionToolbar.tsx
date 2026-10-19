@@ -1,8 +1,8 @@
 /**
  * Floating mini toolbar shown when the user selects text inside a chat
- * message: [copy] [add bookmark]. Copy stays first-class here — selecting
- * text in a chat is usually about copying, so the bookmark affordance rides
- * along instead of replacing it.
+ * message: [copy] [add bookmark] [add to chat] [ask side chat]. Copy stays
+ * first-class here — selecting text in a chat is usually about copying, so
+ * the other affordances ride along instead of replacing it.
  *
  * Anchored above the selection rect with `position: fixed` + a portal to
  * document.body — the chat list is a LegendList whose items carry
@@ -17,7 +17,7 @@ import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { cn } from "@renderer/lib/cn.js";
 import { useI18n } from "@renderer/lib/i18n/index.js";
-import { IconBookmark, IconCheck, IconCopy, IconMessages } from "@renderer/lib/icons.js";
+import { IconBookmark, IconCheck, IconCopy, IconMessages, IconQuote } from "@renderer/lib/icons.js";
 
 /** What the owning ChatPane captured at mouseup: a viewport-space snapshot of
  *  the selection plus the message it belongs to (resolved from
@@ -33,7 +33,9 @@ export interface SelectionToolbarState {
 export function SelectionToolbar({
   state,
   onAddBookmark,
+  onAddToChat,
   onAskSideChat,
+  showAddToChat = true,
   onClose,
 }: {
   state: SelectionToolbarState;
@@ -41,9 +43,15 @@ export function SelectionToolbar({
    *  the selection and closes the toolbar (which the selectionchange close
    *  would do anyway once the selection is gone). */
   onAddBookmark: (s: SelectionToolbarState) => void;
+  /** Seed THIS chat's composer with the selected text as a content card. */
+  onAddToChat: (s: SelectionToolbarState) => void;
   /** Send the selection to the side chat (opens the ask tab and seeds its
    *  composer with the text). */
   onAskSideChat: (s: SelectionToolbarState) => void;
+  /** False hides the add-to-chat button — panes rendered without a composer
+   *  (automation runs in SchedPanel) have nowhere for the text to land, and
+   *  a silent no-op button is worse than an absent one. */
+  showAddToChat?: boolean;
   onClose: () => void;
 }) {
   const { t } = useI18n();
@@ -134,6 +142,19 @@ export function SelectionToolbar({
       >
         <IconBookmark size={12} />
       </button>
+      {showAddToChat && (
+        <>
+          <span className="h-3 w-px bg-edge/60" />
+          <button
+            type="button"
+            onClick={() => onAddToChat(state)}
+            title={t("chatStream.bookmark.addToChat")}
+            className="flex items-center gap-1 rounded-md px-1.5 py-1 text-[10px] text-content-subtle transition-colors hover:bg-surface-hover hover:text-accent"
+          >
+            <IconQuote size={12} />
+          </button>
+        </>
+      )}
       <span className="h-3 w-px bg-edge/60" />
       <button
         type="button"

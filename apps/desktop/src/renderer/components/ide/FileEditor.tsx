@@ -24,6 +24,8 @@ import {
   IconLayoutColumns,
   IconLayoutSidebarRight,
   IconVideo,
+  IconChevronLeft,
+  IconChevronRight,
 } from "@renderer/lib/icons.js";
 import { appResourceUrl } from "@renderer/lib/appResource.js";
 import { Menu } from "@base-ui/react/menu";
@@ -53,7 +55,7 @@ import { useI18n } from "@renderer/lib/i18n/index.js";
 import type { MessageId } from "@renderer/lib/i18n/core.js";
 import { setLastCursor, type NavEntry } from "@renderer/lib/editorNav.js";
 import { useScrollMemory } from "@renderer/lib/scrollMemory.js";
-import { resolveShortcut, acceleratorToDisplayString } from "@renderer/lib/shortcuts.js";
+import { resolveShortcut, acceleratorToDisplayString, isEditableTarget } from "@renderer/lib/shortcuts.js";
 // Monaco model cache (keepCurrentModel ownership): hot tab switches reuse the
 // cached TextModel — tokenization, undo history and unsaved edits survive.
 import {
@@ -156,7 +158,7 @@ export function FileEditor({
           <DiffPane filePath={filePath} before={diffBefore} after={diffAfter} />
         ) : effectiveMode === "preview" ? (
           image ? (
-            <ImagePreviewPane filePath={filePath} />
+            <ImagePreviewPane filePath={filePath} projectPath={projectPath} />
           ) : video ? (
             <VideoPreviewPane filePath={filePath} />
           ) : unsupported ? (
@@ -1344,6 +1346,13 @@ function MarkdownPreviewPane({ filePath, projectPath }: { filePath: string; proj
 
 /* ───────────────────────── Image preview ───────────────────────── */
 
+/** Comparison key for matching a `file.listDir` entry against the active file
+ *  path — different producers emit different drive-letter casing and `\\` vs
+ *  `/` separators, so compare normalized + case-insensitive. */
+function imagePathKey(p: string): string {
+  return p.replace(/\\/g, "/").toLowerCase();
+}
+
 /** Read-only image preview. Fetches the file as a base64 `data:` URL via the
  *  `file.readBinary` IPC (the main process reads the bytes and enforces the
  *  project-root path guard), then renders it in an `<img>`. Centered, with a
@@ -1352,12 +1361,36 @@ function MarkdownPreviewPane({ filePath, projectPath }: { filePath: string; proj
  *
  *  Uses a data URL (not a custom protocol or `file://`) so it works under the
  *  production CSP (`img-src 'self' data:`) with no extra privilege grants.
- *  No dirty tracking - images are read-only. */
-function ImagePreviewPane({ filePath }: { filePath: string }) {
+ *  No dirty tracking - images are read-only.
+ *
+ *  Sibling gallery: the pane lists the containing directory (via
+ *  `file.listDir`, same ordering the file tree shows — dirs first, then
+ *  alphabetical) and, when OTHER images sit beside the current one, offers
+ *  prev/next chevrons + a position counter + ←/→ keys. Stepping calls the
+ *  store's `replaceIdeFile`, which swaps the open tab IN PLACE (one tab per
+ *  folder browse, not one per image) and re-points this pane at the new file.
+ *  The nav chrome lives OUTSIDE the scrolling stage (and above the loading /
+ *  error states) so it survives image-to-image swaps. */
+function ImagePreviewPane({
+  filePath,
+  projectPath,
+}: {
+  filePath: string;
+  projectPath: string;
+}) {
   const { t } = useI18n();
   const [natural, setNatural] = useState(false);
   // null = loading, "" = error/empty, non-empty = valid data URL
   const [dataUrl, setDataUrl] = useState<string | null>(null);
+
+  /* ── sibling-image gallery ── */
+  // null = listing not (yet) available; empty = no siblings → no nav chrome.
+  const [siblings, setSiblings] = useState<string[] | null>(null);
+  const replaceIdeFile = useSessionStore((s) => s.replaceIdeFile);
+  // Root of the pane — used to prove visibility before honoring ←/→ (the
+  // editor column survives focus flips as a hidden keep-alive in wide mode;
+  // `offsetParent` is null under `display:none`).
+  const rootRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -1376,54 +1409,146 @@ function ImagePreviewPane({ filePath }: { filePath: string }) {
     };
   }, [filePath]);
 
-  // Loading state.
-  if (dataUrl === null) {
-    return (
-      <div className="flex h-full items-center justify-center gap-1.5 text-[11px] text-content-subtle">
-        <IconLoader2 size={12} className="animate-spin" />
-        {t("ide.editor.readingImage")}
-      </div>
-    );
-  }
-  // Error / empty (refused or unreadable).
-  if (!dataUrl) {
-    return (
-      <div className="flex h-full flex-col items-center justify-center gap-2 p-6 text-center">
-        <IconPhotoOff size={32} className="text-content-subtle" />
-        <p className="text-[12px] font-medium text-content-muted">{t("ide.editor.imageLoadFailed")}</p>
-        <p className="max-w-[320px] text-[11px] leading-relaxed text-content-subtle">
-          {t("ide.editor.imageLoadFailedDesc")}
-        </p>
-      </div>
-    );
-  }
+  // Fetch the folder listing for the gallery. listDir refuses paths outside
+  // the project root (returns []) — the chrome just doesn't appear there.
+  useEffect(() => {
+    let cancelled = false;
+    setSiblings(null);
+    const rel = relativePath(dirname(filePath), projectPath);
+    api.file
+      .listDir({ projectPath, dirPath: rel })
+      .then(({ entries }) => {
+        if (cancelled) return;
+        setSiblings(entries.filter((e) => !e.isDir && isImage(e.path)).map((e) => e.path));
+      })
+      .catch(() => {
+        if (!cancelled) setSiblings([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [filePath, projectPath]);
+
+  const gallery = siblings != null && siblings.length > 1 ? siblings : null;
+  const galleryIdx = gallery
+    ? gallery.findIndex((p) => imagePathKey(p) === imagePathKey(filePath))
+    : -1;
+
+  const step = (delta: number) => {
+    if (!gallery || galleryIdx < 0) return;
+    const next = gallery[galleryIdx + delta];
+    if (!next) return;
+    replaceIdeFile(filePath, next);
+  };
+
+  // ←/→ step through the gallery. Bare arrows only: modified chords belong to
+  // the shortcut system; editable targets (composer, Monaco, terminal) keep
+  // their caret; open dialogs/menus (chat lightbox, confirm boxes, pickers)
+  // own their arrows; and a hidden pane (wide-mode keep-alive) never steals
+  // keys from the visible surface.
+  useEffect(() => {
+    if (!gallery || galleryIdx < 0) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+      if (e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return;
+      if (isEditableTarget(e.target)) return;
+      if (document.querySelector('[role="dialog"], [role="menu"]')) return;
+      const root = rootRef.current;
+      if (!root || root.offsetParent === null) return;
+      e.preventDefault();
+      step(e.key === "ArrowLeft" ? -1 : 1);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [gallery, galleryIdx, filePath, replaceIdeFile]);
+
+  const prevTitle = t("ide.editor.imagePrev");
+  const nextTitle = t("ide.editor.imageNext");
 
   return (
-    <div
-      className="h-full overflow-auto bg-surface"
-      style={{
-        backgroundImage:
-          "linear-gradient(45deg, var(--color-surface-muted) 25%, transparent 25%), linear-gradient(-45deg, var(--color-surface-muted) 25%, transparent 25%), linear-gradient(45deg, transparent 75%, var(--color-surface-muted) 75%), linear-gradient(-45deg, transparent 75%, var(--color-surface-muted) 75%)",
-        backgroundSize: "16px 16px",
-        backgroundPosition: "0 0, 0 8px, 8px -8px, -8px 0",
-      }}
-    >
+    <div ref={rootRef} className="relative h-full">
       <div
-        className="flex min-h-full min-w-full items-center justify-center p-6"
-        onClick={() => setNatural((n) => !n)}
-        title={natural ? t("ide.editor.imageFitHint") : t("ide.editor.imageNaturalHint")}
+        className="h-full overflow-auto bg-surface"
+        style={{
+          backgroundImage:
+            "linear-gradient(45deg, var(--color-surface-muted) 25%, transparent 25%), linear-gradient(-45deg, var(--color-surface-muted) 25%, transparent 25%), linear-gradient(45deg, transparent 75%, var(--color-surface-muted) 75%), linear-gradient(-45deg, transparent 75%, var(--color-surface-muted) 75%)",
+          backgroundSize: "16px 16px",
+          backgroundPosition: "0 0, 0 8px, 8px -8px, -8px 0",
+        }}
       >
-        <img
-          src={dataUrl}
-          alt={filePath}
-          className={cn(
-            "transition-shadow",
-            natural ? "cursor-zoom-out" : "cursor-zoom-in",
-            "max-h-full max-w-full object-contain shadow-lg",
-          )}
-          style={natural ? { maxHeight: "none", maxWidth: "none" } : undefined}
-        />
+        {dataUrl === null ? (
+          // Loading state.
+          <div className="flex h-full items-center justify-center gap-1.5 text-[11px] text-content-subtle">
+            <IconLoader2 size={12} className="animate-spin" />
+            {t("ide.editor.readingImage")}
+          </div>
+        ) : !dataUrl ? (
+          // Error / empty (refused or unreadable).
+          <div className="flex h-full flex-col items-center justify-center gap-2 p-6 text-center">
+            <IconPhotoOff size={32} className="text-content-subtle" />
+            <p className="text-[12px] font-medium text-content-muted">{t("ide.editor.imageLoadFailed")}</p>
+            <p className="max-w-[320px] text-[11px] leading-relaxed text-content-subtle">
+              {t("ide.editor.imageLoadFailedDesc")}
+            </p>
+          </div>
+        ) : (
+          <div
+            className="flex min-h-full min-w-full items-center justify-center p-6"
+            onClick={() => setNatural((n) => !n)}
+            title={natural ? t("ide.editor.imageFitHint") : t("ide.editor.imageNaturalHint")}
+          >
+            <img
+              src={dataUrl}
+              alt={filePath}
+              className={cn(
+                "transition-shadow",
+                natural ? "cursor-zoom-out" : "cursor-zoom-in",
+                "max-h-full max-w-full object-contain shadow-lg",
+              )}
+              style={natural ? { maxHeight: "none", maxWidth: "none" } : undefined}
+            />
+          </div>
+        )}
       </div>
+      {/* Gallery chrome — floats over the stage, never scrolls with it. */}
+      {gallery && galleryIdx >= 0 && (
+        <>
+          <button
+            type="button"
+            onClick={() => step(-1)}
+            disabled={galleryIdx <= 0}
+            title={prevTitle}
+            aria-label={prevTitle}
+            className={cn(
+              "absolute left-3 top-1/2 z-10 flex h-8 w-8 -translate-y-1/2 items-center justify-center",
+              "rounded-full border border-edge bg-surface/90 text-content-muted shadow-md backdrop-blur-sm",
+              "transition-colors hover:bg-surface-hover hover:text-content",
+              "disabled:pointer-events-none disabled:opacity-30",
+            )}
+          >
+            <IconChevronLeft size={16} />
+          </button>
+          <button
+            type="button"
+            onClick={() => step(1)}
+            disabled={galleryIdx >= gallery.length - 1}
+            title={nextTitle}
+            aria-label={nextTitle}
+            className={cn(
+              "absolute right-3 top-1/2 z-10 flex h-8 w-8 -translate-y-1/2 items-center justify-center",
+              "rounded-full border border-edge bg-surface/90 text-content-muted shadow-md backdrop-blur-sm",
+              "transition-colors hover:bg-surface-hover hover:text-content",
+              "disabled:pointer-events-none disabled:opacity-30",
+            )}
+          >
+            <IconChevronRight size={16} />
+          </button>
+          <span className="pointer-events-none absolute bottom-3 left-1/2 z-10 -translate-x-1/2 rounded-full border border-edge bg-surface/90 px-2.5 py-0.5 text-[11px] font-medium tabular-nums text-content-muted shadow-md backdrop-blur-sm">
+            {galleryIdx + 1} / {gallery.length}
+          </span>
+        </>
+      )}
     </div>
   );
 }

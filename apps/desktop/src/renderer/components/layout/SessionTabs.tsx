@@ -18,7 +18,6 @@ import {
 import { CSS } from "@dnd-kit/utilities";
 import { cn } from "@renderer/lib/cn.js";
 import { IconX, SpinnerIcon } from "@renderer/lib/icons.js";
-import { getProviderIcon } from "@renderer/lib/providerIcon.js";
 import { projectDisplayColor } from "@renderer/lib/projectAvatar.js";
 import { useSessionStore, orchRunningAnchors } from "@renderer/stores/sessionStore.js";
 import type { Session } from "@contracts/session";
@@ -390,14 +389,7 @@ export function SortableSessionTab({
           color={projectDisplayColor(project, projectColors)}
         />
       )}
-      {/* Provider brand mark follows the project identity. */}
-      {(() => {
-        const { Icon, color } = getProviderIcon(session?.providerId);
-        return <Icon size={13} className={cn("shrink-0", color)} />;
-      })()}
-      {/* Running spinner — the only in-flight indicator on the tab. The old
-          idle dot is gone: with project + provider marks up front the chip
-          already has enough leading furniture. */}
+      {/* Running spinner — the only in-flight indicator on the tab. */}
       {running && (
         <SpinnerIcon size={12} className="shrink-0 animate-spin text-accent" />
       )}

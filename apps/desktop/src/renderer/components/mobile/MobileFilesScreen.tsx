@@ -177,7 +177,14 @@ export function MobileFilesScreen() {
       </div>
 
       {openFile && (
-        <FileViewerOverlay name={openFile.name} path={openFile.path} onClose={() => setOpenFile(null)} />
+        <FileViewerOverlay
+          name={openFile.name}
+          path={openFile.path}
+          onClose={() => setOpenFile(null)}
+          // setState setter — stable identity (the viewer's gallery effect
+          // keys on it), and it keeps the header title in sync while stepping.
+          onNavigate={setOpenFile}
+        />
       )}
     </ScreenShell>
   );

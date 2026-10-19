@@ -28,6 +28,7 @@ import { useSuppressBrowserView } from "@renderer/hooks/useSuppressBrowserView.j
 import { useI18n, type MessageId } from "@renderer/lib/i18n/index.js";
 import { useSessionStore, type Block } from "@renderer/stores/sessionStore.js";
 import { appResourceUrl } from "@renderer/lib/appResource.js";
+import { authenticatedMediaUrl } from "@renderer/lib/webApi.js";
 import {
   IconArrowsMaximize,
   IconArrowsMinimize,
@@ -58,6 +59,17 @@ export type MediaItem =
 const TILE_W = 300;
 const TILE_H = 200;
 
+/** Resolve the video element's source for one absolute file path, per
+ *  transport. Desktop windows stream via the guarded `app-resource://`
+ *  protocol (Electron-main registered). The phone's browser can't see that
+ *  scheme, so the web build uses the mobile server's token-authenticated
+ *  `/api/media` route (same fence, Range-capable) — null there means
+ *  unpaired, which renders as the unplayable tile. */
+function videoSrcFor(filePath: string): string {
+  if (isElectron) return appResourceUrl(filePath);
+  return authenticatedMediaUrl(filePath) ?? "";
+}
+
 function toMediaItem(b: MediaBlock, t: (key: MessageId) => string): MediaItem {
   if (b.kind === "image") {
     return {
@@ -67,7 +79,7 @@ function toMediaItem(b: MediaBlock, t: (key: MessageId) => string): MediaItem {
     };
   }
   const name = b.filePath.split(/[\\/]/).pop() ?? b.filePath;
-  return { kind: "video", src: appResourceUrl(b.filePath), name, filePath: b.filePath };
+  return { kind: "video", src: videoSrcFor(b.filePath), name, filePath: b.filePath };
 }
 
 function formatDuration(seconds: number): string | null {
@@ -86,7 +98,10 @@ function MediaTile({ item, onOpen }: { item: MediaItem; onOpen: () => void }) {
   const [failed, setFailed] = useState(false);
   const [duration, setDuration] = useState<string | null>(null);
 
-  if (item.kind === "video" && failed) {
+  // Broken tile: Chromium can't decode the file, OR the web client has no
+  // device token (empty src — unpaired phone). Either way the media is
+  // unwatchable here; name it and stop.
+  if (item.kind === "video" && (failed || !item.src)) {
     return (
       <div
         className="flex shrink-0 flex-col items-center justify-center gap-1.5 rounded-lg border border-edge bg-surface-muted/60 px-3 text-center"
