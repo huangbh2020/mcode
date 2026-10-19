@@ -76,6 +76,12 @@ export const en = {
   "ide.editor.imageLoadFailedDesc": "This image can't be previewed. It may be corrupted or in an unsupported format",
   "ide.editor.imageFitHint": "Click to fit to window",
   "ide.editor.imageNaturalHint": "Click to view original size",
+  "ide.editor.imagePrev": "Previous image (←)",
+  "ide.editor.imageNext": "Next image (→)",
+  "ide.editor.readingVideo": "Loading video…",
+  "ide.editor.videoUnsupported": "Can't play this video",
+  "ide.editor.videoUnsupportedDesc":
+    "The built-in player doesn't support this video's container or codec. Open it with your system player instead",
   "ide.editor.unknownExt": "Unknown",
   "ide.editor.cannotPreview": "Can't preview {ext} files",
   "ide.editor.unsupportedDesc":
@@ -357,4 +363,16 @@ export const en = {
   "ide.turns.usageTotal": "{n} tokens total",
   "ide.turns.cacheHit": "{n}% cache hit",
   "ide.turns.noUsage": "No usage record",
+
+  /* ── Terminal sessions (kind="terminal": a PTY tab running the user's own Claude CLI) ── */
+  "ide.termSession.cliBadge": "CLI {version}",
+  "ide.termSession.cliMissing": "claude CLI not found",
+  "ide.termSession.cliMissingHint": "The claude command is not on PATH. Install Claude Code CLI and restart this session; you can still run other commands manually in the terminal.",
+  "ide.termSession.restored": "History restored, restarting CLI…",
+  "ide.termSession.historySeparator": "Restored history above — new session below",
+  "ide.termSession.restart": "Restart terminal",
+  "ide.termSession.clear": "Clear",
+  "ide.termSession.statusStarting": "Starting",
+  "ide.termSession.statusRunning": "Running",
+  "ide.termSession.statusExited": "Exited",
 } as const;

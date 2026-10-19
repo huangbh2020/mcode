@@ -29,7 +29,7 @@ import { useCursorAnchor } from "@renderer/hooks/useCursorAnchor.js";
 import { isElectron } from "@renderer/lib/platform.js";
 import { useSessionStore, resolveTurnModel, EMPTY_MESSAGES, EMPTY_TODOS, EMPTY_SUBAGENTS, EMPTY_CHAT_QUEUE, EMPTY_ELEMENT_QUEUE, EMPTY_PROMPT_QUEUE, EMPTY_BOOKMARKS, EMPTY_USAGE, EMPTY_BASH_TASKS, EMPTY_SERVICES, STREAM_RATE_STALE_MS, type Block, type ChatMessage, type TodoItem, type TurnMeta, type QueuedPrompt, type StreamRateSnapshot } from "@renderer/stores/sessionStore.js";
 import { useToastStore } from "@renderer/stores/toastStore.js";
-import { api } from "@renderer/lib/api.js";
+import { api, isWebTransport } from "@renderer/lib/api.js";
 import { findNormalizedTextRange, highlightRange } from "@renderer/lib/textFind.js";
 import { useI18n } from "@renderer/lib/i18n/index.js";
 import { useNow } from "@renderer/hooks/useNow.js";
@@ -52,6 +52,7 @@ import {
 } from "@renderer/lib/contentTag.js";
 import type { SkillInfo, BuiltInCommand } from "@renderer/lib/slashCommands.js";
 import { MessageBlocks, TurnPanel, BatchToolGroup, Chevron, isFoldableBlock, TURN_FOLD_MS, type ProceduralBlock, type BeforeContentMap, type ToolUseBlock } from "./MessageBlocks.js";
+import type { MediaBlock } from "./mediaGallery.js";
 import { CurrentOpTicker } from "./CurrentOpTicker.js";
 import { ModelBadge } from "./ModelAvatar.js";
 import { turnTokenUsage, CUMULATIVE_USAGE_PROVIDER_IDS } from "@renderer/lib/turnTokens.js";
@@ -177,9 +178,13 @@ function preserveUserLineBreaks(text: string): string {
 const NEAR_BOTTOM_THRESHOLD = 80;
 
 /** Pixel distance from the top of the scroll surface that triggers loading
- *  one page of older messages. A couple of rows is enough — the fetch is
- *  async and the store dedupes concurrent calls. */
-const NEAR_TOP_THRESHOLD = 120;
+ *  one page of older messages. On the desktop a couple of rows is enough —
+ *  the IPC fetch is near-instant. On the phone the page crosses the network
+ *  (a fast flick travels thousands of px in one gesture), so the trigger
+ *  fires a full screen early to keep older content ready before the user
+ *  reaches the wall. Either way the fetch is async and the store dedupes
+ *  concurrent calls. */
+const NEAR_TOP_THRESHOLD = isWebTransport ? 1200 : 120;
 
 /** Slack (px) for the timeline's active-dash walk: a user message counts as
  *  "scrolled past" once its item top is within this distance of the viewport
@@ -965,29 +970,31 @@ function groupMessagesForRender(
       panelBlocks = panelBlocks.filter((b) => b.kind !== "turn-files");
     }
 
-    // Pull ALL screenshot image blocks out of the PROCESS surface too. Images
-    // are user-facing RESULTS, not process: they're attached right after their
-    // tool_use (which sits inside the panel), so the slice above would fold
-    // them behind the collapsed TurnPanel and the user would never see the
-    // screenshots. Extract every image (from both panelBlocks and the reply
-    // textMsgs, in case one landed after the last tool) into a single
-    // gallery, re-emitted as one trailing message — the render layer's
-    // groupBlocks merges consecutive image blocks into a swipeable gallery.
-    const panelImages: Extract<Block, { kind: "image" }>[] = [];
-    if (panelBlocks.some((b) => b.kind === "image")) {
-      panelImages.push(...(panelBlocks.filter((b) => b.kind === "image") as Extract<Block, { kind: "image" }>[]));
-      panelBlocks = panelBlocks.filter((b) => b.kind !== "image");
+    // Pull ALL media blocks (screenshots + script-generated videos) out of
+    // the PROCESS surface. Media is a user-facing RESULT, not process: these
+    // blocks attach right after their tool_use (which sits inside the panel),
+    // so the slice above would fold them behind the collapsed TurnPanel and
+    // the user would never see them. Extract every image/video (from both
+    // panelBlocks and the reply textMsgs, in case one landed after the last
+    // tool) in TIMELINE ORDER into one list, re-emitted as a single trailing
+    // message — the render layer's groupBlocks merges the consecutive media
+    // blocks into one wrap row of uniform tiles with a shared lightbox.
+    const panelMedia: Block[] = [];
+    const isMediaBlock = (b: Block): b is MediaBlock => b.kind === "image" || b.kind === "video";
+    if (panelBlocks.some(isMediaBlock)) {
+      panelMedia.push(...panelBlocks.filter(isMediaBlock));
+      panelBlocks = panelBlocks.filter((b) => !isMediaBlock(b));
     }
-    // Images that landed after the last tool (rare, but possible when a
-    // screenshot is the very last action) sit in textMsgs; sweep them out of
-    // their host message and into the gallery.
-    if (textMsgs.some((m) => m.blocks.some((b) => b.kind === "image"))) {
+    // Media that landed after the last tool (rare, but possible when a
+    // capture/render is the very last action) sits in textMsgs; sweep it out
+    // of its host message and into the same trailing list.
+    if (textMsgs.some((m) => m.blocks.some(isMediaBlock))) {
       const swept: ChatMessage[] = [];
       for (const m of textMsgs) {
-        const imgs = m.blocks.filter((b) => b.kind === "image") as Extract<Block, { kind: "image" }>[];
-        if (imgs.length > 0) {
-          panelImages.push(...imgs);
-          const rest = m.blocks.filter((b) => b.kind !== "image");
+        const media = m.blocks.filter(isMediaBlock);
+        if (media.length > 0) {
+          panelMedia.push(...media);
+          const rest = m.blocks.filter((b) => !isMediaBlock(b));
           if (rest.length > 0) swept.push({ ...m, blocks: rest });
         } else {
           swept.push(m);
@@ -1060,21 +1067,22 @@ function groupMessagesForRender(
       }
     }
 
-    // Re-emit the turn's screenshots as ONE trailing gallery message (the
-    // render layer's groupBlocks merges the consecutive image blocks into a
-    // swipeable ImageGallery). Appended AFTER the footer cards so the visible
-    // order is: reply text → plan/files cards → screenshots. A screenshot-only
-    // turn (no reply text) still gets its gallery via the synthesized carrier.
-    if (panelImages.length > 0) {
+    // Re-emit the turn's media (screenshots + videos, timeline order) as ONE
+    // trailing message — the render layer's groupBlocks merges the consecutive
+    // media blocks into a single wrap row of uniform tiles with a shared
+    // lightbox. Appended AFTER the footer cards so the visible order is:
+    // reply text → plan/files cards → media. A media-only turn (no reply
+    // text) still gets its row via the synthesized carrier.
+    if (panelMedia.length > 0) {
       const tail = textMsgs.length > 0 ? textMsgs[textMsgs.length - 1] : null;
       textMsgs.push(
         tail
-          ? { ...tail, id: `images_tail_${tail.id}`, turnMeta: undefined, blocks: panelImages }
+          ? { ...tail, id: `media_tail_${tail.id}`, turnMeta: undefined, blocks: panelMedia }
           : {
-              id: `images_tail_${turnMeta?.startedAt ?? Date.now()}`,
+              id: `media_tail_${turnMeta?.startedAt ?? Date.now()}`,
               sessionId: "",
               role: "assistant",
-              blocks: panelImages,
+              blocks: panelMedia,
               createdAt: Date.now(),
             },
       );
@@ -2221,6 +2229,22 @@ function ChatPaneForSession({
       });
     },
     [addBookmark, sessionId, t],
+  );
+
+  /** Selection-toolbar "添加到当前聊天": seed THIS pane's composer with the
+   *  selected text as a CONTENT CARD above the input (same chip + popover +
+   *  compose-at-send pipeline as the side-chat seed / a bulky paste — the
+   *  quote can be long, and the card keeps the input area free for the
+   *  user's actual question). The chip appearing + editor focus is the
+   *  feedback — no toast. */
+  const handleAddSelectionToChat = useCallback(
+    (sel: SelectionToolbarState) => {
+      setTags((prev) => [...prev, makeContentTag(sel.text)]);
+      window.getSelection()?.removeAllRanges();
+      setSelectionToolbar(null);
+      editorRef.current?.focus();
+    },
+    [],
   );
 
   /** Selection-toolbar "发送到子会话": route the selected text to the side
@@ -4220,13 +4244,16 @@ function ChatPaneForSession({
         />
       )}
 
-      {/* Floating [copy | add bookmark] toolbar over the current text
-          selection (portals to body — see SelectionToolbar). */}
+      {/* Floating [copy | add bookmark | add to chat | ask side chat] toolbar
+          over the current text selection (portals to body — see
+          SelectionToolbar). */}
       {selectionToolbar && (
         <SelectionToolbar
           state={selectionToolbar}
           onAddBookmark={handleAddBookmark}
+          onAddToChat={handleAddSelectionToChat}
           onAskSideChat={handleAskSideChat}
+          showAddToChat={!hideComposer}
           onClose={() => setSelectionToolbar(null)}
         />
       )}

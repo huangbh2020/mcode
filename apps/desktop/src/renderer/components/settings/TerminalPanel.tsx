@@ -3,11 +3,11 @@ import { useSessionStore } from "@renderer/stores/sessionStore.js";
 import { api } from "@renderer/lib/api.js";
 import { cn } from "@renderer/lib/cn.js";
 import { useI18n } from "@renderer/lib/i18n/index.js";
-import { Button, Dialog, Input, Select } from "@renderer/components/ui/index.js";
+import { Button, Dialog, Input, Select, Switch } from "@renderer/components/ui/index.js";
 import { PanelHeader } from "./PanelHeader.js";
 import { SettingsSection } from "./SettingsSection.js";
 import { SettingRow } from "./SettingRow.js";
-import { TERMINAL_SHELL_SETTING_KEY } from "@contracts/ipc";
+import { TERMINAL_HISTORY_SETTING_KEY, TERMINAL_SHELL_SETTING_KEY } from "@contracts/ipc";
 import type { CustomCommand } from "@contracts/ipc";
 import {
   IconPlus,
@@ -38,9 +38,53 @@ export function TerminalPanel() {
     <section className="mx-auto w-full max-w-3xl space-y-4">
       <PanelHeader title={t("settings.terminal.title")} />
       <PositionSection />
+      <HistorySection />
       <ShellSection />
       <CommandsSection />
     </section>
+  );
+}
+
+/* ───────────────────────── History section ───────────────────────── */
+
+/** Terminal-session scrollback persistence toggle (`terminal.persistHistory`,
+ *  default ON — stored "0" disables). Same api.setting pattern as the shell
+ *  field: no store field, main's saveHistory handler reads it per call. */
+function HistorySection() {
+  const { t } = useI18n();
+  const [enabled, setEnabled] = useState(true);
+  const [loaded, setLoaded] = useState(false);
+
+  useEffect(() => {
+    void (async () => {
+      const { value } = await api.setting.get({ key: TERMINAL_HISTORY_SETTING_KEY });
+      setEnabled(value !== "0");
+      setLoaded(true);
+    })();
+  }, []);
+
+  return (
+    <SettingsSection
+      title={t("settings.terminal.historySection")}
+      desc={t("settings.terminal.historySectionDesc")}
+    >
+      <SettingRow
+        title={t("settings.terminal.persistHistory")}
+        desc={t("settings.terminal.persistHistoryDesc")}
+        htmlFor="setting-terminal-persist-history"
+      >
+        <Switch
+          id="setting-terminal-persist-history"
+          checked={enabled}
+          disabled={!loaded}
+          onCheckedChange={(v) => {
+            setEnabled(v);
+            void api.setting.set({ key: TERMINAL_HISTORY_SETTING_KEY, value: v ? "1" : "0" });
+          }}
+          label={enabled ? t("settings.on") : t("settings.off")}
+        />
+      </SettingRow>
+    </SettingsSection>
   );
 }
 

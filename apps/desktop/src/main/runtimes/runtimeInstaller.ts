@@ -702,12 +702,14 @@ export async function listRuntimes(): Promise<RuntimeAgentState[]> {
       activePath: managed?.entry ?? fallback?.path ?? null,
       latestVersion: latest,
       installed: managed !== null,
-      // Stale vs this build's pin — unless the user already moved to the
-      // upstream latest (a manual "update to latest" must not leave a
-      // permanent "update available" badge). Offline (latest null) degrades
-      // to the historical pin comparison.
+      // Stale vs this build's pin: only true if activeVersion is strictly OLDER
+      // than expected[agent]. If the user is on a newer version (e.g. active 1.1.0 vs
+      // pin 1.0.2), it is NOT stale and must never suggest a downgrade.
+      // Additionally, if the user is already on the upstream latest, suppress the badge.
       updateAvailable:
-        activeVersion !== null && activeVersion !== expected[agent] && activeVersion !== latest,
+        activeVersion !== null &&
+        compareVersions(activeVersion.replace(/^v/i, ""), expected[agent].replace(/^v/i, "")) < 0 &&
+        (latest === null || compareVersions(activeVersion.replace(/^v/i, ""), latest.replace(/^v/i, "")) < 0),
       installing: installing.get(agent) ?? false,
       lastError: lastErrors.get(agent) ?? "",
       diskBytes: managed ? dirSizeCached(managed.dir) : 0,

@@ -23,7 +23,7 @@ if [[ -z "$ESBUILD" ]]; then ESBUILD="npx esbuild"; fi
   --tsconfig=tsconfig.json \
   --alias:@renderer/lib/api.js=./scripts/stream-aggregate-smoke/stub-api.ts \
   --alias:@renderer/lib/monacoSetup.js=./scripts/stream-aggregate-smoke/stub-monacoSetup.ts \
-  --banner:js="globalThis.window=globalThis.window||{};globalThis.navigator=globalThis.navigator||{userAgent:'node',maxTouchPoints:0};" \
+  --banner:js="globalThis.window=globalThis.window||{};try{globalThis.navigator=globalThis.navigator||{userAgent:'node',maxTouchPoints:0}}catch{}" \
   --outfile="$OUT/smoke.mjs" --log-level=error
 
 node "$OUT/smoke.mjs"

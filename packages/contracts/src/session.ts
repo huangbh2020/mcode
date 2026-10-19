@@ -92,8 +92,13 @@ export interface Session {
    *  automation task (parentSessionId = null; the owning task is referenced
    *  by automationId) — created directly by the automation scheduler in
    *  main, invisible to every list/search query, surfaced only inside the
-   *  automation page's run history. */
-  kind: "chat" | "side" | "orch-worker" | "automation";
+   *  automation page's run history. "terminal" = a live PTY session running
+   *  the user's own Claude CLI in interactive TTY mode (TerminalSessionPane)
+   *  — visible in the normal lists like chat, but with NO message stream:
+   *  the transcript lives inside the terminal; only a serialized scrollback
+   *  snapshot is persisted for restart restore. claudeSessionId holds the
+   *  pre-generated CLI session UUID so a restart can `claude --resume` it. */
+  kind: "chat" | "side" | "orch-worker" | "automation" | "terminal";
   /** For side/orch-worker sessions: the id of the main session this
    *  subordinate thread belongs to. Null for main sessions; set back to null
    *  when the parent is deleted (the subordinate itself is kept). */

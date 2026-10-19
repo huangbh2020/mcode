@@ -1003,10 +1003,13 @@ export const StartSessionSchema = z.object({
   /** Session role: "chat" (default, normal left-bar session), "side"
    *  (side-chat Q&A session owned by the right-panel ask tab),
    *  "orch-worker" (orchestration worker sub-session; always creates a fresh
-   *  row, invisible to every list — managed by the orchestrator), or
-   *  "automation" (one run of a scheduled automation task; always a fresh
-   *  row, invisible to every list — created by the automation scheduler). */
-  kind: z.enum(["chat", "side", "orch-worker", "automation"]).default("chat"),
+   *  row, invisible to every list — managed by the orchestrator), "automation"
+   *  (one run of a scheduled automation task; always a fresh row, invisible
+   *  to every list — created by the automation scheduler), or "terminal" (a
+   *  live PTY session running the user's own Claude CLI in TTY mode; always
+   *  a fresh row, VISIBLE in the lists — main pre-generates the CLI session
+   *  UUID into claudeSessionId so restarts can `claude --resume`). */
+  kind: z.enum(["chat", "side", "orch-worker", "automation", "terminal"]).default("chat"),
   /** For kind="automation": the owning automation task, denormalized onto
    *  the session row (automation_id column) so the automation page can list
    *  a task's runs with one indexed query. Ignored for other kinds. */
@@ -1477,6 +1480,19 @@ export const MessageRecordSchema = z.object({
   content: z.custom<unknown>((v) => v !== undefined, "content is required"),
   createdAt: z.number(),
 });
+
+/** Full session row by id — the phone's on-demand DETAIL fetch. Mobile list
+ * RPCs (project:sessions / session:listPinned / session:search) return slim
+ * rows with the heavy per-session payloads stripped (see `toSlimSession` in
+ * main/lib/sessionSync.ts — `turnFiles.before` can hold whole file contents,
+ * which must never ride a list page over the network). When a session is
+ * opened, the mobile store re-fetches the full row through this channel so
+ * the hydrate path (todos / plan / subagents / context ring / transcripts)
+ * still works. */
+export const SessionGetSchema = z.object({
+  sessionId: z.string(),
+});
+export type SessionGetInput = z.infer<typeof SessionGetSchema>;
 
 export const SessionMessagesSchema = z.object({
   sessionId: z.string(),
@@ -4190,6 +4206,12 @@ export const TerminalCreateSchema = z.object({
   rows: z.number().int().min(1).max(1000).optional(),
   /** Optional shell override for this session only. */
   shell: z.string().min(1).optional(),
+  /** Optional command line typed into the shell once it has booted (first
+   *  output chunk + short settle delay). Used by terminal SESSIONS to auto-
+   *  launch `claude` (with --session-id/--resume) without the user typing
+   *  it. The command runs inside the spawned shell — PATH/shim resolution
+   *  is the shell's, and the user lands back in the shell when it exits. */
+  initCommand: z.string().min(1).max(1000).optional(),
 });
 export type TerminalCreateInput = z.infer<typeof TerminalCreateSchema>;
 
@@ -4247,6 +4269,166 @@ export type TerminalCreateResult =
 export interface TerminalOpResult {
   ok: boolean;
   error?: string;
+}
+
+/* ── Terminal sessions (kind="terminal" PTY sessions running the user's own
+ *  Claude CLI) ── The CLI probe powers the "latest CLI experience" badge and
+ *  the not-installed empty state; the history RPCs persist a serialized
+ *  scrollback snapshot per GUI session so a restart can restore the view
+ *  (see TerminalSessionPane). */
+
+/** Setting key for "persist terminal-session scrollback history" (default
+ *  ON; store "0" to disable). When off, saveHistory is a no-op and restore
+ *  finds nothing. Terminal output may contain sensitive text the user
+ *  deliberately printed, so this is a user-controllable switch. */
+export const TERMINAL_HISTORY_SETTING_KEY = "terminal.persistHistory";
+
+/** Result of probing the user's own Claude CLI installation. */
+export interface TerminalCliProbeResult {
+  /** Whether a `claude` executable was found at all. */
+  found: boolean;
+  /** Resolved executable path/label when found. */
+  path?: string;
+  /** `claude --version` first line (e.g. "2.1.218 (Claude Code)"). */
+  version?: string;
+  /** Human-readable failure reason when found but the version probe failed. */
+  error?: string;
+}
+
+/* ── Terminal-CLI management (设置 → Agent → 终端会话类型) ──
+ *  Terminal sessions run the user's OWN CLIs (claude / pi / codex / agy) in
+ *  a PTY. Not every machine has all four installed, so the settings page
+ *  maintains them: probe install state, install/update/uninstall via npm
+ *  (where applicable), and enable/disable per type — the NewTerminalMenu
+ *  only offers ENABLED types. Enable state is a renderer-side setting
+ *  (main never needs it); install state is probed fresh in main. */
+
+/** Setting key for the per-CLI enable map: JSON `Record<providerId, boolean>`
+ *  stored under `terminal.cliEnabled`. ABSENT key = enabled — a CLI type
+ *  shipped after the map was written lights up without migration, and the
+ *  map only ever records deliberate opt-outs (plus the toggles the user
+ *  explicitly flipped back on, so re-enabling stays sticky). */
+export const TERMINAL_CLI_ENABLED_SETTING_KEY = "terminal.cliEnabled";
+
+/** The four terminal-CLI provider ids (mirror of the renderer's
+ *  TERMINAL_CLI_PROVIDER_IDS — kept here so the zod schema can validate
+ *  RPC input without importing renderer code). */
+export const TERMINAL_CLI_IDS = ["claude-sdk", "pi-sdk", "codex-sdk", "antigravity"] as const;
+export type TerminalCliId = (typeof TERMINAL_CLI_IDS)[number];
+
+/** How a terminal CLI can be managed from inside Mcode. */
+export type TerminalCliManageMode = "npm" | "external";
+
+/** One terminal CLI's install status (probe result + catalog metadata). */
+export interface TerminalCliStatus {
+  providerId: TerminalCliId;
+  /** The shell command a terminal session injects (`claude`, `pi`, …). */
+  command: string;
+  /** npm package name for install/update/uninstall; null when external. */
+  packageName: string | null;
+  /** "npm" = installable from the settings page; "external" = installed by
+   *  its own installer/IDE (settings page offers the download page only). */
+  manageMode: TerminalCliManageMode;
+  /** Whether the CLI resolved on this machine (PATH or known locations). */
+  installed: boolean;
+  /** Resolved executable path when installed. */
+  path?: string;
+  /** First `--version` line when installed and the probe succeeded. */
+  version?: string;
+  /** Probe failure reason (found but `--version` errored). */
+  error?: string;
+}
+
+export interface TerminalCliListResult {
+  clis: TerminalCliStatus[];
+}
+
+/** Registry latest for one CLI after a manual check (`npm view`). */
+export interface TerminalCliCheckResult {
+  providerId: TerminalCliId;
+  /** Latest published version, or null when the lookup failed. */
+  latestVersion: string | null;
+  /** Lookup failure reason (offline / unknown package / …). */
+  error?: string;
+}
+
+export interface TerminalCliCheckUpdatesResult {
+  results: TerminalCliCheckResult[];
+}
+
+/** Install / uninstall action input. */
+export const TerminalCliActionSchema = z.object({
+  providerId: z.enum(TERMINAL_CLI_IDS),
+});
+export type TerminalCliActionInput = z.infer<typeof TerminalCliActionSchema>;
+
+export interface TerminalCliActionResult {
+  ok: boolean;
+  error?: string;
+}
+
+export const TerminalHistorySaveSchema = z.object({
+  /** GUI session id (the sess_* row id — also the history file's key). */
+  sessionId: z.string().min(1).max(128),
+  /** Serialized xterm buffer (serialize addon output, scrollback included). */
+  content: z.string().max(8_000_000),
+  /** Capture geometry — REQUIRED for correct replay: the serialize output
+   *  carries wrap points + absolute cursor rows, so it must be written back
+   *  into a terminal of the SAME size (the addon's documented contract).
+   *  Optional only for legacy callers. */
+  cols: z.number().int().min(1).max(1000).optional(),
+  rows: z.number().int().min(1).max(1000).optional(),
+});
+export type TerminalHistorySaveInput = z.infer<typeof TerminalHistorySaveSchema>;
+
+export const TerminalHistoryLoadSchema = z.object({
+  sessionId: z.string().min(1).max(128),
+});
+export type TerminalHistoryLoadInput = z.infer<typeof TerminalHistoryLoadSchema>;
+
+export interface TerminalHistoryLoadResult {
+  /** Serialized buffer written by the last snapshot, or null when none was
+   *  ever saved (first open) or persistence is disabled. */
+  content: string | null;
+  /** Capture geometry stored alongside the content (absent for legacy
+   *  snapshots saved before the envelope format — replay then falls back
+   *  to the terminal's default size). */
+  cols?: number;
+  rows?: number;
+}
+
+/** Auto-name a terminal session from its scrollback (mirrors the chat
+ *  sessions' titleGen flow). The renderer passes a HEAD excerpt of the live
+ *  serialized buffer; main strips ANSI, gates (title still default? titleGen
+ *  enabled + model configured? enough content?), then fire-and-forgets the
+ *  one-shot LLM query — the resulting title arrives via the existing
+ *  session:titleUpdated push + session.changed broadcast. */
+export const TerminalSuggestTitleSchema = z.object({
+  sessionId: z.string().min(1).max(128),
+  /** Head of the serialized xterm buffer (ANSI-laden — main strips). */
+  content: z.string().max(20_000),
+});
+export type TerminalSuggestTitleInput = z.infer<typeof TerminalSuggestTitleSchema>;
+
+export interface TerminalSuggestTitleResult {
+  /** true = this session needs no further suggestions (already named, or a
+   *  query was accepted — success or failure, we don't retry). false = not
+   *  nameable YET (feature/model not configured, or content too thin) — the
+   *  caller may retry on a later snapshot. */
+  done: boolean;
+}
+
+export const TerminalResolvePathSchema = z.object({
+  projectPath: z.string().min(1),
+  /** Candidate as printed in the terminal (absolute or project-relative,
+   *  either separator style). */
+  path: z.string().min(1).max(1024),
+});
+export type TerminalResolvePathInput = z.infer<typeof TerminalResolvePathSchema>;
+
+export interface TerminalResolvePathResult {
+  /** Absolute, correctly-separated path of an EXISTING file, or null. */
+  path: string | null;
 }
 
 /* ── Embedded browser (WebContentsView + DOM element picker) ──
@@ -4687,6 +4869,9 @@ export interface RpcMap {
    *  first) — powers the left bar's global pinned section above the project
    *  tree. */
   "session.listPinned": () => Promise<{ sessions: Session[] }>;
+  /** Full session row (heavy payloads included) by id — the mobile
+   *  companion's on-demand detail fetch after slim list loads. */
+  "session.get": (input: SessionGetInput) => Promise<{ session: Session | null }>;
   "session.messages": (
     input: SessionMessagesInput,
   ) => Promise<{ messages: MessageRecord[]; hasMore: boolean }>;
@@ -4926,6 +5111,28 @@ export interface RpcMap {
    *  terminal — the settings panel uses it to report which shell a new
    *  terminal will actually use, and to flag a setting that doesn't resolve. */
   "terminal.resolveShell": () => Promise<TerminalResolveShellResult>;
+  /** Probe the user's own Claude CLI (path + version) for terminal sessions. */
+  "terminal.cliProbe": () => Promise<TerminalCliProbeResult>;
+  /** List all four terminal CLIs with install status (设置 → Agent → 终端会话类型). */
+  "terminal.cliList": () => Promise<TerminalCliListResult>;
+  /** Manual registry check: npm latest version per npm-managed CLI. */
+  "terminal.cliCheckUpdates": () => Promise<TerminalCliCheckUpdatesResult>;
+  /** Install (or update to) the CLI's npm latest; external CLIs open their
+   *  download page in the OS browser instead. */
+  "terminal.cliInstall": (input: TerminalCliActionInput) => Promise<TerminalCliActionResult>;
+  /** Remove the CLI's npm global package (confirm happens in the renderer). */
+  "terminal.cliUninstall": (input: TerminalCliActionInput) => Promise<TerminalCliActionResult>;
+  /** Persist a terminal session's serialized scrollback snapshot. */
+  "terminal.saveHistory": (input: TerminalHistorySaveInput) => Promise<TerminalOpResult>;
+  /** Load a terminal session's last scrollback snapshot (null = none). */
+  "terminal.loadHistory": (input: TerminalHistoryLoadInput) => Promise<TerminalHistoryLoadResult>;
+  /** Auto-name a terminal session from its scrollback (titleGen variant). */
+  "terminal.suggestTitle": (input: TerminalSuggestTitleInput) => Promise<TerminalSuggestTitleResult>;
+  /** Resolve a path printed in terminal output for click-to-open: returns
+   *  the absolute path when it exists as a FILE (never a directory) —
+   *  relative candidates resolve against `projectPath`, absolute ones are
+   *  accepted as-is (POSIX style normalized to win32 when needed). */
+  "terminal.resolvePath": (input: TerminalResolvePathInput) => Promise<TerminalResolvePathResult>;
   // Embedded browser (WebContentsView + DOM element picker)
   /** Create a browser view bound to a project root. Returns an opaque id. */
   "browser.create": (input: BrowserCreateInput) => Promise<BrowserCreateResult>;
@@ -5297,6 +5504,7 @@ export const IPC = {
   SESSION_LIST_ALL: "session:listAll",
   SESSION_SEARCH: "session:search",
   SESSION_SEARCH_BOOKMARKS: "session:searchBookmarks",
+  SESSION_GET: "session:get",
   SESSION_MESSAGES: "session:messages",
   SESSION_SAVE_MESSAGES: "session:saveMessages",
   SESSION_UPSERT_MESSAGES: "session:upsertMessages",
@@ -5438,6 +5646,16 @@ export const IPC = {
   TERMINAL_KILL: "terminal:kill",
   TERMINAL_LIST: "terminal:list",
   TERMINAL_RESOLVE_SHELL: "terminal:resolveShell",
+  // Terminal sessions (user's own Claude CLI in a PTY)
+  TERMINAL_CLI_PROBE: "terminal:cliProbe",
+  TERMINAL_CLI_LIST: "terminal:cliList",
+  TERMINAL_CLI_CHECK_UPDATES: "terminal:cliCheckUpdates",
+  TERMINAL_CLI_INSTALL: "terminal:cliInstall",
+  TERMINAL_CLI_UNINSTALL: "terminal:cliUninstall",
+  TERMINAL_HISTORY_SAVE: "terminal:saveHistory",
+  TERMINAL_HISTORY_LOAD: "terminal:loadHistory",
+  TERMINAL_SUGGEST_TITLE: "terminal:suggestTitle",
+  TERMINAL_RESOLVE_PATH: "terminal:resolvePath",
   // Embedded browser (WebContentsView + DOM element picker)
   BROWSER_CREATE: "browser:create",
   BROWSER_LOAD_URL: "browser:loadUrl",

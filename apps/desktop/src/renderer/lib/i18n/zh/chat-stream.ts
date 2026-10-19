@@ -50,6 +50,12 @@ export const zh = {
   "chatStream.image.userImage": "用户图片",
   "chatStream.imageRenderedAbove": "[图片已在上方显示]",
 
+  // ── MessageBlocks: inline video (script-generated media) ──
+  "chatStream.media.tabVideos": "视频",
+  "chatStream.media.tabImages": "图片",
+  "chatStream.video.unplayable": "无法播放",
+  "chatStream.video.openInEditor": "在编辑器中打开",
+
   // ── MessageBlocks: image gallery ──
   "chatStream.gallery.screenshotAlt": "截图 {n}/{total}",
   "chatStream.gallery.prev": "上一张",
@@ -246,6 +252,7 @@ export const zh = {
 
   // ── Message bookmarks (selection toolbar / capsule / timeline) ──
   "chatStream.bookmark.add": "添加书签",
+  "chatStream.bookmark.addToChat": "添加到当前聊天",
   "chatStream.bookmark.askSideChat": "发送到子会话",
   "chatStream.bookmark.copied": "已复制",
   "chatStream.bookmark.capsuleTitle": "书签（{n} 个）",

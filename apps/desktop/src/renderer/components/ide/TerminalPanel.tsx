@@ -6,9 +6,7 @@ import {
   IconPlus,
   IconX,
   IconTerminal2,
-  IconRefresh,
   IconPlayerStop,
-  IconEraser,
   IconLayoutBottombar,
   IconLayoutSidebarRight,
   IconChevronDown,
@@ -404,34 +402,11 @@ export function TerminalPanel({ active }: { active: boolean }) {
         <div className="flex shrink-0 items-center gap-0.5 border-l border-edge pl-1">
           <TerminalCommandsMenu onRun={runCommand} onRunInNewTerminal={runCommandInNewTerminal} />
           <IconBtn
-            title={t("ide.term.clearScreen")}
-            onClick={() => activeHandle?.clear()}
-            disabled={!activeHandle}
-          >
-            <IconEraser size={13} />
-          </IconBtn>
-          <IconBtn
             title={t("ide.term.killProcess")}
             onClick={() => activeHandle?.kill()}
             disabled={!activeHandle || activeSession?.status !== "running"}
           >
             <IconPlayerStop size={13} />
-          </IconBtn>
-          {shellChangedSinceSpawn(activeSession) && (
-            <span className="mr-1 whitespace-nowrap text-[0.7857em] text-warning">
-              {t("ide.term.restartToApply")}
-            </span>
-          )}
-          <IconBtn
-            title={t("ide.term.restart")}
-            onClick={() => {
-              // Clear scrollback then spawn a fresh PTY into the same view.
-              activeHandle?.clear();
-              activeHandle?.restart();
-            }}
-            disabled={!activeHandle}
-          >
-            <IconRefresh size={13} />
           </IconBtn>
           <div className="mx-0.5 h-3 w-px bg-edge" />
           <IconBtn

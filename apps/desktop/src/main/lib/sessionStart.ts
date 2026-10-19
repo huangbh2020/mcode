@@ -1,4 +1,5 @@
 import type { Session } from "@contracts/session";
+import { randomUUID } from "node:crypto";
 import { DEFAULT_PROVIDER_ID, type StartSessionInput } from "@contracts/ipc";
 import { uid } from "@main/utils.js";
 import { ProjectRepo, SessionRepo } from "@main/store/repositories.js";
@@ -224,6 +225,54 @@ export function createOrReuseSession(
       `automation task session started: ${bound.id} (task ${input.automationId ?? "?"}, project ${input.projectId})`,
     );
     return { session: bound, reused: false };
+  }
+
+  // Terminal sessions (kind="terminal"): a live PTY running the user's own
+  // Claude CLI in TTY mode. Always a brand-new row (a terminal is a fresh
+  // process by nature — no reuse), VISIBLE in the lists like chat, and it
+  // broadcasts session.changed so both desktop and mobile caches learn the
+  // row (mobile hides it at the render layer). The CLI session UUID is
+  // PRE-GENERATED here into claudeSessionId: the first open spawns
+  // `claude --session-id <uuid>`, and after an app restart the pane resumes
+  // with `claude --resume <uuid>` (the CLI persists its own transcript under
+  // ~/.claude — version-compatible by construction, which is the whole point
+  // of the terminal-session feature). No runtimeManager.bindSession: the
+  // session never runs SDK turns; the renderer owns its terminalId mapping.
+  if (input.kind === "terminal") {
+    const now = Date.now();
+    const session: Session = {
+      id: uid("sess_"),
+      projectId: input.projectId,
+      providerId: input.providerId ?? DEFAULT_PROVIDER_ID,
+      claudeSessionId: randomUUID(),
+      kind: "terminal",
+      parentSessionId: null,
+      title: input.title ?? "Terminal",
+      status: "idle",
+      model: input.model ?? "default",
+      effort: input.effort,
+      permissionMode: input.permissionMode,
+      customModelId: input.customModelId ?? null,
+      archived: false,
+      pinnedAt: null,
+      contextSnapshot: null,
+      todos: null,
+      subagents: null,
+      planDraft: null,
+      turnFiles: null,
+      usageHistory: null,
+      bookmarks: null,
+      subagentTranscripts: null,
+      envMode: "local",
+      wtStyle: null,
+      worktreePath: null,
+      createdAt: now,
+      updatedAt: now,
+    };
+    SessionRepo.create(session);
+    broadcastSessionChanged(session);
+    log.info(`terminal session started: ${session.id} (project ${input.projectId}, ${source})`);
+    return { session, reused: false };
   }
 
   // Coerced environment (non-repo projects can't carry worktree intent —

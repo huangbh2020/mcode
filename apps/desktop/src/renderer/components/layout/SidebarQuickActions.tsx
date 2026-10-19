@@ -26,7 +26,8 @@ import {
   resolveShortcut,
   acceleratorToDisplayTokens,
 } from "@renderer/lib/shortcuts.js";
-import { IconClock, IconGitFork, IconPlus, IconSearch } from "@renderer/lib/icons.js";
+import { IconClock, IconGitFork, IconPlus, IconSearch, IconChevronDown } from "@renderer/lib/icons.js";
+import { NewSessionMenu } from "@renderer/components/layout/NewSessionMenu.js";
 import { Kbd } from "@renderer/components/ui/index.js";
 import { MobileConnectButton } from "@renderer/components/layout/MobileConnectDialog.js";
 import { isInFlightAutomation } from "@renderer/components/automation/automationFormat.js";
@@ -46,6 +47,7 @@ export function SidebarQuickActions({
   showConnectPhone = true,
   newSessionOverride,
   newSessionOverrideTitle,
+  newTerminalSessionOverride,
 }: {
   /** Hide the 搜索 entry (mobile drawer: no keyboard to trigger Ctrl+K). */
   showSearch?: boolean;
@@ -60,9 +62,15 @@ export function SidebarQuickActions({
   /** Already-translated tooltip for the override state (defaults to the
    *  worktree wording — the original override case). */
   newSessionOverrideTitle?: string;
+  /** When set, 终端会话 dispatches here with the PICKED provider id instead
+   *  of the default active-project start (stream view scoped to a plain
+   *  project: spawn the terminal under THAT project). Worktree scopes don't
+   *  override — terminal sessions are always local to a project root. */
+  newTerminalSessionOverride?: (providerId: string) => void;
 } = {}) {
   const { t } = useI18n();
   const startSession = useSessionStore((s) => s.startSession);
+  const startTerminalSession = useSessionStore((s) => s.startTerminalSession);
   const setCommandPaletteOpen = useSessionStore((s) => s.setCommandPaletteOpen);
   const setSchedPageOpen = useSessionStore((s) => s.setSchedPageOpen);
   const activeProjectId = useSessionStore((s) => s.activeProjectId);
@@ -86,38 +94,63 @@ export function SidebarQuickActions({
 
   return (
     <div className="mb-2 flex flex-col gap-1">
-      {/* 新建会话 — neutral resting state (no persistent highlight), accent
-          only on hover so it doesn't read as an "active/selected" row. */}
-      <button
-        type="button"
-        onClick={() => {
-          if (newSessionOverride) newSessionOverride();
-          else if (canNewSession) void startSession();
-        }}
-        disabled={!canNewSession}
-        title={
-          newSessionOverride
-            ? newSessionOverrideTitle ?? t("layout.newSessionInWorktree")
-            : canNewSession
-              ? t("layout.newSessionInProject")
-              : t("layout.needProject")
-        }
+      {/* 新建会话 (Split Button) — integrated chat + terminal entry.
+          Main area: starts a new thread in the active project (Ctrl+N).
+          Right chevron: opens unified dropdown for chat & terminal CLIs. */}
+      <div
         className={cn(
-          "flex w-full items-center gap-2 rounded-lg px-1 py-2 transition-colors",
-          "[font-size:var(--right-panel-font-size)]",
+          "group/split flex w-full items-stretch rounded-lg transition-colors",
           canNewSession
             ? "text-content-muted hover:bg-accent/10 hover:text-accent"
             : "cursor-not-allowed text-content-subtle opacity-50",
         )}
       >
-        {newSessionOverride ? (
-          <IconGitFork size={16} className="shrink-0" />
-        ) : (
-          <IconPlus size={16} className="shrink-0" />
-        )}
-        <span className="flex-1 text-left font-medium">{t("layout.newSession")}</span>
-        <ShortcutBadge commandId="session.new" />
-      </button>
+        <button
+          type="button"
+          onClick={() => {
+            if (newSessionOverride) newSessionOverride();
+            else if (canNewSession) void startSession();
+          }}
+          disabled={!canNewSession}
+          title={
+            newSessionOverride
+              ? newSessionOverrideTitle ?? t("layout.newSessionInWorktree")
+              : canNewSession
+                ? t("layout.newSessionInProject")
+                : t("layout.needProject")
+          }
+          className={cn(
+            "flex flex-1 min-w-0 items-center gap-2 rounded-l-lg px-1 py-2 text-left transition-colors",
+            "[font-size:var(--right-panel-font-size)]",
+            "focus:outline-none",
+            !canNewSession && "cursor-not-allowed",
+          )}
+        >
+          {newSessionOverride ? (
+            <IconGitFork size={16} className="shrink-0" />
+          ) : (
+            <IconPlus size={16} className="shrink-0" />
+          )}
+          <span className="flex-1 truncate font-medium">{t("layout.newSession")}</span>
+          <ShortcutBadge commandId="session.new" />
+        </button>
+
+        <div className="my-1.5 w-[1px] bg-edge/40 transition-colors group-hover/split:bg-accent/25" />
+
+        <NewSessionMenu
+          disabled={!canNewSession}
+          triggerTitle={t("layout.newSessionMenu.more")}
+          onNewSession={newSessionOverride}
+          onNewTerminalSession={newTerminalSessionOverride}
+          triggerClassName={cn(
+            "flex shrink-0 items-center justify-center rounded-r-lg px-1.5 transition-colors",
+            "hover:bg-accent/20 hover:text-accent focus:outline-none",
+            !canNewSession && "cursor-not-allowed",
+          )}
+        >
+          <IconChevronDown size={13} className="shrink-0 opacity-70 group-hover/split:opacity-100" />
+        </NewSessionMenu>
+      </div>
 
       {/* 搜索 — entry to the unified Ctrl+K palette. Mirrors 新建会话's
           neutral rest + accent-on-hover so the two read as a matched pair. */}

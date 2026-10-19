@@ -13,6 +13,7 @@
  */
 import type { ComponentType } from "react";
 import { SiClaude, IconTerminal, PiBrandIcon, OpenAIBrandIcon } from "@renderer/lib/icons.js";
+import { AntigravityBrandIcon } from "@renderer/lib/antigravityBrandIcon.js";
 
 export interface ProviderIconMeta {
   Icon: ComponentType<{ size?: number; className?: string }>;
@@ -38,6 +39,10 @@ const PROVIDER_ICONS: Record<string, ProviderIconMeta> = {
   "claude-sdk": { Icon: SiClaude, color: "text-[#D97757]", dot: "#D97757", label: "Claude" },
   "pi-sdk": { Icon: PiBrandIcon, color: "text-black dark:text-content", dot: "#A78BFA", label: "Pi" },
   "codex-sdk": { Icon: OpenAIBrandIcon, color: "text-content", dot: "#10A37F", label: "Codex" },
+  // Antigravity terminal CLI (`agy`) — official brand mark, inlined from
+  // antigravity.google's favicon (Google-colored arch; see
+  // antigravityBrandIcon.tsx).
+  antigravity: { Icon: AntigravityBrandIcon, color: "", dot: "#3186FF", label: "Antigravity" },
 };
 
 export function getProviderIcon(providerId: string | null | undefined): ProviderIconMeta {

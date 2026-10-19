@@ -33,7 +33,7 @@ import { disposeModel, getDisplayedPath } from "@renderer/lib/editorModelCache.j
 import type { CustomModelPublic } from "@contracts/customModel";
 import type { PiThinkingLevelMap } from "@contracts/piModel";
 import { resolveEffortLevels, coerceEffortValue } from "@renderer/lib/thinkingLevels.js";
-import { api } from "@renderer/lib/api.js";
+import { api, isWebTransport } from "@renderer/lib/api.js";
 import { isElectron } from "@renderer/lib/platform.js";
 import { normWorktreeKey } from "@renderer/lib/worktree.js";
 import { translate } from "@renderer/lib/i18n/core.js";
@@ -101,6 +101,7 @@ import {
   WORKTREE_NAMES_SETTING_KEY,
   PROJECT_COLORS_SETTING_KEY,
   TERMINAL_POSITION_SETTING_KEY,
+  TERMINAL_CLI_ENABLED_SETTING_KEY,
   type TerminalPosition,
   ShortcutBindingsSchema,
   GestureSettingsSchema,
@@ -208,10 +209,10 @@ function isMarkdownPath(filePath: string): boolean {
   return lower.endsWith(".md") || lower.endsWith(".markdown");
 }
 
-/** True for image files the editor previews via the `app-resource://` protocol.
- *  Mirrors `isImage()` in FileEditor.tsx - kept here so `openFileInIde` can
- *  default images into preview mode without importing the component. SVG is
- *  text but renders as an image, so it's included. */
+/** True for image files the editor previews as a data-URL `<img>` (via
+ *  `file:readBinary`). Mirrors `isImage()` in FileEditor.tsx - kept here so
+ *  `openFileInIde` can default images into preview mode without importing
+ *  the component. SVG is text but renders as an image, so it's included. */
 function isImagePath(filePath: string): boolean {
   const lower = filePath.toLowerCase();
   return [
@@ -220,8 +221,18 @@ function isImagePath(filePath: string): boolean {
   ].some((ext) => lower.endsWith(ext));
 }
 
+/** True for video files the editor plays via the guarded `app-resource://`
+ *  streaming protocol. Mirrors `isVideo()` in FileEditor.tsx — keep the
+ *  extension lists in sync. */
+function isVideoPath(filePath: string): boolean {
+  const lower = filePath.toLowerCase();
+  return [
+    ".mp4", ".m4v", ".webm", ".mov", ".mkv", ".ogv", ".avi",
+  ].some((ext) => lower.endsWith(ext));
+}
+
 /** True for binary file types the editor can neither edit nor preview (Office
- *  docs, archives, binaries, audio/video, fonts, PDF). Mirrors `isUnsupported()`
+ *  docs, archives, binaries, audio, fonts, PDF). Mirrors `isUnsupported()`
  *  in FileEditor.tsx. These default to preview mode so the user sees the
  *  "can't preview" notice instead of garbled Monaco content. */
 function isUnsupportedPath(filePath: string): boolean {
@@ -231,7 +242,7 @@ function isUnsupportedPath(filePath: string): boolean {
     ".odt", ".ods", ".odp",
     ".zip", ".gz", ".tar", ".tgz", ".rar", ".7z", ".bz2", ".xz",
     ".exe", ".dll", ".so", ".dylib", ".bin", ".class", ".jar", ".wasm",
-    ".mp3", ".mp4", ".webm", ".avi", ".mov", ".ogg", ".flac", ".wav", ".m4a",
+    ".mp3", ".ogg", ".flac", ".wav", ".m4a",
     ".db", ".sqlite", ".sqlite3",
     ".woff", ".woff2", ".ttf", ".otf", ".eot",
     ".pdf",
@@ -414,6 +425,18 @@ export type Block =
       /** Image MIME type — "image/png" for browser screenshots; the SendTurn
        *  allowlist (jpeg/png/gif/webp) for user-attached images. */
       mimeType: string;
+    }
+  | {
+      /** Inline video player for a media file a Bash window produced on
+       *  disk (render/tutorial scripts — `tool.media` events). The script-
+       *  generated twin of the screenshot image block: sits right after the
+       *  owning Bash tool_use card. Streams via the guarded app-resource://
+       *  protocol by absolute path — bytes are never inlined. */
+      kind: "video";
+      /** The Bash tool_use whose window created the file. */
+      toolCallId: string;
+      /** Absolute path of the video file. */
+      filePath: string;
     }
   | {
       /** 编排画布:聊天流内的任务 DAG 卡片(自动编排流第②-④步的载体)。
@@ -707,6 +730,19 @@ export interface SessionState {
    *  `session.listPinned` and maintained incrementally by the pin/archive/
    *  delete mutations and the cross-client `session.changed` reducer. */
   pinnedSessions: Session[];
+
+  /** More archived rows remain server-side beyond each project's loaded
+   * archived page (mobile only — the desktop IPC handler lists the archived
+   * bin unpaginated, so this stays empty there). Drives the archived
+   * drawer's "加载更多" row. */
+  archivedHasMoreByProject: Record<string, boolean>;
+  /** In-flight guard for `loadMoreArchivedSessions`. */
+  loadingArchivedByProject: Record<string, boolean>;
+  /** Sessions whose full row (heavy payloads included) has been fetched via
+   * `session:get`. Only the web transport needs this — its list RPCs return
+   * slimmed rows and the full row is re-fetched once per app run when the
+   * session is opened (desktop IPC rows are always full). */
+  sessionDetailLoadedBySession: Record<string, boolean>;
 
   /* ── stream sidebar cache ("stream" leftBarMode) ──
    *  Flat cross-project aggregate behind `session.listAll` — the SAME rows
@@ -1070,6 +1106,12 @@ export interface SessionState {
   bottomTerminalOpen: boolean;
   /** Terminal dock position: "right" (default) or "bottom". Persisted in settings. */
   terminalPosition: TerminalPosition;
+  /** Terminal-CLI enable map (设置 → Agent → 终端会话类型): providerId →
+   *  enabled. ABSENT key = enabled, so a CLI type shipped in a later build
+   *  lights up without migrating the stored map. The NewTerminalMenu offers
+   *  only entries whose value !== false. Persisted as JSON under
+   *  TERMINAL_CLI_ENABLED_SETTING_KEY; main never reads it. */
+  terminalCliEnabled: Record<string, boolean>;
   /** Browser panel visibility. When true the BrowserPanel overlay mounts over
    *  the workspace and the embedded WebContentsView is shown; false hides both.
    *  NOT persisted (pure in-memory, like the other layout flags). */
@@ -1640,6 +1682,17 @@ export interface SessionState {
   /** Fetch the next page of active sessions for a project and append it to
    *  `sessionsByProject[projectId]`. No-op when there are no more to load. */
   loadMoreSessions: (projectId: string) => Promise<void>;
+  /** Fetch the next page of a project's ARCHIVED bin and append it to
+   *  `archivedSessionsByProject[projectId]` (mobile only — the archived bin
+   *  paginates over the network; desktop loads it unpaginated and this is a
+   *  permanent no-op there). */
+  loadMoreArchivedSessions: (projectId: string) => Promise<void>;
+  /** Web transport only: fetch the session's FULL row (heavy payloads) via
+   *  `session:get` and patch it into the list caches, so the sync hydrate
+   *  path (todos / plan / subagents / context ring / transcripts) reads real
+   *  data instead of the slimmed list row. No-op on desktop and after the
+   *  first successful fetch per session. */
+  ensureSessionDetail: (sessionId: string) => Promise<void>;
   /** (Re)fetch a project's worktree-bound threads in full and merge them into
    *  the cache's worktree section (local section untouched). A directory
    *  holds few threads, so this is unpaginated (capped well beyond realistic
@@ -1649,6 +1702,27 @@ export interface SessionState {
    *  sections together). */
   loadWorktreeSessions: (projectId: string) => Promise<void>;
   startSession: (projectId?: string, overrides?: { providerId?: string; model?: string; customModelId?: string | null; worktreePath?: string; /** Force the working-environment intent (bypasses the composer's env chip — e.g. a conflict-resolution session must stay in the real checkout). */ envMode?: "local" | "worktree"; /** Explicit row title — bypasses auto-naming AND the fresh-"New session" row reuse (an explicitly titled session always creates a new row). */ title?: string; /** Initial permission mode for the session row — bypasses the composer slot (e.g. an AI-fix session starts in plan mode). */ permissionMode?: string }) => Promise<void>;
+  /** Create a TERMINAL session (kind="terminal": a PTY running the user's
+   *  own CLI in TTY mode) and open it as the active tab. `providerId` picks
+   *  WHICH CLI the terminal runs (claude-sdk/pi-sdk/codex-sdk — recorded on
+   *  the row, driving the init command, per-type icons and resume
+   *  semantics; default claude-sdk). Much thinner than startSession — no
+   *  composer slots, no worktree intent, no reuse: main always creates a
+   *  fresh row (pre-generating the CLI session UUID for the resume
+   *  machinery) and the session.changed broadcast populates the list
+   *  caches. */
+  startTerminalSession: (projectId?: string, providerId?: string) => Promise<void>;
+  /** Terminal-session "model processing" flag → the shared runningBySession
+   *  map, so the left-bar rows and session tabs show the SAME spinner a
+   *  running chat turn does. `busy` is the TTY heuristic from
+   *  lib/terminalBusy.ts (armed on Enter, ends on output quiet) — the CLI's
+   *  in-flight state has no structured signal. Idempotent; cleared on pane
+   *  unmount by the pane itself. */
+  setTerminalBusy: (sessionId: string, busy: boolean) => void;
+  /** Toggle one terminal-CLI type's enable state (设置 → Agent → 终端会话
+   *  类型). Optimistic — the store flips immediately and the JSON map is
+   *  persisted fire-and-forget; the NewTerminalMenu reads the live value. */
+  setTerminalCliEnabled: (providerId: string, enabled: boolean) => void;
   /** Move a FRESH local session to a different project (the directory
    *  switcher in the new-session composer panel). Main-side guards reject
    *  anything that already started (messages / materialized worktree / bad
@@ -2396,6 +2470,18 @@ export interface SessionState {
   /** Remove a file from the editor's open list; active shifts to the
    *  previous file (or next, or null). */
   closeFileInIde: (filePath: string) => void;
+  /** Replace an open file with another one AT THE SAME TAB POSITION (used by
+   *  the image preview's prev/next gallery stepping, so flipping through a
+   *  folder's images doesn't litter one tab per image). The replaced file's
+   *  view-mode / diff-before entries are cleaned up like closeFileInIde, the
+   *  new file becomes active, and it is forced into preview mode — gallery
+   *  stepping is an explicit viewing intent, so a stale per-file "edit" choice
+   *  must not surface Monaco over binary image bytes. Navigation history is
+   *  deliberately NOT pushed: stepping through a gallery shouldn't flood the
+   *  Alt+← stack with one entry per image. Falls back to openFileInIde when
+   *  prevPath isn't in the open list (e.g. opened through a path that never
+   *  registered). */
+  replaceIdeFile: (prevPath: string, nextPath: string) => void;
   /** Remove every open file that lives under `dirPath` (prefix match), and
    *  drop expanded-dir records under it too. Used by the file-tree "删除"
    *  action when a directory is trashed, so stale editor tabs disappear. */
@@ -2861,7 +2947,7 @@ export const BOTTOM_TERMINAL_HEIGHT_MAX = 600;
 export const EDITOR_WIDTH_PCT_MIN = 20;
 export const EDITOR_WIDTH_PCT_MAX = 80;
 /** Minimum width for the center chat panel in pixels. */
-export const CENTER_CHAT_WIDTH_MIN = 450;
+export const CENTER_CHAT_WIDTH_MIN = 800;
 
 /** Clamp helper for the four persisted pane sizes. Falls back to defaults on
  *  any non-finite value so the layout never breaks. */
@@ -2871,26 +2957,29 @@ export const CENTER_CHAT_WIDTH_MIN = 450;
  *  small delta into 0 (dead handle) until one big move jumped a whole
  *  percent (~29px) — the classic janky resizable. Fractional values keep
  *  the handle tracking the cursor pixel-for-pixel. */
-export function clampLeftWidthPct(pct: number): number {
+export function clampLeftWidthPct(pct: number, windowWidth?: number): number {
   if (!Number.isFinite(pct)) return LEFT_WIDTH_PCT_DEFAULT;
-  return Math.min(
-    LEFT_WIDTH_PCT_MAX,
-    Math.max(LEFT_WIDTH_PCT_MIN, pct),
-  );
+  let maxPct = LEFT_WIDTH_PCT_MAX;
+  if (windowWidth != null && windowWidth > 0) {
+    const maxLeftPx = Math.max(0, windowWidth - CENTER_CHAT_WIDTH_MIN);
+    const maxAllowedPct = (maxLeftPx / windowWidth) * 100;
+    maxPct = Math.min(maxPct, maxAllowedPct);
+  }
+  const minPct = Math.min(LEFT_WIDTH_PCT_MIN, maxPct);
+  return Math.min(maxPct, Math.max(minPct, pct));
 }
 export function clampRightWidth(px: number, availablePx?: number): number {
   if (!Number.isFinite(px)) return 250;
-  const max =
-    availablePx != null && availablePx > 0
-      ? Math.max(
-          RIGHT_WIDTH_MIN,
-          Math.min(
-            Math.round(availablePx * RIGHT_SHARE_MAX),
-            Math.max(RIGHT_WIDTH_MIN, availablePx - CENTER_CHAT_WIDTH_MIN),
-          ),
-        )
-      : RIGHT_WIDTH_ABS_MAX;
-  return Math.min(max, Math.max(RIGHT_WIDTH_MIN, Math.round(px)));
+  if (availablePx != null && availablePx > 0) {
+    const allowedForRight = Math.max(0, availablePx - CENTER_CHAT_WIDTH_MIN);
+    const max = Math.min(
+      Math.round(availablePx * RIGHT_SHARE_MAX),
+      allowedForRight,
+    );
+    const min = Math.min(RIGHT_WIDTH_MIN, max);
+    return Math.min(max, Math.max(min, Math.round(px)));
+  }
+  return Math.min(RIGHT_WIDTH_ABS_MAX, Math.max(RIGHT_WIDTH_MIN, Math.round(px)));
 }
 
 export function clampBottomTerminalHeight(px: number): number {
@@ -2939,12 +3028,17 @@ export const WIDE_PANEL_PCT_MIN = 40;
 export const WIDE_PANEL_PCT_MAX = 80;
 export const WIDE_PANEL_PCT_DEFAULT = 70;
 
-/** Clamp helper for the wide-panel percentage. Falls back to the default on
- *  any non-finite value. */
-export function clampWidePanelPct(pct: number): number {
+export function clampWidePanelPct(pct: number, windowWidth?: number): number {
   // No rounding — see clampLeftWidthPct for why fractional pcts matter.
   if (!Number.isFinite(pct)) return WIDE_PANEL_PCT_DEFAULT;
-  return Math.min(WIDE_PANEL_PCT_MAX, Math.max(WIDE_PANEL_PCT_MIN, pct));
+  let maxPct = WIDE_PANEL_PCT_MAX;
+  if (windowWidth != null && windowWidth > 0) {
+    const maxRightPx = Math.max(0, windowWidth - CENTER_CHAT_WIDTH_MIN);
+    const maxAllowedPct = (maxRightPx / windowWidth) * 100;
+    maxPct = Math.min(maxPct, maxAllowedPct);
+  }
+  const minPct = Math.min(WIDE_PANEL_PCT_MIN, maxPct);
+  return Math.min(maxPct, Math.max(minPct, pct));
 }
 
 /** Matches a well-formed space-separated "R G B" triplet (0–255 each),
@@ -2973,6 +3067,12 @@ const SESSION_PAGE_SIZE = 5;
  *  directory holds few threads by design, so this is not pagination — just a
  *  sanity bound far beyond realistic use. */
 const WORKTREE_SESSIONS_FETCH_LIMIT = 500;
+
+/** Page size for the mobile archived bin. The desktop IPC handler lists the
+ *  archived bin unpaginated; over the network a full bin is exactly the
+ *  boot-latency the mobile server-side pagination (MOBILE_ARCHIVED_PAGE_SIZE)
+ *  exists to avoid — the drawer appends further pages on "加载更多". */
+const ARCHIVED_PAGE_SIZE = 30;
 
 /** Page size for the stream sidebar's cross-project aggregate (rich cards
  *  are ~3x taller than tree rows, so the page is only 2x). */
@@ -3044,6 +3144,18 @@ function streamScopeQuery(
  *  very long threads (thousands of rows) stay snappy on first open. */
 const MESSAGE_PAGE_SIZE = 200;
 
+/** Web transport (phone) page sizes. Every page crosses the network — often
+ *  an off-LAN tunnel at a few Mbps — and long sessions carry heavy tool_use
+ *  blocks, so a heavy page is still multi-MB even gzipped. The FIRST page is
+ *  deliberately tiny: the user lands at the bottom and wants the recent
+ *  tail visible fast; older pages are fetched as they scroll up (ChatPane's
+ *  near-top trigger) at a larger size to amortize round trips during active
+ *  reading. Desktop keeps the IPC-sized 200 for both. */
+const MOBILE_FIRST_MESSAGE_PAGE_SIZE = 40;
+const MOBILE_OLDER_MESSAGE_PAGE_SIZE = 100;
+const FIRST_MESSAGE_PAGE_SIZE = isWebTransport ? MOBILE_FIRST_MESSAGE_PAGE_SIZE : MESSAGE_PAGE_SIZE;
+const OLDER_MESSAGE_PAGE_SIZE = isWebTransport ? MOBILE_OLDER_MESSAGE_PAGE_SIZE : MESSAGE_PAGE_SIZE;
+
 /** Find a session across the active per-project caches, the archived bin,
  *  the global pinned bucket, and the stream sidebar's cross-project
  *  aggregate by id. The archived cache is consulted so that config
@@ -3105,6 +3217,25 @@ function findSession(
   // detail) live in no list cache by design — their dedicated map is the
   // final fallback so tabs/titles/config-sync resolve.
   return workersById?.[id];
+}
+
+/** Look up a session's kind across every list cache (project windows, pinned,
+ *  archived, stream, orch workers). Returns undefined for unknown ids —
+ *  callers treat that as "not a terminal session". Exported for App.tsx's
+ *  per-tab surface branching (ChatPane vs TerminalSessionPane). */
+export function selectSessionKind(
+  s: Pick<SessionState, "sessionsByProject" | "archivedSessionsByProject" | "pinnedSessions" | "streamSessions" | "orchWorkersById">,
+  id: string | null,
+): Session["kind"] | undefined {
+  if (!id) return undefined;
+  return findSession(
+    s.sessionsByProject,
+    s.archivedSessionsByProject,
+    s.pinnedSessions,
+    s.streamSessions,
+    id,
+    s.orchWorkersById,
+  )?.kind;
 }
 
 /** The per-project thread cache is a TWO-SECTION array: local threads first
@@ -3264,6 +3395,71 @@ function materializeSessionEntry(entry: SessionListEntry): Session {
   };
 }
 
+/** In-flight guard for `ensureSessionDetail` — rapid tab flips must not
+ * stack duplicate session:get fetches for the same row. */
+const pendingSessionDetail = new Set<string>();
+
+/** Replace a session row by id in every findSession-visible bucket. Used by
+ * `ensureSessionDetail` to drop the fetched full row over its slim twin — a
+ * plain id-swap is safe because the routing keys (archived / pinnedAt /
+ * worktreePath) are light fields identical on both shapes; only the heavy
+ * payloads differ. Keeps `sessions` (the active project's flat mirror) in
+ * sync with `sessionsByProject` per the established discipline. */
+function patchSessionRowBuckets(
+  partialSet: (patch: (s: SessionState) => Partial<SessionState>) => void,
+  row: Session,
+): void {
+  partialSet((s) => {
+    const swap = (list: Session[] | undefined): Session[] | undefined =>
+      list && list.some((x) => x.id === row.id)
+        ? list.map((x) => (x.id === row.id ? row : x))
+        : list;
+
+    let touched = false;
+    const mark = <T>(next: T, prev: T): T | undefined =>
+      next === prev ? undefined : ((touched = true), next);
+
+    const sessionsByProject: Record<string, Session[]> = {};
+    for (const [pid, list] of Object.entries(s.sessionsByProject)) {
+      const next = mark(swap(list), list);
+      if (next !== undefined) sessionsByProject[pid] = next;
+    }
+    const archivedByProject: Record<string, Session[]> = {};
+    for (const [pid, list] of Object.entries(s.archivedSessionsByProject)) {
+      const next = mark(swap(list), list);
+      if (next !== undefined) archivedByProject[pid] = next;
+    }
+    const pinned = mark(swap(s.pinnedSessions), s.pinnedSessions);
+    const stream = mark(swap(s.streamSessions), s.streamSessions);
+    const orchEntries = Object.entries(s.orchWorkersById);
+    const orchNext: Record<string, Session> = {};
+    for (const [id, sess] of orchEntries) {
+      if (sess.id === row.id) {
+        orchNext[id] = row;
+        touched = true;
+      }
+    }
+
+    if (!touched) return {};
+    const patch: Partial<SessionState> = {};
+    if (Object.keys(sessionsByProject).length > 0) {
+      patch.sessionsByProject = { ...s.sessionsByProject, ...sessionsByProject };
+      // The flat active-project mirror must follow its bucket twin.
+      const activeList = patch.sessionsByProject[s.activeProjectId ?? ""];
+      if (activeList) patch.sessions = activeList;
+    }
+    if (Object.keys(archivedByProject).length > 0) {
+      patch.archivedSessionsByProject = { ...s.archivedSessionsByProject, ...archivedByProject };
+    }
+    if (pinned !== undefined) patch.pinnedSessions = pinned;
+    if (stream !== undefined) patch.streamSessions = stream;
+    if (Object.keys(orchNext).length > 0) {
+      patch.orchWorkersById = { ...s.orchWorkersById, ...orchNext };
+    }
+    return patch;
+  });
+}
+
 /** Per-session buckets + queues to drop when ANY session is hard-deleted —
  *  shared verbatim by the main-session and side-chat paths of
  *  applySessionDeletedState. Pure: copies every touched bucket, removes the
@@ -3352,6 +3548,10 @@ function dropSessionBuckets(s: SessionState, id: string) {
   delete orchRunsBySession[id];
   const orchWorkersById = { ...s.orchWorkersById };
   delete orchWorkersById[id];
+  // Web transport: forget that this session's full row was fetched — a
+  // re-created session with the same id must re-fetch its detail.
+  const sessionDetailLoadedBySession = { ...s.sessionDetailLoadedBySession };
+  delete sessionDetailLoadedBySession[id];
   const pendingApprovals = s.pendingApprovals.filter((p) => p.sessionId !== id);
   return {
     messagesBySession,
@@ -3390,6 +3590,7 @@ function dropSessionBuckets(s: SessionState, id: string) {
     sessionRightTabsBySession,
     orchRunsBySession,
     orchWorkersById,
+    sessionDetailLoadedBySession,
     pendingApprovals,
   };
 }
@@ -5093,6 +5294,7 @@ const CONTENT_FROZEN_EVENTS = new Set<RuntimeEvent["type"]>([
   "tool.use",
   "tool.result",
   "browser.image",
+  "tool.media",
 ]);
 
 /* ─── Pane-width persistence (debounced) ───
@@ -5177,6 +5379,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   sessionsHasMoreByProject: {},
   sessionsTotalByProject: {},
   archivedSessionsByProject: {},
+  archivedHasMoreByProject: {},
+  loadingArchivedByProject: {},
+  sessionDetailLoadedBySession: {},
   pinnedSessions: [],
   gitChangeVersionByRepo: {},
   sessions: [],
@@ -5306,6 +5511,8 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   rightOpen: false,
   bottomTerminalOpen: false,
   terminalPosition: "right",
+  // Terminal-CLI enable map — empty = all enabled (absent key semantics).
+  terminalCliEnabled: {} as Record<string, boolean>,
   // Browser panel overlay - closed by default. NOT persisted.
   browserPanelOpen: false,
   // Wide-panel (3:7) mode - off by default; transient like browserPanelOpen.
@@ -5822,10 +6029,14 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     const hasMoreByProject: Record<string, boolean> = {};
     const totalByProject: Record<string, number> = {};
     const archivedByProject: Record<string, Session[]> = {};
+    const archivedHasMoreByProject: Record<string, boolean> = {};
     try {
       await Promise.all(
         projects.map(async (p) => {
-          const [active, worktreePage] = await Promise.all([
+          // All three pages in parallel — over a high-RTT external network
+          // the old serialized archived leg doubled the boot waterfall for
+          // every project.
+          const [active, worktreePage, archived] = await Promise.all([
             api.project.sessions({
               projectId: p.id,
               limit: SESSION_PAGE_SIZE,
@@ -5839,16 +6050,21 @@ export const useSessionStore = create<SessionState>((set, get) => ({
               worktree: "only",
               limit: WORKTREE_SESSIONS_FETCH_LIMIT,
             }),
+            // First page only — the archived drawer loads more on demand
+            // (desktop IPC lists the bin unpaginated, so this stays a full
+            // load there and the hasMore map stays empty).
+            api.project.sessions({
+              projectId: p.id,
+              archived: true,
+              limit: isWebTransport ? ARCHIVED_PAGE_SIZE : undefined,
+            }),
           ]);
           byProject[p.id] = [...active.sessions, ...worktreePage.sessions];
           hasMoreByProject[p.id] = active.hasMore;
           totalByProject[p.id] = active.total;
-          const archived = await api.project.sessions({
-            projectId: p.id,
-            archived: true,
-          });
           if (archived.sessions.length > 0) {
             archivedByProject[p.id] = archived.sessions;
+            if (archived.hasMore) archivedHasMoreByProject[p.id] = true;
           }
         }),
       );
@@ -6032,6 +6248,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           AUTO_ARCHIVE_SETTING_KEY,
           UI_GESTURES_SETTING_KEY,
           TERMINAL_POSITION_SETTING_KEY,
+          TERMINAL_CLI_ENABLED_SETTING_KEY,
         ],
       })
       .catch((err) => {
@@ -6208,6 +6425,23 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         set({ terminalPosition: termPosRaw });
         if (termPosRaw === "bottom" && get().rightPanelTab === "terminal") {
           set({ rightPanelTab: "files" });
+        }
+      }
+      // Terminal-CLI enable map — unknown/garbage values keep the factory
+      // default (all enabled); the map only records explicit toggles.
+      const termCliRaw = ds[TERMINAL_CLI_ENABLED_SETTING_KEY];
+      if (termCliRaw) {
+        try {
+          const obj = JSON.parse(termCliRaw);
+          if (obj && typeof obj === "object" && !Array.isArray(obj)) {
+            const map: Record<string, boolean> = {};
+            for (const [k, v] of Object.entries(obj)) {
+              if (typeof v === "boolean") map[k] = v;
+            }
+            set({ terminalCliEnabled: map });
+          }
+        } catch {
+          /* malformed JSON — leave the all-enabled default */
         }
       }
       if (modeRaw === "tabs" || modeRaw === "replace") set({ ideEditorMode: modeRaw });
@@ -6549,6 +6783,68 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     });
   },
 
+  loadMoreArchivedSessions: async (projectId) => {
+    if (!get().archivedHasMoreByProject[projectId]) return;
+    if (get().loadingArchivedByProject[projectId]) return;
+    const offset = (get().archivedSessionsByProject[projectId] ?? []).length;
+    set((s) => ({
+      loadingArchivedByProject: { ...s.loadingArchivedByProject, [projectId]: true },
+    }));
+    try {
+      const page = await api.project.sessions({
+        projectId,
+        archived: true,
+        limit: ARCHIVED_PAGE_SIZE,
+        offset,
+      });
+      set((s) => {
+        const prev = s.archivedSessionsByProject[projectId] ?? [];
+        // De-dup by id — a row archived mid-fetch lands in the bin via the
+        // session.changed reducer and would otherwise appear twice.
+        const seen = new Set(prev.map((x) => x.id));
+        const merged = [...prev, ...page.sessions.filter((x) => !seen.has(x.id))];
+        const hasMoreByProject = { ...s.archivedHasMoreByProject };
+        if (page.hasMore) hasMoreByProject[projectId] = true;
+        else delete hasMoreByProject[projectId];
+        return {
+          archivedSessionsByProject: { ...s.archivedSessionsByProject, [projectId]: merged },
+          archivedHasMoreByProject: hasMoreByProject,
+          loadingArchivedByProject: { ...s.loadingArchivedByProject, [projectId]: false },
+        };
+      });
+    } catch {
+      // Leave hasMore as-is so the user can retry by tapping the row again.
+      set((s) => ({
+        loadingArchivedByProject: { ...s.loadingArchivedByProject, [projectId]: false },
+      }));
+    }
+  },
+
+  ensureSessionDetail: async (sessionId) => {
+    // Desktop IPC rows always carry the full payload — nothing to fetch.
+    if (!isWebTransport) return;
+    if (get().sessionDetailLoadedBySession[sessionId]) return;
+    if (pendingSessionDetail.has(sessionId)) return;
+    pendingSessionDetail.add(sessionId);
+    try {
+      const { session } = await api.session.get({ sessionId });
+      if (session) patchSessionRowBuckets(set, session);
+      // Mark loaded even when the row is gone (deleted on another client) —
+      // a missing row can never gain a payload, and re-fetching on every tab
+      // flip would just burn a round trip.
+      set((s) => ({
+        sessionDetailLoadedBySession: {
+          ...s.sessionDetailLoadedBySession,
+          [sessionId]: true,
+        },
+      }));
+    } catch {
+      // Network hiccup — leave the flag unset so the next open retries.
+    } finally {
+      pendingSessionDetail.delete(sessionId);
+    }
+  },
+
   loadWorktreeSessions: async (projectId) => {
     const seq = (worktreeFetchSeq[projectId] ?? 0) + 1;
     worktreeFetchSeq[projectId] = seq;
@@ -6734,6 +7030,76 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     if (overrides) syncConfigFromSession(set, get, session.id);
   },
 
+  /** Terminal session (see the interface doc). The session.changed broadcast
+   *  emitted by main lands ahead of the invoke response and upserts the row
+   *  into the project cache — but ONLY into loaded buckets; the explicit
+   *  patch below mirrors startSession's local create path (expand the
+   *  project, seed the empty message buckets so selectSession never fetches,
+   *  open the tab) for the case where the project window isn't loaded. */
+  startTerminalSession: async (projectIdArg, providerIdArg) => {
+    const projectId = projectIdArg ?? get().activeProjectId;
+    if (!projectId) return;
+    const providerId = providerIdArg ?? "claude-sdk";
+    const { session } = await api.claude.startSession({
+      projectId,
+      kind: "terminal",
+      providerId,
+      effort: "default",
+      permissionMode: "default",
+      // Localized default title (store context has the live locale; main's
+      // own fallback is the English "Terminal" for API-only callers).
+      title: translate(get().locale, "layout.terminalSession"),
+    });
+    set((s) => {
+      const prevList = s.sessionsByProject[projectId];
+      // Only patch caches the broadcast echo can't reach.
+      const nextByProject =
+        prevList && !prevList.some((x) => x.id === session.id)
+          ? { ...s.sessionsByProject, [projectId]: [session, ...prevList] }
+          : prevList
+            ? {
+                ...s.sessionsByProject,
+                [projectId]: prevList.map((x) => (x.id === session.id ? { ...x, ...session } : x)),
+              }
+            : s.sessionsByProject;
+      return {
+        sessionsByProject: nextByProject,
+        sessions: nextByProject[projectId] ?? s.sessions,
+        activeProjectId: projectId,
+        activeSessionId: session.id,
+        expandedProjects: { ...s.expandedProjects, [projectId]: true },
+        messagesBySession: { ...s.messagesBySession, [session.id]: [] },
+        hasMoreMessagesBySession: { ...s.hasMoreMessagesBySession, [session.id]: false },
+        historyLoadedBySession: { ...s.historyLoadedBySession, [session.id]: true },
+        openTabs: s.openTabs.includes(session.id) ? s.openTabs : [...s.openTabs, session.id],
+        centerTabFocus: "chat" as const,
+      };
+    });
+  },
+
+  /** Terminal busy flag → runningBySession (see the interface doc). */
+  setTerminalBusy: (sessionId, busy) => {
+    set((s) => {
+      if (!!s.runningBySession[sessionId] === busy) return {};
+      const runningBySession = { ...s.runningBySession };
+      if (busy) runningBySession[sessionId] = true;
+      else delete runningBySession[sessionId];
+      return { runningBySession };
+    });
+  },
+
+  setTerminalCliEnabled: (providerId, enabled) => {
+    set((s) => ({ terminalCliEnabled: { ...s.terminalCliEnabled, [providerId]: enabled } }));
+    void api.setting
+      .set({
+        key: TERMINAL_CLI_ENABLED_SETTING_KEY,
+        value: JSON.stringify(get().terminalCliEnabled),
+      })
+      .catch((err) => {
+        console.error("setting.set(terminalCliEnabled) failed:", err);
+      });
+  },
+
   /** Re-aim a fresh local session at another project (composer directory
    *  switcher). The main handler validates (no messages, un-materialized,
    *  existing target) and broadcasts `session.changed` for the moved row —
@@ -6836,13 +7202,10 @@ export const useSessionStore = create<SessionState>((set, get) => ({
    *  `tabs` mode) or between arbitrary sessions (in `single` mode) with
    *  the same code path. */
   selectSession: async (sessionId) => {
+    // Config hydration reads LIGHT fields only (model / effort / …), which
+    // slim rows carry too — it stays before the activeSessionId flip per the
+    // chip-flash prevention documented above, with no detail fetch in front.
     syncConfigFromSession(set, get, sessionId);
-    hydrateContextSnapshot(set, get, sessionId);
-    hydrateCapsule(set, get, sessionId);
-    hydrateTurnFiles(set, get, sessionId);
-    hydrateUsageHistory(set, get, sessionId);
-    hydrateBookmarks(set, get, sessionId);
-    hydrateSubagentTranscripts(set, get, sessionId);
     void get().loadOrchRuns(sessionId);
     set((s) => {
       // Clear the unread badge - the user is now looking at this session.
@@ -6854,12 +7217,24 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       delete unreadBySession[sessionId];
       return { activeSessionId: sessionId, unreadBySession, centerTabFocus: "chat" as const };
     });
-    // Gate on the hydration flag, NOT bucket existence: a bucket may already
-    // exist having been created by ingestEvent from another client's turn
-    // (mobile companion) — it holds only the live event window and must not
-    // suppress loading the full persisted history. See prefetchSessionMessages.
-    if (get().historyLoadedBySession[sessionId]) return;
-    void get().prefetchSessionMessages(sessionId);
+    // Web transport: list rows are slim — pull the full row (heavy payloads)
+    // for the hydrates below. Messages DON'T depend on the session row, so
+    // their first-page fetch runs CONCURRENTLY with the detail round trip
+    // instead of behind it (one RTT less to first paint on a slow link; the
+    // fetch is deduped and merges with any live bucket either way). If the
+    // user switched away while in flight, bail before the payload hydrates:
+    // hydrating the stale target's capsule would clobber the new session's.
+    if (!get().historyLoadedBySession[sessionId]) {
+      void get().prefetchSessionMessages(sessionId);
+    }
+    await get().ensureSessionDetail(sessionId);
+    if (get().activeSessionId !== sessionId) return;
+    hydrateContextSnapshot(set, get, sessionId);
+    hydrateCapsule(set, get, sessionId);
+    hydrateTurnFiles(set, get, sessionId);
+    hydrateUsageHistory(set, get, sessionId);
+    hydrateBookmarks(set, get, sessionId);
+    hydrateSubagentTranscripts(set, get, sessionId);
   },
 
   /** Open a session as a tab. Already-open tabs simply become active; new
@@ -6869,13 +7244,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
    *  The full logic chain matches `selectSession` (sync config + load
    *  history) so the first time a tab opens, its messages show up. */
   openTab: async (sessionId) => {
+    // Same split as selectSession: light-field config sync before the flip
+    // (chip-flash prevention), full-row fetch + payload hydrates after it.
     syncConfigFromSession(set, get, sessionId);
-    hydrateContextSnapshot(set, get, sessionId);
-    hydrateCapsule(set, get, sessionId);
-    hydrateTurnFiles(set, get, sessionId);
-    hydrateUsageHistory(set, get, sessionId);
-    hydrateBookmarks(set, get, sessionId);
-    hydrateSubagentTranscripts(set, get, sessionId);
     void get().loadOrchRuns(sessionId);
     set((s) => {
       // Clear the unread badge - the user is now looking at this session.
@@ -6891,11 +7262,20 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         centerTabFocus: "chat" as const,
       };
     });
-    // Same hydration-flag gate as selectSession — an event-created partial
-    // bucket (another client's turn) must not suppress the history fetch.
+    // Same split as selectSession: light-field config sync before the flip,
+    // then the message first page CONCURRENTLY with the full-row fetch, then
+    // (guarded against a switch-away) the payload hydrates.
     if (!get().historyLoadedBySession[sessionId]) {
       void get().prefetchSessionMessages(sessionId);
     }
+    await get().ensureSessionDetail(sessionId);
+    if (get().activeSessionId !== sessionId) return;
+    hydrateContextSnapshot(set, get, sessionId);
+    hydrateCapsule(set, get, sessionId);
+    hydrateTurnFiles(set, get, sessionId);
+    hydrateUsageHistory(set, get, sessionId);
+    hydrateBookmarks(set, get, sessionId);
+    hydrateSubagentTranscripts(set, get, sessionId);
   },
 
   /** Shared first-page history fetch behind selectSession / openTab / hover
@@ -6920,7 +7300,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     try {
       const { messages, hasMore } = await api.session.messages({
         sessionId,
-        limit: MESSAGE_PAGE_SIZE,
+        limit: FIRST_MESSAGE_PAGE_SIZE,
       });
       const fetched = fromRecords(messages);
       const live = get().messagesBySession[sessionId];
@@ -6971,7 +7351,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     try {
       const { messages, hasMore } = await api.session.messages({
         sessionId,
-        limit: MESSAGE_PAGE_SIZE,
+        limit: OLDER_MESSAGE_PAGE_SIZE,
         beforeCreatedAt: head.createdAt,
         beforeId: head.id,
       });
@@ -9207,6 +9587,32 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           });
           break;
         }
+        case "tool.media": {
+          // Script-generated media: the Claude adapter diffed the cwd's
+          // video inventory across a Bash window and found new files.
+          // Attach an inline <video> block right after that Bash tool_use
+          // card — the same placement rule as browser.image above. The
+          // event may arrive AFTER the turn's final text (long renders
+          // settle late via task_notification), so the search runs over
+          // every message, not just the last one.
+          next = next.map((m) => {
+            const tuIdx = m.blocks.findIndex((b) => b.kind === "tool_use" && b.toolCallId === e.toolCallId);
+            if (tuIdx < 0) return m;
+            const existing = new Set(
+              m.blocks.filter((b) => b.kind === "video").map((b) => (b as Extract<Block, { kind: "video" }>).filePath),
+            );
+            const fresh = e.filePaths.filter((p) => !existing.has(p));
+            if (fresh.length === 0) return m;
+            const blocks = [...m.blocks];
+            blocks.splice(
+              tuIdx + 1,
+              0,
+              ...fresh.map((filePath) => ({ kind: "video" as const, toolCallId: e.toolCallId, filePath })),
+            );
+            return { ...m, blocks };
+          });
+          break;
+        }
         case "turn.incomplete": {
           // Gateway-truncated turn (empty final response). The adapter emits
           // this immediately BEFORE turn.done — append the warning card and
@@ -9961,7 +10367,8 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     // (delta>0) widens the sidebar — no sign flip (unlike the right-bar /
     // bottom-terminal dividers). delta is already in percentage points; the
     // caller converted px via the container width.
-    const next = clampLeftWidthPct(get().leftWidthPct + deltaPct);
+    const winWidth = typeof window !== "undefined" ? window.innerWidth : undefined;
+    const next = clampLeftWidthPct(get().leftWidthPct + deltaPct, winWidth);
     set({ leftWidthPct: next });
     schedulePaneWidthPersist(get);
   },
@@ -10048,7 +10455,8 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     // Divider sits LEFT of the right panel in the wide-panel split, so a drag
     // right (delta>0) shrinks the right pane — same sign flip as the editor
     // divider. In-memory only (no schedulePaneWidthPersist).
-    set({ widePanelPct: clampWidePanelPct(get().widePanelPct - deltaPx) });
+    const winWidth = typeof window !== "undefined" ? window.innerWidth : undefined;
+    set({ widePanelPct: clampWidePanelPct(get().widePanelPct - deltaPx, winWidth) });
   },
   resetWidePanelPct: () => {
     set({ widePanelPct: WIDE_PANEL_PCT_DEFAULT });
@@ -12320,13 +12728,14 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     else if (opts?.line != null) viewMode[canonicalPath] = "edit";
     // Files that render as a read-only preview default to "preview" on FIRST
     // open (no prior view-mode for this file): Markdown (rendered), images
-    // (<img> via app-resource://), and unsupported binary types (Office docs,
-    // archives, etc. - shown as a "can't preview" notice). Re-opening respects
-    // the user's earlier choice (e.g. they switched to "edit") since the entry
-    // already exists. A diff request above takes precedence over this default.
+    // (data-URL `<img>`), videos (`<video>` via app-resource://), and
+    // unsupported binary types (Office docs, archives, etc. - shown as a
+    // "can't preview" notice). Re-opening respects the user's earlier choice
+    // (e.g. they switched to "edit") since the entry already exists. A diff
+    // request above takes precedence over this default.
     else if (
       !(canonicalPath in prevViewMode) &&
-      (isMarkdownPath(canonicalPath) || isImagePath(canonicalPath) || isUnsupportedPath(canonicalPath))
+      (isMarkdownPath(canonicalPath) || isImagePath(canonicalPath) || isVideoPath(canonicalPath) || isUnsupportedPath(canonicalPath))
     ) {
       viewMode[canonicalPath] = "preview";
     }
@@ -12504,6 +12913,52 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           : {}),
       };
     });
+
+    persistIdeBuckets(get);
+  },
+
+  replaceIdeFile: (prevPath, nextPath) => {
+    const pid = get().activeProjectId;
+    if (!pid) return;
+    const prev = get().ideOpenFilesByProject[pid] ?? [];
+    // Case-insensitive match mirrors openFileInIde's dedup (Windows/macOS path
+    // casing can differ between producer and store).
+    const lowerPrev = prevPath.toLowerCase();
+    const idx = prev.findIndex((p) => p.toLowerCase() === lowerPrev);
+    if (idx === -1) {
+      // Not open as a tab (registered through some other path) — degrade to a
+      // plain open instead of dropping the navigation on the floor.
+      get().openFileInIde(nextPath);
+      return;
+    }
+    // Canonicalize next against an existing entry so we don't create a
+    // case-variant duplicate tab.
+    const lowerNext = nextPath.toLowerCase();
+    const existing = prev.find((p) => p.toLowerCase() === lowerNext);
+    const canonicalNext = existing ?? nextPath;
+    // Replace at the same position; if next was already open elsewhere, splice
+    // that duplicate out so the moved entry is the only one.
+    const open = prev.filter((p, i) => i !== idx && p !== canonicalNext);
+    open.splice(Math.min(idx, open.length), 0, canonicalNext);
+    // Model cache: images have no Monaco model, but the action is generic —
+    // same displayed-file guard as closeFileInIde for the outgoing path.
+    if (getDisplayedPath() !== prevPath) disposeModel(prevPath);
+    // Clean up the outgoing file's per-file state (mirrors closeFileInIde) and
+    // force the incoming file into preview — gallery stepping is a viewing
+    // intent; a stale "edit" view-mode would show raw bytes over the preview.
+    const prevViewMode = get().ideFileViewModeByProject[pid] ?? {};
+    const viewMode = { ...prevViewMode };
+    delete viewMode[prevPath];
+    viewMode[canonicalNext] = "preview";
+    const prevDiffBefore = get().ideDiffBeforeByProject[pid] ?? {};
+    const diffBefore = { ...prevDiffBefore };
+    delete diffBefore[prevPath];
+    set((s) => ({
+      ideOpenFilesByProject: { ...s.ideOpenFilesByProject, [pid]: open },
+      ideActiveFileByProject: { ...s.ideActiveFileByProject, [pid]: canonicalNext },
+      ideFileViewModeByProject: { ...s.ideFileViewModeByProject, [pid]: viewMode },
+      ideDiffBeforeByProject: { ...s.ideDiffBeforeByProject, [pid]: diffBefore },
+    }));
 
     persistIdeBuckets(get);
   },

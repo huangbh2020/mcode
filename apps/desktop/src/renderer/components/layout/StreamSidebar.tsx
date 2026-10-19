@@ -51,6 +51,7 @@ import {
   IconSun,
   IconTrash,
   IconX,
+  IconTerminal,
 } from "@renderer/lib/icons.js";
 import { cn } from "@renderer/lib/cn.js";
 import { getProviderIcon } from "@renderer/lib/providerIcon.js";
@@ -174,6 +175,7 @@ function StreamSidebarBase() {
   const ensureWorktreeInfo = useSessionStore((s) => s.ensureWorktreeInfo);
   const openTab = useSessionStore((s) => s.openTab);
   const startSession = useSessionStore((s) => s.startSession);
+  const startTerminalSession = useSessionStore((s) => s.startTerminalSession);
   const archiveSession = useSessionStore((s) => s.archiveSession);
   const deleteSession = useSessionStore((s) => s.deleteSession);
   const setSessionPinned = useSessionStore((s) => s.setSessionPinned);
@@ -623,6 +625,9 @@ function StreamSidebarBase() {
               : undefined
         }
         newSessionOverrideTitle={scopedWorktree ? undefined : scopedProjectId ? t("layout.newSessionHere") : undefined}
+        newTerminalSessionOverride={
+          scopedProjectId ? (providerId) => void startTerminalSession(scopedProjectId, providerId) : undefined
+        }
       />
 
       {/* Scope filter: 全部项目 / per-project (+ its worktrees) / group +
@@ -1156,6 +1161,13 @@ function StreamCard({
       <div className="flex min-w-0 items-center gap-1.5 [font-size:var(--right-panel-font-size)]">
         {session.kind === "automation" && (
           <IconClock size={12} className="shrink-0 text-accent" aria-label={t("layout.automation")} />
+        )}
+        {session.kind === "terminal" && (
+          /* Terminal kind marker (IconTerminal, accent) — matches the
+             automation clock's slot so kind badges read as one family; the
+             provider icon stays in its L3/meta slot carrying the CLI
+             identity. */
+          <IconTerminal size={12} className="shrink-0 text-accent" aria-label={t("layout.terminalSession")} />
         )}
         <span className="min-w-0 flex-1 truncate">{session.title}</span>
         {parentTaskCount > 0 && (

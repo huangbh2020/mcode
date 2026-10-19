@@ -56,6 +56,7 @@ import { resolveRg, rgListFiles, rgGrep } from "@main/lib/rgSearch.js";
 import {
   isKnownWorkspaceRoot,
   findContainingWorkspaceRoot,
+  isPasteTempPath,
 } from "@main/lib/pathGuard.js";
 import { cachedTreeFiles, sortDirents, SEARCH_MAX_DEPTH, SEARCH_MAX_VISIT } from "@main/lib/walkCache.js";
 
@@ -79,16 +80,6 @@ function pathWithin(root: string, abs: string): boolean {
   if (a === r) return true;
   // Ensure the root ends with a separator so "/foo/bar" doesn't match "/foo/ba".
   return a.startsWith(r + sep);
-}
-
-/** True if `abs` sits inside the clipboard-paste temp dir (see the
- *  `clipboard:saveFile` handler). Files there were written by THIS app from
- *  user pastes (images/files copied into the composer), so reads are allowed
- *  even though the dir sits outside every project root — the IDE editor needs
- *  it to open/preview pasted files. Writes stay guarded as before. */
-function isPasteTempPath(abs: string): boolean {
-  const dir = join(app.getPath("temp"), "mcode-pastes");
-  return resolve(abs).startsWith(resolve(dir) + sep);
 }
 
 /** Directory/file names hidden from the file tree. These are build artifacts

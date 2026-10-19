@@ -17,6 +17,7 @@ import {
   SessionSearchSchema,
   BookmarkSearchSchema,
   UpdateBookmarksSchema,
+  SessionGetSchema,
 } from "@contracts/ipc";
 import type { Project } from "@contracts/session";
 import { uid } from "@main/utils.js";
@@ -227,6 +228,16 @@ export function registerProjectHandlers(ipcMain: IpcMain): void {
   // All pinned sessions across projects — feeds the left bar's pinned section.
   ipcMain.handle(IPC.SESSION_LIST_PINNED, () => {
     return { sessions: SessionRepo.listPinned() };
+  });
+
+  // Full session row by id (heavy payloads included). Desktop rows already
+  // carry the full payload everywhere; this channel exists for Api-shape
+  // parity with the mobile RPC whitelist, where list responses are slimmed
+  // (see toSlimSession in lib/sessionSync.ts) and the phone re-fetches the
+  // full row on demand when a session is opened.
+  ipcMain.handle(IPC.SESSION_GET, (_evt, raw) => {
+    const input = SessionGetSchema.parse(raw);
+    return { session: SessionRepo.get(input.sessionId) ?? null };
   });
 
   // Cross-project aggregate (stream sidebar's flat "全部项目" list). Same

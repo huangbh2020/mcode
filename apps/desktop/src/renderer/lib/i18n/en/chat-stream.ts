@@ -47,6 +47,12 @@ export const en = {
   "chatStream.image.userImage": "User image",
   "chatStream.imageRenderedAbove": "[image rendered above]",
 
+  // ── MessageBlocks: inline video (script-generated media) ──
+  "chatStream.media.tabVideos": "Videos",
+  "chatStream.media.tabImages": "Images",
+  "chatStream.video.unplayable": "Can't play",
+  "chatStream.video.openInEditor": "Open in editor",
+
   // ── MessageBlocks: image gallery ──
   "chatStream.gallery.screenshotAlt": "Screenshot {n}/{total}",
   "chatStream.gallery.prev": "Previous",
@@ -243,6 +249,7 @@ export const en = {
 
   // ── Message bookmarks (selection toolbar / capsule / timeline) ──
   "chatStream.bookmark.add": "Add bookmark",
+  "chatStream.bookmark.addToChat": "Add to current chat",
   "chatStream.bookmark.askSideChat": "Send to sub-session",
   "chatStream.bookmark.copied": "Copied",
   "chatStream.bookmark.capsuleTitle": "Bookmarks ({n})",

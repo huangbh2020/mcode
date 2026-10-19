@@ -675,6 +675,39 @@ export interface BrowserImageEvent {
   mimeType: "image/png" | "image/jpeg" | "image/webp" | "image/gif";
 }
 
+/** Video file extensions the UI treats as playable media (inline chat
+ *  players + the IDE's video preview pane + the main-process bash media
+ *  diff). Single source of truth so the adapter's diff, the store's
+ *  first-open preview default, and the editor's pane routing can't drift
+ *  apart. Chromium's decoder decides actual playability (MP4/WebM broadly,
+ *  AVI/MKV/MOV codec-dependent) — UIs must ship an unplayable fallback. */
+export const VIDEO_FILE_EXTENSIONS: readonly string[] = [
+  ".mp4",
+  ".m4v",
+  ".webm",
+  ".mov",
+  ".mkv",
+  ".ogv",
+  ".avi",
+];
+
+/** A Bash tool window produced new media files on disk (render/tutorial
+ *  scripts writing MP4s etc.). Emitted by the Claude adapter after diffing
+ *  the cwd's video inventory across the tool window; the renderer attaches
+ *  inline `<video>` blocks right after the tool_use card — the media-file
+ *  twin of BrowserImageEvent's screenshot placement. Files are referenced
+ *  by absolute path and streamed via the guarded `app-resource://`
+ *  protocol (never inlined as data URLs — tutorial renders are routinely
+ *  hundreds of MB). */
+export interface ToolMediaEvent {
+  type: "tool.media";
+  sessionId: string;
+  /** The Bash tool_use whose execution window produced the files. */
+  toolCallId: string;
+  /** Absolute paths of video files that appeared during the window. */
+  filePaths: string[];
+}
+
 /**
  * Cross-client session-list sync. `RuntimeManager.emit` only fans out events
  * from INSIDE a turn — a session created, renamed, deleted, archived or pinned
@@ -846,6 +879,7 @@ export type RuntimeEvent =
   | TurnRewoundEvent
   | CompactResultEvent
   | BrowserImageEvent
+  | ToolMediaEvent
   | SessionChangedEvent
   | SessionDeletedEvent
   | RequestResolvedEvent

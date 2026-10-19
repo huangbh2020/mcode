@@ -24,6 +24,7 @@ import {
   IconGitFork,
   IconGitMerge,
   IconChevronRight,
+  IconChevronDown,
   IconPlus,
   IconArchive,
   IconTrash,
@@ -48,6 +49,7 @@ import {
   IconTerminal,
   IconListCheck,
 } from "@renderer/lib/icons.js";
+import { NewSessionMenu } from "@renderer/components/layout/NewSessionMenu.js";
 import { useTheme, applyThemeClass } from "@renderer/lib/theme.js";
 import { isMac } from "@renderer/lib/platform.js";
 import { getProviderIcon } from "@renderer/lib/providerIcon.js";
@@ -137,6 +139,7 @@ function LeftBarBase({
   const setArchivedViewOpen = useSessionStore((s) => s.setArchivedViewOpen);
   const loadMoreSessions = useSessionStore((s) => s.loadMoreSessions);
   const startSession = useSessionStore((s) => s.startSession);
+  const startTerminalSession = useSessionStore((s) => s.startTerminalSession);
   // Use `openTab` rather than `selectSession` so the clicked thread is
   // added to the tab strip (in `tabs` mode) or simply activated (in
   // `single` mode). Both display modes share the same entry point; the
@@ -664,6 +667,7 @@ function LeftBarBase({
           unreadBySession={unreadBySession}
           onToggleExpand={() => toggleProjectExpanded(p.id)}
           onNewSession={() => void startSession(p.id)}
+          onNewTerminalSession={(providerId) => void startTerminalSession(p.id, providerId)}
           onLoadMore={() => void loadMoreSessions(p.id)}
           onSelectSession={(sid) => void openTab(sid)}
           onDelete={() => {
@@ -1396,6 +1400,9 @@ interface ProjectNodeProps {
   unreadBySession: Record<string, number>;
   onToggleExpand: () => void;
   onNewSession: () => void;
+  /** Create a terminal session in this project with the PICKED CLI's
+   *  providerId (claude-sdk / pi-sdk / codex-sdk). */
+  onNewTerminalSession: (providerId: string) => void;
   onLoadMore: () => void;
   onSelectSession: (sessionId: string) => void;
   onDelete: () => void;
@@ -1456,7 +1463,7 @@ function ProjectNode(props: ProjectNodeProps) {
   const {
     project, sessions, hasMore, total, expanded, isActiveProject, activeSessionId,
     runningBySession, unreadBySession,
-    onToggleExpand, onNewSession, onLoadMore, onSelectSession,
+    onToggleExpand, onNewSession, onNewTerminalSession, onLoadMore, onSelectSession,
     onDelete, onArchiveSession, onDeleteSession, onTogglePinSession,
     bulkMode, bulkSelected, onToggleBulkSession, onToggleBulkProject,
     onNewWorktreeHere, worktreeNames, expandedWorktrees,
@@ -1614,17 +1621,25 @@ function ProjectNode(props: ProjectNodeProps) {
             );
           })()
         ) : (
-          /* New session in this project */
-          <button
-            onClick={onNewSession}
-            className={cn(
-              "flex shrink-0 items-center rounded px-1 text-content-subtle opacity-0 transition-colors",
-              "hover:text-accent group-hover:opacity-100",
-            )}
-            title={t("layout.newSessionHere")}
-          >
-            <IconPlus size={12} />
-          </button>
+          /* New session in this project (chat + terminal CLI picker integrated) */
+          <span className="flex shrink-0 items-center rounded opacity-0 transition-opacity group-hover:opacity-100 hover:bg-surface-hover/80">
+            <button
+              onClick={onNewSession}
+              className="flex shrink-0 items-center rounded-l px-1 py-0.5 text-content-subtle transition-colors hover:text-accent"
+              title={t("layout.newSessionHere")}
+            >
+              <IconPlus size={12} />
+            </button>
+            <NewSessionMenu
+              projectId={project.id}
+              triggerTitle={t("layout.newSessionMenu.more")}
+              triggerClassName="flex shrink-0 items-center rounded-r px-0.5 py-0.5 text-content-subtle transition-colors hover:text-accent"
+              onNewSession={onNewSession}
+              onNewTerminalSession={onNewTerminalSession}
+            >
+              <IconChevronDown size={10} />
+            </NewSessionMenu>
+          </span>
         )}
 
         {/* Delete — inline on hover (projects cannot be archived, only
@@ -1845,7 +1860,8 @@ function SessionRow({
         )
       )}
 
-      {/* 定时任务会话:accent 实心时钟替代 provider 图标(停用=灰)。 */}
+      {/* 终端会话:provider 图标即 CLI 类型(claude/pi/codex 各自的图标,
+          经 SessionRowIcon 的 providerId 映射);定时任务会话:时钟。 */}
       {session.kind === "automation" ? (
         <IconClock
           size={12}
@@ -1853,7 +1869,19 @@ function SessionRow({
           aria-label={t("layout.automation")}
         />
       ) : (
-        <SessionRowIcon providerId={session.providerId} className="shrink-0" />
+        /* Terminal sessions: the provider icon keeps the CLI identity, with
+           a small terminal badge overlaid bottom-left so a terminal row is
+           distinguishable from a chat row at a glance (same icon otherwise). */
+        <span className="relative shrink-0">
+          <SessionRowIcon providerId={session.providerId} className="shrink-0" />
+          {session.kind === "terminal" && (
+            <IconTerminal
+              size={8}
+              className="absolute -bottom-0.5 -left-0.5 rounded-[1px] bg-surface text-accent"
+              aria-label={t("layout.terminalSession")}
+            />
+          )}
+        </span>
       )}
 
       <span className="min-w-0 flex-1 truncate">{session.title}</span>

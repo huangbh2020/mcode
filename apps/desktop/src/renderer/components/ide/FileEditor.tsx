@@ -23,7 +23,11 @@ import {
   IconX,
   IconLayoutColumns,
   IconLayoutSidebarRight,
+  IconVideo,
+  IconChevronLeft,
+  IconChevronRight,
 } from "@renderer/lib/icons.js";
+import { appResourceUrl } from "@renderer/lib/appResource.js";
 import { Menu } from "@base-ui/react/menu";
 import { FileTypeIcon } from "@renderer/lib/fileIcon.js";
 import { Markdown } from "../chat/Markdown.js";
@@ -51,7 +55,7 @@ import { useI18n } from "@renderer/lib/i18n/index.js";
 import type { MessageId } from "@renderer/lib/i18n/core.js";
 import { setLastCursor, type NavEntry } from "@renderer/lib/editorNav.js";
 import { useScrollMemory } from "@renderer/lib/scrollMemory.js";
-import { resolveShortcut, acceleratorToDisplayString } from "@renderer/lib/shortcuts.js";
+import { resolveShortcut, acceleratorToDisplayString, isEditableTarget } from "@renderer/lib/shortcuts.js";
 // Monaco model cache (keepCurrentModel ownership): hot tab switches reuse the
 // cached TextModel — tokenization, undo history and unsaved edits survive.
 import {
@@ -130,6 +134,7 @@ export function FileEditor({
 
   const markdown = isMarkdown(filePath);
   const image = isImage(filePath);
+  const video = isVideo(filePath);
   const unsupported = isUnsupported(filePath);
 
   return (
@@ -142,6 +147,7 @@ export function FileEditor({
         onToggleMode={() => setViewMode(filePath, effectiveMode === "edit" ? "diff" : "edit")}
         isMarkdown={markdown}
         isImage={image}
+        isVideo={video}
         isUnsupported={unsupported}
         onSelectViewMode={(m) => setViewMode(filePath, m)}
         editorMode={editorMode}
@@ -152,7 +158,9 @@ export function FileEditor({
           <DiffPane filePath={filePath} before={diffBefore} after={diffAfter} />
         ) : effectiveMode === "preview" ? (
           image ? (
-            <ImagePreviewPane filePath={filePath} />
+            <ImagePreviewPane filePath={filePath} projectPath={projectPath} />
+          ) : video ? (
+            <VideoPreviewPane filePath={filePath} />
           ) : unsupported ? (
             <UnsupportedPane filePath={filePath} />
           ) : (
@@ -179,6 +187,7 @@ function EditorToolbar({
   onToggleMode,
   isMarkdown,
   isImage,
+  isVideo,
   isUnsupported,
   onSelectViewMode,
   editorMode,
@@ -191,6 +200,7 @@ function EditorToolbar({
   onToggleMode: () => void;
   isMarkdown: boolean;
   isImage: boolean;
+  isVideo: boolean;
   isUnsupported: boolean;
   onSelectViewMode: (mode: "edit" | "preview") => void;
   editorMode: "tabs" | "replace";
@@ -261,9 +271,10 @@ function EditorToolbar({
   const navBackTitle = withChord("editor.nav-back", t("ide.editor.navBack"));
   const navForwardTitle = withChord("editor.nav-forward", t("ide.editor.navForward"));
   // Files that default to a read-only preview pane (markdown rendered, image
-  // displayed, or an unsupported-type notice). These get a Preview/Edit toggle
-  // so the user can still drop into the raw Monaco editor if they want.
-  const hasPreviewToggle = isMarkdown || isImage || isUnsupported;
+  // displayed, video played, or an unsupported-type notice). These get a
+  // Preview/Edit toggle so the user can still drop into the raw Monaco
+  // editor if they want.
+  const hasPreviewToggle = isMarkdown || isImage || isVideo || isUnsupported;
   // Show the path relative to the project root when possible (cleaner in the
   // narrow toolbar); fall back to the full path. Case-insensitive on Windows/
   // macOS so a lowercased drive letter from LSP (`d:\foo`) still matches a
@@ -1335,6 +1346,13 @@ function MarkdownPreviewPane({ filePath, projectPath }: { filePath: string; proj
 
 /* ───────────────────────── Image preview ───────────────────────── */
 
+/** Comparison key for matching a `file.listDir` entry against the active file
+ *  path — different producers emit different drive-letter casing and `\\` vs
+ *  `/` separators, so compare normalized + case-insensitive. */
+function imagePathKey(p: string): string {
+  return p.replace(/\\/g, "/").toLowerCase();
+}
+
 /** Read-only image preview. Fetches the file as a base64 `data:` URL via the
  *  `file.readBinary` IPC (the main process reads the bytes and enforces the
  *  project-root path guard), then renders it in an `<img>`. Centered, with a
@@ -1343,12 +1361,36 @@ function MarkdownPreviewPane({ filePath, projectPath }: { filePath: string; proj
  *
  *  Uses a data URL (not a custom protocol or `file://`) so it works under the
  *  production CSP (`img-src 'self' data:`) with no extra privilege grants.
- *  No dirty tracking - images are read-only. */
-function ImagePreviewPane({ filePath }: { filePath: string }) {
+ *  No dirty tracking - images are read-only.
+ *
+ *  Sibling gallery: the pane lists the containing directory (via
+ *  `file.listDir`, same ordering the file tree shows — dirs first, then
+ *  alphabetical) and, when OTHER images sit beside the current one, offers
+ *  prev/next chevrons + a position counter + ←/→ keys. Stepping calls the
+ *  store's `replaceIdeFile`, which swaps the open tab IN PLACE (one tab per
+ *  folder browse, not one per image) and re-points this pane at the new file.
+ *  The nav chrome lives OUTSIDE the scrolling stage (and above the loading /
+ *  error states) so it survives image-to-image swaps. */
+function ImagePreviewPane({
+  filePath,
+  projectPath,
+}: {
+  filePath: string;
+  projectPath: string;
+}) {
   const { t } = useI18n();
   const [natural, setNatural] = useState(false);
   // null = loading, "" = error/empty, non-empty = valid data URL
   const [dataUrl, setDataUrl] = useState<string | null>(null);
+
+  /* ── sibling-image gallery ── */
+  // null = listing not (yet) available; empty = no siblings → no nav chrome.
+  const [siblings, setSiblings] = useState<string[] | null>(null);
+  const replaceIdeFile = useSessionStore((s) => s.replaceIdeFile);
+  // Root of the pane — used to prove visibility before honoring ←/→ (the
+  // editor column survives focus flips as a hidden keep-alive in wide mode;
+  // `offsetParent` is null under `display:none`).
+  const rootRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -1367,54 +1409,209 @@ function ImagePreviewPane({ filePath }: { filePath: string }) {
     };
   }, [filePath]);
 
-  // Loading state.
-  if (dataUrl === null) {
-    return (
-      <div className="flex h-full items-center justify-center gap-1.5 text-[11px] text-content-subtle">
-        <IconLoader2 size={12} className="animate-spin" />
-        {t("ide.editor.readingImage")}
+  // Fetch the folder listing for the gallery. listDir refuses paths outside
+  // the project root (returns []) — the chrome just doesn't appear there.
+  useEffect(() => {
+    let cancelled = false;
+    setSiblings(null);
+    const rel = relativePath(dirname(filePath), projectPath);
+    api.file
+      .listDir({ projectPath, dirPath: rel })
+      .then(({ entries }) => {
+        if (cancelled) return;
+        setSiblings(entries.filter((e) => !e.isDir && isImage(e.path)).map((e) => e.path));
+      })
+      .catch(() => {
+        if (!cancelled) setSiblings([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [filePath, projectPath]);
+
+  const gallery = siblings != null && siblings.length > 1 ? siblings : null;
+  const galleryIdx = gallery
+    ? gallery.findIndex((p) => imagePathKey(p) === imagePathKey(filePath))
+    : -1;
+
+  const step = (delta: number) => {
+    if (!gallery || galleryIdx < 0) return;
+    const next = gallery[galleryIdx + delta];
+    if (!next) return;
+    replaceIdeFile(filePath, next);
+  };
+
+  // ←/→ step through the gallery. Bare arrows only: modified chords belong to
+  // the shortcut system; editable targets (composer, Monaco, terminal) keep
+  // their caret; open dialogs/menus (chat lightbox, confirm boxes, pickers)
+  // own their arrows; and a hidden pane (wide-mode keep-alive) never steals
+  // keys from the visible surface.
+  useEffect(() => {
+    if (!gallery || galleryIdx < 0) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+      if (e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return;
+      if (isEditableTarget(e.target)) return;
+      if (document.querySelector('[role="dialog"], [role="menu"]')) return;
+      const root = rootRef.current;
+      if (!root || root.offsetParent === null) return;
+      e.preventDefault();
+      step(e.key === "ArrowLeft" ? -1 : 1);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [gallery, galleryIdx, filePath, replaceIdeFile]);
+
+  const prevTitle = t("ide.editor.imagePrev");
+  const nextTitle = t("ide.editor.imageNext");
+
+  return (
+    <div ref={rootRef} className="relative h-full">
+      <div
+        className="h-full overflow-auto bg-surface"
+        style={{
+          backgroundImage:
+            "linear-gradient(45deg, var(--color-surface-muted) 25%, transparent 25%), linear-gradient(-45deg, var(--color-surface-muted) 25%, transparent 25%), linear-gradient(45deg, transparent 75%, var(--color-surface-muted) 75%), linear-gradient(-45deg, transparent 75%, var(--color-surface-muted) 75%)",
+          backgroundSize: "16px 16px",
+          backgroundPosition: "0 0, 0 8px, 8px -8px, -8px 0",
+        }}
+      >
+        {dataUrl === null ? (
+          // Loading state.
+          <div className="flex h-full items-center justify-center gap-1.5 text-[11px] text-content-subtle">
+            <IconLoader2 size={12} className="animate-spin" />
+            {t("ide.editor.readingImage")}
+          </div>
+        ) : !dataUrl ? (
+          // Error / empty (refused or unreadable).
+          <div className="flex h-full flex-col items-center justify-center gap-2 p-6 text-center">
+            <IconPhotoOff size={32} className="text-content-subtle" />
+            <p className="text-[12px] font-medium text-content-muted">{t("ide.editor.imageLoadFailed")}</p>
+            <p className="max-w-[320px] text-[11px] leading-relaxed text-content-subtle">
+              {t("ide.editor.imageLoadFailedDesc")}
+            </p>
+          </div>
+        ) : (
+          <div
+            className="flex min-h-full min-w-full items-center justify-center p-6"
+            onClick={() => setNatural((n) => !n)}
+            title={natural ? t("ide.editor.imageFitHint") : t("ide.editor.imageNaturalHint")}
+          >
+            <img
+              src={dataUrl}
+              alt={filePath}
+              className={cn(
+                "transition-shadow",
+                natural ? "cursor-zoom-out" : "cursor-zoom-in",
+                "max-h-full max-w-full object-contain shadow-lg",
+              )}
+              style={natural ? { maxHeight: "none", maxWidth: "none" } : undefined}
+            />
+          </div>
+        )}
       </div>
-    );
-  }
-  // Error / empty (refused or unreadable).
-  if (!dataUrl) {
+      {/* Gallery chrome — floats over the stage, never scrolls with it. */}
+      {gallery && galleryIdx >= 0 && (
+        <>
+          <button
+            type="button"
+            onClick={() => step(-1)}
+            disabled={galleryIdx <= 0}
+            title={prevTitle}
+            aria-label={prevTitle}
+            className={cn(
+              "absolute left-3 top-1/2 z-10 flex h-8 w-8 -translate-y-1/2 items-center justify-center",
+              "rounded-full border border-edge bg-surface/90 text-content-muted shadow-md backdrop-blur-sm",
+              "transition-colors hover:bg-surface-hover hover:text-content",
+              "disabled:pointer-events-none disabled:opacity-30",
+            )}
+          >
+            <IconChevronLeft size={16} />
+          </button>
+          <button
+            type="button"
+            onClick={() => step(1)}
+            disabled={galleryIdx >= gallery.length - 1}
+            title={nextTitle}
+            aria-label={nextTitle}
+            className={cn(
+              "absolute right-3 top-1/2 z-10 flex h-8 w-8 -translate-y-1/2 items-center justify-center",
+              "rounded-full border border-edge bg-surface/90 text-content-muted shadow-md backdrop-blur-sm",
+              "transition-colors hover:bg-surface-hover hover:text-content",
+              "disabled:pointer-events-none disabled:opacity-30",
+            )}
+          >
+            <IconChevronRight size={16} />
+          </button>
+          <span className="pointer-events-none absolute bottom-3 left-1/2 z-10 -translate-x-1/2 rounded-full border border-edge bg-surface/90 px-2.5 py-0.5 text-[11px] font-medium tabular-nums text-content-muted shadow-md backdrop-blur-sm">
+            {galleryIdx + 1} / {gallery.length}
+          </span>
+        </>
+      )}
+    </div>
+  );
+}
+
+/* ───────────────────────── Video preview pane ───────────────────────── */
+
+/** `<video>` player for local video files (tutorial-rendered MP4s etc.).
+ *  Streams via the guarded `app-resource://` protocol — NOT a base64 data
+ *  URL like images: videos are far too large to hold in the renderer, and
+ *  the protocol's Range support is what makes the scrubber seekable.
+ *  Chromium only decodes what it supports (MP4/H.264, WebM, Ogg; many AVI/
+ *  MKV/MOV codec variants fail), so an unplayable file falls back to a
+ *  notice with an "open in system player" escape hatch.
+ *
+ *  No dirty tracking - videos are read-only. */
+function VideoPreviewPane({ filePath }: { filePath: string }) {
+  const { t } = useI18n();
+  const [state, setState] = useState<"loading" | "ready" | "error">("loading");
+
+  useEffect(() => {
+    setState("loading");
+  }, [filePath]);
+
+  if (state === "error") {
     return (
-      <div className="flex h-full flex-col items-center justify-center gap-2 p-6 text-center">
-        <IconPhotoOff size={32} className="text-content-subtle" />
-        <p className="text-[12px] font-medium text-content-muted">{t("ide.editor.imageLoadFailed")}</p>
-        <p className="max-w-[320px] text-[11px] leading-relaxed text-content-subtle">
-          {t("ide.editor.imageLoadFailedDesc")}
-        </p>
+      <div className="flex h-full flex-col items-center justify-center gap-3 p-8 text-center">
+        <div className="flex h-16 w-16 items-center justify-center rounded-full bg-surface-muted text-content-subtle">
+          <IconVideo size={28} />
+        </div>
+        <div className="space-y-1">
+          <p className="text-[13px] font-medium text-content">{t("ide.editor.videoUnsupported")}</p>
+          <p className="max-w-[360px] text-[11px] leading-relaxed text-content-subtle">
+            {t("ide.editor.videoUnsupportedDesc")}
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={() => void api.shell.openFile({ path: filePath })}
+          className="flex items-center gap-1.5 rounded-md border border-edge bg-surface px-3 py-1.5 text-[12px] text-content-muted transition-colors hover:bg-surface-hover hover:text-content"
+          title={t("ide.editor.openInSystemHint")}
+        >
+          {t("ide.editor.openInSystem")}
+        </button>
       </div>
     );
   }
 
   return (
-    <div
-      className="h-full overflow-auto bg-surface"
-      style={{
-        backgroundImage:
-          "linear-gradient(45deg, var(--color-surface-muted) 25%, transparent 25%), linear-gradient(-45deg, var(--color-surface-muted) 25%, transparent 25%), linear-gradient(45deg, transparent 75%, var(--color-surface-muted) 75%), linear-gradient(-45deg, transparent 75%, var(--color-surface-muted) 75%)",
-        backgroundSize: "16px 16px",
-        backgroundPosition: "0 0, 0 8px, 8px -8px, -8px 0",
-      }}
-    >
-      <div
-        className="flex min-h-full min-w-full items-center justify-center p-6"
-        onClick={() => setNatural((n) => !n)}
-        title={natural ? t("ide.editor.imageFitHint") : t("ide.editor.imageNaturalHint")}
-      >
-        <img
-          src={dataUrl}
-          alt={filePath}
-          className={cn(
-            "transition-shadow",
-            natural ? "cursor-zoom-out" : "cursor-zoom-in",
-            "max-h-full max-w-full object-contain shadow-lg",
-          )}
-          style={natural ? { maxHeight: "none", maxWidth: "none" } : undefined}
-        />
-      </div>
+    <div className="relative flex h-full items-center justify-center overflow-auto bg-surface p-6">
+      <video
+        controls
+        preload="metadata"
+        src={appResourceUrl(filePath)}
+        onLoadedMetadata={() => setState("ready")}
+        onError={() => setState("error")}
+        className="max-h-full max-w-full rounded-md shadow-lg"
+      />
+      {state === "loading" && (
+        <div className="absolute inset-0 flex items-center justify-center gap-1.5 bg-surface/80 text-[11px] text-content-subtle">
+          <IconLoader2 size={12} className="animate-spin" />
+          {t("ide.editor.readingVideo")}
+        </div>
+      )}
     </div>
   );
 }
@@ -1820,9 +2017,9 @@ function isMarkdown(filePath: string): boolean {
   return ext === ".md" || ext === ".markdown";
 }
 
-/** True for image files the editor can preview via the `app-resource://`
- *  protocol (binary files served from the main process). SVG is text but also
- *  renders as an image, so it's included. */
+/** True for image files the editor previews as a data-URL `<img>` (loaded via
+ *  `file:readBinary`; works under the production CSP's `img-src 'self' data:`).
+ *  SVG is text but also renders as an image, so it's included. */
 function isImage(filePath: string): boolean {
   switch (extname(filePath)) {
     case ".png":
@@ -1842,10 +2039,31 @@ function isImage(filePath: string): boolean {
   }
 }
 
+/** True for video files the editor plays via the guarded `app-resource://`
+ *  streaming protocol. Container/codec coverage follows Chromium's decoder
+ *  set — MP4/WebM play everywhere; AVI/MKV/MOV depend on the codecs inside,
+ *  and failures surface as the pane's "open in system player" fallback
+ *  rather than a crash. Mirrors `isVideoPath` in sessionStore.ts (first-open
+ *  preview default) — keep the lists in sync. */
+function isVideo(filePath: string): boolean {
+  switch (extname(filePath)) {
+    case ".mp4":
+    case ".m4v":
+    case ".webm":
+    case ".mov":
+    case ".mkv":
+    case ".ogv":
+    case ".avi":
+      return true;
+    default:
+      return false;
+  }
+}
+
 /** True for binary file types the editor can neither edit (Monaco is text-only)
  *  nor meaningfully preview (no built-in renderer). These get a friendly
  *  "can't preview" pane instead of garbled Monaco content. Covers Office docs,
- *  archives, binaries, audio/video, and databases. */
+ *  archives, binaries, audio, and databases. */
 function isUnsupported(filePath: string): boolean {
   switch (extname(filePath)) {
     // Office documents
@@ -1877,12 +2095,8 @@ function isUnsupported(filePath: string): boolean {
     case ".class":
     case ".jar":
     case ".wasm":
-    // Audio / video
+    // Audio (video containers are handled by isVideo above)
     case ".mp3":
-    case ".mp4":
-    case ".webm":
-    case ".avi":
-    case ".mov":
     case ".ogg":
     case ".flac":
     case ".wav":

@@ -123,6 +123,22 @@ export function getPairEndpoint(): string | null {
   return readAuth().endpoint;
 }
 
+/** Build a same-origin, token-authenticated media stream URL for the phone's
+ *  inline `<video>` elements (`/api/media?path=…&token=…`).
+ *
+ *  Relative on purpose: the page is served by the mobile server itself, so a
+ *  relative URL follows whatever origin the phone is actually on (LAN IP or
+ *  the relay domain) — a stored absolute endpoint would go stale when the
+ *  IP changes. The token rides the query string because media elements
+ *  cannot set an Authorization header; that's the same channel the SSE
+ *  `EventSource` already uses. Returns null when unpaired — callers fall
+ *  back to the unplayable-media tile. */
+export function authenticatedMediaUrl(filePath: string): string | null {
+  const { token } = readAuth();
+  if (!token) return null;
+  return `/api/media?path=${encodeURIComponent(filePath)}&token=${encodeURIComponent(token)}`;
+}
+
 /* ────────────── share links (`#token=…`) ────────────── */
 
 /** Read the device token from the URL hash (`#token=…`) — the share-link
@@ -513,6 +529,7 @@ const session: Api["session"] = {
   search: (input) => rpc("session:search", input),
   searchBookmarks: (input) => rpc("session:searchBookmarks", input),
   messages: (input) => rpc("session:messages", input),
+  get: (input) => rpc("session:get", input),
   saveMessages: (input) => rpc("session:saveMessages", input),
   upsertMessages: (input) => rpc("session:upsertMessages", input),
   truncateAndInsertMessages: (input) => rpc("session:truncateAndInsertMessages", input),
