@@ -7,11 +7,11 @@
  */
 import { sendToRenderer } from "@main/window.js";
 import { IPC } from "@contracts/ipc";
-import type { RuntimeEvent, PermissionMode, ContextSnapshot, TurnUsageRecord, TurnFileEntry, UserMessageEvent, UpstreamIssueEvent, SubagentTranscriptBlock, SubagentSnapshot, BashTaskSnapshot } from "@contracts/runtime";
-import type { Session } from "@contracts/session";
-import type { ProviderContext, TurnHandle, StartTurnRequest, UserInputAnswers, PlanApprovalDecision } from "@contracts/provider";
+import type { RuntimeEvent, PermissionMode, ContextSnapshot, TurnUsageRecord, TurnFileEntry, UserMessageEvent, UpstreamIssueEvent, SubagentTranscriptBlock, SubagentSnapshot, BashTaskSnapshot, SessionRevisedEvent } from "@contracts/runtime";
+import type { Session, MessageRecord } from "@contracts/session";
+import type { ProviderContext, TurnHandle, StartTurnRequest, UserInputAnswers, PlanApprovalDecision, RevisionGuiPrompt } from "@contracts/provider";
 import { providerRegistry } from "@main/providers/registry.js";
-import { SessionRepo, ProjectRepo } from "@main/store/repositories.js";
+import { SessionRepo, ProjectRepo, MessageRepo } from "@main/store/repositories.js";
 import { CustomModelStore } from "@main/lib/secretStore.js";
 import { ApprovalBridge } from "./ApprovalBridge.js";
 import { getFileSnapshot, dropFileSnapshot } from "@main/lib/fileSnapshotRegistry.js";
@@ -456,8 +456,23 @@ class RuntimeManager {
       return;
     }
     if (rt.handle?.isRunning()) {
-      log.warn(`sendTurn: session ${session.id} already running, ignoring`);
-      return;
+      // 上一轮的 SDK 生成器可能处于 flushFinal() 收尾阶段（异步微任务尚未
+      // 落地 `finished = true`），而渲染进程在收到 turn.done 后立即通过
+      // drainPromptQueueIfIdle 发起了下一轮的 sendTurn IPC。
+      // 直接 ignore 会导致整个队列项被渲染进程移除却在主进程被丢弃。
+      // 此处等待其真正结束（最长 2500ms），若超时则说明确有并发冲突，
+      // 抛出错误让 IPC 层返回失败，渲染进程 catch 分支会保留队列并提示。
+      log.info(`sendTurn: session ${session.id} still closing, waiting for handle to finish...`);
+      const WAIT_MS = 2500;
+      const settled = await Promise.race([
+        rt.handle.done.then(() => true),
+        new Promise<false>((resolve) => setTimeout(() => resolve(false), WAIT_MS)),
+      ]);
+      if (!settled || rt.handle?.isRunning()) {
+        log.warn(`sendTurn: session ${session.id} still running after ${WAIT_MS}ms wait, rejecting`);
+        throw new Error(`session ${session.id} is currently running`);
+      }
+      log.info(`sendTurn: session ${session.id} handle finished, proceeding`);
     }
 
     const provider = providerRegistry.resolve(session.providerId);
@@ -820,6 +835,127 @@ class RuntimeManager {
       } satisfies RuntimeEvent,
     });
     return restored;
+  }
+
+  /** Text of a persisted user message row — text blocks joined, mirroring
+   *  what the renderer displays (attachments/images carry no prose). Used as
+   *  the alignment signal every provider's revision matches against. */
+  private static userRowText(content: unknown): string {
+    if (!Array.isArray(content)) return typeof content === "string" ? content : "";
+    const parts: string[] = [];
+    for (const b of content) {
+      if (
+        b &&
+        typeof b === "object" &&
+        (b as { kind?: unknown }).kind === "text" &&
+        typeof (b as { text?: unknown }).text === "string"
+      ) {
+        parts.push((b as { text: string }).text);
+      }
+    }
+    return parts.join("\n");
+  }
+
+  /**
+   * Conversation-level revision at a sent user message (2026-10-20): the
+   *  edit/retract feature's main-process half. Edit-resend and retract share
+   *  this path — both rewind the conversation to just before the target
+   *  message was sent; the edit flow immediately follows with a fresh
+   *  sendTurn carrying the edited text.
+   *
+   *  Division of labor: the PROVIDER rewinds its own conversation state (its
+   *  reviseConversation implementation — claude truncates its transcript
+   *  jsonl, pi branches the session tree, codex calls the protocol's native
+   *  thread/revert), and this method performs the DB row surgery + client
+   *  broadcast AFTER that resolves — provider first, so a refusal aborts
+   *  with nothing changed instead of splitting the GUI view from the
+   *  model's context.
+   *
+   *  Works for a reopened session with no live runtime (providerSessionId
+   *  falls back to the persisted row). Gated on the session being idle and
+   *  on the provider declaring supportsConversationRevision. Throws on
+   *  refusal; the renderer toasts the message.
+   */
+  async reviseConversation(sessionId: string, messageId: string): Promise<{ removed: number }> {
+    const rt = this.sessions.get(sessionId);
+    if (rt?.handle?.isRunning()) {
+      throw new Error("session is running");
+    }
+    const session = SessionRepo.get(sessionId);
+    if (!session) {
+      throw new Error("session not found");
+    }
+    const provider = providerRegistry.resolve(session.providerId);
+    if (!provider.capabilities.supportsConversationRevision) {
+      throw new Error(`provider ${session.providerId} does not support conversation revision`);
+    }
+    const revise = provider.reviseConversation;
+    if (!revise) {
+      throw new Error(`provider ${session.providerId} declares revision support but implements no reviseConversation`);
+    }
+
+    // The DB is authoritative (renderer buckets can be paginated windows).
+    const rows = MessageRepo.listBySession(sessionId).messages;
+    const mIdx = rows.findIndex((r) => r.id === messageId);
+    if (mIdx < 0) throw new Error("message not found");
+    const target = rows[mIdx] as MessageRecord;
+    if (target.role !== "user") throw new Error("only user messages can be revised");
+
+    // GUI user rows (order preserved) — the alignment source every provider
+    // matches its own history against.
+    const guiUserRows: RevisionGuiPrompt[] = [];
+    let guiIndex = -1;
+    for (const r of rows) {
+      if (r.role !== "user") continue;
+      if (r.id === messageId) guiIndex = guiUserRows.length;
+      guiUserRows.push({ id: r.id, createdAt: r.createdAt, text: RuntimeManager.userRowText(r.content) });
+    }
+    if (guiIndex < 0) throw new Error("target is not a user message row");
+
+    // ── Provider-side rewind (throws = refuse, nothing changed) ──
+    const cwd =
+      rt?.lastCwd ??
+      (() => {
+        const project = session.projectId ? ProjectRepo.get(session.projectId) : undefined;
+        return project?.path ?? "";
+      })();
+    const reviseResult = await revise.call(provider, {
+      sessionId,
+      providerSessionId: rt?.providerSessionId ?? session.claudeSessionId ?? null,
+      cwd,
+      target: guiUserRows[guiIndex],
+      guiUserRows,
+      log,
+    });
+    if (reviseResult.cleared) {
+      // The provider wiped its conversation back to before the first
+      // message: drop the session binding (runtime + DB) so the next turn
+      // starts a fresh provider session instead of resuming a dead id.
+      if (rt) rt.providerSessionId = null;
+      try {
+        SessionRepo.updateClaudeSessionId(sessionId, null);
+      } catch (err) {
+        log.error(`reviseConversation: failed to clear provider session id: ${(err as Error).message}`);
+      }
+    }
+
+    // ── DB row surgery (everything from the target to the end) ──
+    const removed = MessageRepo.deleteRange(sessionId, {
+      createdAt: target.createdAt,
+      id: target.id,
+    });
+
+    // ── Tell every client (including the initiator — the splice handler is
+    //    idempotent, so the ordering with the initiator's own optimistic
+    //    update doesn't matter). ──
+    const event: SessionRevisedEvent = {
+      type: "session.revised",
+      sessionId,
+      messageId,
+      scope: "from-message",
+    };
+    broadcastRuntimeEvent(event);
+    return { removed };
   }
 
   /** Resolve an approval request from the renderer. On success, broadcast the

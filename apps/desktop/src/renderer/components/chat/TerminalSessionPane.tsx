@@ -24,7 +24,6 @@ import { useSessionStore } from "@renderer/stores/sessionStore.js";
 import { useI18n } from "@renderer/lib/i18n/index.js";
 import { api } from "@renderer/lib/api.js";
 import { buildTerminalInitCommand } from "@renderer/lib/terminalCli.js";
-import { IconRefresh, IconEraser } from "@renderer/lib/icons.js";
 
 /** Snapshot cadence. Losing at most one interval of trailing output on an
  *  abrupt close is the accepted trade (a real terminal loses everything). */
@@ -165,27 +164,6 @@ export function TerminalSessionPane({
 
   return (
     <div className="group/term relative flex h-full min-h-0 w-full flex-col bg-surface">
-      {/* Hover-revealed mini controls (top-right, floating over the PTY).
-          The old status strip (status dot + CLI badge + restore hint) is
-          gone on purpose: the TUI itself already carries the state, and the
-          CLI badge duplicated what the terminal's own banner shows. Clear +
-          restart keep utility without a permanent chrome bar. */}
-      <div className="absolute right-2 top-1.5 z-10 flex items-center gap-0.5 rounded bg-surface/80 opacity-0 backdrop-blur-sm transition-opacity focus-within:opacity-100 group-hover/term:opacity-100">
-        <button
-          className="rounded p-1 text-content-subtle hover:bg-surface-hover hover:text-content"
-          title={t("ide.termSession.clear")}
-          onClick={() => handleRef.current?.clear()}
-        >
-          <IconEraser size={13} />
-        </button>
-        <button
-          className="rounded p-1 text-content-subtle hover:bg-surface-hover hover:text-content"
-          title={t("ide.termSession.restart")}
-          onClick={() => handleRef.current?.restart()}
-        >
-          <IconRefresh size={13} />
-        </button>
-      </div>
       {/* The terminal host. `boot` gates the spawn until the history decision
           is made so the FIRST PTY already carries the right init command
           (--session-id vs --resume). */}

@@ -743,6 +743,32 @@ export interface SessionDeletedEvent {
   sessionId: string;
 }
 
+/** Conversation-level revision scope. "from-message" removes the target user
+ *  message AND everything after it — the ONE scope the feature ships with:
+ *  edit-resend and cascade retract are both "rewind to just before this
+ *  message was sent" (a middle-excision scope was cut from scope in design —
+ *  no provider's SDK offers it natively and the semantics get murky). The
+ *  union stays open-ended so a future scope needs no protocol change. */
+export type RevisionScope = "from-message";
+
+/**
+ * A conversation was surgically revised on the host (see RuntimeManager's
+ * reviseConversation): message rows were deleted from the DB and, for
+ * providers that own their transcript, the provider session state was
+ * rewound to match. Broadcast through the same two channels as
+ * {@link SessionChangedEvent} so every client — including the one that
+ * initiated the revision — converges on the same view.
+ *
+ * The handler is idempotent (locating the message and finding it gone is a
+ * no-op), so the initiating client's optimistic local splice and this event
+ * can land in either order. */
+export interface SessionRevisedEvent {
+  type: "session.revised";
+  sessionId: string;
+  messageId: string;
+  scope: RevisionScope;
+}
+
 /**
  * A repo's git state changed on the host — commit / stage / unstage / push /
  * pull / discard, issued by ANY client (desktop panel or a paired phone).
@@ -882,6 +908,7 @@ export type RuntimeEvent =
   | ToolMediaEvent
   | SessionChangedEvent
   | SessionDeletedEvent
+  | SessionRevisedEvent
   | RequestResolvedEvent
   | SessionRunningSnapshotEvent
   | UserMessageEvent

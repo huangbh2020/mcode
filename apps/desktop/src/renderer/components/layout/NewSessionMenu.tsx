@@ -1,6 +1,6 @@
 /**
  * 「新建会话」统一菜单 — a base-ui dropdown menu integrating both standard chat
- * sessions and terminal CLI sessions (claude / pi / codex / antigravity).
+ * sessions and terminal CLI sessions (claude / pi / codex / opencode / antigravity).
  *
  * Used by:
  * 1. SidebarQuickActions: attached to the split button's chevron dropdown trigger.

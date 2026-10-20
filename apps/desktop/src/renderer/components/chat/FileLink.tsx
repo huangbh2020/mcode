@@ -44,6 +44,8 @@ export function FileLink({
   projectPath,
   display,
   asLink = false,
+  line,
+  column,
 }: {
   token: string;
   /** Project root to resolve relative tokens against. When null/undefined,
@@ -55,6 +57,10 @@ export function FileLink({
   /** Render as a real `<a href>` (markdown link position) instead of a
    *  `<span>`; clicks are intercepted and resolved exactly the same way. */
   asLink?: boolean;
+  /** 1-based position jumped to after opening (from a `path:line[:col]`
+   *  suffix absorbed at split time). */
+  line?: number;
+  column?: number;
 }) {
   const elRef = useRef<HTMLElement | null>(null);
   const [loading, setLoading] = useState(false);
@@ -84,8 +90,9 @@ export function FileLink({
   const openCandidatePath = (c: ResolvedCandidate) => {
     const store = useSessionStore.getState();
     if (isElectron) {
-      store.openFileInIde(c.path);
+      store.openFileInIde(c.path, { line, column });
     } else {
+      // Mobile viewer has no editor gutter to jump to.
       store.openMobileViewer({ kind: "file", name: basename(c.path), path: c.path });
     }
   };
@@ -166,7 +173,9 @@ export function FileLink({
           onKeyDown={handleKeyDown}
           className={cn(
             "cursor-pointer rounded-[2px] underline decoration-dotted decoration-accent/60 underline-offset-2",
-            "text-accent hover:bg-accent/10",
+            // accent-strong: small accent TEXT must sit at the 700 stop in
+            // light theme (≥4.5:1); dark theme's strong === default accent.
+            "text-accent-strong hover:bg-accent/10",
             loading && "opacity-60",
           )}
         >

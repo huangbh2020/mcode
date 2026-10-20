@@ -539,6 +539,71 @@ console.log("\n[11] leftbar expansion persistence (issue #13)");
   );
 }
 
+// ── 8. `session.revised` — conversation-level revision splice (2026-10-20) ─
+console.log("\n[8] session.revised splices the revised range, idempotently");
+{
+  const mk = (id: string, role: "user" | "assistant", at: number): ChatMessage => ({
+    id,
+    sessionId: "rv1",
+    role,
+    blocks: [{ kind: "text", text: id }],
+    createdAt: at,
+  });
+  const reset = (): void => {
+    useSessionStore.setState({
+      messagesBySession: {
+        ...useSessionStore.getState().messagesBySession,
+        rv1: [mk("u1", "user", 1), mk("a1", "assistant", 2), mk("u2", "user", 3), mk("a2", "assistant", 4), mk("u3", "user", 5), mk("a3", "assistant", 6)],
+      },
+      turnFilesBySession: { ...useSessionStore.getState().turnFilesBySession, rv1: [] },
+    });
+  };
+  const ids = (): string[] => (useSessionStore.getState().messagesBySession["rv1"] ?? []).map((m) => m.id);
+
+  // from-message splice at u2: removes u2 AND everything after (the ONE scope).
+  reset();
+  useSessionStore.getState().ingestEvent({
+    type: "session.revised",
+    sessionId: "rv1",
+    messageId: "u2",
+    scope: "from-message",
+  });
+  check("splice removes the message and the tail", JSON.stringify(ids()) === JSON.stringify(["u1", "a1"]), ids());
+  check("tail-reaching splice clears the latest-turn bucket",
+    (useSessionStore.getState().turnFilesBySession["rv1"] ?? []).length === 0);
+
+  // Replay the SAME event: the message is already gone — a strict no-op.
+  useSessionStore.getState().ingestEvent({
+    type: "session.revised",
+    sessionId: "rv1",
+    messageId: "u2",
+    scope: "from-message",
+  });
+  check("replayed revision is an idempotent no-op", JSON.stringify(ids()) === JSON.stringify(["u1", "a1"]), ids());
+
+  // A revision for a message this client never loaded (unknown id) is a
+  // silent no-op — it must not corrupt the bucket.
+  reset();
+  useSessionStore.getState().ingestEvent({
+    type: "session.revised",
+    sessionId: "rv1",
+    messageId: "gone",
+    scope: "from-message",
+  });
+  check("unknown message id is a no-op", ids().length === 6, ids());
+
+  // from-message is POSITIONAL, not tail-only: retracting u1 (mid-thread
+  // start) empties everything from u1 on.
+  reset();
+  useSessionStore.getState().ingestEvent({
+    type: "session.revised",
+    sessionId: "rv1",
+    messageId: "u1",
+    scope: "from-message",
+  });
+  check("retracting the first message empties the thread", ids().length === 0, ids());
+}
+
 console.log(`\n${checks - failures}/${checks} checks passed`);
 if (failures > 0) {
   console.error(`${failures} check(s) failed`);

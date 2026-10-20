@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { cn } from "@renderer/lib/cn.js";
+import { useI18n } from "@renderer/lib/i18n/index.js";
+import { toolDisplayName } from "@renderer/lib/toolNames.js";
 import {
   IconCheck,
   IconX,
@@ -49,6 +51,7 @@ const ROLL_EASING = "cubic-bezier(0.4, 0, 0.2, 1)";
  *  stream's single loading indicator lives at the bottom (isStreamingTail),
  *  so the ticker only marks errors (✗) and completions (✓) per row. */
 function TickerRow({ op, running }: { op: ToolUseBlock; running: boolean }) {
+  const { t } = useI18n();
   const status = running ? "running" : op.status;
   return (
     <span
@@ -59,7 +62,7 @@ function TickerRow({ op, running }: { op: ToolUseBlock; running: boolean }) {
       {status === "done" && <IconCheck size={12} className="shrink-0 text-content-subtle" />}
       <ToolIcon name={op.toolName} className="shrink-0 text-content-muted" />
       <span className={cn("font-medium", running ? "text-content" : "text-content-muted")}>
-        {op.toolName}
+        {toolDisplayName(t, op.toolName)}
       </span>
       <span className="truncate font-mono text-content-subtle">{toolSummary(op.toolName, op.input)}</span>
     </span>

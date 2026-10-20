@@ -21,9 +21,9 @@ import type { ChatDensity } from "@contracts/ipc";
  *                       accents). Composes `/10`, `/15`, `/60` etc. alpha.
  *   data-chat-density: a `<html>` attribute ("compact"|"comfortable"|"cozy")
  *                       consumed by styles.css attribute selectors to set the
- *                       three density vars (--chat-row-gap-assistant /
- *                       --chat-row-gap-user / --chat-block-gap) that drive
- *                       message-stream vertical rhythm.
+ *                       density vars (--chat-row-gap-assistant /
+ *                       --chat-row-gap-user / --chat-row-gap-turn-lead /
+ *                       --chat-block-gap) that drive message-stream vertical rhythm.
  *
  * Static fallbacks for the color/font vars live in styles.css (:root + .dark);
  * when the user has NOT customized a value we REMOVE the inline property so

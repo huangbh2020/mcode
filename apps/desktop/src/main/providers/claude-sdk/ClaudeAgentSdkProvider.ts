@@ -42,6 +42,19 @@ import { resolveGitBash } from "@main/lib/binaryResolve.js";
 import { samePath } from "@main/lib/pathGuard.js";
 import { getMcpManagement, readProjectMcpServers } from "@main/lib/mcpConfig.js";
 import { getOutputStyleSetting } from "@main/lib/outputStyleConfig.js";
+import { join } from "node:path";
+import { unlinkSync } from "node:fs";
+import {
+  loadTranscript,
+  alignPrompts,
+  positionalPromptRow,
+  planTailCut,
+  serializeTranscript,
+  rewriteTranscriptFile,
+  countSdkPromptRows,
+} from "@main/lib/claudeTranscript.js";
+import { findClaudeProjectDir } from "@main/lib/claudeCli.js";
+import type { ProviderReviseInput } from "@contracts/provider";
 import { getCustomPromptSetting } from "@main/lib/customPrompt.js";
 import { getEnabledPlugins, getPluginMcpServers } from "@main/plugins/pluginManager.js";
 import { resolveSubagentModelValue } from "@main/lib/subagentModel.js";
@@ -698,7 +711,76 @@ export class ClaudeAgentSdkProvider implements AgentProvider {
       { id: "fable", label: "Fable", hint: "claude-fable" },
     ],
     supportsCustomEndpoint: true,
+    // Conversation-level revision (edit/retract of sent messages): the CLI's
+    // transcript is a local jsonl under CLAUDE_CONFIG_DIR that Mcode can
+    // rewrite (see lib/claudeTranscript.ts), so the revision surgery keeps
+    // the model's context in sync with the GUI view. Pi/codex don't declare
+    // this (yet) — their UI falls back to the legacy tail-only edit.
+    supportsConversationRevision: true,
   };
+
+  /**
+   * Conversation-level revision, claude-sdk implementation: truncate the
+   * CLI's own transcript jsonl at the target message's prompt row. The file
+   * (~/.mcode/projects/<encoded-cwd>/<providerSessionId>.jsonl) IS the
+   * model's context — every turn `--resume`s it — so a tail cut there is
+   * the only edit/retract that actually reaches the model. See
+   * lib/claudeTranscript.ts for the row taxonomy and alignment; the host
+   * runs this BEFORE the DB row surgery, so a throw here refuses the whole
+   * revision with nothing changed. A revision that empties the file of every
+   * real prompt deletes it — an empty transcript is not a resumable
+   * conversation, and the next turn starts a fresh CLI session (the host's
+   * providerSessionId slot is cleared via input-provider hooks below).
+   */
+  async reviseConversation(input: ProviderReviseInput): Promise<{ cleared?: boolean }> {
+    const providerSessionId = input.providerSessionId;
+    if (!providerSessionId) {
+      // No CLI session ever ran — nothing to rewind host-side.
+      input.log.info("claude revise: no provider session id, skipping transcript surgery");
+      return {};
+    }
+    const dir = input.cwd
+      ? findClaudeProjectDir(join(MCODE_CONFIG_DIR, "projects"), input.cwd)
+      : null;
+    const file = dir ? join(dir, `${providerSessionId}.jsonl`) : null;
+    const rows = file ? loadTranscript(file) : null;
+    if (!file || !rows) {
+      // Missing transcript (config dir moved / cwd resolution failed):
+      // PROCEED (the host still does DB surgery) but say so — the model's
+      // context will keep the removed turns, and the log should show why.
+      input.log.warn(
+        `claude revise: transcript not found (dir=${dir ?? "unresolved"}); provider context keeps the removed turns`,
+      );
+      return {};
+    }
+
+    const guiIndex = input.guiUserRows.findIndex((r) => r.id === input.target.id);
+    const rowIdx =
+      (guiIndex >= 0 ? alignPrompts(input.guiUserRows, rows).get(guiIndex) : undefined) ??
+      positionalPromptRow(input.guiUserRows.length, Math.max(guiIndex, 0), rows);
+    if (rowIdx == null) {
+      // Refuse rather than guess a cut point: a wrong truncation corrupts
+      // the model's context in ways the user can't see.
+      throw new Error("cannot locate the message's prompt entry in the CLI transcript");
+    }
+
+    const next = planTailCut(rows, rowIdx);
+    if (countSdkPromptRows(next) === 0) {
+      // Wiped back to the pre-first-message state: delete the file and say
+      // so on the log — the persisted session id must be cleared too so the
+      // next turn starts fresh (the host's DB row keeps its GUI identity).
+      try {
+        unlinkSync(file);
+      } catch (err) {
+        input.log.warn(`claude revise: failed to delete emptied transcript: ${(err as Error).message}`);
+      }
+      input.log.info("claude revise: transcript emptied — next turn starts a fresh CLI session");
+      return { cleared: true };
+    } else {
+      rewriteTranscriptFile(file, serializeTranscript(next));
+    }
+    return {};
+  }
 
   async startTurn(req: StartTurnRequest, ctx: ProviderContext): Promise<TurnHandle> {
     const ac = new AbortController();

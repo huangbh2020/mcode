@@ -9,6 +9,9 @@
  * rendering stays synchronous and IPC-free so streaming is unaffected).
  *
  * Resolution strategy (per token, on click):
+ *  0. Main-side authoritative resolve (`terminal.resolvePath`, the terminal
+ *     panel's pipeline): exact stat / same-basename walk; unique hit opens
+ *     directly, ambiguous names return the candidate list for the picker.
  *  1. Absolute path under a known project root -> return as-is.
  *  2. Project-relative path that exists -> resolve against project root.
  *  3. Otherwise -> `file.search` substring query, client-side ranked.
@@ -244,6 +247,25 @@ export async function resolveFilePathToken(
   const clean = token.trim().replace(/^["'`]|["'`]$/g, "");
   if (!clean) return [];
 
+  // 0) Authoritative main-side resolution — the same pipeline the terminal
+  //    panel uses for printed paths: exact stat for path-shaped tokens plus a
+  //    bounded same-basename walk for bare names, so `index.ts` resolves
+  //    straight to the only `index.ts` (open immediately) or yields the full
+  //    candidate list for the picker, never a substring-ranked guess.
+  if (projectPath) {
+    try {
+      const r = await api.terminal.resolvePath({ projectPath, path: clean });
+      if (r.path) {
+        return [{ path: r.path, relativePath: relativeOrSelf(r.path, projectPath) }];
+      }
+      if (r.candidates.length > 0) {
+        return r.candidates.map((p) => ({ path: p, relativePath: relativeOrSelf(p, projectPath) }));
+      }
+    } catch {
+      // transport unavailable (web shell / IPC hiccup) -> search-based strategies below
+    }
+  }
+
   // 1) Absolute path.
   if (isAbsolutePath(clean)) {
     if (isUnderKnownProject(clean)) {
@@ -341,10 +363,31 @@ function relativeOrSelf(abs: string, root: string | null | undefined): string {
 
 // ── Text splitting (render-time, synchronous) ─────────────────────────
 
-/** A text segment is either plain text or a path token to be linkified. */
+/** A text segment is either plain text or a path token to be linkified.
+ *  Path tokens carry an optional line/column location absorbed from a
+ *  `:line[:col]` suffix (`src/a.ts:42`, `src/a.ts:42:7`) so the click can
+ *  jump straight to the position, mirroring the terminal panel. */
 export type TextSegment =
   | { kind: "text"; text: string }
-  | { kind: "path"; token: string };
+  | { kind: "path"; token: string; line?: number; column?: number };
+
+/** Trailing `:line[:col]` on a matched token — the Windows-absolute branch's
+ *  char class admits `:`, so `D:\x\a.ts:42` matches with the suffix inside.
+ *  Digits are bounded so times (`10:30`) and ports can't sneak in. */
+const TRAILING_LINE_COL_RE = /:(\d{1,6})(?::(\d{1,6}))?$/;
+/** Same suffix sitting in the prose right after the match (all other regex
+ *  branches stop before `:`). */
+const LINE_COL_PREFIX_RE = /^:(\d{1,6})(?::(\d{1,6}))?/;
+
+function splitTrailingLineCol(token: string): { token: string; line?: number; column?: number } {
+  const m = TRAILING_LINE_COL_RE.exec(token);
+  if (!m) return { token };
+  return {
+    token: token.slice(0, m.index),
+    line: Number(m[1]),
+    column: m[2] !== undefined ? Number(m[2]) : undefined,
+  };
+}
 
 /**
  * Split a string into plain-text and path-token segments. Pure & synchronous
@@ -359,13 +402,35 @@ export function splitTextByPathTokens(text: string): TextSegment[] {
   PATH_TOKEN_RE.lastIndex = 0;
   let m: RegExpExecArray | null;
   while ((m = PATH_TOKEN_RE.exec(text)) !== null) {
-    const token = m[0];
+    const rawToken = m[0];
+    const start = m.index;
+    // Absorb a `:line[:col]` location suffix. Windows-branch tokens can
+    // swallow it into the match (their char class allows `:`); every other
+    // branch stops before the colon, so pick it up from the prose that
+    // follows. The suffix becomes the jump target, the token stays a clean
+    // path. Stripping must leave a valid path — `D:\a:b`-style NTFS names
+    // are rare enough that treating a numeric tail as a line number is the
+    // better bet.
+    const stripped = splitTrailingLineCol(rawToken);
+    let token = rawToken;
+    let line = stripped.line;
+    let column = stripped.column;
+    let consumed = rawToken.length;
+    if (line !== undefined && stripped.token && isLikelyPathToken(stripped.token)) {
+      token = stripped.token;
+    } else if (line === undefined) {
+      const lc = LINE_COL_PREFIX_RE.exec(text.slice(start + rawToken.length));
+      if (lc) {
+        line = Number(lc[1]);
+        column = lc[2] !== undefined ? Number(lc[2]) : undefined;
+        consumed = rawToken.length + lc[0].length;
+      }
+    }
     // Validate the candidate so we don't linkify version strings etc.
     if (!isLikelyPathToken(token)) {
       continue; // skip — but don't consume; regex will advance naturally
     }
     // Also reject if the match is immediately preceded by a URL scheme.
-    const start = m.index;
     if (start >= 4 && /https?:\/\//i.test(text.slice(Math.max(0, start - 8), start + token.length))) {
       continue;
     }
@@ -376,8 +441,8 @@ export function splitTextByPathTokens(text: string): TextSegment[] {
       continue;
     }
     if (start > last) out.push({ kind: "text", text: text.slice(last, start) });
-    out.push({ kind: "path", token });
-    last = start + token.length;
+    out.push({ kind: "path", token, line, column });
+    last = start + consumed;
   }
   if (last < text.length) out.push({ kind: "text", text: text.slice(last) });
   return out;

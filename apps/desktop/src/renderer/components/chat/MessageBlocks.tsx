@@ -38,6 +38,7 @@ import { PlanStreamBlock } from "./PlanStreamBlock.js";
 import { TurnFilesCard } from "./TurnFilesCard.js";
 import { OrchCanvasBlock } from "./OrchCanvasBlock.js";
 import { OrchSynthBlock } from "./OrchSynthBlock.js";
+import { useFoldHold } from "./streamAnchorPause.js";
 import { CurrentOpTicker } from "./CurrentOpTicker.js";
 import { ModelBadge } from "./ModelAvatar.js";
 import { fmtTokens } from "@renderer/lib/contextWindow.js";
@@ -47,6 +48,7 @@ import { FileLink } from "./FileLink.js";
 import { MediaGallery, type MediaBlock } from "./mediaGallery.js";
 import { TagPopover } from "./TagPopover.js";
 import { isImageFilePath, type ContentTag } from "@renderer/lib/contentTag.js";
+import { toolDisplayName } from "@renderer/lib/toolNames.js";
 import { BUILT_IN_COMMANDS } from "@renderer/lib/slashCommands.js";
 
 /** Map of absolute file path → its pre-turn content. Built from the
@@ -89,10 +91,20 @@ function useKnownSkillNames(): ReadonlyArray<string> {
  *  viewport position. Without this, expanding a card inserts content below
  *  the header and the virtual list's height recompute pushes everything
  *  down - the header the user just clicked scrolls out of view. We snapshot
- *  the header's `rect.top` before the state flip and, after the DOM updates
- *  (rAF), scroll the nearest scroll container by the delta so the header
- *  lands back where it was. Collapsing is a no-op scroll (content above the
- *  fold never moves; only content below shrinks). */
+ *  the header's `rect.top` before the state flip and re-pin the nearest
+ *  scroll container whenever the header drifts from that top over a short
+ *  stabilization window. Collapsing is a no-op scroll (content above the
+ *  fold never moves; only content below shrinks).
+ *
+ *  Why a loop and not a single rAF patch: inside ChatPane's LegendList the
+ *  bottom-anchoring reacts to the height change on its own frame (and
+ *  streaming deltas re-snap while the card is open), so a one-shot correction
+ *  loses the race or gets overwritten. The sustained hold belongs to the
+ *  anchor-pause context (streamAnchorPause.ts); this loop covers the
+ *  click-moment race generically — including containers without a provider —
+ *  and goes quiet once the header has settled. */
+const FOLD_STABILIZE_MS = 360;
+
 function toggleHoldPosition(
   e: React.MouseEvent<HTMLButtonElement>,
   setOpen: (updater: (v: boolean) => boolean) => void,
@@ -100,21 +112,27 @@ function toggleHoldPosition(
   const btn = e.currentTarget;
   const beforeTop = btn.getBoundingClientRect().top;
   setOpen((v) => !v);
-  requestAnimationFrame(() => {
-    const afterTop = btn.getBoundingClientRect().top;
-    const delta = afterTop - beforeTop;
-    if (delta === 0) return;
-    // Walk up to the nearest scroll container and adjust its scrollTop.
-    let el: HTMLElement | null = btn.parentElement;
-    while (el) {
-      const style = getComputedStyle(el);
-      if (/(auto|scroll)/.test(style.overflowY)) {
-        el.scrollTop += delta;
-        return;
+  const startedAt = performance.now();
+  const settle = () => {
+    // The card can unmount mid-window (turn-end regroup discards expanded
+    // ops bars); a detached node's rect is all zeros and would mis-scroll.
+    if (!btn.isConnected) return;
+    const delta = btn.getBoundingClientRect().top - beforeTop;
+    if (delta !== 0) {
+      // Walk up to the nearest scroll container and adjust its scrollTop.
+      let el: HTMLElement | null = btn.parentElement;
+      while (el) {
+        const style = getComputedStyle(el);
+        if (/(auto|scroll)/.test(style.overflowY)) {
+          el.scrollTop += delta;
+          break;
+        }
+        el = el.parentElement;
       }
-      el = el.parentElement;
     }
-  });
+    if (performance.now() - startedAt < FOLD_STABILIZE_MS) requestAnimationFrame(settle);
+  };
+  requestAnimationFrame(settle);
 }
 
 /** Render the content blocks of a message.
@@ -369,6 +387,9 @@ export function BatchToolGroup({
 }) {
   // 胶囊自身默认收起，用户不点击时保持单行紧凑状态（如图所示）
   const [open, setOpen] = useState(false);
+  // While open, suspend the virtual list's height-triggered bottom-pinning so
+  // the bar the user clicked stays put and content only grows below it.
+  const holdFold = useFoldHold();
   const { t } = useI18n();
 
   const toolBlocks = blocks.filter(isToolBlock);
@@ -395,7 +416,7 @@ export function BatchToolGroup({
       if (b.kind === "tool_use" && b.status === "running") {
         return {
           kind: "tool" as const,
-          name: b.toolName,
+          name: toolDisplayName(t, b.toolName),
           detail: toolSummary(b.toolName, b.input),
           status: "running" as const,
         };
@@ -423,7 +444,7 @@ export function BatchToolGroup({
       }
       return {
         kind: "tool" as const,
-        name: last.toolName,
+        name: toolDisplayName(t, last.toolName),
         detail: toolSummary(last.toolName, last.input),
         status: last.status,
       };
@@ -438,7 +459,7 @@ export function BatchToolGroup({
   // Block tally in first-appearance order
   const counts = new Map<string, number>();
   for (const b of blocks) {
-    const name = b.kind === "thinking" ? t("chatStream.thinking") : b.toolName;
+    const name = b.kind === "thinking" ? t("chatStream.thinking") : toolDisplayName(t, b.toolName);
     counts.set(name, (counts.get(name) ?? 0) + 1);
   }
   const countsBreakdown = isSingleThinking
@@ -454,14 +475,15 @@ export function BatchToolGroup({
   return (
     <div className="my-0.5 [font-size:var(--chat-fs-sm)]">
       <button
-        onClick={(e) => toggleHoldPosition(e, setOpen)}
+        onClick={(e) => {
+          holdFold(!open);
+          toggleHoldPosition(e, setOpen);
+        }}
         className="flex w-full items-center gap-2 rounded-md py-1 text-left text-content-muted hover:bg-surface-muted/40 hover:text-content transition-colors select-none group"
       >
-        {/* Leading icon: pulse on running, alert on error, bulb for single thinking, stack for idle */}
+        {/* Leading icon: pulse on running, bulb for single thinking, stack for idle/error */}
         {isLiveRunning ? (
           <span className="shrink-0 h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
-        ) : aggregateStatus === "error" ? (
-          <IconAlertTriangle size={13} className="shrink-0 text-danger" />
         ) : isSingleThinking ? (
           <IconBulb size={13} className="shrink-0 text-amber-500/80" />
         ) : (
@@ -481,13 +503,15 @@ export function BatchToolGroup({
             )}
           </span>
         ) : (
-          /* 2. Normal / completed state: show total count label and last operation hint */
+          /* 2. Normal / completed state: show last operation hint directly (no "N个操作" label) */
           <span className="flex items-center gap-1.5 min-w-0 truncate">
-            <span className="shrink-0 whitespace-nowrap font-medium text-content">{label}</span>
             {isSingleThinking && firstBlock?.kind === "thinking" ? (
-              <span className="min-w-0 truncate text-content-subtle text-[11px]">
-                {summarize(firstBlock.text)}
-              </span>
+              <>
+                <span className="shrink-0 whitespace-nowrap font-medium text-content">{label}</span>
+                <span className="min-w-0 truncate text-content-subtle text-[11px]">
+                  {summarize(firstBlock.text)}
+                </span>
+              </>
             ) : activeOp?.detail ? (
               <span className="min-w-0 truncate font-mono text-[11px] text-content-subtle">
                 {activeOp.name}: {activeOp.detail}
@@ -576,8 +600,9 @@ function AttachmentRow({ blocks }: { blocks: Extract<Block, { kind: "attachment"
  *  Rows of COMPLETED turns keep the old quiet behavior (no glyph unless
  *  error): historical panels would otherwise carry a wall of checkmarks. */
 function StatusIcon({ status, live }: { status: "running" | "done" | "error"; live?: boolean }) {
+  // Error indicator moved to after filename in each tool card — no leading icon.
   if (status === "error") {
-    return <IconX size={12} className="text-danger" />;
+    return null;
   }
   if (!live) {
     return null;
@@ -1692,6 +1717,7 @@ function OrchPlanToolCard({
   live?: boolean;
 }) {
   const [open, setOpen] = useState(defaultOpen);
+  const holdFold = useFoldHold();
   const { t } = useI18n();
   const input = (block.input && typeof block.input === "object" ? block.input : {}) as {
     goal?: unknown;
@@ -1702,7 +1728,10 @@ function OrchPlanToolCard({
   return (
     <div className="[font-size:var(--chat-fs-sm)]">
       <button
-        onClick={(e) => toggleHoldPosition(e, setOpen)}
+        onClick={(e) => {
+          holdFold(!open);
+          toggleHoldPosition(e, setOpen);
+        }}
         className="flex w-full items-center gap-2 rounded-md py-1.5 text-left hover:bg-surface-muted/50"
       >
         <StatusIcon status={block.status} live={live} />
@@ -1713,6 +1742,7 @@ function OrchPlanToolCard({
             {goal}
           </span>
         )}
+        {block.status === "error" && <span className="shrink-0 text-danger whitespace-nowrap [font-size:var(--chat-fs-xxs)]">{t("chatStream.opFailed")}</span>}
         <span className="ml-auto flex shrink-0 items-center gap-1.5 [font-size:var(--chat-fs-xxs)]">
           <span className="tabular-nums text-content-subtle">
             {t("orch.tool.taskCount", { n: tasks.length })}
@@ -1786,6 +1816,7 @@ function EditToolCard({
   // first render (user can collapse an individual card even inside an
   // open group).
   const [open, setOpen] = useState(defaultOpen);
+  const holdFold = useFoldHold();
   const { t } = useI18n();
   const diff = useMemo(() => lineDiff(oldString, newString), [oldString, newString]);
   const { adds, dels } = useMemo(() => diffSummary(diff), [diff]);
@@ -1793,15 +1824,19 @@ function EditToolCard({
   return (
     <div className="[font-size:var(--chat-fs-sm)]">
       <button
-        onClick={(e) => toggleHoldPosition(e, setOpen)}
+        onClick={(e) => {
+          holdFold(!open);
+          toggleHoldPosition(e, setOpen);
+        }}
         className="flex w-full items-center gap-2 rounded-md py-1.5 text-left hover:bg-surface-muted/50"
       >
         <StatusIcon status={status} live={live} />
         <ToolIcon name="Edit" className="shrink-0 text-content-subtle" />
-        <span className="shrink-0 font-medium text-content-muted">Edit</span>
+        <span className="shrink-0 font-medium text-content-muted">{toolDisplayName(t, "Edit")}</span>
         <span className="min-w-0 flex-1 truncate font-mono text-content-subtle" title={filePath}>
           {filePath}
         </span>
+        {status === "error" && <span className="shrink-0 text-danger whitespace-nowrap [font-size:var(--chat-fs-xxs)]">{t("chatStream.opFailed")}</span>}
         <span className="ml-auto flex shrink-0 items-center gap-1.5 whitespace-nowrap [font-size:var(--chat-fs-xxs)]">
           {adds > 0 && <span className="text-success">+{adds}</span>}
           {dels > 0 && <span className="text-danger">−{dels}</span>}
@@ -1850,6 +1885,7 @@ function WriteToolCard({
   projectPath?: string | null;
 }) {
   const [open, setOpen] = useState(defaultOpen);
+  const holdFold = useFoldHold();
   const { t } = useI18n();
   const lineCount = content ? content.split("\n").length : 0;
 
@@ -1877,15 +1913,19 @@ function WriteToolCard({
   return (
     <div className="[font-size:var(--chat-fs-sm)]">
       <button
-        onClick={(e) => toggleHoldPosition(e, setOpen)}
+        onClick={(e) => {
+          holdFold(!open);
+          toggleHoldPosition(e, setOpen);
+        }}
         className="flex w-full items-center gap-2 rounded-md py-1.5 text-left hover:bg-surface-muted/50"
       >
         <StatusIcon status={status} live={live} />
         <ToolIcon name="Write" className="shrink-0 text-content-subtle" />
-        <span className="shrink-0 font-medium text-content-muted">Write</span>
+        <span className="shrink-0 font-medium text-content-muted">{toolDisplayName(t, "Write")}</span>
         <span className="min-w-0 flex-1 truncate font-mono text-content-subtle" title={filePath}>
           {filePath}
         </span>
+        {status === "error" && <span className="shrink-0 text-danger whitespace-nowrap [font-size:var(--chat-fs-xxs)]">{t("chatStream.opFailed")}</span>}
         <span className="ml-auto flex shrink-0 items-center gap-1.5 whitespace-nowrap [font-size:var(--chat-fs-xxs)]">
           {diff && adds > 0 && <span className="text-success">+{adds}</span>}
           {diff && dels > 0 && <span className="text-danger">−{dels}</span>}
@@ -1953,6 +1993,7 @@ function GenericToolCard({
   projectPath?: string | null;
 }) {
   const [open, setOpen] = useState(defaultOpen);
+  const holdFold = useFoldHold();
   const { t } = useI18n();
   // The Read tool (and any file-bearing tool routed here) shows a file_path in
   // its summary line - linkify it. Bash/Grep/Glob summaries are commands or
@@ -1963,12 +2004,15 @@ function GenericToolCard({
   return (
     <div className="[font-size:var(--chat-fs-sm)]">
       <button
-        onClick={(e) => toggleHoldPosition(e, setOpen)}
+        onClick={(e) => {
+          holdFold(!open);
+          toggleHoldPosition(e, setOpen);
+        }}
         className="flex w-full items-center gap-2 rounded-md py-1.5 text-left hover:bg-surface-muted/50"
       >
         <StatusIcon status={block.status} live={live} />
         <ToolIcon name={block.toolName} className="shrink-0 text-content-subtle" />
-        <span className="shrink-0 font-medium text-content-muted">{block.toolName}</span>
+        <span className="shrink-0 font-medium text-content-muted">{toolDisplayName(t, block.toolName)}</span>
         {summaryToolPath ? (
           <span className="min-w-0 flex-1 truncate font-mono text-content-subtle">
             <FileLink token={summaryToolPath} projectPath={projectPath} />
@@ -1976,6 +2020,7 @@ function GenericToolCard({
         ) : (
           <span className="min-w-0 flex-1 truncate text-content-subtle">{toolSummary(block.toolName, block.input)}</span>
         )}
+        {block.status === "error" && <span className="shrink-0 text-danger whitespace-nowrap [font-size:var(--chat-fs-xxs)]">{t("chatStream.opFailed")}</span>}
         <Chevron open={open} className="ml-auto shrink-0" />
       </button>
       {approvalBroken && (
@@ -2025,10 +2070,14 @@ function Collapsible({
   children: ReactNode;
 }) {
   const [open, setOpen] = useState(defaultOpen);
+  const holdFold = useFoldHold();
   return (
     <div className="[font-size:var(--chat-fs-sm)]">
       <button
-        onClick={(e) => toggleHoldPosition(e, setOpen)}
+        onClick={(e) => {
+          holdFold(!open);
+          toggleHoldPosition(e, setOpen);
+        }}
         className="flex w-full items-center gap-2 rounded-md py-1.5 text-left text-content-muted hover:bg-surface-muted/40"
       >
         <IconBulb size={13} className="shrink-0 text-content-subtle" />

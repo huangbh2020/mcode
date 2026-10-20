@@ -31,6 +31,7 @@ import {
   RespondQuestionSchema,
   RespondPlanApprovalSchema,
   RewindTurnSchema,
+  ReviseConversationSchema,
   ProjectSessionsSchema,
   SessionSearchSchema,
   BookmarkSearchSchema,
@@ -349,6 +350,15 @@ const HANDLERS: Record<string, RpcHandler> = {
       input.targetFiles,
     );
     return { restored };
+  },
+
+  // Conversation-level revision (edit / retract) — same entry point as the
+  // desktop handler. The phone's shared store actions (editAndResendMessage /
+  // retractMessage) call through here; the desktop-only confirm UI simply
+  // isn't rendered on the phone shell.
+  "claude:reviseConversation": async (raw) => {
+    const input = ReviseConversationSchema.parse(raw);
+    return runtimeManager.reviseConversation(input.sessionId, input.messageId);
   },
 
   // Per-session composer config (model / effort / permissionMode /

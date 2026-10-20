@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useReducer, useRef, useState } from "react";
+import { useCallback, useEffect, useReducer, useRef, useState, type RefObject } from "react";
 import Editor, { DiffEditor, useMonaco } from "@monaco-editor/react";
 import type { editor } from "monaco-editor";
 import { api } from "@renderer/lib/api.js";
@@ -26,6 +26,8 @@ import {
   IconVideo,
   IconChevronLeft,
   IconChevronRight,
+  IconArrowUp,
+  IconArrowDown,
 } from "@renderer/lib/icons.js";
 import { appResourceUrl } from "@renderer/lib/appResource.js";
 import { Menu } from "@base-ui/react/menu";
@@ -132,6 +134,16 @@ export function FileEditor({
         ? "preview"
         : "edit";
 
+  // Diff-hunk navigation bridge (toolbar 上一处/下一处差异): the toolbar
+  // buttons drive the DiffPane's Monaco widget through this handle, and the
+  // pane reports hunk stats back for the position counter. Cleared per file —
+  // the pane recomputes and re-reports on every mount / switch.
+  const diffNavRef = useRef<DiffNavHandle | null>(null);
+  const [diffStats, setDiffStats] = useState<DiffStats | null>(null);
+  useEffect(() => {
+    setDiffStats(null);
+  }, [filePath]);
+
   const markdown = isMarkdown(filePath);
   const image = isImage(filePath);
   const video = isVideo(filePath);
@@ -150,12 +162,20 @@ export function FileEditor({
         isVideo={video}
         isUnsupported={unsupported}
         onSelectViewMode={(m) => setViewMode(filePath, m)}
+        diffStats={diffStats}
+        diffNavRef={diffNavRef}
         editorMode={editorMode}
         onToggleEditorMode={() => setEditorMode(editorMode === "tabs" ? "replace" : "tabs")}
       />
       <div className="min-h-0 flex-1">
         {effectiveMode === "diff" && diffBefore != null ? (
-          <DiffPane filePath={filePath} before={diffBefore} after={diffAfter} />
+          <DiffPane
+            filePath={filePath}
+            before={diffBefore}
+            after={diffAfter}
+            navRef={diffNavRef}
+            onStats={setDiffStats}
+          />
         ) : effectiveMode === "preview" ? (
           image ? (
             <ImagePreviewPane filePath={filePath} projectPath={projectPath} />
@@ -190,6 +210,8 @@ function EditorToolbar({
   isVideo,
   isUnsupported,
   onSelectViewMode,
+  diffStats,
+  diffNavRef,
   editorMode,
   onToggleEditorMode,
 }: {
@@ -203,6 +225,11 @@ function EditorToolbar({
   isVideo: boolean;
   isUnsupported: boolean;
   onSelectViewMode: (mode: "edit" | "preview") => void;
+  /** Diff-hunk position + total, reported live by DiffPane (null until the
+   *  first diff computation lands). Drives the prev/next-change nav group. */
+  diffStats?: DiffStats | null;
+  /** Handle into the live DiffPane — steps between diff hunks. */
+  diffNavRef?: RefObject<DiffNavHandle | null>;
   editorMode: "tabs" | "replace";
   onToggleEditorMode: () => void;
 }) {
@@ -322,6 +349,45 @@ function EditorToolbar({
         {rel}
       </span>
       <div className="ml-auto flex items-center gap-1">
+        {/* Diff-hunk navigation (上一处/下一处差异) — only while a diff is
+            displayed. Steps between hunks with wrap-around; the counter shows
+            position/total. Buttons stay disabled until the first diff
+            computation reports stats (and on a zero-hunk diff). */}
+        {mode === "diff" && (
+          <div className="flex items-center gap-0.5">
+            <button
+              type="button"
+              onClick={() => diffNavRef?.current?.prev()}
+              disabled={!diffStats || diffStats.count === 0}
+              className={cn(
+                "flex items-center justify-center rounded p-0.5 transition-colors",
+                "text-content-subtle hover:bg-surface-hover hover:text-content",
+                "disabled:cursor-default disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-content-subtle",
+              )}
+              title={t("ide.editor.diffPrev")}
+            >
+              <IconArrowUp size={13} />
+            </button>
+            {diffStats && diffStats.count > 0 && (
+              <span className="min-w-[30px] text-center font-mono text-[10px] tabular-nums text-content-subtle">
+                {diffStats.index + 1}/{diffStats.count}
+              </span>
+            )}
+            <button
+              type="button"
+              onClick={() => diffNavRef?.current?.next()}
+              disabled={!diffStats || diffStats.count === 0}
+              className={cn(
+                "flex items-center justify-center rounded p-0.5 transition-colors",
+                "text-content-subtle hover:bg-surface-hover hover:text-content",
+                "disabled:cursor-default disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-content-subtle",
+              )}
+              title={t("ide.editor.diffNext")}
+            >
+              <IconArrowDown size={13} />
+            </button>
+          </div>
+        )}
         {/* Language-server startup indicator: spinner while the server's
             initialize handshake is in flight, a failure notice (click →
             settings) when it couldn't start. Requests made while starting
@@ -1652,6 +1718,21 @@ function UnsupportedPane({ filePath }: { filePath: string }) {
 
 /* ───────────────────────── Diff pane ───────────────────────── */
 
+/** Toolbar → DiffPane navigation handle: step to the previous/next diff hunk
+ *  (wrap-around). The pane publishes an instance into the caller's ref while
+ *  its widget is alive and clears it on teardown. */
+interface DiffNavHandle {
+  prev: () => void;
+  next: () => void;
+}
+
+/** Hunk-position snapshot for the toolbar counter: current hunk (0-based) of
+ *  `count` total. */
+interface DiffStats {
+  index: number;
+  count: number;
+}
+
 /** Side-by-side diff: `before` vs `after` (or current on-disk content when
  *  `after` is omitted). Read-only — the diff is for review, not editing.
  *
@@ -1667,12 +1748,21 @@ export function DiffPane({
   filePath,
   before,
   after,
+  navRef,
+  onStats,
 }: {
   filePath: string;
   before: string;
   /** Explicit modified-side content (history commits). When omitted the pane
    *  reads the working-tree file from disk. */
   after?: string;
+  /** Populated with the prev/next hunk navigation handle while the widget is
+   *  alive (consumed by the editor toolbar). Optional — GitDiffDialog mounts
+   *  this pane without toolbar nav. */
+  navRef?: RefObject<DiffNavHandle | null>;
+  /** Hunk stats reported on every diff (re)computation and navigation; null
+   *  on teardown so the toolbar counter resets. */
+  onStats?: (stats: DiffStats | null) => void;
 }) {
   const { t } = useI18n();
   const diffShowLineNumbers = useSessionStore((s) => s.diffShowLineNumbers);
@@ -1773,6 +1863,61 @@ export function DiffPane({
   // content change would restore the stale snapshot over the user's latest
   // scroll position. Mount-time runs (nothing swapped yet) and failed
   // restores (dead widget) keep it armed for the post-mount run.
+
+  // ── Diff-hunk navigation (toolbar 上一处/下一处差异) ──
+  // Current hunk index + latest-ref mirror of the stats callback (the
+  // onMount scroll listeners below outlive every render).
+  const changesIdxRef = useRef(0);
+  const onStatsRef = useRef(onStats);
+  useEffect(() => {
+    onStatsRef.current = onStats;
+  }, [onStats]);
+
+  /** Reveal hunk `idx` (wrap-around) in the modified pane, park the cursor at
+   *  its first line, and report the new position. No-ops while the widget is
+   *  mid-swap (loading veil tears it down) or when the diff has no hunks. */
+  const goToChange = useCallback(
+    (idx: number) => {
+      const diffEditor = editorRef.current;
+      if (!diffEditor) return;
+      let changes: editor.ILineChange[] | null = null;
+      try {
+        changes = diffEditor.getLineChanges();
+      } catch {
+        return; // widget torn down mid file-switch
+      }
+      const count = changes?.length ?? 0;
+      if (count === 0) return;
+      const wrapped = ((idx % count) + count) % count;
+      const change = changes![wrapped];
+      if (!change) return;
+      changesIdxRef.current = wrapped;
+      // A pure deletion carries an empty modified range (end < start) — clamp
+      // to the line after the deletion point so the reveal still lands there.
+      const start = Math.max(change.modifiedStartLineNumber, 1);
+      const end = Math.max(change.modifiedEndLineNumber, start);
+      const modifiedEditor = diffEditor.getModifiedEditor();
+      modifiedEditor.revealLinesInCenter(start, end);
+      modifiedEditor.setPosition({ lineNumber: start, column: 1 });
+      onStatsRef.current?.({ index: wrapped, count });
+    },
+    [],
+  );
+
+  // Publish the toolbar nav handle for this pane incarnation; on teardown
+  // clear it and the toolbar counter.
+  useEffect(() => {
+    if (!navRef) return;
+    navRef.current = {
+      prev: () => goToChange(changesIdxRef.current - 1),
+      next: () => goToChange(changesIdxRef.current + 1),
+    };
+    return () => {
+      navRef.current = null;
+      onStatsRef.current?.(null);
+    };
+  }, [navRef, goToChange]);
+
   const prevSwapContentRef = useRef<{
     filePath: string;
     before: string;
@@ -1915,8 +2060,19 @@ export function DiffPane({
             // post-swap restore can land before the diff exists, while the
             // widget's two panes still scroll 1:1. Skipped when the user has
             // scrolled since the last restore — never revert their scroll.
+            // Also reports hunk stats for the toolbar's prev/next-change nav
+            // (computation completion is the point where getLineChanges()
+            // becomes valid); the index resets with each recompute.
             editor.onDidUpdateDiff(() => {
               if (!dirtySinceRestoreRef.current) restoreViewState();
+              let changes: editor.ILineChange[] | null = null;
+              try {
+                changes = editor.getLineChanges();
+              } catch {
+                changes = null;
+              }
+              changesIdxRef.current = 0;
+              onStatsRef.current?.({ index: 0, count: changes?.length ?? 0 });
             }),
           ];
         }}

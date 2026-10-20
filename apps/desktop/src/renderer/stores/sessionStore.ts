@@ -18,6 +18,7 @@ import type {
   ContextSnapshot,
   TurnUsageRecord,
   SessionListEntry,
+  RevisionScope,
 } from "@contracts/runtime";
 import type { TurnFileEntry } from "@renderer/lib/turnFiles.js";
 import type {
@@ -1869,6 +1870,14 @@ export interface SessionState {
     skillsUsed?: string[],
     images?: PromptImage[],
   ) => Promise<void>;
+  /** Retract a sent user message (conversation-level revision): remove the
+   *  message AND every later turn — the conversation rewinds to just before
+   *  it was sent, in BOTH the GUI and the provider's own context (main runs
+   *  the provider-native surgery, then DB row surgery, then echoes
+   *  `session.revised` to every client). This action fires the IPC and
+   *  applies the same idempotent local splice (the echo may land first —
+   *  both orders converge). Throws surface as a toast. */
+  retractMessage: (sessionId: string, messageId: string) => Promise<void>;
   interrupt: (sessionId?: string) => Promise<void>;
   /** Stop ONE running agent command (bash task) without aborting the turn —
    *  backed by the SDK's `stop_task` control request. The roster update
@@ -4008,6 +4017,60 @@ function raiseModelGuard(): void {
   } else {
     useSessionStore.setState({ modelConfigPromptOpen: true });
   }
+}
+
+/** Resolve a session row's provider id across every bucket the store keeps
+ *  (per-project slices, pinned, stream view, side chats). Mirrors the
+ *  component-level scans (ChatPane's sessionProviderId). */
+function lookupSessionProviderId(
+  s: Pick<SessionState, "sessionsByProject" | "pinnedSessions" | "streamSessions" | "sideChatsByParent">,
+  sessionId: string,
+): string | null {
+  for (const list of Object.values(s.sessionsByProject)) {
+    const found = list?.find((x) => x.id === sessionId);
+    if (found) return found.providerId;
+  }
+  const pinned = s.pinnedSessions.find((x) => x.id === sessionId);
+  if (pinned) return pinned.providerId;
+  const streamed = s.streamSessions.find((x) => x.id === sessionId);
+  if (streamed) return streamed.providerId;
+  for (const list of Object.values(s.sideChatsByParent)) {
+    const found = list.find((x) => x.id === sessionId);
+    if (found) return found.providerId;
+  }
+  return null;
+}
+
+/** Whether the SESSION's provider supports conversation-level revision
+ *  (provider transcript surgery). Gates the any-message edit affordance and
+ *  the retract button; providers without it keep the legacy tail-only edit. */
+function providerSupportsRevision(
+  s: Pick<SessionState, "sessionsByProject" | "pinnedSessions" | "streamSessions" | "sideChatsByParent" | "providers">,
+  sessionId: string,
+): boolean {
+  const pid = lookupSessionProviderId(s, sessionId);
+  if (!pid) return false;
+  return s.providers.some((p) => p.id === pid && !!p.capabilities.supportsConversationRevision);
+}
+
+/** Local splice mirroring main's reviseConversation bounds — applied by the
+ *  `session.revised` broadcast handler (every client) AND the initiating
+ *  action (immediately after the IPC resolves), both idempotently: a second
+ *  pass finds the message gone and no-ops. `nextUserMessageId` is the
+ *  exclusive end anchor for the single-exchange scope (null = ran to the
+ *  tail); returned `reachedTail` tells the caller whether the session's
+ *  LATEST turn was removed (per-turn buckets like turnFiles need clearing). */
+function spliceRevisedMessages(
+  list: ChatMessage[],
+  messageId: string,
+): { next: ChatMessage[]; removed: number; reachedTail: boolean } | null {
+  const start = list.findIndex((m) => m.id === messageId);
+  if (start < 0) return null;
+  return {
+    next: list.slice(0, start),
+    removed: list.length - start,
+    reachedTail: true,
+  };
 }
 
 /** Resolve the turn's active/producing model:
@@ -8189,6 +8252,26 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     const editedMsg = current[idx];
     if (!editedMsg) return;
 
+    // Provider-side revision surgery FIRST (claude-sdk and any provider
+    // declaring supportsConversationRevision): truncate the CLI's own
+    // transcript at this message's prompt entry so the re-sent turn
+    // resumes WITHOUT the stale exchange. Pre-revision behavior kept the
+    // old prompt+reply in the model's context forever — the GUI looked
+    // edited but the agent still saw the discarded history. Failure here
+    // (transcript unlocatable etc.) degrades to the legacy GUI-only
+    // truncation rather than blocking the edit — main logged the reason.
+    if (providerSupportsRevision(get(), sessionId)) {
+      try {
+        await api.claude.reviseConversation({
+          sessionId,
+          messageId,
+          scope: "from-message",
+        });
+      } catch (err) {
+        console.warn("editAndResendMessage: provider-side revision failed, falling back to GUI-only truncation:", err);
+      }
+    }
+
     // 1. Truncate: keep only messages BEFORE the edited one. The edited
     //    message itself and everything after it (the AI's reply, any
     //    follow-up exchanges) are discarded.
@@ -8365,6 +8448,39 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         };
       });
     })();
+  },
+
+  retractMessage: async (sessionId, messageId) => {
+    if (!sessionId || !messageId) return;
+    // Same idle gate as editAndResendMessage: racing a running turn's event
+    // ingestion would splice rows out from under the live stream.
+    if (get().runningBySession[sessionId]) return;
+    try {
+      await api.claude.reviseConversation({ sessionId, messageId, scope: "from-message" });
+      // The broadcast echo (`session.revised`) splices every client
+      // including this one; apply the same idempotent splice locally so the
+      // view converges even if the echo is still in flight.
+      set((s) => {
+        const list = s.messagesBySession[sessionId];
+        if (!list) return {};
+        const spliced = spliceRevisedMessages(list, messageId);
+        if (!spliced) return {};
+        return {
+          messagesBySession: { ...s.messagesBySession, [sessionId]: spliced.next },
+          // Removing the session's LATEST turn invalidates the live
+          // turn-files bucket (the card it mirrored is gone) — same cleanup
+          // editAndResendMessage does when it truncates the tail.
+          ...(spliced.reachedTail ? { turnFilesBySession: { ...s.turnFilesBySession, [sessionId]: [] } } : {}),
+        };
+      });
+    } catch (err) {
+      console.error("retractMessage: reviseConversation IPC failed:", err);
+      pushToastLite(
+        "warning",
+        translate(get().locale, "chatStream.retract.failed"),
+        err instanceof Error ? err.message : String(err),
+      );
+    }
   },
 
   interrupt: async (sessionIdArg) => {
@@ -9147,6 +9263,11 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           : e.agents;
         return { subagentsBySession: { ...s.subagentsBySession, [sid]: agents } };
       });
+      // 若本次更新后没有 running 中的子代理，且当前回合已结束（非 runningBySession），
+      // 则尝试消费队列。后台子代理全部完成是"会话真正空闲"的信号之一。
+      if (!get().runningBySession[sid] && e.agents.every((a) => a.status !== "running")) {
+        get().drainPromptQueueIfIdle(sid);
+      }
       return;
     }
     // subagent.transcript: REPLACE one subagent's transcript (inner key =
@@ -9177,6 +9298,10 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         if (s.bashTasksBySession[sid] === tasks) return {};
         return { bashTasksBySession: { ...s.bashTasksBySession, [sid]: tasks } };
       });
+      // 若本次更新后没有 running 中的后台命令，且当前回合已结束，则尝试消费队列。
+      if (!get().runningBySession[sid] && e.tasks.every((t) => t.status !== "running")) {
+        get().drainPromptQueueIfIdle(sid);
+      }
       return;
     }
     // services.update: REPLACE semantics — swap the full roster of the
@@ -9365,6 +9490,25 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           void api.session.upsertMessages({ sessionId: sid, messages: toRecords(sid, [last]) });
         }
       }
+      return;
+    }
+    if (e.type === "session.revised") {
+      // Conversation-level revision landed on the host (edit-resend's
+      // provider-side surgery, or a retract from ANY client — including this
+      // one, whose own optimistic splice makes this a no-op). Idempotent
+      // local splice with the same bounds main used; missing message = a
+      // no-op, so echo/local ordering doesn't matter.
+      set((s) => {
+        const list = s.messagesBySession[sid] ?? EMPTY_MESSAGES;
+        const spliced = spliceRevisedMessages(list, e.messageId);
+        if (!spliced || spliced.next === list) return {};
+        return {
+          messagesBySession: { ...s.messagesBySession, [sid]: spliced.next },
+          ...(spliced.reachedTail
+            ? { turnFilesBySession: { ...s.turnFilesBySession, [sid]: [] } }
+            : {}),
+        };
+      });
       return;
     }
     if (e.type === "turn.rewound") {
@@ -12043,6 +12187,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         },
       };
     });
+    // 入队后立即尝试消费：若当前会话已空闲（无运行中的回合、无运行中的子代理），
+    // 则直接发出队头，避免用户需要手动触发的情况。
+    get().drainPromptQueueIfIdle(sessionId);
   },
 
   removeQueuedPrompt: (sessionId, id) => {
@@ -12099,8 +12246,10 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       raiseModelGuard();
       return;
     }
-    // Drop the head from the queue BEFORE sending so the user sees it leave
-    // immediately, and so a failed send doesn't loop on the same item.
+    // 先乐观出队，再发送。若 sendPrompt 被前置 guard 拦截（返回 false），
+    // 则将队头重新插回队首，保证消息不丢失。
+    // IPC 失败时 sendPrompt 内部已自行恢复 runningBySession 并再次触发
+    // drainPromptQueueIfIdle，消息留在主进程侧（CLI 已收到 prompt），不重置队头。
     set((st) => ({
       promptQueueBySession: {
         ...st.promptQueueBySession,
@@ -12112,7 +12261,23 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     // its turn.done handler will call drainPromptQueueIfIdle again — so the
     // whole queue drains one item per turn, in order. Explicit sessionId so
     // a background/side session's queue never drains into the foreground one.
-    void s.sendPrompt(head.prompt, head.attachments, head.displayText, head.skillNames, head.images, head.displayBlocks, sessionId);
+    const sendResult = s.sendPrompt(
+      head.prompt, head.attachments, head.displayText,
+      head.skillNames, head.images, head.displayBlocks, sessionId,
+    );
+    // sendPrompt is async: if it returns false synchronously-ish, the front-
+    // end guard blocked the send (busy check, model guard, etc.). Restore the
+    // head at the front of the queue so the user doesn't lose the message.
+    void sendResult.then((result) => {
+      if (result === false) {
+        set((st) => ({
+          promptQueueBySession: {
+            ...st.promptQueueBySession,
+            [sessionId]: [head, ...(st.promptQueueBySession[sessionId] ?? [])],
+          },
+        }));
+      }
+    });
   },
 
   sendQueuedPromptNow: async (sessionId, id) => {

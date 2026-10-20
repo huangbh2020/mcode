@@ -51,6 +51,8 @@ export const zh = {
   "ide.editor.lspRestartFailed": "{name} 服务器重启失败",
   "ide.editor.navBack": "返回上一处",
   "ide.editor.navForward": "前往下一处",
+  "ide.editor.diffPrev": "上一处差异",
+  "ide.editor.diffNext": "下一处差异",
   "ide.editor.switchToDiff": "切换到差异视图",
   "ide.editor.switchToEditView": "切换到编辑视图",
   "ide.editor.previewMode": "预览",
@@ -321,6 +323,7 @@ export const zh = {
   "ide.term.moveToBottom": "移至底部面板",
   "ide.term.moveToRight": "移至右侧边栏",
   "ide.term.collapseBottom": "收起底部终端",
+  "ide.term.pathPickTitle": "项目内有多个同名文件,选择要打开的路径",
 
   /* ── turn flow panel (right-panel "turns" tab) ── */
   "ide.turns.title": "轮次流程",

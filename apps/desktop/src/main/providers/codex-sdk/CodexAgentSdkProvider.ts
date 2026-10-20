@@ -52,6 +52,8 @@ import type {
 import type { ServerRequestFrame } from "./CodexAppServerClient.js";
 import { CodexAppServerClient } from "./CodexAppServerClient.js";
 import { CodexMessageAdapter } from "./CodexMessageAdapter.js";
+import { alignCodexTurns, positionalCodexTurn, type CodexTurnLike } from "./codexRevise.js";
+import type { ProviderReviseInput } from "@contracts/provider";
 import { CodexFileSnapshot } from "./CodexFileSnapshot.js";
 import { resolveCodexBinaryPath } from "./codexBinaryResolve.js";
 import {
@@ -217,9 +219,82 @@ export class CodexAgentSdkProvider implements AgentProvider {
     ],
     permissionModes: [...CODEX_PERMISSION_MODES],
     supportsCustomEndpoint: false, // Codex manages its own model-provider panel
+    // Conversation-level revision via the app-server protocol's native
+    // thread/revert — see reviseConversation below.
+    supportsConversationRevision: true,
   };
 
-  async startTurn(req: StartTurnRequest, ctx: ProviderContext): Promise<TurnHandle> {
+  /**
+   * Conversation-level revision, codex implementation: the app-server
+   * protocol's NATIVE thread/revert. The revision path (verified live
+   * against 0.162.0): spawn a TEMPORARY app-server (codex processes are
+   * per-turn in Mcode, so at revision time none is running), cold-load the
+   * thread via thread/resume, align the GUI user row to a turn id via each
+   * turn's userMessage item text (lib promptAlign + codexRevise.ts), then
+   * thread/revert {beforeTurnId: targetTurnId} — "the first turn to drop".
+   * The revert persists in codex's own state (survives app-server restarts
+   * — verified), so the next turn's fresh process resumes the reverted
+   * thread. Only history is touched: local file changes are NOT reverted
+   * (the protocol doc says clients own that — same as Mcode's other
+   * providers, whose confirm dialog says so too).
+   */
+  async reviseConversation(input: ProviderReviseInput): Promise<{ cleared?: boolean }> {
+    const threadId = input.providerSessionId;
+    if (!threadId) {
+      input.log.info("codex revise: no thread bound, skipping revert");
+      return {};
+    }
+    const codexPath = resolveCodexBinaryPath();
+    if (!codexPath) {
+      throw new Error("未找到 Codex:请到 设置 → Agent 下载安装");
+    }
+    const env = await buildCodexEnv(input.log);
+    const client = new CodexAppServerClient({
+      codexPath,
+      cwd: input.cwd || process.cwd(),
+      env,
+      log: input.log,
+    });
+    try {
+      await client.start();
+      // Cold-load the thread — thread/read on an unloaded id says "thread
+      // not found" (the turn-time path resumes the same way).
+      try {
+        await client.request("thread/resume", { threadId, excludeTurns: true });
+      } catch (err) {
+        // The thread no longer exists (rollout deleted / CODEX_HOME reset):
+        // the next turn would start a new thread anyway — DB-only revision.
+        input.log.warn(
+          `codex revise: thread/resume failed (${(err as Error).message}); provider context already lost`,
+        );
+        return {};
+      }
+      const read = (await client.request("thread/read", { threadId, includeTurns: true })) as {
+        thread?: { turns?: CodexTurnLike[] };
+      };
+      const turns = read?.thread?.turns ?? [];
+      const guiIndex = input.guiUserRows.findIndex((r) => r.id === input.target.id);
+      const targetTurnId =
+        (guiIndex >= 0 ? alignCodexTurns(input.guiUserRows, turns).get(guiIndex) : undefined) ??
+        positionalCodexTurn(input.guiUserRows.length, Math.max(guiIndex, 0), turns);
+      if (!targetTurnId) {
+        // Refuse rather than revert at a guessed point — a wrong turn drop
+        // corrupts the model's context invisibly.
+        throw new Error("cannot locate the message's turn in the codex thread");
+      }
+      await client.request("thread/revert", { threadId, beforeTurnId: targetTurnId });
+      input.log.info(`codex revise: reverted thread to before turn ${targetTurnId}`);
+      return {};
+    } finally {
+      try {
+        await client.dispose();
+      } catch {
+        /* process already gone */
+      }
+    }
+  }
+
+    async startTurn(req: StartTurnRequest, ctx: ProviderContext): Promise<TurnHandle> {
     const ac = new AbortController();
 
     /* ── 1. Binary + config bootstrap ── */
@@ -284,7 +359,7 @@ export class CodexAgentSdkProvider implements AgentProvider {
     const modelCatalogPath = contextWindow ? await CodexModelsStore.ensureModelCatalog(codexPath) : null;
 
     /* ── 4. Spawn app-server (env carries CODEX_HOME + provider keys) ── */
-    const env = await buildCodexEnv(ctx);
+    const env = await buildCodexEnv(ctx.log);
     // File snapshot: sandboxed writes reconstruct from the turn diff at
     // freeze (there is no pre-write hook; approval params carry only
     // grantRoot, so no recordPre path exists on this provider).
@@ -592,7 +667,7 @@ function failTurn(
 /** Child env: isolated CODEX_HOME + every configured provider key (the TOML
  *  env_key references pick these up) + inherited PATH/HOME for sandbox
  *  helpers. Keys are decrypted per turn and never persisted. */
-async function buildCodexEnv(ctx: ProviderContext): Promise<Record<string, string>> {
+async function buildCodexEnv(log: { warn(...args: unknown[]): void }): Promise<Record<string, string>> {
   const env: Record<string, string> = {
     ...(process.env as Record<string, string>),
     CODEX_HOME: codexHomePath(),
@@ -604,7 +679,7 @@ async function buildCodexEnv(ctx: ProviderContext): Promise<Record<string, strin
     if (key) {
       env[codexKeyEnvVar(p.id)] = key;
     } else {
-      ctx.log.warn(`codex: failed to decrypt key for provider "${p.id}"`);
+      log.warn(`codex: failed to decrypt key for provider "${p.id}"`);
     }
   }
   return env;

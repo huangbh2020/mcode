@@ -1247,6 +1247,28 @@ export const RewindTurnSchema = z.object({
 });
 export type RewindTurnInput = z.infer<typeof RewindTurnSchema>;
 
+/* Revise the conversation at a sent user message — the conversation-level
+ * sibling of rewindTurn (which rolls back FILES only, never the dialog).
+ *
+ * scope "from-message": delete the target user message AND every message
+ * after it; the provider rewinds its own conversation state to just before
+ * the message was sent (claude: transcript truncation; pi: native branch;
+ * codex: native thread/revert). Used by edit-resend (followed immediately by
+ * a fresh sendTurn with the edited text) and by retract ("撤回并清除之后的
+ * 对话"). A middle-excision scope was deliberately cut — no provider SDK
+ * offers it natively.
+ *
+ * Only offered for providers whose capabilities declare
+ * supportsConversationRevision. Gated on the session being idle in main.
+ * Returns the removed row count; every client also receives a
+ * `session.revised` event (idempotent local splice) so all views converge. */
+export const ReviseConversationSchema = z.object({
+  sessionId: z.string(),
+  messageId: z.string(),
+  scope: z.enum(["from-message"]),
+});
+export type ReviseConversationInput = z.infer<typeof ReviseConversationSchema>;
+
 /* Per-session settings update (model / effort / permissionMode / customModelId).
  * Only the fields present in the payload are persisted; omitted fields are
  * left as-is. */
@@ -4310,10 +4332,10 @@ export interface TerminalCliProbeResult {
  *  explicitly flipped back on, so re-enabling stays sticky). */
 export const TERMINAL_CLI_ENABLED_SETTING_KEY = "terminal.cliEnabled";
 
-/** The four terminal-CLI provider ids (mirror of the renderer's
+/** The five terminal-CLI provider ids (mirror of the renderer's
  *  TERMINAL_CLI_PROVIDER_IDS — kept here so the zod schema can validate
  *  RPC input without importing renderer code). */
-export const TERMINAL_CLI_IDS = ["claude-sdk", "pi-sdk", "codex-sdk", "antigravity"] as const;
+export const TERMINAL_CLI_IDS = ["claude-sdk", "pi-sdk", "codex-sdk", "opencode", "antigravity"] as const;
 export type TerminalCliId = (typeof TERMINAL_CLI_IDS)[number];
 
 /** How a terminal CLI can be managed from inside Mcode. */
@@ -4429,6 +4451,11 @@ export type TerminalResolvePathInput = z.infer<typeof TerminalResolvePathSchema>
 export interface TerminalResolvePathResult {
   /** Absolute, correctly-separated path of an EXISTING file, or null. */
   path: string | null;
+  /** When `path` is null because the BARE name matches MULTIPLE files in
+   *  the project: the match list (absolute paths, capped) for the renderer's
+   *  pick list — an ambiguous name degrades to a choice, not a dead click.
+   *  Empty on unique hits and misses. */
+  candidates: string[];
 }
 
 /* ── Embedded browser (WebContentsView + DOM element picker) ──
@@ -4840,6 +4867,14 @@ export interface RpcMap {
    *  Returns the list of paths that were actually restored (failed
    *  paths are silently logged in main). */
   "claude.rewindTurn": (input: RewindTurnInput) => Promise<{ restored: string[] }>;
+  /** Conversation-level revision at a sent user message (edit-resend's
+   *  provider-side surgery, cascade retract, and single-exchange retract).
+   *  Performs DB row surgery + provider transcript truncation/excision and
+   *  broadcasts `session.revised` to every client. See
+   *  ReviseConversationSchema for the two scopes' semantics. */
+  "claude.reviseConversation": (
+    input: ReviseConversationInput,
+  ) => Promise<{ removed: number }>;
   /** Update the active session's model / effort / permissionMode / customModelId in-place. */
   "session.updateSettings": (input: UpdateSessionSettingsInput) => Promise<void>;
   // Projects
@@ -5486,6 +5521,7 @@ export const IPC = {
   CLAUDE_RESPOND_QUESTION: "claude:respondQuestion",
   CLAUDE_RESPOND_PLAN_APPROVAL: "claude:respondPlanApproval",
   CLAUDE_REWIND_TURN: "claude:rewindTurn",
+  CLAUDE_REVISE_CONVERSATION: "claude:reviseConversation",
   PROJECT_CREATE: "project:create",
   PROJECT_LIST: "project:list",
   PROJECT_SESSIONS: "project:sessions",

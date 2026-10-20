@@ -14,6 +14,7 @@
 import type { ComponentType } from "react";
 import { SiClaude, IconTerminal, PiBrandIcon, OpenAIBrandIcon } from "@renderer/lib/icons.js";
 import { AntigravityBrandIcon } from "@renderer/lib/antigravityBrandIcon.js";
+import { OpenCodeBrandIcon } from "@renderer/lib/opencodeBrandIcon.js";
 
 export interface ProviderIconMeta {
   Icon: ComponentType<{ size?: number; className?: string }>;
@@ -43,6 +44,11 @@ const PROVIDER_ICONS: Record<string, ProviderIconMeta> = {
   // antigravity.google's favicon (Google-colored arch; see
   // antigravityBrandIcon.tsx).
   antigravity: { Icon: AntigravityBrandIcon, color: "", dot: "#3186FF", label: "Antigravity" },
+  // OpenCode terminal CLI — official brand mark, inlined from opencode.ai's
+  // favicon (square ring + cursor block; see opencodeBrandIcon.tsx). The
+  // brand is pure monochrome, so the icon rides currentColor and the dot
+  // picks a neutral gray that stays visible on both surface themes.
+  opencode: { Icon: OpenCodeBrandIcon, color: "text-content", dot: "#9CA3AF", label: "OpenCode" },
 };
 
 export function getProviderIcon(providerId: string | null | undefined): ProviderIconMeta {
