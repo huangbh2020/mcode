@@ -9263,6 +9263,11 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           : e.agents;
         return { subagentsBySession: { ...s.subagentsBySession, [sid]: agents } };
       });
+      // 若本次更新后没有 running 中的子代理，且当前回合已结束（非 runningBySession），
+      // 则尝试消费队列。后台子代理全部完成是"会话真正空闲"的信号之一。
+      if (!get().runningBySession[sid] && e.agents.every((a) => a.status !== "running")) {
+        get().drainPromptQueueIfIdle(sid);
+      }
       return;
     }
     // subagent.transcript: REPLACE one subagent's transcript (inner key =
@@ -9293,6 +9298,10 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         if (s.bashTasksBySession[sid] === tasks) return {};
         return { bashTasksBySession: { ...s.bashTasksBySession, [sid]: tasks } };
       });
+      // 若本次更新后没有 running 中的后台命令，且当前回合已结束，则尝试消费队列。
+      if (!get().runningBySession[sid] && e.tasks.every((t) => t.status !== "running")) {
+        get().drainPromptQueueIfIdle(sid);
+      }
       return;
     }
     // services.update: REPLACE semantics — swap the full roster of the
@@ -12178,6 +12187,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         },
       };
     });
+    // 入队后立即尝试消费：若当前会话已空闲（无运行中的回合、无运行中的子代理），
+    // 则直接发出队头，避免用户需要手动触发的情况。
+    get().drainPromptQueueIfIdle(sessionId);
   },
 
   removeQueuedPrompt: (sessionId, id) => {
@@ -12234,8 +12246,10 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       raiseModelGuard();
       return;
     }
-    // Drop the head from the queue BEFORE sending so the user sees it leave
-    // immediately, and so a failed send doesn't loop on the same item.
+    // 先乐观出队，再发送。若 sendPrompt 被前置 guard 拦截（返回 false），
+    // 则将队头重新插回队首，保证消息不丢失。
+    // IPC 失败时 sendPrompt 内部已自行恢复 runningBySession 并再次触发
+    // drainPromptQueueIfIdle，消息留在主进程侧（CLI 已收到 prompt），不重置队头。
     set((st) => ({
       promptQueueBySession: {
         ...st.promptQueueBySession,
@@ -12247,7 +12261,23 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     // its turn.done handler will call drainPromptQueueIfIdle again — so the
     // whole queue drains one item per turn, in order. Explicit sessionId so
     // a background/side session's queue never drains into the foreground one.
-    void s.sendPrompt(head.prompt, head.attachments, head.displayText, head.skillNames, head.images, head.displayBlocks, sessionId);
+    const sendResult = s.sendPrompt(
+      head.prompt, head.attachments, head.displayText,
+      head.skillNames, head.images, head.displayBlocks, sessionId,
+    );
+    // sendPrompt is async: if it returns false synchronously-ish, the front-
+    // end guard blocked the send (busy check, model guard, etc.). Restore the
+    // head at the front of the queue so the user doesn't lose the message.
+    void sendResult.then((result) => {
+      if (result === false) {
+        set((st) => ({
+          promptQueueBySession: {
+            ...st.promptQueueBySession,
+            [sessionId]: [head, ...(st.promptQueueBySession[sessionId] ?? [])],
+          },
+        }));
+      }
+    });
   },
 
   sendQueuedPromptNow: async (sessionId, id) => {

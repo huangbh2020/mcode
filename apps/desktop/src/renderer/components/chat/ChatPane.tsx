@@ -472,6 +472,8 @@ type RenderItem =
       msg: ChatMessage;
       isStreamingTail: boolean;
       isTurnTail: boolean;
+      /** True on user messages that open a new turn following prior assistant output. */
+      isTurnLead?: boolean;
       /** Live-turn flat row that is NOT the turn's first visible row. Renders
        *  with the block-gap top margin instead of the full assistant row gap:
        *  a mid-turn seam (tool card → next narration) then measures the same
@@ -1117,7 +1119,8 @@ function groupMessagesForRender(
     if (m.role === "user") {
       // A user prompt ends any open turn and emits as its own single item.
       flush();
-      items.push({ kind: "single", msg: m, isStreamingTail: false, isTurnTail: false });
+      const isTurnLead = i > 0 && messages[i - 1].role === "assistant";
+      items.push({ kind: "single", msg: m, isStreamingTail: false, isTurnTail: false, isTurnLead });
       continue;
     }
 
@@ -3814,6 +3817,7 @@ function ChatPaneForSession({
                   msg={m}
                   isStreamingTail={item.isStreamingTail}
                   isTurnTail={item.isTurnTail}
+                  isTurnLead={item.isTurnLead}
                   tightTop={item.tightTop}
                   beforeMap={beforeMap}
                   hideTurnStat={item.live}
@@ -5022,6 +5026,7 @@ const MessageRow = memo(function MessageRow({
   msg,
   isStreamingTail,
   isTurnTail,
+  isTurnLead,
   beforeMap,
   canEdit,
   canRetract,
@@ -5038,6 +5043,8 @@ const MessageRow = memo(function MessageRow({
   msg: ChatMessage;
   isStreamingTail?: boolean;
   isTurnTail?: boolean;
+  /** Whether this user row opens a new turn following prior assistant output. */
+  isTurnLead?: boolean;
   beforeMap?: BeforeContentMap;
   /** Whether the edit affordance should be shown (user message + idle). */
   canEdit?: boolean;
@@ -5241,7 +5248,12 @@ const MessageRow = memo(function MessageRow({
   // as-is; only the text portion is editable). Enter submits, Escape cancels.
   if (isUser && isEditing) {
     return (
-      <div className="mt-5 mb-4 flex justify-end">
+      <div
+        className={cn(
+          "mb-4 flex justify-end",
+          isTurnLead ? "mt-[var(--chat-row-gap-turn-lead)]" : "mt-5",
+        )}
+      >
         <div className="max-w-[85%] w-full">
           <UserMessageEditor
             msg={msg}
@@ -5263,11 +5275,13 @@ const MessageRow = memo(function MessageRow({
       className={cn(
         "group",
         // Vertical rhythm is driven by the chat-density CSS vars (see
-        // styles.css). User rows get a larger gap than assistant rows so a
-        // new user prompt still reads as a distinct input even in compact
-        // mode. mt-[...] preserves the old margin-top semantics.
+        // styles.css). User rows that lead a new turn get a generous
+        // breathing room (--chat-row-gap-turn-lead, ~100px) from prior assistant
+        // output; ordinary user rows use --chat-row-gap-user.
         isUser
-          ? "mt-[var(--chat-row-gap-user)] flex justify-end"
+          ? isTurnLead
+            ? "mt-[var(--chat-row-gap-turn-lead)] flex justify-end"
+            : "mt-[var(--chat-row-gap-user)] flex justify-end"
           : tightTop
             ? "mt-[var(--chat-block-gap)]"
             : "mt-[var(--chat-row-gap-assistant)]",

@@ -14,6 +14,7 @@ export const zh = {
 
   // ── MessageBlocks: batch tool group ──
   "chatStream.opCount": "{n} 个操作",
+  "chatStream.opFailed": "(操作失败)",
 
   // ── Chat stream · 方案A「脉络」: turn summary / reply mark ──
   "chatStream.stepCount": "{n} 步",
@@ -34,6 +35,45 @@ export const zh = {
 
   // ── MessageBlocks: thinking / tool cards ──
   "chatStream.thinking": "思考",
+  // ── 工具显示名本地化（chatStream.toolName.<原始工具名>）──
+  // 仅 UI 展示用，逻辑判定（折叠分组/图标映射/守卫工具集）仍用原始名。
+  // Claude 大写开头；Pi 全小写（read/grep/…）各留一份。MCP 工具
+  // （mcp__server__tool）与未知工具不入表，按原始名显示。
+  "chatStream.toolName.Read": "读取",
+  "chatStream.toolName.read": "读取",
+  "chatStream.toolName.Glob": "文件匹配",
+  "chatStream.toolName.find": "文件匹配",
+  "chatStream.toolName.Write": "写入",
+  "chatStream.toolName.write": "写入",
+  "chatStream.toolName.Edit": "编辑",
+  "chatStream.toolName.edit": "编辑",
+  "chatStream.toolName.MultiEdit": "多处编辑",
+  "chatStream.toolName.multiedit": "多处编辑",
+  "chatStream.toolName.NotebookEdit": "编辑笔记本",
+  "chatStream.toolName.notebookedit": "编辑笔记本",
+  "chatStream.toolName.Bash": "执行命令",
+  "chatStream.toolName.bash": "执行命令",
+  "chatStream.toolName.PowerShell": "执行命令",
+  "chatStream.toolName.Grep": "内容搜索",
+  "chatStream.toolName.grep": "内容搜索",
+  "chatStream.toolName.ls": "浏览目录",
+  "chatStream.toolName.TodoWrite": "更新待办",
+  "chatStream.toolName.TodoRead": "读取待办",
+  "chatStream.toolName.TaskCreate": "创建任务",
+  "chatStream.toolName.TaskUpdate": "更新任务",
+  "chatStream.toolName.TaskGet": "查询任务",
+  "chatStream.toolName.Task": "子代理",
+  "chatStream.toolName.task": "子代理",
+  "chatStream.toolName.WebSearch": "网页搜索",
+  "chatStream.toolName.WebFetch": "网页抓取",
+  "chatStream.toolName.AskUserQuestion": "向用户提问",
+  "chatStream.toolName.EnterPlanMode": "进入计划模式",
+  "chatStream.toolName.ExitPlanMode": "退出计划模式",
+  "chatStream.toolName.SlashCommand": "斜杠命令",
+  "chatStream.toolName.Skill": "技能",
+  "chatStream.toolName.BashOutput": "命令输出",
+  "chatStream.toolName.KillShell": "终止后台命令",
+  "chatStream.toolName.TaskOutput": "后台任务输出",
   "chatStream.tool.input": "输入",
   "chatStream.tool.result": "结果",
   "chatStream.lineCount": "{n} 行",

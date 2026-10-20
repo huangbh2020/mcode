@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { cn } from "@renderer/lib/cn.js";
 import { useI18n } from "@renderer/lib/i18n/index.js";
+import { toolDisplayName } from "@renderer/lib/toolNames.js";
 import { Button } from "@renderer/components/ui/index.js";
 import {
   IconAlertTriangle,
@@ -153,7 +154,7 @@ export function ApprovalPrompt({
       <div className="mb-2.5 rounded-lg border border-edge bg-surface-muted/40 px-3 py-2">
         <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
           <code className="rounded bg-warning/15 px-1.5 py-0.5 font-mono text-[11px] font-semibold text-warning">
-            {toolName}
+            {toolDisplayName(t, toolName)}
           </code>
           {summary && (
             <span className="line-clamp-2 break-all text-content-muted">{summary}</span>

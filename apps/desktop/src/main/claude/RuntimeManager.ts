@@ -456,8 +456,23 @@ class RuntimeManager {
       return;
     }
     if (rt.handle?.isRunning()) {
-      log.warn(`sendTurn: session ${session.id} already running, ignoring`);
-      return;
+      // 上一轮的 SDK 生成器可能处于 flushFinal() 收尾阶段（异步微任务尚未
+      // 落地 `finished = true`），而渲染进程在收到 turn.done 后立即通过
+      // drainPromptQueueIfIdle 发起了下一轮的 sendTurn IPC。
+      // 直接 ignore 会导致整个队列项被渲染进程移除却在主进程被丢弃。
+      // 此处等待其真正结束（最长 2500ms），若超时则说明确有并发冲突，
+      // 抛出错误让 IPC 层返回失败，渲染进程 catch 分支会保留队列并提示。
+      log.info(`sendTurn: session ${session.id} still closing, waiting for handle to finish...`);
+      const WAIT_MS = 2500;
+      const settled = await Promise.race([
+        rt.handle.done.then(() => true),
+        new Promise<false>((resolve) => setTimeout(() => resolve(false), WAIT_MS)),
+      ]);
+      if (!settled || rt.handle?.isRunning()) {
+        log.warn(`sendTurn: session ${session.id} still running after ${WAIT_MS}ms wait, rejecting`);
+        throw new Error(`session ${session.id} is currently running`);
+      }
+      log.info(`sendTurn: session ${session.id} handle finished, proceeding`);
     }
 
     const provider = providerRegistry.resolve(session.providerId);

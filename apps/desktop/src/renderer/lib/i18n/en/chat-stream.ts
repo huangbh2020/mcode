@@ -11,6 +11,7 @@ export const en = {
 
   // ── MessageBlocks: batch tool group ──
   "chatStream.opCount": "{n} operations",
+  "chatStream.opFailed": "(failed)",
 
   // ── Chat stream · Plan A (spine): turn summary / reply mark ──
   "chatStream.stepCount": "{n} steps",
@@ -31,6 +32,43 @@ export const en = {
 
   // ── MessageBlocks: thinking / tool cards ──
   "chatStream.thinking": "Thinking",
+  // Tool display names: en mirrors the raw tool name verbatim (the zh side
+  // localizes; en stays identity). Keys must match zh/chat-stream.ts exactly.
+  "chatStream.toolName.Read": "Read",
+  "chatStream.toolName.read": "read",
+  "chatStream.toolName.Glob": "Glob",
+  "chatStream.toolName.find": "find",
+  "chatStream.toolName.Write": "Write",
+  "chatStream.toolName.write": "write",
+  "chatStream.toolName.Edit": "Edit",
+  "chatStream.toolName.edit": "edit",
+  "chatStream.toolName.MultiEdit": "MultiEdit",
+  "chatStream.toolName.multiedit": "multiedit",
+  "chatStream.toolName.NotebookEdit": "NotebookEdit",
+  "chatStream.toolName.notebookedit": "notebookedit",
+  "chatStream.toolName.Bash": "Bash",
+  "chatStream.toolName.bash": "bash",
+  "chatStream.toolName.PowerShell": "PowerShell",
+  "chatStream.toolName.Grep": "Grep",
+  "chatStream.toolName.grep": "grep",
+  "chatStream.toolName.ls": "ls",
+  "chatStream.toolName.TodoWrite": "TodoWrite",
+  "chatStream.toolName.TodoRead": "TodoRead",
+  "chatStream.toolName.TaskCreate": "TaskCreate",
+  "chatStream.toolName.TaskUpdate": "TaskUpdate",
+  "chatStream.toolName.TaskGet": "TaskGet",
+  "chatStream.toolName.Task": "Task",
+  "chatStream.toolName.task": "task",
+  "chatStream.toolName.WebSearch": "WebSearch",
+  "chatStream.toolName.WebFetch": "WebFetch",
+  "chatStream.toolName.AskUserQuestion": "AskUserQuestion",
+  "chatStream.toolName.EnterPlanMode": "EnterPlanMode",
+  "chatStream.toolName.ExitPlanMode": "ExitPlanMode",
+  "chatStream.toolName.SlashCommand": "SlashCommand",
+  "chatStream.toolName.Skill": "Skill",
+  "chatStream.toolName.BashOutput": "BashOutput",
+  "chatStream.toolName.KillShell": "KillShell",
+  "chatStream.toolName.TaskOutput": "TaskOutput",
   "chatStream.tool.input": "Input",
   "chatStream.tool.result": "Result",
   "chatStream.lineCount": "{n} lines",

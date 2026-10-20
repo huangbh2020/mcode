@@ -48,6 +48,7 @@ import { FileLink } from "./FileLink.js";
 import { MediaGallery, type MediaBlock } from "./mediaGallery.js";
 import { TagPopover } from "./TagPopover.js";
 import { isImageFilePath, type ContentTag } from "@renderer/lib/contentTag.js";
+import { toolDisplayName } from "@renderer/lib/toolNames.js";
 import { BUILT_IN_COMMANDS } from "@renderer/lib/slashCommands.js";
 
 /** Map of absolute file path → its pre-turn content. Built from the
@@ -415,7 +416,7 @@ export function BatchToolGroup({
       if (b.kind === "tool_use" && b.status === "running") {
         return {
           kind: "tool" as const,
-          name: b.toolName,
+          name: toolDisplayName(t, b.toolName),
           detail: toolSummary(b.toolName, b.input),
           status: "running" as const,
         };
@@ -443,7 +444,7 @@ export function BatchToolGroup({
       }
       return {
         kind: "tool" as const,
-        name: last.toolName,
+        name: toolDisplayName(t, last.toolName),
         detail: toolSummary(last.toolName, last.input),
         status: last.status,
       };
@@ -458,7 +459,7 @@ export function BatchToolGroup({
   // Block tally in first-appearance order
   const counts = new Map<string, number>();
   for (const b of blocks) {
-    const name = b.kind === "thinking" ? t("chatStream.thinking") : b.toolName;
+    const name = b.kind === "thinking" ? t("chatStream.thinking") : toolDisplayName(t, b.toolName);
     counts.set(name, (counts.get(name) ?? 0) + 1);
   }
   const countsBreakdown = isSingleThinking
@@ -480,11 +481,9 @@ export function BatchToolGroup({
         }}
         className="flex w-full items-center gap-2 rounded-md py-1 text-left text-content-muted hover:bg-surface-muted/40 hover:text-content transition-colors select-none group"
       >
-        {/* Leading icon: pulse on running, alert on error, bulb for single thinking, stack for idle */}
+        {/* Leading icon: pulse on running, bulb for single thinking, stack for idle/error */}
         {isLiveRunning ? (
           <span className="shrink-0 h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
-        ) : aggregateStatus === "error" ? (
-          <IconAlertTriangle size={13} className="shrink-0 text-danger" />
         ) : isSingleThinking ? (
           <IconBulb size={13} className="shrink-0 text-amber-500/80" />
         ) : (
@@ -504,13 +503,15 @@ export function BatchToolGroup({
             )}
           </span>
         ) : (
-          /* 2. Normal / completed state: show total count label and last operation hint */
+          /* 2. Normal / completed state: show last operation hint directly (no "N个操作" label) */
           <span className="flex items-center gap-1.5 min-w-0 truncate">
-            <span className="shrink-0 whitespace-nowrap font-medium text-content">{label}</span>
             {isSingleThinking && firstBlock?.kind === "thinking" ? (
-              <span className="min-w-0 truncate text-content-subtle text-[11px]">
-                {summarize(firstBlock.text)}
-              </span>
+              <>
+                <span className="shrink-0 whitespace-nowrap font-medium text-content">{label}</span>
+                <span className="min-w-0 truncate text-content-subtle text-[11px]">
+                  {summarize(firstBlock.text)}
+                </span>
+              </>
             ) : activeOp?.detail ? (
               <span className="min-w-0 truncate font-mono text-[11px] text-content-subtle">
                 {activeOp.name}: {activeOp.detail}
@@ -599,8 +600,9 @@ function AttachmentRow({ blocks }: { blocks: Extract<Block, { kind: "attachment"
  *  Rows of COMPLETED turns keep the old quiet behavior (no glyph unless
  *  error): historical panels would otherwise carry a wall of checkmarks. */
 function StatusIcon({ status, live }: { status: "running" | "done" | "error"; live?: boolean }) {
+  // Error indicator moved to after filename in each tool card — no leading icon.
   if (status === "error") {
-    return <IconX size={12} className="text-danger" />;
+    return null;
   }
   if (!live) {
     return null;
@@ -1740,6 +1742,7 @@ function OrchPlanToolCard({
             {goal}
           </span>
         )}
+        {block.status === "error" && <span className="shrink-0 text-danger whitespace-nowrap [font-size:var(--chat-fs-xxs)]">{t("chatStream.opFailed")}</span>}
         <span className="ml-auto flex shrink-0 items-center gap-1.5 [font-size:var(--chat-fs-xxs)]">
           <span className="tabular-nums text-content-subtle">
             {t("orch.tool.taskCount", { n: tasks.length })}
@@ -1829,10 +1832,11 @@ function EditToolCard({
       >
         <StatusIcon status={status} live={live} />
         <ToolIcon name="Edit" className="shrink-0 text-content-subtle" />
-        <span className="shrink-0 font-medium text-content-muted">Edit</span>
+        <span className="shrink-0 font-medium text-content-muted">{toolDisplayName(t, "Edit")}</span>
         <span className="min-w-0 flex-1 truncate font-mono text-content-subtle" title={filePath}>
           {filePath}
         </span>
+        {status === "error" && <span className="shrink-0 text-danger whitespace-nowrap [font-size:var(--chat-fs-xxs)]">{t("chatStream.opFailed")}</span>}
         <span className="ml-auto flex shrink-0 items-center gap-1.5 whitespace-nowrap [font-size:var(--chat-fs-xxs)]">
           {adds > 0 && <span className="text-success">+{adds}</span>}
           {dels > 0 && <span className="text-danger">−{dels}</span>}
@@ -1917,10 +1921,11 @@ function WriteToolCard({
       >
         <StatusIcon status={status} live={live} />
         <ToolIcon name="Write" className="shrink-0 text-content-subtle" />
-        <span className="shrink-0 font-medium text-content-muted">Write</span>
+        <span className="shrink-0 font-medium text-content-muted">{toolDisplayName(t, "Write")}</span>
         <span className="min-w-0 flex-1 truncate font-mono text-content-subtle" title={filePath}>
           {filePath}
         </span>
+        {status === "error" && <span className="shrink-0 text-danger whitespace-nowrap [font-size:var(--chat-fs-xxs)]">{t("chatStream.opFailed")}</span>}
         <span className="ml-auto flex shrink-0 items-center gap-1.5 whitespace-nowrap [font-size:var(--chat-fs-xxs)]">
           {diff && adds > 0 && <span className="text-success">+{adds}</span>}
           {diff && dels > 0 && <span className="text-danger">−{dels}</span>}
@@ -2007,7 +2012,7 @@ function GenericToolCard({
       >
         <StatusIcon status={block.status} live={live} />
         <ToolIcon name={block.toolName} className="shrink-0 text-content-subtle" />
-        <span className="shrink-0 font-medium text-content-muted">{block.toolName}</span>
+        <span className="shrink-0 font-medium text-content-muted">{toolDisplayName(t, block.toolName)}</span>
         {summaryToolPath ? (
           <span className="min-w-0 flex-1 truncate font-mono text-content-subtle">
             <FileLink token={summaryToolPath} projectPath={projectPath} />
@@ -2015,6 +2020,7 @@ function GenericToolCard({
         ) : (
           <span className="min-w-0 flex-1 truncate text-content-subtle">{toolSummary(block.toolName, block.input)}</span>
         )}
+        {block.status === "error" && <span className="shrink-0 text-danger whitespace-nowrap [font-size:var(--chat-fs-xxs)]">{t("chatStream.opFailed")}</span>}
         <Chevron open={open} className="ml-auto shrink-0" />
       </button>
       {approvalBroken && (

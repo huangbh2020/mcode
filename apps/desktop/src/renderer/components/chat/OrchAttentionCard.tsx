@@ -14,6 +14,7 @@
  */
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useI18n } from "@renderer/lib/i18n/index.js";
+import { toolDisplayName } from "@renderer/lib/toolNames.js";
 import { useSessionStore } from "@renderer/stores/sessionStore.js";
 import { isElectron } from "@renderer/lib/platform.js";
 import type { Gate, TaskNode } from "@contracts/orchestration";
@@ -146,7 +147,7 @@ export function OrchAttentionCard({ sessionId }: { sessionId: string }) {
       {/* ③ worker 工具审批 */}
       {workerApprovals.map((p) => (
         <div key={p.requestId} className="rounded-lg border border-edge bg-surface px-2.5 py-2">
-          <div className="text-[11px] font-medium">{p.toolName}</div>
+          <div className="text-[11px] font-medium">{toolDisplayName(t, p.toolName)}</div>
           <div className="mt-0.5 truncate font-mono text-[10px] text-content-subtle">
             {t("orch.inbox.approvals")} · {p.sessionId.slice(0, 18)}…
           </div>
