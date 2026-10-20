@@ -4332,10 +4332,10 @@ export interface TerminalCliProbeResult {
  *  explicitly flipped back on, so re-enabling stays sticky). */
 export const TERMINAL_CLI_ENABLED_SETTING_KEY = "terminal.cliEnabled";
 
-/** The four terminal-CLI provider ids (mirror of the renderer's
+/** The five terminal-CLI provider ids (mirror of the renderer's
  *  TERMINAL_CLI_PROVIDER_IDS — kept here so the zod schema can validate
  *  RPC input without importing renderer code). */
-export const TERMINAL_CLI_IDS = ["claude-sdk", "pi-sdk", "codex-sdk", "antigravity"] as const;
+export const TERMINAL_CLI_IDS = ["claude-sdk", "pi-sdk", "codex-sdk", "opencode", "antigravity"] as const;
 export type TerminalCliId = (typeof TERMINAL_CLI_IDS)[number];
 
 /** How a terminal CLI can be managed from inside Mcode. */

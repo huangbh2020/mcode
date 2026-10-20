@@ -45,6 +45,7 @@ import {
 } from "@main/lib/terminalCliCatalog.js";
 import { reconcileCodexTerminalSessionId } from "@main/lib/codexSession.js";
 import { reconcileAgyTerminalSessionId } from "@main/lib/agySession.js";
+import { reconcileOpenCodeTerminalSessionId } from "@main/lib/opencodeSession.js";
 import { saveTerminalHistory, loadTerminalHistory } from "@main/lib/terminalHistory.js";
 import {
   extractTerminalTitleExcerpt,
@@ -231,9 +232,10 @@ export function registerTerminalHandlers(ipcMain: IpcMain): void {
       });
       // Resume reconciliation piggybacks on the 3s save tick (throttled to
       // 30s in-main), dispatched per CLI: claude's pin can be dropped by a
-      // CLI auto-update relaunch (adopt from ~/.claude/projects); codex has
-      // no pin at all (adopt from ~/.codex/sessions rollouts); pi's
-      // --session-id pin is deterministic and needs nothing.
+      // CLI auto-update relaunch (adopt from ~/.claude/projects); codex and
+      // opencode have no pin at all (adopt from ~/.codex/sessions rollouts
+      // resp. opencode's SQLite session table); pi's --session-id pin is
+      // deterministic and needs nothing.
       if (result.ok) {
         const session = SessionRepo.get(input.sessionId);
         const project = session ? ProjectRepo.get(session.projectId) : undefined;
@@ -242,6 +244,8 @@ export function registerTerminalHandlers(ipcMain: IpcMain): void {
             reconcileCodexTerminalSessionId(session);
           } else if (session.providerId === "antigravity") {
             reconcileAgyTerminalSessionId(session);
+          } else if (session.providerId === "opencode") {
+            reconcileOpenCodeTerminalSessionId(session, project.path);
           } else {
             reconcileTerminalClaudeSessionId(session, project.path);
           }

@@ -17,6 +17,7 @@ import { mkdtempSync, rmSync, writeFileSync, utimesSync, mkdirSync } from "node:
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
+import { DatabaseSync } from "node:sqlite";
 import type { Session } from "@contracts/session";
 import { IPC } from "@contracts/ipc";
 import {
@@ -45,6 +46,7 @@ import { FILE_DRAG_MIME } from "@renderer/lib/contentTag.js";
 import { buildTerminalInitCommand, terminalCliCommand } from "@renderer/lib/terminalCli.js";
 import { reconcileCodexTerminalSessionId } from "@main/lib/codexSession.js";
 import { reconcileAgyTerminalSessionId } from "@main/lib/agySession.js";
+import { reconcileOpenCodeTerminalSessionId } from "@main/lib/opencodeSession.js";
 import {
   resolvePrintedPath,
   resolvePrintedPathWithCandidates,
@@ -476,6 +478,11 @@ console.log("[H] terminal CLI catalog");
     "antigravity: bare launch (skip-permissions) first, --conversation <uuid> after adoption",
   );
   ok(
+    buildTerminalInitCommand("opencode", uuid, false) === "opencode" &&
+      buildTerminalInitCommand("opencode", uuid, true) === `opencode -s ${uuid}`,
+    "opencode: bare launch first (-s needs an existing session), -s <id> after adoption",
+  );
+  ok(
     buildTerminalInitCommand("claude-sdk", null, false) === null &&
       buildTerminalInitCommand("unknown-provider", uuid, false) === null,
     "degenerate inputs → plain shell (null)",
@@ -552,6 +559,74 @@ console.log("[H] terminal CLI catalog");
     } finally {
       await rmBestEffort(agyRoot);
     }
+
+    // opencode adoption: ONE SQLite store, directory-anchored (the tighter
+    // anchor vs codex/agy's mtimes — an unrelated opencode window in another
+    // project can never steal the adoption). Real node:sqlite fixture, same
+    // shape opencode 1.x writes (forward-slashed directory, epoch-ms times).
+    const ocRoot = mkdtempSync(join(tmpdir(), "mcode-opencode-reconcile-smoke."));
+    try {
+      const fixtureDb = join(ocRoot, "opencode.db");
+      const odb = new DatabaseSync(fixtureDb);
+      odb.exec(
+        "CREATE TABLE session (id TEXT PRIMARY KEY, directory TEXT, parent_id TEXT, time_created INTEGER, time_archived INTEGER)",
+      );
+      const ins = odb.prepare(
+        "INSERT INTO session (id, directory, parent_id, time_created, time_archived) VALUES (?, ?, ?, ?, ?)",
+      );
+      const ocNow = Date.now();
+      ins.run("ses_otherdir", "D:/some-other-project", null, ocNow, null); // newest overall — wrong project, never steals
+      ins.run("ses_child", "D:/proj", "ses_parent", ocNow, null); // in-project but a child (subagent) session
+      ins.run("ses_archived", "D:/proj", null, ocNow, ocNow - 1000); // in-project but archived inside opencode
+      ins.run("ses_stale", "D:/proj", null, ocNow - 30 * 60_000, null); // pre-creation
+      ins.run("ses_winner", "D:/proj", null, ocNow - 5000, null); // the adoptable newest in-project row
+      odb.close();
+
+      const ocSession = {
+        id: "sess_oc1",
+        kind: "terminal",
+        providerId: "opencode",
+        claudeSessionId: "deadpin-0003",
+        createdAt: ocNow - 60_000,
+      } as unknown as Session;
+      g.__SESSION_CREATE = [ocSession as unknown as Record<string, unknown> & { id: string }];
+      g.__TERMINAL_CLAIMED = [];
+      g.__CLAUDE_ID_ADOPT = [];
+      g.__BROADCASTS = [];
+      const adoptedOc = reconcileOpenCodeTerminalSessionId(ocSession, "D:\\proj", fixtureDb);
+      ok(
+        adoptedOc === "ses_winner",
+        "opencode: adopted newest in-project post-creation row (other-dir/child/archived/stale skipped)",
+      );
+      ok(
+        (g.__CLAUDE_ID_ADOPT ?? []).length === 1 && g.__CLAUDE_ID_ADOPT![0][1] === "ses_winner",
+        "opencode adoption persisted",
+      );
+      ok((g.__BROADCASTS ?? []).length === 1, "opencode adoption broadcast");
+
+      // Idempotence + claimed-set: once adopted, the id is claimed.
+      const ocSession2 = { ...ocSession, id: "sess_oc2", claudeSessionId: "deadpin-0004" } as unknown as Session;
+      g.__SESSION_CREATE = [ocSession2 as unknown as Record<string, unknown> & { id: string }];
+      g.__TERMINAL_CLAIMED = ["ses_winner"];
+      ok(
+        reconcileOpenCodeTerminalSessionId(ocSession2, "D:/proj/", fixtureDb) === null,
+        "opencode: claimed winner skipped (trailing-slash projectPath normalized too)",
+      );
+
+      // Missing store → null (opencode never ran yet), retryable not fatal.
+      const ocSession3 = { ...ocSession, id: "sess_oc3" } as unknown as Session;
+      ok(
+        reconcileOpenCodeTerminalSessionId(ocSession3, "D:\\proj", join(ocRoot, "nope.db")) === null,
+        "opencode: missing db → null",
+      );
+      ok(
+        reconcileOpenCodeTerminalSessionId(claudeRow, "D:\\proj", fixtureDb) === null,
+        "opencode reconciler ignores non-opencode rows",
+      );
+    } finally {
+      await rmBestEffort(ocRoot);
+    }
+
     const piRow = {
       id: "sess_pi1",
       kind: "terminal",
@@ -912,22 +987,36 @@ console.log("[M] terminal busy detector");
     screenIndicatesActivity(["ESC to interrupt"]) === true,
     "case-insensitive — the TUI's exact casing must not be load-bearing",
   );
+  // opencode: the footer pill renders key + verb with NO "to" (`esc
+  // interrupt`, next to `ctrl+p commands`); idle chrome never matches.
+  ok(
+    screenIndicatesActivity(["Build · GLM 5", "⠋ Thinking", "esc interrupt  10.4K (5%)  ctrl+p commands"]) === true,
+    "opencode's 'esc interrupt' footer pill sustains busy",
+  );
+  ok(
+    screenIndicatesActivity(["Build · GLM 5", "ctrl+p commands"]) === false,
+    "opencode idle chrome (ctrl+p commands) does not",
+  );
+  ok(
+    screenIndicatesActivity(["esc to interrupt"]) === true && !("esc to interrupt".includes("esc interrupt")),
+    "claude's 'esc to interrupt' hint and opencode's marker stay distinct strings",
+  );
 }
 
 /* ── N. terminalCliCatalog: management-side catalog & probe ── */
 console.log("[N] terminalCliCatalog (management)");
 {
-  // Catalog shape: 4 entries in menu order; npm trio + external antigravity.
+  // Catalog shape: 5 entries in menu order; npm quartet + external antigravity.
   ok(
     TERMINAL_CLI_CATALOG.map((e) => e.providerId).join(",") ===
-      "claude-sdk,pi-sdk,codex-sdk,antigravity",
+      "claude-sdk,pi-sdk,codex-sdk,opencode,antigravity",
     "catalog order mirrors the new-terminal menu",
   );
   ok(
-    TERMINAL_CLI_CATALOG.filter((e) => e.packageName).length === 3 &&
+    TERMINAL_CLI_CATALOG.filter((e) => e.packageName).length === 4 &&
       findTerminalCliEntry("antigravity")?.packageName === null &&
       !!findTerminalCliEntry("antigravity")?.downloadUrl,
-    "three npm-managed + external antigravity (with download page)",
+    "four npm-managed + external antigravity (with download page)",
   );
 
   // Semver extraction: the "update available" comparison depends on getting
@@ -992,6 +1081,18 @@ console.log("[N] terminalCliCatalog (management)");
     // opens the download page instead — Electron glue, out of module scope).
     const extInstall = await installTerminalCli("antigravity");
     ok(extInstall.ok === false, "install(antigravity) rejected — externally managed");
+
+    // opencode resolves via `which("opencode")` — the catalog command must
+    // match the binary users actually have on PATH (npm shim included).
+    g.__SMOKE_WHICH__ = (n) => (n === "opencode" ? "C:\\fake\\opencode.cmd" : null);
+    const ocProbe = await probeTerminalCli("opencode", true);
+    ok(
+      ocProbe.installed === true &&
+        ocProbe.path === "C:\\fake\\opencode.cmd" &&
+        ocProbe.packageName === "opencode-ai" &&
+        ocProbe.manageMode === "npm",
+      "opencode probe resolves via which + carries the npm package",
+    );
   } finally {
     g.__SMOKE_WHICH__ = undefined;
     if (savedLocalAppData) process.env["LOCALAPPDATA"] = savedLocalAppData;

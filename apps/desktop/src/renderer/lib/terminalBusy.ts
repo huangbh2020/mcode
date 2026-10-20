@@ -146,6 +146,9 @@ export function footerIndicatesRunningTasks(lines: string[]): boolean {
  *  - `esc to interrupt` — claude's turn-active hint; present only while a
  *    turn is in flight, gone the moment it ends (idle chrome shows
  *    "? for shortcuts" etc.).
+ *  - `esc interrupt` — opencode's footer pill for the same phase (its
+ *    idle footer shows `ctrl+p commands` instead; the pills render
+ *    key + verb with no "to", so the claude hint never collides).
  *  - `Running command…` — the foreground-command spinner caption.
  *  - the `N task(s)` footer indicator (delegated).
  *
@@ -160,5 +163,9 @@ export function footerIndicatesRunningTasks(lines: string[]): boolean {
 export function screenIndicatesActivity(lines: string[]): boolean {
   if (footerIndicatesRunningTasks(lines)) return true;
   const joined = lines.join("").toLowerCase();
-  return joined.includes("esc to interrupt") || joined.includes("running command");
+  return (
+    joined.includes("esc to interrupt") ||
+    joined.includes("esc interrupt") ||
+    joined.includes("running command")
+  );
 }
