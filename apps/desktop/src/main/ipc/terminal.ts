@@ -27,7 +27,7 @@ import {
   UI_TITLE_GEN_ENABLED_SETTING_KEY,
   UI_TITLE_GEN_MODEL_SETTING_KEY,
 } from "@contracts/ipc";
-import { resolvePrintedPath } from "@main/lib/terminalPathResolve.js";
+import { resolvePrintedPathWithCandidates } from "@main/lib/terminalPathResolve.js";
 import { isKnownWorkspaceRoot, pathWithin } from "@main/lib/pathGuard.js";
 import { SessionRepo, ProjectRepo, SettingRepo } from "@main/store/repositories.js";
 import { TerminalManager } from "@main/terminal/TerminalManager.js";
@@ -299,16 +299,19 @@ export function registerTerminalHandlers(ipcMain: IpcMain): void {
   // Click-to-open file paths: resolve a candidate printed in terminal
   // output to an EXISTING FILE (never a directory). Delegates to
   // lib/terminalPathResolve.ts — direct root-relative/absolute resolution
-  // first, then a bounded unique-basename walk (agents reference files by
-  // bare name; ambiguity resolves to nothing).
+  // first, then a bounded basename walk. Unique matches resolve to the file;
+  // ambiguous BARE names come back as a candidate list so the renderer can
+  // ask "which one" instead of dead-clicking.
   ipcMain.handle(IPC.TERMINAL_RESOLVE_PATH, (_evt, raw) => {
     try {
       const input = TerminalResolvePathSchema.parse(raw);
-      if (!isKnownWorkspaceRoot(resolve(input.projectPath))) return { path: null };
-      return { path: resolvePrintedPath(input.projectPath, input.path) };
+      if (!isKnownWorkspaceRoot(resolve(input.projectPath))) {
+        return { path: null, candidates: [] };
+      }
+      return resolvePrintedPathWithCandidates(input.projectPath, input.path);
     } catch (err) {
       log.warn(`terminal.resolvePath failed: ${err instanceof Error ? err.message : String(err)}`);
-      return { path: null };
+      return { path: null, candidates: [] };
     }
   });
 }

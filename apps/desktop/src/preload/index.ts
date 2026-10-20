@@ -37,6 +37,11 @@ const api = {
       ipcRenderer.invoke(IPC.CLAUDE_RESPOND_PLAN_APPROVAL, input)) as RpcMap["claude.respondPlanApproval"],
     rewindTurn: ((input) =>
       ipcRenderer.invoke(IPC.CLAUDE_REWIND_TURN, input)) as RpcMap["claude.rewindTurn"],
+    reviseConversation: ((input) =>
+      ipcRenderer.invoke(
+        IPC.CLAUDE_REVISE_CONVERSATION,
+        input,
+      )) as RpcMap["claude.reviseConversation"],
   },
   project: {
     create: ((input) =>

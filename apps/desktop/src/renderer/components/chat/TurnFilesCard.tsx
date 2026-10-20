@@ -15,6 +15,7 @@ import {
   IconFocus,
   IconPlus,
   IconEdit,
+  IconArrowBackUp,
 } from "@renderer/lib/icons.js";
 
 /**
@@ -157,13 +158,13 @@ export function TurnFilesCard({
               }}
               onKeyDown={(e) => e.stopPropagation()}
               disabled={rewinding || done}
-              className="rounded-md bg-surface-hover px-3 py-1 font-medium text-content transition-colors hover:bg-edge disabled:cursor-not-allowed disabled:text-content-subtle"
+              className="inline-flex items-center gap-1 rounded-md bg-surface-hover px-2.5 py-1 font-medium text-content transition-colors hover:bg-edge disabled:cursor-not-allowed disabled:text-content-subtle"
               title={isLatestTurn ? t("chatStream.turnFiles.rewindLatestTitle") : t("chatStream.turnFiles.rewindHistoryTitle")}
             >
               {done ? t("chatStream.turnFiles.rewoundCheck") : rewinding ? t("chatStream.turnFiles.rewinding") : (
                 <>
-                  <span className="tfc-long">{t("chatStream.turnFiles.rewindLong")}</span>
-                  <span className="tfc-short">{t("chatStream.turnFiles.rewindShort")}</span>
+                  <IconArrowBackUp size={12} />
+                  {t("chatStream.turnFiles.rewindShort")}
                 </>
               )}
             </button>
@@ -227,6 +228,11 @@ export function TurnFilesCard({
 function FileRow({ entry }: { entry: TurnFileEntry }) {
   const { t } = useI18n();
   const isCreated = entry.kind === "created";
+  // Path split for display: the leading directory (with its trailing
+  // separator) is the disposable part that gets ellipsized; the trailing
+  // filename always stays fully visible.
+  const fileName = basename(entry.filePath);
+  const dirPrefix = entry.filePath.slice(0, entry.filePath.length - fileName.length);
 
   const handleOpen = async () => {
     const store = useSessionStore.getState();
@@ -308,8 +314,26 @@ function FileRow({ entry }: { entry: TurnFileEntry }) {
       <span aria-hidden title={isCreated ? t("chatStream.turnFiles.createdThisTurn") : t("chatStream.turnFiles.modifiedThisTurn")} className="shrink-0 text-content-subtle">
         {isCreated ? <IconPlus size={12} /> : <IconEdit size={12} />}
       </span>
-      <span className="min-w-0 truncate font-mono text-[11px] text-content" title={entry.filePath}>
-        {entry.filePath}
+      {/* Path: filename first (always fully visible), then a small gap and the
+          directory prefix in a muted color. When the row is narrow the DIR
+          part ellipsizes at its start (direction:rtl flips the CSS ellipsis
+          from the text end to the string start; the <bdi> isolates the LTR
+          path text from the flipped paragraph direction so segments don't
+          reorder) - the segments nearest the file stay readable. Full path
+          stays on the hover title. */}
+      <span
+        className="flex min-w-0 items-baseline gap-1 overflow-hidden font-mono text-[11px] text-content"
+        title={entry.filePath}
+      >
+        {/* accent-strong, not accent: light theme keeps --accent (emerald-600)
+            for buttons/icons/rings, small accent TEXT must use the darker
+            --accent-strong (≥4.5:1); dark theme's strong === default. */}
+        <span className="shrink-0 text-accent-strong">{fileName}</span>
+        {dirPrefix && (
+          <span className="min-w-0 truncate text-content-subtle [direction:rtl] [text-align:left]">
+            <bdi>{dirPrefix}</bdi>
+          </span>
+        )}
       </span>
       {/* Per-file change tallies. */}
       <span className="flex shrink-0 items-center gap-1 font-mono text-[10px] tabular-nums">

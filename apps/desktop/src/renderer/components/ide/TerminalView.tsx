@@ -10,9 +10,11 @@ import { api } from "@renderer/lib/api.js";
 import { cn } from "@renderer/lib/cn.js";
 import { extractDropPayload, terminalDropInsertText } from "@renderer/lib/terminalDrop.js";
 import { createFileLinkProvider } from "@renderer/lib/terminalFileLinks.js";
-import { createBusyDetector, type BusyDetector } from "@renderer/lib/terminalBusy.js";
+import { createBusyDetector, screenIndicatesActivity, type BusyDetector } from "@renderer/lib/terminalBusy.js";
+import { TerminalPathPick, type TerminalPathPickState } from "./TerminalPathPick.js";
 import { useSessionStore } from "@renderer/stores/sessionStore.js";
 import { useI18n } from "@renderer/lib/i18n/index.js";
+import type { TerminalResolvePathResult } from "@contracts/ipc";
 import type { ITheme } from "@xterm/xterm";
 
 export type TerminalSessionStatus = "starting" | "running" | "exited" | "error";
@@ -234,6 +236,12 @@ export function TerminalView({
   // or falls through to the shell (SIGINT).
   const [hasSelection, setHasSelection] = useState(false);
 
+  // Ambiguous bare filename clicked → the resolver refused to guess and
+  // returned the same-name match list; this state opens the pick panel at
+  // the click point (see TerminalPathPick). Lives at component level because
+  // the link provider below is bound once per sessionKey.
+  const [pathPick, setPathPick] = useState<TerminalPathPickState | null>(null);
+
   // Copy the current xterm selection to the clipboard. No-ops when nothing is
   // selected — the menu item is disabled in that case, but the keyboard path
   // (Ctrl+Shift+C) shares this handler and may be hit with no selection.
@@ -409,13 +417,14 @@ export function TerminalView({
     if (projectPathForLinks) {
       const root = projectPathForLinks;
       const pathCache = new Map<string, { path: string; line?: number; column?: number }>();
-      const inflight = new Map<string, Promise<string | null>>();
-      const resolvePath = async (path: string): Promise<string | null> => {
+      const candCache = new Map<string, string[]>();
+      const inflight = new Map<string, Promise<TerminalResolvePathResult>>();
+      const resolvePath = async (path: string): Promise<TerminalResolvePathResult> => {
         // Dedupe concurrent lookups of the same candidate (a compiler error
         // block repeats the same path dozens of times).
         let p = inflight.get(path);
         if (!p) {
-          p = api.terminal.resolvePath({ projectPath: root, path }).then((r) => r.path);
+          p = api.terminal.resolvePath({ projectPath: root, path });
           inflight.set(path, p);
           if (inflight.size > 200) {
             const first = inflight.keys().next().value;
@@ -427,14 +436,31 @@ export function TerminalView({
       const provider: ILinkProvider = createFileLinkProvider(
         term,
         (target) => {
-          void resolvePath(target.path).then((abs) => {
-            if (abs) pathCache.set(target.path, { path: abs, line: target.line, column: target.column });
+          void resolvePath(target.path).then((r) => {
+            if (r.path) {
+              pathCache.set(target.path, { path: r.path, line: target.line, column: target.column });
+            } else if (r.candidates.length > 0) {
+              candCache.set(target.path, r.candidates);
+            }
           });
-          return pathCache.has(target.path);
+          return pathCache.has(target.path) || candCache.has(target.path);
         },
-        (target) => {
-          void resolvePath(target.path).then((abs) => {
-            if (abs) openFileInIde(abs, { line: target.line, column: target.column });
+        (target, evt) => {
+          void resolvePath(target.path).then((r) => {
+            if (r.path) {
+              openFileInIde(r.path, { line: target.line, column: target.column });
+              return;
+            }
+            // Ambiguous bare name: the main side refuses to guess — ask the
+            // user which match to open instead of dead-clicking.
+            if (r.candidates.length > 0) {
+              setPathPick({
+                x: evt.clientX,
+                y: evt.clientY,
+                printed: target.path,
+                candidates: r.candidates,
+              });
+            }
           });
         },
       );
@@ -471,11 +497,38 @@ export function TerminalView({
 
     // "Model processing" detector: arms on Enter, sustains on output, ends
     // on quiet (see lib/terminalBusy.ts). Lives per sessionKey; the spawn
-    // effect's data subscription feeds it via the ref.
+    // effect's data subscription feeds it via the ref. Each tick also scans
+    // the bottom viewport rows for the CLI's live-work chrome ("esc to
+    // interrupt" while a turn runs, "Running command…" on foreground
+    // commands, "N task(s)" in the footer) — a quiet output stream must not
+    // drop the spinner while the chrome still shows work in flight.
     busyRef.current = onBusyChange ? createBusyDetector(onBusyChange) : null;
+    const scanViewportForActivity = (): boolean => {
+      try {
+        const buf = term.buffer.active;
+        const lines: string[] = [];
+        // The live chrome (spinner hint / footer) sits at the bottom of the
+        // viewport; `length` counts viewport rows, and the cursor typically
+        // rests on the last one — six rows cover the hint block.
+        for (let i = Math.max(0, buf.length - 6); i < buf.length; i++) {
+          if (i < buf.viewportY) continue; // scrolled-back history: stale
+          const line = buf.getLine(i);
+          if (line) lines.push(line.translateToString(true));
+        }
+        return screenIndicatesActivity(lines);
+      } catch {
+        return false;
+      }
+    };
     let busyTimer = 0;
     if (busyRef.current) {
-      busyTimer = window.setInterval(() => busyRef.current?.tick(Date.now()), 500);
+      busyTimer = window.setInterval(() => {
+        const b = busyRef.current;
+        if (!b) return;
+        const now = Date.now();
+        b.sustain(scanViewportForActivity(), now);
+        b.tick(now);
+      }, 500);
     }
 
     const dataDisp = term.onData((data) => {
@@ -753,39 +806,52 @@ export function TerminalView({
   }, [active, sessionKey]);
 
   return (
-    // xterm host. xterm registers its own native 'contextmenu' listener here
-    // during term.open; our capture-phase listener (above) intercepts before it
-    // so right-click performs copy/paste directly instead of showing any menu.
-    <div
-      ref={hostRef}
-      className={cn("h-full min-h-0 w-full overflow-hidden", className)}
-      data-terminal-session={sessionKey}
-      // Exempt from mouse gestures: the terminal's right-click IS its
-      // copy/paste interaction and must never be swallowed by a stroke.
-      data-gesture-exclude=""
-      // Drop target: file-tree drags (and plain text) type straight into the
-      // PTY — claude's input box in terminal sessions, the shell prompt in
-      // the IDE terminal. preventDefault on dragover is what makes the drop
-      // legal at all.
-      onDragOver={(e) => {
-        e.preventDefault();
-        e.dataTransfer.dropEffect = "copy";
-      }}
-      onDrop={(e) => {
-        e.preventDefault();
-        const payload = extractDropPayload(e.dataTransfer);
-        if (!payload) return;
-        const insert =
-          payload.kind === "file"
-            ? terminalDropInsertText([payload.value], mentionFilesOnDrop === true)
-            : `${payload.value} `;
-        const id = terminalIdRef.current;
-        if (!id || statusRef.current !== "running" || !insert) return;
-        void api.terminal.write({ terminalId: id, data: insert }).catch(() => {});
-        termRef.current?.focus();
-      }}
-      // xterm needs a non-zero box; parent supplies flex-1 min-h-0.
-      style={{ padding: "4px 6px 6px" }}
-    />
+    <>
+      {/* xterm host. xterm registers its own native 'contextmenu' listener here
+      during term.open; our capture-phase listener (above) intercepts before it
+      so right-click performs copy/paste directly instead of showing any menu. */}
+      <div
+        ref={hostRef}
+        className={cn("h-full min-h-0 w-full overflow-hidden", className)}
+        data-terminal-session={sessionKey}
+        // Exempt from mouse gestures: the terminal's right-click IS its
+        // copy/paste interaction and must never be swallowed by a stroke.
+        data-gesture-exclude=""
+        // Drop target: file-tree drags (and plain text) type straight into the
+        // PTY — claude's input box in terminal sessions, the shell prompt in
+        // the IDE terminal. preventDefault on dragover is what makes the drop
+        // legal at all.
+        onDragOver={(e) => {
+          e.preventDefault();
+          e.dataTransfer.dropEffect = "copy";
+        }}
+        onDrop={(e) => {
+          e.preventDefault();
+          const payload = extractDropPayload(e.dataTransfer);
+          if (!payload) return;
+          const insert =
+            payload.kind === "file"
+              ? terminalDropInsertText([payload.value], mentionFilesOnDrop === true)
+              : `${payload.value} `;
+          const id = terminalIdRef.current;
+          if (!id || statusRef.current !== "running" || !insert) return;
+          void api.terminal.write({ terminalId: id, data: insert }).catch(() => {});
+          termRef.current?.focus();
+        }}
+        // xterm needs a non-zero box; parent supplies flex-1 min-h-0.
+        style={{ padding: "4px 6px 6px" }}
+      />
+      {pathPick && projectPathForLinks && (
+        <TerminalPathPick
+          pick={pathPick}
+          root={projectPathForLinks}
+          onPick={(abs) => {
+            setPathPick(null);
+            openFileInIde(abs);
+          }}
+          onClose={() => setPathPick(null)}
+        />
+      )}
+    </>
   );
 }

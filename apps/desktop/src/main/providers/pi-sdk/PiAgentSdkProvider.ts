@@ -47,6 +47,13 @@ import { resolveGitBash } from "@main/lib/binaryResolve.js";
 import { getEnabledPluginSkillRoots } from "@main/plugins/pluginManager.js";
 import { getMcpManagement } from "@main/lib/mcpConfig.js";
 import { getCustomPromptSetting } from "@main/lib/customPrompt.js";
+import {
+  alignPiPrompts,
+  positionalPiPrompt,
+  piBranchPoint,
+  type PiEntryLike,
+} from "@main/lib/piSessionRevise.js";
+import type { ProviderReviseInput } from "@contracts/provider";
 
 /** Pi's permission modes, shown in the composer dropdown. Pi has no native
  *  permission system — the inline extension's `tool_call` handler interprets
@@ -104,9 +111,66 @@ export class PiAgentSdkProvider implements AgentProvider {
     permissionModes: PI_PERMISSION_MODES,
     builtinModels: [], // MVP: models come from ~/.pi/agent/models.json discovery
     supportsCustomEndpoint: false, // Pi manages its own models.json
+    // Conversation-level revision via the SDK's native append-only branch
+    // primitive (branchWithSummary) — see reviseConversation below.
+    supportsConversationRevision: true,
   };
 
-  async startTurn(req: StartTurnRequest, ctx: ProviderContext): Promise<TurnHandle> {
+  /**
+   * Conversation-level revision, pi implementation: the SDK's own append-only
+   * branch primitive. `branchWithSummary(branchPoint, "")` appends a
+   * branch_summary entry parented at the branch point (persisting the leaf
+   * move across processes — open() resolves the leaf as the file's LAST
+   * entry) while the EMPTY summary contributes zero context messages, so the
+   * next turn resumes with exactly the pre-target history. The branch point
+   * is the target's predecessor ON THE CURRENT LEAF PATH (raw parentId can
+   * point into an abandoned branch). Nothing is rewritten — the file only
+   * grows (verified live against a real 11-turn session; see
+   * lib/piSessionRevise.ts).
+   */
+  async reviseConversation(input: ProviderReviseInput): Promise<{ cleared?: boolean }> {
+    const file = input.providerSessionId;
+    if (!file) {
+      input.log.info("pi revise: no session file bound, skipping branch surgery");
+      return {};
+    }
+    const sdk = await loadPiSdk();
+    let sm: ReturnType<(typeof sdk.SessionManager)["open"]>;
+    try {
+      sm = sdk.SessionManager.open(file);
+    } catch (err) {
+      // The bound session file is gone (moved/deleted): the next turn would
+      // start fresh anyway — let the host's DB surgery proceed.
+      input.log.warn(
+        `pi revise: cannot open session file ${file} (${(err as Error).message}); provider context already lost`,
+      );
+      return {};
+    }
+
+    const entries = sm.getEntries() as unknown as PiEntryLike[];
+    const guiIndex = input.guiUserRows.findIndex((r) => r.id === input.target.id);
+    const targetEntryId =
+      (guiIndex >= 0 ? alignPiPrompts(input.guiUserRows, entries).get(guiIndex) : undefined) ??
+      positionalPiPrompt(input.guiUserRows.length, Math.max(guiIndex, 0), entries);
+    if (!targetEntryId) {
+      // Refuse rather than branch at a guessed point.
+      throw new Error("cannot locate the message's entry in the pi session file");
+    }
+
+    // Resolve the branch point on the ACTIVE leaf path.
+    const leafPath = sm.buildContextEntries() as unknown as PiEntryLike[];
+    const branchPoint = piBranchPoint(leafPath, targetEntryId);
+    sm.branchWithSummary(branchPoint, "");
+    input.log.info(
+      `pi revise: branched before entry ${targetEntryId} (branch point ${branchPoint ?? "<root>"})`,
+    );
+    // Even a first-message retract keeps the file + binding valid (the
+    // branch point is the path root and appends continue from there), so no
+    // `cleared` signal is ever needed on pi.
+    return {};
+  }
+
+    async startTurn(req: StartTurnRequest, ctx: ProviderContext): Promise<TurnHandle> {
     const sdk = await loadPiSdk();
     const ac = new AbortController();
 

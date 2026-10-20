@@ -24,7 +24,9 @@ import {
   IconGripVertical,
   IconExternalLink,
   IconSparkles,
+  IconArrowBackUp,
 } from "@renderer/lib/icons.js";
+import { ConfirmDialog } from "@renderer/components/ui/confirm-dialog.js";
 import { useCursorAnchor } from "@renderer/hooks/useCursorAnchor.js";
 import { isElectron } from "@renderer/lib/platform.js";
 import { useSessionStore, resolveTurnModel, EMPTY_MESSAGES, EMPTY_TODOS, EMPTY_SUBAGENTS, EMPTY_CHAT_QUEUE, EMPTY_ELEMENT_QUEUE, EMPTY_PROMPT_QUEUE, EMPTY_BOOKMARKS, EMPTY_USAGE, EMPTY_BASH_TASKS, EMPTY_SERVICES, STREAM_RATE_STALE_MS, type Block, type ChatMessage, type TodoItem, type TurnMeta, type QueuedPrompt, type StreamRateSnapshot } from "@renderer/stores/sessionStore.js";
@@ -76,6 +78,7 @@ import { OrchComposerChips } from "./OrchComposerChips.js";
 import { EmptyThreadWelcome } from "./EmptyThreadWelcome.js";
 import { SlashCommandPicker } from "./SlashCommandPicker.js";
 import { ActivityCluster } from "./ActivityCluster.js";
+import { StreamAnchorPauseContext } from "./streamAnchorPause.js";
 import { isInFlightAutomation } from "@renderer/components/automation/automationFormat.js";
 import { MessageTimeline, type UserItemIndexMap } from "./MessageTimeline.js";
 import { SelectionToolbar, type SelectionToolbarState } from "./SelectionToolbar.js";
@@ -98,6 +101,12 @@ import { LegendList, type LegendListRef } from "@legendapp/list/react";
 /** 第一条消息与顶部(标签条 / 标题栏)之间的留白。作为滚动内容的顶部
  *  padding,停在顶部时可见,向下滚动后随内容滚走。 */
 const MESSAGE_LIST_TOP_PADDING = 10;
+
+/** 展开折叠卡(「N 个操作」操作条 / 工具卡 / 思考折叠)期间,挂起虚拟列表
+ *  高度触发底部钉住的单窗预算;有效期内由 interval 按半窗重臂,保证卡片
+ *  持续展开时钉住始终处于挂起态——pauseBottomAnchor 的一次性窗口到期会
+ *  无条件清掉挂起,interval 在最多半窗内把它拉回来(见 streamAnchorPause.ts)。 */
+const FOLD_ANCHOR_HOLD_MS = 4000;
 
 /** Stable empty roster for the side-chats selector (per the store rule:
  * selectors must return stable references or subscriptions loop). */
@@ -1488,6 +1497,7 @@ function ChatPaneForSession({
   // the PlanViewer in the editor column (not a drawer here). Closing is
   // handled by the PlanViewer's close button in CenterPane.
   const openPlanDrawer = useSessionStore((s) => s.openPlanDrawer);
+  const retractMessage = useSessionStore((s) => s.retractMessage);
   // This session's per-turn usage history (token counts + model), used by the
   // running-ledger receipt. Hydrated from the session row; a turn's record only
   // lands at turn END (the turn-end snapshot), so the receipt renders without
@@ -1513,6 +1523,15 @@ function ChatPaneForSession({
     if (pinned) return pinned.providerId;
     return s.streamSessions.find((x) => x.id === sessionId)?.providerId ?? null;
   });
+  // Conversation-level revision (edit/retract ANY sent user message with
+  // provider-side transcript surgery) — capability-gated per provider.
+  // Without it the UI keeps the legacy affordance: edit the LAST user
+  // message only, GUI-truncation without touching provider context.
+  const sessionSupportsRevision = useSessionStore(
+    (s) =>
+      sessionProviderId != null &&
+      s.providers.some((p) => p.id === sessionProviderId && !!p.capabilities.supportsConversationRevision),
+  );
   // Project root absolute path for this session (used by the @ / add-context
   // file pickers). Resolved through the session's projectId → projects[].
   // Pinned sessions aren't in the per-project slices (they live in the global
@@ -1759,6 +1778,12 @@ function ChatPaneForSession({
   // swaps its bubble for an inline editor. Cleared on submit/cancel. Null when
   // no message is being edited.
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
+  // Retract (撤回) flow: the message the confirm dialog is armed against, plus
+  // the scope choice (false = only this message + its reply; true = cascade,
+  // also clear every later turn). The dialog is the two-step confirmation the
+  // destructive option demands — the cascade deletes whole turns from BOTH the
+  // view and the model's context.
+  const [retractTarget, setRetractTarget] = useState<ChatMessage | null>(null);
   const virtualListRef = useRef<LegendListRef>(null);
   // Recompute the "jump to bottom" button visibility from the live scroll
   // state. Returns true if the list is near the bottom (button hidden), false
@@ -1816,6 +1841,23 @@ function ChatPaneForSession({
       setAnchorSuspension(null);
     }, ms);
   }, []);
+  // 展开的折叠卡经 StreamAnchorPauseContext 各持有一个 hold;只要有 hold 在
+  // 外(计数 > 0),高度触发的底部钉住就保持挂起("layout" 模式仍跟随新数据
+  // 行)——用户点开的操作条停在原位,内容只向下生长。计数由卡片点击配对
+  // 增减,卸载中的展开卡经 hook 的 cleanup 释放,不会泄漏。
+  const [foldAnchorHolds, setFoldAnchorHolds] = useState(0);
+  const holdStreamAnchor = useCallback((on: boolean) => {
+    setFoldAnchorHolds((c) => Math.max(0, c + (on ? 1 : -1)));
+  }, []);
+  useEffect(() => {
+    if (foldAnchorHolds <= 0) return;
+    holdAnchorSuspension("layout", FOLD_ANCHOR_HOLD_MS);
+    const rearm = window.setInterval(
+      () => holdAnchorSuspension("layout", FOLD_ANCHOR_HOLD_MS),
+      FOLD_ANCHOR_HOLD_MS / 2,
+    );
+    return () => window.clearInterval(rearm);
+  }, [foldAnchorHolds, holdAnchorSuspension]);
   /** Scroll the given message to the top of the viewport ("re-anchor to the
    *  question"): the turn ended with the question pushed out above, so bring
    *  it back and let the answer sit below. Same aim-then-locate scheme as
@@ -3493,11 +3535,12 @@ function ChatPaneForSession({
     };
   }, [isRunning, isActive]);
 
-  // The id of the last user message in this session. Only this message is
-  // editable - editing an earlier user message would require forking the
-  // conversation at a non-tail point, which the current truncation-based
-  // resend doesn't support cleanly (the SDK's resume keeps server-side
-  // history that we can't rewind to an arbitrary point).
+  // The id of the last user message in this session. Providers WITHOUT
+  // conversation-revision capability only allow editing THIS message — their
+  // edit-resend truncates the GUI tail but can't rewind the provider's own
+  // session history to an arbitrary point. Revision-capable providers
+  // (claude-sdk) allow editing/retracting ANY user message: main rewrites
+  // the provider transcript itself, so the fork happens at the true point.
   const lastUserMessageId = useMemo(() => {
     for (let i = messages.length - 1; i >= 0; i--) {
       if (messages[i].role === "user") return messages[i].id;
@@ -3774,11 +3817,13 @@ function ChatPaneForSession({
                   tightTop={item.tightTop}
                   beforeMap={beforeMap}
                   hideTurnStat={item.live}
-                  canEdit={isUser && !sessionBusy && m.id === lastUserMessageId}
+                  canEdit={isUser && !sessionBusy && (sessionSupportsRevision || m.id === lastUserMessageId)}
+                  canRetract={isUser && !sessionBusy && sessionSupportsRevision}
                   isEditing={editingMessageId === m.id}
                   onStartEdit={(msg) => setEditingMessageId(msg.id)}
                   onSubmitEdit={handleEditSubmit}
                   onCancelEdit={() => setEditingMessageId(null)}
+                  onRetract={(msg) => setRetractTarget(msg)}
                   onOpenPlan={(p) => openPlanDrawer(sessionId, p)}
                   projectPath={projectPath}
                 />
@@ -4100,6 +4145,9 @@ function ChatPaneForSession({
   );
 
   return (
+    // 锚定挂起 Provider:列表内折叠卡(操作条/工具卡)展开期间经
+    // holdStreamAnchor 挂起底部钉住,点开的栏停在原位、内容向下展开。
+    <StreamAnchorPauseContext.Provider value={holdStreamAnchor}>
     <div className="relative flex h-full flex-col" data-chat-root>
       {/* Message stream area */}
       <div
@@ -4888,10 +4936,37 @@ function ChatPaneForSession({
         </div>
       </div>
 
+      {/* Retract (撤回) confirmation — two-step guard for a destructive,
+          context-rewriting operation: the message AND every later turn are
+          removed from both the view and the model's context (provider-native
+          rewind in main). The warning keeps the file-changes boundary honest
+          (「撤销本轮」 remains available until the rows carrying the cards are
+          removed). */}
+      <ConfirmDialog
+        open={retractTarget != null}
+        title={t("chatStream.retract.title")}
+        description={
+          <div className="space-y-2 text-left">
+            <p className="text-xs text-content">{t("chatStream.retract.scopeDesc")}</p>
+            <p className="text-xs text-content-subtle">{t("chatStream.retract.warning")}</p>
+          </div>
+        }
+        confirmText={t("chatStream.retract.confirm")}
+        danger
+        onOpenChange={(open) => {
+          if (!open) setRetractTarget(null);
+        }}
+        onConfirm={() => {
+          const target = retractTarget;
+          setRetractTarget(null);
+          if (target) void retractMessage(sessionId, target.id);
+        }}
+
+      />
     </div>
+    </StreamAnchorPauseContext.Provider>
   );
 }
-
 /** Lines of a user prompt visible before the bubble collapses behind the
  *  expand/collapse toggle. The clamp height itself is pure CSS
  *  (calc(n × --chat-md-leading × --chat-font-size)), so this constant is
@@ -4949,8 +5024,10 @@ const MessageRow = memo(function MessageRow({
   isTurnTail,
   beforeMap,
   canEdit,
+  canRetract,
   isEditing,
   onStartEdit,
+  onRetract,
   onSubmitEdit,
   onCancelEdit,
   onOpenPlan,
@@ -4964,9 +5041,16 @@ const MessageRow = memo(function MessageRow({
   beforeMap?: BeforeContentMap;
   /** Whether the edit affordance should be shown (user message + idle). */
   canEdit?: boolean;
+  /** Whether the retract (撤回) affordance should be shown — user message +
+   *  idle + a revision-capable provider (the provider-native rewind is what
+   *  makes a retract reach the model's context; without it the option stays
+   *  hidden rather than silently desyncing view from context). */
+  canRetract?: boolean;
   /** Whether THIS row is currently in inline-edit mode. */
   isEditing?: boolean;
   onStartEdit?: (msg: ChatMessage) => void;
+  /** Open the retract confirmation dialog armed at this message. */
+  onRetract?: (msg: ChatMessage) => void;
   onSubmitEdit?: (
     msg: ChatMessage,
     newText: string,
@@ -5092,6 +5176,8 @@ const MessageRow = memo(function MessageRow({
   // The edit button is only for user messages, only when idle, and only on
   // rows NOT currently being edited (the editor replaces the row).
   const showEdit = isUser && canEdit && !isEditing;
+  // Retract sits next to edit on user rows (revision-capable providers only).
+  const showRetract = isUser && !!canRetract && !isEditing;
 
   // ── User prompt overflow (5-line default, click to expand/collapse) ──
   // Long prompts clamp to a 5-line window with a bottom fade; clicking the
@@ -5303,7 +5389,7 @@ const MessageRow = memo(function MessageRow({
             buttons (under the right-aligned bubble); assistant messages
             left-align. For user messages the copy + edit buttons sit
             side-by-side; for assistant messages only copy is shown. */}
-        {(showCopy || showEdit) && (
+        {(showCopy || showEdit || showRetract) && (
           <div
             className={cn(
               "mt-1 flex items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100",
@@ -5320,6 +5406,17 @@ const MessageRow = memo(function MessageRow({
                 className="inline-flex items-center rounded px-1 py-0.5 text-[10px] text-content-subtle transition-colors hover:bg-surface-hover hover:text-content-muted"
               >
                 <IconPencil size={12} />
+              </button>
+            )}
+            {showRetract && (
+              <button
+                type="button"
+                onClick={() => onRetract?.(msg)}
+                title={t("chatStream.retract.button")}
+                aria-label={t("chatStream.retract.button")}
+                className="inline-flex items-center rounded px-1 py-0.5 text-[10px] text-content-subtle transition-colors hover:bg-danger/10 hover:text-danger"
+              >
+                <IconArrowBackUp size={12} />
               </button>
             )}
           </div>

@@ -45,8 +45,18 @@ import { FILE_DRAG_MIME } from "@renderer/lib/contentTag.js";
 import { buildTerminalInitCommand, terminalCliCommand } from "@renderer/lib/terminalCli.js";
 import { reconcileCodexTerminalSessionId } from "@main/lib/codexSession.js";
 import { reconcileAgyTerminalSessionId } from "@main/lib/agySession.js";
-import { resolvePrintedPath, resetPrintedPathResolveCache } from "@main/lib/terminalPathResolve.js";
-import { createBusyDetector, BUSY_PRE_ARM_MS, BUSY_QUIET_MS } from "@renderer/lib/terminalBusy.js";
+import {
+  resolvePrintedPath,
+  resolvePrintedPathWithCandidates,
+  resetPrintedPathResolveCache,
+} from "@main/lib/terminalPathResolve.js";
+import {
+  createBusyDetector,
+  footerIndicatesRunningTasks,
+  screenIndicatesActivity,
+  BUSY_PRE_ARM_MS,
+  BUSY_QUIET_MS,
+} from "@renderer/lib/terminalBusy.js";
 import {
   TERMINAL_CLI_CATALOG,
   findTerminalCliEntry,
@@ -69,6 +79,16 @@ import {
   extractTerminalTitleExcerpt,
   isDefaultTerminalTitle,
 } from "@main/lib/terminalTitle.js";
+// Chat prose linkify: split + hast transform + resolution mapping. The api/
+// sessionStore imports inside fileLink.js are aliased to steerable stubs
+// (see run.sh), so the terminal-resolve branch can be driven per assertion.
+import { splitTextByPathTokens, resolveFilePathToken } from "@renderer/lib/fileLink.js";
+import {
+  FILE_PATH_LINK_CLASS,
+  rehypePathInline,
+  transformTextByPaths,
+  type HastNode,
+} from "@renderer/lib/markdownPathLinks.js";
 
 let passed = 0;
 function ok(cond: boolean, label: string): void {
@@ -450,9 +470,10 @@ console.log("[H] terminal CLI catalog");
     "codex: bare launch first (no pin), resume-by-id after adoption",
   );
   ok(
-    buildTerminalInitCommand("antigravity", uuid, false) === "agy" &&
-      buildTerminalInitCommand("antigravity", uuid, true) === `agy --conversation ${uuid}`,
-    "antigravity: bare launch first, --conversation <uuid> after adoption",
+    buildTerminalInitCommand("antigravity", uuid, false) === "agy --dangerously-skip-permissions" &&
+      buildTerminalInitCommand("antigravity", uuid, true) ===
+        `agy --dangerously-skip-permissions --conversation ${uuid}`,
+    "antigravity: bare launch (skip-permissions) first, --conversation <uuid> after adoption",
   );
   ok(
     buildTerminalInitCommand("claude-sdk", null, false) === null &&
@@ -684,6 +705,50 @@ console.log("[K] bare names + fuzzy resolve");
     resetPrintedPathResolveCache();
     ok(resolvePrintedPath(root, "totally-missing.py") === null, "no match → null");
     ok(resolvePrintedPath(root, "scratch") === null, "directory names never resolve");
+
+    // Ambiguity-tolerant variant (the pick-list flow): the ≥2-hit list comes
+    // back as candidates so the renderer can ask "which one" instead of
+    // dead-clicking. resolvePrintedPathWithCandidates shares the walk memo
+    // with resolvePrintedPath — audio_audit.py is already memoized as 2 hits.
+    const amb = resolvePrintedPathWithCandidates(root, "audio_audit.py");
+    ok(amb.path === null && amb.candidates.length === 2, "ambiguous bare name → null path + 2 candidates");
+    ok(
+      amb.candidates.includes(join(root, "scratch", "audio_audit.py")) &&
+        amb.candidates.includes(join(root, "other", "audio_audit.py")),
+      "candidates carry the full disambiguating paths",
+    );
+    const uniq = resolvePrintedPathWithCandidates(root, "merge_all.py");
+    ok(
+      uniq.path === join(root, "scratch", "merge_all.py") && uniq.candidates.length === 0,
+      "unique bare name → resolved path, no candidates",
+    );
+    const direct = resolvePrintedPathWithCandidates(root, ".gitignore");
+    ok(
+      direct.path === join(root, ".gitignore") && direct.candidates.length === 0,
+      "direct hit → path, no candidates",
+    );
+    const miss = resolvePrintedPathWithCandidates(root, "totally-missing.py");
+    ok(miss.path === null && miss.candidates.length === 0, "miss → null path, no candidates");
+    ok(
+      resolvePrintedPathWithCandidates(root, "scratch/nope.py").candidates.length === 0,
+      "separator-path miss → no fuzzy candidates (fuzzy is bare-name only)",
+    );
+    // Candidate cap: the pick list stops at 8 — the 9th same-name copy never
+    // materializes (the walk early-exits at the cap).
+    for (let i = 0; i < 9; i++) {
+      const dir = join(root, `cap${i}`);
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, "dup.dat"), "x");
+    }
+    const capped = resolvePrintedPathWithCandidates(root, "dup.dat");
+    ok(
+      capped.path === null && capped.candidates.length === 8,
+      "candidate list caps at 8 (9 same-name files on disk)",
+    );
+    ok(
+      resolvePrintedPath(root, "dup.dat") === null,
+      "strict resolver still refuses capped-ambiguous names",
+    );
   } finally {
     await rmBestEffort(root);
   }
@@ -761,6 +826,92 @@ console.log("[M] terminal busy detector");
   d.userInput("x\r", T + 70_000);
   d.reset();
   ok(events[events.length - 1] === false, "reset force-clears an armed phase");
+
+  // ── External sustain (CLI footer task indicator) ──
+  // Background task WITHOUT any Enter: the footer signal alone raises busy.
+  const e2: boolean[] = [];
+  const d2 = createBusyDetector((b) => e2.push(b));
+  d2.sustain(true, T);
+  d2.tick(T + 1);
+  ok(e2[e2.length - 1] === true, "footer task signal alone raises busy (no Enter needed)");
+  // ...and holds it far beyond the quiet window (the turn ended long ago).
+  d2.tick(T + 600_000);
+  ok(e2[e2.length - 1] === true, "sustain holds busy past the quiet window");
+
+  // Sustained phase suppresses the no-op-Enter self-cancel too: an Enter
+  // that produces no output must not kill the spinner while a task runs.
+  const e3: boolean[] = [];
+  const d3 = createBusyDetector((b) => e3.push(b));
+  d3.sustain(true, T);
+  d3.tick(T + 1);
+  d3.userInput("\r", T + 100);
+  d3.tick(T + 100 + BUSY_PRE_ARM_MS + 1);
+  ok(e3[e3.length - 1] === true, "no-op Enter does not cancel while sustained");
+
+  // Signal drop (task finished): busy ends after one quiet window from the
+  // drop — the completion footer redraw must not be required to keep it.
+  d3.sustain(false, T + 100_000);
+  d3.tick(T + 100_000 + BUSY_QUIET_MS - 1);
+  ok(e3[e3.length - 1] === true, "busy survives the grace window right after drop");
+  d3.tick(T + 100_000 + BUSY_QUIET_MS + 1);
+  ok(e3[e3.length - 1] === false, "busy ends one quiet window after the signal drops");
+
+  // reset clears a sustained phase (process exited mid-task).
+  d2.reset();
+  ok(e2[e2.length - 1] === false, "reset clears a sustained phase");
+
+  // ── Footer predicate ──
+  ok(
+    footerIndicatesRunningTasks([
+      "[09:06:19] node scripts/run_flow_videos.js laoying C1 running",
+      "? for shortcuts",
+      "Gemini 3.8 Flash · high · 1 task(s) · /ta",
+    ]) === true,
+    "footer '1 task(s)' indicates running background work",
+  );
+  ok(
+    footerIndicatesRunningTasks(["? for shortcuts", "claude · 0 task(s) · /ta"]) === false,
+    "'0 task(s)' does not",
+  );
+  ok(
+    footerIndicatesRunningTasks(["? for shortcuts", "no indicator here"]) === false,
+    "no indicator → no sustain",
+  );
+  ok(footerIndicatesRunningTasks(["2 tasks queued"]) === true, "plural 'N tasks' form matches");
+  ok(
+    footerIndicatesRunningTasks([
+      "The model said: 3 tasks remain in the transcript body",
+      "? for shortcuts",
+      "claude · high",
+    ]) === true,
+    "predicate itself scans what it is given — the HOST limits input to the last viewport rows",
+  );
+
+  // ── Live-work chrome scan (during-turn signals) ──
+  ok(
+    screenIndicatesActivity(["✽ Working…", "esc to interrupt"]) === true,
+    "turn-active hint 'esc to interrupt' sustains busy",
+  );
+  ok(
+    screenIndicatesActivity(["✔ Read 3 files", "⠸ Running command… 2.3s"]) === true,
+    "'Running command…' caption sustains busy (long foreground command)",
+  );
+  ok(
+    screenIndicatesActivity(["Ran (Bash … exit 0)", "Read 3 files"]) === false,
+    "persistent transcript lines ('Ran…'/'Read…') are NOT markers — they survive the turn",
+  );
+  ok(
+    screenIndicatesActivity(["? for shortcuts", "claude · high · 0 task(s)"]) === false,
+    "idle chrome with 0 tasks → no sustain",
+  );
+  ok(
+    screenIndicatesActivity(["✽ Mo", "deling… esc to interr", "upt"]) === true,
+    "soft-wrapped marker split across rows still matches (rows scanned joined)",
+  );
+  ok(
+    screenIndicatesActivity(["ESC to interrupt"]) === true,
+    "case-insensitive — the TUI's exact casing must not be load-bearing",
+  );
 }
 
 /* ── N. terminalCliCatalog: management-side catalog & probe ── */
@@ -845,6 +996,193 @@ console.log("[N] terminalCliCatalog (management)");
     g.__SMOKE_WHICH__ = undefined;
     if (savedLocalAppData) process.env["LOCALAPPDATA"] = savedLocalAppData;
     await rmBestEffort(emptyLocal);
+  }
+}
+
+/* ── O. chat prose path linkify (prose → FileLink pipeline) ── */
+console.log("[O] chat prose path linkify");
+{
+  const gs = globalThis as {
+    __STUB_TERMINAL_RESOLVE__?: (
+      input: { projectPath: string; path: string },
+    ) => Promise<{ path: string | null; candidates: string[] }>;
+    __STUB_FILE_SEARCH__?: (
+      input: { projectPath: string; query: string; limit: number },
+    ) => Promise<{ files: Array<{ name: string; path: string; relativePath: string }> }>;
+  };
+
+  // Split: prose paths and :line[:col] absorption.
+  {
+    const segs = splitTextByPathTokens("已写入 src/lib/a.ts，请查看。");
+    const p = segs.find((s) => s.kind === "path");
+    ok(p?.kind === "path" && p.token === "src/lib/a.ts", "prose relative path split out");
+  }
+  {
+    const p = splitTextByPathTokens("见 src/a.ts:42 的说明").find((s) => s.kind === "path");
+    ok(
+      p?.kind === "path" && p.token === "src/a.ts" && p.line === 42 && p.column === undefined,
+      "trailing :42 absorbed as line, token stays clean",
+    );
+  }
+  {
+    const p = splitTextByPathTokens("src/a.ts:42:7")[0];
+    ok(
+      p.kind === "path" && p.token === "src/a.ts" && p.line === 42 && p.column === 7,
+      ":42:7 absorbed as line + column",
+    );
+  }
+  {
+    // The Windows-absolute branch's char class admits ':' so the suffix
+    // lands inside the match — it must be stripped back out.
+    const p = splitTextByPathTokens("error at D:\\x\\a.ts:42 done").find((s) => s.kind === "path");
+    ok(
+      p?.kind === "path" && p.token === "D:\\x\\a.ts" && p.line === 42,
+      "windows token with swallowed :line stripped and absorbed",
+    );
+  }
+  {
+    ok(
+      splitTextByPathTokens("see https://example.com/src/a.ts now").every((s) => s.kind === "text"),
+      "URL-adjacent path not linkified",
+    );
+    ok(
+      splitTextByPathTokens("mail foo@bar.com ok").every((s) => s.kind === "text"),
+      "email-style token not linkified",
+    );
+    ok(
+      splitTextByPathTokens("upgraded to v1.2.3 today").every((s) => s.kind === "text"),
+      "version string not linkified",
+    );
+    ok(
+      splitTextByPathTokens("listen on port 5173 please").every((s) => s.kind === "text"),
+      "plain words not linkified",
+    );
+  }
+
+  // Hast transform: placeholder spans with dispatch attributes.
+  {
+    const out = transformTextByPaths("open src/lib/a.ts to see");
+    ok(
+      out.length === 3 &&
+        out[0].type === "text" &&
+        out[1].type === "element" &&
+        out[1].tagName === "span" &&
+        out[2].type === "text",
+      "prose split into text + span + text",
+    );
+    const cls = (out[1].properties?.className as string[] | undefined) ?? [];
+    ok(cls.includes(FILE_PATH_LINK_CLASS), "placeholder span carries the dispatch class");
+    ok(out[1].properties?.dataToken === "src/lib/a.ts", "data-token carries the raw token");
+
+    const sp2 = transformTextByPaths("see src/a.ts:42 here").find((n) => n.tagName === "span");
+    ok(
+      sp2?.properties?.dataToken === "src/a.ts" && sp2?.properties?.dataLine === "42",
+      "data-line rides along as string, token stays clean",
+    );
+    ok(transformTextByPaths("nothing path-like here").length === 0, "no-path text returns [] (node kept)");
+  }
+  {
+    // Plugin walk: code/pre exempt, surrounding prose linkified.
+    const tree: HastNode = {
+      type: "root",
+      children: [
+        {
+          type: "element",
+          tagName: "p",
+          children: [
+            { type: "text", value: "run " },
+            {
+              type: "element",
+              tagName: "code",
+              properties: {},
+              children: [{ type: "text", value: "src/a.ts" }],
+            },
+            { type: "text", value: " and see src/b.ts after" },
+          ],
+        },
+        {
+          type: "element",
+          tagName: "pre",
+          properties: {},
+          children: [
+            {
+              type: "element",
+              tagName: "code",
+              properties: {},
+              children: [{ type: "text", value: "src/c.ts" }],
+            },
+          ],
+        },
+      ],
+    };
+    rehypePathInline()()(tree);
+    const p = tree.children![0]!;
+    const codeChild = (p.children as HastNode[]).find((c) => c.tagName === "code");
+    ok(
+      codeChild?.children?.[0]?.type === "text" && codeChild.children[0].value === "src/a.ts",
+      "inline-code text untouched by the plugin",
+    );
+    const pre = tree.children![1]!;
+    ok(
+      pre.children?.[0]?.children?.[0]?.type === "text",
+      "pre text untouched by the plugin",
+    );
+    ok(
+      (p.children as HastNode[]).some(
+        (c) => c.type === "element" && c.tagName === "span" && c.properties?.dataToken === "src/b.ts",
+      ),
+      "prose around the code still linkified",
+    );
+  }
+
+  // Resolution mapping through the steerable terminal.resolvePath stub.
+  {
+    let calls = 0;
+    gs.__STUB_TERMINAL_RESOLVE__ = async (i) => {
+      calls += 1;
+      if (i.path === "unique.ts") return { path: "P:/proj/only/unique.ts", candidates: [] };
+      if (i.path === "dup.ts") return { path: null, candidates: ["P:/proj/a/dup.ts", "P:/proj/b/dup.ts"] };
+      return { path: null, candidates: [] };
+    };
+    gs.__STUB_FILE_SEARCH__ = async () => ({ files: [] });
+
+    const one = await resolveFilePathToken("unique.ts", "P:/proj");
+    ok(
+      one.length === 1 && one[0].path === "P:/proj/only/unique.ts" && one[0].relativePath === "only/unique.ts",
+      "terminal branch: unique hit → single candidate with relative display path",
+    );
+
+    const many = await resolveFilePathToken("dup.ts", "P:/proj");
+    ok(
+      many.length === 2 && many[1].path === "P:/proj/b/dup.ts" && many[1].relativePath === "b/dup.ts",
+      "terminal branch: same-name ambiguity → candidate list for the picker",
+    );
+
+    const miss = await resolveFilePathToken("nope.ts", "P:/proj");
+    ok(miss.length === 0, "terminal branch miss → search fallback finds nothing");
+
+    // IPC failure degrades to the search-based strategies, not an error.
+    gs.__STUB_TERMINAL_RESOLVE__ = async () => {
+      throw new Error("ipc down");
+    };
+    gs.__STUB_FILE_SEARCH__ = async () => ({
+      files: [{ name: "q.ts", path: "P:/proj/q.ts", relativePath: "q.ts" }],
+    });
+    const fell = await resolveFilePathToken("q.ts", "P:/proj");
+    ok(fell.length === 1 && fell[0].path === "P:/proj/q.ts", "terminal branch failure → file.search fallback still resolves");
+
+    // No project root → the terminal branch is never consulted.
+    calls = 0;
+    gs.__STUB_TERMINAL_RESOLVE__ = async () => {
+      calls += 1;
+      return { path: null, candidates: [] };
+    };
+    const relNone = await resolveFilePathToken("rel/x.ts", null);
+    ok(relNone.length === 0 && calls === 0, "no project root → terminal resolve never called, no candidates");
+    const absNone = await resolveFilePathToken("P:/elsewhere/x.ts", "P:/proj");
+    ok(absNone.length === 0, "absolute token outside known roots → empty (containment guard)");
+    gs.__STUB_TERMINAL_RESOLVE__ = undefined;
+    gs.__STUB_FILE_SEARCH__ = undefined;
   }
 }
 

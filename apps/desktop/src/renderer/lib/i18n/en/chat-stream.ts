@@ -95,7 +95,6 @@ export const en = {
   "chatStream.turnFiles.titleShort": "{n} files changed",
   "chatStream.turnFiles.created": "{n} created",
   "chatStream.turnFiles.modified": "{n} modified",
-  "chatStream.turnFiles.rewindLong": "Undo this turn",
   "chatStream.turnFiles.rewindShort": "Undo",
   "chatStream.turnFiles.rewinding": "Undoing…",
   "chatStream.turnFiles.rewoundCheck": "Undone ✓",
@@ -290,4 +289,12 @@ export const en = {
   "chatStream.mermaid.renderError": "Failed to parse diagram syntax",
   "chatStream.mermaid.fullscreen": "View full diagram",
   "chatStream.mermaid.clickToView": "Click to view full diagram",
+  // ── Conversation revision: retract a sent message (2026-10-20) ──
+  "chatStream.retract.button": "Retract",
+  "chatStream.retract.title": "Retract this message",
+  "chatStream.retract.scopeDesc": "Deletes this message and every later turn, rolling the session back to just before it was sent; the model's context is rewound in sync.",
+  "chatStream.retract.warning": "Retracting does not roll back file changes already written to disk; use \"Undo this turn\" first if you need files restored.",
+  "chatStream.retract.confirm": "Retract",
+  "chatStream.retract.failed": "Retract failed",
+
 } as const;

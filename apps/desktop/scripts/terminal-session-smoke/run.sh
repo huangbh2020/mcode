@@ -25,6 +25,8 @@ if [[ -z "$ESBUILD" ]]; then ESBUILD="npx esbuild"; fi
   --alias:@main/store/repositories.js=./scripts/terminal-session-smoke/stub-repositories.ts \
   --alias:@main/claude/RuntimeManager.js=./scripts/terminal-session-smoke/stub-runtime-manager.ts \
   --alias:@main/lib/sessionSync.js=./scripts/terminal-session-smoke/stub-session-sync.ts \
+  --alias:@renderer/lib/api.js=./scripts/terminal-session-smoke/stub-renderer-api.ts \
+  --alias:@renderer/stores/sessionStore.js=./scripts/terminal-session-smoke/stub-session-store.ts \
   --outfile="$OUT/smoke.mjs" --log-level=error
 
 node "$OUT/smoke.mjs"

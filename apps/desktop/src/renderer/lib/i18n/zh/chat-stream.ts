@@ -98,7 +98,6 @@ export const zh = {
   "chatStream.turnFiles.titleShort": "修改 {n} 个文件",
   "chatStream.turnFiles.created": "创建 {n}",
   "chatStream.turnFiles.modified": "修改 {n}",
-  "chatStream.turnFiles.rewindLong": "撤销本轮",
   "chatStream.turnFiles.rewindShort": "撤销",
   "chatStream.turnFiles.rewinding": "撤销中…",
   "chatStream.turnFiles.rewoundCheck": "已撤销 ✓",
@@ -293,4 +292,12 @@ export const zh = {
   "chatStream.mermaid.renderError": "图表语法解析失败",
   "chatStream.mermaid.fullscreen": "全屏查看",
   "chatStream.mermaid.clickToView": "点击全屏查看图表",
+  // ── 对话修订:撤回已发送消息(2026-10-20) ──
+  "chatStream.retract.button": "撤回",
+  "chatStream.retract.title": "撤回这条消息",
+  "chatStream.retract.scopeDesc": "将删除这条消息及其后的所有回合,会话回到这条消息发出之前;模型的上下文也会同步回退。",
+  "chatStream.retract.warning": "撤回不会回滚已写入磁盘的文件改动;需要回滚文件请在撤回前使用「撤销本轮」。",
+  "chatStream.retract.confirm": "撤回",
+  "chatStream.retract.failed": "撤回失败",
+
 } as const;

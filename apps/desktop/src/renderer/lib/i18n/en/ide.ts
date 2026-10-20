@@ -49,6 +49,8 @@ export const en = {
   "ide.editor.lspRestartFailed": "{name} server restart failed",
   "ide.editor.navBack": "Go back",
   "ide.editor.navForward": "Go forward",
+  "ide.editor.diffPrev": "Previous change",
+  "ide.editor.diffNext": "Next change",
   "ide.editor.switchToDiff": "Switch to diff view",
   "ide.editor.switchToEditView": "Switch to edit view",
   "ide.editor.previewMode": "Preview",
@@ -319,6 +321,7 @@ export const en = {
   "ide.term.moveToBottom": "Move to bottom panel",
   "ide.term.moveToRight": "Move to right sidebar",
   "ide.term.collapseBottom": "Collapse bottom terminal",
+  "ide.term.pathPickTitle": "Multiple files share this name — pick one to open",
 
   /* ── turn flow panel (right-panel "turns" tab) ── */
   "ide.turns.title": "Turn Flow",

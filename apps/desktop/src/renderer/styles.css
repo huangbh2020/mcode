@@ -1890,7 +1890,9 @@ button.chat-ledger-head:hover {
   vertical-align: baseline;
   font-size: 0.85em;
   font-weight: 600;
-  color: rgb(var(--accent));
+  /* accent-strong, not accent: small accent TEXT reads at the 700 stop in
+     light theme (≥4.5:1); dark theme's strong === default. */
+  color: rgb(var(--accent-strong));
   white-space: nowrap;
   transition: opacity 0.15s;
 }
@@ -1916,7 +1918,8 @@ button.chat-ledger-head:hover {
   vertical-align: baseline;
   font-size: 0.85em;
   font-weight: 600;
-  color: rgb(var(--accent));
+  /* accent-strong — same rationale as .skill-pill-inline above. */
+  color: rgb(var(--accent-strong));
   white-space: nowrap;
   transition: opacity 0.15s;
 }

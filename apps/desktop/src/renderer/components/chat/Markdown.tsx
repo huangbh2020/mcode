@@ -25,7 +25,8 @@ import { useI18n } from "@renderer/lib/i18n/index.js";
 import { IconCheck, IconChevronDown, IconChevronUp, IconCopy, IconLoader2 } from "@renderer/lib/icons.js";
 import type { Components } from "react-markdown";
 import { codeCacheKey, getCodeHtml, setCodeHtml } from "@renderer/lib/markdownCache.js";
-import { fileHrefToPath, isAbsolutePath, isLocalFileHref } from "@renderer/lib/fileLink.js";
+import { fileHrefToPath, isAbsolutePath, isLocalFileHref, splitTextByPathTokens } from "@renderer/lib/fileLink.js";
+import { FILE_PATH_LINK_CLASS, rehypePathInline } from "@renderer/lib/markdownPathLinks.js";
 import { resolveRelativePath } from "@renderer/lib/path.js";
 import { api } from "@renderer/lib/api.js";
 import { FileLink } from "./FileLink.js";
@@ -626,17 +627,63 @@ function ShikiCodeBlock({
  */
 function buildComponents(): Components {
   return {
-  // Inline code - styled inline, no highlighting needed.
+  // Inline code - styled inline, no highlighting needed. Paths inside are
+  // linkified when a project root is known — the rehype plugin skips code
+  // elements by design, and model-emitted paths are most often wrapped in
+  // backticks, so this is the highest-traffic spot for click-to-open.
   code({ className, children }) {
     const isInline = !isFencedCode(className);
     if (isInline) {
+      const projectPath = useContext(MarkdownProjectContext);
+      let content: React.ReactNode = children;
+      if (projectPath) {
+        const segs = splitTextByPathTokens(extractText(children));
+        if (segs.some((s) => s.kind === "path")) {
+          content = segs.map((s, i) =>
+            s.kind === "text" ? (
+              s.text
+            ) : (
+              <FileLink key={i} token={s.token} line={s.line} column={s.column} projectPath={projectPath} />
+            ),
+          );
+        }
+      }
       return (
         <code className="rounded bg-surface-muted/80 px-1 py-0.5 font-mono [font-size:var(--chat-fs-xs)] [color:var(--code-fg)]">
-          <CodeContext.Provider value={true}>{children}</CodeContext.Provider>
+          <CodeContext.Provider value={true}>{content}</CodeContext.Provider>
         </code>
       );
     }
     return <code className="font-mono"><CodeContext.Provider value={true}>{children}</CodeContext.Provider></code>;
+  },
+
+  // Dispatch placeholder spans produced by `rehypePathInline` to FileLink;
+  // every other span (katex internals, skill/file pills) passes through
+  // untouched. `node` is react-markdown's hast reference and must be kept
+  // out of the DOM spread.
+  span({ node, className, children, ...rest }) {
+    const projectPath = useContext(MarkdownProjectContext);
+    if (typeof className === "string" && className.split(/\s+/).includes(FILE_PATH_LINK_CLASS)) {
+      const props = rest as Record<string, unknown>;
+      const token = props["data-token"];
+      if (typeof token === "string" && token) {
+        const line = Number(props["data-line"]);
+        const column = Number(props["data-column"]);
+        return (
+          <FileLink
+            token={token}
+            projectPath={projectPath}
+            line={Number.isFinite(line) && line > 0 ? line : undefined}
+            column={Number.isFinite(column) && column > 0 ? column : undefined}
+          />
+        );
+      }
+    }
+    return (
+      <span className={className} {...rest}>
+        {children}
+      </span>
+    );
   },
 
   // Fenced code block: highlighted via shiki with copy button + lang label,
@@ -791,9 +838,10 @@ export const Markdown = memo(function Markdown({
   baseDir,
 }: {
   children: string;
-  /** Project root — reserved for future inline file-path linkification.
-   *  Currently unused (the feature was in the dead `text` override; see the
-   *  rehype plugin section for the replacement strategy). */
+  /** Project root — bare file paths in prose (and inline code) that fall
+   *  under it render as clickable FileLinks (unique match opens directly,
+   *  same-name matches open a candidate picker, `:line[:col]` suffixes
+   *  jump to the position). Contexts without a root keep plain text. */
   projectPath?: string | null;
   /** Names of skills/commands that should be highlighted when they appear as
    *  `/name` in this text. Passed to the `rehypeSkillInline` plugin which
@@ -836,14 +884,17 @@ export const Markdown = memo(function Markdown({
   const components = useMemo(() => buildComponents(), []);
   // rehype-katex is always active; the skill-inline and file-mention plugins
   // are added only when there is something to highlight. Recreated when the
-  // underlying regex/map changes, so react-markdown re-parses.
+  // underlying regex/map changes, so react-markdown re-parses. The path
+  // plugin needs a project root to resolve against — contexts without one
+  // (GitHub panel, unopened views) keep plain text.
   const rehypePlugins = useMemo(
     () => [
       rehypeKatex,
       ...(skillRe ? [rehypeSkillInline(skillRe)] : []),
       ...(fileMention ? [rehypeFileInline(fileMention.re, fileMention.titleByMarker)] : []),
+      ...(projectPath ? [rehypePathInline()] : []),
     ],
-    [skillRe, fileMention],
+    [skillRe, fileMention, projectPath],
   );
   // Block margins + line-height here are density-driven (--chat-md-gap-* /
   // --chat-md-leading, see the chat-density section in styles.css) so the

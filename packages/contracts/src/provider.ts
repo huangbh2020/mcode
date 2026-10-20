@@ -50,6 +50,12 @@ export interface ProviderCapabilities {
    *  "添加/管理模型" entry in ModelDropdown). When false, the custom-model
    *  panel and its dropdown entry are hidden for this provider. */
   supportsCustomEndpoint?: boolean;
+  /** Whether conversation-level revision (edit / retract of SENT user
+   *  messages, including the provider-side transcript surgery that keeps the
+   *  model's context in sync) is supported. When false/absent the renderer
+   *  only offers the legacy tail-only edit (GUI truncation without provider
+   *  context rewind) on the LAST user message, and hides retract entirely. */
+  supportsConversationRevision?: boolean;
 }
 
 /** A selectable option for a provider's thinking-level / effort picker. */
@@ -286,6 +292,48 @@ export interface TurnHandle {
   stopTask?(taskId: string): Promise<void>;
 }
 
+/** One GUI user row, reduced to what revision alignment needs. `text` is the
+ *  DISPLAY text (what the bubble shows) — provider transcripts carry the full
+ *  model prompt, so alignment compares by prefix, not equality. */
+export interface RevisionGuiPrompt {
+  id: string;
+  createdAt: number;
+  text: string;
+}
+
+/** Input to AgentProvider.reviseConversation — the conversation-level
+ *  revision's provider half. The host (RuntimeManager) has already gated on
+ *  idleness and the provider's supportsConversationRevision capability, and
+ *  performs the DB row surgery + client broadcast AFTER this resolves.
+ *  Carries its own log (no ProviderContext — revision must work for a
+ *  reopened session with no live runtime bound). */
+export interface ProviderReviseInput {
+  sessionId: string;
+  /** The provider session id (claudeSessionId slot): CLI session uuid for
+   *  claude, the pi session FILE PATH for pi, the codex thread id. Null when
+   *  no turn ever ran — providers may no-op (nothing to rewind). */
+  providerSessionId: string | null;
+  cwd: string;
+  /** The GUI user row being edited/retracted. */
+  target: RevisionGuiPrompt;
+  /** Every user row of the session in order — the alignment source. */
+  guiUserRows: RevisionGuiPrompt[];
+  /** Logger (same shape as ProviderContext's). */
+  log: {
+    info(...args: unknown[]): void;
+    warn(...args: unknown[]): void;
+    error(...args: unknown[]): void;
+  };
+}
+
+/** Result of AgentProvider.reviseConversation. `cleared` = the provider
+ *  session binding must be dropped (the revision wiped the conversation back
+ *  to before its first message; the next turn should start a FRESH provider
+ *  session). The host performs the runtime + DB unbinding. */
+export interface ProviderReviseResult {
+  cleared?: boolean;
+}
+
 /** Every AI backend implements this interface. */
 export interface AgentProvider {
   /** Unique id, e.g. "claude-sdk". Persisted in SQLite, used as registry key. */
@@ -298,6 +346,21 @@ export interface AgentProvider {
   /** Start a turn. Returns a handle immediately; events stream via ctx.emit.
    * The returned TurnHandle.done resolves when the turn finishes. */
   startTurn(req: StartTurnRequest, ctx: ProviderContext): Promise<TurnHandle>;
+
+  /**
+   * Optional (pairs with capabilities.supportsConversationRevision): rewind
+   * the provider's OWN conversation state to just before `target` was sent,
+   * so the next startTurn resumes without the target exchange and everything
+   * after it. Implemented natively per provider:
+   *   - claude-sdk: truncate the CLI transcript jsonl at the target's prompt
+   *     entry (the file IS the model's context; lib/claudeTranscript.ts).
+   *   - pi-sdk: SessionManager.branchWithSummary(path-predecessor, "") — the
+   *     SDK's own append-only branch primitive moves the leaf pointer.
+   *   - codex-sdk: spawn a temporary app-server, thread/resume → thread/read
+   *     → thread/revert {beforeTurnId} (the protocol's native revert).
+   * Throws when the target can't be located in the provider's history — the
+   * host refuses the revision rather than splitting view from context. */
+  reviseConversation?(input: ProviderReviseInput): Promise<ProviderReviseResult>;
 
   /** Optional: quick health / version probe for settings UI. */
   healthCheck?(): Promise<{ ok: boolean; version?: string; error?: string }>;

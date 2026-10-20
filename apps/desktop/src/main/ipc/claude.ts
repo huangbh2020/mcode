@@ -12,6 +12,7 @@ import {
   RespondQuestionSchema,
   RespondPlanApprovalSchema,
   RewindTurnSchema,
+  ReviseConversationSchema,
   UpdateSessionSettingsSchema,
   SessionMessagesSchema,
   SaveMessagesSchema,
@@ -322,6 +323,16 @@ export function registerClaudeHandlers(ipcMain: IpcMain): void {
       input.latest ?? false,
     );
     return { restored };
+  });
+
+  // ── Conversation-level revision (edit / retract at a sent user message):
+  //    transcript surgery + DB row surgery + session.revised broadcast, all
+  //    in RuntimeManager. Throws (→ renderer toast) when the session is
+  //    running, the provider lacks the capability, or the message's prompt
+  //    row can't be located in the CLI transcript. ──
+  ipcMain.handle(IPC.CLAUDE_REVISE_CONVERSATION, async (_evt, raw) => {
+    const input = ReviseConversationSchema.parse(raw);
+    return runtimeManager.reviseConversation(input.sessionId, input.messageId);
   });
 
   // ── Provider listing ──

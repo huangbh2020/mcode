@@ -511,6 +511,7 @@ const claude: Api["claude"] = {
   respondQuestion: (input) => rpc("claude:respondQuestion", input),
   respondPlanApproval: (input) => rpc("claude:respondPlanApproval", input),
   rewindTurn: (input) => rpc("claude:rewindTurn", input),
+  reviseConversation: (input) => rpc("claude:reviseConversation", input),
 };
 
 const project: Api["project"] = {

@@ -38,6 +38,7 @@ import { PlanStreamBlock } from "./PlanStreamBlock.js";
 import { TurnFilesCard } from "./TurnFilesCard.js";
 import { OrchCanvasBlock } from "./OrchCanvasBlock.js";
 import { OrchSynthBlock } from "./OrchSynthBlock.js";
+import { useFoldHold } from "./streamAnchorPause.js";
 import { CurrentOpTicker } from "./CurrentOpTicker.js";
 import { ModelBadge } from "./ModelAvatar.js";
 import { fmtTokens } from "@renderer/lib/contextWindow.js";
@@ -89,10 +90,20 @@ function useKnownSkillNames(): ReadonlyArray<string> {
  *  viewport position. Without this, expanding a card inserts content below
  *  the header and the virtual list's height recompute pushes everything
  *  down - the header the user just clicked scrolls out of view. We snapshot
- *  the header's `rect.top` before the state flip and, after the DOM updates
- *  (rAF), scroll the nearest scroll container by the delta so the header
- *  lands back where it was. Collapsing is a no-op scroll (content above the
- *  fold never moves; only content below shrinks). */
+ *  the header's `rect.top` before the state flip and re-pin the nearest
+ *  scroll container whenever the header drifts from that top over a short
+ *  stabilization window. Collapsing is a no-op scroll (content above the
+ *  fold never moves; only content below shrinks).
+ *
+ *  Why a loop and not a single rAF patch: inside ChatPane's LegendList the
+ *  bottom-anchoring reacts to the height change on its own frame (and
+ *  streaming deltas re-snap while the card is open), so a one-shot correction
+ *  loses the race or gets overwritten. The sustained hold belongs to the
+ *  anchor-pause context (streamAnchorPause.ts); this loop covers the
+ *  click-moment race generically — including containers without a provider —
+ *  and goes quiet once the header has settled. */
+const FOLD_STABILIZE_MS = 360;
+
 function toggleHoldPosition(
   e: React.MouseEvent<HTMLButtonElement>,
   setOpen: (updater: (v: boolean) => boolean) => void,
@@ -100,21 +111,27 @@ function toggleHoldPosition(
   const btn = e.currentTarget;
   const beforeTop = btn.getBoundingClientRect().top;
   setOpen((v) => !v);
-  requestAnimationFrame(() => {
-    const afterTop = btn.getBoundingClientRect().top;
-    const delta = afterTop - beforeTop;
-    if (delta === 0) return;
-    // Walk up to the nearest scroll container and adjust its scrollTop.
-    let el: HTMLElement | null = btn.parentElement;
-    while (el) {
-      const style = getComputedStyle(el);
-      if (/(auto|scroll)/.test(style.overflowY)) {
-        el.scrollTop += delta;
-        return;
+  const startedAt = performance.now();
+  const settle = () => {
+    // The card can unmount mid-window (turn-end regroup discards expanded
+    // ops bars); a detached node's rect is all zeros and would mis-scroll.
+    if (!btn.isConnected) return;
+    const delta = btn.getBoundingClientRect().top - beforeTop;
+    if (delta !== 0) {
+      // Walk up to the nearest scroll container and adjust its scrollTop.
+      let el: HTMLElement | null = btn.parentElement;
+      while (el) {
+        const style = getComputedStyle(el);
+        if (/(auto|scroll)/.test(style.overflowY)) {
+          el.scrollTop += delta;
+          break;
+        }
+        el = el.parentElement;
       }
-      el = el.parentElement;
     }
-  });
+    if (performance.now() - startedAt < FOLD_STABILIZE_MS) requestAnimationFrame(settle);
+  };
+  requestAnimationFrame(settle);
 }
 
 /** Render the content blocks of a message.
@@ -369,6 +386,9 @@ export function BatchToolGroup({
 }) {
   // 胶囊自身默认收起，用户不点击时保持单行紧凑状态（如图所示）
   const [open, setOpen] = useState(false);
+  // While open, suspend the virtual list's height-triggered bottom-pinning so
+  // the bar the user clicked stays put and content only grows below it.
+  const holdFold = useFoldHold();
   const { t } = useI18n();
 
   const toolBlocks = blocks.filter(isToolBlock);
@@ -454,7 +474,10 @@ export function BatchToolGroup({
   return (
     <div className="my-0.5 [font-size:var(--chat-fs-sm)]">
       <button
-        onClick={(e) => toggleHoldPosition(e, setOpen)}
+        onClick={(e) => {
+          holdFold(!open);
+          toggleHoldPosition(e, setOpen);
+        }}
         className="flex w-full items-center gap-2 rounded-md py-1 text-left text-content-muted hover:bg-surface-muted/40 hover:text-content transition-colors select-none group"
       >
         {/* Leading icon: pulse on running, alert on error, bulb for single thinking, stack for idle */}
@@ -1692,6 +1715,7 @@ function OrchPlanToolCard({
   live?: boolean;
 }) {
   const [open, setOpen] = useState(defaultOpen);
+  const holdFold = useFoldHold();
   const { t } = useI18n();
   const input = (block.input && typeof block.input === "object" ? block.input : {}) as {
     goal?: unknown;
@@ -1702,7 +1726,10 @@ function OrchPlanToolCard({
   return (
     <div className="[font-size:var(--chat-fs-sm)]">
       <button
-        onClick={(e) => toggleHoldPosition(e, setOpen)}
+        onClick={(e) => {
+          holdFold(!open);
+          toggleHoldPosition(e, setOpen);
+        }}
         className="flex w-full items-center gap-2 rounded-md py-1.5 text-left hover:bg-surface-muted/50"
       >
         <StatusIcon status={block.status} live={live} />
@@ -1786,6 +1813,7 @@ function EditToolCard({
   // first render (user can collapse an individual card even inside an
   // open group).
   const [open, setOpen] = useState(defaultOpen);
+  const holdFold = useFoldHold();
   const { t } = useI18n();
   const diff = useMemo(() => lineDiff(oldString, newString), [oldString, newString]);
   const { adds, dels } = useMemo(() => diffSummary(diff), [diff]);
@@ -1793,7 +1821,10 @@ function EditToolCard({
   return (
     <div className="[font-size:var(--chat-fs-sm)]">
       <button
-        onClick={(e) => toggleHoldPosition(e, setOpen)}
+        onClick={(e) => {
+          holdFold(!open);
+          toggleHoldPosition(e, setOpen);
+        }}
         className="flex w-full items-center gap-2 rounded-md py-1.5 text-left hover:bg-surface-muted/50"
       >
         <StatusIcon status={status} live={live} />
@@ -1850,6 +1881,7 @@ function WriteToolCard({
   projectPath?: string | null;
 }) {
   const [open, setOpen] = useState(defaultOpen);
+  const holdFold = useFoldHold();
   const { t } = useI18n();
   const lineCount = content ? content.split("\n").length : 0;
 
@@ -1877,7 +1909,10 @@ function WriteToolCard({
   return (
     <div className="[font-size:var(--chat-fs-sm)]">
       <button
-        onClick={(e) => toggleHoldPosition(e, setOpen)}
+        onClick={(e) => {
+          holdFold(!open);
+          toggleHoldPosition(e, setOpen);
+        }}
         className="flex w-full items-center gap-2 rounded-md py-1.5 text-left hover:bg-surface-muted/50"
       >
         <StatusIcon status={status} live={live} />
@@ -1953,6 +1988,7 @@ function GenericToolCard({
   projectPath?: string | null;
 }) {
   const [open, setOpen] = useState(defaultOpen);
+  const holdFold = useFoldHold();
   const { t } = useI18n();
   // The Read tool (and any file-bearing tool routed here) shows a file_path in
   // its summary line - linkify it. Bash/Grep/Glob summaries are commands or
@@ -1963,7 +1999,10 @@ function GenericToolCard({
   return (
     <div className="[font-size:var(--chat-fs-sm)]">
       <button
-        onClick={(e) => toggleHoldPosition(e, setOpen)}
+        onClick={(e) => {
+          holdFold(!open);
+          toggleHoldPosition(e, setOpen);
+        }}
         className="flex w-full items-center gap-2 rounded-md py-1.5 text-left hover:bg-surface-muted/50"
       >
         <StatusIcon status={block.status} live={live} />
@@ -2025,10 +2064,14 @@ function Collapsible({
   children: ReactNode;
 }) {
   const [open, setOpen] = useState(defaultOpen);
+  const holdFold = useFoldHold();
   return (
     <div className="[font-size:var(--chat-fs-sm)]">
       <button
-        onClick={(e) => toggleHoldPosition(e, setOpen)}
+        onClick={(e) => {
+          holdFold(!open);
+          toggleHoldPosition(e, setOpen);
+        }}
         className="flex w-full items-center gap-2 rounded-md py-1.5 text-left text-content-muted hover:bg-surface-muted/40"
       >
         <IconBulb size={13} className="shrink-0 text-content-subtle" />

@@ -703,8 +703,10 @@ export const SessionRepo = {
     return rows.map((r) => r.id);
   },
 
-  /** Persist claude's own session id so future turns can --resume. */
-  updateClaudeSessionId(id: string, claudeSessionId: string): void {
+  /** Persist claude's own session id so future turns can --resume. `null`
+   *  clears the binding (conversation-level revision that wiped the thread
+   *  back to its pre-first-message state — the next turn starts fresh). */
+  updateClaudeSessionId(id: string, claudeSessionId: string | null): void {
     run("UPDATE sessions SET claude_session_id = ?, updated_at = ? WHERE id = ?",
       v(claudeSessionId),
       v(Date.now()),
@@ -1266,6 +1268,54 @@ export const MessageRepo = {
     const info = getDb()
       .prepare("DELETE FROM messages WHERE session_id = ? AND created_at < ?")
       .run(v(sessionId), v(cutoff));
+    persist();
+    return info.changes;
+  },
+
+  /** Conversation-level revision (edit / retract, 2026-10-20): delete rows
+   *  from an inclusive `from` cursor up to an EXCLUSIVE `toExclusive` cursor
+   *  (or to the end of the thread when omitted) in one transaction. The
+   *  cursor semantics match {@link truncateFromAndInsert}'s "at or after"
+   *  ((created_at, id) tiebreak); the exclusive end keeps the boundary user
+   *  row — retract-single's "delete this exchange, keep later turns" stops
+   *  AT the next user message. Returns the removed row count. */
+  deleteRange(
+    sessionId: string,
+    from: { createdAt: number; id: string },
+    toExclusive?: { createdAt: number; id: string } | null,
+  ): number {
+    const db = getDb();
+    let info: { changes: number };
+    const ge = `(created_at > ? OR (created_at = ? AND id >= ?))`;
+    const lt = toExclusive
+      ? ` AND NOT (created_at > ? OR (created_at = ? AND id >= ?))`
+      : "";
+    db.exec("BEGIN");
+    try {
+      if (toExclusive) {
+        info = db
+          .prepare(
+            `DELETE FROM messages WHERE session_id = ? AND ${ge}${lt}`,
+          )
+          .run(
+            v(sessionId),
+            v(from.createdAt),
+            v(from.createdAt),
+            v(from.id),
+            v(toExclusive.createdAt),
+            v(toExclusive.createdAt),
+            v(toExclusive.id),
+          );
+      } else {
+        info = db
+          .prepare(`DELETE FROM messages WHERE session_id = ? AND ${ge}`)
+          .run(v(sessionId), v(from.createdAt), v(from.createdAt), v(from.id));
+      }
+      db.exec("COMMIT");
+    } catch (err) {
+      db.exec("ROLLBACK");
+      throw err;
+    }
     persist();
     return info.changes;
   },
