@@ -29,6 +29,7 @@
  * family (main session + subagent children). The server is private to Mcode,
  * so no foreign session can appear.
  */
+import { randomUUID } from "node:crypto";
 import type { V2Event } from "@opencode-ai/sdk/v2/types";
 import type { ProviderContext } from "@contracts/provider";
 import type {
@@ -42,6 +43,119 @@ import type {
   TurnDoneReason,
 } from "@contracts/runtime";
 import type { FileSnapshot } from "@main/lib/fileSnapshot.js";
+import { parseQuestions } from "@main/lib/askQuestion.js";
+
+const ASK_BEGIN = "<<<ASK_USER_QUESTION>>>";
+const ASK_END = "<<<END_ASK_USER_QUESTION>>>";
+
+/** Extract balanced JSON end position, or 0 if incomplete. */
+function findJsonEnd(buf: string, start: number): number {
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let i = start; i < buf.length; i++) {
+    const ch = buf[i];
+    if (escaped) { escaped = false; continue; }
+    if (ch === "\\") { escaped = true; continue; }
+    if (ch === '"') { inString = !inString; continue; }
+    if (inString) continue;
+    if (ch === "{") { depth++; continue; }
+    if (ch === "}") { depth--; if (depth === 0) return i + 1; continue; }
+  }
+  return 0;
+}
+
+function safeJsonParse(json: string): unknown {
+  try {
+    return JSON.parse(json);
+  } catch {
+    return null;
+  }
+}
+
+/** Quick check: does this JSON parse as a question payload? */
+function isQuestionPayload(json: string): boolean {
+  try {
+    const obj = JSON.parse(json);
+    if (!obj || typeof obj !== "object") return false;
+    const questions = (obj as { questions?: unknown }).questions;
+    if (Array.isArray(questions)) return questions.length > 0;
+    if (questions && typeof questions === "object") {
+      return Array.isArray((questions as { item?: unknown }).item);
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+class SentinelScanner {
+  private buf = "";
+  private flushed = 0;
+  private completedQuestions: string[] = [];
+
+  push(chunk: string): string {
+    this.buf += chunk;
+    let safe = "";
+
+    while (true) {
+      const remaining = this.buf.slice(this.flushed);
+      if (!remaining) break;
+
+      const beginIdx = remaining.indexOf(ASK_BEGIN);
+      if (beginIdx >= 0) {
+        safe += remaining.slice(0, beginIdx);
+        this.flushed += beginIdx;
+        const afterBegin = this.buf.slice(this.flushed);
+        const endRel = afterBegin.indexOf(ASK_END);
+        if (endRel >= 0) {
+          const json = this.buf.slice(this.flushed + ASK_BEGIN.length, this.flushed + endRel).trim();
+          if (json) this.completedQuestions.push(json);
+          this.flushed += endRel + ASK_END.length;
+          continue;
+        }
+        break;
+      }
+
+      // Bare JSON fallback (only at message start)
+      const bareIdx = remaining.search(/\{\s*"questions"\s*:/);
+      if (bareIdx >= 0 && /^\s*$/.test(remaining.slice(0, bareIdx))) {
+        safe += remaining.slice(0, bareIdx);
+        const jsonStart = this.flushed + bareIdx;
+        const jsonEnd = findJsonEnd(this.buf, jsonStart);
+        if (jsonEnd > jsonStart) {
+          const json = this.buf.slice(jsonStart, jsonEnd).trim();
+          if (isQuestionPayload(json)) {
+            this.completedQuestions.push(json);
+            this.flushed = jsonEnd;
+            continue;
+          }
+        }
+        this.flushed += bareIdx;
+        break;
+      }
+
+      const withhold = ASK_BEGIN.length - 1;
+      const tail = remaining.length > withhold ? remaining.slice(0, remaining.length - withhold) : "";
+      safe += tail;
+      this.flushed += tail.length;
+      break;
+    }
+    return safe;
+  }
+
+  takeQuestions(): string[] {
+    const q = this.completedQuestions;
+    this.completedQuestions = [];
+    return q;
+  }
+
+  flush(): string {
+    const remaining = this.buf.slice(this.flushed);
+    this.flushed = this.buf.length;
+    return remaining;
+  }
+}
 
 const NEAR_WINDOW_RATIO = 0.8;
 
@@ -116,6 +230,7 @@ function normalizeToolName(name: string): string {
   const lower = name.toLowerCase();
   if (lower === "shell") return "bash";
   if (lower === "subagent") return "task";
+  if (lower === "askuserquestion") return "question";
   return lower;
 }
 
@@ -169,7 +284,9 @@ export function guessToolName(input: unknown): string {
     }
     // 6. Subagent / Task
     if (typeof rec["prompt"] === "string" || typeof rec["task"] === "string") return "task";
-    // 7. Todo
+    // 7. Question / AskUserQuestion
+    if (rec["questions"] != null) return "question";
+    // 8. Todo
     if (rec["todos"] != null) return "TodoWrite";
   }
   return "tool";
@@ -189,6 +306,8 @@ export interface OpencodeAdapterDeps {
   model?: string;
   /** Rewind snapshot — freeze()d at turn end into turn.files. */
   snapshot: FileSnapshot;
+  /** Abort signal from TurnHandle. Set when user interrupts the turn. */
+  abortSignal?: AbortSignal;
 }
 
 interface ChildSessionState {
@@ -230,6 +349,8 @@ export class OpencodeMessageAdapter {
   private readonly bashTasks = new Map<string, BashTaskSnapshot>();
   /** Open assistant messages (assistantMessageID) — sealed by step.ended. */
   private readonly openMessages = new Set<string>();
+  /** Per-message sentinel scanners for <<<ASK_USER_QUESTION>>> text fallback. */
+  private readonly textScanners = new Map<string, SentinelScanner>();
   /** Last step's token report (instantaneous context-window occupancy). */
   private lastStepTokens?: OpenCodeTokens;
   /** Cumulative session tokens (total processed throughput). */
@@ -249,6 +370,10 @@ export class OpencodeMessageAdapter {
 
   get hasTurnEnded(): boolean {
     return this.turnEnded;
+  }
+
+  private get isAborted(): boolean {
+    return Boolean(this.deps.abortSignal?.aborted);
   }
 
   /** Resolves when the turn ends (execution terminal / idle / finalize). */
@@ -351,6 +476,10 @@ export class OpencodeMessageAdapter {
           else {
             const message =
               (data["error"] as { message?: string } | undefined)?.message ?? "OpenCode 回合执行失败";
+            if (this.isAborted || message === "Step interrupted" || message.toLowerCase().includes("interrupted")) {
+              this.finalizeTurn("interrupted");
+              return;
+            }
             this.emit({
               type: "error",
               sessionId: this.deps.sessionId,
@@ -369,7 +498,8 @@ export class OpencodeMessageAdapter {
         // (verified live); idle alone only ends the turn after activity.
         const sid = this.sessionIDOf(ev);
         if (sid === this.deps.opencodeSessionId) {
-          if (this.sawActivity) this.finalizeTurn("end_turn");
+          if (this.isAborted) this.finalizeTurn("interrupted");
+          else if (this.sawActivity) this.finalizeTurn("end_turn");
         } else if (sid != null && this.children.has(sid)) {
           this.markChildDone(sid, "completed");
         }
@@ -379,6 +509,10 @@ export class OpencodeMessageAdapter {
         if (!this.isMain(ev)) return;
         const message =
           (data["error"] as { message?: string } | undefined)?.message ?? "OpenCode 会话错误";
+        if (this.isAborted || message === "Step interrupted" || message.toLowerCase().includes("interrupted")) {
+          this.finalizeTurn("interrupted");
+          return;
+        }
         this.emit({ type: "error", sessionId: this.deps.sessionId, message, code: "OPENCODE_SESSION_ERROR" });
         this.finalizeTurn("error");
         return;
@@ -410,7 +544,26 @@ export class OpencodeMessageAdapter {
         const delta = data["delta"] as string;
         if (sessionID === this.deps.opencodeSessionId) {
           this.openMessages.add(assistantMessageID);
-          this.emit({ type: "text.delta", sessionId: this.deps.sessionId, messageId: assistantMessageID, text: delta });
+          let scanner = this.textScanners.get(assistantMessageID);
+          if (!scanner) {
+            scanner = new SentinelScanner();
+            this.textScanners.set(assistantMessageID, scanner);
+          }
+          const safe = scanner.push(delta);
+          if (safe) {
+            this.emit({ type: "text.delta", sessionId: this.deps.sessionId, messageId: assistantMessageID, text: safe });
+          }
+          for (const json of scanner.takeQuestions()) {
+            const questions = parseQuestions(safeJsonParse(json));
+            if (questions.length > 0) {
+              this.emit({
+                type: "question.ask",
+                sessionId: this.deps.sessionId,
+                requestId: `sentinel_${randomUUID()}`,
+                questions,
+              });
+            }
+          }
         } else {
           this.ensureChildSession(sessionID);
           this.appendChildText(sessionID, "text", delta);
@@ -447,6 +600,11 @@ export class OpencodeMessageAdapter {
         this.toolInputs.set(callID, input);
         if (sessionID === this.deps.opencodeSessionId) {
           this.openMessages.add(assistantMessageID);
+          // Like Claude SDK: do NOT emit a generic tool.use block for question tool.
+          // The QuestionCard (triggered by question.ask) renders the question interface.
+          if (toolName === "question") {
+            return;
+          }
           this.emit({
             type: "tool.use",
             sessionId: this.deps.sessionId,
@@ -519,6 +677,9 @@ export class OpencodeMessageAdapter {
         const callID = (data["id"] ?? data["callID"]) as string;
         const content = data["content"];
         if (sessionID === this.deps.opencodeSessionId) {
+          if (this.toolNames.get(callID) === "question") {
+            return;
+          }
           this.emit({
             type: "tool.result",
             sessionId: this.deps.sessionId,
@@ -553,21 +714,34 @@ export class OpencodeMessageAdapter {
           (data["error"] as { message?: string } | undefined)?.message ??
           (typeof data["error"] === "string" ? data["error"] : "tool failed");
         if (sessionID === this.deps.opencodeSessionId) {
+          if (this.toolNames.get(callID) === "question") {
+            return;
+          }
+          const isInterrupt =
+            this.isAborted ||
+            message === "Step interrupted" ||
+            message.toLowerCase().includes("interrupted") ||
+            message.toLowerCase().includes("aborted");
           this.emit({
             type: "tool.result",
             sessionId: this.deps.sessionId,
             toolCallId: callID,
-            isError: true,
+            isError: !isInterrupt,
             content: message,
           });
           const task = this.bashTasks.get(callID);
           if (task) {
-            this.bashTasks.set(callID, { ...task, status: "failed", endedAt: Date.now(), error: message });
+            this.bashTasks.set(callID, {
+              ...task,
+              status: isInterrupt ? "killed" : "failed",
+              endedAt: Date.now(),
+              error: message,
+            });
             this.emitBashTasks();
           }
           for (const [sid, child] of this.children) {
             if (child.toolUseId === callID && child.status === "running") {
-              this.markChildDone(sid, "failed");
+              this.markChildDone(sid, isInterrupt ? "completed" : "failed");
             }
           }
         } else {
@@ -596,6 +770,10 @@ export class OpencodeMessageAdapter {
         if (!this.isMain(ev)) return;
         const message =
           (data["error"] as { message?: string } | undefined)?.message ?? "OpenCode step failed";
+        // User interrupted: do NOT emit error card to renderer (mirrors Claude SDK)
+        if (this.isAborted || message === "Step interrupted" || message.toLowerCase().includes("interrupted")) {
+          return;
+        }
         this.emit({ type: "error", sessionId: this.deps.sessionId, message, code: "OPENCODE_STEP_FAILED" });
         return;
       }
@@ -700,6 +878,13 @@ export class OpencodeMessageAdapter {
   finalizeTurn(reason: TurnDoneReason): void {
     if (this.turnEnded) return;
     this.turnEnded = true;
+    for (const [messageId, scanner] of this.textScanners) {
+      const rest = scanner.flush();
+      if (rest) {
+        this.emit({ type: "text.delta", sessionId: this.deps.sessionId, messageId, text: rest });
+      }
+    }
+    this.textScanners.clear();
     for (const messageId of this.openMessages) {
       this.emit({ type: "message.complete", sessionId: this.deps.sessionId, messageId });
     }
@@ -709,7 +894,7 @@ export class OpencodeMessageAdapter {
       if (task.status === "running") {
         this.bashTasks.set(callID, {
           ...task,
-          status: reason === "error" ? "failed" : "completed",
+          status: reason === "error" ? "failed" : reason === "interrupted" ? "killed" : "completed",
           endedAt: Date.now(),
         });
       }

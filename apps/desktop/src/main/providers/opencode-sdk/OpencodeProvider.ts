@@ -49,6 +49,7 @@ import { OpencodeMessageAdapter } from "./OpencodeMessageAdapter.js";
 import {
   handleOpenCodePermissionAsked,
   handleOpenCodeQuestionAsked,
+  handleOpenCodeFormCreated,
   type OpenCodeBridgeDeps,
 } from "./opencodePermissionBridge.js";
 import { getFileSnapshot } from "@main/lib/fileSnapshotRegistry.js";
@@ -200,6 +201,7 @@ export class OpencodeProvider implements AgentProvider {
       contextWindow,
       model: req.model && req.model !== "default" ? req.model : undefined,
       snapshot: getFileSnapshot(req.sessionId),
+      abortSignal: ac.signal,
     });
     const bridgeDeps: OpenCodeBridgeDeps = {
       ctx,
@@ -210,18 +212,32 @@ export class OpencodeProvider implements AgentProvider {
       noteToolName: (callID, toolName) => adapter.noteToolName(callID, toolName),
     };
     const offEvents = onOpenCodeEvent((ev) => {
-      switch (ev.type) {
+      const type = (ev as { type?: unknown }).type as string | undefined;
+      switch (type) {
         // CLI 2.1.1 says "permission.asked" (verified live); the SDK type
         // still names it permission.v2.asked — accept both spellings.
         case "permission.asked":
         case "permission.v2.asked":
           if (adapter.hasTurnEnded) return;
-          void handleOpenCodePermissionAsked(ev, bridgeDeps);
+          void handleOpenCodePermissionAsked(
+            ev as unknown as Parameters<typeof handleOpenCodePermissionAsked>[0],
+            bridgeDeps,
+          );
           return;
         case "question.asked":
         case "question.v2.asked":
           if (adapter.hasTurnEnded) return;
-          void handleOpenCodeQuestionAsked(ev, bridgeDeps);
+          void handleOpenCodeQuestionAsked(
+            ev as unknown as Parameters<typeof handleOpenCodeQuestionAsked>[0],
+            bridgeDeps,
+          );
+          return;
+        case "form.created":
+          if (adapter.hasTurnEnded) return;
+          void handleOpenCodeFormCreated(
+            ev as unknown as Parameters<typeof handleOpenCodeFormCreated>[0],
+            bridgeDeps,
+          );
           return;
         default:
           adapter.dispatch(ev);

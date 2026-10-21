@@ -124,6 +124,11 @@ export function decideOpenCodePermission(input: {
 
   const firstResource = resources[0];
 
+  /* ⓪ Question guard: questions interact with the user directly, never require tool approval */
+  if (action === "question") {
+    return { choice: { kind: "approve" }, toolName: "question", approvalInput: {} };
+  }
+
   /* ① Edit guard: project boundary + normalize (WSL / ~ dialects). */
   if (EDIT_ACTIONS.has(action)) {
     const rawPath =
@@ -380,6 +385,109 @@ export async function handleOpenCodeQuestionAsked(
     }
   } catch (err) {
     log.warn(`opencode question reply failed: ${(err as Error).message}`);
+  }
+}
+
+/** Handle structured form creation on CLI 2.1.1 (the native `question` tool
+ *  triggers `form.created`). Bridges to host's AskUserQuestion card and replies
+ *  via `/api/session/:sessionID/form/:formID/reply`. */
+export async function handleOpenCodeFormCreated(
+  ev: { type: string; data?: unknown },
+  deps: OpenCodeBridgeDeps,
+): Promise<void> {
+  const rawData = (ev as { data?: unknown }).data;
+  const form = (rawData && typeof rawData === "object" && "form" in rawData
+    ? (rawData as { form?: unknown }).form
+    : rawData) as {
+    id?: string;
+    sessionID?: string;
+    title?: string;
+    metadata?: { kind?: string; tool?: { messageID?: string; id?: string; callID?: string } };
+    fields?: Array<{
+      key: string;
+      title?: string;
+      description?: string;
+      type?: string;
+      options?: Array<{ value: string; label?: string; description?: string }>;
+      custom?: boolean;
+    }>;
+  } | null;
+
+  const sessionID = form?.sessionID;
+  const formID = form?.id;
+  if (!sessionID || !formID) return;
+
+  const fields = form.fields ?? [];
+  const questions: AskUserQuestionItem[] = fields.map((f, i) => {
+    const qText = f.description || f.title || `Question ${i + 1}`;
+    const header = (f.title || f.description || `Question ${i + 1}`).slice(0, 30);
+    const multiSelect = f.type === "multiselect";
+    const options = (f.options ?? []).map((o) => ({
+      label: o.label || o.value,
+      ...(o.description ? { description: o.description } : {}),
+    }));
+    return { header, question: qText, multiSelect, options };
+  });
+
+  if (questions.length === 0) {
+    await cancelForm(deps.fetchRaw, sessionID, formID, "No questions in form");
+    return;
+  }
+
+  const requestUserInput = deps.ctx.requestUserInput;
+  if (!requestUserInput) {
+    await cancelForm(deps.fetchRaw, sessionID, formID, "User input not available");
+    return;
+  }
+
+  const tool = form.metadata?.tool;
+  const decision = await requestUserInput({
+    requestId: randomUUID(),
+    questions,
+    ...(tool?.id ?? tool?.callID ? { toolUseId: (tool?.id ?? tool?.callID) as string } : {}),
+  });
+
+  try {
+    if (decision.dismissed) {
+      await cancelForm(deps.fetchRaw, sessionID, formID, "用户关闭了提问,未提供答案,请继续当前任务");
+      return;
+    }
+
+    const answer: Record<string, string | string[]> = {};
+    for (let i = 0; i < fields.length; i++) {
+      const f = fields[i];
+      const qText = questions[i].question;
+      const userAns = decision.answers[qText];
+      if (userAns != null) {
+        answer[f.key] = userAns;
+      } else {
+        answer[f.key] = f.type === "multiselect" ? [] : "";
+      }
+    }
+
+    const res = await deps.fetchRaw(`/api/session/${sessionID}/form/${formID}/reply`, {
+      method: "POST",
+      body: JSON.stringify({ answer }),
+    });
+    if (!res.ok && res.status !== 204) {
+      log.warn(`opencode form reply failed: ${res.status}`);
+    }
+  } catch (err) {
+    log.warn(`opencode form reply failed: ${(err as Error).message}`);
+  }
+}
+
+async function cancelForm(
+  fetchRaw: (path: string, init?: RequestInit) => Promise<Response>,
+  sessionID: string,
+  formID: string,
+  message?: string,
+): Promise<void> {
+  try {
+    const query = message ? `?message=${encodeURIComponent(message)}` : "";
+    await fetchRaw(`/api/session/${sessionID}/form/${formID}/cancel${query}`, { method: "POST" });
+  } catch (err) {
+    log.warn(`opencode form cancel failed: ${(err as Error).message}`);
   }
 }
 

@@ -8603,6 +8603,15 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         ...(frozen ? { messagesBySession: { ...s.messagesBySession, [sessionId]: frozen } } : {}),
       };
     });
+    // Persist the frozen transcript so user-aborted partial output is saved
+    // immediately to SQLite and survives app reload/tab switch (mirrors Claude SDK).
+    const currentMessages = get().messagesBySession[sessionId];
+    if (currentMessages && currentMessages.length > 0) {
+      void api.session.upsertMessages({
+        sessionId,
+        messages: toRecords(sessionId, currentMessages),
+      });
+    }
     // User stopped the turn — drop any live upstream-retry hint with it.
     clearUpstreamIssue(set, sessionId);
   },
