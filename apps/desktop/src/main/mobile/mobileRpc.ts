@@ -79,6 +79,7 @@ import { createOrReuseSession } from "@main/lib/sessionStart.js";
 import { CustomModelStore } from "@main/lib/secretStore.js";
 import { CodexModelsStore } from "@main/lib/codexModelsStore.js";
 import { listAvailablePiModels } from "@main/ipc/piModels.js";
+import { listOpenCodeModels } from "@main/providers/opencode-sdk/opencodeModels.js";
 import { listSkillsForProject, readSkillForProject } from "@main/ipc/skills.js";
 import { readFileGuarded, readBinaryGuarded, listDirGuarded, searchFilesGuarded } from "@main/ipc/files.js";
 import { generateSessionTitle } from "@main/ipc/titleGen.js";
@@ -198,6 +199,13 @@ const HANDLERS: Record<string, RpcHandler> = {
   "codexModels:list": async () => ({
     providers: await CodexModelsStore.listPublic(),
   }),
+
+  // OpenCode's picker surface — same rationale as codexModels:list: without
+  // the model list the phone's send guard blocks every opencode turn.
+  // connectKey/logout/authStatus stay desktop-only (credential management).
+  "opencode:listModels": async () => {
+    return listOpenCodeModels();
+  },
 
   "skills:list": (raw) => {
     const input = SkillsListSchema.parse(raw);

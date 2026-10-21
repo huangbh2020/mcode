@@ -49,6 +49,9 @@ const PROVIDER_ICONS: Record<string, ProviderIconMeta> = {
   // brand is pure monochrome, so the icon rides currentColor and the dot
   // picks a neutral gray that stays visible on both surface themes.
   opencode: { Icon: OpenCodeBrandIcon, color: "text-content", dot: "#9CA3AF", label: "OpenCode" },
+  // OpenCode GUI provider — same official mark (shared with the terminal CLI
+  // entry; both surfaces identify the same backend).
+  "opencode-sdk": { Icon: OpenCodeBrandIcon, color: "text-content", dot: "#9CA3AF", label: "OpenCode" },
 };
 
 export function getProviderIcon(providerId: string | null | undefined): ProviderIconMeta {

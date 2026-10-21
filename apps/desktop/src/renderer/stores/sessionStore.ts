@@ -33,7 +33,7 @@ import { getLastCursor, type NavEntry } from "@renderer/lib/editorNav.js";
 import { disposeModel, getDisplayedPath } from "@renderer/lib/editorModelCache.js";
 import type { CustomModelPublic } from "@contracts/customModel";
 import type { PiThinkingLevelMap } from "@contracts/piModel";
-import { resolveEffortLevels, coerceEffortValue } from "@renderer/lib/thinkingLevels.js";
+import { resolveEffortLevels, coerceEffortValue, defaultEffortForLevels } from "@renderer/lib/thinkingLevels.js";
 import { api, isWebTransport } from "@renderer/lib/api.js";
 import { isElectron } from "@renderer/lib/platform.js";
 import { normWorktreeKey } from "@renderer/lib/worktree.js";
@@ -136,6 +136,7 @@ import {
   type PickedElement,
   type BrowserDevicePreset,
   type BrowserOrientation,
+  type OpenCodeModelOption,
 } from "@contracts/ipc";
 import type { ThemeStyle } from "@contracts/theme";
 
@@ -1256,6 +1257,17 @@ export interface SessionState {
    *  provider is codex-sdk, since codex's `capabilities.builtinModels` is
    *  empty (models come from user config, mirroring pi). */
   codexAvailableModels: BuiltinModelOption[];
+  /** OpenCode (v2) models from the official server (official-login surface —
+   *  Zen free models appear even without login). Populated by
+   *  `reloadOpencodeAvailableModels`; used by ModelDropdown when the active
+   *  provider is opencode-sdk. */
+  opencodeAvailableModels: OpenCodeModelOption[];
+  /** Per-model reasoning-effort variants from the server's model list, keyed
+   *  by "providerID/modelId" (the opencode session.model shape). The effort
+   *  chip filters a model's ladder against this — models without variants
+   *  hide the chip entirely (see resolveEffortLevels; the opencode analogue
+   *  of piModelMaps). Absent key = no filter (provider ladder shows). */
+  opencodeModelVariants: Record<string, string[]>;
   /** Whether each composer config list has landed (initDeferred reloads run
    *  concurrently). validateComposerSelection stays hands-off until ALL are
    *  in — validating against a not-yet-loaded list reads "empty" as "the
@@ -1265,6 +1277,7 @@ export interface SessionState {
   customModelsLoaded: boolean;
   piModelsLoaded: boolean;
   codexModelsLoaded: boolean;
+  opencodeModelsLoaded: boolean;
   /** Discovered skills for the composer `/` menu. Cached per active project
    *  (global ~/.claude/skills + the project's .claude/skills); refreshed on
    *  init and project switch. Empty list = no skills installed. */
@@ -2137,6 +2150,11 @@ export interface SessionState {
    *  Called on init and after any PiModelsPanel save/delete. */
   reloadPiAvailableModels: () => Promise<void>;
   reloadCodexAvailableModels: () => Promise<void>;
+  /** Re-fetch the OpenCode (v2) official model list (server-backed; starts
+   *  the embedded server on first call). Populates `opencodeAvailableModels`
+   *  and `opencodeModelVariants` (per-model effort ladder). Called on init,
+   *  after settings-panel login/logout, and on manual refresh. */
+  reloadOpencodeAvailableModels: () => Promise<void>;
   setModel: (model: string) => void;
   setEffort: (effort: EffortLevel) => void;
   setCustomModel: (id: string | null, model?: string) => void;
@@ -2709,6 +2727,8 @@ const EMPTY_PI_MODELS: BuiltinModelOption[] = [];
  *  (infinite re-render; see the EMPTY_* family). */
 const EMPTY_PI_MODEL_MAPS: Record<string, PiThinkingLevelMap> = {};
 const EMPTY_CODEX_MODELS: BuiltinModelOption[] = [];
+const EMPTY_OPENCODE_MODELS: OpenCodeModelOption[] = [];
+const EMPTY_OPENCODE_VARIANTS: Record<string, string[]> = {};
 const EMPTY_SKILLS: SkillInfo[] = [];
 const EMPTY_SESSIONS: Session[] = [];
 export const EMPTY_SUBAGENTS: SubagentSnapshot[] = [];
@@ -3821,6 +3841,7 @@ function coerceSlotsForProvider(
     | "customModelId"
     | "model"
     | "piModelMaps"
+    | "opencodeModelVariants"
   >,
   providerId: string,
   /** The model binding the coercion is FOR. Pass the incoming binding when it
@@ -3828,13 +3849,15 @@ function coerceSlotsForProvider(
    *  persisted effort BEFORE applying that session's model patch; setProvider
    *  coerces the restored binding). Omit to use the store's current slots. */
   binding?: { customModelId: string | null; model: string },
+  options?: { resetEffort?: boolean },
 ): { effort: SessionState["effort"]; permissionMode: SessionState["permissionMode"] } {
   const provider = s.providers.find((p) => p.id === providerId);
   // Same resolution the effort chip renders with: provider-declared levels,
   // filtered by the selected model's thinking declaration on OpenAI-protocol
-  // custom endpoints and by the pi model's settings-panel mapping (null =
-  // 不支持 → hidden). A model whose thinking isn't controllable (empty list)
-  // snaps any non-default effort back to the neutral slot.
+  // custom endpoints, by the pi model's settings-panel mapping (null =
+  // 不支持 → hidden), and by the opencode model's variant ladder. A model
+  // whose thinking isn't controllable (empty list) snaps any non-default
+  // effort back to the neutral slot.
   const levels = resolveEffortLevels({
     providerLevels: provider?.capabilities.thinkingLevels,
     customModels: s.customModels,
@@ -3842,13 +3865,17 @@ function coerceSlotsForProvider(
     model: binding?.model ?? s.model,
     providerId,
     piModelMaps: s.piModelMaps,
+    opencodeModelVariants: s.opencodeModelVariants,
   });
   const modes = provider?.capabilities.permissionModes;
   return {
-    // Snap target: the provider's neutral slot when declared ("default" —
-    // Claude/Codex), else the SDK's own default level ("medium" — Pi declares
-    // the raw off..max ladder with no Auto; see coerceEffortValue).
-    effort: coerceEffortValue(s.effort, levels),
+    // Snap target: when resetting (explicit model switch), pick the default
+    // thinking level for the model ladder ("default"/Auto for Claude/Codex/OpenCode,
+    // "medium" for Pi). Otherwise snap the existing effort value onto the
+    // available ladder.
+    effort: options?.resetEffort
+      ? defaultEffortForLevels(levels)
+      : coerceEffortValue(s.effort, levels),
     permissionMode:
       modes && modes.length > 0 && !modes.some((m) => m.value === s.permissionMode)
         ? "default"
@@ -3964,7 +3991,7 @@ function syncConfigFromSession(
  * none — never silently falls back to a first/implicit model.
  */
 function resolveSendModel(
-  s: Pick<SessionState, "model" | "customModelId" | "providerId" | "providers" | "customModels" | "piAvailableModels" | "codexAvailableModels">,
+  s: Pick<SessionState, "model" | "customModelId" | "providerId" | "providers" | "customModels" | "piAvailableModels" | "codexAvailableModels" | "opencodeAvailableModels">,
 ): { model: string; customModelId: string | null } | null {
   const provider = s.providers.find((p) => p.id === s.providerId);
   if (provider?.id === "pi-sdk") {
@@ -3975,6 +4002,12 @@ function resolveSendModel(
   }
   if (provider?.id === "codex-sdk") {
     if (s.model !== "default" && s.codexAvailableModels.some((m) => m.id === s.model)) {
+      return { model: s.model, customModelId: null };
+    }
+    return null;
+  }
+  if (provider?.id === "opencode-sdk") {
+    if (s.model !== "default" && s.opencodeAvailableModels.some((m) => m.id === s.model)) {
       return { model: s.model, customModelId: null };
     }
     return null;
@@ -3994,11 +4027,12 @@ function resolveSendModel(
  *  the config dialog is the only way out; selectable-but-unpicked → a light
  *  toast nudge to pick one. */
 function hasSelectableModel(
-  s: Pick<SessionState, "providerId" | "providers" | "customModels" | "piAvailableModels" | "codexAvailableModels">,
+  s: Pick<SessionState, "providerId" | "providers" | "customModels" | "piAvailableModels" | "codexAvailableModels" | "opencodeAvailableModels">,
 ): boolean {
   const provider = s.providers.find((p) => p.id === s.providerId);
   if (provider?.id === "pi-sdk") return s.piAvailableModels.length > 0;
   if (provider?.id === "codex-sdk") return s.codexAvailableModels.length > 0;
+  if (provider?.id === "opencode-sdk") return s.opencodeAvailableModels.length > 0;
   if (provider?.id === "claude-sdk") {
     return s.customModels.some((cfg) => cfg.models.some((m) => m.id.trim()));
   }
@@ -4144,7 +4178,7 @@ function persistComposerSelection(
  *  the entry when still valid, null when the model was deleted (caller then
  *  falls back to "default"). */
 function isValidRememberedModel(
-  s: Pick<SessionState, "providers" | "customModels" | "piAvailableModels" | "codexAvailableModels">,
+  s: Pick<SessionState, "providers" | "customModels" | "piAvailableModels" | "codexAvailableModels" | "opencodeAvailableModels">,
   providerId: string,
   entry: { model: string; customModelId: string | null } | undefined,
 ): entry is { model: string; customModelId: string | null } {
@@ -4158,6 +4192,9 @@ function isValidRememberedModel(
   }
   if (provider.id === "codex-sdk") {
     return !entry.customModelId && s.codexAvailableModels.some((m) => m.id === entry.model);
+  }
+  if (provider.id === "opencode-sdk") {
+    return !entry.customModelId && s.opencodeAvailableModels.some((m) => m.id === entry.model);
   }
   if (provider.id === "claude-sdk") {
     const cfg = s.customModels.find((m) => m.id === entry.customModelId);
@@ -4199,13 +4236,13 @@ function sanitizeBinding(
   get: () => SessionState,
 ): void {
   const s = get();
-  // Boot race guard: the four config lists hydrate concurrently (initDeferred)
+  // Boot race guard: the config lists hydrate concurrently (initDeferred)
   // and each completion validates. Until every list is in, an empty list means
   // "not loaded yet", not "the pick was deleted" — validating early would wipe
   // a legitimate choice and persist the wipe. Whichever reload lands LAST
   // still runs the full validation against complete data, so skipping here
   // loses nothing.
-  if (!s.providersLoaded || !s.customModelsLoaded || !s.piModelsLoaded || !s.codexModelsLoaded) {
+  if (!s.providersLoaded || !s.customModelsLoaded || !s.piModelsLoaded || !s.codexModelsLoaded || !s.opencodeModelsLoaded) {
     return;
   }
   const activeId = s.activeSessionId;
@@ -4226,6 +4263,9 @@ function sanitizeBinding(
     if (!ok) patch = { model: "default", customModelId: null };
   } else if (provider.id === "codex-sdk") {
     const ok = s.codexAvailableModels.some((m) => m.id === s.model);
+    if (!ok) patch = { model: "default", customModelId: null };
+  } else if (provider.id === "opencode-sdk") {
+    const ok = s.opencodeAvailableModels.some((m) => m.id === s.model);
     if (!ok) patch = { model: "default", customModelId: null };
   } else if (provider.id === "claude-sdk") {
     // Valid only when the custom config still exists AND the selected model
@@ -5619,10 +5659,13 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   piAvailableModels: EMPTY_PI_MODELS,
   piModelMaps: EMPTY_PI_MODEL_MAPS,
   codexAvailableModels: EMPTY_CODEX_MODELS,
+  opencodeAvailableModels: EMPTY_OPENCODE_MODELS,
+  opencodeModelVariants: EMPTY_OPENCODE_VARIANTS,
   providersLoaded: false,
   customModelsLoaded: false,
   piModelsLoaded: false,
   codexModelsLoaded: false,
+  opencodeModelsLoaded: false,
   skills: EMPTY_SKILLS,
   effort: "high",
   todosBySession: {},
@@ -6221,6 +6264,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     // shows an empty state until it resolves.
     void get().reloadPiAvailableModels();
     void get().reloadCodexAvailableModels();
+    void get().reloadOpencodeAvailableModels();
 
     // Skill list for the composer `/` menu (scans ~/.claude/skills + the
     // active project's .claude/skills).
@@ -11304,10 +11348,16 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       // a Claude custom pick is stripped here; otherwise the effort chip keeps
       // resolving Claude's ladder for a pi session.
       const customModelId = sanitizeBinding(s, s.providerId, s.customModelId);
-      const coerced = coerceSlotsForProvider(s, s.providerId, {
-        customModelId,
-        model,
-      });
+      const isSwitchingModel = model !== s.model || customModelId !== s.customModelId;
+      const coerced = coerceSlotsForProvider(
+        s,
+        s.providerId,
+        {
+          customModelId,
+          model,
+        },
+        { resetEffort: isSwitchingModel },
+      );
       return {
         model,
         customModelId,
@@ -11371,11 +11421,17 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       }
       // Model-scoped thinking levels (OpenAI-protocol endpoints): a level
       // picked for the previous model may not exist on the new one — coerce
-      // against the INCOMING binding. See coerceSlotsForProvider.
-      const coerced = coerceSlotsForProvider(s, s.providerId, {
-        customModelId: id,
-        model: nextModel,
-      });
+      // against the INCOMING binding. When switching model, reset effort to default.
+      const isSwitchingModel = id !== s.customModelId || nextModel !== s.model;
+      const coerced = coerceSlotsForProvider(
+        s,
+        s.providerId,
+        {
+          customModelId: id,
+          model: nextModel,
+        },
+        { resetEffort: isSwitchingModel },
+      );
       return {
         customModelId: id,
         model: nextModel,
@@ -11484,6 +11540,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           effort: remembered?.effort ?? s.effort,
           permissionMode: remembered?.permissionMode ?? s.permissionMode,
           piModelMaps: s.piModelMaps,
+          opencodeModelVariants: s.opencodeModelVariants,
         },
         id,
         restored,
@@ -11629,6 +11686,27 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       validateComposerSelection(set, get);
     } catch (err) {
       console.error("reloadCodexAvailableModels failed:", err);
+    }
+  },
+
+  reloadOpencodeAvailableModels: async () => {
+    try {
+      const { models } = await api.opencode.listModels({});
+      // Per-model effort ladders (Zen reasoning-effort variants ride
+      // ModelRef.variant). Missing key = no filter — the provider ladder
+      // shows unfiltered.
+      const variants: Record<string, string[]> = {};
+      for (const m of models) {
+        if (m.variants && m.variants.length > 0) variants[m.id] = m.variants;
+      }
+      set({ opencodeAvailableModels: models, opencodeModelVariants: variants, opencodeModelsLoaded: true });
+      validateComposerSelection(set, get);
+    } catch (err) {
+      // Offline / CLI missing / server failed to start: mark loaded with an
+      // empty list so the send guard shows the config dialog instead of
+      // blocking on a never-arriving list.
+      console.error("reloadOpencodeAvailableModels failed:", err);
+      set({ opencodeAvailableModels: [], opencodeModelVariants: {}, opencodeModelsLoaded: true });
     }
   },
 

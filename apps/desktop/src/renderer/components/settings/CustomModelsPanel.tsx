@@ -23,6 +23,8 @@ import {
   IconPlugConnected,
 } from "@renderer/lib/icons.js";
 import { SiClaude, OpenAIBrandIcon, SiGoogle } from "@renderer/lib/icons.js";
+import { OpenCodeBrandIcon } from "@renderer/lib/opencodeBrandIcon.js";
+import { OpenCodeLoginPanel } from "./OpenCodeLoginPanel.js";
 import type {
   CustomModelPublic,
   CustomModelEntry,
@@ -488,7 +490,7 @@ const codexFormFromConfig = (cfg: CodexProviderPublic): CodexFormState => ({
 
 /* ════════════════════════ unified list ════════════════════════ */
 
-type Family = "claude" | "pi" | "codex";
+type Family = "claude" | "pi" | "codex" | "opencode";
 type Selection =
   | { kind: "claude"; id: string | "new" }
   | { kind: "pi"; id: string | "new" }
@@ -900,16 +902,19 @@ export function CustomModelsPanel() {
         title={t("settings.customModels.title")}
       />
 
-      {/* ───────── Claude / Pi family tabs ───────── */}
+      {/* ───────── Claude / Pi / Codex / OpenCode family tabs ───────── */}
       <div className="mb-3 flex w-fit items-center gap-0.5 rounded-lg border border-edge bg-surface/40 p-0.5">
-        {(["claude", "pi", "codex"] as const).map((k) => {
+        {(["claude", "pi", "codex", "opencode"] as const).map((k) => {
           const count =
             k === "claude"
               ? customModels.length
               : k === "codex"
                 ? codexProviders.length
-                : Object.keys(piProviders).length;
-          const label = k === "claude" ? "Claude" : k === "codex" ? "Codex" : "Pi";
+                : k === "opencode"
+                  ? null
+                  : Object.keys(piProviders).length;
+          const label =
+            k === "claude" ? "Claude" : k === "codex" ? "Codex" : k === "opencode" ? "OpenCode" : "Pi";
           return (
             <button
               key={k}
@@ -922,13 +927,21 @@ export function CustomModelsPanel() {
             >
               {k === "claude" ? <SiClaude size={13} className={tab === k ? "text-accent" : "text-content-subtle"} /> : null}
               {k === "codex" ? <OpenAIBrandIcon size={13} className={tab === k ? "text-accent" : "text-content-subtle"} /> : null}
+              {k === "opencode" ? <OpenCodeBrandIcon size={13} className={tab === k ? "text-accent" : "text-content-subtle"} /> : null}
               {label}
-              <span className="tabular-nums text-[0.8571em] text-content-subtle">{count}</span>
+              {count !== null && <span className="tabular-nums text-[0.8571em] text-content-subtle">{count}</span>}
             </button>
           );
         })}
       </div>
 
+      {/* OpenCode is a different SHAPE from the other three: no endpoint
+          configs — an official-login surface (CLI health, connected
+          integrations, Zen API-key connect, model preview). It gets the full
+          width and never participates in the Selection/form machinery. */}
+      {tab === "opencode" ? (
+        <OpenCodeLoginPanel />
+      ) : (
       <div className="grid min-h-0 flex-1 grid-cols-[210px_1fr] gap-4">
         {/* ───────── Left: provider list (family of the active tab) ───────── */}
         <aside className="flex min-h-0 flex-col rounded-md border border-edge bg-surface/40">
@@ -1042,6 +1055,7 @@ export function CustomModelsPanel() {
           )}
         </div>
       </div>
+      )}
 
       <ConfirmDialog
         open={pendingDelete != null}

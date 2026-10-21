@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { cn } from "@renderer/lib/cn.js";
 import { useI18n } from "@renderer/lib/i18n/index.js";
 import { toolDisplayName } from "@renderer/lib/toolNames.js";
+import { formatPathWithMaxDirsText } from "@renderer/lib/path.js";
 import { Button } from "@renderer/components/ui/index.js";
 import {
   IconAlertTriangle,
@@ -235,9 +236,14 @@ function summarizeTool(name: string, input: unknown): string {
   const obj = input as Record<string, unknown>;
   switch (name) {
     case "Read":
+    case "read":
     case "Write":
+    case "write":
     case "Edit":
-      return String(obj.file_path ?? "");
+    case "edit": {
+      const raw = String(obj.file_path ?? obj.path ?? obj.filePath ?? "");
+      return raw ? formatPathWithMaxDirsText(raw) : "";
+    }
     case "Bash":
     case "PowerShell":
       return String(obj.command ?? obj.description ?? "");

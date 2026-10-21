@@ -380,7 +380,9 @@ function SubagentView({
   const { t } = useI18n();
   const scrollRef = useRef<HTMLDivElement>(null);
   const rawBlocks = useSessionStore(
-    (s) => s.subagentTranscriptsBySession[sessionId]?.[agent.toolUseId ?? ""],
+    (s) =>
+      (agent.toolUseId ? s.subagentTranscriptsBySession[sessionId]?.[agent.toolUseId] : undefined) ??
+      s.subagentTranscriptsBySession[sessionId]?.[agent.taskId],
   );
   const blocks = useMemo(
     () => (rawBlocks ?? []).map(mapTranscriptBlock),

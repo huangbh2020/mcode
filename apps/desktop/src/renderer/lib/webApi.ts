@@ -580,6 +580,16 @@ const codexModels: Api["codexModels"] = {
   getApiKey: () => webUnsupported("codexModels.getApiKey"),
 };
 
+// OpenCode official-login surface: the phone needs listModels (the send
+// guard resolves the selection against it) and authStatus (login banner);
+// credential writes (connectKey/logout) stay desktop-only.
+const opencode: Api["opencode"] = {
+  listModels: (input) => rpc("opencode:listModels", input),
+  authStatus: () => rpc("opencode:authStatus"),
+  connectKey: () => webUnsupported("opencode.connectKey"),
+  logout: () => webUnsupported("opencode.logout"),
+};
+
 const skills: Api["skills"] = {
   list: (input) => rpc("skills:list", input),
   read: (input) => rpc("skills:read", input),
@@ -727,6 +737,7 @@ export function createWebApi(): Api {
     piModels,
     piSessions,
     codexModels,
+    opencode,
     skills,
     file,
     git,

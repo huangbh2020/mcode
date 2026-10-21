@@ -1919,6 +1919,61 @@ export type DeleteCodexProviderInput = z.infer<typeof DeleteCodexProviderSchema>
 export const GetCodexApiKeySchema = z.object({ id: z.string().min(1) });
 export type GetCodexApiKeyInput = z.infer<typeof GetCodexApiKeySchema>;
 
+/* ── OpenCode (v2) — official-login provider ──
+      Unlike pi/codex there is NO third-party endpoint config: credentials
+      live in opencode's own store (SQLite via the integration API) and are
+      shared with the user's terminal CLI. The GUI surface is: login status,
+      API-key connect (Zen / any key-based integration), logout, and the
+      model list the server reports for the current auth state. */
+
+/** One integration's login status for the settings panel. `connections` are
+ *  stored credentials (opencode's ConnectionInfo projected — never secrets). */
+export interface OpenCodeIntegrationStatus {
+  id: string;
+  name: string;
+  /** True when this integration has at least one stored credential. */
+  connected: boolean;
+  /** Credential ids for logout (credential.remove). */
+  credentialIds: string[];
+  /** Available auth methods (key/env/oauth), for UI affordances. */
+  methods: Array<{ type: string }>;
+}
+
+/** Model entry projected from the server's /api/model list. Extends the
+ *  picker's BuiltinModelOption with OpenCode-specific affordances. */
+export interface OpenCodeModelOption {
+  /** `providerID/modelId` (same shape as pi/codex selections). */
+  id: string;
+  label: string;
+  /** Context-window hint (e.g. "1M"). */
+  hint?: string;
+  /** Provider display name, for grouping. */
+  supplier?: string;
+  /** Reasoning-effort variants the model declares (Zen models map these to
+   *  reasoningEffort settings, carried per-turn as ModelRef.variant).
+   *  Empty/absent = no effort surface; the composer's effort chip filters
+   *  against this list. */
+  variants?: string[];
+  /** Zen public models usable without any login (apiKey "public"). */
+  free?: boolean;
+}
+
+export const OpenCodeListModelsSchema = z.object({
+  /** Project directory the server scopes the model list to. */
+  directory: z.string().optional(),
+});
+export type OpenCodeListModelsInput = z.infer<typeof OpenCodeListModelsSchema>;
+
+export const OpenCodeConnectKeySchema = z.object({
+  integrationId: z.string().min(1),
+  key: z.string().min(1),
+  label: z.string().optional(),
+});
+export type OpenCodeConnectKeyInput = z.infer<typeof OpenCodeConnectKeySchema>;
+
+export const OpenCodeLogoutSchema = z.object({ credentialId: z.string().min(1) });
+export type OpenCodeLogoutInput = z.infer<typeof OpenCodeLogoutSchema>;
+
 /* ── Theme / color scheme ── */
 
 export const SetThemeSchema = z.object({ theme: ThemeNameSchema });
@@ -4417,6 +4472,9 @@ export interface TerminalHistoryLoadResult {
    *  to the terminal's default size). */
   cols?: number;
   rows?: number;
+  /** CLI session ID associated with the session (e.g. after a pre-boot reconcile
+   *  adopts an OpenCode/Codex/Agy session id). */
+  claudeSessionId?: string | null;
 }
 
 /** Auto-name a terminal session from its scrollback (mirrors the chat
@@ -4997,6 +5055,26 @@ export interface RpcMap {
   /** Settings UI eye-icon only — same security carve-out as
    *  customModel.getToken / piModels.getApiKey. */
   "codexModels.getApiKey": (input: GetCodexApiKeyInput) => Promise<{ apiKey: string | null }>;
+  // OpenCode (v2) — official-login provider: model list + integration auth.
+  /** Models the server reports for the current auth state (starts the
+   *  embedded server if needed). Also returns login status so the picker can
+   *  show the "login required" empty state. */
+  "opencode.listModels": (
+    input: OpenCodeListModelsInput,
+  ) => Promise<{ models: OpenCodeModelOption[]; loggedIn: boolean }>;
+  /** Binary health + per-integration login status (connected integrations
+   *  with their credential ids). Never returns secrets. */
+  "opencode.authStatus": () => Promise<{
+    installed: boolean;
+    version?: string;
+    integrations: OpenCodeIntegrationStatus[];
+    error?: string;
+  }>;
+  /** Connect an integration with an API key (opencode Zen: integration id
+   *  "opencode", key from opencode.ai/auth). Desktop-only. */
+  "opencode.connectKey": (input: OpenCodeConnectKeyInput) => Promise<{ ok: boolean; error?: string }>;
+  /** Remove one stored credential (logout). Desktop-only. */
+  "opencode.logout": (input: OpenCodeLogoutInput) => Promise<{ ok: boolean; error?: string }>;
   // GitHub integration (PR / issue panel)
   /** Token status + github.com repos discoverable under a project path. */
   "github.getContext": (input: GithubGetContextInput) => Promise<{ context: GitHubContextResult }>;
@@ -5597,6 +5675,11 @@ export const IPC = {
   CODEX_MODELS_SAVE: "codexModels:save",
   CODEX_MODELS_DELETE: "codexModels:delete",
   CODEX_MODELS_GET_API_KEY: "codexModels:getApiKey",
+  // OpenCode (v2) — official-login provider
+  OPENCODE_LIST_MODELS: "opencode:listModels",
+  OPENCODE_AUTH_STATUS: "opencode:authStatus",
+  OPENCODE_CONNECT_KEY: "opencode:connectKey",
+  OPENCODE_LOGOUT: "opencode:logout",
   // Theme / color scheme
   THEME_GET: "theme:get",
   THEME_SET: "theme:set",

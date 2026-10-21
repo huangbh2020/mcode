@@ -91,6 +91,7 @@ export function ModelDropdown({
   const providers = useSessionStore((s) => s.providers);
   const piAvailableModels = useSessionStore((s) => s.piAvailableModels);
   const codexAvailableModels = useSessionStore((s) => s.codexAvailableModels);
+  const opencodeAvailableModels = useSessionStore((s) => s.opencodeAvailableModels);
   // Controlled override wins over the global slots; the pick callbacks route
   // back through onPick instead of mutating the session config.
   const model = controller ? controller.model : storeModel;
@@ -108,6 +109,7 @@ export function ModelDropdown({
   const provider = providers.find((p) => p.id === providerId);
   const isPi = provider?.id === "pi-sdk";
   const isCodex = provider?.id === "codex-sdk";
+  const isOpencode = provider?.id === "opencode-sdk";
   const isClaude = provider?.id === "claude-sdk";
   // Built-in aliases come from the provider's capabilities (claude: static
   // aliases Auto/Sonnet/Opus/Fable). Pi declares none — its models are dynamic
@@ -159,11 +161,31 @@ export function ModelDropdown({
     return groups;
   }, [isCodex, codexAvailableModels]);
   const codexModelCount = codexAvailableModels.length;
+  // OpenCode surfaces the official server model list exactly like pi/codex: a
+  // supplier-grouped dynamic list (opencodeAvailableModels, from /api/model —
+  // Zen free models appear even without login), no custom-endpoint section,
+  // no builtin aliases.
+  const showOpencodeModels = isOpencode && opencodeAvailableModels.length > 0;
+  const opencodeGroups = useMemo(() => {
+    if (!isOpencode) return [];
+    const groups: { supplier: string; models: typeof opencodeAvailableModels }[] = [];
+    for (const b of opencodeAvailableModels) {
+      const supplier = b.supplier ?? b.id.split("/")[0] ?? b.id;
+      let g = groups.find((x) => x.supplier === supplier);
+      if (!g) {
+        g = { supplier, models: [] };
+        groups.push(g);
+      }
+      g.models.push(b);
+    }
+    return groups;
+  }, [isOpencode, opencodeAvailableModels]);
+  const opencodeModelCount = opencodeAvailableModels.length;
   // "管理模型" lands on the unified model-config settings section. claude
   // (custom endpoints), pi (models.json providers) and codex (Responses-API
   // providers) live on the same "custom-models" page, distinguished by a
   // type badge in its left list.
-  const manageTarget: string | null = isPi || isClaude || isCodex ? "custom-models" : null;
+  const manageTarget: string | null = isPi || isClaude || isCodex || isOpencode ? "custom-models" : null;
 
   // Chip label: resolve the current `model` against the ACTIVE provider's
   // model surface only. Model ids are per-provider (claude uses gateway model
@@ -182,12 +204,13 @@ export function ModelDropdown({
   const builtin = builtinModels.find((b) => b.id === model);
   const piModel = isPi ? piAvailableModels.find((b) => b.id === model) : undefined;
   const codexModel = isCodex ? codexAvailableModels.find((b) => b.id === model) : undefined;
+  const opencodeModel = isOpencode ? opencodeAvailableModels.find((b) => b.id === model) : undefined;
   const unselected = !(activeCustom
     ? activeEntry
-    : piModel ?? codexModel ?? builtin);
+    : piModel ?? codexModel ?? opencodeModel ?? builtin);
   const chipLabel = activeCustom
     ? (activeEntry?.id ?? t("chat.model.unselected"))
-    : piModel?.label ?? codexModel?.label ?? builtin?.label ?? t("chat.model.unselected");
+    : piModel?.label ?? codexModel?.label ?? opencodeModel?.label ?? builtin?.label ?? t("chat.model.unselected");
 
   // Send-time "no model picked" guard: the store bumps `modelGuardPulse`
   // instead of firing a global toast, and the chip answers in place — a short
@@ -310,7 +333,7 @@ export function ModelDropdown({
                 aliases at all (its models are user-configured, surfaced via
                 the pi "模型列表" section). Future providers that declare
                 builtinModels still surface them here. */}
-            {!isClaude && !isPi && !isCodex && builtinModels.length > 0 && (
+            {!isClaude && !isPi && !isCodex && !isOpencode && builtinModels.length > 0 && (
               <div className="border-b border-edge/60 pb-1">
                 <div className="px-3 py-1 text-xs uppercase tracking-wide text-content-subtle">
                   {t("chat.model.builtin")}
@@ -476,6 +499,86 @@ export function ModelDropdown({
                                 >
                                   <span className="flex min-w-0 items-baseline gap-2">
                                     <span className="truncate font-medium">{b.label}</span>
+                                    {b.hint && (
+                                      <span className="shrink-0 rounded bg-accent/15 px-1 text-[10px] text-accent">{b.hint}</span>
+                                    )}
+                                  </span>
+                                  {active && <IconCheck size={14} className="shrink-0" />}
+                                </Menu.Item>
+                              );
+                            })}
+                          </Menu.Popup>
+                        </Menu.Positioner>
+                      </Menu.Portal>
+                    </Menu.SubmenuRoot>
+                  );
+                })}
+              </div>
+            )}
+
+            {/* OpenCode models: the official server list (/api/model — official
+                login surface; Zen free models appear even without login).
+                Grouped by supplier (same shape as pi/codex). Each entry is a
+                "providerID/modelId" string passed as ModelRef by
+                OpencodeProvider at prompt time. */}
+            {showOpencodeModels && (
+              <div className="border-b border-edge/60 pb-1">
+                <div className="flex items-center justify-between px-3 py-1">
+                  <span className="text-xs uppercase tracking-wide text-content-subtle">{t("chat.model.list")}</span>
+                  <span className="text-xs text-content-subtle">{opencodeModelCount}</span>
+                </div>
+                {opencodeGroups.map((group) => {
+                  const groupActive = group.models.some((b) => model === b.id);
+                  const groupRow = (
+                    <span className="flex min-w-0 items-center gap-2">
+                      <span className="truncate font-medium">{group.supplier}</span>
+                      {groupActive && <IconCheck size={14} className="shrink-0" />}
+                    </span>
+                  );
+                  const groupClasses = cn(
+                    "flex w-full items-center justify-between px-3 py-2 text-left text-[13px] outline-none select-none",
+                    "data-[highlighted]:bg-surface-muted data-[highlighted]:text-content",
+                    groupActive ? "text-accent" : "text-content-muted",
+                  );
+                  return (
+                    <Menu.SubmenuRoot key={group.supplier}>
+                      <Menu.SubmenuTrigger
+                        openOnHover
+                        closeDelay={120}
+                        className={groupClasses}
+                      >
+                        {groupRow}
+                        <IconChevronRight size={12} className="ml-2 shrink-0 opacity-60" />
+                      </Menu.SubmenuTrigger>
+                      <Menu.Portal>
+                        <Menu.Positioner side="right" align="start" sideOffset={4}>
+                          <Menu.Popup
+                            className={cn(
+                              "z-50 min-w-[220px] origin-left rounded-lg border border-edge bg-surface py-1.5 shadow-2xl",
+                              "data-[ending-style]:scale-95 data-[ending-style]:opacity-0",
+                              "data-[starting-style]:scale-95 data-[starting-style]:opacity-0",
+                              "transition-[transform,opacity] duration-100",
+                            )}
+                          >
+                            {group.models.map((b) => {
+                              const active = model === b.id;
+                              return (
+                                <Menu.Item
+                                  key={b.id}
+                                  onClick={() => setModel(b.id)}
+                                  className={cn(
+                                    "flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-[13px] outline-none select-none",
+                                    "data-[highlighted]:bg-surface-muted",
+                                    active ? "text-accent" : "text-content-muted",
+                                  )}
+                                >
+                                  <span className="flex min-w-0 items-baseline gap-2">
+                                    <span className="truncate font-medium">{b.label}</span>
+                                    {b.free && (
+                                      <span className="shrink-0 rounded bg-success/15 px-1 text-[10px] text-success">
+                                        {t("chat.model.free")}
+                                      </span>
+                                    )}
                                     {b.hint && (
                                       <span className="shrink-0 rounded bg-accent/15 px-1 text-[10px] text-accent">{b.hint}</span>
                                     )}

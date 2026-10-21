@@ -50,14 +50,16 @@ export interface TerminalCliCatalogEntry {
  *  the settings rows and the new-terminal menu read top-to-bottom the same.
  *  Package names verified on a real machine (npm ls -g, 2026-10-19):
  *  claude → @anthropic-ai/claude-code, pi → @earendil-works/pi-coding-agent,
- *  codex → @openai/codex, opencode → opencode-ai (2026-10-20). agy is NOT on
+ *  codex → @openai/codex. opencode moved to the v2 package @opencode/cli
+ *  (2026-10-21; v1 was opencode-ai — the v2 CLI is what the GUI provider
+ *  embeds, and both surfaces should stay on the same line). agy is NOT on
  *  npm — the Antigravity IDE drops it at %LOCALAPPDATA%\agy\bin (its
  *  `agy install` only adds that to PATH). */
 export const TERMINAL_CLI_CATALOG: readonly TerminalCliCatalogEntry[] = [
   { providerId: "claude-sdk", command: "claude", packageName: "@anthropic-ai/claude-code", downloadUrl: null },
   { providerId: "pi-sdk", command: "pi", packageName: "@earendil-works/pi-coding-agent", downloadUrl: null },
   { providerId: "codex-sdk", command: "codex", packageName: "@openai/codex", downloadUrl: null },
-  { providerId: "opencode", command: "opencode", packageName: "opencode-ai", downloadUrl: null },
+  { providerId: "opencode", command: "opencode", packageName: "@opencode/cli", downloadUrl: null },
   { providerId: "antigravity", command: "agy", packageName: null, downloadUrl: "https://antigravity.google/" },
 ];
 

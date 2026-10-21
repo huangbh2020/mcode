@@ -992,6 +992,24 @@ export const zh = {
   "settings.usage.unknownVendor": "未知厂商",
   "settings.usage.empty": "暂无用量数据,完成一轮对话后此处会出现统计。",
 
+
+  // ── OpenCode (v2) — official-login panel (OpenCodeLoginPanel) ──
+  "settings.opencode.refresh": "刷新",
+  "settings.opencode.notInstalled": "未安装",
+  "settings.opencode.connected": "已登录的集成",
+  "settings.opencode.noneConnected": "尚未登录任何集成。OpenCode Zen 的免费模型无需登录即可使用;登录后可解锁全部官方模型。",
+  "settings.opencode.credentialCount": "{n} 个凭据",
+  "settings.opencode.connectTitle": "API Key 登录",
+  "settings.opencode.connectHint": "凭据保存在 OpenCode 自己的存储中,与本机终端 CLI 共享(终端里用 /connect 登录的集成也会出现在上方)。推荐使用官方 OpenCode Zen:到 opencode.ai/auth 生成 API Key 后粘贴。",
+  "settings.opencode.keyPlaceholder": "粘贴 API Key…",
+  "settings.opencode.getKey": "获取 Key",
+  "settings.opencode.connect": "登录",
+  "settings.opencode.connectOk": "登录成功。",
+  "settings.opencode.errKeyRequired": "请先粘贴 API Key。",
+  "settings.opencode.logout": "登出",
+  "settings.opencode.models": "可用模型",
+  "settings.opencode.noModels": "暂无可用模型:请确认 OpenCode CLI 已安装并刷新。",
+
   // ── mobile settings sheet (MobileSettingsSheet) ──
   "settings.mobile.copyLink": "复制访问链接",
   "settings.mobile.copyLinkDone": "已复制",

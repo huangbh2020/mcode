@@ -63,19 +63,34 @@ function findNewestProjectSession(
 ): string | null {
   const db = new DatabaseSync(dbPath, { readOnly: true });
   try {
-    const stmt = db.prepare(
-      // parent_id excludes child sessions (opencode spawns subagent
-      // sessions with a parent link); time_archived excludes sessions the
-      // user archived inside opencode.
-      "SELECT id, directory, time_created FROM session " +
-        "WHERE parent_id IS NULL AND time_archived IS NULL AND time_created >= ? " +
-        "ORDER BY time_created DESC",
-    );
-    const rows = stmt.all(createdAfterMs) as unknown as OpenCodeSessionRow[];
-    for (const row of rows) {
-      if (!row.id || claimed.has(row.id)) continue;
-      if (!row.directory || normDirKey(row.directory) !== projectKey) continue;
-      return row.id;
+    // OpenCode 2.x stores sessions in `session_v2`; 1.x stored them in `session`.
+    // Detect which tables exist in this store. Prioritize session_v2 (newer).
+    const tableRows = db
+      .prepare(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('session_v2', 'session')",
+      )
+      .all() as unknown as Array<{ name: string }>;
+    const tableNames = new Set(tableRows.map((r) => r.name));
+
+    const tablesToQuery: string[] = [];
+    if (tableNames.has("session_v2")) tablesToQuery.push("session_v2");
+    if (tableNames.has("session")) tablesToQuery.push("session");
+
+    for (const table of tablesToQuery) {
+      const stmt = db.prepare(
+        // parent_id excludes child sessions (opencode spawns subagent
+        // sessions with a parent link); time_archived excludes sessions the
+        // user archived inside opencode.
+        `SELECT id, directory, time_created FROM ${table} ` +
+          "WHERE parent_id IS NULL AND time_archived IS NULL AND time_created >= ? " +
+          "ORDER BY time_created DESC",
+      );
+      const rows = stmt.all(createdAfterMs) as unknown as OpenCodeSessionRow[];
+      for (const row of rows) {
+        if (!row.id || claimed.has(row.id)) continue;
+        if (!row.directory || normDirKey(row.directory) !== projectKey) continue;
+        return row.id;
+      }
     }
     return null;
   } finally {
@@ -89,17 +104,25 @@ export function reconcileOpenCodeTerminalSessionId(
   projectPath: string,
   /** DB path override (smoke fixture). */
   dbPath = defaultDbPath(),
+  force = false,
 ): string | null {
   if (session.kind !== "terminal" || session.providerId !== "opencode") return null;
   const now = Date.now();
   const last = reconcileLastAttempt.get(session.id) ?? 0;
-  if (now - last < RECONCILE_THROTTLE_MS) return null;
+  if (!force && now - last < RECONCILE_THROTTLE_MS) return null;
   reconcileLastAttempt.set(session.id, now);
 
   try {
     // Idempotence: once adopted, the id is in the claimed set (this row
     // references it) and gets skipped like any other claimed session.
+    // The claimed set ALSO includes GUI opencode sessions' ids (providerId
+    // "opencode-sdk" chat rows) — without them, a terminal opencode session
+    // opened in the same project could adopt the id of a session the GUI
+    // provider itself created and is actively resuming.
     const claimed = new Set(SessionRepo.listTerminalClaudeSessionIds());
+    for (const guiId of SessionRepo.listProviderSessionIds("opencode-sdk")) {
+      if (guiId) claimed.add(guiId);
+    }
     const projectKey = normDirKey(projectPath);
     const best = findNewestProjectSession(
       dbPath,

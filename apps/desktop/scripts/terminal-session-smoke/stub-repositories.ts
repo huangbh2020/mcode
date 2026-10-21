@@ -37,6 +37,11 @@ export const SessionRepo = {
     const g2 = globalThis as { __TERMINAL_CLAIMED?: string[] };
     return g2.__TERMINAL_CLAIMED ?? [];
   },
+  // GUI-provider exclusion set for the reconcilers (opencode-sdk rows).
+  listProviderSessionIds(_providerId: string): string[] {
+    const g2 = globalThis as { __GUI_PROVIDER_CLAIMED?: string[] };
+    return g2.__GUI_PROVIDER_CLAIMED ?? [];
+  },
 };
 
 export const ProjectRepo = {

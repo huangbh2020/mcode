@@ -202,6 +202,19 @@ const api = {
       ipcRenderer.invoke(IPC.CODEX_MODELS_GET_API_KEY, input)) as RpcMap["codexModels.getApiKey"],
   },
 
+  /** OpenCode (v2) — official-login provider. No endpoint config: login
+   *  state lives inside opencode itself (shared with the terminal CLI);
+   *  connectKey/logout are desktop-only affordances. */
+  opencode: {
+    listModels: ((input) =>
+      ipcRenderer.invoke(IPC.OPENCODE_LIST_MODELS, input)) as RpcMap["opencode.listModels"],
+    authStatus: (() => ipcRenderer.invoke(IPC.OPENCODE_AUTH_STATUS)) as RpcMap["opencode.authStatus"],
+    connectKey: ((input) =>
+      ipcRenderer.invoke(IPC.OPENCODE_CONNECT_KEY, input)) as RpcMap["opencode.connectKey"],
+    logout: ((input) =>
+      ipcRenderer.invoke(IPC.OPENCODE_LOGOUT, input)) as RpcMap["opencode.logout"],
+  },
+
   /** Color scheme: get/set the preference; theme.changed fires when the
    *  effective theme changes (incl. OS-side changes in 'system' mode). */
   theme: {

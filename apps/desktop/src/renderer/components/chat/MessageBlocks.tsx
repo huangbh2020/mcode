@@ -45,9 +45,11 @@ import { fmtTokens } from "@renderer/lib/contextWindow.js";
 import { RenderErrorBoundary } from "./RenderErrorBoundary.js";
 import { lineDiff, diffSummary } from "@renderer/lib/lineDiff.js";
 import { FileLink } from "./FileLink.js";
+import { ToolPathDisplay } from "./ToolPathDisplay.js";
 import { MediaGallery, type MediaBlock } from "./mediaGallery.js";
 import { TagPopover } from "./TagPopover.js";
 import { isImageFilePath, type ContentTag } from "@renderer/lib/contentTag.js";
+import { formatPathWithMaxDirsText } from "@renderer/lib/path.js";
 import { toolDisplayName } from "@renderer/lib/toolNames.js";
 import { BUILT_IN_COMMANDS } from "@renderer/lib/slashCommands.js";
 
@@ -1664,12 +1666,14 @@ function ToolCard({
   liveTurn?: boolean;
   projectPath?: string | null;
 }) {
-  if (block.toolName === "Edit" && isEditInput(block.input)) {
+  const isEdit = block.toolName === "Edit" || block.toolName === "edit";
+  const editInput = isEdit ? getNormalizedEditInput(block.input) : null;
+  if (editInput) {
     return (
       <EditToolCard
-        filePath={block.input.file_path}
-        oldString={block.input.old_string}
-        newString={block.input.new_string}
+        filePath={editInput.filePath}
+        oldString={editInput.oldString}
+        newString={editInput.newString}
         status={block.status}
         result={block.result}
         defaultOpen={defaultOpen}
@@ -1678,11 +1682,13 @@ function ToolCard({
       />
     );
   }
-  if (block.toolName === "Write" && isWriteInput(block.input)) {
+  const isWrite = block.toolName === "Write" || block.toolName === "write";
+  const writeInput = isWrite ? getNormalizedWriteInput(block.input) : null;
+  if (writeInput) {
     return (
       <WriteToolCard
-        filePath={block.input.file_path}
-        content={block.input.content}
+        filePath={writeInput.filePath}
+        content={writeInput.content}
         status={block.status}
         result={block.result}
         defaultOpen={defaultOpen}
@@ -1833,9 +1839,7 @@ function EditToolCard({
         <StatusIcon status={status} live={live} />
         <ToolIcon name="Edit" className="shrink-0 text-content-subtle" />
         <span className="shrink-0 font-medium text-content-muted">{toolDisplayName(t, "Edit")}</span>
-        <span className="min-w-0 flex-1 truncate font-mono text-content-subtle" title={filePath}>
-          {filePath}
-        </span>
+        <ToolPathDisplay filePath={filePath} className="min-w-0 flex-1" />
         {status === "error" && <span className="shrink-0 text-danger whitespace-nowrap [font-size:var(--chat-fs-xxs)]">{t("chatStream.opFailed")}</span>}
         <span className="ml-auto flex shrink-0 items-center gap-1.5 whitespace-nowrap [font-size:var(--chat-fs-xxs)]">
           {adds > 0 && <span className="text-success">+{adds}</span>}
@@ -1922,9 +1926,7 @@ function WriteToolCard({
         <StatusIcon status={status} live={live} />
         <ToolIcon name="Write" className="shrink-0 text-content-subtle" />
         <span className="shrink-0 font-medium text-content-muted">{toolDisplayName(t, "Write")}</span>
-        <span className="min-w-0 flex-1 truncate font-mono text-content-subtle" title={filePath}>
-          {filePath}
-        </span>
+        <ToolPathDisplay filePath={filePath} className="min-w-0 flex-1" />
         {status === "error" && <span className="shrink-0 text-danger whitespace-nowrap [font-size:var(--chat-fs-xxs)]">{t("chatStream.opFailed")}</span>}
         <span className="ml-auto flex shrink-0 items-center gap-1.5 whitespace-nowrap [font-size:var(--chat-fs-xxs)]">
           {diff && adds > 0 && <span className="text-success">+{adds}</span>}
@@ -2015,7 +2017,11 @@ function GenericToolCard({
         <span className="shrink-0 font-medium text-content-muted">{toolDisplayName(t, block.toolName)}</span>
         {summaryToolPath ? (
           <span className="min-w-0 flex-1 truncate font-mono text-content-subtle">
-            <FileLink token={summaryToolPath} projectPath={projectPath} />
+            <FileLink
+              token={summaryToolPath}
+              projectPath={projectPath}
+              display={<ToolPathDisplay filePath={summaryToolPath} highlightFileName />}
+            />
           </span>
         ) : (
           <span className="min-w-0 flex-1 truncate text-content-subtle">{toolSummary(block.toolName, block.input)}</span>
@@ -2164,6 +2170,7 @@ const TOOL_ICON_MAP: Record<string, ComponentType<{ size?: number; className?: s
   TaskCreate: IconListCheck,
   TaskUpdate: IconListCheck,
   Task: PiRobot,
+  task: PiRobot,
   WebSearch: IconWorldSearch,
   WebFetch: IconWorldWww,
   AskUserQuestion: IconHelpCircle,
@@ -2197,9 +2204,14 @@ export function toolSummary(name: string, input: unknown): string {
   const obj = input as Record<string, unknown>;
   switch (name) {
     case "Read":
+    case "read":
     case "Write":
+    case "write":
     case "Edit":
-      return String(obj.file_path ?? "");
+    case "edit": {
+      const raw = String(obj.file_path ?? obj.path ?? obj.filePath ?? "");
+      return raw ? formatPathWithMaxDirsText(raw) : "";
+    }
     case "Bash":
     case "PowerShell":
       return String(obj.command ?? obj.description ?? "");
@@ -2209,6 +2221,17 @@ export function toolSummary(name: string, input: unknown): string {
       return String(obj.pattern ?? "");
     case "TodoWrite":
       return "todos";
+    case "Task":
+    case "task": {
+      const desc =
+        typeof obj.description === "string"
+          ? obj.description
+          : typeof obj.prompt === "string"
+          ? obj.prompt.slice(0, 60)
+          : "";
+      const type = typeof obj.subagent_type === "string" ? ` [${obj.subagent_type}]` : "";
+      return desc ? `${desc}${type}` : "";
+    }
     case "AskUserQuestion": {
       // input is { questions: [{ header, question, multiSelect, options }] }
       // (or a { item: [...] } wrapper). Show the first question's text so the
@@ -2227,7 +2250,7 @@ export function toolSummary(name: string, input: unknown): string {
     case "read":
     case "write":
     case "edit":
-      return String(obj.file_path ?? obj.path ?? "");
+      return String(obj.file_path ?? obj.path ?? obj.filePath ?? "");
     case "bash":
       return String(obj.command ?? obj.description ?? "");
     case "find":
@@ -2298,11 +2321,57 @@ function resultPreview(v: unknown): string {
   return truncateResult(v);
 }
 
-/* ─── type guards ───
- * Edit and Write have well-known input shapes from the Claude Agent SDK
- * (verified against docs/claude-stream-json.md). We narrow the generic
- * `unknown` Block input here so EditToolCard/WriteToolCard can render
- * structured content instead of falling back to the JSON dump. */
+/* ─── type guards & input normalizers ───
+ * Edit and Write have well-known input shapes from Claude Agent SDK and
+ * OpenCode/Pi SDK. We normalize their shapes here so EditToolCard / WriteToolCard
+ * can render structured diffs and content previews instead of falling back to raw JSON. */
+
+interface NormalizedEditInput {
+  filePath: string;
+  oldString: string;
+  newString: string;
+}
+
+interface NormalizedWriteInput {
+  filePath: string;
+  content: string;
+}
+
+function getNormalizedEditInput(i: unknown): NormalizedEditInput | null {
+  if (!i || typeof i !== "object") return null;
+  const o = i as Record<string, unknown>;
+  const filePath =
+    typeof o.file_path === "string" ? o.file_path :
+    typeof o.path === "string" ? o.path :
+    typeof o.filePath === "string" ? o.filePath : null;
+  const oldString =
+    typeof o.old_string === "string" ? o.old_string :
+    typeof o.oldString === "string" ? o.oldString : null;
+  const newString =
+    typeof o.new_string === "string" ? o.new_string :
+    typeof o.newString === "string" ? o.newString : null;
+  if (filePath && oldString !== null && newString !== null) {
+    return { filePath, oldString, newString };
+  }
+  return null;
+}
+
+function getNormalizedWriteInput(i: unknown): NormalizedWriteInput | null {
+  if (!i || typeof i !== "object") return null;
+  const o = i as Record<string, unknown>;
+  const filePath =
+    typeof o.file_path === "string" ? o.file_path :
+    typeof o.path === "string" ? o.path :
+    typeof o.filePath === "string" ? o.filePath : null;
+  const content =
+    typeof o.content === "string" ? o.content :
+    typeof o.contents === "string" ? o.contents :
+    typeof o.text === "string" ? o.text : null;
+  if (filePath && content !== null) {
+    return { filePath, content };
+  }
+  return null;
+}
 
 /** Edit tool input: { file_path, old_string, new_string }. */
 function isEditInput(
@@ -2324,35 +2393,29 @@ function isWriteInput(i: unknown): i is { file_path: string; content: string } {
   return typeof o.file_path === "string" && typeof o.content === "string";
 }
 
-/** Pull a single-file path out of a tool input, accepting either Claude's
- *  `file_path` or Pi's `path` field (Pi's read/write/edit use `path`). Used by
- *  extractToolFilePath to decide whether the card's summary line should
- *  render as a clickable file link. */
+/** Pull a single-file path out of a tool input, accepting Claude's `file_path`,
+ *  OpenCode's `path`/`filePath`, or Pi's `path`. Used by extractToolFilePath to
+ *  decide whether the card's summary line should render as a clickable file link. */
 function pathField(input: unknown): string | null {
   if (!input || typeof input !== "object") return null;
   const o = input as Record<string, unknown>;
   if (typeof o.file_path === "string") return o.file_path;
   if (typeof o.path === "string") return o.path;
+  if (typeof o.filePath === "string") return o.filePath;
   return null;
 }
 
 /** Extract a `file_path` from a tool's input when the tool is one that
  *  operates on a single file (Read / Write / Edit). Returns null for tools
  *  whose summary is not a path (Bash, Grep, Glob, etc.) so GenericToolCard
- *  renders their plain-text summary instead of a link. Reuses the Edit/Write
- *  type guards and adds a plain Read fallback. Accepts both Claude
- *  (capitalized) and Pi (lowercase) tool names. */
+ *  renders their plain-text summary instead of a link. Accepts both Claude
+ *  (capitalized) and OpenCode/Pi (lowercase) tool names. */
 function extractToolFilePath(toolName: string, input: unknown): string | null {
-  // Claude (Edit/Write are narrowed first so the structured cards get the
-  // exact field; Read falls through to the lenient pathField).
-  if (toolName === "Edit" && isEditInput(input)) return input.file_path;
-  if (toolName === "Write" && isWriteInput(input)) return input.file_path;
-  if (toolName === "Read") return pathField(input);
-  // Pi (lowercase). Pi's edit input is { path, edits:[…] } and write is
-  // { path, content } — both carry `path`, so the lenient pathField covers
-  // them without needing pi-specific type guards.
-  if (toolName === "read" || toolName === "write" || toolName === "edit") {
-    return pathField(input);
-  }
+  const normEdit = getNormalizedEditInput(input);
+  if ((toolName === "Edit" || toolName === "edit") && normEdit) return normEdit.filePath;
+  const normWrite = getNormalizedWriteInput(input);
+  if ((toolName === "Write" || toolName === "write") && normWrite) return normWrite.filePath;
+  if (toolName === "Read" || toolName === "read") return pathField(input);
+  if (toolName === "find" || toolName === "Glob") return pathField(input);
   return null;
 }

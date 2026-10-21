@@ -151,6 +151,22 @@ class TerminalManagerImpl {
     env.LANG = env.LANG ?? "en_US.UTF-8";
 
     const id = randomUUID();
+
+    if (!existsSync(opts.cwd)) {
+      log.warn(`terminal spawn rejected: cwd does not exist (${opts.cwd})`);
+      return { ok: false, error: `工作目录不存在或已被移除: ${opts.cwd}` };
+    }
+    try {
+      if (!statSync(opts.cwd).isDirectory()) {
+        log.warn(`terminal spawn rejected: cwd is not a directory (${opts.cwd})`);
+        return { ok: false, error: `工作目录必须是文件夹: ${opts.cwd}` };
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      log.warn(`terminal spawn rejected: failed to stat cwd (${opts.cwd}): ${msg}`);
+      return { ok: false, error: `无法访问工作目录 (${opts.cwd}): ${msg}` };
+    }
+
     let pty: IPty;
     try {
       // On Windows, force the conpty.dll path (useConptyDll: true). node-pty's
@@ -172,7 +188,10 @@ class TerminalManagerImpl {
         useConptyDll: process.platform === "win32",
       });
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
+      let msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes("error code: 267") || msg.includes("267")) {
+        msg = `${msg} (工作目录无效或不存在: ${opts.cwd})`;
+      }
       log.error(`terminal spawn failed: ${resolved.file} ${msg}`);
       return { ok: false, error: `启动 shell 失败 (${resolved.label}): ${msg}` };
     }
