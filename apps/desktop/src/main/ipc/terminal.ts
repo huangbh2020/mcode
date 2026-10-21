@@ -9,6 +9,7 @@
  */
 import type { IpcMain } from "electron";
 import { app, shell } from "electron";
+import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import {
   IPC,
@@ -72,7 +73,16 @@ export function registerTerminalHandlers(ipcMain: IpcMain): void {
         return { ok: false as const, error: "未知项目路径，拒绝创建终端" };
       }
 
-      const cwd = resolve(input.cwd ?? projectPath);
+      if (!existsSync(projectPath)) {
+        return { ok: false as const, error: `项目目录不存在或已被移除: ${projectPath}` };
+      }
+
+      let cwd = resolve(input.cwd ?? projectPath);
+      if (!existsSync(cwd)) {
+        // 子目录不存在时回退到项目根目录
+        cwd = projectPath;
+      }
+
       if (!pathWithin(projectPath, cwd)) {
         return { ok: false as const, error: "cwd 必须位于项目目录内" };
       }
@@ -261,9 +271,20 @@ export function registerTerminalHandlers(ipcMain: IpcMain): void {
   ipcMain.handle(IPC.TERMINAL_HISTORY_LOAD, (_evt, raw) => {
     try {
       const input = TerminalHistoryLoadSchema.parse(raw);
+      const session = SessionRepo.get(input.sessionId);
+      let claudeSessionId = session?.claudeSessionId ?? null;
+      if (session && session.kind === "terminal" && session.providerId === "opencode") {
+        if (!claudeSessionId || !claudeSessionId.startsWith("ses")) {
+          const project = ProjectRepo.get(session.projectId);
+          if (project) {
+            const adopted = reconcileOpenCodeTerminalSessionId(session, project.path, undefined, true);
+            if (adopted) claudeSessionId = adopted;
+          }
+        }
+      }
       const data = loadTerminalHistory(historyBaseDir(), input.sessionId);
-      if (!data) return { content: null };
-      return { content: data.content, cols: data.cols, rows: data.rows };
+      if (!data) return { content: null, claudeSessionId };
+      return { content: data.content, cols: data.cols, rows: data.rows, claudeSessionId };
     } catch (err) {
       log.warn(`terminal.loadHistory failed: ${err instanceof Error ? err.message : String(err)}`);
       return { content: null };

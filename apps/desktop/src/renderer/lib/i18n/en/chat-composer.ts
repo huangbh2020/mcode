@@ -163,6 +163,7 @@ export const en = {
   "chat.model.default": "Default",
   "chat.model.unselected": "Select model",
   "chat.model.pickHint": "Pick a model first",
+  "chat.model.free": "Free",
   "chat.model.rowLabel": "Model",
 
   // ── model config guard dialog ──

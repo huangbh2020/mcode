@@ -8,6 +8,7 @@ import type { AgentProvider } from "@contracts/provider";
 import { ClaudeAgentSdkProvider } from "./claude-sdk/ClaudeAgentSdkProvider.js";
 import { PiAgentSdkProvider } from "./pi-sdk/PiAgentSdkProvider.js";
 import { CodexAgentSdkProvider } from "./codex-sdk/CodexAgentSdkProvider.js";
+import { OpencodeProvider } from "./opencode-sdk/OpencodeProvider.js";
 
 class ProviderRegistry {
   private providers = new Map<string, AgentProvider>();
@@ -49,3 +50,4 @@ export const providerRegistry = new ProviderRegistry();
 providerRegistry.register(new ClaudeAgentSdkProvider());
 providerRegistry.register(new PiAgentSdkProvider());
 providerRegistry.register(new CodexAgentSdkProvider());
+providerRegistry.register(new OpencodeProvider());

@@ -477,10 +477,15 @@ console.log("[H] terminal CLI catalog");
         `agy --dangerously-skip-permissions --conversation ${uuid}`,
     "antigravity: bare launch (skip-permissions) first, --conversation <uuid> after adoption",
   );
+  const ocSessionId = "ses_deadbeef1234";
   ok(
-    buildTerminalInitCommand("opencode", uuid, false) === "opencode" &&
-      buildTerminalInitCommand("opencode", uuid, true) === `opencode -s ${uuid}`,
+    buildTerminalInitCommand("opencode", ocSessionId, false) === "opencode" &&
+      buildTerminalInitCommand("opencode", ocSessionId, true) === `opencode -s ${ocSessionId}`,
     "opencode: bare launch first (-s needs an existing session), -s <id> after adoption",
+  );
+  ok(
+    buildTerminalInitCommand("opencode", uuid, true) === "opencode",
+    "opencode: unadopted non-ses uuid falls back to bare opencode instead of crashing",
   );
   ok(
     buildTerminalInitCommand("claude-sdk", null, false) === null &&
@@ -622,6 +627,33 @@ console.log("[H] terminal CLI catalog");
       ok(
         reconcileOpenCodeTerminalSessionId(claudeRow, "D:\\proj", fixtureDb) === null,
         "opencode reconciler ignores non-opencode rows",
+      );
+
+      // OpenCode 2.x session_v2 support:
+      const odbV2 = new DatabaseSync(fixtureDb);
+      odbV2.exec(
+        "CREATE TABLE session_v2 (id TEXT PRIMARY KEY, directory TEXT, parent_id TEXT, time_created INTEGER, time_archived INTEGER)",
+      );
+      const insV2 = odbV2.prepare(
+        "INSERT INTO session_v2 (id, directory, parent_id, time_created, time_archived) VALUES (?, ?, ?, ?, ?)",
+      );
+      insV2.run("ses_v2_winner", "D:/proj", null, ocNow - 1000, null);
+      odbV2.close();
+
+      const ocSessionV2 = {
+        id: "sess_oc_v2",
+        kind: "terminal",
+        providerId: "opencode",
+        claudeSessionId: "deadpin-0005",
+        createdAt: ocNow - 60_000,
+      } as unknown as Session;
+      g.__SESSION_CREATE = [ocSessionV2 as unknown as Record<string, unknown> & { id: string }];
+      g.__TERMINAL_CLAIMED = ["ses_winner"];
+      g.__CLAUDE_ID_ADOPT = [];
+      const adoptedOcV2 = reconcileOpenCodeTerminalSessionId(ocSessionV2, "D:\\proj", fixtureDb, true);
+      ok(
+        adoptedOcV2 === "ses_v2_winner",
+        "opencode 2.x: adopted session from session_v2 table",
       );
     } finally {
       await rmBestEffort(ocRoot);
@@ -1089,9 +1121,9 @@ console.log("[N] terminalCliCatalog (management)");
     ok(
       ocProbe.installed === true &&
         ocProbe.path === "C:\\fake\\opencode.cmd" &&
-        ocProbe.packageName === "opencode-ai" &&
+        ocProbe.packageName === "@opencode/cli" &&
         ocProbe.manageMode === "npm",
-      "opencode probe resolves via which + carries the npm package",
+      "opencode probe resolves via which + carries the npm package (v2: @opencode/cli)",
     );
   } finally {
     g.__SMOKE_WHICH__ = undefined;

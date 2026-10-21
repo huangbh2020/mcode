@@ -736,6 +736,18 @@ export const SessionRepo = {
     return rows.map((r) => r.claude_session_id);
   },
 
+  /** claude_session_ids of ALL sessions bound to one provider (any kind) —
+   *  the GUI-provider exclusion set for the terminal resume-reconcilers (a
+   *  GUI opencode-sdk session's id must never be adopted by a terminal row). */
+  listProviderSessionIds(providerId: string): string[] {
+    const rows = getDb()
+      .prepare(
+        "SELECT claude_session_id FROM sessions WHERE provider_id = ? AND claude_session_id IS NOT NULL",
+      )
+      .all(v(providerId)) as unknown as Array<{ claude_session_id: string }>;
+    return rows.map((r) => r.claude_session_id);
+  },
+
   /** Touch a session's updated_at (list ordering) without changing anything
    *  else. Used by the Pi session importer after appending imported message
    *  tails, so a session that grew in the terminal floats back up the list. */

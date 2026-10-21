@@ -566,8 +566,10 @@ function TaskConfig({ run, task }: { run: OrchestrationRun; task: TaskNode }) {
   const providers = useSessionStore((s) => s.providers);
   const customModels = useSessionStore((s) => s.customModels);
   const piModelMaps = useSessionStore((s) => s.piModelMaps);
+  const opencodeModelVariants = useSessionStore((s) => s.opencodeModelVariants);
   const piAvailableModels = useSessionStore((s) => s.piAvailableModels);
   const codexAvailableModels = useSessionStore((s) => s.codexAvailableModels);
+  const opencodeAvailableModels = useSessionStore((s) => s.opencodeAvailableModels);
   const openOrchWorker = useSessionStore((s) => s.openOrchWorker);
   // 失败/取消/阻塞/暂停/待运行都可改配置(改完用「重跑此任务」重新开始);
   // dispatched/running/completed 不可改。
@@ -610,8 +612,11 @@ function TaskConfig({ run, task }: { run: OrchestrationRun; task: TaskNode }) {
     if (providerId === "codex-sdk") {
       return codexAvailableModels.map((m) => ({ value: m.id, label: m.label }));
     }
+    if (providerId === "opencode-sdk") {
+      return opencodeAvailableModels.map((m) => ({ value: m.id, label: m.label }));
+    }
     return [];
-  }, [providerId, customModels, piAvailableModels, codexAvailableModels]);
+  }, [providerId, customModels, piAvailableModels, codexAvailableModels, opencodeAvailableModels]);
 
   // 把选择解析回 {customModelId, model} 覆盖(claude 的 "|" 编码拆开)。
   const parseModel = (sel: string): { customModelId: string | null; model: string | null } => {
@@ -638,6 +643,7 @@ function TaskConfig({ run, task }: { run: OrchestrationRun; task: TaskNode }) {
       model: parsedBinding.model ?? "default",
       providerId,
       piModelMaps,
+      opencodeModelVariants,
     }) ?? [];
   const taskModelSel = task.customModelId
     ? `${task.customModelId}|${task.model ?? "default"}`

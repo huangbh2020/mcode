@@ -91,7 +91,12 @@ export function buildTerminalInitCommand(
       // "Session not found"); after main's reconciler adopts the session id
       // from opencode's SQLite store (opencodeSession.ts), restarts resume
       // with `-s <id>` ("session id to continue").
-      return restored ? `opencode -s ${cliSessionId}` : "opencode";
+      //
+      // opencode validates that session IDs start with "ses" (e.g. "ses_...").
+      // A raw pre-generated UUID means reconciliation has not adopted the real
+      // session yet; passing it causes `Error: Expected a string starting with "ses"`.
+      // Fall back to bare "opencode" if cliSessionId is not yet a valid "ses" id.
+      return restored && cliSessionId.startsWith("ses") ? `opencode -s ${cliSessionId}` : "opencode";
     case "antigravity":
       // Same shape as codex: no first-run pin; after main's reconciler
       // adopts the conversation uuid (agySession.ts), restarts resume with

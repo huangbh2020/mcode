@@ -89,6 +89,7 @@ export function TerminalSessionPane({
       let initialContent: string | undefined;
       let cols: number | undefined;
       let rows: number | undefined;
+      let adoptedCliId: string | null | undefined;
       try {
         const res = await api.terminal.loadHistory({ sessionId });
         if (res.content) {
@@ -96,10 +97,13 @@ export function TerminalSessionPane({
           cols = res.cols;
           rows = res.rows;
         }
+        if (res.claudeSessionId) {
+          adoptedCliId = res.claudeSessionId;
+        }
       } catch {
         /* first open or persistence disabled */
       }
-      const cliId = session?.claudeSessionId;
+      const cliId = adoptedCliId ?? session?.claudeSessionId;
       const initCommand = buildTerminalInitCommand(
         session?.providerId ?? "claude-sdk",
         cliId,

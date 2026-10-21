@@ -103,3 +103,58 @@ export function resolveRelativePath(baseDir: string, rel: string): string {
   }
   return (slashRoot ? "/" : "") + segments.join("/");
 }
+
+export interface FormattedPathResult {
+  fileName: string;
+  dirDisplay: string;
+  fullPath: string;
+}
+
+/** Formats a file path for compact display in tool headers:
+ *  - `fileName`: the basename of the file (e.g. `foo.ts`)
+ *  - `dirDisplay`: the containing directory structure clamped to at most `maxDirs` levels.
+ *    If trimmed, prefixed with `.../`. Trailing slash included if non-empty.
+ *  - `fullPath`: the original full path unmodified (for tooltips / title).
+ */
+export function formatPathWithMaxDirs(filePath: string, maxDirs = 5): FormattedPathResult {
+  if (!filePath) {
+    return { fileName: "", dirDisplay: "", fullPath: "" };
+  }
+  const fullPath = filePath;
+  const fileName = basename(filePath);
+  const dir = dirname(filePath);
+  if (!dir) {
+    return { fileName, dirDisplay: "", fullPath };
+  }
+
+  // Normalize separators to POSIX for uniform segment splitting
+  const normDir = dir.replace(/\\/g, "/");
+  const isSlashRoot = normDir.startsWith("/");
+  const segments = normDir.split("/").filter(Boolean);
+
+  if (segments.length <= maxDirs) {
+    const prefix = isSlashRoot ? "/" : "";
+    return {
+      fileName,
+      dirDisplay: prefix + segments.join("/") + "/",
+      fullPath,
+    };
+  }
+
+  const tailSegments = segments.slice(-maxDirs);
+  return {
+    fileName,
+    dirDisplay: ".../" + tailSegments.join("/") + "/",
+    fullPath,
+  };
+}
+
+/** One-line text version of formatPathWithMaxDirs:
+ *  `fileName  dirDisplay` (or just `fileName` if no directory).
+ */
+export function formatPathWithMaxDirsText(filePath: string, maxDirs = 5): string {
+  const { fileName, dirDisplay } = formatPathWithMaxDirs(filePath, maxDirs);
+  if (!dirDisplay) return fileName;
+  return `${fileName}  ${dirDisplay}`;
+}
+

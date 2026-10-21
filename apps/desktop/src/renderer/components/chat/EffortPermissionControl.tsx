@@ -296,6 +296,7 @@ export function EffortChip({
   const storeModel = useSessionStore((s) => s.model);
   const customModels = useSessionStore((s) => s.customModels);
   const piModelMaps = useSessionStore((s) => s.piModelMaps);
+  const opencodeModelVariants = useSessionStore((s) => s.opencodeModelVariants);
 
   const effort = controller ? controller.value : storeEffort;
   const setEffort = (v: string): void => {
@@ -319,6 +320,7 @@ export function EffortChip({
     model,
     providerId,
     piModelMaps,
+    opencodeModelVariants,
   });
 
   // Provider declares no thinking levels (or the model's thinking is not

@@ -36,6 +36,24 @@ export function levelsFromValues(values: string[]): ThinkingLevelOption[] {
   return values.map((value) => ({ value, label: levelLabel(value) }));
 }
 
+/** Pick the default thinking-level value for a resolved level list:
+ *
+ *  1. list declares an explicit neutral slot ("default" / Auto — OpenCode, Claude, Codex)
+ *     → "default";
+ *  2. list mirrors an SDK's raw ladder without a neutral slot (Pi: off..max)
+ *     → "medium" (Pi SDK's DEFAULT_THINKING_LEVEL);
+ *  3. fallback to the first declared level, or "default".
+ *
+ *  Lists absent/empty return "default". */
+export function defaultEffortForLevels(
+  levels: ThinkingLevelOption[] | undefined | null,
+): string {
+  if (!levels || levels.length === 0) return "default";
+  if (levels.some((l) => l.value === "default")) return "default";
+  if (levels.some((l) => l.value === "medium")) return "medium";
+  return levels[0]?.value ?? "default";
+}
+
 /** Snap an effort slot value onto a level list. The fallback chain mirrors
  *  how the underlying SDK picks a level when none is given:
  *
@@ -56,9 +74,7 @@ export function coerceEffortValue(
 ): string {
   if (!levels || levels.length === 0) return value;
   if (levels.some((l) => l.value === value)) return value;
-  if (levels.some((l) => l.value === "default")) return "default";
-  if (levels.some((l) => l.value === "medium")) return "medium";
-  return value;
+  return defaultEffortForLevels(levels);
 }
 
 /** The thinking-level options the effort UI should offer for the CURRENT
@@ -91,8 +107,13 @@ export function resolveEffortLevels(args: {
   /** Per-model thinkingLevelMap from ~/.pi/agent/models.json, keyed by
    *  `<provider>/<modelId>` (the pi session.model shape). */
   piModelMaps?: Record<string, PiThinkingLevelMap>;
+  /** Per-model reasoning-effort variants from the OpenCode server's model
+   *  list, keyed by "providerID/modelId" (the opencode session.model shape).
+   *  Effort rides ModelRef.variant, so only declared variants (+ "default")
+   *  are offerable; a model with no entry has no effort surface at all. */
+  opencodeModelVariants?: Record<string, string[]>;
 }): ThinkingLevelOption[] | undefined {
-  const { providerLevels, customModels, customModelId, model, providerId, piModelMaps } = args;
+  const { providerLevels, customModels, customModelId, model, providerId, piModelMaps, opencodeModelVariants } = args;
   if (!providerLevels || providerLevels.length === 0) return undefined;
 
   // Model-level thinking declarations only exist on OpenAI-protocol custom
@@ -117,6 +138,17 @@ export function resolveEffortLevels(args: {
     const map = piModelMaps[model];
     if (map) {
       return providerLevels.filter((l) => map[l.value as keyof PiThinkingLevelMap] !== null);
+    }
+  }
+
+  // OpenCode: effort = the model's declared variants (+ the neutral "default"
+  // slot). A KNOWN model with no variants entry has no controllable effort —
+  // return the default-only ladder (the chip hides single-option lists). An
+  // unknown model ref (list not loaded / stale) shows the full ladder.
+  if (providerId === "opencode-sdk" && opencodeModelVariants) {
+    if (model in opencodeModelVariants) {
+      const allowed = new Set(["default", ...(opencodeModelVariants[model] ?? [])]);
+      return providerLevels.filter((l) => allowed.has(l.value));
     }
   }
 

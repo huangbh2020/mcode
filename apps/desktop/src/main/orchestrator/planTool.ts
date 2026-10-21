@@ -27,6 +27,7 @@ import { providerRegistry } from "@main/providers/registry.js";
 import { CustomModelStore } from "@main/lib/secretStore.js";
 import { PiModelsStore } from "@main/lib/piModelsStore.js";
 import { CodexModelsStore } from "@main/lib/codexModelsStore.js";
+import { listOpenCodeModels } from "@main/providers/opencode-sdk/opencodeModels.js";
 import { sendToRenderer } from "@main/window.js";
 import { log } from "@main/lib/logger.js";
 
@@ -110,6 +111,17 @@ async function buildAvailableModelSurface(): Promise<Map<
     surface.set("codex-sdk", { builtin, custom: new Set(), builtinLabels: labels });
   } catch (err) {
     log.warn(`surface: codex list failed: ${(err as Error).message}`);
+  }
+  // OpenCode: 顶层 provider 是 opencode-sdk,模型 id 即官方列表的合成
+  // "providerID/modelId"。拉取会隐式起 server(无 CLI/未装时抛错,降级为空
+  // 桶——planner 跳过该厂商)。
+  try {
+    const { models } = await listOpenCodeModels();
+    const builtin = new Set(models.map((m) => m.id));
+    const labels = new Map(models.map((m) => [m.id, m.label] as const));
+    surface.set("opencode-sdk", { builtin, custom: new Set(), builtinLabels: labels });
+  } catch (err) {
+    log.warn(`surface: opencode list failed: ${(err as Error).message}`);
   }
   // Claude + 任何其他 provider: providerRegistry 给出 capabilities.builtinModels;
   // 用户自定义配置 = CustomModelStore.listPublic() 里的 models[].id(各 cfg
@@ -211,6 +223,7 @@ const NO_PROMPT_MODE_BY_PROVIDER: Record<string, string> = {
   "claude-sdk": "bypassPermissions",
   "pi-sdk": "bypassPermissions",
   "codex-sdk": "full-access",
+  "opencode-sdk": "bypassPermissions",
 };
 
 /** 节点最终继承的模型面里,model 字段的合法值域。

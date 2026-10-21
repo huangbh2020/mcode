@@ -31,7 +31,7 @@ import {
 } from "@renderer/components/chat/EffortPermissionControl.js";
 import { ModelDropdown } from "@renderer/components/chat/ModelDropdown.js";
 import { ProviderDropdown } from "@renderer/components/chat/ProviderDropdown.js";
-import { resolveEffortLevels, coerceEffortValue } from "@renderer/lib/thinkingLevels.js";
+import { resolveEffortLevels, coerceEffortValue, defaultEffortForLevels } from "@renderer/lib/thinkingLevels.js";
 import { ScheduleEditor } from "./ScheduleEditor.js";
 import { describeSchedule } from "./automationFormat.js";
 import { SlashCommandPicker } from "@renderer/components/chat/SlashCommandPicker.js";
@@ -89,6 +89,7 @@ export function AutomationEditor({
   const skills = useSessionStore((s) => s.skills);
   const customModels = useSessionStore((s) => s.customModels);
   const piModelMaps = useSessionStore((s) => s.piModelMaps);
+  const opencodeModelVariants = useSessionStore((s) => s.opencodeModelVariants);
   const saveAutomation = useSessionStore((s) => s.saveAutomation);
 
   const [draft, setDraft] = useState<EditorDraft>(DEFAULT_DRAFT);
@@ -215,6 +216,7 @@ export function AutomationEditor({
     model: draft.model,
     providerId: draft.providerId,
     piModelMaps,
+    opencodeModelVariants,
   });
   const hasEffort = (draftEffortLevels?.length ?? 0) > 0;
   const hasPerm = draftPermModes.length > 0;
@@ -507,12 +509,16 @@ export function AutomationEditor({
                               model: modelId,
                               providerId: d.providerId,
                               piModelMaps,
+                              opencodeModelVariants,
                             });
+                            const isSwitchingModel = d.model !== modelId || d.customModelId !== customModelId;
                             return {
                               ...d,
                               customModelId,
                               model: modelId,
-                              effort: coerceEffortValue(d.effort, levels),
+                              effort: isSwitchingModel
+                                ? defaultEffortForLevels(levels)
+                                : coerceEffortValue(d.effort, levels),
                             };
                           }),
                       }}

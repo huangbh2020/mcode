@@ -994,6 +994,24 @@ export const en = {
   "settings.usage.unknownVendor": "Unknown vendor",
   "settings.usage.empty": "No usage yet — stats appear here after your first completed turn.",
 
+
+  // ── OpenCode (v2) — official-login panel (OpenCodeLoginPanel) ──
+  "settings.opencode.refresh": "Refresh",
+  "settings.opencode.notInstalled": "Not installed",
+  "settings.opencode.connected": "Connected integrations",
+  "settings.opencode.noneConnected": "No integration logged in yet. OpenCode Zen's free models work without login; sign in to unlock the full official catalog.",
+  "settings.opencode.credentialCount": "{n} credential(s)",
+  "settings.opencode.connectTitle": "API key sign-in",
+  "settings.opencode.connectHint": "Credentials live in OpenCode's own store and are shared with your terminal CLI (integrations connected there via /connect show up above too). Recommended: official OpenCode Zen — generate an API key at opencode.ai/auth and paste it here.",
+  "settings.opencode.keyPlaceholder": "Paste API key…",
+  "settings.opencode.getKey": "Get key",
+  "settings.opencode.connect": "Sign in",
+  "settings.opencode.connectOk": "Signed in.",
+  "settings.opencode.errKeyRequired": "Paste an API key first.",
+  "settings.opencode.logout": "Sign out",
+  "settings.opencode.models": "Available models",
+  "settings.opencode.noModels": "No models yet — make sure the OpenCode CLI is installed, then refresh.",
+
   // ── mobile settings sheet (MobileSettingsSheet) ──
   "settings.mobile.copyLink": "Copy access link",
   "settings.mobile.copyLinkDone": "Copied",
