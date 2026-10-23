@@ -23,7 +23,13 @@ import { SdkMessageAdapter, parseQuestions } from "./SdkMessageAdapter.js";
 import { buildCustomEnv, MCODE_CONFIG_DIR, resolveActiveModel } from "./customEnv.js";
 import type { ClaudeContextWindowTag } from "./claudeTokenUsage.js";
 import { ASK_SYSTEM_PROMPT } from "@main/lib/askQuestion.js";
-import { CLAUDE_IDENTITY_PROMPT, CLAUDE_PLAN_MODE_NUDGE, SCHEDULED_TASK_PROPOSAL_NUDGE, joinPromptSections } from "@main/lib/systemPrompt.js";
+import {
+  CLAUDE_IDENTITY_PROMPT,
+  CLAUDE_PLAN_MODE_NUDGE,
+  CLAUDE_TASK_TRACKING_NUDGE,
+  SCHEDULED_TASK_PROPOSAL_NUDGE,
+  joinPromptSections,
+} from "@main/lib/systemPrompt.js";
 import { bashPathHintFor, detectBashEnv } from "@main/lib/bashEnv.js";
 import { resolveAgentSkillInjections } from "@main/lib/agentSkills.js";
 import { getFileSnapshot } from "@main/lib/fileSnapshotRegistry.js";
@@ -931,7 +937,7 @@ export class ClaudeAgentSdkProvider implements AgentProvider {
     // user-controlled priority and applies regardless of `settingSources`.
     // Add ".claude/plans/" to .gitignore to keep these ephemeral drafts out of
     // version control.
-    options.settings = { plansDirectory: ".claude/plans" };
+    options.settings = { plansDirectory: ".claude/plans", todoFeatureEnabled: true };
 
     // Always redirect the claude binary's user-level config root to Mcode's
     // own directory (~/.mcode) via CLAUDE_CONFIG_DIR. This decouples Mcode from
@@ -958,7 +964,11 @@ export class ClaudeAgentSdkProvider implements AgentProvider {
     } else {
       // Standard Anthropic endpoint: still redirect the config root so Mcode
       // manages its own skills/settings, but no auth/model overrides needed.
-      options.env = { ...process.env, CLAUDE_CONFIG_DIR: MCODE_CONFIG_DIR };
+      options.env = {
+        ...process.env,
+        CLAUDE_CONFIG_DIR: MCODE_CONFIG_DIR,
+        CLAUDE_CODE_ENABLE_TODO_TOOLS: "1",
+      };
     }
 
     // Subagent model pin (per provider config, settings panel「模型配置」):
@@ -1357,6 +1367,7 @@ export class ClaudeAgentSdkProvider implements AgentProvider {
     // becomes the base on every platform, with our fragments appended on top.
     const appends: string[] = [];
     appends.push(CLAUDE_IDENTITY_PROMPT);
+    appends.push(CLAUDE_TASK_TRACKING_NUDGE);
     appends.push(SCHEDULED_TASK_PROPOSAL_NUDGE);
     // (3) 会话内编排拆解(orchestration 标记):规划者指令(角色/工具用法/
     //     可用模型面/硬约束)追加为系统提示段,orch_submit_plan 工具在下方

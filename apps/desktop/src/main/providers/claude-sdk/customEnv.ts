@@ -289,5 +289,9 @@ export function buildCustomEnv(
   // longer need to drop "user" from settingSources to protect the env.
   env.CLAUDE_CONFIG_DIR = MCODE_CONFIG_DIR;
 
+  // Enable todo / task tracking tools (TaskCreate, TaskUpdate, TaskList, TaskGet)
+  // for all models, bypassing the binary's hardcoded model allowlist.
+  env.CLAUDE_CODE_ENABLE_TODO_TOOLS = "1";
+
   return env;
 }
