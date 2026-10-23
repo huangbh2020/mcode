@@ -13,11 +13,11 @@ import {
   IconFile,
   IconPhoto,
   // Tool-kind icons (left glyph of each action card).
-  IconBulb,
+  IconBrain,
+  IconEdit,
   IconTerminal,
   IconFileSearch,
   IconFilePlus,
-  IconReplace,
   IconNotebook,
   IconSearch,
   IconListCheck,
@@ -319,7 +319,11 @@ function groupBlocks(blocks: Block[]): Segment[] {
   let atts: Extract<Block, { kind: "attachment" }>[] = [];
   const flushTools = () => {
     if (run.length > 0) {
-      out.push({ kind: "batch", blocks: run });
+      if (run.length === 1) {
+        out.push({ kind: "single", block: run[0], defaultOpen: false });
+      } else {
+        out.push({ kind: "batch", blocks: run });
+      }
       run = [];
     }
   };
@@ -363,11 +367,10 @@ function groupBlocks(blocks: Block[]): Segment[] {
   return out;
 }
 
-/** A compact action capsule (方案 A: 叙述锚定胶囊) for a run of consecutive
- *  FOLDABLE blocks (thinking + batch tools — Glob/Grep/Bash/task-list/web/skills/MCP).
- *  Renders as a ~28px lightweight capsule when collapsed, showing block tally,
- *  breakdown badges and a live current-operation ticker without cluttering the chat. */
-export function BatchToolGroup({
+/** A compact action capsule for a multi-block run of consecutive
+ *  FOLDABLE blocks (thinking + batch tools). Single-block runs are unwrapped
+ *  directly by BatchToolGroup so they don't render a redundant outer envelope. */
+function MultiBatchToolGroup({
   blocks,
   beforeMap,
   turnActive = false,
@@ -418,6 +421,7 @@ export function BatchToolGroup({
       if (b.kind === "tool_use" && b.status === "running") {
         return {
           kind: "tool" as const,
+          toolName: b.toolName,
           name: toolDisplayName(t, b.toolName),
           detail: toolSummary(b.toolName, b.input),
           status: "running" as const,
@@ -446,6 +450,7 @@ export function BatchToolGroup({
       }
       return {
         kind: "tool" as const,
+        toolName: last.toolName,
         name: toolDisplayName(t, last.toolName),
         detail: toolSummary(last.toolName, last.input),
         status: last.status,
@@ -483,11 +488,13 @@ export function BatchToolGroup({
         }}
         className="flex w-full items-center gap-2 rounded-md py-1 text-left text-content-muted hover:bg-surface-muted/40 hover:text-content transition-colors select-none group"
       >
-        {/* Leading icon: pulse on running, bulb for single thinking, stack for idle/error */}
+        {/* Leading icon: pulse on running, or semantic icon matching activeOp (thinking / tool) */}
         {isLiveRunning ? (
           <span className="shrink-0 h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
-        ) : isSingleThinking ? (
-          <IconBulb size={13} className="shrink-0 text-amber-500/80" />
+        ) : activeOp?.kind === "thinking" || isSingleThinking ? (
+          <IconBrain size={13} className="shrink-0 text-amber-500/80" />
+        ) : activeOp?.kind === "tool" && activeOp.toolName ? (
+          <ToolIcon name={activeOp.toolName} className="shrink-0 text-content-subtle" />
         ) : (
           <IconStack2 size={13} className="shrink-0 text-content-subtle" />
         )}
@@ -1263,6 +1270,32 @@ const BlockView = memo(function BlockView({
   }
 });
 export { BlockView };
+
+/** A compact action capsule for a run of consecutive FOLDABLE blocks.
+ *  When the run consists of a single block, it is unwrapped directly
+ *  to avoid rendering a redundant outer envelope. */
+export function BatchToolGroup(props: {
+  blocks: ProceduralBlock[];
+  beforeMap?: BeforeContentMap;
+  turnActive?: boolean;
+  showTicker?: boolean;
+  projectPath?: string | null;
+}) {
+  if (props.blocks.length === 1) {
+    return (
+      <div className="my-0.5 [font-size:var(--chat-fs-sm)]">
+        <BlockView
+          block={props.blocks[0]}
+          beforeMap={props.beforeMap}
+          liveTurn={props.turnActive}
+          projectPath={props.projectPath}
+          defaultOpen={false}
+        />
+      </div>
+    );
+  }
+  return <MultiBatchToolGroup {...props} />;
+}
 
 /** A pasted-content or file-reference attachment shown as a chip-like card in
  *  the message stream. Mirrors the composer's ContentTagChip visual language
@@ -2086,7 +2119,7 @@ function Collapsible({
         }}
         className="flex w-full items-center gap-2 rounded-md py-1.5 text-left text-content-muted hover:bg-surface-muted/40"
       >
-        <IconBulb size={13} className="shrink-0 text-content-subtle" />
+        <IconBrain size={13} className="shrink-0 text-amber-500/80" />
         {/* shrink-0 + whitespace-nowrap keep the short label on one line even
             in a narrow pane; flex-1 + min-w-0 let the hint own the leftover
             width and truncate with an ellipsis instead of pushing the header
@@ -2160,8 +2193,8 @@ const TOOL_ICON_MAP: Record<string, ComponentType<{ size?: number; className?: s
   Read: IconFileSearch,
   Glob: IconFileSearch,
   Write: IconFilePlus,
-  Edit: IconReplace,
-  MultiEdit: IconReplace,
+  Edit: IconEdit,
+  MultiEdit: IconEdit,
   NotebookEdit: IconNotebook,
   Bash: IconTerminal,
   PowerShell: IconTerminal,
@@ -2176,6 +2209,7 @@ const TOOL_ICON_MAP: Record<string, ComponentType<{ size?: number; className?: s
   AskUserQuestion: IconHelpCircle,
   EnterPlanMode: IconClipboard,
   ExitPlanMode: IconClipboard,
+  thinking: IconBrain,
   // Pi (lowercase) aliases — Pi's tool names are lowercase (read/grep/bash/…);
   // map them to the same glyphs as their Claude equivalents so pi tool cards
   // get semantic icons instead of falling back to the generic tools glyph.
@@ -2184,7 +2218,7 @@ const TOOL_ICON_MAP: Record<string, ComponentType<{ size?: number; className?: s
   ls: IconFileSearch,
   bash: IconTerminal,
   grep: IconSearch,
-  edit: IconReplace,
+  edit: IconEdit,
   write: IconFilePlus,
 };
 

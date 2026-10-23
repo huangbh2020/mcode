@@ -23,6 +23,7 @@ export interface TerminalViewHandle {
   clear: () => void;
   focus: () => void;
   fit: () => void;
+  scrollToBottom: () => void;
   restart: () => void;
   kill: () => void;
   getTerminalId: () => string | null;
@@ -210,6 +211,10 @@ export function TerminalView({
   const statusRef = useRef<TerminalSessionStatus>("starting");
   const disposedRef = useRef(false);
   const writingRef = useRef(false);
+  // Tracks whether the terminal is in an initial restore / restart state
+  // and needs its viewport positioned at the bottom. Cleared once the viewport
+  // settles at the bottom or if the user actively scrolls up to inspect history.
+  const pendingScrollBottomRef = useRef(Boolean(initialContent));
   // Locale-fresh translator: the kill handler below is bound once per
   // sessionKey, so a locale switch mid-session must still translate its
   // status detail. Updated every render, read inside long-lived callbacks.
@@ -477,7 +482,15 @@ export function TerminalView({
         if (restoreSeparator) {
           term.write(`\r\n\x1b[90m──── ${restoreSeparator} ────\x1b[0m`);
         }
-        term.write("\r\n");
+        term.write("\r\n", () => {
+          if (pendingScrollBottomRef.current) {
+            try {
+              term.scrollToBottom();
+            } catch {
+              /* ignore */
+            }
+          }
+        });
       } catch {
         /* a malformed snapshot must not break the terminal */
       }
@@ -486,6 +499,9 @@ export function TerminalView({
     requestAnimationFrame(() => {
       try {
         fit.fit();
+        if (pendingScrollBottomRef.current) {
+          term.scrollToBottom();
+        }
       } catch {
         /* host may be display:none */
       }
@@ -555,6 +571,14 @@ export function TerminalView({
       setHasSelection(term.hasSelection());
     });
 
+    // If the user scrolls up to inspect history, cancel any pending auto-scroll
+    // so we never fight manual scroll actions.
+    const scrollDisp = term.onScroll(() => {
+      if (term.buffer.active.viewportY < term.buffer.active.baseY) {
+        pendingScrollBottomRef.current = false;
+      }
+    });
+
     // Route copy/paste chords through our handlers (see handleKeyEvent) and
     // pass everything else through to the PTY so Ctrl+C etc. still work.
     term.attachCustomKeyEventHandler(handleKeyEvent);
@@ -577,7 +601,22 @@ export function TerminalView({
           /* ignore */
         }
       },
-      restart: () => setSpawnGen((g) => g + 1),
+      scrollToBottom: () => {
+        try {
+          term.scrollToBottom();
+        } catch {
+          /* ignore */
+        }
+      },
+      restart: () => {
+        pendingScrollBottomRef.current = true;
+        try {
+          term.scrollToBottom();
+        } catch {
+          /* ignore */
+        }
+        setSpawnGen((g) => g + 1);
+      },
       kill: () => {
         const id = terminalIdRef.current;
         if (id) {
@@ -609,6 +648,7 @@ export function TerminalView({
       disposedRef.current = true;
       dataDisp.dispose();
       selDisp.dispose();
+      scrollDisp.dispose();
       if (busyTimer) window.clearInterval(busyTimer);
       busyRef.current?.reset();
       busyRef.current = null;
@@ -671,7 +711,16 @@ export function TerminalView({
       if (cancelled || disposedRef.current) return;
       if (msg.terminalId !== terminalIdRef.current) return;
       busyRef.current?.output(msg.data, Date.now());
-      term.write(msg.data);
+      term.write(msg.data, () => {
+        if (pendingScrollBottomRef.current) {
+          try {
+            term.scrollToBottom();
+          } catch {
+            /* ignore */
+          }
+          pendingScrollBottomRef.current = false;
+        }
+      });
     });
     const unsubExit = api.on.terminalExit((msg) => {
       if (cancelled || disposedRef.current) return;
@@ -735,6 +784,13 @@ export function TerminalView({
         } catch {
           /* ignore */
         }
+        if (pendingScrollBottomRef.current) {
+          try {
+            term.scrollToBottom();
+          } catch {
+            /* ignore */
+          }
+        }
         if (active) term.focus();
       } catch (err) {
         if (cancelled || disposedRef.current) return;
@@ -771,6 +827,9 @@ export function TerminalView({
       const fit = fitRef.current;
       const id = terminalIdRef.current;
       if (!term || !fit) return;
+      // Check if user was already at the bottom before resize reflow
+      const wasAtBottom =
+        term.buffer.active.viewportY >= term.buffer.active.baseY;
       try {
         fit.fit();
         if (id && term.cols > 0 && term.rows > 0) {
@@ -779,6 +838,9 @@ export function TerminalView({
             cols: term.cols,
             rows: term.rows,
           });
+        }
+        if (wasAtBottom || pendingScrollBottomRef.current) {
+          term.scrollToBottom();
         }
       } catch {
         /* ignore */
@@ -795,6 +857,13 @@ export function TerminalView({
     if (active) {
       raf = requestAnimationFrame(() => {
         doFit();
+        if (pendingScrollBottomRef.current) {
+          try {
+            termRef.current?.scrollToBottom();
+          } catch {
+            /* ignore */
+          }
+        }
         termRef.current?.focus();
       });
     }

@@ -1031,6 +1031,24 @@ button.chat-ledger-head:hover {
   padding-top: 0;
 }
 
+/* 步骤前导说明（StepNarration）：模型在操作前输出的意图短语，低对比度、紧凑内联，紧贴操作胶囊 */
+.chat-step-narration {
+  font-size: var(--chat-fs-sm);
+  color: var(--content-muted);
+}
+.chat-step-narration .chat-md {
+  font-size: 13px !important;
+  line-height: 1.45 !important;
+  color: inherit !important;
+}
+.chat-step-narration .chat-md p {
+  margin: 0 !important;
+}
+.chat-step-narration .chat-md code:not(pre code) {
+  font-size: 12px;
+  padding: 0.1em 0.3em;
+}
+
 /* 过程面的折叠动画（TurnPanel 的展开体）。
  *   - 外层用 grid-template-rows 0fr↔1fr 做高度收束（内容保持挂载，只被裁剪，
  *     所以中途重挂载不会闪）；
