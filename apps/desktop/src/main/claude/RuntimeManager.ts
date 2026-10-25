@@ -969,8 +969,15 @@ class RuntimeManager {
     reason?: string,
     always?: boolean,
     alwaysScope?: "session" | "global",
+    grantDomain?: string,
   ): boolean {
-    const sessionId = approvalBridge.resolveApproval(requestId, { allow, reason }, always, alwaysScope);
+    const sessionId = approvalBridge.resolveApproval(
+      requestId,
+      { allow, reason },
+      always,
+      alwaysScope,
+      grantDomain,
+    );
     if (!sessionId) return false;
     this.notifyRequestResolved(sessionId, requestId, "approval");
     return true;

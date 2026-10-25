@@ -515,6 +515,40 @@ export const EVALUATE_SCRIPT = `
 `;
 
 /**
+ * Async variant of EVALUATE_SCRIPT: the code runs inside an async IIFE, so
+ * `await` (fetch, timers, app-specific promises) works at the top level.
+ * Statements run as-is; to surface a value the code must `return` it (a bare
+ * trailing expression does NOT become the result in the wrapper form — the
+ * browser_script step description and browser_evaluate prompt both say so).
+ * Serialization discipline is identical to the sync script.
+ */
+export const EVALUATE_ASYNC_SCRIPT = `
+(async function (scriptJson) {
+  var code;
+  try { code = JSON.parse(scriptJson); } catch (e) { return { error: 'invalid script json' }; }
+  if (typeof code !== 'string' || !code) return { error: 'empty script' };
+  var result;
+  try {
+    result = await new Function('"use strict";return (async () => {' + code + '})()')();
+  } catch (e) {
+    return { error: 'script threw: ' + (e && e.message ? e.message : String(e)) };
+  }
+  var text;
+  if (result === undefined) {
+    text = '(undefined)';
+  } else {
+    try {
+      text = JSON.stringify(result, null, 2);
+      if (text === undefined) text = String(result);
+    } catch (e) {
+      text = String(result);
+    }
+  }
+  return { ok: true, result: text, url: location.href, title: document.title };
+})(%SCRIPT_JSON%);
+`;
+
+/**
  * File-input pre-check for browser_upload_file: verifies the selector hits an
  * enabled `<input type="file">` BEFORE the CDP round-trip, so the model gets a
  * readable error (CDP's own DOM.setFileInputFiles failure messages are
@@ -551,6 +585,13 @@ export function buildCheckFileInputScript(selector: string): string {
 
 export function buildEvaluateScript(code: string): string {
   return EVALUATE_SCRIPT.replace("%SCRIPT_JSON%", JSON.stringify(JSON.stringify(code)));
+}
+
+export function buildEvaluateAsyncScript(code: string): string {
+  return EVALUATE_ASYNC_SCRIPT.replace(
+    "%SCRIPT_JSON%",
+    JSON.stringify(JSON.stringify(code)),
+  );
 }
 
 export function buildElementCenterScript(selector: string): string {

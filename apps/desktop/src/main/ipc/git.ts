@@ -718,7 +718,35 @@ export function registerGitHandlers(ipcMain: IpcMain): void {
         // upstream" — the create-PR flow needs the branch on the remote first.
         await git.push(["--set-upstream", "origin", input.branch]);
       } else {
-        await git.push();
+        try {
+          await git.push();
+        } catch (pushErr) {
+          const errMsg = (pushErr as Error).message || "";
+          // If plain push fails because the current branch has no upstream branch (e.g. initial commit),
+          // automatically detect the remote and retry with --set-upstream.
+          if (
+            errMsg.includes("has no upstream branch") ||
+            errMsg.includes("no upstream") ||
+            errMsg.includes("set-upstream")
+          ) {
+            const remotes = await git.getRemotes();
+            if (remotes.length > 0) {
+              const remoteName = remotes.find((r) => r.name === "origin")?.name || remotes[0].name;
+              const currentBranch =
+                input.branch || (await git.revparse(["--abbrev-ref", "HEAD"])).trim();
+              if (currentBranch && currentBranch !== "HEAD") {
+                log.info(`git.push: no upstream, retrying with --set-upstream ${remoteName} ${currentBranch}`);
+                await git.push(["--set-upstream", remoteName, currentBranch]);
+              } else {
+                throw pushErr;
+              }
+            } else {
+              throw pushErr;
+            }
+          } else {
+            throw pushErr;
+          }
+        }
       }
       log.info(`git.push succeeded in ${input.repoPath}`);
       broadcastGitChanged(input.repoPath);

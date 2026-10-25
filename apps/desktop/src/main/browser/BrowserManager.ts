@@ -61,7 +61,7 @@ import { getOsPrefersDark, getThemePreference } from "@main/lib/theme.js";
 import { log } from "@main/lib/logger.js";
 import { SettingRepo } from "@main/store/repositories.js";
 import { PICKER_INJECT_SCRIPT, PICKER_REMOVE_SCRIPT } from "./pickerScript.js";
-import { SNAPSHOT_SCRIPT, buildClickScript, buildCheckFileInputScript, buildElementCenterScript, buildTypeScript, buildEvaluateScript, buildScrollScript, buildWaitScript, buildSelectScript, buildFindScript } from "./snapshotScript.js";
+import { SNAPSHOT_SCRIPT, buildClickScript, buildCheckFileInputScript, buildElementCenterScript, buildTypeScript, buildEvaluateAsyncScript, buildScrollScript, buildWaitScript, buildSelectScript, buildFindScript } from "./snapshotScript.js";
 import { AddressHistory } from "./addressHistory.js";
 
 /** Normalize a URL to its origin (scheme://host[:port]). Returns "" for URLs
@@ -539,6 +539,21 @@ class BrowserManagerImpl {
   /** Background cookie-vault save timer (see saveCookieVault).
    *  Started once with the first browser view; never stopped (process exits). */
   private persistTimer: NodeJS.Timeout | null = null;
+  /** True while the RENDERER has parked the view because a DOM overlay
+   *  (popup/dialog/freeze-frame) owns the screen (browser:setSuppressed IPC).
+   *  Agent paths that would otherwise force the view onscreen — real-input
+   *  click, capturePage screenshot — consult this and prefer their
+   *  offscreen-capable fallbacks so a turn running in the background can't
+   *  visually fight the user's open dialog. */
+  private rendererSuppressed = false;
+
+  /** Idempotent setter for the renderer overlay-suppression flag (see
+   *  `rendererSuppressed`). */
+  setRendererSuppressed(suppressed: boolean): void {
+    if (this.rendererSuppressed === suppressed) return;
+    this.rendererSuppressed = suppressed;
+    log.info(`browser rendererSuppressed=${suppressed}`);
+  }
 
   create(projectPath: string, initialDevice?: BrowserDevicePreset): BrowserCreateResult {
     const spawned = this.spawnView(projectPath);
@@ -1667,31 +1682,36 @@ class BrowserManagerImpl {
 
     // Real input needs the view on the visible surface — park it onscreen if
     // the user has another panel tab active (same trade-off as screenshot's
-    // temp-show, minus the restore: the agent keeps browsing visibly).
-    if (!live.visible) this.show(id);
-    try {
-      const center = (await wc.executeJavaScript(buildElementCenterScript(selector), true)) as {
-        ok?: boolean;
-        error?: string;
-        fallback?: boolean;
-        x?: number;
-        y?: number;
-        obscured?: { tag: string; text: string };
-      };
-      if (center && center.error) return { ok: false, error: center.error };
-      if (center && center.ok && typeof center.x === "number" && typeof center.y === "number") {
-        wc.focus();
-        const base = { x: center.x, y: center.y, button: "left" as const, clickCount: 1 };
-        wc.sendInputEvent({ type: "mouseDown", ...base });
-        wc.sendInputEvent({ type: "mouseUp", ...base });
-        // Give page handlers/navigation a beat to react before we report state.
-        await new Promise((r) => setTimeout(r, 250));
-        return { ok: true, url: wc.getURL(), title: wc.getTitle(), obscured: center.obscured ?? undefined };
+    // temp-show, minus the restore: the agent keeps browsing visibly). While
+    // the renderer has the view suppressed for an open overlay, force-showing
+    // would fight the user's dialog: skip the real-mouse path entirely and
+    // use the programmatic click below (works offscreen).
+    if (!live.visible && !this.rendererSuppressed) this.show(id);
+    if (live.visible) {
+      try {
+        const center = (await wc.executeJavaScript(buildElementCenterScript(selector), true)) as {
+          ok?: boolean;
+          error?: string;
+          fallback?: boolean;
+          x?: number;
+          y?: number;
+          obscured?: { tag: string; text: string };
+        };
+        if (center && center.error) return { ok: false, error: center.error };
+        if (center && center.ok && typeof center.x === "number" && typeof center.y === "number") {
+          wc.focus();
+          const base = { x: center.x, y: center.y, button: "left" as const, clickCount: 1 };
+          wc.sendInputEvent({ type: "mouseDown", ...base });
+          wc.sendInputEvent({ type: "mouseUp", ...base });
+          // Give page handlers/navigation a beat to react before we report state.
+          await new Promise((r) => setTimeout(r, 250));
+          return { ok: true, url: wc.getURL(), title: wc.getTitle(), obscured: center.obscured ?? undefined };
+        }
+        // center.fallback (no layout box) or a thrown/injected-script failure →
+        // fall through to the programmatic click below.
+      } catch {
+        /* CSP-strict pages can reject executeJavaScript — fall back below */
       }
-      // center.fallback (no layout box) or a thrown/injected-script failure →
-      // fall through to the programmatic click below.
-    } catch {
-      /* CSP-strict pages can reject executeJavaScript — fall back below */
     }
 
     try {
@@ -1722,6 +1742,25 @@ class BrowserManagerImpl {
     }
     const wc = live.view.webContents;
     if (wc.isDestroyed()) return { ok: false, error: "浏览器已销毁" };
+    // While the renderer suppressed the view for an open overlay, dispatch the
+    // click through the CDP debugger instead of force-showing: synthetic CDP
+    // Input events land in the page without an onscreen surface. No
+    // programmatic fallback exists for raw coordinates, so if the debugger
+    // slot is busy (DevTools open) degrade to the old force-show — the click
+    // must land.
+    if (!live.visible && this.rendererSuppressed) {
+      const cdp = await this.withDebugger(id, async (dbg) => {
+        const base = { x: Math.round(x), y: Math.round(y), button: "left", clickCount: 1 };
+        await dbg.sendCommand("Input.dispatchMouseEvent", { type: "mousePressed", ...base });
+        await dbg.sendCommand("Input.dispatchMouseEvent", { type: "mouseReleased", ...base });
+        return true;
+      });
+      if (cdp.ok) {
+        await new Promise((r) => setTimeout(r, 250));
+        return { ok: true, url: wc.getURL(), title: wc.getTitle() };
+      }
+      log.warn(`browser clickAt CDP unavailable while suppressed, force-showing: ${id}`);
+    }
     if (!live.visible) this.show(id);
     wc.focus();
     const base = { x: Math.round(x), y: Math.round(y), button: "left" as const, clickCount: 1 };
@@ -1765,21 +1804,20 @@ class BrowserManagerImpl {
     }
   }
 
-  /** Evaluate arbitrary JS in the page's main world via `new Function(code)()`.
-   *  This lets the agent modify the page DOM directly (text, styles,
-   *  attributes, events). The script runs with the page's own permissions —
-   *  no Node/Electron access (contextIsolation is on). Returns a serialized
-   *  view of the script's return value so the caller can verify its changes.
-   *  The script is JSON-encoded (buildEvaluateScript), so the code's quotes /
-   *  backslashes / newlines can't break the injected script's syntax. */
-  async evaluate(id: string, code: string): Promise<BrowserEvaluateResult> {
+  /** Evaluate arbitrary JS in the page's main world. Async variant: the code
+   *  runs inside an async IIFE (EVALUATE_ASYNC_SCRIPT), so `await` works at
+   *  the top level — fetch-based checks, timers, app promises. Sync code is
+   *  unaffected (its value resolves through the same wrapper); to surface a
+   *  value the code must `return` it. Same injection-safety JSON encoding
+   *  (buildEvaluateAsyncScript) and result serialization as the sync script it replaced. */
+  async evaluateAsync(id: string, code: string): Promise<BrowserEvaluateResult> {
     const live = this.get(id);
     if (!live) return { ok: false, error: "浏览器不存在或已关闭" };
     if (typeof code !== "string" || code.length === 0) {
       return { ok: false, error: "script 不能为空" };
     }
     try {
-      const script = buildEvaluateScript(code);
+      const script = buildEvaluateAsyncScript(code);
       const res = (await live.view.webContents.executeJavaScript(script, true)) as {
         ok?: boolean;
         error?: string;
@@ -1791,7 +1829,7 @@ class BrowserManagerImpl {
       return { ok: true, url: res?.url, title: res?.title, result: res?.result };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      log.warn(`browser evaluate failed: ${id} ${msg}`);
+      log.warn(`browser evaluateAsync failed: ${id} ${msg}`);
       return { ok: false, error: `脚本执行失败: ${msg}` };
     }
   }
@@ -2059,6 +2097,33 @@ class BrowserManagerImpl {
     // (resizing to scrollHeight triggers reflow), so we prioritize capture
     // correctness over avoiding the flash.
     const needsTempShow = !live.visible || live.lastBounds.width <= 1;
+    // ...UNLESS the renderer has the view suppressed for an open overlay — the
+    // on-screen flash would fight the user's dialog. CDP Page.captureScreenshot
+    // with a viewport-sized clip renders offscreen (same mechanism as
+    // captureFullPage), so try that first and degrade to the temp-show only
+    // when the debugger slot is unavailable.
+    if (needsTempShow && this.rendererSuppressed) {
+      const clipRect = this.emulationCaptureRect(live) ?? {
+        width: live.lastBounds.width,
+        height: live.lastBounds.height,
+      };
+      const shot = await this.withDebugger<{ data?: string }>(id, (dbg) =>
+        dbg.sendCommand("Page.captureScreenshot", {
+          format: "png",
+          clip: {
+            x: 0,
+            y: 0,
+            width: Math.max(1, clipRect.width),
+            height: Math.max(1, clipRect.height),
+            scale: 1,
+          },
+        }),
+      );
+      if (shot.ok && shot.value?.data) {
+        return { ok: true, data: shot.value.data, mimeType: "image/png" };
+      }
+      log.warn(`browser screenshot CDP unavailable while suppressed, degrading to temp-show: ${id}`);
+    }
     const savedVisible = live.visible;
     const savedBounds = live.lastBounds;
     // Device emulation active: the capture rect must match the emulated

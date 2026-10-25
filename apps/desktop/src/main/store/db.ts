@@ -94,6 +94,10 @@ export function initDb(): Promise<Database.Database> {
     db.pragma("journal_mode = WAL");
     db.pragma("synchronous = NORMAL");
     db.pragma("foreign_keys = ON");
+    // Memory bounds: negative cache_size sets size in kibibytes (-16000 ≈ 16 MB max page cache).
+    // temp_store = MEMORY keeps transient sorting and scratch tables in fast bounded memory.
+    db.pragma("cache_size = -16000");
+    db.pragma("temp_store = MEMORY");
     migrate(db);
     log.info(`sqlite opened (better-sqlite3, WAL): ${dbPath}`);
   })();

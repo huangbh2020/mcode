@@ -7,13 +7,10 @@
  * control. sherpa-onnx runs modern open ASR models fully on-device (offline,
  * free):
  *
- *   - Streaming Zipformer (Chinese, trained on WenetSpeech), e.g.
- *     `sherpa-onnx-streaming-zipformer-zh-14M-2023-02-23`. Supports *streaming*
- *     decoding with live interim ("partial") results — this is what drives the
- *     live "文字边听边出" UX for both continuous and push-to-talk modes.
- *   - NVIDIA Parakeet (e.g. Parakeet TDT v3) offline recognizer for a final
- *     high-accuracy pass (no interim results). Not yet wired — the parakeet
- *     engine request falls back to the streaming zipformer recognizer.
+ *   - Alibaba SenseVoice Small (`sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17`).
+ *     Offline high-accuracy recognizer with native punctuation and inverse text
+ *     normalization (ITN). Produces clean, well-formatted Chinese text in milliseconds.
+ *   - Streaming Zipformer transducer fallback when configured.
  *
  * MODEL MANAGEMENT: models are downloaded from the catalog in Settings →
  * 语音输入 (see models.ts). The engine validates that the required files are
@@ -30,8 +27,10 @@ import { join } from "node:path";
 import type { VoiceResultPayload } from "@contracts/ipc";
 import { log } from "@main/lib/logger.js";
 import {
+  modelArchitecture,
   requireModelDir,
   selectedModelId,
+  senseVoiceFilesFor,
   transducerFilesFor,
 } from "./models.js";
 
@@ -41,8 +40,9 @@ export interface VoiceResultListener {
   (payload: VoiceResultPayload): void;
 }
 
-/** A single in-flight recognition session (one active listen). */
-interface Session {
+/** Online streaming session for Zipformer / Transducer models. */
+interface OnlineSession {
+  arch: "transducer";
   /** Online streaming stream for the zipformer decoder. */
   stream: OnlineStream | null;
   /** The live online recognizer this session belongs to. */
@@ -54,25 +54,34 @@ interface Session {
   committedText: string;
   /** Latest text of the CURRENT (not yet endpoint-reset) segment. */
   currentSegment: string;
-  /** Last text pushed as a partial — dedupes the push channel (decode()
-   *  runs many times per second; text changes less often). */
+  /** Last text pushed as a partial — dedupes the push channel. */
   lastEmitted: string;
   /** The segment committed last. A decoder that was NOT reset keeps its
-   *  result, so the next endpoint re-commits exactly this text (see
-   *  `isStaleSegment`). */
+   *  result, so the next endpoint re-commits exactly this text. */
   lastCommittedSegment: string;
-  /** Whether non-silent audio arrived since that commit — the difference
-   *  between "the user said it again" and "the decoder never let go". */
+  /** Whether non-silent audio arrived since that commit. */
   spokeSinceCommit: boolean;
-  /** Consecutive silence samples, from our own energy gate (see `feedPcm`). */
+  /** Consecutive silence samples, from our own energy gate. */
   silentSamples: number;
-  /** Decaying peak envelope of the recent audio — the reference level for
-   *  that gate, so a quiet mic does not read as silence. */
+  /** Decaying peak envelope of the recent audio. */
   peakEnvelope: number;
-  /** The stale-segment drop is logged once per listen; it otherwise repeats
-   *  on every batch while the engine sits in its broken state. */
+  /** The stale-segment drop is logged once per listen. */
   staleDropLogged: boolean;
 }
+
+/** Offline high-accuracy session for SenseVoice models. */
+interface OfflineSenseVoiceSession {
+  arch: "sense-voice";
+  offline: OfflineRecognizer | null;
+  fedSamples: number;
+  pcmChunks: Float32Array[];
+  lastEmitted: string;
+  lastPartialSampleCount: number;
+  silentSamples: number;
+  peakEnvelope: number;
+}
+
+type Session = OnlineSession | OfflineSenseVoiceSession;
 
 /** Minimal structural types for the `sherpa-onnx-node` addon. We duck-type it
  *  (loaded lazily) rather than importing, so a missing addon doesn't break
@@ -137,12 +146,14 @@ const SILENCE_RESET_SAMPLES = (SAMPLE_RATE * 12) / 10;
  *  cache would otherwise point at unlinked ONNX files). */
 export function resetRecognizerCache(): void {
   onlineRecognizer = null;
+  offlineRecognizer = null;
   recognizerModelId = null;
 }
 
 /** Registry of in-flight sessions keyed by the renderer's opaque token. */
 const sessions = new Map<string, Session>();
 let onlineRecognizer: OnlineRecognizer | null = null;
+let offlineRecognizer: OfflineRecognizer | null = null;
 /** Which model the cached recognizer was built for — a selection change in
  *  Settings must rebuild instead of reusing the stale engine. */
 let recognizerModelId: string | null = null;
@@ -205,15 +216,74 @@ async function getOnlineRecognizer(): Promise<OnlineRecognizer> {
   return onlineRecognizer;
 }
 
+/** Lazily load + build the shared offline (SenseVoice) recognizer for the
+ *  currently-selected voice model. */
+async function getOfflineSenseVoiceRecognizer(): Promise<OfflineRecognizer> {
+  const modelId = selectedModelId();
+  if (!modelId) {
+    throw new Error("尚未选择语音模型。请在 设置 → 语音输入 中先下载并选择一个模型。");
+  }
+  if (offlineRecognizer && recognizerModelId === modelId) return offlineRecognizer;
+  const modelDir = requireModelDir(modelId);
+  const files = senseVoiceFilesFor(modelId);
+
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { OfflineRecognizer } = require("sherpa-onnx-node") as {
+    OfflineRecognizer: new (cfg: unknown) => OfflineRecognizer;
+  };
+  const enc = (rel: string) => join(modelDir, rel);
+  offlineRecognizer = new OfflineRecognizer({
+    featConfig: { sampleRate: SAMPLE_RATE, featureDim: FEATURE_DIM },
+    modelConfig: {
+      senseVoice: {
+        model: enc(files.model),
+        language: "auto",
+        useInverseTextNormalization: 1,
+      },
+      tokens: enc(files.tokens),
+      numThreads: 2,
+      provider: "cpu",
+      debug: 0,
+    },
+  });
+  recognizerModelId = modelId;
+  log.info(`[voice] offline(sense-voice) recognizer ready (modelDir=${modelDir})`);
+  return offlineRecognizer;
+}
+
 /** Pre-build the cached recognizer in the background so the FIRST
  *  `voice.start` doesn't pay the model-load latency (loading the native addon
  *  + ONNX files takes seconds). Safe to call repeatedly — once built the
  *  cached instance returns immediately. Errors are swallowed (e.g. no model
  *  selected yet) — `voice.start` surfaces them properly when it matters. */
 export function warmupRecognizer(): void {
-  void getOnlineRecognizer().catch((err) => {
+  const modelId = selectedModelId();
+  if (!modelId) return;
+  const arch = modelArchitecture(modelId);
+  const promise =
+    arch === "sense-voice"
+      ? getOfflineSenseVoiceRecognizer()
+      : getOnlineRecognizer();
+  void promise.catch((err) => {
     log.info(`[voice] warmup skipped: ${(err as Error).message}`);
   });
+}
+
+/** Clean rich-transcription tokens (emotion/language/event tags) from SenseVoice output. */
+function cleanSenseVoiceText(raw: string): string {
+  if (!raw) return "";
+  return raw.replace(/<\|.*?\|>/g, "").trim();
+}
+
+/** Merge an array of Float32Array audio chunks into a single Float32Array. */
+function mergePcmChunks(chunks: Float32Array[], totalLength: number): Float32Array {
+  const merged = new Float32Array(totalLength);
+  let offset = 0;
+  for (const chunk of chunks) {
+    merged.set(chunk, offset);
+    offset += chunk.length;
+  }
+  return merged;
 }
 
 /** Start a voice session for the given token. `lang` is accepted but the model
@@ -226,22 +296,40 @@ export async function startSession(
   engine: "zipformer" | "parakeet",
 ): Promise<void> {
   if (sessions.has(sessionId)) return;
-  log.info(`[voice] start session=${sessionId} lang=${lang} engine=${engine}`);
-  const rec = await getOnlineRecognizer();
-  const stream = rec.createStream();
-  sessions.set(sessionId, {
-    stream,
-    online: rec,
-    fedSamples: 0,
-    committedText: "",
-    currentSegment: "",
-    lastEmitted: "",
-    lastCommittedSegment: "",
-    spokeSinceCommit: false,
-    silentSamples: 0,
-    peakEnvelope: 0,
-    staleDropLogged: false,
-  });
+  const modelId = selectedModelId();
+  const arch = modelArchitecture(modelId);
+  log.info(`[voice] start session=${sessionId} lang=${lang} arch=${arch} engine=${engine}`);
+
+  if (arch === "sense-voice") {
+    const rec = await getOfflineSenseVoiceRecognizer();
+    sessions.set(sessionId, {
+      arch: "sense-voice",
+      offline: rec,
+      fedSamples: 0,
+      pcmChunks: [],
+      lastEmitted: "",
+      lastPartialSampleCount: 0,
+      silentSamples: 0,
+      peakEnvelope: 0,
+    });
+  } else {
+    const rec = await getOnlineRecognizer();
+    const stream = rec.createStream();
+    sessions.set(sessionId, {
+      arch: "transducer",
+      stream,
+      online: rec,
+      fedSamples: 0,
+      committedText: "",
+      currentSegment: "",
+      lastEmitted: "",
+      lastCommittedSegment: "",
+      spokeSinceCommit: false,
+      silentSamples: 0,
+      peakEnvelope: 0,
+      staleDropLogged: false,
+    });
+  }
   log.info(`[voice] session started ${sessionId}`);
 }
 
@@ -250,7 +338,7 @@ export async function startSession(
  *  Re-committing it would append the same sentence again (the repeat bug);
  *  the `spokeSinceCommit` half keeps a user who genuinely says the same thing
  *  twice — "谢谢" … "谢谢" — from being dropped. */
-function isStaleSegment(s: Session, segment: string): boolean {
+function isStaleSegment(s: OnlineSession, segment: string): boolean {
   return (
     segment !== "" && segment === s.lastCommittedSegment && !s.spokeSinceCommit
   );
@@ -263,7 +351,7 @@ function isStaleSegment(s: Session, segment: string): boolean {
  *  public result (both catalog models report an empty result right after a
  *  reset), and if some build ever keeps text in it, replaying that text is
  *  what we would do forever — so such a stream is replaced outright. */
-function commitSegment(s: Session, rec: OnlineRecognizer): void {
+function commitSegment(s: OnlineSession, rec: OnlineRecognizer): void {
   const segment = s.currentSegment;
   // Decided before the counters are cleared — it reads `spokeSinceCommit`.
   const stale = isStaleSegment(s, segment);
@@ -302,14 +390,13 @@ function commitSegment(s: Session, rec: OnlineRecognizer): void {
 /** Feed a 16 kHz mono Float32 chunk into the active session. */
 export function feedPcm(sessionId: string, pcm: Float32Array): void {
   const s = sessions.get(sessionId);
-  if (!s || !s.stream) return;
+  if (!s) return;
   if (s.fedSamples === 0) {
     log.info(`[voice] first pcm chunk ${sessionId} (${pcm.length} samples)`);
   }
   s.fedSamples += pcm.length;
 
-  // Measure the batch ourselves (see the silence-gate note above the
-  // constants): the decoder must not keep sitting on its last result.
+  // Measure the batch ourselves (silence-gate)
   let peak = 0;
   for (let i = 0; i < pcm.length; i++) {
     const v = pcm[i] ?? 0;
@@ -323,6 +410,41 @@ export function feedPcm(sessionId: string, pcm: Float32Array): void {
     s.silentSamples += pcm.length;
   } else {
     s.silentSamples = 0;
+  }
+
+  // SenseVoice offline batching path
+  if (s.arch === "sense-voice") {
+    s.pcmChunks.push(new Float32Array(pcm));
+
+    // Optional background partial decode when pausing after sufficient speech
+    if (
+      s.offline &&
+      s.fedSamples >= SAMPLE_RATE &&
+      s.fedSamples - s.lastPartialSampleCount >= (SAMPLE_RATE * 15) / 10 &&
+      s.silentSamples >= (SAMPLE_RATE * 6) / 10
+    ) {
+      s.lastPartialSampleCount = s.fedSamples;
+      try {
+        const all = mergePcmChunks(s.pcmChunks, s.fedSamples);
+        const stream = s.offline.createStream();
+        stream.acceptWaveform({ samples: all, sampleRate: SAMPLE_RATE });
+        s.offline.decode(stream);
+        const r = s.offline.getResult(stream);
+        const partial = cleanSenseVoiceText(r.text ?? "");
+        if (partial && partial !== s.lastEmitted) {
+          s.lastEmitted = partial;
+          emit(sessionId, "partial", partial);
+        }
+      } catch (err) {
+        log.warn(`[voice] sense-voice partial decode failed: ${(err as Error).message}`);
+      }
+    }
+    return;
+  }
+
+  // Transducer streaming path
+  if (!s.stream) return;
+  if (!silent) {
     s.spokeSinceCommit = true;
   }
 
@@ -340,15 +462,10 @@ export function feedPcm(sessionId: string, pcm: Float32Array): void {
       rec.decode(s.stream);
       const r = rec.getResult(s.stream);
       if (r.text) s.currentSegment = r.text;
-      // Endpoint (trailing silence): commit the segment and RESET the
-      // decoder. Without the reset the streaming transducer tends to loop on
-      // repeated tokens after silence, and the partial text never segments.
+      // Endpoint (trailing silence): commit the segment and RESET the decoder.
       if (rec.isEndpoint(s.stream)) commitSegment(s, rec);
     }
-    // Backstop for the same reset: if the engine reported no endpoint through
-    // a pause longer than its own trailing-silence rule, close the segment
-    // anyway. A decoder left unreset re-commits its last result at every
-    // later endpoint, which is the repeat users see as duplicated text.
+    // Backstop for the same reset
     if (s.silentSamples >= SILENCE_RESET_SAMPLES) commitSegment(s, rec);
     const text = s.committedText + s.currentSegment;
     if (text && text !== s.lastEmitted) {
@@ -364,6 +481,30 @@ export function feedPcm(sessionId: string, pcm: Float32Array): void {
 export function stopSession(sessionId: string): { text: string } {
   const s = sessions.get(sessionId);
   if (!s) return { text: "" };
+
+  if (s.arch === "sense-voice") {
+    const rec = s.offline;
+    let text = "";
+    try {
+      if (rec && s.pcmChunks.length > 0 && s.fedSamples > 0) {
+        const all = mergePcmChunks(s.pcmChunks, s.fedSamples);
+        const stream = rec.createStream();
+        stream.acceptWaveform({ samples: all, sampleRate: SAMPLE_RATE });
+        rec.decode(stream);
+        const r = rec.getResult(stream);
+        text = cleanSenseVoiceText(r.text ?? "");
+      }
+    } catch (err) {
+      log.error(`[voice] sense-voice stop decode failed: ${(err as Error).message}`);
+    }
+    sessions.delete(sessionId);
+    if (text) emit(sessionId, "final", text);
+    log.info(
+      `[voice] sense-voice session stopped ${sessionId} => ${text ? `${text.length} chars` : "(empty)"} (${(s.fedSamples / 16000).toFixed(1)}s audio received)`,
+    );
+    return { text };
+  }
+
   const rec = s.online;
   let text = "";
   try {

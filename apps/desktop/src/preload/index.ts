@@ -31,6 +31,15 @@ const api = {
         IPC.CLAUDE_SAVE_GLOBAL_ALLOWED_TOOLS,
         input,
       )) as RpcMap["claude.saveGlobalAllowedTools"],
+    listTrustedBrowserDomains: (() =>
+      ipcRenderer.invoke(
+        IPC.CLAUDE_LIST_TRUSTED_BROWSER_DOMAINS,
+      )) as RpcMap["claude.listTrustedBrowserDomains"],
+    saveTrustedBrowserDomains: ((input) =>
+      ipcRenderer.invoke(
+        IPC.CLAUDE_SAVE_TRUSTED_BROWSER_DOMAINS,
+        input,
+      )) as RpcMap["claude.saveTrustedBrowserDomains"],
     respondQuestion: ((input) =>
       ipcRenderer.invoke(IPC.CLAUDE_RESPOND_QUESTION, input)) as RpcMap["claude.respondQuestion"],
     respondPlanApproval: ((input) =>
@@ -464,6 +473,8 @@ const api = {
       ipcRenderer.invoke(IPC.BROWSER_SHOW, input)) as RpcMap["browser.show"],
     hide: ((input) =>
       ipcRenderer.invoke(IPC.BROWSER_HIDE, input)) as RpcMap["browser.hide"],
+    setSuppressed: ((input) =>
+      ipcRenderer.invoke(IPC.BROWSER_SET_SUPPRESSED, input)) as RpcMap["browser.setSuppressed"],
     close: ((input) =>
       ipcRenderer.invoke(IPC.BROWSER_CLOSE, input)) as RpcMap["browser.close"],
     captureFrame: ((input) =>
@@ -486,6 +497,15 @@ const api = {
       ipcRenderer.invoke(IPC.BROWSER_AUTH_RESPOND, input)) as RpcMap["browser.authRespond"],
     downloadAction: ((input) =>
       ipcRenderer.invoke(IPC.BROWSER_DOWNLOAD_ACTION, input)) as RpcMap["browser.downloadAction"],
+    chromeRelayStatus: (() =>
+      ipcRenderer.invoke(IPC.BROWSER_CHROME_RELAY_STATUS)) as RpcMap["browser.chromeRelayStatus"],
+    chromeRelaySetEnabled: ((input) =>
+      ipcRenderer.invoke(
+        IPC.BROWSER_CHROME_RELAY_SET_ENABLED,
+        input,
+      )) as RpcMap["browser.chromeRelaySetEnabled"],
+    chromeRelayResetToken: (() =>
+      ipcRenderer.invoke(IPC.BROWSER_CHROME_RELAY_RESET_TOKEN)) as RpcMap["browser.chromeRelayResetToken"],
   },
 
   /** Language servers (LSP): install/enable per language, then sync documents

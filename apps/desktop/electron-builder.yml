@@ -55,6 +55,16 @@ files:
   # dash in the pattern keeps the JS package (claude-agent-sdk) itself.
   - "!**/node_modules/@anthropic-ai/claude-agent-sdk-*/**"
 
+# The mcode-connector Chrome extension ships UNPACKED (outside the asar) so
+# users can load it via chrome://extensions "Load unpacked" — see
+# extension/mcode-connector/README.md and the settings「真实 Chrome」section.
+extraResources:
+  - from: extension/mcode-connector
+    to: mcode-connector
+    filter:
+      - "**/*"
+      - "!README.md"
+
 # node-pty ships a native .node addon; sql.js loads a wasm/asm.js blob at
 # runtime. Unpack them from the asar so they can be require()'d from disk.
 #

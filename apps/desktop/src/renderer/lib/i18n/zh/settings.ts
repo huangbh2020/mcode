@@ -128,6 +128,41 @@ export const zh = {
   "settings.toolApproval.hint":
     "安全边界不受影响:项目外的写入、越界读取与越界 bash 写入目标仍会被拒绝;计划模式下所有写操作仍需审批。",
 
+  // ── 受信任域名(agent 浏览器导航的域名级审批) ──
+  "settings.trustedDomains.title": "受信任域名",
+  "settings.trustedDomains.desc":
+    "名单中的域名允许 agent 的浏览器工具直接访问,不再弹出首次访问审批;localhost 与本地文件始终放行。",
+  "settings.trustedDomains.rowTitle": "受信任的域名",
+  "settings.trustedDomains.rowDesc":
+    "信任父域名会同时覆盖其子域名(如 github.com 也允许 api.github.com)。审批卡上把「允许范围」选为「始终信任」也会写入此名单。",
+  "settings.trustedDomains.loading": "读取中…",
+  "settings.trustedDomains.empty": "暂无受信任域名",
+  "settings.trustedDomains.placeholder": "输入域名,如 example.com",
+  "settings.trustedDomains.add": "添加",
+  "settings.trustedDomains.removeTitle": "移除该域名",
+  "settings.trustedDomains.removeAria": "移除受信任域名 {domain}",
+  "settings.trustedDomains.invalid": "域名格式无效,应为 example.com 这样的形式。",
+  "settings.trustedDomains.hint":
+    "此名单只影响 agent 发起的导航;你自己在浏览器面板里的浏览不经此门禁。",
+  // ── 真实 Chrome(mcode-connector 扩展接入) ──
+  "settings.chromeRelay.title": "真实 Chrome",
+  "settings.chromeRelay.desc":
+    "通过 mcode-connector 扩展把 agent 的浏览器工具接到你本机的 Chrome——用你的真实登录态访问站点(只读:导航/快照/截图)。",
+  "settings.chromeRelay.enableTitle": "启用真实 Chrome 接入",
+  "settings.chromeRelay.enableDesc":
+    "开启后在本机回环地址启动中继服务;配合 Chrome 扩展 mcode-connector 使用。",
+  "settings.chromeRelay.statusTitle": "连接状态",
+  "settings.chromeRelay.howTo":
+    "Chrome 打开 chrome://extensions → 开发者模式 → 加载已解压的扩展程序,选择应用发行包里的 mcode-connector 目录;在扩展弹窗里填入下方服务地址与配对令牌。",
+  "settings.chromeRelay.connected": "已连接(Chrome {version})",
+  "settings.chromeRelay.listening": "服务已启动,等待扩展连接…",
+  "settings.chromeRelay.starting": "服务启动中…",
+  "settings.chromeRelay.urlPending": "ws://127.0.0.1:…",
+  "settings.chromeRelay.resetToken": "重置配对令牌",
+  "settings.chromeRelay.tokenHint":
+    "配对令牌默认隐藏(仅加密存储)。「重置配对令牌」会生成并显示新令牌,同时断开当前扩展连接。",
+
+
   // ── shared across settings panels ──
   "settings.on": "已开启",
   "settings.off": "已关闭",

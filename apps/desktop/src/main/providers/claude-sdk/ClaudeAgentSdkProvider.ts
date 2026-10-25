@@ -92,7 +92,9 @@ import {
   browserScreenshot,
   BROWSER_TOOL_SPECS,
   BROWSER_TOOLS_FLOW,
+  browserScript,
 } from "@main/browser/agentBrowserTools.js";
+import { gateBrowserNavigation } from "@main/browser/domainGate.js";
 
 // Lazy-load the Agent SDK so the (large) module and its bundled claude binary
 // stay out of the main-process startup path. The SDK is only needed once the
@@ -270,26 +272,33 @@ async function buildBrowserMcpServer(
             .optional()
             .describe("打开方式:desktop(PC 全宽,默认)/iphone(移动端)/android(移动端),仅新建视图时生效"),
           newTab: z.boolean().optional().describe("true=强制新开一个标签页再导航"),
+          backend: z
+            .enum(["chrome"])
+            .optional()
+            .describe("true=在用户真实 Chrome 中打开(需先在设置里连接 mcode-connector 扩展;仅允许已信任域名/localhost)"),
         },
         handler: async (args: Record<string, unknown>) =>
           browserNavigate(
             {
               url: args.url as string,
               browserId: args.browserId as string | undefined,
+              backend: args.backend === "chrome" ? "chrome" : undefined,
               device: args.device as "desktop" | "iphone" | "android" | undefined,
               newTab: args.newTab === true,
             },
             projectPath,
+            { sessionId },
           ),
       },
       {
         name: "browser_snapshot",
         description: BROWSER_TOOL_SPECS.browser_snapshot.description,
         inputSchema: {
+          backend: z.enum(["chrome"]).optional().describe("true=读取用户真实 Chrome 的当前标签页"),
           browserId: z.string().optional().describe("目标浏览器视图 id;省略则用当前目标视图"),
         },
         handler: async (args: Record<string, unknown>) =>
-          browserSnapshot({ browserId: args.browserId as string | undefined }),
+          browserSnapshot({ browserId: args.browserId as string | undefined, backend: args.backend === "chrome" ? "chrome" : undefined }),
       },
       {
         name: "browser_click",
@@ -523,11 +532,40 @@ async function buildBrowserMcpServer(
           }),
       },
       {
+        name: "browser_script",
+        description: BROWSER_TOOL_SPECS.browser_script.description,
+        inputSchema: {
+          steps: z
+            .array(z.object({ op: z.string() }).passthrough())
+            .min(1)
+            .max(40)
+            .describe(
+              "顺序执行的操作数组,每项 { op, ...参数 };op 可选 navigate/click/type/keys/scroll/select/wait/find/evaluate/snapshot,参数与同名工具一致",
+            ),
+          browserId: z.string().optional().describe("目标浏览器视图 id;省略则用当前目标视图"),
+          finalScreenshot: z.boolean().optional().describe("true=末尾追加整页截图"),
+        },
+        handler: async (args: Record<string, unknown>) =>
+          browserScript(
+            {
+              steps: (args.steps as unknown[]) ?? [],
+              browserId: args.browserId as string | undefined,
+              finalScreenshot: args.finalScreenshot === true,
+            },
+            projectPath,
+            // The final-screenshot image flows back through the tool_result
+            // content (same round-trip as browser_screenshot — no separate
+            // browser.image emit on the Claude path).
+            { toolCallId: randomUUID(), sessionId, turnNumber },
+          ),
+      },
+      {
         name: "browser_screenshot",
         description: BROWSER_TOOL_SPECS.browser_screenshot.description,
         inputSchema: {
           browserId: z.string().optional().describe("目标浏览器视图 id;省略则用当前目标视图"),
           fullPage: z.boolean().optional().describe("true=截整页(含滚动外内容)"),
+          backend: z.enum(["chrome"]).optional().describe("true=截用户真实 Chrome 的当前标签页"),
         },
         handler: async (args: Record<string, unknown>) => {
           // The returned image content block flows back to the model via the
@@ -540,7 +578,11 @@ async function buildBrowserMcpServer(
           // needed here — unlike the Pi path, the toolCallId isn't available
           // in the MCP handler's extra, so we rely solely on the tool_result.
           return browserScreenshot(
-            { browserId: args.browserId as string | undefined, fullPage: args.fullPage === true },
+            {
+              browserId: args.browserId as string | undefined,
+              fullPage: args.fullPage === true,
+              backend: args.backend === "chrome" ? "chrome" : undefined,
+            },
             {
               toolCallId: randomUUID(),
               sessionId,
@@ -1228,6 +1270,31 @@ export class ClaudeAgentSdkProvider implements AgentProvider {
             );
             return { behavior: "deny", message: denial };
           }
+        }
+      }
+
+      // --- Browser-navigation domain gate ---
+      // browser_navigate is approved per DOMAIN, not per call: localhost/file
+      // origins and already-trusted hosts pass silently, a new host raises a
+      // domain-kind approval card (its always-grant records the domain, never
+      // the tool name — see domainGate.ts). This branch REPLACES the generic
+      // approval for this tool, so there is never a double prompt; a denied
+      // domain returns here without falling through to the request below.
+      if (toolName === `${BROWSER_MCP_PREFIX}browser_navigate`) {
+        const url = (input as { url?: unknown }).url;
+        if (typeof url === "string" && url.length > 0 && requestApproval) {
+          const gate = await gateBrowserNavigation(url, {
+            sessionId: req.sessionId,
+            mode: ctx.getPermissionMode?.(),
+            requestApproval,
+          });
+          if (gate.allowed) {
+            return effectiveInput
+              ? { behavior: "allow", updatedInput: effectiveInput }
+              : { behavior: "allow" };
+          }
+          ctx.log.info(`denied browser navigation: ${url}`);
+          return { behavior: "deny", message: gate.reason ?? "Denied by user" };
         }
       }
 

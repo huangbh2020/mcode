@@ -19,6 +19,10 @@ import type {
 import { GLOBAL_ALLOWED_TOOLS_SETTING_KEY } from "@contracts/ipc";
 import { log } from "@main/lib/logger.js";
 import { SettingRepo } from "@main/store/repositories.js";
+import {
+  clearSessionBrowserDomains,
+  grantBrowserDomain,
+} from "@main/browser/domainGate.js";
 
 /** Where an "always allow" grant lives. */
 export type AlwaysAllowScope = "session" | "global";
@@ -32,6 +36,10 @@ interface PendingApproval {
   /** Tool name being approved — recorded into alwaysAllowedTools when the
    *  user grants with `always: true`. */
   toolName: string;
+  /** For browser-domain approvals: the host being approved. An always-grant
+   *  records THIS (into the trusted-domain store) instead of the tool name —
+   *  see main/browser/domainGate.ts. */
+  domain?: string;
 }
 
 interface PendingUserInput {
@@ -82,7 +90,13 @@ export class ApprovalBridge {
   ): (req: ApprovalRequest) => Promise<ProviderApprovalDecision> {
     return (req) =>
       new Promise<ProviderApprovalDecision>((resolve, reject) => {
-        this.pendingApprovals.set(req.requestId, { resolve, reject, sessionId, toolName: req.toolName });
+        this.pendingApprovals.set(req.requestId, {
+          resolve,
+          reject,
+          sessionId,
+          toolName: req.toolName,
+          domain: req.domain,
+        });
         emit({
           type: "approval.request",
           sessionId,
@@ -91,6 +105,7 @@ export class ApprovalBridge {
           toolName: req.toolName,
           input: req.input,
           description: req.description,
+          domain: req.domain,
         });
       });
   }
@@ -100,13 +115,17 @@ export class ApprovalBridge {
    *  into the session's in-memory always-allowed set for `scope: "session"`
    *  (default, pre-existing behavior), or into the PERSISTED global allowlist
    *  for `scope: "global"` (every session, across restarts). Subsequent calls
-   *  skip the prompt either way. Returns the owning session's id on success,
+   *  skip the prompt either way. For DOMAIN approvals (`grantDomain` set) the
+   *  grant records the domain into the trusted-domain store instead — the
+   *  tool allowlists are never touched, so approving one site can't
+   *  blanket-approve navigation. Returns the owning session's id on success,
    *  null when no such request is pending (already resolved by another client). */
   resolveApproval(
     requestId: string,
     decision: ProviderApprovalDecision,
     always?: boolean,
     scope?: AlwaysAllowScope,
+    grantDomain?: string,
   ): string | null {
     const p = this.pendingApprovals.get(requestId);
     if (!p) return null;
@@ -115,6 +134,11 @@ export class ApprovalBridge {
     // their grant accordingly (one-shot "accept" vs session-wide).
     p.resolve(decision.allow && always ? { ...decision, persist: true } : decision);
     this.pendingApprovals.delete(requestId);
+    // Domain-kind grant: record the DOMAIN, never the tool name.
+    if (decision.allow && always && grantDomain) {
+      grantBrowserDomain(p.sessionId, grantDomain, scope === "global" ? "global" : "session");
+      return p.sessionId;
+    }
     // Record "always allow" so canUseTool auto-approves this tool next time.
     // A GLOBAL grant deliberately does NOT also land in the session set: the
     // global set already covers this session in every non-plan mode, and the
@@ -322,5 +346,6 @@ export class ApprovalBridge {
     // (shouldn't happen, but defensive) starts clean.
     this.alwaysAllowedTools.delete(sessionId);
     this.permissionModes.delete(sessionId);
+    clearSessionBrowserDomains(sessionId);
   }
 }

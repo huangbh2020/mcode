@@ -594,3 +594,33 @@ export function transducerFilesFor(modelId: string): TransducerModelFiles {
   return roles as TransducerModelFiles;
 }
 
+/** Determine the architecture of a catalog model ("sense-voice" | "transducer"). */
+export function modelArchitecture(modelId: string): "transducer" | "sense-voice" {
+  const model = VOICE_MODEL_CATALOG.find((m) => m.id === modelId);
+  return model?.architecture ?? "transducer";
+}
+
+/** A catalog model's files mapped to the sherpa-onnx SenseVoice config roles. */
+export interface SenseVoiceModelFiles {
+  tokens: string;
+  model: string;
+}
+
+/** Map a SenseVoice model's catalog file list to config roles (tokens.txt + model.int8.onnx). */
+export function senseVoiceFilesFor(modelId: string): SenseVoiceModelFiles {
+  const model = VOICE_MODEL_CATALOG.find((m) => m.id === modelId);
+  if (!model) throw new Error(`未知模型: ${modelId}`);
+  let tokens: string | undefined;
+  let modelFile: string | undefined;
+  for (const f of model.files) {
+    const base = f.rel.split(/[\\/]/).pop() ?? f.rel;
+    if (base.startsWith("tokens")) tokens = f.rel;
+    else if (base.startsWith("model")) modelFile = f.rel;
+  }
+  if (!tokens || !modelFile) {
+    throw new Error(`SenseVoice 模型文件清单不完整: ${modelId}`);
+  }
+  return { tokens, model: modelFile };
+}
+
+

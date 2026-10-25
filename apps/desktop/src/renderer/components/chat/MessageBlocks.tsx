@@ -463,16 +463,6 @@ function MultiBatchToolGroup({
   const firstBlock = blocks[0];
   const isSingleThinking = blocks.length === 1 && firstBlock?.kind === "thinking";
 
-  // Block tally in first-appearance order
-  const counts = new Map<string, number>();
-  for (const b of blocks) {
-    const name = b.kind === "thinking" ? t("chatStream.thinking") : toolDisplayName(t, b.toolName);
-    counts.set(name, (counts.get(name) ?? 0) + 1);
-  }
-  const countsBreakdown = isSingleThinking
-    ? ""
-    : [...counts.entries()].map(([n, c]) => `${n} ×${c}`).join(" · ");
-
   const label = isSingleThinking
     ? t("chatStream.thinking")
     : t("chatStream.opCount", { n: blocks.length });
@@ -534,15 +524,8 @@ function MultiBatchToolGroup({
           <CurrentOpTicker op={runningTool} turnActive={turnActive} />
         )}
 
-        {/* Right side aligned: compact counts breakdown badge + chevron */}
-        <div className="ml-auto flex items-center gap-2 shrink-0">
-          {countsBreakdown && (
-            <span className="px-2 py-0.5 rounded-md bg-surface-muted/60 border border-edge/40 text-[10px] text-content-subtle font-mono">
-              {countsBreakdown}
-            </span>
-          )}
-          <Chevron open={open} className="text-content-subtle opacity-70 group-hover:opacity-100" />
-        </div>
+        {/* Right side aligned: chevron */}
+        <Chevron open={open} className="ml-auto text-content-subtle opacity-70 group-hover:opacity-100 shrink-0" />
       </button>
 
       {open && (
@@ -1084,6 +1067,13 @@ const BlockView = memo(function BlockView({
   // an uncaught render error with no boundary, i.e. the black screen. Deferring
   // an empty constant for non-text kinds is a no-op.
   const deferredText = useDeferredValue(block.kind === "text" ? block.text : "");
+  // Memoize merged skill names so <Markdown> receives a stable array reference,
+  // preventing its memo from being breached on every delta flush.
+  const blockSkillNames = block.kind === "text" ? block.skillNames : undefined;
+  const mergedSkillNames = useMemo(() => {
+    if (!blockSkillNames || blockSkillNames.length === 0) return knownSkillNames;
+    return Array.from(new Set([...blockSkillNames, ...knownSkillNames]));
+  }, [blockSkillNames, knownSkillNames]);
 
   switch (block.kind) {
     case "text": {
@@ -1101,10 +1091,7 @@ const BlockView = memo(function BlockView({
       // of code blocks is itself deferred inside <Markdown> (lazy highlighter
       // singleton + LRU cache + useMemo on rawCode), so the expensive path is
       // already guarded without sacrificing live markdown formatting.
-      const skillNames =
-        block.skillNames && block.skillNames.length > 0
-          ? Array.from(new Set([...block.skillNames, ...knownSkillNames]))
-          : knownSkillNames;
+      const skillNames = mergedSkillNames;
       // Whitespace-only text blocks render nothing. They are stream
       // artifacts: the bridge's <think> segmenter forwards the bare newlines
       // models emit around reasoning sections, and each isolated run became
@@ -2278,13 +2265,9 @@ export function toolSummary(name: string, input: unknown): string {
       }
       return "";
     }
-    // Pi (lowercase) tool names. Pi's read/write/edit take a `path` field
-    // (not Claude's `file_path`); accept either so summaries survive if a
-    // future pi version renames the field. find = Pi's glob, ls = Pi-only.
-    case "read":
-    case "write":
-    case "edit":
-      return String(obj.file_path ?? obj.path ?? obj.filePath ?? "");
+    // Pi (lowercase) tool names. read/write/edit share the cases at the top
+    // of this switch (the file_path ?? path ?? filePath lookup already covers
+    // Pi's `path` field). find = Pi's glob, ls = Pi-only.
     case "bash":
       return String(obj.command ?? obj.description ?? "");
     case "find":

@@ -147,7 +147,7 @@ import type { ThemeStyle } from "@contracts/theme";
  *  switches. The browser panel joins this layer too — only its VISIBILITY is
  *  per-session; the tab list / WebContentsViews behind it stay global. NOT
  *  persisted — resets on restart. */
-export type SessionRightPanelTabId = "turns" | "sidechat" | "browser" | "sched";
+export type SessionRightPanelTabId = "turns" | "sidechat" | "browser" | "sched" | "github";
 
 /** One browser tab, shared across the sidebar and overlay containers. `id` is
  *  renderer-local; `browserId` is the main-process view id. All
@@ -6526,7 +6526,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       // auto-open their panels; "turns"/"sidechat" are session-scoped tabs
       // opened per session via the rail's "+" menu — a persisted value from
       // an older build is ignored the same way).
-      if (tabRaw === "files" || tabRaw === "git" || tabRaw === "github") set({ rightPanelTab: tabRaw });
+      if (tabRaw === "files" || tabRaw === "git") set({ rightPanelTab: tabRaw });
       const termPosRaw = ds[TERMINAL_POSITION_SETTING_KEY];
       if (termPosRaw === "bottom" || termPosRaw === "right") {
         set({ terminalPosition: termPosRaw });
@@ -7549,6 +7549,12 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       }
       return { openTabs: nextTabs, activeSessionId: nextActive, centerTabFocus };
     });
+    // Immediately free memory (large prose blocks, base64 images) for the closed
+    // tab if it has no active background turn or pending decision dialog.
+    const st = get();
+    if (!st.runningBySession[sessionId] && !st.pendingQuestionBySession[sessionId]) {
+      st.pruneSessionHistory(sessionId);
+    }
   },
 
   /** See the interface doc. Callers must NOT prune a session with a running
@@ -11895,6 +11901,10 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         granted,
         always: granted && !!scope,
         alwaysScope: scope,
+        // Domain-kind approvals (browser_navigate first-visit cards): the
+        // always-grant records the DOMAIN into the trusted-domain store —
+        // approving github.com must not blanket-approve every other site.
+        grantDomain: granted && scope ? head.domain : undefined,
       });
     } catch (err) {
       // Don't shift on failure; surface the error to the console so the

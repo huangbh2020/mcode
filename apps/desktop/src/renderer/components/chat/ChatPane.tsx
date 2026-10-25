@@ -61,6 +61,7 @@ import { turnTokenUsage, CUMULATIVE_USAGE_PROVIDER_IDS } from "@renderer/lib/tur
 import type { TurnUsageRecord } from "@contracts/runtime";
 import { RenderErrorBoundary } from "./RenderErrorBoundary.js";
 import { MicButton } from "./MicButton.js";
+import { onVoiceActiveChange, voiceHandleFor } from "@renderer/lib/voiceController.js";
 import { ComposerToolbar } from "./ComposerToolbar.js";
 import { WorktreeModeChip } from "./WorktreeModeChip.js";
 import { SessionDirectoryChip } from "./SessionDirectoryChip.js";
@@ -807,6 +808,10 @@ function groupMessagesForRender(
               openOps.leading = curBlocks;
               curMsg = null;
               curBlocks = [];
+            } else if (curMsg) {
+              // 前置的展示消息来自不同 message，必须先于当前 opsGroup 发射，
+              // 保证时序（先到达的普通文字在上方，后续的工具执行在下方）。
+              flushMsg();
             }
           } else if (curMsg) {
             // A display message was buffered when this run opened without
@@ -1425,6 +1430,11 @@ function ChatPaneForSession({
     cardRef: composerCardRef,
     tier: composerTier,
   } = useComposerRowFit(chipsMode === "collapsed");
+  const [voiceActive, setVoiceActive] = useState(false);
+  useEffect(() => {
+    return onVoiceActiveChange(setVoiceActive);
+  }, []);
+
   const messages = useSessionStore((s) =>
     s.messagesBySession[sessionId] ?? EMPTY_MESSAGES,
   );
@@ -3482,9 +3492,15 @@ function ChatPaneForSession({
     reorderPromptQueue(sessionId, next);
   };
 
-  /** Enter handler wired into the editor: sends when idle, enqueues when busy.
+  /** Enter handler wired into the editor: stops dictation when listening,
+   *  sends when idle, enqueues when busy.
    *  Shift+Enter inserts a newline and never reaches here (handled by Tiptap). */
   const handleEnter = () => {
+    const vh = voiceHandleFor(sessionId);
+    if (vh?.isBusy()) {
+      void vh.stopListen();
+      return;
+    }
     if (sessionBusy) handleEnqueue();
     else handleSend();
   };
@@ -4468,6 +4484,7 @@ function ChatPaneForSession({
               toolName={headApproval.toolName}
               input={headApproval.input}
               description={headApproval.description}
+              domain={headApproval.domain}
               queuePosition={
                 pendingApprovals.filter((p) => p.sessionId === sessionId).findIndex(
                   (p) => p.requestId === headApproval.requestId,
@@ -4525,6 +4542,8 @@ function ChatPaneForSession({
               "focus-within:border-accent focus-within:shadow-[0_0_0_3px_rgb(var(--accent)/0.12)]",
               // Highlight the composer while a file-tree drag hovers over it.
               dragOver && "border-accent ring-4 ring-accent/20",
+              // Voice listening active glow + subtle pulse
+              voiceActive && "border-accent ring-2 ring-accent/30 shadow-[0_0_16px_rgb(var(--accent)/0.18)] animate-pulse",
               // Hide the composer card entirely while a bottom prompt (approval /
               // plan approval / question) is visible - the prompt takes its place
               // in the flow. `hidden` (display:none) keeps the component mounted
@@ -4807,9 +4826,11 @@ function ChatPaneForSession({
                 ref={editorRef}
                 editable={!textareaLocked && !orchBlocking}
                 placeholder={
-                  textareaLocked
-                    ? "Claude is working…"
-                    : orchBlocking
+                  voiceActive
+                    ? t("chat.voice.placeholderListening")
+                    : textareaLocked
+                      ? "Claude is working…"
+                      : orchBlocking
                       ? t("orch.canvas.inputLocked")
                       : schedHintVisible
                         ? t("automation.composerSchedHint")

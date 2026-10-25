@@ -1854,6 +1854,8 @@ export class SdkMessageAdapter {
         // them here (isBackgrounded may still be false if the
         // backgrounding patch raced past us; the level reconcile corrects
         // a mis-marked entry on its next payload).
+        // 工具已完成并返回结果，重置前置叙述消息锚点，防止后续新周期的独立工具倒挂
+        this.state.lastNarrationMessageId = null;
         this.settleBashTaskByToolResult(b.tool_use_id, !!b.is_error);
         this.ctx.emit({
           type: "tool.result",

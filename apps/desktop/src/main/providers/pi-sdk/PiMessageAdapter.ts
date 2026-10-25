@@ -135,11 +135,13 @@ export class PiMessageAdapter {
         this.thinkMessageId = null;
         this.skipLfAfterThinkClose = false;
         break;
-      case "tool_execution_start":
+      case "tool_execution_start": {
         // Attach the tool to the message that narrated it (snapshot at
         // toolcall_start). Without this the store's open-turn heuristic would
         // append every tool to the turn's first message, flattening the
         // interleaved "text → tool → text → tool" timeline into one pile.
+        const targetMessageId = this.pendingToolTargetId;
+        this.pendingToolTargetId = null;
         this.emit({
           type: "tool.use",
           sessionId: this.sessionId,
@@ -147,9 +149,10 @@ export class PiMessageAdapter {
           toolName: event.toolName,
           input: event.args,
           requiresApproval: false, // Pi has no canUseTool interception; tools run directly
-          ...(this.pendingToolTargetId ? { messageId: this.pendingToolTargetId } : {}),
+          ...(targetMessageId ? { messageId: targetMessageId } : {}),
         });
         break;
+      }
       case "tool_execution_end":
         this.emit({
           type: "tool.result",

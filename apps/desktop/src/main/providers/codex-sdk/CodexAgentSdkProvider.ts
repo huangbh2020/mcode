@@ -92,7 +92,9 @@ import {
   browserScreenshot,
   BROWSER_TOOL_SPECS,
   browserToolsUsagePrompt,
+  browserScript,
 } from "@main/browser/agentBrowserTools.js";
+import { gateBrowserNavigation } from "@main/browser/domainGate.js";
 
 /* ── Codex-native capability descriptors ── */
 
@@ -1012,13 +1014,17 @@ function buildDynamicTools(browserToolsEnabled: boolean): Array<Record<string, u
         url: { type: "string", description: "目标 URL,http(s):// 网页或 file:/// 本地文件" },
         device: { type: "string", enum: ["desktop", "iphone", "android"], description: "设备仿真档位,默认 desktop" },
         browserId: optId,
+        backend: { type: "string", enum: ["chrome"], description: "true=在用户真实 Chrome 中打开(需连接 mcode-connector 扩展;仅允许已信任域名/localhost)" },
       }, ["url"]),
     },
     {
       type: "function",
       name: "browser_snapshot",
       description: BROWSER_TOOL_SPECS.browser_snapshot.description,
-      inputSchema: schema({ browserId: optId }),
+      inputSchema: schema({
+          browserId: optId,
+          backend: { type: "string", enum: ["chrome"], description: '"chrome"=读取用户真实 Chrome 的当前标签页' },
+        }),
     },
     {
       type: "function",
@@ -1145,6 +1151,29 @@ function buildDynamicTools(browserToolsEnabled: boolean): Array<Record<string, u
     },
     {
       type: "function",
+      name: "browser_script",
+      description: BROWSER_TOOL_SPECS.browser_script.description,
+      inputSchema: schema({
+        steps: {
+          type: "array",
+          minItems: 1,
+          maxItems: 40,
+          items: {
+            type: "object",
+            properties: {
+              op: { type: "string", enum: ["navigate", "click", "type", "keys", "scroll", "select", "wait", "find", "evaluate", "snapshot"] },
+            },
+            required: ["op"],
+            additionalProperties: true,
+          },
+          description: "顺序执行的操作数组(一步失败即中止);其余字段与同名工具的参数一致,如 {op:'click',index:1}、{op:'type',index:2,text:'hi'}",
+        },
+        browserId: optId,
+        finalScreenshot: { type: "boolean", description: "true=末尾追加整页截图" },
+      }, ["steps"]),
+    },
+    {
+      type: "function",
       name: "browser_save_pdf",
       description: BROWSER_TOOL_SPECS.browser_save_pdf.description,
       inputSchema: schema({
@@ -1179,6 +1208,7 @@ function buildDynamicTools(browserToolsEnabled: boolean): Array<Record<string, u
       inputSchema: schema({
         browserId: optId,
         fullPage: { type: "boolean", description: "true=截整页(含滚动外内容)" },
+        backend: { type: "string", enum: ["chrome"], description: '"chrome"=截用户真实 Chrome 的当前标签页' },
       }),
     },
   );
@@ -1255,20 +1285,46 @@ async function invokeDynamicTool(p: Record<string, unknown>, deps: RequestDeps):
       }
       case "browser_list":
         return toContent(browserList());
-      case "browser_navigate":
+      case "browser_navigate": {
+        // Domain gate: Codex dynamic tools bypass the server's approval flow,
+        // so the per-domain navigation gate runs inline here (see
+        // domainGate.ts — localhost/trusted hosts pass, a new host raises a
+        // domain-kind approval card, denial surfaces as a tool error the
+        // model can act on). Runs before the enabled-check fallback below it.
+        const navUrl = String(args.url ?? "");
+        const requestApproval = ctx.requestApproval;
+        if (navUrl.length > 0 && requestApproval) {
+          const gate = await gateBrowserNavigation(navUrl, {
+            sessionId: req.sessionId,
+            requestApproval,
+          });
+          if (!gate.allowed) {
+            return toContent({
+              content: [{ type: "text", text: gate.reason ?? "用户拒绝了该导航。" }],
+            });
+          }
+        }
         return toContent(
           await browserNavigate(
             {
-              url: String(args.url ?? ""),
+              url: navUrl,
+              backend: args.backend === "chrome" ? "chrome" : undefined,
               browserId: optStr(args.browserId),
               device: optDevice(args.device),
               newTab: args.newTab === true,
             },
             req.cwd,
+            { sessionId: req.sessionId },
           ),
         );
+      }
       case "browser_snapshot":
-        return toContent(await browserSnapshot({ browserId: optStr(args.browserId) }));
+        return toContent(
+          await browserSnapshot({
+            browserId: optStr(args.browserId),
+            backend: args.backend === "chrome" ? "chrome" : undefined,
+          }),
+        );
       case "browser_click":
         return toContent(
           await browserClick({
@@ -1348,6 +1404,29 @@ async function invokeDynamicTool(p: Record<string, unknown>, deps: RequestDeps):
         return toContent(await browserSwitchTab({ browserId: String(args.browserId ?? "") }));
       case "browser_close_tab":
         return toContent(await browserCloseTab({ browserId: String(args.browserId ?? "") }));
+      case "browser_script": {
+        const steps = Array.isArray(args.steps) ? args.steps : [];
+        return toContent(
+          await browserScript(
+            { steps, browserId: optStr(args.browserId), finalScreenshot: args.finalScreenshot === true },
+            req.cwd,
+            {
+              toolCallId: typeof p.callId === "string" ? p.callId : randomUUID(),
+              sessionId: req.sessionId,
+              turnNumber: req.turnNumber,
+              onImage: (info: { toolCallId: string; data: string; mimeType: "image/png" }) => {
+                ctx.emit({
+                  type: "browser.image",
+                  sessionId: req.sessionId,
+                  toolCallId: info.toolCallId,
+                  data: info.data,
+                  mimeType: info.mimeType,
+                });
+              },
+            },
+          ),
+        );
+      }
       case "browser_upload_file":
         return toContent(
           await browserUploadFile(
@@ -1387,7 +1466,11 @@ async function invokeDynamicTool(p: Record<string, unknown>, deps: RequestDeps):
         );
       case "browser_screenshot": {
         const r = await browserScreenshot(
-          { browserId: optStr(args.browserId), fullPage: args.fullPage === true },
+          {
+            browserId: optStr(args.browserId),
+            fullPage: args.fullPage === true,
+            backend: args.backend === "chrome" ? "chrome" : undefined,
+          },
           {
           toolCallId: typeof p.callId === "string" ? p.callId : randomUUID(),
           sessionId: req.sessionId,

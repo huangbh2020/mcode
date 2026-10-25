@@ -24,6 +24,8 @@ import {
   BrowserSetPickModeSchema,
   BrowserShowSchema,
   BrowserHideSchema,
+  BrowserSetSuppressedSchema,
+  BrowserChromeRelaySetEnabledSchema,
   BrowserCloseSchema,
   BrowserCaptureFrameSchema,
   BrowserBookmarkAddSchema,
@@ -36,6 +38,11 @@ import {
 } from "@contracts/ipc";
 import { isKnownProjectPath } from "@main/lib/pathGuard.js";
 import { BrowserManager } from "@main/browser/BrowserManager.js";
+import {
+  chromeRelayStatus,
+  setChromeRelayEnabled,
+  resetChromeRelayToken,
+} from "@main/browser/chromeRelay.js";
 import { AddressHistory } from "@main/browser/addressHistory.js";
 import { Bookmarks } from "@main/browser/bookmarks.js";
 import { log } from "@main/lib/logger.js";
@@ -142,6 +149,20 @@ export function registerBrowserHandlers(ipcMain: IpcMain): void {
     }
   });
 
+  // Renderer overlay suppression flag — not per-browser: while suppressed,
+  // agent paths must not force ANY view back onscreen over the user's open
+  // dialog/popup (see BrowserManager.setRendererSuppressed).
+  ipcMain.handle(IPC.BROWSER_SET_SUPPRESSED, async (_evt, raw) => {
+    try {
+      const input = BrowserSetSuppressedSchema.parse(raw);
+      BrowserManager.setRendererSuppressed(input.suppressed);
+      return { ok: true as const };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return { ok: false as const, error: msg };
+    }
+  });
+
   ipcMain.handle(IPC.BROWSER_CLOSE, async (_evt, raw) => {
     try {
       const input = BrowserCloseSchema.parse(raw);
@@ -150,6 +171,23 @@ export function registerBrowserHandlers(ipcMain: IpcMain): void {
       const msg = err instanceof Error ? err.message : String(err);
       return { ok: false as const, error: msg };
     }
+  });
+
+  // ── Real-Chrome relay (mcode-connector extension). Status reads + the
+  //    lifecycle-owning toggle + token reset. The toggle also writes the
+  //    persisted browser.chromeBackend setting so the next app start seeds
+  //    itself (initChromeRelayFromSettings). ──
+  ipcMain.handle(IPC.BROWSER_CHROME_RELAY_STATUS, async () => {
+    return chromeRelayStatus();
+  });
+
+  ipcMain.handle(IPC.BROWSER_CHROME_RELAY_SET_ENABLED, async (_evt, raw) => {
+    const input = BrowserChromeRelaySetEnabledSchema.parse(raw);
+    return setChromeRelayEnabled(input.enabled);
+  });
+
+  ipcMain.handle(IPC.BROWSER_CHROME_RELAY_RESET_TOKEN, async () => {
+    return { token: resetChromeRelayToken() };
   });
 
   // Frozen-frame placeholder for renderer-DOM menus: one in-memory PNG frame

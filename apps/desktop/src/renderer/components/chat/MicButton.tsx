@@ -102,6 +102,8 @@ function MicButtonDesktop({
     lastWrittenRef.current = text;
   };
 
+  const [volume, setVolume] = useState(0);
+
   const { busy, start, stop, cancel, micError, clearMicError } = useVoiceInput({
     lang: voiceLang,
     onPartial: (text) => applyLiveText(text),
@@ -110,6 +112,7 @@ function MicButtonDesktop({
       if (!trimmed) return;
       applyLiveText(`${trimmed} `);
     },
+    onVolume: (v) => setVolume(v),
   });
 
   // Ref mirrors of the hook/composer state — the voiceController handle and
@@ -236,8 +239,52 @@ function MicButtonDesktop({
     clearMicError();
   }, [micError, t, setSettingsOpen, setVoiceMicPermission, clearMicError]);
 
-  /** Click = toggle: start a fresh listen, or stop the active one and commit. */
+  // Push-to-talk (hold to talk) vs click-to-toggle tracking
+  const holdTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const isHoldModeRef = useRef(false);
+  const pointerDownAtRef = useRef(0);
+
+  const handlePointerDown = (e: React.PointerEvent<HTMLButtonElement>) => {
+    if (disabledRef.current || e.button !== 0) return;
+    pointerDownAtRef.current = Date.now();
+    isHoldModeRef.current = false;
+
+    // If already listening in toggle mode, clicking stops it
+    if (armedRef.current) return;
+
+    holdTimerRef.current = setTimeout(() => {
+      isHoldModeRef.current = true;
+      void beginListen();
+    }, 280);
+  };
+
+  const handlePointerUp = () => {
+    if (holdTimerRef.current) {
+      clearTimeout(holdTimerRef.current);
+      holdTimerRef.current = null;
+    }
+    if (isHoldModeRef.current) {
+      isHoldModeRef.current = false;
+      void endListen();
+    }
+  };
+
+  const handlePointerCancel = () => {
+    if (holdTimerRef.current) {
+      clearTimeout(holdTimerRef.current);
+      holdTimerRef.current = null;
+    }
+    if (isHoldModeRef.current) {
+      isHoldModeRef.current = false;
+      void endListen();
+    }
+  };
+
+  /** Click = toggle (only when not ending a push-to-talk hold). */
   const handleClick = async () => {
+    const elapsed = Date.now() - pointerDownAtRef.current;
+    if (elapsed >= 280) return;
+
     if (armedRef.current) {
       await endListen();
       return;
@@ -253,28 +300,53 @@ function MicButtonDesktop({
       : t("chat.voice.toggleTitle");
 
   return (
-    <button
-      type="button"
-      disabled={disabled}
-      onClick={handleClick}
-      title={title}
-      aria-label={
-        listening ? t("chat.voice.stopListening") : t("chat.voice.startListening")
-      }
-      className={cn(
-        "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-xl text-content-muted transition-all duration-150 ease-out",
-        "hover:scale-110 hover:bg-accent/10 hover:text-accent active:scale-95",
-        listening && "bg-accent/10 text-accent hover:text-accent",
-        "disabled:scale-100 disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-content-muted",
+    <div className="flex items-center gap-1">
+      {listening && (
+        <div
+          className="flex h-8 items-center gap-1 rounded-xl bg-accent/10 px-2 text-accent animate-fade-in"
+          title={t("chat.voice.listening")}
+        >
+          <span className="text-[11px] font-medium tracking-tight select-none mr-0.5">
+            {t("chat.voice.listening")}
+          </span>
+          {[0.6, 1.0, 0.8, 0.5].map((multiplier, i) => {
+            const h = Math.max(3, Math.min(14, Math.round(3 + volume * multiplier * 11)));
+            return (
+              <span
+                key={i}
+                style={{ height: `${h}px` }}
+                className="w-0.5 rounded-full bg-accent transition-all duration-75 ease-out"
+              />
+            );
+          })}
+        </div>
       )}
-    >
-      {listening ? (
-        <IconWaveSine size={18} className="animate-pulse" />
-      ) : disabled ? (
-        <IconMicrophoneOff size={18} />
-      ) : (
-        <IconMicrophone size={18} />
-      )}
-    </button>
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={handleClick}
+        onPointerDown={handlePointerDown}
+        onPointerUp={handlePointerUp}
+        onPointerCancel={handlePointerCancel}
+        title={title}
+        aria-label={
+          listening ? t("chat.voice.stopListening") : t("chat.voice.startListening")
+        }
+        className={cn(
+          "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-xl text-content-muted transition-all duration-150 ease-out",
+          "hover:scale-110 hover:bg-accent/10 hover:text-accent active:scale-95",
+          listening && "bg-accent/10 text-accent hover:text-accent",
+          "disabled:scale-100 disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-content-muted",
+        )}
+      >
+        {listening ? (
+          <IconWaveSine size={18} className="animate-pulse" />
+        ) : disabled ? (
+          <IconMicrophoneOff size={18} />
+        ) : (
+          <IconMicrophone size={18} />
+        )}
+      </button>
+    </div>
   );
 }

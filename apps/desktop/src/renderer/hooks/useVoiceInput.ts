@@ -48,6 +48,8 @@ interface UseVoiceInputOptions {
   onPartial?: (text: string) => void;
   /** Committed final text. */
   onFinal?: (text: string) => void;
+  /** Live audio energy/volume [0, 1] emitted for UI visualizers. */
+  onVolume?: (volume: number) => void;
 }
 
 interface UseVoiceInputResult {
@@ -66,15 +68,17 @@ interface UseVoiceInputResult {
 }
 
 export function useVoiceInput(options: UseVoiceInputOptions = {}): UseVoiceInputResult {
-  const { lang, engine = "zipformer", onPartial, onFinal } = options;
+  const { lang, engine = "zipformer", onPartial, onFinal, onVolume } = options;
   const langRef = useRef(lang);
   const engineRef = useRef(engine);
   const onPartialRef = useRef(onPartial);
   const onFinalRef = useRef(onFinal);
+  const onVolumeRef = useRef(onVolume);
   langRef.current = lang;
   engineRef.current = engine;
   onPartialRef.current = onPartial;
   onFinalRef.current = onFinal;
+  onVolumeRef.current = onVolume;
 
   const [busy, setBusy] = useState(false);
   const [micError, setMicError] = useState<string | null>(null);
@@ -179,6 +183,7 @@ export function useVoiceInput(options: UseVoiceInputOptions = {}): UseVoiceInput
     void ctxRef.current?.close().catch(() => {});
     ctxRef.current = null;
     pendingRef.current = null;
+    onVolumeRef.current?.(0);
   }, []);
 
   const start = useCallback(async (): Promise<void> => {
@@ -273,6 +278,16 @@ export function useVoiceInput(options: UseVoiceInputOptions = {}): UseVoiceInput
       const processor = ctx.createScriptProcessor(4096, 1, 1);
       processor.onaudioprocess = (e) => {
         const data = e.inputBuffer.getChannelData(0);
+        if (onVolumeRef.current) {
+          let sum = 0;
+          for (let i = 0; i < data.length; i += 8) {
+            const s = data[i] ?? 0;
+            sum += s * s;
+          }
+          const rms = Math.sqrt(sum / (data.length / 8));
+          const vol = Math.min(1, Math.max(0, rms * 7));
+          onVolumeRef.current(vol);
+        }
         const resampled = resampleChunk(data);
         const pending = pendingRef.current;
         // Append this callback's samples onto the accumulator.

@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      body { font: 13px system-ui, sans-serif; margin: 14px; width: 300px; color: #1f2328; }
+      h1 { font-size: 14px; margin: 0 0 10px; }
+      label { display: block; margin: 8px 0 3px; font-size: 12px; color: #57606a; }
+      input { width: 100%; box-sizing: border-box; padding: 5px 6px; border: 1px solid #d0d7de; border-radius: 6px; font: 12px ui-monospace, monospace; }
+      button { margin-top: 12px; padding: 5px 14px; border: 0; border-radius: 6px; background: #1f6feb; color: #fff; font-size: 13px; cursor: pointer; }
+      #status { margin-top: 10px; font-size: 12px; }
+      .ok { color: #1a7f37; }
+      .bad { color: #cf222e; }
+      .hint { margin-top: 10px; font-size: 11px; color: #57606a; line-height: 1.5; }
+    </style>
+  </head>
+  <body>
+    <h1>Mcode Connector</h1>
+    <label for="url">Mcode 服务地址</label>
+    <input id="url" placeholder="ws://127.0.0.1:端口" spellcheck="false" />
+    <label for="token">配对令牌(Mcode 设置 → 浏览器 → 真实 Chrome)</label>
+    <input id="token" placeholder="粘贴配对令牌" spellcheck="false" />
+    <button id="save">保存并连接</button>
+    <div id="status"></div>
+    <p class="hint">
+      连接后,Mcode 的 agent 浏览器工具即可在此 Chrome(你的真实登录态)中读取页面与截图。工具只经白名单命令操作,新域名访问仍需你在 Mcode 中逐域审批。
+    </p>
+    <script src="popup.js"></script>
+  </body>
+</html>

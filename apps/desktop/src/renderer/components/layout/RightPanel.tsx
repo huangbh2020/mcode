@@ -52,7 +52,7 @@ const EMPTY_SESSION_TABS: SessionRightPanelTabId[] = [];
 
 const SESSION_TAB_META: ReadonlyArray<{
   id: SessionRightPanelTabId;
-  labelKey: "layout.tabTurns" | "layout.tabSideChat" | "layout.schedTasks";
+  labelKey: "layout.tabTurns" | "layout.tabSideChat" | "layout.schedTasks" | "layout.tabGithub";
   /** Tooltip while the tab is showing (= the close affordance). */
   closeTitleKey: "layout.rightPanelCloseTab";
   Icon: typeof IconListDetails;
@@ -62,6 +62,7 @@ const SESSION_TAB_META: ReadonlyArray<{
   { id: "turns", labelKey: "layout.tabTurns", closeTitleKey: "layout.rightPanelCloseTab", Icon: IconListDetails, commandId: null },
   { id: "sidechat", labelKey: "layout.tabSideChat", closeTitleKey: "layout.rightPanelCloseTab", Icon: IconMessages, commandId: "sidechat.open" },
   { id: "sched", labelKey: "layout.schedTasks", closeTitleKey: "layout.rightPanelCloseTab", Icon: IconClock, commandId: null },
+  { id: "github", labelKey: "layout.tabGithub", closeTitleKey: "layout.rightPanelCloseTab", Icon: IconBrandGithub, commandId: null },
 ];
 
 export function RightPanel() {
@@ -96,10 +97,14 @@ export function RightPanel() {
   const tab = sessionTabs?.active ?? globalTab;
   const openSessionTabs = sessionTabs?.open ?? EMPTY_SESSION_TABS;
   const effectiveOpenTabs = useMemo(() => {
-    if (tab === "sched" && !openSessionTabs.includes("sched")) {
-      return [...openSessionTabs, "sched" as const];
+    let res = openSessionTabs;
+    if (tab === "sched" && !res.includes("sched")) {
+      res = [...res, "sched" as const];
     }
-    return openSessionTabs;
+    if (tab === "github" && !res.includes("github")) {
+      res = [...res, "github" as const];
+    }
+    return res;
   }, [openSessionTabs, tab]);
 
   // 保证当前会话的编排运行记录已拉取
@@ -158,13 +163,6 @@ export function RightPanel() {
           title="Git" /* brand name */
         >
           <IconGitBranch size={16} className="shrink-0" />
-        </RailButton>
-        <RailButton
-          active={tab === "github"}
-          onClick={() => setTab("github")}
-          title={t("layout.tabGithub")}
-        >
-          <IconBrandGithub size={16} className="shrink-0" />
         </RailButton>
         {terminalPosition !== "bottom" && (
           <RailButton

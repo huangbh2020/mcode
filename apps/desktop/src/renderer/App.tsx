@@ -1,4 +1,5 @@
-import { lazy, Suspense, useEffect, useMemo, useRef } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
+import type { ReactNode } from "react";
 import { cn } from "@renderer/lib/cn.js";
 import { ThreePaneLayout } from "./components/layout/ThreePaneLayout.js";
 import { Divider } from "./components/layout/Divider.js";
@@ -31,6 +32,7 @@ import { api } from "./lib/api.js";
 import { useTheme } from "./lib/theme.js";
 import { useChatAppearance, useRightPanelAppearance, useThemeStyle } from "./lib/appearance.js";
 import { useI18n } from "./lib/i18n/index.js";
+import { startPortalPopupWatcher } from "./lib/browserPortalWatcher.js";
 import { OpenTabsBar } from "./components/ide/OpenTabsBar.js";
 
 // Lazy-load the Monaco-backed editor, diff dialog and plan viewer so the large
@@ -54,6 +56,14 @@ const PlanViewer = lazy(() =>
 export function App() {
   // Subscribe to the claude event stream for the app's whole lifetime.
   useClaudeEvents();
+  // Global portal-popup watcher: classifies any portaled popup by ARIA role
+  // (base-ui sets role="menu"/"listbox"/"dialog") and registers occluders so
+  // the embedded browser's OS-level view can't swallow popups nobody wired
+  // with useSuppressBrowserView (ConfirmDialog family, context menus, select
+  // dropdowns, future components). See lib/browserPortalWatcher.ts.
+  useEffect(() => {
+    startPortalPopupWatcher();
+  }, []);
   // When an agent browser tool opens/reuses a view, surface the browser panel
   // so the user sees the agent browsing and BrowserPanel can sync bounds.
   // Subscribed globally (not in BrowserPanel, which only mounts when the
@@ -388,17 +398,50 @@ export function App() {
       {/* Global bottom-right corner: update notification card + runtime
           reminder card + toast stack share one fixed column so they stack
           vertically and never overlap. All render null when they have
-          nothing to show. */}
-      <div className="pointer-events-none fixed bottom-4 right-4 z-[9999] flex flex-col items-end gap-2">
+          nothing to show. The column sits exactly over the right panel's
+          browser stage, so while it has content the browser view is
+          suppressed geometry-aware (CornerOverlayColumn below). */}
+      <CornerOverlayColumn>
         <UpdateNotification />
         {/* Non-blocking runtime-update reminder: surfaced once per launch by
             reloadRuntimes when an installed runtime lags this build's pin. */}
         <RuntimeUpdatePrompt />
         <Toaster />
-      </div>
+      </CornerOverlayColumn>
       {/* Global voice-dictation indicator - floats top-center while any
           composer is listening. Renders null when idle. */}
       <VoiceListeningOverlay />
+    </div>
+  );
+}
+
+/** Bottom-right corner column with browser-view suppression. The OS-level
+ *  browser view floats above all DOM and this corner is exactly where the
+ *  sidebar browser stage lives, so toasts/update cards would be swallowed.
+ *  Content visibility is tracked with a ResizeObserver (the container is
+ *  always mounted but zero-sized while all children render null) — the
+ *  suppression hook only engages once there is something to show, and stays
+ *  geometry-aware so a toast can't fully blank the browser panel either. */
+function CornerOverlayColumn({ children }: { children: ReactNode }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [hasContent, setHasContent] = useState(false);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => {
+      const r = el.getBoundingClientRect();
+      setHasContent(r.width > 1 && r.height > 1);
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  useSuppressBrowserView(hasContent, ref);
+  return (
+    <div
+      ref={ref}
+      className="pointer-events-none fixed bottom-4 right-4 z-[9999] flex flex-col items-end gap-2"
+    >
+      {children}
     </div>
   );
 }
@@ -675,6 +718,20 @@ function ChatColumn() {
       s.pruneSessionHistory(id);
     }
   }, [activeSessionId, displayMode]);
+
+  // Tabs-mode memory hygiene: prune any resident session buckets whose tab has
+  // been closed (and has no in-flight turn / pending question). Survives tab closures,
+  // project switches, and archives without letting megabytes of base64 images linger.
+  useEffect(() => {
+    if (displayMode !== "tabs") return;
+    const s = useSessionStore.getState();
+    const openSet = new Set(openTabs);
+    for (const id of Object.keys(s.messagesBySession)) {
+      if (openSet.has(id)) continue;
+      if (s.runningBySession[id] || s.pendingQuestionBySession[id]) continue;
+      s.pruneSessionHistory(id);
+    }
+  }, [openTabs, displayMode]);
 
   if (displayMode === "tabs") {
     return (

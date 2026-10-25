@@ -1,0 +1,10 @@
+{
+  "manifest_version": 3,
+  "name": "Mcode Connector",
+  "version": "1.0.0",
+  "description": "Connect Mcode's agent browser tools to this Chrome (your real logged-in profile). Pair with the token shown in Mcode settings → 浏览器 → 真实 Chrome.",
+  "permissions": ["debugger", "tabs", "storage"],
+  "background": { "service_worker": "background.js" },
+  "action": { "default_popup": "popup.html", "default_title": "Mcode Connector" },
+  "minimum_chrome_version": "116"
+}

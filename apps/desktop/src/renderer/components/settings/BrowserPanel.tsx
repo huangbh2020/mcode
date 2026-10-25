@@ -5,6 +5,8 @@ import { Button, ConfirmDialog, Input, Switch } from "@renderer/components/ui/in
 import { PanelHeader } from "./PanelHeader.js";
 import { SettingsSection } from "./SettingsSection.js";
 import { SettingRow } from "./SettingRow.js";
+import { TrustedDomainsPanel } from "./TrustedDomainsPanel.js";
+import { ChromeRelayPanel } from "./ChromeRelayPanel.js";
 import {
   BROWSER_DATA_DIR_SETTING_KEY,
   BROWSER_PERSIST_LOGIN_SETTING_KEY,
@@ -46,6 +48,13 @@ export function BrowserPanel() {
       <SettingsSection title={t("settings.browser.sectionLogin")}>
         <PersistLoginRow />
       </SettingsSection>
+
+      {/* 真实 Chrome — mcode-connector 扩展接入(loopback WebSocket 中继)。 */}
+      <ChromeRelayPanel />
+
+      {/* 受信任域名 — agent 浏览器导航的域名级审批豁免名单(见
+          main/browser/domainGate.ts)。 */}
+      <TrustedDomainsPanel />
 
       <CacheSection />
     </section>

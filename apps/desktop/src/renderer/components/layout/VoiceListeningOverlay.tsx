@@ -14,10 +14,11 @@
  * badge pop-in keyframes; fully pointer-transparent so it never blocks the
  * UI underneath.
  */
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { cn } from "@renderer/lib/cn.js";
 import { useI18n } from "@renderer/lib/i18n/index.js";
 import { onVoiceActiveChange } from "@renderer/lib/voiceController.js";
+import { useSuppressBrowserView } from "@renderer/hooks/useSuppressBrowserView.js";
 
 /** mm:ss for the duration readout. */
 function formatDuration(totalSeconds: number): string {
@@ -30,6 +31,12 @@ export function VoiceListeningOverlay() {
   const { t } = useI18n();
   const [active, setActive] = useState(false);
   const [seconds, setSeconds] = useState(0);
+  // The badge is DOM at z-50, so the OS-level browser view would cover it
+  // while the fullscreen browser overlay is open. Suppress geometry-aware on
+  // the pill itself (NOT the full-width wrapper strip — that would hide the
+  // browser for a centered badge that may not reach it).
+  const badgeRef = useRef<HTMLDivElement>(null);
+  useSuppressBrowserView(active, badgeRef);
 
   useEffect(() => onVoiceActiveChange(setActive), []);
 
@@ -49,10 +56,11 @@ export function VoiceListeningOverlay() {
 
   return (
     <div
-      className="pointer-events-none fixed inset-x-0 top-[18%] z-50 flex justify-center"
+      className="pointer-events-none fixed inset-x-0 top-6 z-50 flex justify-center"
       aria-live="polite"
     >
       <div
+        ref={badgeRef}
         className={cn(
           "flex items-center gap-2.5 rounded-full border border-edge bg-surface/95 py-1.5 pl-4 pr-5",
           "shadow-2xl backdrop-blur animate-[live-badge-in_220ms_ease-out]",
